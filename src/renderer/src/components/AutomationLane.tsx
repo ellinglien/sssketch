@@ -188,7 +188,8 @@ export type AutomationLaneTarget =
 export function AutomationLane({
   laneId,
   target,
-  widthPx
+  widthPx,
+  onClose
 }: {
   /** This lane's identity for the session-only parameter picker
    * (state.automationParamOf) -- the stemKey for a per-stem lane, the
@@ -200,6 +201,14 @@ export function AutomationLane({
    * and the right-edge clamp derive from this, so the lane can never extend
    * past the audio. */
   widthPx: number
+  /** Given only by a lane that was opened ON ITS OWN, outside the app-wide
+   * automation mode -- today that is a freshly drawn riser's sweep lane,
+   * which opens in place so the user can draw it immediately (RiserBlock's
+   * laneOpenInPlace). It puts a "done" button in the corner cluster, because
+   * a lane that no mode toggle can close needs a visible way out. A lane
+   * that the mode opened leaves this undefined and shows no such button:
+   * there, the mode is the way out. */
+  onClose?: () => void
 }): React.JSX.Element {
   const dispatch = useDispatch()
   const ppb = useZoom()
@@ -547,6 +556,21 @@ export function AutomationLane({
               style={clearButtonStyle}
             >
               x
+            </button>
+          )}
+          {onClose && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation()
+                onClose()
+              }}
+              onMouseDown={(e) => e.stopPropagation()}
+              onDoubleClick={(e) => e.stopPropagation()}
+              aria-label={`close the ${laneId} lane`}
+              title="close this lane (escape does the same)"
+              style={clearButtonStyle}
+            >
+              done
             </button>
           )}
         </div>

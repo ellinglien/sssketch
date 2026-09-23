@@ -33,6 +33,7 @@ import { Inspector } from './components/Inspector'
 import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
 import { Playhead } from './components/Playhead'
+import { RiserExtentGesture } from './components/RiserExtentGesture'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
 import { LibraryBrowser } from './components/LibraryBrowser'
 import { type DiscoverSlot } from './components/DiscoverPanel'
@@ -152,7 +153,12 @@ function Timeline({
   onOpenClipMenu,
   onOpenRiserMenu,
   onOpenPasteMenu,
-  onBackgroundMouseDown
+  onBackgroundMouseDown,
+  riserArm,
+  onCancelRiserArm,
+  onCreateRiser,
+  openRiserLaneId,
+  onCloseRiserLane
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
@@ -161,6 +167,17 @@ function Timeline({
    * null for a right-click on the empty space below the rows, where the
    * menu instead offers a riser on a brand new row of its own. */
   onOpenPasteMenu: (x: number, y: number, bar: number, channelId: string | null) => void
+  /** Set while "add riser here" has been chosen but the extent drag that
+   * actually creates it hasn't happened yet -- see RiserExtentGesture. Null
+   * the rest of the time, which is almost always. */
+  riserArm: { channelId: string; isNewRow: boolean } | null
+  onCancelRiserArm: () => void
+  onCreateRiser: (startBar: number, lengthBars: number) => void
+  /** The one riser whose automation lane is open IN PLACE, regardless of the
+   * app's own mode -- the riser that was just drawn. See Frame's own
+   * openRiserLaneId. */
+  openRiserLaneId: string | null
+  onCloseRiserLane: () => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
    * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
@@ -454,6 +471,8 @@ function Timeline({
           onOpenContextMenu={onOpenClipMenu}
           onOpenRiserMenu={onOpenRiserMenu}
           onDropOnChannel={handleDropOnChannel}
+          openRiserLaneId={openRiserLaneId}
+          onCloseRiserLane={onCloseRiserLane}
         />
       ))}
       {Array.from({ length: GHOST_ROW_COUNT }, (_, i) => (
@@ -466,6 +485,20 @@ function Timeline({
         />
       ))}
       <Playhead ppb={ppb} />
+      {riserArm && (
+        // Rendered LAST of the arranger's own layers (above every row, the
+        // ghost rows and the playhead) so that, while armed, the whole
+        // arranger is one drawing surface -- a press anywhere in it belongs
+        // to this gesture rather than to whatever clip happens to be under
+        // the cursor. It is only mounted for the few seconds the gesture
+        // lasts.
+        <RiserExtentGesture
+          channelId={riserArm.channelId}
+          isNewRow={riserArm.isNewRow}
+          onCancel={onCancelRiserArm}
+          onCreate={onCreateRiser}
+        />
+      )}
       {dropPromptPaths && (
         <LoopOrOneShotPrompt
           paths={dropPromptPaths}
@@ -1863,6 +1896,52 @@ function Frame(): React.JSX.Element {
   // deleted is just silently ignored).
   const [clipboard, setClipboard] = useState<string | null>(null)
 
+  // The riser creation gesture, in its two halves.
+  //
+  // `riserArm` is set by the arranger's own menu and cleared the moment the
+  // gesture resolves: while it is set, RiserExtentGesture is over the whole
+  // arranger turning a drag into the new riser's start and length. Nothing is
+  // dispatched until release, so an abandoned arm leaves the project exactly
+  // as it was -- including the channel id minted here for a brand new row,
+  // which is just a string until an ADD_RISER carries it.
+  //
+  // `openRiserLaneId` is the riser whose automation lane is open IN PLACE.
+  // Drawing the sweep is the natural next thing to do after choosing a
+  // riser's extent, so the lane opens on release -- but deliberately WITHOUT
+  // flipping state.mode to 'automation', which would put every clip in the
+  // project behind a lane and lose the user the place they were working in.
+  // One riser's lane, opened on the riser they just made. RiserBlock reads
+  // this alongside the global mode (see its own `laneOpen`).
+  const [riserArm, setRiserArm] = useState<{ channelId: string; isNewRow: boolean } | null>(null)
+  const [openRiserLaneId, setOpenRiserLaneId] = useState<string | null>(null)
+  const cancelRiserArm = useCallback((): void => setRiserArm(null), [])
+  const closeRiserLane = useCallback((): void => setOpenRiserLaneId(null), [])
+  // Reads `riserArm` straight out of the render that produced it, and
+  // dispatches in its own body -- NOT from inside a setRiserArm updater,
+  // which StrictMode double-invokes in development and which would therefore
+  // create the riser twice (dragUtils.ts documents the real bug that rule
+  // comes from). The gesture this belongs to only exists while riserArm is
+  // set, so the closure cannot be stale by the time it is called.
+  const createRiserFromGesture = useCallback(
+    (startBar: number, lengthBars: number): void => {
+      if (!riserArm) return
+      // crypto.randomUUID, like every other freshly-minted id in this file.
+      // It is also the riser's NOISE SEED (the engine hashes it -- see
+      // riserSeedFor in NoiseRiser.h), so it has to be unique and it has to
+      // be stable for the riser's whole life: two risers sharing an id would
+      // sound like one doubled, and a riser whose id changed would change
+      // texture under the user.
+      const id = crypto.randomUUID()
+      dispatch({
+        type: 'ADD_RISER',
+        riser: createRiser({ id, channelId: riserArm.channelId, startBar, lengthBars })
+      })
+      setRiserArm(null)
+      setOpenRiserLaneId(id)
+    },
+    [dispatch, riserArm]
+  )
+
   // Wrapped in useCallback, reading state via stateRef.current rather than
   // closing over the reactive `state` variable -- see stateRef's own doc
   // comment above for why (this is what lets Timeline's onOpenClipMenu prop
@@ -1955,20 +2034,18 @@ function Frame(): React.JSX.Element {
     // rather than as a button somewhere: it is "put a thing at this point on
     // this row", and the point and the row are exactly what a right-click
     // already carries. Same place, and the same gesture, as pasting a clip.
+    //
+    // What the menu item itself does changed on 2026-09-23 ("the flow for
+    // creating a riser needs some help though... the initial sizing is what
+    // needs work... prompt the user to select the width first, then draw the
+    // line"): it no longer PLACES anything. It arms the extent gesture, and
+    // the drag that follows is what creates the riser -- so the bar the
+    // right-click landed on stops mattering entirely, which is why it is no
+    // longer passed on. See RiserExtentGesture.
     if (channelId) {
       items.push({
-        label: 'add riser here',
-        onClick: () =>
-          dispatch({
-            type: 'ADD_RISER',
-            // crypto.randomUUID, like every other freshly-minted id in this
-            // file. It is also the riser's NOISE SEED (the engine hashes it
-            // -- see riserSeedFor in NoiseRiser.h), so it has to be unique
-            // and it has to be stable for the riser's whole life: two risers
-            // sharing an id would sound like one doubled, and a riser whose
-            // id changed would change texture under the user.
-            riser: createRiser({ id: crypto.randomUUID(), channelId, startBar: bar })
-          })
+        label: 'add riser -- drag its length',
+        onClick: () => setRiserArm({ channelId, isNewRow: false })
       })
     } else {
       // The empty space below the last row -- the one place a right-click
@@ -1980,20 +2057,15 @@ function Frame(): React.JSX.Element {
       // click was.
       //
       // TWO ids, not one reused: the riser's id is a noise seed with its own
-      // stability contract (above), and the channel id is a row identity
-      // that the reducer matches against channelOf/channelOrder. Keeping
-      // them separate means neither ever has to care what the other means.
+      // stability contract (see createRiserFromGesture), and the channel id
+      // is a row identity that the reducer matches against channelOf/
+      // channelOrder. Keeping them separate means neither ever has to care
+      // what the other means. The channel id is minted HERE, at arm time, so
+      // the gesture knows which row it is drawing on before the row exists;
+      // an abandoned gesture simply throws the string away.
       items.push({
-        label: 'add riser on a new row',
-        onClick: () =>
-          dispatch({
-            type: 'ADD_RISER',
-            riser: createRiser({
-              id: crypto.randomUUID(),
-              channelId: crypto.randomUUID(),
-              startBar: bar
-            })
-          })
+        label: 'add riser on a new row -- drag its length',
+        onClick: () => setRiserArm({ channelId: crypto.randomUUID(), isNewRow: true })
       })
     }
     if (clipboard && state.rifffs[clipboard]) {
@@ -2529,6 +2601,11 @@ function Frame(): React.JSX.Element {
                   onOpenRiserMenu={openRiserMenu}
                   onOpenPasteMenu={openPasteMenu}
                   onBackgroundMouseDown={handlePanMouseDown}
+                  riserArm={riserArm}
+                  onCancelRiserArm={cancelRiserArm}
+                  onCreateRiser={createRiserFromGesture}
+                  openRiserLaneId={openRiserLaneId}
+                  onCloseRiserLane={closeRiserLane}
                 />
               )}
             </div>

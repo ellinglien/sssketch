@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   MIN_RISER_LENGTH_BARS,
   RISER_DEFAULTS,
@@ -76,7 +76,9 @@ const HATCH_SPACING_PX = 7
  */
 export function RiserBlock({
   riserId,
-  onOpenContextMenu
+  onOpenContextMenu,
+  laneOpenInPlace,
+  onCloseLane
 }: {
   riserId: string
   /** Opens the app's own context menu for this riser -- the same callback
@@ -85,12 +87,40 @@ export function RiserBlock({
    * rather than here is what keeps every right-click in the arranger looking
    * and behaving like one thing. */
   onOpenContextMenu: (x: number, y: number, riserId: string) => void
+  /** THIS riser's sweep lane is open even though the app is not in
+   * automation mode -- true for the riser that was just drawn, which opens
+   * ready to draw on (see App.tsx's openRiserLaneId).
+   *
+   * A whole-app mode flip was considered for that and rejected: switching
+   * the global mode because someone drew one riser puts every clip in the
+   * project behind a lane and loses the user the place they were working
+   * in. Nothing in the layout required it -- the lane is already a per-
+   * element overlay (the per-clip lane spec, section 2b), so "one lane, in
+   * place" is a smaller thing to ask for than the mode was. */
+  laneOpenInPlace: boolean
+  onCloseLane: () => void
 }): React.JSX.Element | null {
   const dispatch = useDispatch()
   const ppb = useZoom()
   const riser = useAppSelector((s) => s.risers[riserId])
   const automationMode = useAppSelector((s) => s.mode === 'automation')
   const [hovered, setHovered] = useState(false)
+
+  // Escape closes a lane opened in place -- the same key that backs out of
+  // the creation gesture that opened it, so one key gets you out of the
+  // whole flow at any point in it. Only bound while such a lane is actually
+  // open, so this adds no listener to the ordinary case. Nothing to do in
+  // automation mode: there the lane belongs to the mode, and the mode's own
+  // toggle is how it closes.
+  useEffect(() => {
+    if (!laneOpenInPlace) return
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 'Escape') return
+      onCloseLane()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [laneOpenInPlace, onCloseLane])
 
   // The in-progress geometry of a move/resize. Local state rather than
   // state.dragPlayedBars & friends: nothing outside this block needs to see a
@@ -424,15 +454,25 @@ export function RiserBlock({
                 />
               </div>
             ))}
-            {automationMode && (
+            {(automationMode || laneOpenInPlace) && (
               // The riser's sweep, drawn in the ordinary automation lane -- see
               // AutomationLane's `riser` target. Laid over exactly this block,
               // same as a clip's lane is laid over its waveform, so the drawing
               // surface and the thing being edited are the same rectangle.
+              //
+              // Two ways in, one lane: the app-wide automation mode, or this
+              // one riser's lane being opened in place right after it was
+              // drawn (laneOpenInPlace). The "done" button only appears on
+              // the second -- in automation mode the mode is what closes it,
+              // and a per-lane close there would be a second, contradictory
+              // way out. Escape closes it either way it was opened in place,
+              // which is also the only way out on a riser too narrow for the
+              // lane's corner cluster to appear at all.
               <AutomationLane
                 laneId={`riser:${riser.id}`}
                 target={{ kind: 'riser', riserId: riser.id }}
                 widthPx={widthPx}
+                onClose={automationMode ? undefined : onCloseLane}
               />
             )}
           </div>

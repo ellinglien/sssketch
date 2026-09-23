@@ -100,7 +100,9 @@ function ChannelRowImpl({
   bus,
   onOpenContextMenu,
   onOpenRiserMenu,
-  onDropOnChannel
+  onDropOnChannel,
+  openRiserLaneId,
+  onCloseRiserLane
 }: {
   channelId: string
   rifffs: Rifff[]
@@ -120,6 +122,15 @@ function ChannelRowImpl({
   onOpenContextMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
   onDropOnChannel: (e: React.DragEvent<HTMLDivElement>, channelId: string) => void
+  /** The one riser (anywhere in the project) whose automation lane is open
+   * in place -- the riser that was just drawn, per App.tsx's own
+   * openRiserLaneId. Passed straight through to every RiserBlock rather
+   * than filtered here so this row has no opinion about it; a row holding
+   * none of them simply hands each of its risers a null-ish answer. It
+   * changes at most once per riser created, so it costs this memoized row
+   * one extra render then. */
+  openRiserLaneId: string | null
+  onCloseRiserLane: () => void
 }): React.JSX.Element {
   const [chainPanelOpen, setChainPanelOpen] = useState(false)
   const dispatch = useDispatch()
@@ -673,7 +684,13 @@ function ChannelRowImpl({
           top: a riser is a few translucent strokes, and the audio it stands
           for is the thing about to happen. */}
       {riserIds.map((riserId) => (
-        <RiserBlock key={riserId} riserId={riserId} onOpenContextMenu={onOpenRiserMenu} />
+        <RiserBlock
+          key={riserId}
+          riserId={riserId}
+          onOpenContextMenu={onOpenRiserMenu}
+          laneOpenInPlace={openRiserLaneId === riserId}
+          onCloseLane={onCloseRiserLane}
+        />
       ))}
       {isArmed && armedLoopRegion && (
         // Rendered AFTER rifffs.map above, not before -- both are plain
