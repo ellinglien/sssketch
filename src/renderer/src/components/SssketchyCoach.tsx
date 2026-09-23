@@ -100,7 +100,7 @@ function usePulse(key: string | number, ms: number, onFirstRender: boolean): boo
  *
  * Same look-the-target-up-fresh approach TourOverlay.tsx uses, for the same
  * reason: a step's anchor lives in an unrelated component (Discover, the
- * timeline, the project menu) with no shared parent worth threading a ref
+ * timeline, the auto-arranger) with no shared parent worth threading a ref
  * through. A step whose anchor is not currently mounted (every phase-one
  * step names Discover's add row, which exists only while the riff library
  * is open on the discover tab) parks him in the corner instead.
@@ -590,7 +590,8 @@ function SssketchyCoachPanel({
 /**
  * The store gate. Reads the one nullable coach field and renders nothing at
  * all when there is no flow or the flow is dismissed -- which is every
- * moment until the project menu's own sssketchy button is pressed, including
+ * moment until the auto-arranger's "walk me through it" route starts one,
+ * including
  * the moment right after a project with a half-finished flow is opened (see
  * sanitiseLoadedCoach). He never appears on his own.
  *

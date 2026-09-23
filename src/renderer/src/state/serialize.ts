@@ -375,7 +375,7 @@ export function deserializeProject(
   // The guided flow's own load rules, in one place (see sanitiseLoadedCoach
   // for the full why): which step you got to and how long each phase took
   // come back; his visibility and his clock do not. A flow saved mid-step
-  // reopens 'dismissed', and the project menu's sssketchy button resumes it
+  // reopens 'dismissed', and the auto-arranger's guided route resumes it
   // exactly where it was -- because he "never appears on his own, not even
   // on an empty project" (spec), and because runningSince is an absolute
   // timestamp from a previous session, which left alone would report days

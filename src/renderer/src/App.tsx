@@ -2879,10 +2879,10 @@ function Frame(): React.JSX.Element {
           />
         )}
         {/* Renders nothing at all unless a flow has been started from the
-            project menu's own sssketchy button -- see SssketchyCoach's own
+            auto-arranger's "walk me through it" route -- see SssketchyCoach's own
             doc comment. Mounted here, at the frame's top level, rather than
             inside any one panel, because a step's anchor can be anywhere in
-            the app (Discover, the timeline, the project menu row). */}
+            the app (Discover, the timeline, the auto-arranger). */}
         <SssketchyCoach
           discoverSlots={coachSlots}
           riffLibraryOpen={riffLibraryOpen}
