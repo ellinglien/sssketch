@@ -13,7 +13,7 @@ is continuing something, not starting over.
 
 ## Identity
 
-A near-black, monochrome desktop app shell. Comic Relief (an open Comic Sans replacement)
+A near-black, monochrome desktop app shell. Astloch (a display blackletter)
 throughout, sharp corners everywhere — no rounded rectangles anywhere, buttons and clips
 included. Color is spent deliberately and sparingly: almost the entire UI is greyscale, and
 saturated color appears *only* on things that carry actual audio information (stem
@@ -86,7 +86,7 @@ while playing, as a deliberate "live" cue.
 
 ## Typography
 
-Font stack: `'Comic Relief', ui-rounded, 'Comic Sans MS', system-ui, sans-serif`
+Font stack: `'Astloch', ui-serif, Georgia, serif`
 
 | Size | Use |
 |---|---|
