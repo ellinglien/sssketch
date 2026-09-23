@@ -2755,6 +2755,7 @@ function Frame(): React.JSX.Element {
             the app (Discover, the timeline, the project menu row). */}
         <SssketchyCoach
           discoverSlots={coachSlots}
+          riffLibraryOpen={riffLibraryOpen}
           onOffer={handleCoachOffer}
           onMove={handleCoachMove}
         />

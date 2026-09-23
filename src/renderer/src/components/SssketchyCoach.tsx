@@ -105,11 +105,12 @@ function usePulse(key: string | number, ms: number, onFirstRender: boolean): boo
  * step names Discover's add row, which exists only while the riff library
  * is open on the discover tab) parks him in the corner instead.
  *
- * `anchored` is the second half of the answer, and it decides which layer
- * he sits on: standing on something inside a full-screen view means he has
- * to float above that view's own content, which is exactly what
- * --ra-z-fullscreen-popover is for. Parked in the corner he is an ordinary
- * anchored popover again, and does not hover over unrelated modals.
+ * `anchored` is the second half of the answer, and it is half of which
+ * layer he sits on: standing on something inside a full-screen view means
+ * he has to float above that view's own content, which is exactly what
+ * --ra-z-fullscreen-popover is for. The other half is whether the riff
+ * library is open at all -- he can be parked in its corner with no anchor
+ * in sight, on its browse tab -- see the panel's own `zIndex`.
  */
 function useAnchorLeft(
   selector: string | undefined,
@@ -177,6 +178,7 @@ function useAnchorLeft(
 function SssketchyCoachPanel({
   coach,
   discoverSlots,
+  riffLibraryOpen,
   onOffer,
   onMove,
   onNext,
@@ -190,6 +192,9 @@ function SssketchyCoachPanel({
    * (DiscoverPanel publishes it up through App.tsx). Drives step
    * completion, the seeded note and the climb animation. */
   discoverSlots: readonly CoachSlotSnapshot[]
+  /** Whether the riff library -- the full-screen view the whole of phase
+   * one happens inside -- is open. See `zIndex` below. */
+  riffLibraryOpen: boolean
   onOffer: (action: CoachOfferAction) => void
   onMove: (action: CoachMoveAction) => void
   onNext: () => void
@@ -212,12 +217,26 @@ function SssketchyCoachPanel({
   // has to remember that overrides exist.
   const step = rawStep === undefined ? undefined : resolveCoachStep(rawStep, coach.flavour)
   const { left, anchored } = useAnchorLeft(step?.anchorSelector, BUBBLE_WIDTH)
-  // Above the riff library's own full-screen view while he is standing on
-  // something inside it (every phase-one step is), an ordinary anchored
-  // popover the rest of the time. Without this he is painted UNDER the
-  // library modal for the whole of phase one -- the modal is
+  // Above the riff library's own full-screen view whenever he is INSIDE it
+  // -- either standing on something in it (every phase-one step anchors to
+  // Discover's add row) or parked in its corner. Without this he is painted
+  // UNDER the library for the whole of phase one: the library is
   // --ra-z-fullscreen (1000), this used to be --ra-z-anchored (100).
-  const zIndex = anchored ? 'var(--ra-z-fullscreen-popover)' : 'var(--ra-z-anchored)'
+  //
+  // `anchored` alone was not enough, and the opening step is exactly where
+  // it showed: "start from a riff you love" opens the library on the BROWSE
+  // tab, where DiscoverPanel is not mounted at all, so the anchor does not
+  // exist, he drops to the anchored layer, and the one offer the spec names
+  // by hand leads to a screen where he cannot be seen and the
+  // melodic-or-groove question cannot be answered. Asking whether the
+  // library is open answers it for every tab.
+  //
+  // Deliberately NOT "is any overlay open": parked in the corner with no
+  // full-screen view around him he stays an ordinary anchored popover, so
+  // he never floats over an unrelated modal (--ra-z-modal, 110). That
+  // distinction is the point of d67efaa.
+  const zIndex =
+    anchored || riffLibraryOpen ? 'var(--ra-z-fullscreen-popover)' : 'var(--ra-z-anchored)'
 
   // "walk = moving to another area (Discover -> timeline)" (spec), and
   // "jump = step finished" -- which also fires when he first appears, and
@@ -493,12 +512,16 @@ function SssketchyCoachPanel({
  */
 export function SssketchyCoach({
   discoverSlots,
+  riffLibraryOpen,
   onOffer,
   onMove
 }: {
   /** What Discover currently holds, as the guided flow is allowed to see it
    * (DiscoverPanel publishes it up through App.tsx). */
   discoverSlots: readonly CoachSlotSnapshot[]
+  /** Whether the riff library is open, on any tab -- it is the full-screen
+   * view phase one happens inside, and he has to paint above it. */
+  riffLibraryOpen: boolean
   onOffer: (action: CoachOfferAction) => void
   onMove: (action: CoachMoveAction) => void
 }): React.JSX.Element | null {
@@ -510,6 +533,7 @@ export function SssketchyCoach({
     <SssketchyCoachPanel
       coach={coach}
       discoverSlots={discoverSlots}
+      riffLibraryOpen={riffLibraryOpen}
       onOffer={onOffer}
       onMove={onMove}
       onNext={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'done' })}
