@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { ARRANGE_ROLE_OPTIONS } from './stemRole'
+import { kindsCoverSet } from './coachClimax'
 import {
+  ARRANGE_ROLE_SLOT_KINDS,
+  arrangeRoleToSlotKinds,
   DISCOVER_SLOT_KIND_OPTIONS,
   DISCOVER_MASK_SLOT_KINDS,
   DISCOVER_TRAIT_SLOT_KINDS,
@@ -131,5 +135,33 @@ describe('slotKindsLabel / slotKindsKey', () => {
       bright: 'sparkly',
       warm: 'buttery'
     })
+  })
+})
+
+describe('arrangeRoleToSlotKinds', () => {
+  it('is the identity for the three mask roles', () => {
+    expect(arrangeRoleToSlotKinds('drums')).toEqual(['drums'])
+    expect(arrangeRoleToSlotKinds('bass')).toEqual(['bass'])
+    expect(arrangeRoleToSlotKinds('lead')).toEqual(['lead'])
+  })
+
+  it('calls a backing part the harmony, which is what an intro loses', () => {
+    expect(arrangeRoleToSlotKinds('backing')).toEqual(['lead', 'warm'])
+  })
+
+  it('never calls anything the hook -- the app cannot tell a hook apart', () => {
+    for (const role of ARRANGE_ROLE_OPTIONS) {
+      expect(kindsCoverSet(arrangeRoleToSlotKinds(role), ['lead', 'bright'])).toBe(false)
+    }
+  })
+
+  it('gives the generic catch-all nothing, so it is never a suggested drop', () => {
+    expect(arrangeRoleToSlotKinds('aux')).toEqual([])
+  })
+
+  it('answers for every role the dropdown can produce', () => {
+    for (const role of ARRANGE_ROLE_OPTIONS) {
+      expect(ARRANGE_ROLE_SLOT_KINDS[role]).toBeDefined()
+    }
   })
 })

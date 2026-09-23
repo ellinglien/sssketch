@@ -4,9 +4,11 @@ import {
   isDiscoverSlotKind,
   kindsCoverSet,
   canLockClimax,
+  lockClimaxFromArrangeRoles,
   lockClimaxFromSlots,
   sanitiseLockedClimax,
-  type CoachSlotSnapshot
+  type CoachSlotSnapshot,
+  type CoachStemSnapshot
 } from './coachClimax'
 
 const NOW = 1_700_000_000_000
@@ -172,5 +174,51 @@ describe('kindsCoverSet', () => {
 
   it('is false for an empty wanted set, never vacuously true', () => {
     expect(kindsCoverSet(['drums'], [])).toBe(false)
+  })
+})
+
+describe('lockClimaxFromArrangeRoles', () => {
+  const stem = (path: string, barLength: number): CoachStemSnapshot => ({
+    path,
+    name: path,
+    author: 'e',
+    type: 'fx',
+    durationSec: 4,
+    barLength
+  })
+
+  it('keeps the role the user confirmed rather than re-deriving it', () => {
+    const locked = lockClimaxFromArrangeRoles(
+      [{ stem: stem('/pad.wav', 4), role: 'textureFx', gain: 0.8 }],
+      120,
+      0
+    )
+    expect(locked?.stems[0].role).toBe('textureFx')
+    expect(locked?.stems[0].gain).toBe(0.8)
+  })
+
+  it('takes the LONGEST member bar length, like a placed discover rifff does', () => {
+    const locked = lockClimaxFromArrangeRoles(
+      [
+        { stem: stem('/a.wav', 4), role: 'drums', gain: 1 },
+        { stem: stem('/b.wav', 8), role: 'bass', gain: 1 }
+      ],
+      120,
+      0
+    )
+    expect(locked?.barLength).toBe(8)
+  })
+
+  it('tags each stem with the kinds its role stands for', () => {
+    const locked = lockClimaxFromArrangeRoles(
+      [{ stem: stem('/kick.wav', 4), role: 'drums', gain: 1 }],
+      120,
+      0
+    )
+    expect(locked?.stems[0].kinds).toEqual(['drums'])
+  })
+
+  it('refuses an empty list rather than locking nothing', () => {
+    expect(lockClimaxFromArrangeRoles([], 120, 0)).toBeNull()
   })
 })

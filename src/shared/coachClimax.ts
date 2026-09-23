@@ -18,6 +18,7 @@
 
 import {
   DISCOVER_SLOT_KIND_OPTIONS,
+  arrangeRoleToSlotKinds,
   discoverSlotKindToArrangeRole,
   normalizeSlotKinds,
   type DiscoverSlotKind
@@ -160,6 +161,50 @@ export function lockClimaxFromSlots(
     stems,
     lockedAt: now
   }
+}
+
+/** One stem on its way into a locked climax, as the auto-arranger's own
+ * role step knows it. */
+export interface CoachClimaxStemInput {
+  stem: CoachStemSnapshot
+  /** The role the USER confirmed in AutoArrangeRoleStep -- kept verbatim,
+   * never re-derived from the kinds below. */
+  role: ArrangeRole
+  /** 0-1, the stem's own committed gain off state.vol. */
+  gain: number
+}
+
+/**
+ * A locked climax built from the auto-arranger's confirmed roles rather than
+ * from Discover's slots.
+ *
+ * The two constructors differ in which field is authoritative, and it
+ * matters: lockClimaxFromSlots DERIVES the role from the kinds Discover
+ * tagged, because there the kinds are the real signal. Here the ROLE is the
+ * real signal -- a person just chose it from a dropdown -- and the kinds are
+ * derived from it (ARRANGE_ROLE_SLOT_KINDS). Deriving the role back out of
+ * those kinds would squash 'backing', 'textureFx', 'fill' and 'vocal' into
+ * 'lead' or 'aux' and throw away the one piece of information the user gave
+ * by hand.
+ *
+ * barLength is the longest member's, the same rule the other constructor and
+ * assembleDiscoverRifff both use, so a section built from this tiles exactly
+ * as the source material did.
+ */
+export function lockClimaxFromArrangeRoles(
+  stems: readonly CoachClimaxStemInput[],
+  bpm: number,
+  now: number
+): LockedClimax | null {
+  if (stems.length === 0) return null
+  const locked: LockedClimaxStem[] = stems.map((entry) => ({
+    ...entry.stem,
+    kinds: [...arrangeRoleToSlotKinds(entry.role)],
+    role: entry.role,
+    gain: clampGain(entry.gain)
+  }))
+  const barLength = Math.max(...locked.map((stem) => (stem.barLength > 0 ? stem.barLength : 1)))
+  return { bpm, barLength, stems: locked, lockedAt: now }
 }
 
 function finitePositive(value: unknown, fallback: number): number {

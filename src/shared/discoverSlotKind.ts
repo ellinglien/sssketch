@@ -58,6 +58,47 @@ export function discoverSlotKindToArrangeRole(kind: DiscoverSlotKind): ArrangeRo
   return DISCOVER_SLOT_KIND_TO_ARRANGE_ROLE[kind]
 }
 
+/**
+ * The other direction: the kinds an ArrangeRole stands for.
+ *
+ * Needed because the guided map can now be entered from the AUTO-ARRANGER,
+ * where the material is stems already on the timeline with roles the user
+ * confirmed by hand -- not Discover slots, which arrive already tagged.
+ * Everything downstream of a locked climax keys off `kinds`
+ * (isSuggestedDrop, coachMapTemplate), so a role has to be able to answer
+ * for itself.
+ *
+ * NOT a strict inverse of the table above, and it cannot be: three roles
+ * map to 'lead' there. It is its own deliberately conservative table, and
+ * the conservatism is the point --
+ *
+ * - **Nothing here is ever the hook** (['lead', 'bright']). The app cannot
+ *   tell a plain lead apart from the hook, and coachSections.ts already
+ *   settles what to do about that: under-flagging costs the user one click,
+ *   over-flagging is the app asserting something it has not earned. So a
+ *   'lead' or a 'vocal' keeps its place in a build rather than being taken
+ *   out of one on a guess.
+ * - **'backing' is the harmony** (['lead', 'warm']), which is exactly the
+ *   pair phase one used to arm for the harmony step -- and it is what
+ *   an intro and an outro drop, which is right.
+ * - **'aux' gets nothing**, so kindsCoverSet can never match it and a
+ *   generic part is never a suggested drop anywhere.
+ */
+export const ARRANGE_ROLE_SLOT_KINDS: Record<ArrangeRole, readonly DiscoverSlotKind[]> = {
+  drums: ['drums'],
+  bass: ['bass'],
+  lead: ['lead'],
+  backing: ['lead', 'warm'],
+  aux: [],
+  textureFx: ['warm'],
+  fill: ['rhythmic'],
+  vocal: ['lead']
+}
+
+export function arrangeRoleToSlotKinds(role: ArrangeRole): readonly DiscoverSlotKind[] {
+  return ARRANGE_ROLE_SLOT_KINDS[role]
+}
+
 export type DiscoverTraitKind = 'bassHeavy' | 'rhythmic' | 'bright' | 'warm'
 
 export type DiscoverMaskKind = 'drums' | 'bass' | 'lead'
