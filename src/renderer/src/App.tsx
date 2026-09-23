@@ -38,7 +38,7 @@ import { LibraryBrowser } from './components/LibraryBrowser'
 import { type DiscoverSlot } from './components/DiscoverPanel'
 import { buildSeedSlotsFromStems, discoverHasRealContent } from './audio/discoverSeed'
 import { ProjectLibraryBrowser } from './components/ProjectLibraryBrowser'
-import { ClusterStemsBrowser } from './components/ClusterStemsBrowser'
+import { ClusterStemsBrowser, type TidyUpPopulation } from './components/ClusterStemsBrowser'
 import { ArrangementMap } from './components/ArrangementMap'
 import { AutoArrangeWizard } from './components/AutoArrangeWizard'
 import { DrawArrangeWizard } from './components/DrawArrangeWizard'
@@ -511,6 +511,7 @@ function ProjectMenu({
   handleSave,
   onOpenLibrary,
   onOpenClusterStems,
+  onOpenClusterStemsLibrary,
   onOpenAutoArrange,
   onOpenDrawArrange
 }: {
@@ -529,6 +530,11 @@ function ProjectMenu({
    * App.tsx's Frame). Reused here for the export-time nudge's "tidy up
    * first" button. */
   onOpenClusterStems: () => void
+  /** Opens the same browser over the whole LIBRARY instead of this
+   * sketch's stems -- not clustered, role only, no bus. See
+   * TidyUpPopulation (ClusterStemsBrowser.tsx) for why the same click does
+   * slightly different work in the two populations. */
+  onOpenClusterStemsLibrary: () => void
   /** Opens AutoArrangeWizard -- project-wide, same "no groupId" shape as
    * onOpenClusterStems above, wired to setAutoArrangeOpen(true) in Frame. */
   onOpenAutoArrange: () => void
@@ -866,6 +872,7 @@ function ProjectMenu({
           ignoreRef={gearButtonRef}
           items={[
             { label: 'tidy up', onClick: onOpenClusterStems },
+            { label: 'tidy up library', onClick: onOpenClusterStemsLibrary },
             {
               label: 'auto-arrange',
               onClick: onOpenAutoArrange,
@@ -1787,6 +1794,14 @@ function Frame(): React.JSX.Element {
     setRiffLibraryOpen(true)
   }
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
+  // Which stems the open Tidy Up pass is over -- see TidyUpPopulation
+  // (ClusterStemsBrowser.tsx). Every existing entry point means 'sketch';
+  // only the gear menu's second item asks for the library.
+  const [clusterStemsPopulation, setClusterStemsPopulation] = useState<TidyUpPopulation>('sketch')
+  const openClusterStems = useCallback((population: TidyUpPopulation): void => {
+    setClusterStemsPopulation(population)
+    setClusterStemsOpen(true)
+  }, [])
   const [autoArrangeOpen, setAutoArrangeOpen] = useState(false)
   const [drawArrangeOpen, setDrawArrangeOpen] = useState(false)
   // Every riff imported together as one LORE library batch, sharing the same
@@ -2454,7 +2469,8 @@ function Frame(): React.JSX.Element {
               handleNew={handleNew}
               handleSave={handleSave}
               onOpenLibrary={openLibraryBrowser}
-              onOpenClusterStems={() => setClusterStemsOpen(true)}
+              onOpenClusterStems={() => openClusterStems('sketch')}
+              onOpenClusterStemsLibrary={() => openClusterStems('library')}
               onOpenAutoArrange={() => setAutoArrangeOpen(true)}
               onOpenDrawArrange={() => setDrawArrangeOpen(true)}
             />
@@ -2505,7 +2521,9 @@ function Frame(): React.JSX.Element {
                   either child, so sssketchy does not jump across the screen
                   when the view flips. */}
               {state.mapView ? (
-                <ArrangementMap onWhatIsThis={() => setClusterStemsOpen(true)} />
+                // The map's own "what is this?" keeps the SKETCH population --
+                // it is asking about the rows on THIS map.
+                <ArrangementMap onWhatIsThis={() => openClusterStems('sketch')} />
               ) : (
                 <Timeline
                   onOpenClipMenu={openClipMenu}
@@ -2701,6 +2719,7 @@ function Frame(): React.JSX.Element {
           <ClusterStemsBrowser
             onClose={() => setClusterStemsOpen(false)}
             currentSketch={currentSketch}
+            population={clusterStemsPopulation}
           />
         )}
         {autoArrangeOpen && (

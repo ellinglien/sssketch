@@ -34,6 +34,15 @@ import { useCachedStemEmbeddings } from '../audio/useCachedStemEmbeddings'
 import { suggestCategoryFromEmbedding, type ConfirmedEmbedding } from '@shared/embeddingMatch'
 import { guessArrangeRoleFromPresetName } from '@shared/presetNames'
 import { recordStemRoles } from '../state/stemCategoryCapture'
+import { useThrowawayStemPreview } from '../state/useThrowawayStemPreview'
+import { typeColorVar } from '../theme/typeColor'
+import type { Stem } from '@shared/types'
+import type { TidyUpLibraryStem } from '../../../main/tidyUpLibraryStems'
+
+/** How many library stems one pass offers. One evening's worth, not the
+ * whole backlog -- see listTidyUpLibraryStems' own doc comment for the
+ * ordering that decides WHICH ones. */
+const LIBRARY_PAGE = 200
 
 /** Which stems this pass is over.
  *
@@ -152,6 +161,15 @@ interface ClusterableStem {
   groupId: string
   slot: number
   name: string
+  /** LIBRARY POPULATION ONLY (see TidyUpPopulation). What a human already
+   * said this stem is, read out of the global StemCategories table at open
+   * time. The sketch population leaves this undefined and highlights a row
+   * from live `busOf` instead -- which never has a library stem in it. */
+  confirmedRole?: ArrangeRole | null
+  /** LIBRARY POPULATION ONLY. The stem itself, for the throwaway audition:
+   * a library stem is in no rifff, so there is no state.rifffs entry for
+   * useStemPreviewPlayback to solo by stemKey. */
+  librarySource?: Omit<Stem, 'slot'>
   path: string
   color: string
   /** The bar this stem's own rifff is placed at on the timeline -- what a
@@ -295,6 +313,16 @@ export function ClusterStemsBrowser({
   // possible). See that hook's own doc comment for why this is a shared
   // hook rather than two copies of correctness-critical async ordering.
   const { previewingKeys, startPreview } = useStemPreviewPlayback()
+
+  // The LIBRARY population's own audition -- a library stem is in no rifff
+  // and has no stemKey, so useStemPreviewPlayback above cannot reach it.
+  // Declared AFTER that hook deliberately: React runs effect cleanups in
+  // declaration order, and this one's cleanup is the one that must run
+  // LAST, because it is the one that hands the real project back to the
+  // engine. Reverse them and useStemPreviewPlayback's own releaseEngine()
+  // bumps the ownership generation first, which aborts this flush and
+  // leaves the throwaway preview project loaded.
+  const { previewStems } = useThrowawayStemPreview()
   const busOf = useAppSelector((s) => s.busOf)
 
   // Frozen the moment this component mounts (useState's lazy initializer
@@ -359,7 +387,60 @@ export function ClusterStemsBrowser({
     onClose()
   }
 
+  // Fetched once per modal session, like every other frozen-at-mount input
+  // in this file (busOfSnapshot, centroidStoreSnapshot,
+  // confirmedBusEmbeddings) and for the same reason: a list that reshuffles
+  // under the user mid-pass was reported as "jolting"/like it "took over".
+  // null means "not fetched yet", which the loading branch below reads.
+  const [libraryStems, setLibraryStems] = useState<TidyUpLibraryStem[] | null>(null)
+  useEffect(() => {
+    if (population !== 'library') return
+    void window.rifffApi
+      .getTidyUpLibraryStems(LIBRARY_PAGE)
+      .then(setLibraryStems)
+      .catch((err: unknown) => {
+        console.error('ClusterStemsBrowser: failed to read the library population:', err)
+        setLibraryStems([])
+      })
+  }, [population])
+
   const stems = useMemo<ClusterableStem[]>(() => {
+    if (population === 'library') {
+      // A library stem is in no rifff and on no timeline, so it has no
+      // groupId, no slot and no bar. `key` is its StemCID, which is unique
+      // and is all this file's own Maps/Sets need it for. startBar 0 and
+      // visibleBars/tileSpanBars = barLength make the thumbnail draw one
+      // whole pass of the file, which is exactly what <Waveform> renders
+      // anyway -- the playhead overlay simply never lights, because nothing
+      // on the timeline is playing.
+      return (libraryStems ?? []).map((s): ClusterableStem => {
+        const stem: Omit<Stem, 'slot'> = {
+          author: s.author,
+          name: s.presetName || s.stemCID,
+          type: s.type,
+          path: s.path,
+          durationSec: s.durationSec,
+          barLength: s.barLength
+        }
+        return {
+          key: s.stemCID,
+          groupId: s.stemCID,
+          slot: 1,
+          name: s.presetName || s.stemCID,
+          presetName: s.presetName,
+          path: s.path,
+          tileSpanBars: s.barLength,
+          // typeColorVar, not a second colour table -- a library stem has a
+          // SoundType from its instrument mask and gets the same swatch as
+          // any other stem of that type.
+          color: typeColorVar(s.type),
+          startBar: 0,
+          visibleBars: s.barLength,
+          confirmedRole: s.confirmedRole,
+          librarySource: stem
+        }
+      })
+    }
     const out: ClusterableStem[] = []
     for (const rifff of Object.values(rifffs)) {
       if (rifff.startBar === undefined) continue
@@ -396,7 +477,15 @@ export function ClusterStemsBrowser({
       }
     }
     return out
-  }, [rifffs, playedBarsOverrides, leftCropOverrides, stretchOverrides, stateBpm])
+  }, [
+    population,
+    libraryStems,
+    rifffs,
+    playedBarsOverrides,
+    leftCropOverrides,
+    stretchOverrides,
+    stateBpm
+  ])
 
   const [clusterCount, setClusterCount] = useState(DEFAULT_CLUSTER_COUNT)
 
@@ -420,6 +509,17 @@ export function ClusterStemsBrowser({
     }
     return { analyzedStems, rawVectorsByKey }
   }, [loading, stems, featuresByKey])
+
+  // The overnight classifier's own StemAutoCategory guess, keyed by
+  // StemCID -- carried through listTidyUpLibraryStems rather than
+  // recomputed, and empty for the sketch population.
+  const libraryRoleGuessByKey = useMemo(() => {
+    const byKey = new Map<string, ArrangeRole>()
+    for (const s of libraryStems ?? []) {
+      if (s.suggestedRole !== null) byKey.set(s.stemCID, s.suggestedRole)
+    }
+    return byKey
+  }, [libraryStems])
 
   // Splits the analyzed population in two: stems that get a confident
   // auto-slot suggestion (excluded from DSP clustering entirely, shown
@@ -458,6 +558,41 @@ export function ClusterStemsBrowser({
     const { analyzedStems, rawVectorsByKey } = computed
     const suggestions = new Map<BusId, ClusterableStem[]>()
     const dspStems: ClusterableStem[] = []
+
+    // THE LIBRARY IS NOT CLUSTERED, AND CANNOT BE. computeMergeSequence is
+    // O(n^3) and categoryCentroids.ts records testing against a real
+    // ~45,000-stem backlog -- that is arithmetic, not a performance
+    // problem. Tidy Up already has two halves, and the library gets the
+    // SUGGESTED one: every stem lands in a suggested group from what is
+    // already known about it, and `dspStems` stays empty so the DSP half
+    // renders nothing. expandFlatGroupIntoRows then splits those groups on
+    // demand exactly as it already does -- that is a unification, not a new
+    // mode: the function exists precisely because a suggested group has no
+    // clustering behind it until someone asks for one. (It clusters at most
+    // LIBRARY_PAGE stems, never the library.)
+    //
+    // A HUMAN CONFIRMATION FIRST, then the overnight classifier's guess,
+    // then a real Endlesss preset-name match. That order is the same rule
+    // resolveStemRole applies to a confirmed busId and the role step
+    // applies to a confirmed role: a machine guess may pre-fill, and may
+    // never override what somebody actually said. Grouping a confirmed
+    // stem under StemAutoCategory's guess would put it in a row that
+    // contradicts its own highlight.
+    if (population === 'library') {
+      for (const stem of analyzedStems) {
+        const known =
+          stem.confirmedRole ??
+          libraryRoleGuessByKey.get(stem.key) ??
+          guessArrangeRoleFromPresetName(stem.presetName)?.arrangeRole ??
+          null
+        const busId = known === null ? 'aux' : ARRANGE_ROLE_TO_BUS[known]
+        const list = suggestions.get(busId) ?? []
+        list.push(stem)
+        suggestions.set(busId, list)
+      }
+      return { suggestions, dspStems, rawVectorsByKey, mergeSequence: [] }
+    }
+
     for (const stem of analyzedStems) {
       if (busOfSnapshot[stem.key] !== undefined) {
         dspStems.push(stem)
@@ -500,7 +635,15 @@ export function ClusterStemsBrowser({
       rawVectorsByKey,
       mergeSequence: computeMergeSequence(standardizeFeatures(dspVectors))
     }
-  }, [computed, busOfSnapshot, centroidStoreSnapshot, embeddingByKey, confirmedBusEmbeddings])
+  }, [
+    computed,
+    population,
+    libraryRoleGuessByKey,
+    busOfSnapshot,
+    centroidStoreSnapshot,
+    embeddingByKey,
+    confirmedBusEmbeddings
+  ])
 
   // Node ids the user has manually split a SUGGESTED group further into,
   // keyed by that group's own bus -- same idea as splitNodeIds below (for
@@ -625,6 +768,10 @@ export function ClusterStemsBrowser({
       return
     }
     setFocusedId(id)
+    if (population === 'library') {
+      void previewLibraryStems(members)
+      return
+    }
     const targetBar = Math.min(...members.map((m) => m.startBar))
     void startPreview(new Set(members.map((m) => m.key)), undefined, targetBar)
   }
@@ -633,7 +780,29 @@ export function ClusterStemsBrowser({
   // from the actual click position within the thumbnail, not just the
   // clip's start (see ClusterRow's handlePointerDown below).
   function previewStem(stem: ClusterableStem, targetBar: number): void {
+    if (population === 'library') {
+      // targetBar is meaningless for a throwaway one-loop project (it
+      // starts at 0 and loops) -- a real difference between the two
+      // populations, and an acceptable one: the thumbnail's whole pass IS
+      // the loop. Do not fabricate a seek.
+      void previewLibraryStems([stem])
+      return
+    }
     void startPreview(new Set([stem.key]), stem.groupId, targetBar)
+  }
+
+  /** The library half of the audition invariant: exactly these stems, and
+   * nothing else, handed to the engine as a throwaway project -- starting
+   * one stops the previous one entirely (useThrowawayStemPreview's own
+   * generation guard). Anything with no librarySource is skipped rather
+   * than silently auditioned as something else. */
+  function previewLibraryStems(members: ClusterableStem[]): Promise<void> {
+    const stems = members
+      .map((m) => m.librarySource)
+      .filter((stem): stem is Omit<Stem, 'slot'> => stem !== undefined)
+      .map((stem) => ({ stem, gain: 1 }))
+    if (stems.length === 0) return Promise.resolve()
+    return previewStems(stems)
   }
 
   // Forward-captures every member's BusId into the library-wide
@@ -776,6 +945,10 @@ export function ClusterStemsBrowser({
       members.every((m) => previewingKeys.has(m.key))
     if (isThisGroupAlreadyPlaying) {
       dispatch({ type: 'PAUSE' })
+      return
+    }
+    if (population === 'library') {
+      void previewLibraryStems(members)
       return
     }
     const targetBar = Math.min(...members.map((m) => m.startBar))
@@ -927,22 +1100,31 @@ export function ClusterStemsBrowser({
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
-          <span className="ra-eyebrow">tidy up</span>
+          <span className="ra-eyebrow">
+            {population === 'library' ? 'tidy up library' : 'tidy up'}
+          </span>
           <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
-              clusters: {clusterCount}
-            </span>
-            <input
-              className="cluster-count-slider"
-              type="range"
-              min={1}
-              max={sliderMax}
-              value={clusterCount}
-              onChange={(e) => setClusterCount(Number(e.target.value))}
-              style={{
-                background: `linear-gradient(to right, var(--ra-stretch-on) ${sliderFillPercent}%, var(--ra-border) ${sliderFillPercent}%)`
-              }}
-            />
+            {/* The library is not clustered, so the cluster-count slider
+                has nothing to cut -- see `partitioned`'s own library
+                branch. */}
+            {population === 'sketch' && (
+              <>
+                <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
+                  clusters: {clusterCount}
+                </span>
+                <input
+                  className="cluster-count-slider"
+                  type="range"
+                  min={1}
+                  max={sliderMax}
+                  value={clusterCount}
+                  onChange={(e) => setClusterCount(Number(e.target.value))}
+                  style={{
+                    background: `linear-gradient(to right, var(--ra-stretch-on) ${sliderFillPercent}%, var(--ra-border) ${sliderFillPercent}%)`
+                  }}
+                />
+              </>
+            )}
             <button onClick={handleClose} aria-label="Close tidy up browser" style={buttonStyle()}>
               ×
             </button>
@@ -954,8 +1136,9 @@ export function ClusterStemsBrowser({
             same information, less vertical weight before any real
             content shows. */}
         <p style={{ fontSize: 10, color: 'var(--ra-text-3)', margin: '0 0 8px' }}>
-          group similar stems, assign each cluster to a bus -- exports pack by bus, not one track
-          per stem.
+          {population === 'library'
+            ? 'say what these are -- saved to your library, and every map in the app reads it back.'
+            : 'group similar stems, assign each cluster to a bus -- exports pack by bus, not one track per stem.'}
         </p>
 
         {loading && (
@@ -976,14 +1159,18 @@ export function ClusterStemsBrowser({
 
         {!loading && stems.length === 0 && (
           <div style={{ fontSize: 11, color: 'var(--ra-text-2)', padding: 12 }}>
-            no stems placed on the timeline yet
+            {population === 'library'
+              ? 'nothing in the library has been scanned and downloaded yet'
+              : 'no stems placed on the timeline yet'}
           </div>
         )}
 
         {!loading && suggestedGroups.length > 0 && (
           <div style={{ marginBottom: 14 }}>
             <p style={{ fontSize: 10, color: 'var(--ra-text-3)', margin: '0 0 6px' }}>
-              suggested from past tidy-ups -- click a bus to confirm
+              {population === 'library'
+                ? 'unconfirmed first, newest first after that -- click a category to confirm'
+                : 'suggested from past tidy-ups -- click a bus to confirm'}
             </p>
             {suggestedGroups.map(({ busId, nodeId, members }) => (
               <ClusterRow
@@ -994,7 +1181,8 @@ export function ClusterStemsBrowser({
                   celebratingSuggested?.busId === busId && celebratingSuggested.nodeId === nodeId
                 }
                 provenanceOverride="suggested"
-                suggestedBus={busId}
+                suggestedBus={population === 'library' ? undefined : busId}
+                population={population}
                 onAssign={(category) => assignSuggestedGroup(busId, nodeId, members, category)}
                 onAssignDrumSubRole={(drumSubRole) =>
                   assignDrumSubRoleForSuggestedGroup(busId, nodeId, members, drumSubRole)
@@ -1017,6 +1205,7 @@ export function ClusterStemsBrowser({
               members={members}
               focused={id === clampedFocusedId}
               celebrating={id === celebratingId}
+              population={population}
               onAssign={(category) => assignCluster(id, members, category)}
               onAssignDrumSubRole={(drumSubRole) =>
                 assignDrumSubRoleForRow(id, members, drumSubRole)
@@ -1069,7 +1258,8 @@ function ClusterRow({
   celebrating,
   provenanceOverride,
   splittable = true,
-  suggestedBus
+  suggestedBus,
+  population
 }: {
   members: ClusterableStem[]
   /** One of ARRANGE_ROLE_OPTIONS' 8 values -- see ARRANGE_ROLE_TO_BUS's own
@@ -1102,6 +1292,11 @@ function ClusterRow({
    * drawn with buttonStyle's 'suggested' state until/unless the user
    * clicks a bus (any bus, including this one) to actually confirm it. */
   suggestedBus?: BusId
+  /** Which population this row belongs to -- see TidyUpPopulation. It
+   * decides where the "confirmed" highlight is read FROM: live `busOf` for
+   * the sketch, this row's own fetched confirmedRole for the library
+   * (busOf never has a library stem in it). */
+  population: TidyUpPopulation
 }): React.JSX.Element {
   const busOf = useAppSelector((s) => s.busOf)
   const provenance = provenanceOverride ?? clusterProvenance(members.map((m) => m.name))
@@ -1128,6 +1323,23 @@ function ClusterRow({
     const allMatch = members.every((m) => busOf[m.key] === first)
     return allMatch ? first : null
   }, [members, busOf])
+
+  // The library's counterpart to assignedBus: busOf never has a library
+  // stem in it, so a library row's "confirmed" highlight comes from the
+  // role fetched at open time. Same all-members-agree rule -- a mixed row
+  // shows no highlight rather than a misleading single answer.
+  //
+  // KNOWN LIMIT, accepted: a confirmation made DURING this session does not
+  // re-highlight, because the fetched list is frozen at open (the same
+  // freeze busOfSnapshot/centroidStoreSnapshot have, for the same
+  // "don't jolt the user mid-pass" reason). The celebration pulse already
+  // acknowledges the click, which is exactly what it was added for.
+  const assignedRole = useMemo<ArrangeRole | null>(() => {
+    if (population !== 'library' || members.length === 0) return null
+    const first = members[0].confirmedRole ?? null
+    if (first === null) return null
+    return members.every((m) => (m.confirmedRole ?? null) === first) ? first : null
+  }, [members, population])
 
   // True while ANY of this row's own members is the current preview
   // target -- covers both "play" (every member) and a single thumbnail
@@ -1210,7 +1422,7 @@ function ClusterRow({
               key={category}
               onClick={() => onAssign(category)}
               style={buttonStyle(
-                assignedBus === ARRANGE_ROLE_TO_BUS[category]
+                assignedRole === category || assignedBus === ARRANGE_ROLE_TO_BUS[category]
                   ? 'confirmed'
                   : suggestedBus === category
                     ? 'suggested'
@@ -1232,7 +1444,7 @@ function ClusterRow({
           'drums') -- see onAssignDrumSubRole's own doc comment above for why
           this is write-only and always starts back at "drums (generic)"
           rather than remembering a prior pick. */}
-      {assignedBus === 'drums' && (
+      {(assignedBus === 'drums' || assignedRole === 'drums') && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 6 }}>
           <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>kit piece</span>
           <select
