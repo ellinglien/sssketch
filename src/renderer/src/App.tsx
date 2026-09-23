@@ -59,16 +59,8 @@ import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
 import { TourOverlay, type TourStep } from './components/TourOverlay'
 import { SssketchyCoach } from './components/SssketchyCoach'
-import {
-  coachStepArmKinds,
-  coachStepById,
-  type CoachMoveAction,
-  type CoachOfferAction
-} from '@shared/coachSteps'
-import { isDiscoverSlotKind, type CoachSlotSnapshot } from '@shared/coachClimax'
-import { coachIsComplete } from '@shared/coach'
-import { slotKindsKey } from '@shared/discoverSlotKind'
-import { coachDiscoverIsOpen, requestCoachAddSlot } from './state/coachDiscoverBridge'
+import { type CoachMoveAction } from '@shared/coachSteps'
+import { type CoachSlotSnapshot } from '@shared/coachClimax'
 import { requestCoachSectionOp } from './state/coachSectionBridge'
 import { requestCoachTensionOp } from './state/coachTensionBridge'
 import { registerCoachExport, requestCoachExport } from './state/coachExportBridge'
@@ -800,34 +792,6 @@ function ProjectMenu({
     color: 'var(--ra-text-2)'
   } as const
 
-  /**
-   * The guided flow's only entry point. "Button only (Elling's decision) --
-   * sssketchy never appears on his own, not even on an empty project. The
-   * entry point is a button in the project menu row, alongside new / open /
-   * save / tidy / export: it is a project-level verb like the rest of that
-   * row" (spec, "Starting the flow").
-   *
-   * The same button resumes a half-finished flow, which is why there is no
-   * separate "resume" affordance anywhere: a project reopened mid-flow
-   * comes back 'dismissed' (see sanitiseLoadedCoach), and this puts it back
-   * on screen at exactly the step it was left on.
-   *
-   * A FINISHED flow has nowhere left to resume to, so pressing it then
-   * starts a fresh one -- the title below says so before it happens. That
-   * is coachIsComplete rather than status === 'finished' because a finished
-   * flow can be put away ("done" on the closing bubble), after which its
-   * status is 'dismissed' like any other hidden flow and only the last
-   * step's outcome still says it ran to the end.
-   */
-  const coach = state.coach
-  const coachFinished = coach !== null && coachIsComplete(coach)
-  const coachResumable = coach !== null && !coachFinished
-  function handleSssketchy(): void {
-    const now = Date.now()
-    if (coachResumable) dispatch({ type: 'COACH_RESUME', now })
-    else dispatch({ type: 'COACH_START', now })
-  }
-
   return (
     <div style={{ display: 'flex', gap: 6 }}>
       <button onClick={handleNew} style={buttonStyle}>
@@ -952,19 +916,6 @@ function ProjectMenu({
           onClose={() => setExportMenu(null)}
         />
       )}
-      <button
-        onClick={handleSssketchy}
-        title={
-          coachResumable
-            ? 'pick the guided track-design flow back up'
-            : coachFinished
-              ? 'start the guided track-design flow again from the top'
-              : 'walk me through building a rough track'
-        }
-        style={buttonStyle}
-      >
-        sssketchy
-      </button>
       {exportFormatPickerOpen && (
         <ExportFormatPicker
           toolkitInUse={projectUsesToolkit(state)}
@@ -1496,23 +1447,6 @@ function Frame(): React.JSX.Element {
   const handleCoachSlotsChange = useCallback((next: CoachSlotSnapshot[]) => {
     setCoachSlots(next)
   }, [])
-  // "Each step pre-arms the matching kinds in Discover's add row" (spec).
-  // Memoized by the kind STRING so DiscoverPanel's own arming effect does
-  // not re-fire on every unrelated App re-render and stamp over a chip the
-  // user just armed by hand. Null while no flow is running, while he is
-  // dismissed, and on every step that arms nothing.
-  const coachArmKey = (() => {
-    const coach = state.coach
-    if (coach === null || coach.status === 'dismissed' || coach.status === 'finished') return ''
-    const step = coachStepById(coach.stepId)
-    if (step === undefined) return ''
-    const kinds = coachStepArmKinds(step, coach.flavour)
-    return kinds === null ? '' : slotKindsKey(kinds)
-  })()
-  const coachArmedKinds = useMemo(
-    () => (coachArmKey === '' ? null : coachArmKey.split('+').filter(isDiscoverSlotKind)),
-    [coachArmKey]
-  )
   // 0 = strictest (the Discover "matching" dial all the way up) -- direct
   // request, 2026-09-22.
   const [discoverChaos, setDiscoverChaos] = useState(0)
@@ -1768,56 +1702,18 @@ function Frame(): React.JSX.Element {
     setRiffLibraryOpen(true)
   }
 
-  /** Every phase-one step happens in Discover, so a step's own move opens
-   * it there directly -- on an empty project the normal rule would land on
-   * 'browse', where the add row the step just armed is not even mounted. */
-  function openDiscoverForCoach(): void {
-    setLibraryBrowserOpen(false)
-    setRiffLibraryInitialMode('discover')
-    setRiffLibraryOpen(true)
-  }
-
-  /** "start from a riff you love" (spec, phase 1 step 1) -- the existing
-   * Discover seeding, reached where it already lives: the browse tab's own
-   * "seed discover with this" button (seedDiscoverFromBrowseRiff,
-   * LibraryBrowser.tsx). Nothing new is built for it here. */
-  function openRiffBrowserForCoach(): void {
-    setLibraryBrowserOpen(false)
-    setRiffLibraryInitialMode('browse')
-    setRiffLibraryOpen(true)
-  }
-
-  /** An answer only the user can give. Both answers also open Discover,
-   * because that is where every step after this one happens. */
-  function handleCoachOffer(action: CoachOfferAction): void {
-    if (action.kind === 'set-flavour') {
-      dispatch({
-        type: 'COACH_SET_FLAVOUR',
-        now: Date.now(),
-        flavour: action.flavour,
-        slots: coachSlots
-      })
-      openDiscoverForCoach()
-      return
-    }
-    openRiffBrowserForCoach()
-  }
-
   /**
-   * "do it for me", and every move listed under "stuck?". The add goes
-   * through the bridge because only DiscoverPanel can add a slot properly
-   * (see coachDiscoverBridge.ts); the bridge queues it if Discover is not
-   * open yet, which is why opening it afterwards is safe. The section ops
-   * go through their own bridge for the same reason -- only
-   * SssketchySectionPanel can press its own buttons -- but with no queue,
-   * because that panel is mounted exactly while its steps are current.
+   * "do it for me", and every move listed under "stuck?". The section ops
+   * go through their own bridge because only SssketchySectionPanel can
+   * press its own buttons -- with no queue, because that panel is mounted
+   * exactly while its steps are current.
    * Phase three's two wires are the same idea again: the tension ops reach
    * SssketchyTensionPanel (unqueued, mounted only on p3-tension) and the
    * export ops reach ProjectMenu's own three menu entries, so the flow
    * never grows an export path of its own.
    *
    * An exhaustive SWITCH, not an if-chain with a fallthrough. This was the
-   * latter, which meant every kind other than 'add-slot' landed on the
+   * latter, which meant every kind other than the first landed on the
    * lock-climax dispatch -- fine while there were only two kinds, and a
    * silent wrong answer the moment a third arrived: every phase-two "do it
    * for me" would have quietly re-locked the climax instead of carving.
@@ -1826,10 +1722,6 @@ function Frame(): React.JSX.Element {
    */
   function handleCoachMove(action: CoachMoveAction): void {
     switch (action.kind) {
-      case 'add-slot':
-        requestCoachAddSlot(action.kinds)
-        if (!coachDiscoverIsOpen()) openDiscoverForCoach()
-        return
       case 'lock-climax':
         dispatch({ type: 'COACH_LOCK_CLIMAX', now: Date.now(), slots: coachSlots, bpm: state.bpm })
         return
@@ -2705,7 +2597,6 @@ function Frame(): React.JSX.Element {
             discoverSeedBpm={discoverSeedBpm}
             setDiscoverSeedBpm={setDiscoverSeedBpm}
             initialMode={riffLibraryInitialMode ?? undefined}
-            coachArmedKinds={coachArmedKinds}
             onCoachSlotsChange={handleCoachSlotsChange}
           />
         )}
@@ -2907,7 +2798,6 @@ function Frame(): React.JSX.Element {
         <SssketchyCoach
           discoverSlots={coachSlots}
           riffLibraryOpen={riffLibraryOpen}
-          onOffer={handleCoachOffer}
           onMove={handleCoachMove}
         />
       </div>

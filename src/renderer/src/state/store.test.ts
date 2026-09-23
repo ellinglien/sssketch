@@ -2787,7 +2787,7 @@ describe('the guided flow (sssketchy)', () => {
   it('COACH_START begins a flow on the first step', () => {
     const state = reducer(initialState, { type: 'COACH_START', now: NOW })
     expect(state.coach?.status).toBe('active')
-    expect(state.coach?.stepId).toBe('p1-flavour')
+    expect(state.coach?.stepId).toBe('p2-first')
   })
 
   it('COACH_START restarts a finished flow rather than reviving it mid-step', () => {
@@ -2800,15 +2800,15 @@ describe('the guided flow (sssketchy)', () => {
     }
     expect(state.coach?.status).toBe('finished')
     state = reducer(state, { type: 'COACH_START', now: NOW + (n + 1) * MINUTE })
-    expect(state.coach?.stepId).toBe('p1-flavour')
+    expect(state.coach?.stepId).toBe('p2-first')
     expect(state.coach?.outcomes).toEqual({})
   })
 
   it('COACH_ADVANCE records next and skip differently', () => {
     let state = reducer(initialState, { type: 'COACH_START', now: NOW })
     state = reducer(state, { type: 'COACH_ADVANCE', now: NOW + MINUTE, outcome: 'skipped' })
-    expect(state.coach?.stepId).toBe('p1-low-end')
-    expect(state.coach?.outcomes).toEqual({ 'p1-flavour': 'skipped' })
+    expect(state.coach?.stepId).toBe('p2-section')
+    expect(state.coach?.outcomes).toEqual({ 'p2-first': 'skipped' })
   })
 
   it('COACH_MINIMISE, COACH_RESTORE, COACH_DISMISS and COACH_RESUME move the status', () => {
@@ -2821,7 +2821,7 @@ describe('the guided flow (sssketchy)', () => {
     expect(state.coach?.status).toBe('dismissed')
     state = reducer(state, { type: 'COACH_RESUME', now: NOW + 3 * MINUTE })
     expect(state.coach?.status).toBe('active')
-    expect(state.coach?.stepId).toBe('p1-flavour')
+    expect(state.coach?.stepId).toBe('p2-first')
   })
 
   it('every coach action but START is a no-op when no flow exists', () => {
@@ -2853,34 +2853,6 @@ describe('the guided flow (sssketchy)', () => {
     rolling: false
   })
 
-  it('COACH_SET_FLAVOUR answers the question and orders the rest by it', () => {
-    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
-    state = reducer(state, {
-      type: 'COACH_SET_FLAVOUR',
-      now: NOW + MINUTE,
-      flavour: 'melodic',
-      slots: []
-    })
-    expect(state.coach?.flavour).toBe('melodic')
-    expect(state.coach?.stepId).toBe('p1-harmony')
-  })
-
-  it('COACH_SET_FLAVOUR marks the roles a seeded start already covers', () => {
-    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
-    state = reducer(state, {
-      type: 'COACH_SET_FLAVOUR',
-      now: NOW + MINUTE,
-      flavour: 'groove',
-      slots: [resolvedSlot(['bass']), resolvedSlot(['lead'])]
-    })
-    expect(state.coach?.outcomes).toEqual({
-      'p1-flavour': 'done',
-      'p1-low-end': 'done',
-      'p1-harmony': 'done'
-    })
-    expect(state.coach?.stepId).toBe('p1-drums')
-  })
-
   it('COACH_LOCK_CLIMAX freezes the loop onto the flow', () => {
     let state = reducer(initialState, { type: 'COACH_START', now: NOW })
     state = reducer(state, {
@@ -2893,15 +2865,7 @@ describe('the guided flow (sssketchy)', () => {
     expect(state.coach?.lockedClimax?.stems[0].role).toBe('bass')
   })
 
-  it('both new actions are no-ops when no flow exists', () => {
-    expect(
-      reducer(initialState, {
-        type: 'COACH_SET_FLAVOUR',
-        now: NOW,
-        flavour: 'groove',
-        slots: []
-      }).coach
-    ).toBeNull()
+  it('is a no-op when no flow exists', () => {
     expect(
       reducer(initialState, { type: 'COACH_LOCK_CLIMAX', now: NOW, slots: [], bpm: 96 }).coach
     ).toBeNull()

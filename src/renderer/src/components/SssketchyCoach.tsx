@@ -2,19 +2,12 @@ import { useEffect, useState } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { SssketchySprite } from './SssketchySprite'
 import { SssketchyChecklist } from './SssketchyChecklist'
-import { coachAnimation, isCoachStuck, type CoachState } from '@shared/coach'
-import { coachLineFor, coachSeededLine } from '@shared/coachPhase1'
+import { coachAnimation, coachLineFor, isCoachStuck, type CoachState } from '@shared/coach'
 import { coachSectionLine } from '@shared/coachPhase2'
 import { coachPhase3Line } from '@shared/coachPhase3'
 import { SssketchySectionPanel } from './SssketchySectionPanel'
 import { SssketchyTensionPanel } from './SssketchyTensionPanel'
-import {
-  coachStepById,
-  coachStepPrimaryMove,
-  resolveCoachStep,
-  type CoachMoveAction,
-  type CoachOfferAction
-} from '@shared/coachSteps'
+import { coachStepById, coachStepPrimaryMove, type CoachMoveAction } from '@shared/coachSteps'
 import { canLockClimax, type CoachSlotSnapshot } from '@shared/coachClimax'
 import { COACH_NO_MOVES_LINES, COACH_STUCK_LINES, pickLineVariant } from '@shared/coachLines'
 
@@ -195,7 +188,6 @@ function SssketchyCoachPanel({
   coach,
   discoverSlots,
   riffLibraryOpen,
-  onOffer,
   onMove,
   onNext,
   onSkip,
@@ -211,7 +203,6 @@ function SssketchyCoachPanel({
   /** Whether the riff library -- the full-screen view the whole of phase
    * one happens inside -- is open. See `zIndex` below. */
   riffLibraryOpen: boolean
-  onOffer: (action: CoachOfferAction) => void
   onMove: (action: CoachMoveAction) => void
   onNext: () => void
   onSkip: () => void
@@ -228,10 +219,7 @@ function SssketchyCoachPanel({
   const [stuckOpenFor, setStuckOpenFor] = useState<string | null>(null)
   const stuckOpen = stuckOpenFor === coach.stepId
 
-  const rawStep = coachStepById(coach.stepId)
-  // Per-flavour copy, moves and label, flattened once here so nothing below
-  // has to remember that overrides exist.
-  const step = rawStep === undefined ? undefined : resolveCoachStep(rawStep, coach.flavour)
+  const step = coachStepById(coach.stepId)
   const { left } = useAnchorLeft(step?.anchorSelector, BUBBLE_WIDTH)
   // Above the riff library's own full-screen view whenever he is INSIDE it
   // -- either standing on something in it (every phase-ONE step anchors to
@@ -348,32 +336,28 @@ function SssketchyCoachPanel({
   const finished = coach.status === 'finished'
   const moves = step?.moves ?? []
   // "do it for me" runs exactly one move -- the step's primary. A step with
-  // none (the melodic-or-groove question, the balance pass) leaves the
+  // none (the two "what comes next" questions, the balance pass) leaves the
   // button disabled, which is the honest answer: one of those is a decision
   // only the user can make, the other is a person listening.
-  const primaryMove = rawStep === undefined ? null : coachStepPrimaryMove(rawStep, coach.flavour)
+  const primaryMove = step === undefined ? null : coachStepPrimaryMove(step)
   // Disabled for two different reasons, and the title says which: a step
   // whose work is not the app's to do has no primary move at all, and the
   // lock-in has one that cannot run until something has resolved.
   const primaryBlocked =
     primaryMove === null ? null : moveBlockedReason(primaryMove.action, discoverSlots)
   const primaryDead = primaryMove === null || primaryBlocked !== null
-  const offers = step?.offers ?? []
-  const seededLine = coachSeededLine(coach.seededKinds, step?.label ?? '', coach.lineSeed)
   // Still exactly ONE thought (spec), in one place -- phase two just has its
-  // own source for it, because its lines name the section being carved and
-  // the Discover slots have nothing to say about that. coachSectionLine
-  // returns null on every step that is not p2-section/p2-next, so phase one
-  // is untouched.
+  // own source for it, because its lines name the section being carved.
+  // coachSectionLine returns null on every step that is not
+  // p2-section/p2-next.
   //
   // Phase three goes FIRST in the chain, and the order matters: coachLineFor
   // would otherwise answer an export step that has already written a file
   // with the generic "whether it is finished is your call", which is the
   // wrong thing to say about a v1 that is on disk. coachPhase3Line returns
   // null on every step that is not p3-tension or an exported p3-export, so
-  // phases one and two are untouched.
-  const line =
-    coachPhase3Line(coach) ?? coachSectionLine(coach) ?? coachLineFor(coach, discoverSlots)
+  // phase two is untouched.
+  const line = coachPhase3Line(coach) ?? coachSectionLine(coach) ?? coachLineFor(coach)
 
   return (
     <>
@@ -406,24 +390,7 @@ function SssketchyCoachPanel({
             {line}
           </div>
 
-          {/* The seeded-start note: "you already have drummy and bassish.
-              next: harmony." Sits in the same slot the ten-minute nudge
-              uses, and is cleared by the next transition (advanceCoach), so
-              there is still only ever one thought plus at most one aside. */}
-          {seededLine !== null && !finished && (
-            <div
-              style={{
-                marginTop: 'var(--ra-s-2)',
-                fontSize: 10,
-                lineHeight: 'var(--ra-lh-body)',
-                color: 'var(--ra-text-3)'
-              }}
-            >
-              {seededLine}
-            </div>
-          )}
-
-          {stuck && !finished && seededLine === null && (
+          {stuck && !finished && (
             <div
               style={{
                 marginTop: 'var(--ra-s-2)',
@@ -473,32 +440,6 @@ function SssketchyCoachPanel({
                   )
                 })
               )}
-            </div>
-          )}
-
-          {/* Answers only the user can give -- their own row, above the
-              fixed one, so "do it for me" is never how a decision about the
-              track gets made. Only the melodic-or-groove question has
-              these. */}
-          {!finished && offers.length > 0 && (
-            <div
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                gap: 'var(--ra-s-1)',
-                marginTop: 'var(--ra-s-5)'
-              }}
-            >
-              {offers.map((offer) => (
-                <button
-                  key={offer.id}
-                  type="button"
-                  onClick={() => onOffer(offer.action)}
-                  style={bubbleButtonStyle}
-                >
-                  {offer.label}
-                </button>
-              ))}
             </div>
           )}
 
@@ -602,7 +543,6 @@ function SssketchyCoachPanel({
 export function SssketchyCoach({
   discoverSlots,
   riffLibraryOpen,
-  onOffer,
   onMove
 }: {
   /** What Discover currently holds, as the guided flow is allowed to see it
@@ -611,7 +551,6 @@ export function SssketchyCoach({
   /** Whether the riff library is open, on any tab -- it is the full-screen
    * view phase one happens inside, and he has to paint above it. */
   riffLibraryOpen: boolean
-  onOffer: (action: CoachOfferAction) => void
   onMove: (action: CoachMoveAction) => void
 }): React.JSX.Element | null {
   const state = useAppState()
@@ -631,7 +570,6 @@ export function SssketchyCoach({
         coach={coach}
         discoverSlots={discoverSlots}
         riffLibraryOpen={riffLibraryOpen}
-        onOffer={onOffer}
         onMove={onMove}
         onNext={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'done' })}
         onSkip={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'skipped' })}

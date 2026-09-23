@@ -43,7 +43,6 @@ import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
 import { DiscoverPanel, DISCOVER_UNDO_LIMIT, type DiscoverSlot } from './DiscoverPanel'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
-import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import {
   buildSeedSlotsFromCandidates,
   discoverSlotKindForSoundType,
@@ -139,7 +138,6 @@ export function LibraryBrowser({
   setDiscoverRedoStack,
   discoverSeedBpm,
   setDiscoverSeedBpm,
-  coachArmedKinds,
   onCoachSlotsChange,
   initialMode
 }: {
@@ -186,7 +184,6 @@ export function LibraryBrowser({
   discoverSeedBpm: number | null
   setDiscoverSeedBpm: React.Dispatch<React.SetStateAction<number | null>>
   /** Passed straight through to DiscoverPanel -- see its own doc comments. */
-  coachArmedKinds?: readonly DiscoverSlotKind[] | null
   onCoachSlotsChange?: (slots: CoachSlotSnapshot[]) => void
   /** Which tab to open on, overriding the "open where you left off" rule
    * below. Set only by the guided flow, which always means Discover -- on
@@ -2249,7 +2246,6 @@ export function LibraryBrowser({
             traitMatchBar={traitMatchBar}
             setDiscoverConsented={setDiscoverConsented}
             seedBpm={discoverSeedBpm}
-            coachArmedKinds={coachArmedKinds}
             onCoachSlotsChange={onCoachSlotsChange}
           />
         )}

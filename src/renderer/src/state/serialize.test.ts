@@ -608,9 +608,9 @@ describe('the guided flow across a save and a load', () => {
     const json = serializeProject(state)
     const { state: restored } = deserializeProject(JSON.parse(json))
 
-    expect(restored.coach?.stepId).toBe('p1-low-end')
-    expect(restored.coach?.outcomes).toEqual({ 'p1-flavour': 'skipped' })
-    expect(restored.coach?.phaseElapsedMs.loop).toBe(8 * MINUTE)
+    expect(restored.coach?.stepId).toBe('p2-section')
+    expect(restored.coach?.outcomes).toEqual({ 'p2-first': 'skipped' })
+    expect(restored.coach?.phaseElapsedMs.arrangement).toBe(8 * MINUTE)
   })
 
   it('reopens hidden with a stopped clock -- he never appears on his own', () => {
@@ -658,19 +658,13 @@ describe('the guided flow across a save and a load', () => {
     legacy.coach = { status: 'active', stepId: 'nonsense' }
 
     const { state: restored } = deserializeProject(legacy)
-    expect(restored.coach?.stepId).toBe('p1-flavour')
+    expect(restored.coach?.stepId).toBe('p2-first')
     expect(restored.coach?.status).toBe('dismissed')
   })
 
-  it('round-trips the answer and the locked climax', () => {
+  it('round-trips the locked climax', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'COACH_START', now: NOW })
-    state = reducer(state, {
-      type: 'COACH_SET_FLAVOUR',
-      now: NOW + MINUTE,
-      flavour: 'melodic',
-      slots: []
-    })
     state = reducer(state, {
       type: 'COACH_LOCK_CLIMAX',
       now: NOW + 2 * MINUTE,
@@ -696,7 +690,6 @@ describe('the guided flow across a save and a load', () => {
 
     const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
 
-    expect(restored.coach?.flavour).toBe('melodic')
     expect(restored.coach?.lockedClimax?.bpm).toBe(96)
     expect(restored.coach?.lockedClimax?.stems).toEqual([
       {
@@ -714,8 +707,9 @@ describe('the guided flow across a save and a load', () => {
   })
 
   it('a project saved by the framework build loads on the new first step', () => {
-    // The framework shipped one phase-one placeholder, 'climax-loop', which
-    // no longer exists. Everything else about that save survives.
+    // The framework shipped one phase-one placeholder, 'climax-loop'; phase
+    // one itself replaced it with eight rows and then went the same way on
+    // 2026-09-23. Everything else about that save survives.
     const framework = JSON.parse(
       serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))
     )
@@ -731,12 +725,11 @@ describe('the guided flow across a save and a load', () => {
 
     const { state: restored } = deserializeProject(framework)
 
-    expect(restored.coach?.stepId).toBe('p1-flavour')
+    expect(restored.coach?.stepId).toBe('p2-first')
     expect(restored.coach?.status).toBe('dismissed')
-    expect(restored.coach?.flavour).toBeNull()
-    expect(restored.coach?.seededKinds).toEqual([])
     expect(restored.coach?.lockedClimax).toBeNull()
-    expect(restored.coach?.phaseElapsedMs.loop).toBe(4 * MINUTE)
+    // The `loop` figure has no phase to belong to any more, and is dropped.
+    expect(restored.coach?.phaseElapsedMs).toEqual({ arrangement: 0, polish: 0 })
     expect(restored.rifffs.r1.name).toBe('test')
   })
 
@@ -800,21 +793,19 @@ describe('the guided flow across a save and a load', () => {
     const phase1 = JSON.parse(serializeProject(initialState))
     phase1.coach = {
       status: 'active',
-      stepId: 'p1-lock',
-      outcomes: { 'p1-flavour': 'done' },
-      phaseElapsedMs: { loop: 4 * MINUTE, arrangement: 0, polish: 0 },
+      stepId: 'p2-first',
+      outcomes: {},
+      phaseElapsedMs: { arrangement: 4 * MINUTE, polish: 0 },
       stepElapsedMs: 0,
       runningSince: NOW,
       lineSeed: 2,
-      flavour: 'groove',
-      seededKinds: [],
       lockedClimax: null
     }
     expect('sections' in phase1.coach).toBe(false)
     const { state: restored } = deserializeProject(phase1)
     expect(restored.coach?.sections).toEqual([])
     expect(restored.coach?.draftSection).toBeNull()
-    expect(restored.coach?.stepId).toBe('p1-lock')
+    expect(restored.coach?.stepId).toBe('p2-first')
   })
 })
 
@@ -878,6 +869,8 @@ describe('the phase-three coach fields', () => {
         stepElapsedMs: 3,
         runningSince: 999,
         lineSeed: 4,
+        // A real pre-phase-three save carried these; they are gone from
+        // CoachState now and the loader simply does not read them.
         flavour: 'groove',
         seededKinds: [],
         lockedClimax: null,
@@ -895,6 +888,6 @@ describe('the phase-three coach fields', () => {
       savedWithCoach({ status: 'active', stepId: 'finish', lineSeed: 0 })
     )
 
-    expect(loaded.coach?.stepId).toBe('p1-flavour')
+    expect(loaded.coach?.stepId).toBe('p2-first')
   })
 })

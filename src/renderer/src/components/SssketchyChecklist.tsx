@@ -108,7 +108,7 @@ export function SssketchyChecklist({
             </span>
           </div>
 
-          {coachStepsInPhase(phase.id, coach.flavour).map((step) => {
+          {coachStepsInPhase(phase.id).map((step) => {
             const isCurrent = step.id === coach.stepId && coach.status !== 'finished'
             return (
               <div

@@ -15,6 +15,7 @@ import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 import {
   advanceCoach,
   dismissCoach,
+  lockCoachClimax,
   minimiseCoach,
   restoreCoach,
   resumeCoach,
@@ -22,7 +23,6 @@ import {
   type CoachOutcome,
   type CoachState
 } from '@shared/coach'
-import { answerCoachFlavour, lockCoachClimax } from '@shared/coachPhase1'
 import {
   dropSuggestedCoachSectionStems,
   nudgeCoachSectionBars,
@@ -35,7 +35,6 @@ import { applyCoachTension, clearCoachTension, markCoachV1Exported } from '@shar
 import type { CoachSectionType } from '@shared/coachSections'
 import type { CoachTensionKind } from '@shared/coachTension'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
-import type { CoachFlavour } from '@shared/coachSteps'
 
 // Capped at 1/16 on the fine end -- 1/32 existed here before but was finer
 // than anyone actually needed in practice (per direct user feedback: "it
@@ -761,17 +760,10 @@ export type Action =
   | { type: 'COACH_MINIMISE' }
   | { type: 'COACH_RESTORE'; now: number }
   | { type: 'COACH_DISMISS'; now: number }
-  // Phase one (2026-09-22). Both carry the Discover slots as a plain
-  // snapshot rather than reading them from AppState, because Discover's
-  // slots are App.tsx's own React state, not reducer state -- and both do
-  // their real work in @shared/coachPhase1, so the decisions stay tested
-  // and framework-free.
-  | {
-      type: 'COACH_SET_FLAVOUR'
-      now: number
-      flavour: CoachFlavour
-      slots: readonly CoachSlotSnapshot[]
-    }
+  // Carries the Discover slots as a plain snapshot rather than reading them
+  // from AppState, because Discover's slots are App.tsx's own React state,
+  // not reducer state. Its own step (p1-lock) went with phase one on
+  // 2026-09-23; the auto-arranger dispatches this in the map plan.
   | { type: 'COACH_LOCK_CLIMAX'; now: number; slots: readonly CoachSlotSnapshot[]; bpm: number }
   // Phase two (2026-09-22). `sectionType` rather than `type`, which is
   // already the action's own discriminant. COACH_PLACE_SECTION carries the
@@ -2179,14 +2171,6 @@ export function reducer(state: AppState, action: Action): AppState {
       return state.coach === null
         ? state
         : { ...state, coach: dismissCoach(state.coach, action.now) }
-
-    case 'COACH_SET_FLAVOUR':
-      return state.coach === null
-        ? state
-        : {
-            ...state,
-            coach: answerCoachFlavour(state.coach, action.now, action.flavour, action.slots)
-          }
 
     case 'COACH_LOCK_CLIMAX':
       return state.coach === null

@@ -1,13 +1,14 @@
 /**
  * The one imperative wire from sssketchy's bubble into the phase-two panel.
  *
- * Same shape, and the same reason, as ./coachDiscoverBridge.ts: the bubble's
+ * Same shape, and the same reason, as the Discover bridge that stood
+ * beside it until phase one was deleted (2026-09-23): the bubble's
  * "stuck?" list and "do it for me" offer the step's own moves, and phase
  * two's moves are buttons only SssketchySectionPanel can press (they close
  * over the engine preview, the current AppState and the placement builder).
  *
- * No queue, unlike the Discover bridge: there is nothing to open and wait
- * for. The panel is mounted exactly while p2-first/p2-section/p2-next are
+ * No queue, unlike that one had: there is nothing to open and wait for.
+ * The panel is mounted exactly while p2-first/p2-section/p2-next are
  * current, so a request that finds no handler is a request that should not
  * have been made, and dropping it is better than storing it for a panel
  * that may open on a different section.

@@ -54,7 +54,6 @@ import {
 } from '../state/StoreContext'
 import { tileOffsetsPx, resolvedPlayedBarsFromFields } from '../state/selectors'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
-import { registerCoachAddSlot } from '../state/coachDiscoverBridge'
 import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
@@ -144,38 +143,6 @@ function resolveCandidateStem(candidate: DiscoverCandidate): Promise<ResolvedCan
     if (result === null) resolvedCandidateCache.delete(key)
   })
   return promise
-}
-
-/**
- * "do it for me adds the slot itself" (spec, phase 1 step 3): the one wire
- * from sssketchy's bubble into this panel's own `addSlot` (see
- * ../state/coachDiscoverBridge.ts for why it cannot just be re-implemented
- * in App.tsx). Renders nothing.
- *
- * `addSlot` is redefined every render and closes over `slots`/`rifffsState`,
- * so the registration goes through a ref rather than capturing the first
- * render's copy -- a stale closure here would push an undo snapshot of a
- * slot list that no longer exists, which is exactly the class of bug
- * importPathsAsLoopSeeds' own comment documents.
- *
- * Its own component rather than two more effects inside DiscoverPanel
- * itself, which is not cosmetic: with these two effects in DiscoverPanel's
- * body, react-hooks/immutability stops analysing that whole component (it
- * silently reports nothing at all, verified by planting a deliberate
- * violation -- including the one the skipFirstBpmRetuneRef mutation below
- * has a disable comment for). The compiler-backed rules work per component
- * function, so moving the pair down here keeps the big one checked.
- */
-function CoachAddSlotBridge({ addSlot }: { addSlot: (kinds: DiscoverSlotKind[]) => void }): null {
-  const addSlotRef = useRef(addSlot)
-  useEffect(() => {
-    addSlotRef.current = addSlot
-  })
-  useEffect(
-    () => registerCoachAddSlot((kinds) => addSlotRef.current(normalizeSlotKinds(kinds))),
-    []
-  )
-  return null
 }
 
 export interface DiscoverSlot {
@@ -312,7 +279,6 @@ export function DiscoverPanel({
   traitMatchBar,
   setDiscoverConsented,
   seedBpm,
-  coachArmedKinds,
   onCoachSlotsChange
 }: {
   currentSketch: ProjectRef
@@ -388,7 +354,6 @@ export function DiscoverPanel({
    * time the user looked at the library. null when no flow is running, or
    * when the current step arms nothing. Must be referentially stable per
    * kind set (App.tsx memoizes it) -- see the effect below. */
-  coachArmedKinds?: readonly DiscoverSlotKind[] | null
   /** Publishes what the guided flow is allowed to know about the slots.
    * This panel is the only place that knows whether a slot has really
    * RESOLVED, whether it is audible, and whether it is mid-roll, so
@@ -1367,39 +1332,6 @@ export function DiscoverPanel({
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [hasPendingAdd])
-
-  // Pre-arming, for the guided flow (docs/superpowers/plans/2026-09-22-
-  // sssketchy-phase1.md). Writes straight into the SAME pendingAddKinds the
-  // cmd-click arming above uses, so an armed step and a hand-armed chip are
-  // literally the same state -- the user can add to it, clear it with Esc,
-  // or ignore it entirely, and the row behaves identically either way.
-  // Keyed off the kind STRING (slotKindsKey) rather than the array, so a
-  // re-render with an equal-but-new array does not re-arm over something
-  // the user just changed.
-  //
-  // Written as "which arm has already been applied", adjusted DURING
-  // RENDER, rather than the obvious setState-in-an-effect: a synchronous
-  // setState in an effect body is a lint error in this repo
-  // (react-hooks/set-state-in-effect), and it would also render the row
-  // unarmed for one frame before stamping the arm in. Same shape
-  // SssketchyCoach.tsx's own usePulse uses, for the same reason.
-  // Starts as null -- NOT as the current key -- because this panel mounts
-  // fresh every time the library opens or the tab flips back to discover,
-  // and the flow's own path arrives here with the arm ALREADY set: answering
-  // "groove" dispatches the step change and opens the library in one commit,
-  // so by first render coachArmKey is 'bass' and there has never been a
-  // change to notice. Seeding it with the current key made the mount case
-  // "already applied" and the row came up empty -- which is the whole
-  // mechanic of phase one, while sssketchy said "the add row is set to
-  // bassish." null can never equal a real key, so a mount always arms.
-  const coachArmKey = coachArmedKinds ? slotKindsKey(coachArmedKinds) : ''
-  const [appliedCoachArmKey, setAppliedCoachArmKey] = useState<string | null>(null)
-  if (appliedCoachArmKey !== coachArmKey) {
-    setAppliedCoachArmKey(coachArmKey)
-    if (coachArmKey !== '' && coachArmedKinds) {
-      setPendingAddKinds(normalizeSlotKinds(coachArmedKinds))
-    }
-  }
 
   // Direct request, 2026-09-20: "add + Random to the bottom list" -- an
   // eighth button alongside the 7 kind buttons, for a slot seeded from a
@@ -2600,9 +2532,7 @@ export function DiscoverPanel({
           trait group. The dial column is vertically centred beside both
           rows; the hint line sits in a second grid row so it doesn't pull
           the dial off-centre. */}
-      <CoachAddSlotBridge addSlot={addSlot} />
       <div
-        data-coach-anchor="discover-add-row"
         style={{
           display: 'grid',
           gridTemplateColumns: `minmax(${ADD_ROW_DIAL_COLUMN_WIDTH}px, 1fr) auto minmax(${ADD_ROW_DIAL_COLUMN_WIDTH}px, 1fr)`,

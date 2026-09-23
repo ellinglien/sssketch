@@ -89,7 +89,6 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'COACH_MINIMISE',
   'COACH_RESTORE',
   'COACH_DISMISS',
-  'COACH_SET_FLAVOUR',
   'COACH_LOCK_CLIMAX',
   // Phase two's own flow bookkeeping -- same category as every other
   // COACH_* entry above: where sssketchy is, not an edit to the project.

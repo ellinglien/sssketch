@@ -390,16 +390,15 @@ describe('the guided flow across undo/redo', () => {
     // snapshot ANY other action pushes. Left unhandled, undoing an
     // ordinary edit made DURING the flow walks sssketchy back to whatever
     // step he was on when that checkpoint was taken -- throwing away the
-    // locked climax, which is the material phase two carves from. Same
+    // locked climax, which is the material the map carves from. Same
     // treatment, and the same reasoning, as armedChannelId above.
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'COACH_START', now: T0 })
-    h = historyReducer(h, { type: 'COACH_SET_FLAVOUR', now: T0, flavour: 'groove', slots: [] })
     // An ordinary tracked edit made mid-flow: this is the checkpoint that
-    // captures the flow standing on an early phase-one step.
+    // captures the flow standing on an early step.
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
     let guard = 0
-    while (h.present.coach?.stepId !== 'p1-lock') {
+    while (h.present.coach?.stepId !== 'p2-next') {
       h = historyReducer(h, { type: 'COACH_ADVANCE', now: T0, outcome: 'done' })
       expect((guard += 1)).toBeLessThan(20)
     }
@@ -413,13 +412,12 @@ describe('the guided flow across undo/redo', () => {
 
     h = historyReducer(h, { type: 'UNDO' })
     expect(h.present.rifffs.r1).toBeUndefined() // the clip edit really was undone
-    expect(h.present.coach?.stepId).toBe('p1-lock') // ...but the flow did not rewind
+    expect(h.present.coach?.stepId).toBe('p2-next') // ...but the flow did not rewind
     expect(h.present.coach?.lockedClimax?.stems).toHaveLength(1)
-    expect(h.present.coach?.flavour).toBe('groove')
 
     h = historyReducer(h, { type: 'REDO' })
     expect(h.present.rifffs.r1).toBeDefined()
-    expect(h.present.coach?.stepId).toBe('p1-lock')
+    expect(h.present.coach?.stepId).toBe('p2-next')
     expect(h.present.coach?.lockedClimax?.stems).toHaveLength(1)
   })
 
