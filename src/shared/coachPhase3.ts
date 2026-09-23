@@ -35,7 +35,9 @@ import {
  * something of. Derived, never stored: rename or resize a section and the
  * offers follow. */
 export function coachBoundaries(state: CoachState): CoachSectionBoundary[] {
-  return coachSectionBoundaries(state.sections)
+  // The phrase length is the USER'S answer; a flow that has not answered yet
+  // reads one bar per pass, which is the same floor sectionBars uses.
+  return coachSectionBoundaries(state.sections, state.phrase?.bars ?? 1)
 }
 
 /**

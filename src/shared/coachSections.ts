@@ -43,7 +43,7 @@ export type CoachSectionType = 'intro' | 'verse' | 'build' | 'drop' | 'breakdown
 /** What the section panel's own buttons do, as data rather than as
  * callbacks -- so a step row can list them under "stuck?" and the bubble's
  * "do it for me" can run one without src/shared/ knowing React exists. */
-export type CoachSectionOp = 'drop-suggested' | 'preview' | 'place'
+export type CoachSectionOp = 'preview' | 'place'
 
 export interface CoachSectionTypeDef {
   id: CoachSectionType
@@ -125,11 +125,12 @@ export const COACH_SECTION_DROP_SETS: Record<
 }
 
 /** What the panel writes next to a flagged toggle. Deliberately flat and
- * unrotated: it is a label on a control, not something sssketchy says. */
+ * unrotated: it is a label on a control, not something sssketchy says.
+ *
+ * Unused by the map itself: with a pre-filled map the suggestion is already
+ * APPLIED, and marking a still-playing stem "usually out here" as well would
+ * be the app arguing with itself. Kept for the panel the map replaces. */
 export const COACH_SUGGESTED_DROP_HINT = 'usually out here'
-
-/** The one button that applies every flag at once. */
-export const COACH_DROP_SUGGESTED_LABEL = 'drop the suggested ones'
 
 /** True when this section type usually loses this stem. A MARK -- nothing
  * in this module ever acts on it. */

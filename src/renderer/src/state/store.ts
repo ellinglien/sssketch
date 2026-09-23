@@ -12,6 +12,9 @@ import {
 } from '@shared/toolkit'
 import { MIN_RISER_LENGTH_BARS, nextRiserName, normaliseRiser, type RiserClip } from '@shared/riser'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
+import { buildCoachMapSections, resizeCoachMapToPhrase } from '@shared/coachMapTemplate'
+import type { CoachPhrase, LoopPhraseReading } from '@shared/coachPhrase'
+import type { CoachLoopAnswer, CoachShapeId } from '@shared/coachShapes'
 import {
   advanceCoach,
   dismissCoach,
@@ -24,11 +27,11 @@ import {
   type CoachState
 } from '@shared/coach'
 import {
-  dropSuggestedCoachSectionStems,
-  nudgeCoachSectionBars,
+  nudgeCoachSectionPasses,
   placeCoachSection,
   setCoachSectionName,
   startCoachSection,
+  toggleCoachSectionCell,
   toggleCoachSectionStem
 } from '@shared/coachPhase2'
 import { applyCoachTension, clearCoachTension, markCoachV1Exported } from '@shared/coachPhase3'
@@ -772,9 +775,24 @@ export type Action =
   // them -- see history.ts's own note.
   | { type: 'COACH_START_SECTION'; now: number; sectionType: CoachSectionType }
   | { type: 'COACH_SET_SECTION_NAME'; name: string }
-  | { type: 'COACH_NUDGE_SECTION_BARS'; delta: number }
   | { type: 'COACH_TOGGLE_SECTION_STEM'; path: string }
-  | { type: 'COACH_DROP_SUGGESTED_STEMS' }
+  // The arrangement map (2026-09-23). COACH_SET_PHRASE_READING records what
+  // the app MEASURED; COACH_SET_PHRASE records what the USER ANSWERED. They
+  // are two actions rather than one on purpose: a measurement must never be
+  // able to size anything by itself (spec, "The phrase pass, and who
+  // decides" -- a direct instruction from Elling). Only the second one
+  // re-sizes the map, and only a click dispatches it.
+  | { type: 'COACH_SET_PHRASE_READING'; reading: LoopPhraseReading }
+  | { type: 'COACH_SET_PHRASE'; phrase: CoachPhrase }
+  | { type: 'COACH_SET_LOOP_ANSWER'; loopIs: CoachLoopAnswer }
+  | { type: 'COACH_SET_SHAPE'; shape: CoachShapeId }
+  /** Fills `sections` from the shape template. Needs a locked climax, a
+   * phrase and both answers; without all four it is a no-op rather than a
+   * half-built map. `firstStartBar` is placedTimelineSpanBars(state),
+   * measured by the caller, so the map lands after anything already down. */
+  | { type: 'COACH_BUILD_MAP'; firstStartBar: number }
+  | { type: 'COACH_NUDGE_SECTION_PASSES'; delta: number }
+  | { type: 'COACH_TOGGLE_SECTION_CELL'; passIndex: number; path: string }
   | {
       type: 'COACH_PLACE_SECTION'
       now: number
@@ -2193,23 +2211,79 @@ export function reducer(state: AppState, action: Action): AppState {
         ? state
         : { ...state, coach: setCoachSectionName(state.coach, action.name) }
 
-    case 'COACH_NUDGE_SECTION_BARS':
+    case 'COACH_NUDGE_SECTION_PASSES':
       return state.coach === null
         ? state
-        : { ...state, coach: nudgeCoachSectionBars(state.coach, action.delta) }
+        : { ...state, coach: nudgeCoachSectionPasses(state.coach, action.delta) }
 
     case 'COACH_TOGGLE_SECTION_STEM':
       return state.coach === null
         ? state
         : { ...state, coach: toggleCoachSectionStem(state.coach, action.path) }
 
-    // The one bulk subtraction in the feature, and it only ever arrives
-    // from a click on "drop the suggested ones". Nothing else in this
-    // reducer may apply the suggestion table.
-    case 'COACH_DROP_SUGGESTED_STEMS':
+    case 'COACH_TOGGLE_SECTION_CELL':
       return state.coach === null
         ? state
-        : { ...state, coach: dropSuggestedCoachSectionStems(state.coach) }
+        : {
+            ...state,
+            coach: toggleCoachSectionCell(state.coach, action.passIndex, action.path)
+          }
+
+    // RECORDS a measurement and does nothing else. It must never be able to
+    // size anything by itself -- that is COACH_SET_PHRASE below, and only a
+    // click dispatches that one.
+    case 'COACH_SET_PHRASE_READING':
+      return state.coach === null
+        ? state
+        : { ...state, coach: { ...state.coach, phraseReading: action.reading } }
+
+    case 'COACH_SET_PHRASE': {
+      if (state.coach === null) return state
+      const from = state.coach.phrase?.bars ?? action.phrase.bars
+      return {
+        ...state,
+        coach: {
+          ...state.coach,
+          phrase: action.phrase,
+          // RE-SIZES, never rebuilds -- names, types, ids and every cell
+          // edit survive a change of mind about the phrase length (spec).
+          sections: resizeCoachMapToPhrase(state.coach.sections, from, action.phrase.bars)
+        }
+      }
+    }
+
+    case 'COACH_SET_LOOP_ANSWER':
+      return state.coach === null
+        ? state
+        : { ...state, coach: { ...state.coach, loopIs: action.loopIs } }
+
+    case 'COACH_SET_SHAPE':
+      return state.coach === null
+        ? state
+        : { ...state, coach: { ...state.coach, shape: action.shape } }
+
+    case 'COACH_BUILD_MAP': {
+      const coach = state.coach
+      if (coach === null) return state
+      // All four or nothing: a half-built map is worse than no map, and
+      // every one of these comes from a gesture the user has or has not
+      // made yet.
+      if (coach.lockedClimax === null) return state
+      if (coach.phrase === null || coach.loopIs === null || coach.shape === null) return state
+      return {
+        ...state,
+        coach: {
+          ...coach,
+          sections: buildCoachMapSections({
+            shape: coach.shape,
+            loopIs: coach.loopIs,
+            phraseBars: coach.phrase.bars,
+            climax: coach.lockedClimax,
+            firstStartBar: action.firstStartBar
+          })
+        }
+      }
+    }
 
     case 'COACH_PLACE_SECTION':
       return state.coach === null

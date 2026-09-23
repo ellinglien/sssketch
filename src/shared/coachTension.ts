@@ -30,6 +30,7 @@
  */
 
 import { applyEdgeFade, applyStroke, rampStroke } from './automationEdit'
+import { sectionBars } from './coachPasses'
 import type { CoachSection, CoachSectionType } from './coachSections'
 import { MIN_RISER_LENGTH_BARS } from './riser'
 import type { AutomationParam, AutomationPoint } from './toolkit'
@@ -176,7 +177,10 @@ export interface CoachSectionBoundary {
  * of noise around the one line that matters, and the step's own copy
  * already covers the case where there are none at all.
  */
-export function coachSectionBoundaries(sections: readonly CoachSection[]): CoachSectionBoundary[] {
+export function coachSectionBoundaries(
+  sections: readonly CoachSection[],
+  phraseBars: number
+): CoachSectionBoundary[] {
   const boundaries: CoachSectionBoundary[] = []
   for (let index = 0; index < sections.length - 1; index += 1) {
     const from = sections[index]
@@ -189,8 +193,8 @@ export function coachSectionBoundaries(sections: readonly CoachSection[]): Coach
       into: into.type,
       fromName: from.name,
       intoName: into.name,
-      bar: from.startBar + from.bars,
-      leadBars: from.bars,
+      bar: from.startBar + sectionBars(from.passes, phraseBars),
+      leadBars: sectionBars(from.passes, phraseBars),
       offers
     })
   }

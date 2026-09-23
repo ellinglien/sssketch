@@ -2914,32 +2914,35 @@ describe('the phase-two coach actions', () => {
     return state
   }
 
-  it('opens a section with every stem on', () => {
+  it('opens a section that overrides nothing -- the template fills it in', () => {
     const state = reducer(lockedState(), {
       type: 'COACH_START_SECTION',
       now: NOW,
       sectionType: 'intro'
     })
     expect(state.coach?.stepId).toBe('p2-section')
-    expect(state.coach?.draftSection?.droppedPaths).toEqual([])
+    expect(state.coach?.draftSection?.cells).toEqual({})
   })
 
-  it('renames, nudges, toggles and drops the suggested ones', () => {
+  it('renames, nudges by PASSES and toggles a whole stem', () => {
     let state = reducer(lockedState(), {
       type: 'COACH_START_SECTION',
       now: NOW,
       sectionType: 'intro'
     })
     state = reducer(state, { type: 'COACH_SET_SECTION_NAME', name: 'the way in' })
-    state = reducer(state, { type: 'COACH_NUDGE_SECTION_BARS', delta: 8 })
+    const opened = state.coach!.draftSection!.passes
+    state = reducer(state, { type: 'COACH_NUDGE_SECTION_PASSES', delta: 2 })
     expect(state.coach?.draftSection?.name).toBe('the way in')
-    expect(state.coach?.draftSection?.bars).toBe(16)
+    expect(state.coach?.draftSection?.passes).toBe(opened + 2)
 
+    // The kick plays in an intro, so toggling it writes an explicit OFF in
+    // every pass of the draft.
+    const passes = state.coach!.draftSection!.passes
     state = reducer(state, { type: 'COACH_TOGGLE_SECTION_STEM', path: '/kick.wav' })
-    expect(state.coach?.draftSection?.droppedPaths).toEqual(['/kick.wav'])
-
-    state = reducer(state, { type: 'COACH_DROP_SUGGESTED_STEMS' })
-    expect(state.coach?.draftSection?.droppedPaths).toEqual(['/kick.wav', '/hook.wav'])
+    for (let pass = 0; pass < passes; pass += 1) {
+      expect(state.coach?.draftSection?.cells[`${pass}|/kick.wav`]).toBe(false)
+    }
   })
 
   it('records a placed section and moves on', () => {
@@ -2964,11 +2967,13 @@ describe('the phase-two coach actions', () => {
       reducer(initialState, { type: 'COACH_START_SECTION', now: NOW, sectionType: 'intro' }).coach
     ).toBeNull()
     expect(reducer(initialState, { type: 'COACH_SET_SECTION_NAME', name: 'x' }).coach).toBeNull()
-    expect(reducer(initialState, { type: 'COACH_NUDGE_SECTION_BARS', delta: 4 }).coach).toBeNull()
+    expect(reducer(initialState, { type: 'COACH_NUDGE_SECTION_PASSES', delta: 1 }).coach).toBeNull()
     expect(
       reducer(initialState, { type: 'COACH_TOGGLE_SECTION_STEM', path: '/x' }).coach
     ).toBeNull()
-    expect(reducer(initialState, { type: 'COACH_DROP_SUGGESTED_STEMS' }).coach).toBeNull()
+    expect(
+      reducer(initialState, { type: 'COACH_TOGGLE_SECTION_CELL', passIndex: 0, path: '/x' }).coach
+    ).toBeNull()
     expect(
       reducer(initialState, {
         type: 'COACH_PLACE_SECTION',
@@ -2980,16 +2985,180 @@ describe('the phase-two coach actions', () => {
   })
 })
 
+describe('the phrase actions', () => {
+  const NOW = 1_700_000_000_000
+
+  const climaxSlots: CoachSlotSnapshot[] = [
+    {
+      id: 's1',
+      kinds: ['drums'],
+      gain: 1,
+      audible: true,
+      rolling: false,
+      stem: {
+        path: '/kick.wav',
+        name: 'kick',
+        author: 'e',
+        type: 'drums',
+        durationSec: 4,
+        barLength: 4
+      }
+    },
+    {
+      id: 's2',
+      kinds: ['lead', 'bright'],
+      gain: 0.8,
+      audible: true,
+      rolling: false,
+      stem: {
+        path: '/hook.wav',
+        name: 'hook',
+        author: 'e',
+        type: 'fx',
+        durationSec: 4,
+        barLength: 4
+      }
+    }
+  ]
+
+  function lockedCoach(): AppState {
+    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
+    state = reducer(state, { type: 'COACH_LOCK_CLIMAX', now: NOW, slots: climaxSlots, bpm: 120 })
+    return state
+  }
+
+  it('stores the ANSWER the user gave, measured or nominal', () => {
+    const started = reducer(reducer(initialState, { type: 'COACH_START', now: NOW }), {
+      type: 'COACH_SET_PHRASE',
+      phrase: { bars: 4, source: 'measured' }
+    })
+    expect(started.coach?.phrase).toEqual({ bars: 4, source: 'measured' })
+  })
+
+  it('NEVER applies a measurement by itself -- recording a reading changes no sizing', () => {
+    const state = reducer(reducer(initialState, { type: 'COACH_START', now: NOW }), {
+      type: 'COACH_SET_PHRASE_READING',
+      reading: { nominalBars: 8, phraseBars: 4, measuredStems: 2, inconclusiveStems: 0 }
+    })
+    expect(state.coach?.phraseReading?.phraseBars).toBe(4)
+    expect(state.coach?.phrase).toBeNull()
+  })
+
+  it('records the two answers', () => {
+    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
+    state = reducer(state, { type: 'COACH_SET_LOOP_ANSWER', loopIs: 'verse' })
+    state = reducer(state, { type: 'COACH_SET_SHAPE', shape: 'long' })
+    expect(state.coach?.loopIs).toBe('verse')
+    expect(state.coach?.shape).toBe('long')
+  })
+
+  it('re-sizes the map when the answer changes, keeping names and cells', () => {
+    const started = reducer(initialState, { type: 'COACH_START', now: NOW })
+    const coach = {
+      ...started.coach!,
+      phrase: { bars: 8, source: 'nominal' as const },
+      sections: [
+        {
+          id: 'a',
+          type: 'verse' as const,
+          name: 'my verse',
+          passes: 2,
+          cells: { '0|/kick.wav': false },
+          startBar: 0,
+          placedGroupIds: {}
+        }
+      ]
+    }
+    const next = reducer(
+      { ...started, coach },
+      { type: 'COACH_SET_PHRASE', phrase: { bars: 4, source: 'measured' } }
+    )
+    expect(next.coach?.sections[0].id).toBe('a')
+    expect(next.coach?.sections[0].name).toBe('my verse')
+    expect(next.coach?.sections[0].passes).toBe(4) // 16 bars, now at a 4-bar phrase
+    expect(next.coach?.sections[0].cells['0|/kick.wav']).toBe(false)
+  })
+
+  it('builds a pre-filled map from the two answers and the phrase', () => {
+    const locked = lockedCoach()
+    const coach = {
+      ...locked.coach!,
+      phrase: { bars: 4, source: 'measured' as const },
+      loopIs: 'drop' as const,
+      shape: 'short' as const
+    }
+    const next = reducer({ ...locked, coach }, { type: 'COACH_BUILD_MAP', firstStartBar: 0 })
+    expect(next.coach?.sections.map((s) => s.type)).toEqual(['intro', 'verse', 'drop', 'outro'])
+    for (const section of next.coach!.sections) expect(section.cells).toEqual({})
+  })
+
+  it('refuses to build a map without a locked climax, a phrase and both answers', () => {
+    const started = reducer(initialState, { type: 'COACH_START', now: NOW })
+    const coach = { ...started.coach!, phrase: { bars: 4, source: 'nominal' as const } }
+    const next = reducer({ ...started, coach }, { type: 'COACH_BUILD_MAP', firstStartBar: 0 })
+    expect(next.coach?.sections).toEqual([])
+  })
+
+  it('toggles one cell without touching its neighbours', () => {
+    const locked = lockedCoach()
+    const coach = {
+      ...locked.coach!,
+      phrase: { bars: 4, source: 'measured' as const },
+      loopIs: 'drop' as const,
+      draftSection: { type: 'verse' as const, name: 'verse', passes: 4, cells: {} }
+    }
+    const next = reducer(
+      { ...locked, coach },
+      { type: 'COACH_TOGGLE_SECTION_CELL', passIndex: 1, path: '/kick.wav' }
+    )
+    const cells = next.coach!.draftSection!.cells
+    expect(Object.keys(cells)).toEqual(['1|/kick.wav'])
+    expect(cells['1|/kick.wav']).toBe(false)
+  })
+
+  it('ignores a cell toggle for a path that is not in the locked climax', () => {
+    const locked = lockedCoach()
+    const coach = {
+      ...locked.coach!,
+      draftSection: { type: 'verse' as const, name: 'verse', passes: 4, cells: {} }
+    }
+    const next = reducer(
+      { ...locked, coach },
+      { type: 'COACH_TOGGLE_SECTION_CELL', passIndex: 0, path: '/not-in-the-loop.wav' }
+    )
+    expect(next.coach!.draftSection!.cells).toEqual({})
+  })
+
+  it('every phrase action is a no-op when no flow exists', () => {
+    expect(
+      reducer(initialState, { type: 'COACH_SET_PHRASE', phrase: { bars: 4, source: 'nominal' } })
+        .coach
+    ).toBeNull()
+    expect(
+      reducer(initialState, {
+        type: 'COACH_SET_PHRASE_READING',
+        reading: { nominalBars: 8, phraseBars: 4, measuredStems: 1, inconclusiveStems: 0 }
+      }).coach
+    ).toBeNull()
+    expect(
+      reducer(initialState, { type: 'COACH_SET_LOOP_ANSWER', loopIs: 'drop' }).coach
+    ).toBeNull()
+    expect(reducer(initialState, { type: 'COACH_SET_SHAPE', shape: 'short' }).coach).toBeNull()
+    expect(reducer(initialState, { type: 'COACH_BUILD_MAP', firstStartBar: 0 }).coach).toBeNull()
+  })
+})
+
 describe('the phase-three coach actions', () => {
   const section = {
+    id: 's0',
     type: 'build' as const,
     name: 'build',
-    bars: 16,
-    droppedPaths: [],
+    passes: 4,
+    cells: {},
     startBar: 0,
     placedGroupIds: {}
   }
-  const drop = { ...section, type: 'drop' as const, name: 'drop', startBar: 16 }
+  const drop = { ...section, id: 's1', type: 'drop' as const, name: 'drop', startBar: 16 }
 
   function withFlow(): AppState {
     const started = reducer(initialState, { type: 'COACH_START', now: 1000 })

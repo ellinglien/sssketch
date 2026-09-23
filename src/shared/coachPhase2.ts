@@ -6,20 +6,22 @@
  * returns a new one. Time is injected
  * (`now`), never read from the clock -- see ./coach.ts's module doc.
  *
- * THE RULE (spec): **everything is on, the user subtracts.** A draft opens
- * with droppedPaths empty and stays that way until somebody toggles a stem
- * or presses "drop the suggested ones". dropSuggestedCoachSectionStems below
- * is the ONLY function in this codebase that adds the suggestion table's
- * output to a draft, and it exists to be called from a click. Nothing in
- * startCoachSection, and nothing in the reducer, may pre-apply it: a
- * suggestion you ignore costs nothing when it is wrong, a pre-applied
- * default is a decision you have to notice and undo.
+ * THE RULE, AS OF 2026-09-23: **a draft arrives PRE-FILLED from the
+ * template.** It opens with `cells: {}`, which does not mean "nothing
+ * plays" -- it means "nothing has been overridden", so every cell reads
+ * whatever ./coachMapTemplate.ts says for that section type. This is the
+ * deliberate reversal of the old everything-on/user-subtracts rule (spec:
+ * docs/superpowers/specs/2026-09-23-arrangement-map-design.md, "The map
+ * arrives pre-filled, and says so"), and dropSuggestedCoachSectionStems --
+ * the button that used to apply the suggestion table by hand -- went with
+ * it, because with a pre-filled map the table is already applied and a
+ * button that applies it again is meaningless.
  *
  * The loop back is here rather than in advanceCoach: phase two walks
  * p2-first -> p2-section -> p2-next and then RETURNS to p2-section for as
  * long as the user keeps choosing another section. startCoachSection is that
  * return, and it works from either question step because both do the same
- * thing -- mark the question answered and open a fresh, everything-on draft.
+ * thing -- mark the question answered and open a fresh draft.
  */
 
 import { pauseCoach, type CoachOutcome, type CoachState } from './coach'
@@ -28,13 +30,28 @@ import {
   COACH_SECTION_LINE_TEMPLATES,
   pickLineVariant
 } from './coachLines'
-import {
-  newCoachSectionDraft,
-  nudgeSectionBars,
-  suggestedDropPaths,
-  type CoachSection,
-  type CoachSectionType
-} from './coachSections'
+import { cellIsOn, setCell, setStemAcrossPasses } from './coachCells'
+import { templateFallbackFor } from './coachMapTemplate'
+import { nudgeSectionPasses, passesForTargetBars } from './coachPasses'
+import { newCoachSectionDraft, type CoachSection, type CoachSectionType } from './coachSections'
+import { COACH_LOOP_HOME_TYPE, targetBarsFor } from './coachShapes'
+import type { LockedClimaxStem } from './coachClimax'
+
+/** Which section type the user's own loop IS. 'drop' until he answers,
+ * which is COACH_LOOP_HOME_TYPE's own default and the place the method
+ * puts unattributed material. */
+function homeTypeOf(state: CoachState): CoachSectionType {
+  return state.loopIs === null ? 'drop' : COACH_LOOP_HOME_TYPE[state.loopIs]
+}
+
+/** The template's answer for the open draft, or "everything plays" when
+ * there is no locked climax to read (in which case nothing can be toggled
+ * anyway -- every mutator below refuses without one). */
+function draftFallback(state: CoachState): (stem: LockedClimaxStem, passIndex: number) => boolean {
+  const draft = state.draftSection
+  if (draft === null || state.lockedClimax === null) return () => true
+  return templateFallbackFor(draft, homeTypeOf(state), state.lockedClimax)
+}
 
 /**
  * Opens a fresh section. Dispatched by the panel from p2-first ("what comes
@@ -52,12 +69,16 @@ export function startCoachSection(
 ): CoachState {
   if (state.lockedClimax === null) return state
   const banked = pauseCoach(state, now)
+  // The length comes from the shape template's TARGET for this type, at the
+  // phrase the user answered -- never a hardcoded bar count.
+  const ordinal = banked.sections.filter((section) => section.type === type).length
+  const passes = passesForTargetBars(targetBarsFor(type, ordinal), banked.phrase?.bars ?? 1)
   return {
     ...banked,
     outcomes: { ...banked.outcomes, [banked.stepId]: 'done' as CoachOutcome },
     stepId: 'p2-section',
-    // Everything on. See this module's own doc comment.
-    draftSection: newCoachSectionDraft(type, banked.sections),
+    // Pre-filled from the template. See this module's own doc comment.
+    draftSection: newCoachSectionDraft(type, banked.sections, passes),
     stepElapsedMs: 0,
     runningSince: now,
     lineSeed: banked.lineSeed + 1
@@ -71,14 +92,19 @@ export function setCoachSectionName(state: CoachState, name: string): CoachState
   return { ...state, draftSection: { ...state.draftSection, name } }
 }
 
-/** The spec's "+/-4/+/-8", clamped by nudgeSectionBars. Returns the state
- * untouched when the nudge would change nothing, so a button held at the
- * clamp does not churn React. */
-export function nudgeCoachSectionBars(state: CoachState, delta: number): CoachState {
+/** The spec's "+/-1 and +/-2 passes", clamped by nudgeSectionPasses.
+ * Returns the state untouched when the nudge would change nothing, so a
+ * button held at the clamp does not churn React.
+ *
+ * Growing a section costs nothing: the new passes simply read the template,
+ * and every cell the user already edited is still there (./coachCells.ts).
+ * Shrinking destroys nothing either -- an override for a pass that is out of
+ * range comes back if he grows it again. */
+export function nudgeCoachSectionPasses(state: CoachState, delta: number): CoachState {
   if (state.draftSection === null) return state
-  const bars = nudgeSectionBars(state.draftSection.bars, delta)
-  if (bars === state.draftSection.bars) return state
-  return { ...state, draftSection: { ...state.draftSection, bars } }
+  const passes = nudgeSectionPasses(state.draftSection.passes, delta)
+  if (passes === state.draftSection.passes) return state
+  return { ...state, draftSection: { ...state.draftSection, passes } }
 }
 
 /**
@@ -97,31 +123,40 @@ export function nudgeCoachSectionBars(state: CoachState, delta: number): CoachSt
 export function toggleCoachSectionStem(state: CoachState, path: string): CoachState {
   const draft = state.draftSection
   if (draft === null || state.lockedClimax === null) return state
-  if (!state.lockedClimax.stems.some((stem) => stem.path === path)) return state
-  const droppedPaths = draft.droppedPaths.includes(path)
-    ? draft.droppedPaths.filter((dropped) => dropped !== path)
-    : [...draft.droppedPaths, path]
-  return { ...state, draftSection: { ...draft, droppedPaths } }
+  const stem = state.lockedClimax.stems.find((candidate) => candidate.path === path)
+  if (stem === undefined) return state
+  // Reads its current state from pass 0's RESOLVED value -- the template's
+  // answer unless the user already overrode it -- then writes the opposite
+  // explicitly into every pass. Whole-row, which is what a checkbox means.
+  const on = cellIsOn(draft.cells, 0, path, draftFallback(state)(stem, 0))
+  return {
+    ...state,
+    draftSection: { ...draft, cells: setStemAcrossPasses(draft.cells, draft.passes, path, !on) }
+  }
 }
 
 /**
- * "drop the suggested ones" -- the one button that applies every flag at
- * once (spec).
+ * ONE cell switched off, or back on -- the map's own gesture, one pass of
+ * one stem.
  *
- * This is the only bulk subtraction in the feature, and it only ever runs
- * from a click. Merges with whatever the user already switched off (so
- * pressing it after some manual toggles never un-drops anything), and
- * returns the state untouched when this section type suggests nothing --
- * which is exactly the drop, "everything plays".
+ * Same refusals as the whole-row toggle above: a path that is not in the
+ * locked climax is ignored rather than stored, because such a cell would be
+ * invisible in the map and would survive in the saved project forever.
  */
-export function dropSuggestedCoachSectionStems(state: CoachState): CoachState {
+export function toggleCoachSectionCell(
+  state: CoachState,
+  passIndex: number,
+  path: string
+): CoachState {
   const draft = state.draftSection
   if (draft === null || state.lockedClimax === null) return state
-  const suggested = suggestedDropPaths(draft.type, state.lockedClimax)
-  if (suggested.length === 0) return state
-  const droppedPaths = [...new Set([...draft.droppedPaths, ...suggested])]
-  if (droppedPaths.length === draft.droppedPaths.length) return state
-  return { ...state, draftSection: { ...draft, droppedPaths } }
+  const stem = state.lockedClimax.stems.find((candidate) => candidate.path === path)
+  if (stem === undefined) return state
+  const on = cellIsOn(draft.cells, passIndex, path, draftFallback(state)(stem, passIndex))
+  return {
+    ...state,
+    draftSection: { ...draft, cells: setCell(draft.cells, passIndex, path, !on) }
+  }
 }
 
 /**
@@ -147,10 +182,11 @@ export function placeCoachSection(
   if (draft === null) return state
   const banked = pauseCoach(state, now)
   const section: CoachSection = {
+    id: `section-${banked.sections.length}`,
     type: draft.type,
     name: draft.name,
-    bars: draft.bars,
-    droppedPaths: [...draft.droppedPaths],
+    passes: draft.passes,
+    cells: { ...draft.cells },
     startBar,
     placedGroupIds
   }

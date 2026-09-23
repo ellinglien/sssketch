@@ -378,6 +378,10 @@ describe('sanitiseLoadedCoach', () => {
       runningSince: null,
       lineSeed: 1,
       lockedClimax: null,
+      phraseReading: null,
+      phrase: null,
+      loopIs: null,
+      shape: null,
       sections: [],
       draftSection: null,
       tension: [],
@@ -468,6 +472,54 @@ describe('what phase one left behind', () => {
   })
 })
 
+describe('the phrase, and who owns it', () => {
+  it('starts with no measurement and no answer', () => {
+    const state = startCoach(T0)
+    expect(state.phraseReading).toBeNull()
+    expect(state.phrase).toBeNull()
+    expect(state.loopIs).toBeNull()
+    expect(state.shape).toBeNull()
+  })
+
+  it('brings all four back off disk', () => {
+    const loaded = sanitiseLoadedCoach({
+      stepId: 'p2-first',
+      phraseReading: { nominalBars: 8, phraseBars: 4 },
+      phrase: { bars: 4, source: 'measured' },
+      loopIs: 'drop',
+      shape: 'standard'
+    })
+    expect(loaded?.phrase).toEqual({ bars: 4, source: 'measured' })
+    expect(loaded?.phraseReading?.phraseBars).toBe(4)
+    expect(loaded?.loopIs).toBe('drop')
+    expect(loaded?.shape).toBe('standard')
+  })
+
+  it('loads a project that predates all four as having none of them', () => {
+    const loaded = sanitiseLoadedCoach({ stepId: 'p2-first' })
+    expect(loaded?.phrase).toBeNull()
+    expect(loaded?.loopIs).toBeNull()
+  })
+
+  it('drops an answer or a shape this build does not know', () => {
+    const loaded = sanitiseLoadedCoach({ stepId: 'p2-first', loopIs: 'chorus', shape: 'epic' })
+    expect(loaded?.loopIs).toBeNull()
+    expect(loaded?.shape).toBeNull()
+  })
+
+  it('sizes a legacy section at the phrase length the SAVED ANSWER gives', () => {
+    // The answer is repaired first, then the sections are migrated against
+    // it -- so a 16-bar pre-map section in a project whose phrase is 8 comes
+    // back as two passes, not sixteen.
+    const loaded = sanitiseLoadedCoach({
+      stepId: 'p2-section',
+      phrase: { bars: 8, source: 'nominal' },
+      sections: [{ type: 'intro', name: 'intro', bars: 16, startBar: 0 }]
+    })
+    expect(loaded?.sections[0].passes).toBe(2)
+  })
+})
+
 describe('the phase-two fields', () => {
   it('start empty', () => {
     const coach = startCoach(T0)
@@ -479,27 +531,31 @@ describe('the phase-two fields', () => {
     const saved = {
       ...startCoach(T0),
       stepId: 'p2-section',
+      phrase: { bars: 4, source: 'measured' },
       sections: [
         {
+          id: 'map-0-intro',
           type: 'intro',
           name: 'intro',
-          bars: 8,
-          droppedPaths: ['/hook.wav'],
+          passes: 2,
+          cells: { '0|/hook.wav': false },
           startBar: 0,
           placedGroupIds: { '/kick.wav': 'g1' }
         }
       ],
-      draftSection: { type: 'build', name: 'build', bars: 16, droppedPaths: [] }
+      draftSection: { type: 'build', name: 'build', passes: 2, cells: {} }
     }
     const loaded = sanitiseLoadedCoach(JSON.parse(JSON.stringify(saved)))
     expect(loaded?.sections).toHaveLength(1)
-    expect(loaded?.sections[0].droppedPaths).toEqual(['/hook.wav'])
+    expect(loaded?.sections[0].id).toBe('map-0-intro')
+    expect(loaded?.sections[0].passes).toBe(2)
+    expect(loaded?.sections[0].cells).toEqual({ '0|/hook.wav': false })
     expect(loaded?.sections[0].placedGroupIds).toEqual({ '/kick.wav': 'g1' })
     expect(loaded?.draftSection).toEqual({
       type: 'build',
       name: 'build',
-      bars: 16,
-      droppedPaths: []
+      passes: 2,
+      cells: {}
     })
   })
 
@@ -525,7 +581,7 @@ describe('the phase-two fields', () => {
   it('repairs a hand-edited section list rather than throwing', () => {
     const loaded = sanitiseLoadedCoach({
       ...startCoach(T0),
-      sections: [{ type: 'nonsense' }, { type: 'drop', bars: 12 }],
+      sections: [{ type: 'nonsense' }, { type: 'drop', passes: 3 }],
       draftSection: 'not an object'
     })
     expect(loaded?.sections.map((s) => s.type)).toEqual(['drop'])

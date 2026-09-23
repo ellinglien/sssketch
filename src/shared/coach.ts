@@ -45,6 +45,18 @@ import {
   type CoachSectionDraft
 } from './coachSections'
 import { sanitiseCoachTension, type CoachTensionApplied } from './coachTension'
+import {
+  sanitiseCoachPhrase,
+  sanitiseLoopPhraseReading,
+  type CoachPhrase,
+  type LoopPhraseReading
+} from './coachPhrase'
+import {
+  isCoachLoopAnswer,
+  isCoachShapeId,
+  type CoachLoopAnswer,
+  type CoachShapeId
+} from './coachShapes'
 
 /** 'active' shows the bubble; 'minimised' shows only the corner sprite (the
  * clock keeps running -- you are still on this step, just not looking at
@@ -78,6 +90,27 @@ export interface CoachState {
    * two carves from (spec, phase 1 step 5). null until the lock-in step
    * runs. Real persisted project data, like the rest of this state. */
   lockedClimax: LockedClimax | null
+  /** WHAT THE APP MEASURED about the loop's phrase -- reported once,
+   * before the map is built, and then left alone. Never the number
+   * anything is sized by: that is `phrase` below, which only the user
+   * writes. Kept on the flow (rather than recomputed) so the offer
+   * survives a reload and he can still change his mind next week.
+   *
+   * Pinned across undo (history.ts): a measurement of a file on disk is
+   * not an arrangement edit, and no undo can un-measure it. */
+  phraseReading: LoopPhraseReading | null
+  /** THE USER'S ANSWER, and the only number section sizing ever reads.
+   * Written by exactly one reducer case (COACH_SET_PHRASE), which is
+   * only ever dispatched from a click. Changing it RE-SIZES the map
+   * (resizeCoachMapToPhrase) rather than rebuilding it -- names, types
+   * and cell edits all survive. */
+  phrase: CoachPhrase | null
+  /** "What is this loop?" -- drop / verse / intro / not sure. Decides
+   * where the material he already has lands in the structure, which is
+   * the move that replaced all six of phase one's steps. */
+  loopIs: CoachLoopAnswer | null
+  /** "How long a journey?" -- short / standard / long. */
+  shape: CoachShapeId | null
   /** Phase two's placed sections, in the order they went down (spec:
    * "sections built so far (type, bars, which stems play)"). Real persisted
    * project data: a half-finished guided track resumes with its arrangement
@@ -126,6 +159,10 @@ export function startCoach(now: number): CoachState {
     runningSince: now,
     lineSeed: 0,
     lockedClimax: null,
+    phraseReading: null,
+    phrase: null,
+    loopIs: null,
+    shape: null,
     sections: [],
     draftSection: null,
     tension: [],
@@ -419,6 +456,9 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
   // or hand-edited, including every phase-one 'p1-' step) is repaired back
   // to the first step this build still has.
   const stepId = isCoachStepId(loose.stepId) ? loose.stepId : FIRST_COACH_STEP_ID
+  // The ANSWER is repaired first, because the section migration below
+  // measures a pre-map section's bar count against it.
+  const phrase = sanitiseCoachPhrase(loose.phrase)
   return {
     status: loose.status === 'finished' ? 'finished' : 'dismissed',
     stepId,
@@ -436,8 +476,14 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
         ? Math.trunc(loose.lineSeed)
         : 0,
     lockedClimax: sanitiseLockedClimax(loose.lockedClimax),
-    sections: sanitiseCoachSections(loose.sections),
-    draftSection: sanitiseCoachSectionDraft(loose.draftSection),
+    phraseReading: sanitiseLoopPhraseReading(loose.phraseReading),
+    phrase,
+    loopIs: isCoachLoopAnswer(loose.loopIs) ? loose.loopIs : null,
+    shape: isCoachShapeId(loose.shape) ? loose.shape : null,
+    // A project with no answer yet migrates its sections at one pass each;
+    // the map's own re-size fixes that the moment he answers.
+    sections: sanitiseCoachSections(loose.sections, phrase?.bars ?? 1),
+    draftSection: sanitiseCoachSectionDraft(loose.draftSection, phrase?.bars ?? 1),
     tension: sanitiseCoachTension(loose.tension),
     // Repaired rather than trusted, like every other number here: a
     // hand-edited or absent value must not leave the flow thinking a file

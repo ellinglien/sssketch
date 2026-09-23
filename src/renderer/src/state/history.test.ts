@@ -443,12 +443,13 @@ describe('the guided flow across undo/redo', () => {
               ...h.present.coach,
               sections: [
                 {
+                  id: 'map-0-intro' as const,
                   type: 'intro' as const,
                   name: 'intro',
-                  bars: 8,
-                  // Empty: everything on. The full climax loop played in
-                  // this section, which is the everything-on rule as data.
-                  droppedPaths: [],
+                  passes: 2,
+                  // Empty: nothing OVERRIDDEN. Every cell reads the
+                  // template, which is the pre-fill rule as data.
+                  cells: {},
                   startBar: 0,
                   placedGroupIds: { '/bass.wav': 'g1' }
                 }
@@ -475,6 +476,60 @@ describe('the guided flow across undo/redo', () => {
 
     h = historyReducer(h, { type: 'REDO' })
     expect(h.present.coach?.sections).toHaveLength(1)
+  })
+
+  it('pins the phrase answer and the measurement across undo', () => {
+    let history = createHistoryState(initialState)
+    history = historyReducer(history, { type: 'COACH_START', now: T0 })
+    // An ordinary, tracked edit -- this is the checkpoint undo will land on,
+    // and it captures a coach with no phrase yet.
+    history = historyReducer(history, { type: 'SET_TEMPO', bpm: 100 })
+    history = historyReducer(history, {
+      type: 'COACH_SET_PHRASE_READING',
+      reading: { nominalBars: 8, phraseBars: 4, measuredStems: 2, inconclusiveStems: 0 }
+    })
+    history = historyReducer(history, {
+      type: 'COACH_SET_PHRASE',
+      phrase: { bars: 4, source: 'measured' }
+    })
+    history = historyReducer(history, { type: 'COACH_SET_LOOP_ANSWER', loopIs: 'drop' })
+    history = historyReducer(history, { type: 'COACH_SET_SHAPE', shape: 'standard' })
+    history = historyReducer(history, { type: 'SET_TEMPO', bpm: 120 })
+    history = historyReducer(history, { type: 'UNDO' })
+
+    expect(history.present.bpm).toBe(100) // the edit walked back...
+    // ...the answers and the measurement did not. A measurement of a file on
+    // disk and an answer the user gave are not timeline material.
+    expect(history.present.coach?.phrase).toEqual({ bars: 4, source: 'measured' })
+    expect(history.present.coach?.phraseReading?.phraseBars).toBe(4)
+    expect(history.present.coach?.loopIs).toBe('drop')
+    expect(history.present.coach?.shape).toBe('standard')
+  })
+
+  it('still walks sections back with the clips they name, cells and all', () => {
+    // `sections` stays on the SNAPSHOT side, unlike the four fields above:
+    // it is the one part of the flow that names real timeline material.
+    const section = {
+      id: 'a',
+      type: 'verse' as const,
+      name: 'verse',
+      passes: 2,
+      cells: { '0|/kick.wav': false },
+      startBar: 0,
+      placedGroupIds: {}
+    }
+    let history = createHistoryState(initialState)
+    history = historyReducer(history, { type: 'COACH_START', now: T0 })
+    history = historyReducer(history, { type: 'ADD_TO_SHELF', rifff })
+    history = historyReducer(history, {
+      type: 'LOAD_STATE',
+      state: { ...history.present, coach: { ...history.present.coach!, sections: [section] } }
+    })
+    expect(history.present.coach?.sections[0].cells).toEqual({ '0|/kick.wav': false })
+
+    history = historyReducer(history, { type: 'SET_TEMPO', bpm: 100 })
+    history = historyReducer(history, { type: 'UNDO' })
+    expect(history.present.coach?.sections[0].cells).toEqual({ '0|/kick.wav': false })
   })
 
   it('never makes sssketchy vanish mid-flow by undoing past the moment he started', () => {

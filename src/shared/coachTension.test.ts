@@ -17,11 +17,16 @@ import {
   type CoachTensionApplied
 } from './coachTension'
 
+/** Sections are measured in PASSES now; these fixtures use a 4-bar phrase
+ * throughout, so `passes: 4` is the old `bars: 16`. */
+const PHRASE = 4
+
 function section(over: Partial<CoachSection> & Pick<CoachSection, 'type'>): CoachSection {
   return {
+    id: over.type,
     name: over.type,
-    bars: 16,
-    droppedPaths: [],
+    passes: 4,
+    cells: {},
     startBar: 0,
     placedGroupIds: {},
     ...over
@@ -61,18 +66,18 @@ describe('tensionOffersAt', () => {
 
 describe('coachSectionBoundaries', () => {
   const sections: CoachSection[] = [
-    section({ type: 'intro', bars: 8, startBar: 0 }),
-    section({ type: 'build', bars: 16, startBar: 8 }),
-    section({ type: 'drop', bars: 16, startBar: 24 }),
-    section({ type: 'outro', bars: 8, startBar: 40 })
+    section({ id: 'a', type: 'intro', passes: 2, startBar: 0 }),
+    section({ id: 'b', type: 'build', passes: 4, startBar: 8 }),
+    section({ id: 'c', type: 'drop', passes: 4, startBar: 24 }),
+    section({ id: 'd', type: 'outro', passes: 2, startBar: 40 })
   ]
 
   it('skips boundaries nothing is offered at, rather than listing empty rows', () => {
-    expect(coachSectionBoundaries(sections).map((b) => b.index)).toEqual([1])
+    expect(coachSectionBoundaries(sections, PHRASE).map((b) => b.index)).toEqual([1])
   })
 
   it('measures the join and the lead off the OUTGOING section', () => {
-    const [boundary] = coachSectionBoundaries(sections)
+    const [boundary] = coachSectionBoundaries(sections, PHRASE)
     expect(boundary.from).toBe('build')
     expect(boundary.into).toBe('drop')
     expect(boundary.bar).toBe(24)
@@ -82,17 +87,17 @@ describe('coachSectionBoundaries', () => {
 
   it('carries the names the user gave, for the panel to print', () => {
     const named = [
-      section({ type: 'build', name: 'the long one', bars: 16, startBar: 0 }),
-      section({ type: 'drop', name: 'the big one', bars: 16, startBar: 16 })
+      section({ id: 'a', type: 'build', name: 'the long one', passes: 4, startBar: 0 }),
+      section({ id: 'b', type: 'drop', name: 'the big one', passes: 4, startBar: 16 })
     ]
-    const [boundary] = coachSectionBoundaries(named)
+    const [boundary] = coachSectionBoundaries(named, PHRASE)
     expect(boundary.fromName).toBe('the long one')
     expect(boundary.intoName).toBe('the big one')
   })
 
   it('has no boundaries at all for one section, or none', () => {
-    expect(coachSectionBoundaries([section({ type: 'drop' })])).toEqual([])
-    expect(coachSectionBoundaries([])).toEqual([])
+    expect(coachSectionBoundaries([section({ type: 'drop' })], PHRASE)).toEqual([])
+    expect(coachSectionBoundaries([], PHRASE)).toEqual([])
   })
 })
 

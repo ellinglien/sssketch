@@ -154,22 +154,18 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     phase: 'arrangement',
     label: 'carve a section',
     lines: [
-      'every stem from the locked loop is on. switch off what this section does not need.',
-      'this section starts as the whole climax loop. subtracting is the only thing that changes it.',
-      'name it, set its length, then turn things off. nothing comes out unless you take it out.',
-      'nothing is off yet. the marked ones are what this kind of section usually loses.'
+      'this one is filled in from the usual shape. switch off anything it does not need.',
+      'name it, set how many times round the loop it goes, then change whatever you like.',
+      'a first guess at this section, not a rule. every square is one click from the other way.',
+      'pre-filled from the standard arrangement. cmd+z if you would rather start from full.'
     ],
-    // The panel's own three buttons, restated here so the bubble's "stuck?"
+    // The panel's own two buttons, restated here so the bubble's "stuck?"
     // list and "do it for me" can never offer a different set of moves than
-    // the panel shows. "drop the suggested ones" is the primary one because
-    // it is the single shortcut the spec names -- and it still only ever
-    // runs on a click, leaving the everything-on default until then.
+    // the panel shows. "drop the suggested ones" was a third; it went on
+    // 2026-09-23 with the everything-on rule, because a pre-filled map has
+    // already applied the suggestion table and applying it again means
+    // nothing.
     moves: [
-      {
-        id: 'section-drop-suggested',
-        label: 'drop the suggested ones',
-        action: { kind: 'section-op', op: 'drop-suggested' }
-      },
       {
         id: 'section-preview',
         label: 'loop just this section',
@@ -181,7 +177,7 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
         action: { kind: 'section-op', op: 'place' }
       }
     ],
-    primaryMoveId: 'section-drop-suggested',
+    primaryMoveId: 'section-place',
     anchorSelector: TIMELINE
   },
   {

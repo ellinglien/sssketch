@@ -1,14 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { startCoach, type CoachState } from './coach'
 import type { LockedClimax, LockedClimaxStem } from './coachClimax'
-import { suggestedDropPaths } from './coachSections'
+import { cellIsOn } from './coachCells'
 import {
   coachSectionLine,
-  dropSuggestedCoachSectionStems,
-  nudgeCoachSectionBars,
+  nudgeCoachSectionPasses,
   placeCoachSection,
   setCoachSectionName,
   startCoachSection,
+  toggleCoachSectionCell,
   toggleCoachSectionStem
 } from './coachPhase2'
 
@@ -41,20 +41,36 @@ const climax: LockedClimax = {
   ]
 }
 
+/** A flow with the loop locked and the two answers already given, at a
+ * 4-bar phrase -- which is what every section-editing test below needs. */
 function locked(): CoachState {
-  return { ...startCoach(T0), stepId: 'p2-first', lockedClimax: climax }
+  return {
+    ...startCoach(T0),
+    stepId: 'p2-first',
+    lockedClimax: climax,
+    phrase: { bars: 4, source: 'nominal' },
+    loopIs: 'drop'
+  }
 }
 
 describe('startCoachSection', () => {
-  it('opens a draft with EVERY stem on', () => {
+  it('opens a draft that overrides NOTHING -- the template fills it in', () => {
     const state = startCoachSection(locked(), T0 + MINUTE, 'intro')
     expect(state.stepId).toBe('p2-section')
     expect(state.draftSection).toEqual({
       type: 'intro',
       name: 'intro',
-      bars: 8,
-      droppedPaths: []
+      // The 8-bar intro target, at the 4-bar phrase the user answered.
+      passes: 2,
+      cells: {}
     })
+  })
+
+  it('sizes the draft from the PHRASE, not from a hardcoded bar count', () => {
+    const atEight = { ...locked(), phrase: { bars: 8, source: 'nominal' as const } }
+    // The same 8-bar target is one pass of an 8-bar loop and two of a 4-bar.
+    expect(startCoachSection(atEight, T0, 'intro').draftSection?.passes).toBe(1)
+    expect(startCoachSection(locked(), T0, 'intro').draftSection?.passes).toBe(2)
   })
 
   it('does nothing at all without a locked climax', () => {
@@ -84,52 +100,52 @@ describe('editing the draft', () => {
     expect(setCoachSectionName(open, 'the long build').draftSection?.name).toBe('the long build')
   })
 
-  it('nudges the length by four and eight, clamped', () => {
-    expect(nudgeCoachSectionBars(open, 8).draftSection?.bars).toBe(24)
-    expect(nudgeCoachSectionBars(open, -4).draftSection?.bars).toBe(12)
-    const tiny = nudgeCoachSectionBars(nudgeCoachSectionBars(open, -8), -8)
-    expect(tiny.draftSection?.bars).toBe(4)
-    expect(nudgeCoachSectionBars(tiny, -8).draftSection?.bars).toBe(4)
+  it('nudges the length by one and two PASSES, clamped', () => {
+    const opened = open.draftSection!.passes
+    expect(nudgeCoachSectionPasses(open, 2).draftSection?.passes).toBe(opened + 2)
+    const tiny = nudgeCoachSectionPasses(nudgeCoachSectionPasses(open, -2), -2)
+    expect(tiny.draftSection?.passes).toBe(1)
+    expect(nudgeCoachSectionPasses(tiny, -2)).toBe(tiny)
   })
 
-  it('toggles one stem off and back on', () => {
-    const off = toggleCoachSectionStem(open, '/hook.wav')
-    expect(off.draftSection?.droppedPaths).toEqual(['/hook.wav'])
-    expect(toggleCoachSectionStem(off, '/hook.wav').draftSection?.droppedPaths).toEqual([])
+  it('toggles one stem off and back on, across every pass', () => {
+    const passes = open.draftSection!.passes
+    // The kick plays in a build (the table only drops the hook there), so
+    // the first toggle writes an explicit OFF.
+    const off = toggleCoachSectionStem(open, '/kick.wav')
+    for (let pass = 0; pass < passes; pass += 1) {
+      expect(cellIsOn(off.draftSection!.cells, pass, '/kick.wav', true)).toBe(false)
+    }
+    const backOn = toggleCoachSectionStem(off, '/kick.wav')
+    for (let pass = 0; pass < passes; pass += 1) {
+      expect(cellIsOn(backOn.draftSection!.cells, pass, '/kick.wav', false)).toBe(true)
+    }
+  })
+
+  it('reads the TEMPLATE for a stem the user has not touched', () => {
+    // A build drops the hook, so the template already says off -- the first
+    // toggle therefore turns it ON rather than off again.
+    const on = toggleCoachSectionStem(open, '/hook.wav')
+    expect(cellIsOn(on.draftSection!.cells, 0, '/hook.wav', false)).toBe(true)
+  })
+
+  it('toggles ONE cell without touching its neighbours', () => {
+    const one = toggleCoachSectionCell(open, 1, '/kick.wav')
+    expect(Object.keys(one.draftSection!.cells)).toEqual(['1|/kick.wav'])
+    expect(one.draftSection!.cells['1|/kick.wav']).toBe(false)
   })
 
   it('ignores a path that is not in the locked climax', () => {
     expect(toggleCoachSectionStem(open, '/not-here.wav')).toBe(open)
+    expect(toggleCoachSectionCell(open, 0, '/not-here.wav')).toBe(open)
   })
 
   it('leaves everything alone when no draft is open', () => {
     const closed = locked()
     expect(setCoachSectionName(closed, 'x')).toBe(closed)
-    expect(nudgeCoachSectionBars(closed, 4)).toBe(closed)
+    expect(nudgeCoachSectionPasses(closed, 1)).toBe(closed)
     expect(toggleCoachSectionStem(closed, '/hook.wav')).toBe(closed)
-    expect(dropSuggestedCoachSectionStems(closed)).toBe(closed)
-  })
-})
-
-describe('dropSuggestedCoachSectionStems', () => {
-  it('applies every flag at once, and ONLY when called', () => {
-    const open = startCoachSection(locked(), T0, 'intro')
-    // The draft was untouched until this call. That is the whole rule.
-    expect(open.draftSection?.droppedPaths).toEqual([])
-    const dropped = dropSuggestedCoachSectionStems(open)
-    expect(dropped.draftSection?.droppedPaths).toEqual(suggestedDropPaths('intro', climax))
-    expect(dropped.draftSection?.droppedPaths).toEqual(['/harmony.wav', '/hook.wav'])
-  })
-
-  it('merges with what the user already switched off, without duplicating', () => {
-    const open = toggleCoachSectionStem(startCoachSection(locked(), T0, 'intro'), '/harmony.wav')
-    const dropped = dropSuggestedCoachSectionStems(open)
-    expect(dropped.draftSection?.droppedPaths).toEqual(['/harmony.wav', '/hook.wav'])
-  })
-
-  it('is a no-op on a drop, which suggests nothing', () => {
-    const open = startCoachSection(locked(), T0, 'drop')
-    expect(dropSuggestedCoachSectionStems(open)).toBe(open)
+    expect(toggleCoachSectionCell(closed, 0, '/hook.wav')).toBe(closed)
   })
 })
 
@@ -142,10 +158,11 @@ describe('placeCoachSection', () => {
     expect(placed.draftSection).toBeNull()
     expect(placed.sections).toEqual([
       {
+        id: 'section-0',
         type: 'intro',
         name: 'intro',
-        bars: 8,
-        droppedPaths: [],
+        passes: 2,
+        cells: {},
         startBar: 0,
         placedGroupIds: { '/kick.wav': 'g1' }
       }

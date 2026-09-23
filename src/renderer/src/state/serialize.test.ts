@@ -757,6 +757,10 @@ describe('the guided flow across a save and a load', () => {
         }
       ]
     })
+    // Answering the phrase is what section sizing follows -- without it
+    // every section is one pass, which is the honest default.
+    state = reducer(state, { type: 'COACH_SET_PHRASE', phrase: { bars: 4, source: 'nominal' } })
+    state = reducer(state, { type: 'COACH_SET_LOOP_ANSWER', loopIs: 'drop' })
     state = reducer(state, { type: 'COACH_START_SECTION', now: NOW, sectionType: 'intro' })
     state = reducer(state, {
       type: 'COACH_PLACE_SECTION',
@@ -770,19 +774,22 @@ describe('the guided flow across a save and a load', () => {
     const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
     expect(restored.coach?.sections).toEqual([
       {
+        id: 'section-0',
         type: 'intro',
         name: 'intro',
-        bars: 8,
-        droppedPaths: [],
+        passes: 2,
+        cells: {},
         startBar: 0,
         placedGroupIds: { '/kick.wav': 'g1' }
       }
     ])
+    // A build's 8-bar target at a 4-bar phrase is two passes, and toggling
+    // the kick wrote an explicit OFF into each of them.
     expect(restored.coach?.draftSection).toEqual({
       type: 'build',
       name: 'build',
-      bars: 16,
-      droppedPaths: ['/kick.wav']
+      passes: 2,
+      cells: { '0|/kick.wav': false, '1|/kick.wav': false }
     })
     // A loaded flow is always hidden and its clock always stopped.
     expect(restored.coach?.status).toBe('dismissed')
@@ -831,18 +838,20 @@ describe('the phase-three coach fields', () => {
         stepId: 'p3-export',
         sections: [
           {
+            id: 'map-0-build',
             type: 'build',
             name: 'build',
-            bars: 16,
-            droppedPaths: [],
+            passes: 4,
+            cells: {},
             startBar: 0,
             placedGroupIds: {}
           },
           {
+            id: 'map-1-drop',
             type: 'drop',
             name: 'drop',
-            bars: 16,
-            droppedPaths: [],
+            passes: 4,
+            cells: {},
             startBar: 16,
             placedGroupIds: {}
           }
@@ -889,5 +898,58 @@ describe('the phase-three coach fields', () => {
     )
 
     expect(loaded.coach?.stepId).toBe('p2-first')
+  })
+
+  it("round-trips the map's four fields and a section's cells", () => {
+    const { state: loaded } = deserializeProject(
+      savedWithCoach({
+        status: 'active',
+        stepId: 'p2-section',
+        lineSeed: 0,
+        phraseReading: { nominalBars: 8, phraseBars: 4, measuredStems: 3, inconclusiveStems: 1 },
+        phrase: { bars: 4, source: 'measured' },
+        loopIs: 'drop',
+        shape: 'standard',
+        sections: [
+          {
+            id: 'map-0-intro',
+            type: 'intro',
+            name: 'the way in',
+            passes: 2,
+            cells: { '1|/hook.wav': false },
+            startBar: 0,
+            placedGroupIds: { '/kick.wav': 'g1' }
+          }
+        ]
+      })
+    )
+
+    expect(loaded.coach?.phrase).toEqual({ bars: 4, source: 'measured' })
+    expect(loaded.coach?.phraseReading).toEqual({
+      nominalBars: 8,
+      phraseBars: 4,
+      measuredStems: 3,
+      inconclusiveStems: 1
+    })
+    expect(loaded.coach?.loopIs).toBe('drop')
+    expect(loaded.coach?.shape).toBe('standard')
+    expect(loaded.coach?.sections[0].id).toBe('map-0-intro')
+    expect(loaded.coach?.sections[0].name).toBe('the way in')
+    expect(loaded.coach?.sections[0].passes).toBe(2)
+    expect(loaded.coach?.sections[0].cells).toEqual({ '1|/hook.wav': false })
+  })
+
+  it('brings a project saved before the map up to the map shape', () => {
+    const { state } = deserializeProject(
+      savedWithCoach({
+        stepId: 'p2-section',
+        sections: [{ type: 'intro', name: 'intro', bars: 16, droppedPaths: ['/hook.wav'] }]
+      })
+    )
+    expect(state.coach?.phrase).toBeNull()
+    expect(state.coach?.sections[0].passes).toBeGreaterThanOrEqual(1)
+    expect(state.coach?.sections[0].cells['0|/hook.wav']).toBe(false)
+    expect('bars' in state.coach!.sections[0]).toBe(false)
+    expect('droppedPaths' in state.coach!.sections[0]).toBe(false)
   })
 })

@@ -94,9 +94,20 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // COACH_* entry above: where sssketchy is, not an edit to the project.
   'COACH_START_SECTION',
   'COACH_SET_SECTION_NAME',
-  'COACH_NUDGE_SECTION_BARS',
   'COACH_TOGGLE_SECTION_STEM',
-  'COACH_DROP_SUGGESTED_STEMS',
+  // The arrangement map's own answers and measurement (2026-09-23). Same
+  // category as every other COACH_* entry: where the flow is and what the
+  // user told it, not an edit to the project. COACH_BUILD_MAP is the one
+  // that writes `sections`, and like COACH_PLACE_SECTION it is listed here
+  // so a stray direct dispatch pushes no checkpoint of its own -- in real
+  // use it arrives inside the BATCH that also places the clips.
+  'COACH_SET_PHRASE_READING',
+  'COACH_SET_PHRASE',
+  'COACH_SET_LOOP_ANSWER',
+  'COACH_SET_SHAPE',
+  'COACH_BUILD_MAP',
+  'COACH_NUDGE_SECTION_PASSES',
+  'COACH_TOGGLE_SECTION_CELL',
   // COACH_PLACE_SECTION is listed here so a stray direct dispatch cannot
   // push a checkpoint of its own -- but in real use it is ALWAYS dispatched
   // inside the same BATCH as the arranger actions that place the section's
@@ -151,11 +162,18 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
     // no undo of an in-app edit can take that back off disk. It stays
     // pinned with the rest of the flow.
     //
+    // The map's four new fields (phraseReading, phrase, loopIs, shape) ride
+    // along on the PINNED side by construction, and that is right: a
+    // measurement of a file and an answer the user typed are not timeline
+    // material, and undoing a clip edit must not un-answer "what is this
+    // loop?". `sections` stays on the snapshot side as before -- it is the
+    // one part of the flow that IS the work, cells and all.
+    //
     // Taking both from the snapshot being restored (and the empty value
     // when the snapshot predates the flow entirely) keeps the record honest
-    // about what is actually on the timeline, while the step, the answer to
-    // melodic-or-groove, the locked climax and the v1 mark still survive,
-    // which is the whole point of pinning.
+    // about what is actually on the timeline, while the step, the two
+    // answers, the locked climax and the v1 mark still survive, which is
+    // the whole point of pinning.
     const liveCoach = state.present.coach
     const pinnedCoach =
       liveCoach === null
