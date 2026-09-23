@@ -316,7 +316,7 @@ describe('coachAnimation', () => {
     working: false,
     moving: false,
     justAdvanced: false,
-    stuck: false
+    justNudged: false
   }
 
   it('bobs by default', () => {
@@ -324,11 +324,11 @@ describe('coachAnimation', () => {
   })
 
   it('climbs while the app is doing work, ahead of everything else', () => {
-    expect(coachAnimation({ ...base, working: true, moving: true, stuck: true })).toBe('climb')
+    expect(coachAnimation({ ...base, working: true, moving: true, justNudged: true })).toBe('climb')
   })
 
   it('walks when moving to another area', () => {
-    expect(coachAnimation({ ...base, moving: true, stuck: true })).toBe('walk')
+    expect(coachAnimation({ ...base, moving: true, justNudged: true })).toBe('walk')
   })
 
   it('jumps on a finished step and on a finished flow', () => {
@@ -336,8 +336,12 @@ describe('coachAnimation', () => {
     expect(coachAnimation({ ...base, status: 'finished' })).toBe('jump')
   })
 
-  it('takes a hit on the stuck nudge', () => {
-    expect(coachAnimation({ ...base, stuck: true })).toBe('hit')
+  it('takes a hit when the stuck nudge lands, and only then', () => {
+    // The input is the MOMENT the nudge landed, not the whole time it
+    // stands -- isCoachStuck stays true until the step changes, and a
+    // permanent hit loop is not "a quiet nudge" (spec).
+    expect(coachAnimation({ ...base, justNudged: true })).toBe('hit')
+    expect(coachAnimation({ ...base, justNudged: false })).toBe('idle')
   })
 })
 

@@ -45,6 +45,10 @@ const CLOCK_TICK_MS = 15_000
 const WALK_MS = 700
 /** How long the jump plays after a step is completed. */
 const JUMP_MS = 900
+/** How long the hit plays when the ten-minute nudge lands. Shorter than
+ * the jump: it is the quietest thing he does, and the nudge's line is what
+ * carries the actual message. */
+const HIT_MS = 1200
 
 const bubbleButtonStyle: React.CSSProperties = {
   height: 20,
@@ -264,6 +268,18 @@ function SssketchyCoachPanel({
   const celebrating = usePulse(coach.stepId, JUMP_MS, true)
 
   const stuck = isCoachStuck(coach, now)
+  // The nudge's LINE stands for as long as you are on the step; the
+  // ANIMATION is a burst when it lands. isCoachStuck goes true at minute
+  // ten and stays true until the step changes, so passing it straight to
+  // the animation pinned him to a four-frame hit loop -- in the corner
+  // sprite too -- for the rest of the step, which is the opposite of the
+  // spec's "quiet nudge".
+  //
+  // `&& stuck` is what makes this a burst on ARRIVAL only: the pulse is
+  // also true for a moment when the key flips back (the step changed, the
+  // nudge is over), and without it he would take a hit on the way OUT of
+  // being stuck.
+  const justNudged = usePulse(stuck ? `stuck:${coach.stepId}` : 'not-stuck', HIT_MS, false) && stuck
   const animation = coachAnimation({
     status: coach.status,
     // "climb = while the app works" -- a real fact off the slots, not a
@@ -271,7 +287,7 @@ function SssketchyCoachPanel({
     working: discoverSlots.some((slot) => slot.rolling),
     moving: walking,
     justAdvanced: celebrating,
-    stuck
+    justNudged
   })
 
   const sprite = (

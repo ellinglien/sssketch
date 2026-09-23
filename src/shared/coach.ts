@@ -321,7 +321,19 @@ export interface CoachAnimationInput {
   moving: boolean
   /** A short window just after a step was completed. */
   justAdvanced: boolean
-  stuck: boolean
+  /** A short window just after the ten-minute nudge LANDED -- not the
+   * whole time it stands.
+   *
+   * isCoachStuck stays true from minute ten until the step changes, so
+   * passing that straight in here pinned him to a four-frame hit loop for
+   * the rest of the step (the minimised corner sprite included). The spec
+   * asks for "a quiet nudge"; a character taking hits forever is the
+   * loudest thing on the screen, and it is also the one animation that
+   * reads as something being wrong. The nudge's LINE stays up the whole
+   * time -- that is the part that is actually useful -- and only the
+   * animation is a burst. See SssketchyCoach.tsx for where the burst is
+   * timed. */
+  justNudged: boolean
 }
 
 /**
@@ -335,15 +347,15 @@ export interface CoachAnimationInput {
  * a render is running would tell the user nothing is happening. `moving`
  * then wins over `justAdvanced` because a step that finished AND moved him
  * somewhere else is, from the user's point of view, mostly a journey.
- * `stuck` is last: it is the quietest signal and must never interrupt a
- * louder true one.
+ * `justNudged` is last: it is the quietest signal and must never interrupt
+ * a louder true one.
  */
 export function coachAnimation(input: CoachAnimationInput): SssketchyAnimation {
   if (input.status === 'finished') return 'jump'
   if (input.working) return 'climb'
   if (input.moving) return 'walk'
   if (input.justAdvanced) return 'jump'
-  if (input.stuck) return 'hit'
+  if (input.justNudged) return 'hit'
   return 'idle'
 }
 
