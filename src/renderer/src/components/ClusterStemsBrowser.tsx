@@ -35,6 +35,23 @@ import { suggestCategoryFromEmbedding, type ConfirmedEmbedding } from '@shared/e
 import { guessArrangeRoleFromPresetName } from '@shared/presetNames'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 
+/** Which stems this pass is over.
+ *
+ * 'sketch' is today's behaviour, unchanged and the default: every stem on
+ * the timeline (rifff.startBar !== undefined), clustered, auditioned
+ * through useStemPreviewPlayback, writing BOTH role and bus.
+ *
+ * 'library' is the whole library: NOT clustered (computeMergeSequence is
+ * O(n^3) against a real ~45,000-stem backlog -- that is arithmetic, not a
+ * performance problem), auditioned through a throwaway one-stem project,
+ * and writing ROLE ONLY. The bus is a fact about an export of THIS project
+ * and a library stem has neither a stemKey nor a project, so
+ * ASSIGN_STEMS_TO_BUS and upsertStemCategoryBus do not fire there. That
+ * asymmetry is correct rather than unfortunate -- the bus is a fact about
+ * an export, the role is a fact about a file -- but it means the same click
+ * does slightly different work in the two populations, on purpose. */
+export type TidyUpPopulation = 'sketch' | 'library'
+
 const DEFAULT_CLUSTER_COUNT = 8
 const BUS_IDS: BusId[] = ['drums', 'bass', 'lead', 'backing', 'aux']
 
@@ -254,10 +271,12 @@ function ForkIcon(): React.JSX.Element {
 
 export function ClusterStemsBrowser({
   onClose,
-  currentSketch
+  currentSketch,
+  population = 'sketch'
 }: {
   onClose: () => void
   currentSketch: ProjectRef
+  population?: TidyUpPopulation
 }): React.JSX.Element {
   const dispatch = useDispatch()
   const rifffs = useAppSelector((s) => s.rifffs)
@@ -683,9 +702,12 @@ export function ClusterStemsBrowser({
   // categories the bus assignment is unchanged; recordRoles runs either
   // way (see its own doc comment above).
   function assignCluster(id: number, members: ClusterableStem[], category: ArrangeRole): void {
-    const busId = ARRANGE_ROLE_TO_BUS[category]
-    dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
-    recordBusCategories(members, busId)
+    // BUS WRITES STOP AT THE SKETCH BOUNDARY -- see TidyUpPopulation.
+    if (population === 'sketch') {
+      const busId = ARRANGE_ROLE_TO_BUS[category]
+      dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
+      recordBusCategories(members, busId)
+    }
     recordRoles(members, category)
     setCelebratingId(id)
     window.setTimeout(() => {
@@ -766,9 +788,12 @@ export function ClusterStemsBrowser({
     members: ClusterableStem[],
     category: ArrangeRole
   ): void {
-    const busId = ARRANGE_ROLE_TO_BUS[category]
-    dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
-    recordBusCategories(members, busId)
+    // BUS WRITES STOP AT THE SKETCH BOUNDARY -- see TidyUpPopulation.
+    if (population === 'sketch') {
+      const busId = ARRANGE_ROLE_TO_BUS[category]
+      dispatch({ type: 'ASSIGN_STEMS_TO_BUS', stemKeys: members.map((m) => m.key), busId })
+      recordBusCategories(members, busId)
+    }
     recordRoles(members, category)
     const target = { busId: suggestedBus, nodeId }
     setCelebratingSuggested(target)
