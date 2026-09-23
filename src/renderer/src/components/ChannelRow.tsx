@@ -1,7 +1,7 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import type { BusId, Rifff } from '@shared/types'
-import { stemKey } from '@shared/types'
 import type { LoopRegion } from '../state/store'
+import { channelAllMuted, channelIsSoloed } from '../state/selectors'
 import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { RiserBlock } from './RiserBlock'
 import { ChannelChainPanel } from './ChannelChainPanel'
@@ -136,10 +136,8 @@ function ChannelRowImpl({
   // every dispatch anywhere and defeat this component's own React.memo.
   // state.risers itself only changes when a riser actually does.
   const allRisers = useAppSelector((s) => s.risers)
-  const riserIds = useMemo(
-    () => risersOnChannel(allRisers, channelId).map((riser) => riser.id),
-    [allRisers, channelId]
-  )
+  const channelRisers = useMemo(() => risersOnChannel(allRisers, channelId), [allRisers, channelId])
+  const riserIds = useMemo(() => channelRisers.map((riser) => riser.id), [channelRisers])
   const isRecordingChannel = useAppSelector((s) => !!s.recordingChannelIds[channelId])
   const isArmed = useAppSelector((s) => s.armedChannelId === channelId)
   // Brief "click here to arm" pointer -- see App.tsx's own "/" key handler
@@ -166,30 +164,27 @@ function ChannelRowImpl({
   const playing = usePlaying()
   const ppb = useZoom()
 
+  // Both rules live in selectors.ts, where they are unit-tested -- a riser
+  // row's m/s are the one part of this that can be wrong quietly (a button
+  // that lights up and changes nothing), and components are not tested here.
+  // Both still scan the WHOLE project (solo is a statement about everything
+  // else), and both are still memoized so that scan only re-runs when mute
+  // state, the rifff set or the riser set actually changes.
   const allMuted = useMemo(
-    () =>
-      rifffs.length > 0 &&
-      rifffs.every((r) => r.stems.every((s) => mute[stemKey(r.groupId, s.slot)])),
-    [rifffs, mute]
+    () => channelAllMuted({ rifffs, channelRisers, mute }),
+    [rifffs, channelRisers, mute]
   )
-
-  // Mirrors SOLO_GROUP/SOLO_CHANNEL's own "alreadySoloed" definition in
-  // store.ts: every stem in this channel unmuted, every stem in every other
-  // PLACED channel muted. When there's only one channel on the timeline
-  // this is trivially true even with nothing "soloed" -- same accepted edge
-  // case the pre-existing SOLO_GROUP check already has, not a new one.
-  //
-  // Scans EVERY rifff in the whole project, not just this channel's own --
-  // memoized so that scan only re-runs when mute state or the project's own
-  // rifff set actually changes.
-  const soloed = useMemo(() => {
-    const channelGroupIds = new Set(rifffs.map((r) => r.groupId))
-    return Object.values(rifffsMap).every((r) => {
-      if (r.startBar === undefined) return true
-      const inThisChannel = channelGroupIds.has(r.groupId)
-      return r.stems.every((s) => !!mute[stemKey(r.groupId, s.slot)] === !inThisChannel)
-    })
-  }, [rifffs, rifffsMap, mute])
+  const soloed = useMemo(
+    () =>
+      channelIsSoloed({
+        channelId,
+        channelGroupIds: new Set(rifffs.map((r) => r.groupId)),
+        rifffs: rifffsMap,
+        risers: allRisers,
+        mute
+      }),
+    [channelId, rifffs, rifffsMap, allRisers, mute]
+  )
 
   const baseButtonStyle: React.CSSProperties = {
     fontSize: 9,
