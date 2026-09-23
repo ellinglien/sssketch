@@ -264,26 +264,33 @@ export function isSketchEligible(state: AppState): boolean {
   return true
 }
 
-/** Display label for the arranger mode toggle -- shared by Titlebar.tsx
+/** Display label for the arranger view toggle -- shared by Titlebar.tsx
  * (where the button itself now lives) and anywhere else that needs to show
- * the current mode as text. 'normal' reads as "arrange" everywhere in the
+ * the current view as text. 'normal' reads as "arrange" everywhere in the
  * UI; there's no user-facing "normal." */
 export function modeLabel(mode: ArrangerMode): string {
   return mode === 'normal' ? 'arrange' : mode
 }
 
-/** What Tab / the Titlebar's mode button should switch to next — arrange ->
- * sketch -> automation -> arrange, skipping sketch straight to automation
- * when isSketchEligible(state) is false, so the cycle never lands on a mode
- * it can't actually show. Unlike sketch, automation has no eligibility
- * requirement at all: it's the ordinary arranger with a drawable lane over
- * each row, so it's always showable, and the cycle therefore always
- * advances (before automation existed, an ineligible project's toggle sat
- * on 'normal' and appeared to do nothing — see App.tsx). */
+/** The order Tab and the titlebar button walk the three views in. Declared
+ * as one list rather than as a chain of `if (mode === x) return y` steps,
+ * which is what this was while there were two views and an interaction mode
+ * wedged between them: a list says "these are the views, in this order" in
+ * one place, and the only special case left below is the single eligibility
+ * skip. */
+const MODE_CYCLE: readonly ArrangerMode[] = ['normal', 'sketch', 'map']
+
+/** What Tab / the Titlebar's view button should switch to next — arrange ->
+ * sketch -> map -> arrange, skipping sketch straight to the map when
+ * isSketchEligible(state) is false, so the cycle never lands on a view it
+ * can't actually show. Sketch is the only view with an eligibility
+ * requirement, so the cycle always advances (before there was a third view,
+ * an ineligible project's toggle sat on 'normal' and appeared to do nothing
+ * — see App.tsx). */
 export function nextArrangerMode(state: AppState): ArrangerMode {
-  if (state.mode === 'sketch') return 'automation'
-  if (state.mode === 'automation') return 'normal'
-  return isSketchEligible(state) ? 'sketch' : 'automation'
+  const from = MODE_CYCLE.indexOf(state.mode)
+  const next = MODE_CYCLE[(from + 1) % MODE_CYCLE.length]
+  return next === 'sketch' && !isSketchEligible(state) ? 'map' : next
 }
 
 /** Which placed rifff's [startBar, startBar + playedBars) range contains

@@ -188,7 +188,10 @@ function placeOnTimeline(state: AppState, groupId: string, startBar: number): Ap
   }
 }
 
-export type ArrangerMode = 'normal' | 'sketch' | 'automation'
+/** The arranger's three views of the same arrangement -- see AppState.mode
+ * for what each one shows, and selectors.ts's MODE_CYCLE for the order Tab
+ * walks them in. */
+export type ArrangerMode = 'normal' | 'sketch' | 'map'
 
 export type LoopRegion = { startBar: number; endBar: number } | null
 
@@ -274,31 +277,48 @@ export interface AppState {
    * docs/superpowers/specs/2026-08-05-stem-bus-clustering-design.md. */
   busOf: Record<string, BusId>
   exp: Record<string, boolean>
-  /** Global arrangement-wide view mode. 'normal' is today's per-rifff
-   * collapsed/expanded rendering. 'sketch' replaces the whole Timeline with
-   * a single gapless sequence strip (SketchStrip) — only reachable when
-   * isSketchEligible(state) (see selectors.ts). 'automation' keeps the
-   * normal Timeline exactly as it is but lays a drawable automation lane
-   * over each placed clip's own waveform rect (AutomationLane.tsx) --
-   * purely a view/interaction mode, so entering and leaving it never
-   * touches the arrangement. Cycled by the Tab key via selectors.ts's
-   * nextArrangerMode — see App.tsx's Frame component. Not persisted (see
-   * serialize.ts). */
+  /**
+   * Which of the arranger's three VIEWS of the same arrangement is showing.
+   *
+   * - 'normal' — the timeline, per-rifff collapsed/expanded rendering. Reads
+   *   as "arrange" everywhere in the UI (see selectors.ts's modeLabel);
+   *   there is no user-facing "normal".
+   * - 'sketch' — the whole Timeline replaced by a single gapless sequence
+   *   strip (SketchStrip). The one view with an eligibility requirement:
+   *   only reachable when isSketchEligible(state) (see selectors.ts).
+   * - 'map' — the whole Timeline replaced by ArrangementMap: rows down the
+   *   side, sections across the top, one cell per pass of the loop. Same
+   *   clips underneath, same edits reaching them, further back.
+   *
+   * Cycled by the Tab key and the titlebar button via selectors.ts's
+   * nextArrangerMode — see App.tsx's Frame component. Every one of these
+   * swaps what the arranger column renders, which is exactly what makes
+   * them one three-way choice rather than a mode plus a flag: 'map' used to
+   * be its own boolean (`mapView`) sitting beside this field, so "what am I
+   * looking at" had two answers that had to be read together.
+   *
+   * Not persisted (see serialize.ts) and not undoable (history.ts lists
+   * SET_ARRANGER_MODE transient): every load starts from the default view,
+   * and changing view is not an edit.
+   */
   mode: ArrangerMode
   /**
-   * Whether the arranger is showing the MAP rather than the timeline.
+   * Whether the drawable automation lanes are laid over the clips.
    *
-   * Deliberately NOT a fourth ArrangerMode. `mode` is about how clips are
-   * drawn and edited, is cycled by Tab, and gates on isSketchEligible; the
-   * map is a different VIEW of the same arrangement, with the same clips
-   * underneath and the same edits reaching them. Folding it into `mode`
-   * would put "which view am I in" and "how do clips behave" behind one
-   * three-way cycle that already has two meanings.
+   * Deliberately NOT a fourth ArrangerMode, and it used to be one. A lane
+   * is drawn over a clip's own waveform rect (AutomationLane.tsx), so it
+   * adds something ON TOP of the arrange view rather than replacing it the
+   * way the other two views do -- and once clips became selectable and
+   * movable underneath the lanes, 'automation' had no behaviour of its own
+   * left at all beyond mounting them. It is a toggle in the transport bar
+   * now, and only available in the 'normal' view: sketch and map have no
+   * clips on a timeline to draw a lane over.
    *
-   * Like `mode`: not persisted (serialize.ts drops it) and not undoable
-   * (history.ts lists SET_MAP_VIEW transient). A view toggle is not an edit.
+   * Same category as `mode` above: session view state, not persisted
+   * (serialize.ts) and not undoable (history.ts lists SET_AUTOMATION_LANES
+   * transient). Only the curves themselves are real edits.
    */
-  mapView: boolean
+  automationLanes: boolean
   /** Which parameter each automation lane is currently editing, keyed by
    * that lane's own id -- a stemKey for an expanded clip's per-stem lane, a
    * groupId for a collapsed clip's whole-rifff lane (see AutomationLane.tsx's
@@ -535,7 +555,7 @@ export const initialState: AppState = {
   gatedRecordingTargetGroupId: null,
   pendingLockInConfirm: false,
   mode: 'sketch',
-  mapView: false,
+  automationLanes: false,
   automationParamOf: {},
   inspectorCollapsed: false,
   tidiedView: false,
@@ -761,9 +781,9 @@ export type Action =
   | { type: 'ADD_STEM_TO_RIFFF'; groupId: string; stem: Rifff['stems'][number] }
   | { type: 'SET_AVAILABLE_INPUT_DEVICES'; devices: string[] }
   | { type: 'SET_SELECTED_INPUT_DEVICE'; device: string | null }
-  /** Which VIEW the arranger is showing -- the map or the timeline. Not an
-   * ArrangerMode and not an edit; see AppState.mapView. */
-  | { type: 'SET_MAP_VIEW'; on: boolean }
+  /** Show or hide the drawable automation lanes over the clips. Not a
+   * view and not an edit; see AppState.automationLanes. */
+  | { type: 'SET_AUTOMATION_LANES'; on: boolean }
   // Every coach action carries `now` rather than letting the reducer read
   // the clock, so the machine stays pure and its tests stay deterministic
   // (see @shared/coach's own module doc). COACH_MINIMISE is the one
@@ -1868,8 +1888,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SET_ARRANGER_MODE':
       return { ...state, mode: action.mode }
 
-    case 'SET_MAP_VIEW':
-      return state.mapView === action.on ? state : { ...state, mapView: action.on }
+    case 'SET_AUTOMATION_LANES':
+      return state.automationLanes === action.on ? state : { ...state, automationLanes: action.on }
 
     case 'SET_AUTOMATION_PARAM':
       return {

@@ -158,8 +158,8 @@ export type AutomationLaneTarget =
  *   (the lane's own width in bars) is the right edge. snapBar clamps every
  *   drawn position into [0, clipBars], so drawing past the audio is not
  *   possible rather than merely discouraged.
- * - It also doubles as the dimming scrim for the clip underneath. In
- *   automation mode ChannelRow makes its clips inert (pointer-events: none)
+ * - It also doubles as the dimming scrim for the clip underneath. With the
+ *   lanes showing, ChannelRow makes its clips inert (pointer-events: none)
  *   but does NOT dim them itself: dimming here means only the clips that
  *   actually have a lane recede, and the lane's own chrome stays at full
  *   contrast.
@@ -202,12 +202,12 @@ export function AutomationLane({
    * past the audio. */
   widthPx: number
   /** Given only by a lane that was opened ON ITS OWN, outside the app-wide
-   * automation mode -- today that is a freshly drawn riser's sweep lane,
+   * automation toggle -- today that is a freshly drawn riser's sweep lane,
    * which opens in place so the user can draw it immediately (RiserBlock's
    * laneOpenInPlace). It puts a "done" button in the corner cluster, because
-   * a lane that no mode toggle can close needs a visible way out. A lane
-   * that the mode opened leaves this undefined and shows no such button:
-   * there, the mode is the way out. */
+   * a lane that no toggle can close needs a visible way out. A lane that the
+   * transport bar's toggle opened leaves this undefined and shows no such
+   * button: there, that toggle is the way out. */
   onClose?: () => void
 }): React.JSX.Element {
   const dispatch = useDispatch()
@@ -473,7 +473,7 @@ export function AutomationLane({
         // (both resize handles, the move/scrub surface), so a press anywhere
         // on the clip lands here and draws rather than moving the clip. It
         // does NOT reach the clip's name bar or the row's gain dial, which
-        // sit outside this rectangle -- those stay live in automation mode,
+        // sit outside this rectangle -- those stay live while a lane is up,
         // which is how a clip is still selectable and movable while drawing
         // (ChannelRow used to blanket the whole row in pointerEvents:'none'
         // instead, which killed both -- see its own comment).
@@ -490,7 +490,7 @@ export function AutomationLane({
         // lane IS the clip now, so there is nothing to scroll away from (the
         // old channel-wide lane needed a sticky anchor for exactly that
         // reason). Held at low contrast until the pointer is over this clip,
-        // so a dense arrangement in automation mode reads as waveforms with
+        // so a dense arrangement with the lanes up reads as waveforms with
         // curves on them rather than as a wall of dropdowns.
         <div
           style={{

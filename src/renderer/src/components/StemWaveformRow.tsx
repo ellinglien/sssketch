@@ -48,7 +48,7 @@ export function StemWaveformRow({
   const stretchOn = useAppSelector((s) => s.stretch[groupId] ?? true)
   const bpm = useAppSelector((s) => s.bpm)
   const muteRegions = useAppSelector((s) => s.muteRegions[key] ?? [])
-  const automationMode = useAppSelector((s) => s.mode === 'automation')
+  const automationLanes = useAppSelector((s) => s.automationLanes)
   const regionSelection = useAppSelector((s) => s.regionSelection)
   const busOf = useAppSelector((s) => s.busOf)
   const stem = rifff.stems.find((s) => s.slot === slot)!
@@ -530,7 +530,7 @@ export function StemWaveformRow({
               placed stem, which is the whole point of the per-clip rescope:
               an expanded rifff shows a lane per stem rather than one shared
               lane for the row (see the spec's section 2b). */}
-          {automationMode && (
+          {automationLanes && (
             <AutomationLane
               laneId={key}
               target={{ kind: 'stem', stemKey: key }}

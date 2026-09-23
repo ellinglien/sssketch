@@ -138,8 +138,7 @@ export function AutoArrangeCoachStep({
       { type: 'COACH_BUILD_MAP', firstStartBar: 0 },
       ...built.actions,
       { type: 'COACH_RECORD_MAP_PLACEMENT', placedGroupIds: built.placedGroupIds },
-      { type: 'SET_ARRANGER_MODE', mode: 'normal' },
-      { type: 'SET_MAP_VIEW', on: true },
+      { type: 'SET_ARRANGER_MODE', mode: 'map' },
       { type: 'COACH_START_WALK', now: Date.now() }
     ]
     // ONE batch: the whole map, the clips under it and the walk it starts

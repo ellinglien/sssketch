@@ -264,7 +264,13 @@ export function TransportBar({
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
-  const automationMode = state.mode === 'automation'
+  const automationLanes = state.automationLanes
+  // The lanes are drawn over clips on the timeline, and the other two
+  // views have no clips on a timeline: sketch is a gapless strip of tiles,
+  // the map is one cell per pass of the loop. Nothing to lay a lane over,
+  // so the toggle is disabled rather than silently doing nothing -- the
+  // same treatment the gated-record button gives "needs loop region".
+  const lanesAvailable = state.mode === 'normal'
   const pos = usePos()
   const playing = usePlaying()
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
@@ -761,33 +767,44 @@ export function TransportBar({
         {linkStatus.enabled && linkStatus.numPeers > 0 ? `· ${linkStatus.numPeers}` : ''}
       </button>
 
-      {/* Enters/leaves automation mode. This is the SAME control that used
-          to toggle the old envelope-drag mode (Elling, 2026-09-22: "we can
-          even replace the 'envelopes' button to be this automation
-          section") -- a clip's level is drawn in its own automation lane
-          now, so there is nothing else for an "envelopes" button to mean.
-          Deliberately a direct on/off rather than a second cycler: Tab
-          still cycles arrange -> sketch -> automation (App.tsx's
-          handleCycleArrangerMode/nextArrangerMode), and this button just
-          jumps straight in and back out again to whichever mode isn't
-          automation, so the two can't disagree about what's showing. */}
+      {/* Shows/hides the automation lanes over the clips. This is the SAME
+          control that used to toggle the old envelope-drag mode (Elling,
+          2026-09-22: "we can even replace the 'envelopes' button to be this
+          automation section") -- a clip's level is drawn in its own
+          automation lane now, so there is nothing else for an "envelopes"
+          button to mean.
+
+          It also used to flip a fourth ArrangerMode, which put automation
+          in the Tab cycle beside arrange and sketch. It is a plain toggle
+          now (Elling, 2026-09-23: "automation seems like it should be a
+          button in the taskbar, not top level there"): the lanes are laid
+          OVER the arrange view rather than replacing it the way the other
+          views replace each other, and once clips became selectable and
+          movable underneath them there was no other behaviour left in the
+          mode. Tab now cycles the three views (arrange, sketch, map) and
+          leaves this alone, so pressing it can no longer close the lanes
+          out from under a drawing hand. */}
       <button
-        onClick={() =>
-          dispatch({
-            type: 'SET_ARRANGER_MODE',
-            mode: automationMode ? 'normal' : 'automation'
-          })
+        onClick={() => dispatch({ type: 'SET_AUTOMATION_LANES', on: !automationLanes })}
+        disabled={!lanesAvailable}
+        aria-label="Toggle automation lanes"
+        data-tooltip={
+          !lanesAvailable
+            ? 'arrange view only'
+            : automationLanes
+              ? 'automation: on'
+              : 'automation: off'
         }
-        aria-label="Toggle automation mode"
-        data-tooltip={automationMode ? 'automation: on (tab)' : 'automation: off (tab)'}
         style={{
           height: 22,
           borderRadius: 0,
           padding: '0 8px',
           fontSize: 10,
-          background: automationMode ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-          border: `1px solid ${automationMode ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-          color: automationMode ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+          background: automationLanes ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${automationLanes ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: automationLanes ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+          opacity: lanesAvailable ? 1 : 0.35,
+          cursor: lanesAvailable ? 'pointer' : 'not-allowed'
         }}
       >
         <AutomationIcon />

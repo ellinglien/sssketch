@@ -112,13 +112,16 @@ function ChannelRowImpl({
    * per-bus track coloring does. Undefined in the normal (untidied) view,
    * where channels aren't bus-partitioned at all. */
   bus?: BusId
-  /** No `automationMode` prop: this row does nothing mode-specific any more.
-   * Each clip and riser reads the mode itself and lays an AutomationLane
-   * over its OWN rect (StemWaveformRow / CollapsedRifffRow / RiserBlock
-   * render it, not this row -- the lane is per CLIP, see the spec's section
-   * 2b), and that lane sitting on top is the whole of how automation mode
-   * takes over a clip's body. See the comment above this row's clip stack
-   * for the wrapper that used to be here and why it is gone. */
+  /** No automation prop: this row does nothing automation-specific any
+   * more. Each clip and riser reads state.automationLanes itself and lays
+   * an AutomationLane over its OWN rect (StemWaveformRow /
+   * CollapsedRifffRow / RiserBlock render it, not this row -- the lane is
+   * per CLIP, see the spec's section 2b), and that lane sitting on top is
+   * the whole of what showing the lanes does to a clip's body. Having
+   * nothing left here is also why automation stopped being an ArrangerMode
+   * and became a transport-bar toggle (2026-09-23): there was no
+   * mode-specific behaviour left in it. See the comment above this row's
+   * clip stack for the wrapper that used to be here and why it is gone. */
   onOpenContextMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
   onDropOnChannel: (e: React.DragEvent<HTMLDivElement>, channelId: string) => void
@@ -642,9 +645,9 @@ function ChannelRowImpl({
           )}
         </div>
       </div>
-      {/* No automation-mode pointer-events wrapper here, deliberately.
+      {/* No automation pointer-events wrapper here, deliberately.
           There used to be one -- `pointerEvents: 'none'` over this whole
-          stack in automation mode, so a drag landed on the lane rather than
+          stack whenever the lanes were up, so a drag landed on the lane rather than
           moving a clip the user meant to draw on. It was written when the
           lane was one wide strip per CHANNEL. Once the lane was rescoped to
           sit INSIDE each clip (see the per-clip lane spec, section 2b) it
@@ -659,7 +662,7 @@ function ChannelRowImpl({
             was aiming at. It also covered the clip's NAME BAR (which lives
             above the body, where no lane ever draws) and each row's
             RowGainDial (which sits outside the clip box entirely, at the
-            row's right edge). Both went dead in automation mode and their
+            row's right edge). Both went dead with the lanes up and their
             presses fell through to the Timeline's background click-to-scrub,
             so reaching for a gain knob jumped the playhead instead -- while
             this row's own m/s/fx buttons, rendered ABOVE this point and so
@@ -669,8 +672,9 @@ function ChannelRowImpl({
             track ... i can click s and m though", and separately "cannot
             resize it or move it" about a riser).
 
-          So clips and risers stay fully interactive in every mode -- "all
-          clips should be selectable and movable in automation mode" -- and
+          So clips and risers stay fully interactive whether the lanes are
+          up or not -- "all clips should be selectable and movable in
+          automation mode" -- and
           the clip BODY is still the lane's, because the lane is on top of
           it. */}
       {rifffs.map((rifff) => (

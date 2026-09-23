@@ -88,7 +88,8 @@ export function RiserBlock({
    * and behaving like one thing. */
   onOpenContextMenu: (x: number, y: number, riserId: string) => void
   /** THIS riser's sweep lane is open even though the app is not in
-   * automation mode -- true for the riser that was just drawn, which opens
+   * the transport bar's automation toggle -- true for the riser that was
+   * just drawn, which opens
    * ready to draw on (see App.tsx's openRiserLaneId).
    *
    * A whole-app mode flip was considered for that and rejected: switching
@@ -103,15 +104,15 @@ export function RiserBlock({
   const dispatch = useDispatch()
   const ppb = useZoom()
   const riser = useAppSelector((s) => s.risers[riserId])
-  const automationMode = useAppSelector((s) => s.mode === 'automation')
+  const automationLanes = useAppSelector((s) => s.automationLanes)
   const [hovered, setHovered] = useState(false)
 
   // Escape closes a lane opened in place -- the same key that backs out of
   // the creation gesture that opened it, so one key gets you out of the
   // whole flow at any point in it. Only bound while such a lane is actually
   // open, so this adds no listener to the ordinary case. Nothing to do in
-  // automation mode: there the lane belongs to the mode, and the mode's own
-  // toggle is how it closes.
+  // when the lanes are up app-wide: there the lane belongs to the transport
+  // bar's automation toggle, and that toggle is how it closes.
   useEffect(() => {
     if (!laneOpenInPlace) return
     function handleKeyDown(e: KeyboardEvent): void {
@@ -240,7 +241,7 @@ export function RiserBlock({
           doc comment).
 
           This bar is ALSO the riser's drag surface, and that is what pushed
-          renaming onto a double-click. In automation mode the lane covers
+          renaming onto a double-click. With the lanes up the lane covers
           the block's whole body (AutomationLane's inset:0 at zIndex 4), so
           the body cannot be a move handle there -- which left a riser as the
           one element in the arranger that could not be moved while drawing,
@@ -452,16 +453,16 @@ export function RiserBlock({
                 />
               </div>
             ))}
-            {(automationMode || laneOpenInPlace) && (
+            {(automationLanes || laneOpenInPlace) && (
               // The riser's sweep, drawn in the ordinary automation lane -- see
               // AutomationLane's `riser` target. Laid over exactly this block,
               // same as a clip's lane is laid over its waveform, so the drawing
               // surface and the thing being edited are the same rectangle.
               //
-              // Two ways in, one lane: the app-wide automation mode, or this
+              // Two ways in, one lane: the app-wide automation toggle, or this
               // one riser's lane being opened in place right after it was
               // drawn (laneOpenInPlace). The "done" button only appears on
-              // the second -- in automation mode the mode is what closes it,
+              // the second -- with the lanes up the toggle is what closes it,
               // and a per-lane close there would be a second, contradictory
               // way out. Escape closes it either way it was opened in place,
               // which is also the only way out on a riser too narrow for the
@@ -470,7 +471,7 @@ export function RiserBlock({
                 laneId={`riser:${riser.id}`}
                 target={{ kind: 'riser', riserId: riser.id }}
                 widthPx={widthPx}
-                onClose={automationMode ? undefined : onCloseLane}
+                onClose={automationLanes ? undefined : onCloseLane}
               />
             )}
           </div>

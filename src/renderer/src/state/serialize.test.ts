@@ -34,18 +34,30 @@ describe('project serialization', () => {
     // — nothing to assert here now the way there used to be.
   })
 
-  it('does not persist the arranger mode — always reopens in the normal arranger', () => {
+  it('does not persist which view was showing — always reopens in the default one', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
-    state = reducer(state, { type: 'SET_ARRANGER_MODE', mode: 'automation' })
-    expect(state.mode).toBe('automation')
+    state = reducer(state, { type: 'SET_ARRANGER_MODE', mode: 'map' })
+    expect(state.mode).toBe('map')
 
     const json = serializeProject(state)
     expect(JSON.parse(json).mode).toBeUndefined()
 
-    // Which mode a load lands in is decided by the load rules (see
+    // Which view a load lands in is decided by the load rules (see
     // deserializeProject), never by what was showing when it was saved.
     const { state: restored } = deserializeProject(JSON.parse(json))
-    expect(restored.mode).not.toBe('automation')
+    expect(restored.mode).not.toBe('map')
+  })
+
+  it('does not persist whether the automation lanes were showing', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'SET_AUTOMATION_LANES', on: true })
+    expect(state.automationLanes).toBe(true)
+
+    const json = serializeProject(state)
+    expect(JSON.parse(json).automationLanes).toBeUndefined()
+
+    const { state: restored } = deserializeProject(JSON.parse(json))
+    expect(restored.automationLanes).toBe(false)
   })
 
   it('does not persist inspectorCollapsed — always reopens with it expanded', () => {
@@ -147,15 +159,15 @@ describe('deserializeProject mode fallback', () => {
     expect(deserializeProject(persisted).state.mode).toBe('normal')
   })
 
-  it('leaves automation mode alone -- only sketch has an eligibility requirement', () => {
+  it('leaves the map view alone -- only sketch has an eligibility requirement', () => {
     // mode isn't persisted, so this has to be forced onto the parsed object
     // the way a hand-edited .sssketchproj could; the point is that the
-    // sketch-eligibility fallback doesn't kick a non-sketch mode to normal.
+    // sketch-eligibility fallback doesn't kick a non-sketch view to normal.
     const persisted = {
       ...JSON.parse(serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))),
-      mode: 'automation'
+      mode: 'map'
     } as unknown as import('./serialize').PersistedProject
-    expect(deserializeProject(persisted).state.mode).toBe('automation')
+    expect(deserializeProject(persisted).state.mode).toBe('map')
   })
 })
 
@@ -949,8 +961,32 @@ describe('the phase-three coach fields', () => {
 
 describe('the arrangement map on disk', () => {
   it('never writes the map view to disk -- it is a view, not a project', () => {
-    const json = serializeProject({ ...initialState, mapView: true })
-    expect(JSON.parse(json).mapView).toBeUndefined()
+    const json = serializeProject({ ...initialState, mode: 'map' })
+    expect(JSON.parse(json).mode).toBeUndefined()
+  })
+
+  it('opens a project saved back when the map was its own boolean', () => {
+    // `mapView` was a second field beside `mode` until 2026-09-23, when the
+    // map became the third arranger VIEW. It was never written by
+    // serializeProject (it has always been in the transient Omit list), so
+    // the only files carrying it are hand-edited ones -- but a
+    // `.sssketchproj` is plain JSON people do hand-edit, and a stale key
+    // must not ride along on the loaded state pretending to still mean
+    // something. It is dropped, and the load lands in the default view like
+    // any other.
+    const saved = JSON.parse(
+      serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff }))
+    )
+    const withMapView = {
+      ...saved,
+      mapView: true
+    } as unknown as import('./serialize').PersistedProject
+    const { state } = deserializeProject(withMapView)
+    expect('mapView' in state).toBe(false)
+    expect(state.rifffs.r1.name).toBe('test')
+    // ...and the stale key changes nothing else: same load as the same file
+    // without it.
+    expect(state).toEqual(deserializeProject(saved).state)
   })
 
   it('brings a walk position back off disk, repaired against the sections', () => {

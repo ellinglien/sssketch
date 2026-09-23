@@ -87,8 +87,8 @@ describe('historyReducer', () => {
   it('undoing past a transient action lands on the last real edit, not a stale UI-mode state', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
-    h = historyReducer(h, { type: 'SET_ARRANGER_MODE', mode: 'automation' }) // transient, no new checkpoint
-    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 }) // real edit, checkpoints the mode='automation' state
+    h = historyReducer(h, { type: 'SET_ARRANGER_MODE', mode: 'map' }) // transient, no new checkpoint
+    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 }) // real edit, checkpoints the mode='map' state
     h = historyReducer(h, { type: 'UNDO' })
     expect(h.present.bpm).toBe(80) // back before the tempo change
     expect(h.present.rifffs.r1).toBeDefined() // the shelf add is still there
@@ -644,7 +644,10 @@ describe('the arrangement map', () => {
     let history = createHistoryState(initialState)
     history = historyReducer(history, { type: 'SET_TEMPO', bpm: 100 })
     const depth = history.past.length
-    history = historyReducer(history, { type: 'SET_MAP_VIEW', on: true })
+    history = historyReducer(history, { type: 'SET_ARRANGER_MODE', mode: 'map' })
+    history = historyReducer(history, { type: 'SET_AUTOMATION_LANES', on: true })
     expect(history.past.length).toBe(depth)
+    expect(history.present.mode).toBe('map')
+    expect(history.present.automationLanes).toBe(true)
   })
 })

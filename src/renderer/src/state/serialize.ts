@@ -22,10 +22,12 @@ import { normaliseLoadedRisers } from '@shared/riser'
  * there used to be. */
 export type PersistedProject = Omit<
   AppState,
+  // Which of the three views the arranger is showing.
   | 'mode'
-  // Which view the arranger is showing, not a fact about the project --
-  // same treatment as `mode` directly above.
-  | 'mapView'
+  // Whether the automation lanes are laid over the clips -- how you are
+  // looking at the project, not a fact about it, same treatment as `mode`
+  // directly above.
+  | 'automationLanes'
   | 'automationParamOf'
   | 'inspectorCollapsed'
   | 'metronomeEnabled'
@@ -59,7 +61,7 @@ export function serializeProject(state: AppState, pluginStates: PluginStatesMap 
   /* eslint-disable @typescript-eslint/no-unused-vars */
   const {
     mode,
-    mapView,
+    automationLanes,
     automationParamOf,
     inspectorCollapsed,
     metronomeEnabled,
@@ -263,6 +265,20 @@ interface LegacyEdgeFadeKeys {
   fadeOut?: unknown
 }
 
+/** `mapView` was a boolean sitting beside `mode` until the map became the
+ * third arranger VIEW (2026-09-23) and the two folded into one field. Like
+ * `mode`, it was never actually written by serializeProject -- both have
+ * always been in PersistedProject's transient Omit list -- so the only
+ * files carrying it are hand-edited ones. It is pulled off and dropped
+ * rather than left to ride along, because the loaded object is an AppState
+ * and an AppState with a dead `mapView` on it invites a future reader to
+ * believe it still means something. Unknown keys in general still pass
+ * through untouched (see dropChannelScopedToolkit's own note); this is one
+ * named key that used to be ours. */
+interface LegacyMapViewKey {
+  mapView?: unknown
+}
+
 /** One saved fade length, or 0 for anything that isn't a usable number --
  * a `.sssketchproj` is plain JSON that people can and do hand-edit, and a
  * load must never throw over one. */
@@ -339,9 +355,11 @@ export function deserializeProject(
   data: (PersistedProject | LegacyPersistedProject) & {
     pluginStates?: PluginStatesMap
   } & ChannelScopedToolkitKeys &
-    LegacyEdgeFadeKeys
+    LegacyEdgeFadeKeys &
+    LegacyMapViewKey
 ): { state: AppState; pluginStates: PluginStatesMap } {
-  const { pluginStates, fadeIn, fadeOut, ...projectData } = data
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- mapView is extracted purely to drop it (see LegacyMapViewKey); ignoreRestSiblings isn't enabled project-wide.
+  const { pluginStates, fadeIn, fadeOut, mapView, ...projectData } = data
   // Narrowed off projectData itself, not off the stripped copy below -- the
   // strip returns an Omit over a union, which loses the discriminant that
   // tells a legacy trackOrder save apart from a channelOrder one.
@@ -388,9 +406,9 @@ export function deserializeProject(
   // removes filterResonance curves, which nothing else here touches.
   const migratedState = migrateResonanceCurvesToFilterDials(withMigratedFades)
   return {
-    // Only SKETCH mode has an eligibility requirement -- normal and
-    // automation are always showable, so a project that can't be sketched
-    // only gets forced back to normal if it somehow arrived in sketch mode
+    // Only the SKETCH view has an eligibility requirement -- arrange and
+    // the map are always showable, so a project that can't be sketched
+    // only gets forced back to normal if it somehow arrived in sketch view
     // (mode isn't persisted at all, so in practice this is defence against
     // a hand-edited file, not a path a save/load round trip takes).
     state:

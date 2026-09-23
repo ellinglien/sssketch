@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { modeLabel } from '../state/selectors'
 import type { ArrangerMode } from '../state/store'
 
-// Matches ProjectMenu's own buttonStyle (App.tsx) exactly -- the mode
+// Matches ProjectMenu's own buttonStyle (App.tsx) exactly -- the view
 // toggle button below moved up here from TransportBar.tsx per direct
 // feedback ("same style as the other grey buttons," no special
 // highlight), so it needs to actually look like NEW/OPEN/SAVE/TIDY/EXPORT
@@ -35,9 +35,7 @@ export function Titlebar({
   dirty,
   mode,
   sketchEligible,
-  onCycleMode,
-  mapView,
-  onToggleMapView
+  onCycleMode
 }: {
   /** The real current project name, already resolved by the caller (see
    * App.tsx's Frame) -- was previously a hardcoded "untitled sketch 04"
@@ -60,23 +58,20 @@ export function Titlebar({
    * Shown as a small dot next to the project name; App.tsx's Frame is the
    * only place that knows both sides of that comparison. */
   dirty?: boolean
-  /** Arranger/sketch mode toggle -- moved here from TransportBar.tsx per
-   * direct feedback: sits up in the empty gap of this row (between the
-   * project name and the rifff/stem count) instead of down in the
-   * transport row, and drops the white-outline stroke it had there for
-   * the plain grey buttonStyle stroke above -- same look whichever mode is
-   * active, no background/border highlight. The label text itself stays
+  /** Which of the arranger's three views is showing -- arrange, sketch or
+   * map. One button cycles all three (Tab does the same); the map used to
+   * have a second button of its own right beside this one, which meant two
+   * controls answering "what am I looking at". Moved here from
+   * TransportBar.tsx per direct feedback: sits up in the empty gap of this
+   * row (between the project name and the rifff/stem count) instead of down
+   * in the transport row, and drops the white-outline stroke it had there
+   * for the plain grey buttonStyle stroke above -- same look whichever view
+   * is active, no background/border highlight. The label text itself stays
    * red (var(--ra-mute-on), see the button's own style below), the one
    * thing per direct feedback that should still stand out. */
   mode: ArrangerMode
   sketchEligible: boolean
   onCycleMode: () => void
-  /** Whether the arrangement map is showing instead of the timeline. A
-   * VIEW, not an ArrangerMode: `mode` next to it decides how clips are
-   * drawn and edited, this decides which way you are looking at the same
-   * arrangement (AppState.mapView). */
-  mapView: boolean
-  onToggleMapView: () => void
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(sketchName)
@@ -154,46 +149,30 @@ export function Titlebar({
         )}
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        {/* A view, not a mode: the mode button next to this one decides how
-            clips behave, this one decides which way you are looking at the
-            same arrangement. Two labels rather than one cycling label,
-            because there are only two and naming both is clearer than making
-            the user press it to find out. Active is the app's own toggle
-            treatment -- a grey fill and bright ink, never a colour
-            (tokens.css: colour is spent only on audio information). */}
-        <button
-          onClick={onToggleMapView}
-          aria-label="Show the arrangement map"
-          data-tooltip="map or timeline"
-          data-tour-id="tour-map"
-          style={{
-            ...buttonStyle,
-            width: 72,
-            background: mapView ? 'var(--ra-stretch-on-bg)' : buttonStyle.background,
-            color: mapView ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
-          }}
-        >
-          {mapView ? 'map' : 'timeline'}
-        </button>
+        {/* One button, three views. The map used to have a second button
+            of its own immediately to the left of this one -- but swapping
+            the timeline for the map is the same kind of act as swapping it
+            for the sketch strip, so it belongs in the same cycle rather
+            than in a control beside it answering the same question. */}
         <button
           onClick={onCycleMode}
-          aria-label="Cycle arranger mode"
+          aria-label="Cycle arranger view"
           data-tour-id="tour-mode"
-          title={!sketchEligible ? 'sketch unavailable' : `mode: ${modeLabel(mode)} (Tab)`}
+          title={!sketchEligible ? 'sketch unavailable' : `view: ${modeLabel(mode)} (Tab)`}
           style={{
             ...buttonStyle,
             // Fixed, not content-width -- the three labels are different
             // lengths, and per direct feedback the button itself shouldn't
-            // visibly resize when the mode flips. Sized to fit "automation"
-            // (the longest label) comfortably; it was 64 when "arrange" was
-            // the longest.
-            width: 96,
+            // visibly resize when the view flips. Sized to fit the longest
+            // of them comfortably: back to 64 now that "arrange" is the
+            // longest again, from the 96 that "automation" needed.
+            width: 64,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
             // Text stays red (unlike every other plain grey button here) --
             // per direct feedback this one label should still stand out as
-            // the mode indicator, while the stroke stays the same neutral
+            // the view indicator, while the stroke stays the same neutral
             // grey as the rest of buttonStyle (no white outline).
             color: 'var(--ra-mute-on)'
           }}

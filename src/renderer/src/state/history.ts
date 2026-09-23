@@ -32,7 +32,13 @@ const MAX_HISTORY = 100
 // toggles that still go through this reducer (so useAppState() consumers
 // see them) but shouldn't themselves be undo-able edits.
 const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
+  // Which of the arranger's three views is showing (arrange/sketch/map).
   'SET_ARRANGER_MODE',
+  // Whether the drawable automation lanes are laid over the clips -- a
+  // view preference like SET_ARRANGER_MODE directly above, not an edit. The
+  // real edits are the curves themselves (SET_STEM_AUTOMATION /
+  // SET_GROUP_AUTOMATION, below), which survive the lanes being hidden.
+  'SET_AUTOMATION_LANES',
   // Which parameter a clip's automation lane is currently showing --
   // "what am I looking at," not an edit, same category as
   // SET_ARRANGER_MODE directly above. The real edits are
@@ -102,9 +108,11 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'COACH_SET_LOOP_ANSWER',
   'COACH_SET_SHAPE',
   'COACH_BUILD_MAP',
-  // The map's own view toggle and walk (2026-09-23). Same category as every
-  // other COACH_* entry: where sssketchy is and which view is showing, not
-  // an edit to the project. COACH_RECORD_MAP_PLACEMENT is here for the same
+  // The map walk (2026-09-23). Same category as every other COACH_* entry:
+  // where sssketchy is, not an edit to the project. (Which view is showing
+  // went with it -- that is SET_ARRANGER_MODE at the top of this set now
+  // that the map is one of the three views.) COACH_RECORD_MAP_PLACEMENT is
+  // here for the same
   // reason COACH_PLACE_SECTION was -- in real use it arrives inside the
   // BATCH that also places the clips, and a stray direct dispatch should
   // push no checkpoint of its own. The BATCH branch above runs before this
@@ -114,7 +122,6 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // fields that name real timeline material, precisely so an undone map
   // cannot leave a record pointing at groups that are gone (see the UNDO
   // branch below).
-  'SET_MAP_VIEW',
   'COACH_RECORD_MAP_PLACEMENT',
   'COACH_START_WALK',
   'COACH_WALK_TO',

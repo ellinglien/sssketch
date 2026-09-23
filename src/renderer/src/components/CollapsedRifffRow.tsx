@@ -115,7 +115,7 @@ export function CollapsedRifffRow({
   const firstStemKey = rifff.stems[0] ? stemKey(groupId, rifff.stems[0].slot) : null
   const bpm = useAppSelector((s) => s.bpm)
   const mute = useAppSelector((s) => s.mute)
-  const automationMode = useAppSelector((s) => s.mode === 'automation')
+  const automationLanes = useAppSelector((s) => s.automationLanes)
   const busOf = useAppSelector((s) => s.busOf)
   const muteRegionsByStem = useAppSelector((s) => s.muteRegions)
   const regionSelection = useAppSelector((s) => s.regionSelection)
@@ -785,7 +785,7 @@ export function CollapsedRifffRow({
               clip reveals a lane per stem (StemWaveformRow), which can then
               diverge freely; the curves are always STORED per stem either
               way. See the spec's section 2b. */}
-          {automationMode && firstStemKey && (
+          {automationLanes && firstStemKey && (
             <AutomationLane
               laneId={groupId}
               target={{

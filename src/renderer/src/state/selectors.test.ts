@@ -18,6 +18,7 @@ import {
   channelIsSoloed,
   channelsInOrder,
   isSketchEligible,
+  modeLabel,
   nextArrangerMode,
   groupIdAtPosition,
   tileOffsetsPx,
@@ -705,24 +706,53 @@ describe('isSketchEligible', () => {
 })
 
 describe('nextArrangerMode', () => {
-  it('cycles arrange -> sketch -> automation -> arrange when sketch-eligible', () => {
+  it('cycles arrange -> sketch -> map -> arrange when sketch-eligible', () => {
     const state = { ...initialState, mode: 'normal' as const } // empty timeline: trivially eligible
     expect(nextArrangerMode(state)).toBe('sketch')
-    expect(nextArrangerMode({ ...state, mode: 'sketch' })).toBe('automation')
-    expect(nextArrangerMode({ ...state, mode: 'automation' })).toBe('normal')
+    expect(nextArrangerMode({ ...state, mode: 'sketch' })).toBe('map')
+    expect(nextArrangerMode({ ...state, mode: 'map' })).toBe('normal')
   })
 
-  it('skips sketch straight to automation when the arrangement is not sketch-eligible', () => {
+  it('skips sketch straight to the map when the arrangement is not sketch-eligible', () => {
     let state = reducer(initialState, {
       type: 'ADD_TO_SHELF',
       rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
     })
     state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
     state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 1 }) // disqualifies sketch
-    expect(nextArrangerMode({ ...state, mode: 'normal' })).toBe('automation')
-    // ...and automation still hands back to arrange, so the cycle always
-    // advances rather than parking on a mode it can't show.
-    expect(nextArrangerMode({ ...state, mode: 'automation' })).toBe('normal')
+    expect(nextArrangerMode({ ...state, mode: 'normal' })).toBe('map')
+    // ...and the map still hands back to arrange, so the cycle always
+    // advances rather than parking on a view it can't show.
+    expect(nextArrangerMode({ ...state, mode: 'map' })).toBe('normal')
+  })
+
+  it('reaches every view from every view, ineligible or not', () => {
+    // The whole point of folding the map into the cycle: three views, one
+    // button, nothing stranded. Both eligibility cases, since the skip is
+    // the only place the cycle can lose a view.
+    for (const eligible of [true, false]) {
+      let base = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+      })
+      base = reducer(base, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      if (!eligible) base = reducer(base, { type: 'NUDGE_OFFSET', key: 'r1', delta: 1 })
+      const seen = new Set<string>()
+      let mode = base.mode
+      for (let i = 0; i < 6; i++) {
+        mode = nextArrangerMode({ ...base, mode })
+        seen.add(mode)
+      }
+      expect([...seen].sort()).toEqual(eligible ? ['map', 'normal', 'sketch'] : ['map', 'normal'])
+    }
+  })
+})
+
+describe('modeLabel', () => {
+  it("calls 'normal' arrange, and leaves the other two views alone", () => {
+    expect(modeLabel('normal')).toBe('arrange')
+    expect(modeLabel('sketch')).toBe('sketch')
+    expect(modeLabel('map')).toBe('map')
   })
 })
 

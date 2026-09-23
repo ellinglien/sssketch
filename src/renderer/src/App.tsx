@@ -1644,15 +1644,15 @@ function Frame(): React.JSX.Element {
   }
 
   async function startTour(): Promise<void> {
-    // Both of these put the app into the one state every step's anchor is
-    // actually mounted in: 'sketch' mode swaps the whole Timeline out for
-    // SketchStrip, and the map view swaps it out for ArrangementMap -- either
-    // one leaves the ruler and every clip missing, so those steps would
-    // spotlight nothing and fall back to a centred callout. The tour then
-    // places a demo rifff below, which is what makes the clip step's anchor
-    // exist at all on a fresh, empty project.
+    // Puts the app into the one view every step's anchor is actually
+    // mounted in: 'sketch' swaps the whole Timeline out for SketchStrip and
+    // 'map' swaps it out for ArrangementMap -- either one leaves the ruler
+    // and every clip missing, so those steps would spotlight nothing and
+    // fall back to a centred callout. This used to take two dispatches,
+    // one per view flag; the map being the third ArrangerMode makes it one.
+    // The tour then places a demo rifff below, which is what makes the clip
+    // step's anchor exist at all on a fresh, empty project.
     dispatch({ type: 'SET_ARRANGER_MODE', mode: 'normal' })
-    dispatch({ type: 'SET_MAP_VIEW', on: false })
     const rifff = await window.rifffApi.importDemoRifff()
     if (!rifff) return
     tourDemoGroupIdRef.current = rifff.groupId
@@ -1884,10 +1884,10 @@ function Frame(): React.JSX.Element {
   // `openRiserLaneId` is the riser whose automation lane is open IN PLACE.
   // Drawing the sweep is the natural next thing to do after choosing a
   // riser's extent, so the lane opens on release -- but deliberately WITHOUT
-  // flipping state.mode to 'automation', which would put every clip in the
+  // turning state.automationLanes on, which would put every clip in the
   // project behind a lane and lose the user the place they were working in.
   // One riser's lane, opened on the riser they just made. RiserBlock reads
-  // this alongside the global mode (see its own `laneOpen`).
+  // this alongside the global toggle (see its own `laneOpen`).
   const [riserArm, setRiserArm] = useState<{ channelId: string; isNewRow: boolean } | null>(null)
   const [openRiserLaneId, setOpenRiserLaneId] = useState<string | null>(null)
   const cancelRiserArm = useCallback((): void => setRiserArm(null), [])
@@ -2148,33 +2148,29 @@ function Frame(): React.JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- confirmLockInIfRecording isn't memoized (fresh closure every render), but closes over nothing beyond state/dispatch, already covered by listing playing/pickerGroupId/dispatch -- listing it too would just re-bind the listener on every render instead of only when those actually change, with no safety benefit (same reasoning as the existing \\ key effect further down).
   }, [pickerGroupId, playing, dispatch])
 
-  // Shared by the Titlebar mode button and the Tab shortcut below.
+  // Shared by the Titlebar view button and the Tab shortcut below.
   //
   // This used to block with an alert ("sketch mode requires a plain,
   // back-to-back arrangement...") when the cycle would have stayed put:
-  // before automation mode existed, an ineligible project's toggle went
-  // normal -> normal, which read as broken rather than unavailable. The
-  // cycle now always advances (normal -> automation when sketch is
-  // ineligible — see nextArrangerMode), so there's no longer a dead click
-  // to explain, and a modal alert on a key the user is cycling through
-  // would be worse than the silence it replaced. The reason sketch is
-  // unavailable stays where it already was, in the button's own title text.
+  // with only two views, an ineligible project's toggle went normal ->
+  // normal, which read as broken rather than unavailable. The cycle now
+  // always advances (normal -> map when sketch is ineligible — see
+  // nextArrangerMode), so there's no longer a dead click to explain, and a
+  // modal alert on a key the user is cycling through would be worse than
+  // the silence it replaced. The reason sketch is unavailable stays where
+  // it already was, in the button's own title text.
   function handleCycleArrangerMode(): void {
     dispatch({ type: 'SET_ARRANGER_MODE', mode: nextArrangerMode(state) })
   }
 
-  // A VIEW, not a mode: the same arrangement seen from further back. Not on
-  // Tab, which belongs to the mode cycle above, and not undoable -- see
-  // history.ts, which lists SET_MAP_VIEW transient.
-  function handleToggleMapView(): void {
-    dispatch({ type: 'SET_MAP_VIEW', on: !state.mapView })
-  }
-
-  // Tab cycles the arranger mode, Ableton-style: arrange -> sketch ->
-  // automation -> arrange, skipping sketch when isSketchEligible(state) is
-  // false (see nextArrangerMode). Skipped while focus is in a text input — Tab's native
-  // move-to-next-field behavior is more useful there than the arrangement's
-  // own view-mode cycle (matches Delete/V/undo's same input-skip pattern).
+  // Tab cycles the arranger view, Ableton-style: arrange -> sketch -> map ->
+  // arrange, skipping sketch when isSketchEligible(state) is false (see
+  // nextArrangerMode). The automation lanes are deliberately NOT in this
+  // cycle -- they are a toggle in the transport bar, laid over the arrange
+  // view rather than replacing it. Skipped while focus is in a text input —
+  // Tab's native move-to-next-field behavior is more useful there than the
+  // arrangement's own view cycle (matches Delete/V/undo's same input-skip
+  // pattern).
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key !== 'Tab') return
@@ -2505,8 +2501,6 @@ function Frame(): React.JSX.Element {
               mode={state.mode}
               sketchEligible={isSketchEligible(state)}
               onCycleMode={handleCycleArrangerMode}
-              mapView={state.mapView}
-              onToggleMapView={handleToggleMapView}
             />
           </div>
           <div style={{ paddingRight: 14 }}>
@@ -2567,7 +2561,7 @@ function Frame(): React.JSX.Element {
                   coach anchor stays on the scroll container rather than on
                   either child, so sssketchy does not jump across the screen
                   when the view flips. */}
-              {state.mapView ? (
+              {state.mode === 'map' ? (
                 // The map's own "what is this?" keeps the SKETCH population --
                 // it is asking about the rows on THIS map.
                 <ArrangementMap onWhatIsThis={() => openClusterStems('sketch')} />

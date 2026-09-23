@@ -515,6 +515,8 @@ describe('reducer', () => {
       expect(state.mode).toBe('sketch')
       state = reducer(state, { type: 'SET_ARRANGER_MODE', mode: 'normal' })
       expect(state.mode).toBe('normal')
+      state = reducer(state, { type: 'SET_ARRANGER_MODE', mode: 'map' })
+      expect(state.mode).toBe('map')
     })
   })
 
@@ -2559,14 +2561,31 @@ describe('automation curves', () => {
     expect(state.automationParamOf).toEqual({ 'r1:0': 'reverbSend', r2: 'volume' })
   })
 
-  it('entering and leaving automation mode changes nothing but the mode', () => {
+  it('showing and hiding the automation lanes changes nothing but that flag', () => {
     const placed = reducer(initialState, {
       type: 'ADD_TO_SHELF',
       rifff: makeRifff({ groupId: 'r1' })
     })
-    const there = reducer(placed, { type: 'SET_ARRANGER_MODE', mode: 'automation' })
-    const back = reducer(there, { type: 'SET_ARRANGER_MODE', mode: 'normal' })
-    expect({ ...back, mode: placed.mode }).toEqual(placed)
+    const there = reducer(placed, { type: 'SET_AUTOMATION_LANES', on: true })
+    const back = reducer(there, { type: 'SET_AUTOMATION_LANES', on: false })
+    expect(back).toEqual(placed)
+  })
+})
+
+describe('the automation lanes toggle', () => {
+  it('starts hidden', () => {
+    expect(initialState.automationLanes).toBe(false)
+  })
+
+  it('shows the lanes and hides them again', () => {
+    const on = reducer(initialState, { type: 'SET_AUTOMATION_LANES', on: true })
+    expect(on.automationLanes).toBe(true)
+    expect(reducer(on, { type: 'SET_AUTOMATION_LANES', on: false }).automationLanes).toBe(false)
+  })
+
+  it('is not a view -- it never touches which view is showing', () => {
+    const inMap = reducer(initialState, { type: 'SET_ARRANGER_MODE', mode: 'map' })
+    expect(reducer(inMap, { type: 'SET_AUTOMATION_LANES', on: true }).mode).toBe('map')
   })
 })
 
@@ -3335,14 +3354,13 @@ describe('stemPreviewOverrides', () => {
 })
 
 describe('the map view', () => {
-  it('starts on the timeline', () => {
-    expect(initialState.mapView).toBe(false)
-  })
-
-  it('switches to the map and back', () => {
-    const on = reducer(initialState, { type: 'SET_MAP_VIEW', on: true })
-    expect(on.mapView).toBe(true)
-    expect(reducer(on, { type: 'SET_MAP_VIEW', on: false }).mapView).toBe(false)
+  it('is one of the three arranger views, not a flag beside them', () => {
+    // It used to be AppState.mapView, a second boolean sitting next to
+    // `mode` -- two places to ask "what am I looking at". One now.
+    expect('mapView' in initialState).toBe(false)
+    const on = reducer(initialState, { type: 'SET_ARRANGER_MODE', mode: 'map' })
+    expect(on.mode).toBe('map')
+    expect(reducer(on, { type: 'SET_ARRANGER_MODE', mode: 'normal' }).mode).toBe('normal')
   })
 })
 
