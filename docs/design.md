@@ -13,7 +13,7 @@ is continuing something, not starting over.
 
 ## Identity
 
-A near-black, monochrome desktop app shell. VT323 (a DEC VT320 terminal face)
+A near-black, monochrome desktop app shell. Silkscreen (a pixel/bitmap-style display font)
 throughout, sharp corners everywhere — no rounded rectangles anywhere, buttons and clips
 included. Color is spent deliberately and sparingly: almost the entire UI is greyscale, and
 saturated color appears *only* on things that carry actual audio information (stem
@@ -86,7 +86,7 @@ while playing, as a deliberate "live" cue.
 
 ## Typography
 
-Font stack: `'VT323', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`
+Font stack: `"Silkscreen", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`
 
 | Size | Use |
 |---|---|

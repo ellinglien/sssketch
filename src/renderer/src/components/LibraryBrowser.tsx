@@ -1517,7 +1517,7 @@ export function LibraryBrowser({
                 background: libraryMode === 'browse' ? 'var(--ra-stretch-on-bg)' : 'transparent',
                 border: `1px solid ${libraryMode === 'browse' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
                 color: libraryMode === 'browse' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-                textTransform: libraryMode === 'browse' ? 'uppercase' : 'lowercase',
+                fontWeight: libraryMode === 'browse' ? 700 : 400,
                 cursor: 'pointer'
               }}
             >
@@ -1532,7 +1532,7 @@ export function LibraryBrowser({
                 background: libraryMode === 'discover' ? 'var(--ra-stretch-on-bg)' : 'transparent',
                 border: `1px solid ${libraryMode === 'discover' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
                 color: libraryMode === 'discover' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-                textTransform: libraryMode === 'discover' ? 'uppercase' : 'lowercase',
+                fontWeight: libraryMode === 'discover' ? 700 : 400,
                 cursor: 'pointer'
               }}
             >

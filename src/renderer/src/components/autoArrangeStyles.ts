@@ -21,9 +21,7 @@ export function playButtonStyle(active: boolean): React.CSSProperties {
     background: active ? 'var(--ra-stretch-on-bg)' : 'transparent',
     border: `1px solid ${active ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
     color: active ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-    // No bold cut in this face, so CASE is the state signal: the active
-    // one goes uppercase against the lowercase everything else.
-    textTransform: active ? ('uppercase' as const) : ('lowercase' as const),
+    fontWeight: active ? 700 : 400,
     cursor: 'pointer',
     outline: 'none',
     whiteSpace: 'nowrap'

@@ -142,8 +142,7 @@ bulk in-process scan.
 ## Design system
 
 `src/renderer/src/styles/tokens.css` is the single source of truth — read it before adding
-any UI. Summary: near-black monochrome shell, VT323 throughout (ONE face, for
-labels and prose alike), lowercase by default with uppercase as the emphasis, sharp corners
+any UI. Summary: near-black monochrome shell, Silkscreen font throughout, sharp corners
 everywhere (no `border-radius`), color spent *only* on things that carry audio information
 (stem waveforms/glyphs, the playhead, mute/danger state) — never on chrome. UI copy is
 lowercase, no emoji, no exclamation marks. `typeColorVar(soundType)` is the one legitimate

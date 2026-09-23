@@ -1,24 +1,11 @@
-/* VT323, the app's one typeface. SIL Open Font License 1.1, licence beside
-   it as VT323-OFL.txt, which OFL requires travel with the font.
-
-   A DEC VT320 terminal face: monospace, one cut, and the closest thing yet
-   to what Silkscreen was actually for -- machine-set label text, small, and
-   at home next to numbers. Both @font-face rules point at the same file, so
-   any surviving font-weight: 700 renders the real thing instead of a
-   synthesised bold, and --ra-fw-regular stays 400.
-
-   Monospace again, which matters: the transport readouts, bar counts and
-   tempo field all sit still while they count, the way they did before Comic
-   Relief. Case stays the emphasis -- lowercase by default, uppercase where
-   bold used to be. */
 @font-face {
-  font-family: 'VT323';
-  src: url('../assets/fonts/VT323-Regular.ttf') format('truetype');
+  font-family: 'Silkscreen';
+  src: url('../assets/fonts/Silkscreen-Regular.woff2') format('woff2');
   font-weight: 400;
 }
 @font-face {
-  font-family: 'VT323';
-  src: url('../assets/fonts/VT323-Regular.ttf') format('truetype');
+  font-family: 'Silkscreen';
+  src: url('../assets/fonts/Silkscreen-Bold.woff2') format('woff2');
   font-weight: 700;
 }
 
@@ -36,13 +23,6 @@ body,
 body {
   background: var(--ra-bg-page);
   font-family: var(--ra-font);
-  font-weight: var(--ra-fw-regular);
-  /* Lowercase by default -- the case the copy is actually written in, and
-     the case tokens.css has always asked for. Stated here rather than left
-     to whichever font is loaded, so it survives a font swap. UPPERCASE is
-     this app's emphasis now, spent only where an active or selected thing
-     used to be bold; Tiny5 has no bold cut to spend instead. */
-  text-transform: lowercase;
   font-size: var(--ra-fs-11);
   color: var(--ra-text);
   -webkit-font-smoothing: antialiased;
