@@ -14,7 +14,7 @@
  * see it; "the drums are right" is not, and he never says it.
  */
 
-import { coachLine, pauseCoach, type CoachOutcome, type CoachState } from './coach'
+import { advanceCoach, coachLine, type CoachOutcome, type CoachState } from './coach'
 import { kindsCoverSet, lockClimaxFromSlots, type CoachSlotSnapshot } from './coachClimax'
 import {
   COACH_SEEDED_LINE_TEMPLATES,
@@ -133,22 +133,20 @@ export function answerCoachFlavour(
 ): CoachState {
   if (state.flavour !== null) return state
   const covered = seededCoveredStepIds(flavour, slots)
-  const order = coachStepOrder(flavour)
-  const outcomes: Record<string, CoachOutcome> = { ...state.outcomes, 'p1-flavour': 'done' }
+  const outcomes: Record<string, CoachOutcome> = { ...state.outcomes }
   for (const id of covered) outcomes[id] = 'done'
-  const nextId =
-    order.find((id) => id !== 'p1-flavour' && !covered.includes(id)) ?? order[order.length - 1]
-  const banked = pauseCoach(state, now)
-  return {
-    ...banked,
-    flavour,
-    outcomes,
-    stepId: nextId,
-    stepElapsedMs: 0,
-    runningSince: now,
-    lineSeed: banked.lineSeed + 1,
-    seededKinds: coveredKinds(covered, flavour, slots)
-  }
+  // Answering IS a transition off the question step, so it is advanceCoach
+  // -- which banks the time, records the question as done, rotates the
+  // line seed and, crucially, walks past every step the seed just marked
+  // covered rather than only the ones before the first open one. Written
+  // out here it was a `find` for the first uncovered step plus an
+  // unreachable "or the last step" fallback; there is no second rule about
+  // where a seeded start lands.
+  const advanced = advanceCoach({ ...state, flavour, outcomes }, now, 'done')
+  // advanceCoach clears seededKinds (one thought at a time). This is the
+  // one transition that has something to put there: the roles the seed
+  // covered, named once, on the step the answer lands on.
+  return { ...advanced, seededKinds: coveredKinds(covered, flavour, slots) }
 }
 
 /**

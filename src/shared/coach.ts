@@ -165,6 +165,34 @@ export function resumeCoach(state: CoachState, now: number): CoachState {
   return { ...state, status: 'active', runningSince: state.runningSince ?? now }
 }
 
+/**
+ * The next step the user has not already been credited with.
+ *
+ * Only phase ONE is skipped through, and the reason is that it is the only
+ * phase that is a straight line. A seeded start marks covered steps done
+ * before the user ever reaches them (answerCoachFlavour), and those are not
+ * necessarily a contiguous run -- a seed can cover the low end and the
+ * drums while leaving the harmony open -- so without this, advancing off
+ * the harmony walks straight back into the drums step, asks for work the
+ * flow has already recorded, and overwrites its outcome.
+ *
+ * Phase two's steps repeat by design (p2-section is walked again for every
+ * section carved), so an outcome there means "you did this once", not
+ * "this is behind you", and skipping on it would throw the user out of the
+ * arrangement phase after their second section.
+ */
+function nextUncoveredStepId(
+  from: CoachStepId,
+  flavour: CoachFlavour | null,
+  outcomes: Record<string, CoachOutcome>
+): CoachStepId | null {
+  let id = nextCoachStepId(from, flavour)
+  while (id !== null && coachStepById(id)?.phase === 'loop' && outcomes[id] !== undefined) {
+    id = nextCoachStepId(id, flavour)
+  }
+  return id
+}
+
 /** next (outcome 'done') and skip (outcome 'skipped') are the same
  * transition with a different record of how it happened -- the flow must
  * never treat skipping as an error path. */
@@ -174,7 +202,7 @@ export function advanceCoach(state: CoachState, now: number, outcome: CoachOutco
   // The order depends on the melodic-or-groove answer (coachStepOrder) --
   // a flow that has not answered yet walks the groove order, which is also
   // the order COACH_STEPS itself is written in.
-  const nextId = nextCoachStepId(banked.stepId, banked.flavour)
+  const nextId = nextUncoveredStepId(banked.stepId, banked.flavour, outcomes)
   if (nextId === null) {
     return {
       ...banked,

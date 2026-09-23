@@ -101,6 +101,39 @@ describe('advanceCoach', () => {
     expect(advanceCoach(startCoach(T0), T0 + MINUTE, 'done').lineSeed).toBe(1)
   })
 
+  it('steps over a phase-one step a seeded start already marked done', () => {
+    // A seeded start marks covered steps done BEFORE the user reaches
+    // them, and they are not necessarily a contiguous run (a seed can
+    // cover the low end and the drums while leaving the harmony open).
+    // Landing on the first open one is only half the job: walking on from
+    // it has to step over the covered ones too, or he asks for work the
+    // flow has already recorded and then overwrites its outcome with
+    // whatever the user pressed the second time.
+    const seeded: CoachState = {
+      ...startCoach(T0),
+      flavour: 'groove',
+      stepId: 'p1-harmony',
+      outcomes: { 'p1-flavour': 'done', 'p1-low-end': 'done', 'p1-drums': 'done' }
+    }
+    const next = advanceCoach(seeded, T0 + MINUTE, 'done')
+    expect(next.stepId).toBe('p1-supporting')
+    expect(next.outcomes['p1-drums']).toBe('done') // untouched, not re-recorded
+  })
+
+  it('does not step over a phase-two step just because it has been through once', () => {
+    // Phase two's steps repeat by design -- p2-section is walked again for
+    // every section the user carves -- so an outcome there means "you did
+    // this once", not "this is behind you". Only the straight line of
+    // phase one is skipped through.
+    const secondLap: CoachState = {
+      ...startCoach(T0),
+      flavour: 'groove',
+      stepId: 'p2-section',
+      outcomes: { 'p2-first': 'done', 'p2-section': 'done', 'p2-next': 'done' }
+    }
+    expect(advanceCoach(secondLap, T0 + MINUTE, 'skipped').stepId).toBe('p2-next')
+  })
+
   it('finishes the flow after the last step, with the clock stopped', () => {
     let coach = startCoach(T0)
     let minute = 1

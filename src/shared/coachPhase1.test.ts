@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { startCoach, type CoachState } from './coach'
+import { advanceCoach, startCoach, type CoachState } from './coach'
 import type { CoachSlotSnapshot } from './coachClimax'
 import {
   answerCoachFlavour,
@@ -121,6 +121,24 @@ describe('answerCoachFlavour', () => {
     expect(answered.outcomes).toEqual({ 'p1-flavour': 'done', 'p1-low-end': 'done' })
     expect(answered.stepId).toBe('p1-harmony')
     expect(answered.seededKinds).toEqual(['drums', 'bass'])
+  })
+
+  it('keeps stepping over covered roles, not just the ones before the first open one', () => {
+    // A seed that covers the low end and the drums but not the harmony
+    // lands the user on the harmony -- and advancing off it must carry on
+    // past the drums step it already marked done. Both halves of that are
+    // one transition (advanceCoach), which is why answering is written as
+    // one.
+    const answered = answerCoachFlavour(startCoach(T0), T0 + MINUTE, 'groove', [
+      slot(['bass']),
+      slot(['drums', 'rhythmic'])
+    ])
+    expect(answered.stepId).toBe('p1-harmony')
+    expect(answered.outcomes['p1-drums']).toBe('done')
+    const next = advanceCoach(answered, T0 + 2 * MINUTE, 'done')
+    // p1-drums and p1-supporting are both covered by the seeded
+    // drummy-rhythmic slot, so the hook is the next thing genuinely open.
+    expect(next.stepId).toBe('p1-hook')
   })
 
   it('has nothing to say about a seed when there is no seed', () => {
