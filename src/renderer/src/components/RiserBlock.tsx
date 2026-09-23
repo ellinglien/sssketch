@@ -269,13 +269,10 @@ export function RiserBlock({
             // The riser's LEVEL, as a knob in its corner -- the same
             // treatment (and the same component) the filter lane's resonance
             // already uses, for the same reason: it is one stored number, not
-            // a shape to draw. The guards stop the knob's own press from also
-            // starting a move drag underneath it.
-            <span
-              onMouseDown={(e) => e.stopPropagation()}
-              onContextMenu={(e) => e.stopPropagation()}
-              style={{ position: 'absolute', right: 3, top: 3, display: 'flex' }}
-            >
+            // a shape to draw. Keeping the knob's own press off this block's
+            // move drag is Dial's own job now, not this wrapper's -- see
+            // Dial.tsx's doc comment; this span is only placement.
+            <span style={{ position: 'absolute', right: 3, top: 3, display: 'flex' }}>
               <Dial
                 value={Math.round(riser.level * 100)}
                 onChange={(value) =>

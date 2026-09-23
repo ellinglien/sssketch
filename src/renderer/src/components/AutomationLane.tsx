@@ -512,18 +512,16 @@ export function AutomationLane({
             </select>
           )}
           {showResonanceDial && resonanceTarget && (
-            // The same three guards the picker and the clear button carry,
-            // for the same reason: this corner sits ON the drawing surface,
-            // so without them turning the knob would also scribble a curve
-            // under it, a double-click reset would delete a breakpoint, and
-            // a right-click would clear the whole lane. The dial's own drag
-            // is pointer-captured, so only these first events can leak.
-            <span
-              onMouseDown={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => e.stopPropagation()}
-              onContextMenu={(e) => e.stopPropagation()}
-              style={{ display: 'flex' }}
-            >
+            // No stopPropagation guards here any more, deliberately. This
+            // corner sits ON the drawing surface, so turning the knob must
+            // not also scribble a curve under it, a double-click reset must
+            // not delete a breakpoint, and a right-click must not clear the
+            // lane -- but Dial now stops its own press, click, double-click
+            // and context menu at the knob itself, because a guard at the
+            // call site could never stop the one event that actually
+            // escaped (see Dial.tsx's doc comment and the playhead-scrub bug
+            // it names). One guard, in one place, for every dial in the app.
+            <span style={{ display: 'flex' }}>
               <LaneResonanceDial
                 target={resonanceTarget}
                 ariaLabel={`filter resonance for ${laneId}`}
