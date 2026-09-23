@@ -565,3 +565,70 @@ describe('noise risers in the saved file', () => {
     expect(restored.rifffs.r1).toBeDefined()
   })
 })
+
+describe('the guided flow across a save and a load', () => {
+  const NOW = 1_700_000_000_000
+  const MINUTE = 60_000
+
+  it('round-trips which step you got to, and how you left the ones behind you', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'COACH_START', now: NOW })
+    state = reducer(state, { type: 'COACH_ADVANCE', now: NOW + 8 * MINUTE, outcome: 'skipped' })
+
+    const json = serializeProject(state)
+    const { state: restored } = deserializeProject(JSON.parse(json))
+
+    expect(restored.coach?.stepId).toBe('sections')
+    expect(restored.coach?.outcomes).toEqual({ 'climax-loop': 'skipped' })
+    expect(restored.coach?.phaseElapsedMs.loop).toBe(8 * MINUTE)
+  })
+
+  it('reopens hidden with a stopped clock -- he never appears on his own', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'COACH_START', now: NOW })
+    expect(state.coach?.status).toBe('active')
+
+    const json = serializeProject(state)
+    // The status IS written -- the load rules decide what to do with it,
+    // the same way the arranger mode's own load rules work.
+    expect(JSON.parse(json).coach.status).toBe('active')
+
+    const { state: restored } = deserializeProject(JSON.parse(json))
+    expect(restored.coach?.status).toBe('dismissed')
+    expect(restored.coach?.runningSince).toBeNull()
+  })
+
+  it('a project saved before this feature existed still loads, with no flow', () => {
+    // Exactly what an older .sssketchproj contains: no `coach` key at all.
+    const legacy = JSON.parse(
+      serializeProject(
+        reducer(initialState, {
+          type: 'ADD_TO_SHELF',
+          rifff
+        })
+      )
+    )
+    delete legacy.coach
+    expect('coach' in legacy).toBe(false)
+
+    const { state: restored } = deserializeProject(legacy)
+    expect(restored.coach).toBeNull()
+    expect(restored.rifffs.r1.name).toBe('test')
+  })
+
+  it('a hand-edited coach block loads as a repaired flow rather than throwing', () => {
+    const legacy = JSON.parse(
+      serializeProject(
+        reducer(initialState, {
+          type: 'ADD_TO_SHELF',
+          rifff
+        })
+      )
+    )
+    legacy.coach = { status: 'active', stepId: 'nonsense' }
+
+    const { state: restored } = deserializeProject(legacy)
+    expect(restored.coach?.stepId).toBe('climax-loop')
+    expect(restored.coach?.status).toBe('dismissed')
+  })
+})

@@ -11,6 +11,7 @@ import {
   type StemFilterSettings
 } from '@shared/toolkit'
 import type { PluginStatesMap } from '@shared/pluginStates'
+import { sanitiseLoadedCoach } from '@shared/coach'
 
 /** Everything persisted to a .sssketchproj file — the full AppState minus
  * transient UI-mode fields that never make sense to reopen into. Playback
@@ -360,6 +361,15 @@ export function deserializeProject(
   // it's re-picked, not anything already committed to audio.
   if (state.snapIdx > 4) state.snapIdx = 4
   state.rifffs = snapBarLengthNoise(state.rifffs)
+  // The guided flow's own load rules, in one place (see sanitiseLoadedCoach
+  // for the full why): which step you got to and how long each phase took
+  // come back; his visibility and his clock do not. A flow saved mid-step
+  // reopens 'dismissed', and the project menu's sssketchy button resumes it
+  // exactly where it was -- because he "never appears on his own, not even
+  // on an empty project" (spec), and because runningSince is an absolute
+  // timestamp from a previous session, which left alone would report days
+  // of time on one step and fire the stuck nudge on open.
+  state.coach = sanitiseLoadedCoach(state.coach)
   // After snapBarLengthNoise, deliberately: a clip's length in bars is what
   // a migrated fade is measured against, so it has to be the repaired one.
   const withMigratedFades = migrateEdgeFadesToVolumeCurves(state, { fadeIn, fadeOut })
