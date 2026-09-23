@@ -7,7 +7,7 @@ import { stemKey } from '@shared/types'
 import { packIntoTracks } from '@shared/packIntoTracks'
 import { clipLengthBars, edgeFadeState } from '@shared/automationEdit'
 import { busGroupName } from '@shared/busNaming'
-import { audibleRisers } from '@shared/riser'
+import { audibleRisers, riserSoundingEndBar } from '@shared/riser'
 import type { AutomationPoint } from '@shared/toolkit'
 import { filterResonanceQ, isStemToolkitNeutral, normaliseAutomationCurve } from '@shared/toolkit'
 // TYPE-ONLY, deliberately and permanently: exportToolkitAudio.ts spawns the
@@ -839,7 +839,15 @@ function buildRiserTracks(
 
   const placed = risers.map((riser) => {
     const startSec = riser.startBar * secPerBarProject
-    const lengthSec = riser.lengthBars * secPerBarProject
+    // The riser's SOUNDING length, not the length it was dragged to: it
+    // rings past its own end bar (RISER_TAIL_BARS -- the engine's
+    // kRiserTailBars), risers.wav contains that tail, and an item cropped at
+    // the riser's edge would be the one place an exported project quietly
+    // disagreed with what sssketch plays. The endSec below carries the tail
+    // too, so packIntoTracks moves a riser whose tail runs into the next
+    // one's start onto a track of its own instead of letting the next item
+    // truncate it.
+    const lengthSec = (riserSoundingEndBar(riser) - riser.startBar) * secPerBarProject
     return {
       startSec,
       endSec: startSec + lengthSec,

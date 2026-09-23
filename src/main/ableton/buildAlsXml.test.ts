@@ -1769,7 +1769,11 @@ describe('the built-in sound toolkit', () => {
         const clip = findAudioClip(riserTrack)
         const clipBody = childArray(clip, 'AudioClip')
         expect(attrs(clip)['@_Time']).toBe('16')
-        expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('24')
+        // Bar 6 is where the riser ENDS (24 beats), but the clip runs half a
+        // beat further: the riser rings past its own end bar
+        // (RISER_TAIL_BARS), and a clip cropped at the edge would cut that
+        // tail off in Ableton while sssketch's own mixdown kept it.
+        expect(attrs(findChild(clipBody, 'CurrentEnd')!)['@_Value']).toBe('24.5')
         expect(attrs(findChild(clipBody, 'IsWarped')!)['@_Value']).toBe('false')
         const fileRef = findChild(
           childArray(findChild(clipBody, 'SampleRef')!, 'SampleRef'),

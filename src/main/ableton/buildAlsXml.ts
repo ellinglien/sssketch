@@ -7,7 +7,7 @@ import { parseKeyToAbletonScale } from './scaleMapping'
 import { packIntoTracks } from '@shared/packIntoTracks'
 import { clipLengthBars, edgeFadeState } from '@shared/automationEdit'
 import { busGroupName, summarizeSoundTypes } from '@shared/busNaming'
-import { audibleRisers } from '@shared/riser'
+import { audibleRisers, riserSoundingEndBar, type RiserClip } from '@shared/riser'
 import {
   filterCutoffHz,
   isStemToolkitNeutral,
@@ -1055,7 +1055,7 @@ function applyTrackToolkit(
 function buildRiserClip(
   canonicalClipTemplate: AlsNode,
   nextId: () => number,
-  riser: { id: string; startBar: number; lengthBars: number },
+  riser: RiserClip,
   fileName: string,
   outputDir: string,
   colorIndex: number
@@ -1063,7 +1063,15 @@ function buildRiserClip(
   const clip = cloneNode(canonicalClipTemplate)
   renumberIds(clip, nextId)
   const startBeats = riser.startBar * 4
-  const endBeats = (riser.startBar + riser.lengthBars) * 4
+  // The riser's SOUNDING end, not its right edge: it rings past its own end
+  // bar (RISER_TAIL_BARS -- the engine's kRiserTailBars), and risers.wav
+  // contains that tail, so a clip cropped at the edge would be the one place
+  // an exported project quietly disagreed with what sssketch plays. If the
+  // riser is the very last thing in the arrangement the render stops at the
+  // arrangement's end and this reaches a little past the file, which Ableton
+  // simply plays as silence -- the same tail-cut playback itself gets from
+  // the loop point there.
+  const endBeats = riserSoundingEndBar(riser) * 4
   setAttr(clip, '@_Time', String(startBeats))
   const clipBody = childArray(clip, 'AudioClip')
   setAttr(findChild(clipBody, 'Name')!, '@_Value', 'riser')
@@ -1336,7 +1344,10 @@ export function buildAlsXml(
     const packedRisers = packIntoTracks(
       risers,
       (r) => r.startBar,
-      (r) => r.startBar + r.lengthBars
+      // Packed by the SOUNDING end, tail included: an Ableton track plays
+      // one clip at a time, so a riser whose tail overlaps the next riser's
+      // start has to move to a track of its own or lose it.
+      riserSoundingEndBar
     )
     packedRisers.forEach((riserGroup, index) => {
       const clips = riserGroup.map((riser) =>

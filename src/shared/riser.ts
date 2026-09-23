@@ -275,9 +275,51 @@ export function normaliseLoadedRisers(
   return out
 }
 
-/** The absolute bar the riser stops sounding on. */
+/**
+ * How long a riser rings on AFTER its end bar, in bars.
+ *
+ * A riser into a drop does not stop dead on a record -- it decays away
+ * underneath the first bar of the drop, like a short reverb on the moment of
+ * impact. The decay itself is the ENGINE's (kRiserTailBars and
+ * riserTailGainAt in native-engine/Source/NoiseRiser.h): this side neither
+ * generates nor draws it. It is mirrored here for exactly one reason, and
+ * it is a real one -- the Ableton and REAPER exporters lay each riser out as
+ * a CLIP cropped out of the one rendered `risers.wav`, and a clip cropped at
+ * the riser's own right edge would cut the tail off in the other DAW while
+ * sssketch's own mixdown kept it. See riserSoundingEndBar.
+ *
+ * An eighth note in 4/4 -- 250ms at 120bpm, 172ms at 174bpm. Bars rather
+ * than seconds so a tail ringing over the downbeat stays in time with the
+ * drop it is ringing over, and so this layer (which has no sample rate, and
+ * for that reason could never mirror the 4ms declick this replaced) can
+ * express it exactly.
+ */
+export const RISER_TAIL_BARS = 0.125
+
+/** The absolute bar the riser's swell PEAKS on -- its right edge on the
+ * timeline, and where the drop it is building to lands.
+ *
+ * Deliberately not "where it goes quiet": the tail keeps sounding past this
+ * (riserSoundingEndBar). Callers wanting the riser's footprint -- how long
+ * the user dragged it, where the block is drawn, where the loop should reach
+ * -- want this one; only a caller reproducing the riser's AUDIO wants the
+ * other. */
 export function riserEndBar(riser: RiserClip): number {
   return riser.startBar + riser.lengthBars
+}
+
+/** The absolute bar the riser has finally decayed to silence on: its end bar
+ * plus the tail.
+ *
+ * Note what does NOT use this: loopLengthBars (selectors.ts) and its
+ * main-process twin loopLengthBarsFor (nativeExport.ts), which set the
+ * transport's wrap point and the render's duration. Auto-fitting the loop to
+ * a riser's tail would push the loop an eighth note off the grid for every
+ * arrangement that happens to end on a riser, so a riser parked at the very
+ * end has its tail cut by the arrangement's end -- in playback and in the
+ * bounce alike, which is the important half: the two still agree. */
+export function riserSoundingEndBar(riser: RiserClip): number {
+  return riserEndBar(riser) + RISER_TAIL_BARS
 }
 
 /**
@@ -319,10 +361,11 @@ export function riserCutoffAt(riser: RiserClip, clipBar: number): number {
  *
  * Mirrored by riserEnvelopeAt() in native-engine/Source/NoiseRiser.cpp. One
  * deliberate difference, which is why that side is not simply this function:
- * the engine also applies a few milliseconds of linear declick at the very
- * END of the riser, because stopping at full level would click. That is a
- * real-seconds concern this shared layer has no sample rate to express, and
- * nothing on this side draws it.
+ * the engine holds this at full past the riser's end and multiplies in a
+ * decaying TAIL there (riserTailGainAt, and RISER_TAIL_BARS above), so that
+ * stopping at full level reads as a short reverb rather than as a cut. The
+ * swell itself is unchanged by that, which is the point -- the peak is still
+ * exactly where the drop is.
  */
 export function riserEnvelopeAt(progress01: number): number {
   const p = clamp01(progress01)

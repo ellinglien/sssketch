@@ -3,6 +3,7 @@
 #include "StemBufferCache.h"
 #include "ChannelChainRegistry.h"
 #include "RenderExport.h"
+#include "NoiseRiser.h"
 #include <juce_core/juce_core.h>
 #include <atomic>
 #include <cmath>
@@ -1951,6 +1952,10 @@ namespace sssketch
                                .getChildFile("sssketch_pe_riser_bounce.wav");
                 out.deleteFile();
                 juce::String error;
+                // 2 BARS (8 seconds at this tempo), four times the riser's
+                // own length on purpose: the riser rings past its end
+                // (kRiserTailBars) and then stops, and both of those have to
+                // be in the compared window.
                 expect(renderProjectToWavFile(project, out.getFullPathName(), 2.0, error),
                        "offline render failed: " + error);
 
@@ -1998,6 +2003,21 @@ namespace sssketch
                     // exactly the point.
                     expect(livePeak > 0.05, "nothing was rendered live (peak " + juce::String(livePeak) + ")");
                     expect(worst < 2.0e-4, "bounce differs from playback by " + juce::String(worst));
+
+                    // ...and the window genuinely contains the tail, so the
+                    // sample-for-sample comparison above is covering it
+                    // rather than passing on a stretch of silence. The riser
+                    // ends 2 seconds in; there is audio after that, and it is
+                    // gone again by the time the tail is over.
+                    const int endOfRiser = (int) (2.0 * 44100.0);
+                    const int endOfTail = endOfRiser + (int) std::lround(kRiserTailBars * 4.0 * 44100.0);
+                    double tailPeak = 0.0, afterTailPeak = 0.0;
+                    for (int i = endOfRiser; i < juce::jmin(endOfTail, numSamples); ++i)
+                        tailPeak = juce::jmax(tailPeak, (double) std::abs(bounced.getSample(0, i)));
+                    for (int i = endOfTail; i < numSamples; ++i)
+                        afterTailPeak = juce::jmax(afterTailPeak, (double) std::abs(bounced.getSample(0, i)));
+                    expect(tailPeak > 0.01, "the bounce has no tail past the riser's end");
+                    expect(afterTailPeak < 1.0e-3, "the bounce is still sounding after the tail");
                 }
                 out.deleteFile();
             }

@@ -3,6 +3,7 @@ import {
   MIN_RISER_LENGTH_BARS,
   RISER_DEFAULTS,
   RISER_NAME_PREFIX,
+  RISER_TAIL_BARS,
   audibleRisers,
   createRiser,
   defaultRiserCurve,
@@ -12,6 +13,7 @@ import {
   riserCutoffAt,
   riserEndBar,
   riserEnvelopeAt,
+  riserSoundingEndBar,
   risersOnChannel
 } from './riser'
 
@@ -93,9 +95,25 @@ describe('normaliseRiser', () => {
 })
 
 describe('riserEndBar', () => {
-  it('is the bar the riser stops sounding on', () => {
+  it('is the bar the riser peaks on -- its right edge, not the end of its tail', () => {
     const riser = createRiser({ id: 'r1', channelId: 'ch1', startBar: 6, lengthBars: 4 })
     expect(riserEndBar(riser)).toBe(10)
+  })
+})
+
+describe('riserSoundingEndBar', () => {
+  it('is the riser plus its tail, which rings on past the end bar', () => {
+    const riser = createRiser({ id: 'r1', channelId: 'ch1', startBar: 6, lengthBars: 4 })
+    expect(riserSoundingEndBar(riser)).toBeCloseTo(10 + RISER_TAIL_BARS, 12)
+  })
+
+  it('has a tail short enough to be a tail and long enough to be heard', () => {
+    // Pinned as a note value rather than a number of milliseconds, because
+    // that is the reason it is measured in bars at all: an eighth note rings
+    // over the drop in time with it at any tempo. The engine's own
+    // kRiserTailBars (native-engine/Source/NoiseRiser.h) is this same
+    // number -- a hand-synced pair, like everything else on this boundary.
+    expect(RISER_TAIL_BARS).toBe(0.125)
   })
 })
 

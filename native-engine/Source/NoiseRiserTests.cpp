@@ -49,6 +49,13 @@ namespace sssketch
             return out;
         }
 
+        /** Samples in the riser's tail at kTestSecPerBar -- the stretch past
+         * its end bar that kRiserTailBars adds. */
+        int tailSamples()
+        {
+            return (int) std::lround(kRiserTailBars * kTestSecPerBar * kTestRate);
+        }
+
         double rmsOver(const std::vector<float>& samples, int from, int to)
         {
             double sum = 0.0;
@@ -100,6 +107,41 @@ namespace sssketch
                 expectEquals(riserEnvelopeAt(-1.0), 0.0);
                 expectEquals(riserEnvelopeAt(4.0), 1.0);
                 expectEquals(riserEnvelopeAt(std::nan("")), 0.0);
+            }
+
+            beginTest("the tail is an exponential decay that actually reaches zero");
+            {
+                // Full level where the riser ends, so the tail joins the peak
+                // without a step...
+                expectEquals(riserTailGainAt(0.0), 1.0);
+                // ...and EXACTLY nothing where it finishes. A plain e^-k
+                // would stop a thousandth above this, which is the same click
+                // the tail exists to remove, only quieter.
+                expectEquals(riserTailGainAt(1.0), 0.0);
+
+                // Monotonically down, and BELOW the straight line the whole
+                // way -- that is the difference between a decay and a fader
+                // move.
+                double previous = 1.0;
+                for (int i = 1; i <= 100; ++i)
+                {
+                    const double x = (double) i / 100.0;
+                    const double value = riserTailGainAt(x);
+                    expect(value <= previous);
+                    if (i < 100)
+                        expect(value < 1.0 - x);
+                    previous = value;
+                }
+
+                // 60dB (RT60's own convention) spent across the tail: half
+                // way through it is already 30dB down.
+                expectWithinAbsoluteError(riserTailGainAt(0.5), 0.0316, 0.002);
+
+                // Off both ends, and against corrupted data -- this is a
+                // multiplier inside a per-sample loop on the audio thread.
+                expectEquals(riserTailGainAt(-1.0), 1.0);
+                expectEquals(riserTailGainAt(4.0), 0.0);
+                expectEquals(riserTailGainAt(std::nan("")), 0.0);
             }
 
             beginTest("the sweep follows a drawn curve, and the declared ramp without one");
@@ -221,8 +263,12 @@ namespace sssketch
                 // doing, the riser stays inside the level it was given.
                 auto riser = makeRiser();
                 riser.level = 0.8;
-                const int total = (int) (kTestRate * 4.0);
-                const auto rendered = renderRiser(riser, total, 512);
+                // Rendered THROUGH the tail, not just up to the end bar: the
+                // tail holds the swell at full while it decays, so if
+                // anything in it could exceed the level this is where it
+                // would show.
+                const int body = (int) (kTestRate * 4.0);
+                const auto rendered = renderRiser(riser, body + tailSamples(), 512);
                 double peak = 0.0;
                 for (const auto sample : rendered)
                     peak = juce::jmax(peak, (double) std::abs(sample));
@@ -232,32 +278,83 @@ namespace sssketch
                 expect(peak > riser.level * 0.2, "peak was " + juce::String(peak));
             }
 
-            beginTest("it starts and ends at silence, so it can't click into a drop");
+            beginTest("the peak is on the end bar, where the drop is -- the tail does not move it");
+            {
+                // The one thing the tail was not allowed to cost. A release
+                // carved out of the riser's own length would pull the loudest
+                // moment earlier and leave the riser deflating into the drop;
+                // ringing PAST the end instead means the swell is still at
+                // full when the end bar arrives.
+                const auto riser = makeRiser();
+                const int body = (int) (kTestRate * 4.0);
+                const auto rendered = renderRiser(riser, body + tailSamples(), 512);
+
+                int loudestIndex = 0;
+                double peak = 0.0;
+                for (int i = 0; i < (int) rendered.size(); ++i)
+                {
+                    const double magnitude = std::abs((double) rendered[(size_t) i]);
+                    if (magnitude > peak)
+                    {
+                        peak = magnitude;
+                        loudestIndex = i;
+                    }
+                }
+                expect(loudestIndex < body,
+                       "the loudest sample landed in the tail, at " + juce::String(loudestIndex));
+
+                // And the riser's last milliseconds are as loud as the ones
+                // before them, rather than being shaved by a release: this is
+                // what the old 4ms in-riser declick used to fail.
+                const int fourMs = (int) std::lround(0.004 * kTestRate);
+                const double atTheEnd = rmsOver(rendered, body - fourMs, body);
+                const double justBefore = rmsOver(rendered, body - fourMs * 4, body - fourMs);
+                expect(justBefore > 0.0);
+                expect(atTheEnd > justBefore * 0.9,
+                       "the riser is quieter at its end than just before it");
+            }
+
+            beginTest("it rings past its end and decays to silence there, not at a hard cut");
             {
                 const auto riser = makeRiser();
-                const int total = (int) (kTestRate * 4.0);
-                const auto rendered = renderRiser(riser, total, 512);
+                const int body = (int) (kTestRate * 4.0);
+                const int tail = tailSamples();
+                // Rendered well past the tail, so "nothing after it" is a
+                // real assertion rather than the end of the buffer.
+                const auto rendered = renderRiser(riser, body + tail * 2, 512);
+
                 // The squared swell means the opening is essentially nothing.
                 expect(std::abs(rendered[0]) < 1.0e-4f);
-                // ...and the tail declick (kRiserReleaseSec) takes the riser
-                // back down from what is otherwise its peak. Measured as a
-                // ratio rather than an absolute threshold: the final sample's
-                // value is the peak times however far through the release
-                // ramp it lands, and where exactly that falls depends on the
-                // riser's length in samples, which is not the thing under
-                // test. What IS under test is that the last few milliseconds
-                // are markedly quieter than the moment just before them,
-                // which for a swell-to-the-end envelope can only be the
-                // release doing it.
-                const int releaseSamples = (int) std::lround(kRiserReleaseSec * kTestRate);
-                const double tailRms = rmsOver(rendered, total - releaseSamples / 4, total);
-                const double beforeReleaseRms =
-                    rmsOver(rendered, total - releaseSamples * 4, total - releaseSamples);
-                expect(beforeReleaseRms > 0.0);
-                expect(tailRms < beforeReleaseRms * 0.5);
-                // The peak itself lives in the last tenth, not at the end.
-                const int lastTenth = total - total / 10;
-                expect(rmsOver(rendered, lastTenth, total) > rmsOver(rendered, 0, lastTenth));
+
+                // There IS audio past the end bar -- the point of the whole
+                // change.
+                expect(rmsOver(rendered, body, body + tail / 4) > 0.0);
+
+                // ...and it decays, quarter by quarter, rather than holding.
+                double previous = rmsOver(rendered, body, body + tail / 4);
+                for (int quarter = 1; quarter < 4; ++quarter)
+                {
+                    const double now =
+                        rmsOver(rendered, body + tail * quarter / 4, body + tail * (quarter + 1) / 4);
+                    expect(now < previous * 0.5,
+                           "tail quarter " + juce::String(quarter) + " did not decay");
+                    previous = now;
+                }
+
+                // By the end of the tail it is (near) nothing: a thousandth
+                // of the riser's own peak or better, which is what lets it
+                // stop without a click.
+                double peak = 0.0;
+                for (const auto sample : rendered)
+                    peak = juce::jmax(peak, (double) std::abs(sample));
+                const int lastMs = (int) std::lround(0.001 * kTestRate);
+                for (int i = body + tail - lastMs; i < body + tail; ++i)
+                    expect(std::abs((double) rendered[(size_t) i]) < peak * 1.0e-3);
+
+                // And then it is EXACTLY nothing -- the tail has a real end,
+                // so a riser cannot go on costing samples forever.
+                for (int i = body + tail; i < body + tail * 2; ++i)
+                    expectEquals(rendered[(size_t) i], 0.0f);
             }
 
             beginTest("a riser adds nothing at all to blocks it does not overlap");

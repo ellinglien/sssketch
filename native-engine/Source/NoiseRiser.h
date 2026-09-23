@@ -51,15 +51,42 @@ namespace sssketch
      * claims and what the tests now pin. */
     constexpr double kRiserBandpassNormalisation = 1.0 / kRiserBandwidthQ;
 
-    /** A short linear fade at the riser's very END. The swell reaches full
-     * level exactly at the last sample (riserEnvelopeAt(1) == 1), which is
-     * musically right -- the peak is where the drop lands -- and electrically
-     * a click, since the signal goes from full scale to nothing in one
-     * sample. 4ms is under a 16th note at any tempo this app works at, so the
-     * peak still reads as a peak. Deliberately NOT modelled in the shared TS
-     * twin (src/shared/riser.ts): it is a real-seconds concern that layer has
-     * no sample rate to express, and nothing on that side draws it. */
-    constexpr double kRiserReleaseSec = 0.004;
+    /** How long the riser rings on AFTER its end, as a fraction of a bar.
+     *
+     * The swell reaches full level exactly at the riser's last sample
+     * (riserEnvelopeAt(1) == 1), which is musically right -- the peak is
+     * where the drop lands -- and electrically a click, since the signal went
+     * from full scale to nothing in one sample. What used to be here was a
+     * 4ms linear declick INSIDE the riser, which solved the click and nothing
+     * else: the riser still stopped dead at its own edge.
+     *
+     * A riser into a drop does not stop dead on a record; it decays away
+     * underneath the first bar of the drop, like a short reverb on the moment
+     * of impact. So the tail now lives PAST the riser's end rather than
+     * inside it (see riserTailGainAt), which is the only arrangement that
+     * leaves the peak exactly on the end bar -- a tail carved out of the
+     * riser's own length would pull the peak earlier and make the riser
+     * deflate just before the drop, the opposite of what it is for.
+     *
+     * Measured in BARS, not seconds, for two reasons. Musically, a tail that
+     * rings over the downbeat should be a note value (this is an eighth note
+     * in 4/4 -- 250ms at 120bpm, 172ms at 174bpm), so it stays in time with
+     * the drop it is ringing over instead of smearing a fixed number of
+     * milliseconds across every tempo. Practically, bars is the one unit
+     * every layer here can already express: the shared TS twin
+     * (src/shared/riser.ts's RISER_TAIL_BARS) needs this number to give the
+     * Ableton/REAPER exporters a riser clip long enough to contain its own
+     * tail, and that layer has no sample rate -- which is exactly why the old
+     * 4ms declick could NOT be mirrored there. */
+    constexpr double kRiserTailBars = 0.125;
+
+    /** The tail's decay constant: ln(1000), i.e. 60dB of decay across the
+     * tail. Exponential rather than linear because that is what a decaying
+     * space actually does and what the ear reads as a tail rather than as
+     * someone pulling a fader down; RT60 is the convention for how long "a
+     * reverb" lasts, so borrowing its 60dB is the defensible amount of decay
+     * to spend the tail on. */
+    constexpr double kRiserTailDecay = 6.907755278982137;
 
     /** How often the bandpass's coefficients are recomputed, in samples --
      * the same reasoning as ChannelFilter's own kCoefficientUpdateSamples (a
@@ -98,6 +125,20 @@ namespace sssketch
      * mirrored twin, for why a riser is not a fade-in. */
     double riserEnvelopeAt(double progress01);
 
+    /** The tail's gain in [0,1], at a fraction of the way through the tail --
+     * 0 being the riser's end bar (where the tail starts, at full level, so
+     * it joins the peak without a step) and 1 the end of the tail.
+     *
+     * An exponential decay, shifted so it arrives at EXACTLY zero instead of
+     * merely near it: e^-k never reaches 0, and a tail that stopped at
+     * e^-6.9 of full level would reintroduce, 0.1% quieter, the very click
+     * this exists to remove. Subtracting the endpoint and renormalising costs
+     * that 0.1% of the shape and buys a tail that genuinely ends.
+     *
+     * Values at or below 0 give 1 (the riser proper, untouched -- this is
+     * what keeps the peak where it was), values at or above 1 give 0. */
+    double riserTailGainAt(double tailProgress01);
+
     /** The riser's bandpass centre, as a normalised [0,1] cutoff value, at a
      * CLIP-RELATIVE bar. Follows the drawn curve where there is one, and the
      * declared startCutoffValue -> endCutoffValue ramp where there isn't.
@@ -121,7 +162,9 @@ namespace sssketch
          * the caller has already filled with whatever else is on the
          * channel). A no-op, touching nothing, for a block the riser does not
          * overlap -- so a riser costs only a time comparison on every block
-         * it isn't sounding in.
+         * it isn't sounding in. "Overlap" includes the tail
+         * (kRiserTailBars): a riser sounds past its own end bar, and the
+         * block it rings into is usually the first block of the drop.
          *
          * `blockStartSec` is the absolute transport time of outL[0], the same
          * number PlaybackEngine::renderBlock derives from positionBars, so a

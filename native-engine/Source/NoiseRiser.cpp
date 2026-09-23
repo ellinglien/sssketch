@@ -26,15 +26,6 @@ namespace sssketch
             if (!std::isfinite(v)) return 0.0;
             return std::clamp(v, 0.0, 1.0);
         }
-
-        /** The declick at the riser's tail -- see kRiserReleaseSec. */
-        double releaseGainAt(double localSec, double lengthSec)
-        {
-            const double remaining = lengthSec - localSec;
-            if (remaining >= kRiserReleaseSec) return 1.0;
-            if (remaining <= 0.0) return 0.0;
-            return remaining / kRiserReleaseSec;
-        }
     }
 
     std::uint32_t riserSeedFor(const juce::String& id)
@@ -71,6 +62,19 @@ namespace sssketch
     {
         const double p = clamp01(progress01);
         return p * p;
+    }
+
+    double riserTailGainAt(double tailProgress01)
+    {
+        if (!std::isfinite(tailProgress01) || tailProgress01 >= 1.0) return 0.0;
+        if (tailProgress01 <= 0.0) return 1.0;
+        // The shift-and-renormalise that makes an exponential land on zero --
+        // see riserTailGainAt's declaration in NoiseRiser.h. The floor is a
+        // compile-time constant in everything but name; left as an expression
+        // so it cannot drift away from kRiserTailDecay if that is ever
+        // retuned.
+        const double floorGain = std::exp(-kRiserTailDecay);
+        return (std::exp(-kRiserTailDecay * tailProgress01) - floorGain) / (1.0 - floorGain);
     }
 
     double riserCutoffAt(const EngineRiser& riser, double clipBar)
@@ -124,11 +128,15 @@ namespace sssketch
 
         const double startSec = riser.startBar * secPerBar;
         const double lengthSec = riser.lengthBars * secPerBar;
-        const double endSec = startSec + lengthSec;
+        const double tailSec = kRiserTailBars * secPerBar;
+        // What the riser SOUNDS over, which is longer than what it occupies
+        // on the timeline: the swell peaks at startSec + lengthSec and the
+        // tail decays away after that (kRiserTailBars).
+        const double soundingEndSec = startSec + lengthSec + tailSec;
         const double blockEndSec = blockStartSec + (double) numSamples / sampleRate;
         // The cheap rejection every non-sounding riser takes: one pair of
         // comparisons per block, no state touched, no filter prepared.
-        if (blockEndSec <= startSec || blockStartSec >= endSec)
+        if (blockEndSec <= startSec || blockStartSec >= soundingEndSec)
             return;
 
         prepare(sampleRate, numSamples);
@@ -157,7 +165,7 @@ namespace sssketch
         for (int i = 0; i < numSamples; ++i)
         {
             const double sampleTimeSec = blockStartSec + (double) i / sampleRate;
-            if (sampleTimeSec < startSec || sampleTimeSec >= endSec)
+            if (sampleTimeSec < startSec || sampleTimeSec >= soundingEndSec)
                 continue;
 
             // Rounded to nearest, not truncated -- the same sub-ULP trap
@@ -191,9 +199,14 @@ namespace sssketch
                 lastCoefficientIndex = index;
             }
 
+            // riserEnvelopeAt clamps at 1, so through the tail the swell
+            // simply HOLDS at full and the tail gain is the only thing
+            // moving -- which is what makes the peak land on the end bar and
+            // stay there, rather than being pulled earlier by its own
+            // release.
             const double gain = level
                 * riserEnvelopeAt(localSec / lengthSec)
-                * releaseGainAt(localSec, lengthSec)
+                * riserTailGainAt((localSec - lengthSec) / tailSec)
                 // See kRiserBandpassNormalisation: without this the filter's
                 // own passband gain of Q rides on top of the user's level.
                 * kRiserBandpassNormalisation;

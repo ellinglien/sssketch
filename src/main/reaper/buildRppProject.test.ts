@@ -816,7 +816,11 @@ describe('buildRppProject: risers', () => {
       expect(items).toHaveLength(2)
 
       expect(Number(findChild(items[0], 'POSITION')?.params[0])).toBeCloseTo(8, 9)
-      expect(Number(findChild(items[0], 'LENGTH')?.params[0])).toBeCloseTo(4, 9)
+      // 2 bars of riser (4s) PLUS its tail (RISER_TAIL_BARS, 0.25s here) --
+      // the riser rings on past its own end bar, and an item cropped at that
+      // edge would cut the tail off in REAPER while sssketch's own mixdown
+      // kept it.
+      expect(Number(findChild(items[0], 'LENGTH')?.params[0])).toBeCloseTo(4.25, 9)
       // Same identity mapping a baked clip uses: every riser lives in the
       // one file, laid out on the arrangement's own timeline.
       expect(Number(findChild(items[0], 'SOFFS')?.params[0])).toBeCloseTo(8, 9)
@@ -827,8 +831,24 @@ describe('buildRppProject: risers', () => {
       )
 
       expect(Number(findChild(items[1], 'POSITION')?.params[0])).toBeCloseTo(24, 9)
-      expect(Number(findChild(items[1], 'LENGTH')?.params[0])).toBeCloseTo(8, 9)
+      expect(Number(findChild(items[1], 'LENGTH')?.params[0])).toBeCloseTo(8.25, 9)
     }
+  })
+
+  it('counts the tail as overlap, so a riser cannot ring underneath the next one', () => {
+    // riser-1 ends at bar 8 and rings to 8.125; riser-2 starts at 8. Stacked
+    // on one REAPER track the second item would truncate the first one's
+    // tail at its own start, which is precisely the cut this whole change
+    // exists to remove.
+    const state = emptyAppState({
+      bpm: 120,
+      risers: {
+        'riser-1': riser({ id: 'riser-1', startBar: 4, lengthBars: 4 }),
+        'riser-2': riser({ id: 'riser-2', startBar: 8, lengthBars: 4 })
+      }
+    })
+    const { tracks } = tracksOf(buildRppProject(state, new Map(), bakeOptions([], 'risers.wav')))
+    expect(trackNamed(tracks, 'risers')).toHaveLength(2)
   })
 
   it('opens a second risers track when two risers overlap in time', () => {
