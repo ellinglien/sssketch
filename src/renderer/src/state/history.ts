@@ -88,7 +88,9 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'COACH_ADVANCE',
   'COACH_MINIMISE',
   'COACH_RESTORE',
-  'COACH_DISMISS'
+  'COACH_DISMISS',
+  'COACH_SET_FLAVOUR',
+  'COACH_LOCK_CLIMAX'
 ])
 
 export function createHistoryState(present: AppState): HistoryState {

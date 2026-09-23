@@ -4,6 +4,8 @@ import { stemKey, type Rifff } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
 import { MIN_RISER_LENGTH_BARS, createRiser } from '@shared/riser'
 import { channelsInOrder, loopLengthBars } from './selectors'
+import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
+import type { CoachSlotSnapshot } from '@shared/coachClimax'
 
 function makeRifff(overrides: Partial<Rifff> = {}): Rifff {
   return {
@@ -2830,5 +2832,78 @@ describe('the guided flow (sssketchy)', () => {
     expect(reducer(initialState, { type: 'COACH_MINIMISE' }).coach).toBeNull()
     expect(reducer(initialState, { type: 'COACH_RESTORE', now: NOW }).coach).toBeNull()
     expect(reducer(initialState, { type: 'COACH_DISMISS', now: NOW }).coach).toBeNull()
+  })
+
+  const resolvedSlot = (
+    kinds: DiscoverSlotKind[],
+    id = `slot-${kinds.join('-')}`
+  ): CoachSlotSnapshot => ({
+    id,
+    kinds,
+    stem: {
+      path: `/stems/${id}.wav`,
+      name: id,
+      author: 'someone',
+      type: 'notes' as const,
+      durationSec: 8,
+      barLength: 4
+    },
+    gain: 1,
+    audible: true,
+    rolling: false
+  })
+
+  it('COACH_SET_FLAVOUR answers the question and orders the rest by it', () => {
+    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
+    state = reducer(state, {
+      type: 'COACH_SET_FLAVOUR',
+      now: NOW + MINUTE,
+      flavour: 'melodic',
+      slots: []
+    })
+    expect(state.coach?.flavour).toBe('melodic')
+    expect(state.coach?.stepId).toBe('p1-harmony')
+  })
+
+  it('COACH_SET_FLAVOUR marks the roles a seeded start already covers', () => {
+    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
+    state = reducer(state, {
+      type: 'COACH_SET_FLAVOUR',
+      now: NOW + MINUTE,
+      flavour: 'groove',
+      slots: [resolvedSlot(['bass']), resolvedSlot(['lead'])]
+    })
+    expect(state.coach?.outcomes).toEqual({
+      'p1-flavour': 'done',
+      'p1-low-end': 'done',
+      'p1-harmony': 'done'
+    })
+    expect(state.coach?.stepId).toBe('p1-drums')
+  })
+
+  it('COACH_LOCK_CLIMAX freezes the loop onto the flow', () => {
+    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
+    state = reducer(state, {
+      type: 'COACH_LOCK_CLIMAX',
+      now: NOW + MINUTE,
+      slots: [resolvedSlot(['bass'])],
+      bpm: 96
+    })
+    expect(state.coach?.lockedClimax?.bpm).toBe(96)
+    expect(state.coach?.lockedClimax?.stems[0].role).toBe('bass')
+  })
+
+  it('both new actions are no-ops when no flow exists', () => {
+    expect(
+      reducer(initialState, {
+        type: 'COACH_SET_FLAVOUR',
+        now: NOW,
+        flavour: 'groove',
+        slots: []
+      }).coach
+    ).toBeNull()
+    expect(
+      reducer(initialState, { type: 'COACH_LOCK_CLIMAX', now: NOW, slots: [], bpm: 96 }).coach
+    ).toBeNull()
   })
 })
