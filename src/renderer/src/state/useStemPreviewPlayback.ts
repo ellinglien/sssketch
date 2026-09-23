@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { soloStemsMute } from './store'
+import { stemPreviewOverrides } from './store'
 import {
   useAppSelector,
   useDispatch,
@@ -8,7 +8,6 @@ import {
   usePlaying
 } from './StoreContext'
 import { markManualSeek } from './manualSeek'
-import { sqrtGain } from '@shared/mixGain'
 
 /** Solo-and-seek stem preview playback -- extracted out of
  * ClusterStemsBrowser.tsx (Tidy Up), which AutoArrangeRoleStep.tsx's own
@@ -32,7 +31,13 @@ export function useStemPreviewPlayback(): {
   previewingKeys: Set<string>
   /** Solos exactly `keys`, jumps the transport to `targetBar` (seeking the
    * live engine if already playing, or starting playback fresh at that bar
-   * otherwise), and marks `keys` as the current preview target. */
+   * otherwise), and marks `keys` as the current preview target.
+   *
+   * The engine hears a project stripped of the arrangement's toolkit for
+   * the duration -- no curves, no reverb, no mute regions, no risers -- so
+   * an audition is the raw file, and starting one really does stop
+   * everything else rather than letting the last one ring on through a
+   * reverb send. See store.ts's stemPreviewOverrides. */
   startPreview: (
     keys: Set<string>,
     groupIdToSelect: string | undefined,
@@ -64,7 +69,7 @@ export function useStemPreviewPlayback(): {
   // -- a stem quietly mixed on import (see LibraryBrowser.tsx's own gain
   // import, which carries over Endlesss's real per-slot gain verbatim) would
   // otherwise preview as apparently silent even though playback is working
-  // correctly. See startPreview's own soloedVol computation below.
+  // correctly. See store.ts's stemPreviewOverrides for the gain it uses.
   const [volSnapshot] = useState(() => vol)
 
   const [previewingKeys, setPreviewingKeys] = useState<Set<string>>(() => new Set())
@@ -186,30 +191,24 @@ export function useStemPreviewPlayback(): {
     // invariant ever changes, this file offers no defense on its own.
     const engineToken = claimEngine('stem-solo-preview')
     setPreviewingKeys(keys)
-    const soloedMute = soloStemsMute(rifffs, mute, [...keys])
-    // Boosts every previewed stem to the same "as if it were the only/an
-    // equal source" level (sqrtGain, @shared/mixGain.ts -- the exact same
-    // headroom math ADD_TO_SHELF uses to seed a fresh rifff's stems and
-    // BeatPicker.tsx uses for its own preview) rather than reusing whatever
-    // the real arrangement currently has it mixed at -- a single previewed
-    // stem plays at full volume; several previewed together (play all
-    // included) each get scaled down just enough that summing them won't
-    // clip, without any one of them staying inaudibly quiet because that's
-    // how it happens to be mixed right now. Only the PREVIEWED keys are
-    // touched; every other entry carries over unchanged (irrelevant anyway,
-    // since soloedMute already silences everything else).
-    const previewGain = sqrtGain(keys.size)
-    const soloedVol = { ...vol }
-    for (const key of keys) soloedVol[key] = previewGain
+    // The whole shape of what an audition sends the engine -- the solo, the
+    // preview gain, and a project stripped of the arrangement's toolkit --
+    // lives in store.ts's stemPreviewOverrides, where it is tested. See its
+    // doc comment for why an audition has to be dry, and for the report
+    // ("tidy up often plays multiple stems at once") that made it so.
+    const overrides = stemPreviewOverrides({ rifffs, mute, vol }, [...keys])
+    // Only the solo and the preview gain are DISPATCHED: those two are what
+    // the browser's own rows key their "this is what's live" state off, and
+    // the hook's unmount cleanup restores both. The toolkit blanking is
+    // deliberately NOT dispatched -- it exists for the duration of this one
+    // engine load and nothing more, so the arrangement's real curves are
+    // never touched and come straight back when the preview ends.
     dispatch({ type: 'SOLO_STEMS', stemKeys: [...keys] })
-    dispatch({ type: 'RESTORE_VOL', vol: soloedVol })
+    dispatch({ type: 'RESTORE_VOL', vol: overrides.vol })
     if (groupIdToSelect) dispatch({ type: 'SELECT', groupId: groupIdToSelect })
     dispatch({ type: 'SET_POS', pos: targetBar })
     try {
-      await flushEngineSyncNow(
-        { mute: soloedMute, vol: soloedVol },
-        () => !stillOwnEngine(engineToken)
-      )
+      await flushEngineSyncNow(overrides, () => !stillOwnEngine(engineToken))
     } catch (err) {
       // A failed send must not leave this claim dangling forever -- unlike
       // cancelledRef/callGenerationRef (purely local, self-healing on the

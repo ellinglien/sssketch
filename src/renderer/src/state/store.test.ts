@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { initialState, reducer, type AppState } from './store'
+import { initialState, reducer, stemPreviewOverrides, type AppState } from './store'
 import { stemKey, type Rifff } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
 import { MIN_RISER_LENGTH_BARS, createRiser } from '@shared/riser'
@@ -3168,5 +3168,91 @@ describe('a riser on its own row', () => {
     const before = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     const after = reducer(before, { type: 'SOLO_CHANNEL', channelId: 'nope' })
     expect(after.risers).toBe(before.risers)
+  })
+})
+
+describe('stemPreviewOverrides', () => {
+  /** One placed rifff (r1, two stems) plus a second placed one (r2), so a
+   * solo has something to silence besides its own neighbour. */
+  function placedProject(): AppState {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ groupId: 'r2', name: 'other rifff' })
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 8 })
+    return state
+  }
+
+  const r1s1 = stemKey('r1', 1)
+  const r1s6 = stemKey('r1', 6)
+  const r2s1 = stemKey('r2', 1)
+
+  it('solos exactly the audition target across every placed rifff', () => {
+    const overrides = stemPreviewOverrides(placedProject(), [r1s1])
+    expect(overrides.mute[r1s1]).toBe(false)
+    expect(overrides.mute[r1s6]).toBe(true)
+    expect(overrides.mute[r2s1]).toBe(true)
+  })
+
+  it('lifts each auditioned stem to its own preview gain, whatever it is mixed at', () => {
+    let state = placedProject()
+    state = reducer(state, { type: 'SET_VOLUME', stemKey: r1s1, volume: 0.02 })
+    const one = stemPreviewOverrides(state, [r1s1])
+    expect(one.vol[r1s1]).toBe(sqrtGain(1))
+    const two = stemPreviewOverrides(state, [r1s1, r1s6])
+    expect(two.vol[r1s1]).toBe(sqrtGain(2))
+    expect(two.vol[r1s6]).toBe(sqrtGain(2))
+  })
+
+  it('leaves every other stem its real mixed gain', () => {
+    let state = placedProject()
+    state = reducer(state, { type: 'SET_VOLUME', stemKey: r2s1, volume: 0.31 })
+    expect(stemPreviewOverrides(state, [r1s1]).vol[r2s1]).toBe(0.31)
+  })
+
+  it('drops the whole toolkit, so an audition is the raw file and not the arrangement', () => {
+    let state = placedProject()
+    state = reducer(state, {
+      type: 'SET_STEM_AUTOMATION',
+      stemKey: r1s1,
+      param: 'filterCutoff',
+      points: [
+        { bar: 0, value: 0.1 },
+        { bar: 4, value: 0.9 }
+      ]
+    })
+    state = reducer(state, { type: 'SET_STEM_FILTER_RESONANCE', stemKey: r1s1, resonance: 0.8 })
+    state = reducer(state, {
+      type: 'ADD_MUTE_REGION',
+      stemKeys: [r1s1],
+      startBar: 1,
+      endBar: 2
+    })
+    state = reducer(state, { type: 'SET_DRAG_PREVIEW', field: 'volume', key: r1s1, value: 0.04 })
+    state = reducer(state, {
+      type: 'ADD_RISER',
+      riser: createRiser({ id: 'riser1', channelId: 'ch', startBar: 0 })
+    })
+    // stemSends has no reducer action of its own yet (the reverb send is
+    // written as part of the toolkit's own curve set) -- set directly, so
+    // this test still pins the field down rather than quietly skipping it.
+    state = { ...state, stemSends: { [r1s1]: 0.7 } }
+
+    const overrides = stemPreviewOverrides(state, [r1s1])
+    expect(overrides.stemAutomation).toEqual({})
+    expect(overrides.stemFilters).toEqual({})
+    expect(overrides.stemSends).toEqual({})
+    expect(overrides.muteRegions).toEqual({})
+    expect(overrides.dragVol).toEqual({})
+    expect(overrides.risers).toEqual({})
+  })
+
+  it('does not touch the real project it was given', () => {
+    const state = placedProject()
+    const before = JSON.stringify(state)
+    stemPreviewOverrides(state, [r1s1])
+    expect(JSON.stringify(state)).toBe(before)
   })
 })

@@ -909,6 +909,64 @@ export function soloStemsMute(
   return mute
 }
 
+/**
+ * What an AUDITION overrides on the real project, for the one engine load
+ * that plays it -- Tidy Up's cluster browser and Auto Arrange's role step,
+ * both through useStemPreviewPlayback.
+ *
+ * Two things, and the second is the point. It SOLOS the target (every other
+ * placed stem muted, so starting one audition stops whatever the last one
+ * was) and lifts the target to its own preview gain (sqrtGain, the same
+ * headroom math ADD_TO_SHELF seeds a fresh rifff with) rather than whatever
+ * the arrangement has it mixed at -- a stem quietly mixed in the arrangement
+ * still auditions at a useful level.
+ *
+ * And it hands the engine a project with NO TOOLKIT: no filter curve, no
+ * resonance, no reverb send, no volume curve, no mute regions, no
+ * in-progress gain drag, and no risers. Direct report, 2026-09-23: "tidy up
+ * often plays multiple stems at once... they should play individually.
+ * (Playing them in tidy up should ignore any automation as well)". Those are
+ * one bug, not two -- an audition was rendering through the whole
+ * arrangement, so a reverb send drawn on a clip carried its tail straight
+ * across the seek into the next audition (a previous stem still sounding
+ * over the current one), a filter sweep coloured a stem being judged on its
+ * own, and a riser kept playing over all of it. Tidy Up is for deciding what
+ * a stem IS, so it has to sound like the file, not like the arrangement.
+ *
+ * Returned as an overrides object applied to ONE engine build (see
+ * StoreContext's flushEngineSyncNow) and never dispatched: the arrangement's
+ * real toolkit is untouched and comes straight back the moment the audition
+ * is over. `state` is read, never mutated.
+ */
+export function stemPreviewOverrides(
+  state: Pick<AppState, 'rifffs' | 'mute' | 'vol'>,
+  targetStemKeys: string[]
+): Pick<
+  AppState,
+  | 'mute'
+  | 'vol'
+  | 'dragVol'
+  | 'stemFilters'
+  | 'stemSends'
+  | 'stemAutomation'
+  | 'muteRegions'
+  | 'risers'
+> {
+  const previewGain = sqrtGain(targetStemKeys.length)
+  const vol = { ...state.vol }
+  for (const key of targetStemKeys) vol[key] = previewGain
+  return {
+    mute: soloStemsMute(state.rifffs, state.mute, targetStemKeys),
+    vol,
+    dragVol: {},
+    stemFilters: {},
+    stemSends: {},
+    stemAutomation: {},
+    muteRegions: {},
+    risers: {}
+  }
+}
+
 export function reducer(state: AppState, action: Action): AppState {
   switch (action.type) {
     case 'ADD_TO_SHELF': {
