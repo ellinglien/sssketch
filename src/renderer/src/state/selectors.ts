@@ -7,7 +7,7 @@ import {
   type ArrangeMoveRecord
 } from '@shared/autoArrangeApply'
 import type { StemAutomation } from '@shared/toolkit'
-import { riserEndBar } from '@shared/riser'
+import { riserEndBar, type RiserClip } from '@shared/riser'
 import { clipLengthBars } from '@shared/automationEdit'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 
@@ -920,4 +920,63 @@ export function buildArrangeReplaceActions(
   }
 
   return actions
+}
+
+/**
+ * Is everything on this arranger row silent -- the state the row's `m`
+ * button lights up for.
+ *
+ * Lives here rather than inline in ChannelRow because a riser row's mute is
+ * the one piece of this feature that can actually be got wrong quietly (a
+ * button that lights up and changes nothing), and React components are not
+ * unit-tested in this codebase. Takes narrow explicit fields, not AppState,
+ * so ChannelRow keeps its fine-grained useAppSelector reads.
+ *
+ * An EMPTY row is never "all muted": there is nothing to have silenced, and
+ * lighting the button on a bare recording row would be a lie. This matches
+ * the `rifffs.length > 0 &&` guard this rule already had.
+ */
+export function channelAllMuted(fields: {
+  /** This row's PLACED rifffs (ChannelRow's own `rifffs` prop). */
+  rifffs: Rifff[]
+  /** This row's risers (risersOnChannel). */
+  channelRisers: RiserClip[]
+  mute: Record<string, boolean>
+}): boolean {
+  const { rifffs, channelRisers, mute } = fields
+  if (rifffs.length === 0 && channelRisers.length === 0) return false
+  return (
+    rifffs.every((rifff) => rifff.stems.every((s) => !!mute[stemKey(rifff.groupId, s.slot)])) &&
+    channelRisers.every((riser) => riser.muted)
+  )
+}
+
+/**
+ * Is this row the only audible thing in the project -- the state the row's
+ * `s` button lights up for, and the same definition SOLO_CHANNEL's own
+ * "alreadySoloed" check uses so the toggle and the light cannot disagree.
+ *
+ * When the project has exactly one row this is trivially true even with
+ * nothing "soloed" -- the same accepted edge case SOLO_GROUP has always had,
+ * not a new one.
+ */
+export function channelIsSoloed(fields: {
+  channelId: string
+  /** The groupIds of this row's placed rifffs. */
+  channelGroupIds: Set<string>
+  /** EVERY rifff in the project, placed or not -- the scan genuinely needs
+   * all of them, since "soloed" is a statement about everything else. */
+  rifffs: Record<string, Rifff>
+  /** EVERY riser in the project, for the same reason. */
+  risers: Record<string, RiserClip>
+  mute: Record<string, boolean>
+}): boolean {
+  const { channelId, channelGroupIds, rifffs, risers, mute } = fields
+  const clipsAgree = Object.values(rifffs).every((rifff) => {
+    if (rifff.startBar === undefined) return true
+    const inThisChannel = channelGroupIds.has(rifff.groupId)
+    return rifff.stems.every((s) => !!mute[stemKey(rifff.groupId, s.slot)] === !inThisChannel)
+  })
+  if (!clipsAgree) return false
+  return Object.values(risers).every((riser) => riser.muted === (riser.channelId !== channelId))
 }

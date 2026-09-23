@@ -14,6 +14,8 @@ import {
   pasteRifffAction,
   pasteStemAction,
   placedRifffsInOrder,
+  channelAllMuted,
+  channelIsSoloed,
   channelsInOrder,
   isSketchEligible,
   nextArrangerMode,
@@ -23,6 +25,7 @@ import {
 } from './selectors'
 import { ARRANGE_STEP_BARS, type ArrangeMoveRecord } from '@shared/autoArrangeApply'
 import { stemKey, type Rifff, type Stem } from '@shared/types'
+import { createRiser } from '@shared/riser'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -1325,5 +1328,101 @@ describe('buildArrangeReplaceActions', () => {
     if (!siblingPaste) throw new Error('expected the untouched sibling copy')
     expect(siblingPaste.rifff.barLength).toBe(2 * ARRANGE_STEP_BARS)
     expect(siblingPaste.rifff.barLength).not.toBe(20)
+  })
+})
+
+describe('channelAllMuted', () => {
+  const clip: Rifff = {
+    groupId: 'g1',
+    name: 'g1',
+    bpm: 120,
+    barLength: 4,
+    folderPath: '/x',
+    startBar: 0,
+    stems: [
+      { slot: 1, author: 'e', name: 's', type: 'fx', path: '/a.wav', durationSec: 8, barLength: 4 }
+    ]
+  }
+
+  it('is false for a row with nothing on it', () => {
+    expect(channelAllMuted({ rifffs: [], channelRisers: [], mute: {} })).toBe(false)
+  })
+
+  it('is true when every stem on the row is muted', () => {
+    expect(channelAllMuted({ rifffs: [clip], channelRisers: [], mute: { 'g1:1': true } })).toBe(
+      true
+    )
+  })
+
+  it('is false when a riser on the row is still audible', () => {
+    const riser = createRiser({ id: 'r1', channelId: 'ch1', startBar: 0 })
+    expect(
+      channelAllMuted({ rifffs: [clip], channelRisers: [riser], mute: { 'g1:1': true } })
+    ).toBe(false)
+  })
+
+  it('is true for a riser-only row whose riser is muted', () => {
+    const riser = { ...createRiser({ id: 'r1', channelId: 'ch1', startBar: 0 }), muted: true }
+    expect(channelAllMuted({ rifffs: [], channelRisers: [riser], mute: {} })).toBe(true)
+  })
+})
+
+describe('channelIsSoloed', () => {
+  const riserHere = createRiser({ id: 'here', channelId: 'ch1', startBar: 0 })
+  const riserThere = createRiser({ id: 'there', channelId: 'ch2', startBar: 0 })
+
+  it('is true for a riser-only row when every other riser is muted', () => {
+    expect(
+      channelIsSoloed({
+        channelId: 'ch1',
+        channelGroupIds: new Set<string>(),
+        rifffs: {},
+        risers: { here: riserHere, there: { ...riserThere, muted: true } },
+        mute: {}
+      })
+    ).toBe(true)
+  })
+
+  it('is false while another row is still audible', () => {
+    expect(
+      channelIsSoloed({
+        channelId: 'ch1',
+        channelGroupIds: new Set<string>(),
+        rifffs: {},
+        risers: { here: riserHere, there: riserThere },
+        mute: {}
+      })
+    ).toBe(false)
+  })
+
+  it('is false for a clip row while a riser elsewhere is still audible', () => {
+    const clip: Rifff = {
+      groupId: 'g1',
+      name: 'g1',
+      bpm: 120,
+      barLength: 4,
+      folderPath: '/x',
+      startBar: 0,
+      stems: [
+        {
+          slot: 1,
+          author: 'e',
+          name: 's',
+          type: 'fx',
+          path: '/a.wav',
+          durationSec: 8,
+          barLength: 4
+        }
+      ]
+    }
+    expect(
+      channelIsSoloed({
+        channelId: 'ch1',
+        channelGroupIds: new Set(['g1']),
+        rifffs: { g1: clip },
+        risers: { there: riserThere },
+        mute: {}
+      })
+    ).toBe(false)
   })
 })
