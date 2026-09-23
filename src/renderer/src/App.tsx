@@ -164,10 +164,10 @@ function Timeline({
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
-  /** The timeline's own background menu -- "paste" plus, when the click
-   * landed on a real channel row, "add riser here". `channelId` is null for
-   * a click below the last channel (the ghost rows), where there is no row
-   * for a riser to go on. */
+  /** Opens the arranger's own background menu -- paste, and "add riser
+   * here" when the right-click landed on a real channel row. `channelId` is
+   * null for a right-click on the empty space below the rows, where the
+   * menu instead offers a riser on a brand new row of its own. */
   onOpenPasteMenu: (x: number, y: number, bar: number, channelId: string | null) => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
@@ -2062,6 +2062,31 @@ function Frame(): React.JSX.Element {
             // sharing an id would sound like one doubled, and a riser whose
             // id changed would change texture under the user.
             riser: createRiser({ id: crypto.randomUUID(), channelId, startBar: bar })
+          })
+      })
+    } else {
+      // The empty space below the last row -- the one place a right-click
+      // carries a bar but no row, which makes it exactly the right home for
+      // "put a riser on a row of its own" (Elling, 2026-09-23: "give the
+      // riser ... its own channel", one row per riser, because he wants
+      // making them to be easy). ADD_RISER puts the new channel id into
+      // channelOrder itself, so the row appears at the bottom, where the
+      // click was.
+      //
+      // TWO ids, not one reused: the riser's id is a noise seed with its own
+      // stability contract (above), and the channel id is a row identity
+      // that the reducer matches against channelOf/channelOrder. Keeping
+      // them separate means neither ever has to care what the other means.
+      items.push({
+        label: 'add riser on a new row',
+        onClick: () =>
+          dispatch({
+            type: 'ADD_RISER',
+            riser: createRiser({
+              id: crypto.randomUUID(),
+              channelId: crypto.randomUUID(),
+              startBar: bar
+            })
           })
       })
     }
