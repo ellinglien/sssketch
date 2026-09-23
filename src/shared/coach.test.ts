@@ -401,7 +401,9 @@ describe('sanitiseLoadedCoach', () => {
       seededKinds: [],
       lockedClimax: null,
       sections: [],
-      draftSection: null
+      draftSection: null,
+      tension: [],
+      v1ExportedAt: null
     })
   })
 })
@@ -604,5 +606,35 @@ describe('the phase-two fields', () => {
     })
     expect(loaded?.sections.map((s) => s.type)).toEqual(['drop'])
     expect(loaded?.draftSection).toBeNull()
+  })
+})
+
+describe('the phase-three fields', () => {
+  it('start empty on a fresh flow', () => {
+    const state = startCoach(1000)
+    expect(state.tension).toEqual([])
+    expect(state.v1ExportedAt).toBeNull()
+  })
+
+  it('survive a load', () => {
+    const loaded = sanitiseLoadedCoach({
+      ...startCoach(1000),
+      tension: [{ sectionIndex: 2, kind: 'riser', riserId: 'riser-a' }],
+      v1ExportedAt: 1234
+    })
+    expect(loaded?.tension).toEqual([{ sectionIndex: 2, kind: 'riser', riserId: 'riser-a' }])
+    expect(loaded?.v1ExportedAt).toBe(1234)
+  })
+
+  it('load as empty from a project saved before phase three existed', () => {
+    const loaded = sanitiseLoadedCoach({ status: 'active', stepId: 'p2-next', lineSeed: 3 })
+    expect(loaded?.tension).toEqual([])
+    expect(loaded?.v1ExportedAt).toBeNull()
+  })
+
+  it('repair a nonsense v1 mark rather than trusting it', () => {
+    expect(sanitiseLoadedCoach({ v1ExportedAt: 'yesterday' })?.v1ExportedAt).toBeNull()
+    expect(sanitiseLoadedCoach({ v1ExportedAt: -5 })?.v1ExportedAt).toBeNull()
+    expect(sanitiseLoadedCoach({ v1ExportedAt: Number.NaN })?.v1ExportedAt).toBeNull()
   })
 })

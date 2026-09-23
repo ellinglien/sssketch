@@ -42,6 +42,7 @@ import {
   type CoachSection,
   type CoachSectionDraft
 } from './coachSections'
+import { sanitiseCoachTension, type CoachTensionApplied } from './coachTension'
 import type { DiscoverSlotKind } from './discoverSlotKind'
 
 /** 'active' shows the bubble; 'minimised' shows only the corner sprite (the
@@ -99,6 +100,24 @@ export interface CoachState {
    * always, because a section is the full climax loop until somebody says
    * otherwise. */
   draftSection: CoachSectionDraft | null
+  /** Phase three's applied tension moves -- what is switched ON at which
+   * section boundary. A flat list rather than a keyed record so a later
+   * change needs no migration, exactly like `outcomes`: an entry that is
+   * not there is a toggle that is off. Real persisted project data; the
+   * toggles' on/off state must survive a save, because the curves and
+   * risers themselves do.
+   *
+   * Like `sections`, this describes REAL TIMELINE MATERIAL rather than
+   * where sssketchy is, which is why history.ts takes it from the snapshot
+   * being restored instead of pinning it across undo/redo -- see the note
+   * on pinnedCoach there. */
+  tension: CoachTensionApplied[]
+  /** When an export first really wrote a file -- "the project is marked
+   * 'V1 exported'" (spec). null until then. Set once and never rewritten:
+   * the FIRST file out is the v1, and a later export is just another
+   * export. Pinned across undo/redo like the rest of the flow: it records a
+   * file on disk, which no undo can take back. */
+  v1ExportedAt: number | null
 }
 
 /** The spec's "after ~10 minutes on one step, a quiet nudge". Never blocks,
@@ -122,7 +141,9 @@ export function startCoach(now: number): CoachState {
     seededKinds: [],
     lockedClimax: null,
     sections: [],
-    draftSection: null
+    draftSection: null,
+    tension: [],
+    v1ExportedAt: null
   }
 }
 
@@ -431,6 +452,17 @@ export function sanitiseLoadedCoach(coach: unknown): CoachState | null {
     seededKinds: [],
     lockedClimax: sanitiseLockedClimax(loose.lockedClimax),
     sections: sanitiseCoachSections(loose.sections),
-    draftSection: sanitiseCoachSectionDraft(loose.draftSection)
+    draftSection: sanitiseCoachSectionDraft(loose.draftSection),
+    tension: sanitiseCoachTension(loose.tension),
+    // Repaired rather than trusted, like every other number here: a
+    // hand-edited or absent value must not leave the flow thinking a file
+    // came out when none did. Zero and negatives are treated as "not
+    // exported" -- there is no real export at the epoch.
+    v1ExportedAt:
+      typeof loose.v1ExportedAt === 'number' &&
+      Number.isFinite(loose.v1ExportedAt) &&
+      loose.v1ExportedAt > 0
+        ? loose.v1ExportedAt
+        : null
   }
 }
