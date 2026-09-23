@@ -4,6 +4,8 @@ import { SssketchySprite } from './SssketchySprite'
 import { SssketchyChecklist } from './SssketchyChecklist'
 import { coachAnimation, isCoachStuck, type CoachState } from '@shared/coach'
 import { coachLineFor, coachSeededLine } from '@shared/coachPhase1'
+import { coachSectionLine } from '@shared/coachPhase2'
+import { SssketchySectionPanel } from './SssketchySectionPanel'
 import {
   coachStepById,
   coachStepPrimaryMove,
@@ -109,21 +111,15 @@ function usePulse(key: string | number, ms: number, onFirstRender: boolean): boo
  * step names Discover's add row, which exists only while the riff library
  * is open on the discover tab) parks him in the corner instead.
  *
- * `anchored` is the second half of the answer, and it is half of which
- * layer he sits on: standing on something inside a full-screen view means
- * he has to float above that view's own content, which is exactly what
- * --ra-z-fullscreen-popover is for. The other half is whether the riff
- * library is open at all -- he can be parked in its corner with no anchor
- * in sight, on its browse tab -- see the panel's own `zIndex`.
+ * Answers WHERE only. Which layer he sits on used to be half this hook's
+ * job too, through an `anchored` flag that stood in for "inside a
+ * full-screen view" -- true only while every anchored step pointed at
+ * something in the riff library. Phase two anchors to the timeline, which
+ * broke that equivalence, so the layer is read off the library directly at
+ * the one place that needs it (see the panel's own `zIndex`).
  */
-function useAnchorLeft(
-  selector: string | undefined,
-  width: number
-): { left: number; anchored: boolean } {
-  const [anchor, setAnchor] = useState<{ left: number; anchored: boolean }>({
-    left: DEFAULT_LEFT,
-    anchored: false
-  })
+function useAnchorLeft(selector: string | undefined, width: number): { left: number } {
+  const [left, setLeft] = useState(DEFAULT_LEFT)
 
   useEffect(() => {
     if (selector === undefined) return undefined
@@ -131,19 +127,14 @@ function useAnchorLeft(
       const element = document.querySelector(selector)
       const next =
         element === null
-          ? { left: DEFAULT_LEFT, anchored: false }
-          : {
-              left: Math.min(
-                Math.max(element.getBoundingClientRect().left, 12),
-                window.innerWidth - width - 12
-              ),
-              anchored: true
-            }
-      // Identity-stable when nothing moved, so the poll below costs a
+          ? DEFAULT_LEFT
+          : Math.min(
+              Math.max(element.getBoundingClientRect().left, 12),
+              window.innerWidth - width - 12
+            )
+      // A no-op setState when nothing moved, so the poll below costs a
       // measurement rather than a render.
-      setAnchor((prev) =>
-        prev.left === next.left && prev.anchored === next.anchored ? prev : next
-      )
+      setLeft(next)
     }
     update()
     const pollId = window.setInterval(update, ANCHOR_POLL_MS)
@@ -160,8 +151,8 @@ function useAnchorLeft(
     }
   }, [selector, width])
 
-  if (selector === undefined) return { left: DEFAULT_LEFT, anchored: false }
-  return anchor
+  if (selector === undefined) return { left: DEFAULT_LEFT }
+  return { left }
 }
 
 /**
@@ -239,27 +230,29 @@ function SssketchyCoachPanel({
   // Per-flavour copy, moves and label, flattened once here so nothing below
   // has to remember that overrides exist.
   const step = rawStep === undefined ? undefined : resolveCoachStep(rawStep, coach.flavour)
-  const { left, anchored } = useAnchorLeft(step?.anchorSelector, BUBBLE_WIDTH)
+  const { left } = useAnchorLeft(step?.anchorSelector, BUBBLE_WIDTH)
   // Above the riff library's own full-screen view whenever he is INSIDE it
-  // -- either standing on something in it (every phase-one step anchors to
+  // -- either standing on something in it (every phase-ONE step anchors to
   // Discover's add row) or parked in its corner. Without this he is painted
   // UNDER the library for the whole of phase one: the library is
   // --ra-z-fullscreen (1000), this used to be --ra-z-anchored (100).
   //
-  // `anchored` alone was not enough, and the opening step is exactly where
-  // it showed: "start from a riff you love" opens the library on the BROWSE
-  // tab, where DiscoverPanel is not mounted at all, so the anchor does not
-  // exist, he drops to the anchored layer, and the one offer the spec names
-  // by hand leads to a screen where he cannot be seen and the
-  // melodic-or-groove question cannot be answered. Asking whether the
-  // library is open answers it for every tab.
+  // Being anchored was half of the old test, and it had to go when phase
+  // two landed. It stood in for "he is standing on something inside a
+  // full-screen view", which held only while every anchored step pointed at
+  // Discover's add row -- an element that exists only while the library is
+  // open. Phase two anchors to the TIMELINE, which is ordinary app chrome
+  // and always mounted, so `anchored` is now true with the library CLOSED
+  // and would have floated him over unrelated modals for the whole of
+  // phase two. Asking only whether the library is open says the same thing
+  // about phase one (the add row cannot exist with it shut) and the right
+  // thing about phase two.
   //
-  // Deliberately NOT "is any overlay open": parked in the corner with no
-  // full-screen view around him he stays an ordinary anchored popover, so
-  // he never floats over an unrelated modal (--ra-z-modal, 110). That
-  // distinction is the point of d67efaa.
-  const zIndex =
-    anchored || riffLibraryOpen ? 'var(--ra-z-fullscreen-popover)' : 'var(--ra-z-anchored)'
+  // Still deliberately NOT "is any overlay open": with no full-screen view
+  // around him he stays an ordinary anchored popover, so he never floats
+  // over an unrelated modal (--ra-z-modal, 110). That distinction is the
+  // point of d67efaa.
+  const zIndex = riffLibraryOpen ? 'var(--ra-z-fullscreen-popover)' : 'var(--ra-z-anchored)'
 
   // "walk = moving to another area (Discover -> timeline)" (spec), and
   // "jump = step finished" -- which also fires when he first appears, and
@@ -349,6 +342,12 @@ function SssketchyCoachPanel({
   const primaryDead = primaryMove === null || primaryBlocked !== null
   const offers = step?.offers ?? []
   const seededLine = coachSeededLine(coach.seededKinds, step?.label ?? '', coach.lineSeed)
+  // Still exactly ONE thought (spec), in one place -- phase two just has its
+  // own source for it, because its lines name the section being carved and
+  // the Discover slots have nothing to say about that. coachSectionLine
+  // returns null on every step that is not p2-section/p2-next, so phase one
+  // is untouched.
+  const line = coachSectionLine(coach) ?? coachLineFor(coach, discoverSlots)
 
   return (
     <>
@@ -378,7 +377,7 @@ function SssketchyCoachPanel({
               color: 'var(--ra-text)'
             }}
           >
-            {coachLineFor(coach, discoverSlots)}
+            {line}
           </div>
 
           {/* The seeded-start note: "you already have drummy and bassish.
@@ -586,17 +585,26 @@ export function SssketchyCoach({
   const coach = state.coach
   if (coach === null || coach.status === 'dismissed') return null
   return (
-    <SssketchyCoachPanel
-      coach={coach}
-      discoverSlots={discoverSlots}
-      riffLibraryOpen={riffLibraryOpen}
-      onOffer={onOffer}
-      onMove={onMove}
-      onNext={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'done' })}
-      onSkip={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'skipped' })}
-      onMinimise={() => dispatch({ type: 'COACH_MINIMISE' })}
-      onRestore={() => dispatch({ type: 'COACH_RESTORE', now: Date.now() })}
-      onDismiss={() => dispatch({ type: 'COACH_DISMISS', now: Date.now() })}
-    />
+    <>
+      {/* Phase two's own surface, a sibling of the bubble rather than a
+          child of it: SssketchyCoachPanel owns the coarse clock and every
+          pulse, and the section panel must not re-render on that tick. It
+          gates itself entirely -- null unless there is an active flow on a
+          phase-two step with a locked climax -- so nothing here has to know
+          phase two exists. */}
+      <SssketchySectionPanel />
+      <SssketchyCoachPanel
+        coach={coach}
+        discoverSlots={discoverSlots}
+        riffLibraryOpen={riffLibraryOpen}
+        onOffer={onOffer}
+        onMove={onMove}
+        onNext={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'done' })}
+        onSkip={() => dispatch({ type: 'COACH_ADVANCE', now: Date.now(), outcome: 'skipped' })}
+        onMinimise={() => dispatch({ type: 'COACH_MINIMISE' })}
+        onRestore={() => dispatch({ type: 'COACH_RESTORE', now: Date.now() })}
+        onDismiss={() => dispatch({ type: 'COACH_DISMISS', now: Date.now() })}
+      />
+    </>
   )
 }

@@ -69,6 +69,7 @@ import { isDiscoverSlotKind, type CoachSlotSnapshot } from '@shared/coachClimax'
 import { coachIsComplete } from '@shared/coach'
 import { slotKindsKey } from '@shared/discoverSlotKind'
 import { coachDiscoverIsOpen, requestCoachAddSlot } from './state/coachDiscoverBridge'
+import { requestCoachSectionOp } from './state/coachSectionBridge'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { hasUnsavedChanges } from './state/unsavedChanges'
@@ -1731,17 +1732,40 @@ function Frame(): React.JSX.Element {
     openRiffBrowserForCoach()
   }
 
-  /** "do it for me", and every move listed under "stuck?". The add goes
+  /**
+   * "do it for me", and every move listed under "stuck?". The add goes
    * through the bridge because only DiscoverPanel can add a slot properly
    * (see coachDiscoverBridge.ts); the bridge queues it if Discover is not
-   * open yet, which is why opening it afterwards is safe. */
+   * open yet, which is why opening it afterwards is safe. The section ops
+   * go through their own bridge for the same reason -- only
+   * SssketchySectionPanel can press its own buttons -- but with no queue,
+   * because that panel is mounted exactly while its steps are current.
+   *
+   * An exhaustive SWITCH, not an if-chain with a fallthrough. This was the
+   * latter, which meant every kind other than 'add-slot' landed on the
+   * lock-climax dispatch -- fine while there were only two kinds, and a
+   * silent wrong answer the moment a third arrived: every phase-two "do it
+   * for me" would have quietly re-locked the climax instead of carving.
+   * The `never` default makes the next new kind a typecheck failure here
+   * rather than a mystery at runtime.
+   */
   function handleCoachMove(action: CoachMoveAction): void {
-    if (action.kind === 'add-slot') {
-      requestCoachAddSlot(action.kinds)
-      if (!coachDiscoverIsOpen()) openDiscoverForCoach()
-      return
+    switch (action.kind) {
+      case 'add-slot':
+        requestCoachAddSlot(action.kinds)
+        if (!coachDiscoverIsOpen()) openDiscoverForCoach()
+        return
+      case 'lock-climax':
+        dispatch({ type: 'COACH_LOCK_CLIMAX', now: Date.now(), slots: coachSlots, bpm: state.bpm })
+        return
+      case 'section-op':
+        requestCoachSectionOp(action.op)
+        return
+      default: {
+        const _exhaustive: never = action
+        return _exhaustive
+      }
     }
-    dispatch({ type: 'COACH_LOCK_CLIMAX', now: Date.now(), slots: coachSlots, bpm: state.bpm })
   }
   // Shelf's own onSeedDiscover -- see its own doc comment for why this
   // lives here (App.tsx is the one place with access to both Shelf and
@@ -2445,6 +2469,11 @@ function Frame(): React.JSX.Element {
           <div style={{ flex: 1, minWidth: 0, position: 'relative' }}>
             <div
               ref={scrollContainerRef}
+              // Where sssketchy stands for the whole of phase two (see
+              // coachSteps.ts's TIMELINE), and what makes him WALK out of
+              // Discover when phase one ends: the anchor selector changes,
+              // useAnchorLeft measures a different left, and the walk plays.
+              data-coach-anchor="timeline"
               onWheel={handleTimelineWheel}
               style={{ height: '100%', overflowX: 'auto', overflowY: 'auto' }}
             >
