@@ -1,31 +1,29 @@
-/* Martian Mono, and it is the app's ONE typeface -- labels, prose, numbers,
-   everything. SIL Open Font License 1.1, licence beside it as
-   MartianMono-OFL.txt, which OFL requires travel with the font.
+/* Comic Relief, the app's one typeface. SIL Open Font License 1.1, licence
+   beside it as ComicRelief-OFL.txt, which OFL requires travel with the font.
 
-   Why this rather than another pixel face: what Silkscreen was really doing
-   here was panel labelling -- monoline strokes, square proportions, closed
-   apertures, meant to be small and tracked out, the text screen-printed onto
-   a synth. Martian Mono keeps all of that without being a bitmap, so it
-   stays legible in the places the app now puts whole sentences (sssketchy's
-   bubble, the tour, the keys list) where a 5px display face was being asked
-   to do a job it was never built for.
+   Two real cuts, Regular and Bold, and NO light -- so unlike Martian Mono
+   and Handjet before it, "only the light weight" cannot be honoured
+   literally here; --ra-fw-regular goes back to 400, which is this face's own
+   regular. Asking for 300 would have had the browser synthesise a thin,
+   which looks worse than the real thing.
 
-   Variable, with a real weight axis, so `font-weight: 100 900` lets the
-   browser interpolate a true instance instead of synthesising a bold. That
-   is also what makes the standing request -- "only the light weight version"
-   -- literally possible: --ra-fw-regular is a genuine 300.
+   A bold cut DOES exist, but case stays the emphasis: lowercase by default,
+   UPPERCASE on the few things that used to be bold. That decision is now
+   independent of whether a face ships a bold, which is the point of having
+   made it once in one place.
 
-   Deleted with this change: Silkscreen (two cuts) and Atkinson Hyperlegible
-   Mono (two cuts). Atkinson had been declared here and loaded into every
-   build since it was added, while nothing in the app ever referenced it.
-
-   CASE carries emphasis: lowercase by default, UPPERCASE on the few things
-   that used to be bold. Kept deliberately now that a real bold exists again,
-   rather than drifting back by accident. */
+   Metrically compatible with Comic Sans, and a long way from the panel
+   labelling Silkscreen was doing -- this is a deliberate tonal choice, not a
+   drift. */
 @font-face {
-  font-family: 'Martian Mono';
-  src: url('../assets/fonts/MartianMono.ttf') format('truetype-variations');
-  font-weight: 100 900;
+  font-family: 'Comic Relief';
+  src: url('../assets/fonts/ComicRelief-Regular.ttf') format('truetype');
+  font-weight: 400;
+}
+@font-face {
+  font-family: 'Comic Relief';
+  src: url('../assets/fonts/ComicRelief-Bold.ttf') format('truetype');
+  font-weight: 700;
 }
 
 * {
