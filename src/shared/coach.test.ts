@@ -3,6 +3,7 @@ import {
   COACH_STUCK_AFTER_MS,
   advanceCoach,
   coachAnimation,
+  coachIsComplete,
   coachLine,
   coachPhaseElapsedMs,
   coachStepElapsedMs,
@@ -13,7 +14,8 @@ import {
   restoreCoach,
   resumeCoach,
   sanitiseLoadedCoach,
-  startCoach
+  startCoach,
+  type CoachState
 } from './coach'
 import { COACH_DONE_LINES, COACH_STUCK_LINES } from './coachLines'
 import { COACH_STEPS, coachStepById, coachStepOrder, resolveCoachStep } from './coachSteps'
@@ -141,7 +143,15 @@ describe('dismissCoach', () => {
     expect(dismissed.stepId).toBe('p1-flavour')
   })
 
-  it('leaves a finished flow finished', () => {
+  // This test used to assert the opposite -- that dismissing a finished
+  // flow left it finished. That was wrong in the one way the user actually
+  // feels: the closing bubble's ONLY button is "done", which dispatches
+  // COACH_DISMISS, and the gate in SssketchyCoach.tsx only hides a flow
+  // whose status is 'dismissed'. So a finished flow could never be put
+  // away: the bubble sat over the app for the rest of the session and the
+  // button did nothing. Dismissing it is now an ordinary dismiss, and
+  // nothing about having finished is lost -- see coachIsComplete.
+  it('puts a finished flow away, keeping everything it produced', () => {
     let coach = startCoach(T0)
     let minute = 1
     while (coach.status !== 'finished') {
@@ -149,7 +159,46 @@ describe('dismissCoach', () => {
       minute += 1
       expect(minute).toBeLessThan(50)
     }
-    expect(dismissCoach(coach, T0 + 50 * MINUTE)).toEqual(coach)
+    const dismissed = dismissCoach(coach, T0 + 50 * MINUTE)
+    expect(dismissed.status).toBe('dismissed')
+    expect(dismissed.outcomes).toEqual(coach.outcomes)
+    expect(dismissed.stepId).toBe('finish')
+    // ...and the flow is still, durably, a finished one.
+    expect(coachIsComplete(dismissed)).toBe(true)
+  })
+})
+
+describe('coachIsComplete', () => {
+  function runToTheEnd(): CoachState {
+    let coach = startCoach(T0)
+    let minute = 1
+    while (coach.status !== 'finished') {
+      coach = advanceCoach(coach, T0 + minute * MINUTE, 'done')
+      minute += 1
+      expect(minute).toBeLessThan(50)
+    }
+    return coach
+  }
+
+  it('is false for a flow still in progress, dismissed or not', () => {
+    expect(coachIsComplete(startCoach(T0))).toBe(false)
+    expect(coachIsComplete(dismissCoach(startCoach(T0), T0 + MINUTE))).toBe(false)
+  })
+
+  it('survives a finished flow being put away, so the button still starts a fresh one', () => {
+    const finished = runToTheEnd()
+    const dismissed = dismissCoach(finished, T0 + 99 * MINUTE)
+    expect(coachIsComplete(dismissed)).toBe(true)
+    // Which is what keeps "resume" from walking back into a flow that has
+    // nowhere left to go.
+    expect(resumeCoach(dismissed, T0 + 100 * MINUTE)).toEqual(dismissed)
+  })
+
+  it('survives a save and reload of a finished, dismissed flow', () => {
+    const dismissed = dismissCoach(runToTheEnd(), T0 + 99 * MINUTE)
+    const loaded = sanitiseLoadedCoach(JSON.parse(JSON.stringify(dismissed)))
+    expect(loaded).not.toBeNull()
+    expect(coachIsComplete(loaded!)).toBe(true)
   })
 })
 

@@ -26,6 +26,7 @@ import {
   COACH_STEPS,
   FIRST_COACH_STEP_ID,
   coachStepById,
+  coachStepOrder,
   isCoachFlavour,
   isCoachStepId,
   nextCoachStepId,
@@ -136,11 +137,31 @@ export function pauseCoach(state: CoachState, now: number): CoachState {
   }
 }
 
+/**
+ * Whether this flow ran all the way to the end.
+ *
+ * Derived from the LAST step's outcome rather than read off `status`,
+ * because the two answer different questions: `status` is whether he is on
+ * screen right now, and a finished flow can be put away (dismissCoach), at
+ * which point its status is 'dismissed' like any other hidden flow. "Is
+ * there anything left to resume" has to survive that, and the outcome of
+ * the last step is the durable record of it -- it is already persisted, and
+ * already what the checklist ticks.
+ */
+export function coachIsComplete(state: CoachState): boolean {
+  if (state.status === 'finished') return true
+  const order = coachStepOrder(state.flavour)
+  return state.outcomes[order[order.length - 1]] !== undefined
+}
+
 /** The project-menu button's "resume a half-finished flow". Restarts the
  * clock only if it was stopped, so pressing the button while he is already
- * on screen is harmless. A finished flow has nothing to resume. */
+ * on screen is harmless. A completed flow has nothing to resume -- the
+ * button starts a fresh one instead (App.tsx's handleSssketchy), whether
+ * that flow is still showing its closing line or has already been put
+ * away. */
 export function resumeCoach(state: CoachState, now: number): CoachState {
-  if (state.status === 'finished') return state
+  if (coachIsComplete(state)) return state
   return { ...state, status: 'active', runningSince: state.runningSince ?? now }
 }
 
@@ -193,9 +214,16 @@ export function restoreCoach(state: CoachState, now: number): CoachState {
 
 /** "he can be... dismissed (which ends the guided flow, resumable later)"
  * (spec). Everything about where you were is kept; only the clock and his
- * presence stop. */
+ * presence stop.
+ *
+ * A FINISHED flow dismisses too, and that is the only way the closing
+ * bubble ever leaves the screen: its one button is "done", which dispatches
+ * exactly this. Outcomes, the locked climax and the sections are all kept,
+ * so nothing about having finished is lost -- coachIsComplete reads that
+ * off the last step's outcome, not off `status`, so the project-menu button
+ * still offers a fresh flow rather than resuming this one. */
 export function dismissCoach(state: CoachState, now: number): CoachState {
-  if (state.status === 'dismissed' || state.status === 'finished') return state
+  if (state.status === 'dismissed') return state
   return { ...pauseCoach(state, now), status: 'dismissed' }
 }
 

@@ -66,6 +66,7 @@ import {
   type CoachOfferAction
 } from '@shared/coachSteps'
 import { isDiscoverSlotKind, type CoachSlotSnapshot } from '@shared/coachClimax'
+import { coachIsComplete } from '@shared/coach'
 import { slotKindsKey } from '@shared/discoverSlotKind'
 import { coachDiscoverIsOpen, requestCoachAddSlot } from './state/coachDiscoverBridge'
 import { BusyProvider, useBusy } from './state/BusyContext'
@@ -740,10 +741,14 @@ function ProjectMenu({
    * on screen at exactly the step it was left on.
    *
    * A FINISHED flow has nowhere left to resume to, so pressing it then
-   * starts a fresh one -- the title below says so before it happens.
+   * starts a fresh one -- the title below says so before it happens. That
+   * is coachIsComplete rather than status === 'finished' because a finished
+   * flow can be put away ("done" on the closing bubble), after which its
+   * status is 'dismissed' like any other hidden flow and only the last
+   * step's outcome still says it ran to the end.
    */
   const coach = state.coach
-  const coachFinished = coach !== null && coach.status === 'finished'
+  const coachFinished = coach !== null && coachIsComplete(coach)
   const coachResumable = coach !== null && !coachFinished
   function handleSssketchy(): void {
     const now = Date.now()
