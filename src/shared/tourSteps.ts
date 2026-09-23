@@ -20,8 +20,8 @@ export interface TourStep {
    * refs through.
    *
    * Every one of these must be MOUNTED for the whole tour, not just present
-   * somewhere in the app: App.tsx's startTour forces arranger mode 'normal'
-   * and mapView off, and imports+places a demo rifff, precisely so the
+   * somewhere in the app: App.tsx's startTour forces the arranger into its
+   * 'normal' view and imports+places a demo rifff, precisely so the
    * timeline, the ruler and a clip all exist while the tour runs. */
   selector: string
   title: string
@@ -39,9 +39,11 @@ export interface TourStep {
  *      door) and tidy up (where a stem's role is actually confirmed). Both
  *      live behind the same button, so they sit next to each other and the
  *      spotlight stays put across the pair.
- * 4. the map -- the second view of the arrangement, and undiscoverable
- *    otherwise.
- * 5-7. the fiddly manual things, last: clips, zoom, modes.
+ * 4-5. the fiddly manual things: clips, then zoom.
+ * 6-7. the three views, last, and both on the one button that reaches
+ *      them -- first that the button cycles all three, then what the map
+ *      itself is, since it is the one a new user has not already seen.
+ *      Adjacent, so the spotlight sits still across the pair.
  *
  * Seven is the ceiling. A first-run tour that enumerates every feature
  * teaches nothing -- risers, the sound toolkit and the phrase report are
@@ -70,11 +72,6 @@ export const TOUR_STEPS: readonly TourStep[] = [
     title: 'labeling stems',
     body: 'tidy up is where you say what each stem is, for this sketch or your whole library.'
   },
-  {
-    selector: '[data-tour-id="tour-map"]',
-    title: 'the map',
-    body: 'this button swaps the timeline for the map: rows and sections, one cell per pass of the loop.'
-  },
   // One step, not the two it used to be ("the timeline" and "muting clips"),
   // which spotlighted the same clip back to back -- the second was a step that
   // moved nothing on screen. Anchored on the clip's waveform body rather than
@@ -94,7 +91,17 @@ export const TOUR_STEPS: readonly TourStep[] = [
   },
   {
     selector: '[data-tour-id="tour-mode"]',
-    title: 'arrange, sketch, automation',
-    body: 'this button cycles modes: arrange is the timeline, sketch is a rough layout, automation draws curves.'
+    title: 'arrange, sketch, map',
+    body: 'this button cycles the three views: arrange is the timeline, sketch is a rough layout, map is the whole track.'
+  },
+  // Second step on the mode button, and adjacent to it on purpose (see the
+  // ordering note above). The map took the tour-map anchor with it when the
+  // titlebar's own map/timeline button folded into the cycle -- what it
+  // actually IS still needs saying, and this is now the only button that
+  // reaches it.
+  {
+    selector: '[data-tour-id="tour-mode"]',
+    title: 'the map',
+    body: 'the map is rows and sections, one cell per pass of the loop; clicking a cell edits the real clips.'
   }
 ]

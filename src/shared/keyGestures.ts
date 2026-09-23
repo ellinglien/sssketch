@@ -21,8 +21,8 @@
  * about their own behaviour by the time they were cut. Where the handler
  * turned out to be narrower than the tooltip claimed (option+drag stretches
  * a ONE-SHOT's edge, not every clip's; escape closes a riser's own sweep
- * lane, not an automation-mode lane), the narrower thing is what is written
- * here.
+ * lane, not one opened by the transport bar's automation toggle), the
+ * narrower thing is what is written here.
  */
 
 export interface KeyGesture {
@@ -43,7 +43,7 @@ export const KEY_GESTURES: readonly KeyGestureGroup[] = [
     area: 'transport and timeline',
     gestures: [
       { keys: 'space', does: 'play or pause' },
-      { keys: 'tab', does: 'cycle arrange, sketch, automation' },
+      { keys: 'tab', does: 'cycle the arrange, sketch and map views' },
       { keys: 'cmd+s', does: 'save' },
       { keys: 'cmd+z', does: 'undo' },
       { keys: 'cmd+shift+z', does: 'redo' },
