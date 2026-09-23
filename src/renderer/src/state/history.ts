@@ -90,7 +90,22 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'COACH_RESTORE',
   'COACH_DISMISS',
   'COACH_SET_FLAVOUR',
-  'COACH_LOCK_CLIMAX'
+  'COACH_LOCK_CLIMAX',
+  // Phase two's own flow bookkeeping -- same category as every other
+  // COACH_* entry above: where sssketchy is, not an edit to the project.
+  'COACH_START_SECTION',
+  'COACH_SET_SECTION_NAME',
+  'COACH_NUDGE_SECTION_BARS',
+  'COACH_TOGGLE_SECTION_STEM',
+  'COACH_DROP_SUGGESTED_STEMS',
+  // COACH_PLACE_SECTION is listed here so a stray direct dispatch cannot
+  // push a checkpoint of its own -- but in real use it is ALWAYS dispatched
+  // inside the same BATCH as the arranger actions that place the section's
+  // clips (SssketchySectionPanel.tsx). The BATCH branch above runs before
+  // this set is consulted, so that group gets exactly one checkpoint: the
+  // clips and the flow's record of the section undo together, which is what
+  // "one undo step per section" (spec) means.
+  'COACH_PLACE_SECTION'
 ])
 
 export function createHistoryState(present: AppState): HistoryState {

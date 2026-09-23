@@ -2907,3 +2907,111 @@ describe('the guided flow (sssketchy)', () => {
     ).toBeNull()
   })
 })
+
+describe('the phase-two coach actions', () => {
+  const NOW = 1_700_000_000_000
+
+  const climaxSlots: CoachSlotSnapshot[] = [
+    {
+      id: 's1',
+      kinds: ['drums'],
+      gain: 1,
+      audible: true,
+      rolling: false,
+      stem: {
+        path: '/kick.wav',
+        name: 'kick',
+        author: 'e',
+        type: 'drums',
+        durationSec: 4,
+        barLength: 4
+      }
+    },
+    {
+      id: 's2',
+      kinds: ['lead', 'bright'],
+      gain: 0.8,
+      audible: true,
+      rolling: false,
+      stem: {
+        path: '/hook.wav',
+        name: 'hook',
+        author: 'e',
+        type: 'fx',
+        durationSec: 4,
+        barLength: 4
+      }
+    }
+  ]
+
+  function lockedState(): AppState {
+    let state = reducer(initialState, { type: 'COACH_START', now: NOW })
+    state = reducer(state, { type: 'COACH_LOCK_CLIMAX', now: NOW, slots: climaxSlots, bpm: 120 })
+    return state
+  }
+
+  it('opens a section with every stem on', () => {
+    const state = reducer(lockedState(), {
+      type: 'COACH_START_SECTION',
+      now: NOW,
+      sectionType: 'intro'
+    })
+    expect(state.coach?.stepId).toBe('p2-section')
+    expect(state.coach?.draftSection?.droppedPaths).toEqual([])
+  })
+
+  it('renames, nudges, toggles and drops the suggested ones', () => {
+    let state = reducer(lockedState(), {
+      type: 'COACH_START_SECTION',
+      now: NOW,
+      sectionType: 'intro'
+    })
+    state = reducer(state, { type: 'COACH_SET_SECTION_NAME', name: 'the way in' })
+    state = reducer(state, { type: 'COACH_NUDGE_SECTION_BARS', delta: 8 })
+    expect(state.coach?.draftSection?.name).toBe('the way in')
+    expect(state.coach?.draftSection?.bars).toBe(16)
+
+    state = reducer(state, { type: 'COACH_TOGGLE_SECTION_STEM', path: '/kick.wav' })
+    expect(state.coach?.draftSection?.droppedPaths).toEqual(['/kick.wav'])
+
+    state = reducer(state, { type: 'COACH_DROP_SUGGESTED_STEMS' })
+    expect(state.coach?.draftSection?.droppedPaths).toEqual(['/kick.wav', '/hook.wav'])
+  })
+
+  it('records a placed section and moves on', () => {
+    let state = reducer(lockedState(), {
+      type: 'COACH_START_SECTION',
+      now: NOW,
+      sectionType: 'intro'
+    })
+    state = reducer(state, {
+      type: 'COACH_PLACE_SECTION',
+      now: NOW,
+      startBar: 0,
+      placedGroupIds: { '/kick.wav': 'g1' }
+    })
+    expect(state.coach?.stepId).toBe('p2-next')
+    expect(state.coach?.sections).toHaveLength(1)
+    expect(state.coach?.sections[0].startBar).toBe(0)
+  })
+
+  it('every phase-two action is a no-op when no flow exists', () => {
+    expect(
+      reducer(initialState, { type: 'COACH_START_SECTION', now: NOW, sectionType: 'intro' }).coach
+    ).toBeNull()
+    expect(reducer(initialState, { type: 'COACH_SET_SECTION_NAME', name: 'x' }).coach).toBeNull()
+    expect(reducer(initialState, { type: 'COACH_NUDGE_SECTION_BARS', delta: 4 }).coach).toBeNull()
+    expect(
+      reducer(initialState, { type: 'COACH_TOGGLE_SECTION_STEM', path: '/x' }).coach
+    ).toBeNull()
+    expect(reducer(initialState, { type: 'COACH_DROP_SUGGESTED_STEMS' }).coach).toBeNull()
+    expect(
+      reducer(initialState, {
+        type: 'COACH_PLACE_SECTION',
+        now: NOW,
+        startBar: 0,
+        placedGroupIds: {}
+      }).coach
+    ).toBeNull()
+  })
+})

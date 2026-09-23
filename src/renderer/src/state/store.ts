@@ -23,6 +23,15 @@ import {
   type CoachState
 } from '@shared/coach'
 import { answerCoachFlavour, lockCoachClimax } from '@shared/coachPhase1'
+import {
+  dropSuggestedCoachSectionStems,
+  nudgeCoachSectionBars,
+  placeCoachSection,
+  setCoachSectionName,
+  startCoachSection,
+  toggleCoachSectionStem
+} from '@shared/coachPhase2'
+import type { CoachSectionType } from '@shared/coachSections'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import type { CoachFlavour } from '@shared/coachSteps'
 
@@ -733,6 +742,22 @@ export type Action =
       slots: readonly CoachSlotSnapshot[]
     }
   | { type: 'COACH_LOCK_CLIMAX'; now: number; slots: readonly CoachSlotSnapshot[]; bpm: number }
+  // Phase two (2026-09-22). `sectionType` rather than `type`, which is
+  // already the action's own discriminant. COACH_PLACE_SECTION carries the
+  // startBar and groupIds the caller REALLY used, because it is always
+  // dispatched inside the same BATCH as the arranger actions that produced
+  // them -- see history.ts's own note.
+  | { type: 'COACH_START_SECTION'; now: number; sectionType: CoachSectionType }
+  | { type: 'COACH_SET_SECTION_NAME'; name: string }
+  | { type: 'COACH_NUDGE_SECTION_BARS'; delta: number }
+  | { type: 'COACH_TOGGLE_SECTION_STEM'; path: string }
+  | { type: 'COACH_DROP_SUGGESTED_STEMS' }
+  | {
+      type: 'COACH_PLACE_SECTION'
+      now: number
+      startBar: number
+      placedGroupIds: Record<string, string>
+    }
   | { type: 'LOAD_STATE'; state: AppState }
 
 // Hand-synced copy of selectors.ts's own TIDIED_BUS_ORDER -- store.ts can't
@@ -2010,6 +2035,50 @@ export function reducer(state: AppState, action: Action): AppState {
         : {
             ...state,
             coach: lockCoachClimax(state.coach, action.now, action.slots, action.bpm)
+          }
+
+    case 'COACH_START_SECTION':
+      return state.coach === null
+        ? state
+        : {
+            ...state,
+            coach: startCoachSection(state.coach, action.now, action.sectionType)
+          }
+
+    case 'COACH_SET_SECTION_NAME':
+      return state.coach === null
+        ? state
+        : { ...state, coach: setCoachSectionName(state.coach, action.name) }
+
+    case 'COACH_NUDGE_SECTION_BARS':
+      return state.coach === null
+        ? state
+        : { ...state, coach: nudgeCoachSectionBars(state.coach, action.delta) }
+
+    case 'COACH_TOGGLE_SECTION_STEM':
+      return state.coach === null
+        ? state
+        : { ...state, coach: toggleCoachSectionStem(state.coach, action.path) }
+
+    // The one bulk subtraction in the feature, and it only ever arrives
+    // from a click on "drop the suggested ones". Nothing else in this
+    // reducer may apply the suggestion table.
+    case 'COACH_DROP_SUGGESTED_STEMS':
+      return state.coach === null
+        ? state
+        : { ...state, coach: dropSuggestedCoachSectionStems(state.coach) }
+
+    case 'COACH_PLACE_SECTION':
+      return state.coach === null
+        ? state
+        : {
+            ...state,
+            coach: placeCoachSection(
+              state.coach,
+              action.now,
+              action.startBar,
+              action.placedGroupIds
+            )
           }
 
     case 'LOAD_STATE':
