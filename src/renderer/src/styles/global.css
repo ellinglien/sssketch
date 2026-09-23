@@ -1,36 +1,30 @@
-@font-face {
-  font-family: 'Atkinson Hyperlegible Mono';
-  src: url('../assets/fonts/AtkinsonHyperlegibleMono-Regular.ttf') format('truetype');
-  font-weight: 400;
-}
-@font-face {
-  font-family: 'Atkinson Hyperlegible Mono';
-  src: url('../assets/fonts/AtkinsonHyperlegibleMono-Bold.ttf') format('truetype');
-  font-weight: 700;
-}
-/* Handjet (SIL Open Font License 1.1, so it can ship; its licence travels
-   beside it as Handjet-OFL.txt, which OFL requires).
+/* Martian Mono, and it is the app's ONE typeface -- labels, prose, numbers,
+   everything. SIL Open Font License 1.1, licence beside it as
+   MartianMono-OFL.txt, which OFL requires travel with the font.
 
-   Unlike every face tried before it, Handjet is VARIABLE -- one file with a
-   real weight axis from Thin to Black. That is why the @font-face declares
-   `font-weight: 100 900` rather than a single value: the browser
-   interpolates, so any weight in that range is a real instance and nothing
-   is ever synthesised.
+   Why this rather than another pixel face: what Silkscreen was really doing
+   here was panel labelling -- monoline strokes, square proportions, closed
+   apertures, meant to be small and tracked out, the text screen-printed onto
+   a synth. Martian Mono keeps all of that without being a bitmap, so it
+   stays legible in the places the app now puts whole sentences (sssketchy's
+   bubble, the tour, the keys list) where a 5px display face was being asked
+   to do a job it was never built for.
 
-   It also makes the original request literally possible. "can we use only
-   the light weight version of the font" could not be honoured with
-   Silkscreen or Tiny5, which ship one or two fixed cuts and no light at all
-   -- the best either allowed was "stop using bold". Here `--ra-fw-regular`
-   is set to a genuine 300, and body inherits it.
+   Variable, with a real weight axis, so `font-weight: 100 900` lets the
+   browser interpolate a true instance instead of synthesising a bold. That
+   is also what makes the standing request -- "only the light weight version"
+   -- literally possible: --ra-fw-regular is a genuine 300.
 
-   CASE still carries emphasis: lowercase by default (the case the copy is
-   written in, and what tokens.css always asked for), UPPERCASE on the few
-   things that used to be bold. Kept even though a real bold now exists,
-   because the app has been read that way since the switch -- worth
-   revisiting deliberately rather than by accident. */
+   Deleted with this change: Silkscreen (two cuts) and Atkinson Hyperlegible
+   Mono (two cuts). Atkinson had been declared here and loaded into every
+   build since it was added, while nothing in the app ever referenced it.
+
+   CASE carries emphasis: lowercase by default, UPPERCASE on the few things
+   that used to be bold. Kept deliberately now that a real bold exists again,
+   rather than drifting back by accident. */
 @font-face {
-  font-family: 'Silkscreen';
-  src: url('../assets/fonts/Handjet.ttf') format('truetype-variations');
+  font-family: 'Martian Mono';
+  src: url('../assets/fonts/MartianMono.ttf') format('truetype-variations');
   font-weight: 100 900;
 }
 
