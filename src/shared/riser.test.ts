@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  MIN_DRAWN_RISER_LENGTH_BARS,
   MIN_RISER_LENGTH_BARS,
   RISER_DEFAULTS,
   RISER_NAME_PREFIX,
@@ -11,6 +12,7 @@ import {
   normaliseLoadedRisers,
   normaliseRiser,
   riserCutoffAt,
+  riserDragExtent,
   riserEndBar,
   riserEnvelopeAt,
   riserSoundingEndBar,
@@ -323,5 +325,68 @@ describe('normaliseLoadedRisers', () => {
 
   it('returns an empty record for a project saved before risers existed', () => {
     expect(normaliseLoadedRisers(undefined)).toEqual({})
+  })
+})
+
+describe('riserDragExtent', () => {
+  it('spans the bars the drag actually crossed, snapped to whole bars', () => {
+    expect(riserDragExtent(4, 12)).toEqual({ startBar: 4, lengthBars: 8 })
+  })
+
+  it('snaps a fractional drag to the nearest downbeat at both ends', () => {
+    expect(riserDragExtent(4.4, 11.6)).toEqual({ startBar: 4, lengthBars: 8 })
+    expect(riserDragExtent(3.6, 12.4)).toEqual({ startBar: 4, lengthBars: 8 })
+  })
+
+  it('reads a leftward drag as starting where the cursor ended up', () => {
+    expect(riserDragExtent(12, 4)).toEqual({ startBar: 4, lengthBars: 8 })
+  })
+
+  it('falls back to the default length for a press that never moved', () => {
+    expect(riserDragExtent(6, 6)).toEqual({
+      startBar: 6,
+      lengthBars: RISER_DEFAULTS.lengthBars
+    })
+  })
+
+  it('falls back to the default length for a drag shorter than one bar', () => {
+    expect(riserDragExtent(6, 6.3)).toEqual({
+      startBar: 6,
+      lengthBars: RISER_DEFAULTS.lengthBars
+    })
+    // A sub-bar drag to the LEFT still builds rightward from the anchor,
+    // exactly like the old click-to-place did.
+    expect(riserDragExtent(6, 5.7)).toEqual({
+      startBar: 6,
+      lengthBars: RISER_DEFAULTS.lengthBars
+    })
+  })
+
+  it('never produces a riser shorter than one whole bar', () => {
+    for (const cursor of [0, 0.1, 0.49, 0.5, 0.99, 1, 1.5, -3]) {
+      const extent = riserDragExtent(0.2, cursor)
+      expect(extent.lengthBars).toBeGreaterThanOrEqual(MIN_DRAWN_RISER_LENGTH_BARS)
+      expect(extent.lengthBars).toBeGreaterThan(MIN_RISER_LENGTH_BARS)
+    }
+  })
+
+  it('clamps a drag dragged off the left edge of the timeline to bar 0', () => {
+    expect(riserDragExtent(3, -9)).toEqual({ startBar: 0, lengthBars: 3 })
+    expect(riserDragExtent(-9, -4)).toEqual({
+      startBar: 0,
+      lengthBars: RISER_DEFAULTS.lengthBars
+    })
+  })
+
+  it('survives a non-finite bar rather than writing NaN into a riser', () => {
+    expect(riserDragExtent(Number.NaN, 8)).toEqual({ startBar: 0, lengthBars: 8 })
+    expect(riserDragExtent(8, Number.POSITIVE_INFINITY)).toEqual({
+      startBar: 8,
+      lengthBars: RISER_DEFAULTS.lengthBars
+    })
+  })
+
+  it('takes a caller-supplied fallback length for the no-drag case', () => {
+    expect(riserDragExtent(2, 2, 8)).toEqual({ startBar: 2, lengthBars: 8 })
   })
 })

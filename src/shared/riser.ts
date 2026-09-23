@@ -113,6 +113,17 @@ export const RISER_DEFAULTS = {
  * progress math the engine runs per sample. */
 export const MIN_RISER_LENGTH_BARS = 0.25
 
+/** The shortest riser the CREATION gesture will draw: one whole bar.
+ *
+ * Distinct from MIN_RISER_LENGTH_BARS above, and deliberately much larger.
+ * That one is a safety floor for data arriving from anywhere (a hand-edited
+ * project, a left-edge resize) -- "not zero, because the engine divides by
+ * it". This one is a statement about the GESTURE: a riser's job is to arrive
+ * exactly on a downbeat, so the extent drag snaps to whole bars, and the
+ * shortest thing a whole-bar snap can express other than nothing at all is
+ * one bar. */
+export const MIN_DRAWN_RISER_LENGTH_BARS = 1
+
 /** The stem of every default riser name -- "riser 1", "riser 2", ... Lower
  * case with no punctuation, matching this app's copy rules (tokens.css). */
 export const RISER_NAME_PREFIX = 'riser'
@@ -162,6 +173,68 @@ export function createRiser(fields: {
     name: fields.name ?? '',
     muted: false
   })
+}
+
+function finiteBarOrZero(bar: number): number {
+  if (!Number.isFinite(bar)) return 0
+  return Math.max(0, Math.round(bar))
+}
+
+/**
+ * The whole-bar extent a riser-creation drag currently describes -- where the
+ * riser starts and how long it is -- given the bar the drag was ANCHORED at
+ * (the press) and the bar the cursor is on now.
+ *
+ * This is the whole of "prompt the user to select the width first, then draw
+ * the line" (Elling, 2026-09-23) as a pure function, so the component that
+ * owns the gesture only has to turn pixels into bars and draw a rectangle.
+ * The same call answers both questions the gesture asks -- what to PREVIEW
+ * while the mouse is down, and what to CREATE on release -- on purpose: a
+ * preview that could disagree with what release produces is worse than no
+ * preview.
+ *
+ * Three rules, each of which is a decision rather than an implementation
+ * detail:
+ *
+ * - **Both ends snap to the nearest downbeat.** A riser exists to arrive
+ *   exactly on one (see RiserBlock's beginMove, which for the same reason
+ *   deliberately has no fine-position modifier), so there is no sub-bar
+ *   extent to express and no Option-key escape hatch from the grid.
+ * - **Direction does not matter.** Dragging right from bar 4 to bar 12 and
+ *   dragging left from bar 12 to bar 4 both mean bars 4 through 12. The
+ *   anchor is an edge, not necessarily the start.
+ * - **A drag that never covered a whole bar falls back to the DEFAULT
+ *   length, rightward from the anchor** -- i.e. exactly what right-clicking
+ *   and picking "add riser here" used to do on its own. The alternative
+ *   (create nothing) was rejected: the user has already said "make a riser"
+ *   by choosing the menu item, so a hesitant click would then produce
+ *   nothing at all, with the armed gesture silently gone and no way to tell
+ *   whether the app heard them. This way the gesture is purely additive --
+ *   a click is the old behaviour, a drag is the new one -- and, because the
+ *   fallback is RISER_DEFAULTS.lengthBars rather than zero, no sequence of
+ *   inputs can produce a zero-length riser. Escape, not a click, is how you
+ *   back out (the component's job; see RiserExtentGesture in App.tsx).
+ */
+export function riserDragExtent(
+  anchorBar: number,
+  cursorBar: number,
+  fallbackLengthBars: number = RISER_DEFAULTS.lengthBars
+): { startBar: number; lengthBars: number } {
+  const anchor = finiteBarOrZero(anchorBar)
+  // A non-finite CURSOR collapses onto the anchor (i.e. reads as "no drag
+  // happened yet") rather than onto bar 0 the way a non-finite anchor does:
+  // treating it as 0 would silently turn a garbled pointer position into a
+  // riser stretching all the way back to the start of the arrangement.
+  const cursor = Number.isFinite(cursorBar) ? Math.max(0, Math.round(cursorBar)) : anchor
+  const startBar = Math.min(anchor, cursor)
+  const lengthBars = Math.max(anchor, cursor) - startBar
+  if (lengthBars < MIN_DRAWN_RISER_LENGTH_BARS) {
+    return {
+      startBar: anchor,
+      lengthBars: Math.max(MIN_DRAWN_RISER_LENGTH_BARS, Math.round(fallbackLengthBars))
+    }
+  }
+  return { startBar, lengthBars }
 }
 
 /**
