@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   coachSlotRole,
   isDiscoverSlotKind,
+  kindsCoverSet,
   lockClimaxFromSlots,
   sanitiseLockedClimax,
   type CoachSlotSnapshot
@@ -140,5 +141,17 @@ describe('isDiscoverSlotKind', () => {
     expect(isDiscoverSlotKind('bassHeavy')).toBe(true)
     expect(isDiscoverSlotKind('banana')).toBe(false)
     expect(isDiscoverSlotKind(7)).toBe(false)
+  })
+})
+
+describe('kindsCoverSet', () => {
+  it('is a superset test, not an overlap test', () => {
+    expect(kindsCoverSet(['lead', 'bright'], ['lead'])).toBe(true)
+    expect(kindsCoverSet(['lead'], ['lead', 'bright'])).toBe(false)
+    expect(kindsCoverSet(['lead', 'warm'], ['lead', 'bright'])).toBe(false)
+  })
+
+  it('is false for an empty wanted set, never vacuously true', () => {
+    expect(kindsCoverSet(['drums'], [])).toBe(false)
   })
 })

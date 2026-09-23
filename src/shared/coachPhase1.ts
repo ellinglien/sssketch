@@ -15,7 +15,7 @@
  */
 
 import { coachLine, pauseCoach, type CoachOutcome, type CoachState } from './coach'
-import { lockClimaxFromSlots, type CoachSlotSnapshot } from './coachClimax'
+import { kindsCoverSet, lockClimaxFromSlots, type CoachSlotSnapshot } from './coachClimax'
 import {
   COACH_SEEDED_LINE_TEMPLATES,
   COACH_STEP_SATISFIED_LINES,
@@ -46,8 +46,7 @@ export function slotCoversKindSet(
   want: readonly DiscoverSlotKind[]
 ): boolean {
   if (slot.stem === null) return false
-  const kinds = new Set(normalizeSlotKinds(slot.kinds))
-  return want.every((kind) => kinds.has(kind))
+  return kindsCoverSet(slot.kinds, want)
 }
 
 /** Whether any current slot completes this step. A step with no

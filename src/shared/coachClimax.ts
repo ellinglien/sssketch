@@ -88,6 +88,27 @@ export function coachSlotRole(kinds: readonly DiscoverSlotKind[]): ArrangeRole {
   return discoverSlotKindToArrangeRole(normalized[0])
 }
 
+/**
+ * The one superset rule every kind-set check in this feature shares: a set
+ * of kinds COVERS a wanted set when it contains all of them.
+ *
+ * Superset, not overlap, is what keeps a {leadesque, buttery} harmony stem
+ * from answering for a {leadesque, sparkly} hook -- and normalizeSlotKinds
+ * allows at most one of sparkly/buttery in a set, so those two can never
+ * collide. Phase one uses it to decide whether a step is satisfied
+ * (slotCoversKindSet, ./coachPhase1.ts); phase two uses it to decide
+ * whether a section type's suggested drop applies to a stem
+ * (./coachSections.ts). One rule, one implementation.
+ */
+export function kindsCoverSet(
+  kinds: readonly DiscoverSlotKind[],
+  want: readonly DiscoverSlotKind[]
+): boolean {
+  if (want.length === 0) return false
+  const owned = new Set(normalizeSlotKinds(kinds))
+  return want.every((kind) => owned.has(kind))
+}
+
 function clampGain(value: unknown): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 1
   return Math.max(0, Math.min(1, value))
