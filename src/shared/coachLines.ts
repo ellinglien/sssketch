@@ -59,3 +59,28 @@ export const COACH_DONE_LINES: readonly string[] = [
   'done. nothing here is locked, it is all normal clips.',
   'that is a v1. go and listen to it.'
 ]
+
+/** What the bubble says once the current step's own completion condition is
+ * met -- "a step completes when a slot with those kinds resolves" (spec).
+ * It reports the CONDITION, never the result: nothing here says the stem is
+ * good, or that the step's work is finished, because only the person
+ * listening knows that. next and skip stay available either way. */
+export const COACH_STEP_SATISFIED_LINES: readonly string[] = [
+  'this step has what it asked for. next when you are ready.',
+  'that is the slot this step was after. next, or keep rerolling it.',
+  'covered. move on whenever you like.',
+  'the step is satisfied. whether it is finished is your call, not mine.'
+]
+
+/** Named once, on the step a seeded start lands you on: "seeded starts mark
+ * already-covered roles done ('you've got drums and bass, next: harmony')"
+ * (spec). {covered} is the list of role names Discover itself tagged;
+ * {next} is the label of the step you are now on. Templates rather than
+ * finished lines so the copy rules still get tested here, in one place with
+ * the rest of the vocabulary. */
+export const COACH_SEEDED_LINE_TEMPLATES: readonly string[] = [
+  'you already have {covered}. next: {next}.',
+  '{covered} is already covered by that riff. next: {next}.',
+  'that riff brings {covered} with it, so we skip ahead. next: {next}.',
+  'marked done from the riff you started with: {covered}. next: {next}.'
+]

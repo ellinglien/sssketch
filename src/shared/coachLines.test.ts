@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   COACH_DONE_LINES,
   COACH_NO_MOVES_LINES,
+  COACH_SEEDED_LINE_TEMPLATES,
+  COACH_STEP_SATISFIED_LINES,
   COACH_STUCK_LINES,
   pickLineVariant
 } from './coachLines'
@@ -31,7 +33,13 @@ describe('pickLineVariant', () => {
 })
 
 describe('the shared line tables', () => {
-  const tables = [COACH_STUCK_LINES, COACH_NO_MOVES_LINES, COACH_DONE_LINES]
+  const tables = [
+    COACH_STUCK_LINES,
+    COACH_NO_MOVES_LINES,
+    COACH_DONE_LINES,
+    COACH_STEP_SATISFIED_LINES,
+    COACH_SEEDED_LINE_TEMPLATES
+  ]
 
   it('each give at least three variants', () => {
     for (const table of tables) expect(table.length).toBeGreaterThanOrEqual(3)
@@ -53,6 +61,15 @@ describe('the shared line tables', () => {
         expect(line).not.toMatch(/it looks like/i)
         expect(line).not.toMatch(/your track needs/i)
       }
+    }
+  })
+})
+
+describe('the seeded-start templates', () => {
+  it('each name both the roles already covered and the step that follows', () => {
+    for (const template of COACH_SEEDED_LINE_TEMPLATES) {
+      expect(template).toContain('{covered}')
+      expect(template).toContain('{next}')
     }
   })
 })
