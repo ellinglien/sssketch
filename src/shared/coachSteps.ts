@@ -181,12 +181,17 @@ export interface CoachStepDef {
    * worth threading refs through. */
   anchorSelector?: string
   /** The parts of this row that change with the answer to the melodic-or-
-   * groove question. Only two rows have one: the low end (groove wants a
-   * kick alongside the bass; melodic wants bass under the harmony that is
-   * already there) and drums (groove has already placed a kick, so its
-   * drums step is the kit filling out). Everything else reads the same
-   * either way, and duplicating it into twelve rows would just be two
-   * copies of the same copy to keep in sync. */
+   * groove question. Only two rows have one, and only for GROOVE: the low
+   * end (which on a groove is the bass and the kick together, so it carries
+   * a second move and a second satisfying kind set) and drums (whose groove
+   * order puts it after that, so the step is aimed at the busier layer).
+   * Everything else reads the same either way, and duplicating it into
+   * twelve rows would just be two copies of the same copy to keep in sync.
+   *
+   * An override exists for what a step DOES differently, never for a
+   * different story about what the user has by now -- next/skip mean no
+   * step can assume the step before it produced anything. See
+   * coachSteps.test.ts's "never asserts what is already in the project". */
   byFlavour?: Partial<Record<CoachFlavour, CoachStepOverride>>
 }
 
@@ -211,7 +216,7 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
       'two ways in. melodic, or groove? it only sets the order of the next few steps.',
       'first question: melodic or groove. nothing rides on it except what we stack first.',
       'melodic or groove. either way you end up with the same loop, built in a different order.',
-      'pick a way in -- melodic or groove -- or start from a riff you already love.'
+      'pick a way in -- melodic or groove -- or start from a riff you love.'
     ],
     // Deliberately empty. "do it for me" is disabled here, and that is the
     // point: answering this for you would be the app making a decision
@@ -275,16 +280,13 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
         ],
         primaryMoveId: 'low-end-bass',
         satisfiedBy: [['bass'], ['drums']]
-      },
-      melodic: {
-        label: 'the low end',
-        lines: [
-          'now the bottom. a bassish stem under the harmony you just picked.',
-          'low end next, under what is already there. bassish is armed.',
-          'give it a floor: one bassish stem below the harmony.',
-          'this step is the bass. it goes under the harmony, not over it.'
-        ]
       }
+      // No melodic override any more. The one it had existed only to say
+      // the bass goes "under the harmony you just picked" -- which the
+      // melodic ORDER makes likely and next/skip make false whenever the
+      // harmony step was skipped. The base row above says what this step
+      // is for without claiming anything about the project, and reads
+      // correctly on every route into it.
     }
   },
   {
@@ -319,7 +321,7 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     label: 'drums',
     lines: [
       'drums now. the add row is armed for drummy.',
-      'time for the kit. one drummy stem, under the harmony and the bass.',
+      'time for the kit. this step is one drummy stem.',
       'this step is drums. add one, reroll it as many times as you like.',
       'drums go in here. drummy is armed below.'
     ],
@@ -337,10 +339,10 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
       groove: {
         label: 'drums, filled out',
         lines: [
-          'the kick is already down. this step fills the kit out -- drummy, on the rhythmic side.',
-          'more drums. the add row is armed for drummy \u00b7 rhythmic, on top of what is there.',
-          'fill the kit out: a second drummy layer, the busy one.',
-          'drums again, this time the part that moves. drummy \u00b7 rhythmic is armed.'
+          'this step is the busy end of the kit -- drummy, on the rhythmic side.',
+          'drums that move. the add row is armed for drummy \u00b7 rhythmic.',
+          'the kit fills out here. drummy \u00b7 rhythmic is armed; a plain drummy one is under "stuck".',
+          'this one is for the part of the kit that keeps moving. reroll it as often as you like.'
         ],
         moves: [
           {
@@ -474,7 +476,7 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
       'every stem from the locked loop is on. switch off what this section does not need.',
       'this section starts as the whole climax loop. subtracting is the only thing that changes it.',
       'name it, set its length, then turn things off. nothing comes out unless you take it out.',
-      'the full loop is playing. the marked ones are what this kind of section usually loses.'
+      'nothing is off yet. the marked ones are what this kind of section usually loses.'
     ],
     // The panel's own three buttons, restated here so the bubble's "stuck?"
     // list and "do it for me" can never offer a different set of moves than
@@ -505,11 +507,15 @@ export const COACH_STEPS: readonly CoachStepDef[] = [
     id: 'p2-next',
     phase: 'arrangement',
     label: 'what comes next',
+    // Nothing here says a section went down. The placed case has its own
+    // line, built from the section's real name (coachSectionLine,
+    // ./coachPhase2.ts); these show on the route that reaches this step
+    // WITHOUT placing anything, which is skip from the section step.
     lines: [
-      'that section is on the timeline, as ordinary clips. what comes next?',
-      'down it goes. pick what follows, or stop here -- skip ends phase two.',
-      'placed. the usual next moves are on the panel; an outro is what ends this phase.',
-      'that is one section. keep going, or call the arrangement done and move to polish.'
+      'what comes next? the panel lists the usual follow-ons.',
+      'pick what follows, or stop here -- skip ends phase two.',
+      'another section, or call the arrangement done and move on to polish.',
+      'this step is the question: one more section, or out to phase three. an outro ends it.'
     ],
     // Same reasoning as p2-first: what follows is the user's call.
     moves: [],

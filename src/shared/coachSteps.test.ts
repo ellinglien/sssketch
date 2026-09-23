@@ -206,6 +206,45 @@ describe('coach steps', () => {
       }
     }
   })
+
+  it('never asserts what is already in the project -- every route through the flow skips', () => {
+    // The same rule as the test above, in the form it actually got broken.
+    // A line that SOUNDS neutral ("the kick is already down", "under the
+    // harmony you just picked") is still a claim about the user's project,
+    // and every one of them is reachably false: next/skip are always
+    // available, so no step can assume the step before it produced
+    // anything. Two were shipped wrong and true on neither default path --
+    // groove's low end is satisfied by bass OR drums, so its drums step was
+    // reachable with no kick, and the harmony step is skippable like any
+    // other.
+    //
+    // A keyword guard cannot catch every phrasing of this, but it catches
+    // the shapes English keeps reaching for, which is what a regression
+    // would be written in.
+    const assertsPriorState: readonly [RegExp, string][] = [
+      [/\balready\b/i, 'claims something is already in the project'],
+      [/\byou just\b/i, 'claims the user just did something'],
+      [/\bwhat is (already )?there\b/i, 'claims there is something there'],
+      [/\bon top of\b/i, 'claims there is something underneath'],
+      [/\bunder the (harmony|bass|drums|kick|loop)\b/i, 'claims what it is going under'],
+      [/\b(is|are) down\b/i, 'claims a part is already placed'],
+      [/\b(second|another|more) [\w· ]*(layer|drums|stem)\b/i, 'claims there is a first one'],
+      [/\bis playing\b/i, 'claims the transport is running'],
+      [/\bthat section\b/i, 'claims a section exists']
+    ]
+    for (const step of COACH_STEPS) {
+      for (const flavour of [null, ...COACH_FLAVOURS]) {
+        for (const line of resolveCoachStep(step, flavour).lines) {
+          for (const [pattern, why] of assertsPriorState) {
+            // Context goes in the assertion MESSAGE, never into the
+            // matched string -- a message mentioning "already" would
+            // otherwise match the guard it is explaining.
+            expect(line, `${step.id} (${flavour}) ${why}`).not.toMatch(pattern)
+          }
+        }
+      }
+    }
+  })
 })
 
 describe('flavours', () => {
