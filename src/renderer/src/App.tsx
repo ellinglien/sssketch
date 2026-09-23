@@ -58,6 +58,7 @@ import { StemsFormatPicker } from './components/StemsFormatPicker'
 import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
 import { TourOverlay, type TourStep } from './components/TourOverlay'
+import { SssketchyCoach } from './components/SssketchyCoach'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { hasUnsavedChanges } from './state/unsavedChanges'
@@ -717,6 +718,30 @@ function ProjectMenu({
     color: 'var(--ra-text-2)'
   } as const
 
+  /**
+   * The guided flow's only entry point. "Button only (Elling's decision) --
+   * sssketchy never appears on his own, not even on an empty project. The
+   * entry point is a button in the project menu row, alongside new / open /
+   * save / tidy / export: it is a project-level verb like the rest of that
+   * row" (spec, "Starting the flow").
+   *
+   * The same button resumes a half-finished flow, which is why there is no
+   * separate "resume" affordance anywhere: a project reopened mid-flow
+   * comes back 'dismissed' (see sanitiseLoadedCoach), and this puts it back
+   * on screen at exactly the step it was left on.
+   *
+   * A FINISHED flow has nowhere left to resume to, so pressing it then
+   * starts a fresh one -- the title below says so before it happens.
+   */
+  const coach = state.coach
+  const coachFinished = coach !== null && coach.status === 'finished'
+  const coachResumable = coach !== null && !coachFinished
+  function handleSssketchy(): void {
+    const now = Date.now()
+    if (coachResumable) dispatch({ type: 'COACH_RESUME', now })
+    else dispatch({ type: 'COACH_START', now })
+  }
+
   return (
     <div style={{ display: 'flex', gap: 6 }}>
       <button onClick={handleNew} style={buttonStyle}>
@@ -841,6 +866,19 @@ function ProjectMenu({
           onClose={() => setExportMenu(null)}
         />
       )}
+      <button
+        onClick={handleSssketchy}
+        title={
+          coachResumable
+            ? 'pick the guided track-design flow back up'
+            : coachFinished
+              ? 'start the guided track-design flow again from the top'
+              : 'walk me through building a rough track'
+        }
+        style={buttonStyle}
+      >
+        sssketchy
+      </button>
       {exportFormatPickerOpen && (
         <ExportFormatPicker
           toolkitInUse={projectUsesToolkit(state)}
@@ -2608,6 +2646,12 @@ function Frame(): React.JSX.Element {
             onSkip={endTour}
           />
         )}
+        {/* Renders nothing at all unless a flow has been started from the
+            project menu's own sssketchy button -- see SssketchyCoach's own
+            doc comment. Mounted here, at the frame's top level, rather than
+            inside any one panel, because a step's anchor can be anywhere in
+            the app (Discover, the timeline, the project menu row). */}
+        <SssketchyCoach />
       </div>
     </div>
   )
