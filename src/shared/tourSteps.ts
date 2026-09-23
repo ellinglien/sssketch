@@ -67,8 +67,8 @@ export const TOUR_STEPS: readonly TourStep[] = [
   },
   {
     selector: '[data-tour-id="tour-tidy"]',
-    title: 'saying what a stem is',
-    body: 'tidy up is where you say what each stem is; auto-arrange and discover read it. tidy up library does the same for your whole library.'
+    title: 'labeling stems',
+    body: 'tidy up is where you say what each stem is, for this sketch or your whole library.'
   },
   {
     selector: '[data-tour-id="tour-map"]',
