@@ -111,15 +111,18 @@ export interface CoachState {
   loopIs: CoachLoopAnswer | null
   /** "How long a journey?" -- short / standard / long. */
   shape: CoachShapeId | null
-  /** Phase two's placed sections, in the order they went down (spec:
-   * "sections built so far (type, bars, which stems play)"). Real persisted
-   * project data: a half-finished guided track resumes with its arrangement
-   * intact and the flow knowing where the next section goes. */
+  /** The map's sections, in timeline order -- what each one is, how many
+   * passes it runs for, and which cells the user has changed. Real
+   * persisted project data: a half-finished guided track resumes with its
+   * arrangement intact and the flow knowing where the next section goes. */
   sections: CoachSection[]
-  /** The section currently being carved, or null when none is open. Its
-   * droppedPaths is what "the user subtracts" writes to -- it starts empty,
-   * always, because a section is the full climax loop until somebody says
-   * otherwise. */
+  /** The section currently being carved, or null when none is open.
+   *
+   * Its `cells` starts EMPTY, which does not mean "nothing plays" -- it
+   * means "nothing has been overridden", so every cell reads the template
+   * (./coachMapTemplate.ts). That is the deliberate 2026-09-23 reversal of
+   * the old everything-on/user-subtracts rule; see ./coachSections.ts's own
+   * module comment before changing it. */
   draftSection: CoachSectionDraft | null
   /** Phase three's applied tension moves -- what is switched ON at which
    * section boundary. A flat list rather than a keyed record so a later
