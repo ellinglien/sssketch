@@ -84,3 +84,25 @@ export const COACH_SEEDED_LINE_TEMPLATES: readonly string[] = [
   'that riff brings {covered} with it, so we skip ahead. next: {next}.',
   'marked done from the riff you started with: {covered}. next: {next}.'
 ]
+
+/** What the bubble says while a section is being carved. {section} is the
+ * section's own name. Every variant states the same fact -- the whole loop
+ * is playing and subtracting is the user's move -- because that fact is the
+ * one thing about this step that is true of every track. Nothing here
+ * claims a stem has been removed: nothing has been. */
+export const COACH_SECTION_LINE_TEMPLATES: readonly string[] = [
+  'the {section}. every stem from the loop is on -- switch off what it does not need.',
+  '{section} next. the full climax loop is playing; take things out of it.',
+  'this one is the {section}. it stays the whole loop until you turn something off.',
+  'carving the {section}. marked stems are what this kind of section usually loses.'
+]
+
+/** What the bubble says once a section is on the timeline and the flow is
+ * asking what follows. Reports the placement, which is a fact, and asks a
+ * question -- never an opinion about what the track now needs. */
+export const COACH_NEXT_SECTION_LINE_TEMPLATES: readonly string[] = [
+  'the {section} is down, as ordinary clips. what comes next?',
+  '{section} placed. pick what follows, or stop here.',
+  'that is the {section} on the timeline. move it, resize it, redraw it -- or keep going.',
+  '{section} done. an outro ends this phase; anything else keeps it running.'
+]
