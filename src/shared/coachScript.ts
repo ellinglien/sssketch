@@ -129,12 +129,18 @@ export const COACH_SCRIPT: CoachScript = {
    * Note what none of these do: none of them tells him what the loop IS.
    * The app has not heard it. Every variant asks, and the last one says
    * plainly what "not sure" will be taken to mean, so choosing it is not a
-   * trapdoor. */
+   * trapdoor.
+   *
+   * **Every variant also admits the flow is new and rough.** Said once, in
+   * his own voice, here, because this is the first thing he ever says --
+   * honest rather than apologetic, a coach admitting something rather than a
+   * notice disclaiming anything. The route screen's "walk me through it"
+   * button carries the same qualifier for anyone who never reaches this. */
   loopQuestion: [
-    'before anything else: what is this loop, to you? the drop, a verse, or an intro.',
-    'one question first. is this the drop, a verse, or an intro? not sure is a real answer.',
-    'where does this loop live in a track? drop, verse, intro -- or leave it to me.',
-    'what is this, as a section? say not sure and i will treat it as the drop.'
+    'new flow, still rough, so bear with me: is this loop a drop, a verse, or an intro?',
+    'heads up, this one is new and rough, so: drop, verse, or intro?',
+    "i should say up front that this walkthrough is new and it's rough in places, so treat everything i say as a suggestion. where does this loop live in a track: drop, verse, intro, or leave it to me?",
+    'rough new flow, this. what is the loop to you, and if you are not sure i take it as the drop.'
   ],
 
   /** "How long a journey?" -- the second question, shown above the short /
@@ -146,10 +152,10 @@ export const COACH_SCRIPT: CoachScript = {
    * varies by genre, so a genre list would be one template wearing six
    * names. */
   shapeQuestion: [
-    'how long a journey? short is about two minutes, standard about four, long about six.',
-    'pick a length. the letters are the sections in order -- a is the intro and the outro.',
-    'how far do you want to travel? the same order underneath, just more of it.',
-    'length next. any of these is a fine shape; you can move all of it afterwards.'
+    'how long a journey: short is about two minutes, standard four, long six.',
+    'a length, then.',
+    'how far do you want to travel? the letters are the sections in order, a is the intro and the outro, and the same order holds however long you go.',
+    'length next, and any of these is a fine shape; you can move all of it afterwards.'
   ],
 
   // ==========================================================================
@@ -171,9 +177,9 @@ export const COACH_SCRIPT: CoachScript = {
    * arrangement out of the same material" -- never an instruction. */
   phraseReport: [
     'this {nominal}-bar loop is really the same {phrase} bars twice.',
-    '{nominal} bars, but it repeats every {phrase}. worth knowing before we size anything.',
-    'the phrase in here is {phrase} bars, inside a {nominal}-bar loop. your call which one we use.',
-    'measured: {phrase} bars of material in a {nominal}-bar loop.'
+    '{nominal} bars on paper, {phrase} in practice.',
+    'the phrase in here is {phrase} bars, sitting inside a {nominal}-bar loop, which is worth knowing before we size anything -- your call which number we build on.',
+    'measured: {phrase} bars of material, {nominal} bars of loop.'
   ],
 
   // ==========================================================================
@@ -188,10 +194,10 @@ export const COACH_SCRIPT: CoachScript = {
    * call, and states the way out.** Every variant must name cmd+z or undo.
    * The first variant is the spec's own wording. */
   prefilled: [
-    'that is the usual shape. cmd+z puts everything back on if you would rather start full.',
-    'i filled this in from the usual shape. one cmd+z and every cell comes back on.',
-    'pre-filled, by me, from the standard arrangement. undo once for the everything-on version.',
-    'this is a guess at the shape, not a rule. cmd+z if you would rather start from full.'
+    'that is the usual shape, and cmd+z brings every cell back on.',
+    "i filled this in. one cmd+z and it's all back.",
+    'pre-filled by me, from the standard arrangement, because a blank grid is a worse place to start than a wrong one -- undo once for the everything-on version.',
+    "a guess at the shape, not a rule. cmd+z if you'd rather start from full."
   ],
 
   // ==========================================================================
@@ -210,59 +216,59 @@ export const COACH_SCRIPT: CoachScript = {
     /** THE MAP, just arrived, whole. Nothing here tells the user to do
      * anything with it -- it says what the thing in front of them is. */
     'p2-first': [
-      'there is the whole song. one column per section, one square per time round the loop.',
-      'the map is the arrangement, seen from further back. the toggle up top swaps the two.',
-      'that is the usual shape, laid out. it is all ordinary clips underneath.',
-      'a shape to push against. nothing on it is settled, and none of it has to stay.'
+      'there is the whole song, one column per section, one square per pass.',
+      'that is the map.',
+      'a shape to push against. nothing on it is settled.',
+      'the arrangement seen from further back, all ordinary clips underneath, with the toggle up top swapping between this and the timeline.'
     ],
 
     /** WALK THE SECTIONS, when he is on the walk step but not standing on
      * a column (the walk's own per-section goals, section 6 below, replace
      * this the moment he is). */
     'p2-section': [
-      'the map is the whole song at once. one column per section, one square per pass.',
-      'every square is ordinary clips underneath. switch one off and the clip goes.',
-      'this is the shape, filled in. change anything you like, or leave it.',
-      'the map and the timeline are the same arrangement. the toggle up top swaps them.'
+      'the whole song at once, a column per section, a square per pass.',
+      'switch a square off and the clip goes.',
+      'this is the shape, filled in. change what you like, or leave all of it.',
+      'the map and the timeline are the same arrangement, two ways of looking at one thing, and the toggle up top swaps them.'
     ],
 
     /** WHEN YOU ARE DONE HERE -- the hand-off out of the arrangement phase.
      * Nothing here chases: when the arrangement is finished is the user's
      * call. */
     'p2-next': [
-      'the map keeps working long after this. leaving the walk changes nothing on it.',
+      'the map keeps working long after this.',
+      'nothing here is waiting on you.',
       'stay on the map as long as it is useful, or carry on to polish whenever.',
-      'the arrangement is yours now. next is the joins, the levels and a v1 out.',
-      'nothing here is waiting on you. polish is the next thing, when you want it.'
+      'the arrangement is yours now, and what is left is the joins, the levels and a v1 out -- leaving the walk changes nothing on the map.'
     ],
 
     /** THE TENSION PASS, first step of the polish phase. Replaced by the
      * join-counting line (section 7 below) as soon as the flow has any
      * section boundaries to count. */
     'p3-tension': [
-      'phase three. the joins between sections first -- a sweep into a drop, a fade into a breakdown.',
-      'last phase. start at the seams: what is offered there comes from the names you gave.',
-      'tension pass. nothing is on until you switch it on, and what it makes is an ordinary curve.',
-      'this step is the joins. a drop gets a sweep and a swell; a build into a drop also gets a riser.'
+      'phase three, and the joins come first: a sweep into a drop, a fade into a breakdown.',
+      'the seams, now.',
+      'nothing is on until you switch it on, and what it makes is an ordinary curve.',
+      'this step reads the names you gave the sections: a drop gets a sweep and a swell, and a build into a drop also gets a riser.'
     ],
 
     /** THE BALANCE CHECK. He can start it playing and nothing else --
      * what the levels should be is a person listening, and the third
      * variant says so. */
     'p3-balance': [
-      'balance check. play the whole thing through and set the levels while it runs.',
+      'balance check, and levels, while the whole thing runs.',
       'one listen, top to bottom, with the row gains to hand.',
       'this step is levels. what they should be is yours -- i can only start it playing.',
-      'play it through. the gain on each row is the only control this step is about.'
+      'the gain on each row is the only control this step is about, and whether it is right is a person listening, not me.'
     ],
 
     /** EXPORT A V1, the last step. Replaced by the exported line (section 8
      * below) once a file has really come out. */
     'p3-export': [
-      'last step. a mix, the stems, or an ableton or reaper project -- whichever you want a v1 in.',
+      'last step: a v1.',
+      'a mix, the stems, or an ableton or reaper project, whichever you want a v1 in.',
       'export time. the usual picker, and the project gets marked once a file really comes out.',
-      'get a v1 out. a mix is the quickest; the daw projects carry the curves across as well.',
-      'this is the end of the method: export something you can listen to away from here.'
+      'this is the end of the method, and what it ends with is something you can listen to away from here: a mix is quickest, the daw projects carry the curves across as well.'
     ]
   },
 
@@ -275,10 +281,10 @@ export const COACH_SCRIPT: CoachScript = {
    * "leaving the walk keeps the map" (spec) is the single thing a user
    * needs to know before agreeing to be walked anywhere. */
   walkStart: [
-    'i will go through the sections one at a time. leave whenever you like -- the map stays.',
-    'section by section, then. stepping out keeps everything exactly as it is.',
-    'we can walk these in order. the map is yours either way.',
-    'one section at a time from here. leaving does not undo anything.'
+    'section by section, then. stepping out keeps everything as it is.',
+    'leave whenever you like, the map stays.',
+    'we can walk these in order, and the map is yours either way.',
+    "i will go through the sections one at a time, and if you've had enough of that halfway through, leaving does not undo anything."
   ],
 
   // ==========================================================================
@@ -301,52 +307,52 @@ export const COACH_SCRIPT: CoachScript = {
   sectionGoals: {
     /** Standing on an intro column. */
     intro: [
-      'this one is the way in. it does not have to do much.',
-      'an intro is for getting someone into the room. two or three parts is plenty.',
-      'the opening. the less it gives away, the further the rest has to travel.',
-      'this is the way in. nothing has to change here if you like it as it is.'
+      "the way in, and it doesn't have to do much.",
+      'first thing anyone hears.',
+      'the less the opening gives away, the further the rest of it has to travel.',
+      'nothing has to change here if you like it as it is.'
     ],
 
     /** Standing on a verse column. The first variant is the spec's own
      * example of a good goal. */
     verse: [
       'the verse should hint at the drop without giving it away.',
-      'this one carries the track between the big moments. it can be quieter than you think.',
-      'a verse is room to breathe. want to try taking the hook out?',
-      'the stretch between the big moments. nothing has to change here if it already carries.'
+      'want to try taking the hook out?',
+      'the stretch between the big moments, which can be a lot quieter than you would think and still hold the whole thing together.',
+      'nothing has to change here if it already carries.'
     ],
 
     /** Standing on a build column. */
     build: [
       'this is where it lifts.',
-      'this one is the lift into the drop. the fewer parts it has, the more the drop adds.',
-      'a build is a climb. taking something away here often lifts harder than adding.',
-      'this is the run-up. nothing has to change if it already pulls.'
+      'taking something away here often lifts harder than adding.',
+      'the lift into the drop, and the fewer parts it has on the way up, the more the drop has left to add.',
+      'nothing has to change if it already pulls.'
     ],
 
     /** Standing on a drop column -- usually the loop the user arrived
      * with, which is why none of these ask for anything. */
     drop: [
-      'this is the payoff. everything you have is welcome here.',
-      'the drop. this is the loop you built, doing what it does.',
-      'this one is the top of the track. it already does its job.',
-      'the big one. nothing has to come out here unless you want it to.'
+      'this is the payoff, and everything you have is welcome here.',
+      'the big one.',
+      "the top of the track, and usually the loop you arrived with, which is why i'm not going to ask it for anything -- it already does its job.",
+      'nothing has to come out here unless you want it to.'
     ],
 
     /** Standing on a breakdown column (the long shape only). */
     breakdown: [
-      'a breakdown empties the room out for a moment.',
-      'this one is the drop again with the floor taken away.',
-      'the quiet stretch. the less that is in here, the bigger what follows feels.',
-      'this is space. it can be very little and still work, so nothing has to change here.'
+      'a breakdown empties the room out for a moment, which is most of why the thing after it lands.',
+      'the drop with the floor taken out.',
+      'the quiet stretch.',
+      'this is space, and it can be very little and still work, so nothing has to change here.'
     ],
 
     /** Standing on an outro column -- the last one in every shape. */
     outro: [
       'the way out. parts leaving one at a time is usually enough.',
-      'an outro lets go. it does not need a new idea.',
-      'this is the end of the journey. thinning out is the whole move.',
-      'the last stretch. nothing has to change here.'
+      "an outro lets go, and it doesn't need a new idea.",
+      'thinning out is the whole move.',
+      'the end of the journey, the last stretch of it, and nothing has to change here.'
     ]
   },
 
@@ -360,9 +366,9 @@ export const COACH_SCRIPT: CoachScript = {
    * any good. */
   walkEnd: [
     'that is all of them. the map stays exactly as it is.',
-    'end of the walk. everything here is ordinary clips now.',
-    'through to the end. move any of it, or leave it.',
-    'that is the whole shape. the rest is listening.'
+    'end of the walk.',
+    "through to the end -- move any of it, or leave it, and it's all ordinary clips now.",
+    'that is the whole shape, and the rest is listening.'
   ],
 
   // ==========================================================================
@@ -376,20 +382,20 @@ export const COACH_SCRIPT: CoachScript = {
    * Every variant states the same fact: the joins exist and their NAMES are
    * what is being read. Nothing here says a join needs anything. */
   tension: [
-    'the tension pass. {joins} where the names you gave say what usually goes in.',
-    'joins next. {joins} here, each carrying what that pair of names asks for.',
-    'this step is the seams between sections. {joins} to look at, nothing on yet.',
-    '{joins} between your sections. nothing goes in until you switch it on.'
+    'the tension pass, and {joins} where the names you gave say what usually goes in.',
+    '{joins} here, nothing on yet.',
+    'joins next: {joins}, each one carrying what that pair of names asks for.',
+    'this step is the seams between sections, so {joins} to look at, and nothing goes in until you switch it on.'
   ],
 
   /** The same step when the section names ask for nothing -- no drop and no
    * breakdown to lead into. Says so plainly rather than inventing an offer,
    * which is the same choice the no-moves lines make. */
   tensionNone: [
-    'none of your joins run into a drop or a breakdown, so there is nothing to offer here.',
-    'nothing for this step to do: the names either side of every join ask for nothing.',
-    'no drops and no breakdowns to lead into. skip this one.',
-    'this pass reads section names, and yours do not ask for anything. next when you like.'
+    'none of your joins run into a drop or a breakdown, so there is nothing here to offer.',
+    'nothing for this step to do.',
+    'no drops and no breakdowns to lead into, so this one can just go by.',
+    "this pass reads section names, and yours don't ask for anything, so it is a step you can walk straight past."
   ],
 
   // ==========================================================================
@@ -401,19 +407,19 @@ export const COACH_SCRIPT: CoachScript = {
    * ordinary -- never that the track is any good, which is the one thing he
    * does not know. */
   v1Exported: [
-    'that is a v1, out of the app and onto disk. go and listen to it somewhere else.',
+    'that is a v1, out of the app and onto disk.',
     'v1 exported. the project is marked, and everything in here is still ordinary material.',
-    'exported. that is the whole method, top to bottom.',
-    'v1 is out. nothing here is locked -- open it again and keep going whenever you like.'
+    'exported, and that is the whole method, top to bottom.',
+    'a v1 is out, and nothing in here is locked -- open it again and keep going whenever you like.'
   ],
 
   /** The closing bubble, once the last step is behind him. Its one button
    * is "done". */
   done: [
-    'that is the whole method. the rest is listening.',
-    'flow finished. everything here is ordinary material now, edit it however you like.',
-    'done. nothing here is locked, it is all normal clips.',
-    'that is a v1. go and listen to it.'
+    'that is the whole method, and the rest is listening.',
+    'flow finished.',
+    "nothing here is locked, it's all normal clips, edit it however you like.",
+    "that is a v1. worth hearing somewhere that isn't this app."
   ],
 
   // ==========================================================================
@@ -427,19 +433,19 @@ export const COACH_SCRIPT: CoachScript = {
   /** Every one of these offers only the step actions the bubble already
    * has, and every one of them says skipping is fine. Nothing here chases. */
   stuck: [
-    'stuck? try "do it for me", or move on.',
-    'been a while on this one. "do it for me" is there, and skipping is fine.',
-    'no rush. there is a "do it for me" up there, and skip costs you nothing.',
-    'this one can be done for you, or skipped. both are ok.'
+    'stuck? "do it for me" is up there, and skipping costs nothing.',
+    'no rush.',
+    'this one can be done for you, or skipped, and both are fine by me.',
+    'if you\'d rather not sit with this: there is a "do it for me" button up there, and moving on without it is a perfectly ordinary thing to do.'
   ],
 
   /** What the "stuck?" list says on a step that genuinely has no moves to
    * offer. Says so plainly rather than inventing one. */
   noMoves: [
     'nothing i can do for you on this step yet.',
-    'no moves on this one. next or skip when you are ready.',
+    'no moves on this one.',
     'no shortcuts here yet. this one is yours.',
-    'nothing automatic on this step.'
+    'nothing automatic on this step, so next or skip whenever you are ready.'
   ],
 
   // ==========================================================================
@@ -452,10 +458,10 @@ export const COACH_SCRIPT: CoachScript = {
    * is good, or that the step's work is finished, because only the person
    * listening knows that. next and skip stay available either way. */
   stepSatisfied: [
-    'this step has what it asked for. next when you are ready.',
-    'that is the slot this step was after. next, or keep rerolling it.',
-    'covered. move on whenever you like.',
-    'the step is satisfied. whether it is finished is your call, not mine.'
+    'this step has what it asked for, so next when you are ready.',
+    'covered.',
+    'that is the slot this step was after, so next, or keep rerolling it.',
+    "the step is satisfied, though whether it's finished is your call, not mine."
   ],
 
   // ==========================================================================

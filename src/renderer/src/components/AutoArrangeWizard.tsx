@@ -256,7 +256,8 @@ export function AutoArrangeWizard({ onClose, currentSketch }: Props): React.JSX.
         <button type="button" onClick={(): void => setRoute('guided')} style={routeButtonStyle}>
           walk me through it
           <div style={{ marginTop: 4, fontSize: 9, color: 'var(--ra-text-3)' }}>
-            sssketchy asks a couple of things, then lays out a map you can edit.
+            new, and still rough. sssketchy asks a couple of things, then lays out a map you can
+            edit.
           </div>
         </button>
 
