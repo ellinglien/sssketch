@@ -196,3 +196,66 @@ export function getStemCategory(db: Database.Database, stemCID: string): StemCat
     updatedAt: row.UpdatedAt
   }
 }
+
+/** One path's confirmed role, as the renderer needs it. */
+export interface StemRoleLookup {
+  arrangeRole: ArrangeRole
+  drumSubRole: DrumSubRole | null
+}
+
+// One IN-list query per chunk, matching the chunked lookups elsewhere in
+// main/. 500 is well inside SQLite's own default variable limit.
+const ROLE_LOOKUP_CHUNK_SIZE = 500
+
+/**
+ * Every CONFIRMED role among these paths, keyed by the path that was asked
+ * about rather than by StemCID -- the renderer holds paths (map rows, flat
+ * stems) and has no idea what a StemCID is.
+ *
+ * A path with no `Stems` row (a locally-dropped file, a one-shot, an in-app
+ * recording) is simply absent from the result, as is a stem confirmed only
+ * on the BUS axis. Absent means "nobody has said what this is", which is
+ * exactly what the map's label chain needs to fall through on -- never an
+ * empty string and never a guess.
+ *
+ * Read-only and synchronous: at the sizes this is called with (one
+ * arrangement's stems, or one Tidy Up page) a chunked IN-list is cheap, and
+ * it must not hold a statement open across an await -- see MEMORY.md's own
+ * "never .iterate() across an await" rule.
+ */
+export function getStemCategoryRolesForPaths(
+  db: Database.Database,
+  paths: string[],
+  extraCandidateDbs: Database.Database[] = []
+): Record<string, StemRoleLookup> {
+  const out: Record<string, StemRoleLookup> = {}
+  const pathsByStemCID = new Map<string, string[]>()
+  for (const path of paths) {
+    const stemCID = stemCIDForPath(db, path, extraCandidateDbs)
+    if (!stemCID) continue
+    const existing = pathsByStemCID.get(stemCID)
+    if (existing) existing.push(path)
+    else pathsByStemCID.set(stemCID, [path])
+  }
+  const stemCIDs = [...pathsByStemCID.keys()]
+  for (let start = 0; start < stemCIDs.length; start += ROLE_LOOKUP_CHUNK_SIZE) {
+    const chunk = stemCIDs.slice(start, start + ROLE_LOOKUP_CHUNK_SIZE)
+    countWork('sql:stem-category-roles')
+    const placeholders = chunk.map(() => '?').join(',')
+    const rows = db
+      .prepare(
+        `SELECT StemCID, ArrangeRole, DrumSubRole FROM StemCategories
+         WHERE ArrangeRole IS NOT NULL AND StemCID IN (${placeholders})`
+      )
+      .all(...chunk) as { StemCID: string; ArrangeRole: string; DrumSubRole: string | null }[]
+    for (const row of rows) {
+      for (const path of pathsByStemCID.get(row.StemCID) ?? []) {
+        out[path] = {
+          arrangeRole: row.ArrangeRole as ArrangeRole,
+          drumSubRole: row.DrumSubRole as DrumSubRole | null
+        }
+      }
+    }
+  }
+  return out
+}

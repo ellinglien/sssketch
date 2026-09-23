@@ -204,6 +204,79 @@ describe('stemCategoriesStore', () => {
     })
   })
 
+  describe('getStemCategoryRolesForPaths', () => {
+    it('answers by the PATH it was given, not by StemCID', async () => {
+      const { getStemCategoryRolesForPaths, upsertStemCategoryRole } =
+        await import('./stemCategoriesStore')
+      const db = freshDb()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES ('abc')`).run()
+      upsertStemCategoryRole(db, [{ path: '/w/abc', arrangeRole: 'drums' }], 'tidyup', null, 1)
+      expect(getStemCategoryRolesForPaths(db, ['/w/abc'])).toEqual({
+        '/w/abc': { arrangeRole: 'drums', drumSubRole: null }
+      })
+    })
+
+    it('carries a drum sub-role through', async () => {
+      const { getStemCategoryRolesForPaths, upsertStemCategoryRole } =
+        await import('./stemCategoriesStore')
+      const db = freshDb()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES ('abc')`).run()
+      upsertStemCategoryRole(
+        db,
+        [{ path: '/w/abc', arrangeRole: 'drums', drumSubRole: 'snare' }],
+        'tidyup',
+        null,
+        1
+      )
+      expect(getStemCategoryRolesForPaths(db, ['/w/abc'])['/w/abc'].drumSubRole).toBe('snare')
+    })
+
+    it('omits a path with no confirmed role rather than inventing one', async () => {
+      const { getStemCategoryRolesForPaths } = await import('./stemCategoriesStore')
+      const db = freshDb()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES ('abc')`).run()
+      expect(getStemCategoryRolesForPaths(db, ['/w/abc'])).toEqual({})
+    })
+
+    it('omits a locally-dropped file, which has no StemCID at all', async () => {
+      const { getStemCategoryRolesForPaths } = await import('./stemCategoriesStore')
+      expect(getStemCategoryRolesForPaths(freshDb(), ['/Users/e/Desktop/clap.wav'])).toEqual({})
+    })
+
+    it('omits a row confirmed on the BUS axis only', async () => {
+      const { getStemCategoryRolesForPaths, upsertStemCategoryBus } =
+        await import('./stemCategoriesStore')
+      const db = freshDb()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES ('abc')`).run()
+      upsertStemCategoryBus(db, [{ path: '/w/abc', busId: 'drums' }], 'tidyup', null, 1)
+      expect(getStemCategoryRolesForPaths(db, ['/w/abc'])).toEqual({})
+    })
+
+    it('answers an empty list without touching the db', async () => {
+      const { getStemCategoryRolesForPaths } = await import('./stemCategoriesStore')
+      expect(getStemCategoryRolesForPaths(freshDb(), [])).toEqual({})
+    })
+
+    it('handles more paths than one IN-list chunk', async () => {
+      const { getStemCategoryRolesForPaths, upsertStemCategoryRole } =
+        await import('./stemCategoriesStore')
+      const db = freshDb()
+      const paths: string[] = []
+      for (let i = 0; i < 600; i += 1) {
+        db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run(`s${i}`)
+        paths.push(`/w/s${i}`)
+      }
+      upsertStemCategoryRole(
+        db,
+        paths.map((path) => ({ path, arrangeRole: 'bass' as const })),
+        'tidyup',
+        null,
+        1
+      )
+      expect(Object.keys(getStemCategoryRolesForPaths(db, paths))).toHaveLength(600)
+    })
+  })
+
   describe('extraCandidateDbs', () => {
     it('validates a stem via an extra candidate db when the primary db does not have it', async () => {
       const db = freshDb()

@@ -327,6 +327,13 @@ const api = {
     source: string,
     project: ProjectRef
   ): Promise<void> => ipcRenderer.invoke('upsert-stem-category-role', entries, source, project),
+  /** The read side of the same table. A path nobody has confirmed is simply
+   * ABSENT from the result -- never an empty string and never a guess, so a
+   * caller's fallback chain has something unambiguous to fall through on. */
+  getStemCategoryRoles: (
+    paths: string[]
+  ): Promise<Record<string, { arrangeRole: ArrangeRole; drumSubRole: DrumSubRole | null }>> =>
+    ipcRenderer.invoke('get-stem-category-roles', paths),
   getStemAnalysisNeeds: (paths: string[]): Promise<StemAnalysisNeeds[]> =>
     ipcRenderer.invoke('get-stem-analysis-needs', paths),
   getStemFeatureCache: (path: string): Promise<StemFeatures | null> =>

@@ -121,12 +121,14 @@ import {
 } from './riffLibraryWriter'
 import { listStemFavourites, toggleStemFavourite } from './stemFavouriteStore'
 import {
+  getStemCategoryRolesForPaths,
   upsertStemCategoryBus,
   upsertStemCategoryRole,
   resolveSourceProjectPath,
   stemCIDForPath,
   type StemBusCategoryEntry,
-  type StemRoleCategoryEntry
+  type StemRoleCategoryEntry,
+  type StemRoleLookup
 } from './stemCategoriesStore'
 import { getStemFeatureCache, setStemFeatureCache } from './stemFeatureCacheStore'
 import { getStemPeaksCache, setStemPeaksCache, type StemPeaks } from './stemPeaksCacheStore'
@@ -1116,6 +1118,15 @@ app.whenReady().then(async () => {
       )
       trainCentroidsFromRoleEntries(db, entries, extraCandidateDbs)
     }
+  )
+
+  // The read side of the same table: what somebody already SAID these stems
+  // are, keyed by the path the renderer asked about. Read-only; a path
+  // nobody confirmed is simply absent from the result.
+  ipcMain.handle(
+    'get-stem-category-roles',
+    (_event, paths: string[]): Record<string, StemRoleLookup> =>
+      getStemCategoryRolesForPaths(openOwnRiffLibraryDb(), paths, candidateDbsForRiff())
   )
 
   // Batched "what's still missing" for the ambient scans (background-
