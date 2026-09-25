@@ -126,5 +126,9 @@ describe('IPC round-trip: --serve <-> --test-client', () => {
 
     expect(serverOutput.text()).toContain('client connected')
     rmSync(dir, { recursive: true, force: true })
-  }, 30000)
+    // 45s, not 30s: --test-client no longer sleeps a fixed 300ms before quitting,
+    // it waits for real position updates with an 8s timeout of its own (see
+    // runTestClient in Main.cpp). Worst case is now the 15s server-start wait
+    // above plus that 8s, which 30s left almost no room for.
+  }, 45000)
 })

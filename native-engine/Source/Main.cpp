@@ -1,3 +1,4 @@
+#include <atomic>
 #include <cmath>
 #include <iostream>
 #include <juce_core/juce_core.h>
@@ -353,7 +354,17 @@ namespace sssketch
             // Printed with a stable, greppable prefix — the Task 11 test harness
             // matches on this line rather than parsing full JSON in the shell.
             juce::Logger::writeToLog("test-client: received " + text);
+
+            // Counted here, on the reader thread, so runTestClient can wait on a
+            // *condition* ("N position updates have actually arrived") instead of
+            // a fixed duration. See the comment in runTestClient for why.
+            if (text.contains("\"position-update\""))
+                positionUpdatesSeen.fetch_add(1);
         }
+
+        // Written on InterprocessConnection's reader thread, read by
+        // runTestClient's polling loop on the main thread — atomic, not a plain int.
+        std::atomic<int> positionUpdatesSeen { 0 };
 
         void sendJson(const juce::var& payload)
         {
@@ -387,10 +398,38 @@ static int runTestClient(int port, const juce::String& projectJsonPath)
     playMsg->setProperty("payload", juce::var(playPayload.get()));
     sendRaw(juce::var(playMsg.get()));
 
-    // Give the server's 30Hz position-update timer time to fire a few times —
-    // messageReceived logs each one; the Task 11 harness reads this process's
-    // captured stdout/log rather than needing a reply-and-block protocol here.
-    juce::Thread::sleep(300);
+    // Wait for the server's ~30Hz position-update timer to have actually pushed
+    // a few updates, rather than sleeping a fixed 300ms and hoping.
+    //
+    // This used to be `juce::Thread::sleep(300)`. That is ~9 pushes' worth of
+    // wall time on an idle machine and measured a comfortable 8 every run
+    // locally — but the window is fixed, and the server only has to be descheduled
+    // for those 300ms for *zero* pushes to land. That is precisely what happened
+    // on the v1.2.0 release build: both the arm64 and x64 legs failed
+    // ipc-roundtrip.test.ts with "expected 0 to be greater than 0" while
+    // "test-client: connected" logged fine and this process still exited 0.
+    // Reproduced deterministically by SIGSTOPping the --serve process for 500ms
+    // across this window: same signature, connected but zero updates. The engine
+    // was emitting correctly the whole time; the client just stopped listening
+    // too early. Same class of fix as the TS-side sibling tests
+    // (engineClient / liveReschedule / playbackEngineLifecycle), which replaced
+    // fixed sleeps with condition polling on the same day.
+    //
+    // A loaded CI runner can only make this slower, never wrong: we exit as soon
+    // as the condition is met, and the timeout is a real failure signal, not a
+    // pacing device. If it does expire we still fall through and let the harness
+    // assert on what arrived — the test, not this process's exit code, is what
+    // reports a genuinely silent engine.
+    constexpr int kPositionUpdatesWanted = 5;   // >1, so the harness can also check pos advances
+    constexpr int kPositionWaitTimeoutMs = 8000;
+    const auto waitDeadline = juce::Time::getMillisecondCounter() + (juce::uint32) kPositionWaitTimeoutMs;
+    while (client.positionUpdatesSeen.load() < kPositionUpdatesWanted
+           && juce::Time::getMillisecondCounter() < waitDeadline)
+        juce::Thread::sleep(10);
+
+    if (client.positionUpdatesSeen.load() < kPositionUpdatesWanted)
+        juce::Logger::writeToLog("test-client: timed out waiting for position updates, saw "
+                                 + juce::String(client.positionUpdatesSeen.load()));
 
     juce::DynamicObject::Ptr stopMsg = new juce::DynamicObject();
     stopMsg->setProperty("type", "stop");
