@@ -41,16 +41,20 @@ const noBridgeBinaryPath = '/no/such/bridge/binary'
 
 describe('spawnEngine', () => {
   // Every test in this file that spawns the real engine binary gets an
-  // explicit 15s timeout, not vitest's 5000ms default -- vitest's own
-  // per-test timeout is a separate mechanism from spawnEngine's internal
-  // readiness timeout (engineProcess.ts, now 10000ms -- raised from an
-  // original 5000ms that had ~zero margin under CI contention), and both
-  // need real margin: even a legitimately-slow-but-successful cold spawn
-  // can blow past vitest's 5000ms default before spawnEngine's own promise
-  // ever settles. Caught for real via a release run: "stop() terminates
-  // the process" timed out here despite nothing being wrong, same class of
-  // flake as liveReschedule.test.ts/ipc-roundtrip.test.ts already fixed
-  // this same way.
+  // explicit 30s timeout, not vitest's 5000ms default. This is the TEST's
+  // own budget and is a separate mechanism from spawnEngine's internal
+  // readiness ceiling (READINESS_TIMEOUT_MS in engineProcess.ts, now
+  // 45000ms) -- the two are deliberately decoupled there, see that
+  // constant's doc comment. What this number has to cover is a
+  // legitimately-slow-but-SUCCESSFUL cold spawn: the first exec of a
+  // freshly built engine binary on a machine pays a one-time
+  // Gatekeeper/AMFI evaluation, and on the release workflow's x64 leg
+  // (a cross-compiled binary running translated) that was measured at
+  // 10s+. 15000 was the previous value and left too little room above
+  // that; 30000 matches what nativeExport.test.ts already uses for the
+  // same reason. If a spawn ever does run past this, engineProcess.ts now
+  // logs a progress line every 5s, so the log says how long it was
+  // actually taking even when vitest's message is the one that wins.
   it('spawns the engine, waits for readiness, and returns a connected port', async () => {
     handle = await spawnEngine({
       binaryPathOverride: realBinaryPath,
@@ -58,7 +62,7 @@ describe('spawnEngine', () => {
     })
     expect(handle.port).toBeGreaterThan(0)
     expect(handle.process.exitCode).toBeNull() // still running
-  }, 15000)
+  }, 30000)
 
   it('stop() terminates the process', async () => {
     handle = await spawnEngine({
@@ -81,11 +85,28 @@ describe('spawnEngine', () => {
     expect(proc.exitCode !== null || proc.signalCode !== null).toBe(true)
     expect(proc.signalCode).toBe('SIGKILL')
     handle = undefined // already stopped, don't double-stop in afterEach
-  }, 15000)
+  }, 30000)
 
   it('rejects if the engine binary does not exist at the resolved path', async () => {
     await expect(spawnEngine({ binaryPathOverride: '/no/such/binary' })).rejects.toThrow()
   })
+
+  // The readiness ceiling is the one failure shape that can't be driven by
+  // pointing spawnEngine at a broken path (a missing binary, or one that
+  // exits on its own, rejects through an entirely different branch) -- so
+  // it's driven by injection instead, the same way binaryPathOverride
+  // handles the electron dependency above, rather than by faking timers or
+  // stubbing the process. The binary here is the REAL engine; 1ms is just
+  // a budget no real process spawn can possibly meet, which puts the real
+  // timeout branch on a real subprocess.
+  it('honours an injected readiness timeout, and kills the process it gave up on', async () => {
+    const spawned = spawnEngine({
+      binaryPathOverride: realBinaryPath,
+      bridgeBinaryPathOverride: noBridgeBinaryPath,
+      readinessTimeoutMs: 1
+    })
+    await expect(spawned).rejects.toThrow('timed out waiting for the native engine to report')
+  }, 30000)
 
   // The bridge binary is a genuinely optional, separate build target (see
   // native-engine-bridge/ and docs/superpowers/specs/2026-08-01-x86-plugin-bridge-design.md)
@@ -100,7 +121,7 @@ describe('spawnEngine', () => {
       bridgeBinaryPathOverride: realBinaryPath // reusing the real engine binary as a stand-in "exists" path
     })
     expect(handle.port).toBeGreaterThan(0)
-  }, 15000)
+  }, 30000)
 
   it('still starts normally when nothing exists at the given bridge binary override path', async () => {
     handle = await spawnEngine({
@@ -108,5 +129,5 @@ describe('spawnEngine', () => {
       bridgeBinaryPathOverride: '/definitely/does/not/exist/sssketch-bridge'
     })
     expect(handle.port).toBeGreaterThan(0)
-  }, 15000)
+  }, 30000)
 })

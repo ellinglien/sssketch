@@ -12,8 +12,16 @@ let server: Server | undefined
  * too short under a full parallel suite's CPU contention (the actual cause
  * of a real intermittent failure here — the assertion running before the
  * awaited message had actually arrived).
+ *
+ * The 10000ms default matches the same helper in liveReschedule.test.ts and
+ * playbackEngineLifecycle.test.ts. It was 2000 here, the odd one out and the
+ * tightest poll ceiling in the repo: the only caller waits on three
+ * local-socket pushes nominally 60ms apart, so 2000ms looks like a huge
+ * margin right up until the whole parallel suite is contending for three
+ * cores on a CI runner. Because this is a poll, a bigger ceiling costs a
+ * passing run nothing at all — it only changes how patient a failing one is.
  */
-function waitFor(condition: () => boolean, timeoutMs = 2000, intervalMs = 5): Promise<void> {
+function waitFor(condition: () => boolean, timeoutMs = 10000, intervalMs = 5): Promise<void> {
   return new Promise((resolve, reject) => {
     const start = Date.now()
     const check = (): void => {

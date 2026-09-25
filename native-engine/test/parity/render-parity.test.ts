@@ -178,6 +178,14 @@ describe('native engine vs Web Audio export — render parity', () => {
     rmSync(rubberbandCacheDir, { recursive: true, force: true })
   })
 
+  // Each test below carries an explicit 30s timeout rather than vitest's
+  // default 5000ms. beforeAll's warm-up above removes the one-time
+  // first-exec cost, but these still shell out to a real subprocess (and
+  // the stretch test below shells out to TWO -- rubberband, then the
+  // engine), which is not work that belongs under a 5s budget on a
+  // contended runner. Measured on the release workflow's x64 leg, where
+  // the engine binary runs translated: ~1.7s each, so 5000 was ~3x and
+  // 30000 is ~18x.
   it('produces near-identical output to the native engine for a simple one-stem project', async () => {
     // --- Native side: EngineProject JSON -> --render-test -> WAV ---
     const project: EngineProject = {
@@ -241,7 +249,7 @@ describe('native engine vs Web Audio export — render parity', () => {
 
     console.log('render-parity: volume-only test maxDiff =', maxDiff)
     expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance
-  })
+  }, 30000)
 
   it('matches a fade-in envelope applied to the same tone', async () => {
     const project: EngineProject = {
@@ -299,7 +307,7 @@ describe('native engine vs Web Audio export — render parity', () => {
 
     console.log('render-parity: fade-in test maxDiff =', maxDiff)
     expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance
-  })
+  }, 30000)
 
   it('fails cleanly (nonzero exit, no crash) for a project with an invalid bpm', async () => {
     // Covers the `secPerBar <= 0.0` guard added to renderProjectToWavFile
@@ -320,7 +328,7 @@ describe('native engine vs Web Audio export — render parity', () => {
         stdio: 'pipe'
       })
     ).toThrow()
-  })
+  }, 30000)
 
   it('matches a tempo-stretched stem (rifff recorded at 80bpm, project at 60bpm)', async () => {
     // ratio = projectBpm / rifffBpm, same formula buildEngineProject.ts uses.
@@ -409,7 +417,7 @@ describe('native engine vs Web Audio export — render parity', () => {
     // here (no additional resampling on the native side for this path), so
     // no wider tolerance is expected or justified.
     expect(maxDiff).toBeLessThanOrEqual(2)
-  })
+  }, 30000)
 
   it('re-loops a stem from its own beginning when playedBars exceeds its native barLength', async () => {
     // 1-bar stem (4s tone at 60bpm), playedBars=2 -> should tile twice, restarting
@@ -484,5 +492,5 @@ describe('native engine vs Web Audio export — render parity', () => {
     }
     console.log('render-parity: playedBars re-loop test maxDiff =', maxDiff)
     expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance, matching the other cases
-  })
+  }, 30000)
 })

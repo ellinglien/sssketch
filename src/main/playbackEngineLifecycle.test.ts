@@ -42,19 +42,21 @@ describe('startPlaybackEngine', () => {
     handle = undefined
   })
 
-  // This is the first real engine spawn of the whole test run -- a cold
-  // spawn (first time this freshly-built binary has ever been launched
-  // this run) is measurably slower than every later spawn in this same
-  // file (700ms-1.7s once warm), and occasionally exceeds vitest's default
-  // 5000ms on a loaded CI runner -- caught for real on a GitHub Actions
-  // run, not hypothetical (this test's later siblings, which spawn again
-  // after the process is already warm, never needed this). Matches the
-  // explicit timeout the crash/respawn tests below already carry for the
-  // same class of reason. Also needs margin above spawnEngine's own
-  // internal readiness timeout (engineProcess.ts, 10000ms) -- that promise
-  // rejects on its own regardless of how generous this outer test timeout
-  // is, so a too-tight inner timeout still fails the test even with room
-  // to spare here (raised from 5000ms after repeated real CI failures).
+  // EVERY test in this describe spawns a real engine, so every one of them
+  // carries an explicit 30s timeout rather than vitest's default 5000ms --
+  // including the ones that look cheap. A cold spawn (the first time this
+  // freshly-built binary has been launched on this machine) is measurably
+  // slower than every later spawn in this same file (700ms-1.7s once warm)
+  // and was measured at 10s+ on the release workflow's x64 leg, where the
+  // binary is cross-compiled and runs translated. Caught for real on
+  // GitHub Actions more than once, not hypothetical.
+  //
+  // This is the TEST's budget; spawnEngine's own readiness ceiling
+  // (READINESS_TIMEOUT_MS in engineProcess.ts, 45000ms) is a separate,
+  // deliberately decoupled mechanism -- see that constant's doc comment.
+  // Which of the two reports a pathologically slow spawn doesn't matter
+  // much any more, because engineProcess.ts now logs a progress line every
+  // 5s while it waits.
   it('spawns the engine and the returned client can send load-project without throwing', async () => {
     handle = await startPlaybackEngine()
     // A minimal, valid empty project — proves the connection is live and the
@@ -64,14 +66,14 @@ describe('startPlaybackEngine', () => {
     // the native side already handles it) — just confirm send() doesn't throw
     // (i.e. the socket is genuinely connected).
     expect(handle.client).toBeDefined()
-  }, 20000)
+  }, 30000)
 
   it('remembers the last project sent via sendLoadProject, for crash-recovery resend', async () => {
     handle = await startPlaybackEngine()
     const project = { bpm: 100, snapDiv: 8, rifffs: [] }
     handle.sendLoadProject(project)
     expect(handle.getLastProject()).toEqual(project)
-  })
+  }, 30000)
 
   it('detects a crashed engine process, respawns, reconnects, resends the last project, and notifies onRestarted', async () => {
     handle = await startPlaybackEngine()
@@ -95,7 +97,7 @@ describe('startPlaybackEngine', () => {
     // throw here confirms respawn + reconnect actually completed, not
     // just that the crash was detected.
     expect(() => handle!.client.send('load-project', project)).not.toThrow()
-  }, 20000)
+  }, 30000)
 
   it('a one-time client.on() subscription (bound to a single snapshot instance) stops receiving pushes after a crash+respawn — callers must re-subscribe inside onRestarted', async () => {
     // This documents the sharp edge in the `client` getter's contract that
@@ -140,5 +142,5 @@ describe('startPlaybackEngine', () => {
     // called from inside onRestarted — receives pushes fine on the new one.
     expect(seenBeforeCrash.length).toBe(seenBeforeCrashCount)
     expect(seenAfterCrash.length).toBeGreaterThan(0)
-  }, 20000)
+  }, 30000)
 })

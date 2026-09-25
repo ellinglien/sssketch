@@ -104,7 +104,15 @@ describe('bakeOffset', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
-  }, 20000)
+    // 45s, not the previous 20s: this is the only test in the file that
+    // spawns the real native engine, so it pays a possible cold-spawn cost
+    // (10s+ on the release workflow's x64 leg, where the binary runs
+    // translated -- see READINESS_TIMEOUT_MS in engineProcess.ts) AND then
+    // waits on engineClient.ts's own 30000ms sendAndAwaitType default for
+    // the bake response. 20000 was below that inner response timeout
+    // alone, so the outer budget could expire before the thing it was
+    // waiting on ever got the chance to.
+  }, 45000)
 
   it('skips (and logs, does not throw) a WAV job with no usable fmt chunk', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
