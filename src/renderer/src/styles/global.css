@@ -1,13 +1,11 @@
-@font-face {
-  font-family: 'Silkscreen';
-  src: url('../assets/fonts/Silkscreen-Regular.woff2') format('woff2');
-  font-weight: 400;
-}
-@font-face {
-  font-family: 'Silkscreen';
-  src: url('../assets/fonts/Silkscreen-Bold.woff2') format('woff2');
-  font-weight: 700;
-}
+/* The two Silkscreen @font-face rules used to live right here. They now live
+ * inline in the head of src/renderer/index.html, because this file is only
+ * reached through main.tsx and so could not declare a font until the whole
+ * renderer module graph had executed. See the comment above that style block
+ * for the measurements and for why the bytes are embedded rather than linked.
+ * Do not re-declare them here: a second copy would be a second data: URI in
+ * the production CSS bundle for no benefit.
+ */
 
 * {
   box-sizing: border-box;
