@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import { DEFAULT_TRAIT_BAR, normalizeTraitMatchBar } from '@shared/traitBar'
+import { DEFAULT_RADIO_PACE, normalizeRadioPace, type RadioPace } from '@shared/radioSchedule'
 
 export interface DiscoverSettings {
   /** Whether the user has explicitly agreed to the whole-library background
@@ -15,6 +16,12 @@ export interface DiscoverSettings {
    * (one of TRAIT_MATCH_BAR_OPTIONS; 0.75 = top 25%). Direct request,
    * 2026-09-22. */
   traitMatchBar: number
+  /** How often radio mode turns a layer over -- 'slow' | 'mid' | 'fast',
+   * each a window of bars (RADIO_PACE_BARS, @shared/radioSchedule).
+   * Persisted because re-picking it every launch is an annoyance with a
+   * four-line fix. See docs/superpowers/specs/2026-09-26-radio-mode-
+   * design.md. */
+  radioPace: RadioPace
 }
 
 const STORE_FILENAME = 'discoverSettings.json'
@@ -25,7 +32,8 @@ function storePath(): string {
 
 const DEFAULT_SETTINGS: DiscoverSettings = {
   consentedToLibraryScan: false,
-  traitMatchBar: DEFAULT_TRAIT_BAR
+  traitMatchBar: DEFAULT_TRAIT_BAR,
+  radioPace: DEFAULT_RADIO_PACE
 }
 
 /** Mirrors categoryCentroidStore.ts's own loadCategoryCentroidStore -- an
@@ -38,7 +46,8 @@ export function loadDiscoverSettings(): DiscoverSettings {
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<DiscoverSettings>
     return {
       consentedToLibraryScan: parsed.consentedToLibraryScan ?? false,
-      traitMatchBar: normalizeTraitMatchBar(parsed.traitMatchBar)
+      traitMatchBar: normalizeTraitMatchBar(parsed.traitMatchBar),
+      radioPace: normalizeRadioPace(parsed.radioPace)
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
