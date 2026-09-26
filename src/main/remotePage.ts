@@ -105,7 +105,15 @@ export function remoteNoticePage(line: string): string {
   font-weight: 400;
   font-display: swap;
 }
-* { box-sizing: border-box; border-radius: 0; }
+/* touch-action: manipulation kills the double-tap-to-zoom gesture, which he
+ * hit by accident tapping a chip twice. It is manipulation rather than none:
+ * none would also kill scrolling, and it deliberately leaves pinch-to-zoom
+ * alone, so the page can still be zoomed on purpose. The other way to stop
+ * this is user-scalable=no in the viewport, which takes pinch away too and
+ * which safari has ignored since ios 10 anyway. On * rather than on body
+ * because touch-action is not inherited -- the gesture is resolved against
+ * the element actually tapped, which is always a chip or a button. */
+* { box-sizing: border-box; border-radius: 0; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 body {
   margin: 0;
   padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px);
@@ -160,7 +168,15 @@ export const REMOTE_PAGE_HTML = `<!doctype html>
   font-weight: 400;
   font-display: block;
 }
-* { box-sizing: border-box; border-radius: 0; }
+/* touch-action: manipulation kills the double-tap-to-zoom gesture, which he
+ * hit by accident tapping a chip twice. It is manipulation rather than none:
+ * none would also kill scrolling, and it deliberately leaves pinch-to-zoom
+ * alone, so the page can still be zoomed on purpose. The other way to stop
+ * this is user-scalable=no in the viewport, which takes pinch away too and
+ * which safari has ignored since ios 10 anyway. On * rather than on body
+ * because touch-action is not inherited -- the gesture is resolved against
+ * the element actually tapped, which is always a chip or a button. */
+* { box-sizing: border-box; border-radius: 0; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
 body {
   margin: 0;
   padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px);
