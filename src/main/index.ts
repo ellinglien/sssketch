@@ -77,9 +77,15 @@ import {
   getDiscoverCandidates,
   getRandomLibraryCandidate,
   prewarmDiscoverCandidateCaches,
+  appendToInMemoryDiscoverCaches,
   type DiscoverCandidate,
   type PrewarmScanProgress
 } from './discoverCandidates'
+import {
+  forgetDiscoveredRifff,
+  saveDiscoveredRifff,
+  type DiscoveredMemberInput
+} from './discoveredLibrary'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
 import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
@@ -570,6 +576,36 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('riff-library-download-missing-stems', (_event, riffCID: string) =>
     downloadMissingStems(riffCID)
+  )
+
+  // One explicit, human-initiated save. Eight stemCIDForPath point lookups
+  // is not what CLAUDE.md's "never one query per stem" rule is about;
+  // everything that WRITES inside saveDiscoveredRifff is one transaction.
+  ipcMain.handle(
+    'save-discovered-rifff',
+    (_event, members: DiscoveredMemberInput[], bpm: number, barLength: number) => {
+      const ownDb = openOwnRiffLibraryDb()
+      const result = saveDiscoveredRifff(ownDb, candidateDbsForRiff(), {
+        members,
+        bpm,
+        barLength,
+        creationTime: Math.floor(Date.now() / 1000)
+      })
+      // AFTER the commit, never inside it -- appendToInMemoryDiscoverCaches
+      // re-reads the table signals the in-memory caches are validated
+      // against, and those have to see the new counts. saveDiscoveredRifff
+      // hands back exactly the rows to fold in (indexRows /
+      // newInstrumentRows) rather than this handler re-deriving StemCIDs it
+      // does not have.
+      if (result && !result.duplicate) {
+        appendToInMemoryDiscoverCaches(ownDb, result.indexRows, result.newInstrumentRows)
+      }
+      return result
+    }
+  )
+
+  ipcMain.handle('forget-discovered-rifff', (_event, riffCID: string) =>
+    forgetDiscoveredRifff(openOwnRiffLibraryDb(), riffCID)
   )
 
   ipcMain.handle('endlesss-login', (_event, username: string, password: string) =>

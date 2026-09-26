@@ -560,6 +560,21 @@ const api = {
     ipcRenderer.invoke('riff-library-resolve-riff-with-context', riffCID),
   riffLibraryDownloadMissingStems: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
     ipcRenderer.invoke('riff-library-download-missing-stems', riffCID),
+  saveDiscoveredRifff: (
+    members: {
+      path: string
+      gain: number
+      name: string
+      author: string
+      barLength: number
+      durationSec: number
+    }[],
+    bpm: number,
+    barLength: number
+  ): Promise<{ riffCID: string; name: string; duplicate: boolean } | null> =>
+    ipcRenderer.invoke('save-discovered-rifff', members, bpm, barLength),
+  forgetDiscoveredRifff: (riffCID: string): Promise<void> =>
+    ipcRenderer.invoke('forget-discovered-rifff', riffCID),
   endlesssLogin: (
     username: string,
     password: string
