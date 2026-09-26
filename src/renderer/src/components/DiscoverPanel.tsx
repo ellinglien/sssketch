@@ -773,6 +773,7 @@ export function DiscoverPanel({
       .filter((x): x is { id: string; stem: ResolvedCandidateStem; gain: number } => x !== null)
 
     if (members.length === 0) {
+      void window.rifffApi.setRemoteLoop(null)
       await restorePreviewIfLoaded()
       return
     }
@@ -824,6 +825,7 @@ export function DiscoverPanel({
       // and assembleDiscoverRifff only returns null for an empty list), but
       // handled rather than asserted since the function's own return type
       // is nullable.
+      void window.rifffApi.setRemoteLoop(null)
       await restorePreviewIfLoaded()
       return
     }
@@ -861,6 +863,12 @@ export function DiscoverPanel({
         pluginCatalog
       )
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+      // The phone gets the loop whether or not the Mac's engine is showing
+      // it -- pushed BEFORE the ownership gate below on purpose, so a
+      // Discover panel that has lost the engine to something else still has
+      // something to hand the sofa. Main strips the plugins, fingerprints it
+      // and renders it on demand; nothing here blocks on any of that.
+      void window.rifffApi.setRemoteLoop(project)
       if (!stillOwnEngine(engineToken)) return
 
       await window.rifffApi.engineLoadProject(project)
@@ -1344,6 +1352,7 @@ export function DiscoverPanel({
   // says "open discover on the mac" and offers nothing else.
   useEffect(() => {
     return () => {
+      void window.rifffApi.setRemoteLoop(null)
       void window.rifffApi.setRemoteState({
         discoverOpen: false,
         playing: false,
@@ -1364,7 +1373,6 @@ export function DiscoverPanel({
     remoteCommandRef.current = (command: RemoteCommand): void => {
       if (command.kind === 'roll-all') void rerollAll()
       else if (command.kind === 'roll-slot') void rerollSlot(command.slotId)
-      else if (command.kind === 'transport') dispatch({ type: command.play ? 'PLAY' : 'PAUSE' })
       else if (command.kind === 'keep') void keepGroup()
     }
   })
