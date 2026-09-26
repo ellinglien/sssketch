@@ -26,21 +26,45 @@ import { startRemoteServer, type RemoteServerHandle } from './remoteServer'
 
 /** A port nothing else is on. REMOTE_PORT is fixed in the product and is
  * very likely already held by a copy of the app on the developer's own
- * machine, so a test may never take it. */
-function freePort(): Promise<number> {
-  return new Promise((resolve, reject) => {
+ * machine, so a test may never take it.
+ *
+ * Why this is not `listen(0)` (2026-09-26): it was, and this file was the
+ * flakiest thing in the suite -- a whole run of `13 failed | 2851 passed`
+ * traced back here. An ephemeral probe closes the port BEFORE the real
+ * server binds it, and every vitest worker draws from the same OS range,
+ * so two workers routinely got handed the same number in that window. The
+ * loser's listen fails with EADDRINUSE, `onServerError` fires instead of
+ * `listening`, and every request in the file then gets ECONNREFUSED -- one
+ * race surfacing as a dozen unrelated-looking assertion failures.
+ *
+ * So worker N only ever takes ports from its own 200-wide block. Two
+ * workers cannot collide by construction, which leaves only an unrelated
+ * process already holding one -- and since nothing else draws from this
+ * block, probing for that is safe: no one can take the port between the
+ * probe closing and the server binding. */
+const WORKER_PORT_BASE = 20000 + (Number(process.env.VITEST_WORKER_ID ?? '1') % 40) * 200
+let nextPortOffset = 0
+
+function probeBindable(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
     const probe = createServer()
-    probe.on('error', reject)
-    probe.listen(0, '127.0.0.1', () => {
-      const address = probe.address()
-      if (address === null || typeof address === 'string') {
-        probe.close(() => reject(new Error('no port')))
-        return
-      }
-      const { port } = address
-      probe.close(() => resolve(port))
+    probe.on('error', () => resolve(false))
+    // 0.0.0.0, matching the real server. A port free on 127.0.0.1 can still
+    // be held on 0.0.0.0 by something else, so probing loopback proved the
+    // wrong thing.
+    probe.listen(port, '0.0.0.0', () => {
+      probe.close(() => resolve(true))
     })
   })
+}
+
+async function freePort(): Promise<number> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    const port = WORKER_PORT_BASE + (nextPortOffset % 200)
+    nextPortOffset += 1
+    if (await probeBindable(port)) return port
+  }
+  throw new Error(`no free port in ${WORKER_PORT_BASE}..${WORKER_PORT_BASE + 199}`)
 }
 
 let handle: RemoteServerHandle | null = null
