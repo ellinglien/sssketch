@@ -52,3 +52,61 @@ export function nextRadioIntervalBars(pace: RadioPace, random: () => number = Ma
   const offset = Math.min(span - 1, Math.floor(random() * span))
   return min + offset
 }
+
+/** Radio's own sense of time. Fed ONLY by the engine's existing ~30Hz
+ * position-update stream (IpcServer.cpp's 33ms kPositionTimerId ->
+ * main's subscribeToPositionUpdates -> preload's onEnginePositionUpdate ->
+ * StoreContext's SET_POS -> DiscoverPanel's usePos()). There is no
+ * setInterval anywhere in radio, on purpose: the engine stops its timer on
+ * "pause", so this clock stops with the transport and resumes exactly
+ * where it was, for free. */
+export interface RadioClock {
+  /** Bars of real playback since the last change landed. Fractional. */
+  barsElapsed: number
+  /** The freshly-drawn target for THIS interval (nextRadioIntervalBars). */
+  intervalBars: number
+  /** The previous tick's position, so a wrap can be spotted as a decrease
+   * -- the engine emits no loop-wrap event of any kind. */
+  lastPos: number
+}
+
+export function createRadioClock(intervalBars: number, startPos = 0): RadioClock {
+  return { barsElapsed: 0, intervalBars, lastPos: startPos }
+}
+
+export interface RadioClockStep {
+  clock: RadioClock
+  /** The loop restarted between the previous tick and this one. */
+  wrapped: boolean
+  /** Commit a change NOW: the interval has elapsed AND we are at a loop
+   * boundary. Quantising to the wrap is deliberate (spec 2.2) -- a change
+   * dropped at bar 7 of an 8-bar loop is a splice; a change dropped at the
+   * wrap is a new section. The cost is that the effective interval is
+   * ceil(intervalBars / loopBars) * loopBars, which for a long loop and a
+   * short pace can collapse the pace's whole window onto one value. */
+  due: boolean
+}
+
+/** One position tick. `loopBars` is the preview loop's own length --
+ * DiscoverPanel's `maxBarLength`, which is exactly what went to the engine
+ * as loopLengthBars, so the wrap this spots and the wrap the engine
+ * performed are the same event. */
+export function advanceRadioClock(
+  clock: RadioClock,
+  pos: number,
+  loopBars: number
+): RadioClockStep {
+  if (!(loopBars > 0) || !Number.isFinite(pos)) {
+    return { clock, wrapped: false, due: false }
+  }
+  const wrapped = pos < clock.lastPos
+  // Across a wrap, count the tail of the old pass as well as the head of
+  // the new one -- otherwise every wrap silently loses up to a full bar.
+  const delta = wrapped ? loopBars - clock.lastPos + pos : pos - clock.lastPos
+  const barsElapsed = clock.barsElapsed + Math.max(0, delta)
+  return {
+    clock: { ...clock, barsElapsed, lastPos: pos },
+    wrapped,
+    due: wrapped && barsElapsed >= clock.intervalBars
+  }
+}
