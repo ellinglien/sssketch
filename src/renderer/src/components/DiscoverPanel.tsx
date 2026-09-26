@@ -1374,6 +1374,16 @@ export function DiscoverPanel({
       if (command.kind === 'roll-all') void rerollAll()
       else if (command.kind === 'roll-slot') void rerollSlot(command.slotId)
       else if (command.kind === 'keep') void keepGroup()
+      // addSlot/removeSlot are the SAME functions the add row's chips and a
+      // row's own remove button call -- undo snapshot, immediate first
+      // roll, preview-mix cleanup and all. The phone cannot produce a slot
+      // the Mac would not have produced, because there is only one addSlot.
+      // The empty guard is belt-and-braces over the server's own
+      // parseRemoteSlotKinds: a slot with no kinds can match nothing and
+      // would sit there forever saying "no match".
+      else if (command.kind === 'add-slot') {
+        if (command.kinds.length > 0) addSlot(normalizeSlotKinds(command.kinds))
+      } else if (command.kind === 'remove-slot') removeSlot(command.slotId)
     }
   })
 

@@ -1,5 +1,11 @@
 // src/main/remotePage.ts
 import { REMOTE_PAIR_QUERY_PARAM } from '@shared/remoteAuth'
+import {
+  DISCOVER_SLOT_KIND_LABEL,
+  DISCOVER_SLOT_KIND_OPTIONS,
+  isTraitSlotKind
+} from '@shared/discoverSlotKind'
+import { buildSlotKindToggleTable } from '@shared/discoverSlotKindMask'
 import { SILKSCREEN_REGULAR_WOFF2_BASE64 } from './remoteFont'
 
 /** The page's own Content-Security-Policy, sent as a header by
@@ -7,8 +13,9 @@ import { SILKSCREEN_REGULAR_WOFF2_BASE64 } from './remoteFont'
  * inline style and script (there is no bundler here and no second file to
  * fetch), data: fonts (the Silkscreen face is embedded -- see remoteFont.ts
  * and commit 25ab55d for why that combination has to be spelled out), and
- * same-origin fetch for the five API routes. No images, no frames, no
- * forms, no base tag. */
+ * same-origin fetch for the seven API routes. No images, no frames, no
+ * forms, no base tag. The kind picker added two routes and no new kind of
+ * resource, so this is unchanged by it and must stay that way. */
 export const REMOTE_PAGE_CSP = [
   "default-src 'none'",
   "style-src 'unsafe-inline'",
@@ -28,7 +35,9 @@ export const REMOTE_PAGE_CSP = [
 // --ra-playhead literal Playhead.tsx uses on the real timeline and
 // DiscoverPanel.tsx draws over a previewing slot's waveform. Those two are
 // the only things on this page that carry audio information. Everything else
-// is monochrome, sharp-cornered, lowercase.
+// is monochrome, sharp-cornered, lowercase -- including the kind picker's
+// own chips and the armed state of a remove, both of which invert instead
+// of colouring.
 const TYPE_COLORS: Record<string, string> = {
   drums: '#d98b4e',
   notes: '#c9a24a',
@@ -39,6 +48,17 @@ const TYPE_COLORS: Record<string, string> = {
   extFx: '#7fc98a',
   audioIn: '#c56164'
 }
+
+/** The seven chips, in the desktop add row's own order and with its own
+ * playful labels, plus which of the two groups each belongs to (mask kinds
+ * filter, trait kinds rank -- the desktop draws a divider between them and
+ * so does this). Generated from the shared list, so a new kind appears on
+ * the phone by existing. */
+const KIND_CHIPS = DISCOVER_SLOT_KIND_OPTIONS.map((kind) => ({
+  k: kind,
+  l: DISCOVER_SLOT_KIND_LABEL[kind],
+  t: isTraitSlotKind(kind)
+}))
 
 /** The whole phone remote, as one string. NOT bundled by Vite and not part
  * of the renderer build: no asset-copying config, no hashed-filename lookup
@@ -73,6 +93,7 @@ body {
 h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
 .kept-name { font-size: 10px; color: #8f8f8f; min-height: 16px; }
 .rows { margin: 20px 0; }
+.empty { margin: 20px 0; font-size: 11px; color: #8f8f8f; }
 .track {
   position: relative;
   height: 22px;
@@ -88,14 +109,15 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
   background: #c56164;
   pointer-events: none;
 }
+.slot { display: flex; gap: 6px; margin-bottom: 6px; }
 .row {
   display: flex;
   gap: 10px;
   align-items: baseline;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   text-align: left;
   padding: 14px 10px;
-  margin-bottom: 6px;
   background: #0a0a0a;
   border: 1px solid #222222;
   color: #ededed;
@@ -104,6 +126,18 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
 .row:active { background: #161616; }
 .row .kind { width: 84px; flex: none; font-size: 11px; }
 .row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.drop {
+  width: 78px;
+  flex: none;
+  padding: 14px 4px;
+  background: #0a0a0a;
+  border: 1px solid #222222;
+  color: #6a6a6a;
+  font: inherit;
+  font-size: 10px;
+}
+button.drop:active { background: #161616; }
+button.drop.armed { background: #ededed; border-color: #ededed; color: #050505; }
 .actions { display: flex; gap: 8px; }
 button.big {
   flex: 1;
@@ -116,6 +150,22 @@ button.big {
 }
 button.big:active { background: #161616; }
 button.big.on { background: #ededed; color: #050505; }
+button.big.dim { border-color: #222222; color: #5a5a5a; }
+.picker { margin-top: 26px; padding-top: 18px; border-top: 1px solid #222222; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
+.chips.trait { margin-bottom: 10px; }
+button.chip {
+  flex: 1 1 30%;
+  min-width: 96px;
+  padding: 16px 4px;
+  background: #0a0a0a;
+  border: 1px solid #222222;
+  color: #8f8f8f;
+  font: inherit;
+  font-size: 11px;
+}
+button.chip:active { background: #161616; }
+button.chip.on { background: #ededed; border-color: #ededed; color: #050505; }
 input {
   width: 100%;
   padding: 16px 10px;
@@ -151,12 +201,29 @@ input {
     <h1>side quest</h1>
     <div class="eyebrow" id="counts">kept 0 · rolled 0</div>
     <div class="kept-name" id="kept-name"></div>
+    <!-- Zero slots is a START, not an error. It says what to do next and
+         the thing to do it with is directly below it. -->
+    <div class="empty" id="empty" hidden>pick what you want below, then add it</div>
     <div class="rows" id="rows"></div>
-    <div class="track" id="track"><div class="line" id="line" hidden></div></div>
-    <div class="actions">
-      <button class="big" id="roll-all">roll all</button>
-      <button class="big" id="play">play</button>
-      <button class="big" id="keep">keep</button>
+    <!-- Hidden with nothing in discover: roll all, play and keep all act on
+         a loop that does not exist yet, and three dead buttons are what made
+         the first screen feel like a dead end. They come back on the first
+         add. -->
+    <div id="loop" hidden>
+      <div class="track" id="track"><div class="line" id="line" hidden></div></div>
+      <div class="actions">
+        <button class="big" id="roll-all">roll all</button>
+        <button class="big" id="play">play</button>
+        <button class="big" id="keep">keep</button>
+      </div>
+    </div>
+    <div class="picker" id="picker">
+      <div class="eyebrow">add a stem that is</div>
+      <div class="chips" id="chips-mask"></div>
+      <div class="chips trait" id="chips-trait"></div>
+      <div class="actions">
+        <button class="big dim" id="add-slot">add slot</button>
+      </div>
     </div>
     <div class="eyebrow" id="mac"></div>
     <div class="msg" id="msg"></div>
@@ -166,12 +233,27 @@ input {
 <script>
 (function () {
   var TYPE_COLORS = ${JSON.stringify(TYPE_COLORS)}
+  // The seven chips and, below them, what tapping each one does to a
+  // selection. KIND_TOGGLE is not a reimplementation of the combination
+  // rules -- it is toggleSlotKind (@shared/discoverSlotKind) called for
+  // every selection and every chip at build time, indexed
+  // [selection][chip]. Mask kinds OR together, trait kinds rank, and
+  // bright/warm cannot both be on, here for the same reason and by the
+  // same code as on the mac.
+  var KINDS = ${JSON.stringify(KIND_CHIPS)}
+  var KIND_TOGGLE = ${JSON.stringify(buildSlotKindToggleTable())}
   var token = null
   try { token = localStorage.getItem('sssketch-remote-token') } catch (e) { token = null }
 
   var pairEl = document.getElementById('pair')
   var appEl = document.getElementById('app')
   var rowsEl = document.getElementById('rows')
+  var emptyEl = document.getElementById('empty')
+  var loopEl = document.getElementById('loop')
+  var pickerEl = document.getElementById('picker')
+  var maskChipsEl = document.getElementById('chips-mask')
+  var traitChipsEl = document.getElementById('chips-trait')
+  var addEl = document.getElementById('add-slot')
   var countsEl = document.getElementById('counts')
   var keptNameEl = document.getElementById('kept-name')
   var msgEl = document.getElementById('msg')
@@ -277,6 +359,18 @@ input {
     })
   }
 
+  // A short-lived line under the buttons. The state poll is up to 700ms
+  // behind a tap, and at arm's length in a dark room that is long enough to
+  // wonder whether the tap landed.
+  var flashTimer = null
+  function flash(text) {
+    msgEl.textContent = text
+    if (flashTimer) clearTimeout(flashTimer)
+    flashTimer = setTimeout(function () {
+      if (msgEl.textContent === text) msgEl.textContent = ''
+    }, 1400)
+  }
+
   // PAIRING HAPPENS HERE AND NOWHERE ELSE. The typed form and the QR
   // link's ?${REMOTE_PAIR_QUERY_PARAM}= both come through this one
   // function, so both make the same POST /api/pair request and get the same
@@ -325,11 +419,142 @@ input {
     }
   }
 
+  // --- the kind picker ---------------------------------------------------
+  // A selection is a bitmask over KINDS, and the only thing that ever
+  // changes it is a KIND_TOGGLE lookup. Tapping is not add-to-a-list: it is
+  // the mac's own toggleSlotKind, so tapping sparkly with buttery already on
+  // swaps them, and tapping drummy then rhythmic keeps both.
+  var pendingMask = 0
+  var chipEls = []
+
+  function selectedKinds() {
+    var out = []
+    for (var i = 0; i < KINDS.length; i++) {
+      if (pendingMask & (1 << i)) out.push(KINDS[i].k)
+    }
+    return out
+  }
+
+  function paintChips() {
+    var lit = 0
+    for (var i = 0; i < KINDS.length; i++) {
+      var on = (pendingMask & (1 << i)) !== 0
+      chipEls[i].className = on ? 'chip on' : 'chip'
+      if (on) lit++
+    }
+    // Two words, always the same two. The combination it will make is
+    // readable from the lit chips directly above it, so the button does not
+    // have to grow a sentence to say it -- buttons are two words maximum
+    // (Elling, 2026-09-26), and that matters most on a phone.
+    addEl.className = lit ? 'big' : 'big dim'
+  }
+
+  KINDS.forEach(function (kind, index) {
+    var chip = document.createElement('button')
+    chip.className = 'chip'
+    chip.textContent = kind.l
+    chip.addEventListener('click', function () {
+      pendingMask = KIND_TOGGLE[pendingMask][index]
+      paintChips()
+    })
+    chipEls.push(chip)
+    if (kind.t) traitChipsEl.appendChild(chip)
+    else maskChipsEl.appendChild(chip)
+  })
+  paintChips()
+
+  addEl.addEventListener('click', function () {
+    var kinds = selectedKinds()
+    // Nothing chosen is not worth a message: the chips are right above the
+    // button and none of them is lit.
+    if (kinds.length === 0) return
+    api('/api/add-slot', { kinds: kinds })
+    pendingMask = 0
+    paintChips()
+    flash('adding')
+  })
+
+  // --- the rows ----------------------------------------------------------
+  // Removing has no undo on the phone (undo stayed on the mac on purpose),
+  // so it takes two taps: the first arms this row, the second does it. The
+  // arming lapses on its own rather than sitting armed in a pocket, and any
+  // other tap cancels it.
+  var lastSlots = []
+  var lastRowsKey = null
+  var armedRemoveId = null
+  var armedRemoveTimer = null
+
+  function disarmRemove() {
+    armedRemoveId = null
+    if (armedRemoveTimer) { clearTimeout(armedRemoveTimer); armedRemoveTimer = null }
+  }
+
+  function armRemove(id) {
+    disarmRemove()
+    armedRemoveId = id
+    armedRemoveTimer = setTimeout(function () {
+      armedRemoveId = null
+      renderRows()
+    }, 4000)
+  }
+
+  function renderRows() {
+    // Rebuilt only when something actually changed. The poll runs every
+    // 700ms and wiping the rows under a thumb mid-tap loses the tap.
+    var key = JSON.stringify(lastSlots) + '|' + armedRemoveId
+    if (key === lastRowsKey) return
+    lastRowsKey = key
+    rowsEl.innerHTML = ''
+    lastSlots.forEach(function (slot) {
+      var wrap = document.createElement('div')
+      wrap.className = 'slot'
+      var b = document.createElement('button')
+      b.className = 'row'
+      var kind = document.createElement('span')
+      kind.className = 'kind'
+      kind.textContent = slot.kindLabel
+      kind.style.color = TYPE_COLORS[slot.soundType] || '#8f8f8f'
+      var name = document.createElement('span')
+      name.className = 'name'
+      name.textContent = slot.stemName || '…'
+      b.appendChild(kind)
+      b.appendChild(name)
+      b.addEventListener('click', function () {
+        disarmRemove()
+        renderRows()
+        api('/api/roll', { slotId: slot.id })
+      })
+      var armed = armedRemoveId === slot.id
+      var drop = document.createElement('button')
+      drop.className = armed ? 'drop armed' : 'drop'
+      drop.textContent = armed ? 'sure' : 'remove'
+      drop.addEventListener('click', function () {
+        if (armedRemoveId === slot.id) {
+          disarmRemove()
+          renderRows()
+          api('/api/remove-slot', { slotId: slot.id })
+          flash('removed')
+          return
+        }
+        armRemove(slot.id)
+        renderRows()
+      })
+      wrap.appendChild(b)
+      wrap.appendChild(drop)
+      rowsEl.appendChild(wrap)
+    })
+  }
+
   function render(state) {
     countsEl.textContent = 'kept ' + state.kept + ' · rolled ' + state.rolled
     keptNameEl.textContent = state.lastKeptName ? 'kept · ' + state.lastKeptName : ''
     if (!state.discoverOpen) {
-      rowsEl.innerHTML = ''
+      lastSlots = []
+      disarmRemove()
+      renderRows()
+      emptyEl.hidden = true
+      loopEl.hidden = true
+      pickerEl.hidden = true
       macEl.textContent = ''
       currentLoopId = null
       loadedLoopId = null
@@ -345,24 +570,19 @@ input {
     currentLoopId = state.loopId
     if (wantPlaying && currentLoopId !== loadedLoopId) loadLoop()
 
-    rowsEl.innerHTML = ''
-    state.slots.forEach(function (slot) {
-      var b = document.createElement('button')
-      b.className = 'row'
-      var kind = document.createElement('span')
-      kind.className = 'kind'
-      kind.textContent = slot.kindLabel
-      kind.style.color = TYPE_COLORS[slot.soundType] || '#8f8f8f'
-      var name = document.createElement('span')
-      name.className = 'name'
-      name.textContent = slot.stemName || '…'
-      b.appendChild(kind)
-      b.appendChild(name)
-      b.addEventListener('click', function () {
-        api('/api/roll', { slotId: slot.id })
-      })
-      rowsEl.appendChild(b)
-    })
+    pickerEl.hidden = false
+    // Nothing to roll, play or keep until there is a slot -- and the add
+    // row is then the only thing on screen, which is the point.
+    emptyEl.hidden = state.slots.length > 0
+    loopEl.hidden = state.slots.length === 0
+    // A slot that vanished from under an armed remove must not leave the
+    // arming pointed at an id that no longer exists.
+    if (armedRemoveId !== null) {
+      var stillThere = state.slots.some(function (s) { return s.id === armedRemoveId })
+      if (!stillThere) disarmRemove()
+    }
+    lastSlots = state.slots
+    renderRows()
   }
 
   document.getElementById('roll-all').addEventListener('click', function () { api('/api/roll', {}) })

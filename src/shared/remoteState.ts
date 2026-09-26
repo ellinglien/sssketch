@@ -1,7 +1,12 @@
 // src/shared/remoteState.ts
 import type { SoundType } from './types'
 import type { CoachSlotSnapshot } from './coachClimax'
-import { slotKindsLabel } from './discoverSlotKind'
+import {
+  DISCOVER_SLOT_KIND_OPTIONS,
+  normalizeSlotKinds,
+  slotKindsLabel,
+  type DiscoverSlotKind
+} from './discoverSlotKind'
 
 /** One row on the phone. `id` is Discover's own slot id -- needed so a tap
  * can reroll THAT slot, and not a filesystem path. There is deliberately
@@ -74,10 +79,20 @@ export function remoteStateFromSlots(
   }
 }
 
-/** Everything the phone can ask the Mac to do. THREE verbs, and nothing
- * else: no arranging, no timeline, no slot add/remove, no kind picker, no
- * gain, no settings, no library browsing. The Mac sets the shape of the
- * loop; the phone rolls it.
+/** Everything the phone can ask the Mac to do. FIVE verbs, and nothing else:
+ * no arranging, no timeline, no gain, no settings, no library browsing. The
+ * phone can now set the shape of the loop as well as roll it.
+ *
+ * `add-slot`/`remove-slot` arrived on 2026-09-26, from real use: "the initial
+ * state of the phone interface... how do i add a stem? it starts with zero
+ * and no apparent way to add". Steering slots the Mac already has is no use
+ * when Discover is empty, which is exactly when he is not at the Mac.
+ *
+ * Deliberately still NOT here, and each one can be pulled back later: the
+ * matching dial, chaos, the endlesss/other filters, favourites-only,
+ * undo/redo, the adjacency popover, per-slot gain, the match meter. Every
+ * control competes with the verbs that matter on a thumb-sized screen, and
+ * a reroll already is undo on a phone.
  *
  * `transport` was here until 2026-09-26 and was removed on purpose when the
  * phone became an audio client. One button cannot mean two outputs, and the
@@ -86,4 +101,28 @@ export function remoteStateFromSlots(
  * does not reach into the Mac's transport in either direction, and both
  * playing at once is intended rather than a bug. */
 export type RemoteCommand =
-  { kind: 'roll-slot'; slotId: string } | { kind: 'roll-all' } | { kind: 'keep' }
+  | { kind: 'roll-slot'; slotId: string }
+  | { kind: 'roll-all' }
+  | { kind: 'keep' }
+  | { kind: 'add-slot'; kinds: DiscoverSlotKind[] }
+  | { kind: 'remove-slot'; slotId: string }
+
+/** The kinds POST /api/add-slot will accept, or null for "do not act on
+ * this". The whole trust boundary for the phone's kind picker, in one pure
+ * function: an unknown string is not coerced, dropped or best-guessed, it
+ * fails the whole request -- so `kinds` can never become a channel for a
+ * path, and the renderer's addSlot only ever sees a normalized, non-empty
+ * set of real kinds. */
+export function parseRemoteSlotKinds(value: unknown): DiscoverSlotKind[] | null {
+  if (!Array.isArray(value)) return null
+  if (value.length === 0 || value.length > DISCOVER_SLOT_KIND_OPTIONS.length) return null
+  const kinds: DiscoverSlotKind[] = []
+  for (const entry of value) {
+    if (typeof entry !== 'string') return null
+    const kind = DISCOVER_SLOT_KIND_OPTIONS.find((k) => k === entry)
+    if (kind === undefined) return null
+    kinds.push(kind)
+  }
+  const normalized = normalizeSlotKinds(kinds)
+  return normalized.length === 0 ? null : normalized
+}

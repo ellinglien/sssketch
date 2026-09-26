@@ -10,7 +10,11 @@ import {
   recordPairAttempt,
   type PairingGate
 } from '@shared/remoteAuth'
-import type { RemoteCommand, RemoteStateResponse } from '@shared/remoteState'
+import {
+  parseRemoteSlotKinds,
+  type RemoteCommand,
+  type RemoteStateResponse
+} from '@shared/remoteState'
 import { chooseLanAddress, type NetworkAddress } from '@shared/lanAddress'
 import { REMOTE_PAGE_CSP, REMOTE_PAGE_HTML } from './remotePage'
 
@@ -110,13 +114,13 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
  * screen while this is on. That is the price of the phone reaching it at
  * all, and it is why this is off by default.
  *
- * Five routes, and no route takes or returns a filesystem path or reads
+ * Seven routes, and no route takes or returns a filesystem path or reads
  * the library. GET /api/loop takes no parameters of any kind -- it serves
  * the current Discover loop's wav bytes and names it in an x-loop-id
  * header, so there is no id to validate and nothing to address but "now".
- * A paired attacker can roll dice, save a rifff, and hear the loop that is
- * already on screen. That is the entire blast radius, by design rather
- * than by accident.
+ * A paired attacker can roll dice, save a rifff, add and remove slots, and
+ * hear the loop that is already on screen. That is the entire blast radius,
+ * by design rather than by accident.
  *
  * BEFORE PAIRING THE SERVER SERVES THE PAIRING SCREEN AND NOTHING ELSE:
  * every unauthenticated request other than GET / and POST /api/pair gets
@@ -216,6 +220,33 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
 
       if (req.method === 'POST' && url === '/api/keep') {
         options.onCommand({ kind: 'keep' })
+        return respond(res, 200)
+      }
+
+      // The phone's kind picker. Kinds arrive as their own literal strings
+      // (the seven of DISCOVER_SLOT_KIND_OPTIONS) and parseRemoteSlotKinds
+      // is the only thing that decides whether they are kinds at all -- an
+      // unknown string fails the whole request rather than being dropped,
+      // so this route still cannot be handed anything path-shaped. The 400
+      // is for a malformed body, and is the one thing on this surface that
+      // answers differently from a 401: a paired phone already knows the
+      // route exists, so there is nothing left to conceal from it.
+      if (req.method === 'POST' && url === '/api/add-slot') {
+        const body = await readJsonBody(req)
+        const kinds = parseRemoteSlotKinds(body.kinds)
+        if (kinds === null) return respond(res, 400)
+        options.onCommand({ kind: 'add-slot', kinds })
+        return respond(res, 200)
+      }
+
+      // An id the Mac no longer has is a harmless no-op on the renderer's
+      // side (removeSlot filters by id), so there is nothing to validate
+      // here beyond "a non-empty string".
+      if (req.method === 'POST' && url === '/api/remove-slot') {
+        const body = await readJsonBody(req)
+        const slotId = typeof body.slotId === 'string' ? body.slotId : ''
+        if (slotId === '') return respond(res, 400)
+        options.onCommand({ kind: 'remove-slot', slotId })
         return respond(res, 200)
       }
 

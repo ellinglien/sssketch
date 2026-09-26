@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CoachSlotSnapshot } from './coachClimax'
-import { remoteStateFromSlots, type RemoteStateResponse } from './remoteState'
+import { parseRemoteSlotKinds, remoteStateFromSlots, type RemoteStateResponse } from './remoteState'
 
 function slot(overrides: Partial<CoachSlotSnapshot> = {}): CoachSlotSnapshot {
   return {
@@ -118,5 +118,35 @@ describe('RemoteStateResponse', () => {
       loopId: null
     }
     expect(response.loopId).toBeNull()
+  })
+})
+
+describe('parseRemoteSlotKinds', () => {
+  it('accepts the kinds the phone picker can actually send', () => {
+    expect(parseRemoteSlotKinds(['drums', 'bright'])).toEqual(['drums', 'bright'])
+  })
+
+  it('normalizes rather than trusting the order or the set it was handed', () => {
+    expect(parseRemoteSlotKinds(['bright', 'drums', 'drums'])).toEqual(['drums', 'bright'])
+    expect(parseRemoteSlotKinds(['bright', 'warm'])).toEqual(['bright'])
+  })
+
+  it('rejects anything that is not a kind -- a path cannot ride in here', () => {
+    expect(parseRemoteSlotKinds(['/Users/nickel/Music/secret/abc123'])).toBeNull()
+    expect(parseRemoteSlotKinds(['drums', '../../etc/passwd'])).toBeNull()
+    expect(parseRemoteSlotKinds(['DRUMS'])).toBeNull()
+  })
+
+  it('rejects an empty or missing selection -- a slot always targets something', () => {
+    expect(parseRemoteSlotKinds([])).toBeNull()
+    expect(parseRemoteSlotKinds(undefined)).toBeNull()
+    expect(parseRemoteSlotKinds('drums')).toBeNull()
+    expect(parseRemoteSlotKinds([1, 2])).toBeNull()
+  })
+
+  it('rejects a selection longer than the seven chips, whatever it contains', () => {
+    expect(
+      parseRemoteSlotKinds(['drums', 'drums', 'drums', 'drums', 'drums', 'drums', 'drums', 'drums'])
+    ).toBeNull()
   })
 })
