@@ -55,6 +55,7 @@ export default defineConfig({
           'src/main/categoryCentroidTraining.test.ts',
           'src/main/discoverCandidates.test.ts',
           'src/main/discoverIndexCache.test.ts',
+          'src/main/discoveredLibrary.test.ts',
           'src/main/discoverLibraryStems.test.ts',
           'src/main/embeddingMatch.test.ts',
           'src/main/instrumentMaskCentroidBackfill.test.ts',
