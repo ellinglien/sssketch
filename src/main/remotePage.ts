@@ -256,18 +256,26 @@ button.big {
 button.big:active { background: #161616; }
 button.big.on { background: #ededed; color: #050505; }
 button.big.dim { border-color: #222222; color: #5a5a5a; }
-.picker { margin-top: 26px; padding-top: 18px; border-top: 1px solid #222222; }
-.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 0; }
-.chips.trait { margin-bottom: 10px; }
+.picker { margin-top: 18px; padding-top: 14px; border-top: 1px solid #222222; }
+/* The picker's own buttons are shorter than the transport's. Written as a
+ * descendant selector and not a class, because paintChips rewrites
+ * add-slot's className on every tap and would drop one. */
+.picker button.big { padding: 13px 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 0; }
+.chips.trait { margin-bottom: 8px; }
+/* Smaller type and tighter padding, but min-height holds the TAP target at
+ * 42px whatever the type does. A chip that looks small is fine; a chip a
+ * thumb misses is a bug. */
 button.chip {
   flex: 1 1 30%;
-  min-width: 96px;
-  padding: 16px 4px;
+  min-width: 92px;
+  min-height: 42px;
+  padding: 10px 4px;
   background: #0a0a0a;
   border: 1px solid #222222;
   color: #8f8f8f;
   font: inherit;
-  font-size: 11px;
+  font-size: 10px;
 }
 button.chip:active { background: #161616; }
 button.chip.on { background: #ededed; border-color: #ededed; color: #050505; }
@@ -322,12 +330,22 @@ input {
         <button class="big" id="keep">keep</button>
       </div>
     </div>
+    <!-- Open before the first slot exists (the empty state above points
+         straight at it), collapsed to one button after: once there is
+         something on screen he is listening, and four lines of chooser were
+         pushing the loop down for something touched occasionally. Adding a
+         slot collapses it again. -->
     <div class="picker" id="picker">
-      <div class="eyebrow">add a stem that is</div>
-      <div class="chips" id="chips-mask"></div>
-      <div class="chips trait" id="chips-trait"></div>
-      <div class="actions">
-        <button class="big dim" id="add-slot">add slot</button>
+      <div class="actions" id="picker-toggle-row" hidden>
+        <button class="big dim" id="picker-toggle">add stem</button>
+      </div>
+      <div id="picker-body">
+        <div class="eyebrow">add a stem that is</div>
+        <div class="chips" id="chips-mask"></div>
+        <div class="chips trait" id="chips-trait"></div>
+        <div class="actions">
+          <button class="big dim" id="add-slot">add slot</button>
+        </div>
       </div>
     </div>
     <div class="eyebrow" id="mac"></div>
@@ -375,6 +393,9 @@ input {
   var maskChipsEl = document.getElementById('chips-mask')
   var traitChipsEl = document.getElementById('chips-trait')
   var addEl = document.getElementById('add-slot')
+  var pickerToggleRowEl = document.getElementById('picker-toggle-row')
+  var pickerToggleEl = document.getElementById('picker-toggle')
+  var pickerBodyEl = document.getElementById('picker-body')
   var countsEl = document.getElementById('counts')
   var keptNameEl = document.getElementById('kept-name')
   var msgEl = document.getElementById('msg')
@@ -672,6 +693,27 @@ input {
   var pendingMask = 0
   var chipEls = []
 
+  // Open before the first slot, collapsed after -- pickerOpen is only consulted
+  // in the second case, so removing the last slot opens it again on its own
+  // without anything having to remember to.
+  var pickerOpen = false
+  var pickerHasSlots = false
+
+  function paintPicker() {
+    var open = !pickerHasSlots || pickerOpen
+    pickerBodyEl.hidden = !open
+    pickerToggleRowEl.hidden = !pickerHasSlots
+    // Two words maximum, and the state is the label -- there is no separate
+    // caret to read in the dark.
+    pickerToggleEl.textContent = open ? 'close' : 'add stem'
+    pickerToggleEl.className = open ? 'big' : 'big dim'
+  }
+
+  pickerToggleEl.addEventListener('click', function () {
+    pickerOpen = !pickerOpen
+    paintPicker()
+  })
+
   function selectedKinds() {
     var out = []
     for (var i = 0; i < KINDS.length; i++) {
@@ -707,6 +749,7 @@ input {
     else maskChipsEl.appendChild(chip)
   })
   paintChips()
+  paintPicker()
 
   addEl.addEventListener('click', function () {
     var kinds = selectedKinds()
@@ -716,6 +759,10 @@ input {
     api('/api/add-slot', { kinds: kinds })
     pendingMask = 0
     paintChips()
+    // Back out of the way: the slot is on its way and the next thing he
+    // wants to see is the row for it, not the chooser again.
+    pickerOpen = false
+    paintPicker()
     flash('adding')
   })
 
@@ -800,6 +847,10 @@ input {
       emptyEl.hidden = true
       loopEl.hidden = true
       pickerEl.hidden = true
+      // Don't come back from a closed discover mid-expand.
+      pickerHasSlots = false
+      pickerOpen = false
+      paintPicker()
       macEl.textContent = ''
       currentLoopId = null
       loadedLoopId = null
@@ -817,6 +868,8 @@ input {
     if (wantPlaying && currentLoopId !== loadedLoopId) loadLoop()
 
     pickerEl.hidden = false
+    pickerHasSlots = state.slots.length > 0
+    paintPicker()
     // Nothing to roll, play or keep until there is a slot -- and the add
     // row is then the only thing on screen, which is the point.
     emptyEl.hidden = state.slots.length > 0
