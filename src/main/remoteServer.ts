@@ -11,19 +11,45 @@ import {
   type PairingGate
 } from '@shared/remoteAuth'
 import type { RemoteCommand, RemoteStateResponse } from '@shared/remoteState'
+import { chooseLanAddress, type NetworkAddress } from '@shared/lanAddress'
 import { REMOTE_PAGE_CSP, REMOTE_PAGE_HTML } from './remotePage'
 
-/** The first non-internal IPv4 address on this machine -- what the desktop
- * shows him to type into the phone. Null when there is no LAN at all, in
- * which case the feature cannot work and the UI says so rather than
- * starting a server nothing can reach. */
-export function lanIPv4Address(): string | null {
-  for (const addresses of Object.values(networkInterfaces())) {
+/** node's `networkInterfaces()` as a flat list -- the interface name carried
+ * on each row instead of being the key above it, which is the shape the
+ * pure ranking in @shared/lanAddress takes. */
+function flattenInterfaces(): NetworkAddress[] {
+  const rows: NetworkAddress[] = []
+  for (const [name, addresses] of Object.entries(networkInterfaces())) {
     for (const address of addresses ?? []) {
-      if (address.family === 'IPv4' && !address.internal) return address.address
+      rows.push({
+        name,
+        address: address.address,
+        family: address.family,
+        internal: address.internal
+      })
     }
   }
-  return null
+  return rows
+}
+
+/** The address on this machine a phone on the same wifi can actually reach
+ * -- what the desktop shows him to type in. Null when there is no LAN at
+ * all, in which case the feature cannot work and the UI says so rather than
+ * starting a server nothing can reach.
+ *
+ * This used to return the first non-internal IPv4 it came across, which on
+ * a machine running tailscale meant the tailnet address: his laptop reached
+ * it (same tailnet) and his phone got "connection failed". The choosing is
+ * a ranking now, and it lives in @shared/lanAddress with his exact
+ * three-interface case as a test fixture -- node does not guarantee the
+ * order `networkInterfaces()` enumerates in, so nothing here may depend on
+ * it.
+ *
+ * If the top-ranked address is ever the wrong one on some machine,
+ * `rankLanAddresses` already returns every survivor best-first -- offering
+ * him the runners-up is then a change to the menu, not to this logic. */
+export function lanIPv4Address(): string | null {
+  return chooseLanAddress(flattenInterfaces())
 }
 
 export interface RemoteServerHandle {
