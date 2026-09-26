@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { CoachSlotSnapshot } from './coachClimax'
-import { remoteStateFromSlots } from './remoteState'
+import { remoteStateFromSlots, type RemoteStateResponse } from './remoteState'
 
 function slot(overrides: Partial<CoachSlotSnapshot> = {}): CoachSlotSnapshot {
   return {
@@ -86,5 +86,37 @@ describe('remoteStateFromSlots', () => {
       lastKeptName: 'misty kestrel',
       slots: []
     })
+  })
+})
+
+describe('RemoteStateResponse', () => {
+  it('carries a loop id and still never carries a filesystem path', () => {
+    const response: RemoteStateResponse = {
+      ...remoteStateFromSlots([slot()], {
+        discoverOpen: true,
+        playing: false,
+        kept: 0,
+        rolled: 0,
+        lastKeptName: null
+      }),
+      loopId: '0123456789abcdef'
+    }
+    expect(response.loopId).toMatch(/^[0-9a-f]{16}$/)
+    expect(JSON.stringify(response)).not.toContain('/Users/')
+    expect(JSON.stringify(response)).not.toContain('abc123')
+  })
+
+  it('reads a missing loop as null rather than an empty string', () => {
+    const response: RemoteStateResponse = {
+      ...remoteStateFromSlots([], {
+        discoverOpen: false,
+        playing: false,
+        kept: 0,
+        rolled: 0,
+        lastKeptName: null
+      }),
+      loopId: null
+    }
+    expect(response.loopId).toBeNull()
   })
 })

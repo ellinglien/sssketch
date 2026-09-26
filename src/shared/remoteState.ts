@@ -29,6 +29,19 @@ export interface RemoteState {
   slots: RemoteSlotView[]
 }
 
+/** What GET /api/state actually answers: the snapshot the renderer pushed,
+ * plus the id of the loop the phone can fetch right now.
+ *
+ * `loopId` is deliberately NOT part of RemoteState and is NOT produced by
+ * remoteStateFromSlots. The renderer does not know it -- main computes it
+ * from the EngineProject Discover pushes over IPC, which is full of real
+ * filesystem paths and never leaves the main process. Sixteen hex characters
+ * of a sha256 is what leaves, and the no-path property remoteState.test.ts
+ * asserts is preserved by construction rather than by care. */
+export interface RemoteStateResponse extends RemoteState {
+  loopId: string | null
+}
+
 export interface RemoteStateMeta {
   discoverOpen: boolean
   playing: boolean
@@ -61,12 +74,16 @@ export function remoteStateFromSlots(
   }
 }
 
-/** Everything the phone can ask the Mac to do. Four verbs, and nothing
+/** Everything the phone can ask the Mac to do. THREE verbs, and nothing
  * else: no arranging, no timeline, no slot add/remove, no kind picker, no
  * gain, no settings, no library browsing. The Mac sets the shape of the
- * loop; the phone rolls it. */
+ * loop; the phone rolls it.
+ *
+ * `transport` was here until 2026-09-26 and was removed on purpose when the
+ * phone became an audio client. One button cannot mean two outputs, and the
+ * phone's `play` now means the phone. The two outputs are independent by
+ * Elling's own instruction ("phone audio distinct from the app") -- the phone
+ * does not reach into the Mac's transport in either direction, and both
+ * playing at once is intended rather than a bug. */
 export type RemoteCommand =
-  | { kind: 'roll-slot'; slotId: string }
-  | { kind: 'roll-all' }
-  | { kind: 'transport'; play: boolean }
-  | { kind: 'keep' }
+  { kind: 'roll-slot'; slotId: string } | { kind: 'roll-all' } | { kind: 'keep' }
