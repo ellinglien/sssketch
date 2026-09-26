@@ -10,7 +10,7 @@ import {
   recordPairAttempt,
   type PairingGate
 } from '@shared/remoteAuth'
-import type { RemoteCommand, RemoteState } from '@shared/remoteState'
+import type { RemoteCommand, RemoteStateResponse } from '@shared/remoteState'
 import { REMOTE_PAGE_CSP, REMOTE_PAGE_HTML } from './remotePage'
 
 /** The first non-internal IPv4 address on this machine -- what the desktop
@@ -33,9 +33,14 @@ export interface RemoteServerHandle {
 }
 
 export interface RemoteServerOptions {
-  /** The last state the renderer pushed. Answered verbatim by GET
-   * /api/state -- the server holds no model of Discover at all. */
-  getState: () => RemoteState
+  /** The last state the renderer pushed, plus the current loopId. Answered
+   * verbatim by GET /api/state -- the server holds no model of Discover at
+   * all. */
+  getState: () => RemoteStateResponse
+  /** The current Discover loop as wav bytes, rendered on demand and cached
+   * by the caller. Null when there is no loop to play. Rejects when the
+   * render failed -- answered as 503 rather than crashing the server. */
+  loopWav: () => Promise<{ id: string; bytes: Buffer } | null>
   onCommand: (command: RemoteCommand) => void
   /** Called on every failed pairing attempt, so the desktop can say "two
    * tries left" and, on the fifth, that pairing is over for this session. */
@@ -80,8 +85,12 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
  * all, and it is why this is off by default.
  *
  * Five routes, and no route takes or returns a filesystem path or reads
- * the library. A paired attacker can roll dice and save a rifff. That is
- * the entire blast radius, by design rather than by accident.
+ * the library. GET /api/loop takes no parameters of any kind -- it serves
+ * the current Discover loop's wav bytes and names it in an x-loop-id
+ * header, so there is no id to validate and nothing to address but "now".
+ * A paired attacker can roll dice, save a rifff, and hear the loop that is
+ * already on screen. That is the entire blast radius, by design rather
+ * than by accident.
  *
  * BEFORE PAIRING THE SERVER SERVES THE PAIRING SCREEN AND NOTHING ELSE:
  * every unauthenticated request other than GET / and POST /api/pair gets
@@ -140,16 +149,42 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
         return
       }
 
+      if (req.method === 'GET' && url === '/api/loop') {
+        // TAKES NO PARAMETERS AT ALL -- not a path, not an id, not a query
+        // string. It serves whatever loop is current and names it in a
+        // header. There is nothing to validate, nothing to traverse, and no
+        // way to address anything but "now". A route with no input cannot be
+        // given a bad one, which is how this keeps the property the rest of
+        // the surface has: no route takes or returns a filesystem path.
+        //
+        // No byte-range handling, deliberately: the phone uses fetch +
+        // decodeAudioData, not a media element, so Safari never asks for one.
+        let loop: { id: string; bytes: Buffer } | null
+        try {
+          loop = await options.loopWav()
+        } catch (error) {
+          console.error('remoteServer: loop render failed:', error)
+          return respond(res, 503)
+        }
+        if (loop === null) {
+          res.writeHead(204)
+          res.end()
+          return
+        }
+        res.writeHead(200, {
+          'content-type': 'audio/wav',
+          'content-length': String(loop.bytes.length),
+          'x-loop-id': loop.id,
+          'cache-control': 'no-store'
+        })
+        res.end(loop.bytes)
+        return
+      }
+
       if (req.method === 'POST' && url === '/api/roll') {
         const body = await readJsonBody(req)
         const slotId = typeof body.slotId === 'string' ? body.slotId : null
         options.onCommand(slotId === null ? { kind: 'roll-all' } : { kind: 'roll-slot', slotId })
-        return respond(res, 200)
-      }
-
-      if (req.method === 'POST' && url === '/api/transport') {
-        const body = await readJsonBody(req)
-        options.onCommand({ kind: 'transport', play: body.play === true })
         return respond(res, 200)
       }
 
