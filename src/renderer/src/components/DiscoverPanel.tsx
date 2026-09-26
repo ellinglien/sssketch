@@ -39,6 +39,7 @@ import {
   createRadioClock,
   nextRadioIntervalBars,
   pickRadioSlotId,
+  RADIO_PACE_OPTIONS,
   type RadioClock,
   type RadioPace
 } from '@shared/radioSchedule'
@@ -308,6 +309,7 @@ export function DiscoverPanel({
   discoverConsented,
   traitMatchBar,
   radioPace,
+  onRadioPaceChange,
   setDiscoverConsented,
   seedBpm,
   onCoachSlotsChange
@@ -2759,6 +2761,69 @@ export function DiscoverPanel({
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <span style={{ marginLeft: 'auto' }} />
+        {/* Radio -- docs/superpowers/specs/2026-09-26-radio-mode-design.md.
+            Lit with --ra-play-on when on, exactly like the play/stop button
+            in the settings row above: the transport is audio information
+            and so is this. The label is `radio` either way; the lit state
+            says the rest. */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <button
+            onClick={toggleRadio}
+            data-tooltip="auto reroll"
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 10,
+              padding: '6px 14px',
+              background: radioOn ? 'var(--ra-play-on)' : 'transparent',
+              border: '1px solid var(--ra-border-strong)',
+              color: radioOn ? 'var(--ra-play-on-ink)' : 'var(--ra-text)',
+              cursor: 'pointer'
+            }}
+          >
+            radio
+          </button>
+          {/* How far through the current interval. Monochrome on purpose --
+              this is chrome, not audio information, and colour in this app
+              is spent only on things that carry audio information. A line
+              rather than a number because a number that jitters at 30Hz is
+              worse than a line that does. */}
+          <div
+            style={{
+              height: 2,
+              background: 'var(--ra-border)',
+              visibility: radioOn ? 'visible' : 'hidden'
+            }}
+          >
+            <div
+              style={{
+                height: '100%',
+                width: `${Math.round(radioProgress * 100)}%`,
+                background: 'var(--ra-text-3)'
+              }}
+            />
+          </div>
+        </div>
+        {radioOn && (
+          <div style={{ display: 'flex', gap: 4 }}>
+            {RADIO_PACE_OPTIONS.map((pace) => (
+              <button
+                key={pace}
+                onClick={() => void onRadioPaceChange(pace)}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 9,
+                  padding: '4px 8px',
+                  background: pace === radioPace ? 'var(--ra-bg-row-active)' : 'transparent',
+                  border: '1px solid var(--ra-border)',
+                  color: pace === radioPace ? 'var(--ra-text)' : 'var(--ra-text-3)',
+                  cursor: 'pointer'
+                }}
+              >
+                {pace}
+              </button>
+            ))}
+          </div>
+        )}
         <button
           onClick={() => void rerollAll()}
           disabled={rerollingSlotIds.size > 0}
