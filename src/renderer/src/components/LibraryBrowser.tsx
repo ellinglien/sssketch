@@ -42,6 +42,7 @@ import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
+import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import { DiscoverPanel, DISCOVER_UNDO_LIMIT, type DiscoverSlot } from './DiscoverPanel'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import {
@@ -249,6 +250,15 @@ export function LibraryBrowser({
     y: number
     jamCID: string
     jamName: string
+  } | null>(null)
+
+  // Right-click on a kept group's circle. Only ever opened in the
+  // discovered room -- everywhere else right-click keeps toggling
+  // favourite, as it always has.
+  const [discoveredRiffMenu, setDiscoveredRiffMenu] = useState<{
+    x: number
+    y: number
+    riffCID: string
   } | null>(null)
 
   // Per-jam sync status/trigger. syncStatus itself stays a single value (it's
@@ -525,15 +535,20 @@ export function LibraryBrowser({
   // visibleJams itself (used elsewhere for name lookups) stays sorted by
   // lastRiffTime, unaffected. Stable within each group.
   const sidebarJams = useMemo(() => {
+    // The discovered room goes above everything, including a jam that is
+    // actively syncing -- it is the room he opens most, and it has no
+    // lastRiffTime story worth sorting on.
+    const discovered: RiffLibraryJam[] = []
     const syncing: RiffLibraryJam[] = []
     const pinned: RiffLibraryJam[] = []
     const rest: RiffLibraryJam[] = []
     for (const jam of visibleJams) {
-      if (syncingKeys.has(syncKeyFor(jam.jamCID))) syncing.push(jam)
+      if (jam.jamCID === DISCOVERED_JAM_CID) discovered.push(jam)
+      else if (syncingKeys.has(syncKeyFor(jam.jamCID))) syncing.push(jam)
       else if (jam.jamCID.startsWith('shared:') || jam.jamCID === ownJam?.jamCID) pinned.push(jam)
       else rest.push(jam)
     }
-    return [...syncing, ...pinned, ...rest]
+    return [...discovered, ...syncing, ...pinned, ...rest]
   }, [visibleJams, syncingKeys, ownJam])
 
   // ---------------------------------------------------------------------
@@ -784,6 +799,15 @@ export function LibraryBrowser({
    * no-op) while this jam is actively syncing -- the same removeJamSync
    * call would otherwise reject anyway (a real race, not just wasted
    * work), so this catches the common case before even trying. */
+  /** Right-click "forget this" on a kept group. Deletes the Riffs row and
+   * any copied stem file no OTHER kept group still references; never a
+   * Stems row, never StemCategories/StemFeatureCache -- those are keyed by
+   * StemCID and are still true about the stem wherever else it lives. */
+  async function handleForgetDiscovered(riffCID: string): Promise<void> {
+    await window.rifffApi.forgetDiscoveredRifff(riffCID)
+    setRiffRefreshToken((n) => n + 1)
+  }
+
   const handleRemoveJamSync = useCallback(
     (jamCID: string, jamName: string, deleteFiles: boolean) => {
       if (syncingKeys.has(syncKeyFor(jamCID))) {
@@ -1671,6 +1695,10 @@ export function LibraryBrowser({
                         // always offering it.
                         onContextMenu={(e) => {
                           e.preventDefault()
+                          // Nothing to remove from sync for a room the app
+                          // built itself, and choosing it would delete his
+                          // finds.
+                          if (jam.jamCID === DISCOVERED_JAM_CID) return
                           setJamContextMenu({
                             x: e.clientX,
                             y: e.clientY,
@@ -1736,7 +1764,9 @@ export function LibraryBrowser({
                           {visibleJams.find((j) => j.jamCID === selectedJamCID)?.name ??
                             selectedJamCID}
                         </span>
-                        {authStatus.loggedIn && (
+                        {/* No sync control for the discovered room -- there is
+                            no upstream to sync it with. */}
+                        {authStatus.loggedIn && selectedJamCID !== DISCOVERED_JAM_CID && (
                           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                             <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
                               {syncStatus
@@ -2066,6 +2096,14 @@ export function LibraryBrowser({
                                         onClick={(e) => handleRiffClick(e, riff.riffCID)}
                                         onContextMenu={(e) => {
                                           e.preventDefault()
+                                          if (selectedJamCID === DISCOVERED_JAM_CID) {
+                                            setDiscoveredRiffMenu({
+                                              x: e.clientX,
+                                              y: e.clientY,
+                                              riffCID: riff.riffCID
+                                            })
+                                            return
+                                          }
                                           toggleRiffFavourite(riff.riffCID)
                                         }}
                                       />
@@ -2265,6 +2303,20 @@ export function LibraryBrowser({
               danger: true,
               onClick: () =>
                 handleRemoveJamSync(jamContextMenu.jamCID, jamContextMenu.jamName, true)
+            }
+          ]}
+        />
+      )}
+      {discoveredRiffMenu && (
+        <ContextMenu
+          x={discoveredRiffMenu.x}
+          y={discoveredRiffMenu.y}
+          onClose={() => setDiscoveredRiffMenu(null)}
+          items={[
+            {
+              label: 'forget this',
+              danger: true,
+              onClick: () => void handleForgetDiscovered(discoveredRiffMenu.riffCID)
             }
           ]}
         />
