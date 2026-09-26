@@ -1925,3 +1925,47 @@ async function getRandomOwnStemCandidate(
   }
   return null
 }
+
+/** Folds one just-committed riff into the IN-MEMORY caches, instead of
+ * letting the write invalidate them.
+ *
+ * discoverIndexCache.ts's appendRiffIndexRows/appendInstrumentRows handle
+ * the persisted half (read at startup). This is the half that matters
+ * during a session: riffIndexCache/instrumentRowsCache are re-validated by
+ * isScanCacheCurrent against a live TableSignal at most every
+ * CACHE_CHANGE_CHECK_INTERVAL_MS (30s), so without this a keep makes the
+ * next roll within half a minute pay a full rebuild of the own db's index
+ * -- exactly the roll/keep/roll loop this is for.
+ *
+ * MUST BE CALLED AFTER THE TRANSACTION COMMITS. It refreshes each cache's
+ * stored signal by re-reading the table, which has to see the new counts;
+ * called inside the transaction it would record a stale signal and the
+ * very next check would invalidate anyway.
+ *
+ * A stem already in the index keeps whichever riff it was first seen in --
+ * the same first-seen-wins rule buildRiffIndex uses. `instrumentRows`
+ * should carry ONLY stems that genuinely got a new Stems row (the caller
+ * knows which; this does no dedup of its own, deliberately, so a keep
+ * never scans a 367k-row array). A db whose caches were never built is
+ * left alone: there is nothing to keep current. */
+export function appendToInMemoryDiscoverCaches(
+  db: Database.Database,
+  riffEntries: readonly { stemCID: string; entry: RiffIndexEntry }[],
+  instrumentRows: readonly { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
+): void {
+  const now = Date.now()
+  const riffCached = riffIndexCache.get(db)
+  if (riffCached) {
+    for (const { stemCID, entry } of riffEntries) {
+      if (!riffCached.index.has(stemCID)) riffCached.index.set(stemCID, entry)
+    }
+    riffCached.state.signal = readTableSignal(db, 'Riffs')
+    riffCached.state.checkedAt = now
+  }
+  const stemCached = instrumentRowsCache.get(db)
+  if (stemCached) {
+    for (const row of instrumentRows) stemCached.rows.push(row)
+    stemCached.state.signal = readTableSignal(db, 'Stems')
+    stemCached.state.checkedAt = now
+  }
+}

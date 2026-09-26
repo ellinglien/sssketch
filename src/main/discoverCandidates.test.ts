@@ -5,7 +5,8 @@ import {
   getDiscoverCandidates,
   getRandomLibraryCandidate,
   prewarmDiscoverCandidateCaches,
-  getRiffIndexForDb
+  getRiffIndexForDb,
+  appendToInMemoryDiscoverCaches
 } from './discoverCandidates'
 import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
 import { upsertStemCategoryRole } from './stemCategoriesStore'
@@ -2419,5 +2420,65 @@ describe('stems that can no longer be downloaded are never offered', () => {
       kinds: ['drums']
     })
     expect(candidates.map((c) => c.stemCID).sort()).toEqual(['s1', 's2'])
+  })
+})
+
+describe('appendToInMemoryDiscoverCaches', () => {
+  it('adds a stem to an already-built riff index without rebuilding it', async () => {
+    const db = freshDb()
+    seedRiff(db, 'r1', 'j1', 120, ['s1'])
+    seedStem(db, 's1', 'j1')
+    const first = await getRiffIndexForDb(db)
+    expect(first.size).toBe(1)
+
+    seedRiff(db, 'r2', 'discovered', 140, ['s2'])
+    appendToInMemoryDiscoverCaches(
+      db,
+      [
+        {
+          stemCID: 's2',
+          entry: { riffCID: 'r2', ownerJamCID: 'discovered', bpmRnd: 140, creationTime: 20 }
+        }
+      ],
+      []
+    )
+    const second = await getRiffIndexForDb(db)
+    expect(second).toBe(first)
+    expect(second.get('s2')?.riffCID).toBe('r2')
+    db.close()
+  })
+
+  it('leaves a stem already in the index pointing at the riff it was first seen in', async () => {
+    const db = freshDb()
+    seedRiff(db, 'r1', 'j1', 120, ['s1'])
+    seedStem(db, 's1', 'j1')
+    await getRiffIndexForDb(db)
+
+    appendToInMemoryDiscoverCaches(
+      db,
+      [
+        {
+          stemCID: 's1',
+          entry: { riffCID: 'r2', ownerJamCID: 'discovered', bpmRnd: 140, creationTime: 20 }
+        }
+      ],
+      []
+    )
+    const index = await getRiffIndexForDb(db)
+    expect(index.get('s1')?.riffCID).toBe('r1')
+    db.close()
+  })
+
+  it('is a no-op for a db whose caches were never built', () => {
+    const db = new Database(':memory:')
+    db.exec(`CREATE TABLE Riffs (RiffCID TEXT PRIMARY KEY); CREATE TABLE Stems (StemCID TEXT);`)
+    expect(() =>
+      appendToInMemoryDiscoverCaches(
+        db,
+        [{ stemCID: 's1', entry: { riffCID: 'r', ownerJamCID: 'j', bpmRnd: 1, creationTime: 1 } }],
+        []
+      )
+    ).not.toThrow()
+    db.close()
   })
 })

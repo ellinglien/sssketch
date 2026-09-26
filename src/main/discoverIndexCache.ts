@@ -199,3 +199,79 @@ export function saveInstrumentRowsCache(
   })
   tx()
 }
+
+/** One kept group's rows, appended to an ALREADY-SAVED riff index rather
+ * than invalidating it.
+ *
+ * Why this exists: the freshness check for this cache is a per-db row
+ * count (getCachedRiffCount vs a live COUNT(*) FROM Riffs, compared in
+ * discoverCandidates.ts's prewarmDiscoverCandidateCaches). Saving a
+ * discovered group adds a Riffs row to the own db, which moves that count,
+ * which means the next launch pays a FULL rebuild. In the roll/keep/roll
+ * loop this feature is built around, that is the difference between a game
+ * and a progress bar.
+ *
+ * NO TRANSACTION OF ITS OWN, deliberately: the caller
+ * (discoveredLibrary.ts's saveDiscoveredRifff) wraps this, writeRiffDetail
+ * and everything else in ONE transaction, so a save is all-or-nothing
+ * across the real rows and the cache rows alike.
+ *
+ * ON CONFLICT DO NOTHING matches buildRiffIndex's own first-seen-wins rule
+ * for a stem that appears in more than one riff -- this table is
+ * PRIMARY KEY (SourceDbKey, StemCID), one row per stem, not per riff.
+ *
+ * A key with no meta row has never been cached at all, and half a cache is
+ * worse than none: appending to it would make a partial index look
+ * complete. Returns without writing anything in that case. */
+export function appendRiffIndexRows(
+  ownDb: Database.Database,
+  sourceDbKey: string,
+  rows: readonly {
+    stemCID: string
+    riffCID: string
+    ownerJamCID: string
+    bpmRnd: number
+    creationTime: number | null
+  }[],
+  riffCountDelta: number
+): void {
+  const existing = getCachedRiffCount(ownDb, sourceDbKey)
+  if (existing === null) return
+  const insert = ownDb.prepare(
+    `INSERT INTO DiscoverRiffIndexCache (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime)
+     VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(SourceDbKey, StemCID) DO NOTHING`
+  )
+  for (const row of rows) {
+    insert.run(sourceDbKey, row.stemCID, row.riffCID, row.ownerJamCID, row.bpmRnd, row.creationTime)
+  }
+  ownDb
+    .prepare(
+      `UPDATE DiscoverRiffIndexCacheMeta SET RiffCount = ?, ComputedAt = ? WHERE SourceDbKey = ?`
+    )
+    .run(existing + riffCountDelta, Date.now(), sourceDbKey)
+}
+
+/** Same shape and the same reasoning as appendRiffIndexRows above, for
+ * getInstrumentRowsForDb's own cache. Needed too, not just the riff index:
+ * a stem from an external archive gets a genuinely NEW Stems row in the
+ * own db when a group referencing it is kept, which moves the Stems count
+ * this cache is checked against. */
+export function appendInstrumentRows(
+  ownDb: Database.Database,
+  sourceDbKey: string,
+  rows: readonly CachedInstrumentRow[],
+  stemCountDelta: number
+): void {
+  const existing = getCachedStemCount(ownDb, sourceDbKey)
+  if (existing === null) return
+  const insert = ownDb.prepare(
+    `INSERT INTO DiscoverInstrumentRowsCache (SourceDbKey, StemCID, Instrument, OwnerJamCID)
+     VALUES (?, ?, ?, ?) ON CONFLICT(SourceDbKey, StemCID) DO NOTHING`
+  )
+  for (const row of rows) insert.run(sourceDbKey, row.StemCID, row.Instrument, row.OwnerJamCID)
+  ownDb
+    .prepare(
+      `UPDATE DiscoverInstrumentRowsCacheMeta SET StemCount = ?, ComputedAt = ? WHERE SourceDbKey = ?`
+    )
+    .run(existing + stemCountDelta, Date.now(), sourceDbKey)
+}

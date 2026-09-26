@@ -2,6 +2,8 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import {
+  appendInstrumentRows,
+  appendRiffIndexRows,
   getCachedRiffCount,
   getCachedStemCount,
   loadCachedRiffIndex,
@@ -151,6 +153,100 @@ describe('discoverIndexCache', () => {
 
       const loaded = await loadCachedInstrumentRows(own, 'db-a')
       expect(loaded.map((r) => r.StemCID)).toEqual(['s2'])
+    })
+  })
+
+  describe('appendRiffIndexRows', () => {
+    it('adds a row and bumps the stored RiffCount', async () => {
+      const db = freshOwnDb()
+      saveRiffIndexCache(
+        db,
+        'key1',
+        new Map([['s1', { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 120, creationTime: 10 }]]),
+        1
+      )
+      appendRiffIndexRows(
+        db,
+        'key1',
+        [
+          {
+            stemCID: 's2',
+            riffCID: 'r2',
+            ownerJamCID: 'discovered',
+            bpmRnd: 140,
+            creationTime: 20
+          }
+        ],
+        1
+      )
+      expect(getCachedRiffCount(db, 'key1')).toBe(2)
+      const loaded = await loadCachedRiffIndex(db, 'key1')
+      expect(loaded.get('s2')).toEqual({
+        riffCID: 'r2',
+        ownerJamCID: 'discovered',
+        bpmRnd: 140,
+        creationTime: 20
+      })
+    })
+
+    it('leaves an already-indexed stem pointing at the riff it was first seen in', async () => {
+      const db = freshOwnDb()
+      saveRiffIndexCache(
+        db,
+        'key1',
+        new Map([['s1', { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 120, creationTime: 10 }]]),
+        1
+      )
+      appendRiffIndexRows(
+        db,
+        'key1',
+        [
+          {
+            stemCID: 's1',
+            riffCID: 'r2',
+            ownerJamCID: 'discovered',
+            bpmRnd: 140,
+            creationTime: 20
+          }
+        ],
+        1
+      )
+      const loaded = await loadCachedRiffIndex(db, 'key1')
+      expect(loaded.get('s1')?.riffCID).toBe('r1')
+      expect(getCachedRiffCount(db, 'key1')).toBe(2)
+    })
+
+    it('does nothing at all for a key that has never been cached', () => {
+      const db = freshOwnDb()
+      appendRiffIndexRows(
+        db,
+        'never',
+        [{ stemCID: 's1', riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 120, creationTime: 1 }],
+        1
+      )
+      expect(getCachedRiffCount(db, 'never')).toBe(null)
+    })
+  })
+
+  describe('appendInstrumentRows', () => {
+    it('adds a row and bumps the stored StemCount', async () => {
+      const db = freshOwnDb()
+      saveInstrumentRowsCache(db, 'key1', [{ StemCID: 's1', Instrument: 1, OwnerJamCID: 'j1' }], 1)
+      appendInstrumentRows(
+        db,
+        'key1',
+        [{ StemCID: 's2', Instrument: 4, OwnerJamCID: 'discovered' }],
+        1
+      )
+      expect(getCachedStemCount(db, 'key1')).toBe(2)
+      const rows = await loadCachedInstrumentRows(db, 'key1')
+      expect(rows.map((r) => r.StemCID).sort()).toEqual(['s1', 's2'])
+    })
+
+    it('does nothing at all for a key that has never been cached', () => {
+      const db = freshOwnDb()
+      appendInstrumentRows(db, 'never', [{ StemCID: 's1', Instrument: 1, OwnerJamCID: 'j' }], 1)
+      expect(getCachedStemCount(db, 'never')).toBe(null)
     })
   })
 })
