@@ -34,7 +34,14 @@ import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { applyTraitBar } from '@shared/traitBar'
-import type { RadioPace } from '@shared/radioSchedule'
+import {
+  advanceRadioClock,
+  createRadioClock,
+  nextRadioIntervalBars,
+  pickRadioSlotId,
+  type RadioClock,
+  type RadioPace
+} from '@shared/radioSchedule'
 import {
   buildMatchMeter,
   discoverRoleLabel,
@@ -255,6 +262,14 @@ export function freshSlotId(): string {
 // The global roll filters' starting state -- see globalModifiers.
 const DEFAULT_GLOBAL_MODIFIERS: DiscoverSlotModifier[] = ['endlesss', 'other', 'mine']
 
+// What radio lays down when it is started on an empty panel -- four,
+// because it is the smallest set that sounds like a band rather than like
+// a loop. Deliberately not random: a predictable starting bed is easier to
+// reason about than a surprising one, and every layer is one click from
+// being changed anyway. See docs/superpowers/specs/2026-09-26-radio-mode-
+// design.md 3.6.
+const RADIO_STARTER_KINDS: DiscoverSlotKind[] = ['drums', 'bass', 'lead', 'warm']
+
 // Picks one of `options` uniformly at random, for the "+ random"
 // slot-creation button (addRandomSlot below). Deliberately NOT
 // Math.random() -- this file avoids that specific global inside any
@@ -292,6 +307,7 @@ export function DiscoverPanel({
   currentUsername,
   discoverConsented,
   traitMatchBar,
+  radioPace,
   setDiscoverConsented,
   seedBpm,
   onCoachSlotsChange
@@ -1114,6 +1130,114 @@ export function DiscoverPanel({
   const rerollGenerationRef = useRef<Map<string, number>>(new Map())
   const [rerollingSlotIds, setRerollingSlotIds] = useState<Set<string>>(new Set())
 
+  // --- radio mode (docs/superpowers/specs/2026-09-26-radio-mode-design.md)
+  //
+  // Radio is Discover with a clock: while the preview plays, one unlocked,
+  // audible layer rerolls on its own every so often. Everything schedulable
+  // lives in @shared/radioSchedule; what is here is the wiring.
+  const [radioOn, setRadioOn] = useState(false)
+  // Synchronously-current mirror of radioOn, for the same stale-closure
+  // reason previewingSlotIdsRef and slotsRef exist: armRadioPick awaits a
+  // real IPC round trip and must see a switch-off that happened during it.
+  // Mirrored through an effect, NOT by assigning during render -- this
+  // repo's react-hooks/purity rule rejects a render-time ref write, and
+  // slotsRef above already establishes the effect form as this file's
+  // pattern. toggleRadio also sets it synchronously on switch-off, so a
+  // stop takes effect before the next tick rather than a render later.
+  const radioOnRef = useRef(false)
+  useEffect(() => {
+    radioOnRef.current = radioOn
+  }, [radioOn])
+  // The live clock. A REF, not state: it is written from the position-tick
+  // effect below at ~30Hz and re-rendering the whole panel for each tick
+  // would be pointless (the panel already re-renders at that rate for the
+  // playhead, and this value is read, not displayed, except through
+  // radioProgress below which is derived at render time).
+  const radioClockRef = useRef<RadioClock | null>(null)
+  // What radio will play next, chosen a whole interval early so
+  // resolveCandidateStem's module-level cache has time to warm (spec 2.4).
+  const radioPendingRef = useRef<{ slotId: string; pick: SlotPick } | null>(null)
+  // Which slot radio changed last -- so it never changes the same one
+  // twice running (pickRadioSlotId).
+  const radioLastSlotRef = useRef<string | null>(null)
+  // Fraction of the current interval elapsed, 0..1, for the progress rule
+  // under the button. State, not a ref, because it IS displayed -- but
+  // written at most once per position tick, which the panel re-renders on
+  // anyway.
+  const [radioProgress, setRadioProgress] = useState(0)
+
+  // Radio's clock. Driven ONLY by the engine's real position stream -- no
+  // setInterval anywhere, on purpose: the engine stops its 33ms timer on
+  // "pause" (IpcServer.cpp), so `pos` stops changing and this clock stops
+  // and resumes with the transport for free.
+  //
+  // `due` is true only at a LOOP WRAP at or after the interval (spec 2.2):
+  // a change dropped at bar 7 of an 8-bar loop is a splice; a change
+  // dropped at the wrap is a new section. The effective interval is
+  // therefore ceil(intervalBars / loopBars) * loopBars.
+  //
+  // Sits here, directly under radio's own state, rather than up with the
+  // other `pos`-adjacent effects: its dependency array is evaluated during
+  // render, so it cannot be written above the `const`s it names.
+  // (armRadioPick, radioEligibleSlotIds and commitSlotPick are `function`
+  // declarations further down this component body, so they are hoisted and
+  // available here -- the effect only runs after render regardless.)
+  useEffect(() => {
+    if (!radioOn) return
+    const clock = radioClockRef.current
+    if (!clock) return
+    const loopBars =
+      resolvedBarLengthsRef.current.size > 0
+        ? Math.max(...resolvedBarLengthsRef.current.values())
+        : 0
+    if (!(loopBars > 0)) return
+    const step = advanceRadioClock(clock, pos, loopBars)
+    radioClockRef.current = step.clock
+    // Deferred out of the effect body: this repo ERRORS on a synchronous
+    // setState inside an effect (react-hooks/set-state-in-effect), and the
+    // established workaround in this codebase is a resolved-promise tick.
+    const progress = Math.max(0, Math.min(1, step.clock.barsElapsed / step.clock.intervalBars))
+    void Promise.resolve().then(() => setRadioProgress(progress))
+    if (!step.due) return
+
+    // Due. Draw a fresh interval and reset the clock FIRST, so a slow
+    // commit below cannot fire a second change on the very next tick.
+    radioClockRef.current = createRadioClock(nextRadioIntervalBars(radioPace), pos)
+    void Promise.resolve().then(() => setRadioProgress(0))
+
+    const pending = radioPendingRef.current
+    radioPendingRef.current = null
+    // The pick was made a whole interval ago, so the world may have moved:
+    // the slot may since have been removed, locked or muted. Re-check, and
+    // if it is no longer eligible drop the pick and arm a fresh one --
+    // resolving a few hundred milliseconds late is strictly better than
+    // swapping a layer the user just locked.
+    const eligibleNow = radioEligibleSlotIds()
+    // Everything below sets state, and this repo ERRORS on a synchronous
+    // setState inside an effect -- commitSlotPick calls setSlots, and
+    // armRadioPick reaches pickForSlot's setRolledCount/setRerollingSlotIds
+    // BEFORE its first await. Both are deferred through the same
+    // resolved-promise tick the progress write above uses.
+    void Promise.resolve().then(() => {
+      if (!radioOnRef.current) return
+      if (pending !== null && eligibleNow.includes(pending.slotId)) {
+        // No pushUndoSnapshot: radio firing every twenty bars would fill
+        // the undo stack and make Cmd+Z useless for the edits the user
+        // actually made by hand. A radio change is not undoable; the
+        // padlock is the tool for "I liked that one" (spec 3.4).
+        commitSlotPick(pending.slotId, pending.pick)
+        radioLastSlotRef.current = pending.slotId
+      }
+      // Arm the next one whether or not this one landed -- nothing
+      // eligible is radio idling, not an error, and it retries here at
+      // every boundary.
+      void armRadioPick()
+    })
+    // `pos` is the only real dependency; every function above is re-created
+    // each render and reads through refs on purpose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pos, radioOn, radioPace])
+
   // In-flight + just-succeeded tracking for BOTH "add to timeline" and "add
   // to shelf" -- independent per button (clicking one doesn't disable or
   // animate the other), same disabled/label-swap convention as
@@ -1378,6 +1502,8 @@ export function DiscoverPanel({
         lastKeptName: null,
         slots: []
       })
+      radioClockRef.current = null
+      radioPendingRef.current = null
     }
   }, [])
 
@@ -1983,6 +2109,79 @@ export function DiscoverPanel({
       if (!current) continue
       if (!current.locked) await rollForSlot(current.id, current.kinds)
     }
+  }
+
+  /** Which slots radio is allowed to change right now: unlocked, audible
+   * (a muted slot is not part of what you are listening to, so changing it
+   * would be a change you cannot hear), already holding a candidate, and
+   * not already mid-roll. Read from slotsRef, not `slots`, for the same
+   * stale-closure reason rerollAll does -- the position-tick effect above
+   * runs from a closure that can be a render behind. */
+  function radioEligibleSlotIds(): string[] {
+    return slotsRef.current
+      .filter(
+        (s) =>
+          !s.locked &&
+          previewingSlotIdsRef.current.has(s.id) &&
+          s.candidate !== null &&
+          !rerollingSlotIds.has(s.id)
+      )
+      .map((s) => s.id)
+  }
+
+  /** Chooses radio's NEXT change and warms it. Called right after each
+   * change lands (and once when radio starts), so the prefetch gets the
+   * whole interval -- 12 to 48 bars, long enough for a cold stem to
+   * download before it is needed.
+   *
+   * The warm is the load-bearing half: resolveCandidateStem memoises by
+   * `${riffCID}:${stemCID}` in a module-level map, so calling it here and
+   * throwing the promise away means DiscoverSlotRow's own resolve effect
+   * hits a SETTLED promise when the candidate is finally committed. Without
+   * it a radio change would land hundreds of milliseconds -- or a whole
+   * download -- after the downbeat it was scheduled for. */
+  async function armRadioPick(): Promise<void> {
+    radioPendingRef.current = null
+    const eligible = radioEligibleSlotIds()
+    const slotId = pickRadioSlotId(eligible, radioLastSlotRef.current)
+    if (slotId === null) return
+    const slot = slotsRef.current.find((s) => s.id === slotId)
+    if (!slot) return
+    const pick = await pickForSlot(slotId, slot.kinds)
+    if (pick === null || pick.candidate === null) return
+    if (!radioOnRef.current) return
+    // Warm the cache and deliberately ignore the result -- a null (network
+    // hiccup, since-deleted riff) deletes its own cache entry, the slot
+    // keeps its previous stem, and radio simply tries again at the next
+    // boundary. Same soft degradation every other Discover path takes.
+    void resolveCandidateStem(pick.candidate)
+    radioPendingRef.current = { slotId, pick }
+  }
+
+  /** The radio button. Starting lays down a bed if the panel is empty --
+   * a button that does nothing on a fresh panel is not the thing he asked
+   * for, and four layers is the smallest set that sounds like a band
+   * rather than like a loop. addSlot does its own first roll per slot, so
+   * this is the same four clicks the user would otherwise make. */
+  function toggleRadio(): void {
+    if (radioOn) {
+      radioOnRef.current = false
+      setRadioOn(false)
+      radioClockRef.current = null
+      radioPendingRef.current = null
+      radioLastSlotRef.current = null
+      setRadioProgress(0)
+      return
+    }
+    if (slotsRef.current.length === 0) {
+      for (const kind of RADIO_STARTER_KINDS) addSlot([kind])
+    }
+    radioOnRef.current = true
+    radioClockRef.current = createRadioClock(nextRadioIntervalBars(radioPace), pos)
+    radioLastSlotRef.current = null
+    setRadioProgress(0)
+    setRadioOn(true)
+    void armRadioPick()
   }
 
   // Shared by addToTimeline and addToShelf below -- resolves every
