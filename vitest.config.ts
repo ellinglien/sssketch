@@ -26,6 +26,24 @@ export default defineConfig({
     // and not worth more blind guessing at. (Filenames updated for the
     // 2026-08-14 riff-library rename; the underlying files/crash are
     // unchanged.)
+    //
+    // GROWN 2026-09-25, and the reason it had to be is worth recording: this
+    // list named only the 5 files below, and was never extended when Discover
+    // landed (2026-09-15..22). The v1.2.0 release build then failed on BOTH
+    // legs with 22 `Worker exited unexpectedly` errors and ZERO failed tests
+    // -- 21 further files crashed their workers before running, and vitest
+    // exits non-zero for a dead worker. Nothing was wrong with the code; the
+    // release was simply unshippable until this list caught up. The failure
+    // signature to watch for is exactly that: a non-zero exit with no failed
+    // test named, and a file count well below the local one.
+    //
+    // The 21 added below are the set that EMPIRICALLY crashed in run
+    // 36196299329, not everything that touches the addon. Four others reach
+    // better-sqlite3 through their subject module but run fine, because they
+    // never open a database: discoverAdjacency, projectLibrary,
+    // riffLibraryMigration, stemAutoClassifyScheduler. They stay in CI
+    // deliberately -- excluding a passing test to be tidy is lost coverage
+    // for nothing.
     exclude: process.env.CI
       ? [
           ...configDefaults.exclude,
@@ -33,7 +51,28 @@ export default defineConfig({
           'src/main/riffLibrarySchema.test.ts',
           'src/main/riffLibrarySync.test.ts',
           'src/main/riffLibraryWriter.test.ts',
-          'src/main/riffFavouritesMigration.test.ts'
+          'src/main/riffFavouritesMigration.test.ts',
+          'src/main/categoryCentroidTraining.test.ts',
+          'src/main/discoverCandidates.test.ts',
+          'src/main/discoverIndexCache.test.ts',
+          'src/main/discoverLibraryStems.test.ts',
+          'src/main/embeddingMatch.test.ts',
+          'src/main/instrumentMaskCentroidBackfill.test.ts',
+          'src/main/resolveStemArrangeRole.test.ts',
+          'src/main/scanTargetCache.test.ts',
+          'src/main/stemAnalysisNeeds.test.ts',
+          'src/main/stemAnalysisResultsWriter.test.ts',
+          'src/main/stemAutoCategoryStore.test.ts',
+          'src/main/stemAutoClassify.test.ts',
+          'src/main/stemAvailability.test.ts',
+          'src/main/stemCategoriesBackfill.test.ts',
+          'src/main/stemCategoriesStore.test.ts',
+          'src/main/stemEmbeddingCacheStore.test.ts',
+          'src/main/stemFeatureCacheStore.test.ts',
+          'src/main/stemPeaksCacheStore.test.ts',
+          'src/main/stemUnavailableStore.test.ts',
+          'src/main/tidyUpLibraryStems.test.ts',
+          'src/main/traitQuantileCache.test.ts'
         ]
       : configDefaults.exclude,
     passWithNoTests: true
