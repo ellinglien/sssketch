@@ -6,7 +6,8 @@ import {
   advanceRadioClock,
   createRadioClock,
   nextRadioIntervalBars,
-  normalizeRadioPace
+  normalizeRadioPace,
+  pickRadioSlotId
 } from './radioSchedule'
 
 describe('radio paces', () => {
@@ -155,5 +156,48 @@ describe('advanceRadioClock', () => {
     const step = advanceRadioClock(clock, 2, 0)
     expect(step.clock.barsElapsed).toBe(0)
     expect(step.due).toBe(false)
+  })
+})
+
+describe('pickRadioSlotId', () => {
+  it('returns null when nothing is eligible', () => {
+    expect(pickRadioSlotId([], null, () => 0)).toBeNull()
+  })
+
+  it('returns the only eligible slot', () => {
+    expect(pickRadioSlotId(['a'], null, () => 0)).toBe('a')
+  })
+
+  it('returns the only eligible slot even when it changed last', () => {
+    expect(pickRadioSlotId(['a'], 'a', () => 0)).toBe('a')
+  })
+
+  it('never picks the slot that changed last when another is eligible', () => {
+    for (const r of [0, 0.2, 0.4, 0.6, 0.8, 0.9999]) {
+      expect(pickRadioSlotId(['a', 'b', 'c'], 'b', () => r)).not.toBe('b')
+    }
+  })
+
+  it('can reach every other eligible slot', () => {
+    const seen = new Set<string | null>()
+    for (const r of [0, 0.34, 0.67, 0.9999]) {
+      seen.add(pickRadioSlotId(['a', 'b', 'c'], 'a', () => r))
+    }
+    expect(seen).toEqual(new Set(['b', 'c']))
+  })
+
+  it('ignores a lastChangedId that is no longer eligible', () => {
+    const seen = new Set<string | null>()
+    for (const r of [0, 0.34, 0.67, 0.9999]) {
+      seen.add(pickRadioSlotId(['a', 'b', 'c'], 'gone', () => r))
+    }
+    expect(seen).toEqual(new Set(['a', 'b', 'c']))
+  })
+
+  it('never returns an id that was not eligible', () => {
+    for (let i = 0; i < 50; i++) {
+      const picked = pickRadioSlotId(['x', 'y'], 'x', Math.random)
+      expect(['x', 'y']).toContain(picked)
+    }
   })
 })

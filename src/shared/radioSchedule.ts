@@ -110,3 +110,28 @@ export function advanceRadioClock(
     due: wrapped && barsElapsed >= clock.intervalBars
   }
 }
+
+/** Which single layer turns over next.
+ *
+ * ONE at a time is the whole point (spec 3.1): everything changing
+ * together is just a new loop on a timer, while one at a time lets a bed
+ * you recognise evolve under you.
+ *
+ * `eligible` is decided by the caller -- unlocked, audible, already
+ * holding a candidate, not mid-reroll. The only rule here is "not the same
+ * one twice running", which is enough variety without a rotation nobody
+ * asked for (a least-recently-changed order is an explicit "not now").
+ * Returns null only for an empty list, which is radio idling rather than
+ * an error: everything locked is a legitimate state and radio simply
+ * retries at the next boundary. */
+export function pickRadioSlotId(
+  eligible: readonly string[],
+  lastChangedId: string | null,
+  random: () => number = Math.random
+): string | null {
+  if (eligible.length === 0) return null
+  const pool = eligible.length > 1 ? eligible.filter((id) => id !== lastChangedId) : eligible
+  const choices = pool.length > 0 ? pool : eligible
+  const index = Math.min(choices.length - 1, Math.floor(random() * choices.length))
+  return choices[index]
+}
