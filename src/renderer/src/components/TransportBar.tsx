@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { traitMatchBarLabel } from '@shared/traitBar'
+import { REMOTE_MAX_PAIR_ATTEMPTS } from '@shared/remoteAuth'
 import { useAppState, useDispatch, usePos, usePlaying } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { loopLengthBars } from '../state/selectors'
@@ -292,6 +293,44 @@ export function TransportBar({
     username?: string
   } | null>(null)
 
+  // The phone remote (src/main/remoteServer.ts): OFF BY DEFAULT, opt-in per
+  // session, never persisted, stopped on quit. Kept live rather than
+  // fetched-on-open like endlesssStatus above, because main pushes a status
+  // on every failed pairing attempt and the menu should be able to say how
+  // many tries are left while he is standing there watching it.
+  const [phoneRemote, setPhoneRemote] = useState<{
+    running: boolean
+    url: string | null
+    pairingCode: string | null
+    attemptsUsed: number
+    lockedOut: boolean
+    lanAddress: string | null
+  } | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    window.rifffApi
+      .getPhoneRemoteStatus()
+      .then((status) => {
+        if (!cancelled) setPhoneRemote(status)
+      })
+      .catch((err) => {
+        console.error('TransportBar: getPhoneRemoteStatus() failed:', err)
+      })
+    const off = window.rifffApi.onPhoneRemoteStatus((status) => setPhoneRemote(status))
+    return () => {
+      cancelled = true
+      off()
+    }
+  }, [])
+
+  async function togglePhoneRemote(): Promise<void> {
+    const next = phoneRemote?.running
+      ? await window.rifffApi.stopPhoneRemote()
+      : await window.rifffApi.startPhoneRemote()
+    setPhoneRemote(next)
+  }
+
   // Discover's background classify scan (stemAutoClassifyScheduler.ts) has
   // no progress UI of its own -- direct request, 2026-09-15 ("any way to
   // show the progress of the discovery scan? maybe in the gear menu where
@@ -472,6 +511,16 @@ export function TransportBar({
       .catch((err) => {
         console.error('TransportBar: getDiscoverClassifyProgress() failed:', err)
         setClassifyProgress(null)
+      })
+    // lanAddress is a fact about the machine right now (he may have joined
+    // or left a network since mount), and the entry is disabled when there
+    // is none -- so re-read it as the menu opens, same convention as the
+    // two fetches above.
+    void window.rifffApi
+      .getPhoneRemoteStatus()
+      .then((status) => setPhoneRemote(status))
+      .catch((err) => {
+        console.error('TransportBar: getPhoneRemoteStatus() failed:', err)
       })
   }
 
@@ -878,6 +927,47 @@ export function TransportBar({
               label: 'change riff archive location…',
               onClick: () => void handleChangeRiffLibraryLocation()
             },
+            // The phone remote. Off by default, per session, never
+            // persisted -- see remoteServer.ts. The rows under it are the
+            // disabled-info-row pattern the classify-scan row below already
+            // uses: the URL to type once, the pairing code to read off the
+            // screen, and what the attempt limiter is currently saying.
+            {
+              label: phoneRemote?.running ? 'turn off phone remote' : 'phone remote…',
+              onClick: () => void togglePhoneRemote(),
+              disabled: phoneRemote !== null && phoneRemote.lanAddress === null,
+              title:
+                phoneRemote !== null && phoneRemote.lanAddress === null
+                  ? 'no network found'
+                  : undefined
+            },
+            ...(phoneRemote?.running && phoneRemote.url
+              ? [
+                  { label: phoneRemote.url, onClick: (): void => {}, disabled: true },
+                  {
+                    label: `code ${phoneRemote.pairingCode ?? ''}`,
+                    onClick: (): void => {},
+                    disabled: true
+                  },
+                  ...(phoneRemote.lockedOut
+                    ? [
+                        {
+                          label: 'pairing closed for this session',
+                          onClick: (): void => {},
+                          disabled: true
+                        }
+                      ]
+                    : phoneRemote.attemptsUsed > 0
+                      ? [
+                          {
+                            label: `${REMOTE_MAX_PAIR_ATTEMPTS - phoneRemote.attemptsUsed} tries left`,
+                            onClick: (): void => {},
+                            disabled: true
+                          }
+                        ]
+                      : [])
+                ]
+              : []),
             {
               label: discoverConsented
                 ? 'turn off discover library scan'
