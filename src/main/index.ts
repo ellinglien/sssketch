@@ -86,6 +86,9 @@ import {
   saveDiscoveredRifff,
   type DiscoveredMemberInput
 } from './discoveredLibrary'
+import { lanIPv4Address, startRemoteServer, type RemoteServerHandle } from './remoteServer'
+import type { RemoteCommand, RemoteState } from '@shared/remoteState'
+import type { PairingGate } from '@shared/remoteAuth'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
 import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
@@ -252,6 +255,48 @@ let engineStartupDone = false
 // every keystroke) -- read from the before-quit handler to decide whether
 // Cmd+Q needs to ask before discarding real unsaved work.
 let rendererHasUnsavedChanges = false
+
+// The phone remote is OFF BY DEFAULT and per-session -- never auto-started,
+// never persisted, stopped on quit. These three are the whole of its state;
+// there is no settings file and no accounts.
+let remoteServer: RemoteServerHandle | null = null
+let lastRemoteState: RemoteState = {
+  discoverOpen: false,
+  playing: false,
+  kept: 0,
+  rolled: 0,
+  lastKeptName: null,
+  slots: []
+}
+let remotePairingGate: PairingGate = { attemptsUsed: 0, lockedOut: false }
+
+interface PhoneRemoteStatus {
+  running: boolean
+  url: string | null
+  pairingCode: string | null
+  attemptsUsed: number
+  lockedOut: boolean
+  /** Null when this machine has no non-internal IPv4 address -- the phone
+   * could not reach it, so the UI says so instead of starting a server. */
+  lanAddress: string | null
+}
+
+function phoneRemoteStatus(): PhoneRemoteStatus {
+  return {
+    running: remoteServer !== null,
+    url: remoteServer?.url ?? null,
+    pairingCode: remoteServer?.pairingCode ?? null,
+    attemptsUsed: remotePairingGate.attemptsUsed,
+    lockedOut: remotePairingGate.lockedOut,
+    lanAddress: lanIPv4Address()
+  }
+}
+
+function stopPhoneRemote(): void {
+  remoteServer?.stop()
+  remoteServer = null
+  remotePairingGate = { attemptsUsed: 0, lockedOut: false }
+}
 
 function createWindow(): BrowserWindow {
   // Create the browser window.
@@ -607,6 +652,46 @@ app.whenReady().then(async () => {
   ipcMain.handle('forget-discovered-rifff', (_event, riffCID: string) =>
     forgetDiscoveredRifff(openOwnRiffLibraryDb(), riffCID)
   )
+
+  ipcMain.handle('get-phone-remote-status', () => phoneRemoteStatus())
+
+  ipcMain.handle('start-phone-remote', () => {
+    if (remoteServer) return phoneRemoteStatus()
+    const lanAddress = lanIPv4Address()
+    if (lanAddress === null) return phoneRemoteStatus()
+    remotePairingGate = { attemptsUsed: 0, lockedOut: false }
+    remoteServer = startRemoteServer({
+      lanAddress,
+      getState: () => lastRemoteState,
+      onCommand: (command: RemoteCommand) => {
+        // Commands are performed by the RENDERER, by calling the exact
+        // functions its own buttons call. There is no second
+        // implementation of anything.
+        mainWindow?.webContents.send('remote-command', command)
+      },
+      onPairingChanged: (gate) => {
+        remotePairingGate = gate
+        mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
+      },
+      onServerError: () => {
+        // The listen failed (port 7373 already taken is the realistic
+        // one). Forget the handle so the gear menu says it is off rather
+        // than showing a URL nothing is listening on.
+        stopPhoneRemote()
+        mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
+      }
+    })
+    return phoneRemoteStatus()
+  })
+
+  ipcMain.handle('stop-phone-remote', () => {
+    stopPhoneRemote()
+    return phoneRemoteStatus()
+  })
+
+  ipcMain.handle('set-remote-state', (_event, state: RemoteState) => {
+    lastRemoteState = state
+  })
 
   ipcMain.handle('endlesss-login', (_event, username: string, password: string) =>
     loginWithCredentials(username, password)
@@ -1741,6 +1826,15 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+// The phone remote is per-session and stops with the app. 'will-quit' rather
+// than 'before-quit': before-quit can be preventDefault'd (the unsaved-changes
+// prompt, the engine shutdown race below) and the user may still cancel, in
+// which case the server should stay up. will-quit only fires once quitting is
+// actually happening.
+app.on('will-quit', () => {
+  stopPhoneRemote()
 })
 
 // Asks the renderer to save now (the quit dialog's own "Save" choice,

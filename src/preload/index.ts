@@ -28,6 +28,20 @@ import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
 import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
+import type { RemoteCommand, RemoteState } from '@shared/remoteState'
+
+/** What the gear menu needs to show the phone remote's whole state: whether
+ * it is on, the URL to type, the pairing code, how many tries are left, and
+ * whether there is a LAN address to reach it at in the first place. Declared
+ * once here rather than inlined on each of the four bridges below. */
+interface PhoneRemoteStatus {
+  running: boolean
+  url: string | null
+  pairingCode: string | null
+  attemptsUsed: number
+  lockedOut: boolean
+  lanAddress: string | null
+}
 
 const api = {
   importRifff: (paths: string[]): Promise<Rifff | null> =>
@@ -575,6 +589,22 @@ const api = {
     ipcRenderer.invoke('save-discovered-rifff', members, bpm, barLength),
   forgetDiscoveredRifff: (riffCID: string): Promise<void> =>
     ipcRenderer.invoke('forget-discovered-rifff', riffCID),
+  getPhoneRemoteStatus: (): Promise<PhoneRemoteStatus> =>
+    ipcRenderer.invoke('get-phone-remote-status'),
+  startPhoneRemote: (): Promise<PhoneRemoteStatus> => ipcRenderer.invoke('start-phone-remote'),
+  stopPhoneRemote: (): Promise<PhoneRemoteStatus> => ipcRenderer.invoke('stop-phone-remote'),
+  setRemoteState: (state: RemoteState): Promise<void> =>
+    ipcRenderer.invoke('set-remote-state', state),
+  onRemoteCommand: (callback: (command: RemoteCommand) => void): (() => void) => {
+    const listener = (_event: unknown, command: RemoteCommand): void => callback(command)
+    ipcRenderer.on('remote-command', listener)
+    return () => ipcRenderer.removeListener('remote-command', listener)
+  },
+  onPhoneRemoteStatus: (callback: (status: PhoneRemoteStatus) => void): (() => void) => {
+    const listener = (_event: unknown, status: PhoneRemoteStatus): void => callback(status)
+    ipcRenderer.on('phone-remote-status', listener)
+    return () => ipcRenderer.removeListener('phone-remote-status', listener)
+  },
   endlesssLogin: (
     username: string,
     password: string
