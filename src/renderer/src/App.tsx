@@ -108,6 +108,7 @@ import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
 import type { DiscoverSettings } from '../../main/discoverSettingsStore'
 import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
+import { DEFAULT_RADIO_PACE, type RadioPace } from '@shared/radioSchedule'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 
 /** Tracks what the currently-open project actually is, so Save/Export know
@@ -1657,10 +1658,12 @@ function Frame(): React.JSX.Element {
   // field, but would silently wipe traitMatchBar (2026-09-22) otherwise.
   const [discoverSettings, setDiscoverSettingsState] = useState<DiscoverSettings>({
     consentedToLibraryScan: false,
-    traitMatchBar: DEFAULT_TRAIT_BAR
+    traitMatchBar: DEFAULT_TRAIT_BAR,
+    radioPace: DEFAULT_RADIO_PACE
   })
   const discoverConsented = discoverSettings.consentedToLibraryScan
   const traitMatchBar = discoverSettings.traitMatchBar
+  const radioPace = discoverSettings.radioPace
   useEffect(() => {
     void window.rifffApi
       .getDiscoverSettings()
@@ -1693,6 +1696,13 @@ function Frame(): React.JSX.Element {
 
   async function toggleDiscoverConsent(): Promise<void> {
     await setDiscoverConsented(!discoverConsented)
+  }
+
+  /** The one real setter for radioPace -- goes through
+   * updateDiscoverSettings so the save MERGES rather than wiping
+   * consentedToLibraryScan/traitMatchBar (see its own doc comment). */
+  async function setRadioPace(pace: RadioPace): Promise<void> {
+    await updateDiscoverSettings({ radioPace: pace })
   }
 
   async function startTour(): Promise<void> {
@@ -2748,6 +2758,8 @@ function Frame(): React.JSX.Element {
             currentSketch={currentSketch}
             discoverConsented={discoverConsented}
             traitMatchBar={traitMatchBar}
+            radioPace={radioPace}
+            onRadioPaceChange={setRadioPace}
             setDiscoverConsented={setDiscoverConsented}
             discoverSlots={discoverSlots}
             setDiscoverSlots={setDiscoverSlots}

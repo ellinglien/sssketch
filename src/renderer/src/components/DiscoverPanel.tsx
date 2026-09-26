@@ -34,6 +34,7 @@ import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { applyTraitBar } from '@shared/traitBar'
+import type { RadioPace } from '@shared/radioSchedule'
 import {
   buildMatchMeter,
   discoverRoleLabel,
@@ -335,6 +336,10 @@ export function DiscoverPanel({
   /** Settings' "trait match" bar -- how strict trait kinds are
    * (applyTraitBar's `bar`). */
   traitMatchBar: number
+  /** Radio mode's speed (DiscoverSettings.radioPace), and its persisting
+   * setter. See docs/superpowers/specs/2026-09-26-radio-mode-design.md. */
+  radioPace: RadioPace
+  onRadioPaceChange: (pace: RadioPace) => Promise<void>
   /** Persists + updates the shared consent value above (App.tsx's
    * setDiscoverConsented) -- the "yes, analyze" button below calls this
    * directly with `true` rather than maintaining its own independently
