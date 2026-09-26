@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { traitMatchBarLabel } from '@shared/traitBar'
-import { REMOTE_MAX_PAIR_ATTEMPTS } from '@shared/remoteAuth'
+import { phoneRemoteModalView, type PhoneRemoteStatus } from '@shared/phoneRemoteView'
 import { useAppState, useDispatch, usePos, usePlaying } from '../state/StoreContext'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { loopLengthBars } from '../state/selectors'
@@ -9,6 +9,7 @@ import { MasterChainPanel } from './MasterChainPanel'
 import { ContextMenu } from './ContextMenu'
 import { AudioDeviceModal } from './AudioDeviceModal'
 import { KeyGesturesModal } from './KeyGesturesModal'
+import { PhoneRemoteModal } from './PhoneRemoteModal'
 
 // Persisted per-machine (same pattern as LoreLibraryBrowser's own
 // loreUsername), not part of the project file -- selectedInputDevice/
@@ -296,16 +297,14 @@ export function TransportBar({
   // The phone remote (src/main/remoteServer.ts): OFF BY DEFAULT, opt-in per
   // session, never persisted, stopped on quit. Kept live rather than
   // fetched-on-open like endlesssStatus above, because main pushes a status
-  // on every failed pairing attempt and the menu should be able to say how
+  // on every failed pairing attempt and the modal should be able to say how
   // many tries are left while he is standing there watching it.
-  const [phoneRemote, setPhoneRemote] = useState<{
-    running: boolean
-    url: string | null
-    pairingCode: string | null
-    attemptsUsed: number
-    lockedOut: boolean
-    lanAddress: string | null
-  } | null>(null)
+  const [phoneRemote, setPhoneRemote] = useState<PhoneRemoteStatus | null>(null)
+  // Half of "is the phone remote modal showing" -- the other half is the
+  // server actually being up. phoneRemoteModalView() owns that rule and is
+  // tested; see PhoneRemoteModal.tsx for why the modal exists at all.
+  const [phoneRemoteAsked, setPhoneRemoteAsked] = useState(false)
+  const phoneRemoteView = phoneRemoteModalView(phoneRemote, phoneRemoteAsked)
 
   useEffect(() => {
     let cancelled = false
@@ -324,11 +323,22 @@ export function TransportBar({
     }
   }, [])
 
-  async function togglePhoneRemote(): Promise<void> {
-    const next = phoneRemote?.running
-      ? await window.rifffApi.stopPhoneRemote()
-      : await window.rifffApi.startPhoneRemote()
-    setPhoneRemote(next)
+  // The gear menu's one phone-remote entry. Starts the server if it is not
+  // already running, and either way asks for the modal -- so the code is on
+  // screen the instant the remote comes up, AND is reachable again after the
+  // modal has been dismissed. Turning it off is the modal's own button, not
+  // this: the entry reads "turn off phone remote…" while running, and the
+  // ellipsis is this app's usual "opens something" mark, so the off switch
+  // is one click away, next to the code it is about to invalidate.
+  async function openPhoneRemote(): Promise<void> {
+    setPhoneRemoteAsked(true)
+    if (phoneRemote?.running) return
+    setPhoneRemote(await window.rifffApi.startPhoneRemote())
+  }
+
+  async function turnOffPhoneRemote(): Promise<void> {
+    setPhoneRemoteAsked(false)
+    setPhoneRemote(await window.rifffApi.stopPhoneRemote())
   }
 
   // Discover's background classify scan (stemAutoClassifyScheduler.ts) has
@@ -928,46 +938,20 @@ export function TransportBar({
               onClick: () => void handleChangeRiffLibraryLocation()
             },
             // The phone remote. Off by default, per session, never
-            // persisted -- see remoteServer.ts. The rows under it are the
-            // disabled-info-row pattern the classify-scan row below already
-            // uses: the URL to type once, the pairing code to read off the
-            // screen, and what the attempt limiter is currently saying.
+            // persisted -- see remoteServer.ts. ONE entry: the address, the
+            // QR and the pairing code are a modal now (PhoneRemoteModal.tsx),
+            // not disabled rows under this one. Those rows only appeared if
+            // you reopened the menu after switching the remote on, which is
+            // exactly what nobody does.
             {
-              label: phoneRemote?.running ? 'turn off phone remote' : 'phone remote…',
-              onClick: () => void togglePhoneRemote(),
+              label: phoneRemote?.running ? 'turn off phone remote…' : 'phone remote…',
+              onClick: () => void openPhoneRemote(),
               disabled: phoneRemote !== null && phoneRemote.lanAddress === null,
               title:
                 phoneRemote !== null && phoneRemote.lanAddress === null
                   ? 'no network found'
                   : undefined
             },
-            ...(phoneRemote?.running && phoneRemote.url
-              ? [
-                  { label: phoneRemote.url, onClick: (): void => {}, disabled: true },
-                  {
-                    label: `code ${phoneRemote.pairingCode ?? ''}`,
-                    onClick: (): void => {},
-                    disabled: true
-                  },
-                  ...(phoneRemote.lockedOut
-                    ? [
-                        {
-                          label: 'pairing closed for this session',
-                          onClick: (): void => {},
-                          disabled: true
-                        }
-                      ]
-                    : phoneRemote.attemptsUsed > 0
-                      ? [
-                          {
-                            label: `${REMOTE_MAX_PAIR_ATTEMPTS - phoneRemote.attemptsUsed} tries left`,
-                            onClick: (): void => {},
-                            disabled: true
-                          }
-                        ]
-                      : [])
-                ]
-              : []),
             {
               label: discoverConsented
                 ? 'turn off discover library scan'
@@ -1026,6 +1010,14 @@ export function TransportBar({
       )}
 
       {keysModalOpen && <KeyGesturesModal onClose={() => setKeysModalOpen(false)} />}
+
+      {phoneRemoteView && (
+        <PhoneRemoteModal
+          view={phoneRemoteView}
+          onClose={() => setPhoneRemoteAsked(false)}
+          onTurnOff={() => void turnOffPhoneRemote()}
+        />
+      )}
 
       {audioModalOpen && (
         <AudioDeviceModal

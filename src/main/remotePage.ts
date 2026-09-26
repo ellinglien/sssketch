@@ -1,4 +1,5 @@
 // src/main/remotePage.ts
+import { REMOTE_PAIR_QUERY_PARAM } from '@shared/remoteAuth'
 import { SILKSCREEN_REGULAR_WOFF2_BASE64 } from './remoteFont'
 
 /** The page's own Content-Security-Policy, sent as a header by
@@ -137,7 +138,7 @@ input {
   <div id="pair">
     <div class="eyebrow">sssketch</div>
     <h1>side quest</h1>
-    <div class="msg">enter the code shown on the mac</div>
+    <div class="msg">scan the qr code on the mac, or type the code under it</div>
     <input id="code" inputmode="text" autocapitalize="characters" autocomplete="off" maxlength="4">
     <div class="actions" style="margin-top:10px">
       <button class="big" id="pair-go">pair</button>
@@ -276,8 +277,13 @@ input {
     })
   }
 
-  document.getElementById('pair-go').addEventListener('click', function () {
-    var code = document.getElementById('code').value
+  // PAIRING HAPPENS HERE AND NOWHERE ELSE. The typed form and the QR
+  // link's ?${REMOTE_PAIR_QUERY_PARAM}= both come through this one
+  // function, so both make the same POST /api/pair request and get the same
+  // five-attempt limiter, the same Host guard, the same everything. Scanning
+  // is a faster way to fill the form in -- it is not a second, weaker way in,
+  // and the server did not have to grow one.
+  function submitCode(code) {
     fetch('/api/pair', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -294,7 +300,30 @@ input {
       .catch(function (j) {
         pairMsgEl.textContent = j && j.lockedOut ? 'too many tries, restart it on the mac' : 'wrong code'
       })
+  }
+
+  document.getElementById('pair-go').addEventListener('click', function () {
+    submitCode(document.getElementById('code').value)
   })
+
+  // The mac's QR code encodes this page's address with the pairing code
+  // already in it, so the camera does the typing.
+  var linkMatch = /[?&]${REMOTE_PAIR_QUERY_PARAM}=([^&]*)/.exec(location.search)
+  if (linkMatch) {
+    var linkCode = decodeURIComponent(linkMatch[1].replace(/\\+/g, ' '))
+    // Stripped BEFORE the attempt is made, not after it succeeds, and
+    // whether or not this page is already paired. Two reasons, both real: a
+    // code left in the address bar rides along in a reload, a screenshot or
+    // a shared tab; and a STALE code (the mac restarted, so the code
+    // changed) would spend a fresh attempt off the five-attempt limiter on
+    // every reload -- five refreshes would close pairing for the session
+    // with nobody having typed anything wrong.
+    try { history.replaceState(null, '', location.pathname) } catch (e) {}
+    if (!token) {
+      pairMsgEl.textContent = 'pairing'
+      submitCode(linkCode)
+    }
+  }
 
   function render(state) {
     countsEl.textContent = 'kept ' + state.kept + ' · rolled ' + state.rolled

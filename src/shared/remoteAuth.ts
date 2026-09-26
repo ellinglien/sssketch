@@ -47,6 +47,33 @@ export function isAllowedHost(hostHeader: string | undefined, expectedHost: stri
   return host === `localhost:${port}` || host === `127.0.0.1:${port}`
 }
 
+/** The query parameter the QR code carries the pairing code in. The phone
+ * page reads it, pairs with it through the one and only pairing route, and
+ * strips it from the address bar -- see remotePage.ts. */
+export const REMOTE_PAIR_QUERY_PARAM = 'c'
+
+/** The link the desktop's QR code encodes and its copy button copies: the
+ * remote's address with the pairing code already in it, so scanning with
+ * the camera (or pasting via Universal Clipboard) pairs with nothing typed.
+ *
+ * THE SECURITY TRADE, STATED RATHER THAN LEFT IMPLICIT: a code in a link is
+ * a code anyone who can see the screen, the photo, or the pasted URL can
+ * use. That is genuinely wider than four characters typed by hand. It is
+ * accepted here because everything around it is unchanged and narrow -- the
+ * server is off by default, opt-in per session, never persisted, killed on
+ * quit; the code is regenerated every start; the five-attempt limiter and
+ * the Host guard still apply to this path because it IS the typed path (the
+ * page just fills the form in); and the blast radius of a paired client is
+ * rolling dice on the Discover screen that is already on the Mac. On a home
+ * LAN, for a session-lived code, that is a fair price for removing the
+ * worst part of the flow. It would not be on a shared or public network --
+ * which is the same caveat the feature already carries for being bound to
+ * 0.0.0.0 at all. */
+export function pairedRemoteUrl(baseUrl: string, code: string): string {
+  const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl
+  return `${base}/?${REMOTE_PAIR_QUERY_PARAM}=${encodeURIComponent(code)}`
+}
+
 export interface PairingGate {
   attemptsUsed: number
   lockedOut: boolean

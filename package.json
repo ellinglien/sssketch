@@ -30,6 +30,7 @@
     "electron-updater": "^6.8.9",
     "fast-xml-parser": "^5.10.1",
     "onnxruntime-web": "^1.29.0",
+    "qrcode-generator": "^2.0.4",
     "use-sync-external-store": "^1.6.0"
   },
   "devDependencies": {

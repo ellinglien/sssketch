@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   REMOTE_MAX_PAIR_ATTEMPTS,
+  REMOTE_PAIR_QUERY_PARAM,
   REMOTE_PORT,
   codesMatch,
   isAllowedHost,
   newPairingCode,
+  pairedRemoteUrl,
   recordPairAttempt
 } from './remoteAuth'
 
@@ -59,5 +61,24 @@ describe('remoteAuth', () => {
 
   it('stays locked out once locked out, even on a correct code', () => {
     expect(recordPairAttempt({ attemptsUsed: 5, lockedOut: true }, true).lockedOut).toBe(true)
+  })
+
+  it('carries the code in the link the qr encodes', () => {
+    expect(pairedRemoteUrl('http://192.168.1.40:7373', 'K7FD')).toBe(
+      'http://192.168.1.40:7373/?c=K7FD'
+    )
+    expect(REMOTE_PAIR_QUERY_PARAM).toBe('c')
+  })
+
+  it('does not double the slash when the base already ends in one', () => {
+    expect(pairedRemoteUrl('http://192.168.1.40:7373/', 'K7FD')).toBe(
+      'http://192.168.1.40:7373/?c=K7FD'
+    )
+  })
+
+  it('escapes the code rather than trusting it to be url-safe', () => {
+    expect(pairedRemoteUrl('http://192.168.1.40:7373', 'a b&c')).toBe(
+      'http://192.168.1.40:7373/?c=a%20b%26c'
+    )
   })
 })
