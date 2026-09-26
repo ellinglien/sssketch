@@ -132,7 +132,9 @@ jobs:
       # the current actions/runner-images README), so `arch -x86_64 brew
       # install` isn't safe here -- fetch and relocate the x86_64 bottle
       # directly instead (see scripts/fetch-x64-rubberband.py's own doc
-      # comment for the two real gotchas that mechanism required).
+      # comment for the three real gotchas that mechanism required --
+      # including Homebrew's ongoing, formula-by-formula withdrawal of
+      # Intel macOS bottles, which is a countdown on this whole leg).
       - name: Vendor rubberband
         run: |
           if [ "${{ matrix.arch }}" = "x64" ]; then
@@ -142,10 +144,10 @@ jobs:
             bash scripts/vendor-rubberband.sh
           fi
 
-      # electron-builder handles CSC_LINK (base64-encoded .p12)/CSC_KEY_PASSWORD
-      # itself for ITS OWN signing pass -- but only imports the cert into a
-      # keychain lazily, the first time that pass touches it
-      # (doSignAfterPack, which runs AFTER afterPack fires -- see
+      # electron-builder can handle CSC_LINK (base64-encoded .p12)/
+      # CSC_KEY_PASSWORD itself for ITS OWN signing pass -- but it only
+      # imports the cert into a keychain lazily, the first time that pass
+      # touches it (doSignAfterPack, which runs AFTER afterPack fires -- see
       # app-builder-lib's macPackager.js, `codeSigningInfo` MemoLazy).
       # build/afterPack.js's own `codesign` call runs BEFORE that (see its
       # doc comment for why), so by the time it runs in CI, no keychain has
@@ -153,9 +155,38 @@ jobs:
       # reproduces locally, where the real cert already sits in the login
       # keychain. The "Import signing certificate" step below imports it
       # ourselves, ahead of everything, so it's already available
-      # regardless of which signing pass touches it first. electron-builder
-      # importing the same cert again later into its own temporary keychain
-      # is redundant but harmless.
+      # regardless of which signing pass touches it first.
+      #
+      # That second, redundant electron-builder import used to be harmless.
+      # It is not any more, and it is why the v1.2.0 release run's arm64
+      # leg died at "/usr/bin/security process failed 1 ...
+      # SecKeychainUnlock: The user name or passphrase you entered is not
+      # correct" against a random-hash keychain in TMPDIR (electron-
+      # builder's own, not ours). Traced into app-builder-lib 26.15.3's
+      # macCodeSign.js: createKeychain() makes its temp keychain with a
+      # `randomBytes(32)` password, then importCerts() runs
+      # `security set-key-partition-list ... -k <cscKeyPassword>` -- the
+      # .p12's OWN password, NOT the keychain password it just generated.
+      # Those two can never match. It only ever passed because `security`
+      # used to tolerate a bad -k on an already-unlocked keychain; on the
+      # current runner image (Darwin 25.6.0; the last green release,
+      # v1.1.22, ran on 25.5.0 with the identical electron-builder 26.15.3
+      # and identical secrets) it exits 1 instead. Nothing in this repo,
+      # in electron-builder's pinned version, or in the signing secrets
+      # changed -- the p12 and its password are provably still good, since
+      # our own import step below and afterPack.js's real `codesign` runs
+      # both succeeded in that same failed run.
+      #
+      # So: do NOT give electron-builder CSC_LINK/CSC_KEY_PASSWORD at all.
+      # With no cscLink, macPackager's codeSigningInfo short-circuits to
+      # `{ keychainFile: process.env.CSC_KEYCHAIN || null }` -- no second
+      # import, no createKeychain, no set-key-partition-list -- and that
+      # keychainFile is threaded through findIdentity (`security
+      # find-identity -v <keychain>`), @electron/osx-sign's `keychain`
+      # option and dmg-builder's own `codesign --keychain`, all resolving
+      # the identity by CSC_NAME out of the keychain we already built.
+      # Notarization is untouched: notarizeIfProvided() reads only the
+      # APPLE_* vars.
       #
       # CSC_NAME selects which identity to use -- must be the bare common
       # name (e.g. "Elling Lien (TEAMID)"), NOT prefixed with "Developer ID
@@ -215,10 +246,22 @@ jobs:
           rm -f "$CERT_PATH"
           echo "SIGNING_KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
+          # Print-only (never fails the step). electron-builder resolves the
+          # identity with exactly this call now that CSC_KEYCHAIN points it
+          # here instead of letting it build its own keychain -- so if a
+          # future run reports "no identity found", this line is the
+          # difference between "the cert expired / the chain didn't validate"
+          # and "the keychain wiring is wrong", with no guessing.
+          echo "identities visible in the signing keychain:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH" || true
+
+      # No CSC_LINK/CSC_KEY_PASSWORD here on purpose -- see the long comment
+      # on "Import signing certificate" above. CSC_KEYCHAIN (set from
+      # SIGNING_KEYCHAIN_PATH in the run script below, so it stays empty and
+      # harmless on an unsigned local/fork build) points electron-builder at
+      # the keychain that step already populated.
       - name: Build, sign, notarize, and publish
         env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
           CSC_NAME: ${{ secrets.CSC_NAME }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
@@ -230,13 +273,21 @@ jobs:
           # future case once real secrets exist) would otherwise abort the
           # whole script under errexit even though nothing is wrong.
           set +e
-          [ -z "$CSC_LINK" ] && unset CSC_LINK
-          [ -z "$CSC_KEY_PASSWORD" ] && unset CSC_KEY_PASSWORD
           [ -z "$CSC_NAME" ] && unset CSC_NAME
           [ -z "$APPLE_ID" ] && unset APPLE_ID
           [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && unset APPLE_APP_SPECIFIC_PASSWORD
           [ -z "$APPLE_TEAM_ID" ] && unset APPLE_TEAM_ID
           set -e
+
+          # Only exported when the import step actually ran (it writes
+          # SIGNING_KEYCHAIN_PATH to $GITHUB_ENV only after a successful
+          # import), so an unsigned local/fork build leaves CSC_KEYCHAIN
+          # unset and electron-builder's keychainFile stays null, exactly
+          # as before.
+          if [ -n "${SIGNING_KEYCHAIN_PATH:-}" ]; then
+            export CSC_KEYCHAIN="$SIGNING_KEYCHAIN_PATH"
+          fi
+
           npx electron-vite build
           npx electron-builder --mac --publish always ${{ matrix.arch == 'x64' && '--x64' || '--arm64' }}
 
