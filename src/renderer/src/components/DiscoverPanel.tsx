@@ -1110,6 +1110,13 @@ export function DiscoverPanel({
   const [justAddedToTimeline, setJustAddedToTimeline] = useState(false)
   const [justAddedToShelf, setJustAddedToShelf] = useState(false)
 
+  // `keep` is not `add to shelf`. Shelf is "I am using this now"; keep is
+  // "I found this, do not lose it." Both can be true, and both buttons
+  // stay. One label covers both outcomes: a duplicate save is a no-op that
+  // SAYS so rather than leaving him guessing whether it worked.
+  const [keeping, setKeeping] = useState(false)
+  const [keptLabel, setKeptLabel] = useState<string | null>(null)
+
   // One-time consent prompt for the whole-library background scan (Task
   // 10) -- gates ONLY that scan, not candidate fetching itself (see the
   // prompt's own copy below and rerollSlot above, which reads existing
@@ -2083,6 +2090,34 @@ export function DiscoverPanel({
     }
   }
 
+  // Reuses resolveDiscoverRifff() verbatim -- the same helper addToTimeline
+  // and addToShelf already share, which is what carries one non-obvious
+  // inherited behaviour worth keeping: a slot muted in the preview mix is
+  // placed at gain 0, not dropped, so a muted stem is saved as silence,
+  // still there, still un-muteable later.
+  async function keepGroup(): Promise<void> {
+    setKeeping(true)
+    try {
+      const assembly = await resolveDiscoverRifff()
+      if (!assembly) return
+      const { rifff, vol } = assembly
+      const members = rifff.stems.map((stem) => ({
+        path: stem.path,
+        gain: vol[stemKey(rifff.groupId, stem.slot)] ?? 1,
+        name: stem.name,
+        author: stem.author,
+        barLength: stem.barLength,
+        durationSec: stem.durationSec
+      }))
+      const saved = await window.rifffApi.saveDiscoveredRifff(members, bpm, rifff.barLength)
+      if (!saved) return
+      setKeptLabel(saved.duplicate ? 'already kept' : '✓ kept')
+      window.setTimeout(() => setKeptLabel(null), 500)
+    } finally {
+      setKeeping(false)
+    }
+  }
+
   // What the "match seed" button below actually promises: the seed riff's
   // own tempo, rounded (direct report, 2026-09-17: a raw decimal like
   // "105.01000213623047" was showing up in this button's own label), AND
@@ -2406,6 +2441,23 @@ export function DiscoverPanel({
               dice spin intermittently" -- replaces the LoadingLoader that
               used to swap in here while anything rerolls. */}
           <DiceIcon size={18} spinning={rerollingSlotIds.size > 0} />
+        </button>
+        <button
+          onClick={() => void keepGroup()}
+          disabled={keeping}
+          data-tooltip="keep this group"
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 10,
+            padding: '6px 14px',
+            background: 'transparent',
+            border: '1px solid var(--ra-border-strong)',
+            color: keeping ? 'var(--ra-text-4)' : 'var(--ra-text)',
+            cursor: keeping ? 'default' : 'pointer',
+            animation: keptLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
+          }}
+        >
+          {keeping ? 'keeping…' : (keptLabel ?? 'keep')}
         </button>
         <button
           onClick={() => void addToShelf()}
