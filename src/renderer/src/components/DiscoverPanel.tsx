@@ -215,6 +215,18 @@ export interface DiscoverSlot {
   gain: number
 }
 
+/** What a roll RESOLVED TO, before anything is written to state. Split out
+ * of rollForSlot (2026-09-26, radio mode) so radio can choose a candidate a
+ * whole interval before it commits it -- picking early is what lets it
+ * pre-warm resolveCandidateStem's own module-level cache and then swap the
+ * layer in on a loop boundary without a download happening under the
+ * downbeat. See docs/superpowers/specs/2026-09-26-radio-mode-design.md. */
+interface SlotPick {
+  candidate: DiscoverCandidate | null
+  barUsed: number | null
+  barRequested: number
+}
+
 // Real bug, live-reported 2026-09-17: "i clicked 'lock' on a set of
 // five, then tried to add another drum track, but it simultaneously
 // changed stem 1 as well as added a new track, and both stems were
@@ -1675,13 +1687,12 @@ export function DiscoverPanel({
     )
   }
 
-  // Core roll logic, shared by addSlot (a brand-new slot's own first roll)
-  // and rerollSlot (an existing slot's later rerolls) -- takes `kind`
-  // directly rather than looking it up via `slots.find(...)`, since addSlot
-  // needs to roll a slot in the SAME tick it mints it, before that slot has
-  // made it into `slots` state (a plain function defined in this render
-  // still closes over THIS render's `slots`, which doesn't include it yet).
-  async function rollForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<void> {
+  /** The fetch/dedupe/bar/rank/pick half of a roll. Owns the
+   * rerollGenerationRef claim, the rolled counter and the per-slot
+   * spinner; returns null when a NEWER call for the same slot superseded
+   * this one (the caller must then write nothing) or when the IPC call
+   * genuinely failed. */
+  async function pickForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<SlotPick | null> {
     // Claimed BEFORE the first await -- see rerollGenerationRef's own doc
     // comment above. Any earlier call for this SAME slot id that's still
     // awaiting getDiscoverCandidates when THIS call resolves is now stale
@@ -1711,7 +1722,7 @@ export function DiscoverPanel({
       // process's own matching log (index.ts's get-discover-candidates
       // handler) already reports its own internal timing.
       console.log(
-        `DiscoverPanel: rollForSlot(${slotKindsKey(kinds)}) -- calling getDiscoverCandidates`
+        `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- calling getDiscoverCandidates`
       )
       const candidates = await window.rifffApi.getDiscoverCandidates(
         kinds,
@@ -1720,9 +1731,9 @@ export function DiscoverPanel({
         rollOptions.soundSource
       )
       console.log(
-        `DiscoverPanel: rollForSlot(${slotKindsKey(kinds)}) -- getDiscoverCandidates returned ${candidates.length} candidates`
+        `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- getDiscoverCandidates returned ${candidates.length} candidates`
       )
-      if (rerollGenerationRef.current.get(id) !== myGeneration) return
+      if (rerollGenerationRef.current.get(id) !== myGeneration) return null
       // Direct report: adding two or three slots of the same kind (e.g.
       // several "lead" slots) often landed the exact SAME stem in every
       // one -- each slot's own roll is otherwise unaware of what every
@@ -1760,29 +1771,9 @@ export function DiscoverPanel({
       // TEMPORARY diagnostic log (2026-09-15) -- see the matching one
       // above. Remove once confirmed.
       console.log(
-        `DiscoverPanel: rollForSlot(${slotKindsKey(kinds)}) -- ranked/picked, calling setSlots (picked=${picked?.stemCID ?? 'null'})`
+        `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- ranked/picked, returning pick (picked=${picked?.stemCID ?? 'null'})`
       )
-      // hasRerolled set true in this same setSlots call, alongside
-      // candidate -- see DiscoverSlot's own doc comment above for why this
-      // only happens on the generation-guarded path (never for a stale,
-      // discarded result) and why the catch block below deliberately
-      // leaves it untouched on a real error.
-      setSlots((prev) =>
-        prev.map((s) =>
-          s.id === id
-            ? {
-                ...s,
-                candidate: picked,
-                pickBar: picked
-                  ? { candidate: picked, barUsed, barRequested: traitMatchBar }
-                  : undefined,
-                reclassified: undefined,
-                hasRerolled: true,
-                seedStem: undefined
-              }
-            : s
-        )
-      )
+      return { candidate: picked, barUsed, barRequested: traitMatchBar }
     } catch (err) {
       // Degrade gracefully, log, don't throw -- same convention as this
       // file's own resolveCandidateStem above and LibraryBrowser.tsx's
@@ -1792,7 +1783,8 @@ export function DiscoverPanel({
       // silently producing an empty pool, so a genuine failure here is a
       // real one worth surfacing to the console -- just not by crashing the
       // renderer or nulling out a slot's existing candidate.
-      console.error(`DiscoverPanel: rollForSlot(${slotKindsKey(kinds)}) failed:`, err)
+      console.error(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) failed:`, err)
+      return null
     } finally {
       if (rerollGenerationRef.current.get(id) === myGeneration) {
         setRerollingSlotIds((prev) => {
@@ -1802,6 +1794,51 @@ export function DiscoverPanel({
         })
       }
     }
+  }
+
+  /** Writes a pick onto a slot. The ONE place a rolled candidate lands, so
+   * every roll path (hand-clicked, reroll-all, radio) produces the same
+   * slot shape. No undo snapshot of its own -- every caller decides that
+   * for itself (rerollSlot pushes one, rerollAll pushes one for the whole
+   * batch, radio pushes none; see the spec's 3.4). */
+  function commitSlotPick(id: string, pick: SlotPick): void {
+    // hasRerolled set true in this same setSlots call, alongside
+    // candidate -- see DiscoverSlot's own doc comment above for why this
+    // only happens on the generation-guarded path (never for a stale,
+    // discarded result) and why a genuine error deliberately leaves it
+    // untouched.
+    setSlots((prev) =>
+      prev.map((s) =>
+        s.id === id
+          ? {
+              ...s,
+              candidate: pick.candidate,
+              pickBar: pick.candidate
+                ? {
+                    candidate: pick.candidate,
+                    barUsed: pick.barUsed,
+                    barRequested: pick.barRequested
+                  }
+                : undefined,
+              reclassified: undefined,
+              hasRerolled: true,
+              seedStem: undefined
+            }
+          : s
+      )
+    )
+  }
+
+  // Core roll logic, shared by addSlot (a brand-new slot's own first roll)
+  // and rerollSlot (an existing slot's later rerolls) -- takes `kind`
+  // directly rather than looking it up via `slots.find(...)`, since addSlot
+  // needs to roll a slot in the SAME tick it mints it, before that slot has
+  // made it into `slots` state (a plain function defined in this render
+  // still closes over THIS render's `slots`, which doesn't include it yet).
+  async function rollForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<void> {
+    const pick = await pickForSlot(id, kinds)
+    if (pick === null) return
+    commitSlotPick(id, pick)
   }
 
   // Match meter reclassify (promise-vs-delivery spec, Phase 2; user
