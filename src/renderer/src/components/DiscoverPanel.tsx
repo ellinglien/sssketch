@@ -55,6 +55,7 @@ import {
 import { tileOffsetsPx, resolvedPlayedBarsFromFields } from '../state/selectors'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
+import { remoteStateFromSlots, type RemoteCommand } from '@shared/remoteState'
 import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
@@ -1039,8 +1040,11 @@ export function DiscoverPanel({
       // unmountedRef there. The linter reads that as "used previously in
       // an effect function," but the two effects deliberately coordinate
       // on this ref by design -- it's not an accidental cross-effect
-      // mutation.
-      // eslint-disable-next-line react-hooks/immutability
+      // mutation. (react-hooks/immutability no longer reports it and the
+      // eslint-disable that used to sit here became an "unused directive"
+      // warning of its own, so it is gone. If the rule starts firing again
+      // after some later edit, the paragraph above is the justification for
+      // putting it back.)
       skipFirstBpmRetuneRef.current = false
       return
     }
@@ -1116,6 +1120,13 @@ export function DiscoverPanel({
   // SAYS so rather than leaving him guessing whether it worked.
   const [keeping, setKeeping] = useState(false)
   const [keptLabel, setKeptLabel] = useState<string | null>(null)
+
+  // The phone remote's arcade-ish counters. A run is a session -- these live
+  // with the panel and reset when it unmounts or the app restarts. No points,
+  // no badges, no streaks.
+  const [rolledCount, setRolledCount] = useState(0)
+  const [keptCount, setKeptCount] = useState(0)
+  const [lastKeptName, setLastKeptName] = useState<string | null>(null)
 
   // One-time consent prompt for the whole-library background scan (Task
   // 10) -- gates ONLY that scan, not candidate fetching itself (see the
@@ -1276,32 +1287,91 @@ export function DiscoverPanel({
   // observable from out here at all. seedStem covers a Shelf-seeded slot,
   // which is already a fully resolved stem and never goes through
   // reportSlotResolution.
+  // Hoisted out of the effect below so the phone remote's own push effect
+  // can reuse it -- one snapshot construction, not two. `resolvedBarLengths`
+  // is in the dep list for the reason the comment above gives (it is the
+  // reactive twin of the resolvedStemsRef read inside) even though it is not
+  // read here: without it, a slot resolving would not produce a new
+  // callback identity and neither consumer would see the stem appear.
+  const buildSlotSnapshots = useCallback((): CoachSlotSnapshot[] => {
+    void resolvedBarLengths
+    return slots.map((slot) => {
+      const stem = resolvedStemsRef.current.get(slot.id) ?? slot.seedStem ?? null
+      return {
+        id: slot.id,
+        kinds: normalizeSlotKinds(slot.kinds),
+        stem:
+          stem === null
+            ? null
+            : {
+                path: stem.path,
+                name: stem.name,
+                author: stem.author,
+                type: stem.type,
+                durationSec: stem.durationSec,
+                barLength: stem.barLength
+              },
+        gain: slot.gain,
+        audible: previewingSlotIds.has(slot.id),
+        rolling: rerollingSlotIds.has(slot.id)
+      }
+    })
+  }, [slots, resolvedBarLengths, previewingSlotIds, rerollingSlotIds])
+
   useEffect(() => {
     if (!onCoachSlotsChange) return
-    onCoachSlotsChange(
-      slots.map((slot) => {
-        const stem = resolvedStemsRef.current.get(slot.id) ?? slot.seedStem ?? null
-        return {
-          id: slot.id,
-          kinds: normalizeSlotKinds(slot.kinds),
-          stem:
-            stem === null
-              ? null
-              : {
-                  path: stem.path,
-                  name: stem.name,
-                  author: stem.author,
-                  type: stem.type,
-                  durationSec: stem.durationSec,
-                  barLength: stem.barLength
-                },
-          gain: slot.gain,
-          audible: previewingSlotIds.has(slot.id),
-          rolling: rerollingSlotIds.has(slot.id)
-        }
+    onCoachSlotsChange(buildSlotSnapshots())
+  }, [buildSlotSnapshots, onCoachSlotsChange])
+
+  // The renderer PUSHES; main only ever answers GET /api/state with the
+  // last thing pushed. What he sees on the Mac and what he sees on the
+  // phone are the same state because there is only one. remoteStateFromSlots
+  // is the whole privacy boundary -- no path, no CID, nothing about the
+  // library leaves here.
+  useEffect(() => {
+    void window.rifffApi.setRemoteState(
+      remoteStateFromSlots(buildSlotSnapshots(), {
+        discoverOpen: true,
+        playing,
+        kept: keptCount,
+        rolled: rolledCount,
+        lastKeptName
       })
     )
-  }, [slots, resolvedBarLengths, previewingSlotIds, rerollingSlotIds, onCoachSlotsChange])
+  }, [buildSlotSnapshots, playing, keptCount, rolledCount, lastKeptName])
+
+  // Discover is closed the moment this panel unmounts -- the page then
+  // says "open discover on the mac" and offers nothing else.
+  useEffect(() => {
+    return () => {
+      void window.rifffApi.setRemoteState({
+        discoverOpen: false,
+        playing: false,
+        kept: 0,
+        rolled: 0,
+        lastKeptName: null,
+        slots: []
+      })
+    }
+  }, [])
+
+  // Commands are performed by calling the EXACT functions this panel's own
+  // buttons call. keep is keep. There is no second implementation. Held in
+  // a ref for the same stale-closure reason slotsRef exists: the listener
+  // below is registered once, and must always run THIS render's functions.
+  const remoteCommandRef = useRef<(command: RemoteCommand) => void>(() => {})
+  useEffect(() => {
+    remoteCommandRef.current = (command: RemoteCommand): void => {
+      if (command.kind === 'roll-all') void rerollAll()
+      else if (command.kind === 'roll-slot') void rerollSlot(command.slotId)
+      else if (command.kind === 'transport') dispatch({ type: command.play ? 'PLAY' : 'PAUSE' })
+      else if (command.kind === 'keep') void keepGroup()
+    }
+  })
+
+  useEffect(() => {
+    return window.rifffApi.onRemoteCommand((command) => remoteCommandRef.current(command))
+  }, [])
 
   // Direct request, 2026-09-21 (combination slots), reworked twice on
   // 2026-09-22 -- final shape: a plain click adds a slot right away (single
@@ -1595,6 +1665,10 @@ export function DiscoverPanel({
     // and must not write its own (older) result over this one.
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
     rerollGenerationRef.current.set(id, myGeneration)
+    // The phone's "rolled" counter. Counted in the two functions every roll
+    // path funnels through (this and rollRandomForSlot below) rather than at
+    // each of addSlot/rerollSlot/rerollAll/changeSlotKinds.
+    setRolledCount((n) => n + 1)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
       // The global [x] toggles under the add row (globalRollOptions). An empty
@@ -1770,6 +1844,7 @@ export function DiscoverPanel({
   async function rollRandomForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<void> {
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
     rerollGenerationRef.current.set(id, myGeneration)
+    setRolledCount((n) => n + 1)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
       const rollOptions = globalRollOptions
@@ -2113,6 +2188,12 @@ export function DiscoverPanel({
       if (!saved) return
       setKeptLabel(saved.duplicate ? 'already kept' : '✓ kept')
       window.setTimeout(() => setKeptLabel(null), 500)
+      if (!saved.duplicate) {
+        // friendlyRiffName returns "misty kestrel 1a2b3c4d library"; the
+        // phone's eyebrow flashes just the pair.
+        setKeptCount((n) => n + 1)
+        setLastKeptName(saved.name.replace(/ \w{8} library$/, ''))
+      }
     } finally {
       setKeeping(false)
     }
