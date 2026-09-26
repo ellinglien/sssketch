@@ -2,7 +2,13 @@ import { describe, expect, it } from 'vitest'
 import { REMOTE_PAIR_QUERY_PARAM } from '@shared/remoteAuth'
 import { DISCOVER_SLOT_KIND_LABEL, DISCOVER_SLOT_KIND_OPTIONS } from '@shared/discoverSlotKind'
 import { buildSlotKindToggleTable } from '@shared/discoverSlotKindMask'
-import { REMOTE_PAGE_HTML } from './remotePage'
+import {
+  REMOTE_NOTHING_HERE_NOTICE,
+  REMOTE_PAGE_HTML,
+  REMOTE_WRONG_ADDRESS_NOTICE,
+  acceptsHtml,
+  remoteNoticePage
+} from './remotePage'
 
 /** The phone page is one hand-written string, so these are the only checks
  * that can be made of it without a browser. They are the ones worth having:
@@ -117,5 +123,70 @@ describe('remotePage copy', () => {
       expect(label).toBe(label.toLowerCase())
       expect(label).not.toContain('!')
     }
+  })
+})
+
+/** The bug this file's newest tests exist for, 2026-09-26: a phone whose
+ * saved tab pointed at the address the Mac advertised BEFORE f1fcc9b (the
+ * bridge address, 192.168.3.1 on his machine) still reached the server --
+ * different interface, same 0.0.0.0 listen -- and was refused by the Host
+ * guard with `{}` and a json content type. iOS Safari draws that as a full
+ * white screen with two characters in the corner, which is indistinguishable
+ * from a page that failed to render. Confirmed in the iOS simulator. */
+describe('acceptsHtml', () => {
+  it('recognises a browser navigation', () => {
+    expect(acceptsHtml('text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8')).toBe(
+      true
+    )
+    expect(acceptsHtml('TEXT/HTML')).toBe(true)
+  })
+
+  it('does not recognise the page’s own fetch calls', () => {
+    // fetch() with no Accept of its own sends */*. The page reads every
+    // refusal as json and must keep getting json -- show(false) on a 401 is
+    // how a stale token finds its way back to the pairing form.
+    expect(acceptsHtml('*/*')).toBe(false)
+    expect(acceptsHtml('application/json')).toBe(false)
+    expect(acceptsHtml(undefined)).toBe(false)
+  })
+})
+
+describe('remoteNoticePage', () => {
+  it('says the one thing it has to say, visibly', () => {
+    const page = remoteNoticePage(REMOTE_WRONG_ADDRESS_NOTICE)
+    expect(page).toContain('<!doctype html>')
+    expect(page).toContain(REMOTE_WRONG_ADDRESS_NOTICE)
+    // The whole point: it is not a white void. Same near-black ground as
+    // the remote itself.
+    expect(page).toContain('background: #050505')
+  })
+
+  it('never names the address it is refusing', () => {
+    // The Host guard's job is to not confirm what this machine is called
+    // from the inside. A notice that printed the expected address would
+    // hand that to anything that navigated into the refusal.
+    for (const notice of [REMOTE_WRONG_ADDRESS_NOTICE, REMOTE_NOTHING_HERE_NOTICE]) {
+      expect(remoteNoticePage(notice)).not.toMatch(/\d{1,3}(\.\d{1,3}){3}/)
+    }
+  })
+
+  it('stays in the page’s own voice', () => {
+    for (const notice of [REMOTE_WRONG_ADDRESS_NOTICE, REMOTE_NOTHING_HERE_NOTICE]) {
+      expect(notice).toBe(notice.toLowerCase())
+      expect(notice).not.toContain('!')
+    }
+  })
+})
+
+describe('remotePage last resort', () => {
+  it('shows a line rather than nothing if its own script throws', () => {
+    // Hidden until something actually throws -- it is a last resort, not a
+    // banner.
+    expect(REMOTE_PAGE_HTML).toContain('id="broke" hidden')
+    // Registered as a listener, NOT as a try/catch around init: the throw
+    // still happens, still reaches the console, and is still a bug. A
+    // handler that swallowed it would hide the next one.
+    expect(SCRIPT).toContain("window.addEventListener('error'")
+    expect(SCRIPT).not.toContain('preventDefault')
   })
 })

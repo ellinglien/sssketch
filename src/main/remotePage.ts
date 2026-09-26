@@ -49,6 +49,89 @@ const TYPE_COLORS: Record<string, string> = {
   audioIn: '#c56164'
 }
 
+/** Whether this request is a BROWSER NAVIGATION rather than one of the
+ * page's own fetch calls -- the one distinction that decides whether a
+ * refusal is readable or a white void.
+ *
+ * `fetch()` with no Accept of its own sends the match-everything wildcard
+ * and names no type; a navigation sends a list that leads with text/html.
+ * Nothing else on this surface needs to know the difference, and nothing
+ * about authorisation depends on it: the status code is the same either
+ * way, and so is the fact that every unrecognised path answers
+ * identically. */
+export function acceptsHtml(accept: string | undefined): boolean {
+  return (accept ?? '').toLowerCase().includes('text/html')
+}
+
+/** Refused because the Host header is not the address this server is
+ * serving. The realistic cause, and the bug this page was written for
+ * (2026-09-26): a phone whose tab still points at the address the Mac
+ * advertised before the LAN-address ranking landed (f1fcc9b). The server
+ * binds 0.0.0.0, so the old address still CONNECTS -- it is only the guard
+ * that refuses it, which is why this reads as "loaded, blank" and not as
+ * "cannot connect".
+ *
+ * It deliberately does not print the address it expected: the Host guard
+ * exists so that something reaching this server under the wrong name learns
+ * nothing about it, and a notice naming the right address would hand that
+ * back. The Mac is one glance away and already shows it. */
+export const REMOTE_WRONG_ADDRESS_NOTICE =
+  'the mac is not serving this address. check the address the remote shows on the mac.'
+
+/** Every unauthenticated request other than GET / and POST /api/pair, and
+ * every request to a path that does not exist, authenticated or not -- one
+ * identical answer, so nothing here reveals which routes are real. */
+export const REMOTE_NOTHING_HERE_NOTICE = 'nothing at this address.'
+
+/** A refusal, as a page a phone can read, instead of the two characters of
+ * json a phone draws as a white screen.
+ *
+ * Same ground, same typeface and the same lowercase voice as the remote
+ * itself, and nothing else: no retry, no diagnostics, no report. The font
+ * is `swap` rather than the remote's `block` -- a one-line page must not
+ * spend its first three seconds invisible, which is the failure being fixed
+ * here. */
+export function remoteNoticePage(line: string): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>sssketch · side quest</title>
+<style>
+@font-face {
+  font-family: 'Silkscreen';
+  src: url(data:font/woff2;base64,${SILKSCREEN_REGULAR_WOFF2_BASE64}) format('woff2');
+  font-weight: 400;
+  font-display: swap;
+}
+* { box-sizing: border-box; border-radius: 0; }
+body {
+  margin: 0;
+  padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px);
+  background: #050505;
+  color: #ededed;
+  font-family: 'Silkscreen', ui-monospace, monospace;
+  font-size: 13px;
+  line-height: 1.6;
+  -webkit-text-size-adjust: 100%;
+}
+.wrap { max-width: 420px; margin: 0 auto; padding: 24px 0 32px; }
+.eyebrow { font-size: 10px; color: #6a6a6a; letter-spacing: 0.08em; }
+h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
+.msg { font-size: 11px; color: #8f8f8f; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="eyebrow">sssketch</div>
+  <h1>side quest</h1>
+  <div class="msg">${line}</div>
+</div>
+</body>
+</html>`
+}
+
 /** The seven chips, in the desktop add row's own order and with its own
  * playful labels, plus which of the two groups each belongs to (mask kinds
  * filter, trait kinds rank -- the desktop draws a divider between them and
@@ -229,9 +312,25 @@ input {
     <div class="msg" id="msg"></div>
   </div>
 
+  <!-- The last resort, and the only thing on this page that is about this
+       page rather than about Discover. Unhidden by a window error listener
+       (see the top of the script) so a script that throws leaves a line to
+       read instead of a phone-sized void. -->
+  <div class="msg" id="broke" hidden>something went wrong on this page. reload it.</div>
+
 </div>
 <script>
 (function () {
+  // FIRST, before anything that could throw. This does NOT catch the error:
+  // it is a listener, the throw still happens and still reaches the
+  // console, and a page that needs this line is still a bug. It only makes
+  // that bug visible on a device with no console -- a blank phone is the
+  // one failure that cannot be reported at all.
+  window.addEventListener('error', function () {
+    var broke = document.getElementById('broke')
+    if (broke) broke.hidden = false
+  })
+
   var TYPE_COLORS = ${JSON.stringify(TYPE_COLORS)}
   // The seven chips and, below them, what tapping each one does to a
   // selection. KIND_TOGGLE is not a reimplementation of the combination

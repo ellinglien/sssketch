@@ -16,7 +16,14 @@ import {
   type RemoteStateResponse
 } from '@shared/remoteState'
 import { chooseLanAddress, type NetworkAddress } from '@shared/lanAddress'
-import { REMOTE_PAGE_CSP, REMOTE_PAGE_HTML } from './remotePage'
+import {
+  REMOTE_NOTHING_HERE_NOTICE,
+  REMOTE_PAGE_CSP,
+  REMOTE_PAGE_HTML,
+  REMOTE_WRONG_ADDRESS_NOTICE,
+  acceptsHtml,
+  remoteNoticePage
+} from './remotePage'
 
 /** node's `networkInterfaces()` as a flat list -- the interface name carried
  * on each row instead of being the key above it, which is the shape the
@@ -82,6 +89,10 @@ export interface RemoteServerOptions {
    * not running. */
   onServerError: (error: Error) => void
   lanAddress: string
+  /** Tests only. The real thing is always REMOTE_PORT -- fixed so the URL he
+   * types once stays the URL forever -- and a test cannot bind 7373 without
+   * fighting whatever copy of the app is already running on this machine. */
+  portOverride?: number
 }
 
 function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
@@ -124,10 +135,14 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
  *
  * BEFORE PAIRING THE SERVER SERVES THE PAIRING SCREEN AND NOTHING ELSE:
  * every unauthenticated request other than GET / and POST /api/pair gets
- * 401 with an empty object -- including a path that does not exist, so
- * nothing reveals which routes are real. */
+ * 401 -- including a path that does not exist, so nothing reveals which
+ * routes are real. What that 401 LOOKS like depends only on who is asking
+ * (see `refuse`): an empty object for the page's own fetch calls, and the
+ * same one-line notice page for every navigation. Same status, same
+ * indistinguishability, one of them readable on a phone. */
 export function startRemoteServer(options: RemoteServerOptions): RemoteServerHandle {
-  const expectedHost = `${options.lanAddress}:${REMOTE_PORT}`
+  const port = options.portOverride ?? REMOTE_PORT
+  const expectedHost = `${options.lanAddress}:${port}`
   const pairingCode = newPairingCode(Math.random)
   let gate: PairingGate = { attemptsUsed: 0, lockedOut: false }
   const tokens = new Set<string>()
@@ -135,6 +150,33 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
   function respond(res: ServerResponse, status: number, body: unknown = {}): void {
     res.writeHead(status, { 'content-type': 'application/json' })
     res.end(JSON.stringify(body))
+  }
+
+  /** A refusal, answered as whatever the caller can read.
+   *
+   * THE BUG THIS EXISTS FOR (2026-09-26): every refusal here used to be
+   * `{}` with a json content type, for the page's own fetch calls and for a
+   * phone that had navigated into it alike. A browser draws two characters
+   * of json as a full white screen, which is exactly what he reported and
+   * is indistinguishable from a page that failed to render. His phone's tab
+   * still pointed at the address the Mac advertised before f1fcc9b; the
+   * server binds 0.0.0.0, so that address still connected and the Host
+   * guard still refused it -- "loaded, blank", forever, with nothing on
+   * screen to say why.
+   *
+   * The status code does not change, the page's own fetch calls still get
+   * json (they send the match-everything wildcard, and show(false) on a 401
+   * is how a stale token finds its way back to the pairing form), and every
+   * unrecognised path still answers identically to every other -- nothing
+   * here reveals which routes are real. */
+  function refuse(req: IncomingMessage, res: ServerResponse, status: number, notice: string): void {
+    if (!acceptsHtml(req.headers.accept)) return respond(res, status)
+    res.writeHead(status, {
+      'content-type': 'text/html; charset=utf-8',
+      'content-security-policy': REMOTE_PAGE_CSP,
+      'cache-control': 'no-store'
+    })
+    res.end(remoteNoticePage(notice))
   }
 
   function authorized(req: IncomingMessage): boolean {
@@ -145,7 +187,9 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
 
   const server: Server = createServer((req, res) => {
     void (async (): Promise<void> => {
-      if (!isAllowedHost(req.headers.host, expectedHost)) return respond(res, 403)
+      if (!isAllowedHost(req.headers.host, expectedHost)) {
+        return refuse(req, res, 403, REMOTE_WRONG_ADDRESS_NOTICE)
+      }
       const url = (req.url ?? '/').split('?')[0]
 
       if (req.method === 'GET' && url === '/') {
@@ -171,7 +215,7 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
         return
       }
 
-      if (!authorized(req)) return respond(res, 401)
+      if (!authorized(req)) return refuse(req, res, 401, REMOTE_NOTHING_HERE_NOTICE)
 
       if (req.method === 'GET' && url === '/api/state') {
         res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' })
@@ -252,7 +296,7 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
 
       // Anything else, authenticated or not, answers exactly like an
       // unauthenticated request -- no 404 that reveals a route exists.
-      respond(res, 401)
+      refuse(req, res, 401, REMOTE_NOTHING_HERE_NOTICE)
     })()
   })
 
@@ -261,7 +305,7 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
     options.onServerError(error)
   })
 
-  server.listen(REMOTE_PORT, '0.0.0.0')
+  server.listen(port, '0.0.0.0')
 
   return {
     url: `http://${expectedHost}`,
