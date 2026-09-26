@@ -12,6 +12,7 @@ import type {
 } from '@shared/riffLibraryTypes'
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/riffLibraryTypes'
 import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
+import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import {
   recordStemDownloadFailure,
   recordStemDownloadSuccess,
@@ -191,6 +192,27 @@ export function riffLibraryAvailable(): boolean {
 export function resolveStemPath(jamCID: string, stemCID: string): string {
   const shard = stemCID[0]
   const root = riffLibraryRootPath()
+  // sssketch's own "discovered" room (see @shared/discoveredRoom): the
+  // jam-sharded stem_v2 layout every external LORE jam room already uses,
+  // but always under the OWN root regardless of where browsing currently
+  // points -- these are copies the app made itself and they must not go
+  // missing when the user repoints at a different archive. Same basename-
+  // is-the-StemCID convention as everywhere else (stemCIDForPath), which
+  // is what keeps StemCategories/StemFeatureCache/StemPeaksCache/
+  // StemEmbeddingCache/StemAutoCategory/StemFavourite all hitting at the
+  // copied path for free. Checked BEFORE the own-root branch below, which
+  // would otherwise send it to the content-addressed endlesss-cache.
+  if (jamCID === DISCOVERED_JAM_CID) {
+    return join(
+      ownRiffLibraryRoot(),
+      'cache',
+      'common',
+      'stem_v2',
+      DISCOVERED_JAM_CID,
+      shard,
+      stemCID
+    )
+  }
   // Shared Feed (and anything else auto-synced into sssketch's own
   // database -- see dbForJam below) always downloads its stems to the
   // same content-addressed endlesss-cache regardless of which root is
@@ -205,6 +227,14 @@ export function resolveStemPath(jamCID: string, stemCID: string): string {
   return join(root, 'cache', 'common', 'stem_v2', jamCID, shard, stemCID)
 }
 
+/** Where a kept group's copy of `stemCID` lives. One definition, shared by
+ * the save path (which writes the copy) and every reader (which resolves
+ * it through resolveStemPath) -- delegated rather than re-derived so the
+ * two can never drift. */
+export function discoveredStemPath(stemCID: string): string {
+  return resolveStemPath(DISCOVERED_JAM_CID, stemCID)
+}
+
 /** Whichever db actually holds `jamCID`'s rows. Shared Feed jams (jamCID
  * prefixed "shared:") are ALWAYS synced into sssketch's own database
  * (openOwnRiffLibraryDb, via riffLibrarySync.ts's syncSharedFeed),
@@ -213,7 +243,9 @@ export function resolveStemPath(jamCID: string, stemCID: string): string {
  * Everything else follows whatever root is currently configured
  * (getRiffLibraryDb). */
 function dbForJam(jamCID: string): Database.Database | null {
-  return jamCID.startsWith('shared:') ? openOwnRiffLibraryDb() : getRiffLibraryDb()
+  return jamCID.startsWith('shared:') || jamCID === DISCOVERED_JAM_CID
+    ? openOwnRiffLibraryDb()
+    : getRiffLibraryDb()
 }
 
 function queryJamsFromDb(db: Database.Database, filterText: string): RiffLibraryJam[] {
@@ -239,8 +271,8 @@ export function listJams(filterText: string): RiffLibraryJam[] {
   // of silently reading as never-synced just because browsing is currently
   // pointed at an external archive.
   if (riffLibraryRootPath() === ownRiffLibraryRoot()) return rows
-  const ownRows = queryJamsFromDb(openOwnRiffLibraryDb(), filterText).filter((j) =>
-    j.jamCID.startsWith('shared:')
+  const ownRows = queryJamsFromDb(openOwnRiffLibraryDb(), filterText).filter(
+    (j) => j.jamCID.startsWith('shared:') || j.jamCID === DISCOVERED_JAM_CID
   )
   return [...rows, ...ownRows].sort((a, b) => b.lastRiffTime - a.lastRiffTime)
 }

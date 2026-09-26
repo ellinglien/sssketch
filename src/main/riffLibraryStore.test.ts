@@ -15,8 +15,10 @@ import {
   listRiffs,
   resolveRiff,
   resolveRiffWithContext,
-  downloadMissingStems
+  downloadMissingStems,
+  discoveredStemPath
 } from './riffLibraryStore'
+import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import { writeRiffDetail } from './riffLibraryWriter'
 import { stemDownloadUrl } from '@shared/riffLibraryTypes'
 import { DEFAULT_SESSION_RETRY_ATTEMPTS } from '@shared/stemAvailability'
@@ -210,6 +212,25 @@ describe('riffLibraryStore', () => {
     expect(row.FileEndpoint).toBe('ams3.digitaloceanspaces.com')
     expect(row.FileBucket).toBe('endlesss')
     expect(row.FileKey).toBe('attachments/abc123.ogg')
+  })
+
+  it('resolves a discovered stem under the OWN root, not the configured browse root', async () => {
+    const { ownRiffLibraryRoot } = await import('./riffLibrarySchema')
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    const path = resolveStemPath(DISCOVERED_JAM_CID, 'abc123')
+    expect(path).toBe(
+      join(ownRiffLibraryRoot(), 'cache', 'common', 'stem_v2', 'discovered', 'a', 'abc123')
+    )
+    expect(path.startsWith(root)).toBe(false)
+  })
+
+  it('discoveredStemPath is the same path, by the same rule', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    expect(discoveredStemPath('abc123')).toBe(resolveStemPath(DISCOVERED_JAM_CID, 'abc123'))
   })
 })
 
