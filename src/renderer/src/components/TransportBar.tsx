@@ -341,6 +341,14 @@ export function TransportBar({
     setPhoneRemote(await window.rifffApi.stopPhoneRemote())
   }
 
+  /** He picked another of this machine's addresses in the modal. Main
+   * remembers it per machine and moves the running server onto it -- the
+   * url, the qr and the host guard all follow from the address the server
+   * was started on, so there is nothing to update here but the status. */
+  async function pickPhoneRemoteAddress(address: string): Promise<void> {
+    setPhoneRemote(await window.rifffApi.setPhoneRemoteAddress(address))
+  }
+
   // Discover's background classify scan (stemAutoClassifyScheduler.ts) has
   // no progress UI of its own -- direct request, 2026-09-15 ("any way to
   // show the progress of the discovery scan? maybe in the gear menu where
@@ -1016,6 +1024,7 @@ export function TransportBar({
           view={phoneRemoteView}
           onClose={() => setPhoneRemoteAsked(false)}
           onTurnOff={() => void turnOffPhoneRemote()}
+          onPickAddress={(address) => void pickPhoneRemoteAddress(address)}
         />
       )}
 

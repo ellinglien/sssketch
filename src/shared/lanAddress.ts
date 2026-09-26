@@ -12,30 +12,48 @@ export interface NetworkAddress {
   internal: boolean
 }
 
-/** Interfaces that are never the answer to "what does a phone on the same
- * wifi type in", matched as a case-insensitive prefix of the name:
+/** THE TWO KINDS OF "NO", AND THE LINE BETWEEN THEM (2026-09-26).
+ *
+ * This file used to have one list of interface names it threw away. It now
+ * has two, because "a phone on the same wifi would not type this" and "no
+ * device anywhere could ever hold an address on this network" are different
+ * claims, and only the second one justifies hiding an address from him.
+ *
+ * NOT ALLOWED -- never a candidate, not even an offered one. An address on
+ * one of these is not something another device can be given, on any network,
+ * ever, so listing it would only be noise:
+ *
+ *   awdl, llw              -- apple's peer-to-peer link-local radios
+ *   vmnet, vboxnet, docker -- the host side of a vm/container network
+ *
+ * plus, by range rather than by name: loopback, 169.254/16 link-local (what
+ * an interface self-assigns when DHCP gave it nothing), anything internal,
+ * anything not IPv4, and anything malformed.
+ *
+ * NOT PREFERRED -- offered in the picker, never the default:
  *
  *   utun, tun, tap  -- vpn and tunnel devices (tailscale lives on utun)
  *   ppp             -- point-to-point dial-up/pppoe links
- *   awdl, llw       -- apple's peer-to-peer link-local radios
  *   bridge          -- internet sharing / thunderbolt bridges
- *   vmnet, vboxnet, docker -- virtual machine and container host networks
  *
- * A bridge is the subtle one: it has a real private address (192.168.3.1 on
- * his machine) that looks exactly like a LAN, but it is the address of a
- * network he is serving, not the one his phone is on. */
-const VIRTUAL_NAME_PREFIXES = [
-  'utun',
-  'tun',
-  'tap',
-  'awdl',
-  'llw',
-  'bridge',
-  'vmnet',
-  'vboxnet',
-  'docker',
-  'ppp'
-]
+ * plus, by range, 100.64.0.0/10 (see isCarrierGradeNat).
+ *
+ * The test for this group is "reachable by a device that shares the tunnel
+ * (or is plugged into the sharing bridge)" -- which is a real setup and, on
+ * his machine, the ONLY one that works: his router isolates wireless
+ * clients, so his Mac and his iPhone cannot reach each other over the wifi
+ * they are both on, and Tailscale is the way across. Excluding these
+ * outright (f1fcc9b, this morning) was right for choosing a DEFAULT and
+ * wrong for building a LIST.
+ *
+ * They stay unpreferred because the reason f1fcc9b existed has not gone
+ * away: a phone that is not on the tailnet cannot use a tailnet address,
+ * and a default nobody chose must be the one that works without any setup. */
+const UNREACHABLE_NAME_PREFIXES = ['awdl', 'llw', 'vmnet', 'vboxnet', 'docker']
+
+const TUNNEL_NAME_PREFIXES = ['utun', 'tun', 'tap', 'ppp']
+
+const SHARING_NAME_PREFIXES = ['bridge']
 
 function octets(address: string): number[] | null {
   const parts = address.split('.')
@@ -66,9 +84,9 @@ function isPrivate([a, b]: number[]): boolean {
   return a === 172 && b >= 16 && b <= 31
 }
 
-function isVirtualName(name: string): boolean {
+function hasPrefix(name: string, prefixes: string[]): boolean {
   const lower = name.toLowerCase()
-  return VIRTUAL_NAME_PREFIXES.some((prefix) => lower.startsWith(prefix))
+  return prefixes.some((prefix) => lower.startsWith(prefix))
 }
 
 function isIPv4(family: string | number): boolean {
@@ -87,10 +105,49 @@ function compareNames(a: string, b: string): number {
   return 0
 }
 
-/** Every address a phone on the same wifi has a real chance of reaching,
- * best first.
+/** One address the phone remote could be served on, as the picker shows it. */
+export interface LanAddressCandidate {
+  address: string
+  /** The interface it was found on -- 'en0', 'utun0'. Carried so the picker
+   * can tell two private-looking addresses apart at a glance. */
+  interfaceName: string
+  /** True for an address a device on the same wifi can be expected to reach
+   * with no setup. False for a tunnel, a vpn or a sharing bridge: offered,
+   * but only the right answer for someone who knows their phone is on the
+   * other end of it. See the two prefix lists above. */
+  preferred: boolean
+}
+
+interface Scored {
+  entry: NetworkAddress
+  parts: number[]
+  preferred: boolean
+  /** 0 preferred, 1 tunnel/vpn, 2 sharing bridge. A tailnet address works
+   * from anywhere; a sharing bridge only works for a device plugged into
+   * this Mac -- so among the unpreferred, the likelier one comes first. */
+  tier: number
+}
+
+function score(entry: NetworkAddress): Scored | null {
+  const parts = octets(entry.address)
+  if (parts === null) return null
+  if (entry.internal || !isIPv4(entry.family)) return null
+  if (parts[0] === 127 || isLinkLocal(parts)) return null
+  if (hasPrefix(entry.name, UNREACHABLE_NAME_PREFIXES)) return null
+
+  if (hasPrefix(entry.name, SHARING_NAME_PREFIXES))
+    return { entry, parts, preferred: false, tier: 2 }
+  if (hasPrefix(entry.name, TUNNEL_NAME_PREFIXES) || isCarrierGradeNat(parts)) {
+    return { entry, parts, preferred: false, tier: 1 }
+  }
+  return { entry, parts, preferred: true, tier: 0 }
+}
+
+/** Every address the phone remote could be served on, best first -- the
+ * list the picker in PhoneRemoteModal.tsx offers him.
  *
  * Ranking, in order of priority:
+ *   0. tier -- preferred beats tunnel beats sharing bridge (see Scored).
  *   1. rfc1918 private beats anything else -- that is what a home LAN is.
  *   2. en* (wifi and ethernet on macos) beats any other surviving name.
  *   3. lowest interface number, then lowest address -- purely to be
@@ -100,21 +157,14 @@ function compareNames(a: string, b: string): number {
  * guarantee the order `networkInterfaces()` enumerates in, and depending on
  * that order is exactly the bug this replaces -- a tailscale utun0 listed
  * ahead of en0 got advertised to a phone that could not reach it. */
-export function rankLanAddresses(interfaces: NetworkAddress[]): string[] {
-  const candidates = interfaces
-    .map((entry) => ({ entry, parts: octets(entry.address) }))
-    .filter(
-      (candidate): candidate is { entry: NetworkAddress; parts: number[] } =>
-        candidate.parts !== null &&
-        !candidate.entry.internal &&
-        isIPv4(candidate.entry.family) &&
-        !isVirtualName(candidate.entry.name) &&
-        !isCarrierGradeNat(candidate.parts) &&
-        !isLinkLocal(candidate.parts) &&
-        candidate.parts[0] !== 127
-    )
+export function lanAddressCandidates(interfaces: NetworkAddress[]): LanAddressCandidate[] {
+  const scored = interfaces
+    .map(score)
+    .filter((candidate): candidate is Scored => candidate !== null)
 
-  const sorted = [...candidates].sort((a, b) => {
+  const sorted = [...scored].sort((a, b) => {
+    if (a.tier !== b.tier) return a.tier - b.tier
+
     const aPrivate = isPrivate(a.parts) ? 0 : 1
     const bPrivate = isPrivate(b.parts) ? 0 : 1
     if (aPrivate !== bPrivate) return aPrivate - bPrivate
@@ -133,20 +183,81 @@ export function rankLanAddresses(interfaces: NetworkAddress[]): string[] {
   })
 
   const seen = new Set<string>()
-  return sorted
-    .map((candidate) => candidate.entry.address)
-    .filter((address) => (seen.has(address) ? false : (seen.add(address), true)))
+  const unique: LanAddressCandidate[] = []
+  for (const candidate of sorted) {
+    if (seen.has(candidate.entry.address)) continue
+    seen.add(candidate.entry.address)
+    unique.push({
+      address: candidate.entry.address,
+      interfaceName: candidate.entry.name,
+      preferred: candidate.preferred
+    })
+  }
+  return unique
 }
 
-/** The single address the desktop shows him to type into the phone. Null
- * when nothing survives the ranking.
+/** Every address a phone on the same wifi has a real chance of reaching
+ * WITH NO SETUP AT ALL, best first -- the candidates minus the tunnels and
+ * bridges. This is what a default may be drawn from; the wider list above
+ * is what he may choose from. */
+export function rankLanAddresses(interfaces: NetworkAddress[]): string[] {
+  return lanAddressCandidates(interfaces)
+    .filter((candidate) => candidate.preferred)
+    .map((candidate) => candidate.address)
+}
+
+/** The address the desktop serves on when he has expressed no preference.
+ * Null when there is no such address.
  *
- * Null on a vpn-only machine is the deliberate answer, not an oversight: a
- * machine whose only non-internal address is a tailnet address has no LAN,
- * and handing the phone an address it cannot route to is precisely the
- * failure being fixed -- it looks like the feature is working right up until
- * the phone says "connection failed". "no network found", which the gear
- * menu already says when this is null, is the honest report. */
+ * Null on a vpn-only machine is the deliberate answer here, not an
+ * oversight: handing a phone an address it cannot route to is precisely the
+ * failure f1fcc9b fixed -- it looks like the feature is working right up
+ * until the phone says "connection failed". resolveRemoteAddress is what
+ * decides whether to fall past that and serve on a tunnel anyway; this
+ * function only ever answers "what works with no setup". */
 export function chooseLanAddress(interfaces: NetworkAddress[]): string | null {
   return rankLanAddresses(interfaces)[0] ?? null
+}
+
+/** The address to actually serve on: his remembered choice when it is still
+ * one of this machine's addresses, otherwise the best default there is.
+ *
+ * WHAT HAPPENS WHEN THE REMEMBERED ADDRESS IS GONE -- Tailscale quit, or he
+ * left that network: it falls back to the default and says nothing. It does
+ * NOT clear the stored choice (the caller keeps that untouched), so the
+ * moment Tailscale is back the remote returns to the tailnet address by
+ * itself. A preference that erased itself the first time a VPN was off
+ * would have to be set again every session.
+ *
+ * The last fallback -- an unpreferred candidate when there is no preferred
+ * one at all -- is for a machine whose only address IS the tunnel. Refusing
+ * there would report "no network found" on a machine with a perfectly good
+ * one, and unlike the silent misadvertisement f1fcc9b fixed, the address is
+ * on screen in the modal and one click from being changed. */
+export function resolveRemoteAddress(
+  candidates: LanAddressCandidate[],
+  remembered: string | null
+): string | null {
+  if (remembered !== null && candidates.some((candidate) => candidate.address === remembered)) {
+    return remembered
+  }
+  return (
+    candidates.find((candidate) => candidate.preferred)?.address ?? candidates[0]?.address ?? null
+  )
+}
+
+/** Every IPv4 address this machine holds, loopback and tunnels included, in
+ * the order the interfaces were enumerated.
+ *
+ * Not a ranking and not a filter: the only question it answers is "is this
+ * Host header one of ours", and for that a machine's loopback, its tailnet
+ * address and the bridge it serves count exactly as much as its wifi. See
+ * isAllowedHost in remoteAuth.ts. */
+export function allLocalIPv4Addresses(interfaces: NetworkAddress[]): string[] {
+  const seen = new Set<string>()
+  for (const entry of interfaces) {
+    if (!isIPv4(entry.family) || octets(entry.address) === null) continue
+    seen.add(entry.address)
+  }
+  return [...seen]
 }

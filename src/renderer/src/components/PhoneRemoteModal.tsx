@@ -28,7 +28,8 @@ import { qrSvg } from '@shared/qrSvg'
 export function PhoneRemoteModal({
   view,
   onClose,
-  onTurnOff
+  onTurnOff,
+  onPickAddress
 }: {
   view: PhoneRemoteModalView
   /** Dismisses the card. Leaves the remote RUNNING -- see the two buttons
@@ -36,6 +37,10 @@ export function PhoneRemoteModal({
    * are. */
   onClose: () => void
   onTurnOff: () => void
+  /** Serve on another of this machine's addresses, and remember it. Only
+   * ever called from the picker, which only exists when view.addressOptions
+   * is non-empty -- i.e. when there is genuinely more than one. */
+  onPickAddress: (address: string) => void
 }): React.JSX.Element {
   const [copyState, setCopyState] = useState<CopyState>('idle')
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -194,6 +199,46 @@ export function PhoneRemoteModal({
               the copied link has the code in it
             </span>
           </div>
+
+          {/* The picker, AND NOTHING WHEN THERE IS ONE ADDRESS -- the list
+           * is empty in that case by phoneRemoteAddressOptions' own rule,
+           * so the ordinary card is exactly the card it was before this
+           * existed. One row of small chips, not a settings panel.
+           *
+           * It exists because no ranking can fix his router: a Bell Home
+           * Hub 3000 isolates wireless clients, so the Mac and the phone
+           * are on the same 192.168.2.x and cannot reach each other at
+           * all. Only he knows which network the phone is really on. */}
+          {view.addressOptions.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-1)' }}>
+              <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
+                if the phone cannot reach it, try another
+              </span>
+              <div style={{ display: 'flex', gap: 'var(--ra-s-1)', flexWrap: 'wrap' }}>
+                {view.addressOptions.map((option) => (
+                  <button
+                    key={option.address}
+                    onClick={() => onPickAddress(option.address)}
+                    aria-pressed={option.selected}
+                    title="serves on this address"
+                    style={{
+                      ...buttonStyle,
+                      height: 22,
+                      padding: '0 8px',
+                      fontSize: 10,
+                      border: `1px solid var(${
+                        option.selected ? '--ra-border-strong' : '--ra-border'
+                      })`,
+                      background: `var(${option.selected ? '--ra-bg-row-active' : '--ra-bg-page'})`,
+                      color: `var(${option.selected ? '--ra-text' : '--ra-text-2'})`
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {view.pairingNote !== null && (

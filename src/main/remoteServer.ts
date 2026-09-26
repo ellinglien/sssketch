@@ -15,7 +15,13 @@ import {
   type RemoteCommand,
   type RemoteStateResponse
 } from '@shared/remoteState'
-import { chooseLanAddress, type NetworkAddress } from '@shared/lanAddress'
+import {
+  allLocalIPv4Addresses,
+  lanAddressCandidates,
+  resolveRemoteAddress,
+  type LanAddressCandidate,
+  type NetworkAddress
+} from '@shared/lanAddress'
 import {
   REMOTE_NOTHING_HERE_NOTICE,
   REMOTE_PAGE_CSP,
@@ -43,9 +49,18 @@ function flattenInterfaces(): NetworkAddress[] {
   return rows
 }
 
-/** The address on this machine a phone on the same wifi can actually reach
- * -- what the desktop shows him to type in. Null when there is no LAN at
- * all, in which case the feature cannot work and the UI says so rather than
+/** Every address the phone remote could be served on right now, best
+ * first -- what the modal's picker offers. See lanAddressCandidates for
+ * which addresses are offered, which are preferred, and why those are two
+ * different questions. */
+export function remoteAddressCandidates(): LanAddressCandidate[] {
+  return lanAddressCandidates(flattenInterfaces())
+}
+
+/** The address the desktop will serve on and shows him to type in: his
+ * remembered choice when it is still one of this machine's addresses,
+ * otherwise the best default. Null when this machine has nothing usable, in
+ * which case the feature cannot work and the UI says so rather than
  * starting a server nothing can reach.
  *
  * This used to return the first non-internal IPv4 it came across, which on
@@ -56,15 +71,28 @@ function flattenInterfaces(): NetworkAddress[] {
  * order `networkInterfaces()` enumerates in, so nothing here may depend on
  * it.
  *
- * If the top-ranked address is ever the wrong one on some machine,
- * `rankLanAddresses` already returns every survivor best-first -- offering
- * him the runners-up is then a change to the menu, not to this logic. */
-export function lanIPv4Address(): string | null {
-  return chooseLanAddress(flattenInterfaces())
+ * The ranking cannot, however, know that his router isolates wireless
+ * clients and that the correctly-chosen wifi address is one his phone can
+ * never reach. That is what `remembered` is for. */
+export function lanIPv4Address(remembered: string | null = null): string | null {
+  return resolveRemoteAddress(remoteAddressCandidates(), remembered)
+}
+
+/** Every IPv4 this machine currently holds -- the Host guard's allow-list.
+ * Read per request rather than captured at startup: he joins and leaves
+ * networks while the app is running, and an address that appeared after the
+ * server started is just as much ours as one that was there first. */
+function ownAddresses(): string[] {
+  return allLocalIPv4Addresses(flattenInterfaces())
 }
 
 export interface RemoteServerHandle {
   url: string
+  /** The address this server was started on -- the one the url and the QR
+   * name. Reported back so the picker can mark the row the address bar on
+   * the phone is going to say, rather than the row the resolver would pick
+   * if asked again a second later. */
+  address: string
   pairingCode: string
   stop(): void
 }
@@ -89,6 +117,10 @@ export interface RemoteServerOptions {
    * not running. */
   onServerError: (error: Error) => void
   lanAddress: string
+  /** Tests only -- the machine's own addresses, so a test does not have to
+   * have the network it is testing. The real thing reads them fresh from
+   * `networkInterfaces()` on every request. */
+  localAddressesOverride?: () => string[]
   /** Tests only. The real thing is always REMOTE_PORT -- fixed so the URL he
    * types once stays the URL forever -- and a test cannot bind 7373 without
    * fighting whatever copy of the app is already running on this machine. */
@@ -143,6 +175,7 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
 export function startRemoteServer(options: RemoteServerOptions): RemoteServerHandle {
   const port = options.portOverride ?? REMOTE_PORT
   const expectedHost = `${options.lanAddress}:${port}`
+  const localAddresses = options.localAddressesOverride ?? ownAddresses
   const pairingCode = newPairingCode(Math.random)
   let gate: PairingGate = { attemptsUsed: 0, lockedOut: false }
   const tokens = new Set<string>()
@@ -187,7 +220,12 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
 
   const server: Server = createServer((req, res) => {
     void (async (): Promise<void> => {
-      if (!isAllowedHost(req.headers.host, expectedHost)) {
+      // ANY of this machine's own addresses on this port, not only the one
+      // it advertised -- see isAllowedHost for why that is no weaker
+      // against DNS rebinding, and remoteServer.test.ts for the blank page
+      // it was causing. `expectedHost` remains what the URL and the QR say;
+      // it is no longer what the guard is built from.
+      if (!isAllowedHost(req.headers.host, localAddresses(), port)) {
         return refuse(req, res, 403, REMOTE_WRONG_ADDRESS_NOTICE)
       }
       const url = (req.url ?? '/').split('?')[0]
@@ -309,6 +347,7 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
 
   return {
     url: `http://${expectedHost}`,
+    address: options.lanAddress,
     pairingCode,
     stop: (): void => {
       tokens.clear()

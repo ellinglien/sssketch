@@ -10,6 +10,10 @@ import {
   recordPairAttempt
 } from './remoteAuth'
 
+/** The three addresses of the machine in lanAddress.test.ts's fixture:
+ * wifi, tailnet, and the internet-sharing bridge. */
+const OURS = ['192.168.1.40', '100.66.121.12', '192.168.3.1']
+
 describe('remoteAuth', () => {
   it('uses the fixed port', () => {
     expect(REMOTE_PORT).toBe(7373)
@@ -34,15 +38,79 @@ describe('remoteAuth', () => {
     expect(codesMatch('', '')).toBe(false)
   })
 
-  it('allows the expected host and nothing else', () => {
-    expect(isAllowedHost('192.168.1.40:7373', '192.168.1.40:7373')).toBe(true)
-    expect(isAllowedHost('evil.example.com', '192.168.1.40:7373')).toBe(false)
-    expect(isAllowedHost(undefined, '192.168.1.40:7373')).toBe(false)
+  it('allows this machine own addresses and nothing else', () => {
+    expect(isAllowedHost('192.168.1.40:7373', OURS, 7373)).toBe(true)
+    expect(isAllowedHost('evil.example.com', OURS, 7373)).toBe(false)
+    expect(isAllowedHost(undefined, OURS, 7373)).toBe(false)
   })
 
   it('allows localhost on the same port, for the desktop own check', () => {
-    expect(isAllowedHost('localhost:7373', '192.168.1.40:7373')).toBe(true)
-    expect(isAllowedHost('127.0.0.1:7373', '192.168.1.40:7373')).toBe(true)
+    expect(isAllowedHost('localhost:7373', OURS, 7373)).toBe(true)
+    expect(isAllowedHost('127.0.0.1:7373', OURS, 7373)).toBe(true)
+    // Even when loopback is not in the list it was handed.
+    expect(isAllowedHost('127.0.0.1:7373', ['192.168.1.40'], 7373)).toBe(true)
+  })
+
+  /** WHY THE GUARD WIDENED (2026-09-26).
+   *
+   * It used to be built from THE ONE address the desktop advertised, so a
+   * request that arrived on any other address of the same machine got 403.
+   * Reaching the remote by its tailnet address while the Mac was
+   * advertising its wifi address answered a blank page -- which is what he
+   * got, twice, before this.
+   *
+   * There is no security in insisting on one interface. A request arriving
+   * on another address of the SAME MACHINE is equally legitimate; the
+   * property being defended is something else entirely.
+   *
+   * WHAT THE GUARD IS FOR, AND WHY IT STILL WORKS: dns rebinding. An
+   * attacker's page on evil.example.com re-resolves that NAME to the
+   * victim's 192.168.x.y and has the browser talk to this server -- but the
+   * browser sends the name it was given, `Host: evil.example.com`, and a
+   * name is what this rejects. The allow-list holds IP LITERALS ONLY (plus
+   * `localhost`, which no attacker can repoint: every OS and browser pins
+   * it to loopback, and a page served from localhost:7373 is same-origin
+   * with this server anyway). Widening one literal to all of this machine's
+   * literals adds no name, so it adds no rebinding path: the only way a
+   * browser sends one of them as Host is if it was pointed straight at that
+   * address, which is not an attack, it is the phone. */
+  it('allows any address of this machine, not only the advertised one', () => {
+    expect(isAllowedHost('100.66.121.12:7373', OURS, 7373)).toBe(true)
+    expect(isAllowedHost('192.168.3.1:7373', OURS, 7373)).toBe(true)
+  })
+
+  it('still refuses every name, which is what dns rebinding needs', () => {
+    for (const name of [
+      'evil.example.com:7373',
+      'rebind.localhost.evil.com:7373',
+      'localhost.evil.com:7373',
+      'sssketch.local:7373',
+      'EVIL.EXAMPLE.COM:7373'
+    ]) {
+      expect(isAllowedHost(name, OURS, 7373)).toBe(false)
+    }
+  })
+
+  it('refuses an address of some other machine', () => {
+    expect(isAllowedHost('192.168.1.99:7373', OURS, 7373)).toBe(false)
+  })
+
+  it('refuses the right address on the wrong port, and a missing port', () => {
+    expect(isAllowedHost('192.168.1.40:8080', OURS, 7373)).toBe(false)
+    expect(isAllowedHost('192.168.1.40', OURS, 7373)).toBe(false)
+    expect(isAllowedHost('192.168.1.40:', OURS, 7373)).toBe(false)
+    expect(isAllowedHost(':7373', OURS, 7373)).toBe(false)
+  })
+
+  it('refuses when this machine has no addresses to compare against', () => {
+    // Everything but loopback, which is never in doubt.
+    expect(isAllowedHost('192.168.1.40:7373', [], 7373)).toBe(false)
+    expect(isAllowedHost('localhost:7373', [], 7373)).toBe(true)
+  })
+
+  it('ignores surrounding space and case in the header', () => {
+    expect(isAllowedHost('  192.168.1.40:7373  ', OURS, 7373)).toBe(true)
+    expect(isAllowedHost('LOCALHOST:7373', OURS, 7373)).toBe(true)
   })
 
   it('counts a wrong attempt and locks out on the fifth', () => {

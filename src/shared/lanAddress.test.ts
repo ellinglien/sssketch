@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { chooseLanAddress, rankLanAddresses, type NetworkAddress } from './lanAddress'
+import {
+  allLocalIPv4Addresses,
+  chooseLanAddress,
+  lanAddressCandidates,
+  rankLanAddresses,
+  resolveRemoteAddress,
+  type NetworkAddress
+} from './lanAddress'
 
 function ipv4(name: string, address: string): NetworkAddress {
   return { name, address, family: 'IPv4', internal: false }
@@ -162,5 +169,165 @@ describe('lanAddress', () => {
     expect(
       chooseLanAddress([{ name: 'en0', address: '192.168.2.126', family: 4, internal: false }])
     ).toBe('192.168.2.126')
+  })
+})
+
+/** What was added on 2026-09-26, and why.
+ *
+ * His router (a Bell Home Hub 3000) isolates wireless clients: the Mac and
+ * the iPhone are both on 192.168.2.x and CANNOT REACH EACH OTHER AT ALL --
+ * proven by a bare `python3 -m http.server` on another port being equally
+ * unreachable from two different browsers while the gateway answered fine.
+ * The LAN is the thing that is broken, and no ranking can fix it.
+ *
+ * He already runs Tailscale. With Tailscale on the phone too, 100.66.121.12
+ * is the one address that works -- and it is precisely the address the
+ * ranking above excludes. So the candidate list widens and the RANKING
+ * STAYS: a tailnet address is OFFERED but never the default, because a
+ * phone that is not on the tailnet cannot use it (that was this morning's
+ * bug, and it must not come back by way of the fix for this one). */
+describe('lanAddressCandidates', () => {
+  it('offers the tailnet address his phone needs, ranked below the wifi', () => {
+    expect(lanAddressCandidates(HIS_MACHINE)).toEqual([
+      { address: '192.168.2.126', interfaceName: 'en0', preferred: true },
+      { address: '100.66.121.12', interfaceName: 'utun0', preferred: false },
+      { address: '192.168.3.1', interfaceName: 'bridge100', preferred: false }
+    ])
+  })
+
+  it('still defaults to the wifi, so this morning bug cannot come back', () => {
+    // The whole point of the widening: more choice, same default.
+    expect(chooseLanAddress(HIS_MACHINE)).toBe('192.168.2.126')
+    expect(rankLanAddresses(HIS_MACHINE)).toEqual(['192.168.2.126'])
+  })
+
+  it('marks a cgnat address unpreferred whatever interface it turns up on', () => {
+    expect(lanAddressCandidates([ipv4('vpn0', '100.100.7.1')])).toEqual([
+      { address: '100.100.7.1', interfaceName: 'vpn0', preferred: false }
+    ])
+  })
+
+  it('offers every tunnel and sharing interface, unpreferred', () => {
+    // Reachable BY A DEVICE THAT SHARES THE TUNNEL (or is plugged into the
+    // sharing bridge). Not the default, but a real answer for a real setup.
+    const offered = [
+      ipv4('utun5', '192.168.9.1'),
+      ipv4('tun0', '192.168.9.2'),
+      ipv4('tap0', '192.168.9.3'),
+      ipv4('ppp0', '192.168.9.4'),
+      ipv4('bridge100', '192.168.9.5')
+    ]
+    for (const one of offered) {
+      expect(lanAddressCandidates([one])).toEqual([
+        { address: one.address, interfaceName: one.name, preferred: false }
+      ])
+    }
+  })
+
+  it('never offers an address no other device could ever hold', () => {
+    // Not "not preferred" -- NOT ALLOWED. Loopback, a self-assigned
+    // link-local, apple's peer-to-peer radios and the host side of a vm or
+    // container network are not addresses a phone can be given, on any
+    // network, ever. Nothing is gained by listing them.
+    expect(
+      lanAddressCandidates([
+        { name: 'lo0', address: '127.0.0.1', family: 'IPv4', internal: true },
+        ipv4('lo0', '127.0.0.1'),
+        ipv4('en0', '169.254.30.4'),
+        ipv4('awdl0', '192.168.9.1'),
+        ipv4('llw0', '192.168.9.2'),
+        ipv4('vmnet8', '192.168.9.3'),
+        ipv4('vboxnet0', '192.168.9.4'),
+        ipv4('docker0', '192.168.9.5'),
+        { name: 'en0', address: 'fe80::1', family: 'IPv6', internal: false },
+        ipv4('en0', 'not-an-address')
+      ])
+    ).toEqual([])
+  })
+
+  it('puts a tunnel ahead of a sharing bridge among the unpreferred', () => {
+    // A tailnet address works from anywhere; an internet-sharing bridge
+    // only works for a device plugged into this mac. Both are offered, and
+    // the more likely one is nearer the top.
+    expect(
+      lanAddressCandidates([ipv4('bridge100', '192.168.3.1'), ipv4('utun0', '100.66.121.12')]).map(
+        (candidate) => candidate.address
+      )
+    ).toEqual(['100.66.121.12', '192.168.3.1'])
+  })
+
+  it('is deterministic whatever order the interfaces are enumerated in', () => {
+    const forwards = lanAddressCandidates(HIS_MACHINE)
+    expect(lanAddressCandidates([...HIS_MACHINE].reverse())).toEqual(forwards)
+    expect(
+      lanAddressCandidates([HIS_MACHINE[2], HIS_MACHINE[0], HIS_MACHINE[3], HIS_MACHINE[1]])
+    ).toEqual(forwards)
+  })
+
+  it('lists one address once, under the first interface it was seen on', () => {
+    expect(
+      lanAddressCandidates([ipv4('en0', '192.168.2.126'), ipv4('en1', '192.168.2.126')])
+    ).toEqual([{ address: '192.168.2.126', interfaceName: 'en0', preferred: true }])
+  })
+})
+
+describe('resolveRemoteAddress', () => {
+  const candidates = lanAddressCandidates(HIS_MACHINE)
+
+  it('uses the best preferred candidate when nothing has been chosen', () => {
+    expect(resolveRemoteAddress(candidates, null)).toBe('192.168.2.126')
+  })
+
+  it('uses his remembered choice, even though it is not the preferred one', () => {
+    expect(resolveRemoteAddress(candidates, '100.66.121.12')).toBe('100.66.121.12')
+  })
+
+  it('falls back to the default when the remembered address is gone', () => {
+    // Tailscale quit, or he left that network. The remembered value itself
+    // is NOT forgotten by this function -- the caller keeps it, so the
+    // choice comes back by itself when tailscale does. Silently serving on
+    // the wifi in the meantime beats refusing to start.
+    expect(
+      resolveRemoteAddress(lanAddressCandidates([ipv4('en0', '192.168.2.126')]), '100.66.121.12')
+    ).toBe('192.168.2.126')
+  })
+
+  it('serves on the only address there is when none is preferred', () => {
+    // A machine whose ONLY address is the tailnet -- no wifi, no ethernet.
+    // Refusing here would mean "no network found" on a machine that has a
+    // perfectly good one; the address is on screen in the modal either way.
+    expect(resolveRemoteAddress(lanAddressCandidates([ipv4('utun0', '100.66.121.12')]), null)).toBe(
+      '100.66.121.12'
+    )
+  })
+
+  it('is null when there is no address at all', () => {
+    expect(resolveRemoteAddress([], null)).toBeNull()
+    expect(resolveRemoteAddress([], '100.66.121.12')).toBeNull()
+  })
+})
+
+describe('allLocalIPv4Addresses', () => {
+  it('lists every ipv4 the machine holds, loopback and tunnels included', () => {
+    // Not a ranking and not a filter -- the question this answers is "is
+    // this host one of ours", and for that a machine's own loopback and its
+    // tailnet address count exactly as much as its wifi.
+    expect(allLocalIPv4Addresses(HIS_MACHINE)).toEqual([
+      '127.0.0.1',
+      '100.66.121.12',
+      '192.168.2.126',
+      '192.168.3.1'
+    ])
+  })
+
+  it('skips ipv6 and malformed rows, and lists each address once', () => {
+    expect(
+      allLocalIPv4Addresses([
+        { name: 'en0', address: 'fe80::1', family: 'IPv6', internal: false },
+        ipv4('en0', 'not-an-address'),
+        ipv4('en0', '192.168.2.126'),
+        ipv4('en1', '192.168.2.126')
+      ])
+    ).toEqual(['192.168.2.126'])
   })
 })

@@ -29,6 +29,7 @@ import type { StemAvailabilityNotice } from '@shared/stemAvailability'
 import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 import type { RemoteCommand, RemoteState } from '@shared/remoteState'
+import type { LanAddressCandidate } from '@shared/lanAddress'
 
 /** What the gear menu needs to show the phone remote's whole state: whether
  * it is on, the URL to type, the pairing code, how many tries are left, and
@@ -40,7 +41,11 @@ interface PhoneRemoteStatus {
   pairingCode: string | null
   attemptsUsed: number
   lockedOut: boolean
+  /** The address the remote is on, or would be on if switched on now. */
   lanAddress: string | null
+  /** Every address it could be served on, best first -- the modal's picker
+   * when there is more than one. */
+  candidates: LanAddressCandidate[]
 }
 
 const api = {
@@ -593,6 +598,10 @@ const api = {
     ipcRenderer.invoke('get-phone-remote-status'),
   startPhoneRemote: (): Promise<PhoneRemoteStatus> => ipcRenderer.invoke('start-phone-remote'),
   stopPhoneRemote: (): Promise<PhoneRemoteStatus> => ipcRenderer.invoke('stop-phone-remote'),
+  /** Serve on this address instead, and remember it for next time. Null
+   * forgets the choice and goes back to the default ranking. */
+  setPhoneRemoteAddress: (address: string | null): Promise<PhoneRemoteStatus> =>
+    ipcRenderer.invoke('set-phone-remote-address', address),
   setRemoteState: (state: RemoteState): Promise<void> =>
     ipcRenderer.invoke('set-remote-state', state),
   /** The EngineProject Discover is previewing, so the phone can be served a

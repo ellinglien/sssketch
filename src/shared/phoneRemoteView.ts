@@ -1,4 +1,5 @@
 // src/shared/phoneRemoteView.ts
+import type { LanAddressCandidate } from './lanAddress'
 import { REMOTE_MAX_PAIR_ATTEMPTS, pairedRemoteUrl } from './remoteAuth'
 
 /** The phone remote's status as main reports it (see phoneRemoteStatus() in
@@ -9,8 +10,47 @@ export interface PhoneRemoteStatus {
   pairingCode: string | null
   attemptsUsed: number
   lockedOut: boolean
-  /** Null when this machine has no non-internal IPv4 address. */
+  /** The address the remote is served on, or would be if switched on now.
+   * His remembered choice when it is still one of `candidates`, otherwise
+   * the best default -- see resolveRemoteAddress in lanAddress.ts. Null
+   * when this machine has no usable IPv4 address at all. */
   lanAddress: string | null
+  /** Every address it COULD be served on, best first. More than one means
+   * the picker appears; see phoneRemoteAddressOptions. */
+  candidates: LanAddressCandidate[]
+}
+
+/** One row of the address picker. */
+export interface PhoneRemoteAddressOption {
+  address: string
+  /** 'en0 192.168.1.40' -- the interface then the address. The interface
+   * name is what makes two private-looking addresses tellable apart, and it
+   * is how he recognises the tailnet one (utun0) without the modal having
+   * to explain what a tailnet is. */
+  label: string
+  selected: boolean
+}
+
+/** The addresses to offer him, or NOTHING WHEN THERE IS ONLY ONE.
+ *
+ * The empty list is the important case, not an edge case: on a machine with
+ * one address there is no choice to make, and the modal must look exactly
+ * as it did before any of this existed. A picker that is always on screen
+ * would turn a card that answers "what do I type into my phone" into a
+ * settings panel.
+ *
+ * Why a picker is needed at all, when the ranking is correct: his router (a
+ * Bell Home Hub 3000) isolates wireless clients. His Mac and his iPhone are
+ * both on 192.168.2.x and cannot reach each other AT ALL -- a bare
+ * `python3 -m http.server` on another port is just as unreachable. No
+ * ranking can know that. He can, and Tailscale is his way across. */
+export function phoneRemoteAddressOptions(status: PhoneRemoteStatus): PhoneRemoteAddressOption[] {
+  if (status.candidates.length < 2) return []
+  return status.candidates.map((candidate) => ({
+    address: candidate.address,
+    label: `${candidate.interfaceName} ${candidate.address}`,
+    selected: candidate.address === status.lanAddress
+  }))
 }
 
 export interface PhoneRemoteModalView {
@@ -24,6 +64,9 @@ export interface PhoneRemoteModalView {
   /** What the attempt limiter is currently saying, or null while it has
    * nothing to say. */
   pairingNote: string | null
+  /** The other addresses this machine could be reached on, or empty when
+   * there is no choice to make. See phoneRemoteAddressOptions. */
+  addressOptions: PhoneRemoteAddressOption[]
 }
 
 /** Whether the phone remote modal is showing, and what is on it.
@@ -50,7 +93,8 @@ export function phoneRemoteModalView(
     url: status.url,
     pairedUrl: pairedRemoteUrl(status.url, status.pairingCode),
     pairingCode: status.pairingCode,
-    pairingNote: pairingNote(status)
+    pairingNote: pairingNote(status),
+    addressOptions: phoneRemoteAddressOptions(status)
   }
 }
 

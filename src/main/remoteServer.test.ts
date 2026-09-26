@@ -45,11 +45,17 @@ function freePort(): Promise<number> {
 
 let handle: RemoteServerHandle | null = null
 
+/** The addresses the test machine "has", so the Host guard is testing a
+ * fixed network rather than whatever the developer's laptop is plugged
+ * into. Loopback is always allowed and is deliberately NOT in here. */
+const OUR_ADDRESSES = ['192.168.1.40', '100.66.121.12']
+
 async function start(): Promise<{ port: number; pairingCode: string }> {
   const port = await freePort()
   handle = startRemoteServer({
     portOverride: port,
-    lanAddress: '127.0.0.1',
+    lanAddress: '192.168.1.40',
+    localAddressesOverride: () => OUR_ADDRESSES,
     getState: () => ({
       discoverOpen: true,
       playing: false,
@@ -94,7 +100,11 @@ function send(
   body?: string
 ): Promise<RawResponse> {
   return new Promise((resolve, reject) => {
-    const req = request({ host: '127.0.0.1', port, path, method, headers }, (res) => {
+    // agent: false -- a fresh socket per request. The default global agent
+    // keeps sockets alive, and a pooled socket to a server that has since
+    // been closed (the switching-address test below closes one) comes back
+    // as ECONNRESET instead of as whatever the new server answered.
+    const req = request({ host: '127.0.0.1', port, path, method, headers, agent: false }, (res) => {
       let text = ''
       res.setEncoding('utf8')
       res.on('data', (chunk: string) => {
@@ -128,7 +138,7 @@ describe('a refusal a phone navigated into', () => {
     // The exact shape of his bug: a tab still pointing at an address the
     // Mac used to advertise. It connects -- the listen is 0.0.0.0 -- and
     // the Host guard refuses it.
-    const res = await send(port, '/', { accept: NAVIGATION, host: '192.168.3.1:7373' })
+    const res = await send(port, '/', { accept: NAVIGATION, host: `192.168.9.9:${port}` })
     expect(res.status).toBe(403)
     expect(res.contentType).toContain('text/html')
     expect(res.body).toContain(REMOTE_WRONG_ADDRESS_NOTICE)
@@ -155,6 +165,98 @@ describe('a refusal a phone navigated into', () => {
   })
 })
 
+/** THE SECOND HALF OF HIS 2026-09-26 REPORT. The guard used to be built
+ * from the ONE address the desktop advertised, so reaching the server by
+ * any other address of the same machine answered 403 -- a blank page, then
+ * a readable refusal, but a refusal either way. Over Tailscale that is the
+ * only way in, so the feature could not work on his network at all.
+ *
+ * Widened to every current address of this machine. The rebinding property
+ * it exists for is unchanged, and the reasoning is in isAllowedHost's own
+ * comment: the allow-list is IP literals, rebinding needs a name. */
+describe('the host guard after the widening', () => {
+  it('accepts the tailnet address as well as the advertised wifi one', async () => {
+    const { port } = await start()
+    for (const address of OUR_ADDRESSES) {
+      const res = await send(port, '/', { accept: NAVIGATION, host: `${address}:${port}` })
+      expect(res.status).toBe(200)
+      expect(res.body).toBe(REMOTE_PAGE_HTML)
+    }
+  })
+
+  it('still refuses a name, which is the whole of dns rebinding', async () => {
+    const { port } = await start()
+    for (const name of ['evil.example.com', `evil.example.com:${port}`, `sssketch.local:${port}`]) {
+      const res = await send(port, '/', { accept: NAVIGATION, host: name })
+      expect(res.status).toBe(403)
+    }
+  })
+
+  it('still refuses an address that is not ours', async () => {
+    const { port } = await start()
+    const res = await send(port, '/', { accept: NAVIGATION, host: `192.168.9.9:${port}` })
+    expect(res.status).toBe(403)
+  })
+})
+
+describe('switching address', () => {
+  it('rebinds the same port and reports the new address, url and code', async () => {
+    // What set-phone-remote-address does in main: stop the http server and
+    // start another on the same fixed port, keeping the render engine. If
+    // the port could not be retaken immediately this would be a 45-second
+    // feature instead of an instant one, so it is worth a real socket.
+    const { port, pairingCode } = await start()
+    const first = handle
+    expect(first?.address).toBe('192.168.1.40')
+    expect(first?.url).toBe(`http://192.168.1.40:${port}`)
+
+    const paired = await send(
+      port,
+      '/api/pair',
+      { 'content-type': 'application/json' },
+      'POST',
+      JSON.stringify({ code: pairingCode })
+    )
+    const { token: staleToken } = JSON.parse(paired.body) as { token: string }
+
+    first?.stop()
+    handle = startRemoteServer({
+      portOverride: port,
+      lanAddress: '100.66.121.12',
+      localAddressesOverride: () => OUR_ADDRESSES,
+      getState: () => ({
+        discoverOpen: true,
+        playing: false,
+        kept: 0,
+        rolled: 0,
+        lastKeptName: null,
+        slots: [],
+        loopId: null
+      }),
+      loopWav: () => Promise.resolve(null),
+      onCommand: () => {},
+      onPairingChanged: () => {},
+      onServerError: (error) => {
+        throw error
+      }
+    })
+
+    expect(handle.address).toBe('100.66.121.12')
+    expect(handle.url).toBe(`http://100.66.121.12:${port}`)
+
+    // A new server is a new pairing code and an empty token set: a token
+    // issued by the old one is worth nothing here. This is why the modal
+    // redraws its qr from the status it gets back rather than keeping the
+    // one it was already showing.
+    const stale = await send(port, '/api/state', { authorization: `Bearer ${staleToken}` }, 'GET')
+    expect(stale.status).toBe(401)
+
+    const res = await send(port, '/', { accept: NAVIGATION, host: `100.66.121.12:${port}` })
+    expect(res.status).toBe(200)
+    expect(res.body).toBe(REMOTE_PAGE_HTML)
+  })
+})
+
 describe("a refusal of the page's own fetch", () => {
   it('is still the empty object the page knows how to read', async () => {
     const { port } = await start()
@@ -172,7 +274,7 @@ describe("a refusal of the page's own fetch", () => {
 
   it('is still the empty object when the host is wrong', async () => {
     const { port } = await start()
-    const res = await send(port, '/api/state', { accept: '*/*', host: '192.168.3.1:7373' })
+    const res = await send(port, '/api/state', { accept: '*/*', host: `192.168.9.9:${port}` })
     expect(res.status).toBe(403)
     expect(res.contentType).toContain('application/json')
     expect(res.body).toBe('{}')

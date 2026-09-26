@@ -86,7 +86,14 @@ import {
   saveDiscoveredRifff,
   type DiscoveredMemberInput
 } from './discoveredLibrary'
-import { lanIPv4Address, startRemoteServer, type RemoteServerHandle } from './remoteServer'
+import {
+  lanIPv4Address,
+  remoteAddressCandidates,
+  startRemoteServer,
+  type RemoteServerHandle
+} from './remoteServer'
+import { loadPhoneRemoteSettings, savePhoneRemoteSettings } from './phoneRemoteSettingsStore'
+import type { LanAddressCandidate } from '@shared/lanAddress'
 import { createRemoteLoopRenderer, type RemoteLoopRenderer } from './remoteLoopRenderer'
 import type { EngineProject } from '@shared/buildEngineProject'
 import type { RemoteCommand, RemoteState } from '@shared/remoteState'
@@ -259,8 +266,10 @@ let engineStartupDone = false
 let rendererHasUnsavedChanges = false
 
 // The phone remote is OFF BY DEFAULT and per-session -- never auto-started,
-// never persisted, stopped on quit. These three are the whole of its state;
-// there is no settings file and no accounts.
+// stopped on quit, and no accounts. The one thing that IS persisted, since
+// 2026-09-26, is WHICH ADDRESS to serve on if he switches it on: a
+// per-machine fact about his network (phoneRemoteSettingsStore.ts), not a
+// record that the remote was ever running.
 let remoteServer: RemoteServerHandle | null = null
 let lastRemoteState: RemoteState = {
   discoverOpen: false,
@@ -282,20 +291,72 @@ interface PhoneRemoteStatus {
   pairingCode: string | null
   attemptsUsed: number
   lockedOut: boolean
-  /** Null when this machine has no non-internal IPv4 address -- the phone
-   * could not reach it, so the UI says so instead of starting a server. */
+  /** The address the remote is on, or would be on if switched on now --
+   * his remembered choice when it is still present, else the best default.
+   * Null when this machine has nothing usable, in which case the phone
+   * could not reach it and the gear menu says so instead of starting a
+   * server. */
   lanAddress: string | null
+  /** Every address it COULD be served on, best first. More than one and
+   * the modal shows a picker; see phoneRemoteAddressOptions. */
+  candidates: LanAddressCandidate[]
 }
 
 function phoneRemoteStatus(): PhoneRemoteStatus {
+  const candidates = remoteAddressCandidates()
   return {
     running: remoteServer !== null,
     url: remoteServer?.url ?? null,
     pairingCode: remoteServer?.pairingCode ?? null,
     attemptsUsed: remotePairingGate.attemptsUsed,
     lockedOut: remotePairingGate.lockedOut,
-    lanAddress: lanIPv4Address()
+    // While running, the address the server is ACTUALLY on -- not what the
+    // resolver would pick now. The two differ for a moment if he unplugs
+    // an interface while the remote is up, and the picker must mark the one
+    // the URL on screen belongs to.
+    lanAddress: remoteServer
+      ? remoteServer.address
+      : lanIPv4Address(loadPhoneRemoteSettings().preferredAddress),
+    candidates
   }
+}
+
+/** Brings the http server up on one address, reusing the render engine if
+ * there already is one. Separate from the ipc handler because switching
+ * address restarts the server and MUST NOT restart the renderer with it:
+ * createRemoteLoopRenderer has a documented 45s cold start, and he is
+ * standing in front of the modal waiting for a QR code to change. */
+function startPhoneRemoteOn(address: string): void {
+  // A new server means a new pairing code, so the attempt counter starts
+  // over with it -- an old count against a code that no longer exists
+  // would be meaningless arithmetic on screen.
+  remotePairingGate = { attemptsUsed: 0, lockedOut: false }
+  // Spawned here and deliberately NOT awaited: READINESS_TIMEOUT_MS is 45s
+  // for documented cold-start reasons and the gear menu must not sit on it.
+  // The first render awaits it instead.
+  remoteLoop ??= createRemoteLoopRenderer()
+  remoteServer = startRemoteServer({
+    lanAddress: address,
+    getState: () => ({ ...lastRemoteState, loopId: remoteLoop?.currentLoopId() ?? null }),
+    loopWav: () => remoteLoop?.wav() ?? Promise.resolve(null),
+    onCommand: (command: RemoteCommand) => {
+      // Commands are performed by the RENDERER, by calling the exact
+      // functions its own buttons call. There is no second
+      // implementation of anything.
+      mainWindow?.webContents.send('remote-command', command)
+    },
+    onPairingChanged: (gate) => {
+      remotePairingGate = gate
+      mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
+    },
+    onServerError: () => {
+      // The listen failed (port 7373 already taken is the realistic
+      // one). Forget the handle so the gear menu says it is off rather
+      // than showing a URL nothing is listening on.
+      stopPhoneRemote()
+      mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
+    }
+  })
 }
 
 function stopPhoneRemote(): void {
@@ -665,35 +726,30 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('start-phone-remote', () => {
     if (remoteServer) return phoneRemoteStatus()
-    const lanAddress = lanIPv4Address()
+    const lanAddress = lanIPv4Address(loadPhoneRemoteSettings().preferredAddress)
     if (lanAddress === null) return phoneRemoteStatus()
-    remotePairingGate = { attemptsUsed: 0, lockedOut: false }
-    // Spawned here and deliberately NOT awaited: READINESS_TIMEOUT_MS is 45s
-    // for documented cold-start reasons and the gear menu must not sit on it.
-    // The first render awaits it instead.
-    remoteLoop = createRemoteLoopRenderer()
-    remoteServer = startRemoteServer({
-      lanAddress,
-      getState: () => ({ ...lastRemoteState, loopId: remoteLoop?.currentLoopId() ?? null }),
-      loopWav: () => remoteLoop?.wav() ?? Promise.resolve(null),
-      onCommand: (command: RemoteCommand) => {
-        // Commands are performed by the RENDERER, by calling the exact
-        // functions its own buttons call. There is no second
-        // implementation of anything.
-        mainWindow?.webContents.send('remote-command', command)
-      },
-      onPairingChanged: (gate) => {
-        remotePairingGate = gate
-        mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
-      },
-      onServerError: () => {
-        // The listen failed (port 7373 already taken is the realistic
-        // one). Forget the handle so the gear menu says it is off rather
-        // than showing a URL nothing is listening on.
-        stopPhoneRemote()
-        mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
-      }
-    })
+    startPhoneRemoteOn(lanAddress)
+    return phoneRemoteStatus()
+  })
+
+  /** He picked a different address in the modal. Remembered for next time
+   * (per machine, see phoneRemoteSettingsStore.ts) and, if the remote is
+   * up, moved onto it immediately -- the URL, the QR and the Host guard all
+   * follow from the address the server was started with, so there is
+   * nothing to move but the server itself.
+   *
+   * Restarting invalidates the pairing code, which is correct rather than
+   * unfortunate: he is changing address because the phone could not reach
+   * the old one, so there is no paired phone to disturb, and the modal he
+   * is looking at redraws the QR from the new one. */
+  ipcMain.handle('set-phone-remote-address', (_event, address: string | null) => {
+    savePhoneRemoteSettings({ preferredAddress: address })
+    if (remoteServer) {
+      remoteServer.stop()
+      remoteServer = null
+      const next = lanIPv4Address(address)
+      if (next !== null) startPhoneRemoteOn(next)
+    }
     return phoneRemoteStatus()
   })
 
