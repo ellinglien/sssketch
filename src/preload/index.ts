@@ -595,6 +595,13 @@ const api = {
   stopPhoneRemote: (): Promise<PhoneRemoteStatus> => ipcRenderer.invoke('stop-phone-remote'),
   setRemoteState: (state: RemoteState): Promise<void> =>
     ipcRenderer.invoke('set-remote-state', state),
+  /** The EngineProject Discover is previewing, so the phone can be served a
+   * render of it, or null to clear it. Typed as `unknown` here for the same
+   * reason engineLoadProject just above is: the project crosses the IPC
+   * boundary as plain JSON and preload has no business re-stating
+   * EngineProject's shape. */
+  setRemoteLoop: (project: unknown): Promise<void> =>
+    ipcRenderer.invoke('set-remote-loop', project),
   onRemoteCommand: (callback: (command: RemoteCommand) => void): (() => void) => {
     const listener = (_event: unknown, command: RemoteCommand): void => callback(command)
     ipcRenderer.on('remote-command', listener)

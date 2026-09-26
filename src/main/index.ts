@@ -87,6 +87,8 @@ import {
   type DiscoveredMemberInput
 } from './discoveredLibrary'
 import { lanIPv4Address, startRemoteServer, type RemoteServerHandle } from './remoteServer'
+import { createRemoteLoopRenderer, type RemoteLoopRenderer } from './remoteLoopRenderer'
+import type { EngineProject } from '@shared/buildEngineProject'
 import type { RemoteCommand, RemoteState } from '@shared/remoteState'
 import type { PairingGate } from '@shared/remoteAuth'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
@@ -269,6 +271,10 @@ let lastRemoteState: RemoteState = {
   slots: []
 }
 let remotePairingGate: PairingGate = { attemptsUsed: 0, lockedOut: false }
+// The phone remote's own render engine -- SEPARATE from the session-long
+// playback engine, which is busy playing. Created when the remote is switched
+// on and torn down with it, so at rest this feature owns no process at all.
+let remoteLoop: RemoteLoopRenderer | null = null
 
 interface PhoneRemoteStatus {
   running: boolean
@@ -295,6 +301,8 @@ function phoneRemoteStatus(): PhoneRemoteStatus {
 function stopPhoneRemote(): void {
   remoteServer?.stop()
   remoteServer = null
+  remoteLoop?.stop()
+  remoteLoop = null
   remotePairingGate = { attemptsUsed: 0, lockedOut: false }
 }
 
@@ -660,9 +668,14 @@ app.whenReady().then(async () => {
     const lanAddress = lanIPv4Address()
     if (lanAddress === null) return phoneRemoteStatus()
     remotePairingGate = { attemptsUsed: 0, lockedOut: false }
+    // Spawned here and deliberately NOT awaited: READINESS_TIMEOUT_MS is 45s
+    // for documented cold-start reasons and the gear menu must not sit on it.
+    // The first render awaits it instead.
+    remoteLoop = createRemoteLoopRenderer()
     remoteServer = startRemoteServer({
       lanAddress,
-      getState: () => lastRemoteState,
+      getState: () => ({ ...lastRemoteState, loopId: remoteLoop?.currentLoopId() ?? null }),
+      loopWav: () => remoteLoop?.wav() ?? Promise.resolve(null),
       onCommand: (command: RemoteCommand) => {
         // Commands are performed by the RENDERER, by calling the exact
         // functions its own buttons call. There is no second
@@ -691,6 +704,13 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('set-remote-state', (_event, state: RemoteState) => {
     lastRemoteState = state
+  })
+
+  ipcMain.handle('set-remote-loop', (_event, project: EngineProject | null) => {
+    // The project is full of real filesystem paths and NEVER leaves the main
+    // process. What the phone sees is remoteLoop.currentLoopId() -- sixteen
+    // hex characters of a sha256 of the loop's audio-bearing fields.
+    remoteLoop?.setLoop(project)
   })
 
   ipcMain.handle('endlesss-login', (_event, username: string, password: string) =>
