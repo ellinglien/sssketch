@@ -17,6 +17,7 @@ import {
   resolveRiffWithContext,
   downloadMissingStems
 } from './riffLibraryStore'
+import { writeRiffDetail } from './riffLibraryWriter'
 import { stemDownloadUrl } from '@shared/riffLibraryTypes'
 import { DEFAULT_SESSION_RETRY_ATTEMPTS } from '@shared/stemAvailability'
 
@@ -140,6 +141,75 @@ describe('riffLibraryStore', () => {
     expect(resolveStemPath('jam_1', 'stem_abc123')).toBe(
       join('/some/external/lore-folder', 'cache', 'common', 'stem_v2', 'jam_1', 's', 'stem_abc123')
     )
+  })
+
+  it('resolveRiff carries FileEndpoint/FileBucket/FileKey through onto each stem', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_1', 'jam one')`).run()
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, StemCID_1)
+       VALUES ('riff_1', 'jam_1', 100, 120, 4, 'elling', 'abc123')`
+    ).run()
+    db.prepare(
+      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument,
+                          BPMrnd, Length16s, FileEndpoint, FileBucket, FileKey)
+       VALUES ('abc123', 'jam_1', 'elling', 'thud', 1, 120, 64,
+               'ams3.digitaloceanspaces.com', 'endlesss', 'attachments/abc123.ogg')`
+    ).run()
+    db.close()
+
+    const resolved = resolveRiff('riff_1')
+    expect(resolved?.stems[0].fileEndpoint).toBe('ams3.digitaloceanspaces.com')
+    expect(resolved?.stems[0].fileBucket).toBe('endlesss')
+    expect(resolved?.stems[0].fileKey).toBe('attachments/abc123.ogg')
+  })
+
+  it('writing a resolveRiff result back does not null out a synced stem download columns', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    const dbPath = join(root, 'cache', 'common', 'warehouse.db3')
+    const seed = new Database(dbPath)
+    seed.exec(`ALTER TABLE Riffs ADD COLUMN AppVersion INTEGER;`)
+    seed.exec(`ALTER TABLE Stems ADD COLUMN CreationTime INTEGER;`)
+    seed.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_1', 'jam one')`).run()
+    seed
+      .prepare(
+        `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, StemCID_1)
+         VALUES ('riff_1', 'jam_1', 100, 120, 4, 'elling', 'abc123')`
+      )
+      .run()
+    seed
+      .prepare(
+        `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument,
+                            BPMrnd, Length16s, FileEndpoint, FileBucket, FileKey)
+         VALUES ('abc123', 'jam_1', 'elling', 'thud', 1, 120, 64,
+                 'ams3.digitaloceanspaces.com', 'endlesss', 'attachments/abc123.ogg')`
+      )
+      .run()
+    seed.close()
+
+    const resolved = resolveRiff('riff_1')
+    expect(resolved).not.toBeNull()
+
+    const writable = new Database(dbPath)
+    writeRiffDetail(
+      writable,
+      'discovered',
+      { creationTime: 200, userName: 'discovered' },
+      { ...resolved!, riffCID: 'kept_1' }
+    )
+    const row = writable
+      .prepare(`SELECT FileEndpoint, FileBucket, FileKey FROM Stems WHERE StemCID = 'abc123'`)
+      .get() as { FileEndpoint: string | null; FileBucket: string | null; FileKey: string | null }
+    writable.close()
+
+    expect(row.FileEndpoint).toBe('ams3.digitaloceanspaces.com')
+    expect(row.FileBucket).toBe('endlesss')
+    expect(row.FileKey).toBe('attachments/abc123.ogg')
   })
 })
 

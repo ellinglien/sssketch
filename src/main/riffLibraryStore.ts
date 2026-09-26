@@ -518,6 +518,16 @@ function buildResolvedRiff(db: Database.Database, riffRow: FullRiffRow): RiffLib
       instrumentMask: stemRow?.Instrument ?? 0,
       durationSec,
       barLength: stemBarLength,
+      // Kept on the returned object, not just consumed for downloadUrl below
+      // -- RiffLibraryResolvedStem's own doc comment says a warehouse writer
+      // needs these as their own columns, and writeRiffDetail's
+      // updateStemDetail overwrites FileEndpoint/FileBucket/FileKey
+      // unconditionally from exactly these fields. Dropping them here meant
+      // writing a resolved riff back nulled out a real synced stem's
+      // download columns.
+      fileEndpoint: stemRow?.FileEndpoint ?? undefined,
+      fileBucket: stemRow?.FileBucket ?? undefined,
+      fileKey: stemRow?.FileKey ?? undefined,
       downloadUrl:
         stemRow?.FileEndpoint && stemRow?.FileKey
           ? stemDownloadUrl(stemRow.FileEndpoint, stemRow.FileBucket ?? '', stemRow.FileKey)
