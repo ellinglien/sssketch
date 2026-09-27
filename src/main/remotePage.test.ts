@@ -430,6 +430,59 @@ describe('remotePage per-stem mixer', () => {
   })
 })
 
+describe('remotePage mute is a gain', () => {
+  it('changes the sound before the mac has heard about it', () => {
+    // "lets make mute and solo happen immediately" -- Elling, 2026-09-27.
+    // The gain moves in the handler the two buttons share; the POST is
+    // only how the mac catches up. The optimistic paint is factored into
+    // paintSlotAction, so this asserts the ORDER inside the one function
+    // that does both, which is where the plan expected to find it inline.
+    const send = (/function sendSlotAction\(slot, next\)[\s\S]{0,600}?\n {2}\}/.exec(SCRIPT) ?? [
+      ''
+    ])[0]
+    expect(send).toContain('applyMix()')
+    expect(send.indexOf('applyMix()')).toBeGreaterThan(-1)
+    expect(send.indexOf('applyMix()')).toBeLessThan(send.indexOf("api('/api/slot-action'"))
+  })
+
+  it('ramps rather than stepping, because a step on a live source pops', () => {
+    expect(SCRIPT).toContain('MUTE_RAMP = 0.015')
+    expect(SCRIPT).toContain('linearRampToValueAtTime(level, now + MUTE_RAMP)')
+    expect(SCRIPT).not.toContain('.gain.value = ')
+  })
+
+  it('lets a mute win over a fade that is already running', () => {
+    expect(SCRIPT).toContain('v.gain.gain.cancelScheduledValues(now)')
+  })
+
+  it('leaves a muted stem sounding silently, so unmuting is free', () => {
+    // It is not stopped and its buffer is not dropped, so unmuting is
+    // another 15ms ramp and it comes back IN PHASE, because it never left
+    // the clock.
+    const mix = (/function applyMix\(\)[\s\S]{0,300}/.exec(SCRIPT) ?? [''])[0]
+    expect(mix).not.toContain('killVoice')
+    expect(mix).not.toContain('delete buffers')
+  })
+
+  it('lands a mute made on the mac too, by the same one line', () => {
+    const renders = SCRIPT.match(/applyMix\(\)/g) ?? []
+    // The declaration, the tap, and the poll. Nothing else moves the mix.
+    expect(renders).toHaveLength(3)
+  })
+
+  it('does not re-assert a level nothing asked to change', () => {
+    // The poll runs every 700ms and a handover's fade can be scheduled
+    // seconds ahead of its boundary. Writing the same level again would
+    // cancel that curve four times before it ever ran.
+    expect(SCRIPT).toContain('if (voices[slotId].level !== want) setLevel(voices[slotId], want)')
+  })
+
+  it('still says muted by taking the colour away, never by dimming', () => {
+    expect(SCRIPT).toContain("slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')")
+    expect(REMOTE_PAGE_HTML).not.toContain('opacity')
+  })
+})
+
 describe('remotePage swap grid', () => {
   it('offers loop end and three bar counts, and nothing else', () => {
     // "instead of it playing only at the end of the loop, could we set it

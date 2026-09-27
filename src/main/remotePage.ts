@@ -878,6 +878,42 @@ input {
     return 1
   }
 
+  // 15ms. "INSTANT" CANNOT BE ZERO: a gain step on a sounding source is a
+  // discontinuity, which is an audible pop -- the engine carries FadeGain's
+  // ~3ms micro-fade for the same reason. 15ms is inaudible as a fade and is
+  // the difference between a mute and a click. It is not a compromise on
+  // "lets make mute and solo happen immediately" (Elling, 2026-09-27); it
+  // is what immediately has to mean.
+  var MUTE_RAMP = 0.015
+
+  function setLevel(v, level) {
+    if (!v || !audioCtx) return
+    var now = audioCtx.currentTime
+    // cancelScheduledValues first: a crossfade curve may still be running
+    // on this param, and a mute you asked for has to win.
+    v.gain.gain.cancelScheduledValues(now)
+    v.gain.gain.setValueAtTime(v.gain.gain.value, now)
+    v.gain.gain.linearRampToValueAtTime(level, now + MUTE_RAMP)
+    v.level = level
+  }
+
+  // THE MIX, APPLIED TO WHAT IS SOUNDING. No render, no fetch, no round
+  // trip to the mac -- this IS the feature. A muted voice is not stopped
+  // and its buffer is not dropped, so unmuting is another 15ms ramp and the
+  // stem comes back IN PHASE, because it never left the clock.
+  //
+  // Only a level that actually changed is written. A poll runs every 700ms
+  // and a handover's fade can be scheduled seconds ahead of its boundary;
+  // re-asserting a level nothing asked to change would cancel that curve
+  // four times before it ever ran.
+  function applyMix() {
+    if (!audioCtx) return
+    for (var slotId in voices) {
+      var want = levelFor(slotId)
+      if (voices[slotId].level !== want) setLevel(voices[slotId], want)
+    }
+  }
+
   // HOW OFTEN THE PLAYING LOOP OFFERS A HANDOVER, in seconds.
   //
   // Seconds per bar is the buffer's OWN duration divided by the bar count
@@ -1501,6 +1537,11 @@ input {
     disarmRemove()
     paintSlotAction(slot, next)
     paintMix()
+    // THE SOUND CHANGES HERE, before the mac has heard about it. The POST
+    // below is only how the mac's own discover mix catches up; the phone no
+    // longer waits for it and no longer re-downloads anything when it
+    // lands.
+    applyMix()
     api('/api/slot-action', { slotId: slot.id, action: next })
   }
 
@@ -1834,6 +1875,9 @@ input {
       if (!actStillThere) closeActionSheet()
     }
     renderRows()
+    // A mute or a solo made on the MAC lands on the phone here, by the same
+    // one line a tap on the phone takes. Nothing is re-fetched for it.
+    applyMix()
   }
 
   document.getElementById('roll-all').addEventListener('click', function () { api('/api/roll', {}) })
