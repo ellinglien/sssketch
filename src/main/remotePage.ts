@@ -236,10 +236,37 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
 .rows { position: relative; margin: 20px 0 10px; }
 .foot { text-align: center; margin-top: 12px; }
 .empty { margin: 20px 0; font-size: 11px; color: #8f8f8f; }
-/* The playhead, inside .rows (which is position: relative). It comes after
- * the rows in the DOM and is absolutely positioned, so no z-index is
- * needed, and pointer-events: none plus the total absence of any listener
- * are the two independent reasons it is an indicator and not a seek. */
+/* The playhead's lane: the box the waveform canvases occupy and not a pixel
+ * more. It used to span the whole of .rows, so the line crossed the kind
+ * label and the x as well -- "the playhead line doesnt follow where the
+ * waveform would be... it should follow the waves only" (Elling, on the
+ * phone).
+ *
+ * The two insets are the row grid read off exactly, not estimated. A .row
+ * is 84px 1fr 44px with a 10px column-gap, 10px of left padding and a 1px
+ * border all round, and .row .stem's own padding is 6px 0 -- no horizontal
+ * padding at all -- with the canvas at width:100% inside it. So the middle
+ * column starts at 1 + 10 + 84 + 10 = 105px and ends 1 + 44 + 10 = 55px
+ * short of the right edge, and that IS where the drawn waveform starts and
+ * stops. If any of those five numbers changes, these two must change with
+ * it.
+ *
+ * Keeping the lane as its own element is what lets tick() stay a plain
+ * left = progress * 100 + '%': the percentage is of the lane, so there is
+ * no calc() and no second copy of the arithmetic in the script.
+ *
+ * The line is absolutely positioned inside it and comes after the rows in
+ * the DOM, so no z-index is needed, and pointer-events: none plus the total
+ * absence of any listener are the two independent reasons it is an
+ * indicator and not a seek. */
+.lane {
+  position: absolute;
+  left: 105px;
+  right: 55px;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
 .line {
   position: absolute;
   top: 0;
@@ -433,7 +460,7 @@ input {
     <!-- Zero slots is a START, not an error. It says what to do next and
          the thing to do it with is directly below it. -->
     <div class="empty" id="empty" hidden>pick what you want below, then add it</div>
-    <div class="rows" id="rows"><div class="line" id="line" hidden></div></div>
+    <div class="rows" id="rows"><div class="lane" id="lane"><div class="line" id="line" hidden></div></div></div>
     <!-- The one #ededed-bordered control on the page, and never hidden:
          with nothing on screen it is the only thing there is to do. -->
     <button class="lit" id="new-stem">new stem</button>
@@ -527,6 +554,7 @@ input {
   var msgEl = document.getElementById('msg')
   var pairMsgEl = document.getElementById('pair-msg')
   var playEl = document.getElementById('play')
+  var laneEl = document.getElementById('lane')
   var lineEl = document.getElementById('line')
   var macEl = document.getElementById('mac')
 
@@ -601,10 +629,12 @@ input {
 
   // The progress line, driven by the phone's OWN audio clock. Nothing about
   // its position comes from the Mac: no position messages, no clock sync.
-  // It spans the slot-row stack now that there is no master waveform to sit
-  // over -- and it is still unclickable in two independent ways: .line is
-  // pointer-events:none, and no listener of any kind is attached to it. It
-  // is an indicator. Do not add a seek.
+  // The percentage below is of .lane, which is inset to exactly the column
+  // the waveforms are drawn in (see the stylesheet), so 0% and 100% are the
+  // first and last sample of the picture rather than the edges of the
+  // screen. It is still unclickable in two independent ways: both .lane and
+  // .line are pointer-events:none, and no listener of any kind is attached
+  // to either. It is an indicator. Do not add a seek.
   function tick() {
     if (srcNode && audioBuffer && audioCtx && audioBuffer.duration > 0) {
       var t = (audioCtx.currentTime - startedAt) % audioBuffer.duration
@@ -975,10 +1005,10 @@ input {
       drawRowWave(canvas, slot.peaks, color)
       rowCanvases.push({ canvas: canvas, peaks: slot.peaks, color: color })
     })
-    // The playhead lives inside .rows and innerHTML just wiped it. It is
-    // re-appended rather than rebuilt, so lineEl keeps pointing at the
-    // element tick() is moving.
-    rowsEl.appendChild(lineEl)
+    // The playhead's lane lives inside .rows and innerHTML just wiped it. It
+    // is re-appended rather than rebuilt, so lineEl -- still inside it --
+    // keeps pointing at the element tick() is moving.
+    rowsEl.appendChild(laneEl)
   }
 
   // --- the stem action sheet ---------------------------------------------

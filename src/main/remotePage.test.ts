@@ -268,6 +268,28 @@ describe('remotePage without a master waveform', () => {
     // An indicator, not a seek. Both guards, as before.
     expect(REMOTE_PAGE_HTML).toContain('pointer-events: none')
   })
+
+  it('runs the line down the waveform column only, not across the whole row', () => {
+    // "the playhead line doesnt follow where the waveform would be (the
+    // scroll includes the text descriptor, like drummy).. it should follow
+    // the waves only" -- Elling, on the phone, 2026-09-27.
+    //
+    // The lane's two insets are the row grid read off exactly: 105 = the
+    // row's 1px border + 10px left padding + the 84px kind column + the
+    // 10px gap, and 55 = the 1px border + the 44px x column + its gap. The
+    // stem column has no horizontal padding of its own, so the lane is the
+    // drawn waveform's box and not an approximation of it. All four numbers
+    // are asserted together, because changing one without the others is
+    // exactly the bug.
+    expect(REMOTE_PAGE_HTML).toContain('grid-template-columns: 84px 1fr 44px')
+    expect(REMOTE_PAGE_HTML).toContain('column-gap: 10px')
+    expect(REMOTE_PAGE_HTML).toContain('.row .stem { min-width: 0; padding: 6px 0; }')
+    expect(REMOTE_PAGE_HTML).toContain('id="lane"')
+    expect(REMOTE_PAGE_HTML).toContain('left: 105px')
+    expect(REMOTE_PAGE_HTML).toContain('right: 55px')
+    // Re-appended after every rebuild, with the line still inside it.
+    expect(SCRIPT).toContain('rowsEl.appendChild(laneEl)')
+  })
 })
 
 describe('remotePage row gestures', () => {
