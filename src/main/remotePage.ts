@@ -204,8 +204,10 @@ body {
   -webkit-text-size-adjust: 100%;
 }
 /* 100vh first as the fallback, then 100dvh: ios safari's collapsing
- * toolbar is precisely what dvh exists for, and a bottom-aligned layout
- * measured against the tall viewport puts the buttons under the chrome. */
+ * toolbar is precisely what dvh exists for, and a layout measured against
+ * the tall viewport puts its last control under the chrome. The column
+ * survives the stack moving to the top -- it is what keeps the near-black
+ * ground covering the whole screen on a short loop. */
 .wrap {
   max-width: 420px;
   margin: 0 auto;
@@ -215,22 +217,23 @@ body {
   display: flex;
   flex-direction: column;
 }
-/* The app state is the flex column the rows' margin-top:auto pushes
- * against -- .wrap holds both screens, so the column has to continue
- * through this one. Written as :not([hidden]) rather than as a bare id
- * because an id beats [hidden]'s display:none on specificity, which would
- * show the whole app state to an unpaired phone. */
-#app:not([hidden]) { display: flex; flex-direction: column; flex: 1; }
-/* Nothing in that column may be squashed to make the rest fit: past about
- * a dozen rows the page should scroll, not compress the stack, the new
- * stem button and the transport into each other. */
-#app > * { flex: none; }
+/* #app deliberately has NO rule of its own. It was a flex column only so
+ * the rows' margin-top:auto had something to push against, and a second
+ * rule existed only to stop that column squashing what it pushed; with the
+ * stack starting at the top, plain block flow does both for free.
+ *
+ * If one is ever needed again, write it as #app:not([hidden]) and never as
+ * a bare id: an id (1-0-0) beats [hidden]'s display:none (0-1-0), so a bare
+ * #app display rule would show the whole app state to an unpaired phone. */
 .eyebrow { font-size: 10px; color: #6a6a6a; letter-spacing: 0.08em; }
 h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
 .topbar { display: flex; justify-content: space-between; align-items: baseline; }
-/* The whole of "bottom-aligned". Everything above this is pushed up; the
- * stack, the new-stem button and the transport sit on the thumb. */
-.rows { position: relative; margin: 20px 0 10px; margin-top: auto; }
+/* The stack starts under the status line and builds downward, so the first
+ * stem is where the eye already is and each new one appears below the last
+ * (Elling, on a real iphone: "the waves can appear starting at the top of
+ * the screen and build from under"). Everything below it -- new stem, the
+ * transport, the foot -- simply follows it down the page. */
+.rows { position: relative; margin: 20px 0 10px; }
 .foot { text-align: center; margin-top: 12px; }
 .empty { margin: 20px 0; font-size: 11px; color: #8f8f8f; }
 /* The playhead, inside .rows (which is position: relative). It comes after

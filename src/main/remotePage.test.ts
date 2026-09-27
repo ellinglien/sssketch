@@ -201,9 +201,18 @@ describe('remotePage layout 1a', () => {
     expect(SCRIPT).toContain("countsEl.textContent = 'kept '")
   })
 
-  it('grows the stack up from the thumb rather than down from the title', () => {
+  it('starts the stack at the top and builds downward', () => {
+    // Reversed on 2026-09-27 after the first real iphone session: "the
+    // waves can appear starting at the top of the screen and build from
+    // under". The viewport-height wrap stays -- it is what keeps the ground
+    // near-black all the way down -- but nothing is pushed against it any
+    // more.
     expect(REMOTE_PAGE_HTML).toContain('min-height: 100dvh')
-    expect(REMOTE_PAGE_HTML).toContain('margin-top: auto')
+    expect(REMOTE_PAGE_HTML).not.toContain('margin-top: auto')
+    // A bare `#app` rule would beat [hidden]'s display:none on specificity
+    // and show the app state to an unpaired phone. There is no #app rule at
+    // all now; if one comes back it must be :not([hidden]).
+    expect(REMOTE_PAGE_HTML).not.toMatch(/^#app[\s{>]/m)
   })
 
   it('rests the status line on the last kept rifff instead of on nothing', () => {
