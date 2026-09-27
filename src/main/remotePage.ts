@@ -694,6 +694,30 @@ input {
   // { canvas, peaks, color } per visible row, so a resize can redraw the
   // stack without waiting for the next poll to change something.
   var rowCanvases = []
+
+  // Two gestures on one element, arbitrated exactly. Short tap mutes, long
+  // press opens the action sheet. The rules that matter: a fired long press
+  // must NOT also fire the tap on release; a scroll must not come back as a
+  // mute; and the x inside the row must start neither.
+  var HOLD_MS = 450
+  var SLOP_PX = 10
+  var holdTimer = null
+  var holdFired = false
+  var holdMoved = false
+  var holdX = 0
+  var holdY = 0
+
+  function cancelHold() {
+    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null }
+  }
+
+  function buzz() {
+    // ios safari does not implement this; some browsers implement it and
+    // throw when the document is not focused.
+    if (navigator.vibrate) {
+      try { navigator.vibrate(10) } catch (e) {}
+    }
+  }
   var armedRemoveId = null
   var armedRemoveTimer = null
 
@@ -812,6 +836,49 @@ input {
         renderRows()
       })
 
+      // An unresolved row does neither gesture, matching the desktop's own
+      // hasStemToActOn guard on its mute button. The row carries no click
+      // listener at all, so there is no second event to suppress -- this
+      // page is not allowed to suppress one (see the last-resort test).
+      if (slot.stemName) {
+        row.addEventListener('pointerdown', function (e) {
+          if (e.target.tagName === 'BUTTON') return
+          holdFired = false
+          holdMoved = false
+          holdX = e.clientX
+          holdY = e.clientY
+          cancelHold()
+          holdTimer = setTimeout(function () {
+            holdTimer = null
+            holdFired = true
+            buzz()
+            openActionSheet(slot)
+          }, HOLD_MS)
+        })
+        row.addEventListener('pointermove', function (e) {
+          if (holdTimer === null && !holdFired) return
+          var dx = e.clientX - holdX
+          var dy = e.clientY - holdY
+          if (dx < 0) dx = -dx
+          if (dy < 0) dy = -dy
+          if (dx > SLOP_PX || dy > SLOP_PX) { holdMoved = true; cancelHold() }
+        })
+        // The scroll the browser stole must not come back as a mute.
+        row.addEventListener('pointercancel', function () { holdMoved = true; cancelHold() })
+        row.addEventListener('pointerleave', function () { holdMoved = true; cancelHold() })
+        row.addEventListener('pointerup', function (e) {
+          cancelHold()
+          if (e.target.tagName === 'BUTTON') return
+          if (holdFired || holdMoved) return
+          disarmRemove()
+          // Optimistic: the poll is up to 700ms behind and the row must
+          // answer the thumb now. The next poll overwrites it either way.
+          slot.muted = !slot.muted
+          renderRows()
+          api('/api/slot-action', { slotId: slot.id, action: 'mute' })
+        })
+      }
+
       row.appendChild(kind)
       row.appendChild(stem)
       row.appendChild(drop)
@@ -825,6 +892,10 @@ input {
     // element tick() is moving.
     rowsEl.appendChild(lineEl)
   }
+
+  // Replaced by the real sheet below -- declared here only so this section
+  // can be read on its own.
+  function openActionSheet(slot) {}
 
   function render(state) {
     countsEl.textContent = 'kept ' + state.kept + ' · rolled ' + state.rolled

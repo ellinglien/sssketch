@@ -245,6 +245,39 @@ describe('remotePage without a master waveform', () => {
   })
 })
 
+describe('remotePage row gestures', () => {
+  it('opens the menu on a long press and mutes on a short tap', () => {
+    expect(SCRIPT).toContain('HOLD_MS = 450')
+    expect(SCRIPT).toContain("action: 'mute'")
+  })
+
+  it('never lets a fired long press also fire the tap on release', () => {
+    expect(SCRIPT).toContain('if (holdFired || holdMoved) return')
+  })
+
+  it('cancels the press on a scroll, a leave or a cancel', () => {
+    expect(SCRIPT).toContain('SLOP_PX = 10')
+    expect(SCRIPT).toContain("row.addEventListener('pointercancel'")
+    expect(SCRIPT).toContain("row.addEventListener('pointerleave'")
+  })
+
+  it('leaves the x out of both gestures', () => {
+    expect(SCRIPT).toContain("e.target.tagName === 'BUTTON'")
+  })
+
+  it('guards the haptic rather than calling it bare', () => {
+    // ios safari does not implement it at all.
+    expect(SCRIPT).toContain('if (navigator.vibrate)')
+    expect(SCRIPT).toContain('navigator.vibrate(10)')
+  })
+
+  it('paints a mute before the poll can confirm it', () => {
+    // The poll is up to 700ms behind. A mute you cannot see land is
+    // indistinguishable from a tap that missed.
+    expect(SCRIPT).toContain('slot.muted = !slot.muted')
+  })
+})
+
 describe('remotePage last resort', () => {
   it('shows a line rather than nothing if its own script throws', () => {
     // Hidden until something actually throws -- it is a last resort, not a
