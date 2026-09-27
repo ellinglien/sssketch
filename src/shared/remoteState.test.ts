@@ -4,6 +4,7 @@ import {
   parseRemoteSlotAction,
   parseRemoteSlotKinds,
   remoteStateFromSlots,
+  type RemoteSlotResponse,
   type RemoteStateResponse
 } from './remoteState'
 
@@ -262,7 +263,22 @@ describe('RemoteStateResponse', () => {
         lastKeptName: null,
         loopBars: 8
       }),
-      loopId: '0123456789abcdef'
+      loopId: '0123456789abcdef',
+      // Main injects one of these per row, the way it injects loopId --
+      // see RemoteSlotResponse.
+      slots: [
+        {
+          ...remoteStateFromSlots([slot()], {
+            discoverOpen: true,
+            playing: false,
+            kept: 0,
+            rolled: 0,
+            lastKeptName: null,
+            loopBars: 8
+          }).slots[0],
+          stemId: null
+        }
+      ]
     }
     expect(response.loopId).toMatch(/^[0-9a-f]{16}$/)
     expect(JSON.stringify(response)).not.toContain('/Users/')
@@ -279,7 +295,8 @@ describe('RemoteStateResponse', () => {
         lastKeptName: null,
         loopBars: 8
       }),
-      loopId: null
+      loopId: null,
+      slots: []
     }
     expect(response.loopId).toBeNull()
   })
@@ -336,5 +353,32 @@ describe('parseRemoteSlotAction', () => {
     expect(parseRemoteSlotAction(null)).toBeNull()
     expect(parseRemoteSlotAction(1)).toBeNull()
     expect(parseRemoteSlotAction(['mute'])).toBeNull()
+  })
+})
+
+describe('remoteStateFromSlots and the stem id', () => {
+  const meta = {
+    discoverOpen: true,
+    playing: false,
+    kept: 0,
+    rolled: 0,
+    lastKeptName: null,
+    loopBars: 8
+  }
+
+  it('still emits no stem id of its own, because main injects it', () => {
+    // The whole point. This function does not see a resolvedPath and never
+    // will; the stem id is derived in main from the EngineProject, exactly
+    // the way loopId already is.
+    const state = remoteStateFromSlots([slot({ id: 'a' })], meta)
+    expect(Object.keys(state.slots[0])).not.toContain('stemId')
+  })
+
+  it('types a response row as a view plus the id main added', () => {
+    const row: RemoteSlotResponse = {
+      ...remoteStateFromSlots([slot({ id: 'a' })], meta).slots[0],
+      stemId: 'abcdef0123456789'
+    }
+    expect(row.stemId).toBe('abcdef0123456789')
   })
 })

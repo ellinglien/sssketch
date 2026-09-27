@@ -74,6 +74,29 @@ export interface RemoteState {
   slots: RemoteSlotView[]
 }
 
+/** One row as GET /api/state actually answers it: the view the renderer
+ * pushed, plus the id of that slot's own audio.
+ *
+ * `stemId` is deliberately NOT part of RemoteSlotView and is NOT produced by
+ * remoteStateFromSlots -- same reason, and same shape, as loopId one level
+ * up. The renderer's boundary function has never seen a resolvedPath and
+ * still does not; main derives this from the EngineProject it holds, which
+ * is full of real filesystem paths and never leaves the main process.
+ *
+ * Sixteen hex characters of a sha256 is what leaves. It is a lookup key into
+ * a map main built, meaningless to anything that does not hold that map, and
+ * GET /api/stem never concatenates it into a path -- so the no-path property
+ * remoteState.test.ts asserts stays preserved by construction rather than by
+ * care, even though the phone can now fetch audio one stem at a time.
+ *
+ * Null for a slot the Mac has no audio for right now: unresolved, or muted
+ * (a muted slot is not in Discover's preview project at all). The phone
+ * reads null as "the Mac is not naming one", never as "throw the audio
+ * away" -- see remotePage's wantedStemId. */
+export interface RemoteSlotResponse extends RemoteSlotView {
+  stemId: string | null
+}
+
 /** What GET /api/state actually answers: the snapshot the renderer pushed,
  * plus the id of the loop the phone can fetch right now.
  *
@@ -85,6 +108,7 @@ export interface RemoteState {
  * asserts is preserved by construction rather than by care. */
 export interface RemoteStateResponse extends RemoteState {
   loopId: string | null
+  slots: RemoteSlotResponse[]
 }
 
 export interface RemoteStateMeta {
