@@ -221,6 +221,10 @@ body {
  * because an id beats [hidden]'s display:none on specificity, which would
  * show the whole app state to an unpaired phone. */
 #app:not([hidden]) { display: flex; flex-direction: column; flex: 1; }
+/* Nothing in that column may be squashed to make the rest fit: past about
+ * a dozen rows the page should scroll, not compress the stack, the new
+ * stem button and the transport into each other. */
+#app > * { flex: none; }
 .eyebrow { font-size: 10px; color: #6a6a6a; letter-spacing: 0.08em; }
 h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
 .topbar { display: flex; justify-content: space-between; align-items: baseline; }
@@ -427,13 +431,13 @@ input {
          the thing to do it with is directly below it. -->
     <div class="empty" id="empty" hidden>pick what you want below, then add it</div>
     <div class="rows" id="rows"><div class="line" id="line" hidden></div></div>
+    <!-- The one #ededed-bordered control on the page, and never hidden:
+         with nothing on screen it is the only thing there is to do. -->
+    <button class="lit" id="new-stem">new stem</button>
     <!-- Hidden with nothing in discover: roll all, play and keep all act on
          a loop that does not exist yet, and three dead buttons are what made
          the first screen feel like a dead end. They come back on the first
          add. -->
-    <!-- The one #ededed-bordered control on the page, and never hidden:
-         with nothing on screen it is the only thing there is to do. -->
-    <button class="lit" id="new-stem">new stem</button>
     <div id="loop" hidden>
       <div class="actions">
         <button class="big" id="play">play</button>
