@@ -150,6 +150,7 @@ describe('remotePage copy', () => {
       'random',
       'duplicate',
       'going',
+      'own loop',
       'loop end',
       '8 bars',
       '4 bars',
@@ -484,17 +485,19 @@ describe('remotePage mute is a gain', () => {
 })
 
 describe('remotePage swap grid', () => {
-  it('offers loop end and three bar counts, and nothing else', () => {
+  it('offers own loop, loop end and three bar counts, and nothing else', () => {
     // "instead of it playing only at the end of the loop, could we set it
     // to update every 4 bars, 8 bars, etc? a switch and setting to do that?
     // so it's seamless but can update a bit sooner" -- Elling, 2026-09-27,
-    // after hearing the end-of-loop handover.
+    // after hearing the end-of-loop handover. own loop is the fifth, and
+    // the one per-stem replacement made possible at all.
+    expect(SCRIPT).toContain("{ g: -1, l: 'own loop' }")
     expect(SCRIPT).toContain("{ g: 0, l: 'loop end' }")
     expect(SCRIPT).toContain("{ g: 8, l: '8 bars' }")
     expect(SCRIPT).toContain("{ g: 4, l: '4 bars' }")
     expect(SCRIPT).toContain("{ g: 2, l: '2 bars' }")
-    const options = SCRIPT.match(/\{ g: \d+, l: '/g) ?? []
-    expect(options).toHaveLength(4)
+    const options = SCRIPT.match(/\{ g: -?\d+, l: '/g) ?? []
+    expect(options).toHaveLength(5)
   })
 
   it('starts on loop end, so nobody\u2019s phone changes until they touch a chip', () => {
@@ -591,6 +594,57 @@ describe('remotePage swap grid', () => {
     // Four across in one row, and still a 42px tap target.
     expect(REMOTE_PAGE_HTML).toContain('.chips.grid button.chip { flex: 1 1 0; min-width: 0; }')
     expect(REMOTE_PAGE_HTML).toContain('min-height: 42px')
+  })
+})
+
+describe('remotePage per-stem handover', () => {
+  it('lands a changed stem on a boundary, against the one shared instant', () => {
+    expect(SCRIPT).toContain('var at = origin + Math.ceil((now - origin) / period) * period')
+    expect(SCRIPT).toContain('if (at - now < SWAP_LEAD) at = at + period')
+    expect(SCRIPT).toContain('SWAP_LEAD = 0.08')
+    expect(SCRIPT).toContain('v.src.stop(at)')
+  })
+
+  it('moves ONE row, and leaves the other eleven sounding', () => {
+    // The whole reason for per-stem. scheduleReplace is keyed by slotId and
+    // touches nothing else.
+    expect(SCRIPT).toContain('function scheduleReplace(slotId, stemId, buf)')
+    expect(SCRIPT).toContain('function commitReplace(slotId, at)')
+    expect(SCRIPT).not.toContain('function commitSwap(')
+  })
+
+  it('never leaves a scheduled replacement behind it', () => {
+    expect(SCRIPT).toContain('function cancelPending(slotId)')
+    expect(SCRIPT).toContain('if (p.at !== at) return')
+    expect(SCRIPT).toContain('old.src.onended = null')
+    // A vanished row and a stopped transport are the two ways a scheduled
+    // replacement can be orphaned, and both go through the one function.
+    const cancels = SCRIPT.match(/cancelPending\(/g) ?? []
+    expect(cancels.length).toBeGreaterThanOrEqual(4)
+  })
+
+  it('offers a handover only once per boundary per row', () => {
+    expect(SCRIPT).toContain('if (pending[slotId] && pending[slotId].stemId === want) continue')
+  })
+
+  it('gives own loop the stem its own cycle, and everything else the grid', () => {
+    expect(SCRIPT).toContain('function periodFor(v)')
+    expect(SCRIPT).toContain('if (swapGrid === -1) return v.dur > 0 ? v.dur : loopDur()')
+  })
+
+  it('starts a fresh phrase when there is nothing left to be in phase with', () => {
+    // Not in the plan, and needed: with every voice gone, loopDur() is 0,
+    // so swapPeriod() is 0 and a row joining on a boundary would wait for a
+    // boundary that can never come. Nothing is sounding, so there is
+    // nothing to interrupt.
+    expect(SCRIPT).toContain('if (!sounding) { haveOrigin = false; lineEl.hidden = true }')
+  })
+
+  it('still starts on loop end and still keeps the setting on the phone', () => {
+    expect(SCRIPT).toContain('var swapGrid = 0')
+    expect(SCRIPT).toContain("SWAP_GRID_KEY = 'sssketch-remote-swap-grid'")
+    const posts = SCRIPT.match(/api\('\/api\/[a-z-]+'/g) ?? []
+    expect(posts).not.toContain("api('/api/swap-grid'")
   })
 })
 

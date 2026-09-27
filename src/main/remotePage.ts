@@ -680,15 +680,25 @@ input {
   var token = null
   try { token = localStorage.getItem('sssketch-remote-token') } catch (e) { token = null }
 
-  // WHERE A NEW MIX IS ALLOWED TO TAKE OVER, as a number of bars -- 0
-  // meaning the end of the loop, which is what this page did before the
-  // grid existed and is still the default.
+  // WHEN THIS STEM IS ALLOWED TO CHANGE, as a number of bars -- 0 meaning
+  // the end of the loop, which is what this page did before the grid
+  // existed and is still the default.
   //
   // "instead of it playing only at the end of the loop, could we set it to
   // update every 4 bars, 8 bars, etc? a switch and setting to do that? so
   // it's seamless but can update a bit sooner" -- Elling, 2026-09-27, after
-  // hearing the end-of-loop handover.
+  // hearing the end-of-loop handover. It read "when does the whole mix
+  // swap" then; per stem it reads "when can THIS stem change". The chips
+  // say the same words, and re-labelling shipped copy for its own sake is
+  // churn.
+  //
+  // FIVE OPTIONS NOW. own loop is what per-stem replacement made
+  // possible: the most musical boundary for a stem changing under eleven
+  // others is its own cycle. The default stays 0 -- his phone already has a
+  // value stored under SWAP_GRID_KEY and a default that changed under him
+  // would be a surprise -- but this is the one to try first.
   var SWAP_GRIDS = [
+    { g: -1, l: 'own loop' },
     { g: 0, l: 'loop end' },
     { g: 8, l: '8 bars' },
     { g: 4, l: '4 bars' },
@@ -853,6 +863,25 @@ input {
     return { stemId: stemId, src: src, gain: g, dur: buf.duration, level: level }
   }
 
+  // slotId -> { stemId, src, gain, dur, level, at }. A REPLACEMENT ALREADY
+  // SCHEDULED: its source has start(at) called with at still in the future,
+  // and the voice it replaces has stop(at) called on the same instant. Empty
+  // the rest of the time.
+  var pending = {}
+
+  // Drops a replacement that was scheduled and then superseded or
+  // abandoned. Its source has start(at) called with at still ahead, so
+  // stop() with no argument means "never sound at all"; it is disconnected
+  // either way, so nothing is left hanging off the destination.
+  function cancelPending(slotId) {
+    var p = pending[slotId]
+    if (!p) return
+    try { p.src.stop() } catch (e) {}
+    try { p.src.disconnect() } catch (e) {}
+    try { p.gain.disconnect() } catch (e) {}
+    delete pending[slotId]
+  }
+
   function killVoice(v) {
     if (!v) return
     v.src.onended = null
@@ -862,6 +891,7 @@ input {
   }
 
   function stopAll() {
+    for (var pid in pending) cancelPending(pid)
     for (var id in voices) killVoice(voices[id])
     voices = {}
     haveOrigin = false
@@ -955,6 +985,79 @@ input {
     return (dur * step) / bars
   }
 
+  // HOW OFTEN THIS VOICE OFFERS A HANDOVER. Global for every setting but
+  // one: own loop is the stem's OWN cycle, which is the boundary per-stem
+  // replacement finally makes available. Without it a 2-bar hat rolled at
+  // bar one of an 8-bar loop waits four times longer than it needs to.
+  function periodFor(v) {
+    if (swapGrid === -1) return v.dur > 0 ? v.dur : loopDur()
+    return swapPeriod()
+  }
+
+  // ONE ROW CHANGES, on a boundary, and the other eleven are not touched.
+  // Both ends are committed on the audio clock against the one instant
+  // every voice shares, which is what makes this sample-accurate rather
+  // than "soon after this callback ran".
+  function scheduleReplace(slotId, stemId, buf) {
+    var v = voices[slotId]
+    if (!v) return
+    var period = periodFor(v)
+    if (!(period > 0)) return
+    var now = audioCtx.currentTime
+    var at = origin + Math.ceil((now - origin) / period) * period
+    // Too close to schedule honestly -- start(t) and stop(t) with a t
+    // inside the block the audio thread is rendering are clamped to "as
+    // soon as possible", which is the mid-bar cut this exists to avoid.
+    // Take the next boundary instead; one more cycle of the old stem is the
+    // price, and nobody can hear a change that did not happen yet.
+    if (at - now < SWAP_LEAD) at = at + period
+    var p = pending[slotId]
+    if (p) {
+      // A THIRD stem for this row arriving before the second has started.
+      // Replacing it is clean only at the same instant, because the playing
+      // voice's stop is already scheduled for p.at and re-scheduling a stop
+      // that is about to fire has no honest answer. The boundary can only
+      // have moved if we are inside SWAP_LEAD, so this one is dropped;
+      // wantedStemId is unchanged, so the next reconcile asks again.
+      if (p.at !== at) return
+      cancelPending(slotId)
+    }
+    var next = makeVoice(stemId, buf, at, levelFor(slotId))
+    v.src.stop(at)
+    // The old source ending IS the boundary, reported by the audio system
+    // rather than guessed at by a second clock that could drift from it.
+    v.src.onended = function () { commitReplace(slotId, at) }
+    pending[slotId] = {
+      stemId: next.stemId,
+      src: next.src,
+      gain: next.gain,
+      dur: next.dur,
+      level: next.level,
+      at: at
+    }
+  }
+
+  // The handover as the rest of the page sees it, a few milliseconds after
+  // it already happened in the audio graph. ONE row moves; the phrase does
+  // not restart, so the playhead does not jump.
+  function commitReplace(slotId, at) {
+    var p = pending[slotId]
+    if (!p || p.at !== at) return
+    delete pending[slotId]
+    var old = voices[slotId]
+    if (old) {
+      old.src.onended = null
+      try { old.src.disconnect() } catch (e) {}
+      try { old.gain.disconnect() } catch (e) {}
+    }
+    voices[slotId] = { stemId: p.stemId, src: p.src, gain: p.gain, dur: p.dur, level: p.level }
+    // Whatever the mix asked for while this was in flight wins now that the
+    // curve scheduled at the boundary has run -- and a later mute is then
+    // not fighting a finished curve.
+    setLevel(voices[slotId], levelFor(slotId))
+    renderRows()
+  }
+
   // EVERYTHING THE MIXER DOES, in one function, called from the poll and
   // from every landed fetch. It compares what the mac is naming against
   // what is sounding and closes the gap; it is safe to call at any time and
@@ -963,12 +1066,26 @@ input {
     if (!audioCtx || !wantPlaying) return
     var slotId
 
-    // Rows that are gone take their voice with them.
+    // Rows that are gone take their voice, and anything scheduled for
+    // them, with them. A scheduled replacement is part of what is playing:
+    // left alone it would start into a row that no longer exists and
+    // commit itself through onended.
     for (slotId in voices) {
       if (!wantedStemId[slotId]) {
+        cancelPending(slotId)
         killVoice(voices[slotId])
         delete voices[slotId]
       }
+    }
+
+    // Everything went away -- discover emptied, or every row was replaced
+    // at once. There is nothing left to be in phase WITH, so the next
+    // buffer to land starts a fresh phrase rather than waiting for a
+    // boundary of a loop whose length is now zero.
+    if (haveOrigin) {
+      var sounding = false
+      for (slotId in voices) sounding = true
+      if (!sounding) { haveOrigin = false; lineEl.hidden = true }
     }
 
     if (!haveOrigin) {
@@ -1001,9 +1118,20 @@ input {
       var buf = buffers[want]
       if (!buf) continue
       var v = voices[slotId]
-      if (v && v.stemId === want) continue
-      killVoice(v)
-      voices[slotId] = makeVoice(want, buf, audioCtx.currentTime + START_LEAD, levelFor(slotId))
+      if (!v) {
+        // A row that joined mid-phrase -- a new slot, or a fetch that took
+        // its time. It enters on a boundary too, at the phrase's phase.
+        var period = swapPeriod()
+        if (!(period > 0)) continue
+        var now = audioCtx.currentTime
+        var at = origin + Math.ceil((now - origin) / period) * period
+        if (at - now < SWAP_LEAD) at = at + period
+        voices[slotId] = makeVoice(want, buf, at, levelFor(slotId))
+        continue
+      }
+      if (v.stemId === want) continue
+      if (pending[slotId] && pending[slotId].stemId === want) continue
+      scheduleReplace(slotId, want, buf)
     }
     fetchMissing()
   }
@@ -1233,9 +1361,11 @@ input {
   })
 
   // --- the handover grid -------------------------------------------------
-  // Four chips, one lit, in the page's existing chip idiom: inversion marks
+  // Five chips, one lit, in the page's existing chip idiom: inversion marks
   // the chosen one, exactly as it marks a chosen kind, and no colour is
   // spent -- colour on this page belongs to stems and the playhead only.
+  // Five at flex: 1 1 0 in a 390px column is about 68px each, still well
+  // over the 42px tap floor the page holds itself to.
   //
   // CHANGING IT WHILE PLAYING TOUCHES NOTHING THAT IS ALREADY SCHEDULED. A
   // handover in flight has both of its ends committed on the audio clock --
