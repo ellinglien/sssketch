@@ -350,78 +350,83 @@ describe('remotePage without a master waveform', () => {
   })
 })
 
-describe('remotePage seamless loop swap', () => {
-  it('hands over at the end of the loop, not when the download lands', () => {
-    // "ideally this would be seamless .. so the transitions and new mix
-    // renders play when a loop ends.. ideally it'd be instantaneous at the
-    // end of the loop" -- Elling, 2026-09-27. The playing source has looped
-    // seamlessly since startedAt, so its boundaries are startedAt + k *
-    // duration. Both ends are scheduled against that one instant on the
-    // audio clock, which is what makes the handover sample-accurate rather
-    // than "soon after this callback ran".
-    // The period is `period` rather than `dur` since the handover grid
-    // landed (2026-09-27) -- same arithmetic, a shorter step. swapPeriod()
-    // returns the whole loop's duration on the default setting, so this IS
-    // still the end-of-loop handover unless a chip says otherwise.
-    expect(SCRIPT).toContain('var at = startedAt + Math.ceil((now - startedAt) / period) * period')
-    expect(SCRIPT).toContain('next.start(at)')
-    expect(SCRIPT).toContain('srcNode.stop(at)')
+describe('remotePage per-stem mixer', () => {
+  it('gives every stem its own source and its own gain', () => {
+    // "are we streaming all stems individually? if so lets make mute and
+    // solo happen immediately" -- Elling, 2026-09-27. One mixdown became N
+    // voices, and a gain node per voice is what makes a mute a gain change
+    // rather than a round trip through a c++ renderer.
+    expect(SCRIPT).toContain('function makeVoice(')
+    expect(SCRIPT).toContain('audioCtx.createGain()')
+    expect(SCRIPT).toContain('audioCtx.createBufferSource()')
+    expect(SCRIPT).toContain('src.loop = true')
   })
 
-  it('takes the next boundary along when this one is too close to schedule', () => {
-    // start(t)/stop(t) with a t that has passed are clamped to "now", which
-    // is the mid-loop cut this exists to avoid. 80ms clears the hardware
-    // buffer ios renders ahead by, plus a frame or two of main-thread jitter.
-    expect(SCRIPT).toContain('SWAP_LEAD = 0.08')
-    expect(SCRIPT).toContain('if (at - now < SWAP_LEAD) at = at + period')
+  it('measures every source from one instant that never moves', () => {
+    // The whole simplification: the old player moved its start time on
+    // every handover because the incoming mix began at its own bar 0. Per
+    // stem there is a phrase to enter, so there is nothing to reset.
+    expect(SCRIPT).toContain('var haveOrigin = false')
+    expect(SCRIPT).toContain('origin = audioCtx.currentTime + START_LEAD')
+    // Exactly two writes: the declaration, and the one start.
+    const writes = SCRIPT.match(/origin = /g) ?? []
+    expect(writes).toHaveLength(2)
   })
 
-  it('swaps at once when nothing is sounding, because there is nothing to cut', () => {
-    expect(SCRIPT).toContain(
-      'if (!wantPlaying || !srcNode || !audioBuffer || !(audioBuffer.duration > 0)) {'
-    )
+  it('enters a stem at the phase the phrase is already at, not at its bar 0', () => {
+    expect(SCRIPT).toContain('function offsetAt(at, dur)')
+    expect(SCRIPT).toContain('var o = (at - origin) % dur')
+    expect(SCRIPT).toContain('src.start(at, offsetAt(at, buf.duration))')
   })
 
-  it('moves the playhead onto the new buffer in the same step', () => {
-    // The two loops need not be the same length, so the duration the
-    // progress is divided by and the clock it counts from have to change
-    // together with the sound.
-    expect(SCRIPT).toContain('audioBuffer = swap.buffer')
-    expect(SCRIPT).toContain('startedAt = swap.at')
-    expect(SCRIPT).toContain('loadedLoopId = swap.id')
+  it('loops each stem at its own length, which is the tiling', () => {
+    // A 2-bar hat under an 8-bar pad wraps four times a phrase, in phase,
+    // with no arithmetic -- the same thing tileOffsetsPx draws and
+    // PlaybackEngine::renderBlock walks.
+    expect(SCRIPT).toContain('src.loopEnd = buf.duration')
+    expect(SCRIPT).toContain('src.loopStart = 0')
   })
 
-  it('never leaves a scheduled source behind it', () => {
-    // A third loop arriving before the second has started, and stopping the
-    // transport with a swap already scheduled, are the two ways a source can
-    // be superseded. Both go through one function, and stopping goes through
-    // it before it touches the playing source.
-    expect(SCRIPT).toContain('function cancelPendingSwap()')
-    expect(SCRIPT).toContain('if (pendingSwap.at !== at) return')
-    expect(SCRIPT).toContain('srcNode.onended = null')
-    const cancels = SCRIPT.match(/cancelPendingSwap\(\)/g) ?? []
-    expect(cancels.length).toBeGreaterThanOrEqual(3)
+  it('takes the phrase length off the buffers, never off a tempo', () => {
+    expect(SCRIPT).toContain('function loopDur()')
+    expect(SCRIPT).toContain('return (dur * step) / bars')
+    expect(SCRIPT).not.toContain('bpm')
   })
 
-  it('does not download the same loop again while it waits for its boundary', () => {
-    expect(SCRIPT).toContain('if (pendingSwap && pendingSwap.id === currentLoopId) return')
+  it('addresses a stem only by the id the mac named, and never by a path', () => {
+    const gets = SCRIPT.match(/fetch\('\/api\/stem[^)]*\)/g) ?? []
+    expect(gets).toEqual([
+      "fetch('/api/stem?id=' + stemId, { headers: { authorization: 'Bearer ' + token } })"
+    ])
   })
 
-  it('moves the rows at the boundary too, so the picture never leads the sound', () => {
-    // loadedLoopId is what is audible and currentLoopId is what the mac
-    // wants; the rows follow the first. Drawing the new stems while the old
-    // mix is still playing is seconds of the row saying one thing and the
-    // phone playing another, every roll.
-    expect(SCRIPT).toContain('function adoptPolledSlots()')
-    expect(SCRIPT).toContain('if (polledLoopId !== loadedLoopId) return')
-    expect(SCRIPT).toContain('if (!holdingForSwap()) lastSlots = state.slots')
+  it('keeps a stem the mac stopped naming, because a mute is not a delete', () => {
+    // A muted slot is not in discover's preview project at all, so its
+    // stemId goes null. Null is "the mac is not naming one right now".
+    expect(SCRIPT).toContain('if (ps.stemId) wantedStemId[ps.id] = ps.stemId')
+    expect(SCRIPT).toContain('if (!seen[gone]) delete wantedStemId[gone]')
   })
 
-  it('holds the picture only while sound is actually on its way', () => {
-    // A render that failed means nothing is coming. Freezing the rows on a
-    // loop that will never arrive is worse than showing the mac's picture
-    // early.
-    expect(SCRIPT).toContain('return fetching || pendingSwap !== null')
+  it('never downloads the same stem twice at once', () => {
+    expect(SCRIPT).toContain('if (buffers[id] || fetchingIds[id]) continue')
+  })
+
+  it('runs the playhead off the one instant, so a roll no longer resets it', () => {
+    expect(SCRIPT).toContain('var t = (audioCtx.currentTime - origin) % dur')
+    expect(SCRIPT).toContain('if (t < 0) t = t + dur')
+    expect(REMOTE_PAGE_HTML).toContain('pointer-events: none')
+  })
+
+  it('no longer fetches the rendered mixdown at all', () => {
+    // /api/loop stays on the mac -- it is the only thing that can render
+    // the loop as the mac's own engine hears it, and it is what there is to
+    // compare against. The page simply stops asking for it.
+    expect(SCRIPT).not.toContain("'/api/loop'")
+  })
+
+  it('takes every voice down with the transport, and with discover', () => {
+    expect(SCRIPT).toContain('function stopAll()')
+    expect(SCRIPT).toContain('for (var id in voices) killVoice(voices[id])')
   })
 })
 
@@ -474,7 +479,7 @@ describe('remotePage swap grid', () => {
   it('derives seconds per bar from the buffer, never from a bpm', () => {
     // The buffer is the ground truth for what is sounding. A bpm on the
     // wire would be a second copy of the same fact, free to disagree.
-    expect(SCRIPT).toContain('var dur = audioBuffer.duration')
+    expect(SCRIPT).toContain('var dur = loopDur()')
     expect(SCRIPT).toContain('return (dur * step) / bars')
     expect(SCRIPT).not.toContain('bpm')
   })
@@ -497,14 +502,14 @@ describe('remotePage swap grid', () => {
     expect(SCRIPT).toContain('if (!(bars > 0) || bars !== Math.floor(bars)) return dur')
   })
 
-  it('moves the bar count with the buffer it describes, not with the poll', () => {
-    // loadedLoopBars belongs to the buffer that is AUDIBLE, the same way
-    // loadedLoopId does, so a swap scheduled against the playing loop uses
-    // the playing loop's own grid.
-    expect(SCRIPT).toContain('var loadedLoopBars = 0')
-    expect(SCRIPT).toContain('loadedLoopBars = swap.bars')
-    expect(SCRIPT).toContain('function barsForLoop(id)')
-    expect(SCRIPT).toContain('return polledLoopId === id ? polledLoopBars : 0')
+  it('takes the bar count off the poll and the seconds off the buffers', () => {
+    // There is no single audible buffer to hang a bar count on any more --
+    // there are N of them, and the longest spans the loop by definition.
+    // So the bars come from the mac's own loopBars and the seconds from
+    // loopDur(), and the two are never two copies of one fact.
+    expect(SCRIPT).toContain('var loopBars = 0')
+    expect(SCRIPT).toContain('loopBars = state.loopBars > 0 ? state.loopBars : 0')
+    expect(SCRIPT).not.toContain('loadedLoopBars')
   })
 
   it('leaves a handover that is already scheduled on the boundary it was given', () => {
@@ -513,9 +518,9 @@ describe('remotePage swap grid', () => {
     // reason takeLoop drops a buffer whose boundary has moved. Tapping a
     // chip therefore schedules nothing, cancels nothing and makes no sound.
     const handler = (/swapGrid = option\.g[\s\S]{0,200}/.exec(SCRIPT) ?? [''])[0]
-    expect(handler).not.toContain('cancelPendingSwap')
-    expect(handler).not.toContain('takeLoop')
-    expect(handler).not.toContain('startSource')
+    expect(handler).not.toContain('cancelPending')
+    expect(handler).not.toContain('scheduleReplace')
+    expect(handler).not.toContain('reconcile')
     expect(handler).toContain('paintGridChips()')
   })
 
