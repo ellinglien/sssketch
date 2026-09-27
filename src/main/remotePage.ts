@@ -855,18 +855,48 @@ input {
   }
   var armedRemoveId = null
   var armedRemoveTimer = null
+  // Every visible row's x, by slot id, so arming can repaint ONE button.
+  // Rebuilt with the rows; Object.create(null) so a slot id can never
+  // collide with something inherited.
+  var dropEls = Object.create(null)
+
+  // The whole of "armed", drawn, in the one place that draws it.
+  //
+  // THE BUG THIS EXISTS FOR (2026-09-27, on the phone): "initial click to
+  // engage 'sure' and delete stem for stems low on screen when bottom
+  // buttons are showing, it jumps the scroll to another point". Arming used
+  // to go through renderRows, and armedRemoveId was part of its repaint key
+  // -- so changing one button's label from x to sure wiped rowsEl's
+  // innerHTML and rebuilt every row and every canvas. For that instant the
+  // stack has no height, the document is shorter than the scroll offset,
+  // and the browser clamps the offset to fit. Worst at the bottom of a long
+  // stack, where there is least room to clamp into, which is exactly where
+  // he found it.
+  //
+  // It also stopped every waveform on screen being redrawn to change two
+  // characters, which nobody had complained about yet.
+  function paintDrop(id) {
+    var drop = dropEls[id]
+    if (!drop) return
+    var armed = armedRemoveId === id
+    drop.className = armed ? 'drop armed' : 'drop'
+    drop.textContent = armed ? 'sure' : 'x'
+  }
 
   function disarmRemove() {
+    var was = armedRemoveId
     armedRemoveId = null
     if (armedRemoveTimer) { clearTimeout(armedRemoveTimer); armedRemoveTimer = null }
+    if (was !== null) paintDrop(was)
   }
 
   function armRemove(id) {
     disarmRemove()
     armedRemoveId = id
+    paintDrop(id)
     armedRemoveTimer = setTimeout(function () {
       armedRemoveId = null
-      renderRows()
+      paintDrop(id)
     }, 4000)
   }
 
@@ -928,14 +958,24 @@ input {
   function renderRows() {
     // Rebuilt only when something actually changed. The poll runs every
     // 700ms and wiping the rows under a thumb mid-tap loses the tap. The
-    // key stringifies the whole slot objects, so it now covers muted and
-    // peaks too -- without that the optimistic mute paint below would be
+    // key stringifies the whole slot objects, so it covers muted and peaks
+    // too -- without that the optimistic mute paint below would be
     // swallowed by this very guard.
-    var key = JSON.stringify(lastSlots) + '|' + armedRemoveId
+    //
+    // THE KEY IS THE SLOT DATA AND NOTHING ELSE. armedRemoveId used to be
+    // in it, which made arming a remove cost a full rebuild and threw the
+    // scroll offset up the page (see paintDrop above). Nothing purely
+    // presentational belongs here: if a change can be drawn by touching the
+    // element that shows it, draw it there instead. Everything the key
+    // covers now -- the kind label, the name, the sound type, the mute and
+    // the peaks -- is a different picture, not a different state of the
+    // same one.
+    var key = JSON.stringify(lastSlots)
     if (key === lastRowsKey) return
     lastRowsKey = key
     rowsEl.innerHTML = ''
     rowCanvases = []
+    dropEls = Object.create(null)
     lastSlots.forEach(function (slot) {
       var row = document.createElement('div')
       row.className = 'row'
@@ -955,20 +995,20 @@ input {
       stem.appendChild(name)
       stem.appendChild(canvas)
 
-      var armed = armedRemoveId === slot.id
       var drop = document.createElement('button')
-      drop.className = armed ? 'drop armed' : 'drop'
-      drop.textContent = armed ? 'sure' : 'x'
+      dropEls[slot.id] = drop
+      // Registered first, then painted by the one function that paints it,
+      // so a fresh row comes up already armed if this rebuild happened
+      // under an arming.
+      paintDrop(slot.id)
       drop.addEventListener('click', function () {
         if (armedRemoveId === slot.id) {
           disarmRemove()
-          renderRows()
           api('/api/remove-slot', { slotId: slot.id })
           flash('removed')
           return
         }
         armRemove(slot.id)
-        renderRows()
       })
 
       // An unresolved row does neither gesture, matching the desktop's own

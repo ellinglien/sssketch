@@ -83,6 +83,25 @@ describe('remotePage slots', () => {
   it('rebuilds the rows only when they changed, so a poll cannot eat a tap', () => {
     expect(SCRIPT).toContain('if (key === lastRowsKey) return')
   })
+
+  it('arms by repainting one button, because a rebuild throws the scroll', () => {
+    // "initial click to engage 'sure' and delete stem for stems low on
+    // screen when bottom buttons are showing, it jumps the scroll to
+    // another point" -- Elling, on the phone, 2026-09-27. armedRemoveId was
+    // part of the repaint key, so arming wiped rowsEl and rebuilt every row
+    // and canvas; the list has no height for that instant, the document is
+    // shorter than the scroll offset, and the browser clamps it.
+    expect(SCRIPT).toContain('var key = JSON.stringify(lastSlots)')
+    expect(SCRIPT).not.toContain("+ '|' + armedRemoveId")
+    expect(SCRIPT).toContain('function paintDrop(')
+    // One wipe of the row list in the whole script, and it is renderRows'.
+    const wipes = SCRIPT.match(/rowsEl\.innerHTML = ''/g) ?? []
+    expect(wipes).toHaveLength(1)
+    // And one place that writes the label, so arming and the first build
+    // cannot drift apart.
+    const labelWrites = SCRIPT.match(/drop\.textContent = /g) ?? []
+    expect(labelWrites).toHaveLength(1)
+  })
 })
 
 describe('remotePage empty state', () => {
