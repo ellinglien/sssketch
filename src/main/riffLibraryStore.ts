@@ -344,10 +344,10 @@ interface StemLookupRow {
 // jams have 20,000+ riffs and the old 200-per-page size meant hitting the
 // scroll-load-more boundary constantly while browsing. 1000 stays well
 // clear of SQLite's default SQLITE_MAX_VARIABLE_NUMBER (32766, modern
-// bundled versions) that listRiffs' own stem-creator batch lookup below
-// depends on -- worst case one page's rows reference up to 8 distinct
-// StemCIDs each, i.e. 8000 placeholders in that IN (...) query, comfortably
-// under the limit.
+// bundled versions). A page's rows can reference up to
+// MAX_RIFFF_STEM_SLOTS distinct StemCIDs each, so listRiffs' own
+// stem-creator batch lookup below is chunked rather than relying on
+// staying under SQLITE_MAX_VARIABLE_NUMBER.
 const RIFF_PAGE_SIZE = 1000
 
 export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
@@ -398,32 +398,49 @@ export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
     )
     .all(...params, limit, offset) as RiffRow[]
 
+  // ONE query for the whole page's slots 9+, not one per riff. Empty for
+  // an external OUROVEON/LORE warehouse, which has no such table.
+  const extraByRiff = readExtraStemSlots(
+    db,
+    rows.map((row) => row.RiffCID)
+  )
+  const slotsByRiff = new Map(
+    rows.map((row) => [
+      row.RiffCID,
+      mergeStemSlots(
+        columnStemSlots(row as unknown as Record<string, unknown>),
+        extraByRiff.get(row.RiffCID) ?? []
+      )
+    ])
+  )
+
   // Batch-resolve every referenced StemCID's creator in one query, rather than
-  // one query per stem — up to 8 stems x 200 riffs would otherwise be 1600
+  // one query per stem — up to 20 stems x 1000 riffs would otherwise be 20,000
   // individual point lookups per page.
   const allStemCIDs = new Set<string>()
-  for (const row of rows) {
-    for (let slot = 1; slot <= 8; slot++) {
-      const cid = row[`StemCID_${slot}` as keyof RiffRow] as string | null
-      if (cid) allStemCIDs.add(cid)
-    }
+  for (const slots of slotsByRiff.values()) {
+    for (const { stemCID } of slots) allStemCIDs.add(stemCID)
   }
   const stemCreators = new Map<string, string>()
   if (allStemCIDs.size > 0) {
     const cidList = [...allStemCIDs]
-    const placeholders = cidList.map(() => '?').join(',')
-    const stemRows = db
-      .prepare(`SELECT StemCID, CreatorUserName FROM Stems WHERE StemCID IN (${placeholders})`)
-      .all(...cidList) as StemLookupRow[]
-    for (const s of stemRows) stemCreators.set(s.StemCID, s.CreatorUserName)
+    // Chunked, because the old "worst case 8000 placeholders, comfortably
+    // under SQLITE_MAX_VARIABLE_NUMBER" arithmetic no longer holds: a page
+    // of 1000 rifffs can now reference up to 20 distinct stems each, i.e.
+    // 20,000. Still legal, no longer comfortable, and not worth being
+    // clever about.
+    for (let i = 0; i < cidList.length; i += 900) {
+      const chunk = cidList.slice(i, i + 900)
+      const placeholders = chunk.map(() => '?').join(',')
+      const stemRows = db
+        .prepare(`SELECT StemCID, CreatorUserName FROM Stems WHERE StemCID IN (${placeholders})`)
+        .all(...chunk) as StemLookupRow[]
+      for (const s of stemRows) stemCreators.set(s.StemCID, s.CreatorUserName)
+    }
   }
 
   const summaries: RiffLibraryRiffSummary[] = rows.map((row) => {
-    const stemCIDs: string[] = []
-    for (let slot = 1; slot <= 8; slot++) {
-      const cid = row[`StemCID_${slot}` as keyof RiffRow] as string | null
-      if (cid) stemCIDs.push(cid)
-    }
+    const stemCIDs = (slotsByRiff.get(row.RiffCID) ?? []).map((s) => s.stemCID)
     const cachedStemCount = stemCIDs.filter((cid) =>
       existsSync(resolveStemPath(jamCID, cid))
     ).length

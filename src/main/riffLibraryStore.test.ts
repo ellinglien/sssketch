@@ -422,8 +422,14 @@ function seedStemsAndGains(root: string): void {
 
 describe('listRiffs', () => {
   let root: string
+  // Same reason as the resolveRiff block below: dbForJam reaches
+  // ownRiffLibraryRoot(), which asks the mocked app.getPath('music').
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-userdata-list-test-'))
+  })
   afterEach(() => {
     if (root) rmSync(root, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
   })
 
   it('reports stemCount, cachedStemCount, and ownerFraction per riff', () => {
@@ -608,6 +614,28 @@ describe('listRiffs', () => {
     const page2 = listRiffs('jam-techno', { limit: 5, offset: page1.nextOffset })
     expect(page2.riffs).toHaveLength(1)
     expect(page2.hasMore).toBe(false)
+  })
+
+  it('counts stems past the eighth in a page summary', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.exec(RIFF_STEMS_EXTRA_DDL)
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_1', 'jam one')`).run()
+    const columns = Array.from({ length: 8 }, (_, i) => `'stem_${i + 1}'`).join(', ')
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName,
+                          StemCID_1, StemCID_2, StemCID_3, StemCID_4,
+                          StemCID_5, StemCID_6, StemCID_7, StemCID_8)
+       VALUES ('riff_big', 'jam_1', 100, 120, 4, 'elling', ${columns})`
+    ).run()
+    for (let slot = 9; slot <= 12; slot++) {
+      db.prepare(`INSERT INTO RiffStemsExtra VALUES ('riff_big', ?, ?)`).run(slot, `stem_${slot}`)
+    }
+    db.close()
+
+    expect(listRiffs('jam_1', {}).riffs[0].stemCount).toBe(12)
   })
 })
 

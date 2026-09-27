@@ -19,14 +19,15 @@ export interface RiffLibraryRiffSummary {
   bpm: number
   barLength: number
   userName: string
-  stemCount: number // populated slots, 1-8
+  stemCount: number // populated slots, 1..MAX_RIFFF_STEM_SLOTS (see @shared/riffStemSlots)
   cachedStemCount: number // of those, how many are on disk right now
   ownerFraction: number // 0-1, fraction of populated slots created by RIFF_LIBRARY_USERNAME
 }
 
 export interface RiffLibraryResolvedStem {
   stemCID: string
-  slot: number // 1-8
+  // 1..MAX_RIFFF_STEM_SLOTS -- 1-8 live in Riffs.StemCID_1..8, the rest in RiffStemsExtra
+  slot: number
   path: string | null // local file path, or null if not cached
   gain: number // from the riff's GainsJSON, default 1.0
   creatorUserName: string
