@@ -1014,7 +1014,10 @@ input {
       b.addEventListener('click', function () {
         if (!actSlot) return
         api('/api/slot-action', { slotId: actSlot.id, action: act.a })
-        flash(act.a === 'duplicate' ? 'copied' : 'rolling')
+        // adjacent is not a roll -- it swaps in a stem from the jam next
+        // door, so saying "rolling" would describe the wrong thing
+        // happening. duplicate does not roll either; it clones.
+        flash(act.a === 'duplicate' ? 'copied' : act.a === 'adjacent' ? 'nearby' : 'rolling')
         closeActionSheet()
       })
       actsEl.appendChild(b)
