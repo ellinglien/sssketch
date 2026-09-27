@@ -30,12 +30,18 @@ stems.** That is the product fact the storage eight encodes, and it is the only 
 that is not ours to change.
 
 The failure mode was mechanical. The assembly eight is `assembleDiscoverRifff`'s *default*
-`maxMembers`, and `resolveDiscoverRifff()` (`DiscoverPanel.tsx:2362`) — shared verbatim by
-`add to timeline`, `add to shelf` **and** `keep` — takes that default. So the truncation happens
-in the renderer, before the IPC call, before main ever sees the ninth stem. This exact default
-has already caused one live bug (the engine preview silently dropping a ninth slot,
-2026-09-16, fixed by passing an explicit `maxMembers`) and it is causing this one. Elling is
-separately removing its misapplication to `add to timeline`.
+`maxMembers`, and `resolveDiscoverRifff()` (`DiscoverPanel.tsx`) — shared verbatim by
+`add to timeline`, `add to shelf` **and** `keep` — used to take that default. So the truncation
+happened in the renderer, before the IPC call, before main ever saw the ninth stem. That same
+default had already caused one live bug (the engine preview silently dropping a ninth slot,
+2026-09-16, fixed by passing an explicit `maxMembers`) and it caused this one too.
+
+**That half is already fixed**, by Elling, in commit `e761d57` on the same day as this spec —
+`resolveDiscoverRifff` now passes an explicit `placed.length`, so `add to timeline` and
+`add to shelf` place everything, and `keep` already hands main all twelve members. Which means
+the remaining truncation has moved down a layer and gone quieter: **`writeRiffDetail` receives
+twelve stems, writes eight columns, and drops the other four in silence.** That is the one this
+spec is about, and the storage eight is why it happens.
 
 **Which eight this spec is about: the storage eight.** The other two follow from it and are
 retired in the same breath, because leaving either behind means the DB can hold twenty and the
@@ -229,12 +235,14 @@ export const MAX_RIFFF_STEM_SLOTS = 20    // sssketch's own ceiling: the 8 colum
 - `MAX_STEMS_PER_RIFFF` (`discoverRifffAssembly.ts:36`) becomes `MAX_RIFFF_STEM_SLOTS`. Its own
   doc comment already says why it is 8 — *"Real-Rifff.stems can only ever address 8 slots
   (StemCID_1..8 is the schema…)"* — so raising the storage limit raises this by its own stated
-  reasoning. **This one change alone fixes `keep`**, because `resolveDiscoverRifff()` takes the
-  default.
-- `MAX_SEED_SLOTS` (`discoverSeed.ts:34`) becomes `MAX_RIFFF_STEM_SLOTS`, by the same chain. Left
-  at 8, seeding Discover from a twelve-stem kept group would drop slots 9-12 on the way back in,
-  breaking the round trip — `seed discover with this` on a kept group is, per the discovered-library
-  spec, "probably the nicest thing about the whole feature."
+  reasoning. Since `e761d57` this is no longer what caps `keep`; it is the **default** every
+  future caller that omits `maxMembers` will inherit, and leaving it at 8 behind a justification
+  that has stopped being true is how the next version of this bug gets written.
+- `MAX_SEED_SLOTS` (`discoverSeed.ts:34`) becomes `MAX_RIFFF_STEM_SLOTS`, by the same chain. This
+  one is a live hole: seeding Discover from a twelve-stem kept group drops slots 9-12 on the way
+  back in, so a group he keeps cannot be re-opened and evolved — and `seed discover with this` on
+  a kept group is, per the discovered-library spec, "probably the nicest thing about the whole
+  feature."
 
 `LORE_STEM_COLUMN_COUNT` replaces the literal `8` in the six places that enumerate the *columns*
 (`STEM_SLOT_COLUMNS` is currently defined twice and inlined as a SQL string four more times). It
@@ -242,10 +250,9 @@ stays 8 forever. The point of naming it is that a future reader can tell at a gl
 two numbers they are looking at.
 
 **Where the ceiling is enforced:** in main, in `saveDiscoveredRifff`, not in the renderer. The
-ceiling is a database fact and it belongs on the side of the IPC that owns the database. The
-renderer's cap being raised is what lets the stems *arrive*; main truncating at
-`MAX_RIFFF_STEM_SLOTS` is what guarantees nothing can ever be written that a reader could not
-read back.
+ceiling is a database fact and it belongs on the side of the IPC that owns the database. This is
+load-bearing rather than belt-and-braces now that `resolveDiscoverRifff` is uncapped: main is the
+only thing standing between a twenty-five-slot Discover stack and a rifff nobody can read back.
 
 ---
 

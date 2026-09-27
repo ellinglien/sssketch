@@ -10,11 +10,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-27-rifffs-beyond-eight-stems-design.md` (2026-09-27). Its settled decisions are not re-opened here: **a side table, not new columns**; **slots 9-20, not 1-20 duplicated**; **no foreign key**; **twenty, in one constant**.
 
-**Baseline (verify before Task 1):**
+**Baseline (verified on `master`, 2026-09-27, commit `3774cc4`):**
 
 ```
 Test Files  193 passed (193)
-     Tests  2954 passed (2954)
+     Tests  2974 passed (2974)
 ```
 
 `npm run typecheck` — 0 errors. `npm run lint` — 0 errors + **4 pre-existing prettier warnings in unrelated files**. Any *new* warning is yours.
@@ -33,9 +33,11 @@ Test Files  193 passed (193)
    - **the seed eight** — `MAX_SEED_SLOTS`, `src/renderer/src/audio/discoverSeed.ts:34`. How many Discover slots seeding creates. Its own comment justifies itself by the assembly eight, so it rises too.
    - A fourth eight is not in this codebase: **a real Endlesss rifff is eight stems.** That is the product fact the storage eight encodes. It does not change.
 
-2. **The truncation happens in the renderer, before the IPC.** `resolveDiscoverRifff()` (`DiscoverPanel.tsx:2314-2367`) is shared verbatim by `add to timeline`, `add to shelf` **and** `keepGroup`, and it calls `assembleDiscoverRifff(name, placed, bpm)` with **no `maxMembers`** — so it takes the assembly eight as a default and `keepGroup` never sees the ninth stem. Widening the database without raising that default fixes nothing at all.
+2. **Where the truncation is NOW — this changed under this plan and the change matters.** Until commit `e761d57` (2026-09-27, Elling's own fix for *"add to timeline, it doesn't seem to include all of the stems in the discover modal"*), `resolveDiscoverRifff()` called `assembleDiscoverRifff(name, placed, bpm)` with **no `maxMembers`* and so inherited the assembly eight — the truncation happened in the renderer, before the IPC. **It no longer does.** That call now passes an explicit `placed.length` (`DiscoverPanel.tsx:2375-2398`), so `keepGroup`, which shares that helper, already hands main **all twelve** members today.
+   **So the remaining silent truncation is in `writeRiffDetail`** (`riffLibraryWriter.ts:98`), which writes exactly eight columns and drops the rest without a word — and in `saveDiscoveredRifff`, which numbers members `slot: index + 1` with no ceiling at all. Tasks 4 and 8 are therefore the ones that actually make `keep` save twelve. Do not expect Task 10 to do it.
 
-3. **Raising the assembly eight is a one-line change in `discoverRifffAssembly.ts` and needs NO `DiscoverPanel.tsx` edit.** This is deliberate and it is how this plan stays clear of the concurrent agent. `keepGroup` maps `rifff.stems` straight into its IPC payload; once the default `maxMembers` is twenty, all twelve arrive with no change to the panel. Elling is separately removing the cap's misapplication to `add to timeline` in that same file — that work and this plan do not collide.
+3. **NO `DiscoverPanel.tsx` EDIT IS NEEDED, and this is now doubly true.** `resolveDiscoverRifff` is already uncapped and `keepGroup` already maps every stem into its IPC payload. The file needs nothing from this plan. Another agent is editing it; stay out.
+   One consequence to keep in view: with the renderer uncapped, **main is the only thing standing between a twenty-five-slot Discover stack and a rifff nobody can read back.** That is why Task 8's ceiling in `saveDiscoveredRifff` is load-bearing rather than belt-and-braces.
 
 4. **How absence of the table is detected — do not invent a different way.** `db.prepare('PRAGMA table_info(RiffStemsExtra)').all().length > 0`, the exact idiom `riffLibrarySchema.ts` already uses twice (`ensureDiscoverRiffIndexCacheHasCreationTime:249`, `ensureStemCategoriesHasSubcategoryNote:272`), both of whose comments call it "cheap: one PRAGMA query".
    - **NOT `Database#readonly`.** `getRiffLibraryDb()` opens the *configured* root with `readonly: true`, and the default configured root **is sssketch's own library** (`riffLibraryRootPath()` falls back to `ownRiffLibraryRoot()`). On a normal install the own warehouse is open twice, and a `readonly` check would call the second handle external and hide slots 9-20 from browse for everyone who never touched the folder picker.
@@ -118,7 +120,7 @@ npm run lint
 - [ ] **Step 1: Run the full suite**
 
 Run: `npm test`
-Expected: `Test Files  193 passed (193)` / `Tests  2954 passed (2954)`.
+Expected: `Test Files  193 passed (193)` / `Tests  2974 passed (2974)`.
 
 - [ ] **Step 2: Run typecheck and lint**
 
@@ -740,7 +742,7 @@ Expected: PASS, 12 tests.
 - [ ] **Step 5: Run the full suite to confirm nothing else moved**
 
 Run: `npm test`
-Expected: `Test Files 195 passed (195)` / `Tests 2976 passed (2976)` — 193 + 2 new files, 2954 + 10 + 12 new tests.
+Expected: `Test Files 195 passed (195)` / `Tests 2996 passed (2996)` — 193 + 2 new files, 2974 + 10 + 12 new tests.
 
 - [ ] **Step 6: Run typecheck and lint**
 
@@ -1951,14 +1953,18 @@ EOF
 
 ## Task 10: Retire the assembly eight and the seed eight
 
-This is the change that actually makes `keep` save twelve — everything before it widened the database, and the renderer was still cutting the stack down before the IPC.
+**By this point `keep` already saves twelve** — Tasks 4 and 8 did that, because commit `e761d57` had already uncapped `resolveDiscoverRifff` (finding 2). This task is not the fix; it closes the two stale eights that would otherwise be left standing with false justifications in their comments, and it fixes one real hole: **the seed round trip.**
+
+The seed eight is a genuine user-visible bug at this point. `seed discover with this` on a twelve-stem kept group returns eight slots, so a group he keeps cannot be re-opened and evolved — and the discovered-library spec calls that round trip *"probably the nicest thing about the whole feature."*
+
+The assembly eight is no longer load-bearing for `keep`, but it is still the **default** for every caller that does not pass `maxMembers` (today: `coachMapPlacement.ts`, with a single stem). Leaving it at 8 with a comment that says "Riffs.StemCID_1..8 is the schema" leaves a booby trap: the next person to add a caller inherits a cap that has been wrong since this plan landed.
 
 **Files:**
 - Modify: `src/renderer/src/audio/discoverRifffAssembly.ts:28-36, 63-70, 94`
 - Modify: `src/renderer/src/audio/discoverSeed.ts:27-34`
 - Test: `src/renderer/src/audio/discoverRifffAssembly.test.ts`
 
-**Do not touch `src/renderer/src/components/DiscoverPanel.tsx`.** `resolveDiscoverRifff()` calls `assembleDiscoverRifff(name, placed, bpm)` with no `maxMembers`, so raising the default is all `keepGroup` needs — and another agent is editing that file right now.
+**Do not touch `src/renderer/src/components/DiscoverPanel.tsx`.** It needs nothing from this plan, and another agent is editing it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -2023,12 +2029,13 @@ Replace the constant and its comment at `:28-36`:
 // actually be written to the library as, rather than silently producing
 // one no part of this codebase's own storage could represent.
 //
-// This was 8 until 2026-09-27, and its being 8 is what capped a kept
-// Discover group at eight stems no matter how many slots were on screen:
-// resolveDiscoverRifff (DiscoverPanel.tsx) takes this default, and `keep`
-// shares that helper with `add to shelf` and `add to timeline`. The number
-// lives in @shared/riffStemSlots now precisely so there is one place to
-// change and one place to read -- do not reintroduce a local literal.
+// This was 8 until 2026-09-27, and its being 8 is what silently dropped
+// stems 9+ from everything that took this default -- add to timeline, add
+// to shelf and keep all shared resolveDiscoverRifff, which omitted
+// maxMembers (commit e761d57 gave that call an explicit placed.length;
+// this default is what it used to inherit). The number lives in
+// @shared/riffStemSlots now precisely so there is one place to change and
+// one place to read -- do not reintroduce a local literal.
 ```
 
 and at `:94`, the default becomes:
@@ -2062,11 +2069,12 @@ Expected: PASS.
 ```bash
 git add src/renderer/src/audio/discoverRifffAssembly.ts src/renderer/src/audio/discoverRifffAssembly.test.ts src/renderer/src/audio/discoverSeed.ts
 git commit -m "$(cat <<'EOF'
-keep saves the whole stack, because the renderer stops cutting it at eight
+seeding discover from a kept group returns every slot it had, not eight
 
-resolvediscoverrifff takes assemblediscoverrifff's default maxmembers, so
-that default was doing the truncating long before main ever saw a ninth
-stem. seeding rises with it, or a kept twelve would come back as eight.
+the round trip was the last place the old cap still bit: keep could save
+twelve and seed would hand back eight. the assembly default rises with it
+so the next caller that omits maxmembers does not inherit a number whose
+stated reason stopped being true.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
 Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h
@@ -2097,7 +2105,7 @@ Expected: 0 type errors, 0 lint errors, exactly the same **4** prettier warnings
 
 - [ ] **Step 4: Confirm nothing reached the native engine or the concurrent agent's files**
 
-Run: `git diff --name-only 3d0515f..HEAD`
+Run: `git diff --name-only 3774cc4..HEAD`
 Expected: no path under `native-engine/`, and none of `src/main/remotePage.ts`, `src/main/remotePage.test.ts`, `src/renderer/src/components/DiscoverPanel.tsx`, `src/shared/buildRifff.ts`, `src/shared/buildEngineProject.ts`. If any appears, something went wrong — stop and report it.
 
 - [ ] **Step 5: Report what cannot be verified here**
