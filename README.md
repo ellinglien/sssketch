@@ -60,12 +60,14 @@ Plugins are the one thing no export carries. Stem and mix audio include whatever
 
 ## Installing
 
-Grab the latest `.dmg` for your Mac from the [Releases page](../../releases/latest):
+Latest version: **1.3.0**
 
-- **sssketch-X.Y.Z.dmg** — Apple Silicon (M1/M2/M3/M4)
-- **sssketch-X.Y.Z-x64.dmg** — Intel
+- [**sssketch-1.3.0.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.3.0/sssketch-1.3.0.dmg) — Apple Silicon (M1/M2/M3/M4)
+- [**sssketch-1.3.0-x64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.3.0/sssketch-1.3.0-x64.dmg) — Intel
 
 Not sure which you have? Apple menu → About This Mac — it lists the chip.
+
+Older versions, and the notes for each, are on the [Releases page](../../releases).
 
 Drag `sssketch.app` from the `.dmg` into Applications to install. The app is signed and
 notarized, so Gatekeeper should open it normally after you approve opening an app downloaded from the internet.
