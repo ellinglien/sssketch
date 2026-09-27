@@ -55,6 +55,22 @@ export interface RemoteState {
   rolled: number
   /** Flashed once under the counters as `kept · misty kestrel`. */
   lastKeptName: string | null
+  /** How many bars long the loop the phone can fetch is, or 0 when the Mac
+   * does not know yet -- nothing has resolved, so there is no length to
+   * report.
+   *
+   * It is the SAME number the renderer hands the engine as
+   * EngineProject.loopLengthBars (the longest resolved slot's bar length),
+   * so the phone's bar grid and the engine's loop boundary are one grid by
+   * construction rather than two derivations that happen to agree.
+   *
+   * The phone needs it for exactly one thing: turning "swap every 4 bars"
+   * into seconds. It divides the decoded buffer's OWN duration by this,
+   * never a bpm -- the buffer is the ground truth for what is sounding, and
+   * a bpm on the wire would be a second copy of the same fact, free to
+   * disagree with it. A count of bars is not sensitive: it identifies no
+   * file, names no jam and cannot be turned back into a path. */
+  loopBars: number
   slots: RemoteSlotView[]
 }
 
@@ -77,6 +93,13 @@ export interface RemoteStateMeta {
   kept: number
   rolled: number
   lastKeptName: string | null
+  /** The longest resolved slot's bar length -- the same expression
+   * DiscoverPanel already feeds assembleDiscoverRifff's barLengthOverride
+   * and the radio clock, read off resolvedBarLengthsRef for the same
+   * reason (the ref is current; its reactive twin can be a render behind).
+   * 0, or anything that is not a whole positive number of bars, means "not
+   * known" and is normalized to 0 below. */
+  loopBars: number
 }
 
 /** The whole privacy boundary of Part 2, in one pure function: whatever
@@ -103,6 +126,11 @@ export function remoteStateFromSlots(
     kept: meta.kept,
     rolled: meta.rolled,
     lastKeptName: meta.lastKeptName,
+    // Normalized HERE, once, rather than on the page: the phone reads 0 as
+    // "hand over at the end of the loop", which is what it did before the
+    // grid existed, so an unknown or nonsensical length can only ever
+    // produce no grid -- never a wrong one.
+    loopBars: Number.isInteger(meta.loopBars) && meta.loopBars > 0 ? meta.loopBars : 0,
     slots: slots.map((slot) => ({
       id: slot.id,
       kindLabel: slotKindsLabel(slot.kinds),

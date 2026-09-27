@@ -91,6 +91,7 @@ async function start(): Promise<{ port: number; pairingCode: string }> {
       kept: 0,
       rolled: 0,
       lastKeptName: null,
+      loopBars: 0,
       slots: [],
       loopId: null
     }),
@@ -262,6 +263,7 @@ describe('switching address', () => {
         kept: 0,
         rolled: 0,
         lastKeptName: null,
+        loopBars: 0,
         slots: [],
         loopId: null
       }),

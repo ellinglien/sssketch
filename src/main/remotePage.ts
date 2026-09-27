@@ -410,6 +410,13 @@ button.act:active { background: #161616; }
 button.act .h { display: block; margin-top: 4px; font-size: 9px; color: #6a6a6a; }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 0; }
 .chips.trait { margin-bottom: 8px; }
+/* The handover grid, under the transport. Four chips across in ONE row
+ * rather than the kind picker's wrapping 92px minimum -- these labels are
+ * four characters and a second row of them here would push the foot off a
+ * short screen. button.chip's own min-height still holds the tap target at
+ * 42px, which is the number that actually matters to a thumb. */
+.swapgrid { margin-top: 12px; }
+.chips.grid button.chip { flex: 1 1 0; min-width: 0; }
 /* Smaller type and tighter padding, but min-height holds the TAP target at
  * 42px whatever the type does. A chip that looks small is fine; a chip a
  * thumb misses is a bug. */
@@ -491,6 +498,18 @@ input {
         <button class="big keep" id="keep"><span class="fill" id="keep-fill"></span><span class="keep-label">keep</span><span class="hint">hold</span></button>
         <button class="big" id="roll-all">roll all</button>
       </div>
+      <!-- Where a new mix is allowed to take over. UNDER the transport, not
+           over it: the three big buttons keep the position the thumb already
+           knows, nothing above this moves when it appears, and a chip row of
+           10px type is plainly subordinate to three 52px buttons rather than
+           reading as a fourth one. It is a preference set once and then left
+           alone, so it does not want the best thumb space on the page -- and
+           it lives inside #loop so it comes and goes with the loop it
+           describes: an empty discover has no handover to place. -->
+      <div class="swapgrid">
+        <div class="eyebrow">swap every</div>
+        <div class="chips grid" id="chips-grid"></div>
+      </div>
     </div>
     <div class="eyebrow foot" id="mac"></div>
 
@@ -558,6 +577,43 @@ input {
   var token = null
   try { token = localStorage.getItem('sssketch-remote-token') } catch (e) { token = null }
 
+  // WHERE A NEW MIX IS ALLOWED TO TAKE OVER, as a number of bars -- 0
+  // meaning the end of the loop, which is what this page did before the
+  // grid existed and is still the default.
+  //
+  // "instead of it playing only at the end of the loop, could we set it to
+  // update every 4 bars, 8 bars, etc? a switch and setting to do that? so
+  // it's seamless but can update a bit sooner" -- Elling, 2026-09-27, after
+  // hearing the end-of-loop handover.
+  var SWAP_GRIDS = [
+    { g: 0, l: 'loop end' },
+    { g: 8, l: '8 bars' },
+    { g: 4, l: '4 bars' },
+    { g: 2, l: '2 bars' }
+  ]
+  var SWAP_GRID_KEY = 'sssketch-remote-swap-grid'
+
+  // THE SETTING LIVES ON THE PHONE. It is a preference about how a handover
+  // should feel in this room on this device, not a fact about the project:
+  // it needs no route of its own, it cannot drift out of step with the mac
+  // because the mac never hears about it, and it survives a reload.
+  //
+  // Both storage calls are guarded and both failures land in the same place.
+  // Private browsing throws outright, blocked site data throws on the read,
+  // and a first visit simply has nothing there -- all three leave swapGrid
+  // at 0, which is the behaviour that shipped before this existed. A phone
+  // remote that showed a blank screen because site data is off would be a
+  // bad trade for a preference. The saved value is matched against the
+  // options rather than parsed, so nothing but one of these four can ever
+  // come back out.
+  var swapGrid = 0
+  try {
+    var savedGrid = localStorage.getItem(SWAP_GRID_KEY)
+    for (var gi = 0; gi < SWAP_GRIDS.length; gi++) {
+      if (savedGrid === String(SWAP_GRIDS[gi].g)) swapGrid = SWAP_GRIDS[gi].g
+    }
+  } catch (e) { swapGrid = 0 }
+
   var pairEl = document.getElementById('pair')
   var appEl = document.getElementById('app')
   var rowsEl = document.getElementById('rows')
@@ -592,6 +648,12 @@ input {
   // loadedLoopId, not currentLoopId, so the picture never runs ahead of the
   // sound.
   var loadedLoopId = null
+  // How many bars long the buffer you are HEARING is, as the mac counted
+  // them (RemoteState.loopBars -- the same number it hands the engine as
+  // loopLengthBars). 0 means not known, which swapPeriod reads as "the end
+  // of the loop" and never as a bad grid. It moves with audioBuffer and
+  // only where audioBuffer moves.
+  var loadedLoopBars = 0
   var currentLoopId = null
   var wantPlaying = false
   var fetching = false
@@ -661,6 +723,55 @@ input {
     lineEl.hidden = false
   }
 
+  // How many bars long the loop with THIS id is. The mac pushes the length
+  // alongside the loop id in one snapshot (see render), so the bars belong
+  // to that loop and not to whatever happens to be playing while it
+  // downloads. A buffer the newest poll does not name gets 0 -- unknown, so
+  // the whole loop -- rather than a length borrowed from a different mix.
+  function barsForLoop(id) {
+    return polledLoopId === id ? polledLoopBars : 0
+  }
+
+  // HOW OFTEN THE PLAYING LOOP OFFERS A HANDOVER, in seconds.
+  //
+  // Seconds per bar is the buffer's OWN duration divided by the bar count
+  // the mac counted for it. Derived from the buffer rather than from a
+  // tempo on purpose: the buffer is the ground truth for what is sounding,
+  // and a tempo on the wire would be a second copy of the same fact, free
+  // to disagree with it.
+  //
+  // TWO EDGES, both settled here rather than left to the arithmetic:
+  //
+  // A GRID LONGER THAN THE LOOP -- every 8 bars over a 4-bar loop. Taken
+  // literally that means waiting two whole cycles for a handover, which is
+  // worse than the default this setting is supposed to improve on. The grid
+  // is capped at the loop, so the longest wait it can ever produce is the
+  // wait it started with.
+  //
+  // A GRID THAT DOES NOT DIVIDE THE LOOP -- every 4 bars of a 6-bar loop.
+  // Taken literally the boundaries land at bar 4, then bar 2 of the next
+  // cycle, then bar 0, drifting across the phrase and never repeating; two
+  // handovers in a row would be different musical events, and the second
+  // one would arrive in the middle of a bar the ear is counting as a
+  // pickup. So the grid steps DOWN to the largest number of bars that
+  // divides the loop evenly: 4 over a 6-bar loop becomes 3, 8 over a 12-bar
+  // loop becomes 6, 4 over an 8-bar loop stays 4. Every boundary is then
+  // the same place in the loop on every cycle and the downbeats stay where
+  // they were. It can never step below 1, which divides everything.
+  //
+  // Anything the mac has not given a whole positive bar count for falls
+  // back to the whole loop -- the behaviour with no grid at all.
+  function swapPeriod() {
+    var dur = audioBuffer.duration
+    if (swapGrid === 0) return dur
+    var bars = loadedLoopBars
+    if (!(bars > 0) || bars !== Math.floor(bars)) return dur
+    var step = swapGrid
+    if (step > bars) step = bars
+    while (step > 1 && bars % step !== 0) step = step - 1
+    return (dur * step) / bars
+  }
+
   // A freshly decoded loop, and the ONE place that decides when it becomes
   // the loop you hear.
   function takeLoop(buf, id) {
@@ -674,24 +785,28 @@ input {
       cancelPendingSwap()
       audioBuffer = buf
       loadedLoopId = id
+      loadedLoopBars = barsForLoop(id)
       adoptPolledSlots()
       if (wantPlaying) startSource()
       return
     }
-    // SOMETHING IS SOUNDING: hand over at the end of it. The playing source
-    // started at startedAt on the audio clock and has looped seamlessly ever
-    // since, so its loop boundaries are startedAt + k * duration and the
-    // next one is one ceil away. Scheduling both ends against that instant
-    // is what makes this sample-accurate rather than "soon after this
-    // callback ran".
-    var dur = audioBuffer.duration
+    // SOMETHING IS SOUNDING: hand over on the next boundary of the grid. The
+    // playing source started at startedAt on the audio clock and has looped
+    // seamlessly ever since, so the loop's own boundaries are startedAt + k
+    // * duration -- and an N-bar grid's are the very same arithmetic with a
+    // shorter period (see swapPeriod, which returns the whole duration on
+    // the default setting, so this IS still the end of the loop unless a
+    // chip says otherwise). Scheduling both ends against that one instant is
+    // what makes this sample-accurate rather than "soon after this callback
+    // ran".
+    var period = swapPeriod()
     var now = audioCtx.currentTime
-    var at = startedAt + Math.ceil((now - startedAt) / dur) * dur
-    // Too close to schedule honestly -- take the loop after it instead. One
-    // more pass of the old mix is the price, and nobody can hear a swap that
-    // did not happen; a clamped start, cutting the loop mid-bar, is exactly
-    // what they would hear.
-    if (at - now < SWAP_LEAD) at = at + dur
+    var at = startedAt + Math.ceil((now - startedAt) / period) * period
+    // Too close to schedule honestly -- take the boundary after it instead.
+    // One more step of the old mix is the price, and nobody can hear a swap
+    // that did not happen; a clamped start, cutting the loop mid-bar, is
+    // exactly what they would hear.
+    if (at - now < SWAP_LEAD) at = at + period
     if (pendingSwap) {
       // A THIRD loop arriving before the second one has started. Replacing
       // it is clean only at the same instant, because the playing source's
@@ -713,7 +828,7 @@ input {
     // The old source ending IS the boundary, reported by the audio system
     // instead of guessed at by a second clock that could drift from it.
     srcNode.onended = commitSwap
-    pendingSwap = { src: next, buffer: buf, id: id, at: at }
+    pendingSwap = { src: next, buffer: buf, id: id, bars: barsForLoop(id), at: at }
   }
 
   // The handover as the rest of the page sees it, a few milliseconds after
@@ -733,6 +848,16 @@ input {
     audioBuffer = swap.buffer
     startedAt = swap.at
     loadedLoopId = swap.id
+    loadedLoopBars = swap.bars
+    // THE PLAYHEAD RESTARTS HERE, and on a mid-loop handover that is the
+    // honest picture rather than a glitch. The incoming buffer begins at its
+    // OWN bar 0 -- there is no phase in it to match the outgoing loop to,
+    // and matching one would mean starting the new mix part-way in, which is
+    // not what a new mix means. So the line jumps back to the left at the
+    // same instant the sound does and the rows change with it: one event,
+    // drawn once. It is a step at a boundary, never a drift backwards, and
+    // tick's own negative-remainder wrap still covers a browser that reports
+    // the end exactly on the instant.
     adoptPolledSlots()
   }
 
@@ -947,6 +1072,44 @@ input {
     flash('adding')
   })
 
+  // --- the handover grid -------------------------------------------------
+  // Four chips, one lit, in the page's existing chip idiom: inversion marks
+  // the chosen one, exactly as it marks a chosen kind, and no colour is
+  // spent -- colour on this page belongs to stems and the playhead only.
+  //
+  // CHANGING IT WHILE PLAYING TOUCHES NOTHING THAT IS ALREADY SCHEDULED. A
+  // handover in flight has both of its ends committed on the audio clock --
+  // the incoming source's start(at) and the playing source's stop(at) -- and
+  // moving a stop that may already be inside the block the audio thread is
+  // rendering has no honest answer. That is the same reason takeLoop drops a
+  // buffer whose boundary has moved rather than rescheduling one. So a
+  // pending handover keeps the boundary it was given and the new grid
+  // applies from the next one: tapping a chip cancels nothing, schedules
+  // nothing and cannot make or unmake a sound. At worst one more handover
+  // lands on the old grid, seconds before the new setting takes over.
+  var gridChipsEl = document.getElementById('chips-grid')
+  var gridChipEls = []
+
+  function paintGridChips() {
+    for (var i = 0; i < SWAP_GRIDS.length; i++) {
+      gridChipEls[i].className = SWAP_GRIDS[i].g === swapGrid ? 'chip on' : 'chip'
+    }
+  }
+
+  SWAP_GRIDS.forEach(function (option) {
+    var chip = document.createElement('button')
+    chip.className = 'chip'
+    chip.textContent = option.l
+    chip.addEventListener('click', function () {
+      swapGrid = option.g
+      try { localStorage.setItem(SWAP_GRID_KEY, String(option.g)) } catch (e) {}
+      paintGridChips()
+    })
+    gridChipEls.push(chip)
+    gridChipsEl.appendChild(chip)
+  })
+  paintGridChips()
+
   // --- the rows ----------------------------------------------------------
   // Removing has no undo on the phone (undo stayed on the mac on purpose),
   // so it takes two taps: the first arms this row, the second does it. The
@@ -960,6 +1123,9 @@ input {
   // are stored and used together.
   var polledSlots = []
   var polledLoopId = null
+  // The loop length that arrived with polledLoopId, in bars. Part of the
+  // same snapshot for the same reason the slots are: it describes THAT loop.
+  var polledLoopBars = 0
 
   // The rows catch up with the sound; they never run ahead of it.
   //
@@ -1347,6 +1513,7 @@ input {
       lastSlots = []
       polledSlots = []
       polledLoopId = null
+      polledLoopBars = 0
       disarmRemove()
       renderRows()
       emptyEl.hidden = true
@@ -1357,6 +1524,7 @@ input {
       macEl.textContent = ''
       currentLoopId = null
       loadedLoopId = null
+      loadedLoopBars = 0
       audioBuffer = null
       // Unconditionally, and BEFORE the wantPlaying check: stopSource is
       // the only thing that undoes a scheduled swap completely -- cancelling
@@ -1377,6 +1545,11 @@ input {
     // draw when the sound catches up with it.
     polledSlots = state.slots
     polledLoopId = state.loopId
+    // Guarded rather than trusted: a length the mac does not know is 0 there
+    // and 0 here, and 0 means the whole loop. undefined fails this test too,
+    // so a page served by an older mac degrades to the end-of-loop handover
+    // instead of to arithmetic on nothing.
+    polledLoopBars = state.loopBars > 0 ? state.loopBars : 0
     if (wantPlaying && currentLoopId !== loadedLoopId) loadLoop()
 
     // Nothing to roll, play or keep until there is a slot -- and the add

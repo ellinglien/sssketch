@@ -1517,6 +1517,20 @@ export function DiscoverPanel({
           .catch(() => {})
       }
     }
+    // The loop's length in bars, for the phone's handover grid (2026-09-27:
+    // "could we set it to update every 4 bars, 8 bars"). This is the SAME
+    // expression syncPreviewToEngine uses for the engine's own
+    // loopLengthBars and the radio clock uses for its interval, read off
+    // resolvedBarLengthsRef rather than the reactive resolvedBarLengths for
+    // the reason that ref's own doc comment gives -- so the phone's bar grid
+    // and the loop the engine is actually looping are the same grid by
+    // construction. This effect already re-runs whenever a slot resolves
+    // (buildSlotSnapshots depends on the reactive twin), so the ref read is
+    // current every time it matters.
+    const loopBars =
+      resolvedBarLengthsRef.current.size > 0
+        ? Math.max(...resolvedBarLengthsRef.current.values())
+        : 0
     void window.rifffApi.setRemoteState(
       remoteStateFromSlots(
         snapshots,
@@ -1525,7 +1539,8 @@ export function DiscoverPanel({
           playing,
           kept: keptCount,
           rolled: rolledCount,
-          lastKeptName
+          lastKeptName,
+          loopBars
         },
         peaksBySlotId
       )
@@ -1543,6 +1558,7 @@ export function DiscoverPanel({
         kept: 0,
         rolled: 0,
         lastKeptName: null,
+        loopBars: 0,
         slots: []
       })
       radioClockRef.current = null

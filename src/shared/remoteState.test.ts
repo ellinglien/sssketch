@@ -33,7 +33,8 @@ describe('remoteStateFromSlots', () => {
       playing: false,
       kept: 3,
       rolled: 11,
-      lastKeptName: null
+      lastKeptName: null,
+      loopBars: 8
     })
     expect(state.slots).toEqual([
       {
@@ -54,7 +55,8 @@ describe('remoteStateFromSlots', () => {
       playing: false,
       kept: 0,
       rolled: 0,
-      lastKeptName: null
+      lastKeptName: null,
+      loopBars: 8
     })
     expect(state.slots[0].muted).toBe(true)
   })
@@ -65,7 +67,8 @@ describe('remoteStateFromSlots', () => {
       playing: true,
       kept: 0,
       rolled: 0,
-      lastKeptName: null
+      lastKeptName: null,
+      loopBars: 8
     })
     expect(JSON.stringify(state)).not.toContain('/Users/')
     expect(JSON.stringify(state)).not.toContain('abc123')
@@ -77,7 +80,8 @@ describe('remoteStateFromSlots', () => {
       playing: false,
       kept: 0,
       rolled: 0,
-      lastKeptName: null
+      lastKeptName: null,
+      loopBars: 8
     })
     expect(state.slots).toEqual([
       {
@@ -98,7 +102,8 @@ describe('remoteStateFromSlots', () => {
       playing: false,
       kept: 0,
       rolled: 0,
-      lastKeptName: null
+      lastKeptName: null,
+      loopBars: 8
     })
     expect(state.slots[0].kindLabel).toContain('drummy')
     expect(state.slots[0].kindLabel).toContain('chonky')
@@ -107,7 +112,7 @@ describe('remoteStateFromSlots', () => {
   it('carries quantised peaks for a slot the mac has already analysed', () => {
     const state = remoteStateFromSlots(
       [slot()],
-      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null },
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null, loopBars: 8 },
       new Map([['s1', [0, 0.5, 1, 0.25]]])
     )
     expect(state.slots[0].peaks).toHaveLength(64)
@@ -118,7 +123,7 @@ describe('remoteStateFromSlots', () => {
   it('reads a slot with no analysis yet as no waveform, not an empty one', () => {
     const state = remoteStateFromSlots(
       [slot()],
-      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null },
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null, loopBars: 8 },
       new Map()
     )
     expect(state.slots[0].peaks).toBeNull()
@@ -127,7 +132,7 @@ describe('remoteStateFromSlots', () => {
   it('is keyed by slot id, so a path cannot enter through the new door either', () => {
     const state = remoteStateFromSlots(
       [slot()],
-      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null },
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null, loopBars: 8 },
       new Map([['s1', [0.4, 0.9]]])
     )
     expect(JSON.stringify(state)).not.toContain('/Users/')
@@ -147,7 +152,7 @@ describe('remoteStateFromSlots', () => {
     // own, so the row can tell which third of the tap cycle it is in.
     const state = remoteStateFromSlots(
       [slot({ id: 'a' }), slot({ id: 'b', audible: false }), slot({ id: 'c', audible: false })],
-      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null }
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null, loopBars: 8 }
     )
     expect(state.slots.map((s) => s.soloed)).toEqual([true, false, false])
     expect(state.slots.map((s) => s.muted)).toEqual([false, true, true])
@@ -156,7 +161,7 @@ describe('remoteStateFromSlots', () => {
   it('reads nothing as soloed while more than one slot is audible', () => {
     const state = remoteStateFromSlots(
       [slot({ id: 'a' }), slot({ id: 'b' }), slot({ id: 'c', audible: false })],
-      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null }
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null, loopBars: 8 }
     )
     expect(state.slots.map((s) => s.soloed)).toEqual([false, false, false])
   })
@@ -164,7 +169,7 @@ describe('remoteStateFromSlots', () => {
   it('never reads a muted slot as soloed, even when the whole mix is out', () => {
     const state = remoteStateFromSlots(
       [slot({ id: 'a', audible: false }), slot({ id: 'b', audible: false })],
-      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null }
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null, loopBars: 8 }
     )
     expect(state.slots.map((s) => s.soloed)).toEqual([false, false])
   })
@@ -175,7 +180,8 @@ describe('remoteStateFromSlots', () => {
       playing: true,
       kept: 3,
       rolled: 11,
-      lastKeptName: 'misty kestrel'
+      lastKeptName: 'misty kestrel',
+      loopBars: 8
     })
     expect(state).toEqual({
       discoverOpen: false,
@@ -183,8 +189,65 @@ describe('remoteStateFromSlots', () => {
       kept: 3,
       rolled: 11,
       lastKeptName: 'misty kestrel',
+      loopBars: 8,
       slots: []
     })
+  })
+})
+
+describe('remoteStateFromSlots loop length', () => {
+  it('carries how many bars long the loop is, so the phone can turn bars into seconds', () => {
+    // Added 2026-09-27 for the phone's handover grid: "instead of it
+    // playing only at the end of the loop, could we set it to update every
+    // 4 bars, 8 bars, etc". The page divides the decoded buffer's own
+    // duration by this to get seconds per bar. It is the SAME number the
+    // renderer sends the engine as loopLengthBars, so the phone's grid and
+    // the engine's loop are one grid rather than two that agree.
+    const state = remoteStateFromSlots([slot()], {
+      discoverOpen: true,
+      playing: false,
+      kept: 0,
+      rolled: 0,
+      lastKeptName: null,
+      loopBars: 6
+    })
+    expect(state.loopBars).toBe(6)
+  })
+
+  it('reads anything that is not a whole number of bars as not knowing', () => {
+    // 0 is what the Mac has before a single slot has resolved, and it is
+    // also the only honest answer to a fractional or impossible count. The
+    // page reads 0 as "swap at the end of the loop" -- the behaviour that
+    // shipped before the grid existed -- so an unknown length can never
+    // produce a wrong grid, only no grid.
+    for (const bars of [0, -4, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const state = remoteStateFromSlots([slot()], {
+        discoverOpen: true,
+        playing: false,
+        kept: 0,
+        rolled: 0,
+        lastKeptName: null,
+        loopBars: bars
+      })
+      expect(state.loopBars).toBe(0)
+    }
+  })
+
+  it('is a bar count and carries nothing else with it', () => {
+    // The whole privacy argument for this field, asserted rather than
+    // remembered: a count of bars identifies no file, names no jam and
+    // cannot be turned back into a path.
+    const state = remoteStateFromSlots([slot()], {
+      discoverOpen: true,
+      playing: false,
+      kept: 0,
+      rolled: 0,
+      lastKeptName: null,
+      loopBars: 8
+    })
+    expect(typeof state.loopBars).toBe('number')
+    expect(JSON.stringify(state)).not.toContain('/Users/')
+    expect(JSON.stringify(state)).not.toContain('abc123')
   })
 })
 
@@ -196,7 +259,8 @@ describe('RemoteStateResponse', () => {
         playing: false,
         kept: 0,
         rolled: 0,
-        lastKeptName: null
+        lastKeptName: null,
+        loopBars: 8
       }),
       loopId: '0123456789abcdef'
     }
@@ -212,7 +276,8 @@ describe('RemoteStateResponse', () => {
         playing: false,
         kept: 0,
         rolled: 0,
-        lastKeptName: null
+        lastKeptName: null,
+        loopBars: 8
       }),
       loopId: null
     }

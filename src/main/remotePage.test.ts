@@ -146,7 +146,11 @@ describe('remotePage copy', () => {
       'similar',
       'adjacent',
       'random',
-      'duplicate'
+      'duplicate',
+      'loop end',
+      '8 bars',
+      '4 bars',
+      '2 bars'
     ]
     for (const label of [...buttonLabels, ...runtime]) {
       expect(label.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(2)
@@ -320,7 +324,11 @@ describe('remotePage seamless loop swap', () => {
     // duration. Both ends are scheduled against that one instant on the
     // audio clock, which is what makes the handover sample-accurate rather
     // than "soon after this callback ran".
-    expect(SCRIPT).toContain('var at = startedAt + Math.ceil((now - startedAt) / dur) * dur')
+    // The period is `period` rather than `dur` since the handover grid
+    // landed (2026-09-27) -- same arithmetic, a shorter step. swapPeriod()
+    // returns the whole loop's duration on the default setting, so this IS
+    // still the end-of-loop handover unless a chip says otherwise.
+    expect(SCRIPT).toContain('var at = startedAt + Math.ceil((now - startedAt) / period) * period')
     expect(SCRIPT).toContain('next.start(at)')
     expect(SCRIPT).toContain('srcNode.stop(at)')
   })
@@ -330,7 +338,7 @@ describe('remotePage seamless loop swap', () => {
     // is the mid-loop cut this exists to avoid. 80ms clears the hardware
     // buffer ios renders ahead by, plus a frame or two of main-thread jitter.
     expect(SCRIPT).toContain('SWAP_LEAD = 0.08')
-    expect(SCRIPT).toContain('if (at - now < SWAP_LEAD) at = at + dur')
+    expect(SCRIPT).toContain('if (at - now < SWAP_LEAD) at = at + period')
   })
 
   it('swaps at once when nothing is sounding, because there is nothing to cut', () => {
@@ -379,6 +387,117 @@ describe('remotePage seamless loop swap', () => {
     // loop that will never arrive is worse than showing the mac's picture
     // early.
     expect(SCRIPT).toContain('return fetching || pendingSwap !== null')
+  })
+})
+
+describe('remotePage swap grid', () => {
+  it('offers loop end and three bar counts, and nothing else', () => {
+    // "instead of it playing only at the end of the loop, could we set it
+    // to update every 4 bars, 8 bars, etc? a switch and setting to do that?
+    // so it's seamless but can update a bit sooner" -- Elling, 2026-09-27,
+    // after hearing the end-of-loop handover.
+    expect(SCRIPT).toContain("{ g: 0, l: 'loop end' }")
+    expect(SCRIPT).toContain("{ g: 8, l: '8 bars' }")
+    expect(SCRIPT).toContain("{ g: 4, l: '4 bars' }")
+    expect(SCRIPT).toContain("{ g: 2, l: '2 bars' }")
+    const options = SCRIPT.match(/\{ g: \d+, l: '/g) ?? []
+    expect(options).toHaveLength(4)
+  })
+
+  it('starts on loop end, so nobody\u2019s phone changes until they touch a chip', () => {
+    expect(SCRIPT).toContain('var swapGrid = 0')
+    expect(SCRIPT).toContain('if (swapGrid === 0) return dur')
+  })
+
+  it('keeps the setting on the phone, with no route and no mac involved', () => {
+    // A preference about how a handover should FEEL on this device. It
+    // cannot drift out of step with the mac because the mac never hears
+    // about it, and it survives a reload.
+    expect(SCRIPT).toContain("SWAP_GRID_KEY = 'sssketch-remote-swap-grid'")
+    expect(SCRIPT).toContain('localStorage.getItem(SWAP_GRID_KEY)')
+    expect(SCRIPT).toContain('localStorage.setItem(SWAP_GRID_KEY, String(option.g))')
+    // No new api() call went with it.
+    const posts = SCRIPT.match(/api\('\/api\/[a-z-]+'/g) ?? []
+    expect(posts.sort()).toEqual([
+      "api('/api/add-slot'",
+      "api('/api/keep'",
+      "api('/api/remove-slot'",
+      "api('/api/roll'",
+      "api('/api/slot-action'",
+      "api('/api/slot-action'"
+    ])
+  })
+
+  it('never lets storage being off take the page down with it', () => {
+    // Private browsing throws on both calls and blocked site data throws on
+    // read; a first visit simply has nothing. All three land on the default.
+    const reads = SCRIPT.match(/localStorage\.(get|set)Item/g) ?? []
+    const guards = SCRIPT.match(/try \{[^}]*localStorage/g) ?? []
+    expect(guards).toHaveLength(reads.length)
+  })
+
+  it('derives seconds per bar from the buffer, never from a bpm', () => {
+    // The buffer is the ground truth for what is sounding. A bpm on the
+    // wire would be a second copy of the same fact, free to disagree.
+    expect(SCRIPT).toContain('var dur = audioBuffer.duration')
+    expect(SCRIPT).toContain('return (dur * step) / bars')
+    expect(SCRIPT).not.toContain('bpm')
+  })
+
+  it('never makes the wait longer than the loop it is supposed to shorten', () => {
+    // Every 8 bars over a 4-bar loop would mean waiting two whole cycles --
+    // worse than the default it replaced.
+    expect(SCRIPT).toContain('if (step > bars) step = bars')
+  })
+
+  it('steps a grid that does not divide the loop down to one that does', () => {
+    // 4 bars over a 6-bar loop would land at bar 4, then bar 2 of the next
+    // cycle, then bar 0 -- drifting across the phrase and never repeating.
+    // Stepping down to 3 keeps every boundary at the same place in the loop
+    // every cycle, so the downbeats stay where they were.
+    expect(SCRIPT).toContain('while (step > 1 && bars % step !== 0) step = step - 1')
+  })
+
+  it('falls back to the whole loop when the mac has not said how long it is', () => {
+    expect(SCRIPT).toContain('if (!(bars > 0) || bars !== Math.floor(bars)) return dur')
+  })
+
+  it('moves the bar count with the buffer it describes, not with the poll', () => {
+    // loadedLoopBars belongs to the buffer that is AUDIBLE, the same way
+    // loadedLoopId does, so a swap scheduled against the playing loop uses
+    // the playing loop's own grid.
+    expect(SCRIPT).toContain('var loadedLoopBars = 0')
+    expect(SCRIPT).toContain('loadedLoopBars = swap.bars')
+    expect(SCRIPT).toContain('function barsForLoop(id)')
+    expect(SCRIPT).toContain('return polledLoopId === id ? polledLoopBars : 0')
+  })
+
+  it('leaves a handover that is already scheduled on the boundary it was given', () => {
+    // Both of its ends are committed on the audio clock, and moving a stop
+    // that may be inside the render quantum has no honest answer -- the same
+    // reason takeLoop drops a buffer whose boundary has moved. Tapping a
+    // chip therefore schedules nothing, cancels nothing and makes no sound.
+    const handler = (/swapGrid = option\.g[\s\S]{0,200}/.exec(SCRIPT) ?? [''])[0]
+    expect(handler).not.toContain('cancelPendingSwap')
+    expect(handler).not.toContain('takeLoop')
+    expect(handler).not.toContain('startSource')
+    expect(handler).toContain('paintGridChips()')
+  })
+
+  it('sits under the transport, in the block that appears with the loop', () => {
+    // Below the three big buttons rather than above them: they keep the
+    // position the thumb already knows, and this is set once, not used every
+    // few seconds. Inside #loop, so it comes and goes with the loop it
+    // describes.
+    const loopBlock = (/<div id="loop" hidden>[\s\S]*?<\/div>\s*<div class="eyebrow foot"/.exec(
+      REMOTE_PAGE_HTML
+    ) ?? [''])[0]
+    expect(loopBlock).toContain('id="chips-grid"')
+    expect(loopBlock.indexOf('id="roll-all"')).toBeLessThan(loopBlock.indexOf('id="chips-grid"'))
+    expect(REMOTE_PAGE_HTML).toContain('swap every')
+    // Four across in one row, and still a 42px tap target.
+    expect(REMOTE_PAGE_HTML).toContain('.chips.grid button.chip { flex: 1 1 0; min-width: 0; }')
+    expect(REMOTE_PAGE_HTML).toContain('min-height: 42px')
   })
 })
 
