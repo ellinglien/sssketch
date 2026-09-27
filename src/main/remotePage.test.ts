@@ -150,6 +150,9 @@ describe('remotePage copy', () => {
       'random',
       'duplicate',
       'going',
+      'cut',
+      'short',
+      'long',
       'own loop',
       'loop end',
       '8 bars',
@@ -606,7 +609,7 @@ describe('remotePage per-stem handover', () => {
     expect(SCRIPT).toContain('var at = origin + Math.ceil((now - origin) / period) * period')
     expect(SCRIPT).toContain('if (at - now < SWAP_LEAD) at = at + period')
     expect(SCRIPT).toContain('SWAP_LEAD = 0.08')
-    expect(SCRIPT).toContain('v.src.stop(at)')
+    expect(SCRIPT).toContain('v.src.stop(at + fade)')
   })
 
   it('moves ONE row, and leaves the other eleven sounding', () => {
@@ -965,6 +968,76 @@ describe('remotePage stem budget and failures', () => {
   it('moves a held row at the boundary, not up to a poll after it', () => {
     expect(SCRIPT).toContain('lastSlots = mergePolledSlots(polledSlots)')
     expect(SCRIPT).toContain('lastSlots = mergePolledSlots(state.slots)')
+  })
+})
+
+describe('remotePage crossfade', () => {
+  it('offers cut, short and long, and nothing else', () => {
+    expect(SCRIPT).toContain("{ x: 0, l: 'cut' }")
+    expect(SCRIPT).toContain("{ x: 0.125, l: 'short' }")
+    expect(SCRIPT).toContain("{ x: 0.5, l: 'long' }")
+    const options = SCRIPT.match(/\{ x: [\d.]+, l: '/g) ?? []
+    expect(options).toHaveLength(3)
+  })
+
+  it('measures the fade in bars, so it means the same at any tempo', () => {
+    expect(SCRIPT).toContain('return xfade * (dur / bars)')
+    expect(SCRIPT).not.toContain('bpm')
+  })
+
+  it('is equal power, because a linear crossfade of two stems dips', () => {
+    expect(SCRIPT).toContain('FADE_IN[fi] = Math.sqrt(ft)')
+    expect(SCRIPT).toContain('FADE_OUT[fi] = Math.sqrt(1 - ft)')
+    expect(SCRIPT).toContain('setValueCurveAtTime')
+  })
+
+  it('never lets cut mean a hard step, which pops', () => {
+    expect(SCRIPT).toContain('if (xfade === 0) return 0.005')
+  })
+
+  it('keeps the old source alive until the fade is over', () => {
+    expect(SCRIPT).toContain('v.src.stop(at + fade)')
+  })
+
+  it('keeps every other automation event out of the curve window', () => {
+    // setValueCurveAtTime throws if another event falls inside its own
+    // window, and the curve starts at exactly the boundary -- so a new
+    // voice's baseline gain is set at currentTime, not at the boundary.
+    expect(SCRIPT).toContain('g.gain.setValueAtTime(level, audioCtx.currentTime)')
+  })
+
+  it('does not slow a mute down with it', () => {
+    const mix = (/function setLevel\(v, level\)[\s\S]{0,400}/.exec(SCRIPT) ?? [''])[0]
+    expect(mix).toContain('MUTE_RAMP')
+    expect(mix).not.toContain('xfadeSec')
+  })
+
+  it('keeps the setting on the phone, with no route and no mac involved', () => {
+    expect(SCRIPT).toContain("XFADE_KEY = 'sssketch-remote-xfade'")
+    expect(SCRIPT).toContain('localStorage.getItem(XFADE_KEY)')
+    expect(SCRIPT).toContain('localStorage.setItem(XFADE_KEY, String(option.x))')
+    const posts = SCRIPT.match(/api\('\/api\/[a-z-]+'/g) ?? []
+    expect(posts).not.toContain("api('/api/xfade'")
+  })
+
+  it('never lets storage being off take the page down with it', () => {
+    const reads = SCRIPT.match(/localStorage\.(get|set)Item/g) ?? []
+    const guards = SCRIPT.match(/try \{[^}]*localStorage/g) ?? []
+    expect(guards).toHaveLength(reads.length)
+  })
+
+  it('starts on cut, so nobody’s phone changes until they touch a chip', () => {
+    expect(SCRIPT).toContain('var xfade = 0')
+  })
+
+  it('sits directly under the swap grid, in the same idiom', () => {
+    const loopBlock = (/<div id="loop" hidden>[\s\S]*?<\/div>\s*<div class="eyebrow foot"/.exec(
+      REMOTE_PAGE_HTML
+    ) ?? [''])[0]
+    expect(loopBlock).toContain('id="chips-xfade"')
+    expect(loopBlock.indexOf('id="chips-grid"')).toBeLessThan(loopBlock.indexOf('id="chips-xfade"'))
+    expect(REMOTE_PAGE_HTML).toContain('and take')
+    expect(REMOTE_PAGE_HTML).toContain('.chips.grid button.chip { flex: 1 1 0; min-width: 0; }')
   })
 })
 

@@ -613,6 +613,13 @@ input {
         <div class="eyebrow">swap every</div>
         <div class="chips grid" id="chips-grid"></div>
       </div>
+      <!-- And how the change takes when it gets there. A second row in the
+           same idiom directly under the first, because the two are one
+           question asked twice: when, and how. -->
+      <div class="swapgrid">
+        <div class="eyebrow">and take</div>
+        <div class="chips grid" id="chips-xfade"></div>
+      </div>
     </div>
     <div class="eyebrow foot" id="mac"></div>
 
@@ -706,6 +713,23 @@ input {
   ]
   var SWAP_GRID_KEY = 'sssketch-remote-swap-grid'
 
+  // HOW A HANDOVER TAKES, in bars. Bar-relative and not fixed seconds, so
+  // the control means the same thing at 90 and at 160 -- and seconds per
+  // bar is already derived from the buffers (see swapPeriod), so no new
+  // number goes on the wire for it.
+  //
+  // A crossfade between two whole mixes was a strange object: the same
+  // eleven stems fading out of themselves and back in, three decibels down
+  // in the middle for nothing. Between ONE outgoing stem and ONE incoming
+  // stem, under eleven that never move, it is an ordinary musical control.
+  // That is why it waited for per-stem.
+  var XFADES = [
+    { x: 0, l: 'cut' },
+    { x: 0.125, l: 'short' },
+    { x: 0.5, l: 'long' }
+  ]
+  var XFADE_KEY = 'sssketch-remote-xfade'
+
   // THE SETTING LIVES ON THE PHONE. It is a preference about how a handover
   // should feel in this room on this device, not a fact about the project:
   // it needs no route of its own, it cannot drift out of step with the mac
@@ -726,6 +750,17 @@ input {
       if (savedGrid === String(SWAP_GRIDS[gi].g)) swapGrid = SWAP_GRIDS[gi].g
     }
   } catch (e) { swapGrid = 0 }
+
+  // Same shape, same guards, same reason as the grid above, and the same
+  // default-is-what-shipped rule: cut is today's behaviour, so nobody's
+  // phone changes until they touch a chip.
+  var xfade = 0
+  try {
+    var savedX = localStorage.getItem(XFADE_KEY)
+    for (var xi = 0; xi < XFADES.length; xi++) {
+      if (String(XFADES[xi].x) === savedX) xfade = XFADES[xi].x
+    }
+  } catch (e) { xfade = 0 }
 
   var pairEl = document.getElementById('pair')
   var appEl = document.getElementById('app')
@@ -839,7 +874,13 @@ input {
 
   function makeVoice(stemId, buf, at, level) {
     var g = audioCtx.createGain()
-    g.gain.setValueAtTime(level, at)
+    // Set NOW, not at the boundary. setValueCurveAtTime refuses to run if
+    // any other automation event falls inside the curve's own window, and
+    // the crossfade's curve starts at exactly the boundary -- so an event
+    // there would make every handover throw. Nothing is sounding through
+    // this node until the source starts, so setting its baseline early is
+    // free.
+    g.gain.setValueAtTime(level, audioCtx.currentTime)
     g.connect(audioCtx.destination)
     var src = audioCtx.createBufferSource()
     src.buffer = buf
@@ -994,6 +1035,36 @@ input {
     return swapPeriod()
   }
 
+  // How long a handover takes, in seconds. cut is 5ms -- NOT zero: a hard
+  // gain step on a sounding source pops, the same reason MUTE_RAMP exists.
+  function xfadeSec() {
+    if (xfade === 0) return 0.005
+    var dur = loopDur()
+    var bars = loopBars
+    if (!(dur > 0) || !(bars > 0)) return 0.005
+    return xfade * (dur / bars)
+  }
+
+  // EQUAL POWER, not linear. Two uncorrelated stems crossfaded on straight
+  // lines dip about 3dB in the middle -- inaudible at cut, obvious at long.
+  // setValueCurveAtTime takes an arbitrary shape, so the fade is the same
+  // sqrt curve every other blend in this codebase uses (LoopSewing.cpp,
+  // LoopBoundaryFade.cpp). Built once.
+  var XFADE_POINTS = 64
+  var FADE_IN = new Float32Array(XFADE_POINTS)
+  var FADE_OUT = new Float32Array(XFADE_POINTS)
+  for (var fi = 0; fi < XFADE_POINTS; fi++) {
+    var ft = fi / (XFADE_POINTS - 1)
+    FADE_IN[fi] = Math.sqrt(ft)
+    FADE_OUT[fi] = Math.sqrt(1 - ft)
+  }
+
+  function scaledCurve(shape, level) {
+    var out = new Float32Array(XFADE_POINTS)
+    for (var i = 0; i < XFADE_POINTS; i++) out[i] = shape[i] * level
+    return out
+  }
+
   // ONE ROW CHANGES, on a boundary, and the other eleven are not touched.
   // Both ends are committed on the audio clock against the one instant
   // every voice shares, which is what makes this sample-accurate rather
@@ -1022,8 +1093,15 @@ input {
       if (p.at !== at) return
       cancelPending(slotId)
     }
-    var next = makeVoice(stemId, buf, at, levelFor(slotId))
-    v.src.stop(at)
+    var fade = xfadeSec()
+    var level = levelFor(slotId)
+    var next = makeVoice(stemId, buf, at, 0)
+    next.gain.gain.setValueCurveAtTime(scaledCurve(FADE_IN, level), at, fade)
+    v.gain.gain.cancelScheduledValues(at)
+    v.gain.gain.setValueCurveAtTime(scaledCurve(FADE_OUT, v.gain.gain.value), at, fade)
+    // The OLD source runs until the fade is over, not until the boundary --
+    // otherwise there is nothing left to fade out.
+    v.src.stop(at + fade)
     // The old source ending IS the boundary, reported by the audio system
     // rather than guessed at by a second clock that could drift from it.
     v.src.onended = function () { commitReplace(slotId, at) }
@@ -1471,6 +1549,33 @@ input {
     gridChipsEl.appendChild(chip)
   })
   paintGridChips()
+
+  // --- how a handover takes ----------------------------------------------
+  // Three chips, the same inversion, the same phone-local storage, no route
+  // and no mac involvement. MUTE_RAMP is deliberately NOT governed by this:
+  // a mute you asked for must not take half a bar to arrive.
+  var xfadeChipsEl = document.getElementById('chips-xfade')
+  var xfadeChipEls = []
+
+  function paintXfadeChips() {
+    for (var i = 0; i < XFADES.length; i++) {
+      xfadeChipEls[i].className = XFADES[i].x === xfade ? 'chip on' : 'chip'
+    }
+  }
+
+  XFADES.forEach(function (option) {
+    var chip = document.createElement('button')
+    chip.className = 'chip'
+    chip.textContent = option.l
+    chip.addEventListener('click', function () {
+      xfade = option.x
+      try { localStorage.setItem(XFADE_KEY, String(option.x)) } catch (e) {}
+      paintXfadeChips()
+    })
+    xfadeChipEls.push(chip)
+    xfadeChipsEl.appendChild(chip)
+  })
+  paintXfadeChips()
 
   // --- the rows ----------------------------------------------------------
   // Removing has no undo on the phone (undo stayed on the mac on purpose),
