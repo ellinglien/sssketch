@@ -47,6 +47,17 @@ export default defineConfig(
     }
   },
   {
+    // scripts/merge-mac-update-feeds.mjs is plain, dependency-free
+    // JavaScript on purpose -- it runs under bare `node` in the release
+    // workflow's merge job, on a runner with no npm install (see its own
+    // doc comment). TypeScript's return-type rule has nothing to annotate
+    // in a .js file, so it's off here rather than satisfied with JSDoc.
+    files: ['scripts/*.mjs'],
+    rules: {
+      '@typescript-eslint/explicit-function-return-type': 'off'
+    }
+  },
+  {
     // A bare `node scripts/generate-x64-test-config.js` CommonJS entry
     // point (see scripts/build-x64-test.sh) -- not part of the TS/ESM
     // build, so require() here is correct, not a style slip.

@@ -63,13 +63,35 @@ mac:
   target:
     - dmg
     - zip
-  # arm64 is the historical/default target -- pinning this keeps the arm64
-  # DMG's filename unsuffixed (sssketch-X.Y.Z.dmg, unchanged from every
-  # prior release, no broken download links) while the x64 leg
-  # automatically gets sssketch-X.Y.Z-x64.dmg. Traced directly in
-  # app-builder-lib's expandArtifactNamePattern: the arch suffix is
-  # omitted specifically when the built arch matches this configured
-  # default. See docs/superpowers/specs/2026-08-11-intel-permanent-release-target-design.md.
+  # EVERY mac artifact carries its architecture, with no exceptions -- this
+  # is load-bearing for auto-update, not cosmetic. electron-updater decides
+  # which file a given Mac downloads purely by looking for "arm64"/"x64" in
+  # the file NAME (MacUpdater.filterFilesForArch, then findFile in
+  # providers/Provider.js -- both quoted in the spec below); the update feed
+  # format has no architecture field for it to read instead. Until 2026-09-27
+  # the arm64 build shipped as sssketch-X.Y.Z.dmg / -mac.zip with no arch
+  # anywhere in the name, which left an Apple Silicon Mac picking by array
+  # order out of a feed listing both builds.
+  #
+  # Setting artifactName here (rather than relying on defaultArch below to
+  # suppress one suffix) also makes the suffix unconditional: traced in
+  # app-builder-lib's platformPackager.js, a user-supplied pattern sets
+  # isUserForced, and expandArtifactNamePattern then passes the real arch
+  # through regardless of defaultArch.
+  #
+  # Renames the arm64 artifacts from v1.3.1 onward (sssketch-X.Y.Z-arm64.dmg,
+  # was sssketch-X.Y.Z.dmg) and drops the "-mac" the zips used to carry;
+  # the x64 dmg name is unchanged. Already-published releases keep their own
+  # asset names -- those links still work. See
+  # docs/superpowers/specs/2026-09-27-mac-update-feed-both-arches-design.md.
+  artifactName: ${name}-${version}-${arch}.${ext}
+  # Now only decides the local output DIRECTORY layout (dist/mac for arm64,
+  # dist/mac-x64 for the other leg) -- artifactName above has taken over
+  # naming. Its original purpose was the opposite of the line above: keeping
+  # the arm64 filenames unsuffixed, which is exactly what the auto-update bug
+  # turned out to need undone. See
+  # docs/superpowers/specs/2026-08-11-intel-permanent-release-target-design.md
+  # for the original reasoning.
   defaultArch: arm64
   entitlementsInherit: build/entitlements.mac.plist
   # Paths build/afterPack.js already signs itself (with its own distinct

@@ -291,6 +291,25 @@ jobs:
           npx electron-vite build
           npx electron-builder --mac --publish always ${{ matrix.arch == 'x64' && '--x64' || '--arm64' }}
 
+      # Each leg's electron-builder writes its OWN dist/latest-mac.yml
+      # describing only that leg's two artifacts, and `--publish always`
+      # uploads it to the shared release -- so whichever leg finishes second
+      # silently overwrites the first, and the published feed describes
+      # exactly one architecture. That is not a theory: v1.1.22's published
+      # feed listed only the x64 files, and v1.3.0's listed only the arm64
+      # ones, which left every Intel Mac being offered a build that cannot
+      # run on it. Hand this leg's feed to the merge-update-feed job as a
+      # WORKFLOW artifact (a separate namespace from release assets, so the
+      # two legs cannot collide here the way they do on the release), and it
+      # publishes the one merged feed once both legs are in.
+      - name: Hand this leg's update feed to the merge job
+        uses: actions/upload-artifact@v4
+        with:
+          name: latest-mac-yml-${{ matrix.arch }}
+          path: dist/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 7
+
       # The runner VM is destroyed after the job regardless, but deleting
       # the keychain (and its search-list entry) explicitly is the
       # standard hygiene for a manually-imported signing cert. if: always()
@@ -301,3 +320,88 @@ jobs:
           if [ -n "$SIGNING_KEYCHAIN_PATH" ]; then
             security delete-keychain "$SIGNING_KEYCHAIN_PATH" || true
           fi
+
+  # Both matrix legs have to have succeeded for this to run at all, so a feed
+  # is never assembled out of half a release. If a leg fails, this job is
+  # skipped, the workflow is red, and the release stays a draft holding that
+  # one leg's half-feed -- which is the correct outcome: don't un-draft it.
+  merge-update-feed:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: latest-mac-yml-*
+          path: leg-feeds
+
+      # Pure text work: every entry already carries its own sha512 and size,
+      # so nothing is re-downloaded or re-hashed. scripts/merge-mac-update-
+      # feeds.mjs is dependency-free on purpose -- this job decides whether a
+      # release is correct, and giving it an `npm ci` would add minutes and a
+      # class of install flakiness to exactly the step that must not flake.
+      - name: Merge both legs' feeds into one
+        run: |
+          node scripts/merge-mac-update-feeds.mjs merge \
+            leg-feeds/latest-mac-yml-arm64/latest-mac.yml \
+            leg-feeds/latest-mac-yml-x64/latest-mac.yml \
+            --out merged/latest-mac.yml
+
+      - name: Publish the merged feed over both legs'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "${{ github.ref_name }}" merged/latest-mac.yml --clobber
+
+      # The guard. Deliberately run against the feed as ACTUALLY PUBLISHED,
+      # re-downloaded from the release rather than the local copy, so a
+      # clobber that somehow lost a race to a straggling leg is caught too.
+      # The existing create-release job protects against a MISSING asset
+      # (electron-builder racing two "create release" calls, 2026-08-13);
+      # this is its sibling for an asset that exists and is wrong, which is
+      # what shipped twice. It fails loudly and names the file: a feed that
+      # does not describe both architectures, or that names a file with no
+      # architecture in it, or that points at an asset the release does not
+      # have, stops the release here instead of reaching anyone.
+      - name: Verify the published feed describes both architectures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          gh release view "$TAG" --json assets --jq '.assets[].name' > assets.txt
+          echo "assets on $TAG:"
+          sed 's/^/  - /' assets.txt
+          gh release download "$TAG" --pattern latest-mac.yml --dir published --clobber
+          diff -u merged/latest-mac.yml published/latest-mac.yml
+          node scripts/merge-mac-update-feeds.mjs verify published/latest-mac.yml \
+            --expect-version "${TAG#v}" --assets assets.txt
+
+  # A dead download link on the front page is the same class of quiet failure
+  # as a half-written update feed, and the release run is the only moment that
+  # knows what the real asset names are. Checked by NAME against the release's
+  # own asset list rather than by fetching the URLs: while the release is
+  # still a draft (it is, until it's un-drafted by hand) the public
+  # /releases/download/<tag>/<asset> URL 404s for everyone, so curling here
+  # would fail on a perfectly good link.
+  #
+  # This job failing does NOT mean the build is bad -- the merged feed is the
+  # signal for that, and it's a separate job for exactly this reason. It means
+  # README.md's install section still points at the previous release, or at a
+  # filename this release no longer produces. Fix it on master; it does not
+  # need a retag.
+  verify-readme-links:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the README's download links against this release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          TAG="${{ github.ref_name }}"
+          gh release view "$TAG" --json assets --jq '.assets[].name' > assets.txt
+          node scripts/merge-mac-update-feeds.mjs verify-readme README.md \
+            --expect-tag "$TAG" --expect-version "${TAG#v}" --assets assets.txt
