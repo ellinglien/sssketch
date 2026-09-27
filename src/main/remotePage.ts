@@ -257,13 +257,13 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
  * phone).
  *
  * The two insets are the row grid read off exactly, not estimated. A .row
- * is 84px 1fr 44px with a 10px column-gap, 10px of left padding and a 1px
- * border all round, and .row .stem's own padding is 6px 0 -- no horizontal
- * padding at all -- with the canvas at width:100% inside it. So the middle
- * column starts at 1 + 10 + 84 + 10 = 105px and ends 1 + 44 + 10 = 55px
- * short of the right edge, and that IS where the drawn waveform starts and
- * stops. If any of those five numbers changes, these two must change with
- * it.
+ * is 42px 42px 1fr 44px with a 10px column-gap, 10px of left padding and a
+ * 1px border all round, and the waveform is the third column of the second
+ * line, in a .stem with no horizontal padding at all, with the canvas at
+ * width:100% inside it. So it starts at 1 + 10 + 42 + 10 + 42 + 10 = 115px
+ * and ends 1 + 44 + 10 = 55px short of the right edge, and that IS where
+ * the drawn waveform starts and stops. If any of those numbers changes,
+ * these two must change with it.
  *
  * Keeping the lane as its own element is what lets tick() stay a plain
  * left = progress * 100 + '%': the percentage is of the lane, so there is
@@ -275,7 +275,7 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
  * indicator and not a seek. */
 .lane {
   position: absolute;
-  left: 105px;
+  left: 115px;
   right: 55px;
   top: 0;
   bottom: 0;
@@ -289,12 +289,41 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
   background: #c56164;
   pointer-events: none;
 }
+/* A ROW IS TWO LINES. "reduce or make two rows for where the name is
+ * currently" -- Elling, on the phone, 2026-09-27, asking for s and m of
+ * their own. A name, a waveform and four controls do not fit across 390px
+ * of iphone, so the row splits into what the stem IS and what can be done
+ * to it:
+ *
+ *   drums      kick-loose-07-with-a-long-tail
+ *   s    m     ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~        x
+ *
+ * The first line is identity and runs the whole width of the row -- the
+ * name spans the x's column as well, which is 54px that used to be an
+ * ellipsis on every long stem name. The second line is the controls, with
+ * the waveform lying between the two that change the mix and the one that
+ * takes the row away.
+ *
+ * The four columns are 42, 42, the waveform, 44. 42px is the tap target
+ * every control on this page is held to (see button.chip) and the gaps are
+ * the row's own 10px, so s and m are two full-size targets with a real
+ * gutter between them rather than two halves of one 84px cell.
+ *
+ * WHY x IS AT THE OTHER END. It was sketched as a stack -- x on the first
+ * line, s and m under it -- which puts m a thumb's width below the one
+ * destructive control on the screen. x had no neighbours before tonight;
+ * giving it two, at the corner a thumb reaches for first, would buy a tidy
+ * corner with the occasional removed stem. So the mix controls take the
+ * left end of the controls line, x keeps the right end it has always had,
+ * and a whole waveform lies between them. */
 .row {
   display: grid;
-  grid-template-columns: 84px 1fr 44px;
+  grid-template-columns: 42px 42px 1fr 44px;
+  grid-template-areas: "kind kind name name" "solo mute wave drop";
+  grid-template-rows: 28px 42px;
   align-items: center;
   column-gap: 10px;
-  min-height: 50px;
+  min-height: 72px;
   margin-bottom: 6px;
   padding: 0 0 0 10px;
   background: #0a0a0a;
@@ -302,22 +331,35 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
   color: #ededed;
 }
 .row:active { background: #161616; }
-.row .kind { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.row .stem { min-width: 0; padding: 6px 0; }
+.row .kind { grid-area: kind; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* min-width: 0 is not decoration: a canvas carries an intrinsic width, and
+ * without it the 1fr column would be sized to that rather than to what is
+ * left of the row. */
+.row .stem { grid-area: wave; min-width: 0; }
 .row .name {
+  grid-area: name;
+  /* The row has no right padding of its own -- x is flush with the border
+   * -- so the name, which now runs past where x sits, carries the gutter
+   * itself. */
+  padding-right: 10px;
   display: block;
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.row canvas { display: block; width: 100%; height: 18px; margin-top: 3px; }
-/* 44px wide, 48px tall: it keeps its own tap target even though the row's
- * own minimum is 50px. A border-left rather than a box, so the row still
- * reads as one thing. */
+/* 24px rather than 18px: the waveform has a line to itself now, and the
+ * shape is the one thing on this row that is worth reading from across a
+ * table. */
+.row canvas { display: block; width: 100%; height: 24px; }
+/* 44px wide and the full height of the controls line, so it keeps its own
+ * tap target. A border-left rather than a box, so the row still reads as
+ * one thing -- and that rule is now the only thing between the waveform
+ * and the one control that removes a stem. */
 button.drop {
+  grid-area: drop;
   width: 44px;
-  height: 48px;
+  height: 42px;
   padding: 0;
   background: transparent;
   border: none;
@@ -1480,13 +1522,16 @@ input {
       kind.textContent = slot.kindLabel
       kind.style.color = color
 
-      var stem = document.createElement('span')
-      stem.className = 'stem'
+      // The name is its own cell on the first line now, and the waveform
+      // is a cell on the second. They were one stacked cell when they
+      // shared the middle column.
       var name = document.createElement('span')
       name.className = 'name'
       name.textContent = slot.stemName || '…'
+
+      var stem = document.createElement('span')
+      stem.className = 'stem'
       var canvas = document.createElement('canvas')
-      stem.appendChild(name)
       stem.appendChild(canvas)
 
       var drop = document.createElement('button')
@@ -1561,7 +1606,10 @@ input {
         })
       }
 
+      // Placed by grid-template-areas, so this order is the reading order
+      // and not the layout.
       row.appendChild(kind)
+      row.appendChild(name)
       row.appendChild(stem)
       row.appendChild(drop)
       rowsEl.appendChild(row)

@@ -253,9 +253,41 @@ describe('remotePage layout 1a', () => {
 })
 
 describe('remotePage rows', () => {
-  it('lays a row out as label, stem, remove', () => {
-    expect(REMOTE_PAGE_HTML).toContain('grid-template-columns: 84px 1fr 44px')
-    expect(REMOTE_PAGE_HTML).toContain('min-height: 50px')
+  it('lays a row out as two lines -- what it is, then what to do with it', () => {
+    // "reduce or make two rows for where the name is currently" -- Elling,
+    // on the phone, 2026-09-27. Four controls, a name and a waveform do not
+    // fit across one 390px line.
+    expect(REMOTE_PAGE_HTML).toContain('grid-template-columns: 42px 42px 1fr 44px')
+    expect(REMOTE_PAGE_HTML).toContain(
+      'grid-template-areas: "kind kind name name" "solo mute wave drop"'
+    )
+    // 28px of name line and 42px of controls line: 42 is the tap target
+    // every control on this page is held to, and the two plus the border
+    // are the row's own height.
+    expect(REMOTE_PAGE_HTML).toContain('grid-template-rows: 28px 42px')
+    expect(REMOTE_PAGE_HTML).toContain('min-height: 72px')
+  })
+
+  it('gives the name the whole first line, x\u2019s column included', () => {
+    // The point of the second line: the name used to share the middle
+    // column with the waveform and ellipsised early. It now spans both of
+    // the first line's right-hand columns, which is 54px it did not have.
+    expect(REMOTE_PAGE_HTML).toContain('grid-area: name;')
+    expect(REMOTE_PAGE_HTML).toContain('text-overflow: ellipsis')
+  })
+
+  it('keeps x at the far end of the controls line from s and m', () => {
+    // x is the destructive one and it had no neighbours before tonight.
+    // The areas row says it: solo and mute at the left, the waveform, then
+    // drop -- and a whole waveform between them is the separation.
+    const areas = /grid-template-areas: "kind kind name name" "(.*)"/.exec(REMOTE_PAGE_HTML)
+    expect(areas).not.toBeNull()
+    const line = (areas ?? ['', ''])[1].split(/\s+/)
+    expect(line[0]).toBe('solo')
+    expect(line[1]).toBe('mute')
+    expect(line[line.length - 1]).toBe('drop')
+    expect(line.indexOf('wave')).toBeGreaterThan(line.lastIndexOf('mute'))
+    expect(line.indexOf('wave')).toBeLessThan(line.indexOf('drop'))
   })
 
   it('draws each stem’s own waveform, from peaks the mac already had', () => {
@@ -298,18 +330,18 @@ describe('remotePage without a master waveform', () => {
     // scroll includes the text descriptor, like drummy).. it should follow
     // the waves only" -- Elling, on the phone, 2026-09-27.
     //
-    // The lane's two insets are the row grid read off exactly: 105 = the
-    // row's 1px border + 10px left padding + the 84px kind column + the
-    // 10px gap, and 55 = the 1px border + the 44px x column + its gap. The
-    // stem column has no horizontal padding of its own, so the lane is the
-    // drawn waveform's box and not an approximation of it. All four numbers
-    // are asserted together, because changing one without the others is
-    // exactly the bug.
-    expect(REMOTE_PAGE_HTML).toContain('grid-template-columns: 84px 1fr 44px')
+    // The lane's two insets are the row grid read off exactly: 115 = the
+    // row's 1px border + 10px left padding + the 42px s column + a 10px
+    // gap + the 42px m column + another 10px gap, and 55 = the 1px border
+    // + the 44px x column + its gap. The stem cell has no horizontal
+    // padding of its own, so the lane is the drawn waveform's box and not
+    // an approximation of it. All of these are asserted together, because
+    // changing one without the others is exactly the bug.
+    expect(REMOTE_PAGE_HTML).toContain('grid-template-columns: 42px 42px 1fr 44px')
     expect(REMOTE_PAGE_HTML).toContain('column-gap: 10px')
-    expect(REMOTE_PAGE_HTML).toContain('.row .stem { min-width: 0; padding: 6px 0; }')
+    expect(REMOTE_PAGE_HTML).toContain('.row .stem { grid-area: wave; min-width: 0; }')
     expect(REMOTE_PAGE_HTML).toContain('id="lane"')
-    expect(REMOTE_PAGE_HTML).toContain('left: 105px')
+    expect(REMOTE_PAGE_HTML).toContain('left: 115px')
     expect(REMOTE_PAGE_HTML).toContain('right: 55px')
     // Re-appended after every rebuild, with the line still inside it.
     expect(SCRIPT).toContain('rowsEl.appendChild(laneEl)')
