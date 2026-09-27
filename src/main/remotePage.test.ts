@@ -537,22 +537,51 @@ describe('remotePage swap grid', () => {
 })
 
 describe('remotePage row gestures', () => {
-  it('opens the menu on a long press and cycles the row on a short tap', () => {
-    expect(SCRIPT).toContain('HOLD_MS = 450')
-    expect(SCRIPT).toContain('var next = nextSlotAction(slot)')
+  it('opens the menu on a plain tap, because nothing else wants one', () => {
+    // The menu was a 450ms press for as long as a tap meant mute. s and m
+    // took that job, so the cheapest gesture on the page is free and the
+    // menu takes it.
+    expect(SCRIPT).toContain("row.addEventListener('click', function (e) {")
+    expect(SCRIPT).toContain('openActionSheet(slot)')
   })
 
-  it('never lets a fired long press also fire the tap on release', () => {
-    expect(SCRIPT).toContain('if (holdFired || holdMoved) return')
+  it('has one listener on a row, and it is that tap', () => {
+    // A click rather than a pointerup: the browser already knows a tap
+    // from the start of a scroll, and letting it decide is the whole
+    // saving.
+    const listeners = SCRIPT.match(/row\.addEventListener\('[a-z]+'/g) ?? []
+    expect(listeners).toEqual(["row.addEventListener('click'"])
   })
 
-  it('cancels the press on a scroll, a leave or a cancel', () => {
+  it('has no long press left in it -- deleted, not left dormant', () => {
+    // The 450ms timer, the 10px slop threshold, the fired/moved
+    // arbitration and the pointermove/leave/cancel handling existed only
+    // to tell two gestures on one element apart. There is one gesture now,
+    // so all of it is gone rather than unused: dormant machinery is what
+    // the next person has to read and decide about.
+    for (const ghost of [
+      'HOLD_MS',
+      'holdTimer',
+      'holdFired',
+      'holdMoved',
+      'holdX',
+      'cancelHold',
+      'nextSlotAction'
+    ]) {
+      expect(SCRIPT).not.toContain(ghost)
+    }
+  })
+
+  it('leaves the slop threshold to keep, which is the only hold left', () => {
     expect(SCRIPT).toContain('SLOP_PX = 10')
-    expect(SCRIPT).toContain("row.addEventListener('pointercancel'")
-    expect(SCRIPT).toContain("row.addEventListener('pointerleave'")
+    const slop = SCRIPT.indexOf('var SLOP_PX = 10')
+    expect(slop).toBeGreaterThan(SCRIPT.indexOf('var KEEP_MS = 700'))
   })
 
-  it('leaves the x out of both gestures', () => {
+  it('leaves the row\u2019s own buttons out of the tap', () => {
+    // s, m and x are inside the row, so their click passes through the row
+    // on its way up. Each is its own gesture and none is a request for the
+    // menu.
     expect(SCRIPT).toContain("e.target.tagName === 'BUTTON'")
   })
 
@@ -686,7 +715,7 @@ describe('remotePage going away', () => {
   })
 
   it('stops responding to the thumb the moment it is going', () => {
-    // No mute, no long press, no re-arming the remove. A row you have
+    // No mute, no solo, no menu, no re-arming the remove. A row you have
     // already removed has nothing left to ask it.
     const guards = SCRIPT.match(/if \(isGoing\(slot\.id\)\) return/g) ?? []
     expect(guards).toHaveLength(3)
@@ -840,8 +869,9 @@ describe('remotePage stem action sheet', () => {
 describe('remotePage text selection', () => {
   it('suppresses selection page-wide, because every gesture here is a press', () => {
     // "pressing and holding to keep i selected the text below on my iphone"
-    // -- Elling, 2026-09-27. A row is a 450ms press and keep is a 700ms
-    // one; neither may raise ios's selection handles over the page.
+    // -- Elling, 2026-09-27. Keep is a 700ms press, and it outlived the
+    // row's own: neither may raise ios's selection handles over the page,
+    // and a thumb resting anywhere still must not.
     expect(REMOTE_PAGE_HTML).toContain('-webkit-user-select: none')
     expect(REMOTE_PAGE_HTML).toContain('-webkit-touch-callout: none')
   })

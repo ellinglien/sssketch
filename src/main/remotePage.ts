@@ -155,8 +155,8 @@ const KIND_CHIPS = DISCOVER_SLOT_KIND_OPTIONS.map((kind) => ({
 
 /** The stem action sheet, as data. Four actions, and they are exactly the
  * four buttons that have been on every desktop Discover slot row since
- * 2026-09-20 -- `similar`, `adjacent`, `random`, `duplicate` -- reached from
- * a long press instead of a mouse. `a` is the wire value
+ * 2026-09-20 -- `similar`, `adjacent`, `random`, `duplicate` -- reached by
+ * tapping the row instead of by a mouse. `a` is the wire value
  * (RemoteSlotAction, @shared/remoteState), `l` is the two-word-maximum
  * label and `h` is the hint line under it. The hints are what a label of
  * two words cannot say; they are not tooltips and they are not sentences. */
@@ -194,13 +194,14 @@ export const REMOTE_PAGE_HTML = `<!doctype html>
  * the element actually tapped, which is always a chip or a button.
  *
  * user-select: none went on the same rule on 2026-09-27: "pressing and
- * holding to keep i selected the text below on my iphone". Every gesture on
- * this page is a press -- a row is 450ms, keep is 700ms -- and a press held
- * over text is how ios raises its selection handles and its callout. The
- * rows had carried their own copy of this since the long press was built;
- * keep never had one, so the 700ms press selected straight through the
- * transport and the foot. One rule on * replaces both, which is also why
- * .row no longer declares it.
+ * holding to keep i selected the text below on my iphone". A press held
+ * over text is how ios raises its selection handles and its callout, and
+ * keep is a 700ms press. The rows had carried their own copy of this since
+ * their long press was built; keep never had one, so the 700ms press
+ * selected straight through the transport and the foot. One rule on *
+ * replaces both, which is also why .row no longer declares it -- and it
+ * outlived the long press, because a thumb resting anywhere on this page
+ * still must not raise a selection.
  *
  * It has to be css. The script is not allowed to contain preventDefault
  * (remotePage.test.ts asserts it), and a selectstart handler is the only
@@ -1263,22 +1264,18 @@ input {
   // stack without waiting for the next poll to change something.
   var rowCanvases = []
 
-  // Two gestures on one element, arbitrated exactly. Short tap takes the row
-  // round its solo/mute cycle (see nextSlotAction), long press opens the
-  // action sheet. The rules that matter: a fired long press must NOT also
-  // fire the tap on release; a scroll must not come back as a mute; and the
-  // x inside the row must start neither.
-  var HOLD_MS = 450
-  var SLOP_PX = 10
-  var holdTimer = null
-  var holdFired = false
-  var holdMoved = false
-  var holdX = 0
-  var holdY = 0
-
-  function cancelHold() {
-    if (holdTimer) { clearTimeout(holdTimer); holdTimer = null }
-  }
+  // THERE IS ONE GESTURE ON A ROW. There were two -- a short tap ran the
+  // solo/mute cycle and a 450ms press opened the action sheet -- and
+  // sharing one element between them cost a timer, a 10px slop threshold,
+  // a fired flag, a moved flag and four pointer listeners whose whole job
+  // was deciding which of the two had happened. s, m and x took the tap's
+  // work, so the press has nothing left to be told apart from and the
+  // arbitration went with it. That is the "simplidy" in "buttosn for s and
+  // m instead! simplidy".
+  //
+  // What the deletion also removed, for nothing: a press that drifted 11px
+  // did neither thing, and a sheet that opened under the thumb had to be
+  // waited out before the row would answer again.
 
   function buzz() {
     // ios safari does not implement this; some browsers implement it and
@@ -1424,31 +1421,6 @@ input {
     // desktop's always-visible layer is drawn in. A row with no sound type
     // yet has no colour to spend either.
     return slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')
-  }
-
-  // A row's tap cycle, from earlier on 2026-09-27: "could we also add solo?
-  // first press is solo, then second press is mute / like double tap".
-  //
-  //   audible, others too -> solo   toggleSlotSolo: every other row drops out
-  //   soloed              -> mute   toggleSlotPreview: this row drops out too
-  //   muted               -> mute   toggleSlotPreview: this row comes back
-  //
-  // Two verbs cover three states because the mac's own two functions do, and
-  // both are the buttons already on the desktop row. Nothing new is invented
-  // here and nothing about a solo is remembered -- soloed is read off the
-  // mix (see RemoteSlotView.soloed), not off a mode.
-  //
-  // What the third press lands on is the truth of the MIX rather than a
-  // fixed carousel. Unmuting this row while the others are still out leaves
-  // it the only audible row again, which IS a solo -- the same mix, so the
-  // same reading, and the next press mutes again. Everything comes back one
-  // row at a time, a tap each, exactly as the desktop's own mute buttons
-  // would do it. The one thing that restores a whole mix in one gesture is a
-  // second solo of an already-soloed slot, and that is not reachable from
-  // muted, so the phone does not pretend to offer it.
-  function nextSlotAction(slot) {
-    if (slot.muted) return 'mute'
-    return slot.soloed ? 'mute' : 'solo'
   }
 
   function audibleRowCount() {
@@ -1676,52 +1648,28 @@ input {
         armRemove(slot.id)
       })
 
-      // An unresolved row does neither gesture, matching the desktop's own
-      // hasStemToActOn guard on its mute button. The row carries no click
-      // listener at all, so there is no second event to suppress -- this
-      // page is not allowed to suppress one (see the last-resort test).
+      // A TAP ON THE ROW OPENS THE MENU. It was a 450ms press for as long
+      // as a tap meant mute; with s and m on the row a tap means nothing
+      // else, so the menu takes the cheapest gesture on the page instead of
+      // the most expensive one.
+      //
+      // A click, not a pointerup: the browser is the thing that already
+      // knows a tap from the start of a scroll, and letting it decide is
+      // the whole saving. An unresolved row has no actions to offer, which
+      // is the desktop's own hasStemToActOn guard, and a row on its way out
+      // has nothing left to ask it at all.
       if (slot.stemName) {
-        row.addEventListener('pointerdown', function (e) {
-          // A row already on its way out has nothing left to ask it: no
-          // mute, no solo, no action sheet. Guarded at BOTH ends of the
-          // gesture, because a press that began before the confirming tap
-          // must not complete after it.
+        row.addEventListener('click', function (e) {
           if (isGoing(slot.id)) return
+          // s, m and x are inside the row, so their click passes through
+          // here on its way up. Each one is its own gesture and none of
+          // them is a request for the menu.
           if (e.target.tagName === 'BUTTON') return
-          holdFired = false
-          holdMoved = false
-          holdX = e.clientX
-          holdY = e.clientY
-          cancelHold()
-          holdTimer = setTimeout(function () {
-            holdTimer = null
-            holdFired = true
-            buzz()
-            openActionSheet(slot)
-          }, HOLD_MS)
-        })
-        row.addEventListener('pointermove', function (e) {
-          if (holdTimer === null && !holdFired) return
-          var dx = e.clientX - holdX
-          var dy = e.clientY - holdY
-          if (dx < 0) dx = -dx
-          if (dy < 0) dy = -dy
-          if (dx > SLOP_PX || dy > SLOP_PX) { holdMoved = true; cancelHold() }
-        })
-        // The scroll the browser stole must not come back as a mute.
-        row.addEventListener('pointercancel', function () { holdMoved = true; cancelHold() })
-        row.addEventListener('pointerleave', function () { holdMoved = true; cancelHold() })
-        row.addEventListener('pointerup', function (e) {
-          cancelHold()
-          if (e.target.tagName === 'BUTTON') return
-          if (holdFired || holdMoved) return
-          var next = nextSlotAction(slot)
-          sendSlotAction(slot, next)
+          disarmRemove()
+          openActionSheet(slot)
         })
       }
 
-      // Placed by grid-template-areas, so this order is the reading order
-      // and not the layout.
       // One record, held twice: by slot id so a mute can find this row's
       // parts, and in rowCanvases so a resize can redraw every canvas. The
       // same object both times, deliberately -- two copies of a row's
@@ -1737,6 +1685,8 @@ input {
       mixEls[slot.id] = rec
       rowCanvases.push(rec)
 
+      // Placed by grid-template-areas, so this order is the reading order
+      // and not the layout.
       row.appendChild(kind)
       row.appendChild(name)
       row.appendChild(soloKey)
@@ -1919,11 +1869,15 @@ input {
     if (audioBuffer && loadedLoopId === currentLoopId) startSource()
     else loadLoop()
   })
-  // Keeping is the one thing on this page that feels irreversible, and the
-  // thumb doing it is the same thumb tapping rows to mute them. Same
-  // arbitration shape as a row's long press, so there is one mental model
-  // on the page and not two.
+  // Keeping is the one thing on this page that feels irreversible, so it
+  // asks for a held thumb rather than a tap. It is now the ONLY hold on the
+  // page -- the rows gave theirs up for s, m and a tap that opens the menu
+  // -- which means a press held on this page can mean exactly one thing.
   var KEEP_MS = 700
+  // How far the thumb may drift in those 700ms and still be holding. It was
+  // shared with the row's long press until that press was deleted; keep is
+  // the only hold left on the page.
+  var SLOP_PX = 10
   var keepTimer = null
   var keepX = 0
   var keepY = 0
