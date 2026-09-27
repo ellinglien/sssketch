@@ -14,6 +14,13 @@ import { discoveredStemPath } from './riffLibraryStore'
 import { stemCIDForPath } from './stemCategoriesStore'
 import { upsertJam, writeRiffDetail } from './riffLibraryWriter'
 import { appendInstrumentRows, appendRiffIndexRows } from './discoverIndexCache'
+import {
+  MAX_RIFFF_STEM_SLOTS,
+  STEM_SLOT_COLUMNS,
+  columnStemSlots,
+  mergeStemSlots
+} from '@shared/riffStemSlots'
+import { deleteExtraStemSlotsForRiff, readExtraStemSlots } from './riffStemsExtra'
 
 /** One slot as the renderer sends it. Paths only -- resolveDiscoverRifff's
  * own ResolvedCandidateStems have already thrown away stemCID/riffCID, and
@@ -69,11 +76,13 @@ interface SourceStemRow {
   FileKey: string | null
 }
 
-const STEM_SLOT_COLUMNS = Array.from({ length: 8 }, (_, i) => `StemCID_${i + 1}`)
-
-/** Every kept group in the room, as {riffCID, stemCIDs} -- ONE query over
- * the whole room, never a per-stem lookup. Both the duplicate check and
- * forget's "is this copy still needed" test read this same list. At a
+/** Every kept group in the room, as {riffCID, stemCIDs} -- TWO queries
+ * over the whole room (the Riffs rows, then one batched read of every
+ * slot past the eighth), never a per-riff or per-stem lookup. Both the
+ * duplicate check and forget's "is this copy still needed" test read this
+ * same list, and both are WRONG if it stops at eight: the duplicate check
+ * would call two different twelve-stem groups the same, and forget would
+ * delete a copied file that another group still holds in slot 12. At a
  * realistic few hundred saved groups it is free. */
 export function listDiscoveredGroups(
   ownDb: Database.Database
@@ -81,10 +90,19 @@ export function listDiscoveredGroups(
   const rows = ownDb
     .prepare(`SELECT RiffCID, ${STEM_SLOT_COLUMNS.join(', ')} FROM Riffs WHERE OwnerJamCID = ?`)
     .all(DISCOVERED_JAM_CID) as Record<string, string | null>[]
-  return rows.map((row) => ({
-    riffCID: row.RiffCID as string,
-    stemCIDs: STEM_SLOT_COLUMNS.map((c) => row[c]).filter((c): c is string => Boolean(c))
-  }))
+  const extras = readExtraStemSlots(
+    ownDb,
+    rows.map((row) => row.RiffCID as string)
+  )
+  return rows.map((row) => {
+    const riffCID = row.RiffCID as string
+    return {
+      riffCID,
+      stemCIDs: mergeStemSlots(columnStemSlots(row), extras.get(riffCID) ?? []).map(
+        (s) => s.stemCID
+      )
+    }
+  })
 }
 
 function findSourceStemRow(dbs: Database.Database[], stemCID: string): SourceStemRow | undefined {
@@ -131,8 +149,20 @@ export function saveDiscoveredRifff(
   input: SaveDiscoveredInput
 ): SaveDiscoveredResult | null {
   if (input.members.length === 0) return null
+  // The ceiling is enforced HERE, on the database's own side of the IPC,
+  // not in the renderer -- the renderer's cap being raised is what lets
+  // the stems arrive; this is what guarantees nothing is ever written that
+  // a reader could not read back. In practice the renderer already stops
+  // at the same number, so this only ever fires if the two drift.
+  const members = input.members.slice(0, MAX_RIFFF_STEM_SLOTS)
+  if (members.length < input.members.length) {
+    console.warn(
+      `saveDiscoveredRifff: ${input.members.length} members offered, ` +
+        `keeping the first ${MAX_RIFFF_STEM_SLOTS}`
+    )
+  }
 
-  // Eight point lookups on an explicit, human-initiated action -- not a
+  // Up to twenty point lookups on an explicit, human-initiated action -- not a
   // batch path. A path with no real Stems row behind it (a shelf-seeded
   // slot, a wav dropped on the panel, an in-app recording) gets a freshly
   // minted StemCID and a real Stems row of its own, so save is TOTAL: it
@@ -140,7 +170,7 @@ export function saveDiscoveredRifff(
   // old analysis (new id, cold caches) and re-saving the same dropped wav
   // makes a second copy -- accepted; those slots are rare in the loop this
   // is for.
-  const resolved = input.members.map((member) => {
+  const resolved = members.map((member) => {
     const stemCID = stemCIDForPath(ownDb, member.path, browseDbs)
     return {
       member,
@@ -286,6 +316,7 @@ export function forgetDiscoveredRifff(ownDb: Database.Database, riffCID: string)
   }
 
   ownDb.transaction(() => {
+    deleteExtraStemSlotsForRiff(ownDb, riffCID)
     ownDb
       .prepare(`DELETE FROM Riffs WHERE RiffCID = ? AND OwnerJamCID = ?`)
       .run(riffCID, DISCOVERED_JAM_CID)

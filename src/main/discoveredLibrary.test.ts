@@ -3,6 +3,8 @@ import Database from 'better-sqlite3'
 import { existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
+import type { DiscoveredMemberInput } from './discoveredLibrary'
 
 let userDataDir: string
 
@@ -48,6 +50,7 @@ function freshOwnDb(): Database.Database {
       SourceDbKey TEXT PRIMARY KEY, StemCount INTEGER NOT NULL, ComputedAt INTEGER NOT NULL
     );
   `)
+  db.exec(RIFF_STEMS_EXTRA_DDL)
   return db
 }
 
@@ -315,6 +318,99 @@ describe('discoveredLibrary', () => {
     forgetDiscoveredRifff(db, a!.riffCID)
 
     expect(existsSync(discoveredStemPath('g1'))).toBe(false)
+    db.close()
+  })
+
+  it('saves all twelve members of a group, not the first eight', async () => {
+    const { saveDiscoveredRifff, listDiscoveredGroups } = await import('./discoveredLibrary')
+    const db = freshOwnDb()
+    const members = Array.from({ length: 12 }, (_, i) => ({
+      path: seedStemOnDisk(`cid_${i + 1}`),
+      gain: 1,
+      name: `stem ${i + 1}`,
+      author: 'elling',
+      barLength: 4,
+      durationSec: 2
+    }))
+    for (let i = 1; i <= 12; i++) {
+      db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES (?, 'jam_1')`).run(`cid_${i}`)
+    }
+
+    const saved = saveDiscoveredRifff(db, [], { members, bpm: 120, barLength: 4, creationTime: 1 })
+    expect(saved).not.toBeNull()
+    const groups = listDiscoveredGroups(db)
+    expect(groups[0].stemCIDs).toHaveLength(12)
+    db.close()
+  })
+
+  it('a twelve-stem group is a duplicate of itself, and an eight-stem prefix of it is not', async () => {
+    const { saveDiscoveredRifff } = await import('./discoveredLibrary')
+    const db = freshOwnDb()
+    const member = (n: number): DiscoveredMemberInput => ({
+      path: seedStemOnDisk(`cid_${n}`),
+      gain: 1,
+      name: `stem ${n}`,
+      author: 'elling',
+      barLength: 4,
+      durationSec: 2
+    })
+    for (let i = 1; i <= 12; i++) {
+      db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES (?, 'jam_1')`).run(`cid_${i}`)
+    }
+    const twelve = Array.from({ length: 12 }, (_, i) => member(i + 1))
+
+    saveDiscoveredRifff(db, [], { members: twelve, bpm: 120, barLength: 4, creationTime: 1 })
+    expect(
+      saveDiscoveredRifff(db, [], { members: twelve, bpm: 120, barLength: 4, creationTime: 2 })
+        ?.duplicate
+    ).toBe(true)
+    expect(
+      saveDiscoveredRifff(db, [], {
+        members: twelve.slice(0, 8),
+        bpm: 120,
+        barLength: 4,
+        creationTime: 3
+      })?.duplicate
+    ).toBe(false)
+    db.close()
+  })
+
+  it('forgetting one group never deletes a copy another group holds past its eighth slot', async () => {
+    const { saveDiscoveredRifff, forgetDiscoveredRifff, listDiscoveredGroups } =
+      await import('./discoveredLibrary')
+    const { discoveredStemPath } = await import('./riffLibraryStore')
+    const db = freshOwnDb()
+    for (let i = 1; i <= 12; i++) {
+      db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES (?, 'jam_1')`).run(`cid_${i}`)
+    }
+    const member = (n: number): DiscoveredMemberInput => ({
+      path: seedStemOnDisk(`cid_${n}`),
+      gain: 1,
+      name: `stem ${n}`,
+      author: 'elling',
+      barLength: 4,
+      durationSec: 2
+    })
+    const a = saveDiscoveredRifff(db, [], {
+      members: Array.from({ length: 12 }, (_, i) => member(i + 1)),
+      bpm: 120,
+      barLength: 4,
+      creationTime: 1
+    })
+    saveDiscoveredRifff(db, [], {
+      members: [member(12), member(1)],
+      bpm: 120,
+      barLength: 4,
+      creationTime: 2
+    })
+
+    forgetDiscoveredRifff(db, a!.riffCID)
+    expect(existsSync(discoveredStemPath('cid_12'))).toBe(true)
+    expect(listDiscoveredGroups(db)).toHaveLength(1)
+    const { n } = db
+      .prepare(`SELECT COUNT(*) AS n FROM RiffStemsExtra WHERE RiffCID = ?`)
+      .get(a!.riffCID) as { n: number }
+    expect(n).toBe(0)
     db.close()
   })
 })
