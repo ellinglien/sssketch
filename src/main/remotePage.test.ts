@@ -66,7 +66,7 @@ describe('remotePage kind picker', () => {
 
 describe('remotePage slots', () => {
   it('needs two taps to remove, because the phone has no undo', () => {
-    expect(SCRIPT).toContain("drop.textContent = armed ? 'sure' : 'remove'")
+    expect(SCRIPT).toContain("drop.textContent = armed ? 'sure' : 'x'")
     expect(SCRIPT).toContain('if (armedRemoveId === slot.id) {')
     const removes = SCRIPT.match(/api\('\/api\/remove-slot'[^)]*\)/g) ?? []
     expect(removes).toEqual(["api('/api/remove-slot', { slotId: slot.id })"])
@@ -92,8 +92,11 @@ describe('remotePage empty state', () => {
     expect(REMOTE_PAGE_HTML.toLowerCase()).not.toContain('nothing here')
   })
 
-  it('shows the picker whenever discover is open, slots or not', () => {
-    expect(SCRIPT).toContain('pickerEl.hidden = false')
+  it('always offers the first add, slots or not', () => {
+    // The chooser is a sheet now, so there is no always-visible picker to
+    // unhide -- `new stem` is simply never hidden, and it is the one thing
+    // you can do with an empty screen.
+    expect(SCRIPT).not.toContain('pickerEl.hidden')
     expect(SCRIPT).toContain('emptyEl.hidden = state.slots.length > 0')
     expect(SCRIPT).toContain('loopEl.hidden = state.slots.length === 0')
   })
@@ -110,9 +113,22 @@ describe('remotePage copy', () => {
   })
 
   it('keeps every button to two words, as asked on 2026-09-26', () => {
-    // The labels swapped in at runtime are here too -- they are buttons
-    // the same way.
-    const runtime = ['stop', 'play', 'sure', 'remove']
+    // The labels swapped in at runtime are here too -- they are buttons the
+    // same way. So are the ones inside a button that contains elements: the
+    // regex above matches only <button>text</button>, so `keep` (a fill span
+    // and two label spans) is invisible to it.
+    const runtime = [
+      'stop',
+      'play',
+      'sure',
+      'x',
+      'keep',
+      'hold',
+      'similar',
+      'adjacent',
+      'random',
+      'duplicate'
+    ]
     for (const label of [...buttonLabels, ...runtime]) {
       expect(label.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(2)
     }
@@ -357,6 +373,20 @@ describe('remotePage stem action sheet', () => {
   it('never has two sheets open at once', () => {
     expect(SCRIPT).toContain('closeKindSheet()')
     expect(SCRIPT).toContain('closeActionSheet()')
+  })
+})
+
+describe('remotePage csp reality', () => {
+  it('has no image of any kind, because the csp forbids even a data uri', () => {
+    expect(REMOTE_PAGE_HTML).not.toContain('<img')
+    expect(REMOTE_PAGE_HTML).not.toContain('url(data:image')
+    expect(REMOTE_PAGE_HTML).not.toContain('background-image')
+  })
+
+  it('stays in the conservative dialect the whole page is written in', () => {
+    expect(SCRIPT).not.toContain('=>')
+    expect(SCRIPT).not.toContain('??')
+    expect(SCRIPT).not.toContain('?.')
   })
 })
 
