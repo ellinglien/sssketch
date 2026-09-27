@@ -189,25 +189,36 @@ body {
   line-height: 1.6;
   -webkit-text-size-adjust: 100%;
 }
-.wrap { max-width: 420px; margin: 0 auto; padding: 24px 0 32px; }
+/* 100vh first as the fallback, then 100dvh: ios safari's collapsing
+ * toolbar is precisely what dvh exists for, and a bottom-aligned layout
+ * measured against the tall viewport puts the buttons under the chrome. */
+.wrap {
+  max-width: 420px;
+  margin: 0 auto;
+  padding: 24px 0 16px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+/* The app state is the flex column the rows' margin-top:auto pushes
+ * against -- .wrap holds both screens, so the column has to continue
+ * through this one. Written as :not([hidden]) rather than as a bare id
+ * because an id beats [hidden]'s display:none on specificity, which would
+ * show the whole app state to an unpaired phone. */
+#app:not([hidden]) { display: flex; flex-direction: column; flex: 1; }
 .eyebrow { font-size: 10px; color: #6a6a6a; letter-spacing: 0.08em; }
 h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
-.kept-name { font-size: 10px; color: #8f8f8f; min-height: 16px; }
-.rows { margin: 20px 0; }
+.topbar { display: flex; justify-content: space-between; align-items: baseline; }
+/* The whole of "bottom-aligned". Everything above this is pushed up; the
+ * stack, the new-stem button and the transport sit on the thumb. */
+.rows { position: relative; margin: 20px 0 10px; margin-top: auto; }
+.foot { text-align: center; margin-top: 12px; }
 .empty { margin: 20px 0; font-size: 11px; color: #8f8f8f; }
-.track {
-  position: relative;
-  height: 34px;
-  margin: 2px 0 18px;
-  border-top: 1px solid #222222;
-  pointer-events: none;
-}
-/* The canvas fills the track and the progress line paints over it: the line
- * comes after it in the DOM and is absolutely positioned, so no z-index is
- * needed. pointer-events is inherited, so the canvas is as unclickable as
- * the track -- see tick()'s own comment about why this whole area is an
- * indicator and not a seek. */
-.track canvas { display: block; width: 100%; height: 100%; }
+/* The playhead, inside .rows (which is position: relative). It comes after
+ * the rows in the DOM and is absolutely positioned, so no z-index is
+ * needed, and pointer-events: none plus the total absence of any listener
+ * are the two independent reasons it is an indicator and not a seek. */
 .line {
   position: absolute;
   top: 0;
@@ -312,20 +323,23 @@ input {
   </div>
 
   <div id="app" hidden>
-    <div class="eyebrow">sssketch</div>
-    <h1>side quest</h1>
-    <div class="eyebrow" id="counts">kept 0 · rolled 0</div>
-    <div class="kept-name" id="kept-name"></div>
+    <!-- Two grey lines, not four. The counters ride the eyebrow row, and
+         the status line below it carries a transient message for two
+         seconds and then rests on the last kept rifff. -->
+    <div class="topbar">
+      <span class="eyebrow">sssketch</span>
+      <span class="eyebrow" id="counts">kept 0 · rolled 0</span>
+    </div>
+    <div class="msg" id="msg"></div>
     <!-- Zero slots is a START, not an error. It says what to do next and
          the thing to do it with is directly below it. -->
     <div class="empty" id="empty" hidden>pick what you want below, then add it</div>
-    <div class="rows" id="rows"></div>
+    <div class="rows" id="rows"><div class="line" id="line" hidden></div></div>
     <!-- Hidden with nothing in discover: roll all, play and keep all act on
          a loop that does not exist yet, and three dead buttons are what made
          the first screen feel like a dead end. They come back on the first
          add. -->
     <div id="loop" hidden>
-      <div class="track" id="track"><canvas id="wave"></canvas><div class="line" id="line" hidden></div></div>
       <div class="actions">
         <button class="big" id="roll-all">roll all</button>
         <button class="big" id="play">play</button>
@@ -350,8 +364,7 @@ input {
         </div>
       </div>
     </div>
-    <div class="eyebrow" id="mac"></div>
-    <div class="msg" id="msg"></div>
+    <div class="eyebrow foot" id="mac"></div>
   </div>
 
   <!-- The last resort, and the only thing on this page that is about this
@@ -399,7 +412,6 @@ input {
   var pickerToggleEl = document.getElementById('picker-toggle')
   var pickerBodyEl = document.getElementById('picker-body')
   var countsEl = document.getElementById('counts')
-  var keptNameEl = document.getElementById('kept-name')
   var msgEl = document.getElementById('msg')
   var pairMsgEl = document.getElementById('pair-msg')
   var playEl = document.getElementById('play')
@@ -469,7 +481,7 @@ input {
           audioBuffer = buf
           loadedLoopId = got.id
           setWavePeaks(got.id, buf)
-          msgEl.textContent = ''
+          restStatus()
           if (wantPlaying) startSource()
         })
       })
@@ -635,8 +647,18 @@ input {
     msgEl.textContent = text
     if (flashTimer) clearTimeout(flashTimer)
     flashTimer = setTimeout(function () {
-      if (msgEl.textContent === text) msgEl.textContent = ''
-    }, 1400)
+      if (msgEl.textContent === text) restStatus()
+    }, 2000)
+  }
+
+  // What the status line says when nothing transient is on it. The counters
+  // moved up to the eyebrow row, so this line is the only place the last
+  // kept name has left to live -- and an empty line under a busy thumb is
+  // better than a stale one. Two seconds rather than the old 1400ms: at
+  // arm's length in a dark room 1400 was short.
+  var lastKept = null
+  function restStatus() {
+    msgEl.textContent = lastKept ? 'last kept \\u00b7 ' + lastKept : ''
   }
 
   // PAIRING HAPPENS HERE AND NOWHERE ELSE. The typed form and the QR
@@ -841,7 +863,7 @@ input {
 
   function render(state) {
     countsEl.textContent = 'kept ' + state.kept + ' · rolled ' + state.rolled
-    keptNameEl.textContent = state.lastKeptName ? 'kept · ' + state.lastKeptName : ''
+    lastKept = state.lastKeptName
     if (!state.discoverOpen) {
       lastSlots = []
       disarmRemove()
@@ -862,7 +884,7 @@ input {
       msgEl.textContent = 'open discover on the mac'
       return
     }
-    if (msgEl.textContent === 'open discover on the mac') msgEl.textContent = ''
+    if (msgEl.textContent === 'open discover on the mac') restStatus()
     // state.playing is the MAC's transport, shown and never obeyed.
     macEl.textContent = state.playing ? 'mac playing' : ''
     setPlayLabel()

@@ -178,6 +178,31 @@ describe('remoteNoticePage', () => {
   })
 })
 
+describe('remotePage layout 1a', () => {
+  it('puts the counters up on the eyebrow row instead of on their own line', () => {
+    // Four grey lines (eyebrow, h1, counts, kept-name) collapse to two.
+    expect(REMOTE_PAGE_HTML).toContain('class="topbar"')
+    expect(SCRIPT).toContain("countsEl.textContent = 'kept '")
+  })
+
+  it('grows the stack up from the thumb rather than down from the title', () => {
+    expect(REMOTE_PAGE_HTML).toContain('min-height: 100dvh')
+    expect(REMOTE_PAGE_HTML).toContain('margin-top: auto')
+  })
+
+  it('rests the status line on the last kept rifff instead of on nothing', () => {
+    expect(SCRIPT).toContain('function restStatus()')
+    expect(SCRIPT).toContain("'last kept \\u00b7 '")
+  })
+
+  it('keeps the app state free of a second title', () => {
+    // `side quest` belongs on the pair screen -- it names the thing you are
+    // connecting to. Once connected you are looking at your own loop.
+    const h1s = REMOTE_PAGE_HTML.match(/<h1>/g) ?? []
+    expect(h1s).toHaveLength(1)
+  })
+})
+
 describe('remotePage last resort', () => {
   it('shows a line rather than nothing if its own script throws', () => {
     // Hidden until something actually throws -- it is a last resort, not a
