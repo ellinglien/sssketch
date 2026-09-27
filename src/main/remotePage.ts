@@ -285,11 +285,36 @@ button.big {
 button.big:active { background: #161616; }
 button.big.on { background: #ededed; color: #050505; }
 button.big.dim { border-color: #222222; color: #5a5a5a; }
-.picker { margin-top: 18px; padding-top: 14px; border-top: 1px solid #222222; }
-/* The picker's own buttons are shorter than the transport's. Written as a
- * descendant selector and not a class, because paintChips rewrites
- * add-slot's className on every tap and would drop one. */
-.picker button.big { padding: 13px 8px; }
+/* One sheet treatment, used by both sheets, so "something came up from the
+ * bottom" means one thing. */
+.sheet-bg {
+  position: fixed;
+  inset: 0;
+  background: rgba(5,5,5,0.72);
+}
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 16px 16px calc(16px + env(safe-area-inset-bottom, 0px));
+  background: #0a0a0a;
+  border-top: 1px solid #3a3a3a;
+}
+.sheet .eyebrow { margin-top: 10px; }
+.sheet .eyebrow:first-child { margin-top: 0; }
+/* The one lit control on the page. In a typeface with no bold, an #ededed
+ * border IS the hierarchy -- so nothing else may take one. */
+button.lit {
+  width: 100%;
+  height: 120px;
+  background: transparent;
+  border: 1px solid #ededed;
+  color: #ededed;
+  font: inherit;
+  font-size: 13px;
+}
+button.lit:active { background: #ededed; color: #050505; }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 0; }
 .chips.trait { margin-bottom: 8px; }
 /* Smaller type and tighter padding, but min-height holds the TAP target at
@@ -355,6 +380,9 @@ input {
          a loop that does not exist yet, and three dead buttons are what made
          the first screen feel like a dead end. They come back on the first
          add. -->
+    <!-- The one #ededed-bordered control on the page, and never hidden:
+         with nothing on screen it is the only thing there is to do. -->
+    <button class="lit" id="new-stem">new stem</button>
     <div id="loop" hidden>
       <div class="actions">
         <button class="big" id="roll-all">roll all</button>
@@ -362,25 +390,24 @@ input {
         <button class="big" id="keep">keep</button>
       </div>
     </div>
-    <!-- Open before the first slot exists (the empty state above points
-         straight at it), collapsed to one button after: once there is
-         something on screen he is listening, and four lines of chooser were
-         pushing the loop down for something touched occasionally. Adding a
-         slot collapses it again. -->
-    <div class="picker" id="picker">
-      <div class="actions" id="picker-toggle-row" hidden>
-        <button class="big dim" id="picker-toggle">add stem</button>
-      </div>
-      <div id="picker-body">
-        <div class="eyebrow">add a stem that is</div>
+    <div class="eyebrow foot" id="mac"></div>
+
+    <!-- The chooser stops living in the page: a sheet is its own collapse,
+         and "new stem" above is the one thing you can do with an empty
+         screen. -->
+    <div id="kind-sheet" hidden>
+      <div class="sheet-bg" id="kind-sheet-bg"></div>
+      <div class="sheet">
+        <div class="eyebrow">what kind</div>
         <div class="chips" id="chips-mask"></div>
+        <div class="eyebrow">what it feels like</div>
         <div class="chips trait" id="chips-trait"></div>
         <div class="actions">
+          <button class="big dim" id="kind-cancel">never mind</button>
           <button class="big dim" id="add-slot">add slot</button>
         </div>
       </div>
     </div>
-    <div class="eyebrow foot" id="mac"></div>
   </div>
 
   <!-- The last resort, and the only thing on this page that is about this
@@ -420,13 +447,10 @@ input {
   var rowsEl = document.getElementById('rows')
   var emptyEl = document.getElementById('empty')
   var loopEl = document.getElementById('loop')
-  var pickerEl = document.getElementById('picker')
   var maskChipsEl = document.getElementById('chips-mask')
   var traitChipsEl = document.getElementById('chips-trait')
   var addEl = document.getElementById('add-slot')
-  var pickerToggleRowEl = document.getElementById('picker-toggle-row')
-  var pickerToggleEl = document.getElementById('picker-toggle')
-  var pickerBodyEl = document.getElementById('picker-body')
+  var kindSheetEl = document.getElementById('kind-sheet')
   var countsEl = document.getElementById('counts')
   var msgEl = document.getElementById('msg')
   var pairMsgEl = document.getElementById('pair-msg')
@@ -611,26 +635,20 @@ input {
   var pendingMask = 0
   var chipEls = []
 
-  // Open before the first slot, collapsed after -- pickerOpen is only consulted
-  // in the second case, so removing the last slot opens it again on its own
-  // without anything having to remember to.
-  var pickerOpen = false
-  var pickerHasSlots = false
-
-  function paintPicker() {
-    var open = !pickerHasSlots || pickerOpen
-    pickerBodyEl.hidden = !open
-    pickerToggleRowEl.hidden = !pickerHasSlots
-    // Two words maximum, and the state is the label -- there is no separate
-    // caret to read in the dark.
-    pickerToggleEl.textContent = open ? 'close' : 'add stem'
-    pickerToggleEl.className = open ? 'big' : 'big dim'
+  // A sheet is its own collapse, so there is nothing to remember about
+  // whether the chooser is expanded. "never mind" closes it WITHOUT
+  // clearing the selection -- closing a sheet is not discarding a choice.
+  function openKindSheet() {
+    closeActionSheet()
+    kindSheetEl.hidden = false
+  }
+  function closeKindSheet() {
+    kindSheetEl.hidden = true
   }
 
-  pickerToggleEl.addEventListener('click', function () {
-    pickerOpen = !pickerOpen
-    paintPicker()
-  })
+  document.getElementById('new-stem').addEventListener('click', openKindSheet)
+  document.getElementById('kind-cancel').addEventListener('click', closeKindSheet)
+  document.getElementById('kind-sheet-bg').addEventListener('click', closeKindSheet)
 
   function selectedKinds() {
     var out = []
@@ -667,7 +685,6 @@ input {
     else maskChipsEl.appendChild(chip)
   })
   paintChips()
-  paintPicker()
 
   addEl.addEventListener('click', function () {
     var kinds = selectedKinds()
@@ -679,8 +696,7 @@ input {
     paintChips()
     // Back out of the way: the slot is on its way and the next thing he
     // wants to see is the row for it, not the chooser again.
-    pickerOpen = false
-    paintPicker()
+    closeKindSheet()
     flash('adding')
   })
 
@@ -896,6 +912,7 @@ input {
   // Replaced by the real sheet below -- declared here only so this section
   // can be read on its own.
   function openActionSheet(slot) {}
+  function closeActionSheet() {}
 
   function render(state) {
     countsEl.textContent = 'kept ' + state.kept + ' · rolled ' + state.rolled
@@ -906,11 +923,9 @@ input {
       renderRows()
       emptyEl.hidden = true
       loopEl.hidden = true
-      pickerEl.hidden = true
-      // Don't come back from a closed discover mid-expand.
-      pickerHasSlots = false
-      pickerOpen = false
-      paintPicker()
+      // Don't come back from a closed discover with a sheet still up.
+      closeKindSheet()
+      closeActionSheet()
       macEl.textContent = ''
       currentLoopId = null
       loadedLoopId = null
@@ -926,9 +941,6 @@ input {
     currentLoopId = state.loopId
     if (wantPlaying && currentLoopId !== loadedLoopId) loadLoop()
 
-    pickerEl.hidden = false
-    pickerHasSlots = state.slots.length > 0
-    paintPicker()
     // Nothing to roll, play or keep until there is a slot -- and the add
     // row is then the only thing on screen, which is the point.
     emptyEl.hidden = state.slots.length > 0

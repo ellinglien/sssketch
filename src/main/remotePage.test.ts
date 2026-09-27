@@ -278,6 +278,32 @@ describe('remotePage row gestures', () => {
   })
 })
 
+describe('remotePage bottom sheets', () => {
+  it('has one sheet treatment, used by both sheets', () => {
+    expect(REMOTE_PAGE_HTML).toContain('rgba(5,5,5,0.72)')
+    expect(REMOTE_PAGE_HTML).toContain('border-top: 1px solid #3a3a3a')
+  })
+
+  it('makes new stem the one lit control on the page', () => {
+    expect(REMOTE_PAGE_HTML).toContain('id="new-stem"')
+    expect(REMOTE_PAGE_HTML).toContain('height: 120px')
+    expect(REMOTE_PAGE_HTML).toContain('border: 1px solid #ededed')
+  })
+
+  it('splits the chips into what it is and what it feels like', () => {
+    expect(REMOTE_PAGE_HTML).toContain('what kind')
+    expect(REMOTE_PAGE_HTML).toContain('what it feels like')
+  })
+
+  it('still changes a selection only by a table lookup', () => {
+    // Unchanged from before the rewrite, and the reason the phone's picker
+    // IS the mac's picker.
+    expect(SCRIPT).toContain('pendingMask = KIND_TOGGLE[pendingMask][index]')
+    const writes = SCRIPT.match(/pendingMask = /g) ?? []
+    expect(writes).toHaveLength(3)
+  })
+})
+
 describe('remotePage last resort', () => {
   it('shows a line rather than nothing if its own script throws', () => {
     // Hidden until something actually throws -- it is a last resort, not a
