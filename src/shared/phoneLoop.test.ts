@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { EngineProject, EngineStem } from './buildEngineProject'
-import { phoneLoopFingerprint, phoneLoopProject } from './phoneLoop'
+import {
+  phoneLoopFingerprint,
+  phoneLoopProject,
+  phoneStemAudioId,
+  stemAudioFields
+} from './phoneLoop'
 
 function stem(overrides: Partial<EngineStem> = {}): EngineStem {
   return {
@@ -160,5 +165,49 @@ describe('phoneLoopFingerprint', () => {
     expect(phoneLoopFingerprint(project({ loopLengthBars: 8 }))).not.toBe(
       phoneLoopFingerprint(project())
     )
+  })
+})
+
+describe('phoneStemAudioId', () => {
+  it('is sixteen hex characters, like the loop id it sits under', () => {
+    expect(phoneStemAudioId(stem())).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it('ignores stemKey, which is a fresh uuid on every rebuild', () => {
+    expect(phoneStemAudioId(stem({ stemKey: 'other-group::7' }))).toBe(phoneStemAudioId(stem()))
+  })
+
+  it('IGNORES muted, because mute is a gain on the phone and not a download', () => {
+    expect(phoneStemAudioId(stem({ muted: true }))).toBe(phoneStemAudioId(stem()))
+  })
+
+  it('changes with the resolved path, which is where the stretch lives', () => {
+    expect(phoneStemAudioId(stem({ resolvedPath: '/tmp/stretch-cache/def.wav' }))).not.toBe(
+      phoneStemAudioId(stem())
+    )
+  })
+
+  it('changes with the gain, because the gain is baked into the bytes served', () => {
+    expect(phoneStemAudioId(stem({ volume: 0.5 }))).not.toBe(phoneStemAudioId(stem()))
+  })
+
+  it('changes with the duration, which is where the loop point is', () => {
+    expect(phoneStemAudioId(stem({ durationSec: 8 }))).not.toBe(phoneStemAudioId(stem()))
+  })
+
+  it('cannot be confused by two fields running together', () => {
+    // The whole reason FIELD is \x1f and not ''. '/a1' + 2 must not collide
+    // with '/a' + 12.
+    const a = phoneStemAudioId(stem({ resolvedPath: '/a1', durationSec: 2 }))
+    const b = phoneStemAudioId(stem({ resolvedPath: '/a', durationSec: 12 }))
+    expect(a).not.toBe(b)
+  })
+
+  it('is still what the loop fingerprint is built from, not a second copy', () => {
+    // stemLine must keep CALLING stemAudioFields. If someone reimplements
+    // the field list beside it, this catches it.
+    expect(stemAudioFields(stem())).toContain('/Users/nickel/Music/secret/abc123')
+    expect(stemAudioFields(stem())).not.toContain('group-a::1')
+    expect(phoneLoopFingerprint(project())).toContain(stemAudioFields(stem()))
   })
 })

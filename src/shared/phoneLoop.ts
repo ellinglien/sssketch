@@ -1,4 +1,5 @@
 // src/shared/phoneLoop.ts
+import { createHash } from 'node:crypto'
 import type { EngineProject, EngineMasterChainSlot, EngineStem } from './buildEngineProject'
 
 const EMPTY_SLOT: EngineMasterChainSlot = { pluginId: '', path: '', stateBase64: '' }
@@ -34,28 +35,62 @@ export function phoneLoopProject(project: EngineProject): EngineProject {
  * contain is the whole fix. */
 const FIELD = ''
 
+/** Everything about one stem that changes what its own audio sounds like --
+ * and nothing that identifies it, places it in a loop, or mixes it.
+ *
+ * NOT `stemKey`: it embeds the rifff's groupId, which is a fresh
+ * crypto.randomUUID() on every rebuild (see assembleDiscoverRifff).
+ * NOT `muted`: mute is a gain on the phone now, applied to a buffer it
+ * already holds. Including it would mean a mute changed the id, which would
+ * mean a download, which is precisely the thing per-stem audio exists to
+ * stop.
+ * `volume` IS here, because the gain is baked into the bytes the phone is
+ * served -- so a gain change is genuinely different audio. */
+export function stemAudioFields(stem: EngineStem): string {
+  return [
+    stem.resolvedPath,
+    stem.durationSec,
+    stem.barLength,
+    stem.volume,
+    stem.oneShot ? 1 : 0,
+    stem.trimStartSec,
+    stem.trimEndSec,
+    stem.toolkit === undefined ? '' : JSON.stringify(stem.toolkit)
+  ].join(FIELD)
+}
+
+/** The 16-character id ONE stem's audio is addressed by, over
+ * GET /api/stem?id=. Same length and same derivation style as the loopId
+ * below it, one level down.
+ *
+ * It is a lookup key into a map the main process builds from the loop it is
+ * currently holding -- never a path, never concatenated into one, and
+ * meaningless to anything that does not already hold that map. That is what
+ * lets a per-stem audio route exist at all without widening the boundary
+ * src/shared/remoteState.ts IS. */
+export function phoneStemAudioId(stem: EngineStem): string {
+  return createHash('sha256').update(stemAudioFields(stem)).digest('hex').slice(0, 16)
+}
+
 function stemLine(startBar: number, barLength: number, stem: EngineStem): string {
   // Deliberately NOT stem.stemKey: it embeds the rifff's groupId, which is a
   // fresh crypto.randomUUID() on every single rebuild (see
   // assembleDiscoverRifff). Everything listed here is something that changes
   // what the render sounds like; nothing listed here is an identifier.
+  //
+  // The audio-bearing fields come from stemAudioFields rather than being
+  // listed again here, so the stem id and the loop fingerprint cannot drift
+  // apart -- a field added to one is a field added to both.
   return [
     startBar,
     barLength,
-    stem.resolvedPath,
-    stem.durationSec,
-    stem.barLength,
+    stemAudioFields(stem),
     stem.playedBars,
     stem.leftCropBars,
     stem.offsetSteps,
     stem.startBarOverride,
-    stem.volume,
     stem.muted ? 1 : 0,
-    stem.oneShot ? 1 : 0,
-    stem.trimStartSec,
-    stem.trimEndSec,
-    stem.muteRegions.map((region) => `${region.startBar}-${region.endBar}`).join(','),
-    stem.toolkit === undefined ? '' : JSON.stringify(stem.toolkit)
+    stem.muteRegions.map((region) => `${region.startBar}-${region.endBar}`).join(',')
   ].join(FIELD)
 }
 
