@@ -13,9 +13,11 @@ import { SILKSCREEN_REGULAR_WOFF2_BASE64 } from './remoteFont'
  * inline style and script (there is no bundler here and no second file to
  * fetch), data: fonts (the Silkscreen face is embedded -- see remoteFont.ts
  * and commit 25ab55d for why that combination has to be spelled out), and
- * same-origin fetch for the seven API routes. No images, no frames, no
+ * same-origin fetch for the eight API routes. No images, no frames, no
  * forms, no base tag. The kind picker added two routes and no new kind of
- * resource, so this is unchanged by it and must stay that way. */
+ * resource, so this is unchanged by it and must stay that way. The
+ * slot-action route (2026-09-27) added one more route and, again, no new
+ * kind of resource. */
 export const REMOTE_PAGE_CSP = [
   "default-src 'none'",
   "style-src 'unsafe-inline'",

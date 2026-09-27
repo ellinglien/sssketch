@@ -6,6 +6,11 @@ import {
   REMOTE_WRONG_ADDRESS_NOTICE
 } from './remotePage'
 import { startRemoteServer, type RemoteServerHandle } from './remoteServer'
+import type { RemoteCommand } from '@shared/remoteState'
+
+/** Every command the server forwarded, in order, for the whole of one
+ * test. Cleared in afterEach. */
+const commands: RemoteCommand[] = []
 
 /** Why this file exists (2026-09-26).
  *
@@ -90,7 +95,9 @@ async function start(): Promise<{ port: number; pairingCode: string }> {
       loopId: null
     }),
     loopWav: () => Promise.resolve(null),
-    onCommand: () => {},
+    onCommand: (command) => {
+      commands.push(command)
+    },
     onPairingChanged: () => {},
     onServerError: (error) => {
       throw error
@@ -102,6 +109,7 @@ async function start(): Promise<{ port: number; pairingCode: string }> {
 afterEach(() => {
   handle?.stop()
   handle = null
+  commands.length = 0
 })
 
 /** What Safari sends when a person navigates to a url, near enough. */
@@ -319,5 +327,96 @@ describe('pairing over the wire', () => {
 
     const state = await send(port, '/api/state', { authorization: `Bearer ${token}` })
     expect(state.status).toBe(200)
+  })
+})
+
+/** The eighth route, 2026-09-27. One route with an enumerated action, not
+ * five near-identical routes -- and parseRemoteSlotAction is the only thing
+ * that decides whether an action is an action at all. */
+describe('the slot action route', () => {
+  async function pairedToken(port: number, pairingCode: string): Promise<string> {
+    const res = await send(
+      port,
+      '/api/pair',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      JSON.stringify({ code: pairingCode })
+    )
+    return JSON.parse(res.body).token as string
+  }
+
+  it('forwards each of the five actions verbatim', async () => {
+    const { port, pairingCode } = await start()
+    const token = await pairedToken(port, pairingCode)
+    for (const action of ['mute', 'similar', 'adjacent', 'random', 'duplicate']) {
+      const res = await send(
+        port,
+        '/api/slot-action',
+        {
+          host: `192.168.1.40:${port}`,
+          'content-type': 'application/json',
+          authorization: `Bearer ${token}`
+        },
+        'POST',
+        JSON.stringify({ slotId: 'slot-7', action })
+      )
+      expect(res.status).toBe(200)
+    }
+    expect(commands).toEqual([
+      { kind: 'slot-action', slotId: 'slot-7', action: 'mute' },
+      { kind: 'slot-action', slotId: 'slot-7', action: 'similar' },
+      { kind: 'slot-action', slotId: 'slot-7', action: 'adjacent' },
+      { kind: 'slot-action', slotId: 'slot-7', action: 'random' },
+      { kind: 'slot-action', slotId: 'slot-7', action: 'duplicate' }
+    ])
+  })
+
+  it('refuses an action it does not know, and forwards nothing', async () => {
+    const { port, pairingCode } = await start()
+    const token = await pairedToken(port, pairingCode)
+    const res = await send(
+      port,
+      '/api/slot-action',
+      {
+        host: `192.168.1.40:${port}`,
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`
+      },
+      'POST',
+      JSON.stringify({ slotId: 'slot-7', action: 'delete-everything' })
+    )
+    expect(res.status).toBe(400)
+    expect(commands).toEqual([])
+  })
+
+  it('refuses an empty slot id', async () => {
+    const { port, pairingCode } = await start()
+    const token = await pairedToken(port, pairingCode)
+    const res = await send(
+      port,
+      '/api/slot-action',
+      {
+        host: `192.168.1.40:${port}`,
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`
+      },
+      'POST',
+      JSON.stringify({ slotId: '', action: 'mute' })
+    )
+    expect(res.status).toBe(400)
+    expect(commands).toEqual([])
+  })
+
+  it('tells an unpaired caller nothing about the route existing', async () => {
+    const { port } = await start()
+    const res = await send(
+      port,
+      '/api/slot-action',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      JSON.stringify({ slotId: 'slot-7', action: 'mute' })
+    )
+    expect(res.status).toBe(401)
+    expect(commands).toEqual([])
   })
 })

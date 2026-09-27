@@ -11,6 +11,7 @@ import {
   type PairingGate
 } from '@shared/remoteAuth'
 import {
+  parseRemoteSlotAction,
   parseRemoteSlotKinds,
   type RemoteCommand,
   type RemoteStateResponse
@@ -329,6 +330,25 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
         const slotId = typeof body.slotId === 'string' ? body.slotId : ''
         if (slotId === '') return respond(res, 400)
         options.onCommand({ kind: 'remove-slot', slotId })
+        return respond(res, 200)
+      }
+
+      // One route for all five of the phone's per-row actions, 2026-09-27
+      // -- four of them are the buttons already on every desktop Discover
+      // slot row (similar/adjacent/random/duplicate) and the fifth is its
+      // mute. parseRemoteSlotAction is the only thing that decides whether
+      // an action is an action: an unknown string fails the whole request
+      // rather than being dropped, exactly as an unknown kind does on
+      // /api/add-slot, so this route cannot be handed anything
+      // path-shaped either. An id the Mac no longer has is a harmless
+      // no-op on the renderer's side, so the id is only checked for being
+      // a non-empty string, same as /api/remove-slot.
+      if (req.method === 'POST' && url === '/api/slot-action') {
+        const body = await readJsonBody(req)
+        const slotId = typeof body.slotId === 'string' ? body.slotId : ''
+        const action = parseRemoteSlotAction(body.action)
+        if (slotId === '' || action === null) return respond(res, 400)
+        options.onCommand({ kind: 'slot-action', slotId, action })
         return respond(res, 200)
       }
 
