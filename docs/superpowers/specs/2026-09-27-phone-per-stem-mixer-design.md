@@ -1,7 +1,44 @@
 # The phone holds every stem, and mixes them itself
 
 Date: 2026-09-27
-Status: designed against the real code and against real measurements taken on his own machine; awaiting Elling's walkthrough. No code written.
+Status: **SHIPPED 2026-09-27**, tasks 1-12 of
+`docs/superpowers/plans/2026-09-27-phone-per-stem-mixer.md`. Unwalked: nothing about how any
+of it sounds, and the one number nobody here can settle (below).
+
+**What shipped differently from this spec, and why:**
+
+- **STEREO, not mono.** Elling asked for it after the spec was written, so
+  `PHONE_STEM_CHANNELS = 2` in `src/main/remoteStemRenderer.ts`. Every memory figure in the
+  mono table below therefore doubles: 6.14 MB per 16-second stem, 122.9 MB at twenty.
+- **The budget is 160 MiB, not 96.** 96 was derived from the mono table and would evict at
+  eleven stereo stems. It is set deliberately above twenty stereo 16-second stems, because
+  evicting a stem he is actively listening to is a worse failure than a fatter tab: it is
+  silent, and it reads as the mix being wrong rather than the phone being full. It binds at
+  27 stems of 16 seconds, 13 of 32, or 54 of 8. Still a byte budget, never a stem cap.
+- **ALAC survived checkpoint A.** Proved empirically before any page work: a 2.000s stereo
+  48kHz ALAC `.m4a` built with the same `afconvert -f m4af -d alac` the renderer uses
+  (`afinfo`: `2 ch, 48000 Hz, alac`, `96000 valid frames + 0 priming`), served over loopback
+  and decoded with `decodeAudioData` in Safari on a booted iOS 26 iPhone 17 Simulator, which
+  runs the same AudioToolbox path as the device: `OK ch=2 rate=48000 dur=2 len=96000`. Stereo,
+  48kHz, and exactly `duration x 48000` frames -- no silent offset at the head of a
+  sample-locked source. **The WAV fallback was not built.**
+- **Three small additions the spec did not anticipate**, each forced by the code: `reconcile`
+  drops back to a fresh start when every voice has gone (with no voices `loopDur()` is zero,
+  so the period is zero and a row joining would wait for a boundary that can never arrive);
+  a new voice's baseline gain is set at `currentTime` rather than at the boundary
+  (`setValueCurveAtTime` refuses to run when another automation event falls inside its own
+  window, and the crossfade's curve starts at exactly the boundary); and `applyMix` writes
+  only a level that actually changed, because a poll every 700ms would otherwise cancel a
+  handover's fade four times before it ran.
+- **The per-row picture hold does not hold a row while nothing is sounding**, or when that
+  stem has given up after three tries. Both are the judgement the deleted whole-page
+  `holdingForSwap` already made; without the first, a row rolled with the transport off would
+  freeze forever.
+
+**THE ONE THING STILL UNSETTLED, and it needs his phone:** whether an iOS tab holds twenty
+stereo stems. That is a jetsam question, not a decode question, and no simulator settles it.
+The symptom is the tab reloading itself mid-listen with no console. The retreat is two lines:
+halve `STEM_BUDGET_BYTES` in `src/main/remotePage.ts` to 80 and set `PHONE_STEM_CHANNELS` to 1.
 
 > "are we streaming all stems individually? if so lets make mute and solo happen immediately"
 > — Elling, 2026-09-27, and on being told no, and hearing the trade:
