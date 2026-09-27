@@ -1,11 +1,15 @@
 import { createServer, request } from 'node:http'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   REMOTE_NOTHING_HERE_NOTICE,
   REMOTE_PAGE_HTML,
   REMOTE_WRONG_ADDRESS_NOTICE
 } from './remotePage'
-import { startRemoteServer, type RemoteServerHandle } from './remoteServer'
+import {
+  startRemoteServer,
+  type RemoteServerHandle,
+  type RemoteServerOptions
+} from './remoteServer'
 import type { RemoteCommand } from '@shared/remoteState'
 
 /** Every command the server forwarded, in order, for the whole of one
@@ -79,7 +83,9 @@ let handle: RemoteServerHandle | null = null
  * into. Loopback is always allowed and is deliberately NOT in here. */
 const OUR_ADDRESSES = ['192.168.1.40', '100.66.121.12']
 
-async function start(): Promise<{ port: number; pairingCode: string }> {
+async function start(
+  overrides: Partial<RemoteServerOptions> = {}
+): Promise<{ port: number; pairingCode: string }> {
   const port = await freePort()
   handle = startRemoteServer({
     portOverride: port,
@@ -96,13 +102,15 @@ async function start(): Promise<{ port: number; pairingCode: string }> {
       loopId: null
     }),
     loopWav: () => Promise.resolve(null),
+    stemBytes: () => Promise.resolve(null),
     onCommand: (command) => {
       commands.push(command)
     },
     onPairingChanged: () => {},
     onServerError: (error) => {
       throw error
-    }
+    },
+    ...overrides
   })
   return { port, pairingCode: handle.pairingCode }
 }
@@ -268,6 +276,7 @@ describe('switching address', () => {
         loopId: null
       }),
       loopWav: () => Promise.resolve(null),
+      stemBytes: () => Promise.resolve(null),
       onCommand: () => {},
       onPairingChanged: () => {},
       onServerError: (error) => {
@@ -420,5 +429,113 @@ describe('the slot action route', () => {
     )
     expect(res.status).toBe(401)
     expect(commands).toEqual([])
+  })
+})
+
+/** The ninth route, 2026-09-27. One stem's own audio, addressed by the
+ * sixteen hex characters main named it -- the first route on this surface
+ * that takes a parameter at all, which is why the shape test below matters
+ * more than the happy path. */
+describe('GET /api/stem', () => {
+  /** Binary, not utf8. `send` above decodes the body as text, which turns
+   * an alac m4a into replacement characters and would make an equality
+   * check meaningless. */
+  function sendBytes(
+    port: number,
+    path: string,
+    headers: Record<string, string>
+  ): Promise<{ status: number; contentType: string; cacheControl: string; body: Buffer }> {
+    return new Promise((resolve, reject) => {
+      const req = request(
+        { host: '127.0.0.1', port, path, method: 'GET', headers, agent: false },
+        (res) => {
+          const chunks: Buffer[] = []
+          res.on('data', (chunk: Buffer) => chunks.push(chunk))
+          res.on('end', () =>
+            resolve({
+              status: res.statusCode ?? 0,
+              contentType: String(res.headers['content-type'] ?? ''),
+              cacheControl: String(res.headers['cache-control'] ?? ''),
+              body: Buffer.concat(chunks)
+            })
+          )
+        }
+      )
+      req.on('error', reject)
+      req.end()
+    })
+  }
+
+  async function pairedToken(port: number, pairingCode: string): Promise<string> {
+    const res = await send(
+      port,
+      '/api/pair',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      JSON.stringify({ code: pairingCode })
+    )
+    return JSON.parse(res.body).token as string
+  }
+
+  it('refuses an unpaired phone exactly like every other route', async () => {
+    const { port } = await start({ stemBytes: () => Promise.resolve(Buffer.from('x')) })
+    const res = await sendBytes(port, '/api/stem?id=abcdef0123456789', {})
+    expect(res.status).toBe(401)
+  })
+
+  it('serves the stem as one lossless file, named by nothing but its id', async () => {
+    const bytes = Buffer.from([1, 2, 3, 4])
+    const { port, pairingCode } = await start({ stemBytes: () => Promise.resolve(bytes) })
+    const token = await pairedToken(port, pairingCode)
+    const res = await sendBytes(port, '/api/stem?id=abcdef0123456789', {
+      authorization: `Bearer ${token}`
+    })
+    expect(res.status).toBe(200)
+    expect(res.contentType).toBe('audio/mp4')
+    expect(res.body).toEqual(bytes)
+    // The one route on this surface that is not no-store: the id is a
+    // content hash, so a stale hit is impossible by construction, and a
+    // reload does not re-download megabytes over tailscale.
+    expect(res.cacheControl).toBe('private, max-age=3600')
+  })
+
+  it('never lets anything path-shaped reach the lookup', async () => {
+    // The id is checked against /^[0-9a-f]{16}$/ BEFORE anything looks it up,
+    // so a traversal attempt is rejected as a malformed id and the callback
+    // is never even called.
+    const stemBytes = vi.fn(() => Promise.resolve(Buffer.from('x')))
+    const { port, pairingCode } = await start({ stemBytes })
+    const token = await pairedToken(port, pairingCode)
+    for (const id of ['../../etc/passwd', '/tmp/x', 'ABCDEF0123456789', 'abc', '']) {
+      const res = await sendBytes(port, `/api/stem?id=${encodeURIComponent(id)}`, {
+        authorization: `Bearer ${token}`
+      })
+      expect(res.status).toBe(404)
+    }
+    expect(stemBytes).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 for a well-formed id the mac is not holding', async () => {
+    const { port, pairingCode } = await start({ stemBytes: () => Promise.resolve(null) })
+    const token = await pairedToken(port, pairingCode)
+    const res = await sendBytes(port, '/api/stem?id=abcdef0123456789', {
+      authorization: `Bearer ${token}`
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('answers 503 rather than taking the server down when a transcode throws', async () => {
+    const { port, pairingCode } = await start({
+      stemBytes: () => Promise.reject(new Error('afconvert exploded'))
+    })
+    const token = await pairedToken(port, pairingCode)
+    const res = await sendBytes(port, '/api/stem?id=abcdef0123456789', {
+      authorization: `Bearer ${token}`
+    })
+    expect(res.status).toBe(503)
+    // Still answering afterwards -- a spawn that throws must not take the
+    // http server with it.
+    const again = await send(port, '/api/state', { authorization: `Bearer ${token}` })
+    expect(again.status).toBe(200)
   })
 })

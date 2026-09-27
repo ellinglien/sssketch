@@ -23,6 +23,7 @@ import {
   type LanAddressCandidate,
   type NetworkAddress
 } from '@shared/lanAddress'
+import { PHONE_STEM_CONTENT_TYPE } from './remoteStemRenderer'
 import {
   REMOTE_NOTHING_HERE_NOTICE,
   REMOTE_PAGE_CSP,
@@ -107,6 +108,10 @@ export interface RemoteServerOptions {
    * by the caller. Null when there is no loop to play. Rejects when the
    * render failed -- answered as 503 rather than crashing the server. */
   loopWav: () => Promise<{ id: string; bytes: Buffer } | null>
+  /** One stem's audio bytes for a 16-hex stem id, or null when the Mac is
+   * not holding that id. Rejects when the transcode failed -- answered as
+   * 503 rather than crashing the server. */
+  stemBytes: (stemId: string) => Promise<Buffer | null>
   onCommand: (command: RemoteCommand) => void
   /** Called on every failed pairing attempt, so the desktop can say "two
    * tries left" and, on the fifth, that pairing is over for this session. */
@@ -127,6 +132,12 @@ export interface RemoteServerOptions {
    * fighting whatever copy of the app is already running on this machine. */
   portOverride?: number
 }
+
+/** The ONLY shape GET /api/stem will consider. Checked before anything is
+ * looked up, so nothing path-shaped ever reaches a map lookup, let alone a
+ * filesystem call -- and the id is a lookup key into a map main built from
+ * the loop it is holding, never a fragment of a filename. */
+const STEM_ID = /^[0-9a-f]{16}$/
 
 function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
   return new Promise((resolve) => {
@@ -158,13 +169,24 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
  * screen while this is on. That is the price of the phone reaching it at
  * all, and it is why this is off by default.
  *
- * Seven routes, and no route takes or returns a filesystem path or reads
- * the library. GET /api/loop takes no parameters of any kind -- it serves
- * the current Discover loop's wav bytes and names it in an x-loop-id
- * header, so there is no id to validate and nothing to address but "now".
+ * Nine api routes, plus GET / itself, and no route takes or returns a
+ * filesystem path or reads the library. (The count in this comment was
+ * already one behind before /api/stem: a596b39's /api/slot-action made
+ * seven into eight, and /api/stem makes it nine.)
+ *
+ * GET /api/loop takes no parameters of any kind -- it serves the current
+ * Discover loop's wav bytes and names it in an x-loop-id header, so there
+ * is no id to validate and nothing to address but "now". GET /api/stem is
+ * the only route that takes a parameter at all, and STEM_ID is why the
+ * no-path property survives it: sixteen lowercase hex characters, tested
+ * before anything is looked up, then used as a KEY INTO A MAP the main
+ * process built from the loop it is holding. It is never joined to a path
+ * and never opened, and it means nothing to anything that does not already
+ * hold that map.
+ *
  * A paired attacker can roll dice, save a rifff, add and remove slots, and
- * hear the loop that is already on screen. That is the entire blast radius,
- * by design rather than by accident.
+ * hear the loop -- whole or stem by stem -- that is already on screen. That
+ * is the entire blast radius, by design rather than by accident.
  *
  * BEFORE PAIRING THE SERVER SERVES THE PAIRING SCREEN AND NOTHING ELSE:
  * every unauthenticated request other than GET / and POST /api/pair gets
@@ -291,6 +313,46 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
           'cache-control': 'no-store'
         })
         res.end(loop.bytes)
+        return
+      }
+
+      // The per-stem audio route, 2026-09-27. Unlike /api/loop it DOES take a
+      // parameter, and the parameter is the whole security argument: sixteen
+      // lowercase hex characters, tested by STEM_ID before anything else
+      // happens, then used as a key into a Map the main process built from
+      // the EngineProject it is holding. It is never joined to a path,
+      // never opened, and means nothing to anything that does not already
+      // hold that map -- so this route serves audio one stem at a time
+      // without the surface gaining any way to name a file.
+      //
+      // A 404 rather than the surface's usual indistinguishable 401 is
+      // deliberate and has precedent: /api/add-slot answers 400 for a
+      // malformed body, because a PAIRED phone already knows the route
+      // exists and there is nothing left to conceal from it.
+      //
+      // cache-control is the one departure from no-store on this surface.
+      // The id is a content hash, so a stale hit is impossible by
+      // construction, and it saves re-downloading megabytes over tailscale
+      // on a reload. Change it to no-store if that trade stops being worth
+      // it; nothing else depends on it.
+      if (req.method === 'GET' && url === '/api/stem') {
+        const query = new URL(req.url ?? '/', 'http://localhost').searchParams
+        const stemId = query.get('id') ?? ''
+        if (!STEM_ID.test(stemId)) return respond(res, 404)
+        let bytes: Buffer | null
+        try {
+          bytes = await options.stemBytes(stemId)
+        } catch (error) {
+          console.error('remoteServer: stem transcode failed:', error)
+          return respond(res, 503)
+        }
+        if (bytes === null) return respond(res, 404)
+        res.writeHead(200, {
+          'content-type': PHONE_STEM_CONTENT_TYPE,
+          'content-length': String(bytes.length),
+          'cache-control': 'private, max-age=3600'
+        })
+        res.end(bytes)
         return
       }
 
