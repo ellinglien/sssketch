@@ -352,6 +352,43 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
  * shape is the one thing on this row that is worth reading from across a
  * table. */
 .row canvas { display: block; width: 100%; height: 24px; }
+/* s AND m. "buttosn for s and m instead" -- Elling, on the phone,
+ * 2026-09-27, after a session with the tap cycle that hid them. One
+ * character each: that is what solo and mute are called on every daw on
+ * his machine, and the page's two-word rule is about not writing
+ * sentences.
+ *
+ * Exactly button.chip's treatment at exactly its 42px, because this page
+ * already has a way to draw a toggle and does not need a second one: a
+ * grey letter in a box the colour of the row's own border when it is off,
+ * and an inversion when it is on. Inversion is the page's whole vocabulary
+ * for "engaged" -- .drop.armed and both sets of chips are the same white
+ * block -- and it is the only one available, since nothing on this page
+ * may fade and there is no colour to spend on chrome.
+ *
+ * An s lit on a soloed row is the BUTTON saying what it is, which a toggle
+ * has to. It is not a second mark on the row: the row still says solo the
+ * one way it ever has, by every other row losing its colour.
+ *
+ * A row whose stem has not resolved yet has nothing to mute or solo -- the
+ * desktop row's own hasStemToActOn guard -- so both letters step down to
+ * #3a3a3a and the buttons are disabled. Down to the dimmest ink on the
+ * page, never faded. */
+button.key {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  background: #0a0a0a;
+  border: 1px solid #222222;
+  color: #8f8f8f;
+  font: inherit;
+  font-size: 11px;
+}
+button.key.solo { grid-area: solo; }
+button.key.mute { grid-area: mute; }
+button.key:active { background: #161616; }
+button.key.on { background: #ededed; border-color: #ededed; color: #050505; }
+button.key:disabled { color: #3a3a3a; }
 /* 44px wide and the full height of the controls line, so it keeps its own
  * tap target. A border-left rather than a box, so the row still reads as
  * one thing -- and that rule is now the only thing between the waveform
@@ -1257,6 +1294,13 @@ input {
   // slot id can never collide with something inherited.
   var dropEls = Object.create(null)
   var rowEls = Object.create(null)
+  // The other half of the same idea: everything on a row that says what
+  // the MIX is doing -- the kind label, the canvas and the two key
+  // buttons -- kept together so one row's mute or solo can be drawn
+  // without going near the list. Each record is the same object
+  // rowCanvases holds, so a resize and a mute cannot disagree about a
+  // row's colour.
+  var mixEls = Object.create(null)
 
   // THE ROWS THAT HAVE BEEN REMOVED AND HAVE NOT GONE YET, by slot id, each
   // holding the wall-clock instant its confirming tap posted. A pending
@@ -1382,9 +1426,8 @@ input {
     return slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')
   }
 
-  // A row's tap cycle, asked for on 2026-09-27 after the first real iphone
-  // session: "could we also add solo? first press is solo, then second press
-  // is mute / like double tap".
+  // A row's tap cycle, from earlier on 2026-09-27: "could we also add solo?
+  // first press is solo, then second press is mute / like double tap".
   //
   //   audible, others too -> solo   toggleSlotSolo: every other row drops out
   //   soloed              -> mute   toggleSlotPreview: this row drops out too
@@ -1416,27 +1459,89 @@ input {
     return n
   }
 
+  // soloed is never remembered, here or on the mac: it is one row left in
+  // the mix, read back off the mix. remoteStateFromSlots computes it the
+  // same way from the same fact, so an optimistic paint and the poll that
+  // replaces it can only ever agree.
+  function recomputeSoloed() {
+    var alone = audibleRowCount() === 1
+    for (var i = 0; i < lastSlots.length; i++) {
+      lastSlots[i].soloed = !lastSlots[i].muted && alone
+    }
+  }
+
   // Optimistic: the poll is up to 700ms behind and the row has to answer the
   // thumb now. The next poll overwrites all of it -- and while a loop swap is
   // pending the rows are held, so this paint is what he is looking at for as
   // long as a loop.
   //
-  // A solo has no appearance of its own and deliberately gets none. It drops
-  // every other row out of the mix, so every other row loses its colour
-  // exactly as a mute does, and the one row still in colour is the picture.
-  // A mark on the soloed row would be a second way of saying the same thing,
-  // and it could only be drawn out of inversion or grey -- there is no spare
-  // colour on this page, and nothing on it is ever allowed to fade.
+  // A solo still has no appearance of its own on the ROW and deliberately
+  // gets none. It drops every other row out of the mix, so every other row
+  // loses its colour exactly as a mute does, and the one row still in
+  // colour is the picture. The s button lights because a toggle has to say
+  // whether it is engaged; the row itself takes no mark.
+  //
+  // A second press of an s that is already alone puts the whole mix back --
+  // toggleSlotSolo's own behaviour, and the only gesture on this page that
+  // restores every row at once. It is drawn here rather than waited for
+  // because it is the one that most needs to be believed.
   function paintSlotAction(slot, action) {
     if (action === 'solo') {
       for (var i = 0; i < lastSlots.length; i++) {
-        lastSlots[i].muted = lastSlots[i].id !== slot.id
-        lastSlots[i].soloed = lastSlots[i].id === slot.id
+        // Unresolved rows are not in the mac's full mix either -- the mix
+        // it restores is every RESOLVED slot.
+        if (slot.soloed) lastSlots[i].muted = !lastSlots[i].stemName
+        else lastSlots[i].muted = lastSlots[i].id !== slot.id
       }
+      recomputeSoloed()
       return
     }
     slot.muted = !slot.muted
-    slot.soloed = !slot.muted && audibleRowCount() === 1
+    recomputeSoloed()
+  }
+
+  // Everything one row says about the mix, in the one place that says it:
+  // the kind label's colour, the waveform's colour, and whether s and m are
+  // engaged. Called for a fresh row as it is built and for a row the thumb
+  // just changed, so the two can never draw the same state differently.
+  function paintRowMix(slot) {
+    var rec = mixEls[slot.id]
+    if (!rec) return
+    rec.color = rowColor(slot)
+    rec.kind.style.color = rec.color
+    rec.solo.className = slot.soloed ? 'key solo on' : 'key solo'
+    rec.mute.className = slot.muted ? 'key mute on' : 'key mute'
+    drawRowWave(rec.canvas, rec.peaks, rec.color)
+  }
+
+  // A mute or a solo changes the PICTURE without changing the list, so it
+  // is painted onto the rows already on screen and nothing is rebuilt.
+  // d7ff531 is the reason: wiping rowsEl under a thumb leaves the document
+  // shorter than the scroll offset for an instant and the browser clamps
+  // it, which is the scroll jump he found at the bottom of a long stack.
+  // Arming a remove was fixed that way; this is the same class of state and
+  // gets the same treatment. A solo touches every row, so every row is
+  // repainted -- repainting is not rebuilding.
+  //
+  // The key comes forward with it. renderRows compares the poll against
+  // what is DRAWN, and what is drawn is now what was just painted; without
+  // this line the next poll -- which agrees -- would read as a change and
+  // rebuild the stack 700ms after the tap, scroll jump and all.
+  function paintMix() {
+    for (var i = 0; i < lastSlots.length; i++) paintRowMix(lastSlots[i])
+    lastRowsKey = JSON.stringify(lastSlots)
+  }
+
+  // The one way either verb leaves this page, whichever control asked for
+  // it. A row on its way out has nothing left to ask it, and any other
+  // press cancels a pending remove -- both are true of s and m as much as
+  // they were of the tap that used to do this.
+  function sendSlotAction(slot, next) {
+    if (isGoing(slot.id)) return
+    disarmRemove()
+    paintSlotAction(slot, next)
+    paintMix()
+    api('/api/slot-action', { slotId: slot.id, action: next })
   }
 
   // One flat colour, once per row, on state change and on resize. Not per
@@ -1508,6 +1613,7 @@ input {
     rowCanvases = []
     dropEls = Object.create(null)
     rowEls = Object.create(null)
+    mixEls = Object.create(null)
     lastSlots.forEach(function (slot) {
       var row = document.createElement('div')
       // Registered first, then classed by the one function that classes a
@@ -1515,12 +1621,10 @@ input {
       // removal must come up already marked.
       rowEls[slot.id] = row
       paintGoingRow(slot.id)
-      var color = rowColor(slot)
 
       var kind = document.createElement('span')
       kind.className = 'kind'
       kind.textContent = slot.kindLabel
-      kind.style.color = color
 
       // The name is its own cell on the first line now, and the waveform
       // is a cell on the second. They were one stacked cell when they
@@ -1533,6 +1637,20 @@ input {
       stem.className = 'stem'
       var canvas = document.createElement('canvas')
       stem.appendChild(canvas)
+
+      // s and m, in place of the cycle a tap used to run. A cycle whose
+      // middle you cannot see is a guess -- "buttosn for s and m instead!
+      // simplidy".
+      var soloKey = document.createElement('button')
+      soloKey.textContent = 's'
+      var muteKey = document.createElement('button')
+      muteKey.textContent = 'm'
+      // Nothing to mute or solo until the stem resolves, which is the
+      // desktop row's own guard on the same two buttons.
+      soloKey.disabled = !slot.stemName
+      muteKey.disabled = !slot.stemName
+      soloKey.addEventListener('click', function () { sendSlotAction(slot, 'solo') })
+      muteKey.addEventListener('click', function () { sendSlotAction(slot, 'mute') })
 
       var drop = document.createElement('button')
       dropEls[slot.id] = drop
@@ -1595,27 +1713,39 @@ input {
         row.addEventListener('pointerleave', function () { holdMoved = true; cancelHold() })
         row.addEventListener('pointerup', function (e) {
           cancelHold()
-          if (isGoing(slot.id)) return
           if (e.target.tagName === 'BUTTON') return
           if (holdFired || holdMoved) return
-          disarmRemove()
           var next = nextSlotAction(slot)
-          paintSlotAction(slot, next)
-          renderRows()
-          api('/api/slot-action', { slotId: slot.id, action: next })
+          sendSlotAction(slot, next)
         })
       }
 
       // Placed by grid-template-areas, so this order is the reading order
       // and not the layout.
+      // One record, held twice: by slot id so a mute can find this row's
+      // parts, and in rowCanvases so a resize can redraw every canvas. The
+      // same object both times, deliberately -- two copies of a row's
+      // colour is two things to keep in step.
+      var rec = {
+        canvas: canvas,
+        peaks: slot.peaks,
+        color: rowColor(slot),
+        kind: kind,
+        solo: soloKey,
+        mute: muteKey
+      }
+      mixEls[slot.id] = rec
+      rowCanvases.push(rec)
+
       row.appendChild(kind)
       row.appendChild(name)
+      row.appendChild(soloKey)
+      row.appendChild(muteKey)
       row.appendChild(stem)
       row.appendChild(drop)
       rowsEl.appendChild(row)
       // After append, so the canvas has a box to measure.
-      drawRowWave(canvas, slot.peaks, color)
-      rowCanvases.push({ canvas: canvas, peaks: slot.peaks, color: color })
+      paintRowMix(slot)
     })
     // The playhead's lane lives inside .rows and innerHTML just wiped it. It
     // is re-appended rather than rebuilt, so lineEl -- still inside it --

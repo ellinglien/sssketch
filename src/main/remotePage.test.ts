@@ -141,6 +141,8 @@ describe('remotePage copy', () => {
       'play',
       'sure',
       'x',
+      's',
+      'm',
       'keep',
       'hold',
       'similar',
@@ -567,35 +569,92 @@ describe('remotePage row gestures', () => {
   })
 })
 
-describe('remotePage solo', () => {
-  it('makes the first press a solo and the second a mute', () => {
-    // "could we also add solo? first press is solo, then second press is
-    // mute / like double tap" -- Elling, 2026-09-27. Two verbs cover three
-    // states because the mac's own two functions do: toggleSlotSolo drops
-    // every other row out, toggleSlotPreview takes this one out and puts it
-    // back.
-    expect(SCRIPT).toContain('function nextSlotAction(slot)')
-    expect(SCRIPT).toContain("return slot.soloed ? 'mute' : 'solo'")
-    expect(SCRIPT).toContain('if (slot.muted) return')
+describe('remotePage s and m', () => {
+  it('gives every row its own two buttons, in the shorthand every daw uses', () => {
+    // "buttosn for s and m instead! simplidy" -- Elling, on the phone,
+    // 2026-09-27, after a session with the tap cycle. Neither verb is new:
+    // both have been on the wire since a596b39 and on the desktop row since
+    // 2026-09-15. Only the way to reach them changed.
+    expect(SCRIPT).toContain("soloKey.textContent = 's'")
+    expect(SCRIPT).toContain("muteKey.textContent = 'm'")
+    expect(SCRIPT).toContain("sendSlotAction(slot, 'solo')")
+    expect(SCRIPT).toContain("sendSlotAction(slot, 'mute')")
   })
 
-  it('reads which third of the cycle it is in off the mix, not off a mode', () => {
-    // soloed comes from the mac, computed by remoteStateFromSlots the same
-    // way toggleSlotSolo computes it. The page never decides on its own that
-    // a row is soloed -- except between polls, where it has just made it so.
-    expect(SCRIPT).toContain('slot.soloed')
+  it('draws an engaged toggle as an inversion, the only word this page has for on', () => {
+    // .drop.armed and both sets of chips are the same white block. A second
+    // vocabulary for "engaged" would be a second thing to learn, and there
+    // is nothing else available: nothing here fades and no colour is spent
+    // on chrome.
+    expect(REMOTE_PAGE_HTML).toContain(
+      'button.key.on { background: #ededed; border-color: #ededed; color: #050505; }'
+    )
+    expect(SCRIPT).toContain("rec.solo.className = slot.soloed ? 'key solo on' : 'key solo'")
+    expect(SCRIPT).toContain("rec.mute.className = slot.muted ? 'key mute on' : 'key mute'")
+    expect(REMOTE_PAGE_HTML).not.toContain('opacity')
+  })
+
+  it('holds both letters to the tap target everything else on the page is held to', () => {
+    // Three small targets in a row is exactly where a thumb mis-taps, and
+    // one of them removes a stem. 42px each, and a 10px gutter between them
+    // from the row's own column-gap.
+    expect(REMOTE_PAGE_HTML).toContain('button.key {\n  width: 42px;\n  height: 42px;')
+    expect(REMOTE_PAGE_HTML).toContain('column-gap: 10px')
+  })
+
+  it('offers neither until the stem has resolved', () => {
+    // The desktop row's own hasStemToActOn guard. Dimmed to the page's
+    // faintest ink rather than faded, because nothing here fades.
+    expect(SCRIPT).toContain('soloKey.disabled = !slot.stemName')
+    expect(SCRIPT).toContain('muteKey.disabled = !slot.stemName')
+    expect(REMOTE_PAGE_HTML).toContain('button.key:disabled { color: #3a3a3a; }')
+  })
+
+  it('paints a mute onto one row rather than rebuilding the list', () => {
+    // d7ff531 took armedRemoveId out of the repaint key because arming one
+    // button rebuilt every row and threw the scroll. A mute is the same
+    // kind of change and gets the same treatment -- and the key is brought
+    // forward with the paint, so the poll that agrees with it 700ms later
+    // is not a rebuild either.
+    expect(SCRIPT).toContain('function paintRowMix(slot)')
+    expect(SCRIPT).toContain('function paintMix()')
+    expect(SCRIPT).toContain('lastRowsKey = JSON.stringify(lastSlots)')
+    // Still exactly one wipe of the row list, and it is renderRows'.
+    const wipes = SCRIPT.match(/rowsEl\.innerHTML = ''/g) ?? []
+    expect(wipes).toHaveLength(1)
+    // And the mute path does not go near renderRows.
+    const send = (/function sendSlotAction\(slot, next\)[\s\S]{0,400}?\n {2}\}/.exec(SCRIPT) ?? [
+      ''
+    ])[0]
+    expect(send).not.toContain('renderRows')
+  })
+
+  it('reads soloed off the mix rather than remembering it', () => {
+    // remoteStateFromSlots computes it from the same fact -- one row left
+    // in the mix -- so an optimistic paint and the poll that replaces it
+    // can only ever agree.
+    expect(SCRIPT).toContain('function recomputeSoloed()')
+    expect(SCRIPT).toContain('var alone = audibleRowCount() === 1')
+    expect(SCRIPT).toContain('lastSlots[i].soloed = !lastSlots[i].muted && alone')
   })
 
   it('paints a solo as every other row losing its colour, and nothing more', () => {
-    // A solo IS the other rows dropping out, so it needs no affordance of
-    // its own: they go grey by the mute treatment that already exists, and
-    // the one row still in colour is the picture. There is no spare colour
-    // on this page and nothing on it may fade.
+    // A solo IS the other rows dropping out, so the ROW needs no affordance
+    // of its own: they go grey by the mute treatment that already exists,
+    // and the one row still in colour is the picture. The s button lights
+    // because a toggle has to say whether it is engaged; the row takes no
+    // mark.
     expect(SCRIPT).toContain('lastSlots[i].muted = lastSlots[i].id !== slot.id')
-    expect(SCRIPT).toContain('lastSlots[i].soloed = lastSlots[i].id === slot.id')
-    expect(REMOTE_PAGE_HTML).not.toContain('opacity')
+    expect(REMOTE_PAGE_HTML).not.toContain('.row.soloed')
     // The one place a row's colour is decided, unchanged by solo.
     expect(SCRIPT).toContain("slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')")
+  })
+
+  it('puts the whole mix back on a second press of a solo that is already alone', () => {
+    // toggleSlotSolo's own behaviour, drawn rather than waited for: it is
+    // the one gesture that restores every row at once, and the one that
+    // most needs to be believed.
+    expect(SCRIPT).toContain('if (slot.soloed) lastSlots[i].muted = !lastSlots[i].stemName')
   })
 })
 
