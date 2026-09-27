@@ -304,6 +304,31 @@ describe('remotePage bottom sheets', () => {
   })
 })
 
+describe('remotePage hold to keep', () => {
+  it('takes 700ms of thumb, not a tap', () => {
+    expect(SCRIPT).toContain('KEEP_MS = 700')
+    expect(SCRIPT).toContain("api('/api/keep', {})")
+  })
+
+  it('sweeps an inversion, not a colour', () => {
+    expect(REMOTE_PAGE_HTML).toContain('mix-blend-mode: difference')
+    expect(REMOTE_PAGE_HTML).toContain('isolation: isolate')
+    expect(REMOTE_PAGE_HTML).toContain('transition: width 700ms linear')
+  })
+
+  it('says how to use it, in one word', () => {
+    expect(REMOTE_PAGE_HTML).toContain('>hold</span>')
+  })
+
+  it('abandons the hold on a lift, a leave or a cancel', () => {
+    expect(SCRIPT).toContain('function cancelKeep()')
+  })
+
+  it('keeps the transport three-up and 52px', () => {
+    expect(REMOTE_PAGE_HTML).toContain('height: 52px')
+  })
+})
+
 describe('remotePage last resort', () => {
   it('shows a line rather than nothing if its own script throws', () => {
     // Hidden until something actually throws -- it is a last resort, not a

@@ -272,10 +272,11 @@ button.drop {
 }
 button.drop:active { background: #161616; }
 button.drop.armed { background: #ededed; color: #050505; }
-.actions { display: flex; gap: 8px; }
+.actions { display: flex; gap: 8px; margin-top: 8px; }
 button.big {
   flex: 1;
-  padding: 18px 8px;
+  height: 52px;
+  padding: 0 8px;
   background: transparent;
   border: 1px solid #3a3a3a;
   color: #ededed;
@@ -285,6 +286,28 @@ button.big {
 button.big:active { background: #161616; }
 button.big.on { background: #ededed; color: #050505; }
 button.big.dim { border-color: #222222; color: #5a5a5a; }
+/* isolation scopes the blend to this button, so the fill inverts the label
+ * and nothing else on the page. */
+button.keep { position: relative; overflow: hidden; isolation: isolate; }
+button.keep .fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 0;
+  background: #ededed;
+}
+button.keep .fill.run { transition: width 700ms linear; }
+/* The label is white on black; where the white fill passes under it, the
+ * difference blend makes it black on white. An inversion, not a colour --
+ * #ededed is the page's own text colour. */
+button.keep .keep-label,
+button.keep .hint {
+  position: relative;
+  mix-blend-mode: difference;
+  color: #ededed;
+}
+button.keep .hint { font-size: 9px; margin-left: 6px; color: #6a6a6a; }
 /* One sheet treatment, used by both sheets, so "something came up from the
  * bottom" means one thing. */
 .sheet-bg {
@@ -385,9 +408,9 @@ input {
     <button class="lit" id="new-stem">new stem</button>
     <div id="loop" hidden>
       <div class="actions">
-        <button class="big" id="roll-all">roll all</button>
         <button class="big" id="play">play</button>
-        <button class="big" id="keep">keep</button>
+        <button class="big keep" id="keep"><span class="fill" id="keep-fill"></span><span class="keep-label">keep</span><span class="hint">hold</span></button>
+        <button class="big" id="roll-all">roll all</button>
       </div>
     </div>
     <div class="eyebrow foot" id="mac"></div>
@@ -983,7 +1006,48 @@ input {
     if (audioBuffer && loadedLoopId === currentLoopId) startSource()
     else loadLoop()
   })
-  document.getElementById('keep').addEventListener('click', function () { api('/api/keep', {}) })
+  // Keeping is the one thing on this page that feels irreversible, and the
+  // thumb doing it is the same thumb tapping rows to mute them. Same
+  // arbitration shape as a row's long press, so there is one mental model
+  // on the page and not two.
+  var KEEP_MS = 700
+  var keepTimer = null
+  var keepX = 0
+  var keepY = 0
+  var keepFillEl = document.getElementById('keep-fill')
+  var keepEl = document.getElementById('keep')
+
+  function cancelKeep() {
+    if (keepTimer) { clearTimeout(keepTimer); keepTimer = null }
+    keepFillEl.className = 'fill'
+    keepFillEl.style.width = '0'
+  }
+
+  keepEl.addEventListener('pointerdown', function (e) {
+    keepX = e.clientX
+    keepY = e.clientY
+    cancelKeep()
+    keepFillEl.className = 'fill run'
+    keepFillEl.style.width = '100%'
+    keepTimer = setTimeout(function () {
+      keepTimer = null
+      buzz()
+      api('/api/keep', {})
+      flash('kept')
+      cancelKeep()
+    }, KEEP_MS)
+  })
+  keepEl.addEventListener('pointermove', function (e) {
+    if (keepTimer === null) return
+    var dx = e.clientX - keepX
+    var dy = e.clientY - keepY
+    if (dx < 0) dx = -dx
+    if (dy < 0) dy = -dy
+    if (dx > SLOP_PX || dy > SLOP_PX) cancelKeep()
+  })
+  keepEl.addEventListener('pointerup', cancelKeep)
+  keepEl.addEventListener('pointerleave', cancelKeep)
+  keepEl.addEventListener('pointercancel', cancelKeep)
 
   function poll() {
     if (!token) return
