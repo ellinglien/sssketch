@@ -12,6 +12,8 @@ import type {
 } from '@shared/riffLibraryTypes'
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/riffLibraryTypes'
 import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
+import { columnStemSlots, mergeStemSlots, type StemSlotRef } from '@shared/riffStemSlots'
+import { readExtraStemSlots } from './riffStemsExtra'
 import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import {
   recordStemDownloadFailure,
@@ -496,7 +498,15 @@ export function candidateDbsForRiff(): Database.Database[] {
   return dbs
 }
 
-function buildResolvedRiff(db: Database.Database, riffRow: FullRiffRow): RiffLibraryResolvedRiff {
+function buildResolvedRiff(
+  db: Database.Database,
+  riffRow: FullRiffRow,
+  // Slots 9+ from RiffStemsExtra, already read in one batched query by the
+  // caller. Empty for an external OUROVEON/LORE warehouse, which has no
+  // such table and cannot be given one -- so <=8 stems there is the same
+  // code path as everything else, not a special case.
+  extraSlots: readonly StemSlotRef[] = []
+): RiffLibraryResolvedRiff {
   // GainsJSON keys are slot numbers as strings (e.g. {"1": 0.8}) — malformed
   // or absent JSON just means every stem falls back to the default gain,
   // not a thrown error.
@@ -509,11 +519,10 @@ function buildResolvedRiff(db: Database.Database, riffRow: FullRiffRow): RiffLib
     }
   }
 
-  const slots: { slot: number; stemCID: string }[] = []
-  for (let slot = 1; slot <= 8; slot++) {
-    const cid = riffRow[`StemCID_${slot}` as keyof FullRiffRow] as string | null
-    if (cid) slots.push({ slot, stemCID: cid })
-  }
+  const slots = mergeStemSlots(
+    columnStemSlots(riffRow as unknown as Record<string, unknown>),
+    extraSlots
+  )
 
   const stems: RiffLibraryResolvedStem[] = slots.map(({ slot, stemCID }) => {
     const stemRow = db
@@ -586,7 +595,9 @@ export function resolveRiff(riffCID: string): RiffLibraryResolvedRiff | null {
          FROM Riffs WHERE RiffCID = ?`
       )
       .get(riffCID) as FullRiffRow | undefined
-    if (riffRow) return buildResolvedRiff(db, riffRow)
+    if (riffRow) {
+      return buildResolvedRiff(db, riffRow, readExtraStemSlots(db, [riffCID]).get(riffCID) ?? [])
+    }
   }
   return null
 }

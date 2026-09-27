@@ -20,6 +20,7 @@ import {
 } from './riffLibraryStore'
 import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import { writeRiffDetail } from './riffLibraryWriter'
+import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { stemDownloadUrl } from '@shared/riffLibraryTypes'
 import { DEFAULT_SESSION_RETRY_ATTEMPTS } from '@shared/stemAvailability'
 
@@ -612,8 +613,16 @@ describe('listRiffs', () => {
 
 describe('resolveRiff', () => {
   let root: string
+  // Set here rather than relying on a sibling describe's hook having run
+  // first: candidateDbsForRiff() reaches ownRiffLibraryRoot(), which asks
+  // the mocked app.getPath('music'), so this describe has to stand up on
+  // its own when the suite is filtered to one of its cases.
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-userdata-resolve-test-'))
+  })
   afterEach(() => {
     if (root) rmSync(root, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
   })
 
   it('resolves every populated stem slot with its path, gain, and metadata', () => {
@@ -717,6 +726,57 @@ describe('resolveRiff', () => {
   it('returns null when the warehouse is unavailable, rather than throwing', () => {
     setRiffLibraryRootForTests('/no/such/path')
     expect(resolveRiff('riff-1')).toBeNull()
+  })
+
+  it('resolves a twelve-stem rifff, columns and side table merged in slot order', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.exec(RIFF_STEMS_EXTRA_DDL)
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_1', 'jam one')`).run()
+    const columns = Array.from({ length: 8 }, (_, i) => `'stem_${i + 1}'`).join(', ')
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName,
+                          StemCID_1, StemCID_2, StemCID_3, StemCID_4,
+                          StemCID_5, StemCID_6, StemCID_7, StemCID_8, GainsJSON)
+       VALUES ('riff_big', 'jam_1', 100, 120, 4, 'elling', ${columns}, '{"12":0.25}')`
+    ).run()
+    for (let slot = 9; slot <= 12; slot++) {
+      db.prepare(`INSERT INTO RiffStemsExtra VALUES ('riff_big', ?, ?)`).run(slot, `stem_${slot}`)
+    }
+    for (let i = 1; i <= 12; i++) {
+      db.prepare(
+        `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument,
+                            BPMrnd, Length16s)
+         VALUES (?, 'jam_1', 'elling', 'thud', 1, 120, 64)`
+      ).run(`stem_${i}`)
+    }
+    db.close()
+
+    const resolved = resolveRiff('riff_big')
+    expect(resolved?.stems.map((s) => s.slot)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
+    expect(resolved?.stems[11].stemCID).toBe('stem_12')
+    expect(resolved?.stems[11].gain).toBeCloseTo(0.25)
+  })
+
+  it('resolves eight stems against a warehouse with no side table, which is every external LORE one', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_1', 'jam one')`).run()
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, StemCID_1)
+       VALUES ('riff_plain', 'jam_1', 100, 120, 4, 'elling', 'stem_1')`
+    ).run()
+    db.prepare(
+      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, Length16s)
+       VALUES ('stem_1', 'jam_1', 'elling', 'thud', 1, 120, 64)`
+    ).run()
+    db.close()
+
+    expect(resolveRiff('riff_plain')?.stems.map((s) => s.slot)).toEqual([1])
   })
 })
 
