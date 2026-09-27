@@ -191,8 +191,22 @@ export const REMOTE_PAGE_HTML = `<!doctype html>
  * this is user-scalable=no in the viewport, which takes pinch away too and
  * which safari has ignored since ios 10 anyway. On * rather than on body
  * because touch-action is not inherited -- the gesture is resolved against
- * the element actually tapped, which is always a chip or a button. */
-* { box-sizing: border-box; border-radius: 0; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+ * the element actually tapped, which is always a chip or a button.
+ *
+ * user-select: none went on the same rule on 2026-09-27: "pressing and
+ * holding to keep i selected the text below on my iphone". Every gesture on
+ * this page is a press -- a row is 450ms, keep is 700ms -- and a press held
+ * over text is how ios raises its selection handles and its callout. The
+ * rows had carried their own copy of this since the long press was built;
+ * keep never had one, so the 700ms press selected straight through the
+ * transport and the foot. One rule on * replaces both, which is also why
+ * .row no longer declares it.
+ *
+ * It has to be css. The script is not allowed to contain preventDefault
+ * (remotePage.test.ts asserts it), and a selectstart handler is the only
+ * way to do this in js. -webkit-touch-callout rides along because it is the
+ * same press raising the same menu. */
+* { box-sizing: border-box; border-radius: 0; touch-action: manipulation; -webkit-tap-highlight-color: transparent; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 body {
   margin: 0;
   padding: env(safe-area-inset-top, 0px) 16px env(safe-area-inset-bottom, 0px);
@@ -286,12 +300,6 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
   background: #0a0a0a;
   border: 1px solid #222222;
   color: #ededed;
-  /* A 450ms press on text raises ios's selection callout and magnifier.
-   * Suppressed here and not in js, because remotePage.test.ts asserts the
-   * script never contains preventDefault. */
-  -webkit-user-select: none;
-  user-select: none;
-  -webkit-touch-callout: none;
 }
 .row:active { background: #161616; }
 .row .kind { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -429,6 +437,15 @@ input {
   letter-spacing: 0.3em;
   text-align: center;
   text-transform: uppercase;
+  /* THE exception to the page-wide user-select: none above, and not an
+   * optional one: this is the pair screen's four-character code field, and
+   * user-select: none on an input takes the ios caret handles and the edit
+   * menu with it -- paste, in particular, which is how a code copied off
+   * the mac gets in. -webkit-touch-callout is reset for the same reason: it
+   * is what raises that menu. */
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
 }
 .msg { font-size: 11px; color: #8f8f8f; min-height: 18px; margin-top: 10px; }
 [hidden] { display: none; }

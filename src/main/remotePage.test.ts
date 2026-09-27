@@ -407,6 +407,40 @@ describe('remotePage stem action sheet', () => {
   })
 })
 
+describe('remotePage text selection', () => {
+  it('suppresses selection page-wide, because every gesture here is a press', () => {
+    // "pressing and holding to keep i selected the text below on my iphone"
+    // -- Elling, 2026-09-27. A row is a 450ms press and keep is a 700ms
+    // one; neither may raise ios's selection handles over the page.
+    expect(REMOTE_PAGE_HTML).toContain('-webkit-user-select: none')
+    expect(REMOTE_PAGE_HTML).toContain('-webkit-touch-callout: none')
+  })
+
+  it('does it in css, because the script may not have a preventDefault', () => {
+    // The nicer js fix is a selectstart handler, and this page is not
+    // allowed one -- see 'remotePage last resort' below.
+    expect(SCRIPT).not.toContain('selectstart')
+    expect(SCRIPT).not.toContain('user-select')
+  })
+
+  it('hands selection back to the code field, which has to stay editable', () => {
+    // Not optional: user-select: none on an input takes the ios caret
+    // handles and the edit menu with it, paste included.
+    expect(REMOTE_PAGE_HTML).toContain('user-select: text')
+    expect(REMOTE_PAGE_HTML).toContain('-webkit-touch-callout: default')
+  })
+
+  it('has one mechanism for it, not two overlapping ones', () => {
+    // The rows carried their own copy from the day the long press was
+    // built. The * rule covers them, so theirs is gone; two rules saying
+    // the same thing is how one of them gets changed alone later. The
+    // pattern skips the -webkit- prefixed spelling on the same line, and
+    // the trailing semicolon skips the prose in the comments around it.
+    const declarations = REMOTE_PAGE_HTML.match(/[^-]user-select: none;/g) ?? []
+    expect(declarations).toHaveLength(1)
+  })
+})
+
 describe('remotePage csp reality', () => {
   it('has no image of any kind, because the csp forbids even a data uri', () => {
     expect(REMOTE_PAGE_HTML).not.toContain('<img')
