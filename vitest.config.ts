@@ -51,6 +51,7 @@ export default defineConfig({
           'src/main/riffLibrarySchema.test.ts',
           'src/main/riffLibrarySync.test.ts',
           'src/main/riffLibraryWriter.test.ts',
+          'src/main/riffStemsExtra.test.ts',
           'src/main/riffFavouritesMigration.test.ts',
           'src/main/categoryCentroidTraining.test.ts',
           'src/main/discoverCandidates.test.ts',
