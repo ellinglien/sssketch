@@ -6,7 +6,12 @@ import {
   STEM_SLOT_COLUMNS,
   splitStemSlots
 } from '@shared/riffStemSlots'
-import { writeExtraStemSlots } from './riffStemsExtra'
+import {
+  deleteExtraStemSlotsForJam,
+  extraStemCIDsForJam,
+  hasExtraStemSlotsTable,
+  writeExtraStemSlots
+} from './riffStemsExtra'
 
 export function upsertJam(db: Database.Database, jamCID: string, publicName: string): void {
   db.prepare(
@@ -246,8 +251,9 @@ export function filterUnresolved(db: Database.Database, riffCIDs: string[]): str
  * content-addressed audio, not scoped to a single jam. Deleting by
  * Stems.OwnerJamCID alone would silently break playback for anything else
  * still pointing at the same audio, so this instead walks every
- * Riffs.StemCID_1..8 slot -- the actual source of truth for "is this stem
- * still needed by ANY jam" -- checked only after this jam's own Riffs rows
+ * Riffs.StemCID_1..8 slot AND every RiffStemsExtra row -- together, the
+ * actual source of truth for "is this stem still needed by ANY jam" --
+ * checked only after this jam's own Riffs rows
  * are already gone, so a stem this jam happened to discover first but that
  * a different jam's riff also references is correctly kept. Returns []
  * (having still deleted the jam's own rows) if nothing was synced for this
@@ -264,8 +270,14 @@ export function deleteJamRows(db: Database.Database, jamCID: string): string[] {
       if (cid) candidateStemCIDs.add(cid)
     }
   }
+  // Slots 9+ are candidates too. Read BEFORE the delete below -- both of
+  // these go through Riffs to find the jam's riffCIDs, so after the delete
+  // they would find nothing. One query each, via a subselect, rather than
+  // binding a 20,000-riffCID list from JS.
+  for (const stemCID of extraStemCIDsForJam(db, jamCID)) candidateStemCIDs.add(stemCID)
 
   db.transaction(() => {
+    deleteExtraStemSlotsForJam(db, jamCID)
     db.prepare(`DELETE FROM Riffs WHERE OwnerJamCID = ?`).run(jamCID)
     db.prepare(`DELETE FROM Tags WHERE OwnerJamCID = ?`).run(jamCID)
     db.prepare(`DELETE FROM Jams WHERE JamCID = ?`).run(jamCID)
@@ -273,7 +285,18 @@ export function deleteJamRows(db: Database.Database, jamCID: string): string[] {
 
   if (candidateStemCIDs.size === 0) return []
   const stillReferencedWhere = STEM_SLOT_COLUMNS.map((c) => `${c} = @cid`).join(' OR ')
-  const checkStmt = db.prepare(`SELECT 1 FROM Riffs WHERE ${stillReferencedWhere} LIMIT 1`)
+  // SELECT 1 WHERE EXISTS(...) OR EXISTS(...), not SELECT 1 FROM Riffs
+  // WHERE ... OR EXISTS(...). The second shape looks equivalent and is
+  // not: with the jam's riffs gone, Riffs can be empty, and a statement
+  // selecting FROM an empty table returns no rows however true the EXISTS
+  // is -- so a stem held only in some other riff's slot 12 would be
+  // reported orphaned and deleted.
+  const extraClause = hasExtraStemSlotsTable(db)
+    ? ` OR EXISTS (SELECT 1 FROM RiffStemsExtra WHERE StemCID = @cid)`
+    : ''
+  const checkStmt = db.prepare(
+    `SELECT 1 WHERE EXISTS (SELECT 1 FROM Riffs WHERE ${stillReferencedWhere})${extraClause}`
+  )
   const orphanedStemCIDs = [...candidateStemCIDs].filter((cid) => !checkStmt.get({ cid }))
   if (orphanedStemCIDs.length > 0) {
     const placeholders = orphanedStemCIDs.map(() => '?').join(',')

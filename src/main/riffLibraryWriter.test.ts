@@ -447,4 +447,39 @@ describe('riffLibraryWriter', () => {
     )
     expect(readExtraStemSlots(db, ['riff_1']).has('riff_1')).toBe(false)
   })
+
+  it('collects a stem that only appears past the eighth slot as a candidate', () => {
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_1', 'one')`).run()
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, StemCID_1) VALUES ('r1', 'jam_1', 'in_column')`
+    ).run()
+    db.prepare(`INSERT INTO RiffStemsExtra VALUES ('r1', 9, 'only_extra')`).run()
+    db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES ('in_column', 'jam_1')`).run()
+    db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES ('only_extra', 'jam_1')`).run()
+
+    expect(deleteJamRows(db, 'jam_1').sort()).toEqual(['in_column', 'only_extra'])
+  })
+
+  it('keeps a stem another jam riff still holds past its eighth slot', () => {
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_1', 'one')`).run()
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_2', 'two')`).run()
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, StemCID_1) VALUES ('r1', 'jam_1', 'shared')`
+    ).run()
+    db.prepare(`INSERT INTO Riffs (RiffCID, OwnerJamCID) VALUES ('r2', 'jam_2')`).run()
+    db.prepare(`INSERT INTO RiffStemsExtra VALUES ('r2', 12, 'shared')`).run()
+    db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES ('shared', 'jam_1')`).run()
+
+    expect(deleteJamRows(db, 'jam_1')).toEqual([])
+    expect(db.prepare(`SELECT 1 FROM Stems WHERE StemCID = 'shared'`).get()).toBeDefined()
+  })
+
+  it('deletes the jam own side rows along with its riffs', () => {
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_1', 'one')`).run()
+    db.prepare(`INSERT INTO Riffs (RiffCID, OwnerJamCID) VALUES ('r1', 'jam_1')`).run()
+    db.prepare(`INSERT INTO RiffStemsExtra VALUES ('r1', 9, 'a')`).run()
+    deleteJamRows(db, 'jam_1')
+    const { n } = db.prepare(`SELECT COUNT(*) AS n FROM RiffStemsExtra`).get() as { n: number }
+    expect(n).toBe(0)
+  })
 })
