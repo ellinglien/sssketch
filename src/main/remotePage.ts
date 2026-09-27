@@ -445,28 +445,6 @@ button.big {
 button.big:active { background: #161616; }
 button.big.on { background: #ededed; color: #050505; }
 button.big.dim { border-color: #222222; color: #5a5a5a; }
-/* isolation scopes the blend to this button, so the fill inverts the label
- * and nothing else on the page. */
-button.keep { position: relative; overflow: hidden; isolation: isolate; }
-button.keep .fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  bottom: 0;
-  width: 0;
-  background: #ededed;
-}
-button.keep .fill.run { transition: width 700ms linear; }
-/* The label is white on black; where the white fill passes under it, the
- * difference blend makes it black on white. An inversion, not a colour --
- * #ededed is the page's own text colour. */
-button.keep .keep-label,
-button.keep .hint {
-  position: relative;
-  mix-blend-mode: difference;
-  color: #ededed;
-}
-button.keep .hint { font-size: 9px; margin-left: 6px; color: #6a6a6a; }
 /* One sheet treatment, used by both sheets, so "something came up from the
  * bottom" means one thing. */
 .sheet-bg {
@@ -598,7 +576,7 @@ input {
     <div id="loop" hidden>
       <div class="actions">
         <button class="big" id="play">play</button>
-        <button class="big keep" id="keep"><span class="fill" id="keep-fill"></span><span class="keep-label">keep</span><span class="hint">hold</span></button>
+        <button class="big" id="keep">keep</button>
         <button class="big" id="roll-all">roll all</button>
       </div>
       <!-- Where a new mix is allowed to take over. UNDER the transport, not
@@ -2258,52 +2236,33 @@ input {
     setPlayLabel()
     reconcile()
   })
-  // Keeping is the one thing on this page that feels irreversible, so it
-  // asks for a held thumb rather than a tap. It is now the ONLY hold on the
-  // page -- the rows gave theirs up for s, m and a tap that opens the menu
-  // -- which means a press held on this page can mean exactly one thing.
-  var KEEP_MS = 700
-  // How far the thumb may drift in those 700ms and still be holding. It was
-  // shared with the row's long press until that press was deleted; keep is
-  // the only hold left on the page.
-  var SLOP_PX = 10
-  var keepTimer = null
-  var keepX = 0
-  var keepY = 0
-  var keepFillEl = document.getElementById('keep-fill')
+  // Keeping is a tap. It was a 700ms hold, on the reasoning that the one
+  // thing on this page that writes to disk deserves a beat of intent --
+  // and reported not working at all on his iPhone (2026-09-27), with the
+  // instruction "doesnt need to be a touch and hold necessarily.. it an be
+  // just a click".
+  //
+  // The likely reason it failed is worth recording, because it argues
+  // against ever bringing a hold back here. A hold has to be abandoned when
+  // the browser claims the gesture, so its undo was bound to the
+  // pointercancel event -- and iOS fires that when it decides a touch
+  // might become a scroll. The stack went top-aligned and the rows grew to
+  // two lines on the same day, so the page became genuinely scrollable, and
+  // a thumb resting on a button for most of a second on a scrollable page
+  // is exactly the shape iOS reads as the start of a pan. The hold could
+  // have been rescued with touch-action: none on this one button, but a tap
+  // is what he asked for and a tap cannot be taken away from him by a
+  // scroll heuristic.
+  //
+  // There is now NO hold anywhere on this page: the rows gave theirs up for
+  // s, m and a tap that opens the menu, and this was the last one.
   var keepEl = document.getElementById('keep')
 
-  function cancelKeep() {
-    if (keepTimer) { clearTimeout(keepTimer); keepTimer = null }
-    keepFillEl.className = 'fill'
-    keepFillEl.style.width = '0'
-  }
-
-  keepEl.addEventListener('pointerdown', function (e) {
-    keepX = e.clientX
-    keepY = e.clientY
-    cancelKeep()
-    keepFillEl.className = 'fill run'
-    keepFillEl.style.width = '100%'
-    keepTimer = setTimeout(function () {
-      keepTimer = null
-      buzz()
-      api('/api/keep', {})
-      flash('kept')
-      cancelKeep()
-    }, KEEP_MS)
+  keepEl.addEventListener('click', function () {
+    buzz()
+    api('/api/keep', {})
+    flash('kept')
   })
-  keepEl.addEventListener('pointermove', function (e) {
-    if (keepTimer === null) return
-    var dx = e.clientX - keepX
-    var dy = e.clientY - keepY
-    if (dx < 0) dx = -dx
-    if (dy < 0) dy = -dy
-    if (dx > SLOP_PX || dy > SLOP_PX) cancelKeep()
-  })
-  keepEl.addEventListener('pointerup', cancelKeep)
-  keepEl.addEventListener('pointerleave', cancelKeep)
-  keepEl.addEventListener('pointercancel', cancelKeep)
 
   function poll() {
     if (!token) return

@@ -691,10 +691,26 @@ describe('remotePage row gestures', () => {
     }
   })
 
-  it('leaves the slop threshold to keep, which is the only hold left', () => {
-    expect(SCRIPT).toContain('SLOP_PX = 10')
-    const slop = SCRIPT.indexOf('var SLOP_PX = 10')
-    expect(slop).toBeGreaterThan(SCRIPT.indexOf('var KEEP_MS = 700'))
+  it('has no hold left anywhere on the page, keep included', () => {
+    // Keep was the last one and it is a tap now (2026-09-27: "doesnt need
+    // to be a touch and hold necessarily.. it an be just a click"), after
+    // it was reported not working at all on his iPhone.
+    //
+    // This asserts the machinery is gone rather than merely unreached,
+    // because the reason it went is a trap worth not walking back into: a
+    // hold must give up when the browser claims the gesture, so it listens
+    // for pointercancel -- and iOS fires pointercancel when it decides a
+    // touch might become a scroll. The page became scrollable the same day
+    // the stack went top-aligned and the rows grew to two lines. A thumb
+    // resting on a button for most of a second, on a scrollable page, is
+    // the shape iOS reads as the start of a pan.
+    for (const ghost of ['KEEP_MS', 'SLOP_PX', 'keepTimer', 'cancelKeep', 'keep-fill']) {
+      expect(SCRIPT).not.toContain(ghost)
+    }
+    expect(REMOTE_PAGE_HTML).not.toContain('keep-fill')
+    // One listener, and it is a click.
+    const listeners = SCRIPT.match(/keepEl\.addEventListener\('[a-z]+'/g) ?? []
+    expect(listeners).toEqual(["keepEl.addEventListener('click'"])
   })
 
   it('leaves the row\u2019s own buttons out of the tap', () => {
@@ -1067,24 +1083,14 @@ describe('remotePage bottom sheets', () => {
   })
 })
 
-describe('remotePage hold to keep', () => {
-  it('takes 700ms of thumb, not a tap', () => {
-    expect(SCRIPT).toContain('KEEP_MS = 700')
+describe('remotePage keep', () => {
+  it('is a tap, and posts on that tap', () => {
+    // Was a 700ms hold until 2026-09-27, when it was reported not working
+    // at all on his iPhone and he said a click would do. The hold, its
+    // fill sweep and the difference blend that inverted the label under
+    // it are all gone; "has no hold left anywhere on the page" above is
+    // the assertion that they stayed gone.
     expect(SCRIPT).toContain("api('/api/keep', {})")
-  })
-
-  it('sweeps an inversion, not a colour', () => {
-    expect(REMOTE_PAGE_HTML).toContain('mix-blend-mode: difference')
-    expect(REMOTE_PAGE_HTML).toContain('isolation: isolate')
-    expect(REMOTE_PAGE_HTML).toContain('transition: width 700ms linear')
-  })
-
-  it('says how to use it, in one word', () => {
-    expect(REMOTE_PAGE_HTML).toContain('>hold</span>')
-  })
-
-  it('abandons the hold on a lift, a leave or a cancel', () => {
-    expect(SCRIPT).toContain('function cancelKeep()')
   })
 
   it('keeps the transport three-up and 52px', () => {
