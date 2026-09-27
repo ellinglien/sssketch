@@ -432,7 +432,6 @@ input {
   var pairMsgEl = document.getElementById('pair-msg')
   var playEl = document.getElementById('play')
   var lineEl = document.getElementById('line')
-  var waveEl = document.getElementById('wave')
   var macEl = document.getElementById('mac')
 
   // The phone plays the loop ITSELF. The Mac is not touched in either
@@ -496,7 +495,6 @@ input {
         return audioCtx.decodeAudioData(got.bytes).then(function (buf) {
           audioBuffer = buf
           loadedLoopId = got.id
-          setWavePeaks(got.id, buf)
           restStatus()
           if (wantPlaying) startSource()
         })
@@ -505,134 +503,17 @@ input {
       .then(function () { fetching = false })
   }
 
-  // --- the waveform ------------------------------------------------------
-  // Drawn from the AudioBuffer THIS PHONE is playing, decoded a few lines
-  // above. Nothing is fetched for it, no endpoint serves it and no peaks
-  // cross the wire: the bytes are already here, so the shape is guaranteed
-  // to be the one that is sounding rather than a second rendering of it
-  // that could disagree.
-  //
-  // The peaks are keyed by loadedLoopId -- the id of the buffer we HOLD, not
-  // state.loopId, the id the mac currently wants. Those differ for as long
-  // as a new loop is downloading, and radio mode (shipped 2026-09-26) makes
-  // that happen on its own every 6-48 bars with nobody touching the phone.
-  // Keying on the held buffer is what makes that change flicker-free and
-  // still never stale: the old loop is genuinely still playing until
-  // startSource swaps it, so its waveform is the correct thing to be
-  // showing, and the swap happens in the same tick as the audio.
-  var WAVE_BUCKETS = 128
-  var waveCtx = waveEl && waveEl.getContext ? waveEl.getContext('2d') : null
-  var wavePeaks = null
-  var wavePeaksLoopId = null
-  var waveDrawnCol = -1
-  var waveDirty = true
-
-  function markWaveDirty() { waveDirty = true }
-
-  // Absolute max per bucket, same shape as the desktop's peaksFromChannel
-  // (src/shared/visuals.ts) down to the stride of 7 -- max, never an
-  // average, because an average of a loud drum hit and the silence around
-  // it draws a quiet drum hit. Channel 0 of a stereo mixdown, as on the
-  // desktop. Runs ONCE per loop, not per frame.
-  function peaksFromBuffer(buf) {
-    var samples = buf.getChannelData(0)
-    var out = []
-    for (var i = 0; i < WAVE_BUCKETS; i++) {
-      var a = Math.floor((i * samples.length) / WAVE_BUCKETS)
-      var b = Math.floor(((i + 1) * samples.length) / WAVE_BUCKETS)
-      var m = 0
-      for (var j = a; j < b; j += 7) {
-        var v = samples[j]
-        if (v < 0) v = -v
-        if (v > m) m = v
-      }
-      out.push(m)
-    }
-    return out
-  }
-
-  function setWavePeaks(loopId, buf) {
-    if (wavePeaksLoopId === loopId && wavePeaks) return
-    wavePeaks = peaksFromBuffer(buf)
-    wavePeaksLoopId = loopId
-    markWaveDirty()
-  }
-
-  function clearWavePeaks() {
-    wavePeaks = null
-    wavePeaksLoopId = null
-    markWaveDirty()
-  }
-
-  // Returns false when there is nothing to draw INTO -- the track is inside
-  // #loop, which is hidden until there is a slot, and a hidden element has
-  // no box. The caller leaves the dirty flag up so the first frame after it
-  // becomes visible draws for real.
-  function drawWave(progress) {
-    if (!waveCtx) return false
-    var cssW = waveEl.clientWidth
-    var cssH = waveEl.clientHeight
-    if (cssW <= 0 || cssH <= 0) return false
-    // Retina: the backing store is sized in DEVICE pixels and the context is
-    // scaled back, so everything below is written in css pixels. Without
-    // this a 1px bar is a soft grey smear on his phone. Assigning width or
-    // height also clears the canvas and resets the transform, so it is
-    // guarded -- this is a no-op on every frame except a resize.
-    var dpr = window.devicePixelRatio || 1
-    var w = Math.round(cssW * dpr)
-    var h = Math.round(cssH * dpr)
-    if (waveEl.width !== w) waveEl.width = w
-    if (waveEl.height !== h) waveEl.height = h
-    waveCtx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    waveCtx.clearRect(0, 0, cssW, cssH)
-    var mid = cssH / 2
-    if (!wavePeaks) {
-      // No loop held: nothing downloaded yet, still downloading the first
-      // one, or a decode that failed. A flat rule, never the last loop's
-      // shape -- the message line under the buttons says which of those it
-      // is.
-      waveCtx.fillStyle = '#222222'
-      waveCtx.fillRect(0, Math.floor(mid), cssW, 1)
-      return true
-    }
-    // Monochrome on purpose: this is the whole loop mixed down, not a
-    // typed stem, so there is no sound type for it to be the colour of.
-    // Played bright, unplayed dim, both greys the page already uses.
-    var n = wavePeaks.length
-    var cut = progress * n
-    var room = mid - 1
-    for (var i = 0; i < n; i++) {
-      var x = (i * cssW) / n
-      var bw = (((i + 1) * cssW) / n) - x - 0.5
-      if (bw < 1) bw = 1
-      var amp = wavePeaks[i] * room
-      if (amp < 0.5) amp = 0.5
-      waveCtx.fillStyle = i < cut ? '#ededed' : '#3a3a3a'
-      waveCtx.fillRect(x, mid - amp, bw, amp * 2)
-    }
-    return true
-  }
-
   // The progress line, driven by the phone's OWN audio clock. Nothing about
   // its position comes from the Mac: no position messages, no clock sync.
-  // Unclickable in two independent ways -- .track is pointer-events:none
-  // (which the canvas inherits), and no listener of any kind is attached to
-  // it, to the canvas or to the line. It is an indicator. Do not add a seek.
+  // It spans the slot-row stack now that there is no master waveform to sit
+  // over -- and it is still unclickable in two independent ways: .line is
+  // pointer-events:none, and no listener of any kind is attached to it. It
+  // is an indicator. Do not add a seek.
   function tick() {
-    var progress = 0
     if (srcNode && audioBuffer && audioCtx && audioBuffer.duration > 0) {
       var t = (audioCtx.currentTime - startedAt) % audioBuffer.duration
-      progress = t / audioBuffer.duration
+      var progress = t / audioBuffer.duration
       lineEl.style.left = (progress * 100) + '%'
-    }
-    // One redraw per column the playhead crosses, not one per frame. The
-    // peaks are cached either way; this is about the 128 fills.
-    var col = wavePeaks ? Math.floor(progress * wavePeaks.length) : -1
-    if (waveDirty || col !== waveDrawnCol) {
-      if (drawWave(progress)) {
-        waveDirty = false
-        waveDrawnCol = col
-      }
     }
     requestAnimationFrame(tick)
   }
@@ -963,7 +844,6 @@ input {
       currentLoopId = null
       loadedLoopId = null
       audioBuffer = null
-      clearWavePeaks()
       if (wantPlaying) { wantPlaying = false; stopSource(); setPlayLabel() }
       msgEl.textContent = 'open discover on the mac'
       return
@@ -981,11 +861,7 @@ input {
     // Nothing to roll, play or keep until there is a slot -- and the add
     // row is then the only thing on screen, which is the point.
     emptyEl.hidden = state.slots.length > 0
-    // The canvas has no box while #loop is hidden, so the first frame after
-    // it comes back has to redraw rather than trust waveDrawnCol.
-    var loopWasHidden = loopEl.hidden
     loopEl.hidden = state.slots.length === 0
-    if (loopWasHidden !== loopEl.hidden) markWaveDirty()
     // A slot that vanished from under an armed remove must not leave the
     // arming pointed at an id that no longer exists.
     if (armedRemoveId !== null) {

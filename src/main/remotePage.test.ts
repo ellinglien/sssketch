@@ -229,6 +229,22 @@ describe('remotePage rows', () => {
   })
 })
 
+describe('remotePage without a master waveform', () => {
+  it('lets the stack of per-stem shapes be the picture', () => {
+    expect(SCRIPT).not.toContain('peaksFromBuffer')
+    expect(SCRIPT).not.toContain('wavePeaks')
+    expect(REMOTE_PAGE_HTML).not.toContain('id="wave"')
+  })
+
+  it('keeps the playhead, because it is the only motion on the page', () => {
+    expect(REMOTE_PAGE_HTML).toContain('id="line"')
+    expect(REMOTE_PAGE_HTML).toContain('background: #c56164')
+    expect(SCRIPT).toContain("lineEl.style.left = (progress * 100) + '%'")
+    // An indicator, not a seek. Both guards, as before.
+    expect(REMOTE_PAGE_HTML).toContain('pointer-events: none')
+  })
+})
+
 describe('remotePage last resort', () => {
   it('shows a line rather than nothing if its own script throws', () => {
     // Hidden until something actually throws -- it is a last resort, not a
