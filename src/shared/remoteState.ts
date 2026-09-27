@@ -22,6 +22,17 @@ export interface RemoteSlotView {
    * the guided flow asks "is this in the mix", the phone shows a mute
    * state, and the page should not have to invert it at four call sites. */
   muted: boolean
+  /** The only slot left in the audible mix. Not a mode the Mac remembers --
+   * Discover deliberately keeps no soloed-slot id (see toggleSlotSolo) --
+   * but the state a solo LEAVES, computed here the same way toggleSlotSolo
+   * computes it: audible, and the only one that is. The phone needs it to
+   * know which third of a row's tap cycle it is in (audible -> solo ->
+   * mute -> audible), and for nothing else. It draws no mark of its own:
+   * with every other row's colour gone, one coloured row among grey ones
+   * already IS the picture of a solo, and a soloed row is not
+   * distinguishable from a mix you muted by hand because it is the same
+   * mix. */
+  soloed: boolean
   /** 64 integers, 0..100, for this row's own waveform -- or null when the
    * stem has not been analysed yet. Quantised by quantiseRemotePeaks
    * (@shared/remotePeaks) from peaks the Mac's own Discover rows already
@@ -80,6 +91,12 @@ export function remoteStateFromSlots(
   // function deliberately still never sees one.
   peaksBySlotId?: ReadonlyMap<string, readonly number[]>
 ): RemoteState {
+  // One slot left in the mix is what a solo leaves behind, and what
+  // toggleSlotSolo itself tests for when it decides whether a second press
+  // restores the full mix. A single-slot Discover therefore reads as
+  // soloed, which is true rather than a special case: it is the only thing
+  // audible, and soloing it on the Mac is already a no-op.
+  const audibleCount = slots.reduce((count, slot) => count + (slot.audible ? 1 : 0), 0)
   return {
     discoverOpen: meta.discoverOpen,
     playing: meta.playing,
@@ -92,6 +109,7 @@ export function remoteStateFromSlots(
       stemName: slot.stem?.name ?? '',
       soundType: slot.stem?.type ?? null,
       muted: !slot.audible,
+      soloed: slot.audible && audibleCount === 1,
       peaks: quantiseRemotePeaks(peaksBySlotId?.get(slot.id) ?? [])
     }))
   }
@@ -102,9 +120,10 @@ export function remoteStateFromSlots(
  * phone can now set the shape of the loop as well as roll it.
  *
  * `slot-action` arrived on 2026-09-27 and is ONE verb carrying an enumerated
- * payload rather than five more verbs -- its five actions are the four
+ * payload rather than six more verbs -- its six actions are the four
  * buttons already on every desktop Discover slot row plus that row's own
- * mute, so the wire gains no operation Discover did not already have.
+ * mute and its own solo, so the wire gains no operation Discover did not
+ * already have.
  *
  * `add-slot`/`remove-slot` arrived on 2026-09-26, from real use: "the initial
  * state of the phone interface... how do i add a stem? it starts with zero
@@ -132,16 +151,23 @@ export type RemoteCommand =
   | { kind: 'remove-slot'; slotId: string }
   | { kind: 'slot-action'; slotId: string; action: RemoteSlotAction }
 
-/** The five things a long press (or a tap, for `mute`) on a phone row can
- * ask for. Four of them are the buttons that have been on every desktop
- * Discover slot row since 2026-09-20 -- `similar`, `adjacent`, `random`,
- * `duplicate` -- and the fifth is the desktop's own per-row mute. Nothing
- * here is a new Discover operation; see docs/superpowers/specs/2026-09-27-
- * stem-actions-and-phone-1a-design.md §1.1. */
-export type RemoteSlotAction = 'mute' | 'similar' | 'adjacent' | 'random' | 'duplicate'
+/** The six things a long press (or a tap, for `mute` and `solo`) on a phone
+ * row can ask for. Four of them are the buttons that have been on every
+ * desktop Discover slot row since 2026-09-20 -- `similar`, `adjacent`,
+ * `random`, `duplicate` -- and the other two are that row's own mute and
+ * its own solo, both of which the desktop row has had since 2026-09-15.
+ * Nothing here is a new Discover operation; see docs/superpowers/specs/
+ * 2026-09-27-stem-actions-and-phone-1a-design.md §1.1.
+ *
+ * `solo` arrived on 2026-09-27 from the first real iphone session ("could we
+ * also add solo? first press is solo, then second press is mute / like
+ * double tap"). It is toggleSlotSolo and nothing else: drop every other
+ * slot out of the mix. */
+export type RemoteSlotAction = 'mute' | 'solo' | 'similar' | 'adjacent' | 'random' | 'duplicate'
 
 const REMOTE_SLOT_ACTIONS: RemoteSlotAction[] = [
   'mute',
+  'solo',
   'similar',
   'adjacent',
   'random',

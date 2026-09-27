@@ -995,10 +995,11 @@ input {
   // stack without waiting for the next poll to change something.
   var rowCanvases = []
 
-  // Two gestures on one element, arbitrated exactly. Short tap mutes, long
-  // press opens the action sheet. The rules that matter: a fired long press
-  // must NOT also fire the tap on release; a scroll must not come back as a
-  // mute; and the x inside the row must start neither.
+  // Two gestures on one element, arbitrated exactly. Short tap takes the row
+  // round its solo/mute cycle (see nextSlotAction), long press opens the
+  // action sheet. The rules that matter: a fired long press must NOT also
+  // fire the tap on release; a scroll must not come back as a mute; and the
+  // x inside the row must start neither.
   var HOLD_MS = 450
   var SLOP_PX = 10
   var holdTimer = null
@@ -1071,6 +1072,63 @@ input {
     // desktop's always-visible layer is drawn in. A row with no sound type
     // yet has no colour to spend either.
     return slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')
+  }
+
+  // A row's tap cycle, asked for on 2026-09-27 after the first real iphone
+  // session: "could we also add solo? first press is solo, then second press
+  // is mute / like double tap".
+  //
+  //   audible, others too -> solo   toggleSlotSolo: every other row drops out
+  //   soloed              -> mute   toggleSlotPreview: this row drops out too
+  //   muted               -> mute   toggleSlotPreview: this row comes back
+  //
+  // Two verbs cover three states because the mac's own two functions do, and
+  // both are the buttons already on the desktop row. Nothing new is invented
+  // here and nothing about a solo is remembered -- soloed is read off the
+  // mix (see RemoteSlotView.soloed), not off a mode.
+  //
+  // What the third press lands on is the truth of the MIX rather than a
+  // fixed carousel. Unmuting this row while the others are still out leaves
+  // it the only audible row again, which IS a solo -- the same mix, so the
+  // same reading, and the next press mutes again. Everything comes back one
+  // row at a time, a tap each, exactly as the desktop's own mute buttons
+  // would do it. The one thing that restores a whole mix in one gesture is a
+  // second solo of an already-soloed slot, and that is not reachable from
+  // muted, so the phone does not pretend to offer it.
+  function nextSlotAction(slot) {
+    if (slot.muted) return 'mute'
+    return slot.soloed ? 'mute' : 'solo'
+  }
+
+  function audibleRowCount() {
+    var n = 0
+    for (var i = 0; i < lastSlots.length; i++) {
+      if (!lastSlots[i].muted) n++
+    }
+    return n
+  }
+
+  // Optimistic: the poll is up to 700ms behind and the row has to answer the
+  // thumb now. The next poll overwrites all of it -- and while a loop swap is
+  // pending the rows are held, so this paint is what he is looking at for as
+  // long as a loop.
+  //
+  // A solo has no appearance of its own and deliberately gets none. It drops
+  // every other row out of the mix, so every other row loses its colour
+  // exactly as a mute does, and the one row still in colour is the picture.
+  // A mark on the soloed row would be a second way of saying the same thing,
+  // and it could only be drawn out of inversion or grey -- there is no spare
+  // colour on this page, and nothing on it is ever allowed to fade.
+  function paintSlotAction(slot, action) {
+    if (action === 'solo') {
+      for (var i = 0; i < lastSlots.length; i++) {
+        lastSlots[i].muted = lastSlots[i].id !== slot.id
+        lastSlots[i].soloed = lastSlots[i].id === slot.id
+      }
+      return
+    }
+    slot.muted = !slot.muted
+    slot.soloed = !slot.muted && audibleRowCount() === 1
   }
 
   // One flat colour, once per row, on state change and on resize. Not per
@@ -1211,11 +1269,10 @@ input {
           if (e.target.tagName === 'BUTTON') return
           if (holdFired || holdMoved) return
           disarmRemove()
-          // Optimistic: the poll is up to 700ms behind and the row must
-          // answer the thumb now. The next poll overwrites it either way.
-          slot.muted = !slot.muted
+          var next = nextSlotAction(slot)
+          paintSlotAction(slot, next)
           renderRows()
-          api('/api/slot-action', { slotId: slot.id, action: 'mute' })
+          api('/api/slot-action', { slotId: slot.id, action: next })
         })
       }
 

@@ -383,9 +383,9 @@ describe('remotePage seamless loop swap', () => {
 })
 
 describe('remotePage row gestures', () => {
-  it('opens the menu on a long press and mutes on a short tap', () => {
+  it('opens the menu on a long press and cycles the row on a short tap', () => {
     expect(SCRIPT).toContain('HOLD_MS = 450')
-    expect(SCRIPT).toContain("action: 'mute'")
+    expect(SCRIPT).toContain('var next = nextSlotAction(slot)')
   })
 
   it('never lets a fired long press also fire the tap on release', () => {
@@ -412,6 +412,38 @@ describe('remotePage row gestures', () => {
     // The poll is up to 700ms behind. A mute you cannot see land is
     // indistinguishable from a tap that missed.
     expect(SCRIPT).toContain('slot.muted = !slot.muted')
+  })
+})
+
+describe('remotePage solo', () => {
+  it('makes the first press a solo and the second a mute', () => {
+    // "could we also add solo? first press is solo, then second press is
+    // mute / like double tap" -- Elling, 2026-09-27. Two verbs cover three
+    // states because the mac's own two functions do: toggleSlotSolo drops
+    // every other row out, toggleSlotPreview takes this one out and puts it
+    // back.
+    expect(SCRIPT).toContain('function nextSlotAction(slot)')
+    expect(SCRIPT).toContain("return slot.soloed ? 'mute' : 'solo'")
+    expect(SCRIPT).toContain('if (slot.muted) return')
+  })
+
+  it('reads which third of the cycle it is in off the mix, not off a mode', () => {
+    // soloed comes from the mac, computed by remoteStateFromSlots the same
+    // way toggleSlotSolo computes it. The page never decides on its own that
+    // a row is soloed -- except between polls, where it has just made it so.
+    expect(SCRIPT).toContain('slot.soloed')
+  })
+
+  it('paints a solo as every other row losing its colour, and nothing more', () => {
+    // A solo IS the other rows dropping out, so it needs no affordance of
+    // its own: they go grey by the mute treatment that already exists, and
+    // the one row still in colour is the picture. There is no spare colour
+    // on this page and nothing on it may fade.
+    expect(SCRIPT).toContain('lastSlots[i].muted = lastSlots[i].id !== slot.id')
+    expect(SCRIPT).toContain('lastSlots[i].soloed = lastSlots[i].id === slot.id')
+    expect(REMOTE_PAGE_HTML).not.toContain('opacity')
+    // The one place a row's colour is decided, unchanged by solo.
+    expect(SCRIPT).toContain("slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')")
   })
 })
 
@@ -477,7 +509,7 @@ describe('remotePage stem action sheet', () => {
   it('sends only actions the mac will accept, to the one route', () => {
     const posts = SCRIPT.match(/api\('\/api\/slot-action'[^)]*\)/g) ?? []
     expect(posts).toEqual([
-      "api('/api/slot-action', { slotId: slot.id, action: 'mute' })",
+      "api('/api/slot-action', { slotId: slot.id, action: next })",
       "api('/api/slot-action', { slotId: actSlot.id, action: act.a })"
     ])
   })

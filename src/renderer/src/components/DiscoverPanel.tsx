@@ -1571,7 +1571,7 @@ export function DiscoverPanel({
         if (command.kinds.length > 0) addSlot(normalizeSlotKinds(command.kinds))
       } else if (command.kind === 'remove-slot') removeSlot(command.slotId)
       // The four actions are the four buttons on every desktop slot row,
-      // plus that row's own mute -- see runSlotAction.
+      // plus that row's own mute and its own solo -- see runSlotAction.
       else if (command.kind === 'slot-action') runSlotAction(command.slotId, command.action)
     }
   })
@@ -1908,11 +1908,16 @@ export function DiscoverPanel({
     }
   }
 
-  /** The phone's five per-row actions, each one calling the function the
+  /** The phone's six per-row actions, each one calling the function the
    * desktop row's own button calls -- same undo snapshots, same lack of a
    * lock check (only rerollAll skips a locked slot). mute is the row's own
-   * mute button and, like it, is deliberately not undoable. `adjacent` is
-   * the one-tap form of the desktop popover; see rollAdjacentForSlot above.
+   * mute button and, like it, is deliberately not undoable. solo is the row's
+   * own solo button, added on 2026-09-27 ("could we also add solo? first
+   * press is solo, then second press is mute / like double tap") -- the
+   * phone sends the verb and toggleSlotSolo decides what it means, including
+   * its own restore-the-full-mix on a second solo of an already-sole slot.
+   * `adjacent` is the one-tap form of the desktop popover; see
+   * rollAdjacentForSlot above.
    *
    * A component-scope function rather than five branches written inline in
    * the remoteCommandRef effect below (which is what the plan for this
@@ -1925,6 +1930,7 @@ export function DiscoverPanel({
    * clean. The mapping itself is unchanged. */
   function runSlotAction(id: string, action: RemoteSlotAction): void {
     if (action === 'mute') toggleSlotPreview(id)
+    else if (action === 'solo') toggleSlotSolo(id)
     else if (action === 'similar') void rerollSlot(id)
     else if (action === 'random') void rerollRandomSlot(id)
     else if (action === 'duplicate') duplicateSlot(id)

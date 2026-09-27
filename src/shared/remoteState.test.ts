@@ -42,6 +42,7 @@ describe('remoteStateFromSlots', () => {
         stemName: 'wooden thud',
         soundType: 'drums',
         muted: false,
+        soloed: true,
         peaks: null
       }
     ])
@@ -79,7 +80,15 @@ describe('remoteStateFromSlots', () => {
       lastKeptName: null
     })
     expect(state.slots).toEqual([
-      { id: 's1', kindLabel: 'drummy', stemName: '', soundType: null, muted: false, peaks: null }
+      {
+        id: 's1',
+        kindLabel: 'drummy',
+        stemName: '',
+        soundType: null,
+        muted: false,
+        soloed: true,
+        peaks: null
+      }
     ])
   })
 
@@ -128,6 +137,36 @@ describe('remoteStateFromSlots', () => {
       expect(v).toBeGreaterThanOrEqual(0)
       expect(v).toBeLessThanOrEqual(100)
     }
+  })
+
+  it('reads the only audible slot in the mix as soloed', () => {
+    // Exactly Discover's own predicate -- toggleSlotSolo decides whether a
+    // second press restores the full mix by asking whether this slot is the
+    // sole member of previewingSlotIds, which through CoachSlotSnapshot IS
+    // "the only audible one". The phone gets that answer rather than its
+    // own, so the row can tell which third of the tap cycle it is in.
+    const state = remoteStateFromSlots(
+      [slot({ id: 'a' }), slot({ id: 'b', audible: false }), slot({ id: 'c', audible: false })],
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null }
+    )
+    expect(state.slots.map((s) => s.soloed)).toEqual([true, false, false])
+    expect(state.slots.map((s) => s.muted)).toEqual([false, true, true])
+  })
+
+  it('reads nothing as soloed while more than one slot is audible', () => {
+    const state = remoteStateFromSlots(
+      [slot({ id: 'a' }), slot({ id: 'b' }), slot({ id: 'c', audible: false })],
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null }
+    )
+    expect(state.slots.map((s) => s.soloed)).toEqual([false, false, false])
+  })
+
+  it('never reads a muted slot as soloed, even when the whole mix is out', () => {
+    const state = remoteStateFromSlots(
+      [slot({ id: 'a', audible: false }), slot({ id: 'b', audible: false })],
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null }
+    )
+    expect(state.slots.map((s) => s.soloed)).toEqual([false, false])
   })
 
   it('passes the counters and the open/playing flags straight through', () => {
@@ -212,8 +251,9 @@ describe('parseRemoteSlotKinds', () => {
 })
 
 describe('parseRemoteSlotAction', () => {
-  it('accepts the five actions the phone can actually send', () => {
+  it('accepts the six actions the phone can actually send', () => {
     expect(parseRemoteSlotAction('mute')).toBe('mute')
+    expect(parseRemoteSlotAction('solo')).toBe('solo')
     expect(parseRemoteSlotAction('similar')).toBe('similar')
     expect(parseRemoteSlotAction('adjacent')).toBe('adjacent')
     expect(parseRemoteSlotAction('random')).toBe('random')
