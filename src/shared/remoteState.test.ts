@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import type { CoachSlotSnapshot } from './coachClimax'
-import { parseRemoteSlotKinds, remoteStateFromSlots, type RemoteStateResponse } from './remoteState'
+import {
+  parseRemoteSlotAction,
+  parseRemoteSlotKinds,
+  remoteStateFromSlots,
+  type RemoteStateResponse
+} from './remoteState'
 
 function slot(overrides: Partial<CoachSlotSnapshot> = {}): CoachSlotSnapshot {
   return {
@@ -148,5 +153,28 @@ describe('parseRemoteSlotKinds', () => {
     expect(
       parseRemoteSlotKinds(['drums', 'drums', 'drums', 'drums', 'drums', 'drums', 'drums', 'drums'])
     ).toBeNull()
+  })
+})
+
+describe('parseRemoteSlotAction', () => {
+  it('accepts the five actions the phone can actually send', () => {
+    expect(parseRemoteSlotAction('mute')).toBe('mute')
+    expect(parseRemoteSlotAction('similar')).toBe('similar')
+    expect(parseRemoteSlotAction('adjacent')).toBe('adjacent')
+    expect(parseRemoteSlotAction('random')).toBe('random')
+    expect(parseRemoteSlotAction('duplicate')).toBe('duplicate')
+  })
+
+  it('refuses anything else outright rather than best-guessing it', () => {
+    // Same trust rule as parseRemoteSlotKinds: an unknown string fails the
+    // whole request, so this field can never become a channel for a path.
+    expect(parseRemoteSlotAction('MUTE')).toBeNull()
+    expect(parseRemoteSlotAction('keep')).toBeNull()
+    expect(parseRemoteSlotAction('/Users/nickel/Music/secret/abc123')).toBeNull()
+    expect(parseRemoteSlotAction('')).toBeNull()
+    expect(parseRemoteSlotAction(undefined)).toBeNull()
+    expect(parseRemoteSlotAction(null)).toBeNull()
+    expect(parseRemoteSlotAction(1)).toBeNull()
+    expect(parseRemoteSlotAction(['mute'])).toBeNull()
   })
 })

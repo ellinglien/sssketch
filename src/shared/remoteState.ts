@@ -79,9 +79,14 @@ export function remoteStateFromSlots(
   }
 }
 
-/** Everything the phone can ask the Mac to do. FIVE verbs, and nothing else:
+/** Everything the phone can ask the Mac to do. SIX verbs, and nothing else:
  * no arranging, no timeline, no gain, no settings, no library browsing. The
  * phone can now set the shape of the loop as well as roll it.
+ *
+ * `slot-action` arrived on 2026-09-27 and is ONE verb carrying an enumerated
+ * payload rather than five more verbs -- its five actions are the four
+ * buttons already on every desktop Discover slot row plus that row's own
+ * mute, so the wire gains no operation Discover did not already have.
  *
  * `add-slot`/`remove-slot` arrived on 2026-09-26, from real use: "the initial
  * state of the phone interface... how do i add a stem? it starts with zero
@@ -90,9 +95,10 @@ export function remoteStateFromSlots(
  *
  * Deliberately still NOT here, and each one can be pulled back later: the
  * matching dial, chaos, the endlesss/other filters, favourites-only,
- * undo/redo, the adjacency popover, per-slot gain, the match meter. Every
- * control competes with the verbs that matter on a thumb-sized screen, and
- * a reroll already is undo on a phone.
+ * undo/redo, the adjacency popover itself (the phone gets its one-tap form,
+ * not its browser), per-slot gain, the match meter. Every control competes
+ * with the verbs that matter on a thumb-sized screen, and a reroll already
+ * is undo on a phone.
  *
  * `transport` was here until 2026-09-26 and was removed on purpose when the
  * phone became an audio client. One button cannot mean two outputs, and the
@@ -106,6 +112,32 @@ export type RemoteCommand =
   | { kind: 'keep' }
   | { kind: 'add-slot'; kinds: DiscoverSlotKind[] }
   | { kind: 'remove-slot'; slotId: string }
+  | { kind: 'slot-action'; slotId: string; action: RemoteSlotAction }
+
+/** The five things a long press (or a tap, for `mute`) on a phone row can
+ * ask for. Four of them are the buttons that have been on every desktop
+ * Discover slot row since 2026-09-20 -- `similar`, `adjacent`, `random`,
+ * `duplicate` -- and the fifth is the desktop's own per-row mute. Nothing
+ * here is a new Discover operation; see docs/superpowers/specs/2026-09-27-
+ * stem-actions-and-phone-1a-design.md §1.1. */
+export type RemoteSlotAction = 'mute' | 'similar' | 'adjacent' | 'random' | 'duplicate'
+
+const REMOTE_SLOT_ACTIONS: RemoteSlotAction[] = [
+  'mute',
+  'similar',
+  'adjacent',
+  'random',
+  'duplicate'
+]
+
+/** The whole trust boundary for the action sheet, in one pure function --
+ * same shape and the same rule as parseRemoteSlotKinds below: an unknown
+ * value is not coerced, dropped or best-guessed, it fails the whole
+ * request. */
+export function parseRemoteSlotAction(value: unknown): RemoteSlotAction | null {
+  if (typeof value !== 'string') return null
+  return REMOTE_SLOT_ACTIONS.find((a) => a === value) ?? null
+}
 
 /** The kinds POST /api/add-slot will accept, or null for "do not act on
  * this". The whole trust boundary for the phone's kind picker, in one pure
