@@ -2,6 +2,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
+import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 
 /** sssketch's own self-built riff-sync database -- distinct from any
  * externally-pointed OUROVEON/LORE archive a user might separately
@@ -265,6 +266,33 @@ CREATE TABLE IF NOT EXISTS DiscoverInstrumentRowsCacheMeta (
   StemCount INTEGER NOT NULL,
   ComputedAt INTEGER NOT NULL
 );
+
+-- Rifffs beyond eight stems (2026-09-27). Interpolated from
+-- riffStemsExtra.ts rather than written out here, unlike every other table
+-- in this file, for one reason: the test fixtures that need this table
+-- paste its DDL too, and one shared constant is the only way those cannot
+-- drift. That module also owns every read and write of it, including the
+-- "does this database have it at all" check -- an external OUROVEON/LORE
+-- warehouse never will, and is opened read-only, so it can never be given
+-- one.
+--
+-- Migration is exactly this CREATE TABLE IF NOT EXISTS and nothing else.
+-- No ALTER and no backfill: every rifff that already exists has eight
+-- stems or fewer, so an empty table is already the right answer for all of
+-- them. (Contrast the two special cases below --
+-- ensureDiscoverRiffIndexCacheHasCreationTime drops and rebuilds because
+-- CREATE TABLE IF NOT EXISTS cannot add a COLUMN, and
+-- ensureStemCategoriesHasSubcategoryNote does a real ALTER because that
+-- table holds irreplaceable data. Neither applies to adding a new table;
+-- both are the precedents to copy if this one ever needs a column.)
+--
+-- Downgrade: an older build reads Riffs.StemCID_1..8 and sees an
+-- eight-stem rifff. It never drops a table it does not know about, so the
+-- rows survive and re-upgrading restores all twenty. GainsJSON is
+-- slot-keyed and already carries gains for slots 9-20 with no schema
+-- change at all -- an older build simply never asks for those keys. Do not
+-- "tidy" GainsJSON to eight keys.
+${RIFF_STEMS_EXTRA_DDL}
 `
 
 let cachedDb: Database.Database | null = null

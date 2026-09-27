@@ -43,6 +43,7 @@ describe('riffLibrarySchema', () => {
       'DiscoverRiffIndexCache',
       'DiscoverRiffIndexCacheMeta',
       'Jams',
+      'RiffStemsExtra',
       'Riffs',
       'StemAutoCategory',
       'StemCategories',
@@ -170,5 +171,28 @@ describe('riffLibrarySchema', () => {
     expect(row.SourceProject).toBe('my-sketch')
     expect(row.UpdatedAt).toBe(1000)
     expect(row.SubcategoryNote).toBeNull()
+  })
+
+  it('opening the own db creates RiffStemsExtra, and doing it twice is a no-op', async () => {
+    const { openOwnRiffLibraryDb, closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const db = openOwnRiffLibraryDb()
+    const columns = db.prepare(`PRAGMA table_info(RiffStemsExtra)`).all() as { name: string }[]
+    expect(columns.map((c) => c.name)).toEqual(['RiffCID', 'Slot', 'StemCID'])
+
+    db.prepare(`INSERT INTO RiffStemsExtra (RiffCID, Slot, StemCID) VALUES ('r1', 9, 's9')`).run()
+    closeOwnRiffLibraryDb()
+    const reopened = openOwnRiffLibraryDb()
+    const { n } = reopened.prepare(`SELECT COUNT(*) AS n FROM RiffStemsExtra`).get() as {
+      n: number
+    }
+    expect(n).toBe(1)
+  })
+
+  it('the table refuses a slot the eight columns already own', async () => {
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const db = openOwnRiffLibraryDb()
+    expect(() =>
+      db.prepare(`INSERT INTO RiffStemsExtra (RiffCID, Slot, StemCID) VALUES ('r2', 8, 's8')`).run()
+    ).toThrow()
   })
 })
