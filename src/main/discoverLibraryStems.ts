@@ -5,6 +5,8 @@ import type Database from 'better-sqlite3'
 import { resolveStemPath } from './riffLibraryStore'
 import { getCachedStemJamPairs, type StemJamPair } from './scanTargetCache'
 import { countWork } from './workCounters'
+import { columnStemSlots, mergeStemSlots } from '@shared/riffStemSlots'
+import { readAllExtraStemSlots } from './riffStemsExtra'
 
 interface JamDbPair {
   jamCID: string
@@ -160,6 +162,11 @@ export async function listLibraryScanTargets(
       continue
     }
 
+    // ONCE per database connection, held for the whole paged walk. Not
+    // per page and never per riff -- jams share one database. Free for an
+    // external OUROVEON/LORE archive, which has no such table.
+    const extras = readAllExtraStemSlots(db)
+
     countWork('sql:scan-targets.walk')
     let page: RiffPageRow[]
     let afterRiffCID = ''
@@ -183,9 +190,10 @@ export async function listLibraryScanTargets(
       afterRiffCID = page[page.length - 1].RiffCID
       for (const riff of page) {
         if (!allowedJamCIDs.has(riff.OwnerJamCID)) continue
-        for (let slot = 1; slot <= 8; slot++) {
-          const stemCID = riff[`StemCID_${slot}` as keyof RiffStemColumnsRow]
-          if (!stemCID) continue
+        for (const { stemCID } of mergeStemSlots(
+          columnStemSlots(riff as unknown as Record<string, unknown>),
+          extras.get(riff.RiffCID) ?? []
+        )) {
           if (consider(stemCID, riff.OwnerJamCID)) await yieldToEventLoop()
         }
       }

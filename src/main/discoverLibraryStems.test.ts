@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { listLibraryScanTargets } from './discoverLibraryStems'
+import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 
 // listLibraryScanTargets calls resolveStemPath (riffLibraryStore.ts), which
 // reads app.getPath('userData') on every call (via riffLibraryRootPath) --
@@ -103,6 +104,20 @@ describe('listLibraryScanTargets', () => {
     })
     await listLibraryScanTargets([{ jamCID: 'jam1', dbForJam: db }], () => true)
     expect(interleaved).toBe(true)
+  })
+})
+
+describe('listLibraryScanTargets beyond the eight slot columns', () => {
+  it('lists a stem that only appears past the eighth slot as a scan target', async () => {
+    const db = freshDb()
+    db.exec(RIFF_STEMS_EXTRA_DDL)
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, StemCID_1) VALUES ('r1', 'jam1', 'a')`
+    ).run()
+    db.prepare(`INSERT INTO RiffStemsExtra VALUES ('r1', 9, 'only_extra')`).run()
+
+    const targets = await listLibraryScanTargets([{ jamCID: 'jam1', dbForJam: db }], () => true)
+    expect(targets.map((t) => t.key).sort()).toEqual(['a', 'only_extra'])
   })
 })
 

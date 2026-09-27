@@ -26,6 +26,8 @@
 // the caller walks it exactly as before.
 import type Database from 'better-sqlite3'
 import { countWork } from './workCounters'
+import { columnStemSlots, mergeStemSlots, type StemSlotRef } from '@shared/riffStemSlots'
+import { readAllExtraStemSlots } from './riffStemsExtra'
 
 export interface StemJamPair {
   stemCID: string
@@ -101,13 +103,11 @@ interface PairEntry {
   slot: number
 }
 
-function slotsOf(riff: RiffRow): { slot: number; stemCID: string }[] {
-  const out: { slot: number; stemCID: string }[] = []
-  for (let slot = 1; slot <= 8; slot++) {
-    const stemCID = riff[`StemCID_${slot}` as keyof RiffRow] as string | null
-    if (stemCID) out.push({ slot, stemCID })
-  }
-  return out
+function slotsOf(riff: RiffRow, extras: Map<string, StemSlotRef[]>): StemSlotRef[] {
+  return mergeStemSlots(
+    columnStemSlots(riff as unknown as Record<string, unknown>),
+    extras.get(riff.RiffCID) ?? []
+  )
 }
 
 function isEarlier(a: { riffCID: string; slot: number }, b: PairEntry): boolean {
@@ -116,8 +116,12 @@ function isEarlier(a: { riffCID: string; slot: number }, b: PairEntry): boolean 
 
 /** Records every pair `riff` references into `pairs` (keeping each pair's
  * earliest position). True when the riff is a skeleton (no stems yet). */
-function collectRiff(riff: RiffRow, pairs: Map<string, PairEntry>): boolean {
-  const slots = slotsOf(riff)
+function collectRiff(
+  riff: RiffRow,
+  pairs: Map<string, PairEntry>,
+  extras: Map<string, StemSlotRef[]>
+): boolean {
+  const slots = slotsOf(riff, extras)
   for (const { slot, stemCID } of slots) {
     const key = `${stemCID}|${riff.OwnerJamCID}`
     const existing = pairs.get(key)
@@ -248,6 +252,11 @@ async function rebuild(
 ): Promise<void> {
   countWork('sql:scan-targets.full-rebuild')
   const pairs = new Map<string, PairEntry>()
+  // ONCE per source db, held for the whole walk. Not per page and never
+  // per riff -- jams share one database. Free for an external archive,
+  // which has no such table, and small for sssketch's own, where only a
+  // rifff with more than eight stems has any rows at all.
+  const extras = readAllExtraStemSlots(sourceDb)
   const openRowids: number[] = []
   const statement = sourceDb.prepare(
     `SELECT ${RIFF_COLUMNS} FROM Riffs WHERE RiffCID > ? ORDER BY RiffCID LIMIT ?`
@@ -258,7 +267,7 @@ async function rebuild(
     if (page.length === 0) break
     after = page[page.length - 1].RiffCID
     for (const riff of page) {
-      if (collectRiff(riff, pairs)) openRowids.push(riff.RowId)
+      if (collectRiff(riff, pairs, extras)) openRowids.push(riff.RowId)
     }
     await yieldToEventLoop()
   }
@@ -290,6 +299,11 @@ async function extend(
 ): Promise<void> {
   countWork('sql:scan-targets.extend')
   const pairs = new Map<string, PairEntry>()
+  // ONCE per source db, held for the whole walk. Not per page and never
+  // per riff -- jams share one database. Free for an external archive,
+  // which has no such table, and small for sssketch's own, where only a
+  // rifff with more than eight stems has any rows at all.
+  const extras = readAllExtraStemSlots(sourceDb)
   const openRowids: number[] = []
   const closedRowids: number[] = []
 
@@ -303,7 +317,7 @@ async function extend(
     countWork('scan-targets.new-riffs', page.length)
     after = page[page.length - 1].RowId
     for (const riff of page) {
-      if (collectRiff(riff, pairs)) openRowids.push(riff.RowId)
+      if (collectRiff(riff, pairs, extras)) openRowids.push(riff.RowId)
     }
     await yieldToEventLoop()
   }
@@ -322,7 +336,7 @@ async function extend(
       )
       .all(...chunk) as RiffRow[]
     for (const riff of rows) {
-      if (!collectRiff(riff, pairs)) closedRowids.push(riff.RowId)
+      if (!collectRiff(riff, pairs, extras)) closedRowids.push(riff.RowId)
     }
     await yieldToEventLoop()
   }

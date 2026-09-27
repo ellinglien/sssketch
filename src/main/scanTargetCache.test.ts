@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { listLibraryScanTargets } from './discoverLibraryStems'
 import { getCachedStemJamPairs } from './scanTargetCache'
+import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 
 // resolveStemPath reads app.getPath('userData') -- mock just that, as
 // discoverLibraryStems.test.ts does.
@@ -231,5 +232,23 @@ describe('listLibraryScanTargets with the scan-target cache (B6)', () => {
     expect((await listLibraryScanTargets(jamsFor(src), allExist, own)).map((t) => t.key)).toEqual([
       's1'
     ])
+  })
+
+  it('records a stem that only appears past the eighth slot', async () => {
+    const src = sourceDb()
+    src.exec(RIFF_STEMS_EXTRA_DDL)
+    seedRiff(src, 'r1', 'jam0', ['a'])
+    src.prepare(`INSERT INTO RiffStemsExtra VALUES ('r1', 9, 'only_extra')`).run()
+    const own = new Database(':memory:')
+
+    const built = await listLibraryScanTargets(jamsFor(src, ['jam0']), allExist, own)
+    expect(built.map((t) => t.key).sort()).toEqual(['a', 'only_extra'])
+
+    // And again off the cache the first call just wrote, plus one more
+    // riff so the incremental extend path is covered as well as rebuild.
+    seedRiff(src, 'r2', 'jam0', ['b'])
+    src.prepare(`INSERT INTO RiffStemsExtra VALUES ('r2', 12, 'later_extra')`).run()
+    const extended = await listLibraryScanTargets(jamsFor(src, ['jam0']), allExist, own)
+    expect(extended.map((t) => t.key).sort()).toEqual(['a', 'b', 'later_extra', 'only_extra'])
   })
 })

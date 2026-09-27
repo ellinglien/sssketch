@@ -9,6 +9,7 @@ import {
   appendToInMemoryDiscoverCaches
 } from './discoverCandidates'
 import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
+import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { upsertStemCategoryRole } from './stemCategoriesStore'
 import { instrumentMaskToSoundType, soundSourceMatchesFilter } from '@shared/riffLibraryTypes'
 
@@ -832,6 +833,21 @@ describe('getDiscoverCandidates', () => {
       ([sql]) => sql.includes('FROM Stems') && sql.includes('Instrument')
     )
     expect(stemsInstrumentQueries.length).toBe(1)
+  })
+})
+
+describe('buildRiffIndex beyond the eight slot columns', () => {
+  it('indexes a stem that only appears past the eighth slot', async () => {
+    const db = freshDb()
+    db.exec(RIFF_STEMS_EXTRA_DDL)
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, CreationTime, StemCID_1)
+       VALUES ('r1', 'jam_1', 120, 100, 'a')`
+    ).run()
+    db.prepare(`INSERT INTO RiffStemsExtra VALUES ('r1', 9, 'only_extra')`).run()
+
+    const index = await getRiffIndexForDb(db)
+    expect(index.has('only_extra')).toBe(true)
   })
 })
 

@@ -39,6 +39,8 @@ import {
 import { getStemClassificationVersion } from './stemClassificationVersion'
 import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
+import { columnStemSlots, mergeStemSlots } from '@shared/riffStemSlots'
+import { hasExtraStemSlotsTable, readAllExtraStemSlots } from './riffStemsExtra'
 
 /** Stems whose audio can no longer be fetched (see @shared/stemAvailability
  * and stemUnavailableStore.ts -- one of Endlesss's storage buckets now 403s
@@ -437,6 +439,13 @@ async function buildRiffIndex(
   }
   const total = signal.count
 
+  // ONCE per database connection, held for the whole paged walk. Not per
+  // page and never per riff -- jams share one database. readAllExtraStemSlots
+  // uses .all(), so nothing here holds an open cursor across the awaits
+  // below. Free for an external OUROVEON/LORE archive, which has no such
+  // table.
+  const extras = readAllExtraStemSlots(db)
+
   let offset = 0
   while (offset < total) {
     let page: RiffCandidateRow[]
@@ -456,9 +465,11 @@ async function buildRiffIndex(
 
     let sinceYield = 0
     for (const riff of page) {
-      for (let slot = 1; slot <= 8; slot++) {
-        const stemCID = riff[`StemCID_${slot}` as keyof RiffCandidateRow] as string | null
-        if (!stemCID || index.has(stemCID)) continue
+      for (const { stemCID } of mergeStemSlots(
+        columnStemSlots(riff as unknown as Record<string, unknown>),
+        extras.get(riff.RiffCID) ?? []
+      )) {
+        if (index.has(stemCID)) continue
         index.set(stemCID, {
           riffCID: riff.RiffCID,
           ownerJamCID: riff.OwnerJamCID,
@@ -1893,14 +1904,22 @@ async function getRandomOwnStemCandidate(
 
     let riffRow: { RiffCID: string; BPMrnd: number; CreationTime: number | null } | undefined
     try {
+      // The side table is part of the answer to "which riff contains this
+      // stem", not an afterthought -- a kept group's twelfth stem is in no
+      // column at all. Built conditionally because an external
+      // OUROVEON/LORE archive has no such table.
+      const extraClause = hasExtraStemSlotsTable(db)
+        ? ` OR RiffCID IN (SELECT RiffCID FROM RiffStemsExtra WHERE StemCID = ?)`
+        : ''
+      const slotParams = Array<string>(extraClause ? 9 : 8).fill(stemRow.StemCID)
       riffRow = db
         .prepare(
           `SELECT RiffCID, BPMrnd, CreationTime FROM Riffs WHERE OwnerJamCID = ? AND (
              StemCID_1 = ? OR StemCID_2 = ? OR StemCID_3 = ? OR StemCID_4 = ? OR
-             StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?
+             StemCID_5 = ? OR StemCID_6 = ? OR StemCID_7 = ? OR StemCID_8 = ?${extraClause}
            ) LIMIT 1`
         )
-        .get(stemRow.OwnerJamCID, ...Array<string>(8).fill(stemRow.StemCID)) as typeof riffRow
+        .get(stemRow.OwnerJamCID, ...slotParams) as typeof riffRow
     } catch {
       continue
     }
