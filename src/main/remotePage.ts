@@ -1055,6 +1055,9 @@ input {
     // curve scheduled at the boundary has run -- and a later mute is then
     // not fighting a finished curve.
     setLevel(voices[slotId], levelFor(slotId))
+    // THE ROW MOVES HERE, with the sound, rather than up to a poll later:
+    // this row is no longer mid-change, so the merge stops holding it.
+    lastSlots = mergePolledSlots(polledSlots)
     renderRows()
   }
 
@@ -1136,13 +1139,67 @@ input {
     fetchMissing()
   }
 
+  // 160 MiB. Stereo float32 at 48kHz is seconds x 48000 x 2 x 4 = 384 KB per
+  // second per stem, so a 16-second stem is 6.14 MB and twenty of them are
+  // 122.9 MB. The budget is set ABOVE that on purpose: evicting a stem he is
+  // actively listening to is a worse failure than a fatter tab, because it is
+  // silent and reads as the mix being wrong rather than the phone being full.
+  // This clears twenty 16-second stems by seven more stems' worth and binds at
+  // 27 of them, 13 of 32 seconds, or 54 of 8. The spec's 96 MB was a MONO
+  // figure and would evict at eleven stereo stems.
+  //
+  // IF IOS KILLS THE TAB (it reloads itself mid-listen, with no console):
+  // halve this to 80 and set PHONE_STEM_CHANNELS to 1 in
+  // src/main/remoteStemRenderer.ts. Mono at 80 MiB is the same headroom the
+  // spec measured, and it is a two-line retreat.
+  var STEM_BUDGET_BYTES = 160 * 1024 * 1024
+
+  // A CAP ON STEM COUNT WOULD BE THE WRONG SHAPE: twenty 8-second stems are
+  // cheaper than eight 32-second ones, and PHONE_LOOP_MAX_BARS is 32. What
+  // costs memory is decoded seconds, so that is what is counted.
+  function bytesOf(buf) {
+    return buf.length * buf.numberOfChannels * 4
+  }
+
+  function decodedBytes() {
+    var total = 0
+    for (var id in buffers) total = total + bytesOf(buffers[id])
+    return total
+  }
+
+  // Drops buffers nothing is asking for. A stem that survived a roll is
+  // still wanted and is never touched -- eleven of twelve are kept, which
+  // is the whole economy of this feature. What goes is the stem that left
+  // the mix, which was only being held in case he rolled back to it.
+  function evict() {
+    if (decodedBytes() <= STEM_BUDGET_BYTES) return
+    var wanted = {}
+    for (var slotId in wantedStemId) wanted[wantedStemId[slotId]] = true
+    for (var id in buffers) {
+      if (wanted[id]) continue
+      delete buffers[id]
+      if (decodedBytes() <= STEM_BUDGET_BYTES) return
+    }
+  }
+
+  // True while at least one wanted stem is not being fetched because there
+  // is no room for it. Recomputed from scratch every pass, so it clears
+  // itself the moment an eviction makes room.
+  var overBudget = false
+
   function fetchMissing() {
+    var was = overBudget
+    overBudget = false
     for (var slotId in wantedStemId) {
       var id = wantedStemId[slotId]
       if (buffers[id] || fetchingIds[id]) continue
       if (failedIds[id] >= MAX_STEM_TRIES) continue
+      if (decodedBytes() >= STEM_BUDGET_BYTES) { overBudget = true; continue }
       fetchStem(id)
     }
+    // Only when it CHANGED. This runs on every poll, and a status line
+    // rewritten every 700ms would eat the flash under the thumb.
+    if (was !== overBudget) restStatus()
   }
 
   // ONE STEM'S AUDIO, addressed by nothing but the id the mac named for it.
@@ -1162,6 +1219,7 @@ input {
           // and it is already paid for. Dropping it is the budget's job.
           buffers[stemId] = buf
           delete failedIds[stemId]
+          evict()
           restStatus()
         })
       })
@@ -1234,8 +1292,21 @@ input {
   // kept name has left to live -- and an empty line under a busy thumb is
   // better than a stale one. Two seconds rather than the old 1400ms: at
   // arm's length in a dark room 1400 was short.
+  // A MISSING STEM IS NOT HIDDEN. Judging an incomplete mix without knowing
+  // it is incomplete is the one thing this screen must never do -- and
+  // falling back to the whole rendered mixdown for one missing stem would
+  // be a very large hammer.
   var lastKept = null
   function restStatus() {
+    var missing = 0
+    for (var slotId in wantedStemId) {
+      if (failedIds[wantedStemId[slotId]] >= MAX_STEM_TRIES) missing = missing + 1
+    }
+    if (overBudget) { msgEl.textContent = 'too many stems'; return }
+    if (missing > 0) {
+      msgEl.textContent = missing + (missing === 1 ? ' stem missing' : ' stems missing')
+      return
+    }
     msgEl.textContent = lastKept ? 'last kept \\u00b7 ' + lastKept : ''
   }
 
@@ -1414,6 +1485,44 @@ input {
   // from whether the row is still on screen.
   var polledSlots = []
 
+  // THE ROWS CATCH UP WITH THE SOUND, ROW BY ROW.
+  //
+  // The mac's picture changes the moment a roll lands. That stem then has
+  // to be transcoded, downloaded, decoded and waited on until a boundary.
+  // Drawing its new name at the front of that gap means the row says one
+  // thing while the phone plays another, and judging what you are hearing
+  // is the entire purpose of this screen.
+  //
+  // PER ROW now, not per page: eleven rows that did not change are drawn
+  // from the newest poll immediately, and only the one that is mid-change
+  // holds. That is strictly better than the whole-page hold it replaces.
+  //
+  // Two things are deliberately NOT held. Nothing is held while nothing is
+  // sounding -- there is no sound for the picture to run ahead of, and a
+  // row rolled with the transport off would otherwise freeze forever. And
+  // a stem that has given up after three tries is not on its way: freezing
+  // a row on audio that will never arrive is worse than showing the mac's
+  // picture early, which is the same judgement the whole-page hold made.
+  function mergePolledSlots(polled) {
+    if (!wantPlaying || !haveOrigin) return polled
+    var out = []
+    for (var i = 0; i < polled.length; i++) {
+      var s = polled[i]
+      var want = wantedStemId[s.id]
+      var v = voices[s.id]
+      var coming = !(failedIds[want] >= MAX_STEM_TRIES)
+      var inFlight = want && coming && ((v && v.stemId !== want) || (!v && !buffers[want]))
+      if (!inFlight) { out.push(s); continue }
+      var drawn = null
+      for (var j = 0; j < lastSlots.length; j++) if (lastSlots[j].id === s.id) drawn = lastSlots[j]
+      // Its sound has not changed yet, so its name and shape do not either
+      // -- but its own mute state is a thing he just did and must be shown.
+      if (drawn) { drawn.muted = s.muted; drawn.soloed = s.soloed; out.push(drawn) }
+      else out.push(s)
+    }
+    return out
+  }
+
   // { canvas, peaks, color } per visible row, so a resize can redraw the
   // stack without waiting for the next poll to change something.
   var rowCanvases = []
@@ -1574,7 +1683,14 @@ input {
     // colour; it never dims it. #6a6a6a is --ra-text-3, the exact grey the
     // desktop's always-visible layer is drawn in. A row with no sound type
     // yet has no colour to spend either.
-    return slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')
+    //
+    // A STEM THAT GAVE UP DRAWS THE SAME WAY, because it is not sounding
+    // either and that is the fact the colour carries. There is no spare
+    // colour on this page and nothing on it may fade, so a third state
+    // would have to invent a vocabulary; the status line says how many, in
+    // words, which is where a count belongs.
+    var dead = slot.stemId && failedIds[slot.stemId] >= MAX_STEM_TRIES
+    return (slot.muted || dead) ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')
   }
 
   function audibleRowCount() {
@@ -1974,7 +2090,7 @@ input {
     // row is then the only thing on screen, which is the point.
     emptyEl.hidden = state.slots.length > 0
     loopEl.hidden = state.slots.length === 0
-    lastSlots = state.slots
+    lastSlots = mergePolledSlots(state.slots)
 
     // EVERYTHING BELOW RECONCILES AGAINST THE DRAWN ROWS, and this is the
     // line the three of them have to be on the same side of.

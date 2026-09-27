@@ -302,7 +302,9 @@ describe('remotePage rows', () => {
     // StemWaveformRow.tsx's "gray means quieter/off": the colour layer is
     // suppressed and the grey one stays at full strength. #6a6a6a is the
     // hand-copied --ra-text-3 that layer is drawn in.
-    expect(SCRIPT).toContain("slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')")
+    expect(SCRIPT).toContain(
+      "(slot.muted || dead) ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')"
+    )
     // The whole rule, asserted rather than remembered: mute is the absence
     // of colour. Nothing on this page may express it by fading.
     expect(REMOTE_PAGE_HTML).not.toContain('opacity')
@@ -479,7 +481,9 @@ describe('remotePage mute is a gain', () => {
   })
 
   it('still says muted by taking the colour away, never by dimming', () => {
-    expect(SCRIPT).toContain("slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')")
+    expect(SCRIPT).toContain(
+      "(slot.muted || dead) ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')"
+    )
     expect(REMOTE_PAGE_HTML).not.toContain('opacity')
   })
 })
@@ -788,7 +792,9 @@ describe('remotePage s and m', () => {
     expect(SCRIPT).toContain('lastSlots[i].muted = lastSlots[i].id !== slot.id')
     expect(REMOTE_PAGE_HTML).not.toContain('.row.soloed')
     // The one place a row's colour is decided, unchanged by solo.
-    expect(SCRIPT).toContain("slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')")
+    expect(SCRIPT).toContain(
+      "(slot.muted || dead) ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')"
+    )
   })
 
   it('puts the whole mix back on a second press of a solo that is already alone', () => {
@@ -893,6 +899,72 @@ describe('remotePage going away', () => {
     expect(SCRIPT).toContain('var actStillThere = lastSlots.some(')
     expect(SCRIPT).toContain('if (!stillThere) disarmRemove()')
     expect(SCRIPT).toContain('if (!actStillThere) closeActionSheet()')
+  })
+})
+
+describe('remotePage stem budget and failures', () => {
+  it('budgets decoded bytes, not a stem count', () => {
+    // Twenty 8-second stems are cheaper than eight 32-second ones, and
+    // PHONE_LOOP_MAX_BARS is 32. A count would be the wrong shape.
+    //
+    // 160 MiB, not the spec's 96: 96 was a MONO figure and the mac serves
+    // stereo, so it would evict at eleven stems. The budget is set above
+    // twenty stereo 16-second stems on purpose -- evicting one he is
+    // listening to is a worse failure than a fatter tab, because it is
+    // silent and reads as the mix being wrong.
+    expect(SCRIPT).toContain('STEM_BUDGET_BYTES = 160 * 1024 * 1024')
+    expect(SCRIPT).toContain('buf.length * buf.numberOfChannels * 4')
+    expect(SCRIPT).not.toMatch(/MAX_STEMS?\s*=\s*\d+/)
+  })
+
+  it('evicts only what nothing is asking for', () => {
+    expect(SCRIPT).toContain('if (wanted[id]) continue')
+  })
+
+  it('gives up on a stem after three tries rather than downloading forever', () => {
+    // The poll runs every 700ms. An uncounted retry is an infinite
+    // download, which is why this is NOT the analysis caches' evict-on-
+    // rejection rule.
+    expect(SCRIPT).toContain('MAX_STEM_TRIES = 3')
+    expect(SCRIPT).toContain('if (failedIds[id] >= MAX_STEM_TRIES) continue')
+  })
+
+  it('says a stem is missing rather than hiding an incomplete mix', () => {
+    expect(SCRIPT).toContain("' stem missing'")
+    expect(SCRIPT).toContain("' stems missing'")
+    expect(SCRIPT).toContain("'too many stems'")
+  })
+
+  it('does not rewrite the status line on every poll', () => {
+    // It runs every 700ms and would eat the flash under the thumb.
+    expect(SCRIPT).toContain('if (was !== overBudget) restStatus()')
+  })
+
+  it('draws a stem that never arrived the way it draws a muted one', () => {
+    // There is no spare colour on this page and nothing on it may fade.
+    expect(SCRIPT).toContain('(slot.muted || dead)')
+    expect(REMOTE_PAGE_HTML).not.toContain('opacity')
+  })
+
+  it('holds the picture per row, not per page', () => {
+    expect(SCRIPT).toContain('function mergePolledSlots(')
+    expect(SCRIPT).not.toContain('function holdingForSwap(')
+    // A mute he just made is still shown at once, even on a held row.
+    expect(SCRIPT).toContain('drawn.muted = s.muted')
+  })
+
+  it('holds a row only while its own sound is genuinely on its way', () => {
+    // Nothing is sounding means nothing to run ahead of -- without this a
+    // row rolled with the transport off would freeze forever. And a stem
+    // that has given up is not coming, which is the judgement the
+    // whole-page hold made too.
+    expect(SCRIPT).toContain('if (!wantPlaying || !haveOrigin) return polled')
+    expect(SCRIPT).toContain('var coming = !(failedIds[want] >= MAX_STEM_TRIES)')
+  })
+
+  it('moves a held row at the boundary, not up to a poll after it', () => {
+    expect(SCRIPT).toContain('lastSlots = mergePolledSlots(polledSlots)')
+    expect(SCRIPT).toContain('lastSlots = mergePolledSlots(state.slots)')
   })
 })
 
