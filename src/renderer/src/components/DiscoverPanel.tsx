@@ -814,7 +814,7 @@ export function DiscoverPanel({
       .filter((x): x is { id: string; stem: ResolvedCandidateStem; gain: number } => x !== null)
 
     if (members.length === 0) {
-      void window.rifffApi.setRemoteLoop(null)
+      void window.rifffApi.setRemoteLoop(null, [])
       await restorePreviewIfLoaded()
       return
     }
@@ -866,7 +866,7 @@ export function DiscoverPanel({
       // and assembleDiscoverRifff only returns null for an empty list), but
       // handled rather than asserted since the function's own return type
       // is nullable.
-      void window.rifffApi.setRemoteLoop(null)
+      void window.rifffApi.setRemoteLoop(null, [])
       await restorePreviewIfLoaded()
       return
     }
@@ -909,7 +909,17 @@ export function DiscoverPanel({
       // Discover panel that has lost the engine to something else still has
       // something to hand the sofa. Main strips the plugins, fingerprints it
       // and renders it on demand; nothing here blocks on any of that.
-      void window.rifffApi.setRemoteLoop(project)
+      // `members` carries each slot's own id and is the SAME array, in the
+      // same order, that assembleDiscoverRifff numbered slots 1..N from --
+      // so this is exactly one slot id per EngineStem, from one snapshot.
+      // Main pairs a phone row to its stem's audio from it, and drops the
+      // whole pairing if the two lengths ever disagree.
+      void window.rifffApi.setRemoteLoop(
+        project,
+        members.map(function (m) {
+          return m.id
+        })
+      )
       if (!stillOwnEngine(engineToken)) return
 
       await window.rifffApi.engineLoadProject(project)
@@ -1551,7 +1561,7 @@ export function DiscoverPanel({
   // says "open discover on the mac" and offers nothing else.
   useEffect(() => {
     return () => {
-      void window.rifffApi.setRemoteLoop(null)
+      void window.rifffApi.setRemoteLoop(null, [])
       void window.rifffApi.setRemoteState({
         discoverOpen: false,
         playing: false,

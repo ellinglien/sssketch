@@ -95,6 +95,7 @@ import {
 import { loadPhoneRemoteSettings, savePhoneRemoteSettings } from './phoneRemoteSettingsStore'
 import type { LanAddressCandidate } from '@shared/lanAddress'
 import { createRemoteLoopRenderer, type RemoteLoopRenderer } from './remoteLoopRenderer'
+import { createRemoteStemRenderer, type RemoteStemRenderer } from './remoteStemRenderer'
 import type { EngineProject } from '@shared/buildEngineProject'
 import type { RemoteCommand, RemoteState } from '@shared/remoteState'
 import type { PairingGate } from '@shared/remoteAuth'
@@ -285,6 +286,10 @@ let remotePairingGate: PairingGate = { attemptsUsed: 0, lockedOut: false }
 // playback engine, which is busy playing. Created when the remote is switched
 // on and torn down with it, so at rest this feature owns no process at all.
 let remoteLoop: RemoteLoopRenderer | null = null
+// The phone's per-stem audio. No engine, no spawn, no cold start: it shells
+// out to afconvert per stem and holds the bytes in memory. Lives and dies
+// with the server, like the loop renderer beside it.
+let remoteStems: RemoteStemRenderer | null = null
 
 interface PhoneRemoteStatus {
   running: boolean
@@ -336,10 +341,27 @@ function startPhoneRemoteOn(address: string): void {
   // for documented cold-start reasons and the gear menu must not sit on it.
   // The first render awaits it instead.
   remoteLoop ??= createRemoteLoopRenderer()
+  // No engine, no spawn, no cold start -- it shells out to afconvert per
+  // stem and caches the bytes. Created here only so it dies with the server.
+  remoteStems ??= createRemoteStemRenderer()
   remoteServer = startRemoteServer({
     lanAddress: address,
-    getState: () => ({ ...lastRemoteState, loopId: remoteLoop?.currentLoopId() ?? null }),
+    getState: () => {
+      // stemId is injected HERE, from main's own map, for the same reason
+      // loopId is: remoteStateFromSlots is the privacy boundary and has
+      // never seen a resolvedPath. See RemoteSlotResponse.
+      const bySlot = remoteStems?.stemIdsBySlotId() ?? new Map<string, string>()
+      return {
+        ...lastRemoteState,
+        loopId: remoteLoop?.currentLoopId() ?? null,
+        slots: lastRemoteState.slots.map((slot) => ({
+          ...slot,
+          stemId: bySlot.get(slot.id) ?? null
+        }))
+      }
+    },
     loopWav: () => remoteLoop?.wav() ?? Promise.resolve(null),
+    stemBytes: (stemId: string) => remoteStems?.bytes(stemId) ?? Promise.resolve(null),
     onCommand: (command: RemoteCommand) => {
       // Commands are performed by the RENDERER, by calling the exact
       // functions its own buttons call. There is no second
@@ -365,6 +387,8 @@ function stopPhoneRemote(): void {
   remoteServer = null
   remoteLoop?.stop()
   remoteLoop = null
+  remoteStems?.stop()
+  remoteStems = null
   remotePairingGate = { attemptsUsed: 0, lockedOut: false }
 }
 
@@ -763,11 +787,18 @@ app.whenReady().then(async () => {
     lastRemoteState = state
   })
 
-  ipcMain.handle('set-remote-loop', (_event, project: EngineProject | null) => {
+  ipcMain.handle('set-remote-loop', (_event, project: EngineProject | null, slotIds: string[]) => {
     // The project is full of real filesystem paths and NEVER leaves the main
-    // process. What the phone sees is remoteLoop.currentLoopId() -- sixteen
-    // hex characters of a sha256 of the loop's audio-bearing fields.
+    // process. What the phone sees is remoteLoop.currentLoopId() and, per
+    // row, remoteStems.stemIdsBySlotId() -- sixteen hex characters each, of
+    // a sha256 of the loop's (or the stem's) audio-bearing fields.
+    //
+    // slotIds rides along rather than arriving in a second call: it is one
+    // id per EngineStem, in the same order, taken from the same array in the
+    // same render (DiscoverPanel's `members`), so there is no second push to
+    // fall out of step with. A length disagreement drops the map entirely.
     remoteLoop?.setLoop(project)
+    remoteStems?.setLoop(project, slotIds ?? [])
   })
 
   ipcMain.handle('endlesss-login', (_event, username: string, password: string) =>

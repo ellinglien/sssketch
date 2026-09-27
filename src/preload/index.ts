@@ -608,9 +608,17 @@ const api = {
    * render of it, or null to clear it. Typed as `unknown` here for the same
    * reason engineLoadProject just above is: the project crosses the IPC
    * boundary as plain JSON and preload has no business re-stating
-   * EngineProject's shape. */
-  setRemoteLoop: (project: unknown): Promise<void> =>
-    ipcRenderer.invoke('set-remote-loop', project),
+   * EngineProject's shape.
+   *
+   * `slotIds` is one Discover slot id per EngineStem, in the same order, and
+   * it rides in THIS call rather than arriving in a second one on purpose:
+   * main pairs a phone row to its stem's audio id from one snapshot, so
+   * there is no second push to fall out of step with. A length disagreement
+   * makes main drop the whole map rather than guess at an alignment -- a row
+   * naming one stem while the phone plays another is the worst bug this
+   * feature can have. */
+  setRemoteLoop: (project: unknown, slotIds: string[]): Promise<void> =>
+    ipcRenderer.invoke('set-remote-loop', project, slotIds),
   onRemoteCommand: (callback: (command: RemoteCommand) => void): (() => void) => {
     const listener = (_event: unknown, command: RemoteCommand): void => callback(command)
     ipcRenderer.on('remote-command', listener)
