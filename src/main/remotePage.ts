@@ -153,6 +153,20 @@ const KIND_CHIPS = DISCOVER_SLOT_KIND_OPTIONS.map((kind) => ({
   t: isTraitSlotKind(kind)
 }))
 
+/** The stem action sheet, as data. Four actions, and they are exactly the
+ * four buttons that have been on every desktop Discover slot row since
+ * 2026-09-20 -- `similar`, `adjacent`, `random`, `duplicate` -- reached from
+ * a long press instead of a mouse. `a` is the wire value
+ * (RemoteSlotAction, @shared/remoteState), `l` is the two-word-maximum
+ * label and `h` is the hint line under it. The hints are what a label of
+ * two words cannot say; they are not tooltips and they are not sentences. */
+const STEM_ACTIONS = [
+  { a: 'similar', l: 'similar', h: 'another like it' },
+  { a: 'adjacent', l: 'adjacent', h: 'same jam' },
+  { a: 'random', l: 'random', h: 'anything at all' },
+  { a: 'duplicate', l: 'duplicate', h: 'one more row' }
+]
+
 /** The whole phone remote, as one string. NOT bundled by Vite and not part
  * of the renderer build: no asset-copying config, no hashed-filename lookup
  * from main, nothing that can work in `npm run dev` and be missing from a
@@ -338,6 +352,20 @@ button.lit {
   font-size: 13px;
 }
 button.lit:active { background: #ededed; color: #050505; }
+.act-name { font-size: 12px; color: #ededed; margin: 2px 0 10px; }
+.acts { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+button.act {
+  min-height: 64px;
+  padding: 8px 6px;
+  background: #0a0a0a;
+  border: 1px solid #222222;
+  color: #ededed;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+}
+button.act:active { background: #161616; }
+button.act .h { display: block; margin-top: 4px; font-size: 9px; color: #6a6a6a; }
 .chips { display: flex; flex-wrap: wrap; gap: 5px; margin: 6px 0 0; }
 .chips.trait { margin-bottom: 8px; }
 /* Smaller type and tighter padding, but min-height holds the TAP target at
@@ -428,6 +456,20 @@ input {
         <div class="actions">
           <button class="big dim" id="kind-cancel">never mind</button>
           <button class="big dim" id="add-slot">add slot</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- The hold menu. Same sheet treatment as the chooser, so "something
+         came up from the bottom" means one thing. -->
+    <div id="act-sheet" hidden>
+      <div class="sheet-bg" id="act-sheet-bg"></div>
+      <div class="sheet">
+        <div class="eyebrow" id="act-kind"></div>
+        <div class="act-name" id="act-name"></div>
+        <div class="acts" id="acts"></div>
+        <div class="actions">
+          <button class="big dim" id="act-cancel">never mind</button>
         </div>
       </div>
     </div>
@@ -932,10 +974,52 @@ input {
     rowsEl.appendChild(lineEl)
   }
 
-  // Replaced by the real sheet below -- declared here only so this section
-  // can be read on its own.
-  function openActionSheet(slot) {}
-  function closeActionSheet() {}
+  // --- the stem action sheet ---------------------------------------------
+  var ACTS = ${JSON.stringify(STEM_ACTIONS)}
+  var actSheetEl = document.getElementById('act-sheet')
+  var actsEl = document.getElementById('acts')
+  var actSlot = null
+
+  function closeActionSheet() {
+    actSheetEl.hidden = true
+    actSlot = null
+  }
+
+  // Every action is offered on every resolved row, including a locked one
+  // -- that is what the desktop does: only roll all skips a locked slot,
+  // and a deliberate per-slot action always wins. adjacent is offered even
+  // when the mac would find nothing nearby; hiding it would mean shipping a
+  // "has a riff anchor" flag to a page that deliberately knows nothing
+  // about the library, and an adjacent with nothing nearby simply leaves
+  // the row playing what it was already playing.
+  function openActionSheet(slot) {
+    closeKindSheet()
+    actSlot = slot
+    document.getElementById('act-kind').textContent = slot.kindLabel
+    document.getElementById('act-kind').style.color = rowColor(slot)
+    document.getElementById('act-name').textContent = slot.stemName || '…'
+    actsEl.innerHTML = ''
+    ACTS.forEach(function (act) {
+      var b = document.createElement('button')
+      b.className = 'act'
+      b.appendChild(document.createTextNode(act.l))
+      var hint = document.createElement('span')
+      hint.className = 'h'
+      hint.textContent = act.h
+      b.appendChild(hint)
+      b.addEventListener('click', function () {
+        if (!actSlot) return
+        api('/api/slot-action', { slotId: actSlot.id, action: act.a })
+        flash(act.a === 'duplicate' ? 'copied' : 'rolling')
+        closeActionSheet()
+      })
+      actsEl.appendChild(b)
+    })
+    actSheetEl.hidden = false
+  }
+
+  document.getElementById('act-cancel').addEventListener('click', closeActionSheet)
+  document.getElementById('act-sheet-bg').addEventListener('click', closeActionSheet)
 
   function render(state) {
     countsEl.textContent = 'kept ' + state.kept + ' · rolled ' + state.rolled
@@ -973,6 +1057,13 @@ input {
     if (armedRemoveId !== null) {
       var stillThere = state.slots.some(function (s) { return s.id === armedRemoveId })
       if (!stillThere) disarmRemove()
+    }
+    // A slot that vanished from under an open sheet must not leave it
+    // pointing at an id the mac no longer has -- same rule as an armed
+    // remove.
+    if (actSlot !== null) {
+      var actStillThere = state.slots.some(function (s) { return s.id === actSlot.id })
+      if (!actStillThere) closeActionSheet()
     }
     lastSlots = state.slots
     renderRows()

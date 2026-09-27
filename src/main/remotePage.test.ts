@@ -329,6 +329,37 @@ describe('remotePage hold to keep', () => {
   })
 })
 
+describe('remotePage stem action sheet', () => {
+  it('offers the four actions the desktop row already has', () => {
+    expect(REMOTE_PAGE_HTML).toContain('id="act-sheet"')
+    for (const action of ['similar', 'adjacent', 'random', 'duplicate']) {
+      expect(SCRIPT).toContain(`"a":"${action}"`)
+    }
+  })
+
+  it('sends only actions the mac will accept, to the one route', () => {
+    const posts = SCRIPT.match(/api\('\/api\/slot-action'[^)]*\)/g) ?? []
+    expect(posts).toEqual([
+      "api('/api/slot-action', { slotId: slot.id, action: 'mute' })",
+      "api('/api/slot-action', { slotId: actSlot.id, action: act.a })"
+    ])
+  })
+
+  it('lays the four out two by two, at 64px', () => {
+    expect(REMOTE_PAGE_HTML).toContain('grid-template-columns: 1fr 1fr')
+    expect(REMOTE_PAGE_HTML).toContain('min-height: 64px')
+  })
+
+  it('closes when the slot it points at is gone', () => {
+    expect(SCRIPT).toContain('if (!actStillThere) closeActionSheet()')
+  })
+
+  it('never has two sheets open at once', () => {
+    expect(SCRIPT).toContain('closeKindSheet()')
+    expect(SCRIPT).toContain('closeActionSheet()')
+  })
+})
+
 describe('remotePage last resort', () => {
   it('shows a line rather than nothing if its own script throws', () => {
     // Hidden until something actually throws -- it is a last resort, not a
