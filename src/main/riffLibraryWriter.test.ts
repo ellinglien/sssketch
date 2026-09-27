@@ -16,6 +16,7 @@ import {
   listWarehouseFavourites,
   deleteJamRows
 } from './riffLibraryWriter'
+import { RIFF_STEMS_EXTRA_DDL, readExtraStemSlots } from './riffStemsExtra'
 
 // Same DDL as loreWarehouseSchema.ts's SCHEMA_SQL -- duplicated here
 // (rather than importing openOwnWarehouseDb, which requires mocking
@@ -42,6 +43,7 @@ function freshDb(): Database.Database {
     CREATE TABLE Tags (RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT, Favour INTEGER NOT NULL DEFAULT 0, Note TEXT);
     CREATE TABLE StemLedger (StemCID TEXT PRIMARY KEY, Type TEXT NOT NULL, Note TEXT);
   `)
+  db.exec(RIFF_STEMS_EXTRA_DDL)
   return db
 }
 
@@ -362,5 +364,87 @@ describe('riffLibraryWriter', () => {
 
   it('deleteJamRows is a safe no-op (returns []) for a jamCID with nothing synced', () => {
     expect(deleteJamRows(db, 'never_synced')).toEqual([])
+  })
+
+  it('writes the first eight stems to the columns and the rest to the side table', () => {
+    const stems = Array.from({ length: 12 }, (_, i) => ({
+      ...resolvedRiffFixture().stems[0],
+      stemCID: `stem_${i + 1}`,
+      slot: i + 1
+    }))
+    writeRiffDetail(
+      db,
+      'jam_1',
+      { creationTime: 10, userName: 'elling' },
+      { ...resolvedRiffFixture(), stems }
+    )
+
+    const row = db.prepare(`SELECT StemCID_8 FROM Riffs WHERE RiffCID = 'riff_1'`).get() as {
+      StemCID_8: string
+    }
+    expect(row.StemCID_8).toBe('stem_8')
+    expect(readExtraStemSlots(db, ['riff_1']).get('riff_1')).toEqual([
+      { slot: 9, stemCID: 'stem_9' },
+      { slot: 10, stemCID: 'stem_10' },
+      { slot: 11, stemCID: 'stem_11' },
+      { slot: 12, stemCID: 'stem_12' }
+    ])
+  })
+
+  it('gives every stem past the eighth a real Stems row too', () => {
+    const stems = Array.from({ length: 12 }, (_, i) => ({
+      ...resolvedRiffFixture().stems[0],
+      stemCID: `stem_${i + 1}`,
+      slot: i + 1
+    }))
+    writeRiffDetail(
+      db,
+      'jam_1',
+      { creationTime: 10, userName: 'elling' },
+      { ...resolvedRiffFixture(), stems }
+    )
+    const { n } = db.prepare(`SELECT COUNT(*) AS n FROM Stems`).get() as { n: number }
+    expect(n).toBe(12)
+  })
+
+  it('carries gains for slots past the eighth in GainsJSON, unchanged', () => {
+    const stems = Array.from({ length: 10 }, (_, i) => ({
+      ...resolvedRiffFixture().stems[0],
+      stemCID: `stem_${i + 1}`,
+      slot: i + 1,
+      gain: (i + 1) / 10
+    }))
+    writeRiffDetail(
+      db,
+      'jam_1',
+      { creationTime: 10, userName: 'elling' },
+      { ...resolvedRiffFixture(), stems }
+    )
+    const row = db.prepare(`SELECT GainsJSON FROM Riffs WHERE RiffCID = 'riff_1'`).get() as {
+      GainsJSON: string
+    }
+    expect((JSON.parse(row.GainsJSON) as Record<string, number>)['10']).toBeCloseTo(1.0)
+  })
+
+  it('an upsert that shrinks a rifff leaves no stale side rows', () => {
+    const base = resolvedRiffFixture()
+    const twelve = Array.from({ length: 12 }, (_, i) => ({
+      ...base.stems[0],
+      stemCID: `stem_${i + 1}`,
+      slot: i + 1
+    }))
+    writeRiffDetail(
+      db,
+      'jam_1',
+      { creationTime: 10, userName: 'elling' },
+      { ...base, stems: twelve }
+    )
+    writeRiffDetail(
+      db,
+      'jam_1',
+      { creationTime: 10, userName: 'elling' },
+      { ...base, stems: twelve.slice(0, 5) }
+    )
+    expect(readExtraStemSlots(db, ['riff_1']).has('riff_1')).toBe(false)
   })
 })

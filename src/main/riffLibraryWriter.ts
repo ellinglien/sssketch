@@ -1,5 +1,12 @@
 import type Database from 'better-sqlite3'
 import type { RiffLibraryResolvedRiff } from '@shared/riffLibraryTypes'
+import {
+  LORE_STEM_COLUMN_COUNT,
+  MAX_RIFFF_STEM_SLOTS,
+  STEM_SLOT_COLUMNS,
+  splitStemSlots
+} from '@shared/riffStemSlots'
+import { writeExtraStemSlots } from './riffStemsExtra'
 
 export function upsertJam(db: Database.Database, jamCID: string, publicName: string): void {
   db.prepare(
@@ -95,10 +102,26 @@ export function writeRiffDetail(
   )
 
   const txn = db.transaction((riff: RiffLibraryResolvedRiff) => {
-    const slots: (string | null)[] = Array.from({ length: 8 }, (_, i) => {
-      const stem = riff.stems.find((s) => s.slot === i + 1)
+    // Slots 1-8 go in the Riffs columns; 9-20 go in the RiffStemsExtra
+    // side table, so the LORE-compatible shape of Riffs is untouched. A
+    // slot outside 1..MAX_RIFFF_STEM_SLOTS is dropped and SAID SO -- the
+    // original version of this cap dropped stems in silence, which is the
+    // bug this whole change exists to fix.
+    const { columnStems, extraStems, dropped } = splitStemSlots(riff.stems)
+    if (dropped.length > 0) {
+      console.warn(
+        `writeRiffDetail: riff ${riff.riffCID} had ${dropped.length} stem(s) outside ` +
+          `slots 1..${MAX_RIFFF_STEM_SLOTS}; they were not written`
+      )
+    }
+    const slots: (string | null)[] = Array.from({ length: LORE_STEM_COLUMN_COUNT }, (_, i) => {
+      const stem = columnStems.find((s) => s.slot === i + 1)
       return stem?.stemCID ?? null
     })
+    // GainsJSON is slot-keyed and has never been bounded by eight, so a
+    // 12-stem rifff's gains for slots 9-12 persist here with no schema
+    // change at all. An older build simply never asks for those keys. Do
+    // not "tidy" this to eight entries.
     const gains: Record<string, number> = {}
     for (const stem of riff.stems) gains[String(stem.slot)] = stem.gain
 
@@ -121,6 +144,11 @@ export function writeRiffDetail(
       s8: slots[7],
       gainsJson: JSON.stringify(gains)
     })
+
+    // Inside the same transaction as the Riffs row, and delete-then-insert
+    // inside itself, so an upsert that SHRINKS a rifff cannot leave a
+    // stale slot-12 row pointing at a stem the riff no longer has.
+    writeExtraStemSlots(db, riff.riffCID, extraStems)
 
     for (const stem of riff.stems) {
       insertStemSkeleton.run(stem.stemCID, jamCID)
@@ -207,8 +235,6 @@ export function filterUnresolved(db: Database.Database, riffCIDs: string[]): str
   const resolvedSet = new Set(resolvedRows.map((r) => r.RiffCID))
   return riffCIDs.filter((cid) => !resolvedSet.has(cid))
 }
-
-const STEM_SLOT_COLUMNS = Array.from({ length: 8 }, (_, i) => `StemCID_${i + 1}`)
 
 /** Deletes a jam's own warehouse rows (Riffs, Tags, and the Jams row
  * itself) and returns whichever of its stems' StemCIDs are now safe to
