@@ -95,6 +95,41 @@ describe('remoteStateFromSlots', () => {
     expect(state.slots[0].kindLabel).toContain('chonky')
   })
 
+  it('carries quantised peaks for a slot the mac has already analysed', () => {
+    const state = remoteStateFromSlots(
+      [slot()],
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null },
+      new Map([['s1', [0, 0.5, 1, 0.25]]])
+    )
+    expect(state.slots[0].peaks).toHaveLength(64)
+    expect(state.slots[0].peaks?.[0]).toBe(0)
+    expect(state.slots[0].peaks?.[63]).toBe(25)
+  })
+
+  it('reads a slot with no analysis yet as no waveform, not an empty one', () => {
+    const state = remoteStateFromSlots(
+      [slot()],
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null },
+      new Map()
+    )
+    expect(state.slots[0].peaks).toBeNull()
+  })
+
+  it('is keyed by slot id, so a path cannot enter through the new door either', () => {
+    const state = remoteStateFromSlots(
+      [slot()],
+      { discoverOpen: true, playing: false, kept: 0, rolled: 0, lastKeptName: null },
+      new Map([['s1', [0.4, 0.9]]])
+    )
+    expect(JSON.stringify(state)).not.toContain('/Users/')
+    expect(JSON.stringify(state)).not.toContain('abc123')
+    for (const v of state.slots[0].peaks ?? []) {
+      expect(Number.isInteger(v)).toBe(true)
+      expect(v).toBeGreaterThanOrEqual(0)
+      expect(v).toBeLessThanOrEqual(100)
+    }
+  })
+
   it('passes the counters and the open/playing flags straight through', () => {
     const state = remoteStateFromSlots([], {
       discoverOpen: false,

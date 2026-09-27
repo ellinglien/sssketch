@@ -7,6 +7,7 @@ import {
   slotKindsLabel,
   type DiscoverSlotKind
 } from './discoverSlotKind'
+import { quantiseRemotePeaks } from './remotePeaks'
 
 /** One row on the phone. `id` is Discover's own slot id -- needed so a tap
  * can reroll THAT slot, and not a filesystem path. There is deliberately
@@ -74,7 +75,10 @@ export interface RemoteStateMeta {
  * screen, mid-roll included. */
 export function remoteStateFromSlots(
   slots: readonly CoachSlotSnapshot[],
-  meta: RemoteStateMeta
+  meta: RemoteStateMeta,
+  // Keyed by SLOT ID, never by path -- the caller has the paths and this
+  // function deliberately still never sees one.
+  peaksBySlotId?: ReadonlyMap<string, readonly number[]>
 ): RemoteState {
   return {
     discoverOpen: meta.discoverOpen,
@@ -88,7 +92,7 @@ export function remoteStateFromSlots(
       stemName: slot.stem?.name ?? '',
       soundType: slot.stem?.type ?? null,
       muted: !slot.audible,
-      peaks: null
+      peaks: quantiseRemotePeaks(peaksBySlotId?.get(slot.id) ?? [])
     }))
   }
 }
