@@ -328,6 +328,29 @@ button.drop {
 }
 button.drop:active { background: #161616; }
 button.drop.armed { background: #ededed; color: #050505; }
+/* A ROW ON ITS WAY OUT. Between the confirming tap and the row actually
+ * going there was no sign at all, which is indistinguishable from a tap
+ * that missed -- so the instinct was to tap again.
+ *
+ * What it could NOT be, and why this is what it is. Nothing on this page
+ * fades, so the whole family of dimmed treatments is out. There is no
+ * colour to spend on chrome. #6a6a6a is the muted treatment, and a row on
+ * its way out is still IN the loop that is playing -- it has not stopped
+ * making a sound and must not look as though it has. And inversion already
+ * means armed, which is a question ("sure"); letting it also mean a
+ * statement you are being told would put two opposite affordances in one
+ * white block, at the exact moment the right thing to do is stop tapping.
+ *
+ * So: a word, in the one cell whose job is removal, at full text strength
+ * rather than the x's quiet grey -- the message lands where the thumb just
+ * was. The row keeps every bit of its colour and takes one step of border,
+ * #222222 to #3a3a3a, which is the same border the transport already
+ * wears. :active is pinned back to the resting background because the row
+ * answers nothing now, and a press that lights up would say otherwise. */
+.row.going { border-color: #3a3a3a; }
+.row.going:active { background: #0a0a0a; }
+button.drop.going { color: #ededed; }
+button.drop.going:active { background: transparent; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 button.big {
   flex: 1;
@@ -1187,10 +1210,35 @@ input {
   }
   var armedRemoveId = null
   var armedRemoveTimer = null
-  // Every visible row's x, by slot id, so arming can repaint ONE button.
-  // Rebuilt with the rows; Object.create(null) so a slot id can never
-  // collide with something inherited.
+  // Every visible row and its x, by slot id, so arming or marking one row
+  // can repaint ONE row. Rebuilt with the rows; Object.create(null) so a
+  // slot id can never collide with something inherited.
   var dropEls = Object.create(null)
+  var rowEls = Object.create(null)
+
+  // THE ROWS THAT HAVE BEEN REMOVED AND HAVE NOT GONE YET, by slot id, each
+  // holding the wall-clock instant its confirming tap posted. A pending
+  // indicator and deliberately NOT an undo window: the remove posts on that
+  // tap exactly as it always did, nothing is queued, delayed or cancellable,
+  // and he asked to be shown it rather than to take it back.
+  //
+  // Wall-clock rather than the audio clock on purpose -- this is about the
+  // mac answering, which has nothing to do with whether anything is
+  // sounding, and the audio clock does not exist until play is pressed.
+  var goingRemoveIds = Object.create(null)
+
+  // HOW LONG A REMOVAL THE MAC NEVER TOOK STAYS DRAWN AS GOING. The mac
+  // offline, the command lost, discover closed on it: nothing is coming and
+  // a row cannot sit in limbo forever. Eight seconds is more than ten polls,
+  // so it never fires on a slow but working mac -- and the clock is only
+  // consulted at all when the mac's own live list STILL has the slot, so a
+  // removal the mac DID take can never time out while it waits for a loop
+  // boundary, however long that wait is (see reconcileGoing).
+  var GOING_MS = 8000
+
+  function isGoing(id) {
+    return goingRemoveIds[id] !== undefined
+  }
 
   // The whole of "armed", drawn, in the one place that draws it.
   //
@@ -1210,9 +1258,61 @@ input {
   function paintDrop(id) {
     var drop = dropEls[id]
     if (!drop) return
+    // Going beats armed: the arming is what produced it, and the second tap
+    // disarms before it marks, so the two never really coincide -- but the
+    // order is written down rather than relied on.
+    var going = isGoing(id)
     var armed = armedRemoveId === id
-    drop.className = armed ? 'drop armed' : 'drop'
-    drop.textContent = armed ? 'sure' : 'x'
+    drop.className = going ? 'drop going' : (armed ? 'drop armed' : 'drop')
+    drop.textContent = going ? 'going' : (armed ? 'sure' : 'x')
+  }
+
+  // The other half of the same per-row repaint: the row's own border. Two
+  // elements, two one-line painters, called from the same places -- and, as
+  // with paintDrop, this is the ONLY thing that writes a row's class, so a
+  // fresh row comes up already marked if the list was rebuilt under a
+  // pending removal.
+  function paintGoingRow(id) {
+    var row = rowEls[id]
+    if (!row) return
+    row.className = isGoing(id) ? 'row going' : 'row'
+  }
+
+  function markGoing(id) {
+    goingRemoveIds[id] = Date.now()
+    paintDrop(id)
+    paintGoingRow(id)
+  }
+
+  // A going row stops being going when it stops being DRAWN, which is
+  // exactly what "will disappear soon" promised -- and not a moment before.
+  // That can be a whole loop after the mac agreed, because the rows are held
+  // to the loop that is audible (see adoptPolledSlots): the stem is still in
+  // the mix, so the row is still there to be marked.
+  //
+  // The timeout is the other branch and is deliberately NOT a plain timer:
+  // it is consulted only for a slot the mac's own live list still names.
+  // Still on the mac after eight seconds means the mac never took the
+  // removal; gone from the mac but still drawn means it took it and the
+  // sound has not caught up, which is not a failure and must never be
+  // treated as one.
+  function reconcileGoing() {
+    for (var id in goingRemoveIds) {
+      var drawn = false
+      for (var i = 0; i < lastSlots.length; i++) {
+        if (lastSlots[i].id === id) drawn = true
+      }
+      if (!drawn) { delete goingRemoveIds[id]; continue }
+      var macStillHasIt = false
+      for (var j = 0; j < polledSlots.length; j++) {
+        if (polledSlots[j].id === id) macStillHasIt = true
+      }
+      if (macStillHasIt && Date.now() - goingRemoveIds[id] > GOING_MS) {
+        delete goingRemoveIds[id]
+        paintDrop(id)
+        paintGoingRow(id)
+      }
+    }
   }
 
   function disarmRemove() {
@@ -1365,9 +1465,14 @@ input {
     rowsEl.innerHTML = ''
     rowCanvases = []
     dropEls = Object.create(null)
+    rowEls = Object.create(null)
     lastSlots.forEach(function (slot) {
       var row = document.createElement('div')
-      row.className = 'row'
+      // Registered first, then classed by the one function that classes a
+      // row, for the same reason the x below is: a rebuild under a pending
+      // removal must come up already marked.
+      rowEls[slot.id] = row
+      paintGoingRow(slot.id)
       var color = rowColor(slot)
 
       var kind = document.createElement('span')
@@ -1391,10 +1496,18 @@ input {
       // under an arming.
       paintDrop(slot.id)
       drop.addEventListener('click', function () {
+        if (isGoing(slot.id)) return
         if (armedRemoveId === slot.id) {
           disarmRemove()
           api('/api/remove-slot', { slotId: slot.id })
-          flash('removed')
+          // Marked in the same breath as the post, so the row answers the
+          // thumb now rather than in up to 700ms -- and then keeps
+          // answering it until it actually goes, which with the rows held
+          // to the audible loop can be a whole loop away.
+          markGoing(slot.id)
+          // Not 'removed': it is not, yet. The row says going and this line
+          // must not claim otherwise.
+          flash('removing')
           return
         }
         armRemove(slot.id)
@@ -1406,6 +1519,11 @@ input {
       // page is not allowed to suppress one (see the last-resort test).
       if (slot.stemName) {
         row.addEventListener('pointerdown', function (e) {
+          // A row already on its way out has nothing left to ask it: no
+          // mute, no solo, no action sheet. Guarded at BOTH ends of the
+          // gesture, because a press that began before the confirming tap
+          // must not complete after it.
+          if (isGoing(slot.id)) return
           if (e.target.tagName === 'BUTTON') return
           holdFired = false
           holdMoved = false
@@ -1432,6 +1550,7 @@ input {
         row.addEventListener('pointerleave', function () { holdMoved = true; cancelHold() })
         row.addEventListener('pointerup', function (e) {
           cancelHold()
+          if (isGoing(slot.id)) return
           if (e.target.tagName === 'BUTTON') return
           if (holdFired || holdMoved) return
           disarmRemove()
@@ -1514,6 +1633,7 @@ input {
       polledSlots = []
       polledLoopId = null
       polledLoopBars = 0
+      goingRemoveIds = Object.create(null)
       disarmRemove()
       renderRows()
       emptyEl.hidden = true
@@ -1556,24 +1676,40 @@ input {
     // row is then the only thing on screen, which is the point.
     emptyEl.hidden = state.slots.length > 0
     loopEl.hidden = state.slots.length === 0
-    // A slot that vanished from under an armed remove must not leave the
-    // arming pointed at an id that no longer exists.
-    if (armedRemoveId !== null) {
-      var stillThere = state.slots.some(function (s) { return s.id === armedRemoveId })
-      if (!stillThere) disarmRemove()
-    }
-    // A slot that vanished from under an open sheet must not leave it
-    // pointing at an id the mac no longer has -- same rule as an armed
-    // remove.
-    if (actSlot !== null) {
-      var actStillThere = state.slots.some(function (s) { return s.id === actSlot.id })
-      if (!actStillThere) closeActionSheet()
-    }
     // The one exception to "the renderer pushes and the phone draws": while
     // the sound is on its way, the rows stay on the loop that is sounding.
     // renderRows is still called either way -- an optimistic mute painted
     // between polls has to survive a poll that changed nothing.
     if (!holdingForSwap()) lastSlots = state.slots
+
+    // EVERYTHING BELOW RECONCILES AGAINST THE DRAWN ROWS, and this is the
+    // line the three of them have to be on the same side of.
+    //
+    // The two guards below used to ask the mac's live state.slots instead,
+    // from before the rows could lag the mac at all. Once they could, an
+    // arming was dropped and an open sheet closed under a row that was
+    // still drawn, still sounding and still under the thumb -- the mac had
+    // moved on, but nothing the user could see had. Every one of these
+    // gestures acts on a row that is DRAWN, so every one of them asks the
+    // drawn rows whether it is still there. Fixed here rather than left
+    // alone because the going mark needed exactly this list, and three
+    // notions of "still there" in one function is how the next one goes
+    // wrong. The cost is that a second tap can post a remove for a slot the
+    // mac already dropped, which the mac simply does not find.
+    reconcileGoing()
+    // A slot that vanished from under an armed remove must not leave the
+    // arming pointed at an id that is no longer on screen.
+    if (armedRemoveId !== null) {
+      var stillThere = lastSlots.some(function (s) { return s.id === armedRemoveId })
+      if (!stillThere) disarmRemove()
+    }
+    // A slot that vanished from under an open sheet must not leave it
+    // pointing at a row that is no longer there -- same rule as an armed
+    // remove.
+    if (actSlot !== null) {
+      var actStillThere = lastSlots.some(function (s) { return s.id === actSlot.id })
+      if (!actStillThere) closeActionSheet()
+    }
     renderRows()
   }
 

@@ -66,7 +66,7 @@ describe('remotePage kind picker', () => {
 
 describe('remotePage slots', () => {
   it('needs two taps to remove, because the phone has no undo', () => {
-    expect(SCRIPT).toContain("drop.textContent = armed ? 'sure' : 'x'")
+    expect(SCRIPT).toContain("drop.textContent = going ? 'going' : (armed ? 'sure' : 'x')")
     expect(SCRIPT).toContain('if (armedRemoveId === slot.id) {')
     const removes = SCRIPT.match(/api\('\/api\/remove-slot'[^)]*\)/g) ?? []
     expect(removes).toEqual(["api('/api/remove-slot', { slotId: slot.id })"])
@@ -147,6 +147,7 @@ describe('remotePage copy', () => {
       'adjacent',
       'random',
       'duplicate',
+      'going',
       'loop end',
       '8 bars',
       '4 bars',
@@ -273,7 +274,7 @@ describe('remotePage rows', () => {
   })
 
   it('shortens remove to an icon and still needs two taps', () => {
-    expect(SCRIPT).toContain("drop.textContent = armed ? 'sure' : 'x'")
+    expect(SCRIPT).toContain("drop.textContent = going ? 'going' : (armed ? 'sure' : 'x')")
   })
 })
 
@@ -563,6 +564,103 @@ describe('remotePage solo', () => {
     expect(REMOTE_PAGE_HTML).not.toContain('opacity')
     // The one place a row's colour is decided, unchanged by solo.
     expect(SCRIPT).toContain("slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')")
+  })
+})
+
+describe('remotePage going away', () => {
+  it('says a row is on its way out in a word, at the button that did it', () => {
+    // "have a way to show when a stem has been removed and will disappear
+    // soon" -- Elling, 2026-09-27. Between the confirming tap and the row
+    // actually going there was no sign at all, which is indistinguishable
+    // from a tap that missed, so the instinct is to tap again.
+    //
+    // A WORD, not a treatment, and it goes in the one cell whose job is
+    // removal -- the message lands exactly where the thumb was. The four
+    // facts it had to survive: nothing on this page may fade; there is no
+    // colour to spend on chrome; #6a6a6a is already the muted treatment and
+    // a going row is still SOUNDING, so it must not read as silenced; and
+    // inversion already means armed, a question ("sure"), which must not
+    // come to also mean a statement you are being told.
+    expect(SCRIPT).toContain("drop.textContent = going ? 'going' : (armed ? 'sure' : 'x')")
+    expect(SCRIPT).toContain(
+      "drop.className = going ? 'drop going' : (armed ? 'drop armed' : 'drop')"
+    )
+    expect(REMOTE_PAGE_HTML).toContain('button.drop.going { color: #ededed; }')
+    // The row itself takes a quiet structural mark and keeps every bit of
+    // its colour, because the stem is still in the loop that is playing.
+    expect(REMOTE_PAGE_HTML).toContain('.row.going { border-color: #3a3a3a; }')
+    expect(REMOTE_PAGE_HTML).not.toContain('opacity')
+    // Not a second use of the mute grey, and not a second use of inversion.
+    expect(REMOTE_PAGE_HTML).not.toContain('.row.going { background: #ededed')
+  })
+
+  it('stops responding to the thumb the moment it is going', () => {
+    // No mute, no long press, no re-arming the remove. A row you have
+    // already removed has nothing left to ask it.
+    const guards = SCRIPT.match(/if \(isGoing\(slot\.id\)\) return/g) ?? []
+    expect(guards).toHaveLength(3)
+    expect(REMOTE_PAGE_HTML).toContain('.row.going:active { background: #0a0a0a; }')
+  })
+
+  it('marks the row without rebuilding the list', () => {
+    // d7ff531 took armedRemoveId out of the repaint key precisely because
+    // arming one button rebuilt every row and threw the scroll. Going is
+    // per-row presentational state of exactly the same kind and stays out
+    // of the key for exactly the same reason.
+    expect(SCRIPT).toContain('var key = JSON.stringify(lastSlots)')
+    expect(SCRIPT).not.toMatch(/var key = .*goingRemoveIds/)
+    expect(SCRIPT).toContain('function markGoing(id)')
+    expect(SCRIPT).toContain('function paintGoingRow(id)')
+    // Still exactly one wipe of the row list, and it is renderRows'.
+    const wipes = SCRIPT.match(/rowsEl\.innerHTML = ''/g) ?? []
+    expect(wipes).toHaveLength(1)
+  })
+
+  it('is a pending indicator and not an undo window', () => {
+    // He asked to SHOW it, not to take it back. The remove posts on the
+    // confirming tap exactly as it always did -- nothing is delayed, queued
+    // or cancellable.
+    const removes = SCRIPT.match(/api\('\/api\/remove-slot'[^)]*\)/g) ?? []
+    expect(removes).toEqual(["api('/api/remove-slot', { slotId: slot.id })"])
+    // The post goes FIRST and the mark is drawn after it, so there is no
+    // instant in which the row says going and nothing has been asked for.
+    expect(SCRIPT.indexOf("api('/api/remove-slot'")).toBeLessThan(
+      SCRIPT.indexOf('markGoing(slot.id)')
+    )
+    // And the line under the buttons stops claiming it is already done.
+    expect(SCRIPT).toContain("flash('removing')")
+  })
+
+  it('stays going until the row actually goes, however long the loop is', () => {
+    // The promise is "will disappear soon", so it is kept until the row
+    // disappears -- which, with the rows held to the audible loop, can be a
+    // whole loop after the mac agreed.
+    expect(SCRIPT).toContain('function reconcileGoing()')
+    expect(SCRIPT).toContain('if (!drawn) { delete goingRemoveIds[id]; continue }')
+  })
+
+  it('gives up only when the mac never took the removal at all', () => {
+    // The mac offline, the command lost, discover closed. Eight seconds is
+    // more than ten polls, and the clock is only consulted when the mac's
+    // own live list STILL has the slot -- so a removal the mac did take can
+    // never time out while it waits for a loop boundary, however long that
+    // wait is.
+    expect(SCRIPT).toContain('GOING_MS = 8000')
+    expect(SCRIPT).toContain('if (macStillHasIt && Date.now() - goingRemoveIds[id] > GOING_MS) {')
+  })
+
+  it('reconciles everything the thumb can touch against what the thumb can see', () => {
+    // The armed remove and the open action sheet used to check the MAC's
+    // live list while the rows were held to the audible loop -- so an arming
+    // could be dropped, and a sheet closed, under a row still drawn and
+    // still sounding. Every gesture acts on a drawn row, so every gesture's
+    // "is it still there" asks the drawn rows. Fixed here because the going
+    // mark needed exactly this list and three lists in one function is how
+    // the next one goes wrong.
+    expect(SCRIPT).toContain('var stillThere = lastSlots.some(')
+    expect(SCRIPT).toContain('var actStillThere = lastSlots.some(')
+    expect(SCRIPT).toContain('if (!stillThere) disarmRemove()')
+    expect(SCRIPT).toContain('if (!actStillThere) closeActionSheet()')
   })
 })
 
