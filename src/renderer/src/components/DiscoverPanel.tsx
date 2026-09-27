@@ -10,6 +10,7 @@ import { ROLE_LABELS } from '@shared/autoArrangeLabels'
 import { BracketToggle } from './BracketToggle'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
+import { getPeaks, peekPeaks } from '../audio/peakCache'
 import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
 import {
   DISCOVER_SLOT_KIND_LABEL,
@@ -33,6 +34,7 @@ import {
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
+import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { applyTraitBar } from '@shared/traitBar'
 import {
   advanceRadioClock,
@@ -64,7 +66,11 @@ import {
 import { tileOffsetsPx, resolvedPlayedBarsFromFields } from '../state/selectors'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
-import { remoteStateFromSlots, type RemoteCommand } from '@shared/remoteState'
+import {
+  remoteStateFromSlots,
+  type RemoteCommand,
+  type RemoteSlotAction
+} from '@shared/remoteState'
 import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
@@ -1474,22 +1480,57 @@ export function DiscoverPanel({
     onCoachSlotsChange(buildSlotSnapshots())
   }, [buildSlotSnapshots, onCoachSlotsChange])
 
+  // Bumped when a stem's peaks settle AFTER a push has already gone out, so
+  // the effect below runs again and the phone's row stops being a flat line.
+  // peekPeaks is a synchronous read of peakCache's settled map -- the very
+  // same entry this slot's own <Waveform> tiles populate -- so the common
+  // case costs a Map.get and the uncommon one costs a cache hit.
+  const [remotePeaksTick, setRemotePeaksTick] = useState(0)
+
   // The renderer PUSHES; main only ever answers GET /api/state with the
   // last thing pushed. What he sees on the Mac and what he sees on the
   // phone are the same state because there is only one. remoteStateFromSlots
   // is the whole privacy boundary -- no path, no CID, nothing about the
   // library leaves here.
   useEffect(() => {
+    void remotePeaksTick
+    const snapshots = buildSlotSnapshots()
+    const peaksBySlotId = new Map<string, readonly number[]>()
+    let awaiting = false
+    for (const snapshot of snapshots) {
+      const path = snapshot.stem?.path
+      if (path === undefined) continue
+      const ready = peekPeaks(path)
+      if (ready) peaksBySlotId.set(snapshot.id, ready)
+      else awaiting = true
+    }
+    if (awaiting) {
+      // Not a decode of its own in any realistic case -- the row's own
+      // <Waveform> is already asking for the same path, and peakCache
+      // dedupes by path. A rejection evicts its own entry there, so a
+      // transient failure cannot permanently poison a row.
+      for (const snapshot of snapshots) {
+        const path = snapshot.stem?.path
+        if (path === undefined || peekPeaks(path)) continue
+        void getPeaks(path)
+          .then(() => setRemotePeaksTick((n) => n + 1))
+          .catch(() => {})
+      }
+    }
     void window.rifffApi.setRemoteState(
-      remoteStateFromSlots(buildSlotSnapshots(), {
-        discoverOpen: true,
-        playing,
-        kept: keptCount,
-        rolled: rolledCount,
-        lastKeptName
-      })
+      remoteStateFromSlots(
+        snapshots,
+        {
+          discoverOpen: true,
+          playing,
+          kept: keptCount,
+          rolled: rolledCount,
+          lastKeptName
+        },
+        peaksBySlotId
+      )
     )
-  }, [buildSlotSnapshots, playing, keptCount, rolledCount, lastKeptName])
+  }, [buildSlotSnapshots, playing, keptCount, rolledCount, lastKeptName, remotePeaksTick])
 
   // Discover is closed the moment this panel unmounts -- the page then
   // says "open discover on the mac" and offers nothing else.
@@ -1529,6 +1570,9 @@ export function DiscoverPanel({
       else if (command.kind === 'add-slot') {
         if (command.kinds.length > 0) addSlot(normalizeSlotKinds(command.kinds))
       } else if (command.kind === 'remove-slot') removeSlot(command.slotId)
+      // The four actions are the four buttons on every desktop slot row,
+      // plus that row's own mute -- see runSlotAction.
+      else if (command.kind === 'slot-action') runSlotAction(command.slotId, command.action)
     }
   })
 
@@ -1813,6 +1857,78 @@ export function DiscoverPanel({
         s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
       )
     )
+  }
+
+  // The PHONE's one-tap `adjacent` (docs/superpowers/specs/2026-09-27-stem-
+  // actions-and-phone-1a-design.md §1.4). The desktop's own `adjacent` is
+  // DiscoverNearbyPopover -- a browser -- which does not fit a 2x2 sheet of
+  // 64px buttons on a phone. Same IPC, same candidate, same commit
+  // (swapSlotFromNearby above, undo snapshot and all); only the choosing is
+  // different, and that lives in @shared/discoverAdjacentPick so it can be
+  // tested and so Math.random() stays out of this component
+  // (react-hooks/purity).
+  //
+  // Claims a generation BEFORE the await, into the same rerollGenerationRef
+  // map pickForSlot and rollRandomForSlot share -- without it, a slower
+  // adjacency lookup could land on top of a newer `similar` the user fired
+  // afterwards. Does NOT bump setRolledCount: the desktop's popover pick
+  // does not either, and the phone's counters should keep meaning what they
+  // mean on the Mac.
+  async function rollAdjacentForSlot(id: string): Promise<void> {
+    const slot = slotsRef.current.find((s) => s.id === id)
+    const anchor = slot?.candidate ?? null
+    // No anchor is the desktop's "there is no adjacent button at all" state,
+    // not an error -- leave the slot exactly as it is.
+    if (!slot || !anchor) return
+    const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
+    rerollGenerationRef.current.set(id, myGeneration)
+    setRerollingSlotIds((prev) => new Set(prev).add(id))
+    try {
+      const nearby = await window.rifffApi.getAdjacentDiscoverCandidates(
+        anchor.riffCID,
+        slot.kinds,
+        globalRollOptions.soundSource
+      )
+      if (rerollGenerationRef.current.get(id) !== myGeneration) return
+      const pick = pickAdjacentCandidate(nearby.older, nearby.newer, anchor.stemCID)
+      // Nothing nearby: the stem that is already playing is still the right
+      // stem. Never blank the row.
+      if (pick === null) return
+      swapSlotFromNearby(id, pick)
+    } catch (err) {
+      console.error(`DiscoverPanel: rollAdjacentForSlot(${id}) failed:`, err)
+    } finally {
+      if (rerollGenerationRef.current.get(id) === myGeneration) {
+        setRerollingSlotIds((prev) => {
+          const next = new Set(prev)
+          next.delete(id)
+          return next
+        })
+      }
+    }
+  }
+
+  /** The phone's five per-row actions, each one calling the function the
+   * desktop row's own button calls -- same undo snapshots, same lack of a
+   * lock check (only rerollAll skips a locked slot). mute is the row's own
+   * mute button and, like it, is deliberately not undoable. `adjacent` is
+   * the one-tap form of the desktop popover; see rollAdjacentForSlot above.
+   *
+   * A component-scope function rather than five branches written inline in
+   * the remoteCommandRef effect below (which is what the plan for this
+   * asked for): calling toggleSlotPreview DIRECTLY from inside that effect
+   * makes react-hooks/immutability treat every ref reachable through
+   * syncPreviewToEngine as "used in an effect", which then ERRORS on the
+   * skipFirstBpmRetuneRef write in the bpm-retune effect above and on ten
+   * other pre-existing lines. Reaching it through one plain function is the
+   * same shape removeSlot -> dropFromPreviewingMix already has, and lints
+   * clean. The mapping itself is unchanged. */
+  function runSlotAction(id: string, action: RemoteSlotAction): void {
+    if (action === 'mute') toggleSlotPreview(id)
+    else if (action === 'similar') void rerollSlot(id)
+    else if (action === 'random') void rerollRandomSlot(id)
+    else if (action === 'duplicate') duplicateSlot(id)
+    else if (action === 'adjacent') void rollAdjacentForSlot(id)
   }
 
   /** The fetch/dedupe/bar/rank/pick half of a roll. Owns the
