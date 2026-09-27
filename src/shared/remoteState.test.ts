@@ -27,7 +27,7 @@ function slot(overrides: Partial<CoachSlotSnapshot> = {}): CoachSlotSnapshot {
 }
 
 describe('remoteStateFromSlots', () => {
-  it('carries the slot id, a kind label, the stem name and its sound type', () => {
+  it('carries the slot id, a kind label, the stem name, its sound type and whether it is muted', () => {
     const state = remoteStateFromSlots([slot()], {
       discoverOpen: true,
       playing: false,
@@ -36,8 +36,26 @@ describe('remoteStateFromSlots', () => {
       lastKeptName: null
     })
     expect(state.slots).toEqual([
-      { id: 's1', kindLabel: 'drummy', stemName: 'wooden thud', soundType: 'drums' }
+      {
+        id: 's1',
+        kindLabel: 'drummy',
+        stemName: 'wooden thud',
+        soundType: 'drums',
+        muted: false,
+        peaks: null
+      }
     ])
+  })
+
+  it('inverts the snapshot\u2019s audible into the mute the phone actually shows', () => {
+    const state = remoteStateFromSlots([slot({ audible: false })], {
+      discoverOpen: true,
+      playing: false,
+      kept: 0,
+      rolled: 0,
+      lastKeptName: null
+    })
+    expect(state.slots[0].muted).toBe(true)
   })
 
   it('NEVER carries a filesystem path', () => {
@@ -60,7 +78,9 @@ describe('remoteStateFromSlots', () => {
       rolled: 0,
       lastKeptName: null
     })
-    expect(state.slots).toEqual([{ id: 's1', kindLabel: 'drummy', stemName: '', soundType: null }])
+    expect(state.slots).toEqual([
+      { id: 's1', kindLabel: 'drummy', stemName: '', soundType: null, muted: false, peaks: null }
+    ])
   })
 
   it('labels a combination slot with both kinds', () => {

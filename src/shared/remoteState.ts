@@ -16,6 +16,18 @@ export interface RemoteSlotView {
   kindLabel: string
   stemName: string
   soundType: SoundType | null
+  /** Not in Discover's audible preview mix. Inverted from
+   * CoachSlotSnapshot's own `audible` HERE, once, rather than on the page:
+   * the guided flow asks "is this in the mix", the phone shows a mute
+   * state, and the page should not have to invert it at four call sites. */
+  muted: boolean
+  /** 64 integers, 0..100, for this row's own waveform -- or null when the
+   * stem has not been analysed yet. Quantised by quantiseRemotePeaks
+   * (@shared/remotePeaks) from peaks the Mac's own Discover rows already
+   * computed (peakCache.ts). Amplitude buckets are not a path, do not
+   * identify a file and cannot be turned back into one, so this does not
+   * widen the boundary this function IS. */
+  peaks: number[] | null
 }
 
 export interface RemoteState {
@@ -74,7 +86,9 @@ export function remoteStateFromSlots(
       id: slot.id,
       kindLabel: slotKindsLabel(slot.kinds),
       stemName: slot.stem?.name ?? '',
-      soundType: slot.stem?.type ?? null
+      soundType: slot.stem?.type ?? null,
+      muted: !slot.audible,
+      peaks: null
     }))
   }
 }
