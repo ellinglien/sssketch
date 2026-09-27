@@ -2365,10 +2365,34 @@ export function DiscoverPanel({
     if (placed.length === 0) return null
 
     const kinds = [...new Set(placeable.map((s) => slotKindsLabel(s.kinds)))]
+    // Live-reported 2026-09-27: "add to timeline, it doesn't seem to include
+    // all of the stems in the discover modal" -- with twelve slots built, four
+    // silently vanished. This call used to omit `maxMembers` and so inherited
+    // assembleDiscoverRifff's own MAX_STEMS_PER_RIFFF default of 8, which
+    // slice(0, 8)'d the rest away without a word.
+    //
+    // That 8 is the RIFF LIBRARY's limit -- Riffs.StemCID_1..8 in
+    // riffLibrarySchema.ts -- and it binds a rifff being written to that
+    // table. It does not bind this one. A timeline placement is project
+    // state: Rifff.stems is a plain Stem[], projectFile.ts has no StemCID
+    // columns, and stemKey(groupId, slot) is arithmetic, not a schema. The
+    // cap was inherited by accident rather than chosen.
+    //
+    // Exactly the same bug, in the other half of this component, was fixed
+    // on 2026-09-16 ("i can only hear the last stem if i solo it"): the
+    // engine-preview call shared this same default until it was given an
+    // explicit members.length. So >8 through buildEngineProject and the
+    // native engine is not a hope -- it is the path the preview has taken
+    // ever since, which is why he can HEAR all twelve while only eight land.
+    //
+    // `keep` into the discovered room is the one that really is capped at 8,
+    // because it does write that table. Raising it to 20 needs a side table
+    // and is its own piece of work.
     return assembleDiscoverRifff(
       `discover: ${kinds.join('+')}`,
       placed.map(({ stem, gain }) => ({ stem, gain })),
-      bpm
+      bpm,
+      placed.length
     )
   }
 
