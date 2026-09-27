@@ -6,6 +6,7 @@ import {
   type ResolvedCandidateStem
 } from '../components/DiscoverPanel'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
+import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
 
 /** Best-effort DiscoverSlotKind for a stem's own SoundType -- used by both
  * seed paths in this file (Shelf-sourced and, via LibraryBrowser.tsx,
@@ -24,12 +25,12 @@ export function discoverSlotKindForSoundType(soundType: SoundType): DiscoverSlot
   return 'bright'
 }
 
-// A real Rifff can only ever have 8 stems (StemCID_1..8, see
-// riffLibrarySchema.ts) -- caps defensively at the same number
-// discoverRifffAssembly.ts's own MAX_STEMS_PER_RIFFF already enforces on
-// the way back OUT of Discover, so seeding never produces more slots than
-// a "plunk in arranger" could ever turn back into a single rifff anyway.
-const MAX_SEED_SLOTS = 8
+// Seeding must be able to reproduce anything `keep` could have saved --
+// otherwise seeding Discover from a kept twelve-stem group silently
+// returns eight slots, and "seed discover with this" stops round-tripping.
+// Same single ceiling as discoverRifffAssembly.ts's own maxMembers default
+// (@shared/riffStemSlots), for the same reason: one number, one place.
+const MAX_SEED_SLOTS = MAX_RIFFF_STEM_SLOTS
 
 /** Whether any slot in a Discover loop is real, meaningful content worth
  * confirming before destroying/worth reopening onto the 'discover' tab for

@@ -51,23 +51,35 @@ describe('assembleDiscoverRifff', () => {
     expect(assembly!.rifff.stems.map((s) => s.barLength)).toEqual([1, 8, 4])
   })
 
-  it('caps at 8 stems, keeping only the first 8 in the given order', () => {
+  it('keeps the given members in the given order, up to the ceiling', () => {
     const members = Array.from({ length: 10 }, (_, i) => ({
       stem: fixtureStem({ path: `/${i}.wav` }),
       gain: 1
     }))
     const assembly = assembleDiscoverRifff('discover preview', members, 120)
-    expect(assembly!.rifff.stems).toHaveLength(8)
-    expect(assembly!.rifff.stems.map((s) => s.path)).toEqual([
-      '/0.wav',
-      '/1.wav',
-      '/2.wav',
-      '/3.wav',
-      '/4.wav',
-      '/5.wav',
-      '/6.wav',
-      '/7.wav'
+    expect(assembly!.rifff.stems).toHaveLength(10)
+    expect(assembly!.rifff.stems.map((s) => s.path)).toEqual(
+      Array.from({ length: 10 }, (_, i) => `/${i}.wav`)
+    )
+  })
+
+  it('assembles twelve members by default, because a rifff now holds twenty', () => {
+    const members = Array.from({ length: 12 }, (_, i) => ({
+      stem: fixtureStem({ path: `/stem_${i + 1}.wav` }),
+      gain: 1
+    }))
+    const assembly = assembleDiscoverRifff('discover preview', members, 120)
+    expect(assembly?.rifff.stems.map((s) => s.slot)).toEqual([
+      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
     ])
+  })
+
+  it('still stops at the ceiling, so nothing is assembled that could not be persisted', () => {
+    const members = Array.from({ length: 25 }, (_, i) => ({
+      stem: fixtureStem({ path: `/stem_${i + 1}.wav` }),
+      gain: 1
+    }))
+    expect(assembleDiscoverRifff('discover preview', members, 120)?.rifff.stems).toHaveLength(20)
   })
 
   it('does not cap below 8 when a higher maxMembers is explicitly passed', () => {

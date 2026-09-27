@@ -74,12 +74,19 @@ describe('buildSeedSlotsFromStems', () => {
     expect(slots[0].id).not.toBe(slots[1].id)
   })
 
-  it('caps at 8 slots even if given more stems', () => {
-    const stems = Array.from({ length: 10 }, (_, i) => fixtureStem({ name: `stem-${i}` }))
+  it('seeds every stem of a twelve-stem kept group, not the first eight', () => {
+    const stems = Array.from({ length: 12 }, (_, i) => fixtureStem({ name: `stem-${i}` }))
     const slots = buildSeedSlotsFromStems(stems)
-    expect(slots).toHaveLength(8)
+    expect(slots).toHaveLength(12)
     expect(slots[0].seedStem?.name).toBe('stem-0')
-    expect(slots[7].seedStem?.name).toBe('stem-7')
+    expect(slots[11].seedStem?.name).toBe('stem-11')
+  })
+
+  it('caps at the rifff ceiling even if given more stems', () => {
+    const stems = Array.from({ length: 25 }, (_, i) => fixtureStem({ name: `stem-${i}` }))
+    const slots = buildSeedSlotsFromStems(stems)
+    expect(slots).toHaveLength(20)
+    expect(slots[19].seedStem?.name).toBe('stem-19')
   })
 
   it('returns an empty array for an empty input', () => {
@@ -109,11 +116,11 @@ describe('buildSeedSlotsFromCandidates', () => {
     expect(slots[0].gain).toBe(1)
   })
 
-  it('caps at 8 slots even if given more candidates', () => {
-    const candidates = Array.from({ length: 10 }, (_, i) =>
+  it('caps at the rifff ceiling even if given more candidates', () => {
+    const candidates = Array.from({ length: 25 }, (_, i) =>
       fixtureCandidate({ stemCID: `stem-${i}` })
     )
-    expect(buildSeedSlotsFromCandidates(candidates)).toHaveLength(8)
+    expect(buildSeedSlotsFromCandidates(candidates)).toHaveLength(20)
   })
 
   it('returns an empty array for an empty input', () => {

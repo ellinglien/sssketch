@@ -1,5 +1,6 @@
 // src/renderer/src/audio/discoverRifffAssembly.ts
 import { stemKey, type Rifff, type Stem } from '@shared/types'
+import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
 
 /** One stem to include in an assembled Discover rifff, paired with its own
  * committed gain (0-1) -- gain lives OUTSIDE the Stem/Rifff shape itself
@@ -25,19 +26,25 @@ export interface DiscoverRifffAssembly {
   vol: Record<string, number>
 }
 
-// Real-Rifff.stems can only ever address 8 slots (StemCID_1..8 is the
-// schema every OTHER rifff in this app -- LORE-imported or hand-built --
-// is already bound by, see riffLibrarySchema.ts) -- caps at the first 8
-// given members (in their own given order) rather than silently producing
-// a Rifff no other part of this codebase's own wire format could
-// represent. Originally plunkInArranger's own MAX_STEMS_PER_RIFFF
-// constant, moved here now that this is the one place that actually
-// builds a Discover rifff.
-const MAX_STEMS_PER_RIFFF = 8
+// The persisted ceiling on one rifff: 20. Riffs.StemCID_1..8 addresses the
+// first eight and the RiffStemsExtra side table addresses slots 9-20 (see
+// src/main/riffStemsExtra.ts) -- so this caps at the most a Rifff could
+// actually be written to the library as, rather than silently producing
+// one no part of this codebase's own storage could represent.
+//
+// This was 8 until 2026-09-27, and its being 8 is what silently dropped
+// stems 9+ from everything that took this default -- add to timeline, add
+// to shelf and keep all shared resolveDiscoverRifff, which omitted
+// maxMembers (commit e761d57 gave that call an explicit placed.length;
+// this default is what it used to inherit). The number lives in
+// @shared/riffStemSlots now precisely so there is one place to change and
+// one place to read -- do not reintroduce a local literal. Originally
+// plunkInArranger's own MAX_STEMS_PER_RIFFF constant, moved here now that
+// this is the one place that actually builds a Discover rifff.
 
 /** Assembles one throwaway `Rifff` from a list of already-resolved Discover
  * slot members -- one stem per member, 1-indexed slots in the given order,
- * capped at 8. The rifff's own `barLength` is set to the LONGEST included
+ * capped at MAX_RIFFF_STEM_SLOTS. The rifff's own `barLength` is set to the LONGEST included
  * member's own `stem.barLength`, while each STEM keeps its own real,
  * unstretched barLength unchanged -- exactly the shape a normal multi-bar-
  * length rifff already has, so the SAME tiling machinery every other
@@ -60,7 +67,7 @@ const MAX_STEMS_PER_RIFFF = 8
  * resolved members before calling this; this null case exists so a caller
  * doesn't need to duplicate that same empty-check itself.
  *
- * `maxMembers` defaults to MAX_STEMS_PER_RIFFF (8) -- the right default for
+ * `maxMembers` defaults to MAX_RIFFF_STEM_SLOTS (20) -- the right default for
  * plunkInArranger's own call, whose output becomes a REAL, persisted
  * `Rifff` genuinely bound to Riffs.StemCID_1..8's own schema. Real bug,
  * live-reported 2026-09-16: the engine-preview sync call (syncPreviewToEngine,
@@ -91,7 +98,7 @@ export function assembleDiscoverRifff(
   name: string,
   members: DiscoverRifffMember[],
   bpm: number,
-  maxMembers: number = MAX_STEMS_PER_RIFFF,
+  maxMembers: number = MAX_RIFFF_STEM_SLOTS,
   barLengthOverride?: number
 ): DiscoverRifffAssembly | null {
   if (members.length === 0) return null
