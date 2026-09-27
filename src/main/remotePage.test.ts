@@ -311,6 +311,77 @@ describe('remotePage without a master waveform', () => {
   })
 })
 
+describe('remotePage seamless loop swap', () => {
+  it('hands over at the end of the loop, not when the download lands', () => {
+    // "ideally this would be seamless .. so the transitions and new mix
+    // renders play when a loop ends.. ideally it'd be instantaneous at the
+    // end of the loop" -- Elling, 2026-09-27. The playing source has looped
+    // seamlessly since startedAt, so its boundaries are startedAt + k *
+    // duration. Both ends are scheduled against that one instant on the
+    // audio clock, which is what makes the handover sample-accurate rather
+    // than "soon after this callback ran".
+    expect(SCRIPT).toContain('var at = startedAt + Math.ceil((now - startedAt) / dur) * dur')
+    expect(SCRIPT).toContain('next.start(at)')
+    expect(SCRIPT).toContain('srcNode.stop(at)')
+  })
+
+  it('takes the next boundary along when this one is too close to schedule', () => {
+    // start(t)/stop(t) with a t that has passed are clamped to "now", which
+    // is the mid-loop cut this exists to avoid. 80ms clears the hardware
+    // buffer ios renders ahead by, plus a frame or two of main-thread jitter.
+    expect(SCRIPT).toContain('SWAP_LEAD = 0.08')
+    expect(SCRIPT).toContain('if (at - now < SWAP_LEAD) at = at + dur')
+  })
+
+  it('swaps at once when nothing is sounding, because there is nothing to cut', () => {
+    expect(SCRIPT).toContain(
+      'if (!wantPlaying || !srcNode || !audioBuffer || !(audioBuffer.duration > 0)) {'
+    )
+  })
+
+  it('moves the playhead onto the new buffer in the same step', () => {
+    // The two loops need not be the same length, so the duration the
+    // progress is divided by and the clock it counts from have to change
+    // together with the sound.
+    expect(SCRIPT).toContain('audioBuffer = swap.buffer')
+    expect(SCRIPT).toContain('startedAt = swap.at')
+    expect(SCRIPT).toContain('loadedLoopId = swap.id')
+  })
+
+  it('never leaves a scheduled source behind it', () => {
+    // A third loop arriving before the second has started, and stopping the
+    // transport with a swap already scheduled, are the two ways a source can
+    // be superseded. Both go through one function, and stopping goes through
+    // it before it touches the playing source.
+    expect(SCRIPT).toContain('function cancelPendingSwap()')
+    expect(SCRIPT).toContain('if (pendingSwap.at !== at) return')
+    expect(SCRIPT).toContain('srcNode.onended = null')
+    const cancels = SCRIPT.match(/cancelPendingSwap\(\)/g) ?? []
+    expect(cancels.length).toBeGreaterThanOrEqual(3)
+  })
+
+  it('does not download the same loop again while it waits for its boundary', () => {
+    expect(SCRIPT).toContain('if (pendingSwap && pendingSwap.id === currentLoopId) return')
+  })
+
+  it('moves the rows at the boundary too, so the picture never leads the sound', () => {
+    // loadedLoopId is what is audible and currentLoopId is what the mac
+    // wants; the rows follow the first. Drawing the new stems while the old
+    // mix is still playing is seconds of the row saying one thing and the
+    // phone playing another, every roll.
+    expect(SCRIPT).toContain('function adoptPolledSlots()')
+    expect(SCRIPT).toContain('if (polledLoopId !== loadedLoopId) return')
+    expect(SCRIPT).toContain('if (!holdingForSwap()) lastSlots = state.slots')
+  })
+
+  it('holds the picture only while sound is actually on its way', () => {
+    // A render that failed means nothing is coming. Freezing the rows on a
+    // loop that will never arrive is worse than showing the mac's picture
+    // early.
+    expect(SCRIPT).toContain('return fetching || pendingSwap !== null')
+  })
+})
+
 describe('remotePage row gestures', () => {
   it('opens the menu on a long press and mutes on a short tap', () => {
     expect(SCRIPT).toContain('HOLD_MS = 450')

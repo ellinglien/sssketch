@@ -580,21 +580,64 @@ input {
   // so both playing at once is intended, not a bug. macEl says so when it
   // happens.
   var audioCtx = null
+  // The buffer you are HEARING, the source playing it, and the audio-clock
+  // time it started at. All three move together, and only in startSource
+  // and commitSwap.
   var audioBuffer = null
   var srcNode = null
+  var startedAt = 0
+  // loadedLoopId is the id of the buffer that is audible; currentLoopId is
+  // the id the mac wants. They differ for as long as a new mix is being
+  // rendered, fetched, decoded and then waited on -- and the rows follow
+  // loadedLoopId, not currentLoopId, so the picture never runs ahead of the
+  // sound.
   var loadedLoopId = null
   var currentLoopId = null
-  var startedAt = 0
   var wantPlaying = false
   var fetching = false
+  // A decoded loop that is not audible YET: its source is already scheduled
+  // to start at .at, and the source playing now is already scheduled to stop
+  // at that same instant. Null the rest of the time. See takeLoop.
+  var pendingSwap = null
+
+  // How far ahead of the audio clock a handover has to be to be scheduled at
+  // all.
+  //
+  // start(t) and stop(t) with a t that has already passed -- or that falls
+  // inside the block the audio thread is rendering right now -- are clamped
+  // to "as soon as possible", which is exactly the mid-loop cut this whole
+  // mechanism exists to avoid. A render quantum is 128 frames (under 3ms),
+  // but the audio thread runs a hardware buffer ahead of the main thread
+  // (256 to 1024 frames on ios, so 5 to 21ms), and the main thread doing
+  // this arithmetic can lose a frame or two to layout or gc on top of that.
+  // 80ms clears all of it with room over, and is short against a bar at any
+  // tempo -- so "wait for the loop after this one" stays the rare case
+  // rather than the normal one.
+  var SWAP_LEAD = 0.08
 
   function setPlayLabel() {
     playEl.textContent = wantPlaying ? 'stop' : 'play'
     playEl.className = wantPlaying ? 'big on' : 'big'
   }
 
+  // Drops a swap that was scheduled and then superseded or abandoned. The
+  // source has had start(at) called on it with at still in the future, so
+  // stop() with no argument means "never sound at all"; it is disconnected
+  // either way, so nothing is left hanging off the destination.
+  function cancelPendingSwap() {
+    if (!pendingSwap) return
+    try { pendingSwap.src.stop() } catch (e) {}
+    try { pendingSwap.src.disconnect() } catch (e) {}
+    pendingSwap = null
+  }
+
   function stopSource() {
+    // A scheduled swap is part of "what is playing", so stopping takes it
+    // with us. Left alone it would start into a stopped transport, and the
+    // onended below would commit it as if it were being heard.
+    cancelPendingSwap()
     if (srcNode) {
+      srcNode.onended = null
       try { srcNode.stop() } catch (e) {}
       srcNode.disconnect()
       srcNode = null
@@ -618,10 +661,88 @@ input {
     lineEl.hidden = false
   }
 
+  // A freshly decoded loop, and the ONE place that decides when it becomes
+  // the loop you hear.
+  function takeLoop(buf, id) {
+    // NOTHING IS SOUNDING: take it now. There is no audio to interrupt, so
+    // there is no boundary worth waiting for -- waiting would only mean the
+    // play button does nothing for up to a loop's length, and the rows sat
+    // on a picture of something silent. This branch is also the first load
+    // after play is pressed, where wantPlaying is true but no source exists
+    // yet.
+    if (!wantPlaying || !srcNode || !audioBuffer || !(audioBuffer.duration > 0)) {
+      cancelPendingSwap()
+      audioBuffer = buf
+      loadedLoopId = id
+      adoptPolledSlots()
+      if (wantPlaying) startSource()
+      return
+    }
+    // SOMETHING IS SOUNDING: hand over at the end of it. The playing source
+    // started at startedAt on the audio clock and has looped seamlessly ever
+    // since, so its loop boundaries are startedAt + k * duration and the
+    // next one is one ceil away. Scheduling both ends against that instant
+    // is what makes this sample-accurate rather than "soon after this
+    // callback ran".
+    var dur = audioBuffer.duration
+    var now = audioCtx.currentTime
+    var at = startedAt + Math.ceil((now - startedAt) / dur) * dur
+    // Too close to schedule honestly -- take the loop after it instead. One
+    // more pass of the old mix is the price, and nobody can hear a swap that
+    // did not happen; a clamped start, cutting the loop mid-bar, is exactly
+    // what they would hear.
+    if (at - now < SWAP_LEAD) at = at + dur
+    if (pendingSwap) {
+      // A THIRD loop arriving before the second one has started. Replacing
+      // it is clean only at the same instant, because the playing source's
+      // stop is already scheduled for pendingSwap.at and re-scheduling a
+      // stop that is about to fire is the one case here with no honest
+      // answer. The boundary can only have moved if we are inside SWAP_LEAD
+      // of the handover -- an 80ms window -- so in that case this buffer is
+      // simply dropped. loadedLoopId has not changed, so the next poll asks
+      // for it again, by which time the swap it was racing has landed.
+      if (pendingSwap.at !== at) return
+      cancelPendingSwap()
+    }
+    var next = audioCtx.createBufferSource()
+    next.buffer = buf
+    next.loop = true
+    next.connect(audioCtx.destination)
+    next.start(at)
+    srcNode.stop(at)
+    // The old source ending IS the boundary, reported by the audio system
+    // instead of guessed at by a second clock that could drift from it.
+    srcNode.onended = commitSwap
+    pendingSwap = { src: next, buffer: buf, id: id, at: at }
+  }
+
+  // The handover as the rest of the page sees it, a few milliseconds after
+  // it already happened in the audio graph. Everything measured against the
+  // playing loop moves in one step: the buffer the playhead divides by (the
+  // two loops need not be the same length), the clock it counts from, the id
+  // the fetcher dedupes against, and the rows.
+  function commitSwap() {
+    if (!pendingSwap) return
+    var swap = pendingSwap
+    pendingSwap = null
+    if (srcNode) {
+      srcNode.onended = null
+      srcNode.disconnect()
+    }
+    srcNode = swap.src
+    audioBuffer = swap.buffer
+    startedAt = swap.at
+    loadedLoopId = swap.id
+    adoptPolledSlots()
+  }
+
   function loadLoop() {
     if (fetching || !wantPlaying || !token || !audioCtx) return
     if (!currentLoopId) { msgEl.textContent = 'nothing to play'; return }
     if (currentLoopId === loadedLoopId) return
+    // Already decoded and waiting for a boundary. Without this the same wav
+    // would be downloaded again every 700ms until the swap lands.
+    if (pendingSwap && pendingSwap.id === currentLoopId) return
     fetching = true
     msgEl.textContent = 'loading the loop'
     fetch('/api/loop', { headers: { authorization: 'Bearer ' + token } })
@@ -634,10 +755,10 @@ input {
       .then(function (got) {
         if (!got) return null
         return audioCtx.decodeAudioData(got.bytes).then(function (buf) {
-          audioBuffer = buf
-          loadedLoopId = got.id
+          // The download is over, whatever happens next -- takeLoop may not
+          // make a sound for another loop's length.
           restStatus()
-          if (wantPlaying) startSource()
+          takeLoop(buf, got.id)
         })
       })
       .catch(function () { msgEl.textContent = 'render failed' })
@@ -655,6 +776,13 @@ input {
   function tick() {
     if (srcNode && audioBuffer && audioCtx && audioBuffer.duration > 0) {
       var t = (audioCtx.currentTime - startedAt) % audioBuffer.duration
+      // startedAt is the boundary the swap was scheduled for, and commitSwap
+      // runs when the audio system reports it -- normally a few ms after, so
+      // t is positive. A browser that delivers onended ON the instant rather
+      // than after it would give a remainder of -0 or a hair less, and the
+      // line would jump to the far end of the lane for one frame. A wrap is
+      // cheaper than finding that out on a phone.
+      if (t < 0) t = t + audioBuffer.duration
       var progress = t / audioBuffer.duration
       lineEl.style.left = (progress * 100) + '%'
     }
@@ -824,8 +952,45 @@ input {
   // so it takes two taps: the first arms this row, the second does it. The
   // arming lapses on its own rather than sitting armed in a pocket, and any
   // other tap cancels it.
+  // What is DRAWN. Not necessarily the newest poll -- see adoptPolledSlots.
   var lastSlots = []
   var lastRowsKey = null
+  // The newest poll, and the loop id it arrived with. The two are one
+  // snapshot: state.slots is the set of stems state.loopId renders, so they
+  // are stored and used together.
+  var polledSlots = []
+  var polledLoopId = null
+
+  // The rows catch up with the sound; they never run ahead of it.
+  //
+  // The mac's picture changes the moment a roll lands. The wav for it then
+  // has to be rendered, downloaded, decoded and waited on until the end of
+  // the loop that is playing -- seconds, in the ordinary case. Drawing the
+  // new stem's name and waveform at the front of that gap would mean the row
+  // says one thing while the phone plays another, every single time, and
+  // judging what you are hearing is the entire purpose of this screen.
+  //
+  // So the rows move exactly when the audible loop does, and this is called
+  // from the two places where that happens: commitSwap, and takeLoop's
+  // nothing-is-sounding branch. The guard is what makes it safe to call from
+  // either -- it draws the poll only if the poll is describing the loop that
+  // is now audible.
+  function adoptPolledSlots() {
+    if (polledLoopId !== loadedLoopId) return
+    lastSlots = polledSlots
+    renderRows()
+  }
+
+  // Whether the picture is being held back right now. Only while the sound
+  // is genuinely on its way: a fetch in flight, or a swap already scheduled.
+  // If the render failed there is nothing coming, and freezing the rows on a
+  // loop that will never arrive would be worse than showing the mac's
+  // picture early.
+  function holdingForSwap() {
+    if (!wantPlaying || !srcNode) return false
+    if (polledLoopId === loadedLoopId) return false
+    return fetching || pendingSwap !== null
+  }
   // { canvas, peaks, color } per visible row, so a resize can redraw the
   // stack without waiting for the next poll to change something.
   var rowCanvases = []
@@ -1123,6 +1288,8 @@ input {
     lastKept = state.lastKeptName
     if (!state.discoverOpen) {
       lastSlots = []
+      polledSlots = []
+      polledLoopId = null
       disarmRemove()
       renderRows()
       emptyEl.hidden = true
@@ -1134,7 +1301,13 @@ input {
       currentLoopId = null
       loadedLoopId = null
       audioBuffer = null
-      if (wantPlaying) { wantPlaying = false; stopSource(); setPlayLabel() }
+      // Unconditionally, and BEFORE the wantPlaying check: stopSource is
+      // the only thing that undoes a scheduled swap completely -- cancelling
+      // the pending source alone would leave the playing one's stop(at)
+      // still scheduled, and it would fall silent at the boundary with
+      // nothing taking over. It is idempotent with nothing playing.
+      stopSource()
+      if (wantPlaying) { wantPlaying = false; setPlayLabel() }
       msgEl.textContent = 'open discover on the mac'
       return
     }
@@ -1143,6 +1316,10 @@ input {
     macEl.textContent = state.playing ? 'mac playing' : ''
     setPlayLabel()
     currentLoopId = state.loopId
+    // Kept whether or not it is drawn: this is what adoptPolledSlots will
+    // draw when the sound catches up with it.
+    polledSlots = state.slots
+    polledLoopId = state.loopId
     if (wantPlaying && currentLoopId !== loadedLoopId) loadLoop()
 
     // Nothing to roll, play or keep until there is a slot -- and the add
@@ -1162,7 +1339,11 @@ input {
       var actStillThere = state.slots.some(function (s) { return s.id === actSlot.id })
       if (!actStillThere) closeActionSheet()
     }
-    lastSlots = state.slots
+    // The one exception to "the renderer pushes and the phone draws": while
+    // the sound is on its way, the rows stay on the loop that is sounding.
+    // renderRows is still called either way -- an optimistic mute painted
+    // between polls has to survive a poll that changed nothing.
+    if (!holdingForSwap()) lastSlots = state.slots
     renderRows()
   }
 
