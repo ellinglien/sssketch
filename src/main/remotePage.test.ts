@@ -203,6 +203,32 @@ describe('remotePage layout 1a', () => {
   })
 })
 
+describe('remotePage rows', () => {
+  it('lays a row out as label, stem, remove', () => {
+    expect(REMOTE_PAGE_HTML).toContain('grid-template-columns: 84px 1fr 44px')
+    expect(REMOTE_PAGE_HTML).toContain('min-height: 50px')
+  })
+
+  it('draws each stem’s own waveform, from peaks the mac already had', () => {
+    expect(SCRIPT).toContain('function drawRowWave(')
+    expect(SCRIPT).toContain('slot.peaks')
+  })
+
+  it('says muted by taking the colour away, never by dimming it', () => {
+    // StemWaveformRow.tsx's "gray means quieter/off": the colour layer is
+    // suppressed and the grey one stays at full strength. #6a6a6a is the
+    // hand-copied --ra-text-3 that layer is drawn in.
+    expect(SCRIPT).toContain("slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')")
+    // The whole rule, asserted rather than remembered: mute is the absence
+    // of colour. Nothing on this page may express it by fading.
+    expect(REMOTE_PAGE_HTML).not.toContain('opacity')
+  })
+
+  it('shortens remove to an icon and still needs two taps', () => {
+    expect(SCRIPT).toContain("drop.textContent = armed ? 'sure' : 'x'")
+  })
+})
+
 describe('remotePage last resort', () => {
   it('shows a line rather than nothing if its own script throws', () => {
     // Hidden until something actually throws -- it is a last resort, not a

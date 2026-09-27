@@ -227,35 +227,51 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
   background: #c56164;
   pointer-events: none;
 }
-.slot { display: flex; gap: 6px; margin-bottom: 6px; }
 .row {
-  display: flex;
-  gap: 10px;
-  align-items: baseline;
-  flex: 1;
-  min-width: 0;
-  text-align: left;
-  padding: 14px 10px;
+  display: grid;
+  grid-template-columns: 84px 1fr 44px;
+  align-items: center;
+  column-gap: 10px;
+  min-height: 50px;
+  margin-bottom: 6px;
+  padding: 0 0 0 10px;
   background: #0a0a0a;
   border: 1px solid #222222;
   color: #ededed;
-  font: inherit;
+  /* A 450ms press on text raises ios's selection callout and magnifier.
+   * Suppressed here and not in js, because remotePage.test.ts asserts the
+   * script never contains preventDefault. */
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 .row:active { background: #161616; }
-.row .kind { width: 84px; flex: none; font-size: 11px; }
-.row .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .kind { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.row .stem { min-width: 0; padding: 6px 0; }
+.row .name {
+  display: block;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row canvas { display: block; width: 100%; height: 18px; margin-top: 3px; }
+/* 44px wide, 48px tall: it keeps its own tap target even though the row's
+ * own minimum is 50px. A border-left rather than a box, so the row still
+ * reads as one thing. */
 button.drop {
-  width: 78px;
-  flex: none;
-  padding: 14px 4px;
-  background: #0a0a0a;
-  border: 1px solid #222222;
+  width: 44px;
+  height: 48px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-left: 1px solid #222222;
   color: #6a6a6a;
   font: inherit;
   font-size: 10px;
 }
 button.drop:active { background: #161616; }
-button.drop.armed { background: #ededed; border-color: #ededed; color: #050505; }
+button.drop.armed { background: #ededed; color: #050505; }
 .actions { display: flex; gap: 8px; }
 button.big {
   flex: 1;
@@ -597,9 +613,6 @@ input {
     return true
   }
 
-  window.addEventListener('resize', markWaveDirty)
-  window.addEventListener('orientationchange', markWaveDirty)
-
   // The progress line, driven by the phone's OWN audio clock. Nothing about
   // its position comes from the Mac: no position messages, no clock sync.
   // Unclickable in two independent ways -- .track is pointer-events:none
@@ -797,6 +810,9 @@ input {
   // other tap cancels it.
   var lastSlots = []
   var lastRowsKey = null
+  // { canvas, peaks, color } per visible row, so a resize can redraw the
+  // stack without waiting for the next poll to change something.
+  var rowCanvases = []
   var armedRemoveId = null
   var armedRemoveTimer = null
 
@@ -814,36 +830,95 @@ input {
     }, 4000)
   }
 
+  function rowColor(slot) {
+    // "gray means quieter/off" (StemWaveformRow.tsx). Mute suppresses the
+    // colour; it never dims it. #6a6a6a is --ra-text-3, the exact grey the
+    // desktop's always-visible layer is drawn in. A row with no sound type
+    // yet has no colour to spend either.
+    return slot.muted ? '#6a6a6a' : (TYPE_COLORS[slot.soundType] || '#6a6a6a')
+  }
+
+  // One flat colour, once per row, on state change and on resize. Not per
+  // frame -- these are static shapes; only the playhead moves.
+  function drawRowWave(canvas, peaks, color) {
+    var ctx = canvas.getContext ? canvas.getContext('2d') : null
+    if (!ctx) return
+    var cssW = canvas.clientWidth
+    var cssH = canvas.clientHeight
+    if (cssW <= 0 || cssH <= 0) return
+    // Retina: the backing store is sized in DEVICE pixels and the context
+    // is scaled back, so everything below is written in css pixels.
+    // Assigning width or height also clears the canvas, so it is guarded.
+    var dpr = window.devicePixelRatio || 1
+    var w = Math.round(cssW * dpr)
+    var h = Math.round(cssH * dpr)
+    if (canvas.width !== w) canvas.width = w
+    if (canvas.height !== h) canvas.height = h
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, cssW, cssH)
+    var mid = cssH / 2
+    if (!peaks || peaks.length === 0) {
+      // Nothing analysed yet: a flat rule, never a faked shape. Same answer
+      // the master track used to give when it held no loop.
+      ctx.fillStyle = '#222222'
+      ctx.fillRect(0, Math.floor(mid), cssW, 1)
+      return
+    }
+    var n = peaks.length
+    var room = mid - 1
+    ctx.fillStyle = color
+    for (var i = 0; i < n; i++) {
+      var x = (i * cssW) / n
+      var bw = (((i + 1) * cssW) / n) - x - 0.5
+      if (bw < 1) bw = 1
+      var amp = (peaks[i] / 100) * room
+      if (amp < 0.5) amp = 0.5
+      ctx.fillRect(x, mid - amp, bw, amp * 2)
+    }
+  }
+
+  function redrawRowWaves() {
+    for (var i = 0; i < rowCanvases.length; i++) {
+      drawRowWave(rowCanvases[i].canvas, rowCanvases[i].peaks, rowCanvases[i].color)
+    }
+  }
+  window.addEventListener('resize', redrawRowWaves)
+  window.addEventListener('orientationchange', redrawRowWaves)
+
   function renderRows() {
     // Rebuilt only when something actually changed. The poll runs every
-    // 700ms and wiping the rows under a thumb mid-tap loses the tap.
+    // 700ms and wiping the rows under a thumb mid-tap loses the tap. The
+    // key stringifies the whole slot objects, so it now covers muted and
+    // peaks too -- without that the optimistic mute paint below would be
+    // swallowed by this very guard.
     var key = JSON.stringify(lastSlots) + '|' + armedRemoveId
     if (key === lastRowsKey) return
     lastRowsKey = key
     rowsEl.innerHTML = ''
+    rowCanvases = []
     lastSlots.forEach(function (slot) {
-      var wrap = document.createElement('div')
-      wrap.className = 'slot'
-      var b = document.createElement('button')
-      b.className = 'row'
+      var row = document.createElement('div')
+      row.className = 'row'
+      var color = rowColor(slot)
+
       var kind = document.createElement('span')
       kind.className = 'kind'
       kind.textContent = slot.kindLabel
-      kind.style.color = TYPE_COLORS[slot.soundType] || '#8f8f8f'
+      kind.style.color = color
+
+      var stem = document.createElement('span')
+      stem.className = 'stem'
       var name = document.createElement('span')
       name.className = 'name'
       name.textContent = slot.stemName || '…'
-      b.appendChild(kind)
-      b.appendChild(name)
-      b.addEventListener('click', function () {
-        disarmRemove()
-        renderRows()
-        api('/api/roll', { slotId: slot.id })
-      })
+      var canvas = document.createElement('canvas')
+      stem.appendChild(name)
+      stem.appendChild(canvas)
+
       var armed = armedRemoveId === slot.id
       var drop = document.createElement('button')
       drop.className = armed ? 'drop armed' : 'drop'
-      drop.textContent = armed ? 'sure' : 'remove'
+      drop.textContent = armed ? 'sure' : 'x'
       drop.addEventListener('click', function () {
         if (armedRemoveId === slot.id) {
           disarmRemove()
@@ -855,10 +930,19 @@ input {
         armRemove(slot.id)
         renderRows()
       })
-      wrap.appendChild(b)
-      wrap.appendChild(drop)
-      rowsEl.appendChild(wrap)
+
+      row.appendChild(kind)
+      row.appendChild(stem)
+      row.appendChild(drop)
+      rowsEl.appendChild(row)
+      // After append, so the canvas has a box to measure.
+      drawRowWave(canvas, slot.peaks, color)
+      rowCanvases.push({ canvas: canvas, peaks: slot.peaks, color: color })
     })
+    // The playhead lives inside .rows and innerHTML just wiped it. It is
+    // re-appended rather than rebuilt, so lineEl keeps pointing at the
+    // element tick() is moving.
+    rowsEl.appendChild(lineEl)
   }
 
   function render(state) {
