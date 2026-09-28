@@ -367,3 +367,33 @@ describe('isRadioEligibleSlot', () => {
     expect(isRadioEligibleSlot({ ...base, hasCandidate: false, hasSeedStem: false })).toBe(false)
   })
 })
+
+describe('radioGridBars and long phrases', () => {
+  // Reported 2026-09-28, listening: "it cut off just now... can the
+  // transitions for the stems longer than 8 bars be the complete loop
+  // only?" A short layer swapped on its own cycle is unremarkable -- a
+  // two-bar hat turning over at bar 2 of 8 reads as a variation. A long
+  // phrase is a musical statement, and cutting one partway through the
+  // loop is audible however cleanly the boundary is hit.
+  it('gives a long stem the whole loop, not its own shorter cycle', () => {
+    // 8-bar stem inside a 16-bar loop: own-cycle would change at bar 8.
+    expect(radioGridBars('own loop', 16, 12)).toBe(16)
+    expect(radioGridBars('own loop', 16, 9)).toBe(16)
+  })
+
+  it('leaves short stems on their own cycle, which is the point of the grid', () => {
+    expect(radioGridBars('own loop', 16, 2)).toBe(2)
+    expect(radioGridBars('own loop', 16, 4)).toBe(4)
+    expect(radioGridBars('own loop', 16, 8)).toBe(8)
+  })
+
+  it('applies the same ceiling to an explicitly chosen grid', () => {
+    // He asked for it of "the transitions", not of one setting.
+    expect(radioGridBars('8 bars', 16, 1)).toBe(8)
+    expect(radioGridBars('4 bars', 16, 1)).toBe(4)
+  })
+
+  it('still caps to the loop when the loop is itself short', () => {
+    expect(radioGridBars('own loop', 4, 12)).toBe(4)
+  })
+})

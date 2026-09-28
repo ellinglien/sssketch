@@ -110,6 +110,14 @@ export function normalizeRadioGrid(value: unknown): RadioGrid {
   return RADIO_GRID_OPTIONS.includes(value as RadioGrid) ? (value as RadioGrid) : DEFAULT_RADIO_GRID
 }
 
+/** Longer than this and a stem changes only at the top of the whole loop,
+ * never on its own shorter cycle. Eight bars is the boundary he named, and
+ * it matches the material: Endlesss loops are commonly 1, 2, 4 or 8 bars,
+ * so this leaves every ordinary layer free to turn over on its own cycle
+ * and catches only the long phrases -- the ones with a shape the ear is
+ * still following when the change lands. */
+export const GRID_LONG_PHRASE_BARS = 8
+
 /** How many bars apart the boundaries a change may land on are.
  *
  * `loopBars` is the preview loop's own length (DiscoverPanel's
@@ -136,6 +144,22 @@ export function radioGridBars(grid: RadioGrid, loopBars: number, slotBars: numbe
   const requested = grid === 'own loop' ? slotBars : Number.parseInt(grid, 10)
   if (requested === null || !Number.isInteger(requested) || requested < 1) return loopBars
   if (!Number.isInteger(loopBars)) return loopBars
+  // Reported while listening (2026-09-28): "it cut off just now... can the
+  // transitions for the stems longer than 8 bars be the complete loop
+  // only?"
+  //
+  // A short layer turning over on its own cycle is unremarkable -- a
+  // two-bar hat changing at bar 2 of 8 reads as a variation, which is the
+  // whole point of the grid. A long phrase is a musical statement, and
+  // replacing one partway through the loop is audible however cleanly the
+  // boundary is hit: the ear is still following the phrase, so the change
+  // lands as an interruption rather than an arrival.
+  //
+  // So anything longer than this gets the whole loop, which is where the
+  // ear expects a section to end anyway. Note this is deliberately about
+  // the LENGTH asked for, not about where it came from -- he asked it of
+  // "the transitions", so an explicitly chosen long grid gets it too.
+  if (requested > GRID_LONG_PHRASE_BARS) return loopBars
   let step = requested
   if (step > loopBars) step = loopBars
   while (step > 1 && loopBars % step !== 0) step -= 1
