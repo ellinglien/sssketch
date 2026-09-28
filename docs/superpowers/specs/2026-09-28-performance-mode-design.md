@@ -31,7 +31,7 @@ bolted onto radio** — the radio menu (`2026-09-28-radio-controls-design.md` §
 
 ---
 
-## 0. The three verdicts, up front
+## 0. The four verdicts, up front
 
 Each of these was established by reading the code. They decide the shape of everything below, so
 they go first.
@@ -105,6 +105,43 @@ automation the engine already holds, armed a lap ahead.
 
 So: **no `native-engine/` change, and no new scheduling primitive.** The one place this document
 does touch the engine question is auditioning, and the answer there is no as well — §2.
+
+### 0.4 Master plugin FX already process the Discover and radio preview
+
+> "also would be great to have master effects on the whole radio or discover system... or have the
+> master fx in the app affect that section too"
+
+**Half of this already works, and it works better than "copied into the preview" would suggest.**
+Three independent pieces of evidence:
+
+- `Transport.cpp:581-582` and `:614-615` call `masterChain.process(numSamples, outL, outR)` on the
+  summed output **unconditionally, for whatever project is loaded.** The Discover preview goes
+  through the engine's own mixer, so it goes through the master chain.
+- `load-project` **parses `masterChain` and then never applies it** (`IpcServer.cpp:220-273` calls
+  only `setBpm`, `setLoopLengthBars`, `setProject`, `clearAll`, `updateChannelSet`, `setBpm`).
+  Master plugins are loaded by their own `load-master-plugin` message (`:710`). **So the preview
+  never reloads them and their live parameter state is preserved** — a reverb you tweaked by hand
+  is still exactly as you left it when the preview starts.
+- The master-chain effect in `StoreContext.tsx:776-796` is **not** ownership-gated, unlike
+  `scheduleEngineSync` (`:575,586`). **So editing the master chain while the preview plays takes
+  effect immediately.**
+
+`DiscoverPanel.tsx:759-762` already says so in a doc comment. **He may simply not have realised.**
+
+**Two real caveats, and they are the actual bug half of the request:**
+
+1. **Channel FX do *not* reach the preview, although that same comment claims they do.** It says
+   *"master/channel FX are audibly applied while auditioning too"*. The channel half is wrong:
+   `channelId = state.channelOf[rifff.groupId] ?? rifff.groupId` (`buildEngineProject.ts:577`),
+   the preview's `groupId` is a fresh `crypto.randomUUID()` minted per sync
+   (`discoverRifffAssembly.ts:107`), and `previewState.channelOf` is `{}` because it comes from
+   `initialState` — so the preview's channel id matches **no key** in `channelPlugins` and
+   `channelChains.updateChannelSet([thatId])` gives it an empty chain. Copying `channelPlugins`
+   into `previewState` has no effect at all.
+2. **The project's reverb settings do not reach it either.** `previewState` is
+   `{ ...initialState, bpm, masterChain, channelPlugins, rifffs, vol, stretch }` — `state.reverb`
+   is not in that list, so the preview uses `DEFAULT_REVERB` rather than the project's room size,
+   damping and pre-delay. **One more word in that spread fixes it**, and §4A needs it anyway.
 
 ---
 
@@ -472,6 +509,151 @@ on, hidden with `visibility` (the same rule the progress rule and the other spec
 
 ---
 
+## 4A. Master effects over the whole mix
+
+§0.4 covered the plugin half, which works. This is the half that does not exist: **a master
+version of the built-in toolkit.** The toolkit — filter, reverb send, volume curve
+(`2026-09-22-builtin-sound-toolkit-design.md`) — is strictly **per clip**, and that spec says so
+deliberately: *"Channel-level filter/send settings from the first pass are dropped; there is no
+channel scope for the toolkit any more."*
+
+For a performance instrument this is the most valuable control there is. **Sweeping the whole mix
+is more of a live move than swapping a layer.** So it belongs here, and it belongs in performance
+mode rather than radio for one reason: **a master filter is played, not configured.**
+
+The three controls have three different answers. That is the finding.
+
+### 4A.1 Master reverb: free, and the mechanism is already exactly right
+
+The engine's reverb is **one shared zita-rev1 instance for the whole mix, fed by per-stem sends**
+(`ReverbBus.h:38-58`; a single `mutable ReverbBus reverbBus` on `PlaybackEngine`,
+`PlaybackEngine.h:322`). Its settings are **already project-level and already on the wire**:
+`EngineProject.reverb` = `{ roomSize, damping, preDelayMs }` (`toolkit.ts:110-124`).
+
+So a master reverb is exactly what the brief guessed: **every stem's `reverbSend` raised
+together**, plus copying `state.reverb` into `previewState` (§0.4, caveat 2). Sends are additive
+and independent per clip — `reverbBus.addSend(numSamples, stemL, stemR, dsp.sendSmoother)`
+(`PlaybackEngine.cpp:792`), post-fader, accumulated into one bus — so N equal sends into one bus
+**is** a master send. There is nothing to approximate.
+
+**No native work. This one ships** — with one honest qualification about how it is *moved*.
+
+**It is a control you set, not one you sweep.** `set-live-param` has no reverb field (§4A.2), so
+the only way to change a send is to rebuild and re-send the project. `updateSlotGain`'s own
+comment says exactly why that is not acceptable per drag tick: it exists *"instead of a full
+project rebuild per drag tick"*. So the master reverb dial **reports continuously on screen and
+commits once on release** — one `load-project`, on pointer-up. That is right for reverb anyway,
+which is a colour you choose rather than a gesture you perform. **The thing you sweep is the
+filter, and that is §4A.3.**
+
+### 4A.2 Master volume: use the live-param that already exists, not curves
+
+The brief suggested master volume share an implementation with the radio drop-out. **It should
+not, and the reason is a trap worth naming.**
+
+A non-empty `volume` curve makes `EngineStem.volume` **inert** — `PlaybackEngine.cpp:325-329`
+checks `volumeAutomated` and skips the live-override path entirely. So a master volume curve
+written onto every stem would **disable every slot's gain drag and the phone's mute** for as long
+as it ran. That is a much worse version of the single-stem interaction the radio-controls spec
+already flagged as its constraint 3.
+
+The right mechanism is already shipped: `set-live-param` with `field: 'volume'`, keyed by stemKey
+(`IpcServer.cpp:343-344`, `LiveParamOverrides.h:79-82`), rAF-coalesced through `liveParamSync.ts`.
+It is what the gain drag uses today. A master fader is N of those — one write per slot per frame,
+each slot's own gain multiplied by the master value, so the fader scales the mix rather than
+flattening it.
+
+**One thing that must not be discovered late:** `load-project` calls
+`engine.liveOverrides().clearAll()` (`IpcServer.cpp:259`). So any project reload — a slot landing,
+a skip resolving, a mute — **wipes the master fader's overrides** and every slot snaps back to its
+own gain. The master level therefore has to be **re-applied after every `syncPreviewToEngine`**,
+not written once. That is a few lines, and it is the difference between a fader that works and
+one that jumps back to unity every time a layer changes.
+
+**The general rule, and it is the radio-controls spec's own §0A.2 restated one level up:**
+
+> **A curve is for a gesture that must land on a beat. A live-param is for a hand on a control.**
+> The drop-out is a curve because it has to return exactly on the one. A master fader is dragged,
+> so it is a live-param. They share a concept, deliberately not a mechanism.
+
+**No native work. This one ships too.**
+
+### 4A.3 Master filter: build the real field. Do not fake it with N curves.
+
+This is where the recommendation reverses the brief's hypothesis, and the brief explicitly asked
+for that if it turned out to be the answer.
+
+**First, the maths, because it is not the problem.** `ChannelFilter` wraps
+`juce::dsp::StateVariableTPTFilter<float>` (`ChannelFilter.h:106`) — a 2nd-order TPT SVF, cutoff
+log-mapped 20 Hz–20 kHz, Q 0.707–8.0 (`ChannelFilter.cpp:16-30`). It is **linear**, so
+superposition is exact. **Resonance does not break it** — a fixed-Q linear filter is still linear.
+**Nor does sweeping it**: superposition holds instant by instant for a linear *time-varying*
+system, so N identically-swept filters summed genuinely equals one swept filter on the sum.
+
+**The problem is that "identically" is only true by accident here.** Four properties would have to
+hold, and in Discover today all four happen to, which is exactly what makes the fake dangerous:
+
+| property | true in Discover today? | why it is incidental |
+|---|---|---|
+| every clip shares one `originBar`, so one curve means one thing | yes — every preview clip is `startBar: 0` with no crop and no offset, so `clipOriginBar` (`buildEngineProject.ts:220-229`) is 0 | curves are **clip-relative** (`PlaybackEngine.cpp:721`); any crop, move or re-one offset re-bases it per clip |
+| every stem's smoothers sit at the same point on the sweep | yes — every sync mints a fresh `groupId`, so every `StemDspState` (keyed by stemKey, `PlaybackEngine.h:311`) is new and they all re-seed in lockstep | per-stem smoothers **freeze whenever a clip is not sounding** (every `continue` before `finishStem()`), so in general they drift apart by ~15 ms each time |
+| no per-clip filter to collide with | yes — the preview has no toolkit at all (`initialState.stemFilters/stemSends/stemAutomation` are `{}`) | **each clip has exactly one filter and one cutoff curve.** A master curve would overwrite whatever the user drew, and log-mapped cutoffs do not compose |
+| the cost is acceptable | probably — but see below | a non-neutral toolkit opts every clip off the direct-sum path onto the per-clip scratch-buffer path (`PlaybackEngine.cpp:113-131,341-361`) |
+
+**On cost, since the brief asked rather than assumed.** The filter object is **held, not
+per-block** — one `ChannelFilter` per clip, created lazily and kept (`PlaybackEngine.h:211-216`).
+So the allocation is one-off. What does scale is per block, per stem: a scratch clear, a sum-back,
+and a `tan()`-driven coefficient recompute every 64 samples (`ChannelFilter.h:100`). A Discover
+preview is **one channel with up to 20 stems** (`MAX_RIFFF_STEM_SLOTS`), so that is up to 20× the
+filter work for a result identical to one filter. Not fatal — this engine hosts VST3 plugins — but
+it is 20× for nothing, and it is the honest number rather than a shrug.
+
+**Two of those four properties are things another feature could remove without knowing they were
+load-bearing.** The fresh-`groupId`-per-sync behaviour in particular is an implementation detail
+of `assembleDiscoverRifff`, not a contract.
+
+**So: build the real field.** It is much smaller than it sounds, and categorically smaller than
+the cue bus in §2.2:
+
+- One `ChannelFilter` and one `ParamSmoother` owned by `PlaybackEngine`, beside the `reverbBus` it
+  already owns (`PlaybackEngine.h:322`).
+- Applied at `PlaybackEngine.cpp:669-684`, between the channel-chain sum loop and
+  `reverbBus.endBlock` — one insertion point that already exists.
+- One new field beside `EngineProject.reverb` (`buildEngineProject.ts:194` / `EngineProject.h:237`)
+  and its parse (`EngineProject.cpp`).
+
+**No signature changes. No new output channels. No routing. No `renderBlock` rewrite.** Contrast
+§2.2's cue bus, which needs all of those.
+
+> **But it is still `native-engine/` work, and that must be flagged loudly and early, as the brief
+> asked.** The engine does not hot-reload: every iteration is `cmake --build`, Cmd+Q, relaunch.
+> `EngineProject` and `buildEngineProject.ts` are a hand-synced pair (CLAUDE.md) and this changes
+> both. **It therefore gets its own spec and its own plan, and it is the first native change
+> either of today's two documents proposes.**
+
+**If Elling wants it sooner and will take the trade, the N-curve fake is viable in Discover
+specifically** — all four properties hold there today. It is written down here so the trade is his
+to make with the costs visible, not so that it is the plan.
+
+### 4A.4 What it looks like, and where it is played
+
+One **master strip** above the slot list while performance mode is on: `reverb`, `level`, and
+later `filter`. Continuous controls, so they use the existing `Dial` component
+(`components/Dial.tsx`, already imported by `DiscoverPanel.tsx:6`), monochrome, no
+`border-radius`, lowercase.
+
+**The filter gets a cutoff control and a resonance knob beside it, not two lanes.** That shape is
+already settled in this codebase, by Elling, for the per-clip case — resonance *was* a fourth
+automation lane and was removed after he used it: *"that's confusing to have it separate from cut
+though isn't it?"*, resolved as *"one filter lane you draw, with its resonance as a knob beside
+it. That is also how Ableton's Auto Filter works"* (`toolkit.ts:31-45`). **The master filter
+inherits that decision rather than re-litigating it.**
+
+A swept master filter could also be **armed** like a card, landing its sweep on the loop top —
+which is the one place performance mode's existing machinery and a master control meet. That is
+deliberately **not now**: the dragged version is the one he described, and arming a sweep is a
+second product on top of a control that does not exist yet.
+
 ## 5. The phone as the controller
 
 Standing at a laptop is not performing. The phone is already a real mixer: per-stem audio, instant
@@ -492,6 +674,31 @@ The performance surface on it is small, and deliberately so:
 - `/api/state` gains the deck per slot so the sheet has something to show.
 
 **Phase 4, and a phase, not a prerequisite.** Cue on the phone (§2.4) is further out still.
+
+### 5.1 The phone is the right surface for the master filter, and it is the *last* move, not the obvious one
+
+The argument for it is genuinely strong: a master filter wants a control you can move
+continuously, and a thumb on a phone is that control. It is also the best answer anyone has to
+"why does the phone exist".
+
+**But the premise that the phone already has real-time gain control over the mix is not right,
+and the difference is three pieces of work rather than one.** `setLevel`
+(`remotePage.ts:938,1113`) writes a Web Audio `GainNode` **on the phone**, affecting only the
+phone's own local mix. **No route ever carries a level to the Mac.** Every phone→Mac route
+carries an enum or an id and nothing else: `/api/slot-action` (a fixed action word),
+`/api/roll`, `/api/keep`, `/api/add-slot`, `/api/remove-slot` (`remoteServer.ts:401-455`). And the
+phone **polls at 700 ms** with no push channel (`remotePage.ts:795,954`), which no amount of
+tuning makes playable for a swept filter.
+
+So a master filter played from the phone needs, in order:
+
+1. the engine-side parameter (§4A.3 — native work, its own spec),
+2. a route that carries a continuous value, which does not exist,
+3. a low-latency transport to replace a 700 ms poll, which also does not exist.
+
+**Right destination, wrong first step.** The master strip lands on the desktop (§4A.4), where
+`Dial` and `liveParamSync` already exist and neither (2) nor (3) is needed; the phone gets it once
+there is something for it to move.
 
 ---
 
@@ -520,8 +727,10 @@ thing Elling could actually perform with comes first.
 |---|---|---|
 | **1** | **the deck.** `perform` toggle; one card per slot from radio's own pick; `arm` / `disarm` / `skip`; landing at the next wrap; `put back`; armed slots excluded from radio's roll; `auto` / `hold`. No cue, no phone, no settings. | this plan |
 | **2** | **cue.** A `cue` chip per card: `startPreviewLoop` on the existing `AudioContext`, the stretched path, started at the current offset and re-anchored each wrap. Off by default. No engine work. | this plan |
-| **3** | **two on deck.** Depth 2 per slot, second card refilled behind the first. | its own plan |
-| **4** | **the phone arms.** `on deck` and `arm` in the action sheet, over `/api/slot-action`. | its own plan |
+| **3** | **the master strip.** §4A.1 master reverb and §4A.2 master level, both over the whole mix, plus the two §0.4 caveats fixed (the project's reverb settings reach the preview; the channel-FX claim in the doc comment corrected). No master filter yet. | this plan |
+| **4** | **two on deck.** Depth 2 per slot, second card refilled behind the first. | its own plan |
+| **5** | **the phone arms.** `on deck` and `arm` in the action sheet, over `/api/slot-action`. | its own plan |
+| **6** | **the master filter.** §4A.3 — the real `EngineProject` field. **The first `native-engine/` change either of today's documents proposes.** | **its own spec + plan** |
 
 **Phase 1 is usable with none of the others.** That is the point of the ordering and it is worth
 saying plainly: the deck alone — see what is coming, choose it, land it on the one, put it back if
@@ -531,9 +740,16 @@ that instrument better without being needed for it to work.
 Phase 2 is separated from phase 1 not because it is hard but because it is the only part with a
 physical prerequisite: two output devices. Phase 1 must not depend on Elling having rigged one.
 
-Phases 3 and 4 get their own plans for the usual reason — 3 multiplies the per-slot cost by two
-and wants that measured against a real library first, and 4 is a different process, a different
+Phase 3 is in this plan because both of its controls are free (§4A.1, §4A.2) and because the two
+caveats it fixes are one-line bugs that should not wait behind anything.
+
+Phases 4 and 5 get their own plans for the usual reason — 4 multiplies the per-slot cost by two
+and wants that measured against a real library first, and 5 is a different process, a different
 security surface and a different device.
+
+**Phase 6 gets its own spec, not just its own plan**, because it is native-engine work and every
+other phase here is not. Mixing one native change into a plan whose standing constraint is "no
+native changes" is how that constraint stops meaning anything.
 
 **Performance mode is session-only.** Nothing about it is persisted: slot ids are minted fresh each
 session (`crypto.randomUUID`), so a stored arm or a stored deck would name a slot that does not
@@ -570,13 +786,33 @@ Named so they stay named. Anything not on this list and not above is out.
 - **Auto-detecting whether the cue device is the same as the engine's.** §2.3, limit 4.
 - **Arming a kind change, a mute or a lock to the wrap.** Only a stem change is launchable. Mute is
   already instant everywhere in this app and making it quantised would be a regression.
+- **Faking the master filter as N per-clip `filterCutoff` curves.** §4A.3 — it would work in
+  Discover today, on four accidents, two of which another feature could remove silently.
+- **A master volume built from automation curves.** §4A.2 — it would make `EngineStem.volume`
+  inert and kill every gain drag and the phone's mute while it ran.
+- **Arming a master filter sweep to land on the loop top.** §4A.4. A second product on top of a
+  control that does not exist yet.
+- **Master resonance as an automation lane.** Settled already, per clip, by Elling
+  (`toolkit.ts:31-45`); the master filter inherits the knob-beside-the-lane shape.
+- **A master filter on the phone.** §5.1 — three pieces of work, two of which do not exist.
+- **Channel FX reaching the Discover preview.** §0.4 caveat 1 is about correcting a doc comment
+  that claims they do. Actually routing them would mean giving the preview a stable channel
+  identity, which is a different change with its own consequences.
+- **Bringing back channel scope for the toolkit.** Dropped on purpose by the 2026-09-22 spec and
+  not reopened here.
 
 ---
 
 ## 9. Constraints that do not move
 
-- **No `native-engine/` change, in any phase.** Established by reading it (§2.2), not assumed.
-  `EngineProject` and `buildEngineProject.ts` are a hand-synced pair and neither is touched.
+- **No `native-engine/` change in phases 1 through 5.** Established by reading it (§2.2, §4A),
+  not assumed. `EngineProject` and `buildEngineProject.ts` are a hand-synced pair and neither is
+  touched. **Phase 6 is the single exception, it is scoped to one field and one insertion point
+  (§4A.3), and it has its own spec so that this constraint keeps meaning something everywhere
+  else.**
+- **A curve is for a gesture that must land on a beat; a live-param is for a hand on a control.**
+  §4A.2. Do not build a dragged control out of automation curves, and do not build a
+  land-on-the-one gesture out of live-params.
 - **No new audio-timing mechanism.** A landing is a stem change on the same path radio already
   commits stem changes on; nothing rhythmic is ever fired from the React tick. §0.3, and the other
   spec's §0A is the authority on why.
@@ -609,3 +845,11 @@ Named so they stay named. Anything not on this list and not above is out.
   in a room can answer. **Say so; do not claim a cue was heard.**
 - The same goes for every timing claim in this document. Nothing here can be heard by the thing
   that wrote it.
+- **The master strip's own logic is pure and TDD'd** — how one master send value becomes N
+  per-stem sends, and how one master level becomes N live-param writes, are both value-in,
+  value-out functions in `src/shared/`. What cannot be tested is whether a master reverb at 0.4
+  sounds like anything, which is the only question that matters about it.
+- **Nobody has heard the N-curve master filter either**, so §4A.3's cost argument is a reading of
+  the code and an arithmetic claim about linear systems, not a listening test. The recommendation
+  against it rests on the four incidental properties, which are checkable by reading; if Elling
+  overrules it on taste, that is a legitimate call on evidence this document cannot supply.
