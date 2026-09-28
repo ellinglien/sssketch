@@ -170,6 +170,76 @@ export function normalizeRadioLoopEndBars(value: unknown, legacyGrid?: unknown):
   return LEGACY_RADIO_GRID_BARS[legacyGrid as string] ?? DEFAULT_RADIO_LOOP_END_BARS
 }
 
+/** The PHRASE grid: how far apart the boundaries a change may land on
+ * are, counted in bars, above and beyond whatever the loop-end threshold
+ * already allows. `0` is `loop` -- no phrase grid at all, which is
+ * everything that shipped before 2026-09-28.
+ *
+ * Elling: "any way to keep track of the beat and to make sure it
+ * transitions on 16 or 32". Sections turn over on 16s and 32s, not on
+ * whatever length a loop happens to be.
+ *
+ * NOT the same axis as loopEndOverBars, and deliberately not merged with
+ * it. The threshold is a FLOOR -- the smallest boundary a change may land
+ * on -- and radioGridBars caps it at the loop, so nothing there can ever
+ * express "wait for bar 16 of a phrase that spans two 8-bar loops". This
+ * is the CEILING: however eager the pace and however short the layer, a
+ * change may only land on a 16 or a 32. The threshold still says how fine
+ * a boundary can be inside the phrase; the phrase says which boundaries
+ * exist at all.
+ *
+ * The numbers double as their own UI text (`${n} bars`, or `loop` for 0),
+ * the same convention RadioPace and RADIO_LOOP_END_OPTIONS use. */
+export const RADIO_PHRASE_OPTIONS: number[] = [0, 16, 32]
+
+/** Off. At 120bpm a 16-bar phrase is 32 seconds and a 32-bar one is over
+ * a minute, so a phrase grid plus `fast` means `fast` does nothing -- the
+ * pace stops being "how often" and becomes "which 16 it picks". That is
+ * arguably right for sectional music and it is the exact opposite of the
+ * complaint that drove the same day's pace work ("radio mode seems quite
+ * slow to me"), so it ships opt-in. */
+export const DEFAULT_RADIO_PHRASE_BARS = 0
+
+/** Absent or unrecognised becomes `loop`, never throws -- the same shape
+ * as normalizeRadioLoopEndBars. No legacy word maps onto this one: the
+ * setting is new, so every older file simply keeps today's behaviour. */
+export function normalizeRadioPhraseBars(value: unknown): number {
+  return typeof value === 'number' && RADIO_PHRASE_OPTIONS.includes(value)
+    ? value
+    : DEFAULT_RADIO_PHRASE_BARS
+}
+
+/** One phrase, counted in whole LAPS of the loop rather than in bars.
+ * `0` means no phrase grid is running.
+ *
+ * Laps, not bars, and this is the load-bearing decision of the whole
+ * feature:
+ *
+ *   - A lap is an integer the clock already spots exactly (pos went
+ *     down). Bars are a float sum of ~30Hz deltas, and a phrase boundary
+ *     tested as `total % 16` would sooner or later miss its tick by a
+ *     float hair and skip a whole phrase. Counting laps cannot drift, for
+ *     any listening length.
+ *   - It makes every phrase boundary a LOOP TOP, which is the boundary
+ *     that is actually safe to change on. The transport never resets for
+ *     a change, and the engine tiles each stem at its own barLength
+ *     inside the loop, so at a loop top every stem is at its own zero --
+ *     the guarantee DEFAULT_RADIO_LOOP_END_BARS' comment spells out. A
+ *     boundary 16 bars after some arbitrary moment has no such guarantee.
+ *
+ * A loop that does not divide the phrase takes the NEAREST whole number
+ * of laps (a 3-bar loop against a 16-bar phrase is five laps, fifteen
+ * bars). There is no 16-bar boundary that is also a loop top there, and a
+ * boundary that is not a loop top is not one radio may use, so the
+ * nearest lap is the honest answer rather than a special case.
+ *
+ * Never below one lap: a loop longer than the phrase already changes less
+ * often than the phrase asks for, and the loop top is the floor. */
+export function radioPhraseLaps(phraseBars: number, loopBars: number): number {
+  if (!(phraseBars > 0) || !(loopBars > 0) || !Number.isFinite(loopBars)) return 0
+  return Math.max(1, Math.round(phraseBars / loopBars))
+}
+
 /** The cycle a change has to sit on, given the OUTGOING layer's bar
  * length and the INCOMING one's.
  *
@@ -256,17 +326,48 @@ export function radioGridBars(
  * "pause", so this clock stops with the transport and resumes exactly
  * where it was, for free. */
 export interface RadioClock {
-  /** Bars of real playback since the last change landed. Fractional. */
+  /** Bars of real playback since the last change landed. Fractional.
+   * RESET every time a change lands -- it is a duration, not a position. */
   barsElapsed: number
   /** The freshly-drawn target for THIS interval (nextRadioIntervalBars). */
   intervalBars: number
   /** The previous tick's position, so a wrap can be spotted as a decrease
    * -- the engine emits no loop-wrap event of any kind. */
   lastPos: number
+  /** Whole laps of the loop since the last PHRASE boundary -- radio's
+   * position in the phrase, as opposed to barsElapsed' duration since the
+   * last change. NOT reset when a change lands (restartRadioInterval
+   * carries it over); reset only when a new phrase starts, which is radio
+   * starting or a course change.
+   *
+   * A second field here rather than a separate accumulator in the panel,
+   * because it is advanced by exactly the wrap detection advanceRadioClock
+   * already does. A ref beside radioClockRef would be a second thing that
+   * has to be kept in step with the same event, one tick at 30Hz, and the
+   * first time the two disagreed the phrase grid would silently walk. */
+  lapsSincePhrase: number
 }
 
 export function createRadioClock(intervalBars: number, startPos = 0): RadioClock {
-  return { barsElapsed: 0, intervalBars, lastPos: startPos }
+  return { barsElapsed: 0, intervalBars, lastPos: startPos, lapsSincePhrase: 0 }
+}
+
+/** A fresh interval INSIDE the phrase that is already running. What the
+ * clock does when a change lands: the duration resets, the position in
+ * the phrase does not.
+ *
+ * The distinction is the whole reason lapsSincePhrase lives on the clock.
+ * createRadioClock starts a new PHRASE as well as a new interval, and is
+ * therefore only correct where radio itself starts over -- switch-on, and
+ * a course change (which seeks the transport to 0, so bar 0 of the new
+ * phrase and bar 0 of the transport are the same instant). Every other
+ * restart is this one. */
+export function restartRadioInterval(
+  clock: RadioClock,
+  intervalBars: number,
+  pos: number
+): RadioClock {
+  return { barsElapsed: 0, intervalBars, lastPos: pos, lapsSincePhrase: clock.lapsSincePhrase }
 }
 
 export interface RadioClockStep {
@@ -294,12 +395,15 @@ export interface RadioClockStep {
  * as loopLengthBars, so the wrap this spots and the wrap the engine
  * performed are the same event. `gridBars` is radioGridBars' answer for
  * the slot that is about to change; passing loopBars reproduces the
- * pre-2026-09-28 behaviour exactly. */
+ * pre-2026-09-28 behaviour exactly. `phraseBars` is the phrase ceiling
+ * (RadioSettings.phraseBars); 0 is no phrase grid, which is the default
+ * and changes nothing. */
 export function advanceRadioClock(
   clock: RadioClock,
   pos: number,
   loopBars: number,
-  gridBars: number = loopBars
+  gridBars: number = loopBars,
+  phraseBars: number = 0
 ): RadioClockStep {
   if (!(loopBars > 0) || !Number.isFinite(pos)) {
     return { clock, wrapped: false, due: false }
@@ -313,10 +417,34 @@ export function advanceRadioClock(
   // wraps, a boundary is crossed when the cell index goes up.
   const step = gridBars > 0 ? gridBars : loopBars
   const crossed = wrapped || Math.floor(pos / step) > Math.floor(clock.lastPos / step)
+  // The phrase, counted in laps. A phrase boundary is a LOOP TOP that is
+  // a whole phrase after the last one, so the grid is a strict subset of
+  // the loop tops and every phrase boundary is already a grid boundary --
+  // which is why adding this gate can only ever REMOVE landings, never
+  // invent one, and can never starve (there is no pair of settings where
+  // the two gates miss each other forever).
+  //
+  // Counted whether or not a change is due: a grid is a grid. A change
+  // that misses one WAITS for the next rather than being dropped --
+  // dropping would make `slow` plus `32 bars` nearly silent, and a change
+  // arriving a phrase late is still a change on the beat.
+  const perPhrase = radioPhraseLaps(phraseBars, loopBars)
+  let lapsSincePhrase = clock.lapsSincePhrase + (wrapped ? 1 : 0)
+  let onPhrase = true
+  if (perPhrase > 0) {
+    // `wrapped &&` is not redundant: perPhrase can shrink mid-listen (a
+    // longer stem resolves and the loop grows, or he changes the chip),
+    // and without it a counter left above the new phrase length would
+    // open a boundary in the middle of a lap.
+    onPhrase = wrapped && lapsSincePhrase >= perPhrase
+    if (onPhrase) lapsSincePhrase = 0
+  } else {
+    lapsSincePhrase = 0
+  }
   return {
-    clock: { ...clock, barsElapsed, lastPos: pos },
+    clock: { ...clock, barsElapsed, lastPos: pos, lapsSincePhrase },
     wrapped,
-    due: crossed && barsElapsed >= clock.intervalBars
+    due: crossed && onPhrase && barsElapsed >= clock.intervalBars
   }
 }
 
@@ -537,6 +665,7 @@ export interface RadioSettings {
   pace: RadioPace
   paceBars: RadioPaceWindow
   loopEndOverBars: number
+  phraseBars: number
   channels: number
   transitions: RadioTransitions
   dropOuts: RadioDropOuts
@@ -547,6 +676,7 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   pace: DEFAULT_RADIO_PACE,
   paceBars: { ...RADIO_PACE_BARS[DEFAULT_RADIO_PACE] },
   loopEndOverBars: DEFAULT_RADIO_LOOP_END_BARS,
+  phraseBars: DEFAULT_RADIO_PHRASE_BARS,
   channels: RADIO_CHANNELS_MIN,
   transitions: DEFAULT_RADIO_TRANSITIONS,
   dropOuts: DEFAULT_RADIO_DROP_OUTS,
@@ -578,6 +708,7 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
       raw.loopEndOverBars,
       (value as { grid?: unknown } | null)?.grid
     ),
+    phraseBars: normalizeRadioPhraseBars(raw.phraseBars),
     channels: Number.isFinite(channels)
       ? Math.min(RADIO_CHANNELS_MAX, Math.max(RADIO_CHANNELS_MIN, Math.floor(channels)))
       : RADIO_CHANNELS_MIN,

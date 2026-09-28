@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_RADIO_LOOP_END_BARS,
   DEFAULT_RADIO_PACE,
+  DEFAULT_RADIO_PHRASE_BARS,
   DEFAULT_RADIO_SETTINGS,
   DEFAULT_RADIO_TURNOVER,
   RADIO_CHANNELS_MAX,
@@ -11,6 +12,7 @@ import {
   RADIO_PACE_OPTIONS,
   RADIO_PACE_WINDOW_MAX,
   RADIO_PACE_WINDOW_MIN,
+  RADIO_PHRASE_OPTIONS,
   RADIO_TURNOVER_OPTIONS,
   adjustRadioPaceWindow,
   advanceRadioClock,
@@ -21,12 +23,15 @@ import {
   normalizeRadioLoopEndBars,
   normalizeRadioPace,
   normalizeRadioPaceWindow,
+  normalizeRadioPhraseBars,
   normalizeRadioSettings,
   normalizeRadioTurnover,
   pickRadioSlotId,
   radioChangeBars,
   radioGridBars,
+  restartRadioInterval,
   radioPaceWindowPreset,
+  radioPhraseLaps,
   radioStarterKinds
 } from './radioSchedule'
 
@@ -292,7 +297,7 @@ describe('advanceRadioClock on a grid', () => {
   it('reproduces the old behaviour exactly when the grid IS the loop', () => {
     // The safety property of the whole change: gridBars === loopBars must
     // be byte-for-byte what shipped 2026-09-26.
-    const clock = { barsElapsed: 7.9, intervalBars: 6, lastPos: 7.9 }
+    const clock = { barsElapsed: 7.9, intervalBars: 6, lastPos: 7.9, lapsSincePhrase: 0 }
     const notYet = advanceRadioClock(clock, 7.95, 8, 8)
     expect(notYet.due).toBe(false)
     const atWrap = advanceRadioClock(clock, 0.05, 8, 8)
@@ -303,7 +308,7 @@ describe('advanceRadioClock on a grid', () => {
   it('commits at a sub-loop boundary once the interval has elapsed', () => {
     // 8-bar loop, 2-bar grid, interval 3 bars: the old code would have
     // waited for bar 8. This lands at bar 4.
-    const clock = { barsElapsed: 3.1, intervalBars: 3, lastPos: 3.9 }
+    const clock = { barsElapsed: 3.1, intervalBars: 3, lastPos: 3.9, lapsSincePhrase: 0 }
     const step = advanceRadioClock(clock, 4.02, 8, 2)
     expect(step.wrapped).toBe(false)
     expect(step.due).toBe(true)
@@ -312,26 +317,230 @@ describe('advanceRadioClock on a grid', () => {
   it('does NOT commit at a grid boundary before the interval has elapsed', () => {
     // The grid is a gate, not a trigger -- it can never make changes more
     // frequent than the pace asked for.
-    const clock = { barsElapsed: 1.9, intervalBars: 6, lastPos: 3.9 }
+    const clock = { barsElapsed: 1.9, intervalBars: 6, lastPos: 3.9, lapsSincePhrase: 0 }
     const step = advanceRadioClock(clock, 4.02, 8, 2)
     expect(step.due).toBe(false)
   })
 
   it('treats the wrap as a grid boundary, because 0 is always on the grid', () => {
-    const clock = { barsElapsed: 9, intervalBars: 3, lastPos: 7.9 }
+    const clock = { barsElapsed: 9, intervalBars: 3, lastPos: 7.9, lapsSincePhrase: 0 }
     const step = advanceRadioClock(clock, 0.02, 8, 3)
     expect(step.wrapped).toBe(true)
     expect(step.due).toBe(true)
   })
 
   it('does not fire twice inside one grid cell', () => {
-    const clock = { barsElapsed: 5, intervalBars: 3, lastPos: 4.1 }
+    const clock = { barsElapsed: 5, intervalBars: 3, lastPos: 4.1, lapsSincePhrase: 0 }
     expect(advanceRadioClock(clock, 4.5, 8, 2).due).toBe(false)
   })
 
   it('defaults the grid to the whole loop when it is not given', () => {
-    const clock = { barsElapsed: 9, intervalBars: 3, lastPos: 3.9 }
+    const clock = { barsElapsed: 9, intervalBars: 3, lastPos: 3.9, lapsSincePhrase: 0 }
     expect(advanceRadioClock(clock, 4.02, 8).due).toBe(false)
+  })
+})
+
+describe('the phrase grid', () => {
+  // Elling, 2026-09-28: "any way to keep track of the beat and to make
+  // sure it transitions on 16 or 32". A different axis from the loop-end
+  // threshold: that one is a FLOOR (the smallest boundary a change may
+  // land on, capped at the loop), this one is a CEILING (however eager
+  // the pace and however short the layer, only a 16 or a 32).
+  it('offers loop, sixteen bars and thirty-two bars', () => {
+    expect(RADIO_PHRASE_OPTIONS).toEqual([0, 16, 32])
+  })
+
+  it('is off by default, because a phrase grid swallows the pace', () => {
+    // At 120bpm a 16-bar phrase is 32 seconds and a 32-bar one is over a
+    // minute, so a phrase grid plus `fast` means `fast` does nothing --
+    // the pace stops being how often and becomes which sixteen it picks.
+    // That is the opposite of the complaint that drove the pace work the
+    // same day, so it has to be opt-in.
+    expect(DEFAULT_RADIO_PHRASE_BARS).toBe(0)
+    expect(DEFAULT_RADIO_SETTINGS.phraseBars).toBe(0)
+  })
+
+  it('normalizes anything unrecognised to loop rather than throwing', () => {
+    expect(normalizeRadioPhraseBars(0)).toBe(0)
+    expect(normalizeRadioPhraseBars(16)).toBe(16)
+    expect(normalizeRadioPhraseBars(32)).toBe(32)
+    expect(normalizeRadioPhraseBars(undefined)).toBe(0)
+    expect(normalizeRadioPhraseBars(null)).toBe(0)
+    expect(normalizeRadioPhraseBars(24)).toBe(0)
+    expect(normalizeRadioPhraseBars('32')).toBe(0)
+    expect(normalizeRadioPhraseBars({ bars: 16 })).toBe(0)
+  })
+
+  it('reads a phrase out of a stored settings object, and absent is loop', () => {
+    expect(normalizeRadioSettings({ phraseBars: 32 }).phraseBars).toBe(32)
+    // A file written before this field existed keeps today's behaviour.
+    expect(normalizeRadioSettings({ pace: 'fast' }).phraseBars).toBe(0)
+  })
+})
+
+describe('radioPhraseLaps', () => {
+  // A phrase is counted in WHOLE LAPS of the loop, not in bars off a
+  // float accumulator. Two reasons, and both are load-bearing:
+  //   - a lap is an integer the clock already spots exactly (pos went
+  //     down), so the grid cannot drift by a tick's worth of float over a
+  //     twenty-minute listen;
+  //   - it makes every phrase boundary a loop top, which is the boundary
+  //     that is safe to change on (see DEFAULT_RADIO_LOOP_END_BARS).
+  it('is off when there is no phrase grid', () => {
+    expect(radioPhraseLaps(0, 8)).toBe(0)
+  })
+
+  it('counts an ordinary Endlesss loop into the phrase exactly', () => {
+    expect(radioPhraseLaps(16, 8)).toBe(2)
+    expect(radioPhraseLaps(32, 8)).toBe(4)
+    expect(radioPhraseLaps(16, 4)).toBe(4)
+    expect(radioPhraseLaps(16, 2)).toBe(8)
+    expect(radioPhraseLaps(16, 1)).toBe(16)
+  })
+
+  it('takes the nearest whole lap when the loop does not divide the phrase', () => {
+    // A three-bar loop has no sixteen-bar boundary that is also a loop
+    // top, and a boundary that is not a loop top is not a boundary radio
+    // may use. Five laps -- fifteen bars -- is the nearest honest answer.
+    expect(radioPhraseLaps(16, 3)).toBe(5)
+    expect(radioPhraseLaps(16, 6)).toBe(3)
+    expect(radioPhraseLaps(32, 6)).toBe(5)
+  })
+
+  it('never goes below one lap, so the loop top is always the floor', () => {
+    expect(radioPhraseLaps(16, 32)).toBe(1)
+    expect(radioPhraseLaps(16, 64)).toBe(1)
+  })
+
+  it('is off for a loop length that is not a real length', () => {
+    expect(radioPhraseLaps(16, 0)).toBe(0)
+    expect(radioPhraseLaps(16, -4)).toBe(0)
+    expect(radioPhraseLaps(16, Number.NaN)).toBe(0)
+  })
+})
+
+describe('advanceRadioClock on a phrase grid', () => {
+  /** Runs the clock over `bars` of real playback at roughly the engine's
+   * own 30Hz and returns the bar count at each change -- the same shape
+   * as "effectively rounds the interval up to a whole number of loops"
+   * above, but long enough to see the grid rather than one firing. */
+  function changesOver(opts: {
+    interval: number
+    loopBars: number
+    gridBars: number
+    phraseBars: number
+    bars: number
+  }): number[] {
+    let clock = createRadioClock(opts.interval, 0)
+    const fired: number[] = []
+    let total = 0
+    let pos = 0
+    const tick = 0.02
+    while (total < opts.bars) {
+      total += tick
+      pos = (pos + tick) % opts.loopBars
+      const step = advanceRadioClock(clock, pos, opts.loopBars, opts.gridBars, opts.phraseBars)
+      clock = step.clock
+      if (step.due) {
+        fired.push(Math.round(total))
+        clock = restartRadioInterval(step.clock, opts.interval, pos)
+      }
+    }
+    return fired
+  }
+
+  it('leaves the pace alone when the phrase is loop, which is why that is the default', () => {
+    // The safety property: 0 must change nothing at all. A `mid` interval
+    // on a 2-bar grid lands roughly every eight bars, on the fine grid --
+    // the pace, not a phrase. (Not an exact bar list: which 2-bar cell a
+    // landing falls in is decided by where barsElapsed crosses the
+    // interval, so it is a tick-resolution detail rather than a rule.)
+    const off = changesOver({ interval: 8, loopBars: 8, gridBars: 2, phraseBars: 0, bars: 60 })
+    expect(off.length).toBeGreaterThanOrEqual(5)
+    for (const bar of off) expect(bar % 2).toBe(0)
+  })
+
+  it('holds a change back to the sixteen even when the layer could turn over sooner', () => {
+    // Two-bar hat, eight-bar loop, mid: without a phrase grid this lands
+    // in the eights. With one it can only land on a sixteen.
+    expect(
+      changesOver({ interval: 8, loopBars: 8, gridBars: 2, phraseBars: 16, bars: 70 })
+    ).toEqual([16, 32, 48, 64])
+  })
+
+  it('makes a change WAIT for the phrase rather than dropping it', () => {
+    // `fast` (3-6 bars) against a 16-bar phrase is still one change per
+    // phrase. Dropping the ones that fall between would make `slow` plus
+    // `32 bars` nearly silent, which is not a setting anyone wants.
+    expect(
+      changesOver({ interval: 3, loopBars: 8, gridBars: 2, phraseBars: 16, bars: 50 })
+    ).toEqual([16, 32, 48])
+  })
+
+  it('lands on the first phrase boundary at or after a long interval, with no special case', () => {
+    // `slow` is 24-48 bars against a 16-bar phrase. 24 simply rounds up
+    // to 32 -- the interval still has to elapse first, and the phrase is
+    // a gate on top of it.
+    expect(
+      changesOver({ interval: 24, loopBars: 8, gridBars: 8, phraseBars: 16, bars: 70 })
+    ).toEqual([32, 64])
+  })
+
+  it('counts a thirty-two the same way, on a shorter loop', () => {
+    expect(
+      changesOver({ interval: 8, loopBars: 4, gridBars: 4, phraseBars: 32, bars: 80 })
+    ).toEqual([32, 64])
+  })
+
+  it('keeps the phrase origin across a change, so the grid does not walk', () => {
+    // restartRadioInterval is the whole reason lapsSincePhrase lives on
+    // the clock rather than being reset with it: createRadioClock starts
+    // a NEW phrase (radio starting, a course change), this one starts a
+    // new interval inside the phrase that is already running.
+    const clock = restartRadioInterval(
+      { barsElapsed: 9, intervalBars: 8, lastPos: 4, lapsSincePhrase: 1 },
+      12,
+      4
+    )
+    expect(clock).toEqual({ barsElapsed: 0, intervalBars: 12, lastPos: 4, lapsSincePhrase: 1 })
+  })
+
+  it('starts a fresh phrase when radio itself starts', () => {
+    expect(createRadioClock(8, 2.5).lapsSincePhrase).toBe(0)
+  })
+
+  it('anchors the phrase to a loop top, not to the moment radio was switched on', () => {
+    // Started at bar 2.5 of an 8-bar loop. The first phrase boundary is
+    // still a loop top -- bar 16 of the loop's own counting, not bar 18.5
+    // -- because otherwise a change would land mid-bar and the incoming
+    // stem would enter partway through itself.
+    let clock = createRadioClock(4, 2.5)
+    let pos = 2.5
+    let total = 0
+    let fired: { pos: number; total: number } | null = null
+    while (total < 40 && fired === null) {
+      total += 0.02
+      pos = (pos + 0.02) % 8
+      const step = advanceRadioClock(clock, pos, 8, 2, 16)
+      clock = step.clock
+      if (step.due) fired = { pos, total }
+    }
+    expect(fired).not.toBeNull()
+    // On a loop top, not mid-bar.
+    expect((fired as { pos: number }).pos).toBeLessThan(0.05)
+    // The SECOND loop top after the switch-on, i.e. 5.5 + 8. The phrase
+    // origin is the loop top radio started inside, so it is two laps of
+    // an 8-bar loop later -- never 16 bars measured from bar 2.5.
+    expect((fired as { total: number }).total).toBeCloseTo(13.5, 1)
+  })
+
+  it('still reports every loop top as a wrap, because gestures are anchored there', () => {
+    // The drop-out is anchored to the loop top and stays there: a phrase
+    // grid governs CHANGES, not gestures.
+    const clock = { barsElapsed: 1, intervalBars: 8, lastPos: 7.9, lapsSincePhrase: 0 }
+    const step = advanceRadioClock(clock, 0.02, 8, 8, 32)
+    expect(step.wrapped).toBe(true)
+    expect(step.due).toBe(false)
   })
 })
 
@@ -544,11 +753,12 @@ describe('a pace window he can set himself', () => {
 })
 
 describe('RadioSettings', () => {
-  it('defaults to mid, the mid window, four bars, four channels, subtle, rare and even', () => {
+  it('defaults to mid, the mid window, four bars, no phrase grid, four channels, subtle, rare and even', () => {
     expect(DEFAULT_RADIO_SETTINGS).toEqual({
       pace: 'mid',
       paceBars: { min: 8, max: 16 },
       loopEndOverBars: 4,
+      phraseBars: 0,
       channels: 4,
       transitions: 'subtle',
       dropOuts: 'rare',
