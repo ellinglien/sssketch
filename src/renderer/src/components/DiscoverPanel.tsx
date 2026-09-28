@@ -99,8 +99,9 @@ import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/typ
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { initialState, type AppState } from '../state/store'
-import type { StemAutomation } from '@shared/toolkit'
+import type { AutomationPoint, StemAutomation } from '@shared/toolkit'
 import type { RiserClip } from '@shared/riser'
+import { masterScaledCurve, masterScaledGains, masterSendsFor } from '@shared/performanceDeck'
 import { scheduleLiveParamSync } from './liveParamSync'
 
 export interface ResolvedCandidateStem {
@@ -869,6 +870,71 @@ export function DiscoverPanel({
     }
   }, [restorePreviewIfLoaded])
 
+  // --- the master strip (2026-09-28 performance-mode spec, section 4A)
+  //
+  // One fader and one reverb send over the WHOLE preview mix, so the
+  // built-in toolkit reaches Discover and radio the way the master plugin
+  // chain already does (section 0.4). The spec hangs this strip off
+  // performance mode; performance mode is phase 1 of that plan and is not
+  // built yet, so it is shown here whenever a preview is actually loaded
+  // (previewingSlotIds.size > 0, the same reactive "is anything sounding"
+  // signal the playhead overlay uses). Smallest thing that makes the
+  // controls reachable without inventing a mode for them -- when the deck
+  // lands, this moves under `performOn`.
+  //
+  // Both dials are 0-100, which is Dial's own domain (Dial.tsx). The wire
+  // and @shared/performanceDeck are 0-1, and the division happens at each
+  // push -- three places, listed in performanceDeck.ts's header.
+  const [masterLevel, setMasterLevel] = useState(100)
+  const masterLevelRef = useRef(100)
+  useEffect(() => {
+    masterLevelRef.current = masterLevel
+  }, [masterLevel])
+  // Reverb is NOT continuous, and cannot be: set-live-param accepts only
+  // volume/fadeIn/fadeOut (IpcServer.cpp:343-348), so every send change is
+  // a whole load-project -- which is exactly what updateSlotGain's own
+  // comment exists to keep off a drag tick. Dial already has the right
+  // split: onChange is the live half, onCommit fires once per finished
+  // gesture (Dial.tsx:61-68). `masterSendDraft` follows the thumb;
+  // `masterSend` is what has actually been sent.
+  const [masterSend, setMasterSend] = useState(0)
+  const [masterSendDraft, setMasterSendDraft] = useState(0)
+  const masterSendRef = useRef(0)
+  useEffect(() => {
+    masterSendRef.current = masterSend
+  }, [masterSend])
+
+  /** Write the master fader to every slot in the loaded preview.
+   *
+   * MUST be called after every syncPreviewToEngine, not just on a drag:
+   * load-project calls engine.liveOverrides().clearAll()
+   * (IpcServer.cpp:259), so a slot landing, a skip resolving or a mute
+   * wipes these overrides and every slot snaps back to its own gain.
+   * Re-applying is the difference between a fader that works and one that
+   * jumps to unity whenever a layer changes. */
+  function pushMasterLevel(): void {
+    const mapping = currentPreviewMappingRef.current
+    if (!mapping) return
+    const slotGains = new Map<string, number>()
+    for (const [slotId, slotIndex] of mapping.slotIndexById) {
+      const gain = slotsRef.current.find((sl) => sl.id === slotId)?.gain ?? 1
+      slotGains.set(stemKey(mapping.groupId, slotIndex), gain)
+    }
+    for (const [key, value] of masterScaledGains(slotGains, masterLevelRef.current / 100)) {
+      scheduleLiveParamSync('volume', key, value)
+    }
+  }
+
+  /** One send value on every preview stem. Committed on release, not on
+   * every drag frame -- see the state's own comment above for why. */
+  function commitMasterSend(value: number): void {
+    setMasterSend(value)
+    masterSendRef.current = value
+    setMasterSendDraft(value)
+    const ids = previewingSlotIdsRef.current
+    if (ids.size > 0) scheduleSyncPreviewToEngine(new Set(ids))
+  }
+
   /** Syncs the playing preview to exactly `ids` -- builds a throwaway,
    * single-rifff EngineProject from every id in `ids` that has a resolved
    * stem, and sends it to the real native engine, replacing whatever
@@ -1028,9 +1094,24 @@ export function DiscoverPanel({
     // EngineStem.volume inert while it is there (see clearRadioGesture).
     // Belt and braces over the clears in the lap countdown, stopRadio and
     // the unmount teardown.
+    //
+    // Every VOLUME curve below is pushed through masterScaledCurve first.
+    // A non-empty volume curve makes EngineStem.volume inert
+    // (PlaybackEngine.cpp:317-329) -- the clip runs at the curve's own
+    // value and neither the slot's committed gain nor the master fader's
+    // live-param override is read at all. Unscaled, a duck with the master
+    // pulled down would slam every other layer back to full for the length
+    // of the gesture. So the curve carries the same product the live-param
+    // would have: this stem's own gain, times the master. The gesture still
+    // wins the SHAPE -- it is transient and the master is persistent -- it
+    // just no longer wins the level.
     const stemAutomation: Record<string, StemAutomation> = {}
     const risers: Record<string, RiserClip> = {}
     const gesture = radioOnRef.current ? radioGestureRef.current : null
+    const masterLevel01 = masterLevelRef.current / 100
+    function underMaster(key: string, curve: AutomationPoint[]): AutomationPoint[] {
+      return masterScaledCurve(curve, (vol[key] ?? 1) * masterLevel01)
+    }
     if (gesture && maxBarLength !== undefined && maxBarLength > 0) {
       const own = members.findIndex((m) => m.id === gesture.slotId) + 1
       // Every gesture measures itself in beats, so one conversion here
@@ -1046,7 +1127,8 @@ export function DiscoverPanel({
         // space at the wrap (see radioLedChangeRef).
         const curve = buildDropOutCurve(maxBarLength, gesture.beats)
         if (own > 0 && curve.length > 0) {
-          stemAutomation[stemKey(rifff.groupId, own)] = { volume: curve }
+          const key = stemKey(rifff.groupId, own)
+          stemAutomation[key] = { volume: underMaster(key, curve) }
         }
       } else if (gesture.kind === 'filter in') {
         const curve = buildFilterInCurve(maxBarLength, bars)
@@ -1064,7 +1146,8 @@ export function DiscoverPanel({
         if (curve.length > 0) {
           members.forEach((m, i) => {
             if (m.id !== gesture.slotId) {
-              stemAutomation[stemKey(rifff.groupId, i + 1)] = { volume: curve }
+              const key = stemKey(rifff.groupId, i + 1)
+              stemAutomation[key] = { volume: underMaster(key, curve) }
             }
           })
         }
@@ -1092,6 +1175,23 @@ export function DiscoverPanel({
       reverb,
       rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
       vol,
+      // The master reverb: N equal sends into the ONE shared bus, which is
+      // what that bus already is (ReverbBus.h:38-58), so nothing here is
+      // an approximation the way a faked master filter would be (spec
+      // 4A.3). Object.keys(vol) is exactly the stem keys
+      // assembleDiscoverRifff just minted for this rifff, so the sends and
+      // the stems cannot disagree. At 0 this is {}, so
+      // isStemToolkitNeutral drops the toolkit key and the project is
+      // bit-identical to one built before this feature existed.
+      //
+      // A `bloom` gesture draws a reverbSend CURVE on one stem, and a
+      // curve beats the static value outright (evaluateAutomation's own
+      // fallback argument, PlaybackEngine.cpp:740). So a bloom takes that
+      // one layer's send for as long as it runs and the master send
+      // resumes on it when the gesture clears -- transient over
+      // persistent, same rule as the volume curves above. The other layers
+      // keep the master send throughout.
+      stemSends: masterSendsFor(Object.keys(vol), masterSendRef.current / 100),
       stemAutomation,
       risers,
       stretch: { [rifff.groupId]: true }
@@ -1138,6 +1238,15 @@ export function DiscoverPanel({
         groupId: rifff.groupId,
         slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1]))
       }
+
+      // The mapping is fresh and load-project has just called
+      // liveOverrides().clearAll() (IpcServer.cpp:259), so this is the
+      // moment to re-assert the master fader -- and the only thing that
+      // stops it snapping back to unity on every layer change. It is also
+      // what un-sticks it after a duck: while a volume curve is on a stem
+      // the override is ignored, and the sync that clears the curve is the
+      // sync that writes the override again.
+      pushMasterLevel()
 
       // Only on the empty-to-non-empty transition -- a later rebuild of an
       // already-loaded preview just keeps playing through it, matching every
@@ -1337,7 +1446,13 @@ export function DiscoverPanel({
     const mapping = currentPreviewMappingRef.current
     const slotIndex = mapping?.slotIndexById.get(id)
     if (mapping && slotIndex !== undefined) {
-      scheduleLiveParamSync('volume', stemKey(mapping.groupId, slotIndex), gain)
+      // Times the master, or dragging one slot while the master is down
+      // would push that one slot back up to its unscaled gain.
+      scheduleLiveParamSync(
+        'volume',
+        stemKey(mapping.groupId, slotIndex),
+        gain * (masterLevelRef.current / 100)
+      )
     }
   }
 
@@ -3880,6 +3995,65 @@ export function DiscoverPanel({
           {addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline'}
         </button>
       </div>
+
+      {/* The master strip -- 2026-09-28 performance-mode spec section 4A.
+          Shown only while something is actually sounding, because both
+          controls address the loaded preview's own stems and mean nothing
+          without one. `level` is a live-param and moves continuously;
+          `reverb` is a whole project reload and so commits on release
+          (Dial's own onCommit). There is no master FILTER here on purpose:
+          it needs a real field on the engine's project and is the first
+          native change in any of this (spec 4A.3). */}
+      {previewingSlotIds.size > 0 && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            padding: '6px 8px',
+            marginBottom: 6,
+            background: 'var(--ra-bg-bar)',
+            borderTop: '1px solid var(--ra-border)',
+            borderBottom: '1px solid var(--ra-border)'
+          }}
+        >
+          <span style={{ fontSize: 'var(--ra-fs-9)', color: 'var(--ra-text-3)' }}>master</span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <Dial
+              value={masterLevel}
+              onChange={(v): void => {
+                // The ref is written here as well as through its effect:
+                // pushMasterLevel reads the ref and must see THIS value,
+                // not the one from a render ago.
+                setMasterLevel(v)
+                masterLevelRef.current = v
+                pushMasterLevel()
+              }}
+              defaultValue={100}
+              size={30}
+              ariaLabel="master level"
+              tooltip="whole mix level"
+            />
+            <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+              level
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <Dial
+              value={masterSendDraft}
+              onChange={(v): void => setMasterSendDraft(v)}
+              onCommit={(v): void => commitMasterSend(v)}
+              defaultValue={0}
+              size={30}
+              ariaLabel="master reverb"
+              tooltip="whole mix reverb"
+            />
+            <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+              reverb
+            </span>
+          </div>
+        </div>
+      )}
 
       {slots.length === 0 && (
         <div style={{ fontSize: 11, color: 'var(--ra-text-2)', padding: 12 }}>
