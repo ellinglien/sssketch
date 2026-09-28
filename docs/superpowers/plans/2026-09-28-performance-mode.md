@@ -5,13 +5,15 @@
 **Goal:** A `perform` mode inside Discover where every slot has a warmed candidate on deck, a tap
 arms it, and it lands on the top of the loop — with radio still running the layers you did not arm.
 
-**Architecture:** Two phases, each landing on its own. **Phase 1 is the deck**: one pure module
+**Architecture:** Three phases, each landing on its own. **Phase 1 is the deck**: one pure module
 (`src/shared/performanceDeck.ts`) holding the card state machine and the set arithmetic, plus
 wiring in `DiscoverPanel.tsx` that reuses the calls radio already makes — `pickForSlot`,
 `resolveCandidateStem`, `commitSlotPick` — and lands on the `wrapped` field `advanceRadioClock`
 already returns. **Phase 2 is the cue**: pre-listening a card through the renderer's own shipped
 Web Audio loop player (`src/renderer/src/audio/previewLoop.ts`) on a second output device, which
-needs no engine work at all. No new scheduler, no new IPC, no new engine message.
+needs no engine work at all. **Phase 3 is the master strip**: a master level built from the
+`volume` live-param that already exists, and a master reverb built from the shared reverb bus that
+already exists. No new scheduler, no new IPC, no new engine message, in any of the three.
 
 **Tech Stack:** TypeScript, React 19, Electron renderer, Web Audio, vitest.
 
@@ -24,8 +26,10 @@ then selecting the next one, and having the radio handle the transitions ... or 
 'transition at next wrap' trigger or something."*
 
 **NO NATIVE-ENGINE CHANGES.** Nothing in this plan reaches `native-engine/`. This was established
-by reading it, not assumed — see Finding 4, and the spec's §2.2 for the full cost of the thing
-that is being avoided. `EngineProject` / `buildEngineProject.ts` are a hand-synced pair (CLAUDE.md)
+by reading it, not assumed — see Findings 4 and 17, and the spec's §2.2 and §4A.3 for the full
+cost of the two things that are being avoided (a cue bus, and a master filter bus). **Phase 3 is
+where that constraint is most likely to be broken**, because a master filter feels adjacent to a
+master reverb and is not. Spec §4A.3 gives it its own spec for exactly that reason. `EngineProject` / `buildEngineProject.ts` are a hand-synced pair (CLAUDE.md)
 and **this plan changes neither.** If you conclude a native-engine change is needed, **STOP and
 report it rather than planning one.**
 
@@ -168,7 +172,35 @@ other file may fail.**
     the row itself uses at `:4450`. Add `typeColorVar` to the existing
     `import { stemColorVar } from '../theme/typeColor'`.
 
-16. **No Web Audio under vitest.** `src/renderer/src/audio/analyzeStemOnce.test.ts` opens with
+16. **Master plugin FX ALREADY process the Discover preview — do not rebuild this.** Three proofs:
+    `Transport.cpp:581-582,614-615` runs `masterChain.process()` on the summed output for whatever
+    project is loaded; `load-project` parses `masterChain` but **never applies it**
+    (`IpcServer.cpp:220-273`), because master plugins load through their own `load-master-plugin`
+    message (`:710`), so the preview never reloads them and **their live parameter state is
+    preserved**; and StoreContext's master-chain effect (`:776-796`) is **not** ownership-gated,
+    unlike `scheduleEngineSync` (`:575,586`), so **editing the chain mid-preview is heard
+    immediately**. Task 15 corrects a doc comment about this; nothing else about it is built.
+
+17. **The three master controls have three different mechanisms, and using the wrong one breaks
+    something.** A `volume` **curve** makes `EngineStem.volume` inert (`PlaybackEngine.cpp:325-329`,
+    `volumeAutomated`), taking that stem off the live-override path — so a master volume built
+    from curves would disable every gain drag and the phone's mute while it ran. There is **no**
+    reverb live-param: `set-live-param` accepts exactly `volume`, `fadeIn`, `fadeOut`
+    (`IpcServer.cpp:343-348`), so a send change is always a `load-project`. And the master
+    **filter** is not in this plan at all (spec §4A.3). The rule: **a curve is for a gesture that
+    must land on a beat; a live-param is for a hand on a control.**
+
+18. **`load-project` calls `engine.liveOverrides().clearAll()`** (`IpcServer.cpp:259`). Every
+    project reload — a landing, a skip resolving, a mute — wipes the master fader. Task 16 Step 2
+    re-applies it after every sync for this reason. **This is the most likely thing to be wrong in
+    Phase 3** and it is walkthrough item 5.
+
+19. **`Dial` is a 0–100 control with `onChange` + `onCommit`** (`Dial.tsx:19,50-73,192-196`), and
+    its label is a sibling `<span>`, not a prop — copy Discover's own `chaos` dial at `:3297-3307`.
+    `onCommit` is documented as *"once per finished GESTURE, with its final value"*, which is
+    exactly the split the reverb needs. The wire is 0–1; **convert once, at the push.**
+
+20. **No Web Audio under vitest.** `src/renderer/src/audio/analyzeStemOnce.test.ts` opens with
     *"No OfflineAudioContext / Worker under vitest's node environment"*. That is why Phase 2's only
     testable piece (`cueStartOffsetSec`) lives in `src/shared/performanceDeck.ts` and why
     `cueLoop.ts` has no test file. **Do not create `cueLoop.test.ts`.**
@@ -187,15 +219,23 @@ other file may fail.**
   change. Slot ids are minted fresh each session so a stored arm would name a slot that is gone.
 - **Entering performance mode fires one `pickForSlot` per slot at once.** Not new — the `similar
   all` button (`rerollAll`, `:2253`) already does exactly this.
+- **Master plugin FX on the preview are not built by this plan** because they already work
+  (Finding 16). Only a wrong doc comment is fixed.
+- **Channel plugin FX still do not reach the preview** after Task 15. That task corrects the
+  comment that claims they do; routing them for real means giving the preview a stable channel
+  identity, which is a different change. Spec §8.
+- **There is no master filter in this plan.** Spec §4A.3 — it needs an `EngineProject` field and
+  gets its own spec. Do not fake it with per-clip curves; §4A.3 lists the four accidents that
+  fake would rest on.
 
 ## File map
 
 | File | Change |
 |---|---|
-| `src/shared/performanceDeck.ts` | **NEW** — `DeckCardStatus`, `DeckCardState`, `PerformanceAutopilot`, `PERFORMANCE_AUTOPILOT_OPTIONS`, `DEFAULT_PERFORMANCE_AUTOPILOT`, `deckCardStatus`, `isArmable`, `nextArmedSet`, `prunedArmedSet`, `landingSlotIds`, `radioEligibleUnderPerform`, `cueStartOffsetSec` |
+| `src/shared/performanceDeck.ts` | **NEW** — `DeckCardStatus`, `DeckCardState`, `PerformanceAutopilot`, `PERFORMANCE_AUTOPILOT_OPTIONS`, `DEFAULT_PERFORMANCE_AUTOPILOT`, `deckCardStatus`, `isArmable`, `nextArmedSet`, `prunedArmedSet`, `landingSlotIds`, `radioEligibleUnderPerform`, `cueStartOffsetSec`, `MASTER_LEVEL_UNITY`, `masterScaledGains`, `masterSendsFor` |
 | `src/shared/performanceDeck.test.ts` | **NEW** — full TDD |
-| `src/renderer/src/audio/cueLoop.ts` | **NEW** (Phase 2) — start/stop one cue voice on the shared `AudioContext`. No test file (Finding 16). |
-| `src/renderer/src/components/DiscoverPanel.tsx` | the `perform` button, the `autopilot` chips, the deck state + refill, the sub-row card, arm/disarm/skip, the wrap landing, `put back`, the `cue` chip |
+| `src/renderer/src/audio/cueLoop.ts` | **NEW** (Phase 2) — start/stop one cue voice on the shared `AudioContext`. No test file (Finding 20). |
+| `src/renderer/src/components/DiscoverPanel.tsx` | the `perform` button, the `autopilot` chips, the deck state + refill, the sub-row card, arm/disarm/skip, the wrap landing, `put back`, the `cue` chip, the master strip, `previewState.reverb`, the corrected FX doc comment |
 
 **Nothing else is touched. No file is deleted. `vitest.config.ts` is NOT edited. `native-engine/`
 is NOT edited. `src/main/` is NOT edited. `src/preload/` is NOT edited.**
@@ -1709,7 +1749,7 @@ Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
 **Files:**
 - Create: `src/renderer/src/audio/cueLoop.ts`
 
-**No test file** — Web Audio does not exist under vitest's node environment (Finding 16), and the
+**No test file** — Web Audio does not exist under vitest's node environment (Finding 20), and the
 one piece of arithmetic worth testing is already in `performanceDeck.ts`. Do not create
 `cueLoop.test.ts`.
 
@@ -2056,9 +2096,519 @@ drift is acceptable. Say that plainly, then hand him:
 
 ---
 
+# Phase 3 — the master strip
+
+Tasks 14 through 17. A master reverb and a master level over the whole preview mix, plus the two
+one-line bugs from spec §0.4. **Still no `native-engine/` change** — the master *filter* (spec
+§4A.3) is deliberately not here; it needs a real `EngineProject` field and gets its own spec.
+
+**Read spec §4A before starting.** Its three controls have three different mechanisms on purpose,
+and using the wrong one is the failure mode:
+
+| control | mechanism | why not the other one |
+|---|---|---|
+| master level | N `set-live-param` `volume` writes, one per slot, continuous | a `volume` **curve** makes `EngineStem.volume` inert (`PlaybackEngine.cpp:325-329`) and would kill every gain drag and the phone's mute while it ran |
+| master reverb | N `stemSends` in the project, committed on pointer-up | there is no reverb live-param, so every change is a `load-project`; one per drag tick is what `updateSlotGain`'s own comment exists to avoid |
+| master filter | **not in this plan** | spec §4A.3 |
+
+---
+
+## Task 14: The master strip's arithmetic
+
+**Files:**
+- Modify: `src/shared/performanceDeck.ts`
+- Modify: `src/shared/performanceDeck.test.ts`
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `src/shared/performanceDeck.test.ts` (extend the import list with `MASTER_LEVEL_UNITY`,
+`masterScaledGains` and `masterSendsFor`):
+
+```ts
+describe('masterScaledGains', () => {
+  it('leaves every slot alone at unity', () => {
+    const gains = new Map([
+      ['a', 0.8],
+      ['b', 0.5]
+    ])
+    expect([...masterScaledGains(gains, MASTER_LEVEL_UNITY)]).toEqual([
+      ['a', 0.8],
+      ['b', 0.5]
+    ])
+  })
+
+  it('scales the mix rather than flattening it', () => {
+    // Halving the master must preserve the balance between slots, not set
+    // them all to the same value.
+    const gains = new Map([
+      ['a', 0.8],
+      ['b', 0.4]
+    ])
+    expect([...masterScaledGains(gains, 0.5)]).toEqual([
+      ['a', 0.4],
+      ['b', 0.2]
+    ])
+  })
+
+  it('takes the mix to silence at zero', () => {
+    expect([...masterScaledGains(new Map([['a', 1]]), 0)]).toEqual([['a', 0]])
+  })
+
+  it('clamps a master above unity rather than boosting into clipping', () => {
+    expect([...masterScaledGains(new Map([['a', 1]]), 4)]).toEqual([['a', 1]])
+  })
+
+  it('clamps a negative master to silence -- a negative is the engine clear sentinel', () => {
+    // IpcServer.cpp:338-342 treats a negative value as "clear this
+    // override", so a negative must never reach the wire as a level.
+    expect([...masterScaledGains(new Map([['a', 1]]), -1)]).toEqual([['a', 0]])
+  })
+
+  it('is empty for an empty mix', () => {
+    expect([...masterScaledGains(new Map(), 0.5)]).toEqual([])
+  })
+})
+
+describe('masterSendsFor', () => {
+  it('gives every stem key the same send', () => {
+    expect(masterSendsFor(['a:1', 'a:2'], 0.3)).toEqual({ 'a:1': 0.3, 'a:2': 0.3 })
+  })
+
+  it('returns an empty record at zero, so the toolkit stays neutral', () => {
+    // isStemToolkitNeutral drops the whole toolkit key when the send is 0
+    // and nothing is drawn, which makes the project bit-identical to one
+    // sent without this feature at all. Emitting explicit zeroes would
+    // still be neutral, but returning {} makes that guarantee obvious at
+    // the call site rather than relying on a helper downstream.
+    expect(masterSendsFor(['a:1', 'a:2'], 0)).toEqual({})
+  })
+
+  it('clamps above one', () => {
+    expect(masterSendsFor(['a:1'], 5)).toEqual({ 'a:1': 1 })
+  })
+
+  it('clamps below zero to an empty record', () => {
+    expect(masterSendsFor(['a:1'], -2)).toEqual({})
+  })
+})
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `npx vitest run src/shared/performanceDeck.test.ts`
+Expected: FAIL — `masterScaledGains is not a function`.
+
+- [ ] **Step 3: Implement**
+
+Append to `src/shared/performanceDeck.ts`:
+
+```ts
+/** The master level that changes nothing. */
+export const MASTER_LEVEL_UNITY = 1
+
+function clamp01(value: number): number {
+  if (!Number.isFinite(value)) return 0
+  if (value < 0) return 0
+  return value > 1 ? 1 : value
+}
+
+/** Each slot's own gain, scaled by the master fader.
+ *
+ * MULTIPLICATIVE, not a replacement: a master fader scales the mix and
+ * preserves the balance the user set slot by slot. Setting every slot to the
+ * master value would be a different and much worse control.
+ *
+ * Clamped into [0,1] because the value goes to set-live-param, where a
+ * NEGATIVE number is the wire's "clear this override" sentinel
+ * (IpcServer.cpp:338-342) -- a negative master would silently un-scale the
+ * mix instead of silencing it. Above unity is clamped rather than allowed:
+ * there is no headroom meter here, and a master that can clip is a worse
+ * default than one that cannot. */
+export function masterScaledGains(
+  slotGains: ReadonlyMap<string, number>,
+  masterLevel: number
+): Map<string, number> {
+  const level = clamp01(masterLevel)
+  const out = new Map<string, number>()
+  for (const [key, gain] of slotGains) out.set(key, clamp01(gain) * level)
+  return out
+}
+
+/** One reverb send value, applied to every stem in the preview.
+ *
+ * The engine's reverb is ONE shared bus fed by per-stem sends
+ * (ReverbBus.h:38-58), so N equal sends into it IS a master send -- there is
+ * nothing being approximated here, unlike the master filter (spec 4A.3).
+ *
+ * Returns {} at zero so the caller writes no sends at all and
+ * isStemToolkitNeutral drops the toolkit key entirely, leaving the project
+ * bit-identical to one built without this feature. */
+export function masterSendsFor(
+  stemKeys: readonly string[],
+  send: number
+): Record<string, number> {
+  const value = clamp01(send)
+  if (value <= 0) return {}
+  const out: Record<string, number> = {}
+  for (const key of stemKeys) out[key] = value
+  return out
+}
+```
+
+- [ ] **Step 4: Run the tests and watch them pass**
+
+Run: `npx vitest run src/shared/performanceDeck.test.ts`
+Expected: PASS, 46 tests.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/shared/performanceDeck.ts src/shared/performanceDeck.test.ts
+git commit -m "a master fader scales the mix instead of flattening it, and one send feeds one bus
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+## Task 15: Fix the two preview-FX caveats
+
+Both are one line, both are spec §0.4, and neither should wait behind the strip.
+
+**Files:**
+- Modify: `src/renderer/src/components/DiscoverPanel.tsx`
+
+- [ ] **Step 1: Let the project's reverb settings reach the preview**
+
+`previewState` (`DiscoverPanel.tsx:884-892`) spreads `initialState` and overrides six fields.
+`state.reverb` is not one of them, so the preview uses `DEFAULT_REVERB` rather than the project's
+room size, damping and pre-delay — and Task 16's master send would feed a reverb that is not the
+one the project is tuned to. Add the selector beside `masterChain` (`:467`):
+
+```ts
+  const reverb = useAppSelector((s) => s.reverb)
+```
+
+and the field to the `previewState` literal, after `channelPlugins`:
+
+```ts
+      reverb,
+```
+
+- [ ] **Step 2: Correct the doc comment that claims channel FX apply**
+
+`DiscoverPanel.tsx:759-762` currently says *"master/channel FX are audibly applied while
+auditioning too"*. The master half is true and verified three ways (spec §0.4). **The channel half
+is false**: `channelId = state.channelOf[rifff.groupId] ?? rifff.groupId`
+(`buildEngineProject.ts:577`), the preview's `groupId` is a fresh `crypto.randomUUID()` minted per
+sync (`discoverRifffAssembly.ts:107`), and `previewState.channelOf` is `{}` from `initialState` —
+so the preview's channel id matches no key in `channelPlugins` and its chain is empty. Replace
+that sentence with:
+
+```
+   * The real arrangement's own state (`state.rifffs`/`vol`/etc.) is never
+   * touched -- the thrown-together AppState here only copies bpm/
+   * masterChain/channelPlugins/reverb from the real one.
+   *
+   * MASTER plugin FX genuinely are applied while auditioning: Transport.cpp
+   * runs masterChain.process() on the summed output for whatever project is
+   * loaded, load-project never touches master plugins (they have their own
+   * load-master-plugin message), and StoreContext's master-chain effect is
+   * not ownership-gated -- so editing the chain mid-preview is heard
+   * immediately, with each plugin's live parameter state intact.
+   *
+   * CHANNEL plugin FX are NOT, despite `channelPlugins` being copied here:
+   * assembleDiscoverRifff mints a fresh groupId per sync and previewState
+   * has no channelOf, so buildEngineProject's `channelOf[groupId] ??
+   * groupId` fallback gives this preview a channel id that matches no key
+   * in channelPlugins. Copying it is a no-op. Routing them for real would
+   * mean giving the preview a stable channel identity -- a different
+   * change, deliberately not made here (2026-09-28 performance-mode spec
+   * 0.4). */
+```
+
+- [ ] **Step 3: Typecheck, lint and the full suite**
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+```
+
+Expected: 0 errors, 4 prettier warnings, suite green. **`buildEngineProject.test.ts` may have
+assertions about the preview's reverb — if any fail, they are asserting the bug.** Read the
+assertion, confirm it is about `DEFAULT_REVERB` reaching a preview, and update it; do not revert
+Step 1.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/renderer/src/components/DiscoverPanel.tsx
+git commit -m "the preview hears the project's own reverb, and the comment stops overclaiming
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+## Task 16: The master strip
+
+**Files:**
+- Modify: `src/renderer/src/components/DiscoverPanel.tsx`
+
+- [ ] **Step 1: State**
+
+Under the perform state, and add `MASTER_LEVEL_UNITY`, `masterScaledGains`, `masterSendsFor` to
+the `@shared/performanceDeck` import:
+
+**`Dial` is a 0–100 control** (`Dial.tsx:19,135,192`), like Discover's existing `chaos` dial at
+`:3297`. The wire and the pure functions are 0–1. **Keep the dial's own 0–100 in component state
+and convert once, at the push** — a second unit floating around is how one of these ends up a
+hundred times too loud.
+
+```ts
+  // 0-100, the Dial's own domain (Dial.tsx:19). Converted to the wire's 0-1
+  // exactly once, in pushMasterLevel / the previewState literal below.
+  const [masterLevel, setMasterLevel] = useState(100)
+  const masterLevelRef = useRef(100)
+  useEffect(() => {
+    masterLevelRef.current = masterLevel
+  }, [masterLevel])
+  // Reverb is NOT continuous: there is no reverb live-param, so every change
+  // is a load-project, and one per drag tick is exactly what
+  // updateSlotGain's own comment exists to avoid. Dial already has the right
+  // split for this -- `onChange` is the live half and `onCommit` fires once
+  // per finished gesture (Dial.tsx:61-68). `masterSendDraft` follows the
+  // thumb; `masterSend` is what has actually been sent.
+  const [masterSend, setMasterSend] = useState(0)
+  const [masterSendDraft, setMasterSendDraft] = useState(0)
+```
+
+`MASTER_LEVEL_UNITY` is the pure module's 0–1 unity and is used in Task 14's tests and in the
+conversions below, not as this state's initial value.
+
+- [ ] **Step 2: Push the master level, and re-push it after every reload**
+
+```ts
+  /** Write the master fader to every slot in the loaded preview.
+   *
+   * MUST be called after every syncPreviewToEngine, not just on a drag:
+   * load-project calls engine.liveOverrides().clearAll() (IpcServer.cpp:259),
+   * so a slot landing, a skip resolving or a mute wipes these overrides and
+   * every slot snaps back to its own gain. Re-applying is the difference
+   * between a fader that works and one that jumps to unity whenever a layer
+   * changes. */
+  function pushMasterLevel(): void {
+    const mapping = currentPreviewMappingRef.current
+    if (!mapping) return
+    const slotGains = new Map<string, number>()
+    for (const [slotId, slotIndex] of mapping.slotIndexById) {
+      const gain = slotsRef.current.find((s) => s.id === slotId)?.gain ?? 1
+      slotGains.set(stemKey(mapping.groupId, slotIndex), gain)
+    }
+    for (const [key, value] of masterScaledGains(slotGains, masterLevelRef.current / 100)) {
+      scheduleLiveParamSync('volume', key, value)
+    }
+  }
+```
+
+Call it at the end of `syncPreviewToEngine`'s success path, immediately after
+`currentPreviewMappingRef.current = { ... }` is assigned (`:928-932`):
+
+```ts
+      // The mapping is fresh and load-project has just cleared every
+      // override, so this is the moment to re-assert the master fader.
+      pushMasterLevel()
+```
+
+And make `updateSlotGain` respect the master, so dragging one slot while the master is down does
+not jump it back to full:
+
+```ts
+      scheduleLiveParamSync(
+        'volume',
+        stemKey(mapping.groupId, slotIndex),
+        gain * (masterLevelRef.current / 100)
+      )
+```
+
+- [ ] **Step 3: Commit the master send through the preview**
+
+```ts
+  /** One send value on every preview stem. Committed on release, not on
+   * every drag frame -- Step 1's comment says why. */
+  function commitMasterSend(value: number): void {
+    setMasterSend(value)
+    masterSendRef.current = value
+    setMasterSendDraft(value)
+    const ids = previewingSlotIdsRef.current
+    if (ids.size > 0) scheduleSyncPreviewToEngine(new Set(ids))
+  }
+```
+
+and write the sends into `previewState` inside `syncPreviewToEngine`, replacing the literal's
+construction so the sends are keyed by the groupId this very call just minted:
+
+```ts
+    const previewState: AppState = {
+      ...initialState,
+      bpm,
+      masterChain,
+      channelPlugins,
+      reverb,
+      rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
+      vol,
+      // A master reverb is N equal sends into the ONE shared bus, which is
+      // what that bus already is (ReverbBus.h:38-58) -- nothing here is an
+      // approximation. At 0 this is {}, so isStemToolkitNeutral drops the
+      // toolkit key and the project is bit-identical to one built without
+      // this feature.
+      stemSends: masterSendsFor(Object.keys(vol), masterSendRef.current / 100),
+      stretch: { [rifff.groupId]: true }
+    }
+```
+
+`Object.keys(vol)` is exactly the stemKeys `assembleDiscoverRifff` just built for this rifff
+(`discoverRifffAssembly.ts:136`), so the sends and the stems cannot disagree. Add the usual
+mirror:
+
+```ts
+  const masterSendRef = useRef(0)
+  useEffect(() => {
+    masterSendRef.current = masterSend
+  }, [masterSend])
+```
+
+- [ ] **Step 4: The strip**
+
+Above the slot list, inside the `{performOn && (` region, using the `Dial` component already
+imported at `:6`:
+
+```tsx
+        {performOn && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              padding: '6px 8px',
+              background: 'var(--ra-bg-bar)',
+              borderBottom: '1px solid var(--ra-border)'
+            }}
+          >
+            <span style={{ fontSize: 'var(--ra-fs-9)', color: 'var(--ra-text-3)' }}>master</span>
+            <Dial
+              value={masterLevel}
+              onChange={(v): void => {
+                // The ref is written here as well as through its effect:
+                // pushMasterLevel reads the ref and must see THIS value, not
+                // the one from a render ago.
+                setMasterLevel(v)
+                masterLevelRef.current = v
+                pushMasterLevel()
+              }}
+              defaultValue={100}
+              size={30}
+              ariaLabel="master level"
+              tooltip="whole mix level"
+            />
+            <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+              level
+            </span>
+            <Dial
+              value={masterSendDraft}
+              onChange={(v): void => setMasterSendDraft(v)}
+              onCommit={(v): void => commitMasterSend(v)}
+              defaultValue={0}
+              size={30}
+              ariaLabel="master reverb"
+              tooltip="whole mix reverb"
+            />
+            <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+              reverb
+            </span>
+          </div>
+        )}
+```
+
+Three things about this that are **not** guesses and must not be "simplified":
+
+- **`Dial` has no `label` prop.** It takes a required `ariaLabel` plus a sibling `<span>`, exactly
+  as Discover's own `chaos` dial does at `:3297-3307`. Copy that shape.
+- **`onCommit` already exists and is exactly this split** — *"Called once per finished GESTURE,
+  with its final value … `onChange` fires continuously and is the live/preview half"*
+  (`Dial.tsx:61-68`). Do not add a new callback, and **do not commit the reverb from `onChange`**:
+  that is a `load-project` per frame, the one thing this task must not do.
+- **`onCommit` hands you the final value.** Use its argument, not `masterSendDraft` — the state
+  may be a render behind the gesture that just ended.
+
+- [ ] **Step 5: Typecheck, lint and the full suite**
+
+```bash
+npm run typecheck
+npm run lint
+npm test
+```
+
+Expected: 0 errors, 4 prettier warnings, suite green.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add src/renderer/src/components/DiscoverPanel.tsx
+git commit -m "one fader and one reverb over the whole mix, each moved the way its wire allows
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+## Task 17: Phase 3 checkpoint
+
+**Files:** none.
+
+- [ ] **Step 1: Run everything**
+
+```bash
+npm test
+npm run typecheck
+npm run lint
+git diff --name-only 85e482e..HEAD
+```
+
+Expected: 0 typecheck errors, 0 lint errors and 4 prettier warnings, suite green, and **no
+`native-engine/`, no `vitest.config.ts`, no `src/main/`, no `src/preload/`** in the file list.
+That last check matters more here than anywhere else in this plan: Phase 3 is the phase where
+somebody is most likely to decide the master filter is "nearly free" and reach into the engine.
+**It is not in this phase. Spec §4A.3.**
+
+- [ ] **Step 2: Hand Elling the walkthrough, and state what was not verified**
+
+An agent cannot hear a reverb or a fader. **Say so.** Then:
+
+1. Load a project that has a master plugin (a compressor or a reverb) in the master chain. Open
+   Discover and press `radio`. **The master FX should already be audible on the preview** — this
+   part shipped long ago; confirm it, because it is half of what you asked for.
+2. Open the plugin's editor and change something while the preview plays. It should change what
+   you hear **immediately**, with no reload and no glitch.
+3. Press `perform`. A `master` strip should appear above the slots with `level` and `reverb`.
+4. Drag `level`. The whole mix should come down **keeping its balance** — quiet layers stay
+   quieter, not everything to the same level.
+5. With `level` down, let a layer change (or arm one). **The fader must not jump back to unity.**
+   That is the `clearAll()` interaction, and it is the most likely thing to be wrong.
+6. Drag `reverb` up. It should take effect **when you let go**, not continuously. If it stutters
+   the mix while you drag, it is committing per frame — report it.
+7. Say whether a master filter is what you actually wanted most. **If it is, that is its own spec
+   and it is the first native-engine change in any of this** — worth knowing before it is built.
+
+---
+
 ## Self-review
 
-Run against the spec after Task 13:
+Run against the spec after Task 17:
 
 - **§1 the queue** — Tasks 5 (deck, refill, card), 6 (skip). Depth 2 is spec §7 phase 3, its own
   plan, correctly absent here.
@@ -2069,7 +2619,11 @@ Run against the spec after Task 13:
   `landingSlotIds`.
 - **§4 autopilot vs manual** — Tasks 1 (the constants), 3 (`radioEligibleUnderPerform`), 4 (the
   chips), 7 (composition at the call site, per Finding 8).
-- **§5 the phone** — spec §7 phase 4, its own plan. Correctly absent.
+- **§4A master effects** — §4A.1 master reverb and §4A.2 master level are Tasks 14 and 16; the
+  §0.4 caveats are Task 15. **§4A.3 the master filter is correctly absent** — it needs an
+  `EngineProject` field and has its own spec (spec §7 phase 6). §4A.4's armed sweep is "not now".
+- **§5 the phone** — spec §7 phase 5, its own plan. Correctly absent. §5.1's phone master filter
+  is "not now" and correctly absent.
 - **§6 the screens** — Tasks 4 and 5. No slot-row track is added or moved (Finding 13).
 - **§2.5 `put back`** — Task 8.
 - **§7 session-only** — no `DiscoverSettings` field anywhere in this plan. Confirmed by the file
@@ -2079,6 +2633,19 @@ Type consistency to re-check before starting: `DeckCardState` (Task 1) is the sh
 `deckCardStateFor` builds (Task 6) and `landingSlotIds` consumes (Tasks 3, 7). `SlotPick` is
 `{ candidate, barUsed, barRequested }` (`DiscoverPanel.tsx:238`) and is what `previousFor` (Task 8)
 returns and `commitSlotPick` takes. `CueHandle` (Task 11) is what `cueHandleRef` holds (Task 12).
+`masterScaledGains` and `masterSendsFor` (Task 14) both take and return the **0–1** wire domain,
+while `masterLevel` / `masterSend` state (Task 16) is the Dial's **0–100** — every call site
+divides by 100 exactly once, and there are four of them (`pushMasterLevel`, `updateSlotGain`, the
+`previewState` literal, and nothing else).
+
+Known limits to carry into Phase 3's walkthrough, on top of the list above:
+
+- **The master reverb is not continuous** and is not meant to be — there is no reverb live-param,
+  so it commits on `onCommit`. Spec §4A.1.
+- **The master level is re-asserted after every project load**, not held by the engine. A visible
+  jump on a layer change means Task 16 Step 2's `pushMasterLevel()` call was dropped.
+- **There is no master filter**, which is the control spec §4A.3 argues is the most valuable one
+  in the whole feature. That is a deliberate deferral to a native change, not an oversight.
 
 ## Execution handoff
 
