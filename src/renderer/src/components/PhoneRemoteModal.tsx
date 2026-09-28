@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   COPIED_FEEDBACK_MS,
+  REMOTE_TROUBLE_REASONS,
   copyLinkLabel,
   type CopyState,
   type PhoneRemoteModalView
@@ -209,10 +210,11 @@ export function PhoneRemoteModal({
             </span>
           </div>
 
-          {/* The disclosure, AND NOTHING WHEN THERE IS ONE ADDRESS -- the
-           * list is empty in that case by phoneRemoteAddressOptions' own
-           * rule, so the ordinary card is exactly the card it was before
-           * any of this existed.
+          {/* THE ONE PLACE A STUCK PERSON IS SENT, and the only thing on
+           * this card that is not needed by someone for whom it worked.
+           * Always present, because the explanation inside it is worth
+           * having on any machine -- the list of alternatives below it is
+           * the part that depends on there being a choice.
            *
            * The alternatives exist because no ranking can fix his router:
            * a Bell Home Hub 3000 isolates wireless clients, so the Mac and
@@ -220,78 +222,94 @@ export function PhoneRemoteModal({
            * other at all. Only he knows which network the phone is really
            * on. But that is HIS network, not everyone's -- so the choice
            * lives behind a question only someone already stuck will ask. */}
-          {view.addressOptions.length > 0 && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-1)' }}>
-              <button
-                onClick={() => setTroubleOpen((open) => !open)}
-                aria-expanded={troubleOpen}
-                title="other addresses"
-                style={{
-                  ...buttonStyle,
-                  alignSelf: 'flex-start',
-                  height: 20,
-                  padding: 0,
-                  fontSize: 10,
-                  border: 'none',
-                  background: 'none',
-                  color: 'var(--ra-text-2)',
-                  textDecoration: 'underline'
-                }}
-              >
-                not connecting?
-              </button>
-              {/* ROWS, NOT CHIPS, AND THE HUMAN WORD LEADS. A chip reading
-               * `utun0 100.66.121.12` asks someone to already know what a
-               * utun is. `vpn`, with the device name kept underneath, asks
-               * nothing and loses nothing -- the device name is still the
-               * only way to tell two private-looking addresses apart, and
-               * it is the escape hatch for the one guess lanAddress.ts
-               * makes (en0 is wifi on a laptop, not always on a desktop).
-               * Both words come from LanAddressKind via
-               * phoneRemoteAddressOptions; this file has no table. */}
-              {troubleOpen && view.addressOptions.length > 1 && (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-1)' }}>
-                  {view.addressOptions.map((option) => (
-                    <button
-                      key={option.address}
-                      onClick={() => onPickAddress(option.address)}
-                      aria-pressed={option.selected}
-                      title="serve on this"
-                      style={{
-                        ...buttonStyle,
-                        height: 'auto',
-                        padding: '6px 8px',
-                        fontSize: 10,
-                        textAlign: 'left',
-                        display: 'flex',
-                        flexDirection: 'column',
-                        alignItems: 'flex-start',
-                        gap: 2,
-                        border: `1px solid var(${
-                          option.selected ? '--ra-border-strong' : '--ra-border'
-                        })`,
-                        background: `var(${
-                          option.selected ? '--ra-bg-row-active' : '--ra-bg-page'
-                        })`,
-                        color: `var(${option.selected ? '--ra-text' : '--ra-text-2'})`
-                      }}
-                    >
-                      <span>
-                        {option.label}
-                        {option.note !== null && (
-                          <span style={{ color: 'var(--ra-text-2)' }}>
-                            {' '}
-                            {'—'} {option.note}
-                          </span>
-                        )}
-                      </span>
-                      <span style={{ color: 'var(--ra-text-2)' }}>{option.detail}</span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-1)' }}>
+            <button
+              onClick={() => setTroubleOpen((open) => !open)}
+              aria-expanded={troubleOpen}
+              title="why it fails"
+              style={{
+                ...buttonStyle,
+                alignSelf: 'flex-start',
+                height: 20,
+                padding: 0,
+                fontSize: 10,
+                border: 'none',
+                background: 'none',
+                color: 'var(--ra-text-2)',
+                textDecoration: 'underline'
+              }}
+            >
+              not connecting?
+            </button>
+            {troubleOpen && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-1)' }}>
+                {/* The three causes, named. None of them is detectable
+                 * from in here and all three are checkable by the person
+                 * holding the phone -- see REMOTE_TROUBLE_REASONS. */}
+                {/* Stacked spans, not a <ul>: a list marker is a round
+                 * dot, and there is not a round corner anywhere else in
+                 * this app. There is no other <ul> in the renderer. */}
+                {REMOTE_TROUBLE_REASONS.map((reason) => (
+                  <span key={reason} style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
+                    {reason}
+                  </span>
+                ))}
+                {view.addressOptions.length > 1 && (
+                  <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
+                    or serve on a different address
+                  </span>
+                )}
+              </div>
+            )}
+            {/* ROWS, NOT CHIPS, AND THE HUMAN WORD LEADS. A chip reading
+             * `utun0 100.66.121.12` asks someone to already know what a
+             * utun is. `vpn`, with the device name kept underneath, asks
+             * nothing and loses nothing -- the device name is still the
+             * only way to tell two private-looking addresses apart, and
+             * it is the escape hatch for the one guess lanAddress.ts
+             * makes (en0 is wifi on a laptop, not always on a desktop).
+             * Both words come from LanAddressKind via
+             * phoneRemoteAddressOptions; this file has no table. */}
+            {troubleOpen && view.addressOptions.length > 1 && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-1)' }}>
+                {view.addressOptions.map((option) => (
+                  <button
+                    key={option.address}
+                    onClick={() => onPickAddress(option.address)}
+                    aria-pressed={option.selected}
+                    title="serve on this"
+                    style={{
+                      ...buttonStyle,
+                      height: 'auto',
+                      padding: '6px 8px',
+                      fontSize: 10,
+                      textAlign: 'left',
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'flex-start',
+                      gap: 2,
+                      border: `1px solid var(${
+                        option.selected ? '--ra-border-strong' : '--ra-border'
+                      })`,
+                      background: `var(${option.selected ? '--ra-bg-row-active' : '--ra-bg-page'})`,
+                      color: `var(${option.selected ? '--ra-text' : '--ra-text-2'})`
+                    }}
+                  >
+                    <span>
+                      {option.label}
+                      {option.note !== null && (
+                        <span style={{ color: 'var(--ra-text-2)' }}>
+                          {' '}
+                          {'—'} {option.note}
+                        </span>
+                      )}
+                    </span>
+                    <span style={{ color: 'var(--ra-text-2)' }}>{option.detail}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {view.pairingNote !== null && (

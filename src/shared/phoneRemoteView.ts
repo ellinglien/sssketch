@@ -80,6 +80,30 @@ export function phoneRemoteAddressOptions(status: PhoneRemoteStatus): PhoneRemot
   })
 }
 
+/** THE THREE THINGS THAT ACTUALLY STOP THIS WORKING, in the order they
+ * are worth checking. Until 2026-09-28 a phone that would not connect got
+ * a qr code, an address, and no explanation whatsoever.
+ *
+ * None of the three is detectable from here, and all three are checkable
+ * by the person holding the phone, which is exactly why naming them is
+ * the whole of the help there is to give:
+ *
+ *   1. CLIENT ISOLATION. Plenty of routers keep wireless clients from
+ *      reaching each other. His Bell Home Hub 3000 does, and it was
+ *      proven rather than guessed: a bare `python3 -m http.server` on an
+ *      unrelated port was equally unreachable between two browsers on
+ *      that wifi while the gateway itself answered both.
+ *   2. A VPN ON THE PHONE. It sends the phone's traffic away from the
+ *      local network, so a local address resolves to nothing.
+ *   3. A FIREWALL ON THIS MAC, refusing the incoming connection.
+ *
+ * Kept to three lines. A fourth would turn a card into a support page. */
+export const REMOTE_TROUBLE_REASONS: readonly string[] = [
+  'some routers keep devices apart, even on the same wifi',
+  'a vpn on the phone sends it away from this network',
+  'a firewall on this mac can refuse the connection'
+]
+
 export interface PhoneRemoteModalView {
   /** The bare address, shown as text for anyone typing it by hand. */
   url: string

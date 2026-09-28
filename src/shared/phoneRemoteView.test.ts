@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   COPIED_FEEDBACK_MS,
   copyLinkLabel,
+  REMOTE_TROUBLE_REASONS,
   phoneRemoteAddressOptions,
   phoneRemoteModalView,
   type PhoneRemoteStatus
@@ -172,5 +173,29 @@ describe('copyLinkLabel', () => {
   it('holds the confirmation long enough to read and not long enough to mislead', () => {
     expect(COPIED_FEEDBACK_MS).toBeGreaterThanOrEqual(1000)
     expect(COPIED_FEEDBACK_MS).toBeLessThanOrEqual(3000)
+  })
+})
+
+/** WHY A FAILURE USED TO SAY NOTHING (2026-09-28). A phone that would not
+ * connect got a QR code, an address and silence. All three of the real
+ * causes are things the app cannot detect and the person CAN check, so
+ * naming them is the whole of the help there is to give. */
+describe('REMOTE_TROUBLE_REASONS', () => {
+  it('names the three real causes and stops there', () => {
+    expect(REMOTE_TROUBLE_REASONS).toHaveLength(3)
+    // client isolation (his Bell Home Hub 3000 does exactly this), a vpn
+    // on the phone, and a firewall on this mac.
+    expect(REMOTE_TROUBLE_REASONS[0]).toContain('router')
+    expect(REMOTE_TROUBLE_REASONS[1]).toContain('vpn')
+    expect(REMOTE_TROUBLE_REASONS[2]).toContain('firewall')
+  })
+
+  it('is written in the product voice -- lowercase, no shouting', () => {
+    for (const reason of REMOTE_TROUBLE_REASONS) {
+      expect(reason).toBe(reason.toLowerCase())
+      expect(reason).not.toMatch(/[!]/)
+      // Short enough to be read at a glance under a qr code.
+      expect(reason.length).toBeLessThanOrEqual(64)
+    }
   })
 })
