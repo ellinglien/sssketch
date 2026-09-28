@@ -43,6 +43,15 @@ export function PhoneRemoteModal({
   onPickAddress: (address: string) => void
 }): React.JSX.Element {
   const [copyState, setCopyState] = useState<CopyState>('idle')
+  // THE PICKER IS CLOSED UNTIL ASKED FOR. It used to be a permanent row of
+  // chips reading `en0 192.168.2.126`, `utun0 100.66.121.12`,
+  // `bridge100 192.168.3.1` -- three pieces of jargon on a card whose one
+  // job is "what do I type into my phone". The chips solved a real problem
+  // (his router isolates wireless clients, so only the tailnet address
+  // works) but they solved it for everyone, including the overwhelming
+  // majority for whom the first address simply works. Behind a disclosure
+  // they cost nothing until something has already gone wrong.
+  const [troubleOpen, setTroubleOpen] = useState(false)
   const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
@@ -200,43 +209,64 @@ export function PhoneRemoteModal({
             </span>
           </div>
 
-          {/* The picker, AND NOTHING WHEN THERE IS ONE ADDRESS -- the list
-           * is empty in that case by phoneRemoteAddressOptions' own rule,
-           * so the ordinary card is exactly the card it was before this
-           * existed. One row of small chips, not a settings panel.
+          {/* The disclosure, AND NOTHING WHEN THERE IS ONE ADDRESS -- the
+           * list is empty in that case by phoneRemoteAddressOptions' own
+           * rule, so the ordinary card is exactly the card it was before
+           * any of this existed.
            *
-           * It exists because no ranking can fix his router: a Bell Home
-           * Hub 3000 isolates wireless clients, so the Mac and the phone
-           * are on the same 192.168.2.x and cannot reach each other at
-           * all. Only he knows which network the phone is really on. */}
+           * The alternatives exist because no ranking can fix his router:
+           * a Bell Home Hub 3000 isolates wireless clients, so the Mac and
+           * the phone are on the same 192.168.2.x and cannot reach each
+           * other at all. Only he knows which network the phone is really
+           * on. But that is HIS network, not everyone's -- so the choice
+           * lives behind a question only someone already stuck will ask. */}
           {view.addressOptions.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-1)' }}>
-              <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
-                if the phone cannot reach it, try another
-              </span>
-              <div style={{ display: 'flex', gap: 'var(--ra-s-1)', flexWrap: 'wrap' }}>
-                {view.addressOptions.map((option) => (
-                  <button
-                    key={option.address}
-                    onClick={() => onPickAddress(option.address)}
-                    aria-pressed={option.selected}
-                    title="serves on this address"
-                    style={{
-                      ...buttonStyle,
-                      height: 22,
-                      padding: '0 8px',
-                      fontSize: 10,
-                      border: `1px solid var(${
-                        option.selected ? '--ra-border-strong' : '--ra-border'
-                      })`,
-                      background: `var(${option.selected ? '--ra-bg-row-active' : '--ra-bg-page'})`,
-                      color: `var(${option.selected ? '--ra-text' : '--ra-text-2'})`
-                    }}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
+              <button
+                onClick={() => setTroubleOpen((open) => !open)}
+                aria-expanded={troubleOpen}
+                title="other addresses"
+                style={{
+                  ...buttonStyle,
+                  alignSelf: 'flex-start',
+                  height: 20,
+                  padding: 0,
+                  fontSize: 10,
+                  border: 'none',
+                  background: 'none',
+                  color: 'var(--ra-text-2)',
+                  textDecoration: 'underline'
+                }}
+              >
+                not connecting?
+              </button>
+              {troubleOpen && (
+                <div style={{ display: 'flex', gap: 'var(--ra-s-1)', flexWrap: 'wrap' }}>
+                  {view.addressOptions.map((option) => (
+                    <button
+                      key={option.address}
+                      onClick={() => onPickAddress(option.address)}
+                      aria-pressed={option.selected}
+                      title="serves on this address"
+                      style={{
+                        ...buttonStyle,
+                        height: 22,
+                        padding: '0 8px',
+                        fontSize: 10,
+                        border: `1px solid var(${
+                          option.selected ? '--ra-border-strong' : '--ra-border'
+                        })`,
+                        background: `var(${
+                          option.selected ? '--ra-bg-row-active' : '--ra-bg-page'
+                        })`,
+                        color: `var(${option.selected ? '--ra-text' : '--ra-text-2'})`
+                      }}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
