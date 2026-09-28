@@ -267,10 +267,13 @@ export function DiscoverRadioMenu({
           )
         )}
       {mode === 'running' && row('reroll', [chip('new bed', false, onNewBed)])}
-      <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+      {/* maxWidth, not a wider menu: the chip rows set the width and the
+          hint wraps inside it. Without it this span is one long line and
+          the menu grows to fit it. */}
+      <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
         {mode === 'start'
           ? 'pick a pace to start'
-          : 'a new pace restarts the loop, keeping these stems. layers longer than the loop end setting wait for the top of the loop; shorter ones turn over on their own cycle'}
+          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle'}
       </span>
     </div>
   )
