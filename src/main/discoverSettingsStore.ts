@@ -2,7 +2,11 @@ import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import { DEFAULT_TRAIT_BAR, normalizeTraitMatchBar } from '@shared/traitBar'
-import { DEFAULT_RADIO_PACE, normalizeRadioPace, type RadioPace } from '@shared/radioSchedule'
+import {
+  DEFAULT_RADIO_SETTINGS,
+  normalizeRadioSettings,
+  type RadioSettings
+} from '@shared/radioSchedule'
 
 export interface DiscoverSettings {
   /** Whether the user has explicitly agreed to the whole-library background
@@ -16,12 +20,13 @@ export interface DiscoverSettings {
    * (one of TRAIT_MATCH_BAR_OPTIONS; 0.75 = top 25%). Direct request,
    * 2026-09-22. */
   traitMatchBar: number
-  /** How often radio mode turns a layer over -- 'slow' | 'mid' | 'fast',
-   * each a window of bars (RADIO_PACE_BARS, @shared/radioSchedule).
-   * Persisted because re-picking it every launch is an annoyance with a
-   * four-line fix. See docs/superpowers/specs/2026-09-26-radio-mode-
-   * design.md. */
-  radioPace: RadioPace
+  /** Everything the radio menu sets -- pace preset, the bar window the
+   * clock actually draws from, change grid, starting channel count,
+   * transitions, drop-out rate, turnover. One nested object rather than
+   * seven flat fields; see RadioSettings' own doc comment. Persisted
+   * because re-picking them every launch is an annoyance with a four-line
+   * fix. docs/superpowers/specs/2026-09-28-radio-controls-design.md. */
+  radio: RadioSettings
 }
 
 const STORE_FILENAME = 'discoverSettings.json'
@@ -33,7 +38,7 @@ function storePath(): string {
 const DEFAULT_SETTINGS: DiscoverSettings = {
   consentedToLibraryScan: false,
   traitMatchBar: DEFAULT_TRAIT_BAR,
-  radioPace: DEFAULT_RADIO_PACE
+  radio: DEFAULT_RADIO_SETTINGS
 }
 
 /** Mirrors categoryCentroidStore.ts's own loadCategoryCentroidStore -- an
@@ -47,7 +52,10 @@ export function loadDiscoverSettings(): DiscoverSettings {
     return {
       consentedToLibraryScan: parsed.consentedToLibraryScan ?? false,
       traitMatchBar: normalizeTraitMatchBar(parsed.traitMatchBar),
-      radioPace: normalizeRadioPace(parsed.radioPace)
+      // `parsed.radioPace` is the 1.3.0 shape -- flat, no `radio` object.
+      // Passing it through migrates a real user's chosen pace rather than
+      // silently resetting it. An explicit `radio.pace` always wins.
+      radio: normalizeRadioSettings(parsed.radio, (parsed as { radioPace?: unknown }).radioPace)
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

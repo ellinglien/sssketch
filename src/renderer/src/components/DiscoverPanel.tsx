@@ -37,19 +37,18 @@ import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { applyTraitBar } from '@shared/traitBar'
 import {
+  RADIO_PACE_OPTIONS,
   advanceRadioClock,
   createRadioClock,
   isRadioEligibleSlot,
-  nextRadioIntervalBars,
+  nextRadioIntervalBarsInWindow,
   pickRadioSlotId,
   radioGridBars,
-  DEFAULT_RADIO_GRID,
-  RADIO_PACE_OPTIONS,
+  radioStarterKinds,
   type RadioClock,
-  type RadioPace
+  type RadioSettings
 } from '@shared/radioSchedule'
 import {
-  DEFAULT_RADIO_DROP_OUTS,
   buildDropOutCurve,
   pickDropOutBeats,
   pickDropOutSlotId,
@@ -286,7 +285,6 @@ const DEFAULT_GLOBAL_MODIFIERS: DiscoverSlotModifier[] = ['endlesss', 'other', '
 // reason about than a surprising one, and every layer is one click from
 // being changed anyway. See docs/superpowers/specs/2026-09-26-radio-mode-
 // design.md 3.6.
-const RADIO_STARTER_KINDS: DiscoverSlotKind[] = ['drums', 'bass', 'lead', 'warm']
 
 // Picks one of `options` uniformly at random, for the "+ random"
 // slot-creation button (addRandomSlot below). Deliberately NOT
@@ -325,8 +323,8 @@ export function DiscoverPanel({
   currentUsername,
   discoverConsented,
   traitMatchBar,
-  radioPace,
-  onRadioPaceChange,
+  radioSettings,
+  onRadioSettingsChange,
   setDiscoverConsented,
   seedBpm,
   onCoachSlotsChange
@@ -383,10 +381,11 @@ export function DiscoverPanel({
   /** Settings' "trait match" bar -- how strict trait kinds are
    * (applyTraitBar's `bar`). */
   traitMatchBar: number
-  /** Radio mode's speed (DiscoverSettings.radioPace), and its persisting
-   * setter. See docs/superpowers/specs/2026-09-26-radio-mode-design.md. */
-  radioPace: RadioPace
-  onRadioPaceChange: (pace: RadioPace) => Promise<void>
+  /** Everything the radio menu sets (DiscoverSettings.radio), and its
+   * persisting patch setter. See docs/superpowers/specs/2026-09-28-radio-
+   * controls-design.md. */
+  radioSettings: RadioSettings
+  onRadioSettingsChange: (patch: Partial<RadioSettings>) => Promise<void>
   /** Persists + updates the shared consent value above (App.tsx's
    * setDiscoverConsented) -- the "yes, analyze" button below calls this
    * directly with `true` rather than maintaining its own independently
@@ -1294,11 +1293,10 @@ export function DiscoverPanel({
     // eligible last time) falls back to the whole loop, which is exactly
     // the pre-2026-09-28 behaviour.
     //
-    // DEFAULT_RADIO_GRID directly, not a setting: phase A ships no UI.
     const pendingSlotId = radioPendingRef.current?.slotId ?? null
     const slotBars =
       pendingSlotId !== null ? (resolvedBarLengthsRef.current.get(pendingSlotId) ?? null) : null
-    const gridBars = radioGridBars(DEFAULT_RADIO_GRID, loopBars, slotBars)
+    const gridBars = radioGridBars(radioSettings.grid, loopBars, slotBars)
     const step = advanceRadioClock(clock, pos, loopBars, gridBars)
     radioClockRef.current = step.clock
     // A drop-out is anchored to the loop top, so its lifetime is counted
@@ -1319,7 +1317,10 @@ export function DiscoverPanel({
 
     // Due. Draw a fresh interval and reset the clock FIRST, so a slow
     // commit below cannot fire a second change on the very next tick.
-    radioClockRef.current = createRadioClock(nextRadioIntervalBars(radioPace), pos)
+    radioClockRef.current = createRadioClock(
+      nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+      pos
+    )
     void Promise.resolve().then(() => setRadioProgress(0))
 
     const pending = radioPendingRef.current
@@ -1353,9 +1354,7 @@ export function DiscoverPanel({
       // No pushUndoSnapshot, for the same reason the change above takes
       // none: a drop-out is performance, not an edit.
       //
-      // DEFAULT_RADIO_DROP_OUTS directly, not a setting: phase B ships no
-      // UI. Phase C replaces this one identifier.
-      if (radioDropOutRef.current === null && shouldScheduleDropOut(DEFAULT_RADIO_DROP_OUTS)) {
+      if (radioDropOutRef.current === null && shouldScheduleDropOut(radioSettings.dropOuts)) {
         const audible = slotsRef.current
           .filter((s) => previewingSlotIdsRef.current.has(s.id) && s.id !== pending?.slotId)
           .map((s) => ({ id: s.id, kinds: s.kinds }))
@@ -1374,7 +1373,7 @@ export function DiscoverPanel({
     // `pos` is the only real dependency; every function above is re-created
     // each render and reads through refs on purpose.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pos, radioOn, radioPace])
+  }, [pos, radioOn, radioSettings])
 
   // In-flight + just-succeeded tracking for BOTH "add to timeline" and "add
   // to shelf" -- independent per button (clicking one doesn't disable or
@@ -2458,10 +2457,13 @@ export function DiscoverPanel({
       return
     }
     if (slotsRef.current.length === 0) {
-      for (const kind of RADIO_STARTER_KINDS) addSlot([kind])
+      for (const kind of radioStarterKinds(radioSettings.channels)) addSlot([kind])
     }
     radioOnRef.current = true
-    radioClockRef.current = createRadioClock(nextRadioIntervalBars(radioPace), pos)
+    radioClockRef.current = createRadioClock(
+      nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+      pos
+    )
     radioLastSlotRef.current = null
     setRadioProgress(0)
     setRadioOn(true)
@@ -3114,14 +3116,15 @@ export function DiscoverPanel({
             {RADIO_PACE_OPTIONS.map((pace) => (
               <button
                 key={pace}
-                onClick={() => void onRadioPaceChange(pace)}
+                onClick={() => void onRadioSettingsChange({ pace })}
                 style={{
                   fontFamily: 'inherit',
                   fontSize: 9,
                   padding: '4px 8px',
-                  background: pace === radioPace ? 'var(--ra-bg-row-active)' : 'transparent',
+                  background:
+                    pace === radioSettings.pace ? 'var(--ra-bg-row-active)' : 'transparent',
                   border: '1px solid var(--ra-border)',
-                  color: pace === radioPace ? 'var(--ra-text)' : 'var(--ra-text-3)',
+                  color: pace === radioSettings.pace ? 'var(--ra-text)' : 'var(--ra-text-3)',
                   cursor: 'pointer'
                 }}
               >

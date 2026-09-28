@@ -33,7 +33,7 @@ import {
 import { useBusy } from '../state/BusyContext'
 import { formatBpm } from '@shared/format'
 import { libraryModeLabel, type LibraryMode } from '@shared/libraryEntryPoints'
-import type { RadioPace } from '@shared/radioSchedule'
+import type { RadioSettings } from '@shared/radioSchedule'
 import { bytesLabel } from '@shared/visuals'
 import { stemKey, type Rifff } from '@shared/types'
 import type { ProjectRef } from '@shared/types'
@@ -130,8 +130,8 @@ export function LibraryBrowser({
   currentSketch,
   discoverConsented,
   traitMatchBar,
-  radioPace,
-  onRadioPaceChange,
+  radioSettings,
+  onRadioSettingsChange,
   setDiscoverConsented,
   discoverSlots,
   setDiscoverSlots,
@@ -171,8 +171,11 @@ export function LibraryBrowser({
   /** Radio mode's speed, and its setter -- both owned by App's
    * discoverSettings mirror and passed straight through to DiscoverPanel.
    * LibraryBrowser itself never reads either. */
-  radioPace: RadioPace
-  onRadioPaceChange: (pace: RadioPace) => Promise<void>
+  /** Everything the radio menu sets (DiscoverSettings.radio), and its
+   * persisting patch setter. See docs/superpowers/specs/2026-09-28-radio-
+   * controls-design.md. */
+  radioSettings: RadioSettings
+  onRadioSettingsChange: (patch: Partial<RadioSettings>) => Promise<void>
   setDiscoverConsented: (value: boolean) => Promise<void>
   /** App.tsx's own lifted Discover session state -- see its own doc
    * comment for why it lives there now (survives the WHOLE LibraryBrowser
@@ -2280,8 +2283,8 @@ export function LibraryBrowser({
             currentUsername={riffLibraryUsername}
             discoverConsented={discoverConsented}
             traitMatchBar={traitMatchBar}
-            radioPace={radioPace}
-            onRadioPaceChange={onRadioPaceChange}
+            radioSettings={radioSettings}
+            onRadioSettingsChange={onRadioSettingsChange}
             setDiscoverConsented={setDiscoverConsented}
             seedBpm={discoverSeedBpm}
             onCoachSlotsChange={onCoachSlotsChange}

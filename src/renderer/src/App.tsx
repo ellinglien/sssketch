@@ -108,7 +108,7 @@ import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
 import type { DiscoverSettings } from '../../main/discoverSettingsStore'
 import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
-import { DEFAULT_RADIO_PACE, type RadioPace } from '@shared/radioSchedule'
+import { DEFAULT_RADIO_SETTINGS, type RadioSettings } from '@shared/radioSchedule'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 
 /** Tracks what the currently-open project actually is, so Save/Export know
@@ -1659,11 +1659,11 @@ function Frame(): React.JSX.Element {
   const [discoverSettings, setDiscoverSettingsState] = useState<DiscoverSettings>({
     consentedToLibraryScan: false,
     traitMatchBar: DEFAULT_TRAIT_BAR,
-    radioPace: DEFAULT_RADIO_PACE
+    radio: DEFAULT_RADIO_SETTINGS
   })
   const discoverConsented = discoverSettings.consentedToLibraryScan
   const traitMatchBar = discoverSettings.traitMatchBar
-  const radioPace = discoverSettings.radioPace
+  const radioSettings = discoverSettings.radio
   useEffect(() => {
     void window.rifffApi
       .getDiscoverSettings()
@@ -1698,11 +1698,12 @@ function Frame(): React.JSX.Element {
     await setDiscoverConsented(!discoverConsented)
   }
 
-  /** The one real setter for radioPace -- goes through
-   * updateDiscoverSettings so the save MERGES rather than wiping
-   * consentedToLibraryScan/traitMatchBar (see its own doc comment). */
-  async function setRadioPace(pace: RadioPace): Promise<void> {
-    await updateDiscoverSettings({ radioPace: pace })
+  /** The one real setter for every radio menu control -- patches the
+   * nested object and routes through updateDiscoverSettings, which MERGES
+   * (saving a partial object "would silently wipe traitMatchBar", see its
+   * own doc comment above). */
+  async function setRadioSettings(patch: Partial<RadioSettings>): Promise<void> {
+    await updateDiscoverSettings({ radio: { ...radioSettings, ...patch } })
   }
 
   async function startTour(): Promise<void> {
@@ -2758,8 +2759,8 @@ function Frame(): React.JSX.Element {
             currentSketch={currentSketch}
             discoverConsented={discoverConsented}
             traitMatchBar={traitMatchBar}
-            radioPace={radioPace}
-            onRadioPaceChange={setRadioPace}
+            radioSettings={radioSettings}
+            onRadioSettingsChange={setRadioSettings}
             setDiscoverConsented={setDiscoverConsented}
             discoverSlots={discoverSlots}
             setDiscoverSlots={setDiscoverSlots}
