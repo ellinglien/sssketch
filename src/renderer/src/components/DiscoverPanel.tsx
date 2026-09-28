@@ -60,6 +60,15 @@ import {
   shouldScheduleDropOut
 } from '@shared/radioDropOut'
 import {
+  buildBloomCurve,
+  buildDuckCurve,
+  buildFilterInCurve,
+  buildTransitionRiser,
+  pickTransition,
+  radioGestureLeadsChange,
+  type RadioTransitionKind
+} from '@shared/radioTransition'
+import {
   buildMatchMeter,
   discoverRoleLabel,
   reclassifyKindSources,
@@ -91,6 +100,7 @@ import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { initialState, type AppState } from '../state/store'
 import type { StemAutomation } from '@shared/toolkit'
+import type { RiserClip } from '@shared/riser'
 import { scheduleLiveParamSync } from './liveParamSync'
 
 export interface ResolvedCandidateStem {
@@ -979,29 +989,72 @@ export function DiscoverPanel({
     }
     const { rifff, vol } = assembly
 
-    // The armed drop-out, as a volume automation curve on the dropped
-    // slot's own stem. This is the ONLY way a gesture can land on the
-    // beat in this codebase (spec 0A): the engine holds the curve and
-    // performs it per sample, so radio's 30Hz React clock is nowhere in
-    // the timed path. Arming is not timing-critical and clearing it is a
-    // later sync writing {} here.
+    // The armed gesture, as automation curves (and, for a riser, a live
+    // noise sweep) in the project itself. This is the ONLY way a gesture
+    // can land on the beat in this codebase (spec 0A): the engine holds
+    // the curve and performs it per sample, so radio's 30Hz React clock is
+    // nowhere in the timed path. Arming is not timing-critical and
+    // clearing it is a later sync writing {} here.
     //
     // buildEngineProject reads state.stemAutomation?.[key] and
     // isStemToolkitNeutral drops the whole toolkit key when nothing is
-    // drawn, so an EMPTY record makes the project byte-identical to what
-    // shipped before this feature existed. Do not "simplify" that away.
+    // drawn, and buildEngineRisers({}) emits an empty array, so EMPTY
+    // records make the project byte-identical to what shipped before this
+    // feature existed. Do not "simplify" that away -- it is the regression
+    // safety property of the whole feature: with transitions off, or
+    // between gestures, nothing about the preview has changed.
     //
     // Gated on radioOnRef as well as the ref itself: a curve must never
-    // outlive radio, because it makes that stem's EngineStem.volume inert
-    // while it is there (see clearRadioDropOut). Belt and braces over the
-    // clears in stopRadio and the unmount teardown.
+    // outlive radio, because a volume curve makes that stem's
+    // EngineStem.volume inert while it is there (see clearRadioGesture).
+    // Belt and braces over the clears in the lap countdown, stopRadio and
+    // the unmount teardown.
     const stemAutomation: Record<string, StemAutomation> = {}
-    const armedDropOut = radioOnRef.current ? radioDropOutRef.current : null
-    if (armedDropOut) {
-      const slotIndex = members.findIndex((m) => m.id === armedDropOut.slotId) + 1
-      const curve = buildDropOutCurve(maxBarLength ?? 0, radioDropOutBeatsRef.current)
-      if (slotIndex > 0 && curve.length > 0) {
-        stemAutomation[stemKey(rifff.groupId, slotIndex)] = { volume: curve }
+    const risers: Record<string, RiserClip> = {}
+    const gesture = radioOnRef.current ? radioGestureRef.current : null
+    if (gesture && maxBarLength !== undefined && maxBarLength > 0) {
+      const own = members.findIndex((m) => m.id === gesture.slotId) + 1
+      // Every gesture measures itself in beats, so one conversion here
+      // rather than four different units in the branches. 4/4, as
+      // everywhere else in Discover.
+      const bars = gesture.beats / 4
+      if (gesture.kind === 'drop-out' || gesture.kind === 'hole') {
+        // The same curve for both, and deliberately so: a hole IS the
+        // drop-out, attached to a change. The difference is entirely in
+        // WHOSE stem it lands on and when the change happens -- a
+        // drop-out drops an untouched layer and puts it straight back, a
+        // hole drops the OUTGOING layer and the new one lands in the
+        // space at the wrap (see radioLedChangeRef).
+        const curve = buildDropOutCurve(maxBarLength, gesture.beats)
+        if (own > 0 && curve.length > 0) {
+          stemAutomation[stemKey(rifff.groupId, own)] = { volume: curve }
+        }
+      } else if (gesture.kind === 'filter in') {
+        const curve = buildFilterInCurve(maxBarLength, bars)
+        if (own > 0 && curve.length > 0) {
+          stemAutomation[stemKey(rifff.groupId, own)] = { filterCutoff: curve }
+        }
+      } else if (gesture.kind === 'bloom') {
+        const curve = buildBloomCurve(maxBarLength, bars)
+        if (own > 0 && curve.length > 0) {
+          stemAutomation[stemKey(rifff.groupId, own)] = { reverbSend: curve }
+        }
+      } else if (gesture.kind === 'duck') {
+        // Every OTHER audible layer dips, so the new one lands in space.
+        const curve = buildDuckCurve(maxBarLength, bars)
+        if (curve.length > 0) {
+          members.forEach((m, i) => {
+            if (m.id !== gesture.slotId) {
+              stemAutomation[stemKey(rifff.groupId, i + 1)] = { volume: curve }
+            }
+          })
+        }
+      } else if (gesture.kind === 'riser') {
+        // The preview's one rifff sits on its own groupId channel
+        // (buildEngineProject's state.channelOf fallback), so that is the
+        // bus this sweep belongs on.
+        const riser = buildTransitionRiser(rifff.groupId, maxBarLength, bars)
+        if (riser) risers[riser.id] = riser
       }
     }
 
@@ -1020,6 +1073,7 @@ export function DiscoverPanel({
       rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
       vol,
       stemAutomation,
+      risers,
       stretch: { [rifff.groupId]: true }
     }
 
@@ -1323,9 +1377,26 @@ export function DiscoverPanel({
   // Which slot radio changed last -- so it never changes the same one
   // twice running (pickRadioSlotId).
   const radioLastSlotRef = useRef<string | null>(null)
-  // The armed drop-out: which slot is holding a volume curve, so the next
-  // sync can clear it. A REF, for the same reason radioClockRef is one --
-  // it is written from the 30Hz position effect and nothing renders it.
+  // The armed GESTURE -- a standalone drop-out (no stem change) or a
+  // transition (one attached to a change). Both are the same thing to the
+  // engine: curves written into the preview project, armed a lap early and
+  // cleared a lap later. Elling, 2026-09-28: "also make sure to transition
+  // on the proper beat... that's key" / "not just the downbeat, the proper
+  // start of the loop, i think".
+  //
+  // A REF, for the same reason radioClockRef is one -- it is written from
+  // the 30Hz position effect and nothing renders it.
+  //
+  // A curve is clip-relative and the transport wraps at loopLengthBars, so
+  // it can ONLY be anchored to the top of the loop. The constraint is the
+  // requirement, and it is why nothing here reads the clock at the moment
+  // the gesture fires: arming is not timing-critical, only the
+  // performance is, and the engine already holds the curve by then.
+  //
+  // `beats` is fixed when the gesture is armed rather than re-drawn on
+  // every sync: the curve IS rebuilt on every sync (maxBarLength can
+  // change under it when another slot resolves), and a re-drawn length
+  // would make one gesture change duration mid-lap.
   //
   // `lapsLeft` counts laps, not milliseconds: the curve fires at the top
   // of the loop it is armed for, so it is cleared on the NEXT wrap after
@@ -1333,13 +1404,26 @@ export function DiscoverPanel({
   // is NOT harmless -- the curve repeats every lap, so a second lap would
   // turn one gesture into a rhythm. Hence the countdown in the wrap branch
   // of the clock effect below.
-  const radioDropOutRef = useRef<{ slotId: string; lapsLeft: number } | null>(null)
-  // How long the armed drop-out is, in beats. Separate from the ref above
-  // because the curve is rebuilt on every sync (maxBarLength can change
-  // under it when another slot resolves) and the LENGTH must not be
-  // re-drawn each time -- that would make one gesture change duration
-  // mid-lap.
-  const radioDropOutBeatsRef = useRef(2)
+  const radioGestureRef = useRef<{
+    kind: 'drop-out' | RadioTransitionKind
+    slotId: string
+    beats: number
+    lapsLeft: number
+  } | null>(null)
+  // A change that is WAITING for the gesture announcing it to finish.
+  //
+  // `hole` and `riser` are the two transitions that run BEFORE the change
+  // rather than decorating its arrival (radioGestureLeadsChange), and both
+  // of them end at the loop top -- a hole is the gap the new layer lands
+  // in, a riser is the sweep into the moment. Arming one after the commit
+  // would put it in the wrong place entirely, so when radio draws one the
+  // pick is held here and lands at the next wrap instead, with the gesture
+  // playing out over the bars before it.
+  //
+  // Same shape and the same landing site as radioCourseChangeRef, for the
+  // same reason: the transport does not reset for a load-project, so the
+  // wrap is the one instant every stem is at its own zero.
+  const radioLedChangeRef = useRef<{ slotId: string; pick: SlotPick } | null>(null)
   // An armed COURSE CHANGE: every eligible layer's next pick, already
   // resolved and warmed, waiting for the next loop top to land together.
   //
@@ -1352,18 +1436,20 @@ export function DiscoverPanel({
   // A REF for the same reason radioClockRef is one: written from an event
   // handler and read from the 30Hz position effect, never rendered.
   const radioCourseChangeRef = useRef<{ slotId: string; pick: SlotPick }[] | null>(null)
-  // Takes the armed drop-out off the stem and rebuilds the preview without
-  // it. Called from every path that ends a gesture -- the lap countdown,
-  // radio switching off, the panel unmounting.
+  // Takes the armed gesture off the stems and rebuilds the preview without
+  // it. Called from every path that ends one -- the lap countdown, a led
+  // change landing, radio switching off, the panel unmounting.
   //
   // Load-bearing rather than tidy-up: a `volume` curve makes EngineStem
   // .volume inert (PlaybackEngine.cpp's volumeAutomated branch), so a
   // curve left behind on a stem nothing is gesturing on would quietly stop
-  // that slot's gain drag reaching the engine live. Never leave one on a
-  // stem that is not mid-gesture.
-  function clearRadioDropOut(): void {
-    if (radioDropOutRef.current === null) return
-    radioDropOutRef.current = null
+  // that slot's gain drag reaching the engine live. A `duck` writes one on
+  // every OTHER audible layer at once, so the same mistake there would
+  // take the whole bed's gain dials with it. Never leave a curve on a stem
+  // that is not mid-gesture.
+  function clearRadioGesture(): void {
+    if (radioGestureRef.current === null) return
+    radioGestureRef.current = null
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
   // Fraction of the current interval elapsed, 0..1, for the progress rule
@@ -1434,14 +1520,55 @@ export function DiscoverPanel({
     const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, changeBars)
     const step = advanceRadioClock(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
     radioClockRef.current = step.clock
-    // A drop-out is anchored to the loop top, so its lifetime is counted
+    // A change a hole or a riser was announcing LANDS HERE and only here.
+    //
+    // The gesture has just played out over the closing bars of the lap --
+    // the outgoing layer left a gap, or a noise sweep climbed into this
+    // instant -- and the wrap is what it was pointing at. Same landing
+    // site and the same reason as the course change below: the transport
+    // does not reset for a load-project, so the wrap is the one moment
+    // every stem is at its own zero.
+    //
+    // The gesture is cleared in the same tick. It has fired; a second lap
+    // of it would turn one move into a rhythm, and (for a hole) would
+    // punch the gap in the layer that just arrived.
+    if (step.wrapped && radioLedChangeRef.current !== null) {
+      const led = radioLedChangeRef.current
+      radioLedChangeRef.current = null
+      clearRadioGesture()
+      void Promise.resolve().then(() => {
+        if (!radioOnRef.current) return
+        // Re-checked at the boundary rather than trusted from when the
+        // gesture was armed, exactly as the ordinary commit below does:
+        // the slot may have been removed, locked or muted in the lap the
+        // gesture took, and swapping a layer the user just locked is
+        // worse than skipping a change.
+        let committed = false
+        if (radioEligibleSlotIds().includes(led.slotId)) {
+          // No pushUndoSnapshot, for the same reason nothing else radio
+          // does takes one: a transition is performance, not an edit.
+          commitSlotPick(led.slotId, led.pick)
+          radioLastSlotRef.current = led.slotId
+          committed = true
+        }
+        if (committed) {
+          runAfterEngineSync(() => {
+            if (radioOnRef.current) void armRadioPick()
+          })
+        } else {
+          void armRadioPick()
+        }
+      })
+      return
+    }
+    // A gesture is anchored to the loop top, so its lifetime is counted
     // in laps. One wrap after the lap it fired on, the curve comes off --
     // leaving it armed would repeat the gesture every lap, which is a
     // rhythm rather than a move.
-    if (step.wrapped && radioDropOutRef.current !== null) {
-      const armed = radioDropOutRef.current
-      if (armed.lapsLeft <= 1) clearRadioDropOut()
-      else radioDropOutRef.current = { ...armed, lapsLeft: armed.lapsLeft - 1 }
+    if (step.wrapped && radioGestureRef.current !== null) {
+      const armed = radioGestureRef.current
+      if (armed.lapsLeft <= 1) clearRadioGesture()
+      else radioGestureRef.current = { ...armed, lapsLeft: armed.lapsLeft - 1 }
     }
     // The course change lands HERE and only here -- the top of the loop,
     // for exactly the reason a long stem waits for one (687641a):
@@ -1506,6 +1633,12 @@ export function DiscoverPanel({
     )
     void Promise.resolve().then(() => setRadioProgress(0))
 
+    // A hole or a riser is already announcing a change that has not landed
+    // yet. Deciding a second one on top of it would put two changes in one
+    // place and neither would read. The clock was restarted just above, so
+    // the wait costs one interval and the gesture lands first.
+    if (radioLedChangeRef.current !== null) return
+
     const pending = radioPendingRef.current
     radioPendingRef.current = null
     // The pick was made a whole interval ago, so the world may have moved:
@@ -1523,6 +1656,49 @@ export function DiscoverPanel({
       if (!radioOnRef.current) return
       let committed = false
       if (pending !== null && eligibleNow.includes(pending.slotId)) {
+        // WHICH move this change gets. The menu picks a temperament and
+        // the changing layer's own kinds pick the weights inside it, so a
+        // drum layer cuts or leaves a hole while a pad sweeps open --
+        // per-kind musicality with no per-kind grid to fill in. `off`
+        // always answers `cut`, and `cut` arms nothing at all, which is
+        // what keeps the project byte-identical to what shipped.
+        //
+        // Never while another gesture is already armed: two curves in one
+        // lap is a wash, and a standalone drop-out that has not finished
+        // has as much right to the lap as a transition does.
+        const changing = slotsRef.current.find((sl) => sl.id === pending.slotId)
+        const transition =
+          radioGestureRef.current === null
+            ? pickTransition(radioSettings.transitions, changing?.kinds ?? [])
+            : 'cut'
+        // How long the move takes, in beats. A hole draws from the same
+        // weighted 1/2/4 the standalone drop-out does, because it IS one
+        // -- a fixed length is a rhythm and a varied one is a gesture. A
+        // riser gets two bars, long enough to read as a build; a sweep, a
+        // bloom and a duck get one bar, which is the arrival rather than
+        // the approach. Everything is clamped to half the loop by the
+        // curve builders, so a short loop shortens all of them.
+        const beats = transition === 'hole' ? pickDropOutBeats() : transition === 'riser' ? 8 : 4
+        if (transition !== 'cut' && radioGestureLeadsChange(transition)) {
+          // The gesture comes FIRST and the change waits for the loop top
+          // it ends on -- a hole is the gap the new layer lands in, a
+          // riser is the sweep into the moment, and arming either after
+          // the commit would put it a whole lap out of place. The layer
+          // leaving is the one carrying the gesture, so it is the
+          // OUTGOING stem the curve lands on.
+          radioGestureRef.current = {
+            kind: transition,
+            slotId: pending.slotId,
+            beats,
+            lapsLeft: 1
+          }
+          radioLedChangeRef.current = { slotId: pending.slotId, pick: pending.pick }
+          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+          // Nothing else this interval: the drop-out roll and the next
+          // pick both wait for the change to actually land, the same way
+          // they wait behind a committed change's engine push.
+          return
+        }
         // No pushUndoSnapshot: radio firing every twenty bars would fill
         // the undo stack and make Cmd+Z useless for the edits the user
         // actually made by hand. A radio change is not undoable; the
@@ -1530,6 +1706,23 @@ export function DiscoverPanel({
         commitSlotPick(pending.slotId, pending.pick)
         radioLastSlotRef.current = pending.slotId
         committed = true
+        if (transition !== 'cut') {
+          // An arrival gesture rides the change it decorates: the curve
+          // lands on the stem that just arrived (a sweep and a bloom) or
+          // on every other layer (a duck), and comes off at the next wrap.
+          //
+          // A `duck` writes a volume curve on every OTHER audible layer,
+          // which makes their EngineStem.volume inert for the lap -- see
+          // clearRadioGesture for why that is bounded rather than
+          // tolerated.
+          radioGestureRef.current = {
+            kind: transition,
+            slotId: pending.slotId,
+            beats,
+            lapsLeft: 1
+          }
+          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+        }
       }
       // Roll ONCE per interval for a drop-out in the coming one -- no
       // second clock. Never on the slot that just changed and never in a
@@ -1539,14 +1732,18 @@ export function DiscoverPanel({
       // No pushUndoSnapshot, for the same reason the change above takes
       // none: a drop-out is performance, not an edit.
       //
-      if (radioDropOutRef.current === null && shouldScheduleDropOut(radioSettings.dropOuts)) {
+      if (radioGestureRef.current === null && shouldScheduleDropOut(radioSettings.dropOuts)) {
         const audible = slotsRef.current
           .filter((s) => previewingSlotIdsRef.current.has(s.id) && s.id !== pending?.slotId)
           .map((s) => ({ id: s.id, kinds: s.kinds }))
         const dropId = pickDropOutSlotId(audible)
         if (dropId !== null) {
-          radioDropOutBeatsRef.current = pickDropOutBeats()
-          radioDropOutRef.current = { slotId: dropId, lapsLeft: 1 }
+          radioGestureRef.current = {
+            kind: 'drop-out',
+            slotId: dropId,
+            beats: pickDropOutBeats(),
+            lapsLeft: 1
+          }
           scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
         }
       }
@@ -1889,12 +2086,13 @@ export function DiscoverPanel({
       })
       radioClockRef.current = null
       radioPendingRef.current = null
-      // Not clearRadioDropOut: scheduling a rebuild of a panel that is
+      // Not clearRadioGesture: scheduling a rebuild of a panel that is
       // unmounting would be a sync into the void (and syncPreviewToEngine
       // returns early on unmountedRef anyway). Dropping the ref is what
       // matters -- nothing can re-arm from a dead panel, and the engine
       // gets a fresh project from whatever claims it next.
-      radioDropOutRef.current = null
+      radioGestureRef.current = null
+      radioLedChangeRef.current = null
       radioCourseChangeRef.current = null
     }
   }, [])
@@ -2727,10 +2925,12 @@ export function DiscoverPanel({
     radioCourseChangeRef.current = null
     // A curve left on a stem after radio stops would silently break that
     // slot's gain dial -- EngineStem.volume is inert while a volume curve
-    // is present (PlaybackEngine.cpp's volumeAutomated branch).
+    // is present (PlaybackEngine.cpp's volumeAutomated branch), and a
+    // duck leaves one on every layer but the changing one.
     // radioOnRef is already false above, so the rebuild this schedules
     // writes an empty stemAutomation either way.
-    clearRadioDropOut()
+    radioLedChangeRef.current = null
+    clearRadioGesture()
     setRadioProgress(0)
   }
 
@@ -2834,7 +3034,8 @@ export function DiscoverPanel({
     setRadioProgress(0)
     radioPendingRef.current = null
     radioCourseChangeRef.current = null
-    clearRadioDropOut()
+    radioLedChangeRef.current = null
+    clearRadioGesture()
     void armRadioPick()
   }
 
