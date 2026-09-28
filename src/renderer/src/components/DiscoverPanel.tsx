@@ -39,6 +39,7 @@ import { applyTraitBar } from '@shared/traitBar'
 import {
   advanceRadioClock,
   createRadioClock,
+  isRadioEligibleSlot,
   nextRadioIntervalBars,
   pickRadioSlotId,
   RADIO_PACE_OPTIONS,
@@ -2269,12 +2270,14 @@ export function DiscoverPanel({
    * runs from a closure that can be a render behind. */
   function radioEligibleSlotIds(): string[] {
     return slotsRef.current
-      .filter(
-        (s) =>
-          !s.locked &&
-          previewingSlotIdsRef.current.has(s.id) &&
-          s.candidate !== null &&
-          !rerollingSlotIds.has(s.id)
+      .filter((s) =>
+        isRadioEligibleSlot({
+          locked: s.locked,
+          audible: previewingSlotIdsRef.current.has(s.id),
+          hasCandidate: s.candidate !== null,
+          hasSeedStem: s.seedStem !== undefined,
+          rerolling: rerollingSlotIds.has(s.id)
+        })
       )
       .map((s) => s.id)
   }

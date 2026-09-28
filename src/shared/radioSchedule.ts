@@ -135,3 +135,38 @@ export function pickRadioSlotId(
   const index = Math.min(choices.length - 1, Math.floor(random() * choices.length))
   return choices[index]
 }
+
+/** One layer's state, as far as radio's eligibility cares. */
+export interface RadioSlotEligibility {
+  locked: boolean
+  /** In the preview mix -- a muted layer is not part of what he is
+   * listening to, so changing it would be a change he cannot hear. */
+  audible: boolean
+  hasCandidate: boolean
+  /** A slot seeded from a rifff or the shelf carries a resolved stem and
+   * NO candidate until it is first rerolled. */
+  hasSeedStem: boolean
+  rerolling: boolean
+}
+
+/** Whether radio may turn this layer over.
+ *
+ * Live report, 2026-09-28: "if i start radio with stems already there..
+ * it seems to not transition". Radio's own filter tested
+ * `s.candidate !== null`, which is false for every slot seeded from a
+ * rifff or the shelf and never since rerolled -- so starting radio on a
+ * loop he had already built made every layer ineligible and radio idled
+ * forever, doing nothing, with no way to tell it apart from a long
+ * interval.
+ *
+ * A seedStem IS a fully resolved stem; it is simply held in a different
+ * field. resolveDiscoverRifff hit this exact bug on 2026-09-16 (see its
+ * own comment) and fixed it the same way. Living here, in shared, rather
+ * than as a filter inline in the component, is so the next thing that
+ * needs to ask "may radio touch this layer" cannot get a third answer. */
+export function isRadioEligibleSlot(slot: RadioSlotEligibility): boolean {
+  if (slot.locked) return false
+  if (!slot.audible) return false
+  if (slot.rerolling) return false
+  return slot.hasCandidate || slot.hasSeedStem
+}

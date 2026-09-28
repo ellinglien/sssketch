@@ -5,6 +5,7 @@ import {
   RADIO_PACE_OPTIONS,
   advanceRadioClock,
   createRadioClock,
+  isRadioEligibleSlot,
   nextRadioIntervalBars,
   normalizeRadioPace,
   pickRadioSlotId
@@ -199,5 +200,46 @@ describe('pickRadioSlotId', () => {
       const picked = pickRadioSlotId(['x', 'y'], 'x', Math.random)
       expect(['x', 'y']).toContain(picked)
     }
+  })
+})
+
+describe('isRadioEligibleSlot', () => {
+  const base = {
+    locked: false,
+    audible: true,
+    hasCandidate: true,
+    hasSeedStem: false,
+    rerolling: false
+  }
+
+  it('lets radio turn over an ordinary rolled layer', () => {
+    expect(isRadioEligibleSlot(base)).toBe(true)
+  })
+
+  // The bug, reported live 2026-09-28: "if i start radio with stems
+  // already there.. it seems to not transition". A slot seeded from a
+  // rifff or the shelf carries a seedStem and NO candidate until it is
+  // first rerolled, so a candidate-only test makes every pre-existing
+  // layer permanently ineligible and radio idles forever with nothing it
+  // is allowed to touch. Exactly the filter resolveDiscoverRifff had to
+  // fix on 2026-09-16 for the same reason.
+  it('turns over a seeded layer that has never been rerolled', () => {
+    expect(isRadioEligibleSlot({ ...base, hasCandidate: false, hasSeedStem: true })).toBe(true)
+  })
+
+  it('leaves a locked layer alone, which is what the padlock is for', () => {
+    expect(isRadioEligibleSlot({ ...base, locked: true })).toBe(false)
+  })
+
+  it('leaves a muted layer alone, because it is not part of what he hears', () => {
+    expect(isRadioEligibleSlot({ ...base, audible: false })).toBe(false)
+  })
+
+  it('leaves a layer that is already mid-roll alone', () => {
+    expect(isRadioEligibleSlot({ ...base, rerolling: true })).toBe(false)
+  })
+
+  it('skips a layer holding no stem at all, which has nothing to turn over', () => {
+    expect(isRadioEligibleSlot({ ...base, hasCandidate: false, hasSeedStem: false })).toBe(false)
   })
 })
