@@ -28,12 +28,21 @@ export const DEFAULT_RADIO_PACE: RadioPace = 'mid'
  * would give a change at 6 bars and then nothing for 24, which reads as
  * broken rather than loose.
  *
- * At 120bpm in 4/4 (2s a bar): slow = 48-96s, mid = 24-48s, fast =
- * 12-24s. */
+ * RETUNED 2026-09-28. The old windows (24-48 / 12-24 / 6-12) were chosen
+ * while advanceRadioClock was silently rounding every one of them UP to
+ * the next whole multiple of the loop length -- at 120bpm with an 8-bar
+ * loop, `mid` could only ever produce 32s or 48s, and `fast` could only
+ * produce 16s or 32s. Elling, 2026-09-28: "radio mode seems quite slow to
+ * me". Now that radioGridBars below lets a change land on the changing
+ * slot's own cycle, the numbers finally describe the behaviour, so the
+ * whole ladder moves down one notch and gains a genuinely fast bottom
+ * rung. A clean 3x ladder with a 2:1 window at every step.
+ *
+ * At 120bpm in 4/4 (2s a bar): slow = 36-72s, mid = 12-24s, fast = 4-8s. */
 export const RADIO_PACE_BARS: Record<RadioPace, { min: number; max: number }> = {
-  slow: { min: 24, max: 48 },
-  mid: { min: 12, max: 24 },
-  fast: { min: 6, max: 12 }
+  slow: { min: 18, max: 36 },
+  mid: { min: 6, max: 12 },
+  fast: { min: 2, max: 4 }
 }
 
 /** Anything unrecognised (an older settings file, a hand-edited JSON)

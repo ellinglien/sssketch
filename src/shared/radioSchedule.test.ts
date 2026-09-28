@@ -43,15 +43,21 @@ describe('radio paces', () => {
     expect(normalizeRadioPace('fast')).toBe('fast')
     expect(normalizeRadioPace('slow')).toBe('slow')
   })
+
+  it('sits every pace on a 3x ladder, retuned now the quantisation is gone', () => {
+    expect(RADIO_PACE_BARS.fast).toEqual({ min: 2, max: 4 })
+    expect(RADIO_PACE_BARS.mid).toEqual({ min: 6, max: 12 })
+    expect(RADIO_PACE_BARS.slow).toEqual({ min: 18, max: 36 })
+  })
 })
 
 describe('nextRadioIntervalBars', () => {
   it('returns the window minimum when random() is 0', () => {
-    expect(nextRadioIntervalBars('mid', () => 0)).toBe(12)
+    expect(nextRadioIntervalBars('mid', () => 0)).toBe(6)
   })
 
   it('returns the window maximum when random() is just under 1', () => {
-    expect(nextRadioIntervalBars('mid', () => 0.9999)).toBe(24)
+    expect(nextRadioIntervalBars('mid', () => 0.9999)).toBe(12)
   })
 
   it('returns a whole number of bars inside the window, for every pace', () => {
