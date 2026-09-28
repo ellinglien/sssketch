@@ -99,15 +99,21 @@ describe('radioGridBars', () => {
     expect(RADIO_GRID_OPTIONS).toEqual(['own loop', 'loop end', '8 bars', '4 bars', '2 bars'])
   })
 
-  it('defaults to the changing slot own loop', () => {
-    expect(DEFAULT_RADIO_GRID).toBe('own loop')
+  it('defaults to the loop end, so a change is in time with everything else', () => {
+    // Briefly 'own loop' on 2026-09-28, reverted the same hour. The
+    // transport does not reset on a change, so a mid-loop swap drops the
+    // INCOMING stem in at whatever phase the transport is at -- an 8-bar
+    // stem entering halfway through itself. At the loop top the transport
+    // wraps, so the outgoing layer has finished a cycle and the incoming
+    // one starts at its own zero. "so it feels in time".
+    expect(DEFAULT_RADIO_GRID).toBe('loop end')
   })
 
   it('normalizes anything unrecognised to the default', () => {
-    expect(normalizeRadioGrid('16 bars')).toBe('own loop')
-    expect(normalizeRadioGrid(undefined)).toBe('own loop')
-    expect(normalizeRadioGrid(4)).toBe('own loop')
-    expect(normalizeRadioGrid(null)).toBe('own loop')
+    expect(normalizeRadioGrid('16 bars')).toBe('loop end')
+    expect(normalizeRadioGrid(undefined)).toBe('loop end')
+    expect(normalizeRadioGrid(4)).toBe('loop end')
+    expect(normalizeRadioGrid(null)).toBe('loop end')
   })
 
   it('loop end is the whole loop -- exactly what shipped 2026-09-26', () => {

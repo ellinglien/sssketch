@@ -94,17 +94,40 @@ export const RADIO_GRID_OPTIONS: RadioGrid[] = [
   '2 bars'
 ]
 
-/** `own loop`, NOT the `loop end` that shipped 2026-09-26.
+/** `loop end`. This was briefly `own loop` on 2026-09-28 and came back
+ * within the hour, because listening found the thing the arithmetic had
+ * missed.
  *
- * The phone kept its own shipped default because a value was already
- * stored on Elling's phone and a default that moved under him would be a
- * surprise. Here the reverse holds: this is a brand-new field with nothing
- * stored anywhere, and the surprise would be shipping a fix for "radio
- * mode seems quite slow to me" whose default is still the slow thing.
- * remotePage.ts:680-684 on `own loop`: "the most musical boundary for a
- * stem changing under eleven others is its own cycle ... this is the one
- * to try first." */
-export const DEFAULT_RADIO_GRID: RadioGrid = 'own loop'
+ * `own loop` was reasoned about entirely from the OUTGOING stem: let a
+ * layer turn over on its own cycle and you never cut it mid-phrase. True,
+ * and beside the point. The transport does not stop for a change --
+ * `load-project` deliberately never resets position (IpcServer.cpp) -- so
+ * the INCOMING stem does not start at its own beginning. It drops in at
+ * whatever phase the transport happens to be at. A change landing at bar 4
+ * of an 8-bar loop puts an 8-bar stem in halfway through itself.
+ *
+ * That is a worse cut than the one `own loop` prevents, and no fade on the
+ * outgoing layer would hide it. Elling, listening: "so two things need to
+ * happen: transition on the proper bar, and transition on the loop end"
+ * -- and then, on why: "so it feels in time".
+ *
+ * At the loop top those two stop being separate requirements. The
+ * transport wraps there, so every stem is simultaneously at its own zero:
+ * the outgoing one has finished a whole cycle and the incoming one starts
+ * at its beginning. One rule buys both, which is why it is the default
+ * rather than the cautious option.
+ *
+ * The grid itself stays -- it is tested, and the menu can offer the
+ * restless version to anyone who wants a layer flicking over mid-loop.
+ * What it stops being is the default.
+ *
+ * The cost, stated so nobody "fixes" it later: an interval again rounds up
+ * to the next loop top, so a pace is "at least N bars, then the next loop
+ * top" rather than exactly N. That is honest and explicable, and it is
+ * worth it. The pace retune of the same day is what keeps this from being
+ * slow again -- on an 8-bar loop `mid` now lands at 16s or 32s, averaging
+ * about 30s, against the 32-48s that started this. */
+export const DEFAULT_RADIO_GRID: RadioGrid = 'loop end'
 
 export function normalizeRadioGrid(value: unknown): RadioGrid {
   return RADIO_GRID_OPTIONS.includes(value as RadioGrid) ? (value as RadioGrid) : DEFAULT_RADIO_GRID
