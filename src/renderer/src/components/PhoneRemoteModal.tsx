@@ -38,8 +38,8 @@ export function PhoneRemoteModal({
   onClose: () => void
   onTurnOff: () => void
   /** Serve on another of this machine's addresses, and remember it. Only
-   * ever called from the picker, which only exists when view.addressOptions
-   * is non-empty -- i.e. when there is genuinely more than one. */
+   * ever called from the picker, which is drawn only when the disclosure
+   * is open AND there is genuinely more than one address to choose from. */
   onPickAddress: (address: string) => void
 }): React.JSX.Element {
   const [copyState, setCopyState] = useState<CopyState>('idle')
@@ -240,19 +240,33 @@ export function PhoneRemoteModal({
               >
                 not connecting?
               </button>
-              {troubleOpen && (
-                <div style={{ display: 'flex', gap: 'var(--ra-s-1)', flexWrap: 'wrap' }}>
+              {/* ROWS, NOT CHIPS, AND THE HUMAN WORD LEADS. A chip reading
+               * `utun0 100.66.121.12` asks someone to already know what a
+               * utun is. `vpn`, with the device name kept underneath, asks
+               * nothing and loses nothing -- the device name is still the
+               * only way to tell two private-looking addresses apart, and
+               * it is the escape hatch for the one guess lanAddress.ts
+               * makes (en0 is wifi on a laptop, not always on a desktop).
+               * Both words come from LanAddressKind via
+               * phoneRemoteAddressOptions; this file has no table. */}
+              {troubleOpen && view.addressOptions.length > 1 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-1)' }}>
                   {view.addressOptions.map((option) => (
                     <button
                       key={option.address}
                       onClick={() => onPickAddress(option.address)}
                       aria-pressed={option.selected}
-                      title="serves on this address"
+                      title="serve on this"
                       style={{
                         ...buttonStyle,
-                        height: 22,
-                        padding: '0 8px',
+                        height: 'auto',
+                        padding: '6px 8px',
                         fontSize: 10,
+                        textAlign: 'left',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: 'flex-start',
+                        gap: 2,
                         border: `1px solid var(${
                           option.selected ? '--ra-border-strong' : '--ra-border'
                         })`,
@@ -262,7 +276,16 @@ export function PhoneRemoteModal({
                         color: `var(${option.selected ? '--ra-text' : '--ra-text-2'})`
                       }}
                     >
-                      {option.label}
+                      <span>
+                        {option.label}
+                        {option.note !== null && (
+                          <span style={{ color: 'var(--ra-text-2)' }}>
+                            {' '}
+                            {'—'} {option.note}
+                          </span>
+                        )}
+                      </span>
+                      <span style={{ color: 'var(--ra-text-2)' }}>{option.detail}</span>
                     </button>
                   ))}
                 </div>

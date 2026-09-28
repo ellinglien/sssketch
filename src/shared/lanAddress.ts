@@ -105,12 +105,30 @@ function compareNames(a: string, b: string): number {
   return 0
 }
 
+/** What an address IS, in a word a person already knows.
+ *
+ * This is not a second classification sitting beside the ranking -- it is
+ * the ranking's own one, said out loud. score() decides tier and kind in
+ * the same breath from the same prefix lists, so there is exactly one
+ * place that knows `utun` means vpn and `bridge` means bridge.
+ *
+ * 'wifi' vs 'ethernet' IS A HEURISTIC, and the only guess in here: node
+ * hands us a device name and nothing about the medium behind it. en0 is
+ * the wifi on every laptop apple has shipped in years and the higher
+ * en* are thunderbolt or usb ethernet. On a mac mini or studio with the
+ * ethernet port in use the two can be the other way round. The picker
+ * therefore keeps the device name and the address visible under the word
+ * -- the human word leads, it does not replace. */
+export type LanAddressKind = 'wifi' | 'ethernet' | 'vpn' | 'bridge'
+
 /** One address the phone remote could be served on, as the picker shows it. */
 export interface LanAddressCandidate {
   address: string
   /** The interface it was found on -- 'en0', 'utun0'. Carried so the picker
    * can tell two private-looking addresses apart at a glance. */
   interfaceName: string
+  /** The human word this row leads with. See LanAddressKind. */
+  kind: LanAddressKind
   /** True for an address a device on the same wifi can be expected to reach
    * with no setup. False for a tunnel, a vpn or a sharing bridge: offered,
    * but only the right answer for someone who knows their phone is on the
@@ -122,6 +140,7 @@ interface Scored {
   entry: NetworkAddress
   parts: number[]
   preferred: boolean
+  kind: LanAddressKind
   /** 0 preferred, 1 tunnel/vpn, 2 sharing bridge. A tailnet address works
    * from anywhere; a sharing bridge only works for a device plugged into
    * this Mac -- so among the unpreferred, the likelier one comes first. */
@@ -136,11 +155,14 @@ function score(entry: NetworkAddress): Scored | null {
   if (hasPrefix(entry.name, UNREACHABLE_NAME_PREFIXES)) return null
 
   if (hasPrefix(entry.name, SHARING_NAME_PREFIXES))
-    return { entry, parts, preferred: false, tier: 2 }
+    return { entry, parts, preferred: false, tier: 2, kind: 'bridge' }
   if (hasPrefix(entry.name, TUNNEL_NAME_PREFIXES) || isCarrierGradeNat(parts)) {
-    return { entry, parts, preferred: false, tier: 1 }
+    return { entry, parts, preferred: false, tier: 1, kind: 'vpn' }
   }
-  return { entry, parts, preferred: true, tier: 0 }
+  // The one guess in this file, and the reason the picker still shows the
+  // device name underneath the word -- see LanAddressKind.
+  const kind = entry.name.toLowerCase() === 'en0' ? 'wifi' : 'ethernet'
+  return { entry, parts, preferred: true, tier: 0, kind }
 }
 
 /** Every address the phone remote could be served on, best first -- the
@@ -190,6 +212,7 @@ export function lanAddressCandidates(interfaces: NetworkAddress[]): LanAddressCa
     unique.push({
       address: candidate.entry.address,
       interfaceName: candidate.entry.name,
+      kind: candidate.kind,
       preferred: candidate.preferred
     })
   }

@@ -5,6 +5,7 @@ import {
   lanAddressCandidates,
   rankLanAddresses,
   resolveRemoteAddress,
+  type LanAddressKind,
   type NetworkAddress
 } from './lanAddress'
 
@@ -189,9 +190,9 @@ describe('lanAddress', () => {
 describe('lanAddressCandidates', () => {
   it('offers the tailnet address his phone needs, ranked below the wifi', () => {
     expect(lanAddressCandidates(HIS_MACHINE)).toEqual([
-      { address: '192.168.2.126', interfaceName: 'en0', preferred: true },
-      { address: '100.66.121.12', interfaceName: 'utun0', preferred: false },
-      { address: '192.168.3.1', interfaceName: 'bridge100', preferred: false }
+      { address: '192.168.2.126', interfaceName: 'en0', kind: 'wifi', preferred: true },
+      { address: '100.66.121.12', interfaceName: 'utun0', kind: 'vpn', preferred: false },
+      { address: '192.168.3.1', interfaceName: 'bridge100', kind: 'bridge', preferred: false }
     ])
   })
 
@@ -203,23 +204,23 @@ describe('lanAddressCandidates', () => {
 
   it('marks a cgnat address unpreferred whatever interface it turns up on', () => {
     expect(lanAddressCandidates([ipv4('vpn0', '100.100.7.1')])).toEqual([
-      { address: '100.100.7.1', interfaceName: 'vpn0', preferred: false }
+      { address: '100.100.7.1', interfaceName: 'vpn0', kind: 'vpn', preferred: false }
     ])
   })
 
   it('offers every tunnel and sharing interface, unpreferred', () => {
     // Reachable BY A DEVICE THAT SHARES THE TUNNEL (or is plugged into the
     // sharing bridge). Not the default, but a real answer for a real setup.
-    const offered = [
-      ipv4('utun5', '192.168.9.1'),
-      ipv4('tun0', '192.168.9.2'),
-      ipv4('tap0', '192.168.9.3'),
-      ipv4('ppp0', '192.168.9.4'),
-      ipv4('bridge100', '192.168.9.5')
+    const offered: [NetworkAddress, LanAddressKind][] = [
+      [ipv4('utun5', '192.168.9.1'), 'vpn'],
+      [ipv4('tun0', '192.168.9.2'), 'vpn'],
+      [ipv4('tap0', '192.168.9.3'), 'vpn'],
+      [ipv4('ppp0', '192.168.9.4'), 'vpn'],
+      [ipv4('bridge100', '192.168.9.5'), 'bridge']
     ]
-    for (const one of offered) {
+    for (const [one, kind] of offered) {
       expect(lanAddressCandidates([one])).toEqual([
-        { address: one.address, interfaceName: one.name, preferred: false }
+        { address: one.address, interfaceName: one.name, kind, preferred: false }
       ])
     }
   })
@@ -267,7 +268,7 @@ describe('lanAddressCandidates', () => {
   it('lists one address once, under the first interface it was seen on', () => {
     expect(
       lanAddressCandidates([ipv4('en0', '192.168.2.126'), ipv4('en1', '192.168.2.126')])
-    ).toEqual([{ address: '192.168.2.126', interfaceName: 'en0', preferred: true }])
+    ).toEqual([{ address: '192.168.2.126', interfaceName: 'en0', kind: 'wifi', preferred: true }])
   })
 })
 
@@ -329,5 +330,58 @@ describe('allLocalIPv4Addresses', () => {
         ipv4('en1', '192.168.2.126')
       ])
     ).toEqual(['192.168.2.126'])
+  })
+})
+
+/** THE HUMAN WORD FOR EACH ADDRESS (2026-09-28).
+ *
+ * The picker used to read `en0 192.168.2.126` / `utun0 100.66.121.12` /
+ * `bridge100 192.168.3.1`. Those are BSD device names and nobody outside
+ * this file should have to know them. `kind` is the same classification
+ * the ranking already does -- tunnel, sharing bridge, everything else --
+ * said out loud, so the modal can lead each row with a word instead of a
+ * device. There is deliberately no second list of prefixes: kind and tier
+ * are decided together in score(). */
+describe('lanAddressCandidates kinds', () => {
+  it('names his three addresses wifi, vpn and bridge', () => {
+    expect(lanAddressCandidates(HIS_MACHINE).map((candidate) => candidate.kind)).toEqual([
+      'wifi',
+      'vpn',
+      'bridge'
+    ])
+  })
+
+  it('calls every tunnel prefix a vpn, whatever the address range', () => {
+    for (const name of ['utun5', 'tun0', 'tap0', 'ppp0']) {
+      expect(lanAddressCandidates([ipv4(name, '192.168.9.1')])[0].kind).toBe('vpn')
+    }
+  })
+
+  it('calls a cgnat address a vpn even on an interface it has never heard of', () => {
+    expect(lanAddressCandidates([ipv4('vpn0', '100.100.7.1')])[0].kind).toBe('vpn')
+  })
+
+  it('calls a sharing bridge a bridge', () => {
+    expect(lanAddressCandidates([ipv4('bridge100', '192.168.3.1')])[0].kind).toBe('bridge')
+  })
+
+  it('calls en0 wifi and every other ordinary interface ethernet', () => {
+    // A HEURISTIC AND KNOWN TO BE ONE. node tells us a device name and
+    // nothing about the medium behind it. On every laptop apple has
+    // shipped for years en0 is the wifi and the higher-numbered en* are
+    // thunderbolt or usb ethernet, which is what this says. On a mac mini
+    // or mac studio with the ethernet port in use the two can be the other
+    // way round, and this will then read `ethernet` for the wifi. That is
+    // why the row still carries `en0 192.168.2.126` underneath the word --
+    // the human word leads, it does not replace.
+    expect(lanAddressCandidates([ipv4('en0', '192.168.2.126')])[0].kind).toBe('wifi')
+    expect(lanAddressCandidates([ipv4('en5', '192.168.2.126')])[0].kind).toBe('ethernet')
+    expect(lanAddressCandidates([ipv4('eth0', '192.168.2.126')])[0].kind).toBe('ethernet')
+  })
+
+  it('agrees with preferred, which is the same classification counted twice', () => {
+    for (const candidate of lanAddressCandidates(HIS_MACHINE)) {
+      expect(candidate.preferred).toBe(candidate.kind === 'wifi' || candidate.kind === 'ethernet')
+    }
   })
 })

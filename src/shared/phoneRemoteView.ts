@@ -1,5 +1,5 @@
 // src/shared/phoneRemoteView.ts
-import type { LanAddressCandidate } from './lanAddress'
+import type { LanAddressCandidate, LanAddressKind } from './lanAddress'
 import { REMOTE_MAX_PAIR_ATTEMPTS, pairedRemoteUrl } from './remoteAuth'
 
 /** The phone remote's status as main reports it (see phoneRemoteStatus() in
@@ -23,21 +23,44 @@ export interface PhoneRemoteStatus {
 /** One row of the address picker. */
 export interface PhoneRemoteAddressOption {
   address: string
-  /** 'en0 192.168.1.40' -- the interface then the address. The interface
-   * name is what makes two private-looking addresses tellable apart, and it
-   * is how he recognises the tailnet one (utun0) without the modal having
-   * to explain what a tailnet is. */
+  /** The human word the row leads with -- 'wi-fi', 'vpn', 'bridge'. */
   label: string
+  /** 'en0 · 192.168.1.40' -- the device name and the address, kept under
+   * the word rather than instead of it. It is what makes two
+   * private-looking addresses tellable apart, and it is the escape hatch
+   * for the one guess lanAddress.ts makes (see LanAddressKind: node cannot
+   * tell wifi from ethernet, so on a mac mini the word can be wrong and
+   * the line under it never is). */
+  detail: string
+  /** A short clause where the word alone would get someone stuck on the
+   * wrong row, else null. */
+  note: string | null
   selected: boolean
 }
 
-/** The addresses to offer him, or NOTHING WHEN THERE IS ONLY ONE.
+/** The human word, and any warning that goes with it, for each kind of
+ * address lanAddress.ts classifies. Derived from that classification, not
+ * from a second look at the interface name -- there is one place in this
+ * codebase that knows `utun` means vpn, and it is not here. */
+const KIND_LABELS: Record<LanAddressKind, { label: string; note: string | null }> = {
+  wifi: { label: 'wi-fi', note: null },
+  ethernet: { label: 'ethernet', note: null },
+  // Both notes are for the same failure: picking a row that is only
+  // reachable from somewhere the phone is not. A tailnet address works
+  // beautifully -- from another device on the tailnet. A sharing bridge
+  // works from a vm, or from something plugged into this mac.
+  vpn: { label: 'vpn', note: 'only if the phone is on it too' },
+  bridge: { label: 'bridge', note: 'for virtual machines' }
+}
+
+/** Every address he could be offered, best first, as the picker draws
+ * them. A plain projection of the candidates -- WHETHER to show any of
+ * this is the modal's decision, not this function's.
  *
- * The empty list is the important case, not an edge case: on a machine with
- * one address there is no choice to make, and the modal must look exactly
- * as it did before any of this existed. A picker that is always on screen
- * would turn a card that answers "what do I type into my phone" into a
- * settings panel.
+ * It used to return [] below two candidates, because the picker sat on the
+ * card unconditionally and one chip would have been noise. Since
+ * 2026-09-28 the whole thing lives behind `not connecting?`, so there is
+ * nothing to hide from and the hiding rule went with it.
  *
  * Why a picker is needed at all, when the ranking is correct: his router (a
  * Bell Home Hub 3000) isolates wireless clients. His Mac and his iPhone are
@@ -45,12 +68,16 @@ export interface PhoneRemoteAddressOption {
  * `python3 -m http.server` on another port is just as unreachable. No
  * ranking can know that. He can, and Tailscale is his way across. */
 export function phoneRemoteAddressOptions(status: PhoneRemoteStatus): PhoneRemoteAddressOption[] {
-  if (status.candidates.length < 2) return []
-  return status.candidates.map((candidate) => ({
-    address: candidate.address,
-    label: `${candidate.interfaceName} ${candidate.address}`,
-    selected: candidate.address === status.lanAddress
-  }))
+  return status.candidates.map((candidate) => {
+    const { label, note } = KIND_LABELS[candidate.kind]
+    return {
+      address: candidate.address,
+      label,
+      detail: `${candidate.interfaceName} · ${candidate.address}`,
+      note,
+      selected: candidate.address === status.lanAddress
+    }
+  })
 }
 
 export interface PhoneRemoteModalView {
