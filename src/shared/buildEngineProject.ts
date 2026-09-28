@@ -360,6 +360,33 @@ export type StretchResolver = (path: string, ratio: number) => Promise<Stretched
 // Promise.all) so a genuinely large project doesn't spawn hundreds of
 // rubberband subprocesses at once and thrash CPU/disk contention instead
 // of actually finishing faster.
+/** The tempo ratio a stem needs to sit in a project, measured from the
+ * audio rather than from anything declared.
+ *
+ * Extracted 2026-09-28 so radio's prefetch can warm the SAME stretch this
+ * file will later ask for. The stretch cache is keyed on (path, ratio), so
+ * a prefetch computing the ratio even slightly differently warms a file
+ * nobody wants and leaves the real one to be rendered at commit time --
+ * which is the bug it was meant to fix. One function, one formula.
+ *
+ * Returns 1 -- "do not stretch" -- for anything it cannot measure, rather
+ * than dividing by zero and poisoning a cache key with NaN or Infinity.
+ *
+ * The oneShot and stretch-off cases are deliberately NOT handled here:
+ * they are decisions about whether to stretch at all, and they live with
+ * the caller that knows about rifffs and project state. */
+export function stretchRatioForStem(durationSec: number, barLength: number, bpm: number): number {
+  if (!(durationSec > 0) || !(barLength > 0) || !(bpm > 0)) return 1
+  const secPerBarAtProjectTempo = (60 / bpm) * 4
+  const stemNativeSecPerBar = durationSec / barLength
+  const ratio = stemNativeSecPerBar / secPerBarAtProjectTempo
+  return Number.isFinite(ratio) && ratio > 0 ? ratio : 1
+}
+
+/** How far from 1 a ratio has to be before it is worth rendering at all.
+ * Shared so the prefetch skips exactly what the build would skip. */
+export const STRETCH_RATIO_EPSILON = 0.001
+
 const STRETCH_RESOLUTION_CONCURRENCY = 8
 
 /** Runs `fn` over every item in `items`, at most `limit` calls in flight at
@@ -436,14 +463,14 @@ export async function buildEngineProject(
     // been recorded at a different native tempo than the riff's own
     // declared bpm and were being stretched by the wrong ratio.
     const stretchOn = state.stretch[rifff.groupId] ?? true
-    const secPerBarAtProjectTempo = (60 / state.bpm) * 4
-    const stemNativeSecPerBar = stem.durationSec / stem.barLength
     // A one-shot's own durationSec/barLength are cosmetic (see Stem's own
     // doc comment) -- computing a ratio from them here would be
     // meaningless and would wrongly trigger a real tempo-stretch resolve
     // call for every one-shot. Always ratio 1 (native path, no resolve)
     // regardless of stretchOn/project bpm.
-    return stem.oneShot ? 1 : stretchOn ? stemNativeSecPerBar / secPerBarAtProjectTempo : 1
+    return stem.oneShot || !stretchOn
+      ? 1
+      : stretchRatioForStem(stem.durationSec, stem.barLength, state.bpm)
   }
 
   // Pass 1 (synchronous, no I/O): gather every stem that actually needs a

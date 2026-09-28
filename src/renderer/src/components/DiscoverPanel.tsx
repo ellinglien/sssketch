@@ -85,7 +85,11 @@ import {
 import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
-import { buildEngineProject } from '@shared/buildEngineProject'
+import {
+  buildEngineProject,
+  stretchRatioForStem,
+  STRETCH_RATIO_EPSILON
+} from '@shared/buildEngineProject'
 import { initialState, type AppState } from '../state/store'
 import type { StemAutomation } from '@shared/toolkit'
 import { scheduleLiveParamSync } from './liveParamSync'
@@ -471,6 +475,17 @@ export function DiscoverPanel({
   // state, so the fields-based helper is the right fit here.
   const playedBarsState = useAppSelector((s) => s.playedBars)
   const bpm = useAppSelector((s) => s.bpm)
+
+  // Same reason, for the same caller: armRadioPick warms a stem's stretch
+  // a whole interval before it is needed, and the stretch cache is keyed
+  // on (path, ratio). A stale bpm there would compute a ratio nobody asks
+  // for later, warm the wrong file, and leave the real render to happen at
+  // commit time -- which is the exact bug the prefetch exists to fix,
+  // reintroduced silently.
+  const bpmRef = useRef<number>(bpm)
+  useEffect(() => {
+    bpmRef.current = bpm
+  }, [bpm])
   // Purely cosmetic (a border highlight while an external file is
   // dragged over the panel, see handleExternalFileDrop's own doc
   // comment below) -- never read by anything else.
@@ -2482,7 +2497,38 @@ export function DiscoverPanel({
     // hiccup, since-deleted riff) deletes its own cache entry, the slot
     // keeps its previous stem, and radio simply tries again at the next
     // boundary. Same soft degradation every other Discover path takes.
-    void resolveCandidateStem(pick.candidate)
+    //
+    // Then warm the STRETCH, which is the half that was missing. Reported
+    // 2026-09-28: "the transitions are a bit delayed... the actual audio
+    // doesn't always start on the loop point, it takes a second to start",
+    // and then, correctly, "pre-load?".
+    //
+    // resolveCandidateStem only downloads. The tempo-stretch happens inside
+    // buildEngineProject, which does not run until the change is committed
+    // -- so for any stem not recorded at this project's tempo, a rubberband
+    // subprocess was spawning AFTER the boundary had already passed. The UI
+    // updated from state immediately and the audio waited on a render,
+    // which is exactly the split he described.
+    //
+    // renderStretched is content-keyed on (path, ratio), so doing it here
+    // means buildEngineProject finds a hit instead of a job. The ratio MUST
+    // be the one it will compute -- a different one warms a file nobody
+    // wants and leaves the real render for commit time -- which is why
+    // stretchRatioForStem is imported rather than written out again.
+    //
+    // A whole interval of lead time, so this is deliberately not awaited by
+    // the caller; a failure leaves the cache cold and costs exactly what
+    // today costs.
+    void resolveCandidateStem(pick.candidate).then((stem) => {
+      if (stem === null || !radioOnRef.current) return
+      // The preview always stretches (previewState sets stretch true for
+      // its one rifff) and a Discover candidate is never a one-shot, so
+      // the two "don't stretch at all" cases buildEngineProject handles
+      // cannot arise here.
+      const ratio = stretchRatioForStem(stem.durationSec, stem.barLength, bpmRef.current)
+      if (Math.abs(ratio - 1) < STRETCH_RATIO_EPSILON) return
+      void window.rifffApi.renderStretched(stem.path, ratio)
+    })
     radioPendingRef.current = { slotId, pick }
   }
 
