@@ -105,6 +105,60 @@ describe('listLibraryScanTargets', () => {
     await listLibraryScanTargets([{ jamCID: 'jam1', dbForJam: db }], () => true)
     expect(interleaved).toBe(true)
   })
+
+  it('yields on an elapsed-time budget, not a row count, so slow stem checks cannot hold the process', async () => {
+    // The yield policy was "every 200 stems" until 2026-09-28, which is a
+    // guess about how long 200 stems take -- right only on the machine
+    // that made it. Replayed against Elling's own library (425,813 cached
+    // pairs, an external archive on a USB/ExFAT volume) it gave a p50 of
+    // 0.26ms and a max slice of 102ms: mostly yielding far too eagerly,
+    // and occasionally not nearly eagerly enough. A budget in milliseconds
+    // bounds the slice on hardware this code has never seen; the same
+    // replay measured a 9.8ms max afterwards, with 15x fewer yields.
+    //
+    // Only Date is faked -- yieldToEventLoop's own setImmediate has to
+    // stay real, since a real macrotask interleaving is exactly what is
+    // being asserted.
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      const db = freshDb()
+      // Twenty stems: far FEWER than the old 200-row batch, so the old
+      // policy would not have yielded inside the stem loop even once, and
+      // `firstInterleaveAtStem` below would stay empty.
+      for (let i = 0; i < 20; i++) {
+        seedRiff(db, `r${i}`, 'jam1', [`s${i}`])
+      }
+
+      let interleaved = false
+      setImmediate(() => {
+        interleaved = true
+      })
+
+      // 3ms per existence check -- a slow volume, in other words. The 8ms
+      // budget is therefore spent after three of them.
+      const firstInterleaveAtStem: number[] = []
+      let stemsChecked = 0
+      const slowExists = (): boolean => {
+        stemsChecked += 1
+        if (interleaved && firstInterleaveAtStem.length === 0) {
+          firstInterleaveAtStem.push(stemsChecked)
+        }
+        vi.advanceTimersByTime(3)
+        return true
+      }
+
+      await listLibraryScanTargets([{ jamCID: 'jam1', dbForJam: db }], slowExists)
+
+      expect(stemsChecked).toBe(20)
+      // It yielded partway through the stems, not only at the end of the
+      // page -- and early, within the first handful, because that is when
+      // the budget actually ran out.
+      expect(firstInterleaveAtStem).toHaveLength(1)
+      expect(firstInterleaveAtStem[0]).toBeLessThanOrEqual(8)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })
 
 describe('listLibraryScanTargets beyond the eight slot columns', () => {

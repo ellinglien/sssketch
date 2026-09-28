@@ -39,14 +39,33 @@ interface RiffStemColumnsRow {
 // also owns every other ipcMain.handle callback, so nothing else (menus,
 // other IPC calls, "new project"'s own generate-default-project-name) could
 // run until the whole enumeration finished. Yielding back to the event loop
-// every YIELD_EVERY stems (a plain setImmediate, not a real async
-// filesystem call -- existsSync itself stays synchronous, cheap enough per
-// call that batching the YIELD is what actually matters, not making each
-// check async) lets queued IPC interleave instead of piling up behind one
-// multi-second-to-tens-of-seconds call. Total wall-clock time for the scan
-// itself is essentially unchanged; what changes is that the app stays
-// responsive to everything else while it runs.
-const YIELD_EVERY = 200
+// (a plain setImmediate, not a real async filesystem call) lets queued IPC
+// interleave instead of piling up behind one multi-second call. Total
+// wall-clock time for the scan itself is essentially unchanged; what
+// changes is that the app stays responsive to everything else while it
+// runs.
+//
+// A BUDGET IN MILLISECONDS, not a row count (2026-09-28). It was every 200
+// stems, which is a guess about how long 200 stems take -- and the guess is
+// only right on the machine it was made on. Replayed against Elling's own
+// library (425,813 cached pairs across his own warehouse and a 372k-riff
+// external archive on a USB/ExFAT volume), the count-based version gave a
+// fine median and a bad tail:
+//
+//   p50 0.27ms   p90 0.33-0.61ms   p99 8-67ms   max 119ms / 626ms
+//
+// -- 2,100 yields, almost all of them far too early to be worth the
+// interleaving, and two dozen slices long enough to be felt by anything
+// waiting on the main process (which, during radio, is the engine
+// load-project for a change that is supposed to land on a downbeat). A
+// clock bounds the slice on any hardware; a row count only bounds it on
+// the developer's.
+//
+// What this does NOT fix, and cannot: one `readdirSync` of a large shard
+// folder on that USB volume is a single uninterruptible 626ms, and no
+// yield policy can subdivide one syscall. That needs an async listing and
+// is deliberately left alone here.
+const YIELD_SLICE_BUDGET_MS = 8
 
 // Rows per keyset page when walking a db's whole Riffs table -- see
 // listLibraryScanTargets.
@@ -111,20 +130,33 @@ export async function listLibraryScanTargets(
 ): Promise<LibraryScanTarget[]> {
   const seen = new Set<string>()
   const out: LibraryScanTarget[] = []
-  let sinceYield = 0
+  let sliceStart = Date.now()
 
   // Existence check per stem, in the order the pairs are met -- the first
   // allowed pair for a StemCID decides its path (seen before exists, as
-  // always). True every YIELD_EVERY stems: the caller yields then.
+  // always). True once this slice has used its budget: the caller yields
+  // then.
   function consider(stemCID: string, jamCID: string): boolean {
     if (seen.has(stemCID)) return false
     seen.add(stemCID)
     const path = resolveStemPath(jamCID, stemCID)
     if (existsFn(path)) out.push({ key: stemCID, path })
-    sinceYield += 1
-    if (sinceYield < YIELD_EVERY) return false
-    sinceYield = 0
-    return true
+    // One Date.now() per considered stem. Measured at 38ms across 851,626
+    // calls -- under 2% of the walk it is bounding, which is a fair price
+    // for a bound that holds on hardware this code has never seen.
+    return Date.now() - sliceStart >= YIELD_SLICE_BUDGET_MS
+  }
+
+  /** Hands the main process back and starts a fresh slice.
+   *
+   * The reset is AFTER the await on purpose: a yield is when everything
+   * else queued behind this walk gets to run, and that time is not this
+   * walk's budget to have spent. Resetting before would make the next
+   * slice start already over budget on a busy process and yield after a
+   * single stem. */
+  async function yieldSlice(): Promise<void> {
+    await yieldToEventLoop()
+    sliceStart = Date.now()
   }
 
   // One ordered, paged pass over each DB's Riffs table, filtering to the
@@ -157,7 +189,7 @@ export async function listLibraryScanTargets(
       countWork('scan-targets.cached-pairs', cached.length)
       for (const pair of cached) {
         if (!allowedJamCIDs.has(pair.jamCID)) continue
-        if (consider(pair.stemCID, pair.jamCID)) await yieldToEventLoop()
+        if (consider(pair.stemCID, pair.jamCID)) await yieldSlice()
       }
       continue
     }
@@ -194,10 +226,15 @@ export async function listLibraryScanTargets(
           columnStemSlots(riff as unknown as Record<string, unknown>),
           extras.get(riff.RiffCID) ?? []
         )) {
-          if (consider(stemCID, riff.OwnerJamCID)) await yieldToEventLoop()
+          if (consider(stemCID, riff.OwnerJamCID)) await yieldSlice()
         }
       }
-      await yieldToEventLoop()
+      // The page's own SQL fetch is real work too, and it happens outside
+      // `consider` where the budget is measured -- so this end-of-page
+      // yield stays unconditional, and goes through yieldSlice so the
+      // fetch that follows starts a fresh slice rather than inheriting a
+      // spent one.
+      await yieldSlice()
     }
   }
   return out
