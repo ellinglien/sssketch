@@ -556,8 +556,8 @@ const api = {
   riffLibraryIsOwn: (): Promise<boolean> => ipcRenderer.invoke('riff-library-is-own'),
   setRiffLibraryRoot: (newRoot: string): Promise<void> =>
     ipcRenderer.invoke('riff-library-set-root', newRoot),
-  riffLibraryListJams: (filterText: string): Promise<RiffLibraryJam[]> =>
-    ipcRenderer.invoke('riff-library-list-jams', filterText),
+  riffLibraryListJams: (filterText: string, targetUser?: string): Promise<RiffLibraryJam[]> =>
+    ipcRenderer.invoke('riff-library-list-jams', filterText, targetUser),
   riffLibraryListRiffs: (
     jamCID: string,
     filters: {

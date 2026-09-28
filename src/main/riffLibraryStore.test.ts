@@ -22,6 +22,7 @@ import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import { writeRiffDetail } from './riffLibraryWriter'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { stemDownloadUrl } from '@shared/riffLibraryTypes'
+import type { RiffLibraryJam } from '@shared/riffLibraryTypes'
 import { DEFAULT_SESSION_RETRY_ATTEMPTS } from '@shared/stemAvailability'
 import { CACHE_CHANGE_CHECK_INTERVAL_MS } from './tableChangeSignal'
 
@@ -374,6 +375,134 @@ describe('listJams', () => {
   it('returns an empty array when the warehouse is unavailable, rather than throwing', () => {
     setRiffLibraryRootForTests('/no/such/path')
     expect(listJams('')).toEqual([])
+  })
+})
+
+describe('listJams authorship counts', () => {
+  let root: string
+
+  /** The seeded fixture (jam-techno and jam-ambient, all three riffs by
+   * 'elling'; jam-empty with none) plus the two cases that make the
+   * counts worth having: a jam that is definitely somebody else's, and a
+   * jam synced without any author recorded -- which is what EVERY
+   * privately-synced jam looks like in sssketch's own warehouse. */
+  function seedMixedAuthorship(root: string): void {
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.exec(`
+      INSERT INTO Jams (JamCID, PublicName) VALUES
+        ('jam-theirs', 'Someone Elses Jam'),
+        ('jam-unattributed', 'Synced Without Authors');
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName) VALUES
+        ('riff-t1', 'jam-theirs', 900, 120, 8, 'someoneelse'),
+        ('riff-t2', 'jam-theirs', 950, 120, 8, 'anotherperson'),
+        ('riff-u1', 'jam-unattributed', 800, 100, 8, ''),
+        ('riff-u2', 'jam-unattributed', 850, 100, 8, NULL);
+    `)
+    db.close()
+  }
+
+  function jamsByCID(targetUser?: string): Record<string, RiffLibraryJam> {
+    return Object.fromEntries(listJams('', targetUser).map((j) => [j.jamCID, j]))
+  }
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedMixedAuthorship(root)
+    setRiffLibraryRootForTests(root)
+  })
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true })
+    setRiffLibraryRootForTests(null)
+  })
+
+  it('attaches no counts at all when no username was asked about', () => {
+    expect(jamsByCID()['jam-techno']).toEqual({
+      jamCID: 'jam-techno',
+      name: 'Techno Jam',
+      lastRiffTime: 2000
+    })
+  })
+
+  it('counts the named user’s own riffs per jam', () => {
+    const jams = jamsByCID('elling')
+    expect(jams['jam-techno'].ownRiffCount).toBe(2)
+    expect(jams['jam-ambient'].ownRiffCount).toBe(1)
+  })
+
+  it('reports zero, with authorship fully known, for a jam that is somebody else’s', () => {
+    expect(jamsByCID('elling')['jam-theirs']).toMatchObject({
+      ownRiffCount: 0,
+      unknownAuthorRiffCount: 0
+    })
+  })
+
+  it('reports the unattributed riffs of a jam synced without any author, so a zero there proves nothing', () => {
+    expect(jamsByCID('elling')['jam-unattributed']).toMatchObject({
+      ownRiffCount: 0,
+      unknownAuthorRiffCount: 2
+    })
+  })
+
+  it('leaves a jam with no riffs at all uncounted rather than zeroed -- nothing synced yet is not evidence he was never in it', () => {
+    const empty = jamsByCID('elling')['jam-empty']
+    expect(empty.ownRiffCount).toBeUndefined()
+    expect(empty.unknownAuthorRiffCount).toBeUndefined()
+  })
+
+  it('counts a different username independently of one already asked about', () => {
+    expect(jamsByCID('elling')['jam-theirs'].ownRiffCount).toBe(0)
+    expect(jamsByCID('someoneelse')['jam-theirs'].ownRiffCount).toBe(1)
+  })
+
+  it('a blank username is treated as no username asked about, not as a search for the unattributed', () => {
+    expect(jamsByCID('   ')['jam-unattributed'].ownRiffCount).toBeUndefined()
+  })
+
+  // The counts do not depend on the jam-name filter text, so typing in
+  // "filter jams..." must not re-run them against a removable drive --
+  // they ride the same Riffs change signal listJamsWithDb does.
+  describe('caching', () => {
+    function insertRiffDirectly(riffCID: string, jamCID: string, userName: string): void {
+      const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+      db.prepare(
+        `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName)
+         VALUES (?, ?, 3000, 130, 8, ?)`
+      ).run(riffCID, jamCID, userName)
+      db.close()
+    }
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('serves the counts it already has inside the change-check interval, without noticing new riffs', () => {
+      expect(jamsByCID('elling')['jam-techno'].ownRiffCount).toBe(2)
+      insertRiffDirectly('riff-4', 'jam-techno', 'elling')
+      expect(jamsByCID('elling')['jam-techno'].ownRiffCount).toBe(2)
+    })
+
+    it('recounts past the interval once his riffs really have changed', () => {
+      vi.useFakeTimers()
+      expect(jamsByCID('elling')['jam-techno'].ownRiffCount).toBe(2)
+      insertRiffDirectly('riff-4', 'jam-techno', 'elling')
+      vi.setSystemTime(Date.now() + CACHE_CHANGE_CHECK_INTERVAL_MS + 1_000)
+      expect(jamsByCID('elling')['jam-techno'].ownRiffCount).toBe(3)
+    })
+
+    it('counts follow the configured archive when the root is switched', () => {
+      expect(jamsByCID('elling')['jam-techno'].ownRiffCount).toBe(2)
+      const other = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-other-'))
+      try {
+        createSeededFixtureWarehouse(other)
+        insertRiffDirectly('ignored', 'jam-ambient', 'elling') // stays in the OLD archive
+        setRiffLibraryRootForTests(other)
+        expect(jamsByCID('elling')['jam-ambient'].ownRiffCount).toBe(1)
+      } finally {
+        rmSync(other, { recursive: true, force: true })
+      }
+    })
   })
 })
 

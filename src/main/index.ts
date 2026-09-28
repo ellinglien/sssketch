@@ -701,7 +701,13 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('riff-library-set-root', (_event, newRoot: string) => setRiffLibraryRoot(newRoot))
 
-  ipcMain.handle('riff-library-list-jams', (_event, filterText: string) => listJams(filterText))
+  ipcMain.handle(
+    'riff-library-list-jams',
+    // targetUser is the renderer's own "your username" setting -- passing
+    // it asks for each jam's authorship counts (jamOwnership.ts), which is
+    // what the sidebar's ordering and its "only my jams" filter run on.
+    (_event, filterText: string, targetUser?: string) => listJams(filterText, targetUser)
+  )
 
   ipcMain.handle('riff-library-list-riffs', (_event, jamCID: string, filters: RiffFilters) =>
     listRiffs(jamCID, filters)

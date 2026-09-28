@@ -176,6 +176,10 @@ function closeRiffLibraryDb(): void {
   cachedDb?.close()
   cachedDb = null
   cachedJamsWithDb = null
+  // Keyed by the Database object itself, so a new root can't collide
+  // with the old archive's counts -- but the closed handle would sit in
+  // this map forever if nothing dropped it.
+  jamOwnershipCache.clear()
 }
 
 export function riffLibraryAvailable(): boolean {
@@ -256,33 +260,151 @@ function dbForJam(jamCID: string): Database.Database | null {
     : getRiffLibraryDb()
 }
 
-function queryJamsFromDb(db: Database.Database, filterText: string): RiffLibraryJam[] {
+/** riffCount rides along on the same GROUP BY that already computes
+ * lastRiffTime, so it costs nothing extra -- attachJamOwnership below
+ * needs it to tell "no riffs by him" apart from "no riffs at all". Not
+ * part of RiffLibraryJam; stripped before the rows leave this module. */
+type JamRow = RiffLibraryJam & { riffCount: number }
+
+function queryJamsFromDb(db: Database.Database, filterText: string): JamRow[] {
   return db
     .prepare(
-      `SELECT j.JamCID as jamCID, j.PublicName as name, COALESCE(MAX(r.CreationTime), 0) as lastRiffTime
+      `SELECT j.JamCID as jamCID, j.PublicName as name, COALESCE(MAX(r.CreationTime), 0) as lastRiffTime,
+              COUNT(r.RiffCID) as riffCount
        FROM Jams j
        LEFT JOIN Riffs r ON r.OwnerJamCID = j.JamCID
        WHERE j.PublicName LIKE ?
        GROUP BY j.JamCID
        ORDER BY lastRiffTime DESC`
     )
-    .all(`%${filterText}%`) as RiffLibraryJam[]
+    .all(`%${filterText}%`) as JamRow[]
 }
 
-export function listJams(filterText: string): RiffLibraryJam[] {
+/** Per-jam authorship counts for one db: how many riffs each jam has by
+ * `targetUser`, and how many have no author recorded at all. Two grouped
+ * queries for the whole library -- never one per jam, which on 5,056 jams
+ * would be 10,112 round trips.
+ *
+ * Both hit the Riffs(UserName) index directly rather than scanning:
+ * measured 2026-09-28 against Elling's real external archive (372,319
+ * riffs, 541MB, USB/ExFAT), the pair takes 20 ms warm. The equivalent
+ * single query with a CASE-based authored count planned as a full table
+ * scan (SCAN Riffs USING INDEX Riff_IndexOwner2Ver) and took 100 ms, so
+ * the split into two index seeks is deliberate -- don't "tidy" it back
+ * into one.
+ *
+ * .all(), never .iterate() -- see the SQLite rule in CLAUDE.md. */
+function queryJamOwnership(
+  db: Database.Database,
+  targetUser: string
+): Map<string, { ownRiffCount: number; unknownAuthorRiffCount: number }> {
+  const counts = new Map<string, { ownRiffCount: number; unknownAuthorRiffCount: number }>()
+  const bump = (
+    jamCID: string,
+    field: 'ownRiffCount' | 'unknownAuthorRiffCount',
+    n: number
+  ): void => {
+    const entry = counts.get(jamCID) ?? { ownRiffCount: 0, unknownAuthorRiffCount: 0 }
+    entry[field] = n
+    counts.set(jamCID, entry)
+  }
+  const own = db
+    .prepare(
+      `SELECT OwnerJamCID as jamCID, COUNT(*) as n FROM Riffs WHERE UserName = ? GROUP BY OwnerJamCID`
+    )
+    .all(targetUser) as { jamCID: string; n: number }[]
+  for (const row of own) bump(row.jamCID, 'ownRiffCount', row.n)
+  const unknown = db
+    .prepare(
+      `SELECT OwnerJamCID as jamCID, COUNT(*) as n FROM Riffs
+       WHERE UserName IS NULL OR UserName = '' GROUP BY OwnerJamCID`
+    )
+    .all() as { jamCID: string; n: number }[]
+  for (const row of unknown) bump(row.jamCID, 'unknownAuthorRiffCount', row.n)
+  return counts
+}
+
+// Kept until the Riffs table it was read from actually moves, exactly
+// like cachedJamsWithDb below -- the counts don't depend on the jam-name
+// filter text, so without this every keystroke in "filter jams..." would
+// re-run both queries against a removable drive. Keyed by db and then by
+// username, since switching either has to produce different numbers.
+// Cleared wholesale by closeRiffLibraryDb, which is what a change of
+// archive root goes through and which no signal check could see.
+const jamOwnershipCache = new Map<
+  Database.Database,
+  Map<string, { counts: ReturnType<typeof queryJamOwnership>; riffsState: ScanCacheState }>
+>()
+
+function cachedJamOwnership(
+  db: Database.Database,
+  targetUser: string
+): ReturnType<typeof queryJamOwnership> {
+  const perUser = jamOwnershipCache.get(db) ?? new Map()
+  jamOwnershipCache.set(db, perUser)
+  const hit = perUser.get(targetUser)
+  if (hit && isScanCacheCurrent(db, 'Riffs', hit.riffsState)) return hit.counts
+  // Signal read BEFORE the queries, so a write landing between the two
+  // makes the cache look stale next call rather than being missed.
+  const riffsState = newScanCacheState(readTableSignal(db, 'Riffs'))
+  const counts = queryJamOwnership(db, targetUser)
+  perUser.set(targetUser, { counts, riffsState })
+  return counts
+}
+
+/** Attaches jamOwnership.ts's two count fields to rows read from `db`.
+ * A jam with no synced riffs at all is left WITHOUT counts rather than
+ * given zeroes: "nothing here yet" is not evidence that he never played
+ * in it, and a zeroed jam is one the sidebar filter would hide. */
+function attachJamOwnership(rows: JamRow[], db: Database.Database, targetUser: string): JamRow[] {
+  const counts = cachedJamOwnership(db, targetUser)
+  return rows.map((row) => {
+    if (row.riffCount === 0) return row
+    const entry = counts.get(row.jamCID)
+    return {
+      ...row,
+      ownRiffCount: entry?.ownRiffCount ?? 0,
+      unknownAuthorRiffCount: entry?.unknownAuthorRiffCount ?? 0
+    }
+  })
+}
+
+function stripRiffCount(rows: JamRow[]): RiffLibraryJam[] {
+  return rows.map((row) => {
+    const jam: RiffLibraryJam & { riffCount?: number } = { ...row }
+    delete jam.riffCount
+    return jam
+  })
+}
+
+/** The jams in the configured archive, newest-riff-first.
+ *
+ * `targetUser` is opt-in: pass it to get each jam's authorship counts
+ * (jamOwnership.ts) attached, leave it off to skip those queries
+ * entirely. listJamsWithDb below deliberately leaves it off -- it runs on
+ * every Discover roll and has no use for them. */
+export function listJams(filterText: string, targetUser?: string): RiffLibraryJam[] {
   const db = getRiffLibraryDb()
-  const rows = db ? queryJamsFromDb(db, filterText) : []
+  const withCounts = (rows: JamRow[], from: Database.Database): JamRow[] =>
+    targetUser && targetUser.trim() !== ''
+      ? attachJamOwnership(rows, from, targetUser.trim())
+      : rows
+  const rows = db ? withCounts(queryJamsFromDb(db, filterText), db) : []
   // Shared Feed always lives in sssketch's own database regardless of
   // which root is configured for browsing (see dbForJam) -- when that's
   // NOT the currently active root, merge its own real Jams row(s) in
   // separately, so "Shared Feed" still shows its real lastRiffTime instead
   // of silently reading as never-synced just because browsing is currently
   // pointed at an external archive.
-  if (riffLibraryRootPath() === ownRiffLibraryRoot()) return rows
-  const ownRows = queryJamsFromDb(openOwnRiffLibraryDb(), filterText).filter(
-    (j) => j.jamCID.startsWith('shared:') || j.jamCID === DISCOVERED_JAM_CID
+  if (riffLibraryRootPath() === ownRiffLibraryRoot()) return stripRiffCount(rows)
+  const ownDb = openOwnRiffLibraryDb()
+  const ownRows = withCounts(
+    queryJamsFromDb(ownDb, filterText).filter(
+      (j) => j.jamCID.startsWith('shared:') || j.jamCID === DISCOVERED_JAM_CID
+    ),
+    ownDb
   )
-  return [...rows, ...ownRows].sort((a, b) => b.lastRiffTime - a.lastRiffTime)
+  return stripRiffCount([...rows, ...ownRows].sort((a, b) => b.lastRiffTime - a.lastRiffTime))
 }
 
 // Cache for listJamsWithDb, below -- direct live report: even after
