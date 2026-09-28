@@ -1,4 +1,5 @@
 import type { SoundType } from './types'
+import type { JamOwnership } from './jamOwnership'
 
 /** Default riff-library username, used only as the initial value of the
  * user-editable "your username" setting in LibraryBrowser (persisted to
@@ -7,7 +8,11 @@ import type { SoundType } from './types'
  * this app set their own in the riff library browser's filter bar. */
 export const RIFF_LIBRARY_USERNAME = 'elling'
 
-export interface RiffLibraryJam {
+/** Extends JamOwnership, whose two count fields are attached only when
+ * listJams was asked for them (a username to count against) and only for
+ * jams that really live in a readable archive -- see jamOwnership.ts for
+ * why absent, zero and unknown are three different things here. */
+export interface RiffLibraryJam extends JamOwnership {
   jamCID: string
   name: string
   lastRiffTime: number // unix seconds
