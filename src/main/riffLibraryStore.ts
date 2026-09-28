@@ -21,6 +21,12 @@ import {
   shouldAttemptStemDownload
 } from './stemAvailability'
 import { countWork } from './workCounters'
+import {
+  isScanCacheCurrent,
+  newScanCacheState,
+  readTableSignal,
+  type ScanCacheState
+} from './tableChangeSignal'
 
 const RIFF_LIBRARY_PREFS_FILENAME = 'riffLibraryPrefs.json'
 
@@ -279,7 +285,7 @@ export function listJams(filterText: string): RiffLibraryJam[] {
   return [...rows, ...ownRows].sort((a, b) => b.lastRiffTime - a.lastRiffTime)
 }
 
-// TTL cache for listJamsWithDb, below -- direct live report: even after
+// Cache for listJamsWithDb, below -- direct live report: even after
 // discoverCandidates.ts's own perf fixes (a same-day series of real,
 // measured bottlenecks), rolling still took several real seconds every
 // time, and the remaining cost traced back to THIS function -- a real
@@ -288,17 +294,56 @@ export function listJams(filterText: string): RiffLibraryJam[] {
 // of get-discover-candidates/get-random-discover-candidate/
 // get-discover-library-scan-targets calls this fresh, uncached, every
 // time -- see main/index.ts's own call sites, the ONLY callers of this
-// function in the whole codebase, all Discover-related). Confirmed live:
-// 53ms-1.4s per call on a real 5,057-jam library, non-trivial and fully
-// avoidable, since the real jam list doesn't change on human timescales
-// (LORE sync isn't running every second). Invalidated by
-// closeRiffLibraryDb (above) -- switching riff archive roots must never
-// serve a stale jam list from the PREVIOUS archive.
-const JAMS_WITH_DB_CACHE_TTL_MS = 60_000
-let cachedJamsWithDb: {
+// function in the whole codebase, all Discover-related).
+//
+// Was a plain 60-second TTL. Re-measured 2026-09-28 against Elling's own
+// archive (5,056 jams, 372,319 riffs, a 541MB warehouse.db3 on a USB/ExFAT
+// volume) after a log showed the SAME call at 0ms, then 1365ms, then 0ms
+// again in one session:
+//
+//   listJams('') run0  1389 ms   (cold OS page cache)
+//   listJams('') run1    41 ms
+//   listJams('') run2    48 ms
+//
+// So the spread was never the query plan (it uses a covering index) -- it
+// was the TTL throwing away a perfectly good answer once a minute and
+// re-reading a big file off a removable volume whose pages macOS does not
+// hold on to. The jam list does not change on human timescales; a LORE
+// sync is not running every second.
+//
+// Now kept until the tables it was built from actually move
+// (tableChangeSignal.ts -- at most one cheap signal query per db+table per
+// CACHE_CHANGE_CHECK_INTERVAL_MS, measured at 1-7ms warm against that same
+// archive). Exactly the treatment background efficiency B3 already gave
+// discoverCandidates.ts's own riff-index and instrument-row caches, which
+// had the same expire-on-a-timer problem.
+//
+// Still invalidated outright by closeRiffLibraryDb (above) -- switching
+// riff archive roots must never serve a stale jam list from the PREVIOUS
+// archive, and a signal check cannot see a change of file.
+interface JamsWithDbCache {
   jams: { jamCID: string; db: Database.Database }[]
-  computedAt: number
-} | null = null
+  /** Every db the list was read from, with the per-table state to check it
+   * against. Jams for the list itself, Riffs because each row's
+   * lastRiffTime is a MAX() over that table and drives the ordering. */
+  sources: { db: Database.Database; jamsState: ScanCacheState; riffsState: ScanCacheState }[]
+}
+let cachedJamsWithDb: JamsWithDbCache | null = null
+
+/** The db connections listJams('') actually reads. MUST track listJams'
+ * own branch directly above -- the configured root always, plus the own db
+ * separately when browsing is pointed somewhere else (that's the branch
+ * that merges Shared Feed / discovered rows back in). */
+function jamListSourceDbs(): Database.Database[] {
+  const dbs: Database.Database[] = []
+  const configured = getRiffLibraryDb()
+  if (configured) dbs.push(configured)
+  if (riffLibraryRootPath() !== ownRiffLibraryRoot()) {
+    const own = openOwnRiffLibraryDb()
+    if (!dbs.includes(own)) dbs.push(own)
+  }
+  return dbs
+}
 
 /** Resolves every currently-synced jam to the db its own Riffs/Stems rows
  * actually live in -- Discover's own library-wide candidate query
@@ -306,16 +351,34 @@ let cachedJamsWithDb: {
  * `dbForJam` above is this module's own established per-jam resolution
  * logic, just not previously exposed outside this file. */
 export function listJamsWithDb(): { jamCID: string; db: Database.Database }[] {
-  if (cachedJamsWithDb && Date.now() - cachedJamsWithDb.computedAt < JAMS_WITH_DB_CACHE_TTL_MS) {
+  if (
+    cachedJamsWithDb &&
+    cachedJamsWithDb.sources.every(
+      ({ db, jamsState, riffsState }) =>
+        isScanCacheCurrent(db, 'Jams', jamsState) && isScanCacheCurrent(db, 'Riffs', riffsState)
+    )
+  ) {
     return cachedJamsWithDb.jams
   }
+  // Read BEFORE the query, so a write landing between the two makes the
+  // cache look stale on the next call rather than being missed entirely.
+  const sources = jamListSourceDbs().map((db) => ({
+    db,
+    jamsState: newScanCacheState(readTableSignal(db, 'Jams')),
+    riffsState: newScanCacheState(readTableSignal(db, 'Riffs'))
+  }))
   const jams = listJams('')
     .map((jam) => {
       const db = dbForJam(jam.jamCID)
       return db ? { jamCID: jam.jamCID, db } : null
     })
     .filter((pair): pair is { jamCID: string; db: Database.Database } => pair !== null)
-  cachedJamsWithDb = { jams, computedAt: Date.now() }
+  // No sources means no readable db at all (an unmounted external drive,
+  // a never-synced warehouse). Caching that would make `every` on an empty
+  // array trivially true and pin an empty jam list forever -- so leave the
+  // cache alone and let the next call, which is cheap precisely because
+  // there is nothing to read, pick the drive up the moment it returns.
+  cachedJamsWithDb = sources.length > 0 ? { jams, sources } : null
   return jams
 }
 

@@ -37,6 +37,12 @@ import {
   saveInstrumentRowsCache
 } from './discoverIndexCache'
 import { getStemClassificationVersion } from './stemClassificationVersion'
+import {
+  isScanCacheCurrent,
+  newScanCacheState,
+  readTableSignal,
+  type ScanCacheState
+} from './tableChangeSignal'
 import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
 import { columnStemSlots, mergeStemSlots } from '@shared/riffStemSlots'
@@ -246,95 +252,11 @@ const RIFF_QUERY_YIELD_EVERY = 20
 // getRiffIndexForDb, below.
 //
 // Background efficiency B3 (2026-09-22): these caches used to expire after
-// this TTL even when nothing had changed, forcing a full rescan every 5
-// minutes. Now they're kept until a cheap change check (readTableSignal,
-// at most once per CACHE_CHANGE_CHECK_INTERVAL_MS) says the table moved.
-// This TTL survives only as the upper bound for changes a row count can't
-// see (an in-place UPDATE, e.g. a skeleton riff filled in by the sync) --
-// exactly as stale as before for those, never rescanned for an idle db.
-const RIFF_INDEX_CACHE_TTL_MS = 5 * 60_000
-
-/** How often a cached riff index / instrument-row list re-checks its source
- * table -- a roll pays for readTableSignal at most this often per db. */
-const CACHE_CHANGE_CHECK_INTERVAL_MS = 30_000
-
-/** A table's cheap change signal: row count + MAX(rowid) (inserts,
- * deletes) and, for in-place updates, the connection's own write count
- * (total_changes) and whether another connection committed (data_version).
- * Measured on Elling's real external archive (2026-09-22, 372k riffs /
- * 367k stems, read-only, rowid tables): MAX(rowid) ~1 ms, the combined
- * query ~7 ms warm. maxRowid/changes/dataVersion are null when the table
- * has no rowid (count alone then). */
-interface TableSignal {
-  count: number
-  maxRowid: number | null
-  changes: number | null
-  dataVersion: number | null
-}
-
-/** When a scan cache was built, when it was last change-checked, and the
- * signal it was built against (null for a db missing the table). */
-interface ScanCacheState {
-  builtAt: number
-  checkedAt: number
-  signal: TableSignal | null
-}
-
-/** The live TableSignal for `table`, or null when it can't be read (a
- * broken/foreign db missing the table -- same "not an error" convention as
- * every other query here). Its text keeps `COUNT(*) AS n FROM <table>` so
- * it reads as the count it mostly is. */
-function readTableSignal(db: Database.Database, table: 'Riffs' | 'Stems'): TableSignal | null {
-  try {
-    const row = db
-      .prepare(
-        `SELECT MAX(rowid) AS maxRowid, total_changes() AS changes,
-                (SELECT data_version FROM pragma_data_version) AS dataVersion,
-                COUNT(*) AS n FROM ${table}`
-      )
-      .get() as { maxRowid: number | null; changes: number; dataVersion: number; n: number }
-    return {
-      count: row.n,
-      maxRowid: row.maxRowid,
-      changes: row.changes,
-      dataVersion: row.dataVersion
-    }
-  } catch {
-    try {
-      const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
-      return { count: row.n, maxRowid: null, changes: null, dataVersion: null }
-    } catch {
-      return null
-    }
-  }
-}
-
-function newScanCacheState(signal: TableSignal | null): ScanCacheState {
-  const now = Date.now()
-  return { builtAt: now, checkedAt: now, signal }
-}
-
-/** Whether a cached scan of `table` is still current -- true without any
- * query inside the check interval; otherwise one readTableSignal. Stale
- * when rows were added/removed (count or MAX(rowid) moved), or when the
- * table was written in place (write counters moved) and the cache is older
- * than RIFF_INDEX_CACHE_TTL_MS. */
-function isScanCacheCurrent(
-  db: Database.Database,
-  table: 'Riffs' | 'Stems',
-  state: ScanCacheState
-): boolean {
-  const now = Date.now()
-  if (now - state.checkedAt < CACHE_CHANGE_CHECK_INTERVAL_MS) return true
-  state.checkedAt = now
-  countWork(`sql:discover.cache-check.${table}`)
-  const live = readTableSignal(db, table)
-  const built = state.signal
-  if (!live || !built) return !live && !built
-  if (live.count !== built.count || live.maxRowid !== built.maxRowid) return false
-  const writtenInPlace = live.changes !== built.changes || live.dataVersion !== built.dataVersion
-  return !(writtenInPlace && now - state.builtAt >= RIFF_INDEX_CACHE_TTL_MS)
-}
+// a plain 5-minute TTL even when nothing had changed, forcing a full
+// rescan on a schedule. Now they're kept until a cheap change check says
+// the table moved -- see tableChangeSignal.ts (readTableSignal /
+// isScanCacheCurrent), which this file introduced and which
+// riffLibraryStore.ts's own jam-list cache now shares.
 
 export interface RiffIndexEntry {
   riffCID: string

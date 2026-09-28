@@ -23,6 +23,7 @@ import { writeRiffDetail } from './riffLibraryWriter'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { stemDownloadUrl } from '@shared/riffLibraryTypes'
 import { DEFAULT_SESSION_RETRY_ATTEMPTS } from '@shared/stemAvailability'
+import { CACHE_CHANGE_CHECK_INTERVAL_MS } from './tableChangeSignal'
 
 let userDataDir: string
 
@@ -1186,37 +1187,99 @@ describe('listJamsWithDb', () => {
   // seconds, tracing back to THIS function -- a real JOIN+GROUP BY+
   // ORDER BY over the whole Jams/Riffs tables, re-run fresh on EVERY
   // single roll (confirmed live: 53ms-1.4s per call on a real 5,057-jam
-  // library). Proves the fix: a second call within the TTL reuses the
-  // cached result, even when new data lands in between.
-  it('reuses a cached result on a second call within the TTL, even if new data would otherwise change it', async () => {
-    // A second listJamsWithDb() call (without the fix) also checks
-    // ownRiffLibraryRoot() (riffLibrarySchema.ts, via listJams's own
-    // "is the configured root the own db?" check) -- needs userDataDir
-    // set for this test specifically, same as the "shared-feed jam"
-    // tests below.
-    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-listjamswithdb-cache-test-'))
-    const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
-    closeOwnRiffLibraryDb()
+  // library).
+  //
+  // The three tests below cover the whole of the cache's contract, which
+  // changed on 2026-09-28 from a 60-second TTL to a change check (see
+  // listJamsWithDb's own doc comment for the measurements): reuse without
+  // any query inside the check interval, reuse ACROSS it when nothing
+  // moved -- the actual fix, since the TTL used to force a real 1.4s
+  // re-read there -- and a genuine rebuild when something did.
+  describe('caching', () => {
+    // A listJamsWithDb() call also reaches ownRiffLibraryRoot()
+    // (riffLibrarySchema.ts, via listJams's own "is the configured root
+    // the own db?" check) -- needs userDataDir set for these tests
+    // specifically, same as the "shared-feed jam" tests below.
+    beforeEach(async () => {
+      userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-listjamswithdb-cache-test-'))
+      const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+      closeOwnRiffLibraryDb()
+      root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+      createSeededFixtureWarehouse(root)
+      setRiffLibraryRootForTests(root)
+    })
 
-    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
-    createSeededFixtureWarehouse(root)
-    setRiffLibraryRootForTests(root)
+    afterEach(async () => {
+      vi.useRealTimers()
+      const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+      closeOwnRiffLibraryDb()
+      setRiffLibraryRootForTests(null)
+      rmSync(userDataDir, { recursive: true, force: true })
+    })
 
-    const first = listJamsWithDb()
-    expect(first.map((p) => p.jamCID).sort()).toEqual(['jam-ambient', 'jam-empty', 'jam-techno'])
+    /** A new jam written straight into the configured warehouse file,
+     * behind the cache's back -- the thing a change check has to notice
+     * and a bare reuse must not. */
+    function insertJamDirectly(jamCID: string): void {
+      const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+      db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES (?, 'Brand New')`).run(jamCID)
+      db.close()
+    }
 
-    // A new jam lands directly in the warehouse file after the first call.
-    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
-    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam-new', 'Brand New')`).run()
-    db.close()
+    it('reuses the cached result inside the change-check interval, without noticing new data', () => {
+      const first = listJamsWithDb()
+      expect(first.map((p) => p.jamCID).sort()).toEqual(['jam-ambient', 'jam-empty', 'jam-techno'])
 
-    const second = listJamsWithDb()
-    // Still the cached (stale) result -- the newly-added jam does not
-    // appear because it landed within the TTL window.
-    expect(second.map((p) => p.jamCID).sort()).toEqual(['jam-ambient', 'jam-empty', 'jam-techno'])
+      insertJamDirectly('jam-new')
 
-    closeOwnRiffLibraryDb()
-    rmSync(userDataDir, { recursive: true, force: true })
+      // Still the cached result: inside the interval the cache is served
+      // without so much as a signal query, so there is nothing to notice
+      // the new jam with. Deliberate -- that cheapness is the point.
+      expect(
+        listJamsWithDb()
+          .map((p) => p.jamCID)
+          .sort()
+      ).toEqual(['jam-ambient', 'jam-empty', 'jam-techno'])
+    })
+
+    it('still reuses the cached result past the check interval when nothing changed', () => {
+      vi.useFakeTimers()
+      const first = listJamsWithDb()
+
+      // Well past BOTH the check interval and the 60-second TTL this
+      // replaced, so the old implementation would certainly have rebuilt
+      // here -- which is what makes this a regression test rather than a
+      // restatement of the new code.
+      vi.setSystemTime(Date.now() + 4 * CACHE_CHANGE_CHECK_INTERVAL_MS)
+      const second = listJamsWithDb()
+
+      // The SAME array object, not merely an equal one -- a rebuild would
+      // produce a fresh array with equal contents, so identity is what
+      // actually distinguishes "reused the cache" from "re-ran the query
+      // and got the same answer." This is the regression the old TTL
+      // caused: it re-read a 541MB warehouse off a USB volume, at a
+      // measured 1389ms, purely because a minute had passed.
+      expect(second).toBe(first)
+      expect(second.map((p) => p.jamCID).sort()).toEqual(['jam-ambient', 'jam-empty', 'jam-techno'])
+    })
+
+    it('rebuilds past the check interval once the jam list really has changed', () => {
+      vi.useFakeTimers()
+      const first = listJamsWithDb()
+      expect(first.map((p) => p.jamCID).sort()).toEqual(['jam-ambient', 'jam-empty', 'jam-techno'])
+
+      insertJamDirectly('jam-new')
+      vi.setSystemTime(Date.now() + CACHE_CHANGE_CHECK_INTERVAL_MS + 1_000)
+
+      // The Jams row count moved, so the signal check reports stale and
+      // the list is genuinely re-read -- staleness is bounded by the check
+      // interval, not held until a root switch.
+      expect(
+        listJamsWithDb()
+          .map((p) => p.jamCID)
+          .sort()
+      ).toEqual(['jam-ambient', 'jam-empty', 'jam-new', 'jam-techno'])
+    })
   })
 
   describe('with a shared-feed jam involved', () => {
