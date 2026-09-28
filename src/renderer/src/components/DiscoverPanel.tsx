@@ -5,6 +5,7 @@ import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { Dial } from './Dial'
 import { DiscoverKindPicker } from './DiscoverKindPicker'
+import { DiscoverRadioMenu } from './DiscoverRadioMenu'
 import { DiscoverReclassifyPicker } from './DiscoverReclassifyPicker'
 import { ROLE_LABELS } from '@shared/autoArrangeLabels'
 import { BracketToggle } from './BracketToggle'
@@ -37,7 +38,7 @@ import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { applyTraitBar } from '@shared/traitBar'
 import {
-  RADIO_PACE_OPTIONS,
+  RADIO_PACE_BARS,
   advanceRadioClock,
   createRadioClock,
   isRadioEligibleSlot,
@@ -46,6 +47,7 @@ import {
   radioGridBars,
   radioStarterKinds,
   type RadioClock,
+  type RadioPace,
   type RadioSettings
 } from '@shared/radioSchedule'
 import {
@@ -897,7 +899,7 @@ export function DiscoverPanel({
     // Gated on radioOnRef as well as the ref itself: a curve must never
     // outlive radio, because it makes that stem's EngineStem.volume inert
     // while it is there (see clearRadioDropOut). Belt and braces over the
-    // clears in toggleRadio and the unmount teardown.
+    // clears in stopRadio and the unmount teardown.
     const stemAutomation: Record<string, StemAutomation> = {}
     const armedDropOut = radioOnRef.current ? radioDropOutRef.current : null
     if (armedDropOut) {
@@ -1197,7 +1199,7 @@ export function DiscoverPanel({
   // Mirrored through an effect, NOT by assigning during render -- this
   // repo's react-hooks/purity rule rejects a render-time ref write, and
   // slotsRef above already establishes the effect form as this file's
-  // pattern. toggleRadio also sets it synchronously on switch-off, so a
+  // pattern. stopRadio also sets it synchronously on switch-off, so a
   // stop takes effect before the next tick rather than a render later.
   const radioOnRef = useRef(false)
   useEffect(() => {
@@ -1232,6 +1234,18 @@ export function DiscoverPanel({
   // re-drawn each time -- that would make one gesture change duration
   // mid-lap.
   const radioDropOutBeatsRef = useRef(2)
+  // An armed COURSE CHANGE: every eligible layer's next pick, already
+  // resolved and warmed, waiting for the next loop top to land together.
+  //
+  // Elling, 2026-09-28: "otherwise changing course should reset the whole
+  // thing. okay to have it be dramatic." A new pace is not a re-tuning of
+  // the running clock -- it is a new section. The clock restarts at once
+  // (so the progress rule says something happened) and the whole unlocked
+  // bed turns over on the next wrap.
+  //
+  // A REF for the same reason radioClockRef is one: written from an event
+  // handler and read from the 30Hz position effect, never rendered.
+  const radioCourseChangeRef = useRef<{ slotId: string; pick: SlotPick }[] | null>(null)
   // Takes the armed drop-out off the stem and rebuilds the preview without
   // it. Called from every path that ends a gesture -- the lap countdown,
   // radio switching off, the panel unmounting.
@@ -1251,6 +1265,16 @@ export function DiscoverPanel({
   // written at most once per position tick, which the panel re-renders on
   // anyway.
   const [radioProgress, setRadioProgress] = useState(0)
+  // Radio's own controls -- same position/dismissal pattern as the slot
+  // row's nearbyMenu and kindMenu. See DiscoverRadioMenu.tsx. Opened by
+  // the radio BUTTON while radio is off (the start prompt) and by the
+  // chevron while it is on (the full menu).
+  const [radioMenu, setRadioMenu] = useState<{ x: number; y: number } | null>(null)
+  const radioMenuButtonRef = useRef<HTMLButtonElement>(null)
+  const radioChevronRef = useRef<HTMLButtonElement>(null)
+  // Stable identity -- same playhead-tick re-render reasoning as
+  // closeNearbyMenu.
+  const closeRadioMenu = useCallback(() => setRadioMenu(null), [])
 
   // Radio's clock. Driven ONLY by the engine's real position stream -- no
   // setInterval anywhere, on purpose: the engine stops its 33ms timer on
@@ -1280,19 +1304,15 @@ export function DiscoverPanel({
         ? Math.max(...resolvedBarLengthsRef.current.values())
         : 0
     if (!(loopBars > 0)) return
-    // WHERE a change may land (2026-09-28). The grid is the CHANGING
-    // slot's own bar length: radio swaps one stem at a time, and the most
-    // musical boundary for a stem changing under three others is its own
-    // cycle, not the longest other stem's. Until this, the boundary was
-    // always the whole loop's wrap, which rounded every drawn interval UP
-    // to a multiple of loopBars -- usually a doubling. Elling, 2026-09-28:
-    // "radio mode seems quite slow to me".
+    // WHERE a change may land -- the menu's `change on` row
+    // (radioSettings.grid, 2026-09-28). It defaults to `loop end`, the
+    // whole loop's wrap; the finer settings let a layer flick over on its
+    // own cycle instead. See DEFAULT_RADIO_GRID's own doc comment for why
+    // the loop top won that argument after listening.
     //
     // The pending pick is what is about to change, so it is the slot whose
-    // cycle matters. No pending pick (radio just started, or nothing was
-    // eligible last time) falls back to the whole loop, which is exactly
-    // the pre-2026-09-28 behaviour.
-    //
+    // cycle `own loop` means. No pending pick (radio just started, or
+    // nothing was eligible last time) falls back to the whole loop.
     const pendingSlotId = radioPendingRef.current?.slotId ?? null
     const slotBars =
       pendingSlotId !== null ? (resolvedBarLengthsRef.current.get(pendingSlotId) ?? null) : null
@@ -1307,6 +1327,36 @@ export function DiscoverPanel({
       const armed = radioDropOutRef.current
       if (armed.lapsLeft <= 1) clearRadioDropOut()
       else radioDropOutRef.current = { ...armed, lapsLeft: armed.lapsLeft - 1 }
+    }
+    // The course change lands HERE and only here -- the top of the loop,
+    // for exactly the reason DEFAULT_RADIO_GRID is `loop end` (687641a):
+    // the transport does not reset for a load-project, so a bed dropped
+    // in mid-loop would start every one of its stems at whatever phase
+    // the transport happened to be at. At the wrap they all start at
+    // their own zero.
+    //
+    // Every pick was made and warmed when the pace chip was pressed, so
+    // this is one batched setSlots -> one render -> one rAF-coalesced
+    // sync -> one load-project. Locked and muted layers were never in the
+    // batch: radioEligibleSlotIds excluded them, and the padlock has to
+    // mean never or it means nothing.
+    if (step.wrapped && radioCourseChangeRef.current !== null) {
+      const batch = radioCourseChangeRef.current
+      radioCourseChangeRef.current = null
+      radioClockRef.current = createRadioClock(
+        nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+        pos
+      )
+      void Promise.resolve().then(() => {
+        if (!radioOnRef.current) return
+        for (const { slotId, pick } of batch) commitSlotPick(slotId, pick)
+        // Nothing "changed last" after a whole-bed turnover, so the
+        // not-the-same-one-twice rule starts clean.
+        radioLastSlotRef.current = null
+        setRadioProgress(0)
+        void armRadioPick()
+      })
+      return
     }
     // Deferred out of the effect body: this repo ERRORS on a synchronous
     // setState inside an effect (react-hooks/set-state-in-effect), and the
@@ -1698,6 +1748,7 @@ export function DiscoverPanel({
       // matters -- nothing can re-arm from a dead panel, and the engine
       // gets a fresh project from whatever claims it next.
       radioDropOutRef.current = null
+      radioCourseChangeRef.current = null
     }
   }, [])
 
@@ -2435,39 +2486,126 @@ export function DiscoverPanel({
     radioPendingRef.current = { slotId, pick }
   }
 
-  /** The radio button. Starting lays down a bed if the panel is empty --
-   * a button that does nothing on a fresh panel is not the thing he asked
-   * for, and four layers is the smallest set that sounds like a band
-   * rather than like a loop. addSlot does its own first roll per slot, so
-   * this is the same four clicks the user would otherwise make. */
-  function toggleRadio(): void {
-    if (radioOn) {
-      radioOnRef.current = false
-      setRadioOn(false)
-      radioClockRef.current = null
-      radioPendingRef.current = null
-      radioLastSlotRef.current = null
-      // A curve left on a stem after radio stops would silently break
-      // that slot's gain dial -- EngineStem.volume is inert while a
-      // volume curve is present (PlaybackEngine.cpp's volumeAutomated
-      // branch). radioOnRef is already false above, so the rebuild this
-      // schedules writes an empty stemAutomation either way.
-      clearRadioDropOut()
-      setRadioProgress(0)
-      return
-    }
+  function stopRadio(): void {
+    radioOnRef.current = false
+    setRadioOn(false)
+    radioClockRef.current = null
+    radioPendingRef.current = null
+    radioLastSlotRef.current = null
+    radioCourseChangeRef.current = null
+    // A curve left on a stem after radio stops would silently break that
+    // slot's gain dial -- EngineStem.volume is inert while a volume curve
+    // is present (PlaybackEngine.cpp's volumeAutomated branch).
+    // radioOnRef is already false above, so the rebuild this schedules
+    // writes an empty stemAutomation either way.
+    clearRadioDropOut()
+    setRadioProgress(0)
+  }
+
+  /** Starts radio at a chosen pace. Elling, 2026-09-28: "the initial
+   * prompt should be slow mid fast so the app knows how to start
+   * everything." -- so the radio button opens DiscoverRadioMenu's `start`
+   * mode and a pace chip lands here. The two things that happen at the
+   * starting moment are now one gesture: the pace configures the clock and
+   * the channel count sizes the bed.
+   *
+   * Lays down a bed if the panel is empty -- a button that does nothing on
+   * a fresh panel is not the thing he asked for, and four layers is the
+   * smallest set that sounds like a band rather than like a loop. addSlot
+   * does its own first roll per slot, so this is the same clicks the user
+   * would otherwise make.
+   *
+   * Takes the window from RADIO_PACE_BARS rather than radioSettings, on
+   * purpose: the menu's own persisting write of {pace, paceBars} is async
+   * and this render's radioSettings prop is still the OLD pace. Reading it
+   * here would start the clock at the pace he just replaced.
+   */
+  function startRadio(pace: RadioPace): void {
     if (slotsRef.current.length === 0) {
       for (const kind of radioStarterKinds(radioSettings.channels)) addSlot([kind])
     }
     radioOnRef.current = true
     radioClockRef.current = createRadioClock(
-      nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+      nextRadioIntervalBarsInWindow(RADIO_PACE_BARS[pace]),
       pos
     )
     radioLastSlotRef.current = null
+    radioCourseChangeRef.current = null
     setRadioProgress(0)
     setRadioOn(true)
     void armRadioPick()
+  }
+
+  /** A pace chip pressed while radio is RUNNING. Elling, 2026-09-28:
+   * "changing course should reset the whole thing. okay to have it be
+   * dramatic."
+   *
+   * So this is not a re-tuning of the running clock. Four things happen:
+   *   - the clock restarts on the new window, immediately, so the progress
+   *     rule under the button visibly says something happened;
+   *   - the pending single pick is dropped, because it belonged to the old
+   *     section;
+   *   - any armed drop-out is cleared, so a half-finished gesture cannot
+   *     survive into the new one as a stuck layer;
+   *   - every eligible layer is re-picked and warmed now, and the whole
+   *     batch lands together on the next loop top (the wrap branch of the
+   *     clock effect).
+   *
+   * LOCKED LAYERS ARE NOT TOUCHED. radioEligibleSlotIds already excludes
+   * them, and that is the point: a padlock that a reset overrides is a
+   * padlock nobody can trust. Muted layers are out for the same reason
+   * they are out of every other radio path -- a change you cannot hear.
+   *
+   * Stepping a bar edge in the menu deliberately does NOT come through
+   * here. A reset per keypress while settling a number would be unusable;
+   * a preset is a course change, a stepper is an adjustment. */
+  function armRadioCourseChange(pace: RadioPace): void {
+    radioClockRef.current = createRadioClock(
+      nextRadioIntervalBarsInWindow(RADIO_PACE_BARS[pace]),
+      pos
+    )
+    setRadioProgress(0)
+    radioPendingRef.current = null
+    radioCourseChangeRef.current = null
+    clearRadioDropOut()
+    void collectRadioCourseChange()
+  }
+
+  /** Picks and WARMS every eligible layer's next stem, then arms the batch.
+   *
+   * The warm is awaited here, unlike armRadioPick's fire-and-forget: a
+   * course change is supposed to land as one moment, and one cold stem
+   * arriving two laps after the others would read as a glitch rather than
+   * a section. Cost of awaiting is that a slow download delays the whole
+   * gesture to a later wrap, which is the right trade -- late together
+   * beats early in pieces.
+   *
+   * No pushUndoSnapshot: radio is performance, not an edit, and that holds
+   * for the dramatic version too. */
+  async function collectRadioCourseChange(): Promise<void> {
+    const eligible = radioEligibleSlotIds()
+    if (eligible.length === 0) {
+      void armRadioPick()
+      return
+    }
+    const picks = await Promise.all(
+      eligible.map(async (id): Promise<{ slotId: string; pick: SlotPick } | null> => {
+        const slot = slotsRef.current.find((s) => s.id === id)
+        if (!slot) return null
+        const pick = await pickForSlot(id, slot.kinds)
+        if (pick === null || pick.candidate === null) return null
+        // A null resolve (network hiccup, since-deleted riff) deletes its
+        // own cache entry; the pick still commits and that one row simply
+        // shows as unresolved, the same soft degradation every other
+        // Discover path takes.
+        await resolveCandidateStem(pick.candidate)
+        return { slotId: id, pick }
+      })
+    )
+    if (!radioOnRef.current) return
+    const ready = picks.filter((p): p is { slotId: string; pick: SlotPick } => p !== null)
+    radioCourseChangeRef.current = ready.length > 0 ? ready : null
+    if (ready.length === 0) void armRadioPick()
   }
 
   // Shared by addToTimeline and addToShelf below -- resolves every
@@ -3076,8 +3214,29 @@ export function DiscoverPanel({
             says the rest. */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
           <button
-            onClick={toggleRadio}
-            data-tooltip="auto reroll"
+            ref={radioMenuButtonRef}
+            onClick={(e) => {
+              // ON -> off is still one press; the button is the stop.
+              if (radioOn) {
+                closeRadioMenu()
+                stopRadio()
+                return
+              }
+              // OFF -> the start prompt. Elling, 2026-09-28: "the initial
+              // prompt should be slow mid fast so the app knows how to
+              // start everything." A pace chip is what actually starts
+              // radio (startRadio below), so this press only opens the
+              // choice -- Escape or a click elsewhere cancels it, which
+              // is why it is a popover and not a dialog with an OK.
+              if (radioMenu) {
+                closeRadioMenu()
+                return
+              }
+              const rect = e.currentTarget.getBoundingClientRect()
+              setRadioMenu({ x: rect.left, y: rect.bottom + 4 })
+            }}
+            aria-expanded={!radioOn && radioMenu !== null}
+            data-tooltip={radioOn ? 'stop radio' : 'start radio'}
             style={{
               fontFamily: 'inherit',
               fontSize: 10,
@@ -3112,26 +3271,52 @@ export function DiscoverPanel({
           </div>
         </div>
         {radioOn && (
-          <div style={{ display: 'flex', gap: 4 }}>
-            {RADIO_PACE_OPTIONS.map((pace) => (
-              <button
-                key={pace}
-                onClick={() => void onRadioSettingsChange({ pace })}
-                style={{
-                  fontFamily: 'inherit',
-                  fontSize: 9,
-                  padding: '4px 8px',
-                  background:
-                    pace === radioSettings.pace ? 'var(--ra-bg-row-active)' : 'transparent',
-                  border: '1px solid var(--ra-border)',
-                  color: pace === radioSettings.pace ? 'var(--ra-text)' : 'var(--ra-text-3)',
-                  cursor: 'pointer'
-                }}
-              >
-                {pace}
-              </button>
-            ))}
-          </div>
+          <button
+            ref={radioChevronRef}
+            onClick={(e) => {
+              if (radioMenu) {
+                closeRadioMenu()
+                return
+              }
+              const rect = e.currentTarget.getBoundingClientRect()
+              setRadioMenu({ x: rect.left, y: rect.bottom + 4 })
+            }}
+            aria-expanded={radioMenu !== null}
+            data-tooltip="radio settings"
+            aria-label="radio settings"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 22,
+              height: 22,
+              padding: 0,
+              fontFamily: 'inherit',
+              fontSize: 9,
+              background: 'transparent',
+              border: '1px solid var(--ra-border)',
+              color: radioMenu ? 'var(--ra-text)' : 'var(--ra-text-3)',
+              cursor: 'pointer'
+            }}
+          >
+            v
+          </button>
+        )}
+        {radioMenu && (
+          <DiscoverRadioMenu
+            x={radioMenu.x}
+            y={radioMenu.y}
+            mode={radioOn ? 'running' : 'start'}
+            settings={radioSettings}
+            onChange={(patch) => void onRadioSettingsChange(patch)}
+            onPace={(pace) => {
+              closeRadioMenu()
+              if (radioOn) armRadioCourseChange(pace)
+              else startRadio(pace)
+            }}
+            onClose={closeRadioMenu}
+            ignoreRef={radioOn ? radioChevronRef : radioMenuButtonRef}
+          />
         )}
         <button
           onClick={() => void rerollAll()}
