@@ -62,6 +62,72 @@ export function nextRadioIntervalBars(pace: RadioPace, random: () => number = Ma
   return min + offset
 }
 
+/** Where a change is ALLOWED to land -- not how often one happens. The five
+ * options and their exact words are the phone's (remotePage.ts's
+ * SWAP_GRIDS, commit e0abb0e); two surfaces doing the same thing should
+ * say it the same way, and re-labelling shipped copy is churn.
+ *
+ * Literal values double as their own UI text, the same convention
+ * RadioPace and DISCOVER_SLOT_KIND_OPTIONS use, so there is no label
+ * table. */
+export type RadioGrid = 'own loop' | 'loop end' | '8 bars' | '4 bars' | '2 bars'
+
+export const RADIO_GRID_OPTIONS: RadioGrid[] = [
+  'own loop',
+  'loop end',
+  '8 bars',
+  '4 bars',
+  '2 bars'
+]
+
+/** `own loop`, NOT the `loop end` that shipped 2026-09-26.
+ *
+ * The phone kept its own shipped default because a value was already
+ * stored on Elling's phone and a default that moved under him would be a
+ * surprise. Here the reverse holds: this is a brand-new field with nothing
+ * stored anywhere, and the surprise would be shipping a fix for "radio
+ * mode seems quite slow to me" whose default is still the slow thing.
+ * remotePage.ts:680-684 on `own loop`: "the most musical boundary for a
+ * stem changing under eleven others is its own cycle ... this is the one
+ * to try first." */
+export const DEFAULT_RADIO_GRID: RadioGrid = 'own loop'
+
+export function normalizeRadioGrid(value: unknown): RadioGrid {
+  return RADIO_GRID_OPTIONS.includes(value as RadioGrid) ? (value as RadioGrid) : DEFAULT_RADIO_GRID
+}
+
+/** How many bars apart the boundaries a change may land on are.
+ *
+ * `loopBars` is the preview loop's own length (DiscoverPanel's
+ * maxBarLength, which is what went to the engine as loopLengthBars).
+ * `slotBars` is the CHANGING slot's own bar length, or null when nothing
+ * has resolved it yet.
+ *
+ * Two edges, both settled on the phone (remotePage.ts:995-1007) and not
+ * re-litigated here:
+ *   - a grid longer than the loop is capped to the loop;
+ *   - a grid that does not divide the loop steps DOWN to the largest
+ *     divisor, so every boundary is the same place in the phrase on every
+ *     cycle and the downbeats stay where they were. It can never step
+ *     below 1, which divides everything.
+ *
+ * Anything without a whole positive bar count falls back to the whole
+ * loop -- which is exactly the behaviour that shipped 2026-09-26, so the
+ * fallback can never be worse than what is already out there. A
+ * fractional slot length (2.5 bars) is one of those: flooring it to 2
+ * would invent a boundary the stem does not actually have. */
+export function radioGridBars(grid: RadioGrid, loopBars: number, slotBars: number | null): number {
+  if (!(loopBars > 0)) return loopBars
+  if (grid === 'loop end') return loopBars
+  const requested = grid === 'own loop' ? slotBars : Number.parseInt(grid, 10)
+  if (requested === null || !Number.isInteger(requested) || requested < 1) return loopBars
+  if (!Number.isInteger(loopBars)) return loopBars
+  let step = requested
+  if (step > loopBars) step = loopBars
+  while (step > 1 && loopBars % step !== 0) step -= 1
+  return step
+}
+
 /** Radio's own sense of time. Fed ONLY by the engine's existing ~30Hz
  * position-update stream (IpcServer.cpp's 33ms kPositionTimerId ->
  * main's subscribeToPositionUpdates -> preload's onEnginePositionUpdate ->

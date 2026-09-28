@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_RADIO_GRID,
   DEFAULT_RADIO_PACE,
+  RADIO_GRID_OPTIONS,
   RADIO_PACE_BARS,
   RADIO_PACE_OPTIONS,
   advanceRadioClock,
   createRadioClock,
   isRadioEligibleSlot,
   nextRadioIntervalBars,
+  normalizeRadioGrid,
   normalizeRadioPace,
-  pickRadioSlotId
+  pickRadioSlotId,
+  radioGridBars
 } from './radioSchedule'
 
 describe('radio paces', () => {
@@ -76,6 +80,62 @@ describe('nextRadioIntervalBars', () => {
     const seen = new Set<number>()
     for (let i = 0; i < 13; i++) seen.add(nextRadioIntervalBars('mid', () => i / 13))
     expect(seen.size).toBeGreaterThan(5)
+  })
+})
+
+describe('radioGridBars', () => {
+  it('offers the same five options, in the same words, as the phone', () => {
+    expect(RADIO_GRID_OPTIONS).toEqual(['own loop', 'loop end', '8 bars', '4 bars', '2 bars'])
+  })
+
+  it('defaults to the changing slot own loop', () => {
+    expect(DEFAULT_RADIO_GRID).toBe('own loop')
+  })
+
+  it('normalizes anything unrecognised to the default', () => {
+    expect(normalizeRadioGrid('16 bars')).toBe('own loop')
+    expect(normalizeRadioGrid(undefined)).toBe('own loop')
+    expect(normalizeRadioGrid(4)).toBe('own loop')
+    expect(normalizeRadioGrid(null)).toBe('own loop')
+  })
+
+  it('loop end is the whole loop -- exactly what shipped 2026-09-26', () => {
+    expect(radioGridBars('loop end', 8, 2)).toBe(8)
+    expect(radioGridBars('loop end', 3, 1)).toBe(3)
+  })
+
+  it('own loop is the changing slot own bar length', () => {
+    expect(radioGridBars('own loop', 8, 2)).toBe(2)
+    expect(radioGridBars('own loop', 8, 4)).toBe(4)
+  })
+
+  it('falls back to the whole loop when the slot bar length is unknown', () => {
+    expect(radioGridBars('own loop', 8, null)).toBe(8)
+    expect(radioGridBars('own loop', 8, 0)).toBe(8)
+    expect(radioGridBars('own loop', 8, 2.5)).toBe(8)
+    expect(radioGridBars('4 bars', 0, 2)).toBe(0)
+  })
+
+  it('caps a grid longer than the loop to the loop', () => {
+    expect(radioGridBars('8 bars', 4, 1)).toBe(4)
+    expect(radioGridBars('own loop', 4, 8)).toBe(4)
+  })
+
+  it('steps down to the largest divisor of the loop, as the phone does', () => {
+    // remotePage.ts:995-1002 -- 4 over a 6-bar loop becomes 3, 8 over a
+    // 12-bar loop becomes 6, 4 over an 8-bar loop stays 4.
+    expect(radioGridBars('4 bars', 6, 1)).toBe(3)
+    expect(radioGridBars('8 bars', 12, 1)).toBe(6)
+    expect(radioGridBars('4 bars', 8, 1)).toBe(4)
+  })
+
+  it('never steps below 1, which divides everything', () => {
+    expect(radioGridBars('2 bars', 5, 1)).toBe(1)
+    expect(radioGridBars('own loop', 7, 3)).toBe(1)
+  })
+
+  it('handles a non-integer loop by falling back to the loop', () => {
+    expect(radioGridBars('4 bars', 6.5, 2)).toBe(6.5)
   })
 })
 
