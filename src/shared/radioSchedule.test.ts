@@ -24,6 +24,7 @@ import {
   normalizeRadioSettings,
   normalizeRadioTurnover,
   pickRadioSlotId,
+  radioChangeBars,
   radioGridBars,
   radioPaceWindowPreset,
   radioStarterKinds
@@ -415,6 +416,36 @@ describe('isRadioEligibleSlot', () => {
 
   it('skips a layer holding no stem at all, which has nothing to turn over', () => {
     expect(isRadioEligibleSlot({ ...base, hasCandidate: false, hasSeedStem: false })).toBe(false)
+  })
+})
+
+describe('radioChangeBars', () => {
+  // The half of the phase argument that the outgoing layer's length alone
+  // does not cover. 687641a's bad case is an 8-bar stem ENTERING at bar 4
+  // of an 8-bar loop, and the entering stem is not the one being
+  // replaced: a slot holding a 2-bar hat can draw an 8-bar pad next. So
+  // both lengths decide the boundary, and the longer one wins -- at a
+  // multiple of the longer, a shorter power-of-two cycle is at its own
+  // zero too.
+  it('is the longer of the outgoing and the incoming layer', () => {
+    expect(radioChangeBars(2, 8)).toBe(8)
+    expect(radioChangeBars(8, 2)).toBe(8)
+    expect(radioChangeBars(4, 4)).toBe(4)
+  })
+
+  it('is unknown when either side is, so the change waits for the loop top', () => {
+    expect(radioChangeBars(null, 4)).toBeNull()
+    expect(radioChangeBars(4, null)).toBeNull()
+    expect(radioChangeBars(null, null)).toBeNull()
+    // Which is what radioGridBars does with a null.
+    expect(radioGridBars(4, 8, radioChangeBars(2, null))).toBe(8)
+  })
+
+  it('sends a long incoming layer to the loop top even when the outgoing one is short', () => {
+    // The whole point: a 2-bar hat being replaced by an 8-bar pad is the
+    // cut he described, and the threshold has to catch it.
+    expect(radioGridBars(4, 8, radioChangeBars(2, 8))).toBe(8)
+    expect(radioGridBars(4, 8, radioChangeBars(2, 2))).toBe(2)
   })
 })
 

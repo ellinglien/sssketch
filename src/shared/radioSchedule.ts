@@ -170,6 +170,38 @@ export function normalizeRadioLoopEndBars(value: unknown, legacyGrid?: unknown):
   return LEGACY_RADIO_GRID_BARS[legacyGrid as string] ?? DEFAULT_RADIO_LOOP_END_BARS
 }
 
+/** The cycle a change has to sit on, given the OUTGOING layer's bar
+ * length and the INCOMING one's.
+ *
+ * The outgoing length on its own is not enough, and this is the hole the
+ * threshold would otherwise leave open. 687641a's bad case is an 8-bar
+ * stem ENTERING at bar 4 of an 8-bar loop -- "puts an 8-bar stem in
+ * halfway through itself" -- and the entering stem is not the one being
+ * replaced. A slot holding a 2-bar hat can perfectly well draw an 8-bar
+ * pad next, and a boundary chosen from the hat alone would drop that pad
+ * in at its own bar two, four or six. That is the cut he heard, not the
+ * one the threshold is meant to allow.
+ *
+ * So both lengths go in and the LONGER one wins. At a multiple of the
+ * longer cycle a shorter one that divides it is at its own zero as well,
+ * which is the ordinary case here -- Endlesss layers are 1, 2, 4 or 8
+ * bars. Where the shorter does not divide the longer (a 3 against a 4)
+ * the outgoing layer is cut mid-phrase, which is the lesser of the two
+ * faults and the one a fade could hide.
+ *
+ * Null when either side is unknown -- the incoming stem resolves
+ * asynchronously (DiscoverPanel's armRadioPick warms it a whole interval
+ * ahead), and until it has, radioGridBars' own null fallback holds the
+ * change to the loop top. That is today's behaviour, so waiting can
+ * never be worse than what is already out there. */
+export function radioChangeBars(
+  outgoingBars: number | null,
+  incomingBars: number | null
+): number | null {
+  if (outgoingBars === null || incomingBars === null) return null
+  return Math.max(outgoingBars, incomingBars)
+}
+
 /** How many bars apart the boundaries a change may land on are.
  *
  * `loopEndOverBars` is the threshold above. `loopBars` is the preview

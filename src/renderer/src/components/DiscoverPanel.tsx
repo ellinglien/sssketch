@@ -44,6 +44,7 @@ import {
   isRadioEligibleSlot,
   nextRadioIntervalBarsInWindow,
   pickRadioSlotId,
+  radioChangeBars,
   radioGridBars,
   radioStarterKinds,
   type RadioClock,
@@ -1228,7 +1229,18 @@ export function DiscoverPanel({
   const radioClockRef = useRef<RadioClock | null>(null)
   // What radio will play next, chosen a whole interval early so
   // resolveCandidateStem's module-level cache has time to warm (spec 2.4).
-  const radioPendingRef = useRef<{ slotId: string; pick: SlotPick } | null>(null)
+  //
+  // `incomingBars` is that pick's own bar length, filled in by the same
+  // warm that downloads it, and null until then. It is what stops the
+  // loop-end threshold being decided from the OUTGOING layer alone: a
+  // slot holding a 2-bar hat can draw an 8-bar pad next, and dropping
+  // that pad in on the hat's 2-bar boundary is exactly the cut 687641a
+  // describes. See radioChangeBars.
+  const radioPendingRef = useRef<{
+    slotId: string
+    pick: SlotPick
+    incomingBars: number | null
+  } | null>(null)
   // Which slot radio changed last -- so it never changes the same one
   // twice running (pickRadioSlotId).
   const radioLastSlotRef = useRef<string | null>(null)
@@ -1325,13 +1337,16 @@ export function DiscoverPanel({
     // whole loop's wrap. See DEFAULT_RADIO_LOOP_END_BARS' own doc comment
     // for why that boundary is the safe one.
     //
-    // The pending pick is what is about to change, so it is the slot whose
-    // cycle this means. No pending pick (radio just started, or nothing
-    // was eligible last time) falls back to the whole loop.
-    const pendingSlotId = radioPendingRef.current?.slotId ?? null
-    const slotBars =
-      pendingSlotId !== null ? (resolvedBarLengthsRef.current.get(pendingSlotId) ?? null) : null
-    const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, slotBars)
+    // The pending pick is what is about to change, so BOTH lengths come
+    // from it: the layer being replaced, and the one replacing it. No
+    // pending pick (radio just started, nothing was eligible last time,
+    // the incoming stem has not resolved yet) falls back to the whole
+    // loop, which is what shipped and can never be the worse cut.
+    const pendingPick = radioPendingRef.current
+    const outgoingBars =
+      pendingPick !== null ? (resolvedBarLengthsRef.current.get(pendingPick.slotId) ?? null) : null
+    const changeBars = radioChangeBars(outgoingBars, pendingPick?.incomingBars ?? null)
+    const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, changeBars)
     const step = advanceRadioClock(clock, pos, loopBars, gridBars)
     radioClockRef.current = step.clock
     // A drop-out is anchored to the loop top, so its lifetime is counted
@@ -2521,6 +2536,15 @@ export function DiscoverPanel({
     // today costs.
     void resolveCandidateStem(pick.candidate).then((stem) => {
       if (stem === null || !radioOnRef.current) return
+      // The incoming layer's own bar length, which the boundary decision
+      // needs and only a resolved stem knows (a DiscoverCandidate carries
+      // no barLength). Guarded against a pick that has since been
+      // replaced or committed -- this lands a microtask after the
+      // assignment below at the earliest, and a whole interval before the
+      // change at the latest.
+      if (radioPendingRef.current?.pick === pick) {
+        radioPendingRef.current = { ...radioPendingRef.current, incomingBars: stem.barLength }
+      }
       // The preview always stretches (previewState sets stretch true for
       // its one rifff) and a Discover candidate is never a one-shot, so
       // the two "don't stretch at all" cases buildEngineProject handles
@@ -2529,7 +2553,7 @@ export function DiscoverPanel({
       if (Math.abs(ratio - 1) < STRETCH_RATIO_EPSILON) return
       void window.rifffApi.renderStretched(stem.path, ratio)
     })
-    radioPendingRef.current = { slotId, pick }
+    radioPendingRef.current = { slotId, pick, incomingBars: null }
   }
 
   function stopRadio(): void {
