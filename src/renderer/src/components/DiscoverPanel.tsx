@@ -11,6 +11,7 @@ import { ROLE_LABELS } from '@shared/autoArrangeLabels'
 import { BracketToggle } from './BracketToggle'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
+import { warmEngineBuffer } from '../audio/warmEngineBuffer'
 import { getPeaks, peekPeaks } from '../audio/peakCache'
 import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
 import {
@@ -87,11 +88,7 @@ import {
 import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
-import {
-  buildEngineProject,
-  stretchRatioForStem,
-  STRETCH_RATIO_EPSILON
-} from '@shared/buildEngineProject'
+import { buildEngineProject } from '@shared/buildEngineProject'
 import { initialState, type AppState } from '../state/store'
 import type { StemAutomation } from '@shared/toolkit'
 import { scheduleLiveParamSync } from './liveParamSync'
@@ -2548,7 +2545,8 @@ export function DiscoverPanel({
     // means buildEngineProject finds a hit instead of a job. The ratio MUST
     // be the one it will compute -- a different one warms a file nobody
     // wants and leaves the real render for commit time -- which is why
-    // stretchRatioForStem is imported rather than written out again.
+    // warmEngineBuffer derives it from the shared stretchRatioForStem
+    // rather than writing the formula out again.
     //
     // A whole interval of lead time, so this is deliberately not awaited by
     // the caller; a failure leaves the cache cold and costs exactly what
@@ -2564,12 +2562,11 @@ export function DiscoverPanel({
       if (radioPendingRef.current?.pick === pick) {
         radioPendingRef.current = { ...radioPendingRef.current, incomingBars: stem.barLength }
       }
-      // The preview always stretches (previewState sets stretch true for
-      // its one rifff) and a Discover candidate is never a one-shot, so
-      // the two "don't stretch at all" cases buildEngineProject handles
-      // cannot arise here.
-      const ratio = stretchRatioForStem(stem.durationSec, stem.barLength, bpmRef.current)
-      if (Math.abs(ratio - 1) < STRETCH_RATIO_EPSILON) return
+      // Three warms, one call. The preview always stretches (previewState
+      // sets stretch true for its one rifff) and a Discover candidate is
+      // never a one-shot, so the two "don't stretch at all" cases
+      // buildEngineProject handles cannot arise here.
+      //
       // Through the memoised resolver, NOT renderStretched directly:
       // warming the main-process file cache is only half of it. The other
       // half is that buildEngineProject asks this resolver for the
@@ -2577,7 +2574,20 @@ export function DiscoverPanel({
       // whole file from disk to answer -- per stem, on the beat, on a main
       // thread already decoding that same audio for the waveform. Warming
       // it here means the commit reads a value instead of asking for one.
-      void resolveStretchedForPlayback(stem.path, ratio)
+      //
+      // And then the last cold thing, added 2026-09-28 after "it doesn't
+      // seem to preload still.. it always takes a second for the new stem
+      // to play after the loop ends": the native engine's OWN decoded
+      // buffer, which until now it could not be told about until it was
+      // handed a whole project naming the stem. See warmEngineBuffer.ts --
+      // it is what decides whether the stretched file or the native one is
+      // the one load-project will actually ask for.
+      void warmEngineBuffer(
+        stem,
+        bpmRef.current,
+        resolveStretchedForPlayback,
+        (path, durationSec) => void window.rifffApi.enginePreloadStem(path, durationSec)
+      )
     })
     radioPendingRef.current = { slotId, pick, incomingBars: null }
   }

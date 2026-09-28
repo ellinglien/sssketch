@@ -397,6 +397,8 @@ const api = {
     error?: string
     latencyCompensationBars?: number
   }> => ipcRenderer.invoke('engine-disarm-recording'),
+  enginePreloadStem: (path: string, durationSec: number): Promise<void> =>
+    ipcRenderer.invoke('engine-preload-stem', path, durationSec),
   engineSetMetronome: (enabled: boolean): Promise<void> =>
     ipcRenderer.invoke('engine-set-metronome', enabled),
   engineSetGatedRecordingEnabled: (

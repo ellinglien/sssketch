@@ -1572,6 +1572,20 @@ app.whenReady().then(async () => {
     }
   )
 
+  // Fire-and-forget, deliberately: Discover radio calls this a whole
+  // change-interval before the stem is due, and there is nothing useful it
+  // could do with a success or a failure. `client.send` (not
+  // sendAndAwaitType) because the engine sends no reply -- see IpcServer's
+  // own preload-stem handler. No engine running yet is a silent no-op, the
+  // same as every other engine-* handler here.
+  //
+  // `path`/`durationSec` MUST be the resolved (post-stretch) pair, since
+  // that is what load-project will later put in EngineStem.resolvedPath --
+  // the renderer decides that, in warmEngineBuffer.ts.
+  ipcMain.handle('engine-preload-stem', (_event, path: string, durationSec: number) => {
+    playbackEngine?.client.send('preload-stem', { path, durationSec })
+  })
+
   ipcMain.handle('engine-set-metronome', (_event, enabled: boolean) => {
     playbackEngine?.client.send('set-metronome', { enabled })
   })
