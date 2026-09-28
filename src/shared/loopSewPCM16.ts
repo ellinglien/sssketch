@@ -10,6 +10,53 @@ import { findWavChunks } from './wavChunks'
 export const LOOP_SEW_WINDOW_FRAMES = 128
 
 /**
+ * The seam blend itself, ported from LoopSewing.cpp and shared by both
+ * JS-side callers: this file's loop trim (seam at the buffer's end, anchored
+ * on frame 0) and rotateWav.ts's bake (seam in the MIDDLE of the file, where
+ * the rotation put the original's end→start junction, anchored on the frame
+ * just after it).
+ *
+ * Blends the `windowFrames` frames ENDING at `seamFrame - 1` toward the value
+ * at `anchorFrame`, per channel: coeff is exactly 1.0 at the seam, so the last
+ * frame before it BECOMES the anchor, decaying to 0 at the far edge of the
+ * window on an equal-power curve. Equal-power rather than a linear fade to
+ * silence so the perceived loudness stays constant through the blend instead
+ * of dipping.
+ *
+ * Reads and writes go through callbacks because the two callers hold their
+ * samples differently (a flat Int16Array here, a DataView over raw WAV bytes
+ * there) — the curve, the window and the clamping live here once either way.
+ *
+ * No-op unless there is a clean, non-overlapping window of content before the
+ * seam, mirroring LoopSewing.cpp's own guard. Since `seamFrame` is never more
+ * than the total frame count, that also leaves any buffer shorter than twice
+ * the window completely alone.
+ */
+export function blendSeamInt16(
+  seamFrame: number,
+  anchorFrame: number,
+  numChannels: number,
+  windowFrames: number,
+  read: (frame: number, channel: number) => number,
+  write: (frame: number, channel: number, value: number) => void
+): void {
+  if (windowFrames <= 0 || seamFrame <= windowFrames * 2) return
+  for (let ch = 0; ch < numChannels; ch++) {
+    // Read before writing: the guard above puts `anchorFrame` (either 0 or
+    // `seamFrame` itself) outside the window this loop rewrites, so the
+    // anchor can never be a value the blend already moved.
+    const anchor = read(anchorFrame, ch)
+    for (let i = 0; i < windowFrames; i++) {
+      const frame = seamFrame - 1 - i
+      const t = -1 + (i / windowFrames) * 2
+      const coeff = Math.sqrt(0.5 * (1 - t))
+      const value = read(frame, ch)
+      write(frame, ch, clampInt16(value + (anchor - value) * coeff))
+    }
+  }
+}
+
+/**
  * Takes a 16-bit PCM WAV and returns the audio the phone should loop:
  * trimmed (or silence-padded) to exactly `frames` FRAMES, scaled by `gain`,
  * and with its last LOOP_SEW_WINDOW_FRAMES blended onto its own first frame
@@ -76,22 +123,19 @@ export function sewLoopPCM16(wav: Uint8Array, frames: number, gain: number): Uin
   }
   // Anything past `copy` is already 0 -- silence padding, not a wrapped loop.
 
-  // The seam blend, ported from LoopSewing.cpp. coeff is exactly 1.0 at
-  // i = 0, so the final frame BECOMES the first; it decays to 0 at the far
-  // edge of the window on an equal-power curve. Per channel, because a
-  // stereo stem's two sides meet themselves at their own values.
-  if (target > LOOP_SEW_WINDOW_FRAMES * 2) {
-    for (let ch = 0; ch < channels; ch++) {
-      const first = samples[ch]
-      for (let i = 0; i < LOOP_SEW_WINDOW_FRAMES; i++) {
-        const index = (target - 1 - i) * channels + ch
-        const t = -1 + (i / LOOP_SEW_WINDOW_FRAMES) * 2
-        const coeff = Math.sqrt(0.5 * (1 - t))
-        const value = samples[index]
-        samples[index] = clampInt16(value + (first - value) * coeff)
-      }
+  // The seam here is the buffer's own end wrapping back onto its own head,
+  // so the anchor is frame 0. Per channel, because a stereo stem's two sides
+  // meet themselves at their own values.
+  blendSeamInt16(
+    target,
+    0,
+    channels,
+    LOOP_SEW_WINDOW_FRAMES,
+    (frame, ch) => samples[frame * channels + ch],
+    (frame, ch, value) => {
+      samples[frame * channels + ch] = value
     }
-  }
+  )
 
   for (let n = 0; n < samples.length; n++) dst.setInt16(44 + n * 2, samples[n], true)
   return out

@@ -66,6 +66,43 @@ describe('bakeOffset', () => {
       const bytes = readFileSync(results[0].bakedPath)
       const dataOffset = findDataChunkOffset(bytes)
       expect(bytes.readInt16LE(dataOffset)).toBeCloseTo(0.25 * 32000, -2)
+
+      // The rotation moved the ramp's own end→start junction to frame 750
+      // (1000 - 250), where full scale meets zero as a hard splice. The bake
+      // must have blended it: frame 749 is pulled all the way onto frame 750.
+      expect(bytes.readInt16LE(dataOffset + 750 * 2)).toBe(0)
+      expect(bytes.readInt16LE(dataOffset + 749 * 2)).toBe(0)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('does not blend a second time when re-baking an already-baked file', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const path = join(dir, 'source.wav')
+      writeRampWav(path, 1000, 1000)
+      const first = await bakeOffset([{ path, rotationSec: 0.25 }])
+      const afterFirst = readFileSync(first[0].bakedPath)
+
+      // Re-picking a beat feeds the .baked.wav straight back in (APPLY_BAKE
+      // repointed the stem at it). That file's own end→start junction is a
+      // pair of frames that were adjacent in the source, so blending it again
+      // would smear real audio — and would do so once per re-bake, forever.
+      const second = await bakeOffset([{ path: first[0].bakedPath, rotationSec: 0.1 }])
+      expect(second[0].bakedPath).toBe(first[0].bakedPath)
+      const afterSecond = readFileSync(second[0].bakedPath)
+      const dataOffset = findDataChunkOffset(afterSecond)
+      const firstData = afterFirst.subarray(findDataChunkOffset(afterFirst))
+      const secondData = afterSecond.subarray(dataOffset)
+
+      // A pure rotation by 100 frames and nothing else: every frame of the
+      // re-baked file is a frame of the previous bake, unmodified.
+      for (let frame = 0; frame < 1000; frame++) {
+        expect(secondData.readInt16LE(frame * 2)).toBe(
+          firstData.readInt16LE(((frame + 100) % 1000) * 2)
+        )
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -97,6 +134,12 @@ describe('bakeOffset', () => {
       const bytes = readFileSync(results[0].bakedPath)
       const dataOffset = findDataChunkOffset(bytes)
       expect(bytes.readInt16LE(dataOffset)).toBeCloseTo(0.25 * 32000, -2)
+
+      // BakeStem.cpp rotates without any blend of its own, so the seam it
+      // leaves at frame 750 (full scale meeting zero) is blended here in JS
+      // afterwards — same fix as the WAV path, no engine change.
+      expect(Math.abs(bytes.readInt16LE(dataOffset + 750 * 2))).toBeLessThan(100)
+      expect(Math.abs(bytes.readInt16LE(dataOffset + 749 * 2))).toBeLessThan(100)
 
       // The original source file must be untouched — never overwritten.
       const originalBytes = readFileSync(path)
