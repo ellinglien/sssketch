@@ -42,6 +42,8 @@ import {
   isRadioEligibleSlot,
   nextRadioIntervalBars,
   pickRadioSlotId,
+  radioGridBars,
+  DEFAULT_RADIO_GRID,
   RADIO_PACE_OPTIONS,
   type RadioClock,
   type RadioPace
@@ -1190,10 +1192,13 @@ export function DiscoverPanel({
   // "pause" (IpcServer.cpp), so `pos` stops changing and this clock stops
   // and resumes with the transport for free.
   //
-  // `due` is true only at a LOOP WRAP at or after the interval (spec 2.2):
+  // `due` is true only at a CHANGE-GRID BOUNDARY at or after the interval:
   // a change dropped at bar 7 of an 8-bar loop is a splice; a change
-  // dropped at the wrap is a new section. The effective interval is
-  // therefore ceil(intervalBars / loopBars) * loopBars.
+  // dropped on a boundary of the changing stem's own cycle is a new
+  // section for that stem. Until 2026-09-28 the only boundary was the
+  // whole loop's wrap, which made the effective interval
+  // ceil(intervalBars / loopBars) * loopBars -- usually a doubling rather
+  // than a rounding. See radioGridBars below.
   //
   // Sits here, directly under radio's own state, rather than up with the
   // other `pos`-adjacent effects: its dependency array is evaluated during
@@ -1210,7 +1215,25 @@ export function DiscoverPanel({
         ? Math.max(...resolvedBarLengthsRef.current.values())
         : 0
     if (!(loopBars > 0)) return
-    const step = advanceRadioClock(clock, pos, loopBars)
+    // WHERE a change may land (2026-09-28). The grid is the CHANGING
+    // slot's own bar length: radio swaps one stem at a time, and the most
+    // musical boundary for a stem changing under three others is its own
+    // cycle, not the longest other stem's. Until this, the boundary was
+    // always the whole loop's wrap, which rounded every drawn interval UP
+    // to a multiple of loopBars -- usually a doubling. Elling, 2026-09-28:
+    // "radio mode seems quite slow to me".
+    //
+    // The pending pick is what is about to change, so it is the slot whose
+    // cycle matters. No pending pick (radio just started, or nothing was
+    // eligible last time) falls back to the whole loop, which is exactly
+    // the pre-2026-09-28 behaviour.
+    //
+    // DEFAULT_RADIO_GRID directly, not a setting: phase A ships no UI.
+    const pendingSlotId = radioPendingRef.current?.slotId ?? null
+    const slotBars =
+      pendingSlotId !== null ? (resolvedBarLengthsRef.current.get(pendingSlotId) ?? null) : null
+    const gridBars = radioGridBars(DEFAULT_RADIO_GRID, loopBars, slotBars)
+    const step = advanceRadioClock(clock, pos, loopBars, gridBars)
     radioClockRef.current = step.clock
     // Deferred out of the effect body: this repo ERRORS on a synchronous
     // setState inside an effect (react-hooks/set-state-in-effect), and the
