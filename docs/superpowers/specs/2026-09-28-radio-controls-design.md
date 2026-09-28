@@ -1242,7 +1242,18 @@ Named so they stay named. Anything not on this list and not above is out.
   transition write no history either** — they are not edits, they are performance. **And the reach
   operations in §7 must be pick-only variants for this reason**, since all three shipped entry
   points commit and two of them snapshot.
-- **Eligibility is unchanged**: unlocked ∧ audible ∧ has a candidate ∧ not mid-roll, never the
+- **Eligibility now lives in one place, and nothing here moves it.** While this was being
+  written, `isRadioEligibleSlot` (`src/shared/radioSchedule.ts`) was extracted as the single
+  predicate, fixing a live report — *"if i start radio with stems already there.. it seems to not
+  transition"*. The old inline filter tested `s.candidate !== null`, which is false for every slot
+  seeded from a rifff or the shelf and never since rerolled, so starting radio on a loop he had
+  already built made every layer ineligible and radio idled forever with no way to tell that apart
+  from a long interval. **Everything in this document weights *within* the eligible set or changes
+  *when* it is consulted; nothing adds or removes an eligibility condition.** The one exception is
+  the drop-out, which has its own, deliberately different rule (§4.1, §4.5 — notably it *includes*
+  locked slots).
+- **The shipped eligibility conditions**: unlocked ∧ audible ∧ has a candidate or a seed stem ∧
+  not mid-roll, never the
   same slot twice running. The grid changes *when*; turnover and the hook change the *weights
   within* the eligible set; reach changes *what is fetched*; a transition changes *how it sounds*;
   a drop-out touches no candidate at all and has its own, different eligibility (§4.1, §4.5 — note
