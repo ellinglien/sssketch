@@ -315,6 +315,16 @@ function randomDiscoverSlotKind(options: readonly DiscoverSlotKind[]): DiscoverS
 // exact same cap, rather than duplicating this number in a second file.
 export const DISCOVER_UNDO_LIMIT = 20
 
+// Backstop for runAfterEngineSync (below): how long a deferred radio arm
+// waits for a landing change's own engine push before giving up and arming
+// anyway. A committed change whose stem never resolves schedules no sync at
+// all, and a pick that is simply never armed makes radio SKIP a change
+// outright -- a worse symptom than the late one this whole deferral exists
+// to fix. Comfortably under the shortest interval radio can draw (3 bars at
+// the "fast" pace, ~6s at 120bpm -- RADIO_PACE_BARS), and comfortably over
+// the warm build+send chain it normally waits on (tens of ms).
+const AFTER_ENGINE_SYNC_TIMEOUT_MS = 1500
+
 export function DiscoverPanel({
   currentSketch,
   slots,
@@ -679,8 +689,68 @@ export function DiscoverPanel({
     if (pendingSyncRafRef.current !== null) cancelAnimationFrame(pendingSyncRafRef.current)
     pendingSyncRafRef.current = requestAnimationFrame(() => {
       pendingSyncRafRef.current = null
-      void syncPreviewToEngine(ids)
+      // .finally, not .then: syncPreviewToEngine has several early returns
+      // (unmounted, no members, a superseded generation, ownership lost)
+      // and its own internal try/catch, and a radio arm waiting on this
+      // must be released down EVERY one of those paths.
+      void syncPreviewToEngine(ids).finally(drainAfterEngineSync)
     })
+  }
+
+  // Callbacks waiting for the preview sync that a landing change triggers
+  // to have finished pushing its project to the engine, and the backstop
+  // timer that releases them if no sync ever turns up.
+  const afterEngineSyncRef = useRef<(() => void)[]>([])
+  const afterEngineSyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** Runs `fn` once the engine push triggered by a just-committed change
+   * has gone out.
+   *
+   * Measured 2026-09-28 on Elling's own 5,058-jam library: a radio change
+   * started about a second after the downbeat it was scheduled for, and
+   * four separate prefetch fixes landed the same day -- the download, the
+   * rubberband stretch, the engine's own decoded buffer, the waveform peaks
+   * -- moved it not at all. None of them was what was late.
+   *
+   * The commit and `armRadioPick()` ran in the SAME microtask, and
+   * pickForSlot fires `get-discover-candidates` before its first await.
+   * The commit's own engine push, by contrast, only leaves a frame later:
+   * setSlots, a render, the row's resolve effect, reportSlotResolution,
+   * then scheduleSyncPreviewToEngine's rAF. So the NEXT pick's 0.3-3.1s of
+   * main-process work was already in flight before the CURRENT change's
+   * buildEngineProject stretch lookups, setRemoteLoop and engineLoadProject
+   * had even been sent -- and Electron's main process is single-threaded,
+   * so every one of them queued behind it. The data was warm; the channel
+   * was busy. (Why that pick costs seconds at all is a separate problem --
+   * see docs/superpowers/specs/2026-09-28-discover-candidate-pool-design.md.)
+   *
+   * Waiting for the push to COMPLETE rather than merely be dispatched is
+   * deliberate, and costs nothing worth having: the chain is tens of
+   * milliseconds once warm, against a radio interval of 3 bars at the very
+   * fastest. The next pick still gets essentially the whole interval, which
+   * is the entire point of arming early.
+   *
+   * `fn` ALWAYS runs, via the timer if nothing else -- see
+   * AFTER_ENGINE_SYNC_TIMEOUT_MS's own doc comment for why a dropped arm
+   * would be a worse bug than the one this fixes. */
+  function runAfterEngineSync(fn: () => void): void {
+    afterEngineSyncRef.current.push(fn)
+    if (afterEngineSyncTimerRef.current !== null) return
+    afterEngineSyncTimerRef.current = setTimeout(drainAfterEngineSync, AFTER_ENGINE_SYNC_TIMEOUT_MS)
+  }
+
+  /** Releases everything runAfterEngineSync is holding. Whichever of the
+   * engine push and the backstop timer gets here first wins; the other
+   * finds an empty queue and does nothing. */
+  function drainAfterEngineSync(): void {
+    if (afterEngineSyncTimerRef.current !== null) {
+      clearTimeout(afterEngineSyncTimerRef.current)
+      afterEngineSyncTimerRef.current = null
+    }
+    const waiting = afterEngineSyncRef.current
+    if (waiting.length === 0) return
+    afterEngineSyncRef.current = []
+    for (const fn of waiting) fn()
   }
 
   // "Hands control back" to the real arrangement -- stops treating a
@@ -768,6 +838,17 @@ export function DiscoverPanel({
       if (pendingSyncRafRef.current !== null) {
         cancelAnimationFrame(pendingSyncRafRef.current)
         pendingSyncRafRef.current = null
+      }
+      // Drop, don't drain: a waiting radio arm exists to keep radio going,
+      // and there is no radio to keep going once the panel is gone. Firing
+      // them here would reach pickForSlot's own setState on an unmounted
+      // component. The timer has to go with them or it fires into the void
+      // (and, in StrictMode's fake unmount, into a component that is about
+      // to come back).
+      afterEngineSyncRef.current = []
+      if (afterEngineSyncTimerRef.current !== null) {
+        clearTimeout(afterEngineSyncTimerRef.current)
+        afterEngineSyncTimerRef.current = null
       }
       void restorePreviewIfLoaded()
     }
@@ -1394,7 +1475,13 @@ export function DiscoverPanel({
         // not-the-same-one-twice rule starts clean.
         radioLastSlotRef.current = null
         setRadioProgress(0)
-        void armRadioPick()
+        // Behind this batch's own engine push (runAfterEngineSync), for the
+        // same reason the single-change branch below is -- more so here,
+        // since a course change commits every eligible layer at once and
+        // its push is the biggest one radio ever makes.
+        runAfterEngineSync(() => {
+          if (radioOnRef.current) void armRadioPick()
+        })
       })
       return
     }
@@ -1434,6 +1521,7 @@ export function DiscoverPanel({
     // resolved-promise tick the progress write above uses.
     void Promise.resolve().then(() => {
       if (!radioOnRef.current) return
+      let committed = false
       if (pending !== null && eligibleNow.includes(pending.slotId)) {
         // No pushUndoSnapshot: radio firing every twenty bars would fill
         // the undo stack and make Cmd+Z useless for the edits the user
@@ -1441,6 +1529,7 @@ export function DiscoverPanel({
         // padlock is the tool for "I liked that one" (spec 3.4).
         commitSlotPick(pending.slotId, pending.pick)
         radioLastSlotRef.current = pending.slotId
+        committed = true
       }
       // Roll ONCE per interval for a drop-out in the coming one -- no
       // second clock. Never on the slot that just changed and never in a
@@ -1464,7 +1553,19 @@ export function DiscoverPanel({
       // Arm the next one whether or not this one landed -- nothing
       // eligible is radio idling, not an error, and it retries here at
       // every boundary.
-      void armRadioPick()
+      //
+      // Behind the change's own engine push when something actually landed
+      // (runAfterEngineSync's own doc comment: the next pick used to get in
+      // front of it and hold the change a whole second late); immediately
+      // when nothing did, since then there is no push to get in front of
+      // and waiting would only burn the backstop timer.
+      if (committed) {
+        runAfterEngineSync(() => {
+          if (radioOnRef.current) void armRadioPick()
+        })
+      } else {
+        void armRadioPick()
+      }
     })
     // `pos` is the only real dependency; every function above is re-created
     // each render and reads through refs on purpose.
