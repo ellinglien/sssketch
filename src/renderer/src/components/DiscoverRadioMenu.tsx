@@ -6,6 +6,7 @@ import {
   RADIO_LOOP_END_OPTIONS,
   RADIO_PACE_BARS,
   RADIO_PACE_OPTIONS,
+  RADIO_PHRASE_OPTIONS,
   adjustRadioPaceWindow,
   radioPaceWindowPreset,
   type RadioPace,
@@ -24,6 +25,13 @@ const CHANNEL_OPTIONS: number[] = Array.from(
  * `change on: loop end` chip did. */
 function loopEndLabel(bars: number): string {
   return bars === 0 ? 'always' : `${bars} bars`
+}
+
+/** The `phrase` row's chips. The CEILING, where `loop end` above is the
+ * floor: 0 is no phrase grid at all, which is every boundary the loop
+ * itself offers and is what shipped. */
+function phraseLabel(bars: number): string {
+  return bars === 0 ? 'loop' : `${bars} bars`
 }
 
 /** Radio's own controls, behind the radio button rather than spread across
@@ -57,6 +65,12 @@ function loopEndLabel(bars: number): string {
  * drag and it matches every other row. It sets what radio STARTS with,
  * never what Discover allows -- there is no cap on addSlot and none is
  * being added.
+ *
+ * `loop end` and `phrase` are two rows for two different questions and
+ * are deliberately not one row. `loop end` is the SMALLEST boundary a
+ * change may land on and is capped at the loop; `phrase` is the largest,
+ * and it is the only thing that can hold a change past a loop top. A
+ * single row would have to answer both with one number and could not.
  *
  * `transitions` and `turnover` are stored in RadioSettings but have NO ROW
  * here yet, deliberately: nothing reads either field until phases D and E,
@@ -258,6 +272,13 @@ export function DiscoverRadioMenu({
             )
           )
         )}
+      {mode === 'running' &&
+        row(
+          'phrase',
+          RADIO_PHRASE_OPTIONS.map((n) =>
+            chip(phraseLabel(n), settings.phraseBars === n, () => onChange({ phraseBars: n }))
+          )
+        )}
       {channelsRow}
       {mode === 'running' &&
         row(
@@ -273,7 +294,7 @@ export function DiscoverRadioMenu({
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
         {mode === 'start'
           ? 'pick a pace to start'
-          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle'}
+          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started'}
       </span>
     </div>
   )
