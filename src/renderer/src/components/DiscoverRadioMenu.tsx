@@ -61,6 +61,7 @@ export function DiscoverRadioMenu({
   settings,
   onChange,
   onPace,
+  onNewBed,
   onClose,
   ignoreRef
 }: {
@@ -73,6 +74,10 @@ export function DiscoverRadioMenu({
    * starts radio, in `running` it is the dramatic course change. The panel
    * owns both, so this only reports the chip. */
   onPace: (pace: RadioPace) => void
+  /** Reroll every unlocked layer, landing together at the next loop top.
+   * Separate from a pace change on purpose: changing how often a layer
+   * turns over is not a request for different music. */
+  onNewBed: () => void
   onClose: () => void
   ignoreRef: React.RefObject<HTMLElement | null>
 }): React.JSX.Element {
@@ -249,8 +254,11 @@ export function DiscoverRadioMenu({
             chip(d, settings.dropOuts === d, () => onChange({ dropOuts: d }))
           )
         )}
+      {mode === 'running' && row('reroll', [chip('new bed', false, onNewBed)])}
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
-        {mode === 'start' ? 'pick a pace to start' : 'a new pace rerolls the bed at the loop top'}
+        {mode === 'start'
+          ? 'pick a pace to start'
+          : 'a new pace restarts the loop, keeping these stems'}
       </span>
     </div>
   )

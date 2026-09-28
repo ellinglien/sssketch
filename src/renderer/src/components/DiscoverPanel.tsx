@@ -2606,15 +2606,39 @@ export function DiscoverPanel({
    * here. A reset per keypress while settling a number would be unusable;
    * a preset is a course change, a stepper is an adjustment. */
   function armRadioCourseChange(pace: RadioPace): void {
+    // Restart the loop from its top, immediately, KEEPING the stems that
+    // are there. Revised 2026-09-28 after he heard the first version:
+    // "oh instead of a dramatic change, just reload the stems that are
+    // there currently but fresh?"
+    //
+    // The first version re-picked every eligible layer, which is dramatic
+    // and also destroys the bed he had just spent a few minutes enjoying.
+    // A change of pace is a change of pace; it is not a request for
+    // different music.
+    //
+    // Note a plain reload would be SILENT: load-project deliberately never
+    // resets the transport (IpcServer.cpp), which is exactly what lets a
+    // new bed land without a jump. So the audible part is the seek. Every
+    // layer re-triggers together from its own zero, the mix survives, and
+    // it is a reset you can actually hear -- which "dramatic" was really
+    // asking for.
+    //
+    // Immediately rather than at the next loop top, on purpose: at the top
+    // everything is already at its zero, so a reset there would be
+    // inaudible. Snapping back mid-phrase is the whole gesture.
+    void window.rifffApi.engineSetPosition(0)
+    // lastPos 0, not `pos`: the transport is about to report ~0, and a
+    // clock still holding the old mid-loop position would read that as a
+    // wrap and bank a whole phantom lap on the very next tick.
     radioClockRef.current = createRadioClock(
       nextRadioIntervalBarsInWindow(RADIO_PACE_BARS[pace]),
-      pos
+      0
     )
     setRadioProgress(0)
     radioPendingRef.current = null
     radioCourseChangeRef.current = null
     clearRadioDropOut()
-    void collectRadioCourseChange()
+    void armRadioPick()
   }
 
   /** Picks and WARMS every eligible layer's next stem, then arms the batch.
@@ -3355,6 +3379,7 @@ export function DiscoverPanel({
             mode={radioOn ? 'running' : 'start'}
             settings={radioSettings}
             onChange={(patch) => void onRadioSettingsChange(patch)}
+            onNewBed={() => void collectRadioCourseChange()}
             onPace={(pace) => {
               closeRadioMenu()
               if (radioOn) armRadioCourseChange(pace)
