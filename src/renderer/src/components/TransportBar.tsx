@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { traitMatchBarLabel } from '@shared/traitBar'
 import { phoneRemoteModalView, type PhoneRemoteStatus } from '@shared/phoneRemoteView'
 import { useAppState, useDispatch, usePos, usePlaying } from '../state/StoreContext'
+import { backgroundScanGate } from '../audio/backgroundScanGate'
 import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { loopLengthBars } from '../state/selectors'
 import { stopActivePreview } from '../audio/previewLoop'
@@ -981,12 +982,21 @@ export function TransportBar({
             ...(discoverConsented
               ? [
                   {
-                    label: classifyProgress
-                      ? `categorized ${classifyProgress.classified} / ${classifyProgress.eligible} stems`
-                      : 'categorized …',
+                    // The "paused" suffix is not decoration: radio holds
+                    // the ambient scans off for as long as it runs (see
+                    // DiscoverPanel.tsx's own hold), which really does
+                    // delay when a big library finishes categorizing.
+                    // Without saying so, a scan that had deliberately
+                    // stopped would just look stuck.
+                    label:
+                      (classifyProgress
+                        ? `categorized ${classifyProgress.classified} / ${classifyProgress.eligible} stems`
+                        : 'categorized …') + (backgroundScanGate.isHeld() ? ' · paused' : ''),
                     onClick: () => {},
                     disabled: true,
-                    title: 'classified so far'
+                    title: backgroundScanGate.isHeld()
+                      ? 'paused while radio is playing -- resumes where it left off'
+                      : 'classified so far'
                   }
                 ]
               : []),

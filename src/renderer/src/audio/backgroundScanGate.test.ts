@@ -34,4 +34,19 @@ describe('createBackgroundScanGate', () => {
     releaseA()
     expect(gate.mayRun(10_000)).toBe(false)
   })
+
+  it('reports whether a hold is currently keeping scans paused', () => {
+    // Read by the transport menu's scan row, so a paused scan says so
+    // rather than looking stalled -- radio takes a hold for as long as it
+    // runs (DiscoverPanel.tsx).
+    const gate = createBackgroundScanGate({ quietMs: 0, now: () => 1000 })
+    expect(gate.isHeld()).toBe(false)
+    const release = gate.hold()
+    expect(gate.isHeld()).toBe(true)
+    const second = gate.hold()
+    release()
+    expect(gate.isHeld()).toBe(true)
+    second()
+    expect(gate.isHeld()).toBe(false)
+  })
 })

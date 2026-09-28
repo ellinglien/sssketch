@@ -17,6 +17,10 @@ export interface BackgroundScanGate {
   /** Keeps every scan paused until the returned release is called
    * (idempotent -- a second call is a no-op). */
   hold: () => () => void
+  /** Whether a hold is currently keeping every scan paused. Read by the
+   * transport menu so a deliberately-paused scan says so instead of
+   * looking stalled. */
+  isHeld: () => boolean
   mayRun: (at: number) => boolean
 }
 
@@ -43,6 +47,9 @@ export function createBackgroundScanGate({
         released = true
         holds -= 1
       }
+    },
+    isHeld() {
+      return holds > 0
     },
     mayRun(at) {
       return holds === 0 && at - lastInteractionAt >= quietMs
