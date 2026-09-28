@@ -11,6 +11,8 @@ import {
 import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { upsertStemCategoryRole } from './stemCategoriesStore'
+import { upsertStemAutoCategory } from './stemAutoCategoryStore'
+import { bumpTableWriteVersion } from './tableWriteVersion'
 import { instrumentMaskToSoundType, soundSourceMatchesFilter } from '@shared/riffLibraryTypes'
 
 function freshDb(): Database.Database {
@@ -2259,17 +2261,60 @@ describe('background efficiency B3: change detection instead of a TTL', () => {
     expect(first.has('s1')).toBe(true)
   })
 
-  it("an in-place UPDATE (skeleton riff filled in) is picked up no later than the old TTL's 5 minutes", async () => {
+  // REWRITTEN 2026-09-28 (see tableWriteVersion.ts). This used to assert
+  // that an in-place UPDATE made straight to SQL was picked up once the
+  // cache aged past SCAN_CACHE_INPLACE_TTL_MS, which worked because the
+  // signal included `total_changes()`. That counter is per-CONNECTION and
+  // spans every table, and since the background classifier writes
+  // StemAutoCategory on this same connection every few seconds, it made
+  // EVERY cache here stale on a 5-minute timer forever -- the exact
+  // behaviour 8d81f22 set out to remove. In-place detection is now
+  // per-table and announced by the writer, so the contract changed in
+  // both directions, and both directions are pinned below.
+  it('an in-place UPDATE is picked up on the next check once the writer announces it', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, [])
     const first = await getRiffIndexForDb(own)
     expect(first.size).toBe(0)
     own.prepare(`UPDATE Riffs SET StemCID_1 = 's1' WHERE RiffCID = 'r1'`).run()
+    // Exactly what every real Riffs writer now does (riffLibraryWriter.ts).
+    bumpTableWriteVersion(own, 'Riffs')
     advance(31_000)
-    expect(await getRiffIndexForDb(own)).toBe(first)
-    advance(5 * 60_000)
     const later = await getRiffIndexForDb(own)
+    // Immediately on the next check -- no 5-minute wait, because the
+    // write is known rather than inferred.
     expect(later.get('s1')?.riffCID).toBe('r1')
+  })
+
+  it('an in-place UPDATE written straight to SQL, behind the writers, is NOT detected', async () => {
+    // The deliberate cost of the above. Nothing in this app writes
+    // Jams/Riffs/Stems outside riffLibraryWriter.ts, and a foreign
+    // connection (a real LORE sync writing the archive) still moves
+    // data_version and is still caught. An unannounced raw write on our
+    // OWN connection is the one case that is now invisible, and it is
+    // worth far less than a cache that survives longer than five minutes.
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, [])
+    const first = await getRiffIndexForDb(own)
+    own.prepare(`UPDATE Riffs SET StemCID_1 = 's1' WHERE RiffCID = 'r1'`).run()
+    advance(31_000 + 5 * 60_000)
+    expect(await getRiffIndexForDb(own)).toBe(first)
+  })
+
+  it('the background classifier writing StemAutoCategory does NOT invalidate the riff index', async () => {
+    // The regression this whole change exists to prevent. Measured
+    // 2026-09-28 on Elling's own 5,058-jam archive: the classifier writes
+    // these rows continuously, and under the old connection-wide signal
+    // that alone was enough to force a full rebuild every five minutes --
+    // of a 435,740-row index, on a USB volume, while radio was playing.
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    const first = await getRiffIndexForDb(own)
+    for (let i = 0; i < 50; i += 1) {
+      upsertStemAutoCategory(own, `other-stem-${i}`, 'drums', 'embedding', 2000 + i)
+    }
+    advance(31_000 + 10 * 60_000)
+    expect(await getRiffIndexForDb(own)).toBe(first)
   })
 
   it('the instrument rows follow the same rule: a new drum stem appears after the next check, and an unchanged table is not rescanned', async () => {

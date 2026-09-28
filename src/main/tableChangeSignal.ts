@@ -15,12 +15,12 @@
 // stemClassificationVersion.ts.
 import type Database from 'better-sqlite3'
 import { countWork } from './workCounters'
+import { getTableWriteVersion, type ChangeSignalTable } from './tableWriteVersion'
 
-/** The tables anything in this app currently change-checks. Deliberately a
- * closed union rather than a plain string: the name is interpolated
- * straight into SQL below (a bound parameter cannot name a table), so the
- * type is what keeps that interpolation safe. */
-export type ChangeSignalTable = 'Jams' | 'Riffs' | 'Stems'
+// Re-exported from its new home so existing importers are unaffected --
+// the type moved to tableWriteVersion.ts only because that module needs
+// it too and must not import from here (see its own doc comment).
+export type { ChangeSignalTable }
 
 /** How often a cached scan re-checks its source table -- a caller pays for
  * readTableSignal at most this often per db+table. */
@@ -37,8 +37,17 @@ export const CACHE_CHANGE_CHECK_INTERVAL_MS = 30_000
 export const SCAN_CACHE_INPLACE_TTL_MS = 5 * 60_000
 
 /** A table's cheap change signal: row count + MAX(rowid) (inserts,
- * deletes) and, for in-place updates, the connection's own write count
- * (total_changes) and whether another connection committed (data_version).
+ * deletes), this process's own PER-TABLE write count (in-place updates --
+ * tableWriteVersion.ts) and whether another connection committed to the
+ * file (data_version).
+ *
+ * `writes` replaced SQLite's `total_changes()` on 2026-09-28. That
+ * counter is per-CONNECTION and spans every table, and since the
+ * background classifier writes StemAutoCategory/StemFeatureCache on the
+ * very same connection that holds Jams/Riffs/Stems, it moved every few
+ * seconds regardless of whether the guarded table had changed at all --
+ * which quietly turned this whole mechanism back into the plain timer it
+ * was built to replace. See tableWriteVersion.ts for the full account.
  * Measured on Elling's real external archive (2026-09-22, 372k riffs /
  * 367k stems, read-only, rowid tables): MAX(rowid) ~1 ms, the combined
  * query ~7 ms warm. Re-measured 2026-09-28 against the same archive with a
@@ -49,7 +58,8 @@ export const SCAN_CACHE_INPLACE_TTL_MS = 5 * 60_000
 export interface TableSignal {
   count: number
   maxRowid: number | null
-  changes: number | null
+  /** This process's own writes to THIS table (tableWriteVersion.ts). */
+  writes: number
   dataVersion: number | null
 }
 
@@ -69,28 +79,56 @@ export function readTableSignal(
   db: Database.Database,
   table: ChangeSignalTable
 ): TableSignal | null {
+  const writes = getTableWriteVersion(db, table)
   try {
     const row = db
       .prepare(
-        `SELECT MAX(rowid) AS maxRowid, total_changes() AS changes,
+        `SELECT MAX(rowid) AS maxRowid,
                 (SELECT data_version FROM pragma_data_version) AS dataVersion,
                 COUNT(*) AS n FROM ${table}`
       )
-      .get() as { maxRowid: number | null; changes: number; dataVersion: number; n: number }
+      .get() as { maxRowid: number | null; dataVersion: number; n: number }
     return {
       count: row.n,
       maxRowid: row.maxRowid,
-      changes: row.changes,
+      writes,
       dataVersion: row.dataVersion
     }
   } catch {
     try {
       const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
-      return { count: row.n, maxRowid: null, changes: null, dataVersion: null }
+      return { count: row.n, maxRowid: null, writes, dataVersion: null }
     } catch {
       return null
     }
   }
+}
+
+/** The pure decision behind isScanCacheCurrent -- whether a cache built
+ * against `built` is still good now that the table reads `live`.
+ *
+ * Split out so it can be tested without opening a database (every
+ * better-sqlite3-touching test file has to be excluded from CI -- see
+ * vitest.config.ts). Both null means "this db has never had this table,
+ * and still doesn't," which is not a change. */
+export function isTableSignalCurrent(
+  built: TableSignal | null,
+  live: TableSignal | null,
+  builtAt: number,
+  now: number
+): boolean {
+  if (!live || !built) return !live && !built
+  if (live.count !== built.count || live.maxRowid !== built.maxRowid) return false
+  // Ours, and exact: no grace period, because we know the write landed on
+  // THIS table.
+  if (live.writes !== built.writes) return false
+  // Somebody else's, and unattributable: data_version says the FILE was
+  // committed to by another connection, never which table. Kept as the
+  // same soft signal it always was -- an external LORE sync writing the
+  // archive out from under us is real, and count/maxRowid may not see it
+  // if it only filled fields in.
+  const foreignCommit = live.dataVersion !== built.dataVersion
+  return !(foreignCommit && now - builtAt >= SCAN_CACHE_INPLACE_TTL_MS)
 }
 
 export function newScanCacheState(signal: TableSignal | null): ScanCacheState {
@@ -116,10 +154,5 @@ export function isScanCacheCurrent(
   if (now - state.checkedAt < CACHE_CHANGE_CHECK_INTERVAL_MS) return true
   state.checkedAt = now
   countWork(`sql:cache-check.${table}`)
-  const live = readTableSignal(db, table)
-  const built = state.signal
-  if (!live || !built) return !live && !built
-  if (live.count !== built.count || live.maxRowid !== built.maxRowid) return false
-  const writtenInPlace = live.changes !== built.changes || live.dataVersion !== built.dataVersion
-  return !(writtenInPlace && now - state.builtAt >= SCAN_CACHE_INPLACE_TTL_MS)
+  return isTableSignalCurrent(state.signal, readTableSignal(db, table), state.builtAt, now)
 }

@@ -12,16 +12,21 @@ import {
   hasExtraStemSlotsTable,
   writeExtraStemSlots
 } from './riffStemsExtra'
+import { bumpTableWriteVersion } from './tableWriteVersion'
 
 export function upsertJam(db: Database.Database, jamCID: string, publicName: string): void {
   db.prepare(
     `INSERT INTO Jams (JamCID, PublicName) VALUES (?, ?)
      ON CONFLICT(JamCID) DO UPDATE SET PublicName = excluded.PublicName`
   ).run(jamCID, publicName)
+  bumpTableWriteVersion(db, 'Jams')
 }
 
 export function markJamSyncComplete(db: Database.Database, jamCID: string): void {
   db.prepare(`UPDATE Jams SET SyncComplete = 1 WHERE JamCID = ?`).run(jamCID)
+  // An in-place UPDATE -- invisible to a row count, and precisely the
+  // case tableChangeSignal.ts's per-table write counter exists for.
+  bumpTableWriteVersion(db, 'Jams')
 }
 
 export interface RiffSkeleton {
@@ -49,6 +54,7 @@ export function upsertRiffSkeletons(
       insert.run({ riffCID: row.riffCID, jamCID, creationTime: row.creationTime })
   })
   txn(riffs)
+  bumpTableWriteVersion(db, 'Riffs')
 }
 
 interface RiffDetailMeta {
@@ -172,6 +178,11 @@ export function writeRiffDetail(
     }
   })
   txn(resolved)
+  // Both in place: the Riffs row is a skeleton being filled in
+  // (AppVersion NULL -> 1), and the Stems rows are upserted detail. A row
+  // count sees neither, which is why both are announced here.
+  bumpTableWriteVersion(db, 'Riffs')
+  bumpTableWriteVersion(db, 'Stems')
 }
 
 /** The whole resumability mechanism: a riff whose AppVersion is still NULL
@@ -282,6 +293,8 @@ export function deleteJamRows(db: Database.Database, jamCID: string): string[] {
     db.prepare(`DELETE FROM Tags WHERE OwnerJamCID = ?`).run(jamCID)
     db.prepare(`DELETE FROM Jams WHERE JamCID = ?`).run(jamCID)
   })()
+  bumpTableWriteVersion(db, 'Riffs')
+  bumpTableWriteVersion(db, 'Jams')
 
   if (candidateStemCIDs.size === 0) return []
   const stillReferencedWhere = STEM_SLOT_COLUMNS.map((c) => `${c} = @cid`).join(' OR ')
@@ -301,6 +314,7 @@ export function deleteJamRows(db: Database.Database, jamCID: string): string[] {
   if (orphanedStemCIDs.length > 0) {
     const placeholders = orphanedStemCIDs.map(() => '?').join(',')
     db.prepare(`DELETE FROM Stems WHERE StemCID IN (${placeholders})`).run(...orphanedStemCIDs)
+    bumpTableWriteVersion(db, 'Stems')
   }
   return orphanedStemCIDs
 }
