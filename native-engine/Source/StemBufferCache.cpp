@@ -5,6 +5,16 @@
 
 namespace sssketch
 {
+    // TEMPORARY INSTRUMENTATION (2026-09-28) -- see the declaration in
+    // StemBufferCache.h. Message thread only, same as load() itself, so a
+    // plain int is enough.
+    static int gStemDecodeCount = 0;
+
+    int stemDecodeCount()
+    {
+        return gStemDecodeCount;
+    }
+
     bool decodeRawAudioFile(
         const juce::String& path, juce::AudioBuffer<float>& bufferOut, double& sampleRateOut)
     {
@@ -47,6 +57,7 @@ namespace sssketch
         Entry entry;
         if (!decodeRawAudioFile(path, entry.buffer, entry.sampleRate))
             return false;
+        ++gStemDecodeCount; // TEMP (2026-09-28), see stemDecodeCount()
 
         // Where playback actually wraps this stem, matching
         // PlaybackEngine::renderBlock's own srcSample rounding exactly —

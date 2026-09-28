@@ -21,6 +21,13 @@ namespace sssketch
     bool decodeRawAudioFile(
         const juce::String& path, juce::AudioBuffer<float>& bufferOut, double& sampleRateOut);
 
+    /** TEMPORARY INSTRUMENTATION (2026-09-28) -- how many real decodes
+     * StemBufferCache::load has done since the process started. Read
+     * either side of a load-project to tell a preload hit (0) from a
+     * miss (a file read, on a USB volume, on the beat). Remove together
+     * with IpcServer.cpp's own `[radio-engine]` log line. */
+    int stemDecodeCount();
+
     /** buffer is nullptr (sampleRate the unused default) if the path was never
      * successfully loaded. */
     struct StemBufferEntry

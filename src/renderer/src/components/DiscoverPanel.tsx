@@ -98,6 +98,15 @@ import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject } from '@shared/buildEngineProject'
+import { backgroundScanGate } from '../audio/backgroundScanGate'
+// TEMPORARY INSTRUMENTATION (2026-09-28) -- remove this import and every
+// radioTrace* call below together with src/renderer/src/perf/radioTrace.ts.
+import {
+  radioTraceBegin,
+  radioTraceMark,
+  radioTraceMarkPush,
+  radioTraceTick
+} from '../perf/radioTrace'
 import { initialState, type AppState } from '../state/store'
 import {
   neutralCutoff,
@@ -617,6 +626,13 @@ export function DiscoverPanel({
   useEffect(() => {
     previewingSlotIdsRef.current = previewingSlotIds
   }, [previewingSlotIds])
+  // TEMPORARY INSTRUMENTATION (2026-09-28) -- "React has actually applied
+  // the commit": this is a passive effect on the `slots` prop the commit
+  // wrote, so it fires once that render is committed. Remove with
+  // radioTrace.ts.
+  useEffect(() => {
+    radioTraceMark('render')
+  }, [slots])
   // Every slot's own real, NATIVE-TEMPO resolved stem (path/durationSec/
   // barLength/author/name/type, exactly what each DiscoverSlotRow reports
   // via reportSlotResolution) -- the ONE source of truth `syncPreviewToEngine`
@@ -712,6 +728,7 @@ export function DiscoverPanel({
     if (pendingSyncRafRef.current !== null) cancelAnimationFrame(pendingSyncRafRef.current)
     pendingSyncRafRef.current = requestAnimationFrame(() => {
       pendingSyncRafRef.current = null
+      radioTraceMark('raf') // TEMP (2026-09-28), remove with radioTrace.ts
       // .finally, not .then: syncPreviewToEngine has several early returns
       // (unmounted, no members, a superseded generation, ownership lost)
       // and its own internal try/catch, and a radio arm waiting on this
@@ -1307,11 +1324,13 @@ export function DiscoverPanel({
     // than updated -- they should keep describing whatever preview (or
     // lack of one) was really last loaded successfully.
     try {
+      radioTraceMark('assembled') // TEMP (2026-09-28), remove with radioTrace.ts
       const project = await buildEngineProject(
         previewState,
         resolveStretchedForPlayback,
         pluginCatalog
       )
+      radioTraceMark('built') // TEMP
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
       // The phone gets the loop whether or not the Mac's engine is showing
       // it -- pushed BEFORE the ownership gate below on purpose, so a
@@ -1329,9 +1348,12 @@ export function DiscoverPanel({
           return m.id
         })
       )
+      radioTraceMark('remote') // TEMP
       if (!stillOwnEngine(engineToken)) return
 
+      radioTraceMarkPush() // TEMP -- numbers this push for the engine's own line
       await window.rifffApi.engineLoadProject(project)
+      radioTraceMark('acked') // TEMP
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
       if (!stillOwnEngine(engineToken)) return
 
@@ -1353,6 +1375,32 @@ export function DiscoverPanel({
       // sweep in progress from stepping back to whatever the project this
       // sync happened to carry.
       pushMasterFilter()
+
+      // Warm the engine for every resolved slot that is NOT in the mix --
+      // the muted ones.
+      //
+      // Direct report, 2026-09-28: "channel 3 was muted at start -- the
+      // transition is trying to load it just in time, but it should
+      // pre-load it." He is right, and a muted slot was doubly cold.
+      // radioEligibleSlotIds requires `audible`, so radio never picks a
+      // muted layer and its own prefetch never warms one; and a muted
+      // slot is left out of `members`, so it never appears in a project
+      // either, which is the only other way the engine ever hears about a
+      // stem. Unmuting therefore paid a full read+decode inside
+      // setProject, on the engine's message thread. Visible in the engine
+      // log as the one radio-era `decodes 1 of 4 stems`.
+      //
+      // Deliberately AFTER the load-project above, never before: this is
+      // a hint for a layer nobody is listening to yet, and it must not be
+      // able to delay the change someone IS listening to. Idempotent --
+      // the engine's buffer cache is keyed by path and never evicted, so
+      // a stem already warm costs one no-op message.
+      for (const [slotId, stem] of resolvedStemsRef.current) {
+        if (ids.has(slotId)) continue
+        void warmEngineBuffer(stem, bpm, resolveStretchedForPlayback, (p, durationSec) =>
+          window.rifffApi.enginePreloadStem(p, durationSec)
+        )
+      }
 
       // Only on the empty-to-non-empty transition -- a later rebuild of an
       // already-loaded preview just keeps playing through it, matching every
@@ -1454,6 +1502,7 @@ export function DiscoverPanel({
   // (via syncPreviewToEngine) resolves that internally, every call.
   function reportSlotResolution(id: string, stem: ResolvedCandidateStem | null): void {
     if (stem) {
+      radioTraceMark('resolved') // TEMP (2026-09-28), remove with radioTrace.ts
       resolvedStemsRef.current.set(id, stem)
       resolvedBarLengthsRef.current = new Map(resolvedBarLengthsRef.current).set(id, stem.barLength)
       setResolvedBarLengths((prev) => {
@@ -1595,6 +1644,28 @@ export function DiscoverPanel({
   useEffect(() => {
     radioOnRef.current = radioOn
   }, [radioOn])
+
+  // Radio holds the ambient background scans off for as long as it runs.
+  //
+  // Two separate reasons, both measured 2026-09-28 on Elling's own
+  // library. The bigger one is memory: DiscoverLibraryScan decodes 3
+  // stems every 500ms for the whole session, each costing a whole-file
+  // read plus an AudioBuffer -- megabytes apiece -- and the renderer
+  // reached a 4GB heap and died of "Ineffective mark-compacts near heap
+  // limit" after seven minutes of radio, with ~1s mark-compact pauses on
+  // the way up. The smaller one is that those pauses land on the main
+  // thread radio needs to get a change out on the downbeat.
+  //
+  // A hold, not a stop: backgroundScanGate's own contract is that a scan
+  // finding the gate closed reschedules the same batch rather than
+  // skipping it, so nothing is dropped and the scan resumes exactly where
+  // it was the moment radio stops. What this DOES change is when a big
+  // library finishes classifying, which is why it is said out loud in the
+  // transport menu's own scan row rather than only here.
+  useEffect(() => {
+    if (!radioOn) return
+    return backgroundScanGate.hold()
+  }, [radioOn])
   // The live clock. A REF, not state: it is written from the position-tick
   // effect below at ~30Hz and re-rendering the whole panel for each tick
   // would be pointless (the panel already re-renders at that rate for the
@@ -1735,6 +1806,11 @@ export function DiscoverPanel({
   // declarations further down this component body, so they are hoisted and
   // available here -- the effect only runs after render regardless.)
   useEffect(() => {
+    // TEMPORARY INSTRUMENTATION (2026-09-28) -- the arrival time of this
+    // tick is what every later step is measured from, and `pos` here is
+    // how far past the boundary the 30Hz stream had already carried us
+    // before anything noticed. Remove with radioTrace.ts.
+    radioTraceTick(pos)
     if (!radioOn) return
     const clock = radioClockRef.current
     if (!clock) return
@@ -1761,6 +1837,12 @@ export function DiscoverPanel({
     const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, changeBars)
     const step = advanceRadioClock(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
     radioClockRef.current = step.clock
+    // TEMPORARY INSTRUMENTATION (2026-09-28) -- the bar a change detected
+    // on this tick was aiming at, so `pos - boundaryBars` is the
+    // detection floor. Mirrors advanceRadioClock's own grid arithmetic;
+    // a wrap is always bar 0. Remove with radioTrace.ts.
+    const traceGrid = gridBars > 0 ? gridBars : loopBars
+    const boundaryBars = step.wrapped ? 0 : Math.floor(pos / traceGrid) * traceGrid
     // A change a hole or a riser was announcing LANDS HERE and only here.
     //
     // The gesture has just played out over the closing bars of the lap --
@@ -1788,7 +1870,9 @@ export function DiscoverPanel({
         if (radioEligibleSlotIds().includes(led.slotId)) {
           // No pushUndoSnapshot, for the same reason nothing else radio
           // does takes one: a transition is performance, not an edit.
+          radioTraceBegin(boundaryBars, bpmRef.current, 'gesture-led') // TEMP
           commitSlotPick(led.slotId, led.pick)
+          radioTraceMark('commit') // TEMP
           radioLastSlotRef.current = led.slotId
           committed = true
         }
@@ -1838,7 +1922,9 @@ export function DiscoverPanel({
       )
       void Promise.resolve().then(() => {
         if (!radioOnRef.current) return
+        radioTraceBegin(boundaryBars, bpmRef.current, 'course-change') // TEMP
         for (const { slotId, pick } of batch) commitSlotPick(slotId, pick)
+        radioTraceMark('commit') // TEMP
         // Nothing "changed last" after a whole-bed turnover, so the
         // not-the-same-one-twice rule starts clean.
         radioLastSlotRef.current = null
@@ -1944,7 +2030,9 @@ export function DiscoverPanel({
         // the undo stack and make Cmd+Z useless for the edits the user
         // actually made by hand. A radio change is not undoable; the
         // padlock is the tool for "I liked that one" (spec 3.4).
+        radioTraceBegin(boundaryBars, bpmRef.current, `due-${transition}`) // TEMP
         commitSlotPick(pending.slotId, pending.pick)
+        radioTraceMark('commit') // TEMP
         radioLastSlotRef.current = pending.slotId
         committed = true
         if (transition !== 'cut') {
@@ -1962,7 +2050,33 @@ export function DiscoverPanel({
             beats,
             lapsLeft: 1
           }
-          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+          // NO sync scheduled here, deliberately -- this used to call
+          // scheduleSyncPreviewToEngine and that was the bug.
+          //
+          // Direct report, 2026-09-28: "that last transition there was a
+          // fade in .. or a blip without the top stem." The commit above
+          // only writes the slot's new candidate; the new stem is not
+          // resolved into resolvedStemsRef until the row's own resolve
+          // effect runs, a render and a promise later. Syncing right here
+          // raced that: whenever the renderer was busy enough for the
+          // animation frame to land first, a load-project went out
+          // carrying the arrival gesture applied to the layer's OLD
+          // stem -- a curve sweeping or blooming the wrong audio -- and
+          // the engine applies a load-project in full, so it was audible.
+          // Then the real swap followed as a second push a moment later.
+          //
+          // The gesture is read out of radioGestureRef at build time, so
+          // the sync that reportSlotResolution fires when the new stem
+          // lands already carries it. Dropping this call means the
+          // gesture and the stem it decorates always reach the engine in
+          // the SAME project, which is what "an arrival gesture rides the
+          // change it decorates" was supposed to mean. It also halves the
+          // load-projects a decorated change costs.
+          //
+          // The two sync calls nearby are deliberately untouched: the
+          // leading-gesture branch above (a hole or a riser) must fire
+          // NOW, a whole lap before its change, and the standalone
+          // drop-out below is not attached to a change at all.
         }
       }
       // Roll ONCE per interval for a drop-out in the coming one -- no

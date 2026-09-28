@@ -210,20 +210,38 @@ namespace sssketch
 
     void IpcConnection::messageReceived(const juce::MemoryBlock& message)
     {
+        // TEMPORARY INSTRUMENTATION (2026-09-28) -- radio stem-change
+        // latency. Remove this, the four other tTrace* reads below, the
+        // `[radio-engine]` log line, and StemBufferCache's stemDecodeCount()
+        // together.
+        const auto tTraceEnter = juce::Time::getMillisecondCounterHiRes();
         auto text = juce::String::fromUTF8((const char*) message.getData(), (int) message.getSize());
         auto parsed = juce::JSON::parse(text);
         if (!parsed.isObject())
             return;
+        const auto tTraceVarParsed = juce::Time::getMillisecondCounterHiRes();
         auto type = parsed.getProperty("type", "").toString();
         auto payload = parsed.getProperty("payload", juce::var());
 
         if (type == "load-project")
         {
+            // TEMP -- how far past its own loop top the transport already
+            // is when this message lands. The whole point of the
+            // measurement: the renderer's own trace stops at the socket
+            // write, and this is the other end of it, on the one clock
+            // that matters (the transport's).
+            static int tTracePushSeq = 0;
+            ++tTracePushSeq;
+            const auto tTracePos = transport.currentPositionBars();
+            const auto tTraceDecodesBefore = stemDecodeCount();
+
             EngineProject project;
             juce::String error;
             const auto payloadJson = juce::JSON::toString(payload, true);
+            const auto tTraceReserialized = juce::Time::getMillisecondCounterHiRes();
             if (parseEngineProject(payloadJson, project, error))
             {
+                const auto tTraceProjectParsed = juce::Time::getMillisecondCounterHiRes();
                 transport.setBpm(project.bpm);
                 // Pushes sssketch's own current project tempo out to the
                 // Link session (see LinkSession's own doc comment for the
@@ -241,6 +259,21 @@ namespace sssketch
                 linkSession.syncTempo(project.bpm);
                 transport.setLoopLengthBars(project.loopLengthBars);
                 engine.setProject(project);
+                const auto tTraceSetProject = juce::Time::getMillisecondCounterHiRes();
+                int tTraceStems = 0;
+                for (const auto& r : project.rifffs)
+                    tTraceStems += (int) r.stems.size();
+                juce::Logger::writeToLog(
+                    "[radio-engine #" + juce::String(tTracePushSeq) + "] t "
+                    + juce::String(tTraceEnter, 0) + " · pos "
+                    + juce::String(tTracePos, 3) + "bar · varParse "
+                    + juce::String(tTraceVarParsed - tTraceEnter, 1) + " · reserialize "
+                    + juce::String(tTraceReserialized - tTraceVarParsed, 1) + " · projectParse "
+                    + juce::String(tTraceProjectParsed - tTraceReserialized, 1) + " · setProject "
+                    + juce::String(tTraceSetProject - tTraceProjectParsed, 1) + " (decodes "
+                    + juce::String(stemDecodeCount() - tTraceDecodesBefore) + " of "
+                    + juce::String(tTraceStems) + " stems) · handler "
+                    + juce::String(tTraceSetProject - tTraceEnter, 1) + "ms"); // TEMP (2026-09-28)
                 // The ENTIRE mechanism by which a live override (set via
                 // set-live-param, above) eventually gets cleared -- no
                 // explicit "clear" message is ever sent by the renderer's
