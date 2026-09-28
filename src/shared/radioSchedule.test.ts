@@ -48,20 +48,31 @@ describe('radio paces', () => {
     expect(normalizeRadioPace('slow')).toBe('slow')
   })
 
-  it('sits every pace on a 3x ladder, retuned now the quantisation is gone', () => {
-    expect(RADIO_PACE_BARS.fast).toEqual({ min: 2, max: 4 })
-    expect(RADIO_PACE_BARS.mid).toEqual({ min: 6, max: 12 })
-    expect(RADIO_PACE_BARS.slow).toEqual({ min: 18, max: 36 })
+  it('steps back from the first retune, which he heard as too frenetic', () => {
+    // 2026-09-28, after listening: "the transitions are a little too
+    // frenetic by default now". The first retune put mid at 6-12 (~21s
+    // realised); this is the retreat Phase A's own simulation named.
+    // Not a strict 3x ladder any more -- mid is the number that was
+    // actually judged by ear, and the neighbours are spaced around it
+    // rather than the other way round.
+    expect(RADIO_PACE_BARS.fast).toEqual({ min: 3, max: 6 })
+    expect(RADIO_PACE_BARS.mid).toEqual({ min: 8, max: 16 })
+    expect(RADIO_PACE_BARS.slow).toEqual({ min: 24, max: 48 })
+  })
+
+  it('keeps each pace at least twice the one below it, so they stay distinct', () => {
+    expect(RADIO_PACE_BARS.mid.min / RADIO_PACE_BARS.fast.min).toBeGreaterThanOrEqual(2)
+    expect(RADIO_PACE_BARS.slow.min / RADIO_PACE_BARS.mid.min).toBeGreaterThanOrEqual(2)
   })
 })
 
 describe('nextRadioIntervalBars', () => {
   it('returns the window minimum when random() is 0', () => {
-    expect(nextRadioIntervalBars('mid', () => 0)).toBe(6)
+    expect(nextRadioIntervalBars('mid', () => 0)).toBe(8)
   })
 
   it('returns the window maximum when random() is just under 1', () => {
-    expect(nextRadioIntervalBars('mid', () => 0.9999)).toBe(12)
+    expect(nextRadioIntervalBars('mid', () => 0.9999)).toBe(16)
   })
 
   it('returns a whole number of bars inside the window, for every pace', () => {

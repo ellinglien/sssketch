@@ -39,10 +39,24 @@ export const DEFAULT_RADIO_PACE: RadioPace = 'mid'
  * rung. A clean 3x ladder with a 2:1 window at every step.
  *
  * At 120bpm in 4/4 (2s a bar): slow = 36-72s, mid = 12-24s, fast = 4-8s. */
+// Reported after listening to the first retune (2026-09-28): "the
+// transitions are a little too frenetic by default now". Realised mid had
+// gone from ~44s to ~21s between changes -- a bigger jump than the numbers
+// alone suggest, because it compounded with faa3f24. That fix meant radio
+// had been doing NOTHING on a loop seeded by hand, so he went from no
+// changes at all to one every twenty seconds, and judged the pair
+// together.
+//
+// So mid steps back to 8-16 (~28s realised), which is the number Phase A's
+// own simulation named as the retreat if it came out too busy. The GRID is
+// deliberately left alone: that is the correctness fix -- it is what makes
+// the pace mean a number of bars again rather than a number rounded up to
+// the loop -- and walking it back would hide the thing that was actually
+// wrong. Pace is taste; the grid was a bug.
 export const RADIO_PACE_BARS: Record<RadioPace, { min: number; max: number }> = {
-  slow: { min: 18, max: 36 },
-  mid: { min: 6, max: 12 },
-  fast: { min: 2, max: 4 }
+  slow: { min: 24, max: 48 },
+  mid: { min: 8, max: 16 },
+  fast: { min: 3, max: 6 }
 }
 
 /** Anything unrecognised (an older settings file, a hand-edited JSON)
