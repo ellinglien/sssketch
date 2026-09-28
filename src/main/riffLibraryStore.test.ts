@@ -445,10 +445,16 @@ describe('listJams authorship counts', () => {
     })
   })
 
-  it('leaves a jam with no riffs at all uncounted rather than zeroed -- nothing synced yet is not evidence he was never in it', () => {
-    const empty = jamsByCID('elling')['jam-empty']
-    expect(empty.ownRiffCount).toBeUndefined()
-    expect(empty.unknownAuthorRiffCount).toBeUndefined()
+  // 5,014 of the 5,056 Jams rows in his real LORE archive are exactly
+  // this: a jam LORE knows the name of and has never synced one riff of.
+  // "Nothing of his to import from here" is the true answer for those,
+  // and calling it unanswerable instead would make the sidebar filter a
+  // no-op on the one library it exists for.
+  it('reports zero for a jam with nothing synced in it at all', () => {
+    expect(jamsByCID('elling')['jam-empty']).toMatchObject({
+      ownRiffCount: 0,
+      unknownAuthorRiffCount: 0
+    })
   })
 
   it('counts a different username independently of one already asked about', () => {

@@ -118,13 +118,16 @@ function hasStoredRiffLibraryUsername(): boolean {
   }
 }
 
-// Whether the jam sidebar is narrowed to jams he has riffs in. Defaults ON
-// -- his real external archive holds 5,056 jams and he has played in 42 of
-// them, so an unnarrowed list is 99.2% other people's rooms. Safe as a
-// default only because jamMightBeMine (jamOwnership.ts) hides nothing it
-// cannot positively rule out, so a library that records no authorship at
-// all (sssketch's own) comes out exactly as it does today. Persisted, like
-// the username, since it is a per-person browsing habit.
+// Whether the jam sidebar is narrowed to jams he has riffs in. Defaults
+// ON -- his real external archive lists 5,056 jams, of which 5,014 are
+// name-only stubs with not one riff synced and 42 hold riffs of his, so
+// an unnarrowed list is 99.2% rooms with nothing in them to import. Safe
+// as a default because jamMightBeMine (jamOwnership.ts) hides nothing it
+// cannot positively rule out, and because a jam he has JOINED is never
+// hidden regardless (see jamIsNeverHidden) -- so a library that records
+// no authorship comes out exactly as it does today, and no jam he is
+// actually in can go missing. Persisted, like the username, since it is
+// a per-person browsing habit.
 const ONLY_MY_JAMS_STORAGE_KEY = 'sssketch:onlyMyJams'
 
 function loadStoredOnlyMyJams(): boolean {
@@ -612,26 +615,36 @@ export function LibraryBrowser({
     return merged.filter((j) => j.name.toLowerCase().includes(needle))
   }, [syncedJams, membershipJams, jamFilter])
 
-  // The rooms the sidebar pins to the top, which "only my jams" must
-  // never hide whatever the counts say: the discovered room is built by
-  // this app and authored 'discovered', the shared feed is his by
-  // definition, a jam actively syncing has to stay watchable, and his own
-  // private jam is the one he auto-syncs on login.
-  const jamIsPinned = useCallback(
+  const membershipJamCIDs = useMemo(
+    () => new Set((membershipJams ?? []).map((j) => j.jamCID)),
+    [membershipJams]
+  )
+
+  // What "only my jams" must never hide, whatever the riff counts say.
+  // Membership carries the most weight of these: a jam he has joined is
+  // one he is in by definition, and its warehouse row wins the merge in
+  // visibleJams above, so without this a jam he joined but has not
+  // synced yet would come through as a bare 0/0 and vanish. The rest are
+  // the rooms the sidebar already pins to the top -- the discovered room
+  // is built by this app and authored 'discovered', the shared feed is
+  // his, his own private jam auto-syncs on login, and a jam mid-sync has
+  // to stay watchable while it fills.
+  const jamIsNeverHidden = useCallback(
     (jam: RiffLibraryJam): boolean =>
+      membershipJamCIDs.has(jam.jamCID) ||
       jam.jamCID === DISCOVERED_JAM_CID ||
       jam.jamCID.startsWith('shared:') ||
       jam.jamCID === ownJam?.jamCID ||
       syncingKeys.has(syncKeyFor(jam.jamCID)),
-    [ownJam, syncingKeys]
+    [membershipJamCIDs, ownJam, syncingKeys]
   )
 
   // How many jams "only my jams" would actually hide. Zero means this
   // library records no authorship the filter can act on, and the toggle
   // is not offered at all rather than sitting there doing nothing.
   const hideableJamCount = useMemo(
-    () => visibleJams.filter((jam) => !jamIsPinned(jam) && !jamMightBeMine(jam)).length,
-    [visibleJams, jamIsPinned]
+    () => visibleJams.filter((jam) => !jamIsNeverHidden(jam) && !jamMightBeMine(jam)).length,
+    [visibleJams, jamIsNeverHidden]
   )
 
   // Sidebar-only ordering -- pulls whichever jams are actively syncing to
@@ -647,7 +660,7 @@ export function LibraryBrowser({
     // detail pane looks the SELECTED jam's name up in -- hiding a jam
     // from the sidebar must not blank out its own header.
     const shown = onlyMyJams
-      ? visibleJams.filter((jam) => jamIsPinned(jam) || jamMightBeMine(jam))
+      ? visibleJams.filter((jam) => jamIsNeverHidden(jam) || jamMightBeMine(jam))
       : visibleJams
     // The discovered room goes above everything, including a jam that is
     // actively syncing -- it is the room he opens most, and it has no
@@ -663,7 +676,7 @@ export function LibraryBrowser({
       else rest.push(jam)
     }
     return [...discovered, ...syncing, ...pinned, ...rest]
-  }, [visibleJams, onlyMyJams, jamIsPinned, syncingKeys, ownJam])
+  }, [visibleJams, onlyMyJams, jamIsNeverHidden, syncingKeys, ownJam])
 
   // ---------------------------------------------------------------------
   // Sync status + trigger

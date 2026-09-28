@@ -260,24 +260,17 @@ function dbForJam(jamCID: string): Database.Database | null {
     : getRiffLibraryDb()
 }
 
-/** riffCount rides along on the same GROUP BY that already computes
- * lastRiffTime, so it costs nothing extra -- attachJamOwnership below
- * needs it to tell "no riffs by him" apart from "no riffs at all". Not
- * part of RiffLibraryJam; stripped before the rows leave this module. */
-type JamRow = RiffLibraryJam & { riffCount: number }
-
-function queryJamsFromDb(db: Database.Database, filterText: string): JamRow[] {
+function queryJamsFromDb(db: Database.Database, filterText: string): RiffLibraryJam[] {
   return db
     .prepare(
-      `SELECT j.JamCID as jamCID, j.PublicName as name, COALESCE(MAX(r.CreationTime), 0) as lastRiffTime,
-              COUNT(r.RiffCID) as riffCount
+      `SELECT j.JamCID as jamCID, j.PublicName as name, COALESCE(MAX(r.CreationTime), 0) as lastRiffTime
        FROM Jams j
        LEFT JOIN Riffs r ON r.OwnerJamCID = j.JamCID
        WHERE j.PublicName LIKE ?
        GROUP BY j.JamCID
        ORDER BY lastRiffTime DESC`
     )
-    .all(`%${filterText}%`) as JamRow[]
+    .all(`%${filterText}%`) as RiffLibraryJam[]
 }
 
 /** Per-jam authorship counts for one db: how many riffs each jam has by
@@ -353,28 +346,28 @@ function cachedJamOwnership(
 }
 
 /** Attaches jamOwnership.ts's two count fields to rows read from `db`.
- * A jam with no synced riffs at all is left WITHOUT counts rather than
- * given zeroes: "nothing here yet" is not evidence that he never played
- * in it, and a zeroed jam is one the sidebar filter would hide. */
-function attachJamOwnership(rows: JamRow[], db: Database.Database, targetUser: string): JamRow[] {
+ *
+ * A jam with no riffs in this archive at all comes out 0/0, same as one
+ * whose riffs are all somebody else's -- both mean "nothing of his to
+ * import from here." That case is the BULK of a real LORE archive, not a
+ * corner: measured 2026-09-28 on his own, 5,014 of 5,056 Jams rows are
+ * name-only stubs LORE knows of but has never synced a single riff for,
+ * and only 43 jams have any content at all. Treating an empty jam as
+ * "cannot say" would make the whole filter a no-op on the one library it
+ * was built for. Membership is what rescues a jam he IS in but has never
+ * synced -- see LibraryBrowser.tsx's own never-hidden set, which the
+ * live Endlesss membership list feeds. */
+function attachJamOwnership(
+  rows: RiffLibraryJam[],
+  db: Database.Database,
+  targetUser: string
+): RiffLibraryJam[] {
   const counts = cachedJamOwnership(db, targetUser)
-  return rows.map((row) => {
-    if (row.riffCount === 0) return row
-    const entry = counts.get(row.jamCID)
-    return {
-      ...row,
-      ownRiffCount: entry?.ownRiffCount ?? 0,
-      unknownAuthorRiffCount: entry?.unknownAuthorRiffCount ?? 0
-    }
-  })
-}
-
-function stripRiffCount(rows: JamRow[]): RiffLibraryJam[] {
-  return rows.map((row) => {
-    const jam: RiffLibraryJam & { riffCount?: number } = { ...row }
-    delete jam.riffCount
-    return jam
-  })
+  return rows.map((row) => ({
+    ...row,
+    ownRiffCount: counts.get(row.jamCID)?.ownRiffCount ?? 0,
+    unknownAuthorRiffCount: counts.get(row.jamCID)?.unknownAuthorRiffCount ?? 0
+  }))
 }
 
 /** The jams in the configured archive, newest-riff-first.
@@ -385,7 +378,7 @@ function stripRiffCount(rows: JamRow[]): RiffLibraryJam[] {
  * every Discover roll and has no use for them. */
 export function listJams(filterText: string, targetUser?: string): RiffLibraryJam[] {
   const db = getRiffLibraryDb()
-  const withCounts = (rows: JamRow[], from: Database.Database): JamRow[] =>
+  const withCounts = (rows: RiffLibraryJam[], from: Database.Database): RiffLibraryJam[] =>
     targetUser && targetUser.trim() !== ''
       ? attachJamOwnership(rows, from, targetUser.trim())
       : rows
@@ -396,7 +389,7 @@ export function listJams(filterText: string, targetUser?: string): RiffLibraryJa
   // separately, so "Shared Feed" still shows its real lastRiffTime instead
   // of silently reading as never-synced just because browsing is currently
   // pointed at an external archive.
-  if (riffLibraryRootPath() === ownRiffLibraryRoot()) return stripRiffCount(rows)
+  if (riffLibraryRootPath() === ownRiffLibraryRoot()) return rows
   const ownDb = openOwnRiffLibraryDb()
   const ownRows = withCounts(
     queryJamsFromDb(ownDb, filterText).filter(
@@ -404,7 +397,7 @@ export function listJams(filterText: string, targetUser?: string): RiffLibraryJa
     ),
     ownDb
   )
-  return stripRiffCount([...rows, ...ownRows].sort((a, b) => b.lastRiffTime - a.lastRiffTime))
+  return [...rows, ...ownRows].sort((a, b) => b.lastRiffTime - a.lastRiffTime)
 }
 
 // Cache for listJamsWithDb, below -- direct live report: even after
