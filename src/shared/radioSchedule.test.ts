@@ -6,6 +6,7 @@ import {
   DEFAULT_RADIO_SETTINGS,
   DEFAULT_RADIO_TURNOVER,
   RADIO_CHANNELS_MAX,
+  DEFAULT_RADIO_CHANNELS,
   RADIO_CHANNELS_MIN,
   RADIO_LOOP_END_OPTIONS,
   RADIO_PACE_BARS,
@@ -803,12 +804,22 @@ describe('RadioSettings', () => {
     )
   })
 
-  it('clamps the channel count to four through eight', () => {
-    expect(RADIO_CHANNELS_MIN).toBe(4)
+  it('clamps the channel count to two through eight', () => {
+    // 2026-09-28: "can we adjust settings to include 2 and 3 stems only".
+    // The floor moved; the DEFAULT deliberately did not. They were one
+    // constant until this change, and reusing the floor would have turned
+    // the starting bed from a band into a duo as a side effect of adding
+    // an option nobody asked to have chosen for them.
+    expect(RADIO_CHANNELS_MIN).toBe(2)
     expect(RADIO_CHANNELS_MAX).toBe(8)
-    expect(normalizeRadioSettings({ channels: 1 }).channels).toBe(4)
+    expect(DEFAULT_RADIO_CHANNELS).toBe(4)
+    expect(normalizeRadioSettings({ channels: 1 }).channels).toBe(2)
+    expect(normalizeRadioSettings({ channels: 2 }).channels).toBe(2)
+    expect(normalizeRadioSettings({ channels: 3 }).channels).toBe(3)
     expect(normalizeRadioSettings({ channels: 40 }).channels).toBe(8)
     expect(normalizeRadioSettings({ channels: 6.5 }).channels).toBe(6)
+    // Not a number at all is not a clamp -- it is no answer, so it takes
+    // the default rather than the floor.
     expect(normalizeRadioSettings({ channels: 'six' }).channels).toBe(4)
   })
 
@@ -859,7 +870,17 @@ describe('radioStarterKinds', () => {
   })
 
   it('clamps out of range rather than throwing', () => {
-    expect(radioStarterKinds(0)).toHaveLength(4)
+    // Zero is a number, so it clamps to the floor -- which is 2 since
+    // 2026-09-28, not the default 4. Only a non-number takes the default.
+    expect(radioStarterKinds(0)).toHaveLength(2)
     expect(radioStarterKinds(99)).toHaveLength(8)
+  })
+
+  it('makes a band out of every small bed, not just the big ones', () => {
+    // The starter ORDER already carries this -- its own comment insists
+    // every prefix has to stand alone -- so 2 and 3 needed no special
+    // case, only a lower floor.
+    expect(radioStarterKinds(2)).toEqual(['drums', 'bass'])
+    expect(radioStarterKinds(3)).toEqual(['drums', 'bass', 'lead'])
   })
 })

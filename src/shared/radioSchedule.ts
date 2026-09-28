@@ -612,9 +612,27 @@ export function normalizeRadioTurnover(value: unknown): RadioTurnover {
  *
  * This is NOT a cap on Discover. addSlot has no cap and never has -- he
  * ran twelve slots the same day -- and nothing here adds one. It is only
- * the size of the starting bed. */
-export const RADIO_CHANNELS_MIN = 4
+ * the size of the starting bed.
+ *
+ * Lowered to 2 later the same day: "can we adjust settings to include 2
+ * and 3 stems only". The starter order already makes both musical without
+ * a special case -- 2 is drums and bass, 3 adds the lead -- which is why
+ * that order's own comment insists every PREFIX has to sound like a band.
+ *
+ * One consequence worth knowing rather than discovering: at 2 channels a
+ * drop-out leaves a single layer playing. pickDropOutSlotId already
+ * refuses below two audible slots, so it cannot make silence, but a
+ * two-channel bed is the one place the gesture is as likely to sound
+ * like a fault as a decision. */
+export const RADIO_CHANNELS_MIN = 2
 export const RADIO_CHANNELS_MAX = 8
+
+/** Four, NOT the minimum. These were the same constant until the floor
+ * dropped to 2, at which point reusing it would have quietly changed the
+ * starting bed from a band to a duo -- a default nobody asked to move,
+ * changed as a side effect of adding an option. Four is still "the
+ * smallest thing that sounds like a band"; 2 and 3 are choices. */
+export const DEFAULT_RADIO_CHANNELS = 4
 
 /** The bed, in the order it grows. Every PREFIX has to sound like a band
  * on its own, because the chip row grows it from the left:
@@ -677,7 +695,7 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   paceBars: { ...RADIO_PACE_BARS[DEFAULT_RADIO_PACE] },
   loopEndOverBars: DEFAULT_RADIO_LOOP_END_BARS,
   phraseBars: DEFAULT_RADIO_PHRASE_BARS,
-  channels: RADIO_CHANNELS_MIN,
+  channels: DEFAULT_RADIO_CHANNELS,
   transitions: DEFAULT_RADIO_TRANSITIONS,
   dropOuts: DEFAULT_RADIO_DROP_OUTS,
   turnover: DEFAULT_RADIO_TURNOVER
@@ -709,9 +727,13 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
       (value as { grid?: unknown } | null)?.grid
     ),
     phraseBars: normalizeRadioPhraseBars(raw.phraseBars),
+    // A number out of range is a clamp; something that is not a number at
+    // all is no answer, so it takes the default rather than the floor.
+    // Those were the same constant until 2026-09-28 and the difference did
+    // not matter; it does now that the floor is 2.
     channels: Number.isFinite(channels)
       ? Math.min(RADIO_CHANNELS_MAX, Math.max(RADIO_CHANNELS_MIN, Math.floor(channels)))
-      : RADIO_CHANNELS_MIN,
+      : DEFAULT_RADIO_CHANNELS,
     transitions: normalizeRadioTransitions(raw.transitions),
     dropOuts: normalizeRadioDropOuts(raw.dropOuts),
     turnover: normalizeRadioTurnover(raw.turnover)
