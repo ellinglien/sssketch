@@ -101,8 +101,13 @@ describe('analyzeStemOnce', () => {
 
   it('decodes once for all three outputs, and each equals the old per-module result', async () => {
     const before = await oldPathOutputs('/lib/cid-1')
-    // The old per-module paths: peaks, features, embedding each decoded.
-    expect(decodeAudioDataMock).toHaveBeenCalledTimes(3)
+    // Was 3 -- peaks, features and embedding each decoded the same file
+    // separately. Now 1: decodeStemFile de-duplicates a read+decode
+    // already in flight for a path (2026-09-28), and oldPathOutputs asks
+    // for all four CONCURRENTLY, so they share one. analyzeStemOnce still
+    // earns its keep below -- it also shares across calls that do NOT
+    // overlap in time, and persists one batched write instead of three.
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
 
     vi.resetModules()
     decodeAudioDataMock.mockClear()

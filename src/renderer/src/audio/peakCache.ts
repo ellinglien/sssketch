@@ -1,6 +1,7 @@
 import { peaksFromChannel, zcrFromChannel } from '@shared/visuals'
 import { countWork } from '../perf/workCounters'
 import { queueStemAnalysisWrite } from './analysisWriteQueue'
+import { decodeStemFile } from './decodeStemFile'
 
 export interface WaveformAnalysis {
   peaks: number[]
@@ -59,15 +60,13 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
         return persisted
       }
 
-      countWork('ipc:read-audio-file')
-      const bytes = await window.rifffApi.readAudioFile(path)
-      // Defensive copy: bytes.buffer may be a larger backing ArrayBuffer than the
-      // Uint8Array's own view (e.g. depending on how it was reconstituted across the
-      // IPC boundary), so slice out exactly this view's byte range rather than
-      // handing decodeAudioData the raw (possibly oversized) backing buffer.
-      const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-      countWork('decode')
-      const audioBuffer = await getContext().decodeAudioData(arrayBuffer as ArrayBuffer)
+      // Through decodeStemFile, not inline: that module de-duplicates a
+      // read+decode already in flight for this same path, so a stem that
+      // arrives on screen wanting peaks AND a pitch line AND a glyph pays
+      // for one decode instead of three or four (see its own doc comment
+      // -- this fan-out is what drove the renderer to a 4GB heap). The
+      // body here was byte-for-byte what decodeStemFile already did.
+      const audioBuffer = await decodeStemFile(path)
       const result = waveformFromBuffer(audioBuffer)
       settled.set(path, result)
       // Fire-and-forget -- a real library stem's path persists for next

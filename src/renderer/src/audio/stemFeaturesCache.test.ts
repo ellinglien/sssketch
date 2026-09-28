@@ -84,9 +84,12 @@ describe('stemFeaturesCache', () => {
     await getStemFeatures('/some/stem.wav')
     const contour = await getPitchContour('/some/stem.wav')
     expect(contour.numFrames).toBeGreaterThan(0)
-    // One decode for brightness (peakCache.ts), one for the analysis --
-    // pitch used to cost a third, separate decode of the same file.
-    expect(decodeAudioDataMock).toHaveBeenCalledTimes(2)
+    // One decode, total. Pitch used to cost a third separate decode of
+    // this file and was fixed by priming; brightness (peakCache.ts) and
+    // the analysis itself were still two, and are now one -- they run
+    // concurrently inside getStemFeatures and decodeStemFile shares a
+    // read+decode already in flight for the path (2026-09-28).
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
   })
 
   it('evicts a rejected computation from the cache so a later call retries', async () => {
