@@ -1342,3 +1342,1702 @@ tooling, so the *timing* claim rests on the curve being data the engine performs
 in `radioDropOut.test.ts`, and not on anything anyone listened to.
 
 **Do not start Phase C until he has heard this.**
+
+---
+
+# PHASE C — the menu
+
+> "more parameters .. maybe even a menu"
+
+Six chip rows do not fit on the Discover actions row, and radio stays something you press and
+listen to — so the controls live behind the radio button. This phase also **migrates the settings
+into one nested object**, which is what stops the prop threading growing to sixteen props.
+
+---
+
+## Task 9: `RadioSettings` — the shape, the defaults, the migration
+
+**Files:**
+- Modify: `src/shared/radioSchedule.ts` (append)
+- Modify: `src/shared/radioSchedule.test.ts`
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `src/shared/radioSchedule.test.ts` (extending the import with `DEFAULT_RADIO_SETTINGS`,
+`RADIO_CHANNELS_MAX`, `RADIO_CHANNELS_MIN`, `RADIO_TURNOVER_OPTIONS`, `DEFAULT_RADIO_TURNOVER`,
+`normalizeRadioSettings`, `normalizeRadioTurnover`, `radioStarterKinds`):
+
+```ts
+describe('RadioSettings', () => {
+  it('defaults to mid, own loop, four channels, subtle, rare and even', () => {
+    expect(DEFAULT_RADIO_SETTINGS).toEqual({
+      pace: 'mid',
+      grid: 'own loop',
+      channels: 4,
+      transitions: 'subtle',
+      dropOuts: 'rare',
+      turnover: 'even'
+    })
+  })
+
+  it('normalizes a whole object, field by field, never throwing', () => {
+    expect(normalizeRadioSettings({ pace: 'fast', grid: '4 bars', channels: 6 })).toEqual({
+      pace: 'fast',
+      grid: '4 bars',
+      channels: 6,
+      transitions: 'subtle',
+      dropOuts: 'rare',
+      turnover: 'even'
+    })
+    expect(normalizeRadioSettings(null)).toEqual(DEFAULT_RADIO_SETTINGS)
+    expect(normalizeRadioSettings('nonsense')).toEqual(DEFAULT_RADIO_SETTINGS)
+    expect(normalizeRadioSettings({ pace: 'glacial', grid: 99 })).toEqual(DEFAULT_RADIO_SETTINGS)
+  })
+
+  it('clamps the channel count to four through eight', () => {
+    expect(RADIO_CHANNELS_MIN).toBe(4)
+    expect(RADIO_CHANNELS_MAX).toBe(8)
+    expect(normalizeRadioSettings({ channels: 1 }).channels).toBe(4)
+    expect(normalizeRadioSettings({ channels: 40 }).channels).toBe(8)
+    expect(normalizeRadioSettings({ channels: 6.5 }).channels).toBe(6)
+    expect(normalizeRadioSettings({ channels: 'six' }).channels).toBe(4)
+  })
+
+  it('migrates a pre-2026-09-28 settings file, which stored the pace flat', () => {
+    // Anyone running 1.3.0 has { radioPace: 'fast' } on disk and no
+    // `radio` object at all. That value must survive, not throw and not
+    // silently reset.
+    expect(normalizeRadioSettings(undefined, 'fast')).toEqual({
+      ...DEFAULT_RADIO_SETTINGS,
+      pace: 'fast'
+    })
+    expect(normalizeRadioSettings(undefined, 'glacial').pace).toBe('mid')
+    expect(normalizeRadioSettings({ pace: 'slow' }, 'fast').pace).toBe('slow')
+  })
+
+  it('offers even and random turnover, defaulting to even', () => {
+    expect(RADIO_TURNOVER_OPTIONS).toEqual(['even', 'random'])
+    expect(DEFAULT_RADIO_TURNOVER).toBe('even')
+    expect(normalizeRadioTurnover('fair')).toBe('even')
+  })
+})
+
+describe('radioStarterKinds', () => {
+  it('lays down the shipped four at four', () => {
+    expect(radioStarterKinds(4)).toEqual(['drums', 'bass', 'lead', 'warm'])
+  })
+
+  it('adds a second drum layer fifth -- a groove gets its top end from perc', () => {
+    expect(radioStarterKinds(5)).toEqual(['drums', 'bass', 'lead', 'warm', 'drums'])
+  })
+
+  it('grows from the left, so every prefix still sounds like a band', () => {
+    expect(radioStarterKinds(8)).toEqual([
+      'drums',
+      'bass',
+      'lead',
+      'warm',
+      'drums',
+      'bright',
+      'rhythmic',
+      'lead'
+    ])
+    for (let n = 4; n <= 8; n++) {
+      expect(radioStarterKinds(n)).toEqual(radioStarterKinds(8).slice(0, n))
+    }
+  })
+
+  it('clamps out of range rather than throwing', () => {
+    expect(radioStarterKinds(0)).toHaveLength(4)
+    expect(radioStarterKinds(99)).toHaveLength(8)
+  })
+})
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `npx vitest run src/shared/radioSchedule.test.ts`
+Expected: FAIL at import — `No "DEFAULT_RADIO_SETTINGS" export is defined`.
+
+- [ ] **Step 3: Implement**
+
+Append to `src/shared/radioSchedule.ts`:
+
+```ts
+/** How radio chooses WHICH layer turns over. `even` biases toward the
+ * least-recently-changed; `random` is the memoryless draw that shipped
+ * 2026-09-26. Elling hit a ~4.7-minute drought with the latter on
+ * 2026-09-28 -- "this is good for consistency but i'd love to have some
+ * control" -- so `random` is kept as a choice rather than removed. */
+export type RadioTurnover = 'even' | 'random'
+
+export const RADIO_TURNOVER_OPTIONS: RadioTurnover[] = ['even', 'random']
+
+/** `even`. A five-minute hold nobody asked for reads as broken, and the
+ * deliberate way to hold a layer is the hook. More channels makes the
+ * drought worse (one change per interval across six layers is half the
+ * rate of three), which is the strongest argument for this default. */
+export const DEFAULT_RADIO_TURNOVER: RadioTurnover = 'even'
+
+export function normalizeRadioTurnover(value: unknown): RadioTurnover {
+  return RADIO_TURNOVER_OPTIONS.includes(value as RadioTurnover)
+    ? (value as RadioTurnover)
+    : DEFAULT_RADIO_TURNOVER
+}
+
+/** How many layers radio lays down when started on an EMPTY panel.
+ * Elling, 2026-09-28: "see if more channels are feasible.. lots ideally...
+ * but maybe slider up to 8?".
+ *
+ * This is NOT a cap on Discover. addSlot has no cap and never has -- he
+ * ran twelve slots the same day -- and nothing here adds one. It is only
+ * the size of the starting bed. */
+export const RADIO_CHANNELS_MIN = 4
+export const RADIO_CHANNELS_MAX = 8
+
+/** The bed, in the order it grows. Every PREFIX has to sound like a band
+ * on its own, because the chip row grows it from the left:
+ *   1-4  the shipped set -- the smallest thing that sounds like a band
+ *   5    a SECOND drum layer: a groove gets its top end from hats and
+ *        perc over the kick-and-snare bed. Biggest gain per slot.
+ *   6    bright -- the counterweight to warm; a high end that is not the
+ *        lead
+ *   7    rhythmic -- a texture chosen for MOVEMENT rather than instrument,
+ *        filling the space between the bed and the lead
+ *   8    a second lead -- a counter-line. Two melodic voices, not two
+ *        basses: two basses fight, two leads converse. The dedupe pass in
+ *        pickForSlot keeps it from drawing the same stem. */
+const RADIO_STARTER_ORDER: DiscoverSlotKind[] = [
+  'drums',
+  'bass',
+  'lead',
+  'warm',
+  'drums',
+  'bright',
+  'rhythmic',
+  'lead'
+]
+
+export function radioStarterKinds(channels: number): DiscoverSlotKind[] {
+  const n = Math.min(
+    RADIO_CHANNELS_MAX,
+    Math.max(RADIO_CHANNELS_MIN, Math.floor(Number(channels) || 0))
+  )
+  return RADIO_STARTER_ORDER.slice(0, n)
+}
+
+/** Everything the radio menu sets, in one object rather than six flat
+ * fields on DiscoverSettings.
+ *
+ * Nested because the alternative is threading six pairs of props through
+ * App.tsx -> LibraryBrowser.tsx -> DiscoverPanel.tsx, which is sixteen
+ * props for what is one concept. `reach` and `character` are deliberately
+ * absent: they ship in their own plans (spec 10, phases F and G) and a
+ * field nothing reads is a lie. */
+export interface RadioSettings {
+  pace: RadioPace
+  grid: RadioGrid
+  channels: number
+  transitions: RadioTransitions
+  dropOuts: RadioDropOuts
+  turnover: RadioTurnover
+}
+
+export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
+  pace: DEFAULT_RADIO_PACE,
+  grid: DEFAULT_RADIO_GRID,
+  channels: RADIO_CHANNELS_MIN,
+  transitions: DEFAULT_RADIO_TRANSITIONS,
+  dropOuts: DEFAULT_RADIO_DROP_OUTS,
+  turnover: DEFAULT_RADIO_TURNOVER
+}
+
+/** Field by field, never throwing -- the same shape loadDiscoverSettings
+ * already uses for traitMatchBar and radioPace.
+ *
+ * `legacyPace` is the MIGRATION. Anyone running 1.3.0 has a flat
+ * `radioPace` on disk and no `radio` object, and their chosen pace must
+ * survive the move rather than silently resetting to mid. An explicit
+ * `radio.pace` always wins over it. */
+export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): RadioSettings {
+  const raw = (typeof value === 'object' && value !== null ? value : {}) as Partial<RadioSettings>
+  const pace =
+    raw.pace !== undefined ? normalizeRadioPace(raw.pace) : normalizeRadioPace(legacyPace)
+  const channels = Number(raw.channels)
+  return {
+    pace,
+    grid: normalizeRadioGrid(raw.grid),
+    channels: Number.isFinite(channels)
+      ? Math.min(RADIO_CHANNELS_MAX, Math.max(RADIO_CHANNELS_MIN, Math.floor(channels)))
+      : RADIO_CHANNELS_MIN,
+    transitions: normalizeRadioTransitions(raw.transitions),
+    dropOuts: normalizeRadioDropOuts(raw.dropOuts),
+    turnover: normalizeRadioTurnover(raw.turnover)
+  }
+}
+```
+
+Add at the top of the file:
+
+```ts
+import type { DiscoverSlotKind } from './discoverSlotKind'
+import { DEFAULT_RADIO_DROP_OUTS, normalizeRadioDropOuts, type RadioDropOuts } from './radioDropOut'
+import {
+  DEFAULT_RADIO_TRANSITIONS,
+  normalizeRadioTransitions,
+  type RadioTransitions
+} from './radioTransition'
+```
+
+**`src/shared/radioTransition.ts` does not exist until Task 16.** Create it now as a three-export
+stub so this task compiles, and Task 16 fills it in:
+
+```ts
+// src/shared/radioTransition.ts -- see Task 16 for the rest.
+export type RadioTransitions = 'off' | 'subtle' | 'bold'
+export const RADIO_TRANSITIONS_OPTIONS: RadioTransitions[] = ['off', 'subtle', 'bold']
+export const DEFAULT_RADIO_TRANSITIONS: RadioTransitions = 'subtle'
+export function normalizeRadioTransitions(value: unknown): RadioTransitions {
+  return RADIO_TRANSITIONS_OPTIONS.includes(value as RadioTransitions)
+    ? (value as RadioTransitions)
+    : DEFAULT_RADIO_TRANSITIONS
+}
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `npx vitest run src/shared/radioSchedule.test.ts src/shared/radioDropOut.test.ts`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/shared/radioSchedule.ts src/shared/radioSchedule.test.ts src/shared/radioTransition.ts
+git commit -m "one object for everything the radio menu sets, and the old pace survives the move
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+## Task 10: Migrate the settings store
+
+**Files:**
+- Modify: `src/main/discoverSettingsStore.ts`
+- Modify: `src/main/discoverSettingsStore.test.ts`
+
+**Finding 14: every existing `toEqual` and every existing `saveDiscoverSettings({...})` in that
+test file breaks.** Update all of them; do not reach for `expect.objectContaining`.
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace every `radioPace: 'mid'` in an object literal in `src/main/discoverSettingsStore.test.ts`
+with `radio: DEFAULT_RADIO_SETTINGS`, import `DEFAULT_RADIO_SETTINGS` from
+`@shared/radioSchedule`, and rewrite the two radio-specific cases plus add the migration case:
+
+```ts
+  it('round-trips every radio setting', async () => {
+    const { loadDiscoverSettings, saveDiscoverSettings } = await import('./discoverSettingsStore')
+    saveDiscoverSettings({
+      consentedToLibraryScan: true,
+      traitMatchBar: 0.9,
+      radio: {
+        pace: 'fast',
+        grid: '2 bars',
+        channels: 7,
+        transitions: 'bold',
+        dropOuts: 'often',
+        turnover: 'random'
+      }
+    })
+    expect(loadDiscoverSettings().radio).toEqual({
+      pace: 'fast',
+      grid: '2 bars',
+      channels: 7,
+      transitions: 'bold',
+      dropOuts: 'often',
+      turnover: 'random'
+    })
+  })
+
+  it('migrates a 1.3.0 file, which stored radioPace flat and had no radio object', async () => {
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ consentedToLibraryScan: true, traitMatchBar: 0.9, radioPace: 'fast' }),
+      'utf-8'
+    )
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    const loaded = loadDiscoverSettings()
+    expect(loaded.consentedToLibraryScan).toBe(true)
+    expect(loaded.traitMatchBar).toBe(0.9)
+    expect(loaded.radio).toEqual({ ...DEFAULT_RADIO_SETTINGS, pace: 'fast' })
+  })
+
+  it('defaults a nonsense radio object rather than throwing', async () => {
+    writeFileSync(join(dir, 'discoverSettings.json'), JSON.stringify({ radio: 7 }), 'utf-8')
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    expect(() => loadDiscoverSettings()).not.toThrow()
+    expect(loadDiscoverSettings().radio).toEqual(DEFAULT_RADIO_SETTINGS)
+  })
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `npx vitest run src/main/discoverSettingsStore.test.ts`
+Expected: FAIL — type errors on `radio` not existing, and the migration case returning no `radio`.
+
+- [ ] **Step 3: Implement**
+
+In `src/main/discoverSettingsStore.ts`: change the import to
+`import { DEFAULT_RADIO_SETTINGS, normalizeRadioSettings, type RadioSettings } from '@shared/radioSchedule'`,
+replace the `radioPace` field on `DiscoverSettings` with:
+
+```ts
+  /** Everything the radio menu sets -- pace, change grid, starting channel
+   * count, transitions, drop-out rate, turnover. One nested object rather
+   * than six flat fields; see RadioSettings' own doc comment. Persisted
+   * because re-picking them every launch is an annoyance with a four-line
+   * fix. docs/superpowers/specs/2026-09-28-radio-controls-design.md. */
+  radio: RadioSettings
+```
+
+set `radio: DEFAULT_RADIO_SETTINGS` in `DEFAULT_SETTINGS`, and in `loadDiscoverSettings`'s parse
+branch replace the `radioPace` line with:
+
+```ts
+      // `parsed.radioPace` is the 1.3.0 shape -- flat, no `radio` object.
+      // Passing it through migrates a real user's chosen pace rather than
+      // silently resetting it. An explicit `radio.pace` always wins.
+      radio: normalizeRadioSettings(
+        parsed.radio,
+        (parsed as { radioPace?: unknown }).radioPace
+      )
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `npx vitest run src/main/discoverSettingsStore.test.ts && npm run typecheck`
+Expected: PASS; typecheck will still fail in `App.tsx`/`LibraryBrowser.tsx`/`DiscoverPanel.tsx`,
+which Task 11 fixes. That is expected and is why Tasks 10 and 11 are adjacent.
+
+- [ ] **Step 5: Commit** (after Task 11 — this pair does not typecheck alone)
+
+---
+
+## Task 11: Collapse the prop threading
+
+**Files:**
+- Modify: `src/renderer/src/App.tsx:1659-1666`, `:1701-1706`, `:2761-2762`
+- Modify: `src/renderer/src/components/LibraryBrowser.tsx:133-134`, `:174-175`, `:2283-2284`
+- Modify: `src/renderer/src/components/DiscoverPanel.tsx:317-318`, `:375-378`
+
+- [ ] **Step 1: App.tsx**
+
+Replace `radioPace: DEFAULT_RADIO_PACE` in the `useState` literal with
+`radio: DEFAULT_RADIO_SETTINGS`, replace `const radioPace = discoverSettings.radioPace` with
+`const radioSettings = discoverSettings.radio`, and replace the `setRadioPace` function with:
+
+```ts
+  /** The one real setter for every radio menu control -- patches the
+   * nested object and routes through updateDiscoverSettings, which MERGES
+   * (App.tsx's own comment: saving a partial object "would silently wipe
+   * traitMatchBar"). */
+  async function setRadioSettings(patch: Partial<RadioSettings>): Promise<void> {
+    await updateDiscoverSettings({ radio: { ...radioSettings, ...patch } })
+  }
+```
+
+and the two props at `:2761-2762` become
+`radioSettings={radioSettings}` / `onRadioSettingsChange={setRadioSettings}`.
+
+- [ ] **Step 2: LibraryBrowser.tsx and DiscoverPanel.tsx**
+
+In both, rename the two destructured props and their two type entries:
+
+```ts
+  radioSettings,
+  onRadioSettingsChange,
+```
+
+```ts
+  /** Everything the radio menu sets (DiscoverSettings.radio), and its
+   * persisting patch setter. See docs/superpowers/specs/2026-09-28-radio-
+   * controls-design.md. */
+  radioSettings: RadioSettings
+  onRadioSettingsChange: (patch: Partial<RadioSettings>) => Promise<void>
+```
+
+In `DiscoverPanel.tsx`, replace every remaining `radioPace` reference with `radioSettings.pace`,
+`DEFAULT_RADIO_GRID` (Task 4) with `radioSettings.grid`, and `DEFAULT_RADIO_DROP_OUTS` (Task 8)
+with `radioSettings.dropOuts`. Add `radioSettings.pace` and `radioSettings.grid` to the clock
+effect's dependency array in place of `radioPace`. Replace `RADIO_STARTER_KINDS` in `toggleRadio`
+with `radioStarterKinds(radioSettings.channels)`.
+
+- [ ] **Step 3: Verify**
+
+```bash
+npm run typecheck && npm run lint && npm test
+```
+
+Expected: 0 errors, 4 baseline warnings, suite green. Grep for `radioPace` across `src/` —
+the only surviving hits should be `normalizeRadioPace`, `DEFAULT_RADIO_PACE`, `RadioPace` and
+the migration read in `discoverSettingsStore.ts`.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/main/discoverSettingsStore.ts src/main/discoverSettingsStore.test.ts src/renderer/src/App.tsx src/renderer/src/components/LibraryBrowser.tsx src/renderer/src/components/DiscoverPanel.tsx
+git commit -m "one radio settings object instead of a prop pair per dial
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+## Task 12: `DiscoverRadioMenu.tsx`
+
+**Files:**
+- Create: `src/renderer/src/components/DiscoverRadioMenu.tsx`
+- Modify: `src/renderer/src/components/DiscoverPanel.tsx:2936-2998`
+
+**Read `src/renderer/src/components/DiscoverKindPicker.tsx` in full before writing this.** It is
+the template: the same `x`/`y`/`onClose`/`ignoreRef` props, the same `useLayoutEffect` viewport
+clamp, the same click-outside-plus-Escape effect with the `setTimeout(…, 0)` guard, the same
+`row(label, chips)` shape, the same `position: 'fixed'` / `zIndex: 1200` / `--ra-bg-bar` /
+`--ra-border-strong` / `boxShadow: '0 6px 20px rgba(0,0,0,0.4)'` container. No component test —
+finding 15.
+
+- [ ] **Step 1: Create the menu**
+
+```tsx
+// src/renderer/src/components/DiscoverRadioMenu.tsx
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import {
+  RADIO_CHANNELS_MAX,
+  RADIO_CHANNELS_MIN,
+  RADIO_GRID_OPTIONS,
+  RADIO_PACE_OPTIONS,
+  RADIO_TURNOVER_OPTIONS,
+  type RadioSettings
+} from '@shared/radioSchedule'
+import { RADIO_DROP_OUT_OPTIONS } from '@shared/radioDropOut'
+import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
+
+const CHANNEL_OPTIONS: number[] = Array.from(
+  { length: RADIO_CHANNELS_MAX - RADIO_CHANNELS_MIN + 1 },
+  (_, i) => RADIO_CHANNELS_MIN + i
+)
+
+/** Radio's own controls, behind the radio button rather than spread across
+ * the Discover screen -- Elling set that constraint himself: radio stays
+ * something you press and listen to. Position, dismissal and chip styling
+ * all mirror DiscoverKindPicker.tsx exactly.
+ *
+ * The pace chips MOVED here from the actions row, which is the argument
+ * for this menu existing at all rather than just being somewhere to put
+ * new things: the row used to grow three chips whenever radio was on and
+ * now grows one chevron. The row gets simpler as the feature gets richer.
+ *
+ * `channels` is chips rather than the literal slider Elling asked for:
+ * five values, two characters each, is smaller and more precise than a
+ * drag and it matches every other row. It sets what radio STARTS with,
+ * never what Discover allows -- there is no cap on addSlot and none is
+ * being added. */
+export function DiscoverRadioMenu({
+  x,
+  y,
+  settings,
+  onChange,
+  onClose,
+  ignoreRef
+}: {
+  x: number
+  y: number
+  settings: RadioSettings
+  onChange: (patch: Partial<RadioSettings>) => void
+  onClose: () => void
+  ignoreRef: React.RefObject<HTMLElement | null>
+}): React.JSX.Element {
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [position, setPosition] = useState({ left: x, top: y })
+
+  useLayoutEffect(() => {
+    const el = menuRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const margin = 8
+    const left = Math.max(margin, Math.min(x, window.innerWidth - rect.width - margin))
+    const top = Math.max(margin, Math.min(y, window.innerHeight - rect.height - margin))
+    setPosition({ left, top })
+  }, [x, y])
+
+  useEffect(() => {
+    function handleDismiss(e: MouseEvent): void {
+      if (menuRef.current?.contains(e.target as Node)) return
+      if (ignoreRef.current?.contains(e.target as Node)) return
+      onClose()
+    }
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key === 'Escape') onClose()
+    }
+    const id = setTimeout(() => {
+      window.addEventListener('click', handleDismiss, true)
+    }, 0)
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      clearTimeout(id)
+      window.removeEventListener('click', handleDismiss, true)
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [onClose, ignoreRef])
+
+  function chip(label: string, on: boolean, onClick: () => void): React.JSX.Element {
+    return (
+      <button
+        key={label}
+        aria-pressed={on}
+        onClick={onClick}
+        style={{
+          fontFamily: 'inherit',
+          fontSize: 9,
+          padding: 'var(--ra-s-0) 8px',
+          background: on ? 'var(--ra-bg-row-active)' : 'transparent',
+          border: `1px solid ${on ? 'var(--ra-text)' : 'var(--ra-border)'}`,
+          color: on ? 'var(--ra-text)' : 'var(--ra-text-2)',
+          cursor: 'pointer'
+        }}
+      >
+        {label}
+      </button>
+    )
+  }
+
+  function row(label: string, chips: React.JSX.Element[]): React.JSX.Element {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+        <span
+          style={{
+            width: 76,
+            fontSize: 9,
+            color: 'var(--ra-text-3)',
+            textTransform: 'uppercase',
+            letterSpacing: 'var(--ra-track-eyebrow)'
+          }}
+        >
+          {label}
+        </span>
+        {chips}
+      </div>
+    )
+  }
+
+  return (
+    <div
+      ref={menuRef}
+      role="dialog"
+      aria-label="radio settings"
+      style={{
+        position: 'fixed',
+        left: position.left,
+        top: position.top,
+        zIndex: 1200,
+        background: 'var(--ra-bg-bar)',
+        border: '1px solid var(--ra-border-strong)',
+        padding: 8,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+        boxShadow: '0 6px 20px rgba(0,0,0,0.4)'
+      }}
+    >
+      {row(
+        'pace',
+        RADIO_PACE_OPTIONS.map((p) => chip(p, settings.pace === p, () => onChange({ pace: p })))
+      )}
+      {row(
+        'change on',
+        RADIO_GRID_OPTIONS.map((g) => chip(g, settings.grid === g, () => onChange({ grid: g })))
+      )}
+      {row(
+        'channels',
+        CHANNEL_OPTIONS.map((n) =>
+          chip(String(n), settings.channels === n, () => onChange({ channels: n }))
+        )
+      )}
+      {row(
+        'transitions',
+        RADIO_TRANSITIONS_OPTIONS.map((t) =>
+          chip(t, settings.transitions === t, () => onChange({ transitions: t }))
+        )
+      )}
+      {row(
+        'drop-outs',
+        RADIO_DROP_OUT_OPTIONS.map((d) =>
+          chip(d, settings.dropOuts === d, () => onChange({ dropOuts: d }))
+        )
+      )}
+      {row(
+        'turnover',
+        RADIO_TURNOVER_OPTIONS.map((t) =>
+          chip(t, settings.turnover === t, () => onChange({ turnover: t }))
+        )
+      )}
+      <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+        channels is what radio starts with
+      </span>
+    </div>
+  )
+}
+```
+
+- [ ] **Step 2: Swap the pace chips for a chevron in DiscoverPanel**
+
+Delete the `{radioOn && (<div>{RADIO_PACE_OPTIONS.map(...)}</div>)}` block at `:2978-2998`
+entirely, and in its place put:
+
+```tsx
+        {radioOn && (
+          <button
+            ref={radioMenuButtonRef}
+            onClick={(e) => {
+              if (radioMenu) {
+                closeRadioMenu()
+                return
+              }
+              const rect = e.currentTarget.getBoundingClientRect()
+              setRadioMenu({ x: rect.left, y: rect.bottom + 4 })
+            }}
+            aria-expanded={radioMenu !== null}
+            data-tooltip="radio settings"
+            aria-label="radio settings"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 22,
+              height: 22,
+              padding: 0,
+              fontFamily: 'inherit',
+              fontSize: 9,
+              background: 'transparent',
+              border: '1px solid var(--ra-border)',
+              color: radioMenu ? 'var(--ra-text)' : 'var(--ra-text-3)',
+              cursor: 'pointer'
+            }}
+          >
+            v
+          </button>
+        )}
+```
+
+Add the state beside the other popovers (near `:3801`), and drop `RADIO_PACE_OPTIONS` from the
+`@shared/radioSchedule` import if nothing else uses it:
+
+```ts
+  // Radio's own controls -- same position/dismissal pattern as nearbyMenu
+  // and kindMenu above. See DiscoverRadioMenu.tsx.
+  const [radioMenu, setRadioMenu] = useState<{ x: number; y: number } | null>(null)
+  const radioMenuButtonRef = useRef<HTMLButtonElement>(null)
+  // Stable identity -- same playhead-tick re-render reasoning as closeNearbyMenu.
+  const closeRadioMenu = useCallback(() => setRadioMenu(null), [])
+```
+
+and render it next to the other popovers:
+
+```tsx
+      {radioMenu && (
+        <DiscoverRadioMenu
+          x={radioMenu.x}
+          y={radioMenu.y}
+          settings={radioSettings}
+          onChange={(patch) => void onRadioSettingsChange(patch)}
+          onClose={closeRadioMenu}
+          ignoreRef={radioMenuButtonRef}
+        />
+      )}
+```
+
+- [ ] **Step 3: Verify**
+
+```bash
+npm run typecheck && npm run lint && npm test
+```
+
+Expected: 0 errors, 4 baseline warnings, suite green.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add src/renderer/src/components/DiscoverRadioMenu.tsx src/renderer/src/components/DiscoverPanel.tsx
+git commit -m "the dials go behind the radio button, and the row gets simpler for it
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+# PHASE D — turnover and the hook
+
+---
+
+## Task 13: `pickRadioSlotId` draws by staleness, and the hook divides it
+
+**Files:**
+- Modify: `src/shared/radioSchedule.ts` (`pickRadioSlotId`)
+- Modify: `src/shared/radioSchedule.test.ts`
+
+The existing three-argument signature stays callable — the new options bag is optional, so no
+existing test or call site breaks.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `src/shared/radioSchedule.test.ts` (importing `HOOK_HOLD_FACTOR`):
+
+```ts
+describe('turnover fairness', () => {
+  function lcg(seed: number): () => number {
+    let s = seed
+    return (): number => {
+      s = (s * 1664525 + 1013904223) % 4294967296
+      return s / 4294967296
+    }
+  }
+
+  /** Runs `draws` turns and returns the longest run any slot went
+   * untouched. */
+  function longestDrought(
+    turnover: 'even' | 'random',
+    ids: string[],
+    draws: number,
+    random: () => number
+  ): number {
+    const changedAt = new Map<string, number>()
+    let last: string | null = null
+    let worst = 0
+    for (let turn = 1; turn <= draws; turn++) {
+      const picked = pickRadioSlotId(ids, last, { turnover, changedAt, turn, random })
+      if (picked === null) continue
+      changedAt.set(picked, turn)
+      last = picked
+      for (const id of ids) worst = Math.max(worst, turn - (changedAt.get(id) ?? 0))
+    }
+    return worst
+  }
+
+  it('reproduces the shipped uniform draw when no options are given', () => {
+    expect(pickRadioSlotId(['a', 'b'], 'a', lcg(1))).toBe('b')
+    expect(pickRadioSlotId([], null)).toBeNull()
+    expect(pickRadioSlotId(['a'], 'a', lcg(1))).toBe('a')
+  })
+
+  it('random still strands a layer -- Elling watched one sit for five minutes', () => {
+    // (2/3)^7 is about 6%, which over a session is close to certain.
+    // This is kept as a CHOICE, not a bug: "this is good for consistency".
+    const ids = ['a', 'b', 'c', 'd']
+    expect(longestDrought('random', ids, 60, lcg(7))).toBeGreaterThanOrEqual(7)
+  })
+
+  it('even never strands a layer for anything like that long', () => {
+    const ids = ['a', 'b', 'c', 'd']
+    expect(longestDrought('even', ids, 60, lcg(7))).toBeLessThan(7)
+  })
+
+  it('weights a long-waiting slot far above a just-changed one', () => {
+    const changedAt = new Map([['fresh', 10]])
+    // 'stale' is unknown -> staleness 0 -> weight 1; 'fresh' changed at 10
+    // out of turn 10 -> also weight 1. Give 'stale' six turns of waiting.
+    const waited = new Map([
+      ['fresh', 10],
+      ['stale', 4]
+    ])
+    let staleWins = 0
+    const random = lcg(3)
+    for (let i = 0; i < 200; i++) {
+      if (pickRadioSlotId(['fresh', 'stale'], null, {
+        turnover: 'even',
+        changedAt: waited,
+        turn: 10,
+        random
+      }) === 'stale') {
+        staleWins++
+      }
+    }
+    // weights 1 and 7 -> stale should take roughly seven of every eight.
+    expect(staleWins).toBeGreaterThan(150)
+    expect(changedAt.size).toBe(1) // the function does not mutate its input
+  })
+
+  it('holds the hook eight times longer, under either turnover mode', () => {
+    const random = lcg(11)
+    let hookWins = 0
+    for (let i = 0; i < 400; i++) {
+      if (pickRadioSlotId(['hook', 'other'], null, {
+        turnover: 'random',
+        hookSlotId: 'hook',
+        random
+      }) === 'hook') {
+        hookWins++
+      }
+    }
+    expect(HOOK_HOLD_FACTOR).toBe(8)
+    // weights 1/8 and 1 -> the hook should take about one in nine.
+    expect(hookWins).toBeGreaterThan(10)
+    expect(hookWins).toBeLessThan(100)
+  })
+
+  it('still turns the hook over eventually, because its staleness grows', () => {
+    const ids = ['hook', 'b', 'c']
+    const changedAt = new Map<string, number>()
+    let last: string | null = null
+    const random = lcg(5)
+    let hookPicked = false
+    for (let turn = 1; turn <= 200; turn++) {
+      const picked = pickRadioSlotId(ids, last, {
+        turnover: 'even',
+        changedAt,
+        turn,
+        hookSlotId: 'hook',
+        random
+      })
+      if (picked === null) continue
+      if (picked === 'hook') hookPicked = true
+      changedAt.set(picked, turn)
+      last = picked
+    }
+    // A hook that NEVER turns over is the padlock, which already exists.
+    expect(hookPicked).toBe(true)
+  })
+
+  it('never picks the same slot twice running when there is a choice', () => {
+    const random = lcg(2)
+    for (let i = 0; i < 50; i++) {
+      expect(
+        pickRadioSlotId(['a', 'b', 'c'], 'a', { turnover: 'even', random })
+      ).not.toBe('a')
+    }
+  })
+})
+```
+
+- [ ] **Step 2: Run them and watch them fail**
+
+Run: `npx vitest run src/shared/radioSchedule.test.ts`
+Expected: FAIL — `No "HOOK_HOLD_FACTOR" export is defined`.
+
+- [ ] **Step 3: Implement**
+
+In `src/shared/radioSchedule.ts`, replace `pickRadioSlotId` with:
+
+```ts
+/** How much longer the hook holds than everything else. A divisor on its
+ * weight, which is why it composes with both turnover modes for free: at
+ * `random` every base weight is 1 so the hook is simply drawn an eighth as
+ * often, and at `even` its staleness keeps growing while it waits so it
+ * climbs back toward eligibility on its own.
+ *
+ * That last part is the answer to "does the hook ever turn over?" -- yes,
+ * and it has to, because a hook that never turns over IS the padlock and
+ * the padlock already exists. The padlock is never; the hook is rarely. */
+export const HOOK_HOLD_FACTOR = 8
+
+export interface RadioPickOptions {
+  /** `even` biases toward the least-recently-changed; `random` is the
+   * memoryless draw that shipped 2026-09-26. Omitted behaves as `random`,
+   * which is what keeps every pre-existing caller unchanged. */
+  turnover?: RadioTurnover
+  /** Logical turn number at which each slot last changed. NOT wall time --
+   * it increments once per committed change, so it stops with the
+   * transport for free, exactly like the clock. */
+  changedAt?: ReadonlyMap<string, number>
+  /** The current turn number. */
+  turn?: number
+  /** The one slot marked as the hook, held HOOK_HOLD_FACTOR times longer. */
+  hookSlotId?: string | null
+  random?: () => number
+}
+
+/** Which single layer turns over next.
+ *
+ * ONE at a time is the whole point (2026-09-26 spec 3.1). `eligible` is
+ * decided by the caller through isRadioEligibleSlot; nothing here adds or
+ * removes an eligibility condition, it only weights WITHIN the set.
+ *
+ * "Never the same one twice running" survives from the shipped version.
+ * Under `even` the last-changed slot already has the lowest weight, but
+ * the hard exclusion is free and removing it is a change nobody asked for.
+ *
+ * An UNKNOWN id counts as "just changed" (staleness 0, weight 1). That is
+ * correct rather than convenient: addSlot performs a new slot's own first
+ * roll, so a slot radio has never touched has in fact just changed. It
+ * also means the map needs no seeding and a cold start falls back to a
+ * uniform draw.
+ *
+ * Returns null only for an empty list, which is radio idling rather than
+ * an error. Never mutates its arguments. */
+export function pickRadioSlotId(
+  eligible: readonly string[],
+  lastChangedId: string | null,
+  options: RadioPickOptions | (() => number) = {}
+): string | null {
+  // The shipped signature took `random` as the third argument. Accepting
+  // both keeps every existing caller and test working unchanged.
+  const opts: RadioPickOptions = typeof options === 'function' ? { random: options } : options
+  const random = opts.random ?? Math.random
+  const turnover = opts.turnover ?? 'random'
+  const turn = opts.turn ?? 0
+  const changedAt = opts.changedAt
+
+  if (eligible.length === 0) return null
+  const pool = eligible.length > 1 ? eligible.filter((id) => id !== lastChangedId) : eligible
+  const choices = pool.length > 0 ? pool : eligible
+  if (choices.length === 1) return choices[0]
+
+  const weights = choices.map((id) => {
+    // staleness + 1: a slot that just changed weighs 1, one that has
+    // waited six turns weighs 7. The longer a drought runs the harder it
+    // works against itself, so droughts get short without any one turn
+    // ever becoming certain -- which matters, because strict round-robin
+    // would be audible as a pattern, the exact failure the pace windows
+    // exist to avoid.
+    const base = turnover === 'even' ? Math.max(0, turn - (changedAt?.get(id) ?? turn)) + 1 : 1
+    return id === opts.hookSlotId ? base / HOOK_HOLD_FACTOR : base
+  })
+  const total = weights.reduce((sum, w) => sum + w, 0)
+  if (!(total > 0)) {
+    return choices[Math.min(choices.length - 1, Math.floor(random() * choices.length))]
+  }
+  let draw = random() * total
+  for (let i = 0; i < choices.length; i++) {
+    draw -= weights[i]
+    if (draw < 0) return choices[i]
+  }
+  return choices[choices.length - 1]
+}
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `npx vitest run src/shared/radioSchedule.test.ts && npm test`
+Expected: PASS throughout, including every pre-existing `pickRadioSlotId` test.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/shared/radioSchedule.ts src/shared/radioSchedule.test.ts
+git commit -m "a layer that has waited longest is likeliest next, and the hook waits eight times over
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+## Task 14: Track recency in the panel
+
+**Files:**
+- Modify: `src/renderer/src/components/DiscoverPanel.tsx` — radio state block, the clock effect's
+  commit branch, `armRadioPick`, `toggleRadio`
+
+No component test — finding 15.
+
+- [ ] **Step 1: Add the state**
+
+Beside `radioLastSlotRef`:
+
+```ts
+  // Per-slot recency for `even` turnover. A logical turn counter, not wall
+  // time, so it stops with the transport exactly as the clock does.
+  //
+  // PRUNED to the live slot ids on every commit, the same way
+  // radioEligibleSlotIds re-reads slotsRef rather than trusting a
+  // snapshot: a removed slot's entry is dropped rather than stranded, and
+  // a re-added slot gets a fresh id anyway (freshSlotId), so recency can
+  // never be resurrected.
+  const radioChangedAtRef = useRef<Map<string, number>>(new Map())
+  const radioTurnRef = useRef(0)
+  // The one slot marked as the hook, or null. NOT persisted -- slot ids
+  // are minted fresh each session, so a stored id would name a slot that
+  // does not exist. At most one: setting it replaces.
+  const [hookSlotId, setHookSlotId] = useState<string | null>(null)
+  const hookSlotIdRef = useRef<string | null>(null)
+  useEffect(() => {
+    hookSlotIdRef.current = hookSlotId
+  }, [hookSlotId])
+```
+
+- [ ] **Step 2: Record on commit**
+
+In the deferred commit block, immediately after `radioLastSlotRef.current = pending.slotId`:
+
+```ts
+        radioTurnRef.current += 1
+        radioChangedAtRef.current.set(pending.slotId, radioTurnRef.current)
+        // Prune to the live ids so a removed slot cannot strand an entry.
+        const liveIds = new Set(slotsRef.current.map((s) => s.id))
+        for (const id of radioChangedAtRef.current.keys()) {
+          if (!liveIds.has(id)) radioChangedAtRef.current.delete(id)
+        }
+```
+
+- [ ] **Step 3: Use it when picking**
+
+In `armRadioPick`, replace the `pickRadioSlotId` call:
+
+```ts
+    const slotId = pickRadioSlotId(eligible, radioLastSlotRef.current, {
+      turnover: radioSettings.turnover,
+      changedAt: radioChangedAtRef.current,
+      turn: radioTurnRef.current,
+      hookSlotId: hookSlotIdRef.current
+    })
+```
+
+- [ ] **Step 4: Reset on stop**
+
+In `toggleRadio`'s off branch, beside the other ref clears:
+
+```ts
+      radioChangedAtRef.current = new Map()
+      radioTurnRef.current = 0
+```
+
+The hook is **not** cleared — it is a statement about the track, not about whether radio is
+running, and clearing it would make him re-mark it every time he stops to listen.
+
+- [ ] **Step 5: Verify and commit**
+
+```bash
+npm run typecheck && npm run lint && npm test
+```
+
+```bash
+git add src/renderer/src/components/DiscoverPanel.tsx
+git commit -m "radio remembers how long each layer has waited
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+## Task 15: The hook toggle on the row
+
+**Files:**
+- Modify: `src/renderer/src/components/DiscoverPanel.tsx:4105-4106` (the grid template), the
+  column-6 spacer, the `DiscoverSlotRow` props, and the row's call site at `:3108`
+
+**Re-read finding 19 before touching the grid.** Column 6 is the empty 14 px spacer
+`<div style={{ gridColumn: 6 }} />`.
+
+- [ ] **Step 1: Widen one track**
+
+Change `gridTemplateColumns` from
+
+```
+'18px 18px 18px 18px 18px 14px 1fr 14px 110px 14px 16px 70px 70px 70px 70px'
+```
+
+to
+
+```
+'18px 18px 18px 18px 18px 18px 1fr 14px 110px 14px 16px 70px 70px 70px 70px'
+```
+
+— track six only, 14 px to 18 px. **No other track changes and no `gridColumn` on any child
+changes**, which is what keeps the hard-won fix documented at `:4090-4104` intact.
+
+- [ ] **Step 2: Put the toggle in the spacer**
+
+Replace `<div style={{ gridColumn: 6 }} />` with:
+
+```tsx
+        {/* The hook -- "maybe have a way to select 'keep this one for a
+            while' or .. 'this is the hook' or something" (2026-09-28).
+            Lives in what used to be an empty spacer, so no other column
+            moves.
+
+            NOT the padlock next door, and the difference is one line: the
+            padlock is never, the hook is rarely. A hooked layer is held
+            HOOK_HOLD_FACTOR times longer but does still turn over, because
+            a layer that never turns over is what the padlock is for. A
+            slot can be both; the padlock wins.
+
+            Monochrome on purpose. Colour here is spent only on things
+            carrying audio information, and the padlock directly beside it
+            is monochrome -- two adjacent state toggles disagreeing about
+            colour is noise.
+
+            Rendered always and hidden with `visibility` rather than
+            unmounted, the same trick the radio progress rule uses, because
+            a conditionally-rendered column in this grid is the exact bug
+            the gridTemplateColumns comment above warns about. */}
+        <button
+          onClick={onToggleHook}
+          data-tooltip={isHook ? 'release hook' : 'make hook'}
+          aria-label={isHook ? 'release hook' : 'make hook'}
+          aria-pressed={isHook}
+          style={{
+            gridColumn: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 18,
+            height: 18,
+            padding: 0,
+            fontFamily: 'inherit',
+            fontSize: 9,
+            visibility: radioOn ? 'visible' : 'hidden',
+            pointerEvents: radioOn ? 'auto' : 'none',
+            background: isHook ? 'var(--ra-bg-row-active)' : 'transparent',
+            border: `1px solid ${isHook ? 'var(--ra-text)' : 'var(--ra-border)'}`,
+            color: isHook ? 'var(--ra-text)' : 'var(--ra-text-3)',
+            cursor: 'pointer'
+          }}
+        >
+          H
+        </button>
+```
+
+- [ ] **Step 3: Thread the three props**
+
+Add to `DiscoverSlotRow`'s destructuring and its props type:
+
+```ts
+  /** Whether THIS slot is the hook -- radio holds it eight times longer
+   * (HOOK_HOLD_FACTOR). At most one slot in the panel is. */
+  isHook: boolean
+  onToggleHook: () => void
+  /** Whether radio is running; the hook toggle is only meaningful then. */
+  radioOn: boolean
+```
+
+and at the call site (`:3108`, beside `onToggleLock`):
+
+```tsx
+            isHook={hookSlotId === slot.id}
+            onToggleHook={() => setHookSlotId((prev) => (prev === slot.id ? null : slot.id))}
+            radioOn={radioOn}
+```
+
+Setting it replaces rather than adds — a track has one hook; two hooks is two centres, which is no
+centre.
+
+- [ ] **Step 4: Drop a removed slot's hook**
+
+Wherever `removeSlot` lives, add after its `setSlots`:
+
+```ts
+    setHookSlotId((prev) => (prev === id ? null : prev))
+```
+
+- [ ] **Step 5: Verify and commit**
+
+```bash
+npm run typecheck && npm run lint && npm test
+```
+
+```bash
+git add src/renderer/src/components/DiscoverPanel.tsx
+git commit -m "one layer can be the hook, and radio builds around it instead of over it
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+- [ ] **Step 6: STOP and report.** Phase D is complete. Do not start Phase E until he has heard it.
+
+---
+
+# PHASE E — transitions
+
+> "maybe transitions would be the coolest new idea to focus on building"
+
+**Everything here is one-stem.** A crossfade, a filter-out and an overlap all need the OUTGOING
+stem still in the project, which collides with three renderer-side 1:1 assumptions
+(`slotIndexById`'s `Map<string, number>`, `setRemoteLoop`'s positional id pairing, and the
+"no unrelated `load-project` mid-transition" rule). **Those are spec §5.4 and they are a different
+plan.** If a task here starts to need two stems at once, you have wandered out of scope — stop.
+
+---
+
+## Task 16: `radioTransition.ts` — which transition, given the temperament and the kind
+
+**Files:**
+- Modify: `src/shared/radioTransition.ts` (the Task 9 stub)
+- Create: `src/shared/radioTransition.test.ts`
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+import { describe, expect, it } from 'vitest'
+import {
+  DEFAULT_RADIO_TRANSITIONS,
+  RADIO_TRANSITIONS_OPTIONS,
+  normalizeRadioTransitions,
+  pickTransition
+} from './radioTransition'
+
+function seeded(values: number[]): () => number {
+  let i = 0
+  return (): number => values[i++ % values.length]
+}
+
+describe('transition temperament', () => {
+  it('offers off, subtle and bold, defaulting to subtle', () => {
+    expect(RADIO_TRANSITIONS_OPTIONS).toEqual(['off', 'subtle', 'bold'])
+    expect(DEFAULT_RADIO_TRANSITIONS).toBe('subtle')
+    expect(normalizeRadioTransitions('wild')).toBe('subtle')
+  })
+
+  it('is always a hard cut when off -- exactly what shipped', () => {
+    expect(pickTransition('off', ['drums'], seeded([0]))).toBe('cut')
+    expect(pickTransition('off', ['warm'], seeded([0.99]))).toBe('cut')
+  })
+
+  it('never blooms a drum layer, at any temperament', () => {
+    for (const t of ['subtle', 'bold'] as const) {
+      for (let i = 0; i < 20; i++) {
+        expect(pickTransition(t, ['drums'], seeded([i / 20]))).not.toBe('bloom')
+      }
+    }
+  })
+
+  it('is mostly cut and hole on a drum layer at subtle', () => {
+    const picks = Array.from({ length: 20 }, (_, i) =>
+      pickTransition('subtle', ['drums'], seeded([i / 20]))
+    )
+    expect(picks.filter((p) => p === 'cut' || p === 'hole').length).toBeGreaterThan(14)
+  })
+
+  it('reaches for filter in and bloom on a pad', () => {
+    const picks = new Set(
+      Array.from({ length: 20 }, (_, i) => pickTransition('bold', ['warm'], seeded([i / 20])))
+    )
+    expect(picks.has('filter in')).toBe(true)
+    expect(picks.has('bloom')).toBe(true)
+  })
+
+  it('only reaches riser and duck at bold', () => {
+    const subtle = new Set(
+      Array.from({ length: 40 }, (_, i) => pickTransition('subtle', ['lead'], seeded([i / 40])))
+    )
+    expect(subtle.has('riser')).toBe(false)
+    expect(subtle.has('duck')).toBe(false)
+    const bold = new Set(
+      Array.from({ length: 40 }, (_, i) => pickTransition('bold', ['lead'], seeded([i / 40])))
+    )
+    expect(bold.has('riser') || bold.has('duck')).toBe(true)
+  })
+
+  it('falls back to cut for a kind set it has no opinion about', () => {
+    expect(pickTransition('subtle', [], seeded([0.5]))).toBe('cut')
+  })
+})
+```
+
+- [ ] **Step 2: Run and watch it fail**
+
+Run: `npx vitest run src/shared/radioTransition.test.ts`
+Expected: FAIL — `pickTransition is not a function`.
+
+- [ ] **Step 3: Implement**
+
+Replace the Task 9 stub's contents with the stub's four exports **plus**:
+
+```ts
+import type { DiscoverSlotKind } from './discoverSlotKind'
+
+/** The one-stem palette. Every one of these acts on stems that are ALREADY
+ * in the project after the commit, which is what keeps them clear of the
+ * three 1:1 assumptions a crossfade would hit (spec 5.4). */
+export type RadioTransitionKind = 'cut' | 'hole' | 'filter in' | 'bloom' | 'duck' | 'riser'
+
+/** THE TEMPERAMENT CHOOSES THE MOOD, THE KIND CHOOSES THE WEIGHTS.
+ *
+ * A single fixed transition is a rhythm -- the same failure the pace
+ * windows exist to avoid; it would be perverse to randomise WHEN a change
+ * happens and then make HOW it happens perfectly predictable. And a
+ * per-kind matrix is musically right (a drum layer cutting while a pad
+ * blooms is obviously correct) but it is a grid the user has to fill in,
+ * which is a lot of UI for a control that should be pressed and listened
+ * to.
+ *
+ * So the menu picks a temperament and the changing slot's kind picks the
+ * weights inside it. Per-kind musicality, zero per-kind UI, and the whole
+ * table is a pure value so it can be argued with and adjusted without
+ * touching a component. */
+type WeightTable = Partial<Record<RadioTransitionKind, number>>
+
+const DRUMMY: { subtle: WeightTable; bold: WeightTable } = {
+  // A drum layer wants a cut or a hole. A bloom on drums is a wash.
+  subtle: { cut: 0.6, hole: 0.3, 'filter in': 0.1 },
+  bold: { cut: 0.35, hole: 0.35, 'filter in': 0.1, duck: 0.1, riser: 0.1 }
+}
+
+const PADDY: { subtle: WeightTable; bold: WeightTable } = {
+  // A pad or a texture is where a filter sweep and a reverb bloom belong.
+  subtle: { cut: 0.4, 'filter in': 0.4, bloom: 0.2 },
+  bold: { cut: 0.2, 'filter in': 0.3, bloom: 0.25, duck: 0.15, riser: 0.1 }
+}
+
+const MELODIC: { subtle: WeightTable; bold: WeightTable } = {
+  subtle: { cut: 0.5, hole: 0.2, 'filter in': 0.3 },
+  bold: { cut: 0.3, hole: 0.15, 'filter in': 0.25, bloom: 0.1, duck: 0.1, riser: 0.1 }
+}
+
+function tableFor(
+  temperament: 'subtle' | 'bold',
+  kinds: readonly DiscoverSlotKind[]
+): WeightTable {
+  if (kinds.includes('drums')) return DRUMMY[temperament]
+  if (kinds.includes('bass') || kinds.includes('lead')) return MELODIC[temperament]
+  if (kinds.length > 0) return PADDY[temperament]
+  return { cut: 1 }
+}
+
+/** Which transition this change gets. `off` is always `cut`, which is
+ * exactly what shipped 2026-09-26. */
+export function pickTransition(
+  temperament: RadioTransitions,
+  kinds: readonly DiscoverSlotKind[],
+  random: () => number = Math.random
+): RadioTransitionKind {
+  if (temperament === 'off') return 'cut'
+  const table = tableFor(temperament, kinds)
+  const entries = Object.entries(table) as [RadioTransitionKind, number][]
+  const total = entries.reduce((sum, [, w]) => sum + w, 0)
+  if (!(total > 0)) return 'cut'
+  let draw = random() * total
+  for (const [kind, weight] of entries) {
+    draw -= weight
+    if (draw < 0) return kind
+  }
+  return 'cut'
+}
+```
+
+- [ ] **Step 4: Run the tests**
+
+Run: `npx vitest run src/shared/radioTransition.test.ts`
+Expected: PASS. If the `mostly cut and hole` assertion fails, the weights are the thing to adjust,
+not the test — it encodes the design.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/shared/radioTransition.ts src/shared/radioTransition.test.ts
+git commit -m "a drum layer cuts and a pad blooms, without a grid to fill in
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+## Task 17: The transition curves
+
+**Files:**
+- Modify: `src/shared/radioTransition.ts` (append)
+- Modify: `src/shared/radioTransition.test.ts`
+
+Same anchor rule as Task 7 and the same reason. **Every curve is loop-relative and therefore
+anchored to the loop top.**
+
+- [ ] **Step 1: Write the failing tests**
+
+```ts
+describe('transition curves', () => {
+  it('filter in opens from closed at the loop top', () => {
+    const c = buildFilterInCurve(8, 1)
+    expect(c[0]).toEqual({ bar: 0, value: 0 })
+    expect(c[c.length - 1]).toEqual({ bar: 1, value: 1 })
+  })
+
+  it('bloom starts drenched and dries out', () => {
+    const c = buildBloomCurve(8, 2)
+    expect(c[0]).toEqual({ bar: 0, value: 0.7 })
+    expect(c[c.length - 1]).toEqual({ bar: 2, value: 0 })
+  })
+
+  it('duck dips the other layers and recovers', () => {
+    const c = buildDuckCurve(8, 1)
+    expect(c[0]).toEqual({ bar: 0, value: 0.45 })
+    expect(c[c.length - 1]).toEqual({ bar: 1, value: 1 })
+  })
+
+  it('clamps every curve to half the loop, so none runs into its own anchor', () => {
+    expect(buildFilterInCurve(1, 4)[1].bar).toBe(0.5)
+    expect(buildBloomCurve(1, 4)[1].bar).toBe(0.5)
+    expect(buildDuckCurve(1, 4)[1].bar).toBe(0.5)
+  })
+
+  it('returns nothing for a loop it cannot place a gesture in', () => {
+    expect(buildFilterInCurve(0, 1)).toEqual([])
+    expect(buildBloomCurve(8, 0)).toEqual([])
+    expect(buildDuckCurve(-1, 1)).toEqual([])
+  })
+
+  it('builds a riser that ENDS at the loop top it announces', () => {
+    const r = buildTransitionRiser('chan-1', 8, 2)
+    expect(r).not.toBeNull()
+    expect(r!.startBar).toBe(6)
+    expect(r!.lengthBars).toBe(2)
+    expect(r!.endCutoffValue).toBeGreaterThan(r!.startCutoffValue)
+    expect(r!.channelId).toBe('chan-1')
+  })
+
+  it('will not build a riser longer than half the loop', () => {
+    expect(buildTransitionRiser('c', 2, 4)!.lengthBars).toBe(1)
+  })
+})
+```
+
+- [ ] **Step 2: Run and watch it fail.** Run: `npx vitest run src/shared/radioTransition.test.ts`
+Expected: FAIL — `buildFilterInCurve is not a function`.
+
+- [ ] **Step 3: Implement.** Append to `src/shared/radioTransition.ts`:
+
+```ts
+import type { AutomationPoint } from './toolkit'
+import type { RiserClip } from './riser'
+
+/** No gesture may run into the wrap it is anchored to. The same rule, for
+ * the same reason, that FadeGain.cpp:33-51 already applies to clip fades. */
+function clampToHalfLoop(loopBars: number, bars: number): number {
+  return Math.min(bars, loopBars / 2)
+}
+
+/** The new layer sweeps open from closed over `bars`, starting at the loop
+ * top. Values are normalised cutoffs; buildStemToolkit defaults an
+ * un-set filter to lowpass, so a bare filterCutoff curve is a lowpass
+ * sweep with no other field needed.
+ *
+ * This is the recommended flagship. It is the app's own signature move, it
+ * is usually more musical than a fade, and it needs exactly one curve on
+ * one stem that is already in the project. */
+export function buildFilterInCurve(loopBars: number, bars: number): AutomationPoint[] {
+  if (!(loopBars > 0) || !(bars > 0)) return []
+  return [
+    { bar: 0, value: 0 },
+    { bar: clampToHalfLoop(loopBars, bars), value: 1 }
+  ]
+}
+
+/** How wet the incoming layer arrives. 0.7 rather than 1 because a send at
+ * full is a wash rather than a bloom. */
+const BLOOM_SEND = 0.7
+
+/** The new layer arrives drenched and dries out. */
+export function buildBloomCurve(loopBars: number, bars: number): AutomationPoint[] {
+  if (!(loopBars > 0) || !(bars > 0)) return []
+  return [
+    { bar: 0, value: BLOOM_SEND },
+    { bar: clampToHalfLoop(loopBars, bars), value: 0 }
+  ]
+}
+
+/** How far the OTHER layers dip so the new one lands in space. About 7dB. */
+const DUCK_FLOOR = 0.45
+
+/** Applied to every audible slot EXCEPT the changing one. */
+export function buildDuckCurve(loopBars: number, bars: number): AutomationPoint[] {
+  if (!(loopBars > 0) || !(bars > 0)) return []
+  return [
+    { bar: 0, value: DUCK_FLOOR },
+    { bar: clampToHalfLoop(loopBars, bars), value: 1 }
+  ]
+}
+
+/** A noise sweep INTO the change: it ends exactly at the loop top it
+ * announces, so it is placed at loopBars - lengthBars.
+ *
+ * Generated live by the engine (NoiseRiser.cpp, straight into the
+ * channel's bus) -- there is no file, no render and no cache. Risers are
+ * rendered audio only on EXPORT.
+ *
+ * Unlike the stem curves this is NOT clip-relative: EngineRiser has no
+ * originBar, so startBar is already the loop-relative bar the engine
+ * subtracts directly. `id` is stable per channel so a re-sync of the same
+ * armed riser does not produce two. */
+export function buildTransitionRiser(
+  channelId: string,
+  loopBars: number,
+  bars: number
+): RiserClip | null {
+  if (!(loopBars > 0) || !(bars > 0)) return null
+  const lengthBars = clampToHalfLoop(loopBars, bars)
+  return {
+    id: `radio-riser-${channelId}`,
+    channelId,
+    startBar: loopBars - lengthBars,
+    lengthBars,
+    startCutoffValue: 0.2,
+    endCutoffValue: 0.95,
+    curve: [],
+    level: 0.35
+  }
+}
+```
+
+Check `RiserClip`'s real field list in `src/shared/riser.ts` before writing this — it also carries
+`name` and `muted` in some call sites. Add whatever the type requires; `name` should be
+`'radio'` and `muted` `false`.
+
+- [ ] **Step 4: Run the tests.** `npx vitest run src/shared/radioTransition.test.ts && npm test`
+Expected: PASS, 200 test files.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/shared/radioTransition.ts src/shared/radioTransition.test.ts
+git commit -m "what a sweep, a bloom, a duck and a riser look like as plain data
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+---
+
+## Task 18: Arm and clear a transition
+
+**Files:**
+- Modify: `src/renderer/src/components/DiscoverPanel.tsx` — the radio state block, the clock
+  effect, `syncPreviewToEngine`
+
+This generalises the Task 8 machinery. No component test — finding 15.
+
+- [ ] **Step 1: Generalise the armed-gesture ref**
+
+Replace `radioDropOutRef` / `radioDropOutBeatsRef` with one ref covering both:
+
+```ts
+  // The armed gesture -- a drop-out (no stem change) or a transition
+  // (attached to one). Both are the same thing to the engine: curves in
+  // previewState, armed a lap early and cleared a lap later. Elling,
+  // 2026-09-28: "also make sure to transition on the proper beat... that's
+  // key" / "not just the downbeat, the proper start of the loop, i think".
+  //
+  // A curve is clip-relative and the transport wraps at loopLengthBars, so
+  // it can ONLY be anchored to the top of the loop. The constraint is the
+  // requirement, and it is why nothing here reads the clock at the moment
+  // the gesture fires.
+  const radioGestureRef = useRef<{
+    kind: 'drop-out' | RadioTransitionKind
+    slotId: string
+    beats: number
+    lapsLeft: number
+  } | null>(null)
+```
+
+Update Task 8's arm site to write `{ kind: 'drop-out', slotId: dropId, beats: pickDropOutBeats(), lapsLeft: 1 }`
+and its clear branch to read `radioGestureRef`.
+
+- [ ] **Step 2: Arm a transition on commit**
+
+In the deferred commit block, immediately after `commitSlotPick(pending.slotId, pending.pick)`:
+
+```ts
+        // The transition rides the change it decorates. `cut` arms
+        // nothing, which is what keeps the project byte-identical to
+        // pre-2026-09-28 whenever transitions are off.
+        const changing = slotsRef.current.find((s) => s.id === pending.slotId)
+        const transition = pickTransition(radioSettings.transitions, changing?.kinds ?? [])
+        if (transition !== 'cut') {
+          radioGestureRef.current = {
+            kind: transition,
+            slotId: pending.slotId,
+            beats: 4,
+            lapsLeft: 1
+          }
+        }
+```
+
+- [ ] **Step 3: Write the curves in `syncPreviewToEngine`**
+
+Extend the Task 8 block to switch on the gesture kind. All four write into the same
+`stemAutomation` record; `riser` writes `risers` instead:
+
+```ts
+    const stemAutomation: Record<string, StemAutomation> = {}
+    const risers: Record<string, RiserClip> = {}
+    const gesture = radioGestureRef.current
+    if (gesture && maxBarLength > 0) {
+      const indexOf = (id: string): number => members.findIndex((m) => m.id === id) + 1
+      const own = indexOf(gesture.slotId)
+      const bars = gesture.beats / 4
+      if (gesture.kind === 'drop-out' && own > 0) {
+        const curve = buildDropOutCurve(maxBarLength, gesture.beats)
+        if (curve.length > 0) stemAutomation[stemKey(groupId, own)] = { volume: curve }
+      } else if (gesture.kind === 'hole' && own > 0) {
+        // The hole is the drop-out attached to a change: same curve, and
+        // the new stem lands in the space it leaves.
+        const curve = buildDropOutCurve(maxBarLength, gesture.beats)
+        if (curve.length > 0) stemAutomation[stemKey(groupId, own)] = { volume: curve }
+      } else if (gesture.kind === 'filter in' && own > 0) {
+        const curve = buildFilterInCurve(maxBarLength, bars)
+        if (curve.length > 0) stemAutomation[stemKey(groupId, own)] = { filterCutoff: curve }
+      } else if (gesture.kind === 'bloom' && own > 0) {
+        const curve = buildBloomCurve(maxBarLength, bars)
+        if (curve.length > 0) stemAutomation[stemKey(groupId, own)] = { reverbSend: curve }
+      } else if (gesture.kind === 'duck') {
+        // Every OTHER audible layer dips, so the new one lands in space.
+        const curve = buildDuckCurve(maxBarLength, bars)
+        if (curve.length > 0) {
+          members.forEach((m, i) => {
+            if (m.id !== gesture.slotId) stemAutomation[stemKey(groupId, i + 1)] = { volume: curve }
+          })
+        }
+      } else if (gesture.kind === 'riser') {
+        const riser = buildTransitionRiser(groupId, maxBarLength, bars)
+        if (riser) risers[riser.id] = riser
+      }
+    }
+```
+
+and add both `stemAutomation` and `risers` to the `previewState` literal.
+
+**`isStemToolkitNeutral` drops the whole `toolkit` key when nothing is drawn and
+`buildEngineRisers({})` emits an empty array, so an unarmed sync is byte-identical to what
+shipped before this feature.** That is the regression-safety property of the whole phase — do not
+let a refactor lose it.
+
+- [ ] **Step 4: Verify**
+
+```bash
+npm run typecheck && npm run lint && npm test
+```
+
+Expected: 0 errors, 4 baseline warnings, suite green.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/renderer/src/components/DiscoverPanel.tsx
+git commit -m "a layer can sweep in, bloom or rise into the loop instead of just appearing
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_016ERhqomCvGmAzs5Uncec3h"
+```
+
+- [ ] **Step 6: Final verification and report**
+
+```bash
+npm test && npm run typecheck && npm run lint
+git log --oneline -20
+```
+
+Report to Elling: the pace now means what it says, a drum layer drops out for a couple of beats
+every couple of minutes and returns exactly as the loop restarts, every control is behind the
+radio button, no layer sits untouched for five minutes any more, one layer can be marked as the
+hook, and a change can sweep, bloom, duck or rise into the loop instead of simply appearing.
+
+**State plainly that none of it was heard.** This environment has no GUI or audio tooling. The
+*timing* claims rest on `radioDropOut.test.ts` and `radioTransition.test.ts` asserting the exact
+curves the engine performs — not on anyone listening. What still needs his ears: whether `subtle`
+is subtle enough, whether `rare` is rare enough, and whether `own loop` is the right default grid.
+
+Phases F (reach), G (character + `more like this`) and H (two-stem transitions, pre-rendered
+one-shots) are designed in the spec and each needs its own plan.
