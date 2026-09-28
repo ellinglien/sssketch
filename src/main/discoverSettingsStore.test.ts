@@ -83,7 +83,7 @@ describe('discoverSettingsStore', () => {
       radio: {
         pace: 'fast',
         paceBars: { min: 5, max: 9 },
-        grid: '2 bars',
+        loopEndOverBars: 2,
         channels: 7,
         transitions: 'bold',
         dropOuts: 'often',
@@ -93,7 +93,7 @@ describe('discoverSettingsStore', () => {
     expect(loadDiscoverSettings().radio).toEqual({
       pace: 'fast',
       paceBars: { min: 5, max: 9 },
-      grid: '2 bars',
+      loopEndOverBars: 2,
       channels: 7,
       transitions: 'bold',
       dropOuts: 'often',
@@ -125,6 +125,24 @@ describe('discoverSettingsStore', () => {
       ...DEFAULT_RADIO_SETTINGS,
       pace: 'fast',
       paceBars: { min: 3, max: 6 }
+    })
+  })
+
+  it('migrates a stored change-on grid to the threshold that replaced it', async () => {
+    // 1.3.x wrote a `change on` word where the loop-end threshold now
+    // goes. A real file has to keep meaning what it meant rather than
+    // resetting -- `loop end` is `always`, i.e. 0.
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radio: { pace: 'fast', grid: 'loop end' } }),
+      'utf-8'
+    )
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    expect(loadDiscoverSettings().radio).toEqual({
+      ...DEFAULT_RADIO_SETTINGS,
+      pace: 'fast',
+      paceBars: { min: 3, max: 6 },
+      loopEndOverBars: 0
     })
   })
 

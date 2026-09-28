@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_RADIO_GRID,
+  DEFAULT_RADIO_LOOP_END_BARS,
   DEFAULT_RADIO_PACE,
   DEFAULT_RADIO_SETTINGS,
   DEFAULT_RADIO_TURNOVER,
   RADIO_CHANNELS_MAX,
   RADIO_CHANNELS_MIN,
-  RADIO_GRID_OPTIONS,
+  RADIO_LOOP_END_OPTIONS,
   RADIO_PACE_BARS,
   RADIO_PACE_OPTIONS,
   RADIO_PACE_WINDOW_MAX,
@@ -18,7 +18,7 @@ import {
   isRadioEligibleSlot,
   nextRadioIntervalBars,
   nextRadioIntervalBarsInWindow,
-  normalizeRadioGrid,
+  normalizeRadioLoopEndBars,
   normalizeRadioPace,
   normalizeRadioPaceWindow,
   normalizeRadioSettings,
@@ -108,65 +108,95 @@ describe('nextRadioIntervalBars', () => {
   })
 })
 
-describe('radioGridBars', () => {
-  it('offers the same five options, in the same words, as the phone', () => {
-    expect(RADIO_GRID_OPTIONS).toEqual(['own loop', 'loop end', '8 bars', '4 bars', '2 bars'])
+describe('the loop-end threshold', () => {
+  it('offers two, four and eight bars, then always, in that order', () => {
+    // A threshold, not a grid: at or under it a stem may turn over on its
+    // own cycle, over it the change waits for the loop top. 0 is `always`
+    // -- no stem is under it, so everything waits, which is exactly what
+    // `loop end` did.
+    expect(RADIO_LOOP_END_OPTIONS).toEqual([2, 4, 8, 0])
   })
 
-  it('defaults to the loop end, so a change is in time with everything else', () => {
-    // Briefly 'own loop' on 2026-09-28, reverted the same hour. The
-    // transport does not reset on a change, so a mid-loop swap drops the
-    // INCOMING stem in at whatever phase the transport is at -- an 8-bar
-    // stem entering halfway through itself. At the loop top the transport
-    // wraps, so the outgoing layer has finished a cycle and the incoming
-    // one starts at its own zero. "so it feels in time".
-    expect(DEFAULT_RADIO_GRID).toBe('loop end')
+  it('defaults to four bars, so a fast pace can actually be fast', () => {
+    // Elling, listening at `fast` (3-6 bars) with the old `loop end`
+    // default: "even fast feels quite slow now.. i think it's the
+    // transition rules". He was right -- every drawn interval rounded up
+    // to the next whole loop, so on an 8-bar loop `fast` could only ever
+    // produce 8 bars. Four bars leaves every ordinary Endlesss layer (1,
+    // 2 or 4 bars) free to turn over on its own cycle and still holds
+    // anything longer to the loop top.
+    expect(DEFAULT_RADIO_LOOP_END_BARS).toBe(4)
   })
 
   it('normalizes anything unrecognised to the default', () => {
-    expect(normalizeRadioGrid('16 bars')).toBe('loop end')
-    expect(normalizeRadioGrid(undefined)).toBe('loop end')
-    expect(normalizeRadioGrid(4)).toBe('loop end')
-    expect(normalizeRadioGrid(null)).toBe('loop end')
+    expect(normalizeRadioLoopEndBars(16)).toBe(4)
+    expect(normalizeRadioLoopEndBars(undefined)).toBe(4)
+    expect(normalizeRadioLoopEndBars(null)).toBe(4)
+    // A string that looks like a number is still not one.
+    expect(normalizeRadioLoopEndBars('2')).toBe(4)
+    expect(normalizeRadioLoopEndBars(2)).toBe(2)
+    expect(normalizeRadioLoopEndBars(0)).toBe(0)
+    expect(normalizeRadioLoopEndBars(8)).toBe(8)
   })
 
-  it('loop end is the whole loop -- exactly what shipped 2026-09-26', () => {
-    expect(radioGridBars('loop end', 8, 2)).toBe(8)
-    expect(radioGridBars('loop end', 3, 1)).toBe(3)
+  it('migrates every stored change-on word rather than throwing', () => {
+    expect(normalizeRadioLoopEndBars(undefined, 'loop end')).toBe(0)
+    expect(normalizeRadioLoopEndBars(undefined, 'own loop')).toBe(DEFAULT_RADIO_LOOP_END_BARS)
+    expect(normalizeRadioLoopEndBars(undefined, '8 bars')).toBe(8)
+    expect(normalizeRadioLoopEndBars(undefined, '4 bars')).toBe(4)
+    expect(normalizeRadioLoopEndBars(undefined, '2 bars')).toBe(2)
+    expect(normalizeRadioLoopEndBars(undefined, 'nonsense')).toBe(DEFAULT_RADIO_LOOP_END_BARS)
+    expect(normalizeRadioLoopEndBars(undefined, null)).toBe(DEFAULT_RADIO_LOOP_END_BARS)
+    // A stored threshold always wins over the word it replaced.
+    expect(normalizeRadioLoopEndBars(8, 'loop end')).toBe(8)
   })
 
-  it('own loop is the changing slot own bar length', () => {
-    expect(radioGridBars('own loop', 8, 2)).toBe(2)
-    expect(radioGridBars('own loop', 8, 4)).toBe(4)
+  it('sends everything to the loop end at always -- exactly what shipped 2026-09-26', () => {
+    expect(radioGridBars(0, 8, 2)).toBe(8)
+    expect(radioGridBars(0, 3, 1)).toBe(3)
   })
 
-  it('falls back to the whole loop when the slot bar length is unknown', () => {
-    expect(radioGridBars('own loop', 8, null)).toBe(8)
-    expect(radioGridBars('own loop', 8, 0)).toBe(8)
-    expect(radioGridBars('own loop', 8, 2.5)).toBe(8)
-    expect(radioGridBars('4 bars', 0, 2)).toBe(0)
+  it('lets a stem at or under the threshold change on its own cycle', () => {
+    expect(radioGridBars(4, 8, 2)).toBe(2)
+    expect(radioGridBars(4, 8, 4)).toBe(4)
   })
 
-  it('caps a grid longer than the loop to the loop', () => {
-    expect(radioGridBars('8 bars', 4, 1)).toBe(4)
-    expect(radioGridBars('own loop', 4, 8)).toBe(4)
+  it('holds a stem over the threshold to the loop end', () => {
+    expect(radioGridBars(2, 8, 4)).toBe(8)
+    expect(radioGridBars(4, 16, 8)).toBe(16)
+    expect(radioGridBars(8, 16, 12)).toBe(16)
+    expect(radioGridBars(8, 16, 9)).toBe(16)
+  })
+
+  it('falls back to the whole loop when the bar length is unknown', () => {
+    expect(radioGridBars(4, 8, null)).toBe(8)
+    expect(radioGridBars(4, 8, 0)).toBe(8)
+    // A fractional length (2.5 bars) has no boundary to land on -- flooring
+    // it to 2 would invent one the stem does not have.
+    expect(radioGridBars(4, 8, 2.5)).toBe(8)
+    expect(radioGridBars(4, 0, 2)).toBe(0)
+  })
+
+  it('caps a stem longer than the loop to the loop', () => {
+    expect(radioGridBars(8, 4, 8)).toBe(4)
+    expect(radioGridBars(8, 4, 5)).toBe(4)
   })
 
   it('steps down to the largest divisor of the loop, as the phone does', () => {
     // remotePage.ts:995-1002 -- 4 over a 6-bar loop becomes 3, 8 over a
     // 12-bar loop becomes 6, 4 over an 8-bar loop stays 4.
-    expect(radioGridBars('4 bars', 6, 1)).toBe(3)
-    expect(radioGridBars('8 bars', 12, 1)).toBe(6)
-    expect(radioGridBars('4 bars', 8, 1)).toBe(4)
+    expect(radioGridBars(4, 6, 4)).toBe(3)
+    expect(radioGridBars(8, 12, 8)).toBe(6)
+    expect(radioGridBars(4, 8, 4)).toBe(4)
   })
 
   it('never steps below 1, which divides everything', () => {
-    expect(radioGridBars('2 bars', 5, 1)).toBe(1)
-    expect(radioGridBars('own loop', 7, 3)).toBe(1)
+    expect(radioGridBars(2, 5, 2)).toBe(1)
+    expect(radioGridBars(4, 7, 3)).toBe(1)
   })
 
   it('handles a non-integer loop by falling back to the loop', () => {
-    expect(radioGridBars('4 bars', 6.5, 2)).toBe(6.5)
+    expect(radioGridBars(4, 6.5, 2)).toBe(6.5)
   })
 })
 
@@ -388,33 +418,35 @@ describe('isRadioEligibleSlot', () => {
   })
 })
 
-describe('radioGridBars and long phrases', () => {
+describe('the threshold and long phrases', () => {
   // Reported 2026-09-28, listening: "it cut off just now... can the
   // transitions for the stems longer than 8 bars be the complete loop
   // only?" A short layer swapped on its own cycle is unremarkable -- a
   // two-bar hat turning over at bar 2 of 8 reads as a variation. A long
   // phrase is a musical statement, and cutting one partway through the
-  // loop is audible however cleanly the boundary is hit.
+  // loop is audible however cleanly the boundary is hit. That rule used
+  // to be the hardcoded GRID_LONG_PHRASE_BARS; it is now the setting
+  // itself, which is the whole point of the change.
   it('gives a long stem the whole loop, not its own shorter cycle', () => {
-    // 8-bar stem inside a 16-bar loop: own-cycle would change at bar 8.
-    expect(radioGridBars('own loop', 16, 12)).toBe(16)
-    expect(radioGridBars('own loop', 16, 9)).toBe(16)
+    expect(radioGridBars(8, 16, 12)).toBe(16)
+    expect(radioGridBars(8, 16, 9)).toBe(16)
   })
 
-  it('leaves short stems on their own cycle, which is the point of the grid', () => {
-    expect(radioGridBars('own loop', 16, 2)).toBe(2)
-    expect(radioGridBars('own loop', 16, 4)).toBe(4)
-    expect(radioGridBars('own loop', 16, 8)).toBe(8)
+  it('leaves short stems on their own cycle, which is the point of the threshold', () => {
+    expect(radioGridBars(8, 16, 2)).toBe(2)
+    expect(radioGridBars(8, 16, 4)).toBe(4)
+    expect(radioGridBars(8, 16, 8)).toBe(8)
   })
 
-  it('applies the same ceiling to an explicitly chosen grid', () => {
-    // He asked for it of "the transitions", not of one setting.
-    expect(radioGridBars('8 bars', 16, 1)).toBe(8)
-    expect(radioGridBars('4 bars', 16, 1)).toBe(4)
+  it('moves the ceiling with the setting rather than fixing it at eight', () => {
+    // The old constant was 8 for everyone. At `2 bars` a four-bar layer is
+    // long, and at `8 bars` it is not.
+    expect(radioGridBars(2, 16, 4)).toBe(16)
+    expect(radioGridBars(8, 16, 4)).toBe(4)
   })
 
   it('still caps to the loop when the loop is itself short', () => {
-    expect(radioGridBars('own loop', 4, 12)).toBe(4)
+    expect(radioGridBars(8, 4, 12)).toBe(4)
   })
 })
 
@@ -481,11 +513,11 @@ describe('a pace window he can set himself', () => {
 })
 
 describe('RadioSettings', () => {
-  it('defaults to mid, the mid window, loop end, four channels, subtle, rare and even', () => {
+  it('defaults to mid, the mid window, four bars, four channels, subtle, rare and even', () => {
     expect(DEFAULT_RADIO_SETTINGS).toEqual({
       pace: 'mid',
       paceBars: { min: 8, max: 16 },
-      grid: 'loop end',
+      loopEndOverBars: 4,
       channels: 4,
       transitions: 'subtle',
       dropOuts: 'rare',
@@ -494,16 +526,34 @@ describe('RadioSettings', () => {
   })
 
   it('normalizes a whole object, field by field, never throwing', () => {
-    expect(normalizeRadioSettings({ pace: 'fast', grid: '4 bars', channels: 6 })).toEqual({
+    expect(normalizeRadioSettings({ pace: 'fast', loopEndOverBars: 2, channels: 6 })).toEqual({
       ...DEFAULT_RADIO_SETTINGS,
       pace: 'fast',
       paceBars: RADIO_PACE_BARS.fast,
-      grid: '4 bars',
+      loopEndOverBars: 2,
       channels: 6
     })
     expect(normalizeRadioSettings(null)).toEqual(DEFAULT_RADIO_SETTINGS)
     expect(normalizeRadioSettings('nonsense')).toEqual(DEFAULT_RADIO_SETTINGS)
-    expect(normalizeRadioSettings({ pace: 'glacial', grid: 99 })).toEqual(DEFAULT_RADIO_SETTINGS)
+    expect(normalizeRadioSettings({ pace: 'glacial', loopEndOverBars: 99 })).toEqual(
+      DEFAULT_RADIO_SETTINGS
+    )
+  })
+
+  it('migrates a stored change-on grid to the threshold that means the same', () => {
+    // 1.3.x wrote a `grid` word. Nobody's settings file may throw or
+    // silently change what they were hearing more than the new model
+    // forces: `loop end` is `always`, and the three explicit grids keep
+    // their number. `own loop` has no threshold that means it, so it takes
+    // the default.
+    expect(normalizeRadioSettings({ grid: 'loop end' }).loopEndOverBars).toBe(0)
+    expect(normalizeRadioSettings({ grid: '8 bars' }).loopEndOverBars).toBe(8)
+    expect(normalizeRadioSettings({ grid: '4 bars' }).loopEndOverBars).toBe(4)
+    expect(normalizeRadioSettings({ grid: '2 bars' }).loopEndOverBars).toBe(2)
+    expect(normalizeRadioSettings({ grid: 'own loop' }).loopEndOverBars).toBe(
+      DEFAULT_RADIO_LOOP_END_BARS
+    )
+    expect(normalizeRadioSettings({}).loopEndOverBars).toBe(DEFAULT_RADIO_LOOP_END_BARS)
   })
 
   it('takes the stored window over the preset when there is one', () => {

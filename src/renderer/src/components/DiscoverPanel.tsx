@@ -1319,19 +1319,19 @@ export function DiscoverPanel({
         ? Math.max(...resolvedBarLengthsRef.current.values())
         : 0
     if (!(loopBars > 0)) return
-    // WHERE a change may land -- the menu's `change on` row
-    // (radioSettings.grid, 2026-09-28). It defaults to `loop end`, the
-    // whole loop's wrap; the finer settings let a layer flick over on its
-    // own cycle instead. See DEFAULT_RADIO_GRID's own doc comment for why
-    // the loop top won that argument after listening.
+    // WHERE a change may land -- the menu's `loop end` row
+    // (radioSettings.loopEndOverBars, 2026-09-28). A layer at or under the
+    // threshold turns over on its own cycle; a longer one waits for the
+    // whole loop's wrap. See DEFAULT_RADIO_LOOP_END_BARS' own doc comment
+    // for why that boundary is the safe one.
     //
     // The pending pick is what is about to change, so it is the slot whose
-    // cycle `own loop` means. No pending pick (radio just started, or
-    // nothing was eligible last time) falls back to the whole loop.
+    // cycle this means. No pending pick (radio just started, or nothing
+    // was eligible last time) falls back to the whole loop.
     const pendingSlotId = radioPendingRef.current?.slotId ?? null
     const slotBars =
       pendingSlotId !== null ? (resolvedBarLengthsRef.current.get(pendingSlotId) ?? null) : null
-    const gridBars = radioGridBars(radioSettings.grid, loopBars, slotBars)
+    const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, slotBars)
     const step = advanceRadioClock(clock, pos, loopBars, gridBars)
     radioClockRef.current = step.clock
     // A drop-out is anchored to the loop top, so its lifetime is counted
@@ -1344,7 +1344,7 @@ export function DiscoverPanel({
       else radioDropOutRef.current = { ...armed, lapsLeft: armed.lapsLeft - 1 }
     }
     // The course change lands HERE and only here -- the top of the loop,
-    // for exactly the reason DEFAULT_RADIO_GRID is `loop end` (687641a):
+    // for exactly the reason a long stem waits for one (687641a):
     // the transport does not reset for a load-project, so a bed dropped
     // in mid-loop would start every one of its stems at whatever phase
     // the transport happened to be at. At the wrap they all start at

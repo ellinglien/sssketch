@@ -3,7 +3,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import {
   RADIO_CHANNELS_MAX,
   RADIO_CHANNELS_MIN,
-  RADIO_GRID_OPTIONS,
+  RADIO_LOOP_END_OPTIONS,
   RADIO_PACE_BARS,
   RADIO_PACE_OPTIONS,
   adjustRadioPaceWindow,
@@ -17,6 +17,14 @@ const CHANNEL_OPTIONS: number[] = Array.from(
   { length: RADIO_CHANNELS_MAX - RADIO_CHANNELS_MIN + 1 },
   (_, i) => RADIO_CHANNELS_MIN + i
 )
+
+/** The `loop end` row's chips. The number is the longest a layer may be
+ * and still turn over on its own cycle, so 0 -- no layer is shorter than
+ * that -- is every layer waiting for the loop top, which is what the old
+ * `change on: loop end` chip did. */
+function loopEndLabel(bars: number): string {
+  return bars === 0 ? 'always' : `${bars} bars`
+}
 
 /** Radio's own controls, behind the radio button rather than spread across
  * the Discover screen -- Elling set that constraint himself: radio stays
@@ -243,8 +251,12 @@ export function DiscoverRadioMenu({
       {mode === 'running' && row('bars', [stepper('min'), stepper('max')])}
       {mode === 'running' &&
         row(
-          'change on',
-          RADIO_GRID_OPTIONS.map((g) => chip(g, settings.grid === g, () => onChange({ grid: g })))
+          'loop end',
+          RADIO_LOOP_END_OPTIONS.map((n) =>
+            chip(loopEndLabel(n), settings.loopEndOverBars === n, () =>
+              onChange({ loopEndOverBars: n })
+            )
+          )
         )}
       {channelsRow}
       {mode === 'running' &&
@@ -258,7 +270,7 @@ export function DiscoverRadioMenu({
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
         {mode === 'start'
           ? 'pick a pace to start'
-          : 'a new pace restarts the loop, keeping these stems'}
+          : 'a new pace restarts the loop, keeping these stems. layers longer than the loop end setting wait for the top of the loop; shorter ones turn over on their own cycle'}
       </span>
     </div>
   )

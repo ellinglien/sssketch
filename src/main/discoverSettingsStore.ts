@@ -21,7 +21,8 @@ export interface DiscoverSettings {
    * 2026-09-22. */
   traitMatchBar: number
   /** Everything the radio menu sets -- pace preset, the bar window the
-   * clock actually draws from, change grid, starting channel count,
+   * clock actually draws from, the loop-end threshold, starting channel
+   * count,
    * transitions, drop-out rate, turnover. One nested object rather than
    * seven flat fields; see RadioSettings' own doc comment. Persisted
    * because re-picking them every launch is an annoyance with a four-line
