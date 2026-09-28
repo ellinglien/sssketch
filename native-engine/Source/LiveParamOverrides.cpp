@@ -67,6 +67,18 @@ namespace sssketch
         setOverride(fadeOutOverrides, overrideCount, groupId, value);
     }
 
+    void LiveParamOverrides::setMasterFilterCutoffOverride(std::optional<float> value)
+    {
+        masterFilterCutoffOverride.store(
+            value.has_value() ? *value : kNoMasterOverride, std::memory_order_release);
+    }
+
+    void LiveParamOverrides::setMasterFilterResonanceOverride(std::optional<float> value)
+    {
+        masterFilterResonanceOverride.store(
+            value.has_value() ? *value : kNoMasterOverride, std::memory_order_release);
+    }
+
     void LiveParamOverrides::clearAll()
     {
         // Every one of these three assignments MUST go through
@@ -83,6 +95,15 @@ namespace sssketch
         std::atomic_store_explicit(
             &fadeOutOverrides, std::make_shared<const OverrideMap>(), std::memory_order_release);
         overrideCount.store(0, std::memory_order_release);
+        // The master filter's two live values go the same way, for the same
+        // reason: load-project is the ENTIRE mechanism by which a live
+        // override is cleared, and after it the freshly-published project
+        // already carries whatever the renderer last committed. The renderer
+        // re-asserts them right after every sync anyway (DiscoverPanel's
+        // pushMasterFilter), which is what stops a dragged sweep snapping
+        // back on every layer change.
+        masterFilterCutoffOverride.store(kNoMasterOverride, std::memory_order_release);
+        masterFilterResonanceOverride.store(kNoMasterOverride, std::memory_order_release);
     }
 
     std::optional<float> LiveParamOverrides::volumeFor(const juce::String& stemKey) const
@@ -98,5 +119,19 @@ namespace sssketch
     std::optional<float> LiveParamOverrides::fadeOutFor(const juce::String& groupId) const
     {
         return overrideFor(fadeOutOverrides, groupId);
+    }
+
+    std::optional<float> LiveParamOverrides::masterFilterCutoffFor() const
+    {
+        const float v = masterFilterCutoffOverride.load(std::memory_order_acquire);
+        if (v < 0.0f) return std::nullopt;
+        return v;
+    }
+
+    std::optional<float> LiveParamOverrides::masterFilterResonanceFor() const
+    {
+        const float v = masterFilterResonanceOverride.load(std::memory_order_acquire);
+        if (v < 0.0f) return std::nullopt;
+        return v;
     }
 }

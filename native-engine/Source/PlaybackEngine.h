@@ -268,6 +268,18 @@ namespace sssketch
          * clip volume, then tap a post-fader send into the shared reverb bus.
          * Only ever called for a clip whose toolkit is non-neutral. `const`
          * for the same reason renderBlock is -- see stemDsp. */
+        /** The master strip's filter, applied IN PLACE to the fully summed
+         * master pair as the very last thing renderBlock does. Returns
+         * immediately, touching nothing, whenever the filter is at rest and
+         * has finished ramping there -- see masterFilterEngaged. `const` for
+         * the same reason renderBlock and applyStemToolkit are. */
+        void applyMasterFilter(
+            const EngineProject::MasterFilterSettings& settings,
+            double sampleRate,
+            int numSamples,
+            float* outL,
+            float* outR) const;
+
         void applyStemToolkit(
             const EngineStemToolkit& toolkit,
             const juce::String& stemKey,
@@ -350,6 +362,39 @@ namespace sssketch
         mutable std::map<juce::String, std::unique_ptr<RiserVoice>> riserVoices;
 
         mutable ReverbBus reverbBus;
+
+        /** ONE filter over the whole summed master pair -- the master strip's
+         * swept filter (spec 2026-09-28-performance-mode-design.md §4A.3).
+         * The same ChannelFilter class every clip's filter uses, so the
+         * cutoff map, the resonance map, the smoothing time, the per-64-sample
+         * coefficient recompute and the denormal flush are all literally the
+         * same code rather than a parallel implementation.
+         *
+         * Held by VALUE, like reverbBus beside it: a default-constructed
+         * ChannelFilter's juce::dsp::StateVariableTPTFilter has empty state
+         * vectors and allocates nothing until prepare() is called, and
+         * prepare() is only ever called on a block that actually engages the
+         * filter. So a project that never touches the master filter pays no
+         * allocation and no per-sample work -- the same "neutral costs
+         * nothing" promise the toolkit already makes.
+         *
+         * `mutable` for the same "logically const, physically stateful"
+         * reason reverbBus and stemDsp are, and under the same
+         * single-rendering-thread invariant. */
+        mutable ChannelFilter masterFilter;
+
+        /** Whether the master filter is currently in the signal path.
+         *
+         * Not simply "is the cutoff non-neutral": releasing a sweep back to
+         * its resting position has to RAMP home and only then leave the path,
+         * or dropping a filter whose state still holds the sweep would click.
+         * So this latches true the moment the cutoff leaves neutral and
+         * latches false only once the smoother has actually arrived back at
+         * neutral -- exactly the shape of `runReverbBus = anyToolkitActive ||
+         * reverbBus.isRinging()`. While it is false the master pair is not
+         * touched at all, which is what makes "resting" bit-identical rather
+         * than nearly so. */
+        mutable bool masterFilterEngaged = false;
 
         LiveParamOverrides liveParamOverrides;
     };

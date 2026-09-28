@@ -695,6 +695,85 @@ namespace sssketch
         // outL/outR bit-identical if nothing was actually sent this block.
         if (runReverbBus)
             reverbBus.endBlock(numSamples, outL, outR);
+
+        // ...and LAST, one filter over the whole mix (spec 4A.3).
+        //
+        // Deliberately AFTER the reverb's wet add rather than between the
+        // channel sum and endBlock, which is the one place this departs from
+        // the spec's own sketch of where to put it. A master filter that
+        // left the reverb tail unfiltered would sweep the mix down and leave
+        // a bright wash sitting on top of nothing, which is not what "over
+        // the whole mix" means to anyone performing with it; here, closing
+        // the filter closes the room with it.
+        //
+        // One wart, named rather than hidden: an ENABLED metronome click is
+        // added into this same pair near the top of this function, so it is
+        // filtered too. Separating it would need a second accumulator for
+        // the whole mix, and the metronome is off in Discover/radio, which
+        // is the only surface this control has. (On the no-content early
+        // return above, the click is not filtered at all -- there is no mix
+        // there to filter.)
+        applyMasterFilter(snap->project.masterFilter, sampleRate, numSamples, outL, outR);
+    }
+
+    void PlaybackEngine::applyMasterFilter(
+        const EngineProject::MasterFilterSettings& settings,
+        double sampleRate,
+        int numSamples,
+        float* outL,
+        float* outR) const
+    {
+        // The committed project value, overridden by whatever set-live-param
+        // last pushed. That override is how a DRAGGED sweep reaches the audio
+        // thread without a whole load-project per frame -- the established
+        // rule is that a curve is for a gesture that must land on a beat and
+        // a live-param is for a hand on a control, and this is a hand on a
+        // control. The mode has no override on purpose: flipping a topology
+        // is a click, not a drag, so it rides the next project reload.
+        const auto mode = settings.mode;
+        const float neutral = (float) neutralCutoffValue(mode);
+        float cutoff01 = (float) settings.cutoff;
+        float resonance01 = (float) settings.resonance;
+        if (const auto ov = liveParamOverrides.masterFilterCutoffFor())
+            cutoff01 = *ov;
+        if (const auto ov = liveParamOverrides.masterFilterResonanceFor())
+            resonance01 = *ov;
+
+        // The SAME neutrality rule the per-clip filter uses, called on the
+        // same function -- no automation here, so both automation flags are
+        // false and the test reduces to "is the cutoff at this mode's own
+        // open end". Resonance alone can never un-neutralise it, for the
+        // reason channelFilterIsNeutral's own comment gives.
+        const bool wantFilter = !channelFilterIsNeutral(mode, cutoff01, false, false);
+
+        if (!wantFilter && !masterFilterEngaged)
+            return; // the resting case: the master pair is not touched at all
+
+        if (!masterFilterEngaged)
+        {
+            masterFilterEngaged = true;
+            masterFilter.prepare(sampleRate, numSamples);
+            // Engage AT neutral and let the smoother travel to the target,
+            // so the first block of a sweep ramps in instead of stepping.
+            masterFilter.resetTo(mode, neutral, resonance01);
+        }
+
+        masterFilter.prepare(sampleRate, numSamples);
+        masterFilter.setTargets(mode, wantFilter ? cutoff01 : neutral, resonance01);
+        masterFilter.process(numSamples, outL, outR);
+
+        // Leaving the path is a ramp home, not a drop: only once the cutoff
+        // smoother has actually ARRIVED at neutral does the filter come out,
+        // and from the next block on the master pair is untouched again --
+        // bit-identical to a project that never had a master filter. The
+        // tolerance is the smoother's own arrival threshold, not the wire's:
+        // a one-pole ramp approaches asymptotically and would otherwise
+        // never compare exactly equal.
+        if (!wantFilter && std::abs(masterFilter.currentCutoff01() - neutral) <= 1.0e-4f)
+        {
+            masterFilterEngaged = false;
+            masterFilter.resetTo(mode, neutral, resonance01);
+        }
     }
 
     void PlaybackEngine::applyStemToolkit(

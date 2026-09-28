@@ -346,6 +346,15 @@ namespace sssketch
                     engine.liveOverrides().setFadeInOverride(key, value);
                 else if (field == "fadeOut")
                     engine.liveOverrides().setFadeOutOverride(key, value);
+                // The master filter's two continuous controls (spec 4A.3).
+                // There is exactly one master filter, so `key` is ignored --
+                // the renderer sends "" -- and the negative sentinel above
+                // clears back to the committed project value just as it does
+                // for a stem's volume.
+                else if (field == "masterFilterCutoff")
+                    engine.liveOverrides().setMasterFilterCutoffOverride(value);
+                else if (field == "masterFilterResonance")
+                    engine.liveOverrides().setMasterFilterResonanceOverride(value);
             }
         }
         else if (type == "list-input-devices")

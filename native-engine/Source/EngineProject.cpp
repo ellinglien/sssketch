@@ -157,6 +157,25 @@ namespace sssketch
                 project.reverb.preDelayMs = preDelay;
         }
 
+        // The master filter over the whole summed mix (spec section 4A.3).
+        // Same lenient-parse convention as `reverb` directly above, and the
+        // same "absent means neutral" contract: the renderer OMITS this key
+        // entirely whenever the filter is parked at its mode's neutral end
+        // (buildEngineProject.ts's masterFilterForWire), which is what keeps
+        // an untouched master strip bit-identical to a project built before
+        // this field existed.
+        auto masterFilterVar = parsed.getProperty("masterFilter", juce::var());
+        if (masterFilterVar.getDynamicObject() != nullptr)
+        {
+            project.masterFilter.mode =
+                masterFilterVar.getProperty("mode", "lowpass").toString() == "highpass"
+                    ? FilterMode::highpass
+                    : FilterMode::lowpass;
+            project.masterFilter.cutoff = getNormalised(
+                masterFilterVar, "cutoff", neutralCutoffValue(project.masterFilter.mode));
+            project.masterFilter.resonance = getNormalised(masterFilterVar, "resonance", 0.0);
+        }
+
         // Placed noise risers (spec step 4). Absent for every project saved
         // before they existed, and absent parses to an empty vector, which is
         // exactly the fast path PlaybackEngine skips the whole riser stage

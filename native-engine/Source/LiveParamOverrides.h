@@ -82,7 +82,25 @@ namespace sssketch
         void setFadeInOverride(const juce::String& groupId, std::optional<float> value);
         void setFadeOutOverride(const juce::String& groupId, std::optional<float> value);
 
-        /** Message-thread API: clears all three maps at once. */
+        /** Message-thread API: the MASTER filter's two continuous controls
+         * (see EngineProject::MasterFilterSettings and spec section 4A.3).
+         *
+         * Deliberately NOT a fourth map: there is exactly one master filter,
+         * so there is no key to hash -- a plain std::atomic<float> each,
+         * which unlike the three maps above is genuinely lock-free and
+         * allocation-free on both sides. renderBlock reads them once per
+         * block rather than once per stem, so they are also not counted in
+         * overrideCount/hasAnyOverride(), which exists solely to let the
+         * per-stem loop skip the shared_ptr maps.
+         *
+         * std::nullopt clears, restoring the committed project value --
+         * which is what the wire's negative-value sentinel maps to in
+         * IpcServer's set-live-param handler, exactly as for volume. */
+        void setMasterFilterCutoffOverride(std::optional<float> value);
+        void setMasterFilterResonanceOverride(std::optional<float> value);
+
+        /** Message-thread API: clears all three maps and both master-filter
+         * values at once. */
         void clearAll();
 
         /** Audio-thread API: std::nullopt means "no override, use the
@@ -117,6 +135,15 @@ namespace sssketch
         std::optional<float> fadeInFor(const juce::String& groupId) const;
         std::optional<float> fadeOutFor(const juce::String& groupId) const;
 
+        /** Audio-thread API for the master filter: one genuinely lock-free
+         * relaxed-ordering load each, no map, no allocation, no mutex. Read
+         * unconditionally once per block (not gated on hasAnyOverride(),
+         * which only guards the mutex-backed maps above) -- two atomic
+         * loads per block is nothing next to the snapshot load renderBlock
+         * already does. */
+        std::optional<float> masterFilterCutoffFor() const;
+        std::optional<float> masterFilterResonanceFor() const;
+
         /** Audio-thread API: a single, genuinely lock-free check for whether ANY
          * override is currently set, across all three fields. Intended to let
          * renderBlock() skip volumeFor()/fadeInFor()/fadeOutFor() -- and their
@@ -138,6 +165,16 @@ namespace sssketch
         std::shared_ptr<const OverrideMap> volumeOverrides;
         std::shared_ptr<const OverrideMap> fadeInOverrides;
         std::shared_ptr<const OverrideMap> fadeOutOverrides;
+
+        /** The master filter's two live values. NEGATIVE means "no override"
+         * -- the same sentinel the wire itself already uses for an unset
+         * numeric field (see IpcServer's set-live-param handler), reused
+         * here so there is no second "is it set" flag to keep in step with
+         * the value. Both controls are normalised [0,1], so no legitimate
+         * value is negative. */
+        static constexpr float kNoMasterOverride = -1.0f;
+        std::atomic<float> masterFilterCutoffOverride { kNoMasterOverride };
+        std::atomic<float> masterFilterResonanceOverride { kNoMasterOverride };
 
         // Genuinely lock-free (plain std::atomic<int>, NOT the shared_ptr-based
         // maps above) running count of how many keys are currently overridden,

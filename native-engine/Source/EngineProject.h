@@ -235,6 +235,38 @@ namespace sssketch
          * clip (see ReverbBus.h). Defaults are ReverbSettings's own; they only
          * ever matter once some clip actually sends to it. */
         ReverbSettings reverb;
+
+        /** ONE filter over the whole summed mix, applied at the very end of
+         * PlaybackEngine::renderBlock -- the master strip's swept filter (see
+         * docs/superpowers/specs/2026-09-28-performance-mode-design.md
+         * section 4A.3). Deliberately the SAME normalised control values and
+         * the SAME log cutoff map the per-clip filter uses (ChannelFilter.h),
+         * so a given dial position means the same frequency in both places.
+         *
+         * These defaults ARE neutral (a lowpass parked at 20kHz), and a
+         * payload with no `masterFilter` key at all parses to exactly them --
+         * so every project built before this field existed leaves the
+         * master pair untouched, sample for sample. PlaybackEngine tests
+         * that promise directly.
+         *
+         * Not automatable and deliberately so: a master filter is a hand on a
+         * control, not a gesture that has to land on a beat, so its cutoff
+         * and resonance are ALSO carried by set-live-param
+         * (LiveParamOverrides::masterFilterCutoffFor) during a drag, which
+         * beats these committed values. The mode is not -- flipping a
+         * topology is not something you drag -- so it only ever changes on a
+         * load-project. */
+        struct MasterFilterSettings
+        {
+            FilterMode mode = FilterMode::lowpass;
+            /** Normalised [0,1], mapped by filterCutoffHz(). The default is
+             * neutralCutoffValue(lowpass); a payload that names a mode but
+             * omits the cutoff gets that mode's own neutral end rather than
+             * a lowpass's 20Hz, same rule as EngineStemToolkit's. */
+            double cutoff = 1.0;
+            double resonance = 0.0;
+        };
+        MasterFilterSettings masterFilter;
     };
 
     /** Parses the wire-format JSON documented in Task 3 of the Phase 1 plan.

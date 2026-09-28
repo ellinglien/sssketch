@@ -2111,6 +2111,286 @@ namespace sssketch
             }
 
             fixture.deleteFile();
+
+            // --- the master filter (spec 2026-09-28-performance-mode-design
+            // section 4A.3): ONE filter over the summed master pair, not N
+            // identical per-clip curves.
+
+            beginTest("a project with a neutral master filter renders BIT-identically to one with none");
+            {
+                // The same promise the toolkit's own neutral test pins, one
+                // level up: a master strip nobody has touched must leave the
+                // mix untouched sample for sample, not merely nearly so.
+                // Resonance is deliberately NON-zero here -- a resonant peak
+                // AT a cutoff parked on its own open end is nothing, and the
+                // engine must agree rather than engaging a filter for it.
+                auto toneA = writeFixtureWav("sssketch_pe_mf_neutral_a.wav", 0.3f, 44100);
+                auto toneB = writeFixtureWav("sssketch_pe_mf_neutral_b.wav", 0.2f, 44100);
+
+                EngineProject bare;
+                bare.bpm = 60.0;
+                bare.snapDiv = 16.0;
+                for (int n = 0; n < 2; ++n)
+                {
+                    EngineRifff rifff;
+                    rifff.groupId = n == 0 ? "r1" : "r2";
+                    rifff.channelId = n == 0 ? "ch-1" : "ch-2";
+                    rifff.startBar = 0.0;
+                    rifff.barLength = 1;
+                    EngineStem stem;
+                    stem.resolvedPath = (n == 0 ? toneA : toneB).getFullPathName();
+                    stem.durationSec = 1.0;
+                    stem.barLength = 1;
+                    rifff.stems.push_back(stem);
+                    bare.rifffs.push_back(rifff);
+                }
+
+                EngineProject parked = bare;
+                parked.masterFilter.mode = FilterMode::lowpass;
+                parked.masterFilter.cutoff = neutralCutoffValue(FilterMode::lowpass);
+                parked.masterFilter.resonance = 0.8;
+
+                std::vector<float> bareL(512, 0.0f), bareR(512, 0.0f);
+                {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry channelChains;
+                    engine.setProject(bare);
+                    engine.renderBlock(0.0, 44100.0, 512, bareL.data(), bareR.data(), channelChains);
+                }
+
+                std::vector<float> parkedL(512, 0.0f), parkedR(512, 0.0f);
+                {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry channelChains;
+                    engine.setProject(parked);
+                    engine.renderBlock(0.0, 44100.0, 512, parkedL.data(), parkedR.data(), channelChains);
+                }
+
+                for (int i = 0; i < 512; ++i)
+                {
+                    expectEquals(parkedL[i], bareL[i]);
+                    expectEquals(parkedR[i], bareR[i]);
+                }
+                // ...and it wasn't trivially two silences.
+                expectWithinAbsoluteError(bareL[200], 0.5f, 0.01f);
+
+                toneA.deleteFile();
+                toneB.deleteFile();
+            }
+
+            beginTest("the master filter is on the WHOLE mix, not on one clip");
+            {
+                // Two DC clips on two channels. A highpass is the sharpest
+                // possible probe for "did this reach everything": DC is the
+                // one thing a highpass removes completely, so if the filter
+                // were somehow per clip (the alternative 4A.3 rejected,
+                // built wrong) one clip's 0.2 would survive.
+                auto toneA = writeFixtureWav("sssketch_pe_mf_whole_a.wav", 0.3f, 44100);
+                auto toneB = writeFixtureWav("sssketch_pe_mf_whole_b.wav", 0.2f, 44100);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                for (int n = 0; n < 2; ++n)
+                {
+                    EngineRifff rifff;
+                    rifff.groupId = n == 0 ? "r1" : "r2";
+                    rifff.channelId = n == 0 ? "ch-1" : "ch-2";
+                    rifff.startBar = 0.0;
+                    rifff.barLength = 1;
+                    EngineStem stem;
+                    stem.resolvedPath = (n == 0 ? toneA : toneB).getFullPathName();
+                    stem.durationSec = 1.0;
+                    stem.barLength = 1;
+                    rifff.stems.push_back(stem);
+                    project.rifffs.push_back(rifff);
+                }
+                project.masterFilter.mode = FilterMode::highpass;
+                project.masterFilter.cutoff = 0.75; // well up the log range -- kHz, not Hz
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+                std::vector<float> l(4096, 0.0f), r(4096, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 4096, l.data(), r.data(), channelChains);
+
+                // The filter ENGAGES at neutral and ramps to its target (see
+                // applyMasterFilter), so the first few ms still pass DC --
+                // that ramp is the point, it is what stops a sweep clicking
+                // in. By 3000 samples (~68ms) both clips' DC is gone.
+                expectWithinAbsoluteError(l[3000], 0.0f, 0.01f);
+                expectWithinAbsoluteError(r[3000], 0.0f, 0.01f);
+            }
+
+            beginTest("a low master cutoff attenuates high content, using the same log map the clip filter does");
+            {
+                // 8kHz sine, and a master lowpass at value01 = 1/3, which
+                // filterCutoffHz maps to 20 * 1000^(1/3) = 200Hz -- two
+                // decades below the tone, so a 2nd-order lowpass should
+                // leave essentially nothing. The value is written as the
+                // inverse of the SHARED map rather than as a magic number,
+                // so this test would fail if the master filter ever grew a
+                // second cutoff curve of its own.
+                auto tone = writeSineFixtureWav("sssketch_pe_mf_sweep.wav", 8000.0, 0.5f, 176400);
+
+                EngineProject open;
+                open.bpm = 60.0; // secPerBar = 4s, so 176400 samples is one bar
+                open.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.channelId = "ch-1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+                EngineStem stem;
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                open.rifffs.push_back(rifff);
+
+                EngineProject closed = open;
+                closed.masterFilter.mode = FilterMode::lowpass;
+                closed.masterFilter.cutoff = 1.0 / 3.0;
+                expectWithinAbsoluteError(filterCutoffHz(closed.masterFilter.cutoff), 200.0, 1.0);
+
+                auto peakOf = [this](const EngineProject& project) {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry channelChains;
+                    engine.setProject(project);
+                    // Several blocks, so the cutoff smoother has long since
+                    // arrived; the peak is measured over the LAST one only.
+                    double peak = 0.0;
+                    for (int block = 0; block < 8; ++block)
+                    {
+                        std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                        const double bar = (double) (block * 512) / 44100.0 / 4.0;
+                        engine.renderBlock(bar, 44100.0, 512, l.data(), r.data(), channelChains);
+                        if (block < 7) continue;
+                        for (int i = 0; i < 512; ++i)
+                            peak = juce::jmax(peak, (double) std::abs(l[i]));
+                    }
+                    ignoreUnused(this);
+                    return peak;
+                };
+
+                const double openPeak = peakOf(open);
+                const double closedPeak = peakOf(closed);
+                expect(openPeak > 0.4, "the unfiltered tone is missing (peak " + juce::String(openPeak) + ")");
+                expect(closedPeak < openPeak * 0.05,
+                    "a 200Hz master lowpass barely touched an 8kHz tone (" + juce::String(closedPeak)
+                        + " vs " + juce::String(openPeak) + ")");
+
+                tone.deleteFile();
+            }
+
+            beginTest("a live master cutoff override drives the filter, and clearing it leaves the path entirely");
+            {
+                // The whole live-control story in one test: the project is
+                // neutral throughout (exactly what a resting master strip
+                // sends), the override alone opens and closes the filter,
+                // and once it is cleared the master pair goes back to being
+                // untouched -- BIT-identical to an engine that never had a
+                // filter, not merely close to it.
+                auto tone = writeSineFixtureWav("sssketch_pe_mf_live.wav", 8000.0, 0.5f, 176400);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.channelId = "ch-1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+                EngineStem stem;
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+                // Untouched: mode lowpass, cutoff at its neutral end.
+                expect(channelFilterIsNeutral(
+                    project.masterFilter.mode, project.masterFilter.cutoff, false, false));
+
+                StemBufferCache cacheA, cacheB;
+                PlaybackEngine swept(cacheA), reference(cacheB);
+                ChannelChainRegistry chainsA, chainsB;
+                swept.setProject(project);
+                reference.setProject(project);
+
+                auto renderBoth = [&](int block, std::vector<float>& sweptL, std::vector<float>& refL) {
+                    std::vector<float> sweptR(512, 0.0f), refR(512, 0.0f);
+                    sweptL.assign(512, 0.0f);
+                    refL.assign(512, 0.0f);
+                    const double bar = (double) (block * 512) / 44100.0 / 4.0;
+                    swept.renderBlock(bar, 44100.0, 512, sweptL.data(), sweptR.data(), chainsA);
+                    reference.renderBlock(bar, 44100.0, 512, refL.data(), refR.data(), chainsB);
+                };
+
+                std::vector<float> sweptL, refL;
+
+                // 1. No override yet: identical, because nothing is engaged.
+                renderBoth(0, sweptL, refL);
+                for (int i = 0; i < 512; ++i)
+                    expectEquals(sweptL[i], refL[i]);
+
+                // 2. The hand lands on the control. 200Hz, as above.
+                swept.liveOverrides().setMasterFilterCutoffOverride(1.0f / 3.0f);
+                double sweptPeak = 0.0, refPeak = 0.0;
+                for (int block = 1; block < 10; ++block)
+                {
+                    renderBoth(block, sweptL, refL);
+                    if (block < 9) continue;
+                    for (int i = 0; i < 512; ++i)
+                    {
+                        sweptPeak = juce::jmax(sweptPeak, (double) std::abs(sweptL[i]));
+                        refPeak = juce::jmax(refPeak, (double) std::abs(refL[i]));
+                    }
+                }
+                expect(refPeak > 0.4, "the reference tone is missing");
+                expect(sweptPeak < refPeak * 0.05,
+                    "the live override did not reach the filter (" + juce::String(sweptPeak) + ")");
+
+                // 3. The hand comes off. The filter ramps HOME rather than
+                // dropping out mid-sweep, and then leaves the path -- after
+                // which the two engines agree sample for sample again.
+                swept.liveOverrides().setMasterFilterCutoffOverride(std::nullopt);
+                for (int block = 10; block < 40; ++block)
+                    renderBoth(block, sweptL, refL);
+                renderBoth(40, sweptL, refL);
+                for (int i = 0; i < 512; ++i)
+                    expectEquals(sweptL[i], refL[i]);
+
+                tone.deleteFile();
+            }
+
+            beginTest("clearAll() drops the master filter's live values too");
+            {
+                // load-project calls liveOverrides().clearAll()
+                // (IpcServer.cpp), which is the ENTIRE mechanism by which a
+                // live override is cleared -- so the master filter's own two
+                // values have to go with it, or a sweep would survive a
+                // project it no longer belongs to. The renderer re-asserts
+                // them right after every sync, which is what stops the
+                // clear being heard.
+                LiveParamOverrides overrides;
+                expect(!overrides.masterFilterCutoffFor().has_value());
+                expect(!overrides.masterFilterResonanceFor().has_value());
+                overrides.setMasterFilterCutoffOverride(0.25f);
+                overrides.setMasterFilterResonanceOverride(0.75f);
+                expectWithinAbsoluteError(*overrides.masterFilterCutoffFor(), 0.25f, 1.0e-6f);
+                expectWithinAbsoluteError(*overrides.masterFilterResonanceFor(), 0.75f, 1.0e-6f);
+                // Not counted in hasAnyOverride(): that flag exists only to
+                // let the per-STEM loop skip the three mutex-backed maps,
+                // and the master filter is read once per block regardless.
+                expect(!overrides.hasAnyOverride());
+                overrides.clearAll();
+                expect(!overrides.masterFilterCutoffFor().has_value());
+                expect(!overrides.masterFilterResonanceFor().has_value());
+            }
         }
     };
 

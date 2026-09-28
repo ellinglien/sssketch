@@ -352,6 +352,63 @@ namespace sssketch
                 expectEquals(project.reverb.preDelayMs, 20.0);
             }
 
+            beginTest("a project with no masterFilter key parses to an exactly neutral one");
+            {
+                // The renderer OMITS the key whenever the master strip's
+                // filter is parked (buildEngineProject.ts's
+                // masterFilterForWire), and so does every project built
+                // before the field existed. Absent must therefore mean
+                // neutral, or an untouched master strip would start
+                // filtering things.
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"bpm":120.0,"rifffs":[{"groupId":"g1","stems":[{"stemKey":"g1:0"}]}]})",
+                    project, error), error);
+                expect(project.masterFilter.mode == FilterMode::lowpass);
+                expectEquals(project.masterFilter.cutoff, neutralCutoffValue(FilterMode::lowpass));
+                expectEquals(project.masterFilter.resonance, 0.0);
+                expect(channelFilterIsNeutral(
+                    project.masterFilter.mode, project.masterFilter.cutoff, false, false));
+            }
+
+            beginTest("parses the masterFilter, defaulting an omitted cutoff to its own mode's neutral end");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"masterFilter":{"mode":"highpass","cutoff":0.4,"resonance":0.6},"rifffs":[]})",
+                    project, error), error);
+                expect(project.masterFilter.mode == FilterMode::highpass);
+                expectEquals(project.masterFilter.cutoff, 0.4);
+                expectEquals(project.masterFilter.resonance, 0.6);
+
+                // A mode with no cutoff beside it lands on THAT mode's
+                // neutral end (0.0 for a highpass), not on 1.0 -- which for
+                // a highpass would be 20kHz, i.e. everything gone. Same rule
+                // as EngineStemToolkit's own filterCutoff default.
+                EngineProject modeOnly;
+                expect(parseEngineProject(
+                    R"({"masterFilter":{"mode":"highpass"},"rifffs":[]})", modeOnly, error), error);
+                expectEquals(modeOnly.masterFilter.cutoff, neutralCutoffValue(FilterMode::highpass));
+                expect(channelFilterIsNeutral(
+                    modeOnly.masterFilter.mode, modeOnly.masterFilter.cutoff, false, false));
+
+                // Lenient parse, same as everything else in this file: a
+                // wrong-typed masterFilter is a default, not an error, and
+                // out-of-range values clamp rather than reaching the audio
+                // thread.
+                EngineProject junk;
+                expect(parseEngineProject(R"({"masterFilter":42,"rifffs":[]})", junk, error), error);
+                expectEquals(junk.masterFilter.cutoff, neutralCutoffValue(FilterMode::lowpass));
+                EngineProject clampedMaster;
+                expect(parseEngineProject(
+                    R"({"masterFilter":{"cutoff":-3.0,"resonance":9.0},"rifffs":[]})",
+                    clampedMaster, error), error);
+                expectEquals(clampedMaster.masterFilter.cutoff, 0.0);
+                expectEquals(clampedMaster.masterFilter.resonance, 1.0);
+            }
+
             beginTest("parses a stem's filter, send, volume, origin and automation curves");
             {
                 const juce::String json = R"(
