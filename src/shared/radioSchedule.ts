@@ -9,6 +9,14 @@
 // own freshSlotId/pickRandomKind, which live at module scope for the same
 // reason).
 
+import type { DiscoverSlotKind } from './discoverSlotKind'
+import { DEFAULT_RADIO_DROP_OUTS, normalizeRadioDropOuts, type RadioDropOuts } from './radioDropOut'
+import {
+  DEFAULT_RADIO_TRANSITIONS,
+  normalizeRadioTransitions,
+  type RadioTransitions
+} from './radioTransition'
+
 /** The three speeds radio can run at. Literal values double as their own
  * UI text (the same convention DISCOVER_SLOT_KIND_OPTIONS uses for its
  * non-camelCase kinds), so there is no label table. */
@@ -319,4 +327,203 @@ export function isRadioEligibleSlot(slot: RadioSlotEligibility): boolean {
   if (!slot.audible) return false
   if (slot.rerolling) return false
   return slot.hasCandidate || slot.hasSeedStem
+}
+
+/** A pace as a pair of numbers rather than a word -- Elling, 2026-09-28:
+ * "maybe allow for a specific range selection instead of just slow mid
+ * and fast?". The three presets stay as the starting points (and as what
+ * the start prompt offers); this is where he settles once one of them is
+ * nearly right. */
+export interface RadioPaceWindow {
+  min: number
+  max: number
+}
+
+/** One bar at the tightest -- below that a change lands before the last
+ * one has finished arriving. Sixty-four at the loosest: over two minutes
+ * at 120bpm, further out than `slow` goes and further than anything he
+ * has asked for. */
+export const RADIO_PACE_WINDOW_MIN = 1
+export const RADIO_PACE_WINDOW_MAX = 64
+
+function clampPaceBar(value: number): number {
+  return Math.min(RADIO_PACE_WINDOW_MAX, Math.max(RADIO_PACE_WINDOW_MIN, Math.floor(value)))
+}
+
+/** Anything unusable falls back to the named preset's own window, so a
+ * settings file written before this field existed (or hand-edited into
+ * nonsense) still describes a pace rather than throwing. A crossed-over
+ * window collapses onto its min. */
+export function normalizeRadioPaceWindow(value: unknown, pace: RadioPace): RadioPaceWindow {
+  const raw = (typeof value === 'object' && value !== null ? value : {}) as Partial<RadioPaceWindow>
+  const min = Number(raw.min)
+  const max = Number(raw.max)
+  if (!Number.isFinite(min) || !Number.isFinite(max)) return { ...RADIO_PACE_BARS[pace] }
+  const lo = clampPaceBar(min)
+  return { min: lo, max: Math.max(lo, clampPaceBar(max)) }
+}
+
+/** Which preset a window IS, or null for one he tuned by hand. The menu
+ * lights a pace chip from this rather than from the stored `pace`, so a
+ * hand-tuned window does not keep claiming to be `mid`. */
+export function radioPaceWindowPreset(window: RadioPaceWindow): RadioPace | null {
+  return (
+    RADIO_PACE_OPTIONS.find(
+      (p) => RADIO_PACE_BARS[p].min === window.min && RADIO_PACE_BARS[p].max === window.max
+    ) ?? null
+  )
+}
+
+/** One stepper press. Pushing an edge past the other drags the other with
+ * it rather than inverting the window -- an inverted window draws no
+ * interval at all, and there is no reading of the gesture where that is
+ * what he meant. */
+export function adjustRadioPaceWindow(
+  window: RadioPaceWindow,
+  edge: 'min' | 'max',
+  delta: number
+): RadioPaceWindow {
+  if (edge === 'min') {
+    const min = clampPaceBar(window.min + delta)
+    return { min, max: Math.max(min, window.max) }
+  }
+  const max = clampPaceBar(window.max + delta)
+  return { min: Math.min(window.min, max), max }
+}
+
+/** A fresh whole number of bars to wait, drawn uniformly across a window
+ * (both ends inclusive). nextRadioIntervalBars is this with a preset's own
+ * numbers -- one draw, two ways of naming the window. */
+export function nextRadioIntervalBarsInWindow(
+  window: RadioPaceWindow,
+  random: () => number = Math.random
+): number {
+  const span = Math.max(1, window.max - window.min + 1)
+  const offset = Math.min(span - 1, Math.floor(random() * span))
+  return window.min + offset
+}
+
+/** How radio chooses WHICH layer turns over. `even` biases toward the
+ * least-recently-changed; `random` is the memoryless draw that shipped
+ * 2026-09-26. Elling hit a ~4.7-minute drought with the latter on
+ * 2026-09-28 -- "this is good for consistency but i'd love to have some
+ * control" -- so `random` is kept as a choice rather than removed.
+ *
+ * NOTHING READS THIS YET. The weighting is phase D; only the field and
+ * its migration ship here, so the settings file is written once. */
+export type RadioTurnover = 'even' | 'random'
+
+export const RADIO_TURNOVER_OPTIONS: RadioTurnover[] = ['even', 'random']
+
+/** `even`. A five-minute hold nobody asked for reads as broken, and the
+ * deliberate way to hold a layer is the hook. More channels makes the
+ * drought worse (one change per interval across six layers is half the
+ * rate of three), which is the strongest argument for this default. */
+export const DEFAULT_RADIO_TURNOVER: RadioTurnover = 'even'
+
+export function normalizeRadioTurnover(value: unknown): RadioTurnover {
+  return RADIO_TURNOVER_OPTIONS.includes(value as RadioTurnover)
+    ? (value as RadioTurnover)
+    : DEFAULT_RADIO_TURNOVER
+}
+
+/** How many layers radio lays down when started on an EMPTY panel.
+ * Elling, 2026-09-28: "see if more channels are feasible.. lots ideally...
+ * but maybe slider up to 8?".
+ *
+ * This is NOT a cap on Discover. addSlot has no cap and never has -- he
+ * ran twelve slots the same day -- and nothing here adds one. It is only
+ * the size of the starting bed. */
+export const RADIO_CHANNELS_MIN = 4
+export const RADIO_CHANNELS_MAX = 8
+
+/** The bed, in the order it grows. Every PREFIX has to sound like a band
+ * on its own, because the chip row grows it from the left:
+ *   1-4  the shipped set -- the smallest thing that sounds like a band
+ *   5    a SECOND drum layer: a groove gets its top end from hats and
+ *        perc over the kick-and-snare bed. Biggest gain per slot.
+ *   6    bright -- the counterweight to warm; a high end that is not the
+ *        lead
+ *   7    rhythmic -- a texture chosen for MOVEMENT rather than instrument,
+ *        filling the space between the bed and the lead
+ *   8    a second lead -- a counter-line. Two melodic voices, not two
+ *        basses: two basses fight, two leads converse. The dedupe pass in
+ *        pickForSlot keeps it from drawing the same stem. */
+const RADIO_STARTER_ORDER: DiscoverSlotKind[] = [
+  'drums',
+  'bass',
+  'lead',
+  'warm',
+  'drums',
+  'bright',
+  'rhythmic',
+  'lead'
+]
+
+export function radioStarterKinds(channels: number): DiscoverSlotKind[] {
+  const n = Math.min(
+    RADIO_CHANNELS_MAX,
+    Math.max(RADIO_CHANNELS_MIN, Math.floor(Number(channels) || 0))
+  )
+  return RADIO_STARTER_ORDER.slice(0, n)
+}
+
+/** Everything the radio menu sets, in one object rather than seven flat
+ * fields on DiscoverSettings.
+ *
+ * Nested because the alternative is threading seven pairs of props through
+ * App.tsx -> LibraryBrowser.tsx -> DiscoverPanel.tsx, which is fourteen
+ * props for what is one concept. `reach` and `character` are deliberately
+ * absent: they ship in their own plans (spec 10, phases F and G) and a
+ * field nothing reads is a lie.
+ *
+ * `pace` and `paceBars` are not a duplicate pair. `pace` is the preset he
+ * last chose -- what the start prompt offers and what a course change
+ * resets to. `paceBars` is the window the clock actually draws from, which
+ * starts life as that preset's own numbers and diverges only if he steps
+ * an edge. radioPaceWindowPreset reconciles the two for display. */
+export interface RadioSettings {
+  pace: RadioPace
+  paceBars: RadioPaceWindow
+  grid: RadioGrid
+  channels: number
+  transitions: RadioTransitions
+  dropOuts: RadioDropOuts
+  turnover: RadioTurnover
+}
+
+export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
+  pace: DEFAULT_RADIO_PACE,
+  paceBars: { ...RADIO_PACE_BARS[DEFAULT_RADIO_PACE] },
+  grid: DEFAULT_RADIO_GRID,
+  channels: RADIO_CHANNELS_MIN,
+  transitions: DEFAULT_RADIO_TRANSITIONS,
+  dropOuts: DEFAULT_RADIO_DROP_OUTS,
+  turnover: DEFAULT_RADIO_TURNOVER
+}
+
+/** Field by field, never throwing -- the same shape loadDiscoverSettings
+ * already uses for traitMatchBar and radioPace.
+ *
+ * `legacyPace` is the MIGRATION. Anyone running 1.3.0 has a flat
+ * `radioPace` on disk and no `radio` object, and their chosen pace must
+ * survive the move rather than silently resetting to mid -- and it has to
+ * bring a window with it, since the window is what the clock draws from.
+ * An explicit `radio.pace` always wins over it. */
+export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): RadioSettings {
+  const raw = (typeof value === 'object' && value !== null ? value : {}) as Partial<RadioSettings>
+  const pace =
+    raw.pace !== undefined ? normalizeRadioPace(raw.pace) : normalizeRadioPace(legacyPace)
+  const channels = Number(raw.channels)
+  return {
+    pace,
+    paceBars: normalizeRadioPaceWindow(raw.paceBars, pace),
+    grid: normalizeRadioGrid(raw.grid),
+    channels: Number.isFinite(channels)
+      ? Math.min(RADIO_CHANNELS_MAX, Math.max(RADIO_CHANNELS_MIN, Math.floor(channels)))
+      : RADIO_CHANNELS_MIN,
+    transitions: normalizeRadioTransitions(raw.transitions),
+    dropOuts: normalizeRadioDropOuts(raw.dropOuts),
+    turnover: normalizeRadioTurnover(raw.turnover)
+  }
 }

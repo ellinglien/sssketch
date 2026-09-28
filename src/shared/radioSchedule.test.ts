@@ -2,17 +2,31 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_RADIO_GRID,
   DEFAULT_RADIO_PACE,
+  DEFAULT_RADIO_SETTINGS,
+  DEFAULT_RADIO_TURNOVER,
+  RADIO_CHANNELS_MAX,
+  RADIO_CHANNELS_MIN,
   RADIO_GRID_OPTIONS,
   RADIO_PACE_BARS,
   RADIO_PACE_OPTIONS,
+  RADIO_PACE_WINDOW_MAX,
+  RADIO_PACE_WINDOW_MIN,
+  RADIO_TURNOVER_OPTIONS,
+  adjustRadioPaceWindow,
   advanceRadioClock,
   createRadioClock,
   isRadioEligibleSlot,
   nextRadioIntervalBars,
+  nextRadioIntervalBarsInWindow,
   normalizeRadioGrid,
   normalizeRadioPace,
+  normalizeRadioPaceWindow,
+  normalizeRadioSettings,
+  normalizeRadioTurnover,
   pickRadioSlotId,
-  radioGridBars
+  radioGridBars,
+  radioPaceWindowPreset,
+  radioStarterKinds
 } from './radioSchedule'
 
 describe('radio paces', () => {
@@ -401,5 +415,160 @@ describe('radioGridBars and long phrases', () => {
 
   it('still caps to the loop when the loop is itself short', () => {
     expect(radioGridBars('own loop', 4, 12)).toBe(4)
+  })
+})
+
+describe('a pace window he can set himself', () => {
+  it('is one bar at the tightest and sixty-four at the loosest', () => {
+    // Elling, 2026-09-28: "maybe allow for a specific range selection
+    // instead of just slow mid and fast?". The presets stay as starting
+    // points; this is where he settles. 64 bars is over two minutes at
+    // 120bpm, which is further than `slow` goes and far enough.
+    expect(RADIO_PACE_WINDOW_MIN).toBe(1)
+    expect(RADIO_PACE_WINDOW_MAX).toBe(64)
+  })
+
+  it('falls back to the named preset window when nothing is stored', () => {
+    expect(normalizeRadioPaceWindow(undefined, 'mid')).toEqual(RADIO_PACE_BARS.mid)
+    expect(normalizeRadioPaceWindow(null, 'fast')).toEqual(RADIO_PACE_BARS.fast)
+    expect(normalizeRadioPaceWindow('nonsense', 'slow')).toEqual(RADIO_PACE_BARS.slow)
+    expect(normalizeRadioPaceWindow({ min: 'a', max: 'b' }, 'mid')).toEqual(RADIO_PACE_BARS.mid)
+  })
+
+  it('keeps a stored window he set himself', () => {
+    expect(normalizeRadioPaceWindow({ min: 5, max: 9 }, 'mid')).toEqual({ min: 5, max: 9 })
+  })
+
+  it('clamps, floors and orders rather than throwing', () => {
+    expect(normalizeRadioPaceWindow({ min: 0, max: 900 }, 'mid')).toEqual({ min: 1, max: 64 })
+    expect(normalizeRadioPaceWindow({ min: 6.7, max: 9.2 }, 'mid')).toEqual({ min: 6, max: 9 })
+    // A max below the min is a stored value that got crossed over; the
+    // min wins, because that is the one he was most recently dragging
+    // toward.
+    expect(normalizeRadioPaceWindow({ min: 12, max: 4 }, 'mid')).toEqual({ min: 12, max: 12 })
+  })
+
+  it('names the preset a window matches, and null for one he tuned', () => {
+    expect(radioPaceWindowPreset(RADIO_PACE_BARS.slow)).toBe('slow')
+    expect(radioPaceWindowPreset(RADIO_PACE_BARS.mid)).toBe('mid')
+    expect(radioPaceWindowPreset(RADIO_PACE_BARS.fast)).toBe('fast')
+    expect(radioPaceWindowPreset({ min: 5, max: 9 })).toBeNull()
+  })
+
+  it('steps one edge at a time and never lets them cross', () => {
+    expect(adjustRadioPaceWindow({ min: 8, max: 16 }, 'min', 1)).toEqual({ min: 9, max: 16 })
+    expect(adjustRadioPaceWindow({ min: 8, max: 16 }, 'max', -1)).toEqual({ min: 8, max: 15 })
+    // A min pushed past the max drags the max with it, and vice versa --
+    // an inverted window would draw no interval at all.
+    expect(adjustRadioPaceWindow({ min: 16, max: 16 }, 'min', 1)).toEqual({ min: 17, max: 17 })
+    expect(adjustRadioPaceWindow({ min: 8, max: 8 }, 'max', -1)).toEqual({ min: 7, max: 7 })
+  })
+
+  it('stops at the ends rather than wrapping', () => {
+    expect(adjustRadioPaceWindow({ min: 1, max: 4 }, 'min', -1)).toEqual({ min: 1, max: 4 })
+    expect(adjustRadioPaceWindow({ min: 4, max: 64 }, 'max', 1)).toEqual({ min: 4, max: 64 })
+  })
+
+  it('draws an interval from a window, the same way a pace does', () => {
+    expect(nextRadioIntervalBarsInWindow({ min: 5, max: 9 }, () => 0)).toBe(5)
+    expect(nextRadioIntervalBarsInWindow({ min: 5, max: 9 }, () => 0.999)).toBe(9)
+    expect(nextRadioIntervalBarsInWindow({ min: 7, max: 7 }, () => 0.5)).toBe(7)
+    // The preset path is the window path with the preset's own numbers.
+    expect(nextRadioIntervalBarsInWindow(RADIO_PACE_BARS.mid, () => 0)).toBe(
+      nextRadioIntervalBars('mid', () => 0)
+    )
+  })
+})
+
+describe('RadioSettings', () => {
+  it('defaults to mid, the mid window, loop end, four channels, subtle, rare and even', () => {
+    expect(DEFAULT_RADIO_SETTINGS).toEqual({
+      pace: 'mid',
+      paceBars: { min: 8, max: 16 },
+      grid: 'loop end',
+      channels: 4,
+      transitions: 'subtle',
+      dropOuts: 'rare',
+      turnover: 'even'
+    })
+  })
+
+  it('normalizes a whole object, field by field, never throwing', () => {
+    expect(normalizeRadioSettings({ pace: 'fast', grid: '4 bars', channels: 6 })).toEqual({
+      ...DEFAULT_RADIO_SETTINGS,
+      pace: 'fast',
+      paceBars: RADIO_PACE_BARS.fast,
+      grid: '4 bars',
+      channels: 6
+    })
+    expect(normalizeRadioSettings(null)).toEqual(DEFAULT_RADIO_SETTINGS)
+    expect(normalizeRadioSettings('nonsense')).toEqual(DEFAULT_RADIO_SETTINGS)
+    expect(normalizeRadioSettings({ pace: 'glacial', grid: 99 })).toEqual(DEFAULT_RADIO_SETTINGS)
+  })
+
+  it('takes the stored window over the preset when there is one', () => {
+    expect(normalizeRadioSettings({ pace: 'fast', paceBars: { min: 5, max: 9 } }).paceBars).toEqual(
+      { min: 5, max: 9 }
+    )
+  })
+
+  it('clamps the channel count to four through eight', () => {
+    expect(RADIO_CHANNELS_MIN).toBe(4)
+    expect(RADIO_CHANNELS_MAX).toBe(8)
+    expect(normalizeRadioSettings({ channels: 1 }).channels).toBe(4)
+    expect(normalizeRadioSettings({ channels: 40 }).channels).toBe(8)
+    expect(normalizeRadioSettings({ channels: 6.5 }).channels).toBe(6)
+    expect(normalizeRadioSettings({ channels: 'six' }).channels).toBe(4)
+  })
+
+  it('migrates a pre-2026-09-28 settings file, which stored the pace flat', () => {
+    // Anyone running 1.3.0 has { radioPace: 'fast' } on disk and no
+    // `radio` object at all. That value must survive, not throw and not
+    // silently reset -- and it has to bring its window with it, since a
+    // window is what the clock now draws from.
+    expect(normalizeRadioSettings(undefined, 'fast')).toEqual({
+      ...DEFAULT_RADIO_SETTINGS,
+      pace: 'fast',
+      paceBars: RADIO_PACE_BARS.fast
+    })
+    expect(normalizeRadioSettings(undefined, 'glacial').pace).toBe('mid')
+    expect(normalizeRadioSettings({ pace: 'slow' }, 'fast').pace).toBe('slow')
+  })
+
+  it('offers even and random turnover, defaulting to even', () => {
+    expect(RADIO_TURNOVER_OPTIONS).toEqual(['even', 'random'])
+    expect(DEFAULT_RADIO_TURNOVER).toBe('even')
+    expect(normalizeRadioTurnover('fair')).toBe('even')
+  })
+})
+
+describe('radioStarterKinds', () => {
+  it('lays down the shipped four at four', () => {
+    expect(radioStarterKinds(4)).toEqual(['drums', 'bass', 'lead', 'warm'])
+  })
+
+  it('adds a second drum layer fifth -- a groove gets its top end from perc', () => {
+    expect(radioStarterKinds(5)).toEqual(['drums', 'bass', 'lead', 'warm', 'drums'])
+  })
+
+  it('grows from the left, so every prefix still sounds like a band', () => {
+    expect(radioStarterKinds(8)).toEqual([
+      'drums',
+      'bass',
+      'lead',
+      'warm',
+      'drums',
+      'bright',
+      'rhythmic',
+      'lead'
+    ])
+    for (let n = 4; n <= 8; n++) {
+      expect(radioStarterKinds(n)).toEqual(radioStarterKinds(8).slice(0, n))
+    }
+  })
+
+  it('clamps out of range rather than throwing', () => {
+    expect(radioStarterKinds(0)).toHaveLength(4)
+    expect(radioStarterKinds(99)).toHaveLength(8)
   })
 })
