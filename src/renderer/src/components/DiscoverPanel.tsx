@@ -511,6 +511,11 @@ export function DiscoverPanel({
   const [isDraggingOverExternalFile, setIsDraggingOverExternalFile] = useState(false)
   const masterChain = useAppSelector((s) => s.masterChain)
   const channelPlugins = useAppSelector((s) => s.channelPlugins)
+  // Copied into the preview so an audition hears the room the project
+  // is actually tuned to, not DEFAULT_REVERB -- and so the master reverb
+  // send below feeds that same room. See syncPreviewToEngine's own doc
+  // comment for what else crosses over and what does not.
+  const reverb = useAppSelector((s) => s.reverb)
   const pluginCatalog = usePluginCatalog()
   const flushEngineSyncNow = useFlushEngineSyncNow()
   const {
@@ -874,9 +879,23 @@ export function DiscoverPanel({
    *
    * The real arrangement's own state (`state.rifffs`/`vol`/etc.) is never
    * touched -- the thrown-together AppState here only copies bpm/
-   * masterChain/channelPlugins from the real one, so master/channel FX are
-   * audibly applied while auditioning too (a natural consequence of going
-   * through the engine's own mixer, not a separate feature). */
+   * masterChain/channelPlugins/reverb from the real one.
+   *
+   * MASTER plugin FX genuinely are applied while auditioning: Transport.cpp
+   * runs masterChain.process() on the summed output for whatever project is
+   * loaded, load-project never touches master plugins (they have their own
+   * load-master-plugin message), and StoreContext's master-chain effect is
+   * not ownership-gated -- so editing the chain mid-preview is heard
+   * immediately, with each plugin's live parameter state intact.
+   *
+   * CHANNEL plugin FX are NOT, despite `channelPlugins` being copied here:
+   * assembleDiscoverRifff mints a fresh groupId per sync and previewState
+   * has no channelOf, so buildEngineProject's `channelOf[groupId] ??
+   * groupId` fallback gives this preview a channel id that matches no key
+   * in channelPlugins. Copying it is a no-op. Routing them for real would
+   * mean giving the preview a stable channel identity -- a different
+   * change, deliberately not made here (2026-09-28 performance-mode spec
+   * 0.4). */
   async function syncPreviewToEngine(ids: Set<string>): Promise<void> {
     if (unmountedRef.current) return
     const myGeneration = previewSyncGenerationRef.current + 1
@@ -1059,7 +1078,7 @@ export function DiscoverPanel({
     }
 
     // A throwaway single-rifff AppState -- only bpm/masterChain/
-    // channelPlugins are copied from the real project; state.rifffs is
+    // channelPlugins/reverb are copied from the real project; state.rifffs is
     // ENTIRELY replaced by this one preview rifff, never merged with the
     // real state.rifffs. `startBar: 0` (buildEngineProject's own `placed`
     // filter requires a defined startBar to include a rifff at all) is what
@@ -1070,6 +1089,7 @@ export function DiscoverPanel({
       bpm,
       masterChain,
       channelPlugins,
+      reverb,
       rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
       vol,
       stemAutomation,
