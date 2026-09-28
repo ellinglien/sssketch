@@ -333,12 +333,21 @@ describe('projectUsesToolkit', () => {
 })
 
 describe('masterFilterForWire', () => {
-  it('drops a filter parked at its own mode neutral end', () => {
-    // Both ends, because "neutral" is not one value -- it is whichever end
-    // of the range the chosen mode passes everything at.
+  it('drops a parked lowpass, which is exactly what an absent key parses to', () => {
     expect(masterFilterForWire({ mode: 'lowpass', cutoff: 1, resonance: 0 })).toBeUndefined()
-    expect(masterFilterForWire({ mode: 'highpass', cutoff: 0, resonance: 0 })).toBeUndefined()
     expect(masterFilterForWire(undefined)).toBeUndefined()
+  })
+
+  it('still sends a parked HIGHPASS, because absence means the engine defaults to a lowpass', () => {
+    // A highpass at 0 is inaudible, but the cutoff can arrive later as a
+    // live-param with no project reload behind it, and it is evaluated
+    // against whatever mode the last project carried. Omit this and the
+    // first sweep after it would be heard as a lowpass.
+    expect(masterFilterForWire({ mode: 'highpass', cutoff: 0, resonance: 0 })).toEqual({
+      mode: 'highpass',
+      cutoff: 0,
+      resonance: 0
+    })
   })
 
   it('ignores resonance, which cannot un-neutralise a parked cutoff', () => {

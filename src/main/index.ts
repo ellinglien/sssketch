@@ -33,6 +33,7 @@ import {
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav } from './exportMix'
 import type { ToolkitExportMode } from '@shared/toolkit'
+import type { LiveParamField } from '@shared/liveParam'
 import { exportAbleton, exportAbletonToLibrary, exportAbletonNextToSource } from './exportAbleton'
 import { exportReaper, exportReaperToLibrary, exportReaperNextToSource } from './exportReaper'
 import {
@@ -1119,9 +1120,12 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('set-position', { pos })
   })
 
-  ipcMain.handle('engine-set-live-param', (_event, field: 'volume', key: string, value: number) => {
-    playbackEngine?.client.send('set-live-param', { field, key, value })
-  })
+  ipcMain.handle(
+    'engine-set-live-param',
+    (_event, field: LiveParamField, key: string, value: number) => {
+      playbackEngine?.client.send('set-live-param', { field, key, value })
+    }
+  )
 
   ipcMain.handle('engine-set-loop-region', (_event, startBar: number, endBar: number) => {
     playbackEngine?.client.send('set-loop-region', { startBar, endBar })

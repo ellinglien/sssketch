@@ -200,6 +200,16 @@ export function isStemToolkitNeutral(
  * reason it is there -- a peak AT a cutoff parked on its own open end is
  * nothing to resonate.
  *
+ * ...but a parked HIGHPASS is still sent, which is the one case where "does
+ * it do anything" and "can it be left out" come apart. Absence means the
+ * engine's own parse defaults, and those are a lowpass. The cutoff can
+ * arrive later without a project reload -- it is a live-param, because it is
+ * a hand on a control -- and it is then evaluated against whatever mode the
+ * last project carried. Omit a parked highpass and the first sweep after it
+ * would be heard as a lowpass. So the rule is "identical to what an absent
+ * key parses to", not merely "inaudible"; the two coincide for a lowpass,
+ * which is the resting state, so the common case still sends nothing.
+ *
  * Exported rather than inlined into buildEngineProject so the master strip's
  * own UI can ask the identical question ("is this dial doing anything") and
  * cannot drift from what is actually sent.
@@ -207,7 +217,8 @@ export function isStemToolkitNeutral(
 export function masterFilterForWire(
   filter: StemFilterSettings | undefined
 ): StemFilterSettings | undefined {
-  return isNeutralFilter(filter) ? undefined : filter
+  if (!isNeutralFilter(filter)) return filter
+  return filter && filter.mode !== 'lowpass' ? filter : undefined
 }
 
 function clamp01(value: number): number {

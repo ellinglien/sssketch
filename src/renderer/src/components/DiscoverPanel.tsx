@@ -99,9 +99,16 @@ import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/typ
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { initialState, type AppState } from '../state/store'
-import type { AutomationPoint, StemAutomation } from '@shared/toolkit'
+import {
+  neutralCutoff,
+  type AutomationPoint,
+  type FilterMode,
+  type StemAutomation,
+  type StemFilterSettings
+} from '@shared/toolkit'
 import type { RiserClip } from '@shared/riser'
 import { masterScaledCurve, masterScaledGains, masterSendsFor } from '@shared/performanceDeck'
+import { MASTER_LIVE_PARAM_KEY } from '@shared/liveParam'
 import { scheduleLiveParamSync } from './liveParamSync'
 
 export interface ResolvedCandidateStem {
@@ -925,6 +932,79 @@ export function DiscoverPanel({
     }
   }
 
+  // The master FILTER (spec 4A.3) -- the one control here that needed a
+  // real engine change, and the reason this is the first native work in any
+  // of this line. One ChannelFilter on the summed master pair, not N
+  // identical per-clip curves; that alternative is rejected at length in
+  // 4A.3 and must not be revived.
+  //
+  // Both dials are Dial's own 0-100 and the wire is 0-1, same as the two
+  // above. `cutoff` is the SAME normalised control the per-clip filter lane
+  // draws, mapped onto 20Hz..20kHz logarithmically by exactly one function
+  // on the engine side -- so 40 on this dial and lane-height 0.4 on a clip
+  // are the same frequency, which is the whole reason the mapping was not
+  // re-invented here.
+  //
+  // Where neutral SITS depends on the mode: a lowpass passes everything at
+  // the top of its range, a highpass at the bottom. So the resting position
+  // of this dial is 100 in lp and 0 in hp, which is also what the dial's
+  // double-click reset goes back to.
+  const [masterFilterMode, setMasterFilterMode] = useState<FilterMode>('lowpass')
+  const [masterCutoff, setMasterCutoff] = useState(100)
+  const [masterResonance, setMasterResonance] = useState(0)
+  const masterFilterRef = useRef<StemFilterSettings>({
+    mode: 'lowpass',
+    cutoff: 1,
+    resonance: 0
+  })
+
+  /** Write the master filter's two continuous controls straight at the
+   * engine, bypassing a project rebuild.
+   *
+   * A filter you sweep is a hand on a control, so it takes the live-param
+   * path (the rule this codebase learned twice; see @shared/liveParam) --
+   * a whole load-project per drag frame is exactly what updateSlotGain's
+   * own comment exists to avoid.
+   *
+   * MUST be called after every syncPreviewToEngine, for the identical
+   * reason pushMasterLevel must: load-project calls
+   * engine.liveOverrides().clearAll(), which drops these two along with
+   * every volume override. Unlike the fader, the committed value is ALSO
+   * on the wire (previewState.masterFilter below), so a missed re-assert
+   * would only lose whatever the current drag had moved since the last
+   * sync rather than snapping to unity -- but re-asserting is what makes a
+   * sweep survive a layer change landing underneath it. */
+  function pushMasterFilter(): void {
+    const filter = masterFilterRef.current
+    scheduleLiveParamSync('masterFilterCutoff', MASTER_LIVE_PARAM_KEY, filter.cutoff)
+    scheduleLiveParamSync('masterFilterResonance', MASTER_LIVE_PARAM_KEY, filter.resonance)
+  }
+
+  /** Flip lowpass <-> highpass.
+   *
+   * Three things happen together, and the order matters. The cutoff snaps
+   * to the NEW mode's own neutral end, because a highpass inheriting a
+   * lowpass's parked 1.0 is 20kHz -- everything gone -- and a control that
+   * can silence the mix on a single click is not one you reach for on
+   * stage. The two live overrides are CLEARED rather than rewritten,
+   * because the mode itself has no live-param and so still lives a whole
+   * load-project behind: an override pushed now would be read against the
+   * OLD mode for one round trip, and "neutral for the new mode" is exactly
+   * "everything gone" for the old one. Clearing leaves the engine on its
+   * last committed values for those few milliseconds, which is simply what
+   * it was already doing. Then the sync carries the new mode over. */
+  function toggleMasterFilterMode(): void {
+    const next: FilterMode = masterFilterMode === 'lowpass' ? 'highpass' : 'lowpass'
+    const cutoff = neutralCutoff(next)
+    setMasterFilterMode(next)
+    setMasterCutoff(cutoff * 100)
+    masterFilterRef.current = { mode: next, cutoff, resonance: masterResonance / 100 }
+    scheduleLiveParamSync('masterFilterCutoff', MASTER_LIVE_PARAM_KEY, -1)
+    scheduleLiveParamSync('masterFilterResonance', MASTER_LIVE_PARAM_KEY, -1)
+    const ids = previewingSlotIdsRef.current
+    if (ids.size > 0) scheduleSyncPreviewToEngine(new Set(ids))
+  }
+
   /** One send value on every preview stem. Committed on release, not on
    * every drag frame -- see the state's own comment above for why. */
   function commitMasterSend(value: number): void {
@@ -1192,6 +1272,27 @@ export function DiscoverPanel({
       // persistent, same rule as the volume curves above. The other layers
       // keep the master send throughout.
       stemSends: masterSendsFor(Object.keys(vol), masterSendRef.current / 100),
+      // The master filter, as the COMMITTED value. The live-param pushed on
+      // every drag frame beats this on the engine side, so during a sweep
+      // these two disagree by at most one sync -- and the moment a
+      // load-project clears the override, this is what the filter falls
+      // back to, which is why it is sent at all rather than left entirely
+      // to the live path. buildEngineProject drops the key outright when
+      // the filter is parked, so a resting master strip is bit-identical
+      // to a project built before the field existed
+      // (masterFilterForWire, and an engine test that pins it sample for
+      // sample).
+      //
+      // Radio's `filter in` transition writes a PER-CLIP filterCutoff curve
+      // on the one layer arriving. That is a different filter in a
+      // different place: the clip's own, upstream of its channel, applied
+      // before its samples ever reach the master sum. This one is after the
+      // whole sum (and after the reverb's wet add). So the two are in
+      // series, not in conflict -- a layer sweeping in under a master
+      // sweep is heard through both, which is musically what both of them
+      // separately promise, and neither can clear or overwrite the other's
+      // state.
+      masterFilter: masterFilterRef.current,
       stemAutomation,
       risers,
       stretch: { [rifff.groupId]: true }
@@ -1247,6 +1348,11 @@ export function DiscoverPanel({
       // the override is ignored, and the sync that clears the curve is the
       // sync that writes the override again.
       pushMasterLevel()
+      // Same moment, same reason: clearAll() has just dropped the master
+      // filter's two live values too, and re-asserting is what keeps a
+      // sweep in progress from stepping back to whatever the project this
+      // sync happened to carry.
+      pushMasterFilter()
 
       // Only on the empty-to-non-empty transition -- a later rebuild of an
       // already-loaded preview just keeps playing through it, matching every
@@ -4001,9 +4107,10 @@ export function DiscoverPanel({
           controls address the loaded preview's own stems and mean nothing
           without one. `level` is a live-param and moves continuously;
           `reverb` is a whole project reload and so commits on release
-          (Dial's own onCommit). There is no master FILTER here on purpose:
-          it needs a real field on the engine's project and is the first
-          native change in any of this (spec 4A.3). */}
+          (Dial's own onCommit). `filter` is a live-param again, because it
+          is the one control here you actually SWEEP -- it rides a real
+          field on the engine's project (spec 4A.3), with its own
+          ChannelFilter over the summed master pair. */}
       {previewingSlotIds.size > 0 && (
         <div
           style={{
@@ -4052,6 +4159,74 @@ export function DiscoverPanel({
               reverb
             </span>
           </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <Dial
+              value={masterCutoff}
+              onChange={(v): void => {
+                // Written into the ref here as well as into state, for the
+                // same reason the level dial does: pushMasterFilter reads
+                // the ref and must see THIS value, not a render ago's.
+                setMasterCutoff(v)
+                masterFilterRef.current = {
+                  mode: masterFilterMode,
+                  cutoff: v / 100,
+                  resonance: masterResonance / 100
+                }
+                pushMasterFilter()
+              }}
+              // The resting position is the mode's own open end, which is
+              // the top for a lowpass and the bottom for a highpass -- so
+              // double-click goes back to "nothing is happening" either
+              // way, not to a fixed number that means something different
+              // in each mode.
+              defaultValue={neutralCutoff(masterFilterMode) * 100}
+              size={30}
+              ariaLabel="master filter cutoff"
+              tooltip="whole mix filter"
+            />
+            <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+              filter
+            </span>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
+            <Dial
+              value={masterResonance}
+              onChange={(v): void => {
+                setMasterResonance(v)
+                masterFilterRef.current = {
+                  mode: masterFilterMode,
+                  cutoff: masterCutoff / 100,
+                  resonance: v / 100
+                }
+                pushMasterFilter()
+              }}
+              defaultValue={0}
+              size={30}
+              ariaLabel="master filter resonance"
+              tooltip="filter resonance"
+            />
+            <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+              res
+            </span>
+          </div>
+          {/* A knob beside the cut, not a lane of its own -- the same shape
+              Elling settled on for the per-clip filter and the same shape
+              Ableton's Auto Filter has. The mode is a two-state word rather
+              than a third dial: it is picked, not performed. */}
+          <button
+            onClick={toggleMasterFilterMode}
+            style={{
+              background: 'transparent',
+              border: '1px solid var(--ra-border)',
+              color: 'var(--ra-text-2)',
+              fontSize: 'var(--ra-fs-9)',
+              padding: '2px 5px',
+              cursor: 'pointer'
+            }}
+            title={masterFilterMode === 'lowpass' ? 'low pass' : 'high pass'}
+          >
+            {masterFilterMode === 'lowpass' ? 'lo pass' : 'hi pass'}
+          </button>
         </div>
       )}
 

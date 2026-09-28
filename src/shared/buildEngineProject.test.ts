@@ -688,13 +688,15 @@ describe('buildEngineProject toolkit', () => {
     )
     expect('masterFilter' in parked).toBe(false)
 
-    // ...and a highpass's own neutral end is the OTHER one.
+    // ...but a parked HIGHPASS is still sent: absence means the engine's
+    // own defaults, and those are a lowpass, so omitting the mode would
+    // make the next live-param cutoff sweep the wrong kind of filter.
     const parkedHigh = await buildEngineProject(
       stateWith({ bpm: 150, masterFilter: { mode: 'highpass', cutoff: 0, resonance: 0.3 } }),
       resolveNothing,
       emptyCatalog
     )
-    expect('masterFilter' in parkedHigh).toBe(false)
+    expect(parkedHigh.masterFilter).toEqual({ mode: 'highpass', cutoff: 0, resonance: 0.3 })
   })
 
   it('sends the master filter once the cutoff has actually moved off neutral', async () => {

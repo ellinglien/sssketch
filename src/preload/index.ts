@@ -4,6 +4,7 @@ import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type { ToolkitExportMode } from '@shared/toolkit'
+import type { LiveParamField } from '@shared/liveParam'
 import type {
   RiffLibraryJam,
   RiffLibraryRiffSummary,
@@ -247,7 +248,7 @@ const api = {
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
   engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
-  engineSetLiveParam: (field: 'volume', key: string, value: number): Promise<void> =>
+  engineSetLiveParam: (field: LiveParamField, key: string, value: number): Promise<void> =>
     ipcRenderer.invoke('engine-set-live-param', field, key, value),
   engineSetLoopRegion: (startBar: number, endBar: number): Promise<void> =>
     ipcRenderer.invoke('engine-set-loop-region', startBar, endBar),

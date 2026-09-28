@@ -1,3 +1,12 @@
+/** The union lives in @shared/liveParam, because the preload bridge and the
+ * main-process handler need the identical one and cannot import this file.
+ * The per-clip fade this path once also carried is gone (a clip's fades are
+ * part of its automation lane's own volume curve -- see applyEdgeFade in
+ * src/shared/automationEdit.ts), and a curve edit is a committed edit, not a
+ * live-dragged scalar. The engine's own set-live-param handler still
+ * understands the old fade field names; nothing sends them. */
+import type { LiveParamField } from '@shared/liveParam'
+
 /** Pushes a live volume value straight to the native engine, bypassing
  * the full buildEngineProject/engineLoadProject reload path entirely -- see
  * docs/superpowers/specs/2026-08-04-live-param-fast-path-design.md. Call
@@ -19,13 +28,6 @@
  * native map rebuild, not an async chain that can meaningfully overlap
  * itself; there's nothing to guard against by the time the next frame's
  * flush would run. */
-
-/** Only 'volume' now: the per-clip fade this once also carried is gone (a
- * clip's fades are part of its automation lane's own volume curve -- see
- * applyEdgeFade in src/shared/automationEdit.ts), and a curve edit is a
- * committed edit, not a live-dragged scalar. The engine's own set-live-param
- * handler still understands the old field names; nothing sends them. */
-type LiveParamField = 'volume'
 
 const pending = new Map<string, { field: LiveParamField; key: string; value: number }>()
 let flushScheduled = false
