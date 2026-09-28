@@ -5,6 +5,7 @@ import {
   lanAddressCandidates,
   rankLanAddresses,
   resolveRemoteAddress,
+  withComputerName,
   type LanAddressKind,
   type NetworkAddress
 } from './lanAddress'
@@ -383,5 +384,78 @@ describe('lanAddressCandidates kinds', () => {
     for (const candidate of lanAddressCandidates(HIS_MACHINE)) {
       expect(candidate.preferred).toBe(candidate.kind === 'wifi' || candidate.kind === 'ethernet')
     }
+  })
+})
+
+/** THE COMPUTER'S OWN NAME, AS ONE OF THE ADDRESSES (2026-09-28).
+ *
+ * Every mac already advertises one over bonjour with no code from us --
+ * `scutil --get LocalHostName` gives it, `NickelM2` here, so
+ * `nickelm2.local`. It survives dhcp moves, which a raw ip does not: the
+ * link he sends himself keeps working after the router hands out a
+ * different number.
+ *
+ * IT IS NOT AND MUST NOT BE THE DEFAULT. We could not prove it reaches a
+ * real iphone: his home router blocks mdns, and the personal-hotspot test
+ * was void because ios blocks the host phone from reaching its own
+ * clients (the plain ip failed there too). A dead qr code is worse than a
+ * jargon chip, so the ip stays the default and this is an option in the
+ * opened list. */
+describe('withComputerName', () => {
+  const candidates = lanAddressCandidates(HIS_MACHINE)
+
+  it('offers nickelm2.local last, and never as the default', () => {
+    const offered = withComputerName(candidates, 'NickelM2')
+    expect(offered.map((candidate) => candidate.address)).toEqual([
+      '192.168.2.126',
+      '100.66.121.12',
+      '192.168.3.1',
+      'nickelm2.local'
+    ])
+    expect(offered[3]).toEqual({
+      address: 'nickelm2.local',
+      interfaceName: '',
+      kind: 'computer-name',
+      preferred: false
+    })
+    // The whole point: more choice, same default.
+    expect(resolveRemoteAddress(offered, null)).toBe('192.168.2.126')
+  })
+
+  it('is still not the default on a machine whose only address is a tunnel', () => {
+    // resolveRemoteAddress falls past `preferred` to the first candidate
+    // when nothing is preferred. The name must not be that first one, or
+    // a vpn-only machine would advertise an unproven address by default.
+    const tunnelOnly = withComputerName(
+      lanAddressCandidates([ipv4('utun0', '100.66.121.12')]),
+      'NickelM2'
+    )
+    expect(resolveRemoteAddress(tunnelOnly, null)).toBe('100.66.121.12')
+  })
+
+  it('lowercases the name and adds .local, because a url is typed by a human', () => {
+    expect(withComputerName([], 'NickelM2')).toEqual([])
+    expect(withComputerName(candidates, 'NickelM2').at(-1)?.address).toBe('nickelm2.local')
+    expect(withComputerName(candidates, 'nickel-m2').at(-1)?.address).toBe('nickel-m2.local')
+    // scutil sometimes hands back a name that already carries it, and a
+    // trailing dot is how a fully-qualified name is written.
+    expect(withComputerName(candidates, 'NickelM2.local').at(-1)?.address).toBe('nickelm2.local')
+    expect(withComputerName(candidates, 'NickelM2.local.').at(-1)?.address).toBe('nickelm2.local')
+    expect(withComputerName(candidates, '  NickelM2  ').at(-1)?.address).toBe('nickelm2.local')
+  })
+
+  it('offers nothing when there is no name, or the name is not a hostname', () => {
+    // A name goes into a Host allow-list and into a url. Anything that is
+    // not plainly a dns label is dropped rather than repaired -- this is
+    // the one place a string from outside reaches the host guard.
+    for (const name of [null, undefined, '', '   ', '.local', 'has space', 'semi;colon', 'a/b']) {
+      expect(withComputerName(candidates, name)).toEqual(candidates)
+    }
+  })
+
+  it('offers nothing when the machine has no address at all', () => {
+    // A .local name resolves to the addresses the machine is advertising.
+    // With none, there is nothing for it to resolve to either.
+    expect(withComputerName([], 'NickelM2')).toEqual([])
   })
 })

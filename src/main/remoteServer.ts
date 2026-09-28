@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { randomBytes } from 'node:crypto'
+import { execFileSync } from 'node:child_process'
 import {
   REMOTE_PORT,
   codesMatch,
@@ -18,8 +19,10 @@ import {
 } from '@shared/remoteState'
 import {
   allLocalIPv4Addresses,
+  computerNameHost,
   lanAddressCandidates,
   resolveRemoteAddress,
+  withComputerName,
   type LanAddressCandidate,
   type NetworkAddress
 } from '@shared/lanAddress'
@@ -51,12 +54,42 @@ function flattenInterfaces(): NetworkAddress[] {
   return rows
 }
 
+/** This machine's bonjour name -- 'nickelm2.local' -- or null.
+ *
+ * `scutil --get LocalHostName` is the one macOS keeps and the one it
+ * advertises over mDNS; `os.hostname()` is not (it can be whatever DHCP
+ * handed back). Read ONCE and remembered: it is a preference a person
+ * changes in System Settings, not something that moves while the app is
+ * open, and this is called from the Host guard on every single request.
+ *
+ * Every failure is the same answer -- no name, and the picker simply does
+ * not offer that row. scutil is missing on non-macOS, and this app is
+ * macOS-first. */
+let computerNameCache: { host: string | null } | null = null
+
+export function computerNameHostname(): string | null {
+  if (computerNameCache === null) {
+    let raw: string | null = null
+    try {
+      raw = execFileSync('scutil', ['--get', 'LocalHostName'], {
+        encoding: 'utf8',
+        timeout: 2000
+      })
+    } catch {
+      raw = null
+    }
+    computerNameCache = { host: computerNameHost(raw) }
+  }
+  return computerNameCache.host
+}
+
 /** Every address the phone remote could be served on right now, best
  * first -- what the modal's picker offers. See lanAddressCandidates for
  * which addresses are offered, which are preferred, and why those are two
- * different questions. */
+ * different questions, and withComputerName for why `nickelm2.local` is
+ * last and never the default. */
 export function remoteAddressCandidates(): LanAddressCandidate[] {
-  return lanAddressCandidates(flattenInterfaces())
+  return withComputerName(lanAddressCandidates(flattenInterfaces()), computerNameHostname())
 }
 
 /** The address the desktop will serve on and shows him to type in: his
@@ -80,12 +113,21 @@ export function lanIPv4Address(remembered: string | null = null): string | null 
   return resolveRemoteAddress(remoteAddressCandidates(), remembered)
 }
 
-/** Every IPv4 this machine currently holds -- the Host guard's allow-list.
- * Read per request rather than captured at startup: he joins and leaves
- * networks while the app is running, and an address that appeared after the
- * server started is just as much ours as one that was there first. */
+/** Every IPv4 this machine currently holds, plus its bonjour name -- the
+ * Host guard's allow-list. The addresses are read per request rather than
+ * captured at startup: he joins and leaves networks while the app is
+ * running, and an address that appeared after the server started is just
+ * as much ours as one that was there first.
+ *
+ * The name is on the list because the picker offers it, and a row that
+ * answers the wrong-address notice when chosen would be worse than no row.
+ * It adds no DNS-rebinding path -- see isAllowedHost, which also refuses
+ * to match anything on this list that is not an IPv4 literal or a
+ * single-label `.local`. */
 function ownAddresses(): string[] {
-  return allLocalIPv4Addresses(flattenInterfaces())
+  const name = computerNameHostname()
+  const addresses = allLocalIPv4Addresses(flattenInterfaces())
+  return name === null ? addresses : [...addresses, name]
 }
 
 export interface RemoteServerHandle {

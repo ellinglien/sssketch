@@ -238,6 +238,27 @@ describe('the host guard after the widening', () => {
     const res = await send(port, '/', { accept: NAVIGATION, host: `192.168.9.9:${port}` })
     expect(res.status).toBe(403)
   })
+
+  /** THE COMPUTER'S OWN NAME (2026-09-28). The picker offers
+   * `nickelm2.local` as an address, so the guard has to serve it -- a row
+   * that answers the wrong-address notice when chosen would be worse than
+   * no row at all. What makes it safe is that the name is THIS MACHINE'S,
+   * read from its own LocalHostName, and an attacker cannot get a name of
+   * ours onto this list. `sssketch.local` still gets 403 in the test just
+   * above, which is exactly the line: one of these is our real bonjour
+   * name and the other is not. */
+  it('accepts this machine own bonjour name once it is on the list', async () => {
+    const { port } = await start({
+      localAddressesOverride: () => [...OUR_ADDRESSES, 'nickelm2.local']
+    })
+    const res = await send(port, '/', { accept: NAVIGATION, host: `nickelm2.local:${port}` })
+    expect(res.status).toBe(200)
+    expect(res.body).toBe(REMOTE_PAGE_HTML)
+
+    // And a .local this machine is not called still gets nothing.
+    const other = await send(port, '/', { accept: NAVIGATION, host: `sssketch.local:${port}` })
+    expect(other.status).toBe(403)
+  })
 })
 
 describe('switching address', () => {

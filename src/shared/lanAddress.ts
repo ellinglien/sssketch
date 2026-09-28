@@ -118,8 +118,12 @@ function compareNames(a: string, b: string): number {
  * en* are thunderbolt or usb ethernet. On a mac mini or studio with the
  * ethernet port in use the two can be the other way round. The picker
  * therefore keeps the device name and the address visible under the word
- * -- the human word leads, it does not replace. */
-export type LanAddressKind = 'wifi' | 'ethernet' | 'vpn' | 'bridge'
+ * -- the human word leads, it does not replace.
+ *
+ * 'computer-name' is not an interface at all -- it is this machine's own
+ * bonjour name (`nickelm2.local`), which is offered alongside the numbers
+ * and never chosen for anyone. See withComputerName. */
+export type LanAddressKind = 'wifi' | 'ethernet' | 'vpn' | 'bridge' | 'computer-name'
 
 /** One address the phone remote could be served on, as the picker shows it. */
 export interface LanAddressCandidate {
@@ -217,6 +221,64 @@ export function lanAddressCandidates(interfaces: NetworkAddress[]): LanAddressCa
     })
   }
   return unique
+}
+
+/** A dns label and nothing else: letters, digits and hyphens. Deliberately
+ * strict, because this one string reaches two places that must never take
+ * anything surprising -- the Host allow-list (see isAllowedHost) and the
+ * URL printed on the modal. Anything that is not plainly a label is
+ * dropped, not repaired. */
+const HOSTNAME_LABEL = /^[a-z0-9-]+$/
+
+/** This machine's bonjour name as a URL host -- 'NickelM2' ->
+ * 'nickelm2.local' -- or null when there isn't a usable one.
+ *
+ * macOS keeps this under `scutil --get LocalHostName` and advertises it
+ * over mDNS with no code from us. Lowercased because it is about to be
+ * typed by a person and compared against a Host header; `.local` added
+ * unless it is already there, and a trailing dot (how a fully-qualified
+ * name is written) removed. */
+export function computerNameHost(localHostName: string | null | undefined): string | null {
+  if (typeof localHostName !== 'string') return null
+  let name = localHostName.trim().toLowerCase().replace(/\.$/, '')
+  if (name.endsWith('.local')) name = name.slice(0, -'.local'.length)
+  if (!HOSTNAME_LABEL.test(name)) return null
+  return `${name}.local`
+}
+
+/** The candidates plus this machine's own bonjour name, last.
+ *
+ * WHY OFFER IT: every mac already advertises one, and unlike a raw ip it
+ * survives the router handing out a different number tomorrow. The link
+ * someone saves keeps working.
+ *
+ * WHY IT IS NEVER THE DEFAULT: we could not prove it reaches a real
+ * iphone. His home router blocks mdns, and the personal-hotspot test was
+ * void -- ios blocks the host phone from reaching its own clients, so the
+ * plain ip failed there too. A dead qr code is worse than a jargon chip.
+ * `preferred: false` keeps it out of chooseLanAddress, and appending it
+ * LAST keeps it out of resolveRemoteAddress's final fallback as well, so
+ * a machine whose only number is a tunnel still advertises the tunnel.
+ *
+ * WHY NOTHING IS OFFERED WHEN THERE ARE NO CANDIDATES: a .local name
+ * resolves to the addresses the machine is advertising. With none, there
+ * is nothing behind the name either. */
+export function withComputerName(
+  candidates: LanAddressCandidate[],
+  localHostName: string | null | undefined
+): LanAddressCandidate[] {
+  if (candidates.length === 0) return candidates
+  const host = computerNameHost(localHostName)
+  if (host === null || candidates.some((candidate) => candidate.address === host)) {
+    return candidates
+  }
+  // No interface: it is the machine's name, not one adapter's address.
+  // The picker shows the name itself where it shows `en0 · 192.168.2.126`
+  // for the others.
+  return [
+    ...candidates,
+    { address: host, interfaceName: '', kind: 'computer-name', preferred: false }
+  ]
 }
 
 /** Every address a phone on the same wifi has a real chance of reaching

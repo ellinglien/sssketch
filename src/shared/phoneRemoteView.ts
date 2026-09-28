@@ -50,7 +50,10 @@ const KIND_LABELS: Record<LanAddressKind, { label: string; note: string | null }
   // beautifully -- from another device on the tailnet. A sharing bridge
   // works from a vm, or from something plugged into this mac.
   vpn: { label: 'vpn', note: 'only if the phone is on it too' },
-  bridge: { label: 'bridge', note: 'for virtual machines' }
+  bridge: { label: 'bridge', note: 'for virtual machines' },
+  // The one row that is a reason to choose it rather than a warning: an
+  // ip changes when the router feels like it, a bonjour name does not.
+  'computer-name': { label: 'computer name', note: 'survives address changes' }
 }
 
 /** Every address he could be offered, best first, as the picker draws
@@ -73,7 +76,13 @@ export function phoneRemoteAddressOptions(status: PhoneRemoteStatus): PhoneRemot
     return {
       address: candidate.address,
       label,
-      detail: `${candidate.interfaceName} · ${candidate.address}`,
+      // The computer name has no interface behind it -- it IS the
+      // machine, not one of its adapters -- and a dangling `· ` in front
+      // of the address would read as a word that failed to render.
+      detail:
+        candidate.interfaceName === ''
+          ? candidate.address
+          : `${candidate.interfaceName} · ${candidate.address}`,
       note,
       selected: candidate.address === status.lanAddress
     }

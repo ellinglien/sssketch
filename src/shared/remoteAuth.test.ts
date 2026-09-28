@@ -91,6 +91,48 @@ describe('remoteAuth', () => {
     }
   })
 
+  /** THE COMPUTER'S OWN BONJOUR NAME, ADDED TO THE LIST (2026-09-28).
+   *
+   * `nickelm2.local` is now offered in the modal's picker, so the guard
+   * has to accept it or choosing it answers the wrong-address notice.
+   *
+   * WHY THIS ADDS NO REBINDING PATH. Rebinding needs a name the ATTACKER
+   * CONTROLS: they point evil.example.com at the victim's 192.168.x.y and
+   * the browser dutifully sends `Host: evil.example.com`. It is the name
+   * that carries the attack, and an attacker's name is not on this list
+   * and cannot be put on it -- the list is built by the machine from its
+   * own interfaces and its own LocalHostName. The only way a browser
+   * sends `nickelm2.local` is if it was pointed at this machine's real
+   * bonjour name, which resolves over mDNS on this LAN. That is not an
+   * attack; that is the phone.
+   *
+   * `sssketch.local` stays refused and `nickelm2.local` is accepted, and
+   * that is exactly the right line: one is this machine's real name, the
+   * other is a `.local` name it does not own.
+   *
+   * The second half is the guard defending itself rather than trusting
+   * its caller: a list entry is only usable as a NAME if it ends in
+   * `.local`. Nothing else the caller could put in there -- a typo, a
+   * search-domain-suffixed hostname, a value read from somewhere it
+   * should not have been -- can turn into a matchable name. */
+  it('allows this machine own bonjour name, and no other .local', () => {
+    const withName = [...OURS, 'nickelm2.local']
+    expect(isAllowedHost('nickelm2.local:7373', withName, 7373)).toBe(true)
+    expect(isAllowedHost('NickelM2.local:7373', withName, 7373)).toBe(true)
+    expect(isAllowedHost('sssketch.local:7373', withName, 7373)).toBe(false)
+    expect(isAllowedHost('nickelm2.local:8080', withName, 7373)).toBe(false)
+    // And it is not accepted unless it is actually on the list.
+    expect(isAllowedHost('nickelm2.local:7373', OURS, 7373)).toBe(false)
+  })
+
+  it('refuses a list entry that is neither an ip literal nor a .local name', () => {
+    // Defence in depth against this list ever being built from something
+    // it should not be: a bare name in it stays unmatchable.
+    expect(isAllowedHost('evil.example.com:7373', ['evil.example.com'], 7373)).toBe(false)
+    expect(isAllowedHost('nickelm2:7373', ['nickelm2'], 7373)).toBe(false)
+    expect(isAllowedHost('nickelm2.local.evil.com:7373', ['nickelm2.local'], 7373)).toBe(false)
+  })
+
   it('refuses an address of some other machine', () => {
     expect(isAllowedHost('192.168.1.99:7373', OURS, 7373)).toBe(false)
   })

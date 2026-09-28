@@ -199,3 +199,32 @@ describe('REMOTE_TROUBLE_REASONS', () => {
     }
   })
 })
+
+/** The computer's own name as a row in the picker -- see withComputerName
+ * in lanAddress.ts for why it is offered and why it is never the default. */
+describe('the computer name row', () => {
+  const withName: PhoneRemoteStatus = {
+    ...THREE_WAYS,
+    candidates: [
+      ...THREE_WAYS.candidates,
+      { address: 'nickelm2.local', interfaceName: '', kind: 'computer-name', preferred: false }
+    ]
+  }
+
+  it('leads with the human words and says what it is for', () => {
+    expect(phoneRemoteAddressOptions(withName).at(-1)).toEqual({
+      address: 'nickelm2.local',
+      label: 'computer name',
+      // No interface, so no `en0 · ` in front of it -- the name IS the
+      // address, and a dangling separator would read as a missing word.
+      detail: 'nickelm2.local',
+      note: 'survives address changes',
+      selected: false
+    })
+  })
+
+  it('is marked in use once it is the address being served on', () => {
+    const options = phoneRemoteAddressOptions({ ...withName, lanAddress: 'nickelm2.local' })
+    expect(options.map((option) => option.selected)).toEqual([false, false, false, true])
+  })
+})
