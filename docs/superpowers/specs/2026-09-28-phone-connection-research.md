@@ -24,20 +24,31 @@ Three reasons, in order of weight:
    gateway answers both. That is client isolation at layer 2. No address picker, no `.local`
    name, no mDNS, no protocol choice reaches across it. Anything that stays on the LAN is
    already known to fail there.
-2. **The class of solution that does work on his network is also already known.** Tailscale
-   works — the codebase says so in two places — and Tailscale on an isolated LAN gets across by
-   leaving through the gateway. So the question is not *whether* a gateway-exiting path works,
-   it is *which* one to build. That is an unusually strong position to be recommending from.
+2. **The class of solution that does work on his network is also already known — and it is a
+   relay.** Tailscale works there; the codebase says so in two places. And Tailscale's own
+   description of how it works is that *every* connection begins on a DERP relay and upgrades
+   to direct only if NAT traversal succeeds — **if it never succeeds, traffic stays on DERP
+   indefinitely** ([Tailscale, *How NAT traversal
+   works*](https://tailscale.com/blog/how-nat-traversal-works)). On a client-isolated LAN it
+   never succeeds. So the thing already working on his network today is a relayed path out
+   through the gateway. The question is not *whether* that shape works — it is already proven,
+   by him, this week — it is only which one to build so he can stop depending on someone
+   else's. That is an unusually strong position to be recommending from.
 3. **Among gateway-exiting paths, a tunnel is the only one that costs nothing to run, nothing
    to operate, and almost nothing to build**, because it reuses the existing HTTP server and
    the 2282-line page verbatim. WebRTC, a relay, and a native app all cost substantially more
    and, on his specific network, arrive at the same place.
 
-**Second choice, and its trigger:** run the tunnel server himself — the Gradio/Hugging Face
-model, an FRP server on a small VPS. Switch to it if Cloudflare's rate limit bites, if
-Cloudflare withdraws quick tunnels, or if he decides he is unwilling to route other people's
-control traffic through a third party. Cost: roughly €4–6/month and an operational
-responsibility that never ends. The point of the seam in the recommendation is that this switch
+**Second choice, and its trigger:** own the far end himself. Two shapes, and the research
+changed which one I would pick. The obvious one is the Gradio/Hugging Face model — an **FRP
+server on a €5-a-month VPS** — which needs no page changes at all but makes him a sysadmin
+forever. The better one, if it ever comes to this, is a **WebSocket relay on Cloudflare Workers
++ Durable Objects**: Durable Objects have had a free tier since April 2025, and Cloudflare
+charges **nothing for bandwidth**, which is the only cost driver this workload has. That one can
+plausibly run at zero with no box to patch — but it is the single option that requires
+rewriting the phone page. Switch to either if Cloudflare withdraws quick tunnels, if the
+in-flight limit bites, or if he decides he is unwilling to route other people's control traffic
+through a third party. The point of the seam in the recommendation is that the first switch
 should be a day, not a rewrite.
 
 **What I am explicitly recommending against: WebRTC.** Reasoning in full below, but the short
@@ -169,29 +180,75 @@ go change a router setting.
 
 | product | primary transport | what it does when the LAN path fails | browser or native |
 |---|---|---|---|
-| **Syncthing** | direct TCP/QUIC, local discovery by broadcast/multicast, global discovery server | falls back to a **community relay pool**; traffic stays end-to-end encrypted so the relay is blind; retries direct periodically and drops the relay when direct succeeds ([docs](https://docs.syncthing.net/users/relaying.html)) | native |
-| **Gradio `share=True`** | none — goes straight out | downloads a **modified FRP client** on first use and tunnels to Hugging Face's share server; random `*.gradio.live` subdomain; 72-hour expiry; self-hostable ([docs](https://www.gradio.app/guides/understanding-gradio-share-links), [huggingface/frp](https://github.com/huggingface/frp)) | browser |
-| **Plex** | LAN discovery + direct connection | falls back to **Plex Relay** through Plex's own servers, bandwidth-capped; uses the `plex.direct` wildcard-certificate trick to get browser-trusted TLS to a private IP *(plex.tv 403s automated fetches — described from general knowledge, not a retrieved source)* | both |
-| **Chromecast / Google Home** | mDNS on the LAN, nothing else | **tells the user to turn off AP isolation on their router** ([Google support](https://support.google.com/chromecast/answer/3222253?hl=en)) | native |
-| **Sonos** | mDNS/SSDP on the LAN | same — the support answer is a router setting | native |
-| **Home Assistant** | LAN HTTP | optional paid cloud remote access (Nabu Casa) | browser |
-| **Logic Remote / Cubase iC Pro** | Bonjour + a native app over the LAN | nothing; it simply does not find the Mac | native only |
-| **Cloudflare quick tunnels as a shipped product feature** | — | Beeper's own desktop-API docs recommend exactly this for remote access to a local desktop app ([Beeper docs](https://developers.beeper.com/desktop-api/advanced/remote-access/cloudflare/)) | browser |
+| **REAPER web remote** — the closest architectural twin to ours | plain HTTP, port 8080, **no discovery at all** (no Bonjour, mDNS, UPnP or NAT-PMP anywhere in its changelog), optional password off by default | `rc.reaper.fm` — a **rendezvous redirect**, not a relay: a permanent short URL that resolves to your current LAN IP, keyed by public IP. Fixes address churn only. Nothing for isolation. | browser |
+| **OBS / obs-websocket** | `ws://` on 4455, password auth, LAN only | nothing. Issues get closed with "please use the discord" | browser or native |
+| **Ableton Link** | custom **UDP multicast** to `224.76.78.75:20808` (verifiable in [the source](https://github.com/Ableton/link)) | **no fallback at all.** The UI shows a peer count, which conflates "nobody is running Link" with "your packets are being dropped." Their docs instead list [five router-free paths](https://help.ableton.com/hc/en-us/articles/360003279779) — ad-hoc network, router with no WAN, direct Ethernet, Lightning cable | native |
+| **Ableton Note** | **split architecture**: timing over Link on the LAN, **content transfer over Ableton Cloud** | n/a — the heavy path never used the LAN ([docs](https://help.ableton.com/hc/en-us/articles/6121083513756)) | native |
+| **Audiomovers Listento** | **deliberately not P2P** — a dozen global servers, custom protocol over ports 80/443, chosen explicitly to avoid NAT/firewall problems | n/a; there is no LAN path to fail | browser on both ends — a direct consequence of going cloud-relay |
+| **TouchOSC / Lemur** | OSC over UDP, Zeroconf discovery (TouchOSC) | manual IP entry, plus a "Network Info" dialog showing the machine's own addresses. Hexler says outright that discovery *"can not always work reliably"* | native |
+| **Logic Remote** | Bonjour + native app *(inferred — Apple publishes no transport description and Logic Remote is absent from Apple's own port list)* | nothing. [Apple KB 101940](https://support.apple.com/en-us/101940) is a six-item checklist; Apple's fallback for the unsupported case is "use a VNC app" | native only |
+| **Cubase iC Pro** | Bonjour + SKI Remote extension | manual IP entry — **with the desktop showing its own IP next to the field**. The most thorough troubleshooting article in the survey ([Steinberg](https://helpcenter.steinberg.de/hc/en-us/articles/206531824)) | native |
+| **Luna Display** | Bonjour, with **five transports** including true peer-to-peer, USB, Thunderbolt, Ethernet | **QR-code manual connect**, and "cable kickstart" — connect by wire once, then unplug. Says the cause in plain English: *"Router restrictions… prevent devices on the same network from talking to each other"* ([Astropad](https://support.astropad.com/en/articles/11835445)) | native |
+| **Duet Display** | originally **cable only, on purpose**; Duet Air added wireless with an account and a rendezvous service | manual checklist. Their documented workaround for restricted networks is *"enabling the laptop's hotspot"* | native |
+| **LocalSend** — closest open-source analogue | UDP multicast `224.0.0.167:53317` + HTTP/TCP, plus an **"HTTP legacy mode"** that scans every local IP when multicast fails | strictly LAN, no relay — but **names the cause in its README**: *"Make sure to disable AP-Isolation on your router"* | native |
+| **PairDrop / Snapdrop** | WebRTC, peers grouped by **public IP** as seen by the signalling server | public instance has TURN and it rescues the transfer; **the shipped self-host default is STUN-only and the transfer just dies.** The WebSocket path is chosen by capability, not as a failure fallback — [that is an open issue since 2023](https://github.com/schlagmichdoch/PairDrop/issues/228) | browser (PWA) |
+| **Syncthing** | direct TCP/QUIC; local discovery by broadcast/multicast; global discovery over HTTPS | falls back to a **community relay pool**, end-to-end encrypted so the relay sees only ciphertext; **periodically retries direct and drops the relay when it succeeds**; and the UI literally shows `Relay (Client)` as the connection type ([docs](https://docs.syncthing.net/users/relaying.html), [relay spec](https://docs.syncthing.net/specs/relay-v1.html)) | native |
+| **Plex** | a **cloud candidate directory plus client-side racing** — the server publishes its reachable addresses to plex.tv and clients try local → remote → relay | **Plex Relay**: outbound from the server, TLS not terminated by Plex, deliberately capped at 2 Mbps per stream and no downloads, so it stays a last resort ([docs](https://support.plex.tv/articles/216766168-accessing-a-server-through-relay/)) | both |
+| **Chrome Remote Desktop** | the only full **ICE ladder** in the survey — Direct → STUN → TURN, UDP preferred with TCP fallback, all documented | relays through Google data centres automatically. **No user-facing indication of which rung you are on** ([Google](https://support.google.com/chrome/a/answer/16364503)) | native host, browser client |
+| **VS Code Remote Tunnels** | **relay only.** *"VS Code will make outbound connections to a service hosted in Azure; no firewall changes are generally necessary, and VS Code doesn't set up any network listeners"* ([docs](https://code.visualstudio.com/docs/remote/tunnels)) | n/a — there is no direct path to fail | browser or native |
+| **Home Assistant / Nabu Casa** | LAN HTTP, plus an **always-on opt-in outbound tunnel** ([SniTun](https://github.com/NabuCasa/snitun), an SNI-routed TCP multiplexer; the TLS key never leaves the user's box) | nothing switches automatically — the cloud path is parallel, not a fallback. The companion app picks internal vs external URL by **SSID/BSSID**, not by probing | browser |
+| **Gradio `share=True`** | none — goes straight out | downloads a modified **FRP client** on first use and tunnels to Hugging Face's share server; random `*.gradio.live` subdomain; 72-hour expiry; self-hostable ([docs](https://www.gradio.app/guides/understanding-gradio-share-links), [huggingface/frp](https://github.com/huggingface/frp)) | browser |
+| **Chromecast / Google Home** | mDNS on the LAN, nothing else | **tells the user to turn off AP isolation on their router**, and says plainly that on a guest, hotel or public network *"you won't be able to set up your device"* ([Google](https://support.google.com/googlehome/answer/7300406)) | native |
+| **Sonos** | SSDP/UPnP multicast | declares the offending topologies **unsupported** rather than diagnosing them — guest networks, extenders, EOP, VPNs blocking local resources ([system requirements](https://support.sonos.com/en-us/article/sonos-system-requirements)). Notably, Sonos has **never** used the words "AP isolation" in official documentation | native |
+| **Beeper desktop API** | — | recommends bundling a **Cloudflare quick tunnel** for remote access to a local desktop app ([docs](https://developers.beeper.com/desktop-api/advanced/remote-access/cloudflare/)) | browser |
 
-**Provenance of the table:** the Syncthing, Gradio, Chromecast and Beeper rows are from primary
-sources, linked. The Plex, Sonos, Home Assistant and Logic Remote / Cubase iC rows are general
-knowledge that I could not retrieve a primary source for in this session (several of those sites
-refuse automated fetches). They are all uncontroversial, but treat them as background rather
-than as evidence.
+Five things fall out of that table, and they are what actually drive the recommendation.
 
-The Chromecast/Sonos row is the important one. Those are two of the best-resourced consumer
-products in the category, they hit precisely this failure, and after a decade their answer is
-still a support article asking the user to reconfigure their router. That is the ceiling on
-LAN-only. It is also explicitly ruled out here — the brief forbids asking the user to change a
-setting on their phone or router.
+**1. LAN-only products do not solve this; they hand it to the user.** Chromecast and Sonos are
+two of the best-resourced consumer products in the category, they hit precisely this failure,
+and after a decade their answers are still "change your router setting" and "that topology is
+unsupported." That is the ceiling on LAN-only — and it is explicitly ruled out here, because the
+brief forbids asking the user to change a setting.
 
-The Syncthing and Gradio rows are the template being recommended: a LAN-independent fallback,
-owned or borrowed, with an honest description of what it does.
+**2. The closest twin to our design has the same problem, and mostly does not fix it.** REAPER's
+web remote is a plain LAN HTTP server on a fixed port with no discovery — architecturally almost
+identical to the phone remote. Roughly fifteen distinct "won't load on my phone" threads run
+from 2011 to 2024 across r/Reaper and the Cockos forum, and **in the majority nobody ever
+confirms a fix**; the modal outcome is the poster going quiet or being told it is "a home
+networking question, not a Reaper question." The cleanest case is
+[r/Reaper `mntq28`](https://www.reddit.com/r/Reaper/comments/mntq28/): *"seems all devices … can
+see the printer, but none of them can see each other"* → *"Well, there you go. I'd look at the
+router config."* Unresolved. The important methodological note is that this cause is usually
+**correct but unnamed**, so searching forums for "AP isolation" badly undercounts it.
+
+REAPER *does* have one thing we do not: `rc.reaper.fm`, a permanent short URL that redirects to
+the machine's current LAN address. It is a **rendezvous directory, not a relay** — traffic never
+touches Cockos — and it solves address churn, which is the same problem `.local` solves. It does
+nothing for isolation. Its error string is, however, a small masterpiece of legible failure:
+*"Either the ID is incorrect, or this device is not connected to the same local network as the
+computer running REAPER."*
+
+**3. Music tooling has already gone relay-first when it mattered.** Audiomovers Listento is a
+professional audio product that chose *not* to do peer-to-peer at all, running everything
+through its own servers on ports 80 and 443 specifically so that no network configuration is
+ever required. Ableton Note splits it: timing over Link on the LAN, content over Ableton Cloud.
+Neither treats the LAN as something that can be relied on for the part that must work.
+
+**4. Everyone's real escape hatch is "make your own network," and everyone's real fallback is
+manual address entry.** Duet tells users to enable the laptop's hotspot; PairDrop's FAQ says the
+same; Lemur *prefers* ad-hoc to a router; Ableton documents five router-free paths; Sonos says
+wire it. And the quality of a product's documentation tracks exactly how well it supports typing
+an address by hand. **Cubase iC Pro shows the Mac's own IP next to the manual-entry field** —
+which is, essentially, the address picker that shipped in `a8746a1` and `9aa18a6`. That work was
+the right instinct and matches the best practice in the category; it simply cannot reach across
+a layer-2 block.
+
+**5. The one gap nobody has filled — and it is cheap for us.** The failure signature that
+matters here is **"found but unreachable,"** not "not found." AP isolation produces it; so does
+Firefox's mDNS ICE-candidate obfuscation in PairDrop's case. **No product in this survey
+distinguishes the two.** Syncthing comes closest by naming the mode it ended up in (`Relay
+(Client)` in the UI, with an FAQ explaining that this means a direct connection could not be
+established). That is the model worth copying, and it is free once a fallback exists.
 
 ---
 
@@ -199,12 +256,20 @@ owned or borrowed, with an honest description of what it does.
 
 ### 1. Plain LAN HTTP — what ships today
 
-**Real-world failure rate: low but unknowable, and he is inside it.** I could not find a
-published figure for how many home networks have client isolation on, and I do not believe one
-exists. The best available signal is negative evidence: network engineers observe that AP
-isolation is not normally on by default on home equipment, because it would generate enormous
-support load. It *is* normally on for guest SSIDs, and it is evidently on for at least some
-Bell HH3000 deployments.
+**Real-world failure rate: low but unknowable, and he is inside it.** There is no published
+figure for how many home networks have client isolation on, and I do not believe one exists.
+Two usable signals instead:
+
+- Negative evidence: network engineers observe that AP isolation is not normally on by default
+  on home equipment, because it would generate enormous support load. It *is* normally on for
+  guest SSIDs, hotel and public networks, and Wi-Fi extenders.
+- **The best available proxy is REAPER's web remote**, which is the same architecture. Fifteen
+  or so "won't load on my phone" threads over thirteen years is not a catastrophe — but the
+  majority end unresolved, and the cause is usually correct-but-unnamed. Read as a rate: this
+  fails for a small minority of people, and when it fails it tends to stay failed.
+
+The honest summary is that the LAN path is fine for most people and a dead end for the rest,
+with no way to tell in advance which you are. Elling is in the second group.
 
 **What causes failure, in rough order:** AP/client isolation (his case); separate guest SSID or
 band-split SSIDs putting the phone on a different segment; a VPN profile on the phone; the macOS
@@ -319,16 +384,28 @@ Walking the ICE candidates for two devices on the same client-isolated LAN:
 
 - **Host candidates** (`192.168.2.151` ↔ `192.168.2.123`): blocked. That is what client
   isolation is.
-- **Server-reflexive candidates via STUN**: both peers discover the *same* public address. For
-  them to reach each other this way the router must perform NAT hairpinning, and the hairpinned
-  packet must be permitted — under the "only the gateway's MAC" filter it plausibly would be,
-  since it arrives from the gateway. **Whether a Bell HH3000 hairpins, I do not know, and I
-  could not find out.** Consumer routers vary widely. This may work on some isolated networks
-  and not others, which is the worst possible property for a fallback.
-- **Relay candidates via TURN**: work, because TURN is a server on the internet and both peers
-  reach it outbound. This always works, and it is a relay.
+- **Server-reflexive candidates via STUN**: both peers discover the *same* public address, so
+  reaching each other requires the router to hairpin. **This was researched properly and the
+  answer is no, do not rely on it**, for two independent reasons:
+  - Hairpinning is *mandatory* under [RFC 4787 REQ-9](https://datatracker.ietf.org/doc/html/rfc4787)
+    and compliance is not universal. Comcast/Xfinity
+    [deliberately disable it](https://forums.xfinity.com/conversations/your-home-network/whats-the-deal-with-hairpin-natloopback-being-disabled/666481689e1ca35abf349c72);
+    OpenWrt's own conformance testbed has [an open REQ-9
+    failure](https://gitlab.com/ynezz/openwrt-testbed/-/issues/273). The WebRTC team's standard
+    diagnosis of exactly this symptom is ["your NAT doesn't support
+    hairpinning"](https://groups.google.com/g/discuss-webrtc/c/fP20Q9le4V8). **No 2020s
+    measurement study gives a prevalence figure** — treat any number you see as unverified.
+  - And there is a second gate that closes it regardless: even where the router hairpins, the
+    reflected packet still has to be **delivered to the other wireless client**, and under
+    client isolation that is precisely the delivery that is denied
+    ([Meraki](https://documentation.meraki.com/Wireless/Operate_and_Maintain/How_Tos/Firewall_and_Traffic_Shaping/Wireless_Client_Isolation),
+    [Aruba](https://arubanetworking.hpe.com/techdocs/central/2.5.8/content/nms/access-points/cfg/networks/client-isolation.htm)).
+- **Relay candidates via TURN**: these work, and they work **even though both peers are behind
+  the same NAT** — each peer makes its own allocation over its own client→gateway path, so no
+  hairpinning is involved.
 
-So on the target network, WebRTC's realistic outcome is TURN. Then:
+So on a client-isolated LAN, **ICE falls all the way to TURN with no intermediate state.** That
+is not a hedge; it is the documented behaviour of the filter. Then:
 
 - **It still needs a signalling server.** Offers and answers have to reach the other peer
   somehow, and on this network they cannot go over the LAN. So a WebRTC design requires a
@@ -394,15 +471,21 @@ tunnel as an explicit, opt-in "beyond this network" mode**, so a tunnel outage d
 to where it is today rather than breaking it. **Put the provider behind one function** —
 `startTunnel(port): Promise<{url, stop}>` — so swapping to a self-hosted server is a day's work.
 
-**Others considered:** ngrok requires an account and an auth token for essentially everything,
-which is a non-starter for a flow where the user configures nothing — **I did not re-verify
-ngrok's 2026 terms this session and it should be checked before being ruled out on that
-basis.** `localhost.run` and Pinggy are
-small operations with the same withdrawal risk as Cloudflare and none of the scale. A naive
-`ssh -R` to a host of his own is tempting because macOS already ships `ssh` and nothing would
-need bundling — but Gradio moved *off* SSH tunnelling to FRP partly for security reasons
-([GHSA-3x5j-9vwr-8rr5](https://github.com/gradio-app/gradio/security/advisories/GHSA-3x5j-9vwr-8rr5)),
-which is worth reading before repeating it.
+**Others considered:**
+
+- **ngrok is disqualified on numbers, not on taste.** The 2026 free plan requires an account and
+  authtoken, and allows **20,000 HTTP requests per month** with an interstitial page on every
+  HTTP endpoint ([pricing](https://ngrok.com/pricing)). This page polls every 700 ms — about
+  5,100 requests an hour — so a free ngrok account is exhausted in under four hours of use, and
+  every end user would need their own account. (The ngrok agent's own licence text was not
+  verified; it does not matter given the above.)
+- **`localhost.run` and Pinggy** are small operations with the same withdrawal risk as
+  Cloudflare and none of the scale.
+- **A naive `ssh -R`** to a host of his own is tempting because macOS already ships `ssh` and
+  nothing would need bundling — but Gradio moved *off* SSH tunnelling to FRP partly for security
+  reasons
+  ([GHSA-3x5j-9vwr-8rr5](https://github.com/gradio-app/gradio/security/advisories/GHSA-3x5j-9vwr-8rr5)),
+  which is worth reading before repeating it.
 
 **One thing to note about runtime download versus bundling:** Gradio downloads the FRP binary on
 first use. On Apple Silicon every executable must be at least ad-hoc signed to run at all, so a
@@ -411,20 +494,47 @@ bundled. It costs bundle size — tens of megabytes per architecture — and not
 
 ### 6. A rendezvous/relay server he runs himself — the second choice
 
-Two shapes: run an **FRP server** (the Gradio/Hugging Face stack, open source and documented for
-self-hosting) and keep the tunnel design above unchanged; or write a small WebSocket relay and
-change the phone page to talk through it.
+Two shapes, and the research changed which one is better.
 
-The first is strictly better for him — same client design, no page rewrite, proven code.
+**Shape A — run an FRP server on a VPS** (the Gradio/Hugging Face stack, open source and
+documented for self-hosting) and keep the tunnel client design above completely unchanged. No
+page rewrite, proven code, and a box you own. 2026 prices, checked:
+[Hetzner](https://www.hetzner.com/cloud/cost-optimized/) raised prices on 15 June 2026 —
+CAX11 (ARM) €5.99/month, CX23 €5.49/month, both excluding IPv4, with 20 TB of included EU
+traffic; Linode/Akamai Nanode $5/month with 1 TB; DigitalOcean $4/month with 500 GB;
+[Fly.io](https://fly.io/pricing) shared-cpu-1x at roughly $1.94/month plus $0.02/GB egress;
+Railway now $1/month after a 30-day trial. **The money is not the problem.** The problem is that
+a box has to be patched, watched, renewed and paid for by one person indefinitely, and when it
+falls over on a Saturday the feature is broken for everyone.
 
-**Cost:** a small VPS. Hetzner's entry tier is in the €4–5/month range with terabytes of included
-traffic, which is far more than this needs; the 11.3 MB wavs are the only meaningful load and
-even heavy use is single-digit gigabytes per session. The money is not the problem.
+**Shape B — a WebSocket relay on Cloudflare Workers + Durable Objects, which can genuinely cost
+nothing.** This was the surprise of the research. Durable Objects have been on the **free plan
+since April 2025** (SQLite-backed):
+[100,000 DO requests/day, 13,000 GB-s/day, 5 GB of storage](https://developers.cloudflare.com/changelog/post/2025-04-07-durable-objects-free-tier/).
+On the paid plan the account minimum is $5/month. Two details make it fit this workload almost
+suspiciously well
+([pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/)):
 
-**The burden is the problem, and it is permanent.** A relay that people's phones depend on has to
-be patched, watched, renewed, and paid for by one person indefinitely, and when it goes down on
-a Saturday the feature is broken for everyone. Syncthing solves this with a donated community
-relay pool; Hugging Face solves it by being a company. Neither option is available here.
+- **There is no bandwidth charge at all** — verbatim, *"There are no additional charges for data
+  transfer (egress) or throughput (bandwidth)."* The 11.3 MB wavs, which are the cost driver
+  everywhere else on this page, are free here.
+- Over WebSockets, outgoing messages are free and incoming are billed at a 20:1 ratio, so a
+  700 ms poll converted to a push costs very little.
+
+**One hard requirement if this is ever built:** use the **WebSocket Hibernation API**
+(`state.acceptWebSocket()`), not `ws.accept()`. With plain `accept()`, an idle 30-minute session
+burns roughly 225 GB-s and blows the free duration cap on its own; Cloudflare's own worked
+example is $20.65/month with hibernation against $142.95/month without, for identical work.
+
+**What Shape B costs instead of money:** it is the one option that **requires rewriting the
+phone page**, because the page would stop talking to a same-origin HTTP server and start talking
+through a relay. That is the 2282-line string and its 700 ms polling loop. Against that: no
+server to patch, no renewal, no Saturday outage that is his to fix, and plausibly a bill of
+zero.
+
+Syncthing solves the operator problem with a donated community relay pool; Hugging Face solves
+it by being a company. Neither is available here — but Shape B is the closest thing to solving
+it by not having a server at all.
 
 **Privacy:** state it plainly in the UI and the README, the way Syncthing does — the relay sees
 your IP and how much traffic you moved, and with end-to-end encryption it does not see the
@@ -539,15 +649,29 @@ What standard practice requires:
      hostname is assigned by Cloudflare and routed only to our tunnel — but the reasoning should
      be written down next to the change, because that comment is load-bearing.
 6. **TLS to a private IP, for completeness.** A LAN HTTP server cannot get a browser-trusted
-   certificate for `192.168.2.151`. Plex solves this with the **`plex.direct` trick**: a real
-   wildcard certificate for `*.plex.direct`, plus public DNS that resolves names of the form
-   `192-168-2-151.<hash>.plex.direct` back to the private address — so the browser validates a
-   genuine certificate while the connection actually goes to a LAN IP. *(Described from general
-   knowledge; plex.tv returns 403 to automated fetches and I could not retrieve a primary
-   source this session. Verify before repeating it anywhere load-bearing.)* It works, and it
-   requires owning a domain, running DNS, and distributing certificate material to clients.
-   **This is not worth doing here.** A tunnel gives trusted HTTPS for free, which is one more
-   argument for it.
+   certificate for `192.168.2.151`. Plex solves this with the **`plex.direct` trick**, and it is
+   worth understanding concretely because it is the only real answer to this problem:
+
+   Plex runs a DNS zone in which any name of the form `<dashed-ip>.<hash>.plex.direct` resolves
+   to that IP — including private ones. `192-168-1-50.625d…89.plex.direct` returns
+   `192.168.1.50`. Each server gets **its own** wildcard certificate for `*.<hash>.plex.direct`,
+   and both the certificate and its private key are delivered to the user's machine. Clients
+   learn the server's addresses from plex.tv and connect to the matching `plex.direct` name, so
+   the hostname matches the certificate on LAN and WAN alike with no DNS propagation wait.
+   Originally DigiCert-issued; Plex's current documentation says Let's Encrypt.
+   ([Filippo Valsorda's writeup](https://words.filippo.io/how-plex-is-doing-https-for-all-its-users/),
+   [Plex](https://support.plex.tv/articles/206225077-how-to-use-secure-server-connections/).)
+
+   Two caveats carried from the research. It is textbook **DNS-rebinding shape**, so Pi-hole,
+   NextDNS and router rebinding protection routinely break it — which is why Plex ships dnsmasq
+   and unbound snippets and a server setting called "Treat WAN IP As LAN Bandwidth" to
+   compensate. And the precedent for shipping key material is poor: SEC Consult found Plex
+   shipping an extractable private key for `*.hub.plex.tv` in 2014 and the certificate was
+   revoked; the per-server hash in `plex.direct` is the fix for exactly that.
+
+   **This is not worth doing here.** It needs a domain, a DNS zone, per-user certificate
+   issuance and key distribution — a whole subsystem. A tunnel gives browser-trusted HTTPS for
+   free, which is one more argument for it.
 
 ---
 
@@ -578,17 +702,42 @@ phone can reach this Mac over the internet but not over your Wi-Fi; your router 
 devices." The app gets this almost for free just by observing which path the phone actually
 arrived on, with no probe at all. Note one trap: an HTTPS tunnel page **cannot** actively probe
 `http://192.168.2.151:7373` to confirm, because that is mixed content and the browser blocks it.
-The observation has to come from which QR the user ended up using, not from a fetch.
+(Chrome's Local Network Access work does grant a mixed-content exemption for private-IP
+literals and `.local` names — but that is Chrome on desktop and Android, and WebKit has not
+implemented LNA, so there is no such exemption on any iOS browser. This is also the wall OBS
+Tablet Remote hits, and it says so on its own landing page.) The observation therefore has to
+come from which QR the user ended up using, not from a fetch.
 
-**What good products say.** The honest survey result is: not much, and mostly they blame the
-router. Google's Chromecast answer is a support page telling the user to check for isolation
-mode. Sonos the same. Syncthing shows "Disconnected" and lets the relay handle it. The products
-that do not have a support page about this are the products that have a fallback.
+**What good products say.** The survey answer is blunt: **nobody diagnoses the network for the
+user.** The best anyone does is enumerate suspects and then hand it over. The observed ranking:
+
+- **Syncthing is the best**, and it is best for one reason: it **names the mode it ended up in**.
+  The UI's connection type reads `Relay (Client)`, and the FAQ says that means a direct
+  connection could not be established. It does not diagnose the router; it tells you truthfully
+  which path you are on and lets you draw the conclusion.
+- **Plex** has the best written diagnosis anywhere — its remote-playback requirements page
+  explicitly lists *"restrictions on devices being able to see each other"* and *"privacy /
+  security settings … that do not allow making local network connections"* — but a weak in-app
+  signal (an undocumented "Indirect" label).
+- **Luna Display** says it in one plain sentence: *"Router restrictions might disable Apple
+  Bonjour … or prevent devices on the same network from talking to each other."*
+- **Google** is the only vendor here that names the cause and the remedy outright — and the
+  remedy is a router setting, which is what this brief forbids.
+- **Chrome Remote Desktop** is the worst: a full documented ICE ladder and no user-facing
+  indication whatsoever of which rung you are on.
+- **All of music tooling** — REAPER, OBS, Ableton Link, TouchOSC, Logic Remote — says nothing.
+  Link's peer count actively conflates "nobody is running Link" with "your packets are dropped."
+
+**And the gap worth taking: no product in this survey distinguishes *found but unreachable* from
+*not found*.** That is exactly this failure's signature, and it is the cheapest differentiator
+available — and it becomes nearly free the moment a fallback exists, because arriving over the
+fallback while the LAN path stays silent *is* the distinction, observed rather than inferred.
+Copy Syncthing: say which path you are on.
 
 **Which means the strongest argument for the recommendation is also the answer to this section:**
 the best diagnosis is not needing one. The three lines added in `af9899b` are the right amount
-of honesty for the LAN path and should stay. Building a cleverer detector is effort spent
-explaining a failure instead of removing it.
+of honesty for the LAN path and should stay. Building a cleverer detector for a LAN-only app is
+effort spent explaining a failure instead of removing it.
 
 ---
 
@@ -615,9 +764,14 @@ explaining a failure instead of removing it.
 **Ongoing burden:** watching for Cloudflare changing the deal, and keeping two bundled binaries
 current. Real but small, and bounded by the fact that the LAN path keeps working regardless.
 
-**The second choice, for comparison:** the client work is nearly identical, plus a VPS, plus FRP
-server configuration, plus a domain, plus patching and uptime forever. Roughly €4–6/month and an
-open-ended obligation.
+**The second choice, for comparison:**
+
+- *FRP on a VPS:* the client work is nearly identical to the recommendation, plus a server, plus
+  FRP configuration, plus a domain, plus patching and uptime forever. Roughly €5–6/month and an
+  open-ended obligation.
+- *Cloudflare Workers + Durable Objects:* plausibly $0/month and nothing to patch, but it is the
+  one option that requires rewriting the phone page off same-origin polling and onto a relayed
+  WebSocket — and it must use the hibernation API or the free tier evaporates.
 
 ---
 
@@ -653,14 +807,17 @@ Stated plainly, because a confident wrong answer has already cost a morning.
 - **Whether WebKit's Local Network Access work will ever apply to a page served from a private
   IP fetching back to the same private IP.** The specification's model says no. The
   implementation is in progress. I would not bet the architecture on it.
-- **Several comparable products were not reached.** TouchOSC, Lemur, Duet Display, Luna Display,
-  obs-websocket remote-control apps, Audiomovers Listento, Ableton Note, and — the one I most
-  wanted — **REAPER's built-in web remote control**, which is architecturally almost identical
-  to today's phone remote and would have been the best available proxy for its real-world
-  failure rate. The session's web-search budget ran out before that survey finished. The pattern
-  in the products that *were* reached is consistent enough that I do not think more of them
-  would change the recommendation, but that is a judgement, not a finding.
-- **2026 pricing for some alternatives** — I verified Cloudflare TURN ($0.05/real-time GB
+- **A true failure *rate* for REAPER's web remote.** There is no denominator. The honest claim
+  is "roughly fifteen distinct unresolved-or-network-diagnosed threads over thirteen years
+  across three venues, with maintainers consistently treating it as out of scope."
+- **Logic Remote's actual transport.** Apple publishes nothing, and Logic Remote does not even
+  appear in Apple's own port list. Bonjour plus a proprietary session protocol is well-supported
+  inference, not documented fact.
+- **Whether Duet Air relays pixels or only signalling**, and whether Luna Display's
+  peer-to-peer mode is AWDL specifically. Neither vendor publishes a protocol description.
+- **An official Plex definition of "Indirect"** — the word appears in their UI and in no
+  document.
+- **2026 pricing for a few things.** I verified Cloudflare TURN ($0.05/real-time GB
   outbound, free only alongside their SFU) from primary documentation, but VPS and
   Workers/Durable Objects figures quoted above are approximate and should be re-checked before
   anyone commits money.
@@ -676,6 +833,44 @@ Stated plainly, because a confident wrong answer has already cost a morning.
 - Hugging Face FRP fork — https://github.com/huggingface/frp
 - Gradio security advisory, SSH tunnelling → FRP — https://github.com/gradio-app/gradio/security/advisories/GHSA-3x5j-9vwr-8rr5
 - Syncthing, *Relaying* — https://docs.syncthing.net/users/relaying.html
+- Syncthing, *Relay protocol v1* — https://docs.syncthing.net/specs/relay-v1.html
+- Syncthing, *Firewall setup* — https://docs.syncthing.net/users/firewall.html
+- Tailscale, *How NAT traversal works* (every connection starts on DERP and stays there if direct never succeeds) — https://tailscale.com/blog/how-nat-traversal-works
+- Apple Developer Forums, Quinn, *Wi-Fi Fundamentals* ("some APs refuse to forward STA-to-STA traffic") — https://developer.apple.com/forums/thread/45283
+- Meraki, *Wireless Client Isolation* — https://documentation.meraki.com/Wireless/Operate_and_Maintain/How_Tos/Firewall_and_Traffic_Shaping/Wireless_Client_Isolation
+- HPE Aruba Networking, *Client isolation* — https://arubanetworking.hpe.com/techdocs/central/2.5.8/content/nms/access-points/cfg/networks/client-isolation.htm
+- RFC 4787 (REQ-9, hairpinning) — https://datatracker.ietf.org/doc/html/rfc4787
+- Xfinity forum, hairpin NAT deliberately disabled — https://forums.xfinity.com/conversations/your-home-network/whats-the-deal-with-hairpin-natloopback-being-disabled/666481689e1ca35abf349c72
+- OpenWrt testbed, open RFC 4787 REQ-9 failure — https://gitlab.com/ynezz/openwrt-testbed/-/issues/273
+- discuss-webrtc, "your NAT doesn't support hairpinning" — https://groups.google.com/g/discuss-webrtc/c/fP20Q9le4V8
+- REAPER User Guide v7.80 §15.31 (web browser interface) — https://www.reaper.fm/userguide/ReaperUserGuide780.pdf
+- r/Reaper, *Web Control not working on other devices* — https://www.reddit.com/r/Reaper/comments/mntq28/
+- r/Reaper, AP-isolation mention — https://www.reddit.com/r/Reaper/comments/jo3mki/
+- obs-websocket — https://github.com/obsproject/obs-websocket · OBS Tablet Remote's mixed-content warning — https://t2t2.github.io/obs-tablet-remote/
+- Ableton, *Link troubleshooting* — https://help.ableton.com/hc/en-us/articles/209073069-Link-Troubleshooting · *connecting without a router* — https://help.ableton.com/hc/en-us/articles/360003279779 · Link source — https://github.com/Ableton/link
+- Ableton Note / Ableton Cloud — https://help.ableton.com/hc/en-us/articles/6121083513756
+- Audiomovers Listento — https://audiomovers.com/listento *(site is JS-rendered and its help URLs have moved; quotes came from indexed copies, not pages loaded directly — verify before reusing)*
+- Hexler, *TouchOSC — OSC connections* — https://hexler.net/touchosc/manual/connections-osc
+- Apple, *If you can't connect Logic Remote to your Mac* — https://support.apple.com/en-us/101940
+- Steinberg, *Cubase iC Pro troubleshooting* — https://helpcenter.steinberg.de/hc/en-us/articles/206531824-Cubase-iC-Pro-troubleshooting
+- Astropad, *Luna Display Wi-Fi connection troubleshooting* — https://support.astropad.com/en/articles/11835391-wifi-connection-issues-troubleshooting
+- Duet Display, connecting wirelessly — https://www.duetdisplay.com/help-center/connecting-to-duet-for-android-wirelessly
+- LocalSend protocol (and its README naming AP isolation) — https://github.com/localsend/protocol
+- PairDrop `server/peer.js` (public-IP room keying) — https://github.com/schlagmichdoch/PairDrop/blob/master/server/peer.js · issue #228, the WebSocket path is not a failure fallback — https://github.com/schlagmichdoch/PairDrop/issues/228
+- Plex, *Using plex.tv resources information to troubleshoot app connections* — https://support.plex.tv/articles/206721658-using-plex-tv-resources-information-to-troubleshoot-app-connections/
+- Plex, *Requirements for remote playback* ("restrictions on devices being able to see each other") — https://support.plex.tv/articles/requirements-for-remote-playback-of-personal-media/
+- Plex, *Accessing a server through Relay* — https://support.plex.tv/articles/216766168-accessing-a-server-through-relay/
+- Plex, *How to use secure server connections* — https://support.plex.tv/articles/206225077-how-to-use-secure-server-connections/
+- Filippo Valsorda, *How Plex is doing HTTPS for all its users* — https://words.filippo.io/how-plex-is-doing-https-for-all-its-users/
+- Sonos, *System requirements* (unsupported topologies) — https://support.sonos.com/en-us/article/sonos-system-requirements · Ruckus KB 000006140 (names client isolation, as a network vendor rather than Sonos) — https://support.ruckuswireless.com/articles/000006140
+- Chrome Remote Desktop network guide (Direct / STUN / TURN) — https://support.google.com/chrome/a/answer/16364503
+- VS Code Remote Tunnels — https://code.visualstudio.com/docs/remote/tunnels
+- Nabu Casa, *Remote access deep dive* — https://github.com/NabuCasa/support/blob/main/src/cloud/remote-access/remote-access-deep-dive.md · SniTun — https://github.com/NabuCasa/snitun
+- Home Assistant companion app, networking (SSID/BSSID-based URL switching) — https://companion.home-assistant.io/docs/troubleshooting/networking/
+- ngrok pricing (20,000 HTTP requests/month on the free plan) — https://ngrok.com/pricing
+- Cloudflare, *Durable Objects free tier* — https://developers.cloudflare.com/changelog/post/2025-04-07-durable-objects-free-tier/ · *Durable Objects pricing* (no egress charge; WebSocket hibernation) — https://developers.cloudflare.com/durable-objects/platform/pricing/
+- Hetzner 2026 price adjustment — https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/ · https://www.hetzner.com/cloud/cost-optimized/
+- Fly.io pricing — https://fly.io/pricing
 - Google, *AP Isolation mode* (Chromecast) — https://support.google.com/chromecast/answer/3222253?hl=en
 - Google, *Trouble setting up Chromecast or Google Nest* — https://support.google.com/googlehome/answer/7300406?hl=en
 - Cisco Meraki, *Wireless Client Isolation* (mechanism) — https://documentation.meraki.com/MR/Firewall_and_Traffic_Shaping/Wireless_Client_Isolation
