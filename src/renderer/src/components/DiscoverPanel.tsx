@@ -49,6 +49,13 @@ import {
   type RadioPace
 } from '@shared/radioSchedule'
 import {
+  DEFAULT_RADIO_DROP_OUTS,
+  buildDropOutCurve,
+  pickDropOutBeats,
+  pickDropOutSlotId,
+  shouldScheduleDropOut
+} from '@shared/radioDropOut'
+import {
   buildMatchMeter,
   discoverRoleLabel,
   reclassifyKindSources,
@@ -79,6 +86,7 @@ import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/typ
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { initialState, type AppState } from '../state/store'
+import type { StemAutomation } from '@shared/toolkit'
 import { scheduleLiveParamSync } from './liveParamSync'
 
 export interface ResolvedCandidateStem {
@@ -875,6 +883,32 @@ export function DiscoverPanel({
     }
     const { rifff, vol } = assembly
 
+    // The armed drop-out, as a volume automation curve on the dropped
+    // slot's own stem. This is the ONLY way a gesture can land on the
+    // beat in this codebase (spec 0A): the engine holds the curve and
+    // performs it per sample, so radio's 30Hz React clock is nowhere in
+    // the timed path. Arming is not timing-critical and clearing it is a
+    // later sync writing {} here.
+    //
+    // buildEngineProject reads state.stemAutomation?.[key] and
+    // isStemToolkitNeutral drops the whole toolkit key when nothing is
+    // drawn, so an EMPTY record makes the project byte-identical to what
+    // shipped before this feature existed. Do not "simplify" that away.
+    //
+    // Gated on radioOnRef as well as the ref itself: a curve must never
+    // outlive radio, because it makes that stem's EngineStem.volume inert
+    // while it is there (see clearRadioDropOut). Belt and braces over the
+    // clears in toggleRadio and the unmount teardown.
+    const stemAutomation: Record<string, StemAutomation> = {}
+    const armedDropOut = radioOnRef.current ? radioDropOutRef.current : null
+    if (armedDropOut) {
+      const slotIndex = members.findIndex((m) => m.id === armedDropOut.slotId) + 1
+      const curve = buildDropOutCurve(maxBarLength ?? 0, radioDropOutBeatsRef.current)
+      if (slotIndex > 0 && curve.length > 0) {
+        stemAutomation[stemKey(rifff.groupId, slotIndex)] = { volume: curve }
+      }
+    }
+
     // A throwaway single-rifff AppState -- only bpm/masterChain/
     // channelPlugins are copied from the real project; state.rifffs is
     // ENTIRELY replaced by this one preview rifff, never merged with the
@@ -889,6 +923,7 @@ export function DiscoverPanel({
       channelPlugins,
       rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
       vol,
+      stemAutomation,
       stretch: { [rifff.groupId]: true }
     }
 
@@ -1181,6 +1216,37 @@ export function DiscoverPanel({
   // Which slot radio changed last -- so it never changes the same one
   // twice running (pickRadioSlotId).
   const radioLastSlotRef = useRef<string | null>(null)
+  // The armed drop-out: which slot is holding a volume curve, so the next
+  // sync can clear it. A REF, for the same reason radioClockRef is one --
+  // it is written from the 30Hz position effect and nothing renders it.
+  //
+  // `lapsLeft` counts laps, not milliseconds: the curve fires at the top
+  // of the loop it is armed for, so it is cleared on the NEXT wrap after
+  // that. Arming early is free (spec 0A); leaving it armed a lap too long
+  // is NOT harmless -- the curve repeats every lap, so a second lap would
+  // turn one gesture into a rhythm. Hence the countdown in the wrap branch
+  // of the clock effect below.
+  const radioDropOutRef = useRef<{ slotId: string; lapsLeft: number } | null>(null)
+  // How long the armed drop-out is, in beats. Separate from the ref above
+  // because the curve is rebuilt on every sync (maxBarLength can change
+  // under it when another slot resolves) and the LENGTH must not be
+  // re-drawn each time -- that would make one gesture change duration
+  // mid-lap.
+  const radioDropOutBeatsRef = useRef(2)
+  // Takes the armed drop-out off the stem and rebuilds the preview without
+  // it. Called from every path that ends a gesture -- the lap countdown,
+  // radio switching off, the panel unmounting.
+  //
+  // Load-bearing rather than tidy-up: a `volume` curve makes EngineStem
+  // .volume inert (PlaybackEngine.cpp's volumeAutomated branch), so a
+  // curve left behind on a stem nothing is gesturing on would quietly stop
+  // that slot's gain drag reaching the engine live. Never leave one on a
+  // stem that is not mid-gesture.
+  function clearRadioDropOut(): void {
+    if (radioDropOutRef.current === null) return
+    radioDropOutRef.current = null
+    scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
   // Fraction of the current interval elapsed, 0..1, for the progress rule
   // under the button. State, not a ref, because it IS displayed -- but
   // written at most once per position tick, which the panel re-renders on
@@ -1235,6 +1301,15 @@ export function DiscoverPanel({
     const gridBars = radioGridBars(DEFAULT_RADIO_GRID, loopBars, slotBars)
     const step = advanceRadioClock(clock, pos, loopBars, gridBars)
     radioClockRef.current = step.clock
+    // A drop-out is anchored to the loop top, so its lifetime is counted
+    // in laps. One wrap after the lap it fired on, the curve comes off --
+    // leaving it armed would repeat the gesture every lap, which is a
+    // rhythm rather than a move.
+    if (step.wrapped && radioDropOutRef.current !== null) {
+      const armed = radioDropOutRef.current
+      if (armed.lapsLeft <= 1) clearRadioDropOut()
+      else radioDropOutRef.current = { ...armed, lapsLeft: armed.lapsLeft - 1 }
+    }
     // Deferred out of the effect body: this repo ERRORS on a synchronous
     // setState inside an effect (react-hooks/set-state-in-effect), and the
     // established workaround in this codebase is a resolved-promise tick.
@@ -1269,6 +1344,27 @@ export function DiscoverPanel({
         // padlock is the tool for "I liked that one" (spec 3.4).
         commitSlotPick(pending.slotId, pending.pick)
         radioLastSlotRef.current = pending.slotId
+      }
+      // Roll ONCE per interval for a drop-out in the coming one -- no
+      // second clock. Never on the slot that just changed and never in a
+      // way that leaves silence: pickDropOutSlotId is handed only the
+      // AUDIBLE slots and returns null below two of them.
+      //
+      // No pushUndoSnapshot, for the same reason the change above takes
+      // none: a drop-out is performance, not an edit.
+      //
+      // DEFAULT_RADIO_DROP_OUTS directly, not a setting: phase B ships no
+      // UI. Phase C replaces this one identifier.
+      if (radioDropOutRef.current === null && shouldScheduleDropOut(DEFAULT_RADIO_DROP_OUTS)) {
+        const audible = slotsRef.current
+          .filter((s) => previewingSlotIdsRef.current.has(s.id) && s.id !== pending?.slotId)
+          .map((s) => ({ id: s.id, kinds: s.kinds }))
+        const dropId = pickDropOutSlotId(audible)
+        if (dropId !== null) {
+          radioDropOutBeatsRef.current = pickDropOutBeats()
+          radioDropOutRef.current = { slotId: dropId, lapsLeft: 1 }
+          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+        }
       }
       // Arm the next one whether or not this one landed -- nothing
       // eligible is radio idling, not an error, and it retries here at
@@ -1597,6 +1693,12 @@ export function DiscoverPanel({
       })
       radioClockRef.current = null
       radioPendingRef.current = null
+      // Not clearRadioDropOut: scheduling a rebuild of a panel that is
+      // unmounting would be a sync into the void (and syncPreviewToEngine
+      // returns early on unmountedRef anyway). Dropping the ref is what
+      // matters -- nothing can re-arm from a dead panel, and the engine
+      // gets a fresh project from whatever claims it next.
+      radioDropOutRef.current = null
     }
   }, [])
 
@@ -2346,6 +2448,12 @@ export function DiscoverPanel({
       radioClockRef.current = null
       radioPendingRef.current = null
       radioLastSlotRef.current = null
+      // A curve left on a stem after radio stops would silently break
+      // that slot's gain dial -- EngineStem.volume is inert while a
+      // volume curve is present (PlaybackEngine.cpp's volumeAutomated
+      // branch). radioOnRef is already false above, so the rebuild this
+      // schedules writes an empty stemAutomation either way.
+      clearRadioDropOut()
       setRadioProgress(0)
       return
     }
