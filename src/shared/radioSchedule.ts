@@ -36,17 +36,23 @@ export const DEFAULT_RADIO_PACE: RadioPace = 'mid'
  * would give a change at 6 bars and then nothing for 24, which reads as
  * broken rather than loose.
  *
- * RETUNED 2026-09-28. The old windows (24-48 / 12-24 / 6-12) were chosen
- * while advanceRadioClock was silently rounding every one of them UP to
- * the next whole multiple of the loop length -- at 120bpm with an 8-bar
- * loop, `mid` could only ever produce 32s or 48s, and `fast` could only
- * produce 16s or 32s. Elling, 2026-09-28: "radio mode seems quite slow to
- * me". Now that radioGridBars below lets a change land on the changing
- * slot's own cycle, the numbers finally describe the behaviour, so the
- * whole ladder moves down one notch and gains a genuinely fast bottom
- * rung. A clean 3x ladder with a 2:1 window at every step.
+ * RETUNED TWICE on 2026-09-28, and the second retune is the one that
+ * stands. The original windows (24-48 / 12-24 / 6-12) were chosen while
+ * advanceRadioClock silently rounded every one of them UP to the next
+ * whole multiple of the loop length, so at 120bpm on an 8-bar loop `mid`
+ * could only ever produce 32s or 48s. Elling: "radio mode seems quite slow
+ * to me". The first retune dropped the whole ladder a notch; he listened
+ * and called it "a little too frenetic", so `mid` came back up to the
+ * numbers below. See the comment on the constant itself for why, and note
+ * the clean 3x ladder did NOT survive: `mid` is the one window that has
+ * been judged by ear, so its neighbours are spaced around it rather than
+ * the other way round.
  *
- * At 120bpm in 4/4 (2s a bar): slow = 36-72s, mid = 12-24s, fast = 4-8s. */
+ * These are only the DRAWN windows. What is realised depends on the grid,
+ * and DEFAULT_RADIO_GRID is `loop end`, which rounds an interval up to the
+ * next loop top -- on an 8-bar loop at 120bpm `mid` lands at 16s or 32s,
+ * averaging about 30s. A pace is "at least N bars, then the next loop
+ * top". */
 // Reported after listening to the first retune (2026-09-28): "the
 // transitions are a little too frenetic by default now". Realised mid had
 // gone from ~44s to ~21s between changes -- a bigger jump than the numbers
