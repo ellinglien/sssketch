@@ -13,6 +13,7 @@ import {
   type RadioSettings
 } from '@shared/radioSchedule'
 import { RADIO_DROP_OUT_OPTIONS } from '@shared/radioDropOut'
+import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
 
 const CHANNEL_OPTIONS: number[] = Array.from(
   { length: RADIO_CHANNELS_MAX - RADIO_CHANNELS_MIN + 1 },
@@ -287,6 +288,19 @@ export function DiscoverRadioMenu({
             chip(d, settings.dropOuts === d, () => onChange({ dropOuts: d }))
           )
         )}
+      {/* The field shipped with the settings object on 2026-09-28 and had
+          no row until phase E, deliberately: a chip for something nothing
+          reads is a lie. Now it is read (DiscoverPanel's pickTransition)
+          and this is its control. A TEMPERAMENT, not a list of moves --
+          the changing layer's own kinds pick which move inside it, so
+          there is no grid to fill in. */}
+      {mode === 'running' &&
+        row(
+          'transitions',
+          RADIO_TRANSITIONS_OPTIONS.map((t) =>
+            chip(t, settings.transitions === t, () => onChange({ transitions: t }))
+          )
+        )}
       {mode === 'running' && row('reroll', [chip('new bed', false, onNewBed)])}
       {/* maxWidth, not a wider menu: the chip rows set the width and the
           hint wraps inside it. Without it this span is one long line and
@@ -294,7 +308,7 @@ export function DiscoverRadioMenu({
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
         {mode === 'start'
           ? 'pick a pace to start'
-          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started'}
+          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop'}
       </span>
     </div>
   )
