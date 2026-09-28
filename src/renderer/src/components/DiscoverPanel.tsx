@@ -2588,6 +2588,31 @@ export function DiscoverPanel({
         resolveStretchedForPlayback,
         (path, durationSec) => void window.rifffApi.enginePreloadStem(path, durationSec)
       )
+      // And the picture, which was the last cold thing of all. Reported
+      // after the engine preload landed: "it's reaching the end of a loop,
+      // and a stem is blinking like it's loading, but it reaches the end
+      // and the wave doesn't change until it goes a few moments into the
+      // loop again."
+      //
+      // The row draws <Waveform path={resolvedStem.path} />, and peakCache
+      // has to DECODE that file to produce peaks. Every other warm above
+      // is about the sound; none of them touches this, so the decode still
+      // happened at commit -- which is why the wave arrived late even once
+      // the audio did not.
+      //
+      // Deliberately the raw stem path, not the stretched one: the row
+      // draws the stem, and peakCache is keyed by path, so warming the
+      // stretched file would fill the cache with an entry nothing ever
+      // asks for -- the exact mistake the two previous prefetch attempts
+      // made in the other direction.
+      //
+      // Worth more than the picture, too: this is a full decode on the
+      // main thread. Doing it here moves it off the boundary, where it was
+      // competing with the very commit it was delaying.
+      void getPeaks(stem.path).catch(() => {
+        // peakCache evicts on rejection itself; a failed warm just means
+        // the row decodes at commit, which is today's behaviour.
+      })
     })
     radioPendingRef.current = { slotId, pick, incomingBars: null }
   }
