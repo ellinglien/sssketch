@@ -68,8 +68,11 @@ export interface RadioClockStep {
 ```
 
 The radio-controls spec's §1.3 changes **`due` only** — it widens the gate from the whole loop's
-wrap to the changing slot's own bar grid. `wrapped` survives untouched, and it still means exactly
-one thing: the preview loop restarted.
+wrap to the changing slot's own bar grid, and the signature becomes
+`advanceRadioClock(clock, pos, loopBars, gridBars?)`. **`wrapped` survives untouched**, and it
+still means exactly one thing: the preview loop restarted. Its own plan
+(`docs/superpowers/plans/2026-09-28-radio-controls.md`, Task 8) already reads `step.wrapped`
+directly to place a drop-out, so this is precedent rather than invention.
 
 **Performance mode lands on `wrapped`. Radio lands on `due`.** That is the whole interface between
 the two features, it is one field each, and neither has to know about the other.
@@ -416,9 +419,27 @@ nothing and you have radio; arm one card and you have radio plus one decision.
 
 **Against, and the guard that answers it.** Radio changing a layer you were reaching for is a
 stolen decision. One clause fixes it: **a slot with an armed card is not eligible for radio that
-turn.** `radioEligibleSlotIds()` (`:2270`) gains `&& !armedSlotIds.has(s.id)`. And radio never
-rerolls a card out from under you, because the deck card *is* what radio would have played — same
-`pickForSlot`, same warm.
+turn.** And radio never rerolls a card out from under you, because the deck card *is* what radio
+would have played — same `pickForSlot`, same warm.
+
+**Where that clause goes matters.** As of 2026-09-28 the answer to "may radio turn this layer
+over" lives in one shared place: `isRadioEligibleSlot(slot)`
+(`src/shared/radioSchedule.ts:167`), extracted while fixing a live report — *"if i start radio
+with stems already there.. it seems to not transition"* — because the component's own filter
+tested `s.candidate !== null` and every slot seeded from a rifff or the shelf carries a
+`seedStem` instead. Its doc comment says why it is shared: *"so the next thing that needs to ask
+'may radio touch this layer' cannot get a third answer."*
+
+**Do not add `armed` to it.** Being armed is not a fact about whether a layer is turnable — it is
+a fact about performance mode, which `isRadioEligibleSlot` knows nothing about and should not.
+The exclusion belongs one level up, where the component composes the eligible set:
+`radioEligibleSlotIds()` (`DiscoverPanel.tsx:2270`) filters the shared predicate's result by
+`!armedSlotIds.has(s.id)`. Two questions, two places, and radio's own behaviour with performance
+mode off is bit-identical.
+
+One free consequence of that same fix, worth naming: **a seeded slot is eligible now**, so it
+gets a deck card like any other. Performance mode over a loop Elling already built works from the
+first tap.
 
 **And the other posture, because a set is not a bed: `hold`.** One chip row with two values.
 
@@ -516,7 +537,9 @@ security surface and a different device.
 
 **Performance mode is session-only.** Nothing about it is persisted: slot ids are minted fresh each
 session (`crypto.randomUUID`), so a stored arm or a stored deck would name a slot that does not
-exist. The same argument the other spec makes for the hook. `DiscoverSettings` is not touched.
+exist. The same argument the other spec makes for the hook. **`DiscoverSettings` is not touched**
+— which also means this feature does not participate in the `radioPace` → nested `radio` object
+migration the radio-controls plan is performing on that file, and cannot collide with it.
 
 ---
 
