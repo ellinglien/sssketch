@@ -226,6 +226,53 @@ describe('advanceRadioClock', () => {
   })
 })
 
+describe('advanceRadioClock on a grid', () => {
+  it('reproduces the old behaviour exactly when the grid IS the loop', () => {
+    // The safety property of the whole change: gridBars === loopBars must
+    // be byte-for-byte what shipped 2026-09-26.
+    const clock = { barsElapsed: 7.9, intervalBars: 6, lastPos: 7.9 }
+    const notYet = advanceRadioClock(clock, 7.95, 8, 8)
+    expect(notYet.due).toBe(false)
+    const atWrap = advanceRadioClock(clock, 0.05, 8, 8)
+    expect(atWrap.wrapped).toBe(true)
+    expect(atWrap.due).toBe(true)
+  })
+
+  it('commits at a sub-loop boundary once the interval has elapsed', () => {
+    // 8-bar loop, 2-bar grid, interval 3 bars: the old code would have
+    // waited for bar 8. This lands at bar 4.
+    const clock = { barsElapsed: 3.1, intervalBars: 3, lastPos: 3.9 }
+    const step = advanceRadioClock(clock, 4.02, 8, 2)
+    expect(step.wrapped).toBe(false)
+    expect(step.due).toBe(true)
+  })
+
+  it('does NOT commit at a grid boundary before the interval has elapsed', () => {
+    // The grid is a gate, not a trigger -- it can never make changes more
+    // frequent than the pace asked for.
+    const clock = { barsElapsed: 1.9, intervalBars: 6, lastPos: 3.9 }
+    const step = advanceRadioClock(clock, 4.02, 8, 2)
+    expect(step.due).toBe(false)
+  })
+
+  it('treats the wrap as a grid boundary, because 0 is always on the grid', () => {
+    const clock = { barsElapsed: 9, intervalBars: 3, lastPos: 7.9 }
+    const step = advanceRadioClock(clock, 0.02, 8, 3)
+    expect(step.wrapped).toBe(true)
+    expect(step.due).toBe(true)
+  })
+
+  it('does not fire twice inside one grid cell', () => {
+    const clock = { barsElapsed: 5, intervalBars: 3, lastPos: 4.1 }
+    expect(advanceRadioClock(clock, 4.5, 8, 2).due).toBe(false)
+  })
+
+  it('defaults the grid to the whole loop when it is not given', () => {
+    const clock = { barsElapsed: 9, intervalBars: 3, lastPos: 3.9 }
+    expect(advanceRadioClock(clock, 4.02, 8).due).toBe(false)
+  })
+})
+
 describe('pickRadioSlotId', () => {
   it('returns null when nothing is eligible', () => {
     expect(pickRadioSlotId([], null, () => 0)).toBeNull()

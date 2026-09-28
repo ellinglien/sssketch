@@ -151,25 +151,35 @@ export function createRadioClock(intervalBars: number, startPos = 0): RadioClock
 
 export interface RadioClockStep {
   clock: RadioClock
-  /** The loop restarted between the previous tick and this one. */
+  /** The loop restarted between the previous tick and this one. Still
+   * reported separately from `due` because gestures (drop-outs,
+   * transitions) are anchored to the loop top even when a CHANGE is not --
+   * see the 2026-09-28 spec's 0A.5. */
   wrapped: boolean
-  /** Commit a change NOW: the interval has elapsed AND we are at a loop
-   * boundary. Quantising to the wrap is deliberate (spec 2.2) -- a change
-   * dropped at bar 7 of an 8-bar loop is a splice; a change dropped at the
-   * wrap is a new section. The cost is that the effective interval is
-   * ceil(intervalBars / loopBars) * loopBars, which for a long loop and a
-   * short pace can collapse the pace's whole window onto one value. */
+  /** Commit a change NOW: the interval has elapsed AND we have just
+   * crossed a boundary on the change grid.
+   *
+   * Until 2026-09-28 this was `wrapped && ...`, i.e. the grid was always
+   * the whole loop, which made the effective interval
+   * ceil(intervalBars / loopBars) * loopBars -- usually a DOUBLING rather
+   * than a rounding, and the cause of "radio mode seems quite slow to me".
+   * The grid is a GATE, not a trigger: the interval still has to elapse
+   * first, so a finer grid can never make changes more frequent than the
+   * pace asked for. It only stops the pace being silently rounded up. */
   due: boolean
 }
 
 /** One position tick. `loopBars` is the preview loop's own length --
  * DiscoverPanel's `maxBarLength`, which is exactly what went to the engine
  * as loopLengthBars, so the wrap this spots and the wrap the engine
- * performed are the same event. */
+ * performed are the same event. `gridBars` is radioGridBars' answer for
+ * the slot that is about to change; passing loopBars reproduces the
+ * pre-2026-09-28 behaviour exactly. */
 export function advanceRadioClock(
   clock: RadioClock,
   pos: number,
-  loopBars: number
+  loopBars: number,
+  gridBars: number = loopBars
 ): RadioClockStep {
   if (!(loopBars > 0) || !Number.isFinite(pos)) {
     return { clock, wrapped: false, due: false }
@@ -179,10 +189,14 @@ export function advanceRadioClock(
   // the new one -- otherwise every wrap silently loses up to a full bar.
   const delta = wrapped ? loopBars - clock.lastPos + pos : pos - clock.lastPos
   const barsElapsed = clock.barsElapsed + Math.max(0, delta)
+  // A wrap is ALWAYS a boundary, because 0 is always on the grid. Between
+  // wraps, a boundary is crossed when the cell index goes up.
+  const step = gridBars > 0 ? gridBars : loopBars
+  const crossed = wrapped || Math.floor(pos / step) > Math.floor(clock.lastPos / step)
   return {
     clock: { ...clock, barsElapsed, lastPos: pos },
     wrapped,
-    due: wrapped && barsElapsed >= clock.intervalBars
+    due: crossed && barsElapsed >= clock.intervalBars
   }
 }
 
