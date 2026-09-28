@@ -55,13 +55,17 @@ export function jamAuthorshipIsKnown(jam: JamOwnership): boolean {
   return jam.unknownAuthorRiffCount === 0 && jam.ownRiffCount !== undefined
 }
 
-/** The jams to show when "only my jams" is on: the ones he has riffs in,
- * plus every jam the data cannot rule out. Deliberately errs towards
- * showing -- a filter that hides a jam he IS in is a filter he cannot
- * trust, and one that hides everything (which counting alone would do to
- * sssketch's own authorless warehouse) is worse than no filter at all. */
+/** What "only my jams" keeps: the jams he has riffs in, plus every jam
+ * the data cannot rule out. Deliberately errs towards showing -- a filter
+ * that hides a jam he IS in is a filter he cannot trust, and one that
+ * hides everything (which counting alone would do to sssketch's own
+ * authorless warehouse) is worse than no filter at all. */
+export function jamMightBeMine(jam: JamOwnership): boolean {
+  return jamIsMine(jam) || !jamAuthorshipIsKnown(jam)
+}
+
 export function filterToMyJams<T extends JamOwnership>(jams: T[]): T[] {
-  return jams.filter((jam) => jamIsMine(jam) || !jamAuthorshipIsKnown(jam))
+  return jams.filter(jamMightBeMine)
 }
 
 /** How many jams `filterToMyJams` would drop. Zero means the filter has

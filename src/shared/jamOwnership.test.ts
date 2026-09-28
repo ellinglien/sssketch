@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   jamIsMine,
+  jamMightBeMine,
   jamAuthorshipIsKnown,
   filterToMyJams,
   sortJamsByOwnRiffs,
@@ -48,6 +49,15 @@ describe('jamAuthorshipIsKnown', () => {
   it('is false when the jam carries no counts -- a live membership entry, or a list asked for without a username', () => {
     expect(jamAuthorshipIsKnown({})).toBe(false)
     expect(jamAuthorshipIsKnown({ ownRiffCount: 3 })).toBe(false)
+  })
+})
+
+describe('jamMightBeMine', () => {
+  it('is the per-jam rule filterToMyJams keeps on, exposed so a caller can exempt a jam from the filter without reimplementing it', () => {
+    expect(jamMightBeMine(known(1))).toBe(true)
+    expect(jamMightBeMine(unknown(5))).toBe(true)
+    expect(jamMightBeMine({})).toBe(true)
+    expect(jamMightBeMine(known(0))).toBe(false)
   })
 })
 

@@ -12,6 +12,7 @@ import {
   RIFF_LIBRARY_ROOT_NAMES,
   RIFF_LIBRARY_SCALE_NAMES
 } from '@shared/riffLibraryTypes'
+import { jamMightBeMine, sortJamsByOwnRiffs } from '@shared/jamOwnership'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
@@ -89,6 +90,48 @@ function loadStoredRiffLibraryUsername(): string {
     return RIFF_LIBRARY_USERNAME
   } catch {
     return RIFF_LIBRARY_USERNAME
+  }
+}
+
+/** The counterpart loadStoredRiffLibraryUsername never had: the comment
+ * above has always claimed this setting is "persisted to localStorage from
+ * here", and it never was -- only the one-time carry-forward above ever
+ * wrote the key, so editing the username lasted exactly one session. Found
+ * while making the jam sidebar count riffs against it, which is a setting
+ * that has to survive a relaunch to be worth anything. */
+function storeRiffLibraryUsername(username: string): void {
+  try {
+    localStorage.setItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY, username)
+  } catch (err) {
+    console.error('LibraryBrowser: failed to persist the riff library username:', err)
+  }
+}
+
+/** Whether a username was ever explicitly set on this machine, as opposed
+ * to falling back to RIFF_LIBRARY_USERNAME. Only an unset one gets adopted
+ * from the Endlesss session -- an explicit choice is never overwritten. */
+function hasStoredRiffLibraryUsername(): boolean {
+  try {
+    return localStorage.getItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY) !== null
+  } catch {
+    return false
+  }
+}
+
+// Whether the jam sidebar is narrowed to jams he has riffs in. Defaults ON
+// -- his real external archive holds 5,056 jams and he has played in 42 of
+// them, so an unnarrowed list is 99.2% other people's rooms. Safe as a
+// default only because jamMightBeMine (jamOwnership.ts) hides nothing it
+// cannot positively rule out, so a library that records no authorship at
+// all (sssketch's own) comes out exactly as it does today. Persisted, like
+// the username, since it is a per-person browsing habit.
+const ONLY_MY_JAMS_STORAGE_KEY = 'sssketch:onlyMyJams'
+
+function loadStoredOnlyMyJams(): boolean {
+  try {
+    return localStorage.getItem(ONLY_MY_JAMS_STORAGE_KEY) !== 'false'
+  } catch {
+    return true
   }
 }
 
@@ -360,10 +403,31 @@ export function LibraryBrowser({
   const [userNameFilter, setUserNameFilter] = useState('')
   const [onlyFullyCached, setOnlyFullyCached] = useState(false)
   // Which username "you" are, for ownerFraction (drives the ownership
-  // brightness coloring) and the "only mine" filter — editable and
-  // persisted per-machine (see loadStoredRiffLibraryUsername), not
+  // brightness coloring), the "only mine" riff filter and the jam
+  // sidebar's own ownership counts — editable and persisted per-machine
+  // (see loadStoredRiffLibraryUsername / storeRiffLibraryUsername), not
   // hardcoded, since other people testing this app aren't Elling.
-  const [riffLibraryUsername, setRiffLibraryUsername] = useState(loadStoredRiffLibraryUsername)
+  const [storedUsername, setStoredUsername] = useState(loadStoredRiffLibraryUsername)
+  // Whether a username was ever explicitly typed on this machine, read
+  // once at mount -- see riffLibraryUsername just below.
+  const [usernameIsExplicit, setUsernameIsExplicit] = useState(hasStoredRiffLibraryUsername)
+  /** Who "mine" is. The Endlesss session is the one place in the app that
+   * actually KNOWS -- it is the account whose jams are being listed -- so
+   * until somebody types a username, this follows it rather than sitting
+   * on RIFF_LIBRARY_USERNAME, a default named after one person and wrong
+   * for everybody else. Derived rather than copied into state on login,
+   * so there is no render where the jam counts are asked for under the
+   * wrong name. Typing in the username box makes the typed value stick
+   * for good: somebody browsing a LORE archive under a different handle
+   * from the account they logged in with keeps their choice. */
+  const riffLibraryUsername = useMemo(() => {
+    if (usernameIsExplicit) return storedUsername
+    if (authStatus.loggedIn && authStatus.username.trim() !== '') return authStatus.username.trim()
+    return storedUsername
+  }, [usernameIsExplicit, storedUsername, authStatus])
+  // Narrows the jam sidebar to jams he has riffs in -- see
+  // ONLY_MY_JAMS_STORAGE_KEY for why this starts on.
+  const [onlyMyJams, setOnlyMyJams] = useState(loadStoredOnlyMyJams)
   const [onlyContainsMe, setOnlyContainsMe] = useState(false)
   // <input type="date"> values (YYYY-MM-DD strings, or '' for unset) —
   // converted to unix-seconds boundaries (start/end of day) when building
@@ -468,14 +532,22 @@ export function LibraryBrowser({
   }, [available])
 
   useEffect(() => {
+    try {
+      localStorage.setItem(ONLY_MY_JAMS_STORAGE_KEY, String(onlyMyJams))
+    } catch (err) {
+      console.error('LibraryBrowser: failed to persist the only-my-jams setting:', err)
+    }
+  }, [onlyMyJams])
+
+  useEffect(() => {
     if (!available) return
     window.rifffApi
-      .riffLibraryListJams(jamFilter)
+      .riffLibraryListJams(jamFilter, riffLibraryUsername)
       .then(setSyncedJams)
       .catch((err) => {
         console.error('LibraryBrowser: riffLibraryListJams() failed:', err)
       })
-  }, [jamFilter, available])
+  }, [jamFilter, riffLibraryUsername, available])
 
   useEffect(() => {
     let cancelled = false
@@ -525,27 +597,58 @@ export function LibraryBrowser({
   }, [authStatus])
 
   // Union of both sources, deduplicated by jamCID -- syncedJams entries win
-  // on conflict (they carry a real lastRiffTime from the warehouse;
-  // membershipJams entries never do, per endlesssListJams' own contract).
+  // on conflict (they carry a real lastRiffTime from the warehouse, and the
+  // authorship counts everything below orders on; membershipJams entries
+  // never do, per endlesssListJams' own contract).
   const visibleJams = useMemo(() => {
     const byId = new Map<string, RiffLibraryJam>()
     for (const jam of membershipJams ?? []) byId.set(jam.jamCID, jam)
     for (const jam of syncedJams) byId.set(jam.jamCID, jam)
-    const merged = [...byId.values()]
-    merged.sort((a, b) => b.lastRiffTime - a.lastRiffTime)
+    // Most of his own riffs first, falling back to the recency order this
+    // list has always had -- see sortJamsByOwnRiffs (jamOwnership.ts).
+    const merged = sortJamsByOwnRiffs([...byId.values()])
     if (jamFilter.trim() === '') return merged
     const needle = jamFilter.trim().toLowerCase()
     return merged.filter((j) => j.name.toLowerCase().includes(needle))
   }, [syncedJams, membershipJams, jamFilter])
+
+  // The rooms the sidebar pins to the top, which "only my jams" must
+  // never hide whatever the counts say: the discovered room is built by
+  // this app and authored 'discovered', the shared feed is his by
+  // definition, a jam actively syncing has to stay watchable, and his own
+  // private jam is the one he auto-syncs on login.
+  const jamIsPinned = useCallback(
+    (jam: RiffLibraryJam): boolean =>
+      jam.jamCID === DISCOVERED_JAM_CID ||
+      jam.jamCID.startsWith('shared:') ||
+      jam.jamCID === ownJam?.jamCID ||
+      syncingKeys.has(syncKeyFor(jam.jamCID)),
+    [ownJam, syncingKeys]
+  )
+
+  // How many jams "only my jams" would actually hide. Zero means this
+  // library records no authorship the filter can act on, and the toggle
+  // is not offered at all rather than sitting there doing nothing.
+  const hideableJamCount = useMemo(
+    () => visibleJams.filter((jam) => !jamIsPinned(jam) && !jamMightBeMine(jam)).length,
+    [visibleJams, jamIsPinned]
+  )
 
   // Sidebar-only ordering -- pulls whichever jams are actively syncing to
   // the very top (so a background sync stays visible without hunting
   // through the list), then Shared Feed and the account's own private jam
   // (see ownJam) right after -- these two are the ones auto-synced below,
   // so they're also the two most likely to matter on any given visit.
-  // visibleJams itself (used elsewhere for name lookups) stays sorted by
-  // lastRiffTime, unaffected. Stable within each group.
+  // visibleJams itself (used elsewhere for name lookups) keeps its own
+  // most-of-his-riffs-then-recency order, unaffected, and is the list
+  // "only my jams" is narrowed from. Stable within each group.
   const sidebarJams = useMemo(() => {
+    // Narrowed here rather than in visibleJams, which is also what the
+    // detail pane looks the SELECTED jam's name up in -- hiding a jam
+    // from the sidebar must not blank out its own header.
+    const shown = onlyMyJams
+      ? visibleJams.filter((jam) => jamIsPinned(jam) || jamMightBeMine(jam))
+      : visibleJams
     // The discovered room goes above everything, including a jam that is
     // actively syncing -- it is the room he opens most, and it has no
     // lastRiffTime story worth sorting on.
@@ -553,14 +656,14 @@ export function LibraryBrowser({
     const syncing: RiffLibraryJam[] = []
     const pinned: RiffLibraryJam[] = []
     const rest: RiffLibraryJam[] = []
-    for (const jam of visibleJams) {
+    for (const jam of shown) {
       if (jam.jamCID === DISCOVERED_JAM_CID) discovered.push(jam)
       else if (syncingKeys.has(syncKeyFor(jam.jamCID))) syncing.push(jam)
       else if (jam.jamCID.startsWith('shared:') || jam.jamCID === ownJam?.jamCID) pinned.push(jam)
       else rest.push(jam)
     }
     return [...discovered, ...syncing, ...pinned, ...rest]
-  }, [visibleJams, syncingKeys, ownJam])
+  }, [visibleJams, onlyMyJams, jamIsPinned, syncingKeys, ownJam])
 
   // ---------------------------------------------------------------------
   // Sync status + trigger
@@ -660,7 +763,7 @@ export function LibraryBrowser({
       // selected -- without this, only the jam you happened to be looking
       // at when it finished ever lost its "(not synced)" suffix.
       window.rifffApi
-        .riffLibraryListJams(jamFilter)
+        .riffLibraryListJams(jamFilter, riffLibraryUsername)
         .then(setSyncedJams)
         .catch((err) => {
           console.error('LibraryBrowser: riffLibraryListJams() refresh failed:', err)
@@ -674,7 +777,7 @@ export function LibraryBrowser({
           console.error('LibraryBrowser: riffLibrarySyncStatus() failed:', err)
         })
     },
-    [jamFilter]
+    [jamFilter, riffLibraryUsername]
   )
 
   // Core sync trigger, decoupled from selection -- shared by handleStartSync
@@ -839,7 +942,7 @@ export function LibraryBrowser({
         .riffLibraryRemoveJamSync(jamCID, deleteFiles)
         .then(() => {
           window.rifffApi
-            .riffLibraryListJams(jamFilter)
+            .riffLibraryListJams(jamFilter, riffLibraryUsername)
             .then(setSyncedJams)
             .catch((err) => {
               console.error('LibraryBrowser: riffLibraryListJams() refresh failed:', err)
@@ -861,7 +964,7 @@ export function LibraryBrowser({
           alert(`Couldn't remove "${jamName}" from sync — see the console for details.`)
         })
     },
-    [syncingKeys, jamFilter, selectedJamCID]
+    [syncingKeys, jamFilter, riffLibraryUsername, selectedJamCID]
   )
 
   // ---------------------------------------------------------------------
@@ -1627,6 +1730,36 @@ export function LibraryBrowser({
                       boxSizing: 'border-box'
                     }}
                   />
+                  {/* Only offered when it would do something. A library
+                      that records no authorship (sssketch's own sync
+                      writes no per-riff author for a private jam) has
+                      nothing this can narrow, and a checkbox that visibly
+                      changes nothing reads as broken. */}
+                  {hideableJamCount > 0 && (
+                    <label
+                      title="jams you played"
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        padding: '4px 6px',
+                        fontSize: 10,
+                        color: 'var(--ra-text-2)'
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={onlyMyJams}
+                        onChange={(e) => setOnlyMyJams(e.target.checked)}
+                      />
+                      only my jams
+                      {onlyMyJams && (
+                        <span style={{ color: 'var(--ra-text-3)' }}>
+                          ({hideableJamCount} hidden)
+                        </span>
+                      )}
+                    </label>
+                  )}
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <div style={{ display: 'flex', gap: 4 }}>
                       <input
@@ -1739,11 +1872,29 @@ export function LibraryBrowser({
                         }}
                       >
                         {isJamSyncing && <LoadingLoader size={10} />}
-                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                        <span
+                          style={{
+                            overflow: 'hidden',
+                            textOverflow: 'ellipsis',
+                            flex: 1,
+                            minWidth: 0
+                          }}
+                        >
                           {jam.name}
                           {isJamSyncing &&
                             ` (syncing… ${(syncBaseCountByKey[jamKey] ?? 0) + (jamProgress?.done ?? 0)})`}
                         </span>
+                        {/* What the list is now sorted by, said out loud
+                            -- otherwise the order looks arbitrary. Only
+                            on jams the archive can actually attribute. */}
+                        {(jam.ownRiffCount ?? 0) > 0 && (
+                          <span
+                            title="your rifffs"
+                            style={{ fontSize: 9, color: 'var(--ra-text-3)', flexShrink: 0 }}
+                          >
+                            {jam.ownRiffCount}
+                          </span>
+                        )}
                       </button>
                     )
                   })}
@@ -2001,7 +2152,21 @@ export function LibraryBrowser({
                         <input
                           type="text"
                           value={riffLibraryUsername}
-                          onChange={(e) => setRiffLibraryUsername(e.target.value)}
+                          onChange={(e) => {
+                            setStoredUsername(e.target.value)
+                            setUsernameIsExplicit(true)
+                            // Persisted on the edit itself, not from an
+                            // effect -- an effect would write the default
+                            // on first mount, which would both defeat the
+                            // legacy-key carry-forward and pin a brand-new
+                            // install to a username nobody chose. This is
+                            // also the writer the setting never had: the
+                            // comment on loadStoredRiffLibraryUsername has
+                            // always claimed it persisted, and only the
+                            // one-time carry-forward ever wrote the key,
+                            // so an edit used to last one session.
+                            storeRiffLibraryUsername(e.target.value)
+                          }}
                           placeholder="your username"
                           title="your username"
                           style={{
