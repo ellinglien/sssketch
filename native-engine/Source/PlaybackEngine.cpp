@@ -69,6 +69,19 @@ namespace sssketch
         return secPerBarFor(snap->project.bpm);
     }
 
+    bool PlaybackEngine::preloadStem(const juce::String& path, double durationSec)
+    {
+        // An empty path would reach juce::File's own constructor and assert
+        // in a debug build; it is also never something worth a disk probe.
+        if (path.isEmpty())
+            return false;
+        // Deliberately the SAME call, with the same durationSec meaning, that
+        // setProject makes below -- if these two ever diverge the preload
+        // warms a differently-blended entry than playback wants, and the
+        // whole point is lost.
+        return bufferCache.load(path, durationSec);
+    }
+
     void PlaybackEngine::setProject(const EngineProject& project)
     {
         auto next = std::make_shared<ProjectSnapshot>();

@@ -38,6 +38,36 @@ namespace sssketch
          * see published's own doc comment for why shared_ptr replaced it. */
         void setProject(const EngineProject& project);
 
+        /** Decodes one stem into the shared StemBufferCache ahead of the
+         * setProject() that will eventually name it -- the ONLY thing this
+         * does, deliberately: exactly the bufferCache.load(path,
+         * durationSec) call setProject already makes per stem, just earlier,
+         * and nothing else. No snapshot is republished, no project state is
+         * touched, nothing reaches the audio thread.
+         *
+         * Why it exists (2026-09-28): Discover radio's own prefetch already
+         * warmed the download and the rubberband stretch a whole interval
+         * before a change lands, and the change STILL audibly arrived late.
+         * The last cold thing was this cache -- the engine had no way to
+         * hear about a stem before being handed a whole project containing
+         * it, so the read/decode/loop-sew of the incoming file happened at
+         * the instant the change committed, on the message thread, inside
+         * setProject.
+         *
+         * Message thread only, same as setProject -- StemBufferCache is
+         * explicitly not safe for concurrent load()s (see its own doc
+         * comment), and IpcConnection delivers every message on that one
+         * thread, so preload-stem and load-project can never overlap.
+         *
+         * Returns whatever StemBufferCache::load returned: true if the stem
+         * is now cached (including the already-cached case, which is a
+         * cheap map lookup and no I/O at all), false if the path was empty,
+         * missing or undecodable. A false is a normal, silent outcome, not
+         * an error to report -- it simply leaves things exactly as they
+         * were before this method existed, with setProject paying the read
+         * later or renderBlock skipping the stem. */
+        bool preloadStem(const juce::String& path, double durationSec);
+
         /** Renders numSamples of stereo output starting at absolute transport
          * position positionBars, into outL/outR (each numSamples long, must be
          * pre-zeroed by the caller — this function adds into them).

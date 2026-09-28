@@ -1064,6 +1064,94 @@ namespace sssketch
                 trimFixture.deleteFile();
             }
 
+            // ---- preload-stem (PlaybackEngine::preloadStem) ----
+            // See PlaybackEngine.h's own doc comment for why this exists:
+            // radio's prefetch warmed everything EXCEPT the engine's own
+            // decoded buffer, so the read/decode still happened at the
+            // instant a change committed.
+
+            beginTest("preloadStem warms the cache, so the setProject that later names the stem needs no disk read");
+            {
+                auto preloadFixture = writeFixtureWav("sssketch_preload_fixture.wav", 0.5f, 44100);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+
+                expect(engine.preloadStem(preloadFixture.getFullPathName(), 4.0));
+
+                // Deleted out from under the engine BEFORE setProject ever
+                // sees it -- the same trick StemBufferCacheTests uses for
+                // its own re-load test, and the only way to prove the
+                // decode really happened at preload time rather than at
+                // commit time. If preloadStem did nothing, setProject's own
+                // load() would now fail and this would render silence.
+                preloadFixture.deleteFile();
+
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = preloadFixture.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+                engine.setProject(project);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                // Index 200 for the same reason the "renders a placed stem"
+                // test above picks it: past FadeGain's always-on ~3ms
+                // anti-click ramp.
+                expectWithinAbsoluteError(l[200], 0.5f, 0.01f);
+                expectWithinAbsoluteError(r[200], 0.5f, 0.01f);
+            }
+
+            beginTest("preloading the same stem again is a cheap no-op, not a second read");
+            {
+                auto twiceFixture = writeFixtureWav("sssketch_preload_twice_fixture.wav", 0.25f, 4410);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                expect(engine.preloadStem(twiceFixture.getFullPathName(), 0.1));
+
+                // Radio warms the same stem repeatedly across a session, so
+                // the second call must not touch the disk at all -- proven
+                // by deleting the file and expecting success anyway.
+                twiceFixture.deleteFile();
+                expect(engine.preloadStem(twiceFixture.getFullPathName(), 0.1));
+                expect(cache.get(twiceFixture.getFullPathName()) != nullptr);
+            }
+
+            beginTest("preloadStem degrades silently for a missing or empty path");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+
+                // Neither throws nor caches anything -- a preload is a hint,
+                // and a stem that has not finished downloading (or was
+                // deleted upstream) must cost exactly what it costs today.
+                expect(!engine.preloadStem("/no/such/preloaded/stem.wav", 4.0));
+                expect(!engine.preloadStem("", 4.0));
+                expect(cache.get("/no/such/preloaded/stem.wav") == nullptr);
+
+                // And the engine is still perfectly usable afterwards.
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                engine.setProject(project);
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                for (float s : l) expectEquals(s, 0.0f);
+            }
+
             beginTest("concurrent setProject() and renderBlock() calls do not crash");
             {
                 // Regression test for the PlaybackEngine::currentProject/

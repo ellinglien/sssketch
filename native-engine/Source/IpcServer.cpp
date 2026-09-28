@@ -702,6 +702,31 @@ namespace sssketch
             obj->setProperty("payload", juce::var(payloadObj.get()));
             sendJson(juce::var(obj.get()));
         }
+        else if (type == "preload-stem")
+        {
+            // Fire-and-forget, no reply at all -- the same shape as
+            // set-metronome just below, and deliberately so: the caller
+            // (Discover radio's armRadioPick, a whole change-interval before
+            // the stem is actually needed) has nothing useful to do with a
+            // success or a failure. A failure here costs exactly what today
+            // costs, since load-project still loads every stem itself.
+            if (!payload.isObject())
+                return;
+            const auto path = payload.getProperty("path", "").toString();
+            // -1 is this wire format's existing "no usable value" sentinel
+            // for an optional number (see set-live-param above, and
+            // EngineStem::startBarOverride/trimEndSec) -- and is also
+            // exactly what StemBufferCache::load already treats as "fall
+            // back to the decoded buffer's own length" for the loop-sewing
+            // blend point. Passing a duration that does NOT match the one
+            // load-project will later pass for the same file would warm an
+            // entry blended at a different point, which the later
+            // setProject would then happily reuse, so the renderer is
+            // responsible for sending the resolved (post-stretch) stem's
+            // own duration here -- see PlaybackEngine::preloadStem.
+            const double durationSec = (double) payload.getProperty("durationSec", -1.0);
+            engine.preloadStem(path, durationSec);
+        }
         else if (type == "set-metronome")
         {
             const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);
