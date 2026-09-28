@@ -35,27 +35,41 @@ Three reasons, in order of weight:
    by him, this week — it is only which one to build so he can stop depending on someone
    else's. That is an unusually strong position to be recommending from.
 3. **Among gateway-exiting paths, a tunnel is the only one that costs nothing to run, nothing
-   to operate, and almost nothing to build**, because it reuses the existing HTTP server and
-   the 2282-line page verbatim. WebRTC, a relay, and a native app all cost substantially more
-   and, on his specific network, arrive at the same place.
+   to operate, and almost nothing to build** — it is the only option here that gets a working
+   connection out of the **existing** HTTP server and the existing 2282-line page, with no
+   transport rewrite. WebRTC, a relay and a native app all cost substantially more and, on his
+   specific network, arrive at the same place.
 
-**Second choice, and its trigger:** own the far end himself. Two shapes, and the research
+**This is a choice made with open eyes, not an endorsement.** The research turned up five real
+objections to Cloudflare quick tunnels — the terms say testing-only, their CDN terms reserve
+the right to limit exactly the kind of payload this app serves, the hostnames are widely
+DNS-blocked because of malware abuse, they force QUIC, and bundling silently binds users to
+Cloudflare's terms. All five are set out below. The recommendation survives them because the
+LAN path stays the default, the heavy payload stays off the tunnel, and the provider sits
+behind a seam — not because the objections are small.
+
+**Second choice, and its triggers:** own the far end himself. Two shapes, and the research
 changed which one I would pick. The obvious one is the Gradio/Hugging Face model — an **FRP
-server on a €5-a-month VPS** — which needs no page changes at all but makes him a sysadmin
-forever. The better one, if it ever comes to this, is a **WebSocket relay on Cloudflare Workers
-+ Durable Objects**: Durable Objects have had a free tier since April 2025, and Cloudflare
-charges **nothing for bandwidth**, which is the only cost driver this workload has. That one can
-plausibly run at zero with no box to patch — but it is the single option that requires
-rewriting the phone page. Switch to either if Cloudflare withdraws quick tunnels, if the
-in-flight limit bites, or if he decides he is unwilling to route other people's control traffic
-through a third party. The point of the seam in the recommendation is that the first switch
-should be a day, not a rewrite.
+server on a €5–6-a-month VPS** — which needs no page changes at all but makes him a sysadmin
+forever. The better one, if it comes to this, is a **WebSocket relay on Cloudflare Workers +
+Durable Objects**: DOs have had a free tier since April 2025 and Cloudflare charges **nothing
+for bandwidth**, which is the only real cost driver here, so it can plausibly run at zero with
+no box to patch — at the price of being the one option that requires rewriting the phone page's
+transport.
 
-**What I am explicitly recommending against: WebRTC.** Reasoning in full below, but the short
-version is that on the network this is being built for, WebRTC's direct path is blocked and it
-degrades to TURN — which is a paid relay — while still requiring a signalling server, a CSP
-change, and several hundred lines that a tunnel does not need. It buys its keep when two peers
-are on *different* networks behind *different* NATs. Both of ours are on the same hostile LAN.
+Switch when any of these happen: quick tunnels are withdrawn or throttled; enough users report
+that `trycloudflare.com` does not resolve on their network; Cloudflare acts on the
+large-files clause; or he decides he is not willing to route other people's traffic through a
+third party on terms they never saw. The seam exists so the first switch is a day, not a
+rewrite.
+
+**What I am explicitly recommending against: WebRTC.** On the network this is being built for,
+ICE falls all the way to TURN with nothing in between — and TURN is a relay. It still needs a
+signalling server, so it does not avoid running a service; it needs the CSP opened; it adds a
+new macOS permission prompt; and the TURN credential cannot be shipped inside a GPL app, so it
+needs a credential-minting service too. You would build all of that to arrive at a relay. Its
+real value is offloading expensive media bandwidth between peers on *different* networks behind
+*different* NATs — and both of ours are on the same hostile LAN, with no expensive media.
 
 **Honest answer to "does this fix his network":** yes. A tunnel is an outbound TCP connection
 from the Mac to Cloudflare — the same shape of traffic as any web request the Mac already
@@ -63,11 +77,23 @@ makes, and the same shape Tailscale uses today. Client isolation does not touch 
 then reaches the Mac from the internet side. This is a real fix for his case, not merely a
 better error message.
 
-**Honest answer to what it costs him elsewhere:** the phone's own-speaker loop playback will be
-noticeably slower over the tunnel. `src/main/remoteLoopRenderer.ts:14` says a loop is up to
-**11.3 MB of wav**. That is instant on a LAN and three to nine seconds over a home upstream
-link. The tunnel path should either serve compressed audio or say plainly that phone playback
-is a LAN feature.
+**Honest answer to what it costs him elsewhere, and this is not small:**
+
+- **Every interaction gets 100–200 ms slower.** Measured today: a warm request through
+  trycloudflare round-trips in 106–200 ms against 0.18–0.50 ms on localhost. For tap-to-roll
+  that is the difference between instant and visibly laggy.
+- **The phone's own-speaker loop playback should not go through it at all.**
+  `src/main/remoteLoopRenderer.ts:14` puts a loop at up to **11.3 MB of wav** — seconds over a
+  home upstream link, and squarely inside the payload Cloudflare's CDN terms reserve the right
+  to limit. Off-LAN, the phone should be a controller only, and the UI should say so.
+- **It will not work for everyone.** `*.trycloudflare.com` is blocked by a meaningful number of
+  DNS filters because of malware abuse, and quick tunnels force QUIC, so a network blocking
+  outbound UDP fails too.
+
+**And one thing it fixes that has nothing to do with connectivity:** a tunnel makes the phone
+page a **secure context** for the first time, which is the only way to get `Screen Wake Lock` —
+i.e. the only way to stop the phone screen going to sleep mid-session. On `http://192.168.x.x`
+that API does not exist.
 
 ---
 
@@ -371,12 +397,32 @@ sources:
   port produces **no SYN** and a generic failure. **7373 is not on that list** — but if the port
   ever changes, check it against the list first.
 
-One concrete consequence of plain HTTP that is *already* true and not speculative: an
-`http://192.168.x.x` origin is **not a secure context**, so `crypto.subtle` is `undefined` on
-that page ([MDN](https://developer.mozilla.org/en-US/docs/Web/API/Crypto/subtle),
-[W3C Secure Contexts](https://www.w3.org/TR/secure-contexts/)). Any future plan that wants the
-phone page to do real cryptography — including end-to-end encrypting itself against a relay —
-cannot do it on the LAN path as built.
+### 3a. The secure-context ceiling — already true, and bigger than it looks
+
+An `http://192.168.x.x` origin is **not a secure context**
+([W3C](https://www.w3.org/TR/secure-contexts/)). This is not speculative and it is not only a
+crypto problem. On the LAN page as built today:
+
+**Works:** HTML/CSS/JS, `fetch`, **same-origin `ws://` WebSocket** (no mixed content, because
+the page is not HTTPS either), `crypto.getRandomValues()`, `crypto.randomUUID()`,
+localStorage/IndexedDB, Canvas, Web Audio, touch, rAF.
+
+**Does not work, and cannot be made to:**
+
+- **`crypto.subtle` is `undefined`** ([MDN](https://developer.mozilla.org/en-US/docs/Web/API/Crypto/subtle))
+  — so no in-page HMAC, no AES, and no browser-side PAKE. Any plan to end-to-end encrypt the
+  phone against a relay dies here.
+- **Screen Wake Lock is unavailable.** **The phone's screen will sleep mid-session and the page
+  cannot stop it.** For a thing you hold on a sofa and tap at intervals, that is a real product
+  wound, and it is caused by the transport, not by the design.
+- **`getUserMedia` is unavailable**, so the page can never scan a QR code itself — pairing has
+  to go through the Camera app.
+- Service workers, Notifications, Async Clipboard, WebAuthn, Web MIDI, File System Access: all
+  out.
+
+**This is a genuine, unglamorous argument in favour of the tunnel**, separate from
+connectivity: it is the only option on this page that makes the phone page a secure context,
+and the wake-lock fix alone is worth something to a screen you look at from across a room.
 
 ### 4. WebRTC with STUN, TURN as fallback — recommended against
 
@@ -411,17 +457,32 @@ is not a hedge; it is the documented behaviour of the filter. Then:
   somehow, and on this network they cannot go over the LAN. So a WebRTC design requires a
   developer-run (or vendor) service *anyway* — it does not avoid the server question, it adds
   ICE on top of it.
-- **TURN is not free.** Cloudflare's standalone TURN is **$0.05 per real-time GB outbound**,
-  free only when paired with their Realtime SFU
-  ([docs](https://developers.cloudflare.com/realtime/turn/)). At up to 11.3 MB a loop that is
-  about **90 loops per gigabyte, so five cents per ninety loops** — trivial in absolute terms,
-  but it is a metered vendor account with a card attached, forever, attached to a free app, and
-  it scales with other people's use rather than his. Public free TURN servers exist and should
-  not be used: unowned, unaccountable, frequently dead, and they see every byte.
+- **TURN is cheap but you cannot ship the credential — and that is the real blocker.** Correct
+  2026 pricing: Cloudflare Realtime TURN is **$0.05/GB with the first 1,000 GB per month free**
+  ([pricing](https://developers.cloudflare.com/realtime/pricing/)); Twilio is $0.40–0.80/GB;
+  Metered bills ingress *and* egress. Money is not the problem. The problem is that Cloudflare
+  says outright, *"You should keep your TURN key on the server side (don't share it with the
+  browser/app)"*
+  ([docs](https://developers.cloudflare.com/realtime/turn/generate-credentials/)) — and **in a
+  GPL-3 app any embedded credential is a published credential.** So you must operate a public
+  credential-minting service. At which point you already run the server that could simply have
+  relayed the bytes, and WebRTC has bought you nothing.
+  Public free TURN is not an escape: **Metered's Open Relay withdrew its anonymous hardcoded
+  endpoint and now requires an account and API key**
+  ([openrelay](https://www.metered.ca/tools/openrelay/)), and apps that had baked those
+  credentials in silently broke — other people's shipped software, broken by someone else's
+  policy change.
 - **It needs the CSP opened.** `connect-src 'self'` governs ICE server URLs and the signalling
   socket. The hard constraint in the design brief would have to be relaxed.
-- **The Electron side is the easy part** — Electron is Chromium and has WebRTC natively, so no
-  native module is required. That is the one genuine point in its favour.
+- **It adds a new macOS permission prompt.** On macOS 26, constructing *any* `RTCPeerConnection`
+  triggers the OS Local Network prompt ([w3c/webrtc-pc#3109](https://github.com/w3c/webrtc-pc/issues/3109)).
+  The app does not have that prompt today.
+- **The Electron side is the easy part** — Electron is Chromium, so a hidden `BrowserWindow`
+  can be the peer with no native module, no ABI rebuilds and no bundle growth. If a non-browser
+  peer were wanted, `werift` (MIT, pure TypeScript, maintained through 2026) or
+  `node-datachannel` (MPL-2.0, N-API so no `electron-rebuild`) are both GPL-3-compatible and
+  alive; `wrtc`/`node-webrtc` is abandoned. That is the one genuine point in WebRTC's favour,
+  and it is not enough.
 
 **Conclusion:** WebRTC is the right tool when two peers are on different networks behind
 different NATs and you want to avoid paying for the media path. Here they are on the same
@@ -461,31 +522,93 @@ Cloudflare's own documentation says, verbatim
 > proxied at any point in time. Currently, this limit is 200 in-flight requests."
 > "Quick Tunnels do not support Server-Sent Events (SSE)."
 
-Read against this feature: the 200 in-flight cap is irrelevant for one phone. SSE is not used —
-the page polls. The SLA statement is the one that matters, and it is a genuine risk: this is a
-free service the vendor reserves the right to change or withdraw, and a shipped feature would
-break the day they do.
+Read against this feature: the 200 in-flight cap is irrelevant for one phone, and SSE is not
+used — the page polls. But the research turned up **five further objections that are more
+concrete than the SLA line**, and they should be read before anyone commits:
 
-The mitigations are architectural, not contractual. **Keep the LAN path as the default and the
-tunnel as an explicit, opt-in "beyond this network" mode**, so a tunnel outage degrades the app
-to where it is today rather than breaking it. **Put the provider behind one function** —
-`startTunnel(port): Promise<{url, stop}>` — so swapping to a self-hosted server is a day's work.
+1. **The CDN terms describe this app's exact payload.** Cloudflare's Service-Specific Terms
+   reserve the right to *"disable or limit your access … if you use … the CDN without such
+   Paid Services to serve **video or a disproportionate percentage of pictures, audio files, or
+   other large files**"*
+   ([terms](https://www.cloudflare.com/service-specific-terms-application-services/)). Transport
+   commands are fine. **Stem waveform PNGs and 11.3 MB wavs are literally "pictures" and "audio
+   files."** This has a clean mitigation, below.
+2. **The hostnames are widely blocked, and indexed.** `trycloudflare.com` has been heavily
+   abused for malware delivery since 2024
+   ([Proofpoint](https://www.proofpoint.com/us/blog/threat-insight/threat-actor-abuses-cloudflare-tunnels-deliver-rats)),
+   so plenty of corporate, school and family DNS filters block `*.trycloudflare.com` outright —
+   the user's phone may simply fail to resolve it. And quick-tunnel URLs
+   [turn up in Google's index](https://www.it-connect.tech/trycloudflare-quick-tunnels-are-being-indexed-on-google/),
+   so "nobody can guess the URL" is not a security model.
+3. **It is 100–200 ms slower on every single interaction.** Measured today: localhost with
+   keep-alive is 0.18–0.50 ms; a warm trycloudflare GET is 106–200 ms; a WebSocket echo is
+   95–198 ms. **That is a 500–1000× increase on a three-foot hop**, routed through Montreal or
+   Ashburn. For a tap-to-roll interaction it is the difference between instant and visibly
+   laggy. Also measured: a quick-tunnel WebSocket **died silently after 130 s idle** with no
+   close frame, so anything long-lived needs a heartbeat under 100 s.
+4. **Quick tunnels force QUIC and do not honour protocol fallback**
+   ([cloudflared#1609](https://github.com/cloudflare/cloudflared/issues/1609), still open). On a
+   network that blocks outbound UDP, it just fails — and restrictive networks are precisely the
+   ones with client isolation.
+5. **Bundling it silently binds the user to a third-party contract.** Cloudflare's own text:
+   *"Your installation of cloudflared software constitutes a symbol of your signature indicating
+   that you accept the terms of the Cloudflare License, Terms and Privacy Policy."* For a GPL-3
+   app that ships it pre-installed, that is worth naming in the UI rather than glossing.
+
+One piece of good news in the same measurement: **cloudflared ships signed.** The 2026.9.3
+arm64 binary is 37.6 MiB, signed with a Developer ID (Cloudflare Inc., 68WVV388M8), hardened
+runtime and secure timestamp — so it drops into the existing `signIgnore` arrangement without a
+notarization fight. (`bore`, by contrast, is ad-hoc-signed only and would need re-signing.)
+
+**The mitigations are architectural, not contractual, and there are three:**
+
+- **Keep the LAN path as the default and the tunnel as an explicit, opt-in "beyond this network"
+  mode**, so a tunnel outage degrades the app to where it is today rather than breaking it.
+- **Do not send the heavy payload through the tunnel.** Off-LAN, the phone should be a
+  controller only — no 11.3 MB wavs, and either no stem PNGs or much smaller ones. This
+  sidesteps objection 1 entirely, removes most of objection 3, and it is consistent with the
+  product's own premise that the audio stays on the Mac. It is a real feature loss and should be
+  stated in the UI, not hidden.
+- **Put the provider behind one function** — `startTunnel(port): Promise<{url, stop}>` — so
+  swapping to a self-hosted server is a day's work.
 
 **Others considered:**
 
-- **ngrok is disqualified on numbers, not on taste.** The 2026 free plan requires an account and
-  authtoken, and allows **20,000 HTTP requests per month** with an interstitial page on every
-  HTTP endpoint ([pricing](https://ngrok.com/pricing)). This page polls every 700 ms — about
-  5,100 requests an hour — so a free ngrok account is exhausted in under four hours of use, and
-  every end user would need their own account. (The ngrok agent's own licence text was not
-  verified; it does not matter given the above.)
-- **`localhost.run` and Pinggy** are small operations with the same withdrawal risk as
-  Cloudflare and none of the scale.
+- **ngrok is disqualified twice over.** On arithmetic: the 2026 free plan allows **20,000 HTTP
+  requests per month**, three endpoints, and an interstitial click-through on all browser
+  traffic ([limits](https://ngrok.com/docs/pricing-limits/free-plan-limits/)). This page polls
+  every 700 ms — about 5,100 requests an hour — so a free account is spent in **under four
+  hours, per month, total**. And on liability: their ToS permits redistribution only under
+  *your* account, with you *"solely responsible for all use … whether or not authorized"*, and
+  on the free tier ngrok *"may include the IP address of the ngrok Agent in the hostnames,"*
+  acknowledging that this makes you a **GDPR controller** for that data. Bundling it would make
+  Elling the controller for every EU user's home IP, published in the URL. (The v1 agent was
+  Apache-licensed; v2+ is proprietary.)
+- **Pinggy** has a near-identical ToS clause and free hostnames that literally contain the
+  user's IP (`abcd-12-34-56-78.run.pinggy-free.link`). Same problem.
+- **`localhost.run`** is genuinely interesting — zero bundled binary, it just uses the system
+  `ssh` — but **no Terms of Service exists anywhere on the site.** Silence is not permission.
+- **`bore.pub` has no TLS at all** (verified: HTTPS is refused). Plain `http://` means no secure
+  context, cleartext end to end, and a "Not Secure" label. Its own README says the secret *"is
+  only used for the initial handshake, and no further traffic is encrypted by default."*
+- **`localtunnel` is dead** — server code last committed in 2019, 167 open issues, an outage
+  filed 2026-09-17 with no maintainer response. Its interstitial asks the visitor to type in the
+  tunnel host's **public IP address** as a password.
 - **A naive `ssh -R`** to a host of his own is tempting because macOS already ships `ssh` and
   nothing would need bundling — but Gradio moved *off* SSH tunnelling to FRP partly for security
   reasons
   ([GHSA-3x5j-9vwr-8rr5](https://github.com/gradio-app/gradio/security/advisories/GHSA-3x5j-9vwr-8rr5)),
   which is worth reading before repeating it.
+
+**And the pattern across ten years of free tunnels, which is the honest reason for the seam:**
+ngrok went from Apache-licensed to proprietary, then made random URLs a paid feature, added an
+interstitial, and cut quotas. localtunnel's server has been frozen for seven years. **Serveo**
+repeatedly vanished, its operator publicly blaming abuse — *"more subject to be used by any kind
+of indelicate activities; e.g., phishing"* — and now monetises with an interstitial.
+**PageKite**'s pricing page says it is *"temporarily unable to process new subscriptions"* and
+its blog has been silent since October 2021. **telebit** is simply gone. Every free tunnel
+either monetises, adds an interstitial, adds an account requirement, or dies — **and when it
+shifts, it shifts for every user at once, in a version already shipped.**
 
 **One thing to note about runtime download versus bundling:** Gradio downloads the FRP binary on
 first use. On Apple Silicon every executable must be at least ad-hoc signed to run at all, so a
@@ -532,15 +655,65 @@ through a relay. That is the 2282-line string and its 700 ms polling loop. Again
 server to patch, no renewal, no Saturday outage that is his to fix, and plausibly a bill of
 zero.
 
-Syncthing solves the operator problem with a donated community relay pool; Hugging Face solves
-it by being a company. Neither is available here — but Shape B is the closest thing to solving
-it by not having a server at all.
+**And the operator problem is not the money — this is the part to take seriously.** Four
+precedents, all from unpaid or thinly-paid maintainers:
 
-**Privacy:** state it plainly in the UI and the README, the way Syncthing does — the relay sees
-your IP and how much traffic you moved, and with end-to-end encryption it does not see the
-content. Note the catch found above: **the phone page cannot do real end-to-end encryption on
-the LAN path**, because `http://192.168.x.x` is not a secure context and `crypto.subtle` is
-unavailable. Over a tunnel or relay the page is HTTPS and it can.
+- **croc** is the five-years-from-now scenario, and it is happening right now.
+  [Issue #1269, opened 2026-08-19](https://github.com/schollz/croc/issues/1269): roughly
+  **400,000 monthly users and over 40 TB/month**, with the maintainer publicly asking for
+  sponsorship and for volunteers to run relays after *"almost 10 years of hosting public
+  relay."* The bandwidth bill is about $25. It is the attention that ran out.
+- **Jitsi** proves money does not buy the way out. 8x8 funds meet.jit.si outright and it
+  **still had to stop allowing anonymous room creation in August 2023** — not for cost, for
+  abuse: *"an increase in the number of reports we received about some people using our service
+  in ways that we cannot tolerate."*
+- **Syncthing federates the burden instead of carrying it.** The pool page states plainly that
+  *"the relays listed on this page are not managed or vetted by the Syncthing project"*; the
+  relay server auto-joins the public pool on startup, operators self-cap their own bandwidth,
+  and the project hosts a directory and pays for nothing. Over a thousand relays, several
+  hundred distinct operators.
+- **magic-wormhole writes the limit into the documentation**: the service *"will be freely
+  available until volume or abuse makes it infeasible to support,"* and the transit relay is
+  *"operated by the author."* One of its listed reasons to self-host is *"you are a
+  kind-hearted server admin who wishes to support the project by paying the bandwidth costs
+  incurred by your friends."*
+- And **Snapdrop's ending is worth knowing**: the GPL-3 code stayed free, but the domain and
+  the public instance were the asset, and they were sold to LimeWire. PairDrop forked and its
+  maintainer now pays personally.
+
+The projects with no relay problem — LocalSend, KDE Connect — are the ones where LAN-only is
+the product rather than a limitation. **The pattern is that cost is rarely what breaks it;
+abuse handling and sustained operational attention are.** Shape B is the closest available
+thing to solving that by not having a server to attend to. It does not remove the abuse or
+privacy exposure, only the sysadmin part.
+
+**If either shape ships, borrow magic-wormhole's honesty and write the limit down in advance**,
+in the app, before anyone depends on it: this is a free service one person pays for, run with
+no guarantees, and it may be limited or shut down. And ship self-hosting as one flag.
+
+**Privacy.** IP addresses are personal data under GDPR
+([Recital 30](https://gdpr-info.eu/recitals/no-30/), and the CJEU's *Breyer* judgment), there
+will be EU users, and Article 3(2) has no commerciality carve-out — so Article 13 transparency
+applies even to a free GPL app. Canadian PIPEDA probably does *not*, because it covers
+collection *"in the course of a commercial activity"*, but taking donations or selling builds
+moves that. Not legal advice.
+
+**The standard mitigation is to make the relay blind**: derive a session key from the pairing
+code the user already types, encrypt every message client-side, and let the relay be a dumb
+byte pipe on an opaque rendezvous ID. That is what magic-wormhole, croc, Syncthing (*"the relay
+only retransmits the encrypted data much like a router"*) and Tailscale's DERP (*"it's
+impossible for a DERP server to decrypt your traffic"*) all do. Note the catch established
+above: **the phone page cannot do this on the LAN path at all**, because
+`http://192.168.x.x` is not a secure context and `crypto.subtle` is unavailable. Over a tunnel
+or relay the page is HTTPS and it can.
+
+**And end-to-end encryption does not remove the disclosure obligation.** The relay still
+terminates TCP, so it sees both IP addresses — home location, and travel pattern if the phone
+is on cellular. It sees timing, duration and volume; Syncthing says this out loud, that *"the
+relay operator can see the amount of traffic flowing between devices."* It sees the rendezvous
+ID, which structurally builds a Mac-to-phone graph. And the hosting provider sees all of it
+too. An honest in-app disclosure names the metadata, the retention, the host and region, offers
+the off switch *before* it is needed, and points at self-hosting.
 
 **Condition under which this becomes the right first choice:** Cloudflare withdraws or throttles
 quick tunnels; or the feature stops being opt-in and becomes something users rely on; or he
@@ -590,6 +763,20 @@ empirically ("the personal-hotspot test was void"; corroborated by Apple's commu
 documentation of hotspot client isolation). `usbmuxd` tunnels Mac→phone for debugging, not
 phone→Mac.
 
+### 8a. The phone's own hotspot, with the Mac as the client — a disagreement worth recording
+
+One research thread proposed the reverse of the usual idea: have the **phone** start Personal
+Hotspot and the **Mac join it**. The phone becomes the gateway, client isolation does not
+exist, and the LAN path works.
+
+**The repository already tested this and it failed**, and the recorded reason is decisive: iOS
+isolates the host phone from its own hotspot clients, so the phone's browser cannot reach a
+server on a machine connected to it — *"the personal-hotspot test was void … the plain ip
+failed there too"* (`src/shared/lanAddress.ts:256`). Apple's community documentation of hotspot
+client isolation corroborates it. I am siding with the empirical test over the proposal, and
+recording the disagreement rather than quietly dropping it. It is also a setting change on the
+phone, which the brief forbids.
+
 ### 9. The Mac making its own Wi-Fi network
 
 macOS Internet Sharing can put up an SSID the phone joins, bypassing the router entirely. Ruled
@@ -620,24 +807,68 @@ magnitude for an internet-facing endpoint — not because it is brute-forceable 
 limiter, but because the limiter itself becomes a denial-of-service surface (five wrong guesses
 from anyone ends pairing for the session).
 
-What standard practice requires:
+**What real products do**, because almost nobody in this category ships a PAKE:
 
-1. **A high-entropy capability token for the tunnel path, not a human code.** 128 bits, from
-   `crypto.randomBytes`, carried in the URL and therefore in the QR. The human-typed 4-character
-   code stays for the LAN path, where it is appropriate; it should not be the credential for an
-   internet-reachable URL.
-2. **Capability URLs are accepted practice** — Plex, Gradio, Cloudflare quick tunnels and most
-   "share a link" systems are capability URLs — with known leak vectors that must be respected:
-   `Referer` on any outbound navigation, browser history, screenshots of the QR, and server
-   logs. Mitigations: put the secret in the **fragment** where possible so it is never sent to a
-   server, set `Referrer-Policy: no-referrer`, and have the page strip it from the address bar
-   immediately (which `remotePage.ts` already does for the existing code).
-3. **Bound lifetime.** The tunnel starts on demand, dies with the session, and the token is
-   regenerated every start — the properties the existing design already has and should keep.
-4. **The lockout needs rethinking for the tunnel path.** A session-permanent lockout triggered
-   by five wrong guesses from the internet is a trivial denial of service. Rate-limit per source
-   instead, or simply do not offer a typed code on the tunnel path at all — with a 128-bit token
-   in the link, there is nothing to type.
+- **Jupyter**: high-entropy token in the URL, immediately **exchanged for a cookie** — *"Once
+  you have visited this URL, a cookie will be set in your browser and you won't need to use the
+  token."*
+- **WhatsApp Web and Signal Desktop**: the **QR carries a high-entropy ephemeral key**, not a
+  human code. The QR *is* the out-of-band channel, so there is no reason to shrink the secret
+  to something a person could type.
+- **Jellyfin Quick Connect** is the strongest cheap pattern and the one most worth copying: a
+  six-character code, **approved from the already-authenticated session on the server**,
+  single-use, ten-minute expiry. The code is not a secret resisting guesswork, it is a
+  *correlation handle*; the authorisation comes from the channel that is already trusted.
+- **magic-wormhole** uses SPAKE2 with a 16-bit code and one guess — *"an attacker gets a
+  1-in-65536 chance"* — which people trust with source code.
+- **Matter/Thread** uses SPAKE2+ with a 27-bit passcode and a mandatory lockout after 20
+  failures — and a [2025 analysis](https://eprint.iacr.org/2025/1268.pdf) found the reference
+  SDK **does not actually enforce the limit**, *"effectively nullifying the intended lockout."*
+  That is the single most useful cautionary tale here: the cryptography was correct and the
+  throttle was broken, and the throttle was the part that mattered.
+
+**A PAKE is not worth it, and the reasoning is worth writing down.** No maintained,
+audited, browser-targeted SPAKE2 library exists — the two candidates are a 3-star Apache-2.0
+repo untouched since 2022 whose README says it *"have not go through a formal cryptographic
+audit"* and *"do not protect against time attacks"*, and an npm package last published six
+years ago. And as established above, `crypto.subtle` is unavailable on the LAN page, so it
+would mean P-256 arithmetic in hand-rolled bigint JavaScript. PAKE buys safety for a short
+secret *when you cannot trust the middle*; here both ends and the server are ours, and **a
+throttle does the same job**.
+
+**What standard practice requires:**
+
+1. **A high-entropy capability token for any internet-reachable path, not a human code.** The
+   W3C TAG's [Good Practices for Capability URLs](https://w3ctag.github.io/capability-urls/)
+   suggests **120+ bits**; NIST SP 800-63B requires session identifiers to carry **at least 64
+   bits** from an approved RNG and caps consecutive failures at 100; OWASP says the same. Use
+   128 bits from `crypto.randomBytes`. The human-typed 4-character code stays for the LAN path,
+   where it is appropriate.
+2. **Put the secret in the fragment, not the path or the query, and exchange it immediately.**
+   Per RFC 3986 a fragment is **never transmitted to the server**, so it stays out of access
+   logs, proxy logs and `Referer`. The same TAG document recommends exactly this. The pattern:
+   `https://host/r#k=<32 random bytes, base64url>` → JS reads `location.hash` → **POSTs it in a
+   body** to an exchange endpoint → the server validates, **marks it consumed**, and sets an
+   `HttpOnly; Secure; SameSite=Strict` cookie → `history.replaceState` scrubs the address bar
+   (which `remotePage.ts` already does for the existing code).
+   Two honest caveats. The fragment is **better, not good** — it is still in browser history
+   and therefore in history sync, and readable by any script on the page; RFC 9700 (the OAuth
+   Security BCP, January 2025) deprecates the implicit grant for precisely this reason. And
+   `replaceState` rewrites the current entry, but the URL may already have been recorded before
+   the script ran. **Single-use plus a short expiry is not optional.** The full leak list for
+   this case: browser history and its cloud sync, address-bar autocomplete, screenshots of the
+   QR (and the QR sitting on screen), link unfurling by iOS/Slack/Discord, clipboard managers,
+   and pasting into a search box.
+3. **Add Jellyfin's step — approve on the Mac.** For this feature the user is standing at the
+   Mac when they pair, essentially always. Requiring one click in the desktop UI to admit a
+   pairing makes guessing the code worth nothing, and the entropy argument mostly evaporates.
+   It is the cheapest security improvement available and it costs one button.
+4. **Bound lifetime.** The tunnel starts on demand, dies with the session, and the token is
+   regenerated every start — properties the existing design already has and should keep.
+5. **The lockout needs rethinking for any internet-facing path.** A session-permanent lockout
+   triggered by five wrong guesses from the internet is a trivial denial of service. Rate-limit
+   per source, or offer no typed code at all on that path. And — remembering Matter — **write
+   the test that proves the sixth wrong guess kills the code before writing the pairing flow.**
 5. **Two concrete code changes the tunnel forces**, both in `isAllowedHost`
    (`src/shared/remoteAuth.ts`), and both worth knowing before estimating:
    - the guard **requires a port in the `Host` header** ("no port in the header is not this
@@ -756,8 +987,15 @@ effort spent explaining a failure instead of removing it.
 - A 128-bit token path alongside the 4-character code, and the QR/modal copy to go with it.
 - Desktop UI: one clearly-labelled opt-in and an honest sentence about what it does. This is the
   part that deserves the most care and the least code.
-- Deciding what happens to 11.3 MB wavs over the tunnel — compress, or disable phone playback
-  off-LAN and say so.
+- Deciding what happens to the heavy payload off-LAN. The recommendation above is: do not send
+  it. Control only, stated in the UI.
+- **The 700 ms poll should probably go, and this is the one hidden cost worth flagging.** It is
+  fine over a tunnel today — quick tunnels are not metered by request — but it is incompatible
+  with *every* metered alternative, and it is a poor fit for a 100–200 ms round trip. A
+  WebSocket with a sub-100-second heartbeat (the measured idle timeout was 130 s) is the right
+  shape for any off-LAN path, and it is what makes the second choice affordable if it is ever
+  needed. Doing it now, on the LAN path where `ws://` works fine as a same-origin connection,
+  would de-risk everything downstream.
 
 **To run:** nothing.
 
@@ -817,17 +1055,48 @@ Stated plainly, because a confident wrong answer has already cost a morning.
   peer-to-peer mode is AWDL specifically. Neither vendor publishes a protocol description.
 - **An official Plex definition of "Indirect"** — the word appears in their UI and in no
   document.
-- **2026 pricing for a few things.** I verified Cloudflare TURN ($0.05/real-time GB
-  outbound, free only alongside their SFU) from primary documentation, but VPS and
-  Workers/Durable Objects figures quoted above are approximate and should be re-checked before
-  anyone commits money.
+- **Any prevalence figure for NAT hairpinning** on 2026 consumer and ISP routers. No measurement
+  study exists that I could find, and vendor claims contradict each other. Treat any number
+  anyone offers as unverified. (It does not change the conclusion — the second gate closes it
+  regardless — but it is the kind of thing that gets asserted confidently.)
+- **Whether Cloudflare Realtime's terms** — which license it *"to enable video call
+  functionality for your Internet Properties"* — cover a data channel in a GPL desktop app
+  distributed to third parties. Not clearly permitted, not clearly prohibited.
+- **Whether `localhost.run` has any Terms of Service at all.** I could not find one anywhere on
+  the site. Worth an email before relying on it.
+- **Whether the Workers free plan's 10 ms CPU-per-invocation limit also applies inside Durable
+  Objects**, which matters if the second choice is ever built.
+- **Pricing** is quoted from primary sources where possible (Cloudflare TURN and Durable
+  Objects, Hetzner's June 2026 price adjustment, Fly, Railway, ngrok) but it moves, and Hetzner
+  in particular renamed and repriced its range this year — most comparisons written before June
+  are stale. Re-check before committing money.
 
 ---
 
 ## Sources
 
 - Cloudflare, *TryCloudflare / Quick Tunnels* — https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/
-- Cloudflare, *Realtime TURN* — https://developers.cloudflare.com/realtime/turn/
+- Cloudflare, *Realtime TURN* — https://developers.cloudflare.com/realtime/turn/ · *Realtime pricing* (first 1,000 GB/month free) — https://developers.cloudflare.com/realtime/pricing/ · *generating TURN credentials* ("keep your TURN key on the server side") — https://developers.cloudflare.com/realtime/turn/generate-credentials/
+- Cloudflare, *Service-Specific Terms — Application Services* (the CDN clause about pictures, audio and large files) — https://www.cloudflare.com/service-specific-terms-application-services/
+- cloudflared issue #1609, quick tunnels force QUIC — https://github.com/cloudflare/cloudflared/issues/1609
+- Proofpoint, *Threat actor abuses Cloudflare Tunnels to deliver RATs* — https://www.proofpoint.com/us/blog/threat-insight/threat-actor-abuses-cloudflare-tunnels-deliver-rats
+- IT-Connect, trycloudflare quick tunnels indexed by Google (2026-09-22) — https://www.it-connect.tech/trycloudflare-quick-tunnels-are-being-indexed-on-google/
+- Metered Open Relay (anonymous endpoint withdrawn) — https://www.metered.ca/tools/openrelay/
+- W3C TAG, *Good Practices for Capability URLs* — https://w3ctag.github.io/capability-urls/
+- RFC 9700, *OAuth 2.0 Security Best Current Practice* (implicit grant deprecated; fragment leakage) — https://datatracker.ietf.org/doc/rfc9700/
+- Jellyfin, *Quick Connect* — https://jellyfin.org/docs/general/server/quick-connect/
+- Jupyter Server, *Security* (token exchanged for a cookie) — https://jupyter-server.readthedocs.io/en/latest/operators/security.html
+- *Security analysis of Matter's SPAKE2+ commissioning* (the lockout that does not lock out) — https://eprint.iacr.org/2025/1268.pdf
+- magic-wormhole docs and transit-relay docs — https://magic-wormhole.readthedocs.io/en/latest/welcome.html · https://github.com/magic-wormhole/magic-wormhole-transit-relay/blob/master/docs/running.md
+- croc issue #1269, 400k users / 40 TB a month, maintainer asking for help — https://github.com/schollz/croc/issues/1269
+- Jitsi, *Authentication on meet.jit.si* (anonymous rooms stopped over abuse, not cost) — https://jitsi.org/blog/authentication-on-meet-jit-si/
+- Syncthing relay pool and `strelaysrv` docs — https://relays.syncthing.net/ · https://docs.syncthing.net/users/strelaysrv.html
+- Serveo, operator on abuse — https://groups.google.com/g/serveo/c/ddy85E7A1BM
+- ngrok free-plan limits — https://ngrok.com/docs/pricing-limits/free-plan-limits/ · ToS — https://ngrok.com/tos
+- SEC Consult, Plex shared private key advisory (2014) — https://sec-consult.com/vulnerability-lab/advisory/multiple-vulnerabilities-in-plex-media-server/
+- Pi-hole forum, plex.direct broken by DNS rebinding protection — https://discourse.pi-hole.net/t/plex-secure-connections-issues-with-dns-rebinding-possible-fix/15240
+- GDPR Recital 30 (IP addresses as personal data) — https://gdpr-info.eu/recitals/no-30/
+- w3c/webrtc-pc issue #3109, macOS 26 local-network prompt on RTCPeerConnection — https://github.com/w3c/webrtc-pc/issues/3109
 - cloudflared (Apache-2.0) — https://github.com/cloudflare/cloudflared
 - Gradio, *Understanding Gradio Share Links* — https://www.gradio.app/guides/understanding-gradio-share-links
 - Hugging Face FRP fork — https://github.com/huggingface/frp
