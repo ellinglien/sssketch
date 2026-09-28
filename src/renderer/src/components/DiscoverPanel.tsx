@@ -47,6 +47,7 @@ import {
   radioChangeBars,
   radioGridBars,
   radioStarterKinds,
+  restartRadioInterval,
   type RadioClock,
   type RadioPace,
   type RadioSettings
@@ -1316,6 +1317,12 @@ export function DiscoverPanel({
   // ceil(intervalBars / loopBars) * loopBars -- usually a doubling rather
   // than a rounding. See radioGridBars below.
   //
+  // The PHRASE grid (radioSettings.phraseBars) is the gate on top of
+  // that: off by default, and when it is on a change may land only on a
+  // 16- or 32-bar boundary counted in whole laps from where this clock
+  // was created. It never drops a change, only holds it to the next
+  // phrase -- see advanceRadioClock.
+  //
   // Sits here, directly under radio's own state, rather than up with the
   // other `pos`-adjacent effects: its dependency array is evaluated during
   // render, so it cannot be written above the `const`s it names.
@@ -1347,7 +1354,7 @@ export function DiscoverPanel({
       pendingPick !== null ? (resolvedBarLengthsRef.current.get(pendingPick.slotId) ?? null) : null
     const changeBars = radioChangeBars(outgoingBars, pendingPick?.incomingBars ?? null)
     const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, changeBars)
-    const step = advanceRadioClock(clock, pos, loopBars, gridBars)
+    const step = advanceRadioClock(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
     radioClockRef.current = step.clock
     // A drop-out is anchored to the loop top, so its lifetime is counted
     // in laps. One wrap after the lap it fired on, the curve comes off --
@@ -1373,7 +1380,13 @@ export function DiscoverPanel({
     if (step.wrapped && radioCourseChangeRef.current !== null) {
       const batch = radioCourseChangeRef.current
       radioCourseChangeRef.current = null
-      radioClockRef.current = createRadioClock(
+      // restartRadioInterval, not createRadioClock: the phrase was
+      // anchored when the pace chip was pressed and the transport was
+      // seeked to 0 (armRadioCourseChange). This is the batch LANDING a
+      // lap or two later, and re-anchoring here would shove the phrase
+      // origin forward by however long the slowest stem took to warm.
+      radioClockRef.current = restartRadioInterval(
+        step.clock,
         nextRadioIntervalBarsInWindow(radioSettings.paceBars),
         pos
       )
@@ -1397,7 +1410,13 @@ export function DiscoverPanel({
 
     // Due. Draw a fresh interval and reset the clock FIRST, so a slow
     // commit below cannot fire a second change on the very next tick.
-    radioClockRef.current = createRadioClock(
+    //
+    // restartRadioInterval, not createRadioClock: a change resets the
+    // DURATION since the last change, never radio's position in the
+    // phrase. Resetting the phrase here would re-anchor it to every
+    // change and the 16s would walk.
+    radioClockRef.current = restartRadioInterval(
+      step.clock,
       nextRadioIntervalBarsInWindow(radioSettings.paceBars),
       pos
     )
@@ -2602,6 +2621,12 @@ export function DiscoverPanel({
       for (const kind of radioStarterKinds(radioSettings.channels)) addSlot([kind])
     }
     radioOnRef.current = true
+    // createRadioClock, not restartRadioInterval: switching radio on is
+    // where a phrase STARTS. The origin is the loop top radio started
+    // inside (lapsSincePhrase counts whole laps, so a switch-on halfway
+    // through a lap still puts every phrase boundary on a loop top),
+    // which is the only anchor radio can see -- the transport wraps, so
+    // there is no absolute bar 0 to count from.
     radioClockRef.current = createRadioClock(
       nextRadioIntervalBarsInWindow(RADIO_PACE_BARS[pace]),
       pos
@@ -2661,6 +2686,11 @@ export function DiscoverPanel({
     // lastPos 0, not `pos`: the transport is about to report ~0, and a
     // clock still holding the old mid-loop position would read that as a
     // wrap and bank a whole phantom lap on the very next tick.
+    //
+    // createRadioClock, so the PHRASE restarts here too. A course change
+    // is a new section and it seeks the transport to 0, so bar 0 of the
+    // new phrase and bar 0 of the transport are the same instant -- which
+    // is the one moment radio gets a phrase origin for free.
     radioClockRef.current = createRadioClock(
       nextRadioIntervalBarsInWindow(RADIO_PACE_BARS[pace]),
       0
