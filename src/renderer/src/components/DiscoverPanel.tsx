@@ -2551,7 +2551,14 @@ export function DiscoverPanel({
       // cannot arise here.
       const ratio = stretchRatioForStem(stem.durationSec, stem.barLength, bpmRef.current)
       if (Math.abs(ratio - 1) < STRETCH_RATIO_EPSILON) return
-      void window.rifffApi.renderStretched(stem.path, ratio)
+      // Through the memoised resolver, NOT renderStretched directly:
+      // warming the main-process file cache is only half of it. The other
+      // half is that buildEngineProject asks this resolver for the
+      // duration at commit time, and a bare IPC call would re-read the
+      // whole file from disk to answer -- per stem, on the beat, on a main
+      // thread already decoding that same audio for the waveform. Warming
+      // it here means the commit reads a value instead of asking for one.
+      void resolveStretchedForPlayback(stem.path, ratio)
     })
     radioPendingRef.current = { slotId, pick, incomingBars: null }
   }
