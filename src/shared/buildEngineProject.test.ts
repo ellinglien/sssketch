@@ -667,6 +667,58 @@ describe('buildEngineProject toolkit', () => {
     expect(project.reverb).toEqual({ roomSize: 0.8, damping: 0.2, preDelayMs: 45 })
     expect(project.rifffs[0].stems[0].toolkit?.reverbSend).toBe(0.5)
   })
+
+  it('sends NO masterFilter key at all when the master strip has not been touched', async () => {
+    // Exactly the isStemToolkitNeutral discipline one level up: the ABSENCE
+    // of the key is what puts the engine back on the path it was on before
+    // the master filter existed, and what makes a resting master strip
+    // bit-identical rather than nearly so (there is an engine-side test
+    // asserting that, sample for sample).
+    const project = await buildEngineProject(stateWith({ bpm: 150 }), resolveNothing, emptyCatalog)
+    expect('masterFilter' in project).toBe(false)
+  })
+
+  it('omits a master filter parked at its own mode neutral end, whatever its resonance says', async () => {
+    // A resonant peak AT a cutoff sitting on its own open end is nothing --
+    // the same reason isNeutralFilter reads the cutoff only for a clip.
+    const parked = await buildEngineProject(
+      stateWith({ bpm: 150, masterFilter: { mode: 'lowpass', cutoff: 1, resonance: 0.8 } }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect('masterFilter' in parked).toBe(false)
+
+    // ...and a highpass's own neutral end is the OTHER one.
+    const parkedHigh = await buildEngineProject(
+      stateWith({ bpm: 150, masterFilter: { mode: 'highpass', cutoff: 0, resonance: 0.3 } }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect('masterFilter' in parkedHigh).toBe(false)
+  })
+
+  it('sends the master filter once the cutoff has actually moved off neutral', async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, masterFilter: { mode: 'lowpass', cutoff: 0.35, resonance: 0.5 } }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.masterFilter).toEqual({ mode: 'lowpass', cutoff: 0.35, resonance: 0.5 })
+    // One field beside `reverb`, and nothing per clip: the whole point of
+    // 4A.3 is that this is NOT N identical per-clip curves.
+    expect('toolkit' in project.rifffs[0].stems[0]).toBe(false)
+  })
+
+  it('treats a non-finite master cutoff as non-neutral rather than silently neutral', async () => {
+    // Same rule the engine's channelFilterIsNeutral uses: a corrupted value
+    // flows into the clamping maps rather than into bypassed arithmetic.
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, masterFilter: { mode: 'lowpass', cutoff: NaN, resonance: 0 } }),
+      resolveNothing,
+      emptyCatalog
+    )
+    expect(project.masterFilter).toBeDefined()
+  })
 })
 
 describe('risers on the wire', () => {

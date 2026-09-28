@@ -181,6 +181,35 @@ export function isStemToolkitNeutral(
   return true
 }
 
+/**
+ * The MASTER strip's filter as it goes on the wire, or `undefined` when it
+ * is doing nothing -- one filter over the whole summed mix, per
+ * docs/superpowers/specs/2026-09-28-performance-mode-design.md §4A.3.
+ *
+ * That `undefined` is load-bearing in exactly the way isStemToolkitNeutral's
+ * is, one level up: a project with no `masterFilter` key is what puts the
+ * engine back on the render path it took before this field existed, and
+ * that is what makes a master strip nobody has touched leave the mix
+ * BIT-identical rather than nearly so. PlaybackEngineTests.cpp asserts that
+ * sample for sample, and applyMasterFilter's own early return is the other
+ * half of it.
+ *
+ * Judged by the same isNeutralFilter a clip's own filter is, deliberately:
+ * one rule, mirrored by channelFilterIsNeutral() in
+ * native-engine/Source/ChannelFilter.cpp. Resonance is ignored for the same
+ * reason it is there -- a peak AT a cutoff parked on its own open end is
+ * nothing to resonate.
+ *
+ * Exported rather than inlined into buildEngineProject so the master strip's
+ * own UI can ask the identical question ("is this dial doing anything") and
+ * cannot drift from what is actually sent.
+ */
+export function masterFilterForWire(
+  filter: StemFilterSettings | undefined
+): StemFilterSettings | undefined {
+  return isNeutralFilter(filter) ? undefined : filter
+}
+
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0
   return Math.min(1, Math.max(0, value))

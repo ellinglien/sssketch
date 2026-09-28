@@ -399,6 +399,21 @@ export interface AppState {
   /** The one shared reverb's settings -- project-level, not per channel.
    * Only ever audible once some channel actually sends to it. */
   reverb: ProjectReverbSettings
+  /** ONE filter over the whole summed mix -- the master strip's swept
+   * filter (docs/superpowers/specs/2026-09-28-performance-mode-design.md
+   * §4A.3). Absent means "parked", which is what leaves the mix untouched
+   * sample for sample (see masterFilterForWire).
+   *
+   * Deliberately OPTIONAL, with no reducer action and no entry in
+   * serialize.ts: this is a live performance control over the Discover /
+   * radio preview, not arrangement data -- a fader position is not
+   * something you reopen a project to find where you left it, and a saved
+   * one you had forgotten about would be the worst possible surprise on the
+   * next load. It is written only onto the throwaway preview state
+   * DiscoverPanel builds for each sync, which is also the only surface the
+   * control has today. The day a master filter belongs to the arrangement
+   * itself, it gets an action and a saved field like `reverb` above. */
+  masterFilter?: StemFilterSettings
   /** Placed noise risers, keyed by their own id -- see @shared/riser and
    * step 4 of docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
    *

@@ -7,6 +7,7 @@ import {
   defaultFilterSettings,
   evaluateAutomation,
   isStemToolkitNeutral,
+  masterFilterForWire,
   neutralCutoff,
   normaliseAutomationCurve,
   filterCutoffHz,
@@ -328,5 +329,38 @@ describe('projectUsesToolkit', () => {
     expect(
       projectUsesToolkit({ stemFilters: { 'g:1': { mode: 'lowpass', cutoff: 1, resonance: 0.9 } } })
     ).toBe(false)
+  })
+})
+
+describe('masterFilterForWire', () => {
+  it('drops a filter parked at its own mode neutral end', () => {
+    // Both ends, because "neutral" is not one value -- it is whichever end
+    // of the range the chosen mode passes everything at.
+    expect(masterFilterForWire({ mode: 'lowpass', cutoff: 1, resonance: 0 })).toBeUndefined()
+    expect(masterFilterForWire({ mode: 'highpass', cutoff: 0, resonance: 0 })).toBeUndefined()
+    expect(masterFilterForWire(undefined)).toBeUndefined()
+  })
+
+  it('ignores resonance, which cannot un-neutralise a parked cutoff', () => {
+    expect(masterFilterForWire({ mode: 'lowpass', cutoff: 1, resonance: 1 })).toBeUndefined()
+  })
+
+  it('tolerates an end stop a hair off, the same way the engine does', () => {
+    // A dial parked at its end can land a millionth off after a JSON round
+    // trip, and a millionth of the control's travel is not a sound. Same
+    // 1e-6 tolerance channelFilterIsNeutral uses.
+    expect(masterFilterForWire({ mode: 'lowpass', cutoff: 1 - 1e-9, resonance: 0 })).toBeUndefined()
+    expect(masterFilterForWire({ mode: 'lowpass', cutoff: 0.999, resonance: 0 })).toBeDefined()
+  })
+
+  it('keeps a filter whose cutoff has actually moved, and passes it through unchanged', () => {
+    const filter: StemFilterSettings = { mode: 'lowpass', cutoff: 0.4, resonance: 0.6 }
+    expect(masterFilterForWire(filter)).toBe(filter)
+    // The far end of a highpass is a real, audible choice, not an accident.
+    expect(masterFilterForWire({ mode: 'highpass', cutoff: 1, resonance: 0 })).toBeDefined()
+  })
+
+  it('treats a non-finite cutoff as NOT neutral, so it reaches the clamping maps', () => {
+    expect(masterFilterForWire({ mode: 'lowpass', cutoff: NaN, resonance: 0 })).toBeDefined()
   })
 })

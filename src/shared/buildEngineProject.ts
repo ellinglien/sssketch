@@ -8,6 +8,7 @@ import {
   DEFAULT_REVERB,
   defaultFilterSettings,
   isStemToolkitNeutral,
+  masterFilterForWire,
   neutralCutoff,
   normaliseAutomationCurve,
   type AutomationPoint,
@@ -192,6 +193,23 @@ export interface EngineProject {
    * a non-zero send. Deliberately still project-level after the per-clip
    * rescope (spec section 2b): one room everything sends into. */
   reverb: ProjectReverbSettings
+  /** ONE filter over the whole summed mix -- the master strip's swept filter
+   * (docs/superpowers/specs/2026-09-28-performance-mode-design.md §4A.3),
+   * and deliberately NOT N identical per-clip `filterCutoff` curves, which
+   * that section rules out at length.
+   *
+   * OMITTED entirely when the filter is parked at its own mode's neutral
+   * end, and that absence is load-bearing rather than an optimisation: it is
+   * the same rule `toolkit` follows, and it is what makes a master strip
+   * nobody has touched leave the mix bit-identical, sample for sample (there
+   * is an engine-side test asserting exactly that). See masterFilterForWire.
+   *
+   * Values are normalised [0,1] like everything else here; the map onto Hz
+   * and Q is the engine's, and is the SAME map the per-clip filter uses, so
+   * a dial position means one frequency rather than two. Twin of
+   * EngineProject::MasterFilterSettings in native-engine/Source/
+   * EngineProject.h -- hand-synced, per this file's own header. */
+  masterFilter?: StemFilterSettings
 }
 
 export interface EngineMasterChainSlot {
@@ -633,6 +651,11 @@ export async function buildEngineProject(
       }) as [EngineMasterChainSlot, EngineMasterChainSlot]
     }))
 
+  // Spread rather than assigned, so a parked master filter leaves NO key at
+  // all on the payload -- see masterFilterForWire on why the absence, not a
+  // neutral value, is the thing that has to reach the engine.
+  const masterFilter = masterFilterForWire(state.masterFilter)
+
   return {
     bpm: state.bpm,
     snapDiv: SNAP_DIVS[state.snapIdx],
@@ -640,6 +663,7 @@ export async function buildEngineProject(
     masterChain,
     channelChains,
     reverb: state.reverb ?? DEFAULT_REVERB,
+    ...(masterFilter ? { masterFilter } : {}),
     risers: buildEngineRisers(state.risers ?? {}),
     rifffs
   }
