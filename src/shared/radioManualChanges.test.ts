@@ -170,6 +170,49 @@ describe('drawManualTransitions', () => {
     expect(out.get('a')).toEqual({ kind: 'hole', beats: 2 })
   })
 
+  it('cuts a row that cannot lead WITHOUT spending the lap’s leading gesture', () => {
+    const out = drawManualTransitions(
+      [
+        { slotId: 'joining', kinds: ['drums' as const], canLead: false },
+        { slotId: 'b', kinds: ['bass' as const] }
+      ],
+      {
+        pick: always('riser'),
+        dropOutBeats: () => 2,
+        leadingArmed: false,
+        barsToWrap: 8,
+        loopBars: 16
+      }
+    )
+    expect(out.get('joining')).toEqual({ kind: 'cut', beats: 4 })
+    expect(out.get('b')).toEqual({ kind: 'riser', beats: 8 })
+  })
+
+  it('treats a row without canLead as able to lead', () => {
+    const out = drawManualTransitions([{ slotId: 'a', kinds: ['drums' as const] }], {
+      pick: always('riser'),
+      dropOutBeats: () => 2,
+      leadingArmed: false,
+      barsToWrap: 8,
+      loopBars: 16
+    })
+    expect(out.get('a')).toEqual({ kind: 'riser', beats: 8 })
+  })
+
+  it('still grants a row that cannot lead its arrival gesture', () => {
+    const out = drawManualTransitions(
+      [{ slotId: 'a', kinds: ['drums' as const], canLead: false }],
+      {
+        pick: always('bloom'),
+        dropOutBeats: () => 2,
+        leadingArmed: false,
+        barsToWrap: 8,
+        loopBars: 16
+      }
+    )
+    expect(out.get('a')).toEqual({ kind: 'bloom', beats: 4 })
+  })
+
   it('passes a cut straight through', () => {
     const out = drawManualTransitions(rows, {
       pick: always('cut'),

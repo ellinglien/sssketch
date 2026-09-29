@@ -31,9 +31,14 @@ export function radioGestureBeats(kind: RadioTransitionKind, dropOutBeats: () =>
  * live in a lap -- radio's own rule -- and only when there is room for it
  * before the wrap. Any leading gesture that cannot be granted becomes a
  * cut, which is what radio's due branch does when a gesture is already
- * armed. */
+ * armed.
+ *
+ * A row with `canLead: false` (a JOINING row, which has no outgoing stem
+ * for a hole or a riser to play on) turns a drawn leading gesture into a
+ * cut WITHOUT taking the lap's one leading slot, so the next row may still
+ * lead. `canLead` defaults to true. */
 export function drawManualTransitions(
-  rows: readonly { slotId: string; kinds: readonly DiscoverSlotKind[] }[],
+  rows: readonly { slotId: string; kinds: readonly DiscoverSlotKind[]; canLead?: boolean }[],
   options: {
     pick: (kinds: readonly DiscoverSlotKind[]) => RadioTransitionKind
     dropOutBeats: () => number
@@ -61,7 +66,7 @@ export function drawManualTransitions(
         Number.isFinite(options.loopBars) &&
         options.loopBars > 0
       const bars = Math.min(beats / 4, options.loopBars / 2)
-      if (leadingTaken || !usable || bars > options.barsToWrap) {
+      if (row.canLead === false || leadingTaken || !usable || bars > options.barsToWrap) {
         kind = 'cut'
         beats = 4
       } else {
