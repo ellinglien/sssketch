@@ -475,6 +475,12 @@ export function listJamsWithDb(): { jamCID: string; db: Database.Database }[] {
   ) {
     return cachedJamsWithDb.jams
   }
+  // Counted because the log cannot tell the two expensive outcomes apart:
+  // a rebuild and a check that PASSED both cost ~300ms on a cold ExFAT
+  // page cache (the COUNT(*) over 372k Riffs rows is the same read either
+  // way), so "listJamsWithDb 312ms" is ambiguous on its own. This counter
+  // next to sql:cache-check.Riffs in the same [work] line says which.
+  countWork('sql:list-jams-rebuild')
   // Read BEFORE the query, so a write landing between the two makes the
   // cache look stale on the next call rather than being missed entirely.
   const sources = jamListSourceDbs().map((db) => ({
