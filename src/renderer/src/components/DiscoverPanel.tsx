@@ -47,6 +47,7 @@ import {
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
+import { manualChangesUndoneBy, UndoSnapshotSequence } from '@shared/discoverUndoWithdraw'
 import { applyTraitBar } from '@shared/traitBar'
 import {
   RADIO_PACE_BARS,
@@ -2287,9 +2288,19 @@ export function DiscoverPanel({
         stem: ResolvedCandidateStem | null
         joining: boolean
         arrival: ManualArrival | null
+        /** The latest undo sequence number when this was queued -- see
+         * markUndoSnapshot. An undo to a snapshot numbered at or below it
+         * takes this change back. */
+        undoSeq: number
       }
     >
   >(new Map())
+  // See markUndoSnapshot. An object held in state (created once, never
+  // set) rather than counters in refs: ref writes inside pushUndoSnapshot,
+  // which the phone's command effect reaches, trip react-hooks/immutability
+  // across this whole component (the cascade runSlotAction's comment
+  // describes).
+  const [undoSequence] = useState(() => new UndoSnapshotSequence())
   const [manualWaitingSlotIds, setManualWaitingSlotIds] = useState<ReadonlySet<string>>(new Set())
   /** THE ONLY WAY manualChangesRef IS WRITTEN -- same deferral and reason
    * as setRadioLedChange. */
@@ -3737,6 +3748,32 @@ export function DiscoverPanel({
   // placed (including the first thing plunked in from an empty project),
   // later addSlot calls go back through the normal ranked pipeline, since
   // by then there IS a real arrangement worth matching against.
+  // WHICH WAITING CHANGES AN UNDO TAKES BACK (Elling, 2026-09-29): every
+  // change still waiting for the loop top that was queued after the undo
+  // point -- see @shared/discoverUndoWithdraw for the rule and why it is a
+  // sequence rather than the stack's depth (the stack is capped).
+  //
+  // Every snapshot this panel pushes gets the next number here, and every
+  // queued change records the latest one at the moment it is queued.
+  // Keyed by the snapshot array itself, so each push is a fresh copy: the
+  // same `slots` array can be pushed twice (a queued change does not touch
+  // slots, so two clicks in a row push the same one), and one key cannot
+  // carry two numbers. A WeakMap, so a snapshot trimmed off the stack
+  // takes its number with it.
+  function markUndoSnapshot(current: DiscoverSlot[]): DiscoverSlot[] {
+    const snapshot = current.slice()
+    undoSequence.mark(snapshot)
+    return snapshot
+  }
+  // Snapshots pushed from OUTSIDE this panel -- LibraryBrowser's seeding,
+  // App's reset on a new sketch -- and any already on the stack when the
+  // panel mounted are numbered when they are first seen, which is the
+  // render right after the push. Anything queued after that numbers
+  // higher, so an undo to that snapshot takes it back.
+  useEffect(() => {
+    for (const snapshot of undoStack) undoSequence.mark(snapshot)
+  }, [undoStack, undoSequence])
+
   // Call at the START of any undoable action, BEFORE mutating `slots` --
   // captures the pre-action snapshot to restore to, and clears the redo
   // stack (standard undo/redo semantics: a fresh action invalidates
@@ -3745,7 +3782,8 @@ export function DiscoverPanel({
   // every other slots-reading function in this file already relies on
   // (see rollForSlot's own doc comment on this).
   function pushUndoSnapshot(): void {
-    setUndoStack((prev) => [...prev, slots].slice(-DISCOVER_UNDO_LIMIT))
+    const snapshot = markUndoSnapshot(slots)
+    setUndoStack((prev) => [...prev, snapshot].slice(-DISCOVER_UNDO_LIMIT))
     setRedoStack([])
   }
 
@@ -3813,15 +3851,30 @@ export function DiscoverPanel({
   function undoDiscoverAction(): void {
     if (undoStack.length === 0) return
     const snapshot = undoStack[undoStack.length - 1]
+    // Every change still waiting that was queued at or after this point
+    // is taken back: its row keeps the stem it has, and nothing lands for
+    // it at the top. A change queued before this point stays. With radio
+    // off nothing is ever waiting, so this does nothing.
+    for (const slotId of manualChangesUndoneBy(
+      manualChangesRef.current,
+      undoSequence.seqOf(snapshot)
+    )) {
+      withdrawManualChange(slotId, 'manual-change-undone')
+    }
     setRedoStack((prev) => [...prev, slots].slice(-DISCOVER_UNDO_LIMIT))
     setUndoStack((prev) => prev.slice(0, -1))
     applySlotsSnapshot(snapshot)
   }
 
+  // Redo does NOT re-queue a change undo took back: a withdrawn change is
+  // gone, and redo restores slots exactly as it always has. (Its entry was
+  // never in a snapshot -- a waiting change is not slot state -- so there
+  // is nothing for redo to bring back.)
   function redoDiscoverAction(): void {
     if (redoStack.length === 0) return
     const snapshot = redoStack[redoStack.length - 1]
-    setUndoStack((prev) => [...prev, slots].slice(-DISCOVER_UNDO_LIMIT))
+    const undoPoint = markUndoSnapshot(slots)
+    setUndoStack((prev) => [...prev, undoPoint].slice(-DISCOVER_UNDO_LIMIT))
     setRedoStack((prev) => prev.slice(0, -1))
     applySlotsSnapshot(snapshot)
   }
@@ -4310,7 +4363,8 @@ export function DiscoverPanel({
     }
 
     if (newSlots.length === 0) return
-    setUndoStack((prev) => [...prev, preImportSlots].slice(-DISCOVER_UNDO_LIMIT))
+    const undoPoint = markUndoSnapshot(preImportSlots)
+    setUndoStack((prev) => [...prev, undoPoint].slice(-DISCOVER_UNDO_LIMIT))
     setRedoStack([])
     setSlots((prev) => [...prev, ...newSlots])
   }
@@ -5058,6 +5112,16 @@ export function DiscoverPanel({
     // pushes its OWN snapshot per slot) so "undo" after a "reroll all"
     // restores every slot at once, in a single step, rather than only
     // walking back the last slot rerolled.
+    //
+    // While radio runs (no Cmd) and every unlocked row is already waiting,
+    // the batch would do nothing at all -- so it pushes no undo step either.
+    if (
+      radioOnRef.current &&
+      !immediate &&
+      !slots.some((s) => !s.locked && !manualChangesRef.current.has(s.id))
+    ) {
+      return
+    }
     pushUndoSnapshot()
     // Sequential, not Promise.all -- each slot's own reroll is a real IPC
     // round trip; running them one at a time keeps this simple and avoids
@@ -5298,7 +5362,7 @@ export function DiscoverPanel({
   function queueManualChange(slotId: string, pick: SlotPick, joining: boolean): boolean {
     if (manualChangesRef.current.has(slotId)) return false
     const next = new Map(manualChangesRef.current)
-    next.set(slotId, { pick, stem: null, joining, arrival: null })
+    next.set(slotId, { pick, stem: null, joining, arrival: null, undoSeq: undoSequence.latest() })
     setManualChanges(next)
     // NO withdrawal of the stage that is out for this entry itself, on
     // purpose. Its stem is still null, so a re-stage now would carry
