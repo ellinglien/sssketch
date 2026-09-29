@@ -1,5 +1,6 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CirclesThree, Compass, Copy, HandPalm, Shuffle, SignOut } from '@phosphor-icons/react'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
@@ -58,10 +59,11 @@ import {
 } from '@shared/radioSchedule'
 import {
   NO_RADIO_SLOT_FLAGS,
-  cycleRadioSlotFlag,
   forgetRadioSlotFlagOnChange,
   pruneRadioSlotFlags,
   radioSlotFlagOf,
+  toggleRadioHook,
+  toggleRadioReplaceSoon,
   type RadioSlotFlag,
   type RadioSlotFlags
 } from '@shared/radioSlotFlags'
@@ -3819,12 +3821,14 @@ export function DiscoverPanel({
     })
   }
 
-  /** One press of a row's flag control: normal -> replace soon -> hook ->
-   * normal. Undo deliberately does not cover it, the same way it does not
-   * cover the padlock or mute: it is a statement about what radio should
-   * do next, not an edit to the loop. */
-  function cycleSlotFlag(id: string): void {
-    setRadioSlotFlags((prev) => cycleRadioSlotFlag(prev, id))
+  /** The row's two radio controls. Undo deliberately does not cover them,
+   * the same way it does not cover the padlock or mute: they are a
+   * statement about what radio should do next, not an edit to the loop. */
+  function toggleSlotHook(id: string): void {
+    setRadioSlotFlags((prev) => toggleRadioHook(prev, id))
+  }
+  function toggleSlotReplaceSoon(id: string): void {
+    setRadioSlotFlags((prev) => toggleRadioReplaceSoon(prev, id))
   }
 
   // Direct request, 2026-09-20: "add duplicate channel to discover" --
@@ -5606,7 +5610,8 @@ export function DiscoverPanel({
             onToggleLock={() => toggleLock(slot.id)}
             radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
             radioOn={radioOn}
-            onCycleRadioFlag={() => cycleSlotFlag(slot.id)}
+            onToggleHook={() => toggleSlotHook(slot.id)}
+            onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
             onRemove={() => removeSlot(slot.id)}
             onDuplicate={() => duplicateSlot(slot.id)}
             onReroll={() => void rerollSlot(slot.id)}
@@ -5968,13 +5973,83 @@ function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
   )
 }
 
-// Hand-drawn dice glyph -- same "no icon package" convention as every other
-// glyph in this file. Two usages: purely decorative in DiscoverSlotRow
-// (default size, sits beside the similar/adjacent/random buttons to suggest
-// they're all randomizers -- direct request, 2026-09-17), and the toolbar's
-// own "similar all" button (a real interactive icon, rendered bigger via
-// the size prop). Optional `size` (default 12) lets both call sites share
-// one component instead of duplicating the SVG.
+/** One 18px square on a Discover row. Every new control on the row
+ * (2026-09-29, docs/superpowers/specs/2026-09-29-discover-row-icons-and-
+ * source-dial-design.md) is one of these, so the states cannot drift
+ * between buttons:
+ *
+ *   `on`: the padlock's own treatment, an inverted fill -- "hold longer".
+ *   `soft`: lit but outlined -- "change next", a request that is spent on
+ *     the next change and then gone.
+ *   `pulsing`: the reroll this button started is still in flight.
+ *
+ * Monochrome in every state, per tokens.css: colour on this row is for
+ * audio only. */
+function RowIconButton({
+  gridColumn,
+  tooltip,
+  onClick,
+  children,
+  state = 'off',
+  disabled = false,
+  pulsing = false,
+  hidden = false,
+  buttonRef
+}: {
+  gridColumn: number
+  tooltip: string
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
+  children: React.ReactNode
+  state?: 'off' | 'on' | 'soft'
+  disabled?: boolean
+  pulsing?: boolean
+  hidden?: boolean
+  buttonRef?: React.Ref<HTMLButtonElement>
+}): React.JSX.Element {
+  return (
+    <button
+      ref={buttonRef}
+      onClick={onClick}
+      disabled={disabled || hidden}
+      data-tooltip={tooltip}
+      aria-label={tooltip}
+      aria-pressed={state === 'off' ? undefined : true}
+      style={{
+        gridColumn,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 18,
+        height: 18,
+        padding: 0,
+        visibility: hidden ? 'hidden' : 'visible',
+        pointerEvents: hidden ? 'none' : 'auto',
+        background:
+          state === 'on'
+            ? 'var(--ra-text)'
+            : state === 'soft'
+              ? 'var(--ra-bg-row-active)'
+              : 'transparent',
+        border: `1px solid ${state === 'off' ? 'var(--ra-border)' : 'var(--ra-text)'}`,
+        color: disabled
+          ? 'var(--ra-text-4)'
+          : state === 'on'
+            ? 'var(--ra-bg)'
+            : state === 'soft'
+              ? 'var(--ra-text)'
+              : 'var(--ra-text-2)',
+        cursor: disabled ? 'default' : 'pointer',
+        animation: pulsing ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
+      }}
+    >
+      {children}
+    </button>
+  )
+}
+
+// Hand-drawn dice glyph -- predates the row's phosphor icons (2026-09-29),
+// which were scoped to those six, so it stays hand-drawn. One usage: the toolbar's own "similar all" button,
+// rendered bigger via the size prop.
 // Direct request, 2026-09-21: "instead of that loader, have the dice spin
 // intermittently" -- a quick full turn, then a rest (discover-dice-spin's
 // own 0-35% / 35-100% split), for as long as a roll is in flight.
@@ -6035,7 +6110,8 @@ function DiscoverSlotRow({
   onToggleLock,
   radioFlag,
   radioOn,
-  onCycleRadioFlag,
+  onToggleHook,
+  onToggleReplaceSoon,
   onRemove,
   onDuplicate,
   onReroll,
@@ -6114,7 +6190,12 @@ function DiscoverSlotRow({
   /** Whether radio is running. The flag control only means anything while
    * it is, so it is hidden -- but still RENDERED -- when it is not. */
   radioOn: boolean
-  onCycleRadioFlag: () => void
+  /** The "hold longer" control -- toggles `hook` on this row
+   * (toggleRadioHook). */
+  onToggleHook: () => void
+  /** The "change next" control -- toggles `replace-soon` on this row
+   * (toggleRadioReplaceSoon). */
+  onToggleReplaceSoon: () => void
   onRemove: () => void
   /** DiscoverPanel's own duplicateSlot(id) -- clones this slot's current
    * state (kind, candidate, gain, lock, seedStem) into a brand-new slot
@@ -6231,6 +6312,13 @@ function DiscoverSlotRow({
     | { candidate: DiscoverCandidate; status: 'failed' }
     | null
   >(null)
+  // Which of this row's own reroll buttons started the roll in flight, so
+  // that one pulses and the others only dim. A roll started from anywhere
+  // else (radio, the phone, the panel's roll-all) leaves this stale, but it
+  // is only read while `rerolling`, and a stale value then pulses a button
+  // for a roll it did not start -- so it is cleared when the roll ends.
+  const [rerollAction, setRerollAction] = useState<'similar' | 'random' | null>(null)
+  if (!rerolling && rerollAction !== null) setRerollAction(null)
 
   useEffect(() => {
     let cancelled = false
@@ -6647,8 +6735,13 @@ function DiscoverSlotRow({
           // is what keeps the hard-won explicit-position discipline above
           // intact -- widening one existing track cannot renumber
           // anything, which inserting one would have.
+          // 2026-09-29, the icon row: tracks 12-15 were four 70px text
+          // buttons and are now four 18px squares (13-16), with "change
+          // next" in track 11 (was the 16px decorative dice) and a 1px
+          // divider in 12. Every track stays a FIXED width, for the reason
+          // above; only the 1fr waveform grows.
           gridTemplateColumns:
-            '18px 18px 18px 18px 18px 18px 1fr 14px 110px 14px 16px 70px 70px 70px 70px',
+            '18px 18px 18px 18px 18px 18px 1fr 14px 110px 14px 18px 1px 18px 18px 18px 18px',
           alignItems: 'center',
           columnGap: 8,
           padding: '8px 0',
@@ -6844,108 +6937,25 @@ function DiscoverSlotRow({
             </button>
           </>
         )}
-        {/* RADIO'S ONE GESTURE. Everything else radio offers is a setting
-            you change between changes; this is pointing at a layer you are
-            hearing and saying something about it. Both directions, asked
-            for on two separate days:
-
-              "maybe have a way to select 'keep this one for a while' or ..
-               'this is the hook' or something"            (2026-09-28)
-              "right now channel four is long and repeating many times, and
-               i wish i had a way to flag it as one to replace soon for
-               replacement."                               (2026-09-29)
-
-            ONE THREE-STATE CONTROL, not two buttons. They are the same
-            gesture pointed in opposite directions, and two buttons side by
-            side that push the same draw opposite ways can be made to argue
-            with each other -- while the row, which already carries five
-            controls, would have gained two. One press is "replace soon",
-            two is "hook", three is back to normal; the tooltip always
-            names what the NEXT press does. (The cycle reaches replace-soon
-            first on purpose: hook is at-most-one, so passing THROUGH it
-            would silently release whatever hook was set elsewhere. See
-            cycleRadioSlotFlag.)
-
-            It lives in what used to be an empty 14px spacer, widened to
-            18px, so no other column moves.
-
-            NOT THE PADLOCK NEXT DOOR, and the difference is one line: the
-            padlock is never, the hook is rarely. A hooked layer is held
-            about two and a half times as long (measured -- see
-            HOOK_HOLD_FACTOR) and does still turn over, because a layer
-            that never turns over is exactly what the padlock is for. A
-            slot can carry both; the padlock wins, and it wins for free
-            because radioEligibleSlotIds drops a locked slot before any
-            weight is computed.
-
-            MONOCHROME, and the three states are told apart by glyph and by
-            LUMINANCE only -- the same trick the row's own breathe uses for
-            its two depths. Colour on this row is spent only on things
-            carrying audio information (the waveform, the playhead, mute's
-            red, the favourite star), and the padlock immediately to the
-            left is monochrome: two adjacent state toggles disagreeing
-            about colour is noise. `hook` is the heaviest mark on the row,
-            an inverted fill, because it is the one that says "this is the
-            centre of the track"; `replace soon` is lit but outlined,
-            because it is a request that will be spent on the next change
-            and then gone.
-
-            RENDERED ALWAYS and hidden with `visibility` rather than
-            unmounted, the same trick the radio progress rule used, because
-            a conditionally-rendered child in this grid is the exact bug
-            the gridTemplateColumns comment above warns about at length. */}
-        <button
-          onClick={onCycleRadioFlag}
-          data-tooltip={
-            radioFlag === null
-              ? 'replace soon'
-              : radioFlag === 'replace-soon'
-                ? 'make hook'
-                : 'release hook'
-          }
-          aria-label={
-            radioFlag === null
-              ? 'replace soon'
-              : radioFlag === 'replace-soon'
-                ? 'make hook'
-                : 'release hook'
-          }
-          aria-pressed={radioFlag !== null}
-          style={{
-            gridColumn: 6,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 18,
-            height: 18,
-            padding: 0,
-            fontFamily: 'inherit',
-            fontSize: 10,
-            visibility: radioOn ? 'visible' : 'hidden',
-            pointerEvents: radioOn ? 'auto' : 'none',
-            background:
-              radioFlag === 'hook'
-                ? 'var(--ra-text)'
-                : radioFlag === 'replace-soon'
-                  ? 'var(--ra-bg-row-active)'
-                  : 'transparent',
-            border: `1px solid ${radioFlag === null ? 'var(--ra-border)' : 'var(--ra-text)'}`,
-            color:
-              radioFlag === 'hook'
-                ? 'var(--ra-bg)'
-                : radioFlag === 'replace-soon'
-                  ? 'var(--ra-text)'
-                  : 'var(--ra-text-3)',
-            cursor: 'pointer'
-          }}
+        {/* HOLD LONGER -- radio's hook, next to the padlock because both say
+            "keep this". The difference is one line: the padlock is never,
+            the hook is rarely (about 2.5x as long, see HOOK_HOLD_FACTOR).
+            A padlocked row greys it out, since radio already skips locked
+            rows; the stored flag is kept, so unlocking restores it.
+            RENDERED ALWAYS, hidden with `visibility` while radio is off --
+            a conditionally-rendered child in this grid is the bug the
+            gridTemplateColumns comment above describes. Split from the old
+            three-state cycle button on 2026-09-29; see the spec. */}
+        <RowIconButton
+          gridColumn={6}
+          tooltip="hold longer"
+          onClick={onToggleHook}
+          state={radioFlag === 'hook' ? 'on' : 'off'}
+          disabled={slot.locked}
+          hidden={!radioOn}
         >
-          {/* "h" for the hook, ">" for "move this one along", and a dash
-              for neither -- a glyph in every state, because every other
-              button on this row has one and an empty box among them reads
-              as a missing control rather than an unset one. Lowercase to
-              match the row's own m and s. */}
-          {radioFlag === 'hook' ? 'h' : radioFlag === 'replace-soon' ? '>' : '-'}
-        </button>
+          <HandPalm size={12} />
+        </RowIconButton>
         {/* Direct report, 2026-09-17: "tooltip over the waveforms on
           discover prevents user from dragging the volume, so remove it" --
           this wrapper used to carry a data-tooltip whose own text included
@@ -7361,49 +7371,42 @@ function DiscoverSlotRow({
           )}
         </div>
         <div style={{ gridColumn: 10 }} />
-        {/* Purely decorative -- direct request, 2026-09-17: "place a dice
-            icon to the left of the similar/adjacent/random buttons... this
-            will suggest that they are all randomizers." No onClick/
-            data-tooltip/aria-label: the three buttons it sits beside
-            already carry their own, and a screen reader should skip this
-            entirely, which a plain non-interactive div with no role
-            correctly does. */}
-        <div
-          style={{
-            gridColumn: 11,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            color: 'var(--ra-text-3)'
-          }}
+        {/* CHANGE NEXT -- radio's replace-soon, on this side because it
+            means "replace this", like the four buttons after it, just on
+            radio's clock instead of now. Same visibility and padlock rules
+            as hold longer. */}
+        <RowIconButton
+          gridColumn={11}
+          tooltip="change next"
+          onClick={onToggleReplaceSoon}
+          state={radioFlag === 'replace-soon' ? 'soft' : 'off'}
+          disabled={slot.locked}
+          hidden={!radioOn}
         >
-          <DiceIcon spinning={rerolling} />
-        </div>
-        <button
-          onClick={onReroll}
+          <SignOut size={12} />
+        </RowIconButton>
+        <div style={{ gridColumn: 12, width: 1, height: 18, background: 'var(--ra-border)' }} />
+        {/* The four rerolls, as icons (2026-09-29). The decorative dice that
+            used to sit here and spin while a roll was in flight is gone:
+            the button that STARTED the roll pulses instead, and the others
+            dim, which says the same thing about the right button. */}
+        <RowIconButton
+          gridColumn={13}
+          tooltip="same kind"
+          onClick={() => {
+            setRerollAction('similar')
+            onReroll()
+          }}
           disabled={rerolling}
-          data-tooltip="same kind"
-          aria-label="same kind"
-          style={{
-            gridColumn: 12,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontFamily: 'inherit',
-            fontSize: 9,
-            padding: '3px 7px',
-            whiteSpace: 'nowrap',
-            background: 'transparent',
-            border: '1px solid var(--ra-border)',
-            color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
-            cursor: rerolling ? 'default' : 'pointer'
-          }}
+          pulsing={rerolling && rerollAction === 'similar'}
         >
-          similar
-        </button>
+          <CirclesThree size={12} />
+        </RowIconButton>
         {nearbyAnchor !== null && (
-          <button
-            ref={nearbyButtonRef}
+          <RowIconButton
+            gridColumn={14}
+            tooltip="nearby jam"
+            buttonRef={nearbyButtonRef}
             onClick={(e) => {
               if (nearbyMenu) {
                 closeNearbyMenu()
@@ -7412,76 +7415,27 @@ function DiscoverSlotRow({
               const rect = e.currentTarget.getBoundingClientRect()
               setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
             }}
-            data-tooltip="nearby jam"
-            aria-label="nearby jam"
-            style={{
-              gridColumn: 13,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontFamily: 'inherit',
-              fontSize: 9,
-              padding: '3px 7px',
-              whiteSpace: 'nowrap',
-              background: nearbyMenu ? 'var(--ra-stretch-on-bg)' : 'transparent',
-              border: `1px solid ${nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-              color: nearbyMenu ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
+            state={nearbyMenu ? 'soft' : 'off'}
+            disabled={rerolling}
           >
-            adjacent
-          </button>
+            <Compass size={12} />
+          </RowIconButton>
         )}
-        <button
-          onClick={onRerollRandom}
+        <RowIconButton
+          gridColumn={15}
+          tooltip="any stem"
+          onClick={() => {
+            setRerollAction('random')
+            onRerollRandom()
+          }}
           disabled={rerolling}
-          data-tooltip="any stem"
-          aria-label="any stem"
-          style={{
-            gridColumn: 14,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontFamily: 'inherit',
-            fontSize: 9,
-            padding: '3px 7px',
-            whiteSpace: 'nowrap',
-            background: 'transparent',
-            border: '1px solid var(--ra-border)',
-            color: rerolling ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
-            cursor: rerolling ? 'default' : 'pointer'
-          }}
+          pulsing={rerolling && rerollAction === 'random'}
         >
-          random
-        </button>
-        {/* Direct request, 2026-09-20: "add duplicate channel to discover"
-            -- same 70px labeled-text-button style as similar/adjacent/
-            random above (not an 18px single-letter icon like delete/lock:
-            a bare letter risks misreading, e.g. "D" for "delete" instead
-            of "duplicate"), placed as its own new LAST track (15) rather
-            than reordered next to delete/lock -- see this row's own
-            gridTemplateColumns doc comment above for why. */}
-        <button
-          onClick={onDuplicate}
-          data-tooltip="duplicate"
-          aria-label="duplicate"
-          style={{
-            gridColumn: 15,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontFamily: 'inherit',
-            fontSize: 9,
-            padding: '3px 7px',
-            whiteSpace: 'nowrap',
-            background: 'transparent',
-            border: '1px solid var(--ra-border)',
-            color: 'var(--ra-text-2)',
-            cursor: 'pointer'
-          }}
-        >
-          duplicate
-        </button>
+          <Shuffle size={12} />
+        </RowIconButton>
+        <RowIconButton gridColumn={16} tooltip="duplicate" onClick={onDuplicate}>
+          <Copy size={12} />
+        </RowIconButton>
       </div>
       {nearbyMenu && nearbyAnchor !== null && (
         <DiscoverNearbyPopover

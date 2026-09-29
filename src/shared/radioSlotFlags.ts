@@ -15,11 +15,18 @@
 //    had a way to flag it as one to replace soon for replacement."
 //                                                              (2026-09-29)
 //
-// They are the same gesture pointed in opposite directions, so they are ONE
-// THREE-STATE CONTROL -- hook / normal / replace soon -- and not two
-// buttons. Two buttons on one row that push the same draw in opposite
-// directions is a control that can be made to argue with itself, and the
-// row already carries five.
+// They are the same gesture pointed in opposite directions, and they are
+// TWO CONTROLS on the row: "hold longer" (toggleRadioHook), beside the
+// padlock, and "change next" (toggleRadioReplaceSoon), beside the rerolls.
+// They began as one three-state cycle button -- normal -> replace soon ->
+// hook -- on the argument that two buttons pushing one draw in opposite
+// directions could be made to argue with each other. Split on 2026-09-29
+// (docs/superpowers/specs/2026-09-29-discover-row-icons-and-source-dial-
+// design.md): three glyphs on one square did not say what they meant, the
+// cycle made the order matter, and "keep this" and "replace this" belong
+// beside the controls they resemble. They still cannot argue, because a
+// slot holds at most one flag: pressing one control replaces the other's
+// mark on that row.
 //
 // See docs/superpowers/specs/2026-09-28-radio-controls-design.md 6.3-6.4 for
 // the weighting the hook plugs into. The replace-soon half is not in that
@@ -49,10 +56,9 @@ export type RadioSlotFlag = 'hook' | 'replace-soon'
 /** Flags by slot id, absent meaning normal.
  *
  * ONE map rather than a `hookSlotId` scalar beside a `replaceSoonIds` set,
- * because it is one control: a slot cannot be both, and two stores could
- * disagree about that while the row can only draw one state. The
- * at-most-one-hook invariant is enforced in cycleRadioSlotFlag instead,
- * which is the only writer. */
+ * because a slot holds one flag: it cannot be both, and two stores could
+ * disagree about that. The at-most-one-hook invariant is enforced in
+ * toggleRadioHook instead, which is the only writer of `hook`. */
 export type RadioSlotFlags = Readonly<Record<string, RadioSlotFlag>>
 
 export const NO_RADIO_SLOT_FLAGS: RadioSlotFlags = {}
@@ -122,8 +128,8 @@ export const HOOK_HOLD_FACTOR = 8
  * Different failure modes, different numbers. */
 export const REPLACE_SOON_FACTOR = 4
 
-/** What a flag does to a slot's draw weight. One multiply, so the whole
- * three-state control is a single term in pickRadioSlotId's formula rather
+/** What a flag does to a slot's draw weight. One multiply, so both
+ * controls together are a single term in pickRadioSlotId's formula rather
  * than a branch in it. */
 export function radioSlotFlagWeightFactor(flag: RadioSlotFlag | null): number {
   if (flag === 'hook') return 1 / HOOK_HOLD_FACTOR
@@ -135,9 +141,9 @@ export function radioSlotFlagOf(flags: RadioSlotFlags, id: string): RadioSlotFla
   return flags[id] ?? null
 }
 
-/** The hooked slot, or null. At most one can exist -- cycleRadioSlotFlag is
- * the only writer and it guarantees it -- so this is a lookup, not a
- * choice. */
+/** The hooked slot, or null. At most one can exist -- toggleRadioHook is
+ * the only writer of `hook` and it guarantees it -- so this is a lookup,
+ * not a choice. */
 export function radioHookSlotId(flags: RadioSlotFlags): string | null {
   for (const [id, flag] of Object.entries(flags)) if (flag === 'hook') return id
   return null
@@ -169,41 +175,6 @@ export function toggleRadioHook(flags: RadioSlotFlags, id: string): RadioSlotFla
 /** The row's "change next" control: mark this slot to be replaced soon,
  * or unmark it.
  *
- * NOT at-most-one. Replace-soon makes no claim about the track's
- * structure; being tired of three layers at once is an ordinary thing to
- * be, and making it exclusive would mean flagging a second layer silently
- * unflags the first. It never touches another slot's flag of either kind.
- *
- * One flag per slot, so marking a hooked slot replaces its hook. */
-export function toggleRadioReplaceSoon(flags: RadioSlotFlags, id: string): RadioSlotFlags {
-  const out: Record<string, RadioSlotFlag> = {}
-  for (const [otherId, flag] of Object.entries(flags)) if (otherId !== id) out[otherId] = flag
-  if (flags[id] !== 'replace-soon') out[id] = 'replace-soon'
-  return out
-}
-
-/** One press of the row's flag control: none -> replace soon -> hook ->
- * none.
- *
- * ORDER, and it is not the obvious one. The first draft cycled through
- * `hook` first and a test caught what that costs: `hook` is at-most-one, so
- * PASSING THROUGH it on the way to `replace-soon` silently released
- * whatever hook was already set, somewhere else on the panel, with no press
- * that said so. Reaching a destructive state by accident on the way to a
- * harmless one is the wrong way round.
- *
- * So the transient, harmless, unlimited state is one press away and the
- * exclusive, standing one takes two. That also matches how often each is
- * wanted -- a track has one hook for a whole session and any number of
- * layers get tired -- and it leaves "release hook" at a single press, which
- * is where it belongs.
- *
- * A three-cycle still puts the two opposites one press apart somewhere:
- * overshooting `replace-soon` lands on `hook`. Accepted rather than solved.
- * The state is drawn on the button, the tooltip names what the NEXT press
- * does, and at radio's pace an accidental flag costs at most one layer
- * before a second press undoes it.
- *
  * DECISION 2 OF 3: does "at most one" apply to replace-soon? No.
  *
  * It is load-bearing for the hook and the spec says why -- two hooks is two
@@ -217,18 +188,14 @@ export function toggleRadioReplaceSoon(flags: RadioSlotFlags, id: string): Radio
  * exists to avoid.
  *
  * So: marking a hook releases any other hook, silently, the way a radio
- * button does. Marking a replace-soon releases nothing. */
-export function cycleRadioSlotFlag(flags: RadioSlotFlags, id: string): RadioSlotFlags {
-  const next: RadioSlotFlag | null =
-    flags[id] === undefined ? 'replace-soon' : flags[id] === 'replace-soon' ? 'hook' : null
+ * button does. Marking a replace-soon releases nothing, and never touches
+ * another slot's flag of either kind.
+ *
+ * One flag per slot, so marking a hooked slot replaces its hook. */
+export function toggleRadioReplaceSoon(flags: RadioSlotFlags, id: string): RadioSlotFlags {
   const out: Record<string, RadioSlotFlag> = {}
-  for (const [otherId, flag] of Object.entries(flags)) {
-    if (otherId === id) continue
-    // At most one hook, and only the hook.
-    if (next === 'hook' && flag === 'hook') continue
-    out[otherId] = flag
-  }
-  if (next !== null) out[id] = next
+  for (const [otherId, flag] of Object.entries(flags)) if (otherId !== id) out[otherId] = flag
+  if (flags[id] !== 'replace-soon') out[id] = 'replace-soon'
   return out
 }
 
