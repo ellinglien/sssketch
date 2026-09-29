@@ -347,7 +347,37 @@ namespace sssketch
         return loopEnd - pos;
     }
 
-    void Transport::applyStagedProjectAtWrap(double atBars)
+    double Transport::barsUntilBar(double targetBar) const
+    {
+        // Same window selection as barsUntilNextWrap and renderLoopAware,
+        // and for the same reason: a recording loop, when active, IS the
+        // loop the audio thread wraps at, so it is also the lap a
+        // mid-lap boundary has to live inside.
+        const double recStart = recordingLoopStartBar.load();
+        const double recEnd = recordingLoopEndBar.load();
+        const bool recordingLoopActive = recEnd > recStart;
+        const double loopStart = recordingLoopActive ? recStart : 0.0;
+        const double loopEnd = recordingLoopActive ? recEnd : loopLengthBars.load();
+        if (loopEnd - loopStart <= 0.0)
+            return -1.0;
+        // A target AT the top is the wrap, which barsUntilNextWrap
+        // already answers and renderLoopAware already lands exactly.
+        if (!(targetBar > loopStart) || !(targetBar < loopEnd))
+            return -1.0;
+
+        const double pos = positionBars.load();
+        if (pos < loopStart || pos >= loopEnd)
+            return -1.0;
+        // Already behind the playhead. Deliberately NOT read as "the same
+        // bar, next lap": that would land a whole loop early, which is a
+        // far worse fault than the lateness this whole mechanism exists
+        // to remove. The caller does it now instead.
+        if (targetBar <= pos)
+            return -1.0;
+        return targetBar - pos;
+    }
+
+    void Transport::applyStagedProjectAtWrap(double atBars, bool atRequestedBar)
     {
         const auto result = engine.applyStagedProject();
         if (result == PlaybackEngine::StagedApply::Deferred)
@@ -358,6 +388,16 @@ namespace sssketch
         stagedApplyRetryDue = false;
         if (result != PlaybackEngine::StagedApply::Applied)
             return;
+
+        // Consumed with the project it belonged to. Left set, the next
+        // block would split at the same bar again for a swap that has
+        // already happened -- harmless, but it would also outlive its
+        // own project and could be read by a LATER stage that meant the
+        // loop top. Cleared here rather than only on the message thread
+        // because this is the thread that knows the swap actually
+        // happened.
+        stagedApplyAtBars.store(-1.0);
+        stagedApplyAtRequestedBar.store(atRequestedBar);
 
         // Adopted in the same breath as the project it belongs to: a loop
         // length changed any earlier would have moved the very wrap this
@@ -450,14 +490,81 @@ namespace sssketch
             applyStagedProjectAtWrap(loopStart);
         }
 
+        // A swap the message thread aimed at a BAR rather than at the lap
+        // top -- radio's bare cuts, the one population the loop-top-only
+        // swap could never reach (see setStagedApplyAtBars). Only ever a
+        // bar strictly inside the wrap window; barsUntilBar refuses
+        // anything else on the message thread, and this re-reads the
+        // window it was checked against rather than trusting it, because
+        // the window can move (a recording loop being armed) between the
+        // two.
+        const double stagedBar = stagedApplyAtBars.load();
+        const bool stagedBarInLap = stagedBar > loopStart && stagedBar < loopEnd;
+        if (stagedBarInLap && stagedBar <= pos)
+        {
+            // The bar went by in a block that was already in flight when
+            // the message thread named it, or a seek carried the playhead
+            // over it. The top of a block is the same "no renderBlock in
+            // flight" position the real split is, so it is safe by the
+            // same argument -- exactly the trade stagedApplyRetryDue
+            // already makes, and for the same reason: late by a block
+            // beats late by a lap, and both beat never.
+            applyStagedProjectAtWrap(pos, true);
+        }
+
         const double distToEnd = loopEnd - pos;
         if (distToEnd >= blockDurationBars)
         {
-            // No wrap within this block.
-            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
+            // No wrap within this block -- but possibly the requested bar.
+            //
+            // SAMPLE-ACCURATE BY BORROWING THE WRAP'S OWN TRICK. The lap
+            // top is exact because this function already had to split the
+            // block there for rendering reasons; an arbitrary bar has no
+            // such split, so it gets one of its own, for no reason other
+            // than the swap. At kPreferredBufferSize (1024) a
+            // block-granular swap would be up to ~23ms out, which is a
+            // visible fraction of a 16th note and audibly not "on the
+            // boundary." This costs one extra renderBlock call on the one
+            // block per change that contains the bar.
+            //
+            // The second half continues from pos + splitIndex samples,
+            // NOT from stagedBar: every layer the change did NOT touch
+            // has to stay sample-continuous across the seam, and rounding
+            // the position to the requested bar would step them by up to
+            // half a sample. The wrap split can use loopStart because
+            // there everything genuinely restarts.
+            const double barsIntoBlock = stagedBar - pos;
+            if (stagedBarInLap && barsIntoBlock > 0.0 && barsIntoBlock < blockDurationBars)
+            {
+                const int splitIndex =
+                    std::clamp((int) std::lround(barsIntoBlock / barsPerSample), 0, numSamples);
+                if (splitIndex > 0)
+                    engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR, channelChains);
+                // The same gap, for the same reason, as the wrap split
+                // below: the first render has returned and released its
+                // reference to the outgoing snapshot, and the second has
+                // not taken one yet. Nothing about the reclamation
+                // argument changes for a boundary that is not the top.
+                applyStagedProjectAtWrap(stagedBar, true);
+                if (splitIndex < numSamples)
+                    engine.renderBlock(pos + (double) splitIndex * barsPerSample, deviceSampleRate,
+                                       numSamples - splitIndex, outL + splitIndex,
+                                       outR + splitIndex, channelChains);
+            }
+            else
+            {
+                engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
+            }
         }
         else
         {
+            // The wrap wins a block it shares with a requested bar, and
+            // deliberately: the two are then less than one block apart,
+            // so the difference is under ~23ms either way, and nesting a
+            // second split inside this one would buy that back at the
+            // cost of the clearest code in this file. applyStagedProject
+            // at the wrap takes the staged project, and the requested bar
+            // is cleared with it.
             // The wrap falls partway through this block -- render each side
             // from its own correct (and, for the incoming side, correctly
             // wrapped-to-loopStart) position rather than letting a single

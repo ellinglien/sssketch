@@ -93,9 +93,18 @@ namespace sssketch
 
         /** Finishes a staged swap that has actually taken effect: runs the
          * message-thread side effects and sends the project-applied ack.
-         * `via` is that ack's own field -- "wrap", "deadline",
+         * `via` is that ack's own field -- "wrap", "bar", "deadline",
          * "transport-stopped" or "immediate". */
         void finishStagedApply(const juce::String& via, double atBars);
+
+        /** Which of the audio thread's own two landing sites the last swap
+         * used -- "bar" when the message thread had asked for one with
+         * stage-project's `atBars` and the audio thread genuinely landed
+         * there, "wrap" otherwise. Asked of the transport rather than
+         * remembered here, because a requested bar can still end up
+         * landing at a wrap (they shared a block) and the ack has to say
+         * what happened, not what was asked for. */
+        juce::String audioThreadApplyVia() const;
 
         void sendStageResult(int token, const juce::String& status, const juce::String& reason);
 

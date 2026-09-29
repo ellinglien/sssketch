@@ -175,6 +175,27 @@ namespace sssketch
          * to WAIT, nothing sample-accurate. */
         double barsUntilNextWrap() const;
 
+        /** Message-thread API: how far, in bars, the playhead is from
+         * `targetBar` WITHIN THE LAP IT IS CURRENTLY IN -- the same
+         * question barsUntilNextWrap answers, for a boundary that is not
+         * the wrap.
+         *
+         * Returns -1.0, with the same "waiting for this would wait
+         * forever" meaning, whenever the bar is not genuinely ahead of
+         * the playhead inside the current lap: nothing wraps at all, the
+         * bar sits outside the wrap window, the playhead is outside it,
+         * or the bar is already behind. That last case is the one worth
+         * naming -- a target the renderer aimed at and the transport has
+         * already passed must NOT be read as "the same bar, one lap
+         * later," which would land a whole loop early. The caller treats
+         * -1.0 from a bar that was genuinely requested as "too late to
+         * schedule, do it now," which is exactly what load-project
+         * already does.
+         *
+         * A target AT loopStart is the wrap, not a bar within the lap, so
+         * it is excluded here and left to barsUntilNextWrap. */
+        double barsUntilBar(double targetBar) const;
+
         /** Message-thread API: the loop length belonging to a project
          * currently staged in PlaybackEngine, to be adopted at the same
          * instant the staged snapshot is -- not before, or the very wrap
@@ -190,11 +211,51 @@ namespace sssketch
          * see IpcServer's own stage-project handler for what that costs. */
         void setStagedLoopLengthBars(double bars) { stagedLoopLengthBars.store(bars); }
 
+        /** WHICH boundary the staged swap is waiting for. Negative (the
+         * default, and what the audio thread leaves behind once it has
+         * consumed one) means the loop top, which is the only answer
+         * b876204 had.
+         *
+         * A bar strictly inside the wrap window instead makes the swap
+         * land there. It exists for the one population the loop-top-only
+         * swap could not reach: radio's bare `cut`s, where a layer of
+         * DEFAULT_RADIO_LOOP_END_BARS or fewer turns over on its own 2- or
+         * 4-bar boundary (radioGridBars). About one change in twenty, and
+         * the only ones still falling back to load-project's 20-65ms of
+         * lateness.
+         *
+         * SAMPLE-ACCURATE, NOT BLOCK-ACCURATE, and that is the whole
+         * design question. The loop-top swap is exact because
+         * renderLoopAware ALREADY splits its block at the wrap, so there
+         * is a point in the call where no renderBlock is in flight -- the
+         * precondition PlaybackEngine::applyStagedProject is built on. An
+         * arbitrary bar has no such split, and at kPreferredBufferSize
+         * (1024, ~23ms) a block-granular swap would be a visible fraction
+         * of a 16th note. So renderLoopAware splits at the target bar too,
+         * in exactly the same shape as the wrap split, and the reclamation
+         * argument carries over unchanged: same gap, same four
+         * reference-count adjustments, same retirement slot, no
+         * allocation and no free on this thread.
+         *
+         * Message-thread-only call, consumed by the audio thread, same
+         * handoff as every other atomic in this class. The caller must
+         * have checked with barsUntilBar() that the bar really is ahead
+         * of the playhead in this lap; see that function for what happens
+         * when it is not. */
+        void setStagedApplyAtBars(double bars) { stagedApplyAtBars.store(bars); }
+
         /** The transport position at which the audio thread last promoted a
          * staged project, or -1.0 if it never has. For the renderer's own
          * ack and the engine log: it is how "the swap landed at 0.000 bar"
          * gets measured on the one clock that matters. */
         double lastStagedApplyPositionBars() const { return stagedApplyPositionBars.load(); }
+
+        /** Whether that last promotion happened at a requested bar rather
+         * than at a loop top. Purely so the ack and the `[radio-stage]`
+         * line can say which -- `via wrap at 0.000bar` and `via bar at
+         * 4.000bar` are different events and a log that called both
+         * "wrap" would be lying about the second. */
+        bool lastStagedApplyWasAtRequestedBar() const { return stagedApplyAtRequestedBar.load(); }
 
         // A second, independent loop region -- the recording loop set by
         // arm-recording (IPC), completely separate from the project's own
@@ -259,12 +320,17 @@ namespace sssketch
         double renderLoopAware(double pos, int numSamples, float* outL, float* outR);
 
         /** AUDIO THREAD. Promotes a project the message thread staged
-         * earlier, at the instant the lap turns over. Called from
-         * renderLoopAware at the two points where a lap genuinely ends: the
+         * earlier, at the instant the lap turns over -- or, when the
+         * message thread asked for one (setStagedApplyAtBars), at the
+         * instant the playhead crosses that bar. Called from
+         * renderLoopAware at the points where a lap genuinely ends: the
          * split between an outgoing block's tail and the incoming lap's
-         * head, and the snap back to loopStart from beyond a loop's end.
+         * head, and the snap back to loopStart from beyond a loop's end --
+         * plus, since the arbitrary-bar swap landed, the split
+         * renderLoopAware makes at the requested bar, which exists for
+         * exactly this call and no other reason.
          *
-         * Both are points at which no renderBlock() call is in flight --
+         * All of them are points at which no renderBlock() call is in flight --
          * the split's first render has returned and its second has not
          * begun -- which is the whole precondition
          * PlaybackEngine::applyStagedProject() is built on. Read its doc
@@ -274,8 +340,9 @@ namespace sssketch
          *
          * `atBars` is the loop-relative position the new project's first
          * sample will be rendered from -- reported back to the renderer as
-         * the position the swap landed at. */
-        void applyStagedProjectAtWrap(double atBars);
+         * the position the swap landed at. `atRequestedBar` is only for
+         * that report; see lastStagedApplyWasAtRequestedBar. */
+        void applyStagedProjectAtWrap(double atBars, bool atRequestedBar = false);
 
 
         PlaybackEngine& engine;
@@ -287,6 +354,10 @@ namespace sssketch
         std::atomic<double> loopLengthBars { 0.0 }; // 0 = wrapping disabled
         std::atomic<double> stagedLoopLengthBars { -1.0 }; // < 0 = none pending, see setStagedLoopLengthBars
         std::atomic<double> stagedApplyPositionBars { -1.0 }; // -1 = no staged swap has ever landed
+        // < 0 = the swap waits for the loop top, which is the only answer
+        // b876204 had. See setStagedApplyAtBars.
+        std::atomic<double> stagedApplyAtBars { -1.0 };
+        std::atomic<bool> stagedApplyAtRequestedBar { false };
         std::atomic<double> recordingLoopStartBar { 0.0 };
         std::atomic<double> recordingLoopEndBar { 0.0 }; // <= start = disabled
         std::atomic<LoopRecorder*> loopRecorder { nullptr }; // nullptr = nothing armed

@@ -79,6 +79,7 @@ namespace sssketch
         engine.cancelStagedProject();
         engine.drainRetiredProject();
         transport.setStagedLoopLengthBars(-1.0);
+        transport.setStagedApplyAtBars(-1.0);
         detachArmedRecorderOnTeardown();
         // InterprocessConnection's destructor requires derived classes to have
         // already called disconnect() — without this, pending messages can still
@@ -143,6 +144,7 @@ namespace sssketch
         stagedToken = -1;
         stagedProject = {};
         transport.setStagedLoopLengthBars(-1.0);
+        transport.setStagedApplyAtBars(-1.0);
         detachArmedRecorderOnTeardown();
     }
 
@@ -203,6 +205,11 @@ namespace sssketch
         sendJson(juce::var(obj.get()));
     }
 
+    juce::String IpcConnection::audioThreadApplyVia() const
+    {
+        return transport.lastStagedApplyWasAtRequestedBar() ? "bar" : "wrap";
+    }
+
     void IpcConnection::finishStagedApply(const juce::String& via, double atBars)
     {
         // Deliberately AFTER the swap, not before it. updateChannelSet is
@@ -234,6 +241,7 @@ namespace sssketch
         stagedToken = -1;
         stagedProject = {};
         transport.setStagedLoopLengthBars(-1.0);
+        transport.setStagedApplyAtBars(-1.0);
     }
 
     void IpcConnection::resolveStagedBefore(const juce::String& reason)
@@ -248,6 +256,7 @@ namespace sssketch
             stagedToken = -1;
             stagedProject = {};
             transport.setStagedLoopLengthBars(-1.0);
+            transport.setStagedApplyAtBars(-1.0);
             return;
         }
 
@@ -257,7 +266,7 @@ namespace sssketch
         // the side effects that swap still needs get run.
         sendStageResult(stagedToken, "applied", reason);
         lastSeenStagedApplies = engine.stagedApplyCount();
-        finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
+        finishStagedApply(audioThreadApplyVia(), transport.lastStagedApplyPositionBars());
     }
 
     void IpcConnection::pumpStagedProject()
@@ -275,7 +284,7 @@ namespace sssketch
         if (applies != lastSeenStagedApplies)
         {
             lastSeenStagedApplies = applies;
-            finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
+            finishStagedApply(audioThreadApplyVia(), transport.lastStagedApplyPositionBars());
             return;
         }
 
@@ -291,7 +300,7 @@ namespace sssketch
                 // The audio thread won the race between the isPlaying()
                 // check and the promote -- it already swapped.
                 lastSeenStagedApplies = engine.stagedApplyCount();
-                finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
+                finishStagedApply(audioThreadApplyVia(), transport.lastStagedApplyPositionBars());
             }
             return;
         }
@@ -303,7 +312,7 @@ namespace sssketch
             else
             {
                 lastSeenStagedApplies = engine.stagedApplyCount();
-                finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
+                finishStagedApply(audioThreadApplyVia(), transport.lastStagedApplyPositionBars());
             }
         }
     }
@@ -500,6 +509,28 @@ namespace sssketch
             // in the past by the time we get to check it.
             const auto arrivedAtMs = juce::Time::getMillisecondCounterHiRes();
             const double barsToWrap = transport.barsUntilNextWrap();
+            // WHICH boundary this one is aimed at. Absent (or negative)
+            // is the loop top, which is every change this feature has
+            // handled since b876204. A bar is radio's other landing site:
+            // radioGridBars lets a layer of DEFAULT_RADIO_LOOP_END_BARS
+            // or fewer turn over on its own 2- or 4-bar boundary, and a
+            // bare `cut` carries no curve that would need the loop top,
+            // so those land mid-lap. About one change in twenty, and
+            // until now the only ones still paying load-project's 20-65ms
+            // of lateness.
+            //
+            // Read here, beside barsToWrap, because the deadline has to
+            // be built from whichever of the two this swap is actually
+            // waiting for -- a deadline measured to the wrap would let a
+            // bar-aimed swap sit for most of a lap after its own bar went
+            // by unserved.
+            const double requestedBar = payload.hasProperty("atBars")
+                ? (double) payload.getProperty("atBars", -1.0)
+                : -1.0;
+            const double barsToBar =
+                requestedBar >= 0.0 ? transport.barsUntilBar(requestedBar) : -1.0;
+            const bool aimedAtBar = barsToBar >= 0.0;
+            const double barsToApply = aimedAtBar ? barsToBar : barsToWrap;
             const double liveBpm = transport.currentBpm();
             const double liveSecPerBar = liveBpm > 0.0 ? (60.0 / liveBpm) * 4.0 : 0.0;
 
@@ -519,8 +550,8 @@ namespace sssketch
             if (stagedToken >= 0)
                 resolveStagedBefore("superseded");
 
-            // Three reasons waiting for a loop top is the wrong answer, and
-            // all three resolve the same way: do it now, exactly as
+            // Four reasons waiting for the boundary is the wrong answer,
+            // and all four resolve the same way: do it now, exactly as
             // load-project would have. (1) Nothing is playing, so no wrap
             // will ever come. (2) Nothing wraps at all -- no loop length
             // set. (3) The tempo changes, which is deliberately out of
@@ -529,11 +560,22 @@ namespace sssketch
             // from the audio thread, and neither is real-time-safe. Radio
             // swaps layers inside one tempo-matched loop, so (3) never
             // fires for the case this exists for.
+            //
+            // (4), added with the arbitrary-bar swap: a bar was asked for
+            // and it is not ahead of the playhead in this lap -- it went
+            // by while the renderer was building, or a seek carried the
+            // transport over it. barsUntilBar deliberately refuses to
+            // read that as "the same bar, one lap later," which would
+            // land the change a whole loop early. Doing it now is what
+            // load-project does today, so this case is never worse than
+            // the status quo it replaces.
             const bool tempoChanges = std::abs(project.bpm - liveBpm) > 1.0e-9;
+            const bool barAlreadyPassed = requestedBar >= 0.0 && !aimedAtBar && barsToWrap >= 0.0;
             const char* immediateReason =
                 !transport.isPlaying() ? "not-playing"
                 : barsToWrap < 0.0     ? "no-loop"
                 : tempoChanges         ? "tempo-change"
+                : barAlreadyPassed     ? "bar-passed"
                                        : nullptr;
             if (immediateReason != nullptr)
             {
@@ -554,6 +596,15 @@ namespace sssketch
             // loop top between those two lines, and a baseline taken after
             // it would swallow the very edge the ack rides on.
             lastSeenStagedApplies = engine.stagedApplyCount();
+            // The target BEFORE the project, not after: the audio thread
+            // checks both every block, and the only ordering that can go
+            // wrong is the one where a staged project becomes visible
+            // while the target it belongs to is still the previous
+            // swap's (or absent), which would take it at the wrong
+            // boundary. This way round the worst case is the opposite --
+            // a target briefly set with nothing staged -- which costs one
+            // block's extra renderBlock split and applies nothing.
+            transport.setStagedApplyAtBars(aimedAtBar ? requestedBar : -1.0);
             engine.stageProject(project);
             transport.setStagedLoopLengthBars(project.loopLengthBars);
             stagedToken = token;
@@ -564,7 +615,7 @@ namespace sssketch
             // thread only NOTICES on its next 30Hz tick, and the transport
             // clock and this wall clock are different clocks.
             constexpr double kStageDeadlineMarginMs = 250.0;
-            stageDeadlineMs = arrivedAtMs + barsToWrap * liveSecPerBar * 1000.0 + kStageDeadlineMarginMs;
+            stageDeadlineMs = arrivedAtMs + barsToApply * liveSecPerBar * 1000.0 + kStageDeadlineMarginMs;
             sendStageResult(token, "staged", {});
 
             // Staging may itself have run past the loop top it was aiming

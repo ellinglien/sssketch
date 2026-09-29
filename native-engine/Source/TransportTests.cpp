@@ -5,6 +5,9 @@
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <thread>
 #include <vector>
 
 namespace sssketch
@@ -625,6 +628,221 @@ namespace sssketch
                     transport.setRecordingLoop(1.0, 2.0);
                     expectWithinAbsoluteError(
                         transport.barsUntilNextWrap(), 2.0 - transport.currentPositionBars(), 1.0e-12);
+                }
+
+                // THE ARBITRARY-BAR SWAP (2026-09-29). Everything above
+                // lands at a loop top, which is where all but about one
+                // radio change in twenty lands. The rest are bare `cut`s
+                // on a layer of DEFAULT_RADIO_LOOP_END_BARS or fewer,
+                // turning over on their own 2- or 4-bar boundary
+                // (radioGridBars) -- mid-lap, where there is no wrap to
+                // wait for. See Transport::setStagedApplyAtBars.
+                //
+                // A one-bar loop at 240bpm is one second, so the target
+                // below sits 22050 samples in: ~43 blocks of watching
+                // nothing happen, then the block that contains it.
+                constexpr double kBarLoopBars = 1.0;
+                constexpr double kTargetBar = 0.5;
+
+                beginTest("a staged project aimed at a BAR lands at that bar to the sample -- not at "
+                          "the loop top, and not at the top of whichever block the bar fell inside");
+                {
+                    auto tone5 = writeConstantToneWav("sssketch_transport_stage_bar.wav", 44100);
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    EngineProject base = makeProject(kBarLoopBars);
+                    base.rifffs[0].stems[0].resolvedPath = tone5.getFullPathName();
+                    engine.setProject(base);
+
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(kBpm);
+                    transport.setLoopLengthBars(kBarLoopBars);
+                    transport.play(0.0);
+
+                    std::vector<float> l((size_t) kBlock), r((size_t) kBlock);
+                    float* channels[2] = { l.data(), r.data() };
+
+                    // Handed over EARLY and mid-lap, well before the bar
+                    // it names -- the whole premise of a staged swap.
+                    for (int i = 0; i < 3; ++i)
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                    expect(transport.currentPositionBars() < kTargetBar);
+                    expectWithinAbsoluteError(
+                        transport.barsUntilBar(kTargetBar),
+                        kTargetBar - transport.currentPositionBars(), 1.0e-12);
+
+                    engine.stageProject(base);
+                    transport.setStagedApplyAtBars(kTargetBar);
+
+                    double posBeforeSwapBlock = -1.0;
+                    for (int i = 0; i < 400 && engine.stagedApplyCount() == 0; ++i)
+                    {
+                        posBeforeSwapBlock = transport.currentPositionBars();
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                    }
+
+                    expect(engine.stagedApplyCount() == 1);
+                    // It happened in the one block the target falls inside,
+                    // and in none of the ones before it (the loop condition
+                    // above is what asserts that half).
+                    expect(posBeforeSwapBlock < kTargetBar);
+                    expect(posBeforeSwapBlock + blockBars >= kTargetBar);
+                    // WHERE IT LANDED, which is the point of this test: at
+                    // the requested bar itself, not at the top of the block
+                    // that contained it (posBeforeSwapBlock, up to ~23ms
+                    // early at the shipping buffer size) and not at the
+                    // loop top. Block granularity is a visible fraction of
+                    // a 16th note; the split renderLoopAware makes at the
+                    // bar is what buys the difference.
+                    expectWithinAbsoluteError(
+                        transport.lastStagedApplyPositionBars(), kTargetBar, 1.0e-12);
+                    expect(transport.lastStagedApplyWasAtRequestedBar());
+                    // And the lap has NOT turned over -- this whole swap
+                    // happened inside one pass of the loop, which is the
+                    // thing the loop-top-only mechanism could not do.
+                    expect(transport.currentPositionBars() < kBarLoopBars);
+                    expect(transport.currentPositionBars() > kTargetBar);
+
+                    engine.drainRetiredProject();
+                    tone5.deleteFile();
+                }
+
+                beginTest("a requested bar the playhead has already gone past is served at the top of "
+                          "the very next block, never a whole lap later");
+                {
+                    auto tone6 = writeConstantToneWav("sssketch_transport_stage_bar2.wav", 44100);
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    EngineProject base = makeProject(kBarLoopBars);
+                    base.rifffs[0].stems[0].resolvedPath = tone6.getFullPathName();
+                    engine.setProject(base);
+
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(kBpm);
+                    transport.setLoopLengthBars(kBarLoopBars);
+                    transport.play(0.0);
+
+                    std::vector<float> l((size_t) kBlock), r((size_t) kBlock);
+                    float* channels[2] = { l.data(), r.data() };
+
+                    // Straight past the target with nothing staged. This is
+                    // the bar going by in a block that was already in
+                    // flight when the message thread named it.
+                    while (transport.currentPositionBars() <= kTargetBar)
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                    const double posBefore = transport.currentPositionBars();
+                    expect(posBefore > kTargetBar);
+                    // The message thread's own refusal, which is what stops
+                    // this being read as "the same bar, one lap later."
+                    expect(transport.barsUntilBar(kTargetBar) < 0.0);
+
+                    engine.stageProject(base);
+                    transport.setStagedApplyAtBars(kTargetBar);
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+
+                    expect(engine.stagedApplyCount() == 1);
+                    expectWithinAbsoluteError(
+                        transport.lastStagedApplyPositionBars(), posBefore, 1.0e-12);
+                    // Still the same lap: late by one block, not by a loop.
+                    expect(transport.currentPositionBars() < kBarLoopBars);
+
+                    engine.drainRetiredProject();
+                    tone6.deleteFile();
+                }
+
+                beginTest("barsUntilBar answers only for a bar genuinely ahead of the playhead inside "
+                          "the lap the audio thread is actually wrapping at");
+                {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(kBpm);
+
+                    // Nothing wraps at all -- there is no lap for a bar to
+                    // be inside, same answer barsUntilNextWrap gives.
+                    expect(transport.barsUntilBar(2.0) < 0.0);
+
+                    transport.setLoopLengthBars(4.0);
+                    const double pos = transport.currentPositionBars();
+                    expectWithinAbsoluteError(transport.barsUntilBar(2.0), 2.0 - pos, 1.0e-12);
+                    // The top itself is the WRAP, not a bar within the lap
+                    // -- renderLoopAware already lands that one exactly,
+                    // and answering for it here would give the same swap
+                    // two landing sites.
+                    expect(transport.barsUntilBar(0.0) < 0.0);
+                    expect(transport.barsUntilBar(4.0) < 0.0);
+                    expect(transport.barsUntilBar(9.0) < 0.0);
+
+                    // A recording loop takes over the window entirely,
+                    // exactly as renderLoopAware and barsUntilNextWrap
+                    // both treat it: bar 3 is inside the PROJECT loop and
+                    // outside the one actually being wrapped.
+                    transport.setRecordingLoop(0.0, 2.0);
+                    expectWithinAbsoluteError(transport.barsUntilBar(1.0), 1.0 - pos, 1.0e-12);
+                    expect(transport.barsUntilBar(3.0) < 0.0);
+                }
+
+                beginTest("sustained bar-aimed staging against a running audio callback -- the split "
+                          "at an arbitrary bar is the same safe point the wrap split is");
+                {
+                    auto tone7 = writeConstantToneWav("sssketch_transport_stage_bar3.wav", 44100);
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    EngineProject base = makeProject(kBarLoopBars);
+                    base.rifffs[0].stems[0].resolvedPath = tone7.getFullPathName();
+                    engine.setProject(base);
+
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(kBpm);
+                    transport.setLoopLengthBars(kBarLoopBars);
+                    transport.play(0.0);
+
+                    std::atomic<bool> stop { false };
+
+                    // The real audio callback, in a tight loop -- so the
+                    // swap is taken inside renderLoopAware's own bar split
+                    // rather than at a hand-placed call site, which is the
+                    // difference between this and PlaybackEngineTests'
+                    // version of the same stress.
+                    std::thread audio([&]() {
+                        std::vector<float> l((size_t) kBlock), r((size_t) kBlock);
+                        float* channels[2] = { l.data(), r.data() };
+                        while (!stop.load())
+                            transport.audioDeviceIOCallbackWithContext(
+                                nullptr, 0, channels, 2, kBlock, {});
+                    });
+
+                    for (int i = 0; i < 400; ++i)
+                    {
+                        // Re-aimed every time, all over the lap: the
+                        // message thread naming a bar the audio thread may
+                        // be standing on, about to split at, or already
+                        // past.
+                        transport.setStagedApplyAtBars(0.1 + 0.1 * (double) (i % 8));
+                        engine.stageProject(base);
+                        engine.drainRetiredProject();
+                        std::this_thread::sleep_for(std::chrono::microseconds(200));
+                    }
+
+                    stop.store(true);
+                    audio.join();
+                    engine.drainRetiredProject();
+                    // Not an exact count -- a stage can legitimately be
+                    // superseded before it is ever taken. What matters is
+                    // that swaps really happened under contention, and
+                    // that nothing crashed or freed a snapshot on the
+                    // audio thread doing it.
+                    expect(engine.stagedApplyCount() > 0);
+
+                    tone7.deleteFile();
                 }
             }
         }
