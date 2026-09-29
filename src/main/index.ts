@@ -280,6 +280,7 @@ let lastRemoteState: RemoteState = {
   rolled: 0,
   lastKeptName: null,
   loopBars: 0,
+  radio: null,
   slots: []
 }
 let remotePairingGate: PairingGate = { attemptsUsed: 0, lockedOut: false }

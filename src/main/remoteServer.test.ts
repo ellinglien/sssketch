@@ -98,6 +98,7 @@ async function start(
       rolled: 0,
       lastKeptName: null,
       loopBars: 0,
+      radio: null,
       slots: [],
       loopId: null
     }),
@@ -293,6 +294,7 @@ describe('switching address', () => {
         rolled: 0,
         lastKeptName: null,
         loopBars: 0,
+        radio: null,
         slots: [],
         loopId: null
       }),

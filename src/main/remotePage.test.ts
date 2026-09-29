@@ -1190,3 +1190,36 @@ describe('remotePage last resort', () => {
     expect(SCRIPT).not.toContain('preventDefault')
   })
 })
+
+describe('remotePage rows about to change', () => {
+  // Direct report, 2026-09-29, listening on radio: "i don't see any
+  // preparatory blinking on the channels about to transition... it seems
+  // to make sense to have that in the ui". The phone is a per-stem mixer
+  // now and the same fact is worth the same there.
+  it('marks the row radio is about to change with a rule, not a blink', () => {
+    expect(REMOTE_PAGE_HTML).toContain('.ahead {')
+    // A rule that grows toward the moment. Nothing on this page animates
+    // on a timer, and a flash would compete with the one thing that does
+    // move -- the playhead.
+    expect(REMOTE_PAGE_HTML).not.toContain('@keyframes')
+    expect(SCRIPT).toContain('function paintAhead(')
+  })
+
+  it('tells armed from held by luminance alone, because chrome gets no colour', () => {
+    // Two steps of the page's own grey ladder. #3a3a3a is the dimmest ink
+    // here (the disabled key) and #8f8f8f is the muted one; neither is the
+    // #ededed that button.lit alone is allowed.
+    expect(REMOTE_PAGE_HTML).toContain('.ahead { position: absolute')
+    expect(REMOTE_PAGE_HTML).toContain('.ahead.now { background: #8f8f8f; }')
+    expect(SCRIPT).toContain("'ahead now'")
+  })
+
+  it('paints it onto the drawn rows instead of rebuilding them', () => {
+    // The whole reason it is not a field on a slot view: renderRows
+    // rebuilds the stack whenever the slot list changes, and wiping rowsEl
+    // under a thumb is the scroll jump d7ff531 fixed. A change that lands
+    // every few bars must not reintroduce it.
+    expect(SCRIPT).toContain('paintAllAhead()')
+    expect(SCRIPT).toContain('radioAhead = state.radio')
+  })
+})

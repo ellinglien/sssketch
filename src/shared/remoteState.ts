@@ -42,6 +42,34 @@ export interface RemoteSlotView {
   peaks: number[] | null
 }
 
+/** What radio is about to do, as much of it as the phone needs.
+ *
+ * Direct report, 2026-09-29, listening on radio: "i don't see any
+ * preparatory blinking on the channels about to transition." The phone is
+ * a per-stem mixer now, so the same "about to change" is worth exactly as
+ * much on the sofa as it is at the desk -- see @shared/radioApproach for
+ * the two states and why they are two.
+ *
+ * Three fields and no more. A slot id the phone already has, a slot id the
+ * phone already has, and a fraction: nothing here names a file, a riff or
+ * a jam, so this does not widen the boundary remoteStateFromSlots IS.
+ *
+ * `progress` is deliberately NOT the 30Hz number the Mac's own rows draw.
+ * The renderer pushes remote state on a dependency change, not on a clock,
+ * so a per-tick value here would be a per-tick IPC push and a per-tick
+ * re-derivation of every row's peaks; the Mac quantises it to whole bars,
+ * which moves about once a bar and is all a 700ms poll can show anyway. It
+ * is only meaningful for the armed row -- a held change has nothing left
+ * to count, it lands at the very next wrap. */
+export interface RemoteRadioView {
+  /** The row whose next pick is chosen and warming, or null. */
+  armedSlotId: string | null
+  /** The row whose change is decided and waiting for the loop top. */
+  heldSlotId: string | null
+  /** 0..1, how far the armed row's wait has run. */
+  progress: number
+}
+
 export interface RemoteState {
   /** False when Discover is not open on the Mac -- the page then says
    * "open discover on the mac" and offers nothing else. It does not
@@ -71,6 +99,9 @@ export interface RemoteState {
    * disagree with it. A count of bars is not sensitive: it identifies no
    * file, names no jam and cannot be turned back into a path. */
   loopBars: number
+  /** Null whenever radio is not running, which is also what a Mac that
+   * has nothing armed says. The phone marks no row at all for null. */
+  radio: RemoteRadioView | null
   slots: RemoteSlotView[]
 }
 
@@ -124,6 +155,11 @@ export interface RemoteStateMeta {
    * 0, or anything that is not a whole positive number of bars, means "not
    * known" and is normalized to 0 below. */
   loopBars: number
+  /** Optional rather than required, and that is not laziness: radio not
+   * running has genuinely nothing to say here, and `undefined` says
+   * exactly that. Normalized below -- an id naming no row becomes null and
+   * the progress is clamped, so what leaves is always drawable. */
+  radio?: RemoteRadioView | null
 }
 
 /** The whole privacy boundary of Part 2, in one pure function: whatever
@@ -155,6 +191,12 @@ export function remoteStateFromSlots(
     // grid existed, so an unknown or nonsensical length can only ever
     // produce no grid -- never a wrong one.
     loopBars: Number.isInteger(meta.loopBars) && meta.loopBars > 0 ? meta.loopBars : 0,
+    // Normalized HERE, once, for the same reason loopBars is: an id that
+    // names no row is a mark the phone could never draw, and a progress
+    // that is not a fraction is a width that would break a layout. Both
+    // fail closed -- no mark, no fill -- rather than being passed on for
+    // the page to guard against.
+    radio: normalizeRemoteRadio(meta.radio ?? null, slots),
     slots: slots.map((slot) => ({
       id: slot.id,
       kindLabel: slotKindsLabel(slot.kinds),
@@ -164,6 +206,20 @@ export function remoteStateFromSlots(
       soloed: slot.audible && audibleCount === 1,
       peaks: quantiseRemotePeaks(peaksBySlotId?.get(slot.id) ?? [])
     }))
+  }
+}
+
+function normalizeRemoteRadio(
+  radio: RemoteRadioView | null,
+  slots: readonly CoachSlotSnapshot[]
+): RemoteRadioView | null {
+  if (radio === null) return null
+  const known = (slotId: string | null): string | null =>
+    slotId !== null && slots.some((slot) => slot.id === slotId) ? slotId : null
+  return {
+    armedSlotId: known(radio.armedSlotId),
+    heldSlotId: known(radio.heldSlotId),
+    progress: Number.isFinite(radio.progress) ? Math.max(0, Math.min(1, radio.progress)) : 0
   }
 }
 
