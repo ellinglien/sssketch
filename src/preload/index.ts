@@ -245,6 +245,70 @@ const api = {
     ipcRenderer.invoke('export-stem-tracks-next-to-source', stateJson, sourcePath),
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
+  /** Radio's scheduled swap -- hand the engine a project now, have it
+   * become real exactly at the next loop top. `project` is typed
+   * `unknown` for the same reason engineLoadProject's is: it crosses this
+   * boundary as plain JSON and preload has no business re-stating
+   * EngineProject's shape.
+   *
+   * `token` pairs the two acks below to this request. It exists because
+   * EngineClient matches replies by message TYPE, not by request id, so
+   * two swaps in flight would otherwise cross their answers. */
+  engineStageProject: (token: number, project: unknown): Promise<void> =>
+    ipcRenderer.invoke('engine-stage-project', token, project),
+  /** Withdraw a staged swap. `-1` cancels whatever is staged. Answered by
+   * onEngineProjectStageResult with status `cancelled` -- or, if the audio
+   * thread took it first, `applied`, which is why a caller must keep
+   * waiting for onEngineProjectApplied rather than assume a cancel won. */
+  engineCancelStagedProject: (token: number): Promise<void> =>
+    ipcRenderer.invoke('engine-cancel-staged-project', token),
+  /** Every staged token gets exactly one of these. `staged` means parked
+   * for the loop top; `applied` means the engine did it immediately
+   * (reason `not-playing`, `no-loop`, `tempo-change`, or a cancel that
+   * lost the race); `cancelled` means it will never play; `error` means
+   * the project would not parse and nothing was staged. */
+  onEngineProjectStageResult: (
+    callback: (result: {
+      token: number
+      status: 'staged' | 'applied' | 'cancelled' | 'error'
+      reason?: string
+    }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      payload: {
+        token: number
+        status: 'staged' | 'applied' | 'cancelled' | 'error'
+        reason?: string
+      }
+    ): void => callback(payload)
+    ipcRenderer.on('engine-project-stage-result', listener)
+    return () => ipcRenderer.removeListener('engine-project-stage-result', listener)
+  },
+  /** The staged project is now the live one. `via` is `wrap` for the
+   * normal case (and then `atBars` is exactly the loop start), or
+   * `deadline`/`transport-stopped`/`immediate` for the fallbacks.
+   * `deferrals` should always be 0. */
+  onEngineProjectApplied: (
+    callback: (applied: {
+      token: number
+      via: 'wrap' | 'deadline' | 'transport-stopped' | 'immediate'
+      atBars: number
+      deferrals: number
+    }) => void
+  ): (() => void) => {
+    const listener = (
+      _event: unknown,
+      payload: {
+        token: number
+        via: 'wrap' | 'deadline' | 'transport-stopped' | 'immediate'
+        atBars: number
+        deferrals: number
+      }
+    ): void => callback(payload)
+    ipcRenderer.on('engine-project-applied', listener)
+    return () => ipcRenderer.removeListener('engine-project-applied', listener)
+  },
   enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
   engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),

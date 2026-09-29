@@ -448,6 +448,86 @@ export function advanceRadioClock(
   }
 }
 
+/** Floating-point slack for the boundary arithmetic below. `pos` is a
+ * float sum of ~30Hz deltas coming off a wall clock, so a boundary the
+ * transport is about to cross can read as a hair short of it; a bar is
+ * two seconds at 120bpm, so a thousandth of a bar is well under a
+ * millisecond and cannot move a decision that matters. */
+const BOUNDARY_EPSILON = 1e-9
+
+/** Will the next change come due at the wrap that ends THIS lap, and at no
+ * boundary before it?
+ *
+ * The predicate the staged swap is built on, and the reason a scheduled
+ * swap is worth anything at all. `stage-project` makes the engine apply a
+ * project at the next loop top, so the renderer has to push it DURING the
+ * lap that ends at that loop top: a push a whole interval early would be
+ * taken by the wrong wrap, and a push at the wrap itself is the late-by-
+ * construction chain this whole feature exists to get off the critical
+ * path (see the 2026-09-29 radio-staged-swap spec, and the measurement in
+ * `radio-swap-is-late-by-construction`).
+ *
+ * WHY A PREDICTION RATHER THAN A HOLD. Radio already knows a lap in
+ * advance about the changes it deliberately holds back for a gesture
+ * (radioLedChangeRef). Those are the minority: on Elling's own archive's
+ * bar-length distribution, simulated against these very functions, only
+ * about 23% of changes are held that way, while about 63% come due AT a
+ * wrap and are decided on the tick that discovers it -- zero lead time,
+ * nothing to stage. Predicting the wrap is what turns "a quarter of
+ * changes get better" into "six in seven do".
+ *
+ * Mirrors advanceRadioClock's own arithmetic exactly, and there is a
+ * property test pinning the two together over a grid of starting
+ * positions: whenever this says yes, running the clock forward at 30Hz
+ * really does produce `due` on the wrap tick and on no tick before it.
+ * They must not be able to drift apart -- a yes that turns out to be a
+ * mid-loop landing would fire a staged project a whole lap late, which is
+ * worse than the lateness it is replacing.
+ *
+ * `clock` is the clock as of THIS tick (advanceRadioClock's own answer),
+ * `pos` the position it was stepped to. The other three are the same
+ * arguments advanceRadioClock takes and mean the same things. */
+export function radioChangeDueAtNextWrap(
+  clock: RadioClock,
+  pos: number,
+  loopBars: number,
+  gridBars: number,
+  phraseBars: number
+): boolean {
+  if (!(loopBars > 0) || !Number.isFinite(pos) || pos < 0 || pos >= loopBars) return false
+  const barsToWrap = loopBars - pos
+  // How much of the interval is still to run. Already negative (the
+  // interval elapsed while something else was holding the change) counts
+  // as zero -- it is due at the very next boundary either way.
+  const barsToElapse = Math.max(0, clock.intervalBars - clock.barsElapsed)
+  // The interval has to run out before the wrap, or this lap is not the
+  // one. Equality counts: a change whose interval ends exactly at the
+  // wrap comes due on the wrap tick.
+  if (barsToElapse > barsToWrap + BOUNDARY_EPSILON) return false
+  // A phrase grid makes every landing a loop top -- advanceRadioClock's
+  // `onPhrase` is gated on `wrapped` -- so the change grid cannot pull
+  // this change any earlier, and the only remaining question is whether
+  // the coming wrap is the phrase boundary. A lap that is not one holds
+  // the change over, and the next lap asks again.
+  const perPhrase = radioPhraseLaps(phraseBars, loopBars)
+  if (perPhrase > 0) return clock.lapsSincePhrase + 1 >= perPhrase
+  // Where in the lap the interval runs out, and then the first boundary
+  // the clock will CROSS at or after that -- `crossed` fires on the tick
+  // that carries the position over a multiple of the grid, so a boundary
+  // sitting exactly on the elapse point still counts as ahead of us.
+  const step = gridBars > 0 ? gridBars : loopBars
+  const elapseAt = pos + barsToElapse
+  // Two floors, because a crossing has to be ahead of BOTH: ahead of the
+  // playhead (a boundary we are standing on was crossed on some earlier
+  // tick and will not be crossed again), and at or past the point the
+  // interval runs out.
+  const afterPos = (Math.floor(pos / step + BOUNDARY_EPSILON) + 1) * step
+  const afterElapse = Math.ceil(elapseAt / step - BOUNDARY_EPSILON) * step
+  const nextBoundary = Math.max(afterPos, afterElapse)
+  // The wrap is the only boundary at or past the end of the lap.
+  return nextBoundary >= loopBars - BOUNDARY_EPSILON
+}
+
 /** Which single layer turns over next.
  *
  * ONE at a time is the whole point (spec 3.1): everything changing

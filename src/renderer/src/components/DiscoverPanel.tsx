@@ -41,6 +41,7 @@ import { applyTraitBar } from '@shared/traitBar'
 import {
   RADIO_PACE_BARS,
   advanceRadioClock,
+  radioChangeDueAtNextWrap,
   createRadioClock,
   isRadioEligibleSlot,
   nextRadioIntervalBarsInWindow,
@@ -114,6 +115,10 @@ import {
   radioTraceBegin,
   radioTraceMark,
   radioTraceMarkPush,
+  radioTraceStageApplied,
+  radioTraceStageFallback,
+  radioTraceStageResult,
+  radioTraceStageSent,
   radioTraceTick
 } from '../perf/radioTrace'
 import { initialState, type AppState } from '../state/store'
@@ -350,6 +355,32 @@ function randomDiscoverSlotKind(options: readonly DiscoverSlotKind[]): DiscoverS
 // undoStack/setUndoStack state directly) can push a snapshot using the
 // exact same cap, rather than duplicating this number in a second file.
 export const DISCOVER_UNDO_LIMIT = 20
+
+/** One scheduled swap, as buildAndPushPreview needs to see it.
+ *
+ * `slotId`/`stem` are the substitution: build the project with THIS stem
+ * in that slot instead of whatever is resolved there now. `gesture` is the
+ * curve the staged project carries, which is an arrival gesture or
+ * nothing -- never whatever is armed for the lap that is playing.
+ *
+ * `label`/`atPos`/`loopBars` are only for the radioTrace line. They are
+ * passed in rather than read at send time because by then the build has
+ * taken a few milliseconds and the position has moved, and the number
+ * worth printing is where in the lap the decision was made. */
+interface RadioStageRequest {
+  token: number
+  slotId: string
+  stem: ResolvedCandidateStem
+  gesture: {
+    kind: 'drop-out' | RadioTransitionKind
+    slotId: string
+    beats: number
+    lapsLeft: number
+  } | null
+  label: string
+  atPos: number
+  loopBars: number
+}
 
 // Backstop for runAfterEngineSync (below): how long a deferred radio arm
 // waits for a landing change's own engine push before giving up and arming
@@ -721,6 +752,21 @@ export function DiscoverPanel({
   // real async round trip to the native engine instead of a synchronous Web
   // Audio call.
   const previewSyncGenerationRef = useRef(0)
+  // The ownership token from the claim the LAST ordinary push made. A
+  // staged swap does not claim -- a claim bumps the generation and would
+  // invalidate an ordinary push that is mid-await -- so it asks this
+  // instead: is the claim this panel already holds still the current one.
+  const engineClaimTokenRef = useRef(-1)
+  // How many ordinary pushes are between their first line and their
+  // socket write. A staged swap must not overtake one: a load-project
+  // makes the engine drop whatever is staged (IpcServer.cpp's
+  // resolveStagedBefore("load-project")), and the two travel on the same
+  // socket in call order, so "no rAF pending" is not enough -- a push can
+  // be several awaits deep in buildEngineProject and still be ahead of
+  // us. Counted rather than a boolean because toggleSlotPreview and
+  // toggleSlotSolo call the sync directly, outside the rAF that coalesces
+  // everything else.
+  const liveSyncInFlightRef = useRef(0)
   // Set true by the unmount effect below, checked at the top of
   // syncPreviewToEngine -- load-bearing, not defensive fluff:
   // reportSlotResolution can itself trigger a fresh syncPreviewToEngine from
@@ -1175,11 +1221,72 @@ export function DiscoverPanel({
    * mean giving the preview a stable channel identity -- a different
    * change, deliberately not made here (2026-09-28 performance-mode spec
    * 0.4). */
-  async function syncPreviewToEngine(ids: Set<string>): Promise<void> {
+  /** Builds this panel's preview project and sends it to the engine.
+   *
+   * Two destinations, one build. Without `stage` this is the ordinary
+   * push that has always been here: load-project, live immediately, plus
+   * everything that only makes sense for the project that is actually
+   * playing (the phone's copy of the loop, the slot-index mapping the
+   * live gain drags address through, the master re-assertions, the
+   * empty-to-playing transition).
+   *
+   * With `stage` it is radio's SCHEDULED swap: the same project, built one
+   * slot into the future, handed to the engine early and made real by the
+   * engine itself exactly at the next loop top. See stepRadioStage for
+   * when that is allowed and why it is the only way a radio change can be
+   * on time -- the renderer's own chain (commit, render, resolve, rAF,
+   * build, IPC) cannot start until the boundary it is aiming at has
+   * already passed.
+   *
+   * The bookkeeping lives out here, in this wrapper, because the body
+   * below has a dozen early returns and every one of them has to leave
+   * liveSyncInFlightRef where it found it. */
+  async function syncPreviewToEngine(ids: Set<string>, stage?: RadioStageRequest): Promise<void> {
+    if (stage !== undefined) {
+      try {
+        await buildAndPushPreview(ids, stage)
+      } finally {
+        // A build that bailed out before the write left nothing with the
+        // engine, so the ref has to let go -- otherwise stepRadioStage
+        // would sit there believing a swap was in flight and never push
+        // another one for the rest of the session.
+        const staged = radioStageRef.current
+        if (staged !== null && staged.token === stage.token && !staged.sent) {
+          radioStageRef.current = null
+        }
+      }
+      return
+    }
+    // An ordinary push makes the engine drop whatever radio staged, so
+    // the two can never be in flight together -- and the push wins,
+    // because it is what is actually true right now and a staged project
+    // is only a prediction. The change it was carrying falls back to
+    // landing the way it does today: committed at the wrap, pushed after
+    // it.
+    cancelStagedSwap('load-project')
+    liveSyncInFlightRef.current += 1
+    try {
+      await buildAndPushPreview(ids, undefined)
+    } finally {
+      liveSyncInFlightRef.current -= 1
+    }
+  }
+
+  async function buildAndPushPreview(
+    ids: Set<string>,
+    stage: RadioStageRequest | undefined
+  ): Promise<void> {
     if (unmountedRef.current) return
-    const myGeneration = previewSyncGenerationRef.current + 1
-    previewSyncGenerationRef.current = myGeneration
-    const engineToken = claimEngine('discover-preview')
+    // A stage does not bump the generation: it is a second message under
+    // the claim this panel already holds, not a new claim, and bumping
+    // would invalidate an ordinary push that is mid-await.
+    const myGeneration = stage
+      ? previewSyncGenerationRef.current
+      : previewSyncGenerationRef.current + 1
+    if (!stage) previewSyncGenerationRef.current = myGeneration
+    const engineToken = stage ? engineClaimTokenRef.current : claimEngine('discover-preview')
+    if (stage && !stillOwnEngine(engineToken)) return
+    if (!stage) engineClaimTokenRef.current = engineToken
 
     // Direct request, 2026-09-16: "i'd like the tempo to be set to the
     // original imported rifff in discovery." Checked HERE, right after the
@@ -1215,13 +1322,23 @@ export function DiscoverPanel({
     // regardless of existing arranger content. The manual "match seed"
     // button (below) stays as-is, still useful after an individual
     // reroll drifts a slot away from the seed's own tempo.
-    if (!previewLoadedRef.current && seedBpm !== null) {
+    // Not for a stage: this is the empty-panel seeding rule, and a stage
+    // only ever happens while radio is running on a preview that is
+    // already loaded and playing.
+    if (!stage && !previewLoadedRef.current && seedBpm !== null) {
       dispatch({ type: 'SET_TEMPO', bpm: Math.round(seedBpm) })
     }
 
     const members = [...ids]
       .map((id) => {
-        const stem = resolvedStemsRef.current.get(id)
+        // A staged project is built from the mix as it WILL be: the one
+        // slot radio is about to turn over carries its INCOMING stem,
+        // while nothing in the panel's own state has moved yet. That is
+        // what lets the commit stay exactly where it is, at the wrap --
+        // the row goes on saying "a change is coming" for the lap, the
+        // undo stack and the UI are untouched, and the engine is the only
+        // thing holding the future.
+        const stem = stage && stage.slotId === id ? stage.stem : resolvedStemsRef.current.get(id)
         if (!stem) return null
         const gain = slots.find((s) => s.id === id)?.gain ?? 1
         return { id, stem, gain }
@@ -1229,6 +1346,10 @@ export function DiscoverPanel({
       .filter((x): x is { id: string; stem: ResolvedCandidateStem; gain: number } => x !== null)
 
     if (members.length === 0) {
+      // A stage with nothing in the mix is not a swap, it is a teardown --
+      // and tearing down is the live path's business, not a scheduled
+      // one's. Withdraw instead.
+      if (stage) return
       void window.rifffApi.setRemoteLoop(null, [])
       await restorePreviewIfLoaded()
       return
@@ -1265,10 +1386,16 @@ export function DiscoverPanel({
     // contribution, so the loop length sent to the engine was half what the
     // actually-included stems needed. See resolvedBarLengthsRef's own doc
     // comment for the full mechanism.
+    // The incoming stem's own length goes in for a stage, exactly as it
+    // will when the commit lands: it is what the loop wraps at, and a
+    // staged project that disagreed with the one that follows it would
+    // move the loop point twice in two frames. The engine takes this as
+    // the STAGED loop length (Transport::setStagedLoopLengthBars) and
+    // adopts it at the same wrap it adopts the project.
+    const stagedBarLengths = new Map(resolvedBarLengthsRef.current)
+    if (stage) stagedBarLengths.set(stage.slotId, stage.stem.barLength)
     const maxBarLength =
-      resolvedBarLengthsRef.current.size > 0
-        ? Math.max(...resolvedBarLengthsRef.current.values())
-        : undefined
+      stagedBarLengths.size > 0 ? Math.max(...stagedBarLengths.values()) : undefined
     const assembly = assembleDiscoverRifff(
       'discover preview',
       members.map(({ stem, gain }) => ({ stem, gain })),
@@ -1320,7 +1447,13 @@ export function DiscoverPanel({
     // just no longer wins the level.
     const stemAutomation: Record<string, StemAutomation> = {}
     const risers: Record<string, RiserClip> = {}
-    const gesture = radioOnRef.current ? radioGestureRef.current : null
+    // A staged project carries the gesture of the project it will BECOME
+    // -- an arrival curve for the layer that is about to land, or nothing
+    // at all. Never radioGestureRef, which describes the lap that is
+    // playing NOW: a `hole` announcing this very change is over by the
+    // time the staged project goes live, and carrying it across would
+    // punch the gap in the layer that just arrived.
+    const gesture = stage ? stage.gesture : radioOnRef.current ? radioGestureRef.current : null
     const masterLevel01 = masterLevelRef.current / 100
     function underMaster(key: string, curve: AutomationPoint[]): AutomationPoint[] {
       return masterScaledCurve(curve, (vol[key] ?? 1) * masterLevel01)
@@ -1448,6 +1581,28 @@ export function DiscoverPanel({
       )
       radioTraceMark('built') // TEMP
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
+      if (stage) {
+        // Everything below this point describes the project that is
+        // PLAYING -- the phone's copy of the loop, the slot-index mapping
+        // the live gain drags address through, the master re-assertions,
+        // the empty-to-playing transition, the warm pass over the muted
+        // slots. None of it is true of a project that is not live yet, and
+        // all of it happens anyway on the load-project that follows the
+        // commit at the wrap. So a stage stops here.
+        if (!stillOwnEngine(engineToken)) return
+        // The last word on whether this swap is still wanted: cancelling
+        // clears the ref, so a pick that was locked, muted or removed
+        // while this was building never reaches the socket at all.
+        if (radioStageRef.current?.token !== stage.token) return
+        radioStageRef.current.sent = true
+        radioStageRef.current.mapping = {
+          groupId: rifff.groupId,
+          slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1]))
+        }
+        radioTraceStageSent(stage.token, stage.label, stage.atPos, stage.loopBars) // TEMP
+        await window.rifffApi.engineStageProject(stage.token, project)
+        return
+      }
       // The phone gets the loop whether or not the Mac's engine is showing
       // it -- pushed BEFORE the ownership gate below on purpose, so a
       // Discover panel that has lost the engine to something else still has
@@ -1807,6 +1962,15 @@ export function DiscoverPanel({
     slotId: string
     pick: SlotPick
     incomingBars: number | null
+    /** The warmed stem itself, filled in by the same warm that fills in
+     * incomingBars, and null until then. Kept alongside the bar length
+     * rather than re-derived later because a staged swap has to BUILD a
+     * project out of it, and the only other way to get it back is
+     * resolveCandidateStem's promise -- which is settled and free when
+     * the warm worked, and a whole download when it did not. Null here
+     * is therefore also the honest answer to "is this pick cold", which
+     * is what stops a stage being aimed at a stem that is not there. */
+    stem: ResolvedCandidateStem | null
   } | null>(null)
   // The RENDERABLE half of radioPendingRef: just which slot it names.
   //
@@ -1836,6 +2000,7 @@ export function DiscoverPanel({
       slotId: string
       pick: SlotPick
       incomingBars: number | null
+      stem: ResolvedCandidateStem | null
     } | null
   ): void {
     radioPendingRef.current = next
@@ -1911,6 +2076,22 @@ export function DiscoverPanel({
     slotId: string
     pick: SlotPick
     arrival?: { kind: RadioTransitionKind; beats: number }
+    /** The incoming stem, carried over from the pick so a staged swap can
+     * build a project out of it without a second resolve. Null when the
+     * warm never landed -- such a change cannot be staged and falls back
+     * to today's commit-at-the-wrap. */
+    stem: ResolvedCandidateStem | null
+    /** True when stepRadioStage DECIDED this change early, rather than
+     * the due branch holding it back for a gesture.
+     *
+     * It is what says who owns the clock. The due branch restarts the
+     * interval where it fires, and an early decision has not fired yet --
+     * so an early one restarts the clock when it LANDS instead. Without
+     * that split the pace would silently quicken by up to a lap per
+     * change, which is the one thing this feature is not allowed to
+     * change (see DEFAULT_RADIO_LOOP_END_BARS on why the pace is where it
+     * is). */
+    early?: boolean
   } | null>(null)
   // The renderable half of radioLedChangeRef, exactly as radioArmedSlotId
   // is of radioPendingRef -- and the more urgent of the two to draw: a
@@ -1925,12 +2106,117 @@ export function DiscoverPanel({
       slotId: string
       pick: SlotPick
       arrival?: { kind: RadioTransitionKind; beats: number }
+      stem: ResolvedCandidateStem | null
+      early?: boolean
     } | null
   ): void {
     radioLedChangeRef.current = next
     const slotId = next?.slotId ?? null
     void Promise.resolve().then(() => setRadioHeldSlotId(slotId))
   }
+  // --- the scheduled swap (2026-09-29) ---
+  //
+  // THE PROBLEM. A radio change was late by construction. Measured on
+  // Elling's machine with the engine completely warm (`setProject 0.0 ·
+  // decodes 0 of 4 stems · handler 0.6ms`) the project still always
+  // arrived AFTER the loop top it was meant for -- 0.020 to 0.065 bar
+  // warm, up to 0.222 cold. Nothing in the renderer could fix that,
+  // because the renderer only starts work at the boundary: the tick that
+  // notices it is already up to 33ms past it, and commit -> render ->
+  // resolve -> rAF -> build -> IPC all runs after the instant the stem
+  // should have started. Five rounds of optimisation moved it by nothing
+  // worth hearing. See the memory note radio-swap-is-late-by-
+  // construction.
+  //
+  // THE ANSWER, which is the engine's: stage-project hands the engine a
+  // whole project early and the engine itself swaps to it at the next
+  // loop wrap, on the audio thread, sample-exact. The renderer's job is
+  // to get the right project there DURING the lap that ends at the right
+  // wrap -- a lap early and it would be taken by the wrong wrap, at the
+  // wrap itself and we are back where we started.
+  //
+  // WHICH CHANGES THIS CAN BE. Not all of them, and deliberately so.
+  // radioGridBars lets a layer of DEFAULT_RADIO_LOOP_END_BARS bars or
+  // shorter turn over on its own 2- or 4-bar boundary, and a `cut`
+  // carries no gesture and so is explicitly free to land there -- that
+  // is where the eagerness Elling asked for lives ("even fast feels
+  // quite slow now.. i think it's the transition rules"). Those keep
+  // landing mid-loop on today's load-project. Simulated against these
+  // very functions on his own archive's stem-length distribution, that
+  // is about one change in twenty; the rest land at a loop top and are
+  // staged.
+  //
+  // WHY IT HAS TO PREDICT. Radio already knows a lap ahead about the
+  // changes it deliberately holds for a gesture (radioLedChangeRef), but
+  // those are only about a quarter of the ones that land at a loop top.
+  // The other three quarters come due AT a wrap and are decided on the
+  // tick that discovers it -- no lead time at all, nothing to stage. So
+  // stepRadioStage below looks forward instead: radioChangeDueAtNextWrap
+  // asks whether the coming wrap is the boundary the next change will
+  // come due on, and if it is, the whole decision is brought forward into
+  // this lap. That is the difference between a quarter of changes
+  // getting better and nineteen in twenty.
+  const radioStageRef = useRef<{
+    token: number
+    slotId: string
+    /** False between the decision and the socket write. The window is
+     * short but it is real -- the staged project still has to be built,
+     * which means buildEngineProject's stretch resolution -- and two
+     * things depend on telling the two states apart: a withdrawal must
+     * not send a cancel for a token the engine has never heard of (it
+     * would be ignored, and then the stage would arrive AFTER it and
+     * stick), and a build that bails out before sending has to let go of
+     * this ref or radio would never stage anything again. */
+    sent: boolean
+    /** The staged project's own groupId and slot numbering, so the master
+     * fader and filter can be re-asserted against the RIGHT stem keys the
+     * moment it goes live. A fresh groupId is minted on every build, so
+     * the live mapping still describes the outgoing project until then. */
+    mapping: { groupId: string; slotIndexById: Map<string, number> } | null
+  } | null>(null)
+  // Monotonic, never reused. The token exists because EngineClient
+  // matches replies by message TYPE rather than by request id, so two
+  // swaps in flight would otherwise cross their acks.
+  const radioStageTokenRef = useRef(0)
+  /** A staged swap the wrap branch has already watched land, still
+   * waiting for its project-applied.
+   *
+   * Two 30Hz streams notice the same wrap: this panel's position ticks,
+   * and the engine's own message thread. Which one gets there first is a
+   * coin flip, so the ack routinely arrives AFTER the branch below has
+   * finished with radioStageRef -- and the ack is what re-asserts the
+   * master fader and installs the staged project's slot numbering. This
+   * is where the branch leaves those for it. */
+  const radioStageLandedRef = useRef<{
+    token: number
+    mapping: { groupId: string; slotIndexById: Map<string, number> } | null
+  } | null>(null)
+
+  /** Withdraws the staged swap, if there is one.
+   *
+   * Radio re-checks a pick's eligibility late -- the slot may have been
+   * locked, muted or removed since the pick was made -- and a stale
+   * staged swap must never fire. cancel-staged-project is the engine's
+   * side of exactly that.
+   *
+   * Note what this does NOT guarantee: the audio thread may be taking the
+   * staged project at this very moment, in which case the engine answers
+   * `applied` rather than `cancelled` and the swap happens anyway. Only
+   * the engine can know, which is why every caller here also puts the
+   * renderer's own truth back on the wire rather than assuming the
+   * withdrawal won. */
+  function cancelStagedSwap(reason: string): void {
+    const staged = radioStageRef.current
+    if (staged === null) return
+    radioStageRef.current = null
+    radioTraceStageFallback(staged.token, reason) // TEMP (2026-09-29)
+    // Only if the engine has actually been told about it. Dropping the
+    // ref is what stops the build below from ever sending (it re-reads
+    // this ref in the line before the write, with no await in between),
+    // so there is nothing out there to withdraw.
+    if (staged.sent) void window.rifffApi.engineCancelStagedProject(staged.token)
+  }
+
   // An armed COURSE CHANGE: every eligible layer's next pick, already
   // resolved and warmed, waiting for the next loop top to land together.
   //
@@ -1959,6 +2245,151 @@ export function DiscoverPanel({
     radioGestureRef.current = null
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
+  /** Everything the scheduled swap does on one position tick, in the one
+   * order it is safe to do it in. Called from the clock effect below,
+   * after the two branches that LAND a change and before the one that
+   * decides one.
+   *
+   * Three jobs, and they are separate on purpose:
+   *
+   *   1. WITHDRAW a staged swap whose slot has stopped being eligible.
+   *      The re-check is per tick rather than only at the wrap because
+   *      the audio thread takes a staged project AT the wrap, a good 30ms
+   *      before this effect could possibly notice -- by the wrap it is
+   *      already too late to stop it.
+   *   2. DECIDE a change early, when radioChangeDueAtNextWrap says the
+   *      coming wrap is the boundary it will come due on. This is the
+   *      predictive half, and the transition has to be drawn HERE rather
+   *      than at the wrap: a `hole` or a `riser` makes the change wait
+   *      another whole lap, and a staged project cannot be re-aimed once
+   *      the audio thread has taken it. Drawing it early costs nothing
+   *      musically -- every curve in radioTransition.ts is anchored to
+   *      the loop, so arming one earlier in the same lap plays it in
+   *      exactly the same place, and a `hole` (buildDropOutCurve, which
+   *      leaves at loopBars - dropBars) is actually MORE reliable for it:
+   *      one armed at bar 7 of 8 today has its gap already behind the
+   *      playhead.
+   *   3. PUSH whatever is held and not yet staged. Split from (2) so that
+   *      the changes radio was already holding for a gesture get staged
+   *      too, and so that a leading gesture's own load-project always
+   *      goes out on an earlier tick than the stage that follows it --
+   *      a load-project overtaking a stage on the socket makes the engine
+   *      drop the stage outright (resolveStagedBefore("load-project")).
+   *
+   * NOTHING here commits anything. The commit stays exactly where it was,
+   * in the wrap branch below, which is what keeps the row's "a change is
+   * coming" honest, the undo stack untouched and the fallback free: if
+   * the stage is withdrawn, errors, or never goes out at all, the change
+   * still lands the way it does today. */
+  function stepRadioStage(due: boolean, pos: number, loopBars: number, gridBars: number): void {
+    const staged = radioStageRef.current
+    if (staged !== null && !radioEligibleSlotIds().includes(staged.slotId)) {
+      cancelStagedSwap('no-longer-eligible')
+      setRadioLedChange(null)
+      // Same as the wrap branch's own re-check failing: nothing landed,
+      // so arm a fresh pick straight away rather than burning an
+      // interval. Deferred for the reason every setState out of this
+      // effect is -- pickForSlot writes state before its first await.
+      void Promise.resolve().then(() => {
+        if (radioOnRef.current) void armRadioPick()
+      })
+      return
+    }
+
+    // (2) Decide early. Never on a tick where a change is already coming
+    // due: the due branch below is about to make its own decision, and
+    // setting a held change in front of it would make that one skip.
+    if (
+      !due &&
+      radioStageRef.current === null &&
+      radioLedChangeRef.current === null &&
+      radioCourseChangeRef.current === null &&
+      radioGestureRef.current === null
+    ) {
+      const pending = radioPendingRef.current
+      const clock = radioClockRef.current
+      if (
+        pending !== null &&
+        pending.stem !== null &&
+        clock !== null &&
+        radioEligibleSlotIds().includes(pending.slotId) &&
+        radioChangeDueAtNextWrap(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
+      ) {
+        // The same draw, the same "never a second gesture while one is
+        // armed" rule and the same beats table as the due branch below.
+        // Only the moment differs.
+        const changing = slotsRef.current.find((sl) => sl.id === pending.slotId)
+        const transition = pickTransition(radioSettings.transitions, changing?.kinds ?? [])
+        const beats = transition === 'hole' ? pickDropOutBeats() : transition === 'riser' ? 8 : 4
+        setRadioPending(null)
+        if (radioGestureLeadsChange(transition)) {
+          // A hole or a riser announces the change over the bars before
+          // the wrap, on the OUTGOING stem, so it has to reach the engine
+          // as a live project NOW. The swap is staged on a later tick,
+          // once that push has gone -- see (3)'s own gate.
+          radioGestureRef.current = {
+            kind: transition,
+            slotId: pending.slotId,
+            beats,
+            lapsLeft: 1
+          }
+          setRadioLedChange({
+            slotId: pending.slotId,
+            pick: pending.pick,
+            stem: pending.stem,
+            early: true
+          })
+          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+        } else {
+          // A cut, or an arrival gesture. Nothing is armed and nothing is
+          // pushed live: a cut has no curve at all, and an arrival curve
+          // belongs to the stem that has not arrived yet -- arming it
+          // now would sweep or bloom the OUTGOING audio for a lap, which
+          // is the bug c5612da fixed. It rides into the staged project
+          // instead, where its bar 0 and the wrap are the same instant.
+          setRadioLedChange({
+            slotId: pending.slotId,
+            pick: pending.pick,
+            stem: pending.stem,
+            early: true,
+            arrival: transition === 'cut' ? undefined : { kind: transition, beats }
+          })
+        }
+        return
+      }
+    }
+
+    // (3) Push it. Once -- radioStageRef is the "already out there" flag
+    // -- and only when nothing else is on its way to the engine.
+    const led = radioLedChangeRef.current
+    if (
+      radioStageRef.current !== null ||
+      led === null ||
+      led.stem === null ||
+      !radioOnRef.current ||
+      !previewLoadedRef.current ||
+      radioCourseChangeRef.current !== null ||
+      liveSyncInFlightRef.current > 0 ||
+      pendingSyncRafRef.current !== null ||
+      syncHoldRef.current.size > 0
+    ) {
+      return
+    }
+    const token = (radioStageTokenRef.current += 1)
+    radioStageRef.current = { token, slotId: led.slotId, sent: false, mapping: null }
+    void syncPreviewToEngine(previewingSlotIdsRef.current, {
+      token,
+      slotId: led.slotId,
+      stem: led.stem,
+      gesture: led.arrival
+        ? { kind: led.arrival.kind, slotId: led.slotId, beats: led.arrival.beats, lapsLeft: 1 }
+        : null,
+      label: led.arrival ? led.arrival.kind : radioGestureRef.current !== null ? 'led' : 'cut',
+      atPos: pos,
+      loopBars
+    })
+  }
+
   // Fraction of the current interval elapsed, 0..1, for the progress rule
   // under the button. State, not a ref, because it IS displayed -- but
   // written at most once per position tick, which the panel re-renders on
@@ -2073,6 +2504,27 @@ export function DiscoverPanel({
     // hold the ref is already null and clearRadioGesture is a no-op.
     if (step.wrapped && radioLedChangeRef.current !== null) {
       const led = radioLedChangeRef.current
+      // Taken BEFORE anything else: clearRadioGesture just below pushes a
+      // load-project, and an ordinary push withdraws whatever is staged.
+      // At this instant the engine has already swapped (the audio thread
+      // takes a staged project at the wrap itself, ~30ms before this tick
+      // could notice), so a withdrawal would be a lie -- this swap is
+      // done, not pending.
+      const stagedHere = radioStageRef.current
+      radioStageRef.current = null
+      if (stagedHere !== null) radioStageLandedRef.current = stagedHere
+      // A change DECIDED early has not restarted the clock yet -- the due
+      // branch below is what normally does that, and it never ran for
+      // this one. Restart it here, at the landing, which is exactly where
+      // a change due at a wrap restarts it today. See the `early` field's
+      // own doc comment for why that split is what keeps the pace put.
+      if (led.early) {
+        radioClockRef.current = restartRadioInterval(
+          step.clock,
+          nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+          pos
+        )
+      }
       setRadioLedChange(null)
       clearRadioGesture()
       void Promise.resolve().then(() => {
@@ -2121,6 +2573,17 @@ export function DiscoverPanel({
           radioTraceMark('commit') // TEMP
           radioLastSlotRef.current = led.slotId
           committed = true
+        }
+        if (!committed && stagedHere !== null) {
+          // The engine may already have made this swap real, while the
+          // panel has just decided not to -- the slot was locked, muted
+          // or removed inside the last 30ms, too late for the per-tick
+          // withdrawal in stepRadioStage to have caught it. Try to stop
+          // it anyway, and then put what is actually true back on the
+          // wire either way, rather than leaving the engine playing a
+          // layer nothing in the UI agrees with.
+          cancelStagedSwap('ineligible-at-the-wrap')
+          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
         }
         if (committed) {
           runAfterEngineSync(() => {
@@ -2206,6 +2669,13 @@ export function DiscoverPanel({
           : { barsLeft, intervalBars }
       )
     })
+    // Radio's scheduled swap gets its look at this tick here: after the
+    // two branches that LAND a change (both of which return), and before
+    // the one that decides one. `step.due` is passed in so an early
+    // decision can never get in front of a change that is coming due on
+    // this very tick.
+    stepRadioStage(step.due, pos, loopBars, gridBars)
+
     if (!step.due) return
 
     // Due. Draw a fresh interval and reset the clock FIRST, so a slow
@@ -2292,7 +2762,11 @@ export function DiscoverPanel({
               beats,
               lapsLeft: 1
             }
-            setRadioLedChange({ slotId: pending.slotId, pick: pending.pick })
+            setRadioLedChange({
+              slotId: pending.slotId,
+              pick: pending.pick,
+              stem: pending.stem
+            })
             scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
           } else {
             // An ARRIVAL gesture due mid-loop. Nothing is armed and
@@ -2304,6 +2778,7 @@ export function DiscoverPanel({
             setRadioLedChange({
               slotId: pending.slotId,
               pick: pending.pick,
+              stem: pending.stem,
               arrival: { kind: transition, beats }
             })
           }
@@ -2780,6 +3255,13 @@ export function DiscoverPanel({
       radioGestureRef.current = null
       setRadioLedChange(null)
       radioCourseChangeRef.current = null
+      // Unlike the gesture above, this one DOES have to reach the engine:
+      // a staged project outlives this panel, and whatever claims the
+      // engine next would have its own load-project silently cancelled by
+      // it -- or, worse, get Discover's preview dropped on top of it at
+      // the next wrap.
+      radioStageLandedRef.current = null
+      cancelStagedSwap('panel-closed')
     }
   }, [])
 
@@ -2811,6 +3293,69 @@ export function DiscoverPanel({
 
   useEffect(() => {
     return window.rifffApi.onRemoteCommand((command) => remoteCommandRef.current(command))
+  }, [])
+
+  // The two acks of the scheduled-swap contract. Held in a ref and
+  // subscribed once, exactly as remoteCommandRef above is and for the
+  // same reason: this panel re-renders on every 30Hz position tick, and a
+  // subscription with these handlers in its dependency array would tear
+  // down and rebuild an IPC listener thirty times a second.
+  const stageAckRef = useRef<{
+    result: (r: { token: number; status: string; reason?: string }) => void
+    applied: (a: { token: number; via: string; atBars: number; deferrals: number }) => void
+  }>({ result: () => {}, applied: () => {} })
+  useEffect(() => {
+    stageAckRef.current = {
+      result: (r) => {
+        radioTraceStageResult(r.token, r.status, r.reason) // TEMP (2026-09-29)
+        // `staged` and `applied` both mean the swap is the engine's
+        // problem now and will be answered by a project-applied.
+        // `cancelled` and `error` mean it will never play, so the ref has
+        // to let go -- otherwise stepRadioStage would sit there thinking
+        // a swap was still out there and never push another.
+        if (r.status !== 'cancelled' && r.status !== 'error') return
+        if (radioStageRef.current?.token === r.token) radioStageRef.current = null
+        if (radioStageLandedRef.current?.token === r.token) radioStageLandedRef.current = null
+      },
+      applied: (a) => {
+        radioTraceStageApplied(a.token, a.via, a.atBars, a.deferrals) // TEMP
+        // Either ref may be the one holding it -- see
+        // radioStageLandedRef for why the ack and the wrap tick race.
+        const mine =
+          radioStageRef.current?.token === a.token
+            ? radioStageRef.current
+            : radioStageLandedRef.current?.token === a.token
+              ? radioStageLandedRef.current
+              : null
+        if (mine === null) return
+        if (radioStageRef.current?.token === a.token) radioStageRef.current = null
+        if (radioStageLandedRef.current?.token === a.token) radioStageLandedRef.current = null
+        const mapping = mine.mapping
+        // The staged project is the live one now, and it has its own
+        // groupId -- so the live-param keys the two pushes below address
+        // have just changed underneath them. The load-project that
+        // follows the commit writes this again with the same numbers.
+        if (mapping !== null) currentPreviewMappingRef.current = mapping
+        // Publishing a project -- staged or not -- clears every live
+        // override on the engine (applyProjectPostPublish ->
+        // liveOverrides().clearAll()). The master fader and the master
+        // filter live ONLY in an override, so re-assert them here rather
+        // than waiting for the load-project that follows the commit,
+        // which is a render, a resolve and a build away.
+        pushMasterLevel()
+        pushMasterFilter()
+      }
+    }
+  })
+  useEffect(() => {
+    const offResult = window.rifffApi.onEngineProjectStageResult((r) =>
+      stageAckRef.current.result(r)
+    )
+    const offApplied = window.rifffApi.onEngineProjectApplied((a) => stageAckRef.current.applied(a))
+    return () => {
+      offResult()
+      offApplied()
+    }
   }, [])
 
   // Direct request, 2026-09-21 (combination slots), reworked twice on
@@ -3550,7 +4095,10 @@ export function DiscoverPanel({
       // assignment below at the earliest, and a whole interval before the
       // change at the latest.
       if (radioPendingRef.current?.pick === pick) {
-        setRadioPending({ ...radioPendingRef.current, incomingBars: stem.barLength })
+        // The stem itself, not just its length. A scheduled swap has to
+        // BUILD a project out of it a lap before the commit, and this is
+        // the one moment it is known to be warm.
+        setRadioPending({ ...radioPendingRef.current, incomingBars: stem.barLength, stem })
       }
       // Three warms, one call. The preview always stretches (previewState
       // sets stretch true for its one rifff) and a Discover candidate is
@@ -3604,7 +4152,7 @@ export function DiscoverPanel({
         // the row decodes at commit, which is today's behaviour.
       })
     })
-    setRadioPending({ slotId, pick, incomingBars: null })
+    setRadioPending({ slotId, pick, incomingBars: null, stem: null })
   }
 
   function stopRadio(): void {
@@ -3621,6 +4169,12 @@ export function DiscoverPanel({
     // radioOnRef is already false above, so the rebuild this schedules
     // writes an empty stemAutomation either way.
     setRadioLedChange(null)
+    // Before clearRadioGesture, which pushes -- and an ordinary push
+    // would have the engine drop the stage anyway, silently and a
+    // moment later. Withdrawing first says it out loud, in the trace,
+    // and leaves no window where the engine could swap to a project
+    // radio has already stopped wanting.
+    cancelStagedSwap('radio-off')
     clearRadioGesture()
     // AFTER clearRadioGesture, so the release flushes the rebuild it just
     // parked rather than a staler one: stopping radio mid-change would
@@ -3732,6 +4286,10 @@ export function DiscoverPanel({
     setRadioPending(null)
     radioCourseChangeRef.current = null
     setRadioLedChange(null)
+    // A course change turns the whole bed over at the next wrap. A single
+    // staged layer aimed at that same wrap is a change from the section
+    // that is being left behind.
+    cancelStagedSwap('course-change')
     clearRadioGesture()
     void armRadioPick()
   }

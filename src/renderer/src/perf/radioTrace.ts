@@ -112,3 +112,72 @@ function flush(reason: string): void {
       (reason === 'superseded' ? ' · SUPERSEDED' : '')
   )
 }
+
+// --- the scheduled swap (2026-09-29) ---
+//
+// A staged change spans a whole lap -- seconds -- so it cannot ride the
+// 1500ms open-trace window above: by the time the engine says it landed,
+// that window has long since flushed. These are their own lines, paired by
+// the token the renderer minted, and they are the measurement that says
+// whether the staged path is actually doing the job:
+//
+//   [radio-stage #4 filter in] sent 2.51bar into an 8bar lap · 5.49 bars to
+//   the wrap
+//   [radio-stage #4] staged
+//   [radio-stage #4] APPLIED via wrap at 0.0000bar · deferrals 0 · 10986ms
+//   after the push
+//
+// `via wrap` with `atBars` exactly the loop start is the whole feature
+// working. Anything else -- `immediate`, `deadline`, a `cancelled`, or no
+// stage line at all for a change -- is a change that is still landing the
+// old way, and the reason is printed with it.
+
+const stageSentAtMs = new Map<number, number>()
+
+export function radioTraceStageSent(
+  token: number,
+  label: string,
+  pos: number,
+  loopBars: number
+): void {
+  if (!enabled) return
+  stageSentAtMs.set(token, performance.now())
+  console.log(
+    `[radio-stage #${token} ${label}] sent ${pos.toFixed(2)}bar into a ${loopBars}bar lap · ` +
+      `${(loopBars - pos).toFixed(2)} bars to the wrap`
+  )
+}
+
+export function radioTraceStageResult(token: number, status: string, reason?: string): void {
+  if (!enabled) return
+  console.log(`[radio-stage #${token}] ${status}${reason ? ` (${reason})` : ''}`)
+  if (status === 'cancelled' || status === 'error') stageSentAtMs.delete(token)
+}
+
+export function radioTraceStageApplied(
+  token: number,
+  via: string,
+  atBars: number,
+  deferrals: number
+): void {
+  if (!enabled) return
+  const sentAt = stageSentAtMs.get(token)
+  stageSentAtMs.delete(token)
+  console.log(
+    `[radio-stage #${token}] APPLIED via ${via} at ${atBars.toFixed(4)}bar · ` +
+      `deferrals ${deferrals}` +
+      (sentAt !== undefined ? ` · ${(performance.now() - sentAt).toFixed(0)}ms after the push` : '')
+  )
+}
+
+/** A change that could have been staged and will now land the old way.
+ * The one line to grep for when a measurement says some changes are still
+ * late -- it names which, and why. */
+export function radioTraceStageFallback(token: number | null, reason: string): void {
+  if (!enabled) return
+  console.log(
+    `[radio-stage${token === null ? '' : ` #${token}`}] withdrawn (${reason})` +
+      ' -- this change falls back to load-project'
+  )
+  if (token !== null) stageSentAtMs.delete(token)
+}

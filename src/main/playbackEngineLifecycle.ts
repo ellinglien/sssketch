@@ -12,6 +12,26 @@ class ShutdownAbort extends Error {}
 export interface PlaybackEngineHandle {
   client: EngineClient
   sendLoadProject: (project: unknown) => void
+  /** Radio's scheduled swap: hands the engine a project NOW and asks it to
+   * make it real at the next loop top (IpcServer.cpp's stage-project
+   * handler). Deliberately a sibling of sendLoadProject rather than a flag
+   * on it -- the two differ in when they take effect, and every other
+   * caller in the app wants "now".
+   *
+   * Does NOT set lastProject. A staged project may still be cancelled or
+   * superseded before it ever plays, and lastProject is what a crash
+   * respawn re-sends -- restoring a project that never went live would
+   * make a crash change what is playing. promoteStagedProject below is
+   * what moves it across, once the engine says it landed. */
+  sendStageProject: (token: number, project: unknown) => void
+  /** Withdraws a staged project, by token (or -1 for whatever is staged).
+   * Radio re-checks a pick's eligibility late and can drop it; a stale
+   * staged swap must never fire. */
+  sendCancelStagedProject: (token: number) => void
+  /** Called on the engine's `project-applied` ack: the staged project this
+   * token named is now the live one, so it becomes what a crash respawn
+   * would restore. Unknown tokens are ignored. */
+  promoteStagedProject: (token: number) => void
   getLastProject: () => unknown
   /** Called when main.process itself is shutting down (app quit) — tears
    * down the connection and kills the engine process, no crash-recovery
@@ -62,6 +82,15 @@ export async function startPlaybackEngine(): Promise<PlaybackEngineHandle> {
   let engineHandle: EngineHandle
   let client: EngineClient
   let lastProject: unknown = null
+  // Staged projects the engine has been handed but has not yet said it
+  // applied, by token. Normally holds at most one -- the engine supersedes
+  // an older stage with a newer one -- but it is a Map rather than a
+  // single slot because the ACKS are what empty it, and an ack for a
+  // superseded token can arrive after the next one has already been sent.
+  // Bounded by the same acks: every token gets exactly one
+  // project-stage-result, and every token that goes live gets exactly one
+  // project-applied (see IpcServer.h's own contract note).
+  const stagedProjects = new Map<number, unknown>()
   let shuttingDown = false
   // Tracks a respawn triggered by an unexpected 'exit' so shutdown() can
   // wait for it to fully unwind (rather than kill()ing a stale/old
@@ -120,6 +149,10 @@ export async function startPlaybackEngine(): Promise<PlaybackEngineHandle> {
   async function respawn(): Promise<void> {
     client.disconnect()
     await connect()
+    // Nothing the OLD engine was holding survives it. A staged project
+    // that never got its ack is not going to get one now, and the fresh
+    // process below is handed the last project that actually played.
+    stagedProjects.clear()
     if (lastProject !== null) {
       client.send('load-project', lastProject)
     }
@@ -134,7 +167,23 @@ export async function startPlaybackEngine(): Promise<PlaybackEngineHandle> {
     },
     sendLoadProject(project: unknown) {
       lastProject = project
+      // A load-project makes the engine drop whatever is staged
+      // (resolveStagedBefore("load-project")), so nothing here can still
+      // be waiting to become the live project.
+      stagedProjects.clear()
       client.send('load-project', project)
+    },
+    sendStageProject(token: number, project: unknown) {
+      stagedProjects.set(token, project)
+      client.send('stage-project', { token, project })
+    },
+    sendCancelStagedProject(token: number) {
+      client.send('cancel-staged-project', { token })
+    },
+    promoteStagedProject(token: number) {
+      if (!stagedProjects.has(token)) return
+      lastProject = stagedProjects.get(token)
+      stagedProjects.clear()
     },
     getLastProject: () => lastProject,
     async shutdown() {

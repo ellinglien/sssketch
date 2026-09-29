@@ -1109,6 +1109,20 @@ app.whenReady().then(async () => {
     playbackEngine?.sendLoadProject(project)
   })
 
+  // Radio's scheduled swap. The project rides NESTED inside the payload
+  // rather than being the payload, because EngineClient matches replies by
+  // message TYPE and not by request id -- the token is what pairs an ack
+  // to its request. Keeping the project a verbatim buildEngineProject
+  // output is the point: it is the hand-synced twin of the C++
+  // EngineProject and nothing on this path may reshape it.
+  ipcMain.handle('engine-stage-project', (_event, token: number, project: unknown) => {
+    playbackEngine?.sendStageProject(token, project)
+  })
+
+  ipcMain.handle('engine-cancel-staged-project', (_event, token: number) => {
+    playbackEngine?.sendCancelStagedProject(token)
+  })
+
   ipcMain.handle('engine-play', (_event, fromPos: number) => {
     playbackEngine?.client.send('play', { fromPos })
   })
@@ -1925,7 +1939,32 @@ app.whenReady().then(async () => {
         }
       })
     }
+    // The two acks of the scheduled-swap contract. Relayed rather than
+    // awaited (EngineClient.sendAndAwaitType matches by type, so two
+    // changes in flight would cross their replies) -- the renderer pairs
+    // them to its own request by the token it minted.
+    function subscribeToProjectStageResult(): void {
+      engine.client.on('project-stage-result', (payload) => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('engine-project-stage-result', payload)
+        }
+      })
+    }
+    function subscribeToProjectApplied(): void {
+      engine.client.on('project-applied', (payload) => {
+        // Before the relay: a staged project that has gone live is what a
+        // crash respawn has to restore, and the renderer's own handler
+        // must not be able to run first and send something that races it.
+        const token = (payload as { token?: unknown } | null)?.token
+        if (typeof token === 'number') engine.promoteStagedProject(token)
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('engine-project-applied', payload)
+        }
+      })
+    }
     subscribeToPositionUpdates()
+    subscribeToProjectStageResult()
+    subscribeToProjectApplied()
     subscribeToMasterPluginLoaded()
     subscribeToChannelPluginLoaded()
     subscribeToCaptureLevelUpdates()
@@ -1934,6 +1973,8 @@ app.whenReady().then(async () => {
 
     engine.onRestarted(() => {
       subscribeToPositionUpdates()
+      subscribeToProjectStageResult()
+      subscribeToProjectApplied()
       subscribeToMasterPluginLoaded()
       subscribeToChannelPluginLoaded()
       subscribeToCaptureLevelUpdates()

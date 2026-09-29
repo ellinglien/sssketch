@@ -33,7 +33,9 @@ import {
   restartRadioInterval,
   radioPaceWindowPreset,
   radioPhraseLaps,
-  radioStarterKinds
+  radioStarterKinds,
+  radioChangeDueAtNextWrap,
+  type RadioClock
 } from './radioSchedule'
 
 describe('radio paces', () => {
@@ -882,5 +884,100 @@ describe('radioStarterKinds', () => {
     // case, only a lower floor.
     expect(radioStarterKinds(2)).toEqual(['drums', 'bass'])
     expect(radioStarterKinds(3)).toEqual(['drums', 'bass', 'lead'])
+  })
+})
+
+describe('radioChangeDueAtNextWrap', () => {
+  // The predicate the staged swap is built on: can the renderer tell,
+  // DURING a lap, that the next change comes due at the wrap that ends it?
+  // Only then can it push the project early and have the engine make it
+  // real exactly at the loop top.
+  const clockAt = (barsElapsed: number, intervalBars: number, lapsSincePhrase = 0): RadioClock => ({
+    barsElapsed,
+    intervalBars,
+    lastPos: 0,
+    lapsSincePhrase
+  })
+
+  it('says yes when the interval runs out exactly at the wrap', () => {
+    // 8-bar loop, grid is the whole loop, 4 bars still to run and 4 bars
+    // of lap left.
+    expect(radioChangeDueAtNextWrap(clockAt(8, 12), 4, 8, 8, 0)).toBe(true)
+  })
+
+  it('says yes when the interval has ALREADY run out and the grid is the loop', () => {
+    expect(radioChangeDueAtNextWrap(clockAt(14, 12), 2, 8, 8, 0)).toBe(true)
+  })
+
+  it('says no when the interval cannot run out before the wrap', () => {
+    // 6 bars still to run, only 4 bars of lap left.
+    expect(radioChangeDueAtNextWrap(clockAt(6, 12), 4, 8, 8, 0)).toBe(false)
+  })
+
+  it('says no when a finer grid gives the change an earlier boundary', () => {
+    // A 2-bar grid in an 8-bar loop: the interval runs out at bar 5, so the
+    // change comes due crossing bar 6, not at the wrap.
+    expect(radioChangeDueAtNextWrap(clockAt(11, 12), 4, 8, 2, 0)).toBe(false)
+  })
+
+  it('says yes on a finer grid when the LAST cell of the lap is the one', () => {
+    // Same 2-bar grid, but the interval only runs out at bar 7 -- the next
+    // boundary crossed is the wrap itself.
+    expect(radioChangeDueAtNextWrap(clockAt(11, 12), 6, 8, 2, 0)).toBe(true)
+  })
+
+  it('agrees with advanceRadioClock about where the change actually lands', () => {
+    // The property that matters: whenever this says yes, running the clock
+    // forward at 30Hz really does produce `due` on the wrap tick and on no
+    // tick before it.
+    const loopBars = 8
+    const gridBars = 2
+    const tick = 1 / 60 // bars per 30Hz tick at 120bpm
+    for (let startPos = 0; startPos < loopBars; startPos += 0.25) {
+      for (let barsElapsed = 0; barsElapsed <= 16; barsElapsed += 0.5) {
+        let clock: RadioClock = {
+          barsElapsed,
+          intervalBars: 12,
+          lastPos: startPos,
+          lapsSincePhrase: 0
+        }
+        const predicted = radioChangeDueAtNextWrap(clock, startPos, loopBars, gridBars, 0)
+        let pos = startPos
+        let dueBeforeWrap = false
+        let dueAtWrap = false
+        for (;;) {
+          pos += tick
+          const wrapped = pos >= loopBars
+          if (wrapped) pos -= loopBars
+          const step = advanceRadioClock(clock, pos, loopBars, gridBars, 0)
+          clock = step.clock
+          if (step.due) {
+            if (step.wrapped) dueAtWrap = true
+            else dueBeforeWrap = true
+          }
+          if (wrapped) break
+        }
+        expect(predicted).toBe(dueAtWrap && !dueBeforeWrap)
+      }
+    }
+  })
+
+  it('holds a change to a wrap that is on the phrase, and refuses one that is not', () => {
+    // 16-bar phrase over an 8-bar loop is two laps. One lap in, the coming
+    // wrap IS the phrase boundary; fresh out of one, it is not.
+    expect(radioChangeDueAtNextWrap(clockAt(14, 12, 1), 4, 8, 8, 16)).toBe(true)
+    expect(radioChangeDueAtNextWrap(clockAt(14, 12, 0), 4, 8, 8, 16)).toBe(false)
+  })
+
+  it('ignores a finer grid entirely while a phrase grid is running', () => {
+    // With a phrase grid on, only a loop top can ever be a landing, so the
+    // change grid cannot pull the change earlier.
+    expect(radioChangeDueAtNextWrap(clockAt(11, 12, 1), 4, 8, 2, 16)).toBe(true)
+  })
+
+  it('refuses nonsense rather than guessing', () => {
+    expect(radioChangeDueAtNextWrap(clockAt(8, 12), 4, 0, 8, 0)).toBe(false)
+    expect(radioChangeDueAtNextWrap(clockAt(8, 12), Number.NaN, 8, 8, 0)).toBe(false)
+    expect(radioChangeDueAtNextWrap(clockAt(8, 12), 9, 8, 8, 0)).toBe(false)
   })
 })
