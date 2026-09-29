@@ -352,6 +352,18 @@ export const DISCOVER_UNDO_LIMIT = 20
 // the warm build+send chain it normally waits on (tens of ms).
 const AFTER_ENGINE_SYNC_TIMEOUT_MS = 1500
 
+// Backstop for the sync hold (holdSyncUntilResolved, below): how long
+// every engine push waits for a just-committed pick to actually resolve
+// before going out without it. A commit whose stem never resolves at all
+// (a resolve that throws, or -- vanishingly unlikely -- a pick of the
+// stem the slot already had, which fires no resolve effect) must not
+// wedge the preview: a parked gesture curve arriving a beat late is a
+// missed move, a gesture curve that NEVER arrives is a stuck panel.
+// Deliberately under AFTER_ENGINE_SYNC_TIMEOUT_MS, so that on the day
+// both backstops fire the parked push still goes out before the radio arm
+// that is waiting on it gives up -- the same ordering the fast path has.
+const SYNC_HOLD_TIMEOUT_MS = 1200
+
 export function DiscoverPanel({
   currentSketch,
   slots,
@@ -724,17 +736,101 @@ export function DiscoverPanel({
   // most recently given -- by the time one animation frame has passed, a
   // synchronous resolution burst has always finished landing.
   const pendingSyncRafRef = useRef<number | null>(null)
+  // The member set the next sync will be built from. Lives in a ref rather
+  // than in the rAF closure so a HOLD (below) can park an already-scheduled
+  // sync and still know what to send once the hold lifts.
+  const pendingSyncIdsRef = useRef<Set<string> | null>(null)
   function scheduleSyncPreviewToEngine(ids: Set<string>): void {
-    if (pendingSyncRafRef.current !== null) cancelAnimationFrame(pendingSyncRafRef.current)
+    pendingSyncIdsRef.current = ids
+    if (pendingSyncRafRef.current !== null) {
+      cancelAnimationFrame(pendingSyncRafRef.current)
+      pendingSyncRafRef.current = null
+    }
+    // Held: keep the ids, schedule nothing. releaseSyncHold re-schedules.
+    if (syncHoldRef.current.size > 0) return
     pendingSyncRafRef.current = requestAnimationFrame(() => {
       pendingSyncRafRef.current = null
+      const sending = pendingSyncIdsRef.current
+      pendingSyncIdsRef.current = null
+      if (sending === null) return
       radioTraceMark('raf') // TEMP (2026-09-28), remove with radioTrace.ts
       // .finally, not .then: syncPreviewToEngine has several early returns
       // (unmounted, no members, a superseded generation, ownership lost)
       // and its own internal try/catch, and a radio arm waiting on this
       // must be released down EVERY one of those paths.
-      void syncPreviewToEngine(ids).finally(drainAfterEngineSync)
+      void syncPreviewToEngine(sending).finally(drainAfterEngineSync)
     })
+  }
+
+  // --- the sync hold: a committed change's push carries the change
+  //
+  // Slots whose radio commit is in `slots` but whose NEW stem has not
+  // resolved into resolvedStemsRef yet. While this is non-empty no
+  // load-project goes out at all.
+  //
+  // Measured 2026-09-28: radio changes split cleanly into two populations.
+  // One push, 70-168ms; two pushes, 349-829ms -- and it was always the
+  // SECOND push that was slow. The shape was always the same. A commit
+  // lands, something in the SAME tick schedules a sync, and if that rAF
+  // wins the race against the row's own resolve then a load-project goes
+  // out carrying the OLD stem; the real swap then has to ride a second
+  // push once the resolve lands. When the resolve won the race instead
+  // there was one push and the change was fast.
+  //
+  // Three separate callers put a sync in a commit's own tick, which is why
+  // c5612da (dropping the arrival gesture's explicit sync) fixed only part
+  // of it:
+  //   - clearRadioGesture(), from the wrap's lapsLeft countdown -- the
+  //     PREVIOUS lap's gesture coming off in the same tick a new change is
+  //     due. This is why plain `due-cut` changes with no gesture of their
+  //     own still pushed twice.
+  //   - clearRadioGesture() again, from the gesture-led branch, which
+  //     fires synchronously in the effect body while the commit it belongs
+  //     to is deferred a microtask -- so its rAF was ALREADY pending by
+  //     the time the commit ran.
+  //   - the standalone drop-out roll, which runs after the commit in the
+  //     same microtask and syncs to arm its curve.
+  // None of them is wrong to want a sync; all of them are wrong about
+  // WHEN. Holding here fixes the class rather than the three call sites,
+  // and a fourth caller added later gets the same treatment for free.
+  //
+  // This also subsumes the `armRadioPick` deferral's own remaining bug
+  // (705510a): runAfterEngineSync drains off the push's .finally, so when
+  // the only push is the swap's, "the first push" and "the push carrying
+  // the swap" are the same thing again. No second mechanism needed.
+  const syncHoldRef = useRef<Set<string>>(new Set())
+  const syncHoldTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** Holds every engine push until `slotId`'s newly-committed pick has
+   * resolved. Cancels a sync already scheduled for this frame -- the
+   * gesture-led path schedules one BEFORE the commit it precedes. */
+  function holdSyncUntilResolved(slotId: string): void {
+    syncHoldRef.current.add(slotId)
+    if (pendingSyncRafRef.current !== null) {
+      cancelAnimationFrame(pendingSyncRafRef.current)
+      pendingSyncRafRef.current = null
+    }
+    if (syncHoldTimerRef.current === null) {
+      syncHoldTimerRef.current = setTimeout(() => releaseSyncHold(null), SYNC_HOLD_TIMEOUT_MS)
+    }
+  }
+
+  /** Lifts the hold for one slot, or (null) for all of them, and lets
+   * whatever was parked go out. */
+  function releaseSyncHold(slotId: string | null): void {
+    if (slotId === null) {
+      if (syncHoldRef.current.size === 0) return
+      syncHoldRef.current = new Set()
+    } else {
+      if (!syncHoldRef.current.delete(slotId)) return
+      if (syncHoldRef.current.size > 0) return
+    }
+    if (syncHoldTimerRef.current !== null) {
+      clearTimeout(syncHoldTimerRef.current)
+      syncHoldTimerRef.current = null
+    }
+    const parked = pendingSyncIdsRef.current
+    if (parked !== null) scheduleSyncPreviewToEngine(parked)
   }
 
   // Callbacks waiting for the preview sync that a landing change triggers
@@ -878,6 +974,17 @@ export function DiscoverPanel({
       if (pendingSyncRafRef.current !== null) {
         cancelAnimationFrame(pendingSyncRafRef.current)
         pendingSyncRafRef.current = null
+      }
+      pendingSyncIdsRef.current = null
+      // Same reasoning for the hold: drop it outright rather than
+      // releasing it (releasing would schedule the very rAF just
+      // cancelled), and take its backstop timer with it so it cannot fire
+      // into a component that is gone -- or, in StrictMode's fake
+      // unmount, into one that is about to come back.
+      syncHoldRef.current = new Set()
+      if (syncHoldTimerRef.current !== null) {
+        clearTimeout(syncHoldTimerRef.current)
+        syncHoldTimerRef.current = null
       }
       // Drop, don't drain: a waiting radio arm exists to keep radio going,
       // and there is no radio to keep going once the panel is gone. Firing
@@ -1503,6 +1610,12 @@ export function DiscoverPanel({
   function reportSlotResolution(id: string, stem: ResolvedCandidateStem | null): void {
     if (stem) {
       radioTraceMark('resolved') // TEMP (2026-09-28), remove with radioTrace.ts
+      // The swap this slot's commit was holding every push for has landed.
+      // Before the writes below, so the sync they schedule is the one that
+      // goes out. The null branch deliberately does NOT release: it is the
+      // "mid-reroll, new candidate landed but not resolved yet" window --
+      // exactly the window the hold exists to cover.
+      releaseSyncHold(id)
       resolvedStemsRef.current.set(id, stem)
       resolvedBarLengthsRef.current = new Map(resolvedBarLengthsRef.current).set(id, stem.barLength)
       setResolvedBarLengths((prev) => {
@@ -1872,6 +1985,12 @@ export function DiscoverPanel({
           // does takes one: a transition is performance, not an edit.
           radioTraceBegin(boundaryBars, bpmRef.current, 'gesture-led') // TEMP
           commitSlotPick(led.slotId, led.pick)
+          // The clearRadioGesture() above already scheduled a sync for
+          // this frame, and this commit's stem is a render and a promise
+          // away -- so that sync would push the OLD stem and the swap
+          // would need a second push. Holding cancels it; it goes out
+          // once, carrying both.
+          holdSyncUntilResolved(led.slotId)
           radioTraceMark('commit') // TEMP
           radioLastSlotRef.current = led.slotId
           committed = true
@@ -1923,7 +2042,12 @@ export function DiscoverPanel({
       void Promise.resolve().then(() => {
         if (!radioOnRef.current) return
         radioTraceBegin(boundaryBars, bpmRef.current, 'course-change') // TEMP
-        for (const { slotId, pick } of batch) commitSlotPick(slotId, pick)
+        for (const { slotId, pick } of batch) {
+          commitSlotPick(slotId, pick)
+          // One push for the whole turnover, not one per layer landing:
+          // the hold lifts when the LAST of them has resolved.
+          holdSyncUntilResolved(slotId)
+        }
         radioTraceMark('commit') // TEMP
         // Nothing "changed last" after a whole-bed turnover, so the
         // not-the-same-one-twice rule starts clean.
@@ -2032,6 +2156,11 @@ export function DiscoverPanel({
         // padlock is the tool for "I liked that one" (spec 3.4).
         radioTraceBegin(boundaryBars, bpmRef.current, `due-${transition}`) // TEMP
         commitSlotPick(pending.slotId, pending.pick)
+        // Nothing pushes until this pick's stem has resolved -- not the
+        // previous lap's gesture coming off at this same wrap, not the
+        // drop-out roll below, not this change's own arrival gesture.
+        // See holdSyncUntilResolved.
+        holdSyncUntilResolved(pending.slotId)
         radioTraceMark('commit') // TEMP
         radioLastSlotRef.current = pending.slotId
         committed = true
@@ -2669,6 +2798,11 @@ export function DiscoverPanel({
   // undo, its barLength survives in both maps with nothing left in
   // `slots` that could ever overwrite or remove it again.
   function forgetSlotResolution(id: string): void {
+    // A slot that is gone will never report a resolution, so a hold taken
+    // on it would sit out its whole backstop with every push parked
+    // behind it. This is the one "that stem is never coming" signal the
+    // panel has that isn't a timeout.
+    releaseSyncHold(id)
     resolvedStemsRef.current.delete(id)
     if (resolvedBarLengthsRef.current.has(id)) {
       const next = new Map(resolvedBarLengthsRef.current)
@@ -3286,6 +3420,11 @@ export function DiscoverPanel({
     // writes an empty stemAutomation either way.
     radioLedChangeRef.current = null
     clearRadioGesture()
+    // AFTER clearRadioGesture, so the release flushes the rebuild it just
+    // parked rather than a staler one: stopping radio mid-change would
+    // otherwise leave that curve on for the rest of the hold's backstop,
+    // and the whole point of clearing it here is that it comes off now.
+    releaseSyncHold(null)
     setRadioProgress(0)
   }
 
