@@ -99,3 +99,27 @@ describe('UndoSnapshotSequence', () => {
     expect(seqs).toEqual(Array.from({ length: 25 }, (_, i) => i + 1))
   })
 })
+
+describe('an undo point read at the action, not at the queue', () => {
+  it("keeps a slow batch out of a later action's undo", () => {
+    // Reroll-all pushes its point, then picks for seconds. Meanwhile a
+    // nearby pick pushes its own point and queues row z. The batch queues
+    // a, b, c afterwards -- carrying ITS point, read before the picks.
+    const sequence = new UndoSnapshotSequence()
+    const batchPoint: string[] = []
+    sequence.mark(batchPoint)
+    const batchSeq = sequence.latest()
+    const nearbyPoint: string[] = []
+    sequence.mark(nearbyPoint)
+    const waiting = new Map([
+      ['z', { undoSeq: sequence.latest() }],
+      ['a', { undoSeq: batchSeq }],
+      ['b', { undoSeq: batchSeq }],
+      ['c', { undoSeq: batchSeq }]
+    ])
+    // Cmd+Z once: the nearby pick only.
+    expect(manualChangesUndoneBy(waiting, sequence.seqOf(nearbyPoint))).toEqual(['z'])
+    // Cmd+Z again: the whole batch.
+    expect(manualChangesUndoneBy(waiting, sequence.seqOf(batchPoint))).toEqual(['z', 'a', 'b', 'c'])
+  })
+})

@@ -4547,7 +4547,8 @@ export function DiscoverPanel({
         }
       ])
       if (immediate) commitSlotPick(copyId, pick)
-      else queueManualChange(copyId, pick, true)
+      // Synchronous, straight after this action's own pushUndoSnapshot.
+      else queueManualChange(copyId, pick, true, undoSequence.latest())
       return
     }
     setSlots((prev) => [...prev, { ...slot, id: freshSlotId() }])
@@ -4603,7 +4604,8 @@ export function DiscoverPanel({
         // barRequested: the bar a ranked roll would have asked for; a
         // nearby pick applies none, hence barUsed null.
         { candidate, barUsed: null, barRequested: traitMatchBar, unranked: true },
-        !previewingSlotIdsRef.current.has(id)
+        !previewingSlotIdsRef.current.has(id),
+        undoSequence.latest()
       )
     }
     if (immediate) withdrawManualChange(id, 'manual-change-immediate')
@@ -4917,13 +4919,17 @@ export function DiscoverPanel({
     immediate = false
   ): Promise<void> {
     const queue = radioOnRef.current && !immediate
+    // The undo point this roll belongs to: every caller (rerollSlot,
+    // addSlot, changeSlotKinds) pushed it just before calling. Read now,
+    // before the pick's await -- see queueManualChange.
+    const undoSeq = undoSequence.latest()
     // A row already waiting ignores a second roll -- checked before the
     // pick, so it costs nothing.
     if (queue && manualChangesRef.current.has(id)) return
     const pick = await pickForSlot(id, kinds)
     if (pick === null) return
     if (queue && radioOnRef.current) {
-      queueManualChange(id, pick, !previewingSlotIdsRef.current.has(id))
+      queueManualChange(id, pick, !previewingSlotIdsRef.current.has(id), undoSeq)
       return
     }
     // Cmd on a row that is already waiting: the waiting change goes
@@ -5011,6 +5017,9 @@ export function DiscoverPanel({
     immediate = false
   ): Promise<void> {
     const queue = radioOnRef.current && !immediate
+    // See rollForSlot: the callers (rerollRandomSlot, addSlot,
+    // addRandomSlot) pushed this roll's undo point just before.
+    const undoSeq = undoSequence.latest()
     if (queue && manualChangesRef.current.has(id)) return
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
     rerollGenerationRef.current.set(id, myGeneration)
@@ -5046,7 +5055,8 @@ export function DiscoverPanel({
         queueManualChange(
           id,
           { candidate, barUsed: null, barRequested: traitMatchBar, unranked: true },
-          !previewingSlotIdsRef.current.has(id)
+          !previewingSlotIdsRef.current.has(id),
+          undoSeq
         )
         return
       }
@@ -5170,6 +5180,10 @@ export function DiscoverPanel({
    * means instant: the picks commit, as rerollAll's radio-off path would
    * have committed them. */
   async function rerollAllOnTheTop(slotIds: string[]): Promise<void> {
+    // The batch's ONE undo point, pushed by rerollAll just before -- read
+    // before the first pick, so every row carries it however long the
+    // picks take and whatever else is pushed meanwhile.
+    const undoSeq = undoSequence.latest()
     const picks: { id: string; kindsKey: string; pick: SlotPick }[] = []
     for (const slotId of slotIds) {
       const current = slotsRef.current.find((s) => s.id === slotId)
@@ -5182,8 +5196,9 @@ export function DiscoverPanel({
     for (const { id, kindsKey, pick } of picks) {
       const now = slotsRef.current.find((s) => s.id === id)
       if (!now || slotKindsKey(now.kinds) !== kindsKey) continue
-      if (radioOnRef.current) queueManualChange(id, pick, !previewingSlotIdsRef.current.has(id))
-      else commitSlotPick(id, pick)
+      if (radioOnRef.current) {
+        queueManualChange(id, pick, !previewingSlotIdsRef.current.has(id), undoSeq)
+      } else commitSlotPick(id, pick)
     }
   }
 
@@ -5306,6 +5321,14 @@ export function DiscoverPanel({
    * skips those), and weighted off a just-changed one (commitSlotPick's
    * change time, which is why a Cmd path calls this after its commit).
    *
+   * Not covered: an arm whose pick is still IN FLIGHT when the row is
+   * claimed. There is no pending pick yet to drop, so nothing here sees
+   * it. For a queued change that is harmless -- armRadioPick re-checks for
+   * a waiting row when its pick returns -- but a Cmd-clicked row is not
+   * waiting, so that arm can still land its pick on it, and radio may turn
+   * the row over again at its next change. Weighting only steers a NEW
+   * choice; it cannot recall one already made.
+   *
    * Radio's HELD change on this very row (the breathing one, so the likely
    * one to be clicked) gives way here, rather than being silently dropped
    * at the landing -- or, for a Cmd-click, landing over the user's stem:
@@ -5359,10 +5382,22 @@ export function DiscoverPanel({
    * rerollRandomSlot, rerollAll, addSlot, addRandomSlot, changeSlotKinds and
    * the phone. Radio's own picks never do: they go through pickForSlot and
    * commitSlotPick directly. */
-  function queueManualChange(slotId: string, pick: SlotPick, joining: boolean): boolean {
+  //
+  // `undoSeq` is the undo point of the ACTION that queued this -- read by
+  // the caller right after its own pushUndoSnapshot (or, when the caller's
+  // caller pushed it, at the caller's start), never here. Picks can take
+  // seconds (reroll-all's are sequential), and another action pushing its
+  // own point in between must not lend this change its later number: an
+  // undo of that other action would then take this one back too.
+  function queueManualChange(
+    slotId: string,
+    pick: SlotPick,
+    joining: boolean,
+    undoSeq: number
+  ): boolean {
     if (manualChangesRef.current.has(slotId)) return false
     const next = new Map(manualChangesRef.current)
-    next.set(slotId, { pick, stem: null, joining, arrival: null, undoSeq: undoSequence.latest() })
+    next.set(slotId, { pick, stem: null, joining, arrival: null, undoSeq })
     setManualChanges(next)
     // NO withdrawal of the stage that is out for this entry itself, on
     // purpose. Its stem is still null, so a re-stage now would carry
