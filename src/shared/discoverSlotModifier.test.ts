@@ -9,15 +9,13 @@ import {
 } from './discoverSlotModifier'
 
 describe('DISCOVER_SLOT_MODIFIER_OPTIONS', () => {
-  it('lists the 4 modifiers in canonical order', () => {
-    expect(DISCOVER_SLOT_MODIFIER_OPTIONS).toEqual(['preferFaves', 'endlesss', 'other', 'mine'])
+  it('lists the 2 modifiers in canonical order', () => {
+    expect(DISCOVER_SLOT_MODIFIER_OPTIONS).toEqual(['preferFaves', 'mine'])
   })
 
   it('has lowercase display labels', () => {
     expect(DISCOVER_SLOT_MODIFIER_LABEL).toEqual({
       preferFaves: 'prefer faves',
-      endlesss: 'endlesss sounds',
-      other: 'other sounds',
       mine: 'my sounds'
     })
   })
@@ -25,52 +23,26 @@ describe('DISCOVER_SLOT_MODIFIER_OPTIONS', () => {
 
 describe('toggleSlotModifier', () => {
   it('turns a modifier on, keeping canonical order', () => {
-    expect(toggleSlotModifier(['mine'], 'endlesss')).toEqual(['endlesss', 'mine'])
+    expect(toggleSlotModifier(['mine'], 'preferFaves')).toEqual(['preferFaves', 'mine'])
   })
 
   it('turns a modifier off, including the last one', () => {
-    expect(toggleSlotModifier(['other', 'mine'], 'other')).toEqual(['mine'])
+    expect(toggleSlotModifier(['preferFaves', 'mine'], 'preferFaves')).toEqual(['mine'])
     expect(toggleSlotModifier(['mine'], 'mine')).toEqual([])
   })
 
   it('dedupes', () => {
-    expect(toggleSlotModifier(['mine', 'mine'], 'endlesss')).toEqual(['endlesss', 'mine'])
-  })
-
-  it('endlesss and other are independent (both may be on)', () => {
-    expect(toggleSlotModifier(['endlesss'], 'other')).toEqual(['endlesss', 'other'])
+    expect(toggleSlotModifier(['mine', 'mine'], 'preferFaves')).toEqual(['preferFaves', 'mine'])
   })
 })
 
 describe('slotRollOptions', () => {
   const withUser = { hasUsername: true }
 
-  it('defaults to both sound sources, no ownership filter, no favourite preference', () => {
+  it('defaults to no ownership filter and no favourite preference', () => {
     expect(slotRollOptions([], withUser)).toEqual({
-      soundSource: { endlesss: true, audioIn: true },
       onlyOwnStems: false,
       preferFavourites: false
-    })
-  })
-
-  it("'endlesss' alone restricts to endlesss sounds", () => {
-    expect(slotRollOptions(['endlesss'], withUser).soundSource).toEqual({
-      endlesss: true,
-      audioIn: false
-    })
-  })
-
-  it("'other' alone restricts to non-endlesss sounds", () => {
-    expect(slotRollOptions(['other'], withUser).soundSource).toEqual({
-      endlesss: false,
-      audioIn: true
-    })
-  })
-
-  it('both sources selected means both', () => {
-    expect(slotRollOptions(['endlesss', 'other'], withUser).soundSource).toEqual({
-      endlesss: true,
-      audioIn: true
     })
   })
 
@@ -115,9 +87,24 @@ describe('drawSoundSource', () => {
     expect(other).toBe(n / 2)
   })
 
+  it('is still a draw, with a fallback, just inside each end', () => {
+    expect(drawSoundSource(1, () => 0)).toEqual({ first: OTHER_ONLY, fallback: ENDLESSS_ONLY })
+    expect(drawSoundSource(99, () => 0.99)).toEqual({
+      first: ENDLESSS_ONLY,
+      fallback: OTHER_ONLY
+    })
+  })
+
   it('clamps a value outside 0-100 to the nearest end', () => {
-    expect(drawSoundSource(-5, () => 0).fallback).toBeNull()
-    expect(drawSoundSource(140, () => 0.99).first).toEqual(OTHER_ONLY)
+    expect(drawSoundSource(-5, () => 0)).toEqual({ first: ENDLESSS_ONLY, fallback: null })
+    expect(drawSoundSource(140, () => 0.99)).toEqual({ first: OTHER_ONLY, fallback: null })
+  })
+
+  it('returns frozen filters', () => {
+    const draw = drawSoundSource(50, () => 0)
+    expect(Object.isFrozen(drawSoundSource(0).first)).toBe(true)
+    expect(Object.isFrozen(draw.first)).toBe(true)
+    expect(Object.isFrozen(draw.fallback)).toBe(true)
   })
 })
 
@@ -128,5 +115,12 @@ describe('soundSourceForLean', () => {
     expect(soundSourceForLean(1)).toEqual({ endlesss: true, audioIn: true })
     expect(soundSourceForLean(50)).toEqual({ endlesss: true, audioIn: true })
     expect(soundSourceForLean(99)).toEqual({ endlesss: true, audioIn: true })
+  })
+
+  it('returns frozen filters, one shared object for in between', () => {
+    expect(Object.isFrozen(soundSourceForLean(0))).toBe(true)
+    expect(Object.isFrozen(soundSourceForLean(50))).toBe(true)
+    expect(Object.isFrozen(soundSourceForLean(100))).toBe(true)
+    expect(soundSourceForLean(50)).toBe(soundSourceForLean(20))
   })
 })

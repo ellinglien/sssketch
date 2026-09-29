@@ -1,23 +1,14 @@
 import type { DiscoverSoundSourceFilter } from './riffLibraryTypes'
 
-/** Discover's four roll filters (prefer favourites, endlesss / other sound
- * source, only my stems). Briefly per-slot on 2026-09-22, then moved back
- * to GLOBAL sticky [x] toggles under the add row the same day: every roll
- * and reroll of every slot reads the panel's current set via
- * slotRollOptions. */
-export type DiscoverSlotModifier = 'preferFaves' | 'endlesss' | 'other' | 'mine'
+/** Discover's two remaining roll switches (prefer favourites, only my
+ * stems). The endlesss/other source switches became the source dial on
+ * 2026-09-29 -- see drawSoundSource. */
+export type DiscoverSlotModifier = 'preferFaves' | 'mine'
 
-export const DISCOVER_SLOT_MODIFIER_OPTIONS: DiscoverSlotModifier[] = [
-  'preferFaves',
-  'endlesss',
-  'other',
-  'mine'
-]
+export const DISCOVER_SLOT_MODIFIER_OPTIONS: DiscoverSlotModifier[] = ['preferFaves', 'mine']
 
 export const DISCOVER_SLOT_MODIFIER_LABEL: Record<DiscoverSlotModifier, string> = {
   preferFaves: 'prefer faves',
-  endlesss: 'endlesss sounds',
-  other: 'other sounds',
   mine: 'my sounds'
 }
 
@@ -40,26 +31,19 @@ export function toggleSlotModifier(
 }
 
 export interface DiscoverSlotRollOptions {
-  soundSource: DiscoverSoundSourceFilter
   onlyOwnStems: boolean
   preferFavourites: boolean
 }
 
-/** What the modifier set means for a roll. Neither sound source picked
- * means no source filtering (both on); picking one restricts to it;
- * picking both is the same as neither. 'mine' only takes effect with a
- * username to match against (same as the old global toggle, which was
- * disabled without one). */
+/** What the switch set means for a roll. 'mine' only takes effect with a
+ * username to match against. The sound source is not a switch any more --
+ * each roll draws it from the dial (drawSoundSource). */
 export function slotRollOptions(
   modifiers: readonly DiscoverSlotModifier[],
   { hasUsername }: { hasUsername: boolean }
 ): DiscoverSlotRollOptions {
   const set = new Set(modifiers)
-  const endlesss = set.has('endlesss')
-  const other = set.has('other')
-  const anySource = !endlesss && !other
   return {
-    soundSource: { endlesss: anySource || endlesss, audioIn: anySource || other },
     onlyOwnStems: set.has('mine') && hasUsername,
     preferFavourites: set.has('preferFaves')
   }
@@ -78,6 +62,12 @@ const ENDLESSS_ONLY: Readonly<DiscoverSoundSourceFilter> = Object.freeze({
 })
 const OTHER_ONLY: Readonly<DiscoverSoundSourceFilter> = Object.freeze({
   endlesss: false,
+  audioIn: true
+})
+// Also shared, so soundSourceForLean's in-between value is referentially
+// stable (it lands in React props).
+const BOTH_SOURCES: Readonly<DiscoverSoundSourceFilter> = Object.freeze({
+  endlesss: true,
   audioIn: true
 })
 
@@ -117,5 +107,5 @@ export function soundSourceForLean(lean: number): DiscoverSoundSourceFilter {
   const l = clampLean(lean)
   if (l <= SOURCE_LEAN_ENDLESSS) return ENDLESSS_ONLY
   if (l >= SOURCE_LEAN_OTHER) return OTHER_ONLY
-  return { endlesss: true, audioIn: true }
+  return BOTH_SOURCES
 }

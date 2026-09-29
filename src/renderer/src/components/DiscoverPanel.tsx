@@ -30,7 +30,10 @@ import {
 import {
   DISCOVER_SLOT_MODIFIER_LABEL,
   DISCOVER_SLOT_MODIFIER_OPTIONS,
+  DEFAULT_SOURCE_LEAN,
+  drawSoundSource,
   slotRollOptions,
+  soundSourceForLean,
   toggleSlotModifier,
   type DiscoverSlotModifier
 } from '@shared/discoverSlotModifier'
@@ -351,7 +354,7 @@ export function freshSlotId(): string {
 }
 
 // The global roll filters' starting state -- see globalModifiers.
-const DEFAULT_GLOBAL_MODIFIERS: DiscoverSlotModifier[] = ['endlesss', 'other', 'mine']
+const DEFAULT_GLOBAL_MODIFIERS: DiscoverSlotModifier[] = ['mine']
 
 // What radio lays down when it is started on an empty panel -- four,
 // because it is the smallest set that sounds like a band rather than like
@@ -626,16 +629,26 @@ export function DiscoverPanel({
     release: releaseEngine
   } = useEngineOwnership()
   const hasUsername = currentUsername.trim() !== ''
-  // Direct request, 2026-09-22: the four roll filters (prefer faves,
-  // endlesss sounds, other sounds, my sounds) are GLOBAL sticky [x] toggles
-  // in their own row under the add row -- after a same-day stint as
-  // per-slot modifiers. Every roll and reroll of every slot reads the
+  // Direct request, 2026-09-22: the roll filters (prefer faves, my sounds;
+  // the endlesss/other pair became the source dial on 2026-09-29) are
+  // GLOBAL sticky [x] toggles in their own row under the add row -- after a
+  // same-day stint as per-slot modifiers. Every roll and reroll of every slot reads the
   // current set, so toggling one affects all future rolls. In-memory only,
   // like the pre-modifier globals were. 'my sounds' is shown unchecked and
   // disabled -- and slotRollOptions ignores it -- while no username is set.
   const [globalModifiers, setGlobalModifiers] =
     useState<DiscoverSlotModifier[]>(DEFAULT_GLOBAL_MODIFIERS)
   const globalRollOptions = slotRollOptions(globalModifiers, { hasUsername })
+  // The source dial (2026-09-29): 0 = endlesss, 100 = other, 50 = half and
+  // half. In-memory, like the switches it replaced. Mirrored into a ref
+  // because radio's picks run from long-lived callbacks that would
+  // otherwise read the value from whenever they were created.
+  const [sourceLean, setSourceLean] = useState(DEFAULT_SOURCE_LEAN)
+  const sourceLeanRef = useRef(DEFAULT_SOURCE_LEAN)
+  function changeSourceLean(lean: number): void {
+    sourceLeanRef.current = lean
+    setSourceLean(lean)
+  }
   const stemFavourites = useStemFavourites()
   const { toggleStemFavourite } = useStemFavouritesActions()
 
@@ -3914,7 +3927,7 @@ export function DiscoverPanel({
       const nearby = await window.rifffApi.getAdjacentDiscoverCandidates(
         anchor.riffCID,
         slot.kinds,
-        globalRollOptions.soundSource
+        soundSourceForLean(sourceLeanRef.current)
       )
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       const pick = pickAdjacentCandidate(nearby.older, nearby.newer, anchor.stemCID)
@@ -4001,12 +4014,25 @@ export function DiscoverPanel({
       console.log(
         `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- calling getDiscoverCandidates`
       )
-      const candidates = await window.rifffApi.getDiscoverCandidates(
+      // The source dial: this roll's source is drawn here, and the other
+      // source is tried only if the drawn one has nothing for this slot
+      // (never at an end -- see drawSoundSource).
+      const draw = drawSoundSource(sourceLeanRef.current)
+      let candidates = await window.rifffApi.getDiscoverCandidates(
         kinds,
         rollOptions.onlyOwnStems,
         currentUsername,
-        rollOptions.soundSource
+        draw.first
       )
+      if (candidates.length === 0 && draw.fallback !== null) {
+        if (rerollGenerationRef.current.get(id) !== myGeneration) return null
+        candidates = await window.rifffApi.getDiscoverCandidates(
+          kinds,
+          rollOptions.onlyOwnStems,
+          currentUsername,
+          draw.fallback
+        )
+      }
       console.log(
         `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- getDiscoverCandidates returned ${candidates.length} candidates`
       )
@@ -4207,12 +4233,22 @@ export function DiscoverPanel({
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
       const rollOptions = globalRollOptions
-      const candidate = await window.rifffApi.getRandomDiscoverCandidate(
+      const draw = drawSoundSource(sourceLeanRef.current)
+      let candidate = await window.rifffApi.getRandomDiscoverCandidate(
         kinds,
         rollOptions.onlyOwnStems,
         currentUsername,
-        rollOptions.soundSource
+        draw.first
       )
+      if (candidate === null && draw.fallback !== null) {
+        if (rerollGenerationRef.current.get(id) !== myGeneration) return
+        candidate = await window.rifffApi.getRandomDiscoverCandidate(
+          kinds,
+          rollOptions.onlyOwnStems,
+          currentUsername,
+          draw.fallback
+        )
+      }
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       setSlots((prev) =>
         prev.map((s) =>
@@ -5630,8 +5666,8 @@ export function DiscoverPanel({
             onSwapFromNearby={(candidate) => swapSlotFromNearby(slot.id, candidate)}
             onChangeKinds={(kinds) => changeSlotKinds(slot.id, kinds)}
             onReclassify={(role) => void reclassifySlot(slot.id, role)}
-            soundSourceEndlesss={globalRollOptions.soundSource.endlesss}
-            soundSourceAudioIn={globalRollOptions.soundSource.audioIn}
+            soundSourceEndlesss={soundSourceForLean(sourceLean).endlesss}
+            soundSourceAudioIn={soundSourceForLean(sourceLean).audioIn}
           />
         ))
       })()}
@@ -5747,32 +5783,14 @@ export function DiscoverPanel({
           >
             {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
               const disabled = modifier === 'mine' && !hasUsername
-              // At least one sound source stays on -- with checkboxes,
-              // "both off" reads as "nothing", yet slotRollOptions treats it
-              // as "both". Blocking the last source's uncheck avoids that.
-              const isSource = modifier === 'endlesss' || modifier === 'other'
-              const otherSource = modifier === 'endlesss' ? 'other' : 'endlesss'
-              const isLastSource =
-                isSource &&
-                globalModifiers.includes(modifier) &&
-                !globalModifiers.includes(otherSource)
               return (
                 <BracketToggle
                   key={modifier}
                   checked={!disabled && globalModifiers.includes(modifier)}
-                  onChange={() => {
-                    if (isLastSource) return
-                    setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))
-                  }}
+                  onChange={() => setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))}
                   label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
                   disabled={disabled}
-                  tooltip={
-                    disabled
-                      ? MY_SOUNDS_NEEDS_USERNAME
-                      : isLastSource
-                        ? 'keep one source'
-                        : undefined
-                  }
+                  tooltip={disabled ? MY_SOUNDS_NEEDS_USERNAME : undefined}
                 />
               )
             })}
@@ -5788,6 +5806,34 @@ export function DiscoverPanel({
             borderLeft: '1px solid var(--ra-border)'
           }}
         >
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 3,
+              marginRight: 12
+            }}
+          >
+            {/* The source dial (2026-09-29): 0 = endlesss sounds, 100 =
+                other sounds, 50 = half and half. The ends are "only". See
+                drawSoundSource. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+              <span style={{ fontSize: 7, color: 'var(--ra-text-4)' }}>endlesss</span>
+              <Dial
+                value={sourceLean}
+                onChange={changeSourceLean}
+                defaultValue={DEFAULT_SOURCE_LEAN}
+                size={30}
+                ariaLabel="source"
+                tooltip="other clockwise"
+              />
+              <span style={{ fontSize: 7, color: 'var(--ra-text-4)' }}>other</span>
+            </div>
+            <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+              source
+            </span>
+          </div>
           <div
             style={{
               display: 'flex',
@@ -5831,9 +5877,10 @@ export function DiscoverPanel({
   )
 }
 
-// Wide enough for the dial column's margin + divider + padding + the
-// "matching" caption; the empty left track mirrors it.
-const ADD_ROW_DIAL_COLUMN_WIDTH = 96
+// Wide enough for the dial column's margin + divider + padding + the source
+// dial with its end labels + the "matching" dial; the empty left track
+// mirrors it.
+const ADD_ROW_DIAL_COLUMN_WIDTH = 200
 
 const MY_SOUNDS_NEEDS_USERNAME = 'needs your username'
 
@@ -6286,8 +6333,7 @@ function DiscoverSlotRow({
   /** DiscoverPanel's own reclassifySlot -- fired by the match meter's
    * reclassify picker with the chosen role. */
   onReclassify: (role: ArrangeRole) => void
-  /** DiscoverPanel's own global endlesss sounds / other sounds toggles
-   * (globalRollOptions) -- passed as two primitive booleans, not one
+  /** The source dial as a filter (soundSourceForLean) -- passed as two primitive booleans, not one
    * object, so this row's own re-render checks stay cheap; combined into a
    * real DiscoverSoundSourceFilter object only where actually needed below
    * (the "explore nearby" popover). */
