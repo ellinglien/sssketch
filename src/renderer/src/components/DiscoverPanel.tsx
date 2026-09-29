@@ -4973,7 +4973,10 @@ export function DiscoverPanel({
           follow-up report, 2026-09-16: remove the button animation
           entirely. The disabled/rolling state now reads purely through the
           existing dimmed color + default cursor + title tooltip, no
-          motion. */}
+          motion.
+          2026-09-29: except the one button that STARTED the roll, which
+          now pulses (discover-slot-pulse) -- it replaced the row's
+          spinning dice. */}
       <style>{`
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
@@ -5982,6 +5985,7 @@ function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
  *   `soft`: lit but outlined -- "change next", a request that is spent on
  *     the next change and then gone.
  *   `pulsing`: the reroll this button started is still in flight.
+ *   `disabled`: the whole button at 0.35 opacity, state styling kept.
  *
  * Monochrome in every state, per tokens.css: colour on this row is for
  * audio only. */
@@ -6031,13 +6035,18 @@ function RowIconButton({
               ? 'var(--ra-bg-row-active)'
               : 'transparent',
         border: `1px solid ${state === 'off' ? 'var(--ra-border)' : 'var(--ra-text)'}`,
-        color: disabled
-          ? 'var(--ra-text-4)'
-          : state === 'on'
-            ? 'var(--ra-bg)'
+        color:
+          state === 'on'
+            ? 'var(--ra-bg-frame)'
             : state === 'soft'
               ? 'var(--ra-text)'
               : 'var(--ra-text-2)',
+        // Disabled dims the WHOLE button and keeps its state styling, so a
+        // padlocked row that is hooked reads as a dimmed lit hand: the flag
+        // is inert but still readable. A pulsing button is also disabled
+        // (it started the roll in flight), and its pulse is on opacity, so
+        // the animation wins there rather than fighting a fixed value.
+        opacity: disabled && !pulsing ? 0.35 : undefined,
         cursor: disabled ? 'default' : 'pointer',
         animation: pulsing ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
       }}
@@ -6187,8 +6196,8 @@ function DiscoverSlotRow({
    * the panel carries `hook`; any number can carry `replace-soon`. See
    * src/shared/radioSlotFlags.ts. */
   radioFlag: RadioSlotFlag | null
-  /** Whether radio is running. The flag control only means anything while
-   * it is, so it is hidden -- but still RENDERED -- when it is not. */
+  /** Whether radio is running. The two radio controls (hold longer, change
+   * next) only mean anything while it is, so it is hidden -- but still RENDERED -- when it is not. */
   radioOn: boolean
   /** The "hold longer" control -- toggles `hook` on this row
    * (toggleRadioHook). */
@@ -6691,11 +6700,12 @@ function DiscoverSlotRow({
       <div
         style={{
           display: 'grid',
-          // 15 tracks, explicit gridColumn on every child below (including
+          // 16 tracks, explicit gridColumn on every child below (including
           // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
-          // 5 favourite, 6 gap, 7 waveform, 8 gap, 9 kind/category label,
-          // 10 gap, 11 decorative dice icon, 12 similar, 13 adjacent, 14
-          // random, 15 duplicate. Duplicate (direct request, 2026-09-20:
+          // 5 favourite, 6 hold longer, 7 waveform (1fr), 8 spacer, 9
+          // kind/category label + match meter, 10 spacer, 11 change next,
+          // 12 divider, 13 same kind, 14 nearby jam, 15 any stem, 16
+          // duplicate. Duplicate (direct request, 2026-09-20:
           // "add duplicate channel to discover") was appended as a NEW
           // last track rather than inserted earlier and renumbering
           // everything after it -- this row's own explicit-position
@@ -6729,17 +6739,15 @@ function DiscoverSlotRow({
           // fixed-role-label-width fix for the identical class of bug)
           // make every row's non-1fr tracks identical regardless of which
           // optional buttons happen to render.
-          // Track SIX only, 14px to 18px (2026-09-29): it used to be an
-          // empty spacer and it now holds the radio flag control. No other
-          // track's width changes and no child's gridColumn changes, which
-          // is what keeps the hard-won explicit-position discipline above
-          // intact -- widening one existing track cannot renumber
-          // anything, which inserting one would have.
-          // 2026-09-29, the icon row: tracks 12-15 were four 70px text
-          // buttons and are now four 18px squares (13-16), with "change
-          // next" in track 11 (was the 16px decorative dice) and a 1px
-          // divider in 12. Every track stays a FIXED width, for the reason
-          // above; only the 1fr waveform grows.
+          // 2026-09-29, radio controls and the icon row: track 6, once an
+          // empty 14px spacer, widened to 18px for "hold longer"; track 11,
+          // once the 16px decorative dice, is now 18px for "change next";
+          // a new 1px divider track 12 was inserted, so the four rerolls
+          // moved from 12-15 (70px text buttons) to 13-16 (18px icon
+          // squares). That insert DID renumber every gridColumn after it,
+          // done by hand in one pass. Every non-waveform track stays a
+          // FIXED pixel width, for the reason above; only the 1fr waveform
+          // grows, and it gets all the width the text buttons gave up.
           gridTemplateColumns:
             '18px 18px 18px 18px 18px 18px 1fr 14px 110px 14px 18px 1px 18px 18px 18px 18px',
           alignItems: 'center',
