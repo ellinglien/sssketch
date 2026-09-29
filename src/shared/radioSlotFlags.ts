@@ -143,6 +143,45 @@ export function radioHookSlotId(flags: RadioSlotFlags): string | null {
   return null
 }
 
+/** The row's "hold longer" control: hook this slot, or release it.
+ *
+ * AT MOST ONE HOOK. Two hooks is two centres, which is no centre, so
+ * hooking this slot releases any hook on another -- the way a radio button
+ * does. That release is visible: every row is on screen, and the other
+ * row's hand goes dark in the same render. (The old single cycle button
+ * could reach this state by accident on its way somewhere else; two
+ * separate controls cannot.)
+ *
+ * One flag per slot, so hooking a slot that was marked replace-soon
+ * replaces that mark. Replace-soon on OTHER slots is untouched. */
+export function toggleRadioHook(flags: RadioSlotFlags, id: string): RadioSlotFlags {
+  const turningOn = flags[id] !== 'hook'
+  const out: Record<string, RadioSlotFlag> = {}
+  for (const [otherId, flag] of Object.entries(flags)) {
+    if (otherId === id) continue
+    if (turningOn && flag === 'hook') continue
+    out[otherId] = flag
+  }
+  if (turningOn) out[id] = 'hook'
+  return out
+}
+
+/** The row's "change next" control: mark this slot to be replaced soon,
+ * or unmark it.
+ *
+ * NOT at-most-one. Replace-soon makes no claim about the track's
+ * structure; being tired of three layers at once is an ordinary thing to
+ * be, and making it exclusive would mean flagging a second layer silently
+ * unflags the first. It never touches another slot's flag of either kind.
+ *
+ * One flag per slot, so marking a hooked slot replaces its hook. */
+export function toggleRadioReplaceSoon(flags: RadioSlotFlags, id: string): RadioSlotFlags {
+  const out: Record<string, RadioSlotFlag> = {}
+  for (const [otherId, flag] of Object.entries(flags)) if (otherId !== id) out[otherId] = flag
+  if (flags[id] !== 'replace-soon') out[id] = 'replace-soon'
+  return out
+}
+
 /** One press of the row's flag control: none -> replace soon -> hook ->
  * none.
  *

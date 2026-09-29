@@ -9,6 +9,8 @@ import {
   radioHookSlotId,
   radioSlotFlagOf,
   radioSlotFlagWeightFactor,
+  toggleRadioHook,
+  toggleRadioReplaceSoon,
   type RadioSlotFlags
 } from './radioSlotFlags'
 
@@ -129,5 +131,62 @@ describe('radioSlotFlagWeightFactor', () => {
     // growth, and a layer flagged as tired is by definition already stale.
     // Equal numbers would not be equal claims.
     expect(REPLACE_SOON_FACTOR).toBeLessThan(HOOK_HOLD_FACTOR)
+  })
+})
+
+describe('toggleRadioHook', () => {
+  it('turns the hook on, and off again', () => {
+    const on = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'a')
+    expect(radioSlotFlagOf(on, 'a')).toBe('hook')
+    expect(radioSlotFlagOf(toggleRadioHook(on, 'a'), 'a')).toBeNull()
+  })
+
+  it('moves the hook -- two centres is no centre', () => {
+    const first = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'a')
+    const second = toggleRadioHook(first, 'b')
+    expect(radioSlotFlagOf(second, 'a')).toBeNull()
+    expect(radioHookSlotId(second)).toBe('b')
+  })
+
+  it('replaces replace-soon on the same row', () => {
+    const tired = toggleRadioReplaceSoon(NO_RADIO_SLOT_FLAGS, 'a')
+    expect(radioSlotFlagOf(toggleRadioHook(tired, 'a'), 'a')).toBe('hook')
+  })
+
+  it('leaves replace-soon on other rows alone', () => {
+    const tired = toggleRadioReplaceSoon(NO_RADIO_SLOT_FLAGS, 'b')
+    expect(radioSlotFlagOf(toggleRadioHook(tired, 'a'), 'b')).toBe('replace-soon')
+  })
+
+  it('never mutates what it is given', () => {
+    const before = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'a')
+    toggleRadioHook(before, 'b')
+    expect(radioSlotFlagOf(before, 'a')).toBe('hook')
+  })
+})
+
+describe('toggleRadioReplaceSoon', () => {
+  it('turns replace-soon on, and off again', () => {
+    const on = toggleRadioReplaceSoon(NO_RADIO_SLOT_FLAGS, 'a')
+    expect(radioSlotFlagOf(on, 'a')).toBe('replace-soon')
+    expect(radioSlotFlagOf(toggleRadioReplaceSoon(on, 'a'), 'a')).toBeNull()
+  })
+
+  it('can be on for any number of rows', () => {
+    let flags = NO_RADIO_SLOT_FLAGS
+    for (const id of ['a', 'b', 'c']) flags = toggleRadioReplaceSoon(flags, id)
+    for (const id of ['a', 'b', 'c']) expect(radioSlotFlagOf(flags, id)).toBe('replace-soon')
+  })
+
+  it('replaces the hook on the same row', () => {
+    const hooked = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'a')
+    const tired = toggleRadioReplaceSoon(hooked, 'a')
+    expect(radioSlotFlagOf(tired, 'a')).toBe('replace-soon')
+    expect(radioHookSlotId(tired)).toBeNull()
+  })
+
+  it('never costs the hook on another row', () => {
+    const hooked = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'a')
+    expect(radioHookSlotId(toggleRadioReplaceSoon(hooked, 'b'))).toBe('a')
   })
 })
