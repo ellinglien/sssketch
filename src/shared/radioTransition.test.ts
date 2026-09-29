@@ -8,6 +8,7 @@ import {
   buildTransitionRiser,
   normalizeRadioTransitions,
   pickTransition,
+  radioChangeWaitsForLoopTop,
   radioGestureLeadsChange
 } from './radioTransition'
 
@@ -126,10 +127,40 @@ describe('which gestures lead their change', () => {
     expect(radioGestureLeadsChange('riser')).toBe(true)
   })
 
-  it('lets the change land on time for the three that are an arrival', () => {
+  it('arms the three arrival gestures on the change itself', () => {
     expect(radioGestureLeadsChange('cut')).toBe(false)
     expect(radioGestureLeadsChange('filter in')).toBe(false)
     expect(radioGestureLeadsChange('bloom')).toBe(false)
     expect(radioGestureLeadsChange('duck')).toBe(false)
+  })
+})
+
+describe('which changes wait for the loop top', () => {
+  it('never holds a cut -- it arms nothing, so it keeps the pace it was tuned to', () => {
+    expect(radioChangeWaitsForLoopTop('cut', false)).toBe(false)
+    expect(radioChangeWaitsForLoopTop('cut', true)).toBe(false)
+  })
+
+  it('always holds a leading gesture, even when the change was already due at the top', () => {
+    // The gesture plays out over the lap BEFORE the change, so a hole due
+    // at bar 0 announces the wrap after this one, not this one.
+    expect(radioChangeWaitsForLoopTop('hole', true)).toBe(true)
+    expect(radioChangeWaitsForLoopTop('hole', false)).toBe(true)
+    expect(radioChangeWaitsForLoopTop('riser', true)).toBe(true)
+    expect(radioChangeWaitsForLoopTop('riser', false)).toBe(true)
+  })
+
+  it('holds an arrival gesture only when the boundary is not the loop top', () => {
+    expect(radioChangeWaitsForLoopTop('filter in', false)).toBe(true)
+    expect(radioChangeWaitsForLoopTop('bloom', false)).toBe(true)
+    expect(radioChangeWaitsForLoopTop('duck', false)).toBe(true)
+  })
+
+  it('lets an arrival gesture land on the spot when the boundary already IS the loop top', () => {
+    // Its curve starts at bar 0, so nothing is lost and nothing is gained
+    // by waiting a whole lap.
+    expect(radioChangeWaitsForLoopTop('filter in', true)).toBe(false)
+    expect(radioChangeWaitsForLoopTop('bloom', true)).toBe(false)
+    expect(radioChangeWaitsForLoopTop('duck', true)).toBe(false)
   })
 })

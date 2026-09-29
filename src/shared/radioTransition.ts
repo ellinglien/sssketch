@@ -36,11 +36,17 @@ export function normalizeRadioTransitions(value: unknown): RadioTransitions {
  *
  * Two of them run BEFORE the change they decorate and three run WITH it.
  * `hole` and `riser` announce a change -- the layer leaves a gap, or a
- * noise sweep builds -- so the change they belong to is held back to the
- * loop top they end on. `filter in`, `bloom` and `duck` are how the new
- * layer ARRIVES, so they are armed on the change itself. DiscoverPanel's
- * radioGestureLeadsChange owns that split; nothing here needs to know it
- * except that the two halves exist. */
+ * noise sweep builds -- so the gesture is armed a lap early, on the
+ * OUTGOING stem. `filter in`, `bloom` and `duck` are how the new layer
+ * ARRIVES, so they are armed together with the change, on the stem that
+ * just landed (or, for a duck, on every other one).
+ *
+ * That split is WHEN the curve is armed and WHOSE stem it lands on, and
+ * radioGestureLeadsChange owns it. It is NOT the question of when the
+ * change may land: every curve in this file starts at bar 0 (see
+ * buildFilterInCurve), so a change carrying any gesture at all has to
+ * land at a loop top or the gesture is simply not heard.
+ * radioChangeWaitsForLoopTop owns that second question. */
 export type RadioTransitionKind = 'cut' | 'hole' | 'filter in' | 'bloom' | 'duck' | 'riser'
 
 /** THE TEMPERAMENT CHOOSES THE MOOD, THE KIND CHOOSES THE WEIGHTS.
@@ -122,9 +128,58 @@ export function pickTransition(
  * commit back to the next wrap, land them together.
  *
  * `filter in`, `bloom` and `duck` are how the new layer ARRIVES, so they
- * are armed on the change itself and need no hold. */
+ * are armed on the change itself -- which is a different thing from
+ * landing whenever the change was due; see radioChangeWaitsForLoopTop. */
 export function radioGestureLeadsChange(kind: RadioTransitionKind): boolean {
   return kind === 'hole' || kind === 'riser'
+}
+
+/** Whether a change carrying this gesture has to be held back to the next
+ * loop top, given whether the boundary it came due on already IS one.
+ *
+ * THE BUG THIS EXISTS FOR (reported 2026-09-29, listening on `subtle`:
+ * "so far i've only heard the riser and maybe the dropout"). Every curve
+ * in this file is anchored at bar 0 and cannot be anywhere else -- a
+ * toolkit curve is clip-relative and the transport wraps at
+ * loopLengthBars, so an offset curve would fire in the wrong place on
+ * every later lap. But a change does NOT only land at bar 0:
+ * radioGridBars lets a layer of DEFAULT_RADIO_LOOP_END_BARS or shorter
+ * turn over on its own 2- or 4-bar boundary. A `filter in` armed at bar 4
+ * of an 8-bar loop has its two points at bars 0 and 1, both already
+ * passed; a JUCE curve holds its last value, so the stem just sits fully
+ * open and nothing sweeps, and the lap countdown clears it at the next
+ * wrap before it can ever fire. `hole` and `riser` were the only two he
+ * heard because they are the only two already held to the loop top.
+ *
+ * So the three arrival gestures get the same hold. It reuses the
+ * mechanism that demonstrably works rather than inventing a second one.
+ *
+ * TWO DELIBERATE CARVE-OUTS, both about pace. Holding every change to the
+ * loop top would undo the DEFAULT_RADIO_LOOP_END_BARS work that exists
+ * because "even fast feels quite slow now":
+ *
+ *   - `cut` never waits. It arms nothing at all, so there is no curve to
+ *     be in the wrong place, and it is the single heaviest weight in all
+ *     three tables -- roughly half of all changes. Those keep landing on
+ *     their own 2- and 4-bar boundaries exactly as they do today, which
+ *     is where the eagerness he asked for actually lives.
+ *   - an arrival gesture due AT a loop top does not wait either. Its
+ *     curve already starts where it is about to play, so a lap of waiting
+ *     would buy nothing and cost a whole loop.
+ *
+ * A leading gesture always waits, even at a loop top, and that is not the
+ * same carve-out: its curve plays out over the lap BEFORE the change, so
+ * a hole due at bar 0 announces the NEXT wrap, not this one. That is
+ * today's behaviour, unchanged.
+ *
+ * Net effect: a decorated change is a little less frequent than an
+ * undecorated one, and in exchange it is audible at all. The alternative
+ * -- keeping the pace and keeping the gesture silent -- is not a trade,
+ * it is the bug. */
+export function radioChangeWaitsForLoopTop(kind: RadioTransitionKind, atLoopTop: boolean): boolean {
+  if (kind === 'cut') return false
+  if (radioGestureLeadsChange(kind)) return true
+  return !atLoopTop
 }
 
 /** No gesture may run into the wrap it is anchored to. The same rule, for
@@ -151,7 +206,12 @@ function clampToHalfLoop(loopBars: number, bars: number): number {
  * asked for -- "not just the downbeat, the proper start of the loop" --
  * and the mechanism does not merely permit it, it insists on it. Nothing
  * here reads a clock, so a hundred milliseconds of jitter in WHEN the
- * curve is armed has exactly zero effect on WHEN it fires. */
+ * curve is armed has exactly zero effect on WHEN it fires.
+ *
+ * The flip side of that insistence is radioChangeWaitsForLoopTop: because
+ * this curve can only be at bar 0, a change carrying it may only land at
+ * bar 0. Arming one on a mid-loop boundary is arming a curve whose whole
+ * shape is already behind the playhead. */
 export function buildFilterInCurve(loopBars: number, bars: number): AutomationPoint[] {
   if (!(loopBars > 0) || !(bars > 0)) return []
   return [

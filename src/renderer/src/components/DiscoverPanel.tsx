@@ -65,6 +65,7 @@ import {
   buildFilterInCurve,
   buildTransitionRiser,
   pickTransition,
+  radioChangeWaitsForLoopTop,
   radioGestureLeadsChange,
   type RadioTransitionKind
 } from '@shared/radioTransition'
@@ -1835,20 +1836,40 @@ export function DiscoverPanel({
     beats: number
     lapsLeft: number
   } | null>(null)
-  // A change that is WAITING for the gesture announcing it to finish.
+  // A change that is WAITING for the loop top, because the gesture it
+  // carries can only be performed there.
   //
-  // `hole` and `riser` are the two transitions that run BEFORE the change
-  // rather than decorating its arrival (radioGestureLeadsChange), and both
-  // of them end at the loop top -- a hole is the gap the new layer lands
-  // in, a riser is the sweep into the moment. Arming one after the commit
-  // would put it in the wrong place entirely, so when radio draws one the
-  // pick is held here and lands at the next wrap instead, with the gesture
-  // playing out over the bars before it.
+  // Both halves of the palette end up here, for the one reason
+  // radioChangeWaitsForLoopTop spells out: every curve in
+  // radioTransition.ts is anchored at bar 0 and cannot be anywhere else,
+  // so a change carrying ANY gesture has to land at bar 0 or the gesture
+  // is not heard. What differs is what is already armed while the change
+  // waits:
+  //
+  //   - a LEADING gesture (`hole`, `riser`) is armed the moment the pick
+  //     is held, on the OUTGOING stem, and plays out over the bars before
+  //     the wrap -- the gap the new layer lands in, the sweep into the
+  //     moment. `arrival` is undefined for these.
+  //   - an ARRIVAL gesture (`filter in`, `bloom`, `duck`) is armed AT the
+  //     wrap, together with the commit, because its curve belongs to the
+  //     stem that is arriving (or, for a duck, to every other layer). It
+  //     rides here as `arrival` until then, and nothing is armed in the
+  //     meantime -- the lap before a sweep is supposed to be ordinary.
+  //
+  // An arrival change only lands here when the boundary it came due on
+  // was NOT already the loop top; one due at the top commits on the spot
+  // through the ordinary path below. And a `cut` never lands here at all.
+  // See radioChangeWaitsForLoopTop for why those two carve-outs are what
+  // keep the pace where it was tuned.
   //
   // Same shape and the same landing site as radioCourseChangeRef, for the
   // same reason: the transport does not reset for a load-project, so the
   // wrap is the one instant every stem is at its own zero.
-  const radioLedChangeRef = useRef<{ slotId: string; pick: SlotPick } | null>(null)
+  const radioLedChangeRef = useRef<{
+    slotId: string
+    pick: SlotPick
+    arrival?: { kind: RadioTransitionKind; beats: number }
+  } | null>(null)
   // An armed COURSE CHANGE: every eligible layer's next pick, already
   // resolved and warmed, waiting for the next loop top to land together.
   //
@@ -1956,18 +1977,21 @@ export function DiscoverPanel({
     // a wrap is always bar 0. Remove with radioTrace.ts.
     const traceGrid = gridBars > 0 ? gridBars : loopBars
     const boundaryBars = step.wrapped ? 0 : Math.floor(pos / traceGrid) * traceGrid
-    // A change a hole or a riser was announcing LANDS HERE and only here.
+    // A change that was WAITING for the loop top LANDS HERE and only here.
     //
-    // The gesture has just played out over the closing bars of the lap --
-    // the outgoing layer left a gap, or a noise sweep climbed into this
-    // instant -- and the wrap is what it was pointing at. Same landing
-    // site and the same reason as the course change below: the transport
-    // does not reset for a load-project, so the wrap is the one moment
-    // every stem is at its own zero.
+    // For a leading gesture the gesture has just played out over the
+    // closing bars of the lap -- the outgoing layer left a gap, or a noise
+    // sweep climbed into this instant -- and the wrap is what it was
+    // pointing at. For a held ARRIVAL gesture nothing has happened yet and
+    // this is where both the change and its curve begin. Same landing site
+    // and the same reason as the course change below: the transport does
+    // not reset for a load-project, so the wrap is the one moment every
+    // stem is at its own zero.
     //
-    // The gesture is cleared in the same tick. It has fired; a second lap
-    // of it would turn one move into a rhythm, and (for a hole) would
-    // punch the gap in the layer that just arrived.
+    // A leading gesture is cleared in the same tick. It has fired; a
+    // second lap of it would turn one move into a rhythm, and (for a hole)
+    // would punch the gap in the layer that just arrived. For an arrival
+    // hold the ref is already null and clearRadioGesture is a no-op.
     if (step.wrapped && radioLedChangeRef.current !== null) {
       const led = radioLedChangeRef.current
       radioLedChangeRef.current = null
@@ -1983,8 +2007,32 @@ export function DiscoverPanel({
         if (radioEligibleSlotIds().includes(led.slotId)) {
           // No pushUndoSnapshot, for the same reason nothing else radio
           // does takes one: a transition is performance, not an edit.
-          radioTraceBegin(boundaryBars, bpmRef.current, 'gesture-led') // TEMP
+          radioTraceBegin(
+            boundaryBars,
+            bpmRef.current,
+            led.arrival ? `held-${led.arrival.kind}` : 'gesture-led'
+          ) // TEMP
           commitSlotPick(led.slotId, led.pick)
+          // Armed HERE rather than when the change was held, and only once
+          // the commit has actually happened: an arrival curve belongs to
+          // the stem that is arriving, so arming it a lap early would
+          // sweep or bloom the OUTGOING audio for a whole lap and then be
+          // cleared before the real one ever got it. Same reasoning as the
+          // "no sync scheduled here" note on the unheld arrival path
+          // below, one step earlier in the chain.
+          //
+          // No scheduleSyncPreviewToEngine: holdSyncUntilResolved just
+          // below parks the push until the new stem has resolved, and the
+          // gesture is read out of radioGestureRef at build time, so that
+          // one push carries the curve and the stem it decorates together.
+          if (led.arrival) {
+            radioGestureRef.current = {
+              kind: led.arrival.kind,
+              slotId: led.slotId,
+              beats: led.arrival.beats,
+              lapsLeft: 1
+            }
+          }
           // The clearRadioGesture() above already scheduled a sync for
           // this frame, and this commit's stem is a render and a promise
           // away -- so that sync would push the OLD stem and the swap
@@ -2130,21 +2178,45 @@ export function DiscoverPanel({
         // the approach. Everything is clamped to half the loop by the
         // curve builders, so a short loop shortens all of them.
         const beats = transition === 'hole' ? pickDropOutBeats() : transition === 'riser' ? 8 : 4
-        if (transition !== 'cut' && radioGestureLeadsChange(transition)) {
-          // The gesture comes FIRST and the change waits for the loop top
-          // it ends on -- a hole is the gap the new layer lands in, a
-          // riser is the sweep into the moment, and arming either after
-          // the commit would put it a whole lap out of place. The layer
-          // leaving is the one carrying the gesture, so it is the
-          // OUTGOING stem the curve lands on.
-          radioGestureRef.current = {
-            kind: transition,
-            slotId: pending.slotId,
-            beats,
-            lapsLeft: 1
+        // Can this change land on the boundary it came due on, or does it
+        // have to wait for the loop top? Every curve in radioTransition.ts
+        // is anchored at bar 0 and structurally cannot be anywhere else,
+        // so a decorated change landing at bar 2, 4 or 6 arms a curve that
+        // is already entirely behind the playhead -- see
+        // radioChangeWaitsForLoopTop, which is the whole bug and its
+        // reasoning. `cut` and an arrival gesture that is ALREADY at the
+        // loop top fall straight through to the ordinary commit below and
+        // keep the pace radioGridBars was tuned for.
+        if (radioChangeWaitsForLoopTop(transition, step.wrapped)) {
+          if (radioGestureLeadsChange(transition)) {
+            // The gesture comes FIRST and the change waits for the loop
+            // top it ends on -- a hole is the gap the new layer lands in,
+            // a riser is the sweep into the moment, and arming either
+            // after the commit would put it a whole lap out of place. The
+            // layer leaving is the one carrying the gesture, so it is the
+            // OUTGOING stem the curve lands on, and it has to reach the
+            // engine NOW, a whole lap before its change.
+            radioGestureRef.current = {
+              kind: transition,
+              slotId: pending.slotId,
+              beats,
+              lapsLeft: 1
+            }
+            radioLedChangeRef.current = { slotId: pending.slotId, pick: pending.pick }
+            scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+          } else {
+            // An ARRIVAL gesture due mid-loop. Nothing is armed and
+            // nothing is synced here on purpose: the curve belongs to the
+            // stem that has not arrived yet, so both it and the commit
+            // wait together for the wrap (see radioLedChangeRef). The lap
+            // in between is an ordinary lap, which is what it should
+            // sound like -- a sweep is an arrival, not an announcement.
+            radioLedChangeRef.current = {
+              slotId: pending.slotId,
+              pick: pending.pick,
+              arrival: { kind: transition, beats }
+            }
           }
-          radioLedChangeRef.current = { slotId: pending.slotId, pick: pending.pick }
-          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
           // Nothing else this interval: the drop-out roll and the next
           // pick both wait for the change to actually land, the same way
           // they wait behind a committed change's engine push.
@@ -2168,6 +2240,12 @@ export function DiscoverPanel({
           // An arrival gesture rides the change it decorates: the curve
           // lands on the stem that just arrived (a sweep and a bloom) or
           // on every other layer (a duck), and comes off at the next wrap.
+          //
+          // Only reached when this change is AT the loop top -- the guard
+          // above sent every other decorated change to radioLedChangeRef
+          // to wait for one. So the curve's bar 0 and the playhead are the
+          // same instant here, which is the only arrangement in which any
+          // of these three is audible at all.
           //
           // A `duck` writes a volume curve on every OTHER audible layer,
           // which makes their EngineStem.volume inert for the lap -- see
