@@ -99,6 +99,16 @@ namespace sssketch
 
         void sendStageResult(int token, const juce::String& status, const juce::String& reason);
 
+        /** Settles whatever is currently staged, for every reason one gets
+         * settled other than landing on its own: a newer stage superseding
+         * it, an explicit load-project overtaking it, or the renderer
+         * cancelling it. Either it was stopped in time (one
+         * project-stage-result, status cancelled) or it had already gone
+         * live (project-stage-result status applied, then the
+         * project-applied its client is waiting on) -- never neither, and
+         * never a token left unanswered. */
+        void resolveStagedBefore(const juce::String& reason);
+
         PlaybackEngine& engine;
         Transport& transport;
         PluginChain& masterChain;

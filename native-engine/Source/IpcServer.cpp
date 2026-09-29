@@ -236,6 +236,30 @@ namespace sssketch
         transport.setStagedLoopLengthBars(-1.0);
     }
 
+    void IpcConnection::resolveStagedBefore(const juce::String& reason)
+    {
+        // The cancel and the answer are the same operation on purpose: the
+        // audio thread may be taking the staged project at this exact
+        // moment, and only the operation that tried to stop it can say
+        // whether it did.
+        if (engine.cancelStagedProject())
+        {
+            sendStageResult(stagedToken, "cancelled", reason);
+            stagedToken = -1;
+            stagedProject = {};
+            transport.setStagedLoopLengthBars(-1.0);
+            return;
+        }
+
+        // Too late -- it already went live. The client gets the same pair
+        // of acks it would have got if nothing had superseded it, so
+        // whatever is waiting on project-applied is not left hanging, and
+        // the side effects that swap still needs get run.
+        sendStageResult(stagedToken, "applied", reason);
+        lastSeenStagedApplies = engine.stagedApplyCount();
+        finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
+    }
+
     void IpcConnection::pumpStagedProject()
     {
         // Unconditional and first: this is the message thread taking back
@@ -416,19 +440,12 @@ namespace sssketch
                 // bookkeeping that lets the client hear about it, and it
                 // has to happen BEFORE the publish so the "was it still
                 // staged?" answer is the pre-load one.
+                // cancelStagedProject(), not hasStagedProject() then a
+                // cancel: only the operation that tries to stop it can
+                // truthfully say whether it did, and the audio thread may
+                // be taking it at this exact moment.
                 if (stagedToken >= 0)
-                {
-                    // cancelStagedProject(), not hasStagedProject() then a
-                    // cancel: only the operation that tries to stop it can
-                    // truthfully say whether it did, and the audio thread
-                    // may be taking it at this exact moment.
-                    const bool cancelled = engine.cancelStagedProject();
-                    sendStageResult(stagedToken, cancelled ? "cancelled" : "applied", "load-project");
-                    stagedToken = -1;
-                    stagedProject = {};
-                    transport.setStagedLoopLengthBars(-1.0);
-                    lastSeenStagedApplies = engine.stagedApplyCount();
-                }
+                    resolveStagedBefore("load-project");
                 // Same order as before this feature existed: transport
                 // settings, publish, then the post-publish pair.
                 applyProjectTransportSettings(project);
@@ -500,22 +517,7 @@ namespace sssketch
             // answered -- a dropped change the renderer doesn't know about
             // is the worst outcome available here.
             if (stagedToken >= 0)
-            {
-                const bool cancelled = engine.cancelStagedProject();
-                sendStageResult(stagedToken, cancelled ? "cancelled" : "applied", "superseded");
-                if (!cancelled)
-                {
-                    // It had already gone live; run its side effects now
-                    // so the engine isn't left with the previous project's
-                    // channel set and tempo.
-                    lastSeenStagedApplies = engine.stagedApplyCount();
-                    applyProjectTransportSettings(stagedProject);
-                    applyProjectPostPublish(stagedProject);
-                }
-                stagedToken = -1;
-                stagedProject = {};
-                transport.setStagedLoopLengthBars(-1.0);
-            }
+                resolveStagedBefore("superseded");
 
             // Three reasons waiting for a loop top is the wrong answer, and
             // all three resolve the same way: do it now, exactly as
@@ -584,22 +586,7 @@ namespace sssketch
             if (stagedToken < 0 || (token >= 0 && token != stagedToken))
                 return;
 
-            if (engine.cancelStagedProject())
-            {
-                sendStageResult(stagedToken, "cancelled", "requested");
-                stagedToken = -1;
-                stagedProject = {};
-                transport.setStagedLoopLengthBars(-1.0);
-            }
-            else
-            {
-                // Too late: the audio thread already swapped it in. Say so
-                // rather than pretending, and finish the side effects the
-                // swap still needs.
-                sendStageResult(stagedToken, "applied", "too-late");
-                lastSeenStagedApplies = engine.stagedApplyCount();
-                finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
-            }
+            resolveStagedBefore("requested");
         }
         else if (type == "play")
         {
