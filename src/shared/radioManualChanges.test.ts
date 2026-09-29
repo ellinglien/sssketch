@@ -62,6 +62,16 @@ describe('drawManualTransitions', () => {
     expect(hole.get('a')).toEqual({ kind: 'hole', beats: 4 })
   })
 
+  it('allows a leading gesture whose bars exactly equal the bars to the wrap', () => {
+    const out = drawManualTransitions([rows[0]], {
+      pick: always('riser'),
+      dropOutBeats: () => 2,
+      leadingArmed: false,
+      barsToWrap: 2
+    })
+    expect(out.get('a')).toEqual({ kind: 'riser', beats: 8 })
+  })
+
   it('uses the drop-out beats for a hole', () => {
     const out = drawManualTransitions([rows[0]], {
       pick: always('hole'),
@@ -125,6 +135,11 @@ describe('mergeStageChanges', () => {
   it('works with no radio change at all', () => {
     const manual = new Map([['b', { stem: 'stem-b', joining: false, arrival: null }]])
     expect(mergeStageChanges(null, manual).changes).toEqual([{ slotId: 'b', stem: 'stem-b' }])
+  })
+
+  it('carries radio’s own cut arrival as no arrival', () => {
+    const cutLed = { slotId: 'a', stem: 's', arrival: { kind: 'cut' as const, beats: 4 } }
+    expect(mergeStageChanges(cutLed, new Map()).arrivals).toEqual([])
   })
 
   it('carries a cut as no arrival', () => {

@@ -78,7 +78,8 @@ export function mergeStageChanges<S>(
   const arrivals: ({ slotId: string } & ManualArrival)[] = []
   if (radioLed !== null && !manual.has(radioLed.slotId)) {
     changes.push({ slotId: radioLed.slotId, stem: radioLed.stem })
-    if (radioLed.arrival) arrivals.push({ slotId: radioLed.slotId, ...radioLed.arrival })
+    if (radioLed.arrival && radioLed.arrival.kind !== 'cut')
+      arrivals.push({ slotId: radioLed.slotId, ...radioLed.arrival })
   }
   for (const [slotId, change] of manual) {
     changes.push({ slotId, stem: change.stem })
