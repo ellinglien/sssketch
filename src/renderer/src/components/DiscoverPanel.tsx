@@ -176,6 +176,19 @@ export interface ResolvedCandidateStem {
 // itself never throws (see its own doc comment), so eviction keys off a
 // null return here instead of a caught rejection.
 const resolvedCandidateCache = new Map<string, Promise<ResolvedCandidateStem | null>>()
+/** The SETTLED half of resolvedCandidateCache, readable without an await.
+ *
+ * A promise can only be read a microtask later, so a row whose candidate
+ * had been resolved a whole interval ago (radio's armRadioPick warms it)
+ * still drew its "resolving" placeholder for the first render after the
+ * commit, and the new waveform arrived one resolve later -- 20 to 150ms
+ * behind a swap the engine had already made on the beat. Same keys, same
+ * lifetime: written when the promise settles non-null, dropped with it. */
+const settledCandidateStems = new Map<string, ResolvedCandidateStem>()
+
+function peekResolvedCandidateStem(candidate: DiscoverCandidate): ResolvedCandidateStem | null {
+  return settledCandidateStems.get(`${candidate.riffCID}:${candidate.stemCID}`) ?? null
+}
 
 /** Resolves one Discover candidate down to a real, locally-downloaded
  * `Stem` -- reused verbatim by both this component's own slot-preview
@@ -226,6 +239,7 @@ function resolveCandidateStem(candidate: DiscoverCandidate): Promise<ResolvedCan
   resolvedCandidateCache.set(key, promise)
   void promise.then((result) => {
     if (result === null) resolvedCandidateCache.delete(key)
+    else settledCandidateStems.set(key, result)
   })
   return promise
 }
@@ -6275,8 +6289,21 @@ function DiscoverSlotRow({
     [slot.seedStem, slot.candidate]
   )
 
+  // Already resolved elsewhere (radio warms its pick a whole interval
+  // early): read it on THIS render rather than waiting a microtask for
+  // the effect above -- see settledCandidateStems. Preferred over
+  // `resolved` even once that arrives, so resolvedStem keeps one identity
+  // and the [resolvedStem] effect below does not report it twice.
+  const peekResolved = useMemo(() => {
+    if (!slot.candidate) return null
+    const stem = peekResolvedCandidateStem(slot.candidate)
+    return stem
+      ? { candidate: slot.candidate, status: 'ready' as const, stem: { slot: 1, ...stem } }
+      : null
+  }, [slot.candidate])
+
   const resolvedForCurrent =
-    seedResolved ?? (resolved?.candidate === slot.candidate ? resolved : null)
+    seedResolved ?? peekResolved ?? (resolved?.candidate === slot.candidate ? resolved : null)
   const resolvedStem = resolvedForCurrent?.status === 'ready' ? resolvedForCurrent.stem : null
   const resolveFailed = resolvedForCurrent?.status === 'failed'
   // A candidate exists but hasn't SETTLED yet either way (no ready stem,
