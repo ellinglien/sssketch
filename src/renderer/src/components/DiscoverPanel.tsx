@@ -3753,6 +3753,13 @@ export function DiscoverPanel({
   function applySlotsSnapshot(next: DiscoverSlot[]): void {
     setSlots(next)
     const validIds = new Set(next.map((s) => s.id))
+    // A change waiting for the loop top on a row the snapshot does not have
+    // (undoing an add or a duplicate while radio runs) goes with its row,
+    // exactly as removeSlot takes it. One on a row that is still there
+    // stays. With radio off nothing ever waits, so this does nothing.
+    for (const slotId of [...manualChangesRef.current.keys()]) {
+      if (!validIds.has(slotId)) withdrawManualChange(slotId, 'manual-change-undone')
+    }
     // forgetSlotResolution (not just resolvedStemsRef.current.delete(id))
     // as of code review, 2026-09-17 -- undo/redo dropping a resolved slot
     // used to leave its own barLength behind in resolvedBarLengthsRef/
@@ -4500,6 +4507,8 @@ export function DiscoverPanel({
         s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
       )
     )
+    // See rollForSlot.
+    if (immediate && radioOnRef.current) radioYieldsRow(id, true)
   }
 
   // The PHONE's one-tap `adjacent` (docs/superpowers/specs/2026-09-27-stem-
@@ -4802,10 +4811,13 @@ export function DiscoverPanel({
       queueManualChange(id, pick, !previewingSlotIdsRef.current.has(id))
       return
     }
-    // Cmd on a row that is already waiting (reroll-all reaches those): the
-    // waiting change goes first, or the row would land twice.
+    // Cmd on a row that is already waiting: the waiting change goes
+    // first, or the row would land twice.
     if (immediate) withdrawManualChange(id, 'manual-change-immediate')
     commitSlotPick(id, pick)
+    // And radio gives the row up, as it does for a queued change -- after
+    // the commit, so the row's fresh change time steers the re-arm away.
+    if (immediate && radioOnRef.current) radioYieldsRow(id, true)
   }
 
   // Match meter reclassify (promise-vs-delivery spec, Phase 2; user
@@ -4929,6 +4941,8 @@ export function DiscoverPanel({
           s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
         )
       )
+      // See rollForSlot.
+      if (immediate && radioOnRef.current) radioYieldsRow(id, true)
     } catch (err) {
       console.error(`DiscoverPanel: rollRandomForSlot(${slotKindsKey(kinds)}) failed:`, err)
     } finally {
@@ -4989,13 +5003,49 @@ export function DiscoverPanel({
     // slot removed mid-batch (id no longer in slotsRef.current) is skipped
     // outright rather than rolling a candidate nothing will ever show.
     const slotIds = slots.map((s) => s.id)
+    // While radio runs (no Cmd) the batch lands on one loop top. The undo
+    // snapshot above still covers it: undo applies to the committed state.
+    if (radioOnRef.current && !immediate) {
+      await rerollAllOnTheTop(slotIds)
+      return
+    }
     for (const slotId of slotIds) {
       const current = slotsRef.current.find((s) => s.id === slotId)
       if (!current) continue
-      // While radio runs each row queues as its pick returns, and a row
-      // already waiting is skipped by rollForSlot itself. The undo snapshot
-      // above still covers them: undo applies to the committed state.
+      // Radio off, or Cmd held: each row lands as its pick returns (Cmd
+      // withdraws a waiting change first -- see rollForSlot).
       if (!current.locked) await rollForSlot(current.id, current.kinds, immediate)
+    }
+  }
+
+  /** rerollAll while radio runs (no Cmd): every pick first, then every
+   * queue in ONE tick, so the whole batch waits for -- and lands on -- the
+   * same loop top. Queued one by one as each pick returned, a slow library
+   * spread the batch over two or three tops.
+   *
+   * Picks stay sequential, as rerollAll's own are, for the main process's
+   * sake. Rows already waiting when the batch reaches them are skipped, as
+   * rollForSlot skips them; a row removed or re-kinded while the picks ran
+   * is left alone (a re-kinded row's own roll is already on its way). A
+   * row that became waiting meanwhile keeps the change it has
+   * (queueManualChange declines a second). Radio switched off mid-batch
+   * means instant: the picks commit, as rerollAll's radio-off path would
+   * have committed them. */
+  async function rerollAllOnTheTop(slotIds: string[]): Promise<void> {
+    const picks: { id: string; kindsKey: string; pick: SlotPick }[] = []
+    for (const slotId of slotIds) {
+      const current = slotsRef.current.find((s) => s.id === slotId)
+      if (!current || current.locked) continue
+      if (manualChangesRef.current.has(slotId)) continue
+      const pick = await pickForSlot(current.id, current.kinds)
+      if (pick === null) continue
+      picks.push({ id: current.id, kindsKey: slotKindsKey(current.kinds), pick })
+    }
+    for (const { id, kindsKey, pick } of picks) {
+      const now = slotsRef.current.find((s) => s.id === id)
+      if (!now || slotKindsKey(now.kinds) !== kindsKey) continue
+      if (radioOnRef.current) queueManualChange(id, pick, !previewingSlotIdsRef.current.has(id))
+      else commitSlotPick(id, pick)
     }
   }
 
@@ -5110,6 +5160,60 @@ export function DiscoverPanel({
     return stem
   }
 
+  /** The user has claimed a row radio had spoken for -- by queueing a
+   * manual change on it, or by a Cmd-click that lands one right away.
+   *
+   * Radio's armed (pending) pick for this row is now stale: it is dropped.
+   * With `rearmDroppedPick` radio arms a fresh one at once; a queued change
+   * passes false, because the landing arms it.
+   *
+   * Radio's HELD change on this very row (the breathing one, so the likely
+   * one to be clicked) gives way here, rather than being silently dropped
+   * at the landing -- or, for a Cmd-click, landing over the user's stem:
+   *   - its held change is cleared and any stage carrying it withdrawn;
+   *   - a hole or riser radio armed to announce it comes off -- it would
+   *     play on the outgoing stem of a row that is no longer radio's;
+   *   - the renderer's truth goes back on the wire (the withdrawal may
+   *     lose to the audio thread, or the engine may already have swapped
+   *     it in), the same clear-and-push every other withdrawal uses;
+   *   - radio re-arms and decides again, on another row.
+   * The clock is left alone. An EARLY-decided change has not restarted
+   * it yet -- that happens only at its landing, which now never comes --
+   * so radio's next change comes when it would have. A change the due
+   * branch held had its interval restarted when it came due; that
+   * interval is spent, as it is for any change that fails its re-check.
+   *
+   * With radio off nothing is pending or held, so this does nothing. */
+  function radioYieldsRow(slotId: string, rearmDroppedPick: boolean): void {
+    let droppedPick = false
+    if (radioPendingRef.current?.slotId === slotId) {
+      setRadioPending(null)
+      droppedPick = true
+    }
+    const led = radioLedChangeRef.current
+    if (led !== null && led.slotId === slotId) {
+      setRadioLedChange(null)
+      if (radioStageAppliedLedRef.current === led) radioStageAppliedLedRef.current = null
+      cancelStagedSwap('manual-overrides-radio')
+      radioGestureRef.current = radioGestureRef.current.filter(
+        (g) => !(g.slotId === slotId && g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind))
+      )
+      scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+      if (radioOnRef.current) void armRadioPick()
+      return
+    }
+    // Not while radio holds a change elsewhere: a pick armed now could be
+    // used up by nothing, and the held change's own landing arms the next.
+    if (
+      droppedPick &&
+      rearmDroppedPick &&
+      radioOnRef.current &&
+      radioLedChangeRef.current === null
+    ) {
+      void armRadioPick()
+    }
+  }
+
   /** Queue a manual change for the next loop top. Returns false when the
    * row already has one waiting -- a second click on a waiting row is
    * ignored (Elling, 2026-09-29). `joining` is a row that is not in the
@@ -5126,42 +5230,15 @@ export function DiscoverPanel({
     const next = new Map(manualChangesRef.current)
     next.set(slotId, { pick, stem: null, joining, arrival: null })
     setManualChanges(next)
-    // Radio's own armed pick for this row is now stale -- the user has
-    // spoken for it. Drop it; it is re-armed after the landing.
-    if (radioPendingRef.current?.slotId === slotId) setRadioPending(null)
-    // NO withdrawal of the stage that is out, on purpose. This entry's stem
-    // is still null, so a re-stage now would carry exactly the same set --
-    // and a click in the last moments of the lap would pull radio's own
-    // staged change out too late to get it back, landing it late when it
-    // was on time. 'manual-ready' below re-stages once this is ready.
-    //
-    // Radio's HELD change on this very row: the user has claimed the row
-    // radio was about to turn over (the breathing one, so the likely one to
-    // be clicked). Radio's change gives way here, at queue time, rather
-    // than being silently dropped at the landing:
-    //   - its held change is cleared and any stage carrying it withdrawn;
-    //   - a hole or riser radio armed to announce it comes off -- it would
-    //     play on the outgoing stem of a row that is no longer radio's;
-    //   - the renderer's truth goes back on the wire (the withdrawal may
-    //     lose to the audio thread, or the engine may already have swapped
-    //     it in), the same clear-and-push every other withdrawal uses;
-    //   - radio re-arms and decides again, on another row.
-    // The clock is left alone. An EARLY-decided change has not restarted
-    // it yet -- that happens only at its landing, which now never comes --
-    // so radio's next change comes when it would have. A change the due
-    // branch held had its interval restarted when it came due; that
-    // interval is spent, as it is for any change that fails its re-check.
-    const led = radioLedChangeRef.current
-    if (led !== null && led.slotId === slotId) {
-      setRadioLedChange(null)
-      if (radioStageAppliedLedRef.current === led) radioStageAppliedLedRef.current = null
-      cancelStagedSwap('manual-overrides-radio')
-      radioGestureRef.current = radioGestureRef.current.filter(
-        (g) => !(g.slotId === slotId && g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind))
-      )
-      scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
-      if (radioOnRef.current) void armRadioPick()
-    }
+    // NO withdrawal of the stage that is out for this entry itself, on
+    // purpose. Its stem is still null, so a re-stage now would carry
+    // exactly the same set -- and a click in the last moments of the lap
+    // would pull radio's own staged change out too late to get it back,
+    // landing it late when it was on time. 'manual-ready' below re-stages
+    // once this is ready. (radioYieldsRow withdraws only when radio's own
+    // held change is on this row.) Radio's dropped pending pick is re-armed
+    // after the landing, not here -- the landing arms it.
+    radioYieldsRow(slotId, false)
     void resolveAndWarmPick(pick).then((stem) => {
       const entry = manualChangesRef.current.get(slotId)
       if (entry === undefined || entry.pick !== pick) return
@@ -6882,6 +6959,7 @@ function RowIconButton({
   children,
   state = 'off',
   disabled = false,
+  dimmed = false,
   pulsing = false,
   hidden = false,
   toggle = false,
@@ -6894,6 +6972,10 @@ function RowIconButton({
   children: React.ReactNode
   state?: 'off' | 'on' | 'soft'
   disabled?: boolean
+  /** Looks disabled but still takes clicks -- a row waiting for the loop
+   * top, where a plain click is ignored by the handler but a Cmd-click
+   * lands a change right away (2026-09-29). */
+  dimmed?: boolean
   pulsing?: boolean
   hidden?: boolean
   toggle?: boolean
@@ -6938,7 +7020,7 @@ function RowIconButton({
         // is inert but still readable. A pulsing button is also disabled
         // (it started the roll in flight), and its pulse is on opacity, so
         // the animation wins there rather than fighting a fixed value.
-        opacity: disabled && !pulsing ? 0.35 : undefined,
+        opacity: (disabled || dimmed) && !pulsing ? 0.35 : undefined,
         cursor: disabled ? 'default' : 'pointer',
         animation: pulsing ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
       }}
@@ -7051,9 +7133,11 @@ function DiscoverSlotRow({
    * convention. */
   rerolling: boolean
   /** True while a manual change on THIS row waits for radio's next loop
-   * top. Same kind, nearby jam and any stem are disabled with the look
-   * `rerolling` gives them -- a second click on a waiting row is ignored
-   * (Elling, 2026-09-29). Duplicate and remove stay live. */
+   * top. Same kind, nearby jam and any stem are DIMMED with the look
+   * `rerolling` gives them, but not disabled: a plain second click on a
+   * waiting row is ignored by the handlers (Elling, 2026-09-29), while a
+   * Cmd-click lands a change right away, replacing the waiting one.
+   * Duplicate and remove stay live. */
   manualWaiting: boolean
   /** True while THIS slot is currently included in the playing mix
    * (DiscoverPanel's own `previewingSlotIds`). Toggled-on slots play
@@ -8312,7 +8396,8 @@ function DiscoverSlotRow({
             setRerollAction('similar')
             onReroll(e.metaKey)
           }}
-          disabled={rerolling || manualWaiting}
+          disabled={rerolling}
+          dimmed={manualWaiting}
           pulsing={rerolling && rerollAction === 'similar'}
         >
           <CirclesThree size={12} />
@@ -8332,7 +8417,8 @@ function DiscoverSlotRow({
             }}
             state={nearbyMenu ? 'soft' : 'off'}
             ariaExpanded={nearbyMenu !== null}
-            disabled={rerolling || manualWaiting}
+            disabled={rerolling}
+            dimmed={manualWaiting}
           >
             <Compass size={12} />
           </RowIconButton>
@@ -8344,7 +8430,8 @@ function DiscoverSlotRow({
             setRerollAction('random')
             onRerollRandom(e.metaKey)
           }}
-          disabled={rerolling || manualWaiting}
+          disabled={rerolling}
+          dimmed={manualWaiting}
           pulsing={rerolling && rerollAction === 'random'}
         >
           <Shuffle size={12} />
