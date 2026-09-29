@@ -38,7 +38,12 @@ import {
   type DiscoverSlotModifier
 } from '@shared/discoverSlotModifier'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
-import { mergeStageChanges } from '@shared/radioManualChanges'
+import {
+  drawManualTransitions,
+  mergeStageChanges,
+  radioGestureBeats,
+  type ManualArrival
+} from '@shared/radioManualChanges'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
@@ -394,6 +399,10 @@ interface RadioGesture {
   slotId: string
   beats: number
   lapsLeft: number
+  /** For a `duck` armed at a landing: every row that landed at that wrap,
+   * none of which it dips -- the live twin of a stage's `changes`. Unset
+   * means just `slotId`, which is all radio alone ever lands. */
+  spares?: string[]
 }
 
 /** One scheduled swap, as buildAndPushPreview needs to see it.
@@ -1517,8 +1526,8 @@ export function DiscoverPanel({
     // punch the gap in the layer that just arrived.
     const gestureList: RadioGesture[] = stage
       ? stage.gestures
-      : radioOnRef.current && radioGestureRef.current !== null
-        ? [radioGestureRef.current]
+      : radioOnRef.current
+        ? radioGestureRef.current
         : []
     const masterLevel01 = masterLevelRef.current / 100
     function underMaster(key: string, curve: AutomationPoint[]): AutomationPoint[] {
@@ -1561,12 +1570,21 @@ export function DiscoverPanel({
         } else if (gesture.kind === 'duck') {
           // Every OTHER audible layer dips, so the new one lands in space.
           // "Other" means other than EVERY row changing in this stage, so a
-          // duck never dips another arriving stem. And a second duck on a
-          // key that already carries one is skipped: duck curves are
-          // identical, and scaling one under the master twice would be
-          // wrong.
+          // duck never dips another arriving stem -- and on the live push
+          // that follows a landing, other than every row that landed with
+          // it (`spares`), so that push agrees with the stage it follows.
+          //
+          // And a key that ALREADY carries a volume curve is skipped --
+          // ANY volume curve, not only another duck's. A second duck is the
+          // obvious case (duck curves are identical, and scaling one under
+          // the master twice would be wrong), but a hole or a drop-out
+          // written earlier in this loop keeps its stem too: one volume
+          // curve per stem, first writer wins. Deliberate -- do not narrow
+          // this into a duck-only check.
           const curve = buildDuckCurve(maxBarLength, bars)
-          const changing = new Set(stage?.changes.map((c) => c.slotId) ?? [gesture.slotId])
+          const changing = new Set(
+            stage?.changes.map((c) => c.slotId) ?? gesture.spares ?? [gesture.slotId]
+          )
           if (curve.length > 0) {
             members.forEach((m, i) => {
               if (!changing.has(m.id)) {
@@ -1870,10 +1888,7 @@ export function DiscoverPanel({
       })
       const currentlyPreviewing = previewingSlotIdsRef.current
       if (!currentlyPreviewing.has(id)) {
-        const next = new Set(currentlyPreviewing).add(id)
-        previewingSlotIdsRef.current = next
-        setPreviewingSlotIds(next)
-        scheduleSyncPreviewToEngine(next)
+        scheduleSyncPreviewToEngine(joinPreviewingMix(id))
         return
       }
       scheduleSyncPreviewToEngine(currentlyPreviewing)
@@ -2146,7 +2161,14 @@ export function DiscoverPanel({
   // is NOT harmless -- the curve repeats every lap, so a second lap would
   // turn one gesture into a rhythm. Hence the countdown in the wrap branch
   // of the clock effect below.
-  const radioGestureRef = useRef<RadioGesture | null>(null)
+  //
+  // A LIST since the manual queue (2026-09-29): several rows landing at one
+  // wrap may each carry an arrival curve, and every one of them has to
+  // survive the push that follows the commit. Radio alone never puts more
+  // than one entry here. At most ONE entry is ever a leading gesture (a
+  // hole, a riser or a standalone drop-out) -- every path that arms one
+  // checks that none is armed first. Empty is "nothing armed".
+  const radioGestureRef = useRef<RadioGesture[]>([])
   // A change that is WAITING for the loop top, because the gesture it
   // carries can only be performed there.
   //
@@ -2230,6 +2252,33 @@ export function DiscoverPanel({
     const slotId = next?.slotId ?? null
     void Promise.resolve().then(() => setRadioHeldSlotId(slotId))
   }
+  // MANUAL CHANGES WAITING FOR THE LOOP TOP (2026-09-29). While radio runs,
+  // a reroll, a nearby pick, an added or duplicated row does not commit on
+  // the spot: it waits here, fully warmed, and lands with radio's own
+  // change in one staged swap at the next wrap, with a transition. See
+  // docs/superpowers/specs/2026-09-29-radio-manual-changes-land-on-the-top-
+  // design.md. A REF because the 30Hz clock effect reads it; the Set
+  // below is its renderable half, the same split radioLedChangeRef /
+  // radioHeldSlotId use.
+  const manualChangesRef = useRef<
+    Map<
+      string,
+      {
+        pick: SlotPick
+        stem: ResolvedCandidateStem | null
+        joining: boolean
+        arrival: ManualArrival | null
+      }
+    >
+  >(new Map())
+  const [manualWaitingSlotIds, setManualWaitingSlotIds] = useState<ReadonlySet<string>>(new Set())
+  /** THE ONLY WAY manualChangesRef IS WRITTEN -- same deferral and reason
+   * as setRadioLedChange. */
+  function setManualChanges(next: typeof manualChangesRef.current): void {
+    manualChangesRef.current = next
+    const ids = new Set(next.keys())
+    void Promise.resolve().then(() => setManualWaitingSlotIds(ids))
+  }
   // --- the scheduled swap (2026-09-29) ---
   //
   // THE PROBLEM. A radio change was late by construction. Measured on
@@ -2274,7 +2323,17 @@ export function DiscoverPanel({
   // getting better and nineteen in twenty.
   const radioStageRef = useRef<{
     token: number
-    slotId: string
+    /** Every row this stage changes -- radio's own, and every manual one. */
+    slotIds: string[]
+    /** RADIO's own row in this stage, or null when the stage carries none
+     * (manual changes only, or a manual change on radio's row, which
+     * wins). The per-tick eligibility withdraw in stepRadioStage checks
+     * only this one: a manual change ignores padlock and mute (spec
+     * behaviour 6), and only removing its row withdraws it. */
+    ledSlotId: string | null
+    /** The manual queue this stage was built from, by identity, or null
+     * when it carries none. See radioStageAppliedManualRef. */
+    manual: object | null
     /** False between the decision and the socket write. The window is
      * short but it is real -- the staged project still has to be built,
      * which means buildEngineProject's stretch resolution -- and two
@@ -2320,6 +2379,14 @@ export function DiscoverPanel({
    * then cancelled it. Compared by identity, so a stale value is inert the
    * moment radioLedChangeRef moves on. */
   const radioStageAppliedLedRef = useRef<object | null>(null)
+  /** The same guarantee for the manual queue: the queue (by identity) that
+   * a staged swap carried when its project-applied beat the wrap tick.
+   * Without it the pre-wrap tick in between would find ready manual
+   * changes and no stage, and stage the very same set a second time --
+   * the bug radioStageAppliedLedRef exists for, in its manual form. Every
+   * write to the queue replaces the Map, so a stale value is inert the
+   * moment the queue moves on. */
+  const radioStageAppliedManualRef = useRef<object | null>(null)
 
   /** Withdraws the staged swap, if there is one.
    *
@@ -2370,8 +2437,8 @@ export function DiscoverPanel({
   // take the whole bed's gain dials with it. Never leave a curve on a stem
   // that is not mid-gesture.
   function clearRadioGesture(): void {
-    if (radioGestureRef.current === null) return
-    radioGestureRef.current = null
+    if (radioGestureRef.current.length === 0) return
+    radioGestureRef.current = []
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
   /** Everything the scheduled swap does on one position tick, in the one
@@ -2412,7 +2479,15 @@ export function DiscoverPanel({
    * still lands the way it does today. */
   function stepRadioStage(due: boolean, pos: number, loopBars: number, gridBars: number): void {
     const staged = radioStageRef.current
-    if (staged !== null && !radioEligibleSlotIds().includes(staged.slotId)) {
+    // RADIO's own row only -- a manual change in the same stage is not
+    // withdrawn by a padlock or a mute (spec behaviour 6). Withdrawing
+    // the stage still takes the manual rows out with it; step (3)
+    // re-stages them on its next tick, without radio's.
+    if (
+      staged !== null &&
+      staged.ledSlotId !== null &&
+      !radioEligibleSlotIds().includes(staged.ledSlotId)
+    ) {
       cancelStagedSwap('no-longer-eligible')
       setRadioLedChange(null)
       // Same as the wrap branch's own re-check failing: nothing landed,
@@ -2431,7 +2506,10 @@ export function DiscoverPanel({
       const pending = radioPendingRef.current
       const clock = radioClockRef.current
       const led = radioLedChangeRef.current
-      const gesture = radioGestureRef.current
+      // The first armed gesture still playing, which is what holds (2).
+      const gesture =
+        radioGestureRef.current.find((g) => !radioArrivalGestureSpent(g, pos, loopBars)) ?? null
+      const manual = manualChangesRef.current
       const gate =
         radioStageRef.current !== null
           ? radioStageRef.current.sent
@@ -2451,36 +2529,38 @@ export function DiscoverPanel({
                       : syncHoldRef.current.size > 0
                         ? 'held:sync-hold'
                         : 'held:ready'
-            : due
-              ? 'due-now'
-              : radioCourseChangeRef.current !== null
-                ? 'course-change'
-                : gesture !== null && !radioArrivalGestureSpent(gesture, pos, loopBars)
-                  ? `gesture:${gesture.kind}`
-                  : pending === null
-                    ? 'no-pending'
-                    : pending.stem === null
-                      ? 'pending:no-stem'
-                      : !radioEligibleSlotIds().includes(pending.slotId)
-                        ? 'pending:ineligible'
-                        : clock === null
-                          ? 'no-clock'
-                          : radioChangeDueAtNextWrap(
-                                clock,
-                                pos,
-                                loopBars,
-                                gridBars,
-                                radioSettings.phraseBars
-                              ) ||
-                              radioChangeLandsAtBar(
-                                clock,
-                                pos,
-                                loopBars,
-                                gridBars,
-                                radioSettings.phraseBars
-                              ) !== null
-                            ? 'decide'
-                            : `not-this-lap(interval ${clock.intervalBars} elapsed ${clock.barsElapsed.toFixed(2)})`
+            : manual.size > 0
+              ? `manual:${[...manual.values()].filter((m) => m.stem !== null).length}/${manual.size}-ready`
+              : due
+                ? 'due-now'
+                : radioCourseChangeRef.current !== null
+                  ? 'course-change'
+                  : gesture !== null
+                    ? `gesture:${gesture.kind}`
+                    : pending === null
+                      ? 'no-pending'
+                      : pending.stem === null
+                        ? 'pending:no-stem'
+                        : !radioEligibleSlotIds().includes(pending.slotId)
+                          ? 'pending:ineligible'
+                          : clock === null
+                            ? 'no-clock'
+                            : radioChangeDueAtNextWrap(
+                                  clock,
+                                  pos,
+                                  loopBars,
+                                  gridBars,
+                                  radioSettings.phraseBars
+                                ) ||
+                                radioChangeLandsAtBar(
+                                  clock,
+                                  pos,
+                                  loopBars,
+                                  gridBars,
+                                  radioSettings.phraseBars
+                                ) !== null
+                              ? 'decide'
+                              : `not-this-lap(interval ${clock.intervalBars} elapsed ${clock.barsElapsed.toFixed(2)})`
       radioTraceStageGate(gate, pos)
     }
 
@@ -2498,8 +2578,9 @@ export function DiscoverPanel({
       radioStageRef.current === null &&
       radioLedChangeRef.current === null &&
       radioCourseChangeRef.current === null &&
-      (radioGestureRef.current === null ||
-        radioArrivalGestureSpent(radioGestureRef.current, pos, loopBars))
+      // EVERY armed gesture spent -- true of an empty list, which is the
+      // old "nothing armed". A leading gesture is never spent.
+      radioGestureRef.current.every((g) => radioArrivalGestureSpent(g, pos, loopBars))
     ) {
       const pending = radioPendingRef.current
       const clock = radioClockRef.current
@@ -2528,19 +2609,26 @@ export function DiscoverPanel({
         // Only the moment differs.
         const changing = slotsRef.current.find((sl) => sl.id === pending.slotId)
         const transition = pickTransition(radioSettings.transitions, changing?.kinds ?? [])
-        const beats = transition === 'hole' ? pickDropOutBeats() : transition === 'riser' ? 8 : 4
+        const beats = radioGestureBeats(transition, pickDropOutBeats)
         setRadioPending(null)
         if (radioGestureLeadsChange(transition)) {
           // A hole or a riser announces the change over the bars before
           // the wrap, on the OUTGOING stem, so it has to reach the engine
           // as a live project NOW. The swap is staged on a later tick,
           // once that push has gone -- see (3)'s own gate.
-          radioGestureRef.current = {
-            kind: transition,
-            slotId: pending.slotId,
-            beats,
-            lapsLeft: 1
-          }
+          //
+          // REPLACES the list rather than adding to it, exactly as the
+          // single ref was overwritten: the gate above lets (2) run only
+          // when every armed gesture is a spent arrival, and a spent one
+          // has nothing left to play.
+          radioGestureRef.current = [
+            {
+              kind: transition,
+              slotId: pending.slotId,
+              beats,
+              lapsLeft: 1
+            }
+          ]
           setRadioLedChange({
             slotId: pending.slotId,
             pick: pending.pick,
@@ -2581,12 +2669,39 @@ export function DiscoverPanel({
 
     // (3) Push it. Once -- radioStageRef is the "already out there" flag
     // -- and only when nothing else is on its way to the engine.
+    //
+    // WHAT goes out is radio's held change and every manual change waiting
+    // for the loop top, as ONE stage (mergeStageChanges): the engine holds
+    // one staged project at a time, and they all land at the same wrap.
+    // With the manual queue empty every line below reduces to the single
+    // held change this always staged.
     const led = radioLedChangeRef.current
+    const manual = manualChangesRef.current
+    // The engine has ALREADY swapped a stage in and the wrap tick has not
+    // landed it yet -- see radioStageAppliedLedRef and
+    // radioStageAppliedManualRef. Nothing is staged in that window: a
+    // stage sent now would be aimed at the NEXT wrap, while the landing
+    // branch commits everything waiting at this one.
+    if (led !== null && led === radioStageAppliedLedRef.current) return
+    if (manual.size > 0 && manual === radioStageAppliedManualRef.current) return
+    const readyLed = led !== null && led.stem !== null ? { ...led, stem: led.stem } : null
+    // A bare cut radio aimed at a mid-lap bar (atBars) goes out ALONE, at
+    // its bar. Manual changes land only at the wrap (spec behaviour 8),
+    // and one stage has one landing point -- so they wait for the next
+    // stage, after this one has landed. Folding them in and moving radio's
+    // cut to the wrap would change radio's pace, which the spec forbids,
+    // and would leave the landing branch committing the cut at its bar
+    // while the engine swapped at the wrap.
+    const withManual = manual.size > 0 && !(readyLed !== null && readyLed.atBars !== undefined)
+    const manualAllReady = [...manual.values()].every((m) => m.stem !== null)
     if (
       radioStageRef.current !== null ||
-      led === null ||
-      led === radioStageAppliedLedRef.current ||
-      led.stem === null ||
+      (readyLed === null && !withManual) ||
+      // Everything waiting goes out together or not at all: a change still
+      // resolving holds the stage (radio's too) until it is ready, so the
+      // wrap never takes half a set. One that is still not ready at the
+      // wrap keeps waiting; the rest land the old way, a commit and a push.
+      (withManual && !manualAllReady) ||
       !radioOnRef.current ||
       !previewLoadedRef.current ||
       radioCourseChangeRef.current !== null ||
@@ -2596,12 +2711,106 @@ export function DiscoverPanel({
     ) {
       return
     }
-    const token = (radioStageTokenRef.current += 1)
-    radioStageRef.current = { token, slotId: led.slotId, sent: false, mapping: null }
+    if (withManual) {
+      // A transition for every manual change that does not have one yet --
+      // drawn ONCE, the first time it is staged, and stored back into the
+      // queue so a re-stage (after a withdrawal) cannot re-draw it.
+      const undrawn = [...manual.entries()].filter(([, m]) => m.arrival === null)
+      if (undrawn.length > 0) {
+        const drawn = drawManualTransitions(
+          undrawn.map(([slotId]) => ({
+            slotId,
+            kinds: slotsRef.current.find((s) => s.id === slotId)?.kinds ?? []
+          })),
+          {
+            pick: (kinds) => pickTransition(radioSettings.transitions, kinds),
+            dropOutBeats: pickDropOutBeats,
+            // A hole, a riser or a standalone drop-out -- radio's own or an
+            // earlier manual one. At most one leading gesture per lap.
+            leadingArmed: radioGestureRef.current.some(
+              (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
+            ),
+            barsToWrap: loopBars - pos,
+            loopBars
+          }
+        )
+        const next = new Map(manual)
+        let leading: { slotId: string; arrival: ManualArrival } | null = null
+        for (const [slotId, arrival] of drawn) {
+          const entry = next.get(slotId)
+          if (!entry) continue
+          if (radioGestureLeadsChange(arrival.kind)) {
+            // A leading gesture plays NOW, live, on the outgoing stem (a
+            // joining row has none -- it falls back to a cut). It is not
+            // part of the stage; the stage carries this row as a cut.
+            if (!entry.joining) leading = { slotId, arrival }
+            next.set(slotId, { ...entry, arrival: { kind: 'cut', beats: 4 } })
+          } else {
+            next.set(slotId, { ...entry, arrival })
+          }
+        }
+        setManualChanges(next)
+        if (leading !== null) {
+          radioGestureRef.current = [
+            ...radioGestureRef.current,
+            {
+              kind: leading.arrival.kind,
+              slotId: leading.slotId,
+              beats: leading.arrival.beats,
+              lapsLeft: 1
+            }
+          ]
+          // Same as radio's own leading gesture: it must reach the engine as
+          // a live project now, and the stage follows on a later tick
+          // (a load-project overtaking a stage drops the stage).
+          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+          return
+        }
+      }
+    }
+    // Re-read: the draw above may have replaced the queue.
+    const stagedManual = withManual ? manualChangesRef.current : null
+    const readyManual = new Map<
+      string,
+      { stem: ResolvedCandidateStem; joining: boolean; arrival: ManualArrival | null }
+    >()
+    if (stagedManual !== null) {
+      for (const [slotId, m] of stagedManual) {
+        if (m.stem !== null) {
+          readyManual.set(slotId, { stem: m.stem, joining: m.joining, arrival: m.arrival })
+        }
+      }
+    }
     const merged = mergeStageChanges(
-      { slotId: led.slotId, stem: led.stem, arrival: led.arrival ?? null },
-      new Map()
+      readyLed !== null
+        ? { slotId: readyLed.slotId, stem: readyLed.stem, arrival: readyLed.arrival ?? null }
+        : null,
+      readyManual
     )
+    // Never an empty stage: with nothing changing, a duck would dip every
+    // layer in the mix. Unreachable through the gate above; kept as the
+    // guarantee.
+    if (merged.changes.length === 0) return
+    // mergeStageChanges drops radio's change when a manual one is on the
+    // same row -- the user pointed at it, radio only drew it.
+    const ledInStage = readyLed !== null && !readyManual.has(readyLed.slotId)
+    const token = (radioStageTokenRef.current += 1)
+    radioStageRef.current = {
+      token,
+      slotIds: merged.changes.map((c) => c.slotId),
+      ledSlotId: ledInStage ? readyLed.slotId : null,
+      manual: readyManual.size > 0 ? stagedManual : null,
+      sent: false,
+      mapping: null
+    }
+    const ledLabel =
+      readyLed === null
+        ? null
+        : readyLed.arrival
+          ? readyLed.arrival.kind
+          : radioGestureRef.current.length > 0
+            ? 'led'
+            : 'cut'
     void syncPreviewToEngine(previewingSlotIdsRef.current, {
       token,
       changes: merged.changes,
@@ -2612,8 +2821,15 @@ export function DiscoverPanel({
         beats: a.beats,
         lapsLeft: 1
       })),
-      atBars: led.atBars,
-      label: led.arrival ? led.arrival.kind : radioGestureRef.current !== null ? 'led' : 'cut',
+      // Always the loop top once a manual change is aboard -- and a stage
+      // at a bar never carries one (withManual above).
+      atBars: readyManual.size > 0 ? undefined : readyLed?.atBars,
+      label:
+        !ledInStage || ledLabel === null
+          ? 'manual'
+          : readyManual.size > 0
+            ? `${ledLabel}+manual`
+            : ledLabel,
       atPos: pos,
       loopBars
     })
@@ -2748,11 +2964,32 @@ export function DiscoverPanel({
     // A leading gesture is cleared in the same tick. It has fired; a
     // second lap of it would turn one move into a rhythm, and (for a hole)
     // would punch the gap in the layer that just arrived. For an arrival
-    // hold the ref is already null and clearRadioGesture is a no-op -- and
+    // hold the list is already empty and clearRadioGesture is a no-op -- and
     // so it is for a mid-lap cut, which can only have been decided while
     // nothing was armed.
-    if ((step.wrapped || crossedHeldBar) && radioLedChangeRef.current !== null) {
+    //
+    // MANUAL CHANGES land here too (2026-09-29), at the WRAP only and never
+    // at a held bar -- every waiting one whose stem is ready, together with
+    // radio's own held change if there is one, in the same microtask. The
+    // branch runs for them even when radio holds nothing. With the queue
+    // empty it is exactly the led-only branch it always was.
+    const manualLanding =
+      step.wrapped && [...manualChangesRef.current.values()].some((m) => m.stem !== null)
+    if ((step.wrapped || crossedHeldBar) && (radioLedChangeRef.current !== null || manualLanding)) {
       const led = radioLedChangeRef.current
+      // The queue is captured and cleared FIRST, before anything below can
+      // write to it. An entry still resolving is not landed: it goes back
+      // into the queue and waits for the next wrap.
+      const landingReady: [
+        string,
+        { pick: SlotPick; joining: boolean; arrival: ManualArrival | null }
+      ][] = []
+      if (manualLanding) {
+        const landing = [...manualChangesRef.current]
+        const unready = landing.filter(([, m]) => m.stem === null)
+        for (const entry of landing) if (entry[1].stem !== null) landingReady.push(entry)
+        setManualChanges(new Map(unready))
+      }
       // Taken BEFORE anything else: clearRadioGesture just below pushes a
       // load-project, and an ordinary push withdraws whatever is staged.
       // At this instant the engine has already swapped (the audio thread
@@ -2769,37 +3006,52 @@ export function DiscoverPanel({
       if (stagedHere !== null) radioStageLandedRef.current = stagedHere
       // Whether the engine has already made this swap real, by either
       // route: still staged here (the tick won), or acked (the ack won).
-      const engineSwapped = stagedHere !== null || radioStageAppliedLedRef.current === led
+      const engineSwapped =
+        stagedHere !== null || (led !== null && radioStageAppliedLedRef.current === led)
       radioStageAppliedLedRef.current = null
-      // A change DECIDED early has not restarted the clock yet -- the due
-      // branch below is what normally does that, and it never ran for
-      // this one. Restart it here, at the landing, which is exactly where
-      // a change due at a wrap restarts it today. See the `early` field's
-      // own doc comment for why that split is what keeps the pace put.
-      if (led.early) {
-        radioClockRef.current = restartRadioInterval(
-          step.clock,
-          nextRadioIntervalBarsInWindow(radioSettings.paceBars),
-          pos
-        )
+      radioStageAppliedManualRef.current = null
+      if (led !== null) {
+        // A change DECIDED early has not restarted the clock yet -- the due
+        // branch below is what normally does that, and it never ran for
+        // this one. Restart it here, at the landing, which is exactly where
+        // a change due at a wrap restarts it today. See the `early` field's
+        // own doc comment for why that split is what keeps the pace put.
+        if (led.early) {
+          radioClockRef.current = restartRadioInterval(
+            step.clock,
+            nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+            pos
+          )
+        }
+        setRadioLedChange(null)
       }
-      setRadioLedChange(null)
       clearRadioGesture()
       void Promise.resolve().then(() => {
         if (!radioOnRef.current) return
+        // A manual change on radio's own row wins, the same rule the stage
+        // was built with (mergeStageChanges): radio's change for that row
+        // is dropped, and the manual commit puts the truth on the wire.
+        const ledOverridden = led !== null && landingReady.some(([id]) => id === led.slotId)
+        // Every arrival curve landing at this wrap, radio's and the manual
+        // ones, armed together once the commits below have happened.
+        const arriving: RadioGesture[] = []
+        // Every row that actually turned over here -- what a duck spares.
+        const landedIds: string[] = []
         // Re-checked at the boundary rather than trusted from when the
         // gesture was armed, exactly as the ordinary commit below does:
         // the slot may have been removed, locked or muted in the lap the
         // gesture took, and swapping a layer the user just locked is
         // worse than skipping a change.
         let committed = false
-        if (radioEligibleSlotIds().includes(led.slotId)) {
+        if (led !== null && !ledOverridden && radioEligibleSlotIds().includes(led.slotId)) {
           // No pushUndoSnapshot, for the same reason nothing else radio
           // does takes one: a transition is performance, not an edit.
           radioTraceBegin(
             boundaryBars,
             bpmRef.current,
-            led.arrival ? `held-${led.arrival.kind}` : 'gesture-led'
+            led.arrival
+              ? `held-${led.arrival.kind}${landingReady.length > 0 ? '+manual' : ''}`
+              : `gesture-led${landingReady.length > 0 ? '+manual' : ''}`
           ) // TEMP
           commitSlotPick(led.slotId, led.pick)
           // Armed HERE rather than when the change was held, and only once
@@ -2815,12 +3067,12 @@ export function DiscoverPanel({
           // gesture is read out of radioGestureRef at build time, so that
           // one push carries the curve and the stem it decorates together.
           if (led.arrival) {
-            radioGestureRef.current = {
+            arriving.push({
               kind: led.arrival.kind,
               slotId: led.slotId,
               beats: led.arrival.beats,
               lapsLeft: 1
-            }
+            })
           }
           // The clearRadioGesture() above already scheduled a sync for
           // this frame, and this commit's stem is a render and a promise
@@ -2830,9 +3082,10 @@ export function DiscoverPanel({
           holdSyncUntilResolved(led.slotId)
           radioTraceMark('commit') // TEMP
           radioLastSlotRef.current = led.slotId
+          landedIds.push(led.slotId)
           committed = true
         }
-        if (!committed && engineSwapped) {
+        if (led !== null && !ledOverridden && !committed && engineSwapped) {
           // The engine may already have made this swap real, while the
           // panel has just decided not to -- the slot was locked, muted
           // or removed inside the last 30ms, too late for the per-tick
@@ -2843,11 +3096,62 @@ export function DiscoverPanel({
           cancelStagedSwap('ineligible-at-the-wrap')
           scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
         }
-        if (committed) {
+        // The manual changes. NOT re-checked for eligibility: a padlock or
+        // a mute does not withdraw a change the user asked for (spec
+        // behaviour 6) -- only removing the row does, and removeSlot takes
+        // it out of the queue itself. The existence check is for a row
+        // removed in the instant between.
+        let manualCommitted = false
+        for (const [slotId, change] of landingReady) {
+          if (!slotsRef.current.some((s) => s.id === slotId)) continue // removed meanwhile
+          if (!committed && !manualCommitted) {
+            radioTraceBegin(boundaryBars, bpmRef.current, 'manual') // TEMP
+          }
+          commitSlotPick(slotId, change.pick)
+          // One push for the whole landing, as for a course change: the
+          // hold lifts when the LAST of them has resolved.
+          holdSyncUntilResolved(slotId)
+          if (change.joining) joinPreviewingMix(slotId)
+          // A cut carries nothing, and a leading gesture already played
+          // over the lap that just ended (it was staged as a cut).
+          if (
+            change.arrival !== null &&
+            change.arrival.kind !== 'cut' &&
+            !radioGestureLeadsChange(change.arrival.kind)
+          ) {
+            arriving.push({
+              kind: change.arrival.kind,
+              slotId,
+              beats: change.arrival.beats,
+              lapsLeft: 1
+            })
+          }
+          landedIds.push(slotId)
+          manualCommitted = true
+        }
+        if (manualCommitted && !committed) radioTraceMark('commit') // TEMP
+        // clearRadioGesture() emptied the list at the top of this branch,
+        // so this is every curve for the lap that starts here and nothing
+        // else. Left alone when nothing arrives, as the single ref was.
+        //
+        // A duck spares every row that landed, as the stage's did. Radio
+        // alone lands one row, the duck's own, so only a landing with
+        // manual rows in it needs saying.
+        if (arriving.length > 0) {
+          radioGestureRef.current = manualCommitted
+            ? arriving.map((g) => (g.kind === 'duck' ? { ...g, spares: landedIds } : g))
+            : arriving
+        }
+        if (committed || manualCommitted) {
           runAfterEngineSync(() => {
-            if (radioOnRef.current) void armRadioPick()
+            if (!radioOnRef.current) return
+            // Radio's own change landed: arm its next one, as always. Only
+            // manual ones landed: radio's pick is still armed and warm
+            // unless queueManualChange dropped it for one of these rows,
+            // and re-picking would throw a warm pick away.
+            if (committed || radioPendingRef.current === null) void armRadioPick()
           })
-        } else {
+        } else if (led !== null) {
           void armRadioPick()
         }
       })
@@ -2857,10 +3161,20 @@ export function DiscoverPanel({
     // in laps. One wrap after the lap it fired on, the curve comes off --
     // leaving it armed would repeat the gesture every lap, which is a
     // rhythm rather than a move.
-    if (step.wrapped && radioGestureRef.current !== null) {
+    //
+    // Per gesture: each one on its last lap comes off, the rest count down.
+    // A rebuild is scheduled only when something actually came off, which
+    // for a single gesture is exactly the old clear-or-decrement.
+    if (step.wrapped && radioGestureRef.current.length > 0) {
       const armed = radioGestureRef.current
-      if (armed.lapsLeft <= 1) clearRadioGesture()
-      else radioGestureRef.current = { ...armed, lapsLeft: armed.lapsLeft - 1 }
+      const surviving = armed
+        .filter((g) => g.lapsLeft > 1)
+        .map((g) => ({ ...g, lapsLeft: g.lapsLeft - 1 }))
+      if (surviving.length === 0) clearRadioGesture()
+      else if (surviving.length < armed.length) {
+        radioGestureRef.current = surviving
+        scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+      } else radioGestureRef.current = surviving
     }
     // The course change lands HERE and only here -- the top of the loop,
     // for exactly the reason a long stem waits for one (687641a):
@@ -3000,7 +3314,7 @@ export function DiscoverPanel({
         // has as much right to the lap as a transition does.
         const changing = slotsRef.current.find((sl) => sl.id === pending.slotId)
         const transition =
-          radioGestureRef.current === null
+          radioGestureRef.current.length === 0
             ? pickTransition(radioSettings.transitions, changing?.kinds ?? [])
             : 'cut'
         // How long the move takes, in beats. A hole draws from the same
@@ -3010,7 +3324,7 @@ export function DiscoverPanel({
         // bloom and a duck get one bar, which is the arrival rather than
         // the approach. Everything is clamped to half the loop by the
         // curve builders, so a short loop shortens all of them.
-        const beats = transition === 'hole' ? pickDropOutBeats() : transition === 'riser' ? 8 : 4
+        const beats = radioGestureBeats(transition, pickDropOutBeats)
         // Can this change land on the boundary it came due on, or does it
         // have to wait for the loop top? Every curve in radioTransition.ts
         // is anchored at bar 0 and structurally cannot be anywhere else,
@@ -3029,12 +3343,14 @@ export function DiscoverPanel({
             // layer leaving is the one carrying the gesture, so it is the
             // OUTGOING stem the curve lands on, and it has to reach the
             // engine NOW, a whole lap before its change.
-            radioGestureRef.current = {
-              kind: transition,
-              slotId: pending.slotId,
-              beats,
-              lapsLeft: 1
-            }
+            radioGestureRef.current = [
+              {
+                kind: transition,
+                slotId: pending.slotId,
+                beats,
+                lapsLeft: 1
+              }
+            ]
             setRadioLedChange({
               slotId: pending.slotId,
               pick: pending.pick,
@@ -3089,12 +3405,14 @@ export function DiscoverPanel({
           // which makes their EngineStem.volume inert for the lap -- see
           // clearRadioGesture for why that is bounded rather than
           // tolerated.
-          radioGestureRef.current = {
-            kind: transition,
-            slotId: pending.slotId,
-            beats,
-            lapsLeft: 1
-          }
+          radioGestureRef.current = [
+            {
+              kind: transition,
+              slotId: pending.slotId,
+              beats,
+              lapsLeft: 1
+            }
+          ]
           // NO sync scheduled here, deliberately -- this used to call
           // scheduleSyncPreviewToEngine and that was the bug.
           //
@@ -3132,18 +3450,20 @@ export function DiscoverPanel({
       // No pushUndoSnapshot, for the same reason the change above takes
       // none: a drop-out is performance, not an edit.
       //
-      if (radioGestureRef.current === null && shouldScheduleDropOut(radioSettings.dropOuts)) {
+      if (radioGestureRef.current.length === 0 && shouldScheduleDropOut(radioSettings.dropOuts)) {
         const audible = slotsRef.current
           .filter((s) => previewingSlotIdsRef.current.has(s.id) && s.id !== pending?.slotId)
           .map((s) => ({ id: s.id, kinds: s.kinds }))
         const dropId = pickDropOutSlotId(audible)
         if (dropId !== null) {
-          radioGestureRef.current = {
-            kind: 'drop-out',
-            slotId: dropId,
-            beats: pickDropOutBeats(),
-            lapsLeft: 1
-          }
+          radioGestureRef.current = [
+            {
+              kind: 'drop-out',
+              slotId: dropId,
+              beats: pickDropOutBeats(),
+              lapsLeft: 1
+            }
+          ]
           scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
         }
       }
@@ -3524,8 +3844,11 @@ export function DiscoverPanel({
       // returns early on unmountedRef anyway). Dropping the ref is what
       // matters -- nothing can re-arm from a dead panel, and the engine
       // gets a fresh project from whatever claims it next.
-      radioGestureRef.current = null
+      radioGestureRef.current = []
       setRadioLedChange(null)
+      // A closed panel has no loop top to wait for; the waiting changes
+      // simply go.
+      setManualChanges(new Map())
       radioCourseChangeRef.current = null
       // Unlike the gesture above, this one DOES have to reach the engine:
       // a staged project outlives this panel, and whatever claims the
@@ -3601,8 +3924,13 @@ export function DiscoverPanel({
               : null
         if (mine === null) return
         if (radioStageRef.current?.token === a.token) {
+          const applied = radioStageRef.current
           radioStageRef.current = null
-          radioStageAppliedLedRef.current = radioLedChangeRef.current
+          // Radio's held change only when this stage actually carried it --
+          // always, unless manual changes rode alone or took its row.
+          radioStageAppliedLedRef.current =
+            applied.ledSlotId !== null ? radioLedChangeRef.current : null
+          radioStageAppliedManualRef.current = applied.manual
         }
         if (radioStageLandedRef.current?.token === a.token) radioStageLandedRef.current = null
         const mapping = mine.mapping
@@ -3845,6 +4173,17 @@ export function DiscoverPanel({
   // several call sites in quick succession -- e.g. more than one row
   // hitting a terminal failure in the same frame -- without one full
   // build+send per row).
+  /** The add half of dropFromPreviewingMix: puts `id` into the previewing
+   * mix, ref and state together, and returns the new set. Does NOT sync --
+   * reportSlotResolution schedules one itself, and radio's landing holds
+   * every push until the joining row's stem has resolved. */
+  function joinPreviewingMix(id: string): Set<string> {
+    const next = new Set(previewingSlotIdsRef.current).add(id)
+    previewingSlotIdsRef.current = next
+    setPreviewingSlotIds(next)
+    return next
+  }
+
   function dropFromPreviewingMix(id: string): void {
     const currentlyPreviewing = previewingSlotIdsRef.current
     if (!currentlyPreviewing.has(id)) return
@@ -3856,6 +4195,15 @@ export function DiscoverPanel({
   }
 
   function removeSlot(id: string): void {
+    // A waiting manual change dies with its row -- the ONLY thing that
+    // withdraws one (spec behaviour 6) -- and so does any stage carrying
+    // it. Step (3) re-stages whatever else was waiting.
+    if (manualChangesRef.current.has(id)) {
+      const next = new Map(manualChangesRef.current)
+      next.delete(id)
+      setManualChanges(next)
+      cancelStagedSwap('manual-change-removed')
+    }
     pushUndoSnapshot()
     setSlots((prev) => prev.filter((s) => s.id !== id))
     forgetSlotResolution(id)
@@ -4395,6 +4743,137 @@ export function DiscoverPanel({
       .map((s) => s.id)
   }
 
+  /** Resolve a pick's stem and warm everything the swap will ask for --
+   * the stretch, the engine's decoded buffer, the waveform peaks -- so the
+   * landing reads values instead of asking for them. Shared by radio's own
+   * pick (armRadioPick) and every manual change. Resolves to null when the
+   * candidate cannot be resolved.
+   *
+   * Warm the cache and deliberately ignore the result -- a null (network
+   * hiccup, since-deleted riff) deletes its own cache entry, the slot
+   * keeps its previous stem, and radio simply tries again at the next
+   * boundary. Same soft degradation every other Discover path takes.
+   *
+   * Then warm the STRETCH, which is the half that was missing. Reported
+   * 2026-09-28: "the transitions are a bit delayed... the actual audio
+   * doesn't always start on the loop point, it takes a second to start",
+   * and then, correctly, "pre-load?".
+   *
+   * resolveCandidateStem only downloads. The tempo-stretch happens inside
+   * buildEngineProject, which does not run until the change is committed
+   * -- so for any stem not recorded at this project's tempo, a rubberband
+   * subprocess was spawning AFTER the boundary had already passed. The UI
+   * updated from state immediately and the audio waited on a render,
+   * which is exactly the split he described.
+   *
+   * renderStretched is content-keyed on (path, ratio), so doing it here
+   * means buildEngineProject finds a hit instead of a job. The ratio MUST
+   * be the one it will compute -- a different one warms a file nobody
+   * wants and leaves the real render for commit time -- which is why
+   * warmEngineBuffer derives it from the shared stretchRatioForStem
+   * rather than writing the formula out again.
+   *
+   * A whole interval of lead time, so this is deliberately not awaited by
+   * the caller; a failure leaves the cache cold and costs exactly what
+   * today costs. */
+  async function resolveAndWarmPick(pick: SlotPick): Promise<ResolvedCandidateStem | null> {
+    if (pick.candidate === null) return null
+    const stem = await resolveCandidateStem(pick.candidate)
+    if (stem === null) return null
+    // Three warms, one call. The preview always stretches (previewState
+    // sets stretch true for its one rifff) and a Discover candidate is
+    // never a one-shot, so the two "don't stretch at all" cases
+    // buildEngineProject handles cannot arise here.
+    //
+    // Through the memoised resolver, NOT renderStretched directly:
+    // warming the main-process file cache is only half of it. The other
+    // half is that buildEngineProject asks this resolver for the
+    // duration at commit time, and a bare IPC call would re-read the
+    // whole file from disk to answer -- per stem, on the beat, on a main
+    // thread already decoding that same audio for the waveform. Warming
+    // it here means the commit reads a value instead of asking for one.
+    //
+    // And then the last cold thing, added 2026-09-28 after "it doesn't
+    // seem to preload still.. it always takes a second for the new stem
+    // to play after the loop ends": the native engine's OWN decoded
+    // buffer, which until now it could not be told about until it was
+    // handed a whole project naming the stem. See warmEngineBuffer.ts --
+    // it is what decides whether the stretched file or the native one is
+    // the one load-project will actually ask for.
+    void warmEngineBuffer(
+      stem,
+      bpmRef.current,
+      resolveStretchedForPlayback,
+      (path, durationSec) => void window.rifffApi.enginePreloadStem(path, durationSec)
+    )
+    // And the picture, which was the last cold thing of all. Reported
+    // after the engine preload landed: "it's reaching the end of a loop,
+    // and a stem is blinking like it's loading, but it reaches the end
+    // and the wave doesn't change until it goes a few moments into the
+    // loop again."
+    //
+    // The row draws <Waveform path={resolvedStem.path} />, and peakCache
+    // has to DECODE that file to produce peaks. Every other warm above
+    // is about the sound; none of them touches this, so the decode still
+    // happened at commit -- which is why the wave arrived late even once
+    // the audio did not.
+    //
+    // Deliberately the raw stem path, not the stretched one: the row
+    // draws the stem, and peakCache is keyed by path, so warming the
+    // stretched file would fill the cache with an entry nothing ever
+    // asks for -- the exact mistake the two previous prefetch attempts
+    // made in the other direction.
+    //
+    // Worth more than the picture, too: this is a full decode on the
+    // main thread. Doing it here moves it off the boundary, where it was
+    // competing with the very commit it was delaying.
+    void getPeaks(stem.path).catch(() => {
+      // peakCache evicts on rejection itself; a failed warm just means
+      // the row decodes at commit, which is today's behaviour.
+    })
+    return stem
+  }
+
+  /** Queue a manual change for the next loop top. Returns false when the
+   * row already has one waiting -- a second click on a waiting row is
+   * ignored (Elling, 2026-09-29). `joining` is a row that is not in the
+   * mix yet (added or duplicated while radio ran).
+   *
+   * Nothing calls this yet: Task 4 of the 2026-09-29 manual-changes plan
+   * routes every in-scope action here while radio runs. */
+  function queueManualChange(slotId: string, pick: SlotPick, joining: boolean): boolean {
+    if (manualChangesRef.current.has(slotId)) return false
+    const next = new Map(manualChangesRef.current)
+    next.set(slotId, { pick, stem: null, joining, arrival: null })
+    setManualChanges(next)
+    // Radio's own armed pick for this row is now stale -- the user has
+    // spoken for it. Drop it; it is re-armed after the landing.
+    if (radioPendingRef.current?.slotId === slotId) setRadioPending(null)
+    // A stage already out carries the wrong set now. Withdraw it; step (3)
+    // re-stages everything that is waiting on its next tick.
+    cancelStagedSwap('manual-change')
+    void resolveAndWarmPick(pick).then((stem) => {
+      const entry = manualChangesRef.current.get(slotId)
+      if (entry === undefined || entry.pick !== pick) return
+      if (stem === null) {
+        // Unresolvable: drop it. The row keeps what it had -- the same
+        // soft degradation every other Discover path takes.
+        const dropped = new Map(manualChangesRef.current)
+        dropped.delete(slotId)
+        setManualChanges(dropped)
+        return
+      }
+      const ready = new Map(manualChangesRef.current)
+      ready.set(slotId, { ...entry, stem })
+      setManualChanges(ready)
+    })
+    return true
+  }
+  // TEMPORARY (Task 3 -> Task 4 of the 2026-09-29 manual-changes plan):
+  // nothing routes into the queue until Task 4, and noUnusedLocals fails
+  // the build on an uncalled function. Delete this line in Task 4.
+  void queueManualChange
+
   /** Chooses radio's NEXT change and warms it. Called right after each
    * change lands (and once when radio starts), so the prefetch gets the
    * whole interval -- 12 to 48 bars, long enough for a cold stem to
@@ -4421,34 +4900,9 @@ export function DiscoverPanel({
     const pick = await pickForSlot(slotId, slot.kinds)
     if (pick === null || pick.candidate === null) return
     if (!radioOnRef.current) return
-    // Warm the cache and deliberately ignore the result -- a null (network
-    // hiccup, since-deleted riff) deletes its own cache entry, the slot
-    // keeps its previous stem, and radio simply tries again at the next
-    // boundary. Same soft degradation every other Discover path takes.
-    //
-    // Then warm the STRETCH, which is the half that was missing. Reported
-    // 2026-09-28: "the transitions are a bit delayed... the actual audio
-    // doesn't always start on the loop point, it takes a second to start",
-    // and then, correctly, "pre-load?".
-    //
-    // resolveCandidateStem only downloads. The tempo-stretch happens inside
-    // buildEngineProject, which does not run until the change is committed
-    // -- so for any stem not recorded at this project's tempo, a rubberband
-    // subprocess was spawning AFTER the boundary had already passed. The UI
-    // updated from state immediately and the audio waited on a render,
-    // which is exactly the split he described.
-    //
-    // renderStretched is content-keyed on (path, ratio), so doing it here
-    // means buildEngineProject finds a hit instead of a job. The ratio MUST
-    // be the one it will compute -- a different one warms a file nobody
-    // wants and leaves the real render for commit time -- which is why
-    // warmEngineBuffer derives it from the shared stretchRatioForStem
-    // rather than writing the formula out again.
-    //
-    // A whole interval of lead time, so this is deliberately not awaited by
-    // the caller; a failure leaves the cache cold and costs exactly what
-    // today costs.
-    void resolveCandidateStem(pick.candidate).then((stem) => {
+    // Resolve and warm it -- see resolveAndWarmPick for the three warms
+    // and the four fixes they record.
+    void resolveAndWarmPick(pick).then((stem) => {
       if (stem === null || !radioOnRef.current) return
       // The incoming layer's own bar length, which the boundary decision
       // needs and only a resolved stem knows (a DiscoverCandidate carries
@@ -4462,57 +4916,6 @@ export function DiscoverPanel({
         // the one moment it is known to be warm.
         setRadioPending({ ...radioPendingRef.current, incomingBars: stem.barLength, stem })
       }
-      // Three warms, one call. The preview always stretches (previewState
-      // sets stretch true for its one rifff) and a Discover candidate is
-      // never a one-shot, so the two "don't stretch at all" cases
-      // buildEngineProject handles cannot arise here.
-      //
-      // Through the memoised resolver, NOT renderStretched directly:
-      // warming the main-process file cache is only half of it. The other
-      // half is that buildEngineProject asks this resolver for the
-      // duration at commit time, and a bare IPC call would re-read the
-      // whole file from disk to answer -- per stem, on the beat, on a main
-      // thread already decoding that same audio for the waveform. Warming
-      // it here means the commit reads a value instead of asking for one.
-      //
-      // And then the last cold thing, added 2026-09-28 after "it doesn't
-      // seem to preload still.. it always takes a second for the new stem
-      // to play after the loop ends": the native engine's OWN decoded
-      // buffer, which until now it could not be told about until it was
-      // handed a whole project naming the stem. See warmEngineBuffer.ts --
-      // it is what decides whether the stretched file or the native one is
-      // the one load-project will actually ask for.
-      void warmEngineBuffer(
-        stem,
-        bpmRef.current,
-        resolveStretchedForPlayback,
-        (path, durationSec) => void window.rifffApi.enginePreloadStem(path, durationSec)
-      )
-      // And the picture, which was the last cold thing of all. Reported
-      // after the engine preload landed: "it's reaching the end of a loop,
-      // and a stem is blinking like it's loading, but it reaches the end
-      // and the wave doesn't change until it goes a few moments into the
-      // loop again."
-      //
-      // The row draws <Waveform path={resolvedStem.path} />, and peakCache
-      // has to DECODE that file to produce peaks. Every other warm above
-      // is about the sound; none of them touches this, so the decode still
-      // happened at commit -- which is why the wave arrived late even once
-      // the audio did not.
-      //
-      // Deliberately the raw stem path, not the stretched one: the row
-      // draws the stem, and peakCache is keyed by path, so warming the
-      // stretched file would fill the cache with an entry nothing ever
-      // asks for -- the exact mistake the two previous prefetch attempts
-      // made in the other direction.
-      //
-      // Worth more than the picture, too: this is a full decode on the
-      // main thread. Doing it here moves it off the boundary, where it was
-      // competing with the very commit it was delaying.
-      void getPeaks(stem.path).catch(() => {
-        // peakCache evicts on rejection itself; a failed warm just means
-        // the row decodes at commit, which is today's behaviour.
-      })
     })
     setRadioPending({ slotId, pick, incomingBars: null, stem: null })
   }
@@ -4554,6 +4957,19 @@ export function DiscoverPanel({
     // otherwise leave that curve on for the rest of the hold's backstop,
     // and the whole point of clearing it here is that it comes off now.
     releaseSyncHold(null)
+    // Radio off means "back to instant", so every change still waiting
+    // for the loop top happens NOW rather than never -- committed exactly
+    // as it would have been with radio off. A joining row joins the mix
+    // the way any new row does: reportSlotResolution adds it when its
+    // stem resolves. The stage that carried them was withdrawn above.
+    const waiting = manualChangesRef.current
+    if (waiting.size > 0) {
+      setManualChanges(new Map())
+      for (const [slotId, change] of waiting) {
+        if (!slotsRef.current.some((s) => s.id === slotId)) continue
+        commitSlotPick(slotId, change.pick)
+      }
+    }
     setRadioProgress(0)
     setRadioChangeWait(null)
   }
@@ -5692,10 +6108,15 @@ export function DiscoverPanel({
             radioApproach={radioApproachFor({
               slotId: slot.id,
               armedSlotId: radioArmedSlotId,
-              heldSlotId: radioHeldSlotId,
+              // A manual change waiting for the loop top reads exactly
+              // like radio's own held one -- the same breathing, spec
+              // behaviour 2. Only `state` is drawn, so the wait (radio's
+              // own) does not have to describe it.
+              heldSlotId: manualWaitingSlotIds.has(slot.id) ? slot.id : radioHeldSlotId,
               wait: approachWait
             })}
             rerolling={rerollingSlotIds.has(slot.id)}
+            manualWaiting={manualWaitingSlotIds.has(slot.id)}
             previewing={previewingSlotIds.has(slot.id)}
             soloed={previewingSlotIds.size === 1 && previewingSlotIds.has(slot.id)}
             favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
@@ -6226,6 +6647,7 @@ function DiscoverSlotRow({
   slot,
   radioApproach,
   rerolling,
+  manualWaiting,
   previewing,
   soloed,
   favourited,
@@ -6270,6 +6692,11 @@ function DiscoverSlotRow({
    * LibraryBrowser.tsx's own downloadingRiffCID-driven disabled + label
    * convention. */
   rerolling: boolean
+  /** True while a manual change on THIS row waits for radio's next loop
+   * top. Same kind, nearby jam and any stem are disabled with the look
+   * `rerolling` gives them -- a second click on a waiting row is ignored
+   * (Elling, 2026-09-29). Duplicate and remove stay live. */
+  manualWaiting: boolean
   /** True while THIS slot is currently included in the playing mix
    * (DiscoverPanel's own `previewingSlotIds`). Toggled-on slots play
    * TOGETHER, looped, like the Upcycle reference this screen is modeled on
@@ -7525,7 +7952,7 @@ function DiscoverSlotRow({
             setRerollAction('similar')
             onReroll()
           }}
-          disabled={rerolling}
+          disabled={rerolling || manualWaiting}
           pulsing={rerolling && rerollAction === 'similar'}
         >
           <CirclesThree size={12} />
@@ -7545,7 +7972,7 @@ function DiscoverSlotRow({
             }}
             state={nearbyMenu ? 'soft' : 'off'}
             ariaExpanded={nearbyMenu !== null}
-            disabled={rerolling}
+            disabled={rerolling || manualWaiting}
           >
             <Compass size={12} />
           </RowIconButton>
@@ -7557,7 +7984,7 @@ function DiscoverSlotRow({
             setRerollAction('random')
             onRerollRandom()
           }}
-          disabled={rerolling}
+          disabled={rerolling || manualWaiting}
           pulsing={rerolling && rerollAction === 'random'}
         >
           <Shuffle size={12} />
