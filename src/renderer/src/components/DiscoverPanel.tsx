@@ -1460,8 +1460,8 @@ export function DiscoverPanel({
     // or grows on every mute/solo toggle, and that value is sent straight to
     // the native engine's loop-length setting on every resulting
     // engineLoadProject call -- see assembleDiscoverRifff's own doc comment
-    // for the full mechanism. Same computation already used for the
-    // waveform-tiling maxBarLength reference elsewhere in this file.
+    // for the full mechanism. Same computation as the panel's maxBarLength
+    // (the loop length the rows' playheads and loop-top lines use).
     //
     // Reads resolvedBarLengthsRef, NOT the reactive resolvedBarLengths state
     // -- this function is a plain closure re-created every render, and
@@ -1923,9 +1923,9 @@ export function DiscoverPanel({
     // happened, which could (a) drop `members` to empty mid-reroll if this
     // was the only resolved+previewing slot -- triggering
     // restorePreviewIfLoaded's own pause+seek-to-0+play sequence, an
-    // audible full restart -- and (b) shrink maxBarLength (the shared
-    // reference every OTHER row's own waveform tiles proportionally scale
-    // against) for the whole resolve window whenever the rerolling slot
+    // audible full restart -- and (b) shrink maxBarLength (the loop length
+    // every row's playheads and loop-top lines are drawn against) for the
+    // whole resolve window whenever the rerolling slot
     // happened to be the longest one, snapping the engine's own loop-wrap
     // position back to 0 (Transport.cpp's own `pos >= loopEnd` wrap) and
     // remounting every other row's tiles (see their own key comment above).

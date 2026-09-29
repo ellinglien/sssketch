@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { memo, useEffect, useState } from 'react'
 import { linearWaveBars, linearPitchLine } from '@shared/visuals'
 import { getPeaks, getBrightness, peekPeaks, peekBrightness } from '../audio/peakCache'
 import { getPitchContour } from '../audio/pitchCache'
@@ -9,7 +9,13 @@ import { getPitchContour } from '../audio/pitchCache'
 const PITCH_MIN_HZ = 40
 const PITCH_MAX_HZ = 1000
 
-export function Waveform({
+// Memoised (2026-09-29): Discover re-renders its whole panel on every
+// playhead tick (usePos at the top of DiscoverPanel), and since the fixed
+// 32-bar window a row can hold up to 32 tiles x 2 layers of these. Every
+// prop is a primitive and all loading state is internal, so skipping a
+// re-render with unchanged props is exactly right -- without it each tick
+// rebuilt ~128 <rect>s per instance, tens of thousands per frame.
+export const Waveform = memo(function Waveform({
   path,
   color,
   opacity = 0.75,
@@ -134,4 +140,4 @@ export function Waveform({
       )}
     </svg>
   )
-}
+})
