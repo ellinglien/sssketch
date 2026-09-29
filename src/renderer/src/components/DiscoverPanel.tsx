@@ -3709,9 +3709,11 @@ export function DiscoverPanel({
     // row's control is not silently the SECOND hook. A re-added slot gets
     // a fresh id (freshSlotId) anyway, so nothing can be resurrected.
     radioChangedAtRef.current.delete(id)
-    setRadioSlotFlags((prev) =>
-      pruneRadioSlotFlags(prev, new Set(Object.keys(prev).filter((k) => k !== id)))
-    )
+    setRadioSlotFlags((prev) => {
+      const survivors = new Set(Object.keys(prev))
+      survivors.delete(id)
+      return pruneRadioSlotFlags(prev, survivors)
+    })
   }
 
   /** One press of a row's flag control: normal -> replace soon -> hook ->
