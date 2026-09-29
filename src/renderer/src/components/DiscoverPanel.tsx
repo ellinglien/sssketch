@@ -2502,7 +2502,13 @@ export function DiscoverPanel({
    * coming" honest, the undo stack untouched and the fallback free: if
    * the stage is withdrawn, errors, or never goes out at all, the change
    * still lands the way it does today. */
-  function stepRadioStage(due: boolean, pos: number, loopBars: number, gridBars: number): void {
+  function stepRadioStage(
+    due: boolean,
+    pos: number,
+    loopBars: number,
+    gridBars: number,
+    skipStage = false
+  ): void {
     const staged = radioStageRef.current
     // RADIO's own row only -- a manual change in the same stage is not
     // withdrawn by a padlock or a mute (spec behaviour 6). Withdrawing
@@ -2708,6 +2714,7 @@ export function DiscoverPanel({
 
     // (3) Push it. Once -- radioStageRef is the "already out there" flag
     // -- and only when nothing else is on its way to the engine.
+    if (skipStage) return
     //
     // WHAT goes out is radio's held change and every manual change waiting
     // for the loop top, as ONE stage (mergeStageChanges): the engine holds
@@ -3100,13 +3107,21 @@ export function DiscoverPanel({
         stagedHere !== null || (led !== null && radioStageAppliedLedRef.current === led)
       radioStageAppliedLedRef.current = null
       radioStageAppliedManualRef.current = null
+      // A manual change on radio's own row wins, the same rule the stage
+      // was built with (mergeStageChanges): radio's change for that row
+      // is dropped, and the manual commit puts the truth on the wire.
+      // queueManualChange already gives radio's held change way at queue
+      // time, so this is a defensive fallback that should never fire -- and
+      // when it does, radio's change did not land, so the clock is NOT
+      // restarted for it.
+      const ledOverridden = led !== null && landingReady.some(([id]) => id === led.slotId)
       if (led !== null) {
         // A change DECIDED early has not restarted the clock yet -- the due
         // branch below is what normally does that, and it never ran for
         // this one. Restart it here, at the landing, which is exactly where
         // a change due at a wrap restarts it today. See the `early` field's
         // own doc comment for why that split is what keeps the pace put.
-        if (led.early) {
+        if (led.early && !ledOverridden) {
           radioClockRef.current = restartRadioInterval(
             step.clock,
             nextRadioIntervalBarsInWindow(radioSettings.paceBars),
@@ -3118,10 +3133,6 @@ export function DiscoverPanel({
       clearRadioGesture()
       void Promise.resolve().then(() => {
         if (!radioOnRef.current) return
-        // A manual change on radio's own row wins, the same rule the stage
-        // was built with (mergeStageChanges): radio's change for that row
-        // is dropped, and the manual commit puts the truth on the wire.
-        const ledOverridden = led !== null && landingReady.some(([id]) => id === led.slotId)
         // Every arrival curve landing at this wrap, radio's and the manual
         // ones, armed together once the commits below have happened.
         const arriving: RadioGesture[] = []
@@ -3251,7 +3262,14 @@ export function DiscoverPanel({
             // and re-picking would throw a warm pick away -- and when a
             // due or course change on this same tick arms one itself
             // (radioArmsBelow), this must not arm a second.
-            if (committed || (!radioArmsBelow && radioPendingRef.current === null)) {
+            // Nor while radio HOLDS a change: step (2) may have decided early
+            // on this very tick and used up the pick.
+            if (
+              committed ||
+              (!radioArmsBelow &&
+                radioPendingRef.current === null &&
+                radioLedChangeRef.current === null)
+            ) {
               void armRadioPick()
             }
           })
@@ -3377,7 +3395,11 @@ export function DiscoverPanel({
     // the one that decides one. `step.due` is passed in so an early
     // decision can never get in front of a change that is coming due on
     // this very tick.
-    stepRadioStage(step.due, pos, loopBars, gridBars)
+    //
+    // After a manual-only landing that fell through, step (3) sits this
+    // tick out: the landing's commits are still a microtask away, and a
+    // stage of the leftovers built now would be built on the old mix.
+    stepRadioStage(step.due, pos, loopBars, gridBars, manualLandedIds.size > 0)
 
     if (!step.due) return
 
@@ -3417,7 +3439,14 @@ export function DiscoverPanel({
     void Promise.resolve().then(() => {
       if (!radioOnRef.current) return
       let committed = false
-      if (pending !== null && eligibleNow.includes(pending.slotId)) {
+      if (
+        pending !== null &&
+        eligibleNow.includes(pending.slotId) &&
+        // Never over a row a manual change landed on at this same wrap --
+        // the user's change wins, and armRadioPick should never have
+        // armed it; this is the second guard.
+        !manualLandedIds.has(pending.slotId)
+      ) {
         // WHICH move this change gets. The menu picks a temperament and
         // the changing layer's own kinds pick the weights inside it, so a
         // drum layer cuts or leaves a hole while a pad sweeps open --
@@ -4965,9 +4994,39 @@ export function DiscoverPanel({
     // Radio's own armed pick for this row is now stale -- the user has
     // spoken for it. Drop it; it is re-armed after the landing.
     if (radioPendingRef.current?.slotId === slotId) setRadioPending(null)
-    // A stage already out carries the wrong set now. Withdraw it; step (3)
-    // re-stages everything that is waiting on its next tick.
-    cancelStagedSwap('manual-change')
+    // NO withdrawal of the stage that is out, on purpose. This entry's stem
+    // is still null, so a re-stage now would carry exactly the same set --
+    // and a click in the last moments of the lap would pull radio's own
+    // staged change out too late to get it back, landing it late when it
+    // was on time. 'manual-ready' below re-stages once this is ready.
+    //
+    // Radio's HELD change on this very row: the user has claimed the row
+    // radio was about to turn over (the breathing one, so the likely one to
+    // be clicked). Radio's change gives way here, at queue time, rather
+    // than being silently dropped at the landing:
+    //   - its held change is cleared and any stage carrying it withdrawn;
+    //   - a hole or riser radio armed to announce it comes off -- it would
+    //     play on the outgoing stem of a row that is no longer radio's;
+    //   - the renderer's truth goes back on the wire (the withdrawal may
+    //     lose to the audio thread, or the engine may already have swapped
+    //     it in), the same clear-and-push every other withdrawal uses;
+    //   - radio re-arms and decides again, on another row.
+    // The clock is left alone. An EARLY-decided change has not restarted
+    // it yet -- that happens only at its landing, which now never comes --
+    // so radio's next change comes when it would have. A change the due
+    // branch held had its interval restarted when it came due; that
+    // interval is spent, as it is for any change that fails its re-check.
+    const led = radioLedChangeRef.current
+    if (led !== null && led.slotId === slotId) {
+      setRadioLedChange(null)
+      if (radioStageAppliedLedRef.current === led) radioStageAppliedLedRef.current = null
+      cancelStagedSwap('manual-overrides-radio')
+      radioGestureRef.current = radioGestureRef.current.filter(
+        (g) => !(g.slotId === slotId && g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind))
+      )
+      scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+      if (radioOnRef.current) void armRadioPick()
+    }
     void resolveAndWarmPick(pick).then((stem) => {
       const entry = manualChangesRef.current.get(slotId)
       if (entry === undefined || entry.pick !== pick) return
@@ -4992,7 +5051,8 @@ export function DiscoverPanel({
       const staged = radioStageRef.current
       if (
         staged !== null &&
-        !staged.slotIds.includes(slotId) &&
+        // This manual entry is not in the stage (radio's own row may be).
+        (staged.manual === null || !staged.manual.has(slotId)) &&
         radioLedChangeRef.current?.atBars === undefined &&
         radioBarsToWrapNow() >= MANUAL_RESTAGE_MIN_BARS
       ) {
@@ -5047,6 +5107,15 @@ export function DiscoverPanel({
     const pick = await pickForSlot(slotId, slot.kinds)
     if (pick === null || pick.candidate === null) return
     if (!radioOnRef.current) return
+    // The user queued a manual change on this row while the pick was in
+    // flight. That change wins the row, so this pick is stale: discard it
+    // and choose again among the rest. Terminates -- the next call filters
+    // this row out, and with every eligible row waiting it picks nothing --
+    // and only if nothing else has armed radio in the meantime.
+    if (manualChangesRef.current.has(slotId)) {
+      if (radioPendingRef.current === null) void armRadioPick()
+      return
+    }
     // Resolve and warm it -- see resolveAndWarmPick for the three warms
     // and the four fixes they record.
     void resolveAndWarmPick(pick).then((stem) => {
