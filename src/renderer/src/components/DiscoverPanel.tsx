@@ -3810,7 +3810,11 @@ export function DiscoverPanel({
     applySlotsSnapshot(snapshot)
   }
 
-  function addSlot(kinds: DiscoverSlotKind[]): void {
+  // While radio runs, the new row appears at once but silent, and joins at
+  // the loop top: it is not previewing, so its roll queues as `joining`,
+  // and with candidate null until the landing's commitSlotPick,
+  // reportSlotResolution has nothing to auto-join it on before then.
+  function addSlot(kinds: DiscoverSlotKind[], immediate = false): void {
     pushUndoSnapshot()
     const id = freshSlotId()
     setSlots((prev) => [
@@ -3819,9 +3823,9 @@ export function DiscoverPanel({
     ])
     const projectIsEmpty = !Object.values(rifffsState).some((r) => r.startBar !== undefined)
     if (projectIsEmpty) {
-      void rollRandomForSlot(id, kinds)
+      void rollRandomForSlot(id, kinds, immediate)
     } else {
-      void rollForSlot(id, kinds)
+      void rollForSlot(id, kinds, immediate)
     }
   }
 
@@ -4108,16 +4112,25 @@ export function DiscoverPanel({
 
   // Direct request, 2026-09-21 (combination slots), reworked twice on
   // 2026-09-22 -- final shape: a plain click adds a slot right away (single
-  // click stays the fast path); cmd-click ARMS a chip into this pending
+  // click stays the fast path); shift-click ARMS a chip into this pending
   // selection instead (again to disarm), and the next plain click adds ONE
-  // slot with everything armed plus the one clicked ("cmd-click drums,
+  // slot with everything armed plus the one clicked ("shift-click drums,
   // click bright = a drums · bright slot"). The row's order never changes,
   // so combining never needs the cursor to move. Esc disarms.
   //
+  // Combining was cmd-click until 2026-09-29, when Cmd became "land it
+  // right away" on every button that brings in a stem while radio runs
+  // (docs/superpowers/specs/2026-09-29-radio-manual-changes-land-on-the-
+  // top-design.md). `immediate` goes to whichever addSlot the click makes.
+  //
   const [pendingAddKinds, setPendingAddKinds] = useState<DiscoverSlotKind[]>([])
 
-  function handleAddRowKindClick(kind: DiscoverSlotKind, arm: boolean): void {
-    if (arm) {
+  function handleAddRowKindClick(
+    kind: DiscoverSlotKind,
+    combine: boolean,
+    immediate: boolean
+  ): void {
+    if (combine) {
       setPendingAddKinds((prev) => toggleSlotKind(prev, kind, { allowEmpty: true }))
       return
     }
@@ -4127,7 +4140,7 @@ export function DiscoverPanel({
       ? pendingAddKinds
       : toggleSlotKind(pendingAddKinds, kind, { allowEmpty: true })
     if (withClicked.length === 0) return
-    addSlot(withClicked)
+    addSlot(withClicked, immediate)
     setPendingAddKinds([])
   }
 
@@ -4159,7 +4172,7 @@ export function DiscoverPanel({
   // 2026-09-22 every kind can draw audio-in/mic stems too, and the roll
   // itself still honours the source dial and the my-sounds switch (the
   // kind stays random).
-  function addRandomSlot(): void {
+  function addRandomSlot(immediate = false): void {
     pushUndoSnapshot()
     const id = freshSlotId()
     const kinds = [randomDiscoverSlotKind(DISCOVER_SLOT_KIND_OPTIONS)]
@@ -4167,7 +4180,7 @@ export function DiscoverPanel({
       ...prev,
       { id, kinds, locked: false, candidate: null, hasRerolled: false, gain: 1 }
     ])
-    void rollRandomForSlot(id, kinds)
+    void rollRandomForSlot(id, kinds, immediate)
     setPendingAddKinds([])
   }
 
@@ -4339,16 +4352,23 @@ export function DiscoverPanel({
     scheduleSyncPreviewToEngine(next)
   }
 
+  /** Takes a row's waiting manual change out of the queue, and withdraws
+   * any stage that may be carrying it; stepRadioStage re-stages whatever
+   * else was waiting. A no-op for a row with nothing waiting -- and so
+   * always, with radio off, where nothing ever waits. */
+  function withdrawManualChange(id: string, reason: string): void {
+    if (!manualChangesRef.current.has(id)) return
+    const next = new Map(manualChangesRef.current)
+    next.delete(id)
+    setManualChanges(next)
+    cancelStagedSwap(reason)
+  }
+
   function removeSlot(id: string): void {
-    // A waiting manual change dies with its row -- the ONLY thing that
-    // withdraws one (spec behaviour 6) -- and so does any stage carrying
-    // it. Step (3) re-stages whatever else was waiting.
-    if (manualChangesRef.current.has(id)) {
-      const next = new Map(manualChangesRef.current)
-      next.delete(id)
-      setManualChanges(next)
-      cancelStagedSwap('manual-change-removed')
-    }
+    // A waiting manual change dies with its row -- the only thing a padlock
+    // or a mute cannot do to it (spec behaviour 6) -- and so does any stage
+    // carrying it. Step (3) re-stages whatever else was waiting.
+    withdrawManualChange(id, 'manual-change-removed')
     pushUndoSnapshot()
     setSlots((prev) => prev.filter((s) => s.id !== id))
     forgetSlotResolution(id)
@@ -4384,10 +4404,45 @@ export function DiscoverPanel({
   // mix on its own, same as any other slot with a real candidate (see
   // reportSlotResolution's own auto-join-on-first-resolve behavior) -- no
   // special-casing needed here.
-  function duplicateSlot(id: string): void {
+  //
+  // While radio runs (and Cmd is not held) the copy appears at once but
+  // silent, and joins at the loop top: it is created empty, and the
+  // source's CURRENT candidate is queued for it as a joining change. Only
+  // a source with a candidate can be expressed as a pick -- a seeded source
+  // (seedStem, no candidate) or one with nothing at all is duplicated at
+  // once, exactly as below.
+  function duplicateSlot(id: string, immediate = false): void {
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
     pushUndoSnapshot()
+    const candidate = slot.candidate
+    if (radioOnRef.current && !immediate && candidate !== null) {
+      const copyId = freshSlotId()
+      setSlots((prev) => [
+        ...prev,
+        {
+          id: copyId,
+          kinds: slot.kinds,
+          locked: slot.locked,
+          candidate: null,
+          hasRerolled: false,
+          gain: slot.gain
+        }
+      ])
+      // The source's own match-meter bars, when they describe this
+      // candidate -- the same pickBar an exact copy would carry.
+      const bar = slot.pickBar?.candidate === candidate ? slot.pickBar : null
+      queueManualChange(
+        copyId,
+        {
+          candidate,
+          barUsed: bar?.barUsed ?? null,
+          barRequested: bar?.barRequested ?? traitMatchBar
+        },
+        true
+      )
+      return
+    }
     setSlots((prev) => [...prev, { ...slot, id: freshSlotId() }])
   }
 
@@ -4421,7 +4476,24 @@ export function DiscoverPanel({
   // specific candidate to use. Direct request, 2026-09-16 (temporal
   // adjacency exploration) -- see docs/superpowers/specs/2026-09-16-
   // discover-temporal-adjacency-design.md.
-  function swapSlotFromNearby(id: string, candidate: DiscoverCandidate): void {
+  //
+  // While radio runs it waits for the loop top instead, unless `immediate`
+  // (Cmd held on the popover pick). The undo snapshot is taken at the
+  // click either way, as rerollSlot's is.
+  function swapSlotFromNearby(id: string, candidate: DiscoverCandidate, immediate = false): void {
+    if (radioOnRef.current && !immediate) {
+      if (manualChangesRef.current.has(id)) return
+      pushUndoSnapshot()
+      queueManualChange(
+        id,
+        // barRequested: the bar a ranked roll would have asked for; a
+        // nearby pick applies none, hence barUsed null.
+        { candidate, barUsed: null, barRequested: traitMatchBar },
+        !previewingSlotIdsRef.current.has(id)
+      )
+      return
+    }
+    if (immediate) withdrawManualChange(id, 'manual-change-immediate')
     pushUndoSnapshot()
     setSlots((prev) =>
       prev.map((s) =>
@@ -4451,6 +4523,9 @@ export function DiscoverPanel({
     // No anchor is the desktop's "there is no adjacent button at all" state,
     // not an error -- leave the slot exactly as it is.
     if (!slot || !anchor) return
+    // A row waiting for the loop top ignores it (swapSlotFromNearby would
+    // too) -- checked before the lookup, so it costs nothing.
+    if (radioOnRef.current && manualChangesRef.current.has(id)) return
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
     rerollGenerationRef.current.set(id, myGeneration)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
@@ -4704,9 +4779,32 @@ export function DiscoverPanel({
   // needs to roll a slot in the SAME tick it mints it, before that slot has
   // made it into `slots` state (a plain function defined in this render
   // still closes over THIS render's `slots`, which doesn't include it yet).
-  async function rollForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<void> {
+  //
+  // While radio runs, the pick waits for the loop top (queueManualChange)
+  // unless `immediate` (Cmd held on the click), which takes exactly the
+  // radio-off path. Queueing is decided at the CALL and re-checked when the
+  // pick returns: startRadio lays its bed down through addSlot a moment
+  // BEFORE it switches radio on, and those first rolls must commit the way
+  // they always have -- a row queued to join a mix that is not playing yet
+  // would never land. Radio switched off mid-pick means instant again.
+  async function rollForSlot(
+    id: string,
+    kinds: DiscoverSlotKind[],
+    immediate = false
+  ): Promise<void> {
+    const queue = radioOnRef.current && !immediate
+    // A row already waiting ignores a second roll -- checked before the
+    // pick, so it costs nothing.
+    if (queue && manualChangesRef.current.has(id)) return
     const pick = await pickForSlot(id, kinds)
     if (pick === null) return
+    if (queue && radioOnRef.current) {
+      queueManualChange(id, pick, !previewingSlotIdsRef.current.has(id))
+      return
+    }
+    // Cmd on a row that is already waiting (reroll-all reaches those): the
+    // waiting change goes first, or the row would land twice.
+    if (immediate) withdrawManualChange(id, 'manual-change-immediate')
     commitSlotPick(id, pick)
   }
 
@@ -4742,11 +4840,14 @@ export function DiscoverPanel({
     )
   }
 
-  async function rerollSlot(id: string): Promise<void> {
+  async function rerollSlot(id: string, immediate = false): Promise<void> {
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
+    // A waiting row ignores it (rollForSlot would too) -- checked before
+    // the undo snapshot, so an ignored click leaves no empty undo step.
+    if (radioOnRef.current && !immediate && manualChangesRef.current.has(id)) return
     pushUndoSnapshot()
-    await rollForSlot(id, slot.kinds)
+    await rollForSlot(id, slot.kinds, immediate)
   }
 
   // Combination slots, 2026-09-21: the kind picker on a slot's own label.
@@ -4756,6 +4857,10 @@ export function DiscoverPanel({
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
     pushUndoSnapshot()
+    // A change waiting on this row was drawn for the OLD kinds: it goes,
+    // and the roll below queues one for the new kinds (radio on) or lands
+    // at once (radio off, where nothing ever waits).
+    withdrawManualChange(id, 'manual-change-kinds')
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, kinds } : s)))
     void rollForSlot(id, kinds)
   }
@@ -4770,7 +4875,16 @@ export function DiscoverPanel({
   // SAME stale-response guard against each other (a random roll landing
   // after a NEWER normal reroll for the same slot, or vice versa, must
   // not overwrite it).
-  async function rollRandomForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<void> {
+  //
+  // Queues while radio runs unless `immediate`, decided at the call and
+  // re-checked at the result -- see rollForSlot for why both.
+  async function rollRandomForSlot(
+    id: string,
+    kinds: DiscoverSlotKind[],
+    immediate = false
+  ): Promise<void> {
+    const queue = radioOnRef.current && !immediate
+    if (queue && manualChangesRef.current.has(id)) return
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
     rerollGenerationRef.current.set(id, myGeneration)
     setRolledCount((n) => n + 1)
@@ -4798,6 +4912,18 @@ export function DiscoverPanel({
         )
       }
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
+      if (queue && radioOnRef.current) {
+        // As a SlotPick, so the landing writes it through commitSlotPick.
+        // barRequested is the bar a ranked roll would have asked for; this
+        // path applies none, hence barUsed null.
+        queueManualChange(
+          id,
+          { candidate, barUsed: null, barRequested: traitMatchBar },
+          !previewingSlotIdsRef.current.has(id)
+        )
+        return
+      }
+      if (immediate) withdrawManualChange(id, 'manual-change-immediate')
       setSlots((prev) =>
         prev.map((s) =>
           s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
@@ -4816,14 +4942,16 @@ export function DiscoverPanel({
     }
   }
 
-  async function rerollRandomSlot(id: string): Promise<void> {
+  async function rerollRandomSlot(id: string, immediate = false): Promise<void> {
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
+    // See rerollSlot: an ignored click leaves no empty undo step.
+    if (radioOnRef.current && !immediate && manualChangesRef.current.has(id)) return
     pushUndoSnapshot()
-    await rollRandomForSlot(id, slot.kinds)
+    await rollRandomForSlot(id, slot.kinds, immediate)
   }
 
-  async function rerollAll(): Promise<void> {
+  async function rerollAll(immediate = false): Promise<void> {
     // Direct report, 2026-09-17: "clicking the dice in discover if there
     // are no slots should add a stem" -- an empty loop has nothing for the
     // loop below to iterate over, so this button was a silent no-op on a
@@ -4834,7 +4962,7 @@ export function DiscoverPanel({
     // purity lint rule, and a random FIRST kind isn't something the direct
     // report actually asked for.
     if (slots.length === 0) {
-      addSlot([DISCOVER_SLOT_KIND_OPTIONS[0]])
+      addSlot([DISCOVER_SLOT_KIND_OPTIONS[0]], immediate)
       return
     }
     // One undo snapshot for the WHOLE batch, taken up front -- calls
@@ -4864,7 +4992,10 @@ export function DiscoverPanel({
     for (const slotId of slotIds) {
       const current = slotsRef.current.find((s) => s.id === slotId)
       if (!current) continue
-      if (!current.locked) await rollForSlot(current.id, current.kinds)
+      // While radio runs each row queues as its pick returns, and a row
+      // already waiting is skipped by rollForSlot itself. The undo snapshot
+      // above still covers them: undo applies to the committed state.
+      if (!current.locked) await rollForSlot(current.id, current.kinds, immediate)
     }
   }
 
@@ -4984,8 +5115,12 @@ export function DiscoverPanel({
    * ignored (Elling, 2026-09-29). `joining` is a row that is not in the
    * mix yet (added or duplicated while radio ran).
    *
-   * Nothing calls this yet: Task 4 of the 2026-09-29 manual-changes plan
-   * routes every in-scope action here while radio runs. */
+   * Every way of bringing in a stem routes here while radio runs, unless
+   * Cmd was held (`immediate`): rollForSlot, rollRandomForSlot,
+   * swapSlotFromNearby and duplicateSlot -- and through them rerollSlot,
+   * rerollRandomSlot, rerollAll, addSlot, addRandomSlot, changeSlotKinds and
+   * the phone. Radio's own picks never do: they go through pickForSlot and
+   * commitSlotPick directly. */
   function queueManualChange(slotId: string, pick: SlotPick, joining: boolean): boolean {
     if (manualChangesRef.current.has(slotId)) return false
     const next = new Map(manualChangesRef.current)
@@ -5036,6 +5171,11 @@ export function DiscoverPanel({
         const dropped = new Map(manualChangesRef.current)
         dropped.delete(slotId)
         setManualChanges(dropped)
+        // A JOINING row had nothing to keep: dropping its change alone would
+        // leave it blank and silent for good. Commit the pick instead, so it
+        // shows "no match" or its failed resolve exactly as it would with
+        // radio off. It is not in the mix, so nothing is heard.
+        if (entry.joining) commitSlotPick(slotId, pick)
         return
       }
       const ready = new Map(manualChangesRef.current)
@@ -5073,10 +5213,6 @@ export function DiscoverPanel({
     if (clock === null || !(loopBars > 0)) return 0
     return Math.max(0, loopBars - clock.lastPos)
   }
-  // TEMPORARY (Task 3 -> Task 4 of the 2026-09-29 manual-changes plan):
-  // nothing routes into the queue until Task 4, and noUnusedLocals fails
-  // the build on an uncalled function. Delete this line in Task 4.
-  void queueManualChange
 
   /** Chooses radio's NEXT change and warms it. Called right after each
    * change lands (and once when radio starts), so the prefetch gets the
@@ -6080,7 +6216,7 @@ export function DiscoverPanel({
           />
         )}
         <button
-          onClick={() => void rerollAll()}
+          onClick={(e) => void rerollAll(e.metaKey)}
           disabled={rerollingSlotIds.size > 0}
           aria-label={rerollingSlotIds.size > 0 ? 'rerolling…' : 'similar all'}
           data-tooltip={rerollingSlotIds.size > 0 ? 'rerolling…' : 'similar all'}
@@ -6344,9 +6480,9 @@ export function DiscoverPanel({
             onToggleHook={() => toggleSlotHook(slot.id)}
             onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
             onRemove={() => removeSlot(slot.id)}
-            onDuplicate={() => duplicateSlot(slot.id)}
-            onReroll={() => void rerollSlot(slot.id)}
-            onRerollRandom={() => void rerollRandomSlot(slot.id)}
+            onDuplicate={(immediate) => duplicateSlot(slot.id, immediate)}
+            onReroll={(immediate) => void rerollSlot(slot.id, immediate)}
+            onRerollRandom={(immediate) => void rerollRandomSlot(slot.id, immediate)}
             onTogglePreview={() => toggleSlotPreview(slot.id)}
             onToggleSolo={() => toggleSlotSolo(slot.id)}
             onToggleFavourite={() => {
@@ -6355,7 +6491,9 @@ export function DiscoverPanel({
             onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
             onSlotResolutionAbandoned={() => abandonSlotResolution(slot.id)}
             onGainChange={(gain) => updateSlotGain(slot.id, gain)}
-            onSwapFromNearby={(candidate) => swapSlotFromNearby(slot.id, candidate)}
+            onSwapFromNearby={(candidate, immediate) =>
+              swapSlotFromNearby(slot.id, candidate, immediate)
+            }
             onChangeKinds={(kinds) => changeSlotKinds(slot.id, kinds)}
             onReclassify={(role) => void reclassifySlot(slot.id, role)}
             soundSourceEndlesss={soundSourceForLean(sourceLean).endlesss}
@@ -6441,7 +6579,7 @@ export function DiscoverPanel({
                   {kind === DISCOVER_TRAIT_SLOT_KINDS[0] && <AddRowDivider />}
                   <AddRowChip
                     selected={selected}
-                    onClick={(e) => handleAddRowKindClick(kind, e.metaKey)}
+                    onClick={(e) => handleAddRowKindClick(kind, e.shiftKey, e.metaKey)}
                   >
                     {DISCOVER_SLOT_KIND_LABEL[kind]}
                   </AddRowChip>
@@ -6452,7 +6590,11 @@ export function DiscoverPanel({
                 a slot seeded from a genuinely random stem rather than any
                 one kind's own pool (see addRandomSlot's own doc comment).
                 Sits right after warm, in the trait group, since 2026-09-22. */}
-            <AddRowChip selected={false} title="random stem" onClick={addRandomSlot}>
+            <AddRowChip
+              selected={false}
+              title="random stem"
+              onClick={(e) => addRandomSlot(e.metaKey)}
+            >
               + random
             </AddRowChip>
             <AddRowDivider />
@@ -6563,7 +6705,7 @@ export function DiscoverPanel({
             color: 'var(--ra-text-3)'
           }}
         >
-          hold cmd to combine
+          hold shift to combine
         </div>
       </div>
     </div>
@@ -6969,14 +7111,16 @@ function DiscoverSlotRow({
    * state (kind, candidate, gain, lock, seedStem) into a brand-new slot
    * appended to the end of the list. See duplicateSlot's own doc comment
    * for why the new row needs no special-casing to resolve/auto-join the
-   * mix. */
-  onDuplicate: () => void
-  onReroll: () => void
+   * mix. `immediate` is Cmd held on the click (2026-09-29): while radio
+   * runs, the stem lands right away instead of waiting for the loop top --
+   * the same flag on onReroll, onRerollRandom and onSwapFromNearby. */
+  onDuplicate: (immediate: boolean) => void
+  onReroll: (immediate: boolean) => void
   /** DiscoverPanel's own rerollRandomSlot -- bypasses confirmed/embedding/
    * instrument matching entirely, picking any stem from the user's own
    * library at random. Direct request: an escape hatch for exactly the
    * "stuck at no match regardless of chaos/confirmation" case. */
-  onRerollRandom: () => void
+  onRerollRandom: (immediate: boolean) => void
   /** DiscoverPanel's own updateSlotGain -- fires on every tick of a drag
    * directly on this row's own waveform (handleGainDragStart, below),
    * mirroring StemWaveformRow.tsx's own "envelope" volume-drag gesture
@@ -7026,7 +7170,7 @@ function DiscoverSlotRow({
    * candidate from this slot's own "explore nearby" popover. Same instant,
    * undoable swap as a normal reroll landing; see swapSlotFromNearby's own
    * doc comment in DiscoverPanel. */
-  onSwapFromNearby: (candidate: DiscoverCandidate) => void
+  onSwapFromNearby: (candidate: DiscoverCandidate, immediate: boolean) => void
   /** DiscoverPanel's own changeSlotKinds -- fired by the kind picker on
    * every chip toggle (the panel rerolls this slot). */
   onChangeKinds: (kinds: DiscoverSlotKind[]) => void
@@ -8164,9 +8308,9 @@ function DiscoverSlotRow({
         <RowIconButton
           gridColumn={13}
           tooltip="same kind"
-          onClick={() => {
+          onClick={(e) => {
             setRerollAction('similar')
-            onReroll()
+            onReroll(e.metaKey)
           }}
           disabled={rerolling || manualWaiting}
           pulsing={rerolling && rerollAction === 'similar'}
@@ -8196,16 +8340,16 @@ function DiscoverSlotRow({
         <RowIconButton
           gridColumn={15}
           tooltip="any stem"
-          onClick={() => {
+          onClick={(e) => {
             setRerollAction('random')
-            onRerollRandom()
+            onRerollRandom(e.metaKey)
           }}
           disabled={rerolling || manualWaiting}
           pulsing={rerolling && rerollAction === 'random'}
         >
           <Shuffle size={12} />
         </RowIconButton>
-        <RowIconButton gridColumn={16} tooltip="duplicate" onClick={onDuplicate}>
+        <RowIconButton gridColumn={16} tooltip="duplicate" onClick={(e) => onDuplicate(e.metaKey)}>
           <Copy size={12} />
         </RowIconButton>
       </div>

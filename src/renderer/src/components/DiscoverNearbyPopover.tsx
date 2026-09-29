@@ -38,7 +38,7 @@ function CandidateRow({
   onClick
 }: {
   candidate: AdjacentDiscoverCandidate
-  onClick: () => void
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
 }): React.JSX.Element {
   return (
     <button
@@ -97,8 +97,8 @@ function Section({
   label: string
   candidates: AdjacentDiscoverCandidate[]
   loading: boolean
-  onStep: () => void
-  onPick: (candidate: AdjacentDiscoverCandidate) => void
+  onStep: (e: React.MouseEvent<HTMLButtonElement>) => void
+  onPick: (candidate: AdjacentDiscoverCandidate, immediate: boolean) => void
 }): React.JSX.Element {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -124,7 +124,7 @@ function Section({
       </div>
       <div style={{ display: 'flex', gap: 6, minHeight: THUMB_HEIGHT + 14 }}>
         {candidates.map((c) => (
-          <CandidateRow key={c.stemCID} candidate={c} onClick={() => onPick(c)} />
+          <CandidateRow key={c.stemCID} candidate={c} onClick={(e) => onPick(c, e.metaKey)} />
         ))}
         {!loading && candidates.length === 0 && (
           <span style={{ fontSize: 9, color: 'var(--ra-text-4)', alignSelf: 'center' }}>
@@ -174,8 +174,10 @@ export function DiscoverNearbyPopover({
   soundSource: DiscoverSoundSourceFilter
   /** DiscoverSlotRow's own onSwapFromNearby -- fires on every pick, INCLUDING
    * a step-button pick or "back to start." This popover recenters its own
-   * browsing around whatever was just picked; it does NOT close itself. */
-  onPick: (candidate: DiscoverCandidate) => void
+   * browsing around whatever was just picked; it does NOT close itself.
+   * `immediate` is Cmd held on the click: while radio runs, the pick lands
+   * right away instead of waiting for the loop top (2026-09-29). */
+  onPick: (candidate: DiscoverCandidate, immediate: boolean) => void
   onClose: () => void
   ignoreRef: React.RefObject<HTMLElement | null>
 }): React.JSX.Element {
@@ -228,8 +230,8 @@ export function DiscoverNearbyPopover({
   const candidates = resultForCurrent?.candidates ?? { newer: [], older: [] }
   const loading = resultForCurrent === null
 
-  function handlePick(candidate: DiscoverCandidate): void {
-    onPick(candidate)
+  function handlePick(candidate: DiscoverCandidate, immediate: boolean): void {
+    onPick(candidate, immediate)
     setCenterCandidate(candidate)
   }
 
@@ -306,7 +308,7 @@ export function DiscoverNearbyPopover({
           near {centerCandidate.presetName || '(untitled)'}
         </span>
         <button
-          onClick={() => handlePick(startCandidate)}
+          onClick={(e) => handlePick(startCandidate, e.metaKey)}
           disabled={atStart}
           aria-label="back to start"
           data-tooltip="back to original"
@@ -331,7 +333,7 @@ export function DiscoverNearbyPopover({
         label="earlier"
         candidates={candidates.older}
         loading={loading}
-        onStep={() => candidates.older[0] && handlePick(candidates.older[0])}
+        onStep={(e) => candidates.older[0] && handlePick(candidates.older[0], e.metaKey)}
         onPick={handlePick}
       />
       {/* newer = recorded chronologically AFTER the center -- "later". */}
@@ -339,7 +341,7 @@ export function DiscoverNearbyPopover({
         label="later"
         candidates={candidates.newer}
         loading={loading}
-        onStep={() => candidates.newer[0] && handlePick(candidates.newer[0])}
+        onStep={(e) => candidates.newer[0] && handlePick(candidates.newer[0], e.metaKey)}
         onPick={handlePick}
       />
     </div>
