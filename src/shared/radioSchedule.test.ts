@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { HOOK_HOLD_FACTOR, REPLACE_SOON_FACTOR, type RadioSlotFlags } from './radioSlotFlags'
 import {
   DEFAULT_RADIO_LOOP_END_BARS,
   DEFAULT_RADIO_PACE,
@@ -37,7 +38,8 @@ import {
   radioBarsUntilChange,
   radioChangeDueAtNextWrap,
   radioChangeLandsAtBar,
-  type RadioClock
+  type RadioClock,
+  type RadioTurnover
 } from './radioSchedule'
 
 describe('radio paces', () => {
@@ -589,6 +591,318 @@ describe('pickRadioSlotId', () => {
       const picked = pickRadioSlotId(['x', 'y'], 'x', Math.random)
       expect(['x', 'y']).toContain(picked)
     }
+  })
+})
+
+describe('turnover fairness, the hook and replace-soon', () => {
+  function lcg(seed: number): () => number {
+    let s = seed
+    return (): number => {
+      s = (s * 1664525 + 1013904223) % 4294967296
+      return s / 4294967296
+    }
+  }
+
+  /** What share of the time some layer is sitting seven or more turns
+   * stale -- the drought Elling actually complained about ("right now
+   * channel four is long and repeating many times").
+   *
+   * Measured only once every slot has changed at least once: before that
+   * a slot has no recency to be stale relative to, and counting the
+   * warm-up would report a drought that is really just the start of the
+   * session. */
+  function droughtRate(
+    turnover: RadioTurnover,
+    ids: string[],
+    draws: number,
+    seeds: number
+  ): number {
+    let long = 0
+    let samples = 0
+    for (let seed = 1; seed <= seeds; seed++) {
+      const random = lcg(seed * 977)
+      const changedAt = new Map<string, number>()
+      let last: string | null = null
+      for (let turn = 1; turn <= draws; turn++) {
+        const picked = pickRadioSlotId(ids, last, { turnover, changedAt, turn, random })
+        if (picked === null) continue
+        changedAt.set(picked, turn)
+        last = picked
+        if (changedAt.size < ids.length) continue
+        for (const id of ids) {
+          samples++
+          if (turn - (changedAt.get(id) ?? turn) >= 7) long++
+        }
+      }
+    }
+    return long / samples
+  }
+
+  /** How many turns until `watched` is next picked, starting from a bed
+   * where it is the STALEST layer -- which is the state he is in when he
+   * reaches for the control, because "long and repeating many times" IS
+   * high staleness. The one-shot number, not a steady-state rate: the
+   * replace-soon flag is cleared by the change that honours it, so it only
+   * ever gets to influence one draw sequence. */
+  function turnsUntilPicked(
+    watched: string,
+    ids: string[],
+    staleness: number,
+    flags: RadioSlotFlags,
+    trials: number,
+    random: () => number
+  ): { mean: number; nextChange: number } {
+    let total = 0
+    let immediate = 0
+    for (let trial = 0; trial < trials; trial++) {
+      const start = 100
+      const changedAt = new Map<string, number>()
+      changedAt.set(watched, start - staleness)
+      ids.forEach((id, i) => {
+        if (id !== watched) changedAt.set(id, start - (i % 3))
+      })
+      let last: string | null = null
+      for (let k = 1; k <= 200; k++) {
+        const turn = start + k
+        const picked = pickRadioSlotId(ids, last, {
+          turnover: 'even',
+          changedAt,
+          turn,
+          flags,
+          random
+        })
+        if (picked === null) continue
+        changedAt.set(picked, turn)
+        last = picked
+        if (picked === watched) {
+          total += k
+          if (k === 1) immediate++
+          break
+        }
+      }
+    }
+    return { mean: total / trials, nextChange: immediate / trials }
+  }
+
+  /** How many turns a given slot waits between changes over a long run,
+   * under a full four-layer bed. The steady-state number, which is the
+   * right one for the HOOK: a hook is never cleared, so it is evaluated
+   * every turn for as long as radio runs. */
+  function meanTurnsBetweenChanges(
+    turnover: RadioTurnover,
+    ids: string[],
+    watched: string,
+    flags: RadioSlotFlags,
+    draws: number,
+    random: () => number
+  ): number {
+    const changedAt = new Map<string, number>()
+    let last: string | null = null
+    let hits = 0
+    for (let turn = 1; turn <= draws; turn++) {
+      const picked = pickRadioSlotId(ids, last, { turnover, changedAt, turn, flags, random })
+      if (picked === null) continue
+      changedAt.set(picked, turn)
+      last = picked
+      if (picked === watched) hits++
+    }
+    return hits === 0 ? Infinity : draws / hits
+  }
+
+  it('reproduces the shipped uniform draw when no options are given', () => {
+    expect(pickRadioSlotId(['a', 'b'], 'a', lcg(1))).toBe('b')
+    expect(pickRadioSlotId([], null)).toBeNull()
+    expect(pickRadioSlotId(['a'], 'a', lcg(1))).toBe('a')
+  })
+
+  it('random still strands a layer -- Elling watched one sit for five minutes', () => {
+    // (2/3)^7 is about 6% per turn, which over a session is close to
+    // certain. Kept as a CHOICE, not a bug: "this is good for
+    // consistency".
+    const ids = ['a', 'b', 'c', 'd']
+    expect(droughtRate('random', ids, 600, 8)).toBeGreaterThan(0.05)
+  })
+
+  it('even cuts droughts to a third, without pretending to abolish them', () => {
+    // Measured: 6.4% of the time under `random`, 2.0% under `even`. NOT
+    // zero, and that is the design -- a rotation would abolish droughts
+    // and be audible as a pattern, which is the exact failure the pace
+    // windows exist to avoid. `even` makes the drought work against
+    // itself; it does not forbid it.
+    const ids = ['a', 'b', 'c', 'd']
+    expect(droughtRate('even', ids, 600, 8)).toBeLessThan(droughtRate('random', ids, 600, 8) / 2.5)
+    expect(droughtRate('even', ids, 600, 8)).toBeGreaterThan(0)
+  })
+
+  it('weights a long-waiting slot far above a just-changed one', () => {
+    // 'fresh' changed at turn 10 out of turn 10 -> staleness 0 -> weight 1.
+    // 'stale' last changed at turn 4 -> staleness 6 -> weight 7.
+    const changedAt = new Map([
+      ['fresh', 10],
+      ['stale', 4]
+    ])
+    let staleWins = 0
+    const random = lcg(3)
+    for (let i = 0; i < 200; i++) {
+      const picked = pickRadioSlotId(['fresh', 'stale'], null, {
+        turnover: 'even',
+        changedAt,
+        turn: 10,
+        random
+      })
+      if (picked === 'stale') staleWins++
+    }
+    // Roughly seven of every eight.
+    expect(staleWins).toBeGreaterThan(150)
+    expect(changedAt.size).toBe(2) // the function does not mutate its input
+  })
+
+  it('treats an unknown id as just-changed, so a cold start is a uniform draw', () => {
+    const seen = new Set<string | null>()
+    for (const r of [0, 0.34, 0.67, 0.9999]) {
+      seen.add(
+        pickRadioSlotId(['a', 'b', 'c'], null, { turnover: 'even', turn: 40, random: () => r })
+      )
+    }
+    expect(seen).toEqual(new Set(['a', 'b', 'c']))
+  })
+
+  it('holds the hook eight times longer, under either turnover mode', () => {
+    const random = lcg(11)
+    let hookWins = 0
+    for (let i = 0; i < 400; i++) {
+      const picked = pickRadioSlotId(['hook', 'other'], null, {
+        turnover: 'random',
+        flags: { hook: 'hook' },
+        random
+      })
+      if (picked === 'hook') hookWins++
+    }
+    expect(HOOK_HOLD_FACTOR).toBe(8)
+    // weights 1/8 and 1 -> the hook takes about one in nine.
+    expect(hookWins).toBeGreaterThan(10)
+    expect(hookWins).toBeLessThan(100)
+  })
+
+  it('still turns the hook over eventually, because its staleness grows', () => {
+    const ids = ['hook', 'b', 'c']
+    const changedAt = new Map<string, number>()
+    let last: string | null = null
+    const random = lcg(5)
+    let hookPicked = false
+    for (let turn = 1; turn <= 200; turn++) {
+      const picked = pickRadioSlotId(ids, last, {
+        turnover: 'even',
+        changedAt,
+        turn,
+        flags: { hook: 'hook' },
+        random
+      })
+      if (picked === null) continue
+      if (picked === 'hook') hookPicked = true
+      changedAt.set(picked, turn)
+      last = picked
+    }
+    // A hook that NEVER turns over is the padlock, which already exists.
+    expect(hookPicked).toBe(true)
+  })
+
+  it('holds a hooked layer more than twice as long as a normal one', () => {
+    // The steady-state numbers Elling can hear. Four layers, `even`.
+    // Measured: a normal layer every 4.0 turns, a hooked one every 9.7 --
+    // NOT eight times, because the divisor is fighting the hook's own
+    // staleness, which grows every turn it is passed over. That is the
+    // design working, not the design missing: at `mid` (about 28s a turn)
+    // it is two minutes against four and a half.
+    const ids = ['a', 'b', 'c', 'd']
+    const plain = meanTurnsBetweenChanges('even', ids, 'a', {}, 4000, lcg(21))
+    const hooked = meanTurnsBetweenChanges('even', ids, 'a', { a: 'hook' }, 4000, lcg(21))
+    expect(plain).toBeGreaterThan(3.5)
+    expect(plain).toBeLessThan(4.5)
+    expect(hooked).toBeGreaterThan(2 * plain)
+  })
+
+  it('makes a tired layer the next change more often than not', () => {
+    // The ONE-SHOT number, which is the right one for replace-soon: the
+    // flag is cleared by the change that honours it, so what matters is
+    // how long he waits after pressing, not a long-run rate.
+    //
+    // Measured at four layers, `even`, on a layer six turns stale (which
+    // is the state that makes him press it): unflagged it is the next
+    // change 47% of the time, flagged 77%. And on a layer he flags the
+    // moment it arrives -- zero staleness, "I do not like this one" --
+    // 17% becomes 47%, mean 3.3 turns becomes 1.8.
+    const ids = ['a', 'b', 'c', 'd']
+    const staleAlready = turnsUntilPicked('a', ids, 6, {}, 2000, lcg(21))
+    const staleFlagged = turnsUntilPicked('a', ids, 6, { a: 'replace-soon' }, 2000, lcg(21))
+    expect(staleFlagged.nextChange).toBeGreaterThan(0.7)
+    expect(staleFlagged.nextChange).toBeGreaterThan(staleAlready.nextChange + 0.2)
+    expect(staleFlagged.mean).toBeLessThan(1.5)
+
+    // The case that decided the factor. `even` ALREADY hurries a stale
+    // layer, so the flag has little left to add there -- it earns its
+    // keep on a layer that is not stale at all.
+    const freshFlagged = turnsUntilPicked('a', ids, 0, { a: 'replace-soon' }, 2000, lcg(21))
+    const freshPlain = turnsUntilPicked('a', ids, 0, {}, 2000, lcg(21))
+    expect(freshPlain.mean).toBeGreaterThan(3)
+    expect(freshFlagged.mean).toBeLessThan(2)
+  })
+
+  it('leaves radio a say -- a flagged layer is the favourite, not a certainty', () => {
+    // x4 rather than x8 on purpose: the row already has a `random` button
+    // for "now", and three flagged layers must stay a draw, not a queue.
+    const random = lcg(31)
+    let tiredWins = 0
+    for (let i = 0; i < 400; i++) {
+      const picked = pickRadioSlotId(['tired', 'b', 'c', 'd'], null, {
+        turnover: 'even',
+        flags: { tired: 'replace-soon' },
+        random
+      })
+      if (picked === 'tired') tiredWins++
+    }
+    expect(REPLACE_SOON_FACTOR).toBe(4)
+    // weights 4,1,1,1 -> four in seven, so it loses a real share of draws.
+    expect(tiredWins).toBeGreaterThan(180)
+    expect(tiredWins).toBeLessThan(300)
+  })
+
+  it('keeps three flagged layers a draw rather than a queue', () => {
+    // Decision 2: at-most-one is load-bearing for the hook and not for
+    // this. Being tired of three layers at once is ordinary, and x4 is
+    // small enough that the fourth still gets a real share.
+    const ids = ['a', 'b', 'c', 'd']
+    const flags: RadioSlotFlags = { a: 'replace-soon', b: 'replace-soon', c: 'replace-soon' }
+    const tired = meanTurnsBetweenChanges('even', ids, 'a', flags, 6000, lcg(41))
+    const spared = meanTurnsBetweenChanges('even', ids, 'd', flags, 6000, lcg(41))
+    expect(tired).toBeLessThan(spared)
+    // Two to one, not ten to one: the spared layer is still in the draw.
+    expect(spared / tired).toBeLessThan(3)
+    expect(spared / tired).toBeGreaterThan(1.4)
+  })
+
+  it('never picks the same slot twice running when there is a choice', () => {
+    const random = lcg(2)
+    for (let i = 0; i < 50; i++) {
+      expect(pickRadioSlotId(['a', 'b', 'c'], 'a', { turnover: 'even', random })).not.toBe('a')
+    }
+    // Not even the flagged one -- the hard exclusion is what stops a
+    // replace-soon layer from strobing before its flag is cleared.
+    for (let i = 0; i < 50; i++) {
+      expect(
+        pickRadioSlotId(['a', 'b', 'c'], 'a', {
+          turnover: 'even',
+          flags: { a: 'replace-soon' },
+          random
+        })
+      ).not.toBe('a')
+    }
+  })
+
+  it('still answers when the hook is the only eligible layer left', () => {
+    expect(pickRadioSlotId(['hook'], null, { turnover: 'even', flags: { hook: 'hook' } })).toBe(
+      'hook'
+    )
   })
 })
 

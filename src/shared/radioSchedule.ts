@@ -10,6 +10,7 @@
 // reason).
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
+import { radioSlotFlagWeightFactor, type RadioSlotFlags } from './radioSlotFlags'
 import { DEFAULT_RADIO_DROP_OUTS, normalizeRadioDropOuts, type RadioDropOuts } from './radioDropOut'
 import {
   DEFAULT_RADIO_TRANSITIONS,
@@ -669,29 +670,99 @@ export function radioChangeLandsAtBar(
   return landsAt
 }
 
+export interface RadioPickOptions {
+  /** `even` biases toward the least-recently-changed; `random` is the
+   * memoryless draw that shipped 2026-09-26. Omitted behaves as `random`,
+   * which is what keeps every pre-existing caller unchanged. */
+  turnover?: RadioTurnover
+  /** The logical turn at which each slot last changed. NOT wall time -- it
+   * increments once per committed change, so it stops with the transport
+   * for free, exactly like the clock does. */
+  changedAt?: ReadonlyMap<string, number>
+  /** The current turn number. */
+  turn?: number
+  /** The row's three-state hook / normal / replace-soon control. See
+   * radioSlotFlags.ts, which owns both factors and the arguments for
+   * them. */
+  flags?: RadioSlotFlags
+  random?: () => number
+}
+
 /** Which single layer turns over next.
  *
  * ONE at a time is the whole point (spec 3.1): everything changing
  * together is just a new loop on a timer, while one at a time lets a bed
  * you recognise evolve under you.
  *
- * `eligible` is decided by the caller -- unlocked, audible, already
- * holding a candidate, not mid-reroll. The only rule here is "not the same
- * one twice running", which is enough variety without a rotation nobody
- * asked for (a least-recently-changed order is an explicit "not now").
+ * `eligible` is decided by the caller through isRadioEligibleSlot --
+ * unlocked, audible, already holding a candidate, not mid-reroll. NOTHING
+ * HERE ADDS OR REMOVES AN ELIGIBILITY CONDITION; it only weights WITHIN
+ * that set, which is also why the padlock beats both flags without a line
+ * of code saying so: a locked slot never reaches this function.
+ *
+ * Under `even` the draw is weighted by STALENESS rather than rotated
+ * (spec 6.3). Strict round-robin is audible -- four layers turning over in
+ * the same order forever is a pattern, and a pattern is exactly what the
+ * pace windows exist to avoid -- so:
+ *
+ *     staleness(id) = turn - (changedAt.get(id) ?? turn)
+ *     weight(id)    = (staleness(id) + 1) * factor(flags[id])
+ *
+ * A slot that just changed weighs 1; one that has waited six turns weighs
+ * 7. The longer a drought runs the harder it works against itself, so
+ * droughts get short without any single turn ever becoming certain.
+ * `random` is the same machinery with every base weight pinned to 1 -- one
+ * code path, one set of tests.
+ *
+ * An UNKNOWN id counts as "just changed" (`?? turn`, weight 1). That is
+ * correct rather than convenient: addSlot performs a new slot's own first
+ * roll, so a slot radio has never touched has in fact just changed. The
+ * map needs no seeding and a cold start falls back to a uniform draw.
+ *
+ * "Never the same one twice running" survives from the shipped version.
+ * Under `even` the last-changed slot already carries the lowest weight,
+ * but the hard exclusion is free, removing it is a change nobody asked
+ * for, and it is what stops a `replace-soon` layer from strobing in the
+ * one turn before its flag is cleared.
+ *
  * Returns null only for an empty list, which is radio idling rather than
  * an error: everything locked is a legitimate state and radio simply
- * retries at the next boundary. */
+ * retries at the next boundary. Never mutates its arguments. */
 export function pickRadioSlotId(
   eligible: readonly string[],
   lastChangedId: string | null,
-  random: () => number = Math.random
+  options: RadioPickOptions | (() => number) = {}
 ): string | null {
+  // The shipped signature took `random` as the third argument. Accepting
+  // both keeps every existing caller and test working unchanged.
+  const opts: RadioPickOptions = typeof options === 'function' ? { random: options } : options
+  const random = opts.random ?? Math.random
+  const turnover = opts.turnover ?? 'random'
+  const turn = opts.turn ?? 0
+
   if (eligible.length === 0) return null
   const pool = eligible.length > 1 ? eligible.filter((id) => id !== lastChangedId) : eligible
   const choices = pool.length > 0 ? pool : eligible
-  const index = Math.min(choices.length - 1, Math.floor(random() * choices.length))
-  return choices[index]
+  if (choices.length === 1) return choices[0]
+
+  const weights = choices.map((id) => {
+    const base = turnover === 'even' ? Math.max(0, turn - (opts.changedAt?.get(id) ?? turn)) + 1 : 1
+    return base * radioSlotFlagWeightFactor(opts.flags ? (opts.flags[id] ?? null) : null)
+  })
+  const total = weights.reduce((sum, w) => sum + w, 0)
+  // Defensive: every factor is positive and every base is at least 1, so
+  // this cannot be reached today. It costs one branch and it means a
+  // future factor of zero degrades to a uniform draw rather than to an
+  // undefined return.
+  if (!(total > 0)) {
+    return choices[Math.min(choices.length - 1, Math.floor(random() * choices.length))]
+  }
+  let draw = random() * total
+  for (let i = 0; i < choices.length; i++) {
+    draw -= weights[i]
+    if (draw < 0) return choices[i]
+  }
+  return choices[choices.length - 1]
 }
 
 /** One layer's state, as far as radio's eligibility cares. */
