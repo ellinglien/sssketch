@@ -79,6 +79,10 @@ describe('radioSlotFlagWeightFactor', () => {
 })
 
 describe('toggleRadioHook', () => {
+  it('reports no hook when nothing is hooked', () => {
+    expect(radioHookSlotId(NO_RADIO_SLOT_FLAGS)).toBeNull()
+  })
+
   it('turns the hook on, and off again', () => {
     const on = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'a')
     expect(radioSlotFlagOf(on, 'a')).toBe('hook')

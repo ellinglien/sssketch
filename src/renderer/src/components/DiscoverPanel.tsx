@@ -5986,6 +5986,10 @@ function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
  *     the next change and then gone.
  *   `pulsing`: the reroll this button started is still in flight.
  *   `disabled`: the whole button at 0.35 opacity, state styling kept.
+ *   `toggle`: an on/off control, so `aria-pressed` is always present
+ *     (false when off) -- the role must not change with the state.
+ *   `ariaExpanded`: a menu trigger; `soft` there means "open", not
+ *     "pressed", so it gets aria-expanded + aria-haspopup instead.
  *
  * Monochrome in every state, per tokens.css: colour on this row is for
  * audio only. */
@@ -5998,6 +6002,8 @@ function RowIconButton({
   disabled = false,
   pulsing = false,
   hidden = false,
+  toggle = false,
+  ariaExpanded,
   buttonRef
 }: {
   gridColumn: number
@@ -6008,6 +6014,8 @@ function RowIconButton({
   disabled?: boolean
   pulsing?: boolean
   hidden?: boolean
+  toggle?: boolean
+  ariaExpanded?: boolean
   buttonRef?: React.Ref<HTMLButtonElement>
 }): React.JSX.Element {
   return (
@@ -6017,7 +6025,9 @@ function RowIconButton({
       disabled={disabled || hidden}
       data-tooltip={tooltip}
       aria-label={tooltip}
-      aria-pressed={state === 'off' ? undefined : true}
+      aria-pressed={toggle ? state !== 'off' : undefined}
+      aria-expanded={ariaExpanded}
+      aria-haspopup={ariaExpanded === undefined ? undefined : 'menu'}
       style={{
         gridColumn,
         display: 'flex',
@@ -6056,9 +6066,11 @@ function RowIconButton({
   )
 }
 
-// Hand-drawn dice glyph -- predates the row's phosphor icons (2026-09-29),
-// which were scoped to those six, so it stays hand-drawn. One usage: the toolbar's own "similar all" button,
-// rendered bigger via the size prop.
+// Hand-drawn dice glyph. It predates @phosphor-icons/react (2026-09-29),
+// which is scoped to the six Discover row icons only, so it stays
+// hand-drawn. One usage: the toolbar's own "similar all" button, which
+// passes size={18}; the default of 12 is a leftover from the row's old
+// decorative dice.
 // Direct request, 2026-09-21: "instead of that loader, have the dice spin
 // intermittently" -- a quick full turn, then a rest (discover-dice-spin's
 // own 0-35% / 35-100% split), for as long as a roll is in flight.
@@ -6324,8 +6336,11 @@ function DiscoverSlotRow({
   // Which of this row's own reroll buttons started the roll in flight, so
   // that one pulses and the others only dim. A roll started from anywhere
   // else (radio, the phone, the panel's roll-all) leaves this stale, but it
-  // is only read while `rerolling`, and a stale value then pulses a button
-  // for a roll it did not start -- so it is cleared when the roll ends.
+  // is only read while `rerolling`, and it is cleared the first render
+  // `rerolling` is false. That needs a gap between rolls: if radio or the
+  // phone starts a second roll on this slot while the first is still in
+  // flight, `rerolling` never drops and the first button keeps pulsing for
+  // a roll it did not start. Rare and harmless, so accepted as is.
   const [rerollAction, setRerollAction] = useState<'similar' | 'random' | null>(null)
   if (!rerolling && rerollAction !== null) setRerollAction(null)
 
@@ -6958,6 +6973,7 @@ function DiscoverSlotRow({
           gridColumn={6}
           tooltip="hold longer"
           onClick={onToggleHook}
+          toggle
           state={radioFlag === 'hook' ? 'on' : 'off'}
           disabled={slot.locked}
           hidden={!radioOn}
@@ -7387,6 +7403,7 @@ function DiscoverSlotRow({
           gridColumn={11}
           tooltip="change next"
           onClick={onToggleReplaceSoon}
+          toggle
           state={radioFlag === 'replace-soon' ? 'soft' : 'off'}
           disabled={slot.locked}
           hidden={!radioOn}
@@ -7424,6 +7441,7 @@ function DiscoverSlotRow({
               setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
             }}
             state={nearbyMenu ? 'soft' : 'off'}
+            ariaExpanded={nearbyMenu !== null}
             disabled={rerolling}
           >
             <Compass size={12} />
