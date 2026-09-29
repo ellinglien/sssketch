@@ -321,9 +321,9 @@ Expected: `package.json` gains `"@phosphor-icons/react"` under `devDependencies`
 
 Run:
 ```bash
-node -e "const p=require('@phosphor-icons/react'); for (const n of ['HandPalm','SignOut','CirclesThree','Compass','Shuffle','Copy']) console.log(n, typeof p[n])"
+node --input-type=module -e "const p = await import('@phosphor-icons/react'); for (const n of ['HandPalm','SignOut','CirclesThree','Compass','Shuffle','Copy']) console.log(n, typeof p[n])"
 ```
-Expected: six lines, each ending `object` or `function`. If any says `undefined`, stop and report the missing name rather than substituting another icon.
+Expected: six lines, each ending `object` or `function`. (The package is ESM-only: a `require()` returns an empty object and would wrongly report every icon `undefined`.) If any says `undefined`, stop and report the missing name rather than substituting another icon.
 
 - [ ] **Step 3: Typecheck**
 
