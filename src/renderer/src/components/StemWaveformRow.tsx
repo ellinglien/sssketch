@@ -10,6 +10,7 @@ import {
 } from '../state/selectors'
 import { stemDisplayColorVar } from '../theme/typeColor'
 import { AutomationLane } from './AutomationLane'
+import { LoopLines } from './LoopLines'
 import { RowGainDial } from './RowGainDial'
 import { Waveform } from './Waveform'
 import { startPointerDrag } from './dragUtils'
@@ -369,22 +370,11 @@ export function StemWaveformRow({
               glance: a short loop shows several closely-packed lines, a long
               one shows few or none within the clip's own width. Purely
               informational (pointer-events none), drawn under the resize/
-              fade handles so it never competes with them for clicks. */}
-          {tileOffsets.length > 1 &&
-            tileOffsets.slice(1).map((left) => (
-              <div
-                key={left}
-                style={{
-                  position: 'absolute',
-                  top: 0,
-                  bottom: 0,
-                  left,
-                  width: 1,
-                  background: 'color-mix(in srgb, var(--ra-text) 35%, transparent)',
-                  pointerEvents: 'none'
-                }}
-              />
-            ))}
+              fade handles so it never competes with them for clicks. Drawn by
+              the shared LoopLines, which Discover's rows also use. */}
+          {tileOffsets.length > 1 && (
+            <LoopLines lefts={tileOffsets.slice(1).map((left) => `${left}px`)} kind="restart" />
+          )}
 
           {/* Resize handles, both edges: dragging either extends/shrinks the
               loop (always tiled from the stem's own beginning — see the

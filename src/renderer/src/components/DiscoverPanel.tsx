@@ -2,6 +2,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CirclesThree, Compass, Copy, HandPalm, Shuffle, SignOut } from '@phosphor-icons/react'
 import { Waveform } from './Waveform'
+import { LoopLines } from './LoopLines'
 import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
 import { Dial } from './Dial'
@@ -118,7 +119,8 @@ import {
   useStemFavourites,
   useStemFavouritesActions
 } from '../state/StoreContext'
-import { tileOffsetsPx, resolvedPlayedBarsFromFields } from '../state/selectors'
+import { resolvedPlayedBarsFromFields } from '../state/selectors'
+import { discoverPlayheadPcts, discoverWindowLayout } from '@shared/discoverWindowLayout'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import {
@@ -778,18 +780,16 @@ export function DiscoverPanel({
   // Web-Audio-backed version there's no separate already-stretched map to
   // keep in sync with this one.
   const resolvedStemsRef = useRef<Map<string, ResolvedCandidateStem>>(new Map())
-  // Reactive (unlike resolvedStemsRef) so the row waveforms' own tiled
-  // width -- see DiscoverSlotRow's own `loopBars`/tileOffsetsPx usage below
-  // -- re-renders when a slot resolves/re-resolves/clears. Direct report:
-  // every slot's waveform used to stretch to fill the same fixed box
-  // regardless of the stem's real bar length, making a 1-bar drum hit and
-  // an 8-bar bassline look the same length; this tracks each resolved
-  // slot's own real barLength so DiscoverPanel can compute the shared
-  // "longest slot" reference (maxBarLength below) every row's own tiling
-  // scales against, matching how the real arranger sizes/tiles clips
-  // proportionally (StemWaveformRow.tsx/CollapsedRifffRow.tsx's own
-  // tileOffsetsPx) rather than showing every stem as if it's the same
-  // length.
+  // Reactive (unlike resolvedStemsRef) so the row waveforms -- see
+  // DiscoverSlotRow's own discoverWindowLayout usage below -- re-render
+  // when a slot resolves/re-resolves/clears. Direct report: every slot's
+  // waveform used to stretch to fill the same fixed box regardless of the
+  // stem's real bar length, making a 1-bar drum hit and an 8-bar bassline
+  // look the same length; this tracks each resolved slot's own real
+  // barLength so DiscoverPanel can compute the loop's length (maxBarLength
+  // below), which places every row's loop-top lines and playheads inside
+  // the shared fixed window (spec 2026-09-29-discover-fixed-waveform-
+  // window-design.md).
   const [resolvedBarLengths, setResolvedBarLengths] = useState<Map<string, number>>(new Map())
   // Synchronously-current mirror of resolvedBarLengths, for the exact same
   // reason previewingSlotIdsRef exists (see its own comment above) --
@@ -807,8 +807,8 @@ export function DiscoverPanel({
   // audio in it, tiled to fill only the SHORTER stem's barLength, so the
   // engine's own loop length was set to half the intended value and
   // wrapped/restarted mid-loop. resolvedBarLengths state itself stays --
-  // it's still the right reactive source for the waveform-tiling UI
-  // (DiscoverSlotRow's own tileOffsetsPx math) -- only
+  // it's still the right reactive source for the waveform UI
+  // (DiscoverSlotRow's own discoverWindowLayout inputs) -- only
   // syncPreviewToEngine's own read switches to this ref.
   const resolvedBarLengthsRef = useRef<Map<string, number>>(new Map())
 
@@ -6682,13 +6682,14 @@ export function DiscoverPanel({
         </div>
       )}
 
-      {/* The longest currently-resolved slot's own barLength -- every row's
-          own waveform tiles/scales against this SAME shared reference (see
-          DiscoverSlotRow below), so the whole row of thumbnails reads as
-          one proportional "loop," the shortest stems visibly repeating to
-          fill it, exactly like the real arranger would show them once
-          placed. 0 while nothing has resolved yet (no rows render tiled
-          content in that state anyway). */}
+      {/* The longest currently-resolved slot's own barLength -- the loop's
+          length, which is what the engine loops the preview at. Rows no
+          longer scale their waveform against it: every row shows the same
+          fixed window of bars (discoverWindowLayout, spec 2026-09-29-
+          discover-fixed-waveform-window-design.md), and this only places
+          the loop-top lines and the per-lap playheads inside it (and grows
+          the window past 32 bars while a longer loop is in play). 0 while
+          nothing has resolved yet. */}
       {(() => {
         const maxBarLength =
           resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : 0
@@ -6697,10 +6698,7 @@ export function DiscoverPanel({
         // is true, see syncPreviewToEngine/restorePreviewIfLoaded above) --
         // otherwise it's just wherever the REAL arrangement's own playhead
         // happens to sit, which has nothing to do with this loop.
-        const playheadPct =
-          previewingSlotIds.size > 0 && maxBarLength > 0
-            ? Math.max(0, Math.min(100, (pos / maxBarLength) * 100))
-            : null
+        const playheadPos = previewingSlotIds.size > 0 && maxBarLength > 0 ? pos : null
         // THE ONE WAIT a row can be on, read once for the whole list
         // rather than per row -- radio names at most one armed and at most
         // one held slot at a time. Written by the clock effect above, off
@@ -6732,7 +6730,7 @@ export function DiscoverPanel({
             soloed={previewingSlotIds.size === 1 && previewingSlotIds.has(slot.id)}
             favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
             maxBarLength={maxBarLength}
-            playheadPct={playheadPct}
+            playheadPos={playheadPos}
             onToggleLock={() => toggleLock(slot.id)}
             radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
             radioOn={radioOn}
@@ -7274,7 +7272,7 @@ function DiscoverSlotRow({
   soloed,
   favourited,
   maxBarLength,
-  playheadPct,
+  playheadPos,
   onToggleLock,
   radioFlag,
   radioOn,
@@ -7339,23 +7337,22 @@ function DiscoverSlotRow({
    * bias future rolls toward it. Persisted (see
    * StoreContext.tsx's useStemFavourites), not per-session. */
   favourited: boolean
-  /** The longest currently-resolved slot's own barLength, library-wide
-   * across every row (DiscoverPanel's own `maxBarLength`) -- this row's own
-   * waveform tiles/scales its own resolvedStem.barLength against this SAME
-   * shared reference, so the whole loop's rows read as proportional to each
-   * other (a 1-bar stem visibly repeats 8x next to an 8-bar one) instead of
-   * every stem stretching to fill the same fixed box regardless of its real
-   * length. 0 before anything in the loop has resolved yet. */
+  /** The loop's length in bars: the longest currently-resolved slot's own
+   * barLength, across every row (DiscoverPanel's own `maxBarLength`). No
+   * longer the tiling reference -- every row tiles its stem across the same
+   * fixed window (discoverWindowLayout), and this only places the loop-top
+   * lines and the per-lap playheads, and grows the window when the loop is
+   * longer than 32 bars. 0 before anything in the loop has resolved yet. */
   maxBarLength: number
-  /** This row's own waveform-relative playhead position, 0-100 (percent of
-   * `maxBarLength`), or null while nothing in the loop is currently
-   * previewing (DiscoverPanel's own `previewingSlotIds` is empty, so the
-   * real engine position doesn't refer to this loop at all -- see
-   * DiscoverPanel's own `playheadPct` computation). Direct report,
+  /** The engine's live position in bars, or null while nothing in the loop
+   * is currently previewing (DiscoverPanel's own `previewingSlotIds` is
+   * empty, so the real engine position doesn't refer to this loop at all
+   * -- see DiscoverPanel's own `playheadPos` computation). The row turns it
+   * into one playhead per lap (discoverPlayheadPcts). Direct report,
    * 2026-09-15: the playhead line was lost when the preview backend moved
    * from Web Audio to the real engine; this reuses the engine's own live
    * position instead of reintroducing a separate elapsed-time sweep. */
-  playheadPct: number | null
+  playheadPos: number | null
   onToggleLock: () => void
   /** What this row has been told about radio's next change: `hook` to hold
    * it, `replace-soon` to hurry it, null for neither. At most one row in
@@ -7612,7 +7609,7 @@ function DiscoverSlotRow({
   // Stable across renders (useCallback, empty deps) -- DiscoverNearbyPopover's
   // own outside-click dismissal effect depends on this identity ([onClose,
   // ignoreRef]), and this row re-renders on every playhead tick while
-  // anything is previewing (playheadPct is a prop, driven by DiscoverPanel's
+  // anything is previewing (playheadPos is a prop, driven by DiscoverPanel's
   // own usePos()). An inline `() => setNearbyMenu(null)` closure would be
   // torn down and rebuilt on every one of those ticks, real bug found live:
   // "clicking out of the near panel should close it instead of having to
@@ -8209,16 +8206,19 @@ function DiscoverSlotRow({
               {/* Tiled, not a single stretched-to-fit Waveform -- direct
               report: every slot used to render at the same width regardless
               of its real bar length, making a 1-bar drum hit look the same
-              size as an 8-bar bassline. `loopBars` is every row's own SAME
-              shared reference (DiscoverPanel's own maxBarLength, the
-              longest currently-resolved slot) -- a stem shorter than that
-              repeats to fill this box, exactly how it will actually sound
-              once looped in the real arranger (tileOffsetsPx, the same
-              helper StemWaveformRow.tsx/CollapsedRifffRow.tsx already use
-              for this). `100` here is a PERCENT reference, not real pixels
-              -- tileOffsetsPx's math is linear/proportional, so feeding it
-              100 and rendering each offset/width as a `%` keeps this row's
-              own flex-fluid width working without a real DOM measurement.
+              size as an 8-bar bassline. Every row shows the SAME fixed
+              window of bars (32, or the loop's length when a longer stem is
+              in play -- discoverWindowLayout, spec 2026-09-29-discover-
+              fixed-waveform-window-design.md), so a bar is the same width in
+              every row and no row rescales when a longer or shorter stem
+              arrives elsewhere. The stem repeats from bar 0 to fill the
+              window, exactly how it will actually sound once looped, the
+              last tile cut off at the window edge (this button's own
+              `overflow: hidden` clips it). Restart lines mark each repeat,
+              loop-top lines each wrap of the whole loop (the shared
+              LoopLines, arrange's own restart line). Everything is a
+              PERCENT of the window, which keeps this row's own flex-fluid
+              width working without a real DOM measurement.
               Direct request: gain is shown/adjusted directly on the
               waveform (StemWaveformRow.tsx's own "envelope" volume
               treatment), not a separate slider -- a dim gray layer always
@@ -8228,40 +8228,33 @@ function DiscoverSlotRow({
               underneath (same "gray means quieter" language the real
               envelope uses), with a thin line marking the exact cutoff. */}
               {(() => {
-                const loopBars = maxBarLength > 0 ? maxBarLength : resolvedStem.barLength
-                const rawStemBarLength =
-                  resolvedStem.barLength > 0 ? resolvedStem.barLength : loopBars
-                // Real crash, found live: tileOffsetsPx's own tile count is
-                // Math.ceil(loopBars / stemBarLength) with NO upper bound.
-                // Every OTHER caller (StemWaveformRow.tsx/CollapsedRifffRow.tsx)
-                // tiles a rifff against ITS OWN stem's barLength -- both numbers
-                // come from the same already-authored, already-coherent riff,
-                // so their ratio is naturally bounded in practice. Discover's
-                // own loopBars is a DIFFERENT slot's barLength entirely (the
-                // longest one currently resolved anywhere in the loop) -- an
-                // arbitrary one-shot hi-hat (a tiny barLength) sitting next to
-                // an unrelated 32-bar backing loop can drive that ratio into
-                // the hundreds or thousands, each tile mounting a real
-                // <Waveform> (itself dozens of SVG rects) -- enough of those at
-                // once genuinely hung/crashed the renderer. Clamping the
-                // EFFECTIVE stem bar length to loopBars/MAX_TILES caps the tile
-                // count outright; past that point the tiling is an
-                // approximation (fewer, slightly wider tiles than the stem's
-                // true native loop length), which is a fully acceptable
-                // trade-off for "doesn't crash."
-                const MAX_TILES = 24
-                const stemBarLength = Math.max(rawStemBarLength, loopBars / MAX_TILES)
-                const tileOffsets = tileOffsetsPx(100, stemBarLength, loopBars, 0)
-                const tileWidthPct = 100 * (stemBarLength / loopBars)
+                // The tile cap (DISCOVER_MAX_TILES) lives in the layout
+                // module now: a real crash, found live, came from an
+                // unbounded tile count, each tile mounting a real <Waveform>
+                // (dozens of SVG rects), twice. A sub-bar one-shot is drawn
+                // at the minimum tile width instead.
+                const layout = discoverWindowLayout({
+                  stemBars: resolvedStem.barLength,
+                  loopBars: maxBarLength
+                })
+                const playheads =
+                  playheadPos === null
+                    ? []
+                    : discoverPlayheadPcts(
+                        playheadPos,
+                        maxBarLength > 0 ? maxBarLength : resolvedStem.barLength,
+                        layout.windowBars
+                      )
                 const gainClipPct = (1 - slot.gain) * 100
                 return (
                   <>
                     {/* Direct reports, 2026-09-17: "sometimes the waveforms
                     blink away, like they're refreshing." Root cause: these
                     keys used to be `dim-${leftPct}`, computed from `loopBars`
-                    -- the SHARED maxBarLength every row's own tiling scales
-                    against. Whenever ANY slot's resolution transiently
-                    changed (a reroll landing elsewhere), maxBarLength
+                    -- the SHARED maxBarLength every row's own tiling used to
+                    scale against (and the window still grows with it).
+                    Whenever ANY slot's resolution transiently changed (a
+                    reroll landing elsewhere), maxBarLength
                     recomputed, which changed every OTHER row's own leftPct
                     values, which changed their keys, which made React
                     unmount+remount every tile (a fresh <Waveform> renders
@@ -8271,15 +8264,15 @@ function DiscoverSlotRow({
                     place instead of discarding and recreating the DOM node,
                     so a legitimate re-tile (this slot's own stem genuinely
                     changed) no longer blanks the OTHER rows that didn't. */}
-                    {tileOffsets.map((leftPct, i) => (
+                    {layout.tiles.map((t, i) => (
                       <div
                         key={i}
                         style={{
                           position: 'absolute',
                           top: 0,
                           bottom: 0,
-                          left: `${leftPct}%`,
-                          width: `${tileWidthPct}%`
+                          left: `${t.leftPct}%`,
+                          width: `${t.widthPct}%`
                         }}
                       >
                         <Waveform path={resolvedStem.path} color="var(--ra-text-4)" opacity={1} />
@@ -8304,15 +8297,15 @@ function DiscoverSlotRow({
                       >
                         {/* Index-based key, same reasoning as the dim layer
                         above. */}
-                        {tileOffsets.map((leftPct, i) => (
+                        {layout.tiles.map((t, i) => (
                           <div
                             key={i}
                             style={{
                               position: 'absolute',
                               top: 0,
                               bottom: 0,
-                              left: `${leftPct}%`,
-                              width: `${tileWidthPct}%`
+                              left: `${t.leftPct}%`,
+                              width: `${t.widthPct}%`
                             }}
                           >
                             <Waveform
@@ -8337,26 +8330,30 @@ function DiscoverSlotRow({
                         }}
                       />
                     )}
-                    {/* Real playhead, driven by the actual engine position while
-                    this loop is previewing -- same `--ra-playhead` accent
-                    Playhead.tsx uses on the real timeline. Only this row's
-                    own resolved-and-tiled width is relevant (loopBars ===
-                    maxBarLength, the shared reference every row ties its
-                    tiling to), so `playheadPct` is already directly usable
-                    as a left offset with no further per-row math. */}
-                    {playheadPct !== null && (
+                    <LoopLines lefts={layout.restartLinePcts.map((p) => `${p}%`)} kind="restart" />
+                    <LoopLines lefts={layout.loopTopLinePcts.map((p) => `${p}%`)} kind="loopTop" />
+                    {/* Real playheads, driven by the actual engine position
+                    while this loop is previewing -- same `--ra-playhead`
+                    accent Playhead.tsx uses on the real timeline. One per
+                    loop-length lap of the window, all at the same place in
+                    their own lap (discoverPlayheadPcts), so they reach a
+                    loop-top line together at the instant the loop wraps --
+                    where a radio change or a waiting manual change lands.
+                    Index keys: the count only changes with the window. */}
+                    {playheads.map((pct, i) => (
                       <div
+                        key={i}
                         style={{
                           position: 'absolute',
                           top: 0,
                           bottom: 0,
-                          left: `${playheadPct}%`,
+                          left: `${pct}%`,
                           width: 1,
                           background: 'var(--ra-playhead)',
                           pointerEvents: 'none'
                         }}
                       />
-                    )}
+                    ))}
                   </>
                 )
               })()}
