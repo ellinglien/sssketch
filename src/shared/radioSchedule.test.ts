@@ -34,6 +34,7 @@ import {
   radioPaceWindowPreset,
   radioPhraseLaps,
   radioStarterKinds,
+  radioBarsUntilChange,
   radioChangeDueAtNextWrap,
   type RadioClock
 } from './radioSchedule'
@@ -979,5 +980,127 @@ describe('radioChangeDueAtNextWrap', () => {
     expect(radioChangeDueAtNextWrap(clockAt(8, 12), 4, 0, 8, 0)).toBe(false)
     expect(radioChangeDueAtNextWrap(clockAt(8, 12), Number.NaN, 8, 8, 0)).toBe(false)
     expect(radioChangeDueAtNextWrap(clockAt(8, 12), 9, 8, 8, 0)).toBe(false)
+  })
+})
+
+describe('radioBarsUntilChange', () => {
+  // The countdown a row draws from. Same four inputs as advanceRadioClock,
+  // and it must answer the ONE question radio's interval cannot: how many
+  // bars until the change actually lands.
+  const clockAt = (barsElapsed: number, intervalBars: number, lapsSincePhrase = 0): RadioClock => ({
+    barsElapsed,
+    intervalBars,
+    lastPos: 0,
+    lapsSincePhrase
+  })
+
+  it('counts to the grid boundary, not to the end of the interval', () => {
+    // 8-bar loop, 2-bar grid, 1 bar of interval still to run from bar 4.
+    // The interval runs out at bar 5; the boundary that carries the change
+    // is bar 6.
+    expect(radioBarsUntilChange(clockAt(11, 12), 4, 8, 2, 0)).toBeCloseTo(2)
+  })
+
+  it('counts past the wrap when the interval cannot run out in this lap', () => {
+    // 6 bars of interval left with 4 bars of lap to go, and the whole loop
+    // as the grid: the landing is the wrap AFTER next, 12 bars away.
+    expect(radioBarsUntilChange(clockAt(6, 12), 4, 8, 8, 0)).toBeCloseTo(12)
+  })
+
+  it('never answers zero while the change is still ahead', () => {
+    // The overrun case in its purest form: the interval ran out long ago
+    // and nothing has landed. Standing exactly ON a boundary counts that
+    // boundary as already crossed -- it was, on an earlier tick -- so the
+    // answer is the NEXT one rather than zero.
+    expect(radioBarsUntilChange(clockAt(40, 12), 4, 8, 2, 0)).toBeCloseTo(2)
+    expect(radioBarsUntilChange(clockAt(40, 12), 4.0001, 8, 2, 0)).toBeCloseTo(1.9999)
+    for (let pos = 0; pos < 8; pos += 0.1) {
+      expect(radioBarsUntilChange(clockAt(40, 12), pos, 8, 2, 0)).toBeGreaterThan(0)
+    }
+  })
+
+  it('recomputes to the next boundary rather than freezing on a stale one', () => {
+    // A gesture is holding the change, so boundary after boundary passes
+    // with nothing landing. The answer must keep moving forward, never
+    // stick.
+    const missed = [0.5, 2.5, 4.5, 6.5].map((pos) =>
+      radioBarsUntilChange(clockAt(40, 12), pos, 8, 2, 0)
+    )
+    expect(missed).toEqual([1.5, 1.5, 1.5, 1.5])
+  })
+
+  it('waits for the phrase when a phrase grid is running', () => {
+    // 16-bar phrase over an 8-bar loop is two laps. Fresh out of a phrase,
+    // the coming wrap is not one -- the landing is a whole lap further on.
+    expect(radioBarsUntilChange(clockAt(14, 12, 0), 4, 8, 8, 16)).toBeCloseTo(12)
+    expect(radioBarsUntilChange(clockAt(14, 12, 1), 4, 8, 8, 16)).toBeCloseTo(4)
+  })
+
+  it('agrees with radioChangeDueAtNextWrap about which lap the change lands in', () => {
+    const loopBars = 8
+    for (const gridBars of [2, 4, 8]) {
+      for (const phraseBars of [0, 16]) {
+        for (let pos = 0; pos < loopBars; pos += 0.25) {
+          for (let barsElapsed = 0; barsElapsed <= 16; barsElapsed += 0.5) {
+            for (const laps of [0, 1]) {
+              const clock = clockAt(barsElapsed, 12, laps)
+              const atWrap = radioChangeDueAtNextWrap(clock, pos, loopBars, gridBars, phraseBars)
+              const until = radioBarsUntilChange(clock, pos, loopBars, gridBars, phraseBars)
+              expect(until).not.toBeNull()
+              expect(atWrap).toBe(Math.abs((until as number) - (loopBars - pos)) < 1e-6)
+            }
+          }
+        }
+      }
+    }
+  })
+
+  it('agrees with advanceRadioClock about WHEN the change lands', () => {
+    // The property that matters, and the same 30Hz simulation
+    // radioChangeDueAtNextWrap's own property test runs: whatever this
+    // predicts, running the clock forward really does produce `due` after
+    // exactly that many bars of playback -- within the one tick it takes
+    // to notice a boundary -- and on no tick before it.
+    const loopBars = 8
+    const tick = 1 / 60 // bars per 30Hz tick at 120bpm
+    for (const gridBars of [2, 4, 8]) {
+      for (const phraseBars of [0, 16]) {
+        for (let startPos = 0; startPos < loopBars; startPos += 0.5) {
+          for (let barsElapsed = 0; barsElapsed <= 16; barsElapsed += 1) {
+            let clock: RadioClock = {
+              barsElapsed,
+              intervalBars: 12,
+              lastPos: startPos,
+              lapsSincePhrase: 0
+            }
+            const predicted = radioBarsUntilChange(clock, startPos, loopBars, gridBars, phraseBars)
+            expect(predicted).not.toBeNull()
+            let pos = startPos
+            let travelled = 0
+            let landed: number | null = null
+            // Four laps is further than any prediction these inputs can
+            // produce (a 12-bar interval on an 8-bar loop, phrase or not).
+            while (travelled < loopBars * 4 && landed === null) {
+              pos += tick
+              travelled += tick
+              if (pos >= loopBars) pos -= loopBars
+              const step = advanceRadioClock(clock, pos, loopBars, gridBars, phraseBars)
+              clock = step.clock
+              if (step.due) landed = travelled
+            }
+            expect(landed).not.toBeNull()
+            expect(landed as number).toBeGreaterThanOrEqual((predicted as number) - 1e-9)
+            expect(landed as number).toBeLessThan((predicted as number) + tick + 1e-9)
+          }
+        }
+      }
+    }
+  })
+
+  it('refuses nonsense rather than guessing', () => {
+    expect(radioBarsUntilChange(clockAt(8, 12), 4, 0, 8, 0)).toBeNull()
+    expect(radioBarsUntilChange(clockAt(8, 12), Number.NaN, 8, 8, 0)).toBeNull()
+    expect(radioBarsUntilChange(clockAt(8, 12), 9, 8, 8, 0)).toBeNull()
+    expect(radioBarsUntilChange(clockAt(8, 12), -1, 8, 8, 0)).toBeNull()
   })
 })

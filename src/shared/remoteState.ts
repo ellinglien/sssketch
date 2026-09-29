@@ -50,24 +50,29 @@ export interface RemoteSlotView {
  * much on the sofa as it is at the desk -- see @shared/radioApproach for
  * the two states and why they are two.
  *
- * Three fields and no more. A slot id the phone already has, a slot id the
- * phone already has, and a fraction: nothing here names a file, a riff or
- * a jam, so this does not widen the boundary remoteStateFromSlots IS.
+ * TWO FIELDS AND NO MORE. Two slot ids the phone already has: nothing
+ * here names a file, a riff or a jam, so this does not widen the boundary
+ * remoteStateFromSlots IS.
  *
- * `progress` is deliberately NOT the 30Hz number the Mac's own rows draw.
- * The renderer pushes remote state on a dependency change, not on a clock,
- * so a per-tick value here would be a per-tick IPC push and a per-tick
- * re-derivation of every row's peaks; the Mac quantises it to whole bars,
- * which moves about once a bar and is all a 700ms poll can show anyway. It
- * is only meaningful for the armed row -- a held change has nothing left
- * to count, it lands at the very next wrap. */
+ * It carried a `progress` fraction until 2026-09-29, for a 2px rule the
+ * page drew along the bottom of the row. Both ends of that are gone --
+ * Elling, on the desktop version of the same rule: "can't it be the red
+ * playhead indicator instead of a progress bar? that would streamline the
+ * ui" -- and this page has had its own red playhead sweeping every row
+ * since 2026-09-26, so the "when" was already on screen twice. The row
+ * fades instead, and a fraction nothing draws would be a field nothing
+ * reads.
+ *
+ * It also cost real traffic: the renderer pushes remote state on a
+ * dependency change, and a progress that moved once a bar made this
+ * object -- and with it every row's peaks -- re-derive and go over IPC on
+ * that cadence. Two ids change when radio picks a different row, which is
+ * a handful of times a minute. */
 export interface RemoteRadioView {
   /** The row whose next pick is chosen and warming, or null. */
   armedSlotId: string | null
   /** The row whose change is decided and waiting for the loop top. */
   heldSlotId: string | null
-  /** 0..1, how far the armed row's wait has run. */
-  progress: number
 }
 
 export interface RemoteState {
@@ -157,8 +162,8 @@ export interface RemoteStateMeta {
   loopBars: number
   /** Optional rather than required, and that is not laziness: radio not
    * running has genuinely nothing to say here, and `undefined` says
-   * exactly that. Normalized below -- an id naming no row becomes null and
-   * the progress is clamped, so what leaves is always drawable. */
+   * exactly that. Normalized below -- an id naming no row becomes null, so
+   * what leaves is always drawable. */
   radio?: RemoteRadioView | null
 }
 
@@ -192,10 +197,9 @@ export function remoteStateFromSlots(
     // produce no grid -- never a wrong one.
     loopBars: Number.isInteger(meta.loopBars) && meta.loopBars > 0 ? meta.loopBars : 0,
     // Normalized HERE, once, for the same reason loopBars is: an id that
-    // names no row is a mark the phone could never draw, and a progress
-    // that is not a fraction is a width that would break a layout. Both
-    // fail closed -- no mark, no fill -- rather than being passed on for
-    // the page to guard against.
+    // names no row is a mark the phone could never draw. It fails closed
+    // -- no mark -- rather than being passed on for the page to guard
+    // against.
     radio: normalizeRemoteRadio(meta.radio ?? null, slots),
     slots: slots.map((slot) => ({
       id: slot.id,
@@ -216,11 +220,7 @@ function normalizeRemoteRadio(
   if (radio === null) return null
   const known = (slotId: string | null): string | null =>
     slotId !== null && slots.some((slot) => slot.id === slotId) ? slotId : null
-  return {
-    armedSlotId: known(radio.armedSlotId),
-    heldSlotId: known(radio.heldSlotId),
-    progress: Number.isFinite(radio.progress) ? Math.max(0, Math.min(1, radio.progress)) : 0
-  }
+  return { armedSlotId: known(radio.armedSlotId), heldSlotId: known(radio.heldSlotId) }
 }
 
 /** Everything the phone can ask the Mac to do. SIX verbs, and nothing else:

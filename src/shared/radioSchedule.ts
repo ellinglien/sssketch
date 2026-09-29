@@ -528,6 +528,95 @@ export function radioChangeDueAtNextWrap(
   return nextBoundary >= loopBars - BOUNDARY_EPSILON
 }
 
+/** How many bars from NOW until the next change actually LANDS, or null
+ * when that is not knowable yet (no loop length, no position).
+ *
+ * THE COUNTDOWN THAT CANNOT DISAGREE WITH THE CLOCK. Radio's own interval
+ * (`intervalBars`) is the EARLIEST a change may happen, never when it
+ * happens: advanceRadioClock fires `due` only when the interval has
+ * elapsed AND a boundary on the change grid is crossed AND the phrase
+ * gate is open. Counting down the interval therefore reaches zero and
+ * then sits there for however many bars the real wait still has to run --
+ * reported 2026-09-29, on the row indicator built from exactly that
+ * number: "this one says 'this bar' but continues to loop for a few more
+ * times? it's not clear to me."
+ *
+ * So this counts to the BOUNDARY, derived from the same four inputs
+ * advanceRadioClock uses, in the same arithmetic, with the same epsilon.
+ * radioChangeDueAtNextWrap is the yes/no special case of it -- "is that
+ * boundary the wrap ending this lap" -- and the two are pinned to each
+ * other and to advanceRadioClock by property tests.
+ *
+ * ALWAYS GREATER THAN ZERO while a change is still to come: every
+ * candidate boundary is strictly ahead of `pos`, because a boundary the
+ * playhead is standing on was crossed on an earlier tick and will not be
+ * crossed again. Zero means zero, and a caller that rounds up
+ * (radioApproachBarsLeft) can say "1 bar" knowing the change really is
+ * still ahead of it.
+ *
+ * HONEST WHEN IT IS OVERRUN. Nothing here remembers a prediction, so
+ * there is nothing to go stale: the moment the playhead passes a boundary
+ * the change did not land on -- a gesture was holding one
+ * (radioLedChangeRef), a late eligibility re-check dropped the pick, the
+ * pick never resolved -- the next call simply answers with the next real
+ * boundary. */
+export function radioBarsUntilChange(
+  clock: RadioClock,
+  pos: number,
+  loopBars: number,
+  gridBars: number,
+  phraseBars: number
+): number | null {
+  if (!(loopBars > 0) || !Number.isFinite(pos) || pos < 0 || pos >= loopBars) return null
+  // How much of the interval is still to run. Already negative (it ran out
+  // while something else was holding the change) counts as zero -- the
+  // change is due at the very next boundary either way.
+  const barsToElapse = Math.max(0, clock.intervalBars - clock.barsElapsed)
+  if (!Number.isFinite(barsToElapse)) return null
+  const elapseAt = pos + barsToElapse
+  const perPhrase = radioPhraseLaps(phraseBars, loopBars)
+  if (perPhrase > 0) {
+    // A phrase grid makes every landing a loop top, so the only question
+    // is WHICH loop top: the next one that is a whole phrase after the
+    // last, and then every phrase after that until the interval has had
+    // room to run out. advanceRadioClock increments lapsSincePhrase and
+    // THEN tests it, so the wrap ending this lap is lap 1.
+    let laps = Math.max(1, perPhrase - clock.lapsSincePhrase)
+    if (laps * loopBars < elapseAt - BOUNDARY_EPSILON) {
+      laps += Math.ceil((elapseAt / loopBars - laps) / perPhrase - BOUNDARY_EPSILON) * perPhrase
+    }
+    return laps * loopBars - pos
+  }
+  // Two floors, the same pair radioChangeDueAtNextWrap takes: a crossing
+  // has to be ahead of the playhead AND at or past the point the interval
+  // runs out.
+  //
+  // NO EPSILON ON THE FIRST ONE, and that is not an oversight -- it is
+  // the exact mirror of advanceRadioClock's `Math.floor(pos / step) >
+  // Math.floor(clock.lastPos / step)`, which has none either. Nudging it
+  // by a billionth reads a boundary the clock has NOT yet crossed as
+  // already behind us, and a `pos` that arrives as 3.999999999998 instead
+  // of 4 (it does -- it is an accumulated sum of 30Hz deltas) would then
+  // count a whole grid cell that the very next tick is about to spend.
+  // Measured: that put the countdown a full two bars out for one tick,
+  // immediately before the landing. radioChangeDueAtNextWrap can afford
+  // the slack because it only answers yes or no about the wrap; a number
+  // on screen cannot.
+  const step = gridBars > 0 ? gridBars : loopBars
+  const grid = Math.max(
+    (Math.floor(pos / step) + 1) * step,
+    Math.ceil(elapseAt / step - BOUNDARY_EPSILON) * step
+  )
+  // A wrap is ALWAYS a boundary, whether or not the grid divides the loop
+  // -- advanceRadioClock's `crossed` starts with `wrapped ||`. radioGridBars
+  // steps a cycle down to a divisor precisely so the two agree, but this
+  // must not depend on it: a grid that did not divide the loop would put a
+  // wrap ahead of the grid's own next multiple, and the wrap is the one
+  // that would fire.
+  const wrap = Math.max(loopBars, Math.ceil(elapseAt / loopBars - BOUNDARY_EPSILON) * loopBars)
+  return Math.min(grid, wrap) - pos
+}
+
 /** Which single layer turns over next.
  *
  * ONE at a time is the whole point (spec 3.1): everything changing

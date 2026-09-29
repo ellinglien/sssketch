@@ -41,6 +41,7 @@ import { applyTraitBar } from '@shared/traitBar'
 import {
   RADIO_PACE_BARS,
   advanceRadioClock,
+  radioBarsUntilChange,
   radioChangeDueAtNextWrap,
   createRadioClock,
   isRadioEligibleSlot,
@@ -71,11 +72,10 @@ import {
   type RadioTransitionKind
 } from '@shared/radioTransition'
 import {
-  radioApproachBarsLeft,
   radioApproachFor,
-  radioApproachLabel,
   radioApproachProgress,
-  type RadioApproach
+  type RadioApproach,
+  type RadioApproachWait
 } from '@shared/radioApproach'
 import {
   buildMatchMeter,
@@ -2096,8 +2096,8 @@ export function DiscoverPanel({
   // The renderable half of radioLedChangeRef, exactly as radioArmedSlotId
   // is of radioPendingRef -- and the more urgent of the two to draw: a
   // held change is not "coming", it lands at the very next wrap. See
-  // @shared/radioApproach for the two states and why they read
-  // differently.
+  // @shared/radioApproach for the two states and why the row reads them
+  // as two depths of the same fade rather than as two measurements.
   const [radioHeldSlotId, setRadioHeldSlotId] = useState<string | null>(null)
   /** THE ONLY WAY radioLedChangeRef IS WRITTEN -- same contract, same
    * deferral and the same reason as setRadioPending above. */
@@ -2395,24 +2395,19 @@ export function DiscoverPanel({
   // written at most once per position tick, which the panel re-renders on
   // anyway.
   const [radioProgress, setRadioProgress] = useState(0)
-  // The SAME wait, counted in whole bars instead of as a fraction -- what
-  // the armed row actually says out loud ("in 6 bars").
+  // THE ONE WAIT every about-to-change row is measured against -- bars of
+  // playback since it began, and bars until the change actually LANDS.
+  // Handed straight to radioApproachFor; see @shared/radioApproach for why
+  // it is one quantity rather than the interval-then-loop pair that
+  // shipped in 46c9ddc.
   //
-  // Separate state rather than derived from radioProgress at render time
-  // because the two have to churn at different rates. radioProgress is
-  // written every position tick (~30Hz) and drives a rule, which is fine;
-  // a NUMBER that jitters at 30Hz is worse than no number, and this one
-  // changes at most once a bar. It is also what the phone is handed (the
-  // Mac pushes remote state on a dependency change, not on a clock), so a
-  // per-tick value here would mean a per-tick IPC push and a per-tick
-  // re-derivation of every row's peaks.
-  //
-  // The updater compares before it replaces so an unchanged bar count is a
-  // React bail-out rather than a new object identity every tick.
-  const [radioCountdown, setRadioCountdown] = useState<{
-    barsLeft: number | null
-    intervalBars: number
-  } | null>(null)
+  // NOT the interval. radioProgress above is the interval clock and is
+  // honest about being that -- it is drawn under the radio BUTTON, where
+  // "how far through the wait between changes" is the question. A ROW is
+  // answering a different question ("when does THIS one turn over"), and
+  // the interval only ever said the earliest that could be. See
+  // radioBarsUntilChange.
+  const [radioChangeWait, setRadioChangeWait] = useState<RadioApproachWait | null>(null)
   // Radio's own controls -- same position/dismissal pattern as the slot
   // row's nearbyMenu and kindMenu. See DiscoverRadioMenu.tsx. Opened by
   // the radio BUTTON while radio is off (the start prompt) and by the
@@ -2657,17 +2652,29 @@ export function DiscoverPanel({
     // setState inside an effect (react-hooks/set-state-in-effect), and the
     // established workaround in this codebase is a resolved-promise tick.
     const progress = radioApproachProgress(step.clock.barsElapsed, step.clock.intervalBars)
-    // Whole bars still to go, for the armed row's own words. Same two
-    // numbers, read the other way round -- see @shared/radioApproach.
-    const barsLeft = radioApproachBarsLeft(step.clock.barsElapsed, step.clock.intervalBars)
-    const intervalBars = step.clock.intervalBars
+    // THE ROWS' OWN CLOCK, which is not that one. A row is asking when the
+    // change lands, and the interval only ever said the earliest it could:
+    // a held change waits for the wrap it is anchored to, and an armed one
+    // waits for the first change-grid boundary at or after the interval,
+    // which can be most of a lap later. Counting the interval is what put
+    // "this bar" on a row that then looped several more times.
+    //
+    // ONE quantity across both states, so the armed -> held transition can
+    // change how the row looks and never what it means. The two readings
+    // are the same reading at the moment it flips, too: stepRadioStage
+    // only decides early when radioChangeDueAtNextWrap says the landing is
+    // the coming wrap, which is exactly what radioBarsUntilChange is
+    // already counting to.
+    const changeWait: RadioApproachWait = {
+      elapsedBars: step.clock.barsElapsed,
+      barsUntilChange:
+        radioLedChangeRef.current !== null
+          ? loopBars - pos
+          : radioBarsUntilChange(step.clock, pos, loopBars, gridBars, radioSettings.phraseBars)
+    }
     void Promise.resolve().then(() => {
       setRadioProgress(progress)
-      setRadioCountdown((prev) =>
-        prev !== null && prev.barsLeft === barsLeft && prev.intervalBars === intervalBars
-          ? prev
-          : { barsLeft, intervalBars }
-      )
+      setRadioChangeWait(changeWait)
     })
     // Radio's scheduled swap gets its look at this tick here: after the
     // two branches that LAND a change (both of which return), and before
@@ -3142,24 +3149,23 @@ export function DiscoverPanel({
   // "this one is about to change" the desk does -- the phone is a per-stem
   // mixer now and the information is worth as much there.
   //
-  // QUANTISED TO WHOLE BARS, not the 30Hz fraction the rows use. The push
-  // below is a dependency-driven effect, not a clock: a per-tick value
-  // here would fire a real IPC push and re-derive every row's peaks thirty
-  // times a second, for a number a 700ms poll could never show anyway.
-  // barsLeft moves about once a bar, so this identity does too.
+  // TWO SLOT IDS AND NOTHING ELSE. It carried a `progress` fraction until
+  // 2026-09-29, for a 2px rule the phone drew along the bottom of the row;
+  // both ends of that are gone (Elling: "can't it be the red playhead
+  // indicator instead of a progress bar? that would streamline the ui"),
+  // and the phone's own red playhead already sweeps its rows. A field
+  // nothing reads is a lie, so it went with the rule.
+  //
+  // The push below is a dependency-driven effect, not a clock, and this
+  // now changes only when radio picks a different row -- a handful of
+  // times a minute rather than thirty times a second.
   //
   // useMemo for that identity and nothing else: a fresh object every
   // render would make the effect below a per-render push.
   const radioRemote = useMemo<RemoteRadioView | null>(() => {
     if (radioArmedSlotId === null && radioHeldSlotId === null) return null
-    const barsLeft = radioCountdown?.barsLeft ?? null
-    const intervalBars = radioCountdown?.intervalBars ?? 0
-    return {
-      armedSlotId: radioArmedSlotId,
-      heldSlotId: radioHeldSlotId,
-      progress: barsLeft === null || !(intervalBars > 0) ? 0 : 1 - barsLeft / intervalBars
-    }
-  }, [radioArmedSlotId, radioHeldSlotId, radioCountdown])
+    return { armedSlotId: radioArmedSlotId, heldSlotId: radioHeldSlotId }
+  }, [radioArmedSlotId, radioHeldSlotId])
 
   // The renderer PUSHES; main only ever answers GET /api/state with the
   // last thing pushed. What he sees on the Mac and what he sees on the
@@ -4182,7 +4188,7 @@ export function DiscoverPanel({
     // and the whole point of clearing it here is that it comes off now.
     releaseSyncHold(null)
     setRadioProgress(0)
-    setRadioCountdown(null)
+    setRadioChangeWait(null)
   }
 
   /** Starts radio at a chosen pace. Elling, 2026-09-28: "the initial
@@ -4702,6 +4708,33 @@ export function DiscoverPanel({
         @keyframes discover-slot-working {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
+        }
+        /* A ROW RADIO IS ABOUT TO CHANGE. The row itself breathes, slowly,
+           between the panel's own ground and the fill its controls already
+           use -- and that is the whole indicator. See DiscoverSlotRow's
+           own animation style for why this replaced a progress rule, and
+           @shared/radioApproach for what the two depths mean.
+
+           BACKGROUND, not opacity. discover-slot-working fades the
+           WAVEFORM, and reusing that here would dim audio information for
+           bars at a time and read as "this row is busy" -- the row is not
+           busy, it is next. Chrome carries the message; the stem is left
+           exactly as bright as every other stem.
+
+           NO HUE and no hard blink, the same two rules the rule it
+           replaced was held to: colour is spent on audio only, and a flash
+           at a fixed rate competes with the red playhead sweeping this
+           same row. 2600ms with an ease both ways has no edge to read a
+           beat off, and it is deliberately unrelated to the tempo and
+           never restarted at the wrap -- so it cannot be mistaken for
+           something counting. The playhead does the counting. */
+        @keyframes discover-slot-coming {
+          0%, 100% { background: transparent; }
+          50% { background: var(--ra-bg-row-active); }
+        }
+        @keyframes discover-slot-landing {
+          0%, 100% { background: var(--ra-bg-row-active); }
+          50% { background: var(--ra-border); }
         }
         @keyframes discover-add-pulse {
           0% { box-shadow: 0 0 0 0 var(--ra-stretch-on); }
@@ -5269,22 +5302,16 @@ export function DiscoverPanel({
           previewingSlotIds.size > 0 && maxBarLength > 0
             ? Math.max(0, Math.min(100, (pos / maxBarLength) * 100))
             : null
-        // The two clocks a row can be waiting on, read once for the whole
-        // list rather than per row. The INTERVAL is what an armed change
-        // counts against; the LOOP is what a held one counts against,
-        // because the loop top is literally the thing it waits for. See
-        // @shared/radioApproach for why those are two states and not one.
-        //
-        // Both fall back to "no length known" rather than to a wrong
-        // number: an unresolved loop has no bar length, and radio's clock
-        // has no interval until it has ticked once.
-        const approachInterval = {
-          progress: radioProgress,
-          barsLeft: radioCountdown?.barsLeft ?? null
-        }
-        const approachLoop = {
-          progress: playheadPct === null ? 0 : playheadPct / 100,
-          barsLeft: playheadPct === null ? null : radioApproachBarsLeft(pos, maxBarLength)
+        // THE ONE WAIT a row can be on, read once for the whole list
+        // rather than per row -- radio names at most one armed and at most
+        // one held slot at a time. Written by the clock effect above, off
+        // the same tick that drives everything else radio does, so the
+        // count and the change cannot come from different clocks. It falls
+        // back to "not knowable" rather than to a wrong number: radio has
+        // no wait at all until it has ticked once.
+        const approachWait: RadioApproachWait = radioChangeWait ?? {
+          elapsedBars: 0,
+          barsUntilChange: null
         }
         return slots.map((slot) => (
           <DiscoverSlotRow
@@ -5294,8 +5321,7 @@ export function DiscoverPanel({
               slotId: slot.id,
               armedSlotId: radioArmedSlotId,
               heldSlotId: radioHeldSlotId,
-              interval: approachInterval,
-              loop: approachLoop
+              wait: approachWait
             })}
             rerolling={rerollingSlotIds.has(slot.id)}
             previewing={previewingSlotIds.has(slot.id)}
@@ -5751,13 +5777,13 @@ function DiscoverSlotRow({
    *
    * Direct report, 2026-09-29: "i don't see any preparatory blinking on
    * the channels about to transition... right now it just drops when the
-   * loop ends and everything seems cramped for time." Two distinct waits
-   * (see @shared/radioApproach): `armed` is a pick chosen and warmed a
-   * whole interval early, `held` is a change already decided and waiting
-   * only for the next loop top. They are drawn as one rule filling toward
-   * the moment, at two different luminances -- chrome gets no hue, and a
-   * rule that tracks the real approach says how long as well as whether,
-   * which a blink at a fixed rate cannot. */
+   * loop ends and everything seems cramped for time." Two stages of ONE
+   * wait (see @shared/radioApproach): `armed` is a pick chosen and warmed
+   * ahead of time, `held` is that same change now decided and waiting
+   * only for the next loop top. Only `state` is drawn -- the row breathes
+   * at two luminances and the red playhead says when -- but both stages
+   * measure the same quantity, so the brightness step cannot move what
+   * the row is telling him. */
   radioApproach: RadioApproach | null
   /** True while THIS slot's own rerollSlot call is in flight -- drives the
    * reroll button's disabled/label-swap state, matching
@@ -6318,65 +6344,44 @@ function DiscoverSlotRow({
           alignItems: 'center',
           columnGap: 8,
           padding: '8px 0',
-          // For the radio approach rule below and nothing else. An
-          // absolutely positioned child of a grid container is out of
-          // flow and is NOT a grid item, so it cannot disturb this row's
-          // own explicit-position discipline (see the gridTemplateColumns
-          // comment above) the way a fifteenth in-flow child would.
-          position: 'relative',
+          // A ROW RADIO IS ABOUT TO CHANGE. The row breathes, slowly,
+          // and the red playhead already sweeping it says when -- because
+          // a change now lands at the loop top (e5810f4 stages the swap a
+          // lap early and the engine applies it at bar 0), so the
+          // playhead reaching the right-hand end of the waveform IS the
+          // moment it happens.
+          //
+          // Elling, 2026-09-29, after two passes at drawing this as a
+          // progress rule with a countdown beside it: "i still don't
+          // understand 'this bar'.. i think the fade in and out
+          // indication is clear enough that 'something is going to happen
+          // on this one soon'" and then "can't it be the red playhead
+          // indicator instead of a progress bar? that would streamline
+          // the ui". So: no rule, no chip, no words. Both of the things
+          // this used to draw are built from something already on screen
+          // instead.
+          //
+          // WHAT IS ACCEPTED HERE, rather than solved: the playhead
+          // restarts every lap, so a change three laps out cannot be read
+          // off it as three laps -- the row simply reads "coming" until
+          // the lap it lands in. That is the whole intended message.
+          // Radio still KNOWS the real number (radioChangeWait above, and
+          // @shared/radioApproach, which is still measured and still
+          // tested); nothing draws it.
+          //
+          // Two depths, luminance only: dimmer while the pick is merely
+          // armed, brighter once the change is decided and the next wrap
+          // is the one. Same pace either way, so the difference reads as
+          // weight rather than as urgency counting down.
+          animation:
+            radioApproach === null
+              ? undefined
+              : radioApproach.state === 'held'
+                ? 'discover-slot-landing 2600ms ease-in-out infinite'
+                : 'discover-slot-coming 2600ms ease-in-out infinite',
           borderBottom: '1px solid var(--ra-border-soft)'
         }}
       >
-        {/* THE APPROACH RULE. A row radio is about to change fills a rule
-            along its own bottom edge as the moment arrives -- the same
-            picture, in the same greys, as the interval rule under the
-            radio button, drawn on the layer it is actually about to
-            happen to.
-
-            Direct report, 2026-09-29: "i don't see any preparatory
-            blinking on the channels about to transition... it seems to
-            make sense to have that in the ui... like, 'this one is about
-            to change and is getting ready to transition'. right now it
-            just drops when the loop ends and everything seems cramped for
-            time."
-
-            NOT A BLINK, deliberately. A flash at a fixed rate competes
-            with the playhead sweeping this same row and reads as an error
-            state, and it can only say WHETHER. A rule that tracks the
-            real approach says how long as well, which is the actual
-            complaint ("cramped for time").
-
-            NO HUE, deliberately. A pending change is chrome, not audio
-            information, and tokens.css spends colour only on things that
-            carry audio. The two states are told apart by luminance and by
-            what the rule is measuring: an ARMED row's rule runs against
-            radio's interval clock at --ra-text-3, the same grey as the
-            interval rule under the button, because it IS that clock. A
-            HELD row's runs against the loop itself at full --ra-text,
-            because the change is already decided and lands at the very
-            next wrap. */}
-        {radioApproach !== null && (
-          <div
-            aria-hidden
-            style={{
-              position: 'absolute',
-              left: 0,
-              right: 0,
-              bottom: 0,
-              height: 2,
-              background: 'var(--ra-border)',
-              pointerEvents: 'none'
-            }}
-          >
-            <div
-              style={{
-                height: '100%',
-                width: `${Math.round(radioApproach.progress * 100)}%`,
-                background: radioApproach.state === 'held' ? 'var(--ra-text)' : 'var(--ra-text-3)'
-              }}
-            />
-          </div>
-        )}
         {/* Direct request, 2026-09-15: "an X for remove" -- icon-only, same
           as every other row button now. */}
         <button
@@ -6543,46 +6548,6 @@ function DiscoverSlotRow({
           carries a plain accessible name (drag to adjust volume), just
           without the drag hint or the live percentage. */}
         <div style={{ gridColumn: 7, minWidth: 140, position: 'relative' }}>
-          {/* What the rule along the bottom of this row is counting down
-              to, in words -- "in 6 bars" while the pick is armed, "at loop
-              top" once the change is decided and only waiting for the
-              wrap. Three words at the outside (radioApproachLabel owns
-              that budget), lowercase, no punctuation.
-
-              The bar COUNT rather than the fraction, because it only
-              changes once a bar: a number re-rendered at 30Hz is worse
-              than no number, which is the same reason the interval
-              indicator under the radio button is a line and not a
-              readout. The line carries the continuous half; this carries
-              the half worth reading.
-
-              Drawn on --ra-bg-row-active, the control fill this row's own
-              mute/solo/favourite buttons already use, so a chip of text
-              over the waveform's corner reads as chrome rather than as
-              something in the audio. Top-LEFT on purpose: the right end
-              of the waveform is where the loop -- and the change -- is
-              about to arrive, and covering that would hide the moment
-              this is announcing. */}
-          {radioApproach !== null && (
-            <span
-              style={{
-                position: 'absolute',
-                top: 0,
-                left: 0,
-                zIndex: 1,
-                padding: '1px 4px',
-                fontSize: 9,
-                lineHeight: 1.25,
-                letterSpacing: 'var(--ra-track-eyebrow)',
-                background: 'var(--ra-bg-row-active)',
-                color: radioApproach.state === 'held' ? 'var(--ra-text)' : 'var(--ra-text-3)',
-                pointerEvents: 'none',
-                whiteSpace: 'nowrap'
-              }}
-            >
-              {radioApproachLabel(radioApproach)}
-            </span>
-          )}
           {resolvedStem ? (
             // Direct request, 2026-09-20: "clicking on wave shouldn't mute
             // it, leave that to the M button" -- clicking the waveform used

@@ -398,47 +398,44 @@ describe('remoteStateFromSlots and radio', () => {
     expect(remoteStateFromSlots([slot({ id: 'a' })], meta).radio).toBeNull()
   })
 
-  it('carries which row is armed and how far its wait has run', () => {
+  it('carries which row is armed', () => {
     const state = remoteStateFromSlots([slot({ id: 'a' }), slot({ id: 'b' })], {
       ...meta,
-      radio: { armedSlotId: 'b', heldSlotId: null, progress: 0.5 }
+      radio: { armedSlotId: 'b', heldSlotId: null }
     })
-    expect(state.radio).toEqual({ armedSlotId: 'b', heldSlotId: null, progress: 0.5 })
+    expect(state.radio).toEqual({ armedSlotId: 'b', heldSlotId: null })
   })
 
   it('carries a held row, the one that lands at the next wrap', () => {
     const state = remoteStateFromSlots([slot({ id: 'a' })], {
       ...meta,
-      radio: { armedSlotId: null, heldSlotId: 'a', progress: 1 }
+      radio: { armedSlotId: null, heldSlotId: 'a' }
     })
-    expect(state.radio).toEqual({ armedSlotId: null, heldSlotId: 'a', progress: 1 })
+    expect(state.radio).toEqual({ armedSlotId: null, heldSlotId: 'a' })
   })
 
   it('drops an id that names no row, so the phone can never be told to mark nothing', () => {
     const state = remoteStateFromSlots([slot({ id: 'a' })], {
       ...meta,
-      radio: { armedSlotId: 'gone', heldSlotId: 'also-gone', progress: 0.5 }
+      radio: { armedSlotId: 'gone', heldSlotId: 'also-gone' }
     })
-    expect(state.radio).toEqual({ armedSlotId: null, heldSlotId: null, progress: 0.5 })
+    expect(state.radio).toEqual({ armedSlotId: null, heldSlotId: null })
   })
 
-  it('clamps the progress, so it can only ever be a width', () => {
-    const over = remoteStateFromSlots([slot({ id: 'a' })], {
+  it('carries no fraction at all, because nothing on the phone draws one', () => {
+    // The rule this fed went with the desktop's own on 2026-09-29; the
+    // page's red playhead says when, and the row fades to say which.
+    const state = remoteStateFromSlots([slot({ id: 'a' })], {
       ...meta,
-      radio: { armedSlotId: 'a', heldSlotId: null, progress: 4 }
+      radio: { armedSlotId: 'a', heldSlotId: null }
     })
-    expect(over.radio?.progress).toBe(1)
-    const nonsense = remoteStateFromSlots([slot({ id: 'a' })], {
-      ...meta,
-      radio: { armedSlotId: 'a', heldSlotId: null, progress: Number.NaN }
-    })
-    expect(nonsense.radio?.progress).toBe(0)
+    expect(Object.keys(state.radio ?? {})).toEqual(['armedSlotId', 'heldSlotId'])
   })
 
   it('still lets no path, no cid and nothing about the library out', () => {
     const state = remoteStateFromSlots([slot({ id: 'a' })], {
       ...meta,
-      radio: { armedSlotId: 'a', heldSlotId: null, progress: 0.5 }
+      radio: { armedSlotId: 'a', heldSlotId: null }
     })
     expect(JSON.stringify(state)).not.toContain('secret')
     expect(JSON.stringify(state)).not.toContain('/Users')

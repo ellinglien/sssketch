@@ -330,36 +330,46 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
   background: #0a0a0a;
   border: 1px solid #222222;
   color: #ededed;
-  /* For .ahead below and nothing else. */
-  position: relative;
 }
 .row:active { background: #161616; }
 /* A ROW RADIO IS ABOUT TO CHANGE. Direct report, 2026-09-29, listening on
  * radio: "i don't see any preparatory blinking on the channels about to
  * transition... it seems to make sense to have that in the ui... like,
- * 'this one is about to change and is getting ready to transition'. right
- * now it just drops when the loop ends and everything seems cramped for
- * time."
+ * 'this one is about to change and is getting ready to transition'."
  *
- * A rule along the bottom of the row that GROWS toward the moment, which
- * is the same picture the mac's own discover rows draw (@shared/
- * radioApproach). Not a blink: nothing on this page animates on a timer,
- * the playhead is the only motion here and must stay the only one, and a
- * flash could say whether but never how long.
+ * THE ROW BREATHES, and that is all. It was a 2px rule along the bottom
+ * of the row for one day; Elling, on the mac's own copy of it: "i think
+ * the fade in and out indication is clear enough that 'something is going
+ * to happen on this one soon'" and "can't it be the red playhead
+ * indicator instead of a progress bar? that would streamline the ui".
+ * This page has had a red playhead sweeping every row since 2026-09-26
+ * (.lane / .line below) and a change lands at the loop top, so the line
+ * reaching the end of the lane IS the moment -- the rule was drawing a
+ * second time something already on screen.
  *
- * NOT A CLASS ON .row. paintGoingRow is the one and only thing that writes
- * a row's className -- that is how a rebuild under a pending removal comes
- * up already marked -- so this is its own child element with its own one
- * painter, exactly the shape dropEls and rowEls already have.
+ * Same two depths and the same 2600ms as the mac (DiscoverPanel's
+ * discover-slot-coming / discover-slot-landing), so the desk and the sofa
+ * say it the same way. Luminance only: there is no colour to spend on
+ * chrome here either, and the one lit treatment in a typeface with no
+ * bold belongs to button.lit.
  *
- * Two states, told apart by luminance and nothing else, because there is
- * no colour to spend on chrome here either. #3a3a3a while the pick is
- * armed and the change is still bars away; #8f8f8f, the page's muted ink,
- * once it is held for the loop top and lands at the next wrap. Neither is
- * #ededed: in a typeface with no bold that is the one lit treatment and
- * button.lit has it. */
-.ahead { position: absolute; left: 0; bottom: 0; height: 2px; background: #3a3a3a; }
-.ahead.now { background: #8f8f8f; }
+ * THE ONE EXCEPTION to "the playhead is the only motion here", and it is
+ * allowed for the reason a blink was not: eased both ways over 2600ms,
+ * unrelated to the tempo and never restarted at the wrap, it has no edge
+ * to read a beat off and cannot be mistaken for something counting.
+ *
+ * One knock-on, small and accepted: an animation outranks a normal
+ * declaration, so a breathing row does not flash .row:active under a
+ * thumb. The tap it answers opens the action sheet, which is its own
+ * acknowledgement.
+ *
+ * NOT A CLASS ON .row, still. paintGoingRow is the one and only thing
+ * that writes a row's className -- that is how a rebuild under a pending
+ * removal comes up already marked -- so paintAhead writes the row's own
+ * animation style and nothing else, and the two painters cannot overwrite
+ * each other. */
+@keyframes ahead { 0%, 100% { background: #0a0a0a; } 50% { background: #161616; } }
+@keyframes ahead-now { 0%, 100% { background: #161616; } 50% { background: #222222; } }
 .row .kind { grid-area: kind; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* min-width: 0 is not decoration: a canvas carries an intrinsic width, and
  * without it the 1fr column would be sized to that rather than to what is
@@ -1665,10 +1675,6 @@ input {
   // slot id can never collide with something inherited.
   var dropEls = Object.create(null)
   var rowEls = Object.create(null)
-  // The approach rules, by slot id -- the third member of the same family
-  // as dropEls and rowEls, for the same reason: one row's change can be
-  // repainted without going near the list.
-  var aheadEls = Object.create(null)
   // The last thing the mac said radio was about to do, or null. Held here
   // rather than read off a poll where it is needed, because renderRows can
   // run between polls (a handover lands and the merge stops holding a row)
@@ -1745,29 +1751,30 @@ input {
   }
 
   // THE SAME PER-ROW REPAINT, for what radio is about to do. The mac names
-  // at most one armed row and at most one held row, so every other row's
-  // rule is simply hidden.
+  // at most one armed row and at most one held row, so every other row
+  // simply stops breathing.
   //
-  // A HELD row is full width and the brighter grey: its change is already
-  // decided and lands at the very next wrap, so there is nothing left to
-  // count down. An ARMED row's width is how far its wait has run -- and
-  // never less than 3%, because a rule of zero width is no rule at all and
-  // the first bar of a wait is exactly when "this one is next" is worth
-  // knowing.
+  // A HELD row is the brighter of the two: its change is decided and lands
+  // at the very next wrap. An ARMED one is dimmer -- a pick is chosen and
+  // warming, and the wrap it lands on may still be laps away. Neither one
+  // counts anything down; the playhead in the lane does the "when".
+  //
+  // The row's own animation style and nothing else, so this and
+  // paintGoingRow (which owns className) can never overwrite one another.
   function paintAhead(id) {
-    var el = aheadEls[id]
-    if (!el) return
+    var row = rowEls[id]
+    if (!row) return
     var held = radioAhead !== null && radioAhead.heldSlotId === id
     var armed = !held && radioAhead !== null && radioAhead.armedSlotId === id
-    el.hidden = !held && !armed
-    if (el.hidden) return
-    el.className = held ? 'ahead now' : 'ahead'
-    var pct = held ? 100 : Math.max(3, Math.round((radioAhead.progress || 0) * 100))
-    el.style.width = pct + '%'
+    row.style.animation = held
+      ? 'ahead-now 2600ms ease-in-out infinite'
+      : armed
+        ? 'ahead 2600ms ease-in-out infinite'
+        : ''
   }
 
   function paintAllAhead() {
-    for (var id in aheadEls) paintAhead(id)
+    for (var id in rowEls) paintAhead(id)
   }
 
   function markGoing(id) {
@@ -2006,7 +2013,6 @@ input {
     rowCanvases = []
     dropEls = Object.create(null)
     rowEls = Object.create(null)
-    aheadEls = Object.create(null)
     mixEls = Object.create(null)
     lastSlots.forEach(function (slot) {
       var row = document.createElement('div')
@@ -2107,16 +2113,6 @@ input {
       mixEls[slot.id] = rec
       rowCanvases.push(rec)
 
-      // The approach rule. Absolutely positioned, so it is outside the
-      // grid's areas entirely and cannot take a cell from anything.
-      // Registered first and then painted by the one function that paints
-      // it, for the same reason x is: a rebuild mid-interval must come up
-      // already marked.
-      var ahead = document.createElement('span')
-      ahead.hidden = true
-      aheadEls[slot.id] = ahead
-      paintAhead(slot.id)
-
       // Placed by grid-template-areas, so this order is the reading order
       // and not the layout.
       row.appendChild(kind)
@@ -2125,8 +2121,10 @@ input {
       row.appendChild(muteKey)
       row.appendChild(stem)
       row.appendChild(drop)
-      row.appendChild(ahead)
       rowsEl.appendChild(row)
+      // Painted after the row is in place, for the same reason x is: a
+      // rebuild mid-interval must come up already breathing.
+      paintAhead(slot.id)
       // After append, so the canvas has a box to measure.
       paintRowMix(slot)
     })
@@ -2287,10 +2285,11 @@ input {
     // A mute or a solo made on the MAC lands on the phone here, by the same
     // one line a tap on the phone takes. Nothing is re-fetched for it.
     applyMix()
-    // AFTER renderRows, and unconditionally: the rules move every few bars
-    // and the row list does not, so a rebuild is exactly what must NOT be
-    // what draws them. renderRows paints a row it has just built; this
-    // catches the far commoner case where it rebuilt nothing at all.
+    // AFTER renderRows, and unconditionally: radio moves to a different
+    // row every few bars and the row list does not, so a rebuild is
+    // exactly what must NOT be what draws this. renderRows paints a row it
+    // has just built; this catches the far commoner case where it rebuilt
+    // nothing at all.
     paintAllAhead()
   }
 

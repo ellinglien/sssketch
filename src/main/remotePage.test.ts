@@ -1196,22 +1196,51 @@ describe('remotePage rows about to change', () => {
   // preparatory blinking on the channels about to transition... it seems
   // to make sense to have that in the ui". The phone is a per-stem mixer
   // now and the same fact is worth the same there.
-  it('marks the row radio is about to change with a rule, not a blink', () => {
-    expect(REMOTE_PAGE_HTML).toContain('.ahead {')
-    // A rule that grows toward the moment. Nothing on this page animates
-    // on a timer, and a flash would compete with the one thing that does
-    // move -- the playhead.
-    expect(REMOTE_PAGE_HTML).not.toContain('@keyframes')
+  it('marks the row radio is about to change with a fade, not a blink', () => {
+    // It was a 2px rule along the bottom of the row for one day.
+    // Elling, on the mac's own copy of it: "can't it be the red playhead
+    // indicator instead of a progress bar? that would streamline the ui"
+    // -- and this page has had a playhead sweeping every row since
+    // 2026-09-26, so the rule was drawing a second time something already
+    // on screen.
+    expect(REMOTE_PAGE_HTML).not.toContain('.ahead {')
     expect(SCRIPT).toContain('function paintAhead(')
   })
 
+  it('breathes slowly enough that it can never read as a flash', () => {
+    // The page's standing rule is that the playhead is the only motion
+    // here. This is the one exception, and the reason it is allowed is
+    // the reason a blink was not: at 2600ms it is far slower than a bar
+    // at any tempo radio runs at, so it carries no count and cannot be
+    // mistaken for the playhead's own rhythm. Two keyframes and no more.
+    expect(REMOTE_PAGE_HTML.match(/@keyframes/g)).toHaveLength(2)
+    for (const duration of SCRIPT.match(/(\d+)ms ease-in-out infinite/g) ?? []) {
+      expect(Number.parseInt(duration, 10)).toBeGreaterThanOrEqual(2000)
+    }
+    expect(SCRIPT).not.toContain('step-end')
+  })
+
   it('tells armed from held by luminance alone, because chrome gets no colour', () => {
-    // Two steps of the page's own grey ladder. #3a3a3a is the dimmest ink
-    // here (the disabled key) and #8f8f8f is the muted one; neither is the
-    // #ededed that button.lit alone is allowed.
-    expect(REMOTE_PAGE_HTML).toContain('.ahead { position: absolute')
-    expect(REMOTE_PAGE_HTML).toContain('.ahead.now { background: #8f8f8f; }')
-    expect(SCRIPT).toContain("'ahead now'")
+    // Two steps of the page's own grey ladder, and the same pair the mac
+    // uses (--ra-bg-row-active and --ra-border). #0a0a0a is the row's own
+    // ground; neither peak is the #ededed that button.lit alone is
+    // allowed.
+    expect(REMOTE_PAGE_HTML).toContain(
+      '@keyframes ahead { 0%, 100% { background: #0a0a0a; } 50% { background: #161616; } }'
+    )
+    expect(REMOTE_PAGE_HTML).toContain(
+      '@keyframes ahead-now { 0%, 100% { background: #161616; } 50% { background: #222222; } }'
+    )
+    expect(SCRIPT).toContain("'ahead-now 2600ms ease-in-out infinite'")
+  })
+
+  it('leaves the row class alone, so the one painter that owns it still does', () => {
+    // paintGoingRow is the only thing on this page allowed to write a
+    // row's className -- that is how a rebuild under a pending removal
+    // comes up already marked. This writes the row's animation style
+    // instead, so the two can never overwrite one another.
+    expect(SCRIPT).toContain('row.style.animation =')
+    expect(SCRIPT.match(/\brow\.className = /g) ?? []).toHaveLength(1)
   })
 
   it('paints it onto the drawn rows instead of rebuilding them', () => {
