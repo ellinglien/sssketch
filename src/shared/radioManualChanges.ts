@@ -14,10 +14,10 @@ export interface ManualArrival {
   beats: number
 }
 
-/** How long each gesture takes, in beats -- the table radio's own two
- * decision branches already use: a hole is a drop-out of the drawn length,
- * a riser two bars, everything else one bar. */
-function beatsFor(kind: RadioTransitionKind, dropOutBeats: () => number): number {
+/** How long each gesture takes, in beats -- the one table for radio's
+ * decision branches and the manual queue: a hole is a drop-out of the drawn
+ * length, a riser two bars, everything else one bar. */
+export function radioGestureBeats(kind: RadioTransitionKind, dropOutBeats: () => number): number {
   if (kind === 'hole') return dropOutBeats()
   if (kind === 'riser') return 8
   return 4
@@ -39,16 +39,29 @@ export function drawManualTransitions(
     dropOutBeats: () => number
     /** A hole, riser or standalone drop-out is already armed this lap. */
     leadingArmed: boolean
+    /** Bars from now to the wrap. Not a finite positive number means the
+     * position is unknown, and no leading gesture is granted. */
     barsToWrap: number
+    /** The loop's length in bars. Same rule for an unusable value. */
+    loopBars: number
   }
 ): Map<string, ManualArrival> {
   const out = new Map<string, ManualArrival>()
   let leadingTaken = options.leadingArmed
   for (const row of rows) {
     let kind = options.pick(row.kinds)
-    let beats = beatsFor(kind, options.dropOutBeats)
+    let beats = radioGestureBeats(kind, options.dropOutBeats)
     if (radioGestureLeadsChange(kind)) {
-      if (leadingTaken || beats / 4 > options.barsToWrap) {
+      // The curve is clamped to half the loop (clampToHalfLoop in
+      // radioTransition.ts, private there), so a riser on a short loop is
+      // shorter than its nominal length and may still fit.
+      const usable =
+        Number.isFinite(options.barsToWrap) &&
+        options.barsToWrap > 0 &&
+        Number.isFinite(options.loopBars) &&
+        options.loopBars > 0
+      const bars = Math.min(beats / 4, options.loopBars / 2)
+      if (leadingTaken || !usable || bars > options.barsToWrap) {
         kind = 'cut'
         beats = 4
       } else {
@@ -60,13 +73,22 @@ export function drawManualTransitions(
   return out
 }
 
+function carriesAsArrival(kind: RadioTransitionKind): boolean {
+  return kind !== 'cut' && !radioGestureLeadsChange(kind)
+}
+
 /** Radio's held change and the manual queue, as one staged swap.
+ *
+ * Only ARRIVAL gestures are carried. A hole or riser plays on the OUTGOING
+ * stem in the lap BEFORE the swap, so the caller arms it live and it is
+ * never part of a stage; a cut is no gesture at all. Both are dropped from
+ * `arrivals`, on the radio side and the manual side alike.
  *
  * A manual change on the row radio was about to turn over wins: the user
  * pointed at that row, radio only drew it. Generic over the stem type so
  * this stays free of the renderer's own stem shape. */
 export function mergeStageChanges<S>(
-  radioLed: { slotId: string; stem: S; arrival?: ManualArrival } | null,
+  radioLed: { slotId: string; stem: S; arrival: ManualArrival | null } | null,
   manual: ReadonlyMap<string, { stem: S; joining: boolean; arrival: ManualArrival | null }>
 ): {
   changes: { slotId: string; stem: S }[]
@@ -78,13 +100,14 @@ export function mergeStageChanges<S>(
   const arrivals: ({ slotId: string } & ManualArrival)[] = []
   if (radioLed !== null && !manual.has(radioLed.slotId)) {
     changes.push({ slotId: radioLed.slotId, stem: radioLed.stem })
-    if (radioLed.arrival && radioLed.arrival.kind !== 'cut')
+    if (radioLed.arrival !== null && carriesAsArrival(radioLed.arrival.kind)) {
       arrivals.push({ slotId: radioLed.slotId, ...radioLed.arrival })
+    }
   }
   for (const [slotId, change] of manual) {
     changes.push({ slotId, stem: change.stem })
     if (change.joining) joining.push(slotId)
-    if (change.arrival !== null && change.arrival.kind !== 'cut') {
+    if (change.arrival !== null && carriesAsArrival(change.arrival.kind)) {
       arrivals.push({ slotId, ...change.arrival })
     }
   }
