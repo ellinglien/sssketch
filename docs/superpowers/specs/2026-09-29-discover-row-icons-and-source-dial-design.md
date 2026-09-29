@@ -79,11 +79,15 @@ does not change. Only the gesture that writes it changes.
 
 Following `tokens.css`: no colour on chrome, no `border-radius`.
 
-- Off: transparent background, `--ra-border` border, `--ra-text-3` glyph.
-- Hold longer on: the lock's own "on" treatment, a `--ra-text` fill with a `--ra-bg` glyph.
+- Off: transparent background, `--ra-border` border, `--ra-text-2` glyph — the same as the row's
+  x and the old text buttons, so the squares read as one set.
+- Hold longer on: an inverted fill, `--ra-text` with a `--ra-bg-frame` glyph. (The first draft of
+  this spec said `--ra-bg`, which is not a token; the old cycle button had the same bug and its `h`
+  was invisible when set.)
 - Change next on: the softer treatment the current button uses for replace-soon, a
   `--ra-bg-row-active` fill with a `--ra-text` border and glyph.
-- Disabled: `--ra-text-4` glyph, no pointer.
+- Disabled: the whole button at reduced opacity, keeping its state styling, so a padlocked hooked
+  row still shows its hand. No pointer.
 
 ### Busy state
 
