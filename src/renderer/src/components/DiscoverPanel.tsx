@@ -38,6 +38,7 @@ import {
   type DiscoverSlotModifier
 } from '@shared/discoverSlotModifier'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
+import { mergeStageChanges } from '@shared/radioManualChanges'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
@@ -387,11 +388,19 @@ function randomDiscoverSlotKind(options: readonly DiscoverSlotKind[]): DiscoverS
 // exact same cap, rather than duplicating this number in a second file.
 export const DISCOVER_UNDO_LIMIT = 20
 
+/** One gesture as radioGestureRef holds it. */
+interface RadioGesture {
+  kind: 'drop-out' | RadioTransitionKind
+  slotId: string
+  beats: number
+  lapsLeft: number
+}
+
 /** One scheduled swap, as buildAndPushPreview needs to see it.
  *
- * `slotId`/`stem` are the substitution: build the project with THIS stem
- * in that slot instead of whatever is resolved there now. `gesture` is the
- * curve the staged project carries, which is an arrival gesture or
+ * `changes` are the substitutions: build the project with EACH stem in its
+ * slot instead of whatever is resolved there now. `gestures` are the
+ * curves the staged project carries, which are arrival gestures or
  * nothing -- never whatever is armed for the lap that is playing.
  *
  * `atBars` is WHICH boundary the engine should land this on: the bar of
@@ -404,14 +413,17 @@ export const DISCOVER_UNDO_LIMIT = 20
  * worth printing is where in the lap the decision was made. */
 interface RadioStageRequest {
   token: number
-  slotId: string
-  stem: ResolvedCandidateStem
-  gesture: {
-    kind: 'drop-out' | RadioTransitionKind
-    slotId: string
-    beats: number
-    lapsLeft: number
-  } | null
+  /** Every row whose stem changes at this wrap -- radio's own held change
+   * and, from Task 3 of the 2026-09-29 manual-changes plan, every manual
+   * one. See mergeStageChanges. */
+  changes: { slotId: string; stem: ResolvedCandidateStem }[]
+  /** Rows not in the live mix yet (added or duplicated while radio ran),
+   * joined into the staged member list. */
+  joining: string[]
+  /** Arrival curves for the project this stage BECOMES -- one per changing
+   * row that drew one. Never a leading gesture: that belongs to the lap
+   * before the swap and rides the live project (radioGestureRef). */
+  gestures: RadioGesture[]
   atBars?: number
   label: string
   atPos: number
@@ -1375,16 +1387,20 @@ export function DiscoverPanel({
       dispatch({ type: 'SET_TEMPO', bpm: Math.round(seedBpm) })
     }
 
-    const members = [...ids]
+    // Existing ids first, joining ids after: slotIndexById and the stem
+    // keys are numbered from this order, so it must stay stable.
+    const memberIds = stage ? new Set([...ids, ...stage.joining]) : ids
+    const members = [...memberIds]
       .map((id) => {
-        // A staged project is built from the mix as it WILL be: the one
-        // slot radio is about to turn over carries its INCOMING stem,
+        // A staged project is built from the mix as it WILL be: every
+        // slot about to turn over carries its INCOMING stem,
         // while nothing in the panel's own state has moved yet. That is
         // what lets the commit stay exactly where it is, at the wrap --
         // the row goes on saying "a change is coming" for the lap, the
         // undo stack and the UI are untouched, and the engine is the only
         // thing holding the future.
-        const stem = stage && stage.slotId === id ? stage.stem : resolvedStemsRef.current.get(id)
+        const stem =
+          stage?.changes.find((c) => c.slotId === id)?.stem ?? resolvedStemsRef.current.get(id)
         if (!stem) return null
         const gain = slots.find((s) => s.id === id)?.gain ?? 1
         return { id, stem, gain }
@@ -1439,7 +1455,7 @@ export function DiscoverPanel({
     // the STAGED loop length (Transport::setStagedLoopLengthBars) and
     // adopts it at the same wrap it adopts the project.
     const stagedBarLengths = new Map(resolvedBarLengthsRef.current)
-    if (stage) stagedBarLengths.set(stage.slotId, stage.stem.barLength)
+    if (stage) for (const c of stage.changes) stagedBarLengths.set(c.slotId, c.stem.barLength)
     const maxBarLength =
       stagedBarLengths.size > 0 ? Math.max(...stagedBarLengths.values()) : undefined
     const assembly = assembleDiscoverRifff(
@@ -1499,56 +1515,75 @@ export function DiscoverPanel({
     // playing NOW: a `hole` announcing this very change is over by the
     // time the staged project goes live, and carrying it across would
     // punch the gap in the layer that just arrived.
-    const gesture = stage ? stage.gesture : radioOnRef.current ? radioGestureRef.current : null
+    const gestureList: RadioGesture[] = stage
+      ? stage.gestures
+      : radioOnRef.current && radioGestureRef.current !== null
+        ? [radioGestureRef.current]
+        : []
     const masterLevel01 = masterLevelRef.current / 100
     function underMaster(key: string, curve: AutomationPoint[]): AutomationPoint[] {
       return masterScaledCurve(curve, (vol[key] ?? 1) * masterLevel01)
     }
-    if (gesture && maxBarLength !== undefined && maxBarLength > 0) {
-      const own = members.findIndex((m) => m.id === gesture.slotId) + 1
-      // Every gesture measures itself in beats, so one conversion here
-      // rather than four different units in the branches. 4/4, as
-      // everywhere else in Discover.
-      const bars = gesture.beats / 4
-      if (gesture.kind === 'drop-out' || gesture.kind === 'hole') {
-        // The same curve for both, and deliberately so: a hole IS the
-        // drop-out, attached to a change. The difference is entirely in
-        // WHOSE stem it lands on and when the change happens -- a
-        // drop-out drops an untouched layer and puts it straight back, a
-        // hole drops the OUTGOING layer and the new one lands in the
-        // space at the wrap (see radioLedChangeRef).
-        const curve = buildDropOutCurve(maxBarLength, gesture.beats)
-        if (own > 0 && curve.length > 0) {
-          const key = stemKey(rifff.groupId, own)
-          stemAutomation[key] = { volume: underMaster(key, curve) }
+    // One pass per gesture, merging rather than overwriting: with several
+    // rows changing at one wrap, a bloom on one row and a duck from another
+    // row's change can land on the same stem key.
+    for (const gesture of gestureList) {
+      if (maxBarLength !== undefined && maxBarLength > 0) {
+        const own = members.findIndex((m) => m.id === gesture.slotId) + 1
+        // Every gesture measures itself in beats, so one conversion here
+        // rather than four different units in the branches. 4/4, as
+        // everywhere else in Discover.
+        const bars = gesture.beats / 4
+        if (gesture.kind === 'drop-out' || gesture.kind === 'hole') {
+          // The same curve for both, and deliberately so: a hole IS the
+          // drop-out, attached to a change. The difference is entirely in
+          // WHOSE stem it lands on and when the change happens -- a
+          // drop-out drops an untouched layer and puts it straight back, a
+          // hole drops the OUTGOING layer and the new one lands in the
+          // space at the wrap (see radioLedChangeRef).
+          const curve = buildDropOutCurve(maxBarLength, gesture.beats)
+          if (own > 0 && curve.length > 0) {
+            const key = stemKey(rifff.groupId, own)
+            stemAutomation[key] = { ...stemAutomation[key], volume: underMaster(key, curve) }
+          }
+        } else if (gesture.kind === 'filter in') {
+          const curve = buildFilterInCurve(maxBarLength, bars)
+          if (own > 0 && curve.length > 0) {
+            const key = stemKey(rifff.groupId, own)
+            stemAutomation[key] = { ...stemAutomation[key], filterCutoff: curve }
+          }
+        } else if (gesture.kind === 'bloom') {
+          const curve = buildBloomCurve(maxBarLength, bars)
+          if (own > 0 && curve.length > 0) {
+            const key = stemKey(rifff.groupId, own)
+            stemAutomation[key] = { ...stemAutomation[key], reverbSend: curve }
+          }
+        } else if (gesture.kind === 'duck') {
+          // Every OTHER audible layer dips, so the new one lands in space.
+          // "Other" means other than EVERY row changing in this stage, so a
+          // duck never dips another arriving stem. And a second duck on a
+          // key that already carries one is skipped: duck curves are
+          // identical, and scaling one under the master twice would be
+          // wrong.
+          const curve = buildDuckCurve(maxBarLength, bars)
+          const changing = new Set(stage?.changes.map((c) => c.slotId) ?? [gesture.slotId])
+          if (curve.length > 0) {
+            members.forEach((m, i) => {
+              if (!changing.has(m.id)) {
+                const key = stemKey(rifff.groupId, i + 1)
+                if (!stemAutomation[key]?.volume) {
+                  stemAutomation[key] = { ...stemAutomation[key], volume: underMaster(key, curve) }
+                }
+              }
+            })
+          }
+        } else if (gesture.kind === 'riser') {
+          // The preview's one rifff sits on its own groupId channel
+          // (buildEngineProject's state.channelOf fallback), so that is the
+          // bus this sweep belongs on.
+          const riser = buildTransitionRiser(rifff.groupId, maxBarLength, bars)
+          if (riser) risers[riser.id] = riser
         }
-      } else if (gesture.kind === 'filter in') {
-        const curve = buildFilterInCurve(maxBarLength, bars)
-        if (own > 0 && curve.length > 0) {
-          stemAutomation[stemKey(rifff.groupId, own)] = { filterCutoff: curve }
-        }
-      } else if (gesture.kind === 'bloom') {
-        const curve = buildBloomCurve(maxBarLength, bars)
-        if (own > 0 && curve.length > 0) {
-          stemAutomation[stemKey(rifff.groupId, own)] = { reverbSend: curve }
-        }
-      } else if (gesture.kind === 'duck') {
-        // Every OTHER audible layer dips, so the new one lands in space.
-        const curve = buildDuckCurve(maxBarLength, bars)
-        if (curve.length > 0) {
-          members.forEach((m, i) => {
-            if (m.id !== gesture.slotId) {
-              const key = stemKey(rifff.groupId, i + 1)
-              stemAutomation[key] = { volume: underMaster(key, curve) }
-            }
-          })
-        }
-      } else if (gesture.kind === 'riser') {
-        // The preview's one rifff sits on its own groupId channel
-        // (buildEngineProject's state.channelOf fallback), so that is the
-        // bus this sweep belongs on.
-        const riser = buildTransitionRiser(rifff.groupId, maxBarLength, bars)
-        if (riser) risers[riser.id] = riser
       }
     }
 
@@ -2111,12 +2146,7 @@ export function DiscoverPanel({
   // is NOT harmless -- the curve repeats every lap, so a second lap would
   // turn one gesture into a rhythm. Hence the countdown in the wrap branch
   // of the clock effect below.
-  const radioGestureRef = useRef<{
-    kind: 'drop-out' | RadioTransitionKind
-    slotId: string
-    beats: number
-    lapsLeft: number
-  } | null>(null)
+  const radioGestureRef = useRef<RadioGesture | null>(null)
   // A change that is WAITING for the loop top, because the gesture it
   // carries can only be performed there.
   //
@@ -2568,13 +2598,20 @@ export function DiscoverPanel({
     }
     const token = (radioStageTokenRef.current += 1)
     radioStageRef.current = { token, slotId: led.slotId, sent: false, mapping: null }
+    const merged = mergeStageChanges(
+      { slotId: led.slotId, stem: led.stem, arrival: led.arrival ?? null },
+      new Map()
+    )
     void syncPreviewToEngine(previewingSlotIdsRef.current, {
       token,
-      slotId: led.slotId,
-      stem: led.stem,
-      gesture: led.arrival
-        ? { kind: led.arrival.kind, slotId: led.slotId, beats: led.arrival.beats, lapsLeft: 1 }
-        : null,
+      changes: merged.changes,
+      joining: merged.joining,
+      gestures: merged.arrivals.map((a) => ({
+        kind: a.kind,
+        slotId: a.slotId,
+        beats: a.beats,
+        lapsLeft: 1
+      })),
       atBars: led.atBars,
       label: led.arrival ? led.arrival.kind : radioGestureRef.current !== null ? 'led' : 'cut',
       atPos: pos,
