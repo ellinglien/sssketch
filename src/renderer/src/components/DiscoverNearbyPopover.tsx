@@ -176,8 +176,10 @@ export function DiscoverNearbyPopover({
    * a step-button pick or "back to start." This popover recenters its own
    * browsing around whatever was just picked; it does NOT close itself.
    * `immediate` is Cmd held on the click: while radio runs, the pick lands
-   * right away instead of waiting for the loop top (2026-09-29). */
-  onPick: (candidate: DiscoverCandidate, immediate: boolean) => void
+   * right away instead of waiting for the loop top (2026-09-29). Returns
+   * whether the pick was ACCEPTED -- false when the row already has a
+   * change waiting and ignored it, and then nothing here recenters. */
+  onPick: (candidate: DiscoverCandidate, immediate: boolean) => boolean
   onClose: () => void
   ignoreRef: React.RefObject<HTMLElement | null>
 }): React.JSX.Element {
@@ -231,7 +233,9 @@ export function DiscoverNearbyPopover({
   const loading = resultForCurrent === null
 
   function handlePick(candidate: DiscoverCandidate, immediate: boolean): void {
-    onPick(candidate, immediate)
+    // Only a pick that took moves the browsing -- recentering on one the
+    // row ignored would say it took.
+    if (!onPick(candidate, immediate)) return
     setCenterCandidate(candidate)
   }
 

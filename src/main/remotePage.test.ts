@@ -1251,4 +1251,11 @@ describe('remotePage rows about to change', () => {
     expect(SCRIPT).toContain('paintAllAhead()')
     expect(SCRIPT).toContain('radioAhead = state.radio')
   })
+
+  it('breathes every held row, so a row waiting for the loop top says why a tap did nothing', () => {
+    // 2026-09-29: while radio runs, a manual change waits for the loop top
+    // and a second tap on that row is ignored. The mac sends every waiting
+    // row as held, radio's own among them.
+    expect(SCRIPT).toContain('radioAhead.heldSlotIds')
+  })
 })

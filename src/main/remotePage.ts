@@ -1751,8 +1751,10 @@ input {
   }
 
   // THE SAME PER-ROW REPAINT, for what radio is about to do. The mac names
-  // at most one armed row and at most one held row, so every other row
-  // simply stops breathing.
+  // at most one armed row and any number of held rows -- radio's own held
+  // change plus every manual change waiting for the loop top, which is why
+  // a tap on such a row is ignored -- and every other row simply stops
+  // breathing.
   //
   // A HELD row is the brighter of the two: its change is decided and lands
   // at the very next wrap. An ARMED one is dimmer -- a pick is chosen and
@@ -1764,7 +1766,7 @@ input {
   function paintAhead(id) {
     var row = rowEls[id]
     if (!row) return
-    var held = radioAhead !== null && radioAhead.heldSlotId === id
+    var held = radioAhead !== null && (radioAhead.heldSlotIds || []).indexOf(id) !== -1
     var armed = !held && radioAhead !== null && radioAhead.armedSlotId === id
     row.style.animation = held
       ? 'ahead-now 2600ms ease-in-out infinite'

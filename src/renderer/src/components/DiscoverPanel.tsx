@@ -332,6 +332,13 @@ interface SlotPick {
   candidate: DiscoverCandidate | null
   barUsed: number | null
   barRequested: number
+  /** Not from a ranked roll: an "any stem" draw, a nearby pick, or a
+   * duplicate's copied candidate. commitSlotPick then leaves the slot's
+   * match-meter fields (pickBar, reclassified) exactly as they are, as
+   * those paths' own direct writes always have -- a pickBar paired with a
+   * candidate that never had percentiles computed would draw empty trait
+   * bars and misreport it as unanalysed (see meterEntries). */
+  unranked?: true
 }
 
 // Real bug, live-reported 2026-09-17: "i clicked 'lock' on a set of
@@ -2064,6 +2071,8 @@ export function DiscoverPanel({
   // slot holding a 2-bar hat can draw an 8-bar pad next, and dropping
   // that pad in on the hat's 2-bar boundary is exactly the cut 687641a
   // describes. See radioChangeBars.
+  /** Bumped by every armRadioPick; see there. */
+  const radioArmTokenRef = useRef(0)
   const radioPendingRef = useRef<{
     slotId: string
     pick: SlotPick
@@ -3904,10 +3913,21 @@ export function DiscoverPanel({
   //
   // useMemo for that identity and nothing else: a fresh object every
   // render would make the effect below a per-render push.
+  //
+  // HELD is every row waiting for the loop top: radio's own held change and
+  // every manual change queued while radio runs, the same rows the desktop
+  // breathes as held. Keyed by the joined ids rather than the Set, whose
+  // identity changes whenever a waiting entry resolves.
+  const manualWaitingKey = [...manualWaitingSlotIds].join('\n')
   const radioRemote = useMemo<RemoteRadioView | null>(() => {
-    if (radioArmedSlotId === null && radioHeldSlotId === null) return null
-    return { armedSlotId: radioArmedSlotId, heldSlotId: radioHeldSlotId }
-  }, [radioArmedSlotId, radioHeldSlotId])
+    const manualWaiting = manualWaitingKey === '' ? [] : manualWaitingKey.split('\n')
+    const heldSlotIds =
+      radioHeldSlotId !== null && !manualWaiting.includes(radioHeldSlotId)
+        ? [radioHeldSlotId, ...manualWaiting]
+        : manualWaiting
+    if (radioArmedSlotId === null && heldSlotIds.length === 0) return null
+    return { armedSlotId: radioArmedSlotId, heldSlotIds }
+  }, [radioArmedSlotId, radioHeldSlotId, manualWaitingKey])
 
   // The renderer PUSHES; main only ever answers GET /api/state with the
   // last thing pushed. What he sees on the Mac and what he sees on the
@@ -3978,6 +3998,22 @@ export function DiscoverPanel({
     radioRemote
   ])
 
+  // What the unmount below does with manual changes still waiting. In a
+  // ref, refreshed every render, for the reason remoteCommandRef is: the
+  // unmount cleanup is registered once and must run THIS render's
+  // commitSlotPick.
+  const landWaitingOnCloseRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    landWaitingOnCloseRef.current = (): void => {
+      const waiting = manualChangesRef.current
+      setManualChanges(new Map())
+      for (const [slotId, change] of waiting) {
+        if (!slotsRef.current.some((s) => s.id === slotId)) continue
+        commitSlotPick(slotId, change.pick)
+      }
+    }
+  })
+
   // Discover is closed the moment this panel unmounts -- the page then
   // says "open discover on the mac" and offers nothing else.
   useEffect(() => {
@@ -4002,9 +4038,12 @@ export function DiscoverPanel({
       // gets a fresh project from whatever claims it next.
       radioGestureRef.current = []
       setRadioLedChange(null)
-      // A closed panel has no loop top to wait for; the waiting changes
-      // simply go.
-      setManualChanges(new Map())
+      // A closed panel has no loop top to wait for, so the waiting changes
+      // land now, exactly as stopRadio lands them. Thrown away, a JOINING
+      // row would stay blank for good: the slots live in the parent and
+      // outlive this panel. The stem resolves and joins the mix when
+      // Discover next opens.
+      landWaitingOnCloseRef.current()
       radioCourseChangeRef.current = null
       // Unlike the gesture above, this one DOES have to reach the engine:
       // a staged project outlives this panel, and whatever claims the
@@ -4414,16 +4453,28 @@ export function DiscoverPanel({
   //
   // While radio runs (and Cmd is not held) the copy appears at once but
   // silent, and joins at the loop top: it is created empty, and the
-  // source's CURRENT candidate is queued for it as a joining change. Only
-  // a source with a candidate can be expressed as a pick -- a seeded source
-  // (seedStem, no candidate) or one with nothing at all is duplicated at
-  // once, exactly as below.
+  // source's CURRENT candidate is queued for it as a joining change -- or,
+  // for a source whose own stem is still waiting, that waiting pick. A
+  // seeded source (seedStem, no candidate) or one with nothing at all
+  // cannot be expressed as a pick, and is duplicated at once, exactly as
+  // below.
   function duplicateSlot(id: string, immediate = false): void {
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
     pushUndoSnapshot()
     const candidate = slot.candidate
-    if (radioOnRef.current && !immediate && candidate !== null) {
+    // A row that has no stem yet but has one WAITING -- itself added or
+    // duplicated while radio ran -- is duplicated as what it is about to
+    // be: the copy gets the same waiting pick.
+    const waiting = radioOnRef.current ? manualChangesRef.current.get(id) : undefined
+    const pick: SlotPick | null =
+      candidate !== null
+        ? { candidate, barUsed: null, barRequested: traitMatchBar, unranked: true }
+        : (waiting?.pick ?? null)
+    // Cmd on a row with a stem is today's exact copy, below. Cmd on a row
+    // whose stem is still waiting lands that stem on the copy at once --
+    // an instant copy of it would be a blank row for good.
+    if (radioOnRef.current && pick !== null && (!immediate || candidate === null)) {
       const copyId = freshSlotId()
       setSlots((prev) => [
         ...prev,
@@ -4432,22 +4483,17 @@ export function DiscoverPanel({
           kinds: slot.kinds,
           locked: slot.locked,
           candidate: null,
+          // The source's own match-meter fields, as an exact copy carries
+          // them; an unranked pick leaves them in place when it lands.
+          // Meaningless for a waiting source, which has no candidate.
+          pickBar: candidate !== null ? slot.pickBar : undefined,
+          reclassified: candidate !== null ? slot.reclassified : undefined,
           hasRerolled: false,
           gain: slot.gain
         }
       ])
-      // The source's own match-meter bars, when they describe this
-      // candidate -- the same pickBar an exact copy would carry.
-      const bar = slot.pickBar?.candidate === candidate ? slot.pickBar : null
-      queueManualChange(
-        copyId,
-        {
-          candidate,
-          barUsed: bar?.barUsed ?? null,
-          barRequested: bar?.barRequested ?? traitMatchBar
-        },
-        true
-      )
+      if (immediate) commitSlotPick(copyId, pick)
+      else queueManualChange(copyId, pick, true)
       return
     }
     setSlots((prev) => [...prev, { ...slot, id: freshSlotId() }])
@@ -4487,28 +4533,39 @@ export function DiscoverPanel({
   // While radio runs it waits for the loop top instead, unless `immediate`
   // (Cmd held on the popover pick). The undo snapshot is taken at the
   // click either way, as rerollSlot's is.
-  function swapSlotFromNearby(id: string, candidate: DiscoverCandidate, immediate = false): void {
+  //
+  // Returns false only when the pick was IGNORED (a row already waiting),
+  // so the popover does not recenter on a pick that never took.
+  function swapSlotFromNearby(
+    id: string,
+    candidate: DiscoverCandidate,
+    immediate = false
+  ): boolean {
     if (radioOnRef.current && !immediate) {
-      if (manualChangesRef.current.has(id)) return
+      if (manualChangesRef.current.has(id)) return false
       pushUndoSnapshot()
-      queueManualChange(
+      return queueManualChange(
         id,
         // barRequested: the bar a ranked roll would have asked for; a
         // nearby pick applies none, hence barUsed null.
-        { candidate, barUsed: null, barRequested: traitMatchBar },
+        { candidate, barUsed: null, barRequested: traitMatchBar, unranked: true },
         !previewingSlotIdsRef.current.has(id)
       )
-      return
     }
     if (immediate) withdrawManualChange(id, 'manual-change-immediate')
     pushUndoSnapshot()
+    if (immediate && radioOnRef.current) {
+      // See rollRandomForSlot's Cmd branch: commitSlotPick, same slot state.
+      commitSlotPick(id, { candidate, barUsed: null, barRequested: traitMatchBar, unranked: true })
+      radioYieldsRow(id)
+      return true
+    }
     setSlots((prev) =>
       prev.map((s) =>
         s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
       )
     )
-    // See rollForSlot.
-    if (immediate && radioOnRef.current) radioYieldsRow(id, true)
+    return true
   }
 
   // The PHONE's one-tap `adjacent` (docs/superpowers/specs/2026-09-27-stem-
@@ -4766,14 +4823,18 @@ export function DiscoverPanel({
           ? {
               ...s,
               candidate: pick.candidate,
-              pickBar: pick.candidate
-                ? {
-                    candidate: pick.candidate,
-                    barUsed: pick.barUsed,
-                    barRequested: pick.barRequested
-                  }
-                : undefined,
-              reclassified: undefined,
+              ...(pick.unranked
+                ? {}
+                : {
+                    pickBar: pick.candidate
+                      ? {
+                          candidate: pick.candidate,
+                          barUsed: pick.barUsed,
+                          barRequested: pick.barRequested
+                        }
+                      : undefined,
+                    reclassified: undefined
+                  }),
               hasRerolled: true,
               seedStem: undefined
             }
@@ -4817,7 +4878,7 @@ export function DiscoverPanel({
     commitSlotPick(id, pick)
     // And radio gives the row up, as it does for a queued change -- after
     // the commit, so the row's fresh change time steers the re-arm away.
-    if (immediate && radioOnRef.current) radioYieldsRow(id, true)
+    if (immediate && radioOnRef.current) radioYieldsRow(id)
   }
 
   // Match meter reclassify (promise-vs-delivery spec, Phase 2; user
@@ -4930,19 +4991,32 @@ export function DiscoverPanel({
         // path applies none, hence barUsed null.
         queueManualChange(
           id,
-          { candidate, barUsed: null, barRequested: traitMatchBar },
+          { candidate, barUsed: null, barRequested: traitMatchBar, unranked: true },
           !previewingSlotIdsRef.current.has(id)
         )
         return
       }
       if (immediate) withdrawManualChange(id, 'manual-change-immediate')
-      setSlots((prev) =>
-        prev.map((s) =>
-          s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
+      if (immediate && radioOnRef.current) {
+        // Cmd while radio runs: through commitSlotPick, so radio's change
+        // time and the replace-soon flag see it, and radio's re-arm is
+        // steered off this row. The same slot state the write below makes
+        // (unranked leaves the match-meter fields alone). Then radio gives
+        // the row up -- see rollForSlot.
+        commitSlotPick(id, {
+          candidate,
+          barUsed: null,
+          barRequested: traitMatchBar,
+          unranked: true
+        })
+        radioYieldsRow(id)
+      } else {
+        setSlots((prev) =>
+          prev.map((s) =>
+            s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
+          )
         )
-      )
-      // See rollForSlot.
-      if (immediate && radioOnRef.current) radioYieldsRow(id, true)
+      }
     } catch (err) {
       console.error(`DiscoverPanel: rollRandomForSlot(${slotKindsKey(kinds)}) failed:`, err)
     } finally {
@@ -5163,9 +5237,10 @@ export function DiscoverPanel({
   /** The user has claimed a row radio had spoken for -- by queueing a
    * manual change on it, or by a Cmd-click that lands one right away.
    *
-   * Radio's armed (pending) pick for this row is now stale: it is dropped.
-   * With `rearmDroppedPick` radio arms a fresh one at once; a queued change
-   * passes false, because the landing arms it.
+   * Radio's armed (pending) pick for this row is now stale: it is dropped,
+   * and radio arms a fresh one at once -- off a waiting row (armRadioPick
+   * skips those), and weighted off a just-changed one (commitSlotPick's
+   * change time, which is why a Cmd path calls this after its commit).
    *
    * Radio's HELD change on this very row (the breathing one, so the likely
    * one to be clicked) gives way here, rather than being silently dropped
@@ -5184,7 +5259,7 @@ export function DiscoverPanel({
    * interval is spent, as it is for any change that fails its re-check.
    *
    * With radio off nothing is pending or held, so this does nothing. */
-  function radioYieldsRow(slotId: string, rearmDroppedPick: boolean): void {
+  function radioYieldsRow(slotId: string): void {
     let droppedPick = false
     if (radioPendingRef.current?.slotId === slotId) {
       setRadioPending(null)
@@ -5204,12 +5279,7 @@ export function DiscoverPanel({
     }
     // Not while radio holds a change elsewhere: a pick armed now could be
     // used up by nothing, and the held change's own landing arms the next.
-    if (
-      droppedPick &&
-      rearmDroppedPick &&
-      radioOnRef.current &&
-      radioLedChangeRef.current === null
-    ) {
+    if (droppedPick && radioOnRef.current && radioLedChangeRef.current === null) {
       void armRadioPick()
     }
   }
@@ -5236,9 +5306,16 @@ export function DiscoverPanel({
     // would pull radio's own staged change out too late to get it back,
     // landing it late when it was on time. 'manual-ready' below re-stages
     // once this is ready. (radioYieldsRow withdraws only when radio's own
-    // held change is on this row.) Radio's dropped pending pick is re-armed
-    // after the landing, not here -- the landing arms it.
-    radioYieldsRow(slotId, false)
+    // held change is on this row.)
+    //
+    // Radio's dropped pending pick is re-armed NOW, on another row
+    // (armRadioPick skips waiting rows). Waiting for the landing lost radio
+    // a whole interval whenever the landing never came -- the row removed,
+    // re-kinded, Cmd-clicked, or its pick unresolvable. The landing's own
+    // re-arm is guarded on radioPendingRef being null and on no held
+    // change, and armRadioPick's latest-wins token covers an arm still in
+    // flight, so this can never make two.
+    radioYieldsRow(slotId)
     void resolveAndWarmPick(pick).then((stem) => {
       const entry = manualChangesRef.current.get(slotId)
       if (entry === undefined || entry.pick !== pick) return
@@ -5303,6 +5380,11 @@ export function DiscoverPanel({
    * it a radio change would land hundreds of milliseconds -- or a whole
    * download -- after the downbeat it was scheduled for. */
   async function armRadioPick(): Promise<void> {
+    // The LATEST arm wins. Several paths re-arm (a landing, a yielded row,
+    // an ineligible pick), and one can start while another's pick is still
+    // in flight -- when radioPendingRef is still null, so no guard on it can
+    // see the first. A superseded arm writes nothing.
+    const myArm = (radioArmTokenRef.current += 1)
     setRadioPending(null)
     // Never a row with a manual change waiting: that change wins its row
     // at the landing (mergeStageChanges), so radio's pick for it would be
@@ -5318,6 +5400,7 @@ export function DiscoverPanel({
     const slot = slotsRef.current.find((s) => s.id === slotId)
     if (!slot) return
     const pick = await pickForSlot(slotId, slot.kinds)
+    if (radioArmTokenRef.current !== myArm) return
     if (pick === null || pick.candidate === null) return
     if (!radioOnRef.current) return
     // The user queued a manual change on this row while the pick was in
@@ -7251,10 +7334,12 @@ function DiscoverSlotRow({
    * are kept separate. */
   onSlotResolutionAbandoned: () => void
   /** DiscoverPanel's own swapSlotFromNearby -- called when the user picks a
-   * candidate from this slot's own "explore nearby" popover. Same instant,
-   * undoable swap as a normal reroll landing; see swapSlotFromNearby's own
-   * doc comment in DiscoverPanel. */
-  onSwapFromNearby: (candidate: DiscoverCandidate, immediate: boolean) => void
+   * candidate from this slot's own "explore nearby" popover. An undoable
+   * swap, like a reroll: instant with radio off or Cmd held, otherwise
+   * waiting for the loop top. Returns false when the pick was ignored (the
+   * row already waits), so the popover stays centred where it was. See
+   * swapSlotFromNearby's own doc comment in DiscoverPanel. */
+  onSwapFromNearby: (candidate: DiscoverCandidate, immediate: boolean) => boolean
   /** DiscoverPanel's own changeSlotKinds -- fired by the kind picker on
    * every chip toggle (the panel rerolls this slot). */
   onChangeKinds: (kinds: DiscoverSlotKind[]) => void

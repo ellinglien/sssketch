@@ -50,7 +50,7 @@ export interface RemoteSlotView {
  * much on the sofa as it is at the desk -- see @shared/radioApproach for
  * the two states and why they are two.
  *
- * TWO FIELDS AND NO MORE. Two slot ids the phone already has: nothing
+ * TWO FIELDS AND NO MORE. Slot ids the phone already has: nothing
  * here names a file, a riff or a jam, so this does not widen the boundary
  * remoteStateFromSlots IS.
  *
@@ -71,8 +71,11 @@ export interface RemoteSlotView {
 export interface RemoteRadioView {
   /** The row whose next pick is chosen and warming, or null. */
   armedSlotId: string | null
-  /** The row whose change is decided and waiting for the loop top. */
-  heldSlotId: string | null
+  /** The rows whose change is decided and waiting for the loop top:
+   * radio's own held change, and every manual change queued while radio
+   * runs (2026-09-29) -- the phone's taps on a waiting row are ignored, so
+   * the row has to say it is waiting, exactly as the mac's does. */
+  heldSlotIds: string[]
 }
 
 export interface RemoteState {
@@ -220,7 +223,10 @@ function normalizeRemoteRadio(
   if (radio === null) return null
   const known = (slotId: string | null): string | null =>
     slotId !== null && slots.some((slot) => slot.id === slotId) ? slotId : null
-  return { armedSlotId: known(radio.armedSlotId), heldSlotId: known(radio.heldSlotId) }
+  return {
+    armedSlotId: known(radio.armedSlotId),
+    heldSlotIds: radio.heldSlotIds.filter((slotId) => known(slotId) !== null)
+  }
 }
 
 /** Everything the phone can ask the Mac to do. SIX verbs, and nothing else:
