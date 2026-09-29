@@ -77,6 +77,7 @@ import {
   buildFilterInCurve,
   buildTransitionRiser,
   pickTransition,
+  radioArrivalGestureSpent,
   radioChangeWaitsForLoopTop,
   radioGestureLeadsChange,
   type RadioTransitionKind
@@ -127,6 +128,7 @@ import {
   radioTraceMarkPush,
   radioTraceStageApplied,
   radioTraceStageFallback,
+  radioTraceStageGate,
   radioTraceStageResult,
   radioTraceStageSent,
   radioTraceTick
@@ -2245,6 +2247,19 @@ export function DiscoverPanel({
     token: number
     mapping: { groupId: string; slotIndexById: Map<string, number> } | null
   } | null>(null)
+  /** The held change the engine has ALREADY swapped in, when its
+   * project-applied beat the wrap tick here.
+   *
+   * The other half of the race radioStageLandedRef describes. When the ack
+   * wins, it lets go of radioStageRef before the wrap branch has landed the
+   * change -- and the position tick that arrives between them is still a
+   * pre-wrap one (15.9 of 16), carrying a held change and no stage. Step
+   * (3) of stepRadioStage read that as "held, never sent" and staged the
+   * very same change a second time. Seen on every other change in the
+   * 2026-09-29 gate trace; harmless only because the commit's own push
+   * then cancelled it. Compared by identity, so a stale value is inert the
+   * moment radioLedChangeRef moves on. */
+  const radioStageAppliedLedRef = useRef<object | null>(null)
 
   /** Withdraws the staged swap, if there is one.
    *
@@ -2350,15 +2365,81 @@ export function DiscoverPanel({
       return
     }
 
+    // TEMP (2026-09-29): which gate is holding the swap, so a paste says
+    // why a change was staged late. Remove with radioTrace.ts.
+    {
+      const pending = radioPendingRef.current
+      const clock = radioClockRef.current
+      const led = radioLedChangeRef.current
+      const gesture = radioGestureRef.current
+      const gate =
+        radioStageRef.current !== null
+          ? radioStageRef.current.sent
+            ? 'staged'
+            : 'building'
+          : led !== null
+            ? led === radioStageAppliedLedRef.current
+              ? 'held:engine-already-swapped'
+              : led.stem === null
+                ? 'held:no-stem'
+                : !previewLoadedRef.current
+                  ? 'held:preview-not-loaded'
+                  : liveSyncInFlightRef.current > 0
+                    ? 'held:push-in-flight'
+                    : pendingSyncRafRef.current !== null
+                      ? 'held:raf-pending'
+                      : syncHoldRef.current.size > 0
+                        ? 'held:sync-hold'
+                        : 'held:ready'
+            : due
+              ? 'due-now'
+              : radioCourseChangeRef.current !== null
+                ? 'course-change'
+                : gesture !== null && !radioArrivalGestureSpent(gesture, pos, loopBars)
+                  ? `gesture:${gesture.kind}`
+                  : pending === null
+                    ? 'no-pending'
+                    : pending.stem === null
+                      ? 'pending:no-stem'
+                      : !radioEligibleSlotIds().includes(pending.slotId)
+                        ? 'pending:ineligible'
+                        : clock === null
+                          ? 'no-clock'
+                          : radioChangeDueAtNextWrap(
+                                clock,
+                                pos,
+                                loopBars,
+                                gridBars,
+                                radioSettings.phraseBars
+                              ) ||
+                              radioChangeLandsAtBar(
+                                clock,
+                                pos,
+                                loopBars,
+                                gridBars,
+                                radioSettings.phraseBars
+                              ) !== null
+                            ? 'decide'
+                            : `not-this-lap(interval ${clock.intervalBars} elapsed ${clock.barsElapsed.toFixed(2)})`
+      radioTraceStageGate(gate, pos)
+    }
+
     // (2) Decide early. Never on a tick where a change is already coming
     // due: the due branch below is about to make its own decision, and
     // setting a held change in front of it would make that one skip.
+    //
+    // Nor while a gesture is still PLAYING -- but an arrival gesture that
+    // has finished its curve is only waiting for the wrap to take it off,
+    // and blocking on it made every change after a bloom, sweep or duck
+    // come due at the wrap and land late on the old path (measured
+    // 2026-09-29: 62, 525 and 604ms). See radioArrivalGestureSpent.
     if (
       !due &&
       radioStageRef.current === null &&
       radioLedChangeRef.current === null &&
       radioCourseChangeRef.current === null &&
-      radioGestureRef.current === null
+      (radioGestureRef.current === null ||
+        radioArrivalGestureSpent(radioGestureRef.current, pos, loopBars))
     ) {
       const pending = radioPendingRef.current
       const clock = radioClockRef.current
@@ -2444,6 +2525,7 @@ export function DiscoverPanel({
     if (
       radioStageRef.current !== null ||
       led === null ||
+      led === radioStageAppliedLedRef.current ||
       led.stem === null ||
       !radioOnRef.current ||
       !previewLoadedRef.current ||
@@ -2618,6 +2700,10 @@ export function DiscoverPanel({
       const stagedHere = radioStageRef.current
       radioStageRef.current = null
       if (stagedHere !== null) radioStageLandedRef.current = stagedHere
+      // Whether the engine has already made this swap real, by either
+      // route: still staged here (the tick won), or acked (the ack won).
+      const engineSwapped = stagedHere !== null || radioStageAppliedLedRef.current === led
+      radioStageAppliedLedRef.current = null
       // A change DECIDED early has not restarted the clock yet -- the due
       // branch below is what normally does that, and it never ran for
       // this one. Restart it here, at the landing, which is exactly where
@@ -2679,7 +2765,7 @@ export function DiscoverPanel({
           radioLastSlotRef.current = led.slotId
           committed = true
         }
-        if (!committed && stagedHere !== null) {
+        if (!committed && engineSwapped) {
           // The engine may already have made this swap real, while the
           // panel has just decided not to -- the slot was locked, muted
           // or removed inside the last 30ms, too late for the per-tick
@@ -3447,7 +3533,10 @@ export function DiscoverPanel({
               ? radioStageLandedRef.current
               : null
         if (mine === null) return
-        if (radioStageRef.current?.token === a.token) radioStageRef.current = null
+        if (radioStageRef.current?.token === a.token) {
+          radioStageRef.current = null
+          radioStageAppliedLedRef.current = radioLedChangeRef.current
+        }
         if (radioStageLandedRef.current?.token === a.token) radioStageLandedRef.current = null
         const mapping = mine.mapping
         // The staged project is the live one now, and it has its own

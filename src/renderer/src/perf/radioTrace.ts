@@ -181,3 +181,22 @@ export function radioTraceStageFallback(token: number | null, reason: string): v
   )
   if (token !== null) stageSentAtMs.delete(token)
 }
+
+// Why the scheduled swap is NOT staging right now, logged only when the
+// answer changes. Added 2026-09-29 after two changes were staged at 15.99
+// of a 16-bar lap -- too late for that wrap -- with no line saying what had
+// held them for the fifteen bars before. One word per gate, so a paste
+// reads as a timeline:
+//
+//   [radio-gate] 0.04bar gesture:bloom
+//   [radio-gate] 0.06bar no-pending
+//   [radio-gate] 3.20bar not-this-lap
+//   [radio-gate] 15.99bar decide
+let lastGate = ''
+
+export function radioTraceStageGate(gate: string, pos: number): void {
+  if (!enabled) return
+  if (gate === lastGate) return
+  lastGate = gate
+  console.log(`[radio-gate] ${pos.toFixed(2)}bar ${gate}`)
+}

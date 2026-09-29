@@ -8,6 +8,7 @@ import {
   buildTransitionRiser,
   normalizeRadioTransitions,
   pickTransition,
+  radioArrivalGestureSpent,
   radioChangeWaitsForLoopTop,
   radioGestureLeadsChange
 } from './radioTransition'
@@ -162,5 +163,41 @@ describe('which changes wait for the loop top', () => {
     expect(radioChangeWaitsForLoopTop('filter in', true)).toBe(false)
     expect(radioChangeWaitsForLoopTop('bloom', true)).toBe(false)
     expect(radioChangeWaitsForLoopTop('duck', true)).toBe(false)
+  })
+})
+
+describe('when an arrival gesture has finished playing', () => {
+  const bloom = { kind: 'bloom' as const, beats: 4, lapsLeft: 1 }
+
+  it('is still playing inside its own curve', () => {
+    // 4 beats = 1 bar: the curve runs bar 0 to bar 1.
+    expect(radioArrivalGestureSpent(bloom, 0.5, 8)).toBe(false)
+  })
+
+  it('is spent once the playhead is past the curve, for every arrival kind', () => {
+    expect(radioArrivalGestureSpent(bloom, 1, 8)).toBe(true)
+    expect(radioArrivalGestureSpent({ ...bloom, kind: 'filter in' }, 3, 8)).toBe(true)
+    expect(radioArrivalGestureSpent({ ...bloom, kind: 'duck' }, 7.9, 8)).toBe(true)
+  })
+
+  it('measures against the same half-loop clamp the curve was built with', () => {
+    // 8 beats would be 2 bars, but a 2-bar loop clamps every curve to 1.
+    expect(radioArrivalGestureSpent({ ...bloom, beats: 8 }, 1, 2)).toBe(true)
+    expect(radioArrivalGestureSpent({ ...bloom, beats: 8 }, 1, 8)).toBe(false)
+  })
+
+  it('is never spent while it still has another lap to run', () => {
+    expect(radioArrivalGestureSpent({ ...bloom, lapsLeft: 2 }, 7, 8)).toBe(false)
+  })
+
+  it('never calls a drop-out or a leading gesture spent -- those sit at the END of the lap', () => {
+    expect(radioArrivalGestureSpent({ ...bloom, kind: 'drop-out' }, 7.9, 8)).toBe(false)
+    expect(radioArrivalGestureSpent({ ...bloom, kind: 'hole' }, 7.9, 8)).toBe(false)
+    expect(radioArrivalGestureSpent({ ...bloom, kind: 'riser' }, 7.9, 8)).toBe(false)
+  })
+
+  it('says no when it cannot place the curve at all', () => {
+    expect(radioArrivalGestureSpent(bloom, 3, 0)).toBe(false)
+    expect(radioArrivalGestureSpent(bloom, Number.NaN, 8)).toBe(false)
   })
 })

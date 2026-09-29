@@ -182,6 +182,36 @@ export function radioChangeWaitsForLoopTop(kind: RadioTransitionKind, atLoopTop:
   return !atLoopTop
 }
 
+/** Whether an ARRIVAL gesture (filter in, bloom, duck) has finished playing
+ * and has nothing left to say before the wrap that takes it off.
+ *
+ * WHY THIS EXISTS (measured 2026-09-29). Radio will not decide the next
+ * change early while any gesture is armed, and an arrival gesture stays
+ * armed for the whole lap after the change it decorated. So every change
+ * after a bloom, a sweep or a duck came due AT the wrap instead of being
+ * staged ahead of it -- and landed 0.06 to 0.6 seconds late on the old
+ * load-project path, in one five-minute session.
+ *
+ * But all three curves are anchored at bar 0 and hold their resting value
+ * from the end of the curve to the wrap (see the three builders below), so
+ * past that point the armed gesture is only bookkeeping. Deciding the next
+ * change then cannot collide with it.
+ *
+ * A drop-out, a hole and a riser are never spent here: they sit at the END
+ * of the lap, which is exactly where the next change would be landing. */
+export function radioArrivalGestureSpent(
+  gesture: { kind: RadioTransitionKind | 'drop-out'; beats: number; lapsLeft: number },
+  pos: number,
+  loopBars: number
+): boolean {
+  if (gesture.kind !== 'filter in' && gesture.kind !== 'bloom' && gesture.kind !== 'duck') {
+    return false
+  }
+  if (gesture.lapsLeft > 1) return false
+  if (!(loopBars > 0) || !Number.isFinite(pos)) return false
+  return pos >= clampToHalfLoop(loopBars, gesture.beats / 4)
+}
+
 /** No gesture may run into the wrap it is anchored to. The same rule, for
  * the same reason, that FadeGain.cpp:33-51 already applies to clip fades. */
 function clampToHalfLoop(loopBars: number, bars: number): number {
