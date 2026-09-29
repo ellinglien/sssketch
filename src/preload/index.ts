@@ -246,7 +246,9 @@ const api = {
   engineLoadProject: (project: unknown): Promise<void> =>
     ipcRenderer.invoke('engine-load-project', project),
   /** Radio's scheduled swap -- hand the engine a project now, have it
-   * become real exactly at the next loop top. `project` is typed
+   * become real exactly at the next loop top, or at `atBars` of the
+   * current lap when one is given (radio's mid-lap bare cuts, the one
+   * population a loop-top-only swap could not reach). `project` is typed
    * `unknown` for the same reason engineLoadProject's is: it crosses this
    * boundary as plain JSON and preload has no business re-stating
    * EngineProject's shape.
@@ -254,8 +256,8 @@ const api = {
    * `token` pairs the two acks below to this request. It exists because
    * EngineClient matches replies by message TYPE, not by request id, so
    * two swaps in flight would otherwise cross their answers. */
-  engineStageProject: (token: number, project: unknown): Promise<void> =>
-    ipcRenderer.invoke('engine-stage-project', token, project),
+  engineStageProject: (token: number, project: unknown, atBars?: number): Promise<void> =>
+    ipcRenderer.invoke('engine-stage-project', token, project, atBars),
   /** Withdraw a staged swap. `-1` cancels whatever is staged. Answered by
    * onEngineProjectStageResult with status `cancelled` -- or, if the audio
    * thread took it first, `applied`, which is why a caller must keep

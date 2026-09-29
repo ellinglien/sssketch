@@ -43,6 +43,7 @@ import {
   advanceRadioClock,
   radioBarsUntilChange,
   radioChangeDueAtNextWrap,
+  radioChangeLandsAtBar,
   createRadioClock,
   isRadioEligibleSlot,
   nextRadioIntervalBarsInWindow,
@@ -363,6 +364,10 @@ export const DISCOVER_UNDO_LIMIT = 20
  * curve the staged project carries, which is an arrival gesture or
  * nothing -- never whatever is armed for the lap that is playing.
  *
+ * `atBars` is WHICH boundary the engine should land this on: the bar of
+ * the current lap, or undefined for the loop top. Only radio's bare cuts
+ * ever name a bar -- see radioChangeLandsAtBar.
+ *
  * `label`/`atPos`/`loopBars` are only for the radioTrace line. They are
  * passed in rather than read at send time because by then the build has
  * taken a few milliseconds and the position has moved, and the number
@@ -377,6 +382,7 @@ interface RadioStageRequest {
     beats: number
     lapsLeft: number
   } | null
+  atBars?: number
   label: string
   atPos: number
   loopBars: number
@@ -1600,7 +1606,7 @@ export function DiscoverPanel({
           slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1]))
         }
         radioTraceStageSent(stage.token, stage.label, stage.atPos, stage.loopBars) // TEMP
-        await window.rifffApi.engineStageProject(stage.token, project)
+        await window.rifffApi.engineStageProject(stage.token, project, stage.atBars)
         return
       }
       // The phone gets the loop whether or not the Mac's engine is showing
@@ -2092,6 +2098,17 @@ export function DiscoverPanel({
      * change (see DEFAULT_RADIO_LOOP_END_BARS on why the pace is where it
      * is). */
     early?: boolean
+    /** The bar of the current lap this change lands on, when that is not
+     * the loop top -- radio's bare cuts, turning over on their own 2- or
+     * 4-bar boundary (radioChangeLandsAtBar). Undefined is the loop top,
+     * which is every other held change and every one there was before
+     * the engine could land a swap anywhere else.
+     *
+     * It is both what goes out with the stage (stage-project's `atBars`)
+     * and what the landing branch below watches the playhead cross --
+     * they have to be one number, or the engine would swap at a moment
+     * the panel commits somewhere else. */
+    atBars?: number
   } | null>(null)
   // The renderable half of radioLedChangeRef, exactly as radioArmedSlotId
   // is of radioPendingRef -- and the more urgent of the two to draw: a
@@ -2108,6 +2125,7 @@ export function DiscoverPanel({
       arrival?: { kind: RadioTransitionKind; beats: number }
       stem: ResolvedCandidateStem | null
       early?: boolean
+      atBars?: number
     } | null
   ): void {
     radioLedChangeRef.current = next
@@ -2308,12 +2326,25 @@ export function DiscoverPanel({
     ) {
       const pending = radioPendingRef.current
       const clock = radioClockRef.current
+      // THE TWO BOUNDARIES A CHANGE CAN LAND ON, asked in that order.
+      // The wrap first, always, so the nineteen-in-twenty this already
+      // covered keep exactly the path they had; the bar only when the
+      // wrap says no. The two can never both answer -- they are pinned
+      // to each other by test in radioSchedule.test.ts -- so the
+      // ordering is belt and braces rather than the guarantee.
+      const dueAtWrap =
+        clock !== null &&
+        radioChangeDueAtNextWrap(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
+      const landsAtBar =
+        clock !== null && !dueAtWrap
+          ? radioChangeLandsAtBar(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
+          : null
       if (
         pending !== null &&
         pending.stem !== null &&
         clock !== null &&
         radioEligibleSlotIds().includes(pending.slotId) &&
-        radioChangeDueAtNextWrap(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
+        (dueAtWrap || landsAtBar !== null)
       ) {
         // The same draw, the same "never a second gesture while one is
         // armed" rule and the same beats table as the due branch below.
@@ -2347,12 +2378,24 @@ export function DiscoverPanel({
           // now would sweep or bloom the OUTGOING audio for a lap, which
           // is the bug c5612da fixed. It rides into the staged project
           // instead, where its bar 0 and the wrap are the same instant.
+          //
+          // WHICH BOUNDARY IT LANDS ON is radioChangeWaitsForLoopTop's
+          // rule, spelled out as a field rather than called as a branch,
+          // because that is the only thing that differs. A bare cut
+          // carries no curve, so it may land on the mid-lap bar it came
+          // due on -- and the engine can now put it exactly there
+          // instead of taking the load-project 20-65ms later. Every
+          // arrival gesture is held to the loop top exactly as before:
+          // its curve is anchored at bar 0 and structurally cannot be
+          // anywhere else, so one armed for bar 4 would already be
+          // behind the playhead. Undefined IS the loop top.
           setRadioLedChange({
             slotId: pending.slotId,
             pick: pending.pick,
             stem: pending.stem,
             early: true,
-            arrival: transition === 'cut' ? undefined : { kind: transition, beats }
+            arrival: transition === 'cut' ? undefined : { kind: transition, beats },
+            atBars: transition === 'cut' && landsAtBar !== null ? landsAtBar : undefined
           })
         }
         return
@@ -2384,6 +2427,7 @@ export function DiscoverPanel({
       gesture: led.arrival
         ? { kind: led.arrival.kind, slotId: led.slotId, beats: led.arrival.beats, lapsLeft: 1 }
         : null,
+      atBars: led.atBars,
       label: led.arrival ? led.arrival.kind : radioGestureRef.current !== null ? 'led' : 'cut',
       atPos: pos,
       loopBars
@@ -2481,8 +2525,31 @@ export function DiscoverPanel({
     // detection floor. Mirrors advanceRadioClock's own grid arithmetic;
     // a wrap is always bar 0. Remove with radioTrace.ts.
     const traceGrid = gridBars > 0 ? gridBars : loopBars
-    const boundaryBars = step.wrapped ? 0 : Math.floor(pos / traceGrid) * traceGrid
-    // A change that was WAITING for the loop top LANDS HERE and only here.
+    // THE PLAYHEAD CROSSING A HELD CHANGE'S OWN BAR -- the mid-lap
+    // landing, and the second of the two moments a held change can land
+    // on. Watched directly against the position rather than taken from
+    // `step.due`, and that is not a style choice: the early decision
+    // clears radioPendingRef, so from that tick on `gridBars` falls back
+    // to the whole loop and advanceRadioClock's `crossed` can only fire
+    // at a wrap. The bar the change was aimed at is no longer on the
+    // clock's own grid, so the clock cannot be what announces it.
+    //
+    // `clock.lastPos` is the PREVIOUS tick's position (step.clock's has
+    // already moved to `pos`), so this is a genuine crossing rather than
+    // "past it", and it can fire at most once. If it somehow does not --
+    // a tick dropped over the boundary, a seek -- the wrap branch below
+    // is the catch-all it always was, and the change lands there instead.
+    const heldBar = radioLedChangeRef.current?.atBars
+    const crossedHeldBar =
+      heldBar !== undefined && !step.wrapped && pos >= heldBar && clock.lastPos < heldBar
+    const boundaryBars = step.wrapped
+      ? 0
+      : crossedHeldBar
+        ? heldBar
+        : Math.floor(pos / traceGrid) * traceGrid
+    // A change that was WAITING for its boundary LANDS HERE and only
+    // here -- the loop top, or (since the arbitrary-bar swap) the bar a
+    // bare cut named for itself.
     //
     // For a leading gesture the gesture has just played out over the
     // closing bars of the lap -- the outgoing layer left a gap, or a noise
@@ -2496,8 +2563,10 @@ export function DiscoverPanel({
     // A leading gesture is cleared in the same tick. It has fired; a
     // second lap of it would turn one move into a rhythm, and (for a hole)
     // would punch the gap in the layer that just arrived. For an arrival
-    // hold the ref is already null and clearRadioGesture is a no-op.
-    if (step.wrapped && radioLedChangeRef.current !== null) {
+    // hold the ref is already null and clearRadioGesture is a no-op -- and
+    // so it is for a mid-lap cut, which can only have been decided while
+    // nothing was armed.
+    if ((step.wrapped || crossedHeldBar) && radioLedChangeRef.current !== null) {
       const led = radioLedChangeRef.current
       // Taken BEFORE anything else: clearRadioGesture just below pushes a
       // load-project, and an ordinary push withdraws whatever is staged.
@@ -2505,6 +2574,11 @@ export function DiscoverPanel({
       // takes a staged project at the wrap itself, ~30ms before this tick
       // could notice), so a withdrawal would be a lie -- this swap is
       // done, not pending.
+      // The engine has already swapped by the time this tick runs --
+      // at the wrap, or at the bar, either way on the audio thread some
+      // tens of milliseconds ago -- so a withdrawal from here would be a
+      // lie. Same reasoning for both boundaries; only the instant
+      // differs.
       const stagedHere = radioStageRef.current
       radioStageRef.current = null
       if (stagedHere !== null) radioStageLandedRef.current = stagedHere
@@ -2662,14 +2736,17 @@ export function DiscoverPanel({
     // ONE quantity across both states, so the armed -> held transition can
     // change how the row looks and never what it means. The two readings
     // are the same reading at the moment it flips, too: stepRadioStage
-    // only decides early when radioChangeDueAtNextWrap says the landing is
-    // the coming wrap, which is exactly what radioBarsUntilChange is
-    // already counting to.
+    // only decides early when radioChangeDueAtNextWrap or
+    // radioChangeLandsAtBar names the boundary, and both are read out of
+    // exactly the arithmetic radioBarsUntilChange is already counting
+    // with -- so a held change measures to its OWN boundary (`atBars`,
+    // or the wrap when it has none) and the number does not move when
+    // the row goes from armed to held.
     const changeWait: RadioApproachWait = {
       elapsedBars: step.clock.barsElapsed,
       barsUntilChange:
         radioLedChangeRef.current !== null
-          ? loopBars - pos
+          ? (radioLedChangeRef.current.atBars ?? loopBars) - pos
           : radioBarsUntilChange(step.clock, pos, loopBars, gridBars, radioSettings.phraseBars)
     }
     void Promise.resolve().then(() => {

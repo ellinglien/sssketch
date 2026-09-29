@@ -36,6 +36,7 @@ import {
   radioStarterKinds,
   radioBarsUntilChange,
   radioChangeDueAtNextWrap,
+  radioChangeLandsAtBar,
   type RadioClock
 } from './radioSchedule'
 
@@ -1102,5 +1103,119 @@ describe('radioBarsUntilChange', () => {
     expect(radioBarsUntilChange(clockAt(8, 12), Number.NaN, 8, 8, 0)).toBeNull()
     expect(radioBarsUntilChange(clockAt(8, 12), 9, 8, 8, 0)).toBeNull()
     expect(radioBarsUntilChange(clockAt(8, 12), -1, 8, 8, 0)).toBeNull()
+  })
+})
+
+describe('radioChangeLandsAtBar', () => {
+  // The other half of the staged swap's predicate pair. radioChange-
+  // DueAtNextWrap covers every change that lands on a loop top, which is
+  // nineteen in twenty; this covers the rest -- a bare `cut` on a layer of
+  // DEFAULT_RADIO_LOOP_END_BARS or fewer, turning over on its own 2- or
+  // 4-bar boundary, mid-lap. Those were the only changes left that could
+  // not be staged at all, because the engine could only apply at a wrap.
+  const clockAt = (barsElapsed: number, intervalBars: number, lapsSincePhrase = 0): RadioClock => ({
+    barsElapsed,
+    intervalBars,
+    lastPos: 0,
+    lapsSincePhrase
+  })
+
+  it('names the mid-lap boundary the change will land on', () => {
+    // The same case radioBarsUntilChange's first test uses: 8-bar loop,
+    // 2-bar grid, standing at bar 4 with 1 bar of interval left. The
+    // interval runs out at bar 5 and the boundary that carries the change
+    // is bar 6 -- an absolute bar within the lap, which is what the engine
+    // wants, rather than a count.
+    expect(radioChangeLandsAtBar(clockAt(11, 12), 4, 8, 2, 0)).toBeCloseTo(6)
+  })
+
+  it('says nothing when the landing is the wrap -- that is the other predicate', () => {
+    expect(radioChangeLandsAtBar(clockAt(8, 12), 4, 8, 8, 0)).toBeNull()
+    expect(radioChangeLandsAtBar(clockAt(11, 12), 6, 8, 2, 0)).toBeNull()
+  })
+
+  it('says nothing when the landing is in a later lap', () => {
+    // 6 bars of interval left with 4 bars of lap to go: the landing is a
+    // whole lap and a half away, and nothing can be aimed at it yet.
+    expect(radioChangeLandsAtBar(clockAt(6, 12), 4, 8, 8, 0)).toBeNull()
+  })
+
+  it('says nothing while a phrase grid is running -- every landing is a loop top then', () => {
+    expect(radioChangeLandsAtBar(clockAt(14, 12, 1), 4, 8, 2, 16)).toBeNull()
+    expect(radioChangeLandsAtBar(clockAt(14, 12, 0), 4, 8, 2, 16)).toBeNull()
+  })
+
+  it('and radioChangeDueAtNextWrap are never both true', () => {
+    // They are the two halves of one question -- "which boundary does the
+    // next change land on" -- and a tick where both answered would stage
+    // one project at two different instants.
+    const loopBars = 8
+    for (const gridBars of [1, 2, 4, 8]) {
+      for (const phraseBars of [0, 16]) {
+        for (let pos = 0; pos < loopBars; pos += 0.25) {
+          for (let barsElapsed = 0; barsElapsed <= 16; barsElapsed += 0.5) {
+            for (const laps of [0, 1]) {
+              const clock = clockAt(barsElapsed, 12, laps)
+              const atWrap = radioChangeDueAtNextWrap(clock, pos, loopBars, gridBars, phraseBars)
+              const atBar = radioChangeLandsAtBar(clock, pos, loopBars, gridBars, phraseBars)
+              expect(atWrap && atBar !== null).toBe(false)
+              // And a bar it does name is a real bar of THIS lap, strictly
+              // ahead of the playhead -- the engine refuses anything else
+              // (Transport::barsUntilBar) and would fall back to an
+              // immediate load-project.
+              if (atBar !== null) {
+                expect(atBar).toBeGreaterThan(pos)
+                expect(atBar).toBeLessThan(loopBars)
+              }
+            }
+          }
+        }
+      }
+    }
+  })
+
+  it('agrees with advanceRadioClock about the bar the change lands on', () => {
+    // The property that matters, and the same 30Hz simulation both of the
+    // other two predicates are pinned by: whatever bar this names, running
+    // the clock forward really does produce `due` crossing that bar --
+    // within the one tick it takes to notice a boundary -- and on no tick
+    // before it.
+    const loopBars = 8
+    const tick = 1 / 60 // bars per 30Hz tick at 120bpm
+    for (const gridBars of [1, 2, 4]) {
+      for (let startPos = 0; startPos < loopBars; startPos += 0.25) {
+        for (let barsElapsed = 0; barsElapsed <= 16; barsElapsed += 0.5) {
+          let clock: RadioClock = {
+            barsElapsed,
+            intervalBars: 12,
+            lastPos: startPos,
+            lapsSincePhrase: 0
+          }
+          const predicted = radioChangeLandsAtBar(clock, startPos, loopBars, gridBars, 0)
+          if (predicted === null) continue
+          let pos = startPos
+          let landedAt: number | null = null
+          for (;;) {
+            pos += tick
+            const wrapped = pos >= loopBars
+            if (wrapped) pos -= loopBars
+            const step = advanceRadioClock(clock, pos, loopBars, gridBars, 0)
+            clock = step.clock
+            if (step.due && landedAt === null) landedAt = step.wrapped ? loopBars : pos
+            if (wrapped) break
+          }
+          expect(landedAt).not.toBeNull()
+          expect(landedAt as number).toBeGreaterThanOrEqual(predicted - 1e-9)
+          expect(landedAt as number).toBeLessThan(predicted + tick + 1e-9)
+        }
+      }
+    }
+  })
+
+  it('refuses nonsense rather than guessing', () => {
+    expect(radioChangeLandsAtBar(clockAt(8, 12), 4, 0, 8, 0)).toBeNull()
+    expect(radioChangeLandsAtBar(clockAt(8, 12), Number.NaN, 8, 8, 0)).toBeNull()
+    expect(radioChangeLandsAtBar(clockAt(8, 12), 9, 8, 8, 0)).toBeNull()
+    expect(radioChangeLandsAtBar(clockAt(8, 12), -1, 8, 8, 0)).toBeNull()
   })
 })

@@ -617,6 +617,58 @@ export function radioBarsUntilChange(
   return Math.min(grid, wrap) - pos
 }
 
+/** WHICH BAR of this lap the next change lands on, when that is not the
+ * wrap -- or null when it is the wrap, when it is in some later lap, or
+ * when it is not knowable at all.
+ *
+ * The other half of radioChangeDueAtNextWrap, and the last gap in radio's
+ * scheduled swap. That predicate covers every change that lands on a loop
+ * top, which measured out at nineteen in twenty. The twentieth is a bare
+ * `cut` on a layer of DEFAULT_RADIO_LOOP_END_BARS bars or fewer, turning
+ * over on its own 2- or 4-bar boundary (radioGridBars) -- the eagerness
+ * Elling asked for, and the only population that could not be staged at
+ * all, because the engine could only ever apply a staged project at a
+ * wrap. Those still went out as an ordinary load-project and still landed
+ * 20-65ms past the boundary they were aimed at.
+ *
+ * The engine can now be asked for a bar (stage-project's `atBars`, and
+ * Transport::setStagedApplyAtBars behind it), so the renderer needs to be
+ * able to name one, and this is that. Deliberately NOT new arithmetic:
+ * radioBarsUntilChange already counts to the real landing boundary from
+ * the same four inputs advanceRadioClock uses, with the same epsilons and
+ * pinned to it by property test. This is that answer read as an absolute
+ * bar, and then only kept when it falls strictly inside the lap.
+ *
+ * NEVER TRUE AT THE SAME TIME AS radioChangeDueAtNextWrap -- a tick where
+ * both answered would stage one project at two different instants. The
+ * two are pinned to each other by test, and the caller asks the wrap
+ * first anyway, so the nineteen in twenty keep exactly the path they
+ * already had.
+ *
+ * A bar it names is strictly ahead of `pos`: every candidate boundary
+ * radioBarsUntilChange can return is (see its own "ALWAYS GREATER THAN
+ * ZERO" note), which is also what the engine requires -- a bar already
+ * behind the playhead is refused there (Transport::barsUntilBar) and
+ * falls back to an immediate load-project rather than being read as the
+ * same bar one lap later. */
+export function radioChangeLandsAtBar(
+  clock: RadioClock,
+  pos: number,
+  loopBars: number,
+  gridBars: number,
+  phraseBars: number
+): number | null {
+  const until = radioBarsUntilChange(clock, pos, loopBars, gridBars, phraseBars)
+  if (until === null) return null
+  const landsAt = pos + until
+  // The wrap, or beyond it. The wrap belongs to radioChangeDueAtNextWrap
+  // and the engine lands it exactly without being told a bar; anything
+  // past it is a later lap, which the renderer cannot aim at yet because
+  // a staged project is taken by the first boundary that comes.
+  if (landsAt >= loopBars - BOUNDARY_EPSILON) return null
+  return landsAt
+}
+
 /** Which single layer turns over next.
  *
  * ONE at a time is the whole point (spec 3.1): everything changing

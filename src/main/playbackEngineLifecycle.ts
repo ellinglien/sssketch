@@ -13,8 +13,8 @@ export interface PlaybackEngineHandle {
   client: EngineClient
   sendLoadProject: (project: unknown) => void
   /** Radio's scheduled swap: hands the engine a project NOW and asks it to
-   * make it real at the next loop top (IpcServer.cpp's stage-project
-   * handler). Deliberately a sibling of sendLoadProject rather than a flag
+   * make it real at the next loop top -- or, with `atBars`, at that bar
+   * of the current lap (IpcServer.cpp's stage-project handler). Deliberately a sibling of sendLoadProject rather than a flag
    * on it -- the two differ in when they take effect, and every other
    * caller in the app wants "now".
    *
@@ -23,7 +23,7 @@ export interface PlaybackEngineHandle {
    * respawn re-sends -- restoring a project that never went live would
    * make a crash change what is playing. promoteStagedProject below is
    * what moves it across, once the engine says it landed. */
-  sendStageProject: (token: number, project: unknown) => void
+  sendStageProject: (token: number, project: unknown, atBars?: number) => void
   /** Withdraws a staged project, by token (or -1 for whatever is staged).
    * Radio re-checks a pick's eligibility late and can drop it; a stale
    * staged swap must never fire. */
@@ -173,9 +173,16 @@ export async function startPlaybackEngine(): Promise<PlaybackEngineHandle> {
       stagedProjects.clear()
       client.send('load-project', project)
     },
-    sendStageProject(token: number, project: unknown) {
+    sendStageProject(token: number, project: unknown, atBars?: number) {
       stagedProjects.set(token, project)
-      client.send('stage-project', { token, project })
+      // `atBars` is omitted, not sent as a null or a -1, when the swap is
+      // for the loop top: the engine reads an absent field as "the wrap",
+      // which is every staged swap there was before radio's mid-lap cuts
+      // could be staged at all. One shape on the wire, one default.
+      client.send(
+        'stage-project',
+        atBars === undefined ? { token, project } : { token, project, atBars }
+      )
     },
     sendCancelStagedProject(token: number) {
       client.send('cancel-staged-project', { token })

@@ -1115,9 +1115,12 @@ app.whenReady().then(async () => {
   // to its request. Keeping the project a verbatim buildEngineProject
   // output is the point: it is the hand-synced twin of the C++
   // EngineProject and nothing on this path may reshape it.
-  ipcMain.handle('engine-stage-project', (_event, token: number, project: unknown) => {
-    playbackEngine?.sendStageProject(token, project)
-  })
+  ipcMain.handle(
+    'engine-stage-project',
+    (_event, token: number, project: unknown, atBars?: number) => {
+      playbackEngine?.sendStageProject(token, project, atBars)
+    }
+  )
 
   ipcMain.handle('engine-cancel-staged-project', (_event, token: number) => {
     playbackEngine?.sendCancelStagedProject(token)
