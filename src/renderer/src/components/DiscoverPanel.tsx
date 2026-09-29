@@ -57,6 +57,15 @@ import {
   type RadioSettings
 } from '@shared/radioSchedule'
 import {
+  NO_RADIO_SLOT_FLAGS,
+  cycleRadioSlotFlag,
+  forgetRadioSlotFlagOnChange,
+  pruneRadioSlotFlags,
+  radioSlotFlagOf,
+  type RadioSlotFlag,
+  type RadioSlotFlags
+} from '@shared/radioSlotFlags'
+import {
   buildDropOutCurve,
   pickDropOutBeats,
   pickDropOutSlotId,
@@ -2016,6 +2025,33 @@ export function DiscoverPanel({
   // Which slot radio changed last -- so it never changes the same one
   // twice running (pickRadioSlotId).
   const radioLastSlotRef = useRef<string | null>(null)
+  // Per-slot recency for `even` turnover, and the turn counter it is
+  // measured against. A LOGICAL turn, not wall time: it advances once per
+  // committed change, so it stops with the transport for free, exactly the
+  // way the clock does.
+  //
+  // Written in commitSlotPick rather than in radio's own commit branches,
+  // which is deliberate and is where the pruning lives too -- see the note
+  // there. Refs, not state: they are read synchronously from armRadioPick
+  // across a real IPC await, and nothing renders them.
+  const radioChangedAtRef = useRef<Map<string, number>>(new Map())
+  const radioTurnRef = useRef(0)
+  // The row's three-state gesture -- hook / normal / replace soon. See
+  // src/shared/radioSlotFlags.ts, which owns every rule about it and the
+  // reasoning for each one.
+  //
+  // State AND a ref, the same pairing radioPendingRef/radioArmedSlotId
+  // uses just above: the rows render from the state, and armRadioPick
+  // reads the ref because it runs from the 30Hz clock effect's closure,
+  // which can be a render behind.
+  //
+  // NOT PERSISTED. Slot ids are minted fresh each session (freshSlotId),
+  // so a stored flag would name a slot that does not exist.
+  const [radioSlotFlags, setRadioSlotFlags] = useState<RadioSlotFlags>(NO_RADIO_SLOT_FLAGS)
+  const radioSlotFlagsRef = useRef<RadioSlotFlags>(NO_RADIO_SLOT_FLAGS)
+  useEffect(() => {
+    radioSlotFlagsRef.current = radioSlotFlags
+  }, [radioSlotFlags])
   // The armed GESTURE -- a standalone drop-out (no stem change) or a
   // transition (one attached to a change). Both are the same thing to the
   // engine: curves written into the preview project, armed a lap early and
@@ -3668,6 +3704,22 @@ export function DiscoverPanel({
     setSlots((prev) => prev.filter((s) => s.id !== id))
     forgetSlotResolution(id)
     dropFromPreviewingMix(id)
+    // Immediately rather than at the next commit's prune, so removing the
+    // hooked channel frees the hook now and the next press of another
+    // row's control is not silently the SECOND hook. A re-added slot gets
+    // a fresh id (freshSlotId) anyway, so nothing can be resurrected.
+    radioChangedAtRef.current.delete(id)
+    setRadioSlotFlags((prev) =>
+      pruneRadioSlotFlags(prev, new Set(Object.keys(prev).filter((k) => k !== id)))
+    )
+  }
+
+  /** One press of a row's flag control: normal -> replace soon -> hook ->
+   * normal. Undo deliberately does not cover it, the same way it does not
+   * cover the padlock or mute: it is a statement about what radio should
+   * do next, not an edit to the loop. */
+  function cycleSlotFlag(id: string): void {
+    setRadioSlotFlags((prev) => cycleRadioSlotFlag(prev, id))
   }
 
   // Direct request, 2026-09-20: "add duplicate channel to discover" --
@@ -3918,6 +3970,28 @@ export function DiscoverPanel({
    * for itself (rerollSlot pushes one, rerollAll pushes one for the whole
    * batch, radio pushes none; see the spec's 3.4). */
   function commitSlotPick(id: string, pick: SlotPick): void {
+    // THE ONE PLACE A LAYER'S STEM IS REPLACED, whoever asked for it --
+    // radio's own turnover, both of its commit branches, the row's
+    // similar/adjacent/random buttons, a brand-new slot's first roll and
+    // the phone. Radio's recency and the replace-soon flag both describe
+    // exactly that event, so they are recorded here rather than in radio's
+    // two commit branches: a manual reroll HAS just changed the layer, and
+    // a flag on a stem the user replaced by hand is a flag about audio
+    // nobody can hear any more.
+    radioTurnRef.current += 1
+    radioChangedAtRef.current.set(id, radioTurnRef.current)
+    // Pruned against the live ids rather than trusting that removeSlot is
+    // the only way a slot can vanish -- applySlotsSnapshot (undo/redo) is
+    // another -- the same way radioEligibleSlotIds re-reads slotsRef
+    // rather than a snapshot. The id being committed is kept regardless:
+    // slotsRef can be a render behind a slot that was only just added, and
+    // dropping its entry here would be pruning a layer that exists.
+    const liveIds = new Set(slotsRef.current.map((s) => s.id))
+    liveIds.add(id)
+    for (const known of radioChangedAtRef.current.keys()) {
+      if (!liveIds.has(known)) radioChangedAtRef.current.delete(known)
+    }
+    setRadioSlotFlags((prev) => pruneRadioSlotFlags(forgetRadioSlotFlagOnChange(prev, id), liveIds))
     // hasRerolled set true in this same setSlots call, alongside
     // candidate -- see DiscoverSlot's own doc comment above for why this
     // only happens on the generation-guarded path (never for a stale,
@@ -4135,7 +4209,12 @@ export function DiscoverPanel({
   async function armRadioPick(): Promise<void> {
     setRadioPending(null)
     const eligible = radioEligibleSlotIds()
-    const slotId = pickRadioSlotId(eligible, radioLastSlotRef.current)
+    const slotId = pickRadioSlotId(eligible, radioLastSlotRef.current, {
+      turnover: radioSettings.turnover,
+      changedAt: radioChangedAtRef.current,
+      turn: radioTurnRef.current,
+      flags: radioSlotFlagsRef.current
+    })
     if (slotId === null) return
     const slot = slotsRef.current.find((s) => s.id === slotId)
     if (!slot) return
@@ -4244,6 +4323,17 @@ export function DiscoverPanel({
     radioClockRef.current = null
     setRadioPending(null)
     radioLastSlotRef.current = null
+    // Recency is about how radio has been sharing its turns out, so it
+    // belongs to a run of radio and starts again with the next one.
+    //
+    // THE FLAGS ARE NOT CLEARED. Both halves are statements about the
+    // track, not about whether the clock is running: a hook he would have
+    // to re-mark every time he stopped to listen is not a hook, and a
+    // layer he is tired of is still the layer he is tired of. They are
+    // cleared by the things that make them untrue instead -- the change
+    // that honours a replace-soon, and removing the slot.
+    radioChangedAtRef.current = new Map()
+    radioTurnRef.current = 0
     radioCourseChangeRef.current = null
     // A curve left on a stem after radio stops would silently break that
     // slot's gain dial -- EngineStem.volume is inert while a volume curve
@@ -4302,6 +4392,8 @@ export function DiscoverPanel({
       pos
     )
     radioLastSlotRef.current = null
+    radioChangedAtRef.current = new Map()
+    radioTurnRef.current = 0
     radioCourseChangeRef.current = null
     setRadioProgress(0)
     setRadioOn(true)
@@ -5407,6 +5499,9 @@ export function DiscoverPanel({
             maxBarLength={maxBarLength}
             playheadPct={playheadPct}
             onToggleLock={() => toggleLock(slot.id)}
+            radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
+            radioOn={radioOn}
+            onCycleRadioFlag={() => cycleSlotFlag(slot.id)}
             onRemove={() => removeSlot(slot.id)}
             onDuplicate={() => duplicateSlot(slot.id)}
             onReroll={() => void rerollSlot(slot.id)}
@@ -5833,6 +5928,9 @@ function DiscoverSlotRow({
   maxBarLength,
   playheadPct,
   onToggleLock,
+  radioFlag,
+  radioOn,
+  onCycleRadioFlag,
   onRemove,
   onDuplicate,
   onReroll,
@@ -5903,6 +6001,15 @@ function DiscoverSlotRow({
    * position instead of reintroducing a separate elapsed-time sweep. */
   playheadPct: number | null
   onToggleLock: () => void
+  /** What this row has been told about radio's next change: `hook` to hold
+   * it, `replace-soon` to hurry it, null for neither. At most one row in
+   * the panel carries `hook`; any number can carry `replace-soon`. See
+   * src/shared/radioSlotFlags.ts. */
+  radioFlag: RadioSlotFlag | null
+  /** Whether radio is running. The flag control only means anything while
+   * it is, so it is hidden -- but still RENDERED -- when it is not. */
+  radioOn: boolean
+  onCycleRadioFlag: () => void
   onRemove: () => void
   /** DiscoverPanel's own duplicateSlot(id) -- clones this slot's current
    * state (kind, candidate, gain, lock, seedStem) into a brand-new slot
@@ -6416,8 +6523,14 @@ function DiscoverSlotRow({
           // fixed-role-label-width fix for the identical class of bug)
           // make every row's non-1fr tracks identical regardless of which
           // optional buttons happen to render.
+          // Track SIX only, 14px to 18px (2026-09-29): it used to be an
+          // empty spacer and it now holds the radio flag control. No other
+          // track's width changes and no child's gridColumn changes, which
+          // is what keeps the hard-won explicit-position discipline above
+          // intact -- widening one existing track cannot renumber
+          // anything, which inserting one would have.
           gridTemplateColumns:
-            '18px 18px 18px 18px 18px 14px 1fr 14px 110px 14px 16px 70px 70px 70px 70px',
+            '18px 18px 18px 18px 18px 18px 1fr 14px 110px 14px 16px 70px 70px 70px 70px',
           alignItems: 'center',
           columnGap: 8,
           padding: '8px 0',
@@ -6613,7 +6726,108 @@ function DiscoverSlotRow({
             </button>
           </>
         )}
-        <div style={{ gridColumn: 6 }} />
+        {/* RADIO'S ONE GESTURE. Everything else radio offers is a setting
+            you change between changes; this is pointing at a layer you are
+            hearing and saying something about it. Both directions, asked
+            for on two separate days:
+
+              "maybe have a way to select 'keep this one for a while' or ..
+               'this is the hook' or something"            (2026-09-28)
+              "right now channel four is long and repeating many times, and
+               i wish i had a way to flag it as one to replace soon for
+               replacement."                               (2026-09-29)
+
+            ONE THREE-STATE CONTROL, not two buttons. They are the same
+            gesture pointed in opposite directions, and two buttons side by
+            side that push the same draw opposite ways can be made to argue
+            with each other -- while the row, which already carries five
+            controls, would have gained two. One press is "replace soon",
+            two is "hook", three is back to normal; the tooltip always
+            names what the NEXT press does. (The cycle reaches replace-soon
+            first on purpose: hook is at-most-one, so passing THROUGH it
+            would silently release whatever hook was set elsewhere. See
+            cycleRadioSlotFlag.)
+
+            It lives in what used to be an empty 14px spacer, widened to
+            18px, so no other column moves.
+
+            NOT THE PADLOCK NEXT DOOR, and the difference is one line: the
+            padlock is never, the hook is rarely. A hooked layer is held
+            about two and a half times as long (measured -- see
+            HOOK_HOLD_FACTOR) and does still turn over, because a layer
+            that never turns over is exactly what the padlock is for. A
+            slot can carry both; the padlock wins, and it wins for free
+            because radioEligibleSlotIds drops a locked slot before any
+            weight is computed.
+
+            MONOCHROME, and the three states are told apart by glyph and by
+            LUMINANCE only -- the same trick the row's own breathe uses for
+            its two depths. Colour on this row is spent only on things
+            carrying audio information (the waveform, the playhead, mute's
+            red, the favourite star), and the padlock immediately to the
+            left is monochrome: two adjacent state toggles disagreeing
+            about colour is noise. `hook` is the heaviest mark on the row,
+            an inverted fill, because it is the one that says "this is the
+            centre of the track"; `replace soon` is lit but outlined,
+            because it is a request that will be spent on the next change
+            and then gone.
+
+            RENDERED ALWAYS and hidden with `visibility` rather than
+            unmounted, the same trick the radio progress rule used, because
+            a conditionally-rendered child in this grid is the exact bug
+            the gridTemplateColumns comment above warns about at length. */}
+        <button
+          onClick={onCycleRadioFlag}
+          data-tooltip={
+            radioFlag === null
+              ? 'replace soon'
+              : radioFlag === 'replace-soon'
+                ? 'make hook'
+                : 'release hook'
+          }
+          aria-label={
+            radioFlag === null
+              ? 'replace soon'
+              : radioFlag === 'replace-soon'
+                ? 'make hook'
+                : 'release hook'
+          }
+          aria-pressed={radioFlag !== null}
+          style={{
+            gridColumn: 6,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: 18,
+            height: 18,
+            padding: 0,
+            fontFamily: 'inherit',
+            fontSize: 10,
+            visibility: radioOn ? 'visible' : 'hidden',
+            pointerEvents: radioOn ? 'auto' : 'none',
+            background:
+              radioFlag === 'hook'
+                ? 'var(--ra-text)'
+                : radioFlag === 'replace-soon'
+                  ? 'var(--ra-bg-row-active)'
+                  : 'transparent',
+            border: `1px solid ${radioFlag === null ? 'var(--ra-border)' : 'var(--ra-text)'}`,
+            color:
+              radioFlag === 'hook'
+                ? 'var(--ra-bg)'
+                : radioFlag === 'replace-soon'
+                  ? 'var(--ra-text)'
+                  : 'var(--ra-text-3)',
+            cursor: 'pointer'
+          }}
+        >
+          {/* "h" for the hook, ">" for "move this one along", and a dash
+              for neither -- a glyph in every state, because every other
+              button on this row has one and an empty box among them reads
+              as a missing control rather than an unset one. Lowercase to
+              match the row's own m and s. */}
+          {radioFlag === 'hook' ? 'h' : radioFlag === 'replace-soon' ? '>' : '-'}
+        </button>
         {/* Direct report, 2026-09-17: "tooltip over the waveforms on
           discover prevents user from dragging the volume, so remove it" --
           this wrapper used to carry a data-tooltip whose own text included
