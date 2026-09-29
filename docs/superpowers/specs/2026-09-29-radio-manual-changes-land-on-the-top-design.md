@@ -30,7 +30,17 @@ that waits for the next loop top.
 | toolbar reroll-all | every row commits as it resolves | every eligible row queued, all land together |
 | phone rerolls | same as the row buttons | same as the row buttons |
 
-**When radio is off, nothing changes.** Every path above keeps today's behaviour exactly.
+**Cmd-click lands it right away** (Elling, 2026-09-29: "it'd be nice to be able to override and just
+have it add it right away as well"). Holding Cmd on any of the clicks above commits immediately,
+exactly as it does with radio off -- no wait, no transition. It works on the row buttons (same kind, any
+stem, nearby jam, duplicate), the add chips, + random, and the toolbar reroll-all. The phone has no
+modifier, so its actions always wait.
+
+This takes Cmd from the add chips, where Cmd-click used to mean "combine kinds". **Combine moves to
+Shift-click**, and the hint under the chips changes from `hold cmd to combine` to
+`hold shift to combine`. That applies whether radio is on or off.
+
+**When radio is off, nothing changes**, apart from the combine key. Every path above keeps today's behaviour exactly.
 
 Out of scope:
 - Importing a sample (`+ sample`).

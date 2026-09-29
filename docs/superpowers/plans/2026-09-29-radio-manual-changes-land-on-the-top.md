@@ -391,7 +391,7 @@ In `stepRadioStage` step (3), replace the `syncPreviewToEngine(previewingSlotIds
 
 ```ts
     const merged = mergeStageChanges(
-      { slotId: led.slotId, stem: led.stem, arrival: led.arrival },
+      { slotId: led.slotId, stem: led.stem, arrival: led.arrival ?? null },
       new Map()
     )
     void syncPreviewToEngine(previewingSlotIdsRef.current, {
@@ -474,7 +474,9 @@ Next to `radioLedChangeRef` / `radioHeldSlotId`, add:
   }
 ```
 
-Import `ManualArrival` (type) and `drawManualTransitions` from `@shared/radioManualChanges`, and `pickDropOutBeats` if not already imported.
+Import `ManualArrival` (type), `drawManualTransitions` and `radioGestureBeats` from `@shared/radioManualChanges`, and `pickDropOutBeats` if not already imported. Replace the panel's two inline copies of the beats table (`const beats = transition === 'hole' ? pickDropOutBeats() : transition === 'riser' ? 8 : 4`, in `stepRadioStage` step (2) and in the due branch) with `radioGestureBeats(transition, pickDropOutBeats)` -- one table, owned by the shared module.
+
+Note the shared module's final signatures (Task 1 as reviewed): `drawManualTransitions(rows, { pick, dropOutBeats, leadingArmed, barsToWrap, loopBars })`, and `mergeStageChanges`'s radio side takes `arrival: ManualArrival | null` (pass `led.arrival ?? null`). `mergeStageChanges` itself drops cut AND leading-gesture arrivals.
 
 - [ ] **Step 2: Warming, factored out of `armRadioPick`**
 
@@ -598,7 +600,8 @@ Before building the request, draw transitions for manual changes that do not hav
           pick: (kinds) => pickTransition(radioSettings.transitions, kinds),
           dropOutBeats: pickDropOutBeats,
           leadingArmed: radioGestureRef.current !== null,
-          barsToWrap: loopBars - pos
+          barsToWrap: loopBars - pos,
+          loopBars
         }
       )
       const next = new Map(manual)
@@ -637,7 +640,7 @@ Before building the request, draw transitions for manual changes that do not hav
     }
 ```
 
-Then build the request with `mergeStageChanges(ledReady ? { slotId: led.slotId, stem: led.stem, arrival: led.arrival } : null, readyManualMap)`. `readyManualMap` maps each manual entry to `{ stem, joining, arrival }`. A `cut` is fine, because `mergeStageChanges` skips cut arrivals. Fix the TypeScript narrowing on `led` with a local.
+Then build the request with `mergeStageChanges(ledReady ? { slotId: led.slotId, stem: led.stem, arrival: led.arrival ?? null } : null, readyManualMap)`. `readyManualMap` maps each manual entry to `{ stem, joining, arrival }`. A `cut` is fine, because `mergeStageChanges` skips cut arrivals. Fix the TypeScript narrowing on `led` with a local.
 
 - **`radioStageRef.current`** becomes `{ token, slotIds: merged.changes.map((c) => c.slotId), sent: false, mapping: null }`. Rename the field from `slotId` to `slotIds` and update every reader:
   - the per-tick eligibility withdraw in step (1) must check only RADIO's own slot. Manual changes ignore padlock and mute. Keep a separate `ledSlotId` field for it, or look it up from `radioLedChangeRef`.
@@ -773,7 +776,33 @@ Check the new row does NOT auto-join the preview mix before the landing. Its `ca
 - It takes one undo snapshot up front. Keep it, even though the commits happen later, because undo applies to the committed state.
 - Rows that already have a waiting change are skipped by `rollForSlot`'s early return. That is correct.
 
-- [ ] **Step 7: Verify**
+- [ ] **Step 7: Cmd-click lands it right away, and combine moves to Shift**
+
+(Added to the spec after Task 1.) Every function routed above gets an `immediate` flag, and the queue branch becomes `if (radioOnRef.current && !immediate)`:
+- `rollForSlot(id, kinds, immediate = false)`
+- `rollRandomForSlot(id, kinds, immediate = false)`
+- `swapSlotFromNearby(id, candidate, immediate = false)`
+- `duplicateSlot(id, immediate = false)`
+- `addSlot(kinds, immediate = false)`
+- `rerollAll(immediate = false)`
+
+Thread the flag through `rerollSlot` / `rerollRandomSlot` and the add-random path. With `immediate`, the function takes exactly today's radio-off path.
+
+At the desktop call sites, pass `e.metaKey`:
+- the row's same kind, any stem and duplicate buttons: `RowIconButton`'s `onClick` receives the mouse event, so change the row's `onReroll` / `onRerollRandom` / `onDuplicate` props to take `(immediate: boolean)`;
+- the nearby popover's pick: `DiscoverNearbyPopover`'s `onPick` fires from a click, so add the flag to its callback signature and pass `e.metaKey` where it calls `onPick`;
+- the add chips, + random, and the toolbar reroll-all dice.
+
+The phone's calls pass nothing, so they always queue while radio runs.
+
+**Combine moves from Cmd to Shift.** The add chips call `handleAddRowKindClick(kind, e.metaKey)`, where the second argument means "combine".
+- Change that call to `handleAddRowKindClick(kind, e.shiftKey, e.metaKey)` and rename the parameters to `(kind, combine, immediate)`. Read the whole function first: it has a pending-combination state, and the `immediate` flag goes to whichever `addSlot` it finally makes.
+- Change the hint text `hold cmd to combine` to `hold shift to combine`.
+- Grep for any other place that mentions cmd for combining, including comments and tooltips, and update it.
+
+Tooltips stay as they are, 2-3 words. The Cmd behaviour is not advertised on each button. Tell Elling about it in the final report.
+
+- [ ] **Step 8: Verify**
 
 Run:
 - `npm run typecheck`
@@ -784,16 +813,16 @@ Run:
 
 In your report, list every place that now calls `queueManualChange`. Check that with radio off, every one of them takes its old path.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
-git add src/renderer/src/components/DiscoverPanel.tsx
+git add src/renderer/src/components/DiscoverPanel.tsx src/renderer/src/components/DiscoverNearbyPopover.tsx
 git commit -m "while radio runs, every way of bringing in a stem waits for the loop top and arrives with a transition
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
 
-- [ ] **Step 9: Manual check (hand to Elling, do not claim)**
+- [ ] **Step 10: Manual check (hand to Elling, do not claim)**
 
 With `npm run dev`, Discover and radio on, collect the `[radio-stage]` / `[radio-gate]` lines from DevTools, then check:
 1. Click same kind on one row. The row breathes, the old stem plays until the loop top, and the new one lands exactly there with a transition. The log shows `APPLIED via wrap at 0.0000bar`.
@@ -807,6 +836,8 @@ With `npm run dev`, Discover and radio on, collect the `[radio-stage]` / `[radio
 9. Remove a waiting row. Nothing lands for it.
 10. Turn radio off while changes are waiting. They land at once.
 11. Radio off. Everything is instant, exactly as before.
+12a. Cmd-click any of the buttons with radio on. The stem lands immediately, as it would with radio off.
+12b. Shift-click the add chips. They combine kinds, and Cmd-click on a chip no longer does.
 12. Radio's own changes still land on time.
 
 ---
