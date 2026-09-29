@@ -94,7 +94,7 @@ The playhead only shows while a preview is loaded, as today.
   - `restartLinePcts`
   - `loopTopLinePcts`
 
-  Restart lines that coincide with a loop-top line (to 1e-9) are removed. It also exports
+  Restart lines that coincide with a loop-top line (to 1e-6 of a percent) are removed. It also exports
   `discoverPlayheadPcts(pos, loopBars, windowBars)`, one percentage per lap.
 
   It handles `stemBars <= 0` and `loopBars <= 0` safely, as today's code does: treat a missing loop
