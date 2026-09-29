@@ -141,8 +141,10 @@ does the rest, so nothing in the main process changes.
 1. Draw the source: `other` with probability `lean / 100`, else `endlesss`.
 2. Call `getDiscoverCandidates` with that one source (`{ endlesss: true, audioIn: false }` or the
    reverse).
-3. If that returns no candidates **and the dial is not at an end**, call again with the other
-   source. A kind that has no audio-in stems (common for bass) should never fail a roll because the
+3. If that returns no candidates, or only stems already on other slots, **and the dial is not at
+   an end**, call again with the other source. (Duplicates count as nothing: at the middle a small
+   audio-in pool would otherwise land a repeat half the time. Added in review. The random roll
+   falls back on empty only, since it never skipped duplicates.) A kind that has no audio-in stems (common for bass) should never fail a roll because the
    dial leaned the other way. At an end there is no fallback, because the end means "only".
 
 This is one pure function in `src/shared/discoverSlotModifier.ts`, test-first:

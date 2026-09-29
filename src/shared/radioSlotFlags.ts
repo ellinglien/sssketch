@@ -187,7 +187,7 @@ export function toggleRadioHook(flags: RadioSlotFlags, id: string): RadioSlotFla
  * a lie about another -- the exact failure the clear-on-change rule below
  * exists to avoid.
  *
- * So: marking a hook releases any other hook, silently, the way a radio
+ * So: marking a hook releases any other hook, visibly, the way a radio
  * button does. Marking a replace-soon releases nothing, and never touches
  * another slot's flag of either kind.
  *

@@ -681,7 +681,8 @@ export interface RadioPickOptions {
   changedAt?: ReadonlyMap<string, number>
   /** The current turn number. */
   turn?: number
-  /** The row's three-state hook / normal / replace-soon control. See
+  /** The row's two radio controls, hold longer (hook) and change next
+   * (replace-soon). See
    * radioSlotFlags.ts, which owns both factors and the arguments for
    * them. */
   flags?: RadioSlotFlags

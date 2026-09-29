@@ -239,7 +239,7 @@ function normalizeRemoteRadio(
  * when Discover is empty, which is exactly when he is not at the Mac.
  *
  * Deliberately still NOT here, and each one can be pulled back later: the
- * matching dial, chaos, the endlesss/other filters, favourites-only,
+ * matching dial, chaos, the source dial, favourites-only,
  * undo/redo, the adjacency popover itself (the phone gets its one-tap form,
  * not its browser), per-slot gain, the match meter. Every control competes
  * with the verbs that matter on a thumb-sized screen, and a reroll already

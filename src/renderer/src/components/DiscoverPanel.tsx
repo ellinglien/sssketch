@@ -2067,7 +2067,8 @@ export function DiscoverPanel({
   // across a real IPC await, and nothing renders them.
   const radioChangedAtRef = useRef<Map<string, number>>(new Map())
   const radioTurnRef = useRef(0)
-  // The row's three-state gesture -- hook / normal / replace soon. See
+  // The row's two radio controls -- hold longer (hook) and change next
+  // (replace soon). See
   // src/shared/radioSlotFlags.ts, which owns every rule about it and the
   // reasoning for each one.
   //
@@ -4247,6 +4248,10 @@ export function DiscoverPanel({
     try {
       const rollOptions = globalRollOptions
       const draw = drawSoundSource(sourceLeanRef.current)
+      // Falls back only on no candidate at all, unlike pickForSlot, which
+      // also falls back when everything drawn is already on another slot:
+      // this path has never skipped duplicates, so there is nothing to be
+      // "all duplicates" of.
       let candidate = await window.rifffApi.getRandomDiscoverCandidate(
         kinds,
         rollOptions.onlyOwnStems,
@@ -6270,7 +6275,8 @@ function DiscoverSlotRow({
    * src/shared/radioSlotFlags.ts. */
   radioFlag: RadioSlotFlag | null
   /** Whether radio is running. The two radio controls (hold longer, change
-   * next) only mean anything while it is, so it is hidden -- but still RENDERED -- when it is not. */
+   * next) only mean anything while it is, so they are hidden -- but still
+   * RENDERED -- when it is not. */
   radioOn: boolean
   /** The "hold longer" control -- toggles `hook` on this row
    * (toggleRadioHook). */
