@@ -323,8 +323,65 @@ namespace sssketch
         repositionRequested.store(true);
     }
 
-    double Transport::renderLoopAware(double pos, int numSamples, float* outL, float* outR) const
+    double Transport::barsUntilNextWrap() const
     {
+        // Deliberately the same window selection renderLoopAware makes
+        // below, and for the same reason: a recording loop, when active,
+        // IS the loop the audio thread wraps at.
+        const double recStart = recordingLoopStartBar.load();
+        const double recEnd = recordingLoopEndBar.load();
+        const bool recordingLoopActive = recEnd > recStart;
+        const double loopStart = recordingLoopActive ? recStart : 0.0;
+        const double loopEnd = recordingLoopActive ? recEnd : loopLengthBars.load();
+        if (loopEnd - loopStart <= 0.0)
+            return -1.0;
+
+        const double pos = positionBars.load();
+        // Past the loop's end: the next block snaps straight back to
+        // loopStart, so the wrap is effectively immediate. Ahead of it
+        // (pos < loopStart) playback runs straight through unwrapped until
+        // it arrives, so the wait is the whole travel to loopEnd -- which
+        // is what the shared expression below already says.
+        if (pos >= loopEnd)
+            return 0.0;
+        return loopEnd - pos;
+    }
+
+    void Transport::applyStagedProjectAtWrap(double atBars)
+    {
+        const auto result = engine.applyStagedProject();
+        if (result == PlaybackEngine::StagedApply::Deferred)
+        {
+            stagedApplyRetryDue = true;
+            return;
+        }
+        stagedApplyRetryDue = false;
+        if (result != PlaybackEngine::StagedApply::Applied)
+            return;
+
+        // Adopted in the same breath as the project it belongs to: a loop
+        // length changed any earlier would have moved the very wrap this
+        // swap was waiting for. Reading it back into loopLengthBars here,
+        // mid-renderLoopAware, is deliberate and harmless -- that function
+        // has already taken its own local copy of the window for this
+        // block, so the new length starts applying from the next one.
+        const double nextLoopBars = stagedLoopLengthBars.exchange(-1.0);
+        if (nextLoopBars >= 0.0)
+            loopLengthBars.store(nextLoopBars);
+        stagedApplyPositionBars.store(atBars);
+    }
+
+    double Transport::renderLoopAware(double pos, int numSamples, float* outL, float* outR)
+    {
+        // The one case where a swap happens away from a lap boundary: a
+        // previous attempt found the retirement slot occupied. Retrying at
+        // the top of a block is the same "no renderBlock in flight"
+        // position the real wrap points are, so it is safe by the same
+        // argument -- it is just less musically exact, which is the right
+        // trade against waiting another whole lap.
+        if (stagedApplyRetryDue)
+            applyStagedProjectAtWrap(pos);
+
         // A recording loop, when active, is a second independent instance
         // of this exact same wrap mechanism (see
         // docs/superpowers/specs/2026-08-03-loop-recording-design.md's
@@ -382,7 +439,16 @@ namespace sssketch
             return pos + blockDurationBars;
         }
         if (pos >= loopEnd)
+        {
             pos = loopStart;
+            // A snap back to the top is a lap boundary too, as far as a
+            // scheduled swap is concerned: the same "the loop starts over
+            // here" moment, arrived at from a bounds change rather than
+            // from playing through the end. Nothing has been rendered in
+            // this call yet, so this is as clean a swap point as the
+            // split below.
+            applyStagedProjectAtWrap(loopStart);
+        }
 
         const double distToEnd = loopEnd - pos;
         if (distToEnd >= blockDurationBars)
@@ -402,6 +468,17 @@ namespace sssketch
                 std::clamp((int) std::lround(distToEnd / barsPerSample), 0, numSamples);
             if (splitIndex > 0)
                 engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR, channelChains);
+            // Exactly here, between the outgoing lap's last sample and the
+            // incoming lap's first, is what "apply at the next loop top"
+            // means -- sample-accurate, not block-accurate. The first
+            // renderBlock above has returned, so its reference to the
+            // outgoing snapshot is gone and the second has not taken one
+            // yet; that gap is the precondition
+            // PlaybackEngine::applyStagedProject() requires. The seam
+            // anchor rendered further down then comes from the NEW
+            // project, which is also right: the outgoing tail should be
+            // pulled toward whatever actually follows it.
+            applyStagedProjectAtWrap(loopStart);
             if (splitIndex < numSamples)
                 engine.renderBlock(loopStart, deviceSampleRate, numSamples - splitIndex,
                                     outL + splitIndex, outR + splitIndex, channelChains);

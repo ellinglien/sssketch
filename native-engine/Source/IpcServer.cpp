@@ -1,5 +1,6 @@
 #include "IpcServer.h"
 #include <algorithm>
+#include <cmath>
 
 namespace sssketch
 {
@@ -72,6 +73,12 @@ namespace sssketch
     {
         stopTimer(kPositionTimerId);
         stopTimer(kLinkPollTimerId);
+        // Same reasoning as connectionLost below -- this object is going
+        // away, and a staged swap it will never be able to ack must not
+        // outlive it.
+        engine.cancelStagedProject();
+        engine.drainRetiredProject();
+        transport.setStagedLoopLengthBars(-1.0);
         detachArmedRecorderOnTeardown();
         // InterprocessConnection's destructor requires derived classes to have
         // already called disconnect() — without this, pending messages can still
@@ -127,7 +134,154 @@ namespace sssketch
         stopTimer(kPositionTimerId);
         stopTimer(kLinkPollTimerId);
         transport.stop();
+        // Nothing left to ack it to, and a swap firing on behalf of a
+        // client that has gone away is nobody's intent. The engine's
+        // retirement slot is collected here too, so the last swap's
+        // outgoing project doesn't sit allocated until the next client.
+        engine.cancelStagedProject();
+        engine.drainRetiredProject();
+        stagedToken = -1;
+        stagedProject = {};
+        transport.setStagedLoopLengthBars(-1.0);
         detachArmedRecorderOnTeardown();
+    }
+
+    void IpcConnection::applyProjectTransportSettings(const EngineProject& project)
+    {
+        transport.setBpm(project.bpm);
+        // Pushes sssketch's own current project tempo out to the Link
+        // session (see LinkSession's own doc comment for the one-way sync
+        // direction and why) -- hooked onto the per-project-change path
+        // rather than a new periodic timer, deliberately: the
+        // position-update timer (see timerCallback) only runs while
+        // playing (started/stopped by the play/pause/stop handlers), so
+        // piggybacking tempo sync onto it would silently stop syncing the
+        // instant playback pauses -- exactly the opposite of what a "stay
+        // in sync" feature should do. A project change fires regardless of
+        // play state, which is what "sssketch's own tempo changed"
+        // actually means here.
+        linkSession.syncTempo(project.bpm);
+        transport.setLoopLengthBars(project.loopLengthBars);
+    }
+
+    void IpcConnection::applyProjectPostPublish(const EngineProject& project)
+    {
+        // The ENTIRE mechanism by which a live override (set via
+        // set-live-param) eventually gets cleared -- no explicit "clear"
+        // message is ever sent by the renderer's own drag handlers,
+        // deliberately: the override holds the exact final dragged value
+        // until precisely this point, so by the time it's cleared here the
+        // fresh snapshot already agrees with it, making the handoff
+        // inaudible. See LiveParamOverrides.h's own doc comment for the
+        // fuller reasoning. Not a joint atomic transaction with the
+        // publish -- there's a theoretical nanosecond-to-microsecond
+        // window where renderBlock() could observe the new snapshot with a
+        // still-stale override, practically negligible at that timescale
+        // and correct for the intended drag-commit handoff either way.
+        engine.liveOverrides().clearAll();
+
+        std::vector<juce::String> channelIds;
+        for (const auto& rifff : project.rifffs)
+        {
+            if (std::find(channelIds.begin(), channelIds.end(), rifff.channelId) == channelIds.end())
+                channelIds.push_back(rifff.channelId);
+        }
+        channelChains.updateChannelSet(channelIds);
+        channelChains.setBpm(project.bpm);
+    }
+
+    void IpcConnection::sendStageResult(int token, const juce::String& status, const juce::String& reason)
+    {
+        juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+        payload->setProperty("token", token);
+        payload->setProperty("status", status);
+        if (reason.isNotEmpty())
+            payload->setProperty("reason", reason);
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("type", "project-stage-result");
+        obj->setProperty("payload", juce::var(payload.get()));
+        sendJson(juce::var(obj.get()));
+    }
+
+    void IpcConnection::finishStagedApply(const juce::String& via, double atBars)
+    {
+        // Deliberately AFTER the swap, not before it. updateChannelSet is
+        // the message-thread-only path with the known latent reclamation
+        // bug (see this repo's own memory note) and must never become
+        // reachable from the audio callback; running it early would also
+        // tear down a channel's plugin chain a whole lap before the
+        // project that stopped using it actually went live. A channel that
+        // only the new project has is a passthrough for the few
+        // milliseconds until this runs, which is exactly what a channel
+        // with no chain published already means everywhere else.
+        applyProjectTransportSettings(stagedProject);
+        applyProjectPostPublish(stagedProject);
+
+        juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+        payload->setProperty("token", stagedToken);
+        payload->setProperty("via", via);
+        payload->setProperty("atBars", atBars);
+        payload->setProperty("deferrals", (int) engine.stagedDeferralCount());
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("type", "project-applied");
+        obj->setProperty("payload", juce::var(payload.get()));
+        sendJson(juce::var(obj.get()));
+
+        juce::Logger::writeToLog(
+            "[radio-stage] applied token " + juce::String(stagedToken) + " via " + via
+            + " at " + juce::String(atBars, 4) + "bar"); // TEMP (2026-09-29), see stemDecodeCount()
+
+        stagedToken = -1;
+        stagedProject = {};
+        transport.setStagedLoopLengthBars(-1.0);
+    }
+
+    void IpcConnection::pumpStagedProject()
+    {
+        // Unconditional and first: this is the message thread taking back
+        // whatever the audio thread retired at the last swap, and it is
+        // what keeps the NEXT swap from having to defer. Costs one relaxed
+        // bool load when there is nothing to collect.
+        engine.drainRetiredProject();
+
+        if (stagedToken < 0)
+            return;
+
+        const auto applies = engine.stagedApplyCount();
+        if (applies != lastSeenStagedApplies)
+        {
+            lastSeenStagedApplies = applies;
+            finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
+            return;
+        }
+
+        // Nothing is going to wrap while the transport isn't running, so
+        // waiting would mean waiting forever. A missing change is worse
+        // than a late one.
+        if (!transport.isPlaying())
+        {
+            if (engine.promoteStagedProjectNow())
+                finishStagedApply("transport-stopped", transport.currentPositionBars());
+            else
+            {
+                // The audio thread won the race between the isPlaying()
+                // check and the promote -- it already swapped.
+                lastSeenStagedApplies = engine.stagedApplyCount();
+                finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
+            }
+            return;
+        }
+
+        if (juce::Time::getMillisecondCounterHiRes() >= stageDeadlineMs)
+        {
+            if (engine.promoteStagedProjectNow())
+                finishStagedApply("deadline", transport.currentPositionBars());
+            else
+            {
+                lastSeenStagedApplies = engine.stagedApplyCount();
+                finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
+            }
+        }
     }
 
     void IpcConnection::sendJson(const juce::var& payload)
@@ -139,6 +293,13 @@ namespace sssketch
 
     void IpcConnection::timerCallback(int timerID)
     {
+        // Both cadences, on purpose. The 30Hz one is the cadence a staged
+        // swap actually lands on (it only runs while playing, which is the
+        // only time a loop top happens); the 750ms one is what still
+        // collects retirements and still enforces the deadline after
+        // playback has stopped, when the 30Hz timer isn't running at all.
+        pumpStagedProject();
+
         if (timerID == kLinkPollTimerId)
         {
             // Unsolicited push, same "engine spontaneously tells the
@@ -223,6 +384,13 @@ namespace sssketch
         auto type = parsed.getProperty("type", "").toString();
         auto payload = parsed.getProperty("payload", juce::var());
 
+        // A third place the message thread gets a chance to collect a
+        // retirement and notice a landed swap -- so a client that talks to
+        // the engine at all never has to wait for a timer tick, and so the
+        // retirement slot is essentially always empty by the time the next
+        // loop top arrives.
+        pumpStagedProject();
+
         if (type == "load-project")
         {
             // TEMP -- how far past its own loop top the transport already
@@ -242,22 +410,28 @@ namespace sssketch
             if (parseEngineProject(payloadJson, project, error))
             {
                 const auto tTraceProjectParsed = juce::Time::getMillisecondCounterHiRes();
-                transport.setBpm(project.bpm);
-                // Pushes sssketch's own current project tempo out to the
-                // Link session (see LinkSession's own doc comment for the
-                // one-way sync direction and why) -- hooked onto this
-                // existing per-project-change handler rather than a new
-                // periodic timer, deliberately: the position-update timer
-                // (see timerCallback below) only runs while playing
-                // (started/stopped by the play/pause/stop handlers
-                // further down), so piggybacking tempo sync onto it would
-                // silently stop syncing the instant playback pauses --
-                // exactly the opposite of what a "stay in sync" feature
-                // should do. load-project fires on every real project
-                // state change regardless of play state, which is what
-                // "sssketch's own tempo changed" actually means here.
-                linkSession.syncTempo(project.bpm);
-                transport.setLoopLengthBars(project.loopLengthBars);
+                // An explicit, immediate load supersedes anything waiting
+                // for a loop top. engine.setProject() drops the staged
+                // snapshot itself (see its own comment); this is only the
+                // bookkeeping that lets the client hear about it, and it
+                // has to happen BEFORE the publish so the "was it still
+                // staged?" answer is the pre-load one.
+                if (stagedToken >= 0)
+                {
+                    // cancelStagedProject(), not hasStagedProject() then a
+                    // cancel: only the operation that tries to stop it can
+                    // truthfully say whether it did, and the audio thread
+                    // may be taking it at this exact moment.
+                    const bool cancelled = engine.cancelStagedProject();
+                    sendStageResult(stagedToken, cancelled ? "cancelled" : "applied", "load-project");
+                    stagedToken = -1;
+                    stagedProject = {};
+                    transport.setStagedLoopLengthBars(-1.0);
+                    lastSeenStagedApplies = engine.stagedApplyCount();
+                }
+                // Same order as before this feature existed: transport
+                // settings, publish, then the post-publish pair.
+                applyProjectTransportSettings(project);
                 engine.setProject(project);
                 const auto tTraceSetProject = juce::Time::getMillisecondCounterHiRes();
                 int tTraceStems = 0;
@@ -274,35 +448,157 @@ namespace sssketch
                     + juce::String(stemDecodeCount() - tTraceDecodesBefore) + " of "
                     + juce::String(tTraceStems) + " stems) · handler "
                     + juce::String(tTraceSetProject - tTraceEnter, 1) + "ms"); // TEMP (2026-09-28)
-                // The ENTIRE mechanism by which a live override (set via
-                // set-live-param, above) eventually gets cleared -- no
-                // explicit "clear" message is ever sent by the renderer's
-                // own drag handlers, deliberately: the override holds the
-                // exact final dragged value until precisely this point, so
-                // by the time it's cleared here the fresh snapshot just
-                // published one line up already agrees with it, making the
-                // handoff inaudible. See LiveParamOverrides.h's own doc
-                // comment for the fuller reasoning. Not a joint atomic
-                // transaction with setProject() above -- there's a
-                // theoretical nanosecond-to-microsecond window where
-                // renderBlock() could observe the new snapshot with a still-
-                // stale override, practically negligible at that timescale
-                // and correct for the intended drag-commit handoff either
-                // way.
-                engine.liveOverrides().clearAll();
-
-                std::vector<juce::String> channelIds;
-                for (const auto& rifff : project.rifffs)
-                {
-                    if (std::find(channelIds.begin(), channelIds.end(), rifff.channelId) == channelIds.end())
-                        channelIds.push_back(rifff.channelId);
-                }
-                channelChains.updateChannelSet(channelIds);
-                channelChains.setBpm(project.bpm);
+                applyProjectPostPublish(project);
             }
             else
             {
                 juce::Logger::writeToLog("IpcConnection: load-project failed: " + error);
+            }
+        }
+        else if (type == "stage-project")
+        {
+            // "Here is the next project. Make it real at the next loop
+            // top." The first scheduled message in this protocol -- every
+            // other one of the ~29 types is immediate.
+            //
+            // The payload is { token, project } rather than the project
+            // itself, unlike load-project: EngineClient matches replies by
+            // message type, not by request id (see engineClient.ts), so
+            // without a token a renderer with two changes in flight
+            // couldn't tell which ack was which. The nested `project` is
+            // byte-for-byte whatever buildEngineProject.ts produced --
+            // that wire shape is the hand-synced twin of EngineProject and
+            // is deliberately untouched here.
+            if (!payload.isObject())
+                return;
+            const int token = (int) payload.getProperty("token", -1);
+            const auto projectVar = payload.getProperty("project", juce::var());
+
+            // Read BEFORE parsing and decoding, because the deadline has
+            // to be anchored to when the renderer's change actually
+            // arrived, not to whenever staging happened to finish. That is
+            // exactly what makes the "the loop top went by while we were
+            // still decoding" case resolve as an immediate apply rather
+            // than a wait of one more whole lap: the deadline is already
+            // in the past by the time we get to check it.
+            const auto arrivedAtMs = juce::Time::getMillisecondCounterHiRes();
+            const double barsToWrap = transport.barsUntilNextWrap();
+            const double liveBpm = transport.currentBpm();
+            const double liveSecPerBar = liveBpm > 0.0 ? (60.0 / liveBpm) * 4.0 : 0.0;
+
+            EngineProject project;
+            juce::String error;
+            if (!parseEngineProject(juce::JSON::toString(projectVar, true), project, error))
+            {
+                juce::Logger::writeToLog("IpcConnection: stage-project failed: " + error);
+                sendStageResult(token, "error", error);
+                return;
+            }
+
+            // A newer pick supersedes an older staged one. The client is
+            // told, rather than left holding a token that will never be
+            // answered -- a dropped change the renderer doesn't know about
+            // is the worst outcome available here.
+            if (stagedToken >= 0)
+            {
+                const bool cancelled = engine.cancelStagedProject();
+                sendStageResult(stagedToken, cancelled ? "cancelled" : "applied", "superseded");
+                if (!cancelled)
+                {
+                    // It had already gone live; run its side effects now
+                    // so the engine isn't left with the previous project's
+                    // channel set and tempo.
+                    lastSeenStagedApplies = engine.stagedApplyCount();
+                    applyProjectTransportSettings(stagedProject);
+                    applyProjectPostPublish(stagedProject);
+                }
+                stagedToken = -1;
+                stagedProject = {};
+                transport.setStagedLoopLengthBars(-1.0);
+            }
+
+            // Three reasons waiting for a loop top is the wrong answer, and
+            // all three resolve the same way: do it now, exactly as
+            // load-project would have. (1) Nothing is playing, so no wrap
+            // will ever come. (2) Nothing wraps at all -- no loop length
+            // set. (3) The tempo changes, which is deliberately out of
+            // scope for a scheduled swap: adopting a new tempo at the wrap
+            // would mean writing Transport::secPerBar and pushing Link
+            // from the audio thread, and neither is real-time-safe. Radio
+            // swaps layers inside one tempo-matched loop, so (3) never
+            // fires for the case this exists for.
+            const bool tempoChanges = std::abs(project.bpm - liveBpm) > 1.0e-9;
+            const char* immediateReason =
+                !transport.isPlaying() ? "not-playing"
+                : barsToWrap < 0.0     ? "no-loop"
+                : tempoChanges         ? "tempo-change"
+                                       : nullptr;
+            if (immediateReason != nullptr)
+            {
+                engine.setProject(project);
+                lastSeenStagedApplies = engine.stagedApplyCount();
+                sendStageResult(token, "applied", immediateReason);
+                // Both acks, in the same order a scheduled swap sends
+                // them, so the renderer has exactly one code path: wait
+                // for project-applied. finishStagedApply runs the side
+                // effects.
+                stagedToken = token;
+                stagedProject = project;
+                finishStagedApply("immediate", transport.currentPositionBars());
+                return;
+            }
+
+            // Read BEFORE the stage, not after: the audio thread can hit a
+            // loop top between those two lines, and a baseline taken after
+            // it would swallow the very edge the ack rides on.
+            lastSeenStagedApplies = engine.stagedApplyCount();
+            engine.stageProject(project);
+            transport.setStagedLoopLengthBars(project.loopLengthBars);
+            stagedToken = token;
+            stagedProject = project;
+            // A margin over the arrival-anchored wait, so the deadline
+            // can't beat a loop top that is genuinely about to happen: the
+            // audio thread swaps at the wrap itself, but the message
+            // thread only NOTICES on its next 30Hz tick, and the transport
+            // clock and this wall clock are different clocks.
+            constexpr double kStageDeadlineMarginMs = 250.0;
+            stageDeadlineMs = arrivedAtMs + barsToWrap * liveSecPerBar * 1000.0 + kStageDeadlineMarginMs;
+            sendStageResult(token, "staged", {});
+
+            // Staging may itself have run past the loop top it was aiming
+            // at (a cold decode is ~90ms, and the renderer may have had
+            // very little of the lap left). Apply late rather than wait
+            // out another whole lap -- same rule as the deadline, just
+            // checked immediately because the answer is already known.
+            pumpStagedProject();
+        }
+        else if (type == "cancel-staged-project")
+        {
+            // Radio re-checks a pick's eligibility late and can drop it. A
+            // stale staged swap must never fire.
+            if (!payload.isObject())
+                return;
+            const int token = (int) payload.getProperty("token", -1);
+            // A token that isn't the staged one is a cancel that lost a
+            // race with a supersede -- already answered, nothing to do.
+            if (stagedToken < 0 || (token >= 0 && token != stagedToken))
+                return;
+
+            if (engine.cancelStagedProject())
+            {
+                sendStageResult(stagedToken, "cancelled", "requested");
+                stagedToken = -1;
+                stagedProject = {};
+                transport.setStagedLoopLengthBars(-1.0);
+            }
+            else
+            {
+                // Too late: the audio thread already swapped it in. Say so
+                // rather than pretending, and finish the side effects the
+                // swap still needs.
+                sendStageResult(stagedToken, "applied", "too-late");
+                lastSeenStagedApplies = engine.stagedApplyCount();
+                finishStagedApply("wrap", transport.lastStagedApplyPositionBars());
             }
         }
         else if (type == "play")

@@ -82,7 +82,7 @@ namespace sssketch
         return bufferCache.load(path, durationSec);
     }
 
-    void PlaybackEngine::setProject(const EngineProject& project)
+    std::shared_ptr<PlaybackEngine::ProjectSnapshot> PlaybackEngine::buildSnapshot(const EngineProject& project)
     {
         auto next = std::make_shared<ProjectSnapshot>();
         next->project = project;
@@ -145,6 +145,23 @@ namespace sssketch
             }
         }
 
+        return next;
+    }
+
+    void PlaybackEngine::setProject(const EngineProject& project)
+    {
+        auto next = buildSnapshot(project);
+
+        // An explicit, immediate project load supersedes anything that was
+        // waiting for a loop top -- otherwise a staged swap parked before
+        // this call would fire at the next wrap and quietly undo it. Done
+        // BEFORE the publish below, so the window in which the audio thread
+        // could still take the staged one and then have it immediately
+        // overwritten is as short as the two adjacent stores; and done here
+        // rather than only in IpcServer's own handler so that no future
+        // caller of setProject() can forget it.
+        cancelStagedProject();
+
         // Publishes the new snapshot and releases this function's own
         // reference to the old one in a single atomic operation. Whatever
         // OTHER references to the old snapshot still exist -- most notably,
@@ -160,6 +177,111 @@ namespace sssketch
         // test (PlaybackEngineTests.cpp) proved that heuristic false under
         // sustained load, reliably reproducing a real use-after-free.
         std::atomic_store_explicit(&published, std::shared_ptr<const ProjectSnapshot>(std::move(next)), std::memory_order_release);
+    }
+
+    void PlaybackEngine::stageProject(const EngineProject& project)
+    {
+        // Every expensive thing -- the file reads, the Ogg/WAV decodes, the
+        // loop-sewing blend, the allocation of the snapshot and all its
+        // derived structure -- happens right here, on the message thread,
+        // however long before the loop top the caller managed to get to it.
+        // What reaches the audio thread afterwards is a finished object and
+        // a pointer.
+        auto next = buildSnapshot(project);
+        std::atomic_store_explicit(
+            &staged, std::shared_ptr<const ProjectSnapshot>(std::move(next)), std::memory_order_release);
+    }
+
+    bool PlaybackEngine::cancelStagedProject()
+    {
+        // The exchange, not a load-then-store: the audio thread may be
+        // taking the staged snapshot at this exact moment, and "did I
+        // actually stop it?" has to be answered by the same operation that
+        // tried to, or the caller will tell its client a swap was cancelled
+        // that in fact went ahead.
+        auto previous = std::atomic_exchange_explicit(
+            &staged, std::shared_ptr<const ProjectSnapshot>(), std::memory_order_acq_rel);
+        return previous != nullptr;
+    }
+
+    bool PlaybackEngine::promoteStagedProjectNow()
+    {
+        auto taken = std::atomic_exchange_explicit(
+            &staged, std::shared_ptr<const ProjectSnapshot>(), std::memory_order_acq_rel);
+        if (taken == nullptr)
+            return false;
+        std::atomic_store_explicit(&published, taken, std::memory_order_release);
+        return true;
+    }
+
+    PlaybackEngine::StagedApply PlaybackEngine::applyStagedProject()
+    {
+        // "Is there anything to do at all?" comes first: the overwhelmingly
+        // common case is a lap top with nothing staged, and that has to cost
+        // one load and nothing else -- in particular it must not be counted
+        // as a deferral just because the previous swap's retirement hasn't
+        // been collected yet.
+        auto incoming = std::atomic_load_explicit(&staged, std::memory_order_acquire);
+        if (incoming == nullptr)
+            return StagedApply::None;
+
+        // With the retirement slot occupied there is nowhere to put the
+        // outgoing snapshot that doesn't risk freeing something here. See
+        // this function's own doc comment (.h) -- this is the one branch
+        // that gives up rather than take that risk, and the caller's
+        // contract is to ask again next block rather than to wait another
+        // whole lap.
+        if (retiredOccupied.load(std::memory_order_acquire))
+        {
+            stagedDeferrals.fetch_add(1, std::memory_order_relaxed);
+            return StagedApply::Deferred;
+        }
+
+        // Hold the outgoing snapshot on the stack, THEN park it, THEN
+        // displace it. Any other order lets `published`'s store be the
+        // release that takes the count to zero.
+        auto outgoing = std::atomic_load_explicit(&published, std::memory_order_acquire);
+        std::atomic_store_explicit(&retired, outgoing, std::memory_order_release);
+        retiredOccupied.store(true, std::memory_order_release);
+
+        std::atomic_store_explicit(&published, incoming, std::memory_order_release);
+
+        // Compare-exchange, not a plain clear: if the message thread staged
+        // a NEWER project in the microseconds since the load above, that
+        // one must stay staged and get its own loop top. A plain store of
+        // nullptr here would silently drop it, and a dropped change is the
+        // one outcome this whole feature is not allowed to produce.
+        auto expected = incoming;
+        std::atomic_compare_exchange_strong_explicit(
+            &staged, &expected, std::shared_ptr<const ProjectSnapshot>(),
+            std::memory_order_acq_rel, std::memory_order_acquire);
+
+        stagedApplies.fetch_add(1, std::memory_order_release);
+        return StagedApply::Applied;
+
+        // Every local dies here, and none of them is the last owner:
+        // `incoming` is held by `published`; `outgoing` is held by
+        // `retired`; `expected` is held by either `staged` (the CAS failed,
+        // so it is the newer snapshot, still staged) or `published` (the
+        // CAS succeeded, so it is still `incoming`).
+    }
+
+    void PlaybackEngine::drainRetiredProject()
+    {
+        if (!retiredOccupied.load(std::memory_order_acquire))
+            return;
+        // Clear the slot first, flag second -- the exact mirror of the
+        // audio thread's park-then-flag order above, which is what lets
+        // each side trust the flag about the slot. The destructor, and
+        // every buffer free inside it, runs on THIS thread.
+        std::atomic_store_explicit(
+            &retired, std::shared_ptr<const ProjectSnapshot>(), std::memory_order_release);
+        retiredOccupied.store(false, std::memory_order_release);
+    }
+
+    bool PlaybackEngine::hasStagedProject() const
+    {
+        return std::atomic_load_explicit(&staged, std::memory_order_acquire) != nullptr;
     }
 
     void PlaybackEngine::renderBlock(

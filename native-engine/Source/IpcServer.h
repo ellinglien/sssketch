@@ -60,6 +60,45 @@ namespace sssketch
         // (below), same reasoning for each.
         void detachArmedRecorderOnTeardown();
 
+        /** Everything a project change does BESIDES publishing the
+         * snapshot itself, split at the publish because two of the five
+         * things genuinely have to happen after it (see each one's own
+         * comment in the .cpp). Shared verbatim by load-project and by a
+         * staged swap -- one list, in one order, so the two paths can't
+         * drift apart.
+         *
+         * A staged swap calls both AFTER the audio thread has already done
+         * the publish, which is what makes the tempo, the Link push, the
+         * override clear and the channel-chain set land up to one timer
+         * tick (~33ms) behind the audio. Deliberate: every one of them is
+         * message-thread work that is not real-time-safe -- clearAll()
+         * allocates, updateChannelSet() rebuilds a map and hands the old
+         * one to a background deleter (and carries a known latent
+         * reclamation bug that must not become reachable from the audio
+         * callback), and Link's own docs call its session capture
+         * real-time-unsafe. Tempo is kept out of a staged swap entirely by
+         * the stage-project handler for exactly this reason; the rest are
+         * inaudible at that lag (a channel with no chain published is a
+         * passthrough, which is what a brand-new channel is anyway). */
+        void applyProjectTransportSettings(const EngineProject& project);
+        void applyProjectPostPublish(const EngineProject& project);
+
+        /** Called wherever this connection gets a chance to think: both
+         * timer cadences and the top of every inbound message. Collects
+         * whatever the audio thread retired, notices a staged swap that has
+         * landed, and enforces the deadline that stops a staged swap from
+         * waiting forever for a loop top that isn't coming. See the
+         * stage-project handler for the whole contract. */
+        void pumpStagedProject();
+
+        /** Finishes a staged swap that has actually taken effect: runs the
+         * message-thread side effects and sends the project-applied ack.
+         * `via` is that ack's own field -- "wrap", "deadline",
+         * "transport-stopped" or "immediate". */
+        void finishStagedApply(const juce::String& via, double atBars);
+
+        void sendStageResult(int token, const juce::String& status, const juce::String& reason);
+
         PlaybackEngine& engine;
         Transport& transport;
         PluginChain& masterChain;
@@ -93,6 +132,32 @@ namespace sssketch
         // at all, see its own doc comment, so there's no cross-thread
         // lifetime hazard to guard against here.
         LinkSession linkSession;
+
+        // The token of the project currently staged in PlaybackEngine, or
+        // -1 for none. The renderer picks the value; the engine only ever
+        // echoes it back, because EngineClient (src/main/engineClient.ts)
+        // matches replies by message TYPE, not by request id -- without a
+        // token in the payload a client with two changes in flight could
+        // not tell which one an ack belongs to.
+        int stagedToken = -1;
+        // The project staged under stagedToken, kept so the message-thread
+        // side effects (tempo, Link, overrides, channel chains) can be run
+        // after the audio thread has done the swap -- the engine has no
+        // other way back to it, since the snapshot itself is private to
+        // PlaybackEngine. Metadata only; stem audio lives in
+        // StemBufferCache, not in here.
+        EngineProject stagedProject;
+        // juce::Time::getMillisecondCounterHiRes() value past which a
+        // staged swap stops waiting for a loop top and just happens. See
+        // the stage-project handler for how it's derived and why it is
+        // anchored at the message's ARRIVAL rather than at the end of
+        // staging.
+        double stageDeadlineMs = 0.0;
+        // Last value of PlaybackEngine::stagedApplyCount() this connection
+        // has seen. The audio thread has no way to call back into here and
+        // shouldn't have one; an edge on this counter is how the swap
+        // reports itself.
+        unsigned long long lastSeenStagedApplies = 0;
     };
 
     class IpcServer : public juce::InterprocessConnectionServer

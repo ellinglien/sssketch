@@ -159,6 +159,42 @@ namespace sssketch
         // poll and round-trip a correcting set-position over IPC. See
         // LoopBoundaryFade.h for the declick fade applied right at the wrap.
         void setLoopLengthBars(double bars) { loopLengthBars.store(bars); }
+        double currentLoopLengthBars() const { return loopLengthBars.load(); }
+
+        /** Message-thread API: how far, in bars, the playhead is from the
+         * next loop top -- the number the scheduled-swap deadline is built
+         * out of (see IpcServer's stage-project handler). Picks the same
+         * wrap window renderLoopAware itself uses (a recording loop, when
+         * active, takes over from the project's own loopLengthBars), so a
+         * deadline can never be computed against a loop the audio thread
+         * isn't actually wrapping at. Returns -1.0 when nothing wraps at
+         * all, which the caller must read as "waiting for a loop top would
+         * wait forever."
+         *
+         * A snapshot of a moving value, deliberately: it decides how long
+         * to WAIT, nothing sample-accurate. */
+        double barsUntilNextWrap() const;
+
+        /** Message-thread API: the loop length belonging to a project
+         * currently staged in PlaybackEngine, to be adopted at the same
+         * instant the staged snapshot is -- not before, or the very wrap
+         * the swap is waiting for would move. Negative parks it (nothing
+         * pending), which is also what the audio thread leaves behind once
+         * it has consumed one.
+         *
+         * This is the ONLY part of the load-project handler's work that
+         * happens on the audio thread instead of alongside the swap on the
+         * message thread, and only because it is a single atomic store of
+         * a double. Tempo, the Link push, the live-override clear and the
+         * channel-chain set are all message-thread work and stay there --
+         * see IpcServer's own stage-project handler for what that costs. */
+        void setStagedLoopLengthBars(double bars) { stagedLoopLengthBars.store(bars); }
+
+        /** The transport position at which the audio thread last promoted a
+         * staged project, or -1.0 if it never has. For the renderer's own
+         * ack and the engine log: it is how "the swap landed at 0.000 bar"
+         * gets measured on the one clock that matters. */
+        double lastStagedApplyPositionBars() const { return stagedApplyPositionBars.load(); }
 
         // A second, independent loop region -- the recording loop set by
         // arm-recording (IPC), completely separate from the project's own
@@ -215,7 +251,31 @@ namespace sssketch
         // currently rendering. Returns the new (already wrapped, if
         // applicable) position after this block; doesn't store it —
         // callers decide when/whether to commit it to positionBars.
-        double renderLoopAware(double pos, int numSamples, float* outL, float* outR) const;
+        //
+        // No longer const: this is where a scheduled project swap actually
+        // happens (see applyStagedProjectAtWrap just below), because this
+        // is the function that knows the exact sample the lap turns over
+        // at.
+        double renderLoopAware(double pos, int numSamples, float* outL, float* outR);
+
+        /** AUDIO THREAD. Promotes a project the message thread staged
+         * earlier, at the instant the lap turns over. Called from
+         * renderLoopAware at the two points where a lap genuinely ends: the
+         * split between an outgoing block's tail and the incoming lap's
+         * head, and the snap back to loopStart from beyond a loop's end.
+         *
+         * Both are points at which no renderBlock() call is in flight --
+         * the split's first render has returned and its second has not
+         * begun -- which is the whole precondition
+         * PlaybackEngine::applyStagedProject() is built on. Read its doc
+         * comment before moving this call anywhere else; "somewhere around
+         * the wrap" is not the requirement, "no outstanding audio-thread
+         * reference to the outgoing snapshot" is.
+         *
+         * `atBars` is the loop-relative position the new project's first
+         * sample will be rendered from -- reported back to the renderer as
+         * the position the swap landed at. */
+        void applyStagedProjectAtWrap(double atBars);
 
 
         PlaybackEngine& engine;
@@ -225,6 +285,8 @@ namespace sssketch
         std::atomic<bool> playing { false };
         std::atomic<double> positionBars { 0.0 };
         std::atomic<double> loopLengthBars { 0.0 }; // 0 = wrapping disabled
+        std::atomic<double> stagedLoopLengthBars { -1.0 }; // < 0 = none pending, see setStagedLoopLengthBars
+        std::atomic<double> stagedApplyPositionBars { -1.0 }; // -1 = no staged swap has ever landed
         std::atomic<double> recordingLoopStartBar { 0.0 };
         std::atomic<double> recordingLoopEndBar { 0.0 }; // <= start = disabled
         std::atomic<LoopRecorder*> loopRecorder { nullptr }; // nullptr = nothing armed
@@ -243,6 +305,15 @@ namespace sssketch
         HaltKind activeHaltKind = HaltKind::None;
         double haltFadeElapsedSec = 0.0;
         bool repositioning = false;
+        // Audio-thread-only. True only in the should-never-happen case
+        // where applyStagedProjectAtWrap found the retirement slot still
+        // occupied (see PlaybackEngine::applyStagedProject) and gave up on
+        // that lap top rather than free anything here. renderLoopAware
+        // retries at the top of the next block, so the swap is late by a
+        // block rather than by a whole lap -- a late change beats a
+        // dropped one, the same rule the deadline on the message thread
+        // encodes.
+        bool stagedApplyRetryDue = false;
         bool repositionFadingIn = false;
         double repositionElapsedSec = 0.0;
         double bpm = 120.0;

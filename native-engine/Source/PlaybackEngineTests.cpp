@@ -8,6 +8,8 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <algorithm>
+#include <chrono>
 #include <thread>
 
 namespace sssketch
@@ -2391,6 +2393,264 @@ namespace sssketch
                 expect(!overrides.masterFilterCutoffFor().has_value());
                 expect(!overrides.masterFilterResonanceFor().has_value());
             }
+
+            // ---- scheduled project swap (stage / apply at the loop top) ----
+            //
+            // The engine half of "the renderer pushes the next project early
+            // and the engine makes it real at the next loop top." See
+            // PlaybackEngine::stageProject/applyStagedProject for why it
+            // exists; these cover the four behaviours the contract turns on:
+            // staging doesn't change anything until it's applied, a stage can
+            // be replaced, a stage can be cancelled, and a loop top that
+            // arrives with nothing staged does nothing.
+
+            // Two fixtures with different constant values, so "which project
+            // is live right now" is readable straight off a rendered sample.
+            auto quietFixture = writeFixtureWav("sssketch_pe_stage_quiet.wav", 0.2f, 44100);
+            auto loudFixture = writeFixtureWav("sssketch_pe_stage_loud.wav", 0.8f, 44100);
+            auto oneStemProject = [](const juce::File& file) {
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                project.loopLengthBars = 1.0;
+                EngineRifff rifff;
+                rifff.groupId = "r1";
+                rifff.channelId = "c1";
+                rifff.startBar = 0.0;
+                rifff.barLength = 1;
+                EngineStem stem;
+                stem.stemKey = "r1:1";
+                stem.resolvedPath = file.getFullPathName();
+                stem.durationSec = 4.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+                return project;
+            };
+
+            beginTest("a staged project changes nothing until it is applied, and everything once it is");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(oneStemProject(quietFixture));
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.2f, 0.01f);
+
+                engine.stageProject(oneStemProject(loudFixture));
+                expect(engine.hasStagedProject());
+
+                // Still the old project: staging publishes nothing.
+                std::fill(l.begin(), l.end(), 0.0f);
+                std::fill(r.begin(), r.end(), 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.2f, 0.01f);
+
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::Applied);
+                expect(!engine.hasStagedProject());
+                expect(engine.stagedApplyCount() == 1);
+
+                std::fill(l.begin(), l.end(), 0.0f);
+                std::fill(r.begin(), r.end(), 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.8f, 0.01f);
+            }
+
+            beginTest("staging absorbs the whole decode, so applying it reads no files at all -- "
+                      "the entire point of doing the work early rather than at the loop top");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(oneStemProject(quietFixture));
+
+                const int beforeStage = stemDecodeCount();
+                engine.stageProject(oneStemProject(loudFixture));
+                const int afterStage = stemDecodeCount();
+                expect(afterStage > beforeStage); // the cold decode happened HERE
+
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::Applied);
+                expect(stemDecodeCount() == afterStage); // ...and not here
+            }
+
+            beginTest("staging again replaces the waiting project rather than queueing behind it");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(oneStemProject(quietFixture));
+
+                engine.stageProject(oneStemProject(quietFixture));
+                engine.stageProject(oneStemProject(loudFixture));
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::Applied);
+                // One swap, not two -- the superseded stage never fires.
+                expect(engine.stagedApplyCount() == 1);
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::None);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.8f, 0.01f);
+            }
+
+            beginTest("cancelling a staged project stops it firing, and says whether it was in time");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(oneStemProject(quietFixture));
+
+                engine.stageProject(oneStemProject(loudFixture));
+                expect(engine.cancelStagedProject()); // true: it was still waiting
+                expect(!engine.hasStagedProject());
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::None);
+                expect(engine.stagedApplyCount() == 0);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.2f, 0.01f);
+
+                // A cancel that loses the race has to SAY it lost, or the
+                // caller reports a swap as cancelled that in fact happened.
+                engine.stageProject(oneStemProject(loudFixture));
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::Applied);
+                expect(!engine.cancelStagedProject()); // false: too late
+            }
+
+            beginTest("a loop top that arrives before staging has finished swaps nothing -- "
+                      "the late change is the message thread's problem to solve, not a glitch here");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(oneStemProject(quietFixture));
+
+                // Exactly the state the audio thread finds when the renderer's
+                // stage-project is still parsing/decoding on the message thread.
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::None);
+                expect(engine.stagedApplyCount() == 0);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.2f, 0.01f);
+
+                // The change still lands, via the message thread's own
+                // deadline, rather than waiting out another whole lap.
+                engine.stageProject(oneStemProject(loudFixture));
+                expect(engine.promoteStagedProjectNow());
+                expect(!engine.hasStagedProject());
+                std::fill(l.begin(), l.end(), 0.0f);
+                std::fill(r.begin(), r.end(), 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.8f, 0.01f);
+                // Nothing staged, nothing to promote.
+                expect(!engine.promoteStagedProjectNow());
+                // A message-thread promote is not an audio-thread swap, and
+                // must not look like one to the counter the ack rides on.
+                expect(engine.stagedApplyCount() == 0);
+            }
+
+            beginTest("the displaced project is handed back to the message thread, not freed at the swap -- "
+                      "proven by the audio thread refusing a second swap until it has been collected");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(oneStemProject(quietFixture));
+
+                engine.stageProject(oneStemProject(loudFixture));
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::Applied);
+
+                // The retirement slot is occupied: the outgoing project is
+                // still alive, still owned, and waiting for a thread that is
+                // allowed to run destructors.
+                engine.stageProject(oneStemProject(quietFixture));
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::Deferred);
+                expect(engine.stagedApplyCount() == 1); // no second swap happened
+                expect(engine.stagedDeferralCount() == 1);
+                expect(engine.hasStagedProject()); // and nothing was dropped
+
+                // Collected on the message thread -- this is where the
+                // destructor and every buffer free inside it actually runs.
+                engine.drainRetiredProject();
+                engine.drainRetiredProject(); // idempotent
+
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::Applied);
+                expect(engine.stagedApplyCount() == 2);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.2f, 0.01f);
+
+                engine.drainRetiredProject();
+            }
+
+            beginTest("an explicit setProject supersedes anything waiting for a loop top");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(oneStemProject(quietFixture));
+
+                engine.stageProject(oneStemProject(loudFixture));
+                engine.setProject(oneStemProject(quietFixture));
+                expect(!engine.hasStagedProject());
+                expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::None);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.2f, 0.01f);
+            }
+
+            beginTest("sustained staging against a concurrent renderBlock -- the same shape of stress "
+                      "test that proved the previous, raw-pointer reclamation scheme unsafe");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(oneStemProject(quietFixture));
+
+                std::atomic<bool> stop { false };
+                std::atomic<int> applied { 0 };
+
+                // Stands in for the audio thread: renderBlock in a tight
+                // loop, with the swap taken at a point where no renderBlock
+                // is in flight -- exactly Transport::renderLoopAware's own
+                // lap boundary.
+                std::thread audio([&]() {
+                    ChannelChainRegistry localChains;
+                    std::vector<float> l(256, 0.0f), r(256, 0.0f);
+                    double pos = 0.0;
+                    while (!stop.load())
+                    {
+                        engine.renderBlock(pos, 44100.0, 256, l.data(), r.data(), localChains);
+                        if (engine.applyStagedProject() == PlaybackEngine::StagedApply::Applied)
+                            applied.fetch_add(1);
+                        engine.renderBlock(pos, 44100.0, 256, l.data(), r.data(), localChains);
+                        pos += 0.001;
+                        if (pos > 1.0) pos = 0.0;
+                    }
+                });
+
+                for (int i = 0; i < 400; ++i)
+                {
+                    engine.stageProject(oneStemProject(i % 2 == 0 ? loudFixture : quietFixture));
+                    engine.drainRetiredProject();
+                    std::this_thread::sleep_for(std::chrono::microseconds(200));
+                }
+
+                stop.store(true);
+                audio.join();
+                engine.drainRetiredProject();
+                // Not an exact count -- a stage can legitimately be
+                // superseded before it is ever taken. What matters is that
+                // swaps genuinely happened under contention and nothing
+                // crashed doing it.
+                expect(applied.load() > 0);
+            }
+
+            quietFixture.deleteFile();
+            loudFixture.deleteFile();
         }
     };
 

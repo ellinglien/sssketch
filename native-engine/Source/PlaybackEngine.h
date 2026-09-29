@@ -38,6 +38,137 @@ namespace sssketch
          * see published's own doc comment for why shared_ptr replaced it. */
         void setProject(const EngineProject& project);
 
+        /** What applyStagedProject() actually did -- three outcomes, not two,
+         * because "nothing was waiting" and "something was waiting but this
+         * was not a safe moment to take it" need different treatment by the
+         * caller: the first means stop asking until the next loop top, the
+         * second means ask again next block. */
+        enum class StagedApply
+        {
+            None,     // nothing staged
+            Applied,  // the staged snapshot is now the published one
+            Deferred  // staged, but the previous retirement hasn't been collected yet
+        };
+
+        /** MESSAGE THREAD. Does everything setProject() does -- decodes every
+         * stem into StemBufferCache, builds the whole ProjectSnapshot with
+         * its derived channel/riser groups and scratch space -- and then
+         * PARKS it instead of publishing it. The audio thread promotes it
+         * later, at a moment of its own choosing, via applyStagedProject().
+         *
+         * Why (2026-09-29): Discover radio swaps one layer of a live loop,
+         * and every part of that change except the moment itself had already
+         * been made fast (prefetch, preloadStem, one decode per stem). The
+         * change still landed audibly late because the renderer can only
+         * begin the work at the loop top -- commit, React render, stretch
+         * resolve, rAF, socket write all happen AFTER the instant the new
+         * stem should already have been sounding. Measured: load-project
+         * arrived 0.020-0.222 bar past the loop top, every single time,
+         * never before it. No amount of further renderer optimisation fixes
+         * that, because the clock starts at zero-hour. The fix is to let the
+         * renderer do all of it EARLY and hand the engine a finished project
+         * with "apply this at the next loop top" attached.
+         *
+         * Replaces whatever was staged before (the caller is expected to
+         * have told its own client about the supersession first). Does NOT
+         * touch the published snapshot, the transport, the live overrides or
+         * the channel chains -- those all stay the caller's job, exactly as
+         * they are for setProject(). */
+        void stageProject(const EngineProject& project);
+
+        /** MESSAGE THREAD. Drops a staged project that hasn't been applied
+         * yet. Returns true if one was actually still waiting -- false means
+         * the audio thread got there first and the swap has already
+         * happened, which the caller must report as "applied", not
+         * "cancelled". Radio re-checks a pick's eligibility late and can
+         * drop it; this is how a stale staged swap is stopped from firing. */
+        bool cancelStagedProject();
+
+        /** MESSAGE THREAD. Publishes the staged snapshot right now, without
+         * waiting for a loop top, and returns true if there was one to
+         * publish. The escape hatch for every case where waiting would mean
+         * the change never lands at all (transport stopped, no loop set) or
+         * lands absurdly late (the deadline expired because the loop top
+         * went by while staging was still decoding). A missing change is
+         * worse than a late one.
+         *
+         * Carries exactly setProject()'s own reclamation characteristics,
+         * NOT applyStagedProject()'s: the snapshot this displaces may still
+         * be referenced by an in-flight renderBlock() on the audio thread,
+         * in which case that thread does the free. That is the status quo
+         * for every load-project ever sent, and this is the rare fallback
+         * path rather than the per-change one, so it is not worth a second
+         * retirement mechanism. */
+        bool promoteStagedProjectNow();
+
+        /** AUDIO THREAD, and ONLY from a point with NO renderBlock() call in
+         * flight -- in practice, Transport::renderLoopAware's lap boundary,
+         * between the outgoing lap's render and the incoming lap's.
+         *
+         * That precondition is the whole safety argument, not a style
+         * preference. renderBlock() holds its own reference-counted copy of
+         * the published snapshot for exactly the duration of one call and
+         * releases it before returning (see its own doc comment). So at a
+         * point where none is running there is provably no audio-thread
+         * reference to the outgoing snapshot outstanding, and none can
+         * appear afterwards because it is no longer reachable through
+         * `published`. Which means this function can hand the outgoing
+         * snapshot to the message thread as the SOLE remaining owner, and
+         * the message thread's drainRetiredProject() is then genuinely the
+         * last release -- the destructor, and every buffer free inside it,
+         * runs there and never on the audio callback.
+         *
+         * Nothing here allocates, frees, or waits on anything the message
+         * thread could be holding for an unbounded time. It is four
+         * reference-count adjustments through the same std::atomic_*
+         * shared_ptr free functions renderBlock() already uses once per
+         * block, and every one of them provably leaves the object it
+         * touches with at least one other owner. Walk it: the outgoing
+         * snapshot is displaced from `published` only after `retired`
+         * already holds it; the incoming one is cleared from `staged` only
+         * after `published` already holds it; and both function-locals die
+         * with the other owner still standing.
+         *
+         * Returns Deferred, changing nothing, if the previous retirement
+         * hasn't been collected yet -- writing a second snapshot into an
+         * occupied retirement slot would drop the first one's last
+         * reference HERE, which is exactly what this whole mechanism
+         * exists to prevent. The message thread collects on its 30Hz
+         * position timer, on its 750ms Link timer and on every inbound IPC
+         * message, so an occupied slot at a loop top means the message
+         * thread has been starved for an entire loop; the swap then lands
+         * on the following block instead (the caller keeps asking), not
+         * never. */
+        [[nodiscard]]
+        StagedApply applyStagedProject();
+
+        /** MESSAGE THREAD. Releases whatever applyStagedProject() handed
+         * back, destroying it here. Cheap and safe to call unconditionally
+         * at any cadence -- one relaxed bool load when there is nothing to
+         * collect. */
+        void drainRetiredProject();
+
+        /** MESSAGE THREAD. Whether a staged project is currently waiting. */
+        bool hasStagedProject() const;
+
+        /** How many times applyStagedProject() has actually swapped, since
+         * process start. The message thread watches this for the edge that
+         * means "the swap landed" -- there is no callback out of the audio
+         * thread and there shouldn't be. */
+        unsigned long long stagedApplyCount() const
+        {
+            return stagedApplies.load(std::memory_order_acquire);
+        }
+
+        /** How many times applyStagedProject() returned Deferred. Expected
+         * to stay 0 forever; a non-zero value means the message thread went
+         * unresponsive for a whole loop and is worth surfacing rather than
+         * hiding. */
+        unsigned long long stagedDeferralCount() const
+        {
+            return stagedDeferrals.load(std::memory_order_relaxed);
+        }
+
         /** Decodes one stem into the shared StemBufferCache ahead of the
          * setProject() that will eventually name it -- the ONLY thing this
          * does, deliberately: exactly the bufferCache.load(path,
@@ -342,6 +473,47 @@ namespace sssketch
         // only ever-concurrent reader of a given instance -- see its own
         // doc comment) -- not before.
         std::shared_ptr<const ProjectSnapshot> published;
+
+        /** Everything setProject() and stageProject() have in common: the
+         * per-stem decode, the channel/riser grouping, the scratch sizing
+         * and the toolkit-neutrality narrowing. Message thread only (it
+         * writes into StemBufferCache, which is explicitly not safe for
+         * concurrent load()s). Publishing is deliberately NOT part of it --
+         * that is the one thing the two callers do differently. */
+        std::shared_ptr<ProjectSnapshot> buildSnapshot(const EngineProject& project);
+
+        /** MESSAGE THREAD -> AUDIO THREAD. A fully built, fully decoded
+         * snapshot waiting for the next loop top. Written by
+         * stageProject()/cancelStagedProject()/promoteStagedProjectNow() on
+         * the message thread, taken by applyStagedProject() on the audio
+         * thread. Empty means nothing is staged, which is the normal
+         * resting state. Accessed only through the std::atomic_* shared_ptr
+         * free functions, same as `published` above and for the same
+         * reason. */
+        std::shared_ptr<const ProjectSnapshot> staged;
+
+        /** AUDIO THREAD -> MESSAGE THREAD. Whatever applyStagedProject()
+         * displaced, parked here so that the message thread's
+         * drainRetiredProject() is the last release and therefore the
+         * thread that runs the destructor. See applyStagedProject()'s own
+         * doc comment for why this is airtight rather than merely likely,
+         * and why the audio thread refuses to swap at all while this is
+         * occupied. */
+        std::shared_ptr<const ProjectSnapshot> retired;
+
+        /** Whether `retired` currently holds something. A plain bool flag
+         * rather than testing `retired` itself, so the audio thread's
+         * "is this a safe moment?" check is a genuinely lock-free atomic
+         * load instead of a shared_ptr copy through libc++'s hashed mutex
+         * pool (see published's own doc comment on that). Set true by the
+         * audio thread only after it has stored into `retired`; set false
+         * by the message thread only after it has cleared it. Those two
+         * orderings, paired with acquire/release, are what make the flag
+         * and the slot agree from both sides. */
+        std::atomic<bool> retiredOccupied { false };
+
+        std::atomic<unsigned long long> stagedApplies { 0 };
+        std::atomic<unsigned long long> stagedDeferrals { 0 };
 
         bool metronomeEnabled = false;
 
