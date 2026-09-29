@@ -632,9 +632,9 @@ export function DiscoverPanel({
   // Direct request, 2026-09-22: the roll filters (prefer faves, my sounds;
   // the endlesss/other pair became the source dial on 2026-09-29) are
   // GLOBAL sticky [x] toggles in their own row under the add row -- after a
-  // same-day stint as per-slot modifiers. Every roll and reroll of every slot reads the
-  // current set, so toggling one affects all future rolls. In-memory only,
-  // like the pre-modifier globals were. 'my sounds' is shown unchecked and
+  // same-day stint as per-slot modifiers. Every roll and reroll of every
+  // slot reads the current set, so toggling one affects all future rolls.
+  // In-memory only, like the pre-modifier globals were. 'my sounds' is shown unchecked and
   // disabled -- and slotRollOptions ignores it -- while no username is set.
   const [globalModifiers, setGlobalModifiers] =
     useState<DiscoverSlotModifier[]>(DEFAULT_GLOBAL_MODIFIERS)
@@ -3646,7 +3646,7 @@ export function DiscoverPanel({
   // getRandomLibraryCandidate's own "labeled with the caller's kind, not a
   // claim it IS that role" convention. Picks from every kind -- since
   // 2026-09-22 every kind can draw audio-in/mic stems too, and the roll
-  // itself still honours the global sound-source/my-sounds toggles (the
+  // itself still honours the source dial and the my-sounds switch (the
   // kind stays random).
   function addRandomSlot(): void {
     pushUndoSnapshot()
@@ -4014,9 +4014,21 @@ export function DiscoverPanel({
       console.log(
         `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- calling getDiscoverCandidates`
       )
+      // Stems already on OTHER slots right now. `slots` here is this
+      // function's own closure from whenever it was called (addSlot or
+      // rerollSlot) -- a slightly stale read if another slot changed mid-
+      // request is an acceptable imprecision for what's fundamentally a
+      // variety heuristic, not a correctness guarantee.
+      const usedElsewhere = new Set(
+        slots.filter((s) => s.id !== id && s.candidate).map((s) => s.candidate?.stemCID)
+      )
       // The source dial: this roll's source is drawn here, and the other
-      // source is tried only if the drawn one has nothing for this slot
-      // (never at an end -- see drawSoundSource).
+      // source is tried only if the drawn one has nothing NEW for this slot
+      // (never at an end -- see drawSoundSource). A drawn pool made only of
+      // stems already on other slots counts as nothing: at the middle of
+      // the dial, a small pool (a few audio-in stems for a kind, all in
+      // use) would otherwise land a duplicate half the time while the other
+      // source has fresh stems to offer.
       const draw = drawSoundSource(sourceLeanRef.current)
       let candidates = await window.rifffApi.getDiscoverCandidates(
         kinds,
@@ -4024,14 +4036,21 @@ export function DiscoverPanel({
         currentUsername,
         draw.first
       )
-      if (candidates.length === 0 && draw.fallback !== null) {
+      const drawnHasUnused = candidates.some((c) => !usedElsewhere.has(c.stemCID))
+      if (!drawnHasUnused && draw.fallback !== null) {
         if (rerollGenerationRef.current.get(id) !== myGeneration) return null
-        candidates = await window.rifffApi.getDiscoverCandidates(
+        const fallbackCandidates = await window.rifffApi.getDiscoverCandidates(
           kinds,
           rollOptions.onlyOwnStems,
           currentUsername,
           draw.fallback
         )
+        // Switch to the fallback when it has something new, or when the
+        // drawn source had nothing at all. Otherwise keep the drawn pool,
+        // all duplicates -- the dedupe below then uses it whole, which
+        // beats reporting "no match".
+        const fallbackHasUnused = fallbackCandidates.some((c) => !usedElsewhere.has(c.stemCID))
+        if (fallbackHasUnused || candidates.length === 0) candidates = fallbackCandidates
       }
       console.log(
         `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- getDiscoverCandidates returned ${candidates.length} candidates`
@@ -4045,14 +4064,8 @@ export function DiscoverPanel({
       // to the full pool otherwise (a small confirmed-candidate pool
       // duplicating across slots is still better than wrongly reporting "no
       // match" for a kind that really does have candidates, just not
-      // enough distinct ones for every slot). `slots` here is this
-      // function's own closure from whenever it was called (addSlot or
-      // rerollSlot) -- a slightly stale read if another slot changed mid-
-      // request is an acceptable imprecision for what's fundamentally a
-      // variety heuristic, not a correctness guarantee.
-      const usedElsewhere = new Set(
-        slots.filter((s) => s.id !== id && s.candidate).map((s) => s.candidate?.stemCID)
-      )
+      // enough distinct ones for every slot). usedElsewhere is computed
+      // above, before the source-dial fallback, which uses it too.
       const deduped = candidates.filter((c) => !usedElsewhere.has(c.stemCID))
       const pool = deduped.length > 0 ? deduped : candidates
       const targetTraits = kinds.filter(isTraitSlotKind)
@@ -5699,8 +5712,9 @@ export function DiscoverPanel({
           panel's full width, so it fits on one line instead of wrapping.
 
           Direct request, 2026-09-22 (later the same day): the four roll
-          filters are global again -- [x] toggles in their own row directly
-          under the kinds row (see globalModifiers), and "+ random" joins the
+          filters are global again (two since the 2026-09-29 source dial) --
+          [x] toggles in their own row directly under the kinds row (see
+          globalModifiers), and "+ random" joins the
           trait group. The dial column is vertically centred beside both
           rows; the hint line sits in a second grid row so it doesn't pull
           the dial off-centre. */}
@@ -5819,7 +5833,7 @@ export function DiscoverPanel({
                 other sounds, 50 = half and half. The ends are "only". See
                 drawSoundSource. */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ fontSize: 7, color: 'var(--ra-text-4)' }}>endlesss</span>
+              <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
               <Dial
                 value={sourceLean}
                 onChange={changeSourceLean}
@@ -5828,7 +5842,7 @@ export function DiscoverPanel({
                 ariaLabel="source"
                 tooltip="other clockwise"
               />
-              <span style={{ fontSize: 7, color: 'var(--ra-text-4)' }}>other</span>
+              <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
             </div>
             <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
               source
@@ -6333,10 +6347,10 @@ function DiscoverSlotRow({
   /** DiscoverPanel's own reclassifySlot -- fired by the match meter's
    * reclassify picker with the chosen role. */
   onReclassify: (role: ArrangeRole) => void
-  /** The source dial as a filter (soundSourceForLean) -- passed as two primitive booleans, not one
-   * object, so this row's own re-render checks stay cheap; combined into a
-   * real DiscoverSoundSourceFilter object only where actually needed below
-   * (the "explore nearby" popover). */
+  /** The source dial as a filter (soundSourceForLean) -- passed as two
+   * primitive booleans, not one object, so this row's own re-render checks
+   * stay cheap; combined into a real DiscoverSoundSourceFilter object only
+   * where actually needed below (the "explore nearby" popover). */
   soundSourceEndlesss: boolean
   soundSourceAudioIn: boolean
 }): React.JSX.Element {

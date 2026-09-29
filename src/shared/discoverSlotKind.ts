@@ -10,8 +10,8 @@ import type { ArrangeRole } from './stemRole'
  * bitmask (instrumentMaskToSoundType, @shared/riffLibraryTypes), else --
  * only for stems that mask can't place (no mask, or audio-in) -- the
  * overnight classifier's guess (stemMatchesSlotKinds, discoverTraits.ts;
- * 2026-09-22). The endlesss/non-endlesss sound-source checkboxes apply to
- * every kind, by each stem's own mask (soundSourceMatchesFilter,
+ * 2026-09-22). The endlesss/non-endlesss source filter (the source dial)
+ * applies to every kind, by each stem's own mask (soundSourceMatchesFilter,
  * riffLibraryTypes.ts). The 4 trait kinds are
  * rankings, not a filter -- they score any stem with a cached
  * StemFeatureCache row (tagged or not) by cheap numeric fields; a set

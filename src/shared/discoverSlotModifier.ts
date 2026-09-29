@@ -64,8 +64,8 @@ const OTHER_ONLY: Readonly<DiscoverSoundSourceFilter> = Object.freeze({
   endlesss: false,
   audioIn: true
 })
-// Also shared, so soundSourceForLean's in-between value is referentially
-// stable (it lands in React props).
+// Frozen for the same reason: soundSourceForLean hands this one object to
+// every caller in between the ends.
 const BOTH_SOURCES: Readonly<DiscoverSoundSourceFilter> = Object.freeze({
   endlesss: true,
   audioIn: true

@@ -80,7 +80,7 @@ const EMPTY_UNAVAILABLE: ReadonlySet<string> = new Set<string>()
  * source was dropped for mask kinds on 2026-09-18 and restored, scoped to
  * unplaceable stems, on 2026-09-22 (direct request: audio-in/mic stems
  * never appeared under drums/bass/lead). The endlesss/non-endlesss
- * checkboxes then filter the whole pool by each stem's own mask.
+ * source filter then filters the whole pool by each stem's own mask.
  *
  * For a TRAIT-ONLY slot kind set (bassHeavy/rhythmic/bright/warm), see
  * getTraitPoolCandidates -- any stem with a cached StemFeatureCache row,
@@ -909,7 +909,7 @@ async function buildMaskKindIndex(
  * Endlesss instrument mask, and -- for stems the mask can't place -- the
  * overnight classifier (getMaskKindStemMasks); a trait-only set draws from
  * every stem with cached features (tagged or not). The endlesss/
- * non-endlesss sound-source checkboxes then apply to EVERY candidate, of
+ * non-endlesss source filter then applies to EVERY candidate, of
  * any kind set, by its own instrument mask (soundSourceMatchesFilter):
  * endlesss = sounds made with Endlesss instruments/effects (an unmasked
  * stem counts here), non-endlesss = audio-in/mic. Direct request,
@@ -1193,12 +1193,12 @@ async function getMaskDiscoverCandidates({
     })
   }
 
-  // The endlesss/non-endlesss checkboxes, applied by each stem's own mask
+  // The endlesss/non-endlesss source filter, applied by each stem's own mask
   // BEFORE sampling so the bounded sample isn't wasted on stems that would
   // be filtered out anyway.
   // Both filters run BEFORE sampling, so the bounded sample isn't spent on
   // stems that would be dropped anyway -- the endlesss/non-endlesss
-  // checkboxes by each stem's own mask, and the "can this even be
+  // source filter by each stem's own mask, and the "can this even be
   // downloaded" list (unavailableStems, above).
   const unavailable = unavailableStems(ownDb)
   const eligibleStemCIDs = [...categoryByStemCID.keys()].filter(
@@ -1616,12 +1616,12 @@ function soundSourceSqlFragment(soundSource: DiscoverSoundSourceFilter): string 
  * this escape hatch) -- but `soundSource` still does (direct bug report,
  * 2026-09-21: "unticked endlesss, still got a random Endlesss stem" --
  * random rolls stay kind-agnostic by design, but they must still honor the
- * endlesss/audioIn checkboxes like every other roll).
+ * endlesss/audioIn source filter like every other roll).
  *
  * Samples random STEMS from the cached per-db instrument-row index (see
  * the comment at the top of the body for the 2026-09-22 bug that replaced
  * the old "try 15 random jams" approach), filtered by the allowed jams and
- * the soundSource checkboxes, and resolved through the cached riff index.
+ * the source filter, and resolved through the cached riff index.
  *
  * Real bug, found live 2026-09-15 (root cause of "no match for this
  * role" on EVERY role, for a brand-new empty project, right after

@@ -103,7 +103,10 @@ describe('drawSoundSource', () => {
   it('returns frozen filters', () => {
     const draw = drawSoundSource(50, () => 0)
     expect(Object.isFrozen(drawSoundSource(0).first)).toBe(true)
+    expect(draw.first).toEqual(OTHER_ONLY)
     expect(Object.isFrozen(draw.first)).toBe(true)
+    // Object.isFrozen(null) is true, so pin the fallback down first.
+    expect(draw.fallback).toEqual(ENDLESSS_ONLY)
     expect(Object.isFrozen(draw.fallback)).toBe(true)
   })
 })
