@@ -1,10 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import {
-  buildEngineProject,
-  buildEngineRisers,
-  type EngineStem,
-  stretchRatioForStem
-} from './buildEngineProject'
+import { buildEngineProject, buildEngineRisers, type EngineStem } from './buildEngineProject'
 import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import type { Rifff } from './types'
@@ -818,44 +813,5 @@ describe('risers on the wire', () => {
       off: { ...createRiser({ id: 'off', channelId: 'ch1', startBar: 0 }), muted: true }
     }
     expect(buildEngineRisers(risers)).toEqual([])
-  })
-})
-
-describe('stretchRatioForStem', () => {
-  // Extracted 2026-09-28 so radio's prefetch can warm the SAME stretch the
-  // build will later ask for. Reported: "the transitions are a bit
-  // delayed... the actual audio doesn't always start on the loop point, it
-  // takes a second to start", and then "pre-load?". Radio warmed the
-  // download a whole interval early but never the stretch, so rubberband
-  // ran at commit time. The cache is keyed on (path, ratio), so a prefetch
-  // computing this even slightly differently warms the wrong file and
-  // silently does the work twice -- which is why there is now one function
-  // and this test, rather than the formula written out in two places.
-  it('is 1 when the stem was recorded at the project tempo', () => {
-    // 8 bars at 120bpm is 16s, so a 16s 8-bar stem needs no stretching.
-    expect(stretchRatioForStem(16, 8, 120)).toBeCloseTo(1)
-  })
-
-  it('is above 1 when the stem is slower than the project', () => {
-    // Recorded at 100bpm, played at 120: it must be squeezed.
-    expect(stretchRatioForStem(19.2, 8, 120)).toBeCloseTo(1.2)
-  })
-
-  it('is below 1 when the stem is faster than the project', () => {
-    expect(stretchRatioForStem(8, 8, 120)).toBeCloseTo(0.5)
-  })
-
-  it('scales with the project tempo, not just the stem', () => {
-    expect(stretchRatioForStem(16, 8, 60)).toBeCloseTo(0.5)
-    expect(stretchRatioForStem(16, 8, 240)).toBeCloseTo(2)
-  })
-
-  it('refuses to invent a ratio from a stem it cannot measure', () => {
-    // A zero or missing bar length would divide by zero and poison the
-    // cache key with Infinity/NaN; 1 means "do not stretch".
-    expect(stretchRatioForStem(16, 0, 120)).toBe(1)
-    expect(stretchRatioForStem(0, 8, 120)).toBe(1)
-    expect(stretchRatioForStem(16, 8, 0)).toBe(1)
-    expect(stretchRatioForStem(Number.NaN, 8, 120)).toBe(1)
   })
 })

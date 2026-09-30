@@ -46,6 +46,9 @@ import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
 import { columnStemSlots, mergeStemSlots } from '@shared/riffStemSlots'
 import { hasExtraStemSlotsTable, readAllExtraStemSlots } from './riffStemsExtra'
+import type { DiscoverCandidate } from '@shared/discoverCandidate'
+
+export type { DiscoverCandidate } from '@shared/discoverCandidate'
 
 /** Stems whose audio can no longer be fetched (see @shared/stemAvailability
  * and stemUnavailableStore.ts -- one of Endlesss's storage buckets now 403s
@@ -66,9 +69,6 @@ function unavailableStems(ownDb: Database.Database | undefined): ReadonlySet<str
 }
 
 const EMPTY_UNAVAILABLE: ReadonlySet<string> = new Set<string>()
-
-export type { DiscoverCandidate } from '@shared/discoverCandidate'
-import type { DiscoverCandidate } from '@shared/discoverCandidate'
 
 interface JamDbPair {
   jamCID: string

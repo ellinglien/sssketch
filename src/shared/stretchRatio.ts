@@ -1,8 +1,9 @@
+// src/shared/stretchRatio.ts
 /** The tempo ratio a stem needs to sit in a project, measured from the
  * audio rather than from anything declared.
  *
- * Extracted 2026-09-28 so radio's prefetch can warm the SAME stretch this
- * file will later ask for. The stretch cache is keyed on (path, ratio), so
+ * Extracted 2026-09-28 so radio's prefetch can warm the SAME stretch
+ * buildEngineProject will later ask for. The stretch cache is keyed on (path, ratio), so
  * a prefetch computing the ratio even slightly differently warms a file
  * nobody wants and leaves the real one to be rendered at commit time --
  * which is the bug it was meant to fix. One function, one formula.

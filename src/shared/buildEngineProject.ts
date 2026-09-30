@@ -18,6 +18,9 @@ import {
   type StemFilterSettings
 } from './toolkit'
 import { audibleRisers, type RiserClip } from './riser'
+import { stretchRatioForStem } from './stretchRatio'
+
+export { stretchRatioForStem, STRETCH_RATIO_EPSILON } from './stretchRatio'
 
 export interface EngineStem {
   stemKey: string
@@ -378,9 +381,6 @@ export type StretchResolver = (path: string, ratio: number) => Promise<Stretched
 // Promise.all) so a genuinely large project doesn't spawn hundreds of
 // rubberband subprocesses at once and thrash CPU/disk contention instead
 // of actually finishing faster.
-export { stretchRatioForStem, STRETCH_RATIO_EPSILON } from './stretchRatio'
-import { stretchRatioForStem } from './stretchRatio'
-
 const STRETCH_RESOLUTION_CONCURRENCY = 8
 
 /** Runs `fn` over every item in `items`, at most `limit` calls in flight at

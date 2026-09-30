@@ -7,7 +7,7 @@ import type { TraitPercentiles } from './traitQuantiles'
 /** One library-wide candidate for a Discover slot.
  *
  * For a MASK slot kind (drums/bass/lead -- DISCOVER_MASK_SLOT_KINDS), a
- * candidate comes from one of three sources (getMaskKindStemMasks, below):
+ * candidate comes from one of three sources (getMaskKindStemMasks, in src/main/discoverCandidates.ts):
  * human-confirmed (StemCategories) for the requested kind's own
  * ArrangeRole, any mask; its own Endlesss instrument category maps to that
  * kind (real ground truth, no confirmation needed); or -- ONLY for a stem

@@ -1,7 +1,7 @@
 // src/shared/discoverRanking.test.ts
 import { describe, expect, it, vi } from 'vitest'
 import { rankCandidates, pickReroll } from './discoverRanking'
-import type { DiscoverCandidate } from '../main/discoverCandidates'
+import type { DiscoverCandidate } from './discoverCandidate'
 
 function candidate(overrides: Partial<DiscoverCandidate>): DiscoverCandidate {
   return {
