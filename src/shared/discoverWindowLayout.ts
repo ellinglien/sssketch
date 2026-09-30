@@ -12,9 +12,9 @@
  * grows the window rather than being cropped. */
 export const DISCOVER_WINDOW_BARS = 32
 
-/** Every tile renders its own <Waveform> (dozens of SVG rects), twice --
- * the grey layer and the colour layer. The cap is what keeps a sub-bar
- * one-shot from asking for hundreds of them: such a stem is drawn at the
+/** Tiles are CSS mask repeats of one drawing (RepeatedWaveform.tsx), not
+ * a <Waveform> each any more, but a sub-bar one-shot tiled hundreds of
+ * times would still be unreadable noise: such a stem is drawn at the
  * minimum tile width instead. One tile per bar at the default window. */
 export const DISCOVER_MAX_TILES = 32
 

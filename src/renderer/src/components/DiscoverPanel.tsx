@@ -1,7 +1,7 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { CirclesThree, Compass, Copy, HandPalm, Shuffle, SignOut } from '@phosphor-icons/react'
-import { Waveform } from './Waveform'
+import { RepeatedWaveform } from './RepeatedWaveform'
 import { LoopLines } from './LoopLines'
 import { LoadingLoader } from './LoadingLoader'
 import { DiscoverNearbyPopover } from './DiscoverNearbyPopover'
@@ -4012,7 +4012,7 @@ export function DiscoverPanel({
   // Bumped when a stem's peaks settle AFTER a push has already gone out, so
   // the effect below runs again and the phone's row stops being a flat line.
   // peekPeaks is a synchronous read of peakCache's settled map -- the very
-  // same entry this slot's own <Waveform> tiles populate -- so the common
+  // same entry this slot's own <RepeatedWaveform> layers populate -- so the common
   // case costs a Map.get and the uncommon one costs a cache hit.
   const [remotePeaksTick, setRemotePeaksTick] = useState(0)
 
@@ -5359,7 +5359,7 @@ export function DiscoverPanel({
     // and the wave doesn't change until it goes a few moments into the
     // loop again."
     //
-    // The row draws <Waveform path={resolvedStem.path} />, and peakCache
+    // The row draws <RepeatedWaveform path={resolvedStem.path} />, and peakCache
     // has to DECODE that file to produce peaks. Every other warm above
     // is about the sound; none of them touches this, so the decode still
     // happened at commit -- which is why the wave arrived late even once
@@ -8360,9 +8360,10 @@ function DiscoverSlotRow({
               {(() => {
                 // The tile cap (DISCOVER_MAX_TILES) lives in the layout
                 // module now: a real crash, found live, came from an
-                // unbounded tile count, each tile mounting a real <Waveform>
-                // (dozens of SVG rects), twice. A sub-bar one-shot is drawn
-                // at the minimum tile width instead.
+                // unbounded tile count, each tile once mounting a real <Waveform>
+                // (dozens of SVG rects), twice. Tiles are CSS mask repeats now,
+                // but the cap still sets the minimum repeat width a sub-bar
+                // one-shot is drawn at.
                 const layout = discoverWindowLayout({
                   stemBars: resolvedStem.barLength,
                   loopBars: maxBarLength
@@ -8370,36 +8371,22 @@ function DiscoverSlotRow({
                 const gainClipPct = (1 - slot.gain) * 100
                 return (
                   <>
-                    {/* Direct reports, 2026-09-17: "sometimes the waveforms
-                    blink away, like they're refreshing." Root cause: these
-                    keys used to be `dim-${leftPct}`, computed from `loopBars`
-                    -- the SHARED maxBarLength every row's own tiling used to
-                    scale against (and the window still grows with it).
-                    Whenever ANY slot's resolution transiently changed (a
-                    reroll landing elsewhere), maxBarLength
-                    recomputed, which changed every OTHER row's own leftPct
-                    values, which changed their keys, which made React
-                    unmount+remount every tile (a fresh <Waveform> renders
-                    null until its own async peaks promise resolves -- the
-                    blink). Index-based keys are stable across a re-tile:
-                    React now updates each tile's own position/width in
-                    place instead of discarding and recreating the DOM node,
-                    so a legitimate re-tile (this slot's own stem genuinely
-                    changed) no longer blanks the OTHER rows that didn't. */}
-                    {layout.tiles.map((t, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          bottom: 0,
-                          left: `${t.leftPct}%`,
-                          width: `${t.widthPct}%`
-                        }}
-                      >
-                        <Waveform path={resolvedStem.path} color="var(--ra-text-4)" opacity={1} />
-                      </div>
-                    ))}
+                    {/* ONE element per layer, not one <Waveform> per tile
+                    (Elling, 2026-09-30: "i think it's slowing the app down
+                    having so many of them on there"). RepeatedWaveform
+                    paints the stem once as a CSS mask and repeats it every
+                    tile width, so a 1-bar stem is 2 divs instead of 64 SVGs
+                    of ~128 rects each. The tile maths (and its minimum
+                    width) still come from discoverWindowLayout. The old
+                    per-tile blink (2026-09-17, keys shifting with the shared
+                    loop length) cannot recur: there are no per-tile nodes
+                    left to remount, and the mask is peeked synchronously
+                    from the warm peak cache. */}
+                    <RepeatedWaveform
+                      path={resolvedStem.path}
+                      color="var(--ra-text-4)"
+                      tileWidthPct={layout.tiles[0]?.widthPct ?? 100}
+                    />
                     {/* Full-color layer on top -- suppressed entirely while
                     muted (not currently in the preview mix), same "mute
                     always wins" convention StemWaveformRow.tsx's own
@@ -8417,26 +8404,11 @@ function DiscoverSlotRow({
                           clipPath: `inset(${gainClipPct}% 0 0 0)`
                         }}
                       >
-                        {/* Index-based key, same reasoning as the dim layer
-                        above. */}
-                        {layout.tiles.map((t, i) => (
-                          <div
-                            key={i}
-                            style={{
-                              position: 'absolute',
-                              top: 0,
-                              bottom: 0,
-                              left: `${t.leftPct}%`,
-                              width: `${t.widthPct}%`
-                            }}
-                          >
-                            <Waveform
-                              path={resolvedStem.path}
-                              color={stemColorVar(resolvedStem)}
-                              opacity={1}
-                            />
-                          </div>
-                        ))}
+                        <RepeatedWaveform
+                          path={resolvedStem.path}
+                          color={stemColorVar(resolvedStem)}
+                          tileWidthPct={layout.tiles[0]?.widthPct ?? 100}
+                        />
                       </div>
                     )}
                     {previewing && (
