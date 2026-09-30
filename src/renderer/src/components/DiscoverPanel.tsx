@@ -121,6 +121,7 @@ import {
 } from '../state/StoreContext'
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { discoverSweepPct, discoverWindowLayout } from '@shared/discoverWindowLayout'
+import { discoverBreath } from '@shared/discoverBreath'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import {
@@ -845,6 +846,8 @@ export function DiscoverPanel({
   // flagged, so render never does: it only decides whether the line
   // exists at all.
   const sweepLineRef = useRef<HTMLDivElement>(null)
+  // The rows' wrapper, which carries --discover-breath for every row.
+  const rowsRef = useRef<HTMLDivElement>(null)
   const sweepLapRef = useRef({ lapIndex: 0, lastPos: 0, loopBars: 0 })
   const previewLoopBars = resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : 0
   const sweepActive = previewingSlotIds.size > 0 && previewLoopBars > 0
@@ -852,6 +855,7 @@ export function DiscoverPanel({
     const lap = sweepLapRef.current
     if (!sweepActive) {
       sweepLapRef.current = { lapIndex: 0, lastPos: pos, loopBars: 0 }
+      rowsRef.current?.style.setProperty('--discover-breath', '0.5')
       return
     }
     if (lap.loopBars !== previewLoopBars || (!playing && pos <= 1e-6)) {
@@ -869,6 +873,14 @@ export function DiscoverPanel({
     } else {
       sweepLapRef.current = { ...lap, lastPos: pos }
     }
+    // THE BREATH, off the same count (see the row's `background`, below).
+    // Absolute bars keep running across the wrap, so a loop that is not a
+    // multiple of 4 bars carries its breath through the loop top instead
+    // of snapping back to dim there. Held at the midpoint while stopped.
+    const breath = playing
+      ? discoverBreath(sweepLapRef.current.lapIndex * previewLoopBars + pos)
+      : 0.5
+    rowsRef.current?.style.setProperty('--discover-breath', breath.toFixed(4))
     const line = sweepLineRef.current
     if (!line) return
     const windowBars = discoverWindowLayout({
@@ -6176,33 +6188,6 @@ export function DiscoverPanel({
           0%, 100% { opacity: 1; }
           50% { opacity: 0.5; }
         }
-        /* A ROW RADIO IS ABOUT TO CHANGE. The row itself breathes, slowly,
-           between the panel's own ground and the fill its controls already
-           use -- and that is the whole indicator. See DiscoverSlotRow's
-           own animation style for why this replaced a progress rule, and
-           @shared/radioApproach for what the two depths mean.
-
-           BACKGROUND, not opacity. discover-slot-working fades the
-           WAVEFORM, and reusing that here would dim audio information for
-           bars at a time and read as "this row is busy" -- the row is not
-           busy, it is next. Chrome carries the message; the stem is left
-           exactly as bright as every other stem.
-
-           NO HUE and no hard blink, the same two rules the rule it
-           replaced was held to: colour is spent on audio only, and a flash
-           at a fixed rate competes with the red playhead sweeping this
-           same row. 2600ms with an ease both ways has no edge to read a
-           beat off, and it is deliberately unrelated to the tempo and
-           never restarted at the wrap -- so it cannot be mistaken for
-           something counting. The playhead does the counting. */
-        @keyframes discover-slot-coming {
-          0%, 100% { background: transparent; }
-          50% { background: var(--ra-bg-row-active); }
-        }
-        @keyframes discover-slot-landing {
-          0%, 100% { background: var(--ra-bg-row-active); }
-          50% { background: var(--ra-border); }
-        }
         @keyframes discover-add-pulse {
           0% { box-shadow: 0 0 0 0 var(--ra-stretch-on); }
           35% { box-shadow: 0 0 0 3px var(--ra-stretch-on); }
@@ -6761,7 +6746,7 @@ export function DiscoverPanel({
           The rows sit in one positioned wrapper so the ONE playhead
           (2026-09-30) can be drawn over all of them as a single line --
           see the overlay after the rows, and sweepLineRef above. */}
-      <div style={{ position: 'relative' }}>
+      <div ref={rowsRef} style={{ position: 'relative' }}>
         {(() => {
           const maxBarLength = previewLoopBars
           // THE ONE WAIT a row can be on, read once for the whole list
@@ -8071,16 +8056,49 @@ function DiscoverSlotRow({
           // @shared/radioApproach, which is still measured and still
           // tested); nothing draws it.
           //
+          // LOCKED TO THE MUSIC, since 2026-09-30. The breath used to be a
+          // 2600ms CSS animation, kept deliberately unrelated to the tempo
+          // and never restarted at the wrap, on the argument that a fade
+          // with no beat in it could not be mistaken for something
+          // counting. In practice each row's animation started whenever
+          // that row began breathing, so two breathing rows drifted in and
+          // out of step with each other. Elling: "can the fade be a bit
+          // slower, and synchronized across all waves? right now they can
+          // be out of sync.. maybe even synced to half the tempo" -- and,
+          // given the choice, one full breath (dim -> bright -> dim) every
+          // 4 bars. So the breath is now a function of the transport:
+          // discoverBreath (@shared/discoverBreath, tested) of the
+          // absolute bar count, written once per tick as --discover-breath
+          // on the rows' wrapper by the playhead's layout effect (see
+          // rowsRef). Every row mixes by the same number, so they move
+          // together, and each breath starts dim on a 4-bar line. Still
+          // no hard edge: it is cosine-eased at both ends, so it rises and
+          // settles rather than ticking, and 4 bars is slower than any
+          // beat the playhead is counting. While the transport is stopped
+          // it holds still at the midpoint -- a steady half-tint, which
+          // still tells armed from held.
+          //
+          // BACKGROUND, not opacity. discover-slot-working fades the
+          // WAVEFORM, and reusing that here would dim audio information
+          // for bars at a time and read as "this row is busy" -- the row
+          // is not busy, it is next. Chrome carries the message; the stem
+          // is left exactly as bright as every other stem. NO HUE: colour
+          // is spent on audio only, so both ends of both depths are the
+          // panel's own ground and the fills its controls already use.
+          //
           // Two depths, luminance only: dimmer while the pick is merely
-          // armed, brighter once the change is decided and the next wrap
-          // is the one. Same pace either way, so the difference reads as
-          // weight rather than as urgency counting down.
-          animation:
+          // armed (transparent <-> --ra-bg-row-active), brighter once the
+          // change is decided and the next wrap is the one
+          // (--ra-bg-row-active <-> --ra-border). Same pace either way, so
+          // the difference reads as weight rather than as urgency
+          // counting down. The 0.5 fallback is the stopped value, for the
+          // one frame before the effect has written the variable.
+          background:
             radioApproach === null
               ? undefined
               : radioApproach.state === 'held'
-                ? 'discover-slot-landing 2600ms ease-in-out infinite'
-                : 'discover-slot-coming 2600ms ease-in-out infinite',
+                ? 'color-mix(in srgb, var(--ra-bg-row-active), var(--ra-border) calc(var(--discover-breath, 0.5) * 100%))'
+                : 'color-mix(in srgb, transparent, var(--ra-bg-row-active) calc(var(--discover-breath, 0.5) * 100%))',
           borderBottom: '1px solid var(--ra-border-soft)'
         }}
       >

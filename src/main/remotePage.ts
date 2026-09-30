@@ -347,9 +347,12 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
  * reaching the end of the lane IS the moment -- the rule was drawing a
  * second time something already on screen.
  *
- * Same two depths and the same 2600ms as the mac (DiscoverPanel's
- * discover-slot-coming / discover-slot-landing), so the desk and the sofa
- * say it the same way. Luminance only: there is no colour to spend on
+ * Same two depths as the mac, so the desk and the sofa say it the same
+ * way. NOT the same pace any more: on 2026-09-30 the mac's breath moved
+ * off a 2600ms timer onto the transport -- one breath every 4 bars, every
+ * row in step (DiscoverPanel, @shared/discoverBreath). This page still
+ * runs the old 2600ms timer below; bringing it onto the phone's own lap
+ * clock is a separate change. Luminance only: there is no colour to spend on
  * chrome here either, and the one lit treatment in a typeface with no
  * bold belongs to button.lit.
  *
