@@ -60,6 +60,15 @@ describe('riffLibrarySchema', () => {
     ])
   })
 
+  it('indexes RadioHeartImport by RiffCID, for the kept-riff name lookup', async () => {
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const db = openOwnRiffLibraryDb()
+    const plan = db
+      .prepare(`EXPLAIN QUERY PLAN SELECT Name FROM RadioHeartImport WHERE RiffCID = ?`)
+      .all('r1') as { detail: string }[]
+    expect(plan.map((p) => p.detail).join(' ')).toContain('idx_radio_heart_import_riff')
+  })
+
   it('opening twice returns the same cached connection, not a second one', async () => {
     const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
     const first = openOwnRiffLibraryDb()

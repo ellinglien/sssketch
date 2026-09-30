@@ -53,7 +53,11 @@ export function heartNameForRiff(db: Database.Database, riffCID: string): string
       )
       .get(riffCID) as { Name: string } | undefined
     return row?.Name ?? null
-  } catch {
-    return null
+  } catch (err) {
+    // Only a db without the table at all means "no name". Anything else --
+    // a locked or corrupt db, a closed handle -- is a real fault and must
+    // not be dressed up as an unnamed riff.
+    if (err instanceof Error && /no such table/i.test(err.message)) return null
+    throw err
   }
 }

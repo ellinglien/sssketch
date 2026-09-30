@@ -204,6 +204,9 @@ CREATE TABLE IF NOT EXISTS RadioHeartImport (
   Name TEXT NOT NULL,
   ImportedAt INTEGER NOT NULL
 );
+-- heartNameForRiff looks a label up by RiffCID on every resolve of a kept
+-- riff; without this it would scan the table each time.
+CREATE INDEX IF NOT EXISTS idx_radio_heart_import_riff ON RadioHeartImport(RiffCID);
 
 -- Stems whose audio is known to be unfetchable -- see
 -- stemUnavailableStore.ts and @shared/stemAvailability for the full
