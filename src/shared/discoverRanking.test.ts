@@ -274,6 +274,25 @@ describe('pickReroll', () => {
     expect(picks.size).toBeGreaterThan(1)
   })
 
+  it('draws with an injected random instead of Math.random', () => {
+    const ranked = [
+      { candidate: candidate({ stemCID: 'a' }), score: 1 },
+      { candidate: candidate({ stemCID: 'b' }), score: 1 },
+      { candidate: candidate({ stemCID: 'c' }), score: 0 },
+      { candidate: candidate({ stemCID: 'd' }), score: 0 }
+    ]
+    const spy = vi.spyOn(Math, 'random')
+    // weighted draw: total 2, so 0.1 lands on 'a' and 0.9 on 'b'
+    expect(pickReroll(ranked, 100, () => 0.1)?.stemCID).toBe('a')
+    expect(pickReroll(ranked, 100, () => 0.9)?.stemCID).toBe('b')
+    // an all-zero pool falls back to a uniform draw, through the same generator
+    const zeros = ranked.slice(2)
+    expect(pickReroll(zeros, 100, () => 0.1)?.stemCID).toBe('c')
+    expect(pickReroll(zeros, 100, () => 0.9)?.stemCID).toBe('d')
+    expect(spy).not.toHaveBeenCalled()
+    vi.restoreAllMocks()
+  })
+
   it('never returns a candidate outside the ranked list', () => {
     const ranked = [{ candidate: candidate({ stemCID: 'only-one', riffBpm: 128 }), score: 1 }]
     for (const chaos of [0, 25, 50, 75, 100]) {

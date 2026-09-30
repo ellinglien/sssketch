@@ -168,8 +168,13 @@ function poolSizeForChaos(rankedLength: number, chaos: number): number {
  * pool scores exactly 0 (possible once BPM distance passes BPM_FALLOFF for
  * all of them), falls back to a uniform pick within the pool rather than
  * dividing by a zero total weight. Returns null only for an empty
- * `ranked` list. */
-export function pickReroll(ranked: RankedCandidate[], chaos: number): DiscoverCandidate | null {
+ * `ranked` list. `random` is the draw's generator -- Math.random unless a
+ * caller (a test, or the web radio's seeded picker) injects one. */
+export function pickReroll(
+  ranked: RankedCandidate[],
+  chaos: number,
+  random: () => number = Math.random
+): DiscoverCandidate | null {
   if (ranked.length === 0) return null
   const poolSize = poolSizeForChaos(ranked.length, chaos)
   const pool = ranked.slice(0, poolSize)
@@ -177,9 +182,9 @@ export function pickReroll(ranked: RankedCandidate[], chaos: number): DiscoverCa
 
   const totalWeight = pool.reduce((sum, c) => sum + c.score, 0)
   if (totalWeight <= 0) {
-    return pool[Math.floor(Math.random() * pool.length)].candidate
+    return pool[Math.floor(random() * pool.length)].candidate
   }
-  const draw = Math.random() * totalWeight
+  const draw = random() * totalWeight
   let cumulative = 0
   for (const c of pool) {
     cumulative += c.score
