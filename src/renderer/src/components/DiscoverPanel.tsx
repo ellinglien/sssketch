@@ -3119,10 +3119,14 @@ export function DiscoverPanel({
     const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, changeBars)
     const step = advanceRadioClock(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
     radioClockRef.current = step.clock
-    // TEMPORARY INSTRUMENTATION (2026-09-28) -- the bar a change detected
-    // on this tick was aiming at, so `pos - boundaryBars` is the
-    // detection floor. Mirrors advanceRadioClock's own grid arithmetic;
-    // a wrap is always bar 0. Remove with radioTrace.ts.
+    // The bar a change detected on this tick was aiming at, so
+    // `pos - boundaryBars` is how far past it this tick is. Mirrors
+    // advanceRadioClock's own grid arithmetic; a wrap is always bar 0.
+    //
+    // Began as TEMPORARY INSTRUMENTATION (2026-09-28) for radioTrace.ts,
+    // and is now load-bearing: every restartRadioInterval below counts the
+    // new interval from this boundary rather than from the tick (see its
+    // doc comment). Keep it when radioTrace.ts goes.
     const traceGrid = gridBars > 0 ? gridBars : loopBars
     // THE PLAYHEAD CROSSING A HELD CHANGE'S OWN BAR -- the mid-lap
     // landing, and the second of the two moments a held change can land
@@ -3265,7 +3269,8 @@ export function DiscoverPanel({
           radioClockRef.current = restartRadioInterval(
             step.clock,
             nextRadioIntervalBarsInWindow(radioSettings.paceBars),
-            pos
+            pos,
+            boundaryBars
           )
         }
         setRadioLedChange(null)
@@ -3497,7 +3502,8 @@ export function DiscoverPanel({
       radioClockRef.current = restartRadioInterval(
         step.clock,
         nextRadioIntervalBarsInWindow(radioSettings.paceBars),
-        pos
+        pos,
+        boundaryBars
       )
       void Promise.resolve().then(() => {
         if (!radioOnRef.current) return
@@ -3580,7 +3586,8 @@ export function DiscoverPanel({
     radioClockRef.current = restartRadioInterval(
       step.clock,
       nextRadioIntervalBarsInWindow(radioSettings.paceBars),
-      pos
+      pos,
+      boundaryBars
     )
     void Promise.resolve().then(() => setRadioProgress(0))
 

@@ -450,7 +450,12 @@ describe('advanceRadioClock on a phrase grid', () => {
       clock = step.clock
       if (step.due) {
         fired.push(Math.round(total))
-        clock = restartRadioInterval(step.clock, opts.interval, pos)
+        clock = restartRadioInterval(
+          step.clock,
+          opts.interval,
+          pos,
+          step.wrapped ? 0 : Math.floor(pos / opts.gridBars) * opts.gridBars
+        )
       }
     }
     return fired
@@ -507,6 +512,7 @@ describe('advanceRadioClock on a phrase grid', () => {
     const clock = restartRadioInterval(
       { barsElapsed: 9, intervalBars: 8, lastPos: 4, lapsSincePhrase: 1 },
       12,
+      4,
       4
     )
     expect(clock).toEqual({ barsElapsed: 0, intervalBars: 12, lastPos: 4, lapsSincePhrase: 1 })
@@ -1532,4 +1538,115 @@ describe('radioChangeLandsAtBar', () => {
     expect(radioChangeLandsAtBar(clockAt(8, 12), 9, 8, 8, 0)).toBeNull()
     expect(radioChangeLandsAtBar(clockAt(8, 12), -1, 8, 8, 0)).toBeNull()
   })
+})
+
+describe('restartRadioInterval counts from the boundary, not the tick', () => {
+  it('carries the overshoot past the boundary into the new interval', () => {
+    // Landed at the wrap, noticed 0.02 bars later: 0.02 of the new
+    // interval has already been played.
+    const clock = restartRadioInterval(
+      { barsElapsed: 9, intervalBars: 8, lastPos: 7.99, lapsSincePhrase: 1 },
+      12,
+      0.02,
+      0
+    )
+    expect(clock.barsElapsed).toBeCloseTo(0.02, 12)
+    expect(clock.lastPos).toBe(0.02)
+    // A held bar: landed at bar 4, noticed at 4.01.
+    expect(
+      restartRadioInterval(
+        { barsElapsed: 0, intervalBars: 8, lastPos: 3.99, lapsSincePhrase: 0 },
+        12,
+        4.01,
+        4
+      ).barsElapsed
+    ).toBeCloseTo(0.01, 12)
+  })
+
+  /** Radio's stage against the clock alone -- stepRadioStage (2) deciding
+   * each change early (the wrap first, then a bar in this lap), the wrap
+   * branch landing it at the wrap or on its bar, the due branch as the
+   * fallback -- over ticks that never land on a bar: a random phase, and
+   * each tick 1/60 bar +/- half that, the way the 30Hz stream arrives.
+   * Returns how many changes fell through to the due branch. */
+  function lateChanges(
+    loopBars: number,
+    gridBars: number,
+    seed: number
+  ): {
+    changes: number
+    late: number
+  } {
+    let a = seed >>> 0
+    const random = (): number => {
+      a = (a + 0x6d2b79f5) >>> 0
+      let t = a
+      t = Math.imul(t ^ (t >>> 15), t | 1)
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+    const pace = { min: 8, max: 16 }
+    let t = random() * loopBars
+    let clock = createRadioClock(nextRadioIntervalBarsInWindow(pace, random), t % loopBars)
+    let held: { atBars: number | null } | null = null
+    let changes = 0
+    let late = 0
+    const end = t + 100_000
+    while (t < end) {
+      t += (1 / 60) * (0.5 + random())
+      const pos = t % loopBars
+      const lastPos = clock.lastPos
+      const step = advanceRadioClock(clock, pos, loopBars, gridBars, 0)
+      clock = step.clock
+      const h = held as { atBars: number | null } | null
+      const crossedHeldBar =
+        h !== null && h.atBars !== null && !step.wrapped && pos >= h.atBars && lastPos < h.atBars
+      if (h !== null && (step.wrapped || crossedHeldBar)) {
+        clock = restartRadioInterval(
+          clock,
+          nextRadioIntervalBarsInWindow(pace, random),
+          pos,
+          step.wrapped ? 0 : (h.atBars as number)
+        )
+        held = null
+        changes += 1
+        continue
+      }
+      if (!step.due && held === null) {
+        if (radioChangeDueAtNextWrap(clock, pos, loopBars, gridBars, 0)) held = { atBars: null }
+        else {
+          const at = radioChangeLandsAtBar(clock, pos, loopBars, gridBars, 0)
+          if (at !== null) held = { atBars: at }
+        }
+      }
+      if (step.due && held === null) {
+        clock = restartRadioInterval(
+          clock,
+          nextRadioIntervalBarsInWindow(pace, random),
+          pos,
+          step.wrapped ? 0 : Math.floor(pos / gridBars) * gridBars
+        )
+        changes += 1
+        late += 1
+      }
+    }
+    return { changes, late }
+  }
+
+  for (const [loopBars, gridBars] of [
+    [4, 4],
+    [8, 8],
+    [8, 2],
+    [16, 4]
+  ]) {
+    it(`so every change is decided early even off the bar grid (${loopBars}/${gridBars})`, () => {
+      // Counting from the tick instead put an interval that ends exactly on
+      // a boundary on either side of it, by a tick's worth of luck -- and
+      // on the far side neither predictor had said so, so the change fell
+      // through to the late path: 5-15% of changes on 4- and 8-bar loops.
+      const run = lateChanges(loopBars, gridBars, 17 * loopBars + gridBars)
+      expect(run.changes).toBeGreaterThan(5000)
+      expect(run.late).toBe(0)
+    })
+  }
 })

@@ -294,10 +294,15 @@ function simulateRadio(
   let dropOut: { lapsLeft: number } | null = null
   let turn = 0
   const result = { changes: 0, late: 0, dropOuts: 0, collisions: 0 }
-  const land = (pos: number): void => {
+  const land = (pos: number, boundaryBars: number): void => {
     result.changes += 1
     turn += 1
-    clock = restartRadioInterval(clock, nextRadioIntervalBarsInWindow(pace, random), pos)
+    clock = restartRadioInterval(
+      clock,
+      nextRadioIntervalBarsInWindow(pace, random),
+      pos,
+      boundaryBars
+    )
     dropOut = null // clearRadioGesture
     const roll = rollIntervalDropOut(
       {
@@ -335,7 +340,7 @@ function simulateRadio(
     if (h !== null && (step.wrapped || crossedHeldBar)) {
       if (endingDropOut) result.collisions += 1
       held = null
-      land(pos)
+      land(pos, step.wrapped ? 0 : (h.atBars as number))
       continue
     }
     // The lap countdown.
@@ -356,7 +361,7 @@ function simulateRadio(
       // The due branch: a change that nothing decided early.
       if (endingDropOut) result.collisions += 1
       result.late += 1
-      land(pos)
+      land(pos, step.wrapped ? 0 : Math.floor(pos / gridBars) * gridBars)
     }
   }
   return result
@@ -412,6 +417,9 @@ describe('drop-outs happen at the documented rate when every change is decided e
       const run = simulateRadio(loopBars, gridBars, 200_000, 31 * loopBars + gridBars, true)
       expect(run.dropOuts).toBeGreaterThan(0)
       expect(run.collisions).toBe(0)
+      // And every change still decided early (restartRadioInterval counts
+      // from the boundary, so an interval ending on one is predicted).
+      expect(run.late).toBe(0)
     })
   }
 })

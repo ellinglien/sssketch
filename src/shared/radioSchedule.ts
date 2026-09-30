@@ -362,13 +362,37 @@ export function createRadioClock(intervalBars: number, startPos = 0): RadioClock
  * therefore only correct where radio itself starts over -- switch-on, and
  * a course change (which seeks the transport to 0, so bar 0 of the new
  * phrase and bar 0 of the transport are the same instant). Every other
- * restart is this one. */
+ * restart is this one.
+ *
+ * COUNTED FROM THE BOUNDARY, NOT THE TICK. `boundaryBars` is where the
+ * change actually landed -- 0 for a wrap, the bar for a held mid-lap cut,
+ * the grid line the due branch crossed -- and `pos` the tick that noticed
+ * it, some fraction of a tick later. The new interval has already been
+ * running for that difference, and it goes into barsElapsed.
+ *
+ * Starting it at 0 from the tick (as this did until 2026-09-30) slid every
+ * interval up to a tick late. An interval that then ended exactly on a
+ * boundary -- a whole-bar interval from a whole-bar landing, the ordinary
+ * case -- fell on either side of it by a tick's worth of luck: when it fell
+ * just past, advanceRadioClock still fired `due` there (the crossing tick
+ * is past it too) while radioChangeDueAtNextWrap and radioChangeLandsAtBar,
+ * reading the elapse point as past the boundary, had said the change was a
+ * boundary later. Nothing had decided it early, so it went down the late
+ * path: 5-15% of changes on 4- and 8-bar loops. Anchored at the boundary,
+ * the elapse point is the boundary and all three agree. */
 export function restartRadioInterval(
   clock: RadioClock,
   intervalBars: number,
-  pos: number
+  pos: number,
+  boundaryBars: number
 ): RadioClock {
-  return { barsElapsed: 0, intervalBars, lastPos: pos, lapsSincePhrase: clock.lapsSincePhrase }
+  const overshoot = Number.isFinite(pos - boundaryBars) ? Math.max(0, pos - boundaryBars) : 0
+  return {
+    barsElapsed: overshoot,
+    intervalBars,
+    lastPos: pos,
+    lapsSincePhrase: clock.lapsSincePhrase
+  }
 }
 
 export interface RadioClockStep {
