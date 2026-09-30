@@ -261,25 +261,35 @@ describe('the interval roll', () => {
 
 /**
  * Radio's stage, reduced to the clock and the two moments a change can
- * happen -- DiscoverPanel's stepRadioStage (2) deciding it early, and its
- * held-change landing -- with the due branch kept only as the fallback it
- * is. Every pick is warm and every transition a cut, which is the ordinary
- * case: every change is decided early.
+ * happen. MIRRORS DiscoverPanel's stepRadioStage: (2) decides a change
+ * early -- the wrap first (radioChangeDueAtNextWrap), then a bar in this
+ * lap (radioChangeLandsAtBar), never while a gesture is armed, never on a
+ * due tick -- and the wrap branch of the clock effect lands it, at the
+ * wrap or on the bar it named. The due branch is kept as the fallback it
+ * is. The order inside a tick is the panel's: landing, lap countdown,
+ * early decision, due branch. Every pick is warm and every transition a
+ * cut, which is the ordinary case: every change is decided early.
  *
  * Until this fix the panel rolled for a drop-out only in the due branch,
  * which an early decision pre-empts, so a run like this one heard none.
+ *
+ * `offGrid` moves the ticks off the bar grid: a random phase, and each
+ * tick 1/60 bar +/- half of that, the way the 30Hz position stream
+ * actually arrives. With it off every boundary is hit exactly.
  */
 function simulateRadio(
   loopBars: number,
   gridBars: number,
   totalBars: number,
-  seed: number
+  seed: number,
+  offGrid = false
 ): { changes: number; late: number; dropOuts: number; collisions: number } {
   const random = mulberry32(seed)
+  const jitter = mulberry32(seed ^ 0x5eed)
   const pace = { min: 8, max: 16 }
-  const ticksPerBar = 60 // 30Hz at 120bpm
-  const ticksPerLap = loopBars * ticksPerBar
-  let clock = createRadioClock(nextRadioIntervalBarsInWindow(pace, random), 0)
+  const tickBars = 1 / 60 // 30Hz at 120bpm
+  let t = offGrid ? jitter() * loopBars : 0
+  let clock = createRadioClock(nextRadioIntervalBarsInWindow(pace, random), t % loopBars)
   let held: { atBars: number | null } | null = null
   let dropOut: { lapsLeft: number } | null = null
   let turn = 0
@@ -306,18 +316,24 @@ function simulateRadio(
       result.dropOuts += 1
     }
   }
-  for (let tick = 1; tick <= totalBars * ticksPerBar; tick++) {
-    const pos = (tick % ticksPerLap) / ticksPerBar
+  const end = t + totalBars
+  let tick = 0
+  while (t < end) {
+    tick += 1
+    t = offGrid ? t + tickBars * (0.5 + jitter()) : tick / 60
+    const pos = offGrid ? t % loopBars : (tick % (loopBars * 60)) / 60
     const lastPos = clock.lastPos
     const step = advanceRadioClock(clock, pos, loopBars, gridBars, 0)
     clock = step.clock
+    // A drop-out armed coming into a wrap ends ON that wrap; any change
+    // landing there too, by either path, is the collision.
+    const endingDropOut = step.wrapped && dropOut !== null
     // The held change lands: at the wrap, or on the bar it named.
     const h = held as { atBars: number | null } | null
     const crossedHeldBar =
       h !== null && h.atBars !== null && !step.wrapped && pos >= h.atBars && lastPos < h.atBars
     if (h !== null && (step.wrapped || crossedHeldBar)) {
-      // A drop-out still armed here would be ending on this very wrap.
-      if (dropOut !== null && step.wrapped) result.collisions += 1
+      if (endingDropOut) result.collisions += 1
       held = null
       land(pos)
       continue
@@ -338,6 +354,7 @@ function simulateRadio(
     }
     if (step.due && held === null) {
       // The due branch: a change that nothing decided early.
+      if (endingDropOut) result.collisions += 1
       result.late += 1
       land(pos)
     }
@@ -381,4 +398,20 @@ describe('drop-outs happen at the documented rate when every change is decided e
     expect(run.collisions).toBe(0)
     expect(run.dropOuts).toBeGreaterThan(0)
   })
+
+  for (const [loopBars, gridBars] of [
+    [4, 4],
+    [8, 8],
+    [8, 2],
+    [16, 4]
+  ]) {
+    it(`never ends on a change's wrap when the ticks are off the grid (${loopBars}/${gridBars})`, () => {
+      // Where an interval that ends on a wrap falls is up to the tick; the
+      // half-bar margin in rollIntervalDropOut is what keeps a drop-out
+      // off that wrap whichever side it falls.
+      const run = simulateRadio(loopBars, gridBars, 200_000, 31 * loopBars + gridBars, true)
+      expect(run.dropOuts).toBeGreaterThan(0)
+      expect(run.collisions).toBe(0)
+    })
+  }
 })

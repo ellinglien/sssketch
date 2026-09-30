@@ -2561,6 +2561,20 @@ export function DiscoverPanel({
     radioGestureRef.current = []
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
+  /** The loop length once these rows have turned over -- the preview's
+   * maxBarLength with each landing row's incoming stem in place of its
+   * outgoing one, the same substitution syncPreviewToEngine makes for a
+   * stage (stagedBarLengths). A row whose incoming length is not known
+   * yet keeps the length it has. */
+  function loopBarsAfterLanding(
+    landing: readonly { slotId: string; bars: number | null | undefined }[]
+  ): number {
+    const lengths = new Map(resolvedBarLengthsRef.current)
+    for (const { slotId, bars } of landing) {
+      if (typeof bars === 'number' && bars > 0) lengths.set(slotId, bars)
+    }
+    return lengths.size > 0 ? Math.max(...lengths.values()) : 0
+  }
   /** The interval's one drop-out roll (rollIntervalDropOut), made wherever
    * an interval starts: a held change landing, early or not, and the due
    * branch. `changedSlotId` is the row this interval's change turned over
@@ -3379,12 +3393,33 @@ export function DiscoverPanel({
               : arriving)
           ]
         }
-        // Radio's own change landed, so its interval starts here -- and
-        // this is where the interval's drop-out is rolled, whether the
-        // change was decided a lap early or held at its due tick. The due
-        // branch below never runs for either. After the arrivals above, so
-        // an arrival curve keeps its lap.
-        if (committed && led !== null) rollRadioDropOut(led.slotId, pos, loopBars)
+        // Radio's own change landed (or was dropped at the boundary), so its
+        // interval starts here -- and this is where the interval's drop-out
+        // is rolled, whether the change was decided a lap early or held at
+        // its due tick. The due branch below never runs for either, and it
+        // rolls whether or not its own change commits, so this does too:
+        // once per interval. After the arrivals above, so an arrival curve
+        // keeps its lap.
+        //
+        // Against the loop this landing is ABOUT to be, not the one the
+        // tick measured: a 4-bar loop taking an 8-bar stem wraps at 8 from
+        // here, and a roll measured against 4 would take a lap the next
+        // change can land on.
+        if (led !== null && !ledOverridden) {
+          rollRadioDropOut(
+            led.slotId,
+            pos,
+            loopBarsAfterLanding([
+              ...(committed ? [{ slotId: led.slotId, bars: led.stem?.barLength ?? null }] : []),
+              ...landingReady
+                .filter(([slotId]) => slotsRef.current.some((sl) => sl.id === slotId))
+                .map(([slotId]) => ({
+                  slotId,
+                  bars: manualToLand.find(([id]) => id === slotId)?.[1].stem?.barLength ?? null
+                }))
+            ])
+          )
+        }
         if (committed || manualCommitted) {
           runAfterEngineSync(() => {
             if (!radioOnRef.current) return
@@ -3721,8 +3756,15 @@ export function DiscoverPanel({
       }
       // Roll ONCE per interval for a drop-out in the coming one -- no
       // second clock. See rollRadioDropOut; a held change rolls it where it
-      // lands instead.
-      rollRadioDropOut(pending?.slotId ?? null, pos, loopBars)
+      // lands instead. Against the loop the commit above makes, as the
+      // landing does.
+      rollRadioDropOut(
+        pending?.slotId ?? null,
+        pos,
+        committed && pending !== null
+          ? loopBarsAfterLanding([{ slotId: pending.slotId, bars: pending.incomingBars }])
+          : loopBars
+      )
       // Arm the next one whether or not this one landed -- nothing
       // eligible is radio idling, not an error, and it retries here at
       // every boundary.
