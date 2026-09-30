@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DISCOVER_SLOT_MODIFIER_LABEL,
   DISCOVER_SLOT_MODIFIER_OPTIONS,
+  DEFAULT_SOURCE_LEAN,
   drawSoundSource,
   slotRollOptions,
   soundSourceForLean,
@@ -125,5 +126,11 @@ describe('soundSourceForLean', () => {
     expect(Object.isFrozen(soundSourceForLean(50))).toBe(true)
     expect(Object.isFrozen(soundSourceForLean(100))).toBe(true)
     expect(soundSourceForLean(50)).toBe(soundSourceForLean(20))
+  })
+})
+
+describe('DEFAULT_SOURCE_LEAN', () => {
+  it("leans 95% toward other sounds -- Elling's own recordings (2026-09-30)", () => {
+    expect(DEFAULT_SOURCE_LEAN).toBe(95)
   })
 })

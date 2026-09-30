@@ -164,8 +164,8 @@ at an end, both sources otherwise.
 The existing `Dial`, 0–100, placed beside the `matching` dial in the add row's right-hand column.
 
 - Caption `source`, with small end labels `endlesss` (left) and `other` (right).
-- Double-click resets to 50, the same reset gesture the master dials use.
-- In-memory only, like the switches it replaces. It starts at 50 every session.
+- In-memory only, like the switches it replaces. It starts at **95** every session (changed from 50
+  on 2026-09-30 at Elling's request: 95% his own recordings), and double-click resets to 95.
 
 ---
 

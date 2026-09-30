@@ -52,7 +52,12 @@ export function slotRollOptions(
 /** The source dial's two ends. 0 is endlesss, 100 is other. */
 export const SOURCE_LEAN_ENDLESSS = 0
 export const SOURCE_LEAN_OTHER = 100
-export const DEFAULT_SOURCE_LEAN = 50
+/** Where the dial starts, and where a double-click puts it back: 95% of
+ * rolls draw OTHER sounds -- Elling's own audio-in/mic recordings -- and 5%
+ * Endlesss's built-in instruments (Elling, 2026-09-30: "default setting for
+ * own sounds vs endlesss sounds should be 95% own sounds"). Not an end, so
+ * a kind with no recordings still falls back to Endlesss sounds. */
+export const DEFAULT_SOURCE_LEAN = 95
 
 // Frozen: these are shared by every roll, so a caller mutating a returned
 // filter would corrupt all the later ones.
