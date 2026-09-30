@@ -1277,15 +1277,30 @@ interface TraitSampledStem {
   traitFieldValues: TraitFieldValues
 }
 
-/** Distinct random integers in [0, n), `k` of them (k <= n) -- Floyd's
- * algorithm, O(k), no n-sized scratch array per roll. */
-function sampleDistinctIndices(n: number, k: number): number[] {
+/** Distinct random integers in [0, n), `k` of them (k <= n), in uniformly
+ * random ORDER. Floyd's algorithm picks the set in O(k), no n-sized scratch
+ * array per roll, but its insertion order is biased (early insertions can
+ * only come from [0, n-k+j]); downstream rankCandidates is a stable sort, so
+ * ties at chaos 0 would favour early table rows. The result is therefore
+ * Fisher-Yates shuffled with the same `random` source. */
+export function sampleDistinctIndices(
+  n: number,
+  k: number,
+  random: () => number = Math.random
+): number[] {
   const picked = new Set<number>()
   for (let j = n - k; j < n; j++) {
-    const t = Math.floor(Math.random() * (j + 1))
+    const t = Math.floor(random() * (j + 1))
     picked.add(picked.has(t) ? j : t)
   }
-  return [...picked]
+  const out = [...picked]
+  for (let i = out.length - 1; i > 0; i--) {
+    const r = Math.floor(random() * (i + 1))
+    const tmp = out[i]
+    out[i] = out[r]
+    out[r] = tmp
+  }
+  return out
 }
 
 /** The trait-only pool's bounded random sample of stems with cached

@@ -6,7 +6,8 @@ import {
   getRandomLibraryCandidate,
   prewarmDiscoverCandidateCaches,
   getRiffIndexForDb,
-  appendToInMemoryDiscoverCaches
+  appendToInMemoryDiscoverCaches,
+  sampleDistinctIndices
 } from './discoverCandidates'
 import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
@@ -2541,5 +2542,38 @@ describe('appendToInMemoryDiscoverCaches', () => {
       )
     ).not.toThrow()
     db.close()
+  })
+})
+
+describe('sampleDistinctIndices order', () => {
+  function mulberry32(seed: number): () => number {
+    let a = seed
+    return () => {
+      a = (a + 0x6d2b79f5) | 0
+      let x = Math.imul(a ^ (a >>> 15), 1 | a)
+      x = (x + Math.imul(x ^ (x >>> 7), 61 | x)) ^ x
+      return ((x ^ (x >>> 14)) >>> 0) / 4294967296
+    }
+  }
+
+  it('returns k distinct in-range indices', () => {
+    const out = sampleDistinctIndices(2000, 1000, mulberry32(1))
+    expect(out).toHaveLength(1000)
+    expect(new Set(out).size).toBe(1000)
+    expect(out.every((i) => i >= 0 && i < 2000)).toBe(true)
+  })
+
+  it('position 0 lands in the first half of the table about half the time', () => {
+    const n = 2000
+    const k = 1000
+    const runs = 2000
+    const random = mulberry32(12345)
+    let firstHalf = 0
+    for (let r = 0; r < runs; r++) {
+      if (sampleDistinctIndices(n, k, random)[0] < n / 2) firstHalf++
+    }
+    const frac = firstHalf / runs
+    expect(frac).toBeGreaterThan(0.45)
+    expect(frac).toBeLessThan(0.55)
   })
 })
