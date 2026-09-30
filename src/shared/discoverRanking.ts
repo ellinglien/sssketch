@@ -1,5 +1,5 @@
 // src/shared/discoverRanking.ts
-import type { DiscoverCandidate } from '../main/discoverCandidates'
+import type { DiscoverCandidate } from './discoverCandidate'
 import {
   DISCOVER_TRAIT_DIRECTION,
   DISCOVER_TRAIT_FIELD,
