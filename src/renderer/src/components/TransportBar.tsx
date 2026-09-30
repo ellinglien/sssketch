@@ -10,6 +10,7 @@ import { MasterChainPanel } from './MasterChainPanel'
 import { ContextMenu } from './ContextMenu'
 import { AudioDeviceModal } from './AudioDeviceModal'
 import { KeyGesturesModal } from './KeyGesturesModal'
+import { RadioHeartsKeyModal } from './RadioHeartsKeyModal'
 import { PhoneRemoteModal } from './PhoneRemoteModal'
 
 // Persisted per-machine (same pattern as LoreLibraryBrowser's own
@@ -286,6 +287,8 @@ export function TransportBar({
   // The app's own shortcut/gesture reference -- see KeyGesturesModal.tsx
   // for why it exists at all.
   const [keysModalOpen, setKeysModalOpen] = useState(false)
+  // Discover's "fetch hearts" key -- see RadioHeartsKeyModal.tsx.
+  const [radioHeartsKeyOpen, setRadioHeartsKeyOpen] = useState(false)
   // Fetched fresh each time the settings menu opens (see the trigger
   // button below) rather than kept live -- the menu is only open for a
   // few seconds at most, and this avoids a persistent poll/subscription
@@ -1001,6 +1004,7 @@ export function TransportBar({
                 ]
               : []),
             { label: 'keys and gestures…', onClick: () => setKeysModalOpen(true) },
+            { label: 'radio hearts key…', onClick: () => setRadioHeartsKeyOpen(true) },
             {
               label: 'audio…',
               onClick: () => {
@@ -1028,6 +1032,8 @@ export function TransportBar({
       )}
 
       {keysModalOpen && <KeyGesturesModal onClose={() => setKeysModalOpen(false)} />}
+
+      {radioHeartsKeyOpen && <RadioHeartsKeyModal onClose={() => setRadioHeartsKeyOpen(false)} />}
 
       {phoneRemoteView && (
         <PhoneRemoteModal

@@ -48,6 +48,7 @@ import {
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
+import { heartFetchLabel } from '@shared/radioHearts'
 import { manualChangesUndoneBy, UndoSnapshotSequence } from '@shared/discoverUndoWithdraw'
 import { applyTraitBar } from '@shared/traitBar'
 import {
@@ -688,7 +689,7 @@ export function DiscoverPanel({
     setSourceLean(lean)
   }
   const stemFavourites = useStemFavourites()
-  const { toggleStemFavourite } = useStemFavouritesActions()
+  const { toggleStemFavourite, reloadStemFavourites } = useStemFavouritesActions()
 
   // Direct request, 2026-09-15: "it'd be nice to be able to adjust the
   // track tempo from the discover section" -- a real scope reversal of
@@ -3826,6 +3827,12 @@ export function DiscoverPanel({
   const [keeping, setKeeping] = useState(false)
   const [keptLabel, setKeptLabel] = useState<string | null>(null)
 
+  // "fetch radio hearts" -- ell.ing/radio's hearted combos, kept through
+  // keep's own save (src/main/radioHeartsImport.ts). Same label-flash as
+  // keep, held longer because it carries counts to read, not a tick.
+  const [fetchingHearts, setFetchingHearts] = useState(false)
+  const [heartsLabel, setHeartsLabel] = useState<string | null>(null)
+
   // The phone remote's arcade-ish counters. A run is a session -- these live
   // with the panel and reset when it unmounts or the app restarts. No points,
   // no badges, no streaks.
@@ -6171,6 +6178,22 @@ export function DiscoverPanel({
     }
   }
 
+  async function fetchHearts(): Promise<void> {
+    setFetchingHearts(true)
+    try {
+      const result = await window.rifffApi.fetchRadioHearts()
+      if (result.ok && result.favourited > 0) reloadStemFavourites()
+      setHeartsLabel(heartFetchLabel(result))
+      window.setTimeout(() => setHeartsLabel(null), 2500)
+    } catch (err) {
+      console.error('DiscoverPanel: fetchRadioHearts failed:', err)
+      setHeartsLabel(heartFetchLabel({ ok: false, reason: 'unreachable' }))
+      window.setTimeout(() => setHeartsLabel(null), 2500)
+    } finally {
+      setFetchingHearts(false)
+    }
+  }
+
   // What the "match seed" button below actually promises: the seed riff's
   // own tempo, rounded (direct report, 2026-09-17: a raw decimal like
   // "105.01000213623047" was showing up in this button's own label), AND
@@ -6626,6 +6649,23 @@ export function DiscoverPanel({
           }}
         >
           {keeping ? 'keeping…' : (keptLabel ?? 'keep')}
+        </button>
+        <button
+          onClick={() => void fetchHearts()}
+          disabled={fetchingHearts}
+          data-tooltip="fetch radio hearts"
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 10,
+            padding: '6px 14px',
+            background: 'transparent',
+            border: '1px solid var(--ra-border-strong)',
+            color: fetchingHearts ? 'var(--ra-text-4)' : 'var(--ra-text)',
+            cursor: fetchingHearts ? 'default' : 'pointer',
+            animation: heartsLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
+          }}
+        >
+          {fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts')}
         </button>
         <button
           onClick={() => void addToShelf()}

@@ -85,8 +85,11 @@ import {
 import {
   forgetDiscoveredRifff,
   saveDiscoveredRifff,
-  type DiscoveredMemberInput
+  type DiscoveredMemberInput,
+  type SaveDiscoveredResult
 } from './discoveredLibrary'
+import { fetchRadioHearts, resolveHeartStem } from './radioHeartsImport'
+import { hasRadioHeartsKey, loadRadioHeartsKey, saveRadioHeartsKey } from './radioHeartsKeyStore'
 import {
   lanIPv4Address,
   remoteAddressCandidates,
@@ -735,28 +738,59 @@ app.whenReady().then(async () => {
   // One explicit, human-initiated save. Eight stemCIDForPath point lookups
   // is not what CLAUDE.md's "never one query per stem" rule is about;
   // everything that WRITES inside saveDiscoveredRifff is one transaction.
+  // keep's whole save, shared by the keep button and "fetch radio hearts"
+  // (radioHeartsImport.ts) so a fetched combo is kept exactly as a kept one.
+  function keepDiscovered(
+    members: DiscoveredMemberInput[],
+    bpm: number,
+    barLength: number
+  ): SaveDiscoveredResult | null {
+    const ownDb = openOwnRiffLibraryDb()
+    const result = saveDiscoveredRifff(ownDb, candidateDbsForRiff(), {
+      members,
+      bpm,
+      barLength,
+      creationTime: Math.floor(Date.now() / 1000)
+    })
+    // AFTER the commit, never inside it -- appendToInMemoryDiscoverCaches
+    // re-reads the table signals the in-memory caches are validated
+    // against, and those have to see the new counts. saveDiscoveredRifff
+    // hands back exactly the rows to fold in (indexRows /
+    // newInstrumentRows) rather than this handler re-deriving StemCIDs it
+    // does not have.
+    if (result && !result.duplicate) {
+      appendToInMemoryDiscoverCaches(ownDb, result.indexRows, result.newInstrumentRows)
+    }
+    return result
+  }
+
   ipcMain.handle(
     'save-discovered-rifff',
-    (_event, members: DiscoveredMemberInput[], bpm: number, barLength: number) => {
-      const ownDb = openOwnRiffLibraryDb()
-      const result = saveDiscoveredRifff(ownDb, candidateDbsForRiff(), {
-        members,
-        bpm,
-        barLength,
-        creationTime: Math.floor(Date.now() / 1000)
-      })
-      // AFTER the commit, never inside it -- appendToInMemoryDiscoverCaches
-      // re-reads the table signals the in-memory caches are validated
-      // against, and those have to see the new counts. saveDiscoveredRifff
-      // hands back exactly the rows to fold in (indexRows /
-      // newInstrumentRows) rather than this handler re-deriving StemCIDs it
-      // does not have.
-      if (result && !result.duplicate) {
-        appendToInMemoryDiscoverCaches(ownDb, result.indexRows, result.newInstrumentRows)
-      }
-      return result
-    }
+    (_event, members: DiscoveredMemberInput[], bpm: number, barLength: number) =>
+      keepDiscovered(members, bpm, barLength)
   )
+
+  // "fetch radio hearts" -- ell.ing/radio's hearted combos as kept riffs and
+  // starred stems. The only network call is here; the key never leaves
+  // main (the renderer only learns whether one is set).
+  ipcMain.handle('fetch-radio-hearts', () => {
+    const ownDb = openOwnRiffLibraryDb()
+    const dbs = [ownDb, ...candidateDbsForRiff().filter((db) => db !== ownDb)]
+    return fetchRadioHearts({
+      key: loadRadioHeartsKey(),
+      fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(20_000) }),
+      ownDb,
+      resolveStem: (stemCID) => resolveHeartStem(stemCID, dbs),
+      save: keepDiscovered
+    })
+  })
+
+  ipcMain.handle('radio-hearts-key-set', () => hasRadioHeartsKey())
+
+  ipcMain.handle('set-radio-hearts-key', (_event, key: string | null) => {
+    saveRadioHeartsKey(key)
+    return hasRadioHeartsKey()
+  })
 
   ipcMain.handle('forget-discovered-rifff', (_event, riffCID: string) =>
     forgetDiscoveredRifff(openOwnRiffLibraryDb(), riffCID)

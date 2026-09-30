@@ -30,3 +30,22 @@ export function toggleStemFavourite(ownDb: Database.Database, stemCID: string): 
   }
   return listStemFavourites(ownDb)
 }
+
+/** Stars every stem in `stemCIDs` that is not already starred, and returns
+ * how many it newly starred. A SET, not a toggle: an already-starred stem is
+ * left exactly as it was (its FavouritedAt included), so running this twice
+ * is the same as running it once. For "fetch radio hearts"
+ * (radioHeartsImport.ts), which must never un-star anything. One
+ * transaction, so a fetch's whole batch lands or none of it does. */
+export function addStemFavourites(ownDb: Database.Database, stemCIDs: readonly string[]): number {
+  const insert = ownDb.prepare(
+    `INSERT INTO StemFavourite (StemCID, FavouritedAt) VALUES (?, ?)
+     ON CONFLICT(StemCID) DO NOTHING`
+  )
+  const now = Date.now()
+  let added = 0
+  ownDb.transaction(() => {
+    for (const stemCID of stemCIDs) added += insert.run(stemCID, now).changes
+  })()
+  return added
+}

@@ -154,7 +154,10 @@ const RiffFavouritesActionsCtx = createContext<{
 const StemFavouritesCtx = createContext<Set<string>>(new Set())
 const StemFavouritesActionsCtx = createContext<{
   toggleStemFavourite: (stemCID: string) => void
-}>({ toggleStemFavourite: () => {} })
+  /** Re-reads the list from main -- after something other than a toggle
+   * (fetch radio hearts) has starred stems. */
+  reloadStemFavourites: () => void
+}>({ toggleStemFavourite: () => {}, reloadStemFavourites: () => {} })
 
 // The 5 plugins the old hardcoded allowlist (src/shared/masterChainAllowlist.ts,
 // deleted once the scan-based catalog replaced it) used to reference by these
@@ -303,7 +306,14 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     void window.rifffApi.toggleStemFavourite(stemCID).then((ids) => setStemFavourites(new Set(ids)))
   }, [])
 
-  const stemFavouritesActions = useMemo(() => ({ toggleStemFavourite }), [toggleStemFavourite])
+  const reloadStemFavourites = useCallback(() => {
+    void window.rifffApi.listStemFavourites().then((ids) => setStemFavourites(new Set(ids)))
+  }, [])
+
+  const stemFavouritesActions = useMemo(
+    () => ({ toggleStemFavourite, reloadStemFavourites }),
+    [toggleStemFavourite, reloadStemFavourites]
+  )
 
   // Intercepts the four transport actions before they ever reach the
   // undo-tracked main reducer, routing them to the separate pos/playing
@@ -1207,6 +1217,9 @@ export function useStemFavourites(): Set<string> {
 }
 
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
-export function useStemFavouritesActions(): { toggleStemFavourite: (stemCID: string) => void } {
+export function useStemFavouritesActions(): {
+  toggleStemFavourite: (stemCID: string) => void
+  reloadStemFavourites: () => void
+} {
   return useContext(StemFavouritesActionsCtx)
 }

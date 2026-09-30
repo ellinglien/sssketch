@@ -24,6 +24,7 @@ import type { PrewarmScanProgress } from '../main/discoverCandidates'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import type { UpdateState } from '@shared/updateState'
+import type { RadioHeartsResult } from '@shared/radioHearts'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { StemPeaks } from '../main/stemPeaksCacheStore'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
@@ -681,6 +682,15 @@ const api = {
     ipcRenderer.invoke('save-discovered-rifff', members, bpm, barLength),
   forgetDiscoveredRifff: (riffCID: string): Promise<void> =>
     ipcRenderer.invoke('forget-discovered-rifff', riffCID),
+  /** "fetch radio hearts": ell.ing/radio's hearted combos, kept as riffs
+   * the way keep keeps one, and every hearted stem starred. Counts, or why
+   * not. See src/main/radioHeartsImport.ts. */
+  fetchRadioHearts: (): Promise<RadioHeartsResult> => ipcRenderer.invoke('fetch-radio-hearts'),
+  /** Whether a hearts.json key is set. The key itself never comes back. */
+  radioHeartsKeySet: (): Promise<boolean> => ipcRenderer.invoke('radio-hearts-key-set'),
+  /** Sets the key (null or '' clears it); resolves to whether one is set. */
+  setRadioHeartsKey: (key: string | null): Promise<boolean> =>
+    ipcRenderer.invoke('set-radio-hearts-key', key),
   getPhoneRemoteStatus: (): Promise<PhoneRemoteStatus> =>
     ipcRenderer.invoke('get-phone-remote-status'),
   startPhoneRemote: (): Promise<PhoneRemoteStatus> => ipcRenderer.invoke('start-phone-remote'),

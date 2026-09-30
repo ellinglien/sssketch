@@ -189,6 +189,22 @@ CREATE TABLE IF NOT EXISTS StemFavourite (
   FavouritedAt INTEGER NOT NULL
 );
 
+-- Which ell.ing/radio heart combinations "fetch radio hearts" has already
+-- brought home (radioHeartsImport.ts), so a re-fetch skips them. Combo is
+-- the server's own key: the combination's StemCIDs, sorted, comma-joined.
+-- RiffCID is the kept riff it became -- or, when that exact stem set was
+-- already kept, the riff that already was. Name is its "♥ n · misty
+-- kestrel" label; a kept riff has no name column of its own (its display
+-- name is derived from its RiffCID). A combo that could not be saved
+-- (fewer than 2 stems on this machine) gets no row, so it is tried again.
+-- sssketch-exclusive, own db only, same rule as StemFavourite above.
+CREATE TABLE IF NOT EXISTS RadioHeartImport (
+  Combo TEXT PRIMARY KEY,
+  RiffCID TEXT NOT NULL,
+  Name TEXT NOT NULL,
+  ImportedAt INTEGER NOT NULL
+);
+
 -- Stems whose audio is known to be unfetchable -- see
 -- stemUnavailableStore.ts and @shared/stemAvailability for the full
 -- story. Short version, diagnosed 2026-09-22: Endlesss's stem blobs live
