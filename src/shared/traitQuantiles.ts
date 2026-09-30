@@ -34,6 +34,17 @@ export const TRAIT_FIELDS: readonly TraitField[] = [
   ])
 ]
 
+/** The fields every analysed row carries, of every feature version. */
+export const FALLBACK_FIELDS: ReadonlySet<TraitField> = new Set<TraitField>(
+  Object.values(DISCOVER_TRAIT_FIELD)
+)
+
+/** A preferred-only field (rhythmicStrength, spectralCentroidFftHz) gets a
+ * table only once at least min(this, half the parsed rows) rows carry it
+ * -- a table from a handful of re-extracted stems would be noise. Until then its
+ * stems are placed by their fallback field (traitPercentilesFromValues). */
+export const PREFERRED_TABLE_MIN_ROWS = 200
+
 /** One table per field (keyed by FIELD, not kind, so bright/warm share). */
 export type TraitQuantileTables = Partial<Record<TraitField, QuantileTable>>
 
@@ -60,6 +71,20 @@ export function buildQuantileTable(values: readonly number[]): QuantileTable | n
     table[i] = finite[lo] + (finite[hi] - finite[lo]) * (pos - lo)
   }
   return table
+}
+
+/** One field's table, from its finite values across `parsedRows` parsed
+ * feature rows: a fallback field is always built; a preferred-only field
+ * only once min(PREFERRED_TABLE_MIN_ROWS, half the parsed rows) carry it.
+ * null when skipped or when nothing finite is left. */
+export function tableForField(
+  field: TraitField,
+  values: readonly number[],
+  parsedRows: number
+): QuantileTable | null {
+  const preferredMinRows = Math.min(PREFERRED_TABLE_MIN_ROWS, Math.ceil(parsedRows / 2))
+  if (!FALLBACK_FIELDS.has(field) && values.length < preferredMinRows) return null
+  return buildQuantileTable(values)
 }
 
 /** First index whose breakpoint is >= value (strict=false) or > value

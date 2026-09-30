@@ -31,11 +31,12 @@
 // it while the live row count still matches what it accounts for
 // (getTraitValueTable); otherwise the roll falls back to reading SQL.
 import type Database from 'better-sqlite3'
-import { DISCOVER_TRAIT_FIELD } from '@shared/discoverTraits'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
+  FALLBACK_FIELDS,
+  PREFERRED_TABLE_MIN_ROWS,
   TRAIT_FIELDS,
-  buildQuantileTable,
+  tableForField,
   type TraitField,
   type TraitQuantileTables
 } from '@shared/traitQuantiles'
@@ -50,18 +51,15 @@ export const TRAIT_QUANTILE_PAGE_SIZE = 2000
  * separately, once rows with the Phase 3 fields have grown by it. */
 const REBUILD_GROWTH = 0.05
 
-/** A preferred-only field (rhythmicStrength, spectralCentroidFftHz) gets a
- * table only once at least min(this, half the parsed rows) rows carry it
- * -- a table from a handful of re-extracted stems would be noise. Until then its
- * stems are placed by their fallback field (traitPercentilesFromValues). */
-export const PREFERRED_TABLE_MIN_ROWS = 200
+/** The preferred-field row minimum now lives with the rule that applies it
+ * (tableForField, @shared/traitQuantiles); re-exported for this file's tests. */
+export { PREFERRED_TABLE_MIN_ROWS }
 
 /** Floor for the new-field growth base, so the first few re-extracted rows
  * don't each trigger a rebuild: growth is measured against
  * max(rows with new fields at the last build, min(this, row count)). */
 const NEW_FIELD_GROWTH_FLOOR = 1000
 
-const FALLBACK_FIELDS = new Set<TraitField>(Object.values(DISCOVER_TRAIT_FIELD))
 const NEW_FIELDS = TRAIT_FIELDS.filter((f) => !FALLBACK_FIELDS.has(f))
 
 interface CacheEntry {
@@ -268,12 +266,9 @@ async function buildTables(db: Database.Database, rowCount: number): Promise<Bui
   }
 
   const tables: TraitQuantileTables = {}
-  const preferredMinRows = Math.min(PREFERRED_TABLE_MIN_ROWS, Math.ceil(parsedRows / 2))
   for (const field of TRAIT_FIELDS) {
-    const values = valuesByField.get(field)!
-    if (!FALLBACK_FIELDS.has(field) && values.length < preferredMinRows) continue
     await yieldToEventLoop()
-    const table = buildQuantileTable(values)
+    const table = tableForField(field, valuesByField.get(field)!, parsedRows)
     if (table) tables[field] = table
   }
   return { tables, rowCount, newFieldRows, valueTable }

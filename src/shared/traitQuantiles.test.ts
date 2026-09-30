@@ -4,6 +4,9 @@ import {
   buildQuantileTable,
   percentileOf,
   traitPercentilesFromValues,
+  tableForField,
+  FALLBACK_FIELDS,
+  PREFERRED_TABLE_MIN_ROWS,
   TRAIT_FIELDS
 } from './traitQuantiles'
 
@@ -179,5 +182,35 @@ describe('traitPercentilesFromValues -- preferred field with fallback (Phase 3)'
 
   it('without field values, the value is read against the fallback table (legacy callers)', () => {
     expect(traitPercentilesFromValues({ rhythmic: 3 }, tables).rhythmic).toBeCloseTo(0.3)
+  })
+})
+
+describe('tableForField', () => {
+  it('knows the three fallback fields', () => {
+    expect([...FALLBACK_FIELDS].sort()).toEqual([
+      'bassEnergyRatio',
+      'spectralCentroidHz',
+      'transientDensity'
+    ])
+  })
+
+  it('a preferred field carried by fewer than min(PREFERRED_TABLE_MIN_ROWS, half the rows) gets no table', () => {
+    const parsedRows = PREFERRED_TABLE_MIN_ROWS * 2
+    const sparse = range(PREFERRED_TABLE_MIN_ROWS - 1)
+    expect(tableForField('rhythmicStrength', sparse, parsedRows)).toBeNull()
+    expect(
+      tableForField('rhythmicStrength', range(PREFERRED_TABLE_MIN_ROWS), parsedRows)
+    ).not.toBeNull()
+    // a small library: half its rows is enough
+    expect(tableForField('spectralCentroidFftHz', range(5), 10)).not.toBeNull()
+    expect(tableForField('spectralCentroidFftHz', range(4), 10)).toBeNull()
+  })
+
+  it('a fallback field is always built, however sparse', () => {
+    expect(tableForField('bassEnergyRatio', [1], 1000)).toEqual(buildQuantileTable([1]))
+  })
+
+  it('null when there is nothing finite to build from', () => {
+    expect(tableForField('transientDensity', [], 0)).toBeNull()
   })
 })
