@@ -78,12 +78,7 @@ import {
   type RadioSlotFlag,
   type RadioSlotFlags
 } from '@shared/radioSlotFlags'
-import {
-  buildDropOutCurve,
-  pickDropOutBeats,
-  pickDropOutSlotId,
-  shouldScheduleDropOut
-} from '@shared/radioDropOut'
+import { buildDropOutCurve, pickDropOutBeats, rollIntervalDropOut } from '@shared/radioDropOut'
 import {
   buildBloomCurve,
   buildDuckCurve,
@@ -2566,6 +2561,37 @@ export function DiscoverPanel({
     radioGestureRef.current = []
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
+  /** The interval's one drop-out roll (rollIntervalDropOut), made wherever
+   * an interval starts: a held change landing, early or not, and the due
+   * branch. `changedSlotId` is the row this interval's change turned over
+   * (or was aimed at), which is never the one dropped.
+   *
+   * Until 2026-09-30 the roll lived in the due branch alone, and the early
+   * decision (e5810f4) pre-empts that branch whenever the pick is warm --
+   * so drop-outs had all but stopped.
+   *
+   * No pushUndoSnapshot, for the same reason a radio change takes none: a
+   * drop-out is performance, not an edit. */
+  function rollRadioDropOut(changedSlotId: string | null, pos: number, loopBars: number): void {
+    const clock = radioClockRef.current
+    if (clock === null) return
+    const roll = rollIntervalDropOut({
+      rate: radioSettings.dropOuts,
+      audible: slotsRef.current
+        .filter((s) => previewingSlotIdsRef.current.has(s.id))
+        .map((s) => ({ id: s.id, kinds: s.kinds })),
+      changedSlotId,
+      gestureArmed: radioGestureRef.current.length > 0,
+      clock,
+      pos,
+      loopBars
+    })
+    if (roll === null) return
+    radioGestureRef.current = [
+      { kind: 'drop-out', slotId: roll.slotId, beats: roll.beats, lapsLeft: 1 }
+    ]
+    scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
   /** Everything the scheduled swap does on one position tick, in the one
    * order it is safe to do it in. Called from the clock effect below,
    * after the two branches that LAND a change and before the one that
@@ -3353,6 +3379,12 @@ export function DiscoverPanel({
               : arriving)
           ]
         }
+        // Radio's own change landed, so its interval starts here -- and
+        // this is where the interval's drop-out is rolled, whether the
+        // change was decided a lap early or held at its due tick. The due
+        // branch below never runs for either. After the arrivals above, so
+        // an arrival curve keeps its lap.
+        if (committed && led !== null) rollRadioDropOut(led.slotId, pos, loopBars)
         if (committed || manualCommitted) {
           runAfterEngineSync(() => {
             if (!radioOnRef.current) return
@@ -3617,8 +3649,8 @@ export function DiscoverPanel({
             })
           }
           // Nothing else this interval: the drop-out roll and the next
-          // pick both wait for the change to actually land, the same way
-          // they wait behind a committed change's engine push.
+          // pick both wait for the change to actually land, and the
+          // landing makes them.
           return
         }
         // No pushUndoSnapshot: radio firing every twenty bars would fill
@@ -3688,30 +3720,9 @@ export function DiscoverPanel({
         }
       }
       // Roll ONCE per interval for a drop-out in the coming one -- no
-      // second clock. Never on the slot that just changed and never in a
-      // way that leaves silence: pickDropOutSlotId is handed only the
-      // AUDIBLE slots and returns null below two of them.
-      //
-      // No pushUndoSnapshot, for the same reason the change above takes
-      // none: a drop-out is performance, not an edit.
-      //
-      if (radioGestureRef.current.length === 0 && shouldScheduleDropOut(radioSettings.dropOuts)) {
-        const audible = slotsRef.current
-          .filter((s) => previewingSlotIdsRef.current.has(s.id) && s.id !== pending?.slotId)
-          .map((s) => ({ id: s.id, kinds: s.kinds }))
-        const dropId = pickDropOutSlotId(audible)
-        if (dropId !== null) {
-          radioGestureRef.current = [
-            {
-              kind: 'drop-out',
-              slotId: dropId,
-              beats: pickDropOutBeats(),
-              lapsLeft: 1
-            }
-          ]
-          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
-        }
-      }
+      // second clock. See rollRadioDropOut; a held change rolls it where it
+      // lands instead.
+      rollRadioDropOut(pending?.slotId ?? null, pos, loopBars)
       // Arm the next one whether or not this one landed -- nothing
       // eligible is radio idling, not an error, and it retries here at
       // every boundary.

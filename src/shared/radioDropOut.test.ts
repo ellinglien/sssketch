@@ -8,8 +8,18 @@ import {
   normalizeRadioDropOuts,
   pickDropOutBeats,
   pickDropOutSlotId,
-  shouldScheduleDropOut
+  rollIntervalDropOut,
+  shouldScheduleDropOut,
+  type DropOutCandidate
 } from './radioDropOut'
+import {
+  advanceRadioClock,
+  createRadioClock,
+  nextRadioIntervalBarsInWindow,
+  radioChangeDueAtNextWrap,
+  radioChangeLandsAtBar,
+  restartRadioInterval
+} from './radioSchedule'
 
 /** A deterministic generator that walks a fixed list and then repeats it. */
 function seeded(values: number[]): () => number {
@@ -151,5 +161,224 @@ describe('the drop-out curve', () => {
     for (let i = 1; i < curve.length; i++) {
       expect(curve[i].bar).toBeGreaterThan(curve[i - 1].bar)
     }
+  })
+})
+
+/** mulberry32 -- a seeded generator, so the long runs below are the same
+ * run every time. */
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0
+  return (): number => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+const BED: DropOutCandidate[] = [
+  { id: 'drums', kinds: ['drums'] },
+  { id: 'bass', kinds: ['bass'] },
+  { id: 'pad', kinds: ['rhythmic'] },
+  { id: 'lead', kinds: ['lead'] }
+]
+
+describe('the interval roll', () => {
+  const base = {
+    rate: 'rare' as const,
+    audible: BED,
+    changedSlotId: 'pad',
+    gestureArmed: false,
+    clock: { intervalBars: 12, barsElapsed: 0 },
+    pos: 0.02,
+    loopBars: 8
+  }
+
+  it('drops a drums or bass row for a weighted number of beats when the roll hits', () => {
+    expect(rollIntervalDropOut(base, seeded([0.1, 0.1, 0.5]))).toEqual({
+      slotId: 'drums',
+      beats: 2
+    })
+  })
+
+  it('misses above the rate, and never rolls when off', () => {
+    expect(rollIntervalDropOut(base, seeded([0.2]))).toBeNull()
+    expect(rollIntervalDropOut({ ...base, rate: 'off' }, seeded([0]))).toBeNull()
+  })
+
+  it('never drops the row this interval turned over', () => {
+    for (const r of [0, 0.3, 0.6, 0.99]) {
+      const roll = rollIntervalDropOut({ ...base, changedSlotId: 'drums' }, seeded([0, r, 0.5]))
+      expect(roll?.slotId).toBe('bass')
+    }
+  })
+
+  it('never leaves silence -- the changed row does not count as audible company', () => {
+    const two = [BED[0], BED[1]]
+    expect(
+      rollIntervalDropOut({ ...base, audible: two, changedSlotId: 'bass' }, seeded([0]))
+    ).toBeNull()
+  })
+
+  it('gives the lap to a gesture already armed on it, without spending a draw', () => {
+    let draws = 0
+    const counting = (): number => {
+      draws += 1
+      return 0
+    }
+    expect(rollIntervalDropOut({ ...base, gestureArmed: true }, counting)).toBeNull()
+    expect(draws).toBe(0)
+  })
+
+  it('never ends on the wrap the next change can land on -- one leading gesture per wrap', () => {
+    // 9 bars left in the interval, 7.98 to the wrap: the change comes due
+    // at the wrap after at the earliest, so this lap is free.
+    expect(
+      rollIntervalDropOut({ ...base, clock: { intervalBars: 9, barsElapsed: 0 } }, seeded([0]))
+    ).not.toBeNull()
+    // An interval exactly one lap long ends on the wrap, and which side of
+    // it the change lands on is up to the 30Hz stream. The lap is the
+    // change's.
+    expect(
+      rollIntervalDropOut({ ...base, clock: { intervalBars: 8, barsElapsed: 0 } }, seeded([0]))
+    ).toBeNull()
+    // A 16-bar loop, twelve bars to go: the next change lands in this
+    // lap or on its wrap, whatever the grid.
+    expect(
+      rollIntervalDropOut(
+        { ...base, loopBars: 16, clock: { intervalBars: 12, barsElapsed: 0 } },
+        seeded([0])
+      )
+    ).toBeNull()
+    // A held change landing a lap after its due tick: the clock restarted
+    // back then, so most of the interval is already spent.
+    expect(
+      rollIntervalDropOut({ ...base, clock: { intervalBars: 12, barsElapsed: 8 } }, seeded([0]))
+    ).toBeNull()
+  })
+})
+
+/**
+ * Radio's stage, reduced to the clock and the two moments a change can
+ * happen -- DiscoverPanel's stepRadioStage (2) deciding it early, and its
+ * held-change landing -- with the due branch kept only as the fallback it
+ * is. Every pick is warm and every transition a cut, which is the ordinary
+ * case: every change is decided early.
+ *
+ * Until this fix the panel rolled for a drop-out only in the due branch,
+ * which an early decision pre-empts, so a run like this one heard none.
+ */
+function simulateRadio(
+  loopBars: number,
+  gridBars: number,
+  totalBars: number,
+  seed: number
+): { changes: number; late: number; dropOuts: number; collisions: number } {
+  const random = mulberry32(seed)
+  const pace = { min: 8, max: 16 }
+  const ticksPerBar = 60 // 30Hz at 120bpm
+  const ticksPerLap = loopBars * ticksPerBar
+  let clock = createRadioClock(nextRadioIntervalBarsInWindow(pace, random), 0)
+  let held: { atBars: number | null } | null = null
+  let dropOut: { lapsLeft: number } | null = null
+  let turn = 0
+  const result = { changes: 0, late: 0, dropOuts: 0, collisions: 0 }
+  const land = (pos: number): void => {
+    result.changes += 1
+    turn += 1
+    clock = restartRadioInterval(clock, nextRadioIntervalBarsInWindow(pace, random), pos)
+    dropOut = null // clearRadioGesture
+    const roll = rollIntervalDropOut(
+      {
+        rate: 'rare',
+        audible: BED,
+        changedSlotId: BED[turn % BED.length].id,
+        gestureArmed: false,
+        clock,
+        pos,
+        loopBars
+      },
+      random
+    )
+    if (roll !== null) {
+      dropOut = { lapsLeft: 1 }
+      result.dropOuts += 1
+    }
+  }
+  for (let tick = 1; tick <= totalBars * ticksPerBar; tick++) {
+    const pos = (tick % ticksPerLap) / ticksPerBar
+    const lastPos = clock.lastPos
+    const step = advanceRadioClock(clock, pos, loopBars, gridBars, 0)
+    clock = step.clock
+    // The held change lands: at the wrap, or on the bar it named.
+    const h = held as { atBars: number | null } | null
+    const crossedHeldBar =
+      h !== null && h.atBars !== null && !step.wrapped && pos >= h.atBars && lastPos < h.atBars
+    if (h !== null && (step.wrapped || crossedHeldBar)) {
+      // A drop-out still armed here would be ending on this very wrap.
+      if (dropOut !== null && step.wrapped) result.collisions += 1
+      held = null
+      land(pos)
+      continue
+    }
+    // The lap countdown.
+    if (step.wrapped && dropOut !== null) {
+      const d = dropOut as { lapsLeft: number }
+      dropOut = d.lapsLeft <= 1 ? null : { lapsLeft: d.lapsLeft - 1 }
+    }
+    // stepRadioStage (2): a drop-out is never a spent arrival, so it holds
+    // the early decision exactly as the panel's gate does.
+    if (!step.due && held === null && dropOut === null) {
+      if (radioChangeDueAtNextWrap(clock, pos, loopBars, gridBars, 0)) held = { atBars: null }
+      else {
+        const at = radioChangeLandsAtBar(clock, pos, loopBars, gridBars, 0)
+        if (at !== null) held = { atBars: at }
+      }
+    }
+    if (step.due && held === null) {
+      // The due branch: a change that nothing decided early.
+      result.late += 1
+      land(pos)
+    }
+  }
+  return result
+}
+
+describe('drop-outs happen at the documented rate when every change is decided early', () => {
+  // RADIO_DROP_OUT_CHANCE's own doc: rolled once per interval, so at `mid`
+  // (8-16 bars, mean 12) about one every 80 bars -- somewhat rarer in
+  // practice because the grid rounds each interval up to a boundary.
+  for (const [loopBars, gridBars] of [
+    [4, 4],
+    [8, 8],
+    [8, 2]
+  ]) {
+    it(`on a ${loopBars}-bar loop with a ${gridBars}-bar grid`, () => {
+      const totalBars = 200_000
+      const run = simulateRadio(loopBars, gridBars, totalBars, 7 * loopBars + gridBars)
+      expect(run.late).toBe(0)
+      expect(run.collisions).toBe(0)
+      const perInterval = run.dropOuts / run.changes
+      // Just under RADIO_DROP_OUT_CHANCE.rare: an interval exactly one lap
+      // long gives its only lap to the change that ends it.
+      expect(perInterval).toBeGreaterThan(0.12)
+      expect(perInterval).toBeLessThan(0.17)
+      const barsPerDropOut = totalBars / run.dropOuts
+      expect(barsPerDropOut).toBeGreaterThan(70)
+      expect(barsPerDropOut).toBeLessThan(130)
+    })
+  }
+
+  it('and never at the cost of an early decision, even where most laps belong to a change', () => {
+    // A 16-bar loop at mid pace: an interval that starts at a wrap always
+    // ends on or before the next one, so only the ones a short layer's
+    // 4-bar grid lands mid-lap have a lap of their own. Those still get
+    // their drop-out, and no change is ever pushed onto the late path by
+    // one.
+    const run = simulateRadio(16, 4, 200_000, 99)
+    expect(run.late).toBe(0)
+    expect(run.collisions).toBe(0)
+    expect(run.dropOuts).toBeGreaterThan(0)
   })
 })

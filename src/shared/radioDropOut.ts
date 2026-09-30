@@ -30,7 +30,8 @@ export const DEFAULT_RADIO_DROP_OUTS: RadioDropOuts = 'rare'
 
 /** Chance that the coming interval contains a drop-out. Rolled ONCE per
  * interval, right where radio already picks its next stem -- no second
- * clock.
+ * clock. The roll is rollIntervalDropOut, below; an interval with no lap
+ * clear of the next change does not roll at all.
  *
  * `rare` is the default and it is deliberately sparse. `mid` draws 8-16
  * bars (retuned 0eab8b4), mean 12, so 12 / 0.15 = a drop-out every 80
@@ -187,4 +188,94 @@ export function buildDropOutCurve(loopBars: number, beats: number): AutomationPo
     { bar: silentAt, value: 0 },
     { bar: loopBars, value: 0 }
   ]
+}
+
+/** How far clear of the wrap the interval has to run before a drop-out may
+ * take the lap. Not an epsilon: an interval that ends ON the wrap falls on
+ * whichever side of it the 30Hz stream happens to put the landing tick,
+ * so the change may well land there. Intervals are whole bars and every
+ * landing is on a boundary, so half a bar keeps the guard off that knife
+ * edge without costing any interval that is clearly longer. */
+const CLEAR_OF_WRAP_BARS = 0.5
+
+export interface IntervalDropOutInput {
+  rate: RadioDropOuts
+  /** Every row that is audible right now (the panel's previewing slots),
+   * INCLUDING the one that just changed -- it is taken out here. */
+  audible: readonly DropOutCandidate[]
+  /** The row this interval's change turned over, or the pick that was
+   * aimed at when nothing landed. Never the one dropped: a drop-out on
+   * the layer that just arrived reads as the change failing. */
+  changedSlotId: string | null
+  /** A gesture is already armed on the lap this drop-out would take -- an
+   * arrival curve riding the change that just landed, say. One gesture a
+   * lap: two curves in one lap is a wash. */
+  gestureArmed: boolean
+  /** Radio's clock as it stands AFTER this boundary: restarted for the new
+   * interval, or (a held change landing a lap after its due tick) already
+   * part-way through it. */
+  clock: { intervalBars: number; barsElapsed: number }
+  /** Where the playhead is, and the loop's length -- the wrap the drop-out
+   * would end on is `loopBars - pos` away. */
+  pos: number
+  loopBars: number
+}
+
+export interface IntervalDropOut {
+  slotId: string
+  beats: number
+}
+
+/**
+ * THE interval's drop-out roll -- once per interval, and the only place
+ * radio decides one. Call it wherever an interval starts: a change landing
+ * (whether it was decided a lap early or at its due tick) and the due tick
+ * that lands nothing.
+ *
+ * The rule, from the spec (4.2, 4.4) and the commit that first wired it
+ * (e41c5e3): after each change, roll ONCE for whether the coming interval
+ * holds a drop-out. If it does, it is armed at once for one lap and ends
+ * at the next wrap -- arming early is free, the curve is anchored to the
+ * loop top. Never on the row that just changed, never leaving silence,
+ * drums or bass only (pickDropOutSlotId), and never on a lap that already
+ * has a gesture.
+ *
+ * And never on the wrap the NEXT change can land on. Spec 4.2: "not on the
+ * lap the change lands on -- a drop-out on top of a swap is two events in
+ * one place and neither reads". It is also what keeps the staged swap
+ * working: an armed drop-out is a leading gesture, and the panel lets
+ * only one lead into a wrap -- so a drop-out sharing its wrap with the
+ * next change would hold that change off the early decision and put it
+ * back on the late path. The next change's grid is not known yet (its
+ * pick is armed after this), so this asks the question every grid agrees
+ * on: can the interval run out before (or on) the wrap? If it can, that
+ * lap belongs to the change.
+ *
+ * Guards are checked before any draw, so a lap given to something else
+ * costs no randomness. The draws are in the order the panel always made
+ * them: whether, which row, how long.
+ *
+ * Why this lives here rather than in the panel: until it did, the roll sat
+ * in the due branch only, and radio's early decision (e5810f4) pre-empts
+ * that branch whenever the pick is warm -- which is nearly always -- so
+ * drop-outs had quietly stopped. One function, called from every place an
+ * interval starts, is the fix and the thing to test.
+ */
+export function rollIntervalDropOut(
+  input: IntervalDropOutInput,
+  random: () => number = Math.random
+): IntervalDropOut | null {
+  const { rate, audible, changedSlotId, gestureArmed, clock, pos, loopBars } = input
+  if (gestureArmed) return null
+  if (!(loopBars > 0) || !Number.isFinite(pos) || pos < 0 || pos >= loopBars) return null
+  const barsToWrap = loopBars - pos
+  const barsToElapse = Math.max(0, clock.intervalBars - clock.barsElapsed)
+  if (!(barsToElapse > barsToWrap + CLEAR_OF_WRAP_BARS)) return null
+  if (!shouldScheduleDropOut(rate, random)) return null
+  const slotId = pickDropOutSlotId(
+    audible.filter((c) => c.id !== changedSlotId),
+    random
+  )
+  if (slotId === null) return null
+  return { slotId, beats: pickDropOutBeats(random) }
 }
