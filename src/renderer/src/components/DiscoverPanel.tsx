@@ -1,5 +1,5 @@
 // src/renderer/src/components/DiscoverPanel.tsx
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { CirclesThree, Compass, Copy, HandPalm, Shuffle, SignOut } from '@phosphor-icons/react'
 import { Waveform } from './Waveform'
 import { LoopLines } from './LoopLines'
@@ -120,7 +120,7 @@ import {
   useStemFavouritesActions
 } from '../state/StoreContext'
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
-import { discoverPlayheadPcts, discoverWindowLayout } from '@shared/discoverWindowLayout'
+import { discoverSweepPct, discoverWindowLayout } from '@shared/discoverWindowLayout'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import {
@@ -609,8 +609,9 @@ export function DiscoverPanel({
   // is loaded, this IS the preview loop's own position (Transport.cpp wraps
   // it against the loaded project's own loopLengthBars, which equals the
   // preview rifff's own barLength, see syncPreviewToEngine below), not the
-  // real arrangement's. Used below to draw a real moving playhead line on
-  // each row's own waveform -- direct report, 2026-09-15: "i don't see the
+  // real arrangement's. Used below to draw a real moving playhead line
+  // across the rows' waveforms (one line over every row since 2026-09-30,
+  // see sweepLineRef) -- direct report, 2026-09-15: "i don't see the
   // playhead line" after the Web Audio -> native engine preview rewrite
   // removed the old sweepFraction-based one along with the rest of that
   // state machine (its own replacement was explicitly deferred as
@@ -787,7 +788,7 @@ export function DiscoverPanel({
   // stem's real bar length, making a 1-bar drum hit and an 8-bar bassline
   // look the same length; this tracks each resolved slot's own real
   // barLength so DiscoverPanel can compute the loop's length (maxBarLength
-  // below), which places every row's loop-top lines and playheads inside
+  // below), which places every row's loop-top lines and the one playhead inside
   // the shared fixed window (spec 2026-09-29-discover-fixed-waveform-
   // window-design.md).
   const [resolvedBarLengths, setResolvedBarLengths] = useState<Map<string, number>>(new Map())
@@ -811,6 +812,73 @@ export function DiscoverPanel({
   // (DiscoverSlotRow's own discoverWindowLayout inputs) -- only
   // syncPreviewToEngine's own read switches to this ref.
   const resolvedBarLengthsRef = useRef<Map<string, number>>(new Map())
+
+  // THE ONE PLAYHEAD. Elling, 2026-09-30, looking at an 8-bar loop drawn
+  // as four red lines per row: "shouldn't it be one long one moving across
+  // all of them?" So there is one line, over every row at once (the
+  // overlay drawn above the row list, below), and it sweeps across as many
+  // WHOLE laps as fit in the window before returning to the left edge --
+  // discoverSweepPct has the rule and its tests.
+  //
+  // `pos` is the engine's position INSIDE the lap; which lap of the sweep
+  // we are on is counted here, one step per wrap (pos going below the last
+  // pos -- the same test advanceRadioClock uses, done separately so radio's
+  // own clock is left alone). The count goes back to 0 when:
+  //   - nothing is previewing (the preview stopped, or is about to be
+  //     freshly loaded, which always seeks to 0 -- syncPreviewToEngine);
+  //   - the loop length changes, so the new loop starts from the left edge
+  //     rather than inheriting a lap count that meant something else;
+  //   - the transport is stopped at 0;
+  //   - pos goes BACKWARDS without it being a wrap: a seek (to 0 or
+  //     anywhere), or a stop putting the transport back to the top. A
+  //     pause mid-lap keeps the count, so resuming carries on in place.
+  //     A wrap is told apart by where it comes from -- the second half of
+  //     a real lap into the first half -- which a seek from the middle of
+  //     a lap, or from the real arrangement's far-off position, is not.
+  //
+  // Written straight to the line's style from a LAYOUT effect, not
+  // through state: the count and the position it goes with have to reach
+  // the screen in the same frame, or every wrap would paint one frame of
+  // the line at the wrong lap (a state update from here would have to be
+  // deferred -- this repo errors on a synchronous setState in an effect --
+  // and so would land a render late). Reading the ref in render is also
+  // flagged, so render never does: it only decides whether the line
+  // exists at all.
+  const sweepLineRef = useRef<HTMLDivElement>(null)
+  const sweepLapRef = useRef({ lapIndex: 0, lastPos: 0, loopBars: 0 })
+  const previewLoopBars = resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : 0
+  const sweepActive = previewingSlotIds.size > 0 && previewLoopBars > 0
+  useLayoutEffect(() => {
+    const lap = sweepLapRef.current
+    if (!sweepActive) {
+      sweepLapRef.current = { lapIndex: 0, lastPos: pos, loopBars: 0 }
+      return
+    }
+    if (lap.loopBars !== previewLoopBars || (!playing && pos <= 1e-6)) {
+      // A new loop length, or the transport stopped at the top.
+      sweepLapRef.current = { lapIndex: 0, lastPos: pos, loopBars: previewLoopBars }
+    } else if (pos < lap.lastPos) {
+      const half = previewLoopBars / 2
+      const wrapped =
+        playing && lap.lastPos >= half && lap.lastPos <= previewLoopBars + 1e-6 && pos < half
+      sweepLapRef.current = {
+        lapIndex: wrapped ? lap.lapIndex + 1 : 0,
+        lastPos: pos,
+        loopBars: previewLoopBars
+      }
+    } else {
+      sweepLapRef.current = { ...lap, lastPos: pos }
+    }
+    const line = sweepLineRef.current
+    if (!line) return
+    const windowBars = discoverWindowLayout({
+      stemBars: previewLoopBars,
+      loopBars: previewLoopBars
+    }).windowBars
+    const pct = discoverSweepPct(sweepLapRef.current.lapIndex, pos, previewLoopBars, windowBars)
+    line.style.display = pct === null ? 'none' : 'block'
+    if (pct !== null) line.style.left = `${pct}%`
+  }, [pos, playing, sweepActive, previewLoopBars])
 
   // True once a Discover preview project is actually loaded+playing in the
   // real engine -- the empty-to-non-empty transition (see
@@ -1461,7 +1529,7 @@ export function DiscoverPanel({
     // the native engine's loop-length setting on every resulting
     // engineLoadProject call -- see assembleDiscoverRifff's own doc comment
     // for the full mechanism. Same computation as the panel's maxBarLength
-    // (the loop length the rows' playheads and loop-top lines use).
+    // (the loop length the playhead and the rows' loop-top lines use).
     //
     // Reads resolvedBarLengthsRef, NOT the reactive resolvedBarLengths state
     // -- this function is a plain closure re-created every render, and
@@ -1924,7 +1992,7 @@ export function DiscoverPanel({
     // was the only resolved+previewing slot -- triggering
     // restorePreviewIfLoaded's own pause+seek-to-0+play sequence, an
     // audible full restart -- and (b) shrink maxBarLength (the loop length
-    // every row's playheads and loop-top lines are drawn against) for the
+    // the playhead and every row's loop-top lines are drawn against) for the
     // whole resolve window whenever the rerolling slot
     // happened to be the longest one, snapping the engine's own loop-wrap
     // position back to 0 (Transport.cpp's own `pos >= loopEnd` wrap) and
@@ -5903,7 +5971,7 @@ export function DiscoverPanel({
       //      placement.
       //   4. Nothing ever re-triggered syncPreviewToEngine afterwards
       //      (`slots` unchanged, no row re-resolved, bpm unchanged), and the
-      //      row playheads are gated on previewingSlotIds, not on
+      //      playhead is gated on previewingSlotIds, not on
       //      previewLoadedRef -- so Discover went on LOOKING like it was
       //      previewing while the engine stayed on the real arrangement
       //      indefinitely. UI current, audio stale.
@@ -6687,77 +6755,120 @@ export function DiscoverPanel({
           longer scale their waveform against it: every row shows the same
           fixed window of bars (discoverWindowLayout, spec 2026-09-29-
           discover-fixed-waveform-window-design.md), and this only places
-          the loop-top lines and the per-lap playheads inside it (and grows
-          the window past 32 bars while a longer loop is in play). 0 while
-          nothing has resolved yet. */}
-      {(() => {
-        const maxBarLength =
-          resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : 0
-        // `pos` only means something as a loop position while a preview is
-        // actually loaded (previewingSlotIds.size > 0 <=> previewLoadedRef
-        // is true, see syncPreviewToEngine/restorePreviewIfLoaded above) --
-        // otherwise it's just wherever the REAL arrangement's own playhead
-        // happens to sit, which has nothing to do with this loop.
-        const playheadPos = previewingSlotIds.size > 0 && maxBarLength > 0 ? pos : null
-        // THE ONE WAIT a row can be on, read once for the whole list
-        // rather than per row -- radio names at most one armed and at most
-        // one held slot at a time. Written by the clock effect above, off
-        // the same tick that drives everything else radio does, so the
-        // count and the change cannot come from different clocks. It falls
-        // back to "not knowable" rather than to a wrong number: radio has
-        // no wait at all until it has ticked once.
-        const approachWait: RadioApproachWait = radioChangeWait ?? {
-          elapsedBars: 0,
-          barsUntilChange: null
-        }
-        return slots.map((slot) => (
-          <DiscoverSlotRow
-            key={slot.id}
-            slot={slot}
-            radioApproach={radioApproachFor({
-              slotId: slot.id,
-              armedSlotId: radioArmedSlotId,
-              // A manual change waiting for the loop top reads exactly
-              // like radio's own held one -- the same breathing, spec
-              // behaviour 2. Only `state` is drawn, so the wait (radio's
-              // own) does not have to describe it.
-              heldSlotId: manualWaitingSlotIds.has(slot.id) ? slot.id : radioHeldSlotId,
-              wait: approachWait
-            })}
-            rerolling={rerollingSlotIds.has(slot.id)}
-            manualWaiting={manualWaitingSlotIds.has(slot.id)}
-            previewing={previewingSlotIds.has(slot.id)}
-            soloed={previewingSlotIds.size === 1 && previewingSlotIds.has(slot.id)}
-            favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
-            maxBarLength={maxBarLength}
-            playheadPos={playheadPos}
-            onToggleLock={() => toggleLock(slot.id)}
-            radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
-            radioOn={radioOn}
-            onToggleHook={() => toggleSlotHook(slot.id)}
-            onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
-            onRemove={() => removeSlot(slot.id)}
-            onDuplicate={(immediate) => duplicateSlot(slot.id, immediate)}
-            onReroll={(immediate) => void rerollSlot(slot.id, immediate)}
-            onRerollRandom={(immediate) => void rerollRandomSlot(slot.id, immediate)}
-            onTogglePreview={() => toggleSlotPreview(slot.id)}
-            onToggleSolo={() => toggleSlotSolo(slot.id)}
-            onToggleFavourite={() => {
-              if (slot.candidate) toggleStemFavourite(slot.candidate.stemCID)
+          the loop-top lines inside it (and grows the window past 32 bars
+          while a longer loop is in play). 0 while nothing has resolved yet.
+
+          The rows sit in one positioned wrapper so the ONE playhead
+          (2026-09-30) can be drawn over all of them as a single line --
+          see the overlay after the rows, and sweepLineRef above. */}
+      <div style={{ position: 'relative' }}>
+        {(() => {
+          const maxBarLength = previewLoopBars
+          // THE ONE WAIT a row can be on, read once for the whole list
+          // rather than per row -- radio names at most one armed and at most
+          // one held slot at a time. Written by the clock effect above, off
+          // the same tick that drives everything else radio does, so the
+          // count and the change cannot come from different clocks. It falls
+          // back to "not knowable" rather than to a wrong number: radio has
+          // no wait at all until it has ticked once.
+          const approachWait: RadioApproachWait = radioChangeWait ?? {
+            elapsedBars: 0,
+            barsUntilChange: null
+          }
+          return slots.map((slot) => (
+            <DiscoverSlotRow
+              key={slot.id}
+              slot={slot}
+              radioApproach={radioApproachFor({
+                slotId: slot.id,
+                armedSlotId: radioArmedSlotId,
+                // A manual change waiting for the loop top reads exactly
+                // like radio's own held one -- the same breathing, spec
+                // behaviour 2. Only `state` is drawn, so the wait (radio's
+                // own) does not have to describe it.
+                heldSlotId: manualWaitingSlotIds.has(slot.id) ? slot.id : radioHeldSlotId,
+                wait: approachWait
+              })}
+              rerolling={rerollingSlotIds.has(slot.id)}
+              manualWaiting={manualWaitingSlotIds.has(slot.id)}
+              previewing={previewingSlotIds.has(slot.id)}
+              soloed={previewingSlotIds.size === 1 && previewingSlotIds.has(slot.id)}
+              favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
+              maxBarLength={maxBarLength}
+              onToggleLock={() => toggleLock(slot.id)}
+              radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
+              radioOn={radioOn}
+              onToggleHook={() => toggleSlotHook(slot.id)}
+              onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
+              onRemove={() => removeSlot(slot.id)}
+              onDuplicate={(immediate) => duplicateSlot(slot.id, immediate)}
+              onReroll={(immediate) => void rerollSlot(slot.id, immediate)}
+              onRerollRandom={(immediate) => void rerollRandomSlot(slot.id, immediate)}
+              onTogglePreview={() => toggleSlotPreview(slot.id)}
+              onToggleSolo={() => toggleSlotSolo(slot.id)}
+              onToggleFavourite={() => {
+                if (slot.candidate) toggleStemFavourite(slot.candidate.stemCID)
+              }}
+              onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
+              onSlotResolutionAbandoned={() => abandonSlotResolution(slot.id)}
+              onGainChange={(gain) => updateSlotGain(slot.id, gain)}
+              onSwapFromNearby={(candidate, immediate) =>
+                swapSlotFromNearby(slot.id, candidate, immediate)
+              }
+              onChangeKinds={(kinds) => changeSlotKinds(slot.id, kinds)}
+              onReclassify={(role) => void reclassifySlot(slot.id, role)}
+              soundSourceEndlesss={soundSourceForLean(sourceLean).endlesss}
+              soundSourceAudioIn={soundSourceForLean(sourceLean).audioIn}
+            />
+          ))
+        })()}
+        {/* THE ONE PLAYHEAD, over every row at once (Elling, 2026-09-30:
+            "shouldn't it be one long one moving across all of them?"). An
+            absolutely positioned grid with the rows' own template, gap and
+            zero horizontal padding -- DISCOVER_ROW_GRID_COLUMNS and friends
+            -- so its column 7 IS every row's waveform column. The line's
+            `left` is written by the layout effect beside sweepLineRef (a
+            percentage of the window, discoverSweepPct), never by render.
+            Only while a preview is loaded -- the same condition the
+            per-row playheads it replaces had: `pos` means nothing as a
+            loop position otherwise. The same `--ra-playhead` accent
+            Playhead.tsx uses on the real timeline. */}
+        {sweepActive && (
+          <div
+            aria-hidden
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'grid',
+              gridTemplateColumns: DISCOVER_ROW_GRID_COLUMNS,
+              gridTemplateRows: '100%',
+              columnGap: DISCOVER_ROW_COLUMN_GAP,
+              padding: 0,
+              pointerEvents: 'none'
             }}
-            onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
-            onSlotResolutionAbandoned={() => abandonSlotResolution(slot.id)}
-            onGainChange={(gain) => updateSlotGain(slot.id, gain)}
-            onSwapFromNearby={(candidate, immediate) =>
-              swapSlotFromNearby(slot.id, candidate, immediate)
-            }
-            onChangeKinds={(kinds) => changeSlotKinds(slot.id, kinds)}
-            onReclassify={(role) => void reclassifySlot(slot.id, role)}
-            soundSourceEndlesss={soundSourceForLean(sourceLean).endlesss}
-            soundSourceAudioIn={soundSourceForLean(sourceLean).audioIn}
-          />
-        ))
-      })()}
+          >
+            <div
+              style={{
+                gridColumn: DISCOVER_WAVEFORM_COLUMN,
+                minWidth: DISCOVER_WAVEFORM_MIN_WIDTH,
+                position: 'relative'
+              }}
+            >
+              <div
+                ref={sweepLineRef}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  bottom: 0,
+                  width: 1,
+                  background: 'var(--ra-playhead)',
+                  pointerEvents: 'none'
+                }}
+              />
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Direct request, 2026-09-17: "can we move them to the middle" --
           first tried centered across the full row width; follow-up --
@@ -7263,6 +7374,21 @@ function DiceIcon({
 // uses for its analogous drag on the real timeline.
 const DISCOVER_WAVEFORM_HEIGHT = 40
 
+// THE ROW GRID, shared by every DiscoverSlotRow AND by the one-playhead
+// overlay DiscoverPanel draws above the row list (2026-09-30). The overlay
+// is its own grid with these same tracks, gap and (zero) horizontal
+// padding, so its waveform column is the rows' waveform column: every
+// track but the 1fr waveform is a fixed pixel width, and the waveform
+// cell's min-width is the same in both, so the leftover width the 1fr
+// track gets is identical. Change the template HERE, never inline -- see
+// the long comment where the row applies it for why each track is what
+// it is.
+const DISCOVER_ROW_GRID_COLUMNS =
+  '18px 18px 18px 18px 18px 18px 1fr 14px 110px 14px 18px 1px 18px 18px 18px 18px'
+const DISCOVER_ROW_COLUMN_GAP = 8
+const DISCOVER_WAVEFORM_COLUMN = 7
+const DISCOVER_WAVEFORM_MIN_WIDTH = 140
+
 function DiscoverSlotRow({
   slot,
   radioApproach,
@@ -7272,7 +7398,6 @@ function DiscoverSlotRow({
   soloed,
   favourited,
   maxBarLength,
-  playheadPos,
   onToggleLock,
   radioFlag,
   radioOn,
@@ -7341,18 +7466,11 @@ function DiscoverSlotRow({
    * barLength, across every row (DiscoverPanel's own `maxBarLength`). No
    * longer the tiling reference -- every row tiles its stem across the same
    * fixed window (discoverWindowLayout), and this only places the loop-top
-   * lines and the per-lap playheads, and grows the window when the loop is
-   * longer than 32 bars. 0 before anything in the loop has resolved yet. */
+   * lines, and grows the window when the loop is longer than 32 bars. 0
+   * before anything in the loop has resolved yet. The playhead is no longer
+   * the row's: since 2026-09-30 there is ONE, drawn by DiscoverPanel over
+   * every row at once (sweepLineRef). */
   maxBarLength: number
-  /** The engine's live position in bars, or null while nothing in the loop
-   * is currently previewing (DiscoverPanel's own `previewingSlotIds` is
-   * empty, so the real engine position doesn't refer to this loop at all
-   * -- see DiscoverPanel's own `playheadPos` computation). The row turns it
-   * into one playhead per lap (discoverPlayheadPcts). Direct report,
-   * 2026-09-15: the playhead line was lost when the preview backend moved
-   * from Web Audio to the real engine; this reuses the engine's own live
-   * position instead of reintroducing a separate elapsed-time sweep. */
-  playheadPos: number | null
   onToggleLock: () => void
   /** What this row has been told about radio's next change: `hook` to hold
    * it, `replace-soon` to hurry it, null for neither. At most one row in
@@ -7609,8 +7727,8 @@ function DiscoverSlotRow({
   // Stable across renders (useCallback, empty deps) -- DiscoverNearbyPopover's
   // own outside-click dismissal effect depends on this identity ([onClose,
   // ignoreRef]), and this row re-renders on every playhead tick while
-  // anything is previewing (playheadPos is a prop, driven by DiscoverPanel's
-  // own usePos()). An inline `() => setNearbyMenu(null)` closure would be
+  // anything is previewing (DiscoverPanel re-renders on its own usePos(),
+  // and this row with it). An inline `() => setNearbyMenu(null)` closure would be
   // torn down and rebuilt on every one of those ticks, real bug found live:
   // "clicking out of the near panel should close it instead of having to
   // click the near button again" -- the dismiss listener's own
@@ -7918,17 +8036,21 @@ function DiscoverSlotRow({
           // done by hand in one pass. Every non-waveform track stays a
           // FIXED pixel width, for the reason above; only the 1fr waveform
           // grows, and it gets all the width the text buttons gave up.
-          gridTemplateColumns:
-            '18px 18px 18px 18px 18px 18px 1fr 14px 110px 14px 18px 1px 18px 18px 18px 18px',
+          // The template itself is DISCOVER_ROW_GRID_COLUMNS, shared with
+          // the one-playhead overlay above the row list so the two cannot
+          // drift apart (2026-09-30).
+          gridTemplateColumns: DISCOVER_ROW_GRID_COLUMNS,
           alignItems: 'center',
-          columnGap: 8,
+          columnGap: DISCOVER_ROW_COLUMN_GAP,
+          // No horizontal padding: the overlay relies on the rows' column
+          // 7 starting where its own does.
           padding: '8px 0',
           // A ROW RADIO IS ABOUT TO CHANGE. The row breathes, slowly,
           // and the red playhead already sweeping it says when -- because
           // a change now lands at the loop top (e5810f4 stages the swap a
           // lap early and the engine applies it at bar 0), so the
-          // playhead reaching the right-hand end of the waveform IS the
-          // moment it happens.
+          // playhead reaching a loop-top line, or the end of its sweep,
+          // IS the moment it happens.
           //
           // Elling, 2026-09-29, after two passes at drawing this as a
           // progress rule with a countdown beside it: "i still don't
@@ -7941,8 +8063,9 @@ function DiscoverSlotRow({
           // instead.
           //
           // WHAT IS ACCEPTED HERE, rather than solved: the playhead
-          // restarts every lap, so a change three laps out cannot be read
-          // off it as three laps -- the row simply reads "coming" until
+          // crosses a loop top every lap (since 2026-09-30 it is one line
+          // sweeping several laps, not one per lap), so a change three
+          // laps out cannot be read off it as three laps -- the row simply reads "coming" until
           // the lap it lands in. That is the whole intended message.
           // Radio still KNOWS the real number (radioChangeWait above, and
           // @shared/radioApproach, which is still measured and still
@@ -8145,7 +8268,13 @@ function DiscoverSlotRow({
           than trimmed -- the inner button's own aria-label (below) still
           carries a plain accessible name (drag to adjust volume), just
           without the drag hint or the live percentage. */}
-        <div style={{ gridColumn: 7, minWidth: 140, position: 'relative' }}>
+        <div
+          style={{
+            gridColumn: DISCOVER_WAVEFORM_COLUMN,
+            minWidth: DISCOVER_WAVEFORM_MIN_WIDTH,
+            position: 'relative'
+          }}
+        >
           {resolvedStem ? (
             // Direct request, 2026-09-20: "clicking on wave shouldn't mute
             // it, leave that to the M button" -- clicking the waveform used
@@ -8161,7 +8290,8 @@ function DiscoverSlotRow({
             // `--ra-stretch-on` box around the whole waveform) read as an
             // unwanted white halo -- removed; the dedicated mute button below
             // already carries this row's own on/off state, and the playhead
-            // line (also below) now shows real playback directly.
+            // line (drawn over every row by DiscoverPanel) shows real
+            // playback directly.
             <button
               onMouseDown={handleGainDragStart}
               aria-label="drag to adjust volume"
@@ -8237,14 +8367,6 @@ function DiscoverSlotRow({
                   stemBars: resolvedStem.barLength,
                   loopBars: maxBarLength
                 })
-                const playheads =
-                  playheadPos === null
-                    ? []
-                    : discoverPlayheadPcts(
-                        playheadPos,
-                        maxBarLength > 0 ? maxBarLength : resolvedStem.barLength,
-                        layout.windowBars
-                      )
                 const gainClipPct = (1 - slot.gain) * 100
                 return (
                   <>
@@ -8332,28 +8454,6 @@ function DiscoverSlotRow({
                     )}
                     <LoopLines lefts={layout.restartLinePcts.map((p) => `${p}%`)} kind="restart" />
                     <LoopLines lefts={layout.loopTopLinePcts.map((p) => `${p}%`)} kind="loopTop" />
-                    {/* Real playheads, driven by the actual engine position
-                    while this loop is previewing -- same `--ra-playhead`
-                    accent Playhead.tsx uses on the real timeline. One per
-                    loop-length lap of the window, all at the same place in
-                    their own lap (discoverPlayheadPcts), so they reach a
-                    loop-top line together at the instant the loop wraps --
-                    where a radio change or a waiting manual change lands.
-                    Index keys: the count only changes with the window. */}
-                    {playheads.map((pct, i) => (
-                      <div
-                        key={i}
-                        style={{
-                          position: 'absolute',
-                          top: 0,
-                          bottom: 0,
-                          left: `${pct}%`,
-                          width: 1,
-                          background: 'var(--ra-playhead)',
-                          pointerEvents: 'none'
-                        }}
-                      />
-                    ))}
                   </>
                 )
               })()}

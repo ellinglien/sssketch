@@ -9,7 +9,8 @@
 > "the loop points should be displayed clearly, like in arrange.. lines between each loop"
 >
 > Window: "length of the longest stem we'd realistically load", then 32 bars. Longer stems: "try to
-> avoid that". Playhead: one in every lap, moving together.
+> avoid that". Playhead: one in every lap, moving together. (Changed 2026-09-30 to one playhead
+> sweeping the whole window -- see "The playhead: one sweep" below.)
 
 ## The problem
 
@@ -63,18 +64,35 @@ computes the same boundaries (`tileBoundaryPcts`). This feature lifts the line i
 component, `LoopLines`, which takes percentages and a strength. `StemWaveformRow` and the Discover
 row both use it. `BeatPicker` moves to it only if doing so is a pure refactor.
 
-### The playhead: one per lap
+### The playhead: one sweep
 
-The engine loop is `loopBars` long and the window is `windowBars`. A red playhead is drawn at
-`pos` inside **every** loop-length section of the window: at `k·loopBars + pos` for every `k` where
-that point falls inside the window. All the copies move together.
+**Changed by Elling on 2026-09-30.** This section first specified one playhead per lap: a copy at
+`k·loopBars + pos` in every loop-length section of the window, all moving together. With an 8-bar
+loop that drew four red lines on every row, and Elling found it confusing:
 
-This keeps today's meaning. When the playheads reach a loop-top line, the loop wraps, and that is
-where a radio change or a waiting manual change lands. The row's breathing still says "something is
-coming", and the playhead still says "when", exactly as designed on 2026-09-29.
+> "shouldn't it be one long one moving across all of them?"
 
-When the loop is the window (32 bars, or a longer loop that grew the window), there is one
-playhead, as today.
+So there is now **one** playhead, drawn as a single continuous vertical line over every row at
+once. It sweeps across as many **whole** laps as fit in the window, then returns to the left edge:
+
+- `lapsPerSweep = max(1, floor(windowBars / loopBars))`
+- position = `(lapIndex mod lapsPerSweep) · loopBars + posInLap`, as a percentage of `windowBars`
+  (`discoverSweepPct(lapIndex, pos, loopBars, windowBars)` in `src/shared/discoverWindowLayout.ts`).
+
+With an 8-bar loop it crosses the 32-bar window in four laps. With a 12-bar loop it sweeps 24 bars
+and then goes back to the left edge. It never restarts at the left edge mid-lap, because the tiles
+at the left edge are bar 0 of each stem. When the loop is at least as long as the window, this is
+one playhead, as before.
+
+It keeps the meaning the per-lap copies had: the playhead crosses a loop-top line (or reaches the
+end of its sweep) exactly when the loop wraps, which is where a radio change or a waiting manual
+change lands. The row's breathing still says "something is coming".
+
+`DiscoverPanel` counts the laps: one step each time `pos` wraps. The count goes back to 0 when the
+preview stops or is freshly loaded, when the transport is stopped at 0 or seeked backwards, and when
+the loop length changes. The line is drawn by an overlay above the row list: an absolutely
+positioned grid with the rows' own track template (one shared constant), gap and padding, so its
+waveform column is every row's waveform column.
 
 The playhead only shows while a preview is loaded, as today.
 
@@ -94,8 +112,9 @@ The playhead only shows while a preview is loaded, as today.
   - `restartLinePcts`
   - `loopTopLinePcts`
 
-  Restart lines that coincide with a loop-top line (to 1e-6 of a percent) are removed. It also exports
-  `discoverPlayheadPcts(pos, loopBars, windowBars)`, one percentage per lap.
+  Restart lines that coincide with a loop-top line (to 1e-6 of a percent) are removed. It also exported
+  `discoverPlayheadPcts(pos, loopBars, windowBars)`, one percentage per lap; since 2026-09-30 that is
+  replaced by `discoverSweepPct(lapIndex, pos, loopBars, windowBars)`, the one sweeping playhead.
 
   It handles `stemBars <= 0` and `loopBars <= 0` safely, as today's code does: treat a missing loop
   as the stem's own length.
@@ -122,7 +141,8 @@ The playhead only shows while a preview is loaded, as today.
 - **Needs Elling:**
   - rows keep their scale when a longer or shorter stem arrives;
   - both kinds of loop line read clearly;
-  - the playheads move together and reach the loop-top line when the loop wraps;
+  - the one playhead crosses a loop-top line exactly when the loop wraps, sweeps whole laps only, and
+    lines up with every row's waveform (2026-09-30);
   - a stem longer than 32 bars grows the window, and it shrinks back when that stem leaves;
   - scrolling and playback stay smooth with six rows of short stems;
   - the arrange view's loop lines are unchanged.

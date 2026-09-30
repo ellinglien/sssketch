@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   DISCOVER_MAX_TILES,
   DISCOVER_WINDOW_BARS,
-  discoverPlayheadPcts,
+  discoverSweepPct,
   discoverWindowLayout
 } from './discoverWindowLayout'
 
@@ -60,27 +60,47 @@ describe('discoverWindowLayout', () => {
   })
 })
 
-describe('discoverPlayheadPcts', () => {
-  it('puts one playhead in each lap, all at the same place in their lap', () => {
-    expect(discoverPlayheadPcts(3, 16, 32)).toEqual([9.375, 59.375])
+describe('discoverSweepPct', () => {
+  it('sweeps an 8-bar loop across four laps of a 32-bar window, then comes back', () => {
+    expect(discoverSweepPct(0, 0, 8, 32)).toBe(0)
+    expect(discoverSweepPct(0, 8 - 1e-9, 8, 32)).toBeCloseTo(25)
+    expect(discoverSweepPct(1, 0, 8, 32)).toBe(25)
+    expect(discoverSweepPct(1, 4, 8, 32)).toBe(37.5)
+    expect(discoverSweepPct(2, 0, 8, 32)).toBe(50)
+    expect(discoverSweepPct(3, 0, 8, 32)).toBe(75)
+    expect(discoverSweepPct(3, 8 - 1e-9, 8, 32)).toBeCloseTo(100)
+    expect(discoverSweepPct(4, 0, 8, 32)).toBe(0)
+    expect(discoverSweepPct(5, 4, 8, 32)).toBe(37.5)
   })
 
-  it('drops a lap copy that would fall past the window', () => {
-    expect(discoverPlayheadPcts(10, 12, 32)).toEqual([31.25, 68.75])
-    expect(discoverPlayheadPcts(2, 12, 32)).toEqual([6.25, 43.75, 81.25])
+  it('sweeps only whole laps: a 12-bar loop covers 24 bars, then returns to the left edge', () => {
+    expect(discoverSweepPct(0, 0, 12, 32)).toBe(0)
+    expect(discoverSweepPct(0, 12 - 1e-9, 12, 32)).toBeCloseTo(37.5)
+    expect(discoverSweepPct(1, 0, 12, 32)).toBe(37.5)
+    expect(discoverSweepPct(1, 12 - 1e-9, 12, 32)).toBeCloseTo(75)
+    expect(discoverSweepPct(2, 0, 12, 32)).toBe(0)
+    expect(discoverSweepPct(2, 6, 12, 32)).toBe(18.75)
   })
 
-  it('is a single playhead when the loop fills the window', () => {
-    expect(discoverPlayheadPcts(8, 32, 32)).toEqual([25])
+  it('is a single sweep when the loop fills or exceeds the window', () => {
+    expect(discoverSweepPct(0, 8, 32, 32)).toBe(25)
+    expect(discoverSweepPct(7, 8, 32, 32)).toBe(25)
+    expect(discoverSweepPct(3, 20, 40, 40)).toBe(50)
   })
 
-  it('wraps a position at or past the loop length', () => {
-    expect(discoverPlayheadPcts(16, 16, 32)).toEqual([0, 50])
+  it('wraps a position at or past the loop length into the lap', () => {
+    expect(discoverSweepPct(0, 8, 8, 32)).toBe(0)
+    expect(discoverSweepPct(1, 10, 8, 32)).toBe(31.25)
+    expect(discoverSweepPct(0, -2, 8, 32)).toBe(18.75)
   })
 
-  it('draws nothing it cannot place', () => {
-    expect(discoverPlayheadPcts(Number.NaN, 16, 32)).toEqual([])
-    expect(discoverPlayheadPcts(1, 0, 32)).toEqual([])
-    expect(discoverPlayheadPcts(1, 16, 0)).toEqual([])
+  it('returns null for input it cannot place', () => {
+    expect(discoverSweepPct(0, Number.NaN, 8, 32)).toBeNull()
+    expect(discoverSweepPct(Number.NaN, 1, 8, 32)).toBeNull()
+    expect(discoverSweepPct(0, 1, Number.POSITIVE_INFINITY, 32)).toBeNull()
+    expect(discoverSweepPct(0, 1, 8, Number.NaN)).toBeNull()
+    expect(discoverSweepPct(0, 1, 0, 32)).toBeNull()
+    expect(discoverSweepPct(0, 1, -8, 32)).toBeNull()
+    expect(discoverSweepPct(0, 1, 8, 0)).toBeNull()
   })
 })
