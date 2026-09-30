@@ -64,6 +64,89 @@ describe('rankCandidates', () => {
   })
 })
 
+describe('rankCandidates (favourite weight)', () => {
+  it('scales the favourite boost by the weight', () => {
+    const plain = candidate({ stemCID: 'plain', riffBpm: 128 })
+    const half = candidate({ stemCID: 'half', riffBpm: 128 })
+    const full = candidate({ stemCID: 'full', riffBpm: 128 })
+    const weights: Record<string, number> = { half: 0.5, full: 1 }
+    const ranked = rankCandidates([plain, half, full], {
+      targetBpm: 128,
+      favouriteWeight: (id) => weights[id] ?? 0
+    })
+    expect(ranked.map((r) => r.candidate.stemCID)).toEqual(['full', 'half', 'plain'])
+    const score = (id: string): number => ranked.find((r) => r.candidate.stemCID === id)!.score
+    expect(score('full') - score('plain')).toBeCloseTo(1.5, 10)
+    expect(score('half') - score('plain')).toBeCloseTo(0.75, 10)
+  })
+
+  it('a weight of 0 scores exactly like a non-favourite', () => {
+    const a = candidate({ stemCID: 'a', riffBpm: 120 })
+    const withZero = rankCandidates([a], { targetBpm: 128, favouriteWeight: () => 0 })
+    const without = rankCandidates([a], { targetBpm: 128 })
+    expect(withZero[0].score).toBe(without[0].score)
+  })
+
+  it('clamps the weight to [0, 1]', () => {
+    const a = candidate({ stemCID: 'a', riffBpm: 128 })
+    const base = rankCandidates([a], { targetBpm: 128 })[0].score
+    expect(rankCandidates([a], { targetBpm: 128, favouriteWeight: () => 7 })[0].score).toBeCloseTo(
+      base + 1.5,
+      10
+    )
+    expect(rankCandidates([a], { targetBpm: 128, favouriteWeight: () => -3 })[0].score).toBe(base)
+    expect(rankCandidates([a], { targetBpm: 128, favouriteWeight: () => NaN })[0].score).toBe(base)
+  })
+
+  it('a stem in favouriteStemCIDs keeps its full boost whatever its weight', () => {
+    const a = candidate({ stemCID: 'a', riffBpm: 128 })
+    const setOnly = rankCandidates([a], { targetBpm: 128, favouriteStemCIDs: new Set(['a']) })
+    const both = rankCandidates([a], {
+      targetBpm: 128,
+      favouriteStemCIDs: new Set(['a']),
+      favouriteWeight: () => 0.2
+    })
+    expect(both[0].score).toBe(setOnly[0].score)
+  })
+
+  it('with no weight function, a seeded ranking is identical to before', () => {
+    let seed = 12345
+    const rand = (): number => {
+      seed = (seed * 1103515245 + 12345) % 2147483648
+      return seed / 2147483648
+    }
+    const pool = Array.from({ length: 12 }, (_, i) =>
+      candidate({
+        stemCID: `s${i}`,
+        riffBpm: Math.round(80 + rand() * 80),
+        traitPercentiles: { bright: Math.round(rand() * 100) / 100 }
+      })
+    )
+    const ranked = rankCandidates(pool, {
+      targetBpm: 120,
+      favouriteStemCIDs: new Set(['s3', 's7']),
+      targetTraits: ['bright']
+    })
+    expect(ranked.map((r) => `${r.candidate.stemCID}:${r.score.toFixed(6)}`))
+      .toMatchInlineSnapshot(`
+      [
+        "s3:2.730000",
+        "s7:2.580000",
+        "s1:1.725000",
+        "s4:1.405000",
+        "s2:1.320000",
+        "s8:1.215000",
+        "s9:1.090000",
+        "s0:1.000000",
+        "s11:0.895000",
+        "s5:0.865000",
+        "s10:0.695000",
+        "s6:0.590000",
+      ]
+    `)
+  })
+})
+
 describe('rankCandidates (trait scoring)', () => {
   it('ranks the candidate at the "high" end of the pool first', () => {
     const high = candidate({ stemCID: 'high', traitValues: { bassHeavy: 0.9 } })

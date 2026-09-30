@@ -63,6 +63,11 @@ function traitScore(
   return direction === 'high' ? normalized : 1 - normalized
 }
 
+/** A favourite weight in [0, 1]; anything non-finite counts as 0. */
+function clampWeight(w: number): number {
+  return Number.isFinite(w) ? Math.max(0, Math.min(1, w)) : 0
+}
+
 /** Scores every candidate by BPM closeness, plus an optional favourites
  * boost, plus one score per requested trait kind, summed (combination
  * slots: trait kinds AND together). A trait's score is the candidate's own
@@ -74,10 +79,16 @@ export function rankCandidates(
   {
     targetBpm,
     favouriteStemCIDs,
+    favouriteWeight,
     targetTraits = []
   }: {
     targetBpm: number
     favouriteStemCIDs?: Set<string>
+    /** Optional per-stem favourite strength, clamped to [0, 1]: the boost
+     * becomes FAVOURITE_BOOST * weight. For a crowd that hearts some stems
+     * more than others (ell.ing/radio's ♥). A stem already in
+     * favouriteStemCIDs keeps its full boost; absent, nothing changes. */
+    favouriteWeight?: (stemCID: string) => number
     targetTraits?: readonly DiscoverTraitKind[]
   }
 ): RankedCandidate[] {
@@ -124,6 +135,8 @@ export function rankCandidates(
       const bpmDistance = Math.abs(candidate.riffBpm - targetBpm)
       let score = Math.max(0, 1 - bpmDistance / BPM_FALLOFF)
       if (favouriteStemCIDs?.has(candidate.stemCID)) score += FAVOURITE_BOOST
+      else if (favouriteWeight)
+        score += FAVOURITE_BOOST * clampWeight(favouriteWeight(candidate.stemCID))
       for (const kind of targetTraits) {
         // Library percentile (Phase 1 of the 2026-09-22 promise-vs-delivery
         // spec) when main attached one -- already direction-adjusted, and
