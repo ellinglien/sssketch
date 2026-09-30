@@ -1,5 +1,6 @@
 // src/renderer/src/audio/BackgroundFeatureScan.tsx
 import { backgroundScanGate } from './backgroundScanGate'
+import { backgroundWorkRegistry } from './backgroundWorkRegistry'
 import { useEffect, useRef } from 'react'
 import { usePlacedFlatStems } from '../state/usePlacedFlatStems'
 import { needsAnyAnalysis, type StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
@@ -52,6 +53,16 @@ export function BackgroundFeatureScan(): null {
     // re-decode each of them every session.
     let work: { path: string; needs: StemAnalysisNeeds }[] = []
 
+    // Shown by BackgroundWorkIndicator.tsx; null once the pass is done.
+    // Pausable for the same reason as DiscoverLibraryScan: it yields to
+    // backgroundScanGate.
+    function reportLeft(left: number): void {
+      backgroundWorkRegistry.report(
+        'placedAnalysis',
+        left > 0 ? { kind: 'placedAnalysis', left, pausable: true } : null
+      )
+    }
+
     // Real regression, found live 2026-09-18 -- see DiscoverLibraryScan.tsx's
     // own matching fix for the root-cause writeup. The batch is awaited before the next one is
     // scheduled, capping real concurrency at BATCH_SIZE and making
@@ -66,13 +77,17 @@ export function BackgroundFeatureScan(): null {
         return
       }
       const batch = work.slice(startIndex, startIndex + BATCH_SIZE)
-      if (batch.length === 0) return
+      if (batch.length === 0) {
+        reportLeft(0)
+        return
+      }
       for (const { path } of batch) attemptedRef.current.add(path)
       void (async () => {
         // analyzeStemOnce never rejects and logs its own failures.
         await Promise.allSettled(batch.map(({ path, needs }) => analyzeStemOnce(path, needs)))
         if (cancelled) return
         const nextIndex = startIndex + BATCH_SIZE
+        reportLeft(work.length - nextIndex)
         if (nextIndex < work.length) {
           window.setTimeout(() => runBatch(nextIndex), BATCH_DELAY_MS)
         }
@@ -91,6 +106,7 @@ export function BackgroundFeatureScan(): null {
           // Nothing missing -- done, no decode and no further IPC.
           else attemptedRef.current.add(path)
         })
+        reportLeft(work.length)
         runBatch(0)
       })
       .catch((err: unknown) => {
@@ -100,6 +116,7 @@ export function BackgroundFeatureScan(): null {
 
     return () => {
       cancelled = true
+      reportLeft(0)
     }
   }, [flatStems])
 

@@ -995,7 +995,7 @@ export function TransportBar({
                     onClick: () => {},
                     disabled: true,
                     title: backgroundScanGate.isHeld()
-                      ? 'paused while radio is playing -- resumes where it left off'
+                      ? 'paused -- resumes where it left off'
                       : 'classified so far'
                   }
                 ]

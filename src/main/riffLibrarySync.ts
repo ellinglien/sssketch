@@ -73,6 +73,23 @@ const SYNC_SHARED_FEED_PAGE_SIZE = 100
 // start a second one") is unchanged, just backed by a Map now.
 const syncsInFlight = new Map<string, AbortController>()
 
+// Told the running-sync count whenever a sync starts or finishes -- index.ts
+// forwards it so BackgroundWorkIndicator.tsx can say "syncing library" from
+// anywhere, not only while LibraryBrowser.tsx (which started it) is open.
+let syncsInFlightListener: ((count: number) => void) | null = null
+
+export function setSyncsInFlightListener(fn: ((count: number) => void) | null): void {
+  syncsInFlightListener = fn
+}
+
+export function activeSyncCount(): number {
+  return syncsInFlight.size
+}
+
+function noteSyncsInFlightChanged(): void {
+  syncsInFlightListener?.(syncsInFlight.size)
+}
+
 /** Requests that whichever sync is currently running for `key` stop as soon
  * as possible -- does NOT mark the jam as fully synced (see syncSharedFeed/
  * syncJam's own page-loop abort checks, which skip markJamSyncComplete on
@@ -141,6 +158,7 @@ export async function syncSharedFeed(
   if (syncsInFlight.has(key)) return
   const controller = new AbortController()
   syncsInFlight.set(key, controller)
+  noteSyncsInFlightChanged()
   try {
     upsertJam(db, key, 'Shared Feed')
     let offset = 0
@@ -213,6 +231,7 @@ export async function syncSharedFeed(
     }
   } finally {
     syncsInFlight.delete(key)
+    noteSyncsInFlightChanged()
   }
 }
 
@@ -236,6 +255,7 @@ export async function syncJam(
   if (syncsInFlight.has(jamId)) return
   const controller = new AbortController()
   syncsInFlight.set(jamId, controller)
+  noteSyncsInFlightChanged()
   try {
     upsertJam(db, jamId, jamName)
     let offset = 0
@@ -309,5 +329,6 @@ export async function syncJam(
     }
   } finally {
     syncsInFlight.delete(jamId)
+    noteSyncsInFlightChanged()
   }
 }

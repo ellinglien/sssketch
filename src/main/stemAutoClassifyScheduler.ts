@@ -48,6 +48,34 @@ let sleeping = false
 let running = false
 let wokeWhileRunning = false
 
+/** What the background-work indicator shows for this scheduler: active
+ * while the last batch reported a backlog. Only ever SET from what a batch
+ * already returned -- reporting it never changes when a batch runs. */
+export interface AutoClassifyStatus {
+  active: boolean
+  remaining: number
+}
+
+let status: AutoClassifyStatus = { active: false, remaining: 0 }
+let statusListener: ((status: AutoClassifyStatus) => void) | null = null
+
+function setStatus(next: AutoClassifyStatus): void {
+  if (next.active === status.active && next.remaining === status.remaining) return
+  status = next
+  statusListener?.(status)
+}
+
+export function getAutoClassifyStatus(): AutoClassifyStatus {
+  return status
+}
+
+/** One listener (index.ts forwards it to the renderer). */
+export function setAutoClassifyStatusListener(
+  fn: ((status: AutoClassifyStatus) => void) | null
+): void {
+  statusListener = fn
+}
+
 function scheduleNext(delayMs: number, asSleep = false): void {
   if (timer !== null) clearTimeout(timer)
   sleeping = asSleep
@@ -75,6 +103,7 @@ async function runOnce(): Promise<void> {
   // DiscoverLibraryScan.tsx's own top-level-mount fix already established
   // earlier this session for the sibling renderer-side scan.
   if (!loadDiscoverSettings().consentedToLibraryScan) {
+    setStatus({ active: false, remaining: 0 })
     scheduleNext(IDLE_DELAY_MS)
     return
   }
@@ -90,10 +119,12 @@ async function runOnce(): Promise<void> {
       openOwnRiffLibraryDb(),
       candidateDbsForRiff()
     )
+    setStatus({ active: remaining > 0, remaining })
     if (remaining > 0 || wokeWhileRunning) scheduleNext(BUSY_DELAY_MS)
     else scheduleNext(SAFETY_INTERVAL_MS, true)
   } catch (err) {
     console.error('stemAutoClassifyScheduler: batch failed:', err)
+    setStatus({ active: false, remaining: 0 })
     scheduleNext(IDLE_DELAY_MS)
   } finally {
     running = false

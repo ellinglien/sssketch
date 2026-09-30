@@ -131,7 +131,9 @@ import {
   syncSharedFeed as syncSharedFeedToWarehouse,
   syncJam as syncJamToWarehouse,
   abortSync as abortWarehouseSync,
-  removeJamSync as removeWarehouseJamSync
+  removeJamSync as removeWarehouseJamSync,
+  activeSyncCount as activeWarehouseSyncCount,
+  setSyncsInFlightListener as setWarehouseSyncsInFlightListener
 } from './riffLibrarySync'
 import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
 import {
@@ -166,7 +168,12 @@ import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import { backfillStemCategoriesFromProjectLibrary } from './stemCategoriesBackfill'
 import { backfillInstrumentMaskCategories } from './instrumentMaskCentroidBackfill'
-import { startStemAutoClassifyScheduler } from './stemAutoClassifyScheduler'
+import {
+  startStemAutoClassifyScheduler,
+  getAutoClassifyStatus,
+  setAutoClassifyStatusListener,
+  type AutoClassifyStatus
+} from './stemAutoClassifyScheduler'
 import { migrateProjectLibraryLocation } from './projectLibraryMigration'
 import { migrateRiffLibraryLocation } from './riffLibraryMigration'
 import {
@@ -1324,6 +1331,19 @@ app.whenReady().then(async () => {
   )
   onStemAvailabilityNotice((availability) => {
     mainWindow?.webContents.send('stem-availability-notice', availability)
+  })
+
+  // Background-work indicator (BackgroundWorkIndicator.tsx): the two
+  // main-process processes that had no app-wide "is it running" signal.
+  // Same query-on-mount-plus-push pattern as the warmup status above.
+  // Reporting only -- neither changes when its process does anything.
+  ipcMain.handle('get-auto-classify-status', (): AutoClassifyStatus => getAutoClassifyStatus())
+  setAutoClassifyStatusListener((status) => {
+    mainWindow?.webContents.send('auto-classify-status', status)
+  })
+  ipcMain.handle('get-riff-library-sync-active', (): number => activeWarehouseSyncCount())
+  setWarehouseSyncsInFlightListener((count) => {
+    mainWindow?.webContents.send('riff-library-sync-active', count)
   })
 
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())

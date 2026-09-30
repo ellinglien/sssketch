@@ -77,7 +77,8 @@ interface JamDbPair {
 
 /** One progress update from prewarmDiscoverCandidateCaches's own two-phase,
  * per-db scan (below) -- pushed to the renderer (main/index.ts) so
- * LibraryWarmupIndicator.tsx can show real numbers instead of a static
+ * StartupGate.tsx and BackgroundWorkIndicator.tsx (which replaced
+ * LibraryWarmupIndicator.tsx) can show real numbers instead of a static
  * "indexing library…" message. `phase` names which table this update is
  * for; `dbIndex`/`dbCount` are 0-indexed/total for the OUTER per-db loop
  * (almost always 1 or 2 in practice -- the own warehouse, plus an external

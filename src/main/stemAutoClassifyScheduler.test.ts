@@ -195,3 +195,53 @@ describe('startStemAutoClassifyScheduler', () => {
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
   })
 })
+
+describe('auto-classify status', () => {
+  // Read by BackgroundWorkIndicator.tsx (via index.ts's
+  // auto-classify-status push) -- the scheduler only reports what each
+  // batch already told it; nothing here changes when a batch runs.
+  it('is inactive before any batch has run', async () => {
+    const { getAutoClassifyStatus } = await import('./stemAutoClassifyScheduler')
+    expect(getAutoClassifyStatus()).toEqual({ active: false, remaining: 0 })
+  })
+
+  it('is active with the backlog while work remains, and inactive once caught up', async () => {
+    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
+    classifyAutoCategoryBatch.mockResolvedValueOnce({ processed: 5, remaining: 10 })
+    classifyAutoCategoryBatch.mockResolvedValueOnce({ processed: 10, remaining: 0 })
+    const { startStemAutoClassifyScheduler, getAutoClassifyStatus, setAutoClassifyStatusListener } =
+      await import('./stemAutoClassifyScheduler')
+    const listener = vi.fn()
+    setAutoClassifyStatusListener(listener)
+    startStemAutoClassifyScheduler()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getAutoClassifyStatus()).toEqual({ active: true, remaining: 10 })
+    expect(listener).toHaveBeenLastCalledWith({ active: true, remaining: 10 })
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getAutoClassifyStatus()).toEqual({ active: false, remaining: 0 })
+    expect(listener).toHaveBeenLastCalledWith({ active: false, remaining: 0 })
+  })
+
+  it('goes inactive when consent is withdrawn or a batch throws', async () => {
+    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
+    classifyAutoCategoryBatch.mockResolvedValueOnce({ processed: 1, remaining: 5 })
+    classifyAutoCategoryBatch.mockRejectedValueOnce(new Error('boom'))
+    const { startStemAutoClassifyScheduler, getAutoClassifyStatus } =
+      await import('./stemAutoClassifyScheduler')
+    startStemAutoClassifyScheduler()
+
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getAutoClassifyStatus().active).toBe(true)
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getAutoClassifyStatus().active).toBe(false)
+
+    classifyAutoCategoryBatch.mockResolvedValueOnce({ processed: 1, remaining: 5 })
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(getAutoClassifyStatus().active).toBe(true)
+    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: false })
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(getAutoClassifyStatus().active).toBe(false)
+  })
+})

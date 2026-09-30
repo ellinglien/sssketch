@@ -16,6 +16,9 @@ import { LoadingLoader } from './LoadingLoader'
  * both a query AND a push exist) -- covers both "the engine already
  * finished starting before this component mounted" and "it hasn't yet."
  *
+ * (LibraryWarmupIndicator has since been folded into BackgroundWorkIndicator,
+ * bottom-right; this position is left as it was.)
+ *
  * Positioned below LibraryWarmupIndicator (top: 40 vs its top: 10) rather
  * than at the same top: 10 -- both pills are plausibly visible at once
  * right after a cold launch (engine still starting AND library still

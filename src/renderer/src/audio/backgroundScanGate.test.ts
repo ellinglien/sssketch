@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createBackgroundScanGate } from './backgroundScanGate'
 
 describe('createBackgroundScanGate', () => {
@@ -48,5 +48,24 @@ describe('createBackgroundScanGate', () => {
     expect(gate.isHeld()).toBe(true)
     second()
     expect(gate.isHeld()).toBe(false)
+  })
+  it('tells subscribers when the held state changes, and only then', () => {
+    // BackgroundWorkIndicator re-renders its "paused" line off this.
+    const gate = createBackgroundScanGate({ quietMs: 0, now: () => 0 })
+    const listener = vi.fn()
+    const unsubscribe = gate.subscribe(listener)
+    const releaseA = gate.hold()
+    expect(listener).toHaveBeenCalledTimes(1)
+    const releaseB = gate.hold()
+    expect(listener).toHaveBeenCalledTimes(1)
+    releaseA()
+    expect(listener).toHaveBeenCalledTimes(1)
+    releaseB()
+    expect(listener).toHaveBeenCalledTimes(2)
+    releaseB()
+    expect(listener).toHaveBeenCalledTimes(2)
+    unsubscribe()
+    gate.hold()
+    expect(listener).toHaveBeenCalledTimes(2)
   })
 })

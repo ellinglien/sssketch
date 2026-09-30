@@ -21,6 +21,9 @@ export interface BackgroundScanGate {
    * transport menu so a deliberately-paused scan says so instead of
    * looking stalled. */
   isHeld: () => boolean
+  /** Called whenever isHeld() flips (not on every hold/release) -- lets
+   * BackgroundWorkIndicator show "paused" without polling. */
+  subscribe: (listener: () => void) => () => void
   mayRun: (at: number) => boolean
 }
 
@@ -35,21 +38,33 @@ export function createBackgroundScanGate({
   // "just interacted" -- a startup grace before the first batch.
   let lastInteractionAt = now()
   let holds = 0
+  const listeners = new Set<() => void>()
+  const notify = (): void => {
+    for (const listener of listeners) listener()
+  }
   return {
     noteInteraction(at) {
       lastInteractionAt = at
     },
     hold() {
       holds += 1
+      if (holds === 1) notify()
       let released = false
       return () => {
         if (released) return
         released = true
         holds -= 1
+        if (holds === 0) notify()
       }
     },
     isHeld() {
       return holds > 0
+    },
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => {
+        listeners.delete(listener)
+      }
     },
     mayRun(at) {
       return holds === 0 && at - lastInteractionAt >= quietMs

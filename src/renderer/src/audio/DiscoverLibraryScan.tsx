@@ -1,5 +1,6 @@
 // src/renderer/src/audio/DiscoverLibraryScan.tsx
 import { backgroundScanGate } from './backgroundScanGate'
+import { backgroundWorkRegistry } from './backgroundWorkRegistry'
 import { countWork } from '../perf/workCounters'
 import { useEffect, useRef, useState } from 'react'
 import { needsAnyAnalysis, type StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
@@ -42,10 +43,9 @@ const NEEDS_PAGE_SIZE = 500
  * BackgroundFeatureScan.tsx already established for placed stems, over
  * this much larger target list.
  *
- * Its progress readout below is rendered fixed-position (rather than
- * inline in some particular screen's layout) precisely because this now
- * mounts independent of any screen being open -- see the style comment
- * on the returned <p> below.
+ * It renders nothing: its progress is reported to backgroundWorkRegistry
+ * and shown by the app-wide BackgroundWorkIndicator (see the reporting
+ * effect at the bottom).
  *
  * HONEST ABOUT SCALE: for a real library the size of Elling's own (52,493
  * total stems, some smaller-but-still-large fraction already downloaded
@@ -72,9 +72,12 @@ const NEEDS_PAGE_SIZE = 500
  * first pass after a version bump is a real re-analysis of every old row
  * (same hours-long throttled scale as the very first pass), not a series
  * of cache hits. Old rows stay usable by Discover until replaced. */
-export function DiscoverLibraryScan(): React.JSX.Element | null {
+export function DiscoverLibraryScan(): null {
   const [total, setTotal] = useState<number | null>(null)
   const [completed, setCompleted] = useState(0)
+  // Set when a needs page fails to load, which ends this session's pass --
+  // so the indicator stops saying "analysing" for a loop that has stopped.
+  const [stopped, setStopped] = useState(false)
   const attemptedRef = useRef(new Set<string>())
 
   useEffect(() => {
@@ -151,6 +154,7 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
                 // Stops this session's pass (nothing is lost -- the next
                 // mount starts over from main's persisted state).
                 console.error('DiscoverLibraryScan: failed to load analysis needs:', err)
+                if (!cancelled) setStopped(true)
               })
             return
           }
@@ -191,58 +195,25 @@ export function DiscoverLibraryScan(): React.JSX.Element | null {
     }
   }, [])
 
-  if (total === null) return null
+  // Progress goes to the one app-wide background-work indicator
+  // (BackgroundWorkIndicator.tsx) rather than a readout of its own: this
+  // component used to draw a thin progress line in the bottom-right
+  // corner, which sat under the Library Browser's opaque full-screen layer
+  // -- invisible in exactly the screen (Discover) where this scan's cost
+  // was felt. Pausable: it yields to backgroundScanGate, whose hold is what
+  // the indicator's pause control takes.
+  useEffect(() => {
+    if (total === null || stopped || completed >= total) {
+      backgroundWorkRegistry.report('stemAnalysis', null)
+      return
+    }
+    backgroundWorkRegistry.report('stemAnalysis', {
+      kind: 'stemAnalysis',
+      left: total - completed,
+      pausable: true
+    })
+  }, [total, completed, stopped])
+  useEffect(() => () => backgroundWorkRegistry.report('stemAnalysis', null), [])
 
-  // total === 0 (a library with nothing locally cached yet) would otherwise
-  // divide by zero -- reads as "done" rather than NaN%, which is the
-  // correct display for "nothing to scan" anyway.
-  const fraction = total > 0 ? Math.min(1, completed / total) : 1
-
-  return (
-    // Fixed position -- this component now mounts once at the app's own
-    // top level (App.tsx's Frame()), independent of whether the Discover
-    // tab happens to be open, so it can no longer rely on some ancestor
-    // screen's own layout/scroll container to place it sensibly.
-    //
-    // Direct feedback: the original readout (a small boxed text+bar, bottom
-    // LEFT) was easy to miss entirely -- Elling could see the scan working
-    // in Activity Monitor with no visible confirmation in the app itself.
-    // Asked for "somewhere subtle, maybe a line on the bottom right." This
-    // is now just the line -- no box, no background, no persistent text --
-    // bottom RIGHT, with the "X / Y this session" detail on hover (title)
-    // rather than always on screen, still clear of the transport bar/
-    // titlebar chrome and every modal's own z-index (every modal/menu in
-    // this app sits at 20-1000; this stays well under that).
-    <div
-      title={`analyzing ${completed} / ${total}`}
-      role="progressbar"
-      aria-valuenow={Math.round(fraction * 100)}
-      aria-valuemin={0}
-      aria-valuemax={100}
-      style={{
-        position: 'fixed',
-        right: 8,
-        bottom: 8,
-        zIndex: 10,
-        width: 120,
-        height: 3,
-        background: 'var(--ra-border)',
-        overflow: 'hidden'
-      }}
-    >
-      {/* Sharp corners, no border-radius, matching this app's own design
-          system throughout -- bright fill on a dim track is the same
-          "brightness = live/active" convention buttonStyle's own 'confirmed'
-          state already uses elsewhere (ClusterStemsBrowser.tsx), reused here
-          since a moving fill is itself a live-activity signal. */}
-      <div
-        style={{
-          height: '100%',
-          width: `${fraction * 100}%`,
-          background: 'var(--ra-stretch-on)',
-          pointerEvents: 'none'
-        }}
-      />
-    </div>
-  )
+  return null
 }

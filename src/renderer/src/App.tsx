@@ -81,7 +81,7 @@ import { warmStemCaches } from './audio/warmStemCaches'
 import { BackgroundFeatureScan } from './audio/BackgroundFeatureScan'
 import { installBackgroundScanInteractionListeners } from './audio/backgroundScanGate'
 import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
-import { LibraryWarmupIndicator } from './components/LibraryWarmupIndicator'
+import { BackgroundWorkIndicator } from './components/BackgroundWorkIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { StemsUnavailableIndicator } from './components/StemsUnavailableIndicator'
 import { StartupGate } from './components/StartupGate'
@@ -2562,7 +2562,11 @@ function Frame(): React.JSX.Element {
       <StartupGate />
       <SketchModeAutoFollow />
       <BackgroundFeatureScan />
-      <LibraryWarmupIndicator />
+      {/* The one app-wide "what is running in the background" line --
+       * analysis scans, library index, auto-classify, plugin scan, sync
+       * (see its own doc comment). Replaces LibraryWarmupIndicator and
+       * DiscoverLibraryScan's own progress line. */}
+      <BackgroundWorkIndicator />
       <EngineStartupIndicator />
       <StemsUnavailableIndicator />
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,

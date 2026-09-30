@@ -279,3 +279,29 @@ describe('syncJam', () => {
     expect(jam.PublicName).toBe('Test Jam')
   })
 })
+
+describe('syncs in flight', () => {
+  // Read by BackgroundWorkIndicator.tsx (via index.ts's
+  // riff-library-sync-active push), so "syncing library" shows while any
+  // sync runs -- including one started while the Library Browser is closed.
+  it('reports how many syncs are running as each one starts and finishes', async () => {
+    const { syncSharedFeed, activeSyncCount, setSyncsInFlightListener } =
+      await import('./riffLibrarySync')
+    const db = freshDb()
+    const fetchImpl = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ data: sharedFeedPage([], false).data }), { status: 200 })
+    )
+    const counts: number[] = []
+    setSyncsInFlightListener((count) => counts.push(count))
+    try {
+      const running = syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+      expect(activeSyncCount()).toBe(1)
+      await running
+      expect(activeSyncCount()).toBe(0)
+      expect(counts).toEqual([1, 0])
+    } finally {
+      setSyncsInFlightListener(null)
+    }
+  })
+})

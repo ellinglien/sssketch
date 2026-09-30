@@ -16,6 +16,7 @@ import type { DiscoverCandidate } from '../main/discoverCandidates'
 import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
+import type { AutoClassifyStatus } from '../main/stemAutoClassifyScheduler'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
 import type { TidyUpLibraryStem } from '../main/tidyUpLibraryStems'
 import type { DiscoverLoopSeedResult } from '../main/importOneShot'
@@ -378,6 +379,23 @@ const api = {
     const listener = (_event: unknown, progress: PrewarmScanProgress): void => callback(progress)
     ipcRenderer.on('library-warmup-progress', listener)
     return () => ipcRenderer.removeListener('library-warmup-progress', listener)
+  },
+  // Background-work indicator: whether the auto-classify scheduler has a
+  // backlog, and how many riff library syncs are running. Query on mount,
+  // then a push on every change.
+  getAutoClassifyStatus: (): Promise<AutoClassifyStatus> =>
+    ipcRenderer.invoke('get-auto-classify-status'),
+  onAutoClassifyStatus: (callback: (status: AutoClassifyStatus) => void): (() => void) => {
+    const listener = (_event: unknown, status: AutoClassifyStatus): void => callback(status)
+    ipcRenderer.on('auto-classify-status', listener)
+    return () => ipcRenderer.removeListener('auto-classify-status', listener)
+  },
+  getRiffLibrarySyncActive: (): Promise<number> =>
+    ipcRenderer.invoke('get-riff-library-sync-active'),
+  onRiffLibrarySyncActive: (callback: (count: number) => void): (() => void) => {
+    const listener = (_event: unknown, count: number): void => callback(count)
+    ipcRenderer.on('riff-library-sync-active', listener)
+    return () => ipcRenderer.removeListener('riff-library-sync-active', listener)
   },
   getStemAvailabilityReport: (): Promise<StemAvailabilityNotice> =>
     ipcRenderer.invoke('get-stem-availability-report'),
