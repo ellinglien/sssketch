@@ -21,6 +21,7 @@ import {
   shouldAttemptStemDownload
 } from './stemAvailability'
 import { countWork } from './workCounters'
+import { heartNameForRiff } from './radioHeartImportStore'
 import {
   isScanCacheCurrent,
   newScanCacheState,
@@ -184,6 +185,18 @@ function closeRiffLibraryDb(): void {
 
 export function riffLibraryAvailable(): boolean {
   return getRiffLibraryDb() !== null
+}
+
+/** Whether every riff and stem a lookup might need is actually reachable
+ * right now. Always true on sssketch's own library. On an external LORE
+ * archive, false when its warehouse file is gone -- the drive unmounted,
+ * the folder moved -- which a cached connection alone would not notice.
+ * For "fetch radio hearts" (radioHeartsImport.ts): with the archive away,
+ * every stem that lives there would look like missing audio, and a partial
+ * import would be recorded as done. */
+export function riffLibraryArchiveReachable(): boolean {
+  if (riffLibraryRootPath() === ownRiffLibraryRoot()) return true
+  return existsSync(riffLibraryDbPath()) && getRiffLibraryDb() !== null
 }
 
 /** Stem audio lives in one of two places depending on which warehouse is
@@ -777,8 +790,13 @@ function buildResolvedRiff(
     }
   })
 
+  // Kept riffs only live in the own db, the only one with RadioHeartImport.
+  const heartName =
+    riffRow.OwnerJamCID === DISCOVERED_JAM_CID ? heartNameForRiff(db, riffRow.RiffCID) : null
+
   return {
     riffCID: riffRow.RiffCID,
+    ...(heartName !== null ? { name: heartName } : {}),
     bpm: riffRow.BPMrnd,
     barLength: riffRow.BarLength,
     key: resolveKeyName(riffRow.Root, riffRow.Scale),

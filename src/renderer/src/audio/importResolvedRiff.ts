@@ -75,7 +75,9 @@ export function buildImportedRifff(
       { ...existing, key: resolved.key ?? existing.key, stems: [...existing.stems, ...newStems] }
     : {
         groupId,
-        name: friendlyRiffName(riffCID, sourceLabel),
+        // A radio-hearts riff carries its "♥ n · ..." label (see
+        // RiffLibraryResolvedRiff.name); everything else is named from its id.
+        name: resolved.name ?? friendlyRiffName(riffCID, sourceLabel),
         bpm: resolved.bpm,
         barLength: resolved.barLength,
         key: resolved.key,

@@ -1,20 +1,23 @@
 import { useEffect, useState } from 'react'
+import type { RadioHeartsKeyStatus } from '@shared/radioHearts'
 
 /** Settings menu's "radio hearts key…" entry -- the key Discover's "fetch
  * hearts" sends to ell.ing/radio's private hearts.json. Main keeps it
  * encrypted (radioHeartsKeyStore.ts) and never sends it back here, so this
- * only ever shows WHETHER one is set; typing a new one replaces it.
+ * only ever shows WHETHER one is set -- and says so when it is held for
+ * this session only (no keychain). Typing a new one replaces it.
  *
  * Same modal shell as KeyGesturesModal.tsx / AudioDeviceModal.tsx; the
  * input is EndlesssLoginPanel.tsx's password field. */
 export function RadioHeartsKeyModal({ onClose }: { onClose: () => void }): React.JSX.Element {
-  const [keySet, setKeySet] = useState<boolean | null>(null)
+  const [status, setStatus] = useState<RadioHeartsKeyStatus | null>(null)
+  const keySet = status === 'saved' || status === 'session'
   const [draft, setDraft] = useState('')
 
   useEffect(() => {
     let cancelled = false
-    void window.rifffApi.radioHeartsKeySet().then((set) => {
-      if (!cancelled) setKeySet(set)
+    void window.rifffApi.radioHeartsKeyStatus().then((next) => {
+      if (!cancelled) setStatus(next)
     })
     return () => {
       cancelled = true
@@ -22,7 +25,7 @@ export function RadioHeartsKeyModal({ onClose }: { onClose: () => void }): React
   }, [])
 
   async function save(key: string | null): Promise<void> {
-    setKeySet(await window.rifffApi.setRadioHeartsKey(key))
+    setStatus(await window.rifffApi.setRadioHeartsKey(key))
     setDraft('')
   }
 
@@ -63,7 +66,13 @@ export function RadioHeartsKeyModal({ onClose }: { onClose: () => void }): React
       >
         <p style={{ margin: 0, fontSize: 11, color: 'var(--ra-text)' }}>radio hearts key</p>
         <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>
-          {keySet === null ? '…' : keySet ? 'a key is set' : 'no key set'}
+          {status === null
+            ? '…'
+            : status === 'saved'
+              ? 'a key is set'
+              : status === 'session'
+                ? 'a key is set (this session only)'
+                : 'no key set'}
         </span>
         <input
           type="password"

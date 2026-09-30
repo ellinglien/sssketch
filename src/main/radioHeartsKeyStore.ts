@@ -2,6 +2,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, safeStorage } from 'electron'
+import type { RadioHeartsKeyStatus } from '@shared/radioHearts'
 
 /** The ell.ing/radio hearts.json key, for "fetch radio hearts"
  * (radioHeartsImport.ts). A secret, so it is kept the way endlesssApi.ts
@@ -11,7 +12,8 @@ import { app, safeStorage } from 'electron'
  * session only -- asking again next launch is the safer failure.
  *
  * The key never goes back to the renderer: the settings modal only learns
- * WHETHER one is set (hasRadioHeartsKey). */
+ * WHETHER one is set, and whether only for this session
+ * (radioHeartsKeyStatus). */
 const KEY_FILENAME = 'radio-hearts-key.enc'
 
 function keyFilePath(): string {
@@ -19,6 +21,9 @@ function keyFilePath(): string {
 }
 
 let sessionKey: string | null = null
+/** Whether sessionKey is also on disk, encrypted -- false means it is gone
+ * at the next launch, and the settings modal says so. */
+let persisted = false
 let loaded = false
 
 export function loadRadioHeartsKey(): string | null {
@@ -28,6 +33,7 @@ export function loadRadioHeartsKey(): string | null {
   try {
     const key = safeStorage.decryptString(readFileSync(keyFilePath())).trim()
     sessionKey = key === '' ? null : key
+    persisted = sessionKey !== null
   } catch (err) {
     console.error('radioHeartsKeyStore: failed to read the key:', err)
   }
@@ -38,6 +44,7 @@ export function loadRadioHeartsKey(): string | null {
 export function saveRadioHeartsKey(key: string | null): void {
   const trimmed = key?.trim() ?? ''
   sessionKey = trimmed === '' ? null : trimmed
+  persisted = false
   loaded = true
   try {
     if (sessionKey === null) {
@@ -47,6 +54,7 @@ export function saveRadioHeartsKey(key: string | null): void {
     if (!safeStorage.isEncryptionAvailable()) return
     mkdirSync(app.getPath('userData'), { recursive: true })
     writeFileSync(keyFilePath(), safeStorage.encryptString(sessionKey))
+    persisted = true
   } catch (err) {
     console.error('radioHeartsKeyStore: failed to write the key:', err)
   }
@@ -56,8 +64,16 @@ export function hasRadioHeartsKey(): boolean {
   return loadRadioHeartsKey() !== null
 }
 
+/** 'saved' (encrypted on disk), 'session' (memory only, gone next launch)
+ * or 'none'. */
+export function radioHeartsKeyStatus(): RadioHeartsKeyStatus {
+  if (loadRadioHeartsKey() === null) return 'none'
+  return persisted ? 'saved' : 'session'
+}
+
 /** Test-only: forget the in-memory copy so the next load reads disk. */
 export function resetRadioHeartsKeyForTests(): void {
   sessionKey = null
+  persisted = false
   loaded = false
 }

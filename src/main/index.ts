@@ -72,7 +72,8 @@ import {
   resolveRiffWithContext,
   downloadMissingStems,
   candidateDbsForRiff,
-  listJamsWithDb
+  listJamsWithDb,
+  riffLibraryArchiveReachable
 } from './riffLibraryStore'
 import {
   getDiscoverCandidates,
@@ -89,7 +90,7 @@ import {
   type SaveDiscoveredResult
 } from './discoveredLibrary'
 import { fetchRadioHearts, resolveHeartStem } from './radioHeartsImport'
-import { hasRadioHeartsKey, loadRadioHeartsKey, saveRadioHeartsKey } from './radioHeartsKeyStore'
+import { loadRadioHeartsKey, radioHeartsKeyStatus, saveRadioHeartsKey } from './radioHeartsKeyStore'
 import {
   lanIPv4Address,
   remoteAddressCandidates,
@@ -780,16 +781,17 @@ app.whenReady().then(async () => {
       key: loadRadioHeartsKey(),
       fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(20_000) }),
       ownDb,
+      archiveReachable: riffLibraryArchiveReachable,
       resolveStem: (stemCID) => resolveHeartStem(stemCID, dbs),
       save: keepDiscovered
     })
   })
 
-  ipcMain.handle('radio-hearts-key-set', () => hasRadioHeartsKey())
+  ipcMain.handle('radio-hearts-key-status', () => radioHeartsKeyStatus())
 
   ipcMain.handle('set-radio-hearts-key', (_event, key: string | null) => {
     saveRadioHeartsKey(key)
-    return hasRadioHeartsKey()
+    return radioHeartsKeyStatus()
   })
 
   ipcMain.handle('forget-discovered-rifff', (_event, riffCID: string) =>

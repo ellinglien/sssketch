@@ -31,6 +31,12 @@ export interface PlannedHeartCombo<M> {
   members: M[]
   /** Stems of this combo with no local audio -- skipped, and logged. */
   missing: string[]
+  /** This combo's stems to star once it has actually SAVED: its stems with
+   * local audio, minus those already starred. Always empty for a combo too
+   * small to keep. Not de-duplicated against other combos -- a combo whose
+   * save fails must not take a shared stem's star with it, and starring is
+   * idempotent anyway (addStemFavourites). */
+  stars: string[]
 }
 
 export interface HeartImportPlan<M> {
@@ -40,9 +46,11 @@ export interface HeartImportPlan<M> {
    * Not saved and NOT recorded as imported, so a later fetch tries again
    * once the audio is here. */
   tooFew: PlannedHeartCombo<M>[]
-  /** Combos a previous fetch already brought home. */
-  alreadyImported: number
-  /** Stems to star, each once, none already starred. */
+  /** Combos a previous fetch already brought home -- not kept again, but
+   * their heart count may have moved, so the caller refreshes the label. */
+  alreadyImported: RadioHeartCombo[]
+  /** Every combo-to-keep's stars, each once: the most a fetch could star
+   * if every save succeeds. The caller stars per combo, after its save. */
   favouritesToAdd: string[]
   /** Every stem id without local audio, each once. */
   missingStems: string[]
@@ -53,11 +61,13 @@ const MIN_STEMS = 2
 
 /** Plans one fetch.
  *
- * Favourites come only from combos not yet imported. A stem he has
- * un-starred since the last fetch stays un-starred unless the crowd hearts
- * it in a NEW combination -- a fetch should never quietly undo his own
- * choice. And only stems with local audio are starred, the same rule as
- * saving: a hearted stem that is not on this machine is logged, not kept.
+ * Stars come only from combos being kept now. A stem he has un-starred
+ * since the last fetch stays un-starred unless the crowd hearts it in a NEW
+ * combination that gets kept -- a fetch should never quietly undo his own
+ * choice. A combo too small to keep stars nothing: it is not recorded, so
+ * it comes round again, and starring its lone stem each time would undo an
+ * un-star just as surely. Only stems with local audio are starred, the
+ * same rule as saving.
  *
  * `resolve` is called at most once per stem id. */
 export function planHeartImport<M>(
@@ -75,7 +85,7 @@ export function planHeartImport<M>(
   const plan: HeartImportPlan<M> = {
     combosToKeep: [],
     tooFew: [],
-    alreadyImported: 0,
+    alreadyImported: [],
     favouritesToAdd: [],
     missingStems: []
   }
@@ -87,11 +97,12 @@ export function planHeartImport<M>(
     if (seen.has(heart.combo)) continue
     seen.add(heart.combo)
     if (alreadyImported.has(heart.combo)) {
-      plan.alreadyImported += 1
+      plan.alreadyImported.push(heart)
       continue
     }
     const members: M[] = []
     const missing: string[] = []
+    const stars: string[] = []
     for (const stemCID of heart.stems) {
       const member = resolveOnce(stemCID)
       if (member === null) {
@@ -100,11 +111,14 @@ export function planHeartImport<M>(
         continue
       }
       members.push(member)
-      if (!favourites.has(stemCID)) toStar.add(stemCID)
+      if (!favourites.has(stemCID)) stars.push(stemCID)
     }
-    const planned = { heart, members, missing }
-    if (members.length >= MIN_STEMS) plan.combosToKeep.push(planned)
-    else plan.tooFew.push(planned)
+    if (members.length >= MIN_STEMS) {
+      plan.combosToKeep.push({ heart, members, missing, stars })
+      for (const stemCID of stars) toStar.add(stemCID)
+    } else {
+      plan.tooFew.push({ heart, members, missing, stars: [] })
+    }
   }
 
   plan.favouritesToAdd = [...toStar]
@@ -156,7 +170,16 @@ export function heartRiffName(count: number, friendly: string): string {
   return `♥ ${count} · ${friendly.replace(/ \w{8} \w+$/, '')}`
 }
 
-export type RadioHeartsFailure = 'no key' | 'key refused' | 'unreachable' | 'bad response'
+export type RadioHeartsFailure =
+  | 'no key'
+  | 'key refused'
+  | 'unreachable'
+  | 'bad response'
+  /** The configured LORE archive is away (drive unmounted, file gone):
+   * nothing is imported rather than a half-import recorded as done. */
+  | 'archive not mounted'
+  /** Anything unexpected -- the last-resort catch. */
+  | 'import failed'
 
 export type RadioHeartsResult =
   | {
@@ -176,18 +199,19 @@ export type RadioHeartsResult =
     }
   | { ok: false; reason: RadioHeartsFailure }
 
+/** What the settings modal is told about the key -- never the key. */
+export type RadioHeartsKeyStatus = 'none' | 'saved' | 'session'
+
 /** What the button says for a moment afterwards. */
 export function heartFetchLabel(result: RadioHeartsResult): string {
   if (!result.ok) {
     switch (result.reason) {
       case 'no key':
-        return 'no key -- see settings'
-      case 'key refused':
-        return 'key refused'
+        return 'no key · see settings'
       case 'unreachable':
         return 'radio unreachable'
-      case 'bad response':
-        return 'bad response'
+      default:
+        return result.reason
     }
   }
   const parts: string[] = []

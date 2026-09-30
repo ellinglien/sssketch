@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DiscoveredMemberInput } from './discoveredLibrary'
 import type { FetchLike } from './radioHeartsImport'
-import { RADIO_HEARTS_URL, type RadioHeartCombo } from '@shared/radioHearts'
+import { RADIO_HEARTS_URL, heartRiffName, type RadioHeartCombo } from '@shared/radioHearts'
+import { friendlyRiffName } from '@shared/friendlyRiffName'
 
 let userDataDir: string
 
@@ -106,6 +107,7 @@ describe('fetchRadioHearts', () => {
       key: 'sekrit',
       fetch,
       ownDb: freshOwnDb(),
+      archiveReachable: () => true,
       resolveStem: member,
       save: fakeSave().save
     })
@@ -121,6 +123,7 @@ describe('fetchRadioHearts', () => {
       key: null,
       fetch,
       ownDb: freshOwnDb(),
+      archiveReachable: () => true,
       resolveStem: member,
       save: fakeSave().save
     })
@@ -135,6 +138,7 @@ describe('fetchRadioHearts', () => {
       key: 'wrong',
       fetch: fakeFetch([heart(['a', 'b'])], 401),
       ownDb: db,
+      archiveReachable: () => true,
       resolveStem: member,
       save: fakeSave().save
     })
@@ -150,6 +154,7 @@ describe('fetchRadioHearts', () => {
         throw new Error('ENOTFOUND')
       },
       ownDb: freshOwnDb(),
+      archiveReachable: () => true,
       resolveStem: member,
       save: fakeSave().save,
       log: () => {}
@@ -165,13 +170,18 @@ describe('fetchRadioHearts', () => {
       key: 'k',
       fetch: fakeFetch([{ ...heart(['a', 'b'], 3), bpm: 96, loopBars: 8 }]),
       ownDb: db,
+      archiveReachable: () => true,
       resolveStem: member,
       save
     })
     expect(saved).toEqual([{ stems: ['a', 'b'], bpm: 96, bars: 8 }])
     expect(result).toMatchObject({ ok: true, kept: 1, favourited: 2 })
     expect(db.prepare(`SELECT Combo, RiffCID, Name FROM RadioHeartImport`).all()).toEqual([
-      { Combo: 'a,b', RiffCID: 'discovered-10000000', Name: '♥ 3 · misty kestrel' }
+      {
+        Combo: 'a,b',
+        RiffCID: 'discovered-10000000',
+        Name: heartRiffName(3, friendlyRiffName('discovered-10000000'))
+      }
     ])
   })
 
@@ -179,7 +189,7 @@ describe('fetchRadioHearts', () => {
     const { fetchRadioHearts } = await import('./radioHeartsImport')
     const db = freshOwnDb()
     const { save, saved } = fakeSave()
-    const deps = { key: 'k', ownDb: db, resolveStem: member, save }
+    const deps = { key: 'k', ownDb: db, archiveReachable: () => true, resolveStem: member, save }
 
     await fetchRadioHearts({ ...deps, fetch: fakeFetch([heart(['a', 'b'])]) })
     const second = await fetchRadioHearts({
@@ -207,7 +217,13 @@ describe('fetchRadioHearts', () => {
     const { fetchRadioHearts } = await import('./radioHeartsImport')
     const { toggleStemFavourite } = await import('./stemFavouriteStore')
     const db = freshOwnDb()
-    const deps = { key: 'k', ownDb: db, resolveStem: member, save: fakeSave().save }
+    const deps = {
+      key: 'k',
+      ownDb: db,
+      archiveReachable: () => true,
+      resolveStem: member,
+      save: fakeSave().save
+    }
     await fetchRadioHearts({ ...deps, fetch: fakeFetch([heart(['a', 'b'])]) })
     toggleStemFavourite(db, 'a')
     await fetchRadioHearts({ ...deps, fetch: fakeFetch([heart(['a', 'b'])]) })
@@ -221,6 +237,7 @@ describe('fetchRadioHearts', () => {
       key: 'k',
       fetch: fakeFetch([heart(['a', 'b'])]),
       ownDb: db,
+      archiveReachable: () => true,
       resolveStem: member,
       save: () => ({
         riffCID: 'discovered-old',
@@ -243,6 +260,7 @@ describe('fetchRadioHearts', () => {
       key: 'k',
       fetch: fakeFetch([heart(['a', 'gone'])]),
       ownDb: db,
+      archiveReachable: () => true,
       resolveStem: (id) => (id === 'gone' ? null : member(id)),
       save,
       log: (line) => lines.push(line)
@@ -261,6 +279,7 @@ describe('fetchRadioHearts', () => {
       key: 'k',
       fetch: fakeFetch([heart(['a', 'b']), heart(['c', 'd'])]),
       ownDb: db,
+      archiveReachable: () => true,
       resolveStem: member,
       save: (m, bpm, bars) => {
         if (m[0].name === 'a') throw new Error('disk full')
@@ -270,6 +289,169 @@ describe('fetchRadioHearts', () => {
     })
     expect(result).toMatchObject({ ok: true, kept: 1 })
     expect(db.prepare(`SELECT Combo FROM RadioHeartImport`).all()).toEqual([{ Combo: 'c,d' }])
+  })
+
+  it('refreshes the heart count of a combo already fetched, without keeping it again', async () => {
+    const { fetchRadioHearts } = await import('./radioHeartsImport')
+    const db = freshOwnDb()
+    const { save, saved } = fakeSave()
+    const deps = { key: 'k', ownDb: db, archiveReachable: () => true, resolveStem: member, save }
+    await fetchRadioHearts({ ...deps, fetch: fakeFetch([heart(['a', 'b'], 2)]) })
+    const again = await fetchRadioHearts({ ...deps, fetch: fakeFetch([heart(['a', 'b'], 7)]) })
+    expect(saved).toHaveLength(1)
+    expect(again).toMatchObject({ ok: true, kept: 0, skipped: 1 })
+    expect(db.prepare(`SELECT Name FROM RadioHeartImport`).get()).toEqual({
+      Name: heartRiffName(7, friendlyRiffName('discovered-10000000'))
+    })
+  })
+
+  it('rolls a combo back whole when starring fails partway -- no record, no stars', async () => {
+    const { fetchRadioHearts } = await import('./radioHeartsImport')
+    const db = freshOwnDb()
+    // 'a' goes in, then 'b' blows up: the transaction must take 'a' AND
+    // the combo's record back out with it.
+    db.exec(`CREATE TRIGGER boom BEFORE INSERT ON StemFavourite WHEN NEW.StemCID = 'b'
+             BEGIN SELECT RAISE(ABORT, 'boom'); END`)
+    const lines: string[] = []
+    const result = await fetchRadioHearts({
+      key: 'k',
+      fetch: fakeFetch([heart(['a', 'b']), heart(['c', 'd'])]),
+      ownDb: db,
+      archiveReachable: () => true,
+      resolveStem: member,
+      save: fakeSave().save,
+      log: (line) => lines.push(line)
+    })
+    expect(result).toMatchObject({ ok: true, kept: 1, favourited: 2 })
+    expect(db.prepare(`SELECT Combo FROM RadioHeartImport`).all()).toEqual([{ Combo: 'c,d' }])
+    expect(db.prepare(`SELECT StemCID FROM StemFavourite ORDER BY StemCID`).all()).toEqual([
+      { StemCID: 'c' },
+      { StemCID: 'd' }
+    ])
+    expect(lines.join('\n')).toContain('boom')
+  })
+
+  it('rolls a combo back whole when recording it fails -- its stars never land', async () => {
+    const { fetchRadioHearts } = await import('./radioHeartsImport')
+    const db = freshOwnDb()
+    db.exec(`CREATE TRIGGER boom BEFORE INSERT ON RadioHeartImport WHEN NEW.Combo = 'a,b'
+             BEGIN SELECT RAISE(ABORT, 'boom'); END`)
+    await fetchRadioHearts({
+      key: 'k',
+      fetch: fakeFetch([heart(['a', 'b'])]),
+      ownDb: db,
+      archiveReachable: () => true,
+      resolveStem: member,
+      save: fakeSave().save,
+      log: () => {}
+    })
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM RadioHeartImport`).get()).toEqual({ n: 0 })
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM StemFavourite`).get()).toEqual({ n: 0 })
+  })
+
+  it('does not star the stems of a combo whose save fails', async () => {
+    const { fetchRadioHearts } = await import('./radioHeartsImport')
+    const db = freshOwnDb()
+    await fetchRadioHearts({
+      key: 'k',
+      fetch: fakeFetch([heart(['a', 'b'])]),
+      ownDb: db,
+      archiveReachable: () => true,
+      resolveStem: member,
+      save: () => {
+        throw new Error('disk full')
+      },
+      log: () => {}
+    })
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM StemFavourite`).get()).toEqual({ n: 0 })
+  })
+
+  it('refuses the whole import, before any call, when the archive is not mounted', async () => {
+    const { fetchRadioHearts } = await import('./radioHeartsImport')
+    const db = freshOwnDb()
+    const fetch = fakeFetch([heart(['a', 'b'])])
+    const { save, saved } = fakeSave()
+    const result = await fetchRadioHearts({
+      key: 'k',
+      fetch,
+      ownDb: db,
+      archiveReachable: () => false,
+      resolveStem: member,
+      save
+    })
+    expect(result).toEqual({ ok: false, reason: 'archive not mounted' })
+    expect(fetch.calls).toEqual([])
+    expect(saved).toEqual([])
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM RadioHeartImport`).get()).toEqual({ n: 0 })
+  })
+
+  it('reports a body that is not JSON as a bad response', async () => {
+    const { fetchRadioHearts } = await import('./radioHeartsImport')
+    const result = await fetchRadioHearts({
+      key: 'k',
+      fetch: async () => ({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError('Unexpected token <')
+        }
+      }),
+      ownDb: freshOwnDb(),
+      archiveReachable: () => true,
+      resolveStem: member,
+      save: fakeSave().save
+    })
+    expect(result).toEqual({ ok: false, reason: 'bad response' })
+  })
+
+  it('turns anything unexpected into import failed, never a throw', async () => {
+    const { fetchRadioHearts } = await import('./radioHeartsImport')
+    const result = await fetchRadioHearts({
+      key: 'k',
+      fetch: fakeFetch([heart(['a', 'b'])]),
+      ownDb: freshOwnDb(),
+      archiveReachable: () => true,
+      resolveStem: () => {
+        throw new Error('db closed')
+      },
+      save: fakeSave().save,
+      log: () => {}
+    })
+    expect(result).toEqual({ ok: false, reason: 'import failed' })
+  })
+
+  it('leaves a combo whose save returns nothing unrecorded', async () => {
+    const { fetchRadioHearts } = await import('./radioHeartsImport')
+    const db = freshOwnDb()
+    const result = await fetchRadioHearts({
+      key: 'k',
+      fetch: fakeFetch([heart(['a', 'b'])]),
+      ownDb: db,
+      archiveReachable: () => true,
+      resolveStem: member,
+      save: () => null,
+      log: () => {}
+    })
+    expect(result).toMatchObject({ ok: true, kept: 0, favourited: 0 })
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM RadioHeartImport`).get()).toEqual({ n: 0 })
+  })
+
+  it('keeps and records a combo short a stem, when 2 or more remain', async () => {
+    const { fetchRadioHearts } = await import('./radioHeartsImport')
+    const db = freshOwnDb()
+    const { save, saved } = fakeSave()
+    const result = await fetchRadioHearts({
+      key: 'k',
+      fetch: fakeFetch([heart(['a', 'b', 'gone'])]),
+      ownDb: db,
+      archiveReachable: () => true,
+      resolveStem: (id) => (id === 'gone' ? null : member(id)),
+      save,
+      log: () => {}
+    })
+    expect(saved.map((s) => s.stems)).toEqual([['a', 'b']])
+    expect(result).toMatchObject({ ok: true, kept: 1, favourited: 2, missingStems: 1 })
+    expect(db.prepare(`SELECT Combo FROM RadioHeartImport`).all()).toEqual([{ Combo: 'a,b,gone' }])
   })
 
   it('resolveHeartStem finds local audio and the stem’s own loop length', async () => {

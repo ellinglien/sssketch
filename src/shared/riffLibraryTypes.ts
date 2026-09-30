@@ -126,6 +126,11 @@ export interface RiffPage {
 
 export interface RiffLibraryResolvedRiff {
   riffCID: string
+  /** A display name of its own, when the riff has one -- today only a
+   * kept riff fetched from ell.ing/radio's hearts ("♥ 3 · misty kestrel",
+   * RadioHeartImport). Absent for everything else, which is named by
+   * friendlyRiffName from its riffCID. */
+  name?: string
   bpm: number
   barLength: number
   /** e.g. "E Minor (Aeolian)" -- resolved from the warehouse's own Root/

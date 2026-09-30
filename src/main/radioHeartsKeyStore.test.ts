@@ -30,9 +30,11 @@ describe('radioHeartsKeyStore', () => {
   })
 
   it('has no key until one is set', async () => {
-    const { loadRadioHeartsKey, hasRadioHeartsKey } = await import('./radioHeartsKeyStore')
+    const { loadRadioHeartsKey, hasRadioHeartsKey, radioHeartsKeyStatus } =
+      await import('./radioHeartsKeyStore')
     expect(loadRadioHeartsKey()).toBeNull()
     expect(hasRadioHeartsKey()).toBe(false)
+    expect(radioHeartsKeyStatus()).toBe('none')
   })
 
   it('persists the key encrypted, and reads it back after a restart', async () => {
@@ -43,6 +45,8 @@ describe('radioHeartsKeyStore', () => {
     expect(onDisk.toString()).not.toContain('sekrit-key')
     resetRadioHeartsKeyForTests()
     expect(loadRadioHeartsKey()).toBe('sekrit-key')
+    const { radioHeartsKeyStatus } = await import('./radioHeartsKeyStore')
+    expect(radioHeartsKeyStatus()).toBe('saved')
   })
 
   it('clears with an empty string', async () => {
@@ -61,6 +65,8 @@ describe('radioHeartsKeyStore', () => {
     encryptionAvailable = false
     saveRadioHeartsKey('k')
     expect(loadRadioHeartsKey()).toBe('k')
+    const { radioHeartsKeyStatus } = await import('./radioHeartsKeyStore')
+    expect(radioHeartsKeyStatus()).toBe('session')
     expect(existsSync(join(userDataDir, 'radio-hearts-key.enc'))).toBe(false)
     resetRadioHeartsKeyForTests()
     expect(loadRadioHeartsKey()).toBeNull()

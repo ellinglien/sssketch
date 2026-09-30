@@ -30,6 +30,7 @@ describe('planHeartImport', () => {
     const plan = planHeartImport([heart(['a', 'b'])], new Set(), new Set(), resolver())
     expect(plan.combosToKeep).toHaveLength(1)
     expect(plan.combosToKeep[0].members).toEqual(['a', 'b'])
+    expect(plan.combosToKeep[0].stars).toEqual(['a', 'b'])
     expect(plan.favouritesToAdd).toEqual(['a', 'b'])
   })
 
@@ -41,7 +42,7 @@ describe('planHeartImport', () => {
       resolver()
     )
     expect(plan.combosToKeep.map((c) => c.heart.combo)).toEqual(['c,d'])
-    expect(plan.alreadyImported).toBe(1)
+    expect(plan.alreadyImported.map((h) => h.combo)).toEqual(['a,b'])
     // A stem he has since un-starred stays un-starred.
     expect(plan.favouritesToAdd).toEqual(['c', 'd'])
   })
@@ -53,6 +54,7 @@ describe('planHeartImport', () => {
       new Set(['a']),
       resolver()
     )
+    expect(plan.combosToKeep.map((c) => c.stars)).toEqual([['b'], ['b', 'c']])
     expect(plan.favouritesToAdd).toEqual(['b', 'c'])
   })
 
@@ -75,10 +77,11 @@ describe('planHeartImport', () => {
     expect(plan.favouritesToAdd).toEqual(['a', 'b'])
   })
 
-  it('still favourites the resolvable stem of a combo too small to keep', () => {
+  it('does not star the stem of a combo too small to keep', () => {
     const plan = planHeartImport([heart(['a', 'b'])], new Set(), new Set(), resolver(['b']))
     expect(plan.combosToKeep).toEqual([])
-    expect(plan.favouritesToAdd).toEqual(['a'])
+    expect(plan.tooFew[0].stars).toEqual([])
+    expect(plan.favouritesToAdd).toEqual([])
   })
 
   it('resolves each stem once, however many combos share it', () => {
@@ -147,7 +150,12 @@ describe('heartFetchLabel', () => {
       '♥ 2 kept · 5 starred'
     )
     expect(heartFetchLabel({ ok: true, ...zero, skipped: 4 })).toBe('nothing new')
-    expect(heartFetchLabel({ ok: false, reason: 'no key' })).toBe('no key -- see settings')
+    expect(heartFetchLabel({ ok: false, reason: 'no key' })).toBe('no key · see settings')
+    expect(heartFetchLabel({ ok: false, reason: 'archive not mounted' })).toBe(
+      'archive not mounted'
+    )
+    expect(heartFetchLabel({ ok: false, reason: 'bad response' })).toBe('bad response')
+    expect(heartFetchLabel({ ok: false, reason: 'import failed' })).toBe('import failed')
     expect(heartFetchLabel({ ok: false, reason: 'key refused' })).toBe('key refused')
     expect(heartFetchLabel({ ok: false, reason: 'unreachable' })).toBe('radio unreachable')
   })

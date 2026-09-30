@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import Database from 'better-sqlite3'
 import {
   riffLibraryAvailable,
+  riffLibraryArchiveReachable,
   riffLibraryRootPath,
   setRiffLibraryRoot,
   resolveStemPath,
@@ -170,6 +171,60 @@ describe('riffLibraryStore', () => {
     expect(resolved?.stems[0].fileEndpoint).toBe('ams3.digitaloceanspaces.com')
     expect(resolved?.stems[0].fileBucket).toBe('endlesss')
     expect(resolved?.stems[0].fileKey).toBe('attachments/abc123.ogg')
+  })
+
+  it('resolveRiff names a kept riff by its radio-hearts label, and only that riff', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.exec(`CREATE TABLE RadioHeartImport (
+      Combo TEXT PRIMARY KEY, RiffCID TEXT NOT NULL, Name TEXT NOT NULL, ImportedAt INTEGER NOT NULL
+    )`)
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, StemCID_1)
+       VALUES ('kept_1', ?, 100, 120, 4, 'discovered', 'abc123'),
+              ('kept_2', ?, 100, 120, 4, 'discovered', 'abc123')`
+    ).run(DISCOVERED_JAM_CID, DISCOVERED_JAM_CID)
+    db.prepare(
+      `INSERT INTO RadioHeartImport (Combo, RiffCID, Name, ImportedAt)
+       VALUES ('a,b', 'kept_1', '♥ 3 · misty kestrel', 1)`
+    ).run()
+    db.close()
+
+    expect(resolveRiff('kept_1')?.name).toBe('♥ 3 · misty kestrel')
+    expect(resolveRiff('kept_2')).not.toHaveProperty('name')
+  })
+
+  it('resolveRiff has no name, and does not throw, where there is no RadioHeartImport table', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    const db = new Database(join(root, 'cache', 'common', 'warehouse.db3'))
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, StemCID_1)
+       VALUES ('kept_1', ?, 100, 120, 4, 'discovered', 'abc123')`
+    ).run(DISCOVERED_JAM_CID)
+    db.close()
+    expect(resolveRiff('kept_1')).not.toHaveProperty('name')
+  })
+
+  it('riffLibraryArchiveReachable: an external archive is reachable only while its warehouse is there', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-root-test-'))
+    createFixtureWarehouse(root)
+    setRiffLibraryRootForTests(root)
+    expect(riffLibraryArchiveReachable()).toBe(true)
+    // Unmounted: the connection is already open and cached, the file is gone.
+    rmSync(join(root, 'cache'), { recursive: true, force: true })
+    expect(riffLibraryArchiveReachable()).toBe(false)
+    setRiffLibraryRootForTests('/Volumes/not-plugged-in/ENDLESSS')
+    expect(riffLibraryArchiveReachable()).toBe(false)
+  })
+
+  it("riffLibraryArchiveReachable is always true on sssketch's own library", async () => {
+    const { ownRiffLibraryRoot } = await import('./riffLibrarySchema')
+    setRiffLibraryRootForTests(ownRiffLibraryRoot())
+    expect(riffLibraryArchiveReachable()).toBe(true)
   })
 
   it('writing a resolveRiff result back does not null out a synced stem download columns', () => {

@@ -14,7 +14,6 @@ import { existsSync } from 'node:fs'
 import type Database from 'better-sqlite3'
 import {
   RADIO_HEARTS_URL,
-  heartRiffName,
   parseHeartsResponse,
   planHeartImport,
   type RadioHeartsResult
@@ -22,6 +21,11 @@ import {
 import type { DiscoveredMemberInput } from './discoveredLibrary'
 import { discoveredStemPath, resolveStemPath } from './riffLibraryStore'
 import { addStemFavourites, listStemFavourites } from './stemFavouriteStore'
+import {
+  listImportedHeartCombos,
+  recordHeartImport,
+  refreshHeartCount
+} from './radioHeartImportStore'
 
 /** The narrow slice of fetch this module uses -- injected, so tests never
  * touch the network. */
@@ -36,6 +40,9 @@ export interface FetchRadioHeartsDeps {
   fetch: FetchLike
   /** sssketch's own writable warehouse (openOwnRiffLibraryDb). */
   ownDb: Database.Database
+  /** False when the configured LORE archive is away -- the whole import is
+   * refused. riffLibraryArchiveReachable in production. */
+  archiveReachable: () => boolean
   /** A stem's local audio and metadata, or null if it is not on this
    * machine. resolveHeartStem in production. */
   resolveStem: (stemCID: string) => DiscoveredMemberInput | null
@@ -48,12 +55,6 @@ export interface FetchRadioHeartsDeps {
   ) => { riffCID: string; name: string; duplicate: boolean } | null
   log?: (line: string) => void
   now?: () => number
-}
-
-/** Every combo a previous fetch already brought home. */
-export function listImportedHeartCombos(ownDb: Database.Database): Set<string> {
-  const rows = ownDb.prepare(`SELECT Combo FROM RadioHeartImport`).all() as { Combo: string }[]
-  return new Set(rows.map((r) => r.Combo))
 }
 
 interface HeartStemRow {
@@ -106,31 +107,59 @@ export function resolveHeartStem(
 }
 
 /** One fetch, start to finish. Never throws: a missing key, a refused key,
- * an unreachable server or a malformed body each come back as a reason, and
- * nothing is written in any of those cases. */
-export async function fetchRadioHearts({
+ * an unreachable server, a malformed body or an absent archive each come
+ * back as a reason with nothing written, and anything unexpected as
+ * 'import failed'.
+ *
+ * Writes, per combo: `save` first, on its own (it copies files and runs
+ * its own transaction), then -- only if it saved -- the combo's
+ * RadioHeartImport row and its stars together in ONE transaction. A combo
+ * is therefore either fully brought home or not recorded at all, and an
+ * unrecorded one is simply tried again next fetch (its save then comes
+ * back a duplicate, which is recorded like any other). */
+export async function fetchRadioHearts(deps: FetchRadioHeartsDeps): Promise<RadioHeartsResult> {
+  const log = deps.log ?? ((line: string) => console.log(line))
+  try {
+    return await fetchRadioHeartsUnguarded({ ...deps, log })
+  } catch (err) {
+    log(`radio hearts: import failed: ${err instanceof Error ? err.message : String(err)}`)
+    return { ok: false, reason: 'import failed' }
+  }
+}
+
+async function fetchRadioHeartsUnguarded({
   key,
   fetch,
   ownDb,
+  archiveReachable,
   resolveStem,
   save,
-  log = (line) => console.log(line),
+  log,
   now = Date.now
-}: FetchRadioHeartsDeps): Promise<RadioHeartsResult> {
+}: FetchRadioHeartsDeps & { log: (line: string) => void }): Promise<RadioHeartsResult> {
   if (!key) return { ok: false, reason: 'no key' }
+  // Before anything else: with the archive away, every stem living there
+  // would read as missing audio, and combos would be kept short a stem
+  // and recorded as done.
+  if (!archiveReachable()) return { ok: false, reason: 'archive not mounted' }
 
-  let body: unknown
+  let res: Awaited<ReturnType<FetchLike>>
   try {
-    const res = await fetch(RADIO_HEARTS_URL, { headers: { authorization: `Bearer ${key}` } })
-    if (res.status === 401 || res.status === 403) return { ok: false, reason: 'key refused' }
-    if (!res.ok) {
-      log(`radio hearts: hearts.json answered ${res.status}`)
-      return { ok: false, reason: 'unreachable' }
-    }
-    body = await res.json()
+    res = await fetch(RADIO_HEARTS_URL, { headers: { authorization: `Bearer ${key}` } })
   } catch (err) {
     log(`radio hearts: fetch failed: ${err instanceof Error ? err.message : String(err)}`)
     return { ok: false, reason: 'unreachable' }
+  }
+  if (res.status === 401 || res.status === 403) return { ok: false, reason: 'key refused' }
+  if (!res.ok) {
+    log(`radio hearts: hearts.json answered ${res.status}`)
+    return { ok: false, reason: 'unreachable' }
+  }
+  let body: unknown
+  try {
+    body = await res.json()
+  } catch {
+    return { ok: false, reason: 'bad response' }
   }
   const hearts = parseHeartsResponse(body)
   if (!hearts) return { ok: false, reason: 'bad response' }
@@ -142,41 +171,50 @@ export async function fetchRadioHearts({
     resolveStem
   )
 
-  const record = ownDb.prepare(
-    `INSERT INTO RadioHeartImport (Combo, RiffCID, Name, ImportedAt) VALUES (?, ?, ?, ?)
-     ON CONFLICT(Combo) DO NOTHING`
-  )
+  for (const heart of plan.alreadyImported) refreshHeartCount(ownDb, heart.combo, heart.count)
+
   let kept = 0
   let alreadyKept = 0
-  for (const { heart, members, missing } of plan.combosToKeep) {
+  let favourited = 0
+  for (const { heart, members, missing, stars } of plan.combosToKeep) {
     if (missing.length > 0)
       log(`radio hearts: ${heart.combo} kept without ${missing.join(', ')} (no local audio)`)
-    let saved: ReturnType<FetchRadioHeartsDeps['save']>
     try {
-      saved = save(members, heart.bpm, heart.loopBars)
+      const saved = save(members, heart.bpm, heart.loopBars)
+      if (saved === null) {
+        // Only an empty member list saves nothing, and a planned combo has
+        // at least two -- but if it ever happens, leave it unrecorded.
+        log(`radio hearts: ${heart.combo} saved nothing`)
+        continue
+      }
+      const starred = ownDb.transaction(() => {
+        recordHeartImport(ownDb, {
+          combo: heart.combo,
+          riffCID: saved.riffCID,
+          count: heart.count,
+          at: now()
+        })
+        return addStemFavourites(ownDb, stars)
+      })()
+      favourited += starred
+      if (saved.duplicate) alreadyKept += 1
+      else kept += 1
     } catch (err) {
-      // Not recorded, so the next fetch tries it again.
+      // Not recorded, no stars: the next fetch tries it again.
       log(
-        `radio hearts: saving ${heart.combo} failed: ${err instanceof Error ? err.message : String(err)}`
+        `radio hearts: ${heart.combo} not brought home: ${err instanceof Error ? err.message : String(err)}`
       )
-      continue
     }
-    if (!saved) continue
-    if (saved.duplicate) alreadyKept += 1
-    else kept += 1
-    record.run(heart.combo, saved.riffCID, heartRiffName(heart.count, saved.name), now())
   }
   for (const { heart, missing } of plan.tooFew) {
     log(`radio hearts: ${heart.combo} not kept -- no local audio for ${missing.join(', ')}`)
   }
 
-  const favourited = addStemFavourites(ownDb, plan.favouritesToAdd)
-
   return {
     ok: true,
     kept,
     alreadyKept,
-    skipped: plan.alreadyImported,
+    skipped: plan.alreadyImported.length,
     tooFew: plan.tooFew.length,
     favourited,
     missingStems: plan.missingStems.length
