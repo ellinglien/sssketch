@@ -1,5 +1,6 @@
 // src/renderer/src/audio/DiscoverLibraryScan.tsx
 import { backgroundScanGate } from './backgroundScanGate'
+import { ARTIST_SCAN_QUEUED_EVENT } from './artistScanQueueEvent'
 import { backgroundWorkRegistry } from './backgroundWorkRegistry'
 import { countWork } from '../perf/workCounters'
 import { useEffect, useRef, useState } from 'react'
@@ -87,6 +88,7 @@ export function DiscoverLibraryScan(): null {
 
   useEffect(() => {
     let cancelled = false
+    let removeQueuedListener = (): void => {}
     countWork('ipc:get-discover-library-scan-targets')
     void window.rifffApi
       .getDiscoverLibraryScanTargets()
@@ -139,23 +141,40 @@ export function DiscoverLibraryScan(): null {
         /** One priority batch (artist "analyse overnight"). True when it did work. */
         async function runPriorityBatch(): Promise<boolean> {
           if (performance.now() < priorityPausedUntil) return false
-          const { targets: queued, remaining } =
-            await window.rifffApi.takeArtistScanBatch(BATCH_SIZE)
+          const batch = await window.rifffApi.takeArtistScanBatch(BATCH_SIZE)
           if (cancelled) return false
-          setPriorityLeft(remaining)
-          if (queued.length === 0) return false
-          const ready = queued.filter((t): t is { key: string; path: string } => t.path !== null)
-          const needs =
-            ready.length > 0 ? await fetchStemAnalysisNeeds(ready.map((t) => t.path)) : []
+          setPriorityLeft(batch.remaining)
+          // Paused (the archive drive is not mounted), an empty queue, or
+          // nothing but temporary failures: rest instead of asking again on
+          // every step. A new enqueue ends the rest (the event below).
+          if (batch.status === 'paused' || batch.targets.length === 0) {
+            priorityPausedUntil = performance.now() + PRIORITY_IDLE_POLL_MS
+            return false
+          }
+          const ready = batch.targets
+          const needs = await fetchStemAnalysisNeeds(ready.map((t) => t.path))
           await Promise.allSettled(
             ready.map((t, i) =>
               needs[i] && needsAnyAnalysis(needs[i]) ? analyzeStemOnce(t.path, needs[i]) : undefined
             )
           )
-          // Finished either way -- a failed download or analysis must not loop.
-          await window.rifffApi.finishArtistScanBatch(queued.map((t) => t.key))
+          // Downloaded and attempted: finished either way -- a failed
+          // analysis must not loop. Temporary download failures were kept
+          // in the queue by main, and rest the queue a while.
+          await window.rifffApi.finishArtistScanBatch(ready.map((t) => t.key))
+          if (batch.transient > 0) priorityPausedUntil = performance.now() + PRIORITY_IDLE_POLL_MS
           return true
         }
+
+        // "analyse overnight" just queued stems: show the new size and stop
+        // resting, so the queue starts at the next step.
+        function onQueued(e: Event): void {
+          const size = (e as CustomEvent<{ size: number }>).detail?.size
+          if (typeof size === 'number') setPriorityLeft(size)
+          priorityPausedUntil = 0
+        }
+        window.addEventListener(ARTIST_SCAN_QUEUED_EVENT, onQueued)
+        removeQueuedListener = () => window.removeEventListener(ARTIST_SCAN_QUEUED_EVENT, onQueued)
 
         // Real regression, found live 2026-09-18 (direct report: "very
         // sluggish buttons... click similar and loader running for about
@@ -243,6 +262,7 @@ export function DiscoverLibraryScan(): null {
       })
     return () => {
       cancelled = true
+      removeQueuedListener()
     }
   }, [])
 

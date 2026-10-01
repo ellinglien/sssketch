@@ -2816,6 +2816,21 @@ git commit -m "discover artist: analyse overnight queues the artist's stems ahea
 - **Gates:** typecheck clean, `npx eslint --no-cache .` 0 errors / 4 warnings, 235 files / 3,853 tests green, and `CI=1` skips `discoverArtistScanQueue.test.ts`.
 - **Not measured:** per-stem decode and analysis time, so the 4.5–7 h estimate above stands unverified. Nothing here was run in the app.
 
+**Final review follow-up: the queue never loses stems on a temporary failure.**
+- **Download status:** `downloadStemForAnalysis` returns `{status: 'ok' | 'unavailable' | 'transient', path}`, through a new `downloadOneStemStatus`; `downloadOneStem` wraps it, so riff downloads are unchanged.
+  - `unavailable` only when `StemUnavailable` records it after the attempt (a permanent HTTP failure or a denied host), when the row has no file key, or when the stem is in no db.
+  - Everything else is `transient`: a network error, an EACCES on `mkdir` from a drive pulled mid-queue, an unreadable db, or this session's retries spent.
+- **The batch:** `takeArtistScanBatch` (now in `discoverArtistScanQueue.ts`, with injected `archiveReachable` and `download`) returns `paused` without downloading or removing anything when `riffLibraryArchiveReachable()` is false. Otherwise:
+  - it drops `unavailable` rows;
+  - it bumps `transient` rows' `QueuedAt` (to the back of the queue);
+  - it hands back `ok` rows, which the renderer finishes after analysis.
+- **The scan rests** `PRIORITY_IDLE_POLL_MS` (30 s) after a paused, empty or all-transient batch, and after any batch with transient rows.
+- **The button:**
+  - It's disabled while its call runs (`queueing…`).
+  - It shows the whole queue's size (`N queued`).
+  - It announces the new size (`artistScanQueueEvent.ts`), so the scan updates `priorityLeft` and stops resting.
+- **Tests:** archive not mounted (paused, nothing downloaded or removed), ok, unavailable, transient (kept, moved back), and an artist across the own db and the archive with the drive pulled mid-batch.
+
 ---
 
 ### Task 9: Elling's walkthrough

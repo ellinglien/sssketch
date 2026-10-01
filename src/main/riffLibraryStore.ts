@@ -20,6 +20,8 @@ import {
   recordStemDownloadSuccess,
   shouldAttemptStemDownload
 } from './stemAvailability'
+import { isStemUnavailable } from './stemUnavailableStore'
+import type { StemDownloadStatus } from './discoverArtistScanQueue'
 import { countWork } from './workCounters'
 import { heartNameForRiff } from './radioHeartImportStore'
 import {
@@ -913,16 +915,31 @@ async function downloadOneStem(
   stemCID: string,
   downloadUrl: string
 ): Promise<boolean> {
+  return (await downloadOneStemStatus(jamCID, stemCID, downloadUrl)) === 'ok'
+}
+
+/** downloadOneStem with the failure kind kept (artist "analyse overnight",
+ * 2026-10-01): `unavailable` only when StemUnavailable now says so (a
+ * permanent failure, or a denied host); everything else that failed --
+ * the network, a refused write on a drive pulled mid-queue (EACCES on
+ * mkdir), this session's retry budget spent -- is `transient`. */
+async function downloadOneStemStatus(
+  jamCID: string,
+  stemCID: string,
+  downloadUrl: string
+): Promise<StemDownloadStatus> {
   const finalPath = resolveStemPath(jamCID, stemCID)
   // Local presence always wins over anything the availability list says.
-  if (existsSync(finalPath)) return true
+  if (existsSync(finalPath)) return 'ok'
   const ownDb = openOwnRiffLibraryDb()
-  if (!shouldAttemptStemDownload(ownDb, stemCID, downloadUrl)) return false
+  if (!shouldAttemptStemDownload(ownDb, stemCID, downloadUrl)) {
+    return isStemUnavailable(ownDb, stemCID) ? 'unavailable' : 'transient'
+  }
   try {
     const res = await fetch(downloadUrl)
     if (!res.ok) {
       recordStemDownloadFailure(ownDb, stemCID, downloadUrl, { kind: 'http', status: res.status })
-      return false
+      return isStemUnavailable(ownDb, stemCID) ? 'unavailable' : 'transient'
     }
     const bytes = Buffer.from(await res.arrayBuffer())
     mkdirSync(dirname(finalPath), { recursive: true })
@@ -930,14 +947,14 @@ async function downloadOneStem(
     writeFileSync(tmpPath, bytes)
     renameSync(tmpPath, finalPath)
     recordStemDownloadSuccess(ownDb, stemCID)
-    return true
+    return 'ok'
   } catch {
     // A filesystem failure lands here too, not just a network one -- both
     // are genuinely retryable, and neither says anything about whether the
     // stem still exists on Endlesss's side.
     countWork('stem-download:threw')
     recordStemDownloadFailure(ownDb, stemCID, downloadUrl, { kind: 'network' })
-    return false
+    return 'transient'
   }
 }
 
@@ -973,26 +990,36 @@ export async function downloadMissingStems(
   return resolveRiff(riffCID)
 }
 
-/** One stem's audio for the artist analysis queue -- the SAME downloadOneStem
+/** One stem's audio for the artist analysis queue -- the SAME download
  * (local-first, StemUnavailable-aware, atomic rename) every riff download
- * uses, without resolving or downloading the rest of its riff. Returns the
- * local path, or null when it can't be fetched. */
+ * uses, without resolving or downloading the rest of its riff. The caller
+ * (takeArtistScanBatch) checks the archive is mounted first: with it away,
+ * an archive stem is in no db here and would read as `unavailable`. */
 export async function downloadStemForAnalysis(
   jamCID: string,
   stemCID: string
-): Promise<string | null> {
+): Promise<{ status: StemDownloadStatus; path: string | null }> {
   const path = resolveStemPath(jamCID, stemCID)
-  if (existsSync(path)) return path
+  if (existsSync(path)) return { status: 'ok', path }
   for (const db of candidateDbsForRiff()) {
-    const row = db
-      .prepare(`SELECT FileEndpoint, FileBucket, FileKey FROM Stems WHERE StemCID = ?`)
-      .get(stemCID) as
+    let row:
       { FileEndpoint: string | null; FileBucket: string | null; FileKey: string | null } | undefined
-    if (!row?.FileEndpoint || !row.FileKey) continue
+    try {
+      row = db
+        .prepare(`SELECT FileEndpoint, FileBucket, FileKey FROM Stems WHERE StemCID = ?`)
+        .get(stemCID) as typeof row
+    } catch {
+      // A db that cannot be read right now (the drive going away) -- retry later.
+      return { status: 'transient', path: null }
+    }
+    if (!row) continue
+    if (!row.FileEndpoint || !row.FileKey) return { status: 'unavailable', path: null }
     const url = stemDownloadUrl(row.FileEndpoint, row.FileBucket ?? '', row.FileKey)
-    return (await downloadOneStem(jamCID, stemCID, url)) ? path : null
+    const status = await downloadOneStemStatus(jamCID, stemCID, url)
+    return { status, path: status === 'ok' ? path : null }
   }
-  return null
+  // In no db at all, with every db reachable: the stem is gone.
+  return { status: 'unavailable', path: null }
 }
 
 export { getRiffLibraryDb }

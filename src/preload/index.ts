@@ -14,6 +14,7 @@ import type {
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { DiscoverCandidate } from '../main/discoverCandidates'
 import type { ArtistIndex, ArtistMode, KeepRefused } from '@shared/discoverArtist'
+import type { ArtistScanBatch } from '../main/discoverArtistScanQueue'
 import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
@@ -381,11 +382,11 @@ const api = {
    * in /api/state's `keeps`. */
   reportRemoteKeep: (keepId: string, outcome: RemoteKeepOutcome): Promise<void> =>
     ipcRenderer.invoke('remote-keep-result', keepId, outcome),
-  discoverQueueArtistAnalysis: (artist: string): Promise<{ queued: number; total: number }> =>
+  discoverQueueArtistAnalysis: (
+    artist: string
+  ): Promise<{ queued: number; total: number; size: number }> =>
     ipcRenderer.invoke('discover-queue-artist-analysis', artist),
-  takeArtistScanBatch: (
-    limit: number
-  ): Promise<{ targets: { key: string; path: string | null }[]; remaining: number }> =>
+  takeArtistScanBatch: (limit: number): Promise<ArtistScanBatch> =>
     ipcRenderer.invoke('take-artist-scan-batch', limit),
   finishArtistScanBatch: (stemCIDs: string[]): Promise<void> =>
     ipcRenderer.invoke('finish-artist-scan-batch', stemCIDs),

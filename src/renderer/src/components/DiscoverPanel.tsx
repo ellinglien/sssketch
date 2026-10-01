@@ -148,6 +148,7 @@ import {
   type ListenOnlyAction
 } from '@shared/discoverArtist'
 import { DiscoverArtistPicker } from './DiscoverArtistPicker'
+import { announceArtistScanQueued } from '../audio/artistScanQueueEvent'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import {
@@ -7113,10 +7114,15 @@ export function DiscoverPanel({
                       : 'turn on library analysis first'
                   }
                   onClick={() => {
+                    // Disabled while the call runs (the label is non-null).
+                    setAnalysisQueued('queueing…')
                     window.rifffApi
                       .discoverQueueArtistAnalysis(artist)
                       .then((r) => {
-                        setAnalysisQueued(`queued ${r.queued.toLocaleString('en-US')}`)
+                        // The whole queue's size: "queued 0" says nothing
+                        // when this artist's stems were all queued already.
+                        setAnalysisQueued(`${r.size.toLocaleString('en-US')} queued`)
+                        announceArtistScanQueued(r.size)
                       })
                       .catch((err: unknown) => {
                         console.error('DiscoverPanel: discoverQueueArtistAnalysis failed:', err)

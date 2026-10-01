@@ -115,9 +115,9 @@ import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAd
 import { getArtistStemCIDs, getArtistStemRows } from './discoverArtistStems'
 import {
   artistScanQueueSize,
-  peekArtistScanQueue,
   queueArtistStems,
-  removeFromArtistScanQueue
+  removeFromArtistScanQueue,
+  takeArtistScanBatch
 } from './discoverArtistScanQueue'
 import { KEEP_REFUSED } from '@shared/discoverArtist'
 import { abortArtistIndexWork, getArtistAnalysed, getArtistIndex } from './discoverArtistIndex'
@@ -1415,28 +1415,28 @@ app.whenReady().then(async () => {
   // classification is allowed in listen-only mode (spec §2): not guarded.
   ipcMain.handle('discover-queue-artist-analysis', async (_event, artist: unknown) => {
     const name = typeof artist === 'string' ? artist.trim() : ''
-    if (name === '') return { queued: 0, total: 0 }
+    if (name === '') return { queued: 0, total: 0, size: 0 }
     const rows = await getArtistStemRows(discoverSourceDbs(), name)
-    const queued = queueArtistStems(openOwnRiffLibraryDb(), rows, name)
-    return { queued, total: rows.length }
+    const ownDb = openOwnRiffLibraryDb()
+    const queued = queueArtistStems(ownDb, rows, name)
+    // `size`: the whole queue now (every artist), for the button and the
+    // scan's indicator -- "queued 0" says nothing when they were all queued.
+    return { queued, total: rows.length, size: artistScanQueueSize(ownDb) }
   })
 
   // The scan's priority batch: the next `limit` queued stems, downloaded
   // (in parallel -- limit is the scan's BATCH_SIZE, 3). path null = could
   // not be fetched; the renderer still finishes it so it never loops.
-  ipcMain.handle('take-artist-scan-batch', async (_event, limit: unknown) => {
-    const n =
-      typeof limit === 'number' && Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 10) : 3
-    const ownDb = openOwnRiffLibraryDb()
-    const next = peekArtistScanQueue(ownDb, n)
-    const targets = await Promise.all(
-      next.map(async ({ stemCID, jamCID }) => ({
-        key: stemCID,
-        path: await downloadStemForAnalysis(jamCID, stemCID)
-      }))
+  // The scan's priority batch (takeArtistScanBatch): only a stem that
+  // downloaded or is known unfetchable leaves the queue; a temporary failure
+  // stays; with the archive drive away the whole queue pauses.
+  ipcMain.handle('take-artist-scan-batch', (_event, limit: unknown) =>
+    takeArtistScanBatch(
+      openOwnRiffLibraryDb(),
+      typeof limit === 'number' && Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 10) : 3,
+      { archiveReachable: riffLibraryArchiveReachable, download: downloadStemForAnalysis }
     )
-    return { targets, remaining: artistScanQueueSize(ownDb) }
-  })
+  )
 
   ipcMain.handle('finish-artist-scan-batch', (_event, stemCIDs: unknown) =>
     removeFromArtistScanQueue(

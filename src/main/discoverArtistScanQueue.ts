@@ -78,3 +78,79 @@ export function artistScanQueueSize(ownDb: Database.Database): number {
   return (ownDb.prepare(`SELECT COUNT(*) AS n FROM DiscoverArtistScanQueue`).get() as { n: number })
     .n
 }
+
+/** What one stem's download came to (riffLibraryStore's
+ * downloadStemForAnalysis): `ok` (the audio is on disk), `unavailable`
+ * (known unfetchable, durably -- StemUnavailable) or `transient` (anything
+ * that may work later: a network error, a refused write on a drive pulled
+ * mid-queue, this session's retries spent). */
+export type StemDownloadStatus = 'ok' | 'unavailable' | 'transient'
+
+export type ArtistScanBatch =
+  /** The archive drive is not mounted: nothing downloaded, nothing removed. */
+  | { status: 'paused'; remaining: number }
+  | {
+      status: 'ok'
+      /** Downloaded, to analyse -- still queued until finished. */
+      targets: { key: string; path: string }[]
+      remaining: number
+      /** Rows that failed temporarily: kept, moved to the back of the queue. */
+      transient: number
+    }
+
+/** Moves rows to the back of the queue (a temporary failure). */
+export function requeueArtistStems(
+  ownDb: Database.Database,
+  stemCIDs: string[],
+  now: number
+): void {
+  ensure(ownDb)
+  const bump = ownDb.prepare(`UPDATE DiscoverArtistScanQueue SET QueuedAt = ? WHERE StemCID = ?`)
+  ownDb.transaction(() => {
+    for (const id of stemCIDs) bump.run(now, id)
+  })()
+}
+
+/** The scan's priority batch (final review, 2026-10-01). Only a stem that
+ * downloaded or is known unfetchable ever leaves the queue: `ok` rows are
+ * handed back to analyse (the renderer finishes them), `unavailable` rows
+ * are dropped here, `transient` rows stay, moved to the back. With the
+ * archive drive away, every archive stem would look missing -- so the
+ * whole queue pauses instead, and nothing is downloaded or dropped. */
+export async function takeArtistScanBatch(
+  ownDb: Database.Database,
+  limit: number,
+  deps: {
+    archiveReachable: () => boolean
+    download: (
+      jamCID: string,
+      stemCID: string
+    ) => Promise<{ status: StemDownloadStatus; path: string | null }>
+    now?: () => number
+  }
+): Promise<ArtistScanBatch> {
+  if (!deps.archiveReachable()) return { status: 'paused', remaining: artistScanQueueSize(ownDb) }
+  const next = peekArtistScanQueue(ownDb, limit)
+  const results = await Promise.all(
+    next.map(async ({ stemCID, jamCID }) => ({
+      stemCID,
+      ...(await deps.download(jamCID, stemCID))
+    }))
+  )
+  const targets: { key: string; path: string }[] = []
+  const unavailable: string[] = []
+  const transient: string[] = []
+  for (const r of results) {
+    if (r.status === 'ok' && r.path !== null) targets.push({ key: r.stemCID, path: r.path })
+    else if (r.status === 'unavailable') unavailable.push(r.stemCID)
+    else transient.push(r.stemCID)
+  }
+  removeFromArtistScanQueue(ownDb, unavailable)
+  requeueArtistStems(ownDb, transient, (deps.now ?? Date.now)())
+  return {
+    status: 'ok',
+    targets,
+    remaining: artistScanQueueSize(ownDb),
+    transient: transient.length
+  }
+}
