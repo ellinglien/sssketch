@@ -88,7 +88,8 @@ describe('discoverSettingsStore', () => {
         channels: 7,
         transitions: 'bold',
         dropOuts: 'often',
-        turnover: 'random'
+        turnover: 'random',
+        density: 'off'
       }
     })
     expect(loadDiscoverSettings().radio).toEqual({
@@ -99,7 +100,8 @@ describe('discoverSettingsStore', () => {
       channels: 7,
       transitions: 'bold',
       dropOuts: 'often',
-      turnover: 'random'
+      turnover: 'random',
+      density: 'off'
     })
   })
 

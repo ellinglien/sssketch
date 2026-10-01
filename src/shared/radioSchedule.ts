@@ -996,6 +996,15 @@ export function radioStarterKinds(channels: number): DiscoverSlotKind[] {
  * resets to. `paceBars` is the window the clock actually draws from, which
  * starts life as that preset's own numbers and diverges only if he steps
  * an edge. radioPaceWindowPreset reconciles the two for display. */
+/** The density arc (radioDensity.ts): `arc` grows and thins the rows while
+ * radio runs; `off` keeps the count where it is. Elling likes it on. */
+export type RadioDensity = 'off' | 'arc'
+export const RADIO_DENSITY_OPTIONS: RadioDensity[] = ['off', 'arc']
+export const DEFAULT_RADIO_DENSITY: RadioDensity = 'arc'
+export function normalizeRadioDensity(value: unknown): RadioDensity {
+  return value === 'off' || value === 'arc' ? value : DEFAULT_RADIO_DENSITY
+}
+
 export interface RadioSettings {
   pace: RadioPace
   paceBars: RadioPaceWindow
@@ -1005,6 +1014,14 @@ export interface RadioSettings {
   transitions: RadioTransitions
   dropOuts: RadioDropOuts
   turnover: RadioTurnover
+  /** Optional only because the web radio builds its own RadioSettings and
+   * has its own arc; normalizeRadioSettings always sets it, and absent
+   * reads as the default (radioDensityOf). */
+  density?: RadioDensity
+}
+
+export function radioDensityOf(settings: RadioSettings): RadioDensity {
+  return settings.density ?? DEFAULT_RADIO_DENSITY
 }
 
 export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
@@ -1015,7 +1032,8 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   channels: DEFAULT_RADIO_CHANNELS,
   transitions: DEFAULT_RADIO_TRANSITIONS,
   dropOuts: DEFAULT_RADIO_DROP_OUTS,
-  turnover: DEFAULT_RADIO_TURNOVER
+  turnover: DEFAULT_RADIO_TURNOVER,
+  density: DEFAULT_RADIO_DENSITY
 }
 
 /** Field by field, never throwing -- the same shape loadDiscoverSettings
@@ -1053,6 +1071,7 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
       : DEFAULT_RADIO_CHANNELS,
     transitions: normalizeRadioTransitions(raw.transitions),
     dropOuts: normalizeRadioDropOuts(raw.dropOuts),
-    turnover: normalizeRadioTurnover(raw.turnover)
+    turnover: normalizeRadioTurnover(raw.turnover),
+    density: normalizeRadioDensity(raw.density)
   }
 }

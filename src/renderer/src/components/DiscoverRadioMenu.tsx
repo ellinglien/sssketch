@@ -13,6 +13,7 @@ import {
   type RadioSettings
 } from '@shared/radioSchedule'
 import { RADIO_DROP_OUT_OPTIONS } from '@shared/radioDropOut'
+import { RADIO_DENSITY_OPTIONS, radioDensityOf } from '@shared/radioSchedule'
 import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
 
 const CHANNEL_OPTIONS: number[] = Array.from(
@@ -236,12 +237,23 @@ export function DiscoverRadioMenu({
       })
     )
   )
-  const channelsRow = row(
-    'channels',
-    CHANNEL_OPTIONS.map((n) =>
-      chip(String(n), settings.channels === n, () => onChange({ channels: n }))
-    )
+  // `density: arc` (2026-10-01, @shared/radioDensity) grows and thins the
+  // rows itself, starting from two on an empty panel, so `channels` -- the
+  // size of the starting bed -- only shows while the arc is off.
+  const density = radioDensityOf(settings)
+  const densityRow = row(
+    'density',
+    RADIO_DENSITY_OPTIONS.map((d) => chip(d, density === d, () => onChange({ density: d })))
   )
+  const channelsRow =
+    density === 'off'
+      ? row(
+          'channels',
+          CHANNEL_OPTIONS.map((n) =>
+            chip(String(n), settings.channels === n, () => onChange({ channels: n }))
+          )
+        )
+      : null
 
   return (
     <div
@@ -280,6 +292,7 @@ export function DiscoverRadioMenu({
             chip(phraseLabel(n), settings.phraseBars === n, () => onChange({ phraseBars: n }))
           )
         )}
+      {densityRow}
       {channelsRow}
       {mode === 'running' &&
         row(
@@ -308,7 +321,7 @@ export function DiscoverRadioMenu({
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
         {mode === 'start'
           ? 'pick a pace to start'
-          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop'}
+          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added'}
       </span>
     </div>
   )

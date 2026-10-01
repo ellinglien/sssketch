@@ -1078,7 +1078,7 @@ describe('a pace window he can set himself', () => {
 })
 
 describe('RadioSettings', () => {
-  it('defaults to mid, the mid window, four bars, no phrase grid, four channels, subtle, rare and even', () => {
+  it('defaults to mid, the mid window, four bars, no phrase grid, four channels, subtle, rare, even and the density arc', () => {
     expect(DEFAULT_RADIO_SETTINGS).toEqual({
       pace: 'mid',
       paceBars: { min: 8, max: 16 },
@@ -1087,7 +1087,8 @@ describe('RadioSettings', () => {
       channels: 4,
       transitions: 'subtle',
       dropOuts: 'rare',
-      turnover: 'even'
+      turnover: 'even',
+      density: 'arc'
     })
   })
 

@@ -47,6 +47,15 @@ import {
 } from '@shared/radioManualChanges'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { stemsToAvoid } from '@shared/discoverPickAvoid'
+import {
+  DENSITY_MIN,
+  advanceDensityLeg,
+  densityArrival,
+  newDensityLeg,
+  nextArcKind,
+  pickArcRemoval,
+  type DensityLeg
+} from '@shared/radioDensity'
 import { DEFAULT_DISCOVER_CHAOS, rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { heartFetchLabel } from '@shared/radioHearts'
@@ -64,6 +73,7 @@ import {
   pickRadioSlotId,
   radioChangeBars,
   radioGridBars,
+  radioDensityOf,
   radioStarterKinds,
   restartRadioInterval,
   type RadioClock,
@@ -321,6 +331,10 @@ export interface DiscoverSlot {
    * the universal `state.vol[key] ?? 1` read convention used everywhere
    * else in this codebase. */
   gain: number
+  /** Radio laid this row down (the bed on an empty panel) or the density
+   * arc added it -- the only rows the arc may remove. A duplicate of one is
+   * his, not radio's. */
+  radioAdded?: boolean
 }
 
 /** What a roll RESOLVED TO, before anything is written to state. Split out
@@ -385,6 +399,10 @@ const DEFAULT_GLOBAL_MODIFIERS: DiscoverSlotModifier[] = ['mine']
 // module scope, like freshSlotId above, and uses the Web Crypto API
 // instead, the same non-Math.random() convention freshSlotId itself
 // already established.
+/** How long a row the density arc removes takes to leave: a drop-out over
+ * its last two bars (clamped to half the loop by the curve). */
+const ARC_EXIT_BEATS = 8
+
 function randomDiscoverSlotKind(options: readonly DiscoverSlotKind[]): DiscoverSlotKind {
   const index = crypto.getRandomValues(new Uint32Array(1))[0] % options.length
   return options[index]
@@ -2154,6 +2172,15 @@ export function DiscoverPanel({
   // Rows radio's skip is picking a stem for (skipRadio), before the pick is
   // queued as a manual change -- radio arms nothing meanwhile.
   const radioSkipPickingRef = useRef<Set<string>>(new Set())
+  // The density arc (@shared/radioDensity): its current leg, the row it is
+  // bringing in (still picking, then waiting in the manual queue), the row
+  // it is taking out, and a count of loop tops so an exit knows its lap.
+  const densityLegRef = useRef<DensityLeg | null>(null)
+  const arcAddingRef = useRef<{ slotId: string; picking: boolean } | null>(null)
+  const arcExitRef = useRef<{ slotId: string; phase: 'waiting' | 'fading'; lap: number } | null>(
+    null
+  )
+  const arcLapRef = useRef(0)
   const radioPendingRef = useRef<{
     slotId: string
     pick: SlotPick
@@ -3159,6 +3186,8 @@ export function DiscoverPanel({
       : crossedHeldBar
         ? heldBar
         : Math.floor(pos / traceGrid) * traceGrid
+    // The density arc gets every tick, before any branch below can return.
+    densityTick(step.wrapped, pos, loopBars)
     // A change that was WAITING for its boundary LANDS HERE and only
     // here -- the loop top, or (since the arbitrary-bar swap) the bar a
     // bare cut named for itself.
@@ -4054,12 +4083,20 @@ export function DiscoverPanel({
   // the loop top: it is not previewing, so its roll queues as `joining`,
   // and with candidate null until the landing's commitSlotPick,
   // reportSlotResolution has nothing to auto-join it on before then.
-  function addSlot(kinds: DiscoverSlotKind[], immediate = false): void {
+  function addSlot(kinds: DiscoverSlotKind[], immediate = false, radioAdded = false): void {
     pushUndoSnapshot()
     const id = freshSlotId()
     setSlots((prev) => [
       ...prev,
-      { id, kinds, locked: false, candidate: null, hasRerolled: false, gain: 1 }
+      {
+        id,
+        kinds,
+        locked: false,
+        candidate: null,
+        hasRerolled: false,
+        gain: 1,
+        ...(radioAdded ? { radioAdded: true } : {})
+      }
     ])
     const projectIsEmpty = !Object.values(rifffsState).some((r) => r.startBar !== undefined)
     if (projectIsEmpty) {
@@ -4641,6 +4678,13 @@ export function DiscoverPanel({
     // carrying it. Step (3) re-stages whatever else was waiting.
     withdrawManualChange(id, 'manual-change-removed')
     pushUndoSnapshot()
+    dropSlot(id)
+  }
+
+  /** removeSlot without its undo point and its queue withdrawal: the row
+   * goes, with everything radio and the mix knew about it. Also how the
+   * density arc removes a row (radioRemovesRow), which takes no undo. */
+  function dropSlot(id: string): void {
     setSlots((prev) => prev.filter((s) => s.id !== id))
     forgetSlotResolution(id)
     dropFromPreviewingMix(id)
@@ -4733,7 +4777,7 @@ export function DiscoverPanel({
       else queueManualChange(copyId, pick, true, undoSequence.latest())
       return
     }
-    setSlots((prev) => [...prev, { ...slot, id: freshSlotId() }])
+    setSlots((prev) => [...prev, { ...slot, id: freshSlotId(), radioAdded: undefined }])
   }
 
   // Direct reports, 2026-09-17, found in code review: a slot whose reroll
@@ -5594,11 +5638,12 @@ export function DiscoverPanel({
     pick: SlotPick,
     joining: boolean,
     undoSeq: number,
-    radioSkip = false
+    radioSkip = false,
+    arrival: ManualArrival | null = null
   ): boolean {
     if (manualChangesRef.current.has(slotId)) return false
     const next = new Map(manualChangesRef.current)
-    next.set(slotId, { pick, stem: null, joining, arrival: null, undoSeq, radioSkip })
+    next.set(slotId, { pick, stem: null, joining, arrival, undoSeq, radioSkip })
     setManualChanges(next)
     // NO withdrawal of the stage that is out for this entry itself, on
     // purpose. Its stem is still null, so a re-stage now would carry
@@ -5735,6 +5780,206 @@ export function DiscoverPanel({
     setRadioPending({ slotId, pick, incomingBars: null, stem: null })
   }
 
+  // --- the density arc (2026-10-01; @shared/radioDensity) ---
+
+  function resetDensityArc(): void {
+    densityLegRef.current = null
+    arcAddingRef.current = null
+    arcExitRef.current = null
+  }
+
+  /** Every radio tick. At a loop top the leg advances and may start a
+   * step; on every tick a row on its way out is moved along. Deferred, as
+   * everything in the tick that sets state is. */
+  function densityTick(wrapped: boolean, pos: number, loopBars: number): void {
+    if (radioDensityOf(radioSettings) !== 'arc') return
+    if (wrapped) arcLapRef.current += 1
+    void Promise.resolve().then(() => {
+      if (!radioOnRef.current) return
+      stepArcExit(pos, loopBars)
+      if (wrapped) densityAtWrap(loopBars)
+    })
+  }
+
+  function densityAtWrap(loopBars: number): void {
+    const rows = slotsRef.current
+    const adding = arcAddingRef.current
+    // A joining row is done once its change has landed or gone.
+    if (adding !== null && !adding.picking && !manualChangesRef.current.has(adding.slotId)) {
+      arcAddingRef.current = null
+    }
+    const kind = nextArcKind(rows.map((r) => r.kinds))
+    const removal = arcRemovalCandidate()
+    const { leg, step } = advanceDensityLeg(
+      densityLegRef.current ?? newDensityLeg('growing', rows.length),
+      {
+        count: rows.length,
+        loopBars,
+        busy: arcAddingRef.current !== null || arcExitRef.current !== null,
+        canAdd: kind !== null,
+        canRemove: removal !== null
+      }
+    )
+    densityLegRef.current = leg
+    if (step === 'add' && kind !== null) void arcAddRow(kind)
+    else if (step === 'remove' && removal !== null) {
+      arcExitRef.current = { slotId: removal, phase: 'waiting', lap: arcLapRef.current }
+    }
+  }
+
+  /** The row a thinning arc would remove now (pickArcRemoval), or null. */
+  function arcRemovalCandidate(): string | null {
+    const lengths = resolvedBarLengthsRef.current
+    const longest = lengths.size > 0 ? Math.max(...lengths.values()) : 0
+    const atLongest = [...lengths.values()].filter((b) => b === longest).length
+    const previewing = previewingSlotIdsRef.current
+    const led = radioLedChangeRef.current
+    return pickArcRemoval(
+      slotsRef.current.map((s) => ({
+        id: s.id,
+        kinds: s.kinds,
+        radioAdded: s.radioAdded === true,
+        locked: s.locked,
+        soloed: previewing.size === 1 && previewing.has(s.id),
+        held: radioSlotFlagsRef.current[s.id] === 'hook',
+        busy:
+          manualChangesRef.current.has(s.id) ||
+          radioSkipPickingRef.current.has(s.id) ||
+          led?.slotId === s.id ||
+          !lengths.has(s.id),
+        shrinksLoop: lengths.get(s.id) === longest && atLongest === 1,
+        staleness: radioTurnRef.current - (radioChangedAtRef.current.get(s.id) ?? 0)
+      }))
+    )
+  }
+
+  /** A growing arc adds a row of `kind`: it appears at once, silent, and
+   * joins at the loop top through the manual queue (as a row added by hand
+   * while radio runs does), arriving with a filter in or a bloom. No undo
+   * point: the arc is radio, and radio is performance, not an edit. */
+  async function arcAddRow(kind: DiscoverSlotKind): Promise<void> {
+    const id = freshSlotId()
+    arcAddingRef.current = { slotId: id, picking: true }
+    setSlots((prev) => [
+      ...prev,
+      {
+        id,
+        kinds: [kind],
+        locked: false,
+        candidate: null,
+        hasRerolled: false,
+        gain: 1,
+        radioAdded: true
+      }
+    ])
+    // PAN HOOK: when Discover rows can be panned (a native track of its
+    // own), a row the arc adds takes its stable place in the stereo field
+    // here, as the web radio's panForSlots gives it.
+    const pick = await pickForSlot(id, [kind])
+    const stillThere = slotsRef.current.some((s) => s.id === id)
+    if (pick === null || pick.candidate === null || !stillThere) {
+      if (stillThere) dropSlot(id)
+      arcAddingRef.current = null
+      return
+    }
+    if (!radioOnRef.current) {
+      // Radio stopped meanwhile: it lands at once, as every waiting change
+      // does when radio stops.
+      commitSlotPick(id, pick)
+      arcAddingRef.current = null
+      return
+    }
+    arcAddingRef.current = { slotId: id, picking: false }
+    const queued = queueManualChange(
+      id,
+      pick,
+      true,
+      undoSequence.latest(),
+      false,
+      densityArrival(radioSettings.transitions, [kind])
+    )
+    if (!queued) arcAddingRef.current = null
+  }
+
+  /** A thinning arc's row on its way out, moved along each tick:
+   *   waiting -> a drop-out is armed on it for the rest of this lap (the
+   *              same curve a radio drop-out uses: full, then silent for
+   *              its last two bars), when no other leading gesture or
+   *              stage has the lap and the drop is still ahead;
+   *   fading  -> once the drop has gone silent, the row is removed, in the
+   *              silence -- never across the wrap, where the curve comes
+   *              back up. A lap missed for any reason starts over.
+   * A row that stops being removable (padlocked, soloed, held, changed)
+   * is simply kept, and the leg tries again at its next step. */
+  function stepArcExit(pos: number, loopBars: number): void {
+    const exit = arcExitRef.current
+    if (exit === null) return
+    const slot = slotsRef.current.find((s) => s.id === exit.slotId)
+    const previewing = previewingSlotIdsRef.current
+    if (
+      !slot ||
+      slot.locked ||
+      radioSlotFlagsRef.current[slot.id] === 'hook' ||
+      (previewing.size === 1 && previewing.has(slot.id)) ||
+      manualChangesRef.current.has(slot.id) ||
+      radioLedChangeRef.current?.slotId === slot.id
+    ) {
+      if (exit.phase === 'fading') {
+        radioGestureRef.current = radioGestureRef.current.filter(
+          (g) => !(g.kind === 'drop-out' && g.slotId === exit.slotId)
+        )
+        scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+      }
+      arcExitRef.current = null
+      return
+    }
+    // Not heard: nothing to fade.
+    if (!previewing.has(slot.id)) {
+      radioRemovesRow(slot.id)
+      return
+    }
+    const dropBars = Math.min(ARC_EXIT_BEATS / 4, loopBars / 2)
+    const leaveAt = loopBars - dropBars
+    if (exit.phase === 'waiting') {
+      const leadingArmed = radioGestureRef.current.some(
+        (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
+      )
+      // An ordinary push would withdraw a stage that is out.
+      if (leadingArmed || radioStageRef.current !== null || pos >= leaveAt - 0.25) return
+      radioGestureRef.current = [
+        ...radioGestureRef.current,
+        { kind: 'drop-out', slotId: slot.id, beats: ARC_EXIT_BEATS, lapsLeft: 1 }
+      ]
+      arcExitRef.current = { ...exit, phase: 'fading', lap: arcLapRef.current }
+      scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+      return
+    }
+    const stillArmed = radioGestureRef.current.some(
+      (g) => g.kind === 'drop-out' && g.slotId === slot.id
+    )
+    if (!stillArmed || arcLapRef.current !== exit.lap) {
+      arcExitRef.current = { ...exit, phase: 'waiting' }
+      return
+    }
+    // Silent from leaveAt (plus the curve's short ramp); a little margin,
+    // and never with a stage out.
+    if (pos >= leaveAt + 0.1 && radioStageRef.current === null) radioRemovesRow(slot.id)
+  }
+
+  /** The arc removes a row: as removeSlot, but no undo point, and radio's
+   * pick for it (if any) goes and is made again among the rest. */
+  function radioRemovesRow(id: string): void {
+    arcExitRef.current = null
+    radioGestureRef.current = radioGestureRef.current.filter((g) => g.slotId !== id)
+    withdrawManualChange(id, 'arc-removed')
+    dropSlot(id)
+    if (radioLastSlotRef.current === id) radioLastSlotRef.current = null
+    if (radioPendingRef.current?.slotId === id) {
+      setRadioPending(null)
+      if (radioLedChangeRef.current === null && !radioSkipWaiting()) void armRadioPick()
+    }
+  }
+
   /** A skip picking its stem, or queued and waiting for the loop top. */
   function radioSkipWaiting(): boolean {
     if (radioSkipPickingRef.current.size > 0) return true
@@ -5800,6 +6045,7 @@ export function DiscoverPanel({
 
   function stopRadio(): void {
     radioOnRef.current = false
+    resetDensityArc()
     setRadioOn(false)
     radioClockRef.current = null
     setRadioPending(null)
@@ -5872,9 +6118,13 @@ export function DiscoverPanel({
    */
   function startRadio(pace: RadioPace): void {
     if (slotsRef.current.length === 0) {
-      for (const kind of radioStarterKinds(radioSettings.channels)) addSlot([kind])
+      // With the density arc on, the bed starts minimal (drums, bass) and
+      // the arc grows it; otherwise it is `channels` rows, as before.
+      const bed = radioDensityOf(radioSettings) === 'arc' ? DENSITY_MIN : radioSettings.channels
+      for (const kind of radioStarterKinds(bed)) addSlot([kind], false, true)
     }
     radioOnRef.current = true
+    resetDensityArc()
     // createRadioClock, not restartRadioInterval: switching radio on is
     // where a phrase STARTS. The origin is the loop top radio started
     // inside (lapsSincePhrase counts whole laps, so a switch-on halfway
