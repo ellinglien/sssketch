@@ -1439,17 +1439,26 @@ async function sampleArtistTraitStems(
   const ids = [...artistStemCIDs]
   const shuffled = sampleDistinctIndices(ids.length, ids.length).map((i) => ids[i])
   const sampled: TraitSampledStem[] = []
+  // Prepared once per placeholder count: every chunk but the last is full
+  // size, so a call prepares at most two statements.
+  const statements = new Map<number, Database.Statement>()
+  const statementFor = (n: number): Database.Statement => {
+    let stmt = statements.get(n)
+    if (!stmt) {
+      stmt = ownDb.prepare(
+        `SELECT StemCID, FeaturesJSON FROM StemFeatureCache
+         WHERE StemCID IN (${new Array(n).fill('?').join(', ')})`
+      )
+      statements.set(n, stmt)
+    }
+    return stmt
+  }
   for (const idChunk of chunk(shuffled, CANDIDATE_QUERY_CHUNK_SIZE)) {
     if (sampled.length >= MAX_CANDIDATE_RESOLUTION_POOL) break
     let rows: FeatureCandidateRow[]
     try {
       countWork('sql:discover.artist-trait-page')
-      rows = ownDb
-        .prepare(
-          `SELECT StemCID, FeaturesJSON FROM StemFeatureCache
-           WHERE StemCID IN (${idChunk.map(() => '?').join(', ')})`
-        )
-        .all(...idChunk) as FeatureCandidateRow[]
+      rows = statementFor(idChunk.length).all(...idChunk) as FeatureCandidateRow[]
     } catch {
       return sampled
     }

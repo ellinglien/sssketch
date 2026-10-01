@@ -14,6 +14,8 @@ import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { upsertStemCategoryRole } from './stemCategoriesStore'
 import { upsertStemAutoCategory } from './stemAutoCategoryStore'
 import { bumpTableWriteVersion } from './tableWriteVersion'
+import { prewarmTraitQuantileTables } from './traitQuantileCache'
+import { countWork } from './workCounters'
 import { instrumentMaskToSoundType, soundSourceMatchesFilter } from '@shared/riffLibraryTypes'
 
 function freshDb(): Database.Database {
@@ -2646,5 +2648,46 @@ describe('artist mode: artistStemCIDs filters before the bounded sample', () => 
       artistStemCIDs: new Set()
     })
     expect(candidates).toEqual([])
+  })
+})
+
+// Pass-through spy for the trait fast-path test below (vi.mock is hoisted).
+// countWork is a no-op in tests, so recording calls changes nothing else.
+vi.mock('./workCounters', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./workCounters')>()
+  return { ...actual, countWork: vi.fn() }
+})
+
+describe('artist mode: trait value-table fast path', () => {
+  it('samples from the in-memory table, never the SQL page', async () => {
+    const own = freshDb()
+    for (let i = 0; i < 1200; i++) {
+      seedRiff(own, `re${i}`, 'jam1', 128, [`e${i}`])
+      seedStem(own, `e${i}`, 'jam1', { creatorUserName: 'elling' })
+      seedFeatures(own, `e${i}`, featuresJSON({ zcrBrightness: 0.5 }))
+    }
+    for (const id of ['t1', 't2']) {
+      seedRiff(own, `r-${id}`, 'jam1', 128, [id])
+      seedStem(own, id, 'jam1', { creatorUserName: 'tiny' })
+      seedFeatures(own, id, featuresJSON({ zcrBrightness: 0.5 }))
+    }
+    seedRiff(own, 'r-t3', 'jam1', 128, ['t3'])
+    seedStem(own, 't3', 'jam1', { creatorUserName: 'tiny' }) // not analysed
+    await prewarmTraitQuantileTables(own)
+    vi.mocked(countWork).mockClear()
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['bright'],
+      onlyOwnStems: true,
+      targetUser: 'tiny',
+      artistStemCIDs: new Set(['t1', 't2', 't3'])
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['t1', 't2'])
+    const kinds = vi.mocked(countWork).mock.calls.map(([kind]) => kind)
+    // The value table was consulted (and current) ...
+    expect(kinds).toContain('sql:trait-value-table.count')
+    // ... so the SQL fallback never ran.
+    expect(kinds).not.toContain('sql:discover.artist-trait-page')
   })
 })

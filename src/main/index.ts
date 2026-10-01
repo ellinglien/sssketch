@@ -1274,8 +1274,9 @@ app.whenReady().then(async () => {
       )
       // Artist mode only. `me` never sends `artist`, so this stays undefined
       // and getDiscoverCandidates takes today's path.
-      const artistStemCIDs = artist
-        ? await getArtistStemCIDs([...new Set(jams.map((j) => j.dbForJam))], artist)
+      const artistName = artist?.trim() || undefined
+      const artistStemCIDs = artistName
+        ? await getArtistStemCIDs([...new Set(jams.map((j) => j.dbForJam))], artistName)
         : undefined
       const result = await getDiscoverCandidates({
         ownDb: openOwnRiffLibraryDb(),
@@ -1320,7 +1321,8 @@ app.whenReady().then(async () => {
       kinds: DiscoverSlotKind[],
       soundSource?: DiscoverSoundSourceFilter,
       creator?: string
-    ) => getAdjacentDiscoverCandidates(centerRiffCID, kinds, soundSource, creator)
+    ) =>
+      getAdjacentDiscoverCandidates(centerRiffCID, kinds, soundSource, creator?.trim() || undefined)
   )
 
   ipcMain.handle('find-riff-for-stem-path', (_event, stemPath: string) =>

@@ -125,6 +125,8 @@ export async function getAdjacentDiscoverCandidates(
   /** Discover artist mode: only this creator's stems (creatorAllowed). */
   creator?: string
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
+  // A blank creator is no filter, never "only stems with no creator".
+  const creatorName = creator?.trim() || undefined
   const context = resolveRiffWithContext(centerRiffCID)
   if (!context) return { newer: [], older: [] }
 
@@ -171,7 +173,7 @@ export async function getAdjacentDiscoverCandidates(
     const resolved = resolveRiff(summary.riffCID)
     if (!resolved) return null
     for (const stem of resolved.stems) {
-      if (!creatorAllowed(stem.creatorUserName, creator)) continue
+      if (!creatorAllowed(stem.creatorUserName, creatorName)) continue
       // Local audio always wins over the unavailable list: resolveRiff has
       // already turned `path` into null for anything not on disk, so a
       // non-null path here IS a real existsSync result.

@@ -3,8 +3,8 @@
 // One artist's stems, for Discover artist mode. Read from the archive's
 // Stems_IndexUser index, paged by rowid INSIDE that index (measured
 // 2026-10-01 on Elling's 1.19 GB USB archive: 31,398 rows in 1.63 s cold as
-// one statement, 2,000 rows in 9 ms per page) so no single slice blocks the
-// main process. The own db has no CreatorUserName index; its pages are
+// one statement; per 2,000-row page, ~9 ms warm and ~250 ms cold) so no
+// single slice blocks the main process for long. The own db has no CreatorUserName index; its pages are
 // rowid-range scans of a small SSD table, which is cheap.
 import type Database from 'better-sqlite3'
 import { countWork } from './workCounters'
@@ -21,7 +21,8 @@ export interface ArtistStemRow {
 }
 
 const ARTIST_PAGE = 2000
-/** Per db. 31k rows is ~3 MB; a handful of artists per session is plenty. */
+/** Per db. 31k rows is ~4.6 MB of row objects and CID strings; a handful
+ * of artists per session is plenty. */
 const MAX_CACHED_ARTISTS = 8
 
 function yieldToEventLoop(): Promise<void> {
@@ -59,32 +60,70 @@ export async function readArtistStemRows(
   return out
 }
 
-interface Entry {
-  rows: ArtistStemRow[]
-  state: ScanCacheState
+interface PerDb {
+  /** ONE Stems signal for every artist cached on this db, read before the
+   * walk that first filled the (empty) cache. Any write since then reads
+   * as stale and drops every artist at once, so a roll pays one signal
+   * check per db, not one per cached artist. Null while nothing is cached. */
+  state: ScanCacheState | null
+  /** Map order is the LRU order. */
+  artists: Map<string, ArtistStemRow[]>
+  /** Walks still running, so concurrent rolls for one artist share one. */
+  inFlight: Map<string, Promise<ArtistStemRow[]>>
+  /** Bumped on invalidation: a walk that started before it must not
+   * repopulate the cache with rows read against the old table. */
+  generation: number
 }
-const cache = new WeakMap<Database.Database, Map<string, Entry>>()
+const cache = new WeakMap<Database.Database, PerDb>()
 
-async function rowsForDb(db: Database.Database, artist: string): Promise<ArtistStemRow[]> {
+function perDbFor(db: Database.Database): PerDb {
   let perDb = cache.get(db)
   if (!perDb) {
-    perDb = new Map()
+    perDb = { state: null, artists: new Map(), inFlight: new Map(), generation: 0 }
     cache.set(db, perDb)
   }
-  const hit = perDb.get(artist)
-  if (hit && isScanCacheCurrent(db, 'Stems', hit.state)) {
-    // Re-insert: Map order is the LRU order.
-    perDb.delete(artist)
-    perDb.set(artist, hit)
-    return hit.rows
+  return perDb
+}
+
+function rowsForDb(db: Database.Database, artist: string): Promise<ArtistStemRow[]> {
+  const perDb = perDbFor(db)
+  if (perDb.state !== null && !isScanCacheCurrent(db, 'Stems', perDb.state)) {
+    perDb.state = null
+    perDb.artists.clear()
+    perDb.generation += 1
   }
+  const hit = perDb.artists.get(artist)
+  if (hit) {
+    perDb.artists.delete(artist)
+    perDb.artists.set(artist, hit)
+    return Promise.resolve(hit)
+  }
+  const pending = perDb.inFlight.get(artist)
+  if (pending) return pending
+
   // Signal read BEFORE the walk: a write landing mid-walk reads as stale next time.
-  const state = newScanCacheState(readTableSignal(db, 'Stems'))
-  const rows = await readArtistStemRows(db, artist)
-  perDb.delete(artist)
-  perDb.set(artist, { rows, state })
-  while (perDb.size > MAX_CACHED_ARTISTS) perDb.delete(perDb.keys().next().value as string)
-  return rows
+  const signal = perDb.state === null ? readTableSignal(db, 'Stems') : null
+  const generation = perDb.generation
+  const walk = (async (): Promise<ArtistStemRow[]> => {
+    try {
+      const rows = await readArtistStemRows(db, artist)
+      if (perDb.generation === generation) {
+        if (perDb.state === null) perDb.state = newScanCacheState(signal)
+        perDb.artists.delete(artist)
+        perDb.artists.set(artist, rows)
+        while (perDb.artists.size > MAX_CACHED_ARTISTS) {
+          perDb.artists.delete(perDb.artists.keys().next().value as string)
+        }
+      }
+      return rows
+    } finally {
+      perDb.inFlight.delete(artist)
+    }
+  })()
+  // Set before anything awaits it: the async body above has suspended at
+  // its first await by now, so its finally cannot have run yet.
+  perDb.inFlight.set(artist, walk)
+  return walk
 }
 
 /** Every db's rows, merged; the FIRST db listing a StemCID decides its jam. */

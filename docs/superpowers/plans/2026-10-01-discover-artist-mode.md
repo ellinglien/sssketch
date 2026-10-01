@@ -965,6 +965,15 @@ git commit -m "discover artist: artist stem set filters every pool before its sa
 
 **As landed:** code exactly as above. Prettier reformatted only the test's import onto one line and the two preload `ipcRenderer.invoke(...)` calls onto one argument per line. Step 7: the mask and trait tests failed as expected. "An empty artist set yields nothing" already passed before the change, because `targetUser: 'nobody'` filters everything anyway; it now pins the empty-set early return. In adjacency, an unknown creator comes through as `''` (`riffLibraryStore.ts:771`), not null, and `creatorAllowed` rejects it correctly. The value-table branch of `sampleArtistTraitStems` has no direct test (the trait test covers the SQL fallback). Gates: typecheck clean, lint at the 4 pre-existing warnings, 232 files / 3,784 tests green, and `CI=1` skips `discoverArtistStems.test.ts`.
 
+**Task 2 review fixes (separate commit):**
+- `discoverArtistStems.ts` now holds one Stems signal per db, shared by every cached artist, so one change drops them all.
+- It also has an in-flight promise map per db and artist (set before the first await, deleted in a `finally`), plus a generation counter so a walk that started before an invalidation never repopulates the cache.
+- Comments now say ~4.6 MB per 31k rows and ~250 ms per cold page.
+- `sampleArtistTraitStems` prepares at most two chunk statements per call.
+- Both IPC handlers and `getAdjacentDiscoverCandidates` normalise with `?.trim() || undefined`.
+- New tests: concurrent calls share one 3-page walk; one signal check refreshes two artists; and the trait value-table fast path (after `prewarmTraitQuantileTables`, `{t1,t2,t3}` gives `[t1,t2]` and never counts `sql:discover.artist-trait-page`).
+- Both test files use a pass-through `vi.mock('./workCounters')` spy.
+
 **Task 1 review follow-up (commit `e455ab2`):** `artistTurnoverIds` trims `artist`, and a blank one targets the own username. `rollFilterForArtist` treats a blank `artist` as own. New tests cover "the artist wins over `onlyOwnStems=true`" and pin case-sensitive matching.
 
 ---
