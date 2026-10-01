@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+#include <vector>
 
 namespace sssketch
 {
@@ -137,6 +138,9 @@ namespace sssketch
         // writers are message-thread code today; the audio thread never
         // touches this.
         std::mutex writerMutex;
+        // Retired maps whose grace period timed out -- see GracePeriod.h.
+        // Freed after the next grace period that completes. Writer-only.
+        std::vector<const ChannelMap*> stuckRetired;
 
         /** A load's own onLoaded callback, plus when it was issued (via
          * juce::Time::getMillisecondCounterHiRes(), same clock

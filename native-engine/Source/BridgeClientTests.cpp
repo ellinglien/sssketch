@@ -1,6 +1,7 @@
 // native-engine/Source/BridgeClientTests.cpp
 #include "BridgeClient.h"
 #include <juce_core/juce_core.h>
+#include <chrono>
 #include <thread>
 #include <vector>
 
@@ -61,6 +62,47 @@ namespace sssketch
                 for (auto& t : readers)
                     t.join();
                 expectEquals(missing.load(), 0);
+            }
+
+            // A bridged slot stuck past the deadline (the reader doesn't leave its scope)
+            // must not hang unloadPlugin: it returns at the deadline, the slot is gone
+            // from the published map, and the old map -- with the channel in it -- is
+            // leaked rather than freed under the reader, until a later grace period
+            // completes.
+            beginTest("unloadPlugin returns at the deadline and leaks the old map while a reader is stuck");
+            {
+                BridgeClient client({});
+                publish(client, "stuck");
+                std::weak_ptr<SharedAudioChannel> channel = client.publishedChannels.load()->at("stuck");
+
+                std::atomic<bool> entered { false };
+                std::atomic<bool> release { false };
+                std::thread hungAudioThread([&]()
+                {
+                    BridgeClient::ReadScope scope(client);
+                    entered.store(true);
+                    while (!release.load())
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                });
+                while (!entered.load())
+                    std::this_thread::yield();
+
+                const auto start = std::chrono::steady_clock::now();
+                client.unloadPlugin("stuck");
+                const double waitedMs =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+
+                expectGreaterOrEqual(waitedMs, (double) GracePeriod::kDefaultTimeout.count() - 50.0);
+                expectLessThan(waitedMs, (double) GracePeriod::kDefaultTimeout.count() + 3000.0);
+                expect(client.channelFor("stuck") == nullptr);
+                expect(!channel.expired()); // leaked with the old map, not freed
+
+                release.store(true);
+                hungAudioThread.join();
+                expect(!channel.expired());
+
+                publish(client, "next");    // a grace period that completes...
+                expect(channel.expired());  // ...reclaims the parked map
             }
 
             // The channel channelFor hands back has to outlive the lookup too:

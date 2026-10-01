@@ -44,6 +44,8 @@ namespace sssketch
         if (bridgeProcess != nullptr && !bridgeProcess->waitForProcessToFinish(1000))
             bridgeProcess->kill();
         delete publishedChannels.load();
+        for (const auto* parked : stuckRetired)
+            delete parked;
     }
 
     void BridgeClient::connectionMade()
@@ -121,7 +123,24 @@ namespace sssketch
         // Bounded by the longest reader scope already in progress: one
         // bridged slot inside PluginChain::process, whose wait on the
         // bridge is itself capped at 5ms.
-        grace.waitForReaders();
+        if (!grace.waitForReaders())
+        {
+            // A reader is still inside a bridged slot past the deadline. It
+            // may be using `old`: park it rather than free it under a live
+            // reader. See GracePeriod.h.
+            juce::Logger::writeToLog(
+                "!!! BridgeClient: audio thread still inside a bridged slot after "
+                + juce::String((int) GracePeriod::kDefaultTimeout.count())
+                + "ms -- LEAKING the retired channel map instead of freeing it under a live reader"
+                  " (reclaimed if a later grace period completes)");
+            stuckRetired.push_back(old);
+            return;
+        }
+        // A completed grace period: anything parked by an earlier timeout
+        // is unreachable now.
+        for (const auto* parked : stuckRetired)
+            delete parked;
+        stuckRetired.clear();
         // Past the grace period nothing can reach `old`, so delete it
         // inline: channel teardown (unmapping, unlinking the shared memory
         // and semaphores) stays on the message thread with every other

@@ -11,6 +11,8 @@ namespace sssketch
     ChannelChainRegistry::~ChannelChainRegistry()
     {
         delete published.load();
+        for (const auto* parked : stuckRetired)
+            delete parked;
     }
 
     void ChannelChainRegistry::updateChannelSet(const std::vector<juce::String>& channelIds)
@@ -51,7 +53,26 @@ namespace sssketch
         // comment. Bounded by the longest reader scope already in progress:
         // one renderBlock call, which includes every channel plugin's own
         // process() and any bridged slot's wait on the bridge.
-        grace.waitForReaders();
+        if (!grace.waitForReaders())
+        {
+            // A reader has been inside its scope past the deadline -- most
+            // likely a hosted plugin hung in process(). It may still be
+            // using `old`, so freeing it would be the very use-after-free
+            // this exists to prevent: park it instead. See GracePeriod.h.
+            juce::Logger::writeToLog(
+                "!!! ChannelChainRegistry: audio thread still inside a channel chain after "
+                + juce::String((int) GracePeriod::kDefaultTimeout.count())
+                + "ms (hung plugin?) -- LEAKING the retired channel map instead of freeing it under a live reader"
+                  " (reclaimed if a later grace period completes)");
+            stuckRetired.push_back(old);
+            return;
+        }
+        // This grace period completed, so any reader that was stuck when
+        // an earlier one timed out has left: what it was parked against is
+        // unreachable now.
+        for (const auto* parked : stuckRetired)
+            delete parked;
+        stuckRetired.clear();
         // Any channel from `current` NOT reused above still has its
         // shared_ptr held only by `old` (never copied into `next`) -- once
         // `old` itself is deleted, that's the last reference, so its

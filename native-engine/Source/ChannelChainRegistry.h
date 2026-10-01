@@ -37,7 +37,9 @@ namespace sssketch
      * (message thread) ever waits, for at most the longest reader scope
      * already in progress: one renderBlock call, which includes every
      * channel plugin's own process() and any bridged slot's wait on the
-     * bridge.
+     * bridge. That wait has a deadline (see GracePeriod.h): past it, a
+     * stuck reader (a hung plugin) gets the old map LEAKED rather than
+     * freed under it, and the message thread carries on.
      *
      * Map values are shared_ptr, not unique_ptr, deliberately: reusing an
      * existing channel's chain across an updateChannelSet call means
@@ -157,6 +159,9 @@ namespace sssketch
         // grace periods never interleave their phase flips. Writer-only:
         // the audio thread never touches it.
         std::mutex writerMutex;
+        // Retired maps whose grace period timed out -- see GracePeriod.h.
+        // Freed after the next grace period that completes. Writer-only.
+        std::vector<const ChannelChainMap*> stuckRetired;
         PluginChain::Instantiator instantiator;
         BridgeClient* bridgeClient;
         std::atomic<double> currentBpm { 120.0 };

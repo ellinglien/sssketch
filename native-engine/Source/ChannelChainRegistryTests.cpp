@@ -1,6 +1,7 @@
 // native-engine/Source/ChannelChainRegistryTests.cpp
 #include "ChannelChainRegistry.h"
 #include <juce_core/juce_core.h>
+#include <chrono>
 #include <thread>
 
 namespace sssketch
@@ -128,6 +129,51 @@ namespace sssketch
                     expect(registry.chainFor("ch-2")->loadPluginSync(0, "some-plugin", 44100.0, 512, err));
                     registry.updateChannelSet({ "ch-2" });
                     expectEquals(destroyed.load(), 1);
+                }
+
+                // A hosted plugin hung inside process() holds renderBlock's ReadScope. While it
+                // stays stuck, updateChannelSet must come back at the grace-period deadline
+                // rather than hang the message thread, publish the new map anyway, and LEAK
+                // the old one (its dropped chain is not destroyed) rather than free it under
+                // the reader. Once the reader has left, the next completed grace period
+                // reclaims it.
+                beginTest("updateChannelSet returns at the deadline and leaks the old map while a reader is stuck");
+                {
+                    std::atomic<int> destroyed { 0 };
+                    ChannelChainRegistry registry(trackedInstantiator(destroyed));
+                    registry.updateChannelSet({ "ch-1", "ch-2" });
+                    juce::String err;
+                    expect(registry.chainFor("ch-1")->loadPluginSync(0, "some-plugin", 44100.0, 512, err));
+
+                    std::atomic<bool> entered { false };
+                    std::atomic<bool> release { false };
+                    std::thread hungAudioThread([&]()
+                    {
+                        ChannelChainRegistry::ReadScope scope(registry);
+                        entered.store(true);
+                        while (!release.load())
+                            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                    });
+                    while (!entered.load())
+                        std::this_thread::yield();
+
+                    const auto start = std::chrono::steady_clock::now();
+                    registry.updateChannelSet({ "ch-2" });
+                    const double waitedMs =
+                        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+
+                    expectGreaterOrEqual(waitedMs, (double) GracePeriod::kDefaultTimeout.count() - 50.0);
+                    expectLessThan(waitedMs, (double) GracePeriod::kDefaultTimeout.count() + 3000.0);
+                    expect(registry.chainFor("ch-1") == nullptr); // the new map is published regardless
+                    expect(registry.chainFor("ch-2") != nullptr);
+                    expectEquals(destroyed.load(), 0); // leaked, not freed under the reader
+
+                    release.store(true);
+                    hungAudioThread.join();
+                    expectEquals(destroyed.load(), 0); // nothing frees it behind the writer's back
+
+                    registry.updateChannelSet({ "ch-2", "ch-3" }); // a grace period that completes
+                    expectEquals(destroyed.load(), 1);              // ...reclaims the parked map
                 }
 
                 beginTest("concurrent chainFor reads never see a torn map while updateChannelSet runs repeatedly");
