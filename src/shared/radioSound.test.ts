@@ -11,7 +11,10 @@ import {
   REVERB_IR,
   REVERB_RETURN_DB,
   SOUND_LIMITS,
+  TONE_TILT_DB,
   glueThresholdDb,
+  reverbReturnGain,
+  toneShelvesDb,
   normalizeSoundSettings,
   saturationDrive,
   saturationMakeupDb,
@@ -93,7 +96,13 @@ describe('the amount maps', () => {
     expect(glueThresholdDb(1)).toBe(-20)
     expect(glueThresholdDb(5)).toBe(-20)
     expect(glueThresholdDb(-1)).toBe(-8)
-    expect(glueThresholdDb(Number.NaN)).toBe(-14)
+  })
+
+  it('a non-number amount is the default amount, in every map', () => {
+    for (const junk of [Number.NaN, Infinity, -Infinity]) {
+      expect(glueThresholdDb(junk)).toBe(glueThresholdDb(DEFAULT_SOUND_SETTINGS.glue.amount))
+      expect(saturationDrive(junk)).toBe(saturationDrive(DEFAULT_SOUND_SETTINGS.saturation.amount))
+    }
   })
 
   it('saturation: amount 0..1 is drive 0..1.8, clamped; the default 0.5 is 0.9, the web default', () => {
@@ -112,6 +121,29 @@ describe('the amount maps', () => {
     expect(saturationMakeupDb(1.8)).toBeCloseTo(0.5, 12)
     expect(saturationMakeupDb(0.9)).toBeCloseTo(0.125, 12)
     expect(saturationMakeupDb(0)).toBe(0)
+    expect(saturationMakeupDb(MASTERING.saturation.maxDrive)).toBeCloseTo(0.5, 12)
+    expect(saturationMakeupDb(Number.NaN)).toBe(0)
+    expect(saturationMakeupDb(Infinity)).toBe(0)
+  })
+
+  it('tone: a tilt about +1/+1 dB, 1.5 dB a unit; 0 is today exactly', () => {
+    expect(TONE_TILT_DB).toBe(1.5)
+    expect(toneShelvesDb(0)).toEqual({ lowDb: 1, highDb: 1 })
+    expect(toneShelvesDb(-1)).toEqual({ lowDb: 2.5, highDb: -0.5 })
+    expect(toneShelvesDb(1)).toEqual({ lowDb: -0.5, highDb: 2.5 })
+    expect(toneShelvesDb(0.5)).toEqual({ lowDb: 0.25, highDb: 1.75 })
+    expect(toneShelvesDb(7)).toEqual(toneShelvesDb(1))
+    expect(toneShelvesDb(Number.NaN)).toEqual(toneShelvesDb(0))
+  })
+
+  it("reverb: 0.5 is today's return for either room, 0 silent, 1 is +6 dB", () => {
+    const cavern = Math.pow(10, REVERB_RETURN_DB / 20)
+    expect(reverbReturnGain(0.5, 'cavern')).toBeCloseTo(cavern, 12)
+    expect(reverbReturnGain(0.5, 'zita')).toBe(1)
+    expect(reverbReturnGain(0, 'cavern')).toBe(0)
+    expect(reverbReturnGain(1, 'zita')).toBe(2)
+    expect(reverbReturnGain(3, 'zita')).toBe(2)
+    expect(reverbReturnGain(Number.NaN, 'zita')).toBe(1)
   })
 
   it('throws: rare 32-64, normal 16-32 (the web), often 8-16 bars', () => {
@@ -126,14 +158,14 @@ describe('DEFAULT_SOUND_SETTINGS', () => {
   it('is all on, at the web values (saturation at half its range, lower than the old 1.8)', () => {
     const d = DEFAULT_SOUND_SETTINGS
     expect(d).toEqual({
-      mastering: { on: true },
+      mastering: { on: true, headroomDb: -4, ceilingDb: -1 },
       glue: { on: true, amount: 0.5 },
-      tone: { on: true },
+      tone: { on: true, amount: 0 },
       saturation: { on: true, amount: 0.5 },
-      reverb: { room: 'cavern' },
+      reverb: { room: 'cavern', amount: 0.5 },
       panning: { on: true, width: ROW_PAN },
       pump: { on: true, depthDb: 4 },
-      throws: { on: true, rate: 'normal' },
+      throws: { on: true, rate: 'normal', level: 1 },
       riserVariety: { on: true }
     } satisfies SoundSettings)
   })
@@ -141,6 +173,16 @@ describe('DEFAULT_SOUND_SETTINGS', () => {
   it('is frozen, so no caller can change the defaults under everyone else', () => {
     expect(Object.isFrozen(DEFAULT_SOUND_SETTINGS)).toBe(true)
     expect(Object.isFrozen(DEFAULT_SOUND_SETTINGS.glue)).toBe(true)
+  })
+
+  it('the shared numbers are frozen too, all the way down', () => {
+    expect(Object.isFrozen(REVERB_IR)).toBe(true)
+    expect(Object.isFrozen(REVERB_IR.t60)).toBe(true)
+    expect(Object.isFrozen(REVERB_IR.t60[0])).toBe(true)
+    expect(Object.isFrozen(MASTERING)).toBe(true)
+    expect(Object.isFrozen(MASTERING.glue)).toBe(true)
+    expect(Object.isFrozen(FAUST_DEFAULTS)).toBe(true)
+    expect(Object.isFrozen(FAUST_DEFAULTS.pump)).toBe(true)
   })
 })
 
@@ -153,14 +195,14 @@ describe('normalizeSoundSettings', () => {
 
   it('fills a missing stage, or a missing or junk field, from the defaults given', () => {
     const off: SoundSettings = {
-      mastering: { on: false },
+      mastering: { on: false, headroomDb: -6, ceilingDb: -2 },
       glue: { on: false, amount: 0.2 },
-      tone: { on: false },
+      tone: { on: false, amount: -0.5 },
       saturation: { on: false, amount: 0.1 },
-      reverb: { room: 'zita' },
+      reverb: { room: 'zita', amount: 0.8 },
       panning: { on: false, width: 0.1 },
       pump: { on: false, depthDb: 1 },
-      throws: { on: false, rate: 'rare' },
+      throws: { on: false, rate: 'rare', level: 0.3 },
       riserVariety: { on: false }
     }
     expect(normalizeSoundSettings({}, off)).toEqual(off)
@@ -168,7 +210,7 @@ describe('normalizeSoundSettings', () => {
       {
         glue: { on: 'yes', amount: 'lots' },
         reverb: { room: 'hall' },
-        throws: { rate: 'always' },
+        throws: { rate: 'always', level: 'loud' },
         pump: 7
       },
       off
@@ -186,7 +228,7 @@ describe('normalizeSoundSettings', () => {
     expect(got.mastering.on).toBe(false)
     expect(got.saturation).toEqual({ on: true, amount: 0.25 })
     expect(got.reverb.room).toBe('zita')
-    expect(got.throws).toEqual({ on: true, rate: 'often' })
+    expect(got.throws).toEqual({ on: true, rate: 'often', level: 1 })
     expect(got.glue).toEqual(DEFAULT_SOUND_SETTINGS.glue)
   })
 
@@ -195,17 +237,36 @@ describe('normalizeSoundSettings', () => {
       glue: { amount: 3 },
       saturation: { amount: -2 },
       panning: { width: 0.9 },
-      pump: { depthDb: 40 }
+      pump: { depthDb: 40 },
+      throws: { level: 1.5 },
+      mastering: { headroomDb: 3, ceilingDb: -10 },
+      tone: { amount: -4 },
+      reverb: { amount: 2 }
     })
+    expect(got.mastering).toEqual({ on: true, headroomDb: 0, ceilingDb: -3 })
+    expect(got.tone.amount).toBe(-1)
+    expect(got.reverb.amount).toBe(1)
+    const lo = normalizeSoundSettings({ mastering: { headroomDb: -20, ceilingDb: 0 } })
+    expect(lo.mastering).toEqual({ on: true, headroomDb: -8, ceilingDb: -0.3 })
+    expect(normalizeSoundSettings({ tone: { amount: 9 } }).tone.amount).toBe(1)
+    expect(normalizeSoundSettings({ reverb: { amount: -1 } }).reverb.amount).toBe(0)
     expect(got.glue.amount).toBe(SOUND_LIMITS.glueAmount[1])
     expect(got.saturation.amount).toBe(SOUND_LIMITS.saturationAmount[0])
     expect(got.panning.width).toBe(SOUND_LIMITS.panWidth[1])
     expect(got.pump.depthDb).toBe(SOUND_LIMITS.pumpDepthDb[1])
+    expect(got.throws.level).toBe(SOUND_LIMITS.throwLevel[1])
+    expect(normalizeSoundSettings({ throws: { level: -0.5 } }).throws.level).toBe(0)
+    expect(normalizeSoundSettings({ throws: { level: 0.4 } }).throws.level).toBe(0.4)
     expect(SOUND_LIMITS).toEqual({
       glueAmount: [0, 1],
       saturationAmount: [0, 1],
       panWidth: [0, 0.5],
-      pumpDepthDb: [0, 8]
+      pumpDepthDb: [0, 8],
+      throwLevel: [0, 1],
+      headroomDb: [-8, 0],
+      ceilingDb: [-3, -0.3],
+      toneAmount: [-1, 1],
+      reverbAmount: [0, 1]
     })
   })
 
@@ -216,6 +277,19 @@ describe('normalizeSoundSettings', () => {
     })
     expect(got.pump.depthDb).toBe(4)
     expect(got.panning.width).toBe(ROW_PAN)
+  })
+
+  it('normalises a custom defaults argument against DEFAULT_SOUND_SETTINGS first', () => {
+    const junkDefaults = {
+      glue: { on: 'no', amount: 9 },
+      throws: { level: Number.NaN },
+      reverb: { room: 'hall' }
+    } as unknown as SoundSettings
+    const got = normalizeSoundSettings({}, junkDefaults)
+    expect(got.glue).toEqual({ on: true, amount: 1 })
+    expect(got.throws.level).toBe(1)
+    expect(got.reverb.room).toBe('cavern')
+    expect(got.mastering).toEqual(DEFAULT_SOUND_SETTINGS.mastering)
   })
 
   it('returns a fresh object, never the defaults themselves', () => {

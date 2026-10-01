@@ -22,6 +22,20 @@
 import { ROW_PAN } from './radioPan'
 import { THROW_EVERY_BARS } from './radioThrows'
 
+/** Readonly all the way down: what a frozen constant really is. */
+export type DeepReadonly<T> = T extends (infer E)[]
+  ? readonly DeepReadonly<E>[]
+  : T extends object
+    ? { readonly [K in keyof T]: DeepReadonly<T[K]> }
+    : T
+
+/** Object.freeze, all the way down (arrays included), so no caller can change a shared constant
+ * under everyone else. */
+function deepFreeze<T extends object>(o: T): T {
+  for (const v of Object.values(o)) if (v && typeof v === 'object') deepFreeze(v)
+  return Object.freeze(o)
+}
+
 // ---------------------------------------------------------------------------------------------
 // the shared numbers
 
@@ -36,7 +50,7 @@ export interface ReverbIr {
   t60: readonly (readonly [number, number])[]
 }
 
-export const REVERB_IR: ReverbIr = {
+export const REVERB_IR: ReverbIr = deepFreeze({
   preDelaySec: 0.03,
   t60: [
     [125, 5.0],
@@ -48,7 +62,7 @@ export const REVERB_IR: ReverbIr = {
     [8000, 2.2],
     [16000, 1.5]
   ]
-}
+})
 
 /** The convolver's return trim, dB: the ConvolverNode normalises an impulse's total power, but a
  * longer, darker room still sums louder on a steady signal; measured (the radio's
@@ -57,7 +71,7 @@ export const REVERB_IR: ReverbIr = {
 export const REVERB_RETURN_DB = -3.4
 
 /** The light mastering chain (the web's masterChain.ts MASTERING, the same shape). */
-export const MASTERING = {
+export const MASTERING = deepFreeze({
   /** Before the bypass split, so bypass A/Bs the chain at the same level: stems at unity are
    * loud (four measured at -8.9 dB RMS, +3.7 dBFS peaks), and this brings a dense mix toward
    * the spec's ~-14 LUFS with only light compression doing the rest. */
@@ -94,16 +108,16 @@ export const MASTERING = {
   /** The web's bypass crossfade time constant (setTargetAtTime): ~99% across in 5 tau = 50 ms.
    * Wet and dry fade with the same exponential, so their gains always sum to 1. */
   bypassFadeTau: 0.01
-} as const
+} as const)
 
 /** The Faust stages at their .dsp defaults: what the web runs (its loadFaust sets none of these
  * but the saturation drive and the pump depth, from the listener's amounts). */
-export const FAUST_DEFAULTS = {
+export const FAUST_DEFAULTS = deepFreeze({
   glue: { thresholdDb: -14, ratio: 2, kneeDb: 6 },
   truepeak: { ceilingDb: -1, releaseSec: 0.1, lookaheadSamples: 64, latencySamples: 75 },
   pump: { depthDb: 4, attackSec: 0.003, releaseSec: 0.2, keyLowpassHz: 150 },
   saturate: { drive: 0.9, bias: 0.1 }
-} as const
+} as const)
 
 /** The dub echo (the web's dubDelay.ts): a stereo ping-pong whose loop runs through a highpass
  * and a lowpass, so each repeat is darker; a little of it feeds the reverb. */
@@ -126,22 +140,28 @@ export const REVERB_ROOMS: readonly ReverbRoom[] = ['cavern', 'zita']
 export const THROW_RATES: readonly ThrowRate[] = ['rare', 'normal', 'often']
 
 export interface SoundSettings {
-  /** The headroom trim and the -1 dBTP limiter; glue, tone and saturation need it on. */
-  mastering: { on: boolean }
+  /** The headroom trim and the true-peak limiter; glue, tone and saturation need it on.
+   * headroomDb -8..0 (-4, the web's); ceilingDb -3..-0.3 dBTP (-1, the web's). */
+  mastering: { on: boolean; headroomDb: number; ceilingDb: number }
   /** amount 0..1 -> threshold -8..-20 dB (glueThresholdDb); 0.5 is -14, glue.dsp's default. */
   glue: { on: boolean; amount: number }
   /** HP 25 Hz, width, and +1 dB shelves at 100 Hz and 10 kHz. */
-  tone: { on: boolean }
+  /** amount -1..1, a tilt across the shelves (toneShelvesDb): negative warmer, positive
+   * brighter; 0 is the web's +1 dB at 100 Hz and +1 dB at 10 kHz. */
+  tone: { on: boolean; amount: number }
   /** amount 0..1 -> drive 0..1.8 (saturationDrive); 0.5 is 0.9, the web's default. */
   saturation: { on: boolean; amount: number }
-  /** zita keeps its own roomSize/damping/preDelayMs (the project's `reverb`). */
-  reverb: { room: ReverbRoom }
+  /** zita keeps its own roomSize/damping/preDelayMs (the project's `reverb`). amount 0..1 scales
+   * the return (reverbReturnGain): 0.5 is today's level for either room, 0 silent, 1 +6 dB. */
+  reverb: { room: ReverbRoom; amount: number }
   /** The pan for rows that are not drums or bass, 0..0.5; ROW_PAN (0.25) is the web's. */
   panning: { on: boolean; width: number }
   /** The pump's depth, dB, 0..8; 4 is the web's. */
   pump: { on: boolean; depthDb: number }
-  /** rare 32-64, normal 16-32 (the web's), often 8-16 bars between throws (throwEveryBars). */
-  throws: { on: boolean; rate: ThrowRate }
+  /** rate: rare 32-64, normal 16-32 (the web's), often 8-16 bars between throws
+   * (throwEveryBars). level: 0..1, scales each throw's send (the web's Engine.setEcho); 1, as
+   * built, is the web's default. */
+  throws: { on: boolean; rate: ThrowRate; level: number }
   /** Radio's transition risers draw a character; hand-drawn risers keep theirs. */
   riserVariety: { on: boolean }
 }
@@ -151,25 +171,25 @@ export const SOUND_LIMITS = {
   glueAmount: [0, 1],
   saturationAmount: [0, 1],
   panWidth: [0, 0.5],
-  pumpDepthDb: [0, 8]
+  pumpDepthDb: [0, 8],
+  throwLevel: [0, 1],
+  headroomDb: [-8, 0],
+  ceilingDb: [-3, -0.3],
+  toneAmount: [-1, 1],
+  reverbAmount: [0, 1]
 } as const
 
-function deepFreeze<T extends object>(o: T): Readonly<T> {
-  for (const v of Object.values(o)) if (v && typeof v === 'object') deepFreeze(v)
-  return Object.freeze(o)
-}
-
-/** The app-wide defaults: everything on, at the web's values. Frozen; normalizeSoundSettings
- * hands out fresh copies. */
-export const DEFAULT_SOUND_SETTINGS: SoundSettings = deepFreeze({
-  mastering: { on: true },
+/** The app-wide defaults: everything on, at the web's values. Frozen (and typed so); take a
+ * mutable copy with normalizeSoundSettings(undefined). */
+export const DEFAULT_SOUND_SETTINGS: DeepReadonly<SoundSettings> = deepFreeze<SoundSettings>({
+  mastering: { on: true, headroomDb: MASTERING.headroomDb, ceilingDb: MASTERING.ceilingDb },
   glue: { on: true, amount: 0.5 },
-  tone: { on: true },
+  tone: { on: true, amount: 0 },
   saturation: { on: true, amount: 0.5 },
-  reverb: { room: 'cavern' },
+  reverb: { room: 'cavern', amount: 0.5 },
   panning: { on: true, width: ROW_PAN },
   pump: { on: true, depthDb: FAUST_DEFAULTS.pump.depthDb },
-  throws: { on: true, rate: 'normal' },
+  throws: { on: true, rate: 'normal', level: 1 },
   riserVariety: { on: true }
 })
 
@@ -179,12 +199,17 @@ const isRecord = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v)
 
 /** Anything (a saved project's `sound`, the app-wide JSON) to a whole SoundSettings: a missing or
- * junk stage or field falls back to `defaults`'s; the amounts are clamped to SOUND_LIMITS. Always
- * a fresh object. */
+ * junk stage or field falls back to `defaults`'s; the amounts are clamped to SOUND_LIMITS. A
+ * custom `defaults` is itself normalised against DEFAULT_SOUND_SETTINGS first, so junk there
+ * cannot leak through. Always a fresh, mutable object. */
 export function normalizeSoundSettings(
   value: unknown,
-  defaults: SoundSettings = DEFAULT_SOUND_SETTINGS
+  defaults: DeepReadonly<SoundSettings> = DEFAULT_SOUND_SETTINGS
 ): SoundSettings {
+  const d =
+    defaults === DEFAULT_SOUND_SETTINGS
+      ? DEFAULT_SOUND_SETTINGS
+      : normalizeSoundSettings(defaults, DEFAULT_SOUND_SETTINGS)
   const v = isRecord(value) ? value : {}
   const stage = (key: keyof SoundSettings): Record<string, unknown> => {
     const s = v[key]
@@ -212,19 +237,28 @@ export function normalizeSoundSettings(
     const x = stage(key)[field]
     return options.includes(x as T) ? (x as T) : fallback
   }
-  const d = defaults
   return {
-    mastering: { on: on('mastering', d.mastering.on) },
+    mastering: {
+      on: on('mastering', d.mastering.on),
+      headroomDb: num('mastering', 'headroomDb', d.mastering.headroomDb, SOUND_LIMITS.headroomDb),
+      ceilingDb: num('mastering', 'ceilingDb', d.mastering.ceilingDb, SOUND_LIMITS.ceilingDb)
+    },
     glue: {
       on: on('glue', d.glue.on),
       amount: num('glue', 'amount', d.glue.amount, SOUND_LIMITS.glueAmount)
     },
-    tone: { on: on('tone', d.tone.on) },
+    tone: {
+      on: on('tone', d.tone.on),
+      amount: num('tone', 'amount', d.tone.amount, SOUND_LIMITS.toneAmount)
+    },
     saturation: {
       on: on('saturation', d.saturation.on),
       amount: num('saturation', 'amount', d.saturation.amount, SOUND_LIMITS.saturationAmount)
     },
-    reverb: { room: pick('reverb', 'room', REVERB_ROOMS, d.reverb.room) },
+    reverb: {
+      room: pick('reverb', 'room', REVERB_ROOMS, d.reverb.room),
+      amount: num('reverb', 'amount', d.reverb.amount, SOUND_LIMITS.reverbAmount)
+    },
     panning: {
       on: on('panning', d.panning.on),
       width: num('panning', 'width', d.panning.width, SOUND_LIMITS.panWidth)
@@ -235,7 +269,8 @@ export function normalizeSoundSettings(
     },
     throws: {
       on: on('throws', d.throws.on),
-      rate: pick('throws', 'rate', THROW_RATES, d.throws.rate)
+      rate: pick('throws', 'rate', THROW_RATES, d.throws.rate),
+      level: num('throws', 'level', d.throws.level, SOUND_LIMITS.throwLevel)
     },
     riserVariety: { on: on('riserVariety', d.riserVariety.on) }
   }
@@ -243,25 +278,60 @@ export function normalizeSoundSettings(
 
 // ---------------------------------------------------------------------------------------------
 // the amount maps (the wire carries what these return, never the amounts)
+//
+// NON-NUMBERS: an amount that is not a finite number (NaN, Infinity) is the default amount's
+// (DEFAULT_SOUND_SETTINGS), in every map, the same rule normalizeSoundSettings applies to a
+// stored field. A finite amount out of range is clamped.
 
 const finiteOr = (v: number, fallback: number): number => (Number.isFinite(v) ? v : fallback)
 
 /** The glue's threshold for an amount: more glue, a lower threshold. 0 -> -8 dB, 0.5 -> -14
- * (glue.dsp's default, what the web runs), 1 -> -20; a non-number is the default's. */
+ * (glue.dsp's default, what the web runs), 1 -> -20. */
 export function glueThresholdDb(amount: number): number {
-  return -8 - 12 * clampTo(finiteOr(amount, 0.5), SOUND_LIMITS.glueAmount)
+  const a = finiteOr(amount, DEFAULT_SOUND_SETTINGS.glue.amount)
+  return -8 - 12 * clampTo(a, SOUND_LIMITS.glueAmount)
 }
 
-/** The saturation's drive for an amount: 0..1 -> 0..1.8 (the web's masterChain.ts
- * saturationDrive); a non-number is 0, no saturation. */
+/** The saturation's drive for an amount: 0..1 -> 0..1.8 (MASTERING.saturation.maxDrive); the
+ * default 0.5 is 0.9. */
 export function saturationDrive(amount: number): number {
-  return clampTo(finiteOr(amount, 0), SOUND_LIMITS.saturationAmount) * MASTERING.saturation.maxDrive
+  const a = finiteOr(amount, DEFAULT_SOUND_SETTINGS.saturation.amount)
+  return clampTo(a, SOUND_LIMITS.saturationAmount) * MASTERING.saturation.maxDrive
 }
 
-/** The saturation's makeup at a drive, dB: +0.5 at 1.8 (where it level-matched a dense mix), in
- * proportion to the drive squared (faust/saturate.dsp has the same). */
+/** The saturation's makeup at a drive, dB: +0.5 at the full drive (MASTERING.saturation.maxDrive,
+ * 1.8, where it level-matched a dense mix), in proportion to the drive squared
+ * (faust/saturate.dsp has the same). A drive that is not a finite number gets no makeup, 0 dB. */
 export function saturationMakeupDb(drive: number): number {
-  return 0.5 * (drive / 1.8) ** 2
+  if (!Number.isFinite(drive)) return 0
+  return 0.5 * (drive / MASTERING.saturation.maxDrive) ** 2
+}
+
+/** dB per unit of tone amount that the tilt moves each shelf. */
+export const TONE_TILT_DB = 1.5
+
+/** The tone's two shelves for an amount, dB: a tilt about the web's +1/+1. The low shelf (100 Hz)
+ * gets 1 - 1.5 x amount and the high shelf (10 kHz) 1 + 1.5 x amount: -1 is +2.5 / -0.5 (warmer),
+ * 0 exactly +1 / +1 (today), +1 is -0.5 / +2.5 (brighter). Within the spec's "at most about
+ * +-1.5 dB" of today's either way. */
+export function toneShelvesDb(amount: number): { lowDb: number; highDb: number } {
+  const a = clampTo(finiteOr(amount, DEFAULT_SOUND_SETTINGS.tone.amount), SOUND_LIMITS.toneAmount)
+  return {
+    lowDb: MASTERING.lowShelf.gainDb - TONE_TILT_DB * a,
+    highDb: MASTERING.highShelf.gainDb + TONE_TILT_DB * a
+  }
+}
+
+/** The reverb return's linear gain for an amount and room: 2 x amount times the room's own trim,
+ * so 0.5 is today's level exactly (cavern: REVERB_RETURN_DB, -3.4 dB; zita: unity), 0 silent, 1
+ * +6 dB. */
+export function reverbReturnGain(amount: number, room: ReverbRoom): number {
+  const a = clampTo(
+    finiteOr(amount, DEFAULT_SOUND_SETTINGS.reverb.amount),
+    SOUND_LIMITS.reverbAmount
+  )
+  const trim = room === 'cavern' ? Math.pow(10, REVERB_RETURN_DB / 20) : 1
+  return 2 * a * trim
 }
 
 /** Bars between throws for a rate, drawn uniformly per throw (stepThrows' everyBars). */

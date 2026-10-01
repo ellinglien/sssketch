@@ -200,21 +200,30 @@ caller:    Transport: masterChain (4 user plugin slots) -> reposition fade -> de
 ```ts
 // src/shared/radioSound.ts
 export interface SoundSettings {
-  mastering: { on: boolean }                  // the headroom trim and the -1 dBTP limiter; the master stages below need it on
+  mastering: { on: boolean; headroomDb: number; ceilingDb: number } // the headroom trim (-8..0, -4) and the true-peak limiter (ceiling -3..-0.3 dBTP, -1); the master stages below need it on
   glue: { on: boolean; amount: number }       // 0..1 -> threshold -8..-20 dB (more glue, lower threshold); 0.5 -> -14 (glue.dsp's default, what the web runs)
-  tone: { on: boolean }                       // HP 25 Hz, width, and +1 dB shelves at 100 Hz and 10 kHz
+  tone: { on: boolean; amount: number }       // HP 25 Hz, width, and the shelves at 100 Hz / 10 kHz; amount -1..1 tilts them (toneShelvesDb): low 1 - 1.5a dB, high 1 + 1.5a dB; 0 is today's +1/+1, negative warmer, positive brighter
   saturation: { on: boolean; amount: number } // 0..1 -> drive 0..1.8; 0.5 -> 0.9, the web's default (D7)
-  reverb: { room: 'cavern' | 'zita' }         // zita keeps its own roomSize/damping/preDelayMs in state.reverb
+  reverb: { room: 'cavern' | 'zita'; amount: number } // amount 0..1 scales the return (reverbReturnGain = 2a x the room's trim): 0.5 is today's level for either room. zita keeps its own roomSize/damping/preDelayMs in state.reverb
   panning: { on: boolean; width: number }     // 0..0.5; 0.25 is ROW_PAN
-  pump: { on: boolean; depthDb: number }      // 0..8; 4 is the web's
-  throws: { on: boolean; rate: 'rare' | 'normal' | 'often' }  // 32-64 / 16-32 / 8-16 bars; normal is the web's
+  pump: { on: boolean; depthDb: number }      // 0..8 dB; 4 dB is the web's
+  throws: { on: boolean; rate: 'rare' | 'normal' | 'often'; level: number }  // rate: 32-64 / 16-32 / 8-16 bars, normal is the web's; level 0..1 scales each throw's send (the web's Engine.setEcho), 1 by default
   riserVariety: { on: boolean }               // radio's transition risers draw a character; hand-drawn risers keep theirs
 }
 ```
 
 - `DEFAULT_SOUND_SETTINGS` is all on, at the web's values.
-- `normalizeSoundSettings(unknown)` fills anything missing or junk from the defaults it is given, and clamps the amounts.
-- The maps: `glueThresholdDb(amount)`, `saturationDrive(amount)`, `saturationMakeupDb(drive)`, `throwEveryBars(rate)`. `SOUND_LIMITS` holds the ranges. Task 0 landed these.
+- `DEFAULT_SOUND_SETTINGS` is typed `DeepReadonly` and frozen at runtime, as are `REVERB_IR`, `MASTERING` and `FAUST_DEFAULTS`.
+- `normalizeSoundSettings(unknown, defaults?)` fills anything missing or junk from the defaults it is given, and clamps the amounts. A custom `defaults` is normalised against `DEFAULT_SOUND_SETTINGS` first.
+- The maps:
+  - `glueThresholdDb(amount)`;
+  - `saturationDrive(amount)`;
+  - `saturationMakeupDb(drive)`;
+  - `toneShelvesDb(amount)`;
+  - `reverbReturnGain(amount, room)`;
+  - `throwEveryBars(rate)`.
+
+  `SOUND_LIMITS` holds the ranges. In every map, a non-finite amount gives the default amount's result. `saturationMakeupDb` of a non-finite drive is 0 dB. Task 0 landed these.
 - **The wire carries resolved parameters, not amounts.** For example `glue.thresholdDb`, not `glue.amount`. The engine never needs to know the UI's scale, and the TS maps are unit-tested.
 - **Glue, tone and saturation are master stages.** They only run when `mastering.on` is true. The UI greys them out otherwise, so a limiter-less glue chain can't be built by accident.
 
@@ -227,7 +236,7 @@ No sound changes in this task.
 **Files:**
 - Create in sssketch: `src/shared/{radioPan,radioPump,radioThrows,riserCharacter,radioSound}.ts`, each with a test.
 - Modify in radio: `src/radio/{pan,pump,throws}.ts`, `src/audio/{riserCharacter,dubDelay,noise,masterChain,engine}.ts`, which become re-exports or imports.
-- **As landed (2026-10-01):** all eight radio files listed above now import or re-export from `@shared`. That includes `masterChain.ts` (`MASTERING`, `saturationDrive`, `saturationMakeupDb`) and `engine.ts` (`PumpRole`), which were edited after radio commit `4c233bf` (the listener's saturation, pump and echo controls) had landed. The radio's moved tests stay in place as wiring checks, and their copies run in sssketch. `stepThrows` takes an optional `everyBars`, which defaults to `THROW_EVERY_BARS`, so Task 11 can pass `throwEveryBars(rate)`. The web's echo level (`Engine.setEcho`, 0..1) has no `SoundSettings` field yet. If wanted, it can be added later as `throws.level`.
+- **As landed (2026-10-01):** all eight radio files listed above now import or re-export from `@shared`. That includes `masterChain.ts` (`MASTERING`, `saturationDrive`, `saturationMakeupDb`) and `engine.ts` (`PumpRole`), which were edited after radio commit `4c233bf` (the listener's saturation, pump and echo controls) had landed. `stepThrows` takes an optional `everyBars`, which defaults to `THROW_EVERY_BARS`, so Task 11 can pass `throwEveryBars(rate)`. The web's echo level (`Engine.setEcho`, 0..1) is `throws.level`, which Task 11/12 multiplies into the `dubSend` curve. The radio's tests for the moved rules were trimmed to one re-export smoke test (`src/radio/sharedRules.test.ts`), so the logic is tested once, in sssketch. Follow-up, Elling 2026-10-01: `reverb.amount`, `mastering.headroomDb`/`ceilingDb` and `tone.amount` are adjustable too.
 
 - [x] **Step 1.** Copy each module verbatim, doc comments included, into sssketch `src/shared/`. Move its existing radio test with it. Run the tests red-then-green.
   - `radioThrows.ts` takes the pure `throwDelaySec`/`throwTailSec`/`ThrowTiming` out of `dubDelay.ts`.
@@ -334,17 +343,18 @@ No sound changes in this task.
 - [ ] **Step 3. The wire.** `buildEngineProject` emits `sound` with **resolved** parameters:
   ```ts
   sound: {
-    mastering: { headroomDb: -4, ceilingDb: -1 } | absent,
+    mastering: { headroomDb, ceilingDb } | absent,      // straight from the settings (-4, -1 by default)
     glue: { thresholdDb, ratio: 2, kneeDb: 6 } | absent,
-    tone: {} | absent,
+    tone: { lowShelfDb, highShelfDb } | absent,          // toneShelvesDb(amount); +1/+1 at 0
     saturation: { drive } | absent,
     room: 'cavern' | 'zita',
+    reverbReturn: number | absent,                       // reverbReturnGain(amount, room) / today's trim for the room; absent at 1 (amount 0.5)
     pump: { depthDb } | absent,
     dub: absent   // Task 10
   }
   ```
   - Stage off means the key is absent.
-  - Every stage off still sends `room`; with `room: 'zita'` and nothing else on, `sound` is omitted entirely, so the wire is byte-identical to today's.
+  - Every stage off still sends `room`; with `room: 'zita'`, the reverb amount at 0.5 and nothing else on, `sound` is omitted entirely, so the wire is byte-identical to today's.
   - The per-stem fields (`pan`, `pumpRole`, `dubSend`) and the riser fields arrive with their own tasks.
   - TS tests:
     - all-off is byte-identical to a pre-plan project;
@@ -683,14 +693,14 @@ The delay is `delayBeats × 60 / bpm`. A settings change is taken only while the
 - **Design:** `tokens.css`, lowercase copy, Silkscreen, sharp corners, no colour on chrome.
 
 **Content, top to bottom:**
-1. **mastering** (limiter) on/off;
+1. **mastering** (limiter) on/off + headroom (dB) + ceiling (dBTP);
 2. **glue** on/off + amount, greyed out without mastering;
 3. **saturation** on/off + drive, greyed out without mastering;
-4. **tone** on/off, greyed out without mastering;
-5. **reverb** cavern | zita;
+4. **tone** on/off + tilt (warmer ↔ brighter), greyed out without mastering;
+5. **reverb** cavern | zita + amount;
 6. **panning** on/off + width;
-7. **pump** on/off + depth;
-8. **throws** on/off + rare/normal/often;
+7. **pump** on/off + depth (dB);
+8. **throws** on/off + rare/normal/often + level;
 9. **riser variety** on/off.
 
 The defaults panel adds **reset to defaults**.
