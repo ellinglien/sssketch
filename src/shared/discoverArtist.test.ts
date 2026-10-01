@@ -135,3 +135,46 @@ describe('artist turnover (course change on switch)', () => {
     expect(nextTurnoverSlotId([], new Set())).toBeNull()
   })
 })
+
+describe('follow-ups (Task 1 review)', () => {
+  it('rollFilterForArtist: another artist wins over onlyOwnStems=true', () => {
+    expect(rollFilterForArtist('honeydisco', 'elling', true)).toEqual({
+      onlyOwnStems: true,
+      targetUser: 'honeydisco',
+      artist: 'honeydisco'
+    })
+  })
+  it('rollFilterForArtist: a blank artist behaves as own', () => {
+    expect(rollFilterForArtist('', 'elling', false)).toEqual({
+      onlyOwnStems: false,
+      targetUser: 'elling',
+      artist: undefined
+    })
+    expect(rollFilterForArtist('   ', 'elling', true)).toEqual({
+      onlyOwnStems: true,
+      targetUser: 'elling',
+      artist: undefined
+    })
+  })
+  it('artistTurnoverIds trims the artist', () => {
+    const slots = [
+      { id: 'a', creator: 'elling' },
+      { id: 'b', creator: 'tpj' }
+    ]
+    expect([...artistTurnoverIds(slots, ' tpj ', 'elling')]).toEqual(['a'])
+  })
+  it('artistTurnoverIds: a blank artist targets the own username', () => {
+    const slots = [
+      { id: 'a', creator: 'elling' },
+      { id: 'b', creator: 'tpj' }
+    ]
+    expect([...artistTurnoverIds(slots, '  ', 'elling')]).toEqual(['b'])
+  })
+  it('matching is case-sensitive (pinned current behaviour)', () => {
+    expect(artistMode('Elling', 'elling')).toBe('other')
+    expect(normalizeArtistPick('Elling', 'elling')).toBe('Elling')
+    expect(creatorAllowed('TPJ', 'tpj')).toBe(false)
+    expect(rollFilterForArtist('Elling', 'elling', false).artist).toBe('Elling')
+    expect([...artistTurnoverIds([{ id: 'a', creator: 'TPJ' }], 'tpj', 'elling')]).toEqual(['a'])
+  })
+})

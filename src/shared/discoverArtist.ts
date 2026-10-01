@@ -85,10 +85,11 @@ export function rollFilterForArtist(
   ownUsername: string,
   onlyOwnStems: boolean
 ): ArtistRollFilter {
-  if (artistMode(artist, ownUsername) === 'own') {
+  const name = (artist ?? '').trim()
+  // A blank artist is `me` too, so it can never send an empty creator filter.
+  if (name === '' || artistMode(name, ownUsername) === 'own') {
     return { onlyOwnStems, targetUser: ownUsername, artist: undefined }
   }
-  const name = (artist as string).trim()
   return { onlyOwnStems: true, targetUser: name, artist: name }
 }
 
@@ -102,13 +103,16 @@ export function creatorAllowed(
 
 /** Rows a mid-radio artist change turns over: every row holding a stem
  * not by the new target (the artist, or the own username for `me` -- or
- * every row when there is no own username). */
+ * every row when there is no own username). Names match case-sensitively,
+ * as Endlesss usernames are stored. */
 export function artistTurnoverIds(
   slots: readonly { id: string; creator: string | null }[],
   artist: string | null,
   ownUsername: string
 ): Set<string> {
-  const target = artist ?? ownUsername.trim()
+  const picked = (artist ?? '').trim()
+  // A blank artist is `me`, the same as null.
+  const target = picked !== '' ? picked : ownUsername.trim()
   return new Set(
     slots
       .filter((s) => s.creator !== null && (target === '' || s.creator !== target))
