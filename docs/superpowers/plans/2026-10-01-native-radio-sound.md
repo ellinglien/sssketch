@@ -2,20 +2,30 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Discover radio in the app sounds like `ell.ing/radio`. Port the web radio's sound into the native engine:
+> **Amended 2026-10-01 with Elling's decisions (D1–D5, below).** The radio sound applies **everywhere**: Discover, the arranger timeline, and every bounce and export. It is adjustable through per-project sound settings, and the app-wide defaults have everything on.
+
+**Goal:** sssketch sounds like `ell.ing/radio`, everywhere, adjustably. Port the web radio's sound into the native engine:
 - **Sound:** per-row panning, the cavernous reverb, and riser variety.
-- **Glue:** dub throws, tape saturation, the drum-keyed pump, the glue compressor, and a −1 dBTP true-peak limiter.
+- **Glue:** dub throws, tape saturation, the drum-keyed pump, the glue compressor and tone, and a −1 dBTP true-peak limiter.
 
 Elling approved the port on 2026-10-01.
 
 **Architecture:**
-- **Pure rules are shared, not copied.** The radio repo's pure rules move into `src/shared/`, where the radio repo already imports from (`@shared`). Both the web page and the app's renderer then use them. They decide pan per slot, pump role per slot, when throws happen, and each riser's character.
-- **The wire carries what the rules decide.** New optional fields go on `EngineProject`. Each one is absent by default, and absence means today's behaviour, bit for bit (the toolkit's "absence is load-bearing" rule). Discover's preview project turns them on.
-- **The engine performs it per sample.** Throws ride the project as per-stem automation curves, the same way radio's gestures already do. This keeps the 30 Hz React clock out of the timed path.
-- **Master DSP comes from the web's own Faust sources, compiled to C++.** Saturation, glue, pump and the true-peak limiter are compiled with the Faust compiler's C++ backend. The generated code is committed, with golden vectors from the web's wasm proving it is the same DSP.
+- **Pure rules are shared, not copied.** The radio repo's pure rules move into `src/shared/`, which the radio repo already imports as `@shared`. Both the web page and the app use them. They decide pan per slot, pump role per slot, when throws happen, and each riser's character.
+- **One settings object says what is on.** `SoundSettings` lives in `src/shared/radioSound.ts`:
+  - it is stored per project;
+  - a new project starts from the app-wide defaults, which are all on;
+  - Discover, the timeline, live playback and every bounce read it.
+- **The wire carries what the settings and rules decide.** A new optional `EngineProject.sound` block holds the master stages, the reverb room, the pump and the dub bus. Each stem gets optional `pan`, `pumpRole` and a `dubSend` curve. Each riser gets optional character fields.
+  - Absent fields mean today's behaviour, bit for bit (the toolkit's "absence is load-bearing" rule).
+  - Every stage switched off is also bit-identical to today.
+- **The engine performs it per sample.** Throws ride the project as per-stem automation curves:
+  - in Discover, radio arms them live, the way it arms gestures;
+  - on the timeline, a seeded plan over the arrangement places them, so playback and export hear the same throws.
+- **Master DSP comes from the Faust sources, compiled to C++.** Saturation, glue, pump and the true-peak limiter come from the Faust `.dsp` files, which now live in sssketch as the single copy. They are compiled to C++ with a native Faust compiler pinned to the web's version. The generated code is committed, with golden vectors from the web's wasm proving it is the same DSP. The web compiles the same `.dsp` files to wasm from sssketch.
 - **Some parts are hand-written C++.** The reverb (the web's default is a generated-IR convolver, not Faust), the dub delay, the panner and the riser changes are written by hand.
 
-**Tech stack:** C++20, JUCE 8.0.4 (`juce_dsp`), JUCE `UnitTest`, the Faust compiler (build-time only), TypeScript, vitest.
+**Tech stack:** C++20, JUCE 8.0.4 (`juce_dsp`), JUCE `UnitTest`, the Faust compiler (build-time only, via Homebrew), TypeScript, React, vitest.
 
 **References:**
 - Web spec §3: `~/Claudecode/ell.ing/radio/docs/specs/2026-09-30-radio-a-design.md`. It lists every stage and its measured targets.
@@ -23,15 +33,21 @@ Elling approved the port on 2026-10-01.
 
 ---
 
-## Decisions Elling needs to make (before Task 2)
+## Elling's decisions (2026-10-01)
 
-| # | question | recommendation |
-|---|---|---|
-| D1 | Where does the radio sound apply? Discover's preview only while radio is on, Discover's preview always, or the arranger timeline too? | **Discover's preview, always** (radio on or off). The rows are slots in both cases. The timeline is untouched. |
-| D2 | Should mastering (the headroom trim, glue, saturation and limiter) reach the timeline or render-export? | **No.** Discover's preview only for now. Add a project toggle later if he wants it on bounces. |
-| D3 | Discover's reverb: should the cavernous convolver replace zita there? | **Yes, in Discover only.** The timeline's zita reverb and its three controls are unchanged. |
-| D4 | Where do the `.dsp` files live? | **Move them into sssketch** at `native-engine/Source/dsp/faust/`. The radio repo's `build-faust.mjs` reads them from `../../sssketch`, as it already does for `@shared`. One copy, no drift. |
-| D5 | Can a native Faust compiler be installed on the dev Mac (`brew install faust` gives 2.85.9; GRAME's release page has 2.89.2, the web's version)? | **Yes, and pin 2.89.2** if it installs cleanly. If not, the fallback is a hand port of the four DSPs against the same golden vectors (see "Faust vs C++"). |
+| # | decision |
+|---|---|
+| D1/D2 | The radio sound applies **everywhere**: Discover, the timeline, playback, and every export and bounce. It is **adjustable**. <br>**Per-stage switches:** mastering/limiter, glue, saturation, pump, the cavernous reverb vs zita, panning and throws, plus amounts where they make sense. <br>**Storage:** per project, with app-wide defaults all on. <br>**Exports and bounces:** follow the project's settings. |
+| D3 | The cavernous reverb replaces zita, selectable in the settings. Zita stays available and keeps its three existing controls. |
+| D4 | The `.dsp` files move into sssketch (`native-engine/Source/dsp/faust/`) as the single source. The web compiles them from there (Task 1). |
+| D5 | Faust → C++ with a native compiler, installed with Homebrew (approved). Pin it to match the web; see Task 1 for the version situation. |
+
+**Version situation for D5** (checked 2026-10-01):
+- The web's `@grame/faustwasm` 0.18.5 bundles libfaust **2.89.2**, which is a development build. The newest **published** Faust release is **2.88.0**: Homebrew's formula, and GRAME's GitHub release with a `Faust-2.88.0-arm64.dmg`. 2.89.2 is not installable as a release.
+- So the plan installs 2.88.0 natively and **re-pins the web's faustwasm to the release whose libfaust reports 2.88.0**. The two compilers then match exactly.
+- If no published faustwasm bundles 2.88.0, the fallback is to build Faust from source at the 2.89.2 commit and keep the web where it is.
+
+**One ruling inside D1/D2, flagged for Elling to confirm in review:** in DAW exports (Ableton/REAPER) and per-stem bakes, every stem gets its **per-stem** stages (pan, filter, sends), but the **master-bus** stages (headroom, saturation, glue, tone, limiter, the pump's mix) do not. The DAW session has its own master, and each stem would be limited on its own. Mixdown bounces get the whole chain.
 
 ---
 
@@ -40,16 +56,17 @@ Elling approved the port on 2026-10-01.
 - **Read first:**
   - `CLAUDE.md`, especially "Wire format twins" and the engine rebuild/relaunch rule.
   - `native-engine/Source/PlaybackEngine.h`, the comments on `renderBlock` and `ProjectSnapshot`.
-  - `ReverbBus.h`, `NoiseRiser.h`, and the gesture block in `DiscoverPanel.tsx`. Find that block by searching for `const gestureList: RadioGesture[]`.
+  - `ReverbBus.h`, `NoiseRiser.h`, `src/shared/buildEngineProject.ts`, `src/renderer/src/state/{store,serialize}.ts`, `src/main/discoverSettingsStore.ts` (the app-wide settings pattern).
+  - The gesture block in `DiscoverPanel.tsx`; find it by searching for `const gestureList: RadioGesture[]`.
 - **Staging:** stage explicit paths only. Never `git add -A`.
 - **Line numbers drift.** `DiscoverPanel.tsx` is about 8,800 lines. Anchor on quoted code and grep.
 - **After every task:**
   - `npm run typecheck`, `npx vitest run`, and eslint on the changed files are clean.
   - `cd native-engine && cmake --build build`, then `…/sssketch-engine --test` ends with `All unit tests passed.`
   - On 2026-10-01 the native suite was 269 tests, all passing, in 3.1 s.
-- **Nothing changes until it is asked for.** Every new wire field is optional. With it absent, the engine's output is bit-identical to today's, and a test pins that for each field. The existing live-equals-export and block-split parity tests must stay green untouched.
-- **Live and export must match.** Any master-stage DSP runs in both `Transport.cpp` (live) and `RenderExport.cpp` (bounce), in the same order. It also has to be block-size invariant, because Transport splits blocks at loop tops.
-- **No allocation on the audio thread** for anything bigger than today's precedent: zita's lazy ~100 ms of lines. The convolver's IR and partitions are built on the message thread, in `setProject`/`stageProject`.
+- **Off is today.** With the `sound` block absent, or with every stage switched off, the engine's output is bit-identical to today's, and a test pins both for each stage. The existing live-equals-export and block-split parity tests stay green untouched.
+- **Live and export must match.** Any master-stage DSP runs in both `Transport.cpp` (live) and `RenderExport.cpp` (bounce), in the same order, through one shared call. It also has to be block-size invariant, because Transport splits blocks at loop tops.
+- **No allocation on the audio thread** for anything bigger than today's precedent: zita's lazy ~100 ms of lines. Faust objects and the convolver's IR and partitions are built on the message thread, in `setProject`/`stageProject`.
 - **The library DBs are not touched.** Nothing in this plan opens them.
 - **No agent can hear the output.** Never claim a sound "works". Every task that changes sound ends with items for Elling's listening list.
 - **Commits.** End every commit message with:
@@ -82,12 +99,12 @@ caller:    Transport: masterChain (4 user plugin slots) -> reposition fade -> de
 ```
 
 - **No pan.** A stereo stem passes L/R as is. A mono stem is copied to both sides.
-- **No master level in the engine.** The renderer scales stem gains and volume curves (`masterScaledGains` and `masterScaledCurve` in `src/shared/performanceDeck.ts`).
-- **No mastering.** There is no headroom trim, compressor, saturation or limiter. A dense mix can pass 0 dBFS, and `NoiseRiser.h`'s comment on `kRiserBandpassNormalisation` records a bounce clipping exactly this way.
+- **No master level in the engine.** The renderer scales stem gains and volume curves (`masterScaledGains`/`masterScaledCurve`).
+- **No mastering.** There is no headroom trim, compressor, saturation or limiter. A dense mix can pass 0 dBFS, and `NoiseRiser.h`'s comment on `kRiserBandpassNormalisation` records a bounce clipping this way.
 - **The reverb exists:** one shared zita-rev1 FDN (`ReverbBus`), fed by per-clip post-fader sends.
-  - Its settings are `roomSize` (rtmid 0.5–8 s, log), `damping` (fdamp 20 kHz–1.5 kHz) and `preDelayMs` (20–115 ms).
+  - Its settings are `roomSize` (rtmid 0.5–8 s), `damping` (fdamp 20 kHz–1.5 kHz) and `preDelayMs` (20–115 ms).
   - rtlow is fixed at 1.5 × rtmid.
-  - Discover sends every stem an equal static amount (`masterSendsFor`). A bloom is a `reverbSend` curve on one stem.
+  - `state.reverb` is saved per project (`serialize.ts`). `exportToolkitAudio.ts` mirrors zita's decay to size bake tails.
 
 **How gestures are scheduled.** All of it is renderer-side data. The engine has no notion of "radio".
 - `DiscoverPanel` turns the armed gesture into project data:
@@ -97,47 +114,52 @@ caller:    Transport: masterChain (4 user plugin slots) -> reposition fade -> de
   - bloom becomes a `reverbSend` curve;
   - riser becomes an `EngineRiser` from `buildTransitionRiser`.
 - The builders live in `src/shared/radioTransition.ts`.
-- Curves are anchored at loop bar 0 and play every lap until a later sync clears them.
-- A change plus its arrival gesture goes out as a **staged project** (`stageProject`). `Transport::applyStagedProjectAtWrap` promotes it exactly at the loop top.
+- Curves are anchored at loop bar 0 and play every lap until cleared.
+- A change goes out as a **staged project**. `Transport::applyStagedProjectAtWrap` promotes it exactly at the loop top.
 
-**The preview's shape matters.** Discover's preview is one rifff on one channel (its `groupId`). Each row is a stem keyed `stemKey(groupId, i + 1)`. So everything per row (pan, pump role, throw send) must be a **per-stem** field. A per-channel field would hit every row at once.
+**Rows differ between the two places.**
+- **Discover's preview** is one rifff on one channel. Each row is a stem keyed `stemKey(groupId, i + 1)`, with slot kinds.
+- **On the timeline** a rifff clip carries up to 8 stems, each with a `SoundType` (`drums`, `bass`, …).
+- So every per-row stage (pan, pump role, throw send) is a **per-stem** field in both places:
+  - in Discover, a "slot" is a Discover slot, with its kinds;
+  - on the timeline, a "slot" is the stem's slot in its rifff, with its `SoundType`.
 
 **Wire twins.** `EngineProject.h`/`EngineProject.cpp` (parse) and `src/shared/buildEngineProject.ts` are hand-synced. Each field added below touches both, plus `EngineProjectTests.cpp` and `buildEngineProject.test.ts`.
+
+**Bounce and export paths** (all must follow the project's sound settings):
+- the mixdown: `exportMix.ts` via `nativeExport.ts` → `RenderExport.cpp`;
+- toolkit bakes: `exportToolkitAudio.ts` → `BakeStem.cpp`, which sizes reverb tails;
+- the DAW exports: `exportAbleton.ts`, `exportReaper.ts`;
+- the phone renderers: `remoteLoopRenderer.ts`, `remoteStemRenderer.ts`.
 
 ---
 
 ## Faust vs C++
 
-**What was checked.** On 2026-10-01 the radio repo's pinned `@grame/faustwasm` 0.18.5 (libfaust 2.89.2) was asked for C++:
-- `generateAuxFiles(name, code, '-lang cpp …')` fails with `-lang cpp not supported since CPP backend is not built`.
-- `-lang c` and `-lang rust` fail the same way.
-- `-lang cmajor-hybrid` hits an internal assert on `saturate.dsp`.
-
-**So faustwasm cannot emit the C++.** A native Faust compiler is needed as a build-time tool:
-- Homebrew's formula is 2.85.9.
-- GRAME publishes 2.89.2 on its release page.
-- Nothing from the compiler ships.
+**What was checked.** On 2026-10-01 the radio repo's `@grame/faustwasm` 0.18.5 was asked for C++:
+- `generateAuxFiles(…, '-lang cpp …')` fails with `CPP backend is not built`.
+- C and Rust fail the same way.
+- `cmajor-hybrid` hits an internal assert on `saturate.dsp`.
+- **So the wasm compiler cannot emit C++.** A native compiler is needed at build time (D5). Nothing from it ships.
 
 **Licences.**
-- The five `.dsp` files are written from Faust primitives only (no `import`, no `stdfaust.lib`) and declare GPL-2.0-or-later.
-- Faust's documentation states that the generated code carries the licence of the DSP source, not the compiler's.
+- The `.dsp` files are written from Faust primitives only and declare GPL-2.0-or-later.
+- Faust's documentation states that the generated code carries the DSP source's licence.
 - sssketch is GPL-3.0-or-later. GPL-2.0-or-later code can be combined into it under v3. Elling also wrote both.
-- **One thing to avoid:** Faust's stock architecture headers (`faust/dsp/dsp.h`, `faust/gui/UI.h`, `faust/gui/meta.h`) carry GRAME's own licence terms. Compile with `-i` against **our own minimal architecture file** that defines the tiny `dsp`, `UI` and `Meta` bases, so no GRAME file enters the tree.
-- The licence file for this lives beside the generated code (see Task 1).
+- Faust's stock architecture headers (`faust/dsp/dsp.h`, `faust/gui/UI.h`, `faust/gui/meta.h`) carry GRAME's own licence terms. Avoid them: compile with `-i` against **our own minimal architecture file**.
 
-| | Faust → C++ (recommended for the four) | hand-written C++ |
+| | Faust → C++ (decided, D5) | hand-written C++ |
 |---|---|---|
-| same sound as the web | the same DSP graph, compiled. Golden vectors from the wasm match to float rounding | a re-derivation; drift possible in exactly the details Elling tuned by ear (soft knee, dual-envelope release, true-peak taps, box-average attack) |
-| effort | a script, an architecture file, a thin wrapper per DSP | ~40 lines (truepeak) to ~20 (glue, pump) and ~10 (saturate) each, plus the same tests |
-| readability | generated code (`fRec0[2]`…) is opaque. Vendored and compiled with `-w`, like zita | in the codebase's commented style |
-| future tuning | edit the `.dsp`, recompile both targets: one source | edit two implementations and keep them in step |
-| toolchain risk | needs the native compiler (D5). Version skew between 2.85.9 and 2.89.2 changes code generation, not semantics: primitives only. Golden vectors catch any difference | none |
-| real-time safety | Faust C++ never allocates in `compute()`. State is member arrays, so the object is heap-allocated off the audio thread | same discipline by hand |
+| same sound as the web | the same DSP graph from the same `.dsp` file. With matched compiler versions the code generation is the same too; golden vectors check it | a re-derivation; drift possible in the details Elling tuned by ear |
+| effort | a script, an architecture file, a thin wrapper | ~10–40 lines per DSP plus the same tests |
+| readability | generated code, vendored and compiled with `-w`, like zita | the codebase's commented style |
+| future tuning | edit one `.dsp`, recompile both targets | edit two implementations |
+| real-time safety | `compute()` never allocates; heap-allocate the object off the audio thread | the same discipline by hand |
 
-**Recommendation.**
-- **Use Faust → C++ for `saturate`, `glue`, `truepeak` and `pump`.** The generated `.cpp` files are committed (as the web commits its `.wasm`), with a regeneration script and a drift check that runs when the compiler is installed.
-- **Do not port `reverb.dsp`.** It is the web's A/B candidate, not its default. Elling's verdict was "sounds a bit different". Port the **convolver** he chose: a C++ twin of `noise.ts` `reverbImpulse` plus a hand-written uniformly partitioned FFT convolver. If he later picks the Faust room on the web, the same pipeline gives it to native for free.
-- **Golden vectors make either route safe.** If D5 is a no-go, hand-port the four DSPs and hold them to the same vectors.
+**Decided:**
+- **Faust → C++** for `saturate`, `glue`, `truepeak` and `pump`.
+- **The convolver**, a C++ twin of `noise.ts` `reverbImpulse`, for the cavernous room. The web's Faust `reverb.dsp` is only its A/B candidate.
+- `reverb.dsp` moves too (D4), and the toolchain compiles it to C++, so a later switch is one wiring change. It is not wired now.
 
 ---
 
@@ -145,438 +167,587 @@ caller:    Transport: masterChain (4 user plugin slots) -> reposition fade -> de
 
 | path | responsibility |
 |---|---|
-| `src/shared/radioPan.ts` (+test) | `panForSlots`, `ROW_PAN`, moved from radio `src/radio/pan.ts` |
-| `src/shared/radioPump.ts` (+test) | `pumpRoleFor`, `PumpRole`, moved from radio `src/radio/pump.ts` and `audio/engine.ts` |
-| `src/shared/radioThrows.ts` (+test) | `stepThrows`, `throwDelaySec`, `throwTailSec`, `THROW_*`, moved from radio `src/radio/throws.ts` and `audio/dubDelay.ts` |
-| `src/shared/riserCharacter.ts` (+test) | `drawRiserCharacter`, `RISER_RANGES`, `RISER_BEFORE`, moved from radio `src/audio/riserCharacter.ts` |
-| `src/shared/radioSound.ts` (+test) | the shared numbers both engines cite: `REVERB_IR` (T60 table, 30 ms), `REVERB_RETURN_DB`, `MASTERING`, `DUB_*`. Each has a C++ twin pinned by a native test |
-| `native-engine/Source/dsp/faust/*.dsp` | the five DSPs, moved here from the radio repo (D4) |
-| `native-engine/Source/dsp/faust/arch.cpp`, `LICENSES.md` | our own minimal architecture, and the licence notes |
+| `src/shared/radioPan.ts` (+test) | `panForSlots`, `ROW_PAN`, moved from radio `src/radio/pan.ts`; plus `stemPansForRifff` for the timeline |
+| `src/shared/radioPump.ts` (+test) | `pumpRoleFor`, `PumpRole`, moved from radio; plus `pumpRoleForSoundType` |
+| `src/shared/radioThrows.ts` (+test) | `stepThrows`, `throwDelaySec`, `throwTailSec`, `THROW_*`, moved from radio; plus `throwCurveFor` and `planArrangementThrows` |
+| `src/shared/riserCharacter.ts` (+test) | `drawRiserCharacter`, `RISER_RANGES`, `RISER_BEFORE`, moved from radio |
+| `src/shared/radioSound.ts` (+test) | `SoundSettings`, `DEFAULT_SOUND_SETTINGS` (all on), `normalizeSoundSettings`, amount-to-parameter maps, and the shared numbers (`REVERB_IR`, `REVERB_RETURN_DB`, `MASTERING`, `DUB_*`). Each number has a C++ twin pinned by a native test |
+| `src/main/soundSettingsStore.ts` (+test), IPC in `index.ts`, `preload` | app-wide default sound settings (a userData JSON, the `discoverSettingsStore.ts` pattern) |
+| `src/renderer/src/state/{store,serialize}.ts` (+tests) | `AppState.sound`, `SET_SOUND_SETTINGS`, saved per project, legacy projects normalised |
+| `src/renderer/src/components/SoundSettingsPanel.tsx`, `TransportBar.tsx` | the settings UI (Task 13) |
+| `native-engine/Source/dsp/faust/*.dsp` | the five DSPs, moved here from the radio repo (D4): the single copy |
+| `native-engine/Source/dsp/faust/arch.cpp`, `LICENSES.md`, `FAUST_VERSION` | our own minimal architecture, licence notes, and the pinned compiler version |
 | `native-engine/Source/dsp/faust/generated/*.h` | committed Faust C++ output (`-w`) |
-| `scripts/build-faust-cpp.mjs` (+ `buildFaustCpp.test.ts`, skipped without `faust`) | regenerates the C++; fails on drift |
+| `scripts/build-faust-cpp.mjs` (+ `buildFaustCpp.test.ts`) | regenerates the C++, checks the pinned version, fails on drift |
 | `native-engine/test/golden/*.f32` | golden in/out vectors rendered from the web's wasm |
-| `native-engine/Source/FaustStage.h/.cpp` (+Tests) | a thin, allocation-free wrapper: `init(sr)`, set params by address, `process(n, ins, outs)` |
-| `native-engine/Source/MasterStage.h/.cpp` (+Tests) | headroom → HP 25 → saturate → glue → width → shelves → true-peak limiter. Called by Transport and RenderExport |
-| `native-engine/Source/StemPan.h` (+Tests) | the StereoPannerNode law, inline |
-| `native-engine/Source/CavernReverb.h/.cpp` (+Tests) | the IR generator (twin of `reverbImpulse`), Web Audio's convolver normalisation, a partitioned convolver |
+| `native-engine/Source/FaustStage.h/.cpp` (+Tests) | an allocation-free wrapper: `init(sr)`, set params by address, `process` |
+| `native-engine/Source/SoundSettings.h` (+ parse in `EngineProject.cpp`) | the C++ twin of the wire's `sound` block |
+| `native-engine/Source/MasterStage.h/.cpp` (+Tests) | headroom → HP 25 → saturate → glue → width → shelves → true-peak limiter, each switchable. Called by Transport and RenderExport |
+| `native-engine/Source/StemPan.h` (+Tests) | the StereoPannerNode law |
+| `native-engine/Source/CavernReverb.h/.cpp` (+Tests) | the IR generator, Web Audio's convolver normalisation, a partitioned convolver |
 | `native-engine/Source/DubDelayBus.h/.cpp` (+Tests) | the ping-pong echo bus |
-| `native-engine/Source/DrumPump.h/.cpp` (+Tests) | the pump's key/program routing around the Faust `pump` |
-| `NoiseRiser.*`, `ReverbBus.*`, `PlaybackEngine.*`, `Transport.cpp`, `RenderExport.cpp`, `EngineProject.*` | modified |
-| `src/shared/buildEngineProject.ts`, `src/renderer/src/components/DiscoverPanel.tsx` | modified |
+| `native-engine/Source/DrumPump.h/.cpp` (+Tests) | the pump's key/program routing around Faust `pump` |
+| `NoiseRiser.*`, `ReverbBus.*`, `PlaybackEngine.*`, `Transport.cpp`, `RenderExport.cpp`, `BakeStem.*`, `EngineProject.*` | modified |
+| `src/shared/buildEngineProject.ts`, `src/main/{exportToolkitAudio,nativeExport,exportAbleton,exportReaper,remoteLoopRenderer,remoteStemRenderer}.ts`, `DiscoverPanel.tsx` | modified |
+| radio repo: `scripts/build-faust.mjs`, `scripts/buildFaust.test.ts`, `package.json`, `src/audio/faust/LICENSES.md` | compile from sssketch's `.dsp`; re-pinned faustwasm |
 
 ---
 
-### Task 0 (sssketch, then radio): move the pure rules into `src/shared`
+## The sound settings (shape)
 
-No sound changes in this task. It makes the rules importable by both engines.
+```ts
+// src/shared/radioSound.ts
+export interface SoundSettings {
+  mastering: { on: boolean }                  // the headroom trim and the -1 dBTP limiter; the master stages below need it on
+  glue: { on: boolean; amount: number }       // 0..1 -> threshold -20..-8 dB; 0.5 -> -14 (glue.dsp's default, what the web runs)
+  tone: { on: boolean }                       // HP 25 Hz, width, and +1 dB shelves at 100 Hz and 10 kHz
+  saturation: { on: boolean; drive: number }  // 1..4; 1.8 is the web's
+  reverb: { room: 'cavern' | 'zita' }         // zita keeps its own roomSize/damping/preDelayMs in state.reverb
+  panning: { on: boolean; width: number }     // 0..0.5; 0.25 is ROW_PAN
+  pump: { on: boolean; depthDb: number }      // 0..8; 4 is the web's
+  throws: { on: boolean; rate: 'rare' | 'normal' | 'often' }  // 32-64 / 16-32 / 8-16 bars; normal is the web's
+  riserVariety: { on: boolean }               // radio's transition risers draw a character; hand-drawn risers keep theirs
+}
+```
+
+- `DEFAULT_SOUND_SETTINGS` is all on, at the web's values.
+- `normalizeSoundSettings(unknown)` fills anything missing or junk from the defaults it is given, and clamps the amounts.
+- **The wire carries resolved parameters, not amounts.** For example `glue.thresholdDb`, not `glue.amount`. The engine never needs to know the UI's scale, and the TS maps are unit-tested.
+- **Glue, tone and saturation are master stages.** They only run when `mastering.on` is true. The UI greys them out otherwise, so a limiter-less glue chain can't be built by accident.
+
+---
+
+### Task 0 (sssketch, then radio): move the pure rules into `src/shared`; define `SoundSettings`
+
+No sound changes in this task.
 
 **Files:**
 - Create in sssketch: `src/shared/{radioPan,radioPump,radioThrows,riserCharacter,radioSound}.ts`, each with a test.
-- Modify in radio: `src/radio/{pan,pump,throws}.ts`, `src/audio/{riserCharacter,dubDelay,noise,masterChain,engine}.ts`. Each becomes a re-export or an import.
+- Modify in radio: `src/radio/{pan,pump,throws}.ts`, `src/audio/{riserCharacter,dubDelay,noise,masterChain,engine}.ts`, which become re-exports or imports.
 
-- [ ] **Step 1.** Copy each module verbatim, doc comments included, into sssketch `src/shared/`. Move its existing radio test with it (`pan.test.ts`, `pump.test.ts`, `throws.test.ts`, `riserCharacter.test.ts`). Run them red-then-green in sssketch.
+- [ ] **Step 1.** Copy each module verbatim, doc comments included, into sssketch `src/shared/`. Move its existing radio test with it. Run the tests red-then-green.
   - `radioThrows.ts` takes the pure `throwDelaySec`/`throwTailSec`/`ThrowTiming` out of `dubDelay.ts`.
   - `radioPump.ts` takes `PumpRole` out of `engine.ts`.
-- [ ] **Step 2.** Put the numbers in `radioSound.ts`: `REVERB_IR`, `REVERB_RETURN_DB`, the `MASTERING` object, `DUB_HIGHPASS_HZ`, `DUB_LOWPASS_HZ`, `DUB_TO_REVERB`. Write a test that pins each value as the web spec states it, for example `t60At(REVERB_IR, 1000) === 4.5` and `REVERB_IR.preDelaySec === 0.03`.
-- [ ] **Step 3.** In the radio repo, replace each module's body with `export … from '@shared/…'`. Run its `npx vitest run` and typecheck, and commit there.
-- [ ] **Step 4.** In sssketch, commit. No renderer or engine change yet.
+- [ ] **Step 2.** In `radioSound.ts`, add the numbers (`REVERB_IR`, `REVERB_RETURN_DB`, `MASTERING`, `DUB_*`) and the `SoundSettings` shape above, with `DEFAULT_SOUND_SETTINGS`, `normalizeSoundSettings` and the amount-to-parameter maps. Tests pin:
+  - every number as the web spec states it;
+  - defaults all on;
+  - junk normalised to defaults;
+  - amounts clamped;
+  - `glueThresholdDb(0.5) === -14`;
+  - `throwEveryBars('normal')` deep-equals `[16, 32]`.
+- [ ] **Step 3.** Add the timeline helpers, test-first:
+  - `stemPansForRifff(stems)`: `panForSlots` over the rifff's stems in slot order, with a `drums`/`bass` `SoundType` counted as centred;
+  - `pumpRoleForSoundType(type)`.
+- [ ] **Step 4.** In the radio repo, replace each module's body with `export … from '@shared/…'`. Make radio's `panForSlots` call honour a width argument, defaulting to `ROW_PAN`. Run its tests and commit there.
+- [ ] **Step 5.** Commit in sssketch. No renderer or engine change yet.
 
-**Risk:** low. The only trap is the radio repo building against an sssketch checkout that lacks the new files. Land the sssketch commit first.
+**Risk:** low. Land the sssketch commit before the radio one.
 
 ---
 
-### Task 1: Faust → C++ toolchain and golden vectors (nothing wired yet)
+### Task 1: the Faust toolchain, `.dsp` files in sssketch, the web re-pinned, golden vectors (nothing wired)
 
 **Files:**
-- Move the `.dsp` files (D4).
-- Create `dsp/faust/arch.cpp`, `dsp/faust/LICENSES.md`, `dsp/faust/generated/{saturate,glue,pump,truepeak}.h`.
-- Create `scripts/build-faust-cpp.mjs`, `FaustStage.h/.cpp`, `FaustStageTests.cpp`, `native-engine/test/golden/`.
+- Move the five `.dsp` files from radio `src/audio/faust/` to sssketch `native-engine/Source/dsp/faust/`.
+- Create `arch.cpp`, `LICENSES.md`, `FAUST_VERSION`, `generated/{saturate,glue,pump,truepeak,reverb}.h`.
+- Create `scripts/build-faust-cpp.mjs`, `scripts/buildFaustCpp.test.ts`, `FaustStage.h/.cpp`, `FaustStageTests.cpp`, `native-engine/test/golden/`.
 - Modify `CMakeLists.txt`.
-- In radio: `scripts/build-faust.mjs` (read the `.dsp` from sssketch), and a new `scripts/golden-vectors.mjs`.
+- In radio: `scripts/build-faust.mjs`, `scripts/buildFaust.test.ts`, `package.json`, `src/audio/faust/LICENSES.md`, plus a new `scripts/golden-vectors.mjs`.
 
-- [ ] **Step 1. Golden vectors first (the red test's data).**
-  - In the radio repo, `golden-vectors.mjs` instantiates each committed `.wasm` in Node, the way `faustProcessor.js` does, at 48 kHz.
-  - It feeds a fixed, seeded input: 2 s of a burst, sine and noise programme. For `pump` it also feeds a seeded kick key.
-  - Parameters are left at their defaults.
-  - It writes raw little-endian float32 in and out files into sssketch `native-engine/test/golden/` (a few hundred KB each).
-- [ ] **Step 2. Failing native test.** `FaustStageTests`: for each DSP, load the golden input, run it through `FaustStage` in blocks of 1, 64, 512 and a random split, and compare with the golden output.
-  - **Pass:** max abs error ≤ 1e-5, and the block splits are bit-identical to each other.
-  - **Also check:**
-    - `latencySamples()` reads the DSP's `latency_samples` meta (truepeak 75, others 0);
-    - `setParam("/truepeak/ceiling", …)` reaches the zone;
-    - the meter address (`/glue/gr`, `/pump/duck`, `/truepeak/gr`) can be read back.
-- [ ] **Step 3. Generate.**
-  - `build-faust-cpp.mjs` runs `faust -lang cpp -i -a arch.cpp -cn <Name>Dsp -ftz 2 -single <name>.dsp` for each of the four. The `-ftz 2` matches the web's compile.
-  - It writes `generated/<name>.h` with a header naming the compiler version and the `.dsp` hash.
+- [ ] **Step 1. Install and pin the native compiler.** `brew install faust`, then `faust --version`; expect 2.88.0. Then `brew pin faust`, so an upgrade can't move it under the generated code. Record the exact version string in `native-engine/Source/dsp/faust/FAUST_VERSION`.
+- [ ] **Step 2. Match the web to it.**
+  - In the scratchpad, `npm pack @grame/faustwasm@<v>` for each release from 0.17.0 to 0.18.4. For each one, instantiate it and print `compiler.version()`. Pick the release whose libfaust equals `FAUST_VERSION`.
+  - Before re-pinning, render golden vectors with the **current** wasm (Step 4's script) and keep them.
+  - In the radio repo, set that version in `package.json` (exact, no caret), update `PINNED_VERSION` in `build-faust.mjs`, run `node scripts/build-faust.mjs`, and commit the new `.wasm`/`.json`.
+  - Re-render the golden vectors and diff them against the pre-re-pin ones. The expectation is max abs difference ≤ 1e-6 per DSP.
+  - **If the difference is larger**, the DSP changed audibly between compiler versions. Stop and tell Elling, who A/Bs the web before and after.
+  - **If no published faustwasm reports the native version**, keep the web at 0.18.5, build Faust 2.89.2 from source (`grame-cncm/faust`, the commit that sets `FAUSTVERSION` to 2.89.2), and pin that path in `FAUST_VERSION` instead.
+- [ ] **Step 3. One copy of each DSP (D4).**
+  - `git mv` is impossible across repos: add the files in sssketch, then delete them in radio in the same session.
+  - Radio's `build-faust.mjs` sets `FAUST_SRC_DIR = process.env.SSSKETCH_DIR ? join(SSSKETCH_DIR, 'native-engine/Source/dsp/faust') : join(ROOT, '..', '..', 'sssketch', 'native-engine', 'Source', 'dsp', 'faust')`. That is the same relative layout the `@shared` alias in `tsconfig.json`/`vite.config.ts` already assumes.
+  - It keeps writing `.wasm`/`.json` into radio's `src/audio/faust/`, where they are committed.
+  - `buildFaust.test.ts` already recompiles and diffs, so it now also fails when a `.dsp` in sssketch changes without the radio's wasm being rebuilt. That is the drift alarm between the repos.
+  - Radio's `LICENSES.md` points at sssketch's.
+- [ ] **Step 4. Golden vectors (the red test's data).**
+  - Radio's `scripts/golden-vectors.mjs` instantiates each committed `.wasm` in Node, as `faustProcessor.js` does, at 48 kHz.
+  - It feeds a fixed, seeded input: 2 s of a burst, sine and noise programme, plus a seeded kick key for `pump`.
+  - Parameters stay at their defaults.
+  - It writes little-endian float32 in and out files into sssketch `native-engine/test/golden/`.
+- [ ] **Step 5. Failing native test.** `FaustStageTests`, for each DSP:
+  - the golden input through `FaustStage` in blocks of 1, 64, 512 and a random split matches the golden output to max abs error ≤ 1e-6 (the compilers match);
+  - the block splits are bit-identical to each other;
+  - `latencySamples()` reads `latency_samples` (truepeak 75);
+  - `setParam("/truepeak/ceiling", …)` reaches its zone;
+  - the meters (`/glue/gr`, `/pump/duck`, `/truepeak/gr`) can be read.
+- [ ] **Step 6. Generate.**
+  - `build-faust-cpp.mjs` checks that `faust --version` equals `FAUST_VERSION`, refusing otherwise.
+  - It then runs `faust -lang cpp -i -a arch.cpp -cn <Name>Dsp -ftz 2 -single <name>.dsp` per DSP. The `-ftz 2` is the web's.
+  - It writes `generated/<name>.h` with a header naming the version and the `.dsp` hash.
   - `arch.cpp` declares the minimal `dsp`, `UI` and `Meta` bases in `namespace sssketch::faust`.
-- [ ] **Step 4.** Wire the headers into `CMakeLists.txt`'s vendored list (compiled with `-w`). `FaustStage` holds the DSP by `std::unique_ptr`, allocated in `prepare()` on the message thread, and collects param zones through our `UI`. Make the tests green.
-- [ ] **Step 5.** `buildFaustCpp.test.ts` re-runs the generator into a temp dir and diffs it against `generated/`. It is skipped with a clear message when `faust --version` is missing, the same way the radio repo's `buildFaust.test.ts` checks its wasm.
-- [ ] **Step 6.** Write `LICENSES.md`: the DSPs are GPL-2.0-or-later and combined into GPL-3.0-or-later; the compiler is a build tool only; no GRAME architecture file is used. Commit.
+- [ ] **Step 7. Make it green.**
+  - Add the headers to `CMakeLists.txt`'s vendored list, compiled with `-w`.
+  - `FaustStage` holds the DSP in a `std::unique_ptr`, allocated in `prepare()` on the message thread, and collects param zones through our `UI`.
+- [ ] **Step 8.** `buildFaustCpp.test.ts` regenerates into a temp dir and diffs it against `generated/`. It is skipped with a clear message without `faust`.
+- [ ] **Step 9.** Write `LICENSES.md`:
+  - GPL-2.0-or-later DSPs, combined into GPL-3.0-or-later;
+  - the compiler is a build tool;
+  - no GRAME architecture file is used;
+  - the pinned versions on both sides.
+
+  Commit in both repos.
 
 **Risk:**
-- **Compiler version skew (D5).** Mitigation: the golden tolerance, and pinning the version in the script.
-- **The radio repo's build now reads from sssketch.** Mitigation: it already depends on `../../sssketch` for `@shared`.
+- **Re-pinning the web might change its sound.** Step 2's before/after golden diff is the gate, and Elling listens if it fails.
+- **Version skew later.** `brew pin`, the `FAUST_VERSION` check and the drift tests on both sides cover it.
+- **The radio build now needs an sssketch checkout.** It already does, for `@shared`.
 
 ---
 
-### Task 2: the master stage, with the true-peak limiter at −1 dBTP (item 7)
+### Task 2: the sound settings: storage, defaults and the wire (no DSP yet)
 
-**Where:** after the user's master plugin slots, as the very last thing before the device or WAV. A user plugin after a limiter would undo the −1 dBTP promise.
-- `Transport.cpp`: in both `renderLoopAware` call sites, right after `masterChain.process(...)` and before the reposition fade.
+**What it does:** puts `SoundSettings` in each project and the app-wide defaults in a store, and sends the resolved settings to the engine. The engine parses them and ignores each stage until its task lands.
+
+**Files:**
+- `src/main/soundSettingsStore.ts` (+test), `src/main/index.ts` (IPC `sound-settings:get`/`:set`), `src/preload/index.ts`.
+- `store.ts`, `serialize.ts` (+tests), `buildEngineProject.ts` (+test).
+- `native-engine/Source/SoundSettings.h`, `EngineProject.{h,cpp}` (+Tests).
+
+- [ ] **Step 1. App-wide defaults.** `soundSettingsStore.ts` is a userData JSON read through `normalizeSoundSettings(…, DEFAULT_SOUND_SETTINGS)`, as `discoverSettingsStore.ts` does. Tests follow that file's pattern (mock only `app.getPath`):
+  - a missing file gives all on;
+  - junk is normalised;
+  - a set round-trips.
+- [ ] **Step 2. Per project.**
+  - `AppState.sound: SoundSettings`.
+  - `SET_SOUND_SETTINGS` takes a partial and merges it.
+  - A **new project** initialises from the app-wide defaults (fetched over IPC once at startup).
+  - `serialize.ts` saves `sound`.
+  - `deserializeProject` normalises it, and a **legacy project without `sound` gets the app-wide defaults**. "Everywhere" includes old projects; Elling can switch stages off per project.
+  - Tests:
+    - round-trip;
+    - legacy gets the defaults;
+    - unsaved-changes tracking sees a settings edit (`unsavedChanges.ts`);
+    - undo history covers it, if `history.ts` covers comparable project-level edits such as `reverb`. Check it and follow the same rule.
+- [ ] **Step 3. The wire.** `buildEngineProject` emits `sound` with **resolved** parameters:
+  ```ts
+  sound: {
+    mastering: { headroomDb: -4, ceilingDb: -1 } | absent,
+    glue: { thresholdDb, ratio: 2, kneeDb: 6 } | absent,
+    tone: {} | absent,
+    saturation: { drive } | absent,
+    room: 'cavern' | 'zita',
+    pump: { depthDb } | absent,
+    dub: absent   // Task 10
+  }
+  ```
+  - Stage off means the key is absent.
+  - Every stage off still sends `room`; with `room: 'zita'` and nothing else on, `sound` is omitted entirely, so the wire is byte-identical to today's.
+  - The per-stem fields (`pan`, `pumpRole`, `dubSend`) and the riser fields arrive with their own tasks.
+  - TS tests:
+    - all-off is byte-identical to a pre-plan project;
+    - each stage maps its amounts.
+- [ ] **Step 4. Parse.** `EngineProject.sound` (`SoundSettings.h`), where absent fields mean off. Native tests:
+  - each field parses;
+  - junk degrades to off;
+  - an absent block gives an all-off struct.
+- [ ] **Step 5.** Discover's `previewState` already copies project-level fields from the real project (`reverb`, `masterChain`). Copy `sound` the same way. Discover then follows the open project's settings.
+
+**Risk:** this is the widest twin change in the plan. It is all data with no DSP, which is why it is its own task. Each later task only flips its own stage from "parsed" to "performed".
+
+---
+
+### Task 3: the master stage, with the true-peak limiter at −1 dBTP (item 7)
+
+**Where:** after the user's master plugin slots, as the last thing before the device or WAV. A user plugin after a limiter would undo −1 dBTP.
+- `Transport.cpp`: in both `renderLoopAware` call sites, after `masterChain.process(...)` and before the reposition fade.
 - `RenderExport.cpp`: after its `masterChain.process(...)`.
-- Both call one `MasterStage` owned by `PlaybackEngine` (`engine.processMaster(n, l, r)`). It reads the published snapshot's `mastering` flag. The two paths cannot diverge.
+- Both call `engine.processMaster(n, l, r)`, backed by one `MasterStage` that `PlaybackEngine` owns. It reads `sound.mastering` from the published snapshot, so the two paths cannot diverge.
 
-**Trigger:** a new wire field, `EngineProject.mastering: { enabled: bool }`. Absent means off. Discover's preview sets it (D1/D2). A dev-only bypass for A/B comes for free: flip the flag and reload.
+**Trigger:** `sound.mastering` (the "mastering" switch). **Params:** headroom −4 dB; truepeak ceiling −1 dBTP, release 0.1 s, lookahead 64, latency 75 samples.
 
-**Params (`MASTERING` from `radioSound.ts`):**
-- headroom −4 dB;
-- truepeak: ceiling −1 dBTP, release 0.1 s, lookahead 64, latency 75 samples.
+**Native tests (`MasterStageTests`, `TransportTests`):**
+- [ ] **Off** (absent or switched off): `processMaster` leaves the buffers bit-identical.
+- [ ] **True peak:** a +6 dBFS sine at fs/4, at a 45° phase, measured with the test's own 8× sinc upsampler, comes out ≤ −1.0 dBTP + 0.1 dB.
+- [ ] **Transparent below threshold:** a −20 dBFS sine comes out ×10^(−4/20), delayed exactly 75 samples.
+- [ ] **Block-size invariant**, bit-identical.
+- [ ] **Live equals export:** the same project through `RenderExport` and through `renderLoopAware` + `processMaster` matches.
 
-This task ships headroom + limiter only. The later stages slot in between.
-
-**Native tests (`MasterStageTests`, `TransportTests`, `EngineProjectTests`):**
-- [ ] **Off:** with `mastering` absent, `processMaster` leaves the buffers bit-identical. Every existing parity test passes unchanged.
-- [ ] **True peak:** a +6 dBFS sine at fs/4 at a 45° phase has intersample peaks about 3 dB over its samples. Measure the output's true peak with the test's own 8× sinc upsampler: ≤ −1.0 dBTP + 0.1 dB.
-- [ ] **Transparent below threshold:** a −20 dBFS sine comes out ×10^(−4/20), delayed exactly 75 samples. The gain path is exactly 1.
-- [ ] **Block-size invariant:** a 512 block vs a random split of the same render is bit-identical.
-- [ ] **Live equals export:** a project rendered through `RenderExport` and through `Transport::renderLoopAware` + `processMaster` matches.
-- [ ] **Parse:** `mastering` is parsed, and junk degrades to off.
-- [ ] **TS:** `buildEngineProject` omits `mastering` unless it is set (`buildEngineProject.test.ts`). DiscoverPanel sets it on `previewState`.
-
-**Latency:** the 75 samples (1.6 ms at 48 kHz) are not compensated against the playhead. They are under the reposition fade and the device buffer. Write that down in the code comment.
+**The 75-sample latency** (1.6 ms at 48 kHz) is not compensated against the playhead. Say so in the code comment.
 
 **Risk:**
-- **Level change.** The headroom trim makes Discover about 4 dB quieter before limiting, and Elling's master-fader habits will notice.
-- The `processMaster` call order relative to the reposition fade.
-- A stale engine binary: rebuild and relaunch per `CLAUDE.md`.
+- **Level:** the −4 dB headroom makes every project, the timeline included, quieter before limiting.
+- A stale engine binary: rebuild and relaunch.
 
 **Elling listens:**
 - loud stacks no longer crackle;
-- the level drop;
-- is anything pumping or dulled?
-- export a Discover bounce and confirm it sounds the same as the pass.
+- the level drop on an existing timeline project;
+- switching mastering off in the project gives today's sound back.
 
 ---
 
-### Task 3: per-row panning (item 1)
+### Task 4: per-row panning (item 1)
 
-**Where:** per stem, in the stem's own buffer, after the volume curve and **before the reverb send**. That is post-pan, as on the web, so a row placed right gets its room mostly on the right. Order: `filter → volume → pan → send → channel`.
+**Where:** per stem, in its own buffer, after the volume curve and **before the reverb send**. That is post-pan, as on the web. Order: `filter → volume → pan → send → channel`.
 - A stem with pan ≠ 0 takes the toolkit path, so it has its own buffer.
 - Pan 0 never touches the samples.
 
-**Law:** Web Audio's `StereoPannerNode` on a stereo input (a mono stem is already L = R natively, as the web up-mixes it):
+**Law:** Web Audio's `StereoPannerNode` on a stereo input (a mono stem is already L = R natively):
 - for p ≤ 0, x = p + 1: `L' = L + R·cos(x·π/2)`, `R' = R·sin(x·π/2)`;
 - for p > 0, x = p: `L' = L·cos(x·π/2)`, `R' = R + L·sin(x·π/2)`.
 
-**Trigger:**
-- New wire field `EngineStem.pan` (−1..1, absent means 0).
-- The renderer computes `panForSlots(slots)` (shared) over **all** slots in slot order, keyed by slot id, so a swap or a mute never moves a row. It maps each slot to its member's stem key.
-- Drums and bass are 0; the rest go +0.25, −0.25, … (`ROW_PAN`).
+**Trigger:** new wire field `EngineStem.pan` (−1..1, absent means 0), emitted when `sound.panning.on`. The pan is `±width`:
+- **Discover:** `panForSlots(slots, width)` over **all** slots in slot order, keyed by slot id, so a swap or a mute never moves a row.
+- **Timeline:** `stemPansForRifff(stems, width)` per rifff, by slot and `SoundType`.
 
 **Native tests (`StemPanTests`, `PlaybackEngineTests`):**
 - [ ] Pan 0 is bit-identical to today.
 - [ ] +0.25 on a stereo stem matches the formula sample for sample.
-- [ ] A mono stem at +0.25 comes out at `L = cos(π/8)·x`, `R = (1 + sin(π/8))·x` (R/L ≈ 1.50), as the web gives.
-- [ ] The send is post-pan: a stem at +1 with a send feeds the reverb on the right only.
+- [ ] A mono stem at +0.25 gives `L = cos(π/8)·x`, `R = (1 + sin(π/8))·x`.
+- [ ] The send is post-pan.
 - [ ] Block-split invariance.
-- [ ] **TS:** the `panForSlots` mapping in DiscoverPanel is pure (extract `stemPansFor(slots, members)` into shared and test it). `buildEngineProject` omits `pan` when it is 0.
+- [ ] **TS:** the Discover and timeline pan maps, width honoured, panning off emits no `pan`.
 
-**Risk:** low.
-- Pan reroutes neutral stems onto the toolkit path. That costs one extra buffer copy per stem, which is trivial.
-- Sends: today a stem without a toolkit has no send at all, so check that a panned stem with send 0 stays send 0.
+**Risk:** low. Check that a panned stem with no send still adds no send, since today a stem without a toolkit has none.
 
-**Elling listens:** drums and bass in the middle; the others slightly left and right; a swap doesn't move a row.
+**Elling listens:**
+- drums and bass centred, the rest gently left and right, in Discover and on the timeline;
+- a swap doesn't move a row;
+- the width slider.
 
 ---
 
-### Task 4: the cavernous reverb (item 2)
+### Task 5: the cavernous reverb (item 2, D3)
 
-**Where:** `ReverbBus` gets a second room. `ReverbSettings.room: 'zita' | 'cavern'`, absent means zita. With `cavern`, the bus runs `CavernReverb` instead of zita. The sends and the lazy, neutral-is-free behaviour stay exactly as they are.
+**Where:** `ReverbBus` gets a second room. With `sound.room === 'cavern'` the bus runs `CavernReverb` instead of zita. The sends and the lazy, neutral-is-free behaviour stay as they are. With `zita`, the bus is bit-identical to today.
 
 **What it is:** a C++ twin of `noise.ts` `reverbImpulse`:
-- mulberry32 white noise, seeds `0x5eed` and `0x5eed ^ 0x9e3779b9` (different per side, so it is wide);
-- 1024-point STFT synthesis, hop 256, Hann analysis and synthesis, normalised by 1/1.5;
+- mulberry32 white noise, seeds `0x5eed` and `0x5eed ^ 0x9e3779b9` (wide);
+- 1024-point STFT synthesis, hop 256, Hann and Hann, divided by 1.5;
 - per-bin decay `exp(-ln(1000)/T60(f)·t)` from `REVERB_IR`: 5 s at 125–250 Hz, 4.5 s at 1 kHz, 2.2 s at 8 kHz, 1.5 s at 16 kHz;
 - 30 ms of leading zeros;
-- then Web Audio's `ConvolverNode` normalisation: scale = 0.00125 / max(rms over all channels and samples, 0.000125), × 44100 / sr; then `REVERB_RETURN_DB` (−3.4 dB).
+- Web Audio's `ConvolverNode` normalisation: scale = 0.00125 / max(rms over all channels and samples, 0.000125), × 44100 / sr; then `REVERB_RETURN_DB` (−3.4 dB).
 
 **The convolver:**
-- Hand-written, uniformly partitioned (partition 1024, `juce::dsp::FFT`), with an input FIFO, so the output never depends on the host's block size. That keeps the live-equals-export bit-identity.
-- Its 1024-sample FIFO latency is cancelled by **trimming the first 1024 zeros of the 30 ms pre-delay** out of the IR. 30 ms is 1323 samples at 44.1 kHz, 1440 at 48 kHz, both at least 1024. The tail lands exactly where the web's does.
-- **Why not `juce::dsp::Convolution`:** it loads IRs on a background thread. A fresh offline export would render its first blocks dry. It is also not block-size invariant to the bit.
+- Hand-written, uniformly partitioned (1024, `juce::dsp::FFT`), with an input FIFO, so it is block-size invariant to the bit.
+- Its 1024-sample latency is cancelled by trimming 1024 of the pre-delay's leading zeros. The pre-delay is 1323 samples at 44.1 kHz and 1440 at 48 kHz, both at least 1024.
+- **Why not `juce::dsp::Convolution`:** it loads IRs on a background thread, so a fresh export would start dry.
 
-**Built where:**
-- The IR and its frequency-domain partitions (2 ch × about 240 partitions × 1025 complex bins, about 4 MB) are built in `setProject`/`stageProject` on the message thread, when a project first asks for `cavern`.
-- They are cached per sample rate and swapped in through the snapshot. They are never built on the audio thread.
-- If the device rate differs from the cached one at render time, the bus stays silent for that block and the message thread rebuilds. Log it, because it should never happen.
+**Built where:** the IR and its partitions (about 240 partitions per side, ~4 MB) are built on the message thread in `setProject`/`stageProject`. They are cached per sample rate and handed over through the snapshot. If there is a rate mismatch at render time, the bus is silent for that block and the message thread rebuilds; log it.
 
-**Trigger:** DiscoverPanel's `previewState.reverb = { ...reverb, room: 'cavern' }` (D3). The master send default stays the renderer's.
+**Bake tails:** `exportToolkitAudio.ts` `reverbTailSeconds` learns the room. A cavern tail is pre-delay + 5 s. A test pins it.
 
 **Native tests (`CavernReverbTests`):**
 - [ ] **IR shape:** length = pre + 5 s; exactly zero for the first 30 ms; L/R correlation < 0.1.
-- [ ] **Decay per band:** band-pass the IR at 1 kHz and fit the energy decay: T60 4.5 s ± 10%. At 8 kHz: 2.2 s ± 10%. At 250 Hz: 5.0 s ± 10%.
-- [ ] **Twin:** the first 8,192 samples after the pre-delay match the TS `reverbImpulse` at 48 kHz within 1e-6 (golden file from the radio repo, same seed).
-- [ ] **Normalisation:** equals the Web Audio formula computed in the test.
-- [ ] **Convolver:** an impulse in gives the normalised IR out, aligned to the sample (pre-delay included). Blocks of 1, 64, 512, 4096 and random splits are bit-identical. With no send, nothing is built and the output is unchanged. It reports ringing for the IR's length after the last send.
-- [ ] **Room switch:** zita projects are bit-identical to today.
-- [ ] **TS:** the `room` field round-trips, and is omitted when it is `zita`.
+- [ ] **Decay per band:** T60 at 1 kHz is 4.5 s ± 10%, at 8 kHz 2.2 s ± 10%, at 250 Hz 5.0 s ± 10%.
+- [ ] **Twin:** the first 8,192 samples after the pre-delay match the TS `reverbImpulse` at 48 kHz within 1e-6 (a golden file from the radio repo).
+- [ ] **Normalisation:** equals the Web Audio formula.
+- [ ] **Convolver:**
+  - an impulse in gives the normalised IR out, sample-aligned;
+  - blocks of 1, 64, 512, 4096 and random splits are bit-identical;
+  - with no send, nothing is built;
+  - it reports ringing for the IR's length.
+- [ ] **Zita:** projects with zita are bit-identical to today.
 
 **Risk:**
-- **CPU:** about 240 partitions × 1025 complex MACs per 1024 samples per side. Back of the envelope, a few percent of one core. Measure it in a `PlaybackEngineTests` timing note, not a hard assert.
+- **CPU:** a few percent of a core per instance. Measure it in Task 14.
 - **Memory:** ~4 MB per sample rate.
-- The FIFO and partition bookkeeping is the most intricate new C++ in this plan, so test it hardest.
-- **Level:** the web's −3.4 dB return was measured against its old 2.5 s room. The native send-level history differs (zita is 100% wet). Expect a level trim by ear.
+- **Bookkeeping:** the FIFO and partitions are the most intricate new C++.
+- **Send level:** expect a trim by ear.
 
 **Elling listens:**
-- the room is huge and darkens as it decays;
-- the pre-delay keeps transients clear;
-- a bloom still reads;
-- send at 0.5 is about where the web sits;
-- CPU is fine on the laptop.
+- huge and darkening, with clear transients;
+- a send of 0.5 against the web;
+- blooms;
+- switching to zita in a project restores today's room.
 
 ---
 
-### Task 5: riser variety (item 3)
+### Task 6: riser variety (item 3)
 
-**Where:** `RiserVoice`/`NoiseRiser`, still rendered into the channel. A riser with a send also feeds `reverbBus.addSend`. Risers with a send mark the snapshot as `anyToolkitActive`, so the bus runs.
+**Where:** `RiserVoice`/`NoiseRiser`, still rendered into the channel. A riser with a send also feeds `reverbBus.addSend`. Risers with a send mark the snapshot as `anyToolkitActive`.
 
 **Wire (`EngineRiser`, all optional, absent means today's riser):**
-- `q` (1–6, default `kRiserBandwidthQ` 2);
+- `q` (1–6, default 2);
 - `colour: 'white' | 'pink'`;
 - `stereo: 'wide' | 'mono'`;
-- `send` (0–1, default 0).
+- `send` (0–1).
 
-Level, sweep range and sweep curve need **no** native change:
-- The renderer draws a `RiserCharacter` with the shared `drawRiserCharacter`, seeded from the riser id, so a re-sync redraws the same character.
-- `level = 0.35 · 10^(levelDb/20)`. That is +1 to +5 dB, +3 dB on average.
-- `startCutoffValue`/`endCutoffValue` come from the character.
-- The sweep shape `start + (end − start)·p^curve` is written into `RiserClip.curve` as 17 points, which `riserCutoffAt` already follows.
+**Trigger:**
+- With `sound.riserVariety.on`, radio's transition risers (`buildTransitionRiser`) draw a `RiserCharacter`. They do this with the shared `drawRiserCharacter`, seeded from the riser id, so a re-sync redraws the same character.
+- `level = 0.35 · 10^(levelDb/20)` (+3 dB on average).
+- The sweep ends and the shape `start + (end − start)·p^curve` go into `RiserClip.curve` as 17 points, which `riserCutoffAt` already follows.
+- Hand-drawn risers keep exactly what the user drew.
 - The timing stays `buildTransitionRiser`'s.
 
 **Native changes:**
-- **Q:** the gain is `level · (1/Q) · sqrt(Q/2)`. The 1/Q is the SVF bandpass's peak normalisation (today's constant). The `sqrt(Q/2)` is the web's `qTrim`: noise power level-matched to Q 2. At Q 2 this is exactly today's gain.
+- **Q:** gain `level · (1/Q) · sqrt(Q/2)`. This is today's peak normalisation times the web's power match to Q 2; it equals today's gain at Q 2.
 - **Pink:**
-  - Paul Kellet's economy filter (three one-poles, the same coefficients as `riserVoice.ts`) over `riserNoiseAt`.
-  - Scaled by a constant k that matches white at 6 kHz, as the web's `MATCH_HZ` does. Compute k analytically from the filter's magnitude at 6 kHz for the running sample rate, and pin it against the web's measured value.
-  - The filter has state, so **index addressing is kept by warm-up**: on a discontinuity (a seek or the first block), re-run the filter over the 16,384 samples before the index. 0.99765^16384 ≈ e^−38, so the state matches a from-zero run to float precision.
+  - Kellet's three one-poles over `riserNoiseAt`, with `riserVoice.ts`'s coefficients.
+  - Level-matched to white at 6 kHz (`MATCH_HZ`) by a constant computed from the filter's magnitude there at the running rate. Pin it to the web's measured value.
+  - Index addressing is kept by warm-up: on a discontinuity, re-run the filter over the 16,384 samples before the index (0.99765^16384 ≈ e^−38).
 - **Mono:** `seedR = seedL`.
 
 **Native tests (`NoiseRiserTests`):**
-- [ ] **Regression:** all 13 existing riser tests pass unchanged with the new fields absent. "Level means level" stays true for Q 2, white.
-- [ ] **Q:** the RMS over the sweep is within 0.5 dB across Q 1, 2, 4 and 6 at one level, and the resonant ones are narrower (the band's bandwidth).
-- [ ] **Pink:** the slope is −3 dB/oct ± 1 dB from 200 Hz to 8 kHz.
-- [ ] **Pink, by index:** a render seeked into the middle matches a continuous render within 1e-6, and two fresh renders are bit-identical (live equals offline).
-- [ ] **Mono:** L == R exactly. Wide: decorrelated (the existing test).
-- [ ] **Send:** a riser with a send rings the reverb, and with send 0 the bus is never built.
-- [ ] **TS:**
-  - the riser character becomes `RiserClip` fields (a pure helper in shared, with a test);
-  - `buildEngineRisers` omits absent fields;
-  - the same id gives the same character.
+- [ ] The 13 existing tests pass unchanged when the fields are absent.
+- [ ] RMS is within 0.5 dB across Q 1, 2, 4 and 6.
+- [ ] The pink slope is −3 dB/oct ± 1 from 200 Hz to 8 kHz.
+- [ ] A pink seek matches a continuous render within 1e-6, and two fresh renders are bit-identical.
+- [ ] Mono gives L == R.
+- [ ] A send rings the reverb; send 0 builds nothing.
+- [ ] **TS:** character to fields; omission; same id gives the same character; variety off leaves the riser as today.
 
-**Risk:**
-- At Q > 2 the noise's peaks can pass `level`. The "level means level" doc comment changes from a peak bound to a power match. Task 2's limiter is the backstop, which is why it lands first.
-- The pink warm-up costs about 16k × 3 one-poles once per seek.
+**Risk:** at Q > 2, "level means level" becomes a power match. Document it; the limiter (Task 3) is the backstop.
 
 **Elling listens:**
-- risers vary: some whistle (resonant), some have body (pink), a few are narrow (mono);
-- louder by about 3 dB;
+- varied risers: whistly, full, narrow;
+- about +3 dB;
 - they bloom into the room;
-- the timing is unchanged.
+- variety off restores today's riser.
 
 ---
 
-### Task 6: glue compression and tone (the master stage's middle)
+### Task 7: glue compression and tone
 
-**Where:** inside `MasterStage`, between the headroom trim and the limiter. Order:
-1. HP 25 Hz;
-2. a saturation slot (Task 7);
-3. glue (Faust `glue` at its own `.dsp` defaults: threshold −14, ratio 2, soft knee 6 dB, dual envelope);
-4. width (mid/side, the side through a +2 dB high shelf at 250 Hz, so the mono sum is unchanged);
-5. low shelf +1 dB at 100 Hz;
-6. high shelf +1 dB at 10 kHz;
+**Where:** `MasterStage`, between the headroom trim and the limiter, in this order:
+1. HP 25 Hz (tone);
+2. a saturation slot (Task 8);
+3. glue (Faust);
+4. width (mid/side, the side through a +2 dB high shelf at 250 Hz; the mono sum is unchanged) (tone);
+5. low shelf +1 dB at 100 Hz (tone);
+6. high shelf +1 dB at 10 kHz (tone);
 7. limiter.
 
-Use RBJ biquads with the **web's actual Q**: the HP uses `biquadQ(0)` = −3.01 dB in Web Audio's decibel Q, which is linear 0.7071.
+The biquads are RBJ, at the web's Q: the HP's `biquadQ(0)` is −3.01 dB in Web Audio's decibel Q, which is linear 0.7071.
 
-**Trigger:** the same `mastering` flag.
-
-**Params:** the HP, width and shelves from `MASTERING` in `radioSound.ts`. The glue runs at `glue.dsp`'s own defaults (−14 dB, ratio 2, knee 6). The web's `loadFaust` sets no glue params, and `MASTERING.glue` (−11, knee 0) belongs only to its `DynamicsCompressorNode` fallback. Pin the defaults in a test so a `.dsp` edit is a visible change.
+**Trigger and params:**
+- `sound.glue` (threshold from the amount: 0.5 gives −14 dB, ratio 2, knee 6). That is `glue.dsp`'s defaults: the web's `loadFaust` sets no glue params, and `MASTERING.glue` (−11, knee 0) belongs only to its `DynamicsCompressorNode` fallback.
+- `sound.tone` switches the HP, width and shelves.
+- Both only run with mastering on.
 
 **Native tests:**
-- [ ] Golden vector, the whole stage: the radio repo renders the same seeded mix through its Faust chain (`spike/engine-check`'s offline render, Faust stages on, convolver off) and native matches within 1e-4.
-- [ ] The glue alone: a signal below the knee comes out at unity; +10 dB over the threshold comes out at about +5 dB (2:1).
-- [ ] Width: the mono sum L + R is unchanged to 1e-6.
-- [ ] Shelves: ±0.1 dB at their corners against RBJ formulas.
-- [ ] Block-split invariance; mastering off is still bit-identical.
+- [ ] Whole-stage golden: the radio repo renders a seeded mix through its Faust chain (convolver off), and native matches within 1e-5.
+- [ ] Glue below the knee is unity; +10 dB over the threshold comes out about +5 dB over.
+- [ ] Width leaves L + R unchanged to 1e-6.
+- [ ] The shelves are within ±0.1 dB of the RBJ formulas.
+- [ ] Each switch off removes exactly its stage.
+- [ ] Block-split invariance.
 
-**Risk:**
-- The web's chain order and its fallback trims are subtle (`GLUE_TRIM_DB` exists only for `DynamicsCompressorNode`). The Faust glue has no makeup gain, so **no trim natively**. Port the Faust-path chain, not the fallback.
+**Risk:** port the web's **Faust-path** chain, not its fallback trims (`GLUE_TRIM_DB` exists only for the `DynamicsCompressorNode`).
 
-**Elling listens:** layers from different jams sit together; gain reduction is about 1–3 dB on a dense mix (expose `/glue/gr` in the dev readout if he wants it); nothing breathes.
+**Elling listens:** layers sit together; about 1–3 dB of gain reduction on a dense mix; nothing breathes; the glue amount slider; tone off.
 
 ---
 
-### Task 7: tape saturation (item 5)
+### Task 8: tape saturation (item 5)
 
-**Where:** `MasterStage`'s saturation slot: after the HP, before the glue. Faust `saturate`: drive 1.8, bias 0.1, makeup +0.5 dB, DC blocker at 5 Hz.
+**Where:** `MasterStage`'s saturation slot, after the HP and before the glue. Faust `saturate`: drive from the settings (1.8 by default), bias 0.1, makeup +0.5 dB, DC blocker at 5 Hz.
 
 **Native tests:**
-- [ ] Golden vector (Task 1's harness).
+- [ ] Golden vector.
 - [ ] A −40 dBFS sine comes out at unity ± 0.01 dB.
-- [ ] THD of a −14 dBFS 1 kHz sine is 1.8% ± 0.3%.
-- [ ] No DC on an asymmetric input after 1 s.
-- [ ] A dense-mix level match within 0.3 dB (spec 1a).
+- [ ] THD of a −14 dBFS sine at drive 1.8 is 1.8% ± 0.3%.
+- [ ] No DC.
+- [ ] A dense mix level-matches within 0.3 dB.
+- [ ] Switched off, the stage is absent.
 
-**Risk:** aliasing. The web's Faust stage runs **without** oversampling; only the WaveShaper stand-in was 4×. Native matches the Faust stage. If Elling hears grit on bright material, add 2× oversampling later as its own task. Don't pre-empt it.
+**Risk:** aliasing. The web's Faust stage is not oversampled, and native matches it. Add 2× oversampling only if Elling hears grit.
 
-**Elling listens:** peaks rounded a little, nothing obviously distorted; A/B with the dev bypass.
+**Elling listens:** peaks rounded, nothing gritty; the drive slider.
 
 ---
 
-### Task 8: the drum-keyed pump (item 6)
+### Task 9: the drum-keyed pump (item 6)
 
-**Where:** `renderBlock`. The pumped stems' dry signal goes into a per-channel pumped scratch buffer, after filter → volume → pan → send. The send is therefore **not** pumped, as on the web. The drums stems' dry signal also goes into one key buffer.
-- After the channel loop, `DrumPump` runs the Faust `pump` (4 in: program L/R, key L/R; 2 out) over each channel's pumped buffer, keyed by the block's key buffer.
-- It then adds the result into the channel before the channel plugin chain.
-- The pump is sample by sample with no look-ahead, so using the same block's key is exact.
-- The pump's gain multiplies the stems' own gain, so the duck gesture's `volume` curve still works.
+**Where:** `renderBlock`.
+- The pumped stems' dry signal goes into a per-channel pumped scratch buffer, after filter → volume → pan → send, so the send is not pumped.
+- The key stems' dry signal also goes into one project-wide key buffer.
+- After the channel loop, `DrumPump` runs Faust `pump` (4 in, 2 out) over each pumped buffer and adds it into its channel, before the channel plugin chain.
+- The pump works sample by sample with no look-ahead, so using the same block's key is exact.
+- It multiplies the stems' own gains, so duck curves still work.
 
-**Trigger:**
-- New wire field `EngineStem.pumpRole: 'key' | 'pumped' | 'none'`, absent means none.
-- The renderer sets it from the shared `pumpRoleFor(slot.kinds)`: drums are key, bass is none, everything else is pumped.
-- No key stem in the project means no pump at all; the gain is exactly 1.
+**Trigger:** `EngineStem.pumpRole: 'key' | 'pumped' | 'none'` (absent means none), emitted when `sound.pump.on`:
+- **Discover:** `pumpRoleFor(slot.kinds)`.
+- **Timeline:** `pumpRoleForSoundType(stem.type)`.
 
-**Params:** depth 4 dB, attack 3 ms, release 200 ms, key low-passed at 150 Hz twice, range −30 to −10 dB.
+No key stem means no pump. Depth comes from the settings (4 dB by default); attack 3 ms; release 200 ms.
 
 **Native tests (`DrumPumpTests`, `PlaybackEngineTests`):**
 - [ ] Golden vector.
-- [ ] No key: pumped stems are bit-identical to unpumped.
-- [ ] A 60 Hz kick burst at −10 dBFS ducks a pumped pad by 4 dB ± 0.3. The attack reaches 90% in about 7 ms, and recovery is about 63% in 200 ms.
-- [ ] Hats alone at −10 dBFS (8 kHz) duck by under 0.5 dB.
-- [ ] Drums and bass stems are untouched.
-- [ ] The reverb send is not pumped.
+- [ ] No key: bit-identical.
+- [ ] A 60 Hz kick at −10 dBFS ducks a pad by `depthDb` ± 0.3, reaching 90% in about 7 ms and recovering about 63% in 200 ms.
+- [ ] 8 kHz hats duck it by under 0.5 dB.
+- [ ] Drums and bass are untouched.
+- [ ] The send is not pumped.
 - [ ] Block-split invariance.
-- [ ] **TS:** `pumpRole` mapping and omission.
+- [ ] **TS:** both role maps; pump off emits no `pumpRole`.
 
-**Risk:**
-- This is a new routing shape inside `renderBlock` (a second per-channel scratch buffer and a project-wide key), in the engine's most commented, most fragile function. Keep the change to routing pointers and one post-loop pass.
-- A muted drums row stops keying, which is correct: it isn't heard.
+**Risk:** a new routing shape in `renderBlock`. Keep it to routing pointers and one post-loop pass.
 
-**Elling listens:** a subtle breath on pads and leads with each kick; nothing on drums and bass; the duck gesture still dips over it.
+**Elling listens:** a breath on pads with each kick, in Discover and on the timeline; drums and bass untouched; the depth slider.
 
 ---
 
-### Task 9: the dub echo bus (item 4, engine half)
+### Task 10: the dub echo bus (item 4, engine half)
 
-**Where:** a new `DubDelayBus`, shaped like `ReverbBus`: lazy, neutral-is-free.
-- Fed by a per-stem, post-pan `dubSend` (the stem's own buffer, like the reverb send).
-- Processed before `reverbBus.endBlock`, so its output can feed `DUB_TO_REVERB` (0.15) into the reverb in the same block.
+**Where:** `DubDelayBus`, shaped like `ReverbBus`: lazy, neutral-is-free.
+- Fed by a per-stem, post-pan `dubSend` curve.
+- Processed before `reverbBus.endBlock`, so 0.15 of it (`DUB_TO_REVERB`) can feed the reverb in the same block.
 - Its wet signal goes into the master sum.
 
 The DSP is a stereo ping-pong:
-- L delay → HP 200 → LP 3500 → feedback → R delay, and R back to L.
-- The lowpass is in the loop, so each repeat is darker.
-- Feedback is clamped to 0.95.
-- Fractional delay is linear-interpolated, the line sized for 2 s.
-- **Web quirk to match deliberately:** `dubDelay.ts` passes `Q: Math.SQRT1_2` to Web Audio low and high passes, whose Q is in **decibels**. So the web's filters are linear Q 10^(0.7071/20) ≈ 1.085, about +0.7 dB of bump. Match what Elling heard, and note it as a candidate fix in the radio repo.
+- L → HP 200 → LP 3500 → feedback → R, and back to L;
+- each repeat is darker;
+- feedback is clamped to 0.95;
+- the line holds 2 s, with linear-interpolated fractional delay.
+- **Web quirk, matched on purpose:** `dubDelay.ts` gives Web Audio's decibel-Q filters `Q: Math.SQRT1_2`, which is linear ≈ 1.085. Note it as a candidate fix on the web.
 
 **Wire:**
-- `EngineStemAutomation.dubSend` (a curve; wire-only, not a UI lane in `AUTOMATION_PARAMS`);
-- `EngineProject.dub: { delayBeats: 0.75 | 1, feedback }`, absent means no bus.
+- `EngineStemAutomation.dubSend` (wire-only, not a UI lane);
+- `sound.dub: { delayBeats: 0.75 | 1, feedback }`.
 
-The delay time is `delayBeats × 60 / bpm`, so it follows tempo. A settings change is taken only while the bus is silent (`!isRinging()`). Otherwise it waits, so a ringing tail is never retimed.
+The delay is `delayBeats × 60 / bpm`. A settings change is taken only while the bus is silent.
 
 **Native tests (`DubDelayBusTests`):**
-- [ ] An impulse into L gives echoes at d (R), 2d (L), 3d (R)…, each about `feedback` times the last, with the −3 dB point falling each pass.
+- [ ] An impulse into L gives echoes at d (R), 2d (L)…, each about `feedback` times the last, and darker.
 - [ ] d = 0.375 s at 120 bpm dotted-eighth, and 0.5 s quarter.
-- [ ] Feedback 2.0 is clamped and does not run away over 30 s.
-- [ ] No send and no tail: nothing built, output bit-identical.
+- [ ] Feedback 2.0 is clamped; no runaway over 30 s.
+- [ ] No send: nothing built, bit-identical.
 - [ ] Echoes reach the reverb at 0.15.
-- [ ] A settings change while ringing is deferred.
+- [ ] A change while ringing is deferred.
 - [ ] Block-split invariance.
-- [ ] Parse and round-trip of `dub` and `dubSend`.
+- [ ] Parse and round-trip.
 
-**Risk:**
-- A second bus in the render order; the dub-before-reverb ordering is easy to get wrong. Test it explicitly.
-- The Q quirk.
-
-**Elling listens:** nothing yet (Task 10 triggers it). Optionally a dev button that throws the first eligible row now.
+**Risk:** the bus order (dub before reverb end); the Q quirk.
 
 ---
 
-### Task 10: throw scheduling in Discover (item 4, renderer half)
+### Task 11: throws in Discover (item 4, live)
 
-**Where:** DiscoverPanel's radio loop, next to the gesture code.
+**Where:** DiscoverPanel's radio loop, beside the gesture code, gated on `radioOnRef.current` and `sound.throws.on`.
 
-**Rules (all shared `radioThrows.ts`):**
-- `stepThrows` is fed a tick of `now` and `nextBeat` in transport seconds (bars × secPerBar), plus `bpm`, `held`, `leadingArmed` and the rows' kinds and audibility.
-- It answers with a `ThrowPlan` or nothing:
-  - every 16–32 bars;
-  - 1 or 2 beats;
-  - dotted eighth or quarter;
-  - feedback 0.45–0.6;
-  - never drums or bass;
-  - never two at once;
-  - never while held or over a hole, riser or drop-out.
+**Rules:** the shared `stepThrows`, fed a tick of `now` and `nextBeat` in transport seconds (bars × secPerBar), plus `bpm`, `held`, `leadingArmed` and the rows. `THROW_EVERY_BARS` comes from `throws.rate`.
 
 **Turning a plan into the project:**
-- **The curve.** A plan becomes a `dubSend` curve on the chosen row's stem key, in loop-relative bars, with 5 ms ramps either side of 1, as `engine.ts` `throwDelay` draws it, plus `dub` settings. It is pushed with the live project, the same way a bloom is.
-- **How far ahead.** Choose `nextBeat` at least **one bar** ahead. The measured load-project latency is 0.02–0.22 bar.
-- **Clearing.** Clear the curve after the throw's beats pass and before the next lap reaches that bar. Otherwise it fires every lap.
-- **Staged projects.** A throw armed while a staged swap is pending must also go into the staged project, as gestures' `spares` do. Otherwise the swap at the wrap drops it mid-throw.
+- A plan becomes `throwCurveFor(plan, loopBars, spb)`: a `dubSend` curve with 5 ms ramps, as `engine.ts` `throwDelay` draws it, plus `sound.dub`.
+- Choose `nextBeat` at least one bar ahead (load-project lands 0.02–0.22 bar late).
+- Clear the curve after the throw, before the lap returns to it.
+- Also put it into any pending staged project, like gestures' `spares`.
 
-**Tests (vitest):**
-- [ ] Extract `throwCurveFor(plan, loopBars, spb)` into shared and test it:
-  - points at the right bars;
-  - a 5 ms ramp in bars at that tempo;
-  - wrap-safe when the throw crosses the loop top (split into two segments, or refused and redrawn; decide in the test).
-- [ ] `stepThrows` is already tested (moved in Task 0).
-- [ ] A DiscoverPanel-level test that a throw curve survives a staged swap, if the panel's existing test seams allow it. If not, add it to the walkthrough.
+**Tests:**
+- [ ] `throwCurveFor`: bars, ramps, and the loop-top crossing (decide in the test: split into two segments, or refuse and redraw).
+- [ ] A staged swap keeps the curve, if the panel's test seams allow it; otherwise add it to the walkthrough.
 
-**Risk:**
-- This is the most renderer plumbing in the plan: an 8.8k-line component, curves that repeat every lap until cleared, and the staged/live split.
-- Two load-projects per throw add IPC churn.
-- **Mitigation:** gate every branch on `radioOnRef.current`, as the other gestures are; with radio off, nothing changes.
+**Risk:** renderer plumbing in an 8.8k-line component, and curves that repeat every lap until cleared.
 
-**Elling listens:**
-- now and then a lead or pad echoes into the room;
-- never on drums or bass;
-- the echoes are in time and darken as they go;
-- never during a hole or riser;
-- held means no throws.
+**Elling listens:** occasional in-time echoes on leads and pads, never drums or bass, darker each repeat, none while held or over a hole or riser; the rate setting.
 
 ---
 
-### Task 11: final verification
+### Task 12: throws on the timeline and in exports (item 4, deterministic)
 
-- [ ] The native suite is green; the count goes up by the new tests and nothing is skipped. `npx vitest run` is green, including the render-parity test.
-- [ ] Mastering, pan, room, pump and dub all absent: a timeline project renders bit-identical to a pre-plan build (render-parity plus a saved fixture).
-- [ ] Profile a dense Discover mix (8 rows, all features on) at 48 kHz/256 for CPU. Note the numbers in the commit.
-- [ ] A Discover bounce null-tests against the live pass, with all features on.
-- [ ] Hand Elling the walkthrough below.
+**Why:** throws "everywhere" on the timeline cannot be live random draws. A bounce would then differ from the pass Elling just heard. So they are **planned from the project**.
+
+**What:** `planArrangementThrows(arrangement, settings, seed)` in shared steps `stepThrows` across the arrangement's beat grid with a seeded random.
+- The seed is a hash of the project's id and the rate, so the throws are stable across sessions and edits elsewhere.
+- Eligible rows are timeline stems whose `SoundType` is neither `drums` nor `bass` and that are audible at that bar.
+- It returns throw plans in absolute bars.
+- `buildEngineProject` writes them as `dubSend` curves on each stem's toolkit, in **clip-relative** bars (the automation lane convention: bar 0 is the clip's left edge, `originBar`).
+- Live playback and every export render the same project, so they hear the same throws.
+
+**Tests (vitest):**
+- [ ] The same project gives the same throws, and a different seed gives different ones.
+- [ ] Never two at once (`busyUntil`); never on drums or bass; never on a muted stem.
+- [ ] The rate is honoured.
+- [ ] Throws off gives no curves.
+- [ ] Clip-relative conversion for a clip that starts mid-arrangement and for a left-cropped clip.
+- [ ] A throw near a clip's end is dropped rather than cut.
+- [ ] **Native:** a timeline project with a planned throw renders the same live and through `RenderExport`.
+
+**Risk:**
+- Throws on hand-made arrangements may surprise. The setting is per project, and Elling can switch it off or set it to `rare`.
+- A stem that already carries a user-drawn automation curve is fine: `dubSend` is a separate wire-only param and never collides with the user's lanes.
+
+**Elling listens:** a timeline project with throws on; export it and compare it with the pass; `rare` vs `often`.
+
+---
+
+### Task 13: the sound settings UI
+
+**Where, following existing patterns:**
+- **Per project:** a `SoundSettingsPanel` opened from `TransportBar`, next to the master chain button, built like `MasterChainPanel`: the same open/close state and the same anchored panel. It is the project's mixer-level sound. It dispatches `SET_SOUND_SETTINGS`.
+- **App-wide defaults:** a "sound defaults…" entry in TransportBar's settings (gear) menu opens the same panel bound to the app store (`sound-settings:get`/`:set`). It has a "use these in this project" action and a "make this project's the default" action.
+- **Design:** `tokens.css`, lowercase copy, Silkscreen, sharp corners, no colour on chrome.
+
+**Content, top to bottom:**
+1. **mastering** (limiter) on/off;
+2. **glue** on/off + amount, greyed out without mastering;
+3. **saturation** on/off + drive, greyed out without mastering;
+4. **tone** on/off, greyed out without mastering;
+5. **reverb** cavern | zita;
+6. **panning** on/off + width;
+7. **pump** on/off + depth;
+8. **throws** on/off + rare/normal/often;
+9. **riser variety** on/off.
+
+The defaults panel adds **reset to defaults**.
+
+**Readouts in dev only** (behind the existing dev flag, if there is one; otherwise none): glue gain reduction, pump duck and limiter gain reduction from the Faust meters, through a small engine query IPC.
+
+**Tests:**
+- [ ] Reducer and selector tests for every control's action.
+- [ ] A pure `soundPanelModel(settings)` covering what is greyed out and each label, tested.
+- [ ] Components are verified by typecheck and lint, plus the walkthrough, per `CLAUDE.md`.
+
+**Risk:** UI scope creep. Keep it to switches and sliders, with no new visual language.
+
+**Elling listens and looks:**
+- each switch changes what it says, live, within a sync;
+- a project saves and reopens its settings;
+- a new project starts from the defaults;
+- an old project opens with the defaults;
+- the defaults panel doesn't change the open project unless asked.
+
+---
+
+### Task 14: the bounce paths, and final verification
+
+Every export follows the project's settings.
+
+**The tests:**
+- [ ] **Mixdown** (`nativeExport.ts` → `RenderExport.cpp`), native: for each stage switched on alone, then all on, a project renders the same live (`renderLoopAware` + `processMaster`) as through `RenderExport`. Mixdown in vitest: `nativeExport.test.ts` asserts the project it sends carries `sound` from the state.
+- [ ] **Render parity** (`native-engine/test/parity/render-parity.test.ts`): add an all-stages-on case next to the existing one.
+- [ ] **Toolkit bakes** (`exportToolkitAudio.ts`, `BakeStem.cpp`):
+  - a baked stem carries its per-stem stages (pan, the `dubSend` throws and their tail, the reverb room and its tail);
+  - it carries none of the master stages (the ruling above);
+  - tail lengths account for the cavern (5 s) and the dub (`throwTailSec`).
+- [ ] **DAW exports** (`exportAbleton.ts`, `exportReaper.ts`): the exported stems match the bakes above, and the project's master settings are not baked in. Note in the export README/notes that the mastering was left to the DAW. Follow whatever notes channel these exporters already use; if none exists, add nothing.
+- [ ] **Phone renderers** (`remoteLoopRenderer.ts`, `remoteStemRenderer.ts`): the loop renderer is a mixdown, so the full chain. The stem renderer is per stem, so per-stem stages only. Tests mirror their existing ones.
+- [ ] **Off is today:** a project with every stage off renders bit-identical to a pre-plan build (render parity plus a saved fixture).
+- [ ] **CPU:** profile a dense mix (8 rows, all on) at 48 kHz/256. Note the numbers in the commit.
+- [ ] The full native suite and `npx vitest run` are green. Hand Elling the walkthrough below.
+
+**Risk:** the per-stem/master split in DAW and stem exports is a ruling Elling should confirm (see the decisions section).
 
 ---
 
 ## What Elling needs to listen to
 
-Do this in `npm run dev`, after a **full Cmd+Q and relaunch** once the engine is rebuilt. Use the same rifffs as on the web where possible, and A/B against `ell.ing/radio` at the same tempo.
+Do this in `npm run dev`, after a **full Cmd+Q and relaunch** once the engine is rebuilt. A/B against `ell.ing/radio` at the same tempo where possible.
 
-1. **Limiter (T2):**
-   - stack eight loud rows: no crackle;
-   - the level drop from the −4 dB headroom; is the master fader's range still right?
-   - a bounce sounds the same as the pass.
-2. **Pan (T3):** drums and bass in the middle, the rest gently left and right; a swap never moves a row.
-3. **Reverb (T4):**
-   - cavernous, darkening tail, clear transients;
-   - is a send of 0.5 the same amount of room as the web?
-   - blooms;
-   - CPU on the laptop.
-4. **Risers (T5):** variety (whistly, full-bodied, narrow); about 3 dB louder; blooming into the room; never harsh at Q 6.
-5. **Glue and tone (T6):** layers sit together; no audible pumping from the compressor; low and high end a touch fuller.
-6. **Saturation (T7):** peaks rounded, no grit on hats or cymbals (if there is grit, ask for oversampling).
-7. **Pump (T8):** a subtle breath on pads with each kick; drums and bass untouched; the duck gesture still dips over it.
-8. **Throws (T10):** occasional in-time echoes on non-drum, non-bass rows; darker each repeat; none while held or over a hole or riser.
-9. **The whole (T11):** an hour of radio. Does the app now sound like the web? Note anything that differs, with the rifff names.
+1. **Web re-pin (T1):** if the golden diff in Task 1 Step 2 was not clean, A/B the web before and after the faustwasm re-pin.
+2. **Limiter (T3):** loud stacks don't crackle; the level drop on an old timeline project; mastering off restores today's sound.
+3. **Pan (T4):** centred drums and bass, the rest gently spread, in Discover and on the timeline; the width setting.
+4. **Reverb (T5):** cavernous and darkening; a send of 0.5 against the web; zita still available.
+5. **Risers (T6):** varied, about +3 dB, blooming into the room; variety off restores today's.
+6. **Glue and tone (T7):** layers sit together, nothing breathes; the amount setting; tone off.
+7. **Saturation (T8):** peaks rounded, no grit; the drive setting.
+8. **Pump (T9):** a breath on pads with each kick; the depth setting.
+9. **Throws (T11, T12):**
+   - in Discover: occasional, in time, darkening, never on drums or bass;
+   - on the timeline: the export has the same throws as the pass;
+   - the rate setting.
+10. **Settings (T13):** every switch works live; settings save with the project; a new project gets the defaults; an old project opens with the defaults on.
+11. **Exports (T14):** a mixdown sounds like the pass; a DAW export's stems have pan, throws and reverb but no mastering. Confirm that ruling.
+12. **The whole:** an hour of radio, and one finished timeline project. Does the app now sound like the web? Note anything that differs, with rifff names.
 
 ---
 
@@ -584,13 +755,16 @@ Do this in `npm run dev`, after a **full Cmd+Q and relaunch** once the engine is
 
 | risk | where | mitigation |
 |---|---|---|
-| Wire-twin blast radius (≈10 new fields) | every task | optional fields with absence meaning today; one field group per task; parse and round-trip tests on both sides |
-| Live ≠ export | T2, T4–T9 | one `processMaster` for both callers; block-size-invariant DSP; the existing parity tests plus new ones |
-| Audio-thread allocation | T1, T4 | Faust objects and the convolver's IR and partitions built on the message thread, swapped via the snapshot |
-| Faust toolchain (no C++ in faustwasm; brew 2.85.9 vs 2.89.2) | T1 | native compiler pinned; generated code committed; golden vectors; a hand port as fallback |
-| Loudness shift in Discover | T2, T5 | headroom first, limiter as the backstop; Elling tunes the master fader by ear |
-| CPU (convolution, four Faust stages, pump) | T4–T8 | measured in T11; if the convolver is heavy, a two-size (non-uniform) partition scheme, still latency-free behind the pre-delay |
-| Matching web quirks rather than intent | T4, T6, T9 | match what Elling heard (convolver normalisation, Web Audio's dB Q, StereoPanner law); list each quirk in the code comment and in the radio repo |
-| `renderBlock` routing (pump, dub, pan) | T3, T8, T9 | pointer-routing changes only; a separate post-loop pass; heavy tests |
-| DiscoverPanel plumbing (throws, staged projects) | T10 | gated on `radioOnRef`; pure helpers extracted and tested; the walkthrough covers what can't be tested |
-| The riser's "level means level" contract | T5 | it becomes a power match, documented; the limiter backstops it |
+| Old projects change sound on open (defaults all on) | T2 | Elling's decision; per-project switches; mastering off restores today's |
+| Wire-twin blast radius (`sound` + per-stem + riser fields) | T2–T12 | T2 lands all the data first; optional fields; parse and round-trip tests both sides; off is bit-identical |
+| Live ≠ export | T3–T12, T14 | one `processMaster` for both callers; block-size-invariant DSP; timeline throws planned from the project; explicit bounce-path tests |
+| Audio-thread allocation | T1, T5 | Faust objects and the convolver built on the message thread, handed over via the snapshot |
+| Faust versions (2.89.2 is not a release; brew is 2.88.0) | T1 | native 2.88.0 pinned (`brew pin`, `FAUST_VERSION` check); web re-pinned to the matching faustwasm, gated by a before/after golden diff; build from source as the fallback |
+| Cross-repo `.dsp` drift | T1 | one copy in sssketch; radio compiles from it; both repos' drift tests fail on a stale build |
+| Loudness shift | T3, T6 | headroom first, limiter as the backstop; Elling sets the level by ear |
+| CPU | T5–T9 | measured in T14; a two-size partition scheme if the convolver is heavy |
+| Matching web quirks rather than intent | T5, T7, T10 | match what Elling heard (convolver normalisation, decibel Q, StereoPanner law); each listed in code comments and offered as web fixes |
+| `renderBlock` routing (pan, pump, dub) | T4, T9, T10 | pointer routing only; separate post-loop passes; heavy tests |
+| DiscoverPanel plumbing | T11 | gated on `radioOnRef` and the setting; pure helpers extracted and tested |
+| Per-stem vs master split in DAW and stem exports | T14 | flagged for Elling's confirmation |
+| The riser's "level means level" contract | T6 | becomes a power match, documented; the limiter backstops it |
