@@ -333,11 +333,18 @@ No sound changes in this task.
 - `store.ts`, `serialize.ts` (+tests), `buildEngineProject.ts` (+test).
 - `native-engine/Source/SoundSettings.h`, `EngineProject.{h,cpp}` (+Tests).
 
-- [ ] **Step 1. App-wide defaults.** `soundSettingsStore.ts` is a userData JSON read through `normalizeSoundSettings(…, DEFAULT_SOUND_SETTINGS)`, as `discoverSettingsStore.ts` does. Tests follow that file's pattern (mock only `app.getPath`):
+- **As landed (2026-10-01):**
+  - `AppState.sound` is **optional**: absent means today's sound (no `sound` on the wire). Only the pre-project startup state and the throwaway previews that copy no project lack one. Every real project has one: `commitNewProject` takes the app-wide defaults, and `deserializeProject(data, soundDefaults)` gives a legacy project those defaults and normalises a saved one against them. `App.tsx` passes them in from `state/appSoundDefaults.ts`, which fetches them once (`sound-settings:get`) and falls back to all on.
+  - `SET_SOUND_SETTINGS { settings: SoundSettingsPatch }` merges per stage (`mergeSoundSettings` in `radioSound.ts`), normalises, and is undoable (`history.ts` excludes only view and transient actions).
+  - The wire: `buildEngineSound` in `buildEngineProject.ts`. Glue, tone and saturation are sent only with mastering on. `reverbReturn` is 2 × amount (the room's trim cancels), absent at 1. The block is omitted when it would be just `{ room: 'zita' }`. Panning, throws and riser variety put nothing in it.
+  - Native: `SoundSettings.{h,cpp}` with `parseSoundSettings`, called by `parseEngineProject`. A stage that is not an object or has a missing or non-finite number is off. A room other than `"cavern"` is zita. Values are clamped to each stage's range. Tests: `SoundSettingsTests.cpp`.
+  - Discover's `previewState` copies `sound`. The other throwaway previews (`useThrowawayStemPreview`, the backup preview) do not yet; Task 14 covers the remaining render paths.
+
+- [x] **Step 1. App-wide defaults.** `soundSettingsStore.ts` is a userData JSON read through `normalizeSoundSettings(…, DEFAULT_SOUND_SETTINGS)`, as `discoverSettingsStore.ts` does. Tests follow that file's pattern (mock only `app.getPath`):
   - a missing file gives all on;
   - junk is normalised;
   - a set round-trips.
-- [ ] **Step 2. Per project.**
+- [x] **Step 2. Per project.**
   - `AppState.sound: SoundSettings`.
   - `SET_SOUND_SETTINGS` takes a partial and merges it.
   - A **new project** initialises from the app-wide defaults (fetched over IPC once at startup).
@@ -348,7 +355,7 @@ No sound changes in this task.
     - legacy gets the defaults;
     - unsaved-changes tracking sees a settings edit (`unsavedChanges.ts`);
     - undo history covers it, if `history.ts` covers comparable project-level edits such as `reverb`. Check it and follow the same rule.
-- [ ] **Step 3. The wire.** `buildEngineProject` emits `sound` with **resolved** parameters:
+- [x] **Step 3. The wire.** `buildEngineProject` emits `sound` with **resolved** parameters:
   ```ts
   sound: {
     mastering: { headroomDb, ceilingDb } | absent,      // straight from the settings (-4, -1 by default)
@@ -367,11 +374,11 @@ No sound changes in this task.
   - TS tests:
     - all-off is byte-identical to a pre-plan project;
     - each stage maps its amounts.
-- [ ] **Step 4. Parse.** `EngineProject.sound` (`SoundSettings.h`), where absent fields mean off. Native tests:
+- [x] **Step 4. Parse.** `EngineProject.sound` (`SoundSettings.h`), where absent fields mean off. Native tests:
   - each field parses;
   - junk degrades to off;
   - an absent block gives an all-off struct.
-- [ ] **Step 5.** Discover's `previewState` already copies project-level fields from the real project (`reverb`, `masterChain`). Copy `sound` the same way. Discover then follows the open project's settings.
+- [x] **Step 5.** Discover's `previewState` already copies project-level fields from the real project (`reverb`, `masterChain`). Copy `sound` the same way. Discover then follows the open project's settings.
 
 **Risk:** this is the widest twin change in the plan. It is all data with no DSP, which is why it is its own task. Each later task only flips its own stage from "parsed" to "performed".
 

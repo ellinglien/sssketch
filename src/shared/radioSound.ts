@@ -276,6 +276,22 @@ export function normalizeSoundSettings(
   }
 }
 
+/** A change to some settings: any stages, any fields of each (SET_SOUND_SETTINGS). */
+export type SoundSettingsPatch = { [K in keyof SoundSettings]?: Partial<SoundSettings[K]> }
+
+/** `base` with `patch` laid over it stage by stage, then normalised (clamped, junk dropped).
+ * A fresh object; `base` is untouched. */
+export function mergeSoundSettings(
+  base: DeepReadonly<SoundSettings>,
+  patch: SoundSettingsPatch
+): SoundSettings {
+  const merged: Record<string, unknown> = {}
+  for (const key of Object.keys(DEFAULT_SOUND_SETTINGS) as (keyof SoundSettings)[]) {
+    merged[key] = { ...base[key], ...patch[key] }
+  }
+  return normalizeSoundSettings(merged, base)
+}
+
 // ---------------------------------------------------------------------------------------------
 // the amount maps (the wire carries what these return, never the amounts)
 //

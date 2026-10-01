@@ -99,6 +99,7 @@ import {
   resolvePlayedBars
 } from './state/selectors'
 import { initialState, SNAP_DIVS } from './state/store'
+import { appSoundDefaults } from './state/appSoundDefaults'
 import type { LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
@@ -1332,16 +1333,21 @@ function Frame(): React.JSX.Element {
   }
 
   function commitNewProject(name: string, bpm: number): void {
-    // NewProjectModal's own tempo field (direct request, 2026-09-20) --
-    // freshState (not bare `initialState`) is used for BOTH the dispatch
-    // AND the dirty-tracking baseline below, so picking a tempo up front
-    // doesn't immediately read as an unsaved change the instant the
-    // project is created.
-    const freshState = { ...initialState, bpm }
-    dispatch({ type: 'LOAD_STATE', state: freshState })
-    lastSavedJsonRef.current = serializeProject(freshState)
-    setCurrentSketch({ kind: 'library', name })
-    setNewProjectModal(null)
+    void (async () => {
+      // NewProjectModal's own tempo field (direct request, 2026-09-20) --
+      // freshState (not bare `initialState`) is used for BOTH the dispatch
+      // AND the dirty-tracking baseline below, so picking a tempo up front
+      // doesn't immediately read as an unsaved change the instant the
+      // project is created. The same goes for the sound settings: a new
+      // project starts from the app-wide defaults (native radio sound plan,
+      // Task 2; fetched once, at mount, below), and that is not an edit.
+      const sound = await appSoundDefaults()
+      const freshState = { ...initialState, bpm, sound }
+      dispatch({ type: 'LOAD_STATE', state: freshState })
+      lastSavedJsonRef.current = serializeProject(freshState)
+      setCurrentSketch({ kind: 'library', name })
+      setNewProjectModal(null)
+    })()
   }
   // Guards the startup effect below against StrictMode's dev-only
   // double-invoke: without this, both invocations independently call
@@ -1374,6 +1380,9 @@ function Frame(): React.JSX.Element {
   useEffect(() => {
     if (startupResolvedRef.current) return
     startupResolvedRef.current = true
+    // Fetch the app-wide sound settings now, so a new or opened project
+    // never waits on them.
+    void appSoundDefaults()
     void (async () => {
       const json = await window.rifffApi.loadAutosave()
       // "unsaved work" means real content, not just any autosave file --
@@ -1406,7 +1415,10 @@ function Frame(): React.JSX.Element {
    * dismisses the welcome modal. */
   async function handleRecoverAutosave(dontShowAgain: boolean): Promise<void> {
     if (!recoverableAutosave) return
-    const { state: loaded, pluginStates } = deserializeProject(JSON.parse(recoverableAutosave.json))
+    const { state: loaded, pluginStates } = deserializeProject(
+      JSON.parse(recoverableAutosave.json),
+      await appSoundDefaults()
+    )
     // Same pre-warm-before-LOAD_STATE reasoning as the library browser's
     // onSelect/onOpenFromDisk handlers below -- avoids the timeline/sketch
     // strip rendering with blank waveforms that pop in one at a time as
@@ -2815,7 +2827,8 @@ function Frame(): React.JSX.Element {
                   const result = await window.rifffApi.openLibrarySketch(name)
                   if (!result) return
                   const { state: loaded, pluginStates } = deserializeProject(
-                    JSON.parse(result.json)
+                    JSON.parse(result.json),
+                    await appSoundDefaults()
                   )
                   setBusy('loading…')
                   await warmStemCaches(loaded)
@@ -2849,7 +2862,8 @@ function Frame(): React.JSX.Element {
                   const result = await window.rifffApi.openProject()
                   if (!result) return
                   const { state: loaded, pluginStates } = deserializeProject(
-                    JSON.parse(result.json)
+                    JSON.parse(result.json),
+                    await appSoundDefaults()
                   )
                   // Same pre-warm-before-LOAD_STATE reasoning as the onSelect
                   // handler right above -- see its own comment history.

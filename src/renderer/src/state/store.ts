@@ -12,6 +12,12 @@ import {
   type StemFilterSettings
 } from '@shared/toolkit'
 import { MIN_RISER_LENGTH_BARS, nextRiserName, normaliseRiser, type RiserClip } from '@shared/riser'
+import {
+  DEFAULT_SOUND_SETTINGS,
+  mergeSoundSettings,
+  type SoundSettings,
+  type SoundSettingsPatch
+} from '@shared/radioSound'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 import { buildCoachMapSections, resizeCoachMapToPhrase } from '@shared/coachMapTemplate'
 import type { CoachPhrase, LoopPhraseReading } from '@shared/coachPhrase'
@@ -414,6 +420,17 @@ export interface AppState {
    * control has today. The day a master filter belongs to the arrangement
    * itself, it gets an action and a saved field like `reverb` above. */
   masterFilter?: StemFilterSettings
+  /** The radio sound's settings for this project (native radio sound plan; @shared/radioSound):
+   * mastering, glue, tone, saturation, the reverb room, panning, pump, throws, riser variety.
+   * Saved with the project. A new project starts from the app-wide defaults (all on, the
+   * sound-settings store in main), and a project saved before this existed opens with them too
+   * (deserializeProject).
+   *
+   * OPTIONAL, and absent means today's sound, bit for bit (buildEngineSound sends nothing):
+   * only the pre-project startup state and the throwaway preview states that copy no project
+   * are without one. Edited through SET_SOUND_SETTINGS, which is undoable like any project
+   * edit. */
+  sound?: SoundSettings
   /** Placed noise risers, keyed by their own id -- see @shared/riser and
    * step 4 of docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
    *
@@ -785,6 +802,9 @@ export type Action =
   | { type: 'TOGGLE_TIDIED_VIEW' }
   | { type: 'TOGGLE_METRONOME' }
   | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
+  /** The project's sound settings (AppState.sound): `settings` is merged over them stage by
+   * stage and normalised; a state with none starts from DEFAULT_SOUND_SETTINGS. */
+  | { type: 'SET_SOUND_SETTINGS'; settings: SoundSettingsPatch }
   | { type: 'SET_CHANNEL_CHAIN_PLUGIN'; channelId: string; slot: 0 | 1; pluginId: string | null }
   | { type: 'SET_LOOP_REGION'; region: LoopRegion }
   | { type: 'ADD_RECORDING_CHANNEL'; channelId: string }
@@ -1913,6 +1933,12 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_METRONOME':
       return { ...state, metronomeEnabled: !state.metronomeEnabled }
+
+    case 'SET_SOUND_SETTINGS':
+      return {
+        ...state,
+        sound: mergeSoundSettings(state.sound ?? DEFAULT_SOUND_SETTINGS, action.settings)
+      }
 
     case 'SET_MASTER_CHAIN_PLUGIN': {
       const masterChain = [...state.masterChain] as AppState['masterChain']

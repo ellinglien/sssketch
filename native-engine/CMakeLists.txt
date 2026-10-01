@@ -172,6 +172,8 @@ target_sources(sssketch_engine PRIVATE
   Source/NoiseRiserTests.cpp
   Source/FaustStage.cpp
   Source/FaustStageTests.cpp
+  Source/SoundSettings.cpp
+  Source/SoundSettingsTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE

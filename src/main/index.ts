@@ -135,6 +135,8 @@ import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
+import { loadSoundSettings, saveSoundSettings } from './soundSettingsStore'
+import type { SoundSettings } from '@shared/radioSound'
 import {
   getStemAutoClassifyProgress,
   applyYamnetZeroShotCategory,
@@ -1528,6 +1530,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
   ipcMain.handle('set-discover-settings', (_event, settings: DiscoverSettings): void =>
     saveDiscoverSettings(settings)
+  )
+
+  // The app-wide default sound settings (native radio sound plan, Task 2): a new project, and a
+  // project saved before the radio sound, start from these.
+  ipcMain.handle('sound-settings:get', (): SoundSettings => loadSoundSettings())
+  ipcMain.handle('sound-settings:set', (_event, settings: SoundSettings): void =>
+    saveSoundSettings(settings)
   )
 
   ipcMain.handle('get-discover-classify-progress', (): StemAutoClassifyProgress =>

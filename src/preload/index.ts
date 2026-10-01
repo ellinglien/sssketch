@@ -17,6 +17,7 @@ import type { ArtistIndex, ArtistMode, KeepRefused } from '@shared/discoverArtis
 import type { ArtistScanBatch } from '../main/discoverArtistScanQueue'
 import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
+import type { SoundSettings } from '@shared/radioSound'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { AutoClassifyStatus } from '../main/stemAutoClassifyScheduler'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
@@ -453,6 +454,10 @@ const api = {
   getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
   setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
     ipcRenderer.invoke('set-discover-settings', settings),
+  /** The app-wide default sound settings (soundSettingsStore.ts). */
+  getSoundSettings: (): Promise<SoundSettings> => ipcRenderer.invoke('sound-settings:get'),
+  setSoundSettings: (settings: SoundSettings): Promise<void> =>
+    ipcRenderer.invoke('sound-settings:set', settings),
   getDiscoverClassifyProgress: (): Promise<StemAutoClassifyProgress> =>
     ipcRenderer.invoke('get-discover-classify-progress'),
   getDiscoverLibraryScanTargets: (): Promise<LibraryScanTarget[]> =>

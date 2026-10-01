@@ -185,6 +185,10 @@ namespace sssketch
         // rather than defaulted -- its length is a divisor in a per-sample
         // loop on the audio thread, and silently substituting a plausible one
         // would invent an element the user never placed.
+        // The radio sound's settings (SoundSettings.h): lenient like everything above, and an
+        // absent or unreadable block is every stage off.
+        project.sound = parseSoundSettings(parsed.getProperty("sound", juce::var()));
+
         auto risersVar = parsed.getProperty("risers", juce::var());
         if (auto* risersArray = risersVar.getArray())
         {

@@ -705,6 +705,10 @@ export function DiscoverPanel({
   // send below feeds that same room. See syncPreviewToEngine's own doc
   // comment for what else crosses over and what does not.
   const reverb = useAppSelector((s) => s.reverb)
+  // The project's sound settings (native radio sound plan, Task 2), copied
+  // the same way: Discover plays with the open project's mastering, room,
+  // pump and the rest, and a stage switched off there is off here too.
+  const sound = useAppSelector((s) => s.sound)
   const pluginCatalog = usePluginCatalog()
   const flushEngineSyncNow = useFlushEngineSyncNow()
   const {
@@ -1789,7 +1793,7 @@ export function DiscoverPanel({
     }
 
     // A throwaway single-rifff AppState -- only bpm/masterChain/
-    // channelPlugins/reverb are copied from the real project; state.rifffs is
+    // channelPlugins/reverb/sound are copied from the real project; state.rifffs is
     // ENTIRELY replaced by this one preview rifff, never merged with the
     // real state.rifffs. `startBar: 0` (buildEngineProject's own `placed`
     // filter requires a defined startBar to include a rifff at all) is what
@@ -1801,6 +1805,7 @@ export function DiscoverPanel({
       masterChain,
       channelPlugins,
       reverb,
+      sound,
       rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
       vol,
       // The master reverb: N equal sends into the ONE shared bus, which is

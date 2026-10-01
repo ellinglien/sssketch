@@ -1,5 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
-import { buildEngineProject, buildEngineRisers, type EngineStem } from './buildEngineProject'
+import {
+  buildEngineProject,
+  buildEngineRisers,
+  buildEngineSound,
+  type EngineStem
+} from './buildEngineProject'
+import {
+  glueThresholdDb,
+  normalizeSoundSettings,
+  reverbReturnGain,
+  saturationDrive,
+  type SoundSettings
+} from './radioSound'
 import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import type { Rifff } from './types'
@@ -813,5 +825,126 @@ describe('risers on the wire', () => {
       off: { ...createRiser({ id: 'off', channelId: 'ch1', startBar: 0 }), muted: true }
     }
     expect(buildEngineRisers(risers)).toEqual([])
+  })
+})
+
+describe('the sound settings on the wire (native radio sound plan, Task 2)', () => {
+  const allOff = (): SoundSettings => {
+    const s = normalizeSoundSettings(undefined)
+    s.mastering.on = false
+    s.glue.on = false
+    s.tone.on = false
+    s.saturation.on = false
+    s.reverb.room = 'zita'
+    s.panning.on = false
+    s.pump.on = false
+    s.throws.on = false
+    s.riserVariety.on = false
+    return s
+  }
+
+  it('the defaults resolve to parameters, never amounts', () => {
+    expect(buildEngineSound(normalizeSoundSettings(undefined))).toEqual({
+      mastering: { headroomDb: -4, ceilingDb: -1 },
+      glue: { thresholdDb: -14, ratio: 2, kneeDb: 6 },
+      tone: { lowShelfDb: 1, highShelfDb: 1 },
+      saturation: { drive: 0.9 },
+      room: 'cavern',
+      pump: { depthDb: 4 }
+    })
+  })
+
+  it('a project with no sound settings sends no `sound` key (today)', async () => {
+    const project = await buildEngineProject(stateWith({ bpm: 150 }), vi.fn(), emptyCatalog)
+    expect('sound' in project).toBe(false)
+  })
+
+  it('every stage off, zita at amount 0.5: no `sound` key, the JSON byte-identical to a pre-plan project', async () => {
+    expect(buildEngineSound(allOff())).toBeUndefined()
+    const before = await buildEngineProject(stateWith({ bpm: 150 }), vi.fn(), emptyCatalog)
+    const after = await buildEngineProject(
+      stateWith({ bpm: 150, sound: allOff() }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before))
+  })
+
+  it('every stage off still sends the room when it is the cavern', () => {
+    const s = allOff()
+    s.reverb.room = 'cavern'
+    expect(buildEngineSound(s)).toEqual({ room: 'cavern' })
+  })
+
+  it('a stage switched off is an absent key', () => {
+    const s = normalizeSoundSettings(undefined)
+    s.pump.on = false
+    s.glue.on = false
+    const wire = buildEngineSound(s)!
+    expect('pump' in wire).toBe(false)
+    expect('glue' in wire).toBe(false)
+    expect(wire.tone).toBeDefined()
+  })
+
+  it('glue, tone and saturation need mastering: off with it, whatever their own switches say', () => {
+    const s = normalizeSoundSettings(undefined)
+    s.mastering.on = false
+    expect(buildEngineSound(s)).toEqual({ room: 'cavern', pump: { depthDb: 4 } })
+  })
+
+  it('each stage maps its amounts', () => {
+    const s = normalizeSoundSettings(undefined)
+    s.mastering.headroomDb = -6
+    s.mastering.ceilingDb = -2
+    s.glue.amount = 1
+    s.tone.amount = -1
+    s.saturation.amount = 1
+    s.pump.depthDb = 7
+    const wire = buildEngineSound(s)!
+    expect(wire.mastering).toEqual({ headroomDb: -6, ceilingDb: -2 })
+    expect(wire.glue).toEqual({ thresholdDb: glueThresholdDb(1), ratio: 2, kneeDb: 6 })
+    expect(wire.glue!.thresholdDb).toBe(-20)
+    expect(wire.tone).toEqual({ lowShelfDb: 2.5, highShelfDb: -0.5 })
+    expect(wire.saturation).toEqual({ drive: saturationDrive(1) })
+    expect(wire.saturation!.drive).toBeCloseTo(1.8, 12)
+    expect(wire.pump).toEqual({ depthDb: 7 })
+  })
+
+  it('the reverb return is relative to the room’s own trim, absent at amount 0.5', () => {
+    const s = allOff()
+    s.reverb.amount = 0.5
+    expect(buildEngineSound(s)).toBeUndefined()
+    s.reverb.amount = 0.25
+    expect(buildEngineSound(s)).toEqual({ room: 'zita', reverbReturn: 0.5 })
+    s.reverb.room = 'cavern'
+    s.reverb.amount = 1
+    const cavern = buildEngineSound(s)!
+    expect(cavern.reverbReturn).toBeCloseTo(
+      reverbReturnGain(1, 'cavern') / reverbReturnGain(0.5, 'cavern'),
+      12
+    )
+    s.reverb.amount = 0
+    expect(buildEngineSound(s)!.reverbReturn).toBe(0)
+  })
+
+  it('panning, throws and riser variety put nothing in the block (their own tasks)', () => {
+    const s = allOff()
+    s.panning.on = true
+    s.throws.on = true
+    s.riserVariety.on = true
+    expect(buildEngineSound(s)).toBeUndefined()
+  })
+
+  it('a stored junk sound is normalised on the way out', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        sound: { glue: { on: true, amount: 99 } } as unknown as SoundSettings
+      }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(project.sound?.glue?.thresholdDb).toBe(-20)
+    expect(project.sound?.mastering).toEqual({ headroomDb: -4, ceilingDb: -1 })
   })
 })

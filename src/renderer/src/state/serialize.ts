@@ -13,6 +13,12 @@ import {
 import type { PluginStatesMap } from '@shared/pluginStates'
 import { sanitiseLoadedCoach } from '@shared/coach'
 import { normaliseLoadedRisers } from '@shared/riser'
+import {
+  DEFAULT_SOUND_SETTINGS,
+  normalizeSoundSettings,
+  type DeepReadonly,
+  type SoundSettings
+} from '@shared/radioSound'
 
 /** Everything persisted to a .sssketchproj file — the full AppState minus
  * transient UI-mode fields that never make sense to reopen into. Playback
@@ -356,7 +362,11 @@ export function deserializeProject(
     pluginStates?: PluginStatesMap
   } & ChannelScopedToolkitKeys &
     LegacyEdgeFadeKeys &
-    LegacyMapViewKey
+    LegacyMapViewKey,
+  /** The app-wide default sound settings (window.rifffApi.getSoundSettings, fetched once at
+   * startup): what a project saved before the radio sound existed opens with, and what fills
+   * any field a saved one is missing. Everything on when not given. */
+  soundDefaults: DeepReadonly<SoundSettings> = DEFAULT_SOUND_SETTINGS
 ): { state: AppState; pluginStates: PluginStatesMap } {
   // eslint-disable-next-line @typescript-eslint/no-unused-vars -- mapView is extracted purely to drop it (see LegacyMapViewKey); ignoreRestSiblings isn't enabled project-wide.
   const { pluginStates, fadeIn, fadeOut, mapView, ...projectData } = data
@@ -399,6 +409,12 @@ export function deserializeProject(
   // timestamp from a previous session, which left alone would report days
   // of time on one step and fire the stuck nudge on open.
   state.coach = sanitiseLoadedCoach(state.coach)
+  // The radio sound's settings (native radio sound plan, Task 2). A project saved before they
+  // existed has no `sound` and opens with the app-wide defaults, all on unless Elling changed
+  // them (D6: old projects get the radio sound too; he switches stages off per project). A
+  // saved one is normalised against the same defaults, so a hand-edited file's junk never
+  // reaches the reducer or the engine.
+  state.sound = normalizeSoundSettings(state.sound, soundDefaults)
   // After snapBarLengthNoise, deliberately: a clip's length in bars is what
   // a migrated fade is measured against, so it has to be the repaired one.
   const withMigratedFades = migrateEdgeFadesToVolumeCurves(state, { fadeIn, fadeOut })

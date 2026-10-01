@@ -19,6 +19,15 @@ import {
 } from './toolkit'
 import { audibleRisers, type RiserClip } from './riser'
 import { stretchRatioForStem } from './stretchRatio'
+import {
+  FAUST_DEFAULTS,
+  glueThresholdDb,
+  normalizeSoundSettings,
+  saturationDrive,
+  toneShelvesDb,
+  type ReverbRoom,
+  type SoundSettings
+} from './radioSound'
 
 export { stretchRatioForStem, STRETCH_RATIO_EPSILON } from './stretchRatio'
 
@@ -213,6 +222,68 @@ export interface EngineProject {
    * EngineProject::MasterFilterSettings in native-engine/Source/
    * EngineProject.h -- hand-synced, per this file's own header. */
   masterFilter?: StemFilterSettings
+  /** The radio sound's project-level stages, resolved (see EngineSound). OMITTED when they would
+   * change nothing, which is what keeps such a project's render bit-identical to today's. */
+  sound?: EngineSound
+}
+
+/** The project's sound settings on the wire, RESOLVED to the engine's parameters (the amounts
+ * and their UI scale never leave the renderer; radioSound.ts's maps do the resolving). Twin of
+ * SoundSettings in native-engine/Source/SoundSettings.h -- the hand-synced pair CLAUDE.md warns
+ * about.
+ *
+ * EVERY STAGE IS OPTIONAL, and an absent stage is off: that absence is load-bearing, the same rule
+ * as `toolkit` and `masterFilter`. The whole block is omitted when it would say nothing but
+ * "zita, at today's return" (buildEngineSound), so a project with every stage off sends the
+ * exact JSON a project from before the radio sound sent. Panning, throws and riser variety ride
+ * on the stems and risers (their own tasks), not here. */
+export interface EngineSound {
+  /** The headroom trim and the true-peak limiter (`sound.mastering.on`). */
+  mastering?: { headroomDb: number; ceilingDb: number }
+  /** Faust glue; only with mastering. */
+  glue?: { thresholdDb: number; ratio: number; kneeDb: number }
+  /** HP 25 Hz, width and the two shelves (toneShelvesDb); only with mastering. */
+  tone?: { lowShelfDb: number; highShelfDb: number }
+  /** Faust saturate's drive (saturationDrive); only with mastering. */
+  saturation?: { drive: number }
+  /** Which room the reverb bus runs. Always present in the block. */
+  room: ReverbRoom
+  /** The return's gain RELATIVE to the room's own trim at today's level: 2 x amount, so
+   * absent (1) at the default amount 0.5. */
+  reverbReturn?: number
+  /** The drum-keyed pump's depth. */
+  pump?: { depthDb: number }
+}
+
+/** The project's sound settings to the wire, or undefined when the block would carry nothing
+ * but today's behaviour (zita at today's return, every stage off) -- see EngineSound. A missing
+ * `sound` (the pre-project startup state, a throwaway preview that copied none) is undefined
+ * too. Normalises first: a hand-edited project's junk never reaches the engine. */
+export function buildEngineSound(sound: SoundSettings | undefined): EngineSound | undefined {
+  if (sound === undefined) return undefined
+  const s = normalizeSoundSettings(sound)
+  const wire: EngineSound = { room: s.reverb.room }
+  if (s.mastering.on) {
+    wire.mastering = { headroomDb: s.mastering.headroomDb, ceilingDb: s.mastering.ceilingDb }
+    if (s.glue.on) {
+      wire.glue = {
+        thresholdDb: glueThresholdDb(s.glue.amount),
+        ratio: FAUST_DEFAULTS.glue.ratio,
+        kneeDb: FAUST_DEFAULTS.glue.kneeDb
+      }
+    }
+    if (s.tone.on) {
+      const { lowDb, highDb } = toneShelvesDb(s.tone.amount)
+      wire.tone = { lowShelfDb: lowDb, highShelfDb: highDb }
+    }
+    if (s.saturation.on) wire.saturation = { drive: saturationDrive(s.saturation.amount) }
+  }
+  // reverbReturnGain(amount, room) / reverbReturnGain(0.5, room): the room's trim cancels
+  const reverbReturn = 2 * s.reverb.amount
+  if (reverbReturn !== 1) wire.reverbReturn = reverbReturn
+  if (s.pump.on) wire.pump = { depthDb: s.pump.depthDb }
+  const saysNothing = wire.room === 'zita' && Object.keys(wire).length === 1
+  return saysNothing ? undefined : wire
 }
 
 export interface EngineMasterChainSlot {
@@ -631,6 +702,7 @@ export async function buildEngineProject(
   // all on the payload -- see masterFilterForWire on why the absence, not a
   // neutral value, is the thing that has to reach the engine.
   const masterFilter = masterFilterForWire(state.masterFilter)
+  const sound = buildEngineSound(state.sound)
 
   return {
     bpm: state.bpm,
@@ -640,6 +712,7 @@ export async function buildEngineProject(
     channelChains,
     reverb: state.reverb ?? DEFAULT_REVERB,
     ...(masterFilter ? { masterFilter } : {}),
+    ...(sound ? { sound } : {}),
     risers: buildEngineRisers(state.risers ?? {}),
     rifffs
   }

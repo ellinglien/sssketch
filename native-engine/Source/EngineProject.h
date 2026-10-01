@@ -3,6 +3,7 @@
 #include "ChannelFilter.h"
 #include "PluginChain.h"
 #include "ReverbBus.h"
+#include "SoundSettings.h"
 #include <juce_core/juce_core.h>
 #include <array>
 #include <vector>
@@ -267,6 +268,11 @@ namespace sssketch
             double resonance = 0.0;
         };
         MasterFilterSettings masterFilter;
+
+        /** The radio sound's project-level stages (SoundSettings.h). A payload with no `sound`
+         * key parses to every stage off, zita at today's return: today's sound. Parsed only;
+         * no stage reads it yet. */
+        SoundSettings sound;
     };
 
     /** Parses the wire-format JSON documented in Task 3 of the Phase 1 plan.
