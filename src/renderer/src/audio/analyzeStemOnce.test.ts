@@ -285,6 +285,46 @@ describe('analyzeStemOnce', () => {
     errSpy.mockRestore()
   })
 
+  // Real, 2026-10-01: each 0-byte placeholder in the archive logged three
+  // stack traces (peaks, features, embedding), flooding the console.
+  it('a 0-byte stem is not decoded and logs one short line, not one per output', async () => {
+    api.readAudioFile.mockResolvedValueOnce(new Uint8Array(0))
+    const { analyzeStemOnce } = await import('./analyzeStemOnce')
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const result = await analyzeStemOnce('/lore/e/e22be9a0', ALL)
+    const lines = [...errSpy.mock.calls, ...warnSpy.mock.calls]
+    errSpy.mockRestore()
+    warnSpy.mockRestore()
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
+    expect(result).toEqual({
+      peaks: 'failed',
+      features: 'failed',
+      embedding: 'failed',
+      zeroShot: 'skipped'
+    })
+    expect(lines).toHaveLength(1)
+    // One line: plain strings, no Error object (whose stack would print).
+    expect(lines[0].every((part) => typeof part === 'string')).toBe(true)
+    expect(lines[0].join(' ')).toContain('/lore/e/e22be9a0')
+    // Still retryable once the real audio lands.
+    const retry = await analyzeStemOnce('/lore/e/e22be9a0', ALL)
+    expect(retry.peaks).toBe('done')
+  })
+
+  it('a corrupt file also logs just one line for all its outputs', async () => {
+    decodeAudioDataMock.mockRejectedValueOnce(new Error('Unable to decode audio data'))
+    const { analyzeStemOnce } = await import('./analyzeStemOnce')
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await analyzeStemOnce('/lib/cid-bad', ALL)
+    const lines = [...errSpy.mock.calls, ...warnSpy.mock.calls]
+    errSpy.mockRestore()
+    warnSpy.mockRestore()
+    expect(lines).toHaveLength(1)
+    expect(lines[0].join(' ')).toContain('Unable to decode audio data')
+  })
+
   it('zero-shot for an already-embedded stem shares the one decode, marks attempted, never re-writes the embedding', async () => {
     const { analyzeStemOnce } = await import('./analyzeStemOnce')
     const result = await analyzeStemOnce('/lib/cid-9', {

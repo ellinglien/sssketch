@@ -128,8 +128,17 @@ export function adoptStemEmbeddingFromBuffer(
 ): Promise<number[] | null> | null {
   if (cache.has(path)) return null
   const promise = (async (): Promise<number[] | null> => {
+    let decoded: AudioBuffer
     try {
-      return await embedAndPersist(path, await resampleTo16kMono(await audioBuffer), true)
+      decoded = await audioBuffer
+    } catch {
+      // The decode itself failed (a 0-byte placeholder, a corrupt file):
+      // the caller (analyzeStemOnce) logs that once for all its outputs.
+      cache.delete(path)
+      return null
+    }
+    try {
+      return await embedAndPersist(path, await resampleTo16kMono(decoded), true)
     } catch (err) {
       console.error('adoptStemEmbeddingFromBuffer: extraction failed for stem', path, err)
       // Unguarded, same as getOrExtractStemEmbedding: only this entry can be
@@ -175,8 +184,16 @@ export function adoptZeroShotFromBuffer(
 ): Promise<boolean> | null {
   if (zeroShotEntries.has(path)) return null
   const promise = (async (): Promise<boolean> => {
+    let decoded: AudioBuffer
     try {
-      const result = await extractEmbeddingAndTopClass(await resampleTo16kMono(await audioBuffer))
+      decoded = await audioBuffer
+    } catch {
+      // Logged once by the caller (analyzeStemOnce), as above.
+      zeroShotEntries.delete(path)
+      return false
+    }
+    try {
+      const result = await extractEmbeddingAndTopClass(await resampleTo16kMono(decoded))
       if (!result) {
         zeroShotEntries.delete(path)
         return false

@@ -21,6 +21,7 @@ import {
   shouldAttemptStemDownload
 } from './stemAvailability'
 import { isStemUnavailable } from './stemUnavailableStore'
+import { isUsableStemFile } from './stemFile'
 import type { StemDownloadStatus } from './discoverArtistScanQueue'
 import { countWork } from './workCounters'
 import { heartNameForRiff } from './radioHeartImportStore'
@@ -640,8 +641,10 @@ export function listRiffs(jamCID: string, filters: RiffFilters): RiffPage {
 
   const summaries: RiffLibraryRiffSummary[] = rows.map((row) => {
     const stemCIDs = (slotsByRiff.get(row.RiffCID) ?? []).map((s) => s.stemCID)
+    // One stat per stem, same count of syscalls as the existsSync this
+    // was: a 0-byte placeholder is not a cached stem.
     const cachedStemCount = stemCIDs.filter((cid) =>
-      existsSync(resolveStemPath(jamCID, cid))
+      isUsableStemFile(resolveStemPath(jamCID, cid))
     ).length
     const creatorNames = stemCIDs.map((cid) => stemCreators.get(cid) ?? '')
     return {
@@ -768,7 +771,9 @@ function buildResolvedRiff(
     return {
       stemCID,
       slot,
-      path: existsSync(path) ? path : null,
+      // A 0-byte placeholder (an unfinished LORE download) reads as not
+      // downloaded, so every caller sends it through downloadMissingStems.
+      path: isUsableStemFile(path) ? path : null,
       gain: gains[String(slot)] ?? 1.0,
       creatorUserName: stemRow?.CreatorUserName ?? '',
       presetName: stemRow?.PresetName ?? '',
@@ -901,6 +906,10 @@ export function resolveRiffWithContext(riffCID: string): RiffContextResult | nul
  * failure — the caller treats a failed stem as "still missing," not fatal to
  * the rest of the riff's downloads.
  *
+ * "On disk" means isUsableStemFile (2026-10-01): a 0-byte placeholder left
+ * by an unfinished LORE download is downloaded over, and the rename
+ * replaces it in place; an empty response body is never written.
+ *
  * Availability (2026-09-22, see @shared/stemAvailability): a stem already on
  * disk is answered locally without any request at all; a stem already known
  * unfetchable, or one on a host learned to be refusing anonymous downloads,
@@ -930,7 +939,8 @@ async function downloadOneStemStatus(
 ): Promise<StemDownloadStatus> {
   const finalPath = resolveStemPath(jamCID, stemCID)
   // Local presence always wins over anything the availability list says.
-  if (existsSync(finalPath)) return 'ok'
+  // A 0-byte placeholder is not presence: it is downloaded over, in place.
+  if (isUsableStemFile(finalPath)) return 'ok'
   const ownDb = openOwnRiffLibraryDb()
   if (!shouldAttemptStemDownload(ownDb, stemCID, downloadUrl)) {
     return isStemUnavailable(ownDb, stemCID) ? 'unavailable' : 'transient'
@@ -942,6 +952,12 @@ async function downloadOneStemStatus(
       return isStemUnavailable(ownDb, stemCID) ? 'unavailable' : 'transient'
     }
     const bytes = Buffer.from(await res.arrayBuffer())
+    // An empty body would become a new 0-byte placeholder: a soft failure.
+    if (bytes.length === 0) {
+      countWork('stem-download:empty-body')
+      recordStemDownloadFailure(ownDb, stemCID, downloadUrl, { kind: 'network' })
+      return 'transient'
+    }
     mkdirSync(dirname(finalPath), { recursive: true })
     const tmpPath = `${finalPath}.downloading`
     writeFileSync(tmpPath, bytes)
@@ -1000,7 +1016,7 @@ export async function downloadStemForAnalysis(
   stemCID: string
 ): Promise<{ status: StemDownloadStatus; path: string | null }> {
   const path = resolveStemPath(jamCID, stemCID)
-  if (existsSync(path)) return { status: 'ok', path }
+  if (isUsableStemFile(path)) return { status: 'ok', path }
   for (const db of candidateDbsForRiff()) {
     let row:
       { FileEndpoint: string | null; FileBucket: string | null; FileKey: string | null } | undefined

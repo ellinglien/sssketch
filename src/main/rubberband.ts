@@ -14,6 +14,8 @@ import { app } from 'electron'
 import { promisify } from 'util'
 import { readWavDurationSeconds } from '../shared/wavDuration'
 import type { StretchedStem } from '../shared/buildEngineProject'
+import { StemNotDownloadedError } from '../shared/stemNotDownloaded'
+import { isUsableStemFile } from './stemFile'
 
 const execFileAsync = promisify(execFile)
 
@@ -115,6 +117,11 @@ export function cacheKey(stemPath: string, ratio: number): string {
  * Results are cached by (path, ratio) so repeated tempo settings don't re-render.
  */
 export async function renderStretched(stemPath: string, ratio: number): Promise<StretchedStem> {
+  // A missing or 0-byte input (an unfinished LORE download's placeholder,
+  // 2026-10-01) is a stem not downloaded yet, not something to hand
+  // rubberband ("Format not recognised") or the WAV reader. One stat per
+  // stretched stem; callers already fall back per stem on a rejection.
+  if (!isUsableStemFile(stemPath)) throw new StemNotDownloadedError(stemPath)
   if (Math.abs(ratio - 1) < 0.001) {
     // native tempo, nothing to render — still measure rather than trust
     // whatever duration metadata the caller has on hand, so this function's

@@ -1,6 +1,7 @@
 // src/renderer/src/audio/decodeStemFile.ts
 import { countWork } from '../perf/workCounters'
 import { getAudioContext } from './peakCache'
+import { StemNotDownloadedError } from '@shared/stemNotDownloaded'
 
 /** Decodes in flight right now, keyed by path -- NOT a buffer cache.
  *
@@ -38,6 +39,10 @@ export function decodeStemFile(path: string): Promise<AudioBuffer> {
   const promise = (async () => {
     countWork('ipc:read-audio-file')
     const bytes = await window.rifffApi.readAudioFile(path)
+    // A 0-byte placeholder (an unfinished LORE download, 2026-10-01) is a
+    // stem not downloaded yet: say so, rather than let decodeAudioData
+    // throw "EncodingError: Unable to decode audio data".
+    if (bytes.byteLength === 0) throw new StemNotDownloadedError(path)
     // bytes.buffer may be a LARGER backing ArrayBuffer than this view, so
     // the range has to be exact -- but slicing when the view already
     // spans the whole buffer just doubles a multi-megabyte allocation for

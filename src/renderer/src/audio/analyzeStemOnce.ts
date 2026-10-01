@@ -3,6 +3,7 @@ import { isCurrentStemFeatureVersion, type StemFeatures } from '@shared/stemFeat
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import { countWork } from '../perf/workCounters'
 import { decodeStemFile } from './decodeStemFile'
+import { isStemNotDownloadedError } from '@shared/stemNotDownloaded'
 import { adoptWaveformAnalysis, hasWaveformEntry, waveformFromBuffer } from './peakCache'
 import { adoptStemFeaturesFromBuffer, peekStemFeaturesEntry } from './stemFeaturesCache'
 import {
@@ -128,11 +129,26 @@ export async function analyzeStemOnce(
     zeroShotPromise
   ])
 
-  const logFailure = (what: string, reason: unknown): void => {
-    console.error(`analyzeStemOnce: ${what} failed for stem`, path, reason)
+  // One short line per stem, never one stack trace per output: a decode
+  // failure fails every output at once, and used to be logged three times
+  // over (peaks, features, embedding) -- for each of 2,361 0-byte
+  // placeholders in a real archive (2026-10-01). The decode has settled by
+  // now (every consumer above awaited it).
+  const [decode] = await Promise.allSettled([decoded])
+  if (decode.status === 'rejected') {
+    if (isStemNotDownloadedError(decode.reason)) {
+      console.warn(`analyzeStemOnce: skipped ${path}: not downloaded yet (0 bytes)`)
+    } else {
+      console.error(`analyzeStemOnce: could not decode ${path}: ${describe(decode.reason)}`)
+    }
+  } else {
+    if (peaks.status === 'rejected') {
+      console.error(`analyzeStemOnce: peaks failed for ${path}: ${describe(peaks.reason)}`)
+    }
+    if (features.status === 'rejected') {
+      console.error(`analyzeStemOnce: features failed for ${path}: ${describe(features.reason)}`)
+    }
   }
-  if (peaks.status === 'rejected') logFailure('peaks', peaks.reason)
-  if (features.status === 'rejected') logFailure('features', features.reason)
 
   return {
     peaks:
@@ -158,6 +174,10 @@ export async function analyzeStemOnce(
           ? 'done'
           : 'failed'
   }
+}
+
+function describe(reason: unknown): string {
+  return reason instanceof Error ? `${reason.name}: ${reason.message}` : String(reason)
 }
 
 /** Main's batched "what's still missing" answer for these paths (index-

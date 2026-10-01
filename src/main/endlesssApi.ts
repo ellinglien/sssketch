@@ -10,6 +10,7 @@ import type {
   RiffPage
 } from '@shared/riffLibraryTypes'
 import { computeOwnerFraction, resolveKeyName, stemDownloadUrl } from '@shared/riffLibraryTypes'
+import { isUsableStemFile } from './stemFile'
 
 const API_HOST = 'https://api.endlesss.fm'
 export const DATA_HOST = 'https://data.endlesss.fm'
@@ -557,6 +558,14 @@ async function downloadOneEndlesssStem(
         continue
       }
       const bytes = Buffer.from(await res.arrayBuffer())
+      // An empty body is not audio: writing it would lay down exactly the
+      // 0-byte placeholder isUsableStemFile exists to see through.
+      if (bytes.length === 0) {
+        console.error(
+          `endlesssApi: stem download failed: empty response (attempt ${attempt + 1}/${STEM_DOWNLOAD_RETRIES})`
+        )
+        continue
+      }
       mkdirSync(dirname(path), { recursive: true })
       const tmpPath = `${path}.downloading`
       writeFileSync(tmpPath, bytes)
@@ -598,7 +607,9 @@ export async function downloadMissingStemsFor(
     resolved.stems.map(async (stem) => {
       if (stem.path !== null || !stem.downloadUrl) return stem
       const path = endlesssStemCachePath(stem.stemCID)
-      if (existsSync(path)) return { ...stem, path }
+      // Not existsSync: a 0-byte file there is a placeholder, downloaded
+      // over in place (the rename below replaces it).
+      if (isUsableStemFile(path)) return { ...stem, path }
       const downloadedBytes = await downloadOneEndlesssStem(
         path,
         stem.downloadUrl,

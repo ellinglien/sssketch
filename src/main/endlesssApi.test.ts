@@ -1,7 +1,8 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
+import type { RiffLibraryResolvedRiff } from '@shared/riffLibraryTypes'
 
 vi.mock('electron', () => ({
   app: {
@@ -880,6 +881,108 @@ describe('endlesssApi stem downloading', () => {
       const resolved = await resolvePromise
       expect(resolved!.stems[0].path).not.toBeNull()
       expect(cdnAttempts).toBe(2)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// Real data, 2026-10-01: an unfinished download can leave a 0-byte file at
+// a stem's cache path. Existing is not downloaded -- it has to go through
+// the download, which then replaces it in place.
+describe('downloadMissingStemsFor and 0-byte cache files', () => {
+  let userDataDir: string
+
+  beforeEach(() => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-endlesss-test-'))
+    ;(globalThis as unknown as { __testUserDataDir: string }).__testUserDataDir = userDataDir
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  const URL = 'https://ndls-att0.fra1.digitaloceanspaces.com/attachments/oggAudio/1/abc'
+
+  function riffWithOneStem(stemCID: string): RiffLibraryResolvedRiff {
+    return {
+      riffCID: 'riff_1',
+      bpm: 120,
+      barLength: 4,
+      stems: [
+        {
+          stemCID,
+          slot: 1,
+          path: null,
+          gain: 1,
+          creatorUserName: 'someone',
+          presetName: 'p',
+          instrumentMask: 0,
+          durationSec: 2,
+          barLength: 1,
+          downloadUrl: URL
+        }
+      ]
+    } as RiffLibraryResolvedRiff
+  }
+
+  function cachePath(stemCID: string): string {
+    return join(userDataDir, 'endlesss-cache', 'stems', stemCID.slice(0, 1), stemCID)
+  }
+
+  it('downloads over a 0-byte cached file and overwrites it in place', async () => {
+    const { downloadMissingStemsFor } = await import('./endlesssApi')
+    const path = cachePath('e22be9a0')
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, '')
+    const fakeFetch = vi.fn(async () => new Response('real ogg bytes', { status: 200 }))
+    const onDownloaded = vi.fn()
+
+    const result = await downloadMissingStemsFor(
+      riffWithOneStem('e22be9a0'),
+      fakeFetch as unknown as typeof fetch,
+      undefined,
+      onDownloaded
+    )
+    expect(fakeFetch).toHaveBeenCalledTimes(1)
+    expect(result.stems[0].path).toBe(path)
+    expect(readFileSync(path, 'utf-8')).toBe('real ogg bytes')
+    expect(onDownloaded).toHaveBeenCalledWith('real ogg bytes'.length)
+    expect(existsSync(`${path}.downloading`)).toBe(false)
+  })
+
+  it('leaves a normal cached file alone, with no request', async () => {
+    const { downloadMissingStemsFor } = await import('./endlesssApi')
+    const path = cachePath('a1b2c3')
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, 'cached audio')
+    const fakeFetch = vi.fn(async () => new Response('other bytes', { status: 200 }))
+
+    const result = await downloadMissingStemsFor(
+      riffWithOneStem('a1b2c3'),
+      fakeFetch as unknown as typeof fetch
+    )
+    expect(fakeFetch).not.toHaveBeenCalled()
+    expect(result.stems[0].path).toBe(path)
+    expect(readFileSync(path, 'utf-8')).toBe('cached audio')
+  })
+
+  it('an empty 200 body is a failed download, never a fresh placeholder', async () => {
+    vi.useFakeTimers()
+    try {
+      const { downloadMissingStemsFor } = await import('./endlesssApi')
+      const fakeFetch = vi.fn(async () => new Response(new Uint8Array(0), { status: 200 }))
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const pending = downloadMissingStemsFor(
+        riffWithOneStem('f00d'),
+        fakeFetch as unknown as typeof fetch
+      )
+      await vi.runAllTimersAsync()
+      const result = await pending
+      errSpy.mockRestore()
+      expect(result.stems[0].path).toBeNull()
+      expect(existsSync(cachePath('f00d'))).toBe(false)
     } finally {
       vi.useRealTimers()
     }

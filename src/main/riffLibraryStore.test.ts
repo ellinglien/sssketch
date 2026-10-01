@@ -1,5 +1,13 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  statSync
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import Database from 'better-sqlite3'
@@ -17,6 +25,7 @@ import {
   resolveRiff,
   resolveRiffWithContext,
   downloadMissingStems,
+  downloadStemForAnalysis,
   discoveredStemPath
 } from './riffLibraryStore'
 import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
@@ -1236,6 +1245,135 @@ describe('downloadMissingStems', () => {
   it('returns null when the warehouse is unavailable, rather than throwing', async () => {
     setRiffLibraryRootForTests('/no/such/path')
     expect(await downloadMissingStems('riff-1')).toBeNull()
+  })
+})
+
+// Real data, 2026-10-01: an unfinished LORE download left 2,361 0-byte
+// placeholder files in one jam folder of Elling's archive. Existing is not
+// downloaded: each one failed to decode, to stretch and to play, and the
+// downloader skipped it because the file was there.
+describe('0-byte placeholder stems count as not downloaded', () => {
+  let root: string
+  beforeEach(async () => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-lore-userdata-placeholder-test-'))
+    const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    closeOwnRiffLibraryDb()
+    const { resetStemAvailabilitySessionStateForTests } = await import('./stemAvailability')
+    resetStemAvailabilitySessionStateForTests()
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setRiffLibraryRootForTests(root)
+  })
+  afterEach(async () => {
+    const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    closeOwnRiffLibraryDb()
+    vi.unstubAllGlobals()
+    rmSync(root, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  function placeholder(stemCID: string): string {
+    const path = resolveStemPath('jam-techno', stemCID)
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, '')
+    return path
+  }
+
+  function okFetch(body: string): ReturnType<typeof vi.fn> {
+    return vi.fn(
+      async () =>
+        ({
+          ok: true,
+          status: 200,
+          arrayBuffer: async () => new TextEncoder().encode(body).buffer
+        }) as Response
+    )
+  }
+
+  it('resolveRiff reports a 0-byte stem as having no local path', () => {
+    placeholder('stem-b')
+    const stemB = resolveRiff('riff-1')!.stems.find((s) => s.stemCID === 'stem-b')!
+    expect(stemB.path).toBeNull()
+  })
+
+  it('listRiffs does not count a 0-byte stem as cached', () => {
+    placeholder('stem-b')
+    const riff1 = listRiffs('jam-techno', {}).riffs.find((r) => r.riffCID === 'riff-1')!
+    expect(riff1.cachedStemCount).toBe(1) // stem-a only
+  })
+
+  it('downloadMissingStems fetches the real audio and overwrites the placeholder in place', async () => {
+    const path = placeholder('stem-b')
+    const fetchMock = okFetch('real ogg bytes for stem-b')
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await downloadMissingStems('riff-1')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(result!.stems.find((s) => s.stemCID === 'stem-b')!.path).toBe(path)
+    expect(readFileSync(path, 'utf-8')).toBe('real ogg bytes for stem-b')
+    expect(existsSync(`${path}.downloading`)).toBe(false)
+  })
+
+  it('a normal file is left alone -- not re-requested, not rewritten', async () => {
+    const path = resolveStemPath('jam-techno', 'stem-b')
+    mkdirSync(join(path, '..'), { recursive: true })
+    writeFileSync(path, 'already real audio')
+    const before = statSync(path).mtimeMs
+    const fetchMock = okFetch('should never be written')
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await downloadMissingStems('riff-1')
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(result!.stems.find((s) => s.stemCID === 'stem-b')!.path).toBe(path)
+    expect(readFileSync(path, 'utf-8')).toBe('already real audio')
+    expect(statSync(path).mtimeMs).toBe(before)
+  })
+
+  it('downloadStemForAnalysis (the artist queue) downloads over a placeholder: ok', async () => {
+    const path = placeholder('stem-b')
+    vi.stubGlobal('fetch', okFetch('real ogg bytes'))
+    expect(await downloadStemForAnalysis('jam-techno', 'stem-b')).toEqual({ status: 'ok', path })
+    expect(readFileSync(path, 'utf-8')).toBe('real ogg bytes')
+  })
+
+  it('downloadStemForAnalysis: a placeholder whose download is refused is unavailable, like any missing stem', async () => {
+    placeholder('stem-b')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({ ok: false, status: 403 }) as Response)
+    )
+    expect(await downloadStemForAnalysis('jam-techno', 'stem-b')).toEqual({
+      status: 'unavailable',
+      path: null
+    })
+  })
+
+  it('downloadStemForAnalysis: a placeholder whose download hits the network is transient', async () => {
+    placeholder('stem-b')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('ECONNRESET')
+      })
+    )
+    expect(await downloadStemForAnalysis('jam-techno', 'stem-b')).toEqual({
+      status: 'transient',
+      path: null
+    })
+  })
+
+  // A download that "succeeds" with no bytes must not lay down a fresh
+  // placeholder of its own.
+  it('an empty 200 response writes nothing and counts as a temporary failure', async () => {
+    const path = resolveStemPath('jam-techno', 'stem-b')
+    vi.stubGlobal('fetch', okFetch(''))
+    expect(await downloadStemForAnalysis('jam-techno', 'stem-b')).toEqual({
+      status: 'transient',
+      path: null
+    })
+    expect(existsSync(path)).toBe(false)
+    expect(existsSync(`${path}.downloading`)).toBe(false)
   })
 })
 

@@ -1,5 +1,5 @@
 // src/main/discoveredLibrary.ts
-import { copyFileSync, existsSync, mkdirSync, rmSync } from 'node:fs'
+import { copyFileSync, mkdirSync, rmSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type Database from 'better-sqlite3'
@@ -12,6 +12,7 @@ import {
 import { friendlyRiffName } from '@shared/friendlyRiffName'
 import { discoveredStemPath } from './riffLibraryStore'
 import { stemCIDForPath } from './stemCategoriesStore'
+import { isUsableStemFile } from './stemFile'
 import { upsertJam, writeRiffDetail } from './riffLibraryWriter'
 import { appendInstrumentRows, appendRiffIndexRows } from './discoverIndexCache'
 import {
@@ -197,7 +198,8 @@ export function saveDiscoveredRifff(
 
   for (const { member, stemCID } of resolved) {
     const destination = discoveredStemPath(stemCID)
-    if (existsSync(destination)) continue
+    // A 0-byte placeholder there is copied over, not kept as the copy.
+    if (isUsableStemFile(destination)) continue
     mkdirSync(dirname(destination), { recursive: true })
     copyFileSync(member.path, destination)
   }

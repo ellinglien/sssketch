@@ -87,4 +87,16 @@ describe('decodeStemFile', () => {
     decodeAudioDataMock.mockResolvedValue({ decoded: true })
     await expect(decodeStemFile('/stem.wav')).resolves.toEqual({ decoded: true })
   })
+  // Real, 2026-10-01: 0-byte placeholders in a LORE archive (an unfinished
+  // download) reached decodeAudioData, which threw "EncodingError: Unable
+  // to decode audio data" for each. Empty bytes are a stem not downloaded
+  // yet, not audio to decode.
+  it('rejects 0 bytes as not downloaded, without decoding', async () => {
+    const { decodeStemFile } = await import('./decodeStemFile')
+    const { isStemNotDownloadedError } = await import('@shared/stemNotDownloaded')
+    readAudioFileMock.mockResolvedValue(new Uint8Array(0))
+    const err = await decodeStemFile('/lore/e/e22be9a0').catch((e: unknown) => e)
+    expect(isStemNotDownloadedError(err)).toBe(true)
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
+  })
 })

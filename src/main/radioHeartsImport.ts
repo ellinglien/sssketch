@@ -12,7 +12,6 @@
 //
 // Only ever writes sssketch's OWN db (StemFavourite, RadioHeartImport, and
 // whatever `save` writes there) -- never an external LORE archive.
-import { existsSync } from 'node:fs'
 import type Database from 'better-sqlite3'
 import {
   RADIO_HEARTS_URL,
@@ -24,6 +23,7 @@ import {
 } from '@shared/radioHearts'
 import type { DiscoveredMemberInput } from './discoveredLibrary'
 import { discoveredStemPath, resolveStemPath } from './riffLibraryStore'
+import { isUsableStemFile } from './stemFile'
 import { addStemFavourites, listStemFavourites } from './stemFavouriteStore'
 import {
   listImportedHeartCombos,
@@ -95,8 +95,9 @@ export function resolveHeartStem(
       continue // an external db this app does not control
     }
     if (!row || !row.BPMrnd || row.BPMrnd <= 0) continue
+    // isUsableStemFile, not existsSync: a 0-byte placeholder is not audio.
     const path = [resolveStemPath(row.OwnerJamCID, stemCID), discoveredStemPath(stemCID)].find(
-      (p) => existsSync(p)
+      (p) => isUsableStemFile(p)
     )
     if (!path) continue
     const barLength = (row.Length16s ?? 16) / 16

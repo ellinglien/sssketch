@@ -27,7 +27,9 @@ describe('getOrExtractStemEmbedding', () => {
         setStemEmbeddingCache: vi.fn().mockResolvedValue(undefined),
         setYamnetZeroShotCategory: setYamnetZeroShotCategoryMock,
         markYamnetZeroShotAttempted: markYamnetZeroShotAttemptedMock,
-        readAudioFile: vi.fn().mockResolvedValue(new Uint8Array())
+        // Non-empty: 0 bytes now reads as a stem not downloaded yet
+        // (decodeStemFile), and never reaches the decode.
+        readAudioFile: vi.fn().mockResolvedValue(new Uint8Array([1, 2, 3, 4]))
       }
     })
     mockGetAudioContext.mockReturnValue({
