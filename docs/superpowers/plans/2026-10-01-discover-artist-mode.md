@@ -2430,6 +2430,29 @@ git commit -m "discover artist: switching artist mid-radio turns rows over, one 
 - **Gates:** typecheck clean, `npx eslint --no-cache .` at 0 errors / 4 pre-existing warnings, 234 files / 3,839 tests green.
 - **Not run in the app:** no agent can hear radio. Elling's walkthrough is Task 9.
 
+**Task 7 review follow-up (one commit), including Elling's decision:**
+- **Picks are tagged with the artist they were rolled under** (`DiscoverCandidate.pickedUnderArtist`, set by `tagPickedUnderArtist` as each roll's results arrive: candidates, random, nearby, and the nearby popover).
+  - The tag lives on the candidate, not the slot, so it travels with the stem through duplicates and undo/redo.
+- **Race 1, stale picks:**
+  - `skipRadio` captures the turnover set (by identity) before `await pickForSlot`. If `changeArtist` has replaced it meanwhile, the pick is dropped and radio re-arms.
+  - `commitSlotPick` removes a row from the set only when `pickMatchesSelection(pick.candidate, artistRef.current)`, so a manual reroll or skip rolled under the old artist leaves the row pending.
+  - Tags rather than creators, because a legitimate `me` pick is often a collaborator's stem.
+- **Race 2, switching mid-turnover:** `changeArtist` calls `skipRadio` only when no skip is waiting or picking. Otherwise it lets the waiting skip land, and its landing re-arms into the new turnover. This option was chosen so a switch never puts two rows at one loop top.
+- **Keep while another artist's stems remain (Elling):** in `me`, keep is refused while `lingeringArtists(slots)` is non-empty.
+  - The renderer dims keep and shows `listening only: <x>'s stems still playing`, and `keepGroup` returns `refused`.
+  - Main refuses too (`refusesKeep`), on the list the keep IPC itself carries (4th argument, the rows at that moment, so nothing can lag it) **and** on the session's mirror (pushed with `discoverSetArtist`).
+  - The phone's state `listenOnly` is `keepBlockedForPhone()`, so the phone dims and refuses the same way.
+- **Minors:**
+  - A turnover row takes its undo snapshot only once its pick is non-null.
+  - The picker's highlight is `-1` only for an empty list, the arrows do nothing then, status lines sit outside the listbox, and the highlighted row is `scrollIntoView`'d.
+  - `readJsonBody` returns `{}` for any JSON that isn't an object.
+- **Tests:**
+  - shared: tagging, `pickMatchesSelection`, `lingeringArtists`/`lingeringNotice`, and a composed switch-with-stale-pick walk;
+  - session: `refusesKeep` / `keepBlockedForPhone`;
+  - server: a non-object body.
+  - The panel wiring itself isn't unit-testable here (React component).
+- **Gates:** typecheck clean, `npx eslint --no-cache .` 0 errors / 4 warnings, 234 files / 3,851 tests green.
+
 ---
 
 ### Task 8: analyse overnight

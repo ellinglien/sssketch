@@ -3,13 +3,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   currentArtistMode,
   getDiscoverArtistSession,
+  keepBlockedForPhone,
+  refusesKeep,
   refusesListenOnly,
   resetDiscoverArtistSession,
   setDiscoverArtistSession
 } from './discoverArtistSession'
 import { heartFetchLabel } from '@shared/radioHearts'
 
-afterEach(() => resetDiscoverArtistSession())
+afterEach(() => {
+  resetDiscoverArtistSession()
+  vi.restoreAllMocks()
+})
 
 describe('discover artist session', () => {
   it('starts on me, own mode, refusing nothing', () => {
@@ -47,5 +52,45 @@ describe('discover artist session', () => {
 
   it('the refused fetch reads as a label', () => {
     expect(heartFetchLabel({ ok: false, reason: 'listening only' })).toBe('listening only')
+  })
+})
+
+// Elling, 2026-10-01: in `me`, keep is refused while any row still plays a
+// stem picked under artist mode.
+describe("keep while another artist's stems remain", () => {
+  it('in me, refuses keep for a call that names lingering artists', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setDiscoverArtistSession({ artist: null, ownUsername: 'elling' })
+    expect(refusesKeep(['tpj'])).toBe(true)
+    expect(refusesKeep([])).toBe(false)
+    expect(refusesKeep(undefined)).toBe(false)
+  })
+
+  it('ignores a malformed list rather than refusing on it', () => {
+    setDiscoverArtistSession({ artist: null, ownUsername: 'elling' })
+    expect(refusesKeep('tpj')).toBe(false)
+    expect(refusesKeep([7, null, ''])).toBe(false)
+  })
+
+  it("refuses on the session's own lingering list too (the phone's path)", () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setDiscoverArtistSession({ artist: null, ownUsername: 'elling', lingering: ['tpj'] })
+    expect(keepBlockedForPhone()).toBe(true)
+    expect(refusesKeep(undefined)).toBe(true)
+    setDiscoverArtistSession({ artist: null, ownUsername: 'elling', lingering: [] })
+    expect(keepBlockedForPhone()).toBe(false)
+  })
+
+  it('in artist mode keep is refused whatever the list says', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setDiscoverArtistSession({ artist: 'tpj', ownUsername: 'elling' })
+    expect(refusesKeep([])).toBe(true)
+    expect(keepBlockedForPhone()).toBe(true)
+  })
+
+  it('a reset clears the lingering list', () => {
+    setDiscoverArtistSession({ artist: null, ownUsername: 'elling', lingering: ['tpj'] })
+    resetDiscoverArtistSession()
+    expect(keepBlockedForPhone()).toBe(false)
   })
 })

@@ -143,7 +143,16 @@ export function DiscoverArtistPicker({
     () => (index ? suggestArtists(index, query, ownUsername) : []),
     [index, query, ownUsername]
   )
-  const active = Math.min(highlight, suggestions.length - 1)
+  // -1 only while the list is empty; otherwise always a real row, so a list
+  // that fills after an empty one still has a highlight for Enter.
+  const active =
+    suggestions.length === 0 ? -1 : Math.max(0, Math.min(highlight, suggestions.length - 1))
+
+  // Keep the highlighted row in view as the arrows move it.
+  useEffect(() => {
+    if (active < 0) return
+    document.getElementById(`${listId}-option-${active}`)?.scrollIntoView({ block: 'nearest' })
+  }, [active, listId])
 
   function pick(s: ArtistSuggestion): void {
     onPick(s.kind === 'me' ? null : normalizeArtistPick(s.user, ownUsername))
@@ -192,10 +201,10 @@ export function DiscoverArtistPicker({
         onKeyDown={(e) => {
           if (e.key === 'ArrowDown') {
             e.preventDefault()
-            setHighlight(Math.min(active + 1, suggestions.length - 1))
+            if (active >= 0) setHighlight(Math.min(active + 1, suggestions.length - 1))
           } else if (e.key === 'ArrowUp') {
             e.preventDefault()
-            setHighlight(Math.max(active - 1, 0))
+            if (active >= 0) setHighlight(Math.max(active - 1, 0))
           } else if (e.key === 'Enter' && active >= 0) {
             pick(suggestions[active])
           }
@@ -214,25 +223,28 @@ export function DiscoverArtistPicker({
           finding who you&apos;ve jammed with…
         </span>
       )}
+      {/* Status lines sit OUTSIDE the listbox: it holds options only. */}
+      {index === null && (
+        <span role="status" style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
+          {indexFailed ? 'couldn’t load · retrying' : 'loading…'}
+        </span>
+      )}
+      {index !== null && indexFailed && (
+        <span role="status" style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
+          couldn’t refresh · retrying
+        </span>
+      )}
+      {index !== null && query.trim() !== '' && suggestions.length === 0 && (
+        <span role="status" style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
+          no matches
+        </span>
+      )}
       <div
         id={listId}
         role="listbox"
         aria-label="artists"
         style={{ display: 'flex', flexDirection: 'column', maxHeight: 260, overflowY: 'auto' }}
       >
-        {index === null && (
-          <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
-            {indexFailed ? 'couldn’t load · retrying' : 'loading…'}
-          </span>
-        )}
-        {index !== null && indexFailed && (
-          <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
-            couldn’t refresh · retrying
-          </span>
-        )}
-        {index !== null && query.trim() !== '' && suggestions.length === 0 && (
-          <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>no matches</span>
-        )}
         {suggestions.map((s, i) => (
           <button
             key={s.kind === 'me' ? ':me' : s.user}

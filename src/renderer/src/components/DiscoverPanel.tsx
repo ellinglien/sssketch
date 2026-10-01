@@ -135,11 +135,15 @@ import {
   artistNotice,
   artistTurnoverIds,
   isKeepRefused,
+  lingeringArtists,
+  lingeringNotice,
   listenOnlyActions,
   listenOnlyTooltip,
   nextTurnoverSlotId,
   normalizeArtistPick,
+  pickMatchesSelection,
   rollFilterForArtist,
+  tagPickedUnderArtist,
   type ArtistRollFilter,
   type ListenOnlyAction
 } from '@shared/discoverArtist'
@@ -745,10 +749,19 @@ export function DiscoverPanel({
   function rollFilter(): ArtistRollFilter {
     return rollFilterForArtist(artistRef.current, currentUsername, globalRollOptions.onlyOwnStems)
   }
-  // Main's mirror, for the guards. Re-sent on the own username changing too.
+  // In `me`, the artists whose stems still play on the rows (picked under
+  // artist mode): keep is blocked until they are gone (Elling, 2026-10-01).
+  const lingering = mode === 'own' ? lingeringArtists(slots) : []
+  const lingeringKey = lingering.join('\n')
+  // Main's mirror, for the guards. Re-sent on the own username changing, and
+  // on the lingering artists changing (the phone's keep reads it there).
   useEffect(() => {
-    void window.rifffApi.discoverSetArtist(artist, currentUsername)
-  }, [artist, currentUsername])
+    void window.rifffApi.discoverSetArtist(
+      artist,
+      currentUsername,
+      lingeringKey === '' ? [] : lingeringKey.split('\n')
+    )
+  }, [artist, currentUsername, lingeringKey])
   // The source dial (2026-09-29): 0 = endlesss, 100 = other, 50 = half and
   // half. In-memory, like the switches it replaced. Mirrored into a ref
   // because radio's picks run from long-lived callbacks that would
@@ -3163,7 +3176,11 @@ export function DiscoverPanel({
       next,
       currentUsername
     )
-    void skipRadio()
+    // Never two rows at one loop top: a skip already waiting (or still
+    // picking) lands first, and its landing re-arms -- armRadioPick then
+    // starts the turnover. A pick still in flight for the OLD artist is
+    // dropped by skipRadio itself.
+    if (!radioSkipWaiting()) void skipRadio()
   }
   const radioMenuButtonRef = useRef<HTMLButtonElement>(null)
   const radioChevronRef = useRef<HTMLButtonElement>(null)
@@ -4963,12 +4980,17 @@ export function DiscoverPanel({
     rerollGenerationRef.current.set(id, myGeneration)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
-      const nearby = await window.rifffApi.getAdjacentDiscoverCandidates(
+      const nearbyArtist = rollFilter().artist
+      const nearbyRaw = await window.rifffApi.getAdjacentDiscoverCandidates(
         anchor.riffCID,
         slot.kinds,
         soundSourceForLean(sourceLeanRef.current),
-        rollFilter().artist
+        nearbyArtist
       )
+      const nearby = {
+        older: nearbyRaw.older.map((c) => tagPickedUnderArtist(c, nearbyArtist)),
+        newer: nearbyRaw.newer.map((c) => tagPickedUnderArtist(c, nearbyArtist))
+      }
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       const pick = pickAdjacentCandidate(nearby.older, nearby.newer, anchor.stemCID)
       // Nothing nearby: the stem that is already playing is still the right
@@ -5083,23 +5105,28 @@ export function DiscoverPanel({
       // use) would otherwise land a duplicate half the time while the other
       // source has fresh stems to offer.
       const draw = drawSoundSource(sourceLeanRef.current)
-      let candidates = await window.rifffApi.getDiscoverCandidates(
-        kinds,
-        f.onlyOwnStems,
-        f.targetUser,
-        draw.first,
-        f.artist
-      )
-      const drawnHasUnused = candidates.some((c) => !usedElsewhere.has(c.stemCID))
-      if (!drawnHasUnused && draw.fallback !== null) {
-        if (rerollGenerationRef.current.get(id) !== myGeneration) return null
-        const fallbackCandidates = await window.rifffApi.getDiscoverCandidates(
+      // Tagged with the artist they were rolled under (pickedUnderArtist).
+      let candidates = (
+        await window.rifffApi.getDiscoverCandidates(
           kinds,
           f.onlyOwnStems,
           f.targetUser,
-          draw.fallback,
+          draw.first,
           f.artist
         )
+      ).map((c) => tagPickedUnderArtist(c, f.artist))
+      const drawnHasUnused = candidates.some((c) => !usedElsewhere.has(c.stemCID))
+      if (!drawnHasUnused && draw.fallback !== null) {
+        if (rerollGenerationRef.current.get(id) !== myGeneration) return null
+        const fallbackCandidates = (
+          await window.rifffApi.getDiscoverCandidates(
+            kinds,
+            f.onlyOwnStems,
+            f.targetUser,
+            draw.fallback,
+            f.artist
+          )
+        ).map((c) => tagPickedUnderArtist(c, f.artist))
         // Switch to the fallback when it has something new, or when the
         // drawn source had nothing at all. Otherwise keep the drawn pool,
         // all duplicates -- the dedupe below then uses it whole, which
@@ -5176,8 +5203,13 @@ export function DiscoverPanel({
    * for itself (rerollSlot pushes one, rerollAll pushes one for the whole
    * batch, radio pushes none; see the spec's 3.4). */
   function commitSlotPick(id: string, pick: SlotPick): void {
-    // A row changed by anyone counts as turned over (changeArtist).
-    artistTurnoverRef.current.delete(id)
+    // A row changed by anyone counts as turned over (changeArtist) -- but
+    // only by a pick rolled under the CURRENT selection: a manual reroll or
+    // skip still in flight from before the switch lands the old artist's
+    // stem, and that row still has to turn over.
+    if (pickMatchesSelection(pick.candidate, artistRef.current)) {
+      artistTurnoverRef.current.delete(id)
+    }
     // THE ONE PLACE A LAYER'S STEM IS REPLACED, whoever asked for it --
     // radio's own turnover, both of its commit branches, the row's
     // similar/adjacent/random buttons, a brand-new slot's first roll and
@@ -5371,6 +5403,7 @@ export function DiscoverPanel({
         f.targetUser,
         draw.first
       )
+      if (candidate !== null) candidate = tagPickedUnderArtist(candidate, f.artist)
       if (candidate === null && draw.fallback !== null) {
         if (rerollGenerationRef.current.get(id) !== myGeneration) return
         candidate = await window.rifffApi.getRandomDiscoverCandidate(
@@ -5379,6 +5412,7 @@ export function DiscoverPanel({
           f.targetUser,
           draw.fallback
         )
+        if (candidate !== null) candidate = tagPickedUnderArtist(candidate, f.artist)
       }
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       if (queue && radioOnRef.current) {
@@ -6125,6 +6159,11 @@ export function DiscoverPanel({
     const slot = slotsRef.current.find((s) => s.id === slotId)
     if (!slot) return
     radioSkipPickingRef.current.add(slotId)
+    // The turnover set this pick serves. changeArtist REPLACES the set, so a
+    // different object after the await means the artist changed meanwhile:
+    // the pick was rolled for the old one.
+    const turnoverAtStart = artistTurnoverRef.current
+    const isTurnover = turnoverId !== null
     // Radio's decided change, wherever it is, and its armed pick: taken
     // back. radioYieldsRow does exactly this for its own row; here it is
     // whichever row radio had spoken for. Bumping the arm token drops an
@@ -6133,13 +6172,28 @@ export function DiscoverPanel({
     if (led !== null) radioTakesBackLed(led)
     radioArmTokenRef.current += 1
     setRadioPending(null)
-    pushUndoSnapshot()
-    const undoSeq = undoSequence.latest()
+    // A turnover row takes its undo snapshot only once its pick is real: a
+    // row with nothing by the new artist changes nothing, so it must not
+    // leave an empty undo step behind.
+    if (!isTurnover) pushUndoSnapshot()
+    let undoSeq = undoSequence.latest()
     const pick = await pickForSlot(slotId, slot.kinds, { avoidOwnStem: true })
     radioSkipPickingRef.current.delete(slotId)
+    if (artistTurnoverRef.current !== turnoverAtStart) {
+      // Rolled under the artist before the switch: dropped, and radio
+      // re-arms (the new turnover goes first there).
+      if (radioOnRef.current && !radioSkipWaiting() && radioLedChangeRef.current === null) {
+        void armRadioPick()
+      }
+      return
+    }
     // One try per row: a row whose kinds have nothing by the new artist keeps
     // its stem rather than being retried at every loop top.
     artistTurnoverRef.current.delete(slotId)
+    if (isTurnover && pick !== null) {
+      pushUndoSnapshot()
+      undoSeq = undoSequence.latest()
+    }
     const queued =
       pick !== null &&
       radioOnRef.current &&
@@ -6644,6 +6698,9 @@ export function DiscoverPanel({
     // bisected in review). Same rule -- keep is listen-only exactly when
     // the mode is `other`.
     if (artistMode(artistRef.current, currentUsername) === 'other') return 'refused'
+    // In `me`, while any row still plays a stem picked under artist mode.
+    const still = lingeringArtists(slotsRef.current)
+    if (still.length > 0) return 'refused'
     setKeeping(true)
     try {
       const assembly = await resolveDiscoverRifff()
@@ -6657,7 +6714,14 @@ export function DiscoverPanel({
         barLength: stem.barLength,
         durationSec: stem.durationSec
       }))
-      const saved = await window.rifffApi.saveDiscoveredRifff(members, bpm, rifff.barLength)
+      // The rows' lingering artists as of NOW, so main can refuse even if
+      // its mirror has not caught up (refusesKeep).
+      const saved = await window.rifffApi.saveDiscoveredRifff(
+        members,
+        bpm,
+        rifff.barLength,
+        lingeringArtists(slotsRef.current)
+      )
       if (!saved) return 'none'
       // Main refused it: Discover is playing another user's stems.
       if (isKeepRefused(saved)) {
@@ -7199,16 +7263,26 @@ export function DiscoverPanel({
         </button>
         <button
           onClick={() => void keepGroup()}
-          disabled={keeping || listenOnly.has('keep')}
-          data-tooltip={listenOnly.has('keep') ? listenOnlyTip : 'keep this group'}
+          disabled={keeping || listenOnly.has('keep') || lingering.length > 0}
+          data-tooltip={
+            listenOnly.has('keep')
+              ? listenOnlyTip
+              : lingering.length > 0
+                ? lingeringNotice(lingering)
+                : 'keep this group'
+          }
           style={{
             fontFamily: 'inherit',
             fontSize: 10,
             padding: '6px 14px',
             background: 'transparent',
             border: '1px solid var(--ra-border-strong)',
-            color: keeping || listenOnly.has('keep') ? 'var(--ra-text-4)' : 'var(--ra-text)',
-            cursor: keeping || listenOnly.has('keep') ? 'default' : 'pointer',
+            color:
+              keeping || listenOnly.has('keep') || lingering.length > 0
+                ? 'var(--ra-text-4)'
+                : 'var(--ra-text)',
+            cursor:
+              keeping || listenOnly.has('keep') || lingering.length > 0 ? 'default' : 'pointer',
             animation: keptLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
           }}
         >
@@ -7276,6 +7350,14 @@ export function DiscoverPanel({
           {addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline'}
         </button>
       </div>
+      {lingering.length > 0 && (
+        <div
+          role="note"
+          style={{ fontSize: 9, color: 'var(--ra-text-3)', marginTop: -6, marginBottom: 10 }}
+        >
+          {lingeringNotice(lingering)}
+        </div>
+      )}
       {mode === 'other' && artist !== null && (
         <div
           role="note"

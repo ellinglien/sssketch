@@ -71,4 +71,11 @@ export interface DiscoverCandidate {
    * why THAT field is per-stem). Direct request, 2026-09-20: "date could
    * be a tooltip on hover.. in discovery and in arranger or sketch." */
   riffCreationTime: number | null
+  /** Discover artist mode (2026-10-01): the artist this candidate was
+   * rolled under, set by the RENDERER as a roll's results arrive
+   * (tagPickedUnderArtist, @shared/discoverArtist); absent for a `me` roll.
+   * On the candidate rather than the slot, so it travels with the stem
+   * through duplicates, nearby picks and undo/redo. It drives the radio
+   * turnover after a switch and the keep block while such stems remain. */
+  pickedUnderArtist?: string
 }

@@ -1,6 +1,7 @@
 // src/renderer/src/components/DiscoverNearbyPopover.tsx
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
+import { tagPickedUnderArtist } from '@shared/discoverArtist'
 import { slotKindsKey, type DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
@@ -212,7 +213,13 @@ export function DiscoverNearbyPopover({
     window.rifffApi
       .getAdjacentDiscoverCandidates(centerCandidate.riffCID, kinds, soundSource, creator)
       .then((candidates) => {
-        if (!cancelled) setResult({ key: resultKey, candidates })
+        // Tagged with the artist they were browsed under (pickedUnderArtist),
+        // like every roll's results.
+        const tagged = {
+          newer: candidates.newer.map((c) => tagPickedUnderArtist(c, creator)),
+          older: candidates.older.map((c) => tagPickedUnderArtist(c, creator))
+        }
+        if (!cancelled) setResult({ key: resultKey, candidates: tagged })
       })
       .catch((err) => {
         console.error('DiscoverNearbyPopover: getAdjacentDiscoverCandidates failed:', err)

@@ -644,4 +644,13 @@ describe("the keep route carries the phone's keep id", () => {
     expect((await keepWith(port, token, { keepId: '../x' })).status).toBe(200)
     expect(commands).toEqual([{ kind: 'keep', keepId: 'k1x2' }, { kind: 'keep' }])
   })
+
+  it('survives a body that is JSON but not an object (null, a number, a list)', async () => {
+    const { port, pairingCode } = await start()
+    const token = await pairedToken(port, pairingCode)
+    for (const body of [null, 7, ['k1']]) {
+      expect((await keepWith(port, token, body)).status).toBe(200)
+    }
+    expect(commands).toEqual([{ kind: 'keep' }, { kind: 'keep' }, { kind: 'keep' }])
+  })
 })

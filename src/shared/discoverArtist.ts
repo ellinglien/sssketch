@@ -293,3 +293,47 @@ export function isKeepRefused(value: unknown): value is KeepRefused {
     (value as { refused?: unknown }).refused === 'listening only'
   )
 }
+
+/** A roll's result as the renderer keeps it: tagged with the artist it was
+ * rolled under (DiscoverCandidate.pickedUnderArtist). A `me` roll
+ * (artist undefined) is returned untouched -- the same object. */
+export function tagPickedUnderArtist<T extends object>(
+  candidate: T,
+  artist: string | undefined
+): T | (T & { pickedUnderArtist: string }) {
+  return artist === undefined ? candidate : { ...candidate, pickedUnderArtist: artist }
+}
+
+/** Whether a pick belongs to the CURRENT selection (null = me): rolled under
+ * that artist, or -- for `me` -- rolled with no artist at all. Tags, not
+ * creators: a `me` pick is often a collaborator's stem from Elling's own
+ * jams, whose creator is not him. Used to decide that a row has turned
+ * over after a switch; a pick still in flight from before it does not
+ * count. */
+export function pickMatchesSelection(
+  candidate: { pickedUnderArtist?: string } | null | undefined,
+  artist: string | null
+): boolean {
+  if (!candidate) return false
+  return artist === null
+    ? candidate.pickedUnderArtist === undefined
+    : candidate.pickedUnderArtist === artist
+}
+
+/** The artists whose stems are still on Discover's rows (picked under artist
+ * mode), once each, in name order. In `me` mode any of these blocks keep
+ * (Elling, 2026-10-01): the loop still holds someone else's work. */
+export function lingeringArtists(
+  slots: readonly { candidate: { pickedUnderArtist?: string } | null }[]
+): string[] {
+  const artists = new Set<string>()
+  for (const s of slots) {
+    const tag = s.candidate?.pickedUnderArtist
+    if (tag !== undefined && tag !== '') artists.add(tag)
+  }
+  return [...artists].sort((a, b) => a.localeCompare(b))
+}
+
+export function lingeringNotice(artists: readonly string[]): string {
+  return `listening only: ${artists.map((a) => `${a}'s`).join(' and ')} stems still playing`
+}

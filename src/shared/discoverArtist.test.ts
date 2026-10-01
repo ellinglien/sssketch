@@ -2,6 +2,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   KEEP_REFUSED,
+  lingeringArtists,
+  lingeringNotice,
+  pickMatchesSelection,
+  tagPickedUnderArtist,
   LISTEN_ONLY_ACTIONS,
   isKeepRefused,
   analysedLabel,
@@ -346,5 +350,71 @@ describe('suggestArtists: me and Enter', () => {
   it('a prefix of the own name (or of "me") still puts me first', () => {
     expect(suggestArtists(index, 'ell', 'elling')[0]).toEqual({ kind: 'me' })
     expect(suggestArtists(index, 'm', 'elling')[0]).toEqual({ kind: 'me' })
+  })
+})
+
+// Task 7 review (2026-10-01): picks are tagged with the artist they were
+// rolled under, and the tag drives both turnover and the keep block.
+describe('picked under artist', () => {
+  const c = { stemCID: 's1', creatorUserName: 'tpj' }
+  it('tags a candidate rolled in artist mode, and leaves a me roll untouched', () => {
+    expect(tagPickedUnderArtist(c, 'tpj')).toEqual({ ...c, pickedUnderArtist: 'tpj' })
+    expect(tagPickedUnderArtist(c, undefined)).toBe(c)
+  })
+  it('a pick counts for the current selection only when rolled under it', () => {
+    expect(pickMatchesSelection({ pickedUnderArtist: 'tpj' }, 'tpj')).toBe(true)
+    expect(pickMatchesSelection({ pickedUnderArtist: 'tpj' }, 'honeydisco')).toBe(false)
+    expect(pickMatchesSelection({ pickedUnderArtist: 'tpj' }, null)).toBe(false)
+    // A me pick, of any creator (collaborators' stems included), counts for me.
+    expect(pickMatchesSelection({ creatorUserName: 'bananepoep' }, null)).toBe(true)
+    expect(pickMatchesSelection({}, 'tpj')).toBe(false)
+    expect(pickMatchesSelection(null, null)).toBe(false)
+  })
+  it('lists the artists whose stems still play, once each, in name order', () => {
+    expect(
+      lingeringArtists([
+        { candidate: { pickedUnderArtist: 'tpj' } },
+        { candidate: null },
+        { candidate: {} },
+        { candidate: { pickedUnderArtist: 'bananepoep' } },
+        { candidate: { pickedUnderArtist: 'tpj' } }
+      ])
+    ).toEqual(['bananepoep', 'tpj'])
+    expect(lingeringArtists([])).toEqual([])
+  })
+  it('says whose stems are still playing', () => {
+    expect(lingeringNotice(['tpj'])).toBe("listening only: tpj's stems still playing")
+    expect(lingeringNotice(['bananepoep', 'tpj'])).toBe(
+      "listening only: bananepoep's and tpj's stems still playing"
+    )
+  })
+})
+
+// The Task 7 race, by the helpers DiscoverPanel's commitSlotPick and
+// skipRadio use: a pick rolled before a switch must not count as turned over.
+describe('turnover after a switch, with a stale pick in flight', () => {
+  it('a pick rolled under the OLD artist leaves its row pending; one under the new clears it', () => {
+    const slots = [
+      { id: 'a', creator: 'tpj' },
+      { id: 'b', creator: 'tpj' }
+    ]
+    // tpj -> honeydisco mid-radio.
+    const pending = artistTurnoverIds(slots, 'honeydisco', 'elling')
+    expect([...pending].sort()).toEqual(['a', 'b'])
+    // A skip rolled under tpj lands on row a: not a turnover.
+    const stale = { creatorUserName: 'tpj', pickedUnderArtist: 'tpj' }
+    if (pickMatchesSelection(stale, 'honeydisco')) pending.delete('a')
+    expect(nextTurnoverSlotId(['a', 'b'], pending)).toBe('a')
+    // The new artist's pick for row a clears it; b is next.
+    const fresh = { creatorUserName: 'honeydisco', pickedUnderArtist: 'honeydisco' }
+    if (pickMatchesSelection(fresh, 'honeydisco')) pending.delete('a')
+    expect(nextTurnoverSlotId(['a', 'b'], pending)).toBe('b')
+  })
+
+  it("back to me: a me pick clears the row even when its stem is a collaborator's", () => {
+    const pending = artistTurnoverIds([{ id: 'a', creator: 'tpj' }], null, 'elling')
+    const mePick = tagPickedUnderArtist({ creatorUserName: 'bananepoep' }, undefined)
+    if (pickMatchesSelection(mePick, null)) pending.delete('a')
+    expect(pending.size).toBe(0)
   })
 })

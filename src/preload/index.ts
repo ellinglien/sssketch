@@ -381,8 +381,12 @@ const api = {
    * in /api/state's `keeps`. */
   reportRemoteKeep: (keepId: string, outcome: RemoteKeepOutcome): Promise<void> =>
     ipcRenderer.invoke('remote-keep-result', keepId, outcome),
-  discoverSetArtist: (artist: string | null, ownUsername: string): Promise<ArtistMode> =>
-    ipcRenderer.invoke('discover-set-artist', artist, ownUsername),
+  discoverSetArtist: (
+    artist: string | null,
+    ownUsername: string,
+    lingering?: string[]
+  ): Promise<ArtistMode> =>
+    ipcRenderer.invoke('discover-set-artist', artist, ownUsername, lingering),
   findRiffForStemPath: (
     stemPath: string
   ): Promise<{
@@ -703,9 +707,12 @@ const api = {
       durationSec: number
     }[],
     bpm: number,
-    barLength: number
+    barLength: number,
+    /** Artists whose stems still play on Discover's rows -- main refuses
+     * the keep while any do (lingeringArtists). */
+    lingering?: string[]
   ): Promise<{ riffCID: string; name: string; duplicate: boolean } | KeepRefused | null> =>
-    ipcRenderer.invoke('save-discovered-rifff', members, bpm, barLength),
+    ipcRenderer.invoke('save-discovered-rifff', members, bpm, barLength, lingering),
   forgetDiscoveredRifff: (riffCID: string): Promise<void> =>
     ipcRenderer.invoke('forget-discovered-rifff', riffCID),
   /** "fetch radio hearts": ell.ing/radio's hearted combos, kept as riffs

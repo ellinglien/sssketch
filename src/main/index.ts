@@ -115,7 +115,8 @@ import { getArtistStemCIDs } from './discoverArtistStems'
 import { KEEP_REFUSED } from '@shared/discoverArtist'
 import { abortArtistIndexWork, getArtistAnalysed, getArtistIndex } from './discoverArtistIndex'
 import {
-  currentArtistMode,
+  keepBlockedForPhone,
+  refusesKeep,
   refusesListenOnly,
   resetDiscoverArtistSession,
   setDiscoverArtistSession
@@ -389,7 +390,7 @@ function startPhoneRemoteOn(address: string): void {
       return {
         ...lastRemoteState,
         loopId: remoteLoop?.currentLoopId() ?? null,
-        listenOnly: currentArtistMode() === 'other',
+        listenOnly: keepBlockedForPhone(),
         keeps: remoteKeeps.results(),
         slots: lastRemoteState.slots.map((slot) => ({
           ...slot,
@@ -409,7 +410,7 @@ function startPhoneRemoteOn(address: string): void {
       }
       mainWindow?.webContents.send('remote-command', command)
     },
-    refusesKeep: () => refusesListenOnly('keep'),
+    refusesKeep: () => refusesKeep(),
     onPairingChanged: (gate) => {
       remotePairingGate = gate
       mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
@@ -805,10 +806,18 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'save-discovered-rifff',
-    (_event, members: DiscoveredMemberInput[], bpm: number, barLength: number) =>
+    (
+      _event,
+      members: DiscoveredMemberInput[],
+      bpm: number,
+      barLength: number,
+      // The artists whose stems are still on Discover's rows, at the moment
+      // of this keep (lingeringArtists). Optional: an older caller sends none.
+      lingering?: unknown
+    ) =>
       // A refusal is KEEP_REFUSED, never null: null still means "nothing
       // was kept", and the renderer has to tell the two apart.
-      refusesListenOnly('keep') ? KEEP_REFUSED : keepDiscovered(members, bpm, barLength)
+      refusesKeep(lingering) ? KEEP_REFUSED : keepDiscovered(members, bpm, barLength)
   )
 
   // "fetch radio hearts" -- ell.ing/radio's hearted combos as kept riffs and
@@ -1395,11 +1404,15 @@ app.whenReady().then(async () => {
     if (id !== null && result !== null) remoteKeeps.finish(id, result)
   })
 
-  ipcMain.handle('discover-set-artist', (_event, artist: unknown, ownUsername: unknown) =>
-    setDiscoverArtistSession({
-      artist: typeof artist === 'string' ? artist : null,
-      ownUsername: typeof ownUsername === 'string' ? ownUsername : ''
-    })
+  ipcMain.handle(
+    'discover-set-artist',
+    (_event, artist: unknown, ownUsername: unknown, lingering?: unknown) =>
+      setDiscoverArtistSession({
+        artist: typeof artist === 'string' ? artist : null,
+        ownUsername: typeof ownUsername === 'string' ? ownUsername : '',
+        // Sanitised in the session (only non-empty strings count).
+        lingering: Array.isArray(lingering) ? (lingering as string[]) : []
+      })
   )
 
   ipcMain.handle('find-riff-for-stem-path', (_event, stemPath: string) =>

@@ -197,7 +197,14 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
     })
     req.on('end', () => {
       try {
-        resolve(raw ? (JSON.parse(raw) as Record<string, unknown>) : {})
+        // Only a JSON OBJECT is a body here: `null`, a number or a list
+        // would otherwise reach a route's `body.x` and throw.
+        const parsed: unknown = raw ? JSON.parse(raw) : {}
+        resolve(
+          typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)
+            ? (parsed as Record<string, unknown>)
+            : {}
+        )
       } catch {
         resolve({})
       }
