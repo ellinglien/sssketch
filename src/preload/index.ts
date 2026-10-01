@@ -13,6 +13,7 @@ import type {
 } from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { DiscoverCandidate } from '../main/discoverCandidates'
+import type { ArtistIndex } from '@shared/discoverArtist'
 import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
@@ -372,6 +373,10 @@ const api = {
       soundSource,
       creator
     ),
+  discoverArtistIndex: (ownUsername: string): Promise<ArtistIndex> =>
+    ipcRenderer.invoke('discover-artist-index', ownUsername),
+  discoverArtistAnalysed: (artist: string): Promise<{ analysed: number; total: number }> =>
+    ipcRenderer.invoke('discover-artist-analysed', artist),
   findRiffForStemPath: (
     stemPath: string
   ): Promise<{

@@ -985,7 +985,7 @@ git commit -m "discover artist: artist stem set filters every pool before its sa
 - Create: `src/main/discoverArtistIndex.ts`, `src/main/discoverArtistIndex.test.ts`
 - Modify: `src/main/index.ts` (new handlers next to `get-discover-candidates`), `src/preload/index.ts`, `vitest.config.ts`
 
-- [ ] **Step 1: Write the failing shared tests (append to `src/shared/discoverArtist.test.ts`)**
+- [x] **Step 1: Write the failing shared tests (append to `src/shared/discoverArtist.test.ts`)**
 
 ```ts
 import {
@@ -1086,12 +1086,12 @@ describe('labels', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/shared/discoverArtist.test.ts`
 Expected: FAIL, missing exports.
 
-- [ ] **Step 3: Implement the shared half (append to `src/shared/discoverArtist.ts`)**
+- [x] **Step 3: Implement the shared half (append to `src/shared/discoverArtist.ts`)**
 
 ```ts
 import { DISCOVERED_JAM_CID } from './discoveredRoom'
@@ -1217,12 +1217,12 @@ Move the `import` to the top of the file.
 
 `Math.floor` is used so that 98.2% never rounds up to a misleading 100%. For bananepoep, 385/31,398 is 1.2%, which reads as `analysed: 1%`.
 
-- [ ] **Step 4: Run the shared tests**
+- [x] **Step 4: Run the shared tests**
 
 Run: `npx vitest run src/shared/discoverArtist.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing main tests**
+- [x] **Step 5: Write the failing main tests**
 
 ```ts
 // src/main/discoverArtistIndex.test.ts
@@ -1325,16 +1325,16 @@ describe('getArtistAnalysed', () => {
 })
 ```
 
-- [ ] **Step 6: Add the CI exclusion (non-optional)**
+- [x] **Step 6: Add the CI exclusion (non-optional)**
 
 In `vitest.config.ts`, add `'src/main/discoverArtistIndex.test.ts',` after `'src/main/discoverArtistStems.test.ts',`.
 
-- [ ] **Step 7: Run it to verify it fails**
+- [x] **Step 7: Run it to verify it fails**
 
 Run: `npx vitest run src/main/discoverArtistIndex.test.ts`
 Expected: FAIL, module not found.
 
-- [ ] **Step 8: Implement `src/main/discoverArtistIndex.ts`**
+- [x] **Step 8: Implement `src/main/discoverArtistIndex.ts`**
 
 ```ts
 // src/main/discoverArtistIndex.ts
@@ -1533,12 +1533,12 @@ export function resetArtistIndexForTests(): void {
 }
 ```
 
-- [ ] **Step 9: Run the main tests**
+- [x] **Step 9: Run the main tests**
 
 Run: `npx vitest run src/main/discoverArtistIndex.test.ts`
 Expected: PASS.
 
-- [ ] **Step 10: IPC handlers, `src/main/index.ts`**
+- [x] **Step 10: IPC handlers, `src/main/index.ts`**
 
 Add the handlers directly after `get-adjacent-discover-candidates` (`:1315`), and import `getArtistIndex, getArtistAnalysed` from `./discoverArtistIndex`.
 
@@ -1561,7 +1561,7 @@ Add the handlers directly after `get-adjacent-discover-candidates` (`:1315`), an
 
 If `Database` is not already imported as a type in `index.ts`, add `import type Database from 'better-sqlite3'`.
 
-- [ ] **Step 11: Preload, `src/preload/index.ts` (after `getAdjacentDiscoverCandidates`)**
+- [x] **Step 11: Preload, `src/preload/index.ts` (after `getAdjacentDiscoverCandidates`)**
 
 ```ts
   discoverArtistIndex: (ownUsername: string): Promise<ArtistIndex> =>
@@ -1572,7 +1572,7 @@ If `Database` is not already imported as a type in `index.ts`, add `import type 
 
 Add `import type { ArtistIndex } from '@shared/discoverArtist'`.
 
-- [ ] **Step 12: Gate and commit**
+- [x] **Step 12: Gate and commit**
 
 Run: `npm run typecheck && npm run lint && npm test`
 Expected: all green.
@@ -1583,6 +1583,28 @@ git add src/shared/discoverArtist.ts src/shared/discoverArtist.test.ts \
   src/main/index.ts src/preload/index.ts vitest.config.ts
 git commit -m "discover artist: search counts, background jammed-with walk, analysed share"
 ```
+
+**As landed:**
+- **Shared half:** exactly as above. The test's mid-file `import` was merged into the file's top import, and `DISCOVERED_JAM_CID`'s import sits at the top of `discoverArtist.ts`.
+- **Jammed-with saved to disk** (the "Decisions after planning" item, which the code above predates):
+  - New `src/main/discoverJammedWithStore.ts` holds `DiscoverJammedWith(User PK, SharedJams, ComputedAt)` and `DiscoverJammedWithMeta(SourceDbKey PK, StemCount, MaxRowid, OwnUsername, ComputedAt)`. There's one meta row per source db, keyed by `db.name` like `DiscoverRiffIndexCacheMeta`.
+  - Only count and MAX(rowid) persist. `writes` is per process and `data_version` per connection, so neither survives a relaunch.
+  - The tables are created lazily on first use, like Task 8's queue, **not** in `riffLibrarySchema.ts`. That's because `riffLibrarySchema.test.ts` lists every own-db table exactly, and the existing tests must not be edited.
+  - Rows load back sorted in JS with `jammedWithFromPairs`'s order (SQLite's BINARY collation isn't `localeCompare`).
+- **`getArtistIndex(ownDb, dbs, ownUsername)`** gains `ownDb` as its first parameter and works in three steps:
+  - It returns a trusted list (from disk or from a finished walk) while every db's Stems signal is current.
+  - Otherwise, on the first look this session for that own username and db set, it serves the saved list with no walk if every source db still reads the saved count and MAX(rowid).
+  - Otherwise it runs the plan's background walk. When the walk lands it saves the result and trusts it. Meanwhile the saved list for the same own username is shown as stale with `jammedWithPending: true`.
+  - If one source db moves, every db is re-walked once in that session, because pairs aren't persisted, only the list.
+- **`getArtistAnalysed`:** prepares its chunk statement once per placeholder count, the same as Task 2's review fix. The `discover-artist-analysed` handler trims the artist and returns `{analysed: 0, total: 0}` when it's blank.
+- **Tests:** the plan's test calls pass a fixture own db. New tests cover:
+  - the list is written once the walk lands;
+  - a relaunch serves it with zero pair pages;
+  - a moved archive shows the stale list, recomputes and re-saves;
+  - another own username or another source-db set is never served;
+  - the tables are created lazily.
+  - The file uses the same pass-through `workCounters` spy.
+- **Gates:** typecheck clean, lint at the 4 pre-existing warnings, 233 files / 3,807 tests green, and `CI=1` skips `discoverArtistIndex.test.ts`. `radioDropOut.test.ts` failed once under full-suite load, then passed 6/6 alone and in a full rerun. It's unrelated.
 
 ---
 

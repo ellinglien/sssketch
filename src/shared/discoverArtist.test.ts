@@ -2,6 +2,12 @@
 import { describe, expect, it } from 'vitest'
 import {
   LISTEN_ONLY_ACTIONS,
+  analysedLabel,
+  jammedWithFromPairs,
+  mergeArtistCounts,
+  suggestArtists,
+  suggestionLabel,
+  type ArtistIndex,
   artistFieldLabel,
   artistMode,
   artistNotice,
@@ -176,5 +182,105 @@ describe('follow-ups (Task 1 review)', () => {
     expect(creatorAllowed('TPJ', 'tpj')).toBe(false)
     expect(rollFilterForArtist('Elling', 'elling', false).artist).toBe('Elling')
     expect([...artistTurnoverIds([{ id: 'a', creator: 'TPJ' }], 'tpj', 'elling')]).toEqual(['a'])
+  })
+})
+
+describe('mergeArtistCounts', () => {
+  it('sums a user across dbs', () => {
+    expect(
+      mergeArtistCounts([
+        [
+          { user: 'tpj', stems: 10 },
+          { user: 'elling', stems: 5 }
+        ],
+        [{ user: 'tpj', stems: 2 }]
+      ])
+    ).toEqual([
+      { user: 'tpj', stems: 12 },
+      { user: 'elling', stems: 5 }
+    ])
+  })
+})
+
+describe('jammedWithFromPairs', () => {
+  const pairs: [string, string][] = [
+    ['j1', 'elling'],
+    ['j1', 'tpj'],
+    ['j1', 'bananepoep'],
+    ['j2', 'elling'],
+    ['j2', 'tpj'],
+    ['j3', 'honeydisco'], // a jam elling is not in
+    ['shared:feed', 'elling'],
+    ['shared:feed', 'stranger'], // not a jam
+    ['discovered', 'elling'],
+    ['discovered', 'keptfrom'] // kept groups, not a jam
+  ]
+  it('orders users by shared jams, then name, excluding self and non-jams', () => {
+    expect(jammedWithFromPairs(pairs, 'elling')).toEqual([
+      { user: 'tpj', sharedJams: 2 },
+      { user: 'bananepoep', sharedJams: 1 }
+    ])
+  })
+  it('is empty with no own username', () => {
+    expect(jammedWithFromPairs(pairs, '')).toEqual([])
+  })
+})
+
+describe('suggestArtists', () => {
+  const index: ArtistIndex = {
+    counts: [
+      { user: 'elling', stems: 66534 },
+      { user: 'seasickcookie', stems: 26828 },
+      { user: 'bananepoep', stems: 31398 },
+      { user: 'seaweed', stems: 12 },
+      { user: 'oversea', stems: 400 }
+    ],
+    jammedWith: [
+      { user: 'seaweed', sharedJams: 9 },
+      { user: 'bananepoep', sharedJams: 4 }
+    ],
+    jammedWithPending: false
+  }
+  it('before typing: me, then people you have jammed with, in that order', () => {
+    expect(suggestArtists(index, '', 'elling')).toEqual([
+      { kind: 'me' },
+      { kind: 'user', user: 'seaweed', stems: 12, sharedJams: 9 },
+      { kind: 'user', user: 'bananepoep', stems: 31398, sharedJams: 4 }
+    ])
+  })
+  it('before typing, while jammed-with is still being built: by stem count', () => {
+    const pending = { ...index, jammedWith: null, jammedWithPending: true }
+    expect(suggestArtists(pending, '', 'elling', 2)).toEqual([
+      { kind: 'me' },
+      { kind: 'user', user: 'bananepoep', stems: 31398, sharedJams: null },
+      { kind: 'user', user: 'seasickcookie', stems: 26828, sharedJams: null }
+    ])
+  })
+  it('typing: prefix matches first, then substring, each by stem count; never self', () => {
+    expect(
+      suggestArtists(index, 'SEA', 'elling').map((s) => (s.kind === 'me' ? 'me' : s.user))
+    ).toEqual(['seasickcookie', 'seaweed', 'oversea'])
+  })
+  it('typing "me" or part of the own name offers me first', () => {
+    expect(suggestArtists(index, 'me', 'elling')[0]).toEqual({ kind: 'me' })
+    expect(suggestArtists(index, 'ell', 'elling')[0]).toEqual({ kind: 'me' })
+  })
+})
+
+describe('labels', () => {
+  it('formats suggestions and the analysed share', () => {
+    expect(
+      suggestionLabel(
+        { kind: 'user', user: 'seasickcookie', stems: 26828, sharedJams: null },
+        'elling'
+      )
+    ).toBe('seasickcookie · 26,828')
+    expect(suggestionLabel({ kind: 'me' }, 'elling')).toBe('me · elling')
+    expect(suggestionLabel({ kind: 'me' }, '')).toBe('me')
+    expect(analysedLabel(385, 31398)).toBe('analysed: 1%')
+    expect(analysedLabel(1, 31398)).toBe('analysed: <1%')
+    expect(analysedLabel(0, 31398)).toBe('analysed: 0%')
+    expect(analysedLabel(0, 0)).toBe('analysed: 0%')
+    expect(analysedLabel(65357, 66534)).toBe('analysed: 98%')
   })
 })

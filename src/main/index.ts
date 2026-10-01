@@ -106,6 +106,8 @@ import type { RemoteCommand, RemoteState } from '@shared/remoteState'
 import type { PairingGate } from '@shared/remoteAuth'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
 import { getArtistStemCIDs } from './discoverArtistStems'
+import { getArtistAnalysed, getArtistIndex } from './discoverArtistIndex'
+import type Database from 'better-sqlite3'
 import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
@@ -1324,6 +1326,24 @@ app.whenReady().then(async () => {
     ) =>
       getAdjacentDiscoverCandidates(centerRiffCID, kinds, soundSource, creator?.trim() || undefined)
   )
+
+  // Discover artist mode (2026-10-01): the picker's data. The dbs are the
+  // ones Discover rolls from -- the same distinct set get-discover-candidates
+  // derives from listJamsWithDb.
+  function discoverSourceDbs(): Database.Database[] {
+    return [...new Set(listJamsWithDb().map(({ db }) => db))]
+  }
+
+  ipcMain.handle('discover-artist-index', (_event, ownUsername: string) =>
+    getArtistIndex(openOwnRiffLibraryDb(), discoverSourceDbs(), ownUsername)
+  )
+
+  ipcMain.handle('discover-artist-analysed', (_event, artist: string) => {
+    const name = artist?.trim() || undefined
+    return name
+      ? getArtistAnalysed(openOwnRiffLibraryDb(), discoverSourceDbs(), name)
+      : { analysed: 0, total: 0 }
+  })
 
   ipcMain.handle('find-riff-for-stem-path', (_event, stemPath: string) =>
     findRiffForStemPath(stemPath)

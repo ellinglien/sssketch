@@ -5,6 +5,8 @@
 // only. Every rule the renderer and main both need lives here, so the
 // dimmed buttons and the main-process guards read ONE list.
 
+import { DISCOVERED_JAM_CID } from './discoveredRoom'
+
 export type ArtistMode = 'own' | 'other'
 
 /** `artist` null is `me`. With no own username, `me` is still today's
@@ -128,4 +130,123 @@ export function nextTurnoverSlotId(
   pending: ReadonlySet<string>
 ): string | null {
   return eligible.find((id) => pending.has(id)) ?? null
+}
+
+export interface ArtistCount {
+  user: string
+  stems: number
+}
+export interface JammedWith {
+  user: string
+  sharedJams: number
+}
+/** What the picker gets from main. `jammedWith` is null until main's
+ * background pairs walk finishes (~15 s on the USB archive, once per
+ * archive change); `jammedWithPending` says whether one is running. */
+export interface ArtistIndex {
+  counts: ArtistCount[]
+  jammedWith: JammedWith[] | null
+  jammedWithPending: boolean
+}
+
+export function mergeArtistCounts(lists: readonly (readonly ArtistCount[])[]): ArtistCount[] {
+  const total = new Map<string, number>()
+  for (const list of lists) {
+    for (const { user, stems } of list) total.set(user, (total.get(user) ?? 0) + stems)
+  }
+  return [...total].map(([user, stems]) => ({ user, stems }))
+}
+
+/** Not jams: the Shared Feed's synthetic jams and kept groups. */
+function isRealJam(jamCID: string): boolean {
+  return !jamCID.startsWith('shared:') && jamCID !== DISCOVERED_JAM_CID
+}
+
+/** "People you've jammed with" (spec §1): users with stems in jams where
+ * the own user also has stems, by number of shared jams, then name. */
+export function jammedWithFromPairs(
+  pairs: Iterable<readonly [jamCID: string, user: string]>,
+  ownUsername: string
+): JammedWith[] {
+  const own = ownUsername.trim()
+  if (own === '') return []
+  const usersByJam = new Map<string, Set<string>>()
+  for (const [jam, user] of pairs) {
+    if (!isRealJam(jam)) continue
+    let users = usersByJam.get(jam)
+    if (!users) {
+      users = new Set()
+      usersByJam.set(jam, users)
+    }
+    users.add(user)
+  }
+  const shared = new Map<string, number>()
+  for (const users of usersByJam.values()) {
+    if (!users.has(own)) continue
+    for (const user of users) if (user !== own) shared.set(user, (shared.get(user) ?? 0) + 1)
+  }
+  return [...shared]
+    .map(([user, sharedJams]) => ({ user, sharedJams }))
+    .sort((a, b) => b.sharedJams - a.sharedJams || a.user.localeCompare(b.user))
+}
+
+export type ArtistSuggestion =
+  { kind: 'me' } | { kind: 'user'; user: string; stems: number; sharedJams: number | null }
+
+const SUGGESTION_LIMIT = 12
+
+export function suggestArtists(
+  index: ArtistIndex,
+  query: string,
+  ownUsername: string,
+  limit = SUGGESTION_LIMIT
+): ArtistSuggestion[] {
+  const q = query.trim().toLowerCase()
+  const own = ownUsername.trim()
+  const stemsOf = new Map(index.counts.map((c) => [c.user, c.stems]))
+  const sharedOf = new Map((index.jammedWith ?? []).map((j) => [j.user, j.sharedJams]))
+  const toSuggestion = (user: string): ArtistSuggestion => ({
+    kind: 'user',
+    user,
+    stems: stemsOf.get(user) ?? 0,
+    sharedJams: sharedOf.get(user) ?? null
+  })
+  const me: ArtistSuggestion = { kind: 'me' }
+  if (q === '') {
+    const ordered =
+      index.jammedWith !== null
+        ? index.jammedWith.map((j) => j.user)
+        : [...index.counts]
+            .sort((a, b) => b.stems - a.stems || a.user.localeCompare(b.user))
+            .map((c) => c.user)
+    return [
+      me,
+      ...ordered
+        .filter((u) => u !== own)
+        .slice(0, limit)
+        .map(toSuggestion)
+    ]
+  }
+  const matches = index.counts.filter((c) => c.user !== own && c.user.toLowerCase().includes(q))
+  const rank = (user: string): number => (user.toLowerCase().startsWith(q) ? 0 : 1)
+  matches.sort(
+    (a, b) => rank(a.user) - rank(b.user) || b.stems - a.stems || a.user.localeCompare(b.user)
+  )
+  const users = matches.slice(0, limit).map((c) => toSuggestion(c.user))
+  const offersMe = 'me'.startsWith(q) || (own !== '' && own.toLowerCase().includes(q))
+  return offersMe ? [me, ...users] : users
+}
+
+export function suggestionLabel(s: ArtistSuggestion, ownUsername: string): string {
+  if (s.kind === 'me') {
+    const own = ownUsername.trim()
+    return own !== '' ? `me · ${own}` : 'me'
+  }
+  return `${s.user} · ${s.stems.toLocaleString('en-US')}`
+}
+
+export function analysedLabel(analysed: number, total: number): string {
+  if (total <= 0 || analysed <= 0) return 'analysed: 0%'
+  const pct = (analysed / total) * 100
+  return pct < 1 ? 'analysed: <1%' : `analysed: ${Math.floor(pct)}%`
 }
