@@ -46,6 +46,7 @@ import {
   type ManualArrival
 } from '@shared/radioManualChanges'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
+import { stemsToAvoid } from '@shared/discoverPickAvoid'
 import { DEFAULT_DISCOVER_CHAOS, rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { heartFetchLabel } from '@shared/radioHearts'
@@ -4867,8 +4868,16 @@ export function DiscoverPanel({
    * rerollGenerationRef claim, the rolled counter and the per-slot
    * spinner; returns null when a NEWER call for the same slot superseded
    * this one (the caller must then write nothing) or when the IPC call
-   * genuinely failed. */
-  async function pickForSlot(id: string, kinds: DiscoverSlotKind[]): Promise<SlotPick | null> {
+   * genuinely failed.
+   *
+   * `avoidOwnStem`: a RADIO re-pick (armRadioPick, a course change) also
+   * steers away from the row's own current stem -- stemsToAvoid's `own`,
+   * the web radio's guard. Manual rolls leave it off. */
+  async function pickForSlot(
+    id: string,
+    kinds: DiscoverSlotKind[],
+    { avoidOwnStem = false }: { avoidOwnStem?: boolean } = {}
+  ): Promise<SlotPick | null> {
     // Claimed BEFORE the first await -- see rerollGenerationRef's own doc
     // comment above. Any earlier call for this SAME slot id that's still
     // awaiting getDiscoverCandidates when THIS call resolves is now stale
@@ -4900,13 +4909,16 @@ export function DiscoverPanel({
       console.log(
         `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- calling getDiscoverCandidates`
       )
-      // Stems already on OTHER slots right now. `slots` here is this
+      // Stems already on OTHER slots right now -- and, for a radio
+      // re-pick, this row's own (stemsToAvoid). `slots` here is this
       // function's own closure from whenever it was called (addSlot or
       // rerollSlot) -- a slightly stale read if another slot changed mid-
       // request is an acceptable imprecision for what's fundamentally a
       // variety heuristic, not a correctness guarantee.
-      const usedElsewhere = new Set(
-        slots.filter((s) => s.id !== id && s.candidate).map((s) => s.candidate?.stemCID)
+      const usedElsewhere = stemsToAvoid(
+        slots.map((s) => ({ id: s.id, stemCID: s.candidate?.stemCID ?? null })),
+        id,
+        { own: avoidOwnStem }
       )
       // The source dial: this roll's source is drawn here, and the other
       // source is tried only if the drawn one has nothing NEW for this slot
@@ -5656,7 +5668,7 @@ export function DiscoverPanel({
     if (slotId === null) return
     const slot = slotsRef.current.find((s) => s.id === slotId)
     if (!slot) return
-    const pick = await pickForSlot(slotId, slot.kinds)
+    const pick = await pickForSlot(slotId, slot.kinds, { avoidOwnStem: true })
     if (radioArmTokenRef.current !== myArm) return
     if (pick === null || pick.candidate === null) return
     if (!radioOnRef.current) return
@@ -5875,7 +5887,7 @@ export function DiscoverPanel({
       eligible.map(async (id): Promise<{ slotId: string; pick: SlotPick } | null> => {
         const slot = slotsRef.current.find((s) => s.id === id)
         if (!slot) return null
-        const pick = await pickForSlot(id, slot.kinds)
+        const pick = await pickForSlot(id, slot.kinds, { avoidOwnStem: true })
         if (pick === null || pick.candidate === null) return null
         // A null resolve (network hiccup, since-deleted riff) deletes its
         // own cache entry; the pick still commits and that one row simply
