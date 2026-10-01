@@ -103,7 +103,7 @@ namespace sssketch
         void sendJson(const juce::var& payload);
         /** Message-thread API. Copies the published map, applies
          * `mutator` to the COPY, publishes it, waits out the grace period,
-         * and only then hands the old map to a background deleter. The
+         * and only then deletes the old map, inline on the message thread. The
          * live map is never written to -- it used to be: entries were
          * moved out of it, so a concurrent channelFor could find a loaded
          * slot already emptied, and the old map was freed with no grace
@@ -111,8 +111,9 @@ namespace sssketch
         void publishChannels(std::function<void(std::unordered_map<juce::String, std::shared_ptr<SharedAudioChannel>>&)> mutator);
 
         /** Publishes `next`, waits for every reader that could still hold
-         * the old map to leave its ReadScope, then deletes the old map on
-         * a background thread. The one place a map is ever retired. */
+         * the old map to leave its ReadScope (at most one bridged slot's
+         * process(), whose bridge wait is capped at 5ms), then deletes the
+         * old map inline. The one place a map is ever retired. */
         void replacePublished(const std::unordered_map<juce::String, std::shared_ptr<SharedAudioChannel>>* next);
 
         /** Fires every 500ms (see the constructor) to fail out any pending

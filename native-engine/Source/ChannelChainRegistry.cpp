@@ -1,6 +1,5 @@
 // native-engine/Source/ChannelChainRegistry.cpp
 #include "ChannelChainRegistry.h"
-#include <thread>
 
 namespace sssketch
 {
@@ -49,7 +48,9 @@ namespace sssketch
         // before the exchange may still be walking it, or running process()
         // on one of its chains under a ReadScope. Wait those out here, on
         // the message thread, before anything frees it -- see the class doc
-        // comment. Bounded by one reader scope, i.e. one renderBlock call.
+        // comment. Bounded by the longest reader scope already in progress:
+        // one renderBlock call, which includes every channel plugin's own
+        // process() and any bridged slot's wait on the bridge.
         grace.waitForReaders();
         // Any channel from `current` NOT reused above still has its
         // shared_ptr held only by `old` (never copied into `next`) -- once
@@ -58,11 +59,12 @@ namespace sssketch
         // stays alive regardless, since `next` now holds its own copy of
         // the shared_ptr (refcount >= 1 independent of `old`). The actual
         // PluginChain destructors may do real work (closing editor windows,
-        // tearing down plugin instances), so hand the whole map off to a
-        // background thread regardless, matching this codebase's
-        // established convention of never doing that work inline on a
-        // thread that could be the audio thread.
-        std::thread([old]() { delete old; }).detach();
+        // tearing down plugin instances). That work used to go to a
+        // detached thread; now that the grace period has passed and no
+        // reader can reach `old`, it runs right here instead, on the
+        // message thread -- where editor windows have to be torn down
+        // anyway, and never on the audio thread.
+        delete old;
     }
 
     void ChannelChainRegistry::setBpm(double bpm)

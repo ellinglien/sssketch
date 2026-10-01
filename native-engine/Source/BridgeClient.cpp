@@ -1,6 +1,5 @@
 // native-engine/Source/BridgeClient.cpp
 #include "BridgeClient.h"
-#include <thread>
 
 namespace sssketch
 {
@@ -119,12 +118,15 @@ namespace sssketch
         // Nothing can load `old` any more, but the audio thread may still
         // be inside channelFor on it, or using a channel it got from it
         // under a ReadScope. Wait those out before anything frees it.
-        // Bounded by one reader scope: one PluginChain::process call,
-        // whose bridge wait is itself capped at 5ms.
+        // Bounded by the longest reader scope already in progress: one
+        // bridged slot inside PluginChain::process, whose wait on the
+        // bridge is itself capped at 5ms.
         grace.waitForReaders();
-        // Deleting a channel unlinks shared memory and semaphores, so keep
-        // that off the message thread as before.
-        std::thread([old]() { delete old; }).detach();
+        // Past the grace period nothing can reach `old`, so delete it
+        // inline: channel teardown (unmapping, unlinking the shared memory
+        // and semaphores) stays on the message thread with every other
+        // control-plane operation, instead of a detached thread.
+        delete old;
     }
 
     void BridgeClient::loadPlugin(

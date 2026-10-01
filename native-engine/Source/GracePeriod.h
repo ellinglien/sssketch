@@ -23,7 +23,9 @@ namespace sssketch
      * the audio thread. Scopes nest.
      *
      * Writer side: waits (yielding) for at most the longest reader scope
-     * already in progress. Never call it from the audio thread, and never
+     * already in progress -- for the audio thread that is a whole
+     * renderBlock or PluginChain::process call, hosted plugins' own
+     * process() and bridged slots' waits on the bridge included. Never call it from the audio thread, and never
      * while the calling thread itself holds a ReadScope on the same
      * GracePeriod -- it would wait for itself forever. Writers must be
      * serialized against each other by the caller (both users publish only
@@ -78,6 +80,6 @@ namespace sssketch
         // mutable: entering a scope is logically a read, and const methods
         // (e.g. ChannelChainRegistry::knownChannelIds) take scopes too.
         mutable std::atomic<unsigned> phase { 0 };
-        mutable std::atomic<int> readers[2] { 0, 0 };
+        mutable std::atomic<int> readers[2] {};
     };
 }

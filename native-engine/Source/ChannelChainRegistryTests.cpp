@@ -32,6 +32,29 @@ namespace sssketch
             float gain;
         };
 
+        // Counts its own destructions, so a test can tell whether (and when) a
+        // dropped channel's chain was actually torn down.
+        class TrackedTestPlugin : public GainTestPlugin
+        {
+        public:
+            explicit TrackedTestPlugin(std::atomic<int>& d) : GainTestPlugin(1.0f), destroyed(d) {}
+            ~TrackedTestPlugin() override { destroyed.fetch_add(1); }
+
+        private:
+            std::atomic<int>& destroyed;
+        };
+
+        PluginChain::Instantiator trackedInstantiator(std::atomic<int>& destroyed)
+        {
+            return [&destroyed](const juce::String& path, double, int, juce::String& errorOut) -> std::unique_ptr<juce::AudioProcessor>
+            {
+                errorOut = {};
+                if (path.isEmpty())
+                    return nullptr;
+                return std::make_unique<TrackedTestPlugin>(destroyed);
+            };
+        }
+
         PluginChain::Instantiator fakeInstantiator()
         {
             return [](const juce::String& path, double, int, juce::String& errorOut) -> std::unique_ptr<juce::AudioProcessor>
@@ -90,6 +113,21 @@ namespace sssketch
                     registry.updateChannelSet({ "ch-2" });
                     expect(registry.chainFor("ch-1") == nullptr);
                     expect(registry.chainFor("ch-2") != nullptr);
+                }
+
+                beginTest("a dropped channel's chain is torn down before updateChannelSet returns, on the calling thread");
+                {
+                    // No detached deleter any more: once the grace period has passed the old
+                    // map is deleted inline, so teardown is synchronous and on the message
+                    // thread.
+                    std::atomic<int> destroyed { 0 };
+                    ChannelChainRegistry registry(trackedInstantiator(destroyed));
+                    registry.updateChannelSet({ "ch-1", "ch-2" });
+                    juce::String err;
+                    expect(registry.chainFor("ch-1")->loadPluginSync(0, "some-plugin", 44100.0, 512, err));
+                    expect(registry.chainFor("ch-2")->loadPluginSync(0, "some-plugin", 44100.0, 512, err));
+                    registry.updateChannelSet({ "ch-2" });
+                    expectEquals(destroyed.load(), 1);
                 }
 
                 beginTest("concurrent chainFor reads never see a torn map while updateChannelSet runs repeatedly");

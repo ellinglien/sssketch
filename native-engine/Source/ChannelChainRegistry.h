@@ -31,11 +31,13 @@ namespace sssketch
      * the "stress:" tests under AddressSanitizer. Every read now happens
      * inside a ReadScope (see below), and updateChannelSet waits for a
      * grace period -- every reader that could still hold the old map has
-     * left its scope -- before handing the old map to the deleter thread.
-     * The reader side is two atomic increments and one atomic load: it
-     * never blocks, allocates or frees. Only the writer (message thread)
-     * ever waits, for at most the length of one reader scope (one
-     * renderBlock call).
+     * left its scope -- and then deletes the old map itself, on the
+     * message thread. The reader side is two atomic increments and one
+     * atomic load: it never blocks, allocates or frees. Only the writer
+     * (message thread) ever waits, for at most the longest reader scope
+     * already in progress: one renderBlock call, which includes every
+     * channel plugin's own process() and any bridged slot's wait on the
+     * bridge.
      *
      * Map values are shared_ptr, not unique_ptr, deliberately: reusing an
      * existing channel's chain across an updateChannelSet call means
@@ -80,8 +82,9 @@ namespace sssketch
         };
 
         /** Message-thread API. See class doc comment. Blocks for the grace
-         * period (at most one in-flight reader scope) before retiring the
-         * old map, so must never be called from the audio thread. */
+         * period (at most one in-flight renderBlock, plugin process() and
+         * bridge waits included) before deleting the old map inline, so
+         * must never be called from the audio thread. */
         void updateChannelSet(const std::vector<juce::String>& channelIds);
 
         /** Message-thread API: forwards the project tempo to every currently
