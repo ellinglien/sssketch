@@ -36,7 +36,7 @@ namespace sssketch
                 expectWithinAbsoluteError(metronomeSampleAt(0.1, secPerBeat), 0.0f, 1.0e-6f);
             }
 
-            beginTest("envelope decays — a sample right at the beat is louder than one just before the click ends");
+            beginTest("envelope decays -- a sample right at the beat is louder than one just before the click ends");
             {
                 const float atStart = std::abs(metronomeSampleAt(0.001, secPerBeat));
                 const float nearEnd = std::abs(metronomeSampleAt(0.028, secPerBeat));
