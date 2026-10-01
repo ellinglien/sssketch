@@ -271,8 +271,9 @@ No sound changes in this task.
   - Native Faust 2.88.0 from Homebrew, `brew pin`ned. Of faustwasm 0.17.0–0.18.5, 0.18.3 and 0.18.4 bundle libfaust 2.88.0; the web is pinned to **0.18.4**. The re-pin gate passed: the seeded golden input through each committed wasm, before and after, is bit-identical for saturate, glue, pump and truepeak, and within 2.4e-7 for reverb.
   - The compile line gained two options beyond Step 6's: `-fm arch` (the math functions are `fast_<fn>f`, defined in `FaustArch.h` in double precision rounded to float, as the wasm gets them from JS `Math`) and `-fp` (full parentheses: without it the C++ printer drops the brackets of a long sum and C++ adds left to right, while the wasm keeps Faust's order; truepeak came out 1.4e-6 off). With both, native matches the web **bit for bit** for saturate, glue, pump and truepeak, and within 2.4e-7 for reverb (its `sin`).
   - The bases live in `FaustArch.h`, which `arch.cpp` includes, so `FaustStage.h` can use them without the generated code. The generated headers are included by one TU, `dsp/faust/FaustDsps.cpp` (`makeFaustDsp(kind)`), compiled `-w -ffp-contract=off`.
-  - **`pump.dsp` has 8 inputs, not 4.** `duckDb`'s `-(...)` is a partial application (`_ - x`), so each use of the duck leaves a free input: program L R, key L R, then four more. The web connects a 4-channel merge, which Web Audio's upmix pads with silence, so it works. `FaustStage::process` feeds silence to any input the caller doesn't supply, the same way. A fix in the `.dsp` (`0 - (...)`) would make it 4 in without changing the sound; not done here.
-  - Golden vectors: radio's `scripts/golden-vectors.mjs` runs `faustProcessor.js` itself in Node. `test/golden/` holds `programme.f32`, `key.f32` (2 s, 48 kHz, planar float32), `<name>.out.f32` and `manifest.json`. `FaustStageTests` reads them via a compile definition (`SSSKETCH_GOLDEN_DIR`, overridable from the environment).
+  - **`pump.dsp` was 8 inputs, now 4.** `duckDb`'s `-(...)` was a partial application (`_ - x`), leaving free inputs the web's upmix fed with silence. It is now `0 - (...)`: 4 inputs, one `duck` bargraph, and the same output to the byte (the re-rendered `pump.out.f32` is identical). `FaustStage::process` still feeds silence to any input a caller doesn't supply.
+  - Golden vectors: radio's `scripts/golden-vectors.mjs` runs `faustProcessor.js` itself in Node. `test/golden/` holds `programme.f32`, `key.f32` (2 s, 48 kHz, planar float32), `<name>.out.f32` and `manifest.json`. `FaustStageTests` finds them from the executable's location (`$SSSKETCH_GOLDEN_DIR` first); no source path is compiled in.
+  - Checks: CI runs only the hash test (each `.dsp` against line 2 of its header and the golden manifest); the regenerate-and-compare drift test (needs `faust`) and `FaustStageTests` run locally. Radio's `deploy/deploy-page.sh` runs its `buildFaust.test.ts` before building (not for `RADIO_SRC` rollbacks) and counts sssketch's `native-engine/Source/dsp/faust` in its dirty check.
 
 - [x] **Step 1. Install and pin the native compiler.** `brew install faust`, then `faust --version`; expect 2.88.0. Then `brew pin faust`, so an upgrade can't move it under the generated code. Record the exact version string in `native-engine/Source/dsp/faust/FAUST_VERSION`.
 - [x] **Step 2. Match the web to it.**
@@ -293,9 +294,9 @@ No sound changes in this task.
   - It feeds a fixed, seeded input: 2 s of a burst, sine and noise programme, plus a seeded kick key for `pump`.
   - Parameters stay at their defaults.
   - It writes little-endian float32 in and out files into sssketch `native-engine/test/golden/`.
-- [x] **Step 5. Failing native test.** `FaustStageTests`, for each DSP:
-  - the golden input through `FaustStage` in blocks of 1, 64, 512 and a random split matches the golden output to max abs error ≤ 1e-6 (the compilers match);
-  - the block splits are bit-identical to each other;
+- [x] **Step 5. Failing native test.** `FaustStageTests`, for each DSP, run with `cd native-engine && cmake --build build && build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine --test`:
+  - the golden input through `FaustStage` in 128-sample blocks matches the golden output: **bit-identical (memcmp) for saturate, glue, pump and truepeak; max abs error ≤ 5e-7 for reverb** (its per-sample `sin`); and the same again, to the bit, under `juce::ScopedNoDenormals`;
+  - blocks of 1, 64, 512 and a random split are bit-identical to the 128-sample render;
   - `latencySamples()` reads `latency_samples` (truepeak 75);
   - `setParam("/truepeak/ceiling", …)` reaches its zone;
   - the meters (`/glue/gr`, `/pump/duck`, `/truepeak/gr`) can be read.

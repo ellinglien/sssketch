@@ -104,15 +104,14 @@ target_sources(sssketch_engine PRIVATE ${SSSKETCH_VENDORED_SOURCES})
 # drift-checked by scripts/build-faust-cpp.mjs and its test -- see Source/dsp/faust/LICENSES.md).
 # Generated code, so -w like zita; included by exactly one TU, FaustDsps.cpp. -ffp-contract=off
 # keeps the compiler from fusing a*b+c into an FMA, which the web's wasm (the golden vectors in
-# test/golden, FaustStageTests) never does.
+# test/golden, FaustStageTests) never does. NO -ffast-math here, or anywhere the Faust code is
+# compiled (nor -Ofast): it licenses reassociation and approximate math, which would break the
+# bit-for-bit match with the web that FaustStageTests pins.
 set(SSSKETCH_FAUST_GENERATED_SOURCES
   Source/dsp/faust/FaustDsps.cpp
 )
 set_source_files_properties(${SSSKETCH_FAUST_GENERATED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w;-ffp-contract=off")
 target_sources(sssketch_engine PRIVATE ${SSSKETCH_FAUST_GENERATED_SOURCES})
-# FaustStageTests reads the golden vectors from the source tree (or $SSSKETCH_GOLDEN_DIR).
-set_source_files_properties(Source/FaustStageTests.cpp PROPERTIES
-  COMPILE_DEFINITIONS "SSSKETCH_GOLDEN_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/test/golden\"")
 
 target_sources(sssketch_engine PRIVATE
   Source/Main.cpp

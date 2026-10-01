@@ -27,8 +27,9 @@ lp150 = *(1 - c) : + ~ *(c) with { c = exp(-2 * PI * 150 / SR); };
 // a one-pole that rises at `up` and falls at `down` (seconds)
 follow(up, down) = (f ~ _) with { f(prev, v) = select2(v > prev, v + (prev - v) * coef(down), v + (prev - v) * coef(up)); };
 key(kl, kr) = max(abs(kl : lp150 : lp150), abs(kr : lp150 : lp150)) : follow(0.001, 0.03);
-// the duck as a positive amount of dB, followed: in at ATT, back out at REL
-duckDb(e) = -(DEPTH * min(1, max(0, (20 * log10(max(e, 1e-6)) - LOW) / (HIGH - LOW))) : follow(ATT, REL));
+// the duck: a positive amount of dB, followed (in at ATT, back out at REL), negated. `0 - (...)`,
+// not `-(...)`: Faust reads the latter as `_ - (...)`, a partial application with a free input
+duckDb(e) = 0 - (DEPTH * min(1, max(0, (20 * log10(max(e, 1e-6)) - LOW) / (HIGH - LOW))) : follow(ATT, REL));
 meter(d) = attach(d, d : hbargraph("duck [unit:dB]", -12, 0));
 
 process(pl, pr, kl, kr) = pl * g, pr * g

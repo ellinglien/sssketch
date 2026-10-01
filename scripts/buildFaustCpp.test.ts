@@ -1,9 +1,11 @@
+import { createHash } from 'node:crypto'
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterAll, describe, expect, it } from 'vitest'
 import {
   dspNames,
+  FAUST_DIR,
   GENERATED_DIR,
   generateAll,
   installedVersion,
@@ -13,7 +15,9 @@ import {
 const version = installedVersion()
 if (version === null) {
   console.warn(
-    `buildFaustCpp.test.ts: skipped -- no \`faust\` on PATH (want ${PINNED_VERSION}: brew install faust && brew pin faust)`
+    `buildFaustCpp.test.ts: the regenerate-and-compare drift check is skipped -- no \`faust\` on PATH. ` +
+      `Expected in CI (its runners have no faust): CI checks the .dsp hashes only; the full drift check and ` +
+      `the bit-exact FaustStageTests run locally (want faust ${PINNED_VERSION}: brew install faust && brew pin faust)`
   )
 }
 
@@ -50,3 +54,26 @@ describe.skipIf(version === null)(
     })
   }
 )
+
+// Needs no compiler, so it runs in CI too: each .dsp is the one the committed C++ was generated
+// from (line 2 of generated/<name>.h) and the one the golden vectors were rendered from
+// (native-engine/test/golden/manifest.json). An edited .dsp without a regenerate fails here.
+describe('the .dsp files, the generated C++ and the golden vectors agree (hashes; no faust needed)', () => {
+  const sha = (p: string): string => createHash('sha256').update(readFileSync(p)).digest('hex')
+  const manifest = JSON.parse(
+    readFileSync(join(FAUST_DIR, '..', '..', '..', 'test', 'golden', 'manifest.json'), 'utf8')
+  ) as { dsps: Record<string, { dspSha256: string }> }
+
+  it('every .dsp has a header and a golden render', () => {
+    expect(Object.keys(manifest.dsps).sort()).toEqual(dspNames())
+  })
+
+  for (const name of dspNames()) {
+    it(`${name}.dsp`, () => {
+      const dsp = sha(join(FAUST_DIR, `${name}.dsp`))
+      const line2 = readFileSync(join(GENERATED_DIR, `${name}.h`), 'utf8').split('\n')[1]
+      expect(/sha256 ([0-9a-f]{64})/.exec(line2)?.[1], `generated/${name}.h line 2`).toBe(dsp)
+      expect(manifest.dsps[name]?.dspSha256, 'manifest.json').toBe(dsp)
+    })
+  }
+})

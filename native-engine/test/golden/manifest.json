@@ -21,17 +21,13 @@
         "programme.L",
         "programme.R",
         "key.L",
-        "key.R",
-        "zero",
-        "zero",
-        "zero",
-        "zero"
+        "key.R"
       ],
       "outputs": 2,
       "faust": "2.88.0",
       "compileOptions": "-lang wasm-i -fpga-mem-th 4 -ct 1 -es 1 -mcd 16 -mdd 1024 -mdy 33 -single -ftz 2",
-      "dspSha256": "f6f7a8fa14b2a63f6b09b9b885c7c518f1d90f160349de8a152ef022ae06f6c8",
-      "wasmSha256": "29629f4a3dd196becedfb78f18f22be8ef6330b0ef3cd0ecfacc913e6bfe65de"
+      "dspSha256": "3a591476e8f39531dc575c5f742a66d6d6f1156af7a9278ca2bb7fc8a897ee3f",
+      "wasmSha256": "726d53a6b9e1c34b2824b4ec643d4f8e498f9fdb7c1c749f30da94f6fc84e928"
     },
     "reverb": {
       "inputs": [

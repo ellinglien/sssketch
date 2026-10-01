@@ -90,7 +90,6 @@ namespace sssketch
 
     const FaustStage::Zone* FaustStage::find(std::string_view address) const
     {
-        // the first match: pump.dsp declares its duck meter twice, once per output, same value
         for (auto& z : zones)
             if (z.address == address) return &z;
         return nullptr;

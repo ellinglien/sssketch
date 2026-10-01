@@ -9,17 +9,14 @@
 // saturate, glue, pump and truepeak matched bit for bit, reverb within 2.4e-7 (its sin: Apple's
 // libm against V8's).
 #include "FaustStage.h"
+#include <juce_audio_basics/juce_audio_basics.h>
 #include <juce_core/juce_core.h>
+#include <algorithm>
 #include <cmath>
 #include <cstdlib>
-#include <algorithm>
 #include <cstring>
 #include <random>
 #include <vector>
-
-#ifndef SSSKETCH_GOLDEN_DIR
-#define SSSKETCH_GOLDEN_DIR ""
-#endif
 
 namespace sssketch
 {
@@ -27,12 +24,25 @@ namespace sssketch
     {
         constexpr double kRate = 48000.0;
         constexpr int kFrames = 96000;
-        constexpr double kGoldenTolerance = 1.0e-6;
+        /** How far each DSP may sit from the web's output. Bit-identical (memcmp) for all but
+         * reverb, whose per-sample sin (Apple's libm here, V8's in the web) left it 2.4e-7 off on
+         * 2026-10-01. */
+        constexpr double kReverbTolerance = 5.0e-7;
 
+        /** $SSSKETCH_GOLDEN_DIR, else found from the executable: the first ancestor of the
+         * binary (native-engine/build/.../sssketch-engine.app/Contents/MacOS/) holding
+         * test/golden/manifest.json. No source path is compiled into the binary. */
         juce::File goldenDir()
         {
             if (const char* env = std::getenv("SSSKETCH_GOLDEN_DIR")) return juce::File(env);
-            return juce::File(SSSKETCH_GOLDEN_DIR);
+            auto dir = juce::File::getSpecialLocation(juce::File::currentExecutableFile).getParentDirectory();
+            for (int up = 0; up < 12 && dir.exists(); ++up, dir = dir.getParentDirectory())
+            {
+                auto candidate = dir.getChildFile("test").getChildFile("golden");
+                if (candidate.getChildFile("manifest.json").existsAsFile()) return candidate;
+                if (dir.isRoot()) break;
+            }
+            return {};
         }
 
         /** A planar little-endian float32 file: channel 0's frames, then channel 1's, ... */
@@ -72,6 +82,14 @@ namespace sssketch
         Channels renderFixed(FaustDspKind kind, const Channels& in, int block)
         {
             return render(kind, in, [block] { return block; }, juce::jmax(block, 1));
+        }
+
+        /** The same, under the audio thread's flush-to-zero/denormals-are-zero (as Transport and
+         * RenderExport run). -ftz 2 already flushes Faust's recursions, so nothing may change. */
+        Channels renderNoDenormals(FaustDspKind kind, const Channels& in, int block)
+        {
+            juce::ScopedNoDenormals noDenormals;
+            return renderFixed(kind, in, block);
         }
 
         double maxAbsDiff(const Channels& a, const Channels& b)
@@ -115,18 +133,25 @@ namespace sssketch
             for (auto kind : kinds)
             {
                 const juce::String name = faustDspName(kind);
-                // pump: program L R, key L R; its other four inputs are left to the stage's silence,
-                // as the web's 4-channel merge leaves them
+                // pump: program L R, key L R
                 Channels in = programme;
                 if (kind == FaustDspKind::pump) in.insert(in.end(), key.begin(), key.end());
                 const auto golden = loadPlanar(name + ".out.f32", 2);
 
-                beginTest(name + ": matches the web's wasm within 1e-6 (128-sample quanta, as the worklet runs)");
+                const bool exact = kind != FaustDspKind::reverb;
+                beginTest(name + (exact ? ": bit-identical to the web's wasm" : ": within 5e-7 of the web's wasm")
+                          + " (128-sample quanta, as the worklet runs)");
                 const auto at128 = renderFixed(kind, in, 128);
                 expectEquals((int) golden.size(), 2);
                 const double err = maxAbsDiff(at128, golden);
-                expect(err <= kGoldenTolerance, name + ": max abs error " + juce::String(err, 10));
+                if (exact)
+                    expect(bitIdentical(at128, golden), name + ": max abs error " + juce::String(err, 10));
+                else
+                    expect(err <= kReverbTolerance, name + ": max abs error " + juce::String(err, 10));
                 logMessage("  " + name + " max abs error vs the web: " + juce::String(err, 10));
+
+                beginTest(name + ": under ScopedNoDenormals, the same to the bit");
+                expect(bitIdentical(renderNoDenormals(kind, in, 128), at128), name + ": ScopedNoDenormals");
 
                 beginTest(name + ": blocks of 1, 64, 512 and a random split are bit-identical");
                 expect(bitIdentical(renderFixed(kind, in, 1), at128), name + ": block 1");

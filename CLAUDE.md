@@ -168,6 +168,17 @@ way to get a color; don't hand-roll a second color table.
   live playback) has no automated test and is verified by manual walkthrough instead —
   that's an intentional, documented choice in this codebase, not a gap to "fix" by mocking.
 
+## Faust DSPs (the radio sound's master stages)
+
+`native-engine/Source/dsp/faust/*.dsp` are the single copy of the web radio's Faust DSPs:
+ell.ing/radio compiles them to wasm, `scripts/build-faust-cpp.mjs` compiles them to the committed
+C++ in `generated/` with the native `faust` pinned in `FAUST_VERSION` (Homebrew, `brew pin`ned).
+After editing a `.dsp`: run that script here, `node scripts/build-faust.mjs` and
+`node scripts/golden-vectors.mjs` in the radio repo, then rebuild the engine. CI checks only that
+the hashes agree (no `faust` there, so the regenerate-and-compare test skips, as expected); the
+full drift check and the bit-exact `FaustStageTests` against the web's output run locally. See
+`native-engine/Source/dsp/faust/LICENSES.md`.
+
 ## Where the history actually lives
 
 `docs/superpowers/specs/*.md` and `docs/superpowers/plans/*.md` are a complete, dated record

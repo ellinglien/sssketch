@@ -36,9 +36,9 @@ namespace sssketch
      *   process()  audio thread: never allocates; block-size invariant to the bit (Faust reads
      *              its parameters once per compute() call, and they only change via setParam)
      *
-     * Inputs the caller does not supply are fed silence, as Web Audio's upmix feeds them on the
-     * web: pump.dsp declares 8 inputs (program L R, key L R, and four that its `-(x)` partial
-     * application leaves free), and the web connects 4. */
+     * Inputs the caller does not supply are fed silence, as Web Audio's upmix feeds a worklet
+     * input with more channels than are connected (pump.dsp: program L R, key L R; a caller with
+     * no key passes 2 and the pump never ducks). */
     class FaustStage
     {
     public:
