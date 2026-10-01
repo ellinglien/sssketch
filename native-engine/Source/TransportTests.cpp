@@ -1,10 +1,16 @@
 #include "Transport.h"
 #include "EngineProject.h"
 #include "PlaybackEngine.h"
+#include "RenderExport.h"
+#include "PluginChain.h"
+#include "ChannelChainRegistry.h"
 #include "StemBufferCache.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include <juce_core/juce_core.h>
 #include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <random>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -14,6 +20,24 @@ namespace sssketch
 {
     namespace
     {
+        /** A mono 16-bit sine, `amp` peak. */
+        juce::File writeSineWav(const juce::String& name, int numSamples, double freq, float amp, double sampleRate = 44100.0)
+        {
+            auto file = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile(name);
+            file.deleteFile();
+            juce::WavAudioFormat wavFormat;
+            std::unique_ptr<juce::FileOutputStream> out(file.createOutputStream());
+            std::unique_ptr<juce::AudioFormatWriter> writer(
+                wavFormat.createWriterFor(out.get(), sampleRate, 1, 16, {}, 0));
+            out.release();
+            juce::AudioBuffer<float> source(1, numSamples);
+            for (int i = 0; i < numSamples; ++i)
+                source.setSample(0, i, amp * (float) std::sin(2.0 * 3.14159265358979323846 * freq * i / sampleRate));
+            writer->writeFromAudioSampleBuffer(source, 0, numSamples);
+            writer.reset();
+            return file;
+        }
+
         juce::File writeConstantToneWav(const juce::String& name, int numSamples, double sampleRate = 44100.0)
         {
             auto file = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile(name);
@@ -844,6 +868,195 @@ namespace sssketch
 
                     tone7.deleteFile();
                 }
+            }
+
+            // ---- the master stage (radio sound plan, Task 3): one processMaster for live and export
+            {
+                constexpr double kRate = 44100.0;
+                constexpr double kBpm = 120.0; // 2 s a bar
+                constexpr double kBars = 1.0;
+                const int kTotal = (int) std::ceil(kBars * 2.0 * kRate);
+                auto hot = writeSineWav("sssketch_transport_master_hot.wav", (int) (2.0 * kRate), 220.0, 0.9f);
+                auto hot2 = writeSineWav("sssketch_transport_master_hot2.wav", (int) (2.0 * kRate), 331.0, 0.9f);
+
+                // Three loud sines summed: peaks near +7 dBFS, so the limiter really works.
+                auto makeProject = [&](std::optional<SoundSettings::Mastering> mastering) {
+                    EngineProject project;
+                    project.bpm = kBpm;
+                    project.snapDiv = 16.0;
+                    int n = 0;
+                    for (const auto* file : { &hot, &hot2, &hot })
+                    {
+                        EngineRifff rifff;
+                        rifff.groupId = "m" + juce::String(++n);
+                        rifff.channelId = "c" + juce::String(n);
+                        rifff.startBar = 0.0;
+                        rifff.barLength = 1;
+                        EngineStem stem;
+                        stem.stemKey = rifff.groupId + ":1";
+                        stem.resolvedPath = file->getFullPathName();
+                        stem.durationSec = 2.0;
+                        stem.barLength = 1;
+                        rifff.stems.push_back(stem);
+                        project.rifffs.push_back(rifff);
+                    }
+                    project.sound.mastering = mastering;
+                    return project;
+                };
+
+                // The live path, as the device callback runs it: Transport ->
+                // renderLoopAware -> masterChain -> processMaster, in device blocks of
+                // `nextBlock()` samples, from a fresh engine.
+                auto renderLive = [&](const EngineProject& project, auto nextBlock, int totalSamples) {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    engine.prepareMaster(kRate);
+                    engine.setProject(project);
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(kBpm);
+                    transport.play(0.0);
+                    std::vector<float> l((size_t) totalSamples), r((size_t) totalSamples);
+                    for (int at = 0; at < totalSamples;)
+                    {
+                        const int n = juce::jmin(nextBlock(), totalSamples - at);
+                        float* channels[2] = { l.data() + at, r.data() + at };
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, n, {});
+                        at += n;
+                    }
+                    engine.drainRetiredProject();
+                    return std::make_pair(l, r);
+                };
+
+                auto renderExport = [&](const EngineProject& project) {
+                    juce::AudioBuffer<float> out;
+                    juce::String error;
+                    expect(renderProjectToBuffer(project, kBars, kRate, 512, out, error), "export failed: " + error);
+                    std::vector<float> l(out.getReadPointer(0), out.getReadPointer(0) + out.getNumSamples());
+                    std::vector<float> r(out.getReadPointer(1), out.getReadPointer(1) + out.getNumSamples());
+                    return std::make_pair(l, r);
+                };
+
+                auto same = [](const std::vector<float>& a, const std::vector<float>& b) {
+                    return a.size() == b.size() && std::memcmp(a.data(), b.data(), a.size() * sizeof(float)) == 0;
+                };
+
+                beginTest("master stage: live playback and export give the same samples, to the bit");
+                {
+                    const auto project = makeProject(SoundSettings::Mastering {});
+                    const auto exported = renderExport(project);
+                    expectEquals((int) exported.first.size(), kTotal);
+                    const auto live300 = renderLive(project, [] { return 300; }, kTotal);
+                    expect(same(live300.first, exported.first) && same(live300.second, exported.second),
+                           "live (300-sample blocks) differs from the export");
+                    std::mt19937 rng(42);
+                    std::uniform_int_distribution<int> size(1, 1100);
+                    const auto liveRandom = renderLive(project, [&] { return size(rng); }, kTotal);
+                    expect(same(liveRandom.first, exported.first) && same(liveRandom.second, exported.second),
+                           "live (random blocks) differs from the export");
+
+                    // and the stage really ran: the sum peaks near +7 dBFS, the output under 0.9
+                    float peak = 0.0f;
+                    for (float v : exported.first) peak = std::max(peak, std::abs(v));
+                    expect(peak < 0.9f && peak > 0.7f, "peak " + juce::String(peak));
+                }
+
+                beginTest("master stage OFF: with no sound block, or no mastering, live and export are exactly today's");
+                {
+                    // Today's output: the bare renderBlock sum, which is all the transport and the
+                    // export did before this stage existed (no plugins in either chain).
+                    auto today = [&](const EngineProject& project) {
+                        StemBufferCache cache;
+                        PlaybackEngine engine(cache);
+                        engine.setProject(project);
+                        ChannelChainRegistry channelChains;
+                        std::vector<float> l((size_t) kTotal, 0.0f), r((size_t) kTotal, 0.0f);
+                        for (int at = 0; at < kTotal; at += 512)
+                        {
+                            const int n = juce::jmin(512, kTotal - at);
+                            engine.renderBlock((at / kRate) / 2.0, kRate, n, l.data() + at, r.data() + at, channelChains);
+                        }
+                        return std::make_pair(l, r);
+                    };
+
+                    auto noSound = makeProject(std::nullopt);
+                    // glue/tone/saturation sent without mastering: the parser drops them, and
+                    // the master stage is still off
+                    const auto parsed = parseSoundSettings(juce::JSON::parse(
+                        R"({"glue":{"thresholdDb":-14,"ratio":2,"kneeDb":6},"saturation":{"drive":0.9},"room":"zita"})"));
+                    expect(! parsed.mastering.has_value() && ! parsed.glue.has_value());
+                    auto noMastering = noSound;
+                    noMastering.sound = parsed;
+
+                    for (const auto* project : { &noSound, &noMastering })
+                    {
+                        const auto reference = today(*project);
+                        const auto exported = renderExport(*project);
+                        const auto live = renderLive(*project, [] { return 300; }, kTotal);
+                        expect(same(exported.first, reference.first) && same(exported.second, reference.second),
+                               "export differs from today's");
+                        expect(same(live.first, reference.first) && same(live.second, reference.second),
+                               "live differs from today's");
+                    }
+                }
+
+                beginTest("master stage: a stop resets it, so playing again from the top renders the first pass again");
+                {
+                    const auto project = makeProject(SoundSettings::Mastering {});
+                    const auto exported = renderExport(project);
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    engine.prepareMaster(kRate);
+                    engine.setProject(project);
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(kBpm);
+                    std::vector<float> l(512), r(512);
+                    float* channels[2] = { l.data(), r.data() };
+                    transport.play(0.0);
+                    for (int i = 0; i < 20; ++i)
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                    transport.stop();
+                    for (int i = 0; i < 400 && transport.isPlaying(); ++i)
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                    expect(! transport.isPlaying());
+                    transport.play(0.0);
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                    expect(std::memcmp(l.data(), exported.first.data(), 512 * sizeof(float)) == 0,
+                           "the first block after a stop is not the first block of the export");
+                }
+
+                beginTest("master stage: the device's rate reaches it (prepareMaster), and a mismatched block passes through");
+                {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    engine.setProject(makeProject(SoundSettings::Mastering {}));
+                    // setProject with mastering builds at the engine's rate (44.1 kHz until told)
+                    ChannelChainRegistry channelChains;
+                    std::vector<float> l(1024, 0.0f), r(1024, 0.0f);
+                    engine.renderBlock(0.0, 48000.0, 1024, l.data(), r.data(), channelChains);
+                    const auto dry = l;
+                    engine.processMaster(48000.0, 1024, l.data(), r.data());
+                    expect(l == dry, "a 48 kHz block went through a 44.1 kHz limiter");
+                    expect(engine.masterRateMismatchCount() == 1);
+
+                    engine.prepareMaster(48000.0);
+                    std::fill(l.begin(), l.end(), 0.0f);
+                    std::fill(r.begin(), r.end(), 0.0f);
+                    engine.renderBlock(0.0, 48000.0, 1024, l.data(), r.data(), channelChains);
+                    engine.processMaster(48000.0, 1024, l.data(), r.data());
+                    expect(engine.masterRateMismatchCount() == 1);
+                    expect(l[74] == 0.0f, "the limiter's 75-sample line should start empty");
+                    float peak = 0.0f;
+                    for (float v : l) peak = std::max(peak, std::abs(v));
+                    expect(peak > 0.1f && peak < 0.9f, "peak " + juce::String(peak));
+                    engine.drainRetiredProject();
+                }
+
+                hot.deleteFile();
+                hot2.deleteFile();
             }
         }
     };

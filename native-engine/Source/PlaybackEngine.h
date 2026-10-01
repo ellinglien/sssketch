@@ -5,6 +5,7 @@
 #include "StemBufferCache.h"
 #include "ChannelChainRegistry.h"
 #include "LiveParamOverrides.h"
+#include "MasterStage.h"
 #include <juce_audio_basics/juce_audio_basics.h>
 #include <atomic>
 #include <map>
@@ -228,6 +229,33 @@ namespace sssketch
             ChannelChainRegistry& channelChains) const;
 
         double secPerBar() const;
+
+        /** The radio sound's master stage (MasterStage.h): headroom trim, then the true-peak
+         * limiter. The ONE call both outputs make, after the user's master plugin slots and
+         * before anything else touches the block -- Transport's device callback and
+         * RenderExport's offline loop -- so live playback and a bounce cannot run different
+         * mastering.
+         *
+         * AUDIO THREAD (or export's own thread), after the block's renderBlock call(s). Applies
+         * the mastering settings of the snapshot the most recent renderBlock rendered: a staged
+         * project swapped in mid-block brings its settings with it, and nothing here loads
+         * `published` a second time. With no mastering in that snapshot it touches nothing
+         * (today's output, bit for bit). */
+        void processMaster(double sampleRate, int numSamples, float* outL, float* outR);
+
+        /** MESSAGE THREAD (Transport::audioDeviceAboutToStart, RenderExport before setProject).
+         * The rate processMaster will be called at. Rebuilds the master stage's instance for it
+         * if one has been built already; otherwise only remembered, and setProject/stageProject
+         * build one at it when a project first asks for mastering. Until told, 44.1 kHz -- the
+         * transport's own default rate and the export's. */
+        void prepareMaster(double sampleRate);
+
+        /** AUDIO THREAD, with no processMaster in flight. See MasterStage::reset: Transport
+         * calls it when a stop or pause has finished fading out. */
+        void resetMaster() { masterStage.reset(); }
+
+        /** Blocks processMaster passed through because no instance at their rate was ready. */
+        unsigned long long masterRateMismatchCount() const { return masterStage.rateMismatchCount(); }
 
         /** A copy of the project most recently passed to setProject(), for
          * the render-export IPC handler to render "whatever was last
@@ -569,5 +597,16 @@ namespace sssketch
         mutable bool masterFilterEngaged = false;
 
         LiveParamOverrides liveParamOverrides;
+
+        /** See processMaster. Its instance is built on the message thread (setProject,
+         * stageProject, prepareMaster) and swapped in on the audio thread; drainRetiredProject
+         * frees a swapped-out one. */
+        MasterStage masterStage;
+        std::atomic<double> masterRate { 44100.0 };
+
+        /** The mastering settings of the snapshot the latest renderBlock call rendered, for
+         * processMaster. Written and read only by the single rendering thread (the same
+         * invariant as stemDsp); trivially copyable, so the write allocates nothing. */
+        mutable std::optional<SoundSettings::Mastering> masterSettingsSeen;
     };
 }

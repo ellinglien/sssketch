@@ -23,9 +23,10 @@ namespace sssketch
      * there, which is today's sound, bit for bit. A default-constructed SoundSettings is
      * exactly that (isNeutral()).
      *
-     * Parsed only, so far: each stage is performed by its own later task (mastering and the
-     * limiter Task 3, the cavern Task 5, glue and tone Task 7, saturation Task 8, the pump
-     * Task 9). Until then the engine reads none of it. */
+     * Each stage is performed by its own task: mastering (headroom and the true-peak limiter)
+     * since Task 3, by MasterStage through PlaybackEngine::processMaster; the cavern (Task 5),
+     * glue and tone (Task 7), saturation (Task 8) and the pump (Task 9) are parsed only until
+     * theirs land. */
     struct SoundSettings
     {
         /** The headroom trim and the true-peak limiter. */

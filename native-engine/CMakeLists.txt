@@ -174,6 +174,8 @@ target_sources(sssketch_engine PRIVATE
   Source/FaustStageTests.cpp
   Source/SoundSettings.cpp
   Source/SoundSettingsTests.cpp
+  Source/MasterStage.cpp
+  Source/MasterStageTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE

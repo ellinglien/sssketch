@@ -9,18 +9,19 @@
 
 namespace sssketch
 {
-    bool renderProjectToWavFile(
+    bool renderProjectToBuffer(
         const EngineProject& project,
-        const juce::String& outputPath,
         double durationBars,
+        double sampleRate,
+        int blockSize,
+        juce::AudioBuffer<float>& output,
         juce::String& errorOut)
     {
         StemBufferCache bufferCache;
         PlaybackEngine engine(bufferCache);
+        // Before setProject, so the master stage is built once, at this rate.
+        engine.prepareMaster(sampleRate);
         engine.setProject(project);
-
-        const double sampleRate = 44100.0;
-        const int blockSize = 512;
 
         // Export has no real-time deadline, so plugins are loaded directly
         // and synchronously here rather than via PluginChain::requestLoad's
@@ -75,7 +76,7 @@ namespace sssketch
         }
         const int totalSamples = (int) std::ceil(durationBars * secPerBar * sampleRate);
 
-        juce::AudioBuffer<float> output(2, juce::jmax(1, totalSamples));
+        output.setSize(2, juce::jmax(0, totalSamples));
         output.clear();
 
         for (int startSample = 0; startSample < totalSamples; startSample += blockSize)
@@ -87,7 +88,24 @@ namespace sssketch
             engine.renderBlock(positionBars, sampleRate, numSamples, l, r, channelChainRegistry);
             masterChain.setPosition(positionBars);
             masterChain.process(numSamples, l, r);
+            // The radio sound's master stage, last -- after the user's plugins, exactly where
+            // Transport runs it (PlaybackEngine::processMaster).
+            engine.processMaster(sampleRate, numSamples, l, r);
         }
+        return true;
+    }
+
+    bool renderProjectToWavFile(
+        const EngineProject& project,
+        const juce::String& outputPath,
+        double durationBars,
+        juce::String& errorOut)
+    {
+        const double sampleRate = 44100.0;
+        juce::AudioBuffer<float> output;
+        if (! renderProjectToBuffer(project, durationBars, sampleRate, 512, output, errorOut))
+            return false;
+        const int totalSamples = output.getNumSamples();
 
         juce::WavAudioFormat wavFormat;
         auto outFile = juce::File(outputPath);

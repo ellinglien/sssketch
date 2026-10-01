@@ -145,6 +145,12 @@ namespace sssketch
             }
         }
 
+        // The master stage's limiter is a Faust object: built here, on the message thread,
+        // before a snapshot that asks for it can reach the audio thread (a no-op once one is
+        // built at the current rate).
+        if (project.sound.mastering)
+            masterStage.prepare(masterRate.load());
+
         return next;
     }
 
@@ -268,6 +274,7 @@ namespace sssketch
 
     void PlaybackEngine::drainRetiredProject()
     {
+        masterStage.drainRetired();
         if (!retiredOccupied.load(std::memory_order_acquire))
             return;
         // Clear the slot first, flag second -- the exact mirror of the
@@ -277,6 +284,18 @@ namespace sssketch
         std::atomic_store_explicit(
             &retired, std::shared_ptr<const ProjectSnapshot>(), std::memory_order_release);
         retiredOccupied.store(false, std::memory_order_release);
+    }
+
+    void PlaybackEngine::prepareMaster(double sampleRate)
+    {
+        masterRate.store(sampleRate);
+        if (masterStage.preparedRate() != 0.0)
+            masterStage.prepare(sampleRate);
+    }
+
+    void PlaybackEngine::processMaster(double sampleRate, int numSamples, float* outL, float* outR)
+    {
+        masterStage.process(masterSettingsSeen ? &*masterSettingsSeen : nullptr, sampleRate, numSamples, outL, outR);
     }
 
     bool PlaybackEngine::hasStagedProject() const
@@ -304,7 +323,13 @@ namespace sssketch
         // see published's own doc comment in PlaybackEngine.h.
         const auto snap = std::atomic_load_explicit(&published, std::memory_order_acquire);
         if (snap == nullptr)
+        {
+            masterSettingsSeen.reset();
             return;
+        }
+        // For processMaster, which runs after this block's render(s): the settings travel
+        // with the snapshot, so a staged swap's mastering starts with its project.
+        masterSettingsSeen = snap->project.sound.mastering;
 
         // Pushed once per renderBlock call, covering every channel chain at
         // once -- both live playback (Transport.cpp's several

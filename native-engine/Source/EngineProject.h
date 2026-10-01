@@ -270,8 +270,8 @@ namespace sssketch
         MasterFilterSettings masterFilter;
 
         /** The radio sound's project-level stages (SoundSettings.h). A payload with no `sound`
-         * key parses to every stage off, zita at today's return: today's sound. Parsed only;
-         * no stage reads it yet. */
+         * key parses to every stage off, zita at today's return: today's sound. Performed so far:
+         * `mastering` (PlaybackEngine::processMaster, MasterStage.h); the rest is parsed only. */
         SoundSettings sound;
     };
 

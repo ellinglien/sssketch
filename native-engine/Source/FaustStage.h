@@ -11,8 +11,8 @@
 namespace sssketch
 {
     /** The Faust DSPs compiled to C++ (dsp/faust/generated/, from the .dsp files the web radio
-     * compiles to wasm; scripts/build-faust-cpp.mjs). Nothing is wired into playback yet: each
-     * master/pump stage takes one of these in a later task of the native radio sound plan. */
+     * compiles to wasm; scripts/build-faust-cpp.mjs). truepeak is wired (MasterStage, Task 3 of
+     * the native radio sound plan); each other master/pump stage takes one in its own task. */
     enum class FaustDspKind
     {
         saturate,

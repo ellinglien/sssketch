@@ -395,11 +395,21 @@ No sound changes in this task.
 **Trigger:** `sound.mastering` (the "mastering" switch). **Params:** headroom −4 dB; truepeak ceiling −1 dBTP, release 0.1 s, lookahead 64, latency 75 samples.
 
 **Native tests (`MasterStageTests`, `TransportTests`):**
-- [ ] **Off** (absent or switched off): `processMaster` leaves the buffers bit-identical.
-- [ ] **True peak:** a +6 dBFS sine at fs/4, at a 45° phase, measured with the test's own 8× sinc upsampler, comes out ≤ −1.0 dBTP + 0.1 dB.
-- [ ] **Transparent below threshold:** a −20 dBFS sine comes out ×10^(−4/20), delayed exactly 75 samples.
-- [ ] **Block-size invariant**, bit-identical.
-- [ ] **Live equals export:** the same project through `RenderExport` and through `renderLoopAware` + `processMaster` matches.
+- [x] **Off** (absent or switched off): `processMaster` leaves the buffers bit-identical.
+- [x] **True peak:** a +6 dBFS sine at fs/4, at a 45° phase, measured with the test's own 8× sinc upsampler, comes out ≤ −1.0 dBTP + 0.1 dB.
+- [x] **Transparent below threshold:** a −20 dBFS sine comes out ×10^(−4/20), delayed exactly 75 samples.
+- [x] **Block-size invariant**, bit-identical.
+- [x] **Live equals export:** the same project through `RenderExport` and through `renderLoopAware` + `processMaster` matches.
+
+- **As landed (2026-10-01):**
+  - `MasterStage.{h,cpp}`: headroom trim → Faust `truepeak` (ceiling from `sound.mastering.ceilingDb`, release and lookahead at the `.dsp`'s defaults). `PlaybackEngine` owns the one instance; `processMaster(sampleRate, n, l, r)` is called by `Transport` (both `renderLoopAware` sites, after `masterChain.process`, before the reposition and halt fades) and by `RenderExport`, after its `masterChain.process`.
+  - **Where the settings come from:** `renderBlock` copies its snapshot's `sound.mastering` into a rendering-thread member and `processMaster` uses that, rather than loading `published` a second time (a second `shared_ptr` load per callback, and one more place the audio thread could drop a snapshot's last reference). A staged swap mid-block brings its mastering with it.
+  - **Threading (the PluginChain slot pattern):** an `Instance` (the Faust object plus fixed 512-sample scratch, so the device block size never matters) is built on the message thread and parked in an atomic `pending` cell; `process()` promotes it and parks the old one in `retired`, deferring while `retired` is occupied; `PlaybackEngine::drainRetiredProject()` frees it. Built by `buildSnapshot` (so `setProject` and `stageProject`) when a project has mastering, and rebuilt by `prepareMaster(rate)`, which `Transport::audioDeviceAboutToStart` and `RenderExport` (before `setProject`) call. Until told, the rate is 44.1 kHz, the transport's and export's default. A block at a rate with no instance ready passes through untouched and is counted (`masterRateMismatchCount`), rather than going silent or allocating.
+  - **`RenderExport`** is split: `renderProjectToBuffer(project, bars, rate, blockSize, out, err)` renders floats, and `renderProjectToWavFile` writes it (still 44.1 kHz / 512, 16-bit). The live-equals-export test compares the float buffer with the Transport callback output in 300-sample and random blocks, to the bit.
+  - **Beyond the plan (conservative additions):** switching mastering on or off mid-play crossfades over 20 ms between the dry and limited signals (no 4 dB step, no 75-sample jump; the ceiling is not held during those 20 ms); a headroom change ramps over 20 ms; the first block of a fresh stage, or after `reset()`, engages at once with no fade, so an export and a play from a stop start the same. `Transport` calls `engine.resetMaster()` when a stop or pause fade completes, so the limiter's line (which holds unfaded audio, since the fade runs after it) does not replay 75 old samples on the next play.
+  - **Latency:** 75 samples, not compensated (commented in `MasterStage.h`). An export keeps its length, so its last 75 samples stay in the line.
+  - **Limiter measured:** ≤ −0.99 dBTP on a tonal programme driven ~11 dB into it, at 44.1/48/96 kHz. On full-band noise driven 8–11 dB in, the web's `truepeak.dsp` reaches **−0.67 dBTP** (its header records −0.86 at a lower drive): per-sample gain modulation plus the 4× detector missing near-Nyquist peaks. The native stage is the web's DSP to the bit (the golden test runs `programme.f32` through the whole stage at 0 dB headroom and matches `truepeak.out.f32` by memcmp), so this is pinned as a ≤ +0.4 dB regression bound, not changed. Fixing it is a `.dsp` change for both repos (e.g. 8× detector points or a longer filter), for Elling to decide.
+  - **Tests:** `MasterStageTests` (14: off, unprepared/mismatched rate, transparency with the exact 75-sample delay at 44.1/48/88.2/96/176.4/192 kHz, true peak on the fs/4 sine at three ceilings and four rates, the tonal and full-band programmes, the golden, block sizes 1–8192 and random, fade out/in, the headroom ramp, reset, rate swaps and deferral, a concurrency stress); `TransportTests` (4: live equals export to the bit, off is today's for no `sound` and for glue/saturation without mastering, a stop resets the stage, `prepareMaster` reaching the stage).
 
 **The 75-sample latency** (1.6 ms at 48 kHz) is not compensated against the playhead. Say so in the code comment.
 
