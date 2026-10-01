@@ -13,7 +13,7 @@ import type {
 } from '@shared/riffLibraryTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { DiscoverCandidate } from '../main/discoverCandidates'
-import type { ArtistIndex, ArtistMode } from '@shared/discoverArtist'
+import type { ArtistIndex, ArtistMode, KeepRefused } from '@shared/discoverArtist'
 import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
@@ -700,7 +700,7 @@ const api = {
     }[],
     bpm: number,
     barLength: number
-  ): Promise<{ riffCID: string; name: string; duplicate: boolean } | null> =>
+  ): Promise<{ riffCID: string; name: string; duplicate: boolean } | KeepRefused | null> =>
     ipcRenderer.invoke('save-discovered-rifff', members, bpm, barLength),
   forgetDiscoveredRifff: (riffCID: string): Promise<void> =>
     ipcRenderer.invoke('forget-discovered-rifff', riffCID),

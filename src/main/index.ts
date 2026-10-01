@@ -106,8 +106,10 @@ import type { RemoteCommand, RemoteState } from '@shared/remoteState'
 import type { PairingGate } from '@shared/remoteAuth'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
 import { getArtistStemCIDs } from './discoverArtistStems'
+import { KEEP_REFUSED } from '@shared/discoverArtist'
 import { abortArtistIndexWork, getArtistAnalysed, getArtistIndex } from './discoverArtistIndex'
 import {
+  currentArtistMode,
   refusesListenOnly,
   resetDiscoverArtistSession,
   setDiscoverArtistSession
@@ -375,6 +377,7 @@ function startPhoneRemoteOn(address: string): void {
       return {
         ...lastRemoteState,
         loopId: remoteLoop?.currentLoopId() ?? null,
+        listenOnly: currentArtistMode() === 'other',
         slots: lastRemoteState.slots.map((slot) => ({
           ...slot,
           stemId: bySlot.get(slot.id) ?? null
@@ -389,6 +392,7 @@ function startPhoneRemoteOn(address: string): void {
       // implementation of anything.
       mainWindow?.webContents.send('remote-command', command)
     },
+    refusesKeep: () => refusesListenOnly('keep'),
     onPairingChanged: (gate) => {
       remotePairingGate = gate
       mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
@@ -514,8 +518,13 @@ function createWindow(): BrowserWindow {
   // produced character (key) and the physical key code (code) so it isn't
   // tied to one specific layout.
   // Discover artist mode: the renderer's chosen artist starts as `me` on
-  // every load, so main's mirror must too.
-  win.webContents.on('did-finish-load', () => resetDiscoverArtistSession())
+  // every load, so main's mirror must too. Reset when a main-frame load
+  // STARTS, not when it finishes: a guarded call from the old page landing
+  // in between, or the new page pushing its artist before did-finish-load,
+  // must never meet a stale `other`.
+  win.webContents.on('did-start-navigation', (details) => {
+    if (details.isMainFrame && !details.isSameDocument) resetDiscoverArtistSession()
+  })
 
   win.webContents.on('before-input-event', (_event, input) => {
     if (input.type !== 'keyDown' || !input.meta || input.shift) return
@@ -780,7 +789,9 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'save-discovered-rifff',
     (_event, members: DiscoveredMemberInput[], bpm: number, barLength: number) =>
-      refusesListenOnly('keep') ? null : keepDiscovered(members, bpm, barLength)
+      // A refusal is KEEP_REFUSED, never null: null still means "nothing
+      // was kept", and the renderer has to tell the two apart.
+      refusesListenOnly('keep') ? KEEP_REFUSED : keepDiscovered(members, bpm, barLength)
   )
 
   // "fetch radio hearts" -- ell.ing/radio's hearted combos as kept riffs and

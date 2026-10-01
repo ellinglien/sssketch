@@ -1,7 +1,9 @@
 // src/shared/discoverArtist.test.ts
 import { describe, expect, it } from 'vitest'
 import {
+  KEEP_REFUSED,
   LISTEN_ONLY_ACTIONS,
+  isKeepRefused,
   analysedLabel,
   jammedWithFromPairs,
   mergeArtistCounts,
@@ -314,5 +316,14 @@ describe('suggestArtists: Task 3 review', () => {
       stems: 500,
       sharedJams: 3
     })
+  })
+})
+
+describe('keep refusal over IPC', () => {
+  it('is a distinct value: not null, not a kept riff', () => {
+    expect(isKeepRefused(KEEP_REFUSED)).toBe(true)
+    expect(isKeepRefused(null)).toBe(false)
+    expect(isKeepRefused({ riffCID: 'r', name: 'n', duplicate: false })).toBe(false)
+    expect(KEEP_REFUSED).toEqual({ refused: 'listening only' })
   })
 })

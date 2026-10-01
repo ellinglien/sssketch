@@ -155,6 +155,10 @@ export interface RemoteServerOptions {
    * 503 rather than crashing the server. */
   stemBytes: (stemId: string) => Promise<Buffer | null>
   onCommand: (command: RemoteCommand) => void
+  /** Discover artist mode (2026-10-01): true while Discover plays another
+   * user's stems, listen only. The phone's keep is then answered 409
+   * `listening only` and not forwarded. Absent means never refused. */
+  refusesKeep?: () => boolean
   /** Called on every failed pairing attempt, so the desktop can say "two
    * tries left" and, on the fifth, that pairing is over for this session. */
   onPairingChanged: (gate: PairingGate) => void
@@ -406,6 +410,7 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
       }
 
       if (req.method === 'POST' && url === '/api/keep') {
+        if (options.refusesKeep?.()) return respond(res, 409, { reason: 'listening only' })
         options.onCommand({ kind: 'keep' })
         return respond(res, 200)
       }

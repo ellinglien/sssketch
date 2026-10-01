@@ -1259,3 +1259,29 @@ describe('remotePage rows about to change', () => {
     expect(SCRIPT).toContain('radioAhead.heldSlotIds')
   })
 })
+
+/** Discover artist mode (2026-10-01). The keep used to flash "kept" the
+ * moment it was tapped, whether or not anything was kept. */
+describe('remotePage keep', () => {
+  const SCRIPT_TEXT = REMOTE_PAGE_HTML.slice(REMOTE_PAGE_HTML.indexOf('<script>'))
+  const handler = SCRIPT_TEXT.slice(
+    SCRIPT_TEXT.indexOf("keepEl.addEventListener('click'"),
+    SCRIPT_TEXT.indexOf('function poll()')
+  )
+
+  it('does not claim "kept" when the tap is sent', () => {
+    expect(handler).toContain("api('/api/keep'")
+    expect(handler).not.toContain("flash('kept')")
+  })
+
+  it('says "kept" only once the kept counter has moved', () => {
+    expect(SCRIPT_TEXT).toMatch(/state\.kept > keepPendingFrom[\s\S]{0,80}flash\('kept'\)/)
+  })
+
+  it('reads a refused keep as listening only, and disables keep in that mode', () => {
+    expect(handler).toContain('409')
+    expect(handler).toContain("flash('listening only')")
+    expect(SCRIPT_TEXT).toContain('state.listenOnly === true')
+    expect(SCRIPT_TEXT).toContain('keepEl.disabled = listenOnly')
+  })
+})

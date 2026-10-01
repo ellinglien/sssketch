@@ -1836,6 +1836,19 @@ git commit -m "discover artist: main refuses keep, star and fetch hearts in arti
 - **Gates:** typecheck clean; 234 files / 3,819 tests green; `discoverArtistSession.test.ts` opens no db, so it's not CI-excluded.
 - **Lint:** my files are clean. The full run showed 40 warnings, but 36 came from another agent's uncommitted edit to `src/shared/radioDropOut.test.ts` (left unstaged); the other 4 are the pre-existing ones.
 
+**Tasks 3–4 review follow-up (one commit):**
+- **Phone keep:**
+  - `remotePage.ts` no longer flashes `kept` on tap. It flashes `keeping`, then `kept` once the polled `state.kept` passes its value at tap time, or `not kept` after 5 s.
+  - `/api/keep` answers `409 {reason: 'listening only'}` without forwarding when the new `RemoteServerOptions.refusesKeep` says so. `index.ts` passes `() => refusesListenOnly('keep')`.
+  - `RemoteStateResponse` gains an optional `listenOnly`. Main derives it from the session, like `loopId`, so the renderer push is unchanged and an older Mac reads as false.
+  - The phone disables keep and labels it `listening only` (new `button.big:disabled` style).
+- **Reset timing:** the session resets on a main-frame, cross-document `did-start-navigation`, not on `did-finish-load`.
+- **Distinct refusal:** a refused keep returns `KEEP_REFUSED` (`{refused: 'listening only'}`, new in `@shared/discoverArtist`, with `isKeepRefused`). `null` and the kept-riff shape keep their meanings, and the preload type is the union. `keepGroup` shows `listening only` for it.
+- **Quiet aborts:**
+  - `countsFor` doesn't log when aborted.
+  - `abortArtistIndexWork` also calls the new `abortArtistStemWalks`, which stops `readArtistStemRows` at its next page.
+  - `getArtistAnalysed`'s chunk loop checks the flag too.
+
 ---
 
 ### Task 5: the artist picker and the notice (artist mode goes live)

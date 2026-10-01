@@ -271,3 +271,21 @@ export function analysedLabel(analysed: number, total: number): string {
   const pct = (analysed / total) * 100
   return pct < 1 ? 'analysed: <1%' : `analysed: ${Math.floor(pct)}%`
 }
+
+/** save-discovered-rifff's answer when listen-only refused the keep. A
+ * distinct value, because null already means "nothing was kept" (no
+ * resolvable loop) and a kept riff is `{ riffCID, name, duplicate }`; both
+ * keep exactly that meaning. */
+export interface KeepRefused {
+  refused: 'listening only'
+}
+
+export const KEEP_REFUSED: KeepRefused = Object.freeze({ refused: 'listening only' })
+
+export function isKeepRefused(value: unknown): value is KeepRefused {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { refused?: unknown }).refused === 'listening only'
+  )
+}

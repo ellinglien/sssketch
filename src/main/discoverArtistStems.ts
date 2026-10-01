@@ -25,6 +25,18 @@ const ARTIST_PAGE = 2000
  * of artists per session is plenty. */
 const MAX_CACHED_ARTISTS = 8
 
+/** Set on quit (abortArtistIndexWork calls it): running walks stop at
+ * their next page, so none holds a statement on a closing db. */
+let aborted = false
+
+export function abortArtistStemWalks(): void {
+  aborted = true
+}
+
+export function resetArtistStemAbortForTests(): void {
+  aborted = false
+}
+
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
@@ -46,6 +58,7 @@ export async function readArtistStemRows(
   const out: ArtistStemRow[] = []
   let after = 0
   for (;;) {
+    if (aborted) throw new Error('discoverArtistStems: aborted (quitting)')
     countWork('sql:discover.artist-stems-page')
     const page = stmt.all(artist, after, pageSize) as {
       rid: number

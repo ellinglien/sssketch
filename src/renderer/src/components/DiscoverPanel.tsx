@@ -129,6 +129,7 @@ import {
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { discoverSweepPct, discoverWindowLayout } from '@shared/discoverWindowLayout'
 import { discoverBreath } from '@shared/discoverBreath'
+import { isKeepRefused } from '@shared/discoverArtist'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import {
@@ -6535,6 +6536,12 @@ export function DiscoverPanel({
       }))
       const saved = await window.rifffApi.saveDiscoveredRifff(members, bpm, rifff.barLength)
       if (!saved) return
+      // Main refused it: Discover is playing another user's stems.
+      if (isKeepRefused(saved)) {
+        setKeptLabel('listening only')
+        window.setTimeout(() => setKeptLabel(null), 1500)
+        return
+      }
       setKeptLabel(saved.duplicate ? 'already kept' : '✓ kept')
       window.setTimeout(() => setKeptLabel(null), 500)
       if (!saved.duplicate) {

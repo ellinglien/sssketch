@@ -562,3 +562,52 @@ describe('GET /api/stem', () => {
     expect(again.status).toBe(200)
   })
 })
+
+/** Discover artist mode (2026-10-01): another user's stems are listen
+ * only, so the phone's keep is refused at the door -- with a reason the
+ * page can show -- rather than forwarded for the Mac to refuse silently. */
+describe('the keep route in listen-only mode', () => {
+  async function pairedToken(port: number, pairingCode: string): Promise<string> {
+    const res = await send(
+      port,
+      '/api/pair',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      JSON.stringify({ code: pairingCode })
+    )
+    return JSON.parse(res.body).token as string
+  }
+  async function keep(port: number, token: string): Promise<RawResponse> {
+    return send(
+      port,
+      '/api/keep',
+      {
+        host: `192.168.1.40:${port}`,
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`
+      },
+      'POST',
+      '{}'
+    )
+  }
+
+  it('answers 409 "listening only" and forwards nothing', async () => {
+    const { port, pairingCode } = await start({ refusesKeep: () => true })
+    const res = await keep(port, await pairedToken(port, pairingCode))
+    expect(res.status).toBe(409)
+    expect(JSON.parse(res.body)).toEqual({ reason: 'listening only' })
+    expect(commands).toEqual([])
+  })
+
+  it('forwards the keep as before when not refused (or with no check given)', async () => {
+    for (const overrides of [{ refusesKeep: () => false }, {}]) {
+      const { port, pairingCode } = await start(overrides)
+      const res = await keep(port, await pairedToken(port, pairingCode))
+      expect(res.status).toBe(200)
+      expect(commands).toEqual([{ kind: 'keep' }])
+      handle?.stop()
+      handle = null
+      commands.length = 0
+    }
+  })
+})

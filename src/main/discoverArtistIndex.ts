@@ -34,7 +34,11 @@ import {
   type ArtistIndex,
   type JammedWith
 } from '@shared/discoverArtist'
-import { getArtistStemCIDs } from './discoverArtistStems'
+import {
+  abortArtistStemWalks,
+  getArtistStemCIDs,
+  resetArtistStemAbortForTests
+} from './discoverArtistStems'
 import { loadSavedPairs, savePairs } from './discoverJamUserPairsStore'
 
 const USER_PAGE = 500
@@ -53,6 +57,7 @@ let aborted = false
 
 export function abortArtistIndexWork(): void {
   aborted = true
+  abortArtistStemWalks()
 }
 
 function yieldToEventLoop(): Promise<void> {
@@ -170,7 +175,7 @@ function countsFor(db: Database.Database, signalOf: SignalOf): Promise<ArtistCou
       return value
     })
     .catch((err: unknown) => {
-      console.error('discoverArtistIndex: counts failed:', err)
+      if (!aborted) console.error('discoverArtistIndex: counts failed:', err)
       return hit?.value ?? []
     })
     .finally(() => {
@@ -318,6 +323,7 @@ export async function getArtistAnalysed(
     return stmt
   }
   for (let i = 0; i < ids.length; i += FEATURE_CHUNK) {
+    if (aborted) throw new Error('discoverArtistIndex: aborted (quitting)')
     const idChunk = ids.slice(i, i + FEATURE_CHUNK)
     countWork('sql:discover.artist-analysed-chunk')
     analysed += (statementFor(idChunk.length).get(...idChunk) as { n: number }).n
@@ -338,4 +344,5 @@ export function resetArtistIndexForTests(): void {
   lastList = null
   analysedCache = new Map()
   aborted = false
+  resetArtistStemAbortForTests()
 }

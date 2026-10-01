@@ -315,3 +315,28 @@ describe('getArtistIndex: shared work', () => {
     expect(countPages).toBe(1)
   })
 })
+
+describe('abort on quit: quiet, and reaches every loop', () => {
+  it('a counts read stopped by quit logs nothing', async () => {
+    const own = ownDb()
+    const db = archive()
+    seed(db, 's1', 'j1', 'elling')
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    abortArtistIndexWork()
+    const index = await getArtistIndex(own, [db], 'elling')
+    expect(index.counts).toEqual([])
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('stops the artist-stems walk and the analysed loop', async () => {
+    const own = ownDb()
+    const db = archive()
+    for (let i = 0; i < 10; i++) seed(db, `t${i}`, 'j1', 'tpj')
+    vi.mocked(countWork).mockClear()
+    abortArtistIndexWork()
+    await expect(getArtistAnalysed(own, [db], 'tpj')).rejects.toThrow(/aborted/)
+    const kinds = vi.mocked(countWork).mock.calls.map(([kind]) => kind)
+    expect(kinds).not.toContain('sql:discover.artist-stems-page')
+    expect(kinds).not.toContain('sql:discover.artist-analysed-chunk')
+  })
+})

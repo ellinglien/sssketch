@@ -147,6 +147,13 @@ export interface RemoteSlotResponse extends RemoteSlotView {
  * asserts is preserved by construction rather than by care. */
 export interface RemoteStateResponse extends RemoteState {
   loopId: string | null
+  /** Discover artist mode (2026-10-01): the Mac is playing another user's
+   * stems, listen only, so the phone's keep is off. Main-derived from its
+   * own session mirror (discoverArtistSession.ts) -- the same thing the
+   * keep guard reads -- like loopId, and for the same reason it is not in
+   * what the renderer pushes. Optional: absent (an older Mac) reads as
+   * false. A boolean names no user, so the boundary is unchanged. */
+  listenOnly?: boolean
   slots: RemoteSlotResponse[]
 }
 

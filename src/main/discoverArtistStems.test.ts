@@ -1,7 +1,13 @@
 // src/main/discoverArtistStems.test.ts
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
-import { getArtistStemCIDs, getArtistStemRows, readArtistStemRows } from './discoverArtistStems'
+import {
+  abortArtistStemWalks,
+  getArtistStemCIDs,
+  getArtistStemRows,
+  readArtistStemRows,
+  resetArtistStemAbortForTests
+} from './discoverArtistStems'
 import { countWork } from './workCounters'
 import { readTableSignal } from './tableChangeSignal'
 
@@ -38,7 +44,10 @@ function seed(db: Database.Database, stemCID: string, jam: string, user: string 
   )
 }
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => {
+  vi.useRealTimers()
+  resetArtistStemAbortForTests()
+})
 
 describe('readArtistStemRows', () => {
   it('reads every row for the artist across several pages', async () => {
@@ -170,5 +179,22 @@ describe('Task 3 review: in-flight walks and the signal', () => {
     expect((await stale).some((r) => r.stemCID === 't0')).toBe(true)
     expect(fresh.some((r) => r.stemCID === 't0')).toBe(false)
     expect(fresh).toHaveLength(4499)
+  })
+})
+
+describe('abort on quit', () => {
+  it('stops a running walk at its next page', async () => {
+    const db = archive()
+    const insert = db.prepare(
+      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName) VALUES (?, 'jam1', 'tpj')`
+    )
+    db.transaction(() => {
+      for (let i = 0; i < 4500; i++) insert.run(`t${i}`)
+    })()
+    vi.mocked(countWork).mockClear()
+    const walk = getArtistStemRows([db], 'tpj') // page 1 read, then yields
+    abortArtistStemWalks()
+    await expect(walk).rejects.toThrow(/aborted/)
+    expect(pageReads()).toBe(1)
   })
 })

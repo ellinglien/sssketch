@@ -486,6 +486,8 @@ button.big {
 button.big:active { background: #161616; }
 button.big.on { background: #ededed; color: #050505; }
 button.big.dim { border-color: #222222; color: #5a5a5a; }
+/* Keep while the Mac plays another user's stems, listen only. */
+button.big:disabled { border-color: #222222; color: #5a5a5a; }
 /* One sheet treatment, used by both sheets, so "something came up from the
  * bottom" means one thing. */
 .sheet-bg {
@@ -2192,6 +2194,20 @@ input {
   function render(state) {
     countsEl.textContent = 'kept ' + state.kept + ' · rolled ' + state.rolled
     lastKept = state.lastKeptName
+    keptCount = state.kept
+    if (keepPendingFrom !== null) {
+      if (state.kept > keepPendingFrom) {
+        keepPendingFrom = null
+        flash('kept')
+      } else if (Date.now() > keepPendingUntil) {
+        keepPendingFrom = null
+        flash('not kept')
+      }
+    }
+    // Absent from an older Mac, which reads as false.
+    listenOnly = state.listenOnly === true
+    keepEl.disabled = listenOnly
+    keepEl.textContent = listenOnly ? 'listening only' : 'keep'
     // WHAT RADIO IS ABOUT TO CHANGE, held before anything can rebuild the
     // rows below. Null from a mac with radio off -- and from an older one
     // that has never heard of it, which is the same no-mark either way.
@@ -2347,10 +2363,27 @@ input {
   // s, m and a tap that opens the menu, and this was the last one.
   var keepEl = document.getElementById('keep')
 
+  // "kept" is said only once the Mac's kept counter has MOVED (render,
+  // below): the tap only asks, and the Mac can decline -- nothing
+  // resolvable to keep, or Discover playing another user's stems, listen
+  // only (2026-10-01), which the server answers 409 before forwarding.
+  var keptCount = 0
+  var keepPendingFrom = null
+  var keepPendingUntil = 0
+  var listenOnly = false
   keepEl.addEventListener('click', function () {
+    if (listenOnly) { flash('listening only'); return }
     buzz()
+    var before = keptCount
     api('/api/keep', {})
-    flash('kept')
+      .then(function (r) {
+        if (r.status === 409) { flash('listening only'); return }
+        if (!r.ok) { flash('not kept'); return }
+        keepPendingFrom = before
+        keepPendingUntil = Date.now() + 5000
+        flash('keeping')
+      })
+      .catch(function () { flash('not kept') })
   })
 
   function poll() {
