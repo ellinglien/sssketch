@@ -69,7 +69,13 @@ namespace sssketch
          * (single-channel) device has that one channel duplicated to both,
          * matching LoopRecorder's own convention (see its writeBlock's own
          * doc comment) -- both recording paths downmixed to mono in v1,
-         * which is gone now per direct feedback. */
+         * which is gone now per direct feedback.
+         *
+         * startSample is an offset into each inputChannelData array (the
+         * usual JUCE callback convention), so each must hold at least
+         * startSample + numSamples samples. It says nothing about WHERE in
+         * the loop buffer the block lands -- that is loopRelativeStartBar.
+         * Transport always passes 0. */
         void writeBlock(const float* const* inputChannelData, int numInputChannels, int startSample,
                          int numSamples, double loopRelativeStartBar);
 

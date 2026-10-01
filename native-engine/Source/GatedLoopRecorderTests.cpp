@@ -255,7 +255,11 @@ namespace sssketch
                 expect(recorder.writeToWavFile(path));
                 // Still open/capturing right after -- writeToWavFile didn't detach anything.
                 expect(recorder.isGateOpen());
-                recorder.writeBlock(channels, 1, 4800, 4800, 0.1);
+                // startSample is an offset into `loud` itself (which only holds 4800
+                // samples), not a write position -- where this block lands in the loop
+                // is loopRelativeStartBar's job. Passing 4800 here used to read 4800
+                // floats past the end of `loud` (an ASan heap-buffer-overflow).
+                recorder.writeBlock(channels, 1, 0, 4800, 0.1);
                 expect(recorder.isGateOpen());
                 expect(recorder.writeToWavFile(path)); // callable again, still fine
             }
