@@ -44,7 +44,7 @@ describe('the shared numbers, as the web spec and the radio code state them', ()
     expect(MASTERING.lowShelf).toEqual({ hz: 100, gainDb: 1 })
     expect(MASTERING.highShelf).toEqual({ hz: 10000, gainDb: 1 })
     expect(MASTERING.ceilingDb).toBe(-1)
-    expect(MASTERING.saturation).toEqual({ maxDrive: 2.4, bias: 0.1 })
+    expect(MASTERING.saturation).toEqual({ maxDrive: 1.8, bias: 0.1 })
     // the web's DynamicsCompressorNode fallback only (the native port runs the Faust path)
     expect(MASTERING.glue).toEqual({
       thresholdDb: -11,
@@ -76,7 +76,7 @@ describe('the shared numbers, as the web spec and the radio code state them', ()
       releaseSec: 0.2,
       keyLowpassHz: 150
     })
-    expect(FAUST_DEFAULTS.saturate).toEqual({ drive: 1.2, bias: 0.1 })
+    expect(FAUST_DEFAULTS.saturate).toEqual({ drive: 0.9, bias: 0.1 })
   })
 
   it('the dub echo: HP 200, LP 3500 in the loop, 0.15 to the reverb, 2 s line, feedback <= 0.95', () => {
@@ -96,14 +96,15 @@ describe('the amount maps', () => {
     expect(glueThresholdDb(Number.NaN)).toBe(-14)
   })
 
-  it('saturation: amount 0..1 is drive 0..2.4, clamped; the default 0.5 is 1.2, the web default', () => {
-    expect(saturationDrive(0.5)).toBeCloseTo(1.2, 12)
+  it('saturation: amount 0..1 is drive 0..1.8, clamped; the default 0.5 is 0.9, the web default', () => {
+    expect(saturationDrive(0.5)).toBeCloseTo(0.9, 12)
     expect(saturationDrive(DEFAULT_SOUND_SETTINGS.saturation.amount)).toBeCloseTo(
       FAUST_DEFAULTS.saturate.drive,
       12
     )
     expect(saturationDrive(0)).toBe(0)
-    expect(saturationDrive(2)).toBe(2.4)
+    expect(saturationDrive(2)).toBe(1.8)
+    expect(saturationDrive(1)).toBe(1.8)
     expect(saturationDrive(-1)).toBe(0)
   })
 

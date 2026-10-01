@@ -42,7 +42,7 @@ Elling approved the port on 2026-10-01.
 | D4 | The `.dsp` files move into sssketch (`native-engine/Source/dsp/faust/`) as the single source. The web compiles them from there (Task 1). |
 | D5 | Faust → C++ with a native compiler, installed with Homebrew (approved). Pin it to match the web; see Task 1 for the version situation. |
 | D6 | **Old projects get it all on too.** A project saved before this plan opens with the app-wide defaults (all on), the same as a new one; Elling switches stages off per project. |
-| D7 | **Saturation is adjustable and quieter by default.** Elling found drive 1.8 too strong. The web now takes an amount 0..1, drive = amount × 2.4, default 0.5 (drive 1.2, about 0.8% THD on a −14 dBFS sine instead of ~1.8%); the makeup follows the drive squared (+0.5 dB at 1.8), and drive 0 is an exact pass-through (`saturate.dsp`). `SoundSettings.saturation` uses the same amount scale and default. |
+| D7 | **Saturation is adjustable and quieter by default.** Elling found drive 1.8 too strong. The web now takes an amount 0..1, drive = amount × 1.8, default 0.5 (drive 0.9, 0.83% THD on a −14 dBFS sine instead of 1.8%; radio commit `4c233bf`); the makeup follows the drive squared (+0.5 dB at 1.8), and drive 0 is an exact pass-through (`saturate.dsp`). `SoundSettings.saturation` uses the same amount scale and default. |
 
 **Version situation for D5** (checked 2026-10-01):
 - The web's `@grame/faustwasm` 0.18.5 bundles libfaust **2.89.2**, which is a development build. The newest **published** Faust release is **2.88.0**: Homebrew's formula, and GRAME's GitHub release with a `Faust-2.88.0-arm64.dmg`. 2.89.2 is not installable as a release.
@@ -203,7 +203,7 @@ export interface SoundSettings {
   mastering: { on: boolean }                  // the headroom trim and the -1 dBTP limiter; the master stages below need it on
   glue: { on: boolean; amount: number }       // 0..1 -> threshold -8..-20 dB (more glue, lower threshold); 0.5 -> -14 (glue.dsp's default, what the web runs)
   tone: { on: boolean }                       // HP 25 Hz, width, and +1 dB shelves at 100 Hz and 10 kHz
-  saturation: { on: boolean; amount: number } // 0..1 -> drive 0..2.4; 0.5 -> 1.2, the web's default (D7)
+  saturation: { on: boolean; amount: number } // 0..1 -> drive 0..1.8; 0.5 -> 0.9, the web's default (D7)
   reverb: { room: 'cavern' | 'zita' }         // zita keeps its own roomSize/damping/preDelayMs in state.reverb
   panning: { on: boolean; width: number }     // 0..0.5; 0.25 is ROW_PAN
   pump: { on: boolean; depthDb: number }      // 0..8; 4 is the web's
@@ -227,7 +227,7 @@ No sound changes in this task.
 **Files:**
 - Create in sssketch: `src/shared/{radioPan,radioPump,radioThrows,riserCharacter,radioSound}.ts`, each with a test.
 - Modify in radio: `src/radio/{pan,pump,throws}.ts`, `src/audio/{riserCharacter,dubDelay,noise,masterChain,engine}.ts`, which become re-exports or imports.
-- **As landed (2026-10-01):** `masterChain.ts` (`MASTERING`) and `engine.ts` (`PumpRole`) were left alone. Another agent was changing them for the listener's saturation, pump and echo controls at the time. The shared `MASTERING` already has their new shape (`saturation: { maxDrive, bias }`), and `saturationDrive`/`saturationMakeupDb` match theirs, so each can become a one-line re-export once that work lands. `engine.ts`'s `PumpRole` is the same type as the shared one in the meantime. `stepThrows` takes an optional `everyBars`, which defaults to `THROW_EVERY_BARS`, so Task 11 can pass `throwEveryBars(rate)`.
+- **As landed (2026-10-01):** all eight radio files listed above now import or re-export from `@shared`. That includes `masterChain.ts` (`MASTERING`, `saturationDrive`, `saturationMakeupDb`) and `engine.ts` (`PumpRole`), which were edited after radio commit `4c233bf` (the listener's saturation, pump and echo controls) had landed. The radio's moved tests stay in place as wiring checks, and their copies run in sssketch. `stepThrows` takes an optional `everyBars`, which defaults to `THROW_EVERY_BARS`, so Task 11 can pass `throwEveryBars(rate)`. The web's echo level (`Engine.setEcho`, 0..1) has no `SoundSettings` field yet. If wanted, it can be added later as `throws.level`.
 
 - [x] **Step 1.** Copy each module verbatim, doc comments included, into sssketch `src/shared/`. Move its existing radio test with it. Run the tests red-then-green.
   - `radioThrows.ts` takes the pure `throwDelaySec`/`throwTailSec`/`ThrowTiming` out of `dubDelay.ts`.
@@ -543,12 +543,12 @@ The biquads are RBJ, at the web's Q: the HP's `biquadQ(0)` is −3.01 dB in Web 
 
 ### Task 8: tape saturation (item 5)
 
-**Where:** `MasterStage`'s saturation slot, after the HP and before the glue. Faust `saturate`: drive from the settings (`saturationDrive(amount)`, 1.2 by default, D7), bias 0.1, makeup `0.5 × (drive/1.8)²` dB (inside the `.dsp`), DC blocker at 5 Hz. The drive is smoothed over ~20 ms in the `.dsp`, and drive 0 is an exact pass-through.
+**Where:** `MasterStage`'s saturation slot, after the HP and before the glue. Faust `saturate`: drive from the settings (`saturationDrive(amount)`, 0.9 by default, D7), bias 0.1, makeup `0.5 × (drive/1.8)²` dB (inside the `.dsp`), DC blocker at 5 Hz. The drive is smoothed over ~20 ms in the `.dsp`, and drive 0 is an exact pass-through.
 
 **Native tests:**
 - [ ] Golden vector.
 - [ ] A −40 dBFS sine comes out at unity ± 0.01 dB.
-- [ ] THD of a −14 dBFS sine at the default drive 1.2 is about 0.8% (measure the web's figure in Task 1's golden run and pin it ± 0.3%). At drive 1.8 it is still 1.8% ± 0.3%.
+- [ ] THD of a −14 dBFS sine at the default drive 0.9 is 0.83% ± 0.2% (the web's measured figure). At drive 1.8 (amount 1) it is 1.8% ± 0.3%.
 - [ ] Drive 0 is bit-identical to the stage switched off, latency included.
 - [ ] No DC.
 - [ ] A dense mix level-matches within 0.3 dB.

@@ -14,10 +14,10 @@
 // native test (later tasks).
 //
 // SATURATION (Elling, 2026-10-01, listening: "a little too strong" at the old drive 1.8). It is
-// an amount 0..1, drive = amount x 2.4, as the web's listener control (Engine.setSaturation); the
-// default 0.5 is drive 1.2, about 0.8% THD on a -14 dBFS sine where 1.8 gave about 1.8%. The
-// makeup follows the drive squared (+0.5 dB at 1.8), and a drive of 0 is an exact pass-through
-// (faust/saturate.dsp).
+// an amount 0..1, drive = amount x 1.8, as the web's listener control (Engine.setSaturation): 1
+// is the drive it was built at (1.8% THD on a -14 dBFS sine), the default 0.5 half of it (drive
+// 0.9, 0.83% THD, a dense mix's peaks rounded by about 2 dB). The makeup follows the drive
+// squared (+0.5 dB at 1.8), and a drive of 0 is an exact pass-through (faust/saturate.dsp).
 
 import { ROW_PAN } from './radioPan'
 import { THROW_EVERY_BARS } from './radioThrows'
@@ -63,11 +63,15 @@ export const MASTERING = {
    * the spec's ~-14 LUFS with only light compression doing the rest. */
   headroomDb: -4,
   /** Gentle tape-style saturation before the glue (faust/saturate.dsp): drive = amount x
-   * maxDrive (saturationDrive). */
-  saturation: { maxDrive: 2.4, bias: 0.1 },
+   * maxDrive (saturationDrive): 1 is the drive it was built at (1.8, "a little too strong"), the
+   * default 0.5 half of it. */
+  saturation: { maxDrive: 1.8, bias: 0.1 },
   highpassHz: 25,
   /** The web's DynamicsCompressorNode FALLBACK glue only: the Faust glue (FAUST_DEFAULTS.glue)
-   * is what plays, and what the native port runs. */
+   * is what plays, and what the native port runs. A starting point, to tune by ear. Measured
+   * (headless render, the radio's spike/engine-check): four real stems (drums, bass, lead at 110
+   * bpm, a backing pad), after the headroom trim, get 1.5-2.9 dB of reduction (median 2.0) at
+   * -11 and come out at -13.8 dB RMS; -18 gave 4.4-5.9 dB, and without the trim 6-8 dB. */
   glue: {
     thresholdDb: -11,
     kneeDb: 0,
@@ -77,15 +81,18 @@ export const MASTERING = {
   },
   /** Light stereo width (Elling, 2026-09-30: "a light thing that expands the audio slightly"):
    * mid/side, the side through a high shelf so it gains ~2 dB above ~250 Hz and bass stays
-   * centred; the mid is untouched, so the mono sum (L+R = 2 * mid) is exactly unchanged. */
+   * centred; the mid is untouched, so the mono sum (L+R = 2 * mid) is exactly unchanged. No Haas
+   * delay, no decorrelation: it only scales what is already different between L and R. */
   width: { sideShelfHz: 250, sideGainDb: 2 },
   lowShelf: { hz: 100, gainDb: 1 },
   highShelf: { hz: 10000, gainDb: 1 },
   /** The web's DynamicsCompressorNode FALLBACK limiter only (FAUST_DEFAULTS.truepeak plays). */
   limiter: { thresholdDb: -1.5, kneeDb: 0, ratio: 20, attackSec: 0.001, releaseSec: 0.1 },
-  /** The ceiling, dBTP. */
+  /** The ceiling, dBTP; the fallback limiter's threshold is lifted to it ("makeup to about -1
+   * dBFS"). */
   ceilingDb: -1,
-  /** The web's bypass crossfade time constant (setTargetAtTime). */
+  /** The web's bypass crossfade time constant (setTargetAtTime): ~99% across in 5 tau = 50 ms.
+   * Wet and dry fade with the same exponential, so their gains always sum to 1. */
   bypassFadeTau: 0.01
 } as const
 
@@ -95,7 +102,7 @@ export const FAUST_DEFAULTS = {
   glue: { thresholdDb: -14, ratio: 2, kneeDb: 6 },
   truepeak: { ceilingDb: -1, releaseSec: 0.1, lookaheadSamples: 64, latencySamples: 75 },
   pump: { depthDb: 4, attackSec: 0.003, releaseSec: 0.2, keyLowpassHz: 150 },
-  saturate: { drive: 1.2, bias: 0.1 }
+  saturate: { drive: 0.9, bias: 0.1 }
 } as const
 
 /** The dub echo (the web's dubDelay.ts): a stereo ping-pong whose loop runs through a highpass
@@ -125,7 +132,7 @@ export interface SoundSettings {
   glue: { on: boolean; amount: number }
   /** HP 25 Hz, width, and +1 dB shelves at 100 Hz and 10 kHz. */
   tone: { on: boolean }
-  /** amount 0..1 -> drive 0..2.4 (saturationDrive); 0.5 is 1.2, the web's default. */
+  /** amount 0..1 -> drive 0..1.8 (saturationDrive); 0.5 is 0.9, the web's default. */
   saturation: { on: boolean; amount: number }
   /** zita keeps its own roomSize/damping/preDelayMs (the project's `reverb`). */
   reverb: { room: ReverbRoom }
@@ -245,7 +252,7 @@ export function glueThresholdDb(amount: number): number {
   return -8 - 12 * clampTo(finiteOr(amount, 0.5), SOUND_LIMITS.glueAmount)
 }
 
-/** The saturation's drive for an amount: 0..1 -> 0..2.4 (the web's masterChain.ts
+/** The saturation's drive for an amount: 0..1 -> 0..1.8 (the web's masterChain.ts
  * saturationDrive); a non-number is 0, no saturation. */
 export function saturationDrive(amount: number): number {
   return clampTo(finiteOr(amount, 0), SOUND_LIMITS.saturationAmount) * MASTERING.saturation.maxDrive
