@@ -1877,7 +1877,7 @@ function Frame(): React.JSX.Element {
     // too.
     setRiffLibraryInitialMode('discover')
     setDiscoverSlots(buildSeedSlotsFromStems(rifff.stems))
-    setDiscoverChaos(35)
+    setDiscoverChaos(DEFAULT_DISCOVER_CHAOS)
     setDiscoverUndoStack([[]])
     setDiscoverRedoStack([])
     setDiscoverSeedBpm(rifff.bpm)
