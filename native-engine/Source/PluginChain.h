@@ -81,13 +81,15 @@ namespace sssketch
          * (including a bridged slot -- bridge-hosted plugin state capture
          * is out of scope for this feature, see the design doc's non-goals).
          *
-         * Reads `active` without additional synchronization -- the SAME
-         * accepted-risk pattern openEditorWindow already uses just below
-         * (a plain pointer read racing the audio thread's own
-         * applyPendingSwaps() write is not new risk this method
-         * introduces; worst case is observing a briefly-stale but still
-         * valid pointer, never a torn read, on every real target
-         * platform). getStateInformation() itself is safe to call from the
+         * Safe against a concurrent swap: it reads the slot's current
+         * SlotState through an atomic, and a SlotState the audio thread
+         * swaps out is only ever freed by drainRetired() -- on the message
+         * thread, i.e. never while this (message-thread) call is using it.
+         * It used to read a plain unique_ptr the audio thread was moving
+         * from, with the outgoing instance deleted on a detached thread:
+         * both a null dereference and a heap-use-after-free, reproduced by
+         * PluginChainTests' "stress:" test. getStateInformation() itself is
+         * safe to call from the
          * message thread while this SAME instance concurrently processes
          * audio on another thread -- this is JUCE/VST3/AU's own
          * established host-plugin threading contract (real DAWs capture
@@ -133,11 +135,25 @@ namespace sssketch
          * Transport.cpp's own call sites). */
         void setPosition(double positionBars);
 
-        /** Audio-thread API: promotes any slot with a ready pending swap to
-         * active; the instance it replaces is handed to a background
-         * cleanup thread rather than deleted here (a plugin's destructor
-         * can do real work). Call once per block, before process(). */
+        /** Audio-thread API: promotes any slot with a ready pending load to
+         * current. Real-time safe: per slot, at most two atomic pointer
+         * exchanges and an atomic store -- no allocation, no free, no
+         * string copies, no thread creation. The SlotState it replaces is
+         * parked in the slot's single `retired` cell for drainRetired() to
+         * destroy on the message thread. While that cell is still occupied
+         * the slot's swap is DEFERRED -- left pending, retried next block --
+         * rather than dropping or overwriting anything. Call once per
+         * block, before process(). */
         void applyPendingSwaps();
+
+        /** Message-thread API: destroys whatever applyPendingSwaps() has
+         * retired (closing its editor window first, if one is open), which
+         * also unblocks that slot's next swap. Cheap when there's nothing
+         * to do: one atomic load per slot. IpcConnection calls it on every
+         * timer tick and inbound message, next to drainRetiredProject().
+         * Plugins are therefore always destroyed on the message thread,
+         * which is where AU/VST3 instances expect it. */
+        void drainRetired();
 
         /** Audio-thread API: runs outL/outR through every loaded slot's
          * plugin in series (slot 0 first), dropping any non-finite
@@ -200,37 +216,53 @@ namespace sssketch
             std::atomic<double> positionBars { 0.0 };
         };
 
-        // Bundles what a completed background load hands off to the audio
-        // thread via applyPendingSwaps() -- EITHER a local instance
-        // (bridgeSlotId empty) OR a bridge slot id (localInstance nullptr),
-        // never both. Deleting a PendingLoad that was never applied (e.g.
-        // PluginChain destroyed mid-load) also deletes localInstance if
-        // present -- mirrors the original design's "harmless" in-flight
-        // teardown reasoning (see PluginChain::~PluginChain), just one
-        // level deeper now that there are two kinds of pending state
-        // instead of one.
-        struct PendingLoad
+        // Everything that describes what one slot is running, as ONE
+        // immutable-once-published record: EITHER a local instance
+        // (bridgeSlotId empty) OR a bridge slot id (instance nullptr), or
+        // neither (an explicitly empty slot). Built completely on the
+        // message thread -- playhead attached, processChannels worked out --
+        // before the audio thread can see it, and never modified after, so
+        // a swap is a pointer exchange: nothing on the audio thread ever
+        // assigns, copies or frees a String or a plugin. Destroying a
+        // SlotState destroys its instance; that only ever happens on the
+        // message thread (drainRetired, the destructor) or in single-
+        // threaded export (loadPluginSync).
+        struct SlotState
         {
-            juce::AudioProcessor* localInstance = nullptr;
-            juce::String bridgeSlotId;
-            ~PendingLoad() { delete localInstance; }
-        };
-
-        struct Slot
-        {
-            std::unique_ptr<juce::AudioProcessor> active;
-            int processChannels = 2; // max(active's total input, total output) once a plugin is loaded
-            std::atomic<PendingLoad*> pending { nullptr };
-            std::atomic<bool> pendingReady { false };
-            juce::AudioBuffer<float> scratch;
-            std::unique_ptr<PluginEditorWindow> editorWindow;
+            std::unique_ptr<juce::AudioProcessor> instance;
             // Non-empty when this slot's plugin is running on the x86_64
             // bridge instead of in-process -- see
             // docs/superpowers/specs/2026-08-01-x86-plugin-bridge-design.md.
-            // `active` stays nullptr for a bridged slot. Only ever written
-            // by applyPendingSwaps() (audio thread), matching how `active`
-            // itself is only ever written there too.
             juce::String bridgeSlotId;
+            int processChannels = 2; // max(instance's total input, total output)
+        };
+
+        // A fully-built SlotState for `instance` (may be null: empty slot),
+        // playhead attached. Message thread / export only.
+        std::unique_ptr<SlotState> makeLocalState(std::unique_ptr<juce::AudioProcessor> instance);
+
+        struct Slot
+        {
+            // What the audio thread is running. Written only by
+            // applyPendingSwaps() (and by single-threaded export's
+            // loadPluginSync); read by process() and, on the message
+            // thread, by captureStateBase64/openEditorWindow -- safe there
+            // because only the message thread ever frees a SlotState.
+            std::atomic<SlotState*> state { nullptr };
+            // Message thread -> audio thread: the next SlotState to run. A
+            // newer load replacing one the audio thread hasn't taken yet
+            // deletes the older one (exchange makes that unambiguous).
+            std::atomic<SlotState*> pending { nullptr };
+            // Audio thread -> message thread: the SlotState a swap
+            // replaced, for drainRetired() to destroy. One cell; while it's
+            // occupied, this slot's next swap waits (see applyPendingSwaps).
+            std::atomic<SlotState*> retired { nullptr };
+            juce::AudioBuffer<float> scratch;
+            std::unique_ptr<PluginEditorWindow> editorWindow;
+            // Message thread only: the SlotState editorWindow's editor
+            // belongs to, so drainRetired() can close it before destroying
+            // that state's plugin (JUCE requires the editor go first).
+            const SlotState* editorFor = nullptr;
             // Reused interleaved-stereo scratch for the bridged path,
             // resized only when numSamples changes -- mirrors `scratch`
             // above's own resize-only-if-changed pattern, for the exact

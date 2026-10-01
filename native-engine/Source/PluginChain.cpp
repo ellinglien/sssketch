@@ -19,45 +19,78 @@ namespace sssketch
         // about to go away, or the process exits first. Not a concern for
         // this app's actual lifecycle (a short-lived engine process killed
         // by the parent Electron process on quit).
+        //
+        // Editor windows go first: JUCE requires an editor be deleted
+        // before its processor.
         for (auto& slot : slots)
-            delete slot.pending.exchange(nullptr); // PendingLoad's own dtor cleans up localInstance if set
+        {
+            slot.editorWindow.reset();
+            delete slot.pending.exchange(nullptr);
+            delete slot.retired.exchange(nullptr);
+            delete slot.state.exchange(nullptr);
+        }
     }
 
     void PluginChain::setBpm(double bpm) { playHead.setBpm(bpm); }
     void PluginChain::setPosition(double positionBars) { playHead.setPosition(positionBars); }
 
+    std::unique_ptr<PluginChain::SlotState> PluginChain::makeLocalState(std::unique_ptr<juce::AudioProcessor> instance)
+    {
+        auto state = std::make_unique<SlotState>();
+        if (instance != nullptr)
+        {
+            // Done here, before the audio thread can see the instance --
+            // this used to happen inside applyPendingSwaps, on the audio
+            // thread.
+            instance->setPlayHead(&playHead);
+            state->processChannels = std::max(
+                { 2, instance->getTotalNumInputChannels(), instance->getTotalNumOutputChannels() });
+        }
+        state->instance = std::move(instance);
+        return state;
+    }
+
     void PluginChain::applyPendingSwaps()
     {
         for (auto& slot : slots)
         {
-            if (!slot.pendingReady.exchange(false))
+            // The previous swap's outgoing state hasn't been collected yet:
+            // with nowhere to park another one, leave this swap pending and
+            // try again next block. drainRetired() empties the cell from the
+            // message thread at ~30Hz, so a deferral lasts a few blocks at
+            // most -- and only when two swaps land on one slot that close
+            // together.
+            if (slot.retired.load(std::memory_order_acquire) != nullptr)
                 continue;
-            auto* newPending = slot.pending.exchange(nullptr);
-            if (newPending == nullptr)
-                continue; // defensive: shouldn't happen if pendingReady was true
 
-            auto oldActive = std::move(slot.active);
-            slot.active.reset(newPending->localInstance);
-            newPending->localInstance = nullptr; // ownership moved into slot.active -- don't let PendingLoad's dtor double-delete it
-            slot.bridgeSlotId = newPending->bridgeSlotId;
-            delete newPending;
+            auto* next = slot.pending.exchange(nullptr, std::memory_order_acq_rel);
+            if (next == nullptr)
+                continue;
 
-            if (slot.active != nullptr)
-            {
-                slot.active->setPlayHead(&playHead);
-                slot.processChannels = std::max(
-                    { 2, slot.active->getTotalNumInputChannels(), slot.active->getTotalNumOutputChannels() });
-            }
-            else
-            {
-                slot.processChannels = 2;
-            }
+            auto* previous = slot.state.exchange(next, std::memory_order_acq_rel);
+            if (previous != nullptr)
+                slot.retired.store(previous, std::memory_order_release);
+        }
+    }
 
-            if (oldActive != nullptr)
+    void PluginChain::drainRetired()
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        for (auto& slot : slots)
+        {
+            auto* retired = slot.retired.load(std::memory_order_acquire);
+            if (retired == nullptr)
+                continue;
+            if (slot.editorFor == retired)
             {
-                auto* toDelete = oldActive.release();
-                std::thread([toDelete]() { delete toDelete; }).detach();
+                slot.editorWindow.reset(); // the editor must go before its processor
+                slot.editorFor = nullptr;
             }
+            delete retired;
+            // Only now, after the delete: the audio thread treats an
+            // occupied cell as "defer", so it never parks a second state
+            // here while this one is being destroyed.
+            slot.retired.store(nullptr, std::memory_order_release);
         }
     }
 
@@ -66,8 +99,11 @@ namespace sssketch
         juce::MidiBuffer midi;
         for (auto& slot : slots)
         {
-            const bool isBridged = !slot.bridgeSlotId.isEmpty();
-            if (slot.active == nullptr && !isBridged)
+            const auto* state = slot.state.load(std::memory_order_acquire);
+            if (state == nullptr)
+                continue; // never loaded = passthrough
+            const bool isBridged = state->bridgeSlotId.isNotEmpty();
+            if (state->instance == nullptr && !isBridged)
                 continue; // empty slot = passthrough, not a break in the chain
 
             if (isBridged)
@@ -80,7 +116,7 @@ namespace sssketch
                 if (bridgeClient != nullptr)
                     bridgeScope.emplace(*bridgeClient);
                 auto* channel = bridgeClient != nullptr && bridgeClient->isHealthy()
-                    ? bridgeClient->channelFor(slot.bridgeSlotId)
+                    ? bridgeClient->channelFor(state->bridgeSlotId)
                     : nullptr;
                 if (channel == nullptr)
                 {
@@ -134,8 +170,8 @@ namespace sssketch
             }
 
             // Existing in-process path, unchanged from before this task:
-            if (slot.scratch.getNumSamples() != numSamples || slot.scratch.getNumChannels() != slot.processChannels)
-                slot.scratch.setSize(slot.processChannels, numSamples, false, false, true);
+            if (slot.scratch.getNumSamples() != numSamples || slot.scratch.getNumChannels() != state->processChannels)
+                slot.scratch.setSize(state->processChannels, numSamples, false, false, true);
             slot.scratch.clear();
             for (int i = 0; i < numSamples; ++i)
             {
@@ -143,7 +179,7 @@ namespace sssketch
                 slot.scratch.setSample(1, i, outR[i]);
             }
 
-            slot.active->processBlock(slot.scratch, midi);
+            state->instance->processBlock(slot.scratch, midi);
             midi.clear();
 
             for (int i = 0; i < numSamples; ++i)
@@ -217,22 +253,23 @@ namespace sssketch
         if (instance != nullptr)
             applyStateBase64(*instance, stateBase64);
         auto& slot = slots[(size_t) slotIndex];
-        slot.active = std::move(instance); // nullptr (empty pluginId) is a valid "no plugin" state
-        if (slot.active != nullptr)
-            slot.active->setPlayHead(&playHead);
-        slot.processChannels = slot.active != nullptr
-            ? std::max({ 2, slot.active->getTotalNumInputChannels(), slot.active->getTotalNumOutputChannels() })
-            : 2;
+        // nullptr (empty pluginId) is a valid "no plugin" state. Export is
+        // single-threaded -- nothing else is reading this slot -- so the
+        // previous state can be deleted right here.
+        delete slot.state.exchange(makeLocalState(std::move(instance)).release(), std::memory_order_acq_rel);
         return true;
     }
 
     juce::String PluginChain::captureStateBase64(int slotIndex) const
     {
-        const auto& slot = slots[(size_t) slotIndex];
-        if (slot.active == nullptr)
+        // ONE load, then everything through it: the audio thread may swap
+        // the slot at any moment, but the state loaded here can't be freed
+        // until drainRetired() runs -- on this same (message) thread.
+        const auto* state = slots[(size_t) slotIndex].state.load(std::memory_order_acquire);
+        if (state == nullptr || state->instance == nullptr)
             return {};
         juce::MemoryBlock block;
-        slot.active->getStateInformation(block);
+        state->instance->getStateInformation(block);
         return block.toBase64Encoding();
     }
 
@@ -250,16 +287,28 @@ namespace sssketch
         if (slotIndex < 0 || slotIndex >= (int) slots.size())
             return false;
         auto& slot = slots[(size_t) slotIndex];
+        // One load, read through for the rest of this call -- see
+        // captureStateBase64 for why that is safe on the message thread.
+        const auto* state = slot.state.load(std::memory_order_acquire);
 
-        if (!slot.bridgeSlotId.isEmpty())
+        if (state != nullptr && state->bridgeSlotId.isNotEmpty())
         {
             // Bridged slot -- the actual editor window lives in the bridge
             // process (see BridgeSlot::openEditor), not here. `active` is
             // always null for a bridged slot, so without this branch the
             // no-op check below would silently swallow the request.
             if (bridgeClient != nullptr)
-                bridgeClient->openEditor(slot.bridgeSlotId);
+                bridgeClient->openEditor(state->bridgeSlotId);
             return true;
+        }
+
+        if (slot.editorWindow != nullptr && slot.editorFor != state)
+        {
+            // Still showing the editor of a plugin this slot has since
+            // swapped away from (drainRetired would close it on its next
+            // pass anyway) -- close it now and open the current one's.
+            slot.editorWindow.reset();
+            slot.editorFor = nullptr;
         }
 
         if (slot.editorWindow != nullptr)
@@ -279,15 +328,16 @@ namespace sssketch
             slot.editorWindow->toFront(true);
             return true;
         }
-        if (slot.active == nullptr || !slot.active->hasEditor())
+        if (state == nullptr || state->instance == nullptr || !state->instance->hasEditor())
             return true; // no-op: nothing to open
 
-        auto* editor = slot.active->createEditorIfNeeded();
+        auto* editor = state->instance->createEditorIfNeeded();
         if (editor == nullptr)
             return true;
 
         slot.editorWindow = std::make_unique<PluginEditorWindow>(
-            slot.active->getName(), editor, [this, slotIndex]() { closeEditorWindow(slotIndex); });
+            state->instance->getName(), editor, [this, slotIndex]() { closeEditorWindow(slotIndex); });
+        slot.editorFor = state;
         return true;
     }
 
@@ -296,13 +346,15 @@ namespace sssketch
         if (slotIndex < 0 || slotIndex >= (int) slots.size())
             return;
         auto& slot = slots[(size_t) slotIndex];
-        if (!slot.bridgeSlotId.isEmpty())
+        const auto* state = slot.state.load(std::memory_order_acquire);
+        if (state != nullptr && state->bridgeSlotId.isNotEmpty())
         {
             if (bridgeClient != nullptr)
-                bridgeClient->closeEditor(slot.bridgeSlotId);
+                bridgeClient->closeEditor(state->bridgeSlotId);
             return;
         }
         slot.editorWindow.reset();
+        slot.editorFor = nullptr;
     }
 
     void PluginChain::requestLoad(
@@ -330,9 +382,9 @@ namespace sssketch
                     if (success)
                     {
                         auto& slot = slots[(size_t) slotIndex];
-                        auto* newPending = new PendingLoad { nullptr, newBridgeSlotId };
-                        delete slot.pending.exchange(newPending);
-                        slot.pendingReady.store(true);
+                        auto next = std::make_unique<SlotState>();
+                        next->bridgeSlotId = newBridgeSlotId;
+                        delete slot.pending.exchange(next.release(), std::memory_order_acq_rel);
                     }
                     if (onLoaded)
                         onLoaded(success, error);
@@ -365,17 +417,17 @@ namespace sssketch
             if (success)
             {
                 // Applied here, strictly before the instance is published
-                // via slot.pending/pendingReady below -- the audio thread's
-                // own applyPendingSwaps() is the ONLY place slot.active
-                // (and therefore audio-thread visibility) ever gets set, so
-                // an instance that hasn't reached that exchange yet is
+                // via slot.pending below -- the audio thread's own
+                // applyPendingSwaps() is the ONLY place slot.state (and
+                // therefore audio-thread visibility) ever changes, so an
+                // instance that hasn't reached that exchange yet is
                 // provably not being concurrently processed. See this
-                // method's own .h doc comment.
+                // method's own .h doc comment. A newer load replacing one
+                // the audio thread hasn't taken yet deletes the older one,
+                // here on the message thread.
                 if (instance != nullptr)
                     applyStateBase64(*instance, stateBase64);
-                auto* newPending = new PendingLoad { instance.release(), {} };
-                delete slot.pending.exchange(newPending);
-                slot.pendingReady.store(true);
+                delete slot.pending.exchange(makeLocalState(std::move(instance)).release(), std::memory_order_acq_rel);
             }
 
             if (onLoaded)

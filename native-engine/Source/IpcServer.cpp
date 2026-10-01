@@ -277,6 +277,12 @@ namespace sssketch
         // what keeps the NEXT swap from having to defer. Costs one relaxed
         // bool load when there is nothing to collect.
         engine.drainRetiredProject();
+        // Same deal for plugins: every chain slot whose plugin the audio
+        // thread swapped out parks the outgoing one for exactly this, so
+        // plugins are destroyed here on the message thread, and that slot's
+        // next swap stops deferring. One atomic load per slot when idle.
+        masterChain.drainRetired();
+        channelChains.drainRetired();
 
         if (stagedToken < 0)
             return;

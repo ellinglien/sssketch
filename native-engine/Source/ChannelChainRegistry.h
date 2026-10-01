@@ -129,6 +129,13 @@ namespace sssketch
          * chainFor()-based process() calls. */
         void applyPendingSwaps();
 
+        /** Message-thread API: PluginChain::drainRetired() on every
+         * currently published channel's chain -- destroys plugins the audio
+         * thread swapped out, on the message thread, and unblocks those
+         * slots' next swaps. A dropped channel's chain drains in its own
+         * destructor instead. */
+        void drainRetired();
+
         /** Audio-thread API: the channel's chain if one is currently
          * published, or nullptr (treat as passthrough) otherwise. Never
          * blocks, never allocates -- one atomic pointer load plus an
