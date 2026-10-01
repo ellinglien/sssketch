@@ -8744,7 +8744,7 @@ function DiscoverSlotRow({
             dim, which says the same thing about the right button. */}
         <RowIconButton
           gridColumn={12}
-          tooltip="replace now"
+          tooltip={radioOn ? 'replace at loop top · ⌘ now' : 'replace'}
           onClick={(e) => {
             setRerollAction('similar')
             onReroll(e.metaKey)

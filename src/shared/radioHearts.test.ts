@@ -6,7 +6,8 @@ import {
   parseLikesResponse,
   planLikeImport,
   planHeartImport,
-  type RadioHeartCombo
+  type RadioHeartCombo,
+  type RadioStemLike
 } from './radioHearts'
 
 function heart(stems: string[], count = 1): RadioHeartCombo {
@@ -159,7 +160,7 @@ describe('parseLikesResponse', () => {
 })
 
 describe('planLikeImport', () => {
-  const like = (stem: string) => ({ stem, count: 1, first: 1, last: 1 })
+  const like = (stem: string): RadioStemLike => ({ stem, count: 1, first: 1, last: 1 })
 
   it('stars a new liked stem with local audio, and records it', () => {
     const plan = planLikeImport([like('a')], new Set(), new Set(), resolver())

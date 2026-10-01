@@ -4,7 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DiscoveredMemberInput } from './discoveredLibrary'
-import type { FetchLike } from './radioHeartsImport'
+import type { FetchLike, FetchRadioHeartsDeps } from './radioHeartsImport'
 import {
   RADIO_HEARTS_URL,
   heartRiffName,
@@ -469,7 +469,7 @@ describe('fetchRadioHearts', () => {
 
   describe('likes', () => {
     const like = (stem: string): RadioStemLike => ({ stem, count: 2, first: 1, last: 2 })
-    const deps = (db: Database.Database) => ({
+    const deps = (db: Database.Database): Omit<FetchRadioHeartsDeps, 'fetch'> => ({
       key: 'k',
       ownDb: db,
       archiveReachable: () => true,
