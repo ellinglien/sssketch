@@ -41,13 +41,15 @@ Elling approved the port on 2026-10-01.
 | D3 | The cavernous reverb replaces zita, selectable in the settings. Zita stays available and keeps its three existing controls. |
 | D4 | The `.dsp` files move into sssketch (`native-engine/Source/dsp/faust/`) as the single source. The web compiles them from there (Task 1). |
 | D5 | Faust → C++ with a native compiler, installed with Homebrew (approved). Pin it to match the web; see Task 1 for the version situation. |
+| D6 | **Old projects get it all on too.** A project saved before this plan opens with the app-wide defaults (all on), the same as a new one; Elling switches stages off per project. |
+| D7 | **Saturation is adjustable and quieter by default.** Elling found drive 1.8 too strong. The web now takes an amount 0..1, drive = amount × 2.4, default 0.5 (drive 1.2, about 0.8% THD on a −14 dBFS sine instead of ~1.8%); the makeup follows the drive squared (+0.5 dB at 1.8), and drive 0 is an exact pass-through (`saturate.dsp`). `SoundSettings.saturation` uses the same amount scale and default. |
 
 **Version situation for D5** (checked 2026-10-01):
 - The web's `@grame/faustwasm` 0.18.5 bundles libfaust **2.89.2**, which is a development build. The newest **published** Faust release is **2.88.0**: Homebrew's formula, and GRAME's GitHub release with a `Faust-2.88.0-arm64.dmg`. 2.89.2 is not installable as a release.
 - So the plan installs 2.88.0 natively and **re-pins the web's faustwasm to the release whose libfaust reports 2.88.0**. The two compilers then match exactly.
 - If no published faustwasm bundles 2.88.0, the fallback is to build Faust from source at the 2.89.2 commit and keep the web where it is.
 
-**One ruling inside D1/D2, flagged for Elling to confirm in review:** in DAW exports (Ableton/REAPER) and per-stem bakes, every stem gets its **per-stem** stages (pan, filter, sends), but the **master-bus** stages (headroom, saturation, glue, tone, limiter, the pump's mix) do not. The DAW session has its own master, and each stem would be limited on its own. Mixdown bounces get the whole chain.
+**One ruling inside D1/D2, confirmed by Elling (2026-10-01):** in DAW exports (Ableton/REAPER) and per-stem bakes, every stem gets its **per-stem** stages (pan, filter, sends), but the **master-bus** stages (headroom, saturation, glue, tone, limiter, the pump's mix) do not. The DAW session has its own master, and each stem would be limited on its own. Mixdown bounces get the whole chain.
 
 ---
 
@@ -199,9 +201,9 @@ caller:    Transport: masterChain (4 user plugin slots) -> reposition fade -> de
 // src/shared/radioSound.ts
 export interface SoundSettings {
   mastering: { on: boolean }                  // the headroom trim and the -1 dBTP limiter; the master stages below need it on
-  glue: { on: boolean; amount: number }       // 0..1 -> threshold -20..-8 dB; 0.5 -> -14 (glue.dsp's default, what the web runs)
+  glue: { on: boolean; amount: number }       // 0..1 -> threshold -8..-20 dB (more glue, lower threshold); 0.5 -> -14 (glue.dsp's default, what the web runs)
   tone: { on: boolean }                       // HP 25 Hz, width, and +1 dB shelves at 100 Hz and 10 kHz
-  saturation: { on: boolean; drive: number }  // 1..4; 1.8 is the web's
+  saturation: { on: boolean; amount: number } // 0..1 -> drive 0..2.4; 0.5 -> 1.2, the web's default (D7)
   reverb: { room: 'cavern' | 'zita' }         // zita keeps its own roomSize/damping/preDelayMs in state.reverb
   panning: { on: boolean; width: number }     // 0..0.5; 0.25 is ROW_PAN
   pump: { on: boolean; depthDb: number }      // 0..8; 4 is the web's
@@ -212,6 +214,7 @@ export interface SoundSettings {
 
 - `DEFAULT_SOUND_SETTINGS` is all on, at the web's values.
 - `normalizeSoundSettings(unknown)` fills anything missing or junk from the defaults it is given, and clamps the amounts.
+- The maps: `glueThresholdDb(amount)`, `saturationDrive(amount)`, `saturationMakeupDb(drive)`, `throwEveryBars(rate)`. `SOUND_LIMITS` holds the ranges. Task 0 landed these.
 - **The wire carries resolved parameters, not amounts.** For example `glue.thresholdDb`, not `glue.amount`. The engine never needs to know the UI's scale, and the TS maps are unit-tested.
 - **Glue, tone and saturation are master stages.** They only run when `mastering.on` is true. The UI greys them out otherwise, so a limiter-less glue chain can't be built by accident.
 
@@ -224,22 +227,23 @@ No sound changes in this task.
 **Files:**
 - Create in sssketch: `src/shared/{radioPan,radioPump,radioThrows,riserCharacter,radioSound}.ts`, each with a test.
 - Modify in radio: `src/radio/{pan,pump,throws}.ts`, `src/audio/{riserCharacter,dubDelay,noise,masterChain,engine}.ts`, which become re-exports or imports.
+- **As landed (2026-10-01):** `masterChain.ts` (`MASTERING`) and `engine.ts` (`PumpRole`) were left alone. Another agent was changing them for the listener's saturation, pump and echo controls at the time. The shared `MASTERING` already has their new shape (`saturation: { maxDrive, bias }`), and `saturationDrive`/`saturationMakeupDb` match theirs, so each can become a one-line re-export once that work lands. `engine.ts`'s `PumpRole` is the same type as the shared one in the meantime. `stepThrows` takes an optional `everyBars`, which defaults to `THROW_EVERY_BARS`, so Task 11 can pass `throwEveryBars(rate)`.
 
-- [ ] **Step 1.** Copy each module verbatim, doc comments included, into sssketch `src/shared/`. Move its existing radio test with it. Run the tests red-then-green.
+- [x] **Step 1.** Copy each module verbatim, doc comments included, into sssketch `src/shared/`. Move its existing radio test with it. Run the tests red-then-green.
   - `radioThrows.ts` takes the pure `throwDelaySec`/`throwTailSec`/`ThrowTiming` out of `dubDelay.ts`.
   - `radioPump.ts` takes `PumpRole` out of `engine.ts`.
-- [ ] **Step 2.** In `radioSound.ts`, add the numbers (`REVERB_IR`, `REVERB_RETURN_DB`, `MASTERING`, `DUB_*`) and the `SoundSettings` shape above, with `DEFAULT_SOUND_SETTINGS`, `normalizeSoundSettings` and the amount-to-parameter maps. Tests pin:
+- [x] **Step 2.** In `radioSound.ts`, add the numbers (`REVERB_IR`, `REVERB_RETURN_DB`, `MASTERING`, `DUB_*`) and the `SoundSettings` shape above, with `DEFAULT_SOUND_SETTINGS`, `normalizeSoundSettings` and the amount-to-parameter maps. Tests pin:
   - every number as the web spec states it;
   - defaults all on;
   - junk normalised to defaults;
   - amounts clamped;
   - `glueThresholdDb(0.5) === -14`;
   - `throwEveryBars('normal')` deep-equals `[16, 32]`.
-- [ ] **Step 3.** Add the timeline helpers, test-first:
+- [x] **Step 3.** Add the timeline helpers, test-first:
   - `stemPansForRifff(stems)`: `panForSlots` over the rifff's stems in slot order, with a `drums`/`bass` `SoundType` counted as centred;
   - `pumpRoleForSoundType(type)`.
-- [ ] **Step 4.** In the radio repo, replace each module's body with `export … from '@shared/…'`. Make radio's `panForSlots` call honour a width argument, defaulting to `ROW_PAN`. Run its tests and commit there.
-- [ ] **Step 5.** Commit in sssketch. No renderer or engine change yet.
+- [x] **Step 4.** In the radio repo, replace each module's body with `export … from '@shared/…'`. Make radio's `panForSlots` call honour a width argument, defaulting to `ROW_PAN`. Run its tests and commit there.
+- [x] **Step 5.** Commit in sssketch. No renderer or engine change yet.
 
 **Risk:** low. Land the sssketch commit before the radio one.
 
@@ -539,12 +543,13 @@ The biquads are RBJ, at the web's Q: the HP's `biquadQ(0)` is −3.01 dB in Web 
 
 ### Task 8: tape saturation (item 5)
 
-**Where:** `MasterStage`'s saturation slot, after the HP and before the glue. Faust `saturate`: drive from the settings (1.8 by default), bias 0.1, makeup +0.5 dB, DC blocker at 5 Hz.
+**Where:** `MasterStage`'s saturation slot, after the HP and before the glue. Faust `saturate`: drive from the settings (`saturationDrive(amount)`, 1.2 by default, D7), bias 0.1, makeup `0.5 × (drive/1.8)²` dB (inside the `.dsp`), DC blocker at 5 Hz. The drive is smoothed over ~20 ms in the `.dsp`, and drive 0 is an exact pass-through.
 
 **Native tests:**
 - [ ] Golden vector.
 - [ ] A −40 dBFS sine comes out at unity ± 0.01 dB.
-- [ ] THD of a −14 dBFS sine at drive 1.8 is 1.8% ± 0.3%.
+- [ ] THD of a −14 dBFS sine at the default drive 1.2 is about 0.8% (measure the web's figure in Task 1's golden run and pin it ± 0.3%). At drive 1.8 it is still 1.8% ± 0.3%.
+- [ ] Drive 0 is bit-identical to the stage switched off, latency included.
 - [ ] No DC.
 - [ ] A dense mix level-matches within 0.3 dB.
 - [ ] Switched off, the stage is absent.
@@ -725,7 +730,7 @@ Every export follows the project's settings.
 - [ ] **CPU:** profile a dense mix (8 rows, all on) at 48 kHz/256. Note the numbers in the commit.
 - [ ] The full native suite and `npx vitest run` are green. Hand Elling the walkthrough below.
 
-**Risk:** the per-stem/master split in DAW and stem exports is a ruling Elling should confirm (see the decisions section).
+**Ruling:** the per-stem/master split in DAW and stem exports is confirmed by Elling (see the decisions section).
 
 ---
 
@@ -746,7 +751,7 @@ Do this in `npm run dev`, after a **full Cmd+Q and relaunch** once the engine is
    - on the timeline: the export has the same throws as the pass;
    - the rate setting.
 10. **Settings (T13):** every switch works live; settings save with the project; a new project gets the defaults; an old project opens with the defaults on.
-11. **Exports (T14):** a mixdown sounds like the pass; a DAW export's stems have pan, throws and reverb but no mastering. Confirm that ruling.
+11. **Exports (T14):** a mixdown sounds like the pass; a DAW export's stems have pan, throws and reverb but no mastering (the ruling Elling confirmed).
 12. **The whole:** an hour of radio, and one finished timeline project. Does the app now sound like the web? Note anything that differs, with rifff names.
 
 ---
@@ -766,5 +771,5 @@ Do this in `npm run dev`, after a **full Cmd+Q and relaunch** once the engine is
 | Matching web quirks rather than intent | T5, T7, T10 | match what Elling heard (convolver normalisation, decibel Q, StereoPanner law); each listed in code comments and offered as web fixes |
 | `renderBlock` routing (pan, pump, dub) | T4, T9, T10 | pointer routing only; separate post-loop passes; heavy tests |
 | DiscoverPanel plumbing | T11 | gated on `radioOnRef` and the setting; pure helpers extracted and tested |
-| Per-stem vs master split in DAW and stem exports | T14 | flagged for Elling's confirmation |
+| Per-stem vs master split in DAW and stem exports | T14 | confirmed by Elling, 2026-10-01 |
 | The riser's "level means level" contract | T6 | becomes a power match, documented; the limiter backstops it |
