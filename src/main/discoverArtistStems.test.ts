@@ -3,12 +3,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { getArtistStemCIDs, getArtistStemRows, readArtistStemRows } from './discoverArtistStems'
 import { countWork } from './workCounters'
+import { readTableSignal } from './tableChangeSignal'
 
 // Pass-through spy: countWork is a no-op in tests (counters never enabled),
 // so recording the calls changes nothing else.
 vi.mock('./workCounters', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./workCounters')>()
   return { ...actual, countWork: vi.fn() }
+})
+
+vi.mock('./tableChangeSignal', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./tableChangeSignal')>()
+  return { ...actual, readTableSignal: vi.fn(actual.readTableSignal) }
 })
 
 function pageReads(): number {
@@ -132,5 +138,37 @@ describe('concurrent reads and the shared Stems signal', () => {
       .mocked(countWork)
       .mock.calls.filter(([kind]) => kind === 'sql:cache-check.Stems').length
     expect(checks).toBe(1)
+  })
+})
+
+describe('Task 3 review: in-flight walks and the signal', () => {
+  it('concurrent first walks for two artists read the Stems signal once', async () => {
+    const db = archive()
+    seed(db, 'a1', 'jam1', 'tpj')
+    seed(db, 'b1', 'jam1', 'honeydisco')
+    vi.mocked(readTableSignal).mockClear()
+    await Promise.all([getArtistStemRows([db], 'tpj'), getArtistStemRows([db], 'honeydisco')])
+    expect(vi.mocked(readTableSignal)).toHaveBeenCalledTimes(1)
+  })
+
+  it('an invalidation drops in-flight walks: the next call does not join a stale one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-01T12:00:00Z'))
+    const db = archive()
+    const insert = db.prepare(
+      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName) VALUES (?, 'jam1', 'tpj')`
+    )
+    db.transaction(() => {
+      for (let i = 0; i < 4500; i++) insert.run(`t${i}`)
+    })()
+    // Fill the cache once so the db has a signal state to go stale.
+    await getArtistStemRows([db], 'other')
+    const stale = getArtistStemRows([db], 'tpj') // page 1 read, then yields
+    db.prepare(`DELETE FROM Stems WHERE StemCID = 't0'`).run()
+    vi.setSystemTime(new Date('2026-10-01T12:01:00Z'))
+    const fresh = await getArtistStemRows([db], 'tpj')
+    expect((await stale).some((r) => r.stemCID === 't0')).toBe(true)
+    expect(fresh.some((r) => r.stemCID === 't0')).toBe(false)
+    expect(fresh).toHaveLength(4499)
   })
 })

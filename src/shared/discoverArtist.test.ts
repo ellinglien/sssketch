@@ -284,3 +284,35 @@ describe('labels', () => {
     expect(analysedLabel(65357, 66534)).toBe('analysed: 98%')
   })
 })
+
+describe('suggestArtists: Task 3 review', () => {
+  const counts = [
+    { user: 'elling', stems: 66534 },
+    { user: 'bananepoep', stems: 31398 },
+    { user: 'tpj', stems: 500 }
+  ]
+  it('an empty jammed-with list falls back to stem count, so the picker is never only me', () => {
+    expect(
+      suggestArtists({ counts, jammedWith: [], jammedWithPending: false }, '', 'elling')
+    ).toEqual([
+      { kind: 'me' },
+      { kind: 'user', user: 'bananepoep', stems: 31398, sharedJams: null },
+      { kind: 'user', user: 'tpj', stems: 500, sharedJams: null }
+    ])
+  })
+  it('gives the same answer when called again with the same index (maps built once)', () => {
+    const index = {
+      counts,
+      jammedWith: [{ user: 'tpj', sharedJams: 3 }],
+      jammedWithPending: false
+    }
+    const first = suggestArtists(index, 'b', 'elling')
+    expect(suggestArtists(index, 'b', 'elling')).toEqual(first)
+    expect(suggestArtists(index, '', 'elling')[1]).toEqual({
+      kind: 'user',
+      user: 'tpj',
+      stems: 500,
+      sharedJams: 3
+    })
+  })
+})

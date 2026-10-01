@@ -18,7 +18,10 @@
 
 
 **Decisions after planning (Elling, 2026-10-01):**
-- **Jammed-with is saved to disk.** It's computed once by the background scan and stored in a small table in the own db (e.g. `DiscoverJammedWith(User PK, SharedJams, ComputedAt)`, with the archive change signal it was built from). It's reused instantly on launch and recomputed only when the archive's `Stems` change signal moves. This replaces the spec's "in memory per session" for this list only. Stem counts and analysed % stay as planned.
+- **Jammed-with is saved to disk.** It's computed once by the background scan and saved in the own db. Stem counts and analysed % stay as planned. This replaces the spec's "in memory per session" for this list only.
+  - *Revised in the Task 3 review:* what's saved is each **source db's** distinct `(jam, user)` pairs: `DiscoverJamUserPairs(SourceDbKey, JamCID, User)` and `DiscoverJamUserPairsMeta(SourceDbKey PK, StemCount, MaxRowid, ComputedAt)`.
+  - The final list isn't saved. It's rebuilt from the pairs in JS, which takes milliseconds.
+  - On launch, a db whose saved count and MAX(rowid) still match isn't walked at all. Only a db that has moved is re-walked. This matters because the own db is a source and moves with every riff sync, so saving only the list would rarely have saved the ~15 s archive walk.
 - **Other artists' audio is stored on the USB drive** in LORE's folder, where `resolveStemPath` already writes for archive jams (`cache/common/stem_v2/<jam>/…`). This is the plan's existing behaviour, now confirmed.
 
 ---
@@ -1586,16 +1589,29 @@ git commit -m "discover artist: search counts, background jammed-with walk, anal
 
 **As landed:**
 - **Shared half:** exactly as above. The test's mid-file `import` was merged into the file's top import, and `DISCOVERED_JAM_CID`'s import sits at the top of `discoverArtist.ts`.
-- **Jammed-with saved to disk** (the "Decisions after planning" item, which the code above predates):
-  - New `src/main/discoverJammedWithStore.ts` holds `DiscoverJammedWith(User PK, SharedJams, ComputedAt)` and `DiscoverJammedWithMeta(SourceDbKey PK, StemCount, MaxRowid, OwnUsername, ComputedAt)`. There's one meta row per source db, keyed by `db.name` like `DiscoverRiffIndexCacheMeta`.
-  - Only count and MAX(rowid) persist. `writes` is per process and `data_version` per connection, so neither survives a relaunch.
-  - The tables are created lazily on first use, like Task 8's queue, **not** in `riffLibrarySchema.ts`. That's because `riffLibrarySchema.test.ts` lists every own-db table exactly, and the existing tests must not be edited.
-  - Rows load back sorted in JS with `jammedWithFromPairs`'s order (SQLite's BINARY collation isn't `localeCompare`).
-- **`getArtistIndex(ownDb, dbs, ownUsername)`** gains `ownDb` as its first parameter and works in three steps:
-  - It returns a trusted list (from disk or from a finished walk) while every db's Stems signal is current.
-  - Otherwise, on the first look this session for that own username and db set, it serves the saved list with no walk if every source db still reads the saved count and MAX(rowid).
-  - Otherwise it runs the plan's background walk. When the walk lands it saves the result and trusts it. Meanwhile the saved list for the same own username is shown as stale with `jammedWithPending: true`.
-  - If one source db moves, every db is re-walked once in that session, because pairs aren't persisted, only the list.
+- **Jammed-with saved to disk** (the "Decisions after planning" item, which the code above predates), in its revised form (Task 3 review commit):
+  - **Store:** `src/main/discoverJamUserPairsStore.ts` saves each source db's `(jam, user)` pairs plus a meta row, keyed by `db.name` like `DiscoverRiffIndexCacheMeta`.
+    - Only count and MAX(rowid) persist. `writes` is per process and `data_version` per connection.
+    - The store's header documents the gap: an in-place UPDATE between launches isn't seen.
+    - Tables are created lazily on first use, like Task 8's queue, **not** in `riffLibrarySchema.ts`, whose test lists every own-db table exactly.
+    - The DDL drops the first commit's unreleased `DiscoverJammedWith*` tables.
+  - **`getArtistIndex(ownDb, dbs, ownUsername)`** (gains `ownDb`):
+    - Per db, it uses in-memory pairs while they're current.
+    - Otherwise, on the first look this session, it uses the saved pairs if that db's count and MAX(rowid) still match.
+    - Otherwise it walks that db in the background, saves the result, and meanwhile shows the old pairs.
+    - Pairs are independent of the user, so a different own username gets its list at once.
+    - The list is memoised per (pairs, own username).
+  - **Walk:**
+    - Pair pages are 2,000 rows, the measured ~250 ms cold-page size.
+    - A failed walk backs off 60 s (`jammedWithPending: false` meanwhile) instead of retrying on every poll.
+    - `abortArtistIndexWork()` (wired to `will-quit`) stops walks at their next page and starts no new ones.
+  - **Signal and counts:**
+    - The Stems signal is read at most once per db per call, shared by the counts check, the pairs check and new cache states.
+    - Concurrent `countsFor` calls share one read.
+  - **IPC:** `discover-artist-index` type-checks `ownUsername`.
+- **Same review, other files:**
+  - `suggestArtists` falls back to stem order when `jammedWith` is empty, not only when it's null, and builds its lookup maps once per index object.
+  - `discoverArtistStems.ts` clears in-flight walks on invalidation (a stale walk only removes its own entry). It reads the shared Stems signal into the per-db state before the first walk starts, so concurrent walks for two artists read it once.
 - **`getArtistAnalysed`:** prepares its chunk statement once per placeholder count, the same as Task 2's review fix. The `discover-artist-analysed` handler trims the artist and returns `{analysed: 0, total: 0}` when it's blank.
 - **Tests:** the plan's test calls pass a fixture own db. New tests cover:
   - the list is written once the walk lands;
@@ -1603,7 +1619,8 @@ git commit -m "discover artist: search counts, background jammed-with walk, anal
   - a moved archive shows the stale list, recomputes and re-saves;
   - another own username or another source-db set is never served;
   - the tables are created lazily.
-  - The file uses the same pass-through `workCounters` spy.
+  - The file uses the same pass-through `workCounters` spy. Source dbs are temp files, because pairs are keyed by `db.name`.
+  - The review commit replaced the list-on-disk tests with: per-db pairs saved; a relaunch walks nothing; a moved own-db source is the only db re-walked; another username is served at once; lazy tables; 60 s back-off; abort on quit; concurrent counts share one read. Mutating the back-off, abort and disk-load lines each fails a test.
 - **Gates:** typecheck clean, lint at the 4 pre-existing warnings, 233 files / 3,807 tests green, and `CI=1` skips `discoverArtistIndex.test.ts`. `radioDropOut.test.ts` failed once under full-suite load, then passed 6/6 alone and in a full rerun. It's unrelated.
 
 ---

@@ -195,6 +195,31 @@ export type ArtistSuggestion =
 
 const SUGGESTION_LIMIT = 12
 
+interface IndexLookups {
+  stemsOf: Map<string, number>
+  sharedOf: Map<string, number>
+  /** Every user, most stems first, then name. */
+  byStems: string[]
+}
+/** Built once per index object: the picker calls suggestArtists on every
+ * keystroke with the same index, and counts can hold ~6,000 users. */
+const lookups = new WeakMap<ArtistIndex, IndexLookups>()
+
+function lookupsFor(index: ArtistIndex): IndexLookups {
+  let hit = lookups.get(index)
+  if (!hit) {
+    hit = {
+      stemsOf: new Map(index.counts.map((c) => [c.user, c.stems])),
+      sharedOf: new Map((index.jammedWith ?? []).map((j) => [j.user, j.sharedJams])),
+      byStems: [...index.counts]
+        .sort((a, b) => b.stems - a.stems || a.user.localeCompare(b.user))
+        .map((c) => c.user)
+    }
+    lookups.set(index, hit)
+  }
+  return hit
+}
+
 export function suggestArtists(
   index: ArtistIndex,
   query: string,
@@ -203,8 +228,7 @@ export function suggestArtists(
 ): ArtistSuggestion[] {
   const q = query.trim().toLowerCase()
   const own = ownUsername.trim()
-  const stemsOf = new Map(index.counts.map((c) => [c.user, c.stems]))
-  const sharedOf = new Map((index.jammedWith ?? []).map((j) => [j.user, j.sharedJams]))
+  const { stemsOf, sharedOf, byStems } = lookupsFor(index)
   const toSuggestion = (user: string): ArtistSuggestion => ({
     kind: 'user',
     user,
@@ -213,12 +237,9 @@ export function suggestArtists(
   })
   const me: ArtistSuggestion = { kind: 'me' }
   if (q === '') {
-    const ordered =
-      index.jammedWith !== null
-        ? index.jammedWith.map((j) => j.user)
-        : [...index.counts]
-            .sort((a, b) => b.stems - a.stems || a.user.localeCompare(b.user))
-            .map((c) => c.user)
+    // An EMPTY jammed-with list (no own username, or nobody shared a jam)
+    // falls back to stem count too, so the picker is never just `me`.
+    const ordered = index.jammedWith?.length ? index.jammedWith.map((j) => j.user) : byStems
     return [
       me,
       ...ordered

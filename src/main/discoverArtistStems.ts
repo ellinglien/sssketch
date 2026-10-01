@@ -61,10 +61,11 @@ export async function readArtistStemRows(
 }
 
 interface PerDb {
-  /** ONE Stems signal for every artist cached on this db, read before the
-   * walk that first filled the (empty) cache. Any write since then reads
-   * as stale and drops every artist at once, so a roll pays one signal
-   * check per db, not one per cached artist. Null while nothing is cached. */
+  /** ONE Stems signal for every artist cached on this db, read once, before
+   * the first walk on an empty cache starts (so concurrent walks share the
+   * earliest reading). Any write since then reads as stale and drops every
+   * artist at once, so a roll pays one signal check per db, not one per
+   * cached artist. Null after an invalidation until the next walk starts. */
   state: ScanCacheState | null
   /** Map order is the LRU order. */
   artists: Map<string, ArtistStemRow[]>
@@ -90,6 +91,8 @@ function rowsForDb(db: Database.Database, artist: string): Promise<ArtistStemRow
   if (perDb.state !== null && !isScanCacheCurrent(db, 'Stems', perDb.state)) {
     perDb.state = null
     perDb.artists.clear()
+    // Walks still running read the old table: the next call must not join one.
+    perDb.inFlight.clear()
     perDb.generation += 1
   }
   const hit = perDb.artists.get(artist)
@@ -101,14 +104,17 @@ function rowsForDb(db: Database.Database, artist: string): Promise<ArtistStemRow
   const pending = perDb.inFlight.get(artist)
   if (pending) return pending
 
-  // Signal read BEFORE the walk: a write landing mid-walk reads as stale next time.
-  const signal = perDb.state === null ? readTableSignal(db, 'Stems') : null
+  // Signal read BEFORE the walk, into the shared state: a write landing
+  // mid-walk reads as stale next time.
+  if (perDb.state === null) perDb.state = newScanCacheState(readTableSignal(db, 'Stems'))
   const generation = perDb.generation
-  const walk = (async (): Promise<ArtistStemRow[]> => {
+  // `let` so the finally below can compare against it; assigned before that
+  // finally can run (the body suspends at its first await).
+  let walk: Promise<ArtistStemRow[]> | null = null
+  walk = (async (): Promise<ArtistStemRow[]> => {
     try {
       const rows = await readArtistStemRows(db, artist)
       if (perDb.generation === generation) {
-        if (perDb.state === null) perDb.state = newScanCacheState(signal)
         perDb.artists.delete(artist)
         perDb.artists.set(artist, rows)
         while (perDb.artists.size > MAX_CACHED_ARTISTS) {
@@ -117,7 +123,8 @@ function rowsForDb(db: Database.Database, artist: string): Promise<ArtistStemRow
       }
       return rows
     } finally {
-      perDb.inFlight.delete(artist)
+      // Only our own entry: an invalidation may have replaced it already.
+      if (perDb.inFlight.get(artist) === walk) perDb.inFlight.delete(artist)
     }
   })()
   // Set before anything awaits it: the async body above has suspended at

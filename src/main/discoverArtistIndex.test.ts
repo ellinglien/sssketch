@@ -1,14 +1,18 @@
 // src/main/discoverArtistIndex.test.ts
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
+  abortArtistIndexWork,
   getArtistAnalysed,
   getArtistIndex,
   readArtistCounts,
   readJamUserPairs,
   resetArtistIndexForTests
 } from './discoverArtistIndex'
-import { DISCOVER_JAMMED_WITH_DDL } from './discoverJammedWithStore'
+import { DISCOVER_JAM_USER_PAIRS_DDL } from './discoverJamUserPairsStore'
 import { countWork } from './workCounters'
 
 // Pass-through spy: countWork is a no-op in tests (counters never enabled).
@@ -23,8 +27,14 @@ function pairPages(): number {
     .mock.calls.filter(([kind]) => kind === 'sql:discover.artist-pairs-page').length
 }
 
+// File-backed, each with its own name: saved pairs are keyed by db.name,
+// and every in-memory db is called ':memory:'.
+const dir = mkdtempSync(join(tmpdir(), 'artist-index-'))
+let dbSerial = 0
+const opened: Database.Database[] = []
 function archive(): Database.Database {
-  const db = new Database(':memory:')
+  const db = new Database(join(dir, `db${dbSerial++}.db3`))
+  opened.push(db)
   db.exec(`CREATE TABLE Stems (StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL,
     CreatorUserName TEXT);
     CREATE INDEX Stems_IndexUser ON Stems (CreatorUserName);`)
@@ -34,7 +44,7 @@ function ownDb(): Database.Database {
   const db = archive()
   db.exec(`CREATE TABLE StemFeatureCache (StemCID TEXT PRIMARY KEY, FeaturesJSON TEXT NOT NULL,
     ExtractedAt INTEGER NOT NULL);`)
-  db.exec(DISCOVER_JAMMED_WITH_DDL)
+  db.exec(DISCOVER_JAM_USER_PAIRS_DDL)
   return db
 }
 function seed(db: Database.Database, stemCID: string, jam: string, user: string | null): void {
@@ -44,6 +54,11 @@ function seed(db: Database.Database, stemCID: string, jam: string, user: string 
 afterEach(() => {
   resetArtistIndexForTests()
   vi.useRealTimers()
+  vi.restoreAllMocks()
+})
+afterAll(() => {
+  for (const db of opened) db.close()
+  rmSync(dir, { recursive: true, force: true })
 })
 
 describe('readArtistCounts', () => {
@@ -113,17 +128,18 @@ describe('getArtistAnalysed', () => {
   })
 })
 
-// Elling's decision (2026-10-01): jammed-with is saved to the own db and
-// reused on launch until the archive's Stems signal moves.
-describe('jammed-with saved to disk', () => {
-  async function built(
+// Elling's decision (2026-10-01), as revised in review: each source db's
+// (jam, user) pairs are saved to the own db, so a launch walks only a db
+// that moved, and the list is rebuilt from the pairs.
+describe('pairs saved to disk', () => {
+  async function settled(
     own: Database.Database,
-    db: Database.Database,
+    dbs: Database.Database[],
     ownUsername = 'elling'
   ): Promise<void> {
-    await getArtistIndex(own, [db], ownUsername)
+    await getArtistIndex(own, dbs, ownUsername)
     await vi.waitFor(async () => {
-      expect((await getArtistIndex(own, [db], ownUsername)).jammedWithPending).toBe(false)
+      expect((await getArtistIndex(own, dbs, ownUsername)).jammedWithPending).toBe(false)
     })
   }
   function sharedArchive(): Database.Database {
@@ -140,23 +156,34 @@ describe('jammed-with saved to disk', () => {
     { user: 'bananepoep', sharedJams: 1 }
   ]
 
-  it('writes the list to DiscoverJammedWith once the walk lands', async () => {
+  it("writes each source db's pairs and its signal once its walk lands", async () => {
     const own = ownDb()
     const db = sharedArchive()
-    await built(own, db)
-    const rows = own
-      .prepare(`SELECT User, SharedJams FROM DiscoverJammedWith ORDER BY SharedJams DESC`)
-      .all()
-    expect(rows).toEqual([
-      { User: 'tpj', SharedJams: 2 },
-      { User: 'bananepoep', SharedJams: 1 }
+    await settled(own, [db])
+    expect(
+      own
+        .prepare(
+          `SELECT JamCID, User FROM DiscoverJamUserPairs WHERE SourceDbKey = ? ORDER BY JamCID, User`
+        )
+        .all(db.name)
+    ).toEqual([
+      { JamCID: 'j1', User: 'elling' },
+      { JamCID: 'j1', User: 'tpj' },
+      { JamCID: 'j2', User: 'bananepoep' },
+      { JamCID: 'j2', User: 'elling' },
+      { JamCID: 'j2', User: 'tpj' }
     ])
+    expect(
+      own
+        .prepare(`SELECT StemCount, MaxRowid FROM DiscoverJamUserPairsMeta WHERE SourceDbKey = ?`)
+        .get(db.name)
+    ).toEqual({ StemCount: 5, MaxRowid: 5 })
   })
 
-  it('on the next launch serves the saved list at once, with no walk', async () => {
+  it('on the next launch serves the list at once, with no walk', async () => {
     const own = ownDb()
     const db = sharedArchive()
-    await built(own, db)
+    await settled(own, [db])
     resetArtistIndexForTests() // a relaunch: nothing in memory
     vi.mocked(countWork).mockClear()
     const next = await getArtistIndex(own, [db], 'elling')
@@ -165,64 +192,126 @@ describe('jammed-with saved to disk', () => {
     expect(pairPages()).toBe(0)
   })
 
-  it('once the archive Stems moved: shows the saved list while it recomputes, then saves the new one', async () => {
+  it('a launch after one source moved re-walks only that db', async () => {
     const own = ownDb()
-    const db = sharedArchive()
-    await built(own, db)
+    const archiveDb = sharedArchive()
+    const ownSource = archive()
+    seed(ownSource, 'o1', 'j3', 'elling')
+    seed(ownSource, 'o2', 'j3', 'seaweed')
+    await settled(own, [archiveDb, ownSource])
     resetArtistIndexForTests()
-    seed(db, 's6', 'j1', 'honeydisco')
-    const stale = await getArtistIndex(own, [db], 'elling')
-    expect(stale.jammedWith).toEqual(LIST)
-    expect(stale.jammedWithPending).toBe(true)
-    const fresh = [
+    seed(ownSource, 'o3', 'j3', 'honeydisco') // a riff sync on the own db
+    vi.mocked(countWork).mockClear()
+    const first = await getArtistIndex(own, [archiveDb, ownSource], 'elling')
+    // The moved db's old pairs are shown while it re-walks.
+    expect(first.jammedWith).toEqual([
       { user: 'tpj', sharedJams: 2 },
       { user: 'bananepoep', sharedJams: 1 },
-      { user: 'honeydisco', sharedJams: 1 }
-    ]
+      { user: 'seaweed', sharedJams: 1 }
+    ])
+    expect(first.jammedWithPending).toBe(true)
     await vi.waitFor(async () => {
-      const next = await getArtistIndex(own, [db], 'elling')
-      expect(next.jammedWith).toEqual(fresh)
+      const next = await getArtistIndex(own, [archiveDb, ownSource], 'elling')
       expect(next.jammedWithPending).toBe(false)
+      expect(next.jammedWith).toEqual([
+        { user: 'tpj', sharedJams: 2 },
+        { user: 'bananepoep', sharedJams: 1 },
+        { user: 'honeydisco', sharedJams: 1 },
+        { user: 'seaweed', sharedJams: 1 }
+      ])
     })
-    resetArtistIndexForTests()
-    expect((await getArtistIndex(own, [db], 'elling')).jammedWith).toEqual(fresh)
+    // One small page: the own-db source only. The archive was not walked.
+    expect(pairPages()).toBe(1)
   })
 
-  it('never serves a list saved for another own username', async () => {
+  it('pairs are user-independent: another own username gets its list at once', async () => {
     const own = ownDb()
     const db = sharedArchive()
-    await built(own, db, 'elling')
+    await settled(own, [db], 'elling')
     resetArtistIndexForTests()
     const other = await getArtistIndex(own, [db], 'tpj')
-    expect(other.jammedWith).toBeNull()
-    expect(other.jammedWithPending).toBe(true)
+    expect(other.jammedWithPending).toBe(false)
+    expect(other.jammedWith).toEqual([
+      { user: 'elling', sharedJams: 2 },
+      { user: 'bananepoep', sharedJams: 1 }
+    ])
   })
 
-  it('never serves a list saved for a different set of source dbs', async () => {
-    const own = ownDb()
+  it('creates its tables on first use in an own db that lacks them', async () => {
+    const own = new Database(':memory:')
     const db = sharedArchive()
-    await built(own, db)
-    resetArtistIndexForTests()
-    const second = archive()
-    seed(second, 'x1', 'j9', 'elling')
-    // Same name (':memory:') but a second source: the saved meta has one row.
-    const next = await getArtistIndex(own, [db, second], 'elling')
-    expect(next.jammedWithPending).toBe(true)
+    await settled(own, [db])
+    expect(
+      (own.prepare(`SELECT COUNT(*) AS n FROM DiscoverJamUserPairs`).get() as { n: number }).n
+    ).toBe(5)
   })
 })
 
-describe('discoverJammedWithStore', () => {
-  it('creates its tables on first use in an own db that lacks them', async () => {
-    const own = new Database(':memory:')
+describe('pairs walk: failure and quit', () => {
+  it('backs off ~60 s after a failed walk instead of retrying on every poll', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-01T12:00:00Z'))
+    const own = ownDb()
     const db = archive()
     seed(db, 's1', 'j1', 'elling')
-    seed(db, 's2', 'j1', 'tpj')
+    const realPrepare = db.prepare.bind(db)
+    vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      const stmt = realPrepare(sql)
+      if (!sql.includes('AS jam')) return stmt
+      return {
+        all: () => {
+          throw new Error('disk gone')
+        }
+      } as unknown as Database.Statement
+    }) as typeof db.prepare)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(countWork).mockClear()
     await getArtistIndex(own, [db], 'elling')
     await vi.waitFor(async () => {
       expect((await getArtistIndex(own, [db], 'elling')).jammedWithPending).toBe(false)
     })
-    expect(own.prepare(`SELECT User, SharedJams FROM DiscoverJammedWith`).all()).toEqual([
-      { User: 'tpj', SharedJams: 1 }
-    ])
+    expect(pairPages()).toBe(1)
+    vi.setSystemTime(new Date('2026-10-01T12:00:30Z'))
+    const backingOff = await getArtistIndex(own, [db], 'elling')
+    expect(backingOff).toMatchObject({ jammedWith: null, jammedWithPending: false })
+    expect(pairPages()).toBe(1)
+    vi.setSystemTime(new Date('2026-10-01T12:01:01Z'))
+    expect((await getArtistIndex(own, [db], 'elling')).jammedWithPending).toBe(true)
+    expect(pairPages()).toBe(2)
+  })
+
+  it('stops a running walk at its next page on quit and saves nothing', async () => {
+    const own = ownDb()
+    const db = archive()
+    const insert = db.prepare(`INSERT INTO Stems VALUES (?, 'j1', ?)`)
+    db.transaction(() => {
+      for (let i = 0; i < 5000; i++) insert.run(`s${i}`, `user${i % 7}`)
+    })()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(countWork).mockClear()
+    const first = await getArtistIndex(own, [db], 'elling') // page 1 read, then yields
+    expect(first.jammedWithPending).toBe(true)
+    abortArtistIndexWork()
+    await vi.waitFor(async () => {
+      expect((await getArtistIndex(own, [db], 'elling')).jammedWithPending).toBe(false)
+    })
+    expect(pairPages()).toBe(1)
+    expect(
+      (own.prepare(`SELECT COUNT(*) AS n FROM DiscoverJamUserPairsMeta`).get() as { n: number }).n
+    ).toBe(0)
+  })
+})
+
+describe('getArtistIndex: shared work', () => {
+  it('concurrent first calls share one counts read', async () => {
+    const own = ownDb()
+    const db = archive()
+    seed(db, 's1', 'j1', 'elling')
+    vi.mocked(countWork).mockClear()
+    await Promise.all([getArtistIndex(own, [db], 'elling'), getArtistIndex(own, [db], 'elling')])
+    const countPages = vi
+      .mocked(countWork)
+      .mock.calls.filter(([kind]) => kind === 'sql:discover.artist-counts-page').length
+    expect(countPages).toBe(1)
   })
 })

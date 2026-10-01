@@ -106,7 +106,7 @@ import type { RemoteCommand, RemoteState } from '@shared/remoteState'
 import type { PairingGate } from '@shared/remoteAuth'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
 import { getArtistStemCIDs } from './discoverArtistStems'
-import { getArtistAnalysed, getArtistIndex } from './discoverArtistIndex'
+import { abortArtistIndexWork, getArtistAnalysed, getArtistIndex } from './discoverArtistIndex'
 import type Database from 'better-sqlite3'
 import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
@@ -1334,12 +1334,16 @@ app.whenReady().then(async () => {
     return [...new Set(listJamsWithDb().map(({ db }) => db))]
   }
 
-  ipcMain.handle('discover-artist-index', (_event, ownUsername: string) =>
-    getArtistIndex(openOwnRiffLibraryDb(), discoverSourceDbs(), ownUsername)
+  ipcMain.handle('discover-artist-index', (_event, ownUsername: unknown) =>
+    getArtistIndex(
+      openOwnRiffLibraryDb(),
+      discoverSourceDbs(),
+      typeof ownUsername === 'string' ? ownUsername : ''
+    )
   )
 
-  ipcMain.handle('discover-artist-analysed', (_event, artist: string) => {
-    const name = artist?.trim() || undefined
+  ipcMain.handle('discover-artist-analysed', (_event, artist: unknown) => {
+    const name = (typeof artist === 'string' ? artist.trim() : '') || undefined
     return name
       ? getArtistAnalysed(openOwnRiffLibraryDb(), discoverSourceDbs(), name)
       : { analysed: 0, total: 0 }
@@ -2099,6 +2103,8 @@ app.on('window-all-closed', () => {
 // actually happening.
 app.on('will-quit', () => {
   stopPhoneRemote()
+  // Discover artist mode's background walks stop at their next page.
+  abortArtistIndexWork()
 })
 
 // Asks the renderer to save now (the quit dialog's own "Save" choice,

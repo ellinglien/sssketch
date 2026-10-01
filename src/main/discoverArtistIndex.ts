@@ -9,15 +9,19 @@
 //           cache). The obvious IN-subquery form took 60-69 s. So pairs are
 //           built by a BACKGROUND rowid walk, paged and yielding, and the
 //           picker works from the counts until it lands.
-// Counts and pairs are in memory, per session, re-validated against the
-// Stems table signal. The jammed-with LIST is also saved to the own db
-// (Elling's decision, 2026-10-01; discoverJammedWithStore.ts): on launch it
-// is served at once, with no walk, while every source db's Stems count and
-// MAX(rowid) still match what it was built from.
+// Counts are in memory, per session. Pairs are in memory AND saved to the
+// own db per source db (Elling's decision, 2026-10-01;
+// discoverJamUserPairsStore.ts): on launch a db whose Stems count and
+// MAX(rowid) still match its saved pairs is not walked at all, and a change
+// re-walks only the db that moved. The jammed-with list is rebuilt from the
+// pairs in JS. Everything is re-validated against the Stems table signal,
+// read at most ONCE per db per call. Known gap across launches (no
+// in-place-update signal survives a restart): see the store's header.
 import type Database from 'better-sqlite3'
 import { countWork } from './workCounters'
 import {
-  isScanCacheCurrent,
+  CACHE_CHANGE_CHECK_INTERVAL_MS,
+  isTableSignalCurrent,
   newScanCacheState,
   readTableSignal,
   type ScanCacheState,
@@ -31,16 +35,25 @@ import {
   type JammedWith
 } from '@shared/discoverArtist'
 import { getArtistStemCIDs } from './discoverArtistStems'
-import {
-  loadSavedJammedWith,
-  saveJammedWith,
-  type JammedWithSource,
-  type SavedJammedWith
-} from './discoverJammedWithStore'
+import { loadSavedPairs, savePairs } from './discoverJamUserPairsStore'
 
 const USER_PAGE = 500
-const PAIR_PAGE = 20_000
+/** Rowid pages of the full table. Kept at the size a cold USB page was
+ * measured at (2,000 rows ~250 ms in discoverArtistStems.ts) so no single
+ * slice blocks the main process for longer. ~390 pages for 781k stems. */
+const PAIR_PAGE = 2000
+/** After a failed pairs walk, the picker's polls wait this long before
+ * starting another, rather than looping on a broken db. */
+const PAIRS_RETRY_MS = 60_000
 const FEATURE_CHUNK = 500
+
+/** Set on quit: running walks stop at their next page and nothing new
+ * starts, so no walk holds a statement on a db that is being closed. */
+let aborted = false
+
+export function abortArtistIndexWork(): void {
+  aborted = true
+}
 
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
@@ -64,6 +77,7 @@ export async function readArtistCounts(
   // '' as the first bound skips NULL and empty names in one go.
   let after = ''
   for (;;) {
+    if (aborted) throw new Error('discoverArtistIndex: aborted (quitting)')
     countWork('sql:discover.artist-counts-page')
     const page = stmt.all(after, pageSize) as ArtistCount[]
     out.push(...page)
@@ -91,6 +105,7 @@ export async function readJamUserPairs(
   const out: [string, string][] = []
   let after = 0
   for (;;) {
+    if (aborted) throw new Error('discoverArtistIndex: aborted (quitting)')
     countWork('sql:discover.artist-pairs-page')
     const page = stmt.all(after, pageSize) as { rid: number; jam: string; user: string | null }[]
     for (const { jam, user } of page) {
@@ -107,108 +122,143 @@ export async function readJamUserPairs(
   return out
 }
 
+/** The live Stems signal, read at most once per db per getArtistIndex call
+ * and shared by every check and every new cache state in that call. */
+type SignalOf = (db: Database.Database) => TableSignal | null
+
+function signalReader(): SignalOf {
+  const read = new Map<Database.Database, TableSignal | null>()
+  return (db) => {
+    if (!read.has(db)) read.set(db, readTableSignal(db, 'Stems'))
+    return read.get(db) as TableSignal | null
+  }
+}
+
+/** isScanCacheCurrent, but taking the live signal from the call's reader so
+ * counts and pairs never read it twice. */
+function isCurrent(db: Database.Database, state: ScanCacheState, signalOf: SignalOf): boolean {
+  const now = Date.now()
+  if (now - state.checkedAt < CACHE_CHANGE_CHECK_INTERVAL_MS) return true
+  state.checkedAt = now
+  countWork('sql:cache-check.Stems')
+  return isTableSignalCurrent(state.signal, signalOf(db), state.builtAt, now)
+}
+
 interface Cached<T> {
   value: T
   state: ScanCacheState
 }
 let countsCache = new WeakMap<Database.Database, Cached<ArtistCount[]>>()
+let countsInFlight = new WeakMap<Database.Database, Promise<ArtistCount[]>>()
 let pairsCache = new WeakMap<Database.Database, Cached<[string, string][]>>()
 let pairsInFlight = new WeakMap<Database.Database, Promise<void>>()
+/** Saved pairs that no longer match their db: shown while it re-walks. */
+let stalePairs = new WeakMap<Database.Database, [string, string][]>()
+/** Source dbs whose saved pairs were already consulted this session. */
+let diskTried = new WeakSet<Database.Database>()
+let pairsFailedAt = new WeakMap<Database.Database, number>()
 
-async function countsFor(db: Database.Database): Promise<ArtistCount[]> {
+function countsFor(db: Database.Database, signalOf: SignalOf): Promise<ArtistCount[]> {
   const hit = countsCache.get(db)
-  if (hit && isScanCacheCurrent(db, 'Stems', hit.state)) return hit.value
-  const state = newScanCacheState(readTableSignal(db, 'Stems'))
-  const value = await readArtistCounts(db)
-  countsCache.set(db, { value, state })
-  return value
+  if (hit && isCurrent(db, hit.state, signalOf)) return Promise.resolve(hit.value)
+  const pending = countsInFlight.get(db)
+  if (pending) return pending
+  const state = newScanCacheState(signalOf(db))
+  const run = readArtistCounts(db)
+    .then((value) => {
+      countsCache.set(db, { value, state })
+      return value
+    })
+    .catch((err: unknown) => {
+      console.error('discoverArtistIndex: counts failed:', err)
+      return hit?.value ?? []
+    })
+    .finally(() => {
+      if (countsInFlight.get(db) === run) countsInFlight.delete(db)
+    })
+  countsInFlight.set(db, run)
+  return run
 }
 
-/** Current pairs, or null -- and starts the background walk when missing
- * or stale. Never awaited by a caller: the picker polls instead. */
-function pairsFor(db: Database.Database): { pairs: [string, string][] | null; pending: boolean } {
-  const hit = pairsCache.get(db)
-  if (hit && isScanCacheCurrent(db, 'Stems', hit.state)) return { pairs: hit.value, pending: false }
-  if (!pairsInFlight.has(db)) {
-    const state = newScanCacheState(readTableSignal(db, 'Stems'))
-    const run = readJamUserPairs(db)
-      .then((value) => {
-        pairsCache.set(db, { value, state })
-      })
-      .catch((err: unknown) => console.error('discoverArtistIndex: pairs walk failed:', err))
-      .finally(() => pairsInFlight.delete(db))
-    pairsInFlight.set(db, run)
-  }
-  // A stale-but-present answer is still shown while the refresh runs.
-  return { pairs: hit?.value ?? null, pending: true }
-}
-
-function sourceOf(db: Database.Database, signal: TableSignal | null): JammedWithSource {
-  return {
-    sourceDbKey: db.name,
-    stemCount: signal?.count ?? null,
-    maxRowid: signal?.maxRowid ?? null
-  }
-}
-
-/** Whether a saved list was built for this own username from exactly these
- * dbs, each still reading the Stems count and MAX(rowid) it had then. */
-function savedMatches(
-  saved: SavedJammedWith,
-  ownUsername: string,
-  live: readonly JammedWithSource[]
+function savedSignalMatches(
+  saved: { stemCount: number | null; maxRowid: number | null },
+  live: TableSignal | null
 ): boolean {
-  if (saved.ownUsername !== ownUsername || saved.sources.length !== live.length) return false
-  return live.every((l) =>
-    saved.sources.some(
-      (s) =>
-        s.sourceDbKey === l.sourceDbKey && s.stemCount === l.stemCount && s.maxRowid === l.maxRowid
-    )
-  )
+  return saved.stemCount === (live?.count ?? null) && saved.maxRowid === (live?.maxRowid ?? null)
 }
 
-/** The jammed-with answer this session trusts without a walk: from disk
- * (first look) or from a finished walk. `states` are one per db, in order. */
-interface Verified {
-  ownUsername: string
-  dbs: readonly Database.Database[]
-  states: ScanCacheState[]
-  value: JammedWith[]
-}
-let verified = new WeakMap<Database.Database, Verified>()
-/** Shown while a walk runs, when nothing verified is: the saved list for
- * the same own username, even if a source db has moved since. */
-let shownWhileWalking = new WeakMap<
-  Database.Database,
-  { ownUsername: string; value: JammedWith[] }
->()
-/** Which (own username, dbs) the disk was already consulted for. */
-let diskChecked = new WeakMap<Database.Database, string>()
-
-function sameDbs(a: readonly Database.Database[], b: readonly Database.Database[]): boolean {
-  return a.length === b.length && a.every((db, i) => db === b[i])
-}
-
-/** First look this session: the saved list, verified against live signals. */
-function verifyFromDisk(
+/** Current pairs, or null -- and starts the background walk when missing or
+ * stale. Never awaited by a caller: the picker polls instead. */
+function pairsFor(
   ownDb: Database.Database,
-  dbs: readonly Database.Database[],
-  ownUsername: string
-): Verified | null {
-  const saved = loadSavedJammedWith(ownDb)
-  if (!saved) return null
-  if (saved.ownUsername === ownUsername) {
-    shownWhileWalking.set(ownDb, { ownUsername, value: saved.list })
+  db: Database.Database,
+  signalOf: SignalOf
+): { pairs: [string, string][] | null; pending: boolean } {
+  const hit = pairsCache.get(db)
+  if (hit && isCurrent(db, hit.state, signalOf)) return { pairs: hit.value, pending: false }
+
+  // First look this session: the pairs saved on an earlier launch.
+  if (!hit && !diskTried.has(db)) {
+    diskTried.add(db)
+    const saved = loadSavedPairs(ownDb, db.name)
+    if (saved) {
+      const live = signalOf(db)
+      if (savedSignalMatches(saved, live)) {
+        pairsCache.set(db, { value: saved.pairs, state: newScanCacheState(live) })
+        return { pairs: saved.pairs, pending: false }
+      }
+      stalePairs.set(db, saved.pairs)
+    }
   }
-  const signals = dbs.map((db) => readTableSignal(db, 'Stems'))
-  const live = dbs.map((db, i) => sourceOf(db, signals[i]))
-  if (!savedMatches(saved, ownUsername, live)) return null
-  return {
-    ownUsername,
-    dbs: [...dbs],
-    states: signals.map((signal) => newScanCacheState(signal)),
-    value: saved.list
+
+  // Shown while a walk runs (or while backing off after a failed one).
+  const shown = hit?.value ?? stalePairs.get(db) ?? null
+  if (pairsInFlight.has(db)) return { pairs: shown, pending: true }
+  if (aborted) return { pairs: shown, pending: false }
+  const failedAt = pairsFailedAt.get(db)
+  if (failedAt !== undefined && Date.now() - failedAt < PAIRS_RETRY_MS) {
+    return { pairs: shown, pending: false }
   }
+
+  // Signal read BEFORE the walk: a write landing mid-walk reads as stale next time.
+  const state = newScanCacheState(signalOf(db))
+  const run = readJamUserPairs(db)
+    .then((value) => {
+      pairsCache.set(db, { value, state })
+      stalePairs.delete(db)
+      pairsFailedAt.delete(db)
+      savePairs(
+        ownDb,
+        db.name,
+        { stemCount: state.signal?.count ?? null, maxRowid: state.signal?.maxRowid ?? null },
+        value
+      )
+    })
+    .catch((err: unknown) => {
+      pairsFailedAt.set(db, Date.now())
+      if (!aborted) console.error('discoverArtistIndex: pairs walk failed:', err)
+    })
+    .finally(() => pairsInFlight.delete(db))
+  pairsInFlight.set(db, run)
+  return { pairs: shown, pending: true }
+}
+
+/** The last list built, reused while its pairs and own username are the
+ * same (the picker polls; 13k pairs is a few ms each time otherwise). */
+let lastList: { pairs: [string, string][][]; own: string; value: JammedWith[] } | null = null
+
+function jammedWithFor(pairs: [string, string][][], own: string): JammedWith[] {
+  if (
+    lastList &&
+    lastList.own === own &&
+    lastList.pairs.length === pairs.length &&
+    lastList.pairs.every((p, i) => p === pairs[i])
+  ) {
+    return lastList.value
+  }
+  const value = jammedWithFromPairs(pairs.flat(), own)
+  lastList = { pairs, own, value }
+  return value
 }
 
 export async function getArtistIndex(
@@ -217,58 +267,20 @@ export async function getArtistIndex(
   ownUsername: string
 ): Promise<ArtistIndex> {
   const own = ownUsername.trim()
-  const counts = mergeArtistCounts(await Promise.all(dbs.map((db) => countsFor(db))))
-
-  // 1. A trusted answer, still current: no walk at all.
-  const v = verified.get(ownDb)
-  if (
-    v &&
-    v.ownUsername === own &&
-    sameDbs(v.dbs, dbs) &&
-    v.states.every((state, i) => isScanCacheCurrent(dbs[i], 'Stems', state))
-  ) {
-    return { counts, jammedWith: v.value, jammedWithPending: false }
-  }
-
-  // 2. First look this session (per own username and db set): the disk.
-  const checkKey = [own, ...dbs.map((db) => db.name)].join('\u0000')
-  if (diskChecked.get(ownDb) !== checkKey) {
-    diskChecked.set(ownDb, checkKey)
-    const fromDisk = verifyFromDisk(ownDb, dbs, own)
-    if (fromDisk) {
-      verified.set(ownDb, fromDisk)
-      return { counts, jammedWith: fromDisk.value, jammedWithPending: false }
-    }
-  }
-
-  // 3. The background walk, per db, as before.
-  const perDb = dbs.map((db) => pairsFor(db))
-  const pending = perDb.some((p) => p.pending)
+  const signalOf = signalReader()
+  const perDb = dbs.map((db) => pairsFor(ownDb, db, signalOf))
+  const counts = mergeArtistCounts(await Promise.all(dbs.map((db) => countsFor(db, signalOf))))
   const ready = perDb.every((p) => p.pairs !== null)
-  if (ready) {
-    const value = jammedWithFromPairs(
-      perDb.flatMap((p) => p.pairs as [string, string][]),
-      own
-    )
-    if (!pending) {
-      const states = dbs.map((db) => (pairsCache.get(db) as Cached<[string, string][]>).state)
-      saveJammedWith(
-        ownDb,
-        own,
-        dbs.map((db, i) => sourceOf(db, states[i].signal)),
-        value
-      )
-      verified.set(ownDb, { ownUsername: own, dbs: [...dbs], states, value })
-    }
-    return { counts, jammedWith: value, jammedWithPending: pending }
+  return {
+    counts,
+    jammedWith: ready
+      ? jammedWithFor(
+          perDb.map((p) => p.pairs as [string, string][]),
+          own
+        )
+      : null,
+    jammedWithPending: perDb.some((p) => p.pending)
   }
-  const stale =
-    (v && v.ownUsername === own ? v.value : null) ??
-    (() => {
-      const shown = shownWhileWalking.get(ownDb)
-      return shown && shown.ownUsername === own ? shown.value : null
-    })()
-  return { counts, jammedWith: stale, jammedWithPending: pending }
 }
 
 let analysedCache = new Map<string, { featureRows: number; analysed: number; total: number }>()
@@ -317,10 +329,13 @@ export async function getArtistAnalysed(
 
 export function resetArtistIndexForTests(): void {
   countsCache = new WeakMap()
+  countsInFlight = new WeakMap()
   pairsCache = new WeakMap()
   pairsInFlight = new WeakMap()
+  stalePairs = new WeakMap()
+  diskTried = new WeakSet()
+  pairsFailedAt = new WeakMap()
+  lastList = null
   analysedCache = new Map()
-  verified = new WeakMap()
-  shownWhileWalking = new WeakMap()
-  diskChecked = new WeakMap()
+  aborted = false
 }
