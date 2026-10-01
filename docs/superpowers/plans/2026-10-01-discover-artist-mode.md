@@ -2831,6 +2831,8 @@ No agent can hear or see the app. This list is the check. Run `npm run dev` with
 - [ ] Type `sea`. `seasickcookie · 26,828` is near the top, with prefix matches first.
 - [ ] Pick `bananepoep`. The field reads `artist: bananepoep`, and the quiet line appears: `listening to bananepoep's stems. to use them in your own work, ask them first.`
 - [ ] The footer shows `analysed: 1%`.
+- [ ] In the search: ArrowDown/ArrowUp move the highlight, and Enter picks the highlighted row. Typing a name nobody has shows `no matches`. Typing part of your own name that isn't its start (e.g. `lin`) lists real users before `me`.
+- [ ] Escape closes only the search, not the library, and focus is back on the artist field. Escape in the radio menu also closes only the menu.
 
 **Listening:**
 - [ ] `similar all`, a row's similar, random and nearby jam: every new stem's author is bananepoep.
@@ -2840,14 +2842,20 @@ No agent can hear or see the app. This list is the check. Run `npm run dev` with
 
 **Listen-only:**
 - [ ] keep, fetch hearts, add to shelf and add to timeline are dimmed, with the tooltip `listening only: these are bananepoep's stems`.
-- [ ] `my sounds` is dimmed.
-- [ ] 👍 holds the row while radio runs, but the star does not fill. Its tooltip says nothing is starred.
-- [ ] Keep from the phone remote does nothing.
+- [ ] `my sounds` and `prefer faves` are dimmed, with `artist mode picks bananepoep's stems`.
+- [ ] 👍 holds the row while radio runs, but the star does not fill. Its tooltip says nothing is starred. With radio off, 👍 is dimmed.
+- [ ] On the phone remote, keep reads `listening only` and is disabled. A tap still flashes `listening only`.
 
 **Course change:**
 - [ ] With radio running on `me`, pick `seasickcookie`. One row changes at each loop top until every unlocked, audible row is seasickcookie's.
 - [ ] Locked and muted rows are untouched.
 - [ ] Pick `me` again, and rows not by elling turn over the same way.
+- [ ] Switch artist twice in quick succession while radio runs: still only one row changes per loop top, and the rows end up by the LAST artist picked.
+- [ ] While the old artist's stems are still on the rows after switching back to `me`, keep is dimmed with `listening only: seasickcookie's stems still playing`, and the same line shows under the header. The phone's keep is disabled too. Once every such row has turned over (or been rerolled), keep comes back.
+
+**Phone keep (in `me`, nothing lingering):**
+- [ ] Tap keep on the phone. It flashes `keeping`, then `kept`, or `already kept` for the same loop. With no loop to keep, it shows `nothing to keep`.
+- [ ] Tap keep on the phone and, straight after, keep on the Mac. The phone still reports its own tap's result, not the Mac's.
 
 **Session:**
 - [ ] Switch to the browse tab and back: still the artist.
@@ -2860,6 +2868,7 @@ No agent can hear or see the app. This list is the check. Run `npm run dev` with
 - [ ] The USB drive's `stem_v2/<jam>/` gains files.
 - [ ] Later, the `analysed:` share rises.
 - [ ] With consent off, the button is dimmed: `turn on library analysis first`.
+- [ ] Quit while the queue is part-way through and relaunch. It carries on from where it was (the queue lives in the own db).
 
 **Reload safety:**
 - [ ] With an artist chosen, reload the renderer (View > Reload). Discover is on `me`, and keep works, because main reset its mirror.
