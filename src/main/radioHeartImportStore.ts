@@ -2,7 +2,7 @@
 //
 // RadioHeartImport (riffLibrarySchema.ts): which ell.ing/radio heart combos
 // "fetch radio hearts" has brought home, and the "♥ n · misty kestrel"
-// label each kept riff shows. Own db only. Its own module, apart from
+// label each kept riff shows. RadioLikeImport: which liked single stems. Own db only. Its own module, apart from
 // radioHeartsImport.ts, so riffLibraryStore.ts can read a label without
 // importing the module that imports it.
 import type Database from 'better-sqlite3'
@@ -60,4 +60,21 @@ export function heartNameForRiff(db: Database.Database, riffCID: string): string
     if (err instanceof Error && /no such table/i.test(err.message)) return null
     throw err
   }
+}
+
+/** Every liked stem a previous fetch already brought home. */
+export function listImportedLikes(ownDb: Database.Database): Set<string> {
+  const rows = ownDb.prepare(`SELECT Stem FROM RadioLikeImport`).all() as { Stem: string }[]
+  return new Set(rows.map((r) => r.Stem))
+}
+
+export function recordLikeImports(
+  ownDb: Database.Database,
+  stems: readonly string[],
+  at: number
+): void {
+  const insert = ownDb.prepare(
+    `INSERT INTO RadioLikeImport (Stem, ImportedAt) VALUES (?, ?) ON CONFLICT(Stem) DO NOTHING`
+  )
+  for (const stem of stems) insert.run(stem, at)
 }

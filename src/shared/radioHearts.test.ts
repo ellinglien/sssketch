@@ -3,6 +3,8 @@ import {
   heartFetchLabel,
   heartRiffName,
   parseHeartsResponse,
+  parseLikesResponse,
+  planLikeImport,
   planHeartImport,
   type RadioHeartCombo
 } from './radioHearts'
@@ -137,6 +139,61 @@ describe('parseHeartsResponse', () => {
   })
 })
 
+describe('parseLikesResponse', () => {
+  it('reads the likes the server sends', () => {
+    const like = { stem: 'a', count: 2, first: 1, last: 2 }
+    expect(parseLikesResponse({ hearts: [], likes: [like] })).toEqual([like])
+  })
+
+  it('treats a missing likes field as none -- the older server sends no such thing', () => {
+    expect(parseLikesResponse({ generated: 'x', hearts: [] })).toEqual([])
+    expect(parseLikesResponse({ hearts: [], likes: 'nope' })).toEqual([])
+  })
+
+  it('drops malformed likes on their own', () => {
+    const good = { stem: 'a', count: 1, first: 1, last: 1 }
+    expect(
+      parseLikesResponse({ likes: [good, { stem: '', count: 1 }, { stem: 'b', count: 0 }, null] })
+    ).toEqual([good])
+  })
+})
+
+describe('planLikeImport', () => {
+  const like = (stem: string) => ({ stem, count: 1, first: 1, last: 1 })
+
+  it('stars a new liked stem with local audio, and records it', () => {
+    const plan = planLikeImport([like('a')], new Set(), new Set(), resolver())
+    expect(plan.toStar).toEqual(['a'])
+    expect(plan.toRecord).toEqual(['a'])
+  })
+
+  it('never stars a like already imported -- an un-star stays an un-star', () => {
+    const plan = planLikeImport([like('a'), like('b')], new Set(['a']), new Set(), resolver())
+    expect(plan.toStar).toEqual(['b'])
+    expect(plan.toRecord).toEqual(['b'])
+    expect(plan.alreadyImported).toBe(1)
+  })
+
+  it('records but does not re-star a stem that is already starred', () => {
+    const plan = planLikeImport([like('a')], new Set(), new Set(['a']), resolver())
+    expect(plan.toStar).toEqual([])
+    expect(plan.toRecord).toEqual(['a'])
+  })
+
+  it('skips a liked stem without local audio, unrecorded so a later fetch tries again', () => {
+    const plan = planLikeImport([like('a'), like('gone')], new Set(), new Set(), resolver(['gone']))
+    expect(plan.toStar).toEqual(['a'])
+    expect(plan.toRecord).toEqual(['a'])
+    expect(plan.missing).toEqual(['gone'])
+  })
+
+  it('treats a stem liked twice in one response as one', () => {
+    const plan = planLikeImport([like('a'), like('a')], new Set(), new Set(), resolver())
+    expect(plan.toStar).toEqual(['a'])
+    expect(plan.toRecord).toEqual(['a'])
+  })
+})
+
 describe('heartRiffName', () => {
   it('leads with the heart count, then the friendly pair', () => {
     expect(heartRiffName(3, 'misty kestrel 1a2b3c4d library')).toBe('♥ 3 · misty kestrel')
@@ -144,8 +201,18 @@ describe('heartRiffName', () => {
 })
 
 describe('heartFetchLabel', () => {
-  const zero = { kept: 0, alreadyKept: 0, skipped: 0, tooFew: 0, favourited: 0, missingStems: 0 }
+  const zero = {
+    kept: 0,
+    alreadyKept: 0,
+    skipped: 0,
+    tooFew: 0,
+    favourited: 0,
+    likes: 0,
+    missingStems: 0
+  }
   it('says what happened, tersely and in lowercase', () => {
+    // Likes alone: their stars are counted with the rest.
+    expect(heartFetchLabel({ ok: true, ...zero, favourited: 3, likes: 3 })).toBe('3 starred')
     expect(heartFetchLabel({ ok: true, ...zero, kept: 2, favourited: 5 })).toBe(
       '♥ 2 kept · 5 starred'
     )

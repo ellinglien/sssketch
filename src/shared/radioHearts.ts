@@ -163,6 +163,81 @@ export function parseHeartsResponse(body: unknown): RadioHeartCombo[] | null {
   }))
 }
 
+/** One liked stem (👍 on a single stem), as hearts.json sends it. */
+export interface RadioStemLike {
+  stem: string
+  /** Visitors who liked it. */
+  count: number
+  /** Epoch ms of the first and latest like. */
+  first: number
+  last: number
+}
+
+function isLikeRow(row: unknown): row is RadioStemLike {
+  if (typeof row !== 'object' || row === null) return false
+  const r = row as Record<string, unknown>
+  return (
+    typeof r.stem === 'string' &&
+    r.stem !== '' &&
+    isFinitePositive(r.count) &&
+    typeof r.first === 'number' &&
+    typeof r.last === 'number'
+  )
+}
+
+/** hearts.json's `likes`. The older server sends no such field, and that
+ * (or anything that is not an array) reads as no likes -- never as a bad
+ * response. A malformed row is dropped on its own. */
+export function parseLikesResponse(body: unknown): RadioStemLike[] {
+  if (typeof body !== 'object' || body === null) return []
+  const likes = (body as { likes?: unknown }).likes
+  if (!Array.isArray(likes)) return []
+  return likes
+    .filter(isLikeRow)
+    .map((l) => ({ stem: l.stem, count: l.count, first: l.first, last: l.last }))
+}
+
+export interface LikeImportPlan {
+  /** Stems to star: new likes with local audio, not already starred. */
+  toStar: string[]
+  /** Stems to record in RadioLikeImport: every new like with local audio,
+   * starred now or already starred -- so a later un-star is final. */
+  toRecord: string[]
+  /** Likes a previous fetch already brought home. */
+  alreadyImported: number
+  /** Liked stems without local audio: skipped, NOT recorded, so a later
+   * fetch tries them again once the audio is here. */
+  missing: string[]
+}
+
+/** Plans a fetch's likes. The same un-star rule as combos: a like is acted
+ * on once, on its first import, and never again -- a stem he un-stars
+ * after that stays un-starred however many more likes it gets. */
+export function planLikeImport(
+  likes: readonly RadioStemLike[],
+  alreadyImported: ReadonlySet<string>,
+  favourites: ReadonlySet<string>,
+  resolve: (stemCID: string) => unknown
+): LikeImportPlan {
+  const plan: LikeImportPlan = { toStar: [], toRecord: [], alreadyImported: 0, missing: [] }
+  const seen = new Set<string>()
+  for (const { stem } of likes) {
+    if (seen.has(stem)) continue
+    seen.add(stem)
+    if (alreadyImported.has(stem)) {
+      plan.alreadyImported += 1
+      continue
+    }
+    if (resolve(stem) === null) {
+      plan.missing.push(stem)
+      continue
+    }
+    plan.toRecord.push(stem)
+    if (!favourites.has(stem)) plan.toStar.push(stem)
+  }
+  return plan
+}
+
 /** "♥ 3 · misty kestrel". `friendly` is friendlyRiffName's whole string
  * ("misty kestrel 1a2b3c4d library"); only the pair is kept, the same trim
  * keep's own flash uses. */
@@ -192,9 +267,11 @@ export type RadioHeartsResult =
       skipped: number
       /** Combos with fewer than 2 stems on this machine. */
       tooFew: number
-      /** Stems newly starred. */
+      /** Stems newly starred, from kept combos and from likes. */
       favourited: number
-      /** Hearted stems with no local audio. */
+      /** Liked stems brought home this fetch (starred, or already starred). */
+      likes: number
+      /** Hearted or liked stems with no local audio. */
       missingStems: number
     }
   | { ok: false; reason: RadioHeartsFailure }

@@ -208,6 +208,17 @@ CREATE TABLE IF NOT EXISTS RadioHeartImport (
 -- riff; without this it would scan the table each time.
 CREATE INDEX IF NOT EXISTS idx_radio_heart_import_riff ON RadioHeartImport(RiffCID);
 
+-- Which ell.ing/radio single-stem likes (the 👍) a fetch has already
+-- brought home -- the same un-star rule as RadioHeartImport: a like stars
+-- its stem once, on first import, and a stem he un-stars after that stays
+-- un-starred. A row is written for every liked stem with local audio,
+-- starred then or already starred; a stem without local audio gets no row,
+-- so a later fetch tries it again. Own db only.
+CREATE TABLE IF NOT EXISTS RadioLikeImport (
+  Stem TEXT PRIMARY KEY,
+  ImportedAt INTEGER NOT NULL
+);
+
 -- Stems whose audio is known to be unfetchable -- see
 -- stemUnavailableStore.ts and @shared/stemAvailability for the full
 -- story. Short version, diagnosed 2026-09-22: Endlesss's stem blobs live

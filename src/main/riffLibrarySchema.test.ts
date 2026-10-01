@@ -44,6 +44,7 @@ describe('riffLibrarySchema', () => {
       'DiscoverRiffIndexCacheMeta',
       'Jams',
       'RadioHeartImport',
+      'RadioLikeImport',
       'RiffStemsExtra',
       'Riffs',
       'StemAutoCategory',

@@ -5,7 +5,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { DiscoveredMemberInput } from './discoveredLibrary'
 import type { FetchLike } from './radioHeartsImport'
-import { RADIO_HEARTS_URL, heartRiffName, type RadioHeartCombo } from '@shared/radioHearts'
+import {
+  RADIO_HEARTS_URL,
+  heartRiffName,
+  type RadioHeartCombo,
+  type RadioStemLike
+} from '@shared/radioHearts'
 import { friendlyRiffName } from '@shared/friendlyRiffName'
 
 let userDataDir: string
@@ -25,6 +30,7 @@ function freshOwnDb(): Database.Database {
     CREATE TABLE RadioHeartImport (
       Combo TEXT PRIMARY KEY, RiffCID TEXT NOT NULL, Name TEXT NOT NULL, ImportedAt INTEGER NOT NULL
     );
+    CREATE TABLE RadioLikeImport (Stem TEXT PRIMARY KEY, ImportedAt INTEGER NOT NULL);
     CREATE TABLE Stems (
       StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
       FileEndpoint TEXT, FileBucket TEXT, FileKey TEXT, BPMrnd REAL, Instrument INTEGER,
@@ -40,14 +46,21 @@ function heart(stems: string[], count = 2): RadioHeartCombo {
 }
 
 /** A fake hearts.json that records what it was asked. */
-function fakeFetch(hearts: RadioHeartCombo[], status = 200): FetchLike & { calls: unknown[] } {
+function fakeFetch(
+  hearts: RadioHeartCombo[],
+  status = 200,
+  likes?: RadioStemLike[]
+): FetchLike & { calls: unknown[] } {
   const calls: unknown[] = []
   const fn = (async (url: string, init: { headers: Record<string, string> }) => {
     calls.push({ url, init })
     return {
       ok: status >= 200 && status < 300,
       status,
-      json: async () => (status === 200 ? { generated: 'x', hearts } : { ok: false })
+      // No `likes` key at all unless a test passes some -- the older
+      // server's exact shape.
+      json: async () =>
+        status === 200 ? { generated: 'x', hearts, ...(likes ? { likes } : {}) } : { ok: false }
     }
   }) as FetchLike & { calls: unknown[] }
   fn.calls = calls
@@ -452,6 +465,95 @@ describe('fetchRadioHearts', () => {
     expect(saved.map((s) => s.stems)).toEqual([['a', 'b']])
     expect(result).toMatchObject({ ok: true, kept: 1, favourited: 2, missingStems: 1 })
     expect(db.prepare(`SELECT Combo FROM RadioHeartImport`).all()).toEqual([{ Combo: 'a,b,gone' }])
+  })
+
+  describe('likes', () => {
+    const like = (stem: string): RadioStemLike => ({ stem, count: 2, first: 1, last: 2 })
+    const deps = (db: Database.Database) => ({
+      key: 'k',
+      ownDb: db,
+      archiveReachable: () => true,
+      resolveStem: (id: string) => (id === 'gone' ? null : member(id)),
+      save: fakeSave().save,
+      log: () => {}
+    })
+    const starred = (db: Database.Database): string[] =>
+      (
+        db.prepare(`SELECT StemCID FROM StemFavourite ORDER BY StemCID`).all() as {
+          StemCID: string
+        }[]
+      ).map((r) => r.StemCID)
+
+    it('stars each liked stem once, and counts it with the rest', async () => {
+      const { fetchRadioHearts } = await import('./radioHeartsImport')
+      const db = freshOwnDb()
+      const result = await fetchRadioHearts({
+        ...deps(db),
+        fetch: fakeFetch([heart(['a', 'b'])], 200, [like('x'), like('y')])
+      })
+      expect(result).toMatchObject({ ok: true, kept: 1, favourited: 4, likes: 2 })
+      expect(starred(db)).toEqual(['a', 'b', 'x', 'y'])
+      const again = await fetchRadioHearts({
+        ...deps(db),
+        fetch: fakeFetch([], 200, [like('x'), like('y')])
+      })
+      expect(again).toMatchObject({ ok: true, favourited: 0, likes: 0 })
+    })
+
+    it('never re-stars a liked stem he un-starred', async () => {
+      const { fetchRadioHearts } = await import('./radioHeartsImport')
+      const { toggleStemFavourite } = await import('./stemFavouriteStore')
+      const db = freshOwnDb()
+      await fetchRadioHearts({ ...deps(db), fetch: fakeFetch([], 200, [like('x')]) })
+      toggleStemFavourite(db, 'x')
+      await fetchRadioHearts({ ...deps(db), fetch: fakeFetch([], 200, [like('x')]) })
+      expect(starred(db)).toEqual([])
+    })
+
+    it('tolerates a response with no likes field at all', async () => {
+      const { fetchRadioHearts } = await import('./radioHeartsImport')
+      const db = freshOwnDb()
+      const result = await fetchRadioHearts({ ...deps(db), fetch: fakeFetch([heart(['a', 'b'])]) })
+      expect(result).toMatchObject({ ok: true, kept: 1, likes: 0 })
+    })
+
+    it('skips a liked stem without local audio, leaving it unrecorded for next time', async () => {
+      const { fetchRadioHearts } = await import('./radioHeartsImport')
+      const db = freshOwnDb()
+      const result = await fetchRadioHearts({
+        ...deps(db),
+        fetch: fakeFetch([], 200, [like('x'), like('gone')])
+      })
+      expect(result).toMatchObject({ ok: true, favourited: 1, likes: 1, missingStems: 1 })
+      expect(starred(db)).toEqual(['x'])
+      expect(db.prepare(`SELECT Stem FROM RadioLikeImport`).all()).toEqual([{ Stem: 'x' }])
+    })
+
+    it('records a like for a stem already starred, so a later un-star is final', async () => {
+      const { fetchRadioHearts } = await import('./radioHeartsImport')
+      const { toggleStemFavourite } = await import('./stemFavouriteStore')
+      const db = freshOwnDb()
+      toggleStemFavourite(db, 'x')
+      const result = await fetchRadioHearts({ ...deps(db), fetch: fakeFetch([], 200, [like('x')]) })
+      expect(result).toMatchObject({ ok: true, favourited: 0, likes: 1 })
+      toggleStemFavourite(db, 'x')
+      await fetchRadioHearts({ ...deps(db), fetch: fakeFetch([], 200, [like('x')]) })
+      expect(starred(db)).toEqual([])
+    })
+
+    it('rolls the likes back whole if starring them fails partway', async () => {
+      const { fetchRadioHearts } = await import('./radioHeartsImport')
+      const db = freshOwnDb()
+      db.exec(`CREATE TRIGGER boom BEFORE INSERT ON StemFavourite WHEN NEW.StemCID = 'y'
+               BEGIN SELECT RAISE(ABORT, 'boom'); END`)
+      const result = await fetchRadioHearts({
+        ...deps(db),
+        fetch: fakeFetch([], 200, [like('x'), like('y')])
+      })
+      expect(result).toMatchObject({ ok: true, favourited: 0, likes: 0 })
+      expect(starred(db)).toEqual([])
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM RadioLikeImport`).get()).toEqual({ n: 0 })
+    })
   })
 
   it('resolveHeartStem finds local audio and the stem’s own loop length', async () => {

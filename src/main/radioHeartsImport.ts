@@ -4,6 +4,8 @@
 // private hearts.json and brings every newly hearted combination home as a
 // kept riff, through the very same saveDiscoveredRifff path keep uses, and
 // stars every hearted stem so Discover's favourites boost applies here too.
+// Liked single stems (the radio's 👍, hearts.json's `likes`) are starred the
+// same way, once each, on first import (planLikeImport).
 // What to import is decided by @shared/radioHearts' planHeartImport; this
 // module is the fetch and the writes.
 // ell.ing/radio docs/specs/2026-09-30-radio-controls-and-hearts-design.md §2.4.
@@ -15,7 +17,9 @@ import type Database from 'better-sqlite3'
 import {
   RADIO_HEARTS_URL,
   parseHeartsResponse,
+  parseLikesResponse,
   planHeartImport,
+  planLikeImport,
   type RadioHeartsResult
 } from '@shared/radioHearts'
 import type { DiscoveredMemberInput } from './discoveredLibrary'
@@ -23,7 +27,9 @@ import { discoveredStemPath, resolveStemPath } from './riffLibraryStore'
 import { addStemFavourites, listStemFavourites } from './stemFavouriteStore'
 import {
   listImportedHeartCombos,
+  listImportedLikes,
   recordHeartImport,
+  recordLikeImports,
   refreshHeartCount
 } from './radioHeartImportStore'
 
@@ -163,13 +169,18 @@ async function fetchRadioHeartsUnguarded({
   }
   const hearts = parseHeartsResponse(body)
   if (!hearts) return { ok: false, reason: 'bad response' }
+  // Absent on the older server; that is no likes, not a bad response.
+  const likes = parseLikesResponse(body)
 
-  const plan = planHeartImport(
-    hearts,
-    listImportedHeartCombos(ownDb),
-    new Set(listStemFavourites(ownDb)),
-    resolveStem
-  )
+  // A stem both hearted and liked is looked up once.
+  const resolved = new Map<string, DiscoveredMemberInput | null>()
+  const resolveOnce = (stemCID: string): DiscoveredMemberInput | null => {
+    if (!resolved.has(stemCID)) resolved.set(stemCID, resolveStem(stemCID))
+    return resolved.get(stemCID) ?? null
+  }
+  const favourites = new Set(listStemFavourites(ownDb))
+  const plan = planHeartImport(hearts, listImportedHeartCombos(ownDb), favourites, resolveOnce)
+  const likePlan = planLikeImport(likes, listImportedLikes(ownDb), favourites, resolveOnce)
 
   for (const heart of plan.alreadyImported) refreshHeartCount(ownDb, heart.combo, heart.count)
 
@@ -210,6 +221,27 @@ async function fetchRadioHeartsUnguarded({
     log(`radio hearts: ${heart.combo} not kept -- no local audio for ${missing.join(', ')}`)
   }
 
+  // Likes: every record and star in ONE transaction, after the combos. A
+  // stem a combo just starred is already there, so addStemFavourites
+  // counts it once, not twice.
+  let likesImported = 0
+  if (likePlan.missing.length > 0)
+    log(`radio hearts: liked but no local audio: ${likePlan.missing.join(', ')}`)
+  if (likePlan.toRecord.length > 0) {
+    try {
+      favourited += ownDb.transaction(() => {
+        recordLikeImports(ownDb, likePlan.toRecord, now())
+        return addStemFavourites(ownDb, likePlan.toStar)
+      })()
+      likesImported = likePlan.toRecord.length
+    } catch (err) {
+      // Nothing recorded, nothing starred: the next fetch tries again.
+      log(
+        `radio hearts: likes not brought home: ${err instanceof Error ? err.message : String(err)}`
+      )
+    }
+  }
+
   return {
     ok: true,
     kept,
@@ -217,6 +249,7 @@ async function fetchRadioHeartsUnguarded({
     skipped: plan.alreadyImported.length,
     tooFew: plan.tooFew.length,
     favourited,
-    missingStems: plan.missingStems.length
+    likes: likesImported,
+    missingStems: new Set([...plan.missingStems, ...likePlan.missing]).size
   }
 }
