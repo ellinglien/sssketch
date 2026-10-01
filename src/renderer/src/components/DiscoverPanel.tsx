@@ -2151,6 +2151,9 @@ export function DiscoverPanel({
   // describes. See radioChangeBars.
   /** Bumped by every armRadioPick; see there. */
   const radioArmTokenRef = useRef(0)
+  // Rows radio's skip is picking a stem for (skipRadio), before the pick is
+  // queued as a manual change -- radio arms nothing meanwhile.
+  const radioSkipPickingRef = useRef<Set<string>>(new Set())
   const radioPendingRef = useRef<{
     slotId: string
     pick: SlotPick
@@ -2369,6 +2372,10 @@ export function DiscoverPanel({
          * markUndoSnapshot. An undo to a snapshot numbered at or below it
          * takes this change back. */
         undoSeq: number
+        /** Queued by radio's skip (skipRadio): it lands as radio's change
+         * for its row, restarting radio's interval from the landing, and
+         * radio arms nothing while it waits. */
+        radioSkip?: boolean
       }
     >
   >(new Map())
@@ -3218,7 +3225,7 @@ export function DiscoverPanel({
       // and waits for the next wrap.
       const landingReady: [
         string,
-        { pick: SlotPick; joining: boolean; arrival: ManualArrival | null }
+        { pick: SlotPick; joining: boolean; arrival: ManualArrival | null; radioSkip?: boolean }
       ][] = manualToLand
       if (landingReady.length > 0) {
         const landingIds = new Set(landingReady.map(([slotId]) => slotId))
@@ -3350,6 +3357,7 @@ export function DiscoverPanel({
         // it out of the queue itself. The existence check is for a row
         // removed in the instant between.
         let manualCommitted = false
+        let skipLanded: string | null = null
         for (const [slotId, change] of landingReady) {
           if (!slotsRef.current.some((s) => s.id === slotId)) continue // removed meanwhile
           if (!committed && !manualCommitted) {
@@ -3376,8 +3384,23 @@ export function DiscoverPanel({
           }
           landedIds.push(slotId)
           manualCommitted = true
+          if (change.radioSkip) skipLanded = slotId
         }
         if (manualCommitted && !committed) radioTraceMark('commit') // TEMP
+        // Radio's skip landed: it was radio's change for that row, so
+        // radio's interval starts HERE (as it does where its own change
+        // lands) and the row is radio's last. The re-arm below then finds
+        // no skip waiting and arms radio's next pick.
+        if (skipLanded !== null && radioClockRef.current !== null) {
+          radioLastSlotRef.current = skipLanded
+          radioClockRef.current = restartRadioInterval(
+            radioClockRef.current,
+            nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+            pos,
+            boundaryBars
+          )
+          setRadioProgress(0)
+        }
         // clearRadioGesture() emptied the list at the top of this branch,
         // so this is every curve for the lap that starts here and nothing
         // else. Left alone when nothing arrives, as the single ref was.
@@ -5516,6 +5539,19 @@ export function DiscoverPanel({
    * interval is spent, as it is for any change that fails its re-check.
    *
    * With radio off nothing is pending or held, so this does nothing. */
+  /** Radio's HELD change is taken back: cleared, any stage carrying it
+   * withdrawn, a hole or riser announcing it taken off, and the truth put
+   * back on the wire. Re-arming is the caller's. */
+  function radioTakesBackLed(led: NonNullable<typeof radioLedChangeRef.current>): void {
+    setRadioLedChange(null)
+    if (radioStageAppliedLedRef.current === led) radioStageAppliedLedRef.current = null
+    cancelStagedSwap('manual-overrides-radio')
+    radioGestureRef.current = radioGestureRef.current.filter(
+      (g) => !(g.slotId === led.slotId && g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind))
+    )
+    scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
+
   function radioYieldsRow(slotId: string): void {
     let droppedPick = false
     if (radioPendingRef.current?.slotId === slotId) {
@@ -5524,13 +5560,7 @@ export function DiscoverPanel({
     }
     const led = radioLedChangeRef.current
     if (led !== null && led.slotId === slotId) {
-      setRadioLedChange(null)
-      if (radioStageAppliedLedRef.current === led) radioStageAppliedLedRef.current = null
-      cancelStagedSwap('manual-overrides-radio')
-      radioGestureRef.current = radioGestureRef.current.filter(
-        (g) => !(g.slotId === slotId && g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind))
-      )
-      scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+      radioTakesBackLed(led)
       if (radioOnRef.current) void armRadioPick()
       return
     }
@@ -5563,11 +5593,12 @@ export function DiscoverPanel({
     slotId: string,
     pick: SlotPick,
     joining: boolean,
-    undoSeq: number
+    undoSeq: number,
+    radioSkip = false
   ): boolean {
     if (manualChangesRef.current.has(slotId)) return false
     const next = new Map(manualChangesRef.current)
-    next.set(slotId, { pick, stem: null, joining, arrival: null, undoSeq })
+    next.set(slotId, { pick, stem: null, joining, arrival: null, undoSeq, radioSkip })
     setManualChanges(next)
     // NO withdrawal of the stage that is out for this entry itself, on
     // purpose. Its stem is still null, so a re-stage now would carry
@@ -5655,6 +5686,9 @@ export function DiscoverPanel({
     // see the first. A superseded arm writes nothing.
     const myArm = (radioArmTokenRef.current += 1)
     setRadioPending(null)
+    // Radio's skip is radio's next change: nothing else is armed until it
+    // lands (the landing re-arms) or goes (the next due tick re-arms).
+    if (radioSkipWaiting()) return
     // Never a row with a manual change waiting: that change wins its row
     // at the landing (mergeStageChanges), so radio's pick for it would be
     // dropped there -- a change radio lost to a manual one.
@@ -5699,6 +5733,69 @@ export function DiscoverPanel({
       }
     })
     setRadioPending({ slotId, pick, incomingBars: null, stem: null })
+  }
+
+  /** A skip picking its stem, or queued and waiting for the loop top. */
+  function radioSkipWaiting(): boolean {
+    if (radioSkipPickingRef.current.size > 0) return true
+    for (const m of manualChangesRef.current.values()) if (m.radioSkip) return true
+    return false
+  }
+
+  /** RADIO'S SKIP (the web radio's "next", 2026-10-01). Radio chooses ONE
+   * row the way it chooses its own (pickRadioSlotId over the eligible rows:
+   * turnover, staleness, flags), leaving out rows already waiting, and
+   * gives it a same-kind roll that steers off its own stem. It lands by the
+   * manual-change rule -- the loop top while radio runs -- and counts as
+   * radio's change for that row: the landing restarts radio's interval.
+   *
+   * Radio's own change, decided on any row, is taken back first (as the
+   * web's next does) and its armed pick dropped, and radio arms nothing
+   * until the skip has landed -- so it does not change a second row at the
+   * same loop top or just after. Undoable like the row's own skip. Another
+   * press picks another row. */
+  async function skipRadio(): Promise<void> {
+    if (!radioOnRef.current) return
+    const eligible = radioEligibleSlotIds().filter(
+      (id) => !manualChangesRef.current.has(id) && !radioSkipPickingRef.current.has(id)
+    )
+    const slotId = pickRadioSlotId(eligible, radioLastSlotRef.current, {
+      turnover: radioSettings.turnover,
+      changedAt: radioChangedAtRef.current,
+      turn: radioTurnRef.current,
+      flags: radioSlotFlagsRef.current
+    })
+    if (slotId === null) return
+    const slot = slotsRef.current.find((s) => s.id === slotId)
+    if (!slot) return
+    radioSkipPickingRef.current.add(slotId)
+    // Radio's decided change, wherever it is, and its armed pick: taken
+    // back. radioYieldsRow does exactly this for its own row; here it is
+    // whichever row radio had spoken for. Bumping the arm token drops an
+    // arm still in flight.
+    const led = radioLedChangeRef.current
+    if (led !== null) radioTakesBackLed(led)
+    radioArmTokenRef.current += 1
+    setRadioPending(null)
+    pushUndoSnapshot()
+    const undoSeq = undoSequence.latest()
+    const pick = await pickForSlot(slotId, slot.kinds, { avoidOwnStem: true })
+    radioSkipPickingRef.current.delete(slotId)
+    const queued =
+      pick !== null &&
+      radioOnRef.current &&
+      slotsRef.current.some((s) => s.id === slotId) &&
+      queueManualChange(slotId, pick, !previewingSlotIdsRef.current.has(slotId), undoSeq, true)
+    // Nothing queued (no pick, radio stopped, the row went or was claimed
+    // meanwhile): radio carries on as if the press never happened.
+    if (
+      !queued &&
+      radioOnRef.current &&
+      !radioSkipWaiting() &&
+      radioLedChangeRef.current === null
+    ) {
+      void armRadioPick()
+    }
   }
 
   function stopRadio(): void {
@@ -6584,6 +6681,30 @@ export function DiscoverPanel({
             />
           </div>
         </div>
+        {/* Radio's skip (the web radio's "next", 2026-10-01): radio picks a
+            row as it would and changes it at the loop top. Square, like
+            the settings chevron beside it; only while radio runs. */}
+        {radioOn && (
+          <button
+            onClick={() => void skipRadio()}
+            data-tooltip="skip a row"
+            aria-label="skip a row"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 22,
+              height: 22,
+              padding: 0,
+              background: 'transparent',
+              border: '1px solid var(--ra-border)',
+              color: 'var(--ra-text-3)',
+              cursor: 'pointer'
+            }}
+          >
+            <SkipForward size={12} />
+          </button>
+        )}
         {radioOn && (
           <button
             ref={radioChevronRef}
