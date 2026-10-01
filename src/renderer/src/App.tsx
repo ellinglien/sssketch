@@ -98,7 +98,7 @@ import {
   groupIdAtPosition,
   resolvePlayedBars
 } from './state/selectors'
-import { initialState, SNAP_DIVS } from './state/store'
+import { initialState, SNAP_DIVS, startupState } from './state/store'
 import { appSoundDefaults } from './state/appSoundDefaults'
 import type { LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
@@ -1381,8 +1381,13 @@ function Frame(): React.JSX.Element {
     if (startupResolvedRef.current) return
     startupResolvedRef.current = true
     // Fetch the app-wide sound settings now, so a new or opened project
-    // never waits on them.
-    void appSoundDefaults()
+    // never waits on them, and let the startup state adopt them -- only
+    // while its sound is still the untouched startup one (store.ts's
+    // ADOPT_APP_SOUND_DEFAULTS), and as a baseline, not an undoable edit,
+    // the same way commitNewProject's are.
+    void appSoundDefaults().then((sound) =>
+      dispatch({ type: 'ADOPT_APP_SOUND_DEFAULTS', sound, ifStill: startupState.sound! })
+    )
     void (async () => {
       const json = await window.rifffApi.loadAutosave()
       // "unsaved work" means real content, not just any autosave file --
@@ -1404,7 +1409,7 @@ function Frame(): React.JSX.Element {
       // it might coincidentally look more "real."
       if (json) void window.rifffApi.clearAutosave()
     })()
-  }, [])
+  }, [dispatch])
 
   /** OnboardingModal's "recover" button -- loads the just-found snapshot
    * into the live project, restores currentSketch from its sidecar (see

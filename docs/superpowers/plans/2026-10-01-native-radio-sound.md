@@ -338,7 +338,8 @@ No sound changes in this task.
   - `SET_SOUND_SETTINGS { settings: SoundSettingsPatch }` merges per stage (`mergeSoundSettings` in `radioSound.ts`), normalises, and is undoable (`history.ts` excludes only view and transient actions).
   - The wire: `buildEngineSound` in `buildEngineProject.ts`. Glue, tone and saturation are sent only with mastering on. `reverbReturn` is 2 × amount (the room's trim cancels), absent at 1. The block is omitted when it would be just `{ room: 'zita' }`. Panning, throws and riser variety put nothing in it.
   - Native: `SoundSettings.{h,cpp}` with `parseSoundSettings`, called by `parseEngineProject`. A stage that is not an object or has a missing or non-finite number is off. A room other than `"cavern"` is zita. Values are clamped to each stage's range. Tests: `SoundSettingsTests.cpp`.
-  - Discover's `previewState` copies `sound`. The other throwaway previews (`useThrowawayStemPreview`, the backup preview) do not yet; Task 14 covers the remaining render paths.
+  - Discover's `previewState` and `useThrowawayStemPreview` copy `sound`, falling back to `appSoundDefaultsNow()`. The backup preview (`ProjectLibraryBrowser`) plays stems only, not an engine project.
+  - **Review follow-up:** the live store starts from `startupState` (`initialState` plus `sound`, all on), so a project saved without "new project" still carries settings. When the startup fetch resolves, App dispatches `ADOPT_APP_SOUND_DEFAULTS`, which is transient and only takes effect while the sound is still the untouched startup object. `SET_SOUND_SETTINGS` on a state with none merges onto `appSoundDefaultsNow()`. The C++ parser drops glue, tone and saturation without mastering. `soloState` (`nativeExport.ts`) applies `stemExportSound`: per-stem bakes and stem exports keep the room, its return and the per-stem stages, and drop mastering, glue, tone, saturation and the pump.
 
 - [x] **Step 1. App-wide defaults.** `soundSettingsStore.ts` is a userData JSON read through `normalizeSoundSettings(…, DEFAULT_SOUND_SETTINGS)`, as `discoverSettingsStore.ts` does. Tests follow that file's pattern (mock only `app.getPath`):
   - a missing file gives all on;
@@ -722,6 +723,11 @@ The defaults panel adds **reset to defaults**.
 
 **Readouts in dev only** (behind the existing dev flag, if there is one; otherwise none): glue gain reduction, pump duck and limiter gain reduction from the Faust meters, through a small engine query IPC.
 
+**Carried over from Task 2's review (do these here):**
+- After `window.rifffApi.setSoundSettings(...)`, call `forgetAppSoundDefaults()` (`state/appSoundDefaults.ts`), so the next new project and `appSoundDefaultsNow()` see the change.
+- The Discover preview copies `sound` only when it syncs. A settings change mid-preview must resync it, the way the bpm effect does, so a switch is heard within a sync.
+- Sliders commit on release (the `SET_DRAG_PREVIEW` pattern): live values while dragging, one `SET_SOUND_SETTINGS` on release, so undo is not flooded with one step per frame.
+
 **Tests:**
 - [ ] Reducer and selector tests for every control's action.
 - [ ] A pure `soundPanelModel(settings)` covering what is greyed out and each label, tested.
@@ -745,6 +751,7 @@ Every export follows the project's settings.
 **The tests:**
 - [ ] **Mixdown** (`nativeExport.ts` → `RenderExport.cpp`), native: for each stage switched on alone, then all on, a project renders the same live (`renderLoopAware` + `processMaster`) as through `RenderExport`. Mixdown in vitest: `nativeExport.test.ts` asserts the project it sends carries `sound` from the state.
 - [ ] **Render parity** (`native-engine/test/parity/render-parity.test.ts`): add an all-stages-on case next to the existing one.
+- [ ] **Already in place (Task 2 review):** `soloState` (`nativeExport.ts`) applies `stemExportSound` (`radioSound.ts`), so every solo render (per-stem bakes, stem and bus exports, the riser file) drops mastering, glue, tone, saturation and the pump, and keeps the room, its return and the per-stem stages. Check that each path below goes through it, and route `remoteStemRenderer.ts` the same way.
 - [ ] **Toolkit bakes** (`exportToolkitAudio.ts`, `BakeStem.cpp`):
   - a baked stem carries its per-stem stages (pan, the `dubSend` throws and their tail, the reverb room and its tail);
   - it carries none of the master stages (the ruling above);

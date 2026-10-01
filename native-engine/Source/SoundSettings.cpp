@@ -53,6 +53,17 @@ namespace sssketch
         if (auto v = stage<1>(sound, "pump", { "depthDb" }))
             out.pump = SoundSettings::Pump { std::clamp((*v)[0], 0.0, 8.0) };
 
+        // Glue, tone and saturation are master stages that run only between the headroom trim
+        // and the true-peak limiter: without mastering they are dropped, so no wire can build a
+        // compressing, saturating chain with no limiter after it (buildEngineSound never sends
+        // one; this holds for any payload).
+        if (! out.mastering)
+        {
+            out.glue.reset();
+            out.tone.reset();
+            out.saturation.reset();
+        }
+
         out.room = sound.getProperty("room", juce::var()).toString() == "cavern" ? ReverbRoom::cavern : ReverbRoom::zita;
         if (auto r = finiteNumber(sound, "reverbReturn"))
             out.reverbReturn = std::clamp(*r, 0.0, 2.0);

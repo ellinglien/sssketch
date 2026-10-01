@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import type { Rifff } from '../shared/types'
+import { normalizeSoundSettings, stemExportSound } from '../shared/radioSound'
 
 // nativeExport's internal spawnEngine() call (see engineProcess.ts's
 // defaultBinaryPath) resolves the compiled engine binary's path via
@@ -121,6 +122,21 @@ describe('soloState', () => {
     const state = stateWith({ masterChain: ['some-limiter-id', null, null, null] })
     const result = soloState(state, new Set(['r1:1']), ['r1:1', 'r1:2'])
     expect(result.masterChain).toEqual([null, null, null, null])
+  })
+
+  it('drops the master stages of the radio sound, keeping the room and the per-stem stages', () => {
+    const state = stateWith({ sound: normalizeSoundSettings(undefined) })
+    const result = soloState(state, new Set(['r1:1']), ['r1:1'])
+    expect(result.sound).toEqual(stemExportSound(state.sound))
+    expect(result.sound!.mastering.on).toBe(false)
+    expect(result.sound!.pump.on).toBe(false)
+    expect(result.sound!.reverb).toEqual(state.sound!.reverb)
+    expect(state.sound!.mastering.on).toBe(true)
+  })
+
+  it('a state with no sound settings keeps none', () => {
+    const result = soloState(stateWith({}), new Set(['r1:1']), ['r1:1'])
+    expect(result.sound).toBeUndefined()
   })
 
   it('supports multiple simultaneous targets (a bus solo, not just a single stem)', () => {

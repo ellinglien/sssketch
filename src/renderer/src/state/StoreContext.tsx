@@ -10,7 +10,7 @@ import {
   type Dispatch,
   type ReactNode
 } from 'react'
-import { initialState, type AppState } from './store'
+import { startupState, type AppState } from './store'
 import { createEngineOwnershipTracker, type EngineOwner } from '@shared/engineOwnership'
 import { createSequentialRunner } from '@shared/sequentialAsync'
 import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector'
@@ -62,7 +62,7 @@ export type DispatchableAction = HistoryAction | TransportAction
 // render body below) -- nothing else should ever call __setStateForTest,
 // which exists purely so this bridge's own tests don't need a real React
 // render to exercise it.
-let currentState: AppState = initialState
+let currentState: AppState = startupState
 const stateListeners = new Set<() => void>()
 
 // eslint-disable-next-line react-refresh/only-export-components -- store bridge function, not a component
@@ -82,7 +82,7 @@ export function __setStateForTest(state: AppState): void {
   for (const listener of stateListeners) listener()
 }
 
-const StateCtx = createContext<AppState>(initialState)
+const StateCtx = createContext<AppState>(startupState)
 const DispatchCtx = createContext<Dispatch<DispatchableAction>>(() => {})
 const RestoreStateCtx = createContext<(state: AppState, pluginStates: PluginStatesMap) => void>(
   () => {}
@@ -190,7 +190,9 @@ const HistoryCtx = createContext<HistoryControls>({
 })
 
 export function StoreProvider({ children }: { children: ReactNode }): React.JSX.Element {
-  const [history, rawDispatch] = useReducer(historyReducer, initialState, createHistoryState)
+  // startupState, not initialState: the live project always has its radio
+  // sound settings (store.ts's startupState doc comment).
+  const [history, rawDispatch] = useReducer(historyReducer, startupState, createHistoryState)
   const state = history.present
   // Keeps the store bridge (subscribeToState/getStateSnapshot, above) in
   // sync with this render's state, synchronously -- safe because React

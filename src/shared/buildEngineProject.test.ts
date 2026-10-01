@@ -868,6 +868,19 @@ describe('the sound settings on the wire (native radio sound plan, Task 2)', () 
       emptyCatalog
     )
     expect(JSON.stringify(after)).toBe(JSON.stringify(before))
+    // pinned: the top-level keys a pre-plan project sends, in order
+    const preplanKeys = [
+      'bpm',
+      'snapDiv',
+      'loopLengthBars',
+      'masterChain',
+      'channelChains',
+      'reverb',
+      'risers',
+      'rifffs'
+    ]
+    expect(Object.keys(before)).toEqual(preplanKeys)
+    expect(Object.keys(after)).toEqual(preplanKeys)
   })
 
   it('every stage off still sends the room when it is the cavern', () => {

@@ -13,11 +13,12 @@ import {
 } from '@shared/toolkit'
 import { MIN_RISER_LENGTH_BARS, nextRiserName, normaliseRiser, type RiserClip } from '@shared/riser'
 import {
-  DEFAULT_SOUND_SETTINGS,
   mergeSoundSettings,
+  normalizeSoundSettings,
   type SoundSettings,
   type SoundSettingsPatch
 } from '@shared/radioSound'
+import { appSoundDefaultsNow } from './appSoundDefaults'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 import { buildCoachMapSections, resizeCoachMapToPhrase } from '@shared/coachMapTemplate'
 import type { CoachPhrase, LoopPhraseReading } from '@shared/coachPhrase'
@@ -605,6 +606,13 @@ export const initialState: AppState = {
   rifffs: {}
 }
 
+/** The live store's state before any project is created or opened (StoreProvider): initialState
+ * with the radio sound's settings, all on, so even a project saved from here -- onboarding
+ * dismissed without "new project" -- carries them. App.tsx swaps in the app-wide defaults once
+ * they are fetched (ADOPT_APP_SOUND_DEFAULTS). initialState itself stays without `sound`: the
+ * throwaway preview states and the tests build on it, and absent is today's sound. */
+export const startupState: AppState = { ...initialState, sound: normalizeSoundSettings(undefined) }
+
 // PLAY/PAUSE/STOP/SET_POS deliberately aren't part of this union — they live
 // as StoreContext.tsx's own TransportAction/usePos()/usePlaying() instead,
 // entirely outside this undo-tracked reducer. Position updates at ~30Hz
@@ -803,8 +811,13 @@ export type Action =
   | { type: 'TOGGLE_METRONOME' }
   | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
   /** The project's sound settings (AppState.sound): `settings` is merged over them stage by
-   * stage and normalised; a state with none starts from DEFAULT_SOUND_SETTINGS. */
+   * stage and normalised; a state with none merges onto the app-wide defaults
+   * (appSoundDefaultsNow: all on until they have been fetched). */
   | { type: 'SET_SOUND_SETTINGS'; settings: SoundSettingsPatch }
+  /** The startup state's sound becomes the app-wide defaults once they arrive -- only while it
+   * is still `ifStill` (startupState.sound, untouched: no edit, no project created or opened,
+   * each of which replaces the object). Transient (history.ts): a baseline, not an edit. */
+  | { type: 'ADOPT_APP_SOUND_DEFAULTS'; sound: SoundSettings; ifStill: SoundSettings }
   | { type: 'SET_CHANNEL_CHAIN_PLUGIN'; channelId: string; slot: 0 | 1; pluginId: string | null }
   | { type: 'SET_LOOP_REGION'; region: LoopRegion }
   | { type: 'ADD_RECORDING_CHANNEL'; channelId: string }
@@ -1937,8 +1950,13 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'SET_SOUND_SETTINGS':
       return {
         ...state,
-        sound: mergeSoundSettings(state.sound ?? DEFAULT_SOUND_SETTINGS, action.settings)
+        sound: mergeSoundSettings(state.sound ?? appSoundDefaultsNow(), action.settings)
       }
+
+    case 'ADOPT_APP_SOUND_DEFAULTS':
+      return state.sound === action.ifStill
+        ? { ...state, sound: normalizeSoundSettings(action.sound) }
+        : state
 
     case 'SET_MASTER_CHAIN_PLUGIN': {
       const masterChain = [...state.masterChain] as AppState['masterChain']

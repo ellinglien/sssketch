@@ -78,7 +78,8 @@ namespace sssketch
 
     /** The wire's `sound` value (any var) to a SoundSettings. Lenient, like the rest of
      * parseEngineProject: a non-object block is all off; a stage that is not an object, or has a
-     * missing or non-finite number, is off; a room other than "cavern" is zita; a non-finite
-     * reverbReturn is 1. Present values are clamped to the ranges above. Never fails. */
+     * missing or non-finite number, is off; glue, tone and saturation are off without
+     * mastering; a room other than "cavern" is zita; a non-finite reverbReturn is 1. Present
+     * values are clamped to the ranges above. Never fails. */
     SoundSettings parseSoundSettings(const juce::var& sound);
 }

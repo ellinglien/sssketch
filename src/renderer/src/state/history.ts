@@ -32,6 +32,9 @@ const MAX_HISTORY = 100
 // toggles that still go through this reducer (so useAppState() consumers
 // see them) but shouldn't themselves be undo-able edits.
 const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
+  // The startup state adopting the app-wide sound defaults once they arrive
+  // (store.ts): a baseline, like a project being created, not an edit.
+  'ADOPT_APP_SOUND_DEFAULTS',
   // Which of the arranger's three views is showing (arrange/sketch/map).
   'SET_ARRANGER_MODE',
   // Whether the drawable automation lanes are laid over the clips -- a

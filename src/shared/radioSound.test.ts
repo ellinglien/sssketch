@@ -18,6 +18,7 @@ import {
   normalizeSoundSettings,
   saturationDrive,
   saturationMakeupDb,
+  stemExportSound,
   throwEveryBars,
   type SoundSettings
 } from './radioSound'
@@ -302,5 +303,28 @@ describe('normalizeSoundSettings', () => {
   it('round-trips through JSON', () => {
     const s = normalizeSoundSettings({ reverb: { room: 'zita' }, pump: { depthDb: 6 } })
     expect(normalizeSoundSettings(JSON.parse(JSON.stringify(s)))).toEqual(s)
+  })
+})
+
+describe('stemExportSound (per-stem bakes and stem exports: no master stages)', () => {
+  it('keeps the room, its amount and the per-stem stages; drops mastering, glue, tone, saturation and the pump', () => {
+    const s = normalizeSoundSettings(undefined)
+    s.reverb.amount = 0.3
+    s.panning.width = 0.4
+    const out = stemExportSound(s)!
+    expect(out.mastering.on).toBe(false)
+    expect(out.glue.on).toBe(false)
+    expect(out.tone.on).toBe(false)
+    expect(out.saturation.on).toBe(false)
+    expect(out.pump.on).toBe(false)
+    expect(out.reverb).toEqual({ room: 'cavern', amount: 0.3 })
+    expect(out.panning).toEqual({ on: true, width: 0.4 })
+    expect(out.throws).toEqual(s.throws)
+    expect(out.riserVariety).toEqual(s.riserVariety)
+    expect(s.mastering.on).toBe(true)
+  })
+
+  it('no settings stay no settings', () => {
+    expect(stemExportSound(undefined)).toBeUndefined()
   })
 })

@@ -14,6 +14,7 @@ import { EngineClient } from './engineClient'
 import { loadCatalog } from './pluginCatalog'
 import { sketchStemsDir } from './projectLibrary'
 import { buildPluginStatesMap, type RawPluginStatesCapture } from '@shared/pluginStates'
+import { stemExportSound } from '@shared/radioSound'
 
 // Anything outside this set is unsafe (or at least unwelcome) in a filename
 // across macOS/Windows/Linux -- matches exportAudioMaterialization.ts's own
@@ -134,12 +135,20 @@ export function riserOnlyState(state: AppState, allKeys: string[]): AppState {
  * docs/superpowers/specs/2026-08-05-stem-bus-clustering-design.md.
  * `allKeys` must include every stemKey that could sound in this project --
  * anything not in `targetKeys` gets muted, so an incomplete list would
- * leave an unrelated stem audible.
+ * leave an unrelated stem audible. The radio sound's master stages (mastering, glue, tone,
+ * saturation, the pump) are dropped too (stemExportSound); its room and per-stem stages stay.
  */
 export function soloState(state: AppState, targetKeys: Set<string>, allKeys: string[]): AppState {
   const soloMute: Record<string, boolean> = {}
   for (const key of allKeys) soloMute[key] = !targetKeys.has(key)
-  return { ...state, mute: soloMute, masterChain: [null, null, null, null] }
+  return {
+    ...state,
+    mute: soloMute,
+    masterChain: [null, null, null, null],
+    // The radio sound's master stages go with the master chain, for the same reason: a stem
+    // render keeps only its per-stem stages (stemExportSound).
+    ...(state.sound ? { sound: stemExportSound(state.sound) } : {})
+  }
 }
 
 /**

@@ -177,6 +177,7 @@ import {
   radioTraceTick
 } from '../perf/radioTrace'
 import { initialState, type AppState } from '../state/store'
+import { appSoundDefaultsNow } from '../state/appSoundDefaults'
 import {
   neutralCutoff,
   type AutomationPoint,
@@ -1458,7 +1459,10 @@ export function DiscoverPanel({
    *
    * The real arrangement's own state (`state.rifffs`/`vol`/etc.) is never
    * touched -- the thrown-together AppState here only copies bpm/
-   * masterChain/channelPlugins/reverb from the real one.
+   * masterChain/channelPlugins/reverb/sound from the real one (sound: the
+   * radio sound's settings; the app-wide defaults if the project has none).
+   * A sound settings change is picked up at the next sync, not mid-preview
+   * (the native radio sound plan's Task 13 adds the resync).
    *
    * MASTER plugin FX genuinely are applied while auditioning: Transport.cpp
    * runs masterChain.process() on the summed output for whatever project is
@@ -1805,7 +1809,8 @@ export function DiscoverPanel({
       masterChain,
       channelPlugins,
       reverb,
-      sound,
+      // explicit: initialState has none (absent is today's sound)
+      sound: sound ?? appSoundDefaultsNow(),
       rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
       vol,
       // The master reverb: N equal sends into the ONE shared bus, which is

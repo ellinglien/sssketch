@@ -176,6 +176,10 @@ namespace sssketch
             project.masterFilter.resonance = getNormalised(masterFilterVar, "resonance", 0.0);
         }
 
+        // The radio sound's settings (SoundSettings.h): lenient like everything above, and an
+        // absent or unreadable block is every stage off.
+        project.sound = parseSoundSettings(parsed.getProperty("sound", juce::var()));
+
         // Placed noise risers (spec step 4). Absent for every project saved
         // before they existed, and absent parses to an empty vector, which is
         // exactly the fast path PlaybackEngine skips the whole riser stage
@@ -185,10 +189,6 @@ namespace sssketch
         // rather than defaulted -- its length is a divisor in a per-sample
         // loop on the audio thread, and silently substituting a plausible one
         // would invent an element the user never placed.
-        // The radio sound's settings (SoundSettings.h): lenient like everything above, and an
-        // absent or unreadable block is every stage off.
-        project.sound = parseSoundSettings(parsed.getProperty("sound", juce::var()));
-
         auto risersVar = parsed.getProperty("risers", juce::var());
         if (auto* risersArray = risersVar.getArray())
         {

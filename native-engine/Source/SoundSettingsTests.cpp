@@ -145,6 +145,28 @@ namespace sssketch
                 expectEquals(s.pump->depthDb, 0.0);
             }
 
+            beginTest("glue, tone and saturation are dropped without mastering: never a chain without the limiter");
+            {
+                bool ok = false;
+                auto p = parseSound(R"({
+                    "glue": { "thresholdDb": -14, "ratio": 2, "kneeDb": 6 },
+                    "tone": { "lowShelfDb": 1, "highShelfDb": 1 },
+                    "saturation": { "drive": 0.9 },
+                    "room": "cavern",
+                    "pump": { "depthDb": 4 }
+                })", ok);
+                expect(ok);
+                expect(! p.sound.mastering && ! p.sound.glue && ! p.sound.tone && ! p.sound.saturation);
+                expect(p.sound.pump.has_value(), "the pump is not a master stage");
+                expect(p.sound.room == ReverbRoom::cavern);
+
+                auto junkMastering = parseSound(R"({
+                    "mastering": { "headroomDb": -4 },
+                    "glue": { "thresholdDb": -14, "ratio": 2, "kneeDb": 6 }
+                })", ok);
+                expect(! junkMastering.sound.mastering && ! junkMastering.sound.glue, "unreadable mastering drops glue too");
+            }
+
             beginTest("the room alone, zita at today's return, is neutral; the cavern is not");
             {
                 SoundSettings s;

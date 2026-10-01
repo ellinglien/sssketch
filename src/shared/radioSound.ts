@@ -292,6 +292,23 @@ export function mergeSoundSettings(
   return normalizeSoundSettings(merged, base)
 }
 
+/** The settings a per-stem render plays with: per-stem bakes, stem and bus exports, the DAW
+ * exports' stems (Elling's ruling, 2026-10-01: each stem gets its per-stem stages, never the
+ * master bus's). The room and its return, panning, throws and riser variety stay; mastering,
+ * glue, tone, saturation and the pump's mix are switched off -- each stem would otherwise be
+ * limited, glued and saturated on its own, and the stems would no longer sum to the mix. No
+ * settings stay no settings. A fresh object. */
+export function stemExportSound(sound: SoundSettings | undefined): SoundSettings | undefined {
+  if (sound === undefined) return undefined
+  const s = normalizeSoundSettings(sound)
+  s.mastering.on = false
+  s.glue.on = false
+  s.tone.on = false
+  s.saturation.on = false
+  s.pump.on = false
+  return s
+}
+
 // ---------------------------------------------------------------------------------------------
 // the amount maps (the wire carries what these return, never the amounts)
 //

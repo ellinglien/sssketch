@@ -4,6 +4,7 @@ import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlaybac
 import { buildEngineProject } from '@shared/buildEngineProject'
 import type { Stem } from '@shared/types'
 import { initialState, type AppState } from './store'
+import { appSoundDefaultsNow } from './appSoundDefaults'
 import {
   useAppSelector,
   useDispatch,
@@ -50,6 +51,9 @@ export function useThrowawayStemPreview(): {
   const bpm = useAppSelector((s) => s.bpm)
   const masterChain = useAppSelector((s) => s.masterChain)
   const channelPlugins = useAppSelector((s) => s.channelPlugins)
+  // The project's radio sound settings (native radio sound plan), so a
+  // preview plays with the project's mastering and room.
+  const sound = useAppSelector((s) => s.sound)
   const pluginCatalog = usePluginCatalog()
   const flushEngineSyncNow = useFlushEngineSyncNow()
   const {
@@ -98,7 +102,7 @@ export function useThrowawayStemPreview(): {
       const engineToken = claimEngine('tidy-up-library-preview')
 
       // A throwaway single-rifff AppState -- only bpm/masterChain/
-      // channelPlugins come from the real project; state.rifffs is ENTIRELY
+      // channelPlugins/sound come from the real project; state.rifffs is ENTIRELY
       // replaced by this one rifff, never merged. `startBar: 0` is what
       // buildEngineProject's own `placed` filter needs to include it at
       // all, and it makes this preview's loopLengthBars exactly the rifff's
@@ -108,6 +112,8 @@ export function useThrowawayStemPreview(): {
         bpm,
         masterChain,
         channelPlugins,
+        // explicit: initialState has none (absent is today's sound)
+        sound: sound ?? appSoundDefaultsNow(),
         rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
         vol,
         stretch: { [rifff.groupId]: true }
@@ -139,6 +145,7 @@ export function useThrowawayStemPreview(): {
       masterChain,
       pluginCatalog,
       releaseEngine,
+      sound,
       stillOwnEngine
     ]
   )

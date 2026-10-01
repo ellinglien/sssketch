@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { appSoundDefaults, forgetAppSoundDefaults } from './appSoundDefaults'
+import { appSoundDefaults, appSoundDefaultsNow, forgetAppSoundDefaults } from './appSoundDefaults'
 import { DEFAULT_SOUND_SETTINGS, normalizeSoundSettings } from '@shared/radioSound'
 
 describe('appSoundDefaults', () => {
@@ -38,5 +38,24 @@ describe('appSoundDefaults', () => {
     forgetAppSoundDefaults()
     await appSoundDefaults(fetch)
     expect(fetch).toHaveBeenCalledTimes(2)
+  })
+
+  it('a fetch that throws synchronously is a failed fetch too, not an escaping throw', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const got = await appSoundDefaults(() => {
+      throw new Error('no window.rifffApi')
+    })
+    expect(got).toEqual(DEFAULT_SOUND_SETTINGS)
+  })
+
+  it('appSoundDefaultsNow: all on until a fetch has resolved, then what it gave, a fresh copy', async () => {
+    expect(appSoundDefaultsNow()).toEqual(DEFAULT_SOUND_SETTINGS)
+    const stored = normalizeSoundSettings(undefined)
+    stored.glue.on = false
+    await appSoundDefaults(async () => stored)
+    expect(appSoundDefaultsNow()).toEqual(stored)
+    expect(appSoundDefaultsNow()).not.toBe(appSoundDefaultsNow())
+    forgetAppSoundDefaults()
+    expect(appSoundDefaultsNow()).toEqual(DEFAULT_SOUND_SETTINGS)
   })
 })

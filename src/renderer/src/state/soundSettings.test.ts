@@ -1,7 +1,8 @@
 // The project's sound settings in the renderer (native radio sound plan, Task 2): the reducer
 // action, undo, save/load (a legacy project opens with the app-wide defaults), unsaved changes.
-import { describe, expect, it } from 'vitest'
-import { initialState, reducer, type AppState } from './store'
+import { afterEach, describe, expect, it } from 'vitest'
+import { initialState, reducer, startupState, type AppState } from './store'
+import { appSoundDefaults, forgetAppSoundDefaults } from './appSoundDefaults'
 import { createHistoryState, historyReducer } from './history'
 import { deserializeProject, serializeProject } from './serialize'
 import { hasUnsavedChanges } from './unsavedChanges'
@@ -45,7 +46,19 @@ describe('SET_SOUND_SETTINGS', () => {
     expect(next.sound!.panning.width).toBe(0)
   })
 
-  it('on a state with none, starts from the defaults', () => {
+  it('on a state with none, merges onto the app-wide defaults once they are known', async () => {
+    const appDefaults = normalizeSoundSettings(undefined)
+    appDefaults.pump.depthDb = 2
+    await appSoundDefaults(async () => appDefaults)
+    const next = reducer(initialState, {
+      type: 'SET_SOUND_SETTINGS',
+      settings: { tone: { on: false } }
+    })
+    expect(next.sound).toEqual({ ...appDefaults, tone: { on: false, amount: 0 } })
+    forgetAppSoundDefaults()
+  })
+
+  it('on a state with none, before the app-wide defaults are known, starts from all on', () => {
     const next = reducer(initialState, {
       type: 'SET_SOUND_SETTINGS',
       settings: { tone: { on: false } }
@@ -120,5 +133,51 @@ describe('the sound settings in a saved project', () => {
     })
     expect(hasUnsavedChanges(edited.rifffs, saved, saved)).toBe(false)
     expect(hasUnsavedChanges(edited.rifffs, serializeProject(edited), saved)).toBe(true)
+  })
+})
+
+describe('the startup state (before any project is created or opened)', () => {
+  afterEach(() => forgetAppSoundDefaults())
+
+  it('has sound settings, all on, so a save from it carries them', () => {
+    expect(startupState.sound).toEqual(DEFAULT_SOUND_SETTINGS)
+    const saved = JSON.parse(serializeProject({ ...startupState, rifffs: { r1: rifff } }))
+    expect(saved.sound).toEqual(DEFAULT_SOUND_SETTINGS)
+  })
+
+  it('ADOPT_APP_SOUND_DEFAULTS swaps in the app-wide defaults while the sound is untouched', () => {
+    const appDefaults = normalizeSoundSettings(undefined)
+    appDefaults.reverb.room = 'zita'
+    const next = reducer(startupState, {
+      type: 'ADOPT_APP_SOUND_DEFAULTS',
+      sound: appDefaults,
+      ifStill: startupState.sound!
+    })
+    expect(next.sound).toEqual(appDefaults)
+  })
+
+  it('...and not once the sound was edited or a project was loaded', () => {
+    const edited = reducer(startupState, {
+      type: 'SET_SOUND_SETTINGS',
+      settings: { glue: { on: false } }
+    })
+    const appDefaults = normalizeSoundSettings(undefined)
+    appDefaults.reverb.room = 'zita'
+    const after = reducer(edited, {
+      type: 'ADOPT_APP_SOUND_DEFAULTS',
+      sound: appDefaults,
+      ifStill: startupState.sound!
+    })
+    expect(after).toBe(edited)
+  })
+
+  it('is not an edit: no undo step', () => {
+    let h = createHistoryState(startupState)
+    h = historyReducer(h, {
+      type: 'ADOPT_APP_SOUND_DEFAULTS',
+      sound: normalizeSoundSettings(undefined),
+      ifStill: startupState.sound!
+    })
+    expect(h.past).toHaveLength(0)
   })
 })
