@@ -858,7 +858,8 @@ export async function getDiscoverCandidates({
   kinds,
   onlyOwnStems = false,
   targetUser,
-  soundSource = { endlesss: true, audioIn: true }
+  soundSource = { endlesss: true, audioIn: true },
+  artistStemCIDs
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
@@ -866,6 +867,11 @@ export async function getDiscoverCandidates({
   onlyOwnStems?: boolean
   targetUser?: string
   soundSource?: DiscoverSoundSourceFilter
+  /** Discover artist mode (2026-10-01): ONLY these stems may enter any
+   * pool, applied BEFORE each pool's bounded random sample -- see
+   * docs/superpowers/plans/2026-10-01-discover-artist-mode.md, "READ THIS"
+   * §2. Undefined (every `me` roll) takes today's path untouched. */
+  artistStemCIDs?: ReadonlySet<string>
 }): Promise<DiscoverCandidate[]> {
   const normalized = normalizeSlotKinds(kinds)
   const maskKinds = normalized.filter(isMaskSlotKind)
@@ -883,7 +889,8 @@ export async function getDiscoverCandidates({
         traitKinds,
         onlyOwnStems,
         targetUser,
-        soundSource
+        soundSource,
+        artistStemCIDs
       })
     )
   }
@@ -899,7 +906,8 @@ export async function getDiscoverCandidates({
       kind,
       onlyOwnStems,
       targetUser,
-      soundSource
+      soundSource,
+      artistStemCIDs
     })
     for (const candidate of perKind) {
       const existing = indexByStemCID.get(candidate.stemCID)
@@ -1078,7 +1086,8 @@ async function getMaskDiscoverCandidates({
   kind,
   onlyOwnStems = false,
   targetUser,
-  soundSource
+  soundSource,
+  artistStemCIDs
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
@@ -1086,6 +1095,7 @@ async function getMaskDiscoverCandidates({
   onlyOwnStems?: boolean
   targetUser?: string
   soundSource: DiscoverSoundSourceFilter
+  artistStemCIDs?: ReadonlySet<string>
 }): Promise<DiscoverCandidate[]> {
   // Human-confirmed StemCategories rows for this exact ArrangeRole still
   // win outright -- a real confirmation is trusted even over an ambiguous
@@ -1137,6 +1147,7 @@ async function getMaskDiscoverCandidates({
   const unavailable = unavailableStems(ownDb)
   const eligibleStemCIDs = [...categoryByStemCID.keys()].filter(
     (stemCID) =>
+      (artistStemCIDs === undefined || artistStemCIDs.has(stemCID)) &&
       soundSourceMatchesFilter(maskByStemCID.get(stemCID)?.instrument, soundSource) &&
       stemIsUsable(stemCID, unavailable)
   )
@@ -1322,8 +1333,12 @@ export function sampleDistinctIndices(
  * which nothing else in this codebase depends on. */
 async function sampleTraitStems(
   ownDb: Database.Database,
-  traitKinds: readonly DiscoverTraitKind[]
+  traitKinds: readonly DiscoverTraitKind[],
+  artistStemCIDs?: ReadonlySet<string>
 ): Promise<TraitSampledStem[]> {
+  if (artistStemCIDs !== undefined) {
+    return sampleArtistTraitStems(ownDb, traitKinds, artistStemCIDs)
+  }
   const table = getTraitValueTable(ownDb)
   if (table) {
     const indices = sampleDistinctIndices(
@@ -1388,6 +1403,73 @@ async function sampleTraitStems(
   return sampled
 }
 
+/** Artist mode's trait sample: the artist's ANALYSED stems only (most other
+ * artists are a few % analysed -- spec "Context"), at most
+ * MAX_CANDIDATE_RESOLUTION_POOL of them, uniformly random. From the
+ * in-memory value table when it is current (Map lookups, no SQL);
+ * otherwise chunked primary-key lookups on StemFeatureCache over a
+ * shuffled id list, stopping once the bound is reached. */
+async function sampleArtistTraitStems(
+  ownDb: Database.Database,
+  traitKinds: readonly DiscoverTraitKind[],
+  artistStemCIDs: ReadonlySet<string>
+): Promise<TraitSampledStem[]> {
+  if (artistStemCIDs.size === 0) return []
+  const table = getTraitValueTable(ownDb)
+  if (table) {
+    const rows: number[] = []
+    for (const stemCID of artistStemCIDs) {
+      const row = table.rowOf(stemCID)
+      if (row !== undefined) rows.push(row)
+    }
+    const picked = sampleDistinctIndices(
+      rows.length,
+      Math.min(rows.length, MAX_CANDIDATE_RESOLUTION_POOL)
+    )
+    return picked.map((i) => {
+      const features = table.features(rows[i])
+      return {
+        stemCID: table.stemCIDAt(rows[i]),
+        traitValues: traitValuesFromFeatures(features, traitKinds),
+        traitFieldValues: traitFieldValuesFromFeatures(features, traitKinds)
+      }
+    })
+  }
+
+  const ids = [...artistStemCIDs]
+  const shuffled = sampleDistinctIndices(ids.length, ids.length).map((i) => ids[i])
+  const sampled: TraitSampledStem[] = []
+  for (const idChunk of chunk(shuffled, CANDIDATE_QUERY_CHUNK_SIZE)) {
+    if (sampled.length >= MAX_CANDIDATE_RESOLUTION_POOL) break
+    let rows: FeatureCandidateRow[]
+    try {
+      countWork('sql:discover.artist-trait-page')
+      rows = ownDb
+        .prepare(
+          `SELECT StemCID, FeaturesJSON FROM StemFeatureCache
+           WHERE StemCID IN (${idChunk.map(() => '?').join(', ')})`
+        )
+        .all(...idChunk) as FeatureCandidateRow[]
+    } catch {
+      return sampled
+    }
+    for (const row of rows) {
+      try {
+        const features = JSON.parse(row.FeaturesJSON) as StemFeatures
+        sampled.push({
+          stemCID: row.StemCID,
+          traitValues: traitValuesFromFeatures(features, traitKinds),
+          traitFieldValues: traitFieldValuesFromFeatures(features, traitKinds)
+        })
+      } catch {
+        // malformed row -- not a candidate
+      }
+    }
+    await yieldToEventLoop()
+  }
+  return sampled.slice(0, MAX_CANDIDATE_RESOLUTION_POOL)
+}
+
 type TraitStemRow = {
   StemCID: string
   Instrument: number | null
@@ -1420,7 +1502,8 @@ async function getTraitPoolCandidates({
   traitKinds,
   onlyOwnStems,
   targetUser,
-  soundSource = { endlesss: true, audioIn: true }
+  soundSource = { endlesss: true, audioIn: true },
+  artistStemCIDs
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
@@ -1428,8 +1511,9 @@ async function getTraitPoolCandidates({
   onlyOwnStems: boolean
   targetUser?: string
   soundSource?: DiscoverSoundSourceFilter
+  artistStemCIDs?: ReadonlySet<string>
 }): Promise<DiscoverCandidate[]> {
-  const allSampled = await sampleTraitStems(ownDb, traitKinds)
+  const allSampled = await sampleTraitStems(ownDb, traitKinds, artistStemCIDs)
   // Dropped before the per-db Stems lookups below, not after, so the
   // chunked IN (...) queries stay as small as the real pool.
   const unavailable = unavailableStems(ownDb)

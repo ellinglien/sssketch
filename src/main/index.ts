@@ -105,6 +105,7 @@ import type { EngineProject } from '@shared/buildEngineProject'
 import type { RemoteCommand, RemoteState } from '@shared/remoteState'
 import type { PairingGate } from '@shared/remoteAuth'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
+import { getArtistStemCIDs } from './discoverArtistStems'
 import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
@@ -1258,7 +1259,8 @@ app.whenReady().then(async () => {
       kinds: DiscoverSlotKind[],
       onlyOwnStems: boolean,
       targetUser?: string,
-      soundSource?: DiscoverSoundSourceFilter
+      soundSource?: DiscoverSoundSourceFilter,
+      artist?: string
     ): Promise<DiscoverCandidate[]> => {
       // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
       // staying stuck with no console errors made it impossible to tell,
@@ -1270,13 +1272,19 @@ app.whenReady().then(async () => {
       console.log(
         `get-discover-candidates(${kinds.join('+')}): listJamsWithDb -- ${jams.length} jams in ${t1 - t0}ms`
       )
+      // Artist mode only. `me` never sends `artist`, so this stays undefined
+      // and getDiscoverCandidates takes today's path.
+      const artistStemCIDs = artist
+        ? await getArtistStemCIDs([...new Set(jams.map((j) => j.dbForJam))], artist)
+        : undefined
       const result = await getDiscoverCandidates({
         ownDb: openOwnRiffLibraryDb(),
         jams,
         kinds,
         onlyOwnStems,
         targetUser,
-        soundSource
+        soundSource,
+        artistStemCIDs
       })
       console.log(
         `get-discover-candidates(${kinds.join('+')}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`
@@ -1310,8 +1318,9 @@ app.whenReady().then(async () => {
       _event,
       centerRiffCID: string,
       kinds: DiscoverSlotKind[],
-      soundSource?: DiscoverSoundSourceFilter
-    ) => getAdjacentDiscoverCandidates(centerRiffCID, kinds, soundSource)
+      soundSource?: DiscoverSoundSourceFilter,
+      creator?: string
+    ) => getAdjacentDiscoverCandidates(centerRiffCID, kinds, soundSource, creator)
   )
 
   ipcMain.handle('find-riff-for-stem-path', (_event, stemPath: string) =>

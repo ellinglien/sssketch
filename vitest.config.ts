@@ -58,6 +58,7 @@ export default defineConfig({
           'src/main/discoverIndexCache.test.ts',
           'src/main/discoveredLibrary.test.ts',
           'src/main/discoverLibraryStems.test.ts',
+          'src/main/discoverArtistStems.test.ts',
           'src/main/embeddingMatch.test.ts',
           'src/main/instrumentMaskCentroidBackfill.test.ts',
           'src/main/resolveStemArrangeRole.test.ts',

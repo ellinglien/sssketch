@@ -2577,3 +2577,74 @@ describe('sampleDistinctIndices order', () => {
     expect(frac).toBeLessThan(0.55)
   })
 })
+
+describe('artist mode: artistStemCIDs filters before the bounded sample', () => {
+  // 1,200 of Elling's drums stems swamp a 1,000-stem sample; the 3 by
+  // `tiny` must still all come back. Without the pre-filter, each would
+  // survive only ~1000/1203 of the time -- this test would flake, not pass.
+  function seedSwamp(own: Database.Database): void {
+    for (let i = 0; i < 1200; i++) {
+      seedRiff(own, `re${i}`, 'jam1', 128, [`e${i}`])
+      seedStem(own, `e${i}`, 'jam1', { creatorUserName: 'elling' })
+      seedCategory(own, `e${i}`, { arrangeRole: 'drums', busId: 'drums' })
+    }
+    for (const id of ['t1', 't2', 't3']) {
+      seedRiff(own, `r-${id}`, 'jam1', 128, [id])
+      seedStem(own, id, 'jam1', { creatorUserName: 'tiny' })
+      seedCategory(own, id, { arrangeRole: 'drums', busId: 'drums' })
+    }
+  }
+
+  it("mask kinds: returns exactly the artist's stems", async () => {
+    const own = freshDb()
+    seedSwamp(own)
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['drums'],
+      onlyOwnStems: true,
+      targetUser: 'tiny',
+      artistStemCIDs: new Set(['t1', 't2', 't3'])
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['t1', 't2', 't3'])
+  })
+
+  it("trait kinds: samples only the artist's analysed stems (SQL fallback, no value table)", async () => {
+    const own = freshDb()
+    for (let i = 0; i < 1200; i++) {
+      seedRiff(own, `re${i}`, 'jam1', 128, [`e${i}`])
+      seedStem(own, `e${i}`, 'jam1', { creatorUserName: 'elling' })
+      seedFeatures(own, `e${i}`, featuresJSON({ zcrBrightness: 0.5 }))
+    }
+    for (const id of ['t1', 't2']) {
+      seedRiff(own, `r-${id}`, 'jam1', 128, [id])
+      seedStem(own, id, 'jam1', { creatorUserName: 'tiny' })
+      seedFeatures(own, id, featuresJSON({ zcrBrightness: 0.5 }))
+    }
+    seedRiff(own, 'r-t3', 'jam1', 128, ['t3'])
+    seedStem(own, 't3', 'jam1', { creatorUserName: 'tiny' }) // not analysed
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['bright'],
+      onlyOwnStems: true,
+      targetUser: 'tiny',
+      artistStemCIDs: new Set(['t1', 't2', 't3'])
+    })
+    expect(candidates.map((c) => c.stemCID).sort()).toEqual(['t1', 't2'])
+  })
+
+  it('an empty artist set yields nothing, not everything', async () => {
+    const own = freshDb()
+    seedSwamp(own)
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['drums'],
+      onlyOwnStems: true,
+      targetUser: 'nobody',
+      artistStemCIDs: new Set()
+    })
+    expect(candidates).toEqual([])
+  })
+})

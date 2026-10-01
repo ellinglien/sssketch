@@ -471,7 +471,7 @@ git commit -m "discover artist: shared rules (mode, listen-only list, copy, roll
 - Modify: `vitest.config.ts` `:47-79`
 - Test: `src/main/discoverCandidates.test.ts` (append)
 
-- [ ] **Step 1: Write the failing test for the artist stem reader**
+- [x] **Step 1: Write the failing test for the artist stem reader**
 
 ```ts
 // src/main/discoverArtistStems.test.ts
@@ -547,12 +547,12 @@ describe('getArtistStemRows', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/main/discoverArtistStems.test.ts`
 Expected: FAIL, module not found.
 
-- [ ] **Step 3: Implement `src/main/discoverArtistStems.ts`**
+- [x] **Step 3: Implement `src/main/discoverArtistStems.ts`**
 
 ```ts
 // src/main/discoverArtistStems.ts
@@ -671,16 +671,16 @@ export async function getArtistStemCIDs(
 }
 ```
 
-- [ ] **Step 4: Add the CI exclusion (non-optional)**
+- [x] **Step 4: Add the CI exclusion (non-optional)**
 
 In `vitest.config.ts`, inside the `process.env.CI` array (`:48-78`), add `'src/main/discoverArtistStems.test.ts',` after `'src/main/discoverLibraryStems.test.ts',`.
 
-- [ ] **Step 5: Run it**
+- [x] **Step 5: Run it**
 
 Run: `npx vitest run src/main/discoverArtistStems.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Write the failing candidate tests (append to `src/main/discoverCandidates.test.ts`)**
+- [x] **Step 6: Write the failing candidate tests (append to `src/main/discoverCandidates.test.ts`)**
 
 ```ts
 describe('artist mode: artistStemCIDs filters before the bounded sample', () => {
@@ -755,12 +755,12 @@ describe('artist mode: artistStemCIDs filters before the bounded sample', () => 
 })
 ```
 
-- [ ] **Step 7: Run them to verify they fail**
+- [x] **Step 7: Run them to verify they fail**
 
 Run: `npx vitest run src/main/discoverCandidates.test.ts -t "artist mode"`
 Expected: FAIL. TypeScript/vitest reports `artistStemCIDs` as an unknown property, or the mask test returns fewer than 3 or flakes.
 
-- [ ] **Step 8: Implement in `src/main/discoverCandidates.ts`**
+- [x] **Step 8: Implement in `src/main/discoverCandidates.ts`**
 
 8a. In `getDiscoverCandidates` (`:855-870`), add the parameter to both the destructuring and the type:
 
@@ -885,12 +885,12 @@ async function sampleArtistTraitStems(
 
 `chunk`, `yieldToEventLoop`, `CANDIDATE_QUERY_CHUNK_SIZE`, `FeatureCandidateRow`, `sampleDistinctIndices`, `getTraitValueTable` and the trait helpers already exist in this file (`:571`, `:577`, `:165`, `:1271`, `:1286`, and the imports).
 
-- [ ] **Step 9: Run the candidate tests**
+- [x] **Step 9: Run the candidate tests**
 
 Run: `npx vitest run src/main/discoverCandidates.test.ts`
 Expected: PASS. Every pre-existing test is unchanged and green, and the 3 new ones pass.
 
-- [ ] **Step 10: The nearby-jam filter, `src/main/discoverAdjacency.ts`**
+- [x] **Step 10: The nearby-jam filter, `src/main/discoverAdjacency.ts`**
 
 Add a fourth parameter to `getAdjacentDiscoverCandidates` (`:114-125`), after `soundSource`:
 
@@ -908,7 +908,7 @@ In `matchRole`'s `for (const stem of resolved.stems)` loop (`:168`), make this t
 
 Add `import { creatorAllowed } from '@shared/discoverArtist'` to the file's imports.
 
-- [ ] **Step 11: The IPC arguments, `src/main/index.ts`**
+- [x] **Step 11: The IPC arguments, `src/main/index.ts`**
 
 Add `import { getArtistStemCIDs } from './discoverArtistStems'` next to the other `./discover*` imports.
 
@@ -928,7 +928,7 @@ Pass `artistStemCIDs` in the options object.
 
 In `get-adjacent-discover-candidates` (`:1307-1315`), add `creator?: string` and pass it as the 4th argument.
 
-- [ ] **Step 12: Preload, `src/preload/index.ts:334-359`**
+- [x] **Step 12: Preload, `src/preload/index.ts:334-359`**
 
 ```ts
   getDiscoverCandidates: (
@@ -949,12 +949,12 @@ In `get-adjacent-discover-candidates` (`:1307-1315`), add `creator?: string` and
     ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, kinds, soundSource, creator),
 ```
 
-- [ ] **Step 13: Gate**
+- [x] **Step 13: Gate**
 
 Run: `npm run typecheck && npm run lint && npm test`
 Expected: all green. No renderer call site passes the new arguments yet, so the app behaves exactly as before.
 
-- [ ] **Step 14: Commit**
+- [x] **Step 14: Commit**
 
 ```bash
 git add src/main/discoverArtistStems.ts src/main/discoverArtistStems.test.ts \
@@ -962,6 +962,10 @@ git add src/main/discoverArtistStems.ts src/main/discoverArtistStems.test.ts \
   src/main/discoverAdjacency.ts src/main/index.ts src/preload/index.ts vitest.config.ts
 git commit -m "discover artist: artist stem set filters every pool before its sample; me unchanged"
 ```
+
+**As landed:** code exactly as above. Prettier reformatted only the test's import onto one line and the two preload `ipcRenderer.invoke(...)` calls onto one argument per line. Step 7: the mask and trait tests failed as expected. "An empty artist set yields nothing" already passed before the change, because `targetUser: 'nobody'` filters everything anyway; it now pins the empty-set early return. In adjacency, an unknown creator comes through as `''` (`riffLibraryStore.ts:771`), not null, and `creatorAllowed` rejects it correctly. The value-table branch of `sampleArtistTraitStems` has no direct test (the trait test covers the SQL fallback). Gates: typecheck clean, lint at the 4 pre-existing warnings, 232 files / 3,784 tests green, and `CI=1` skips `discoverArtistStems.test.ts`.
+
+**Task 1 review follow-up (commit `e455ab2`):** `artistTurnoverIds` trims `artist`, and a blank one targets the own username. `rollFilterForArtist` treats a blank `artist` as own. New tests cover "the artist wins over `onlyOwnStems=true`" and pin case-sensitive matching.
 
 ---
 

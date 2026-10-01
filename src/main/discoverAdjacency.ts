@@ -17,6 +17,7 @@ import {
   type TraitValues
 } from '@shared/discoverTraits'
 import type { StemFeatures } from '@shared/stemFeatures'
+import { creatorAllowed } from '@shared/discoverArtist'
 import {
   resolveRiffWithContext,
   listRiffs,
@@ -120,7 +121,9 @@ export async function getAdjacentDiscoverCandidates(
   // instrument mask (2026-09-22 -- mask kinds no longer go empty while
   // "endlesss" is off; an audio-in stem the overnight classifier placed
   // can match drums/bass/lead). Defaults to no filtering.
-  soundSource: DiscoverSoundSourceFilter = { endlesss: true, audioIn: true }
+  soundSource: DiscoverSoundSourceFilter = { endlesss: true, audioIn: true },
+  /** Discover artist mode: only this creator's stems (creatorAllowed). */
+  creator?: string
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   const context = resolveRiffWithContext(centerRiffCID)
   if (!context) return { newer: [], older: [] }
@@ -168,6 +171,7 @@ export async function getAdjacentDiscoverCandidates(
     const resolved = resolveRiff(summary.riffCID)
     if (!resolved) return null
     for (const stem of resolved.stems) {
+      if (!creatorAllowed(stem.creatorUserName, creator)) continue
       // Local audio always wins over the unavailable list: resolveRiff has
       // already turned `path` into null for anything not on disk, so a
       // non-null path here IS a real existsSync result.

@@ -335,9 +335,17 @@ const api = {
     kinds: DiscoverSlotKind[],
     onlyOwnStems: boolean,
     targetUser?: string,
-    soundSource?: DiscoverSoundSourceFilter
+    soundSource?: DiscoverSoundSourceFilter,
+    artist?: string
   ): Promise<DiscoverCandidate[]> =>
-    ipcRenderer.invoke('get-discover-candidates', kinds, onlyOwnStems, targetUser, soundSource),
+    ipcRenderer.invoke(
+      'get-discover-candidates',
+      kinds,
+      onlyOwnStems,
+      targetUser,
+      soundSource,
+      artist
+    ),
   getRandomDiscoverCandidate: (
     kinds: DiscoverSlotKind[],
     onlyOwnStems: boolean,
@@ -354,9 +362,16 @@ const api = {
   getAdjacentDiscoverCandidates: (
     centerRiffCID: string,
     kinds: DiscoverSlotKind[],
-    soundSource?: DiscoverSoundSourceFilter
+    soundSource?: DiscoverSoundSourceFilter,
+    creator?: string
   ): Promise<{ newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }> =>
-    ipcRenderer.invoke('get-adjacent-discover-candidates', centerRiffCID, kinds, soundSource),
+    ipcRenderer.invoke(
+      'get-adjacent-discover-candidates',
+      centerRiffCID,
+      kinds,
+      soundSource,
+      creator
+    ),
   findRiffForStemPath: (
     stemPath: string
   ): Promise<{
