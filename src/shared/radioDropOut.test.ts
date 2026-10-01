@@ -367,6 +367,15 @@ function simulateRadio(
   return result
 }
 
+/** Each simulation below is 200,000 bars at 60 ticks a bar -- 12 million
+ * ticks, 3-4.5s alone and over 5s under the full parallel suite, so
+ * vitest's default 5000ms timeout failed one about every other full run
+ * ("Test timed out in 5000ms", never a wrong count). Every draw is seeded
+ * (mulberry32, the radio's and the jitter's), so the counts are the same
+ * every run and only the wall clock varies: this is a budget for known CPU
+ * work, not a looser check. */
+const SIMULATION_TIMEOUT_MS = 30_000
+
 describe('drop-outs happen at the documented rate when every change is decided early', () => {
   // RADIO_DROP_OUT_CHANCE's own doc: rolled once per interval, so at `mid`
   // (8-16 bars, mean 12) about one every 80 bars -- somewhat rarer in
@@ -376,33 +385,41 @@ describe('drop-outs happen at the documented rate when every change is decided e
     [8, 8],
     [8, 2]
   ]) {
-    it(`on a ${loopBars}-bar loop with a ${gridBars}-bar grid`, () => {
-      const totalBars = 200_000
-      const run = simulateRadio(loopBars, gridBars, totalBars, 7 * loopBars + gridBars)
-      expect(run.late).toBe(0)
-      expect(run.collisions).toBe(0)
-      const perInterval = run.dropOuts / run.changes
-      // Just under RADIO_DROP_OUT_CHANCE.rare: an interval exactly one lap
-      // long gives its only lap to the change that ends it.
-      expect(perInterval).toBeGreaterThan(0.12)
-      expect(perInterval).toBeLessThan(0.17)
-      const barsPerDropOut = totalBars / run.dropOuts
-      expect(barsPerDropOut).toBeGreaterThan(70)
-      expect(barsPerDropOut).toBeLessThan(130)
-    })
+    it(
+      `on a ${loopBars}-bar loop with a ${gridBars}-bar grid`,
+      () => {
+        const totalBars = 200_000
+        const run = simulateRadio(loopBars, gridBars, totalBars, 7 * loopBars + gridBars)
+        expect(run.late).toBe(0)
+        expect(run.collisions).toBe(0)
+        const perInterval = run.dropOuts / run.changes
+        // Just under RADIO_DROP_OUT_CHANCE.rare: an interval exactly one lap
+        // long gives its only lap to the change that ends it.
+        expect(perInterval).toBeGreaterThan(0.12)
+        expect(perInterval).toBeLessThan(0.17)
+        const barsPerDropOut = totalBars / run.dropOuts
+        expect(barsPerDropOut).toBeGreaterThan(70)
+        expect(barsPerDropOut).toBeLessThan(130)
+      },
+      SIMULATION_TIMEOUT_MS
+    )
   }
 
-  it('and never at the cost of an early decision, even where most laps belong to a change', () => {
-    // A 16-bar loop at mid pace: an interval that starts at a wrap always
-    // ends on or before the next one, so only the ones a short layer's
-    // 4-bar grid lands mid-lap have a lap of their own. Those still get
-    // their drop-out, and no change is ever pushed onto the late path by
-    // one.
-    const run = simulateRadio(16, 4, 200_000, 99)
-    expect(run.late).toBe(0)
-    expect(run.collisions).toBe(0)
-    expect(run.dropOuts).toBeGreaterThan(0)
-  })
+  it(
+    'and never at the cost of an early decision, even where most laps belong to a change',
+    () => {
+      // A 16-bar loop at mid pace: an interval that starts at a wrap always
+      // ends on or before the next one, so only the ones a short layer's
+      // 4-bar grid lands mid-lap have a lap of their own. Those still get
+      // their drop-out, and no change is ever pushed onto the late path by
+      // one.
+      const run = simulateRadio(16, 4, 200_000, 99)
+      expect(run.late).toBe(0)
+      expect(run.collisions).toBe(0)
+      expect(run.dropOuts).toBeGreaterThan(0)
+    },
+    SIMULATION_TIMEOUT_MS
+  )
 
   for (const [loopBars, gridBars] of [
     [4, 4],
@@ -410,16 +427,20 @@ describe('drop-outs happen at the documented rate when every change is decided e
     [8, 2],
     [16, 4]
   ]) {
-    it(`never ends on a change's wrap when the ticks are off the grid (${loopBars}/${gridBars})`, () => {
-      // Where an interval that ends on a wrap falls is up to the tick; the
-      // half-bar margin in rollIntervalDropOut is what keeps a drop-out
-      // off that wrap whichever side it falls.
-      const run = simulateRadio(loopBars, gridBars, 200_000, 31 * loopBars + gridBars, true)
-      expect(run.dropOuts).toBeGreaterThan(0)
-      expect(run.collisions).toBe(0)
-      // And every change still decided early (restartRadioInterval counts
-      // from the boundary, so an interval ending on one is predicted).
-      expect(run.late).toBe(0)
-    })
+    it(
+      `never ends on a change's wrap when the ticks are off the grid (${loopBars}/${gridBars})`,
+      () => {
+        // Where an interval that ends on a wrap falls is up to the tick; the
+        // half-bar margin in rollIntervalDropOut is what keeps a drop-out
+        // off that wrap whichever side it falls.
+        const run = simulateRadio(loopBars, gridBars, 200_000, 31 * loopBars + gridBars, true)
+        expect(run.dropOuts).toBeGreaterThan(0)
+        expect(run.collisions).toBe(0)
+        // And every change still decided early (restartRadioInterval counts
+        // from the boundary, so an interval ending on one is predicted).
+        expect(run.late).toBe(0)
+      },
+      SIMULATION_TIMEOUT_MS
+    )
   }
 })
