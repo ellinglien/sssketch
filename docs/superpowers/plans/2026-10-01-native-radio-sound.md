@@ -267,41 +267,48 @@ No sound changes in this task.
 - Modify `CMakeLists.txt`.
 - In radio: `scripts/build-faust.mjs`, `scripts/buildFaust.test.ts`, `package.json`, `src/audio/faust/LICENSES.md`, plus a new `scripts/golden-vectors.mjs`.
 
-- [ ] **Step 1. Install and pin the native compiler.** `brew install faust`, then `faust --version`; expect 2.88.0. Then `brew pin faust`, so an upgrade can't move it under the generated code. Record the exact version string in `native-engine/Source/dsp/faust/FAUST_VERSION`.
-- [ ] **Step 2. Match the web to it.**
+- **As landed (2026-10-01):**
+  - Native Faust 2.88.0 from Homebrew, `brew pin`ned. Of faustwasm 0.17.0–0.18.5, 0.18.3 and 0.18.4 bundle libfaust 2.88.0; the web is pinned to **0.18.4**. The re-pin gate passed: the seeded golden input through each committed wasm, before and after, is bit-identical for saturate, glue, pump and truepeak, and within 2.4e-7 for reverb.
+  - The compile line gained two options beyond Step 6's: `-fm arch` (the math functions are `fast_<fn>f`, defined in `FaustArch.h` in double precision rounded to float, as the wasm gets them from JS `Math`) and `-fp` (full parentheses: without it the C++ printer drops the brackets of a long sum and C++ adds left to right, while the wasm keeps Faust's order; truepeak came out 1.4e-6 off). With both, native matches the web **bit for bit** for saturate, glue, pump and truepeak, and within 2.4e-7 for reverb (its `sin`).
+  - The bases live in `FaustArch.h`, which `arch.cpp` includes, so `FaustStage.h` can use them without the generated code. The generated headers are included by one TU, `dsp/faust/FaustDsps.cpp` (`makeFaustDsp(kind)`), compiled `-w -ffp-contract=off`.
+  - **`pump.dsp` has 8 inputs, not 4.** `duckDb`'s `-(...)` is a partial application (`_ - x`), so each use of the duck leaves a free input: program L R, key L R, then four more. The web connects a 4-channel merge, which Web Audio's upmix pads with silence, so it works. `FaustStage::process` feeds silence to any input the caller doesn't supply, the same way. A fix in the `.dsp` (`0 - (...)`) would make it 4 in without changing the sound; not done here.
+  - Golden vectors: radio's `scripts/golden-vectors.mjs` runs `faustProcessor.js` itself in Node. `test/golden/` holds `programme.f32`, `key.f32` (2 s, 48 kHz, planar float32), `<name>.out.f32` and `manifest.json`. `FaustStageTests` reads them via a compile definition (`SSSKETCH_GOLDEN_DIR`, overridable from the environment).
+
+- [x] **Step 1. Install and pin the native compiler.** `brew install faust`, then `faust --version`; expect 2.88.0. Then `brew pin faust`, so an upgrade can't move it under the generated code. Record the exact version string in `native-engine/Source/dsp/faust/FAUST_VERSION`.
+- [x] **Step 2. Match the web to it.**
   - In the scratchpad, `npm pack @grame/faustwasm@<v>` for each release from 0.17.0 to 0.18.4. For each one, instantiate it and print `compiler.version()`. Pick the release whose libfaust equals `FAUST_VERSION`.
   - Before re-pinning, render golden vectors with the **current** wasm (Step 4's script) and keep them.
   - In the radio repo, set that version in `package.json` (exact, no caret), update `PINNED_VERSION` in `build-faust.mjs`, run `node scripts/build-faust.mjs`, and commit the new `.wasm`/`.json`.
   - Re-render the golden vectors and diff them against the pre-re-pin ones. The expectation is max abs difference ≤ 1e-6 per DSP.
   - **If the difference is larger**, the DSP changed audibly between compiler versions. Stop and tell Elling, who A/Bs the web before and after.
   - **If no published faustwasm reports the native version**, keep the web at 0.18.5, build Faust 2.89.2 from source (`grame-cncm/faust`, the commit that sets `FAUSTVERSION` to 2.89.2), and pin that path in `FAUST_VERSION` instead.
-- [ ] **Step 3. One copy of each DSP (D4).**
+- [x] **Step 3. One copy of each DSP (D4).**
   - `git mv` is impossible across repos: add the files in sssketch, then delete them in radio in the same session.
   - Radio's `build-faust.mjs` sets `FAUST_SRC_DIR = process.env.SSSKETCH_DIR ? join(SSSKETCH_DIR, 'native-engine/Source/dsp/faust') : join(ROOT, '..', '..', 'sssketch', 'native-engine', 'Source', 'dsp', 'faust')`. That is the same relative layout the `@shared` alias in `tsconfig.json`/`vite.config.ts` already assumes.
   - It keeps writing `.wasm`/`.json` into radio's `src/audio/faust/`, where they are committed.
   - `buildFaust.test.ts` already recompiles and diffs, so it now also fails when a `.dsp` in sssketch changes without the radio's wasm being rebuilt. That is the drift alarm between the repos.
   - Radio's `LICENSES.md` points at sssketch's.
-- [ ] **Step 4. Golden vectors (the red test's data).**
+- [x] **Step 4. Golden vectors (the red test's data).**
   - Radio's `scripts/golden-vectors.mjs` instantiates each committed `.wasm` in Node, as `faustProcessor.js` does, at 48 kHz.
   - It feeds a fixed, seeded input: 2 s of a burst, sine and noise programme, plus a seeded kick key for `pump`.
   - Parameters stay at their defaults.
   - It writes little-endian float32 in and out files into sssketch `native-engine/test/golden/`.
-- [ ] **Step 5. Failing native test.** `FaustStageTests`, for each DSP:
+- [x] **Step 5. Failing native test.** `FaustStageTests`, for each DSP:
   - the golden input through `FaustStage` in blocks of 1, 64, 512 and a random split matches the golden output to max abs error ≤ 1e-6 (the compilers match);
   - the block splits are bit-identical to each other;
   - `latencySamples()` reads `latency_samples` (truepeak 75);
   - `setParam("/truepeak/ceiling", …)` reaches its zone;
   - the meters (`/glue/gr`, `/pump/duck`, `/truepeak/gr`) can be read.
-- [ ] **Step 6. Generate.**
+- [x] **Step 6. Generate.**
   - `build-faust-cpp.mjs` checks that `faust --version` equals `FAUST_VERSION`, refusing otherwise.
   - It then runs `faust -lang cpp -i -a arch.cpp -cn <Name>Dsp -ftz 2 -single <name>.dsp` per DSP. The `-ftz 2` is the web's.
   - It writes `generated/<name>.h` with a header naming the version and the `.dsp` hash.
   - `arch.cpp` declares the minimal `dsp`, `UI` and `Meta` bases in `namespace sssketch::faust`.
-- [ ] **Step 7. Make it green.**
+- [x] **Step 7. Make it green.**
   - Add the headers to `CMakeLists.txt`'s vendored list, compiled with `-w`.
   - `FaustStage` holds the DSP in a `std::unique_ptr`, allocated in `prepare()` on the message thread, and collects param zones through our `UI`.
-- [ ] **Step 8.** `buildFaustCpp.test.ts` regenerates into a temp dir and diffs it against `generated/`. It is skipped with a clear message without `faust`.
-- [ ] **Step 9.** Write `LICENSES.md`:
+- [x] **Step 8.** `buildFaustCpp.test.ts` regenerates into a temp dir and diffs it against `generated/`. It is skipped with a clear message without `faust`.
+- [x] **Step 9.** Write `LICENSES.md`:
   - GPL-2.0-or-later DSPs, combined into GPL-3.0-or-later;
   - the compiler is a build tool;
   - no GRAME architecture file is used;

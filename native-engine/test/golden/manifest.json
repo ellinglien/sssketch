@@ -1,0 +1,70 @@
+{
+  "note": "written by ell.ing/radio scripts/golden-vectors.mjs; little-endian float32, planar",
+  "sampleRate": 48000,
+  "frames": 96000,
+  "quantum": 128,
+  "faustwasm": "0.18.4",
+  "dsps": {
+    "glue": {
+      "inputs": [
+        "programme.L",
+        "programme.R"
+      ],
+      "outputs": 2,
+      "faust": "2.88.0",
+      "compileOptions": "-lang wasm-i -fpga-mem-th 4 -ct 1 -es 1 -mcd 16 -mdd 1024 -mdy 33 -single -ftz 2",
+      "dspSha256": "4c53b064e4f1d1d19c112d64e40e7ea1372fd3bd9613c105cda730f6cee8842c",
+      "wasmSha256": "5f6960d9291f67f8cee7eceef468aee1c6f0668394bb20dfb92652d7120c043e"
+    },
+    "pump": {
+      "inputs": [
+        "programme.L",
+        "programme.R",
+        "key.L",
+        "key.R",
+        "zero",
+        "zero",
+        "zero",
+        "zero"
+      ],
+      "outputs": 2,
+      "faust": "2.88.0",
+      "compileOptions": "-lang wasm-i -fpga-mem-th 4 -ct 1 -es 1 -mcd 16 -mdd 1024 -mdy 33 -single -ftz 2",
+      "dspSha256": "f6f7a8fa14b2a63f6b09b9b885c7c518f1d90f160349de8a152ef022ae06f6c8",
+      "wasmSha256": "29629f4a3dd196becedfb78f18f22be8ef6330b0ef3cd0ecfacc913e6bfe65de"
+    },
+    "reverb": {
+      "inputs": [
+        "programme.L",
+        "programme.R"
+      ],
+      "outputs": 2,
+      "faust": "2.88.0",
+      "compileOptions": "-lang wasm-i -fpga-mem-th 4 -ct 1 -es 1 -mcd 16 -mdd 1024 -mdy 33 -single -ftz 2",
+      "dspSha256": "89af358dfa6b5097269d3c5d513ff8cbc1c004c0fdd16822d9dbdb613490ffd0",
+      "wasmSha256": "f14e414f5765b9a7673560c585e2f75866b5501925b12ea9a8df23acb9ae02cc"
+    },
+    "saturate": {
+      "inputs": [
+        "programme.L",
+        "programme.R"
+      ],
+      "outputs": 2,
+      "faust": "2.88.0",
+      "compileOptions": "-lang wasm-i -fpga-mem-th 4 -ct 1 -es 1 -mcd 16 -mdd 1024 -mdy 33 -single -ftz 2",
+      "dspSha256": "48e6139d48e38bee45b0a321eeccdd2390a9179cd399e6a5c576db427416dbc2",
+      "wasmSha256": "fc1408c9def3f94dcc0173e0ab14384ca100e242e2740d889fefb6a2fd020021"
+    },
+    "truepeak": {
+      "inputs": [
+        "programme.L",
+        "programme.R"
+      ],
+      "outputs": 2,
+      "faust": "2.88.0",
+      "compileOptions": "-lang wasm-i -fpga-mem-th 4 -ct 1 -es 1 -mcd 16 -mdd 1024 -mdy 33 -single -ftz 2",
+      "dspSha256": "671d21b9824e77b63d5c4940c6355ae90eba4c5ec12faa196649c322b028b254",
+      "wasmSha256": "6aeefe782b828eca59d7783ddfa2dd9f992f44912be4f6767cdc94a07f9e273c"
+    }
+  }
+}
