@@ -73,9 +73,9 @@ namespace sssketch
          * tick (~33ms) behind the audio. Deliberate: every one of them is
          * message-thread work that is not real-time-safe -- clearAll()
          * allocates, updateChannelSet() rebuilds a map and hands the old
-         * one to a background deleter (and carries a known latent
-         * reclamation bug that must not become reachable from the audio
-         * callback), and Link's own docs call its session capture
+         * one to a background deleter (after waiting out a grace period
+         * for in-flight readers, which is exactly why it must never become
+         * reachable from the audio callback), and Link's own docs call its session capture
          * real-time-unsafe. Tempo is kept out of a staged swap entirely by
          * the stage-project handler for exactly this reason; the rest are
          * inaudible at that lag (a channel with no chain published is a

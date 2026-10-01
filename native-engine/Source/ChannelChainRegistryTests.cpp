@@ -119,6 +119,88 @@ namespace sssketch
                     reader.join();
                     expect(!sawNullDuringSteadyState.load());
                 }
+
+                // The map a reader is inside must not be freed under it. updateChannelSet used
+                // to swap in a new map and hand the old one straight to a deleter thread, so a
+                // reader that had loaded the old pointer just before the swap could still be
+                // walking its buckets when it was freed. A wide map, several readers and a lot
+                // of swaps make that window easy to hit; AddressSanitizer reports it as a
+                // heap-use-after-free, and MallocScribble=1 turns it into a crash without ASan.
+                beginTest("stress: chainFor never reads a map that updateChannelSet has freed");
+                {
+                    ChannelChainRegistry registry(fakeInstantiator());
+                    std::vector<juce::String> stable;
+                    for (int i = 0; i < 48; ++i)
+                        stable.push_back("ch-" + juce::String(i));
+                    registry.updateChannelSet(stable);
+
+                    std::atomic<bool> stop { false };
+                    std::atomic<int> missing { 0 };
+                    std::vector<std::thread> readers;
+                    for (int r = 0; r < 4; ++r)
+                    {
+                        readers.emplace_back([&, r]()
+                        {
+                            int i = r;
+                            while (!stop.load())
+                            {
+                                if (registry.chainFor(stable[(size_t) (i++ % (int) stable.size())]) == nullptr)
+                                    missing.fetch_add(1);
+                            }
+                        });
+                    }
+
+                    for (int i = 0; i < 2000; ++i)
+                    {
+                        auto ids = stable;
+                        ids.push_back("extra-" + juce::String(i));
+                        registry.updateChannelSet(ids);
+                    }
+
+                    stop.store(true);
+                    for (auto& t : readers)
+                        t.join();
+                    expectEquals(missing.load(), 0);
+                }
+
+                // The chain chainFor hands back has to outlive the lookup too: renderBlock calls
+                // process() on it after chainFor has returned, and a channel dropped by a
+                // concurrent updateChannelSet has its PluginChain destroyed along with the old
+                // map. Holding a ReadScope across lookup-and-use, as renderBlock does, keeps it
+                // alive until the scope ends.
+                beginTest("stress: a chain used inside a ReadScope is not destroyed by a concurrent updateChannelSet");
+                {
+                    ChannelChainRegistry registry(fakeInstantiator());
+                    std::atomic<bool> stop { false };
+                    std::atomic<int> processed { 0 };
+
+                    std::thread audio([&]()
+                    {
+                        float l[64] {};
+                        float r[64] {};
+                        while (!stop.load())
+                        {
+                            registry.applyPendingSwaps();
+                            ChannelChainRegistry::ReadScope scope(registry);
+                            registry.setPosition(1.0);
+                            if (auto* chain = registry.chainFor("churn"))
+                            {
+                                chain->process(64, l, r);
+                                processed.fetch_add(1);
+                            }
+                        }
+                    });
+
+                    for (int i = 0; i < 2000; ++i)
+                        registry.updateChannelSet(i % 2 == 0 ? std::vector<juce::String> { "keep", "churn" }
+                                                             : std::vector<juce::String> { "keep" });
+
+                    stop.store(true);
+                    audio.join();
+                    expect(registry.chainFor("keep") != nullptr);
+                    expect(registry.chainFor("churn") == nullptr);
+                    logMessage("chains processed while churning: " + juce::String(processed.load()));
+                }
             }
         };
 

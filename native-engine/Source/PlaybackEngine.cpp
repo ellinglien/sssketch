@@ -315,6 +315,13 @@ namespace sssketch
         // position needs to be kept in sync -- see
         // ChannelChainRegistry::setPosition's own doc comment for why it's
         // safe to call this from a real-time thread every block.
+        //
+        // The ReadScope is held for the rest of this call, not just the
+        // lookups: the channel loop below calls process() on the chains
+        // chainFor returns, and a concurrent updateChannelSet that drops a
+        // channel would otherwise destroy its chain mid-process(). See
+        // ChannelChainRegistry::ReadScope. Lock-free; never blocks.
+        const ChannelChainRegistry::ReadScope channelChainsScope(channelChains);
         channelChains.setPosition(positionBars);
 
         // Single, genuinely lock-free check -- see hasAnyOverride()'s own

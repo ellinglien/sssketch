@@ -213,8 +213,9 @@ namespace sssketch
     void IpcConnection::finishStagedApply(const juce::String& via, double atBars)
     {
         // Deliberately AFTER the swap, not before it. updateChannelSet is
-        // the message-thread-only path with the known latent reclamation
-        // bug (see this repo's own memory note) and must never become
+        // message-thread-only -- it waits out a grace period for in-flight
+        // audio-thread readers before retiring the old map (see
+        // ChannelChainRegistry's class doc comment) -- and must never become
         // reachable from the audio callback; running it early would also
         // tear down a channel's plugin chain a whole lap before the
         // project that stopped using it actually went live. A channel that

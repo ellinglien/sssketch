@@ -3,6 +3,7 @@
 #include "PluginChain.h"
 #include <atomic>
 #include <functional>
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 
@@ -17,11 +18,23 @@ namespace sssketch
      * (message thread only) builds a COMPLETE new map -- reusing each
      * still-present channel's existing PluginChain (and whatever it has
      * loaded), constructing a fresh one only for genuinely new channel IDs
-     * -- then publishes it via one atomic pointer exchange; the old map is
-     * handed to a background thread for deletion, exactly mirroring how
-     * PluginChain's own applyPendingSwaps() already hands off a superseded
-     * plugin instance. The audio thread only ever reads whatever's
-     * currently published, once per block, and never mutates it.
+     * -- then publishes it via one atomic pointer exchange. The audio
+     * thread only ever reads whatever's currently published and never
+     * mutates it.
+     *
+     * Reclamation (2026-10-01): the old map used to go straight to a
+     * detached deleter thread, so a reader that had loaded the old pointer
+     * just before the exchange could still be inside map->find() -- or
+     * inside process() on a dropped channel's PluginChain -- when it was
+     * freed. A real heap-use-after-free on the audio thread, reproduced by
+     * the "stress:" tests under AddressSanitizer. Every read now happens
+     * inside a ReadScope (see below), and updateChannelSet waits for a
+     * grace period -- every reader that could still hold the old map has
+     * left its scope -- before handing the old map to the deleter thread.
+     * The reader side is two atomic increments and one atomic load: it
+     * never blocks, allocates or frees. Only the writer (message thread)
+     * ever waits, for at most the length of one reader scope (one
+     * renderBlock call).
      *
      * Map values are shared_ptr, not unique_ptr, deliberately: reusing an
      * existing channel's chain across an updateChannelSet call means
@@ -42,7 +55,39 @@ namespace sssketch
         ChannelChainRegistry(const ChannelChainRegistry&) = delete;
         ChannelChainRegistry& operator=(const ChannelChainRegistry&) = delete;
 
-        /** Message-thread API. See class doc comment. */
+        /** Marks the calling thread as a reader for as long as it lives.
+         * chainFor, setPosition, applyPendingSwaps, setBpm and
+         * knownChannelIds each take one internally, which covers their own
+         * walk of the map. A caller that USES the PluginChain* chainFor
+         * returns after chainFor has returned -- renderBlock calling
+         * process() on it -- must hold its own ReadScope across both the
+         * lookup and the use, or a concurrent updateChannelSet that drops
+         * that channel can destroy the chain mid-process(). Scopes nest.
+         *
+         * Real-time safe: entering is one atomic load plus one atomic
+         * increment, leaving is one atomic decrement. Never blocks.
+         *
+         * Never call updateChannelSet while holding a ReadScope on the same
+         * thread: it waits for every scope to end, including that one. */
+        class ReadScope
+        {
+        public:
+            explicit ReadScope(const ChannelChainRegistry& registry) noexcept
+                : counter(registry.enterRead())
+            {
+            }
+            ~ReadScope() { counter.fetch_sub(1); }
+
+            ReadScope(const ReadScope&) = delete;
+            ReadScope& operator=(const ReadScope&) = delete;
+
+        private:
+            std::atomic<int>& counter;
+        };
+
+        /** Message-thread API. See class doc comment. Blocks for the grace
+         * period (at most one in-flight reader scope) before retiring the
+         * old map, so must never be called from the audio thread. */
         void updateChannelSet(const std::vector<juce::String>& channelIds);
 
         /** Message-thread API: forwards the project tempo to every currently
@@ -107,7 +152,30 @@ namespace sssketch
         void installForExport(ChannelChainMap chains);
 
     private:
+        std::atomic<int>& enterRead() const noexcept;
+
+        /** Waits until no reader that entered before this call is still
+         * inside a ReadScope. Writer side only. Two-phase, as in userspace
+         * RCU: flip the phase readers enter on, wait for the old phase's
+         * count to drain, then do it again for the other one. Flipping
+         * first means new readers pile onto the other counter, so the one
+         * being waited on only ever goes down and the writer can't be
+         * starved by back-to-back readers; checking both counters covers a
+         * reader that read the phase just before a flip but incremented
+         * just after it. */
+        void waitForReaders();
+
         std::atomic<const ChannelChainMap*> published;
+
+        // Grace-period state. readerPhase's low bit picks which of the two
+        // counters a new ReadScope increments. mutable because the const
+        // knownChannelIds() reads under a scope too.
+        mutable std::atomic<unsigned> readerPhase { 0 };
+        mutable std::atomic<int> readersInPhase[2] { 0, 0 };
+        // Serializes writers (updateChannelSet, installForExport) so two
+        // grace periods never interleave their phase flips. Writer-only:
+        // the audio thread never touches it.
+        std::mutex writerMutex;
         PluginChain::Instantiator instantiator;
         BridgeClient* bridgeClient;
         std::atomic<double> currentBpm { 120.0 };

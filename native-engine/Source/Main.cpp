@@ -20,10 +20,30 @@
 // required for it to compile at all.
 using namespace sssketch;
 
-static int runUnitTests()
+// `--test` runs every test; `--test <name>` runs just the tests whose name
+// or category is <name> (e.g. `--test ChannelChainRegistry`), for looping
+// one suite under stress or a sanitizer without the rest of the run in the
+// way.
+static int runUnitTests(const juce::String& filter = {})
 {
     juce::UnitTestRunner runner;
-    runner.runAllTests();
+    if (filter.isEmpty())
+    {
+        runner.runAllTests();
+    }
+    else
+    {
+        juce::Array<juce::UnitTest*> selected;
+        for (auto* test : juce::UnitTest::getAllTests())
+            if (test->getName() == filter || test->getCategory() == filter)
+                selected.add(test);
+        if (selected.isEmpty())
+        {
+            juce::Logger::writeToLog("FAIL: no test named or categorised " + filter);
+            return 1;
+        }
+        runner.runTests(selected);
+    }
 
     for (int i = 0; i < runner.getNumResults(); ++i)
     {
@@ -451,7 +471,7 @@ int main(int argc, char* argv[])
     const juce::ScopedJuceInitialiser_GUI juceInit;
 
     if (argc > 1 && juce::String(argv[1]) == "--test")
-        return runUnitTests();
+        return runUnitTests(argc > 2 ? juce::String(argv[2]) : juce::String());
 
     if (argc > 1 && juce::String(argv[1]) == "--scan")
         return runScanReport();
