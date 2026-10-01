@@ -61,8 +61,7 @@ namespace sssketch
         // mid-session": PluginChain checks isHealthy()/channelFor()
         // together and renders silence for any slot this leaves without a
         // channel.
-        auto* old = publishedChannels.exchange(new ChannelMap());
-        std::thread([old]() { delete old; }).detach();
+        replacePublished(new ChannelMap());
     }
 
     bool BridgeClient::ensureRunning()
@@ -106,12 +105,25 @@ namespace sssketch
 
     void BridgeClient::publishChannels(std::function<void(ChannelMap&)> mutator)
     {
-        const auto* current = publishedChannels.load();
-        auto* next = new ChannelMap();
-        for (auto& [id, ch] : *current)
-            (*next)[id] = std::move(const_cast<ChannelMap*>(current)->at(id));
+        // A plain copy: reads the live map and bumps refcounts, never
+        // writes to it -- see the header.
+        auto* next = new ChannelMap(*publishedChannels.load());
         mutator(*next);
-        auto* old = publishedChannels.exchange(next);
+        replacePublished(next);
+    }
+
+    void BridgeClient::replacePublished(const ChannelMap* next)
+    {
+        const std::lock_guard<std::mutex> writerLock(writerMutex);
+        const auto* old = publishedChannels.exchange(next);
+        // Nothing can load `old` any more, but the audio thread may still
+        // be inside channelFor on it, or using a channel it got from it
+        // under a ReadScope. Wait those out before anything frees it.
+        // Bounded by one reader scope: one PluginChain::process call,
+        // whose bridge wait is itself capped at 5ms.
+        grace.waitForReaders();
+        // Deleting a channel unlinks shared memory and semaphores, so keep
+        // that off the message thread as before.
         std::thread([old]() { delete old; }).detach();
     }
 
@@ -202,6 +214,7 @@ namespace sssketch
 
     SharedAudioChannel* BridgeClient::channelFor(const juce::String& slotId)
     {
+        const ReadScope scope(*this);
         const auto* map = publishedChannels.load();
         auto it = map->find(slotId);
         return it == map->end() ? nullptr : it->second.get();

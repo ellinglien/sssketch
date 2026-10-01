@@ -1,5 +1,6 @@
 // native-engine/Source/ChannelChainRegistry.h
 #pragma once
+#include "GracePeriod.h"
 #include "PluginChain.h"
 #include <atomic>
 #include <functional>
@@ -72,17 +73,10 @@ namespace sssketch
         class ReadScope
         {
         public:
-            explicit ReadScope(const ChannelChainRegistry& registry) noexcept
-                : counter(registry.enterRead())
-            {
-            }
-            ~ReadScope() { counter.fetch_sub(1); }
-
-            ReadScope(const ReadScope&) = delete;
-            ReadScope& operator=(const ReadScope&) = delete;
+            explicit ReadScope(const ChannelChainRegistry& registry) noexcept : scope(registry.grace) {}
 
         private:
-            std::atomic<int>& counter;
+            GracePeriod::ReadScope scope;
         };
 
         /** Message-thread API. See class doc comment. Blocks for the grace
@@ -152,26 +146,10 @@ namespace sssketch
         void installForExport(ChannelChainMap chains);
 
     private:
-        std::atomic<int>& enterRead() const noexcept;
-
-        /** Waits until no reader that entered before this call is still
-         * inside a ReadScope. Writer side only. Two-phase, as in userspace
-         * RCU: flip the phase readers enter on, wait for the old phase's
-         * count to drain, then do it again for the other one. Flipping
-         * first means new readers pile onto the other counter, so the one
-         * being waited on only ever goes down and the writer can't be
-         * starved by back-to-back readers; checking both counters covers a
-         * reader that read the phase just before a flip but incremented
-         * just after it. */
-        void waitForReaders();
-
         std::atomic<const ChannelChainMap*> published;
 
-        // Grace-period state. readerPhase's low bit picks which of the two
-        // counters a new ReadScope increments. mutable because the const
-        // knownChannelIds() reads under a scope too.
-        mutable std::atomic<unsigned> readerPhase { 0 };
-        mutable std::atomic<int> readersInPhase[2] { 0, 0 };
+        // See GracePeriod.h.
+        GracePeriod grace;
         // Serializes writers (updateChannelSet, installForExport) so two
         // grace periods never interleave their phase flips. Writer-only:
         // the audio thread never touches it.

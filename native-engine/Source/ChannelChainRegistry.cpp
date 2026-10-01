@@ -14,28 +14,6 @@ namespace sssketch
         delete published.load();
     }
 
-    std::atomic<int>& ChannelChainRegistry::enterRead() const noexcept
-    {
-        // seq_cst on both: the increment must be ordered before this
-        // reader's own later load of `published`, and a writer's exchange
-        // before its load of this counter, so a reader whose increment the
-        // writer didn't see is guaranteed to load the NEW map, not the one
-        // being retired.
-        auto& counter = readersInPhase[readerPhase.load() & 1u];
-        counter.fetch_add(1);
-        return counter;
-    }
-
-    void ChannelChainRegistry::waitForReaders()
-    {
-        for (int pass = 0; pass < 2; ++pass)
-        {
-            const unsigned drained = readerPhase.fetch_xor(1u) & 1u;
-            while (readersInPhase[drained].load() != 0)
-                std::this_thread::yield();
-        }
-    }
-
     void ChannelChainRegistry::updateChannelSet(const std::vector<juce::String>& channelIds)
     {
         const std::lock_guard<std::mutex> writerLock(writerMutex);
@@ -72,7 +50,7 @@ namespace sssketch
         // on one of its chains under a ReadScope. Wait those out here, on
         // the message thread, before anything frees it -- see the class doc
         // comment. Bounded by one reader scope, i.e. one renderBlock call.
-        waitForReaders();
+        grace.waitForReaders();
         // Any channel from `current` NOT reused above still has its
         // shared_ptr held only by `old` (never copied into `next`) -- once
         // `old` itself is deleted, that's the last reference, so its

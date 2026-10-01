@@ -1,10 +1,12 @@
 // native-engine/Source/BridgeClient.h
 #pragma once
+#include "GracePeriod.h"
 #include "SharedAudioChannel.h"
 #include <juce_events/juce_events.h>
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <unordered_map>
 
 namespace sssketch
@@ -64,14 +66,29 @@ namespace sssketch
         void openEditor(const juce::String& slotId);
         void closeEditor(const juce::String& slotId);
 
+        /** Marks the calling thread as a reader of the published channel
+         * map for as long as it lives -- see GracePeriod.h. channelFor takes
+         * one internally for its own lookup; a caller that USES the
+         * returned channel afterwards (PluginChain::process writing to it
+         * and waiting on its output) must hold its own across the lookup
+         * and the use, or a concurrent unloadPlugin/connectionLost can
+         * destroy the channel mid-use. Real-time safe, never blocks. */
+        class ReadScope
+        {
+        public:
+            explicit ReadScope(const BridgeClient& client) noexcept : scope(client.grace) {}
+
+        private:
+            GracePeriod::ReadScope scope;
+        };
+
         /** Audio-thread API: the slot's own SharedAudioChannel, or nullptr
          * if that slot isn't currently loaded on the bridge (never loaded,
          * failed to load, or the bridge crashed and it was torn down).
          * Never blocks, never allocates -- one map lookup into state only
-         * ever mutated on the message thread, published via the same
-         * atomic-whole-map-swap pattern ChannelChainRegistry already uses
-         * (see its own doc comment) -- read with acquire semantics, never
-         * mutated in place once published. */
+         * ever replaced wholesale on the message thread, never mutated in
+         * place once published (see publishChannels). The returned pointer
+         * is valid only while the caller holds a ReadScope. */
         SharedAudioChannel* channelFor(const juce::String& slotId);
 
         /** Audio-thread API: true if the bridge connection is currently
@@ -81,8 +98,22 @@ namespace sssketch
         bool isHealthy() const { return connected.load(); }
 
     private:
+        friend class BridgeClientTests;
+
         void sendJson(const juce::var& payload);
-        void publishChannels(std::function<void(std::unordered_map<juce::String, std::unique_ptr<SharedAudioChannel>>&)> mutator);
+        /** Message-thread API. Copies the published map, applies
+         * `mutator` to the COPY, publishes it, waits out the grace period,
+         * and only then hands the old map to a background deleter. The
+         * live map is never written to -- it used to be: entries were
+         * moved out of it, so a concurrent channelFor could find a loaded
+         * slot already emptied, and the old map was freed with no grace
+         * period at all. Both reproduced by BridgeClientTests. */
+        void publishChannels(std::function<void(std::unordered_map<juce::String, std::shared_ptr<SharedAudioChannel>>&)> mutator);
+
+        /** Publishes `next`, waits for every reader that could still hold
+         * the old map to leave its ReadScope, then deletes the old map on
+         * a background thread. The one place a map is ever retired. */
+        void replacePublished(const std::unordered_map<juce::String, std::shared_ptr<SharedAudioChannel>>* next);
 
         /** Fires every 500ms (see the constructor) to fail out any pending
          * load that's been waiting too long -- see timerCallback()'s own
@@ -94,8 +125,17 @@ namespace sssketch
         std::unique_ptr<juce::ChildProcess> bridgeProcess;
         std::atomic<bool> connected { false };
 
-        using ChannelMap = std::unordered_map<juce::String, std::unique_ptr<SharedAudioChannel>>;
+        // shared_ptr, not unique_ptr, for the same reason as
+        // ChannelChainRegistry's map: building the next map COPIES each
+        // entry (read-only on the source, plus an atomic refcount bump)
+        // instead of moving it, which would write to the live map.
+        using ChannelMap = std::unordered_map<juce::String, std::shared_ptr<SharedAudioChannel>>;
         std::atomic<const ChannelMap*> publishedChannels;
+        GracePeriod grace;
+        // Serializes writers so two grace periods never interleave. All
+        // writers are message-thread code today; the audio thread never
+        // touches this.
+        std::mutex writerMutex;
 
         /** A load's own onLoaded callback, plus when it was issued (via
          * juce::Time::getMillisecondCounterHiRes(), same clock

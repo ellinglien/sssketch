@@ -2,6 +2,7 @@
 #include "PluginChain.h"
 #include "PluginArchitecture.h"
 #include <algorithm>
+#include <optional>
 #include <cmath>
 #include <thread>
 
@@ -71,6 +72,13 @@ namespace sssketch
 
             if (isBridged)
             {
+                // Held for the rest of this slot, not just the lookup: the
+                // channel is written to and waited on below, and a
+                // concurrent unloadPlugin/connectionLost would otherwise
+                // destroy it mid-use. See BridgeClient::ReadScope.
+                std::optional<BridgeClient::ReadScope> bridgeScope;
+                if (bridgeClient != nullptr)
+                    bridgeScope.emplace(*bridgeClient);
                 auto* channel = bridgeClient != nullptr && bridgeClient->isHealthy()
                     ? bridgeClient->channelFor(slot.bridgeSlotId)
                     : nullptr;

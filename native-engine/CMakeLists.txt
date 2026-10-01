@@ -122,6 +122,7 @@ target_sources(sssketch_engine PRIVATE
   Source/SharedAudioChannel.cpp
   Source/SharedAudioChannelTests.cpp
   Source/BridgeClient.cpp
+  Source/BridgeClientTests.cpp
   Source/PluginChain.cpp
   Source/PluginChainTests.cpp
   Source/ChannelChainRegistry.cpp
