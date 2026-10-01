@@ -1,6 +1,6 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Compass, Copy, Shuffle, ThumbsDown, ThumbsUp, Trash } from '@phosphor-icons/react'
+import { Compass, Copy, Shuffle, SkipForward, ThumbsDown, ThumbsUp } from '@phosphor-icons/react'
 import { RepeatedWaveform } from './RepeatedWaveform'
 import { LoopLines } from './LoopLines'
 import { LoadingLoader } from './LoadingLoader'
@@ -8057,8 +8057,8 @@ function DiscoverSlotRow({
           // 15 tracks, explicit gridColumn on every child below (including
           // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
           // 5 👍 like, 6 waveform (1fr), 7 spacer, 8 kind/category label +
-          // match meter, 9 spacer, 10 👎 change soon, 11 divider, 12 trash
-          // (replace now, the old "same kind"), 13 nearby jam, 14 any
+          // match meter, 9 spacer, 10 👎 change soon, 11 divider, 12 skip
+          // (SkipForward, the old "same kind"), 13 nearby jam, 14 any
           // stem, 15 duplicate. (2026-10-01: the web radio's row buttons.
           // 👍 took over the star's track 5 and the separate "hold longer"
           // track 6 was REMOVED, renumbering every later gridColumn by one
@@ -8744,7 +8744,7 @@ function DiscoverSlotRow({
             dim, which says the same thing about the right button. */}
         <RowIconButton
           gridColumn={12}
-          tooltip={radioOn ? 'replace at loop top · ⌘ now' : 'replace'}
+          tooltip="skip"
           onClick={(e) => {
             setRerollAction('similar')
             onReroll(e.metaKey)
@@ -8753,7 +8753,7 @@ function DiscoverSlotRow({
           dimmed={manualWaiting}
           pulsing={rerolling && rerollAction === 'similar'}
         >
-          <Trash size={12} />
+          <SkipForward size={12} />
         </RowIconButton>
         {nearbyAnchor !== null && (
           <RowIconButton
