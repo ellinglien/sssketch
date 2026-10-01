@@ -2343,7 +2343,7 @@ git commit -m "discover artist: listen-only controls dimmed with the tooltip; th
 
 Spec §1 says radio re-picks each row from the new artist, **one row per loop top**. Radio's skip (`skipRadio`) already means "pick one row as radio would and change it at the loop top". The turnover is therefore a queue of skips: one per landing, choosing turnover rows first.
 
-- [ ] **Step 1: The pending set.** Next to `radioSkipPickingRef` (grep its `useRef`):
+- [x] **Step 1: The pending set.** Next to `radioSkipPickingRef` (grep its `useRef`):
 
 ```tsx
   /** Rows still to turn over after a mid-radio artist change -- one per
@@ -2351,7 +2351,7 @@ Spec §1 says radio re-picks each row from the new artist, **one row per loop to
   const artistTurnoverRef = useRef<Set<string>>(new Set())
 ```
 
-- [ ] **Step 2: `changeArtist` arms it** (extends Task 5's version):
+- [x] **Step 2: `changeArtist` arms it** (extends Task 5's version):
 
 ```tsx
   function changeArtist(next: string | null): void {
@@ -2368,7 +2368,7 @@ Spec §1 says radio re-picks each row from the new artist, **one row per loop to
   }
 ```
 
-- [ ] **Step 3: `skipRadio` prefers turnover rows.** Replace the `const slotId = pickRadioSlotId(eligible, ...)` statement (`:6006-6011`) with:
+- [x] **Step 3: `skipRadio` prefers turnover rows.** Replace the `const slotId = pickRadioSlotId(eligible, ...)` statement (`:6006-6011`) with:
 
 ```tsx
     const turnoverId = nextTurnoverSlotId(eligible, artistTurnoverRef.current)
@@ -2390,7 +2390,7 @@ Then directly after `radioSkipPickingRef.current.delete(slotId)` (`:6031`):
     artistTurnoverRef.current.delete(slotId)
 ```
 
-- [ ] **Step 4: Each landing triggers the next.** At the top of `armRadioPick`, after `if (radioSkipWaiting()) return` (`:5735`):
+- [x] **Step 4: Each landing triggers the next.** At the top of `armRadioPick`, after `if (radioSkipWaiting()) return` (`:5735`):
 
 ```tsx
     // Mid-radio artist change: keep turning rows over, one per loop top,
@@ -2406,13 +2406,13 @@ Then directly after `radioSkipPickingRef.current.delete(slotId)` (`:6031`):
     }
 ```
 
-- [ ] **Step 5: Clean up.**
+- [x] **Step 5: Clean up.**
 - At the top of `commitSlotPick` (`:5085`): `artistTurnoverRef.current.delete(id)`. A manual change on a row also counts as turned over.
 - In `stopRadio` (`:6046`), next to `radioClockRef.current = null`: `artistTurnoverRef.current = new Set()`.
 
 Import `artistTurnoverIds` and `nextTurnoverSlotId`.
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Run: `npm run typecheck && npm run lint && npm test`
 Expected: all green.
@@ -2421,6 +2421,14 @@ Expected: all green.
 git add src/renderer/src/components/DiscoverPanel.tsx
 git commit -m "discover artist: switching artist mid-radio turns rows over, one per loop top"
 ```
+
+**As landed:**
+- **Code:** exactly as above. Line numbers had drifted:
+  - `radioSkipPickingRef` is at `:2224`, `commitSlotPick` at `:5164`, `armRadioPick` at `:5807`, `skipRadio` at `:6082` and `stopRadio` at `:6126`;
+  - `changeArtist` sits beside the artist-menu state, from Task 5.
+- **Termination:** when a turnover row's pick comes back empty (nothing by the new artist for its kinds), `skipRadio` re-arms. `armRadioPick` then starts the next turnover row at once rather than spending a loop top. The set only shrinks (each row is deleted after its one try, and every commit deletes too), so this ends.
+- **Gates:** typecheck clean, `npx eslint --no-cache .` at 0 errors / 4 pre-existing warnings, 234 files / 3,839 tests green.
+- **Not run in the app:** no agent can hear radio. Elling's walkthrough is Task 9.
 
 ---
 

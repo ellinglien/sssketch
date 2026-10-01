@@ -133,9 +133,11 @@ import {
   artistFieldLabel,
   artistMode,
   artistNotice,
+  artistTurnoverIds,
   isKeepRefused,
   listenOnlyActions,
   listenOnlyTooltip,
+  nextTurnoverSlotId,
   normalizeArtistPick,
   rollFilterForArtist,
   type ArtistRollFilter,
@@ -2222,6 +2224,9 @@ export function DiscoverPanel({
   // Rows radio's skip is picking a stem for (skipRadio), before the pick is
   // queued as a manual change -- radio arms nothing meanwhile.
   const radioSkipPickingRef = useRef<Set<string>>(new Set())
+  /** Rows still to turn over after a mid-radio artist change -- one per
+   * loop top, through skipRadio (@shared/discoverArtist artistTurnoverIds). */
+  const artistTurnoverRef = useRef<Set<string>>(new Set())
   // The density arc (@shared/radioDensity): its current leg, the row it is
   // bringing in (still picking, then waiting in the manual queue), the row
   // it is taking out, and a count of loop tops so an exit knows its lap.
@@ -3145,11 +3150,20 @@ export function DiscoverPanel({
   // Discover artist mode's field and its search popover.
   const [artistMenu, setArtistMenu] = useState<{ x: number; y: number } | null>(null)
   const artistButtonRef = useRef<HTMLButtonElement>(null)
-  /** The artist field's pick. Radio off: the next rolls just use it. */
+  /** The artist field's pick. Radio off: the next rolls just use it.
+   * Radio on: a course change -- every row not by the new artist turns
+   * over, one per loop top (spec §1), through skipRadio. */
   function changeArtist(next: string | null): void {
     if (next === artistRef.current) return
     artistRef.current = next
     onArtistChange(next)
+    if (!radioOnRef.current) return
+    artistTurnoverRef.current = artistTurnoverIds(
+      slotsRef.current.map((s) => ({ id: s.id, creator: s.candidate?.creatorUserName ?? null })),
+      next,
+      currentUsername
+    )
+    void skipRadio()
   }
   const radioMenuButtonRef = useRef<HTMLButtonElement>(null)
   const radioChevronRef = useRef<HTMLButtonElement>(null)
@@ -5162,6 +5176,8 @@ export function DiscoverPanel({
    * for itself (rerollSlot pushes one, rerollAll pushes one for the whole
    * batch, radio pushes none; see the spec's 3.4). */
   function commitSlotPick(id: string, pick: SlotPick): void {
+    // A row changed by anyone counts as turned over (changeArtist).
+    artistTurnoverRef.current.delete(id)
     // THE ONE PLACE A LAYER'S STEM IS REPLACED, whoever asked for it --
     // radio's own turnover, both of its commit branches, the row's
     // similar/adjacent/random buttons, a brand-new slot's first roll and
@@ -5814,6 +5830,17 @@ export function DiscoverPanel({
     // Radio's skip is radio's next change: nothing else is armed until it
     // lands (the landing re-arms) or goes (the next due tick re-arms).
     if (radioSkipWaiting()) return
+    // Mid-radio artist change: keep turning rows over, one per loop top,
+    // before radio's own picking resumes.
+    if (
+      nextTurnoverSlotId(
+        radioEligibleSlotIds().filter((id) => !manualChangesRef.current.has(id)),
+        artistTurnoverRef.current
+      ) !== null
+    ) {
+      void skipRadio()
+      return
+    }
     // Never a row with a manual change waiting: that change wins its row
     // at the landing (mergeStageChanges), so radio's pick for it would be
     // dropped there -- a change radio lost to a manual one.
@@ -6084,12 +6111,16 @@ export function DiscoverPanel({
     const eligible = radioEligibleSlotIds().filter(
       (id) => !manualChangesRef.current.has(id) && !radioSkipPickingRef.current.has(id)
     )
-    const slotId = pickRadioSlotId(eligible, radioLastSlotRef.current, {
-      turnover: radioSettings.turnover,
-      changedAt: radioChangedAtRef.current,
-      turn: radioTurnRef.current,
-      flags: radioSlotFlagsRef.current
-    })
+    // A mid-radio artist change's rows go first (changeArtist).
+    const turnoverId = nextTurnoverSlotId(eligible, artistTurnoverRef.current)
+    const slotId =
+      turnoverId ??
+      pickRadioSlotId(eligible, radioLastSlotRef.current, {
+        turnover: radioSettings.turnover,
+        changedAt: radioChangedAtRef.current,
+        turn: radioTurnRef.current,
+        flags: radioSlotFlagsRef.current
+      })
     if (slotId === null) return
     const slot = slotsRef.current.find((s) => s.id === slotId)
     if (!slot) return
@@ -6106,6 +6137,9 @@ export function DiscoverPanel({
     const undoSeq = undoSequence.latest()
     const pick = await pickForSlot(slotId, slot.kinds, { avoidOwnStem: true })
     radioSkipPickingRef.current.delete(slotId)
+    // One try per row: a row whose kinds have nothing by the new artist keeps
+    // its stem rather than being retried at every loop top.
+    artistTurnoverRef.current.delete(slotId)
     const queued =
       pick !== null &&
       radioOnRef.current &&
@@ -6128,6 +6162,7 @@ export function DiscoverPanel({
     resetDensityArc()
     setRadioOn(false)
     radioClockRef.current = null
+    artistTurnoverRef.current = new Set()
     setRadioPending(null)
     radioLastSlotRef.current = null
     // Recency is about how radio has been sharing its turns out, so it
