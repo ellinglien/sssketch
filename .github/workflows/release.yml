@@ -65,7 +65,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: native-engine/build
-          key: native-engine-${{ runner.os }}-${{ matrix.arch }}-juce-8.0.4-${{ hashFiles('native-engine/CMakeLists.txt', 'native-engine/Source/**') }}
+          key: native-engine-${{ runner.os }}-${{ matrix.arch }}-juce-8.0.4-release-${{ hashFiles('native-engine/CMakeLists.txt', 'native-engine/Source/**') }}
 
       # Each matrix leg gets its own isolated runner VM, so native-engine
       # builds into its normal path on every leg -- no separate build
@@ -75,13 +75,24 @@ jobs:
       # natively (unchanged); the x64 leg cross-compiles via
       # CMAKE_OSX_ARCHITECTURES, already proven to produce a genuine x86_64
       # engine binary in this session's local test build.
+      #
+      # -DCMAKE_BUILD_TYPE=Release at CONFIGURE time is what makes this an
+      # optimised build. The Makefile generator is single-config, so the
+      # `--config Release` on the build line is ignored -- before
+      # 2026-10-01 that was all there was, and every shipped engine was an
+      # unoptimised (-O0) build: JUCE still added NDEBUG for the empty
+      # build type, so nothing looked like a debug build, it was just slow.
+      # Release keeps NDEBUG and adds -O3; the Faust sources keep their own
+      # -ffp-contract=off, and nothing anywhere uses -ffast-math (see
+      # native-engine/CMakeLists.txt), so FaustStageTests' bit-exact golden
+      # match holds at -O3.
       - name: Build native engine
         working-directory: native-engine
         run: |
           if [ "${{ matrix.arch }}" = "x64" ]; then
-            cmake -B build -DCMAKE_OSX_ARCHITECTURES=x86_64
+            cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64
           else
-            cmake -B build
+            cmake -B build -DCMAKE_BUILD_TYPE=Release
           fi
           cmake --build build --config Release
 
@@ -97,12 +108,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: native-engine-bridge/build
-          key: native-engine-bridge-${{ runner.os }}-juce-8.0.4-${{ hashFiles('native-engine-bridge/CMakeLists.txt', 'native-engine-bridge/Source/**', 'native-engine/Source/SharedRingBuffer.*', 'native-engine/Source/SharedAudioChannel.*', 'native-engine/Source/PluginArchitecture.*', 'native-engine/Source/PluginScanning.*') }}
+          key: native-engine-bridge-${{ runner.os }}-juce-8.0.4-release-${{ hashFiles('native-engine-bridge/CMakeLists.txt', 'native-engine-bridge/Source/**', 'native-engine/Source/SharedRingBuffer.*', 'native-engine/Source/SharedAudioChannel.*', 'native-engine/Source/PluginArchitecture.*', 'native-engine/Source/PluginScanning.*') }}
 
       - name: Build native engine bridge
         working-directory: native-engine-bridge
         run: |
-          cmake -B build
+          # Release at configure time, same reason as the engine above.
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
 
       # Installed here, before Test -- render-parity.test.ts spawns the real

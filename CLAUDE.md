@@ -35,6 +35,25 @@ Then run its own test suite (JUCE `UnitTestRunner`, compiled into the same binar
 native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine --test
 ```
 
+`--test <name>` runs only the tests whose name or category is `<name>` (e.g. `--test ChannelChainRegistry`):
+handy for looping one suite under stress or AddressSanitizer.
+
+**Build type (optimisation).** The Makefile generator is single-config: optimisation comes from
+`-DCMAKE_BUILD_TYPE=...` **at configure time**, and `cmake --build ... --config Release` does nothing.
+A plain `cmake -B build` (the local default above) has an empty build type: JUCE still defines `NDEBUG`,
+so asserts are off, but there is no `-O` at all, i.e. an unoptimised build. That's fine for local
+iteration. **Shipped** engines are Release (`-O3`, `NDEBUG`): `release.yml` and
+`scripts/build-x64-test.sh` configure with `-DCMAKE_BUILD_TYPE=Release` (engine and bridge). Until
+2026-10-01 they didn't, and every release shipped the unoptimised build: an offline render of 8 stems
+over 35 s took ~0.95 s, against ~0.11 s at Release, with bit-identical output. `scripts/rebuild-app.sh`
+and `npm run build:mac` package whatever `native-engine/build` is configured as, so for a locally packaged
+app that should perform like a release, configure that dir with `-DCMAKE_BUILD_TYPE=Release` (one-time;
+`cmake -B build -DCMAKE_BUILD_TYPE=Release`, then rebuild). The Faust sources keep `-ffp-contract=off`, and
+nothing may use `-ffast-math`/`-Ofast` (see `native-engine/CMakeLists.txt`), so `FaustStageTests`'
+bit-exact golden match holds at `-O3` too. Use `-DCMAKE_BUILD_TYPE=Debug` for an asserting build. An
+out-of-tree build (e.g. ASan in a temp dir) needs `SSSKETCH_GOLDEN_DIR=<repo>/native-engine/test/golden`
+for `FaustStageTests` to find its vectors.
+
 **The single most expensive mistake made in this codebase's history:** the native engine does
 NOT hot-reload, and it's only spawned once at app startup (`startPlaybackEngine()` in
 `src/main/index.ts`). After editing anything under `native-engine/Source/`:

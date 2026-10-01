@@ -31,7 +31,9 @@ cd "$REPO_ROOT"
 
 echo "==> [1/7] Cross-compiling native-engine for x86_64"
 echo "    (first run: ~10-15 min, same JUCE fetch+build cost CI pays for a fresh build dir)"
-cmake -B native-engine/build-x64 -DCMAKE_OSX_ARCHITECTURES=x86_64 native-engine
+# CMAKE_BUILD_TYPE at configure time is what optimises it -- the Makefile
+# generator ignores `--config` (see release.yml's "Build native engine").
+cmake -B native-engine/build-x64 -DCMAKE_BUILD_TYPE=Release -DCMAKE_OSX_ARCHITECTURES=x86_64 native-engine
 cmake --build native-engine/build-x64 --config Release
 
 ENGINE_BIN="native-engine/build-x64/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine"
@@ -45,7 +47,7 @@ fi
 BRIDGE_APP="native-engine-bridge/build/sssketch_bridge_artefacts/sssketch-bridge.app"
 if [ ! -d "$BRIDGE_APP" ]; then
   echo "==> [3/7] Building native-engine-bridge (missing locally; always x86_64, one-time)"
-  cmake -B native-engine-bridge/build native-engine-bridge
+  cmake -B native-engine-bridge/build -DCMAKE_BUILD_TYPE=Release native-engine-bridge
   cmake --build native-engine-bridge/build --config Release
 else
   echo "==> [3/7] native-engine-bridge already built, skipping"
