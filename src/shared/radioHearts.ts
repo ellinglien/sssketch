@@ -253,6 +253,8 @@ export type RadioHeartsFailure =
   /** The configured LORE archive is away (drive unmounted, file gone):
    * nothing is imported rather than a half-import recorded as done. */
   | 'archive not mounted'
+  /** Discover is in artist mode (another user's stems, listen only). */
+  | 'listening only'
   /** Anything unexpected -- the last-resort catch. */
   | 'import failed'
 

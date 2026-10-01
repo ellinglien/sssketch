@@ -107,6 +107,11 @@ import type { PairingGate } from '@shared/remoteAuth'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
 import { getArtistStemCIDs } from './discoverArtistStems'
 import { abortArtistIndexWork, getArtistAnalysed, getArtistIndex } from './discoverArtistIndex'
+import {
+  refusesListenOnly,
+  resetDiscoverArtistSession,
+  setDiscoverArtistSession
+} from './discoverArtistSession'
 import type Database from 'better-sqlite3'
 import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
@@ -508,6 +513,10 @@ function createWindow(): BrowserWindow {
   // resetZoom increment) as a supplemental path -- checks both the
   // produced character (key) and the physical key code (code) so it isn't
   // tied to one specific layout.
+  // Discover artist mode: the renderer's chosen artist starts as `me` on
+  // every load, so main's mirror must too.
+  win.webContents.on('did-finish-load', () => resetDiscoverArtistSession())
+
   win.webContents.on('before-input-event', (_event, input) => {
     if (input.type !== 'keyDown' || !input.meta || input.shift) return
     if (input.key === '-' || input.code === 'Minus') {
@@ -771,13 +780,14 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'save-discovered-rifff',
     (_event, members: DiscoveredMemberInput[], bpm: number, barLength: number) =>
-      keepDiscovered(members, bpm, barLength)
+      refusesListenOnly('keep') ? null : keepDiscovered(members, bpm, barLength)
   )
 
   // "fetch radio hearts" -- ell.ing/radio's hearted combos as kept riffs and
   // starred stems. The only network call is here; the key never leaves
   // main (the renderer only learns whether one is set).
   ipcMain.handle('fetch-radio-hearts', () => {
+    if (refusesListenOnly('fetchHearts')) return { ok: false, reason: 'listening only' } as const
     const ownDb = openOwnRiffLibraryDb()
     const dbs = [ownDb, ...candidateDbsForRiff().filter((db) => db !== ownDb)]
     return fetchRadioHearts({
@@ -1349,6 +1359,13 @@ app.whenReady().then(async () => {
       : { analysed: 0, total: 0 }
   })
 
+  ipcMain.handle('discover-set-artist', (_event, artist: unknown, ownUsername: unknown) =>
+    setDiscoverArtistSession({
+      artist: typeof artist === 'string' ? artist : null,
+      ownUsername: typeof ownUsername === 'string' ? ownUsername : ''
+    })
+  )
+
   ipcMain.handle('find-riff-for-stem-path', (_event, stemPath: string) =>
     findRiffForStemPath(stemPath)
   )
@@ -1857,7 +1874,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('list-stem-favourites', () => listStemFavourites(openOwnRiffLibraryDb()))
 
   ipcMain.handle('toggle-stem-favourite', (_event, stemCID: string) =>
-    toggleStemFavourite(openOwnRiffLibraryDb(), stemCID)
+    refusesListenOnly('star')
+      ? listStemFavourites(openOwnRiffLibraryDb())
+      : toggleStemFavourite(openOwnRiffLibraryDb(), stemCID)
   )
 
   createWindow()

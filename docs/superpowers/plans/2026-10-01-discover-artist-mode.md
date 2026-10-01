@@ -1631,7 +1631,7 @@ git commit -m "discover artist: search counts, background jammed-with walk, anal
 - Create: `src/main/discoverArtistSession.ts`, `src/main/discoverArtistSession.test.ts`
 - Modify: `src/shared/radioHearts.ts:248-257`, `src/main/index.ts` (`:408` createWindow, `:768-788`, `:1824-1826`), `src/preload/index.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/main/discoverArtistSession.test.ts
@@ -1687,12 +1687,12 @@ describe('discover artist session', () => {
 })
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `npx vitest run src/main/discoverArtistSession.test.ts`
 Expected: FAIL, module not found. Once the module exists, a type error remains for `'listening only'`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 // src/main/discoverArtistSession.ts
@@ -1757,7 +1757,7 @@ In `src/shared/radioHearts.ts`, add a member to `RadioHeartsFailure` (`:248-257`
 
 `heartFetchLabel`'s `default` branch already returns the reason verbatim, so no label change is needed.
 
-- [ ] **Step 4: Wire the guards, `src/main/index.ts`**
+- [x] **Step 4: Wire the guards, `src/main/index.ts`**
 
 Import `refusesListenOnly`, `resetDiscoverArtistSession` and `setDiscoverArtistSession` from `./discoverArtistSession`.
 
@@ -1803,7 +1803,7 @@ In `createWindow` (`:408`), next to `win.webContents.on('before-input-event', ..
   win.webContents.on('did-finish-load', () => resetDiscoverArtistSession())
 ```
 
-- [ ] **Step 5: Preload**
+- [x] **Step 5: Preload**
 
 ```ts
   discoverSetArtist: (artist: string | null, ownUsername: string): Promise<ArtistMode> =>
@@ -1812,20 +1812,29 @@ In `createWindow` (`:408`), next to `win.webContents.on('before-input-event', ..
 
 Add `ArtistMode` to the `@shared/discoverArtist` type import.
 
-- [ ] **Step 6: Run and gate**
+- [x] **Step 6: Run and gate**
 
 Run: `npx vitest run src/main/discoverArtistSession.test.ts && npm run typecheck && npm run lint && npm test`
 Expected: all green.
 
 Nothing sets the session yet, so it is always `me` and every guard is a no-op. `me` is unchanged.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/main/discoverArtistSession.ts src/main/discoverArtistSession.test.ts \
   src/shared/radioHearts.ts src/main/index.ts src/preload/index.ts
 git commit -m "discover artist: main refuses keep, star and fetch hearts in artist mode"
 ```
+
+**As landed:**
+- **Code:** exactly as above, with one exception. `discover-set-artist` takes `unknown` arguments and coerces them: a non-string artist becomes `null` (`me`) and a non-string `ownUsername` becomes `''`. That's the same IPC type-checking the Task 3 review asked for, so a bad payload can't throw inside `setDiscoverArtistSession`'s `.trim()`.
+- **Line numbers had drifted:**
+  - `save-discovered-rifff` is at `:772`, `fetch-radio-hearts` at `:780` and `toggle-stem-favourite` at `:1859`;
+  - `createWindow` is at `:411` and `before-input-event` at `:511`.
+- **Return types:** the refused branches match the handlers' existing types. `keepDiscovered` already returns `SaveDiscoveredResult | null`, and both favourite functions return `string[]`.
+- **Gates:** typecheck clean; 234 files / 3,819 tests green; `discoverArtistSession.test.ts` opens no db, so it's not CI-excluded.
+- **Lint:** my files are clean. The full run showed 40 warnings, but 36 came from another agent's uncommitted edit to `src/shared/radioDropOut.test.ts` (left unstaged); the other 4 are the pre-existing ones.
 
 ---
 
