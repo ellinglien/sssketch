@@ -2194,13 +2194,19 @@ input {
   function render(state) {
     countsEl.textContent = 'kept ' + state.kept + ' · rolled ' + state.rolled
     lastKept = state.lastKeptName
-    keptCount = state.kept
-    if (keepPendingFrom !== null) {
-      if (state.kept > keepPendingFrom) {
-        keepPendingFrom = null
-        flash('kept')
-      } else if (Date.now() > keepPendingUntil) {
-        keepPendingFrom = null
+    if (keepPending) {
+      var keeps = state.keeps || []
+      var answer = null
+      for (var ki = 0; ki < keeps.length; ki++) {
+        var k = keeps[ki]
+        if (k.id === keepPending.id) answer = k
+      }
+      // The four outcomes: 'kept', 'already', 'refused', 'none'.
+      if (answer && KEEP_SAYS[answer.outcome]) {
+        keepPending = null
+        flash(KEEP_SAYS[answer.outcome])
+      } else if (Date.now() > keepPending.until) {
+        keepPending = null
         flash('not kept')
       }
     }
@@ -2363,27 +2369,33 @@ input {
   // s, m and a tap that opens the menu, and this was the last one.
   var keepEl = document.getElementById('keep')
 
-  // "kept" is said only once the Mac's kept counter has MOVED (render,
-  // below): the tap only asks, and the Mac can decline -- nothing
-  // resolvable to keep, or Discover playing another user's stems, listen
-  // only (2026-10-01), which the server answers 409 before forwarding.
-  var keptCount = 0
-  var keepPendingFrom = null
-  var keepPendingUntil = 0
+  // Each tap carries its own random id, and "kept" is said only when the
+  // Mac answers THAT id (state.keeps, render below). The kept counter is
+  // no evidence: a keep made on the Mac during the wait moves it too. A
+  // tap before the first state, a duplicate request and a reloaded page
+  // are all safe: ids are random, and main forwards an id once.
+  // 409 means Discover is playing another user's stems, listen only.
+  var keepPending = null
   var listenOnly = false
+  var KEEP_SAYS = { kept: 'kept', already: 'already kept', refused: 'listening only', none: 'nothing to keep' }
+  function newKeepId() {
+    return (Date.now().toString(36) + Math.random().toString(36).slice(2, 10)).slice(0, 24)
+  }
   keepEl.addEventListener('click', function () {
     if (listenOnly) { flash('listening only'); return }
     buzz()
-    var before = keptCount
-    api('/api/keep', {})
+    var id = newKeepId()
+    keepPending = { id: id, until: Date.now() + 8000 }
+    flash('keeping')
+    api('/api/keep', { keepId: id })
       .then(function (r) {
-        if (r.status === 409) { flash('listening only'); return }
-        if (!r.ok) { flash('not kept'); return }
-        keepPendingFrom = before
-        keepPendingUntil = Date.now() + 5000
-        flash('keeping')
+        if (!keepPending || keepPending.id !== id) return
+        if (r.status === 409) { keepPending = null; flash('listening only'); return }
+        if (!r.ok) { keepPending = null; flash('not kept') }
       })
-      .catch(function () { flash('not kept') })
+      .catch(function () {
+        if (keepPending && keepPending.id === id) { keepPending = null; flash('not kept') }
+      })
   })
 
   function poll() {

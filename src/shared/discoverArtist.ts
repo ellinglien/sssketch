@@ -254,8 +254,12 @@ export function suggestArtists(
     (a, b) => rank(a.user) - rank(b.user) || b.stems - a.stems || a.user.localeCompare(b.user)
   )
   const users = matches.slice(0, limit).map((c) => toSuggestion(c.user))
-  const offersMe = 'me'.startsWith(q) || (own !== '' && own.toLowerCase().includes(q))
-  return offersMe ? [me, ...users] : users
+  // `me` leads only on a PREFIX (of "me" or of the own name), so Enter on a
+  // query that merely occurs inside the own name picks the user it typed.
+  const mePrefix = 'me'.startsWith(q) || (own !== '' && own.toLowerCase().startsWith(q))
+  const meSubstring = own !== '' && own.toLowerCase().includes(q)
+  if (mePrefix) return [me, ...users]
+  return meSubstring ? [...users, me] : users
 }
 
 export function suggestionLabel(s: ArtistSuggestion, ownUsername: string): string {

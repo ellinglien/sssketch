@@ -1090,7 +1090,9 @@ describe('remotePage keep', () => {
     // fill sweep and the difference blend that inverted the label under
     // it are all gone; "has no hold left anywhere on the page" above is
     // the assertion that they stayed gone.
-    expect(SCRIPT).toContain("api('/api/keep', {})")
+    // The body carries the tap's own keep id since 2026-10-01 (artist mode
+    // review), so the Mac's answer can be matched to this tap.
+    expect(SCRIPT).toContain("api('/api/keep', { keepId: id })")
   })
 
   it('keeps the transport three-up and 52px', () => {
@@ -1274,8 +1276,19 @@ describe('remotePage keep', () => {
     expect(handler).not.toContain("flash('kept')")
   })
 
-  it('says "kept" only once the kept counter has moved', () => {
-    expect(SCRIPT_TEXT).toMatch(/state\.kept > keepPendingFrom[\s\S]{0,80}flash\('kept'\)/)
+  it('says "kept" only for its OWN keep id, never by watching the kept counter', () => {
+    expect(handler).toContain("api('/api/keep', { keepId: ")
+    expect(SCRIPT_TEXT).not.toContain('keepPendingFrom')
+    expect(SCRIPT_TEXT).toMatch(/k\.id === keepPending\.id/)
+  })
+
+  it('names all four outcomes, and gives up after a wait', () => {
+    for (const outcome of ["'kept'", "'already'", "'refused'", "'none'"]) {
+      expect(SCRIPT_TEXT).toContain(outcome)
+    }
+    expect(SCRIPT_TEXT).toMatch(
+      /Date\.now\(\) > keepPending\.until[\s\S]{0,120}flash\('not kept'\)/
+    )
   })
 
   it('reads a refused keep as listening only, and disables keep in that mode', () => {

@@ -32,7 +32,7 @@ import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
 import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
-import type { RemoteCommand, RemoteState } from '@shared/remoteState'
+import type { RemoteCommand, RemoteKeepOutcome, RemoteState } from '@shared/remoteState'
 import type { LanAddressCandidate } from '@shared/lanAddress'
 
 /** What the gear menu needs to show the phone remote's whole state: whether
@@ -377,6 +377,10 @@ const api = {
     ipcRenderer.invoke('discover-artist-index', ownUsername),
   discoverArtistAnalysed: (artist: string): Promise<{ analysed: number; total: number }> =>
     ipcRenderer.invoke('discover-artist-analysed', artist),
+  /** What a phone keep (by its tap id) came to -- served back to the phone
+   * in /api/state's `keeps`. */
+  reportRemoteKeep: (keepId: string, outcome: RemoteKeepOutcome): Promise<void> =>
+    ipcRenderer.invoke('remote-keep-result', keepId, outcome),
   discoverSetArtist: (artist: string | null, ownUsername: string): Promise<ArtistMode> =>
     ipcRenderer.invoke('discover-set-artist', artist, ownUsername),
   findRiffForStemPath: (

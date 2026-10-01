@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { CoachSlotSnapshot } from './coachClimax'
 import {
+  createRemoteKeepLedger,
+  parseRemoteKeepId,
+  parseRemoteKeepOutcome,
   parseRemoteSlotAction,
   parseRemoteSlotKinds,
   remoteStateFromSlots,
@@ -447,5 +450,71 @@ describe('remoteStateFromSlots and radio', () => {
     })
     expect(JSON.stringify(state)).not.toContain('secret')
     expect(JSON.stringify(state)).not.toContain('/Users')
+  })
+})
+
+/** The phone's keep confirmation (2026-10-01): each tap carries its own id,
+ * and the Mac answers that id with an outcome. The phone never infers a
+ * keep from the kept counter, which a keep on the Mac also moves. */
+describe('remote keep ids and outcomes', () => {
+  it('accepts only short lowercase alphanumeric ids', () => {
+    expect(parseRemoteKeepId('k1a2b3c4')).toBe('k1a2b3c4')
+    expect(parseRemoteKeepId('')).toBeNull()
+    expect(parseRemoteKeepId('A1')).toBeNull()
+    expect(parseRemoteKeepId('../etc')).toBeNull()
+    expect(parseRemoteKeepId('x'.repeat(25))).toBeNull()
+    expect(parseRemoteKeepId(7)).toBeNull()
+    expect(parseRemoteKeepId(undefined)).toBeNull()
+  })
+
+  it('accepts exactly the four outcomes', () => {
+    for (const o of ['kept', 'already', 'refused', 'none'])
+      expect(parseRemoteKeepOutcome(o)).toBe(o)
+    expect(parseRemoteKeepOutcome('maybe')).toBeNull()
+    expect(parseRemoteKeepOutcome(null)).toBeNull()
+  })
+})
+
+describe('createRemoteKeepLedger', () => {
+  it('begins an id once: a duplicate tap is not forwarded twice', () => {
+    const ledger = createRemoteKeepLedger()
+    expect(ledger.begin('a1')).toBe(true)
+    expect(ledger.begin('a1')).toBe(false)
+    ledger.finish('a1', 'kept')
+    expect(ledger.begin('a1')).toBe(false)
+  })
+
+  it('serves only finished outcomes, by id', () => {
+    const ledger = createRemoteKeepLedger()
+    ledger.begin('a1')
+    ledger.begin('b2')
+    expect(ledger.results()).toEqual([])
+    ledger.finish('b2', 'already')
+    expect(ledger.results()).toEqual([{ id: 'b2', outcome: 'already' }])
+  })
+
+  it('ignores an outcome for an id it never began (a stale or forged report)', () => {
+    const ledger = createRemoteKeepLedger()
+    ledger.finish('zz', 'kept')
+    expect(ledger.results()).toEqual([])
+  })
+
+  it('a second outcome for one id does not replace the first', () => {
+    const ledger = createRemoteKeepLedger()
+    ledger.begin('a1')
+    ledger.finish('a1', 'kept')
+    ledger.finish('a1', 'none')
+    expect(ledger.results()).toEqual([{ id: 'a1', outcome: 'kept' }])
+  })
+
+  it('keeps only the most recent few, oldest dropped first', () => {
+    const ledger = createRemoteKeepLedger(3)
+    for (const id of ['a', 'b', 'c', 'd']) {
+      ledger.begin(id)
+      ledger.finish(id, 'kept')
+    }
+    expect(ledger.results().map((r) => r.id)).toEqual(['b', 'c', 'd'])
+    // A dropped id is forgotten entirely, so it could begin again.
+    expect(ledger.begin('a')).toBe(true)
   })
 })

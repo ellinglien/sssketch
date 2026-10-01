@@ -12,6 +12,7 @@ import {
   type PairingGate
 } from '@shared/remoteAuth'
 import {
+  parseRemoteKeepId,
   parseRemoteSlotAction,
   parseRemoteSlotKinds,
   type RemoteCommand,
@@ -411,7 +412,10 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
 
       if (req.method === 'POST' && url === '/api/keep') {
         if (options.refusesKeep?.()) return respond(res, 409, { reason: 'listening only' })
-        options.onCommand({ kind: 'keep' })
+        // The phone's id for this tap, so its outcome can be matched to it.
+        // Anything that is not an id is dropped, never forwarded.
+        const keepId = parseRemoteKeepId((await readJsonBody(req)).keepId)
+        options.onCommand(keepId === null ? { kind: 'keep' } : { kind: 'keep', keepId })
         return respond(res, 200)
       }
 

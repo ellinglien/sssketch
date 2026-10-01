@@ -124,17 +124,22 @@ export function DiscoverRadioMenu({
       if (ignoreRef.current?.contains(e.target as Node)) return
       onClose()
     }
+    // Escape closes ONLY this menu: capture phase, propagation stopped, so
+    // LibraryBrowser's window-level Escape (close the whole library) never
+    // sees it.
     function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      onClose()
     }
     const id = setTimeout(() => {
       window.addEventListener('click', handleDismiss, true)
     }, 0)
-    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handleKeyDown, true)
     return () => {
       clearTimeout(id)
       window.removeEventListener('click', handleDismiss, true)
-      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keydown', handleKeyDown, true)
     }
   }, [onClose, ignoreRef])
 

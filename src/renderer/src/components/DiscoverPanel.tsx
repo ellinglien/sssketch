@@ -147,6 +147,7 @@ import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import {
   remoteStateFromSlots,
   type RemoteCommand,
+  type RemoteKeepOutcome,
   type RemoteRadioView,
   type RemoteSlotAction
 } from '@shared/remoteState'
@@ -4383,7 +4384,13 @@ export function DiscoverPanel({
     remoteCommandRef.current = (command: RemoteCommand): void => {
       if (command.kind === 'roll-all') void rerollAll()
       else if (command.kind === 'roll-slot') void rerollSlot(command.slotId)
-      else if (command.kind === 'keep') void keepGroup()
+      else if (command.kind === 'keep') {
+        // Answer the phone's own tap id with what the keep came to.
+        const keepId = command.keepId
+        void keepGroup().then((outcome) => {
+          if (keepId !== undefined) void window.rifffApi.reportRemoteKeep(keepId, outcome)
+        })
+      }
       // addSlot/removeSlot are the SAME functions the add row's chips and a
       // row's own remove button call -- undo snapshot, immediate first
       // roll, preview-mix cleanup and all. The phone cannot produce a slot
@@ -5111,7 +5118,10 @@ export function DiscoverPanel({
       const { pool: barred, barUsed } = applyTraitBar(pool, targetTraits, { bar: traitMatchBar })
       const ranked = rankCandidates(barred, {
         targetBpm: bpm,
-        favouriteStemCIDs: rollOptions.preferFavourites ? stemFavourites : undefined,
+        // Off in artist mode, where the toggle is dimmed: your stars are
+        // not among the artist's stems.
+        favouriteStemCIDs:
+          rollOptions.preferFavourites && f.artist === undefined ? stemFavourites : undefined,
         // Finding, 2026-09-21: trait kinds were never passed here before,
         // so a "warm" roll ranked by BPM alone. Every trait kind in the set
         // now adds its library percentile (rankCandidates).
@@ -6591,12 +6601,18 @@ export function DiscoverPanel({
   // inherited behaviour worth keeping: a slot muted in the preview mix is
   // placed at gain 0, not dropped, so a muted stem is saved as silence,
   // still there, still un-muteable later.
-  async function keepGroup(): Promise<void> {
-    if (refusesNow('keep')) return
+  /** Returns what the keep came to, for the phone's confirmation
+   * (RemoteKeepOutcome). The Mac's own button ignores it. */
+  async function keepGroup(): Promise<RemoteKeepOutcome> {
+    // Inlined rather than refusesNow('keep'): through refusesNow, this line
+    // makes the React Compiler reject the whole component (18 lint errors,
+    // bisected in review). Same rule -- keep is listen-only exactly when
+    // the mode is `other`.
+    if (artistMode(artistRef.current, currentUsername) === 'other') return 'refused'
     setKeeping(true)
     try {
       const assembly = await resolveDiscoverRifff()
-      if (!assembly) return
+      if (!assembly) return 'none'
       const { rifff, vol } = assembly
       const members = rifff.stems.map((stem) => ({
         path: stem.path,
@@ -6607,12 +6623,12 @@ export function DiscoverPanel({
         durationSec: stem.durationSec
       }))
       const saved = await window.rifffApi.saveDiscoveredRifff(members, bpm, rifff.barLength)
-      if (!saved) return
+      if (!saved) return 'none'
       // Main refused it: Discover is playing another user's stems.
       if (isKeepRefused(saved)) {
         setKeptLabel('listening only')
         window.setTimeout(() => setKeptLabel(null), 1500)
-        return
+        return 'refused'
       }
       setKeptLabel(saved.duplicate ? 'already kept' : '✓ kept')
       window.setTimeout(() => setKeptLabel(null), 500)
@@ -6622,6 +6638,10 @@ export function DiscoverPanel({
         setKeptCount((n) => n + 1)
         setLastKeptName(saved.name.replace(/ \w{8} library$/, ''))
       }
+      return saved.duplicate ? 'already' : 'kept'
+    } catch (err) {
+      console.error('DiscoverPanel: keep failed:', err)
+      return 'none'
     } finally {
       setKeeping(false)
     }
@@ -7599,8 +7619,9 @@ export function DiscoverPanel({
           >
             {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
               const needsUsername = modifier === 'mine' && !hasUsername
-              // Artist mode picks the artist's stems; `my sounds` is moot.
-              const overridden = modifier === 'mine' && mode === 'other'
+              // Artist mode picks the artist's stems: `my sounds` is moot, and
+              // `prefer faves` too -- your stars are not among their stems.
+              const overridden = mode === 'other'
               const disabled = needsUsername || overridden
               return (
                 <BracketToggle
@@ -9286,20 +9307,25 @@ function DiscoverSlotRow({
         {hasStemToActOn && (
           <button
             onClick={onLike}
+            // Listen-only with radio off: no star to give and no hold to
+            // take, so 👍 does nothing -- dimmed, like any dead control.
+            disabled={listenOnlyStars && !radioOn}
             data-tooltip={
-              listenOnlyStars
-                ? holding
-                  ? 'holding · listening only, nothing is starred'
-                  : 'hold · listening only, nothing is starred'
-                : holding
-                  ? favourited
-                    ? 'unlike · holding'
-                    : 'like · holding'
-                  : favourited
-                    ? 'unlike'
-                    : 'like'
+              listenOnlyStars && !radioOn
+                ? 'listening only, nothing is starred'
+                : listenOnlyStars
+                  ? holding
+                    ? 'holding · listening only, nothing is starred'
+                    : 'hold · listening only, nothing is starred'
+                  : holding
+                    ? favourited
+                      ? 'unlike · holding'
+                      : 'like · holding'
+                    : favourited
+                      ? 'unlike'
+                      : 'like'
             }
-            aria-label={favourited ? 'unlike' : 'like'}
+            aria-label={listenOnlyStars ? 'hold, listening only' : favourited ? 'unlike' : 'like'}
             aria-pressed={favourited}
             aria-description={holding ? 'holding longer' : undefined}
             style={{
@@ -9316,8 +9342,10 @@ function DiscoverSlotRow({
                 ? 'var(--ra-recording-live)'
                 : holding
                   ? 'var(--ra-bg-frame)'
-                  : 'var(--ra-text-2)',
-              cursor: 'pointer'
+                  : listenOnlyStars && !radioOn
+                    ? 'var(--ra-text-4)'
+                    : 'var(--ra-text-2)',
+              cursor: listenOnlyStars && !radioOn ? 'default' : 'pointer'
             }}
           >
             <ThumbsUp size={12} weight={favourited ? 'fill' : 'regular'} />

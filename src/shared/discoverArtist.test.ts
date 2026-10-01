@@ -327,3 +327,24 @@ describe('keep refusal over IPC', () => {
     expect(KEEP_REFUSED).toEqual({ refused: 'listening only' })
   })
 })
+
+describe('suggestArtists: me and Enter', () => {
+  const index = {
+    counts: [
+      { user: 'elling', stems: 100 },
+      { user: 'linda', stems: 50 }
+    ],
+    jammedWith: null,
+    jammedWithPending: false
+  }
+  it('a query that is only a SUBSTRING of the own name lists me after the users', () => {
+    expect(suggestArtists(index, 'lin', 'elling')).toEqual([
+      { kind: 'user', user: 'linda', stems: 50, sharedJams: null },
+      { kind: 'me' }
+    ])
+  })
+  it('a prefix of the own name (or of "me") still puts me first', () => {
+    expect(suggestArtists(index, 'ell', 'elling')[0]).toEqual({ kind: 'me' })
+    expect(suggestArtists(index, 'm', 'elling')[0]).toEqual({ kind: 'me' })
+  })
+})

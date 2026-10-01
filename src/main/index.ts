@@ -102,7 +102,13 @@ import type { LanAddressCandidate } from '@shared/lanAddress'
 import { createRemoteLoopRenderer, type RemoteLoopRenderer } from './remoteLoopRenderer'
 import { createRemoteStemRenderer, type RemoteStemRenderer } from './remoteStemRenderer'
 import type { EngineProject } from '@shared/buildEngineProject'
-import type { RemoteCommand, RemoteState } from '@shared/remoteState'
+import {
+  createRemoteKeepLedger,
+  parseRemoteKeepId,
+  parseRemoteKeepOutcome,
+  type RemoteCommand,
+  type RemoteState
+} from '@shared/remoteState'
 import type { PairingGate } from '@shared/remoteAuth'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
 import { getArtistStemCIDs } from './discoverArtistStems'
@@ -294,6 +300,12 @@ let rendererHasUnsavedChanges = false
 // per-machine fact about his network (phoneRemoteSettingsStore.ts), not a
 // record that the remote was ever running.
 let remoteServer: RemoteServerHandle | null = null
+// The phone's keeps by tap id, and what each came to (2026-10-01). Held
+// HERE rather than in the renderer so a Discover remount cannot lose an
+// answer the phone is waiting on, and so a duplicate request is dropped
+// before it can keep twice.
+const remoteKeeps = createRemoteKeepLedger()
+
 let lastRemoteState: RemoteState = {
   discoverOpen: false,
   playing: false,
@@ -378,6 +390,7 @@ function startPhoneRemoteOn(address: string): void {
         ...lastRemoteState,
         loopId: remoteLoop?.currentLoopId() ?? null,
         listenOnly: currentArtistMode() === 'other',
+        keeps: remoteKeeps.results(),
         slots: lastRemoteState.slots.map((slot) => ({
           ...slot,
           stemId: bySlot.get(slot.id) ?? null
@@ -390,6 +403,10 @@ function startPhoneRemoteOn(address: string): void {
       // Commands are performed by the RENDERER, by calling the exact
       // functions its own buttons call. There is no second
       // implementation of anything.
+      // A keep id already seen is a duplicate request: it must not keep twice.
+      if (command.kind === 'keep' && command.keepId !== undefined) {
+        if (!remoteKeeps.begin(command.keepId)) return
+      }
       mainWindow?.webContents.send('remote-command', command)
     },
     refusesKeep: () => refusesListenOnly('keep'),
@@ -1368,6 +1385,14 @@ app.whenReady().then(async () => {
     return name
       ? getArtistAnalysed(openOwnRiffLibraryDb(), discoverSourceDbs(), name)
       : { analysed: 0, total: 0 }
+  })
+
+  // The renderer's answer to a phone keep: what keepGroup came to, by the
+  // tap's own id (remoteKeeps). Validated: an unknown shape is dropped.
+  ipcMain.handle('remote-keep-result', (_event, keepId: unknown, outcome: unknown) => {
+    const id = parseRemoteKeepId(keepId)
+    const result = parseRemoteKeepOutcome(outcome)
+    if (id !== null && result !== null) remoteKeeps.finish(id, result)
   })
 
   ipcMain.handle('discover-set-artist', (_event, artist: unknown, ownUsername: unknown) =>

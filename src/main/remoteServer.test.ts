@@ -611,3 +611,37 @@ describe('the keep route in listen-only mode', () => {
     }
   })
 })
+
+describe("the keep route carries the phone's keep id", () => {
+  async function pairedToken(port: number, pairingCode: string): Promise<string> {
+    const res = await send(
+      port,
+      '/api/pair',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      JSON.stringify({ code: pairingCode })
+    )
+    return JSON.parse(res.body).token as string
+  }
+  async function keepWith(port: number, token: string, body: unknown): Promise<RawResponse> {
+    return send(
+      port,
+      '/api/keep',
+      {
+        host: `192.168.1.40:${port}`,
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`
+      },
+      'POST',
+      JSON.stringify(body)
+    )
+  }
+
+  it('forwards a valid id, and drops one that is not an id', async () => {
+    const { port, pairingCode } = await start()
+    const token = await pairedToken(port, pairingCode)
+    expect((await keepWith(port, token, { keepId: 'k1x2' })).status).toBe(200)
+    expect((await keepWith(port, token, { keepId: '../x' })).status).toBe(200)
+    expect(commands).toEqual([{ kind: 'keep', keepId: 'k1x2' }, { kind: 'keep' }])
+  })
+})

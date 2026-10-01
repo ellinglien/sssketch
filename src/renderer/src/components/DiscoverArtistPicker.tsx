@@ -3,7 +3,13 @@
 // Discover artist mode's search (spec §1). A popover in DiscoverRadioMenu's
 // shape: positioned at (x, y), clamped to the window, dismissed by Escape or
 // a click outside (ignoreRef excepted). Monochrome -- this is chrome.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+//
+// A combobox: the field keeps focus, ArrowUp/ArrowDown move the highlighted
+// row, Enter picks the highlighted row. Escape closes ONLY this popover
+// (capture phase, propagation stopped -- LibraryBrowser closes the whole
+// library on a window-level Escape), and Escape or a pick hands focus back
+// to the artist field (ignoreRef).
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   analysedLabel,
   normalizeArtistPick,
@@ -14,6 +20,9 @@ import {
 } from '@shared/discoverArtist'
 
 const JAMMED_WITH_POLL_MS = 2000
+/** After a failed load: 2 s, doubling, at most 30 s. */
+const RETRY_FIRST_MS = 2000
+const RETRY_MAX_MS = 30_000
 
 export function DiscoverArtistPicker({
   x,
@@ -36,10 +45,16 @@ export function DiscoverArtistPicker({
   footerExtra?: React.ReactNode
 }): React.JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null)
+  const listId = useId()
   const [position, setPosition] = useState({ left: x, top: y })
   const [query, setQuery] = useState('')
+  const [highlight, setHighlight] = useState(0)
   const [index, setIndex] = useState<ArtistIndex | null>(null)
-  const [analysed, setAnalysed] = useState<{ analysed: number; total: number } | null>(null)
+  const [indexFailed, setIndexFailed] = useState(false)
+  const [analysed, setAnalysed] = useState<{
+    artist: string
+    value: { analysed: number; total: number } | 'failed'
+  } | null>(null)
 
   useLayoutEffect(() => {
     const el = menuRef.current
@@ -52,7 +67,8 @@ export function DiscoverArtistPicker({
     })
   }, [x, y])
 
-  // Same dismissal as DiscoverRadioMenu.
+  // Same dismissal as DiscoverRadioMenu. Escape in the CAPTURE phase with
+  // propagation stopped, so the library modal behind never sees it.
   useEffect(() => {
     function handleDismiss(e: MouseEvent): void {
       if (menuRef.current?.contains(e.target as Node)) return
@@ -60,28 +76,44 @@ export function DiscoverArtistPicker({
       onClose()
     }
     function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key === 'Escape') onClose()
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      ignoreRef.current?.focus()
+      onClose()
     }
     const id = setTimeout(() => window.addEventListener('click', handleDismiss, true), 0)
-    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keydown', handleKeyDown, true)
     return () => {
       clearTimeout(id)
       window.removeEventListener('click', handleDismiss, true)
-      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keydown', handleKeyDown, true)
     }
   }, [onClose, ignoreRef])
 
   // Counts come back at once; jammed-with lands later (main's background
-  // walk, ~15 s cold), so poll only while it is pending and we are open.
+  // walk), so poll while it is pending and we are open. A failed load says
+  // so and retries with a back-off -- never an unhandled rejection.
   useEffect(() => {
     let cancelled = false
     let timer: number | undefined
+    let retryMs = RETRY_FIRST_MS
     function load(): void {
-      void window.rifffApi.discoverArtistIndex(ownUsername).then((next) => {
-        if (cancelled) return
-        setIndex(next)
-        if (next.jammedWithPending) timer = window.setTimeout(load, JAMMED_WITH_POLL_MS)
-      })
+      window.rifffApi
+        .discoverArtistIndex(ownUsername)
+        .then((next) => {
+          if (cancelled) return
+          retryMs = RETRY_FIRST_MS
+          setIndex(next)
+          setIndexFailed(false)
+          if (next.jammedWithPending) timer = window.setTimeout(load, JAMMED_WITH_POLL_MS)
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return
+          console.error('DiscoverArtistPicker: discoverArtistIndex failed:', err)
+          setIndexFailed(true)
+          timer = window.setTimeout(load, retryMs)
+          retryMs = Math.min(retryMs * 2, RETRY_MAX_MS)
+        })
     }
     load()
     return () => {
@@ -91,11 +123,17 @@ export function DiscoverArtistPicker({
   }, [ownUsername])
 
   useEffect(() => {
-    let cancelled = false
     if (artist === null) return
-    void window.rifffApi.discoverArtistAnalysed(artist).then((a) => {
-      if (!cancelled) setAnalysed(a)
-    })
+    let cancelled = false
+    window.rifffApi
+      .discoverArtistAnalysed(artist)
+      .then((value) => {
+        if (!cancelled) setAnalysed({ artist, value })
+      })
+      .catch((err: unknown) => {
+        console.error('DiscoverArtistPicker: discoverArtistAnalysed failed:', err)
+        if (!cancelled) setAnalysed({ artist, value: 'failed' })
+      })
     return () => {
       cancelled = true
     }
@@ -105,11 +143,19 @@ export function DiscoverArtistPicker({
     () => (index ? suggestArtists(index, query, ownUsername) : []),
     [index, query, ownUsername]
   )
+  const active = Math.min(highlight, suggestions.length - 1)
 
   function pick(s: ArtistSuggestion): void {
     onPick(s.kind === 'me' ? null : normalizeArtistPick(s.user, ownUsername))
+    ignoreRef.current?.focus()
     onClose()
   }
+
+  function optionId(i: number): string {
+    return `${listId}-option-${i}`
+  }
+
+  const analysedNow = analysed !== null && analysed.artist === artist ? analysed.value : null
 
   return (
     <div
@@ -132,11 +178,27 @@ export function DiscoverArtistPicker({
     >
       <input
         autoFocus
+        role="combobox"
+        aria-expanded={suggestions.length > 0}
+        aria-controls={listId}
+        aria-autocomplete="list"
+        aria-activedescendant={active >= 0 ? optionId(active) : undefined}
         value={query}
         placeholder="search users"
-        onChange={(e) => setQuery(e.target.value)}
+        onChange={(e) => {
+          setQuery(e.target.value)
+          setHighlight(0)
+        }}
         onKeyDown={(e) => {
-          if (e.key === 'Enter' && suggestions.length > 0) pick(suggestions[0])
+          if (e.key === 'ArrowDown') {
+            e.preventDefault()
+            setHighlight(Math.min(active + 1, suggestions.length - 1))
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault()
+            setHighlight(Math.max(active - 1, 0))
+          } else if (e.key === 'Enter' && active >= 0) {
+            pick(suggestions[active])
+          }
         }}
         style={{
           fontFamily: 'inherit',
@@ -147,25 +209,47 @@ export function DiscoverArtistPicker({
           color: 'var(--ra-text)'
         }}
       />
-      {query.trim() === '' && index?.jammedWith === null && (
+      {query.trim() === '' && index?.jammedWith === null && index.jammedWithPending && (
         <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
           finding who you&apos;ve jammed with…
         </span>
       )}
-      <div style={{ display: 'flex', flexDirection: 'column', maxHeight: 260, overflowY: 'auto' }}>
-        {index === null && <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>loading…</span>}
-        {suggestions.map((s) => (
+      <div
+        id={listId}
+        role="listbox"
+        aria-label="artists"
+        style={{ display: 'flex', flexDirection: 'column', maxHeight: 260, overflowY: 'auto' }}
+      >
+        {index === null && (
+          <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
+            {indexFailed ? 'couldn’t load · retrying' : 'loading…'}
+          </span>
+        )}
+        {index !== null && indexFailed && (
+          <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>
+            couldn’t refresh · retrying
+          </span>
+        )}
+        {index !== null && query.trim() !== '' && suggestions.length === 0 && (
+          <span style={{ fontSize: 9, color: 'var(--ra-text-4)' }}>no matches</span>
+        )}
+        {suggestions.map((s, i) => (
           <button
             key={s.kind === 'me' ? ':me' : s.user}
+            id={optionId(i)}
+            role="option"
+            aria-selected={i === active}
+            tabIndex={-1}
+            onMouseEnter={() => setHighlight(i)}
             onClick={() => pick(s)}
             style={{
               fontFamily: 'inherit',
               fontSize: 10,
               textAlign: 'left',
               padding: '3px 6px',
-              background: 'transparent',
+              background: i === active ? 'var(--ra-bg-row-active)' : 'transparent',
               border: 'none',
-              color: 'var(--ra-text-2)',
+              color: i === active ? 'var(--ra-text)' : 'var(--ra-text-2)',
               cursor: 'pointer'
             }}
           >
@@ -176,7 +260,11 @@ export function DiscoverArtistPicker({
       {artist !== null && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 9 }}>
           <span style={{ color: 'var(--ra-text-3)' }}>
-            {analysed ? analysedLabel(analysed.analysed, analysed.total) : 'analysed: …'}
+            {analysedNow === null
+              ? 'analysed: …'
+              : analysedNow === 'failed'
+                ? 'analysed: couldn’t load'
+                : analysedLabel(analysedNow.analysed, analysedNow.total)}
           </span>
           {footerExtra}
         </div>

@@ -2308,8 +2308,32 @@ git commit -m "discover artist: listen-only controls dimmed with the tooltip; th
   - for anything that fires before the dimming render lands.
   - That closes the window where main's mirror (updated by an effect after the render) and the panel disagree, in both directions.
 - **Main's refusal is still the backstop.** `keepGroup` shows `listening only` for a `KEEP_REFUSED` answer (Tasks 3–4 review commit).
-- **Gates:** typecheck clean, lint at the 4 pre-existing warnings, 234 files / 3,828 tests green.
+- **Gates:** typecheck clean, 234 files / 3,828 tests green.
+- **Lint correction:** the earlier "lint at the 4 pre-existing warnings" for this commit (`3f475b2`) was a **cached** eslint result and was wrong. Uncached, `npm run lint` had **18 React Compiler errors**.
+  - Review bisected them to `refusesNow('keep')` in `keepGroup`. The fix inlines it as `artistMode(artistRef.current, currentUsername) === 'other'`, which follows the same rule.
+  - Every lint gate from here on runs `npx eslint --no-cache`.
 - **Not run in the app:** no agent can see it. Elling's walkthrough is Task 9.
+
+**Tasks 5–6 review follow-up (one commit):**
+- **Lint:** the keepGroup fix above. Uncached lint is back to 0 errors and 4 warnings.
+- **Phone keep, by id:**
+  - Each phone tap sends a random `keepId` (`parseRemoteKeepId`: lowercase alphanumeric, at most 24 characters, otherwise dropped).
+  - Main's `RemoteKeepLedger` (`@shared/remoteState`) forwards an id once, so a duplicate request never keeps twice.
+  - `keepGroup` returns a `RemoteKeepOutcome` (`kept | already | refused | none`), which the renderer reports by id (`remote-keep-result`).
+  - `/api/state` serves the finished outcomes as `keeps`, main-derived like `loopId`, so they survive a Discover remount.
+  - The phone matches only its own id, and gives up with `not kept` after 8 s. A keep made on the Mac never matches; a tap before the first state works; a reloaded page uses fresh random ids.
+  - **One existing assertion changed:** `remotePage.test.ts` "is a tap, and posts on that tap" pinned the body `{}` and now pins `{ keepId: id }`. Required by the change; its intent is unchanged.
+- **Escape:** the picker and `DiscoverRadioMenu` listen in the capture phase and stop propagation on Escape, so `LibraryBrowser`'s window-level Escape (close the library) doesn't fire.
+- **Picker error paths:**
+  - A failed index load shows `couldn't load · retrying` (or `couldn't refresh` over an index already loaded) and retries at 2 s, doubling to 30 s.
+  - A failed analysed call shows `analysed: couldn't load`. Every promise has a `.catch`.
+  - `finding who you've jammed with…` shows only while `jammedWithPending`.
+- **Picker minors:**
+  - It's a combobox/listbox with a highlighted row, ArrowUp/ArrowDown, Enter on the highlighted row, and a `no matches` line.
+  - Escape or a pick returns focus to the artist field.
+  - `suggestArtists` puts `me` first only on a prefix (of `me` or of the own name); a substring-only match lists `me` after the users.
+- **Thumbs-up:** the aria-label in listen-only is `hold, listening only`. In listen-only with radio off it's disabled and dimmed (nothing to star, no hold to take).
+- **`prefer faves`:** dimmed in artist mode with the same tooltip as `my sounds`, and `pickForSlot` ignores it while an artist is set.
 
 ---
 

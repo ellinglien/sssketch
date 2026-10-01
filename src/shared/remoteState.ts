@@ -154,6 +154,10 @@ export interface RemoteStateResponse extends RemoteState {
    * what the renderer pushes. Optional: absent (an older Mac) reads as
    * false. A boolean names no user, so the boundary is unchanged. */
   listenOnly?: boolean
+  /** The phone's recent keeps, by the id each tap carried, with what the
+   * Mac did. Main-derived (its RemoteKeepLedger), like loopId, so it
+   * survives Discover remounting. Optional: absent from an older Mac. */
+  keeps?: RemoteKeepResult[]
   slots: RemoteSlotResponse[]
 }
 
@@ -267,7 +271,9 @@ function normalizeRemoteRadio(
 export type RemoteCommand =
   | { kind: 'roll-slot'; slotId: string }
   | { kind: 'roll-all' }
-  | { kind: 'keep' }
+  /** `keepId` is the phone's own id for this tap, so the Mac's answer can
+   * be matched to it (RemoteKeepResult). Absent from an older page. */
+  | { kind: 'keep'; keepId?: string }
   | { kind: 'add-slot'; kinds: DiscoverSlotKind[] }
   | { kind: 'remove-slot'; slotId: string }
   | { kind: 'slot-action'; slotId: string; action: RemoteSlotAction }
@@ -322,4 +328,68 @@ export function parseRemoteSlotKinds(value: unknown): DiscoverSlotKind[] | null 
   }
   const normalized = normalizeSlotKinds(kinds)
   return normalized.length === 0 ? null : normalized
+}
+
+/** What a phone keep came to (2026-10-01):
+ * - `kept`: a new kept riff;
+ * - `already`: that exact loop was kept before;
+ * - `refused`: listen only (Discover artist mode);
+ * - `none`: nothing kept -- nothing resolvable, or the save failed. */
+export type RemoteKeepOutcome = 'kept' | 'already' | 'refused' | 'none'
+
+export interface RemoteKeepResult {
+  id: string
+  outcome: RemoteKeepOutcome
+}
+
+/** A keep id is the phone's own random token: short, lowercase
+ * alphanumeric, nothing path-shaped. Anything else is dropped (the keep
+ * still happens, unconfirmed), never forwarded. */
+const REMOTE_KEEP_ID = /^[a-z0-9]{1,24}$/
+
+export function parseRemoteKeepId(value: unknown): string | null {
+  return typeof value === 'string' && REMOTE_KEEP_ID.test(value) ? value : null
+}
+
+const REMOTE_KEEP_OUTCOMES: readonly RemoteKeepOutcome[] = ['kept', 'already', 'refused', 'none']
+
+export function parseRemoteKeepOutcome(value: unknown): RemoteKeepOutcome | null {
+  return REMOTE_KEEP_OUTCOMES.find((o) => o === value) ?? null
+}
+
+/** How many keep ids main remembers. A phone waits on one tap at a time,
+ * and a few seconds at most, so a handful is plenty. */
+export const REMOTE_KEEP_HISTORY = 16
+
+export interface RemoteKeepLedger {
+  /** True the first time an id is seen: forward it. False for a
+   * duplicate (a retried request), which must not keep twice. */
+  begin(id: string): boolean
+  /** The renderer's answer. Ignored for an id never begun, or already
+   * finished -- the first outcome stands. */
+  finish(id: string, outcome: RemoteKeepOutcome): void
+  /** Finished keeps, oldest first. */
+  results(): RemoteKeepResult[]
+}
+
+export function createRemoteKeepLedger(limit = REMOTE_KEEP_HISTORY): RemoteKeepLedger {
+  // Insertion order is age order; null = begun, not yet finished.
+  const entries = new Map<string, RemoteKeepOutcome | null>()
+  return {
+    begin(id) {
+      if (entries.has(id)) return false
+      entries.set(id, null)
+      while (entries.size > limit) entries.delete(entries.keys().next().value as string)
+      return true
+    },
+    finish(id, outcome) {
+      if (entries.get(id) !== null) return // never begun (undefined), or already finished
+      entries.set(id, outcome)
+    },
+    results() {
+      const out: RemoteKeepResult[] = []
+      for (const [id, outcome] of entries) if (outcome !== null) out.push({ id, outcome })
+      return out
+    }
+  }
 }
