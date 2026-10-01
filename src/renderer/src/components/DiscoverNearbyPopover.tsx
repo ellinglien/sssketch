@@ -156,7 +156,8 @@ export function DiscoverNearbyPopover({
   soundSource,
   onPick,
   onClose,
-  ignoreRef
+  ignoreRef,
+  creator
 }: {
   x: number
   y: number
@@ -182,6 +183,9 @@ export function DiscoverNearbyPopover({
   onPick: (candidate: DiscoverCandidate, immediate: boolean) => boolean
   onClose: () => void
   ignoreRef: React.RefObject<HTMLElement | null>
+  /** Discover artist mode (2026-10-01): only this creator's stems. Undefined
+   * (every `me` roll) filters nothing. */
+  creator?: string
 }): React.JSX.Element {
   // Tracks the full candidate, not just its riffCID -- the header below
   // shows this candidate's own presetName/creatorUserName for orientation
@@ -201,12 +205,12 @@ export function DiscoverNearbyPopover({
     candidates: { newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }
   } | null>(null)
   const kindsKey = slotKindsKey(kinds)
-  const resultKey = `${centerCandidate.riffCID}:${kindsKey}:${soundSource.endlesss}:${soundSource.audioIn}`
+  const resultKey = `${centerCandidate.riffCID}:${kindsKey}:${soundSource.endlesss}:${soundSource.audioIn}:${creator ?? ''}`
 
   useEffect(() => {
     let cancelled = false
     window.rifffApi
-      .getAdjacentDiscoverCandidates(centerCandidate.riffCID, kinds, soundSource)
+      .getAdjacentDiscoverCandidates(centerCandidate.riffCID, kinds, soundSource, creator)
       .then((candidates) => {
         if (!cancelled) setResult({ key: resultKey, candidates })
       })
@@ -226,7 +230,14 @@ export function DiscoverNearbyPopover({
     // `kinds` itself is also omitted -- it's a fresh array every render;
     // `kindsKey` carries its identity instead.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [centerCandidate.riffCID, kindsKey, soundSource.endlesss, soundSource.audioIn, resultKey])
+  }, [
+    centerCandidate.riffCID,
+    kindsKey,
+    soundSource.endlesss,
+    soundSource.audioIn,
+    creator,
+    resultKey
+  ])
 
   const resultForCurrent = result?.key === resultKey ? result : null
   const candidates = resultForCurrent?.candidates ?? { newer: [], older: [] }

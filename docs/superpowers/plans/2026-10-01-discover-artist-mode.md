@@ -1859,7 +1859,7 @@ git commit -m "discover artist: main refuses keep, star and fetch hearts in arti
 
 Between this task and Task 6, keep, star and the hearts fetch fail **quietly** in artist mode. Task 4's guards refuse them, but the buttons are not dimmed yet. Ship Task 6 next.
 
-- [ ] **Step 1: Lift the state**
+- [x] **Step 1: Lift the state**
 
 `App.tsx`, directly below `const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])` (`:1499`):
 
@@ -1883,7 +1883,7 @@ In `LibraryBrowser.tsx`:
 
 - Pass them to `<DiscoverPanel` (`:2451-2470`) as `artist={discoverArtist}` and `onArtistChange={setDiscoverArtist}`.
 
-- [ ] **Step 2: Create `DiscoverArtistPicker.tsx`**
+- [x] **Step 2: Create `DiscoverArtistPicker.tsx`**
 
 ```tsx
 // src/renderer/src/components/DiscoverArtistPicker.tsx
@@ -2076,7 +2076,7 @@ export function DiscoverArtistPicker({
 
 `zIndex: 1200` matches `DiscoverRadioMenu.tsx:267`.
 
-- [ ] **Step 3: Thread the artist through `DiscoverPanel.tsx`**
+- [x] **Step 3: Thread the artist through `DiscoverPanel.tsx`**
 
 3a. **Props.** Add to the destructuring next to `currentUsername` (`:510`) and to the props type (after `currentUsername: string`, `:558`):
 
@@ -2204,12 +2204,12 @@ State next to the radio menu state (grep `const [radioMenu, setRadioMenu]`):
       )}
 ```
 
-- [ ] **Step 4: Gate**
+- [x] **Step 4: Gate**
 
 Run: `npm run typecheck && npm run lint && npm test`
 Expected: all green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/renderer/src/components/DiscoverArtistPicker.tsx \
@@ -2217,6 +2217,17 @@ git add src/renderer/src/components/DiscoverArtistPicker.tsx \
   src/renderer/src/components/LibraryBrowser.tsx src/renderer/src/App.tsx
 git commit -m "discover artist: artist field, search picker, notice; rolls follow the artist"
 ```
+
+**As landed:**
+- **Steps 1, 2, 3e, 3f and 3g** are exactly as above.
+- **3b: the artist ref follows this file's effect-mirror convention** (`slotsRef`), so it isn't written during render. `changeArtist` still writes it synchronously, so a pick is in force before the next render.
+- **3c, `pickForSlot`: `rollOptions` is kept.** It's still read for `preferFavourites`, so `const f = rollFilter()` is added beside it instead of replacing it. In `rollRandomForSlot`, `rollOptions` had no other use and was replaced as written.
+- **3d: the popover isn't rendered by `DiscoverPanel` itself but inside `DiscoverSlotRow`.**
+  - The row gets a new prop `nearbyCreator`. Its value comes from props (`rollFilterForArtist(artist, currentUsername, false).artist`), not from `rollFilter()`, so render never reads the ref.
+  - `DiscoverNearbyPopover` adds `creator` to its `resultKey` and effect deps, so a change of artist re-fetches.
+- **`changeArtist`** sits beside the artist-menu state, not beside `startRadio`. Function declarations are hoisted, and Task 7 can extend it in place.
+- **Gates:** typecheck clean, lint at the 4 pre-existing warnings, 234 files / 3,828 tests green.
+- **Not run in the app:** no agent can see or hear it. Elling's walkthrough is Task 9.
 
 ---
 

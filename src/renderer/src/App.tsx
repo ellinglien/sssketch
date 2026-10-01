@@ -1497,6 +1497,9 @@ function Frame(): React.JSX.Element {
   // within one already-open session -- App.tsx itself never unmounts for
   // the life of the app, LibraryBrowser does every time the modal closes.
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
+  // Discover artist mode: the chosen artist, null = me. Session-only, the
+  // same lifetime as discoverSlots -- Discover opens on `me` at launch.
+  const [discoverArtist, setDiscoverArtist] = useState<string | null>(null)
   // What the guided flow sees of Discover. Published by DiscoverPanel (the
   // only component that knows whether a slot has really resolved) and kept
   // here rather than inside the bubble so it survives the library modal
@@ -2770,6 +2773,8 @@ function Frame(): React.JSX.Element {
             setDiscoverConsented={setDiscoverConsented}
             discoverSlots={discoverSlots}
             setDiscoverSlots={setDiscoverSlots}
+            discoverArtist={discoverArtist}
+            setDiscoverArtist={setDiscoverArtist}
             discoverChaos={discoverChaos}
             setDiscoverChaos={setDiscoverChaos}
             discoverUndoStack={discoverUndoStack}

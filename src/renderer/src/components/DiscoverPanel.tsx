@@ -129,7 +129,16 @@ import {
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { discoverSweepPct, discoverWindowLayout } from '@shared/discoverWindowLayout'
 import { discoverBreath } from '@shared/discoverBreath'
-import { isKeepRefused } from '@shared/discoverArtist'
+import {
+  artistFieldLabel,
+  artistMode,
+  artistNotice,
+  isKeepRefused,
+  normalizeArtistPick,
+  rollFilterForArtist,
+  type ArtistRollFilter
+} from '@shared/discoverArtist'
+import { DiscoverArtistPicker } from './DiscoverArtistPicker'
 import { recordStemRoles } from '../state/stemCategoryCapture'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
 import {
@@ -509,6 +518,8 @@ export function DiscoverPanel({
   redoStack,
   setRedoStack,
   currentUsername,
+  artist,
+  onArtistChange,
   discoverConsented,
   traitMatchBar,
   radioSettings,
@@ -557,6 +568,9 @@ export function DiscoverPanel({
    * real per-machine value down keeps "only own stems" rerolls scoped to
    * whoever is actually using this install. */
   currentUsername: string
+  /** Discover artist mode (2026-10-01): null = me. App.tsx state. */
+  artist: string | null
+  onArtistChange: (artist: string | null) => void
   /** App.tsx's Frame() own single source of truth for Discover's
    * whole-library-scan consent, threaded down through LibraryBrowser.tsx
    * -- the real scan itself (DiscoverLibraryScan) is mounted once at that
@@ -698,6 +712,26 @@ export function DiscoverPanel({
   const [globalModifiers, setGlobalModifiers] =
     useState<DiscoverSlotModifier[]>(DEFAULT_GLOBAL_MODIFIERS)
   const globalRollOptions = slotRollOptions(globalModifiers, { hasUsername })
+  // Artist mode. Mirrored into a ref for the same reason sourceLeanRef is:
+  // radio's picks run from long-lived callbacks. Written from an effect,
+  // this file's ref-mirroring convention, and synchronously by
+  // changeArtist so a pick is in force before the next render lands.
+  const artistRef = useRef<string | null>(artist)
+  useEffect(() => {
+    artistRef.current = artist
+  }, [artist])
+  const mode = artistMode(artist, currentUsername)
+  /** The creator filter as of this render, for children (the nearby
+   * popover); rolls read rollFilter() instead, which follows the ref. */
+  const artistCreator = rollFilterForArtist(artist, currentUsername, false).artist
+  /** What every roll sends main -- today's values in own mode (rollFilterForArtist). */
+  function rollFilter(): ArtistRollFilter {
+    return rollFilterForArtist(artistRef.current, currentUsername, globalRollOptions.onlyOwnStems)
+  }
+  // Main's mirror, for the guards. Re-sent on the own username changing too.
+  useEffect(() => {
+    void window.rifffApi.discoverSetArtist(artist, currentUsername)
+  }, [artist, currentUsername])
   // The source dial (2026-09-29): 0 = endlesss, 100 = other, 50 = half and
   // half. In-memory, like the switches it replaced. Mirrored into a ref
   // because radio's picks run from long-lived callbacks that would
@@ -3093,6 +3127,15 @@ export function DiscoverPanel({
   // the radio BUTTON while radio is off (the start prompt) and by the
   // chevron while it is on (the full menu).
   const [radioMenu, setRadioMenu] = useState<{ x: number; y: number } | null>(null)
+  // Discover artist mode's field and its search popover.
+  const [artistMenu, setArtistMenu] = useState<{ x: number; y: number } | null>(null)
+  const artistButtonRef = useRef<HTMLButtonElement>(null)
+  /** The artist field's pick. Radio off: the next rolls just use it. */
+  function changeArtist(next: string | null): void {
+    if (next === artistRef.current) return
+    artistRef.current = next
+    onArtistChange(next)
+  }
   const radioMenuButtonRef = useRef<HTMLButtonElement>(null)
   const radioChevronRef = useRef<HTMLButtonElement>(null)
   // Stable identity -- same playhead-tick re-render reasoning as
@@ -4882,7 +4925,8 @@ export function DiscoverPanel({
       const nearby = await window.rifffApi.getAdjacentDiscoverCandidates(
         anchor.riffCID,
         slot.kinds,
-        soundSourceForLean(sourceLeanRef.current)
+        soundSourceForLean(sourceLeanRef.current),
+        rollFilter().artist
       )
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       const pick = pickAdjacentCandidate(nearby.older, nearby.newer, anchor.stemCID)
@@ -4966,6 +5010,8 @@ export function DiscoverPanel({
       // getDiscoverCandidates' own `CreatorUserName !== targetUser` check
       // exclude essentially every real stem -- zero candidates, forever.
       const rollOptions = globalRollOptions
+      // The creator filter (artist mode) -- today's values in own mode.
+      const f = rollFilter()
       // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
       // staying stuck with no console errors made it impossible to tell,
       // from the outside, whether the IPC call itself was the slow part
@@ -4998,18 +5044,20 @@ export function DiscoverPanel({
       const draw = drawSoundSource(sourceLeanRef.current)
       let candidates = await window.rifffApi.getDiscoverCandidates(
         kinds,
-        rollOptions.onlyOwnStems,
-        currentUsername,
-        draw.first
+        f.onlyOwnStems,
+        f.targetUser,
+        draw.first,
+        f.artist
       )
       const drawnHasUnused = candidates.some((c) => !usedElsewhere.has(c.stemCID))
       if (!drawnHasUnused && draw.fallback !== null) {
         if (rerollGenerationRef.current.get(id) !== myGeneration) return null
         const fallbackCandidates = await window.rifffApi.getDiscoverCandidates(
           kinds,
-          rollOptions.onlyOwnStems,
-          currentUsername,
-          draw.fallback
+          f.onlyOwnStems,
+          f.targetUser,
+          draw.fallback,
+          f.artist
         )
         // Switch to the fallback when it has something new, or when the
         // drawn source had nothing at all. Otherwise keep the drawn pool,
@@ -5264,7 +5312,8 @@ export function DiscoverPanel({
     setRolledCount((n) => n + 1)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
-      const rollOptions = globalRollOptions
+      // The creator filter (artist mode) -- today's values in own mode.
+      const f = rollFilter()
       const draw = drawSoundSource(sourceLeanRef.current)
       // Falls back only on no candidate at all, unlike pickForSlot, which
       // also falls back when everything drawn is already on another slot:
@@ -5272,16 +5321,16 @@ export function DiscoverPanel({
       // "all duplicates" of.
       let candidate = await window.rifffApi.getRandomDiscoverCandidate(
         kinds,
-        rollOptions.onlyOwnStems,
-        currentUsername,
+        f.onlyOwnStems,
+        f.targetUser,
         draw.first
       )
       if (candidate === null && draw.fallback !== null) {
         if (rerollGenerationRef.current.get(id) !== myGeneration) return
         candidate = await window.rifffApi.getRandomDiscoverCandidate(
           kinds,
-          rollOptions.onlyOwnStems,
-          currentUsername,
+          f.onlyOwnStems,
+          f.targetUser,
           draw.fallback
         )
       }
@@ -6875,6 +6924,41 @@ export function DiscoverPanel({
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <span style={{ marginLeft: 'auto' }} />
+        <button
+          ref={artistButtonRef}
+          onClick={(e) => {
+            if (artistMenu) {
+              setArtistMenu(null)
+              return
+            }
+            const rect = e.currentTarget.getBoundingClientRect()
+            setArtistMenu({ x: rect.left, y: rect.bottom + 4 })
+          }}
+          aria-expanded={artistMenu !== null}
+          data-tooltip="whose stems discover plays"
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 10,
+            padding: '6px 10px',
+            background: 'transparent',
+            border: '1px solid var(--ra-border)',
+            color: mode === 'other' ? 'var(--ra-text)' : 'var(--ra-text-2)',
+            cursor: 'pointer'
+          }}
+        >
+          {artistFieldLabel(artist, currentUsername)}
+        </button>
+        {artistMenu && (
+          <DiscoverArtistPicker
+            x={artistMenu.x}
+            y={artistMenu.y}
+            artist={artist}
+            ownUsername={currentUsername}
+            onPick={(next) => changeArtist(normalizeArtistPick(next, currentUsername))}
+            onClose={() => setArtistMenu(null)}
+            ignoreRef={artistButtonRef}
+          />
+        )}
         {/* Radio -- docs/superpowers/specs/2026-09-26-radio-mode-design.md.
             Lit with --ra-play-on when on, exactly like the play/stop button
             in the settings row above: the transport is audio information
@@ -7101,6 +7185,14 @@ export function DiscoverPanel({
           {addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline'}
         </button>
       </div>
+      {mode === 'other' && artist !== null && (
+        <div
+          role="note"
+          style={{ fontSize: 9, color: 'var(--ra-text-3)', marginTop: -6, marginBottom: 10 }}
+        >
+          {artistNotice(artist)}
+        </div>
+      )}
 
       {/* The master strip -- 2026-09-28 performance-mode spec section 4A.
           Shown only while something is actually sounding, because both
@@ -7285,6 +7377,7 @@ export function DiscoverPanel({
               radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
               radioOn={radioOn}
               onLike={() => likeSlot(slot.id)}
+              nearbyCreator={artistCreator}
               onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
               onRemove={() => removeSlot(slot.id)}
               onDuplicate={(immediate) => duplicateSlot(slot.id, immediate)}
@@ -7468,7 +7561,10 @@ export function DiscoverPanel({
             }}
           >
             {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
-              const disabled = modifier === 'mine' && !hasUsername
+              const needsUsername = modifier === 'mine' && !hasUsername
+              // Artist mode picks the artist's stems; `my sounds` is moot.
+              const overridden = modifier === 'mine' && mode === 'other'
+              const disabled = needsUsername || overridden
               return (
                 <BracketToggle
                   key={modifier}
@@ -7476,7 +7572,13 @@ export function DiscoverPanel({
                   onChange={() => setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))}
                   label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
                   disabled={disabled}
-                  tooltip={disabled ? MY_SOUNDS_NEEDS_USERNAME : undefined}
+                  tooltip={
+                    overridden
+                      ? `artist mode picks ${artist}'s stems`
+                      : needsUsername
+                        ? MY_SOUNDS_NEEDS_USERNAME
+                        : undefined
+                  }
                 />
               )
             })}
@@ -7863,6 +7965,7 @@ function DiscoverSlotRow({
   radioFlag,
   radioOn,
   onLike,
+  nearbyCreator,
   onToggleReplaceSoon,
   onRemove,
   onDuplicate,
@@ -7944,6 +8047,9 @@ function DiscoverSlotRow({
   /** The 👍 -- toggles this stem's star and, when starring, turns hold
    * longer on (DiscoverPanel's likeSlot -> likeRadioSlot). */
   onLike: () => void
+  /** Discover artist mode: the nearby popover shows only this creator's
+   * stems. Undefined in own mode. */
+  nearbyCreator: string | undefined
   /** The 👎 ("change soon", once "change next") -- toggles `replace-soon`
    * on this row (toggleRadioReplaceSoon). */
   onToggleReplaceSoon: () => void
@@ -9200,6 +9306,7 @@ function DiscoverSlotRow({
           onPick={onSwapFromNearby}
           onClose={closeNearbyMenu}
           ignoreRef={nearbyButtonRef}
+          creator={nearbyCreator}
         />
       )}
       {reclassifyMenu && slot.candidate && (
