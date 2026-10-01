@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   KEEP_REFUSED,
+  blockedActions,
   lingeringArtists,
   lingeringNotice,
   pickMatchesSelection,
@@ -416,5 +417,26 @@ describe('turnover after a switch, with a stale pick in flight', () => {
     const mePick = tagPickedUnderArtist({ creatorUserName: 'bananepoep' }, undefined)
     if (pickMatchesSelection(mePick, null)) pending.delete('a')
     expect(pending.size).toBe(0)
+  })
+})
+
+// Elling, 2026-10-01 (final review): while another artist's stems linger in
+// `me`, everything that would take them into your work is off -- not just keep.
+describe('blockedActions', () => {
+  it('in artist mode, the whole listen-only list', () => {
+    expect([...blockedActions('other', [])].sort()).toEqual([...LISTEN_ONLY_ACTIONS].sort())
+  })
+  it('in me with lingering stems: keep, star, shelf and timeline', () => {
+    expect([...blockedActions('own', ['tpj'])].sort()).toEqual(
+      ['addToShelf', 'addToTimeline', 'keep', 'star'].sort()
+    )
+  })
+  it('in me with nothing lingering: nothing', () => {
+    expect(blockedActions('own', []).size).toBe(0)
+  })
+  it('says how to clear a row radio will not turn over', () => {
+    expect(lingeringNotice(['tpj'], true)).toBe(
+      "listening only: tpj's stems still playing · reroll or unlock the row to keep"
+    )
   })
 })

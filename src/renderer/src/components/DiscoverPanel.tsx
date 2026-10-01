@@ -134,10 +134,10 @@ import {
   artistMode,
   artistNotice,
   artistTurnoverIds,
+  blockedActions,
   isKeepRefused,
   lingeringArtists,
   lingeringNotice,
-  listenOnlyActions,
   listenOnlyTooltip,
   nextTurnoverSlotId,
   normalizeArtistPick,
@@ -736,15 +736,15 @@ export function DiscoverPanel({
    * popover); rolls read rollFilter() instead, which follows the ref. */
   const artistCreator = rollFilterForArtist(artist, currentUsername, false).artist
   // Listen-only (spec §2): the one list the buttons dim by and main refuses.
-  const listenOnly = listenOnlyActions(mode)
-  const listenOnlyTip = artist !== null ? listenOnlyTooltip(artist) : undefined
-  /** The same list as of NOW (artistRef), for the functions themselves: the
-   * phone's keep and long-lived callbacks call them too, and a pick must be
-   * in force before the render that dims the buttons -- otherwise an
-   * other->own (or own->other) switch has a window where main's mirror and
-   * this panel disagree. */
+  /** The same set as `listenOnly` below, as of NOW (artistRef, slotsRef),
+   * for the functions themselves: the phone's keep and long-lived callbacks
+   * call them too, and a pick must be in force before the render that dims
+   * the buttons -- otherwise an other->own (or own->other) switch has a
+   * window where main's mirror and this panel disagree. */
   function refusesNow(action: ListenOnlyAction): boolean {
-    return listenOnlyActions(artistMode(artistRef.current, currentUsername)).has(action)
+    const nowMode = artistMode(artistRef.current, currentUsername)
+    const still = nowMode === 'own' ? lingeringArtists(slotsRef.current) : []
+    return blockedActions(nowMode, still).has(action)
   }
   /** What every roll sends main -- today's values in own mode (rollFilterForArtist). */
   function rollFilter(): ArtistRollFilter {
@@ -754,6 +754,10 @@ export function DiscoverPanel({
   // artist mode): keep is blocked until they are gone (Elling, 2026-10-01).
   const lingering = mode === 'own' ? lingeringArtists(slots) : []
   const lingeringKey = lingering.join('\n')
+  // What the buttons dim by (blockedActions): the whole listen-only list in
+  // artist mode; in `me`, keep, star, shelf and timeline while another
+  // artist's stems linger (Elling, 2026-10-01).
+  const listenOnly = blockedActions(mode, lingering)
   // Main's mirror, for the guards. Re-sent on the own username changing, and
   // on the lingering artists changing (the phone's keep reads it there).
   useEffect(() => {
@@ -5213,6 +5217,11 @@ export function DiscoverPanel({
     // stem, and that row still has to turn over.
     if (pickMatchesSelection(pick.candidate, artistRef.current)) {
       artistTurnoverRef.current.delete(id)
+    } else if (pick.candidate !== null && radioOnRef.current) {
+      // Rolled under a different selection than the current one -- a
+      // density-arc add (or any pick) in flight across a switch: it joins
+      // the turnover, so radio replaces it like every other row.
+      artistTurnoverRef.current.add(id)
     }
     // THE ONE PLACE A LAYER'S STEM IS REPLACED, whoever asked for it --
     // radio's own turnover, both of its commit branches, the row's
@@ -6167,7 +6176,6 @@ export function DiscoverPanel({
     // different object after the await means the artist changed meanwhile:
     // the pick was rolled for the old one.
     const turnoverAtStart = artistTurnoverRef.current
-    const isTurnover = turnoverId !== null
     // Radio's decided change, wherever it is, and its armed pick: taken
     // back. radioYieldsRow does exactly this for its own row; here it is
     // whichever row radio had spoken for. Bumping the arm token drops an
@@ -6176,11 +6184,10 @@ export function DiscoverPanel({
     if (led !== null) radioTakesBackLed(led)
     radioArmTokenRef.current += 1
     setRadioPending(null)
-    // A turnover row takes its undo snapshot only once its pick is real: a
-    // row with nothing by the new artist changes nothing, so it must not
-    // leave an empty undo step behind.
-    if (!isTurnover) pushUndoSnapshot()
-    let undoSeq = undoSequence.latest()
+    // The undo snapshot is taken only once the pick is real and current: an
+    // empty pick (a turnover row with nothing by the new artist) or a stale
+    // one (dropped below) changes nothing, so it must not leave an empty
+    // undo step behind.
     const pick = await pickForSlot(slotId, slot.kinds, { avoidOwnStem: true })
     radioSkipPickingRef.current.delete(slotId)
     if (artistTurnoverRef.current !== turnoverAtStart) {
@@ -6194,10 +6201,8 @@ export function DiscoverPanel({
     // One try per row: a row whose kinds have nothing by the new artist keeps
     // its stem rather than being retried at every loop top.
     artistTurnoverRef.current.delete(slotId)
-    if (isTurnover && pick !== null) {
-      pushUndoSnapshot()
-      undoSeq = undoSequence.latest()
-    }
+    if (pick !== null) pushUndoSnapshot()
+    const undoSeq = undoSequence.latest()
     const queued =
       pick !== null &&
       radioOnRef.current &&
@@ -6779,6 +6784,21 @@ export function DiscoverPanel({
   // the same expression at each of the 4 read sites.
   const seedTempo = seedBpm !== null ? Math.min(200, Math.max(40, Math.round(seedBpm))) : null
 
+  // A lingering row radio will never turn over (locked, or muted out of the
+  // mix): the line then says what clears it.
+  const lingeringStuck =
+    lingering.length > 0 &&
+    slots.some(
+      (s) =>
+        s.candidate?.pickedUnderArtist !== undefined && (s.locked || !previewingSlotIds.has(s.id))
+    )
+  const listenOnlyTip =
+    mode === 'other' && artist !== null
+      ? listenOnlyTooltip(artist)
+      : lingering.length > 0
+        ? lingeringNotice(lingering, lingeringStuck)
+        : undefined
+
   return (
     <div
       style={{
@@ -7311,13 +7331,7 @@ export function DiscoverPanel({
         <button
           onClick={() => void keepGroup()}
           disabled={keeping || listenOnly.has('keep') || lingering.length > 0}
-          data-tooltip={
-            listenOnly.has('keep')
-              ? listenOnlyTip
-              : lingering.length > 0
-                ? lingeringNotice(lingering)
-                : 'keep this group'
-          }
+          data-tooltip={listenOnly.has('keep') ? listenOnlyTip : 'keep this group'}
           style={{
             fontFamily: 'inherit',
             fontSize: 10,
@@ -7402,7 +7416,7 @@ export function DiscoverPanel({
           role="note"
           style={{ fontSize: 9, color: 'var(--ra-text-3)', marginTop: -6, marginBottom: 10 }}
         >
-          {lingeringNotice(lingering)}
+          {lingeringNotice(lingering, lingeringStuck)}
         </div>
       )}
       {mode === 'other' && artist !== null && (

@@ -5,6 +5,7 @@ import {
   getDiscoverArtistSession,
   keepBlockedForPhone,
   refusesKeep,
+  refusesStar,
   refusesListenOnly,
   resetDiscoverArtistSession,
   setDiscoverArtistSession
@@ -92,5 +93,20 @@ describe("keep while another artist's stems remain", () => {
     setDiscoverArtistSession({ artist: null, ownUsername: 'elling', lingering: ['tpj'] })
     resetDiscoverArtistSession()
     expect(keepBlockedForPhone()).toBe(false)
+  })
+})
+
+describe("star while another artist's stems remain", () => {
+  it('in me, star is refused while the session names lingering artists', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setDiscoverArtistSession({ artist: null, ownUsername: 'elling', lingering: ['tpj'] })
+    expect(refusesStar()).toBe(true)
+    setDiscoverArtistSession({ artist: null, ownUsername: 'elling', lingering: [] })
+    expect(refusesStar()).toBe(false)
+  })
+  it('in artist mode star is refused as before', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    setDiscoverArtistSession({ artist: 'tpj', ownUsername: 'elling' })
+    expect(refusesStar()).toBe(true)
   })
 })

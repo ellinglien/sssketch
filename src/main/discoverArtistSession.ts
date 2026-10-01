@@ -73,6 +73,16 @@ export function refusesKeep(lingeringFromCall?: unknown): boolean {
   return true
 }
 
+/** The star guard: refused in artist mode, and in `me` while the session's
+ * mirror names lingering artists (Elling, 2026-10-01). The toggle IPC
+ * carries one stem id and no rows, so the session is what it reads. */
+export function refusesStar(): boolean {
+  if (refusesListenOnly('star')) return true
+  if (lingering.length === 0) return false
+  console.warn(`discover: refused star -- ${lingering.join(', ')}'s stems still playing`)
+  return true
+}
+
 /** Whether the phone's keep is off: the same rule, from the session alone
  * (the phone's request carries no rows). No warning -- polled. */
 export function keepBlockedForPhone(): boolean {

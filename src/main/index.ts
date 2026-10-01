@@ -125,6 +125,7 @@ import {
   keepBlockedForPhone,
   refusesKeep,
   refusesListenOnly,
+  refusesStar,
   resetDiscoverArtistSession,
   setDiscoverArtistSession
 } from './discoverArtistSession'
@@ -1964,7 +1965,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('list-stem-favourites', () => listStemFavourites(openOwnRiffLibraryDb()))
 
   ipcMain.handle('toggle-stem-favourite', (_event, stemCID: string) =>
-    refusesListenOnly('star')
+    refusesStar()
       ? listStemFavourites(openOwnRiffLibraryDb())
       : toggleStemFavourite(openOwnRiffLibraryDb(), stemCID)
   )

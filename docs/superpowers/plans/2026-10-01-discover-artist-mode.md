@@ -2831,6 +2831,12 @@ git commit -m "discover artist: analyse overnight queues the artist's stems ahea
   - It announces the new size (`artistScanQueueEvent.ts`), so the scan updates `priorityLeft` and stops resting.
 - **Tests:** archive not mounted (paused, nothing downloaded or removed), ok, unavailable, transient (kept, moved back), and an artist across the own db and the archive with the drive pulled mid-batch.
 
+**Final review follow-up (second commit), including Elling's decision:**
+- **Lingering blocks more than keep:** `blockedActions(mode, lingering)` is the one set the buttons dim by and `refusesNow` refuses on. In `me` with lingering stems that's keep, star, add to shelf and add to timeline. Main's `refusesStar()` refuses star on the session mirror. See Risk #8.
+- **Stuck rows:** the lingering line adds `· reroll or unlock the row to keep` while such a row is locked or muted.
+- **Undo:** every radio skip takes its undo snapshot only once its pick is non-null and not stale, so no empty undo step is left.
+- **Picks across a switch:** a pick committed with radio on that doesn't match the current selection (a density-arc add, or any pick, in flight across a switch) joins the turnover set.
+
 ---
 
 ### Task 9: Elling's walkthrough
@@ -2866,7 +2872,12 @@ No agent can hear or see the app. This list is the check. Run `npm run dev` with
 - [ ] Locked and muted rows are untouched.
 - [ ] Pick `me` again, and rows not by elling turn over the same way.
 - [ ] Switch artist twice in quick succession while radio runs: still only one row changes per loop top, and the rows end up by the LAST artist picked.
-- [ ] While the old artist's stems are still on the rows after switching back to `me`, keep is dimmed with `listening only: seasickcookie's stems still playing`, and the same line shows under the header. The phone's keep is disabled too. Once every such row has turned over (or been rerolled), keep comes back.
+- [ ] While the old artist's stems are still on the rows after switching back to `me`:
+  - keep, add to shelf and add to timeline are dimmed with `listening only: seasickcookie's stems still playing`, and the same line shows under the header;
+  - 👍 holds but doesn't star;
+  - the phone's keep is disabled too.
+  - Lock or mute one of those rows, and the line adds `· reroll or unlock the row to keep`.
+  - Once every such row has turned over (or been rerolled), everything comes back.
 
 **Phone keep (in `me`, nothing lingering):**
 - [ ] Tap keep on the phone. It flashes `keeping`, then `kept`, or `already kept` for the same loop. With no loop to keep, it shows `nothing to keep`.
@@ -2893,7 +2904,7 @@ No agent can hear or see the app. This list is the check. Run `npm run dev` with
 ## Risks
 
 1. **`GROUP BY` over 781k rows on USB.** It uses the covering `Stems_IndexUser`: 2.86 s cold, 0.09 s warm. It is paged by username (500 per page) so no slice blocks main. Its first open on a cold drive still waits about 3 s for the list.
-2. **Jammed-with costs ~15 s of sequential USB reads per session** (60–69 s for the naive query). It runs in the background, paged and yielding, but it **competes for the drive with radio's own stem reads and downloads**. That could delay a lap-early warm on a cold drive. It starts only when the picker first opens. If Elling notices, the follow-up is to persist the pairs in the own db, keyed by the `Stems` signal, like `scanTargetCache.ts`. That deviates from the spec's "in memory per session", so ask first.
+2. **Jammed-with costs ~15 s of sequential USB reads** (60–69 s for the naive query). It runs in the background, paged (2,000 rows) and yielding, but it **competes for the drive with radio's own stem reads and downloads**. *As landed:* each source db's pairs are saved to the own db (Elling's decision), so the walk happens only on first use and again only for a db whose `Stems` count or MAX(rowid) has moved.
 3. **Time to first sound for a cold artist.**
    - The artist set takes ~1.6 s cold.
    - `resolveCandidateStem` downloads the **whole riff** (`downloadMissingStems`, up to 8 × ~91 KB) onto the USB drive.
@@ -2903,8 +2914,14 @@ No agent can hear or see the app. This list is the check. Run `npm run dev` with
 5. **Trait slots for other artists** are mostly empty (bananepoep is 1.2% analysed). The spec accepts this, and analyse overnight is the remedy.
 6. **The analyse-overnight scale:** about 31k downloads (~2.8 GB) onto the USB drive and an estimated 4.5–7 h of idle time per 30k-stem artist. The time is not measured.
 7. **Memory.** Each cached artist set holds ~31k ids (~3 MB). The cache is capped at 8 artists per db. The pairs list is 13k entries.
-8. **Rows rolled under an artist re-enable keep after switching to `me`.** This grants nothing new, because `me` already rolls every stem in the archive, all from Elling's own 79 jams. The tooltip and notice disappear as they should. Flag it to Elling in the walkthrough if he wants per-row taint.
-9. **A renderer reload** resets main's mirror (`did-finish-load`). Discover's own effect re-sends the artist on mount.
+8. **Rows rolled under an artist, after switching to `me`.** *Decided by Elling (2026-10-01), superseding the original "re-enable" answer:* they stay blocked.
+   - Every pick is tagged with the artist it was rolled under (`pickedUnderArtist`).
+   - In `me`, while any row still plays a tagged stem, **keep, star (👍 holds but doesn't star), add to shelf and add to timeline** are dimmed and refused, with `listening only: <x>'s stems still playing`.
+   - The line adds `· reroll or unlock the row to keep` when such a row is locked or muted (radio won't turn it over).
+   - Main refuses keep (on the rows the keep call carries, and on the session mirror) and star (on the mirror).
+   - Shelf and timeline have no main-side surface: they're renderer-only, and they're refused in their functions.
+   - Everything re-enables once every tagged row has been rerolled or turned over in `me`.
+9. **A renderer reload** resets main's mirror when a main-frame navigation starts (`did-start-navigation`; as landed). Discover's own effect re-sends the artist, and the lingering list, on mount.
 10. **The own db has no `CreatorUserName` index.** Its artist and count queries are full scans of 81,814 rows on the SSD (tens of ms). Do not add an index in this plan.
 
 ## Self-review against the spec (done)

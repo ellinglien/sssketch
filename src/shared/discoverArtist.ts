@@ -334,6 +334,29 @@ export function lingeringArtists(
   return [...artists].sort((a, b) => a.localeCompare(b))
 }
 
-export function lingeringNotice(artists: readonly string[]): string {
-  return `listening only: ${artists.map((a) => `${a}'s`).join(' and ')} stems still playing`
+/** `stuck`: a lingering row radio will not turn over (locked or muted), so
+ * the line says what clears it. */
+export function lingeringNotice(artists: readonly string[], stuck = false): string {
+  const line = `listening only: ${artists.map((a) => `${a}'s`).join(' and ')} stems still playing`
+  return stuck ? `${line} · reroll or unlock the row to keep` : line
+}
+
+/** What lingering stems block in `me` (Elling, 2026-10-01): everything that
+ * would take them into your own work. Fetch hearts is not about the rows. */
+const LINGERING_BLOCKS: ReadonlySet<ListenOnlyAction> = new Set<ListenOnlyAction>([
+  'keep',
+  'star',
+  'addToShelf',
+  'addToTimeline'
+])
+
+/** The one set the buttons dim by and the functions refuse on: the whole
+ * listen-only list in artist mode; in `me`, LINGERING_BLOCKS while any row
+ * still plays a stem picked under artist mode; otherwise nothing. */
+export function blockedActions(
+  mode: ArtistMode,
+  lingering: readonly string[]
+): ReadonlySet<ListenOnlyAction> {
+  if (mode === 'other') return listenOnlyActions('other')
+  return lingering.length > 0 ? LINGERING_BLOCKS : listenOnlyActions('own')
 }
