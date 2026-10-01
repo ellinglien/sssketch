@@ -2235,7 +2235,7 @@ git commit -m "discover artist: artist field, search picker, notice; rolls follo
 
 **Files:** Modify `src/renderer/src/components/DiscoverPanel.tsx`
 
-- [ ] **Step 1: One derived set.** Below `const mode = artistMode(...)` (Task 5, 3b):
+- [x] **Step 1: One derived set.** Below `const mode = artistMode(...)` (Task 5, 3b):
 
 ```tsx
   const listenOnly = listenOnlyActions(mode)
@@ -2244,13 +2244,13 @@ git commit -m "discover artist: artist field, search picker, notice; rolls follo
 
 Import `listenOnlyActions` and `listenOnlyTooltip`.
 
-- [ ] **Step 2: Guard the functions themselves**, so the phone's keep (`:4328`) and any shortcut obey too.
+- [x] **Step 2: Guard the functions themselves**, so the phone's keep (`:4328`) and any shortcut obey too.
 - First line of `keepGroup` (`:6522`): `if (listenOnly.has('keep')) return`.
 - `addToShelf` (`:6503`): `if (listenOnly.has('addToShelf')) return`.
 - `addToTimeline` (`:6369`): `if (listenOnly.has('addToTimeline')) return`.
 - `fetchHearts` (`:6551`): `if (listenOnly.has('fetchHearts')) return`.
 
-- [ ] **Step 3: Dim the four header buttons** (`:7030-7095`). The pattern below is for keep; repeat it with `'fetchHearts'`, `'addToShelf'` and `'addToTimeline'`.
+- [x] **Step 3: Dim the four header buttons** (`:7030-7095`). The pattern below is for keep; repeat it with `'fetchHearts'`, `'addToShelf'` and `'addToTimeline'`.
 
 ```tsx
         <button
@@ -2267,7 +2267,7 @@ For add to timeline, also swap the accent while dimmed: `border: listenOnly.has(
 
 Add-to-shelf and add-to-timeline have no `data-tooltip` today. Add `data-tooltip={listenOnly.has('addToShelf') ? listenOnlyTip : undefined}`, and the same with `'addToTimeline'`.
 
-- [ ] **Step 4: 👍 holds, never stars.** `likeSlot` (`:4712-4719`):
+- [x] **Step 4: 👍 holds, never stars.** `likeSlot` (`:4712-4719`):
 
 ```tsx
   function likeSlot(id: string): void {
@@ -2291,7 +2291,7 @@ In `DiscoverSlotRow`:
 - In the 👍 button (`:9133-9143`), make `data-tooltip` start with `listenOnlyStars ? (holding ? 'holding · listening only, nothing is starred' : 'hold · listening only, nothing is starred') : ...today's expression`.
 - Leave the button **un-dimmed**: it still holds.
 
-- [ ] **Step 5: Gate and commit**
+- [x] **Step 5: Gate and commit**
 
 Run: `npm run typecheck && npm run lint && npm test`
 Expected: all green.
@@ -2300,6 +2300,16 @@ Expected: all green.
 git add src/renderer/src/components/DiscoverPanel.tsx
 git commit -m "discover artist: listen-only controls dimmed with the tooltip; thumbs-up holds without starring"
 ```
+
+**As landed:**
+- **Steps 1, 3 and 4** are as above.
+- **Step 2:** the four functions (and `likeSlot`'s star check) test `refusesNow(action)`, not the render's `listenOnly` set. `refusesNow` is `listenOnlyActions(artistMode(artistRef.current, currentUsername))`. It reads the artist ref, which `changeArtist` writes synchronously, so the guard holds from the moment of a pick:
+  - for the phone's keep, which arrives through `remoteCommandRef`;
+  - for anything that fires before the dimming render lands.
+  - That closes the window where main's mirror (updated by an effect after the render) and the panel disagree, in both directions.
+- **Main's refusal is still the backstop.** `keepGroup` shows `listening only` for a `KEEP_REFUSED` answer (Tasks 3–4 review commit).
+- **Gates:** typecheck clean, lint at the 4 pre-existing warnings, 234 files / 3,828 tests green.
+- **Not run in the app:** no agent can see it. Elling's walkthrough is Task 9.
 
 ---
 

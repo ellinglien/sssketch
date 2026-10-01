@@ -134,9 +134,12 @@ import {
   artistMode,
   artistNotice,
   isKeepRefused,
+  listenOnlyActions,
+  listenOnlyTooltip,
   normalizeArtistPick,
   rollFilterForArtist,
-  type ArtistRollFilter
+  type ArtistRollFilter,
+  type ListenOnlyAction
 } from '@shared/discoverArtist'
 import { DiscoverArtistPicker } from './DiscoverArtistPicker'
 import { recordStemRoles } from '../state/stemCategoryCapture'
@@ -724,6 +727,17 @@ export function DiscoverPanel({
   /** The creator filter as of this render, for children (the nearby
    * popover); rolls read rollFilter() instead, which follows the ref. */
   const artistCreator = rollFilterForArtist(artist, currentUsername, false).artist
+  // Listen-only (spec §2): the one list the buttons dim by and main refuses.
+  const listenOnly = listenOnlyActions(mode)
+  const listenOnlyTip = artist !== null ? listenOnlyTooltip(artist) : undefined
+  /** The same list as of NOW (artistRef), for the functions themselves: the
+   * phone's keep and long-lived callbacks call them too, and a pick must be
+   * in force before the render that dims the buttons -- otherwise an
+   * other->own (or own->other) switch has a window where main's mirror and
+   * this panel disagree. */
+  function refusesNow(action: ListenOnlyAction): boolean {
+    return listenOnlyActions(artistMode(artistRef.current, currentUsername)).has(action)
+  }
   /** What every roll sends main -- today's values in own mode (rollFilterForArtist). */
   function rollFilter(): ArtistRollFilter {
     return rollFilterForArtist(artistRef.current, currentUsername, globalRollOptions.onlyOwnStems)
@@ -4757,9 +4771,15 @@ export function DiscoverPanel({
     const slot = slots.find((s) => s.id === id)
     if (!slot || slot.candidate === null) return
     const stemCID = slot.candidate.stemCID
-    const opts = { starred: stemFavourites.has(stemCID), canHold: radioOn && !slot.locked }
+    // Listen-only (spec §2): 👍 still holds the row longer, but stars
+    // nothing -- always the "would star" branch, never toggleStemFavourite.
+    const listening = refusesNow('star')
+    const opts = {
+      starred: listening ? false : stemFavourites.has(stemCID),
+      canHold: radioOn && !slot.locked
+    }
     setRadioSlotFlags((prev) => likeRadioSlot(prev, id, opts).flags)
-    toggleStemFavourite(stemCID)
+    if (!listening) toggleStemFavourite(stemCID)
   }
   function toggleSlotReplaceSoon(id: string): void {
     setRadioSlotFlags((prev) => toggleRadioReplaceSoon(prev, id))
@@ -6417,6 +6437,7 @@ export function DiscoverPanel({
   // resolveDiscoverRifff above (shared with addToShelf below) -- see that
   // helper's own doc comment for that mechanics.
   async function addToTimeline(): Promise<void> {
+    if (refusesNow('addToTimeline')) return
     setAddingToTimeline(true)
     try {
       const assembly = await resolveDiscoverRifff()
@@ -6551,6 +6572,7 @@ export function DiscoverPanel({
   // and the discover preview stays legitimately loaded/owned for
   // continued building.
   async function addToShelf(): Promise<void> {
+    if (refusesNow('addToShelf')) return
     setAddingToShelf(true)
     try {
       const assembly = await resolveDiscoverRifff()
@@ -6570,6 +6592,7 @@ export function DiscoverPanel({
   // placed at gain 0, not dropped, so a muted stem is saved as silence,
   // still there, still un-muteable later.
   async function keepGroup(): Promise<void> {
+    if (refusesNow('keep')) return
     setKeeping(true)
     try {
       const assembly = await resolveDiscoverRifff()
@@ -6605,6 +6628,7 @@ export function DiscoverPanel({
   }
 
   async function fetchHearts(): Promise<void> {
+    if (refusesNow('fetchHearts')) return
     setFetchingHearts(true)
     try {
       const result = await window.rifffApi.fetchRadioHearts()
@@ -7120,16 +7144,16 @@ export function DiscoverPanel({
         </button>
         <button
           onClick={() => void keepGroup()}
-          disabled={keeping}
-          data-tooltip="keep this group"
+          disabled={keeping || listenOnly.has('keep')}
+          data-tooltip={listenOnly.has('keep') ? listenOnlyTip : 'keep this group'}
           style={{
             fontFamily: 'inherit',
             fontSize: 10,
             padding: '6px 14px',
             background: 'transparent',
             border: '1px solid var(--ra-border-strong)',
-            color: keeping ? 'var(--ra-text-4)' : 'var(--ra-text)',
-            cursor: keeping ? 'default' : 'pointer',
+            color: keeping || listenOnly.has('keep') ? 'var(--ra-text-4)' : 'var(--ra-text)',
+            cursor: keeping || listenOnly.has('keep') ? 'default' : 'pointer',
             animation: keptLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
           }}
         >
@@ -7137,16 +7161,19 @@ export function DiscoverPanel({
         </button>
         <button
           onClick={() => void fetchHearts()}
-          disabled={fetchingHearts}
-          data-tooltip="fetch radio hearts"
+          disabled={fetchingHearts || listenOnly.has('fetchHearts')}
+          data-tooltip={listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts'}
           style={{
             fontFamily: 'inherit',
             fontSize: 10,
             padding: '6px 14px',
             background: 'transparent',
             border: '1px solid var(--ra-border-strong)',
-            color: fetchingHearts ? 'var(--ra-text-4)' : 'var(--ra-text)',
-            cursor: fetchingHearts ? 'default' : 'pointer',
+            color:
+              fetchingHearts || listenOnly.has('fetchHearts')
+                ? 'var(--ra-text-4)'
+                : 'var(--ra-text)',
+            cursor: fetchingHearts || listenOnly.has('fetchHearts') ? 'default' : 'pointer',
             animation: heartsLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
           }}
         >
@@ -7154,15 +7181,17 @@ export function DiscoverPanel({
         </button>
         <button
           onClick={() => void addToShelf()}
-          disabled={addingToShelf}
+          disabled={addingToShelf || listenOnly.has('addToShelf')}
+          data-tooltip={listenOnly.has('addToShelf') ? listenOnlyTip : undefined}
           style={{
             fontFamily: 'inherit',
             fontSize: 10,
             padding: '6px 14px',
             background: 'transparent',
             border: '1px solid var(--ra-border-strong)',
-            color: addingToShelf ? 'var(--ra-text-4)' : 'var(--ra-text)',
-            cursor: addingToShelf ? 'default' : 'pointer',
+            color:
+              addingToShelf || listenOnly.has('addToShelf') ? 'var(--ra-text-4)' : 'var(--ra-text)',
+            cursor: addingToShelf || listenOnly.has('addToShelf') ? 'default' : 'pointer',
             animation: justAddedToShelf ? 'discover-add-pulse 500ms ease-out' : undefined
           }}
         >
@@ -7170,15 +7199,22 @@ export function DiscoverPanel({
         </button>
         <button
           onClick={() => void addToTimeline()}
-          disabled={addingToTimeline}
+          disabled={addingToTimeline || listenOnly.has('addToTimeline')}
+          data-tooltip={listenOnly.has('addToTimeline') ? listenOnlyTip : undefined}
           style={{
             fontFamily: 'inherit',
             fontSize: 10,
             padding: '6px 14px',
-            background: 'var(--ra-stretch-on-bg)',
-            border: '1px solid var(--ra-stretch-on)',
-            color: addingToTimeline ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
-            cursor: addingToTimeline ? 'default' : 'pointer',
+            // A dead button carries no audio information, so no accent.
+            background: listenOnly.has('addToTimeline') ? 'transparent' : 'var(--ra-stretch-on-bg)',
+            border: listenOnly.has('addToTimeline')
+              ? '1px solid var(--ra-border)'
+              : '1px solid var(--ra-stretch-on)',
+            color:
+              addingToTimeline || listenOnly.has('addToTimeline')
+                ? 'var(--ra-text-4)'
+                : 'var(--ra-stretch-on)',
+            cursor: addingToTimeline || listenOnly.has('addToTimeline') ? 'default' : 'pointer',
             animation: justAddedToTimeline ? 'discover-add-pulse 500ms ease-out' : undefined
           }}
         >
@@ -7377,6 +7413,7 @@ export function DiscoverPanel({
               radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
               radioOn={radioOn}
               onLike={() => likeSlot(slot.id)}
+              listenOnlyStars={listenOnly.has('star')}
               nearbyCreator={artistCreator}
               onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
               onRemove={() => removeSlot(slot.id)}
@@ -7965,6 +8002,7 @@ function DiscoverSlotRow({
   radioFlag,
   radioOn,
   onLike,
+  listenOnlyStars,
   nearbyCreator,
   onToggleReplaceSoon,
   onRemove,
@@ -8047,6 +8085,9 @@ function DiscoverSlotRow({
   /** The 👍 -- toggles this stem's star and, when starring, turns hold
    * longer on (DiscoverPanel's likeSlot -> likeRadioSlot). */
   onLike: () => void
+  /** Discover artist mode, listen only: 👍 holds but stars nothing, and
+   * its tooltip says so. The button stays un-dimmed -- it still holds. */
+  listenOnlyStars: boolean
   /** Discover artist mode: the nearby popover shows only this creator's
    * stems. Undefined in own mode. */
   nearbyCreator: string | undefined
@@ -9246,13 +9287,17 @@ function DiscoverSlotRow({
           <button
             onClick={onLike}
             data-tooltip={
-              holding
-                ? favourited
-                  ? 'unlike · holding'
-                  : 'like · holding'
-                : favourited
-                  ? 'unlike'
-                  : 'like'
+              listenOnlyStars
+                ? holding
+                  ? 'holding · listening only, nothing is starred'
+                  : 'hold · listening only, nothing is starred'
+                : holding
+                  ? favourited
+                    ? 'unlike · holding'
+                    : 'like · holding'
+                  : favourited
+                    ? 'unlike'
+                    : 'like'
             }
             aria-label={favourited ? 'unlike' : 'like'}
             aria-pressed={favourited}
