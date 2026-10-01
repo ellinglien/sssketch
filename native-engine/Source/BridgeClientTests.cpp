@@ -1,5 +1,6 @@
 // native-engine/Source/BridgeClientTests.cpp
 #include "BridgeClient.h"
+#include "StressTest.h"
 #include <juce_core/juce_core.h>
 #include <chrono>
 #include <thread>
@@ -41,7 +42,7 @@ namespace sssketch
                 std::atomic<bool> stop { false };
                 std::atomic<int> missing { 0 };
                 std::vector<std::thread> readers;
-                for (int r = 0; r < 4; ++r)
+                for (int r = 0; r < stress::readerThreads(); ++r)
                 {
                     readers.emplace_back([&, r]()
                     {
@@ -52,7 +53,7 @@ namespace sssketch
                     });
                 }
 
-                for (int i = 0; i < 500; ++i)
+                for (int i = 0; i < stress::kWriterIterations; ++i)
                 {
                     publish(client, "churn");
                     client.unloadPlugin("churn");
@@ -125,14 +126,22 @@ namespace sssketch
                         BridgeClient::ReadScope scope(client);
                         if (auto* channel = client.channelFor("churn"))
                         {
-                            channel->writeInputAndSignal(in, 16);
-                            channel->waitAndReadOutput(out, 16, 0);
+                            // Several round trips per lookup: the bug is a channel freed
+                            // between lookup and use, so the longer the use, the more
+                            // reliably a regression shows up at CI-sized iteration counts.
+                            // One thread only -- the channel's rings are single-producer,
+                            // single-consumer.
+                            for (int k = 0; k < 8; ++k)
+                            {
+                                channel->writeInputAndSignal(in, 16);
+                                channel->waitAndReadOutput(out, 16, 0);
+                            }
                             used.fetch_add(1);
                         }
                     }
                 });
 
-                for (int i = 0; i < 500; ++i)
+                for (int i = 0; i < stress::kWriterIterations; ++i)
                 {
                     publish(client, "churn");
                     client.unloadPlugin("churn");

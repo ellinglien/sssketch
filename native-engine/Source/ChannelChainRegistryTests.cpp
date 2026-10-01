@@ -1,5 +1,6 @@
 // native-engine/Source/ChannelChainRegistryTests.cpp
 #include "ChannelChainRegistry.h"
+#include "StressTest.h"
 #include <juce_core/juce_core.h>
 #include <chrono>
 #include <thread>
@@ -221,7 +222,7 @@ namespace sssketch
                     std::atomic<bool> stop { false };
                     std::atomic<int> missing { 0 };
                     std::vector<std::thread> readers;
-                    for (int r = 0; r < 4; ++r)
+                    for (int r = 0; r < stress::readerThreads(); ++r)
                     {
                         readers.emplace_back([&, r]()
                         {
@@ -234,7 +235,7 @@ namespace sssketch
                         });
                     }
 
-                    for (int i = 0; i < 2000; ++i)
+                    for (int i = 0; i < stress::kWriterIterations; ++i)
                     {
                         auto ids = stable;
                         ids.push_back("extra-" + juce::String(i));
@@ -258,29 +259,41 @@ namespace sssketch
                     std::atomic<bool> stop { false };
                     std::atomic<int> processed { 0 };
 
-                    std::thread audio([&]()
+                    // Thread 0 is the real audio thread's whole per-block sequence; the rest
+                    // only look up and process, which widens the window enough to catch a
+                    // regression reliably at CI-sized iteration counts. Concurrent process()
+                    // calls on one chain are fine here: nothing is loaded into it, so
+                    // process() only reads.
+                    std::vector<std::thread> audio;
+                    for (int t = 0; t < stress::readerThreads(); ++t)
                     {
-                        float l[64] {};
-                        float r[64] {};
-                        while (!stop.load())
+                        audio.emplace_back([&, t]()
                         {
-                            registry.applyPendingSwaps();
-                            ChannelChainRegistry::ReadScope scope(registry);
-                            registry.setPosition(1.0);
-                            if (auto* chain = registry.chainFor("churn"))
+                            float l[64] {};
+                            float r[64] {};
+                            while (!stop.load())
                             {
-                                chain->process(64, l, r);
-                                processed.fetch_add(1);
+                                if (t == 0)
+                                    registry.applyPendingSwaps();
+                                ChannelChainRegistry::ReadScope scope(registry);
+                                if (t == 0)
+                                    registry.setPosition(1.0);
+                                if (auto* chain = registry.chainFor("churn"))
+                                {
+                                    chain->process(64, l, r);
+                                    processed.fetch_add(1);
+                                }
                             }
-                        }
-                    });
+                        });
+                    }
 
-                    for (int i = 0; i < 2000; ++i)
+                    for (int i = 0; i < stress::kWriterIterations; ++i)
                         registry.updateChannelSet(i % 2 == 0 ? std::vector<juce::String> { "keep", "churn" }
                                                              : std::vector<juce::String> { "keep" });
 
                     stop.store(true);
-                    audio.join();
+                    for (auto& t : audio)
+                        t.join();
                     expect(registry.chainFor("keep") != nullptr);
                     expect(registry.chainFor("churn") == nullptr);
                     logMessage("chains processed while churning: " + juce::String(processed.load()));
