@@ -16,6 +16,11 @@
 
 **Spec:** `docs/superpowers/specs/2026-10-01-discover-artist-mode-design.md` (commit `bf92720`). Its "Out of scope" list is the boundary: no web radio, no multi-artist blends, no keep or export of other artists' work.
 
+
+**Decisions after planning (Elling, 2026-10-01):**
+- **Jammed-with is saved to disk.** It's computed once by the background scan and stored in a small table in the own db (e.g. `DiscoverJammedWith(User PK, SharedJams, ComputedAt)`, with the archive change signal it was built from). It's reused instantly on launch and recomputed only when the archive's `Stems` change signal moves. This replaces the spec's "in memory per session" for this list only. Stem counts and analysed % stay as planned.
+- **Other artists' audio is stored on the USB drive** in LORE's folder, where `resolveStemPath` already writes for archive jams (`cache/common/stem_v2/<jam>/…`). This is the plan's existing behaviour, now confirmed.
+
 ---
 
 ## READ THIS BEFORE TASK 1
