@@ -157,7 +157,7 @@ Per CLAUDE.md's testing conventions, components are verified by typecheck, lint,
 - Create: `src/shared/discoverArtist.ts`
 - Test: `src/shared/discoverArtist.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/shared/discoverArtist.test.ts
@@ -297,12 +297,12 @@ describe('artist turnover (course change on switch)', () => {
 })
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `npx vitest run src/shared/discoverArtist.test.ts`
 Expected: FAIL with `Failed to resolve import "./discoverArtist"`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 ```ts
 // src/shared/discoverArtist.ts
@@ -434,22 +434,24 @@ export function nextTurnoverSlotId(
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `npx vitest run src/shared/discoverArtist.test.ts`
 Expected: PASS, all tests.
 
-- [ ] **Step 5: Gate**
+- [x] **Step 5: Gate**
 
 Run: `npm run typecheck && npm run lint && npm test`
 Expected: all green. Nothing imports the module yet.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/shared/discoverArtist.ts src/shared/discoverArtist.test.ts
 git commit -m "discover artist: shared rules (mode, listen-only list, copy, roll filter, turnover)"
 ```
+
+**As landed:** code and tests exactly as above, except prettier reflowed two lines of the test (the `listenOnlyTooltip` expectation wrapped; one test name switched to double quotes) so lint stays at the 4 pre-existing warnings. Step 2's failure read `Cannot find module './discoverArtist'` rather than `Failed to resolve import`. 17 tests; full suite 231 files / 3772 tests green.
 
 ---
 
