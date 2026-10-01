@@ -973,4 +973,26 @@ export async function downloadMissingStems(
   return resolveRiff(riffCID)
 }
 
+/** One stem's audio for the artist analysis queue -- the SAME downloadOneStem
+ * (local-first, StemUnavailable-aware, atomic rename) every riff download
+ * uses, without resolving or downloading the rest of its riff. Returns the
+ * local path, or null when it can't be fetched. */
+export async function downloadStemForAnalysis(
+  jamCID: string,
+  stemCID: string
+): Promise<string | null> {
+  const path = resolveStemPath(jamCID, stemCID)
+  if (existsSync(path)) return path
+  for (const db of candidateDbsForRiff()) {
+    const row = db
+      .prepare(`SELECT FileEndpoint, FileBucket, FileKey FROM Stems WHERE StemCID = ?`)
+      .get(stemCID) as
+      { FileEndpoint: string | null; FileBucket: string | null; FileKey: string | null } | undefined
+    if (!row?.FileEndpoint || !row.FileKey) continue
+    const url = stemDownloadUrl(row.FileEndpoint, row.FileBucket ?? '', row.FileKey)
+    return (await downloadOneStem(jamCID, stemCID, url)) ? path : null
+  }
+  return null
+}
+
 export { getRiffLibraryDb }

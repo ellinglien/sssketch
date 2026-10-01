@@ -2478,7 +2478,7 @@ What this means for a 30k-stem artist:
 - Create: `src/main/discoverArtistScanQueue.ts`, `src/main/discoverArtistScanQueue.test.ts`
 - Modify: `src/main/riffLibraryStore.ts` (export after `downloadMissingStems`, `:974`), `src/main/index.ts`, `src/preload/index.ts`, `vitest.config.ts`, `src/renderer/src/audio/DiscoverLibraryScan.tsx`, `src/renderer/src/components/DiscoverPanel.tsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // src/main/discoverArtistScanQueue.test.ts
@@ -2523,14 +2523,14 @@ describe('artist scan queue', () => {
 })
 ```
 
-- [ ] **Step 2: Add the CI exclusion (non-optional).** In `vitest.config.ts`, add `'src/main/discoverArtistScanQueue.test.ts',` after `'src/main/discoverArtistIndex.test.ts',`.
+- [x] **Step 2: Add the CI exclusion (non-optional).** In `vitest.config.ts`, add `'src/main/discoverArtistScanQueue.test.ts',` after `'src/main/discoverArtistIndex.test.ts',`.
 
-- [ ] **Step 3: Run it to verify it fails**
+- [x] **Step 3: Run it to verify it fails**
 
 Run: `npx vitest run src/main/discoverArtistScanQueue.test.ts`
 Expected: FAIL, module not found.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 ```ts
 // src/main/discoverArtistScanQueue.ts
@@ -2618,12 +2618,12 @@ export function artistScanQueueSize(ownDb: Database.Database): number {
 
 The test's `StemUnavailable` DDL matches `riffLibrarySchema.ts:233-237`.
 
-- [ ] **Step 5: Run it**
+- [x] **Step 5: Run it**
 
 Run: `npx vitest run src/main/discoverArtistScanQueue.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: The one-stem download, `src/main/riffLibraryStore.ts`** (after `downloadMissingStems`, `:974`)
+- [x] **Step 6: The one-stem download, `src/main/riffLibraryStore.ts`** (after `downloadMissingStems`, `:974`)
 
 ```ts
 /** One stem's audio for the artist analysis queue -- the SAME downloadOneStem
@@ -2650,7 +2650,7 @@ export async function downloadStemForAnalysis(
 }
 ```
 
-- [ ] **Step 7: IPC, `src/main/index.ts`** (after `discover-set-artist`)
+- [x] **Step 7: IPC, `src/main/index.ts`** (after `discover-set-artist`)
 
 Import `getArtistStemRows` from `./discoverArtistStems`, the queue functions, and `downloadStemForAnalysis`.
 
@@ -2696,7 +2696,7 @@ Preload:
 
 The `analyse overnight` button only reads audio for classification, so spec §2 allows it in listen-only mode. Do not guard it.
 
-- [ ] **Step 8: The scan serves the queue first, `src/renderer/src/audio/DiscoverLibraryScan.tsx`**
+- [x] **Step 8: The scan serves the queue first, `src/renderer/src/audio/DiscoverLibraryScan.tsx`**
 
 8a. Add the constant `const PRIORITY_IDLE_POLL_MS = 30_000`, and a state `const [priorityLeft, setPriorityLeft] = useState(0)`.
 
@@ -2751,7 +2751,7 @@ Rename the rest of today's `step` body (from `if (workIndex >= work.length) {` t
 
 8d. Include the queue in the background-work indicator. In the `backgroundWorkRegistry.report` effect, use `left: total - completed + priorityLeft`. Change its early-return condition to `total === null || stopped || (completed >= total && priorityLeft === 0)`, and add `priorityLeft` to the dependency array.
 
-- [ ] **Step 9: The button, `DiscoverPanel.tsx`**
+- [x] **Step 9: The button, `DiscoverPanel.tsx`**
 
 Pass `footerExtra` to `<DiscoverArtistPicker` (Task 5, 3f):
 
@@ -2791,7 +2791,7 @@ Pass `footerExtra` to `<DiscoverArtistPicker` (Task 5, 3f):
 
 Add the state `const [analysisQueued, setAnalysisQueued] = useState<string | null>(null)`, and reset it in `changeArtist` (`setAnalysisQueued(null)`). `discoverConsented` is already a prop (`:567`).
 
-- [ ] **Step 10: Gate and commit**
+- [x] **Step 10: Gate and commit**
 
 Run: `npm run typecheck && npm run lint && npm test`
 Expected: all green. With an empty queue, the scan behaves as today except that it polls the empty queue every 30 s after finishing: one indexed `SELECT ... LIMIT 3` on the own db.
@@ -2802,6 +2802,19 @@ git add src/main/discoverArtistScanQueue.ts src/main/discoverArtistScanQueue.tes
   src/renderer/src/audio/DiscoverLibraryScan.tsx src/renderer/src/components/DiscoverPanel.tsx
 git commit -m "discover artist: analyse overnight queues the artist's stems ahead of the library scan"
 ```
+
+**As landed:**
+- **Steps 1–6** are as written.
+- **Step 7, IPC:** the handlers type-check their arguments.
+  - The artist is trimmed; a blank one queues nothing (`{queued: 0, total: 0}`).
+  - `take-artist-scan-batch` clamps `limit` to an integer from 1 to 10 (default 3).
+  - `finish-artist-scan-batch` keeps only string ids.
+- **Step 8, the scan:**
+  - `runPriorityBatch` sits above `step`'s concurrency comment. It also backs off for `PRIORITY_IDLE_POLL_MS` after a failed batch, so a broken queue entry isn't retried and logged on every 500 ms step during the local walk.
+  - The indicator's `left` is `max(0, total - completed) + priorityLeft`.
+- **Step 9, the button:** a rejected queue call shows `couldn't queue` for 2.5 s and can then be pressed again.
+- **Gates:** typecheck clean, `npx eslint --no-cache .` 0 errors / 4 warnings, 235 files / 3,853 tests green, and `CI=1` skips `discoverArtistScanQueue.test.ts`.
+- **Not measured:** per-stem decode and analysis time, so the 4.5–7 h estimate above stands unverified. Nothing here was run in the app.
 
 ---
 

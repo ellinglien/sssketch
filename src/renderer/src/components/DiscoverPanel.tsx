@@ -3163,6 +3163,8 @@ export function DiscoverPanel({
   // Discover artist mode's field and its search popover.
   const [artistMenu, setArtistMenu] = useState<{ x: number; y: number } | null>(null)
   const artistButtonRef = useRef<HTMLButtonElement>(null)
+  // "analyse overnight"'s answer for the current artist ("queued 31,013").
+  const [analysisQueued, setAnalysisQueued] = useState<string | null>(null)
   /** The artist field's pick. Radio off: the next rolls just use it.
    * Radio on: a course change -- every row not by the new artist turns
    * over, one per loop top (spec §1), through skipRadio. */
@@ -3170,6 +3172,7 @@ export function DiscoverPanel({
     if (next === artistRef.current) return
     artistRef.current = next
     onArtistChange(next)
+    setAnalysisQueued(null)
     if (!radioOnRef.current) return
     artistTurnoverRef.current = artistTurnoverIds(
       slotsRef.current.map((s) => ({ id: s.id, creator: s.candidate?.creatorUserName ?? null })),
@@ -7100,6 +7103,44 @@ export function DiscoverPanel({
             onPick={(next) => changeArtist(normalizeArtistPick(next, currentUsername))}
             onClose={() => setArtistMenu(null)}
             ignoreRef={artistButtonRef}
+            footerExtra={
+              artist !== null ? (
+                <button
+                  disabled={!discoverConsented || analysisQueued !== null}
+                  data-tooltip={
+                    discoverConsented
+                      ? "queue this artist's stems for the overnight scan"
+                      : 'turn on library analysis first'
+                  }
+                  onClick={() => {
+                    window.rifffApi
+                      .discoverQueueArtistAnalysis(artist)
+                      .then((r) => {
+                        setAnalysisQueued(`queued ${r.queued.toLocaleString('en-US')}`)
+                      })
+                      .catch((err: unknown) => {
+                        console.error('DiscoverPanel: discoverQueueArtistAnalysis failed:', err)
+                        setAnalysisQueued('couldn’t queue')
+                        window.setTimeout(() => setAnalysisQueued(null), 2500)
+                      })
+                  }}
+                  style={{
+                    fontFamily: 'inherit',
+                    fontSize: 9,
+                    padding: '2px 6px',
+                    background: 'transparent',
+                    border: '1px solid var(--ra-border)',
+                    color:
+                      !discoverConsented || analysisQueued !== null
+                        ? 'var(--ra-text-4)'
+                        : 'var(--ra-text-2)',
+                    cursor: !discoverConsented || analysisQueued !== null ? 'default' : 'pointer'
+                  }}
+                >
+                  {analysisQueued ?? 'analyse overnight'}
+                </button>
+              ) : undefined
+            }
           />
         )}
         {/* Radio -- docs/superpowers/specs/2026-09-26-radio-mode-design.md.

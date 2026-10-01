@@ -60,6 +60,7 @@ export default defineConfig({
           'src/main/discoverLibraryStems.test.ts',
           'src/main/discoverArtistStems.test.ts',
           'src/main/discoverArtistIndex.test.ts',
+          'src/main/discoverArtistScanQueue.test.ts',
           'src/main/embeddingMatch.test.ts',
           'src/main/instrumentMaskCentroidBackfill.test.ts',
           'src/main/resolveStemArrangeRole.test.ts',

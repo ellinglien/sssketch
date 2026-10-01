@@ -381,6 +381,14 @@ const api = {
    * in /api/state's `keeps`. */
   reportRemoteKeep: (keepId: string, outcome: RemoteKeepOutcome): Promise<void> =>
     ipcRenderer.invoke('remote-keep-result', keepId, outcome),
+  discoverQueueArtistAnalysis: (artist: string): Promise<{ queued: number; total: number }> =>
+    ipcRenderer.invoke('discover-queue-artist-analysis', artist),
+  takeArtistScanBatch: (
+    limit: number
+  ): Promise<{ targets: { key: string; path: string | null }[]; remaining: number }> =>
+    ipcRenderer.invoke('take-artist-scan-batch', limit),
+  finishArtistScanBatch: (stemCIDs: string[]): Promise<void> =>
+    ipcRenderer.invoke('finish-artist-scan-batch', stemCIDs),
   discoverSetArtist: (
     artist: string | null,
     ownUsername: string,

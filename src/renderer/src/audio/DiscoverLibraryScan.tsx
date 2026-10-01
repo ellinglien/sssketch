@@ -14,6 +14,9 @@ import { analyzeStemOnce, fetchStemAnalysisNeeds } from './analyzeStemOnce'
 // mechanisms together.
 const BATCH_SIZE = 3
 const BATCH_DELAY_MS = 500
+/** Once the local walk is done, how often the scan looks at the artist
+ * analysis queue (Discover artist mode's "analyse overnight"). */
+const PRIORITY_IDLE_POLL_MS = 30_000
 // Targets per get-stem-analysis-needs call, fetched ahead of processing
 // (background-efficiency spec, A3) -- matches main's own SQL chunk size.
 const NEEDS_PAGE_SIZE = 500
@@ -78,6 +81,8 @@ export function DiscoverLibraryScan(): null {
   // Set when a needs page fails to load, which ends this session's pass --
   // so the indicator stops saying "analysing" for a loop that has stopped.
   const [stopped, setStopped] = useState(false)
+  // Stems still in the artist analysis queue (main's DiscoverArtistScanQueue).
+  const [priorityLeft, setPriorityLeft] = useState(0)
   const attemptedRef = useRef(new Set<string>())
 
   useEffect(() => {
@@ -127,6 +132,31 @@ export function DiscoverLibraryScan(): null {
           return true
         }
 
+        // After a failed priority batch, the queue rests this long rather
+        // than being retried (and logged) on every step.
+        let priorityPausedUntil = 0
+
+        /** One priority batch (artist "analyse overnight"). True when it did work. */
+        async function runPriorityBatch(): Promise<boolean> {
+          if (performance.now() < priorityPausedUntil) return false
+          const { targets: queued, remaining } =
+            await window.rifffApi.takeArtistScanBatch(BATCH_SIZE)
+          if (cancelled) return false
+          setPriorityLeft(remaining)
+          if (queued.length === 0) return false
+          const ready = queued.filter((t): t is { key: string; path: string } => t.path !== null)
+          const needs =
+            ready.length > 0 ? await fetchStemAnalysisNeeds(ready.map((t) => t.path)) : []
+          await Promise.allSettled(
+            ready.map((t, i) =>
+              needs[i] && needsAnyAnalysis(needs[i]) ? analyzeStemOnce(t.path, needs[i]) : undefined
+            )
+          )
+          // Finished either way -- a failed download or analysis must not loop.
+          await window.rifffApi.finishArtistScanBatch(queued.map((t) => t.key))
+          return true
+        }
+
         // Real regression, found live 2026-09-18 (direct report: "very
         // sluggish buttons... click similar and loader running for about
         // 3 minutes"): batches used to be fired without awaiting the
@@ -145,10 +175,31 @@ export function DiscoverLibraryScan(): null {
             window.setTimeout(step, BATCH_DELAY_MS)
             return
           }
+          // The artist analysis queue goes first, one batch per step.
+          void runPriorityBatch()
+            .then((didWork) => {
+              if (cancelled) return
+              if (didWork) {
+                window.setTimeout(step, BATCH_DELAY_MS)
+                return
+              }
+              stepLocal()
+            })
+            .catch((err: unknown) => {
+              console.error('DiscoverLibraryScan: priority batch failed:', err)
+              priorityPausedUntil = performance.now() + PRIORITY_IDLE_POLL_MS
+              if (!cancelled) stepLocal()
+            })
+        }
+
+        function stepLocal(): void {
+          if (cancelled) return
           if (workIndex >= work.length) {
             void loadNextPage()
               .then((more) => {
-                if (more && !cancelled) window.setTimeout(step, BATCH_DELAY_MS)
+                // The local walk done, keep idling for the artist queue.
+                if (!cancelled)
+                  window.setTimeout(step, more ? BATCH_DELAY_MS : PRIORITY_IDLE_POLL_MS)
               })
               .catch((err: unknown) => {
                 // Stops this session's pass (nothing is lost -- the next
@@ -203,16 +254,16 @@ export function DiscoverLibraryScan(): null {
   // was felt. Pausable: it yields to backgroundScanGate, whose hold is what
   // the indicator's pause control takes.
   useEffect(() => {
-    if (total === null || stopped || completed >= total) {
+    if (total === null || stopped || (completed >= total && priorityLeft === 0)) {
       backgroundWorkRegistry.report('stemAnalysis', null)
       return
     }
     backgroundWorkRegistry.report('stemAnalysis', {
       kind: 'stemAnalysis',
-      left: total - completed,
+      left: Math.max(0, total - completed) + priorityLeft,
       pausable: true
     })
-  }, [total, completed, stopped])
+  }, [total, completed, stopped, priorityLeft])
   useEffect(() => () => backgroundWorkRegistry.report('stemAnalysis', null), [])
 
   return null

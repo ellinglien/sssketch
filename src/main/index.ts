@@ -71,6 +71,7 @@ import {
   resolveRiff,
   resolveRiffWithContext,
   downloadMissingStems,
+  downloadStemForAnalysis,
   candidateDbsForRiff,
   listJamsWithDb,
   riffLibraryArchiveReachable
@@ -111,7 +112,13 @@ import {
 } from '@shared/remoteState'
 import type { PairingGate } from '@shared/remoteAuth'
 import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
-import { getArtistStemCIDs } from './discoverArtistStems'
+import { getArtistStemCIDs, getArtistStemRows } from './discoverArtistStems'
+import {
+  artistScanQueueSize,
+  peekArtistScanQueue,
+  queueArtistStems,
+  removeFromArtistScanQueue
+} from './discoverArtistScanQueue'
 import { KEEP_REFUSED } from '@shared/discoverArtist'
 import { abortArtistIndexWork, getArtistAnalysed, getArtistIndex } from './discoverArtistIndex'
 import {
@@ -1403,6 +1410,40 @@ app.whenReady().then(async () => {
     const result = parseRemoteKeepOutcome(outcome)
     if (id !== null && result !== null) remoteKeeps.finish(id, result)
   })
+
+  // Discover artist mode's "analyse overnight" (Task 8). Reading audio for
+  // classification is allowed in listen-only mode (spec §2): not guarded.
+  ipcMain.handle('discover-queue-artist-analysis', async (_event, artist: unknown) => {
+    const name = typeof artist === 'string' ? artist.trim() : ''
+    if (name === '') return { queued: 0, total: 0 }
+    const rows = await getArtistStemRows(discoverSourceDbs(), name)
+    const queued = queueArtistStems(openOwnRiffLibraryDb(), rows, name)
+    return { queued, total: rows.length }
+  })
+
+  // The scan's priority batch: the next `limit` queued stems, downloaded
+  // (in parallel -- limit is the scan's BATCH_SIZE, 3). path null = could
+  // not be fetched; the renderer still finishes it so it never loops.
+  ipcMain.handle('take-artist-scan-batch', async (_event, limit: unknown) => {
+    const n =
+      typeof limit === 'number' && Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 10) : 3
+    const ownDb = openOwnRiffLibraryDb()
+    const next = peekArtistScanQueue(ownDb, n)
+    const targets = await Promise.all(
+      next.map(async ({ stemCID, jamCID }) => ({
+        key: stemCID,
+        path: await downloadStemForAnalysis(jamCID, stemCID)
+      }))
+    )
+    return { targets, remaining: artistScanQueueSize(ownDb) }
+  })
+
+  ipcMain.handle('finish-artist-scan-batch', (_event, stemCIDs: unknown) =>
+    removeFromArtistScanQueue(
+      openOwnRiffLibraryDb(),
+      Array.isArray(stemCIDs) ? stemCIDs.filter((id): id is string => typeof id === 'string') : []
+    )
+  )
 
   ipcMain.handle(
     'discover-set-artist',
