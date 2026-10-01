@@ -1,5 +1,6 @@
 // native-engine/Source/GracePeriod.h
 #pragma once
+#include <juce_events/juce_events.h>
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -47,6 +48,19 @@ namespace sssketch
      * waits (and, while the reader stays stuck, times out) independently,
      * so each call is bounded by the deadline, never stuck forever.
      *
+     * Debug check (JUCE_DEBUG): waitForReaders() asserts the calling thread
+     * doesn't itself hold a ReadScope on this GracePeriod -- it would only
+     * ever time out waiting for itself. Writers are message-thread-only
+     * (both users assert that), so this only needs to know whether the
+     * MESSAGE thread holds a scope: each scope records whether it was
+     * opened there, a pthread_self() comparison. Deliberately not a
+     * thread_local depth: on macOS the first thread_local access on a
+     * thread lazily malloc()s that thread's TLV block, which would put an
+     * allocation on the audio thread in Debug builds (release builds
+     * define NDEBUG, so none of this is compiled in there). It is also
+     * per-GracePeriod, which is exactly the deadlock case -- a scope held
+     * on a DIFFERENT GracePeriod doesn't block this one's writer.
+     *
      * Two-phase, as in userspace RCU: flip the phase new readers enter on,
      * wait for the old phase's count to drain, then do the same for the
      * other phase. Flipping first means new readers pile onto the other
@@ -65,14 +79,36 @@ namespace sssketch
         class ReadScope
         {
         public:
-            explicit ReadScope(const GracePeriod& grace) noexcept : counter(grace.enter()) {}
-            ~ReadScope() { counter.fetch_sub(1); }
+            explicit ReadScope(const GracePeriod& g) noexcept
+                : counter(g.enter())
+#if JUCE_DEBUG
+                , grace(g), openedOnMessageThread(juce::MessageManager::existsAndIsCurrentThread())
+#endif
+            {
+#if JUCE_DEBUG
+                if (openedOnMessageThread)
+                    grace.messageThreadScopes.fetch_add(1);
+#endif
+            }
+
+            ~ReadScope()
+            {
+#if JUCE_DEBUG
+                if (openedOnMessageThread)
+                    grace.messageThreadScopes.fetch_sub(1);
+#endif
+                counter.fetch_sub(1);
+            }
 
             ReadScope(const ReadScope&) = delete;
             ReadScope& operator=(const ReadScope&) = delete;
 
         private:
             std::atomic<int>& counter;
+#if JUCE_DEBUG
+            const GracePeriod& grace;
+            const bool openedOnMessageThread;
+#endif
         };
 
         static constexpr std::chrono::milliseconds kDefaultTimeout { 2000 };
@@ -89,6 +125,11 @@ namespace sssketch
          * sleeps so a long wait doesn't burn a core. */
         [[nodiscard]] bool waitForReaders() noexcept
         {
+#if JUCE_DEBUG
+            // Waiting while this thread holds a scope on this same
+            // GracePeriod can only end in a timeout -- see the class doc.
+            jassert(!(juce::MessageManager::existsAndIsCurrentThread() && messageThreadScopes.load() != 0));
+#endif
             const auto deadline = std::chrono::steady_clock::now() + timeout;
             for (int pass = 0; pass < 2; ++pass)
             {
@@ -108,6 +149,12 @@ namespace sssketch
             return true;
         }
 
+#if JUCE_DEBUG
+        /** Debug builds only: how many ReadScopes on this GracePeriod the
+         * message thread currently holds. For tests. */
+        int messageThreadScopeCount() const noexcept { return messageThreadScopes.load(); }
+#endif
+
     private:
         static constexpr int kSpinsBeforeSleeping = 64;
 
@@ -123,5 +170,8 @@ namespace sssketch
         mutable std::atomic<unsigned> phase { 0 };
         mutable std::atomic<int> readers[2] {};
         const std::chrono::milliseconds timeout;
+#if JUCE_DEBUG
+        mutable std::atomic<int> messageThreadScopes { 0 };
+#endif
     };
 }

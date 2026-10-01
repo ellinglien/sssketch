@@ -80,6 +80,35 @@ namespace sssketch
                     expect(grace.waitForReaders());
                 }
 
+                beginTest("the unit tests run on the message thread (the writer-side asserts rely on it)");
+                {
+                    expect(juce::MessageManager::existsAndIsCurrentThread());
+                }
+
+#if JUCE_DEBUG
+                beginTest("debug: only scopes opened on the message thread are counted as the message thread's");
+                {
+                    GracePeriod grace(std::chrono::milliseconds(50));
+                    expectEquals(grace.messageThreadScopeCount(), 0);
+                    {
+                        GracePeriod::ReadScope outer(grace);
+                        GracePeriod::ReadScope inner(grace);
+                        expectEquals(grace.messageThreadScopeCount(), 2);
+
+                        int seenFromWorker = -1;
+                        std::thread worker([&]()
+                        {
+                            GracePeriod::ReadScope scope(grace);
+                            seenFromWorker = grace.messageThreadScopeCount();
+                        });
+                        worker.join();
+                        expectEquals(seenFromWorker, 2); // the worker's own scope isn't counted
+                    }
+                    expectEquals(grace.messageThreadScopeCount(), 0);
+                    expect(grace.waitForReaders()); // and with none held, no assert, no wait
+                }
+#endif
+
                 beginTest("scopes nest");
                 {
                     GracePeriod grace(std::chrono::milliseconds(50));

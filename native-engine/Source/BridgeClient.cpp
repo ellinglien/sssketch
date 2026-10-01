@@ -115,6 +115,8 @@ namespace sssketch
 
     void BridgeClient::replacePublished(const ChannelMap* next)
     {
+        // Message thread only: it blocks for the grace period.
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
         const std::lock_guard<std::mutex> writerLock(writerMutex);
         const auto* old = publishedChannels.exchange(next);
         // Nothing can load `old` any more, but the audio thread may still

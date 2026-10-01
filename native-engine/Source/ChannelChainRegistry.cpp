@@ -17,6 +17,9 @@ namespace sssketch
 
     void ChannelChainRegistry::updateChannelSet(const std::vector<juce::String>& channelIds)
     {
+        // Message thread only: it blocks for the grace period, which must
+        // never happen on the audio thread. See the class doc comment.
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
         const std::lock_guard<std::mutex> writerLock(writerMutex);
         const auto* current = published.load();
         auto* next = new ChannelChainMap();
