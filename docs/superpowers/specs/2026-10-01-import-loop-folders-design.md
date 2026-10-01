@@ -141,3 +141,17 @@ The look and layout are the existing IMPORT browser's. The new elements are the 
 - Discover and radio support: a later decision ("another ball of wax").
 - Beat or onset detection for tempo: not built. The length-based guess plus correction is the
   agreed approach.
+
+## Phase 2 (later, separate spec)
+
+Elling, while this was being planned: "in discover it might be cool to be able to switch on added
+loops". Not part of this work. The idea, for when it gets its own spec:
+
+- **A Discover switch**, such as `[ ] my loops` beside `prefer faves` and `my sounds`, off by
+  default.
+- **When it is on**, Discover may pick linked loops whose kind matches the slot, alongside stems.
+- **It needs loop classification first.** A loop has no kind until the background analysis (the
+  overnight classify scan and its caches) is extended to loop files.
+
+Phase 1 keeps the door open: every loop has a stable id (a hash of its normalized absolute path),
+and its duration, tempo and bar count are stored in `LoopFiles` columns that Discover can read.
