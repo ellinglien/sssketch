@@ -46,7 +46,7 @@ import {
   type ManualArrival
 } from '@shared/radioManualChanges'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
-import { rankCandidates, pickReroll } from '@shared/discoverRanking'
+import { DEFAULT_DISCOVER_CHAOS, rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { heartFetchLabel } from '@shared/radioHearts'
 import { manualChangesUndoneBy, UndoSnapshotSequence } from '@shared/discoverUndoWithdraw'
@@ -6919,7 +6919,7 @@ export function DiscoverPanel({
             "shouldn't it be one long one moving across all of them?"). An
             absolutely positioned grid with the rows' own template, gap and
             zero horizontal padding -- DISCOVER_ROW_GRID_COLUMNS and friends
-            -- so its column 6 IS every row's waveform column. The line's
+            -- so its column 5 IS every row's waveform column. The line's
             `left` is written by the layout effect beside sweepLineRef (a
             percentage of the window, discoverSweepPct), never by render.
             Only while a preview is loaded -- the same condition the
@@ -7140,12 +7140,13 @@ export function DiscoverPanel({
           >
             {/* Captioned "matching", so clockwise = MORE matching: the dial
                 shows 100 - chaos (chaos itself stays "0 = strictest" for
-                pickReroll). Direct request, 2026-09-22: default all the way
-                up (App.tsx's discoverChaos starts at 0). */}
+                pickReroll). Starts at, and double-click returns to, 100 -
+                DEFAULT_DISCOVER_CHAOS: about 25 (Elling, 2026-10-01; was
+                all the way up, 2026-09-22). */}
             <Dial
               value={100 - chaos}
               onChange={(matching) => setChaos(100 - matching)}
-              defaultValue={100}
+              defaultValue={100 - DEFAULT_DISCOVER_CHAOS}
               size={30}
               ariaLabel="matching"
               tooltip="more matching clockwise"
@@ -7454,9 +7455,9 @@ const DISCOVER_WAVEFORM_HEIGHT = 40
 // the long comment where the row applies it for why each track is what
 // it is.
 const DISCOVER_ROW_GRID_COLUMNS =
-  '18px 18px 18px 18px 18px 1fr 14px 110px 14px 18px 1px 18px 18px 18px 18px'
+  '18px 18px 18px 18px 1fr 14px 110px 14px 1px 18px 18px 18px 18px 18px 18px'
 const DISCOVER_ROW_COLUMN_GAP = 8
-const DISCOVER_WAVEFORM_COLUMN = 6
+const DISCOVER_WAVEFORM_COLUMN = 5
 const DISCOVER_WAVEFORM_MIN_WIDTH = 140
 
 function DiscoverSlotRow({
@@ -8056,13 +8057,14 @@ function DiscoverSlotRow({
           display: 'grid',
           // 15 tracks, explicit gridColumn on every child below (including
           // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
-          // 5 👍 like, 6 waveform (1fr), 7 spacer, 8 kind/category label +
-          // match meter, 9 spacer, 10 👎 change soon, 11 divider, 12 skip
-          // (SkipForward, the old "same kind"), 13 nearby jam, 14 any
-          // stem, 15 duplicate. (2026-10-01: the web radio's row buttons.
-          // 👍 took over the star's track 5 and the separate "hold longer"
-          // track 6 was REMOVED, renumbering every later gridColumn by one
-          // in one pass; the history below uses the old numbers.) Duplicate (direct request, 2026-09-20:
+          // 5 waveform (1fr), 6 spacer, 7 kind/category label + match
+          // meter, 8 spacer, 9 divider, 10 skip (SkipForward, the old
+          // "same kind"), 11 nearby jam, 12 any stem, 13 duplicate, 14 👍
+          // like, 15 👎 change soon. (2026-10-01, the web radio's row
+          // buttons: the star and "hold longer" tracks became one 👍, and
+          // 👍/👎 then moved together to the END of the row, after
+          // duplicate -- every gridColumn renumbered in one pass each time;
+          // the history below uses the numbers of its own day.) Duplicate (direct request, 2026-09-20:
           // "add duplicate channel to discover") was appended as a NEW
           // last track rather than inserted earlier and renumbering
           // everything after it -- this row's own explicit-position
@@ -8233,7 +8235,7 @@ function DiscoverSlotRow({
         {/* A single guard around a fragment is safe here (rather than one
             guard per button, as this used to be split) because each button
             below carries its own explicit gridColumn -- omitting all three
-            leaves columns 3/4/5 empty instead of shifting anything after
+            leaves columns 3/4 (and 👍's 14) empty instead of shifting anything after
             them. See hasStemToActOn's own doc comment above for why it's
             "has a candidate OR resolvedStem," not resolvedStem alone. */}
         {hasStemToActOn && (
@@ -8310,50 +8312,6 @@ function DiscoverSlotRow({
               }}
             >
               s
-            </button>
-            {/* 👍 (2026-10-01, the web radio's full-mode row buttons):
-                replaces both the star that sat here (direct request,
-                2026-09-16) and the separate "hold longer" hand. It TOGGLES
-                the star -- filled ThumbsUp and the star's own
-                `--ra-recording-live` treatment while the stem is starred --
-                and, when it stars, turns hold longer on if it is off
-                (likeRadioSlot). While this row holds, the button takes the
-                padlock-style inverted fill the hand used to, so the one
-                holding row is still visible. Only shown once there's a
-                real stem to like, same guard as mute/solo. */}
-            <button
-              onClick={onLike}
-              data-tooltip={
-                holding
-                  ? favourited
-                    ? 'unlike · holding'
-                    : 'like · holding'
-                  : favourited
-                    ? 'unlike'
-                    : 'like'
-              }
-              aria-label={favourited ? 'unlike' : 'like'}
-              aria-pressed={favourited}
-              aria-description={holding ? 'holding longer' : undefined}
-              style={{
-                gridColumn: 5,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 18,
-                height: 18,
-                padding: 0,
-                background: holding ? 'var(--ra-text)' : 'var(--ra-bg-row-active)',
-                border: `1px solid ${favourited ? 'var(--ra-recording-live)' : holding ? 'var(--ra-text)' : 'var(--ra-border)'}`,
-                color: favourited
-                  ? 'var(--ra-recording-live)'
-                  : holding
-                    ? 'var(--ra-bg-frame)'
-                    : 'var(--ra-text-2)',
-                cursor: 'pointer'
-              }}
-            >
-              <ThumbsUp size={12} weight={favourited ? 'fill' : 'regular'} />
             </button>
           </>
         )}
@@ -8584,12 +8542,12 @@ function DiscoverSlotRow({
             </div>
           )}
         </div>
-        <div style={{ gridColumn: 7 }} />
+        <div style={{ gridColumn: 6 }} />
         {/* Kind label + match meter stacked in the 110px label column --
             see the meter's own comment on meterEntries above. */}
         <div
           style={{
-            gridColumn: 8,
+            gridColumn: 7,
             width: 110,
             display: 'flex',
             flexDirection: 'column',
@@ -8720,30 +8678,14 @@ function DiscoverSlotRow({
             </div>
           )}
         </div>
-        <div style={{ gridColumn: 9 }} />
-        {/* 👎, CHANGE SOON -- radio's replace-soon (once "change next",
-            renamed with the web radio's row buttons, 2026-10-01), on this
-            side because it means "replace this", like the buttons after
-            it, just on radio's clock instead of now. Filled while set.
-            Hidden while radio is off, greyed on a padlocked row. */}
-        <RowIconButton
-          gridColumn={10}
-          tooltip="change soon"
-          onClick={onToggleReplaceSoon}
-          toggle
-          state={radioFlag === 'replace-soon' ? 'soft' : 'off'}
-          disabled={slot.locked}
-          hidden={!radioOn}
-        >
-          <ThumbsDown size={12} weight={radioFlag === 'replace-soon' ? 'fill' : 'regular'} />
-        </RowIconButton>
-        <div style={{ gridColumn: 11, width: 1, height: 18, background: 'var(--ra-border)' }} />
+        <div style={{ gridColumn: 8 }} />
+        <div style={{ gridColumn: 9, width: 1, height: 18, background: 'var(--ra-border)' }} />
         {/* The four rerolls, as icons (2026-09-29). The decorative dice that
             used to sit here and spin while a roll was in flight is gone:
             the button that STARTED the roll pulses instead, and the others
             dim, which says the same thing about the right button. */}
         <RowIconButton
-          gridColumn={12}
+          gridColumn={10}
           tooltip="skip"
           onClick={(e) => {
             setRerollAction('similar')
@@ -8757,7 +8699,7 @@ function DiscoverSlotRow({
         </RowIconButton>
         {nearbyAnchor !== null && (
           <RowIconButton
-            gridColumn={13}
+            gridColumn={11}
             tooltip="nearby jam"
             buttonRef={nearbyButtonRef}
             onClick={(e) => {
@@ -8777,7 +8719,7 @@ function DiscoverSlotRow({
           </RowIconButton>
         )}
         <RowIconButton
-          gridColumn={14}
+          gridColumn={12}
           tooltip="any stem"
           onClick={(e) => {
             setRerollAction('random')
@@ -8789,8 +8731,73 @@ function DiscoverSlotRow({
         >
           <Shuffle size={12} />
         </RowIconButton>
-        <RowIconButton gridColumn={15} tooltip="duplicate" onClick={(e) => onDuplicate(e.metaKey)}>
+        <RowIconButton gridColumn={13} tooltip="duplicate" onClick={(e) => onDuplicate(e.metaKey)}>
           <Copy size={12} />
+        </RowIconButton>
+        {/* 👍 (2026-10-01, the web radio's full-mode row buttons):
+            replaces both the star (direct request, 2026-09-16) and the
+            separate "hold longer" hand. With 👎, the last two tracks of
+            the row, side by side (Elling, 2026-10-01). It TOGGLES
+            the star -- filled ThumbsUp and the star's own
+            `--ra-recording-live` treatment while the stem is starred --
+            and, when it stars, turns hold longer on if it is off
+            (likeRadioSlot). While this row holds, the button takes the
+            padlock-style inverted fill the hand used to, so the one
+            holding row is still visible. Only shown once there's a
+            real stem to like, same guard as mute/solo -- its track stays
+            reserved either way, so nothing shifts. */}
+        {hasStemToActOn && (
+          <button
+            onClick={onLike}
+            data-tooltip={
+              holding
+                ? favourited
+                  ? 'unlike · holding'
+                  : 'like · holding'
+                : favourited
+                  ? 'unlike'
+                  : 'like'
+            }
+            aria-label={favourited ? 'unlike' : 'like'}
+            aria-pressed={favourited}
+            aria-description={holding ? 'holding longer' : undefined}
+            style={{
+              gridColumn: 14,
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 18,
+              height: 18,
+              padding: 0,
+              background: holding ? 'var(--ra-text)' : 'var(--ra-bg-row-active)',
+              border: `1px solid ${favourited ? 'var(--ra-recording-live)' : holding ? 'var(--ra-text)' : 'var(--ra-border)'}`,
+              color: favourited
+                ? 'var(--ra-recording-live)'
+                : holding
+                  ? 'var(--ra-bg-frame)'
+                  : 'var(--ra-text-2)',
+              cursor: 'pointer'
+            }}
+          >
+            <ThumbsUp size={12} weight={favourited ? 'fill' : 'regular'} />
+          </button>
+        )}
+        {/* 👎, CHANGE SOON -- radio's replace-soon (once "change next",
+            renamed with the web radio's row buttons, 2026-10-01): "replace
+            this", on radio's clock instead of now. The LAST track, beside
+            👍 (Elling, 2026-10-01). Filled while set. Hidden while radio is
+            off -- with `visibility`, so its track stays reserved and 👍
+            never moves -- and greyed on a padlocked row. */}
+        <RowIconButton
+          gridColumn={15}
+          tooltip="change soon"
+          onClick={onToggleReplaceSoon}
+          toggle
+          state={radioFlag === 'replace-soon' ? 'soft' : 'off'}
+          disabled={slot.locked}
+          hidden={!radioOn}
+        >
+          <ThumbsDown size={12} weight={radioFlag === 'replace-soon' ? 'fill' : 'regular'} />
         </RowIconButton>
       </div>
       {nearbyMenu && nearbyAnchor !== null && (

@@ -47,6 +47,7 @@ import { LockInConfirmDialog } from './components/LockInConfirmDialog'
 import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './components/LoopOrOneShotPrompt'
 import { importPathsWithChoice } from './audio/importPathsWithChoice'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
+import { DEFAULT_DISCOVER_CHAOS } from '@shared/discoverRanking'
 import { createRiser } from '@shared/riser'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
@@ -1507,9 +1508,10 @@ function Frame(): React.JSX.Element {
   const handleCoachSlotsChange = useCallback((next: CoachSlotSnapshot[]) => {
     setCoachSlots(next)
   }, [])
-  // 0 = strictest (the Discover "matching" dial all the way up) -- direct
-  // request, 2026-09-22.
-  const [discoverChaos, setDiscoverChaos] = useState(0)
+  // 0 = strictest (the Discover "matching" dial all the way up). Starts at
+  // DEFAULT_DISCOVER_CHAOS, matching about 25 (Elling, 2026-10-01; was 0,
+  // 2026-09-22).
+  const [discoverChaos, setDiscoverChaos] = useState(DEFAULT_DISCOVER_CHAOS)
   const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>([])
   const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
   const [discoverSeedBpm, setDiscoverSeedBpm] = useState<number | null>(null)

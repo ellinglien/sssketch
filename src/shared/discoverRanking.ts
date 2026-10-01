@@ -157,6 +157,12 @@ export function rankCandidates(
     .sort((a, b) => b.score - a.score)
 }
 
+/** Where Discover's chaos starts, and where a double-click on the
+ * "matching" dial (which shows 100 - chaos) puts it back. Elling,
+ * 2026-10-01: matching about 25%. Was 0 (matching all the way up, direct
+ * request 2026-09-22). A seeded riff still opens at its own 35 (App.tsx). */
+export const DEFAULT_DISCOVER_CHAOS = 75 // Elling: matching ≈ 25
+
 // chaos=0 -> exactly the top 1 candidate (deterministic, "safe"). chaos=100
 // -> up to the whole ranked list is eligible (loosest). Linear in between.
 function poolSizeForChaos(rankedLength: number, chaos: number): number {
