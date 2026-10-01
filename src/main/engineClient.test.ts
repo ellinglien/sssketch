@@ -84,8 +84,15 @@ function startEchoServer(): Promise<number> {
 // The shared startEchoServer() helper above only replies to "render-export" with a
 // single message, which isn't enough to exercise a repeated push subscription. This
 // helper is separate and local to the push-subscription tests below: on receiving a
-// "subscribe-me" message, it sends four position-update pushes with a short delay
-// between each, so tests can assert ordering and that unsubscribing stops delivery.
+// "subscribe-me" message, it sends three position-update pushes with a short delay
+// between each, so tests can assert ordering; on "push-again" it sends a fourth.
+//
+// The fourth push is on demand, NOT on a timer. It used to go out 150ms after
+// subscribe-me, on the theory that the test would unsubscribe in the 60-150ms gap.
+// Under a full parallel suite the event loop can stall longer than that gap, the
+// third and fourth pushes then arrive together, and both reach the listener before
+// waitFor's next 5ms poll -- received was [0.1, 0.2, 0.3, 0.4]. Sending it only once
+// the test has unsubscribed makes the order fixed rather than a race.
 function startPushServer(): Promise<number> {
   return new Promise((resolve) => {
     server = createServer((socket: Socket) => {
@@ -100,22 +107,22 @@ function startPushServer(): Promise<number> {
           const payload = buf.subarray(8, 8 + len).toString('utf8')
           buf = buf.subarray(8 + len)
           const parsed = JSON.parse(payload)
+          const push = (pos: number): void => {
+            socket.write(
+              encodeMessage(JSON.stringify({ type: 'position-update', payload: { pos } }))
+            )
+          }
           if (parsed.type === 'subscribe-me') {
-            // Three pushes close together, then a fourth after a much longer gap —
-            // tests unsubscribe in that gap and assert the fourth is never delivered.
-            const pushes: { pos: number; delayMs: number }[] = [
-              { pos: 0.1, delayMs: 20 },
-              { pos: 0.2, delayMs: 40 },
-              { pos: 0.3, delayMs: 60 },
-              { pos: 0.4, delayMs: 150 }
-            ]
-            for (const { pos, delayMs } of pushes) {
-              setTimeout(() => {
-                socket.write(
-                  encodeMessage(JSON.stringify({ type: 'position-update', payload: { pos } }))
-                )
-              }, delayMs)
+            // Three pushes close together, each its own write.
+            for (const [pos, delayMs] of [
+              [0.1, 20],
+              [0.2, 40],
+              [0.3, 60]
+            ]) {
+              setTimeout(() => push(pos), delayMs)
             }
+          } else if (parsed.type === 'push-again') {
+            push(0.4)
           }
         }
       })
@@ -261,28 +268,23 @@ describe('EngineClient', () => {
 
     client.send('subscribe-me')
 
-    // The server sends pushes at 20/40/60ms, then a fourth at 150ms. Poll for the
-    // first three to actually land rather than sleeping a fixed duration — under a
-    // full parallel suite, real socket I/O can lag well past any fixed guess at
-    // "surely long enough," which is exactly what made this test intermittently
-    // fail (the assertion running before the third push had arrived).
+    // The server sends pushes at 20/40/60ms. Poll for all three to actually land
+    // rather than sleeping a fixed duration — under a full parallel suite, real
+    // socket I/O can lag well past any fixed guess at "surely long enough".
     await waitFor(() => received.length >= 3)
-    // Unsubscribe immediately, synchronously, with nothing else awaited in
-    // between the condition above resolving and this call — Node's run-to-
-    // completion semantics guarantee no other socket data (e.g. the fourth push)
-    // is processed in that gap, so this can't race the fourth push's delivery.
     unsubscribe()
     expect(received).toEqual([{ pos: 0.1 }, { pos: 0.2 }, { pos: 0.3 }])
 
-    // The fourth push was scheduled 150ms after the server received
-    // 'subscribe-me'; wait comfortably past that, then confirm the listener was
-    // never called again. This one genuinely has no positive condition to poll
-    // for (it's an absence check) — but unlike the wait above, its timing can't
-    // cause a false failure: unsubscribe() already removed the callback, so no
-    // matter how delayed the fourth push's delivery is, it cannot add to
-    // `received` after this point.
-    await new Promise((resolve) => setTimeout(resolve, 300))
+    // Only now ask for a fourth push (see startPushServer for why it is on demand).
+    // A second listener, still subscribed, says when it has been delivered, so the
+    // absence check below waits on the push itself rather than a fixed sleep.
+    const after: unknown[] = []
+    const unsubscribeAfter = client.on('position-update', (payload) => after.push(payload))
+    client.send('push-again')
+    await waitFor(() => after.length >= 1)
+    expect(after).toEqual([{ pos: 0.4 }])
     expect(received.length).toBe(3)
+    unsubscribeAfter()
 
     client.disconnect()
   })
