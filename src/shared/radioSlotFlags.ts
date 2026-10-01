@@ -172,6 +172,32 @@ export function toggleRadioHook(flags: RadioSlotFlags, id: string): RadioSlotFla
   return out
 }
 
+/** The row's 👍 (2026-10-01, from the web radio's full-mode rows): one
+ * press that says "i like this stem" twice -- a star, and radio's hold.
+ *
+ * Elling: "👍 replaces the star ... and toggles it." So the STAR toggles,
+ * and the HOLD only ever turns on:
+ *   - unstarred: star it, and hook the slot if it is not hooked already
+ *     (toggleRadioHook, so the one-hold rule still holds and a replace-soon
+ *     on this slot becomes the hook). Never turns a hook off.
+ *   - starred: un-star it; the flags are untouched.
+ *
+ * `canHold` is false while radio is off ("👍 only stars or un-stars") and
+ * on a padlocked row, where a hook is inert and would only steal the one
+ * hold from a row radio can still turn over -- the same reason the old
+ * "hold longer" button was disabled there.
+ *
+ * Returns the SAME flags object when the hold does not change. */
+export function likeRadioSlot(
+  flags: RadioSlotFlags,
+  id: string,
+  opts: { starred: boolean; canHold: boolean }
+): { flags: RadioSlotFlags; starred: boolean } {
+  if (opts.starred) return { flags, starred: false }
+  if (!opts.canHold || flags[id] === 'hook') return { flags, starred: true }
+  return { flags: toggleRadioHook(flags, id), starred: true }
+}
+
 /** The row's "change next" control: mark this slot to be replaced soon,
  * or unmark it.
  *

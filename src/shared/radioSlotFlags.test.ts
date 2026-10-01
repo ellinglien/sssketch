@@ -4,6 +4,7 @@ import {
   NO_RADIO_SLOT_FLAGS,
   REPLACE_SOON_FACTOR,
   forgetRadioSlotFlagOnChange,
+  likeRadioSlot,
   pruneRadioSlotFlags,
   radioHookSlotId,
   radioSlotFlagOf,
@@ -158,5 +159,49 @@ describe('toggleRadioReplaceSoon', () => {
   it('turning it off leaves every other row exactly as it was', () => {
     const flags: RadioSlotFlags = { a: 'replace-soon', b: 'hook', c: 'replace-soon' }
     expect(toggleRadioReplaceSoon(flags, 'a')).toEqual({ b: 'hook', c: 'replace-soon' })
+  })
+})
+
+describe('likeRadioSlot', () => {
+  it('stars an unstarred stem and turns hold longer on', () => {
+    const out = likeRadioSlot(NO_RADIO_SLOT_FLAGS, 'a', { starred: false, canHold: true })
+    expect(out.starred).toBe(true)
+    expect(radioSlotFlagOf(out.flags, 'a')).toBe('hook')
+  })
+
+  it('leaves an existing hold on (never toggles it off)', () => {
+    const held = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'a')
+    const out = likeRadioSlot(held, 'a', { starred: false, canHold: true })
+    expect(out.starred).toBe(true)
+    expect(out.flags).toBe(held)
+  })
+
+  it('takes the one hold from another row', () => {
+    const held = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'b')
+    const out = likeRadioSlot(held, 'a', { starred: false, canHold: true })
+    expect(radioHookSlotId(out.flags)).toBe('a')
+    expect(radioSlotFlagOf(out.flags, 'b')).toBeNull()
+  })
+
+  it('turns change next into hold on the liked row', () => {
+    const tired = toggleRadioReplaceSoon(NO_RADIO_SLOT_FLAGS, 'a')
+    const out = likeRadioSlot(tired, 'a', { starred: false, canHold: true })
+    expect(radioSlotFlagOf(out.flags, 'a')).toBe('hook')
+  })
+
+  it('un-stars a starred stem and leaves the flags alone', () => {
+    const held = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'a')
+    const out = likeRadioSlot(held, 'a', { starred: true, canHold: true })
+    expect(out.starred).toBe(false)
+    expect(out.flags).toBe(held)
+    const none = likeRadioSlot(NO_RADIO_SLOT_FLAGS, 'a', { starred: true, canHold: true })
+    expect(none.flags).toBe(NO_RADIO_SLOT_FLAGS)
+  })
+
+  it('only stars when it cannot hold (radio off or padlocked)', () => {
+    const held = toggleRadioHook(NO_RADIO_SLOT_FLAGS, 'b')
+    const out = likeRadioSlot(held, 'a', { starred: false, canHold: false })
+    expect(out.starred).toBe(true)
+    expect(out.flags).toBe(held)
   })
 })

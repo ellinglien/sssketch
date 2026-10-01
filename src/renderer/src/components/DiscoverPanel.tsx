@@ -1,6 +1,6 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { CirclesThree, Compass, Copy, HandPalm, Shuffle, SignOut } from '@phosphor-icons/react'
+import { Compass, Copy, Shuffle, ThumbsDown, ThumbsUp, Trash } from '@phosphor-icons/react'
 import { RepeatedWaveform } from './RepeatedWaveform'
 import { LoopLines } from './LoopLines'
 import { LoadingLoader } from './LoadingLoader'
@@ -72,9 +72,9 @@ import {
 import {
   NO_RADIO_SLOT_FLAGS,
   forgetRadioSlotFlagOnChange,
+  likeRadioSlot,
   pruneRadioSlotFlags,
   radioSlotFlagOf,
-  toggleRadioHook,
   toggleRadioReplaceSoon,
   type RadioSlotFlag,
   type RadioSlotFlags
@@ -4632,11 +4632,22 @@ export function DiscoverPanel({
     })
   }
 
-  /** The row's two radio controls. Undo deliberately does not cover them,
-   * the same way it does not cover the padlock or mute: they are a
-   * statement about what radio should do next, not an edit to the loop. */
-  function toggleSlotHook(id: string): void {
-    setRadioSlotFlags((prev) => toggleRadioHook(prev, id))
+  /** The row's 👍 and 👎 (2026-10-01, the web radio's full-mode row
+   * buttons). Undo deliberately does not cover them, the same way it does
+   * not cover the padlock or mute: they are a statement about what radio
+   * should do next (and, for 👍, a favourite), not an edit to the loop.
+   *
+   * 👍 toggles the star (toggleStemFavourite) and, only when it STARS,
+   * turns hold longer on if it is off -- likeRadioSlot decides both. A
+   * second 👍 un-stars and leaves the hold as it is. Radio off or a
+   * padlocked row: star only. */
+  function likeSlot(id: string): void {
+    const slot = slots.find((s) => s.id === id)
+    if (!slot || slot.candidate === null) return
+    const stemCID = slot.candidate.stemCID
+    const opts = { starred: stemFavourites.has(stemCID), canHold: radioOn && !slot.locked }
+    setRadioSlotFlags((prev) => likeRadioSlot(prev, id, opts).flags)
+    toggleStemFavourite(stemCID)
   }
   function toggleSlotReplaceSoon(id: string): void {
     setRadioSlotFlags((prev) => toggleRadioReplaceSoon(prev, id))
@@ -6883,7 +6894,7 @@ export function DiscoverPanel({
               onToggleLock={() => toggleLock(slot.id)}
               radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
               radioOn={radioOn}
-              onToggleHook={() => toggleSlotHook(slot.id)}
+              onLike={() => likeSlot(slot.id)}
               onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
               onRemove={() => removeSlot(slot.id)}
               onDuplicate={(immediate) => duplicateSlot(slot.id, immediate)}
@@ -6891,9 +6902,6 @@ export function DiscoverPanel({
               onRerollRandom={(immediate) => void rerollRandomSlot(slot.id, immediate)}
               onTogglePreview={() => toggleSlotPreview(slot.id)}
               onToggleSolo={() => toggleSlotSolo(slot.id)}
-              onToggleFavourite={() => {
-                if (slot.candidate) toggleStemFavourite(slot.candidate.stemCID)
-              }}
               onResolvedChange={(stem) => reportSlotResolution(slot.id, stem)}
               onSlotResolutionAbandoned={() => abandonSlotResolution(slot.id)}
               onGainChange={(gain) => updateSlotGain(slot.id, gain)}
@@ -6911,7 +6919,7 @@ export function DiscoverPanel({
             "shouldn't it be one long one moving across all of them?"). An
             absolutely positioned grid with the rows' own template, gap and
             zero horizontal padding -- DISCOVER_ROW_GRID_COLUMNS and friends
-            -- so its column 7 IS every row's waveform column. The line's
+            -- so its column 6 IS every row's waveform column. The line's
             `left` is written by the layout effect beside sweepLineRef (a
             percentage of the window, discoverSweepPct), never by render.
             Only while a preview is loaded -- the same condition the
@@ -7288,29 +7296,6 @@ function RedoIcon(): React.JSX.Element {
   )
 }
 
-// Hand-drawn five-point star, styled after Phosphor's own Star icon -- same
-// "no icon package" convention as every other glyph in this file. Direct
-// request, 2026-09-16: star a stem to favourite it. Filled when favourited
-// (currentColor fill), outline-only otherwise -- same filled-means-active
-// convention every other on/off glyph in this app already uses (e.g.
-// CollapsedRifffRow.tsx's own mute dot doc comment).
-function StarIcon({ favourited }: { favourited: boolean }): React.JSX.Element {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill={favourited ? 'currentColor' : 'none'}
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinejoin="round"
-      style={{ flexShrink: 0 }}
-    >
-      <path d="M8 1.5 L9.53 5.9 L14.18 5.99 L10.47 8.8 L11.82 13.26 L8 10.6 L4.18 13.26 L5.53 8.8 L1.82 5.99 L6.47 5.9 Z" />
-    </svg>
-  )
-}
-
 /** One 18px square on a Discover row. Every new control on the row
  * (2026-09-29, docs/superpowers/specs/2026-09-29-discover-row-icons-and-
  * source-dial-design.md) is one of these, so the states cannot drift
@@ -7469,9 +7454,9 @@ const DISCOVER_WAVEFORM_HEIGHT = 40
 // the long comment where the row applies it for why each track is what
 // it is.
 const DISCOVER_ROW_GRID_COLUMNS =
-  '18px 18px 18px 18px 18px 18px 1fr 14px 110px 14px 18px 1px 18px 18px 18px 18px'
+  '18px 18px 18px 18px 18px 1fr 14px 110px 14px 18px 1px 18px 18px 18px 18px'
 const DISCOVER_ROW_COLUMN_GAP = 8
-const DISCOVER_WAVEFORM_COLUMN = 7
+const DISCOVER_WAVEFORM_COLUMN = 6
 const DISCOVER_WAVEFORM_MIN_WIDTH = 140
 
 function DiscoverSlotRow({
@@ -7486,7 +7471,7 @@ function DiscoverSlotRow({
   onToggleLock,
   radioFlag,
   radioOn,
-  onToggleHook,
+  onLike,
   onToggleReplaceSoon,
   onRemove,
   onDuplicate,
@@ -7494,7 +7479,6 @@ function DiscoverSlotRow({
   onRerollRandom,
   onTogglePreview,
   onToggleSolo,
-  onToggleFavourite,
   onResolvedChange,
   onSlotResolutionAbandoned,
   onGainChange,
@@ -7562,15 +7546,15 @@ function DiscoverSlotRow({
    * the panel carries `hook`; any number can carry `replace-soon`. See
    * src/shared/radioSlotFlags.ts. */
   radioFlag: RadioSlotFlag | null
-  /** Whether radio is running. The two radio controls (hold longer, change
-   * next) only mean anything while it is, so they are hidden -- but still
-   * RENDERED -- when it is not. */
+  /** Whether radio is running. 👎 only means anything while it is, so it
+   * is hidden -- but still RENDERED -- when it is not; 👍's hold half is
+   * skipped, and its holding look not drawn. */
   radioOn: boolean
-  /** The "hold longer" control -- toggles `hook` on this row
-   * (toggleRadioHook). */
-  onToggleHook: () => void
-  /** The "change next" control -- toggles `replace-soon` on this row
-   * (toggleRadioReplaceSoon). */
+  /** The 👍 -- toggles this stem's star and, when starring, turns hold
+   * longer on (DiscoverPanel's likeSlot -> likeRadioSlot). */
+  onLike: () => void
+  /** The 👎 ("change soon", once "change next") -- toggles `replace-soon`
+   * on this row (toggleRadioReplaceSoon). */
   onToggleReplaceSoon: () => void
   onRemove: () => void
   /** DiscoverPanel's own duplicateSlot(id) -- clones this slot's current
@@ -7612,11 +7596,6 @@ function DiscoverSlotRow({
    * Only shown once there's a real stem to solo (matching the mute
    * button's own guard, just below). */
   onToggleSolo: () => void
-  /** Toggles this slot's own resolved candidate's favourite status
-   * (DiscoverPanel's own toggleStemFavourite -> the shared, persisted
-   * stemFavourites set). Only shown once there's a real stem to favourite,
-   * same guard as mute/solo. */
-  onToggleFavourite: () => void
   /** Reports this row's own effective resolved stem (or null) up to
    * DiscoverPanel every time it changes -- resolved on arrival, invalidated
    * on reroll, cleared on unmount/removal -- so the parent's
@@ -8067,18 +8046,23 @@ function DiscoverSlotRow({
   // resolvedStem exists, this is identical to `!previewing`, same as
   // before.
   const showsAsMuted = resolvedStem !== null ? !previewing : resolveFailed
+  // The one row radio holds longer, drawn on its 👍 (see that button).
+  const holding = radioOn && radioFlag === 'hook'
 
   return (
     <>
       <div
         style={{
           display: 'grid',
-          // 16 tracks, explicit gridColumn on every child below (including
+          // 15 tracks, explicit gridColumn on every child below (including
           // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
-          // 5 favourite, 6 hold longer, 7 waveform (1fr), 8 spacer, 9
-          // kind/category label + match meter, 10 spacer, 11 change next,
-          // 12 divider, 13 same kind, 14 nearby jam, 15 any stem, 16
-          // duplicate. Duplicate (direct request, 2026-09-20:
+          // 5 👍 like, 6 waveform (1fr), 7 spacer, 8 kind/category label +
+          // match meter, 9 spacer, 10 👎 change soon, 11 divider, 12 trash
+          // (replace now, the old "same kind"), 13 nearby jam, 14 any
+          // stem, 15 duplicate. (2026-10-01: the web radio's row buttons.
+          // 👍 took over the star's track 5 and the separate "hold longer"
+          // track 6 was REMOVED, renumbering every later gridColumn by one
+          // in one pass; the history below uses the old numbers.) Duplicate (direct request, 2026-09-20:
           // "add duplicate channel to discover") was appended as a NEW
           // last track rather than inserted earlier and renumbering
           // everything after it -- this row's own explicit-position
@@ -8327,17 +8311,30 @@ function DiscoverSlotRow({
             >
               s
             </button>
-            {/* Direct request, 2026-09-16: star a stem to favourite it,
-                then optionally bias future rolls toward favourites (the
-                global "prefer faves" toggle). Reuses
-                `--ra-recording-live` for the filled/active state -- the
-                same token RiffCircle.tsx already uses for its own
-                "favourited" semantic, just applied to a literal star glyph
-                here instead of a circle fill. */}
+            {/* 👍 (2026-10-01, the web radio's full-mode row buttons):
+                replaces both the star that sat here (direct request,
+                2026-09-16) and the separate "hold longer" hand. It TOGGLES
+                the star -- filled ThumbsUp and the star's own
+                `--ra-recording-live` treatment while the stem is starred --
+                and, when it stars, turns hold longer on if it is off
+                (likeRadioSlot). While this row holds, the button takes the
+                padlock-style inverted fill the hand used to, so the one
+                holding row is still visible. Only shown once there's a
+                real stem to like, same guard as mute/solo. */}
             <button
-              onClick={onToggleFavourite}
-              data-tooltip={favourited ? 'unfavourite' : 'favourite'}
-              aria-label={favourited ? 'unfavourite' : 'favourite'}
+              onClick={onLike}
+              data-tooltip={
+                holding
+                  ? favourited
+                    ? 'unlike · holding'
+                    : 'like · holding'
+                  : favourited
+                    ? 'unlike'
+                    : 'like'
+              }
+              aria-label={favourited ? 'unlike' : 'like'}
+              aria-pressed={favourited}
+              aria-description={holding ? 'holding longer' : undefined}
               style={{
                 gridColumn: 5,
                 display: 'flex',
@@ -8346,36 +8343,20 @@ function DiscoverSlotRow({
                 width: 18,
                 height: 18,
                 padding: 0,
-                background: 'var(--ra-bg-row-active)',
-                border: `1px solid ${favourited ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
-                color: favourited ? 'var(--ra-recording-live)' : 'var(--ra-text-2)',
+                background: holding ? 'var(--ra-text)' : 'var(--ra-bg-row-active)',
+                border: `1px solid ${favourited ? 'var(--ra-recording-live)' : holding ? 'var(--ra-text)' : 'var(--ra-border)'}`,
+                color: favourited
+                  ? 'var(--ra-recording-live)'
+                  : holding
+                    ? 'var(--ra-bg-frame)'
+                    : 'var(--ra-text-2)',
                 cursor: 'pointer'
               }}
             >
-              <StarIcon favourited={favourited} />
+              <ThumbsUp size={12} weight={favourited ? 'fill' : 'regular'} />
             </button>
           </>
         )}
-        {/* HOLD LONGER -- radio's hook, next to the padlock because both say
-            "keep this". The difference is one line: the padlock is never,
-            the hook is rarely (about 2.5x as long, see HOOK_HOLD_FACTOR).
-            A padlocked row greys it out, since radio already skips locked
-            rows; the stored flag is kept, so unlocking restores it.
-            RENDERED ALWAYS, hidden with `visibility` while radio is off --
-            a conditionally-rendered child in this grid is the bug the
-            gridTemplateColumns comment above describes. Split from the old
-            three-state cycle button on 2026-09-29; see the spec. */}
-        <RowIconButton
-          gridColumn={6}
-          tooltip="hold longer"
-          onClick={onToggleHook}
-          toggle
-          state={radioFlag === 'hook' ? 'on' : 'off'}
-          disabled={slot.locked}
-          hidden={!radioOn}
-        >
-          <HandPalm size={12} />
-        </RowIconButton>
         {/* Direct report, 2026-09-17: "tooltip over the waveforms on
           discover prevents user from dragging the volume, so remove it" --
           this wrapper used to carry a data-tooltip whose own text included
@@ -8603,12 +8584,12 @@ function DiscoverSlotRow({
             </div>
           )}
         </div>
-        <div style={{ gridColumn: 8 }} />
+        <div style={{ gridColumn: 7 }} />
         {/* Kind label + match meter stacked in the 110px label column --
             see the meter's own comment on meterEntries above. */}
         <div
           style={{
-            gridColumn: 9,
+            gridColumn: 8,
             width: 110,
             display: 'flex',
             flexDirection: 'column',
@@ -8739,30 +8720,31 @@ function DiscoverSlotRow({
             </div>
           )}
         </div>
-        <div style={{ gridColumn: 10 }} />
-        {/* CHANGE NEXT -- radio's replace-soon, on this side because it
-            means "replace this", like the four buttons after it, just on
-            radio's clock instead of now. Same visibility and padlock rules
-            as hold longer. */}
+        <div style={{ gridColumn: 9 }} />
+        {/* 👎, CHANGE SOON -- radio's replace-soon (once "change next",
+            renamed with the web radio's row buttons, 2026-10-01), on this
+            side because it means "replace this", like the buttons after
+            it, just on radio's clock instead of now. Filled while set.
+            Hidden while radio is off, greyed on a padlocked row. */}
         <RowIconButton
-          gridColumn={11}
-          tooltip="change next"
+          gridColumn={10}
+          tooltip="change soon"
           onClick={onToggleReplaceSoon}
           toggle
           state={radioFlag === 'replace-soon' ? 'soft' : 'off'}
           disabled={slot.locked}
           hidden={!radioOn}
         >
-          <SignOut size={12} />
+          <ThumbsDown size={12} weight={radioFlag === 'replace-soon' ? 'fill' : 'regular'} />
         </RowIconButton>
-        <div style={{ gridColumn: 12, width: 1, height: 18, background: 'var(--ra-border)' }} />
+        <div style={{ gridColumn: 11, width: 1, height: 18, background: 'var(--ra-border)' }} />
         {/* The four rerolls, as icons (2026-09-29). The decorative dice that
             used to sit here and spin while a roll was in flight is gone:
             the button that STARTED the roll pulses instead, and the others
             dim, which says the same thing about the right button. */}
         <RowIconButton
-          gridColumn={13}
-          tooltip="same kind"
+          gridColumn={12}
+          tooltip="replace now"
           onClick={(e) => {
             setRerollAction('similar')
             onReroll(e.metaKey)
@@ -8771,11 +8753,11 @@ function DiscoverSlotRow({
           dimmed={manualWaiting}
           pulsing={rerolling && rerollAction === 'similar'}
         >
-          <CirclesThree size={12} />
+          <Trash size={12} />
         </RowIconButton>
         {nearbyAnchor !== null && (
           <RowIconButton
-            gridColumn={14}
+            gridColumn={13}
             tooltip="nearby jam"
             buttonRef={nearbyButtonRef}
             onClick={(e) => {
@@ -8795,7 +8777,7 @@ function DiscoverSlotRow({
           </RowIconButton>
         )}
         <RowIconButton
-          gridColumn={15}
+          gridColumn={14}
           tooltip="any stem"
           onClick={(e) => {
             setRerollAction('random')
@@ -8807,7 +8789,7 @@ function DiscoverSlotRow({
         >
           <Shuffle size={12} />
         </RowIconButton>
-        <RowIconButton gridColumn={16} tooltip="duplicate" onClick={(e) => onDuplicate(e.metaKey)}>
+        <RowIconButton gridColumn={15} tooltip="duplicate" onClick={(e) => onDuplicate(e.metaKey)}>
           <Copy size={12} />
         </RowIconButton>
       </div>
