@@ -62,7 +62,8 @@ namespace sssketch
         // mid-session": PluginChain checks isHealthy()/channelFor()
         // together and renders silence for any slot this leaves without a
         // channel.
-        replacePublished(new ChannelMap());
+        const std::lock_guard<std::mutex> writerLock(writerMutex);
+        replacePublishedLocked(new ChannelMap());
     }
 
     bool BridgeClient::ensureRunning()
@@ -106,18 +107,23 @@ namespace sssketch
 
     void BridgeClient::publishChannels(std::function<void(ChannelMap&)> mutator)
     {
+        // Held across the whole load/copy/mutate/exchange, not just the
+        // exchange: two writers that each copied the same map would
+        // otherwise each publish their own change on top of it, and
+        // whichever exchanged second would silently drop the other's.
+        const std::lock_guard<std::mutex> writerLock(writerMutex);
         // A plain copy: reads the live map and bumps refcounts, never
         // writes to it -- see the header.
         auto* next = new ChannelMap(*publishedChannels.load());
         mutator(*next);
-        replacePublished(next);
+        replacePublishedLocked(next);
     }
 
-    void BridgeClient::replacePublished(const ChannelMap* next)
+    void BridgeClient::replacePublishedLocked(const ChannelMap* next)
     {
-        // Message thread only: it blocks for the grace period.
+        // Message thread only: it blocks for the grace period. The caller
+        // holds writerMutex.
         jassert(juce::MessageManager::existsAndIsCurrentThread());
-        const std::lock_guard<std::mutex> writerLock(writerMutex);
         const auto* old = publishedChannels.exchange(next);
         // Nothing can load `old` any more, but the audio thread may still
         // be inside channelFor on it, or using a channel it got from it

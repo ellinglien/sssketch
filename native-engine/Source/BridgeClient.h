@@ -102,20 +102,22 @@ namespace sssketch
         friend class BridgeClientTests;
 
         void sendJson(const juce::var& payload);
-        /** Message-thread API. Copies the published map, applies
+        /** Message-thread API (asserted), serialized by writerMutex across
+         * the whole copy/mutate/publish. Copies the published map, applies
          * `mutator` to the COPY, publishes it, waits out the grace period,
-         * and only then deletes the old map, inline on the message thread. The
-         * live map is never written to -- it used to be: entries were
+         * and only then deletes the old map, inline on the message thread.
+         * The live map is never written to -- it used to be: entries were
          * moved out of it, so a concurrent channelFor could find a loaded
          * slot already emptied, and the old map was freed with no grace
          * period at all. Both reproduced by BridgeClientTests. */
         void publishChannels(std::function<void(std::unordered_map<juce::String, std::shared_ptr<SharedAudioChannel>>&)> mutator);
 
-        /** Publishes `next`, waits for every reader that could still hold
-         * the old map to leave its ReadScope (at most one bridged slot's
-         * process(), whose bridge wait is capped at 5ms), then deletes the
-         * old map inline. The one place a map is ever retired. */
-        void replacePublished(const std::unordered_map<juce::String, std::shared_ptr<SharedAudioChannel>>* next);
+        /** Caller must hold writerMutex. Publishes `next`, waits for every
+         * reader that could still hold the old map to leave its ReadScope
+         * (at most one bridged slot's process(), whose bridge wait is
+         * capped at 5ms), then deletes the old map inline. The one place a
+         * map is ever retired. */
+        void replacePublishedLocked(const std::unordered_map<juce::String, std::shared_ptr<SharedAudioChannel>>* next);
 
         /** Fires every 500ms (see the constructor) to fail out any pending
          * load that's been waiting too long -- see timerCallback()'s own
@@ -134,9 +136,11 @@ namespace sssketch
         using ChannelMap = std::unordered_map<juce::String, std::shared_ptr<SharedAudioChannel>>;
         std::atomic<const ChannelMap*> publishedChannels;
         GracePeriod grace;
-        // Serializes writers so two grace periods never interleave. All
-        // writers are message-thread code today; the audio thread never
-        // touches this.
+        // Serializes writers: held across publishChannels' whole
+        // load/copy/mutate/exchange (so concurrent writers can't lose each
+        // other's changes) and connectionLost's exchange, and so two grace
+        // periods never interleave. All writers are message-thread code
+        // today (asserted); the audio thread never touches this.
         std::mutex writerMutex;
         // Retired maps whose grace period timed out -- see GracePeriod.h.
         // Freed after the next grace period that completes. Writer-only.
