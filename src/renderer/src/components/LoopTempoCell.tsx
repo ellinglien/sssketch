@@ -18,8 +18,11 @@ export function LoopTempoCell({
 
   async function commit(): Promise<void> {
     const parsed = parseTempoInput(draft)
+    // An unusable entry keeps the box open with the text in it, so it reads
+    // as not taken rather than silently dropped.
+    if (parsed === 'invalid') return
     setEditing(false)
-    if (parsed !== 'invalid') await onSetTempo(parsed)
+    await onSetTempo(parsed)
   }
 
   if (!editing) {
@@ -66,6 +69,7 @@ export function LoopTempoCell({
         width: 44,
         height: 20,
         fontSize: 11,
+        fontFamily: 'inherit',
         textAlign: 'right',
         background: 'var(--ra-bg-row-active)',
         color: 'var(--ra-text)',
