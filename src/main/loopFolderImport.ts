@@ -11,6 +11,10 @@ import { loopFolderName, tempoForLoop } from './loopFolderScan'
 /** Runs `fn` with a decoder, and tears the decoder down afterwards. */
 export type RunWithDecoder = <T>(fn: (decode: DecodeToWav) => Promise<T>) => Promise<T>
 
+/** A long MP3 on a slow USB drive can take a while; the engine finishes a
+ * decode however long it takes, so the client must outwait it. */
+const DECODE_TIMEOUT_MS = 180_000
+
 /** One engine process for the whole batch, the same spawn-connect-act-
  * teardown shape as bakeOffset.ts's bakeNativeJobs. bake-stem with
  * rotationSec 0 is a plain decode to 16-bit WAV
@@ -22,12 +26,19 @@ export const withEngineDecoder: RunWithDecoder = async (fn) => {
   const client = new EngineClient()
   try {
     await client.connect(handle.port)
+    // Replies are matched by type, not by request. After a timeout or a
+    // throw the engine may still answer the abandoned request, and that
+    // late reply would be read as the next loop's. So the session is done:
+    // the rest of the batch is skipped rather than risk a mismatch.
+    let poisoned = false
     return await fn(async (sourcePath, outputPath) => {
+      if (poisoned) return null
       try {
         const result = (await client.sendAndAwaitType(
           'bake-stem',
           { path: sourcePath, rotationSec: 0, outputPath },
-          'bake-stem-result'
+          'bake-stem-result',
+          DECODE_TIMEOUT_MS
         )) as { success: boolean; durationSec?: number; error?: string }
         if (!result.success || result.durationSec === undefined) {
           console.error(`loopFolderImport: decode failed for "${sourcePath}": ${result.error}`)
@@ -35,6 +46,7 @@ export const withEngineDecoder: RunWithDecoder = async (fn) => {
         }
         return result.durationSec
       } catch (err) {
+        poisoned = true
         console.error(`loopFolderImport: decode failed for "${sourcePath}":`, err)
         return null
       }
@@ -119,7 +131,10 @@ export async function importLinkedLoops(
       continue
     }
     const { bars } = loopEntryFromRow(row)
-    if (bars === null) continue // no readable header, so importLoop would refuse it too
+    if (bars === null) {
+      toDecode.push(row) // our reader can't parse the header; the engine may still
+      continue
+    }
     const rifff = importLoop(row.Path, bars)
     if (rifff) results.set(row.LoopId, renamed(rifff, row.Name))
   }

@@ -47,6 +47,7 @@ beforeEach(async () => {
   writeWav(join(root, 'Amen Breaks Volume 1', 'WAV', 'cw_amen01_175.wav'), secs(2, 175))
   writeJunk(join(root, 'Pads', 'Pad 120.flac'))
   writeJunk(join(root, 'Pads', 'Pad 2 120.ogg'))
+  writeJunk(join(root, 'Pads', 'Odd Header 120.wav'))
   linkLoopFolder(db, root)
   await rescanLoopFolder(db, root, 120)
   imported = []
@@ -151,5 +152,14 @@ describe('importLinkedLoops', () => {
   it('imports nothing for a loop whose decode fails', async () => {
     const rifffs = await importLinkedLoops(db, [idOf('Pad 120')], 120, fakeDecoder(null).run)
     expect(rifffs).toEqual([])
+  })
+
+  it('sends a wav whose header cannot be read through the engine decoder', async () => {
+    const decoder = fakeDecoder(8)
+    const rifffs = await importLinkedLoops(db, [idOf('Odd Header 120')], 120, decoder.run)
+    imported.push(...rifffs)
+    expect(decoder.sessions()).toBe(1)
+    expect(rifffs.map((r) => r.name)).toEqual(['Odd Header 120'])
+    expect(rifffs[0].barLength).toBe(4)
   })
 })
