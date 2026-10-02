@@ -490,11 +490,10 @@ namespace sssketch
                 expect(wetPeak > 1.0e-3 && worst < 1.0e-6, "wet peak " + juce::String(wetPeak) + ", error " + juce::String(worst));
             }
 
-            // Random block sizes here are never bigger than the first block: a clip's toolkit
-            // filter (ChannelFilter::prepare) re-prepares, wiping its state, whenever a block is
-            // bigger than any before it -- today's behaviour for any send, zita's included, and
-            // not this room's to change. A send curve is avoided for the same kind of reason: the
-            // toolkit evaluates automation once per block.
+            // Random block sizes start small and grow: a clip's toolkit filter keeps its state
+            // when a block is bigger than any before it (ChannelFilter::prepare, since the
+            // 2026-10-02 cleanup). A send curve is avoided: the toolkit evaluates automation once
+            // per block.
             beginTest("in the engine: the cavern is block-size invariant, and live (Transport) equals the export, to the bit");
             {
                 auto project = sendProject({ burst, click }, 0.7, ReverbRoom::cavern);
@@ -515,7 +514,7 @@ namespace sssketch
                 std::uniform_int_distribution<int> size(1, 3000);
                 bool firstBlock = true;
                 const auto random = renderEngine(project, kTotal, [&] {
-                    return std::exchange(firstBlock, false) ? 3000 : size(rng);
+                    return std::exchange(firstBlock, false) ? 1 : size(rng);
                 });
                 expect(sameBits(random.l, reference.l) && sameBits(random.r, reference.r), "random blocks differ");
 
@@ -533,7 +532,7 @@ namespace sssketch
                 std::uniform_int_distribution<int> device(1, 1100);
                 for (int at = 0; at < kTotal;)
                 {
-                    const int n = juce::jmin(at == 0 ? 1100 : device(rng), kTotal - at);
+                    const int n = juce::jmin(at == 0 ? 1 : device(rng), kTotal - at);
                     float* channels[2] = { live.l.data() + at, live.r.data() + at };
                     transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, n, {});
                     at += n;
@@ -596,7 +595,7 @@ namespace sssketch
                 std::mt19937 rng(13);
                 std::uniform_int_distribution<int> size(1, 4000);
                 bool first = true;
-                const auto random = render([&] { return std::exchange(first, false) ? 4000 : size(rng); }, 4000);
+                const auto random = render([&] { return std::exchange(first, false) ? 1 : size(rng); }, 4000);
                 expect(sameBits(random.l, reference.l) && sameBits(random.r, reference.r), "random blocks differ");
                 expect(std::abs(reference.l[(size_t) s2 + 1323 + 500]) > 1.0e-5f, "the room sounds again after S2");
             }

@@ -187,6 +187,48 @@ namespace sssketch
                 expect(biggest < 0.05f, "biggest per-sample jump was " + juce::String(biggest));
             }
 
+            beginTest("a block bigger than any before does not reset the filter: prepare() every block "
+                      "(as a clip's toolkit calls it) gives the same samples as one prepare up front");
+            {
+                // Growing device blocks mid-play (a buffer-size change, the transport's split
+                // blocks). A wiped state or a re-seeded smoother would show as a step.
+                const int sizes[] = { 64, 128, 100, 256, 512, 300, 1024, 2048, 4096 };
+                ChannelFilter once, everyBlock;
+                once.prepare(kTestRate, 4096);
+                everyBlock.prepare(kTestRate, sizes[0]);
+                once.resetTo(FilterMode::lowpass, 0.3f, 0.6f);
+                everyBlock.resetTo(FilterMode::lowpass, 0.3f, 0.6f);
+                juce::Random rng(17);
+                std::vector<float> l1, r1, l2, r2;
+                int b = 0;
+                for (const int n : sizes)
+                {
+                    std::vector<float> l((size_t) n), r((size_t) n);
+                    for (int i = 0; i < n; ++i)
+                    {
+                        l[(size_t) i] = rng.nextFloat() * 2.0f - 1.0f;
+                        r[(size_t) i] = rng.nextFloat() * 2.0f - 1.0f;
+                    }
+                    auto l2b = l, r2b = r;
+                    // a sweep in progress across the growth: the smoother is mid-ramp
+                    const float target = (b++ % 2 == 0) ? 0.7f : 0.2f;
+                    once.setTargets(FilterMode::lowpass, target, 0.6f);
+                    once.process(n, l.data(), r.data());
+                    everyBlock.prepare(kTestRate, n);
+                    everyBlock.setTargets(FilterMode::lowpass, target, 0.6f);
+                    everyBlock.process(n, l2b.data(), r2b.data());
+                    l1.insert(l1.end(), l.begin(), l.end());
+                    r1.insert(r1.end(), r.begin(), r.end());
+                    l2.insert(l2.end(), l2b.begin(), l2b.end());
+                    r2.insert(r2.end(), r2b.begin(), r2b.end());
+                }
+                size_t first = 0;
+                while (first < l1.size() && l1[first] == l2[first] && r1[first] == r2[first])
+                    ++first;
+                expect(first == l1.size(), "differs from sample " + juce::String((int) first));
+                expectEquals(everyBlock.currentCutoff01(), once.currentCutoff01());
+            }
+
             beginTest("neutrality: only an untouched, unautomated filter is skippable");
             {
                 expect(channelFilterIsNeutral(FilterMode::lowpass, 1.0, false, false));

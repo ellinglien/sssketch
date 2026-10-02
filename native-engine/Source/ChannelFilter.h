@@ -75,8 +75,10 @@ namespace sssketch
     class ChannelFilter
     {
     public:
-        /** Safe to call every block; only does real work when the sample rate
-         * or block size actually changed. */
+        /** Safe to call every block; only does real work (which wipes the
+         * filter's state) when the sample rate changed. The block size is
+         * not part of it: the filter runs per sample, so any block size
+         * works with any prepare. */
         void prepare(double sampleRate, int maxBlockSize);
 
         /** Drops filter state and jumps both smoothers straight to the given
@@ -109,6 +111,5 @@ namespace sssketch
         ParamSmoother cutoffSmoother, resonanceSmoother;
         FilterMode currentMode = FilterMode::lowpass;
         double preparedSampleRate = 0.0;
-        int preparedBlockSize = 0;
     };
 }

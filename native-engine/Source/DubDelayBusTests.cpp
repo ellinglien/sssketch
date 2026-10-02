@@ -699,10 +699,10 @@ namespace sssketch
                                              { pad, throwCurve(0.13, 0.29), -0.25, 0.2 } },
                                            dotted, ReverbRoom::cavern, 3.0);
                 const auto a = render(project, total, { 512 });
-                const auto b = render(project, total, { 4096, 1, 64, 300, 7, 129 });
-                // the largest block first: a clip's toolkit filter resets when a block outgrows every
-                // block before it (ChannelFilter::prepare, pre-existing, Task 5's note)
-                std::vector<int> sizes { 2000 };
+                // blocks that outgrow every block before them: a clip's toolkit filter keeps its
+                // state (ChannelFilter::prepare, 2026-10-02 cleanup)
+                const auto b = render(project, total, { 1, 64, 300, 4096, 7, 129 });
+                std::vector<int> sizes { 1 };
                 std::mt19937 sizesRng(3);
                 std::uniform_int_distribution<int> size(1, 2000);
                 for (int i = 0; i < 400; ++i) sizes.push_back(size(sizesRng));

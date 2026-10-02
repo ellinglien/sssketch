@@ -668,13 +668,12 @@ namespace sssketch
                     { { kick, Role::key }, { pad, Role::pumped, "", false, 0.5 }, { bass, Role::none, "c1" } }, 4.0);
                 project.sound.room = ReverbRoom::cavern;
                 const auto a = render(project, total, { 512 });
-                // Each split starts on its largest block: a toolkit clip's filter (the pad's send
-                // runs one) resets when a block is bigger than any before it -- pre-existing
-                // (ChannelFilter::prepare; Task 5's notes), not the pump's.
-                const auto b = render(project, total, { 4096, 1, 64, 300, 7, 129 });
+                // Blocks that grow past every block before them: a toolkit clip's filter (the
+                // pad's send runs one) keeps its state (ChannelFilter::prepare, 2026-10-02 cleanup).
+                const auto b = render(project, total, { 1, 64, 300, 4096, 7, 129 });
                 std::mt19937 rng(17);
                 std::uniform_int_distribution<int> size(1, 1500);
-                std::vector<int> sizes { 1500 };
+                std::vector<int> sizes { 1 };
                 for (int i = 0; i < 80; ++i) sizes.push_back(size(rng));
                 const auto c = render(project, total, sizes);
                 expect(sameBits(a.first, b.first) && sameBits(a.second, b.second));

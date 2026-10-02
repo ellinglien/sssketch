@@ -51,7 +51,14 @@ namespace sssketch
     {
         if (sampleRate <= 0.0 || maxBlockSize <= 0)
             return;
-        if (sampleRate == preparedSampleRate && maxBlockSize <= preparedBlockSize)
+        // Only a RATE change is real work. The block size never was: the TPT filter runs
+        // per sample (processSample) and its prepare() ignores maximumBlockSize; it only sizes
+        // its two per-channel state vectors (2 channels, so after the first prepare that is no
+        // allocation) and then WIPES them. Re-preparing whenever a block came in bigger than
+        // any before (a buffer-size change, a transport block split differently) dropped a
+        // running clip's filter state and re-seeded its smoothers mid-ramp -- a click, and a
+        // live render that no longer matched a fixed-block one.
+        if (sampleRate == preparedSampleRate)
             return;
 
         juce::dsp::ProcessSpec spec {};
@@ -60,7 +67,6 @@ namespace sssketch
         spec.numChannels = 2;
         filter.prepare(spec);
         preparedSampleRate = sampleRate;
-        preparedBlockSize = std::max(preparedBlockSize, maxBlockSize);
 
         // prepare() wipes the filter's state, so the smoothers have to be
         // re-seeded against the new rate too -- their coefficient is derived
