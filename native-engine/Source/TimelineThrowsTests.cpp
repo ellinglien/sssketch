@@ -107,28 +107,27 @@ namespace sssketch
 
         void runTest() override
         {
-            // A noisy phrase over 0.02..0.3 s of each 1-bar tile and again over 0.5..0.7 s (so the
-            // throw at bar 4.5 has something to send), and a quieter sine pad over 0.02..0.98 s.
+            // A noisy phrase over 0..0.3 s of each 1-bar tile and again over 0.5..0.7 s (so the
+            // throw at bar 4.5 has something to send), and a quieter sine pad (a quarter period
+            // in, so it is loud at both ends of the tile) over the whole tile.
             //
-            // Both are SILENT for 20 ms at each end of a tile, on purpose: Transport advances its
-            // position by adding each block's length in bars, RenderExport recomputes it from the
-            // sample count, and the two differ in the last bits. Where a tile seam or a clip edge
-            // falls exactly on a live block's first sample, live can read that one sample from the
-            // neighbouring tile (or its micro-fade at a rounding-different time) -- found here, and
-            // pre-existing: it has nothing to do with throws (the throw-less project does the same)
-            // and is reported with Task 12. Silent edges keep this test about the throw.
+            // Both are LOUD at each tile's first and last sample, on purpose: where a tile seam or
+            // a clip edge falls on a live block's first sample, live must read the same sample as
+            // the export. It once did not (Task 12): Transport summed block lengths in bars where
+            // RenderExport converts its sample count, and the last bits differed. Transport now
+            // keeps an integer sample clock (see Transport.h's anchorBars), and this fixture pins it.
             std::mt19937 rng(23);
             std::uniform_real_distribution<float> noise(-0.3f, 0.3f);
-            constexpr int edge = (int) (0.02 * kRate);
             std::vector<float> phrase((size_t) kBarSamples, 0.0f);
-            for (int i = edge; i < (int) (0.3 * kRate); ++i)
+            for (int i = 0; i < (int) (0.3 * kRate); ++i)
                 phrase[(size_t) i] = noise(rng);
             for (int i = (int) (0.5 * kRate); i < (int) (0.7 * kRate); ++i)
                 phrase[(size_t) i] = noise(rng);
+            phrase[0] = 0.3f;
+            phrase[(size_t) kBarSamples - 1] = -0.3f;
             const auto lead = writeFloatWav("sssketch_tl_throw_lead.wav", kBarSamples, kRate, [&](int i) { return phrase[(size_t) i]; });
             const auto pad = writeFloatWav("sssketch_tl_throw_pad.wav", kBarSamples, kRate, [](int i) {
-                if (i < edge || i >= kBarSamples - edge) return 0.0f;
-                return 0.1f * (float) std::sin(2.0 * juce::MathConstants<double>::pi * 220.0 * i / kRate);
+                return 0.1f * (float) std::cos(2.0 * juce::MathConstants<double>::pi * 220.0 * i / kRate);
             });
 
             beginTest("the wire: a dubSend in clip-relative bars on a toolkit at the lane's origin, and one echo");

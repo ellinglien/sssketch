@@ -422,6 +422,13 @@ namespace sssketch
         if (stagedApplyRetryDue)
             applyStagedProjectAtWrap(pos);
 
+        // The sample clock (see anchorBars in Transport.h). `pos` is what this function returned
+        // last time unless something set it since (play, a seek landing, a stop), or the tempo
+        // or the device rate changed under it: then the clock restarts from `pos`.
+        if (! anchorValid || pos != lastReturnedPositionBars || secPerBar != anchorSecPerBar
+            || deviceSampleRate != anchorSampleRate)
+            reanchor(pos, 0);
+
         // A recording loop, when active, is a second independent instance
         // of this exact same wrap mechanism (see
         // docs/superpowers/specs/2026-08-03-loop-recording-design.md's
@@ -447,7 +454,7 @@ namespace sssketch
         if (loopBars <= 0.0)
         {
             engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
-            return pos + blockDurationBars;
+            return advanceClock(numSamples);
         }
 
         // pos is normally kept within [loopStart, loopEnd) by this
@@ -476,11 +483,12 @@ namespace sssketch
         if (pos < loopStart)
         {
             engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
-            return pos + blockDurationBars;
+            return advanceClock(numSamples);
         }
         if (pos >= loopEnd)
         {
             pos = loopStart;
+            reanchor(loopStart, 0);
             // A snap back to the top is a lap boundary too, as far as a
             // scheduled swap is concerned: the same "the loop starts over
             // here" moment, arrived at from a bounds change rather than
@@ -547,7 +555,7 @@ namespace sssketch
                 // argument changes for a boundary that is not the top.
                 applyStagedProjectAtWrap(stagedBar, true);
                 if (splitIndex < numSamples)
-                    engine.renderBlock(pos + (double) splitIndex * barsPerSample, deviceSampleRate,
+                    engine.renderBlock(barsAtSample(splitIndex), deviceSampleRate,
                                        numSamples - splitIndex, outL + splitIndex,
                                        outR + splitIndex, channelChains);
             }
@@ -586,6 +594,8 @@ namespace sssketch
             // project, which is also right: the outgoing tail should be
             // pulled toward whatever actually follows it.
             applyStagedProjectAtWrap(loopStart);
+            // The clock restarts at the top, on the sample the lap turns over at.
+            reanchor(loopStart, -(int64_t) splitIndex);
             if (splitIndex < numSamples)
                 engine.renderBlock(loopStart, deviceSampleRate, numSamples - splitIndex,
                                     outL + splitIndex, outR + splitIndex, channelChains);
@@ -616,7 +626,23 @@ namespace sssketch
             }
         }
 
-        return loopStart + std::fmod(pos - loopStart + blockDurationBars, loopBars);
+        return advanceClock(numSamples);
+    }
+
+    void Transport::reanchor(double atBars, int64_t samplesIntoBlock)
+    {
+        anchorBars = atBars;
+        anchorSamples = samplesIntoBlock;
+        anchorSecPerBar = secPerBar;
+        anchorSampleRate = deviceSampleRate;
+        anchorValid = true;
+    }
+
+    double Transport::advanceClock(int numSamples)
+    {
+        anchorSamples += numSamples;
+        lastReturnedPositionBars = barsAtSample(0);
+        return lastReturnedPositionBars;
     }
 
     void Transport::audioDeviceIOCallbackWithContext(

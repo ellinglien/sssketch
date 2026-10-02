@@ -1334,6 +1334,83 @@ namespace sssketch
                     file.deleteFile();
                 }
 
+                beginTest("the sample clock: every lap of a looping project is the export's lap to the bit, "
+                          "at random device blocks (the position is counted in samples from the loop top, never summed in bars)");
+                {
+                    // Two half-bar tiles of a cosine (loud at each tile's first and last sample), so
+                    // a seam read one sample off shows.
+                    const int half = (int) kRate; // half a bar at 120 bpm
+                    auto cosFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                       .getChildFile("sssketch_transport_clock_cos.wav");
+                    cosFile.deleteFile();
+                    {
+                        juce::WavAudioFormat wavFormat;
+                        std::unique_ptr<juce::FileOutputStream> out(cosFile.createOutputStream());
+                        std::unique_ptr<juce::AudioFormatWriter> writer(
+                            wavFormat.createWriterFor(out.get(), kRate, 1, 32, {}, 0));
+                        out.release();
+                        juce::AudioBuffer<float> source(1, half);
+                        for (int i = 0; i < half; ++i)
+                            source.setSample(0, i, 0.5f * (float) std::cos(2.0 * 3.14159265358979323846 * 330.0 * i / kRate));
+                        writer->writeFromAudioSampleBuffer(source, 0, half);
+                    }
+                    EngineProject project;
+                    project.bpm = kBpm;
+                    project.snapDiv = 16.0;
+                    EngineRifff rifff;
+                    rifff.groupId = "cos";
+                    rifff.channelId = "c1";
+                    rifff.startBar = 0.0;
+                    rifff.barLength = 1;
+                    EngineStem stem;
+                    stem.stemKey = "cos:1";
+                    stem.resolvedPath = cosFile.getFullPathName();
+                    stem.durationSec = 1.0;
+                    stem.barLength = 0.5;
+                    rifff.stems.push_back(stem);
+                    project.rifffs.push_back(rifff);
+
+                    const auto exported = renderExport(project);
+                    for (const unsigned seed : { 5u, 6u, 7u })
+                    {
+                        StemBufferCache cache;
+                        PlaybackEngine engine(cache);
+                        engine.setProject(project);
+                        PluginChain masterChain(kNumMasterChainSlots);
+                        ChannelChainRegistry channelChains;
+                        Transport transport(engine, masterChain, channelChains);
+                        transport.setBpm(kBpm);
+                        transport.setLoopLengthBars(kBars);
+                        transport.play(0.0);
+                        std::mt19937 rng(seed);
+                        std::uniform_int_distribution<int> size(1, 1100);
+                        const int laps = 3;
+                        std::vector<float> l((size_t) (laps * kTotal)), r((size_t) (laps * kTotal));
+                        for (int at = 0; at < laps * kTotal;)
+                        {
+                            const int n = juce::jmin(size(rng), laps * kTotal - at);
+                            float* channels[2] = { l.data() + at, r.data() + at };
+                            transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, n, {});
+                            at += n;
+                        }
+                        engine.drainRetiredProject();
+                        // The loop seam's own declick pulls each lap's last 3 ms toward the next
+                        // lap's first sample (the export, one pass, has none): compare up to it.
+                        const int seam = (int) std::ceil(0.003 * kRate) + 1;
+                        for (int lap = 0; lap < laps; ++lap)
+                        {
+                            int firstDiff = -1;
+                            for (int i = 0; i < kTotal - seam && firstDiff < 0; ++i)
+                                if (l[(size_t) (lap * kTotal + i)] != exported.first[(size_t) i]
+                                    || r[(size_t) (lap * kTotal + i)] != exported.second[(size_t) i])
+                                    firstDiff = i;
+                            expect(firstDiff < 0, "seed " + juce::String(seed) + ", lap " + juce::String(lap)
+                                                      + " differs from the export from sample " + juce::String(firstDiff));
+                        }
+                    }
+                    cosFile.deleteFile();
+                }
+
                 beginTest("a seek that arrives while the previous seek is holding or fading in fades out from the "
                           "gain it has reached -- no jump (a scrub drag sends one every ~16 ms)");
                 {

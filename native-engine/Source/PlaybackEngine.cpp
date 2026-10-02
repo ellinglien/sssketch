@@ -1018,8 +1018,9 @@ namespace sssketch
                 const double firstTileStartSec = (start + offsetBars + lowerBound) * spb;
 
                 // One tile of slack behind the naive floor absorbs floating-
-                // point drift at a tile boundary (positionBars accumulates by
-                // repeated addition in Transport.cpp) — worst case the extra
+                // point rounding at a tile boundary (positionBars is a bar
+                // position converted from a sample count, and a seek can land
+                // anywhere) — worst case the extra
                 // tile checked here is immediately skipped by the per-tile
                 // overlap test below, at negligible cost. Floored at
                 // firstTileIdx now, not a hardcoded 0 -- firstTileIdx can be

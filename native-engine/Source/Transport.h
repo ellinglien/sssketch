@@ -344,6 +344,13 @@ namespace sssketch
          * that report; see lastStagedApplyWasAtRequestedBar. */
         void applyStagedProjectAtWrap(double atBars, bool atRequestedBar = false);
 
+        /** AUDIO THREAD. Restarts the sample clock (anchorBars): block sample
+         * `-samplesIntoBlock` of the current block is at `atBars`. */
+        void reanchor(double atBars, int64_t samplesIntoBlock);
+        /** AUDIO THREAD. Moves the sample clock past this block and returns the position
+         * of the next block's first sample, which renderLoopAware returns. */
+        double advanceClock(int numSamples);
+
 
         PlaybackEngine& engine;
         PluginChain& masterChain;
@@ -387,6 +394,29 @@ namespace sssketch
         bool stagedApplyRetryDue = false;
         bool repositionFadingIn = false;
         double repositionElapsedSec = 0.0;
+
+        // The playback clock, audio-thread-only: the position is anchorBars plus an INTEGER
+        // count of samples since the anchor, converted the way RenderExport converts its own
+        // sample count ((n / rate) / secPerBar), never a running sum of block lengths in bars.
+        // A sum drifts in the last bits, and at a tile seam or clip edge that falls on a block's
+        // first sample live could then read the neighbouring sample where the export does not.
+        // From an anchor at bar 0 (a play from the top, a loop top at bar 0) every block starts
+        // at exactly the position the export computes for the same sample.
+        //
+        // Re-anchored (anchorSamples = 0) wherever the position is set rather than advanced: a
+        // play() or seek landing (positionBars no longer holds what renderLoopAware last
+        // returned), a loop wrap or snap (anchored at loopStart, on the sample the lap turns
+        // over), and a tempo or device-rate change (the conversion itself changes).
+        double anchorBars = 0.0;
+        int64_t anchorSamples = 0;
+        double anchorSecPerBar = 0.0;
+        double anchorSampleRate = 0.0;
+        double lastReturnedPositionBars = -1.0; // what renderLoopAware last returned
+        bool anchorValid = false;
+        double barsAtSample(int64_t samplesIntoBlock) const
+        {
+            return anchorBars + ((double) (anchorSamples + samplesIntoBlock) / deviceSampleRate) / secPerBar;
+        }
         // How long the fade-in holds at silence first: the master stage's latency when it is
         // in (so the jump lands under silence), else 0. Set when the fade-out completes.
         double repositionHoldSec = 0.0;
