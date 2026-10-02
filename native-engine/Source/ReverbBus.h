@@ -1,6 +1,8 @@
 // native-engine/Source/ReverbBus.h
 #pragma once
 #include "AutomationCurve.h"
+#include "SoundSettings.h"
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -36,9 +38,29 @@ namespace sssketch
      * `_ipdel`; this returns the clamped SECONDS value to hand set_delay(). */
     double reverbPreDelaySecondsFor(double preDelayMs);
 
-    /** ONE shared zita-rev1 instance for the whole mix, fed by per-channel
-     * sends -- cheaper and more cohesive than an instance per channel, per
-     * the design doc.
+    class CavernConvolver;
+
+    /** ONE shared reverb for the whole mix, fed by per-channel sends -- cheaper
+     * and more cohesive than an instance per channel, per the design doc.
+     *
+     * TWO ROOMS (native radio sound plan, Task 5). `zita` is zita-rev1, the
+     * room this bus has always run, exactly as before (bit for bit at today's
+     * return). `cavern` is the web radio's convolver room (CavernReverb.h).
+     * setRoom() picks one per block; the sends feed the current room only, and
+     * the other one, if still ringing, rings out on silence -- so switching
+     * rooms mid-play hands over instead of cutting. A return gain (the sound
+     * settings' reverb amount, 1 = today's level) scales the wet output of
+     * either room; at 1 the samples are added untouched.
+     *
+     * The cavern is built OFF the audio thread (its impulse and state are
+     * ~8 MB): prepareCavern() on the message thread builds a convolver at a
+     * rate and parks it; endBlock() promotes it on the audio thread, parking
+     * the one it displaces for drainRetiredCavern() to free -- MasterStage's
+     * pattern. PlaybackEngine prepares one whenever a project in the cavern
+     * room has a send, so with no send nothing is built. A cavern block at a
+     * rate no convolver has been built for adds no wet signal (silent for that
+     * block, counted in cavernRateMismatchCount) and asks the message thread to
+     * build one (takeWantedCavernRate).
      *
      * Usage per render block: beginBlock(n), then addSend(...) once per
      * channel that has a non-zero send, then endBlock(n, outL, outR) to run
@@ -53,7 +75,9 @@ namespace sssketch
      * project that never touches reverb therefore pays zero -- no allocation,
      * no per-sample work, and bit-identical output to the pre-toolkit path.
      *
-     * Not thread-safe, same single-renderer invariant as ChannelFilter. */
+     * Not thread-safe, same single-renderer invariant as ChannelFilter --
+     * except the methods marked MESSAGE THREAD, which touch only the cavern's
+     * hand-over cells and message-thread bookkeeping. */
     class ReverbBus
     {
     public:
@@ -68,6 +92,11 @@ namespace sssketch
         void prepare(double sampleRate, int maxBlockSize);
 
         void setSettings(const ReverbSettings& settings);
+
+        /** Which room runs, and the return's gain relative to today's level
+         * (SoundSettings::reverbReturn). Cheap; the render path calls it every
+         * block with the snapshot's values. */
+        void setRoom(ReverbRoom room, double returnGain);
 
         /** Clears the send accumulator for a block of `numSamples`. */
         void beginBlock(int numSamples);
@@ -89,15 +118,41 @@ namespace sssketch
          * of the seek. */
         void reset();
 
-        /** True while the reverb is either being fed or still ringing out.
+        /** True while either room is being fed or still ringing out.
          * Exposed for tests and for a future "is the toolkit doing anything"
          * indicator; the render path uses it internally. */
-        bool isRinging() const { return tailSamplesRemaining > 0; }
+        bool isRinging() const { return tailSamplesRemaining > 0 || cavernTailRemaining > 0; }
 
-        /** Whether a reverb has actually been constructed yet -- i.e. whether
-         * this project has ever used a non-zero send. Tests assert on this to
-         * pin the "neutral allocates nothing" promise. */
+        /** Whether zita has actually been constructed yet -- i.e. whether
+         * this project has ever sent to it. Tests assert on this to pin the
+         * "neutral allocates nothing" promise (the cavern's equivalent is
+         * cavernPreparedRate). */
         bool hasBeenBuilt() const { return impl != nullptr; }
+
+        /** MESSAGE THREAD. Builds a cavern convolver at this rate (its impulse
+         * comes from cavernIrFor's per-rate cache) and parks it for the audio
+         * thread, unless the last one built is already at this rate.
+         * Allocates. */
+        void prepareCavern(double sampleRate);
+
+        /** MESSAGE THREAD. The rate of the last cavern prepareCavern built, or
+         * 0 if none has been: "with no send, nothing is built". */
+        double cavernPreparedRate() const { return cavernBuiltRate; }
+
+        /** MESSAGE THREAD. Frees a convolver the audio thread swapped out. One
+         * atomic load when there is none. */
+        void drainRetiredCavern();
+
+        /** MESSAGE THREAD. A rate a cavern block found no convolver for, then
+         * cleared; 0 if none. The caller builds one (prepareCavern). */
+        double takeWantedCavernRate() { return cavernWantedRate.exchange(0.0); }
+
+        /** Cavern blocks that went without wet signal because no convolver at
+         * their rate was ready. */
+        unsigned long long cavernRateMismatchCount() const
+        {
+            return cavernRateMismatches.load(std::memory_order_relaxed);
+        }
 
     private:
         struct Impl; // hides the vendored zita-rev1 header (and its
@@ -123,6 +178,22 @@ namespace sssketch
         std::vector<float> spareC, spareD;
 
         bool fedThisBlock = false;
-        int tailSamplesRemaining = 0;
+        int tailSamplesRemaining = 0; // zita's
+
+        ReverbRoom room = ReverbRoom::zita;
+        float returnGain = 1.0f;
+        std::vector<float> silence; // a ringing room that is not the current one is fed this
+
+        /** The audio thread's convolver; pending/retired are the hand-over cells. */
+        std::atomic<CavernConvolver*> cavern { nullptr };
+        std::atomic<CavernConvolver*> cavernPending { nullptr };
+        std::atomic<CavernConvolver*> cavernRetired { nullptr };
+        double cavernBuiltRate = 0.0; // message thread only
+        int cavernTailRemaining = 0;
+        std::atomic<double> cavernWantedRate { 0.0 };
+        std::atomic<unsigned long long> cavernRateMismatches { 0 };
+
+        void runZita(int numSamples, bool fed, const float* inL, const float* inR, float* outL, float* outR);
+        void runCavern(int numSamples, bool fed, const float* inL, const float* inR, float* outL, float* outR);
     };
 }

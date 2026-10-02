@@ -1,0 +1,9 @@
+{
+  "note": "written by sssketch scripts/golden-cavern-ir.mjs from ell.ing/radio src/audio/noise.ts reverbImpulse; little-endian float32, planar (L then R)",
+  "radioCommit": "5262ed5",
+  "sampleRate": 48000,
+  "frames": 8192,
+  "offset": 1440,
+  "length": 241440,
+  "meanSquare": 0.010444921926694174
+}

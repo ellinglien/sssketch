@@ -16,7 +16,7 @@ vi.mock('electron', () => ({
   shell: { openPath: vi.fn().mockResolvedValue('') }
 }))
 
-import { renderToolkitAudio } from './exportToolkitAudio'
+import { renderToolkitAudio, reverbTailSeconds } from './exportToolkitAudio'
 
 /** A 16-bit mono WAV of a constant sample value -- same helper
  * nativeExport.test.ts uses (its own copy notes why a constant, not a tone). */
@@ -278,6 +278,48 @@ describe('renderToolkitAudio', () => {
       const stats = renderStats(join(outDir, 'Samples', 'Imported', baked.fileName))
       expect(stats.frames).toBe(44100 * 8)
       expect(stats.peak).toBeGreaterThan(0)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(outDir, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('sizes a cavern tail as the pre-delay plus 5 s, and bakes it', async () => {
+    // the room's impulse: REVERB_IR's 30 ms, then its longest T60
+    expect(reverbTailSeconds(0.5, 20, 'cavern')).toBeCloseTo(5.03, 10)
+    // zita's own size and pre-delay do not touch it
+    expect(reverbTailSeconds(1, 115, 'cavern')).toBe(reverbTailSeconds(0, 0, 'cavern'))
+    expect(reverbTailSeconds(0.5, 20)).toBe(reverbTailSeconds(0.5, 20, 'zita'))
+
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-src-'))
+    const outDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-out-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.5, 44100 * 4)
+      const sound = normalizeSoundSettings({})
+      sound.reverb.room = 'cavern'
+      sound.panning.on = false
+      const state = oneBarState(stemPath, { sound })
+      state.stemSends = { 'r1:1': 1 }
+
+      const audio = await renderToolkitAudio(state, outDir, 'bake')
+
+      const baked = audio.bakedClips.get('r1:1')!
+      // 5.03 s of tail at 4 s a bar: two bars, where zita's ~3 s took one
+      expect(baked.tailBars).toBe(2)
+      const file = join(outDir, 'Samples', 'Imported', baked.fileName)
+      const { samples, frames } = readStereo(file)
+      expect(frames).toBe(44100 * 12)
+      // the room still sounds four seconds after the clip (zita's tail would be gone by now) ...
+      let late = 0
+      for (let f = 44100 * 8; f < 44100 * 8 + 4410; f++)
+        late = Math.max(late, Math.abs(samples[2 * f]))
+      expect(late).toBeGreaterThan(1e-5)
+      // ... and is silent once its impulse has ended (4 s + 5.03 s, plus a margin)
+      let after = 0
+      for (let f = Math.ceil(44100 * 9.1); f < frames; f++)
+        after = Math.max(after, Math.abs(samples[2 * f]))
+      expect(after).toBeLessThan(1e-6)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(outDir, { recursive: true, force: true })

@@ -9,7 +9,7 @@ namespace sssketch
     {
         /** zita-rev1, the ReverbBus as it was before the radio sound: today's room. */
         zita,
-        /** The web radio's convolver room (CavernReverb, a later task). */
+        /** The web radio's convolver room (CavernReverb.h, run by ReverbBus since Task 5). */
         cavern
     };
 
@@ -24,9 +24,9 @@ namespace sssketch
      * exactly that (isNeutral()).
      *
      * Each stage is performed by its own task: mastering (headroom and the true-peak limiter)
-     * since Task 3, by MasterStage through PlaybackEngine::processMaster; the cavern (Task 5),
-     * glue and tone (Task 7), saturation (Task 8) and the pump (Task 9) are parsed only until
-     * theirs land. */
+     * since Task 3, by MasterStage through PlaybackEngine::processMaster; the room and its
+     * return since Task 5, by ReverbBus (zita or CavernReverb); glue and tone (Task 7),
+     * saturation (Task 8) and the pump (Task 9) are parsed only until theirs land. */
     struct SoundSettings
     {
         /** The headroom trim and the true-peak limiter. */
@@ -64,7 +64,8 @@ namespace sssketch
         std::optional<Tone> tone;
         std::optional<Saturation> saturation;
         ReverbRoom room = ReverbRoom::zita;
-        /** The reverb return relative to the room's own level today: 1 is today's, 0..2. */
+        /** The reverb return relative to the room's own level today: 1 is today's, 0..2. Scales
+         * either room's wet output (ReverbBus::setRoom); at 1 the wet samples are added untouched. */
         double reverbReturn = 1.0;
         std::optional<Pump> pump;
 

@@ -10,6 +10,7 @@ import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { riserOnlyState, riserRenderBarsFor, soloState, withoutRisers } from './nativeExport'
+import { normalizeSoundSettings, REVERB_IR, type ReverbRoom } from '@shared/radioSound'
 
 // Same ceiling nativeExport.ts uses for a render-export round trip, and for
 // the same reason -- see RENDER_EXPORT_TIMEOUT_MS's own comment there.
@@ -22,16 +23,28 @@ function sanitizeFileNamePart(name: string): string {
   return name.replace(/[/\\:*?"<>|]/g, '_').trim() || 'stem'
 }
 
-/** Ports of reverbDecaySecondsFor/reverbPreDelaySecondsFor in
- * native-engine/Source/ReverbBus.cpp, and of the 1.5x decay allowance its own
- * tail-runout uses. Only ever used to decide how much EXTRA time a baked clip
- * needs rendered past its own end so its reverb tail isn't chopped off -- a
- * generous over-estimate here costs a little silence at the end of one file,
- * an under-estimate audibly truncates the tail. */
+/** How long the project's reverb rings after the last thing sent to it, in seconds. Only ever
+ * used to decide how much EXTRA time a baked clip needs rendered past its own end so its reverb
+ * tail isn't chopped off -- a generous over-estimate here costs a little silence at the end of
+ * one file, an under-estimate audibly truncates the tail.
+ *
+ * - `cavern` (the radio sound's room, native-engine/Source/CavernReverb.h): its impulse is the
+ *   pre-delay plus the longest T60 of REVERB_IR (5 s) long, and the convolver's output ends
+ *   exactly there, so that is the tail.
+ * - `zita`: ports of reverbDecaySecondsFor/reverbPreDelaySecondsFor in
+ *   native-engine/Source/ReverbBus.cpp, and of the 1.5x decay allowance its own tail-runout
+ *   uses. */
 const REVERB_MIN_DECAY_SEC = 0.5
 const REVERB_MAX_DECAY_SEC = 8
 
-function reverbTailSeconds(roomSize01: number, preDelayMs: number): number {
+export function reverbTailSeconds(
+  roomSize01: number,
+  preDelayMs: number,
+  room: ReverbRoom = 'zita'
+): number {
+  if (room === 'cavern') {
+    return REVERB_IR.preDelaySec + Math.max(...REVERB_IR.t60.map(([, t60]) => t60))
+  }
   const v = Number.isFinite(roomSize01) ? Math.min(1, Math.max(0, roomSize01)) : 0.5
   const decay =
     REVERB_MIN_DECAY_SEC * Math.pow(REVERB_MAX_DECAY_SEC / REVERB_MIN_DECAY_SEC, v) * 1.5
@@ -170,10 +183,13 @@ export async function renderToolkitAudio(
 
   const secPerBar = state.bpm > 0 ? (60 / state.bpm) * 4 : 0
   const reverb = state.reverb
+  // The project's room: a bake keeps it (soloState's stemExportSound), and a project with no
+  // sound settings plays zita, as the wire does (buildEngineSound).
+  const room: ReverbRoom = state.sound ? normalizeSoundSettings(state.sound).reverb.room : 'zita'
   const tailBarsFor = (hasSend: boolean): number => {
     if (!hasSend || secPerBar <= 0) return 0
     return Math.ceil(
-      reverbTailSeconds(reverb?.roomSize ?? 0.5, reverb?.preDelayMs ?? 20) / secPerBar
+      reverbTailSeconds(reverb?.roomSize ?? 0.5, reverb?.preDelayMs ?? 20, room) / secPerBar
     )
   }
 

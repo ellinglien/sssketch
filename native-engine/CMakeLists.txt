@@ -168,6 +168,8 @@ target_sources(sssketch_engine PRIVATE
   Source/ChannelFilterTests.cpp
   Source/ReverbBus.cpp
   Source/ReverbBusTests.cpp
+  Source/CavernReverb.cpp
+  Source/CavernReverbTests.cpp
   Source/NoiseRiser.cpp
   Source/NoiseRiserTests.cpp
   Source/FaustStage.cpp

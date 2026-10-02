@@ -1,5 +1,6 @@
 // native-engine/Source/ReverbBus.cpp
 #include "ReverbBus.h"
+#include "CavernReverb.h"
 
 // The ONLY place the vendored zita-rev1 header is included -- see
 // Source/dsp/zita-rev1/VENDORED.md. Fons Adriaensen's reverb, GPL-3-or-later,
@@ -68,7 +69,13 @@ namespace sssketch
     };
 
     ReverbBus::ReverbBus() = default;
-    ReverbBus::~ReverbBus() = default;
+
+    ReverbBus::~ReverbBus()
+    {
+        delete cavernPending.exchange(nullptr);
+        delete cavernRetired.exchange(nullptr);
+        delete cavern.exchange(nullptr);
+    }
 
     void ReverbBus::prepare(double newSampleRate, int newMaxBlockSize)
     {
@@ -162,6 +169,7 @@ namespace sssketch
             wetR.resize(n);
             spareC.resize(n);
             spareD.resize(n);
+            silence.resize(n); // zeros, and only ever read
         }
         // Only the live prefix is cleared -- the vectors can be longer than
         // this block from a previous, larger one.
@@ -191,21 +199,53 @@ namespace sssketch
         fedThisBlock = true;
     }
 
+    void ReverbBus::setRoom(ReverbRoom newRoom, double newReturnGain)
+    {
+        room = newRoom;
+        returnGain = std::isfinite(newReturnGain) ? (float) std::max(0.0, newReturnGain) : 1.0f;
+    }
+
     void ReverbBus::endBlock(int numSamples, float* outL, float* outR)
     {
         if (numSamples <= 0 || outL == nullptr || outR == nullptr)
             return;
+        // The sends feed the current room; the other one, if it is still
+        // ringing from before a room change, rings out on silence.
+        const bool zitaFed = fedThisBlock && room == ReverbRoom::zita;
+        const bool cavernFed = fedThisBlock && room == ReverbRoom::cavern;
+        const bool runZitaRoom = zitaFed || tailSamplesRemaining > 0;
+        const bool runCavernRoom = cavernFed || cavernTailRemaining > 0;
         // The whole point of the neutral path: nothing was sent and nothing
         // is still ringing, so the output is left exactly as the caller had
         // it -- bit-identical, no reverb built, no samples touched.
-        if (!fedThisBlock && tailSamplesRemaining <= 0)
+        if (! runZitaRoom && ! runCavernRoom)
             return;
         if (sampleRate <= 0.0)
             return;
+        if (sendL.size() < (size_t) numSamples)
+            return; // beginBlock wasn't called for this size
 
+        if (runZitaRoom)
+        {
+            if (zitaFed)
+                runZita(numSamples, true, sendL.data(), sendR.data(), outL, outR);
+            else
+                runZita(numSamples, false, silence.data(), silence.data(), outL, outR);
+        }
+        if (runCavernRoom)
+        {
+            if (cavernFed)
+                runCavern(numSamples, true, sendL.data(), sendR.data(), outL, outR);
+            else
+                runCavern(numSamples, false, silence.data(), silence.data(), outL, outR);
+        }
+    }
+
+    void ReverbBus::runZita(int numSamples, bool fed, const float* inL, const float* inR, float* outL, float* outR)
+    {
         ensureBuilt();
 
-        if (fedThisBlock)
+        if (fed)
         {
             // Keep running for a full decay's worth of blocks after the last
             // thing was sent, so a send automation ramping to zero (or a clip
@@ -221,21 +261,99 @@ namespace sssketch
             tailSamplesRemaining = std::max(0, tailSamplesRemaining - numSamples);
         }
 
-        float* inp[2] = { sendL.data(), sendR.data() };
+        // zita's process() takes non-const input pointers; it only reads them.
+        float* inp[2] = { const_cast<float*>(inL), const_cast<float*>(inR) };
         float* out[4] = { wetL.data(), wetR.data(), spareC.data(), spareD.data() };
         impl->reverb.prepare(numSamples);
         impl->reverb.process(numSamples, inp, out);
 
-        for (int i = 0; i < numSamples; ++i)
+        if (returnGain == 1.0f)
         {
-            outL[i] += wetL[(size_t) i];
-            outR[i] += wetR[(size_t) i];
+            // today's return: the wet samples added untouched
+            for (int i = 0; i < numSamples; ++i)
+            {
+                outL[i] += wetL[(size_t) i];
+                outR[i] += wetR[(size_t) i];
+            }
         }
+        else
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                outL[i] += wetL[(size_t) i] * returnGain;
+                outR[i] += wetR[(size_t) i] * returnGain;
+            }
+        }
+    }
+
+    void ReverbBus::runCavern(int numSamples, bool fed, const float* inL, const float* inR, float* outL, float* outR)
+    {
+        // Promote a convolver the message thread built (the first one, or one
+        // at a new rate), unless the last one swapped out has not been
+        // collected yet -- then this block runs on what is here.
+        if (cavernRetired.load(std::memory_order_acquire) == nullptr)
+        {
+            if (auto* next = cavernPending.exchange(nullptr, std::memory_order_acq_rel))
+            {
+                if (auto* previous = cavern.exchange(next, std::memory_order_acq_rel))
+                    cavernRetired.store(previous, std::memory_order_release);
+                cavernTailRemaining = 0; // the new one starts from silence
+            }
+        }
+
+        auto* conv = cavern.load(std::memory_order_acquire);
+        if (conv == nullptr || conv->sampleRate() != sampleRate)
+        {
+            // No convolver at this rate: no wet signal this block (silence
+            // beats allocating here), and the message thread is asked for one.
+            cavernRateMismatches.fetch_add(1, std::memory_order_relaxed);
+            cavernWantedRate.store(sampleRate);
+            cavernTailRemaining = std::max(0, cavernTailRemaining - numSamples);
+            return;
+        }
+
+        // Starting from silence. After a whole tail of silent input the state is exactly zero
+        // anyway; clearing makes it so after a cut short too (a reset, a new convolver).
+        if (cavernTailRemaining <= 0)
+            conv->clear();
+
+        conv->process(numSamples, inL, inR, outL, outR, returnGain);
+
+        // Fed: the room can sound until every remembered frame has left
+        // (CavernConvolver::tailSamples, a little over the impulse's length);
+        // after that its state is exactly zero, so stopping changes nothing.
+        cavernTailRemaining = fed ? conv->tailSamples() : std::max(0, cavernTailRemaining - numSamples);
+    }
+
+    void ReverbBus::prepareCavern(double newSampleRate)
+    {
+        if (! (newSampleRate > 0.0) || newSampleRate == cavernBuiltRate)
+            return;
+        auto ir = cavernIrFor(newSampleRate);
+        if (ir == nullptr)
+            return;
+        cavernBuiltRate = newSampleRate;
+        // Replaces anything still pending: the audio thread only ever takes
+        // `cavernPending` by an exchange, so whatever this gets back was never
+        // seen by it.
+        delete cavernPending.exchange(new CavernConvolver(std::move(ir)), std::memory_order_acq_rel);
+    }
+
+    void ReverbBus::drainRetiredCavern()
+    {
+        auto* old = cavernRetired.load(std::memory_order_acquire);
+        if (old == nullptr)
+            return;
+        delete old;
+        // Only after the delete: the audio thread treats an occupied cell as
+        // "defer", so it never parks a second convolver here meanwhile.
+        cavernRetired.store(nullptr, std::memory_order_release);
     }
 
     void ReverbBus::reset()
     {
         tailSamplesRemaining = 0;
+        cavernTailRemaining = 0; // the cavern's next block starts from silence (runCavern)
         fedThisBlock = false;
         if (impl != nullptr && impl->initialised && sampleRate > 0.0)
         {

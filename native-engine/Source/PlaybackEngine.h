@@ -244,10 +244,11 @@ namespace sssketch
         void processMaster(double sampleRate, int numSamples, float* outL, float* outR);
 
         /** MESSAGE THREAD (Transport::audioDeviceAboutToStart, RenderExport before setProject).
-         * The rate processMaster will be called at. Rebuilds the master stage's instance for it
-         * if one has been built already; otherwise only remembered, and setProject/stageProject
-         * build one at it when a project first asks for mastering. Until told, 44.1 kHz -- the
-         * transport's own default rate and the export's. */
+         * The rate processMaster and renderBlock will be called at. Rebuilds the master stage's
+         * instance, and the cavern reverb's convolver, for it if one has been built already;
+         * otherwise only remembered, and setProject/stageProject build one at it when a project
+         * first asks for mastering, or first sends to the cavern room. Until told, 44.1 kHz --
+         * the transport's own default rate and the export's. */
         void prepareMaster(double sampleRate);
 
         /** AUDIO THREAD, with no processMaster in flight. See MasterStage::reset: Transport
@@ -258,6 +259,14 @@ namespace sssketch
         /** AUDIO THREAD. See MasterStage::currentLatencySamples: 75 while the master stage's
          * limiter is in the output, else 0. Transport's seek holds at silence this much longer. */
         int masterLatencySamples() const { return masterStage.currentLatencySamples(); }
+
+        /** MESSAGE THREAD. The rate of the cavern room's convolver, 0 if none has been built --
+         * which is the case until a project in the cavern room has a send (ReverbBus.h). */
+        double cavernReverbPreparedRate() const { return reverbBus.cavernPreparedRate(); }
+
+        /** Cavern blocks that went without wet signal because no convolver at their rate was
+         * ready (the message thread then builds one, in drainRetiredProject). */
+        unsigned long long cavernRateMismatchCount() const { return reverbBus.cavernRateMismatchCount(); }
 
         /** Blocks processMaster passed through because no instance at their rate was ready. */
         unsigned long long masterRateMismatchCount() const { return masterStage.rateMismatchCount(); }
@@ -379,6 +388,11 @@ namespace sssketch
             // test rather than a map lookup per channel per block. Exactly
             // the same shape (and the same purpose) as anyToolkitActive.
             bool anyRisers = false;
+
+            // True if a stem sends to the reverb (a static send or a send curve) and the room is
+            // the cavern -- what makes buildSnapshot build the cavern's convolver. False for zita,
+            // which builds itself lazily on the audio thread as it always has.
+            bool anyReverbSend = false;
         };
 
         /** Per-CLIP toolkit DSP state: a filter has memory, a send has a

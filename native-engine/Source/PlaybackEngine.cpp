@@ -168,6 +168,21 @@ namespace sssketch
         if (project.sound.mastering)
             masterStage.prepare(masterRate.load());
 
+        // The cavern room's convolver likewise (CavernReverb.h: an impulse cached per rate,
+        // plus ~4 MB of state), but only once something actually sends to it -- with no send
+        // nothing is built, the same promise zita's lazy build keeps. A no-op once one is built
+        // at the current rate.
+        if (project.sound.room == ReverbRoom::cavern)
+        {
+            for (const auto& rifff : next->project.rifffs)
+                for (const auto& stem : rifff.stems)
+                    if (stem.hasToolkit
+                        && (stem.toolkit.reverbSend > 0.0 || ! stem.toolkit.automation.reverbSend.empty()))
+                        next->anyReverbSend = true;
+            if (next->anyReverbSend)
+                reverbBus.prepareCavern(masterRate.load());
+        }
+
         return next;
     }
 
@@ -292,6 +307,17 @@ namespace sssketch
     void PlaybackEngine::drainRetiredProject()
     {
         masterStage.drainRetired();
+        reverbBus.drainRetiredCavern();
+        // A cavern block found no convolver at its rate (ReverbBus::runCavern went silent for
+        // it): build one now. Expected never in practice -- prepareMaster tells the engine the
+        // device's and the export's rate before either renders -- so it is logged.
+        if (const double wanted = reverbBus.takeWantedCavernRate(); wanted > 0.0
+            && wanted != reverbBus.cavernPreparedRate())
+        {
+            juce::Logger::writeToLog("PlaybackEngine: the cavern reverb had no convolver at "
+                                     + juce::String(wanted) + " Hz; building one");
+            reverbBus.prepareCavern(wanted);
+        }
         if (!retiredOccupied.load(std::memory_order_acquire))
             return;
         // Clear the slot first, flag second -- the exact mirror of the
@@ -308,6 +334,9 @@ namespace sssketch
         masterRate.store(sampleRate);
         if (masterStage.preparedRate() != 0.0)
             masterStage.prepare(sampleRate);
+        // The cavern room's convolver follows the same rate, rebuilt only if one exists.
+        if (reverbBus.cavernPreparedRate() != 0.0)
+            reverbBus.prepareCavern(sampleRate);
     }
 
     void PlaybackEngine::processMaster(double sampleRate, int numSamples, float* outL, float* outR)
@@ -457,6 +486,7 @@ namespace sssketch
         {
             reverbBus.prepare(sampleRate, numSamples);
             reverbBus.setSettings(snap->project.reverb);
+            reverbBus.setRoom(snap->project.sound.room, snap->project.sound.reverbReturn);
             reverbBus.beginBlock(numSamples);
         }
 
