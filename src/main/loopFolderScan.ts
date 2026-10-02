@@ -57,8 +57,10 @@ export interface FoundLoopFile {
  * no yield can split. Dot entries are skipped and never descended into.
  * Symlinks are neither files nor directories to a Dirent, so they are
  * skipped too, which also rules out a symlink cycle. An unreadable
- * subfolder is skipped, not fatal. */
-export async function walkLoopFolder(rootPath: string): Promise<FoundLoopFile[]> {
+ * subfolder is skipped, not fatal. An unreadable ROOT returns null: a drive
+ * pulled between the root stat and this readdir is not an empty folder,
+ * and must not delete every loop in it. */
+export async function walkLoopFolder(rootPath: string): Promise<FoundLoopFile[] | null> {
   const found: FoundLoopFile[] = []
   const pending: string[][] = [[]]
   while (pending.length > 0) {
@@ -68,6 +70,7 @@ export async function walkLoopFolder(rootPath: string): Promise<FoundLoopFile[]>
     try {
       entries = await readdir(dir, { withFileTypes: true })
     } catch {
+      if (segments.length === 0) return null
       continue
     }
     for (const entry of entries) {
@@ -165,15 +168,18 @@ async function doRescan(
   projectBpm: number,
   deps: LoopScanDeps
 ): Promise<LoopScanSummary> {
-  const rootStat = await stat(rootPath).catch(() => null)
-  if (!rootStat || !rootStat.isDirectory()) {
+  const markUnavailable = (): LoopScanSummary => {
     // An unplugged drive. Its rows are left exactly as they were: greyed,
     // not removed, until it is back.
     db.prepare(`UPDATE LoopFolders SET Available = 0 WHERE RootPath = ?`).run(rootPath)
     return { rootPath, available: false, total: 0, measured: 0, removed: 0 }
   }
+  const rootStat = await stat(rootPath).catch(() => null)
+  if (!rootStat || !rootStat.isDirectory()) return markUnavailable()
 
+  // Null when the root itself cannot be read -- the same as not there.
   const files = await walkLoopFolder(rootPath)
+  if (files === null) return markUnavailable()
   const stated: StatedFile[] = []
   for (const file of files) {
     const fileStat = await stat(file.path).catch(() => null)

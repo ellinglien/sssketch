@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
-import { mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { encodeWavPCM16 } from '@shared/encodeWav'
@@ -192,6 +192,20 @@ describe('rescanLoopFolder', () => {
     renameSync(away, root)
     expect((await rescanLoopFolder(db, root, 120)).available).toBe(true)
     expect(listLoopFolders(db)[0].available).toBe(true)
+  })
+
+  it('marks a folder it can stat but not read as unavailable, not empty', async () => {
+    await rescanLoopFolder(db, root, 120)
+    chmodSync(root, 0o000)
+    try {
+      const unreadable = await rescanLoopFolder(db, root, 120)
+      expect(unreadable.available).toBe(false)
+    } finally {
+      chmodSync(root, 0o755)
+    }
+    const [folder] = listLoopFolders(db)
+    expect(folder.available).toBe(false)
+    expect(folder.loops).toHaveLength(6)
   })
 
   it('yields on an elapsed-time budget, not a file count', async () => {
