@@ -6,8 +6,10 @@ import {
   engineDubFor,
   timelineStemPans,
   timelineStemPumpRoles,
+  withoutDubThrows,
   type EngineStem
 } from './buildEngineProject'
+import { phoneLoopFingerprint } from './phoneLoop'
 import type { PumpRole } from './radioPump'
 import {
   glueThresholdDb,
@@ -1464,5 +1466,43 @@ describe('dub throws on the wire (native radio sound plan, Task 10)', () => {
     )
     expect(project.rifffs[0].stems[1].toolkit?.automation.dubSend).toEqual(curve)
     expect(project.sound?.dub).toEqual({ delayBeats: 0.75, feedback: 0.6 })
+  })
+
+  it("withoutDubThrows (Discover's phone loop, Task 11) is the build without the plan, JSON and all", async () => {
+    // every stage off but throws: the echo is all `sound` says, so it goes with it
+    const onlyThrows = (): SoundSettings => {
+      const s = withThrows(true)
+      s.mastering.on = false
+      s.panning.on = false
+      s.pump.on = false
+      s.reverb = { room: 'zita', amount: 0.5 }
+      return s
+    }
+    const states = [
+      // a do-nothing toolkit (no toolkit of its own) and one beside a send
+      stateWith({
+        bpm: 150,
+        rifffs: { r1: twoStems },
+        sound: withThrows(true),
+        stemSends: { [stemKey('r1', 1)]: 0.4 }
+      }),
+      stateWith({ bpm: 150, rifffs: { r1: twoStems }, sound: onlyThrows() })
+    ]
+    for (const state of states) {
+      const sends = plan([
+        [stemKey('r1', 1), curve],
+        [stemKey('r1', 2), curve]
+      ])
+      const thrown = await buildEngineProject(state, vi.fn(), emptyCatalog, {}, sends)
+      const plain = await buildEngineProject(state, vi.fn(), emptyCatalog, {}, {})
+      expect(thrown.sound?.dub).toBeDefined()
+      expect(JSON.stringify(withoutDubThrows(thrown))).toBe(JSON.stringify(plain))
+      expect(phoneLoopFingerprint(withoutDubThrows(thrown))).toBe(phoneLoopFingerprint(plain))
+      // the input is left as it was
+      expect(thrown.rifffs[0].stems[1].toolkit?.automation.dubSend).toEqual(curve)
+    }
+    // with no throws it is the same project
+    const plain = await buildEngineProject(states[0], vi.fn(), emptyCatalog, {}, {})
+    expect(withoutDubThrows(plain)).toEqual(plain)
   })
 })

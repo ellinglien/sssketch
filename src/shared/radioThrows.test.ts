@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import {
   THROW_EVERY_BARS,
+  THROW_RAMP_SEC,
   initialThrowState,
   stepThrows,
+  throwCurveFor,
   throwDelaySec,
   throwTailSec,
   type ThrowPlan,
@@ -120,5 +122,42 @@ describe('stepThrows', () => {
     const mean = often.reduce((a, b) => a + b, 0) / often.length
     expect(mean).toBeGreaterThan(10)
     expect(mean).toBeLessThan(15)
+  })
+})
+
+describe('throwCurveFor (native radio sound plan, Task 11)', () => {
+  const SPB = 2 // 120 bpm: 2 s a bar, so 5 ms is 0.0025 bar
+
+  it("opens over 5 ms at the start and closes over the last 5 ms, at full level (the web's throwDelay)", () => {
+    const curve = throwCurveFor({ atBar: 1.5, beats: 2 }, 4, SPB)
+    expect(curve).not.toBeNull()
+    const c = curve!
+    expect(c.map((p) => p.value)).toEqual([0, 1, 1, 0])
+    expect(c[0].bar).toBe(1.5)
+    expect(c[1].bar).toBeCloseTo(1.5 + THROW_RAMP_SEC / SPB, 12)
+    expect(c[2].bar).toBeCloseTo(2 - THROW_RAMP_SEC / SPB, 12)
+    expect(c[3].bar).toBe(2) // two beats = half a bar
+    // in seconds, the ramps are 5 ms at any tempo
+    const at90 = throwCurveFor({ atBar: 0, beats: 1 }, 4, (4 * 60) / 90)!
+    expect((at90[1].bar - at90[0].bar) * ((4 * 60) / 90)).toBeCloseTo(0.005, 12)
+    expect(at90[3].bar).toBe(0.25)
+  })
+
+  it('a throw that ends exactly on the loop top fits', () => {
+    expect(throwCurveFor({ atBar: 3.5, beats: 2 }, 4, SPB)?.[3].bar).toBe(4)
+    expect(throwCurveFor({ atBar: 0, beats: 2 }, 0.5, SPB)).not.toBeNull()
+  })
+
+  it('refuses a throw across the loop top rather than splitting it (the head would sit behind the playhead)', () => {
+    expect(throwCurveFor({ atBar: 3.75, beats: 2 }, 4, SPB)).toBeNull()
+    expect(throwCurveFor({ atBar: 4, beats: 1 }, 4, SPB)).toBeNull()
+  })
+
+  it('refuses nonsense', () => {
+    expect(throwCurveFor({ atBar: -0.25, beats: 1 }, 4, SPB)).toBeNull()
+    expect(throwCurveFor({ atBar: 0, beats: 0 }, 4, SPB)).toBeNull()
+    expect(throwCurveFor({ atBar: 0, beats: 1 }, 0, SPB)).toBeNull()
+    expect(throwCurveFor({ atBar: 0, beats: 1 }, 4, 0)).toBeNull()
+    expect(throwCurveFor({ atBar: Number.NaN, beats: 1 }, 4, SPB)).toBeNull()
   })
 })

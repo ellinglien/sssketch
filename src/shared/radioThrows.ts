@@ -91,3 +91,38 @@ export function stepThrows(
     plan.at + (beats * 60) / tick.bpm + throwTailSec(throwDelaySec(tick.bpm, timing), feedback)
   return { state: next, plan }
 }
+
+/** The send's ramps in and out, as the web's Engine.throwDelay draws them: 5 ms each. */
+export const THROW_RAMP_SEC = 0.005
+
+/** One throw as a `dubSend` curve (native radio sound plan, Task 11): the row's send into the
+ * echo, opened from 0 to full over 5 ms at `atBar`, held, and closed over the last 5 ms of its
+ * `beats` (4/4) -- the web's Engine.throwDelay (setValueAtTime 0, a linear ramp to the level,
+ * setValueAtTime at end - 5 ms, a linear ramp to 0 at the end), at full level (buildEngineProject
+ * scales it by `sound.throws.level`).
+ *
+ * The curve is anchored at the loop top, like every radio gesture: `atBar` is a position in the
+ * loop, and it repeats every lap until it is cleared. A throw that would cross the loop top is
+ * REFUSED (null), not split in two: the half after the top would sit at the start of the curve,
+ * and the lap that is playing when the curve arrives could already be inside it -- a fragment of
+ * the throw before the throw. The caller picks a start the whole throw fits after
+ * (discoverThrows.ts throwStartAhead), so a refusal there is a bug, not a redraw. Also null for
+ * nonsense (no loop, no tempo, no beats, a start before the top). */
+export function throwCurveFor(
+  plan: { atBar: number; beats: number },
+  loopBars: number,
+  secPerBar: number
+): { bar: number; value: number }[] | null {
+  if (!(loopBars > 0) || !(secPerBar > 0) || !(plan.beats > 0) || !(plan.atBar >= 0)) return null
+  const end = plan.atBar + plan.beats / 4
+  // a hair of float slack: a throw ending exactly on the top is inside the loop
+  if (end > loopBars + 1e-9) return null
+  // never more than half the throw, so a (theoretical) very short throw still opens and closes
+  const ramp = Math.min(THROW_RAMP_SEC / secPerBar, (end - plan.atBar) / 2)
+  return [
+    { bar: plan.atBar, value: 0 },
+    { bar: plan.atBar + ramp, value: 1 },
+    { bar: end - ramp, value: 1 },
+    { bar: Math.min(end, loopBars), value: 0 }
+  ]
+}

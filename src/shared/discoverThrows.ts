@@ -1,0 +1,239 @@
+// src/shared/discoverThrows.ts -- dub throws in Discover's radio (native radio sound plan,
+// Task 11). The rules are the web radio's own (radioThrows.ts stepThrows: when, on which row, for
+// how long, at what echo); this is the part that only Discover needs, kept pure so the panel only
+// wires it:
+//
+// - THE CLOCK. stepThrows counts time in seconds that only go forward. Discover's playhead is a
+//   position in a loop that wraps (and changes length when a longer layer lands), so the panel's
+//   ticks are unrolled here into bars and seconds played.
+// - WHERE A THROW MAY START. A throw goes out as a `dubSend` curve anchored at the loop top
+//   (throwCurveFor), like every radio gesture, and a load-project lands 0.02-0.22 bar late. So it
+//   starts on a beat at least THROW_LEAD_BARS ahead; at its FIRST pass after the curve arrives
+//   (the whole throw within a loop's length of the playhead, or the curve would play earlier than
+//   planned); and never across the loop top (throwStartAhead).
+// - HOW LONG IT IS ARMED. From the plan until the throw has closed; then the panel clears the
+//   curve, which lands long before the lap comes back round to it (a loop is at least
+//   THROW_LEAD_BARS + THROW_MAX_BARS long, or nothing is planned).
+//
+// The echo itself rings on after the curve is cleared: the engine's dub bus keeps ringing while
+// it has a tail (Task 10), whatever the project says.
+
+import type { DiscoverSlotKind } from './discoverSlotKind'
+import {
+  THROW_BEATS,
+  initialThrowState,
+  stepThrows,
+  throwCurveFor,
+  type ThrowState,
+  type ThrowTiming
+} from './radioThrows'
+import { stemKey } from './types'
+
+/** A throw starts at least this far ahead of the playhead: load-project lands 0.02-0.22 bar
+ * late, and the curve has to be in the engine before the throw opens. */
+export const THROW_LEAD_BARS = 1
+/** The longest throw, in bars (THROW_BEATS' longer draw, 4/4). */
+export const THROW_MAX_BARS = THROW_BEATS[1] / 4
+const BEAT_BARS = 1 / 4
+const EPS = 1e-9
+
+/** The first beat at or after `bars`, on the loop's own beat grid (4/4 from the loop top). */
+function ceilBeat(bars: number): number {
+  return Math.ceil(bars / BEAT_BARS - EPS) * BEAT_BARS + 0 // + 0: never -0
+}
+
+/**
+ * Where a throw due now may start: `ahead` bars from the playhead, at `atBar` in the loop -- or
+ * null when nowhere fits yet (the throw waits for a later tick).
+ *
+ * The start is a beat, at least `leadBars` ahead, chosen as if the throw were the longest one
+ * (`maxBars`) so whatever stepThrows draws fits:
+ * - in the lap that is playing, ending by the loop top; else
+ * - in the next lap, ending before the playhead's own position comes round again (so this is the
+ *   curve's first pass after it lands, and nothing of it is behind the playhead now).
+ * Never across the loop top (throwCurveFor refuses that). A loop shorter than
+ * `leadBars + maxBars` never fits.
+ */
+export function throwStartAhead(
+  pos: number,
+  loopBars: number,
+  leadBars: number = THROW_LEAD_BARS,
+  maxBars: number = THROW_MAX_BARS
+): { ahead: number; atBar: number } | null {
+  if (!(loopBars > 0) || !Number.isFinite(pos) || pos < 0) return null
+  const here = ceilBeat(pos + leadBars)
+  if (here + maxBars <= loopBars + EPS) return { ahead: here - pos, atBar: here }
+  const next = ceilBeat(Math.max(0, pos + leadBars - loopBars))
+  if (next + maxBars <= loopBars + EPS && next + maxBars <= pos + EPS)
+    return { ahead: loopBars - pos + next, atBar: next }
+  return null
+}
+
+/** A throw as Discover arms it. */
+export interface DiscoverThrow {
+  slotId: string
+  /** Where it starts, bars from the loop top. */
+  atBar: number
+  beats: number
+  timing: ThrowTiming
+  feedback: number
+  /** Where it starts and closes, in bars played (DiscoverThrowState.elapsedBars). */
+  startBars: number
+  endBars: number
+}
+
+export interface DiscoverThrowState {
+  throws: ThrowState
+  /** Bars and seconds played since the radio started, unrolled across wraps. */
+  elapsedBars: number
+  elapsedSec: number
+  /** The last tick's playhead and loop length; null before the first tick. */
+  lastPos: number | null
+  lastLoopBars: number
+  /** The throw whose curve is in the project, or null. */
+  armed: DiscoverThrow | null
+}
+
+export const initialDiscoverThrowState = (): DiscoverThrowState => ({
+  throws: initialThrowState(),
+  elapsedBars: 0,
+  elapsedSec: 0,
+  lastPos: null,
+  lastLoopBars: 0,
+  armed: null
+})
+
+export interface DiscoverThrowTick {
+  /** The playhead, bars from the loop top. */
+  pos: number
+  loopBars: number
+  bpm: number
+  /** The transport is running. Stopped, no bars go by and no throw is planned (stepThrows' held). */
+  playing: boolean
+  /** Nothing stands in the way of pushing a project now (no staged swap the push would
+   * withdraw, the preview loaded). False: the throw clock runs, but nothing is planned. */
+  canArm: boolean
+  /** A hole, riser or drop-out is armed (stepThrows' leadingArmed). */
+  leadingArmed: boolean
+  /** Every row in the panel: its slot, kinds, and whether it is heard. */
+  rows: readonly { slot: string; kinds: readonly DiscoverSlotKind[]; audible: boolean }[]
+  /** The spacing, from the sound settings' rate (radioSound.ts throwEveryBars). */
+  everyBars: readonly [number, number]
+}
+
+/**
+ * One radio tick. Advances the clock; ends an armed throw once it has closed, or when the
+ * transport has stopped ('ended': the panel clears the curve); otherwise, with nothing armed and somewhere to start, asks stepThrows
+ * ('armed': the panel puts the curve in). Ticks that cannot plan (canArm false, nowhere to start)
+ * do not call stepThrows at all; the bars they cover still count at its next call (it measures
+ * from its own last `now`), so a due throw just waits.
+ *
+ * The clock: a playhead that moved back is a wrap -- the rest of the last lap plus the new
+ * position (a seek back counts the same, which can only end a throw early, never late).
+ */
+export function stepDiscoverThrows(
+  state: DiscoverThrowState,
+  tick: DiscoverThrowTick,
+  random: () => number
+): { state: DiscoverThrowState; change: 'armed' | 'ended' | null } {
+  const secPerBar = (4 * 60) / tick.bpm
+  let delta = 0
+  if (state.lastPos !== null && tick.playing) {
+    delta =
+      tick.pos >= state.lastPos
+        ? tick.pos - state.lastPos
+        : Math.max(0, state.lastLoopBars - state.lastPos) + tick.pos
+  }
+  const next: DiscoverThrowState = {
+    ...state,
+    elapsedBars: state.elapsedBars + delta,
+    elapsedSec:
+      state.elapsedSec + delta * (secPerBar > 0 && Number.isFinite(secPerBar) ? secPerBar : 0),
+    lastPos: tick.pos,
+    lastLoopBars: tick.loopBars
+  }
+  if (next.armed !== null) {
+    // stopped: the playhead can come back anywhere (a stop puts it at the top), so the throw
+    // is off rather than left to fire wherever the clock and the playhead now disagree
+    if (!tick.playing || next.elapsedBars >= next.armed.endBars - EPS) {
+      next.armed = null
+      return { state: next, change: 'ended' }
+    }
+    return { state: next, change: null }
+  }
+  if (!tick.canArm || !(secPerBar > 0) || !Number.isFinite(secPerBar)) {
+    return { state: next, change: null }
+  }
+  const start = throwStartAhead(tick.pos, tick.loopBars)
+  if (start === null) return { state: next, change: null }
+  const r = stepThrows(
+    next.throws,
+    {
+      now: next.elapsedSec,
+      bpm: tick.bpm,
+      nextBeat: next.elapsedSec + start.ahead * secPerBar,
+      held: !tick.playing,
+      leadingArmed: tick.leadingArmed,
+      rows: tick.rows
+    },
+    random,
+    tick.everyBars
+  )
+  next.throws = r.state
+  if (r.plan === null) return { state: next, change: null }
+  const startBars = next.elapsedBars + start.ahead
+  next.armed = {
+    slotId: r.plan.slot,
+    atBar: start.atBar,
+    beats: r.plan.beats,
+    timing: r.plan.timing,
+    feedback: r.plan.feedback,
+    startBars,
+    endBars: startBars + r.plan.beats / 4
+  }
+  return { state: next, change: 'armed' }
+}
+
+/**
+ * Whether a staged project should carry the armed throw: when the throw is still open at the
+ * moment the stage lands -- at `atBars` of the lap that is playing, or (undefined) at the next
+ * loop top. A throw that closes before then belongs to the project playing now; carried, it would
+ * play again in the staged project's lap. One in the next lap, or still to close at a mid-lap
+ * landing, has to ride the stage or it is lost when the stage lands.
+ */
+export function throwOutlivesLanding(state: DiscoverThrowState, atBars?: number): boolean {
+  if (state.armed === null || state.lastPos === null) return false
+  const lapStart = state.elapsedBars - state.lastPos
+  const landing = lapStart + (atBars ?? state.lastLoopBars)
+  return state.armed.endBars > landing + EPS
+}
+
+/**
+ * The armed throw as buildEngineProject's `dubThrows`: its curve (throwCurveFor, full level) on
+ * the preview stem of its row -- the preview numbers its stems by member order, stem i + 1 is
+ * `memberSlotIds[i]` -- and the echo it opens into. Undefined when there is nothing to send: no
+ * throw, its row is not in the mix, or the curve does not fit this loop (a loop that got shorter
+ * under it).
+ */
+export function discoverThrowSends(
+  armed: DiscoverThrow | null,
+  memberSlotIds: readonly string[],
+  groupId: string,
+  loopBars: number,
+  secPerBar: number
+):
+  | {
+      echo: { timing: ThrowTiming; feedback: number }
+      sends: Map<string, { bar: number; value: number }[]>
+    }
+  | undefined {
+  if (armed === null) return undefined
+  const own = memberSlotIds.indexOf(armed.slotId) + 1
+  if (own <= 0) return undefined
+  const curve = throwCurveFor(armed, loopBars, secPerBar)
+  if (curve === null) return undefined
+  return {
+    echo: { timing: armed.timing, feedback: armed.feedback },
+    sends: new Map([[stemKey(groupId, own), curve]])
+  }
+}

@@ -161,10 +161,17 @@ import {
 import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
-import { buildEngineProject } from '@shared/buildEngineProject'
+import { buildEngineProject, withoutDubThrows } from '@shared/buildEngineProject'
 import { discoverStemPans } from '@shared/radioPan'
 import { discoverStemPumpRoles } from '@shared/radioPump'
-import { normalizeSoundSettings } from '@shared/radioSound'
+import { normalizeSoundSettings, throwEveryBars } from '@shared/radioSound'
+import {
+  discoverThrowSends,
+  initialDiscoverThrowState,
+  stepDiscoverThrows,
+  throwOutlivesLanding,
+  type DiscoverThrowState
+} from '@shared/discoverThrows'
 import { backgroundScanGate } from '../audio/backgroundScanGate'
 // TEMPORARY INSTRUMENTATION (2026-09-28) -- remove this import and every
 // radioTrace* call below together with src/renderer/src/perf/radioTrace.ts.
@@ -1818,6 +1825,30 @@ export function DiscoverPanel({
       }
     }
 
+    // The armed dub throw (native radio sound plan, Task 11; @shared/discoverThrows), as a
+    // `dubSend` curve on its row's stem, anchored at the loop top like the gestures above and
+    // cleared by the radio clock once the throw has closed (radioThrowTick). Gated on radioOnRef
+    // the same way. A STAGED project carries it only if the throw is still open when the stage
+    // lands (throwOutlivesLanding): one that closes before then belongs to the project playing
+    // now, and carried it would play again a lap later; one in the next lap would be lost with
+    // the swap. buildEngineProject sends it only while the project's throws are on, scaled by
+    // their level.
+    const throwState = radioThrowRef.current
+    const throwArmed =
+      radioOnRef.current && (stage === undefined || throwOutlivesLanding(throwState, stage.atBars))
+        ? throwState.armed
+        : null
+    const dubThrows =
+      maxBarLength !== undefined && maxBarLength > 0
+        ? discoverThrowSends(
+            throwArmed,
+            members.map(({ id }) => id),
+            rifff.groupId,
+            maxBarLength,
+            (4 * 60) / bpm
+          )
+        : undefined
+
     // A throwaway single-rifff AppState -- only bpm/masterChain/
     // channelPlugins/reverb/sound are copied from the real project; state.rifffs is
     // ENTIRELY replaced by this one preview rifff, never merged with the
@@ -1910,7 +1941,7 @@ export function DiscoverPanel({
         resolveStretchedForPlayback,
         pluginCatalog,
         undefined,
-        { stemPans, stemPumpRoles }
+        { stemPans, stemPumpRoles, dubThrows }
       )
       radioTraceMark('built') // TEMP
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
@@ -1946,8 +1977,13 @@ export function DiscoverPanel({
       // so this is exactly one slot id per EngineStem, from one snapshot.
       // Main pairs a phone row to its stem's audio from it, and drops the
       // whole pairing if the two lengths ever disagree.
+      //
+      // Without the dub throw (Task 11): a throw is a one-off, and the phone plays its loop on
+      // repeat -- it would echo there every lap, and every throw would re-render the loop twice.
+      // The gestures do go to the phone; they belong to the layer changes, which change the loop
+      // anyway.
       void window.rifffApi.setRemoteLoop(
-        project,
+        dubThrows !== undefined ? withoutDubThrows(project) : project,
         members.map(function (m) {
           return m.id
         })
@@ -2420,6 +2456,14 @@ export function DiscoverPanel({
   // hole, a riser or a standalone drop-out) -- every path that arms one
   // checks that none is armed first. Empty is "nothing armed".
   const radioGestureRef = useRef<RadioGesture[]>([])
+  // The dub throws (native radio sound plan, Task 11): the web radio's own rule
+  // (@shared/radioThrows stepThrows) on a clock of bars played, and the one throw armed
+  // as a `dubSend` curve in the preview project, if any. See radioThrowTick. A REF, like
+  // radioGestureRef: the 30Hz clock writes it and buildAndPushPreview reads it.
+  const radioThrowRef = useRef<DiscoverThrowState>(initialDiscoverThrowState())
+  // A throw closed while a staged swap was pending: the push that would clear its curve
+  // waits until the stage is gone (a push withdraws a stage). See radioThrowTick.
+  const radioThrowClearOwedRef = useRef(false)
   // A change that is WAITING for the loop top, because the gesture it
   // carries can only be performed there.
   //
@@ -2720,6 +2764,80 @@ export function DiscoverPanel({
     if (radioGestureRef.current.length === 0) return
     radioGestureRef.current = []
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
+  /** Takes the armed throw's curve off the preview: a push now, or -- while a staged swap
+   * is pending, which an ordinary push would withdraw -- once it is gone. Whatever happens
+   * to the stage puts a project on the wire anyway (its landing's commit, a cancel's
+   * re-push), built without the throw; the owed push is the backstop for a stage that
+   * just goes away (a build that bailed out). The echo itself rings on: the engine's dub
+   * bus keeps its tail whatever the project says. */
+  function clearRadioThrowCurve(): void {
+    if (radioStageRef.current !== null) {
+      radioThrowClearOwedRef.current = true
+      return
+    }
+    radioThrowClearOwedRef.current = false
+    scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
+  /** Starts the throws afresh (radio on, radio off, the panel closing), clearing an armed
+   * throw's curve when `clear` says to. */
+  function resetRadioThrows(clear: boolean): void {
+    const hadArmed = radioThrowRef.current.armed !== null
+    radioThrowRef.current = initialDiscoverThrowState()
+    if (clear && hadArmed) clearRadioThrowCurve()
+  }
+  /** One radio tick for the dub throws (native radio sound plan, Task 11). The rules are
+   * the web radio's (stepThrows, through @shared/discoverThrows stepDiscoverThrows, which
+   * unrolls the looping playhead into bars played and picks where a throw may start): now
+   * and then one heard row that is neither drums nor bass opens its send into the echo for
+   * a beat or two -- never while stopped, never over a hole, riser or drop-out, at the
+   * project's rate (throwEveryBars). The armed throw goes out as a curve on the next push,
+   * at least a bar ahead; once it has closed its curve is cleared, long before the lap
+   * comes back round to it.
+   *
+   * Nothing is armed while a staged swap is pending, or a change waits to be staged:
+   * arming pushes, and an ordinary push withdraws the stage (a due throw just waits). A
+   * stage built while a throw is armed carries it when it must (buildAndPushPreview).
+   *
+   * With the project's throws off (or at level 0, which sends nothing) an armed throw is
+   * cleared and the rule starts again from scratch when they come back on. */
+  function radioThrowTick(pos: number, loopBars: number): void {
+    if (radioThrowClearOwedRef.current && radioStageRef.current === null) clearRadioThrowCurve()
+    const throws = normalizeSoundSettings(sound ?? appSoundDefaultsNow()).throws
+    if (!throws.on || !(throws.level > 0)) {
+      resetRadioThrows(true)
+      return
+    }
+    const step = stepDiscoverThrows(
+      radioThrowRef.current,
+      {
+        pos,
+        loopBars,
+        bpm: bpmRef.current,
+        playing,
+        // Nor while a change waits for the loop top (radio's held one, or manual ones):
+        // it is about to be staged, and a throw's push would only hold that up.
+        canArm:
+          radioStageRef.current === null &&
+          radioLedChangeRef.current === null &&
+          manualChangesRef.current.size === 0 &&
+          previewLoadedRef.current &&
+          !radioThrowClearOwedRef.current,
+        leadingArmed: radioGestureRef.current.some(
+          (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
+        ),
+        rows: slotsRef.current.map((s) => ({
+          slot: s.id,
+          kinds: s.kinds,
+          audible: previewingSlotIdsRef.current.has(s.id)
+        })),
+        everyBars: throwEveryBars(throws.rate)
+      },
+      Math.random
+    )
+    radioThrowRef.current = step.state
+    if (step.change === 'armed') scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+    else if (step.change === 'ended') clearRadioThrowCurve()
   }
   /** The loop length once these rows have turned over -- the preview's
    * maxBarLength with each landing row's incoming stem in place of its
@@ -3340,6 +3458,8 @@ export function DiscoverPanel({
         : Math.floor(pos / traceGrid) * traceGrid
     // The density arc gets every tick, before any branch below can return.
     densityTick(step.wrapped, pos, loopBars)
+    // So do the dub throws (Task 11).
+    radioThrowTick(pos, loopBars)
     // A change that was WAITING for its boundary LANDS HERE and only
     // here -- the loop top, or (since the arbitrary-bar swap) the bar a
     // bare cut named for itself.
@@ -4454,6 +4574,8 @@ export function DiscoverPanel({
       // matters -- nothing can re-arm from a dead panel, and the engine
       // gets a fresh project from whatever claims it next.
       radioGestureRef.current = []
+      radioThrowRef.current = initialDiscoverThrowState()
+      radioThrowClearOwedRef.current = false
       setRadioLedChange(null)
       // A closed panel has no loop top to wait for, so the waiting changes
       // land now, exactly as stopRadio lands them. Thrown away, a JOINING
@@ -6312,6 +6434,9 @@ export function DiscoverPanel({
     // radio has already stopped wanting.
     cancelStagedSwap('radio-off')
     clearRadioGesture()
+    // An armed throw's curve comes off too (radioOnRef is false, so the rebuild carries
+    // none); its echo rings out in the engine.
+    resetRadioThrows(true)
     // AFTER clearRadioGesture, so the release flushes the rebuild it just
     // parked rather than a staler one: stopping radio mid-change would
     // otherwise leave that curve on for the rest of the hold's backstop,
@@ -6361,6 +6486,7 @@ export function DiscoverPanel({
     }
     radioOnRef.current = true
     resetDensityArc()
+    resetRadioThrows(false)
     // createRadioClock, not restartRadioInterval: switching radio on is
     // where a phrase STARTS. The origin is the loop top radio started
     // inside (lapsSincePhrase counts whole laps, so a switch-on halfway

@@ -951,3 +951,45 @@ export async function buildEngineProject(
     rifffs
   }
 }
+
+/**
+ * The project as it would have been built with no `dubThrows`: every stem's `dubSend` taken off
+ * (and a toolkit that only carried one, dubOnlyToolkit, taken off with it), and `sound.dub` with
+ * it (and the whole `sound` block, if the echo was all it said). For Discover's phone loop
+ * (native radio sound plan, Task 11): a live throw is a one-off, and the phone renders the loop
+ * once and plays it on repeat -- with the throw baked in it would echo every lap there, and each
+ * throw would re-render (and re-download) the loop twice. Equal, field for field and key order
+ * included (phoneLoopFingerprint hashes the JSON), to a build without the option.
+ */
+export function withoutDubThrows(project: EngineProject): EngineProject {
+  let touched = false
+  const rifffs = project.rifffs.map((rifff) => {
+    let stemsTouched = false
+    const stems = rifff.stems.map((stem) => {
+      const toolkit = stem.toolkit
+      if (toolkit?.automation.dubSend === undefined) return stem
+      stemsTouched = true
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { dubSend, ...automation } = toolkit.automation
+      const rest: EngineStemToolkit = { ...toolkit, automation }
+      if (JSON.stringify(rest) === JSON.stringify(dubOnlyToolkit(toolkit.originBar))) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const { toolkit: _dropped, ...bare } = stem
+        return bare
+      }
+      return { ...stem, toolkit: rest }
+    })
+    if (!stemsTouched) return rifff
+    touched = true
+    return { ...rifff, stems }
+  })
+  const out: EngineProject = touched ? { ...project, rifffs } : { ...project }
+  if (project.sound?.dub !== undefined) {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { dub, ...sound } = project.sound
+    // buildEngineSound's "says nothing" rule: zita at today's return and nothing else
+    if (sound.room === 'zita' && Object.keys(sound).length === 1) delete out.sound
+    else out.sound = sound
+  }
+  return out
+}
