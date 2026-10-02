@@ -110,6 +110,7 @@ namespace sssketch
     {
         auto next = std::make_shared<ProjectSnapshot>();
         next->project = project;
+        next->generation = ++snapshotGeneration;
         for (auto& rifff : next->project.rifffs)
             for (auto& stem : rifff.stems)
                 // stem.durationSec: see StemBufferCache::load's own doc
@@ -239,14 +240,38 @@ namespace sssketch
                 for (const auto& stem : rifff.stems)
                     anyDubSend = anyDubSend || sends(stem.toolkit.automation.dubSend);
             next->dubActive = next->project.sound.dub.has_value() && anyDubSend;
+            // The snapshot this one follows (a staged one first: it lands before this does), for
+            // the stems whose send has to ramp out rather than step to nothing (SEND SLEW).
+            auto before = std::atomic_load_explicit(&staged, std::memory_order_acquire);
+            if (before == nullptr)
+                before = std::atomic_load_explicit(&published, std::memory_order_acquire);
+            const auto tappedBefore = [&](const juce::String& key) {
+                // 0 not tapped, 1 a curve, 2 a ramp out
+                if (before == nullptr)
+                    return 0;
+                for (const auto& tap : before->dubTaps)
+                    if (tap.stem->stemKey == key)
+                        return tap.rampOut ? 2 : 1;
+                return 0;
+            };
+            const bool settled = dubBus.sendGainsSettled();
             for (auto& rifff : next->project.rifffs)
                 for (auto& stem : rifff.stems)
                 {
                     if (! next->dubActive || ! sends(stem.toolkit.automation.dubSend))
                         stem.toolkit.automation.dubSend.clear();
-                    else
-                        next->dubStems.push_back(&stem);
+                    const bool curve = ! stem.toolkit.automation.dubSend.empty();
+                    // A stem that sent in the snapshot before ramps out from wherever its gain is;
+                    // one that was already ramping out keeps at it while any gain is held.
+                    const int was = curve ? 0 : tappedBefore(stem.stemKey);
+                    const bool rampOut = was == 1 || (was == 2 && ! settled);
+                    if (! curve && ! rampOut)
+                        continue;
+                    stem.dubTap = (int) next->dubTaps.size();
+                    next->dubTaps.push_back({ &stem, (unsigned long long) stem.stemKey.hashCode64(), rampOut });
+                    next->anyDubRampOut = next->anyDubRampOut || rampOut;
                 }
+            next->dubTapSlots.assign(next->dubTaps.size(), -1);
             // Its core (2 s of line a side), on this (message) thread; only the first build
             // happens here, at masterRate -- after that the rate is prepareMaster's or
             // drainRetiredProject's, as the cavern's.
@@ -642,15 +667,22 @@ namespace sssketch
         // The dub echo bus (DubDelay.h): opened while the project has a dub send, or while the
         // echo still rings after it has gone. It feeds the reverb (kDubToReverb), so it opens the
         // reverb bus with it. With neither, nothing below touches it: today's path.
-        const bool runDub = snap->dubActive || dubBus.isRinging();
+        // A send still ramping out (its curve gone with the last swap) keeps it running too.
+        const bool runDub = snap->dubActive || dubBus.isRinging() || (snap->anyDubRampOut && dubBus.holdsSendGain());
         if (runDub)
         {
-            dubBus.beginBlock(numSamples);
-            // Where each throw is open, from the curves alone (DubDelayBus::markOpen).
-            for (const auto* stem : snap->dubStems)
-                dubBus.markOpen(numSamples, stem->toolkit.automation.dubSend, stem->toolkit.originBar,
-                                positionBars, spb, sampleRate);
+            dubBus.beginBlock(numSamples, positionBars, spb, sampleRate, snap->generation);
+            // Each tapped stem's send gain for the block, and where its throw is open, from the
+            // curves (and a slew after a break) alone (DubDelayBus::markOpen).
+            for (size_t t = 0; t < snap->dubTaps.size(); ++t)
+            {
+                const auto* stem = snap->dubTaps[t].stem;
+                snap->dubTapSlots[t] = dubBus.markOpen(snap->dubTaps[t].id, numSamples, stem->toolkit.automation.dubSend,
+                                                       stem->toolkit.originBar, positionBars, spb, sampleRate);
+            }
         }
+        else
+            dubBus.idleSends();
         const bool runReverbBus = snap->anyToolkitActive || reverbBus.isRinging() || runDub;
         if (runReverbBus)
         {
@@ -770,7 +802,7 @@ namespace sssketch
                 // echo is on -- buildSnapshot): the echo is tapped from this stem alone.
                 const auto& dubSend = stem.toolkit.automation.dubSend;
                 const bool ownBuffer = stem.hasToolkit || stem.pan != 0.0
-                    || pumpRole != EngineStem::PumpRole::none || ! dubSend.empty();
+                    || pumpRole != EngineStem::PumpRole::none || stem.dubTap >= 0;
                 float* stemOutL = chOutL;
                 float* stemOutR = chOutR;
                 // The own buffer is cleared LAZILY, by the first segment that
@@ -844,9 +876,9 @@ namespace sssketch
                     // The dub throw's send: post-volume, post-pan, beside the reverb send and,
                     // like it, before the pump (the web's rows feed their delaySend from the
                     // pan, ahead of the pump bus).
-                    if (! dubSend.empty())
-                        dubBus.addSendCurve(numSamples, stemOutL, stemOutR, dubSend, stem.toolkit.originBar,
-                                            positionBars, spb, sampleRate);
+                    if (runDub && stem.dubTap >= 0)
+                        dubBus.addSendCurve(snap->dubTapSlots[(size_t) stem.dubTap], numSamples, stemOutL, stemOutR,
+                                            dubSend, stem.toolkit.originBar, positionBars, spb, sampleRate);
                     // The sends have been tapped by now (applyStemToolkit, the dub), so they are not pumped.
                     if (routeToPumped(*snap, pumpRole, thisChannel, pumpedReady, numSamples, stemOutL, stemOutR,
                                       chOutL, chOutR))

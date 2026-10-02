@@ -918,6 +918,92 @@ namespace sssketch
                 expect(peak(out.first, from, out.first.size()) + peak(out.second, from, out.second.size()) > 1.0e-4);
             }
 
+            // ---- SEND SLEW: a dub send never steps at a swap or a seek (Task 10/11 review) ----
+            {
+                auto ones = writeFloatWav("sssketch_dub_slew_ones.wav", kBarSamples, kRate, [](int) { return 1.0f; });
+                // feedback 0, a whole-frame delay (0.5 s at 44.1 kHz), the room muted: a stem of
+                // ones makes the echo d later the send gain itself, sample for sample
+                const int d = (int) (0.5 * kRate);
+                const float step = (float) (1.0 / (DubDelayBus::kSendSlewSec * kRate));
+                auto base = makeProject({ { ones, throwCurve(0.1, 0.4) } }, SoundSettings::Dub { 1.0, 0.0 });
+                base.sound.reverbReturn = 0.0;
+                auto noDub = base;
+                noDub.sound.dub.reset();
+                noDub.rifffs[0].stems[0].toolkit.automation.dubSend.clear();
+                const auto dry = render(noDub, kBarSamples);
+                const int swapAt = kBarSamples / 4; // bar 0.25: the throw open at 1
+                // the send gain at sample i, read from the echo
+                const auto gainAt = [&](const std::pair<std::vector<float>, std::vector<float>>& out, int i) {
+                    return out.first[(size_t) (i + d)] - dry.first[(size_t) (i + d)];
+                };
+                const auto worstStep = [&](const std::pair<std::vector<float>, std::vector<float>>& out, int from, int to) {
+                    float worst = 0.0f;
+                    for (int i = from; i < to; ++i)
+                        worst = std::max(worst, std::abs(gainAt(out, i + 1) - gainAt(out, i)));
+                    return worst;
+                };
+                const auto swappedAt = [&](const EngineProject& second) {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    engine.prepareMaster(kRate);
+                    engine.setProject(base);
+                    auto a = render(engine, swapAt);
+                    engine.setProject(second);
+                    const auto b = render(engine, kBarSamples - swapAt, { 512 }, swapAt);
+                    a.first.insert(a.first.end(), b.first.begin(), b.first.end());
+                    a.second.insert(a.second.end(), b.second.begin(), b.second.end());
+                    return a;
+                };
+
+                beginTest("switching throws off mid-throw ramps the send out over 5 ms instead of stepping it");
+                {
+                    const auto out = swappedAt(noDub);
+                    expectWithinAbsoluteError(gainAt(out, swapAt - 1), 1.0f, 1.0e-6f);
+                    const float worst = worstStep(out, swapAt - 100, swapAt + 400);
+                    expect(worst <= step * 1.001f, "a step of " + juce::String(worst) + " (a ramp is " + juce::String(step) + ")");
+                    const int ramp = (int) std::ceil(1.0 / step);
+                    expectEquals(gainAt(out, swapAt + ramp + 1), 0.0f);
+                    expect(gainAt(out, swapAt + ramp / 2) > 0.3f, "dropped, not ramped");
+                    for (int i = swapAt + ramp + 1; i < kBarSamples - d; ++i)
+                        if (gainAt(out, i) != 0.0f) { expect(false, "sends again at " + juce::String(i)); break; }
+                }
+
+                beginTest("moving the throw level mid-throw glides the send to the new level");
+                {
+                    auto lower = base;
+                    lower.rifffs[0].stems[0].toolkit.automation.dubSend = throwCurve(0.1, 0.4, 0.3);
+                    const auto out = swappedAt(lower);
+                    expect(worstStep(out, swapAt - 100, swapAt + 400) <= step * 1.001f);
+                    expectWithinAbsoluteError(gainAt(out, swapAt + 400), 0.3f, 1.0e-6f);
+                }
+
+                beginTest("a swap that leaves an open throw's curve as it was changes nothing, to the bit");
+                {
+                    const auto out = swappedAt(base);
+                    const auto straight = render(base, kBarSamples);
+                    expect(sameBits(out.first, straight.first) && sameBits(out.second, straight.second));
+                }
+
+                beginTest("a seek into an open throw ramps the send in");
+                {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    engine.prepareMaster(kRate);
+                    engine.setProject(base);
+                    render(engine, 4410); // bar 0..0.025: the throw not yet open
+                    const int to = kBarSamples / 5; // bar 0.2: open at 1
+                    const auto out = render(engine, kBarSamples / 2, { 512 }, to);
+                    // here the dry stem is 1.0 throughout, so the echo d later is 1 + the gain
+                    const auto g = [&](int j) { return out.first[(size_t) (j + d)] - 1.0f; };
+                    expect(g(0) <= step * 1.001f, "the send stepped in: " + juce::String(g(0)));
+                    float worst = 0.0f;
+                    for (int j = 0; j < 400; ++j)
+                        worst = std::max(worst, std::abs(g(j + 1) - g(j)));
+                    expect(worst <= step * 1.001f);
+                    expectEquals(g(400), 1.0f);
+                }
+            }
+
             // A log, not a check: only with SSSKETCH_BENCH=1, so the suite stays quick.
             if (std::getenv("SSSKETCH_BENCH") != nullptr)
             {

@@ -483,10 +483,24 @@ namespace sssketch
             // taps a stem for the echo and, with the bus silent, routes exactly as before it
             // existed.
             bool dubActive = false;
-            // The stems whose dubSend curve survived that narrowing (pointers into this
-            // snapshot's own project): every block the echo runs, each marks where its throw is
-            // open (DubDelayBus::markOpen), whether or not it has audio in the block.
-            std::vector<const EngineStem*> dubStems;
+            // The stems the echo taps (EngineStem::dubTap indexes this): each whose dubSend curve
+            // survived that narrowing, and each that had one in the snapshot before this one but
+            // has none now (`rampOut`: an empty curve, so its send ramps out instead of stepping
+            // -- DubDelayBus, SEND SLEW). Every block the echo runs, each works out its send gain
+            // and marks where its throw is open (DubDelayBus::markOpen), audio or not; the slot it
+            // gets is kept in dubTapSlots (sized here, so the audio thread never allocates).
+            struct DubTap
+            {
+                const EngineStem* stem = nullptr;
+                unsigned long long id = 0; // stemKey's hash
+                bool rampOut = false;
+            };
+            std::vector<DubTap> dubTaps;
+            bool anyDubRampOut = false;
+            mutable std::vector<int> dubTapSlots;
+            // Which build this is (PlaybackEngine::snapshotGeneration): the echo's send slew tells
+            // a swap from a block that follows on.
+            unsigned long long generation = 0;
             // The pumped stems' dry sum per channel (channelGroups order), and the key stems' dry sum for the whole
             // project; sized lazily per numSamples, like the channel scratch. `mutable` for the
             // same reason. pumpTargets is reserved to the channel count here, so filling it per
@@ -788,5 +802,7 @@ namespace sssketch
          * thread; held here, not in the snapshot, so a re-sync keeps its tail. `mutable` as the
          * reverb bus is. */
         mutable DubDelayBus dubBus;
+        /** Counts buildSnapshot calls (message thread), for ProjectSnapshot::generation. */
+        unsigned long long snapshotGeneration = 0;
     };
 }

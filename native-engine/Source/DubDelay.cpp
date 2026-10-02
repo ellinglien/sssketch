@@ -4,6 +4,7 @@
 #include "DubDelay.h"
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace sssketch
 {
@@ -214,7 +215,77 @@ namespace sssketch
         }
     }
 
-    void DubDelayBus::beginBlock(int numSamples)
+    namespace
+    {
+        /** The block's first sample, as a whole sample count; nullopt if out of range. */
+        std::optional<long long> firstSample(double positionBars, double secPerBar, double sampleRate)
+        {
+            if (! (sampleRate > 0.0) || ! (secPerBar > 0.0) || ! std::isfinite(positionBars))
+                return std::nullopt;
+            const double startSample = std::round(positionBars * secPerBar * sampleRate);
+            if (! (std::abs(startSample) < 9.0e15))
+                return std::nullopt;
+            return (long long) startSample;
+        }
+
+        /** A stem's send gain over a block, sample by sample: its curve (0 where it is empty),
+         * or, while `slewing`, a linear slew from `gain` toward it at `step` a sample, which ends
+         * -- exactly on the curve -- once the curve is within a step. `sink(i, g)` gets each
+         * sample's gain; a curve that is 0 over the whole block with no slew calls nothing.
+         * Updates `gain` and `slewing` to the block's end. The ONE place the gains are worked
+         * out: markOpen and addSendCurve both run it, from the same starting state. */
+        template <typename Sink>
+        void sendGains(const std::vector<AutomationPoint>& curve, double originBar, long long k0, int numSamples,
+                       double sampleRate, double secPerBar, float step, float& gain, bool& slewing, Sink&& sink)
+        {
+            const auto barOf = [&](int i) { return (((double) (k0 + i) / sampleRate) / secPerBar) - originBar; };
+            if (! slewing && (curve.empty() || silentOver(curve, barOf(0), barOf(numSamples - 1))))
+            {
+                gain = 0.0f;
+                return;
+            }
+            if (! slewing)
+            {
+                CurveCursor cursor { curve };
+                for (int i = 0; i < numSamples; ++i)
+                    sink(i, gain = cursor.at(barOf(i)));
+                return;
+            }
+            std::optional<CurveCursor> cursor;
+            if (! curve.empty())
+                cursor.emplace(CurveCursor { curve });
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const float target = cursor ? cursor->at(barOf(i)) : 0.0f;
+                if (slewing)
+                {
+                    const float d = target - gain;
+                    if (std::abs(d) <= step)
+                    {
+                        gain = target;
+                        slewing = false;
+                    }
+                    else
+                        gain += d > 0.0f ? step : -step;
+                }
+                else
+                    gain = target;
+                sink(i, gain);
+            }
+        }
+    }
+
+    void DubDelayBus::forgetSends()
+    {
+        for (auto& slot : sendSlots)
+            slot = SendSlot {};
+        fresh = true;
+        holdsGain = false;
+        gainsSettled.store(true, std::memory_order_relaxed);
+    }
+
+    void DubDelayBus::beginBlock(int numSamples, double positionBars, double secPerBar, double sampleRate,
+                                 unsigned long long generation)
     {
         fed = false;
         if (numSamples <= 0)
@@ -231,54 +302,97 @@ namespace sssketch
         std::fill(inL.begin(), inL.begin() + (long) n, 0.0f);
         std::fill(inR.begin(), inR.begin() + (long) n, 0.0f);
         std::fill(open.begin(), open.begin() + (long) n, (unsigned char) 0);
+
+        const auto k0 = firstSample(positionBars, secPerBar, sampleRate);
+        blockBreaks = ! fresh && (generation != lastGeneration || ! k0 || *k0 != nextK0);
+        fresh = false;
+        lastGeneration = generation;
+        nextK0 = k0 ? *k0 + numSamples : 0;
+        slewStep = sampleRate > 0.0 ? (float) (1.0 / (kSendSlewSec * sampleRate)) : 1.0f;
+        for (auto& slot : sendSlots)
+            slot.seen = false;
     }
 
-    void DubDelayBus::addSendCurve(int numSamples, const float* left, const float* right,
+    int DubDelayBus::markOpen(unsigned long long id, int numSamples, const std::vector<AutomationPoint>& curve,
+                              double originBar, double positionBars, double secPerBar, double sampleRate)
+    {
+        if (numSamples <= 0 || open.size() < (size_t) numSamples)
+            return -1;
+        const auto k0 = firstSample(positionBars, secPerBar, sampleRate);
+        if (! k0)
+            return -1;
+        const auto barOf = [&](int i) { return (((double) (*k0 + i) / sampleRate) / secPerBar) - originBar; };
+        const auto targetAt = [&](int i) { return curve.empty() ? 0.0f : (float) evaluateAutomation(curve, barOf(i), 0.0); };
+
+        int index = -1;
+        for (int k = 0; k < kMaxSendSlots && index < 0; ++k)
+            if (sendSlots[(size_t) k].used && sendSlots[(size_t) k].id == id)
+                index = k;
+        if (index < 0)
+        {
+            for (int k = 0; k < kMaxSendSlots && index < 0; ++k)
+                if (! sendSlots[(size_t) k].used)
+                    index = k;
+            if (index >= 0)
+            {
+                // A stem new to the bus: after a break it was not sending before it (0); otherwise
+                // (a fresh play, an export) it starts on its curve.
+                auto& added = sendSlots[(size_t) index];
+                added = SendSlot {};
+                added.used = true;
+                added.id = id;
+                added.gain = blockBreaks ? 0.0f : targetAt(0);
+            }
+        }
+
+        const auto mark = [&](int i, float g) {
+            if (g > 0.0f)
+                open[(size_t) i] = 1;
+        };
+        if (index < 0)
+        {
+            // Every slot in use: no slew for this stem, its curve as is.
+            float gain = 0.0f;
+            bool slewing = false;
+            sendGains(curve, originBar, *k0, numSamples, sampleRate, secPerBar, slewStep, gain, slewing, mark);
+            return -1;
+        }
+
+        auto& slot = sendSlots[(size_t) index];
+        slot.seen = true;
+        // A break: slew if the gain would otherwise step by more than a 5 ms ramp's worth (a
+        // little over a step, so a curve's own ramp across the break never engages it).
+        if (blockBreaks && ! slot.slewing && std::abs(targetAt(0) - slot.gain) > slewStep * 1.05f)
+            slot.slewing = true;
+        slot.startGain = slot.gain;
+        slot.startSlewing = slot.slewing;
+        sendGains(curve, originBar, *k0, numSamples, sampleRate, secPerBar, slewStep, slot.gain, slot.slewing, mark);
+        return index;
+    }
+
+    void DubDelayBus::addSendCurve(int slotIndex, int numSamples, const float* left, const float* right,
                                    const std::vector<AutomationPoint>& curve, double originBar,
                                    double positionBars, double secPerBar, double sampleRate)
     {
-        if (numSamples <= 0 || curve.empty() || left == nullptr || right == nullptr || inL.size() < (size_t) numSamples)
+        if (numSamples <= 0 || left == nullptr || right == nullptr || inL.size() < (size_t) numSamples)
             return;
-        if (! (sampleRate > 0.0) || ! (secPerBar > 0.0) || ! std::isfinite(positionBars))
+        const auto k0 = firstSample(positionBars, secPerBar, sampleRate);
+        if (! k0)
             return;
-        const double samplesPerBar = secPerBar * sampleRate;
-        const double startSample = std::round(positionBars * samplesPerBar);
-        if (! (std::abs(startSample) < 9.0e15))
-            return;
-        const auto k0 = (long long) startSample;
-        const auto barOf = [&](int i) { return (((double) (k0 + i) / sampleRate) / secPerBar) - originBar; };
-        if (silentOver(curve, barOf(0), barOf(numSamples - 1)))
-            return;
-        CurveCursor cursor { curve };
-        for (int i = 0; i < numSamples; ++i)
+        float gain = 0.0f;
+        bool slewing = false;
+        if (slotIndex >= 0 && slotIndex < kMaxSendSlots)
         {
-            const float g = cursor.at(barOf(i));
+            gain = sendSlots[(size_t) slotIndex].startGain;
+            slewing = sendSlots[(size_t) slotIndex].startSlewing;
+        }
+        sendGains(curve, originBar, *k0, numSamples, sampleRate, secPerBar, slewStep, gain, slewing, [&](int i, float g) {
             if (g <= 0.0f)
-                continue; // adds +0.0f: nothing (a send of 0 is no send)
+                return; // adds +0.0f: nothing (a send of 0 is no send)
             inL[(size_t) i] += left[i] * g;
             inR[(size_t) i] += right[i] * g;
             fed = true;
-        }
-    }
-
-    void DubDelayBus::markOpen(int numSamples, const std::vector<AutomationPoint>& curve, double originBar,
-                               double positionBars, double secPerBar, double sampleRate)
-    {
-        if (numSamples <= 0 || curve.empty() || open.size() < (size_t) numSamples)
-            return;
-        if (! (sampleRate > 0.0) || ! (secPerBar > 0.0) || ! std::isfinite(positionBars))
-            return;
-        const double startSample = std::round(positionBars * secPerBar * sampleRate);
-        if (! (std::abs(startSample) < 9.0e15))
-            return;
-        const auto k0 = (long long) startSample;
-        const auto barOf = [&](int i) { return (((double) (k0 + i) / sampleRate) / secPerBar) - originBar; };
-        if (silentOver(curve, barOf(0), barOf(numSamples - 1)))
-            return;
-        CurveCursor cursor { curve };
-        for (int i = 0; i < numSamples; ++i)
-            if (cursor.at(barOf(i)) > 0.0f)
-                open[(size_t) i] = 1;
+        });
     }
 
     void DubDelayBus::process(double sampleRate, const std::optional<SoundSettings::Dub>& wanted, double bpm,
@@ -288,6 +402,17 @@ namespace sssketch
             return;
         std::fill(wetL.begin(), wetL.begin() + numSamples, 0.0f);
         std::fill(wetR.begin(), wetR.begin() + numSamples, 0.0f);
+
+        // Stems no longer in the project are forgotten (their audio has gone with them); what
+        // is left either holds a gain or has settled at 0.
+        holdsGain = false;
+        for (auto& slot : sendSlots)
+        {
+            if (slot.used && ! slot.seen)
+                slot = SendSlot {};
+            holdsGain = holdsGain || (slot.used && (slot.gain != 0.0f || slot.slewing));
+        }
+        gainsSettled.store(! holdsGain, std::memory_order_relaxed);
 
         promotePending();
         auto* core = current.load(std::memory_order_acquire);

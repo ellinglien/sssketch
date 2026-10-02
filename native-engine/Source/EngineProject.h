@@ -164,6 +164,11 @@ namespace sssketch
             pumped
         };
         PumpRole pumpRole = PumpRole::none;
+
+        /** NOT ON THE WIRE: this stem's index in PlaybackEngine's ProjectSnapshot::dubTaps (its
+         * dub send -- a dubSend curve, or a ramp out after its curve has gone), or -1. Set by
+         * buildSnapshot on the snapshot's own copy; the parser leaves it -1. */
+        int dubTap = -1;
     };
 
     /** A riser's bandpass Q on the wire (EngineRiser::q): 2 is today's (NoiseRiser.h's

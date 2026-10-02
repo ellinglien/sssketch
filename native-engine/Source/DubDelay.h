@@ -150,6 +150,16 @@ namespace sssketch
      * 0 (markOpen) -- and never in the middle of a ringing tail with no throw. Per sample, so
      * block-size invariant.
      *
+     * SEND SLEW. Within one project snapshot, played on without a jump, a stem's send gain is
+     * its curve, sample for sample. A curve can step at a break, though -- throws switched off or
+     * their level moved while one is open, a staged project landing, a seek or a loop's wrap into
+     * an open throw -- and a send stepping 1 -> 0 in one sample clicks into the echo. So after a
+     * break, a stem whose gain would step by more than a 5 ms ramp's worth slews to its curve
+     * at that rate instead (linear, full scale in kSendSlewSec), then follows the curve exactly.
+     * A stem whose curve has gone stays a tap with an empty curve (PlaybackEngine keeps it one
+     * snapshot on) and ramps out to 0. Never engaged by a continuous curve, so a play with no
+     * break -- every export -- is exactly the curve.
+     *
      * SILENCE. The bus rings for DubDelayCore::ringSamples() after the last non-zero input
      * sample, then zeroes its state (everything in it is below -140 dB by then) and is idle:
      * an idle block with no input is skipped, which is exactly what processing it would give.
@@ -161,7 +171,8 @@ namespace sssketch
      * (takeWantedRate). PlaybackEngine prepares one only once a project with sound.dub has a
      * stem with a non-zero dubSend curve: with no send, nothing is built.
      *
-     * Usage per render block: beginBlock(n), addSendCurve(...) per sending stem, process(...),
+     * Usage per render block: beginBlock(...), markOpen(...) per stem with a send, addSendCurve(...)
+     * per sending stem with audio, process(...),
      * then read wetLeft()/wetRight(). Single rendering thread, except the MESSAGE THREAD
      * methods. */
     class DubDelayBus
@@ -189,25 +200,54 @@ namespace sssketch
         unsigned long long rateMismatchCount() const { return rateMismatches.load(std::memory_order_relaxed); }
 
         /** AUDIO THREAD. Clears the input for a block of numSamples (sizing the scratch the first
-         * time a block is this long, as the reverb bus does). */
-        void beginBlock(int numSamples);
+         * time a block is this long, as the reverb bus does), and notes whether this block follows
+         * the last one without a break: the same project snapshot (`generation`) and the next
+         * sample (k0 = round(positionBars x secPerBar x sampleRate)). A swap (setProject, a staged
+         * project landing) or a jump (a seek, a loop's wrap) is a break: see SEND SLEW. The first
+         * block after construction or dropTail() is never a break. */
+        void beginBlock(int numSamples, double positionBars, double secPerBar, double sampleRate,
+                        unsigned long long generation);
 
-        /** AUDIO THREAD. Adds one stem's post-pan signal, scaled per sample by its dubSend curve
-         * (clip-relative bars from `originBar`, values 0..1, linear gain as the web's send
-         * GainNode). Each sample's bar comes from a whole sample count, k0 + i with
-         * k0 = round(positionBars x secPerBar x sampleRate), so the gains do not depend on how the
-         * host splits its blocks. A curve that is 0 over the whole block adds nothing. */
-        void addSendCurve(int numSamples, const float* left, const float* right,
+        /** AUDIO THREAD. Called once per block for EVERY stem with a send in this snapshot (`id`
+         * its stemKey's hash), sounding or not (muted, out of its clip, nothing in the block):
+         * works out the stem's send gain for the block -- its curve, or, after a break, a slew
+         * from where the gain was (SEND SLEW) -- and marks where it is above 0: a throw is open
+         * there, so a throw's start (where a change of settings is taken while the echo rings)
+         * comes from the gains alone, never from where the host's blocks hold the stem's audio.
+         * An empty curve is 0 throughout (a stem whose curve has gone, ramping out). Returns the
+         * slot addSendCurve takes, -1 if every slot is in use (then no slew: the curve as is). */
+        int markOpen(unsigned long long id, int numSamples, const std::vector<AutomationPoint>& curve,
+                     double originBar, double positionBars, double secPerBar, double sampleRate);
+
+        /** AUDIO THREAD. Adds one stem's post-pan signal, scaled per sample by the gain markOpen
+         * worked out for its `slot` this block: its dubSend curve (clip-relative bars from
+         * `originBar`, values 0..1, linear gain as the web's send GainNode), slewed after a break.
+         * Each sample's bar comes from a whole sample count, k0 + i, so the gains do not depend on
+         * how the host splits its blocks. A gain of 0 over the whole block adds nothing. */
+        void addSendCurve(int slot, int numSamples, const float* left, const float* right,
                           const std::vector<AutomationPoint>& curve, double originBar, double positionBars,
                           double secPerBar, double sampleRate);
 
-        /** AUDIO THREAD. Marks where a stem's dubSend curve is above 0 in this block: a throw is
-         * open there. Called for EVERY stem with a curve, sounding or not (muted, out of its clip,
-         * nothing in the block), so a throw's start -- where a change of settings is taken while
-         * the echo rings -- comes from the curves alone and never from where the host's blocks
-         * happen to hold the stem's audio. Same sample clock as addSendCurve. */
-        void markOpen(int numSamples, const std::vector<AutomationPoint>& curve, double originBar,
-                      double positionBars, double secPerBar, double sampleRate);
+        /** AUDIO THREAD. A block the bus does not run: every stem's send is forgotten (none is
+         * sending), so one that sends again later starts from 0 at that break. */
+        void idleSends()
+        {
+            if (! holdsGain && ! anySlotUsed())
+                return;
+            for (auto& slot : sendSlots)
+                slot = SendSlot {};
+            holdsGain = false;
+            gainsSettled.store(true, std::memory_order_relaxed);
+        }
+
+        /** AUDIO THREAD. Whether some stem's send gain is not yet settled at 0 (a ramp out after
+         * its curve went is still to run). PlaybackEngine keeps the bus running for it. */
+        bool holdsSendGain() const { return holdsGain; }
+
+        /** Any thread: false while some stem's send gain is held above 0 or slewing, as of the last
+         * block the bus ran (true before any). buildSnapshot keeps a stem whose curve has gone as
+         * a ramp-out tap only while this is false. */
+        bool sendGainsSettled() const { return gainsSettled.load(std::memory_order_relaxed); }
 
         /** AUDIO THREAD. Runs the echo over the block's input into the wet buffers. `wanted` is
          * the project's sound.dub (none: keep what is set), at `bpm`. */
@@ -227,14 +267,39 @@ namespace sssketch
         {
             dropRequested = true;
             ringRemaining = 0;
+            forgetSends();
         }
 
         /** For tests: the settings the running core has taken (0 if none). */
         float currentDelaySec() const;
         float currentFeedback() const;
 
+        /** SEND SLEW: how fast a stem's send gain may move after a break -- full scale in 5 ms,
+         * the web's own throw ramps (Engine.throwDelay), so a curve's ramp never engages it. */
+        static constexpr double kSendSlewSec = 0.005;
+        static constexpr int kMaxSendSlots = 64;
+
     private:
         void promotePending();
+        void forgetSends();
+        bool anySlotUsed() const
+        {
+            for (const auto& slot : sendSlots)
+                if (slot.used) return true;
+            return false;
+        }
+
+        /** One stem's send gain across blocks (SEND SLEW). */
+        struct SendSlot
+        {
+            unsigned long long id = 0;
+            bool used = false;
+            bool seen = false;       // by markOpen this block
+            float gain = 0.0f;       // the last sample's gain
+            bool slewing = false;
+            float startGain = 0.0f;  // as this block began, for addSendCurve's replay
+            bool startSlewing = false;
+        };
 
         std::vector<float> inL, inR, wetL, wetR;
         std::vector<unsigned char> open; // any send's gain > 0 at that sample
@@ -242,6 +307,15 @@ namespace sssketch
         bool wasOpen = false;
         int ringRemaining = 0;
         bool dropRequested = false;
+
+        std::array<SendSlot, kMaxSendSlots> sendSlots {};
+        bool fresh = true;           // no block since construction or dropTail()
+        bool blockBreaks = false;    // this block follows a swap or a jump
+        long long nextK0 = 0;
+        unsigned long long lastGeneration = 0;
+        float slewStep = 0.0f;       // per sample
+        bool holdsGain = false;
+        std::atomic<bool> gainsSettled { true };
 
         double builtRate = 0.0; // message thread only
         std::atomic<DubDelayCore*> current { nullptr };
