@@ -163,6 +163,7 @@ import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/typ
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject } from '@shared/buildEngineProject'
 import { discoverStemPans } from '@shared/radioPan'
+import { discoverStemPumpRoles } from '@shared/radioPump'
 import { normalizeSoundSettings } from '@shared/radioSound'
 import { backgroundScanGate } from '../audio/backgroundScanGate'
 // TEMPORARY INSTRUMENTATION (2026-09-28) -- remove this import and every
@@ -1896,12 +1897,20 @@ export function DiscoverPanel({
         rifff.groupId,
         normalizeSoundSettings(previewState.sound).panning.width
       )
+      // The drum-keyed pump's roles (Task 9), by each member's slot kinds: drums key it, bass
+      // is left alone, the rest are pumped. buildEngineProject applies them only while the
+      // project's pump is on.
+      const stemPumpRoles = discoverStemPumpRoles(
+        slotsRef.current,
+        members.map(({ id }) => id),
+        rifff.groupId
+      )
       const project = await buildEngineProject(
         previewState,
         resolveStretchedForPlayback,
         pluginCatalog,
         undefined,
-        { stemPans }
+        { stemPans, stemPumpRoles }
       )
       radioTraceMark('built') // TEMP
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return

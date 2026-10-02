@@ -186,6 +186,39 @@ namespace sssketch
             }
         }
 
+        // The drum-keyed pump (DrumPump.h): on only with the project's pump AND a key stem AND a
+        // pumped stem. "No key stem means no pump" -- and with no pumped stem there is nothing
+        // to duck. Otherwise every role is narrowed to none here, so renderBlock routes every
+        // stem exactly as it did before the pump existed (no own buffer for the role, no key
+        // buffer, no post-loop pass): bit-identical. Muted stems count: a mute re-sends the
+        // project, and the routing should not hinge on it (a muted key simply keys nothing).
+        {
+            bool anyKey = false, anyPumped = false;
+            for (const auto& rifff : next->project.rifffs)
+                for (const auto& stem : rifff.stems)
+                {
+                    anyKey = anyKey || stem.pumpRole == EngineStem::PumpRole::key;
+                    anyPumped = anyPumped || stem.pumpRole == EngineStem::PumpRole::pumped;
+                }
+            next->pumpActive = next->project.sound.pump.has_value() && anyKey && anyPumped;
+            if (next->pumpActive)
+            {
+                next->pumpDepthDb = next->project.sound.pump->depthDb;
+                next->scratchPumpL.assign(next->channelGroups.size(), {});
+                next->scratchPumpR.assign(next->channelGroups.size(), {});
+                next->pumpTargets.reserve(next->channelGroups.size());
+                // Its Faust instance, on this (message) thread; a no-op once one is built at the
+                // current rate.
+                drumPump.prepare(masterRate.load());
+            }
+            else
+            {
+                for (auto& rifff : next->project.rifffs)
+                    for (auto& stem : rifff.stems)
+                        stem.pumpRole = EngineStem::PumpRole::none;
+            }
+        }
+
         // The master stage's limiter and glue are Faust objects: built here, on the message thread,
         // before a snapshot that asks for it can reach the audio thread (a no-op once one is
         // built at the current rate).
@@ -337,6 +370,7 @@ namespace sssketch
     void PlaybackEngine::drainRetiredProject()
     {
         masterStage.drainRetired();
+        drumPump.drainRetired();
         reverbBus.drainRetiredCavern();
         // A cavern block found no convolver at its rate (ReverbBus::runCavern went silent for
         // it): build one now. Expected never in practice -- prepareMaster tells the engine the
@@ -399,6 +433,9 @@ namespace sssketch
         masterRate.store(sampleRate);
         if (masterStage.preparedRate() != 0.0)
             masterStage.prepare(sampleRate);
+        // The pump's instance likewise.
+        if (drumPump.preparedRate() != 0.0)
+            drumPump.prepare(sampleRate);
         // The cavern room's convolver follows the same rate, rebuilt only if one exists.
         if (reverbBus.cavernPreparedRate() != 0.0)
             reverbBus.prepareCavern(sampleRate);
@@ -555,12 +592,34 @@ namespace sssketch
             reverbBus.beginBlock(numSamples);
         }
 
+        // The drum-keyed pump's routing (DrumPump.h). The key buffer collects every key stem's
+        // dry signal, project-wide, cleared once per block; each channel's pumped buffer is
+        // cleared lazily by its first pumped stem that has samples in the block
+        // (pumpedReady), and only such channels are ducked and added in after the loop.
+        const bool pumpActive = snap->pumpActive;
+        if (pumpActive)
+        {
+            auto& kL = snap->scratchKeyL;
+            auto& kR = snap->scratchKeyR;
+            if (kL.size() != (size_t) numSamples)
+            {
+                kL.resize((size_t) numSamples);
+                kR.resize((size_t) numSamples);
+            }
+            std::fill(kL.begin(), kL.end(), 0.0f);
+            std::fill(kR.begin(), kR.end(), 0.0f);
+            snap->pumpTargets.clear();
+        }
+
         size_t channelIdx = 0;
         for (const auto& [channelId, rifffPtrs] : snap->channelGroups)
         {
             float* chOutL = channelL[channelIdx].data();
             float* chOutR = channelR[channelIdx].data();
+            const size_t thisChannel = channelIdx;
             ++channelIdx;
+            // This channel's pumped buffer, once a pumped stem has written to it this block.
+            bool pumpedReady = false;
 
             for (const auto* rifffPtr : rifffPtrs)
             {
@@ -625,7 +684,12 @@ namespace sssketch
                 // straight into the channel accumulator exactly as it always
                 // did -- same pointers, same order of additions, so an
                 // ordinary project's output stays bit-identical.
-                const bool ownBuffer = stem.hasToolkit || stem.pan != 0.0;
+                //
+                // A stem with a pump role (only ever set while the pump is active) takes its own
+                // buffer too: a pumped stem's dry signal goes to its channel's pumped buffer
+                // instead of the channel, and a key stem's to the key buffer as well.
+                const bool ownBuffer =
+                    stem.hasToolkit || stem.pan != 0.0 || stem.pumpRole != EngineStem::PumpRole::none;
                 float* stemOutL = chOutL;
                 float* stemOutR = chOutR;
                 // The own buffer is cleared LAZILY, by the first segment that
@@ -696,10 +760,44 @@ namespace sssketch
                             stemOutR);
                     else
                         applyStemPan(stem.pan, numSamples, stemOutL, stemOutR);
+                    // The send has been tapped by now (applyStemToolkit), so it is not pumped.
+                    if (stem.pumpRole == EngineStem::PumpRole::pumped)
+                    {
+                        auto& pL = snap->scratchPumpL[thisChannel];
+                        auto& pR = snap->scratchPumpR[thisChannel];
+                        if (!pumpedReady)
+                        {
+                            if (pL.size() != (size_t) numSamples)
+                            {
+                                pL.resize((size_t) numSamples);
+                                pR.resize((size_t) numSamples);
+                            }
+                            std::fill(pL.begin(), pL.end(), 0.0f);
+                            std::fill(pR.begin(), pR.end(), 0.0f);
+                            pumpedReady = true;
+                            snap->pumpTargets.push_back({ pL.data(), pR.data(), chOutL, chOutR });
+                        }
+                        for (int i2 = 0; i2 < numSamples; ++i2)
+                        {
+                            pL[(size_t) i2] += stemOutL[i2];
+                            pR[(size_t) i2] += stemOutR[i2];
+                        }
+                        return;
+                    }
                     for (int i2 = 0; i2 < numSamples; ++i2)
                     {
                         chOutL[i2] += stemOutL[i2];
                         chOutR[i2] += stemOutR[i2];
+                    }
+                    if (stem.pumpRole == EngineStem::PumpRole::key)
+                    {
+                        float* kL = snap->scratchKeyL.data();
+                        float* kR = snap->scratchKeyR.data();
+                        for (int i2 = 0; i2 < numSamples; ++i2)
+                        {
+                            kL[i2] += stemOutL[i2];
+                            kR[i2] += stemOutR[i2];
+                        }
                     }
                 };
 
@@ -990,6 +1088,18 @@ namespace sssketch
                 }
             }
         }
+
+        // The drum-keyed pump: every key stem has been rendered by now, whatever channel it is
+        // on, so the key is complete. One pass ducks each channel's pumped buffer and adds it
+        // into that channel, BEFORE the channel plugin chains below (the pumped rows are dry
+        // signal, like the rest of the channel). pump.dsp works sample by sample with no
+        // look-ahead, so this block's key is exactly the key for this block. Run every block the
+        // pump is on, pumped samples or not, so its envelope follows the key continuously.
+        if (pumpActive)
+            drumPump.process(sampleRate, snap->pumpDepthDb, numSamples, snap->scratchKeyL.data(),
+                             snap->scratchKeyR.data(), snap->pumpTargets.data(), snap->pumpTargets.size());
+        else
+            drumPump.idle();
 
         // Run each channel's own chain, then add the result into the real
         // output -- a channel with no chain published is a pure passthrough,

@@ -274,6 +274,19 @@ namespace sssketch
                         // audio thread, and anything else is clamped into the law's range.
                         const double pan = getDouble(stemVar, "pan", 0.0);
                         stem.pan = std::isfinite(pan) ? std::clamp(pan, -1.0, 1.0) : 0.0;
+                        // The drum-keyed pump's role (DrumPump.h). Only a string "key" or
+                        // "pumped" counts; absent, "none" or anything else is none.
+                        {
+                            const auto role = stemVar.getProperty("pumpRole", juce::var());
+                            if (role.isString())
+                            {
+                                const auto text = role.toString();
+                                if (text == "key")
+                                    stem.pumpRole = EngineStem::PumpRole::key;
+                                else if (text == "pumped")
+                                    stem.pumpRole = EngineStem::PumpRole::pumped;
+                            }
+                        }
 
                         // The built-in toolkit, per CLIP (spec section 2b).
                         // An ABSENT `toolkit` key leaves hasToolkit false,

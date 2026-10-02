@@ -794,6 +794,9 @@ namespace sssketch
                     // new position starts as a fresh stage would (the switches and their fades
                     // are kept). Off, or with nothing engaged, this touches no sample.
                     engine.clearMasterDynamics();
+                    // The drum-keyed pump's duck likewise (DrumPump.h): a seek lands as a fresh
+                    // play from the new bar, not 200 ms of the old kick's release.
+                    engine.clearPump();
                     repositionFadingIn = true;
                     repositionElapsedSec = 0.0;
                     // The jump happens at the master stage's INPUT, but this fade is applied at
@@ -843,6 +846,8 @@ namespace sssketch
             // freeze and play on under the start of the next play (zita's cannot be dropped
             // without allocating; see ReverbBus::dropCavernTail). A seek keeps it.
             engine.dropReverbTail();
+            // And the pump's duck, so the next play starts as an export does.
+            engine.clearPump();
             // Pause preserves wherever playback had reached by the time the
             // fade finished; Stop resets to the top, matching each one's
             // existing pre-fade behavior.
@@ -865,6 +870,7 @@ namespace sssketch
         // needs.
         engine.resetMaster();
         engine.dropReverbTail(); // the same "no callback in flight" moment
+        engine.clearPump();
         // Called by JUCE on the thread that starts the device (the message thread, from
         // openDevice/setAudioDeviceSetup or a restart), before any callback at the new rate:
         // the master stage's limiter is rebuilt at it there, never on the audio thread. A

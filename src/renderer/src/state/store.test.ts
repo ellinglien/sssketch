@@ -3427,13 +3427,15 @@ describe('stemPreviewOverrides', () => {
     expect(overrides.risers).toEqual({})
   })
 
-  it("centres the audition: the project's per-row panning is switched off, nothing else", () => {
+  it("centres the audition and leaves it unpumped: the project's panning and pump are switched off, nothing else", () => {
     const state = placedProject()
     const sound = normalizeSoundSettings(undefined)
     const overrides = stemPreviewOverrides({ ...state, sound }, [r1s1])
     expect(overrides.sound?.panning.on).toBe(false)
-    expect({ ...overrides.sound, panning: sound.panning }).toEqual(sound)
+    expect(overrides.sound?.pump.on).toBe(false)
+    expect({ ...overrides.sound, panning: sound.panning, pump: sound.pump }).toEqual(sound)
     expect(sound.panning.on).toBe(true)
+    expect(sound.pump.on).toBe(true)
     // No settings stay no settings.
     expect('sound' in stemPreviewOverrides({ ...state, sound: undefined }, [r1s1])).toBe(false)
   })

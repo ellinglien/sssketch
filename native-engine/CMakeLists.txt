@@ -118,6 +118,9 @@ target_sources(sssketch_engine PRIVATE ${SSSKETCH_FAUST_GENERATED_SOURCES})
 # The master stage's biquads (Web Audio's BiquadFilterNode as Chromium runs it): no FMA either,
 # so their output is the same on every machine (MasterGlueToneTests' golden from the web).
 set_source_files_properties(Source/MasterTone.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+# The drum-keyed pump multiplies each pumped channel by pump.dsp's gain here rather than in the
+# generated code (DrumPump.h): no FMA, so it is the .dsp's own float multiply, to the bit.
+set_source_files_properties(Source/DrumPump.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 
 target_sources(sssketch_engine PRIVATE
   Source/Main.cpp
@@ -188,6 +191,8 @@ target_sources(sssketch_engine PRIVATE
   Source/MasterStageTestUtil.h
   Source/StemPan.h
   Source/StemPanTests.cpp
+  Source/DrumPump.cpp
+  Source/DrumPumpTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE

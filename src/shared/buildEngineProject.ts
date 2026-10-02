@@ -19,6 +19,7 @@ import {
 } from './toolkit'
 import { RISER_DEFAULT_Q, audibleRisers, type RiserClip } from './riser'
 import { stemPansForRifff } from './radioPan'
+import { pumpRoleForSoundType, type PumpRole } from './radioPump'
 import { stretchRatioForStem } from './stretchRatio'
 import {
   FAUST_DEFAULTS,
@@ -59,6 +60,12 @@ export interface EngineStem {
    * load-bearing, the same rule as `toolkit`: such a stem sends the JSON it sent before panning
    * existed. Twin of EngineStem::pan in native-engine/Source/EngineProject.h. */
   pan?: number
+  /** This row's part in the drum-keyed pump (native radio sound plan, Task 9; DrumPump.h): the
+   * key (a drums row: the pump listens to it) or pumped (ducked a little on each kick). ABSENT
+   * for a row left alone (bass, and any row the rule gives 'none') and for every row while the
+   * project's pump is off -- absence is load-bearing, the same rule as `pan`. Twin of
+   * EngineStem::pumpRole in native-engine/Source/EngineProject.h. */
+  pumpRole?: 'key' | 'pumped'
 }
 
 /** The built-in sound toolkit on the wire, per placed stem clip. Twin of
@@ -483,6 +490,32 @@ export function timelineStemPans(state: Pick<AppState, 'rifffs' | 'sound'>): Map
   return pans
 }
 
+/** Whether the project's drum-keyed pump is on (false with no sound settings: today's sound). */
+function pumpOn(state: Pick<AppState, 'sound'>): boolean {
+  return state.sound !== undefined && normalizeSoundSettings(state.sound).pump.on
+}
+
+/** The timeline's pump roles, by stem key, for every stem of every placed rifff that keys the
+ * pump or is pumped (native radio sound plan, Task 9): pumpRoleForSoundType by the stem's
+ * SoundType -- drums key it, bass is left alone, the rest are pumped. Muted stems are included
+ * (a muted key keys nothing in the engine; a mute should not reroute a row). The key is
+ * project-wide: a drums stem on any channel ducks the pumped stems on every channel. Empty
+ * while the project's pump is off. */
+export function timelineStemPumpRoles(
+  state: Pick<AppState, 'rifffs' | 'sound'>
+): Map<string, 'key' | 'pumped'> {
+  const roles = new Map<string, 'key' | 'pumped'>()
+  if (!pumpOn(state)) return roles
+  for (const rifff of Object.values(state.rifffs)) {
+    if (rifff.startBar === undefined) continue // only what is placed sounds
+    for (const stem of rifff.stems) {
+      const role = pumpRoleForSoundType(stem.type)
+      if (role !== 'none') roles.set(stemKey(rifff.groupId, stem.slot), role)
+    }
+  }
+  return roles
+}
+
 /** What a caller can tell buildEngineProject beyond the state itself. */
 export interface BuildEngineProjectOptions {
   /** Discover's row pans by stem key (discoverStemPans in @shared/radioPan), which REPLACE the
@@ -490,6 +523,10 @@ export interface BuildEngineProjectOptions {
    * centred. Discover's rows are slots with kinds, not stems with a SoundType, and a row keeps
    * its pan through a swap or a mute. Only applied while the state's panning is on. */
   stemPans?: ReadonlyMap<string, number>
+  /** Discover's pump roles by stem key (discoverStemPumpRoles in @shared/radioPump, by each
+   * row's slot kinds), which REPLACE the timeline's rule (by SoundType) for every stem: a key not
+   * in the map, or mapped to 'none', has no part. Only applied while the state's pump is on. */
+  stemPumpRoles?: ReadonlyMap<string, PumpRole>
 }
 
 // Real perf bug, found live 2026-09-15 via a direct report ("it's all very
@@ -564,6 +601,11 @@ export async function buildEngineProject(
   // settings -- then no stem gets a `pan`, and the wire is what it was before panning existed.
   const pans =
     panningWidth(state) === undefined ? undefined : (options.stemPans ?? timelineStemPans(state))
+  // The drum-keyed pump's roles (Task 9), likewise: Discover's map or the timeline's rule while
+  // the pump is on; undefined when it is off -- then no stem gets a `pumpRole`.
+  const pumpRoles: ReadonlyMap<string, PumpRole> | undefined = pumpOn(state)
+    ? (options.stemPumpRoles ?? timelineStemPumpRoles(state))
+    : undefined
 
   // Per-stem stretch ratio, computed once and reused by BOTH the gathering
   // pass below and the assembly pass further down -- pure/cheap (no I/O),
@@ -654,6 +696,7 @@ export async function buildEngineProject(
     for (const stem of rifff.stems) {
       const key = stemKey(rifff.groupId, stem.slot)
       const pan = pans?.get(key) ?? 0
+      const pumpRole = pumpRoles?.get(key) ?? 'none'
       const resolved: StretchedStem = resolvedByKey.get(key) ?? {
         path: stem.path,
         durationSec: stem.durationSec
@@ -723,7 +766,9 @@ export async function buildEngineProject(
         ...(toolkit ? { toolkit } : {}),
         // Spread for the same reason: a centred row (or panning off) has no `pan` key at all.
         // `pan !== 0` is false for -0 too (a width of 0 alternates 0 and -0).
-        ...(pan !== 0 && Number.isFinite(pan) ? { pan } : {})
+        ...(pan !== 0 && Number.isFinite(pan) ? { pan } : {}),
+        // And again: a row with no part in the pump (or the pump off) has no `pumpRole` key.
+        ...(pumpRole !== 'none' ? { pumpRole } : {})
       })
     }
 

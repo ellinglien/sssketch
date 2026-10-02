@@ -758,6 +758,30 @@ namespace sssketch
                 // A pan is no toolkit: the stem stays off the toolkit path.
                 expect(! stems[1].hasToolkit);
             }
+
+            beginTest("a stem's pumpRole parses; absent, 'none', other strings and non-strings are none");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"bpm":120.0,"rifffs":[{"groupId":"g","stems":[
+                         {"stemKey":"absent"},
+                         {"stemKey":"key","pumpRole":"key"},
+                         {"stemKey":"pumped","pumpRole":"pumped"},
+                         {"stemKey":"none","pumpRole":"none"},
+                         {"stemKey":"upper","pumpRole":"KEY"},
+                         {"stemKey":"number","pumpRole":1},
+                         {"stemKey":"null","pumpRole":null}
+                       ]}]})",
+                    project, error), error);
+                const auto& stems = project.rifffs[0].stems;
+                expectEquals((int) stems.size(), 7);
+                using Role = EngineStem::PumpRole;
+                const Role expected[] = { Role::none, Role::key, Role::pumped, Role::none, Role::none, Role::none, Role::none };
+                for (size_t i = 0; i < stems.size(); ++i)
+                    expect(stems[i].pumpRole == expected[i], stems[i].stemKey);
+                expect(! stems[1].hasToolkit);
+            }
         }
     };
 

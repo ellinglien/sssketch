@@ -142,6 +142,21 @@ namespace sssketch
          * it is panned after the toolkit's filter and volume and BEFORE its reverb send, as on
          * the web. Clamped into [-1,1] at parse time, and a non-finite value is 0. */
         double pan = 0.0;
+
+        /** This row's part in the drum-keyed pump (native radio sound plan, Task 9; DrumPump.h):
+         * the key (a drums row: the pump listens to it), pumped (ducked a little on each kick),
+         * or none (bass, and the drums themselves). Absent on the wire -- every project from
+         * before the pump, and every stem while the project's pump is off -- is none, as is any
+         * string other than "key" or "pumped". PlaybackEngine narrows every role back to none
+         * for a project that has no pump, no key stem or no pumped stem, so such a project
+         * renders exactly as before the pump existed. */
+        enum class PumpRole
+        {
+            none,
+            key,
+            pumped
+        };
+        PumpRole pumpRole = PumpRole::none;
     };
 
     /** A riser's bandpass Q on the wire (EngineRiser::q): 2 is today's (NoiseRiser.h's

@@ -1,5 +1,6 @@
 // native-engine/Source/PlaybackEngine.h
 #pragma once
+#include "DrumPump.h"
 #include "EngineProject.h"
 #include "NoiseRiser.h"
 #include "StemBufferCache.h"
@@ -267,6 +268,19 @@ namespace sssketch
          * export from the same bar). A seek keeps the tail: a real room keeps ringing. */
         void dropReverbTail() { reverbBus.dropCavernTail(); }
 
+        /** AUDIO THREAD, with no renderBlock in flight (or the message thread with no callback
+         * running). See DrumPump::clear: Transport calls it beside clearMasterDynamics (a seek's
+         * jump) and resetMaster (a stop's end, a device start), so the new position does not
+         * inherit the old one's duck. */
+        void clearPump() { drumPump.clear(); }
+
+        /** For tests: the drum-keyed pump's current duck in dB (<= 0), the rate its instance was
+         * built at (0 if none), and blocks it passed unducked for want of an instance at their
+         * rate. */
+        float pumpDuckDb() const { return drumPump.currentDuckDb(); }
+        double pumpPreparedRate() const { return drumPump.preparedRate(); }
+        unsigned long long pumpRateMismatchCount() const { return drumPump.rateMismatchCount(); }
+
         /** AUDIO THREAD. See MasterStage::currentLatencySamples: 75 while the master stage's
          * limiter is in the output, else 0. Transport's seek holds at silence this much longer. */
         int masterLatencySamples() const { return masterStage.currentLatencySamples(); }
@@ -429,6 +443,20 @@ namespace sssketch
             // test rather than a map lookup per channel per block. Exactly
             // the same shape (and the same purpose) as anyToolkitActive.
             bool anyRisers = false;
+
+            // The drum-keyed pump (DrumPump.h; native radio sound plan, Task 9). True when the
+            // project's pump is on AND it has at least one key stem and one pumped stem --
+            // decided here, off the real-time thread. When false every stem's pumpRole has been
+            // narrowed to none, so renderBlock routes exactly as before the pump existed.
+            bool pumpActive = false;
+            double pumpDepthDb = 0.0;
+            // The pumped stems' dry sum per channel (channelGroups order), and the key stems' dry sum for the whole
+            // project; sized lazily per numSamples, like the channel scratch. `mutable` for the
+            // same reason. pumpTargets is reserved to the channel count here, so filling it per
+            // block never allocates.
+            mutable std::vector<std::vector<float>> scratchPumpL, scratchPumpR;
+            mutable std::vector<float> scratchKeyL, scratchKeyR;
+            mutable std::vector<DrumPump::Target> pumpTargets;
         };
 
         /** Per-CLIP toolkit DSP state: a filter has memory, a send has a
@@ -692,5 +720,11 @@ namespace sssketch
          * rendering thread (the same invariant as stemDsp); trivially copyable, so the write
          * allocates nothing. */
         mutable std::optional<MasterStage::Settings> masterSettingsSeen;
+
+        /** The drum-keyed pump's one Faust instance and its envelope (DrumPump.h). Built on the
+         * message thread (buildSnapshot, prepareMaster) and run by the single rendering thread;
+         * held here, not in the snapshot, so a re-sync keeps the envelope. `mutable` as the
+         * reverb bus is. */
+        mutable DrumPump drumPump;
     };
 }

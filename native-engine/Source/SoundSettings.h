@@ -26,8 +26,8 @@ namespace sssketch
      * Each stage is performed by its own task: mastering (headroom and the true-peak limiter)
      * since Task 3, glue and tone inside it since Task 7 and saturation since Task 8, by
      * MasterStage through PlaybackEngine::processMaster; the room and its return since Task 5,
-     * by ReverbBus (zita or CavernReverb); the pump (Task 9) is parsed only until its task
-     * lands. */
+     * by ReverbBus (zita or CavernReverb); the pump since Task 9, by DrumPump through
+     * PlaybackEngine::renderBlock, keyed and routed by each stem's EngineStem::pumpRole. */
     struct SoundSettings
     {
         /** The headroom trim and the true-peak limiter. */
@@ -54,7 +54,8 @@ namespace sssketch
         {
             double drive = 0.9; // 0..1.8
         };
-        /** The drum-keyed pump (pump.dsp). */
+        /** The drum-keyed pump (pump.dsp; DrumPump.h). Its depth only: the release (200 ms) and
+         * the 3 ms attack are the .dsp's own, as the web runs them. */
         struct Pump
         {
             double depthDb = 4.0; // 0..8

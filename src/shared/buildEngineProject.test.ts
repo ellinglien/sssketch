@@ -4,13 +4,16 @@ import {
   buildEngineRisers,
   buildEngineSound,
   timelineStemPans,
+  timelineStemPumpRoles,
   type EngineStem
 } from './buildEngineProject'
+import type { PumpRole } from './radioPump'
 import {
   glueThresholdDb,
   normalizeSoundSettings,
   reverbReturnGain,
   saturationDrive,
+  stemExportSound,
   type SoundSettings
 } from './radioSound'
 import type { AppState } from '../renderer/src/state/store'
@@ -1135,6 +1138,115 @@ describe('per-row panning on the wire (native radio sound plan, Task 4)', () => 
       { stemPans: new Map([[stemKey('r1', 2), 0.25]]) }
     )
     expect(project.rifffs[0].stems.some((s) => 'pan' in s)).toBe(false)
+  })
+})
+
+describe('the drum-keyed pump on the wire (native radio sound plan, Task 9)', () => {
+  const fourStems: Rifff = {
+    ...rifff,
+    stems: [
+      { ...rifff.stems[0], slot: 1, type: 'drums', path: '/k.wav' },
+      { ...rifff.stems[0], slot: 2, type: 'notes', path: '/n.wav' },
+      { ...rifff.stems[0], slot: 3, type: 'bass', path: '/b.wav' },
+      { ...rifff.stems[0], slot: 4, type: 'fx', path: '/f.wav' }
+    ]
+  }
+  const withPump = (on: boolean): SoundSettings => {
+    const s = normalizeSoundSettings(undefined)
+    s.pump = { on, depthDb: 4 }
+    return s
+  }
+  const rolesOf = (stems: EngineStem[]): (string | undefined)[] => stems.map((s) => s.pumpRole)
+
+  it('the timeline: drums key it, bass is left alone (no key), the rest are pumped, by SoundType', async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: withPump(true) }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(rolesOf(project.rifffs[0].stems)).toEqual(['key', 'pumped', undefined, 'pumped'])
+    expect('pumpRole' in project.rifffs[0].stems[2]).toBe(false)
+    expect(project.sound?.pump).toEqual({ depthDb: 4 })
+  })
+
+  it('a muted stem keeps its role (the engine keys nothing from a muted drums row)', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        rifffs: { r1: fourStems },
+        sound: withPump(true),
+        mute: { [stemKey('r1', 1)]: true }
+      }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(rolesOf(project.rifffs[0].stems)).toEqual(['key', 'pumped', undefined, 'pumped'])
+  })
+
+  it('pump off, and no sound settings, emit no `pumpRole` at all', async () => {
+    for (const sound of [withPump(false), undefined]) {
+      const project = await buildEngineProject(
+        stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound }),
+        vi.fn(),
+        emptyCatalog,
+        {},
+        { stemPumpRoles: new Map([[stemKey('r1', 2), 'key' as const]]) }
+      )
+      expect(project.rifffs[0].stems.some((s) => 'pumpRole' in s)).toBe(false)
+      expect(project.sound?.pump).toBeUndefined()
+    }
+  })
+
+  it('a per-stem export (stemExportSound) carries no pump: no depth and no roles', async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: stemExportSound(withPump(true)) }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(project.rifffs[0].stems.some((s) => 'pumpRole' in s)).toBe(false)
+    expect(project.sound?.pump).toBeUndefined()
+  })
+
+  it("Discover's map replaces the timeline rule, keyed by stem key; a key not in it, or 'none', has no role", async () => {
+    const stemPumpRoles = new Map<string, PumpRole>([
+      [stemKey('r1', 2), 'key'],
+      [stemKey('r1', 3), 'pumped'],
+      [stemKey('r1', 4), 'none']
+    ])
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: withPump(true) }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      { stemPumpRoles }
+    )
+    expect(rolesOf(project.rifffs[0].stems)).toEqual([undefined, 'key', 'pumped', undefined])
+  })
+})
+
+describe('timelineStemPumpRoles', () => {
+  it('maps every keying or pumped stem of every PLACED rifff, and nothing while the pump is off', () => {
+    const sound = normalizeSoundSettings(undefined)
+    const placed: Rifff = {
+      ...rifff,
+      stems: [
+        { ...rifff.stems[0], slot: 1, type: 'drums' },
+        { ...rifff.stems[0], slot: 2, type: 'bass' },
+        { ...rifff.stems[0], slot: 3, type: 'sampler' }
+      ]
+    }
+    const shelved: Rifff = { ...placed, groupId: 'r2', startBar: undefined }
+    const other: Rifff = { ...placed, groupId: 'r3', startBar: 8 }
+    const state = stateWith({ rifffs: { r1: placed, r2: shelved, r3: other }, sound })
+    expect([...timelineStemPumpRoles(state).entries()]).toEqual([
+      [stemKey('r1', 1), 'key'],
+      [stemKey('r1', 3), 'pumped'],
+      [stemKey('r3', 1), 'key'],
+      [stemKey('r3', 3), 'pumped']
+    ])
+    sound.pump.on = false
+    expect(timelineStemPumpRoles(stateWith({ rifffs: { r1: placed }, sound })).size).toBe(0)
+    expect(timelineStemPumpRoles(stateWith({ rifffs: { r1: placed } })).size).toBe(0)
   })
 })
 

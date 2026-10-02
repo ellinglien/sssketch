@@ -1061,9 +1061,12 @@ export function stemPreviewOverrides(
     muteRegions: {},
     risers: {},
     // The radio sound's per-row pan is a per-stem stage like the send, so it goes too: an
-    // audition is centred. The project-level stages (mastering, the room) stay, as they
-    // always have.
-    ...(state.sound ? { sound: mergeSoundSettings(state.sound, { panning: { on: false } }) } : {})
+    // audition is centred. So does the drum-keyed pump (Task 9): one auditioned stem ducking
+    // another is not what the file sounds like. The project-level stages (mastering, the room)
+    // stay, as they always have.
+    ...(state.sound
+      ? { sound: mergeSoundSettings(state.sound, { panning: { on: false }, pump: { on: false } }) }
+      : {})
   }
 }
 

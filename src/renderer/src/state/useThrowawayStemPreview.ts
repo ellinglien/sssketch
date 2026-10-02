@@ -115,8 +115,12 @@ export function useThrowawayStemPreview(): {
         channelPlugins,
         // explicit: initialState has none (absent is today's sound). Panning off: an
         // audition is the file, centred, the same rule stemPreviewOverrides follows for the
-        // sketch's own auditions -- the per-row pan belongs to a row in a mix.
-        sound: mergeSoundSettings(sound ?? appSoundDefaultsNow(), { panning: { on: false } }),
+        // sketch's own auditions -- the per-row pan belongs to a row in a mix. The drum-keyed
+        // pump likewise (Task 9): it belongs to rows in a mix, not to an audition.
+        sound: mergeSoundSettings(sound ?? appSoundDefaultsNow(), {
+          panning: { on: false },
+          pump: { on: false }
+        }),
         rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
         vol,
         stretch: { [rifff.groupId]: true }
