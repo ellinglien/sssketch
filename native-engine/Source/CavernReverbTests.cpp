@@ -110,7 +110,10 @@ namespace sssketch
             juce::WavAudioFormat wav;
             std::unique_ptr<juce::FileOutputStream> out(file.createOutputStream());
             std::unique_ptr<juce::AudioFormatWriter> writer(wav.createWriterFor(out.get(), rate, 2, 16, {}, 0));
-            out.release();
+            jassert(writer != nullptr);
+            if (writer == nullptr)
+                return file; // `out` still owns the stream and closes it; the test then finds no audio
+            out.release(); // the writer owns the stream now
             juce::AudioBuffer<float> source(2, numSamples);
             for (int i = 0; i < numSamples; ++i)
                 for (int c = 0; c < 2; ++c)
@@ -229,8 +232,8 @@ namespace sssketch
                 }
             }
 
-            beginTest("the impulse is the web's: the first 8,192 samples after the pre-delay match noise.ts "
-                      "reverbImpulse at 48 kHz within 1e-6");
+            beginTest("the impulse is the web's: the first 8,192 samples after the pre-delay are noise.ts "
+                      "reverbImpulse's at 48 kHz, to the bit");
             {
                 const auto dir = goldenDir();
                 juce::MemoryBlock data;
@@ -250,7 +253,10 @@ namespace sssketch
                         for (int i = 0; i < frames; ++i)
                             worst = std::max(worst, (double) std::abs(impulse48[(size_t) c][(size_t) (offset + i)]
                                                                       - golden[c * frames + i]));
-                    expect(worst <= 1.0e-6, "max abs error " + juce::String(worst, 12));
+                    // Exact here (arm64 macOS, 2026-10-02): both sides compute in double with the
+                    // same FFT and round to float once. The plan's bound is 1e-6; if another libm's
+                    // cos/exp/log ever moves a sample by an ulp, loosen this to that bound.
+                    expect(worst == 0.0, "max abs error " + juce::String(worst, 12));
                     logMessage("max abs error against the web's impulse: " + juce::String(worst, 12));
                 }
 
@@ -615,7 +621,7 @@ namespace sssketch
                 expect(worst < 1.0e-6, "error " + juce::String(worst));
             }
 
-            beginTest("switching rooms mid-play: the old room rings out on silence, the sends go to the new one");
+            beginTest("in the engine: switching rooms mid-play lets zita's tail ring out");
             {
                 StemBufferCache cache;
                 PlaybackEngine engine(cache);
@@ -639,6 +645,195 @@ namespace sssketch
                 for (float v : l)
                     tail = std::max(tail, std::abs(v));
                 expect(tail > 1.0e-4f, "zita's tail was cut: " + juce::String(tail));
+                engine.drainRetiredProject();
+            }
+
+            beginTest("switching rooms with a clip still sending: the new room gets the sends, the old one "
+                      "rings out on silence -- both ways");
+            {
+                // The switched bus against two buses that each only ever run one room: the old
+                // room fed until the switch and then nothing, the new room fed from the switch.
+                // Their sum, added in the same order endBlock adds them (zita, then the cavern),
+                // must be the switched bus's output to the bit.
+                constexpr int kBlock = 512, kBlocks = 200, kSwitch = 37;
+                std::vector<float> sig((size_t) kBlock * kBlocks);
+                juce::Random noise(21);
+                for (auto& v : sig)
+                    v = 0.5f * (noise.nextFloat() - 0.5f);
+                const auto run = [&](ReverbBus& bus, auto roomAt, auto sendsAt, float* outL, float* outR) {
+                    bus.prepare(44100.0, kBlock);
+                    for (int b = 0; b < kBlocks; ++b)
+                    {
+                        ParamSmoother gain;
+                        gain.reset(44100.0, kAutomationSmoothingSec, sendsAt(b) ? 1.0f : 0.0f);
+                        bus.setRoom(roomAt(b), 1.0);
+                        bus.beginBlock(kBlock);
+                        const float* in = sig.data() + (size_t) b * kBlock;
+                        bus.addSend(kBlock, in, in, gain);
+                        bus.endBlock(kBlock, outL + (size_t) b * kBlock, outR + (size_t) b * kBlock);
+                    }
+                };
+                for (const auto& rooms : { std::pair { ReverbRoom::cavern, ReverbRoom::zita },
+                                           std::pair { ReverbRoom::zita, ReverbRoom::cavern } })
+                {
+                    const ReverbRoom from = rooms.first, to = rooms.second;
+                    const size_t n = sig.size();
+                    std::vector<float> l(n, 0.0f), r(n, 0.0f), oldL(n, 0.0f), oldR(n, 0.0f), newL(n, 0.0f), newR(n, 0.0f);
+                    ReverbBus switched, oldOnly, newOnly;
+                    for (auto* bus : { &switched, &oldOnly, &newOnly })
+                        bus->prepareCavern(44100.0);
+                    run(switched, [&](int b) { return b < kSwitch ? from : to; }, [](int) { return true; }, l.data(), r.data());
+                    run(oldOnly, [&](int) { return from; }, [&](int b) { return b < kSwitch; }, oldL.data(), oldR.data());
+                    run(newOnly, [&](int) { return to; }, [&](int b) { return b >= kSwitch; }, newL.data(), newR.data());
+                    std::vector<float> sumL(n), sumR(n);
+                    const bool zitaFirst = from == ReverbRoom::zita;
+                    for (size_t i = 0; i < n; ++i)
+                    {
+                        sumL[i] = zitaFirst ? 0.0f + oldL[i] + newL[i] : 0.0f + newL[i] + oldL[i];
+                        sumR[i] = zitaFirst ? 0.0f + oldR[i] + newR[i] : 0.0f + newR[i] + oldR[i];
+                    }
+                    const juce::String what = from == ReverbRoom::cavern ? "cavern -> zita" : "zita -> cavern";
+                    expect(sameBits(l, sumL) && sameBits(r, sumR), what + ": not the two rooms' sum");
+                    // and both really sound after the switch
+                    const size_t late = (size_t) (kSwitch + 20) * kBlock;
+                    expect(std::abs(oldL[late]) > 1.0e-5f && std::abs(newL[late]) > 1.0e-5f, what + ": a room is silent");
+                }
+            }
+
+            beginTest("a live convolver is rebuilt at a new rate: promoted, the old one retired, then freed");
+            {
+                ReverbBus bus;
+                bus.prepareCavern(44100.0);
+                std::vector<float> in(512, 0.1f), l(512, 0.0f), r(512, 0.0f);
+                const auto block = [&](double rate) {
+                    ParamSmoother gain;
+                    gain.reset(rate, kAutomationSmoothingSec, 1.0f);
+                    bus.prepare(rate, 512);
+                    bus.setRoom(ReverbRoom::cavern, 1.0);
+                    bus.beginBlock(512);
+                    bus.addSend(512, in.data(), in.data(), gain);
+                    std::fill(l.begin(), l.end(), 0.0f);
+                    bus.endBlock(512, l.data(), r.data());
+                };
+                for (int i = 0; i < 4; ++i)
+                    block(44100.0);
+                expectEquals(bus.liveCavernRate(), 44100.0);
+                bus.prepareCavern(48000.0); // what prepareMaster(48000) does with one built
+                expectEquals(bus.liveCavernRate(), 44100.0); // pending until the audio thread takes it
+                block(48000.0);
+                expectEquals(bus.liveCavernRate(), 48000.0);
+                expect(bus.hasRetiredCavern(), "the 44.1 kHz convolver should wait for the message thread");
+                expectEquals((int) bus.cavernRateMismatchCount(), 0);
+                for (int i = 0; i < 4; ++i)
+                    block(48000.0);
+                expect(std::abs(l[100]) > 1.0e-6f, "the 48 kHz room sounds");
+                bus.drainRetiredCavern();
+                expect(! bus.hasRetiredCavern());
+
+                // and through the engine: prepareMaster rebuilds a convolver that exists
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.prepareMaster(44100.0);
+                engine.setProject(sendProject({ burst }, 1.0, ReverbRoom::cavern));
+                expectEquals(engine.cavernReverbPreparedRate(), 44100.0);
+                engine.prepareMaster(48000.0);
+                expectEquals(engine.cavernReverbPreparedRate(), 48000.0);
+                // a later project load does not rebuild at some other rate
+                engine.setProject(sendProject({ burst }, 0.5, ReverbRoom::cavern));
+                expectEquals(engine.cavernReverbPreparedRate(), 48000.0);
+            }
+
+            beginTest("a rate the engine was not told about is built once, with no rebuild loop on later loads");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry chains;
+                engine.setProject(sendProject({ burst }, 1.0, ReverbRoom::cavern)); // masterRate 44.1 kHz
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 96000.0, 512, l.data(), r.data(), chains);
+                engine.drainRetiredProject(); // builds at 96 kHz
+                expectEquals(engine.cavernReverbPreparedRate(), 96000.0);
+                engine.setProject(sendProject({ burst }, 0.9, ReverbRoom::cavern));
+                expectEquals(engine.cavernReverbPreparedRate(), 96000.0); // not back to 44.1
+                for (int b = 1; b < 4; ++b)
+                    engine.renderBlock(b * 512 / 96000.0, 96000.0, 512, l.data(), r.data(), chains);
+                expectEquals((int) engine.cavernRateMismatchCount(), 1);
+                engine.drainRetiredProject();
+            }
+
+            beginTest("a stop drops the cavern's tail: play again from bar 0 is the export, to the bit");
+            {
+                // A loud send, stopped while the room is still ringing (the clip itself has ended),
+                // then played again from the top.
+                auto project = sendProject({ burst }, 1.0, ReverbRoom::cavern);
+                juce::AudioBuffer<float> exported;
+                juce::String error;
+                expect(renderProjectToBuffer(project, 1.0, 44100.0, 512, exported, error), error);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.prepareMaster(44100.0);
+                engine.setProject(project);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry chains;
+                Transport transport(engine, masterChain, chains);
+                transport.setBpm(240.0);
+                std::vector<float> l(512), r(512);
+                float* channels[2] = { l.data(), r.data() };
+                transport.play(0.0);
+                for (int i = 0; i < 120; ++i) // ~1.4 s: past the clip, deep in the tail
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                expect(std::abs(l[100]) > 1.0e-5f, "the room was ringing");
+                transport.stop();
+                for (int i = 0; i < 400 && transport.isPlaying(); ++i)
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                expect(! transport.isPlaying());
+                transport.play(0.0);
+                std::vector<float> again;
+                for (int i = 0; i < 87; ++i) // the export's 44100 samples, and a little more
+                {
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                    again.insert(again.end(), l.begin(), l.end());
+                }
+                again.resize(44100);
+                const std::vector<float> want(exported.getReadPointer(0), exported.getReadPointer(0) + 44100);
+                // Equal to the export but for denormal dust: the clip's toolkit filter
+                // (PlaybackEngine's per-clip stemDsp) is not reset by a stop, and its state, decayed
+                // to ~1e-44 rather than to zero, still reaches the first sample (pre-existing, and
+                // zita's too). Without dropping the room's tail the difference is ~0.02 throughout.
+                const double err = maxAbsDiff(again, want);
+                expect(err < 1.0e-30, "the play after a stop differs from the export: max " + juce::String(err, 12));
+                engine.drainRetiredProject();
+            }
+
+            beginTest("a seek keeps the cavern's tail: a real room keeps ringing");
+            {
+                // The clip sounds for the first second; at ~1.2 s the playhead jumps to bar 3,
+                // where nothing is placed. After the reposition fade the room is still audible.
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.prepareMaster(44100.0);
+                engine.setProject(sendProject({ burst }, 1.0, ReverbRoom::cavern));
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry chains;
+                Transport transport(engine, masterChain, chains);
+                transport.setBpm(240.0);
+                std::vector<float> l(512), r(512);
+                float* channels[2] = { l.data(), r.data() };
+                transport.play(0.0);
+                for (int i = 0; i < 100; ++i)
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                transport.setPosition(3.0);
+                float after = 0.0f;
+                for (int i = 0; i < 40; ++i) // well past the reposition fade
+                {
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                    if (i >= 20)
+                        for (float v : l)
+                            after = std::max(after, std::abs(v));
+                }
+                expect(transport.currentPositionBars() > 3.0, "the seek happened");
+                expect(after > 1.0e-5f, "the tail was dropped by a seek: " + juce::String(after));
                 engine.drainRetiredProject();
             }
 
@@ -698,6 +893,36 @@ namespace sssketch
                 const auto t1 = std::chrono::steady_clock::now();
                 const CavernConvolver state(built);
                 const auto t2 = std::chrono::steady_clock::now();
+                // The callback cost (CavernReverb.h: the partitions are spread over the frame):
+                // every partition sounding, then 64-sample callbacks timed one by one -- the worst
+                // of them against a 64-sample buffer's budget, and a whole frame's worth in all.
+                for (double rate : { 48000.0, 96000.0 })
+                {
+                    CavernConvolver conv(cavernIrFor(rate));
+                    const int P = conv.impulse().numPartitions;
+                    std::vector<float> in(CavernIr::kBlock), outL(CavernIr::kBlock), outR(CavernIr::kBlock);
+                    juce::Random noise(1);
+                    for (int f = 0; f < P + 2; ++f)
+                    {
+                        for (auto& v : in)
+                            v = noise.nextFloat() - 0.5f;
+                        conv.process(CavernIr::kBlock, in.data(), in.data(), outL.data(), outR.data(), 1.0f);
+                    }
+                    constexpr int kFrames = 20;
+                    double worstMs = 0.0, totalMs = 0.0;
+                    for (int call = 0; call < kFrames * (CavernIr::kBlock / 64); ++call)
+                    {
+                        const auto c0 = std::chrono::steady_clock::now();
+                        conv.process(64, in.data(), in.data(), outL.data(), outR.data(), 1.0f);
+                        const double ms = 1000.0 * std::chrono::duration<double>(std::chrono::steady_clock::now() - c0).count();
+                        worstMs = std::max(worstMs, ms);
+                        totalMs += ms;
+                    }
+                    logMessage(juce::String(rate / 1000.0, 1) + " kHz (" + juce::String(P) + " partitions a side), 64-sample "
+                               "callbacks: worst " + juce::String(worstMs, 3) + " ms against a budget of "
+                               + juce::String(64000.0 / rate, 3) + " ms; " + juce::String(totalMs / kFrames, 3)
+                               + " ms a frame in all");
+                }
                 logMessage("building the 48 kHz room: impulse and partitions "
                            + juce::String(std::chrono::duration<double>(t1 - t0).count(), 3) + " s, a convolver's state "
                            + juce::String(std::chrono::duration<double>(t2 - t1).count(), 3) + " s; "

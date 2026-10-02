@@ -256,9 +256,20 @@ namespace sssketch
          * (audioDeviceAboutToStart, before any callback). */
         void resetMaster() { masterStage.reset(); }
 
+        /** AUDIO THREAD, with no renderBlock in flight. See ReverbBus::dropCavernTail: Transport
+         * calls it beside resetMaster, when a stop or pause has faded out and when the device
+         * (re)starts, so a play after a stop is not under the old cavern decay (and equals an
+         * export from the same bar). A seek keeps the tail: a real room keeps ringing. */
+        void dropReverbTail() { reverbBus.dropCavernTail(); }
+
         /** AUDIO THREAD. See MasterStage::currentLatencySamples: 75 while the master stage's
          * limiter is in the output, else 0. Transport's seek holds at silence this much longer. */
         int masterLatencySamples() const { return masterStage.currentLatencySamples(); }
+
+        /** For tests: the rate of the convolver the audio thread is running (0 if none), and
+         * whether a swapped-out one is waiting for drainRetiredProject. */
+        double liveCavernReverbRate() const { return reverbBus.liveCavernRate(); }
+        bool cavernReverbRetiredPending() const { return reverbBus.hasRetiredCavern(); }
 
         /** MESSAGE THREAD. The rate of the cavern room's convolver, 0 if none has been built --
          * which is the case until a project in the cavern room has a send (ReverbBus.h). */
@@ -388,11 +399,6 @@ namespace sssketch
             // test rather than a map lookup per channel per block. Exactly
             // the same shape (and the same purpose) as anyToolkitActive.
             bool anyRisers = false;
-
-            // True if a stem sends to the reverb (a static send or a send curve) and the room is
-            // the cavern -- what makes buildSnapshot build the cavern's convolver. False for zita,
-            // which builds itself lazily on the audio thread as it always has.
-            bool anyReverbSend = false;
         };
 
         /** Per-CLIP toolkit DSP state: a filter has memory, a send has a

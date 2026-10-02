@@ -40,6 +40,19 @@ namespace sssketch
      * Not juce::dsp::Convolution: that loads impulses on a background thread, so a fresh export
      * would start dry.
      *
+     * THE WORK IS SPREAD OVER THE FRAME. The number of partitions grows with the rate (216 at
+     * 44.1 kHz, 235 at 48, 471 at 96, ~940 at 192), and doing all of them in the one callback
+     * that completes a frame took 0.41 ms at 48 kHz and 0.83 ms at 96 kHz (Release) -- more
+     * than a 64-sample buffer's 0.67 ms at 96 kHz. So only partition 0 (the frame just
+     * completed) is left for that callback: partitions 1..P-1 need only frames already
+     * remembered, and are multiply-added ahead, a share at a time as the FIFO fills
+     * ((P-1) x fifoPos / 1024 of them by each position). The schedule is a function of the
+     * FIFO position alone and the sums always run in the same order (1..P-1, then 0), so the
+     * output is still block-size invariant to the bit. What remains for the completing
+     * callback is two forward and two inverse 2048-point FFTs and one partition a side, plus
+     * whatever share falls in it; CavernReverbTests' cost test logs the worst callback.
+     * 192 kHz with very small buffers is still untested (a Task 14 item).
+     *
      * Building an impulse is message-thread work (~240 partitions a side at 48 kHz, ~4 MB):
      * cavernIrFor() caches one per sample rate for the process. The convolver's own state (the
      * spectra of the last ~240 input frames, another ~4 MB) is allocated by its constructor, so
@@ -148,6 +161,11 @@ namespace sssketch
 
     private:
         void processFrame();
+        /** Multiply-adds the older partitions (1..P-1, in order) into each side's accumulator
+         * until `upTo` of them are in. They only need frames already remembered, so they are
+         * done ahead, spread over the frame (see process()). */
+        void accumulateOlderPartitions(int upTo);
+        void macPartition(size_t side, int p);
 
         std::shared_ptr<const CavernIr> ir;
         std::unique_ptr<juce::dsp::FFT> fft;
@@ -159,9 +177,11 @@ namespace sssketch
             bool previousSilent = true;
             std::vector<float> fdlRe, fdlIm;              // numPartitions x kBins: past input spectra
             std::vector<uint8_t> slotSilent;              // numPartitions
+            std::vector<float> accRe, accIm;              // kBins: the next frame's spectrum so far
+            bool accAny = false;                          // anything non-silent went into it
         };
         std::array<Side, 2> sides;
-        std::vector<float> fftBuffer;   // 2 x kFftSize, juce::dsp::FFT's real-only layout
-        std::vector<float> accRe, accIm; // kBins
+        int olderDone = 0; // partitions 1..olderDone already in the accumulators
+        std::vector<float> fftBuffer; // 2 x kFftSize, juce::dsp::FFT's real-only layout
     };
 }

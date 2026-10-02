@@ -295,10 +295,10 @@ namespace sssketch
             s.fdlRe.assign(fdl, 0.0f);
             s.fdlIm.assign(fdl, 0.0f);
             s.slotSilent.assign((size_t) ir->numPartitions, 1);
+            s.accRe.assign(CavernIr::kBins, 0.0f);
+            s.accIm.assign(CavernIr::kBins, 0.0f);
         }
         fftBuffer.assign((size_t) (2 * CavernIr::kFftSize), 0.0f);
-        accRe.assign(CavernIr::kBins, 0.0f);
-        accIm.assign(CavernIr::kBins, 0.0f);
         clear();
     }
 
@@ -315,9 +315,13 @@ namespace sssketch
             // The spectra themselves are left as they are: a slot flagged silent is never read,
             // and is overwritten whole before it is unflagged.
             std::fill(s.slotSilent.begin(), s.slotSilent.end(), (uint8_t) 1);
+            std::fill(s.accRe.begin(), s.accRe.end(), 0.0f);
+            std::fill(s.accIm.begin(), s.accIm.end(), 0.0f);
+            s.accAny = false;
         }
         head = 0;
         fifoPos = 0;
+        olderDone = 0;
     }
 
     void CavernConvolver::process(int numSamples, const float* inL, const float* inR, float* outL, float* outR, float gain)
@@ -343,7 +347,41 @@ namespace sssketch
                 processFrame();
                 fifoPos = 0;
             }
+            else
+            {
+                // this position's share of the older partitions (see CavernReverb.h)
+                accumulateOlderPartitions((ir->numPartitions - 1) * fifoPos / CavernIr::kBlock);
+            }
         }
+    }
+
+    void CavernConvolver::macPartition(size_t c, int p)
+    {
+        constexpr int bins = CavernIr::kBins;
+        const int P = ir->numPartitions;
+        auto& s = sides[c];
+        const int slot = head - p < 0 ? head - p + P : head - p;
+        if (s.slotSilent[(size_t) slot] != 0)
+            return;
+        s.accAny = true;
+        const float* xr = s.fdlRe.data() + (size_t) slot * bins;
+        const float* xi = s.fdlIm.data() + (size_t) slot * bins;
+        const float* hr = ir->re[c].data() + (size_t) p * bins;
+        const float* hi = ir->im[c].data() + (size_t) p * bins;
+        juce::FloatVectorOperations::addWithMultiply(s.accRe.data(), xr, hr, bins);
+        juce::FloatVectorOperations::subtractWithMultiply(s.accRe.data(), xi, hi, bins);
+        juce::FloatVectorOperations::addWithMultiply(s.accIm.data(), xr, hi, bins);
+        juce::FloatVectorOperations::addWithMultiply(s.accIm.data(), xi, hr, bins);
+    }
+
+    void CavernConvolver::accumulateOlderPartitions(int upTo)
+    {
+        // `head` still names the slot the coming frame will take, so partition p >= 1 pairs with
+        // the frame p - 1 before it: slot head - p, all already remembered.
+        upTo = std::min(upTo, ir->numPartitions - 1);
+        for (; olderDone < upTo; ++olderDone)
+            for (size_t c = 0; c < 2; ++c)
+                macPartition(c, olderDone + 1);
     }
 
     void CavernConvolver::processFrame()
@@ -351,6 +389,8 @@ namespace sssketch
         constexpr int B = CavernIr::kBlock;
         constexpr int bins = CavernIr::kBins;
         const int P = ir->numPartitions;
+        // whatever share of the older partitions the last callbacks did not reach
+        accumulateOlderPartitions(P - 1);
         for (size_t c = 0; c < 2; ++c)
         {
             auto& s = sides[c];
@@ -381,43 +421,30 @@ namespace sssketch
             std::memcpy(s.previous.data(), s.inFifo.data(), B * sizeof(float));
             s.previousSilent = currentSilent;
 
-            // Y = sum over partitions p of X[frame - p] x H[p]
-            std::fill(accRe.begin(), accRe.end(), 0.0f);
-            std::fill(accIm.begin(), accIm.end(), 0.0f);
-            bool any = false;
-            const float* hRe = ir->re[c].data();
-            const float* hIm = ir->im[c].data();
-            for (int p = 0; p < P; ++p)
-            {
-                const int slot = head - p < 0 ? head - p + P : head - p;
-                if (s.slotSilent[(size_t) slot] != 0)
-                    continue;
-                any = true;
-                const float* xr = s.fdlRe.data() + (size_t) slot * bins;
-                const float* xi = s.fdlIm.data() + (size_t) slot * bins;
-                const float* hr = hRe + (size_t) p * bins;
-                const float* hi = hIm + (size_t) p * bins;
-                juce::FloatVectorOperations::addWithMultiply(accRe.data(), xr, hr, bins);
-                juce::FloatVectorOperations::subtractWithMultiply(accRe.data(), xi, hi, bins);
-                juce::FloatVectorOperations::addWithMultiply(accIm.data(), xr, hi, bins);
-                juce::FloatVectorOperations::addWithMultiply(accIm.data(), xi, hr, bins);
-            }
+            // Y = (sum over p = 1..P-1 of X[frame - p] x H[p], done ahead) + X[frame] x H[0]
+            macPartition(c, 0);
 
-            if (! any)
+            if (! s.accAny)
             {
                 std::fill(s.outFifo.begin(), s.outFifo.end(), 0.0f);
-                continue;
             }
-            for (int b = 0; b < bins; ++b)
+            else
             {
-                fftBuffer[(size_t) (2 * b)] = accRe[(size_t) b];
-                fftBuffer[(size_t) (2 * b + 1)] = accIm[(size_t) b];
+                for (int b = 0; b < bins; ++b)
+                {
+                    fftBuffer[(size_t) (2 * b)] = s.accRe[(size_t) b];
+                    fftBuffer[(size_t) (2 * b + 1)] = s.accIm[(size_t) b];
+                }
+                std::fill(fftBuffer.begin() + 2 * bins, fftBuffer.end(), 0.0f);
+                fft->performRealOnlyInverseTransform(fftBuffer.data());
+                // overlap-save: the second half is the linear convolution's
+                std::memcpy(s.outFifo.data(), fftBuffer.data() + B, B * sizeof(float));
+                std::fill(s.accRe.begin(), s.accRe.end(), 0.0f);
+                std::fill(s.accIm.begin(), s.accIm.end(), 0.0f);
+                s.accAny = false;
             }
-            std::fill(fftBuffer.begin() + 2 * bins, fftBuffer.end(), 0.0f);
-            fft->performRealOnlyInverseTransform(fftBuffer.data());
-            // overlap-save: the second half is the linear convolution's
-            std::memcpy(s.outFifo.data(), fftBuffer.data() + B, B * sizeof(float));
         }
         head = head + 1 == P ? 0 : head + 1;
+        olderDone = 0;
     }
 }

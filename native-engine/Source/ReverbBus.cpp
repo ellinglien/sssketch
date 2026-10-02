@@ -317,6 +317,8 @@ namespace sssketch
         if (cavernTailRemaining <= 0)
             conv->clear();
 
+        // Run even at a return of 0: the room's state keeps up with its input,
+        // so turning the amount back up brings in the tail as it would be.
         conv->process(numSamples, inL, inR, outL, outR, returnGain);
 
         // Fed: the room can sound until every remembered frame has left
@@ -337,6 +339,12 @@ namespace sssketch
         // `cavernPending` by an exchange, so whatever this gets back was never
         // seen by it.
         delete cavernPending.exchange(new CavernConvolver(std::move(ir)), std::memory_order_acq_rel);
+    }
+
+    double ReverbBus::liveCavernRate() const
+    {
+        const auto* conv = cavern.load(std::memory_order_acquire);
+        return conv != nullptr ? conv->sampleRate() : 0.0;
     }
 
     void ReverbBus::drainRetiredCavern()

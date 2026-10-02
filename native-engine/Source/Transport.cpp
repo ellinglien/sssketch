@@ -833,6 +833,10 @@ namespace sssketch
             // The limiter's 75-sample lookahead still holds the last unfaded audio (the fade
             // runs after it): clear it, so the next play starts as an export does.
             engine.resetMaster();
+            // Likewise the cavern's tail: nothing renders while halted, so it would otherwise
+            // freeze and play on under the start of the next play (zita's cannot be dropped
+            // without allocating; see ReverbBus::dropCavernTail). A seek keeps it.
+            engine.dropReverbTail();
             // Pause preserves wherever playback had reached by the time the
             // fade finished; Stop resets to the top, matching each one's
             // existing pre-fade behavior.
@@ -854,6 +858,7 @@ namespace sssketch
         // callback is (re)added to its list -- so this is the "no process() in flight" reset()
         // needs.
         engine.resetMaster();
+        engine.dropReverbTail(); // the same "no callback in flight" moment
         // Called by JUCE on the thread that starts the device (the message thread, from
         // openDevice/setAudioDeviceSetup or a restart), before any callback at the new rate:
         // the master stage's limiter is rebuilt at it there, never on the audio thread. A

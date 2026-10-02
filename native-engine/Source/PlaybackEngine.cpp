@@ -49,6 +49,13 @@ namespace sssketch
          *
          * Mirrored by isStemToolkitNeutral() in src/shared/toolkit.ts; the two
          * are checked against each other by intent, not by code sharing. */
+        /** Whether a clip's toolkit sends to the reverb at all: a raised static send, or a send
+         * curve (which may rise from 0). */
+        bool stemSendsToReverb(const EngineStemToolkit& toolkit)
+        {
+            return toolkit.reverbSend > 0.0 || ! toolkit.automation.reverbSend.empty();
+        }
+
         bool stemToolkitIsNeutral(const EngineStemToolkit& toolkit)
         {
             const auto& automation = toolkit.automation;
@@ -58,7 +65,7 @@ namespace sssketch
                     !automation.filterCutoff.empty(),
                     !automation.filterResonance.empty()))
                 return false;
-            if (toolkit.reverbSend > 0.0 || !automation.reverbSend.empty())
+            if (stemSendsToReverb(toolkit))
                 return false;
             if (toolkit.volume != 1.0 || !automation.volume.empty())
                 return false;
@@ -172,14 +179,18 @@ namespace sssketch
         // plus ~4 MB of state), but only once something actually sends to it -- with no send
         // nothing is built, the same promise zita's lazy build keeps. A no-op once one is built
         // at the current rate.
-        if (project.sound.room == ReverbRoom::cavern)
+        //
+        // Only the FIRST build happens here, at masterRate. After that the rate is prepareMaster's
+        // business (a device or export rate change) or drainRetiredProject's (a block at a rate
+        // nothing was built for): rebuilding at masterRate on every project load would undo the
+        // latter whenever the two differ, and ping-pong.
+        if (project.sound.room == ReverbRoom::cavern && reverbBus.cavernPreparedRate() == 0.0)
         {
+            bool anyReverbSend = false;
             for (const auto& rifff : next->project.rifffs)
                 for (const auto& stem : rifff.stems)
-                    if (stem.hasToolkit
-                        && (stem.toolkit.reverbSend > 0.0 || ! stem.toolkit.automation.reverbSend.empty()))
-                        next->anyReverbSend = true;
-            if (next->anyReverbSend)
+                    anyReverbSend = anyReverbSend || (stem.hasToolkit && stemSendsToReverb(stem.toolkit));
+            if (anyReverbSend)
                 reverbBus.prepareCavern(masterRate.load());
         }
 

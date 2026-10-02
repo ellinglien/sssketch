@@ -62,6 +62,15 @@ namespace sssketch
      * block, counted in cavernRateMismatchCount) and asks the message thread to
      * build one (takeWantedCavernRate).
      *
+     * Lifetimes: the per-rate impulse cache (cavernIrFor) lives as long as the
+     * process, and the live convolver as long as this bus, even once nothing
+     * sends to the cavern any more. Both are bounded by the number of sample
+     * rates used (~8 MB a rate), so neither is freed early.
+     *
+     * The return gain is applied as a plain multiply, not smoothed: a change of
+     * the reverb amount steps the wet level at the block where the new project
+     * lands, as zita's sends-only control always has.
+     *
      * Usage per render block: beginBlock(n), then addSend(...) once per
      * channel that has a non-zero send, then endBlock(n, outL, outR) to run
      * the reverb and add its (fully wet) output into the mix. The dry signal
@@ -118,6 +127,18 @@ namespace sssketch
          * of the seek. */
         void reset();
 
+        /** Forgets the cavern's tail: its next block starts from silence
+         * (runCavern clears the convolver's state then). O(1), allocates
+         * nothing. AUDIO THREAD, or with no endBlock in flight. Transport calls
+         * it (through PlaybackEngine::dropReverbTail) when a stop or pause has
+         * faded out and when the device (re)starts, so the next play starts as
+         * an export does instead of under the old decay.
+         *
+         * Zita's tail is NOT dropped there: zita has no state-only clear, and
+         * its init() (what reset() uses) allocates its delay lines. So after a
+         * stop zita rings on from where it froze, as it always has. */
+        void dropCavernTail() { cavernTailRemaining = 0; }
+
         /** True while either room is being fed or still ringing out.
          * Exposed for tests and for a future "is the toolkit doing anything"
          * indicator; the render path uses it internally. */
@@ -146,6 +167,12 @@ namespace sssketch
         /** MESSAGE THREAD. A rate a cavern block found no convolver for, then
          * cleared; 0 if none. The caller builds one (prepareCavern). */
         double takeWantedCavernRate() { return cavernWantedRate.exchange(0.0); }
+
+        /** For tests: whether a swapped-out convolver is waiting for
+         * drainRetiredCavern, and the rate of the one the audio thread is
+         * running (0 if none). */
+        bool hasRetiredCavern() const { return cavernRetired.load() != nullptr; }
+        double liveCavernRate() const;
 
         /** Cavern blocks that went without wet signal because no convolver at
          * their rate was ready. */
