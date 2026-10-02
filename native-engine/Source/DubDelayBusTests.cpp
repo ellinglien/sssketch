@@ -1002,6 +1002,34 @@ namespace sssketch
                     expect(worst <= step * 1.001f);
                     expectEquals(g(400), 1.0f);
                 }
+
+                beginTest("the slew covers a timeline's worth of throwing stems: a seek into the 100th one's open throw "
+                          "ramps it in too (the slots once ran out at 64)");
+                {
+                    // 99 muted stems with throws hold a slot each (every tap is marked, sounding or
+                    // not), then the one that sounds.
+                    std::vector<Row> rows;
+                    for (int i = 0; i < 99; ++i)
+                        rows.push_back({ ones, throwCurve(0.1, 0.4), 0.0, 0.0, true });
+                    rows.push_back({ ones, throwCurve(0.1, 0.4) });
+                    auto many = makeProject(rows, SoundSettings::Dub { 1.0, 0.0 });
+                    many.sound.reverbReturn = 0.0;
+                    expect(DubDelayBus::kMaxSendSlots >= 100);
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    engine.prepareMaster(kRate);
+                    engine.setProject(many);
+                    render(engine, 4410);
+                    const int to = kBarSamples / 5;
+                    const auto out = render(engine, kBarSamples / 2, { 512 }, to);
+                    const auto g = [&](int j) { return out.first[(size_t) (j + d)] - 1.0f; };
+                    expect(g(0) <= step * 1.001f, "the send stepped in: " + juce::String(g(0)));
+                    float worst = 0.0f;
+                    for (int j = 0; j < 400; ++j)
+                        worst = std::max(worst, std::abs(g(j + 1) - g(j)));
+                    expect(worst <= step * 1.001f, "a step of " + juce::String(worst));
+                    expectEquals(g(400), 1.0f);
+                }
             }
 
             // A log, not a check: only with SSSKETCH_BENCH=1, so the suite stays quick.

@@ -286,7 +286,13 @@ namespace sssketch
         /** SEND SLEW: how fast a stem's send gain may move after a break -- full scale in 5 ms,
          * the web's own throw ramps (Engine.throwDelay), so a curve's ramp never engages it. */
         static constexpr double kSendSlewSec = 0.005;
-        static constexpr int kMaxSendSlots = 64;
+        /** How many stems' send gains the slew can follow at once; a stem past it gets its curve
+         * as is (no slew). A fixed array, in the bus, because the gains have to outlive every
+         * snapshot (a slot is found by the stem's id, block by block); sizing it per snapshot would
+         * mean handing the state from one snapshot's storage to the next across the swap. 256
+         * covers a long timeline's throwing stems (every stem with a throw anywhere is a tap) for
+         * ~7 KB; the per-block cost follows the slots in use, not this number. */
+        static constexpr int kMaxSendSlots = 256;
 
     private:
         void promotePending();
