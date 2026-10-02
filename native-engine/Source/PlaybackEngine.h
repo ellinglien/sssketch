@@ -231,10 +231,10 @@ namespace sssketch
         double secPerBar() const;
 
         /** The radio sound's master stage (MasterStage.h): headroom trim, HP, glue, width,
-         * shelves, then the true-peak limiter. The ONE call both outputs make, after the user's master plugin slots and
-         * before anything else touches the block -- Transport's device callback and
-         * RenderExport's offline loop -- so live playback and a bounce cannot run different
-         * mastering.
+         * shelves, then the true-peak limiter. The ONE call both outputs make, after the
+         * user's master plugin slots and before anything else touches the block -- Transport's
+         * device callback and RenderExport's offline loop -- so live playback and a bounce
+         * cannot run different mastering.
          *
          * AUDIO THREAD (or export's own thread), after the block's renderBlock call(s). Applies
          * the mastering settings of the snapshot the most recent renderBlock rendered: a staged
@@ -255,6 +255,11 @@ namespace sssketch
          * calls it when a stop or pause has finished fading out, and when the device (re)starts
          * (audioDeviceAboutToStart, before any callback). */
         void resetMaster() { masterStage.reset(); }
+
+        /** AUDIO THREAD, with no processMaster in flight. See MasterStage::clearDynamics:
+         * Transport calls it at a seek's jump, so the new position does not inherit the old
+         * one's glue reduction, limiter envelope or filter tails. */
+        void clearMasterDynamics() { masterStage.clearDynamics(); }
 
         /** AUDIO THREAD, with no renderBlock in flight. See ReverbBus::dropCavernTail: Transport
          * calls it beside resetMaster, when a stop or pause has faded out and when the device
@@ -683,9 +688,9 @@ namespace sssketch
         std::atomic<double> masterRate { 44100.0 };
 
         /** The mastering settings (with its glue and tone) of the snapshot the latest
-         * renderBlock call rendered, for
-         * processMaster. Written and read only by the single rendering thread (the same
-         * invariant as stemDsp); trivially copyable, so the write allocates nothing. */
+         * renderBlock call rendered, for processMaster. Written and read only by the single
+         * rendering thread (the same invariant as stemDsp); trivially copyable, so the write
+         * allocates nothing. */
         mutable std::optional<MasterStage::Settings> masterSettingsSeen;
     };
 }

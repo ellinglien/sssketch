@@ -498,12 +498,18 @@ namespace sssketch
              * step from the switch -- with 5% to spare. */
             auto noStep = [&](const Stereo& out, const Stereo& a, const Stereo& b, size_t bFrom, size_t from, size_t to) {
                 expect(from >= L + bFrom);
-                const float stepA = maxStep(a.l, from - L, to - L);
-                const float stepB = maxStep(b.l, from - L - bFrom, to - L - bFrom);
-                const float stepOut = maxStep(out.l, from, to);
-                const bool ok = stepOut <= 1.05f * std::max(stepA, stepB);
-                expect(ok, "a step of " + juce::String(stepOut) + " (the two sides move " + juce::String(stepA) + ", "
-                               + juce::String(stepB) + ")");
+                for (int ch = 0; ch < 2; ++ch)
+                {
+                    const auto& av = ch == 0 ? a.l : a.r;
+                    const auto& bv = ch == 0 ? b.l : b.r;
+                    const auto& ov = ch == 0 ? out.l : out.r;
+                    const float stepA = maxStep(av, from - L, to - L);
+                    const float stepB = maxStep(bv, from - L - bFrom, to - L - bFrom);
+                    const float stepOut = maxStep(ov, from, to);
+                    const bool ok = stepOut <= 1.05f * std::max(stepA, stepB);
+                    expect(ok, juce::String(ch == 0 ? "L" : "R") + ": a step of " + juce::String(stepOut)
+                                   + " (the two sides move " + juce::String(stepA) + ", " + juce::String(stepB) + ")");
+                }
             };
             auto segment = [](const Stereo& s, size_t from, size_t to) {
                 Stereo out(to - from);
@@ -524,8 +530,9 @@ namespace sssketch
 
                 expect(delayedEquals(out, steady, L, on + L), "not the plain delay before the switch");
                 // after the fade-in: the glue, started clean at the switch, exactly
-                const auto dry = segment(steady, on, off);
-                Stereo glued(off - on);
+                // the glue run from the switch to the end: it keeps running through the fade-out
+                const auto dry = segment(steady, on, steady.size());
+                Stereo glued(steady.size() - on);
                 {
                     FaustStage g(FaustDspKind::glue);
                     g.prepare(rate, 512);
@@ -537,15 +544,13 @@ namespace sssketch
                 for (size_t i = on + (size_t) fade48 + L; i < off + L && asGlued; ++i)
                     asGlued = out.l[i] == glued.l[i - L - on] && out.r[i] == glued.r[i - L - on];
                 expect(asGlued, "not the glue's output after the fade-in");
-                const float reductionDb = (float) (20.0 * std::log10(maxAbsDiff(glued, Stereo(off - on)) / maxAbsDiff(dry, Stereo(off - on))));
+                const float reductionDb = (float) (20.0 * std::log10(maxAbsDiff(glued, Stereo(glued.size())) / maxAbsDiff(dry, Stereo(dry.size()))));
                 logMessage("the glue's peak, against the input's: " + juce::String(reductionDb, 2) + " dB");
                 expect(reductionDb < -0.3f, "the glue hardly worked: " + juce::String(reductionDb, 2) + " dB");
                 // after the fade-out: the dry stage again, exactly
                 expect(delayedEquals(out, steady, off + (size_t) fade48 + L, steady.size()), "not dry after the fade-out");
                 noStep(out, steady, glued, on, on + L, on + L + (size_t) fade48 + 10);
-                Stereo gluedThenDry = steady; // the glue's output up to `off`, for the fade-out's check
-                std::copy(glued.l.begin(), glued.l.end(), gluedThenDry.l.begin() + (long) on);
-                noStep(out, steady, gluedThenDry, 0, off + L - 10, off + L + (size_t) fade48 + 10);
+                noStep(out, steady, glued, on, off + L - 10, off + L + (size_t) fade48 + 10);
             }
 
             beginTest("tone switched on mid-play fades in from a cleared state, then settles onto the tone; switched off it "
@@ -559,7 +564,7 @@ namespace sssketch
                 stage.process(&flatTone, rate, (int) (off - on), out.l.data() + on, out.r.data() + on);
                 stage.process(&flatNeither, rate, (int) (steady.size() - off), out.l.data() + off, out.r.data() + off);
 
-                auto toned = segment(steady, on, off);
+                auto toned = segment(steady, on, steady.size()); // the tone runs on through the fade-out
                 {
                     MasterTone t;
                     t.prepare(rate);
@@ -581,9 +586,7 @@ namespace sssketch
                 expect(justAfter < 2e-3f && later < 1e-6f, juce::String(justAfter, 8) + ", " + juce::String(later, 10));
                 expect(delayedEquals(out, steady, off + (size_t) fade48 + L, steady.size()), "not dry after the fade-out");
                 noStep(out, steady, toned, on, on + L, on + L + (size_t) fade48 + 10);
-                Stereo tonedThenDry = steady;
-                std::copy(toned.l.begin(), toned.l.end(), tonedThenDry.l.begin() + (long) on);
-                noStep(out, steady, tonedThenDry, 0, off + L - 10, off + L + (size_t) fade48 + 10);
+                noStep(out, steady, toned, on, off + L - 10, off + L + (size_t) fade48 + 10);
             }
 
             beginTest("a tone tilt glides the shelves over the fade time rather than stepping");

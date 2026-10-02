@@ -35,15 +35,21 @@ namespace sssketch
         void setShelf(bool high, double sinW0, double cosW0, float gainDb);
     };
 
+    /** The wet/dry mix every MasterStage stage fade uses, in place in (l, r): x + (y - x)·w,
+     * exactly y where w >= 1 and exactly x where w <= 0; `w` null means all y. In
+     * MasterTone.cpp (-ffp-contract=off) so every fade rounds the same. */
+    void mixWet(int numSamples, float* l, float* r, const float* wetL, const float* wetR, const float* w);
+
     /** The web radio's tone stages (masterChain.ts; the numbers are MASTERING in
      * src/shared/radioSound.ts): the 25 Hz high-pass that opens the chain, and, after the glue,
      * the width (mid/side, the side through a +2 dB high shelf at 250 Hz) and the two shelves
      * (+1 dB at 100 Hz and at 10 kHz by default; the project's tone amount tilts them, the wire
      * carries the resolved dB). MasterStage runs them; native radio sound plan, Task 7.
      *
-     * Every call takes an optional per-sample wet weight `w` (null: fully wet): the section's
-     * output is mixed with its own input, x + (y - x)·w, where 0 < w < 1, and is exactly x at 0
-     * and y at 1. MasterStage's tone switch fades this way, the same weights at both places. */
+     * highpass() and widthAndShelves() take an optional per-sample wet weight `w` (null: fully
+     * wet): the section's output is mixed with its own input as mixWet does, x + (y - x)·w,
+     * exactly x at 0 and y at 1. MasterStage's tone switch fades this way, the same weights at
+     * both places. The static width() is the bare width, always fully wet (for its tests). */
     class MasterTone
     {
     public:

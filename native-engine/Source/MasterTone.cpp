@@ -37,6 +37,15 @@ namespace sssketch
         }
     }
 
+    void mixWet(int numSamples, float* l, float* r, const float* wetL, const float* wetR, const float* w)
+    {
+        for (int i = 0; i < numSamples; ++i)
+        {
+            l[i] = mix(l[i], wetL[i], w, i);
+            r[i] = mix(r[i], wetR[i], w, i);
+        }
+    }
+
     void WebBiquad::reset() { x1 = x2 = y1 = y2 = 0.0; }
 
     static void setNormalised(WebBiquad& f, double b0, double b1, double b2, double a0, double a1, double a2)

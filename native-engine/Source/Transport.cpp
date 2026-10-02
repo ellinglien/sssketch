@@ -788,12 +788,18 @@ namespace sssketch
                 if (repositionElapsedSec >= kRepositionFadeSec)
                 {
                     positionBars.store(repositionTarget.load());
+                    // The master stage's state belongs to the old position: the glue's slow
+                    // release (1.5 s) would start a quiet passage reduced and swell it up, and
+                    // the limiter's envelope likewise. Clear it here, under the silence, so the
+                    // new position starts as a fresh stage would (the switches and their fades
+                    // are kept). Off, or with nothing engaged, this touches no sample.
+                    engine.clearMasterDynamics();
                     repositionFadingIn = true;
                     repositionElapsedSec = 0.0;
                     // The jump happens at the master stage's INPUT, but this fade is applied at
-                    // its output: with the limiter in, the next 75 samples out of it are still
-                    // the old position's (unfaded) audio. Hold at silence that much longer
-                    // before fading in, so they play at gain 0 and the new audio arrives at the
+                    // its output: with the limiter in, the new audio comes out of it 75 samples
+                    // late (its line, just cleared above, plays zeros meanwhile). Hold at
+                    // silence that much longer before fading in, so the new audio arrives at the
                     // start of the fade, as it does with the stage off. Off: 0, today's timing.
                     repositionHoldSec = engine.masterLatencySamples() / deviceSampleRate;
                 }

@@ -92,6 +92,13 @@ namespace sssketch
         toneFade = {};
     }
 
+    void MasterStage::Instance::clearDynamics()
+    {
+        limiter.reset();
+        glue.reset();
+        tone.reset();
+    }
+
     void MasterStage::Instance::updateStages(const Settings& s, bool fade)
     {
         if (glueFade.update(s.glue.has_value(), fade, fadeSamples))
@@ -231,27 +238,9 @@ namespace sssketch
             float* outs[2] = { outL, outR };
             glue.process(ins, 2, outs, n);
             float* w = scratch[4].data();
-            if (! glueFade.weights(n, fadeSamples, w))
-            {
-                std::memcpy(inL, outL, (size_t) n * sizeof(float));
-                std::memcpy(inR, outR, (size_t) n * sizeof(float));
-            }
-            else
-            {
-                for (int i = 0; i < n; ++i)
-                {
-                    if (w[i] >= 1.0f)
-                    {
-                        inL[i] = outL[i];
-                        inR[i] = outR[i];
-                    }
-                    else if (w[i] > 0.0f)
-                    {
-                        inL[i] = inL[i] + (outL[i] - inL[i]) * w[i];
-                        inR[i] = inR[i] + (outR[i] - inR[i]) * w[i];
-                    }
-                }
-            }
+            const bool fading = glueFade.weights(n, fadeSamples, w);
+            // the same mix the tone's fades use (MasterTone.cpp, one rounding everywhere)
+            mixWet(n, inL, inR, outL, outR, fading ? w : nullptr);
             glueFade.settle();
         }
 
@@ -332,6 +321,12 @@ namespace sssketch
         sounded = false;
         if (auto* inst = current.load(std::memory_order_acquire))
             inst->reset();
+    }
+
+    void MasterStage::clearDynamics()
+    {
+        if (auto* inst = current.load(std::memory_order_acquire))
+            inst->clearDynamics();
     }
 
     int MasterStage::currentLatencySamples() const

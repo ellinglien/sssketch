@@ -2,11 +2,15 @@
 // code in the browser it plays in: ell.ing/radio's src/audio/masterChain.ts buildMasterChain with
 // its Faust glue and true-peak limiter (src/audio/faustNode.ts, the committed .wasm through
 // faustProcessor.js as an AudioWorklet), in headless Chrome's OfflineAudioContext. Native radio
-// sound plan, Task 7: MasterStageTests runs the same input through the native MasterStage
+// sound plan, Task 7: MasterGlueToneTests runs the same input through the native MasterStage
 // (headroom -> HP 25 -> glue -> width -> shelves -> limiter) and matches this within 1e-5.
 //
 //   node scripts/golden-master-chain.mjs            # radio checked out at ../ell.ing/radio
 //   RADIO_DIR=/path/to/radio CHROME=/path/to/chrome node scripts/golden-master-chain.mjs
+//
+// The radio checkout must be clean (`git status --porcelain` empty), so the commit recorded in
+// master-chain.json is what was rendered; GOLDEN_ALLOW_DIRTY=1 renders anyway, and records the
+// commit as `git describe --always --dirty` (ending -dirty).
 //
 // What it covers: the web chain exactly as the radio builds it (input -> level -> headroom -4 dB
 // -> master filter, parked open -> HP 25 Hz -> glue.dsp -> width -> low shelf -> high shelf ->
@@ -36,6 +40,20 @@ const GOLDEN = join(ROOT, 'native-engine', 'test', 'golden')
 const PORT = Number(process.env.GOLDEN_PORT ?? 5198)
 const SAMPLE_RATE = 48000
 const FRAMES = 2 * SAMPLE_RATE
+
+const git = (...args) =>
+  execFileSync('git', ['-C', RADIO, ...args])
+    .toString()
+    .trim()
+const dirty = git('status', '--porcelain')
+if (dirty && process.env.GOLDEN_ALLOW_DIRTY !== '1') {
+  console.error(
+    `${RADIO} has uncommitted changes, so the golden would not match any commit:\n${dirty}\n` +
+      'commit or stash them, or set GOLDEN_ALLOW_DIRTY=1 to render anyway (recorded as -dirty)'
+  )
+  process.exit(1)
+}
+const radioCommit = git('describe', '--always', '--dirty')
 
 const programme = readFileSync(join(GOLDEN, 'programme.f32'))
 if (programme.length !== 2 * FRAMES * 4) throw new Error('programme.f32: unexpected size')
@@ -76,18 +94,47 @@ const { createServer } = await import(
 
 let chrome
 let server
+let finishing = false
 const userDir = mkdtempSync(join(tmpdir(), 'golden-master-'))
+/** Every exit goes through here: Chrome killed, vite closed, the temp profile removed. */
 const finish = async (code) => {
-  chrome?.kill()
-  await server?.close()
-  // Chrome may still be writing its profile as it exits: a leftover temp dir is harmless
+  if (finishing) return
+  finishing = true
+  // kill Chrome and wait for it to be gone (a few seconds at most), so its profile is no
+  // longer being written when it is removed below
+  if (
+    chrome &&
+    chrome.exitCode === null &&
+    chrome.signalCode === null &&
+    chrome.pid !== undefined
+  ) {
+    const gone = new Promise((ok) => chrome.once('exit', ok))
+    chrome.kill()
+    await Promise.race([gone, new Promise((ok) => setTimeout(ok, 5000))])
+  }
   try {
-    rmSync(userDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
-  } catch {
-    // left for the OS to clear
+    await server?.close()
+  } catch (e) {
+    console.error('closing vite:', e)
+  }
+  // a straggling Chrome helper may still touch it: retry, then say so
+  try {
+    rmSync(userDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  } catch (e) {
+    console.error(`could not remove ${userDir}:`, e)
   }
   process.exit(code)
 }
+process.on('SIGINT', () => void finish(130))
+process.on('SIGTERM', () => void finish(143))
+process.on('uncaughtException', (e) => {
+  console.error(e)
+  void finish(1)
+})
+process.on('unhandledRejection', (e) => {
+  console.error(e)
+  void finish(1)
+})
 
 const readBody = (req) =>
   new Promise((ok) => {
@@ -96,80 +143,78 @@ const readBody = (req) =>
     req.on('end', () => ok(Buffer.concat(parts)))
   })
 
-server = await createServer({
-  root: RADIO,
-  configFile: join(RADIO, 'vite.config.ts'),
-  logLevel: 'warn',
-  server: { port: PORT, strictPort: true },
-  plugins: [
-    {
-      name: 'golden-master-chain',
-      resolveId: (id) => (id === 'virtual:golden-master' ? '\0golden-master' : undefined),
-      load: (id) => (id === '\0golden-master' ? PAGE : undefined),
-      configureServer(s) {
-        s.middlewares.use('/__golden', async (req, res) => {
-          const url = new URL(req.url ?? '/', 'http://x')
-          if (url.pathname === '/page') {
-            res.setHeader('content-type', 'text/html')
-            res.end(
-              '<!doctype html><script type="module" src="/radio/@id/__x00__golden-master"></script>'
-            )
-          } else if (url.pathname === '/programme.f32') {
-            res.setHeader('content-type', 'application/octet-stream')
-            res.end(programme)
-          } else if (url.pathname === '/result') {
-            const body = await readBody(req)
-            res.end('ok')
-            if (body.length !== 2 * FRAMES * 4) {
-              console.error(`unexpected result size ${body.length}`)
-              return finish(1)
-            }
-            const out = new Float32Array(body.buffer, body.byteOffset, 2 * FRAMES)
-            let peak = 0
-            for (const v of out) peak = Math.max(peak, Math.abs(v))
-            writeFileSync(join(GOLDEN, 'master-chain.out.f32'), body)
-            const radioCommit = (() => {
-              try {
-                return execFileSync('git', ['-C', RADIO, 'rev-parse', '--short', 'HEAD'])
-                  .toString()
-                  .trim()
-              } catch {
-                return 'unknown'
+try {
+  server = await createServer({
+    root: RADIO,
+    configFile: join(RADIO, 'vite.config.ts'),
+    logLevel: 'warn',
+    server: { port: PORT, strictPort: true },
+    plugins: [
+      {
+        name: 'golden-master-chain',
+        resolveId: (id) => (id === 'virtual:golden-master' ? '\0golden-master' : undefined),
+        load: (id) => (id === '\0golden-master' ? PAGE : undefined),
+        configureServer(s) {
+          s.middlewares.use('/__golden', async (req, res) => {
+            const url = new URL(req.url ?? '/', 'http://x')
+            if (url.pathname === '/page') {
+              res.setHeader('content-type', 'text/html')
+              // the module through vite's /@id/ route, under whatever base the radio's config sets
+              const base = s.config.base.endsWith('/') ? s.config.base : s.config.base + '/'
+              res.end(
+                `<!doctype html><script type="module" src="${base}@id/__x00__golden-master"></script>`
+              )
+            } else if (url.pathname === '/programme.f32') {
+              res.setHeader('content-type', 'application/octet-stream')
+              res.end(programme)
+            } else if (url.pathname === '/result') {
+              const body = await readBody(req)
+              res.end('ok')
+              if (body.length !== 2 * FRAMES * 4) {
+                console.error(`unexpected result size ${body.length}`)
+                return finish(1)
               }
-            })()
-            const meta = {
-              note:
-                'written by sssketch scripts/golden-master-chain.mjs: programme.f32 through ell.ing/radio ' +
-                'src/audio/masterChain.ts buildMasterChain (saturate: false) with its Faust glue and ' +
-                'truepeak stages, every parameter at its default, in headless Chrome OfflineAudioContext; ' +
-                'little-endian float32, planar (L then R)',
-              input: 'programme.f32',
-              chain:
-                'headroom -4 dB, HP 25 Hz, glue.dsp (-14 dB, 2:1, knee 6), width (side +2 dB shelf at 250 Hz), low shelf +1 dB at 100 Hz, high shelf +1 dB at 10 kHz, truepeak.dsp (-1 dBTP)',
-              radioCommit,
-              userAgent: url.searchParams.get('ua'),
-              sampleRate: SAMPLE_RATE,
-              frames: FRAMES
+              const out = new Float32Array(body.buffer, body.byteOffset, 2 * FRAMES)
+              let peak = 0
+              for (const v of out) peak = Math.max(peak, Math.abs(v))
+              writeFileSync(join(GOLDEN, 'master-chain.out.f32'), body)
+              const meta = {
+                note:
+                  'written by sssketch scripts/golden-master-chain.mjs: programme.f32 through ell.ing/radio ' +
+                  'src/audio/masterChain.ts buildMasterChain (saturate: false) with its Faust glue and ' +
+                  'truepeak stages, every parameter at its default, in headless Chrome OfflineAudioContext; ' +
+                  'little-endian float32, planar (L then R)',
+                input: 'programme.f32',
+                chain:
+                  'headroom -4 dB, HP 25 Hz, glue.dsp (-14 dB, 2:1, knee 6), width (side +2 dB shelf at 250 Hz), low shelf +1 dB at 100 Hz, high shelf +1 dB at 10 kHz, truepeak.dsp (-1 dBTP)',
+                radioCommit,
+                userAgent: url.searchParams.get('ua'),
+                sampleRate: SAMPLE_RATE,
+                frames: FRAMES
+              }
+              writeFileSync(join(GOLDEN, 'master-chain.json'), JSON.stringify(meta, null, 2) + '\n')
+              console.log(
+                `wrote master-chain.out.f32 (peak ${peak.toFixed(4)}) and master-chain.json; ${meta.userAgent}`
+              )
+              return finish(0)
+            } else if (url.pathname === '/error') {
+              console.error((await readBody(req)).toString())
+              res.end('ok')
+              return finish(1)
+            } else {
+              res.statusCode = 404
+              res.end()
             }
-            writeFileSync(join(GOLDEN, 'master-chain.json'), JSON.stringify(meta, null, 2) + '\n')
-            console.log(
-              `wrote master-chain.out.f32 (peak ${peak.toFixed(4)}) and master-chain.json; ${meta.userAgent}`
-            )
-            return finish(0)
-          } else if (url.pathname === '/error') {
-            console.error((await readBody(req)).toString())
-            res.end('ok')
-            return finish(1)
-          } else {
-            res.statusCode = 404
-            res.end()
-          }
-        })
+          })
+        }
       }
-    }
-  ]
-})
-await server.listen()
+    ]
+  })
+  await server.listen()
+} catch (e) {
+  console.error('vite:', e)
+  await finish(1)
+}
 chrome = spawn(
   CHROME,
   [
@@ -183,6 +228,16 @@ chrome = spawn(
   ],
   { stdio: 'ignore' }
 )
+chrome.on('error', (e) => {
+  console.error(`could not start Chrome (${CHROME}; set CHROME=...):`, e.message)
+  void finish(1)
+})
+chrome.on('exit', (code) => {
+  if (!finishing) {
+    console.error(`Chrome exited (${code}) before the page reported back`)
+    void finish(1)
+  }
+})
 setTimeout(() => {
   console.error('timed out')
   void finish(1)

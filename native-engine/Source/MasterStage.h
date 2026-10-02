@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <type_traits>
 #include <vector>
 
 namespace sssketch
@@ -85,6 +86,8 @@ namespace sssketch
             // Task 8: std::optional<SoundSettings::Saturation> saturation;
         };
 
+        static_assert(std::is_trivially_copyable_v<Settings>, "copied on the audio thread every block");
+
         /** The settings a project's sound asks for, or nothing when mastering is off. */
         static std::optional<Settings> settingsFor(const SoundSettings& sound);
 
@@ -123,6 +126,15 @@ namespace sssketch
          * pause has faded out, so the next play does not start with the last 75 samples of the
          * previous one, and when the device (re)starts. */
         void reset();
+
+        /** AUDIO THREAD (or with no process() in flight). Clears the DSP state only -- the
+         * limiter's line and envelope, the glue's envelopes, the tone's filters -- and keeps
+         * everything else: the switches, their fades, the trim, and whether the stage has
+         * sounded. Transport calls it at a seek's jump, under the reposition fade's silence, so
+         * the new position starts as a fresh stage would (no glue reduction carried over from
+         * a loud passage, no old audio in the line) while a later switch still crossfades.
+         * Allocates nothing (Faust's instanceClear, zeroed biquads). Never called by an export. */
+        void clearDynamics();
 
         /** AUDIO THREAD. How late the stage's output is right now: kLatencySamples while the
          * limited signal is in it (fully or partly, during a crossfade), else 0. Transport's
@@ -180,6 +192,7 @@ namespace sssketch
             Settings held {}; // the settings a fade-out keeps running on
 
             void reset();
+            void clearDynamics();
             /** `fadeOnEngage`: the stage has sounded since it was built or reset, so an engage
              * here crossfades in; otherwise it is immediate. */
             void process(const Settings* settings, bool fadeOnEngage, int numSamples, float* l, float* r);

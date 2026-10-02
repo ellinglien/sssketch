@@ -1047,6 +1047,40 @@ namespace sssketch
                            "the first block after a stop is not the first block of the export");
                 }
 
+                beginTest("master stage with glue and tone: a stop resets them too, so playing again renders the first pass again");
+                {
+                    auto project = makeProject(SoundSettings::Mastering {});
+                    project.sound.glue = SoundSettings::Glue {};
+                    project.sound.tone = SoundSettings::Tone {};
+                    const auto exported = renderExport(project);
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    engine.prepareMaster(kRate);
+                    engine.setProject(project);
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(kBpm);
+                    std::vector<float> l(512), r(512);
+                    float* channels[2] = { l.data(), r.data() };
+                    transport.play(0.0);
+                    for (int i = 0; i < 60; ++i) // 0.7 s of a hot mix: the glue's slow envelope well down
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                    transport.stop();
+                    for (int i = 0; i < 400 && transport.isPlaying(); ++i)
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                    expect(! transport.isPlaying());
+                    transport.play(0.0);
+                    std::vector<float> again(4096);
+                    for (int b = 0; b < 8; ++b)
+                    {
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                        std::copy(l.begin(), l.end(), again.begin() + b * 512);
+                    }
+                    expect(std::memcmp(again.data(), exported.first.data(), again.size() * sizeof(float)) == 0,
+                           "the first blocks after a stop are not the export's");
+                }
+
                 beginTest("master stage: the device's rate reaches it (prepareMaster), and a mismatched block passes through");
                 {
                     StemBufferCache cache;
@@ -1173,6 +1207,104 @@ namespace sssketch
 
                     engine.drainRetiredProject();
                     halfFile.deleteFile();
+                }
+
+                beginTest("master stage: a seek clears the glue, the tone and the limiter -- after a seek from a loud "
+                          "passage into a quiet one, the quiet one sounds as a fresh play from there does");
+                {
+                    // A loud sine for the first half bar (the glue well into its slow release),
+                    // a quiet one (-20 dBFS, under the glue's knee) for the second.
+                    const int frames = (int) (2.0 * kRate), loud = frames / 2;
+                    auto file = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                    .getChildFile("sssketch_transport_master_loudquiet.wav");
+                    file.deleteFile();
+                    {
+                        juce::WavAudioFormat wavFormat;
+                        std::unique_ptr<juce::FileOutputStream> out(file.createOutputStream());
+                        std::unique_ptr<juce::AudioFormatWriter> writer(
+                            wavFormat.createWriterFor(out.get(), kRate, 1, 24, {}, 0));
+                        out.release();
+                        juce::AudioBuffer<float> source(1, frames);
+                        for (int i = 0; i < frames; ++i)
+                            source.setSample(0, i, (i < loud ? 0.9f : 0.1f)
+                                                       * (float) std::sin(2.0 * 3.14159265358979323846 * 220.0 * i / kRate));
+                        writer->writeFromAudioSampleBuffer(source, 0, frames);
+                    }
+                    EngineProject project;
+                    project.bpm = kBpm;
+                    project.snapDiv = 16.0;
+                    EngineRifff rifff;
+                    rifff.groupId = "lq";
+                    rifff.channelId = "c1";
+                    rifff.startBar = 0.0;
+                    rifff.barLength = 1;
+                    EngineStem stem;
+                    stem.stemKey = "lq:1";
+                    stem.resolvedPath = file.getFullPathName();
+                    stem.durationSec = 2.0;
+                    stem.barLength = 1;
+                    rifff.stems.push_back(stem);
+                    project.rifffs.push_back(rifff);
+                    project.sound.mastering = SoundSettings::Mastering {};
+                    project.sound.glue = SoundSettings::Glue {};
+                    project.sound.tone = SoundSettings::Tone {};
+
+                    constexpr int kBlock = 64;
+                    struct Rig
+                    {
+                        StemBufferCache cache;
+                        PlaybackEngine engine { cache };
+                        PluginChain masterChain { kNumMasterChainSlots };
+                        ChannelChainRegistry channelChains;
+                        Transport transport { engine, masterChain, channelChains };
+                    };
+                    auto runBlocks = [&](Rig& rig, int count) {
+                        std::vector<float> l((size_t) (count * kBlock)), r((size_t) (count * kBlock));
+                        for (int b = 0; b < count; ++b)
+                        {
+                            float* channels[2] = { l.data() + b * kBlock, r.data() + b * kBlock };
+                            rig.transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                        }
+                        return std::make_pair(l, r);
+                    };
+                    auto makeRig = [&](Rig& rig) {
+                        rig.engine.prepareMaster(kRate);
+                        rig.engine.setProject(project);
+                        rig.transport.setBpm(kBpm);
+                    };
+
+                    // played from the top, then seeked into the quiet half
+                    Rig seeked;
+                    makeRig(seeked);
+                    seeked.transport.play(0.0);
+                    runBlocks(seeked, 400); // 0.58 s of the loud half
+                    seeked.transport.setPosition(0.75);
+                    const auto after = runBlocks(seeked, 400);
+                    const int fadeSamples = (int) std::ceil(0.012 * kRate);
+                    const int jumpAt = ((fadeSamples + kBlock - 1) / kBlock) * kBlock;
+
+                    // a fresh play from the same bar
+                    Rig fresh;
+                    makeRig(fresh);
+                    fresh.transport.play(0.75);
+                    const auto fromThere = runBlocks(fresh, 400);
+
+                    // once the seek's hold and fade-in are done, the two are the same samples
+                    const int settled = jumpAt + MasterStage::kLatencySamples + fadeSamples + kBlock;
+                    bool same = true;
+                    float worst = 0.0f;
+                    for (int i = settled; i + jumpAt < (int) fromThere.first.size(); ++i)
+                    {
+                        worst = std::max(worst, std::abs(after.first[(size_t) i] - fromThere.first[(size_t) (i - jumpAt)]));
+                        same = same && after.first[(size_t) i] == fromThere.first[(size_t) (i - jumpAt)]
+                            && after.second[(size_t) i] == fromThere.second[(size_t) (i - jumpAt)];
+                    }
+                    expect(same, "after the seek the quiet half differs from a fresh play from there by up to "
+                                     + juce::String(worst, 8));
+
+                    seeked.engine.drainRetiredProject();
+                    fresh.engine.drainRetiredProject();
+                    file.deleteFile();
                 }
 
                 hot.deleteFile();
