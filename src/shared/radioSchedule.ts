@@ -11,8 +11,13 @@
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import { radioSlotFlagWeightFactor, type RadioSlotFlags } from './radioSlotFlags'
-import { DEFAULT_RADIO_DROP_OUTS, normalizeRadioDropOuts, type RadioDropOuts } from './radioDropOut'
-import { turnaroundPhraseLaps } from './radioTurnaround'
+import type { RadioDropOuts } from './radioDropOut'
+import {
+  DEFAULT_RADIO_TURNAROUNDS,
+  normalizeRadioTurnarounds,
+  turnaroundPhraseLaps,
+  type RadioTurnarounds
+} from './radioTurnaround'
 import {
   DEFAULT_RADIO_TRANSITIONS,
   normalizeRadioTransitions,
@@ -1034,6 +1039,12 @@ export interface RadioSettings {
   phraseBars: number
   channels: number
   transitions: RadioTransitions
+  /** How often a phrase end gets a turnaround (radioTurnaround.ts). Absorbed the old
+   * `dropOuts` row (2026-10-02). */
+  turnarounds: RadioTurnarounds
+  /** DEPRECATED: equal to `turnarounds` (normalizeRadioSettings keeps it so). Kept only while
+   * the shipped DiscoverRadioMenu and DiscoverPanel still read and write it -- the radio
+   * turnarounds plan's Task 14 moves them over, and its Task 16 deletes this field. */
   dropOuts: RadioDropOuts
   turnover: RadioTurnover
   /** Optional only because the web radio builds its own RadioSettings and
@@ -1053,7 +1064,8 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   phraseBars: DEFAULT_RADIO_PHRASE_BARS,
   channels: DEFAULT_RADIO_CHANNELS,
   transitions: DEFAULT_RADIO_TRANSITIONS,
-  dropOuts: DEFAULT_RADIO_DROP_OUTS,
+  turnarounds: DEFAULT_RADIO_TURNAROUNDS,
+  dropOuts: DEFAULT_RADIO_TURNAROUNDS,
   turnover: DEFAULT_RADIO_TURNOVER,
   density: DEFAULT_RADIO_DENSITY
 }
@@ -1076,6 +1088,10 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
   const pace =
     raw.pace !== undefined ? normalizeRadioPace(raw.pace) : normalizeRadioPace(legacyPace)
   const channels = Number(raw.channels)
+  // Turnarounds absorbed drop-outs. Until the plan's Task 16 the shipped menu writes only
+  // `dropOuts`, so it is read FIRST -- whenever the two differ it is the newer -- and
+  // `turnarounds` is the fallback. Task 16 flips this to the spec's order.
+  const turnarounds = normalizeRadioTurnarounds(raw.dropOuts, raw.turnarounds)
   return {
     pace,
     paceBars: normalizeRadioPaceWindow(raw.paceBars, pace),
@@ -1092,7 +1108,8 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
       ? Math.min(RADIO_CHANNELS_MAX, Math.max(RADIO_CHANNELS_MIN, Math.floor(channels)))
       : DEFAULT_RADIO_CHANNELS,
     transitions: normalizeRadioTransitions(raw.transitions),
-    dropOuts: normalizeRadioDropOuts(raw.dropOuts),
+    turnarounds,
+    dropOuts: turnarounds,
     turnover: normalizeRadioTurnover(raw.turnover),
     density: normalizeRadioDensity(raw.density)
   }

@@ -87,6 +87,7 @@ describe('discoverSettingsStore', () => {
         phraseBars: 16,
         channels: 7,
         transitions: 'bold',
+        turnarounds: 'often',
         dropOuts: 'often',
         turnover: 'random',
         density: 'off'
@@ -99,6 +100,7 @@ describe('discoverSettingsStore', () => {
       phraseBars: 16,
       channels: 7,
       transitions: 'bold',
+      turnarounds: 'often',
       dropOuts: 'often',
       turnover: 'random',
       density: 'off'
@@ -130,6 +132,16 @@ describe('discoverSettingsStore', () => {
       pace: 'fast',
       paceBars: { min: 3, max: 6 }
     })
+  })
+
+  it('carries a saved drop-outs choice over to turnarounds', async () => {
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radio: { dropOuts: 'off' } }),
+      'utf-8'
+    )
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    expect(loadDiscoverSettings().radio.turnarounds).toBe('off')
   })
 
   it('migrates a stored change-on grid to the threshold that replaced it', async () => {

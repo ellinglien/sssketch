@@ -1086,6 +1086,7 @@ describe('RadioSettings', () => {
       phraseBars: 0,
       channels: 4,
       transitions: 'subtle',
+      turnarounds: 'rare',
       dropOuts: 'rare',
       turnover: 'even',
       density: 'arc'
