@@ -256,6 +256,32 @@ whose shortest length does not fit is left out of the draw.
   5. Old drop-out settings carried over.
   6. `off` is silent.
 
+## 7. Next: auto-arrange uses the same planner
+
+The planner is pure, and it does not know who plays its plans. Auto-arrange is planned as a third
+consumer, after the radios have been tuned by ear. It gets its own short spec.
+
+- **The pass.** After `runAutoArrangeBuild`, one pass walks every section boundary. It calls
+  `rollTurnaround` and writes each plan as clip automation on the timeline:
+  - volume, filter cutoff and mode, and reverb send become ordinary toolkit lanes, at the last
+    bars of the clips in the section that is ending;
+  - a riser becomes a clip on the riser row.
+  The output is visible, editable, and exported like any other automation.
+- **Direction is known, not guessed.** Rows entering, or a boundary into build or peak, mean
+  `growing`. Rows exiting, or a boundary into breakdown or outro, mean `thinning`. The row that
+  exits is `leavingRowId`.
+- **The build → peak boundary is the drop.** That boundary favours the low drop and the riser,
+  Solberg's and Butler's central move (§0).
+- **It runs once, at build time.** It stores no clip ids for later, per the arrangement map's lesson.
+
+What this asks of the planner now:
+- **All randomness comes from the injected `random`,** so a seeded auto-arrange rebuild gives the
+  same turnarounds. The radios pass their own source.
+- **Rows are identified by opaque ids.** The planner does not care whether an id is a radio slot or
+  a timeline channel.
+- **The plan is in beats before a boundary,** never in a runtime's own clock.
+- **The arc is an input.** The planner never reads `radioDensity` itself.
+
 ## Out of scope
 
 - The breakdown → build → drop section (next spec).
