@@ -54,6 +54,7 @@ vi.mock('@shared/buildEngineProject', async (importOriginal) => {
 
 import { buildEngineProject } from '@shared/buildEngineProject'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
+import { timelineDubThrows } from '@shared/timelineThrows'
 import {
   loopLengthBarsFor,
   riserRenderBarsFor,
@@ -1245,4 +1246,74 @@ describe('risers in an isolated render', () => {
       rmSync(destDir, { recursive: true, force: true })
     }
   }, 30000)
+})
+
+describe("the timeline's throws in every export (native radio sound plan, Task 12)", () => {
+  // Two throwing rows on two buses, 40 bars at 1 s a bar (silent: the paths do not exist, which
+  // the engine renders as silence -- only what each render is BUILT with is under test here).
+  const throwing: Rifff = {
+    groupId: 'r1',
+    name: 'long',
+    bpm: 240,
+    barLength: 1,
+    folderPath: '/x',
+    startBar: 0,
+    stems: [
+      {
+        slot: 1,
+        author: 'e',
+        name: 'a',
+        type: 'notes',
+        path: '/no/a.wav',
+        durationSec: 1,
+        barLength: 1
+      },
+      {
+        slot: 2,
+        author: 'e',
+        name: 'b',
+        type: 'fx',
+        path: '/no/b.wav',
+        durationSec: 1,
+        barLength: 1
+      }
+    ]
+  }
+  const state: AppState = {
+    ...initialState,
+    bpm: 240,
+    rifffs: { r1: throwing },
+    playedBars: { r1: 40 },
+    busOf: { 'r1:1': 'lead', 'r1:2': 'aux' },
+    sound: normalizeSoundSettings(undefined),
+    projectSeed: 'export-throws'
+  }
+
+  it('the mixdown and every bus and track render are built with the WHOLE project’s plan', async () => {
+    const plan = timelineDubThrows(state)
+    expect(plan).toBeDefined()
+    expect(plan!.sends.size).toBeGreaterThan(0)
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-throws-dest-'))
+    try {
+      vi.mocked(buildEngineProject).mockClear()
+      await nativeExport(state, null)
+      await renderStemsToDir(state, destDir)
+      await renderStemTracksToDir(state, destDir, 'p')
+      const calls = vi.mocked(buildEngineProject).mock.calls
+      expect(calls).toHaveLength(5) // the mixdown, two buses, two tracks
+      for (const call of calls) expect(call[4]?.dubThrows).toEqual(plan)
+      // and the solo renders' throws are the mix's: the muted rows keep their curves (they send
+      // nothing), so each throw is in the file of the bus its row is on
+      const projects = await Promise.all(
+        vi.mocked(buildEngineProject).mock.results.map((r) => r.value)
+      )
+      for (const project of projects) {
+        for (const stem of project.rifffs[0].stems)
+          expect(stem.toolkit?.automation.dubSend).toEqual(plan!.sends.get(stem.stemKey))
+        expect(project.sound?.dub).toBeDefined()
+      }
+    } finally {
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 60000)
 })

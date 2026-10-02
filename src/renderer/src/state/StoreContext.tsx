@@ -16,6 +16,7 @@ import { createSequentialRunner } from '@shared/sequentialAsync'
 import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector'
 import { createHistoryState, historyReducer, type HistoryAction } from './history'
 import { buildEngineProject, type BuildEngineProjectOptions } from '@shared/buildEngineProject'
+import { timelineDubThrows } from '@shared/timelineThrows'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { loopLengthBars } from './selectors'
 import { isWithinManualSeekGrace } from './manualSeek'
@@ -504,7 +505,14 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
           resolveStretchedForPlayback,
           pluginCatalog,
           undefined,
-          buildOptions
+          // With neither overrides nor options this puts the real project back (after Discover or
+          // an audition let go of the engine), so it carries the timeline's planned throws
+          // (native radio sound plan, Task 12), as the automatic sync's builds do. An audition
+          // (overrides) gets none: it is the file.
+          buildOptions ??
+            (overrides === undefined
+              ? { dubThrows: timelineDubThrows(stateRef.current) }
+              : undefined)
         )
         // Re-checked after the build too -- ownership (or whatever
         // condition shouldAbort tests) could have changed WHILE the build
@@ -598,10 +606,14 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
               dirtyEngineSyncRef.current = true
               return
             }
+            // The timeline's planned throws (native radio sound plan, Task 12): the same plan
+            // every export builds from this project, so the pass and the bounce throw alike.
             const project = await buildEngineProject(
               stateRef.current,
               resolveStretchedForPlayback,
-              pluginCatalog
+              pluginCatalog,
+              undefined,
+              { dubThrows: timelineDubThrows(stateRef.current) }
             )
             // Ownership could have been claimed WHILE the build above was
             // in flight -- re-check right before the actual send.
@@ -721,7 +733,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // toolkit's curves are: a move/resize drag dispatches exactly once, on
     // release (RiserBlock.tsx keeps the in-progress geometry local), so this
     // can't fire at drag frequency.
-    state.risers
+    state.risers,
+    // The project's sound settings (native radio sound plan): every stage rides this reload, and
+    // the timeline's throws (Task 12) are planned from the throw settings and the project's seed.
+    // Edited once per gesture (SET_SOUND_SETTINGS), never at drag rate.
+    state.sound,
+    state.projectSeed
   ])
 
   // Inbound half of the same bidirectional relationship as the outbound

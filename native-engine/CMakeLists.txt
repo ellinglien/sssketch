@@ -198,6 +198,7 @@ target_sources(sssketch_engine PRIVATE
   Source/DrumPumpTests.cpp
   Source/DubDelay.cpp
   Source/DubDelayBusTests.cpp
+  Source/TimelineThrowsTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE

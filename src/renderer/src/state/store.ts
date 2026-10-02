@@ -432,6 +432,13 @@ export interface AppState {
    * are without one. Edited through SET_SOUND_SETTINGS, which is undoable like any project
    * edit. */
   sound?: SoundSettings
+  /** This project's own seed, for rules that must draw the same "random" every time it is
+   * played or exported: the timeline's dub throws (native radio sound plan, Task 12;
+   * @shared/timelineThrows). Random for a new project (App.tsx's commitNewProject); a project
+   * saved before it existed gets one derived from its rifffs when it opens (deserializeProject),
+   * kept once saved. Saved with the project; nothing edits it. OPTIONAL: the startup state and
+   * the throwaway preview states have none, and the throws then plan from ''. */
+  projectSeed?: string
   /** Placed noise risers, keyed by their own id -- see @shared/riser and
    * step 4 of docs/superpowers/specs/2026-09-22-builtin-sound-toolkit-design.md.
    *

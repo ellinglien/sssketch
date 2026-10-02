@@ -15,6 +15,7 @@ import { loadCatalog } from './pluginCatalog'
 import { sketchStemsDir } from './projectLibrary'
 import { buildPluginStatesMap, type RawPluginStatesCapture } from '@shared/pluginStates'
 import { stemExportSound } from '@shared/radioSound'
+import { timelineDubThrows } from '@shared/timelineThrows'
 
 // Anything outside this set is unsafe (or at least unwelcome) in a filename
 // across macOS/Windows/Linux -- matches exportAudioMaterialization.ts's own
@@ -167,11 +168,14 @@ export async function nativeExport(
     rawPluginStates !== null
       ? buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins)
       : {}
+  // The timeline's planned throws (native radio sound plan, Task 12): the plan live playback
+  // builds from this same project, so the mixdown throws where the pass did.
   const project = await buildEngineProject(
     state,
     resolveStretchedForExport,
     loadCatalog(),
-    pluginStates
+    pluginStates,
+    { dubThrows: timelineDubThrows(state) }
   )
   const durationBars = loopLengthBarsFor(state)
 
@@ -297,6 +301,10 @@ export async function renderStemsToDir(
     rawPluginStates !== null
       ? buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins)
       : {}
+  // The throws are a per-stem stage (the D1/D2 ruling), so the bus files keep them -- planned
+  // from the WHOLE project, not from each bus's solo state (whose other rows are muted, and would
+  // plan other throws). A throw is then in the file of the bus its row belongs to.
+  const dubThrows = timelineDubThrows(state)
 
   try {
     await client.connect(engineHandle.port)
@@ -311,7 +319,8 @@ export async function renderStemsToDir(
         busState,
         resolveStretchedForExport,
         pluginCatalog,
-        pluginStates
+        pluginStates,
+        { dubThrows }
       )
       const fileName = `${busId}.wav`
       const outputPath = join(destDir, fileName)
@@ -479,6 +488,8 @@ export async function renderStemTracksToDir(
     rawPluginStates !== null
       ? buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins)
       : {}
+  // From the whole project, as renderStemsToDir's: see there.
+  const dubThrows = timelineDubThrows(state)
 
   try {
     await client.connect(engineHandle.port)
@@ -499,7 +510,8 @@ export async function renderStemTracksToDir(
           trackState,
           resolveStretchedForExport,
           pluginCatalog,
-          pluginStates
+          pluginStates,
+          { dubThrows }
         )
         const fileName = `${sanitizedProjectName} - ${busId} ${i + 1}.wav`
         const outputPath = join(destDir, fileName)

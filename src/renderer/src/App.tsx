@@ -1346,7 +1346,8 @@ function Frame(): React.JSX.Element {
       // project starts from the app-wide defaults (native radio sound plan,
       // Task 2; fetched once, at mount, below), and that is not an edit.
       const sound = await appSoundDefaults()
-      const freshState = { ...initialState, bpm, sound }
+      // Its own seed, so its timeline throws are its own (@shared/timelineThrows).
+      const freshState = { ...initialState, bpm, sound, projectSeed: crypto.randomUUID() }
       dispatch({ type: 'LOAD_STATE', state: freshState })
       lastSavedJsonRef.current = serializeProject(freshState)
       setCurrentSketch({ kind: 'library', name })

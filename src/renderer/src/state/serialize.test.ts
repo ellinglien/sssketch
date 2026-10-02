@@ -1019,3 +1019,44 @@ describe('the arrangement map on disk', () => {
     expect(state.coach?.walkIndex).toBeNull()
   })
 })
+
+describe("the project's seed (native radio sound plan, Task 12)", () => {
+  it('a saved seed comes back as it was, and survives a second round trip', () => {
+    const state: AppState = {
+      ...reducer(initialState, { type: 'ADD_TO_SHELF', rifff }),
+      projectSeed: 'abc'
+    }
+    const { state: once } = deserializeProject(JSON.parse(serializeProject(state)))
+    expect(once.projectSeed).toBe('abc')
+    const { state: twice } = deserializeProject(JSON.parse(serializeProject(once)))
+    expect(twice.projectSeed).toBe('abc')
+  })
+
+  it('a project saved before seeds gets one from its rifffs: the same at every open, kept once saved', () => {
+    const old = JSON.parse(serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff })))
+    expect(old.projectSeed).toBeUndefined()
+    const first = deserializeProject(structuredClone(old)).state.projectSeed
+    expect(first).toMatch(/^rifffs:[0-9a-f]{8}$/)
+    expect(deserializeProject(structuredClone(old)).state.projectSeed).toBe(first)
+    // another project's rifffs, another seed
+    const other = JSON.parse(
+      serializeProject(
+        reducer(initialState, { type: 'ADD_TO_SHELF', rifff: { ...rifff, groupId: 'r2' } })
+      )
+    )
+    expect(deserializeProject(other).state.projectSeed).not.toBe(first)
+    // saved, it is the project's own: edits to its rifffs no longer move it
+    const saved = deserializeProject(structuredClone(old)).state
+    const edited = reducer(saved, { type: 'ADD_TO_SHELF', rifff: { ...rifff, groupId: 'r9' } })
+    expect(deserializeProject(JSON.parse(serializeProject(edited))).state.projectSeed).toBe(first)
+  })
+
+  it('junk is replaced', () => {
+    const old = JSON.parse(serializeProject(reducer(initialState, { type: 'ADD_TO_SHELF', rifff })))
+    for (const junk of [3, '', null, {}]) {
+      expect(deserializeProject({ ...old, projectSeed: junk }).state.projectSeed).toMatch(
+        /^rifffs:/
+      )
+    }
+  })
+})

@@ -16,7 +16,14 @@ vi.mock('electron', () => ({
   shell: { openPath: vi.fn().mockResolvedValue('') }
 }))
 
-import { renderToolkitAudio, reverbTailSeconds } from './exportToolkitAudio'
+import {
+  clipsToBake,
+  dubTailSeconds,
+  renderToolkitAudio,
+  reverbTailSeconds
+} from './exportToolkitAudio'
+import { throwTailSec } from '../shared/radioThrows'
+import { timelineThrowPlan } from '../shared/timelineThrows'
 
 /** A 16-bit mono WAV of a constant sample value -- same helper
  * nativeExport.test.ts uses (its own copy notes why a constant, not a tone). */
@@ -393,4 +400,125 @@ describe('renderToolkitAudio', () => {
       rmSync(outDir, { recursive: true, force: true })
     }
   }, 120000)
+
+  describe("the timeline's throws in a bake (native radio sound plan, Task 12)", () => {
+    /** A 16-bit mono WAV of a sine, so the echo's 200 Hz-3.5 kHz loop has something to pass. */
+    function writeSineWav(path: string, hz: number, amplitude: number, numSamples: number): void {
+      writeConstantWav(path, 0, numSamples)
+      const buf = readFileSync(path)
+      for (let i = 0; i < numSamples; i++) {
+        const v = amplitude * Math.sin((2 * Math.PI * hz * i) / 44100)
+        buf.writeInt16LE(Math.round(v * 32767), 44 + i * 2)
+      }
+      writeFileSync(path, buf)
+    }
+    /** One throwing row (notes), `bars` long at 1 s a bar, panning off so only the throws bake. */
+    function throwingState(
+      stemPath: string,
+      bars: number,
+      seed: string,
+      throwsOn = true
+    ): AppState {
+      const sound = normalizeSoundSettings(undefined)
+      sound.panning.on = false
+      sound.throws.on = throwsOn
+      const rifff: Rifff = {
+        groupId: 'r1',
+        name: 'long',
+        bpm: 240,
+        barLength: 1,
+        folderPath: '/x',
+        startBar: 0,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 'n',
+            type: 'notes',
+            path: stemPath,
+            durationSec: 1,
+            barLength: 1
+          }
+        ]
+      }
+      return {
+        ...initialState,
+        bpm: 240,
+        rifffs: { r1: rifff },
+        playedBars: { r1: bars },
+        sound,
+        projectSeed: seed
+      }
+    }
+
+    it('sizes the echo at the loop peak gain, not the nominal feedback', () => {
+      const nominal = throwTailSec(0.375, 0.6)
+      const peak = dubTailSeconds(0.375, 0.6)
+      // ~22.7 passes at 0.6 x 1.23 against ~13.5 at 0.6; plus the first repeat and the drift
+      const passes = Math.log(1000) / -Math.log(0.6 * 1.23)
+      expect(peak).toBeCloseTo(0.375 * (1 + passes) + Math.ceil(passes / 2) * (128 / 44100), 10)
+      expect(peak).toBeGreaterThan(nominal * 1.6)
+      // the native guard: anything above 0.77 rings as 0.77 does, and never forever
+      expect(dubTailSeconds(0.5, 2)).toBe(dubTailSeconds(0.5, 0.77))
+      expect(Number.isFinite(dubTailSeconds(2, 0.95))).toBe(true)
+      expect(dubTailSeconds(0.5, 0)).toBe(0.5)
+    })
+
+    it('a throwing clip is baked, with its last throw; not with throws off', () => {
+      const state = throwingState('/no/a.wav', 64, 'bake-1')
+      const plan = timelineThrowPlan(state)!
+      expect(plan.throws.length).toBeGreaterThan(0)
+      const last = plan.throws[plan.throws.length - 1]
+      expect(clipsToBake(state)).toEqual([
+        {
+          key: 'r1:1',
+          rifffName: 'long',
+          stemName: 'n',
+          endBar: 64,
+          hasSend: false,
+          lastThrowEndBar: last.atBar + last.beats / 4
+        }
+      ])
+      expect(clipsToBake(throwingState('/no/a.wav', 64, 'bake-1', false))).toEqual([])
+    })
+
+    it('bakes the echo and leaves room for it and the room it feeds; automation has none', async () => {
+      const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-src-'))
+      const bakeDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-bake-'))
+      const autoDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-auto-'))
+      try {
+        const stemPath = join(srcDir, 'n.wav')
+        writeSineWav(stemPath, 1000, 0.3, 44100)
+        // End the clip on the bar after its first throw closes, so the echo rings past it. The
+        // throw stays where it was: a shorter clip it still fits in changes nothing before it.
+        const first = timelineThrowPlan(throwingState(stemPath, 64, 'bake-2'))!.throws[0]
+        const throwEnd = first.atBar + first.beats / 4
+        const bars = Math.ceil(throwEnd + 1e-9)
+        const state = throwingState(stemPath, bars, 'bake-2')
+        const plan = timelineThrowPlan(state)!
+        expect(plan.throws[plan.throws.length - 1]).toEqual(first)
+
+        const audio = await renderToolkitAudio(state, bakeDir, 'bake')
+        const baked = audio.bakedClips.get('r1:1')!
+        const delaySec = (plan.echo.timing === 'quarter' ? 1 : 0.75) * 0.25
+        const ringSec =
+          dubTailSeconds(delaySec, plan.echo.feedback) + reverbTailSeconds(0.5, 20, 'cavern')
+        expect(baked.tailBars).toBe(Math.ceil(throwEnd - bars + ringSec))
+        const file = join(bakeDir, 'Samples', 'Imported', baked.fileName)
+        const { frames } = readStereo(file)
+        expect(frames).toBe(44100 * (bars + baked.tailBars))
+        // past the clip's end the dry row is gone; the echo is still there
+        expect(peakBetweenFrames(file, 44100 * bars + 2205, 44100 * (bars + 1))).toBeGreaterThan(
+          1e-3
+        )
+
+        const dry = await renderToolkitAudio(state, autoDir, 'automation')
+        expect(dry.bakedClips.size).toBe(0)
+      } finally {
+        rmSync(srcDir, { recursive: true, force: true })
+        rmSync(bakeDir, { recursive: true, force: true })
+        rmSync(autoDir, { recursive: true, force: true })
+      }
+    }, 120000)
+  })
 })

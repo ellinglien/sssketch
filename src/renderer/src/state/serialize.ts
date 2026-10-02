@@ -13,6 +13,7 @@ import {
 import type { PluginStatesMap } from '@shared/pluginStates'
 import { sanitiseLoadedCoach } from '@shared/coach'
 import { normaliseLoadedRisers } from '@shared/riser'
+import { hashText } from '@shared/seededRandom'
 import {
   DEFAULT_SOUND_SETTINGS,
   normalizeSoundSettings,
@@ -415,6 +416,12 @@ export function deserializeProject(
   // saved one is normalised against the same defaults, so a hand-edited file's junk never
   // reaches the reducer or the engine.
   state.sound = normalizeSoundSettings(state.sound, soundDefaults)
+  // The project's seed (the timeline's throws, @shared/timelineThrows). One saved before it existed
+  // gets one derived from its rifffs' ids, so it plans the same throws every time it is opened
+  // until it is saved, and from then on keeps it whatever is edited.
+  if (typeof state.projectSeed !== 'string' || state.projectSeed === '') {
+    state.projectSeed = `rifffs:${hashText(Object.keys(state.rifffs).sort().join(','))}`
+  }
   // After snapBarLengthNoise, deliberately: a clip's length in bars is what
   // a migrated fade is measured against, so it has to be the repaired one.
   const withMigratedFades = migrateEdgeFadesToVolumeCurves(state, { fadeIn, fadeOut })

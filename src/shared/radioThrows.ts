@@ -65,6 +65,19 @@ export const initialThrowState = (): ThrowState => ({
 
 const between = (r: number, [lo, hi]: readonly [number, number]): number => lo + (hi - lo) * r
 
+/** How long a throw holds the send open, in beats: one or two, evenly (one draw). Shared by
+ * stepThrows and the timeline's plan (timelineThrows.ts), so the two cannot drift. */
+export function drawThrowBeats(random: () => number): number {
+  return random() < 0.5 ? THROW_BEATS[0] : THROW_BEATS[1]
+}
+
+/** A throw's echo: a dotted eighth or a quarter, evenly, and a feedback in THROW_FEEDBACK (two
+ * draws, in that order). Shared by stepThrows and the timeline's plan (timelineThrows.ts). */
+export function drawThrowEcho(random: () => number): { timing: ThrowTiming; feedback: number } {
+  const timing: ThrowTiming = random() < 0.5 ? 'dotted-eighth' : 'quarter'
+  return { timing, feedback: between(random(), THROW_FEEDBACK) }
+}
+
 export function stepThrows(
   state: ThrowState,
   tick: ThrowTick,
@@ -83,9 +96,8 @@ export function stepThrows(
   const eligible = tick.rows.filter((r) => r.audible && !r.kinds.some((k) => NEVER.includes(k)))
   if (tick.held || tick.leadingArmed || eligible.length === 0) return { state: next, plan: null }
   const slot = eligible[Math.min(eligible.length - 1, Math.floor(random() * eligible.length))].slot
-  const beats = random() < 0.5 ? THROW_BEATS[0] : THROW_BEATS[1]
-  const timing: ThrowTiming = random() < 0.5 ? 'dotted-eighth' : 'quarter'
-  const feedback = between(random(), THROW_FEEDBACK)
+  const beats = drawThrowBeats(random)
+  const { timing, feedback } = drawThrowEcho(random)
   const plan: ThrowPlan = { slot, at: tick.nextBeat, beats, timing, feedback }
   next.busyUntil =
     plan.at + (beats * 60) / tick.bpm + throwTailSec(throwDelaySec(tick.bpm, timing), feedback)

@@ -67,4 +67,22 @@ describe('exportToolkitChoice', () => {
       exportToolkitChoice(state({ sound: panning(false), stemSends: { 'r1:2': 0.5 } }))
     ).toEqual({ offer: true, defaultMode: 'bake' })
   })
+
+  it("the timeline's throws (Task 12) offer the choice, and do not move the default", () => {
+    const throwing = (pan: boolean, throws: boolean): AppState => {
+      const sound = panning(pan)
+      sound.throws.on = throws
+      // 64 bars: room for a throw (one comes round every 16-32 bars)
+      return state({ sound, playedBars: { r1: 64 }, projectSeed: 'choice' })
+    }
+    expect(exportToolkitChoice(throwing(false, true))).toEqual({ offer: true, defaultMode: 'bake' })
+    expect(exportToolkitChoice(throwing(true, true))).toEqual({
+      offer: true,
+      defaultMode: 'automation'
+    })
+    expect(exportToolkitChoice(throwing(false, false))).toEqual({
+      offer: false,
+      defaultMode: 'bake'
+    })
+  })
 })
