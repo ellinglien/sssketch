@@ -156,6 +156,30 @@ namespace sssketch
         pinkReady = false;
     }
 
+    void RiserVoice::seedFrom(const EngineRiser& riser)
+    {
+        if (seeded)
+            return;
+        seedL = riserSeedFor(riser.id);
+        // The right channel is the SAME riser's noise under a different
+        // seed rather than a copy of the left. Two independent noise
+        // streams through one bandpass give the riser real stereo width
+        // (a mono riser collapses to a point in the middle of the mix,
+        // which is the one place a build has the least room to grow);
+        // derived from seedL so it is still fully determined by the
+        // riser's id. The constant is the golden-ratio odd word every
+        // hash mixer in this family uses -- chosen only because it has no
+        // small factors in common with the FNV multiplier.
+        seedR = seedL ^ 0x9e3779b9U;
+        seeded = true;
+    }
+
+    void RiserVoice::prepare(const EngineRiser& riser, double sampleRate)
+    {
+        seedFrom(riser);
+        prepare(sampleRate, 1);
+    }
+
     bool RiserVoice::render(
         const EngineRiser& riser,
         double blockStartSec,
@@ -189,21 +213,7 @@ namespace sssketch
         if (preparedSampleRate <= 0.0)
             return false;
 
-        if (!seeded)
-        {
-            seedL = riserSeedFor(riser.id);
-            // The right channel is the SAME riser's noise under a different
-            // seed rather than a copy of the left. Two independent noise
-            // streams through one bandpass give the riser real stereo width
-            // (a mono riser collapses to a point in the middle of the mix,
-            // which is the one place a build has the least room to grow);
-            // derived from seedL so it is still fully determined by the
-            // riser's id. The constant is the golden-ratio odd word every
-            // hash mixer in this family uses -- chosen only because it has no
-            // small factors in common with the FNV multiplier.
-            seedR = seedL ^ 0x9e3779b9U;
-            seeded = true;
-        }
+        seedFrom(riser);
 
         // The riser's character (EngineRiser; all of it today's riser when
         // the wire left it out). Mono is one noise in both sides: seedR =

@@ -909,6 +909,67 @@ namespace sssketch
                 }
             }
 
+            beginTest("voices: built and prepared on the message thread; renderBlock creates none");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry chains;
+                engine.prepareMaster(kTestRate);
+                expectEquals((int) engine.riserVoicePoolSize(), 0);
+                auto project = riserProject(0.0, ReverbRoom::zita);
+                engine.setProject(project);
+                expectEquals((int) engine.riserVoicePoolSize(), 1);
+                const auto* voice = engine.pooledRiserVoice("radio-riser-g");
+                expect(voice != nullptr);
+                // Prepared at the engine's rate before the audio thread ever saw it.
+                expectEquals(voice->preparedRate(), kTestRate);
+                std::vector<float> l(512), r(512);
+                for (int block = 0; block < 300; ++block)
+                    engine.renderBlock((block * 512.0 / kTestRate), kTestRate, 512, l.data(), r.data(), chains);
+                expectEquals((int) engine.riserVoicePoolSize(), 1);
+                expect(engine.pooledRiserVoice("radio-riser-g") == voice);
+                // The same id in a new project (a re-sync) keeps the voice; a new id adds one.
+                auto resynced = project;
+                resynced.risers[0].channelId = "g2";
+                engine.setProject(resynced);
+                expect(engine.pooledRiserVoice("radio-riser-g") == voice);
+                auto other = project;
+                other.risers[0].id = "radio-riser-next";
+                engine.stageProject(other);
+                expectEquals((int) engine.riserVoicePoolSize(), 2);
+                // Staged: both ids are in use, so the drain keeps both.
+                engine.drainRetiredProject();
+                expectEquals((int) engine.riserVoicePoolSize(), 2);
+                expect(engine.promoteStagedProjectNow());
+                engine.drainRetiredProject();
+                expectEquals((int) engine.riserVoicePoolSize(), 1);
+                expect(engine.pooledRiserVoice("radio-riser-next") != nullptr);
+                expect(engine.pooledRiserVoice("radio-riser-g") == nullptr);
+            }
+
+            beginTest("voices: a long run of armings (a new riser id each) does not grow the pool");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry chains;
+                engine.prepareMaster(kTestRate);
+                std::vector<float> l(512), r(512);
+                size_t most = 0;
+                for (int arming = 0; arming < 2000; ++arming)
+                {
+                    auto project = riserProject(arming % 2 == 0 ? 0.0 : 0.3, ReverbRoom::cavern);
+                    project.risers[0].id = "radio-riser-arm-" + juce::String(arming);
+                    engine.setProject(project);
+                    engine.renderBlock(0.5 + (arming % 100) * 0.01, kTestRate, 512, l.data(), r.data(), chains);
+                    engine.drainRetiredProject();
+                    most = std::max(most, engine.riserVoicePoolSize());
+                }
+                expectEquals((int) most, 1);
+                engine.setProject(EngineProject {});
+                engine.drainRetiredProject();
+                expectEquals((int) engine.riserVoicePoolSize(), 0);
+            }
+
             beginTest("variety: a sending riser is block-size invariant, and the export is the same audio");
             {
                 const auto project = riserProject(0.35, ReverbRoom::cavern);

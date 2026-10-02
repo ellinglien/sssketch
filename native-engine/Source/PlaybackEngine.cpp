@@ -131,7 +131,18 @@ namespace sssketch
         // so without this it would be silently missing from the mix.
         for (const auto& riser : next->project.risers)
         {
-            next->riserGroups[riser.channelId].push_back(&riser);
+            // The riser's voice, from the message-thread pool: the same id
+            // keeps the same voice (and so its state) across project swaps; a
+            // new id gets a new voice, created and prepared HERE so that
+            // nothing is allocated for it on the audio thread.
+            auto& pooled = riserVoicePool[riser.id];
+            if (pooled == nullptr)
+            {
+                pooled = std::make_shared<RiserVoice>();
+                pooled->prepare(riser, masterRate.load());
+            }
+            next->riserVoiceRefs.push_back(pooled);
+            next->riserGroups[riser.channelId].push_back({ &riser, pooled.get() });
             next->channelGroups[riser.channelId];
         }
         next->anyRisers = !next->project.risers.empty();
@@ -337,6 +348,7 @@ namespace sssketch
                                      + juce::String(wanted) + " Hz; building one");
             reverbBus.prepareCavern(wanted);
         }
+        pruneRiserVoices();
         if (!retiredOccupied.load(std::memory_order_acquire))
             return;
         // Clear the slot first, flag second -- the exact mirror of the
@@ -346,6 +358,31 @@ namespace sssketch
         std::atomic_store_explicit(
             &retired, std::shared_ptr<const ProjectSnapshot>(), std::memory_order_release);
         retiredOccupied.store(false, std::memory_order_release);
+    }
+
+    void PlaybackEngine::pruneRiserVoices()
+    {
+        if (riserVoicePool.empty())
+            return;
+        // An id is kept while the published or the staged snapshot has a
+        // riser with it (a staged project's voices must survive until its
+        // loop top). Anything else goes from the pool; dropping the pool's
+        // reference never frees a voice a live snapshot still holds (see
+        // ProjectSnapshot::riserVoiceRefs), it only stops the id carrying its
+        // state into a later project -- a riser that comes back after leaving
+        // both starts from a fresh voice, as after a seek.
+        const auto live = std::atomic_load_explicit(&published, std::memory_order_acquire);
+        const auto next = std::atomic_load_explicit(&staged, std::memory_order_acquire);
+        const auto inUse = [&](const juce::String& id) {
+            for (const auto* snap : { live.get(), next.get() })
+                if (snap != nullptr)
+                    for (const auto& riser : snap->project.risers)
+                        if (riser.id == id)
+                            return true;
+            return false;
+        };
+        for (auto it = riserVoicePool.begin(); it != riserVoicePool.end();)
+            it = inUse(it->first) ? std::next(it) : riserVoicePool.erase(it);
     }
 
     void PlaybackEngine::prepareMaster(double sampleRate)
@@ -932,53 +969,14 @@ namespace sssketch
                 const auto risersHere = snap->riserGroups.find(channelId);
                 if (risersHere != snap->riserGroups.end())
                 {
-                    for (const auto* riserPtr : risersHere->second)
+                    for (const auto& placed : risersHere->second)
                     {
-                        auto& voice = riserVoices[riserPtr->id];
-                        if (voice == nullptr)
-                            voice = std::make_unique<RiserVoice>();
-                        if (!(riserPtr->send > 0.0) || !runReverbBus)
-                        {
-                            voice->render(
-                                *riserPtr, blockStartSec, sampleRate, spb, numSamples, chOutL, chOutR);
-                            continue;
-                        }
-                        // The sending riser. The scratch is sized the way a
-                        // stem's own buffer is (prepareStemBuffer).
-                        auto& sL = snap->scratchStemL;
-                        auto& sR = snap->scratchStemR;
-                        if (sL.size() != (size_t) numSamples)
-                        {
-                            sL.resize((size_t) numSamples);
-                            sR.resize((size_t) numSamples);
-                        }
-                        std::fill(sL.begin(), sL.end(), 0.0f);
-                        std::fill(sR.begin(), sR.end(), 0.0f);
-                        if (voice->render(
-                                *riserPtr, blockStartSec, sampleRate, spb, numSamples, sL.data(), sR.data()))
-                        {
-                            for (int i2 = 0; i2 < numSamples; ++i2)
-                            {
-                                chOutL[i2] += sL[(size_t) i2];
-                                chOutR[i2] += sR[(size_t) i2];
-                            }
-                        }
-                        // Sent EVERY block, silence included, exactly as a
-                        // sending clip's toolkit is (it runs over silence too):
-                        // the cavern's convolver frames its input from the
-                        // first block it is fed, so feeding only the blocks the
-                        // riser sounds in would frame it from a block that
-                        // depends on the host's split, and the room would
-                        // differ by a few ULPs between live and an export.
-                        // Fed from playback's first block, it is split-
-                        // invariant to the bit (NoiseRiserTests).
-                        //
-                        // A constant send: settled at its value, so every
-                        // sample's gain is exactly `send` (ParamSmoother::next
-                        // snaps a settled smoother to its target).
-                        ParamSmoother sendGain;
-                        sendGain.reset(sampleRate, kAutomationSmoothingSec, (float) riserPtr->send);
-                        reverbBus.addSend(numSamples, sL.data(), sR.data(), sendGain);
+                        if (placed.riser->send > 0.0 && runReverbBus)
+                            renderSendingRiser(*snap, *placed.riser, *placed.voice, blockStartSec, sampleRate, spb,
+                                               numSamples, chOutL, chOutR);
+                        else
+                            placed.voice->render(
+                                *placed.riser, blockStartSec, sampleRate, spb, numSamples, chOutL, chOutR);
                     }
                 }
             }
@@ -1089,6 +1087,52 @@ namespace sssketch
             masterFilterEngaged = false;
             masterFilter.resetTo(mode, neutral, resonance01);
         }
+    }
+
+    void PlaybackEngine::renderSendingRiser(
+        const ProjectSnapshot& snap,
+        const EngineRiser& riser,
+        RiserVoice& voice,
+        double blockStartSec,
+        double sampleRate,
+        double secPerBar,
+        int numSamples,
+        float* chOutL,
+        float* chOutR) const
+    {
+        // The scratch is sized the way a stem's own buffer is (prepareStemBuffer); every stem
+        // of this channel is done by now, so it is free.
+        auto& sL = snap.scratchStemL;
+        auto& sR = snap.scratchStemR;
+        if (sL.size() != (size_t) numSamples)
+        {
+            sL.resize((size_t) numSamples);
+            sR.resize((size_t) numSamples);
+        }
+        std::fill(sL.begin(), sL.end(), 0.0f);
+        std::fill(sR.begin(), sR.end(), 0.0f);
+        if (voice.render(riser, blockStartSec, sampleRate, secPerBar, numSamples, sL.data(), sR.data()))
+        {
+            for (int i = 0; i < numSamples; ++i)
+            {
+                chOutL[i] += sL[(size_t) i];
+                chOutR[i] += sR[(size_t) i];
+            }
+        }
+        // Sent EVERY block, silence included, exactly as a sending clip's toolkit is (it runs
+        // over silence too): the cavern's convolver frames its input from the first block it is
+        // fed, so feeding only the blocks the riser sounds in would frame it from a block that
+        // depends on the host's split, and the room would differ by a few ULPs between live and
+        // an export. Fed from playback's first block, it is split-invariant to the bit
+        // (NoiseRiserTests).
+        //
+        // The ParamSmoother is a stack local, rebuilt every block, deliberately: the send is a
+        // constant, so reset() leaves it settled at `send` and every next() returns exactly
+        // `send` (a settled smoother snaps to its target). It holds no state worth carrying
+        // between blocks, costs one exp() per block, and allocates nothing.
+        ParamSmoother sendGain;
+        sendGain.reset(sampleRate, kAutomationSmoothingSec, (float) riser.send);
+        reverbBus.addSend(numSamples, sL.data(), sR.data(), sendGain);
     }
 
     void PlaybackEngine::applyStemToolkit(

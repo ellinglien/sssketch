@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   DEFAULT_RADIO_TRANSITIONS,
   RADIO_TRANSITIONS_OPTIONS,
@@ -212,10 +212,25 @@ describe('riser variety (native radio sound plan, Task 6)', () => {
     expect(qs.size).toBeGreaterThan(190)
   })
 
-  it("variety off ignores the arming and keeps today's id (wire-identical); no armId falls back to the channel", () => {
-    expect(buildTransitionRiser('g', 8, 2, { variety: false, armId: 'arm-1' })).toStrictEqual(today)
-    expect(buildTransitionRiser('g', 8, 2, { variety: true, armId: '' })!.id).toBe('radio-riser-g')
-    expect(buildTransitionRiser('g', 8, 2, { variety: true })!.id).toBe('radio-riser-g')
+  it("variety off ignores the arming and keeps today's id (wire-identical); no armId falls back to the channel, with a warning", async () => {
+    // a fresh copy of the module: its warn-once flag may already be spent by the tests above
+    vi.resetModules()
+    const fresh = await import('./radioTransition')
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      expect(
+        fresh.buildTransitionRiser('g', 8, 2, { variety: false, armId: 'arm-1' })
+      ).toStrictEqual(today)
+      expect(warn).not.toHaveBeenCalled()
+      expect(fresh.buildTransitionRiser('g', 8, 2, { variety: true, armId: '' })!.id).toBe(
+        'radio-riser-g'
+      )
+      expect(fresh.buildTransitionRiser('g', 8, 2, { variety: true })!.id).toBe('radio-riser-g')
+      // once per session, however often it happens
+      expect(warn).toHaveBeenCalledTimes(1)
+    } finally {
+      warn.mockRestore()
+    }
   })
 
   it("applying today's character keeps today's sound fields (Q 2, white, wide, no send, the same level and ends)", () => {

@@ -238,10 +238,13 @@ namespace sssketch
      * arranger draws the block's slope from. */
     double riserCutoffAt(const EngineRiser& riser, double clipBar);
 
-    /** ONE riser's live DSP -- which is only the bandpass, because the source
-     * is index-addressed (riserNoiseAt) and the envelope is a pure function
-     * of position. Owned by PlaybackEngine, keyed by riser id, created
-     * lazily: a project with no risers never constructs one.
+    /** ONE riser's live DSP -- the bandpass (and, for a pink riser, the
+     * Kellet filters), because the source is index-addressed (riserNoiseAt)
+     * and the envelope is a pure function of position. Owned by
+     * PlaybackEngine's message-thread pool, keyed by riser id, created and
+     * prepared in buildSnapshot (never on the audio thread) and shared with
+     * every snapshot that has a riser with that id, so its state carries
+     * across project swaps. A project with no risers never constructs one.
      *
      * Not thread-safe and not meant to be, exactly like ChannelFilter and for
      * the same reason: one thread ever renders a given engine instance (the
@@ -274,8 +277,26 @@ namespace sssketch
             float* outL,
             float* outR);
 
+        /** MESSAGE THREAD, before the voice can reach the audio thread
+         * (PlaybackEngine::buildSnapshot, for a voice it has just created):
+         * seeds it from the riser's id and prepares the bandpass at
+         * `sampleRate`, so the filter's state vectors are allocated here and
+         * not in the first block the riser sounds in. render() still
+         * re-prepares if it is called at another rate -- which allocates
+         * nothing, since the state is already sized for two channels. */
+        void prepare(const EngineRiser& riser, double sampleRate);
+
+        /** For tests: how many times this voice has warmed its pink filters
+         * up, so a test can pin that continuous playback, at any block size,
+         * warms up exactly once. */
+        unsigned long long pinkWarmUpCount() const { return pinkWarmUps; }
+
+        /** For tests: the rate the bandpass is prepared at (0 = not yet). */
+        double preparedRate() const { return preparedSampleRate; }
+
     private:
         void prepare(double sampleRate, int maxBlockSize);
+        void seedFrom(const EngineRiser& riser);
 
         juce::dsp::StateVariableTPTFilter<float> filter;
         double preparedSampleRate = 0.0;
@@ -298,14 +319,6 @@ namespace sssketch
         bool pinkReady = false;
         bool pinkReadyMono = false;
         unsigned long long pinkWarmUps = 0;
-
-    public:
-        /** For tests: how many times this voice has warmed its pink filters
-         * up, so a test can pin that continuous playback, at any block size,
-         * warms up exactly once. */
-        unsigned long long pinkWarmUpCount() const { return pinkWarmUps; }
-
-    private:
 
         // The riser-local sample index this voice expects NEXT. A mismatch
         // means playback jumped (a seek, a fresh transport start, the first

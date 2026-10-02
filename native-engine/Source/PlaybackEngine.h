@@ -269,6 +269,14 @@ namespace sssketch
         /** For tests: the rate of the convolver the audio thread is running (0 if none), and
          * whether a swapped-out one is waiting for drainRetiredProject. */
         double liveCavernReverbRate() const { return reverbBus.liveCavernRate(); }
+        /** For tests, MESSAGE THREAD: how many riser voices the pool holds (riserVoicePool). */
+        size_t riserVoicePoolSize() const { return riserVoicePool.size(); }
+        /** For tests, MESSAGE THREAD: the pooled voice for a riser id, or null. */
+        const RiserVoice* pooledRiserVoice(const juce::String& id) const
+        {
+            const auto it = riserVoicePool.find(id);
+            return it != riserVoicePool.end() ? it->second.get() : nullptr;
+        }
         /** For tests: whether the zita room's reverb has been constructed (ReverbBus::hasBeenBuilt). */
         bool zitaReverbBuilt() const { return reverbBus.hasBeenBuilt(); }
         bool cavernReverbRetiredPending() const { return reverbBus.hasRetiredCavern(); }
@@ -358,8 +366,23 @@ namespace sssketch
 
             // Groups project.risers by channelId, same lifetime and same
             // pointers-into-this-snapshot rule as channelGroups above. A
-            // channelId absent from here simply has no risers on it.
-            std::map<juce::String, std::vector<const EngineRiser*>> riserGroups;
+            // channelId absent from here simply has no risers on it. Each
+            // riser comes with its voice, looked up (or created and prepared)
+            // in buildSnapshot on the message thread, so renderBlock does no
+            // map work and no allocation for a riser.
+            struct PlacedRiser
+            {
+                const EngineRiser* riser = nullptr;
+                RiserVoice* voice = nullptr;
+            };
+            std::map<juce::String, std::vector<PlacedRiser>> riserGroups;
+
+            // Keeps every voice above alive for exactly as long as this
+            // snapshot can be rendered: the pool (riserVoicePool) shares
+            // ownership, and pruning it only drops the pool's reference, so a
+            // voice is never freed while a snapshot the audio thread may still
+            // hold can reach it.
+            std::vector<std::shared_ptr<RiserVoice>> riserVoiceRefs;
 
             // Per-channel accumulation scratch for renderBlock() -- one
             // entry per channelGroups entry, in the same order. `mutable`:
@@ -480,6 +503,24 @@ namespace sssketch
             float* stemL,
             float* stemR) const;
 
+        /** AUDIO THREAD. One riser with a reverb send (EngineRiser::send > 0), for one block:
+         * rendered into the snapshot's stem scratch, added into its channel, and fed to the
+         * reverb bus every block (see the definition for why every block). */
+        void renderSendingRiser(
+            const ProjectSnapshot& snap,
+            const EngineRiser& riser,
+            RiserVoice& voice,
+            double blockStartSec,
+            double sampleRate,
+            double secPerBar,
+            int numSamples,
+            float* chOutL,
+            float* chOutR) const;
+
+        /** MESSAGE THREAD (drainRetiredProject). Drops the pool's voices whose id is in neither
+         * the published nor the staged snapshot. */
+        void pruneRiserVoices();
+
         StemBufferCache& bufferCache;
 
         // Owning, reference-counted pointer to the currently-live snapshot --
@@ -583,14 +624,20 @@ namespace sssketch
         // real DSP cannot be stateless.
         mutable std::map<juce::String, std::unique_ptr<StemDspState>> stemDsp;
 
-        /** Per-RISER live DSP -- only a bandpass, since a riser's source is
-         * index-addressed and its envelope is a pure function of position
-         * (see NoiseRiser.h). Keyed by the riser's own id, and living under
-         * exactly the same threading, lifetime and lazy-creation rules as
-         * stemDsp above: created on the first block a given riser actually
-         * sounds in, never pruned, only ever touched by the single rendering
-         * thread, and never constructed at all by a project with no risers. */
-        mutable std::map<juce::String, std::unique_ptr<RiserVoice>> riserVoices;
+        /** Per-RISER live DSP (NoiseRiser.h's RiserVoice), keyed by the riser's
+         * own id. MESSAGE THREAD ONLY: buildSnapshot finds or creates (and
+         * prepares, at masterRate) each riser's voice here and hands the
+         * snapshot a shared reference, so the audio thread never allocates a
+         * voice or its filter state, and the same id keeps the same voice --
+         * its state -- across setProject/stageProject (a Discover re-sync).
+         * drainRetiredProject prunes every id that is in neither the published
+         * nor the staged snapshot; a pruned voice lives on in whatever snapshot
+         * still holds it and is freed with that snapshot. A voice's DSP state is
+         * only ever touched by the single rendering thread (and by
+         * buildSnapshot before it is first published). Never constructed by a
+         * project with no risers. (Until 2026-10-02 this map was filled in
+         * renderBlock, on the audio thread, and never pruned.) */
+        std::map<juce::String, std::shared_ptr<RiserVoice>> riserVoicePool;
 
         mutable ReverbBus reverbBus;
 

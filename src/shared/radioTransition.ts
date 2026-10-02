@@ -298,6 +298,8 @@ export function buildDuckCurve(loopBars: number, bars: number): AutomationPoint[
  * see `armId`) so a re-sync of the same armed riser cannot produce two. `level` is well under the 0.6 a hand-dropped riser
  * gets (RISER_DEFAULTS): this one is announcing a layer change under a
  * full mix, not being the moment itself. */
+let warnedUnarmedRiser = false
+
 export function buildTransitionRiser(
   channelId: string,
   loopBars: number,
@@ -322,6 +324,16 @@ export function buildTransitionRiser(
   const lengthBars = clampToHalfLoop(loopBars, bars)
   const variety = options.variety === true
   const armed = variety && typeof options.armId === 'string' && options.armId !== ''
+  if (variety && !armed && !warnedUnarmedRiser) {
+    // Not an error -- the riser still plays, under today's channel id -- but without the
+    // arming's key every Discover rebuild mid-lap would redraw its character and restart its
+    // voice. Plain console.warn, as the rest of src/shared does (it has no dev flag); once
+    // per session so a misbehaving caller cannot flood the log.
+    warnedUnarmedRiser = true
+    console.warn(
+      'buildTransitionRiser: riser variety without an armId -- the character falls back to the channel id and will change on every re-sync'
+    )
+  }
   const riser: RiserClip = {
     id: armed ? `radio-riser-${options.armId}` : `radio-riser-${channelId}`,
     channelId,
