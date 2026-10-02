@@ -31,6 +31,12 @@
 // seed is the project's own (`AppState.projectSeed`, random per new project, derived from its
 // rifffs for a project saved before it existed); with none it is ''.
 //
+// Live == export depends on the renderer (live sync) and main (exports) planning the SAME throws
+// from the same project. The hashing is integer-only (Math.imul, shifts), but the echo's tail
+// (throwTailSec: Math.log) and the bar arithmetic are floating point: both processes run the same
+// Electron V8, so they agree to the bit. Planning on another runtime (a worker on a different
+// engine, a server) would need those made exact first.
+//
 // "Audible at that bar" (Task 12's eligibility, decided here):
 // - the stem's clip is placed, and the WHOLE throw lies inside the clip as drawn (its left edge,
 //   `clipOriginBar`, to its right edge, `clipLengthBars`) -- a throw near a clip's end is
@@ -195,7 +201,12 @@ function audibleThrough(row: ThrowRow, at: number, end: number): boolean {
 export function planArrangementThrows(
   state: AppState,
   settings: Pick<SoundSettings['throws'], 'rate'>,
-  projectSeed: string
+  projectSeed: string,
+  /** For tests only: how long, in bars, a throw keeps the next one waiting after it closes (the
+   * echo's tail, `busyUntil`). Default: the echo's own -60 dB tail, as stepThrows measures it --
+   * which with one echo per project never reaches the next candidate, so the wait is otherwise
+   * untestable. */
+  testing: { tailBars?: number } = {}
 ): ArrangementThrowPlan {
   // hashed once, so every label below hashes a short string whatever the project's seed is
   const seed = hashText(projectSeed)
@@ -218,7 +229,7 @@ export function planArrangementThrows(
   // The echo's -60 dB tail in BARS (throwTailSec is linear in the delay: a delay in bars gives a
   // tail in bars), the web's own busyUntil measure, so the spacing does not depend on the tempo.
   const delayBars = (echo.timing === 'quarter' ? 1 : 0.75) / 4
-  const tailBars = throwTailSec(delayBars, echo.feedback)
+  const tailBars = testing.tailBars ?? throwTailSec(delayBars, echo.feedback)
   let busyUntil = Number.NEGATIVE_INFINITY
 
   for (let k = 0; k < candidates.length; k += 1) {
@@ -227,6 +238,12 @@ export function planArrangementThrows(
     const at = Math.max(beatAtOrAfter(candidates[k]), beatAtOrAfter(busyUntil))
     // Waiting ran into the next candidate: stepThrows would have thrown once, so the next one
     // takes it.
+    //
+    // A difference from the web, by design: stepThrows draws the NEXT gap when a throw fires, so
+    // a throw that waited re-anchors everything after it (the next is everyBars after the late
+    // throw). Here the candidates are fixed, so after a wait the next throw can come sooner than
+    // everyBars after the late one -- the price of throws that do not move when something earlier
+    // is edited. (With one echo per project no throw waits; see the tests.)
     if (k + 1 < candidates.length && at >= candidates[k + 1]) continue
     const end = at + beats / 4
     if (end > endBar + EPS) break
@@ -250,12 +267,12 @@ export function planArrangementThrows(
   return { echo, throws }
 }
 
-/** The project's planned throws, or undefined when none would be heard: no sound settings,
- * throws off or at level 0, or no tempo. */
-export function timelineThrowPlan(state: AppState): ArrangementThrowPlan | undefined {
-  if (state.sound === undefined || !(state.bpm > 0)) return undefined
+/** The project's planned throws, or null when none would be heard: no sound settings, throws off
+ * or at level 0, or no tempo. */
+export function timelineThrowPlan(state: AppState): ArrangementThrowPlan | null {
+  if (state.sound === undefined || !(state.bpm > 0)) return null
   const { throws } = normalizeSoundSettings(state.sound)
-  if (!throws.on || !(throws.level > 0)) return undefined
+  if (!throws.on || !(throws.level > 0)) return null
   return planArrangementThrows(state, throws, state.projectSeed ?? '')
 }
 
@@ -273,9 +290,15 @@ export function timelineThrowPlan(state: AppState): ArrangementThrowPlan | undef
  * one that would cross the clip's right edge is refused there and dropped, never cut (the plan
  * already only places whole throws inside a clip).
  */
-export function timelineDubThrows(
+export function timelineDubThrows(state: AppState): BuildEngineProjectOptions['dubThrows'] {
+  return dubThrowsForPlan(state, timelineThrowPlan(state))
+}
+
+/** timelineDubThrows for a plan already in hand (null: no throws), so a caller that needs the
+ * plan too (the bakes) plans once. */
+export function dubThrowsForPlan(
   state: AppState,
-  plan: ArrangementThrowPlan | undefined = timelineThrowPlan(state)
+  plan: ArrangementThrowPlan | null
 ): BuildEngineProjectOptions['dubThrows'] {
   if (!plan || plan.throws.length === 0 || !(state.bpm > 0)) return undefined
   const secPerBar = 240 / state.bpm

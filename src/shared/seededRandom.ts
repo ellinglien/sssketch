@@ -34,3 +34,9 @@ export function seededRandom(seed: string): () => number {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296
   }
 }
+
+/** A new project's seed: random (a UUID), so each project has its own throws. Both Electron
+ * processes and Node have `crypto.randomUUID`. */
+export function newProjectSeed(): string {
+  return globalThis.crypto.randomUUID()
+}

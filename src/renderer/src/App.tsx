@@ -100,6 +100,7 @@ import {
   resolvePlayedBars
 } from './state/selectors'
 import { initialState, SNAP_DIVS, startupState } from './state/store'
+import { newProjectSeed } from '@shared/seededRandom'
 import { appSoundDefaults } from './state/appSoundDefaults'
 import type { LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
@@ -1347,7 +1348,7 @@ function Frame(): React.JSX.Element {
       // Task 2; fetched once, at mount, below), and that is not an edit.
       const sound = await appSoundDefaults()
       // Its own seed, so its timeline throws are its own (@shared/timelineThrows).
-      const freshState = { ...initialState, bpm, sound, projectSeed: crypto.randomUUID() }
+      const freshState = { ...initialState, bpm, sound, projectSeed: newProjectSeed() }
       dispatch({ type: 'LOAD_STATE', state: freshState })
       lastSavedJsonRef.current = serializeProject(freshState)
       setCurrentSketch({ kind: 'library', name })

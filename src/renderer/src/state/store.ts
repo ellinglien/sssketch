@@ -19,6 +19,7 @@ import {
   type SoundSettingsPatch
 } from '@shared/radioSound'
 import { appSoundDefaultsNow } from './appSoundDefaults'
+import { newProjectSeed } from '@shared/seededRandom'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
 import { buildCoachMapSections, resizeCoachMapToPhrase } from '@shared/coachMapTemplate'
 import type { CoachPhrase, LoopPhraseReading } from '@shared/coachPhrase'
@@ -618,7 +619,15 @@ export const initialState: AppState = {
  * dismissed without "new project" -- carries them. App.tsx swaps in the app-wide defaults once
  * they are fetched (ADOPT_APP_SOUND_DEFAULTS). initialState itself stays without `sound`: the
  * throwaway preview states and the tests build on it, and absent is today's sound. */
-export const startupState: AppState = { ...initialState, sound: normalizeSoundSettings(undefined) }
+export const startupState: AppState = {
+  ...initialState,
+  sound: normalizeSoundSettings(undefined),
+  // Its own seed from the first sync (native radio sound plan, Task 12 review): the untitled
+  // session is played, exported and autosaved with it, and a save or a crash recovery reopens
+  // with the same seed -- so the same throws. A baseline, never an edit: it is the reducer's
+  // initial state, not an action. Random per launch, like a new project's (commitNewProject).
+  projectSeed: newProjectSeed()
+}
 
 // PLAY/PAUSE/STOP/SET_POS deliberately aren't part of this union — they live
 // as StoreContext.tsx's own TransportAction/usePos()/usePlaying() instead,

@@ -736,7 +736,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.risers,
     // The project's sound settings (native radio sound plan): every stage rides this reload, and
     // the timeline's throws (Task 12) are planned from the throw settings and the project's seed.
-    // Edited once per gesture (SET_SOUND_SETTINGS), never at drag rate.
+    //
+    // CONTRACT (for Task 13's settings UI): `sound` must NOT be dispatched at drag rate. Each
+    // change here is a full project reload (and a re-plan of the throws), the same cost the
+    // drag-rate warning above is about. Sliders keep their live value locally while dragging and
+    // dispatch ONE SET_SOUND_SETTINGS on release (the SET_DRAG_PREVIEW pattern); anything that
+    // must be heard while dragging needs its own light path, not this effect.
     state.sound,
     state.projectSeed
   ])

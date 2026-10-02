@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { initialState, reducer, type AppState } from './store'
+import { initialState, reducer, startupState, type AppState } from './store'
 import { serializeProject, deserializeProject, type LegacyPersistedProject } from './serialize'
 import type { Rifff } from '@shared/types'
 import { edgeFadeState } from '@shared/automationEdit'
 import { createRiser } from '@shared/riser'
+import { timelineThrowPlan } from '@shared/timelineThrows'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -1058,5 +1059,35 @@ describe("the project's seed (native radio sound plan, Task 12)", () => {
         /^rifffs:/
       )
     }
+  })
+
+  it('the untitled (startup) session has its own seed, and a save or a recovery keeps its throws', () => {
+    expect(typeof startupState.projectSeed).toBe('string')
+    expect(startupState.projectSeed!.length).toBeGreaterThan(8)
+    // the startup state with a long placed rifff: it throws
+    const placed: Rifff = {
+      ...rifff,
+      startBar: 0,
+      barLength: 256,
+      stems: [
+        {
+          slot: 1,
+          author: 'e',
+          name: 'n',
+          type: 'notes',
+          path: '/n.wav',
+          durationSec: 512,
+          barLength: 256
+        }
+      ]
+    }
+    const live: AppState = { ...startupState, bpm: 120, rifffs: { r1: placed } }
+    const heard = timelineThrowPlan(live)
+    expect(heard?.throws.length).toBeGreaterThan(0)
+    // a save then a reopen -- and a crash recovery, which is the same serialize/deserialize of the
+    // autosave -- plans exactly what was heard
+    const reopened = deserializeProject(JSON.parse(serializeProject(live))).state
+    expect(reopened.projectSeed).toBe(startupState.projectSeed)
+    expect(timelineThrowPlan(reopened)).toEqual(heard)
   })
 })

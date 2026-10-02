@@ -13,7 +13,7 @@ import { riserOnlyState, riserRenderBarsFor, soloState, withoutRisers } from './
 import { normalizeSoundSettings, REVERB_IR, type ReverbRoom } from '@shared/radioSound'
 import { throwDelaySec, throwTailSec } from '@shared/radioThrows'
 import {
-  timelineDubThrows,
+  dubThrowsForPlan,
   timelineThrowPlan,
   type ArrangementThrowPlan
 } from '@shared/timelineThrows'
@@ -147,9 +147,10 @@ export interface ClipToBake {
 
 export function clipsToBake(
   state: AppState,
-  /** The timeline's planned throws (timelineThrowPlan), when the project throws: a throwing clip
-   * is baked too, since the automation mode has no echo. */
-  throwPlan: ArrangementThrowPlan | undefined = timelineThrowPlan(state)
+  /** The timeline's planned throws (timelineThrowPlan), or null when the project does not throw:
+   * a throwing clip is baked too, since the automation mode has no echo. Required, not defaulted,
+   * so "no throws" can never be mistaken for "plan them". */
+  throwPlan: ArrangementThrowPlan | null
 ): ClipToBake[] {
   const out: ClipToBake[] = []
   const pans = timelineStemPans(state)
@@ -218,8 +219,8 @@ export async function renderToolkitAudio(
   // The timeline's throws (Task 12): planned once, from the whole project, and given to every
   // clip's render (a clip's own solo state would plan other throws). Only baked clips carry them:
   // the automation mode leaves the audio dry and has no echo (neither DAW session has the bus).
-  const throwPlan = mode === 'bake' ? timelineThrowPlan(state) : undefined
-  const dubThrows = timelineDubThrows(state, throwPlan)
+  const throwPlan = mode === 'bake' ? timelineThrowPlan(state) : null
+  const dubThrows = dubThrowsForPlan(state, throwPlan)
   const baking = mode === 'bake' ? clipsToBake(state, throwPlan) : []
   // Muted risers are already absent from what the engine would render, so a
   // project whose only risers are muted must not spend a whole extra engine

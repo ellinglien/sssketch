@@ -469,7 +469,7 @@ describe('renderToolkitAudio', () => {
       const plan = timelineThrowPlan(state)!
       expect(plan.throws.length).toBeGreaterThan(0)
       const last = plan.throws[plan.throws.length - 1]
-      expect(clipsToBake(state)).toEqual([
+      expect(clipsToBake(state, plan)).toEqual([
         {
           key: 'r1:1',
           rifffName: 'long',
@@ -479,7 +479,11 @@ describe('renderToolkitAudio', () => {
           lastThrowEndBar: last.atBar + last.beats / 4
         }
       ])
-      expect(clipsToBake(throwingState('/no/a.wav', 64, 'bake-1', false))).toEqual([])
+      const off = throwingState('/no/a.wav', 64, 'bake-1', false)
+      expect(timelineThrowPlan(off)).toBeNull()
+      expect(clipsToBake(off, timelineThrowPlan(off))).toEqual([])
+      // null is "no throws", never "plan them": the throwing project with no plan bakes nothing
+      expect(clipsToBake(state, null)).toEqual([])
     })
 
     it('bakes the echo and leaves room for it and the room it feeds; automation has none', async () => {

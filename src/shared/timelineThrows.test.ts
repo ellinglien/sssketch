@@ -6,6 +6,7 @@ import { throwTailSec } from './radioThrows'
 import {
   clipLane,
   planArrangementThrows,
+  dubThrowsForPlan,
   timelineDubThrows,
   timelineThrowPlan,
   type ArrangementThrowPlan
@@ -92,6 +93,35 @@ describe('planArrangementThrows (native radio sound plan, Task 12)', () => {
           expect([stemKey('a', 3), stemKey('a', 4)]).toContain(t.stemKey)
         }
       }
+    }
+  })
+
+  it("a throw waits for the last one's echo, and gives way when the wait reaches the next", () => {
+    // With one echo per project no throw ever waits (its tail is shorter than the shortest gap),
+    // so the tail is injected. Every row is eligible everywhere here, so with no tail each
+    // candidate throws on the beat at or after it: those are the candidates' beats.
+    const long = project({ rifffs: { a: band('a', 0, 4096) } })
+    const free = planArrangementThrows(long, { rate: 'normal' }, 'wait', { tailBars: 0 }).throws
+    expect(free.length).toBeGreaterThan(100)
+    for (const tail of [28, 40]) {
+      const waited = planArrangementThrows(long, { rate: 'normal' }, 'wait', { tailBars: tail })
+      // the rule, simulated over the candidates' beats: wait for the tail (on a beat), give way
+      // to the next candidate if the wait reaches it (a beat at or past a candidate is at or past
+      // its beat), keep each candidate's own length
+      // (and a late throw that would run past the arrangement's end is not thrown)
+      const want: { atBar: number; beats: number }[] = []
+      let busy = -Infinity
+      free.forEach((c, k) => {
+        const at = Math.max(c.atBar, Math.ceil(busy * 4 - 1e-9) / 4)
+        if (k + 1 < free.length && at >= free[k + 1].atBar) return
+        if (at + c.beats / 4 > 4096) return
+        want.push({ atBar: at, beats: c.beats })
+        busy = at + c.beats / 4 + tail
+      })
+      expect(waited.throws.map(({ atBar, beats }) => ({ atBar, beats }))).toEqual(want)
+      // and both happened: some throws were late, some candidates gave way
+      expect(want.some((w) => !free.some((f) => f.atBar === w.atBar))).toBe(true)
+      expect(want.length).toBeLessThan(free.length)
     }
   })
 
@@ -299,7 +329,7 @@ describe('timelineDubThrows (the plan as buildEngineProject draws it)', () => {
       expect(t.atBar).toBeGreaterThanOrEqual(10.25)
       expect(t.atBar + t.beats / 4).toBeLessThanOrEqual(10.25 + 254)
     }
-    const dub = timelineDubThrows(state, p)!
+    const dub = dubThrowsForPlan(state, p)!
     expect(dub.echo).toEqual(p.echo)
     for (const t of p.throws) {
       const curve = dub.sends.get(t.stemKey)!
@@ -340,7 +370,7 @@ describe('timelineDubThrows (the plan as buildEngineProject draws it)', () => {
     })
     const p = plan(state)
     expect(p.throws.length).toBeGreaterThan(10)
-    const curve = timelineDubThrows(state, p)!.sends.get(stemKey('a', 3))!
+    const curve = dubThrowsForPlan(state, p)!.sends.get(stemKey('a', 3))!
     expect(curve.length).toBe(4 * p.throws.length)
     for (let i = 1; i < curve.length; i += 1) expect(curve[i].bar).toBeGreaterThan(curve[i - 1].bar)
   })
