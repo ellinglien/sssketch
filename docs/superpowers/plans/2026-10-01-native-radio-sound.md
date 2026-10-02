@@ -1081,6 +1081,20 @@ Every export follows the project's settings.
 
 ---
 
+## Cleanup pass (2026-10-02)
+
+Deferred review follow-ups, native only, one commit each (native suite 485, all passing; `npx vitest run native-engine/test/parity` 6, `nativeExport` + `exportToolkitAudio` 50, all passing). Each fix has a test that fails without it (checked by reverting).
+
+- **Scrub click** (`35dfb95`, pre-existing): a seek arriving during the previous seek's hold or fade-in read the fade-in clock as fade-out time (gain 0 -> ~1, 0.1 -> ~0.9: most scrub events). The fade-out now starts from the gain reached, `F - clamp(elapsed - hold, 0, F)`. Test: a constant signal never steps by more than the fade's slope (was 0.33-0.5).
+- **Transport position drift** (`0cb84f6`, pre-existing, found by Task 12): Transport's position is now `anchorBars + (samples since the anchor / rate) / secPerBar`, as RenderExport converts its sample count, re-anchored at a play or seek landing (positionBars no longer what renderLoopAware returned), a loop wrap or snap (at loopStart, on the lap's turning sample), and a tempo or device-rate change. Task 12's TimelineThrows fixture is loud at every tile edge again (live == export; failed from sample 132300 before), and a new Transport test matches three laps of a looping project at random blocks to the export (failed from sample 44100). Not a restructuring: renderLoopAware's shape is unchanged; the wrap's position after the split now rounds to the turning sample instead of carrying the fractional remainder.
+- **ChannelFilter::prepare** (`d92e240`, pre-existing, Task 5): prepares only on a rate change (JUCE's TPT prepare ignores the block size and wiped the state). The largest-block-first workarounds in the cavern, pump and dub split-invariance tests are gone (their splits now start at 1 and grow).
+- **Per-snapshot scratch** (`e5a7236`): `prepareMaster(rate, maxBlockSize)` (Transport: the device's buffer size; RenderExport: its block; capped at 8192); buildSnapshot reserves every snapshot's channel, stem, pumped and key scratch to it, and the reverb and dub buses' scratch is sized in prepareMaster (no block in flight there). A longer block still works (guarded resize, counted by `audioScratchGrowthCount`). Test: 0 audio-thread growths across re-syncs (158 before).
+- **audioDeviceAboutToStart resets the master stage** (`ca60999`): a stub `juce::AudioIODevice`; a restart mid-play, then a play from the top is the export's first 2048 samples, the limiter's line empty.
+- **Comments and titles** (`7966ec1`): `stemSendsToReverb` no longer splits `stemToolkitIsNeutral` from its doc; `ReverbBus::reset`'s doc (nothing in the engine calls it; it allocates); the cavern stop test retitled "but for denormal dust (< 1e-30)" (tried exact: the toolkit filter's denormal state still differs after a stop); DrumPumpTests' stale comment; MasterStage.h's saturation-glide wording; an unused include.
+- **Dub slew slots** (`8bd893d`): sizing them per snapshot is not cheap (the gains must survive the swap, so the state would move between snapshots' storage); raising the fixed cap from 64 to 256 is (~7 KB, no allocation, per-block cost follows the slots in use). Test: the 100th throwing stem's send ramps in at a seek.
+
+Not done: nothing stopped short. Still open from the reviews: zita's tail rings on after a stop (it cannot be dropped without allocating); a stop does not reset a clip's toolkit filter (the denormal dust above).
+
 ## What Elling needs to listen to
 
 Do this in `npm run dev`, after a **full Cmd+Q and relaunch** once the engine is rebuilt. A/B against `ell.ing/radio` at the same tempo where possible.
