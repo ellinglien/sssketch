@@ -227,7 +227,7 @@ namespace sssketch
                 rifff.groupId = rifffVar.getProperty("groupId", "").toString();
                 rifff.channelId = rifffVar.getProperty("channelId", "").toString();
                 rifff.startBar = getDouble(rifffVar, "startBar", 0.0);
-                rifff.barLength = (int) getDouble(rifffVar, "barLength", 0.0);
+                rifff.barLength = getDouble(rifffVar, "barLength", 0.0);
                 rifff.fadeInBars = getDouble(rifffVar, "fadeInBars", 0.0);
                 rifff.fadeOutBars = getDouble(rifffVar, "fadeOutBars", 0.0);
 
@@ -245,8 +245,8 @@ namespace sssketch
                         stem.stemKey = stemVar.getProperty("stemKey", "").toString();
                         stem.resolvedPath = stemVar.getProperty("resolvedPath", "").toString();
                         stem.durationSec = getDouble(stemVar, "durationSec", 0.0);
-                        stem.barLength = (int) getDouble(stemVar, "barLength", 0.0);
-                        stem.playedBars = getDouble(stemVar, "playedBars", (double) rifff.barLength);
+                        stem.barLength = getDouble(stemVar, "barLength", 0.0);
+                        stem.playedBars = getDouble(stemVar, "playedBars", rifff.barLength);
                         stem.leftCropBars = getDouble(stemVar, "leftCropBars", 0.0);
                         stem.offsetSteps = getDouble(stemVar, "offsetSteps", 0.0);
                         stem.startBarOverride = getDouble(stemVar, "startBarOverride", -1.0);

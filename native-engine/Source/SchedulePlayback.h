@@ -7,14 +7,14 @@ namespace sssketch
     struct RifffInfo
     {
         double startBar = 0.0;
-        int barLength = 0;
+        double barLength = 0.0;
     };
 
     /** The fields computeStemSchedule needs from a Stem. */
     struct StemInfo
     {
         double durationSec = 0.0;
-        int barLength = 0;
+        double barLength = 0.0; // may be fractional (0.5, 1.5, ...)
     };
 
     struct ScheduleOptions

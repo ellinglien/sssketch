@@ -370,6 +370,110 @@ namespace sssketch
                 ramp.deleteFile();
             }
 
+            // Endlesss stems can be shorter than a bar, or a non-whole number
+            // of bars (Length16s / 16 = 0.5, 1.5, 2.667, ...). barLength used
+            // to be parsed as an int: a half-bar stem became 0 and was skipped
+            // outright (silent while its row showed a waveform), and a 1.5-bar
+            // stem tiled every 1 bar while still stretching its 1.5 bars of
+            // audio across that 1 bar's span.
+            auto renderTileBoundary = [] (double stemBars, double rifffBars, double boundarySec,
+                                              const juce::File& rampFile, double durationSec,
+                                              float& before, float& after)
+            {
+                EngineProject project;
+                project.bpm = 60.0; // secPerBar = 4.0
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = rifffBars;
+                EngineStem stem;
+                stem.resolvedPath = rampFile.getFullPathName();
+                stem.durationSec = durationSec;
+                stem.barLength = stemBars;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                // Same shape as the segment-boundary test above: 150 samples
+                // before the boundary (outside LoopSewing's 128-sample tail
+                // blend), 20 after.
+                const double sampleRate = 44100.0;
+                const int numSamples = 170;
+                const double blockStartSec = boundarySec - 150.0 / sampleRate;
+                std::vector<float> l(numSamples, 0.0f), r(numSamples, 0.0f);
+                engine.renderBlock(blockStartSec / 4.0, sampleRate, numSamples, l.data(), r.data(), channelChains);
+                before = l[0];
+                after = l[numSamples - 1];
+            };
+
+            beginTest("a half-bar stem plays (not silent) and repeats every half bar");
+            {
+                // 2s ramp = half a bar at 60bpm. Tiles at [0,2)s, [2,4)s.
+                auto ramp = writeRampFixtureWav("sssketch_pe_halfbar_ramp.wav", 88200);
+                float before = 0.0f, after = 0.0f;
+                renderTileBoundary(0.5, 1.0, 2.0, ramp, 2.0, before, after);
+                expect(before > 0.9f, "half-bar stem should be near the tail of its first tile, got " + juce::String(before));
+                expect(after < 0.05f, "half-bar stem should restart at 2s (half a bar), got " + juce::String(after));
+                expect(after > 0.0f, "half-bar stem should still be sounding right after its first repeat");
+                ramp.deleteFile();
+            }
+
+            beginTest("a 1.5-bar stem tiles every 1.5 bars, not every 1 bar");
+            {
+                // 6s ramp = 1.5 bars at 60bpm. Tiles at [0,6)s, [6,12)s.
+                auto ramp = writeRampFixtureWav("sssketch_pe_onehalf_ramp.wav", 264600);
+                float before = 0.0f, after = 0.0f;
+                renderTileBoundary(1.5, 3.0, 6.0, ramp, 6.0, before, after);
+                expect(before > 0.9f, "1.5-bar stem should be near the tail of its first tile at 6s, got " + juce::String(before));
+                expect(after < 0.05f, "1.5-bar stem should restart at 6s (1.5 bars), got " + juce::String(after));
+                ramp.deleteFile();
+            }
+
+            beginTest("a rifff whose own barLength is fractional plays for exactly that long");
+            {
+                // Discover's assembled rifff takes the LONGEST member's
+                // barLength, so a rifff of only half-bar stems is itself 0.5
+                // bars. It must sound inside [0,2)s and stop at 2s, rather
+                // than being truncated to a 0-bar rifff (silent throughout).
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 0.5;
+                EngineStem stem;
+                auto halfBar = writeFixtureWav("sssketch_pe_halfbar_const.wav", 0.5f, 88200); // 2s = half a bar
+                stem.resolvedPath = halfBar.getFullPathName();
+                stem.durationSec = 2.0;
+                stem.barLength = 0.5;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+
+                std::vector<float> l(512, 0.0f), r(512, 0.0f);
+                engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
+                expectWithinAbsoluteError(l[200], 0.5f, 0.01f);
+
+                // Late in the rifff's half bar: still sounding.
+                std::vector<float> lMid(512, 0.0f), rMid(512, 0.0f);
+                engine.renderBlock(1.5 / 4.0, 44100.0, 512, lMid.data(), rMid.data(), channelChains);
+                expectWithinAbsoluteError(lMid[200], 0.5f, 0.01f);
+
+                // Past the rifff's half bar: silent (its bound is 0.5 bars, not 1).
+                std::vector<float> l2(512, 0.0f), r2(512, 0.0f);
+                engine.renderBlock(2.5 / 4.0, 44100.0, 512, l2.data(), r2.data(), channelChains);
+                for (float s : l2) expectEquals(s, 0.0f);
+                halfBar.deleteFile();
+            }
+
             beginTest("leftCropBars clips the first tile without moving startBar, and reads from the correct offset into the source buffer");
             {
                 // A 1-bar stem tiled twice (rifff.barLength=2), cropped 0.5

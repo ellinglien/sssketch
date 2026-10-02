@@ -88,7 +88,9 @@ namespace sssketch
         juce::String stemKey;
         juce::String resolvedPath;
         double durationSec = 0.0;
-        int barLength = 0;
+        // Bars, and NOT necessarily whole: an Endlesss stem's length is
+        // Length16s / 16, so half-bar (0.5) and 1.5-bar stems are real.
+        double barLength = 0.0;
         // -1.0 = unset (use the rifff's own barLength), matching startBarOverride's
         // own sentinel convention below. In practice parseEngineProject() always
         // assigns a concrete resolved value at parse time (falling back to the
@@ -175,7 +177,7 @@ namespace sssketch
         juce::String groupId;
         juce::String channelId; // which channel this rifff's clip is on
         double startBar = 0.0;
-        int barLength = 0;
+        double barLength = 0.0; // fractional when its longest stem is (see EngineStem::barLength)
         double fadeInBars = 0.0;
         double fadeOutBars = 0.0;
         std::vector<EngineStem> stems;

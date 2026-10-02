@@ -9,6 +9,10 @@ namespace sssketch
         const StemInfo& stem,
         const ScheduleOptions& opts)
     {
+        // barLength may be fractional (0.5, 1.5, ...) but must be positive
+        // and finite -- otherwise the tile loop below never advances.
+        if (!std::isfinite(stem.barLength) || stem.barLength <= 0.0)
+            return {};
         const double start = opts.startBarOverride >= 0.0 ? opts.startBarOverride : rifff.startBar;
         // Wrapped into [0, stem.barLength) rather than used as a raw additive
         // shift — see src/shared/schedulePlayback.ts's identical fix (kept in
@@ -21,16 +25,16 @@ namespace sssketch
         // shifting every tile by a whole multiple of its own loop length
         // doesn't change the audible pattern at all.
         const double rawOffsetBars = opts.offsetSteps / opts.snapDiv;
-        double offsetBars = std::fmod(rawOffsetBars, (double) stem.barLength);
+        double offsetBars = std::fmod(rawOffsetBars, stem.barLength);
         if (offsetBars < 0.0)
-            offsetBars += (double) stem.barLength;
-        const double secPerBarNative = stem.durationSec / (double) stem.barLength;
-        const double bound = opts.playedBars >= 0.0 ? opts.playedBars : (double) rifff.barLength;
+            offsetBars += stem.barLength;
+        const double secPerBarNative = stem.durationSec / stem.barLength;
+        const double bound = opts.playedBars >= 0.0 ? opts.playedBars : rifff.barLength;
 
         std::vector<PlaybackSegment> segments;
-        for (double barOffset = 0.0; barOffset < bound; barOffset += (double) stem.barLength)
+        for (double barOffset = 0.0; barOffset < bound; barOffset += stem.barLength)
         {
-            const double segmentBarLength = std::min((double) stem.barLength, bound - barOffset);
+            const double segmentBarLength = std::min(stem.barLength, bound - barOffset);
             const double startBarInTimeline = start + offsetBars + barOffset;
             const double endBarInTimeline = startBarInTimeline + segmentBarLength;
             if (endBarInTimeline <= opts.projectPos)

@@ -143,6 +143,25 @@ namespace sssketch
                 expectEquals(segments[2].startBarInTimeline, 8.0);
                 expectEquals(segments[2].barLength, 1.0);
             }
+
+            beginTest("tiles a 1.5-bar stem every 1.5 bars across a fractional bound");
+            {
+                RifffInfo r;
+                r.startBar = 0.0;
+                r.barLength = 3.0;
+                StemInfo s;
+                s.durationSec = 3.0;
+                s.barLength = 1.5;
+                auto segments = computeStemSchedule(r, s, { 0.0, 16.0, 0.0, 120.0, -1.0, 3.75 });
+                expectEquals((int) segments.size(), 3); // [0,1.5) [1.5,3) [3,3.75)
+                expectEquals(segments[0].startBarInTimeline, 0.0);
+                expectEquals(segments[0].barLength, 1.5);
+                expectWithinAbsoluteError(segments[0].durationSec, 3.0, 1.0e-9);
+                expectEquals(segments[1].startBarInTimeline, 1.5);
+                expectEquals(segments[2].startBarInTimeline, 3.0);
+                expectEquals(segments[2].barLength, 0.75);
+                expectWithinAbsoluteError(segments[2].durationSec, 1.5, 1.0e-9);
+            }
         }
     };
 

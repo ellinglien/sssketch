@@ -19,6 +19,22 @@ namespace sssketch
         // whichever project.bpm they've each already loaded.
         double secPerBarFor(double bpm) { return bpm > 0.0 ? (60.0 / bpm) * 4.0 : 0.0; }
 
+        /** Shortest stem loop renderBlock will tile, in bars. Endlesss's own
+         * grain is a sixteenth (1/16 bar); this sits well below that, and
+         * only exists so a corrupt tiny barLength can't explode the tile
+         * count. */
+        constexpr double kMinStemBarLength = 1.0 / 256.0;
+
+        /** A floored/ceiled tile index as an int, clamped to +/-1e9 first
+         * (NaN -> 0). A double->int cast out of range is undefined
+         * behaviour; +/-1e9 also leaves room for the one addition renderBlock
+         * does on top of it without overflowing. */
+        int tileIndexFromDouble(double v)
+        {
+            if (std::isnan(v)) return 0;
+            return (int) std::clamp(v, -1.0e9, 1.0e9);
+        }
+
         /** Whether a clip's toolkit entry does nothing at all -- the test
          * that decides, once per setProject() rather than per block, whether
          * renderBlock can skip this clip's toolkit stage entirely.
@@ -606,7 +622,16 @@ namespace sssketch
                     continue; // handled -- skip the tile-loop path below entirely
                 }
 
-                if (stem.barLength <= 0)
+                // barLength is in bars and may be fractional (a half-bar
+                // Endlesss stem is 0.5, a 24-sixteenths one is 1.5). It used
+                // to be an int, which made a half-bar stem 0 -- skipped here,
+                // silent -- and tiled a 1.5-bar stem every 1 bar. As a double
+                // it can now also be NaN (which `<= 0` lets through) or a
+                // pathologically tiny value whose tile count would overflow
+                // the int tile indices below, so both are rejected. The floor
+                // (1/256 bar) is far below Endlesss's own 1/16-bar grain, and
+                // keeps the per-block tile walk to a couple of tiles at most.
+                if (!std::isfinite(stem.barLength) || stem.barLength < kMinStemBarLength)
                     continue;
 
                 // Which tile(s) of this stem's repeating pattern overlap this
@@ -634,9 +659,9 @@ namespace sssketch
                 // for the real-time callback, not a caller of
                 // computeStemSchedule — see the comment above this loop).
                 const double rawOffsetBars = stem.offsetSteps / snap->project.snapDiv;
-                double offsetBars = std::fmod(rawOffsetBars, (double) stem.barLength);
+                double offsetBars = std::fmod(rawOffsetBars, stem.barLength);
                 if (offsetBars < 0.0)
-                    offsetBars += (double) stem.barLength;
+                    offsetBars += stem.barLength;
                 // lowerBound/upperBound together define the visible/audible
                 // window as [lowerBound, upperBound) bars, relative to
                 // start+offsetBars -- NEITHER start NOR offsetBars moves for
@@ -654,14 +679,19 @@ namespace sssketch
                 // ternary (NaN/-Infinity both fail that comparison and fall through to
                 // the already-bounded rifff.barLength).
                 const double lowerBound = std::isfinite(stem.leftCropBars) ? stem.leftCropBars : 0.0;
-                const double upperBound = stem.playedBars >= 0.0 ? stem.playedBars : (double) rifff.barLength;
+                const double upperBound = stem.playedBars >= 0.0 ? stem.playedBars : rifff.barLength;
                 if (upperBound <= lowerBound)
                     continue;
-                const double secPerBarNative = stem.durationSec / (double) stem.barLength;
+                const double secPerBarNative = stem.durationSec / stem.barLength;
 
-                const int firstTileIdx = (int) std::floor(lowerBound / (double) stem.barLength);
-                const int totalTiles = (int) std::ceil(upperBound / (double) stem.barLength);
-                const double tileDurationSec = (double) stem.barLength * spb;
+                // Clamped in double space before the int cast: with a
+                // fractional (smaller) divisor, an oversized or +Infinity
+                // playedBars/leftCropBars from a corrupted file would
+                // otherwise overflow int -- undefined behaviour on the
+                // real-time thread.
+                const int firstTileIdx = tileIndexFromDouble(std::floor(lowerBound / stem.barLength));
+                const int totalTiles = tileIndexFromDouble(std::ceil(upperBound / stem.barLength));
+                const double tileDurationSec = stem.barLength * spb;
                 // The first AUDIBLE tile's own start (not tile 0's start,
                 // unless lowerBound is itself 0) -- this is what the
                 // one-tile-slack skip-ahead below measures forward from.
@@ -676,18 +706,18 @@ namespace sssketch
                 // negative (extend-left case).
                 int tileIdx = firstTileIdx + std::max(
                     0,
-                    (int) std::floor((blockStartSec - firstTileStartSec) / tileDurationSec) - 1);
+                    tileIndexFromDouble(std::floor((blockStartSec - firstTileStartSec) / tileDurationSec)) - 1);
 
                 for (; tileIdx < totalTiles; ++tileIdx)
                 {
-                    const double barOffset = (double) tileIdx * (double) stem.barLength;
+                    const double barOffset = (double) tileIdx * stem.barLength;
                     // Clip THIS tile against both bounds symmetrically -- the
                     // first audible tile gets clipped from the left when
                     // lowerBound falls inside it (barOffset < lowerBound <
                     // barOffset+barLength), the last gets clipped from the
                     // right exactly as it always did.
                     const double tileStart = std::max(barOffset, lowerBound);
-                    const double tileEnd = std::min(barOffset + (double) stem.barLength, upperBound);
+                    const double tileEnd = std::min(barOffset + stem.barLength, upperBound);
                     if (tileEnd <= tileStart)
                         continue; // shouldn't normally happen given firstTileIdx/totalTiles above; defensive
                     const double segmentBarLength = tileEnd - tileStart;

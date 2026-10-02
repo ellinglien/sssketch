@@ -299,6 +299,34 @@ namespace sssketch
                 expectWithinAbsoluteError(project.rifffs[0].stems[1].leftCropBars, 0.0, 0.0001);
             }
 
+            beginTest("keeps fractional barLength exact for both the rifff and its stems");
+            {
+                // Endlesss stems can be half a bar (Length16s = 8) or 1.5 bars
+                // (Length16s = 24); truncating to int silenced the first and
+                // mis-tiled the second.
+                const juce::String json = R"({
+                    "bpm": 120.0,
+                    "snapDiv": 16.0,
+                    "rifffs": [{
+                        "groupId": "r1",
+                        "startBar": 0.0,
+                        "barLength": 1.5,
+                        "stems": [
+                            { "stemKey": "s1", "resolvedPath": "/a.wav", "durationSec": 1.0, "barLength": 0.5 },
+                            { "stemKey": "s2", "resolvedPath": "/b.wav", "durationSec": 3.0, "barLength": 1.5 }
+                        ]
+                    }]
+                })";
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(json, project, error));
+                expectEquals((double) project.rifffs[0].barLength, 1.5);
+                expectEquals((double) project.rifffs[0].stems[0].barLength, 0.5);
+                expectEquals((double) project.rifffs[0].stems[1].barLength, 1.5);
+                // playedBars falls back to the rifff's own (exact) barLength.
+                expectEquals(project.rifffs[0].stems[0].playedBars, 1.5);
+            }
+
             beginTest("parses muteRegions on a stem");
             {
                 EngineProject project;
