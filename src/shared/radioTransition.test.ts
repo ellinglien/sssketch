@@ -193,6 +193,31 @@ describe('riser variety (native radio sound plan, Task 6)', () => {
     expect(characters.some((c) => c.stereo === 'mono')).toBe(true)
   })
 
+  it('a riser armed once keeps its id and character across re-syncs (fresh groupIds); a new arming redraws', () => {
+    // Discover mints a fresh groupId (the riser's channel) on every rebuild; the arming's key
+    // is what stays.
+    const first = buildTransitionRiser('group-a', 8, 2, { variety: true, armId: 'arm-1' })!
+    const resync = buildTransitionRiser('group-b', 8, 2, { variety: true, armId: 'arm-1' })!
+    expect(resync.id).toBe('radio-riser-arm-1')
+    expect(resync.id).toBe(first.id)
+    expect(resync.channelId).toBe('group-b') // still routed to the preview's channel
+    expect({ ...resync, channelId: 'x' }).toStrictEqual({ ...first, channelId: 'x' })
+    // different armings draw different characters (200 armings, nearly all distinct)
+    const qs = new Set(
+      Array.from(
+        { length: 200 },
+        (_, i) => buildTransitionRiser('group-a', 8, 2, { variety: true, armId: `arm-${i}` })!.q
+      )
+    )
+    expect(qs.size).toBeGreaterThan(190)
+  })
+
+  it("variety off ignores the arming and keeps today's id (wire-identical); no armId falls back to the channel", () => {
+    expect(buildTransitionRiser('g', 8, 2, { variety: false, armId: 'arm-1' })).toStrictEqual(today)
+    expect(buildTransitionRiser('g', 8, 2, { variety: true, armId: '' })!.id).toBe('radio-riser-g')
+    expect(buildTransitionRiser('g', 8, 2, { variety: true })!.id).toBe('radio-riser-g')
+  })
+
   it("applying today's character keeps today's sound fields (Q 2, white, wide, no send, the same level and ends)", () => {
     const r = applyRiserCharacter(today, RISER_BEFORE)
     expect(r).toMatchObject({ q: 2, colour: 'white', stereo: 'wide', send: 0, level: 0.35 })

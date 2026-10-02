@@ -453,6 +453,17 @@ interface RadioGesture {
    * none of which it dips -- the live twin of a stage's `changes`. Unset
    * means just `slotId`, which is all radio alone ever lands. */
   spares?: string[]
+  /** Minted once when the gesture is armed (newArmId), and carried across the lap
+   * countdown by the `{ ...g, lapsLeft }` copy. A riser uses it as its identity
+   * (buildTransitionRiser's armId): every rebuild mints a fresh groupId, so without
+   * it the riser's character, engine voice and noise would change on any re-sync
+   * during the armed lap (native radio sound plan, Task 6 review). */
+  armId: string
+}
+
+/** A fresh RadioGesture.armId: unique per arming, for the session. */
+function newArmId(): string {
+  return crypto.randomUUID()
 }
 
 /** One scheduled swap, as buildAndPushPreview needs to see it.
@@ -1798,7 +1809,8 @@ export function DiscoverPanel({
           // and a send into the room -- seeded from its id, as the web
           // radio's risers do. Off, it is today's riser exactly.
           const riser = buildTransitionRiser(rifff.groupId, maxBarLength, bars, {
-            variety: normalizeSoundSettings(sound ?? appSoundDefaultsNow()).riserVariety.on
+            variety: normalizeSoundSettings(sound ?? appSoundDefaultsNow()).riserVariety.on,
+            armId: gesture.armId
           })
           if (riser) risers[riser.id] = riser
         }
@@ -2741,7 +2753,7 @@ export function DiscoverPanel({
     })
     if (roll === null) return
     radioGestureRef.current = [
-      { kind: 'drop-out', slotId: roll.slotId, beats: roll.beats, lapsLeft: 1 }
+      { kind: 'drop-out', slotId: roll.slotId, beats: roll.beats, lapsLeft: 1, armId: newArmId() }
     ]
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
@@ -2946,7 +2958,8 @@ export function DiscoverPanel({
               kind: transition,
               slotId: pending.slotId,
               beats,
-              lapsLeft: 1
+              lapsLeft: 1,
+              armId: newArmId()
             }
           ]
           setRadioLedChange({
@@ -3090,7 +3103,8 @@ export function DiscoverPanel({
               kind: leading.arrival.kind,
               slotId: leading.slotId,
               beats: leading.arrival.beats,
-              lapsLeft: 1
+              lapsLeft: 1,
+              armId: newArmId()
             }
           ]
           // Same as radio's own leading gesture: it must reach the engine as
@@ -3156,7 +3170,8 @@ export function DiscoverPanel({
         kind: a.kind,
         slotId: a.slotId,
         beats: a.beats,
-        lapsLeft: 1
+        lapsLeft: 1,
+        armId: newArmId()
       })),
       // Always the loop top once a manual change is aboard -- and a stage
       // at a bar never carries one (withManual above).
@@ -3483,7 +3498,8 @@ export function DiscoverPanel({
               kind: led.arrival.kind,
               slotId: led.slotId,
               beats: led.arrival.beats,
-              lapsLeft: 1
+              lapsLeft: 1,
+              armId: newArmId()
             })
           }
           // The clearRadioGesture() above already scheduled a sync for
@@ -3536,7 +3552,8 @@ export function DiscoverPanel({
               kind: change.arrival.kind,
               slotId,
               beats: change.arrival.beats,
-              lapsLeft: 1
+              lapsLeft: 1,
+              armId: newArmId()
             })
           }
           landedIds.push(slotId)
@@ -3849,7 +3866,8 @@ export function DiscoverPanel({
                 kind: transition,
                 slotId: pending.slotId,
                 beats,
-                lapsLeft: 1
+                lapsLeft: 1,
+                armId: newArmId()
               }
             ]
             setRadioLedChange({
@@ -3911,7 +3929,8 @@ export function DiscoverPanel({
               kind: transition,
               slotId: pending.slotId,
               beats,
-              lapsLeft: 1
+              lapsLeft: 1,
+              armId: newArmId()
             }
           ]
           // NO sync scheduled here, deliberately -- this used to call
@@ -6132,7 +6151,7 @@ export function DiscoverPanel({
       if (leadingArmed || radioStageRef.current !== null || pos >= leaveAt - 0.25) return
       radioGestureRef.current = [
         ...radioGestureRef.current,
-        { kind: 'drop-out', slotId: slot.id, beats: ARC_EXIT_BEATS, lapsLeft: 1 }
+        { kind: 'drop-out', slotId: slot.id, beats: ARC_EXIT_BEATS, lapsLeft: 1, armId: newArmId() }
       ]
       arcExitRef.current = { ...exit, phase: 'fading', lap: arcLapRef.current }
       scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)

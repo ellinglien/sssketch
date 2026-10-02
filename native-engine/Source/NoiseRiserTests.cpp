@@ -868,6 +868,47 @@ namespace sssketch
                 expect(sendingZita.zitaReverbBuilt());
             }
 
+            beginTest("variety: a re-sync mid-riser (a new project, the riser on a new channel, the same id) carries the voice through");
+            {
+                // Discover rebuilds the project with a fresh groupId -- so a new channel -- on every
+                // sync; with the arming's key in the id (buildTransitionRiser's armId) the riser keeps
+                // its id, so the engine keeps its voice: the pink filter, the bandpass and the noise
+                // continue as if nothing happened, and the room keeps ringing.
+                const auto project = riserProject(0.35, ReverbRoom::cavern);
+                auto resynced = project;
+                resynced.risers[0].channelId = "g2";
+                auto renamed = resynced;
+                renamed.risers[0].id = "radio-riser-other";
+                const int total = (int) (kTestRate * 3.0);
+                const int swapAt = (int) (kTestRate * 1.5) + 7; // mid-riser, mid-block
+                const auto continuous = renderEngine(project, total, [] { return 512; });
+                for (const bool sameId : { true, false })
+                {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry chains;
+                    engine.prepareMaster(kTestRate);
+                    engine.setProject(project);
+                    std::vector<float> l((size_t) total, 0.0f), r((size_t) total, 0.0f);
+                    bool swapped = false;
+                    for (int at = 0; at < total;)
+                    {
+                        if (!swapped && at >= swapAt)
+                        {
+                            engine.setProject(sameId ? resynced : renamed);
+                            swapped = true;
+                        }
+                        const int n = juce::jmin(at < swapAt ? swapAt - at : 512, total - at);
+                        engine.renderBlock(((double) at / kTestRate) / 1.0, kTestRate, n, l.data() + at, r.data() + at, chains);
+                        at += n;
+                    }
+                    if (sameId)
+                        expect(sameBits(l, continuous.l) && sameBits(r, continuous.r), "a re-sync changed the riser");
+                    else
+                        expect(!sameBits(l, continuous.l), "a new id is a new voice (the old behaviour)");
+                }
+            }
+
             beginTest("variety: a sending riser is block-size invariant, and the export is the same audio");
             {
                 const auto project = riserProject(0.35, ReverbRoom::cavern);

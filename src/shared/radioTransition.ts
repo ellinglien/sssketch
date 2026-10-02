@@ -294,8 +294,8 @@ export function buildDuckCurve(loopBars: number, bars: number): AutomationPoint[
  * Unlike the stem curves this is NOT clip-relative: a RiserClip's startBar
  * is an absolute arrangement bar, and the Discover preview's one rifff
  * sits at startBar 0, so loop-relative and absolute are the same number
- * here. `id` is stable per channel so a re-sync of the same armed riser
- * cannot produce two. `level` is well under the 0.6 a hand-dropped riser
+ * here. `id` is stable per channel (or, with riser variety, per arming:
+ * see `armId`) so a re-sync of the same armed riser cannot produce two. `level` is well under the 0.6 a hand-dropped riser
  * gets (RISER_DEFAULTS): this one is announcing a layer change under a
  * full mix, not being the moment itself. */
 export function buildTransitionRiser(
@@ -308,12 +308,22 @@ export function buildTransitionRiser(
      * Off (the default) is today's riser exactly. Only the character varies; the timing
      * above is this function's, always. */
     variety?: boolean
+    /** A key minted when the riser gesture was ARMED (DiscoverPanel's RadioGesture.armId).
+     * Discover mints a fresh rifff groupId -- the riser's channel -- on every rebuild, so an id
+     * made from the channel changes whenever the preview is re-synced during the armed lap.
+     * With variety on and an armId, the id is `radio-riser-${armId}`: the character, the
+     * engine's voice (keyed by riser id) and the noise seed all carry across re-syncs, and
+     * each arming draws afresh. Without one (or with variety off) the id is today's,
+     * `radio-riser-${channelId}`, so variety off stays wire-identical to before. */
+    armId?: string
   } = {}
 ): RiserClip | null {
   if (!(loopBars > 0) || !(bars > 0)) return null
   const lengthBars = clampToHalfLoop(loopBars, bars)
+  const variety = options.variety === true
+  const armed = variety && typeof options.armId === 'string' && options.armId !== ''
   const riser: RiserClip = {
-    id: `radio-riser-${channelId}`,
+    id: armed ? `radio-riser-${options.armId}` : `radio-riser-${channelId}`,
     channelId,
     startBar: loopBars - lengthBars,
     lengthBars,
@@ -324,9 +334,7 @@ export function buildTransitionRiser(
     name: 'radio',
     muted: false
   }
-  return options.variety === true
-    ? applyRiserCharacter(riser, riserCharacterForId(riser.id))
-    : riser
+  return variety ? applyRiserCharacter(riser, riserCharacterForId(riser.id)) : riser
 }
 
 /** Points along a character's sweep: the web radio's SWEEP_POINTS (transitions.ts). The engine
