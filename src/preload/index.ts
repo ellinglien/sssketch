@@ -11,6 +11,7 @@ import type {
   RiffLibraryResolvedRiff,
   DiscoverSoundSourceFilter
 } from '@shared/riffLibraryTypes'
+import type { LinkLoopFolderResult, LoopEntry, LoopFolderListing } from '@shared/loopFolderTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
 import type { DiscoverCandidate } from '../main/discoverCandidates'
 import type { ArtistIndex, ArtistMode, KeepRefused } from '@shared/discoverArtist'
@@ -101,6 +102,25 @@ const api = {
     ipcRenderer.invoke('import-recorded-stem', path, rifffBpm, loopBars, existingSlots),
   pickFolder: (): Promise<string | null> => ipcRenderer.invoke('pick-folder'),
   pickRifffImportPaths: (): Promise<string[]> => ipcRenderer.invoke('pick-rifff-import-paths'),
+  // Linked loop folders -- see the loop-folders-* handlers in main/index.ts.
+  // Pick with pickFolder above, then link the path.
+  loopFoldersList: (): Promise<LoopFolderListing[]> => ipcRenderer.invoke('loop-folders-list'),
+  loopFoldersLink: (rootPath: string, projectBpm: number): Promise<LinkLoopFolderResult> =>
+    ipcRenderer.invoke('loop-folders-link', rootPath, projectBpm),
+  loopFoldersUnlink: (rootPath: string): Promise<void> =>
+    ipcRenderer.invoke('loop-folders-unlink', rootPath),
+  loopFoldersRescan: (projectBpm: number): Promise<LoopFolderListing[]> =>
+    ipcRenderer.invoke('loop-folders-rescan', projectBpm),
+  loopFoldersSetTempo: (loopId: string, bpm: number | null): Promise<LoopEntry | null> =>
+    ipcRenderer.invoke('loop-folders-set-tempo', loopId, bpm),
+  loopFoldersReportDuration: (
+    loopId: string,
+    durationSec: number,
+    projectBpm: number
+  ): Promise<LoopEntry | null> =>
+    ipcRenderer.invoke('loop-folders-report-duration', loopId, durationSec, projectBpm),
+  loopFoldersImport: (loopIds: string[], projectBpm: number): Promise<Rifff[]> =>
+    ipcRenderer.invoke('loop-folders-import', loopIds, projectBpm),
   // Electron no longer augments dropped File objects with a `.path` property (removed
   // as of Electron 32+ — see https://electronjs.org/docs/api/web-utils). webUtils is
   // only reachable from main/preload, so the renderer has to go through this bridge

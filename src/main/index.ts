@@ -13,6 +13,15 @@ import {
   importRecordedStem,
   importDiscoverLoopSeed
 } from './importOneShot'
+import {
+  linkLoopFolder,
+  listLoopFolders,
+  setLoopTempoOverride,
+  unlinkLoopFolder
+} from './loopFolders'
+import { recordLoopDuration, rescanAllLoopFolders, rescanLoopFolder } from './loopFolderScan'
+import { importLinkedLoops } from './loopFolderImport'
+import type { LinkLoopFolderResult } from '@shared/loopFolderTypes'
 import { readAudioFile } from './readAudioFile'
 import { renderStretched } from './rubberband'
 import {
@@ -708,6 +717,47 @@ app.whenReady().then(async () => {
   ipcMain.handle('import-loop', (_event, path: string, barCount: number) => {
     return importLoop(path, barCount)
   })
+
+  // Linked loop folders (docs/superpowers/specs/2026-10-01-import-loop-
+  // folders-design.md). The picker is the existing pick-folder. Everything
+  // here is the own library db; the folders themselves are only read.
+  ipcMain.handle('loop-folders-list', () => listLoopFolders(openOwnRiffLibraryDb()))
+
+  ipcMain.handle(
+    'loop-folders-link',
+    async (_event, rootPath: string, projectBpm: number): Promise<LinkLoopFolderResult> => {
+      const db = openOwnRiffLibraryDb()
+      const linked = linkLoopFolder(db, rootPath)
+      if (!linked.ok) return linked
+      await rescanLoopFolder(db, linked.folder.rootPath, projectBpm)
+      const folder = listLoopFolders(db).find((f) => f.rootPath === linked.folder.rootPath)
+      return folder ? { ok: true, folder } : linked
+    }
+  )
+
+  ipcMain.handle('loop-folders-unlink', (_event, rootPath: string) =>
+    unlinkLoopFolder(openOwnRiffLibraryDb(), rootPath)
+  )
+
+  ipcMain.handle('loop-folders-rescan', async (_event, projectBpm: number) => {
+    const db = openOwnRiffLibraryDb()
+    await rescanAllLoopFolders(db, projectBpm)
+    return listLoopFolders(db)
+  })
+
+  ipcMain.handle('loop-folders-set-tempo', (_event, loopId: string, bpm: number | null) =>
+    setLoopTempoOverride(openOwnRiffLibraryDb(), loopId, bpm)
+  )
+
+  ipcMain.handle(
+    'loop-folders-report-duration',
+    (_event, loopId: string, durationSec: number, projectBpm: number) =>
+      recordLoopDuration(openOwnRiffLibraryDb(), loopId, durationSec, projectBpm)
+  )
+
+  ipcMain.handle('loop-folders-import', (_event, loopIds: string[], projectBpm: number) =>
+    importLinkedLoops(openOwnRiffLibraryDb(), loopIds, projectBpm)
+  )
 
   // Discover's own drop target (DiscoverPanel.tsx) -- always a loop, no
   // LoopOrOneShotPrompt, see importDiscoverLoopSeed's own doc comment
