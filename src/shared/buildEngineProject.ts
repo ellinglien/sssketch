@@ -17,7 +17,7 @@ import {
   type StemAutomation,
   type StemFilterSettings
 } from './toolkit'
-import { audibleRisers, type RiserClip } from './riser'
+import { RISER_DEFAULT_Q, audibleRisers, type RiserClip } from './riser'
 import { stemPansForRifff } from './radioPan'
 import { stretchRatioForStem } from './stretchRatio'
 import {
@@ -152,6 +152,14 @@ export interface EngineRiser {
    * no crop and no re-one offset, so its left edge IS startBar and the engine
    * subtracts that directly. */
   curve: AutomationPoint[]
+  /** The riser's character (native radio sound plan, Task 6), each present only when it differs
+   * from today's riser (absence is load-bearing: a riser without them is today's, to the bit).
+   * Only radio's transition risers carry them; see RiserClip. The engine clamps q to 1..6 and
+   * send to 0..1, and reads anything but 'pink' / 'mono' as white / wide. */
+  q?: number
+  colour?: 'pink'
+  stereo?: 'mono'
+  send?: number
 }
 
 /* NOTE, 2026-09-22: this interface used to carry fadeInBars/fadeOutBars,
@@ -418,7 +426,11 @@ export function buildEngineRisers(risers: Record<string, RiserClip>): EngineRise
     startCutoffValue: riser.startCutoffValue,
     endCutoffValue: riser.endCutoffValue,
     level: riser.level,
-    curve: riser.curve
+    curve: riser.curve,
+    ...(riser.q !== undefined && riser.q !== RISER_DEFAULT_Q ? { q: riser.q } : {}),
+    ...(riser.colour === 'pink' ? { colour: 'pink' as const } : {}),
+    ...(riser.stereo === 'mono' ? { stereo: 'mono' as const } : {}),
+    ...(riser.send !== undefined && riser.send > 0 ? { send: riser.send } : {})
   }))
 }
 

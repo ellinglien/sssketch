@@ -5,13 +5,17 @@ import {
   buildBloomCurve,
   buildDuckCurve,
   buildFilterInCurve,
+  applyRiserCharacter,
   buildTransitionRiser,
   normalizeRadioTransitions,
+  RISER_SWEEP_POINTS,
   pickTransition,
   radioArrivalGestureSpent,
   radioChangeWaitsForLoopTop,
   radioGestureLeadsChange
 } from './radioTransition'
+import { riserCutoffAt } from './riser'
+import { RISER_BEFORE, riserCharacterForId } from './riserCharacter'
 
 /** A deterministic generator that walks a fixed list and then repeats it. */
 function seeded(values: number[]): () => number {
@@ -119,6 +123,84 @@ describe('transition curves', () => {
   it('returns no riser for a loop it cannot place one in', () => {
     expect(buildTransitionRiser('c', 0, 2)).toBeNull()
     expect(buildTransitionRiser('c', 8, 0)).toBeNull()
+  })
+})
+
+describe('riser variety (native radio sound plan, Task 6)', () => {
+  const today = {
+    id: 'radio-riser-g',
+    channelId: 'g',
+    startBar: 6,
+    lengthBars: 2,
+    startCutoffValue: 0.2,
+    endCutoffValue: 0.95,
+    curve: [],
+    level: 0.35,
+    name: 'radio',
+    muted: false
+  }
+
+  it("variety off is today's riser exactly, field for field", () => {
+    expect(buildTransitionRiser('g', 8, 2)).toStrictEqual(today)
+    expect(buildTransitionRiser('g', 8, 2, {})).toStrictEqual(today)
+    expect(buildTransitionRiser('g', 8, 2, { variety: false })).toStrictEqual(today)
+  })
+
+  it('variety on draws the character seeded from the riser id, and puts it in the fields', () => {
+    const r = buildTransitionRiser('g', 8, 2, { variety: true })!
+    const c = riserCharacterForId('radio-riser-g')
+    // the timing and identity are buildTransitionRiser's, always
+    expect(r).toMatchObject({
+      id: today.id,
+      channelId: 'g',
+      startBar: 6,
+      lengthBars: 2,
+      name: 'radio',
+      muted: false
+    })
+    expect(r.level).toBeCloseTo(0.35 * Math.pow(10, c.levelDb / 20), 12)
+    expect(r).toMatchObject({ q: c.q, colour: c.colour, stereo: c.stereo, send: c.send })
+    expect(r.startCutoffValue).toBe(c.startCutoff)
+    expect(r.endCutoffValue).toBe(c.endCutoff)
+    // the sweep: start + (end - start) * p^curve as 17 points over the riser's length
+    expect(r.curve).toHaveLength(RISER_SWEEP_POINTS)
+    expect(r.curve[0]).toEqual({ bar: 0, value: c.startCutoff })
+    expect(r.curve[16].bar).toBe(2)
+    expect(r.curve[16].value).toBeCloseTo(c.endCutoff, 12)
+    expect(r.curve[8].bar).toBe(1)
+    expect(r.curve[8].value).toBeCloseTo(
+      c.startCutoff + (c.endCutoff - c.startCutoff) * Math.pow(0.5, c.curve),
+      12
+    )
+    // and the engine's riserCutoffAt follows it
+    expect(riserCutoffAt(r, 0.5)).toBeCloseTo(
+      c.startCutoff + (c.endCutoff - c.startCutoff) * Math.pow(0.25, c.curve),
+      12
+    )
+  })
+
+  it('the same id gives the same character (a re-sync redraws it); ids vary it', () => {
+    expect(buildTransitionRiser('g', 8, 2, { variety: true })).toStrictEqual(
+      buildTransitionRiser('g', 8, 2, { variety: true })
+    )
+    expect(riserCharacterForId('radio-riser-x')).toStrictEqual(riserCharacterForId('radio-riser-x'))
+    const characters = Array.from({ length: 200 }, (_, i) =>
+      riserCharacterForId(`radio-riser-${i}`)
+    )
+    expect(new Set(characters.map((c) => c.q)).size).toBeGreaterThan(150)
+    expect(characters.some((c) => c.colour === 'pink')).toBe(true)
+    expect(characters.some((c) => c.colour === 'white')).toBe(true)
+    expect(characters.some((c) => c.stereo === 'mono')).toBe(true)
+  })
+
+  it("applying today's character keeps today's sound fields (Q 2, white, wide, no send, the same level and ends)", () => {
+    const r = applyRiserCharacter(today, RISER_BEFORE)
+    expect(r).toMatchObject({ q: 2, colour: 'white', stereo: 'wide', send: 0, level: 0.35 })
+    expect(r.startCutoffValue).toBe(0.2)
+    expect(r.endCutoffValue).toBe(0.95)
+    for (let bar = 0; bar <= 2; bar += 0.125) {
+      expect(riserCutoffAt(r, bar)).toBeCloseTo(riserCutoffAt(today, bar), 12)
+    }
   })
 })
 

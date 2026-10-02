@@ -91,7 +91,28 @@ export interface RiserClip {
    * to key it by. This flag is the riser's half of the channel's m button;
    * store.ts's SET_CHANNEL_MUTE and SOLO_CHANNEL move both halves together. */
   muted: boolean
+  /** The riser's CHARACTER (native radio sound plan, Task 6), all optional:
+   * absent is today's riser, bit for bit. Only radio's transition risers carry
+   * these (buildTransitionRiser, with the project's riser variety on, from
+   * the shared riserCharacter.ts draw); a hand-drawn riser never has them and
+   * keeps exactly what the user drew. Twins of EngineRiser's q / pink / mono /
+   * send in native-engine/Source/EngineProject.h (NoiseRiser.h says what each
+   * does).
+   *
+   * The bandpass's Q, 1..6; 2 is today's. */
+  q?: number
+  /** Pink noise (more body under the sweep) instead of white. */
+  colour?: 'white' | 'pink'
+  /** One noise in both sides instead of a different one in each. */
+  stereo?: 'wide' | 'mono'
+  /** Send into the reverb room, 0..1. */
+  send?: number
 }
+
+/** The riser Q range on the wire (EngineRiser::q's clamp, and RISER_RANGES' q..resonantQ). */
+export const RISER_Q_RANGE = [1, 6] as const
+/** Today's riser Q (NoiseRiser.h's kRiserBandwidthQ). */
+export const RISER_DEFAULT_Q = 2
 
 /** What a freshly dropped riser is. Four bars is one phrase at this app's
  * usual working lengths -- long enough to read as a build, short enough that
@@ -131,6 +152,22 @@ export const RISER_NAME_PREFIX = 'riser'
 function clamp01(value: number): number {
   if (!Number.isFinite(value)) return 0
   return Math.min(1, Math.max(0, value))
+}
+
+/** The character fields of a riser, normalised, with each one present only
+ * when it was present and readable: a junk value is dropped (today's
+ * behaviour for that field), never invented. */
+function normaliseRiserCharacterFields(
+  riser: Pick<RiserClip, 'q' | 'colour' | 'stereo' | 'send'>
+): Pick<RiserClip, 'q' | 'colour' | 'stereo' | 'send'> {
+  const out: Pick<RiserClip, 'q' | 'colour' | 'stereo' | 'send'> = {}
+  if (typeof riser.q === 'number' && Number.isFinite(riser.q)) {
+    out.q = Math.min(RISER_Q_RANGE[1], Math.max(RISER_Q_RANGE[0], riser.q))
+  }
+  if (riser.colour === 'white' || riser.colour === 'pink') out.colour = riser.colour
+  if (riser.stereo === 'wide' || riser.stereo === 'mono') out.stereo = riser.stereo
+  if (typeof riser.send === 'number' && Number.isFinite(riser.send)) out.send = clamp01(riser.send)
+  return out
 }
 
 /** The two-point ramp a riser plays when nothing has been drawn on it --
@@ -264,7 +301,8 @@ export function normaliseRiser(riser: RiserClip): RiserClip {
     curve: normaliseAutomationCurve(riser.curve ?? []),
     name: typeof riser.name === 'string' ? riser.name.trim() : '',
     muted: riser.muted === true,
-    level: clamp01(riser.level)
+    level: clamp01(riser.level),
+    ...normaliseRiserCharacterFields(riser)
   }
 }
 

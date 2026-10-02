@@ -144,6 +144,12 @@ namespace sssketch
         double pan = 0.0;
     };
 
+    /** A riser's bandpass Q on the wire (EngineRiser::q): 2 is today's (NoiseRiser.h's
+     * kRiserBandwidthQ), and the character draw's range is 1..6 (RISER_RANGES). */
+    constexpr double kRiserDefaultQ = 2.0;
+    constexpr double kRiserMinQ = 1.0;
+    constexpr double kRiserMaxQ = 6.0;
+
     /** One placed noise riser -- a GENERATED audio source on a channel, not
      * an effect on one. Wire-format twin of EngineRiser in
      * src/shared/buildEngineProject.ts (and of RiserClip in
@@ -178,6 +184,20 @@ namespace sssketch
          * startCutoffValue -> endCutoffValue ramp" -- riserCutoffAt
          * (NoiseRiser.h) owns that rule for both sides. */
         std::vector<AutomationPoint> curve;
+
+        /** The riser's CHARACTER (native radio sound plan, Task 6): radio's transition risers
+         * draw one (src/shared/riserCharacter.ts); a hand-drawn riser has none. Every field is
+         * optional on the wire and its default is today's riser, so a riser without them renders
+         * bit for bit as before. NoiseRiser.h says what each does. */
+        /** The bandpass's Q, clamped to [kRiserMinQ, kRiserMaxQ]; 2 is today's. */
+        double q = kRiserDefaultQ;
+        /** Pink noise (Kellet's filter over the same index-addressed white) instead of white. */
+        bool pink = false;
+        /** One noise in both sides (seedR = seedL) instead of a different one in each. */
+        bool mono = false;
+        /** Post-everything send into the shared reverb bus, [0,1]; 0 sends nothing and builds
+         * nothing. */
+        double send = 0.0;
     };
 
     struct EngineRifff

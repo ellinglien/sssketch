@@ -684,6 +684,41 @@ namespace sssketch
                 expectEquals(riser.curve[1].value, 1.0);
             }
 
+            beginTest("a riser's character parses; absent and junk are today's riser; Q and send clamp");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"risers":[
+                         {"id":"plain","lengthBars":4.0},
+                         {"id":"drawn","lengthBars":4.0,"q":4.5,"colour":"pink","stereo":"mono","send":0.3},
+                         {"id":"high","lengthBars":4.0,"q":40,"send":7},
+                         {"id":"low","lengthBars":4.0,"q":0.1,"send":-1},
+                         {"id":"junk","lengthBars":4.0,"q":"whistly","colour":"red","stereo":7,"send":"lots"},
+                         {"id":"inf","lengthBars":4.0,"q":1e999,"send":1e999},
+                         {"id":"white","lengthBars":4.0,"colour":"white","stereo":"wide","q":2}
+                       ]})",
+                    project, error), error);
+                expectEquals((int) project.risers.size(), 7);
+                const auto isToday = [this](const EngineRiser& r) {
+                    expectEquals(r.q, 2.0);
+                    expect(!r.pink && !r.mono);
+                    expectEquals(r.send, 0.0);
+                };
+                isToday(project.risers[0]);
+                const auto& drawn = project.risers[1];
+                expectEquals(drawn.q, 4.5);
+                expect(drawn.pink && drawn.mono);
+                expectEquals(drawn.send, 0.3);
+                expectEquals(project.risers[2].q, 6.0);
+                expectEquals(project.risers[2].send, 1.0);
+                expectEquals(project.risers[3].q, 1.0);
+                expectEquals(project.risers[3].send, 0.0);
+                isToday(project.risers[4]);
+                isToday(project.risers[5]);
+                isToday(project.risers[6]);
+            }
+
             beginTest("a malformed risers key costs nothing but the risers");
             {
                 EngineProject project;

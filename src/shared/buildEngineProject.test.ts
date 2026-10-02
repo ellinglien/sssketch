@@ -17,7 +17,7 @@ import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import { stemKey, type Rifff } from './types'
 import { DEFAULT_REVERB, defaultFilterSettings } from './toolkit'
-import { MIN_RISER_LENGTH_BARS, RISER_DEFAULTS, createRiser } from './riser'
+import { MIN_RISER_LENGTH_BARS, RISER_DEFAULTS, createRiser, type RiserClip } from './riser'
 
 const rifff: Rifff = {
   groupId: 'r1',
@@ -826,6 +826,61 @@ describe('risers on the wire', () => {
       off: { ...createRiser({ id: 'off', channelId: 'ch1', startBar: 0 }), muted: true }
     }
     expect(buildEngineRisers(risers)).toEqual([])
+  })
+
+  describe('the riser character (native radio sound plan, Task 6)', () => {
+    const base = createRiser({ id: 'r', channelId: 'ch1', startBar: 0 })
+
+    it('a riser without a character sends exactly the keys it always did', () => {
+      const [wire] = buildEngineRisers({ r: base })
+      expect(Object.keys(wire).sort()).toEqual(
+        [
+          'channelId',
+          'curve',
+          'endCutoffValue',
+          'id',
+          'lengthBars',
+          'level',
+          'startBar',
+          'startCutoffValue'
+        ].sort()
+      )
+    })
+
+    it("omits each field at today's value: Q 2, white, wide, no send", () => {
+      const [wire] = buildEngineRisers({
+        r: { ...base, q: 2, colour: 'white', stereo: 'wide', send: 0 }
+      })
+      expect(wire).toStrictEqual(buildEngineRisers({ r: base })[0])
+    })
+
+    it('sends each field that differs', () => {
+      const [wire] = buildEngineRisers({
+        r: { ...base, q: 4.5, colour: 'pink', stereo: 'mono', send: 0.3 }
+      })
+      expect(wire).toMatchObject({ q: 4.5, colour: 'pink', stereo: 'mono', send: 0.3 })
+      const [partial] = buildEngineRisers({ r: { ...base, q: 1.5 } })
+      expect(partial.q).toBe(1.5)
+      expect(partial).not.toHaveProperty('colour')
+      expect(partial).not.toHaveProperty('stereo')
+      expect(partial).not.toHaveProperty('send')
+    })
+
+    it('clamps Q and the send, and drops junk rather than inventing a value', () => {
+      const [high] = buildEngineRisers({ r: { ...base, q: 40, send: 7 } })
+      expect(high).toMatchObject({ q: 6, send: 1 })
+      const [low] = buildEngineRisers({ r: { ...base, q: 0.2, send: -1 } })
+      expect(low.q).toBe(1)
+      expect(low).not.toHaveProperty('send')
+      const junk = {
+        ...base,
+        q: Number.NaN,
+        colour: 'red',
+        stereo: 7,
+        send: Number.POSITIVE_INFINITY
+      } as unknown as RiserClip
+      expect(buildEngineRisers({ r: junk })[0]).toStrictEqual(buildEngineRisers({ r: base })[0])
+    })
   })
 })
 

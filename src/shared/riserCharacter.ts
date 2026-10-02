@@ -66,3 +66,33 @@ export function drawRiserCharacter(random: () => number): RiserCharacter {
   const send = between(random(), R.send)
   return { colour, q, startCutoff, endCutoff, curve, stereo, levelDb, send }
 }
+
+/** FNV-1a over the id's UTF-16 code units: the radio's `seedFor` (noise.ts), so the same id
+ * seeds the same way on the web and in the app. */
+function seedForId(id: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return h >>> 0
+}
+
+/** mulberry32, the radio's `seededRandom` (noise.ts): uniform in [0, 1) from a 32-bit seed. */
+function seededRandom(seed: number): () => number {
+  let a = seed >>> 0
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0
+    let t = a
+    t = Math.imul(t ^ (t >>> 15), t | 1)
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+  }
+}
+
+/** The character a riser with this id draws (native radio sound plan, Task 6): the shared draw,
+ * seeded from the id, so a re-sync of the same riser redraws the same character rather than a
+ * new one every time the project is rebuilt. */
+export function riserCharacterForId(id: string): RiserCharacter {
+  return drawRiserCharacter(seededRandom(seedForId(id)))
+}

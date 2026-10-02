@@ -1792,7 +1792,14 @@ export function DiscoverPanel({
           // The preview's one rifff sits on its own groupId channel
           // (buildEngineProject's state.channelOf fallback), so that is the
           // bus this sweep belongs on.
-          const riser = buildTransitionRiser(rifff.groupId, maxBarLength, bars)
+          //
+          // With the project's riser variety on (native radio sound plan,
+          // Task 6) it draws a character -- Q, colour, stereo, sweep, level
+          // and a send into the room -- seeded from its id, as the web
+          // radio's risers do. Off, it is today's riser exactly.
+          const riser = buildTransitionRiser(rifff.groupId, maxBarLength, bars, {
+            variety: normalizeSoundSettings(sound ?? appSoundDefaultsNow()).riserVariety.on
+          })
           if (riser) risers[riser.id] = riser
         }
       }

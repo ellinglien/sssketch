@@ -269,6 +269,8 @@ namespace sssketch
         /** For tests: the rate of the convolver the audio thread is running (0 if none), and
          * whether a swapped-out one is waiting for drainRetiredProject. */
         double liveCavernReverbRate() const { return reverbBus.liveCavernRate(); }
+        /** For tests: whether the zita room's reverb has been constructed (ReverbBus::hasBeenBuilt). */
+        bool zitaReverbBuilt() const { return reverbBus.hasBeenBuilt(); }
         bool cavernReverbRetiredPending() const { return reverbBus.hasRetiredCavern(); }
 
         /** MESSAGE THREAD. The rate of the cavern room's convolver, 0 if none has been built --

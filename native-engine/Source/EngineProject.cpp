@@ -209,6 +209,20 @@ namespace sssketch
                 riser.endCutoffValue = getNormalised(riserVar, "endCutoffValue", 1.0);
                 riser.level = getNormalised(riserVar, "level", 0.0);
                 riser.curve = parseAutomationCurve(riserVar, "curve");
+                // The character (Task 6). Absent, junk or non-finite is today's riser: Q 2,
+                // white, wide, no send. Only a number counts as a number here -- a string would
+                // otherwise read as 0, which clamps to a real (and wrong) Q of 1.
+                const auto numberOr = [&riserVar](const char* key, double fallback) {
+                    const auto value = riserVar.getProperty(key, juce::var());
+                    if (!(value.isDouble() || value.isInt() || value.isInt64()))
+                        return fallback;
+                    const double number = (double) value;
+                    return std::isfinite(number) ? number : fallback;
+                };
+                riser.q = std::clamp(numberOr("q", kRiserDefaultQ), kRiserMinQ, kRiserMaxQ);
+                riser.pink = riserVar.getProperty("colour", juce::var()).toString() == "pink";
+                riser.mono = riserVar.getProperty("stereo", juce::var()).toString() == "mono";
+                riser.send = std::clamp(numberOr("send", 0.0), 0.0, 1.0);
                 project.risers.push_back(std::move(riser));
             }
         }

@@ -14,6 +14,7 @@
 // this file are what the engine actually performs.
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import type { RiserClip } from './riser'
+import { riserCharacterForId, type RiserCharacter } from './riserCharacter'
 import type { AutomationPoint } from './toolkit'
 
 export type RadioTransitions = 'off' | 'subtle' | 'bold'
@@ -300,11 +301,18 @@ export function buildDuckCurve(loopBars: number, bars: number): AutomationPoint[
 export function buildTransitionRiser(
   channelId: string,
   loopBars: number,
-  bars: number
+  bars: number,
+  options: {
+    /** The project's `sound.riserVariety.on` (native radio sound plan, Task 6): the riser
+     * draws a character, seeded from its id (riserCharacterForId), as the web radio's do.
+     * Off (the default) is today's riser exactly. Only the character varies; the timing
+     * above is this function's, always. */
+    variety?: boolean
+  } = {}
 ): RiserClip | null {
   if (!(loopBars > 0) || !(bars > 0)) return null
   const lengthBars = clampToHalfLoop(loopBars, bars)
-  return {
+  const riser: RiserClip = {
     id: `radio-riser-${channelId}`,
     channelId,
     startBar: loopBars - lengthBars,
@@ -315,5 +323,43 @@ export function buildTransitionRiser(
     level: 0.35,
     name: 'radio',
     muted: false
+  }
+  return options.variety === true
+    ? applyRiserCharacter(riser, riserCharacterForId(riser.id))
+    : riser
+}
+
+/** Points along a character's sweep: the web radio's SWEEP_POINTS (transitions.ts). The engine
+ * follows them linearly (riserCutoffAt), close enough to the power curve at 17. */
+export const RISER_SWEEP_POINTS = 17
+
+/**
+ * A riser with a drawn character, the way the web radio plays one (transitions.ts, riserVoice.ts):
+ * - the level is today's moved by the character's dB: 0.35 x 10^(levelDb / 20), +3 dB on average;
+ * - the sweep runs from its start to its end cutoff as start + (end - start) x p^curve, as
+ *   RISER_SWEEP_POINTS points on the riser's curve (which riserCutoffAt already follows); the
+ *   declared ends are the character's, so a cleared curve still plays its ends;
+ * - Q, colour, stereo and send ride as the riser's own fields, which buildEngineRisers puts on
+ *   the wire only when they differ from today's riser.
+ * The riser's id, row, timing and length are untouched.
+ */
+export function applyRiserCharacter(riser: RiserClip, character: RiserCharacter): RiserClip {
+  const { startCutoff, endCutoff, curve } = character
+  return {
+    ...riser,
+    startCutoffValue: startCutoff,
+    endCutoffValue: endCutoff,
+    curve: Array.from({ length: RISER_SWEEP_POINTS }, (_, i) => {
+      const p = i / (RISER_SWEEP_POINTS - 1)
+      return {
+        bar: p * riser.lengthBars,
+        value: startCutoff + (endCutoff - startCutoff) * Math.pow(p, curve)
+      }
+    }),
+    level: riser.level * Math.pow(10, character.levelDb / 20),
+    q: character.q,
+    colour: character.colour,
+    stereo: character.stereo,
+    send: character.send
   }
 }

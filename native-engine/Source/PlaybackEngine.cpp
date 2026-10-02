@@ -135,6 +135,12 @@ namespace sssketch
             next->channelGroups[riser.channelId];
         }
         next->anyRisers = !next->project.risers.empty();
+        // A riser with a reverb send (radio's riser character, Task 6) needs the bus opened
+        // every block, exactly as a sending clip does -- and only then: a riser without one
+        // leaves the bus on today's path, so nothing is built for it.
+        for (const auto& riser : next->project.risers)
+            if (riser.send > 0.0)
+                next->anyToolkitActive = true;
 
         // Scratch space for the new channel set -- off the real-time thread
         // (see renderBlock's own comment on why this lives here, not
@@ -190,6 +196,8 @@ namespace sssketch
             for (const auto& rifff : next->project.rifffs)
                 for (const auto& stem : rifff.stems)
                     anyReverbSend = anyReverbSend || (stem.hasToolkit && stemSendsToReverb(stem.toolkit));
+            for (const auto& riser : next->project.risers)
+                anyReverbSend = anyReverbSend || riser.send > 0.0;
             if (anyReverbSend)
                 reverbBus.prepareCavern(masterRate.load());
         }
@@ -907,10 +915,14 @@ namespace sssketch
             // (RenderExport.cpp) call, a bounce contains the riser for free
             // and contains exactly the riser that was heard.
             //
-            // A riser does NOT feed the shared reverb bus: its data shape has
-            // no send of its own (see EngineRiser), and inventing one on its
-            // behalf would be a parameter with nothing to set it. A reverb
-            // reached through this channel's plugin chain still applies.
+            // A riser feeds the shared reverb bus only when it carries a send
+            // (EngineRiser::send, from radio's riser character -- Task 6; a
+            // hand-drawn riser has none). Such a riser renders into the stem
+            // scratch first (the one stem at a time is done by now), which is
+            // then added into the channel and sent, post-level, at a fixed
+            // gain. A riser without a send renders straight into the channel
+            // exactly as before. A reverb reached through this channel's
+            // plugin chain still applies to both.
             //
             // Skipped on one bool test for a project with no risers, and
             // inside that, on one map lookup for a channel with none -- so
@@ -925,8 +937,48 @@ namespace sssketch
                         auto& voice = riserVoices[riserPtr->id];
                         if (voice == nullptr)
                             voice = std::make_unique<RiserVoice>();
-                        voice->render(
-                            *riserPtr, blockStartSec, sampleRate, spb, numSamples, chOutL, chOutR);
+                        if (!(riserPtr->send > 0.0) || !runReverbBus)
+                        {
+                            voice->render(
+                                *riserPtr, blockStartSec, sampleRate, spb, numSamples, chOutL, chOutR);
+                            continue;
+                        }
+                        // The sending riser. The scratch is sized the way a
+                        // stem's own buffer is (prepareStemBuffer).
+                        auto& sL = snap->scratchStemL;
+                        auto& sR = snap->scratchStemR;
+                        if (sL.size() != (size_t) numSamples)
+                        {
+                            sL.resize((size_t) numSamples);
+                            sR.resize((size_t) numSamples);
+                        }
+                        std::fill(sL.begin(), sL.end(), 0.0f);
+                        std::fill(sR.begin(), sR.end(), 0.0f);
+                        if (voice->render(
+                                *riserPtr, blockStartSec, sampleRate, spb, numSamples, sL.data(), sR.data()))
+                        {
+                            for (int i2 = 0; i2 < numSamples; ++i2)
+                            {
+                                chOutL[i2] += sL[(size_t) i2];
+                                chOutR[i2] += sR[(size_t) i2];
+                            }
+                        }
+                        // Sent EVERY block, silence included, exactly as a
+                        // sending clip's toolkit is (it runs over silence too):
+                        // the cavern's convolver frames its input from the
+                        // first block it is fed, so feeding only the blocks the
+                        // riser sounds in would frame it from a block that
+                        // depends on the host's split, and the room would
+                        // differ by a few ULPs between live and an export.
+                        // Fed from playback's first block, it is split-
+                        // invariant to the bit (NoiseRiserTests).
+                        //
+                        // A constant send: settled at its value, so every
+                        // sample's gain is exactly `send` (ParamSmoother::next
+                        // snaps a settled smoother to its target).
+                        ParamSmoother sendGain;
+                        sendGain.reset(sampleRate, kAutomationSmoothingSec, (float) riserPtr->send);
+                        reverbBus.addSend(numSamples, sL.data(), sR.data(), sendGain);
                     }
                 }
             }
