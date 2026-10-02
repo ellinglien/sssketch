@@ -1,0 +1,189 @@
+// scripts/golden-master-chain.mjs -- the master chain's golden output, rendered by the WEB's own
+// code in the browser it plays in: ell.ing/radio's src/audio/masterChain.ts buildMasterChain with
+// its Faust glue and true-peak limiter (src/audio/faustNode.ts, the committed .wasm through
+// faustProcessor.js as an AudioWorklet), in headless Chrome's OfflineAudioContext. Native radio
+// sound plan, Task 7: MasterStageTests runs the same input through the native MasterStage
+// (headroom -> HP 25 -> glue -> width -> shelves -> limiter) and matches this within 1e-5.
+//
+//   node scripts/golden-master-chain.mjs            # radio checked out at ../ell.ing/radio
+//   RADIO_DIR=/path/to/radio CHROME=/path/to/chrome node scripts/golden-master-chain.mjs
+//
+// What it covers: the web chain exactly as the radio builds it (input -> level -> headroom -4 dB
+// -> master filter, parked open -> HP 25 Hz -> glue.dsp -> width -> low shelf -> high shelf ->
+// truepeak.dsp -> wet), every parameter at the web's default, with the saturation left out
+// (`saturate: false`; Task 8 adds it) and no reverb (the input goes straight into the chain).
+// The biquads are Chrome's own BiquadFilterNode, the mid/side sums its own GainNodes.
+//
+// The input is the Faust goldens' programme.f32 (ell.ing/radio scripts/golden-vectors.mjs: 2 s
+// at 48 kHz of seeded sine-and-noise bursts from -36 to +6 dBFS), read from
+// native-engine/test/golden/. Writes master-chain.out.f32 (little-endian float32, planar: L then
+// R) and master-chain.json (what it is, the Chrome version, the radio commit). Nothing is added
+// to or changed in the radio repo. Regenerate after changing masterChain.ts, MASTERING or
+// FAUST_DEFAULTS (src/shared/radioSound.ts), glue.dsp or truepeak.dsp (after the radio's own
+// build-faust.mjs and golden-vectors.mjs).
+import { spawn, execFileSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const RADIO = process.env.RADIO_DIR
+  ? resolve(process.env.RADIO_DIR)
+  : resolve(ROOT, '..', 'ell.ing', 'radio')
+const CHROME = process.env.CHROME ?? '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
+const GOLDEN = join(ROOT, 'native-engine', 'test', 'golden')
+const PORT = Number(process.env.GOLDEN_PORT ?? 5198)
+const SAMPLE_RATE = 48000
+const FRAMES = 2 * SAMPLE_RATE
+
+const programme = readFileSync(join(GOLDEN, 'programme.f32'))
+if (programme.length !== 2 * FRAMES * 4) throw new Error('programme.f32: unexpected size')
+
+// The page, as a virtual module: the radio's own modules, imported by their paths in its root.
+const PAGE = `
+import { buildMasterChain } from '/src/audio/masterChain.ts'
+import { createFaustNode, GLUE, TRUEPEAK, latencySamples } from '/src/audio/faustNode.ts'
+const SR = ${SAMPLE_RATE}, FRAMES = ${FRAMES}
+try {
+  const prog = new Float32Array(await (await fetch('/__golden/programme.f32')).arrayBuffer())
+  const ctx = new OfflineAudioContext({ numberOfChannels: 2, length: FRAMES, sampleRate: SR })
+  const chain = buildMasterChain(ctx, ctx.destination, { saturate: false })
+  // as Engine.loadFaust puts them in, with no parameter set: glue.dsp's and truepeak.dsp's defaults
+  for (const [stage, dsp] of [['glue', GLUE], ['limiter', TRUEPEAK]]) {
+    const f = await createFaustNode(ctx, dsp)
+    chain.useStage(stage, f.node, latencySamples(dsp.meta) / SR)
+  }
+  const buffer = ctx.createBuffer(2, FRAMES, SR)
+  buffer.copyToChannel(prog.subarray(0, FRAMES), 0)
+  buffer.copyToChannel(prog.subarray(FRAMES), 1)
+  const src = new AudioBufferSourceNode(ctx, { buffer })
+  src.connect(chain.input)
+  src.start(0)
+  const out = await ctx.startRendering()
+  const all = new Float32Array(2 * FRAMES)
+  all.set(out.getChannelData(0), 0)
+  all.set(out.getChannelData(1), FRAMES)
+  await fetch('/__golden/result?ua=' + encodeURIComponent(navigator.userAgent), { method: 'POST', body: all.buffer })
+} catch (e) {
+  await fetch('/__golden/error', { method: 'POST', body: String((e && e.stack) || e) })
+}
+`
+
+const { createServer } = await import(
+  pathToFileURL(join(RADIO, 'node_modules', 'vite', 'dist', 'node', 'index.js')).href
+)
+
+let chrome
+let server
+const userDir = mkdtempSync(join(tmpdir(), 'golden-master-'))
+const finish = async (code) => {
+  chrome?.kill()
+  await server?.close()
+  // Chrome may still be writing its profile as it exits: a leftover temp dir is harmless
+  try {
+    rmSync(userDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
+  } catch {
+    // left for the OS to clear
+  }
+  process.exit(code)
+}
+
+const readBody = (req) =>
+  new Promise((ok) => {
+    const parts = []
+    req.on('data', (c) => parts.push(c))
+    req.on('end', () => ok(Buffer.concat(parts)))
+  })
+
+server = await createServer({
+  root: RADIO,
+  configFile: join(RADIO, 'vite.config.ts'),
+  logLevel: 'warn',
+  server: { port: PORT, strictPort: true },
+  plugins: [
+    {
+      name: 'golden-master-chain',
+      resolveId: (id) => (id === 'virtual:golden-master' ? '\0golden-master' : undefined),
+      load: (id) => (id === '\0golden-master' ? PAGE : undefined),
+      configureServer(s) {
+        s.middlewares.use('/__golden', async (req, res) => {
+          const url = new URL(req.url ?? '/', 'http://x')
+          if (url.pathname === '/page') {
+            res.setHeader('content-type', 'text/html')
+            res.end(
+              '<!doctype html><script type="module" src="/radio/@id/__x00__golden-master"></script>'
+            )
+          } else if (url.pathname === '/programme.f32') {
+            res.setHeader('content-type', 'application/octet-stream')
+            res.end(programme)
+          } else if (url.pathname === '/result') {
+            const body = await readBody(req)
+            res.end('ok')
+            if (body.length !== 2 * FRAMES * 4) {
+              console.error(`unexpected result size ${body.length}`)
+              return finish(1)
+            }
+            const out = new Float32Array(body.buffer, body.byteOffset, 2 * FRAMES)
+            let peak = 0
+            for (const v of out) peak = Math.max(peak, Math.abs(v))
+            writeFileSync(join(GOLDEN, 'master-chain.out.f32'), body)
+            const radioCommit = (() => {
+              try {
+                return execFileSync('git', ['-C', RADIO, 'rev-parse', '--short', 'HEAD'])
+                  .toString()
+                  .trim()
+              } catch {
+                return 'unknown'
+              }
+            })()
+            const meta = {
+              note:
+                'written by sssketch scripts/golden-master-chain.mjs: programme.f32 through ell.ing/radio ' +
+                'src/audio/masterChain.ts buildMasterChain (saturate: false) with its Faust glue and ' +
+                'truepeak stages, every parameter at its default, in headless Chrome OfflineAudioContext; ' +
+                'little-endian float32, planar (L then R)',
+              input: 'programme.f32',
+              chain:
+                'headroom -4 dB, HP 25 Hz, glue.dsp (-14 dB, 2:1, knee 6), width (side +2 dB shelf at 250 Hz), low shelf +1 dB at 100 Hz, high shelf +1 dB at 10 kHz, truepeak.dsp (-1 dBTP)',
+              radioCommit,
+              userAgent: url.searchParams.get('ua'),
+              sampleRate: SAMPLE_RATE,
+              frames: FRAMES
+            }
+            writeFileSync(join(GOLDEN, 'master-chain.json'), JSON.stringify(meta, null, 2) + '\n')
+            console.log(
+              `wrote master-chain.out.f32 (peak ${peak.toFixed(4)}) and master-chain.json; ${meta.userAgent}`
+            )
+            return finish(0)
+          } else if (url.pathname === '/error') {
+            console.error((await readBody(req)).toString())
+            res.end('ok')
+            return finish(1)
+          } else {
+            res.statusCode = 404
+            res.end()
+          }
+        })
+      }
+    }
+  ]
+})
+await server.listen()
+chrome = spawn(
+  CHROME,
+  [
+    '--headless=new',
+    '--mute-audio',
+    '--disable-gpu',
+    '--no-first-run',
+    '--no-default-browser-check',
+    `--user-data-dir=${userDir}`,
+    `http://localhost:${PORT}/__golden/page`
+  ],
+  { stdio: 'ignore' }
+)
+setTimeout(() => {
+  console.error('timed out')
+  void finish(1)
+}, 120000)

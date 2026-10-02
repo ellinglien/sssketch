@@ -193,7 +193,9 @@ way to get a color; don't hand-roll a second color table.
 ell.ing/radio compiles them to wasm, `scripts/build-faust-cpp.mjs` compiles them to the committed
 C++ in `generated/` with the native `faust` pinned in `FAUST_VERSION` (Homebrew, `brew pin`ned).
 After editing a `.dsp`: run that script here, `node scripts/build-faust.mjs` and
-`node scripts/golden-vectors.mjs` in the radio repo, then rebuild the engine. CI checks only that
+`node scripts/golden-vectors.mjs` in the radio repo, then rebuild the engine. After editing `glue.dsp` or
+`truepeak.dsp` (or the radio's `masterChain.ts`), also re-render the whole master chain's golden here with
+`node scripts/golden-master-chain.mjs` (headless Chrome running the radio's own chain; `MasterGlueToneTests`). CI checks only that
 the hashes agree (no `faust` there, so the regenerate-and-compare test skips, as expected); the
 full drift check and the bit-exact `FaustStageTests` against the web's output run locally. See
 `native-engine/Source/dsp/faust/LICENSES.md`.

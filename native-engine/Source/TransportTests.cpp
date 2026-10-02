@@ -962,6 +962,25 @@ namespace sssketch
                     expect(peak < 0.9f && peak > 0.7f, "peak " + juce::String(peak));
                 }
 
+                beginTest("master stage with glue and tone (Task 7): live playback and export give the same samples, to the bit");
+                {
+                    auto project = makeProject(SoundSettings::Mastering {});
+                    const auto masteringOnly = renderExport(project);
+                    project.sound.glue = SoundSettings::Glue {};
+                    project.sound.tone = SoundSettings::Tone { 2.5, -0.5 };
+                    const auto exported = renderExport(project);
+                    const auto live300 = renderLive(project, [] { return 300; }, kTotal);
+                    expect(same(live300.first, exported.first) && same(live300.second, exported.second),
+                           "live (300-sample blocks) differs from the export");
+                    std::mt19937 rng(43);
+                    std::uniform_int_distribution<int> size(1, 1100);
+                    const auto liveRandom = renderLive(project, [&] { return size(rng); }, kTotal);
+                    expect(same(liveRandom.first, exported.first) && same(liveRandom.second, exported.second),
+                           "live (random blocks) differs from the export");
+                    // the glue and tone reached the stage through the snapshot
+                    expect(! same(exported.first, masteringOnly.first), "glue and tone changed nothing");
+                }
+
                 beginTest("master stage OFF: with no sound block, or no mastering, live and export are exactly today's");
                 {
                     // Today's output: the bare renderBlock sum, which is all the transport and the

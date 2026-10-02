@@ -1,0 +1,9 @@
+{
+  "note": "written by sssketch scripts/golden-master-chain.mjs: programme.f32 through ell.ing/radio src/audio/masterChain.ts buildMasterChain (saturate: false) with its Faust glue and truepeak stages, every parameter at its default, in headless Chrome OfflineAudioContext; little-endian float32, planar (L then R)",
+  "input": "programme.f32",
+  "chain": "headroom -4 dB, HP 25 Hz, glue.dsp (-14 dB, 2:1, knee 6), width (side +2 dB shelf at 250 Hz), low shelf +1 dB at 100 Hz, high shelf +1 dB at 10 kHz, truepeak.dsp (-1 dBTP)",
+  "radioCommit": "5262ed5",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36",
+  "sampleRate": 48000,
+  "frames": 96000
+}

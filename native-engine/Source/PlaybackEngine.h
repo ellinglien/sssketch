@@ -230,8 +230,8 @@ namespace sssketch
 
         double secPerBar() const;
 
-        /** The radio sound's master stage (MasterStage.h): headroom trim, then the true-peak
-         * limiter. The ONE call both outputs make, after the user's master plugin slots and
+        /** The radio sound's master stage (MasterStage.h): headroom trim, HP, glue, width,
+         * shelves, then the true-peak limiter. The ONE call both outputs make, after the user's master plugin slots and
          * before anything else touches the block -- Transport's device callback and
          * RenderExport's offline loop -- so live playback and a bounce cannot run different
          * mastering.
@@ -682,9 +682,10 @@ namespace sssketch
         MasterStage masterStage;
         std::atomic<double> masterRate { 44100.0 };
 
-        /** The mastering settings of the snapshot the latest renderBlock call rendered, for
+        /** The mastering settings (with its glue and tone) of the snapshot the latest
+         * renderBlock call rendered, for
          * processMaster. Written and read only by the single rendering thread (the same
          * invariant as stemDsp); trivially copyable, so the write allocates nothing. */
-        mutable std::optional<SoundSettings::Mastering> masterSettingsSeen;
+        mutable std::optional<MasterStage::Settings> masterSettingsSeen;
     };
 }

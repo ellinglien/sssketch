@@ -1,18 +1,27 @@
 // native-engine/Source/MasterStage.h
 #pragma once
 #include "FaustStage.h"
+#include "MasterTone.h"
 #include "SoundSettings.h"
 #include <array>
 #include <atomic>
+#include <cstddef>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace sssketch
 {
     /** The radio sound's master stage (docs/superpowers/plans/2026-10-01-native-radio-sound.md,
-     * Task 3): the headroom trim, then the true-peak limiter (truepeak.dsp, ceiling -1 dBTP by
-     * default, release 0.1 s, lookahead 64). Glue, tone and saturation (Tasks 7-8) slot in
-     * between the two later.
+     * Tasks 3 and 7), in the web radio's order (masterChain.ts, its Faust path):
+     *
+     *   headroom trim -> HP 25 Hz (tone) -> [saturation: Task 8's slot] -> glue (glue.dsp)
+     *   -> width (tone) -> low shelf 100 Hz (tone) -> high shelf 10 kHz (tone)
+     *   -> true-peak limiter (truepeak.dsp, ceiling -1 dBTP by default, release 0.1 s, lookahead 64)
+     *
+     * Glue and tone each have their own switch (Settings::glue, Settings::tone), and run only
+     * inside mastering (the wire and the parser drop them without it). The tone stages are
+     * MasterTone (Web Audio's BiquadFilterNode, as Chromium runs it). Neither adds latency.
      *
      * Runs AFTER the user's master plugin slots, as the last thing before the device or the WAV:
      * a plugin after a limiter would undo the ceiling. PlaybackEngine owns the one instance and
@@ -20,7 +29,8 @@ namespace sssketch
      * PlaybackEngine::processMaster, so the two paths run the same code on the same settings.
      *
      * OFF IS TODAY. With no mastering settings (sound absent, or mastering switched off) and no
-     * fade-out still running, process() returns without touching a sample.
+     * fade-out still running, process() returns without touching a sample. With glue and tone
+     * both off (and settled), the stage is Task 3's, to the bit: neither is run at all.
      *
      * LATENCY. The limiter delays the audio by its lookahead plus the detector's centring: 75
      * samples (truepeak.dsp's latency_samples; 1.6 ms at 48 kHz, 1.7 ms at 44.1 kHz). It is NOT
@@ -37,6 +47,14 @@ namespace sssketch
      * at once, with no fade: an export starts there, and so does live playback from a stop --
      * which is what keeps the two identical. During a crossfade the ceiling is not guaranteed
      * (the dry part is unlimited).
+     *
+     * GLUE AND TONE SWITCHES. While mastering is on, switching glue or tone on or off crossfades
+     * that stage alone over kFadeSec (its input against its output; tone's HP and its
+     * width-and-shelves section on the same weights), starting it from a cleared state when it
+     * comes on. When mastering itself engages, the stages engage with it at once, inside
+     * mastering's own fade. A tone amount change glides the shelves' gains in dB over kFadeSec,
+     * sample by sample. A glue amount change is set at once: glue.dsp's reduction runs through
+     * its own attack/release one-poles (30 ms at the fastest), so the gain cannot step.
      *
      * THREADING. Two sides, the house pattern (PluginChain's slots): the message thread builds a
      * whole Instance for a sample rate (prepare(): the Faust object, its scratch) and parks it in
@@ -58,6 +76,18 @@ namespace sssketch
         /** truepeak.dsp's latency_samples. */
         static constexpr int kLatencySamples = 75;
 
+        /** What one block runs on: mastering, and the stages that run inside it. */
+        struct Settings
+        {
+            SoundSettings::Mastering mastering;
+            std::optional<SoundSettings::Glue> glue;
+            std::optional<SoundSettings::Tone> tone;
+            // Task 8: std::optional<SoundSettings::Saturation> saturation;
+        };
+
+        /** The settings a project's sound asks for, or nothing when mastering is off. */
+        static std::optional<Settings> settingsFor(const SoundSettings& sound);
+
         MasterStage();
         ~MasterStage();
         MasterStage(const MasterStage&) = delete;
@@ -78,7 +108,14 @@ namespace sssketch
          * Passes the block through untouched (and counts it, rateMismatchCount) when no
          * instance has been prepared at `sampleRate` yet. Any numSamples; block-size invariant
          * to the bit for a given sequence of settings. */
-        void process(const SoundSettings::Mastering* settings, double sampleRate, int numSamples, float* l, float* r);
+        void process(const Settings* settings, double sampleRate, int numSamples, float* l, float* r);
+        /** Mastering alone (glue and tone off): Task 3's stage. */
+        void process(const SoundSettings::Mastering* mastering, double sampleRate, int numSamples, float* l, float* r);
+        /** Off (either overload's null). */
+        void process(std::nullptr_t, double sampleRate, int numSamples, float* l, float* r)
+        {
+            process(static_cast<const Settings*>(nullptr), sampleRate, numSamples, l, r);
+        }
 
         /** AUDIO THREAD (or with no process() in flight). Clears the limiter's lookahead and
          * envelope, and forgets that the stage has sounded: the next process() is a fresh
@@ -98,15 +135,37 @@ namespace sssketch
     private:
         static constexpr int kChunk = 512;
 
+        /** One switchable stage's crossfade (glue, tone): see GLUE AND TONE SWITCHES above. */
+        struct StageFade
+        {
+            bool engaged = false; // the stage runs (its output is at least partly in the signal)
+            bool fadingIn = true;
+            int fadeLeft = 0;
+
+            /** Once per process() call. `fade`: crossfade an engage (else immediate). Returns
+             * true when the stage engages from nothing: the caller clears its state. */
+            bool update(bool want, bool fade, int fadeSamples);
+            /** The wet weights of the next n samples into w; false (w untouched) when they are
+             * all 1, i.e. no fade is running. */
+            bool weights(int n, int fadeSamples, float* w);
+            /** After a chunk: a finished fade-out leaves the stage off. */
+            void settle();
+        };
+
         struct Instance
         {
             explicit Instance(double sampleRate);
 
             FaustStage limiter { FaustDspKind::truepeak };
+            FaustStage glue { FaustDspKind::glue };
+            MasterTone tone;
+            StageFade glueFade, toneFade;
+            SoundSettings::Glue glueSet {}; // the glue parameters last set on the DSP
+            bool glueParamsSet = false;
             const double sampleRate;
             const int fadeSamples;
 
-            std::array<std::vector<float>, 4> scratch; // in L/R, out L/R, kChunk each
+            std::array<std::vector<float>, 6> scratch; // in L/R, out L/R, glue and tone weights; kChunk each
 
             float lastCeilingDb = 0.0f;
             bool ceilingSet = false;
@@ -118,13 +177,15 @@ namespace sssketch
             bool engaged = false; // the limited signal is (at least partly) in the output
             int fadeLeft = 0;     // samples of crossfade still to run
             bool fadingIn = true;
-            SoundSettings::Mastering held {}; // the settings a fade-out keeps running on
+            Settings held {}; // the settings a fade-out keeps running on
 
             void reset();
             /** `fadeOnEngage`: the stage has sounded since it was built or reset, so an engage
              * here crossfades in; otherwise it is immediate. */
-            void process(const SoundSettings::Mastering* settings, bool fadeOnEngage, int numSamples, float* l, float* r);
-            void processChunk(const SoundSettings::Mastering& m, int n, float* l, float* r);
+            void process(const Settings* settings, bool fadeOnEngage, int numSamples, float* l, float* r);
+            /** Glue and tone follow `s` (on, off, their parameters); `fade` crossfades a switch. */
+            void updateStages(const Settings& s, bool fade);
+            void processChunk(const Settings& s, int n, float* l, float* r);
         };
 
         std::atomic<Instance*> current { nullptr };

@@ -115,6 +115,10 @@ set(SSSKETCH_FAUST_GENERATED_SOURCES
 set_source_files_properties(${SSSKETCH_FAUST_GENERATED_SOURCES} PROPERTIES COMPILE_OPTIONS "-w;-ffp-contract=off")
 target_sources(sssketch_engine PRIVATE ${SSSKETCH_FAUST_GENERATED_SOURCES})
 
+# The master stage's biquads (Web Audio's BiquadFilterNode as Chromium runs it): no FMA either,
+# so their output is the same on every machine (MasterGlueToneTests' golden from the web).
+set_source_files_properties(Source/MasterTone.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+
 target_sources(sssketch_engine PRIVATE
   Source/Main.cpp
   Source/PluginArchitecture.cpp
@@ -178,6 +182,8 @@ target_sources(sssketch_engine PRIVATE
   Source/SoundSettingsTests.cpp
   Source/MasterStage.cpp
   Source/MasterStageTests.cpp
+  Source/MasterTone.cpp
+  Source/MasterGlueToneTests.cpp
   Source/StemPan.h
   Source/StemPanTests.cpp
 )

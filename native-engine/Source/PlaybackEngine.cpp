@@ -186,7 +186,7 @@ namespace sssketch
             }
         }
 
-        // The master stage's limiter is a Faust object: built here, on the message thread,
+        // The master stage's limiter and glue are Faust objects: built here, on the message thread,
         // before a snapshot that asks for it can reach the audio thread (a no-op once one is
         // built at the current rate).
         if (project.sound.mastering)
@@ -431,7 +431,7 @@ namespace sssketch
         }
         // For processMaster, which runs after this block's render(s): the settings travel
         // with the snapshot, so a staged swap's mastering starts with its project.
-        masterSettingsSeen = snap->project.sound.mastering;
+        masterSettingsSeen = MasterStage::settingsFor(snap->project.sound);
 
         // Pushed once per renderBlock call, covering every channel chain at
         // once -- both live playback (Transport.cpp's several
