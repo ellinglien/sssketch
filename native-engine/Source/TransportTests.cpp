@@ -1334,6 +1334,79 @@ namespace sssketch
                     file.deleteFile();
                 }
 
+                beginTest("a seek that arrives while the previous seek is holding or fading in fades out from the "
+                          "gain it has reached -- no jump (a scrub drag sends one every ~16 ms)");
+                {
+                    // A constant 0.8 throughout: any gain step shows as a sample step.
+                    auto dc = writeConstantToneWav("sssketch_transport_scrub_dc.wav", (int) (2.0 * kRate));
+                    EngineProject project;
+                    project.bpm = kBpm;
+                    project.snapDiv = 16.0;
+                    EngineRifff rifff;
+                    rifff.groupId = "dc";
+                    rifff.channelId = "c1";
+                    rifff.startBar = 0.0;
+                    rifff.barLength = 1;
+                    EngineStem stem;
+                    stem.stemKey = "dc:1";
+                    stem.resolvedPath = dc.getFullPathName();
+                    stem.durationSec = 2.0;
+                    stem.barLength = 1;
+                    rifff.stems.push_back(stem);
+                    project.rifffs.push_back(rifff);
+
+                    constexpr int kBlock = 64;
+                    const int fadeOutBlocks = ((int) std::ceil(0.012 * kRate) + kBlock - 1) / kBlock; // 9
+                    // `blocksIntoFadeIn` blocks after the first seek's jump, a second seek. With the
+                    // mastering on, the fade-in first holds 75 samples at silence: 1 block lands the
+                    // second seek in that hold (gain 0), 2 blocks 53 samples into the fade-in (~0.1).
+                    auto worstStep = [&](bool mastering, int blocksIntoFadeIn) {
+                        auto p = project;
+                        if (mastering)
+                            p.sound.mastering = SoundSettings::Mastering {};
+                        StemBufferCache cache;
+                        PlaybackEngine engine(cache);
+                        engine.prepareMaster(kRate);
+                        engine.setProject(p);
+                        PluginChain masterChain(kNumMasterChainSlots);
+                        ChannelChainRegistry channelChains;
+                        Transport transport(engine, masterChain, channelChains);
+                        transport.setBpm(kBpm);
+                        transport.play(0.05);
+                        const int total = 20 + fadeOutBlocks + blocksIntoFadeIn + 60;
+                        std::vector<float> l((size_t) (total * kBlock)), r((size_t) (total * kBlock));
+                        for (int b = 0; b < total; ++b)
+                        {
+                            if (b == 20)
+                                transport.setPosition(0.3);
+                            if (b == 20 + fadeOutBlocks + blocksIntoFadeIn)
+                                transport.setPosition(0.6);
+                            float* channels[2] = { l.data() + b * kBlock, r.data() + b * kBlock };
+                            transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                        }
+                        engine.drainRetiredProject();
+                        // from the first seek on (a play starts with a step of its own: the DC)
+                        float worst = 0.0f, peak = 0.0f;
+                        for (size_t i = (size_t) (20 * kBlock); i < l.size(); ++i)
+                        {
+                            worst = std::max(worst, std::abs(l[i] - l[i - 1]));
+                            peak = std::max(peak, std::abs(l[i]));
+                        }
+                        expect(peak > 0.3f, "not playing: peak " + juce::String(peak));
+                        return worst;
+                    };
+
+                    // A linear 12 ms fade of ~0.8 moves ~0.0015 a sample; a jump is ~0.5 or more.
+                    const float duringHold = worstStep(true, 1);
+                    expect(duringHold < 0.01f, "a seek during the hold jumps by " + juce::String(duringHold));
+                    const float duringFadeInMastered = worstStep(true, 2);
+                    expect(duringFadeInMastered < 0.01f,
+                           "a seek during the fade-in (mastering on) jumps by " + juce::String(duringFadeInMastered));
+                    const float duringFadeIn = worstStep(false, 2);
+                    expect(duringFadeIn < 0.01f, "a seek during the fade-in jumps by " + juce::String(duringFadeIn));
+                    dc.deleteFile();
+                }
+
                 hot.deleteFile();
                 hot2.deleteFile();
             }

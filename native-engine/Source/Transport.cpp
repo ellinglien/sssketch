@@ -753,6 +753,19 @@ namespace sssketch
                 repositioning = true;
                 repositionElapsedSec = 0.0;
             }
+            else if (repositionFadingIn)
+            {
+                // Fading back in at a target the drag has already left: fade out again from
+                // the gain the fade-in has reached, not from where the elapsed clock happens to
+                // stand. That clock counts from the fade-in's start, hold included, so reading
+                // it as fade-out time would jump the gain (from the hold's 0 to nearly 1, or
+                // from 0.1 to 0.9) -- a click on every scrub event that lands inside the
+                // ~13.6 ms hold + fade-in window, i.e. most of them. Gain g = clamp((e - hold)
+                // / F) fades out from e' = F - clamp(e - hold, 0, F), where 1 - e'/F = g; in the
+                // hold that is F, so the jump to the new target comes at once, under silence.
+                const double inSec = std::clamp(repositionElapsedSec - repositionHoldSec, 0.0, kRepositionFadeSec);
+                repositionElapsedSec = kRepositionFadeSec - inSec;
+            }
             repositionFadingIn = false;
             repositionHoldSec = 0.0;
         }
