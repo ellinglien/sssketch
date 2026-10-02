@@ -371,8 +371,17 @@ namespace sssketch
         // ProjectSnapshot::riserVoiceRefs), it only stops the id carrying its
         // state into a later project -- a riser that comes back after leaving
         // both starts from a fresh voice, as after a seek.
-        const auto live = std::atomic_load_explicit(&published, std::memory_order_acquire);
+        // `staged` BEFORE `published`, and the order matters. The audio thread can promote the
+        // staged snapshot (applyStagedProject: publish it, then clear `staged`) between the two
+        // loads. Published first would let it slip between them -- the old published loaded,
+        // then a null staged -- and a newly armed riser's id, in the promoted snapshot only,
+        // would be pruned: memory-safe (that snapshot holds the voice), but the next re-sync
+        // would build a fresh voice mid-riser (a bandpass reset and a pink warm-up), the very
+        // thing the riser's armId is there to prevent. Staged first: if it is a snapshot, its
+        // ids are covered whether or not it is promoted meanwhile; if it is null, nothing can be
+        // promoted behind our back, since only this (message) thread stages.
         const auto next = std::atomic_load_explicit(&staged, std::memory_order_acquire);
+        const auto live = std::atomic_load_explicit(&published, std::memory_order_acquire);
         const auto inUse = [&](const juce::String& id) {
             for (const auto* snap : { live.get(), next.get() })
                 if (snap != nullptr)

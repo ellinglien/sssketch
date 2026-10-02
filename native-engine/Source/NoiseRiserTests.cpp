@@ -947,6 +947,56 @@ namespace sssketch
                 expect(engine.pooledRiserVoice("radio-riser-g") == nullptr);
             }
 
+            beginTest("voices: a staged project replaced before its loop top gives up its voices; the replacement keeps its");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.prepareMaster(kTestRate);
+                auto withId = [](const char* id) {
+                    auto project = riserProject(0.0, ReverbRoom::zita);
+                    project.risers[0].id = id;
+                    return project;
+                };
+                engine.setProject(withId("radio-riser-p"));
+                engine.stageProject(withId("radio-riser-a"));
+                engine.stageProject(withId("radio-riser-b")); // replaces A, never promoted
+                expectEquals((int) engine.riserVoicePoolSize(), 3);
+                engine.drainRetiredProject();
+                expectEquals((int) engine.riserVoicePoolSize(), 2);
+                expect(engine.pooledRiserVoice("radio-riser-a") == nullptr);
+                expect(engine.pooledRiserVoice("radio-riser-b") != nullptr);
+                expect(engine.pooledRiserVoice("radio-riser-p") != nullptr);
+            }
+
+            beginTest("voices: prepared at the engine's rate, a voice rendered at another re-prepares itself, the same as one prepared there");
+            {
+                const auto project = riserProject(0.0, ReverbRoom::zita);
+                constexpr double rate = 48000.0;
+                const int total = (int) (rate * 3.0);
+                const auto run = [&](double toldRate, double& preparedAfter) {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry chains;
+                    engine.prepareMaster(toldRate);
+                    engine.setProject(project);
+                    StereoRender out { std::vector<float>((size_t) total, 0.0f), std::vector<float>((size_t) total, 0.0f) };
+                    for (int at = 0; at < total; at += 512)
+                    {
+                        const int n = juce::jmin(512, total - at);
+                        engine.renderBlock(((double) at / rate) / 1.0, rate, n, out.l.data() + at, out.r.data() + at, chains);
+                    }
+                    preparedAfter = engine.pooledRiserVoice("radio-riser-g")->preparedRate();
+                    return out;
+                };
+                double told44 = 0.0, told48 = 0.0;
+                const auto mismatched = run(44100.0, told44);
+                const auto matched = run(rate, told48);
+                expectEquals(told44, rate);
+                expectEquals(told48, rate);
+                expect(rmsOver(matched.l, 0, total) > 1.0e-3);
+                expect(sameBits(mismatched.l, matched.l) && sameBits(mismatched.r, matched.r));
+            }
+
             beginTest("voices: a long run of armings (a new riser id each) does not grow the pool");
             {
                 StemBufferCache cache;

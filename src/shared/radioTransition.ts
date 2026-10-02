@@ -283,6 +283,9 @@ export function buildDuckCurve(loopBars: number, bars: number): AutomationPoint[
   ]
 }
 
+/** buildTransitionRiser's warn-once flag (variety without an armId). */
+let warnedUnarmedRiser = false
+
 /** A noise sweep INTO the change: it ends exactly at the loop top it
  * announces, so it is placed at loopBars - lengthBars.
  *
@@ -298,8 +301,6 @@ export function buildDuckCurve(loopBars: number, bars: number): AutomationPoint[
  * see `armId`) so a re-sync of the same armed riser cannot produce two. `level` is well under the 0.6 a hand-dropped riser
  * gets (RISER_DEFAULTS): this one is announcing a layer change under a
  * full mix, not being the moment itself. */
-let warnedUnarmedRiser = false
-
 export function buildTransitionRiser(
   channelId: string,
   loopBars: number,
