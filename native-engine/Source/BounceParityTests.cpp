@@ -7,8 +7,11 @@
 // take ONE project with every per-stem and master feature in it -- a key, a bass, a pumped pad
 // sending to the room, a pumped lead with a planned throw, a riser, two channels -- and switch
 // the radio sound's stages on one at a time, then all together, as buildEngineProject sends them
-// (the JSON wire, parsed). For each: live, at 300-sample and random device blocks, equals the
-// export to the bit, and the stage changed the render.
+// (the JSON wire, parsed). For each: the stage changed the render, and live equals the export to
+// the bit -- at the export's own 512-sample device blocks in the project as it is (zita unless the
+// stage is the room), and at 512-sample, 300-sample and random device blocks with the cavern as
+// the room. Zita and a clip's drawn toolkit curves follow the device's blocks (pre-plan; the
+// "known limits" test), which is why the zita cases are held to 512 only.
 //
 // The CPU and cavern-callback measurements Task 14 asked for live here too, behind
 // SSSKETCH_BENCH=1 (logged, never asserted: they depend on the machine and the build type).
@@ -414,10 +417,14 @@ namespace sssketch
                 const auto curved = parse(wire(files, {}, curve));
                 const auto curvedExport = exportOf(curved);
                 checkLiveEqualsExport(curved, curvedExport, "a drawn volume curve", 2, false);
+                const double zitaGap = maxAbsDiff(liveOf(allOff, [] { return 300; }), offExport);
+                const double curveGap = maxAbsDiff(liveOf(curved, [] { return 300; }), curvedExport);
                 logMessage("zita at 300-sample device blocks: max abs difference from the export "
-                           + juce::String(maxAbsDiff(liveOf(allOff, [] { return 300; }), offExport), 8)
-                           + "; a drawn volume curve: "
-                           + juce::String(maxAbsDiff(liveOf(curved, [] { return 300; }), curvedExport), 8));
+                           + juce::String(zitaGap, 8) + "; a drawn volume curve: " + juce::String(curveGap, 8));
+                // Loose bounds (measured 3.7e-7 and 2.0e-4 for this gentle ramp; the curve's gap grows
+                // with its slope x the block size), so a regression past "a hair" is caught.
+                expectLessThan(zitaGap, 1.0e-3);
+                expectLessThan(curveGap, 1.0e-3);
             }
 
             if (juce::SystemStats::getEnvironmentVariable("SSSKETCH_BENCH", {}) == "1")
