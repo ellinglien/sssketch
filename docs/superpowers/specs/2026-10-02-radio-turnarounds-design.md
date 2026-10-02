@@ -169,6 +169,43 @@ whose shortest length does not fit is left out of the draw.
 - **Menu (sssketch, `DiscoverRadioMenu`):** the `drop-outs` row is renamed `turnarounds`, with the
   same three chips. The tooltip is `end of phrase`.
 
+## 4a. Controls (Elling, 2026-10-02, added with the plan)
+
+Two lean controls beside the rate, and no other knobs. They are built in their own tasks after
+the core, so the core can ship without them.
+
+- **`moves`**: a multi-select of four families. All are on by default.
+  - The families:
+    - drops: drum drop, low drop, stop;
+    - wash;
+    - filters: lift, dip;
+    - riser.
+  - The draw skips a family that is off, and so does diminution.
+  - With none enabled, turnarounds behave as `off`.
+  - `RadioSettings.turnaroundMoves` is normalised: an unknown entry is dropped, and anything
+    that is not a list reads as all four.
+- **`depth: subtle / bold`**, `bold` by default on both radios. Bold is §2's own numbers.
+
+| depth | lift top | dip floor | wash peak | longest move |
+|---|---|---|---|---|
+| bold | 0.6 | 0.35 | 0.85 | min(half the loop, 4 bars) |
+| subtle | 0.35 | 0.6 | 0.6 | min(half the loop, 1 bar) |
+
+  - The setting is `RadioSettings.turnaroundDepth`.
+  - The planner takes both as optional inputs, `moves` and `depth`. Without them it behaves as
+    all four families at `bold`.
+- **Where they appear:**
+  - **sssketch `DiscoverRadioMenu`:**
+    - `moves` and `depth` chip rows sit under `turnarounds`, shown while it is not `off`;
+    - tooltips are `which moves` and `how far`.
+  - **ell.ing/radio full mode:**
+    - four family toggles and a depth toggle sit beside the listener's effects (saturation,
+      pump, echo);
+    - they are remembered per visitor in `localStorage['radio.turnarounds']`;
+    - simple mode gets nothing new;
+    - the web radio has no rate control (`often`).
+  - **The phone remote** shows no radio settings, so it gets nothing.
+
 ## 5. Architecture
 
 ### Shared: `sssketch/src/shared/radioTurnaround.ts` (pure, tested in sssketch)
