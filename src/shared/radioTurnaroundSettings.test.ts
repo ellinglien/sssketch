@@ -39,3 +39,25 @@ describe('RadioSettings.turnarounds', () => {
     })
   })
 })
+
+describe('RadioSettings.turnaroundMoves and turnaroundDepth', () => {
+  it('default to every family, bold', () => {
+    expect(DEFAULT_RADIO_SETTINGS.turnaroundMoves).toEqual(['drops', 'wash', 'filters', 'riser'])
+    expect(DEFAULT_RADIO_SETTINGS.turnaroundDepth).toBe('bold')
+  })
+
+  it('normalise: unknown families dropped, empty kept (off), junk depth bold', () => {
+    expect(normalizeRadioSettings({ turnaroundMoves: ['riser', 'loud'] }).turnaroundMoves).toEqual([
+      'riser'
+    ])
+    expect(normalizeRadioSettings({ turnaroundMoves: [] }).turnaroundMoves).toEqual([])
+    expect(normalizeRadioSettings({}).turnaroundMoves).toEqual([
+      'drops',
+      'wash',
+      'filters',
+      'riser'
+    ])
+    expect(normalizeRadioSettings({ turnaroundDepth: 'subtle' }).turnaroundDepth).toBe('subtle')
+    expect(normalizeRadioSettings({ turnaroundDepth: 'deep' }).turnaroundDepth).toBe('bold')
+  })
+})

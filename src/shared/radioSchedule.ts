@@ -14,9 +14,15 @@ import { radioSlotFlagWeightFactor, type RadioSlotFlags } from './radioSlotFlags
 import type { RadioDropOuts } from './radioDropOut'
 import {
   DEFAULT_RADIO_TURNAROUNDS,
+  DEFAULT_TURNAROUND_DEPTH,
+  TURNAROUND_FAMILIES,
   normalizeRadioTurnarounds,
+  normalizeTurnaroundDepth,
+  normalizeTurnaroundMoves,
   turnaroundPhraseLaps,
-  type RadioTurnarounds
+  type RadioTurnarounds,
+  type TurnaroundDepth,
+  type TurnaroundFamily
 } from './radioTurnaround'
 import {
   DEFAULT_RADIO_TRANSITIONS,
@@ -1046,6 +1052,11 @@ export interface RadioSettings {
    * the shipped DiscoverRadioMenu and DiscoverPanel still read and write it -- the radio
    * turnarounds plan's Task 14 moves them over, and its Task 16 deletes this field. */
   dropOuts: RadioDropOuts
+  /** Which move families a turnaround may draw (radioTurnaround's TURNAROUND_FAMILIES). None
+   * enabled behaves as `turnarounds: off`. */
+  turnaroundMoves: readonly TurnaroundFamily[]
+  /** How far the moves go: `bold` (the spec's numbers) or `subtle`. */
+  turnaroundDepth: TurnaroundDepth
   turnover: RadioTurnover
   /** Optional only because the web radio builds its own RadioSettings and
    * has its own arc; normalizeRadioSettings always sets it, and absent
@@ -1066,6 +1077,8 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   transitions: DEFAULT_RADIO_TRANSITIONS,
   turnarounds: DEFAULT_RADIO_TURNAROUNDS,
   dropOuts: DEFAULT_RADIO_TURNAROUNDS,
+  turnaroundMoves: [...TURNAROUND_FAMILIES],
+  turnaroundDepth: DEFAULT_TURNAROUND_DEPTH,
   turnover: DEFAULT_RADIO_TURNOVER,
   density: DEFAULT_RADIO_DENSITY
 }
@@ -1110,6 +1123,8 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
     transitions: normalizeRadioTransitions(raw.transitions),
     turnarounds,
     dropOuts: turnarounds,
+    turnaroundMoves: normalizeTurnaroundMoves(raw.turnaroundMoves),
+    turnaroundDepth: normalizeTurnaroundDepth(raw.turnaroundDepth),
     turnover: normalizeRadioTurnover(raw.turnover),
     density: normalizeRadioDensity(raw.density)
   }

@@ -89,6 +89,8 @@ describe('discoverSettingsStore', () => {
         transitions: 'bold',
         turnarounds: 'often',
         dropOuts: 'often',
+        turnaroundMoves: ['wash', 'riser'],
+        turnaroundDepth: 'subtle',
         turnover: 'random',
         density: 'off'
       }
@@ -102,6 +104,8 @@ describe('discoverSettingsStore', () => {
       transitions: 'bold',
       turnarounds: 'often',
       dropOuts: 'often',
+      turnaroundMoves: ['wash', 'riser'],
+      turnaroundDepth: 'subtle',
       turnover: 'random',
       density: 'off'
     })
