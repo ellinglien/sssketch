@@ -156,6 +156,21 @@ export function rescanLoopFolder(
   return scan
 }
 
+interface LoopFileWrite {
+  path: string
+  loopId: string
+  rootPath: string
+  groupPath: string
+  name: string
+  size: number
+  mtimeMs: number
+  durationSec: number | null
+  bpm: number | null
+  bars: number | null
+  source: LoopTempoSource | null
+  irregular: number
+}
+
 interface StatedFile {
   file: FoundLoopFile
   size: number
@@ -223,13 +238,17 @@ async function doRescan(
     members.push(s)
     byGroup.set(key, members)
   }
-  const rows: Record<string, string | number | null>[] = []
+  const rows: LoopFileWrite[] = []
+  // What each row's guess was worked from, kept so the transaction can
+  // redo it if a length was reported while this scan was awaiting.
+  const contexts = new Map<string, { folderName: string; siblingNames: string[] }>()
   for (const [groupKey, members] of byGroup) {
     const siblingNames = members.map((m) => m.file.name)
     const folderName = loopFolderName(members[0].file.groupPath, rootPath)
     for (const { file, size, mtimeMs } of members) {
       const durationSec = durations.get(file.path) ?? null
       const tempo = tempoForLoop(file.name, folderName, siblingNames, durationSec, projectBpm)
+      contexts.set(file.path, { folderName, siblingNames })
       rows.push({
         path: file.path,
         loopId: loopIdForPath(file.path),
@@ -248,8 +267,13 @@ async function doRescan(
     }
   }
 
-  const seen = new Set(rows.map((row) => row.path as string))
-  const gone = knownRows.filter((row) => !seen.has(row.Path))
+  // The drive can go between the walk and here: every stat after it then
+  // fails, and the folder would look empty. Checked once more, after the
+  // last await, so the write below never sees a pulled drive as deletions.
+  const stillThere = await stat(rootPath).catch(() => null)
+  if (!stillThere || !stillThere.isDirectory()) return markUnavailable()
+
+  const seen = new Set(rows.map((row) => row.path))
   const upsert = db.prepare(
     `INSERT INTO LoopFiles (Path, LoopId, RootPath, GroupPath, Name, SizeBytes, MtimeMs,
        DurationSec, Bpm, Bars, TempoSource, Irregular, Present)
@@ -261,6 +285,7 @@ async function doRescan(
        DurationSec = excluded.DurationSec, Bpm = excluded.Bpm, Bars = excluded.Bars,
        TempoSource = excluded.TempoSource, Irregular = excluded.Irregular, Present = 1`
   )
+  const currentRows = db.prepare(`SELECT * FROM LoopFiles WHERE RootPath = ?`)
   const deleteRow = db.prepare(`DELETE FROM LoopFiles WHERE Path = ?`)
   const hideRow = db.prepare(`UPDATE LoopFiles SET Present = 0 WHERE Path = ?`)
   const isLinked = db.prepare(`SELECT 1 FROM LoopFolders WHERE RootPath = ?`)
@@ -269,23 +294,42 @@ async function doRescan(
   )
   const scannedAt = deps.now()
 
-  // One transaction for every write. Re-checks the link inside it: an
-  // unlink that landed during the awaits above wins, and nothing is
-  // written back for a folder that is no longer linked.
+  // One transaction for every write. Everything in it reads the rows as
+  // they are NOW, not the snapshot taken before the awaits:
+  // - an unlink that landed meanwhile wins, and nothing is written back;
+  // - a length recordLoopDuration stored meanwhile, for a file this scan
+  //   found unchanged, is kept (and the guess redone with it);
+  // - a removed file is hidden rather than deleted if it holds a
+  //   correction, including one set meanwhile.
+  let removed = 0
   db.transaction(() => {
     if (!isLinked.get(rootPath)) return
-    for (const row of rows) upsert.run(row)
-    for (const row of gone) (row.OverrideBpm === null ? deleteRow : hideRow).run(row.Path)
+    const current = new Map(
+      (currentRows.all(rootPath) as LoopFileRow[]).map((row) => [row.Path, row])
+    )
+    for (const row of rows) {
+      const now = current.get(row.path)
+      const unchanged = now && now.SizeBytes === row.size && now.MtimeMs === row.mtimeMs
+      if (unchanged && row.durationSec === null && now.DurationSec !== null) {
+        const { folderName, siblingNames } = contexts.get(row.path)!
+        const tempo = tempoForLoop(row.name, folderName, siblingNames, now.DurationSec, projectBpm)
+        row.durationSec = now.DurationSec
+        row.bpm = tempo.bpm
+        row.bars = tempo.bars
+        row.source = tempo.source
+        row.irregular = tempo.irregular ? 1 : 0
+      }
+      upsert.run(row)
+    }
+    for (const row of current.values()) {
+      if (seen.has(row.Path)) continue
+      if (row.Present === 1) removed += 1
+      ;(row.OverrideBpm === null ? deleteRow : hideRow).run(row.Path)
+    }
     markScanned.run(scannedAt, rootPath)
   })()
 
-  return {
-    rootPath,
-    available: true,
-    total: rows.length,
-    measured,
-    removed: gone.filter((row) => row.Present === 1).length
-  }
+  return { rootPath, available: true, total: rows.length, measured, removed }
 }
 
 /** Every linked folder, one after another. */

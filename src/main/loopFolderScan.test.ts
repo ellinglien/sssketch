@@ -208,6 +208,44 @@ describe('rescanLoopFolder', () => {
     expect(folder.loops).toHaveLength(6)
   })
 
+  it('writes nothing when the drive goes away partway through a scan', async () => {
+    await rescanLoopFolder(db, root, 120)
+    const before = loopsByName()
+    const away = `${root} (unplugged)`
+    writeWav(cwPath, secs(1, 175)) // changed, so its header is read again
+    const pulled = await rescanLoopFolder(db, root, 120, {
+      ...DEFAULT_LOOP_SCAN_DEPS,
+      measureDurationSec: (path) => {
+        renameSync(root, away) // pulled after the walk and stats, before the write
+        return measureWavDurationSec(path)
+      }
+    })
+    renameSync(away, root)
+    expect(pulled.available).toBe(false)
+    const [folder] = listLoopFolders(db)
+    expect(folder.available).toBe(false)
+    expect(loopsByName()).toEqual(before)
+  })
+
+  it('keeps a length reported while a scan was running', async () => {
+    writeJunk(join(root, 'Pads', 'Pad 120.flac'))
+    await rescanLoopFolder(db, root, 120)
+    const padId = loopsByName().get('Pad 120')!.loopId
+    let clock = 0
+    let reported = false
+    await rescanLoopFolder(db, root, 120, {
+      ...DEFAULT_LOOP_SCAN_DEPS,
+      now: () => (clock += 10),
+      yieldToEventLoop: async () => {
+        if (reported) return
+        reported = true
+        recordLoopDuration(db, padId, 8, 120)
+      }
+    })
+    expect(reported).toBe(true)
+    expect(loopsByName().get('Pad 120')).toMatchObject({ durationSec: 8, bpm: 120, bars: 4 })
+  })
+
   it('yields on an elapsed-time budget, not a file count', async () => {
     const hits = join(dir, 'Hits')
     for (let i = 0; i < 20; i++) writeWav(join(hits, `hit ${String(i).padStart(2, '0')}.wav`), 0.05)
