@@ -16,6 +16,8 @@ that followed:
 - subtractive arrangement: sections made by revealing and hiding loops that are already playing;
 - the DJ rule that big moves land on phrase boundaries.
 
+The theory behind it is §0. It changed several numbers below.
+
 This spec is the phrase turnaround. The full **breakdown → build → drop** section (controls spec
 §4.7) is the natural follow-up, and gets its own design.
 
@@ -24,9 +26,64 @@ This spec is the phrase turnaround. The full **breakdown → build → drop** se
 - Turnarounds **absorb drop-outs**. The `drop-outs` row becomes `turnarounds: off / rare / often`,
   and today's drum drop-out is one move among several.
 - They happen **only at phrase ends**, not once per interval.
-- The palette is: **drops** (drums, bass, stop), **reverb wash**, **filter moves** (high-pass lift,
+- The palette is: **drops** (drums, low end, stop), **reverb wash**, **filter moves** (high-pass lift,
   low-pass dip) and the **riser**.
 - Approach: one pure planner, shared by both radios. Each radio writes its own playback.
+- The research in §0 is folded in: turnarounds are at most 4 bars long, a stop keeps a melodic row,
+  bass and kick go first, thinning foreshadows what really leaves, the stop is rarer, and a shorter
+  repeat may follow a turnaround.
+
+## 0. The theory, and what it decides
+
+Sources, read in full on 2026-10-02:
+- **Solberg 2014**, "Waiting for the Bass to Drop", *Dancecult* 6(1);
+- **Solberg & Dibben 2019**, *Music Perception* 36(4). It is peer-reviewed, and measured skin
+  conductance;
+- **Iler 2011**, "Formal Devices of Trance and House Music", MM thesis, UNT. It carries Butler's
+  *Unlocking the Groove* model;
+- **Garcia 2005**, *Music Theory Online* 11(4);
+- **Glancey 2020**, an undergraduate study, treated as directional only.
+
+[SB] means a source says it; [INF] means it is our inference.
+
+- **Uncertain when, certain that.** Listeners know a change is coming. The pleasure is in not
+  knowing precisely when or how (Huron's model, as applied by Solberg p.67; Garcia [6.2]). [SB]
+  - *So:* the turnaround's timing is rolled, but the move always lands exactly on the one.
+- **Hypermeter.** Layers enter and leave "after 2, 4, 8, 16 or 32 bars" (Solberg p.66). Music groups
+  in 4-bar hypermeasures (Iler pp.7–8). "Variation almost always occur[s] just before a… hypermetrical
+  downbeat" (Butler 2006:189, via Iler p.38). [SB]
+  - *So:* moves sit at the end of the phrase's last hypermeasure. They last at most 4 bars and
+    default to the last bar.
+- **Tension is additive, release is return.** "The return to a basic groove" is the release (Iler
+  p.ix). Removing something gives contrast, and the reward is everything coming back at once. [SB]
+  - *So:* every move ends with every row at full level on the one.
+- **Bass and kick are the lever.** A breakdown removes "most importantly the bass and the bass drum"
+  (Solberg p.67), and the drop is their return. A layer left playing shrinks the release (Iler p.9,
+  pp.88–89). Cutting the kick for about 4 bars and bringing it back is "one of the most powerful
+  things a DJ can do" (Butler, via Iler p.1). [SB]
+  - *So:* a **low drop** (drums and bass together) is in the palette, and when a move removes rows,
+    those go first.
+- **Contract the spectrum, then expand it.** Energy moves into the highs before the return (Solberg
+  pp.70–71). Opening a low-pass filter fully is another proven announcement (Solberg & Dibben
+  p.380). [SB]
+  - *So:* the lift and the dip.
+- **The rest measure.** Just before the arrival, percussion stops while one hook line continues. This
+  suspends the tension and makes the release stronger. It lasts from 1 beat to 2 bars, about the
+  length of the line that keeps going (Iler p.27, pp.35–36). [SB]
+  - *So:* the stop keeps a melodic row, never drums.
+- **Diminution escalates.** The same move repeated shorter each time (4 bars, then 2, then 1)
+  builds, as in Iler's false arrivals (pp.94–95). [SB]
+  - *So:* a turnaround may follow a turnaround only as a shorter repeat of the same move.
+- **Big moves are rare.** A track has about two break routines, and the second is the stronger
+  (Solberg p.66; Solberg & Dibben p.373). [SB]
+  - *So:* the stop, the biggest move here, is drawn less often. [INF] The full section belongs to
+    the next spec.
+- **A return reads as growth.** Removing rows that come back at the top is a mini-drop: tension and
+  release, not thinning. [INF, consistent with Iler p.4 n.15, p.9 n.19]
+  - *So:* while the arc thins, moves foreshadow what actually leaves, or soften the whole mix
+    (wash, dip). They do not drop rows that will return.
+- No source gives a frequency for phrase-end moves. The 1-in-3 and 2-in-3 rates are a guess to tune
+  by ear. [INF]
 
 ## 1. When
 
@@ -34,49 +91,59 @@ This spec is the phrase turnaround. The full **breakdown → build → drop** se
   - When `phraseBars` is 16 or 32, the phrase is that long; when it is 0, the phrase is 16 bars.
   - `turnaroundPhraseLaps(phraseBars, loopBars) = max(1, ceil(phrase / loopBars))`. So a loop of 16
     bars or more makes every wrap a phrase end, and a phrase is never shorter than its bar count.
+    A 32-bar loop therefore has a 32-bar phrase, not two 16-bar halves.
 - **Counting.**
   - The turnaround clock counts laps since the last phrase end. It runs whatever `phraseBars` is:
     today `lapsSincePhrase` is reset when `phraseBars` is 0, and the turnaround count must not be.
   - The first possible turnaround is at the end of the first whole phrase after radio starts.
 - **Roll.** At the start of the lap that ends a phrase, roll once:
   - `rare` fires 1 time in 3 and `often` 2 times in 3, from the injected random source;
-  - **never at two phrase ends in a row**;
+  - **never at two phrase ends in a row**, with one exception, **diminution**: after a drum drop,
+    low drop or lift, the next phrase end may repeat the same move at half its length. Two halvings
+    at most, rolled at the same rate, and never below 1 beat (§0);
   - `off` never fires.
 - **Anchor.** Every move **ends on the one** of the wrap that closes the phrase. It is counted
   backwards from that wrap, as the controls spec's rule (0A.4) requires.
 
 ## 2. The moves
 
-Every duration is clamped to **half the loop**, the existing rule for radio curves. A move whose
-shortest length does not fit is left out of the draw.
+Every duration is clamped to **min(half the loop, 4 bars)**: one hypermeasure at most (§0). A move
+whose shortest length does not fit is left out of the draw.
 
 | move | rows | shape over its length | length |
 |---|---|---|---|
 | **drum drop** | one drums row | volume 0, back to 1 on the one (today's `buildDropOutCurve`) | 1, 2 or 4 beats (`pickDropOutBeats`) |
-| **bass drop** | one bass row | the same curve | 2 or 4 beats |
-| **stop** | every audible row but one | the same curve | 1 or 2 beats |
-| **reverb wash** | every non-drums row | send rises from the row's own send to 0.85, back to its own on the one | 1 bar |
+| **low drop** | every drums row and every bass row | the same curve | 2 beats, 1 bar or 2 bars |
+| **stop** | every audible row but one | the same curve | 1 beat, 2 beats or 1 bar (weighted 2 : 2 : 1), never longer than the kept row's own loop |
+| **reverb wash** | a row leaving at that wrap if the arc removes one; else every non-drums row | send rises from the row's own send to 0.85, back to its own on the one | 1 bar |
 | **high-pass lift** | every row but drums | high-pass cutoff rises 0 → 0.6, back to 0 (open) on the one | 1 or 2 bars |
 | **low-pass dip** | every row but drums | low-pass cutoff falls 1 → 0.35, back to 1 on the one | 1 bar |
 | **riser** | none (its own voice) | the existing riser, with its drawn character | 1, 2 or 4 bars |
 
-- **Which row stays playing in a stop:** the hook row if there is one, else a lead row, else any row
-  that is not bass, else any row.
+- **Which row stays playing in a stop:** it is a melodic row, never drums or bass (§0, the rest
+  measure). In order:
+  - the hook row, if it is neither drums nor bass;
+  - else a lead row;
+  - else any row that is neither drums nor bass.
+  With no such row, the stop is out of the draw.
 - **Guards.** A move is only in the draw when it can sound and leaves music playing:
-  - drum drop needs a drums row; bass drop needs a bass row;
+  - drum drop needs a drums row; low drop needs a drums or a bass row;
   - drops and stop need at least 2 audible rows;
   - wash needs a non-drums row;
   - filter moves need at least one row that isn't mid filter-in;
   - no move may silence every row.
 - **Choosing a move.** It is weighted by where the density arc is heading (`radioDensity`):
 
-| arc | drum drop | bass drop | stop | wash | lift | dip | riser |
+| arc | drum drop | low drop | stop | wash | lift | dip | riser |
 |---|---|---|---|---|---|---|---|
-| growing | 1 | 0 | 2 | 0 | 3 | 0 | 3 |
-| thinning | 2 | 2 | 0 | 3 | 0 | 3 | 0 |
-| steady or off | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
+| growing | 2 | 3 | 1 | 0 | 3 | 0 | 3 |
+| thinning | 0 | 0 | 0 | 3 | 0 | 3 | 0 |
+| steady or off | 2 | 2 | 1 | 1 | 2 | 1 | 1 |
 
-  "Steady" means the arc is at a peak or trough hold, or density is off.
+  - "Steady" means the arc is at a peak or trough hold, or density is off.
+  - **Thinning drops nothing.** Rows that come back on the one read as growth (§0). So a thinning arc
+    washes the row that is leaving, or dips the whole mix.
+  - The stop is the rarest move everywhere (§0).
 
 ## 3. Living with layer changes and other gestures
 
@@ -108,9 +175,12 @@ shortest length does not fit is left out of the draw.
 
 - `turnaroundPhraseLaps(phraseBars, loopBars): number`
 - `rollTurnaround(input): TurnaroundPlan | null`. The input is:
-  - `rate`, `random`, `firedLastPhrase`, `loopBars`;
-  - `rows`: id, kinds, `hooked`, `audible`, `inFilterIn`;
-  - `arc: 'growing' | 'thinning' | 'steady'`.
+  - `rate`, `random`, `loopBars`;
+  - `lastPhrase`: the move and length that fired at the previous phrase end, or null. It drives
+    "never two in a row" and diminution;
+  - `rows`: id, kinds, `hooked`, `audible`, `inFilterIn`, `barLength`;
+  - `arc: 'growing' | 'thinning' | 'steady'`;
+  - `leavingRowId`: the row the arc removes at this wrap, if any.
 - `TurnaroundPlan = { move, beats, rows: TurnaroundRowCurves[], riserBars?: number }`
   - `TurnaroundRowCurves = { rowId, volume?, filter?: { mode, cutoff }, reverbSend? }`
   - Curves are points in **beats before the wrap** (0 = the one), so each runtime maps them onto
@@ -158,12 +228,17 @@ shortest length does not fit is left out of the draw.
 
 - **Shared (vitest, sssketch):**
   - `turnaroundPhraseLaps` across loop lengths, including fractional and ≥ 16 bars;
-  - rate frequencies with a seeded random, and never two phrase ends in a row;
-  - every guard, including that a move never silences everything and that the stop keeps the
-    right row;
+  - rate frequencies with a seeded random;
+  - never two phrase ends in a row, except diminution: the same move, half the length, at most two
+    halvings, never under 1 beat;
+  - every guard, including that a move never silences everything, that the stop keeps a melodic row
+    (never drums or bass) and is out of the draw without one, and that a thinning arc never drops a
+    row;
+  - the low drop removes every drums and bass row together;
+  - the wash targets the leaving row when there is one;
   - direction weights;
-  - every curve's last point is on the one at full value, and its length is clamped to half the
-    loop;
+  - every curve's last point is on the one at full value, and its length is clamped to min(half the
+    loop, 4 bars);
   - `combineRadioCurves`;
   - settings migration from `dropOuts`;
   - the clock's turnaround count with `phraseBars` 0, 16 and 32.
