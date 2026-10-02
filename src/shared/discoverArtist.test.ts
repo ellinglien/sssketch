@@ -49,8 +49,12 @@ describe('listenOnlyActions', () => {
   it('disables nothing in own mode', () => {
     expect([...listenOnlyActions('own')]).toEqual([])
   })
-  it('disables the whole spec list in other mode', () => {
-    expect([...listenOnlyActions('other')].sort()).toEqual(
+  // Elling, 2026-10-02: restrictions lifted, to come back if needed.
+  it('disables nothing in other mode either', () => {
+    expect([...listenOnlyActions('other')]).toEqual([])
+  })
+  it('keeps the full catalogue a restriction can name', () => {
+    expect([...LISTEN_ONLY_ACTIONS].sort()).toEqual(
       [
         'addToShelf',
         'addToTimeline',
@@ -62,7 +66,6 @@ describe('listenOnlyActions', () => {
         'star'
       ].sort()
     )
-    expect(LISTEN_ONLY_ACTIONS).toHaveLength(8)
   })
 })
 
@@ -420,18 +423,12 @@ describe('turnover after a switch, with a stale pick in flight', () => {
   })
 })
 
-// Elling, 2026-10-01 (final review): while another artist's stems linger in
-// `me`, everything that would take them into your work is off -- not just keep.
+// Elling, 2026-10-01 blocked keep, star, shelf and timeline while another
+// artist's stems lingered in `me`; lifted 2026-10-02.
 describe('blockedActions', () => {
-  it('in artist mode, the whole listen-only list', () => {
-    expect([...blockedActions('other', [])].sort()).toEqual([...LISTEN_ONLY_ACTIONS].sort())
-  })
-  it('in me with lingering stems: keep, star, shelf and timeline', () => {
-    expect([...blockedActions('own', ['tpj'])].sort()).toEqual(
-      ['addToShelf', 'addToTimeline', 'keep', 'star'].sort()
-    )
-  })
-  it('in me with nothing lingering: nothing', () => {
+  it('blocks nothing, in artist mode or with stems lingering', () => {
+    expect(blockedActions('other', []).size).toBe(0)
+    expect(blockedActions('own', ['tpj']).size).toBe(0)
     expect(blockedActions('own', []).size).toBe(0)
   })
   it('says how to clear a row radio will not turn over', () => {

@@ -42,11 +42,17 @@ export const LISTEN_ONLY_ACTIONS: readonly ListenOnlyAction[] = Object.freeze([
 ])
 
 const NONE: ReadonlySet<ListenOnlyAction> = new Set()
-const ALL: ReadonlySet<ListenOnlyAction> = new Set(LISTEN_ONLY_ACTIONS)
+
+/** What artist mode blocks. Empty since 2026-10-02 (Elling): any artist's
+ * stems can be kept, starred, shelved, put on the timeline and exported,
+ * with restrictions added back if they turn out to be needed. Everything
+ * still consults this list, so one comes back by naming it here (the full
+ * catalogue is LISTEN_ONLY_ACTIONS). */
+const OTHER_ARTIST_BLOCKS: ReadonlySet<ListenOnlyAction> = new Set<ListenOnlyAction>([])
 
 /** The one list the UI dims and main refuses. */
 export function listenOnlyActions(mode: ArtistMode): ReadonlySet<ListenOnlyAction> {
-  return mode === 'other' ? ALL : NONE
+  return mode === 'other' ? OTHER_ARTIST_BLOCKS : NONE
 }
 
 export function artistNotice(user: string): string {
@@ -341,14 +347,10 @@ export function lingeringNotice(artists: readonly string[], stuck = false): stri
   return stuck ? `${line} · reroll or unlock the row to keep` : line
 }
 
-/** What lingering stems block in `me` (Elling, 2026-10-01): everything that
- * would take them into your own work. Fetch hearts is not about the rows. */
-const LINGERING_BLOCKS: ReadonlySet<ListenOnlyAction> = new Set<ListenOnlyAction>([
-  'keep',
-  'star',
-  'addToShelf',
-  'addToTimeline'
-])
+/** What lingering stems block in `me`. It was keep, star, shelf and
+ * timeline (Elling, 2026-10-01); empty since 2026-10-02 along with
+ * OTHER_ARTIST_BLOCKS. */
+const LINGERING_BLOCKS: ReadonlySet<ListenOnlyAction> = new Set<ListenOnlyAction>([])
 
 /** The one set the buttons dim by and the functions refuse on: the whole
  * listen-only list in artist mode; in `me`, LINGERING_BLOCKS while any row

@@ -7,6 +7,7 @@
 // unit-tested in CI.
 import {
   artistMode,
+  blockedActions,
   listenOnlyActions,
   type ArtistMode,
   type ListenOnlyAction
@@ -68,7 +69,7 @@ export function refusesListenOnly(action: ListenOnlyAction): boolean {
 export function refusesKeep(lingeringFromCall?: unknown): boolean {
   if (refusesListenOnly('keep')) return true
   const still = [...artistList(lingeringFromCall), ...lingering]
-  if (still.length === 0) return false
+  if (!blockedActions(currentArtistMode(), still).has('keep')) return false
   console.warn(`discover: refused keep -- ${still.join(', ')}'s stems still playing`)
   return true
 }
@@ -78,7 +79,7 @@ export function refusesKeep(lingeringFromCall?: unknown): boolean {
  * carries one stem id and no rows, so the session is what it reads. */
 export function refusesStar(): boolean {
   if (refusesListenOnly('star')) return true
-  if (lingering.length === 0) return false
+  if (!blockedActions(currentArtistMode(), lingering).has('star')) return false
   console.warn(`discover: refused star -- ${lingering.join(', ')}'s stems still playing`)
   return true
 }
@@ -86,7 +87,7 @@ export function refusesStar(): boolean {
 /** Whether the phone's keep is off: the same rule, from the session alone
  * (the phone's request carries no rows). No warning -- polled. */
 export function keepBlockedForPhone(): boolean {
-  return currentArtistMode() === 'other' || lingering.length > 0
+  return blockedActions(currentArtistMode(), lingering).has('keep')
 }
 
 export function resetDiscoverArtistSession(): void {

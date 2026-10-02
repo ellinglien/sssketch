@@ -58,6 +58,12 @@
 
 ## 2. Listen-only mode
 
+> **Lifted 2026-10-02 (Elling):** keep, star, shelf, timeline, export and fetch hearts are all
+> allowed for any artist's stems, and so is everything a lingering artist's stems used to block in
+> `me`. Restrictions can come back if needed. The machinery is still wired: name an action in
+> `OTHER_ARTIST_BLOCKS` or `LINGERING_BLOCKS` in `src/shared/discoverArtist.ts`. The notice under
+> the artist field ("ask them first") stays.
+
 - **When:** it applies when `artist !== ownUsername`. With no own username set, every artist counts
   as other.
 - **Off for other artists:**

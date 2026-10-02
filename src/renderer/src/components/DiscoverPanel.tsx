@@ -6714,12 +6714,10 @@ export function DiscoverPanel({
   async function keepGroup(): Promise<RemoteKeepOutcome> {
     // Inlined rather than refusesNow('keep'): through refusesNow, this line
     // makes the React Compiler reject the whole component (18 lint errors,
-    // bisected in review). Same rule -- keep is listen-only exactly when
-    // the mode is `other`.
-    if (artistMode(artistRef.current, currentUsername) === 'other') return 'refused'
-    // In `me`, while any row still plays a stem picked under artist mode.
-    const still = lingeringArtists(slotsRef.current)
-    if (still.length > 0) return 'refused'
+    // bisected in review). Same rule, through blockedActions.
+    const nowMode = artistMode(artistRef.current, currentUsername)
+    const still = nowMode === 'own' ? lingeringArtists(slotsRef.current) : []
+    if (blockedActions(nowMode, still).has('keep')) return 'refused'
     setKeeping(true)
     try {
       const assembly = await resolveDiscoverRifff()
@@ -6796,8 +6794,10 @@ export function DiscoverPanel({
 
   // A lingering row radio will never turn over (locked, or muted out of the
   // mix): the line then says what clears it.
+  // Only while lingering stems block anything (blockedActions).
+  const lingeringBlocks = lingering.length > 0 && listenOnly.size > 0
   const lingeringStuck =
-    lingering.length > 0 &&
+    lingeringBlocks &&
     slots.some(
       (s) =>
         s.candidate?.pickedUnderArtist !== undefined && (s.locked || !previewingSlotIds.has(s.id))
@@ -6805,7 +6805,7 @@ export function DiscoverPanel({
   const listenOnlyTip =
     mode === 'other' && artist !== null
       ? listenOnlyTooltip(artist)
-      : lingering.length > 0
+      : lingeringBlocks
         ? lingeringNotice(lingering, lingeringStuck)
         : undefined
 
@@ -7340,7 +7340,7 @@ export function DiscoverPanel({
         </button>
         <button
           onClick={() => void keepGroup()}
-          disabled={keeping || listenOnly.has('keep') || lingering.length > 0}
+          disabled={keeping || listenOnly.has('keep')}
           data-tooltip={listenOnly.has('keep') ? listenOnlyTip : 'keep this group'}
           style={{
             fontFamily: 'inherit',
@@ -7348,12 +7348,8 @@ export function DiscoverPanel({
             padding: '6px 14px',
             background: 'transparent',
             border: '1px solid var(--ra-border-strong)',
-            color:
-              keeping || listenOnly.has('keep') || lingering.length > 0
-                ? 'var(--ra-text-4)'
-                : 'var(--ra-text)',
-            cursor:
-              keeping || listenOnly.has('keep') || lingering.length > 0 ? 'default' : 'pointer',
+            color: keeping || listenOnly.has('keep') ? 'var(--ra-text-4)' : 'var(--ra-text)',
+            cursor: keeping || listenOnly.has('keep') ? 'default' : 'pointer',
             animation: keptLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
           }}
         >
@@ -7421,7 +7417,7 @@ export function DiscoverPanel({
           {addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline'}
         </button>
       </div>
-      {lingering.length > 0 && (
+      {lingeringBlocks && (
         <div
           role="note"
           style={{ fontSize: 9, color: 'var(--ra-text-3)', marginTop: -6, marginBottom: 10 }}
