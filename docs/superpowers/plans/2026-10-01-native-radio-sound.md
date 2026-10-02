@@ -193,6 +193,7 @@ caller:    Transport: masterChain (4 user plugin slots) -> reposition fade -> de
 | `native-engine/Source/CavernReverb.h/.cpp` (+Tests) | the IR generator, Web Audio's convolver normalisation, a partitioned convolver |
 | `native-engine/Source/DubDelay.h/.cpp` (+`DubDelayBusTests`) | the ping-pong echo bus (`DubDelayCore`, `DubDelayBus`) |
 | `native-engine/Source/DrumPump.h/.cpp` (+Tests) | the pump's key/program routing around Faust `pump` |
+| `native-engine/Source/BounceParityTests.cpp`, `native-engine/test/parity/fixtures/off-is-today.*` | Task 14: live == export per stage and all on; the CPU benches (`SSSKETCH_BENCH=1`); the pre-plan engine's every-stage-off render |
 | `NoiseRiser.*`, `ReverbBus.*`, `PlaybackEngine.*`, `Transport.cpp`, `RenderExport.cpp`, `BakeStem.*`, `EngineProject.*` | modified |
 | `src/shared/buildEngineProject.ts`, `src/main/{exportToolkitAudio,nativeExport,exportAbleton,exportReaper,remoteLoopRenderer,remoteStemRenderer}.ts`, `DiscoverPanel.tsx` | modified |
 | radio repo: `scripts/build-faust.mjs`, `scripts/buildFaust.test.ts`, `package.json`, `src/audio/faust/LICENSES.md` | compile from sssketch's `.dsp`; re-pinned faustwasm |
@@ -1063,21 +1064,51 @@ The defaults panel adds **reset to defaults**.
 Every export follows the project's settings.
 
 **The tests:**
-- [ ] **Mixdown** (`nativeExport.ts` → `RenderExport.cpp`), native: for each stage switched on alone, then all on, a project renders the same live (`renderLoopAware` + `processMaster`) as through `RenderExport`. Mixdown in vitest: `nativeExport.test.ts` asserts the project it sends carries `sound` from the state.
-- [ ] **Render parity** (`native-engine/test/parity/render-parity.test.ts`): add an all-stages-on case next to the existing one.
-- [ ] **Already in place (Task 2 review):** `soloState` (`nativeExport.ts`) applies `stemExportSound` (`radioSound.ts`), so every solo render (per-stem bakes, stem and bus exports, the riser file) drops mastering, glue, tone, saturation and the pump, and keeps the room, its return and the per-stem stages. Check that each path below goes through it, and route `remoteStemRenderer.ts` the same way.
-- [ ] **Toolkit bakes** (`exportToolkitAudio.ts`, `BakeStem.cpp`):
+- [x] **Mixdown** (`nativeExport.ts` → `RenderExport.cpp`), native: for each stage switched on alone, then all on, a project renders the same live (`renderLoopAware` + `processMaster`) as through `RenderExport`. Mixdown in vitest: `nativeExport.test.ts` asserts the project it sends carries `sound` from the state.
+- [x] **Render parity** (`native-engine/test/parity/render-parity.test.ts`): add an all-stages-on case next to the existing one.
+- [x] **Already in place (Task 2 review):** `soloState` (`nativeExport.ts`) applies `stemExportSound` (`radioSound.ts`), so every solo render (per-stem bakes, stem and bus exports, the riser file) drops mastering, glue, tone, saturation and the pump, and keeps the room, its return and the per-stem stages. Check that each path below goes through it, and route `remoteStemRenderer.ts` the same way. *(`remoteStemRenderer` is a transcode, not a render: no master stage can reach it. Pinned rather than routed; see below.)*
+- [x] **Toolkit bakes** (`exportToolkitAudio.ts`, `BakeStem.cpp`):
   - a baked stem carries its per-stem stages (pan, the `dubSend` throws and their tail, the reverb room and its tail);
   - it carries none of the master stages (the ruling above);
   - tail lengths account for the cavern (5 s) and the dub (`throwTailSec`).
-- [ ] **DAW exports** (`exportAbleton.ts`, `exportReaper.ts`): the exported stems match the bakes above, and the project's master settings are not baked in. Note in the export README/notes that the mastering was left to the DAW. Follow whatever notes channel these exporters already use; if none exists, add nothing.
-- [ ] **Phone renderers** (`remoteLoopRenderer.ts`, `remoteStemRenderer.ts`): the loop renderer is a mixdown, so the full chain. The stem renderer is per stem, so per-stem stages only. Tests mirror their existing ones.
-- [ ] **Off is today:** a project with every stage off renders bit-identical to a pre-plan build (render parity plus a saved fixture).
-- [ ] **CPU:** profile a dense mix (8 rows, all on) at 48 kHz/256. Note the numbers in the commit.
-- [ ] **Cavern per-callback cost at 96/192 kHz:** measure the worst callback at small buffers (64, 128) at 96 and 192 kHz on Elling's interface. Task 5's review spread the partitions over the frame (worst 0.08 ms at 96 kHz/64, Release); if 192 kHz still does not fit, spread the FFTs too, or use a two-size partition scheme.
-- [ ] The full native suite and `npx vitest run` are green. Hand Elling the walkthrough below.
+- [x] **DAW exports** (`exportAbleton.ts`, `exportReaper.ts`): the exported stems match the bakes above, and the project's master settings are not baked in. Note in the export README/notes that the mastering was left to the DAW. Follow whatever notes channel these exporters already use; if none exists, add nothing. *(No README; the export picker's notes are the channel.)*
+- [x] **Phone renderers** (`remoteLoopRenderer.ts`, `remoteStemRenderer.ts`): the loop renderer is a mixdown, so the full chain. The stem renderer is per stem, so per-stem stages only. Tests mirror their existing ones.
+- [x] **Off is today:** a project with every stage off renders bit-identical to a pre-plan build (render parity plus a saved fixture).
+- [x] **CPU:** profile a dense mix (8 rows, all on) at 48 kHz/256. Note the numbers in the commit.
+- [x] **Cavern per-callback cost at 96/192 kHz:** measure the worst callback at small buffers (64, 128) at 96 and 192 kHz on Elling's interface. Task 5's review spread the partitions over the frame (worst 0.08 ms at 96 kHz/64, Release); if 192 kHz still does not fit, spread the FFTs too, or use a two-size partition scheme. *(Measured offline, not on Elling's interface; 192 kHz is reported with a proposal, not changed. See below.)*
+- [x] The full native suite and `npx vitest run` are green. Hand Elling the walkthrough below.
 
 **Ruling:** the per-stem/master split in DAW and stem exports is confirmed by Elling (see the decisions section).
+
+- **As landed (2026-10-02):**
+  - **Mixdown, native (`BounceParityTests.cpp`, new).** One project with every per-stem and master feature in it -- a kick (the pump's key), a bass, a pad sending to the room through a toolkit filter, a lead with a planned throw, a riser, two channels -- sent as `buildEngineProject` sends it (the JSON wire, parsed), with each stage switched on alone (mastering; glue, tone and saturation each with mastering, as the wire only ever carries them; the cavern; the reverb amount; panning; the pump; throws; riser variety), then all on. For each: the stage changed the render, and live (Transport, a stub device telling it the rate as the app's device does, then `renderLoopAware` + `masterChain` + `processMaster`) equals `renderProjectToBuffer` **to the bit**. Every stage is checked twice: in the project as it is (zita, unless the stage is the room) at the export's own 512-sample device blocks; and with the cavern as the room at 512-sample, 300-sample and random (1..1,100) device blocks. All on: every split, to the bit, and the sample peak under the −1 dBTP ceiling plus the limiter's measured overshoot. Every stage off: no `sound` block, a block saying only zita, and the pump's roles with the pump off all render the same samples.
+  - **Found, pre-existing, not the radio sound (pinned and logged, not changed):** two things in today's engine follow the device's blocks, so live equals the export to the bit only when the device runs at the export's 512 samples: **zita** ramps its output gains over the first block it runs (`Reverb::prepare(nfram)` in the vendored zita-rev1), and **a clip's drawn toolkit curves** (volume, cutoff, send) are evaluated once per block and smoothed to that target. Measured at 300-sample device blocks: zita 3.7e-7 at most, a drawn volume curve 2.0e-4. Changing either would move the mixdown of every existing project (and break "off is today"), so they stay; the "known limits" test asserts the 512-sample equality and logs the rest. The radio sound's own stages (the cavern, the master stage, pan, the pump, the dub echo) carry no such dependence: that is what the cavern-based cases pin. This is why Task 9's note found "a zita send is not block-split invariant".
+  - **Mixdown, vitest (`nativeExport.test.ts` +5).** The mixdown's project carries `sound` exactly as `buildEngineSound(state.sound, the plan's echo)` resolves it (mastering, glue, tone, saturation, the pump, the cavern), the pump's roles and the pans; a change to the project's settings (headroom, ceiling, glue off, zita at amount 0.75, depth 6, panning off) reaches it; every stage off sends no `sound` block, no pans and no roles (a pre-plan project's wire); every solo render -- two bus files, two track files and `risers.wav`, twice -- carries `buildEngineSound(stemExportSound(...))`: the room, the pans, no master stage, no pump; and through the real engine a steady row's mixdown comes out at the −4 dB headroom trim with mastering on.
+  - **Render parity (`render-parity.test.ts` +2) and off is today.** A saved fixture, `native-engine/test/parity/fixtures/off-is-today.{s16,json}` (220 KB: 1.25 s, stereo int16, the `--render-test` output): a project of a kick, a tone with a mute region, filtered noise sending to zita with drawn cutoff, send and volume curves, and a riser, on two channels, rendered by **the engine built at `926eb84`** (the commit before Task 0) in a scratch worktree, since removed. The current engine's render of the same project with every stage off -- no `sound` block, a block saying zita, roles with the pump off -- equals it **sample for sample** (also checked against a Release (`-O3`) build: identical). The fixture is int16, the CLI's format before the plan (float output came with Task 4); on a machine whose architecture differs from the fixture's (`arm64`; CI's x64 leg runs under Rosetta, without FMA contraction) the test allows one step. Re-rendering it needs `SSSKETCH_OFF_FIXTURE_ENGINE=<a 926eb84 engine>` (commented in the test). **All on:** the same project with the defaults as `buildEngineSound` sends them (every stage, a dotted-eighth echo), a throw, roles, pans and a pink, sending riser: it renders, twice byte-identical, at the fixture's length, differs from it, and peaks under −0.6 dBFS (the ceiling plus the limiter's overshoot bound). There is no outside reference for the whole chain; each stage has its own golden.
+  - **Solo renders (checked):** every per-stem render goes through `soloState` → `stemExportSound`: bus and track stems (`renderStemsToDir`, `renderStemTracksToDir`), `risers.wav` in both exporters (`riserOnlyState`), and the per-clip bakes (`renderToolkitAudio`). The DAW exports' unbaked clips are copies of the source files (`materializeStemsForExport`), processed by nothing.
+  - **Toolkit bakes (checked, already pinned):** pan (the real-engine bake matches the StereoPannerNode law exactly, so no master stage touched it), the cavern (5.03 s tail) and the throws (`dubTailSeconds`: `throwTailSec` at `min(fb, 0.77) × 1.23`, the loop's peak gain, plus 128 samples a round trip -- Task 12 sized it at the peak, as Task 10 asked; 8.9 s at 0.6 / 0.375 s against 5.1 s nominal) are each tested in `exportToolkitAudio.test.ts`. `BakeStem.cpp` is the LORE stem rotation and has no reverb (Task 5's note): nothing to do there.
+  - **DAW exports.** The stems are the bakes above (bake mode) or dry copies with the pan as a track pan (automation mode); no master stage in either. There is no README or notes file; the one notes channel these exports have is the export picker's own small print ("risers always come out as audio"), so the picker now says, when the project has mastering or the pump on, **"the mastering is left to the daw: no limiter, glue, tone, saturation or pump in the stems"** (`dawExportLeavesMastering`, `exportToolkitChoice.ts`, tested; `ExportFormatPicker`, `App.tsx`; the component is verified by typecheck and lint only). The stems export picker says nothing new (not asked).
+  - **Phone renderers.** **The loop** renders Discover's project through the engine, so it already ran the whole chain (Task 11's throw strip kept). Found: its id (`phoneLoopFingerprint`) did not include the `sound` block, so a mastering, room or pump change alone served the old render (noted since Task 4). Now the fingerprint carries `sound` when there is one, and each row's pump role (it routes the row in the loop's render), both only when present, so a loop without them keeps its old id. Tested: the settings and the roles change the fingerprint, a row's own file id does not move with its role, and the real renderer serves a new loop at the −4 dB trim for a mastering change. **The per-row files** are `afconvert` transcodes with the row's gain and pan baked in (Task 4), not engine renders: no master stage can reach them, so "route it the same way" is pinned rather than routed -- a project with every master stage on gives the same ids and the same bytes as one without, and the pan changes them. They carry neither the room, the throws nor the toolkit, as before the radio sound (a question for Elling, below).
+  - **CPU (Release `-O3`, Apple M2 Max, offline: the engine's own time per callback, `SSSKETCH_BENCH=1 … --test BounceParity`).** A dense mix -- 8 rows on 4 channels (two keys, a bass, five pumped rows panned, two sending to the cavern, three throwing throughout so the echo and the room never idle, a pink sending riser), every stage on:
+
+    | rate / buffer | every stage off | every stage on: share of a core | mean callback | 99th / 99.9th percentile callback (of the buffer) |
+    |---|---|---|---|---|
+    | 48 kHz / 256 | 0.5% | **3.4%** | 0.18 ms | 0.23 / 0.26 ms (4.4% / 4.9% of 5.33 ms) |
+    | 96 kHz / 64 | 1.1% | 9.4% | 0.063 ms | 0.10 / 0.11 ms (15% / 16% of 0.667 ms) |
+    | 192 kHz / 64 | 2.2% | **31%** | 0.105 ms | 0.17 / 0.20 ms (50% / 59% of 0.333 ms) |
+
+    The test thread is not a realtime thread, so a single worst callback is sometimes an OS preemption (2–4 ms, seen twice in five runs); the percentiles are the engine's. Every stage was built at the bench's rate (asserted: no rate mismatch).
+  - **The cavern alone at 96/192 kHz** (the convolver with every partition sounding, 200 frames of callbacks; offline -- there is no access to Elling's interface here, so this is the engine's compute, not the interface's measured headroom):
+
+    | rate | partitions a side | 64-sample buffer: worst / 99th | 128-sample buffer: worst / 99th |
+    |---|---|---|---|
+    | 48 kHz | 235 | 0.06 / 0.05 ms (4.5% / 3.8%) | 0.08 / 0.08 ms (3.0% / 2.9%) |
+    | 96 kHz | 471 | 0.09 / 0.08 ms (13% / 12%) | 0.14 / 0.13 ms (10% / 10%) |
+    | 192 kHz | 943 | 0.15–0.18 / 0.13–0.14 ms (**45–55%** / 39–42%) | 0.27–0.37 / 0.24–0.29 ms (40–56% / 37–44%) |
+
+    **192 kHz at 64 does not fit comfortably** (worst at or over half the buffer for the room alone, 59% of it at the 99.9th percentile for the dense mix). Spreading the FFTs would not help: the partitions are already spread (Task 5's review), so the cost is level across callbacks -- at 192 kHz the room itself is ~40% of a core, because the impulse is 5 s long and a uniform 1,024-sample partitioning costs work per sample in proportion to the number of partitions (rate × 5 s / 1,024): the cost grows with the square of the rate. **Proposed, not implemented** (neither is contained, and neither keeps today's 192 kHz output to the bit): (a) **a two-size partition scheme** -- the first ~8 partitions at 1,024 samples (the latency and the early room as now), the tail at 8,192 or 16,384, its multiply-adds spread over its longer frame -- about an eighth of the tail's work at the same latency; or (b) **run the cavern at a fixed 48 kHz above 48 kHz** (decimate the send, convolve, interpolate the wet back): a sixteenth of the work at 192 kHz, and the impulse would then be exactly the web's own 48 kHz one. (b) is the smaller change. Neither matters at 44.1/48 kHz, where the dense mix is 3.4% of a core. Only if Elling runs 96/192 kHz sessions at small buffers.
+  - **Tests.** Native 500 (was 487 at `d3a6296`): `BounceParityTests` 13 (every stage off three ways; ten stages alone, each in the project as it is and on the cavern; every stage on; the known limits; plus two benches behind `SSSKETCH_BENCH=1`). Vitest 4261 (+15): `nativeExport` +5, `render-parity` +2, `remoteLoopRenderer` +1, `remoteStemRenderer` +2, `phoneLoop` +2, `exportToolkitChoice` +3.
+  - **Not covered:** no agent clicked through the export picker or listened to any of it; the fixture covers the CLI's 44.1 kHz / 512 render, the path every export takes.
 
 ---
 
@@ -1098,23 +1129,75 @@ Not done: nothing stopped short. Still open from the reviews: zita's tail rings 
 
 ## What Elling needs to listen to
 
-Do this in `npm run dev`, after a **full Cmd+Q and relaunch** once the engine is rebuilt. A/B against `ell.ing/radio` at the same tempo where possible.
+One list, in order, from every task's "Elling listens" and "for Elling" notes (T3–T14 and the cleanup pass). No agent has heard any of it.
 
-1. **Web re-pin (T1):** if the golden diff in Task 1 Step 2 was not clean, A/B the web before and after the faustwasm re-pin.
-2. **Limiter (T3):** loud stacks don't crackle; the level drop on an old timeline project; mastering off restores today's sound.
-3. **Pan (T4):** centred drums and bass, the rest gently spread, in Discover and on the timeline; the width setting.
-4. **Reverb (T5):** cavernous and darkening; a send of 0.5 against the web; zita still available; old timeline projects' sends now go to the cavern (longer, darker) -- keep that, or default old projects to zita?
-5. **Risers (T6):** varied, about +3 dB, blooming into the room; variety off restores today's.
-6. **Glue and tone (T7):** layers sit together, nothing breathes; the amount setting; tone off; the amount and tilt moved while playing (no zipper); glue at amount 1 on a dense mix.
-7. **Saturation (T8):** peaks rounded, no grit; the drive setting, moved while playing (no zipper); amount 1 on a bright, dense mix (grit? no oversampling, as the web); amount 0 is exactly saturation off.
-8. **Pump (T9):** a breath on pads with each kick; the depth setting.
-9. **Throws (T11, T12):**
-   - in Discover: occasional, in time, darkening, never on drums or bass;
-   - on the timeline: the export has the same throws as the pass;
-   - the rate setting.
-10. **Settings (T13):** every switch works live; settings save with the project; a new project gets the defaults; an old project opens with the defaults on.
-11. **Exports (T14):** a mixdown sounds like the pass; a DAW export's stems have pan, throws and reverb but no mastering (the ruling Elling confirmed).
-12. **The whole:** an hour of radio, and one finished timeline project. Does the app now sound like the web? Note anything that differs, with rifff names.
+**Before you start:** rebuild the engine, preferably Release (`cd native-engine && cmake -B build -DCMAKE_BUILD_TYPE=Release && cmake --build build`: the unoptimised local build can glitch on a seek into a pink riser), then **fully quit (Cmd+Q) and relaunch** `npm run dev`. A/B against `ell.ing/radio` at the same tempo where you can. The radio sound is on everywhere by default (old projects too); the sound button (right of the master chain button) switches each stage per project.
+
+**Discover (radio on)**
+1. **Limiter (T3):** loud stacks no longer crackle.
+2. **Pan (T4):** drums and bass centred, the rest gently left and right; a swap or a mute never moves a row; the width slider.
+3. **Room (T5):** huge and darkening, clear transients; a send of 0.5 against the web; blooms; switching to zita gives today's room back; switching rooms mid-play: a click or a jump?
+4. **Risers (T6):** varied (whistly, full, narrow), about +3 dB, blooming into the room; a resonant one (Q 4–6) may poke out ~1 dB before the limiter catches it; pink against white at the top of the sweep (thin?); swap or mute another row mid-riser: the riser carries on unbroken; the riser's tail and its send are cut at the wrap (audible?); variety off gives today's riser.
+5. **Glue and tone (T7):** layers sit together, ~1–3 dB of reduction on a dense mix, nothing breathes; move the glue amount and the tilt while playing (a zipper or a jump?); switch glue or tone off and on mid-play (20 ms crossfades); glue at amount 1 (does it breathe?); the tilt at both ends.
+6. **Saturation (T8):** peaks rounded, nothing gritty; move the drive while playing; switch it mid-play; amount 1 on a bright, dense mix (grit? there is no oversampling, as on the web); amount 0 sounds exactly like off; a seek onto a big hit (the first ~20–50 ms are a touch cleaner).
+7. **Pump (T9):** a breath on pads with each kick, drums and bass untouched; the depth slider glides; switching it off mid-duck lets go over ~200 ms; a seek or play just after a kick starts unducked; Tidy Up and library auditions are unpumped and centred.
+8. **Throws (T10, T11; throws on at normal, a loop of 2+ bars with drums, bass and two other rows):**
+   - within ~16–32 bars a row that is not drums or bass opens into the echo for a beat or two, on a beat, and rings out darker; again 16–32 bars later, not every lap;
+   - the repeats narrow onto ~2.65 kHz rather than just darkening, and drift 2.7 ms later each round trip (both the web's, matched);
+   - a radio change landing while a throw rings: on time, the throw neither cut nor repeated; a throw planned just before a loop top still plays after it;
+   - mute every row but drums and bass: no throws; arm a hole or riser: no throw over it;
+   - `rare` / `often`: about half / twice as many; level 0 or throws off: none, and an echo already ringing rings out;
+   - radio off mid-echo: it rings out, no throw afterwards; stop and play: no stray throw;
+   - switching throws or radio off while one is open (half a bar at most): a click into the echo?
+   - with the window minimised for a long stretch: a throw that repeats every lap?
+9. **The phone (T11, T14):** the phone loop never has an echo in it, and a throw does not make it reload; the loop is mastered like the app; a sound-settings change now re-renders it once (new in T14); the per-row files have pan and gain only.
+
+**The timeline**
+10. **An old project (T2, T3, T5):** it opens with the defaults (everything on): a level drop (the −4 dB headroom), sends longer and darker (the cavern); mastering off gives today's level back, zita today's room.
+11. **Pan and pump (T4, T9):** rows by `SoundType`; a loop moved from Discover can land on the other side; the pump's key is project-wide (a drums stem anywhere ducks every other non-drums, non-bass stem); a one-shot kick typed `fx` is pumped, never a key; a softer kick ducks less than the full depth.
+12. **Throws (T12):** a project with throws on plays the same throws every pass, on leads and pads, never drums or bass, never in a muted row, over a mute region or a riser; `rare` against `often`; a solo re-plans while it lasts; every throw in a project shares one echo (time and feedback).
+13. **The echo's room (T10):** at reverb amounts other than 0.5 the echo's share of the room follows the amount (not on the web).
+
+**Exports (T12, T14)**
+14. **The mixdown** sounds like the pass: the same throws, pump, room and mastering.
+15. **Stems / bus / track exports**, summed: the same throws and room, no mastering (louder and unlimited next to the mix; 32-bit float files).
+16. **DAW export, bake mode:** each stem has its pan, its throws with their echo tails and its room tail (cavern clips about two seconds longer); no mastering. **Automation mode:** dry audio, the pan as the track's pan, no throws. The picker now says "the mastering is left to the daw" when mastering or the pump is on (T14). `risers.wav` is unchanged.
+
+**The settings panel (T13)**
+17. Nine rows (mastering, glue, saturation, tone, reverb, panning, pump, throws, riser variety). Each switch is heard within a sync; mastering off greys glue, saturation and tone, and they come back as they were.
+18. A slider drag or a held arrow key commits once, on release: one Cmd+Z undoes it; letting go outside the panel keeps it open; Escape closes it.
+19. Save, close, reopen: the settings are kept. Gear → "sound defaults…": a change leaves the open project alone; a new project starts from it; "use these in this project" (one undo step), "make this project's the default", "reset to defaults". Dev build only: the `dev glue … pump … limiter …` meters move.
+20. Look: lowercase, Silkscreen, sharp corners, no colour on the chrome. Too tall?
+
+**The whole:** an hour of radio, and one finished timeline project, exported. Does the app now sound like the web? Note anything that differs, with rifff names.
+
+### Open questions for Elling
+
+**Discover**
+- **Short loops never throw (T11).** The 1-bar lead means a loop under 1.5 bars never throws, and no throw starts in a lap's last half bar. A ~0.3-bar lead would let a 1-bar loop throw. Wanted?
+- **The riser's cut at the wrap (T6).** The riser's tail and its send stop at the loop top where the next staged project lands. Fine, or should it ring on?
+
+**The timeline**
+- **Old projects and the cavern (T5).** Old timeline projects now play the cavern (longer, darker; DAW bakes about two seconds longer). Keep, or should old projects default to zita?
+- **The pump's reach (T9).** The key is project-wide: should a rifff only pump its own rows? Should a one-shot kick (typed anything but `drums`) key the pump? Is 4 dB enough on quiet drum stems (92% of the depth at −10 dBFS)?
+- **One echo per project (T12).** Every timeline throw shares one echo time and feedback; the web draws them per throw. Keep, or carry a per-throw schedule on the wire?
+- **Discover to the timeline (T4).** A loop moved from Discover is re-panned by `SoundType`, so a row can switch sides. Fine?
+
+**Exports**
+- **Throws in a default DAW export (T12).** The picker's default (automation) has no throws; bake carries them. Should a throwing project start on bake (which also bakes every panned stem)?
+- **The phone's per-row files (T14).** They carry gain and pan only: no room, throws or toolkit (as before the radio sound). Should they be engine-rendered per row instead (slower to build, a bigger change)?
+
+**The sound itself**
+- **The echo (T10).** It drifts 2.7 ms later each round trip (Chrome's render quantum) and narrows onto ~2.65 kHz (the web's decibel-Q quirk), both matched to the web. Keep both, or fix both repos (on the beat; `Q: biquadQ(0)`)?
+- **Saturation grit (T8).** If amount 1 is gritty, 2× oversampling would fix it but make the app differ from the web.
+
+**Settings panel**
+- **Height (T13).** About nine rows and nine sliders: too tall?
+
+**Engine**
+- **192 kHz (T14).** At 192 kHz with a 64-sample buffer the cavern alone takes about half of each buffer (a dense mix at its 99.9th percentile: 59%), measured offline on this Mac, not on your interface. Do you run 96/192 kHz sessions at small buffers? If so, the proposal is to run the room at 48 kHz internally above 48 kHz (a sixteenth of the work at 192 kHz), or a two-size partition scheme.
+- **Device-block dependence, from before the plan (T14).** Zita, and a clip's drawn volume, cutoff and send curves, follow the device's buffer size, so live playback differs from the export by a hair (2e-4 at most, measured) unless the device runs at 512 samples. Fixing it would change every existing project's export slightly. Leave it?
+- **Already decided:** the limiter's −0.67 dBTP overshoot on hot noise stays (T3, 2026-10-02).
 
 ---
 
@@ -1129,7 +1212,7 @@ Do this in `npm run dev`, after a **full Cmd+Q and relaunch** once the engine is
 | Faust versions (2.89.2 is not a release; brew is 2.88.0) | T1 | native 2.88.0 pinned (`brew pin`, `FAUST_VERSION` check); web re-pinned to the matching faustwasm, gated by a before/after golden diff; build from source as the fallback |
 | Cross-repo `.dsp` drift | T1 | one copy in sssketch; radio compiles from it; both repos' drift tests fail on a stale build |
 | Loudness shift | T3, T6 | headroom first, limiter as the backstop; Elling sets the level by ear |
-| CPU | T5–T9 | measured in T14; the convolver's partitions are spread over each frame (T5 review); a two-size partition scheme if it is still heavy |
+| CPU | T5–T9 | measured in T14 (Release): a dense 8-row mix with every stage on is 3.4% of a core at 48 kHz/256; at 192 kHz/64 the cavern alone takes about half of each buffer, so a 48 kHz internal room or a two-size partition scheme is proposed (T14, for Elling) |
 | Matching web quirks rather than intent | T5, T7, T10 | match what Elling heard (convolver normalisation, decibel Q, StereoPanner law); each listed in code comments and offered as web fixes |
 | Known differences from the web (cavern) | T5 | below ~34.1 kHz the pre-delay (round(0.03 × rate)) is shorter than the convolver's 1024-sample partition, so the room arrives 1024 − pre samples late (`CavernIr::extraLatency`; 0 at 44.1 kHz and above); the normalisation uses the spec's 0.00125 where Chromium writes −58 dB (+0.06 dB); after a stop zita (not the cavern) rings on from where it froze. Dub (T10): the native feedback is capped at 0.77 where the web's 0.95 runs away (decibel-Q peak); the reverb amount scales the echo's room natively, not on the web; the delay's float read rounding falls in a different phase than the web's (its node clock) |
 | `renderBlock` routing (pan, pump, dub) | T4, T9, T10 | pointer routing only; separate post-loop passes; heavy tests |
