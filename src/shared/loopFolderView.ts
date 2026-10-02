@@ -1,6 +1,6 @@
 // src/shared/loopFolderView.ts
 import { formatBpm } from './format'
-import type { LoopEntry } from './loopFolderTypes'
+import { MAX_LOOP_TEMPO_OVERRIDE, MIN_LOOP_TEMPO_OVERRIDE, type LoopEntry } from './loopFolderTypes'
 
 /** A row's tempo text. A guess is marked by a `~` and, in the component,
  * dimmer text (var(--ra-text-3)) -- never a colour (spec, "Visuals"). */
@@ -55,4 +55,15 @@ export function nextLoopSelection(
     return { anchor: clickedId, selected: next }
   }
   return { anchor: clickedId, selected: new Set([clickedId]) }
+}
+
+/** The tempo box: a number in range sets a correction, an empty box
+ * clears it (null), anything else is refused. Same range main enforces. */
+export function parseTempoInput(text: string): number | null | 'invalid' {
+  const trimmed = text.trim()
+  if (trimmed === '') return null
+  const bpm = Number(trimmed)
+  return Number.isFinite(bpm) && bpm >= MIN_LOOP_TEMPO_OVERRIDE && bpm <= MAX_LOOP_TEMPO_OVERRIDE
+    ? bpm
+    : 'invalid'
 }

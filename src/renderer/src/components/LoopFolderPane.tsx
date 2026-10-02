@@ -12,7 +12,6 @@ import {
 import {
   EMPTY_LOOP_SELECTION,
   loopBarsLabel,
-  loopTempoLabel,
   nextLoopSelection,
   type LoopSelection
 } from '@shared/loopFolderView'
@@ -28,6 +27,7 @@ import { useDispatch, usePlaying } from '../state/StoreContext'
 import { useBusy } from '../state/BusyContext'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
+import { LoopTempoCell } from './LoopTempoCell'
 
 const INDENT_PX = 12
 const ROW_HEIGHT_PX = 28
@@ -69,7 +69,8 @@ function LoopRow({
   anchor,
   scrollRoot,
   onSeen,
-  onClick
+  onClick,
+  onSetTempo
 }: {
   loop: LoopEntry
   depth: number
@@ -81,8 +82,8 @@ function LoopRow({
    * from the decode the waveform has just started. */
   onSeen: (loop: LoopEntry) => void
   onClick: (e: React.MouseEvent) => void
+  onSetTempo: (bpm: number | null) => Promise<void>
 }): React.JSX.Element {
-  const tempo = loopTempoLabel(loop)
   const [rowEl, setRowEl] = useState<HTMLDivElement | null>(null)
   const seen = useSeenNearViewport(rowEl, scrollRoot)
   useEffect(() => {
@@ -118,15 +119,7 @@ function LoopRow({
       >
         {loop.name}
       </span>
-      <span
-        style={{
-          width: 44,
-          textAlign: 'right',
-          color: tempo.guessed ? 'var(--ra-text-3)' : 'inherit'
-        }}
-      >
-        {tempo.text}
-      </span>
+      <LoopTempoCell loop={loop} onSetTempo={onSetTempo} />
       <span style={{ width: 52, textAlign: 'right', color: 'var(--ra-text-3)' }}>
         {loopBarsLabel(loop)}
       </span>
@@ -266,6 +259,15 @@ export function LoopFolderPane({
     }
   }
 
+  async function setTempo(loopId: string, bpm: number | null): Promise<void> {
+    try {
+      const updated = await window.rifffApi.loopFoldersSetTempo(loopId, bpm)
+      if (updated) onLoopUpdated(updated)
+    } catch (err) {
+      console.error('LoopFolderPane: set tempo failed:', err)
+    }
+  }
+
   function renderGroup(node: LoopGroupNode<LoopEntry>): React.JSX.Element {
     const open = node.depth === 0 || expanded.has(node.key)
     return (
@@ -315,6 +317,7 @@ export function LoopFolderPane({
                   })
                 )
               }
+              onSetTempo={(bpm) => setTempo(loop.loopId, bpm)}
             />
           ))}
         {open && node.children.map(renderGroup)}

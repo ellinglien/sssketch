@@ -3,6 +3,7 @@ import {
   loopTempoLabel,
   loopBarsLabel,
   nextLoopSelection,
+  parseTempoInput,
   EMPTY_LOOP_SELECTION,
   type LoopSelection
 } from './loopFolderView'
@@ -87,5 +88,27 @@ describe('nextLoopSelection', () => {
     nextLoopSelection(one, 'd', order, toggle)
     expect(ids(one)).toEqual(['a'])
     expect(EMPTY_LOOP_SELECTION.selected.size).toBe(0)
+  })
+})
+
+describe('parseTempoInput', () => {
+  it('reads a tempo, trimming space', () => {
+    expect(parseTempoInput('165')).toBe(165)
+    expect(parseTempoInput('87.5')).toBe(87.5)
+    expect(parseTempoInput(' 170 ')).toBe(170)
+  })
+
+  it('reads an empty box as "clear the correction"', () => {
+    expect(parseTempoInput('')).toBeNull()
+    expect(parseTempoInput('   ')).toBeNull()
+  })
+
+  it('accepts 40 to 300 inclusive, and nothing else', () => {
+    expect(parseTempoInput('40')).toBe(40)
+    expect(parseTempoInput('300')).toBe(300)
+    expect(parseTempoInput('39')).toBe('invalid')
+    expect(parseTempoInput('301')).toBe('invalid')
+    expect(parseTempoInput('abc')).toBe('invalid')
+    expect(parseTempoInput('Infinity')).toBe('invalid')
   })
 })
