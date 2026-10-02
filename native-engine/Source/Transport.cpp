@@ -411,7 +411,7 @@ namespace sssketch
         stagedApplyPositionBars.store(atBars);
     }
 
-    double Transport::renderLoopAware(double pos, int numSamples, float* outL, float* outR)
+    double Transport::renderLoopAware(double pos, int numSamples, float* outL, float* outR, double spb)
     {
         // The one case where a swap happens away from a lap boundary: a
         // previous attempt found the retirement slot occupied. Retrying at
@@ -425,9 +425,9 @@ namespace sssketch
         // The sample clock (see anchorBars in Transport.h). `pos` is what this function returned
         // last time unless something set it since (play, a seek landing, a stop), or the tempo
         // or the device rate changed under it: then the clock restarts from `pos`.
-        if (! anchorValid || pos != lastReturnedPositionBars || secPerBar != anchorSecPerBar
+        if (! anchorValid || pos != lastReturnedPositionBars || spb != anchorSecPerBar
             || deviceSampleRate != anchorSampleRate)
-            reanchor(pos, 0);
+            reanchor(pos, 0, spb);
 
         // A recording loop, when active, is a second independent instance
         // of this exact same wrap mechanism (see
@@ -448,7 +448,7 @@ namespace sssketch
         const double loopStart = recordingLoopActive ? recStart : 0.0;
         const double loopEnd = recordingLoopActive ? recEnd : loopLengthBars.load();
         const double loopBars = loopEnd - loopStart;
-        const double barsPerSample = (1.0 / deviceSampleRate) / secPerBar;
+        const double barsPerSample = (1.0 / deviceSampleRate) / spb;
         const double blockDurationBars = numSamples * barsPerSample;
 
         if (loopBars <= 0.0)
@@ -488,7 +488,7 @@ namespace sssketch
         if (pos >= loopEnd)
         {
             pos = loopStart;
-            reanchor(loopStart, 0);
+            reanchor(loopStart, 0, spb);
             // A snap back to the top is a lap boundary too, as far as a
             // scheduled swap is concerned: the same "the loop starts over
             // here" moment, arrived at from a bounds change rather than
@@ -595,7 +595,7 @@ namespace sssketch
             // pulled toward whatever actually follows it.
             applyStagedProjectAtWrap(loopStart);
             // The clock restarts at the top, on the sample the lap turns over at.
-            reanchor(loopStart, -(int64_t) splitIndex);
+            reanchor(loopStart, -(int64_t) splitIndex, spb);
             if (splitIndex < numSamples)
                 engine.renderBlock(loopStart, deviceSampleRate, numSamples - splitIndex,
                                     outL + splitIndex, outR + splitIndex, channelChains);
@@ -607,7 +607,7 @@ namespace sssketch
         // scheme LoopSewing.cpp already uses for a single stem buffer's own
         // tail-toward-head blend, just applied here to the whole mixed
         // master output instead.
-        const double fadeBars = std::min(kLoopSeamFadeSec / secPerBar, loopBars / 2.0);
+        const double fadeBars = std::min(kLoopSeamFadeSec / spb, loopBars / 2.0);
         if (distToEnd < fadeBars + blockDurationBars)
         {
             float anchorL = 0.0f, anchorR = 0.0f;
@@ -629,11 +629,11 @@ namespace sssketch
         return advanceClock(numSamples);
     }
 
-    void Transport::reanchor(double atBars, int64_t samplesIntoBlock)
+    void Transport::reanchor(double atBars, int64_t samplesIntoBlock, double spb)
     {
         anchorBars = atBars;
         anchorSamples = samplesIntoBlock;
-        anchorSecPerBar = secPerBar;
+        anchorSecPerBar = spb;
         anchorSampleRate = deviceSampleRate;
         anchorValid = true;
     }
@@ -762,7 +762,9 @@ namespace sssketch
             return;
         }
 
-        if (secPerBar <= 0.0)
+        // The tempo this whole callback runs at: read once (see renderLoopAware).
+        const double spb = secPerBar.load(std::memory_order_relaxed);
+        if (spb <= 0.0)
             return;
 
         if (playing.load() && repositionRequested.exchange(false))
@@ -801,7 +803,7 @@ namespace sssketch
         if (repositioning)
         {
             const double pos = positionBars.load();
-            const double newPos = renderLoopAware(pos, numSamples, outL, outR);
+            const double newPos = renderLoopAware(pos, numSamples, outL, outR, spb);
             masterChain.setPosition(pos);
             masterChain.process(numSamples, outL, outR);
             // The radio sound's master stage: last before the device, after the user's
@@ -856,7 +858,7 @@ namespace sssketch
         }
 
         const double pos = positionBars.load();
-        const double newPos = renderLoopAware(pos, numSamples, outL, outR);
+        const double newPos = renderLoopAware(pos, numSamples, outL, outR, spb);
         masterChain.setPosition(pos);
         masterChain.process(numSamples, outL, outR);
         // As above: the master stage, then the halt fade.

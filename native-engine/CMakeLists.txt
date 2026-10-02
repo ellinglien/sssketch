@@ -160,6 +160,7 @@ target_sources(sssketch_engine PRIVATE
   Source/PlaybackEngineTests.cpp
   Source/Transport.cpp
   Source/TransportTests.cpp
+  Source/TransportTempoTests.cpp
   Source/IpcServer.cpp
   Source/RenderExport.cpp
   Source/BakeStem.cpp

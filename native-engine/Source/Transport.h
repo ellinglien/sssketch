@@ -82,7 +82,9 @@ namespace sssketch
         void setBpm(double bpmValue)
         {
             bpm = bpmValue;
-            secPerBar = bpmValue > 0.0 ? (60.0 / bpmValue) * 4.0 : 0.0;
+            // Relaxed: the audio thread reads it ONCE per callback (see secPerBar) and runs the
+            // whole block, clock included, at that value.
+            secPerBar.store(bpmValue > 0.0 ? (60.0 / bpmValue) * 4.0 : 0.0, std::memory_order_relaxed);
             masterChain.setBpm(bpmValue);
         }
 
@@ -317,7 +319,11 @@ namespace sssketch
         // happens (see applyStagedProjectAtWrap just below), because this
         // is the function that knows the exact sample the lap turns over
         // at.
-        double renderLoopAware(double pos, int numSamples, float* outL, float* outR);
+        //
+        // `spb` is the callback's one read of secPerBar: the tempo the whole block -- the wrap
+        // window, the seam fade and the sample clock -- runs at. A setBpm landing mid-block
+        // takes effect at the next block's re-anchor, never inside this one.
+        double renderLoopAware(double pos, int numSamples, float* outL, float* outR, double spb);
 
         /** AUDIO THREAD. Promotes a project the message thread staged
          * earlier, at the instant the lap turns over -- or, when the
@@ -346,7 +352,7 @@ namespace sssketch
 
         /** AUDIO THREAD. Restarts the sample clock (anchorBars): block sample
          * `-samplesIntoBlock` of the current block is at `atBars`. */
-        void reanchor(double atBars, int64_t samplesIntoBlock);
+        void reanchor(double atBars, int64_t samplesIntoBlock, double spb);
         /** AUDIO THREAD. Moves the sample clock past this block and returns the position
          * of the next block's first sample, which renderLoopAware returns. */
         double advanceClock(int numSamples);
@@ -407,6 +413,11 @@ namespace sssketch
         // play() or seek landing (positionBars no longer holds what renderLoopAware last
         // returned), a loop wrap or snap (anchored at loopStart, on the sample the lap turns
         // over), and a tempo or device-rate change (the conversion itself changes).
+        //
+        // The conversion uses the ANCHOR's tempo and rate, never the live ones: setBpm writes
+        // secPerBar from the message thread at any moment, and converting every sample since the
+        // anchor at a tempo that arrived mid-block would jump the playhead (bar 64, 120 -> 125
+        // bpm: ~2.7 bars) -- permanently, since the next block re-anchors where it landed.
         double anchorBars = 0.0;
         int64_t anchorSamples = 0;
         double anchorSecPerBar = 0.0;
@@ -415,13 +426,16 @@ namespace sssketch
         bool anchorValid = false;
         double barsAtSample(int64_t samplesIntoBlock) const
         {
-            return anchorBars + ((double) (anchorSamples + samplesIntoBlock) / deviceSampleRate) / secPerBar;
+            return anchorBars + ((double) (anchorSamples + samplesIntoBlock) / anchorSampleRate) / anchorSecPerBar;
         }
         // How long the fade-in holds at silence first: the master stage's latency when it is
         // in (so the jump lands under silence), else 0. Set when the fade-out completes.
         double repositionHoldSec = 0.0;
         double bpm = 120.0;
-        double secPerBar = 2.0; // updated via setBpm before play(); safe default avoids div-by-zero
+        // Written by setBpm (message thread), read once per callback by the audio thread
+        // (audioDeviceIOCallbackWithContext), which passes that value down. Atomic, relaxed:
+        // a single value, nothing else ordered by it. Safe default avoids div-by-zero.
+        std::atomic<double> secPerBar { 2.0 };
         double deviceSampleRate = 44100.0;
         int deviceBlockSize = 512;
 
