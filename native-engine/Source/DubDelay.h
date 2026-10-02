@@ -291,7 +291,9 @@ namespace sssketch
          * snapshot (a slot is found by the stem's id, block by block); sizing it per snapshot would
          * mean handing the state from one snapshot's storage to the next across the swap. 256
          * covers a long timeline's throwing stems (every stem with a throw anywhere is a tap) for
-         * ~7 KB; the per-block cost follows the slots in use, not this number. */
+         * ~8 KB (32 bytes a slot). Every block walks all of them a few times (beginBlock, process,
+         * anySlotUsed) and markOpen searches them per tap: 256 slots is a few thousand cheap
+         * compares a block, far under the echo's own per-sample work. */
         static constexpr int kMaxSendSlots = 256;
 
     private:
