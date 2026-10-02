@@ -3,6 +3,7 @@ import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
+import { LOOP_FOLDERS_DDL } from './loopFolders'
 
 /** sssketch's own self-built riff-sync database -- distinct from any
  * externally-pointed OUROVEON/LORE archive a user might separately
@@ -323,6 +324,11 @@ CREATE TABLE IF NOT EXISTS DiscoverInstrumentRowsCacheMeta (
 -- change at all -- an older build simply never asks for those keys. Do not
 -- "tidy" GainsJSON to eight keys.
 ${RIFF_STEMS_EXTRA_DDL}
+
+-- Linked loop folders (2026-10-01). Interpolated, like RiffStemsExtra above,
+-- so loopFolders.test.ts builds its database from the same constant. New
+-- tables only, so the migration is exactly CREATE TABLE IF NOT EXISTS.
+${LOOP_FOLDERS_DDL}
 `
 
 let cachedDb: Database.Database | null = null

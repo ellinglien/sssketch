@@ -43,6 +43,8 @@ describe('riffLibrarySchema', () => {
       'DiscoverRiffIndexCache',
       'DiscoverRiffIndexCacheMeta',
       'Jams',
+      'LoopFiles',
+      'LoopFolders',
       'RadioHeartImport',
       'RadioLikeImport',
       'RiffStemsExtra',
