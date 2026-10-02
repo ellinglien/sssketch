@@ -92,6 +92,10 @@ Sources, read in full on 2026-10-02:
   - `turnaroundPhraseLaps(phraseBars, loopBars) = max(1, ceil(phrase / loopBars))`. So a loop of 16
     bars or more makes every wrap a phrase end, and a phrase is never shorter than its bar count.
     A 32-bar loop therefore has a 32-bar phrase, not two 16-bar halves.
+  - The change grid's phrase (`radioPhraseLaps`) rounds where this one rounds up, so the two agree
+    only on loops that divide the phrase. On a 3-, 5-, 7- or 12-bar loop at 16 they put phrase
+    ends on different wraps, and "a change on a phrase end is led in by its turnaround" holds only
+    on dividing loops.
 - **Counting.**
   - The turnaround clock counts laps since the last phrase end. It runs whatever `phraseBars` is:
     today `lapsSincePhrase` is reset when `phraseBars` is 0, and the turnaround count must not be.
@@ -160,6 +164,9 @@ whose shortest length does not fit is left out of the draw.
   - **volume** curves multiply, so a turnaround never cancels a hole, a duck or an arc exit;
   - **reverb send** takes the larger value at each point;
   - **filter:** a row already in a change's filter in is skipped by filter moves.
+  - The radios differ on purpose here: on the web, a change drawn after the roll with a filter in on
+    a row the turnaround DIPS lands as a cut (the dip owns the row's low-pass); in sssketch the roll
+    comes after the wrap's landings, so the filter in wins and the planner skips that row.
 - The density arc's exit drop-out (`ARC_EXIT_BEATS`) is unchanged. It is an exit, not a turnaround,
   and multiplies like any volume curve.
 - Hold, pause, a seek or radio off clears an armed turnaround, the same as drop-outs today.
@@ -241,6 +248,10 @@ the core, so the core can ship without them.
   - row curves become `stemAutomation` lanes on that lap, anchored to the loop top;
   - the lift sets the row's `filterMode` to high-pass for that lap;
   - the riser goes in through the existing riser clips.
+- The roll runs after that wrap's landings (as the web's runs after `land()`), reading the loop and
+  the rows as they leave it; a landed stem whose length is not known yet defers it to that stem's
+  resolution, given up once the lap is too near its half for the move. The lane builder drops a plan
+  that no longer fits the loop it plays in (`turnaroundFitsLoop`).
 - It clears them at the wrap, with the same arm-then-clear pattern as drop-outs and
   `clearRadioGesture`.
 - The per-interval `rollRadioDropOut` call is removed.

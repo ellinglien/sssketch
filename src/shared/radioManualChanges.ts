@@ -42,7 +42,8 @@ export function drawManualTransitions(
   options: {
     pick: (kinds: readonly DiscoverSlotKind[]) => RadioTransitionKind
     dropOutBeats: () => number
-    /** A hole, riser or standalone drop-out is already armed this lap. */
+    /** The lap's leading slot is taken: a hole, a riser or the density arc's exit drop-out is
+     * armed, or a phrase turnaround is (it is the lap's lead-in). */
     leadingArmed: boolean
     /** Bars from now to the wrap. Not a finite positive number means the
      * position is unknown, and no leading gesture is granted. */

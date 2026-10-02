@@ -98,6 +98,7 @@ import {
   rememberTurnaround,
   rollTurnaround,
   turnaroundArc,
+  turnaroundFitsLoop,
   turnaroundToLoopBars,
   turnaroundWashSend,
   type RadioTurnaroundGate,
@@ -553,6 +554,20 @@ const AFTER_ENGINE_SYNC_TIMEOUT_MS = 1500
 // both backstops fire the parked push still goes out before the radio arm
 // that is waiting on it gives up -- the same ordering the fast path has.
 const SYNC_HOLD_TIMEOUT_MS = 1200
+
+/** How close to the half of the lap a deferred phrase-turnaround roll may still run, in bars
+ * (radioTurnaroundAtWrap): no move starts before the half, and the push carrying it needs time
+ * to land -- tens to a couple of hundred ms, measured (holdSyncUntilResolved). A beat is that
+ * at any tempo radio plays. */
+const TURNAROUND_ROLL_LATE_BARS = 0.25
+
+/** The phrase end's roll while it is owed (radioTurnaroundAtWrap): the loop at its wrap, and
+ * every row landing there with the bar length the roll should read -- null when that is not
+ * known until the stem resolves, and the roll waits for it. */
+interface TurnaroundRollOwed {
+  loopBars: number
+  landed: Map<string, number | null>
+}
 
 export function DiscoverPanel({
   currentSketch,
@@ -1859,12 +1874,25 @@ export function DiscoverPanel({
     // so it must carry the move or the move would vanish mid-lap). Never a stage landing at the
     // wrap: the turnaround ends on that wrap. Its curves are in beats before the wrap;
     // turnaroundToLoopBars puts them on the lap, so they end exactly on the loop top.
+    //
+    // A plan that no longer fits THIS loop (turnaroundFitsLoop: a landing changed the loop after
+    // it was rolled) is dropped whole, as is a filter move left with no row to filter (every
+    // target already in a change's filter in): either way nothing plays, so the phrase end is
+    // forgotten too -- a silent move must not be "repeated" by a diminution at the next one.
     const turnaround =
       radioOnRef.current && (!stage || stage.atBars !== undefined)
         ? radioTurnaroundRef.current
         : null
-    if (turnaround !== null && maxBarLength !== undefined && maxBarLength > 0) {
+    if (
+      turnaround !== null &&
+      maxBarLength !== undefined &&
+      maxBarLength > 0 &&
+      !turnaroundFitsLoop(turnaround.plan, maxBarLength)
+    ) {
+      radioTurnaroundMemoryRef.current = null
+    } else if (turnaround !== null && maxBarLength !== undefined && maxBarLength > 0) {
       const ownSend = masterSendRef.current / 100
+      let filtered = 0
       for (const curves of turnaround.plan.rows) {
         const own = members.findIndex((m) => m.id === curves.rowId) + 1
         if (own === 0) continue
@@ -1890,6 +1918,7 @@ export function DiscoverPanel({
           // mode, one lap (combineRadioCurves keeps the curve already there).
           const had = stemAutomation[key]?.filterCutoff ?? []
           if (had.length === 0) {
+            filtered += 1
             stemAutomation[key] = {
               ...stemAutomation[key],
               filterCutoff: combineRadioCurves(
@@ -1907,6 +1936,9 @@ export function DiscoverPanel({
             }
           }
         }
+      }
+      if ((turnaround.plan.move === 'lift' || turnaround.plan.move === 'dip') && filtered === 0) {
+        radioTurnaroundMemoryRef.current = null
       }
       if (turnaround.plan.riserBars !== undefined) {
         const riser = buildTransitionRiser(rifff.groupId, maxBarLength, turnaround.plan.riserBars, {
@@ -2272,6 +2304,9 @@ export function DiscoverPanel({
         next.set(id, stem.barLength)
         return next
       })
+      // A phrase turnaround's roll waiting on this stem's length rolls now, before the push
+      // below, so the push carries it (radioTurnaroundAtWrap).
+      turnaroundRollOnResolve(id, stem.barLength)
       const currentlyPreviewing = previewingSlotIdsRef.current
       if (!currentlyPreviewing.has(id)) {
         scheduleSyncPreviewToEngine(joinPreviewingMix(id))
@@ -2559,8 +2594,8 @@ export function DiscoverPanel({
   useEffect(() => {
     radioSlotFlagsRef.current = radioSlotFlags
   }, [radioSlotFlags])
-  // The armed GESTURE -- a standalone drop-out (no stem change) or a
-  // transition (one attached to a change). Both are the same thing to the
+  // The armed GESTURE -- the density arc's exit drop-out (no stem change) or
+  // a transition (one attached to a change). Both are the same thing to the
   // engine: curves written into the preview project, armed a lap early and
   // cleared a lap later. Elling, 2026-09-28: "also make sure to transition
   // on the proper beat... that's key" / "not just the downbeat, the proper
@@ -2591,8 +2626,10 @@ export function DiscoverPanel({
   // wrap may each carry an arrival curve, and every one of them has to
   // survive the push that follows the commit. Radio alone never puts more
   // than one entry here. At most ONE entry is ever a leading gesture (a
-  // hole, a riser or a standalone drop-out) -- every path that arms one
-  // checks that none is armed first. Empty is "nothing armed".
+  // hole, a riser or the arc's exit drop-out) -- every path that arms one
+  // checks that none is armed first. Empty is "nothing armed". The phrase
+  // turnaround, which also has its lap, is not in this list
+  // (radioTurnaroundRef, below).
   const radioGestureRef = useRef<RadioGesture[]>([])
   // The phrase turnaround armed for the lap that is playing (@shared/radioTurnaround; spec
   // 2026-10-02-radio-turnarounds-design). Rolled at the wrap that starts a phrase's last lap
@@ -2608,6 +2645,8 @@ export function DiscoverPanel({
   // True from the wrap that starts a phrase's last lap until its roll (a microtask later) has
   // run: the early decision and the manual draw wait it out (radioTurnaroundAtWrap).
   const radioTurnaroundRollPendingRef = useRef(false)
+  // The phrase end's roll while it is owed (TurnaroundRollOwed); null when nothing is owed.
+  const radioTurnaroundRollRef = useRef<TurnaroundRollOwed | null>(null)
   // The dub throws (native radio sound plan, Task 11): the web radio's own rule
   // (@shared/radioThrows stepThrows) on a clock of bars played, and the one throw armed
   // as a `dubSend` curve in the preview project, if any. See radioThrowTick. A REF, like
@@ -2917,38 +2956,128 @@ export function DiscoverPanel({
     radioGestureRef.current = []
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
-  /** The turnaround at a wrap, from the clock effect. The one that played comes off; the wrap
-   * that starts a phrase's last lap rolls the next. The roll is DEFERRED one microtask, queued
-   * right after densityTick's, so the arc's exit at this wrap (arcExitRef) is decided first:
-   * the roll leaves that row alone. The due branch's decision and a landing's arrivals run in
-   * microtasks queued later in the same tick, so they see the armed turnaround. What runs
-   * SYNCHRONOUSLY in this tick does not: stepRadioStage's early decision and its manual draw.
-   * So the roll is marked pending here, and while it is (radioTurnaroundGate's 'wait') those
-   * two decide on a later tick instead -- they are a lap early, so a tick costs nothing. Left
-   * unmarked, a hole or riser drawn on this tick would arm first, and the roll keeps an armed
-   * lead-in: the turnaround would lose the wrap the two most often share. */
+  /** The turnaround at a wrap, from the clock effect. The one that played comes off (and a roll
+   * still owed from the lap that just ended is given up: nothing fired there); the wrap that
+   * starts a phrase's last lap owes the next roll (radioTurnaroundRollRef).
+   *
+   * THE ROLL COMES AFTER THE LANDINGS, as the web radio's does (step.ts rolls after land()). A
+   * change landing on this wrap -- the landing branch's held and manual changes, the due
+   * branch's commit, a course change -- turns its row over in a microtask queued later in this
+   * same tick, and resolvedBarLengthsRef only learns the new stem's length when it resolves, a
+   * render and a promise after that. Rolled first (as it was until 2026-10-02), the roll saw the
+   * OLD loop, the old row lengths and none of the rows joining: a plan capped against the old
+   * loop could run past half a shorter new one, and a row joining here played through a stop.
+   * So the roll is queued TWO microtasks deep: the outer one runs after densityTick's (the arc's
+   * exit at this wrap is decided first, and the roll leaves that row alone), and by then every
+   * first-level microtask this tick queued -- every landing's commit -- is already on the queue,
+   * so the inner one runs after all of them. Each landing notes its row and the length it knows
+   * (noteTurnaroundLanding: the incoming stem's barLength, which the warmed stem carries), and
+   * the roll reads the loop as it will be. A landing whose length is not known yet (a cold stem,
+   * a course change's batch) DEFERS the roll to that stem's resolution (reportSlotResolution),
+   * which is also when the push carrying the stem goes out, so the plan rides that same push.
+   *
+   * WHY THE TIME IS THERE: every move is at most half the loop (turnaroundCapBeats), so the
+   * earliest any curve starts is the lap's midpoint, and the roll needs only to have reached the
+   * engine by then. Undeferred, it runs microseconds after the wrap tick and rides the landing's
+   * own push (tens to a couple of hundred ms, measured). Deferred, it is given up once the
+   * playhead is within TURNAROUND_ROLL_LATE_BARS of the half (radioTurnaroundOverdue, every tick,
+   * and the same check when the stem resolves): a move that cannot be on the engine before it
+   * would start is not played at all, never played from its middle.
+   *
+   * What runs SYNCHRONOUSLY in this tick still decides before the roll: stepRadioStage's early
+   * decision and its manual draw. So the roll is marked pending here, and while it is
+   * (radioTurnaroundGate's 'wait') those two decide on a later tick instead -- they are a lap
+   * early, so a tick (or a deferral) costs nothing. Left unmarked, a hole or riser drawn on this
+   * tick would arm first, and the roll keeps an armed lead-in: the turnaround would lose the wrap
+   * the two most often share. The due branch, a microtask, rolls inline before arming a lead-in
+   * (see there). */
   function radioTurnaroundAtWrap(lapStarts: boolean, loopBars: number): void {
     const had = radioTurnaroundRef.current !== null
     radioTurnaroundRef.current = null
+    if (radioTurnaroundRollRef.current !== null) {
+      radioTurnaroundRollRef.current = null
+      radioTurnaroundMemoryRef.current = null
+    }
+    radioTurnaroundRollPendingRef.current = false
     if (!lapStarts) {
       if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
       return
     }
     radioTurnaroundRollPendingRef.current = true
-    void Promise.resolve().then(() => {
-      radioTurnaroundRollPendingRef.current = false
-      if (!radioOnRef.current) return
-      rollRadioTurnaround(loopBars)
-      if (had || radioTurnaroundRef.current !== null) {
-        scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
-      }
-    })
+    radioTurnaroundRollRef.current = { loopBars, landed: new Map() }
+    void Promise.resolve().then(() =>
+      Promise.resolve().then(() => {
+        const armed = rollOwedRadioTurnaround()
+        if (radioOnRef.current && (had || armed)) {
+          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+        }
+      })
+    )
   }
-  /** The phrase end's roll (rollTurnaround). Math.random is passed, not called here (this
-   * repo's react-hooks/purity rule). No pushUndoSnapshot: a turnaround is performance, not an
-   * edit. A change's own lead-in already armed for this lap keeps it: no roll, and the next
-   * phrase end is not "after a turnaround". */
-  function rollRadioTurnaround(loopBars: number): void {
+  /** A row turning over while the phrase end's roll is owed (radioTurnaroundAtWrap): the roll
+   * reads it at `barLength`, null when that is not known until the stem resolves. A no-op once
+   * the roll has run. */
+  function noteTurnaroundLanding(slotId: string, barLength: number | null): void {
+    radioTurnaroundRollRef.current?.landed.set(slotId, barLength)
+  }
+  /** The row lengths and the loop the owed roll would see: the resolved ones, with every landed
+   * row's known length over its old one. */
+  function turnaroundRollLengths(owed: TurnaroundRollOwed): {
+    lengths: Map<string, number>
+    loopBars: number
+  } {
+    const lengths = new Map(resolvedBarLengthsRef.current)
+    for (const [id, bars] of owed.landed) if (bars !== null && bars > 0) lengths.set(id, bars)
+    return { lengths, loopBars: lengths.size > 0 ? Math.max(...lengths.values()) : owed.loopBars }
+  }
+  /** Whether the owed roll is too late to reach the engine before its move could start: the
+   * playhead (the last tick's position) within TURNAROUND_ROLL_LATE_BARS of the half of the
+   * shorter of the loop it was owed on and the loop it would roll in. */
+  function turnaroundRollTooLate(owed: TurnaroundRollOwed): boolean {
+    const at = radioClockRef.current?.lastPos ?? 0
+    const loopBars = Math.min(owed.loopBars, turnaroundRollLengths(owed).loopBars)
+    return at >= loopBars / 2 - TURNAROUND_ROLL_LATE_BARS
+  }
+  /** Gives the owed roll up: nothing fires at this phrase end. */
+  function giveUpTurnaroundRoll(): void {
+    radioTurnaroundRollRef.current = null
+    radioTurnaroundRollPendingRef.current = false
+    radioTurnaroundMemoryRef.current = null
+  }
+  /** The owed roll, once every landed row's length is known. True when it armed a turnaround
+   * (the caller pushes). False with nothing owed, while it waits for a stem, or when given up. */
+  function rollOwedRadioTurnaround(): boolean {
+    const owed = radioTurnaroundRollRef.current
+    if (owed === null) return false
+    if ([...owed.landed.values()].some((b) => b === null)) return false
+    radioTurnaroundRollRef.current = null
+    radioTurnaroundRollPendingRef.current = false
+    if (!radioOnRef.current) return false
+    rollRadioTurnaround(owed)
+    return radioTurnaroundRef.current !== null
+  }
+  /** A stem resolved: a deferred roll waiting on it rolls now -- or is given up when the lap is
+   * too far on for its move (turnaroundRollTooLate). Before the caller's push, so it carries it. */
+  function turnaroundRollOnResolve(slotId: string, barLength: number): void {
+    const owed = radioTurnaroundRollRef.current
+    if (owed === null || owed.landed.get(slotId) !== null) return
+    owed.landed.set(slotId, barLength)
+    if ([...owed.landed.values()].some((b) => b === null)) return
+    if (turnaroundRollTooLate(owed)) giveUpTurnaroundRoll()
+    else rollOwedRadioTurnaround()
+  }
+  /** Every tick but a wrap: a deferred roll still waiting once its move could no longer reach the
+   * engine in time is given up, so the early decision and the manual draw stop waiting on it. */
+  function radioTurnaroundOverdue(): void {
+    const owed = radioTurnaroundRollRef.current
+    if (owed !== null && turnaroundRollTooLate(owed)) giveUpTurnaroundRoll()
+  }
+  /** The phrase end's roll (rollTurnaround), on the rows and the loop as the landings at its wrap
+   * left them (radioTurnaroundAtWrap). Math.random is passed, not called here (this repo's
+   * react-hooks/purity rule). No pushUndoSnapshot: a turnaround is performance, not an edit. A
+   * change's own lead-in already armed for this lap keeps it: no roll, and the next phrase end is
+   * not "after a turnaround". */
+  function rollRadioTurnaround(owed: TurnaroundRollOwed): void {
     const leadArmed = radioGestureRef.current.some(
       (g) => g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
     )
@@ -2956,8 +3085,12 @@ export function DiscoverPanel({
       radioTurnaroundMemoryRef.current = null
       return
     }
+    // The landings at this wrap have run: a joining row is in the previewing mix
+    // (joinPreviewingMix), and an arrival gesture landing with its row is on radioGestureRef --
+    // a filter in there is `inFilterIn`, so the planner never aims a lift or a dip at a row the
+    // lane builder would then skip.
     const previewing = previewingSlotIdsRef.current
-    const lengths = resolvedBarLengthsRef.current
+    const { lengths, loopBars } = turnaroundRollLengths(owed)
     // The row a thinning arc is taking out (stepArcExit) is left out of the turnaround, as if
     // unheard, but only when its exit fades in this lap: an 8-beat drop-out (ARC_EXIT_BEATS, at
     // most half the loop) that goes silent before the wrap and removes the row in the silence,
@@ -2965,7 +3098,8 @@ export function DiscoverPanel({
     // exit held back (arcExitHeldBack: a stage out, a drop-out or lead-in armed) is not leaving
     // at this wrap: the row plays on, so it stays in, and a stop or low drop silences it as any
     // other. No `leavingRowId` either way: the planner's wash takes the non-drums bed. (The web
-    // radio's leaving row plays through to the wrap; sssketch's does not.)
+    // radio's leaving row goes silent before the wrap too -- the same 8-beat exit hole -- and its
+    // roll leaves it out the same way.)
     const exit = arcExitRef.current
     const exiting =
       exit !== null &&
@@ -3011,6 +3145,7 @@ export function DiscoverPanel({
   function clearRadioTurnaround(): void {
     radioTurnaroundMemoryRef.current = null
     radioTurnaroundRollPendingRef.current = false
+    radioTurnaroundRollRef.current = null
     if (radioTurnaroundRef.current === null) return
     radioTurnaroundRef.current = null
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
@@ -3689,8 +3824,11 @@ export function DiscoverPanel({
     // The density arc gets every tick, before any branch below can return.
     densityTick(step.wrapped, pos, loopBars)
     // The phrase turnaround: off at every wrap, rolled on the wrap that starts a phrase's last
-    // lap. After densityTick, whose microtask decides the arc's removal at this wrap first.
+    // lap -- after densityTick's microtask (the arc's removal at this wrap) and after every
+    // landing this tick commits (radioTurnaroundAtWrap). Between wraps, a roll still waiting on a
+    // stem is given up once its move could no longer reach the engine in time.
     if (step.wrapped) radioTurnaroundAtWrap(step.turnaroundLapStarts, loopBars)
+    else radioTurnaroundOverdue()
     // So do the dub throws (Task 11).
     radioThrowTick(pos, loopBars)
     // A change that was WAITING for its boundary LANDS HERE and only
@@ -3759,7 +3897,13 @@ export function DiscoverPanel({
       // and waits for the next wrap.
       const landingReady: [
         string,
-        { pick: SlotPick; joining: boolean; arrival: ManualArrival | null; radioSkip?: boolean }
+        {
+          pick: SlotPick
+          stem: ResolvedCandidateStem | null
+          joining: boolean
+          arrival: ManualArrival | null
+          radioSkip?: boolean
+        }
       ][] = manualToLand
       if (landingReady.length > 0) {
         const landingIds = new Set(landingReady.map(([slotId]) => slotId))
@@ -3843,6 +3987,9 @@ export function DiscoverPanel({
               : `gesture-led${landingReady.length > 0 ? '+manual' : ''}`
           ) // TEMP
           commitSlotPick(led.slotId, led.pick)
+          // The phrase end's roll, if this wrap owes one, runs after this and reads this row at
+          // its incoming length (radioTurnaroundAtWrap).
+          noteTurnaroundLanding(led.slotId, led.stem?.barLength ?? null)
           // Armed HERE rather than when the change was held, and only once
           // the commit has actually happened: an arrival curve belongs to
           // the stem that is arriving, so arming it a lap early would
@@ -3899,6 +4046,7 @@ export function DiscoverPanel({
             radioTraceBegin(boundaryBars, bpmRef.current, 'manual') // TEMP
           }
           commitSlotPick(slotId, change.pick)
+          noteTurnaroundLanding(slotId, change.stem?.barLength ?? null)
           // One push for the whole landing, as for a course change: the
           // hold lifts when the LAST of them has resolved.
           holdSyncUntilResolved(slotId)
@@ -4047,6 +4195,8 @@ export function DiscoverPanel({
           // it wins, as it does over radio's own change.
           if (manualLandedIds.has(slotId)) continue
           commitSlotPick(slotId, pick)
+          // No stem carried: a roll this wrap owes waits for these to resolve.
+          noteTurnaroundLanding(slotId, null)
           // One push for the whole turnover, not one per layer landing:
           // the hold lifts when the LAST of them has resolved.
           holdSyncUntilResolved(slotId)
@@ -4163,13 +4313,28 @@ export function DiscoverPanel({
         // what keeps the project byte-identical to what shipped.
         //
         // Never while another gesture is already armed: two curves in one
-        // lap is a wash, and a standalone drop-out that has not finished
-        // has as much right to the lap as a transition does.
+        // lap is a wash, and the arc's exit drop-out that has not finished
+        // has as much right to the lap as a transition does. (A phrase
+        // turnaround is handled just below: the change keeps an arrival.)
         const changing = slotsRef.current.find((sl) => sl.id === pending.slotId)
         const drawnTransition =
           radioGestureRef.current.length === 0
             ? pickTransition(radioSettings.transitions, changing?.kinds ?? [])
             : 'cut'
+        // On the wrap that owes the phrase end's roll, that roll comes after this microtask
+        // (radioTurnaroundAtWrap) -- but a lead-in drawn here would arm first and keep the lap,
+        // and the turnaround would lose the wrap the two share. So the roll runs NOW, as if this
+        // change lands here as a cut (which it does if a turnaround comes up), with every landing
+        // before it in this tick already noted. A cold pick has no length to roll with: the
+        // lead-in keeps the lap, and the roll stands down when it runs.
+        if (
+          turnaroundGateNow() === 'wait' &&
+          radioGestureLeadsChange(drawnTransition) &&
+          pending.stem !== null
+        ) {
+          noteTurnaroundLanding(pending.slotId, pending.stem.barLength)
+          rollOwedRadioTurnaround()
+        }
         // Under this lap's turnaround a lead-in would land on its wrap: the turnaround is the
         // change's lead-in, so it keeps only an arrival (spec section 3).
         const transition =
@@ -4177,7 +4342,7 @@ export function DiscoverPanel({
             ? radioTransitionUnderTurnaround(drawnTransition)
             : drawnTransition
         // How long the move takes, in beats. A hole draws from the same
-        // weighted 1/2/4 the standalone drop-out does, because it IS one
+        // weighted 1/2/4 a turnaround's drum drop does, because it IS one
         // -- a fixed length is a rhythm and a varied one is a gesture. A
         // riser gets two bars, long enough to read as a build; a sweep, a
         // bloom and a duck get one bar, which is the arrival rather than
@@ -4231,9 +4396,8 @@ export function DiscoverPanel({
               arrival: { kind: transition, beats }
             })
           }
-          // Nothing else this interval: the drop-out roll and the next
-          // pick both wait for the change to actually land, and the
-          // landing makes them.
+          // Nothing else this interval: the next pick waits for the change
+          // to actually land, and the landing makes it.
           return
         }
         // No pushUndoSnapshot: radio firing every twenty bars would fill
@@ -4242,9 +4406,11 @@ export function DiscoverPanel({
         // padlock is the tool for "I liked that one" (spec 3.4).
         radioTraceBegin(boundaryBars, bpmRef.current, `due-${transition}`) // TEMP
         commitSlotPick(pending.slotId, pending.pick)
+        noteTurnaroundLanding(pending.slotId, pending.stem?.barLength ?? null)
         // Nothing pushes until this pick's stem has resolved -- not the
         // previous lap's gesture coming off at this same wrap, not the
-        // drop-out roll below, not this change's own arrival gesture.
+        // phrase turnaround rolled after this landing, not this change's
+        // own arrival gesture.
         // See holdSyncUntilResolved.
         holdSyncUntilResolved(pending.slotId)
         radioTraceMark('commit') // TEMP
@@ -4778,6 +4944,7 @@ export function DiscoverPanel({
       radioTurnaroundRef.current = null
       radioTurnaroundMemoryRef.current = null
       radioTurnaroundRollPendingRef.current = false
+      radioTurnaroundRollRef.current = null
       radioThrowRef.current = initialDiscoverThrowState()
       radioThrowClearOwedRef.current = false
       setRadioLedChange(null)
