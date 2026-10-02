@@ -11,8 +11,10 @@ namespace sssketch
      * measured against Chrome 154's own BiquadFilterNode output: within 1 float ulp, where a
      * float-rounded feedback was 1e-4 off at 25 Hz).
      *
-     *   highpass   Q in DECIBELS (Web Audio's lowpass/highpass Q): alpha = sin(w0) / (2·10^(Q/20)).
-     *              The web's biquadQ(0), -3.0103 dB, is linear 0.7071: Butterworth.
+     *   highpass,  Q in DECIBELS (Web Audio's lowpass/highpass Q): alpha = sin(w0) / (2·10^(Q/20)).
+     *   lowpass    The web's biquadQ(0), -3.0103 dB, is linear 0.7071: Butterworth. (The dub echo,
+     *              DubDelay.h, passes Q = Math.SQRT1_2 *as decibels*, linear 1.085, as its web
+     *              twin does.)
      *   shelves    no Q (Web Audio's shelves ignore it): slope S = 1, A = 10^(G/40),
      *              alpha = sin(w0)/2 · sqrt((A + 1/A)(1/S - 1) + 2).
      *
@@ -24,6 +26,7 @@ namespace sssketch
         double x1 = 0.0, x2 = 0.0, y1 = 0.0, y2 = 0.0;
 
         void setHighpass(double sampleRate, float frequencyHz, float qDb);
+        void setLowpass(double sampleRate, float frequencyHz, float qDb);
         void setLowShelf(double sampleRate, float frequencyHz, float gainDb);
         void setHighShelf(double sampleRate, float frequencyHz, float gainDb);
         void reset();

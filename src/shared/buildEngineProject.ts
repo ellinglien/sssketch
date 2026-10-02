@@ -21,7 +21,9 @@ import { RISER_DEFAULT_Q, audibleRisers, type RiserClip } from './riser'
 import { stemPansForRifff } from './radioPan'
 import { pumpRoleForSoundType, type PumpRole } from './radioPump'
 import { stretchRatioForStem } from './stretchRatio'
+import type { ThrowTiming } from './radioThrows'
 import {
+  DUB_MAX_FEEDBACK,
   FAUST_DEFAULTS,
   glueThresholdDb,
   normalizeSoundSettings,
@@ -91,6 +93,13 @@ export interface EngineStemAutomation {
   filterResonance: AutomationPoint[]
   reverbSend: AutomationPoint[]
   volume: AutomationPoint[]
+  /** The dub throws' send into the echo (native radio sound plan, Task 10; DubDelay.h): a linear
+   * gain 0..1 on the stem's post-pan signal, the web's per-row delaySend. WIRE-ONLY, never a lane
+   * (AUTOMATION_PARAMS has no `dubSend`): the throw planners draw it (Discover's radio, Task 11;
+   * the timeline's seeded plan, Task 12), passed in as BuildEngineProjectOptions.dubThrows.
+   * ABSENT unless this stem throws -- absence is load-bearing, so every other toolkit sends the
+   * JSON it sent before. Twin of EngineStemAutomation::dubSend in EngineProject.h. */
+  dubSend?: AutomationPoint[]
 }
 
 export interface EngineStemToolkit {
@@ -278,13 +287,34 @@ export interface EngineSound {
   reverbReturn?: number
   /** The drum-keyed pump's depth. */
   pump?: { depthDb: number }
+  /** The dub echo the throws open into (Task 10): the echo time in beats (0.75 a dotted eighth,
+   * 1 a quarter; the web's ThrowTiming) and its feedback, as the current throw sets them. Only
+   * with throws on and a plan given (BuildEngineProjectOptions.dubThrows). The engine takes a
+   * change at the next throw's start, never under a ringing tail with no throw. */
+  dub?: { delayBeats: 0.75 | 1; feedback: number }
+}
+
+/** The echo's settings on the wire, for a throw's timing and feedback (the feedback clamped to
+ * the web's DUB_MAX_FEEDBACK). */
+export function engineDubFor(echo: {
+  timing: ThrowTiming
+  feedback: number
+}): NonNullable<EngineSound['dub']> {
+  const feedback = Number.isFinite(echo.feedback)
+    ? Math.min(DUB_MAX_FEEDBACK, Math.max(0, echo.feedback))
+    : 0
+  return { delayBeats: echo.timing === 'quarter' ? 1 : 0.75, feedback }
 }
 
 /** The project's sound settings to the wire, or undefined when the block would carry nothing
  * but today's behaviour (zita at today's return, every stage off) -- see EngineSound. A missing
  * `sound` (the pre-project startup state, a throwaway preview that copied none) is undefined
  * too. Normalises first: a hand-edited project's junk never reaches the engine. */
-export function buildEngineSound(sound: SoundSettings | undefined): EngineSound | undefined {
+export function buildEngineSound(
+  sound: SoundSettings | undefined,
+  /** The current throw's echo (BuildEngineProjectOptions.dubThrows), sent only while throws are on. */
+  echo?: { timing: ThrowTiming; feedback: number }
+): EngineSound | undefined {
   if (sound === undefined) return undefined
   const s = normalizeSoundSettings(sound)
   const wire: EngineSound = { room: s.reverb.room }
@@ -307,6 +337,7 @@ export function buildEngineSound(sound: SoundSettings | undefined): EngineSound 
   const reverbReturn = 2 * s.reverb.amount
   if (reverbReturn !== 1) wire.reverbReturn = reverbReturn
   if (s.pump.on) wire.pump = { depthDb: s.pump.depthDb }
+  if (echo && s.throws.on && s.throws.level > 0) wire.dub = engineDubFor(echo)
   const saysNothing = wire.room === 'zita' && Object.keys(wire).length === 1
   return saysNothing ? undefined : wire
 }
@@ -557,6 +588,51 @@ export interface BuildEngineProjectOptions {
    * still carries its roles, so switching the pump off mid-duck glides out (the web's
    * setPump(0)) rather than stepping. Ignored while the pump is on. */
   pumpRelease?: boolean
+  /** Dub throws planned for this project (native radio sound plan, Tasks 11/12; the engine half
+   * is Task 10): the echo the current throw opens into, and each throwing stem's send curve by
+   * stem key -- clip-relative bars (the lanes' convention: bar 0 is the clip's left edge), values
+   * 0..1 at full level. buildEngineProject multiplies the curves by the project's throw level
+   * (`sound.throws.level`, the web's Engine.setEcho) and sends them as the stems'
+   * `toolkit.automation.dubSend`, with `sound.dub`, only while throws are on and the level is
+   * above 0, and `sound.dub` only when some curve is sent (one that is 0 throughout is not);
+   * otherwise neither is sent. */
+  dubThrows?: {
+    echo: { timing: ThrowTiming; feedback: number }
+    sends: ReadonlyMap<string, readonly AutomationPoint[]>
+  }
+}
+
+/** The dub send curves to put on the wire, by stem key: the plan's, scaled by the throw level,
+ * when throws are on and the level is above 0; none otherwise. A curve that is empty, or 0
+ * throughout, is left out. */
+function dubSendsSent(
+  state: AppState,
+  options: BuildEngineProjectOptions
+): ReadonlyMap<string, AutomationPoint[]> | undefined {
+  if (!options.dubThrows || !state.sound) return undefined
+  const s = normalizeSoundSettings(state.sound)
+  if (!s.throws.on || !(s.throws.level > 0)) return undefined
+  const out = new Map<string, AutomationPoint[]>()
+  for (const [key, curve] of options.dubThrows.sends) {
+    const points = scaleCurveByGain(normaliseAutomationCurve([...curve]), s.throws.level)
+    if (points.some((p) => p.value > 0)) out.set(key, points)
+  }
+  return out
+}
+
+/** A toolkit that does nothing but carry a dub send (the engine keeps such a stem off the
+ * toolkit path: stemToolkitIsNeutral ignores dubSend), for a throwing stem with no toolkit of
+ * its own. */
+function dubOnlyToolkit(originBar: number): EngineStemToolkit {
+  return {
+    filterMode: 'lowpass',
+    filterCutoff: neutralCutoff('lowpass'),
+    filterResonance: defaultFilterSettings('lowpass').resonance,
+    reverbSend: 0,
+    volume: 1,
+    originBar,
+    automation: { filterCutoff: [], filterResonance: [], reverbSend: [], volume: [] }
+  }
 }
 
 // Real perf bug, found live 2026-09-15 via a direct report ("it's all very
@@ -637,6 +713,8 @@ export async function buildEngineProject(
   const pumpRoles: ReadonlyMap<string, PumpRole> | undefined = pumpRolesSent(state, options)
     ? (options.stemPumpRoles ?? timelineStemPumpRoles(state))
     : undefined
+  // Dub throws (Task 10): the planned send curves, scaled by the throw level, while throws are on.
+  const dubSends = dubSendsSent(state, options)
 
   // Per-stem stretch ratio, computed once and reused by BOTH the gathering
   // pass below and the assembly pass further down -- pure/cheap (no I/O),
@@ -743,18 +821,27 @@ export async function buildEngineProject(
       // section 2b), and two stems of the same rifff can carry entirely
       // different curves. The origin they share is the rifff's own left edge,
       // which is exactly what the lane is drawn over.
-      const toolkit = buildStemToolkit(
+      const originBar = clipOriginBar({
+        startBar: rifff.startBar ?? 0,
+        leftCropBars,
+        offsetSteps,
+        snapDiv: SNAP_DIVS[state.snapIdx]
+      })
+      const ownToolkit = buildStemToolkit(
         state.stemFilters?.[key],
         state.stemSends?.[key],
         state.stemAutomation?.[key],
-        clipOriginBar({
-          startBar: rifff.startBar ?? 0,
-          leftCropBars,
-          offsetSteps,
-          snapDiv: SNAP_DIVS[state.snapIdx]
-        }),
+        originBar,
         gain
       )
+      // A throwing stem's dub send rides in its toolkit (a do-nothing one if it has none).
+      const dubSend = dubSends?.get(key)
+      const toolkit: EngineStemToolkit | undefined = dubSend
+        ? (() => {
+            const base = ownToolkit ?? dubOnlyToolkit(originBar)
+            return { ...base, automation: { ...base.automation, dubSend } }
+          })()
+        : ownToolkit
 
       stems.push({
         stemKey: key,
@@ -845,7 +932,11 @@ export async function buildEngineProject(
   // all on the payload -- see masterFilterForWire on why the absence, not a
   // neutral value, is the thing that has to reach the engine.
   const masterFilter = masterFilterForWire(state.masterFilter)
-  const sound = buildEngineSound(state.sound)
+  // The echo goes out only with a throw to open into it.
+  const sound = buildEngineSound(
+    state.sound,
+    dubSends && dubSends.size > 0 ? options.dubThrows?.echo : undefined
+  )
 
   return {
     bpm: state.bpm,

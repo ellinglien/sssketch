@@ -78,6 +78,26 @@ namespace sssketch
         setNormalised(*this, beta, -2.0 * beta, beta, 1.0 + alpha, -2.0 * cosw, 1.0 - alpha);
     }
 
+    void WebBiquad::setLowpass(double sampleRate, float frequencyHz, float qDb)
+    {
+        const double cutoff = normalised(sampleRate, frequencyHz);
+        if (cutoff >= 1.0)
+        {
+            setNormalised(*this, 1, 0, 0, 1, 0, 0); // nothing removed
+            return;
+        }
+        if (cutoff <= 0.0)
+        {
+            setNormalised(*this, 0, 0, 0, 1, 0, 0); // everything removed
+            return;
+        }
+        const double theta = kPi * cutoff;
+        const double alpha = std::sin(theta) / (2.0 * std::pow(10.0, (double) qDb / 20.0));
+        const double cosw = std::cos(theta);
+        const double beta = (1.0 - cosw) / 2.0;
+        setNormalised(*this, beta, 2.0 * beta, beta, 1.0 + alpha, -2.0 * cosw, 1.0 - alpha);
+    }
+
     void WebBiquad::setShelf(bool high, double sinW0, double cosW0, float gainDb)
     {
         const double a = std::pow(10.0, (double) gainDb / 40.0);

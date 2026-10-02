@@ -328,6 +328,8 @@ namespace sssketch
                                     parseAutomationCurve(automationVar, "reverbSend");
                                 toolkit.automation.volume =
                                     parseAutomationCurve(automationVar, "volume");
+                                toolkit.automation.dubSend =
+                                    parseAutomationCurve(automationVar, "dubSend");
                             }
                         }
 

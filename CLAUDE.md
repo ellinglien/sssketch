@@ -199,7 +199,9 @@ After editing a `.dsp`: run that script here, `node scripts/build-faust.mjs` and
 `MasterGlueToneTests`, `MasterSaturationTests`). CI checks only that
 the hashes agree (no `faust` there, so the regenerate-and-compare test skips, as expected); the
 full drift check and the bit-exact `FaustStageTests` against the web's output run locally. See
-`native-engine/Source/dsp/faust/LICENSES.md`.
+`native-engine/Source/dsp/faust/LICENSES.md`. The dub echo (`DubDelay.h`) is hand-written C++, not
+Faust, but is matched to the web the same way: after editing the radio's `dubDelay.ts` or the `DUB_*`
+numbers, re-render `node scripts/golden-dub-delay.mjs` (`DubDelayBusTests`).
 
 ## Where the history actually lives
 

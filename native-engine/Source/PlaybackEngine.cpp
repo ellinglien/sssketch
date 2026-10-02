@@ -225,6 +225,31 @@ namespace sssketch
             }
         }
 
+        // The dub echo (DubDelay.h): on only with the project's sound.dub AND a stem whose dubSend
+        // curve is not 0 throughout. Otherwise every dubSend is cleared here (this snapshot's own
+        // copy of the project), so renderBlock never taps a stem for the echo, and nothing is
+        // built: with no send, the bus does not exist. Muted stems count (a mute re-sends the
+        // project, and the routing should not hinge on it; a muted stem sends nothing).
+        {
+            const auto sends = [](const std::vector<AutomationPoint>& curve) {
+                return std::any_of(curve.begin(), curve.end(), [](const AutomationPoint& p) { return p.value > 0.0; });
+            };
+            bool anyDubSend = false;
+            for (const auto& rifff : next->project.rifffs)
+                for (const auto& stem : rifff.stems)
+                    anyDubSend = anyDubSend || sends(stem.toolkit.automation.dubSend);
+            next->dubActive = next->project.sound.dub.has_value() && anyDubSend;
+            for (auto& rifff : next->project.rifffs)
+                for (auto& stem : rifff.stems)
+                    if (! next->dubActive || ! sends(stem.toolkit.automation.dubSend))
+                        stem.toolkit.automation.dubSend.clear();
+            // Its core (2 s of line a side), on this (message) thread; only the first build
+            // happens here, at masterRate -- after that the rate is prepareMaster's or
+            // drainRetiredProject's, as the cavern's.
+            if (next->dubActive && dubBus.preparedRate() == 0.0)
+                dubBus.prepare(masterRate.load());
+        }
+
         // The master stage's limiter and glue are Faust objects: built here, on the message thread,
         // before a snapshot that asks for it can reach the audio thread (a no-op once one is
         // built at the current rate).
@@ -248,6 +273,8 @@ namespace sssketch
                     anyReverbSend = anyReverbSend || (stem.hasToolkit && stemSendsToReverb(stem.toolkit));
             for (const auto& riser : next->project.risers)
                 anyReverbSend = anyReverbSend || riser.send > 0.0;
+            // The dub echo feeds the room too (kDubToReverb).
+            anyReverbSend = anyReverbSend || next->dubActive;
             if (anyReverbSend)
                 reverbBus.prepareCavern(masterRate.load());
         }
@@ -378,6 +405,15 @@ namespace sssketch
         masterStage.drainRetired();
         drumPump.drainRetired();
         reverbBus.drainRetiredCavern();
+        dubBus.drainRetired();
+        // A dub block found no core at its rate (DubDelayBus::process gave no echo): build one,
+        // as for the cavern below. Expected never in practice (prepareMaster comes first).
+        if (const double wanted = dubBus.takeWantedRate(); wanted > 0.0 && wanted != dubBus.preparedRate())
+        {
+            juce::Logger::writeToLog("PlaybackEngine: the dub echo had no core at " + juce::String(wanted)
+                                     + " Hz; building one");
+            dubBus.prepare(wanted);
+        }
         // A cavern block found no convolver at its rate (ReverbBus::runCavern went silent for
         // it): build one now. Expected never in practice -- prepareMaster tells the engine the
         // device's and the export's rate before either renders -- so it is logged.
@@ -445,6 +481,9 @@ namespace sssketch
         // The cavern room's convolver follows the same rate, rebuilt only if one exists.
         if (reverbBus.cavernPreparedRate() != 0.0)
             reverbBus.prepareCavern(sampleRate);
+        // And the dub echo's core.
+        if (dubBus.preparedRate() != 0.0)
+            dubBus.prepare(sampleRate);
     }
 
     void PlaybackEngine::processMaster(double sampleRate, int numSamples, float* outL, float* outR)
@@ -596,7 +635,13 @@ namespace sssketch
         // dragging a send back to zero (or deleting the only sending clip)
         // must still hear the tail out rather than have it cut on the next
         // block.
-        const bool runReverbBus = snap->anyToolkitActive || reverbBus.isRinging();
+        // The dub echo bus (DubDelay.h): opened while the project has a dub send, or while the
+        // echo still rings after it has gone. It feeds the reverb (kDubToReverb), so it opens the
+        // reverb bus with it. With neither, nothing below touches it: today's path.
+        const bool runDub = snap->dubActive || dubBus.isRinging();
+        if (runDub)
+            dubBus.beginBlock(numSamples);
+        const bool runReverbBus = snap->anyToolkitActive || reverbBus.isRinging() || runDub;
         if (runReverbBus)
         {
             reverbBus.prepare(sampleRate, numSamples);
@@ -711,8 +756,11 @@ namespace sssketch
                 // buffer too: a pumped stem's dry signal goes to its channel's pumped buffer
                 // instead of the channel, and a key stem's to the key buffer as well.
                 const auto pumpRole = roleOf(stem);
-                const bool ownBuffer =
-                    stem.hasToolkit || stem.pan != 0.0 || pumpRole != EngineStem::PumpRole::none;
+                // And a stem with a dub throw (its dubSend curve, kept only while the project's
+                // echo is on -- buildSnapshot): the echo is tapped from this stem alone.
+                const auto& dubSend = stem.toolkit.automation.dubSend;
+                const bool ownBuffer = stem.hasToolkit || stem.pan != 0.0
+                    || pumpRole != EngineStem::PumpRole::none || ! dubSend.empty();
                 float* stemOutL = chOutL;
                 float* stemOutR = chOutR;
                 // The own buffer is cleared LAZILY, by the first segment that
@@ -783,7 +831,13 @@ namespace sssketch
                             stemOutR);
                     else
                         applyStemPan(stem.pan, numSamples, stemOutL, stemOutR);
-                    // The send has been tapped by now (applyStemToolkit), so it is not pumped.
+                    // The dub throw's send: post-volume, post-pan, beside the reverb send and,
+                    // like it, before the pump (the web's rows feed their delaySend from the
+                    // pan, ahead of the pump bus).
+                    if (! dubSend.empty())
+                        dubBus.addSendCurve(numSamples, stemOutL, stemOutR, dubSend, stem.toolkit.originBar,
+                                            positionBars, spb, sampleRate);
+                    // The sends have been tapped by now (applyStemToolkit, the dub), so they are not pumped.
                     if (routeToPumped(*snap, pumpRole, thisChannel, pumpedReady, numSamples, stemOutL, stemOutR,
                                       chOutL, chOutR))
                         return;
@@ -1116,6 +1170,29 @@ namespace sssketch
                 outL[i2] += channelL[i][i2];
                 outR[i2] += channelR[i][i2];
             }
+        }
+
+        // The dub echo, BEFORE the reverb's end, so its 0.15 into the room (kDubToReverb, the
+        // web's toReverb) is in this block's reverb input; its wet signal joins the master sum
+        // here, beside the reverb's, as the web's dub output joins the master input. The room is
+        // fed every block the echo runs, silence included, as a sending riser's is: the cavern's
+        // convolver frames its input from the first block it is fed, so starting the feed only
+        // where the echo first sounds would hang the room's framing on the host's block split.
+        if (runDub)
+        {
+            dubBus.process(sampleRate, snap->project.sound.dub, snap->project.bpm, numSamples);
+            const float* wetL = dubBus.wetLeft();
+            const float* wetR = dubBus.wetRight();
+            for (int i2 = 0; i2 < numSamples; ++i2)
+            {
+                outL[i2] += wetL[i2];
+                outR[i2] += wetR[i2];
+            }
+            // A constant: reset() leaves it settled, so every next() is exactly kDubToReverb
+            // (the web's GainNode's float multiply).
+            ParamSmoother toReverb;
+            toReverb.reset(sampleRate, kAutomationSmoothingSec, kDubToReverb);
+            reverbBus.addSend(numSamples, wetL, wetR, toReverb);
         }
 
         // Adds the wet reverb on top of the summed dry mix. A no-op leaving

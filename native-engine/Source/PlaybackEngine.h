@@ -1,6 +1,7 @@
 // native-engine/Source/PlaybackEngine.h
 #pragma once
 #include "DrumPump.h"
+#include "DubDelay.h"
 #include "EngineProject.h"
 #include "NoiseRiser.h"
 #include "StemBufferCache.h"
@@ -266,7 +267,13 @@ namespace sssketch
          * calls it beside resetMaster, when a stop or pause has faded out and when the device
          * (re)starts, so a play after a stop is not under the old cavern decay (and equals an
          * export from the same bar). A seek keeps the tail: a real room keeps ringing. */
-        void dropReverbTail() { reverbBus.dropCavernTail(); }
+        void dropReverbTail()
+        {
+            reverbBus.dropCavernTail();
+            // The dub echo is a send bus too (DubDelayBus::dropTail): a stop drops its tail as
+            // the cavern's, so a play after it starts as an export does; a seek keeps it.
+            dubBus.dropTail();
+        }
 
         /** AUDIO THREAD, with no renderBlock in flight (or the message thread with no callback
          * running). See DrumPump::clear: Transport calls it beside clearMasterDynamics (a seek's
@@ -296,6 +303,19 @@ namespace sssketch
             const auto it = riserVoicePool.find(id);
             return it != riserVoicePool.end() ? it->second.get() : nullptr;
         }
+        /** For tests: the dub echo bus (DubDelay.h) -- the rate of its last built core (0: none,
+         * which is the case until a project with sound.dub has a stem with a dubSend curve), the
+         * rate the audio thread runs, whether a swapped-out core waits for drainRetiredProject,
+         * whether it is fed or ringing, blocks it gave no echo for want of a core, and the
+         * settings it runs. */
+        double dubPreparedRate() const { return dubBus.preparedRate(); }
+        double dubLiveRate() const { return dubBus.liveRate(); }
+        bool dubRetiredPending() const { return dubBus.hasRetired(); }
+        bool dubRinging() const { return dubBus.isRinging(); }
+        unsigned long long dubRateMismatchCount() const { return dubBus.rateMismatchCount(); }
+        float dubDelaySec() const { return dubBus.currentDelaySec(); }
+        float dubFeedback() const { return dubBus.currentFeedback(); }
+
         /** For tests: whether the zita room's reverb has been constructed (ReverbBus::hasBeenBuilt). */
         bool zitaReverbBuilt() const { return reverbBus.hasBeenBuilt(); }
         bool cavernReverbRetiredPending() const { return reverbBus.hasRetiredCavern(); }
@@ -457,6 +477,12 @@ namespace sssketch
             // released (DrumPump.h, RELEASE). A fresh engine never ducks, so such a project
             // otherwise renders exactly as one without roles.
             bool pumpReleasing = false;
+            // The dub echo (DubDelay.h; native radio sound plan, Task 10). True when the project
+            // has sound.dub AND a stem with a dubSend curve that is not 0 throughout -- decided
+            // here. Otherwise every stem's dubSend has been cleared here, so renderBlock never
+            // taps a stem for the echo and, with the bus silent, routes exactly as before it
+            // existed.
+            bool dubActive = false;
             // The pumped stems' dry sum per channel (channelGroups order), and the key stems' dry sum for the whole
             // project; sized lazily per numSamples, like the channel scratch. `mutable` for the
             // same reason. pumpTargets is reserved to the channel count here, so filling it per
@@ -746,5 +772,11 @@ namespace sssketch
          * held here, not in the snapshot, so a re-sync keeps the envelope. `mutable` as the
          * reverb bus is. */
         mutable DrumPump drumPump;
+
+        /** The dub echo bus (DubDelay.h). Its core (the 2 s lines) is built on the message thread
+         * (buildSnapshot, prepareMaster, drainRetiredProject) and run by the single rendering
+         * thread; held here, not in the snapshot, so a re-sync keeps its tail. `mutable` as the
+         * reverb bus is. */
+        mutable DubDelayBus dubBus;
     };
 }

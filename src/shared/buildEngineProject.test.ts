@@ -3,6 +3,7 @@ import {
   buildEngineProject,
   buildEngineRisers,
   buildEngineSound,
+  engineDubFor,
   timelineStemPans,
   timelineStemPumpRoles,
   type EngineStem
@@ -19,7 +20,7 @@ import {
 import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import { stemKey, type Rifff } from './types'
-import { DEFAULT_REVERB, defaultFilterSettings } from './toolkit'
+import { AUTOMATION_PARAMS, DEFAULT_REVERB, defaultFilterSettings, neutralCutoff } from './toolkit'
 import { MIN_RISER_LENGTH_BARS, RISER_DEFAULTS, createRiser, type RiserClip } from './riser'
 
 const rifff: Rifff = {
@@ -1292,5 +1293,176 @@ describe('timelineStemPans (the one timeline rule the wire and the DAW exports s
     sound.panning.on = false
     expect(timelineStemPans(stateWith({ rifffs: { r1: placed }, sound })).size).toBe(0)
     expect(timelineStemPans(stateWith({ rifffs: { r1: placed } })).size).toBe(0)
+  })
+})
+
+describe('dub throws on the wire (native radio sound plan, Task 10)', () => {
+  const twoStems: Rifff = {
+    ...rifff,
+    stems: [
+      { ...rifff.stems[0], slot: 1, type: 'notes', path: '/n.wav' },
+      { ...rifff.stems[0], slot: 2, type: 'fx', path: '/f.wav' }
+    ]
+  }
+  const withThrows = (on: boolean, level = 1): SoundSettings => {
+    const s = normalizeSoundSettings(undefined)
+    s.throws = { on, rate: 'normal', level }
+    return s
+  }
+  // a throw as the planners draw it: 5 ms ramps, clip-relative bars
+  const curve = [
+    { bar: 1, value: 0 },
+    { bar: 1.0025, value: 1 },
+    { bar: 1.2475, value: 1 },
+    { bar: 1.25, value: 0 }
+  ]
+  type Plan = {
+    dubThrows: {
+      echo: { timing: 'dotted-eighth'; feedback: number }
+      sends: Map<string, { bar: number; value: number }[]>
+    }
+  }
+  const plan = (sends: [string, { bar: number; value: number }[]][]): Plan => ({
+    dubThrows: {
+      echo: { timing: 'dotted-eighth' as const, feedback: 0.6 },
+      sends: new Map(sends)
+    }
+  })
+
+  it("a planned curve passes through as the stem's dubSend, in a do-nothing toolkit, with sound.dub", async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: twoStems }, sound: withThrows(true) }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      plan([[stemKey('r1', 2), curve]])
+    )
+    const [plain, throwing] = project.rifffs[0].stems
+    expect('toolkit' in plain).toBe(false)
+    expect(throwing.toolkit).toEqual({
+      filterMode: 'lowpass',
+      filterCutoff: neutralCutoff('lowpass'),
+      filterResonance: defaultFilterSettings('lowpass').resonance,
+      reverbSend: 0,
+      volume: 1,
+      originBar: 4, // the clip's left edge: its curve is clip-relative
+      automation: {
+        filterCutoff: [],
+        filterResonance: [],
+        reverbSend: [],
+        volume: [],
+        dubSend: curve
+      }
+    })
+    expect(project.sound?.dub).toEqual({ delayBeats: 0.75, feedback: 0.6 })
+  })
+
+  it('is wire-only: never a lane the UI draws', () => {
+    expect(AUTOMATION_PARAMS as readonly string[]).not.toContain('dubSend')
+  })
+
+  it('rides beside a toolkit the stem already has', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        rifffs: { r1: twoStems },
+        sound: withThrows(true),
+        stemSends: { [stemKey('r1', 1)]: 0.4 }
+      }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      plan([[stemKey('r1', 1), curve]])
+    )
+    const tk = project.rifffs[0].stems[0].toolkit
+    expect(tk?.reverbSend).toBe(0.4)
+    expect(tk?.automation.dubSend).toEqual(curve)
+  })
+
+  it("the throw level scales the curve (the web's setEcho); level 0 sends no throw at all", async () => {
+    const half = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: twoStems }, sound: withThrows(true, 0.5) }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      plan([[stemKey('r1', 2), curve]])
+    )
+    expect(half.rifffs[0].stems[1].toolkit?.automation.dubSend?.map((p) => p.value)).toEqual([
+      0, 0.5, 0.5, 0
+    ])
+    const none = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: twoStems }, sound: withThrows(true, 0) }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      plan([[stemKey('r1', 2), curve]])
+    )
+    expect('toolkit' in none.rifffs[0].stems[1]).toBe(false)
+    expect(none.sound?.dub).toBeUndefined()
+  })
+
+  it('throws off, no settings, no plan, or a curve that is 0 throughout: no dubSend key and no sound.dub', async () => {
+    const zero = [
+      { bar: 0, value: 0 },
+      { bar: 2, value: 0 }
+    ]
+    const cases: [SoundSettings | undefined, Plan | object][] = [
+      [withThrows(false), plan([[stemKey('r1', 2), curve]])],
+      [undefined, plan([[stemKey('r1', 2), curve]])],
+      [withThrows(true), {}],
+      [withThrows(true), plan([[stemKey('r1', 2), zero]])]
+    ]
+    for (const [sound, opts] of cases) {
+      const project = await buildEngineProject(
+        stateWith({
+          bpm: 150,
+          rifffs: { r1: twoStems },
+          sound,
+          stemSends: { [stemKey('r1', 1)]: 0.4 }
+        }),
+        vi.fn(),
+        emptyCatalog,
+        {},
+        opts
+      )
+      expect(
+        project.rifffs[0].stems.some((s) => s.toolkit && 'dubSend' in s.toolkit.automation)
+      ).toBe(false)
+      expect('toolkit' in project.rifffs[0].stems[1]).toBe(false)
+      expect(project.sound?.dub).toBeUndefined()
+    }
+  })
+
+  it("the echo: a quarter is 1 beat, a dotted eighth 0.75; the feedback is clamped to the web's 0.95", () => {
+    expect(engineDubFor({ timing: 'quarter', feedback: 0.45 })).toEqual({
+      delayBeats: 1,
+      feedback: 0.45
+    })
+    expect(engineDubFor({ timing: 'dotted-eighth', feedback: 2 })).toEqual({
+      delayBeats: 0.75,
+      feedback: 0.95
+    })
+    expect(engineDubFor({ timing: 'quarter', feedback: Number.NaN }).feedback).toBe(0)
+    expect(engineDubFor({ timing: 'quarter', feedback: -1 }).feedback).toBe(0)
+    // only with throws on
+    expect(
+      buildEngineSound(withThrows(false), { timing: 'quarter', feedback: 0.5 })?.dub
+    ).toBeUndefined()
+    expect(buildEngineSound(withThrows(true), { timing: 'quarter', feedback: 0.5 })?.dub).toEqual({
+      delayBeats: 1,
+      feedback: 0.5
+    })
+  })
+
+  it('a per-stem render keeps the throws (stemExportSound keeps them: a per-stem stage)', async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: twoStems }, sound: stemExportSound(withThrows(true)) }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      plan([[stemKey('r1', 2), curve]])
+    )
+    expect(project.rifffs[0].stems[1].toolkit?.automation.dubSend).toEqual(curve)
+    expect(project.sound?.dub).toEqual({ delayBeats: 0.75, feedback: 0.6 })
   })
 })

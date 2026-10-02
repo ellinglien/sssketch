@@ -27,7 +27,8 @@ namespace sssketch
      * since Task 3, glue and tone inside it since Task 7 and saturation since Task 8, by
      * MasterStage through PlaybackEngine::processMaster; the room and its return since Task 5,
      * by ReverbBus (zita or CavernReverb); the pump since Task 9, by DrumPump through
-     * PlaybackEngine::renderBlock, keyed and routed by each stem's EngineStem::pumpRole. */
+     * PlaybackEngine::renderBlock, keyed and routed by each stem's EngineStem::pumpRole; the dub
+     * echo since Task 10, by DubDelayBus, fed by each stem's dubSend curve. */
     struct SoundSettings
     {
         /** The headroom trim and the true-peak limiter. */
@@ -60,6 +61,16 @@ namespace sssketch
         {
             double depthDb = 4.0; // 0..8
         };
+        /** The dub echo (DubDelay.h; Task 10): the echo time in beats (0.75 = a dotted eighth,
+         * 1 = a quarter; the web's ThrowTiming) and the feedback, as the current throw sets them.
+         * The time is delayBeats x 60 / bpm, clamped to 2 s; the feedback 0..0.95 (the web's
+         * clamp; DubDelayCore caps it again at kDubStableFeedback). Fed by each stem's dubSend
+         * curve, so present with no curve it builds and does nothing. */
+        struct Dub
+        {
+            double delayBeats = 0.75; // 1/16..4
+            double feedback = 0.5;    // 0..0.95
+        };
 
         std::optional<Mastering> mastering;
         std::optional<Glue> glue;
@@ -70,12 +81,13 @@ namespace sssketch
          * either room's wet output (ReverbBus::setRoom); at 1 the wet samples are added untouched. */
         double reverbReturn = 1.0;
         std::optional<Pump> pump;
+        std::optional<Dub> dub;
 
         /** True when this says nothing beyond today's behaviour: every stage off, zita, at
          * today's return. */
         bool isNeutral() const
         {
-            return ! mastering && ! glue && ! tone && ! saturation && ! pump && room == ReverbRoom::zita
+            return ! mastering && ! glue && ! tone && ! saturation && ! pump && ! dub && room == ReverbRoom::zita
                 && reverbReturn == 1.0;
         }
     };

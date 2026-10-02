@@ -1,0 +1,48 @@
+{
+  "note": "written by sssketch scripts/golden-dub-delay.mjs: dub-delay.in.f32 (bursts A and B, each 2048 frames, planar L then R: A.L, A.R, B.L, B.R) through ell.ing/radio src/audio/dubDelay.ts buildDubDelay, set() from throwDelaySec, in headless Chrome OfflineAudioContext; little-endian float32, each case planar (L then R), the cases one after another",
+  "burstFrames": 2048,
+  "cases": [
+    {
+      "name": "a",
+      "sampleRate": 48000,
+      "frames": 76800,
+      "bpm": 120,
+      "timing": "dotted-eighth",
+      "feedback": 0.6,
+      "delaySec": [
+        0.375
+      ]
+    },
+    {
+      "name": "b",
+      "sampleRate": 44100,
+      "frames": 70560,
+      "bpm": 123,
+      "timing": "quarter",
+      "feedback": 0.45,
+      "delaySec": [
+        0.4878048780487805
+      ]
+    },
+    {
+      "name": "c",
+      "sampleRate": 48000,
+      "frames": 105600,
+      "bpm": 120,
+      "timing": "dotted-eighth",
+      "feedback": 0.6,
+      "retime": {
+        "atFrame": 57600,
+        "bpm": 97,
+        "timing": "quarter",
+        "feedback": 0.5
+      },
+      "delaySec": [
+        0.375,
+        0.6185567010309279
+      ]
+    }
+  ],
+  "radioCommit": "5262ed5",
+  "userAgent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/154.0.0.0 Safari/537.36"
+}

@@ -52,6 +52,8 @@ namespace sssketch
             out.saturation = SoundSettings::Saturation { std::clamp((*v)[0], 0.0, 1.8) };
         if (auto v = stage<1>(sound, "pump", { "depthDb" }))
             out.pump = SoundSettings::Pump { std::clamp((*v)[0], 0.0, 8.0) };
+        if (auto v = stage<2>(sound, "dub", { "delayBeats", "feedback" }); v && (*v)[0] > 0.0)
+            out.dub = SoundSettings::Dub { std::clamp((*v)[0], 0.0625, 4.0), std::clamp((*v)[1], 0.0, 0.95) };
 
         // Glue, tone and saturation are master stages that run only between the headroom trim
         // and the true-peak limiter: without mastering they are dropped, so no wire can build a

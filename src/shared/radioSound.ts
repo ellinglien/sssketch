@@ -127,7 +127,11 @@ export const DUB_LOWPASS_HZ = 3500
 export const DUB_TO_REVERB = 0.15
 /** The delay line's length, s. */
 export const DUB_MAX_DELAY_SEC = 2
-/** Feedback is clamped to this: never a runaway loop. */
+/** Feedback is clamped to this, meant as "never a runaway loop". It is not quite: the loop's
+ * filters take `Q: Math.SQRT1_2` as decibels (linear 1.085), peak x1.2265 near 2.65 kHz, and the
+ * loop runs away from a feedback of about 0.815 (Chrome, measured 2026-10-02; the throws draw
+ * 0.45..0.6, so the web never gets there). The native bus caps the feedback again at 0.77
+ * (DubDelay.h, kDubStableFeedback); a web fix would be `Q: biquadQ(0)` or the same cap. */
 export const DUB_MAX_FEEDBACK = 0.95
 
 // ---------------------------------------------------------------------------------------------

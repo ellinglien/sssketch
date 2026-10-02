@@ -121,6 +121,9 @@ set_source_files_properties(Source/MasterTone.cpp PROPERTIES COMPILE_OPTIONS "-f
 # The drum-keyed pump multiplies each pumped channel by pump.dsp's gain here rather than in the
 # generated code (DrumPump.h): no FMA, so it is the .dsp's own float multiply, to the bit.
 set_source_files_properties(Source/DrumPump.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
+# The dub echo (DubDelay.h): the web's DelayNode interpolation and feedback in float, and its
+# biquads -- no FMA, so DubDelayBusTests' golden from Chrome holds on every machine.
+set_source_files_properties(Source/DubDelay.cpp PROPERTIES COMPILE_OPTIONS "-ffp-contract=off")
 
 target_sources(sssketch_engine PRIVATE
   Source/Main.cpp
@@ -193,6 +196,8 @@ target_sources(sssketch_engine PRIVATE
   Source/StemPanTests.cpp
   Source/DrumPump.cpp
   Source/DrumPumpTests.cpp
+  Source/DubDelay.cpp
+  Source/DubDelayBusTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE

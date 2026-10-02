@@ -38,11 +38,18 @@ namespace sssketch
         std::vector<AutomationPoint> filterResonance;
         std::vector<AutomationPoint> reverbSend;
         std::vector<AutomationPoint> volume;
+        /** The dub throws' send into the echo bus (DubDelay.h; native radio sound plan, Task 10):
+         * a linear gain 0..1 on the stem's post-pan signal, like the web's per-row delaySend.
+         * WIRE-ONLY: drawn by the throw planners (Discover's radio, the timeline's seeded plan),
+         * never a lane in the UI, and absent from the wire unless a throw is planned. Not part of
+         * the toolkit's neutrality rule either: a stem whose toolkit does nothing else keeps
+         * hasToolkit false and is only tapped for the echo. Only heard with sound.dub. */
+        std::vector<AutomationPoint> dubSend;
 
         bool isEmpty() const
         {
             return filterCutoff.empty() && filterResonance.empty()
-                && reverbSend.empty() && volume.empty();
+                && reverbSend.empty() && volume.empty() && dubSend.empty();
         }
     };
 
