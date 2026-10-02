@@ -17,7 +17,13 @@
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import { buildDropOutCurve, pickDropOutBeats } from './radioDropOut'
-import type { AutomationPoint, FilterMode } from './toolkit'
+import { radioGestureLeadsChange, type RadioTransitionKind } from './radioTransition'
+import {
+  evaluateAutomation,
+  type AutomationParam,
+  type AutomationPoint,
+  type FilterMode
+} from './toolkit'
 
 /** How often a phrase end gets a turnaround. Absorbed the old `dropOuts` row (2026-10-02). */
 export type RadioTurnarounds = 'off' | 'rare' | 'often'
@@ -522,4 +528,56 @@ export function turnaroundArc(
   if (leg === null) return 'steady'
   if (leg.phase === 'growing') return count < leg.target ? 'growing' : 'steady'
   return count > leg.target ? 'thinning' : 'steady'
+}
+
+// ---- living with layer changes and other gestures (spec section 3) ----
+
+/** A curve's value just BEFORE `bar` (its left limit): where a stacked pair steps, the earlier
+ * value. evaluateAutomation is the right limit (the later value), as the engine reads it. */
+function valueBefore(points: readonly AutomationPoint[], bar: number): number {
+  if (bar <= points[0].bar) return points[0].value
+  for (let i = 1; i < points.length; i++) {
+    const b = points[i]
+    if (b.bar < bar) continue
+    const a = points[i - 1]
+    return a.value + (b.value - a.value) * ((bar - a.bar) / (b.bar - a.bar))
+  }
+  return points[points.length - 1].value
+}
+
+/**
+ * Two curves on one stem's lane, as one (clip-relative bars, normalised and ascending, as
+ * every builder here and in radioTransition.ts returns them):
+ *   - `volume` MULTIPLIES, so a turnaround's drop never cancels a hole, a duck or the arc's
+ *     exit -- it stacks on them;
+ *   - `reverbSend` takes the larger value at each point;
+ *   - `filterCutoff` keeps `a`, the curve already there: a row in a change's filter in is
+ *     skipped by filter moves (one filter, one mode, one lap).
+ * An empty side is no curve. Evaluated at every breakpoint of either, keeping both sides of any
+ * step, so between breakpoints it is linear like both inputs (a product of two ramps is not,
+ * exactly; the drops and ducks it meets are steps and single ramps). Inputs untouched.
+ */
+export function combineRadioCurves(
+  a: readonly AutomationPoint[],
+  b: readonly AutomationPoint[],
+  lane: AutomationParam
+): AutomationPoint[] {
+  if (a.length === 0) return b.map((p) => ({ ...p }))
+  if (b.length === 0 || lane === 'filterCutoff') return a.map((p) => ({ ...p }))
+  const join = lane === 'volume' ? (x: number, y: number): number => x * y : Math.max
+  const bars = [...new Set([...a, ...b].map((p) => p.bar))].sort((x, y) => x - y)
+  const out: AutomationPoint[] = []
+  for (const bar of bars) {
+    const before = join(valueBefore(a, bar), valueBefore(b, bar))
+    const after = join(evaluateAutomation([...a], bar, 1), evaluateAutomation([...b], bar, 1))
+    out.push({ bar, value: before })
+    if (after !== before) out.push({ bar, value: after })
+  }
+  return out
+}
+
+/** A change landing on the wrap a turnaround ends on keeps only its arrival (filter in, bloom,
+ * duck, or a cut): the turnaround is its lead-in, so a hole or a riser becomes a cut. */
+export function radioTransitionUnderTurnaround(kind: RadioTransitionKind): RadioTransitionKind {
+  return radioGestureLeadsChange(kind) ? 'cut' : kind
 }
