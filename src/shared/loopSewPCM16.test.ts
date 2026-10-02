@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { findWavChunks } from './wavChunks'
 import { LOOP_SEW_WINDOW_FRAMES, sewLoopPCM16 } from './loopSewPCM16'
+import { stereoPanFrame } from './radioPan'
 
 /** A mono 16-bit WAV whose Nth frame is `value(n)`. Same header layout as
  * encodeWavPCM16 writes, so the fixture and the subject agree by
@@ -226,6 +227,35 @@ describe('sewLoopPCM16 in stereo', () => {
     const frame = 899 - LOOP_SEW_WINDOW_FRAMES
     expect(out[frame * 2]).toBe(0)
     expect(out[frame * 2 + 1]).toBe(0)
+  })
+})
+
+describe('sewLoopPCM16 pan (the row pan, baked like the gain)', () => {
+  const lr = (): Uint8Array =>
+    stereoWav(
+      1000,
+      (n): number => 4000 + n,
+      (n): number => -2000 - n
+    )
+
+  it('pan 0 is the unpanned output, byte for byte', () => {
+    expect(sewLoopPCM16(lr(), 900, 0.8, 0)).toEqual(sewLoopPCM16(lr(), 900, 0.8))
+  })
+
+  it('applies the StereoPannerNode law after the gain, once rounded', () => {
+    const out = samplesOf(sewLoopPCM16(lr(), 900, 0.5, 0.25))
+    const plain = samplesOf(sewLoopPCM16(lr(), 900, 0.5))
+    // A frame well clear of the seam blend at the end.
+    const n = 100
+    const [l, r] = stereoPanFrame((4000 + n) * 0.5, (-2000 - n) * 0.5, 0.25)
+    expect(out[n * 2]).toBe(Math.round(l))
+    expect(out[n * 2 + 1]).toBe(Math.round(r))
+    expect(out[n * 2]).not.toBe(plain[n * 2])
+  })
+
+  it('leaves a mono file alone (no second side to pan into)', () => {
+    const mono = monoWav(1000, (): number => 500)
+    expect(sewLoopPCM16(mono, 900, 1, 0.25)).toEqual(sewLoopPCM16(mono, 900, 1))
   })
 })
 

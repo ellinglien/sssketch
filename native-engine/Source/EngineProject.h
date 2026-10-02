@@ -134,6 +134,14 @@ namespace sssketch
          * thread, so renderBlock's per-stem cost stays one bool test). */
         bool hasToolkit = false;
         EngineStemToolkit toolkit;
+
+        /** This row's place in the stereo field, -1..1 (native radio sound plan, Task 4;
+         * StemPan.h has the law). 0 -- what an absent `pan` key parses to, and what every
+         * project from before panning existed sends -- is centred and touches nothing. Any
+         * other value gives the stem its own buffer in renderBlock (as a toolkit does), where
+         * it is panned after the toolkit's filter and volume and BEFORE its reverb send, as on
+         * the web. Clamped into [-1,1] at parse time, and a non-finite value is 0. */
+        double pan = 0.0;
     };
 
     /** One placed noise riser -- a GENERATED audio source on a channel, not

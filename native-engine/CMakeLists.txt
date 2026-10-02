@@ -176,6 +176,8 @@ target_sources(sssketch_engine PRIVATE
   Source/SoundSettingsTests.cpp
   Source/MasterStage.cpp
   Source/MasterStageTests.cpp
+  Source/StemPan.h
+  Source/StemPanTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE

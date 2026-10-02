@@ -48,6 +48,7 @@ export function useStemPreviewPlayback(): {
   const rifffs = useAppSelector((s) => s.rifffs)
   const mute = useAppSelector((s) => s.mute)
   const vol = useAppSelector((s) => s.vol)
+  const sound = useAppSelector((s) => s.sound)
   const playing = usePlaying()
   const flushEngineSyncNow = useFlushEngineSyncNow()
   const {
@@ -196,7 +197,7 @@ export function useStemPreviewPlayback(): {
     // lives in store.ts's stemPreviewOverrides, where it is tested. See its
     // doc comment for why an audition has to be dry, and for the report
     // ("tidy up often plays multiple stems at once") that made it so.
-    const overrides = stemPreviewOverrides({ rifffs, mute, vol }, [...keys])
+    const overrides = stemPreviewOverrides({ rifffs, mute, vol, sound }, [...keys])
     // Only the solo and the preview gain are DISPATCHED: those two are what
     // the browser's own rows key their "this is what's live" state off, and
     // the hook's unmount cleanup restores both. The toolkit blanking is

@@ -695,6 +695,34 @@ namespace sssketch
                 expectEquals(project.bpm, 99.0);
                 expectEquals((int) project.rifffs.size(), 1);
             }
+
+            beginTest("a stem's pan parses; absent, junk and non-finite are centred; out of range clamps");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"bpm":120.0,"rifffs":[{"groupId":"g","stems":[
+                         {"stemKey":"none"},
+                         {"stemKey":"right","pan":0.25},
+                         {"stemKey":"left","pan":-0.25},
+                         {"stemKey":"wide","pan":7.0},
+                         {"stemKey":"wideL","pan":-7.0},
+                         {"stemKey":"inf","pan":1e999},
+                         {"stemKey":"text","pan":"left"}
+                       ]}]})",
+                    project, error), error);
+                const auto& stems = project.rifffs[0].stems;
+                expectEquals((int) stems.size(), 7);
+                expectEquals(stems[0].pan, 0.0);
+                expectEquals(stems[1].pan, 0.25);
+                expectEquals(stems[2].pan, -0.25);
+                expectEquals(stems[3].pan, 1.0);
+                expectEquals(stems[4].pan, -1.0);
+                expectEquals(stems[5].pan, 0.0);
+                expectEquals(stems[6].pan, 0.0);
+                // A pan is no toolkit: the stem stays off the toolkit path.
+                expect(! stems[1].hasToolkit);
+            }
         }
     };
 

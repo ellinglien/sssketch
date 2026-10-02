@@ -57,6 +57,7 @@ import { UpdateAvailableDialog } from './components/UpdateAvailableDialog'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { ExportFormatPicker } from './components/ExportFormatPicker'
 import { projectUsesToolkit, type ToolkitExportMode } from '@shared/toolkit'
+import { timelineStemPans } from '@shared/buildEngineProject'
 import { StemsFormatPicker } from './components/StemsFormatPicker'
 import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
@@ -1009,7 +1010,9 @@ function ProjectMenu({
       )}
       {exportFormatPickerOpen && (
         <ExportFormatPicker
-          toolkitInUse={projectUsesToolkit(state)}
+          // The per-row pans count: a DAW export bakes them or writes them as track pans, so
+          // a project whose only per-stem stage is its pans still has that choice to make.
+          toolkitInUse={projectUsesToolkit(state) || timelineStemPans(state).size > 0}
           onChoose={(format, toolkitMode) => {
             setExportFormatPickerOpen(false)
             void handleExportProject(format, toolkitMode)

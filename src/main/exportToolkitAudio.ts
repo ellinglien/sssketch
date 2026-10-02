@@ -2,7 +2,7 @@
 import { join } from 'node:path'
 import { mkdirSync } from 'node:fs'
 import type { AppState } from '../renderer/src/state/store'
-import { buildEngineProject } from '@shared/buildEngineProject'
+import { buildEngineProject, timelineStemPans } from '@shared/buildEngineProject'
 import { stemKey } from '@shared/types'
 import { isStemToolkitNeutral, type ToolkitExportMode } from '@shared/toolkit'
 import { audibleRisers } from '@shared/riser'
@@ -82,12 +82,18 @@ export interface ToolkitExportOptions {
   toolkitAudio: ToolkitAudio
 }
 
-/** Every placed clip whose toolkit actually does something, in a stable
- * order. A fully muted clip is left out: it renders silent, so baking it
- * would spend a whole render producing silence, and the existing dry path
- * already exports it at volume 0 (which is what lets it be brought back with
- * one fader move in the other DAW). */
-function clipsToBake(
+/** Every placed clip whose toolkit actually does something, or which the
+ * project's per-row panning puts off centre (native radio sound plan, Task 4:
+ * a DAW export's stems carry their per-stem stages, pan among them -- Elling's
+ * ruling, 2026-10-01), in a stable order. The bake renders the pan into the
+ * audio by the engine's own StereoPannerNode law, so the clip sounds as it
+ * does here; the `automation` mode instead leaves the audio dry and sets the
+ * stem's own track pan (buildAlsXml / buildRppProject). A fully muted clip is
+ * left out: it renders silent, so baking it would spend a whole render
+ * producing silence, and the existing dry path already exports it at volume 0
+ * (which is what lets it be brought back with one fader move in the other
+ * DAW). */
+export function clipsToBake(
   state: AppState
 ): { key: string; rifffName: string; stemName: string; endBar: number; hasSend: boolean }[] {
   const out: {
@@ -97,6 +103,7 @@ function clipsToBake(
     endBar: number
     hasSend: boolean
   }[] = []
+  const pans = timelineStemPans(state)
   for (const rifff of Object.values(state.rifffs)) {
     if (rifff.startBar === undefined) continue
     const playedBars = state.playedBars[rifff.groupId] ?? rifff.barLength
@@ -106,7 +113,7 @@ function clipsToBake(
       const filter = state.stemFilters?.[key]
       const send = state.stemSends?.[key]
       const automation = state.stemAutomation?.[key]
-      if (isStemToolkitNeutral(filter, send, automation)) continue
+      if (isStemToolkitNeutral(filter, send, automation) && !pans.has(key)) continue
       out.push({
         key,
         rifffName: rifff.name,

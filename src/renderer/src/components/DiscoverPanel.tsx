@@ -162,6 +162,8 @@ import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject } from '@shared/buildEngineProject'
+import { discoverStemPans } from '@shared/radioPan'
+import { normalizeSoundSettings } from '@shared/radioSound'
 import { backgroundScanGate } from '../audio/backgroundScanGate'
 // TEMPORARY INSTRUMENTATION (2026-09-28) -- remove this import and every
 // radioTrace* call below together with src/renderer/src/perf/radioTrace.ts.
@@ -1866,10 +1868,21 @@ export function DiscoverPanel({
     // lack of one) was really last loaded successfully.
     try {
       radioTraceMark('assembled') // TEMP (2026-09-28), remove with radioTrace.ts
+      // Per-row panning (native radio sound plan, Task 4): over EVERY slot in the panel, by
+      // slot id, so a mute, a solo or a swap never moves a row (discoverStemPans).
+      // buildEngineProject applies it only while the project's panning is on.
+      const stemPans = discoverStemPans(
+        slotsRef.current,
+        members.map(({ id }) => id),
+        rifff.groupId,
+        normalizeSoundSettings(previewState.sound).panning.width
+      )
       const project = await buildEngineProject(
         previewState,
         resolveStretchedForPlayback,
-        pluginCatalog
+        pluginCatalog,
+        undefined,
+        { stemPans }
       )
       radioTraceMark('built') // TEMP
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return

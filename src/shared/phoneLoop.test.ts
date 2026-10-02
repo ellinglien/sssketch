@@ -191,6 +191,11 @@ describe('phoneStemAudioId', () => {
     expect(phoneStemAudioId(stem({ volume: 0.5 }))).not.toBe(phoneStemAudioId(stem()))
   })
 
+  it("changes with the row's pan, which is baked into the bytes too; absent is centred", () => {
+    expect(phoneStemAudioId(stem({ pan: 0.25 }))).not.toBe(phoneStemAudioId(stem()))
+    expect(phoneStemAudioId(stem({ pan: 0 }))).toBe(phoneStemAudioId(stem()))
+  })
+
   it('changes with the duration, which is where the loop point is', () => {
     expect(phoneStemAudioId(stem({ durationSec: 8 }))).not.toBe(phoneStemAudioId(stem()))
   })

@@ -429,9 +429,12 @@ namespace sssketch
          * that clip just rendered into, BEFORE it is summed into its channel:
          * evaluate the four automatable parameters at this block's bar
          * (clip-relative, via the toolkit's own originBar), filter, apply the
-         * clip volume, then tap a post-fader send into the shared reverb bus.
-         * Only ever called for a clip whose toolkit is non-neutral. `const`
-         * for the same reason renderBlock is -- see stemDsp. */
+         * clip volume, pan it by the row's `pan` (StemPan.h; 0 touches
+         * nothing), then tap a post-fader, post-pan send into the shared
+         * reverb bus. Only ever called for a clip whose toolkit is
+         * non-neutral (a panned clip without one is panned in renderBlock
+         * and sends nothing). `const` for the same reason renderBlock is --
+         * see stemDsp. */
         /** The master strip's filter, applied IN PLACE to the fully summed
          * master pair as the very last thing renderBlock does. Returns
          * immediately, touching nothing, whenever the filter is at rest and
@@ -447,6 +450,7 @@ namespace sssketch
         void applyStemToolkit(
             const EngineStemToolkit& toolkit,
             const juce::String& stemKey,
+            double pan,
             double positionBars,
             double secPerBar,
             double sampleRate,

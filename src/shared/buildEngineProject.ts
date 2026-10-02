@@ -18,6 +18,7 @@ import {
   type StemFilterSettings
 } from './toolkit'
 import { audibleRisers, type RiserClip } from './riser'
+import { stemPansForRifff } from './radioPan'
 import { stretchRatioForStem } from './stretchRatio'
 import {
   FAUST_DEFAULTS,
@@ -52,6 +53,12 @@ export interface EngineStem {
    * before the toolkit existed, which is what keeps its render bit-identical
    * (see buildStemToolkit below and the engine's own regression test). */
   toolkit?: EngineStemToolkit
+  /** This row's place in the stereo field, -1..1 (native radio sound plan, Task 4): the radio's
+   * per-row panning, by Web Audio's StereoPannerNode law (native-engine/Source/StemPan.h).
+   * ABSENT when the row is centred or the project's panning is off, and that absence is
+   * load-bearing, the same rule as `toolkit`: such a stem sends the JSON it sent before panning
+   * existed. Twin of EngineStem::pan in native-engine/Source/EngineProject.h. */
+  pan?: number
 }
 
 /** The built-in sound toolkit on the wire, per placed stem clip. Twin of
@@ -236,7 +243,7 @@ export interface EngineProject {
  * as `toolkit` and `masterFilter`. The whole block is omitted when it would say nothing but
  * "zita, at today's return" (buildEngineSound), so a project with every stage off sends the
  * exact JSON a project from before the radio sound sent. Panning, throws and riser variety ride
- * on the stems and risers (their own tasks), not here. */
+ * on the stems and risers (their own tasks), not here: panning is EngineStem.pan. */
 export interface EngineSound {
   /** The headroom trim and the true-peak limiter (`sound.mastering.on`). */
   mastering?: { headroomDb: number; ceilingDb: number }
@@ -435,6 +442,44 @@ export interface StretchedStem {
 
 export type StretchResolver = (path: string, ratio: number) => Promise<StretchedStem>
 
+/** The width the project's per-row panning runs at, or undefined when it is off (or the state has
+ * no sound settings, which is today's sound). */
+function panningWidth(state: Pick<AppState, 'sound'>): number | undefined {
+  if (state.sound === undefined) return undefined
+  const { panning } = normalizeSoundSettings(state.sound)
+  return panning.on ? panning.width : undefined
+}
+
+/** The timeline's row pans, by stem key, for every NON-CENTRED stem of every placed rifff
+ * (native radio sound plan, Task 4): stemPansForRifff per rifff, by slot and SoundType --
+ * drums and bass centred, the rest alternating +width, -width in slot order, muted stems
+ * included so a mute never moves a row. Empty while the project's panning is off.
+ *
+ * The one rule buildEngineProject sends and the DAW exports follow (exportToolkitAudio bakes a
+ * panned clip; the automation mode writes it as the track's pan), so they cannot disagree. */
+export function timelineStemPans(state: Pick<AppState, 'rifffs' | 'sound'>): Map<string, number> {
+  const pans = new Map<string, number>()
+  const width = panningWidth(state)
+  if (width === undefined) return pans
+  for (const rifff of Object.values(state.rifffs)) {
+    if (rifff.startBar === undefined) continue // only what is placed sounds
+    for (const [slot, pan] of stemPansForRifff(rifff.stems, width)) {
+      // `pan !== 0` is false for -0 too (a width of 0 alternates 0 and -0).
+      if (pan !== 0 && Number.isFinite(pan)) pans.set(stemKey(rifff.groupId, slot), pan)
+    }
+  }
+  return pans
+}
+
+/** What a caller can tell buildEngineProject beyond the state itself. */
+export interface BuildEngineProjectOptions {
+  /** Discover's row pans by stem key (discoverStemPans in @shared/radioPan), which REPLACE the
+   * timeline's rule (stemPansForRifff, by SoundType) for every stem: a key not in the map is
+   * centred. Discover's rows are slots with kinds, not stems with a SoundType, and a row keeps
+   * its pan through a swap or a mute. Only applied while the state's panning is on. */
+  stemPans?: ReadonlyMap<string, number>
+}
+
 // Real perf bug, found live 2026-09-15 via a direct report ("it's all very
 // sluggish, the interface takes a while for buttons to register") traced
 // to a real 409-placed-stem project: buildEngineProject used to resolve
@@ -498,9 +543,15 @@ export async function buildEngineProject(
   state: AppState,
   resolveStretched: StretchResolver,
   pluginCatalog: PluginCatalogForEngineProject,
-  pluginStates: PluginStatesMap = {}
+  pluginStates: PluginStatesMap = {},
+  options: BuildEngineProjectOptions = {}
 ): Promise<EngineProject> {
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
+  // Per-row panning (native radio sound plan, Task 4): Discover's map or the timeline's rule
+  // while the project's panning is on; undefined when it is off or the state has no sound
+  // settings -- then no stem gets a `pan`, and the wire is what it was before panning existed.
+  const pans =
+    panningWidth(state) === undefined ? undefined : (options.stemPans ?? timelineStemPans(state))
 
   // Per-stem stretch ratio, computed once and reused by BOTH the gathering
   // pass below and the assembly pass further down -- pure/cheap (no I/O),
@@ -590,6 +641,7 @@ export async function buildEngineProject(
     const stems: EngineStem[] = []
     for (const stem of rifff.stems) {
       const key = stemKey(rifff.groupId, stem.slot)
+      const pan = pans?.get(key) ?? 0
       const resolved: StretchedStem = resolvedByKey.get(key) ?? {
         path: stem.path,
         durationSec: stem.durationSec
@@ -656,7 +708,10 @@ export async function buildEngineProject(
         // Spread rather than `toolkit` so a neutral clip's stem object has no
         // `toolkit` key AT ALL -- the wire payload for a project nobody has
         // drawn on stays byte-for-byte what it was before this feature.
-        ...(toolkit ? { toolkit } : {})
+        ...(toolkit ? { toolkit } : {}),
+        // Spread for the same reason: a centred row (or panning off) has no `pan` key at all.
+        // `pan !== 0` is false for -0 too (a width of 0 alternates 0 and -0).
+        ...(pan !== 0 && Number.isFinite(pan) ? { pan } : {})
       })
     }
 

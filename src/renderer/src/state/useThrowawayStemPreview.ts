@@ -5,6 +5,7 @@ import { buildEngineProject } from '@shared/buildEngineProject'
 import type { Stem } from '@shared/types'
 import { initialState, type AppState } from './store'
 import { appSoundDefaultsNow } from './appSoundDefaults'
+import { mergeSoundSettings } from '@shared/radioSound'
 import {
   useAppSelector,
   useDispatch,
@@ -112,8 +113,10 @@ export function useThrowawayStemPreview(): {
         bpm,
         masterChain,
         channelPlugins,
-        // explicit: initialState has none (absent is today's sound)
-        sound: sound ?? appSoundDefaultsNow(),
+        // explicit: initialState has none (absent is today's sound). Panning off: an
+        // audition is the file, centred, the same rule stemPreviewOverrides follows for the
+        // sketch's own auditions -- the per-row pan belongs to a row in a mix.
+        sound: mergeSoundSettings(sound ?? appSoundDefaultsNow(), { panning: { on: false } }),
         rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
         vol,
         stretch: { [rifff.groupId]: true }

@@ -8,6 +8,7 @@ import { packIntoTracks } from '@shared/packIntoTracks'
 import { clipLengthBars, edgeFadeState } from '@shared/automationEdit'
 import { busGroupName, summarizeSoundTypes } from '@shared/busNaming'
 import { audibleRisers, riserSoundingEndBar, type RiserClip } from '@shared/riser'
+import { timelineStemPans } from '@shared/buildEngineProject'
 import {
   filterCutoffHz,
   isStemToolkitNeutral,
@@ -1007,6 +1008,21 @@ function containsTag(node: AlsNode, tag: string): boolean {
  * belongs to the whole track and would otherwise apply one stem's sweep to
  * whatever else shared it.
  */
+/**
+ * The stem's per-row pan (native radio sound plan, Task 4) as its exported track's own
+ * `Mixer/Pan` -- the `automation` mode only, where every stem has a track of its own and the
+ * audio stays dry. (`bake` mode renders the pan into the clip's audio instead:
+ * exportToolkitAudio.ts's clipsToBake.) Ableton's Pan runs -1..1 like ours, but it is Live's own
+ * pan law, not the StereoPannerNode law sssketch plays with, so the placement is the same and
+ * the level of the near side is not. A centred stem leaves the template's 0 untouched.
+ */
+function applyTrackPan(track: AlsNode, pan: number | undefined): void {
+  if (pan === undefined || pan === 0 || !Number.isFinite(pan)) return
+  const mixerBody = childArray(mixerOf(track, 'AudioTrack'), 'Mixer')
+  const panParam = findChild(mixerBody, 'Pan')
+  if (panParam) setManual(panParam, 'Pan', Math.min(1, Math.max(-1, pan)))
+}
+
 function applyTrackToolkit(
   track: AlsNode,
   nextId: () => number,
@@ -1179,6 +1195,8 @@ export function buildAlsXml(
 ): string {
   const automationMode = toolkit.mode === 'automation'
   const { bakedClips, riserFileName } = toolkit.toolkitAudio
+  // The per-row pans, written as each stem's track pan in automation mode (applyTrackPan).
+  const stemPans = automationMode ? timelineStemPans(state) : new Map<string, number>()
   const autoFilterTemplate =
     automationMode && toolkit.autoFilterXml
       ? findChild(parseAls(toolkit.autoFilterXml), 'AutoFilter2')
@@ -1377,6 +1395,7 @@ export function buildAlsXml(
       )
       if (automationMode) {
         applyTrackToolkit(track, nextId, state, trackEntries[0], autoFilterTemplate)
+        applyTrackPan(track, stemPans.get(trackEntries[0].key))
       }
       outTracks.push(track)
     }

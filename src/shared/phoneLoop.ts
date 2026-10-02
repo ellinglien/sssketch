@@ -55,7 +55,10 @@ export function stemAudioFields(stem: EngineStem): string {
     stem.oneShot ? 1 : 0,
     stem.trimStartSec,
     stem.trimEndSec,
-    stem.toolkit === undefined ? '' : JSON.stringify(stem.toolkit)
+    stem.toolkit === undefined ? '' : JSON.stringify(stem.toolkit),
+    // The row's pan is baked into the bytes too (remoteStemRenderer), so a pan is different
+    // audio. Absent is centred.
+    stem.pan ?? 0
   ].join(FIELD)
 }
 

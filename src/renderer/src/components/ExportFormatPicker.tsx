@@ -10,7 +10,8 @@ import type { ToolkitExportMode } from '@shared/toolkit'
  * own dimmed-backdrop-plus-panel convention.
  *
  * When the project actually uses the built-in sound toolkit
- * (projectUsesToolkit, which the caller asks), the modal also carries the
+ * (projectUsesToolkit, which the caller asks) or the radio sound's per-row
+ * pans put a stem off centre (timelineStemPans), the modal also carries the
  * bake/automation choice from the toolkit spec's section 4. It appears ONLY
  * then: a project with nothing drawn on it has nothing to choose between,
  * and would just be reading two paragraphs about a feature it isn't using. */
@@ -85,7 +86,7 @@ export function ExportFormatPicker({
         {toolkitInUse && (
           <div style={{ marginTop: 12 }}>
             <p style={{ margin: 0, fontSize: 10, color: 'var(--ra-text-2)' }}>
-              the filter, reverb and volume you drew
+              the filter, reverb, volume and pan
             </p>
             <div style={{ marginTop: 6 }}>
               <button style={modeButtonStyle('bake')} onClick={() => setToolkitMode('bake')}>

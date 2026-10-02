@@ -8,6 +8,7 @@ import { packIntoTracks } from '@shared/packIntoTracks'
 import { clipLengthBars, edgeFadeState } from '@shared/automationEdit'
 import { busGroupName } from '@shared/busNaming'
 import { audibleRisers, riserSoundingEndBar } from '@shared/riser'
+import { timelineStemPans } from '@shared/buildEngineProject'
 import type { AutomationPoint } from '@shared/toolkit'
 import { filterResonanceQ, isStemToolkitNeutral, normaliseAutomationCurve } from '@shared/toolkit'
 // TYPE-ONLY, deliberately and permanently: exportToolkitAudio.ts spawns the
@@ -934,6 +935,10 @@ export function buildRppProject(
 ): string {
   const secPerBarProject = secPerBarFor(state.bpm)
   const automationMode = options.mode === 'automation'
+  // The radio sound's per-row pans (native radio sound plan, Task 4), written as each stem's own
+  // track pan in automation mode -- see the TRACK block below. Bake mode renders them into the
+  // audio instead (exportToolkitAudio.ts's clipsToBake).
+  const stemPans = automationMode ? timelineStemPans(state) : new Map<string, number>()
   const byBus = new Map<BusId, StemItemsResult[]>()
   for (const busId of BUS_IDS) byBus.set(busId, [])
   const plans = new Map<string, StemToolkitPlan>()
@@ -1024,6 +1029,15 @@ export function buildRppProject(
             : `${busLabel} (shared)`
 
       const toolkitNodes: RppNode[] = []
+      // A panned row's track pan, automation mode only (one stem per track there). REAPER's
+      // `VOLPAN <vol> <pan> <width> <pan law> <pan mode>` with everything but the pan at its
+      // default (-1 is "use the project's"). REAPER's pan law is its own, not the
+      // StereoPannerNode law sssketch plays with: the row lands on the same side, but the near
+      // side's level is REAPER's. A centred row writes nothing, as before.
+      const trackPan = automationMode ? stemPans.get(trackEntries[0].key) : undefined
+      if (trackPan !== undefined) {
+        toolkitNodes.push(rppField('VOLPAN', 1, Math.min(1, Math.max(-1, trackPan)), -1, -1, 1))
+      }
       if (automationMode) {
         const plan = plans.get(trackEntries[0].key)
         if (plan) {

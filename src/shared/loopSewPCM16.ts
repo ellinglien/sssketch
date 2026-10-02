@@ -1,4 +1,5 @@
 import { findWavChunks } from './wavChunks'
+import { stereoPanFrame } from './radioPan'
 
 /** 128 frames, ~2.7ms at 48kHz. NOT a number to tune.
  *
@@ -84,7 +85,16 @@ export function blendSeamInt16(
  * only add rounding error to samples this function never touches. At unity
  * gain every frame outside the blend window is bit-identical.
  */
-export function sewLoopPCM16(wav: Uint8Array, frames: number, gain: number): Uint8Array {
+export function sewLoopPCM16(
+  wav: Uint8Array,
+  frames: number,
+  gain: number,
+  /** The row's pan (EngineStem.pan; the radio sound's per-row panning), baked in by the same
+   * StereoPannerNode law the engine plays it with (stereoPanFrame). Only a STEREO file can carry
+   * it -- the phone's files are stereo (PHONE_STEM_CHANNELS) -- and 0 leaves every frame exactly
+   * as it was. */
+  pan = 0
+): Uint8Array {
   const info = findWavChunks(wav)
   if (info.dataOffset < 0 || info.numChannels < 1 || info.bitsPerSample !== 16) {
     throw new Error('sewLoopPCM16 expects a 16-bit PCM wav')
@@ -118,8 +128,21 @@ export function sewLoopPCM16(wav: Uint8Array, frames: number, gain: number): Uin
 
   const samples = new Int16Array(target * channels)
   const copy = Math.min(target, available) * channels
-  for (let n = 0; n < copy; n++) {
-    samples[n] = clampInt16(src.getInt16(info.dataOffset + n * 2, true) * gain)
+  if (channels === 2 && pan !== 0 && Number.isFinite(pan)) {
+    // Gain then pan, as the engine orders a stem's stages, rounded to 16 bits once.
+    for (let n = 0; n < copy; n += 2) {
+      const [l, r] = stereoPanFrame(
+        src.getInt16(info.dataOffset + n * 2, true) * gain,
+        src.getInt16(info.dataOffset + (n + 1) * 2, true) * gain,
+        pan
+      )
+      samples[n] = clampInt16(l)
+      samples[n + 1] = clampInt16(r)
+    }
+  } else {
+    for (let n = 0; n < copy; n++) {
+      samples[n] = clampInt16(src.getInt16(info.dataOffset + n * 2, true) * gain)
+    }
   }
   // Anything past `copy` is already 0 -- silence padding, not a wrapped loop.
 

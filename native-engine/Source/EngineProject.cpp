@@ -255,6 +255,11 @@ namespace sssketch
                         stem.oneShot = getBool(stemVar, "oneShot", false);
                         stem.trimStartSec = getDouble(stemVar, "trimStartSec", 0.0);
                         stem.trimEndSec = getDouble(stemVar, "trimEndSec", -1.0);
+                        // Per-row panning (StemPan.h). Absent is centred, which is the whole
+                        // off path; a non-finite value is centred too rather than reaching the
+                        // audio thread, and anything else is clamped into the law's range.
+                        const double pan = getDouble(stemVar, "pan", 0.0);
+                        stem.pan = std::isfinite(pan) ? std::clamp(pan, -1.0, 1.0) : 0.0;
 
                         // The built-in toolkit, per CLIP (spec section 2b).
                         // An ABSENT `toolkit` key leaves hasToolkit false,

@@ -15,6 +15,7 @@ import {
 import type { AppState } from '../../renderer/src/state/store'
 import type { Rifff } from '@shared/types'
 import type { RiserClip } from '@shared/riser'
+import { normalizeSoundSettings } from '@shared/radioSound'
 
 // Mirrors engineProcess.test.ts / pluginScan.test.ts's own pattern for
 // reading a real sibling file from a test -- __dirname isn't reliably
@@ -1541,6 +1542,37 @@ describe('the built-in sound toolkit', () => {
   })
 
   describe('export the automation', () => {
+    it("writes the radio sound's per-row pan as the stem's track pan (bake mode bakes it instead)", () => {
+      const notes: Rifff = {
+        ...drumsRifff(),
+        stems: [{ ...drumsRifff().stems[0], name: 'keys', type: 'notes' }]
+      }
+      const state = toolkitState({
+        rifffs: { 'rifff-1': notes },
+        sound: normalizeSoundSettings(undefined)
+      })
+      const panOf = (mode: 'bake' | 'automation'): number => {
+        const xml = buildAlsXml(TEMPLATE_XML, state, '/out', fileNames, new Map(), {
+          mode,
+          toolkitAudio: { bakedClips: new Map() },
+          autoFilterXml: AUTO_FILTER_XML
+        })
+        const track = findChild(tracksOf(xml).tracks, 'AudioTrack')!
+        return manualOf(findChild(mixerBodyOf(track), 'Pan')!, 'Pan')
+      }
+      // The rifff's one non-drums stem is its first placed row: +width.
+      expect(panOf('automation')).toBe(0.25)
+      expect(panOf('bake')).toBe(0)
+      // A drums stem is centred, so its track keeps the template's 0.
+      const drums = toolkitState({ sound: normalizeSoundSettings(undefined) })
+      const xml = buildAlsXml(TEMPLATE_XML, drums, '/out', fileNames, new Map(), {
+        mode: 'automation',
+        toolkitAudio: { bakedClips: new Map() }
+      })
+      const track = findChild(tracksOf(xml).tracks, 'AudioTrack')!
+      expect(manualOf(findChild(mixerBodyOf(track), 'Pan')!, 'Pan')).toBe(0)
+    })
+
     it('gives every stem its own track, so no envelope is shared', () => {
       const xml = buildAlsXml(
         TEMPLATE_XML,

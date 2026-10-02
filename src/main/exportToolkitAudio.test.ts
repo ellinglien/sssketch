@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
 import type { Rifff } from '../shared/types'
+import { normalizeSoundSettings } from '../shared/radioSound'
 
 // Same narrow electron stand-in nativeExport.test.ts uses, and for the same
 // reasons -- see that file's own long comment on app.getAppPath/getPath. The
@@ -124,6 +125,13 @@ const riser = {
   muted: false
 }
 
+/** One frame's [left, right] of a rendered (16-bit stereo) WAV. */
+function frameAt(path: string, frame: number): [number, number] {
+  const buf = readFileSync(path)
+  const at = findDataChunkOffset(buf) + frame * 4
+  return [buf.readInt16LE(at) / 32767, buf.readInt16LE(at + 2) / 32767]
+}
+
 describe('renderToolkitAudio', () => {
   it('renders nothing for a project that uses none of the toolkit', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-audio-'))
@@ -139,6 +147,44 @@ describe('renderToolkitAudio', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  it("bakes a panned clip (the radio sound's per-row pan) with the engine's pan law, and only in bake mode", async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-src-'))
+    const outDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-out-'))
+    const autoDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-out-'))
+    try {
+      const stemPath = join(srcDir, 'a.wav')
+      writeConstantWav(stemPath, 0.5, 44100 * 4)
+      // No toolkit at all: the pan alone makes it a bake. An `fx` stem in slot 1 is the first
+      // placed row, so +0.25.
+      const sound = normalizeSoundSettings(undefined)
+      const state = oneBarState(stemPath, { sound })
+
+      const audio = await renderToolkitAudio(state, outDir, 'bake')
+      const baked = audio.bakedClips.get('r1:1')
+      expect(baked).toBeDefined()
+      expect(baked!.tailBars).toBe(0)
+      const [left, right] = frameAt(join(outDir, 'Samples', 'Imported', baked!.fileName), 44100)
+      // A mono stem at +0.25: L = cos(pi/8) x, R = (1 + sin(pi/8)) x -- and no mastering (a bake
+      // drops the master stages), so exactly that, to 16 bits.
+      expect(left).toBeCloseTo(Math.cos(Math.PI / 8) * 0.5, 3)
+      expect(right).toBeCloseTo((1 + Math.sin(Math.PI / 8)) * 0.5, 3)
+
+      // The automation mode keeps the audio dry (the pan goes on the stem's own track instead).
+      expect((await renderToolkitAudio(state, autoDir, 'automation')).bakedClips.size).toBe(0)
+      // And with panning off there is nothing to bake.
+      const off = normalizeSoundSettings(undefined)
+      off.panning.on = false
+      expect(
+        (await renderToolkitAudio(oneBarState(stemPath, { sound: off }), autoDir, 'bake'))
+          .bakedClips.size
+      ).toBe(0)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(outDir, { recursive: true, force: true })
+      rmSync(autoDir, { recursive: true, force: true })
+    }
+  }, 60000)
 
   it('bakes a clip through its own volume curve', async () => {
     const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-src-'))

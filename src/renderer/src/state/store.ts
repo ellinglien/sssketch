@@ -1034,7 +1034,7 @@ export function soloStemsMute(
  * is over. `state` is read, never mutated.
  */
 export function stemPreviewOverrides(
-  state: Pick<AppState, 'rifffs' | 'mute' | 'vol'>,
+  state: Pick<AppState, 'rifffs' | 'mute' | 'vol' | 'sound'>,
   targetStemKeys: string[]
 ): Pick<
   AppState,
@@ -1046,6 +1046,7 @@ export function stemPreviewOverrides(
   | 'stemAutomation'
   | 'muteRegions'
   | 'risers'
+  | 'sound'
 > {
   const previewGain = sqrtGain(targetStemKeys.length)
   const vol = { ...state.vol }
@@ -1058,7 +1059,11 @@ export function stemPreviewOverrides(
     stemSends: {},
     stemAutomation: {},
     muteRegions: {},
-    risers: {}
+    risers: {},
+    // The radio sound's per-row pan is a per-stem stage like the send, so it goes too: an
+    // audition is centred. The project-level stages (mastering, the room) stay, as they
+    // always have.
+    ...(state.sound ? { sound: mergeSoundSettings(state.sound, { panning: { on: false } }) } : {})
   }
 }
 

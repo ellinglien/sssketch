@@ -64,6 +64,8 @@ interface HeldStem {
   resolvedPath: string
   durationSec: number
   volume: number
+  /** The row's pan (EngineStem.pan), baked in with the gain. 0 when absent. */
+  pan: number
 }
 
 export interface RemoteStemRenderer {
@@ -117,9 +119,9 @@ export function createRemoteStemRenderer(): RemoteStemRenderer {
         ],
         { timeout: TRANSCODE_TIMEOUT_MS }
       )
-      // Trim to the loop the engine would read, bake the gain, sew the seam.
+      // Trim to the loop the engine would read, bake the gain and the row's pan, sew the seam.
       const frames = Math.round(stem.durationSec * PHONE_STEM_SAMPLE_RATE)
-      writeFileSync(sewnPath, sewLoopPCM16(readFileSync(rawPath), frames, stem.volume))
+      writeFileSync(sewnPath, sewLoopPCM16(readFileSync(rawPath), frames, stem.volume, stem.pan))
       // Pass 2: the lossless container the phone decodes.
       await execFileAsync(AFCONVERT, [...OUTPUT_ARGS, sewnPath, outPath], {
         timeout: TRANSCODE_TIMEOUT_MS
@@ -156,7 +158,8 @@ export function createRemoteStemRenderer(): RemoteStemRenderer {
         nextHeld.set(stemId, {
           resolvedPath: stem.resolvedPath,
           durationSec: stem.durationSec,
-          volume: stem.volume
+          volume: stem.volume,
+          pan: stem.pan ?? 0
         })
         // FAIL CLOSED. A row that says one stem's name while the phone plays
         // another is the worst bug available here, so a length disagreement

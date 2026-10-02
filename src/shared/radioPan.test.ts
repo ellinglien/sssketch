@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { ROW_PAN, panForSlots, stemPansForRifff } from './radioPan'
-import type { SoundType } from './types'
+import {
+  ROW_PAN,
+  discoverStemPans,
+  panForSlots,
+  stemPansForRifff,
+  stereoPanFrame
+} from './radioPan'
+import { stemKey, type SoundType } from './types'
 
 const slot = (...kinds: string[]): { kinds: never[] } => ({ kinds: kinds as never[] })
 
@@ -77,5 +83,76 @@ describe('stemPansForRifff (the timeline: a rifff clip stems, by slot and SoundT
 
   it('is empty for no stems', () => {
     expect(stemPansForRifff([]).size).toBe(0)
+  })
+})
+
+describe('discoverStemPans (Discover: every slot, by slot id, onto the preview stems)', () => {
+  const s = (id: string, ...kinds: string[]): { id: string; kinds: never[] } => ({
+    id,
+    kinds: kinds as never[]
+  })
+  const slots = [s('a', 'drums'), s('b', 'lead'), s('c', 'warm'), s('d', 'bass'), s('e', 'bright')]
+
+  it('pans over ALL the slots, so a member keeps its row pan whoever else is playing', () => {
+    // Only b and e are in the mix (c is muted): e is still the third placed row, so +width.
+    const pans = discoverStemPans(slots, ['b', 'e'], 'g')
+    expect(pans.get(stemKey('g', 1))).toBe(ROW_PAN)
+    expect(pans.get(stemKey('g', 2))).toBe(ROW_PAN)
+    expect(pans.size).toBe(2)
+  })
+
+  it('a mute or a solo moves no row', () => {
+    const all = discoverStemPans(slots, ['a', 'b', 'c', 'd', 'e'], 'g')
+    const fewer = discoverStemPans(slots, ['c'], 'g')
+    expect(all.get(stemKey('g', 3))).toBe(-ROW_PAN)
+    expect(fewer.get(stemKey('g', 1))).toBe(-ROW_PAN)
+  })
+
+  it('keys by member order, the preview rifff numbering (stem i + 1)', () => {
+    const pans = discoverStemPans(slots, ['e', 'a', 'c'], 'g')
+    expect([...pans.entries()]).toEqual([
+      [stemKey('g', 1), ROW_PAN],
+      [stemKey('g', 2), 0],
+      [stemKey('g', 3), -ROW_PAN]
+    ])
+  })
+
+  it('honours a width', () => {
+    const pans = discoverStemPans(slots, ['b', 'c'], 'g', 0.5)
+    expect(pans.get(stemKey('g', 1))).toBe(0.5)
+    expect(pans.get(stemKey('g', 2))).toBe(-0.5)
+  })
+
+  it('a member whose slot is not listed is centred', () => {
+    expect(discoverStemPans(slots, ['zzz'], 'g').get(stemKey('g', 1))).toBe(0)
+  })
+})
+
+describe('stereoPanFrame (the StereoPannerNode law, twin of the engine StemPan.h)', () => {
+  it('pan 0 is the frame unchanged', () => {
+    expect(stereoPanFrame(0.3, -0.2, 0)).toEqual([0.3, -0.2])
+  })
+
+  it('+p: L cos(p pi/2), R + L sin(p pi/2)', () => {
+    const [l, r] = stereoPanFrame(0.3, -0.2, 0.25)
+    expect(l).toBeCloseTo(0.3 * Math.cos(Math.PI / 8), 12)
+    expect(r).toBeCloseTo(-0.2 + 0.3 * Math.sin(Math.PI / 8), 12)
+  })
+
+  it('-p: L + R cos((1 - p) pi/2), R sin((1 - p) pi/2)', () => {
+    const [l, r] = stereoPanFrame(0.3, -0.2, -0.25)
+    expect(l).toBeCloseTo(0.3 + -0.2 * Math.cos((0.75 * Math.PI) / 2), 12)
+    expect(r).toBeCloseTo(-0.2 * Math.sin((0.75 * Math.PI) / 2), 12)
+  })
+
+  it('a mono frame at +0.25: L = cos(pi/8) x, R = (1 + sin(pi/8)) x', () => {
+    const [l, r] = stereoPanFrame(0.5, 0.5, 0.25)
+    expect(l).toBeCloseTo(Math.cos(Math.PI / 8) * 0.5, 12)
+    expect(r).toBeCloseTo((1 + Math.sin(Math.PI / 8)) * 0.5, 12)
+  })
+
+  it('clamps out of range and treats non-finite as centred', () => {
+    expect(stereoPanFrame(0.3, -0.2, 5)).toEqual(stereoPanFrame(0.3, -0.2, 1))
+    expect(stereoPanFrame(0.3, -0.2, NaN)).toEqual([0.3, -0.2])
   })
 })

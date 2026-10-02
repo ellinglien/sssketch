@@ -3,6 +3,7 @@
 #include "FadeGain.h"
 #include "Metronome.h"
 #include "MuteRegionGain.h"
+#include "StemPan.h"
 #include <algorithm>
 #include <cmath>
 
@@ -523,13 +524,16 @@ namespace sssketch
 
                 // A clip with a toolkit renders into its OWN buffer first, so
                 // its filter/volume/send apply to just that clip before it
-                // joins the rest of the channel. A neutral clip writes
+                // joins the rest of the channel. So does a panned row (the
+                // radio sound's per-row panning, StemPan.h): a pan has to
+                // act on this stem alone. A neutral, centred clip writes
                 // straight into the channel accumulator exactly as it always
                 // did -- same pointers, same order of additions, so an
                 // ordinary project's output stays bit-identical.
+                const bool ownBuffer = stem.hasToolkit || stem.pan != 0.0;
                 float* stemOutL = chOutL;
                 float* stemOutR = chOutR;
-                if (stem.hasToolkit)
+                if (ownBuffer)
                 {
                     auto& sL = snap->scratchStemL;
                     auto& sR = snap->scratchStemR;
@@ -550,21 +554,31 @@ namespace sssketch
                 // branch (which leaves the stem body early) and the tile
                 // loop -- rather than restructuring both into one exit, which
                 // would mean reindenting the whole tile path for nothing. A
-                // no-op, and not even a copy, for a clip with no toolkit:
-                // stemOut* ARE chOut* in that case, so the samples are
-                // already exactly where they belong.
+                // no-op, and not even a copy, for a clip with no toolkit and
+                // no pan: stemOut* ARE chOut* in that case, so the samples
+                // are already exactly where they belong.
+                //
+                // Order: filter -> volume -> pan -> send -> channel, the
+                // web's (its rows pan before the reverb send). A panned
+                // clip with no toolkit is panned and summed and that is
+                // all: it adds no send, so it neither opens the reverb bus
+                // nor feeds it, exactly like a centred clip without one.
                 const auto finishStem = [&]() {
-                    if (!stem.hasToolkit)
+                    if (!ownBuffer)
                         return;
-                    applyStemToolkit(
-                        stem.toolkit,
-                        stem.stemKey,
-                        positionBars,
-                        spb,
-                        sampleRate,
-                        numSamples,
-                        stemOutL,
-                        stemOutR);
+                    if (stem.hasToolkit)
+                        applyStemToolkit(
+                            stem.toolkit,
+                            stem.stemKey,
+                            stem.pan,
+                            positionBars,
+                            spb,
+                            sampleRate,
+                            numSamples,
+                            stemOutL,
+                            stemOutR);
+                    else
+                        applyStemPan(stem.pan, numSamples, stemOutL, stemOutR);
                     for (int i2 = 0; i2 < numSamples; ++i2)
                     {
                         chOutL[i2] += stemOutL[i2];
@@ -963,6 +977,7 @@ namespace sssketch
     void PlaybackEngine::applyStemToolkit(
         const EngineStemToolkit& toolkit,
         const juce::String& stemKey,
+        double pan,
         double positionBars,
         double secPerBar,
         double sampleRate,
@@ -1064,6 +1079,11 @@ namespace sssketch
         {
             dsp.volumeSmoother.advance(numSamples);
         }
+
+        // The row's pan, after the volume and BEFORE the send tap: the web
+        // pans its rows ahead of their reverb send, so a row panned right
+        // sends more to the room's right input. 0 touches nothing.
+        applyStemPan(pan, numSamples, stemL, stemR);
 
         reverbBus.addSend(numSamples, stemL, stemR, dsp.sendSmoother);
     }

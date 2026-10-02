@@ -4,6 +4,7 @@ import { parseRpp, findChild, findAllChildren, type RppNode } from './rppNode'
 import type { AppState } from '../../renderer/src/state/store'
 import type { Rifff } from '@shared/types'
 import type { RiserClip } from '@shared/riser'
+import { normalizeSoundSettings } from '@shared/radioSound'
 // Type-only, same as buildRppProject.ts's own import: exportToolkitAudio.ts
 // spawns the native engine, and this suite stays pure.
 import type { BakedClip, ToolkitExportOptions } from '../exportToolkitAudio'
@@ -489,6 +490,35 @@ describe('buildRppProject: bake mode', () => {
 })
 
 describe('buildRppProject: automation mode', () => {
+  it("writes the radio sound's per-row pan as the stem's track VOLPAN; bake mode bakes it instead", () => {
+    const notes: Rifff = {
+      ...drumsRifff(),
+      stems: [{ ...drumsRifff().stems[0], name: 'keys', type: 'notes' }]
+    }
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': notes },
+      busOf: { 'rifff-1:0': 'drums' },
+      sound: normalizeSoundSettings(undefined)
+    })
+    const fileNames = new Map([['rifff-1:0', 'keys.wav']])
+
+    const auto = tracksOf(buildRppProject(state, fileNames, automationOptions())).tracks[0]
+    expect(findChild(auto, 'VOLPAN')?.params).toEqual(['1', '0.25', '-1', '-1', '1'])
+    const baked = tracksOf(buildRppProject(state, fileNames, bakeOptions())).tracks[0]
+    expect(findChild(baked, 'VOLPAN')).toBeUndefined()
+    // The item's own VOLPAN keeps its centre either way: the pan is applied once.
+    expect(findChild(firstItemOf(auto), 'VOLPAN')?.params[1]).toBe('0')
+
+    // A drums stem is centred: no track VOLPAN, as before.
+    const drums = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      busOf: { 'rifff-1:0': 'drums' },
+      sound: normalizeSoundSettings(undefined)
+    })
+    const centred = tracksOf(buildRppProject(drums, fileNames, automationOptions())).tracks[0]
+    expect(findChild(centred, 'VOLPAN')).toBeUndefined()
+  })
+
   it('gives every stem its own track where bake mode packs two onto one', () => {
     const rifffA: Rifff = { ...drumsRifff(), groupId: 'a', startBar: 0 }
     const rifffB: Rifff = { ...drumsRifff(), groupId: 'b', startBar: 4 }

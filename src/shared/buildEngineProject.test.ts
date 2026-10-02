@@ -3,6 +3,7 @@ import {
   buildEngineProject,
   buildEngineRisers,
   buildEngineSound,
+  timelineStemPans,
   type EngineStem
 } from './buildEngineProject'
 import {
@@ -14,7 +15,7 @@ import {
 } from './radioSound'
 import type { AppState } from '../renderer/src/state/store'
 import { initialState } from '../renderer/src/state/store'
-import type { Rifff } from './types'
+import { stemKey, type Rifff } from './types'
 import { DEFAULT_REVERB, defaultFilterSettings } from './toolkit'
 import { MIN_RISER_LENGTH_BARS, RISER_DEFAULTS, createRiser } from './riser'
 
@@ -959,5 +960,144 @@ describe('the sound settings on the wire (native radio sound plan, Task 2)', () 
     )
     expect(project.sound?.glue?.thresholdDb).toBe(-20)
     expect(project.sound?.mastering).toEqual({ headroomDb: -4, ceilingDb: -1 })
+  })
+})
+
+describe('per-row panning on the wire (native radio sound plan, Task 4)', () => {
+  const fourStems: Rifff = {
+    ...rifff,
+    stems: [
+      {
+        slot: 1,
+        author: 'e',
+        name: 'k',
+        type: 'drums',
+        path: '/k.wav',
+        durationSec: 12.8,
+        barLength: 8
+      },
+      {
+        slot: 2,
+        author: 'e',
+        name: 'n',
+        type: 'notes',
+        path: '/n.wav',
+        durationSec: 12.8,
+        barLength: 8
+      },
+      {
+        slot: 3,
+        author: 'e',
+        name: 'b',
+        type: 'bass',
+        path: '/b.wav',
+        durationSec: 12.8,
+        barLength: 8
+      },
+      {
+        slot: 4,
+        author: 'e',
+        name: 'f',
+        type: 'fx',
+        path: '/f.wav',
+        durationSec: 12.8,
+        barLength: 8
+      }
+    ]
+  }
+  const withPanning = (on: boolean, width = 0.25): SoundSettings => {
+    const s = normalizeSoundSettings(undefined)
+    s.panning = { on, width }
+    return s
+  }
+  const pansOf = (stems: EngineStem[]): (number | undefined)[] => stems.map((s) => s.pan)
+
+  it('the timeline: drums and bass centred (no key), the rest +width, -width by slot', async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: withPanning(true) }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(pansOf(project.rifffs[0].stems)).toEqual([undefined, 0.25, undefined, -0.25])
+    expect('pan' in project.rifffs[0].stems[0]).toBe(false)
+  })
+
+  it('honours the width', async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: withPanning(true, 0.4) }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(pansOf(project.rifffs[0].stems)).toEqual([undefined, 0.4, undefined, -0.4])
+  })
+
+  it('a muted stem keeps its place, so muting never moves another row', async () => {
+    const project = await buildEngineProject(
+      stateWith({
+        bpm: 150,
+        rifffs: { r1: fourStems },
+        sound: withPanning(true),
+        mute: { [stemKey('r1', 2)]: true }
+      }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(project.rifffs[0].stems[3].pan).toBe(-0.25)
+  })
+
+  it('panning off, a width of 0 and no sound settings all emit no `pan` at all', async () => {
+    for (const sound of [withPanning(false), withPanning(true, 0), undefined]) {
+      const project = await buildEngineProject(
+        stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound }),
+        vi.fn(),
+        emptyCatalog
+      )
+      expect(project.rifffs[0].stems.some((s) => 'pan' in s)).toBe(false)
+    }
+  })
+
+  it("Discover's map replaces the timeline rule, keyed by stem key; a key not in it is centred", async () => {
+    const stemPans = new Map([
+      [stemKey('r1', 1), -0.25],
+      [stemKey('r1', 3), 0.25]
+    ])
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: withPanning(true) }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      { stemPans }
+    )
+    expect(pansOf(project.rifffs[0].stems)).toEqual([-0.25, undefined, 0.25, undefined])
+  })
+
+  it("Discover's map is ignored while panning is off", async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: withPanning(false) }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      { stemPans: new Map([[stemKey('r1', 2), 0.25]]) }
+    )
+    expect(project.rifffs[0].stems.some((s) => 'pan' in s)).toBe(false)
+  })
+})
+
+describe('timelineStemPans (the one timeline rule the wire and the DAW exports share)', () => {
+  it('maps every off-centre stem of every PLACED rifff, and nothing while panning is off', () => {
+    const sound = normalizeSoundSettings(undefined)
+    const placed: Rifff = {
+      ...rifff,
+      stems: [
+        { ...rifff.stems[0], slot: 1, type: 'drums' },
+        { ...rifff.stems[0], slot: 2, type: 'notes' }
+      ]
+    }
+    const shelved: Rifff = { ...placed, groupId: 'r2', startBar: undefined }
+    const state = stateWith({ rifffs: { r1: placed, r2: shelved }, sound })
+    expect([...timelineStemPans(state).entries()]).toEqual([[stemKey('r1', 2), 0.25]])
+    sound.panning.on = false
+    expect(timelineStemPans(stateWith({ rifffs: { r1: placed }, sound })).size).toBe(0)
+    expect(timelineStemPans(stateWith({ rifffs: { r1: placed } })).size).toBe(0)
   })
 })

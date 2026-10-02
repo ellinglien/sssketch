@@ -3,6 +3,7 @@ import { initialState, reducer, stemPreviewOverrides, type AppState } from './st
 import { stemKey, type Rifff } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
 import { MIN_RISER_LENGTH_BARS, createRiser } from '@shared/riser'
+import { normalizeSoundSettings } from '@shared/radioSound'
 import { channelsInOrder, loopLengthBars } from './selectors'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import { lockClimaxFromArrangeRoles, type CoachSlotSnapshot } from '@shared/coachClimax'
@@ -3424,6 +3425,17 @@ describe('stemPreviewOverrides', () => {
     expect(overrides.muteRegions).toEqual({})
     expect(overrides.dragVol).toEqual({})
     expect(overrides.risers).toEqual({})
+  })
+
+  it("centres the audition: the project's per-row panning is switched off, nothing else", () => {
+    const state = placedProject()
+    const sound = normalizeSoundSettings(undefined)
+    const overrides = stemPreviewOverrides({ ...state, sound }, [r1s1])
+    expect(overrides.sound?.panning.on).toBe(false)
+    expect({ ...overrides.sound, panning: sound.panning }).toEqual(sound)
+    expect(sound.panning.on).toBe(true)
+    // No settings stay no settings.
+    expect('sound' in stemPreviewOverrides({ ...state, sound: undefined }, [r1s1])).toBe(false)
   })
 
   it('does not touch the real project it was given', () => {

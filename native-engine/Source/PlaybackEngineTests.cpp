@@ -7,6 +7,7 @@
 #include <juce_core/juce_core.h>
 #include <atomic>
 #include <cmath>
+#include <cstring>
 #include <limits>
 #include <algorithm>
 #include <chrono>
@@ -68,6 +69,32 @@ namespace sssketch
         juce::AudioBuffer<float> source(1, numSamples);
         for (int i = 0; i < numSamples; ++i)
             source.setSample(0, i, (float) i / (float) numSamples);
+        writer->writeFromAudioSampleBuffer(source, 0, numSamples);
+        writer.reset();
+        return file;
+    }
+
+    /** A two-channel fixture: a sine of `amplitudeL` on the left and `amplitudeR` on the right
+     * (offset by `phaseR` radians), so a test can tell the sides apart -- the panning tests
+     * need a real stereo stem, which every other fixture here is not. */
+    static juce::File writeStereoSineFixtureWav(const juce::String& name, double freqHz, float amplitudeL,
+                                                float amplitudeR, float phaseR, int numSamples,
+                                                double sampleRate = 44100.0)
+    {
+        auto file = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile(name);
+        file.deleteFile();
+        juce::WavAudioFormat wavFormat;
+        std::unique_ptr<juce::FileOutputStream> out(file.createOutputStream());
+        std::unique_ptr<juce::AudioFormatWriter> writer(
+            wavFormat.createWriterFor(out.get(), sampleRate, 2, 16, {}, 0));
+        out.release();
+        juce::AudioBuffer<float> source(2, numSamples);
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const double w = 2.0 * juce::MathConstants<double>::pi * freqHz * (double) i / sampleRate;
+            source.setSample(0, i, amplitudeL * (float) std::sin(w));
+            source.setSample(1, i, amplitudeR * (float) std::sin(w + phaseR));
+        }
         writer->writeFromAudioSampleBuffer(source, 0, numSamples);
         writer.reset();
         return file;
@@ -1975,6 +2002,178 @@ namespace sssketch
                 expect(wetPeak > 1.0e-3, "reverb tail peak was " + juce::String(wetPeak));
 
                 tone.deleteFile();
+            }
+
+            // ---- per-row panning (native radio sound plan, Task 4; StemPan.h) ----
+            {
+                constexpr double kRate = 44100.0;
+                // 240bpm: one bar is one second, and each fixture is one second, so one bar
+                // of audio and then silence (playedBars 1).
+                const auto panProject = [](const std::vector<std::pair<juce::File, double>>& stems) {
+                    EngineProject project;
+                    project.bpm = 240.0;
+                    project.snapDiv = 16.0;
+                    EngineRifff rifff;
+                    rifff.groupId = "pan";
+                    rifff.channelId = "ch-pan";
+                    rifff.startBar = 0.0;
+                    rifff.barLength = 1;
+                    int n = 0;
+                    for (const auto& [file, pan] : stems)
+                    {
+                        EngineStem stem;
+                        stem.stemKey = "pan:" + juce::String(++n);
+                        stem.resolvedPath = file.getFullPathName();
+                        stem.durationSec = 1.0;
+                        stem.barLength = 1;
+                        stem.playedBars = 1.0;
+                        stem.pan = pan;
+                        rifff.stems.push_back(stem);
+                    }
+                    project.rifffs.push_back(rifff);
+                    return project;
+                };
+                // Renders `totalSamples` from bar 0 in the given block sizes (cycled), the way
+                // Transport hands renderBlock consecutive sub-ranges.
+                const auto render = [&](const EngineProject& project, int totalSamples,
+                                        const std::vector<int>& blockSizes,
+                                        std::vector<float>& outL, std::vector<float>& outR) {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry channelChains;
+                    engine.setProject(project);
+                    outL.assign((size_t) totalSamples, 0.0f);
+                    outR.assign((size_t) totalSamples, 0.0f);
+                    size_t which = 0;
+                    for (int start = 0; start < totalSamples;)
+                    {
+                        const int len = juce::jmin(totalSamples - start, blockSizes[which++ % blockSizes.size()]);
+                        const double positionBars = (start / kRate) / 1.0; // 1 s per bar
+                        engine.renderBlock(positionBars, kRate, len, outL.data() + start, outR.data() + start,
+                                           channelChains);
+                        start += len;
+                    }
+                };
+
+                auto stereo = writeStereoSineFixtureWav("sssketch_pe_pan_stereo.wav", 330.0, 0.5f, 0.0f, 0.3f, 44100);
+                auto mono = writeSineFixtureWav("sssketch_pe_pan_mono.wav", 220.0, 0.5f, 44100);
+
+                beginTest("pan 0 (and -0) is bit-identical to a stem with no pan, with or without a toolkit");
+                {
+                    auto bare = panProject({ { stereo, 0.0 }, { mono, 0.0 } });
+                    bare.rifffs[0].stems[1].hasToolkit = true;
+                    bare.rifffs[0].stems[1].toolkit.reverbSend = 0.5;
+                    auto zero = bare;
+                    zero.rifffs[0].stems[0].pan = -0.0;
+                    zero.rifffs[0].stems[1].pan = 0.0;
+                    std::vector<float> aL, aR, bL, bR;
+                    render(bare, 66150, { 512 }, aL, aR);
+                    render(zero, 66150, { 512 }, bL, bR);
+                    expect(std::memcmp(aL.data(), bL.data(), sizeof(float) * aL.size()) == 0);
+                    expect(std::memcmp(aR.data(), bR.data(), sizeof(float) * aR.size()) == 0);
+                    expect(std::abs(aL[3000]) > 0.01f, "it rendered something");
+                }
+
+                beginTest("+0.25 on a stereo stem is the StereoPannerNode formula over the unpanned render");
+                {
+                    std::vector<float> dryL, dryR, panL, panR;
+                    render(panProject({ { stereo, 0.0 } }), 4096, { 512 }, dryL, dryR);
+                    render(panProject({ { stereo, 0.25 } }), 4096, { 512 }, panL, panR);
+                    const double gL = std::cos(0.25 * juce::MathConstants<double>::halfPi);
+                    const double gR = std::sin(0.25 * juce::MathConstants<double>::halfPi);
+                    int mismatches = 0;
+                    for (size_t i = 0; i < dryL.size(); ++i)
+                    {
+                        const double l = dryL[i], r = dryR[i];
+                        if (panL[i] != (float) (l * gL) || panR[i] != (float) (r + l * gR))
+                            ++mismatches;
+                    }
+                    expectEquals(mismatches, 0);
+                    expect(dryL[1000] != dryR[1000], "the fixture really is stereo");
+                }
+
+                beginTest("a mono stem at +0.25 gives L = cos(pi/8) x, R = (1 + sin(pi/8)) x");
+                {
+                    std::vector<float> dryL, dryR, panL, panR;
+                    render(panProject({ { mono, 0.0 } }), 4096, { 512 }, dryL, dryR);
+                    render(panProject({ { mono, 0.25 } }), 4096, { 512 }, panL, panR);
+                    const double c = std::cos(juce::MathConstants<double>::pi / 8.0);
+                    const double s = std::sin(juce::MathConstants<double>::pi / 8.0);
+                    double worst = 0.0;
+                    for (size_t i = 0; i < dryL.size(); ++i)
+                    {
+                        expectEquals(dryL[i], dryR[i]);
+                        worst = juce::jmax(worst, std::abs(panL[i] - c * dryL[i]));
+                        worst = juce::jmax(worst, std::abs(panR[i] - (1.0 + s) * dryL[i]));
+                    }
+                    expect(worst < 1.0e-6, "worst error " + juce::String(worst));
+                }
+
+                beginTest("a panned stem with no toolkit adds no send: silence after its last sample");
+                {
+                    std::vector<float> l, r;
+                    render(panProject({ { mono, 0.25 } }), 88200, { 512 }, l, r);
+                    float tail = 0.0f;
+                    for (size_t i = 44100 + 64; i < l.size(); ++i)
+                        tail = juce::jmax(tail, std::abs(l[i]), std::abs(r[i]));
+                    expectEquals(tail, 0.0f);
+                }
+
+                beginTest("the reverb send is post-pan: a hard-right mono row feeds the room what a "
+                          "right-only stem does");
+                {
+                    // Pan +1 folds a mono x into (0, 2x). Post-pan, the room hears (0, 2x); a
+                    // pre-pan send would feed it (x, x) -- the centred row's send. So the
+                    // panned row's tail must match a stem that IS (0, 2x) at pan 0, and must
+                    // not match the centred row's.
+                    auto rightOnly = writeStereoSineFixtureWav(
+                        "sssketch_pe_pan_rightonly.wav", 220.0, 0.0f, 1.0f, 0.0f, 44100);
+                    const auto withSend = [&](EngineProject p) {
+                        p.rifffs[0].stems[0].hasToolkit = true;
+                        p.rifffs[0].stems[0].toolkit.reverbSend = 1.0;
+                        p.reverb.roomSize = 0.6;
+                        p.reverb.preDelayMs = 0.0;
+                        return p;
+                    };
+                    std::vector<float> panL, panR, refL, refR, midL, midR;
+                    render(withSend(panProject({ { mono, 1.0 } })), 88200, { 512 }, panL, panR);
+                    render(withSend(panProject({ { rightOnly, 0.0 } })), 88200, { 512 }, refL, refR);
+                    render(withSend(panProject({ { mono, 0.0 } })), 88200, { 512 }, midL, midR);
+                    double toRef = 0.0, toMid = 0.0, tailPeak = 0.0;
+                    for (size_t i = 44100 + 64; i < panL.size(); ++i)
+                    {
+                        toRef = juce::jmax(toRef, (double) std::abs(panL[i] - refL[i]),
+                                           (double) std::abs(panR[i] - refR[i]));
+                        toMid = juce::jmax(toMid, (double) std::abs(panL[i] - midL[i]),
+                                           (double) std::abs(panR[i] - midR[i]));
+                        tailPeak = juce::jmax(tailPeak, (double) std::abs(panL[i]), (double) std::abs(panR[i]));
+                    }
+                    expect(tailPeak > 1.0e-3, "there is a tail: " + juce::String(tailPeak));
+                    // The reference stem is 16-bit, so it is (0, 2x) to within quantisation.
+                    expect(toRef < 2.0e-4, "panned tail vs right-only stem: " + juce::String(toRef));
+                    expect(toMid > 20.0 * 2.0e-4, "panned tail vs centred send: " + juce::String(toMid));
+                    rightOnly.deleteFile();
+                }
+
+                beginTest("panned rows are block-split invariant, to the bit");
+                {
+                    const auto project = panProject({ { stereo, -0.25 }, { mono, 0.25 } });
+                    std::vector<float> aL, aR, bL, bR, cL, cR;
+                    render(project, 50000, { 512 }, aL, aR);
+                    render(project, 50000, { 1, 64, 300, 7, 4096, 129 }, bL, bR);
+                    juce::Random random(11);
+                    std::vector<int> sizes;
+                    for (int i = 0; i < 64; ++i)
+                        sizes.push_back(1 + random.nextInt(1500));
+                    render(project, 50000, sizes, cL, cR);
+                    expect(std::memcmp(aL.data(), bL.data(), sizeof(float) * aL.size()) == 0);
+                    expect(std::memcmp(aR.data(), bR.data(), sizeof(float) * aR.size()) == 0);
+                    expect(std::memcmp(aL.data(), cL.data(), sizeof(float) * aL.size()) == 0);
+                    expect(std::memcmp(aR.data(), cR.data(), sizeof(float) * aR.size()) == 0);
+                }
+
+                stereo.deleteFile();
+                mono.deleteFile();
             }
 
             beginTest("a project with no risers renders bit-identically to before they existed");
