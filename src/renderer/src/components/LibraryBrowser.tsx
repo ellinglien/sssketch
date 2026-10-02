@@ -44,6 +44,9 @@ import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
 import { ContextMenu } from './ContextMenu'
+import { LoopFolderSidebar } from './LoopFolderSidebar'
+import { LoopFolderPane } from './LoopFolderPane'
+import { useLoopFolders } from '../state/useLoopFolders'
 import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import { DiscoverPanel, DISCOVER_UNDO_LIMIT, type DiscoverSlot } from './DiscoverPanel'
 import type { CoachSlotSnapshot } from '@shared/coachClimax'
@@ -303,6 +306,10 @@ export function LibraryBrowser({
   // something typed into the jam search box.
   const [ownJam, setOwnJam] = useState<RiffLibraryJam | null>(null)
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
+  // A linked loop folder shown in the right-hand pane. Only shown while no
+  // jam is selected, so picking a jam (or "go to rifff ID") hides it with
+  // no extra bookkeeping.
+  const [selectedLoopRoot, setSelectedLoopRoot] = useState<string | null>(null)
   // Right-click "remove from sync" menu on a sidebar jam row -- jamCID/
   // jamName are captured at open time rather than read back from
   // sidebarJams at click time, so the menu still knows what it's acting on
@@ -488,6 +495,13 @@ export function LibraryBrowser({
   const playing = usePlaying()
   const dispatch = useDispatch()
   const appState = useAppState()
+  // Rescanned when IMPORT opens (spec, "Staying current") -- the browse
+  // half only; opening on discover never touches the loop folders.
+  const loopFolders = useLoopFolders(appState.bpm, initialMode === 'browse')
+  const selectedLoopFolder =
+    selectedJamCID === null && selectedLoopRoot !== null
+      ? (loopFolders.folders.find((f) => f.rootPath === selectedLoopRoot) ?? null)
+      : null
   const setBusy = useBusy()
 
   // Stable across renders (useCallback, empty deps) so it's safe to pass to
@@ -1825,6 +1839,28 @@ export function LibraryBrowser({
                       </span>
                     )}
                   </div>
+                  <LoopFolderSidebar
+                    folders={loopFolders.folders}
+                    scanning={loopFolders.scanning}
+                    linkRefusal={loopFolders.linkRefusal}
+                    selectedRootPath={selectedLoopFolder?.rootPath ?? null}
+                    onSelect={(rootPath) => {
+                      setSelectedJamCID(null)
+                      setSelectedLoopRoot(rootPath)
+                    }}
+                    onLink={async () => {
+                      const rootPath = await loopFolders.link()
+                      if (rootPath) {
+                        setSelectedJamCID(null)
+                        setSelectedLoopRoot(rootPath)
+                      }
+                    }}
+                    onRescan={loopFolders.rescan}
+                    onUnlink={async (rootPath) => {
+                      await loopFolders.unlink(rootPath)
+                      if (selectedLoopRoot === rootPath) setSelectedLoopRoot(null)
+                    }}
+                  />
                   {sidebarJams.map((jam) => {
                     // Live per-row progress, visible regardless of which jam is
                     // currently selected -- matches LORE's own Data Warehouse
@@ -1920,10 +1956,13 @@ export function LibraryBrowser({
                 </div>
 
                 <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-                  {selectedJamCID === null && (
+                  {selectedJamCID === null && selectedLoopFolder === null && (
                     <div style={{ fontSize: 11, color: 'var(--ra-text-3)', margin: 12 }}>
                       select a jam to browse its rifffs
                     </div>
+                  )}
+                  {selectedLoopFolder !== null && (
+                    <LoopFolderPane key={selectedLoopFolder.rootPath} folder={selectedLoopFolder} />
                   )}
                   {selectedJamCID !== null && (
                     <>
