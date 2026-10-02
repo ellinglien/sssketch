@@ -36,6 +36,13 @@ namespace sssketch
             return (int) std::clamp(v, -1.0e9, 1.0e9);
         }
 
+        /** Whether a clip's toolkit sends to the reverb at all: a raised static send, or a send
+         * curve (which may rise from 0). */
+        bool stemSendsToReverb(const EngineStemToolkit& toolkit)
+        {
+            return toolkit.reverbSend > 0.0 || ! toolkit.automation.reverbSend.empty();
+        }
+
         /** Whether a clip's toolkit entry does nothing at all -- the test
          * that decides, once per setProject() rather than per block, whether
          * renderBlock can skip this clip's toolkit stage entirely.
@@ -49,13 +56,6 @@ namespace sssketch
          *
          * Mirrored by isStemToolkitNeutral() in src/shared/toolkit.ts; the two
          * are checked against each other by intent, not by code sharing. */
-        /** Whether a clip's toolkit sends to the reverb at all: a raised static send, or a send
-         * curve (which may rise from 0). */
-        bool stemSendsToReverb(const EngineStemToolkit& toolkit)
-        {
-            return toolkit.reverbSend > 0.0 || ! toolkit.automation.reverbSend.empty();
-        }
-
         bool stemToolkitIsNeutral(const EngineStemToolkit& toolkit)
         {
             const auto& automation = toolkit.automation;

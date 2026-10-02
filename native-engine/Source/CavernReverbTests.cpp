@@ -760,7 +760,7 @@ namespace sssketch
                 engine.drainRetiredProject();
             }
 
-            beginTest("a stop drops the cavern's tail: play again from bar 0 is the export, to the bit");
+            beginTest("a stop drops the cavern's tail: play again from bar 0 is the export, but for denormal dust (< 1e-30)");
             {
                 // A loud send, stopped while the room is still ringing (the clip itself has ended),
                 // then played again from the top.

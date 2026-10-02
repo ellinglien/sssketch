@@ -630,7 +630,7 @@ namespace sssketch
 
             beginTest("a fresh render of a project whose pump is off never pumps, even with roles on the wire");
             {
-                // what every per-stem export and audition sends (the pump off, roles kept): a fresh
+                // what a per-stem export or any fresh render sends with the pump off (roles kept): a fresh
                 // engine has no duck to release, so not a sample is routed through the pump
                 const auto offWithRoles =
                     render(makeProject({ { hotKick, Role::key }, { pad, Role::pumped }, { bass } }, std::nullopt), total,

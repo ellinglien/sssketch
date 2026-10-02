@@ -138,9 +138,12 @@ namespace sssketch
          * when nothing was sent this block and no tail remains. */
         void endBlock(int numSamples, float* outL, float* outR);
 
-        /** Drops the tail -- for a transport stop/seek, where letting the
-         * previous position's reverb ring on into the new one is an artifact
-         * of the seek. */
+        /** Drops both rooms' tails: the cavern's (as dropCavernTail) and
+         * zita's, by re-initialising it -- which allocates its delay lines, so
+         * this is not an audio-thread call. The transport does NOT use it: a
+         * seek keeps the tail (a real room keeps ringing), and a stop drops
+         * only the cavern's (dropCavernTail, below). For tests, and any
+         * caller with no block in flight that wants a silent room. */
         void reset();
 
         /** Forgets the cavern's tail: its next block starts from silence

@@ -29,8 +29,9 @@ namespace sssketch
      * from the wire (saturationDrive(amount), 0.9 by default); the bias (0.1), the makeup
      * (+0.5 dB x (drive / 1.8)^2, so +0.125 dB at 0.9: small signals come out that much louder,
      * not at unity) and the ~5 Hz DC blocker are inside the .dsp. The .dsp glides its drive
-     * over ~20 ms itself (a one-pole from 0 when the DSP is fresh or cleared, as the web's
-     * worklet starts), so a drive change is just set; while the glided drive is under 0.001 a
+     * over ~20 ms itself (a one-pole from 0 when the DSP is fresh or cleared -- here at every
+     * stop, seek and device start; the web's worklet glides from 0 only when it is created), so
+     * a drive change is just set; while the glided drive is under 0.001 a
      * channel is passed through exactly (DC blocker bypassed), so drive 0 is the stage
      * switched off, to the bit.
      *
