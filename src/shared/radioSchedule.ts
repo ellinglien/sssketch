@@ -11,7 +11,6 @@
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import { radioSlotFlagWeightFactor, type RadioSlotFlags } from './radioSlotFlags'
-import type { RadioDropOuts } from './radioDropOut'
 import {
   DEFAULT_RADIO_TURNAROUNDS,
   DEFAULT_TURNAROUND_DEPTH,
@@ -970,7 +969,7 @@ export function normalizeRadioTurnover(value: unknown): RadioTurnover {
  * that order's own comment insists every PREFIX has to sound like a band.
  *
  * One consequence worth knowing rather than discovering: at 2 channels a
- * drop-out leaves a single layer playing. pickDropOutSlotId already
+ * drop-out leaves a single layer playing. The turnaround roll already
  * refuses below two audible slots, so it cannot make silence, but a
  * two-channel bed is the one place the gesture is as likely to sound
  * like a fault as a decision. */
@@ -1048,10 +1047,6 @@ export interface RadioSettings {
   /** How often a phrase end gets a turnaround (radioTurnaround.ts). Absorbed the old
    * `dropOuts` row (2026-10-02). */
   turnarounds: RadioTurnarounds
-  /** DEPRECATED: equal to `turnarounds` (normalizeRadioSettings keeps it so). Kept only while
-   * the shipped DiscoverRadioMenu and DiscoverPanel still read and write it -- the radio
-   * turnarounds plan's Task 14 moves them over, and its Task 16 deletes this field. */
-  dropOuts: RadioDropOuts
   /** Which move families a turnaround may draw (radioTurnaround's TURNAROUND_FAMILIES). None
    * enabled behaves as `turnarounds: off`. */
   turnaroundMoves: readonly TurnaroundFamily[]
@@ -1076,7 +1071,6 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   channels: DEFAULT_RADIO_CHANNELS,
   transitions: DEFAULT_RADIO_TRANSITIONS,
   turnarounds: DEFAULT_RADIO_TURNAROUNDS,
-  dropOuts: DEFAULT_RADIO_TURNAROUNDS,
   turnaroundMoves: [...TURNAROUND_FAMILIES],
   turnaroundDepth: DEFAULT_TURNAROUND_DEPTH,
   turnover: DEFAULT_RADIO_TURNOVER,
@@ -1101,10 +1095,12 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
   const pace =
     raw.pace !== undefined ? normalizeRadioPace(raw.pace) : normalizeRadioPace(legacyPace)
   const channels = Number(raw.channels)
-  // Turnarounds absorbed drop-outs. Until the plan's Task 16 the shipped menu writes only
-  // `dropOuts`, so it is read FIRST -- whenever the two differ it is the newer -- and
-  // `turnarounds` is the fallback. Task 16 flips this to the spec's order.
-  const turnarounds = normalizeRadioTurnarounds(raw.dropOuts, raw.turnarounds)
+  // Turnarounds absorbed drop-outs (2026-10-02): an old saved `dropOuts` is read only when
+  // there is no `turnarounds`, so a choice made before the rename carries over.
+  const turnarounds = normalizeRadioTurnarounds(
+    raw.turnarounds,
+    (value as { dropOuts?: unknown } | null)?.dropOuts
+  )
   return {
     pace,
     paceBars: normalizeRadioPaceWindow(raw.paceBars, pace),
@@ -1122,7 +1118,6 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
       : DEFAULT_RADIO_CHANNELS,
     transitions: normalizeRadioTransitions(raw.transitions),
     turnarounds,
-    dropOuts: turnarounds,
     turnaroundMoves: normalizeTurnaroundMoves(raw.turnaroundMoves),
     turnaroundDepth: normalizeTurnaroundDepth(raw.turnaroundDepth),
     turnover: normalizeRadioTurnover(raw.turnover),

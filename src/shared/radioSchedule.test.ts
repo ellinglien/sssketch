@@ -1087,7 +1087,6 @@ describe('RadioSettings', () => {
       channels: 4,
       transitions: 'subtle',
       turnarounds: 'rare',
-      dropOuts: 'rare',
       turnaroundMoves: ['drops', 'wash', 'filters', 'riser'],
       turnaroundDepth: 'bold',
       turnover: 'even',

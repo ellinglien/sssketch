@@ -85,7 +85,7 @@ const MELODIC: { subtle: WeightTable; bold: WeightTable } = {
 
 /** `drums` first, because a combination slot carrying it is a drum layer
  * for this purpose whatever else it also carries -- the same "strongest
- * eligible kind wins" reading radioDropOut's own weighting uses. The four
+ * eligible kind wins" reading the old drop-out weighting used. The four
  * trait kinds (bassHeavy/rhythmic/bright/warm) have no instrument identity
  * and fall to PADDY, which is where a sweep and a bloom belong. */
 function tableFor(temperament: 'subtle' | 'bold', kinds: readonly DiscoverSlotKind[]): WeightTable {

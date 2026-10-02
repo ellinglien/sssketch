@@ -306,13 +306,12 @@ export function DiscoverRadioMenu({
       {densityRow}
       {channelsRow}
       {/* The drop-outs row, renamed (2026-10-02, @shared/radioTurnaround): how often a phrase
-          end gets a turnaround -- a drop, a wash, a filter move or a riser. Writes the
-          deprecated dropOuts mirror too, until the plan's Task 16 deletes it. */}
+          end gets a turnaround -- a drop, a wash, a filter move or a riser. */}
       {mode === 'running' &&
         row(
           'turnarounds',
           RADIO_TURNAROUNDS_OPTIONS.map((d) =>
-            chip(d, settings.turnarounds === d, () => onChange({ turnarounds: d, dropOuts: d }))
+            chip(d, settings.turnarounds === d, () => onChange({ turnarounds: d }))
           ),
           'end of phrase'
         )}

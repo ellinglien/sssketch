@@ -2,41 +2,25 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_RADIO_SETTINGS, normalizeRadioSettings } from './radioSchedule'
 
 describe('RadioSettings.turnarounds', () => {
-  it('defaults to rare, with the deprecated dropOuts mirror equal', () => {
+  it('defaults to rare, and there is no dropOuts field any more', () => {
     expect(DEFAULT_RADIO_SETTINGS.turnarounds).toBe('rare')
-    expect(DEFAULT_RADIO_SETTINGS.dropOuts).toBe('rare')
+    expect(DEFAULT_RADIO_SETTINGS).not.toHaveProperty('dropOuts')
+    expect(normalizeRadioSettings({})).not.toHaveProperty('dropOuts')
   })
 
-  it('carries an old drop-outs choice over', () => {
-    expect(normalizeRadioSettings({ dropOuts: 'often' })).toMatchObject({
-      turnarounds: 'often',
-      dropOuts: 'often'
-    })
-    expect(normalizeRadioSettings({ dropOuts: 'off' })).toMatchObject({
-      turnarounds: 'off',
-      dropOuts: 'off'
-    })
+  it('carries an old drop-outs choice over when there is no turnarounds value', () => {
+    expect(normalizeRadioSettings({ dropOuts: 'often' }).turnarounds).toBe('often')
+    expect(normalizeRadioSettings({ dropOuts: 'off' }).turnarounds).toBe('off')
   })
 
-  it('reads turnarounds when there is no drop-outs value', () => {
-    expect(normalizeRadioSettings({ turnarounds: 'often' })).toMatchObject({
-      turnarounds: 'often',
-      dropOuts: 'often'
-    })
-  })
-
-  it('while the shipped menu still writes dropOuts, that is the newer of the two', () => {
-    expect(normalizeRadioSettings({ turnarounds: 'rare', dropOuts: 'off' })).toMatchObject({
-      turnarounds: 'off',
-      dropOuts: 'off'
-    })
+  it('a turnarounds value wins over an old drop-outs one', () => {
+    expect(normalizeRadioSettings({ turnarounds: 'rare', dropOuts: 'off' }).turnarounds).toBe(
+      'rare'
+    )
   })
 
   it('falls back to rare for junk', () => {
-    expect(normalizeRadioSettings({ turnarounds: 'loud', dropOuts: 3 })).toMatchObject({
-      turnarounds: 'rare',
-      dropOuts: 'rare'
-    })
+    expect(normalizeRadioSettings({ turnarounds: 'loud', dropOuts: 3 }).turnarounds).toBe('rare')
   })
 })
 
