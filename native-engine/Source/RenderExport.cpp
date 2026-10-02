@@ -20,7 +20,7 @@ namespace sssketch
         StemBufferCache bufferCache;
         PlaybackEngine engine(bufferCache);
         // Before setProject, so the master stage is built once, at this rate.
-        engine.prepareMaster(sampleRate);
+        engine.prepareMaster(sampleRate, blockSize);
         engine.setProject(project);
 
         // Export has no real-time deadline, so plugins are loaded directly

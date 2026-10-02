@@ -156,10 +156,22 @@ namespace sssketch
 
         // Scratch space for the new channel set -- off the real-time thread
         // (see renderBlock's own comment on why this lives here, not
-        // there). Inner per-numSamples buffers are left empty; renderBlock
-        // sizes those lazily on first use.
+        // there). The inner per-numSamples buffers are RESERVED to the
+        // longest block prepareMaster was told of, so renderBlock's per-block
+        // resize stays within capacity and a re-sync allocates nothing on the
+        // audio thread; untold (0), they are left empty and renderBlock sizes
+        // them on first use, as it always did.
+        const auto reserved = (size_t) reservedBlock.load();
+        const auto reserveEach = [reserved](std::vector<std::vector<float>>& buffers) {
+            for (auto& b : buffers)
+                b.reserve(reserved);
+        };
         next->scratchChannelL.assign(next->channelGroups.size(), {});
         next->scratchChannelR.assign(next->channelGroups.size(), {});
+        reserveEach(next->scratchChannelL);
+        reserveEach(next->scratchChannelR);
+        next->scratchStemL.reserve(reserved);
+        next->scratchStemR.reserve(reserved);
         next->scratchChannelIds.reserve(next->channelGroups.size());
         for (const auto& [channelId, rifffPtrs] : next->channelGroups)
             next->scratchChannelIds.push_back(channelId);
@@ -212,6 +224,10 @@ namespace sssketch
                 next->pumpDepthDb = next->pumpActive ? next->project.sound.pump->depthDb : 0.0;
                 next->scratchPumpL.assign(next->channelGroups.size(), {});
                 next->scratchPumpR.assign(next->channelGroups.size(), {});
+                reserveEach(next->scratchPumpL);
+                reserveEach(next->scratchPumpR);
+                next->scratchKeyL.reserve(reserved);
+                next->scratchKeyR.reserve(reserved);
                 next->pumpTargets.reserve(next->channelGroups.size());
                 // Its Faust instance, on this (message) thread; a no-op once one is built at the
                 // current rate. A releasing project needs none: with no instance nothing ducks.
@@ -499,9 +515,27 @@ namespace sssketch
             it = inUse(it->first) ? std::next(it) : riserVoicePool.erase(it);
     }
 
-    void PlaybackEngine::prepareMaster(double sampleRate)
+    void PlaybackEngine::sizeScratch(std::vector<float>& v, size_t n) const
+    {
+        if (v.size() == n)
+            return;
+        if (n > v.capacity())
+            scratchGrowths.fetch_add(1, std::memory_order_relaxed);
+        v.resize(n);
+    }
+
+    void PlaybackEngine::prepareMaster(double sampleRate, int maxBlockSize)
     {
         masterRate.store(sampleRate);
+        if (maxBlockSize > 0)
+        {
+            const int block = std::min(maxBlockSize, kMaxReservedBlock);
+            reservedBlock.store(block);
+            // The buses' block scratch is theirs (not a snapshot's), and both callers are moments
+            // with no block in flight (see the declaration), so it is sized right here.
+            reverbBus.reserveScratch(block);
+            dubBus.reserveScratch(block);
+        }
         if (masterStage.preparedRate() != 0.0)
             masterStage.prepare(sampleRate);
         // The pump's instance likewise.
@@ -645,11 +679,8 @@ namespace sssketch
         auto& channelIds = snap->scratchChannelIds;
         for (size_t i = 0; i < channelL.size(); ++i)
         {
-            if (channelL[i].size() != (size_t) numSamples)
-            {
-                channelL[i].resize((size_t) numSamples);
-                channelR[i].resize((size_t) numSamples);
-            }
+            sizeScratch(channelL[i], (size_t) numSamples);
+            sizeScratch(channelR[i], (size_t) numSamples);
             std::fill(channelL[i].begin(), channelL[i].end(), 0.0f);
             std::fill(channelR[i].begin(), channelR[i].end(), 0.0f);
         }
@@ -710,11 +741,8 @@ namespace sssketch
         {
             auto& kL = snap->scratchKeyL;
             auto& kR = snap->scratchKeyR;
-            if (kL.size() != (size_t) numSamples)
-            {
-                kL.resize((size_t) numSamples);
-                kR.resize((size_t) numSamples);
-            }
+            sizeScratch(kL, (size_t) numSamples);
+            sizeScratch(kR, (size_t) numSamples);
             std::fill(kL.begin(), kL.end(), 0.0f);
             std::fill(kR.begin(), kR.end(), 0.0f);
             snap->pumpTargets.clear();
@@ -819,11 +847,8 @@ namespace sssketch
                         return;
                     auto& sL = snap->scratchStemL;
                     auto& sR = snap->scratchStemR;
-                    if (sL.size() != (size_t) numSamples)
-                    {
-                        sL.resize((size_t) numSamples);
-                        sR.resize((size_t) numSamples);
-                    }
+                    sizeScratch(sL, (size_t) numSamples);
+                    sizeScratch(sR, (size_t) numSamples);
                     std::fill(sL.begin(), sL.end(), 0.0f);
                     std::fill(sR.begin(), sR.end(), 0.0f);
                     stemOutL = sL.data();
@@ -1266,7 +1291,7 @@ namespace sssketch
 
     bool PlaybackEngine::routeToPumped(const ProjectSnapshot& snap, EngineStem::PumpRole role, size_t channel,
                                        bool& pumpedReady, int numSamples, const float* stemL, const float* stemR,
-                                       float* chOutL, float* chOutR)
+                                       float* chOutL, float* chOutR) const
     {
         if (role != EngineStem::PumpRole::pumped)
             return false;
@@ -1274,11 +1299,8 @@ namespace sssketch
         auto& pR = snap.scratchPumpR[channel];
         if (!pumpedReady)
         {
-            if (pL.size() != (size_t) numSamples)
-            {
-                pL.resize((size_t) numSamples);
-                pR.resize((size_t) numSamples);
-            }
+            sizeScratch(pL, (size_t) numSamples);
+            sizeScratch(pR, (size_t) numSamples);
             std::fill(pL.begin(), pL.end(), 0.0f);
             std::fill(pR.begin(), pR.end(), 0.0f);
             pumpedReady = true;
@@ -1381,11 +1403,8 @@ namespace sssketch
         // of this channel is done by now, so it is free.
         auto& sL = snap.scratchStemL;
         auto& sR = snap.scratchStemR;
-        if (sL.size() != (size_t) numSamples)
-        {
-            sL.resize((size_t) numSamples);
-            sR.resize((size_t) numSamples);
-        }
+        sizeScratch(sL, (size_t) numSamples);
+        sizeScratch(sR, (size_t) numSamples);
         std::fill(sL.begin(), sL.end(), 0.0f);
         std::fill(sR.begin(), sR.end(), 0.0f);
         if (voice.render(riser, blockStartSec, sampleRate, secPerBar, numSamples, sL.data(), sR.data()))

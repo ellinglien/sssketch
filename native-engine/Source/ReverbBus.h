@@ -107,8 +107,19 @@ namespace sssketch
          * block with the snapshot's values. */
         void setRoom(ReverbRoom room, double returnGain);
 
-        /** Clears the send accumulator for a block of `numSamples`. */
+        /** Clears the send accumulator for a block of `numSamples` (sizing the scratch the
+         * first time a block is this long, unless reserveScratch already has). */
         void beginBlock(int numSamples);
+
+        /** Sizes the block scratch for blocks of up to `maxBlock` samples, so beginBlock never
+         * has to. NOT the audio thread's call, and only where no block is in flight: the
+         * engine calls it from prepareMaster (Transport::audioDeviceAboutToStart, under JUCE's
+         * callback lock, and RenderExport before rendering). */
+        void reserveScratch(int maxBlock);
+
+        /** For tests: how many times beginBlock had to grow the scratch (an allocation on the
+         * rendering thread). */
+        unsigned long long scratchGrowthCount() const { return scratchGrowths.load(std::memory_order_relaxed); }
 
         /** Mixes one channel's signal into the send accumulator, scaled by
          * `gain` advanced ONE SAMPLE AT A TIME -- so a reverbSend automation
@@ -215,6 +226,8 @@ namespace sssketch
         ReverbRoom room = ReverbRoom::zita;
         float returnGain = 1.0f;
         std::vector<float> silence; // a ringing room that is not the current one is fed this
+        std::atomic<unsigned long long> scratchGrowths { 0 };
+        void sizeScratch(size_t n);
 
         /** The audio thread's convolver; pending/retired are the hand-over cells. */
         std::atomic<CavernConvolver*> cavern { nullptr };

@@ -163,18 +163,31 @@ namespace sssketch
         const auto n = (size_t) numSamples;
         if (sendL.size() < n)
         {
-            sendL.resize(n);
-            sendR.resize(n);
-            wetL.resize(n);
-            wetR.resize(n);
-            spareC.resize(n);
-            spareD.resize(n);
-            silence.resize(n); // zeros, and only ever read
+            // The fallback: a block longer than reserveScratch was told of (or none was).
+            scratchGrowths.fetch_add(1, std::memory_order_relaxed);
+            sizeScratch(n);
         }
         // Only the live prefix is cleared -- the vectors can be longer than
         // this block from a previous, larger one.
         std::fill(sendL.begin(), sendL.begin() + (long) n, 0.0f);
         std::fill(sendR.begin(), sendR.begin() + (long) n, 0.0f);
+    }
+
+    void ReverbBus::reserveScratch(int maxBlock)
+    {
+        if (maxBlock > 0 && sendL.size() < (size_t) maxBlock)
+            sizeScratch((size_t) maxBlock);
+    }
+
+    void ReverbBus::sizeScratch(size_t n)
+    {
+        sendL.resize(n);
+        sendR.resize(n);
+        wetL.resize(n);
+        wetR.resize(n);
+        spareC.resize(n);
+        spareD.resize(n);
+        silence.resize(n); // zeros, and only ever read
     }
 
     void ReverbBus::addSend(int numSamples, const float* left, const float* right, ParamSmoother& gain)

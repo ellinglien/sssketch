@@ -284,6 +284,21 @@ namespace sssketch
         gainsSettled.store(true, std::memory_order_relaxed);
     }
 
+    void DubDelayBus::reserveScratch(int maxBlock)
+    {
+        if (maxBlock > 0 && inL.size() < (size_t) maxBlock)
+            sizeScratch((size_t) maxBlock);
+    }
+
+    void DubDelayBus::sizeScratch(size_t n)
+    {
+        inL.resize(n);
+        inR.resize(n);
+        wetL.resize(n);
+        wetR.resize(n);
+        open.resize(n);
+    }
+
     void DubDelayBus::beginBlock(int numSamples, double positionBars, double secPerBar, double sampleRate,
                                  unsigned long long generation)
     {
@@ -293,11 +308,9 @@ namespace sssketch
         const auto n = (size_t) numSamples;
         if (inL.size() < n)
         {
-            inL.resize(n);
-            inR.resize(n);
-            wetL.resize(n);
-            wetR.resize(n);
-            open.resize(n);
+            // The fallback: a block longer than reserveScratch was told of (or none was).
+            scratchGrowths.fetch_add(1, std::memory_order_relaxed);
+            sizeScratch(n);
         }
         std::fill(inL.begin(), inL.begin() + (long) n, 0.0f);
         std::fill(inR.begin(), inR.begin() + (long) n, 0.0f);

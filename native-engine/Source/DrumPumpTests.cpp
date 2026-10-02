@@ -680,6 +680,39 @@ namespace sssketch
                 expect(sameBits(a.first, c.first) && sameBits(a.second, c.second));
             }
 
+            beginTest("re-syncs allocate nothing on the audio thread: every snapshot's scratch (channel, stem, pumped, "
+                      "key) and the reverb and dub buses' are sized to the block prepareMaster was told of");
+            {
+                // Everything that has a block scratch: pumped and key stems, a toolkit send to the
+                // cavern, and a dub throw.
+                auto project = makeProject({ { kick, Role::key }, { pad, Role::pumped, "", false, 0.5 }, { bass } }, 4.0);
+                project.sound.room = ReverbRoom::cavern;
+                project.sound.dub = SoundSettings::Dub {};
+                project.rifffs[1].stems[0].toolkit.automation.dubSend = { { 0.0, 1.0 }, { 1.0, 1.0 } };
+                const auto run = [&](int told, int block) {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry chains;
+                    engine.prepareMaster(kRate, told);
+                    engine.setProject(project);
+                    std::vector<float> l((size_t) block), r((size_t) block);
+                    for (int b = 0; b < 48; ++b)
+                    {
+                        if (b % 4 == 3)
+                            engine.setProject(project); // a re-sync: a new snapshot, new scratch
+                        engine.renderBlock((double) (b * block) / (double) kBarSamples, kRate, block, l.data(), r.data(), chains);
+                    }
+                    engine.drainRetiredProject();
+                    return engine.audioScratchGrowthCount();
+                };
+                expectEquals((int) run(512, 512), 0, "told the block: no growth");
+                expectEquals((int) run(1024, 512), 0, "a shorter block than told: no growth");
+                // untold, the lazy sizing of old: every snapshot's scratch grows on its first block
+                expect(run(0, 512) > 12, "untold: the scratch grows per snapshot");
+                // a block longer than told still renders: the guarded fallback grows the scratch
+                expect(run(256, 512) > 0, "a longer block than told grows the scratch");
+            }
+
             beginTest("a re-sync (setProject of the same project mid-play) keeps the pump's envelope");
             {
                 const auto project = makeProject({ { kick, Role::key }, { pad, Role::pumped } }, 4.0);

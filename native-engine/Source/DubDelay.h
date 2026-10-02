@@ -208,6 +208,15 @@ namespace sssketch
         void beginBlock(int numSamples, double positionBars, double secPerBar, double sampleRate,
                         unsigned long long generation);
 
+        /** Sizes the block scratch for blocks of up to `maxBlock` samples, so beginBlock never has
+         * to. Only where no block is in flight (ReverbBus::reserveScratch's rule): the engine's
+         * prepareMaster. */
+        void reserveScratch(int maxBlock);
+
+        /** For tests: how many times beginBlock had to grow the scratch (an allocation on the
+         * rendering thread). */
+        unsigned long long scratchGrowthCount() const { return scratchGrowths.load(std::memory_order_relaxed); }
+
         /** AUDIO THREAD. Called once per block for EVERY stem with a send in this snapshot (`id`
          * its stemKey's hash), sounding or not (muted, out of its clip, nothing in the block):
          * works out the stem's send gain for the block -- its curve, or, after a break, a slew
@@ -303,6 +312,8 @@ namespace sssketch
 
         std::vector<float> inL, inR, wetL, wetR;
         std::vector<unsigned char> open; // any send's gain > 0 at that sample
+        std::atomic<unsigned long long> scratchGrowths { 0 };
+        void sizeScratch(size_t n);
         bool fed = false;                // any open sample this block
         bool wasOpen = false;
         int ringRemaining = 0;

@@ -250,8 +250,29 @@ namespace sssketch
          * instance, and the cavern reverb's convolver, for it if one has been built already;
          * otherwise only remembered, and setProject/stageProject build one at it when a project
          * first asks for mastering, or first sends to the cavern room. Until told, 44.1 kHz --
-         * the transport's own default rate and the export's. */
-        void prepareMaster(double sampleRate);
+         * the transport's own default rate and the export's.
+         *
+         * `maxBlockSize` (> 0; capped at kMaxReservedBlock) is the longest block renderBlock will
+         * be called with: every later snapshot's scratch (channel, stem, pump and key buffers) is
+         * reserved to it in buildSnapshot, and the reverb and dub buses' block scratch is sized
+         * to it here (safe: both callers are moments with no block in flight), so a re-sync
+         * allocates nothing on the audio thread. A longer block still works: the scratch grows
+         * there, as it always did, and audioScratchGrowthCount says so. 0 keeps what was told
+         * before (nothing, until told: the lazy sizing of old). */
+        void prepareMaster(double sampleRate, int maxBlockSize = 0);
+
+        /** The cap on prepareMaster's maxBlockSize: a device reporting something absurd must not
+         * make every snapshot reserve it. 8192 is well past any real buffer size. */
+        static constexpr int kMaxReservedBlock = 8192;
+
+        /** For tests: how many times the rendering thread had to grow a block scratch (the
+         * snapshot's channel, stem, pump and key buffers, the reverb and dub buses' own) past
+         * what was reserved -- each an allocation on the audio thread. */
+        unsigned long long audioScratchGrowthCount() const
+        {
+            return scratchGrowths.load(std::memory_order_relaxed) + reverbBus.scratchGrowthCount()
+                + dubBus.scratchGrowthCount();
+        }
 
         /** AUDIO THREAD, with no processMaster in flight. See MasterStage::reset: Transport
          * calls it when a stop or pause has finished fading out, and when the device (re)starts
@@ -438,7 +459,10 @@ namespace sssketch
             // audio callback, or RenderExport's own single-threaded
             // offline instance -- never both, see renderBlock's own doc
             // comment) ever touches a GIVEN published snapshot's scratch
-            // space, for as long as it stays published.
+            // space, for as long as it stays published. Every block
+            // scratch in a snapshot is RESERVED in buildSnapshot to the
+            // block prepareMaster was told of, so sizing it per block never
+            // allocates (see prepareMaster).
             mutable std::vector<std::vector<float>> scratchChannelL, scratchChannelR;
             mutable std::vector<juce::String> scratchChannelIds;
 
@@ -447,8 +471,8 @@ namespace sssketch
             // then added into its channel's buffer. ONE pair for the whole
             // snapshot, not one per stem -- a single rendering thread
             // processes exactly one stem at a time (see renderBlock's own doc
-            // comment), so there is never a second live user. Untouched, and
-            // never even sized, by a project with no toolkit usage.
+            // comment), so there is never a second live user. Untouched by a
+            // project with no toolkit usage (only reserved).
             // `mutable` for the same reason the channel scratch above is.
             mutable std::vector<float> scratchStemL, scratchStemR;
 
@@ -507,7 +531,7 @@ namespace sssketch
             // a swap from a block that follows on.
             unsigned long long generation = 0;
             // The pumped stems' dry sum per channel (channelGroups order), and the key stems' dry sum for the whole
-            // project; sized lazily per numSamples, like the channel scratch. `mutable` for the
+            // project; sized per numSamples, like the channel scratch. `mutable` for the
             // same reason. pumpTargets is reserved to the channel count here, so filling it per
             // block never allocates.
             mutable std::vector<std::vector<float>> scratchPumpL, scratchPumpR;
@@ -619,9 +643,9 @@ namespace sssketch
          * else returns false, and the caller adds it into the channel, after which a key stem is
          * also summed into the key buffer (addToKey). `role` is the effective role (none while
          * the block does not route the pump). */
-        static bool routeToPumped(const ProjectSnapshot& snap, EngineStem::PumpRole role, size_t channel,
-                                  bool& pumpedReady, int numSamples, const float* stemL, const float* stemR,
-                                  float* chOutL, float* chOutR);
+        bool routeToPumped(const ProjectSnapshot& snap, EngineStem::PumpRole role, size_t channel,
+                           bool& pumpedReady, int numSamples, const float* stemL, const float* stemR,
+                           float* chOutL, float* chOutR) const;
         static void addToKey(const ProjectSnapshot& snap, EngineStem::PumpRole role, int numSamples,
                              const float* stemL, const float* stemR);
 
@@ -789,6 +813,12 @@ namespace sssketch
          * frees a swapped-out one. */
         MasterStage masterStage;
         std::atomic<double> masterRate { 44100.0 };
+        /** prepareMaster's maxBlockSize (0: never told). Message thread. */
+        std::atomic<int> reservedBlock { 0 };
+        /** See audioScratchGrowthCount. Rendering thread, relaxed. */
+        mutable std::atomic<unsigned long long> scratchGrowths { 0 };
+        /** Sizes one block scratch to n, counting it when that has to allocate. */
+        void sizeScratch(std::vector<float>& v, size_t n) const;
 
         /** The mastering settings (with its glue and tone) of the snapshot the latest
          * renderBlock call rendered, for processMaster. Written and read only by the single

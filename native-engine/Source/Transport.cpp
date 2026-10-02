@@ -914,7 +914,9 @@ namespace sssketch
         // openDevice/setAudioDeviceSetup or a restart), before any callback at the new rate:
         // the master stage's limiter is rebuilt at it there, never on the audio thread. A
         // block size needs nothing -- the stage works in its own fixed chunks.
-        engine.prepareMaster(deviceSampleRate);
+        // The device's block size too: every snapshot's scratch is reserved to it on the
+        // message thread, so a re-sync allocates nothing on the audio thread.
+        engine.prepareMaster(deviceSampleRate, deviceBlockSize);
     }
 
     void Transport::audioDeviceStopped() {}
