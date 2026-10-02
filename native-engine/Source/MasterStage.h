@@ -14,15 +14,25 @@
 namespace sssketch
 {
     /** The radio sound's master stage (docs/superpowers/plans/2026-10-01-native-radio-sound.md,
-     * Tasks 3 and 7), in the web radio's order (masterChain.ts, its Faust path):
+     * Tasks 3, 7 and 8), in the web radio's order (masterChain.ts, its Faust path):
      *
-     *   headroom trim -> HP 25 Hz (tone) -> [saturation: Task 8's slot] -> glue (glue.dsp)
+     *   headroom trim -> HP 25 Hz (tone) -> saturation (saturate.dsp) -> glue (glue.dsp)
      *   -> width (tone) -> low shelf 100 Hz (tone) -> high shelf 10 kHz (tone)
      *   -> true-peak limiter (truepeak.dsp, ceiling -1 dBTP by default, release 0.1 s, lookahead 64)
      *
-     * Glue and tone each have their own switch (Settings::glue, Settings::tone), and run only
-     * inside mastering (the wire and the parser drop them without it). The tone stages are
-     * MasterTone (Web Audio's BiquadFilterNode, as Chromium runs it). Neither adds latency.
+     * Glue, tone and saturation each have their own switch (Settings::glue, ::tone,
+     * ::saturation), and run only inside mastering (the wire and the parser drop them without
+     * it). The tone stages are MasterTone (Web Audio's BiquadFilterNode, as Chromium runs it).
+     * None of them adds latency (saturate.dsp and glue.dsp declare 0).
+     *
+     * SATURATION (Task 8) is saturate.dsp as the web runs it, not oversampled: the drive comes
+     * from the wire (saturationDrive(amount), 0.9 by default); the bias (0.1), the makeup
+     * (+0.5 dB x (drive / 1.8)^2, so +0.125 dB at 0.9: small signals come out that much louder,
+     * not at unity) and the ~5 Hz DC blocker are inside the .dsp. The .dsp glides its drive
+     * over ~20 ms itself (a one-pole from 0 when the DSP is fresh or cleared, as the web's
+     * worklet starts), so a drive change is just set; while the glided drive is under 0.001 a
+     * channel is passed through exactly (DC blocker bypassed), so drive 0 is the stage
+     * switched off, to the bit.
      *
      * Runs AFTER the user's master plugin slots, as the last thing before the device or the WAV:
      * a plugin after a limiter would undo the ceiling. PlaybackEngine owns the one instance and
@@ -30,8 +40,8 @@ namespace sssketch
      * PlaybackEngine::processMaster, so the two paths run the same code on the same settings.
      *
      * OFF IS TODAY. With no mastering settings (sound absent, or mastering switched off) and no
-     * fade-out still running, process() returns without touching a sample. With glue and tone
-     * both off (and settled), the stage is Task 3's, to the bit: neither is run at all.
+     * fade-out still running, process() returns without touching a sample. With glue, tone and
+     * saturation all off (and settled), the stage is Task 3's, to the bit: none is run at all.
      *
      * LATENCY. The limiter delays the audio by its lookahead plus the detector's centring: 75
      * samples (truepeak.dsp's latency_samples; 1.6 ms at 48 kHz, 1.7 ms at 44.1 kHz). It is NOT
@@ -49,10 +59,11 @@ namespace sssketch
      * which is what keeps the two identical. During a crossfade the ceiling is not guaranteed
      * (the dry part is unlimited).
      *
-     * GLUE AND TONE SWITCHES. While mastering is on, switching glue or tone on or off crossfades
-     * that stage alone over kFadeSec (its input against its output; tone's HP and its
-     * width-and-shelves section on the same weights), starting it from a cleared state when it
-     * comes on. When mastering itself engages, the stages engage with it at once, inside
+     * GLUE, TONE AND SATURATION SWITCHES. While mastering is on, switching glue, tone or
+     * saturation on or off crossfades that stage alone over kFadeSec (its input against its
+     * output; tone's HP and its width-and-shelves section on the same weights), starting it from
+     * a cleared state when it comes on (for the saturation that includes its drive glide, which
+     * starts again from 0). When mastering itself engages, the stages engage with it at once, inside
      * mastering's own fade. A tone amount change glides the shelves' gains in dB over kFadeSec,
      * sample by sample. A glue amount change is set at once: glue.dsp's reduction runs through
      * its own attack/release one-poles (30 ms at the fastest), so the gain cannot step.
@@ -83,7 +94,7 @@ namespace sssketch
             SoundSettings::Mastering mastering;
             std::optional<SoundSettings::Glue> glue;
             std::optional<SoundSettings::Tone> tone;
-            // Task 8: std::optional<SoundSettings::Saturation> saturation;
+            std::optional<SoundSettings::Saturation> saturation {}; // off unless given (Task 7's three-field initialisers stay valid)
         };
 
         static_assert(std::is_trivially_copyable_v<Settings>, "copied on the audio thread every block");
@@ -112,7 +123,7 @@ namespace sssketch
          * instance has been prepared at `sampleRate` yet. Any numSamples; block-size invariant
          * to the bit for a given sequence of settings. */
         void process(const Settings* settings, double sampleRate, int numSamples, float* l, float* r);
-        /** Mastering alone (glue and tone off): Task 3's stage. */
+        /** Mastering alone (glue, tone and saturation off): Task 3's stage. */
         void process(const SoundSettings::Mastering* mastering, double sampleRate, int numSamples, float* l, float* r);
         /** Off (either overload's null). */
         void process(std::nullptr_t, double sampleRate, int numSamples, float* l, float* r)
@@ -128,7 +139,9 @@ namespace sssketch
         void reset();
 
         /** AUDIO THREAD (or with no process() in flight). Clears the DSP state only -- the
-         * limiter's line and envelope, the glue's envelopes, the tone's filters -- and keeps
+         * limiter's line and envelope, the glue's envelopes, the tone's filters, the
+         * saturation's DC blocker and drive glide (which then rises from 0 again over ~20 ms,
+         * as at a fresh play: so a seek's new position equals a fresh play from there) -- and keeps
          * everything else: the switches, their fades, the trim, and whether the stage has
          * sounded. Transport calls it at a seek's jump, under the reposition fade's silence, so
          * the new position starts as a fresh stage would (no glue reduction carried over from
@@ -147,7 +160,7 @@ namespace sssketch
     private:
         static constexpr int kChunk = 512;
 
-        /** One switchable stage's crossfade (glue, tone): see GLUE AND TONE SWITCHES above. */
+        /** One switchable stage's crossfade (glue, tone, saturation): see the SWITCHES above. */
         struct StageFade
         {
             bool engaged = false; // the stage runs (its output is at least partly in the signal)
@@ -170,14 +183,17 @@ namespace sssketch
 
             FaustStage limiter { FaustDspKind::truepeak };
             FaustStage glue { FaustDspKind::glue };
+            FaustStage saturate { FaustDspKind::saturate };
             MasterTone tone;
-            StageFade glueFade, toneFade;
+            StageFade glueFade, toneFade, saturateFade;
             SoundSettings::Glue glueSet {}; // the glue parameters last set on the DSP
             bool glueParamsSet = false;
+            float driveSet = 0.0f; // the saturation drive last set on the DSP
+            bool driveParamSet = false;
             const double sampleRate;
             const int fadeSamples;
 
-            std::array<std::vector<float>, 6> scratch; // in L/R, out L/R, glue and tone weights; kChunk each
+            std::array<std::vector<float>, 7> scratch; // in L/R, out L/R, glue, tone and saturation weights; kChunk each
 
             float lastCeilingDb = 0.0f;
             bool ceilingSet = false;
@@ -196,7 +212,8 @@ namespace sssketch
             /** `fadeOnEngage`: the stage has sounded since it was built or reset, so an engage
              * here crossfades in; otherwise it is immediate. */
             void process(const Settings* settings, bool fadeOnEngage, int numSamples, float* l, float* r);
-            /** Glue and tone follow `s` (on, off, their parameters); `fade` crossfades a switch. */
+            /** Glue, tone and saturation follow `s` (on, off, their parameters); `fade`
+             * crossfades a switch. */
             void updateStages(const Settings& s, bool fade);
             void processChunk(const Settings& s, int n, float* l, float* r);
         };

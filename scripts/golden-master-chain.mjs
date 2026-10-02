@@ -2,8 +2,10 @@
 // code in the browser it plays in: ell.ing/radio's src/audio/masterChain.ts buildMasterChain with
 // its Faust glue and true-peak limiter (src/audio/faustNode.ts, the committed .wasm through
 // faustProcessor.js as an AudioWorklet), in headless Chrome's OfflineAudioContext. Native radio
-// sound plan, Task 7: MasterGlueToneTests runs the same input through the native MasterStage
-// (headroom -> HP 25 -> glue -> width -> shelves -> limiter) and matches this within 1e-5.
+// sound plan, Tasks 7 and 8: MasterGlueToneTests runs the same input through the native
+// MasterStage (headroom -> HP 25 -> glue -> width -> shelves -> limiter) and matches this within
+// 1e-5; MasterSaturationTests does the same with the saturation on (-> saturate.dsp before the
+// glue).
 //
 //   node scripts/golden-master-chain.mjs            # radio checked out at ../ell.ing/radio
 //   RADIO_DIR=/path/to/radio CHROME=/path/to/chrome node scripts/golden-master-chain.mjs
@@ -13,17 +15,22 @@
 // commit as `git describe --always --dirty` (ending -dirty).
 //
 // What it covers: the web chain exactly as the radio builds it (input -> level -> headroom -4 dB
-// -> master filter, parked open -> HP 25 Hz -> glue.dsp -> width -> low shelf -> high shelf ->
-// truepeak.dsp -> wet), every parameter at the web's default, with the saturation left out
-// (`saturate: false`; Task 8 adds it) and no reverb (the input goes straight into the chain).
+// -> master filter, parked open -> HP 25 Hz -> [saturate.dsp] -> glue.dsp -> width -> low shelf
+// -> high shelf -> truepeak.dsp -> wet), every parameter at the web's default, and no reverb (the
+// input goes straight into the chain). Rendered twice, in one page:
+//   master-chain.out.f32           the saturation left out (`saturate: false`; Task 7)
+//   master-chain-saturate.out.f32  the saturation in (Task 8), its Faust stage put in and its
+//                                  drive set as Engine.loadFaust does: saturationDrive of the
+//                                  listener's default amount, DEFAULT_SATURATION (0.5 -> 0.9)
 // The biquads are Chrome's own BiquadFilterNode, the mid/side sums its own GainNodes.
 //
 // The input is the Faust goldens' programme.f32 (ell.ing/radio scripts/golden-vectors.mjs: 2 s
 // at 48 kHz of seeded sine-and-noise bursts from -36 to +6 dBFS), read from
-// native-engine/test/golden/. Writes master-chain.out.f32 (little-endian float32, planar: L then
-// R) and master-chain.json (what it is, the Chrome version, the radio commit). Nothing is added
-// to or changed in the radio repo. Regenerate after changing masterChain.ts, MASTERING or
-// FAUST_DEFAULTS (src/shared/radioSound.ts), glue.dsp or truepeak.dsp (after the radio's own
+// native-engine/test/golden/. Writes each .out.f32 (little-endian float32, planar: L then R)
+// with its .json (what it is, the Chrome version, the radio commit). Nothing is added to or
+// changed in the radio repo. Regenerate after changing masterChain.ts, MASTERING,
+// FAUST_DEFAULTS or the saturation maps (src/shared/radioSound.ts), the radio's
+// DEFAULT_SATURATION, saturate.dsp, glue.dsp or truepeak.dsp (after the radio's own
 // build-faust.mjs and golden-vectors.mjs).
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -60,14 +67,20 @@ if (programme.length !== 2 * FRAMES * 4) throw new Error('programme.f32: unexpec
 
 // The page, as a virtual module: the radio's own modules, imported by their paths in its root.
 const PAGE = `
-import { buildMasterChain } from '/src/audio/masterChain.ts'
-import { createFaustNode, GLUE, TRUEPEAK, latencySamples } from '/src/audio/faustNode.ts'
+import { buildMasterChain, saturationDrive } from '/src/audio/masterChain.ts'
+import { createFaustNode, GLUE, SATURATE, TRUEPEAK, latencySamples } from '/src/audio/faustNode.ts'
+import { DEFAULT_SATURATION } from '/src/audio/defaults.ts'
 const SR = ${SAMPLE_RATE}, FRAMES = ${FRAMES}
-try {
-  const prog = new Float32Array(await (await fetch('/__golden/programme.f32')).arrayBuffer())
+const render = async (prog, saturate) => {
   const ctx = new OfflineAudioContext({ numberOfChannels: 2, length: FRAMES, sampleRate: SR })
-  const chain = buildMasterChain(ctx, ctx.destination, { saturate: false })
-  // as Engine.loadFaust puts them in, with no parameter set: glue.dsp's and truepeak.dsp's defaults
+  const chain = buildMasterChain(ctx, ctx.destination, { saturate })
+  // as Engine.loadFaust puts them in: the saturation (when on) first, its drive set from the
+  // listener's default amount; the glue and limiter with no parameter set (their .dsp defaults)
+  if (saturate) {
+    const f = await createFaustNode(ctx, SATURATE)
+    chain.useStage('saturate', f.node, latencySamples(SATURATE.meta) / SR)
+    f.setParam('/saturate/drive', saturationDrive(DEFAULT_SATURATION))
+  }
   for (const [stage, dsp] of [['glue', GLUE], ['limiter', TRUEPEAK]]) {
     const f = await createFaustNode(ctx, dsp)
     chain.useStage(stage, f.node, latencySamples(dsp.meta) / SR)
@@ -82,7 +95,15 @@ try {
   const all = new Float32Array(2 * FRAMES)
   all.set(out.getChannelData(0), 0)
   all.set(out.getChannelData(1), FRAMES)
-  await fetch('/__golden/result?ua=' + encodeURIComponent(navigator.userAgent), { method: 'POST', body: all.buffer })
+  return all
+}
+try {
+  const prog = new Float32Array(await (await fetch('/__golden/programme.f32')).arrayBuffer())
+  const both = new Float32Array(4 * FRAMES)
+  both.set(await render(prog, false), 0)
+  both.set(await render(prog, true), 2 * FRAMES)
+  const drive = saturationDrive(DEFAULT_SATURATION)
+  await fetch('/__golden/result?ua=' + encodeURIComponent(navigator.userAgent) + '&drive=' + drive, { method: 'POST', body: both.buffer })
 } catch (e) {
   await fetch('/__golden/error', { method: 'POST', body: String((e && e.stack) || e) })
 }
@@ -170,32 +191,49 @@ try {
             } else if (url.pathname === '/result') {
               const body = await readBody(req)
               res.end('ok')
-              if (body.length !== 2 * FRAMES * 4) {
+              if (body.length !== 4 * FRAMES * 4) {
                 console.error(`unexpected result size ${body.length}`)
                 return finish(1)
               }
-              const out = new Float32Array(body.buffer, body.byteOffset, 2 * FRAMES)
-              let peak = 0
-              for (const v of out) peak = Math.max(peak, Math.abs(v))
-              writeFileSync(join(GOLDEN, 'master-chain.out.f32'), body)
-              const meta = {
-                note:
-                  'written by sssketch scripts/golden-master-chain.mjs: programme.f32 through ell.ing/radio ' +
-                  'src/audio/masterChain.ts buildMasterChain (saturate: false) with its Faust glue and ' +
-                  'truepeak stages, every parameter at its default, in headless Chrome OfflineAudioContext; ' +
-                  'little-endian float32, planar (L then R)',
-                input: 'programme.f32',
-                chain:
-                  'headroom -4 dB, HP 25 Hz, glue.dsp (-14 dB, 2:1, knee 6), width (side +2 dB shelf at 250 Hz), low shelf +1 dB at 100 Hz, high shelf +1 dB at 10 kHz, truepeak.dsp (-1 dBTP)',
-                radioCommit,
-                userAgent: url.searchParams.get('ua'),
-                sampleRate: SAMPLE_RATE,
-                frames: FRAMES
-              }
-              writeFileSync(join(GOLDEN, 'master-chain.json'), JSON.stringify(meta, null, 2) + '\n')
-              console.log(
-                `wrote master-chain.out.f32 (peak ${peak.toFixed(4)}) and master-chain.json; ${meta.userAgent}`
-              )
+              const drive = Number(url.searchParams.get('drive'))
+              const tail =
+                'glue.dsp (-14 dB, 2:1, knee 6), width (side +2 dB shelf at 250 Hz), low shelf +1 dB at 100 Hz, high shelf +1 dB at 10 kHz, truepeak.dsp (-1 dBTP)'
+              const outputs = [
+                {
+                  name: 'master-chain',
+                  how: 'buildMasterChain (saturate: false) with its Faust glue and truepeak stages, every parameter at its default',
+                  chain: `headroom -4 dB, HP 25 Hz, ${tail}`
+                },
+                {
+                  name: 'master-chain-saturate',
+                  how:
+                    'buildMasterChain (saturate: true) with its Faust saturate (drive set as Engine.loadFaust ' +
+                    'does, saturationDrive(DEFAULT_SATURATION)), glue and truepeak stages, every other parameter at its default',
+                  chain: `headroom -4 dB, HP 25 Hz, saturate.dsp (drive ${drive}), ${tail}`
+                }
+              ]
+              outputs.forEach(({ name, how, chain }, k) => {
+                const bytes = body.subarray(k * 2 * FRAMES * 4, (k + 1) * 2 * FRAMES * 4)
+                const out = new Float32Array(bytes.buffer, bytes.byteOffset, 2 * FRAMES)
+                let peak = 0
+                for (const v of out) peak = Math.max(peak, Math.abs(v))
+                writeFileSync(join(GOLDEN, `${name}.out.f32`), bytes)
+                const meta = {
+                  note:
+                    'written by sssketch scripts/golden-master-chain.mjs: programme.f32 through ell.ing/radio ' +
+                    `src/audio/masterChain.ts ${how}, in headless Chrome ` +
+                    'OfflineAudioContext; little-endian float32, planar (L then R)',
+                  input: 'programme.f32',
+                  chain,
+                  radioCommit,
+                  userAgent: url.searchParams.get('ua'),
+                  sampleRate: SAMPLE_RATE,
+                  frames: FRAMES
+                }
+                writeFileSync(join(GOLDEN, `${name}.json`), JSON.stringify(meta, null, 2) + '\n')
+                console.log(`wrote ${name}.out.f32 (peak ${peak.toFixed(4)}) and ${name}.json`)
+              })
+              console.log(url.searchParams.get('ua'))
               return finish(0)
             } else if (url.pathname === '/error') {
               console.error((await readBody(req)).toString())

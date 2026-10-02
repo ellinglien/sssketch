@@ -184,6 +184,8 @@ target_sources(sssketch_engine PRIVATE
   Source/MasterStageTests.cpp
   Source/MasterTone.cpp
   Source/MasterGlueToneTests.cpp
+  Source/MasterSaturationTests.cpp
+  Source/MasterStageTestUtil.h
   Source/StemPan.h
   Source/StemPanTests.cpp
 )

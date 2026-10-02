@@ -981,6 +981,31 @@ namespace sssketch
                     expect(! same(exported.first, masteringOnly.first), "glue and tone changed nothing");
                 }
 
+                beginTest("master stage with the saturation (Task 8): live playback and export give the same samples, to the bit");
+                {
+                    auto project = makeProject(SoundSettings::Mastering {});
+                    project.sound.glue = SoundSettings::Glue {};
+                    project.sound.tone = SoundSettings::Tone {};
+                    const auto withoutSat = renderExport(project);
+                    project.sound.saturation = SoundSettings::Saturation {};
+                    const auto exported = renderExport(project);
+                    const auto live300 = renderLive(project, [] { return 300; }, kTotal);
+                    expect(same(live300.first, exported.first) && same(live300.second, exported.second),
+                           "live (300-sample blocks) differs from the export");
+                    std::mt19937 rng(44);
+                    std::uniform_int_distribution<int> size(1, 1100);
+                    const auto liveRandom = renderLive(project, [&] { return size(rng); }, kTotal);
+                    expect(same(liveRandom.first, exported.first) && same(liveRandom.second, exported.second),
+                           "live (random blocks) differs from the export");
+                    // the saturation reached the stage through the snapshot
+                    expect(! same(exported.first, withoutSat.first), "the saturation changed nothing");
+                    // and at drive 0 it is the stage without it, to the bit
+                    project.sound.saturation = SoundSettings::Saturation { 0.0 };
+                    const auto atZero = renderExport(project);
+                    expect(same(atZero.first, withoutSat.first) && same(atZero.second, withoutSat.second),
+                           "drive 0 differs from the saturation off");
+                }
+
                 beginTest("master stage OFF: with no sound block, or no mastering, live and export are exactly today's");
                 {
                     // Today's output: the bare renderBlock sum, which is all the transport and the
@@ -1209,7 +1234,7 @@ namespace sssketch
                     halfFile.deleteFile();
                 }
 
-                beginTest("master stage: a seek clears the glue, the tone and the limiter -- after a seek from a loud "
+                beginTest("master stage: a seek clears the saturation, the glue, the tone and the limiter -- after a seek from a loud "
                           "passage into a quiet one, the quiet one sounds as a fresh play from there does");
                 {
                     // A loud sine for the first half bar (the glue well into its slow release),
@@ -1248,6 +1273,8 @@ namespace sssketch
                     project.sound.mastering = SoundSettings::Mastering {};
                     project.sound.glue = SoundSettings::Glue {};
                     project.sound.tone = SoundSettings::Tone {};
+                    // at the full drive: its DC blocker and drive glide are state too (Task 8)
+                    project.sound.saturation = SoundSettings::Saturation { 1.8 };
 
                     constexpr int kBlock = 64;
                     struct Rig

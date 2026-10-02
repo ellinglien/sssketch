@@ -9,7 +9,7 @@ namespace sssketch
     std::optional<MasterStage::Settings> MasterStage::settingsFor(const SoundSettings& sound)
     {
         if (! sound.mastering) return std::nullopt;
-        return Settings { *sound.mastering, sound.glue, sound.tone };
+        return Settings { *sound.mastering, sound.glue, sound.tone, sound.saturation };
     }
 
     // ---------------------------------------------------------------------------------------
@@ -77,6 +77,8 @@ namespace sssketch
         jassert(limiter.latencySamples() == kLatencySamples);
         glue.prepare(rate, kChunk);
         jassert(glue.numInputs() == 2 && glue.numOutputs() == 2 && glue.latencySamples() == 0);
+        saturate.prepare(rate, kChunk);
+        jassert(saturate.numInputs() == 2 && saturate.numOutputs() == 2 && saturate.latencySamples() == 0);
         tone.prepare(rate);
         for (auto& s : scratch)
             s.assign((size_t) kChunk, 0.0f);
@@ -90,6 +92,7 @@ namespace sssketch
         gainRampLeft = 0;
         glueFade = {};
         toneFade = {};
+        saturateFade = {};
     }
 
     void MasterStage::Instance::clearDynamics()
@@ -97,10 +100,27 @@ namespace sssketch
         limiter.reset();
         glue.reset();
         tone.reset();
+        saturate.reset();
     }
 
     void MasterStage::Instance::updateStages(const Settings& s, bool fade)
     {
+        // A saturation coming on starts clean: its DC blocker empty and its drive glide from 0
+        // (saturate.dsp's own one-pole, as the web's freshly loaded worklet starts).
+        if (saturateFade.update(s.saturation.has_value(), fade, fadeSamples))
+            saturate.reset();
+        if (s.saturation)
+        {
+            // the slider's float, as the web's setParam; a change glides inside the .dsp
+            const auto drive = (float) s.saturation->drive;
+            if (! driveParamSet || drive != driveSet)
+            {
+                saturate.setParam("/saturate/drive", drive);
+                driveSet = drive;
+                driveParamSet = true;
+            }
+        }
+
         if (glueFade.update(s.glue.has_value(), fade, fadeSamples))
             glue.reset();
         if (s.glue)
@@ -138,9 +158,10 @@ namespace sssketch
                 fadingIn = true;
                 gain = gainTarget = target;
                 gainRampLeft = 0;
-                // glue and tone start with the stage, inside its own fade (or at once)
+                // glue, tone and saturation start with the stage, inside its own fade (or at once)
                 glueFade = {};
                 toneFade = {};
+                saturateFade = {};
                 if (fadeOnEngage)
                 {
                     // Switched on while sounding: start the limiter clean (its line holds
@@ -173,7 +194,7 @@ namespace sssketch
             if (! engaged) return; // off is today: not a sample touched
             if (fadingIn)
             {
-                // Switched off: keep running on the last settings (glue and tone included)
+                // Switched off: keep running on the last settings (glue, tone, saturation)
                 // while fading to the dry signal -- the whole fade from steady, or back from
                 // where a fade-in had got to.
                 fadeLeft = fadeSamples - fadeLeft;
@@ -229,7 +250,17 @@ namespace sssketch
         if (toneFade.engaged)
             tone.highpass(n, inL, inR, toneW);
 
-        // 3. the saturation (Task 8) slots in here: after the HP, before the glue, as the web's.
+        // 3. the saturation (saturate.dsp): no latency; its makeup and DC blocker are its own
+        if (saturateFade.engaged)
+        {
+            const float* ins[2] = { inL, inR };
+            float* outs[2] = { outL, outR };
+            saturate.process(ins, 2, outs, n);
+            float* w = scratch[6].data();
+            const bool fading = saturateFade.weights(n, fadeSamples, w);
+            mixWet(n, inL, inR, outL, outR, fading ? w : nullptr);
+            saturateFade.settle();
+        }
 
         // 4. the glue (glue.dsp): no latency, no makeup
         if (glueFade.engaged)
@@ -342,7 +373,7 @@ namespace sssketch
             process(static_cast<const Settings*>(nullptr), sampleRate, numSamples, l, r);
             return;
         }
-        const Settings settings { *mastering, std::nullopt, std::nullopt };
+        const Settings settings { *mastering, std::nullopt, std::nullopt, std::nullopt };
         process(&settings, sampleRate, numSamples, l, r);
     }
 

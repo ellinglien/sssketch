@@ -691,17 +691,31 @@ The biquads are RBJ, at the web's Q: the HP's `biquadQ(0)` is −3.01 dB in Web 
 **Where:** `MasterStage`'s saturation slot, after the HP and before the glue. Faust `saturate`: drive from the settings (`saturationDrive(amount)`, 0.9 by default, D7), bias 0.1, makeup `0.5 × (drive/1.8)²` dB (inside the `.dsp`), DC blocker at 5 Hz. The drive is smoothed over ~20 ms in the `.dsp`, and drive 0 is an exact pass-through.
 
 **Native tests:**
-- [ ] Golden vector.
-- [ ] A −40 dBFS sine comes out at unity ± 0.01 dB.
-- [ ] THD of a −14 dBFS sine at the default drive 0.9 is 0.83% ± 0.2% (the web's measured figure). At drive 1.8 (amount 1) it is 1.8% ± 0.3%.
-- [ ] Drive 0 is bit-identical to the stage switched off, latency included.
-- [ ] No DC.
-- [ ] A dense mix level-matches within 0.3 dB.
-- [ ] Switched off, the stage is absent.
+- [x] Golden vector.
+- [x] A −40 dBFS sine comes out at unity ± 0.01 dB. *(Corrected, the `.dsp` wins: unity **plus the makeup**, +0.125 dB at 0.9; see below.)*
+- [x] THD of a −14 dBFS sine at the default drive 0.9 is 0.83% ± 0.2% (the web's measured figure). At drive 1.8 (amount 1) it is 1.8% ± 0.3%.
+- [x] Drive 0 is bit-identical to the stage switched off, latency included.
+- [x] No DC.
+- [x] A dense mix level-matches within 0.3 dB.
+- [x] Switched off, the stage is absent.
 
 **Risk:** aliasing. The web's Faust stage is not oversampled, and native matches it. Add 2× oversampling only if Elling hears grit.
 
+- **As landed (2026-10-02):**
+  - **`saturate.dsp` read against the plan.** Makeup inside the `.dsp`: yes, `pow(10, 0.5·(drive/1.8)²/20)`, so the wire carries only `{ drive }` (Task 2) and no TS change was needed. Smoothing: a one-pole on the drive with a 20 ms time constant (`c = exp(−1/(0.02·SR))`), not a 20 ms ramp: 63% in 20 ms, under 0.001 from 0.9 after ~136 ms. Its state starts at **0**, so a fresh or cleared DSP glides its drive up from 0 (the web's freshly loaded worklet does the same; the Chrome golden confirms it). Drive 0: `select2(DRIVE < 0.001, shape : dcblock, x)` on the **glided** drive, so below 0.001 each channel is the input itself, **DC blocker bypassed**. So "drive 0 is bit-identical to off, latency included" holds (latency 0 either way): from a fresh or cleared stage at once, and ~136 ms after the drive is taken to 0 mid-play (until then it glides down through the curve). **One plan claim corrected:** a −40 dBFS sine does not come out at unity ± 0.01 dB but at unity **plus the makeup** (+0.031/+0.125/+0.500 dB at drives 0.45/0.9/1.8): the makeup multiplies everything, small signals included. Measured within 0.003 dB of that; the test pins `makeup ± 0.01`.
+  - **`MasterStage`:** `Settings::saturation` (`std::optional<SoundSettings::Saturation>`, default-initialised to off so Task 7's three-field initialisers still mean "no saturation"); `settingsFor` passes `sound.saturation`. The `Instance` holds a third `FaustStage` (`saturate`), built on the message thread with the limiter and glue, and its own `StageFade` and weight scratch. Per chunk: trim → HP → **saturate** → glue → width/shelves → limiter, the slot Task 7 reserved. Task 7's conventions throughout: switching it on or off mid-play crossfades the stage's input against its output over 20 ms through `mixWet` (the `-ffp-contract=off` TU), starting it cleared (DC blocker empty, drive glide from 0); it engages with mastering, inside mastering's own fade; fully off it is not run at all. A drive change is set on the DSP at once (only when the float changes) and glides inside the `.dsp`, the web's `setParam` way: the stage equals `saturate.dsp` told at the same sample, to the bit. No latency (`latency_samples 0`): `currentLatencySamples` is still 75 or 0. No oversampling, as the web.
+  - **Seek (`clearDynamics`) clears it too** (Faust `instanceClear`: DC blocker and drive glide). Decided because a seek should equal a fresh play from the new bar, as Task 7 set for glue and tone: without the clear the seek test (now with saturation at drive 1.8) differs from a fresh play by up to 0.0104 after the fade-in; with it, to the bit. The cost: right after a seek (as after any play from a stop, and on the web at load) the drive glides up from 0 over ~20 ms, so the first transient is a little less saturated. Also checked that `MasterSaturationTests` fails without the clear.
+  - **The golden.** `scripts/golden-master-chain.mjs` now renders the web's chain twice in one page: `master-chain.out.f32` as before (`saturate: false`; re-rendered byte-identical, its `.json` unchanged) and **`master-chain-saturate.out.f32`/`.json`**: `buildMasterChain(…, { saturate: true })` with the Faust saturate put in and its drive set as `Engine.loadFaust` does (`saturationDrive(DEFAULT_SATURATION)` = 0.9), glue and limiter at their defaults. Deterministic run to run (Chrome 154, radio `5262ed5`, clean). **Native matches it within 4.5e-7** (max abs, 128-sample blocks) against 1e-5; the saturation's own effect on the web's output is up to 0.14, so the golden does see it. The `.dsp` alone was already bit-exact against the web's wasm (`FaustStageTests`, Task 1).
+  - **Measured** (the web's method, `spike/engine-check` `thd`: 997 Hz, 48 kHz, Hann 65536 from 0.5 s, harmonics 2–10): THD **0.830%** at drive 0.9 and **1.817%** at 1.8 (web: 0.83%, 1.8%); 0 at drive 0, output equal to input. A dense mix after the −4 dB trim: RMS −0.007 dB / +0.040 dB, peaks −0.30 dB / −1.21 dB, at drives 0.9 / 1.8. DC: a −3 dBFS 100 Hz sine at drive 1.8, whose bare curve averages −0.026, comes out with a mean of 5e-8.
+  - **Off is today, checked outside the suite.** A temporary dump test (Task 7's schedule of mastering/glue/tone switches, headroom and ceiling changes, both `process` overloads, `clearDynamics` every 4,096 samples, `currentLatencySamples` per block; 44.1 and 48 kHz; blocks 512, 300, 1) built at `70be67c` and with this change: the 11 MB dumps are byte-identical. Removed before the commit.
+  - **Tests.** Native 424 (was 412): `MasterSaturationTests` 11 -- the Chrome golden (4.5e-7); THD at 0.9/1.8/0 by the web's method; −40 dBFS at the makeup ± 0.01 dB (0.45, 0.9, 1.8); drive 0 bit-identical to off (mastering alone and the whole chain, blocks 512/1/333, latency equal and 75; switched on at drive 0 mid-play and off again; a drive taken to 0 exact 200 ms later, and gliding before that); no DC; dense-mix level; every combination of saturation, glue and tone equals its parts run by hand to the bit at 44.1 and 48 kHz (and on differs from off); switched on mid-play is the saturation started clean at the switch, to the bit, after the fade, and off is exactly dry, no step either way; a drive change equals the `.dsp` told at that sample, with no jump; `clearDynamics` leaves a fresh stage's output, to the bit; a schedule of saturation switches (back on mid-fade), drives 0.9/1.8/0, mastering off/on and a `clearDynamics` bit-identical across splits 1/77/300/4096/random. `TransportTests` +1: saturation on, live (300 and random blocks) equals the export to the bit, differs from saturation off, and drive 0 equals saturation off; the Task 7 seek test now has the saturation on (drive 1.8). The shared signals and the by-hand stage (now with the saturation) moved from `MasterGlueToneTests.cpp` into `MasterStageTestUtil.h`. No TS change.
+  - **Not covered / for Elling:**
+    - **Aliasing**, as the plan says: not oversampled, the web's way. At drive 0.9 the harmonics are small (0.83% THD at −14 dBFS); at 1.8 on bright, hot material listen for grit. 2× oversampling would make native differ from the web (and from the golden).
+    - **The drive glide restarts from 0** on every play from a stop, seek, export start and switch-on (the `.dsp`'s smoother state, as the web at load): the first ~20–50 ms after each are a touch cleaner. Expected to be too short to notice; listen to a seek onto a big hit.
+    - **DC:** with the saturation on, any DC in the mix is removed too (the 5 Hz blocker); with it off or at drive 0 it passes, as today.
+
 **Elling listens:** peaks rounded, nothing gritty; the drive slider.
+- **added 2026-10-02:** the drive moved while playing (it glides in the `.dsp`; listen for a zipper); saturation switched off and on mid-play (a 20 ms crossfade); amount 1 (drive 1.8) on a bright, dense mix: grit? (no oversampling, as the web); amount 0 should sound exactly like saturation off.
 
 ---
 
@@ -896,7 +910,7 @@ Do this in `npm run dev`, after a **full Cmd+Q and relaunch** once the engine is
 4. **Reverb (T5):** cavernous and darkening; a send of 0.5 against the web; zita still available; old timeline projects' sends now go to the cavern (longer, darker) -- keep that, or default old projects to zita?
 5. **Risers (T6):** varied, about +3 dB, blooming into the room; variety off restores today's.
 6. **Glue and tone (T7):** layers sit together, nothing breathes; the amount setting; tone off; the amount and tilt moved while playing (no zipper); glue at amount 1 on a dense mix.
-7. **Saturation (T8):** peaks rounded, no grit; the drive setting.
+7. **Saturation (T8):** peaks rounded, no grit; the drive setting, moved while playing (no zipper); amount 1 on a bright, dense mix (grit? no oversampling, as the web); amount 0 is exactly saturation off.
 8. **Pump (T9):** a breath on pads with each kick; the depth setting.
 9. **Throws (T11, T12):**
    - in Discover: occasional, in time, darkening, never on drums or bass;

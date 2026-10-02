@@ -24,10 +24,10 @@ namespace sssketch
      * exactly that (isNeutral()).
      *
      * Each stage is performed by its own task: mastering (headroom and the true-peak limiter)
-     * since Task 3, and glue and tone inside it since Task 7, by MasterStage through
-     * PlaybackEngine::processMaster; the room and its return since Task 5, by ReverbBus (zita
-     * or CavernReverb); saturation (Task 8) and the pump (Task 9) are parsed only until theirs
-     * land. */
+     * since Task 3, glue and tone inside it since Task 7 and saturation since Task 8, by
+     * MasterStage through PlaybackEngine::processMaster; the room and its return since Task 5,
+     * by ReverbBus (zita or CavernReverb); the pump (Task 9) is parsed only until its task
+     * lands. */
     struct SoundSettings
     {
         /** The headroom trim and the true-peak limiter. */
