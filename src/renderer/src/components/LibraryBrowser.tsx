@@ -1858,7 +1858,7 @@ export function LibraryBrowser({
                     onRescan={loopFolders.rescan}
                     onUnlink={async (rootPath) => {
                       await loopFolders.unlink(rootPath)
-                      if (selectedLoopRoot === rootPath) setSelectedLoopRoot(null)
+                      setSelectedLoopRoot((cur) => (cur === rootPath ? null : cur))
                     }}
                   />
                   {sidebarJams.map((jam) => {

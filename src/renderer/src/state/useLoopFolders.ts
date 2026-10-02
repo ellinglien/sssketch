@@ -25,7 +25,10 @@ function byName(a: LoopFolderListing, b: LoopFolderListing): number {
  * mid-session is not a reason to rescan. */
 export function useLoopFolders(projectBpm: number, rescanOnOpen: boolean): LoopFolders {
   const [folders, setFolders] = useState<LoopFolderListing[]>([])
-  const [scanning, setScanning] = useState(false)
+  // Link and rescan can overlap (a link during the open-rescan), so the
+  // spinner counts scans in flight rather than sharing one boolean.
+  const [scansInFlight, setScansInFlight] = useState(0)
+  const scanning = scansInFlight > 0
   const [linkRefusal, setLinkRefusal] = useState<LinkLoopFolderRefusal | null>(null)
   const projectBpmRef = useRef(projectBpm)
   useEffect(() => {
@@ -33,13 +36,13 @@ export function useLoopFolders(projectBpm: number, rescanOnOpen: boolean): LoopF
   }, [projectBpm])
 
   const rescan = useCallback(async (): Promise<void> => {
-    setScanning(true)
+    setScansInFlight((n) => n + 1)
     try {
       setFolders(await window.rifffApi.loopFoldersRescan(projectBpmRef.current))
     } catch (err) {
       console.error('useLoopFolders: rescan failed:', err)
     } finally {
-      setScanning(false)
+      setScansInFlight((n) => n - 1)
     }
   }, [])
 
@@ -62,7 +65,7 @@ export function useLoopFolders(projectBpm: number, rescanOnOpen: boolean): LoopF
     setLinkRefusal(null)
     const picked = await window.rifffApi.pickFolder()
     if (!picked) return null
-    setScanning(true)
+    setScansInFlight((n) => n + 1)
     try {
       const result = await window.rifffApi.loopFoldersLink(picked, projectBpmRef.current)
       if (!result.ok) {
@@ -77,13 +80,17 @@ export function useLoopFolders(projectBpm: number, rescanOnOpen: boolean): LoopF
       console.error('useLoopFolders: link failed:', err)
       return null
     } finally {
-      setScanning(false)
+      setScansInFlight((n) => n - 1)
     }
   }, [])
 
   const unlink = useCallback(async (rootPath: string): Promise<void> => {
-    await window.rifffApi.loopFoldersUnlink(rootPath)
-    setFolders((prev) => prev.filter((f) => f.rootPath !== rootPath))
+    try {
+      await window.rifffApi.loopFoldersUnlink(rootPath)
+      setFolders((prev) => prev.filter((f) => f.rootPath !== rootPath))
+    } catch (err) {
+      console.error('useLoopFolders: unlink failed:', err)
+    }
   }, [])
 
   const replaceLoop = useCallback((entry: LoopEntry): void => {
