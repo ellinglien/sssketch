@@ -171,21 +171,44 @@ export function turnaroundWashSend(wash: TurnaroundWash, ownSend: number): Turna
   return wash.points.map((p) => ({ beats: p.beats, value: own + (peak - own) * p.value }))
 }
 
+/** Float slack for the cap checks below: a move exactly at the cap fits. */
+const CAP_SLACK = 1e-9
+
 /** A curve as CLIP-RELATIVE bars of the lap that ends on the wrap -- what a Discover preview
  * stem's automation lane takes (sssketch). The resting value sits at bar 0, the move's points
  * at `loopBars - beats / 4`, and the step back to rest on the one is dropped: a lane repeats
  * every lap, so the lap wrapping IS that step. For a drop this gives back buildDropOutCurve
- * exactly. [] for no points or no loop. */
+ * exactly. [] for no points or no loop, and for a curve longer than the cap of THIS loop
+ * (turnaroundCapBeats): a plan capped against another loop (one a landing changed) would run
+ * past half of this one, or start before its bar 0 -- a drop silent for the whole lap. */
 export function turnaroundToLoopBars(
   points: readonly TurnaroundPoint[],
   loopBars: number
 ): AutomationPoint[] {
   if (points.length === 0 || !(loopBars > 0)) return []
+  const cap = turnaroundCapBeats(loopBars)
+  if (points.some((p) => !(p.beats >= 0) || p.beats > cap + CAP_SLACK)) return []
   const rest = points[points.length - 1].value
   return [
     { bar: 0, value: rest },
     ...points.slice(0, -1).map((p) => ({ bar: loopBars - p.beats / BEATS_PER_BAR, value: p.value }))
   ]
+}
+
+/** Whether a plan fits the loop it is about to play in: its length and every curve point within
+ * min(half the loop, 4 bars) (turnaroundCapBeats). The roll caps against the loop it saw; a
+ * runtime whose loop has since changed drops a plan that no longer fits rather than play it. */
+export function turnaroundFitsLoop(
+  plan: Pick<TurnaroundPlan, 'beats' | 'rows'>,
+  loopBars: number
+): boolean {
+  const cap = turnaroundCapBeats(loopBars)
+  if (!(cap > 0) || !(plan.beats > 0) || plan.beats > cap + CAP_SLACK) return false
+  const fits = (points: readonly TurnaroundPoint[] | undefined): boolean =>
+    points === undefined || points.every((p) => p.beats >= 0 && p.beats <= cap + CAP_SLACK)
+  return plan.rows.every(
+    (r) => fits(r.volume) && fits(r.filter?.cutoff) && fits(r.reverbSend?.points)
+  )
 }
 
 // ---- the moves and the draw ----
@@ -606,7 +629,8 @@ export function radioTransitionUnderTurnaround(kind: RadioTransitionKind): Radio
 }
 
 /** What a change decided now may draw, against the phrase turnaround (sssketch's Discover, where
- * the roll runs a microtask after the wrap tick that starts a phrase's last lap):
+ * the roll runs after the wrap tick that starts a phrase's last lap -- after that wrap's landings,
+ * and later still while it waits for a landed stem's length):
  *   - 'wait': that roll is still to come. Decide on a later tick: a hole or a riser drawn now
  *     would arm first, and the roll keeps a lead-in already armed, so the turnaround would
  *     never play on the wrap the two most often share;

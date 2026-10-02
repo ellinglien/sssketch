@@ -6,10 +6,12 @@ import {
   TURNAROUND_WASH_PEAK,
   turnaroundDipCurve,
   turnaroundDropCurve,
+  turnaroundFitsLoop,
   turnaroundLiftCurve,
   turnaroundToLoopBars,
   turnaroundWashCurve,
   turnaroundWashSend,
+  type TurnaroundPlan,
   type TurnaroundPoint
 } from './radioTurnaround'
 
@@ -140,5 +142,40 @@ describe('turnaroundToLoopBars', () => {
   it('is empty for no points or no loop', () => {
     expect(turnaroundToLoopBars([], 8)).toEqual([])
     expect(turnaroundToLoopBars(turnaroundLiftCurve(4).cutoff, 0)).toEqual([])
+  })
+
+  // A plan capped against one loop, put on a lane of another (a landing at the wrap that starts
+  // a phrase's last lap shortened the loop): never a move past half the loop, never a bar < 0.
+  it('is empty for a curve longer than the cap of the loop it is put on', () => {
+    // 4 beats fits an 8-bar loop's cap (16) and a 2-bar loop's (4), not a 1-bar loop's (2)
+    expect(turnaroundToLoopBars(turnaroundLiftCurve(4).cutoff, 2)).toHaveLength(3)
+    expect(turnaroundToLoopBars(turnaroundLiftCurve(4).cutoff, 1)).toEqual([])
+    // 16 beats (4 bars, capped against a 16-bar loop) on a 3-bar loop: past half of it
+    expect(turnaroundToLoopBars(turnaroundDropCurve(16, 16), 3)).toEqual([])
+    // longer than the whole loop: would have been negative bars, a drop silent all lap
+    expect(turnaroundToLoopBars(turnaroundDropCurve(16, 8), 1)).toEqual([])
+  })
+
+  it('never emits a negative bar', () => {
+    for (const loopBars of [0.5, 1, 2, 3, 4, 5, 8, 16]) {
+      for (const beats of [1, 2, 4, 8, 16]) {
+        for (const p of turnaroundToLoopBars(turnaroundDropCurve(16, beats), loopBars)) {
+          expect(p.bar).toBeGreaterThanOrEqual(0)
+        }
+      }
+    }
+  })
+})
+
+describe('turnaroundFitsLoop', () => {
+  const plan = (beats: number): TurnaroundPlan => ({ move: 'lift', beats, halvings: 0, rows: [] })
+  it('is whether the move fits min(half the loop, 4 bars) of the loop it plays in', () => {
+    expect(turnaroundFitsLoop(plan(16), 8)).toBe(true)
+    expect(turnaroundFitsLoop(plan(16), 16)).toBe(true)
+    expect(turnaroundFitsLoop(plan(8), 4)).toBe(true)
+    expect(turnaroundFitsLoop(plan(8), 3)).toBe(false)
+    expect(turnaroundFitsLoop(plan(4), 1)).toBe(false)
+    expect(turnaroundFitsLoop(plan(2), 1)).toBe(true)
+    expect(turnaroundFitsLoop(plan(1), 0)).toBe(false)
   })
 })
