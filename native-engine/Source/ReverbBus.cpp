@@ -199,6 +199,20 @@ namespace sssketch
         fedThisBlock = true;
     }
 
+    void ReverbBus::addSendConstant(int numSamples, const float* left, const float* right, float gain)
+    {
+        if (numSamples <= 0 || left == nullptr || right == nullptr || ! (gain > 0.0f))
+            return;
+        if (sendL.size() < (size_t) numSamples)
+            return; // beginBlock wasn't called for this size
+        for (int i = 0; i < numSamples; ++i)
+        {
+            sendL[(size_t) i] += left[i] * gain;
+            sendR[(size_t) i] += right[i] * gain;
+        }
+        fedThisBlock = true;
+    }
+
     void ReverbBus::setRoom(ReverbRoom newRoom, double newReturnGain)
     {
         room = newRoom;

@@ -839,6 +839,14 @@ The delay is `delayBeats × 60 / bpm`. A settings change is taken only while the
     - The Transport's loop-seam anchor (`renderBlock(loopStart, …, 1, …)`) feeds one extra sample through the bus at each seam, as it does the reverb and the pump (pre-existing shape).
     - Delays under two frames (a throw is at least a tenth of a second) read as two; the web's minimum is one.
 
+  - **Review follow-up (2026-10-02):**
+    - **A throw's start comes from the curves alone.** A stem with a `dubSend` but no audio in a block (outside its clip, a one-shot out of range, muted) used to leave the block's "open" marks unset, so where a ringing echo took a change of settings hung on the host's split. Now `ProjectSnapshot::dubStems` lists every stem whose curve survived the narrowing, and each block marks where each curve is above 0 (`DubDelayBus::markOpen`), audio or not; `addSendCurve` only adds input. A muted row's throw therefore still counts as a throw's start, as the web's `throwDelay` still calls `set()` for it.
+    - **A change waiting for silence is taken at the sample the tail runs out**, not at the next block's top (`take()` per sample while the bus is silent).
+    - **A change taken under a tail extends the ring** to the new settings' `ringSamples()` if that is longer (a throw that raises the feedback no longer has its recirculating tail cut where the old one would have stopped).
+    - The echo's block is a helper, `PlaybackEngine::processDubEcho`; its 0.15 into the room goes through a new `ReverbBus::addSendConstant` instead of a per-block `ParamSmoother` for a constant -- bit-identical (the "0.15 reaches the reverb" test still matches a hand-run bus fed through `addSend` with a settled smoother, to the bit, cavern and zita).
+    - The golden's tolerance is 1e-7 (measured 3.0e-8). The cost log runs only with `SSSKETCH_BENCH=1`.
+    - **Tests:** native 471 (469, +3, −1 gated): a throw opening under a tail on a clip with no audio yet, at 512 / mixed / random / one 200000-sample block, bit-identical and taken at its curve's start; a change waiting through a long open, quiet stretch, the same four splits bit-identical and at the new time; a throw raising the feedback under a feedback-0 tail keeps ringing past the old tail's end (room muted). Each was checked to fail with its fix reverted. Native files only; no TS change.
+
 **Elling listens (from Tasks 11/12; nothing produces throws until then):**
 - the echo against the web: in time with the beat for the first repeats, then each round trip 2.7 ms later (Chrome's render quantum, matched); keep it, or should the native echo sit exactly on the beat?
 - the repeats narrowing onto ~2.65 kHz (the web's decibel-Q quirk, matched) rather than just darkening: keep, or fix both (`Q: biquadQ(0)`)?

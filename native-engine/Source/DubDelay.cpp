@@ -257,9 +257,28 @@ namespace sssketch
                 continue; // adds +0.0f: nothing (a send of 0 is no send)
             inL[(size_t) i] += left[i] * g;
             inR[(size_t) i] += right[i] * g;
-            open[(size_t) i] = 1;
             fed = true;
         }
+    }
+
+    void DubDelayBus::markOpen(int numSamples, const std::vector<AutomationPoint>& curve, double originBar,
+                               double positionBars, double secPerBar, double sampleRate)
+    {
+        if (numSamples <= 0 || curve.empty() || open.size() < (size_t) numSamples)
+            return;
+        if (! (sampleRate > 0.0) || ! (secPerBar > 0.0) || ! std::isfinite(positionBars))
+            return;
+        const double startSample = std::round(positionBars * secPerBar * sampleRate);
+        if (! (std::abs(startSample) < 9.0e15))
+            return;
+        const auto k0 = (long long) startSample;
+        const auto barOf = [&](int i) { return (((double) (k0 + i) / sampleRate) / secPerBar) - originBar; };
+        if (silentOver(curve, barOf(0), barOf(numSamples - 1)))
+            return;
+        CurveCursor cursor { curve };
+        for (int i = 0; i < numSamples; ++i)
+            if (cursor.at(barOf(i)) > 0.0f)
+                open[(size_t) i] = 1;
     }
 
     void DubDelayBus::process(double sampleRate, const std::optional<SoundSettings::Dub>& wanted, double bpm,
@@ -302,7 +321,13 @@ namespace sssketch
         const auto take = [&]() {
             if (haveWanted
                 && ((float) wantDelay != core->delaySec() || dubFeedbackFor(wantFeedback) != core->feedback()))
+            {
                 core->set(wantDelay, wantFeedback);
+                // Taken under a ringing tail (a throw's start): the tail now runs at the new
+                // settings, so it may need longer to fall silent.
+                if (ringRemaining > 0)
+                    ringRemaining = std::max(ringRemaining, core->ringSamples());
+            }
         };
 
         // Silent: a change is taken at once (nothing rings, so when cannot matter).
@@ -320,8 +345,11 @@ namespace sssketch
         for (int i = 0; i < numSamples; ++i)
         {
             const bool isOpen = open[(size_t) i] != 0;
-            if (isOpen && ! wasOpen)
-                take(); // a throw starts: the web's set() at the throw's start
+            // Silent (the last tail may have run out mid-block): a change is taken at once, at
+            // this sample -- not at the next block's top, which would hang it on the host's split.
+            // Ringing: only as a throw starts, the web's set() at the throw's start.
+            if (ringRemaining <= 0 || (isOpen && ! wasOpen))
+                take();
             wasOpen = isOpen;
             const float xl = inL[(size_t) i], xr = inR[(size_t) i];
             const bool sounding = xl != 0.0f || xr != 0.0f;

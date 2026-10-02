@@ -301,7 +301,8 @@ namespace sssketch
                     const double errL = maxAbsDiff(out.first, gL), errR = maxAbsDiff(out.second, gR);
                     logMessage("dub golden case " + c["name"].toString() + ": max abs error L " + juce::String(errL, 12)
                                + ", R " + juce::String(errR, 12) + " (peak " + juce::String(peak(gL, 0, gL.size()), 4) + ")");
-                    expect(errL <= 1.0e-6 && errR <= 1.0e-6, "case " + c["name"].toString() + " off the web by "
+                    // measured 3.0e-8 (the biquads' last ulp), Chrome 154, 2026-10-02
+                    expect(errL <= 1.0e-7 && errR <= 1.0e-7, "case " + c["name"].toString() + " off the web by "
                                                                  + juce::String(std::max(errL, errR), 9));
                     // and the web's echo really is there: something well after the bursts
                     expect(peak(gR, (size_t) (2.0 * delay * rate), gR.size()) > 1.0e-3);
@@ -796,8 +797,131 @@ namespace sssketch
                 engine.drainRetiredProject();
             }
 
-            beginTest("cost: one throw's echo over 10 s at 44.1 kHz");
+
+            // Split invariance of WHEN a change of settings is taken (Task 10 review).
+            const auto withClip = [&](EngineProject p, const juce::File& file, double startBar,
+                                      std::vector<AutomationPoint> curve) {
+                EngineRifff rifff;
+                rifff.groupId = "late";
+                rifff.channelId = "late";
+                rifff.startBar = startBar;
+                rifff.barLength = 1;
+                EngineStem stem;
+                stem.stemKey = "late:1";
+                stem.resolvedPath = file.getFullPathName();
+                stem.durationSec = 2.0;
+                stem.barLength = 1;
+                stem.playedBars = 1.0;
+                stem.hasToolkit = true;
+                stem.toolkit.originBar = startBar;
+                stem.toolkit.automation.dubSend = std::move(curve);
+                rifff.stems.push_back(stem);
+                p.rifffs.push_back(rifff);
+                return p;
+            };
+            const std::vector<std::vector<int>> splits = [] {
+                std::vector<int> random { 2000 };
+                std::mt19937 sizesRng(9);
+                std::uniform_int_distribution<int> size(1, 2000);
+                for (int i = 0; i < 400; ++i) random.push_back(size(sizesRng));
+                return std::vector<std::vector<int>> { { 512 }, { 4096, 1, 64, 300, 7, 129 }, random, { 200000 } };
+            }();
+            // the first render up to `swapAt` in 512s, the swap, then `after` samples in `sizes`
+            const auto swapped = [&](const EngineProject& first, const EngineProject& second, int swapAt, int after,
+                                     const std::vector<int>& sizes, float* delayOut = nullptr) {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.prepareMaster(kRate);
+                engine.setProject(first);
+                auto a = render(engine, swapAt);
+                engine.setProject(second);
+                auto b = render(engine, after, sizes, swapAt);
+                if (delayOut != nullptr) *delayOut = engine.dubDelaySec();
+                a.first.insert(a.first.end(), b.first.begin(), b.first.end());
+                a.second.insert(a.second.end(), b.second.begin(), b.second.end());
+                return a;
+            };
+
+            beginTest("a throw's start under a tail comes from its curve, not from where its stem has audio: split-invariant");
             {
+                // throw 1 (dotted, 0.6) rings; the change (quarter, 0.45) arrives with a throw on a
+                // clip at bar 2 whose curve opens at bar 1.4 -- before the clip has any audio
+                const auto first = makeProject({ { lead, throwCurve(0.0, 0.3) } }, dotted);
+                auto second = withClip(first, lead, 2.0, throwCurve(-0.6, 0.3));
+                second.sound.dub = SoundSettings::Dub { 1.0, 0.45 };
+                std::pair<std::vector<float>, std::vector<float>> reference;
+                for (const auto& sizes : splits)
+                {
+                    float delay = 0.0f;
+                    const auto out = swapped(first, second, kBarSamples, 2 * kBarSamples, sizes, &delay);
+                    expectEquals(delay, 0.5f);
+                    if (reference.first.empty())
+                        reference = out;
+                    else
+                        expect(sameBits(out.first, reference.first) && sameBits(out.second, reference.second),
+                               "differs at split starting " + juce::String(sizes[0]));
+                }
+                // and it was taken at bar 1.4: rendered only to bar 1.5, the new time is already set
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.prepareMaster(kRate);
+                engine.setProject(first);
+                render(engine, kBarSamples);
+                engine.setProject(second);
+                render(engine, kBarSamples / 2, { 512 }, kBarSamples);
+                expectEquals(engine.dubDelaySec(), 0.5f);
+            }
+
+            beginTest("a change waiting for silence is taken at the sample the tail runs out: split-invariant");
+            {
+                // the send is open throughout (no throw starts after the change); the first echo
+                // (feedback 0) dies ~0.43 s after the phrase, mid-block for a long block, and the
+                // phrase comes round again at bar 1 -- at the new time in every split
+                const std::vector<AutomationPoint> open { { 0.0, 1.0 }, { 3.0, 1.0 } };
+                auto first = makeProject({ { lead, open } }, SoundSettings::Dub { 0.75, 0.0 }, ReverbRoom::cavern, 3.0);
+                auto second = first;
+                second.sound.dub = SoundSettings::Dub { 1.0, 0.45 };
+                std::pair<std::vector<float>, std::vector<float>> reference;
+                for (const auto& sizes : splits)
+                {
+                    float delay = 0.0f;
+                    const auto out = swapped(first, second, kBarSamples / 4, 2 * kBarSamples, sizes, &delay);
+                    expectEquals(delay, 0.5f);
+                    if (reference.first.empty())
+                        reference = out;
+                    else
+                        expect(sameBits(out.first, reference.first) && sameBits(out.second, reference.second),
+                               "differs at split starting " + juce::String(sizes[0]));
+                }
+            }
+
+            beginTest("a throw's start under a tail that raises the feedback keeps the bus ringing for the new tail");
+            {
+                // throw 1 at feedback 0 rings ~0.43 s past the phrase; a throw opening at 0.9 s (on a
+                // clip with no audio yet) raises it to 0.6: the tail recirculates from there and
+                // must not be cut where the old tail would have ended. The room is muted (return 0)
+                // so what is heard is the echo alone.
+                auto first = makeProject({ { lead, throwCurve(0.0, 0.3) } }, SoundSettings::Dub { 0.75, 0.0 });
+                first.sound.reverbReturn = 0.0;
+                auto second = withClip(first, lead, 2.0, throwCurve(0.45 - 2.0, 0.3));
+                second.sound.dub = SoundSettings::Dub { 0.75, 0.6 };
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.prepareMaster(kRate);
+                engine.setProject(first);
+                render(engine, (int) (0.4 * kBarSamples));
+                engine.setProject(second);
+                const auto out = render(engine, (int) (0.6 * kBarSamples), { 512 }, (int) (0.4 * kBarSamples));
+                expect(engine.dubRinging(), "the new tail was cut");
+                // 1.2..2.0 s: past where the feedback-0 tail would have stopped
+                const size_t from = (size_t) (0.4 * kRate);
+                expect(peak(out.first, from, out.first.size()) + peak(out.second, from, out.second.size()) > 1.0e-4);
+            }
+
+            // A log, not a check: only with SSSKETCH_BENCH=1, so the suite stays quick.
+            if (std::getenv("SSSKETCH_BENCH") != nullptr)
+            {
+                beginTest("cost: one throw's echo over 10 s at 44.1 kHz");
                 const auto project = makeProject({ { lead, throwCurve(0.0, 0.3) } }, dotted, ReverbRoom::zita, 5.0);
                 auto noDub = project;
                 noDub.sound.dub.reset();

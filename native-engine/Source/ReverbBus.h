@@ -117,6 +117,11 @@ namespace sssketch
          * adds nothing and, crucially, does not mark the bus as fed. */
         void addSend(int numSamples, const float* left, const float* right, ParamSmoother& gain);
 
+        /** addSend at a constant gain (no smoother): the same per-sample multiply-add as a
+         * settled smoother at `gain` gives, to the bit. A gain of 0 or less adds nothing and does
+         * not mark the bus fed. */
+        void addSendConstant(int numSamples, const float* left, const float* right, float gain);
+
         /** Runs the reverb over whatever was accumulated and ADDS the wet
          * result into outL/outR. A no-op (leaving the output bit-identical)
          * when nothing was sent this block and no tail remains. */

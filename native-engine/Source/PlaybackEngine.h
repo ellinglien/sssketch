@@ -483,6 +483,10 @@ namespace sssketch
             // taps a stem for the echo and, with the bus silent, routes exactly as before it
             // existed.
             bool dubActive = false;
+            // The stems whose dubSend curve survived that narrowing (pointers into this
+            // snapshot's own project): every block the echo runs, each marks where its throw is
+            // open (DubDelayBus::markOpen), whether or not it has audio in the block.
+            std::vector<const EngineStem*> dubStems;
             // The pumped stems' dry sum per channel (channelGroups order), and the key stems' dry sum for the whole
             // project; sized lazily per numSamples, like the channel scratch. `mutable` for the
             // same reason. pumpTargets is reserved to the channel count here, so filling it per
@@ -582,6 +586,12 @@ namespace sssketch
             int numSamples,
             float* chOutL,
             float* chOutR) const;
+
+        /** AUDIO THREAD. The dub echo's block (DubDelay.h): runs the bus, adds its wet signal into
+         * the master sum and feeds kDubToReverb of it into the reverb bus -- before the reverb's
+         * endBlock, so the room hears this block's echoes. */
+        void processDubEcho(const ProjectSnapshot& snap, double sampleRate, int numSamples, float* outL,
+                            float* outR) const;
 
         /** AUDIO THREAD. The pump's routing tail of one stem, after its filter, volume, pan and
          * send (renderBlock's finishStem): a pumped stem is summed into its channel's pumped

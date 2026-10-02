@@ -145,9 +145,10 @@ namespace sssketch
      * SETTINGS (sound.dub: delayBeats, feedback; the time is delayBeats x 60 / bpm). The web sets
      * them per throw, at the throw's start, while the last throw's tail may still be ringing
      * below -60 dB (dubDelay.ts: "nothing is retimed under a ringing tail" because throws keep
-     * apart). So: a change is taken when the bus is silent (at once), or else at the next
-     * throw's start -- the first sample at which any send's gain rises from 0 -- and never in
-     * the middle of a ringing tail with no throw. Per sample, so block-size invariant.
+     * apart). So: a change is taken when the bus is silent (at once, at that sample), or else
+     * at the next throw's start -- the first sample at which any stem's dubSend curve rises from
+     * 0 (markOpen) -- and never in the middle of a ringing tail with no throw. Per sample, so
+     * block-size invariant.
      *
      * SILENCE. The bus rings for DubDelayCore::ringSamples() after the last non-zero input
      * sample, then zeroes its state (everything in it is below -140 dB by then) and is idle:
@@ -199,6 +200,14 @@ namespace sssketch
         void addSendCurve(int numSamples, const float* left, const float* right,
                           const std::vector<AutomationPoint>& curve, double originBar, double positionBars,
                           double secPerBar, double sampleRate);
+
+        /** AUDIO THREAD. Marks where a stem's dubSend curve is above 0 in this block: a throw is
+         * open there. Called for EVERY stem with a curve, sounding or not (muted, out of its clip,
+         * nothing in the block), so a throw's start -- where a change of settings is taken while
+         * the echo rings -- comes from the curves alone and never from where the host's blocks
+         * happen to hold the stem's audio. Same sample clock as addSendCurve. */
+        void markOpen(int numSamples, const std::vector<AutomationPoint>& curve, double originBar,
+                      double positionBars, double secPerBar, double sampleRate);
 
         /** AUDIO THREAD. Runs the echo over the block's input into the wet buffers. `wanted` is
          * the project's sound.dub (none: keep what is set), at `bpm`. */

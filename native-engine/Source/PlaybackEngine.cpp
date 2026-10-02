@@ -241,8 +241,12 @@ namespace sssketch
             next->dubActive = next->project.sound.dub.has_value() && anyDubSend;
             for (auto& rifff : next->project.rifffs)
                 for (auto& stem : rifff.stems)
+                {
                     if (! next->dubActive || ! sends(stem.toolkit.automation.dubSend))
                         stem.toolkit.automation.dubSend.clear();
+                    else
+                        next->dubStems.push_back(&stem);
+                }
             // Its core (2 s of line a side), on this (message) thread; only the first build
             // happens here, at masterRate -- after that the rate is prepareMaster's or
             // drainRetiredProject's, as the cavern's.
@@ -640,7 +644,13 @@ namespace sssketch
         // reverb bus with it. With neither, nothing below touches it: today's path.
         const bool runDub = snap->dubActive || dubBus.isRinging();
         if (runDub)
+        {
             dubBus.beginBlock(numSamples);
+            // Where each throw is open, from the curves alone (DubDelayBus::markOpen).
+            for (const auto* stem : snap->dubStems)
+                dubBus.markOpen(numSamples, stem->toolkit.automation.dubSend, stem->toolkit.originBar,
+                                positionBars, spb, sampleRate);
+        }
         const bool runReverbBus = snap->anyToolkitActive || reverbBus.isRinging() || runDub;
         if (runReverbBus)
         {
@@ -1179,21 +1189,7 @@ namespace sssketch
         // convolver frames its input from the first block it is fed, so starting the feed only
         // where the echo first sounds would hang the room's framing on the host's block split.
         if (runDub)
-        {
-            dubBus.process(sampleRate, snap->project.sound.dub, snap->project.bpm, numSamples);
-            const float* wetL = dubBus.wetLeft();
-            const float* wetR = dubBus.wetRight();
-            for (int i2 = 0; i2 < numSamples; ++i2)
-            {
-                outL[i2] += wetL[i2];
-                outR[i2] += wetR[i2];
-            }
-            // A constant: reset() leaves it settled, so every next() is exactly kDubToReverb
-            // (the web's GainNode's float multiply).
-            ParamSmoother toReverb;
-            toReverb.reset(sampleRate, kAutomationSmoothingSec, kDubToReverb);
-            reverbBus.addSend(numSamples, wetL, wetR, toReverb);
-        }
+            processDubEcho(*snap, sampleRate, numSamples, outL, outR);
 
         // Adds the wet reverb on top of the summed dry mix. A no-op leaving
         // outL/outR bit-identical if nothing was actually sent this block.
@@ -1218,6 +1214,21 @@ namespace sssketch
         // return above, the click is not filtered at all -- there is no mix
         // there to filter.)
         applyMasterFilter(snap->project.masterFilter, sampleRate, numSamples, outL, outR);
+    }
+
+    void PlaybackEngine::processDubEcho(const ProjectSnapshot& snap, double sampleRate, int numSamples,
+                                        float* outL, float* outR) const
+    {
+        dubBus.process(sampleRate, snap.project.sound.dub, snap.project.bpm, numSamples);
+        const float* wetL = dubBus.wetLeft();
+        const float* wetR = dubBus.wetRight();
+        for (int i = 0; i < numSamples; ++i)
+        {
+            outL[i] += wetL[i];
+            outR[i] += wetR[i];
+        }
+        // The web's toReverb GainNode: a constant float multiply.
+        reverbBus.addSendConstant(numSamples, wetL, wetR, kDubToReverb);
     }
 
     bool PlaybackEngine::routeToPumped(const ProjectSnapshot& snap, EngineStem::PumpRole role, size_t channel,
