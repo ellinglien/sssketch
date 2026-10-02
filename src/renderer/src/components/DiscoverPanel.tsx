@@ -2959,14 +2959,20 @@ export function DiscoverPanel({
     const previewing = previewingSlotIdsRef.current
     const lengths = resolvedBarLengthsRef.current
     // The row a thinning arc is taking out (stepArcExit) is left out of the turnaround, as if
-    // unheard. Its exit is an 8-beat drop-out (ARC_EXIT_BEATS, at most half the loop) that goes
-    // silent before the wrap and removes the row in the silence, so a move ending on the wrap
-    // -- a wash (one bar, at most half the loop, never longer than that silence) above all --
-    // would land on a row already gone; and if a stage or a lead-in holds the exit back a lap,
-    // the row is not leaving at this wrap at all. So no `leavingRowId` here: the planner's wash takes
-    // the non-drums bed. (The web radio's leaving row plays through to the wrap; sssketch's
-    // does not.) A stop never picks it as the one row left playing, either.
-    const exiting = arcExitRef.current?.slotId ?? null
+    // unheard, but only when its exit fades in this lap: an 8-beat drop-out (ARC_EXIT_BEATS, at
+    // most half the loop) that goes silent before the wrap and removes the row in the silence,
+    // so a move ending on the wrap -- a wash above all -- would land on a row already gone. An
+    // exit held back (arcExitHeldBack: a stage out, a drop-out or lead-in armed) is not leaving
+    // at this wrap: the row plays on, so it stays in, and a stop or low drop silences it as any
+    // other. No `leavingRowId` either way: the planner's wash takes the non-drums bed. (The web
+    // radio's leaving row plays through to the wrap; sssketch's does not.)
+    const exit = arcExitRef.current
+    const exiting =
+      exit !== null &&
+      ((exit.phase === 'fading' && exit.lap === arcLapRef.current) ||
+        (exit.phase === 'waiting' && !arcExitHeldBack()))
+        ? exit.slotId
+        : null
     const plan = rollTurnaround({
       rate: radioSettings.turnarounds,
       random: Math.random,
@@ -2993,8 +2999,6 @@ export function DiscoverPanel({
     radioTurnaroundMemoryRef.current = rememberTurnaround(plan)
     radioTurnaroundRef.current = plan === null ? null : { plan, armId: newArmId() }
   }
-  /** Radio off or a course change: the armed turnaround comes off, and the next phrase end
-   * starts fresh. Wherever drop-outs were cleared (clearRadioGesture outside the clock). */
   /** radioTurnaroundGate for a decision made now. */
   function turnaroundGateNow(): RadioTurnaroundGate {
     return radioTurnaroundGate(
@@ -3002,6 +3006,8 @@ export function DiscoverPanel({
       radioTurnaroundRef.current !== null
     )
   }
+  /** Radio off or a course change: the armed turnaround comes off, and the next phrase end
+   * starts fresh. Wherever drop-outs were cleared (clearRadioGesture outside the clock). */
   function clearRadioTurnaround(): void {
     radioTurnaroundMemoryRef.current = null
     radioTurnaroundRollPendingRef.current = false
@@ -6473,11 +6479,7 @@ export function DiscoverPanel({
     const dropBars = Math.min(ARC_EXIT_BEATS / 4, loopBars / 2)
     const leaveAt = loopBars - dropBars
     if (exit.phase === 'waiting') {
-      const leadingArmed = radioGestureRef.current.some(
-        (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
-      )
-      // An ordinary push would withdraw a stage that is out.
-      if (leadingArmed || radioStageRef.current !== null || pos >= leaveAt - 0.25) return
+      if (arcExitHeldBack() || pos >= leaveAt - 0.25) return
       radioGestureRef.current = [
         ...radioGestureRef.current,
         { kind: 'drop-out', slotId: slot.id, beats: ARC_EXIT_BEATS, lapsLeft: 1, armId: newArmId() }
@@ -6496,6 +6498,15 @@ export function DiscoverPanel({
     // Silent from leaveAt (plus the curve's short ramp); a little margin,
     // and never with a stage out.
     if (pos >= leaveAt + 0.1 && radioStageRef.current === null) radioRemovesRow(slot.id)
+  }
+
+  /** Whether a waiting arc exit is held back from arming now: a drop-out or a change's lead-in
+   * already leads the lap, or a stage is out (an ordinary push would withdraw it). */
+  function arcExitHeldBack(): boolean {
+    return (
+      radioStageRef.current !== null ||
+      radioGestureRef.current.some((g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind))
+    )
   }
 
   /** The arc removes a row: as removeSlot, but no undo point, and radio's
