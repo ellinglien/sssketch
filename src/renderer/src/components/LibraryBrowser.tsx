@@ -1962,7 +1962,13 @@ export function LibraryBrowser({
                     </div>
                   )}
                   {selectedLoopFolder !== null && (
-                    <LoopFolderPane key={selectedLoopFolder.rootPath} folder={selectedLoopFolder} />
+                    <LoopFolderPane
+                      key={selectedLoopFolder.rootPath}
+                      folder={selectedLoopFolder}
+                      projectBpm={appState.bpm}
+                      onImported={onImported}
+                      onLoopUpdated={loopFolders.replaceLoop}
+                    />
                   )}
                   {selectedJamCID !== null && (
                     <>
