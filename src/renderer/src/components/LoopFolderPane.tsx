@@ -16,7 +16,7 @@ import {
   nextLoopSelection,
   type LoopSelection
 } from '@shared/loopFolderView'
-import { getAudioContext } from '../audio/peakCache'
+import { getAudioContext, getDecodedDuration } from '../audio/peakCache'
 import { decodeStemFile } from '../audio/decodeStemFile'
 import {
   registerActivePreview,
@@ -30,6 +30,33 @@ import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 
 const INDENT_PX = 12
+const ROW_HEIGHT_PX = 28
+/** How far outside the scroll area a row starts its waveform: a few rows,
+ * so scrolling finds them drawn rather than drawing. */
+const NEAR_VIEWPORT_MARGIN = `${ROW_HEIGHT_PX * 4}px 0px`
+
+/** True once `el` has come within a few rows of the scroll area, and stays
+ * true while mounted. A flat folder of hundreds of loose files would
+ * otherwise mount every waveform -- every read and decode -- at once, the
+ * fan-out that has blown the renderer's heap before (decodeStemFile.ts). */
+function useSeenNearViewport(el: Element | null, scrollRoot: Element | null): boolean {
+  const [seen, setSeen] = useState(false)
+  useEffect(() => {
+    if (seen || !el || !scrollRoot) return
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setSeen(true)
+          observer.disconnect()
+        }
+      },
+      { root: scrollRoot, rootMargin: NEAR_VIEWPORT_MARGIN }
+    )
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [el, scrollRoot, seen])
+  return seen
+}
 
 /** One loop. A div, not a button: the tempo cell inside it becomes an
  * input, and an input inside a button is invalid. Waveform colour is the
@@ -40,23 +67,36 @@ function LoopRow({
   depth,
   selected,
   anchor,
+  scrollRoot,
+  onSeen,
   onClick
 }: {
   loop: LoopEntry
   depth: number
   selected: boolean
   anchor: boolean
+  scrollRoot: Element | null
+  /** Called once the row is near the viewport (and again if the loop
+   * entry changes while it is): the pane measures an unmeasured loop then,
+   * from the decode the waveform has just started. */
+  onSeen: (loop: LoopEntry) => void
   onClick: (e: React.MouseEvent) => void
 }): React.JSX.Element {
   const tempo = loopTempoLabel(loop)
+  const [rowEl, setRowEl] = useState<HTMLDivElement | null>(null)
+  const seen = useSeenNearViewport(rowEl, scrollRoot)
+  useEffect(() => {
+    if (seen) onSeen(loop)
+  }, [seen, loop, onSeen])
   return (
     <div
+      ref={setRowEl}
       onClick={onClick}
       style={{
         display: 'flex',
         alignItems: 'center',
         gap: 8,
-        height: 28,
+        height: ROW_HEIGHT_PX,
         padding: `0 12px 0 ${12 + depth * INDENT_PX}px`,
         cursor: 'pointer',
         fontSize: 11,
@@ -65,7 +105,7 @@ function LoopRow({
       }}
     >
       <div style={{ position: 'relative', width: 120, height: 22, flexShrink: 0 }}>
-        <Waveform path={loop.path} color={typeColorVar('fx')} />
+        {seen && <Waveform path={loop.path} color={typeColorVar('fx')} />}
       </div>
       <span
         style={{
@@ -169,40 +209,38 @@ export function LoopFolderPane({
   }, [selection.anchor])
 
   // ---- lengths main could not read (non-WAV): measured from our decode ----
+  // Only rows that have come on screen are measured, and from peakCache's
+  // decode -- the one their Waveform has just started -- so a loop is
+  // decoded once, for its waveform and its length together.
   const reportedRef = useRef<Set<string>>(new Set())
-  const unmeasured = useMemo(
-    () => visibleLoops.filter((l) => l.durationSec === null),
-    [visibleLoops]
-  )
-  useEffect(() => {
-    if (!folder.available) return
-    let cancelled = false
-    void (async () => {
-      for (const loop of unmeasured) {
-        if (cancelled) return
-        if (reportedRef.current.has(loop.loopId)) continue
-        reportedRef.current.add(loop.loopId)
+  const measureIfNeeded = useCallback(
+    (loop: LoopEntry): void => {
+      if (loop.durationSec !== null || reportedRef.current.has(loop.loopId)) return
+      reportedRef.current.add(loop.loopId)
+      void (async () => {
         try {
-          // Shares the Waveform's own in-flight decode of the same path.
-          const buffer = await decodeStemFile(loop.path)
+          // Null only when peakCache's waveform came from somewhere that
+          // never decoded (the persisted peaks cache, which holds library
+          // stems, not linked files): then decode for the length alone.
+          const durationSec =
+            (await getDecodedDuration(loop.path)) ?? (await decodeStemFile(loop.path)).duration
           const updated = await window.rifffApi.loopFoldersReportDuration(
             loop.loopId,
-            buffer.duration,
+            durationSec,
             projectBpm
           )
-          // Applied even if this run was superseded: main has stored it.
+          // Applied even if the pane has gone: main has stored it.
           if (updated) onLoopUpdated(updated)
         } catch (err) {
           // The renderer cannot decode every format the engine can. The
           // row keeps "? bars", and import still works through the engine.
           console.warn(`LoopFolderPane: could not measure ${loop.path}:`, err)
         }
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [unmeasured, folder.available, projectBpm, onLoopUpdated])
+      })()
+    },
+    [projectBpm, onLoopUpdated]
+  )
+  const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null)
 
   // ---- import ----
   const allOrderedIds = useMemo(
@@ -267,6 +305,8 @@ export function LoopFolderPane({
               depth={node.depth}
               selected={selection.selected.has(loop.loopId)}
               anchor={selection.anchor === loop.loopId}
+              scrollRoot={scrollRoot}
+              onSeen={measureIfNeeded}
               onClick={(e) =>
                 setSelection((prev) =>
                   nextLoopSelection(prev, loop.loopId, visibleIds, {
@@ -303,7 +343,7 @@ export function LoopFolderPane({
         </div>
       ) : (
         <>
-          <div style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
+          <div ref={setScrollRoot} style={{ flex: 1, minHeight: 0, overflowY: 'auto' }}>
             {folder.loops.length === 0 ? (
               <div style={{ fontSize: 11, color: 'var(--ra-text-3)', margin: 12 }}>
                 no playable loops in this folder

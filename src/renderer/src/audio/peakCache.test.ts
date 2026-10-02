@@ -147,4 +147,62 @@ describe('peakCache', () => {
       brightness: expect.any(Array)
     })
   })
+  describe('getDecodedDuration', () => {
+    it('is the length of the same decode the waveform used: one read, one decode', async () => {
+      readAudioFileMock.mockResolvedValue(fakeBytes())
+      decodeAudioDataMock.mockResolvedValue({ ...fakeAudioBuffer(), duration: 3.75 })
+
+      const { getPeaks, getDecodedDuration } = await import('./peakCache')
+      const [, duration] = await Promise.all([
+        getPeaks('/loops/a.mp3'),
+        getDecodedDuration('/loops/a.mp3')
+      ])
+
+      expect(duration).toBe(3.75)
+      expect(readAudioFileMock).toHaveBeenCalledTimes(1)
+      expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('a later call after the waveform settled reuses it rather than decoding again', async () => {
+      readAudioFileMock.mockResolvedValue(fakeBytes())
+      decodeAudioDataMock.mockResolvedValue({ ...fakeAudioBuffer(), duration: 2 })
+
+      const { getPeaks, getDecodedDuration } = await import('./peakCache')
+      await getPeaks('/loops/a.mp3')
+      expect(await getDecodedDuration('/loops/a.mp3')).toBe(2)
+      expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects with a failed decode, and the next call retries', async () => {
+      readAudioFileMock.mockResolvedValue(fakeBytes())
+      decodeAudioDataMock
+        .mockRejectedValueOnce(new Error('corrupt'))
+        .mockResolvedValueOnce({ ...fakeAudioBuffer(), duration: 1.5 })
+
+      const { getDecodedDuration } = await import('./peakCache')
+      await expect(getDecodedDuration('/loops/a.mp3')).rejects.toThrow('corrupt')
+      expect(await getDecodedDuration('/loops/a.mp3')).toBe(1.5)
+      expect(decodeAudioDataMock).toHaveBeenCalledTimes(2)
+    })
+
+    it('is null when the peaks came from the persisted cache (no buffer was decoded)', async () => {
+      getStemPeaksCacheMock.mockResolvedValue({ peaks: [0], brightness: [0] })
+
+      const { getDecodedDuration } = await import('./peakCache')
+      expect(await getDecodedDuration('/some/path.wav')).toBeNull()
+      expect(decodeAudioDataMock).not.toHaveBeenCalled()
+    })
+
+    it('evictWaveform forgets the length along with the peaks', async () => {
+      readAudioFileMock.mockResolvedValue(fakeBytes())
+      decodeAudioDataMock
+        .mockResolvedValueOnce({ ...fakeAudioBuffer(), duration: 1 })
+        .mockResolvedValueOnce({ ...fakeAudioBuffer(), duration: 2 })
+
+      const { getDecodedDuration, evictWaveform } = await import('./peakCache')
+      expect(await getDecodedDuration('/loops/a.wav')).toBe(1)
+      evictWaveform('/loops/a.wav')
+      expect(await getDecodedDuration('/loops/a.wav')).toBe(2)
+    })
+  })
 })

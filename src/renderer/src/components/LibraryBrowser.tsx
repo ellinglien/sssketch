@@ -1845,12 +1845,15 @@ export function LibraryBrowser({
                     linkRefusal={loopFolders.linkRefusal}
                     selectedRootPath={selectedLoopFolder?.rootPath ?? null}
                     onSelect={(rootPath) => {
+                      // A playing rifff preview stops, as it does on picking a jam.
+                      stopPreview()
                       setSelectedJamCID(null)
                       setSelectedLoopRoot(rootPath)
                     }}
                     onLink={async () => {
                       const rootPath = await loopFolders.link()
                       if (rootPath) {
+                        stopPreview()
                         setSelectedJamCID(null)
                         setSelectedLoopRoot(rootPath)
                       }

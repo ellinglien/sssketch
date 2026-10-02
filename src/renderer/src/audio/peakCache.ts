@@ -29,6 +29,12 @@ const cache = new Map<string, Promise<WaveformAnalysis>>()
 // still a blank frame regardless of the underlying data being ready
 // immediately. peekPeaks/peekBrightness below close that last gap.
 const settled = new Map<string, WaveformAnalysis>()
+// The decoded length of a path, recorded by the same decode that produced
+// its peaks (CLAUDE.md: one decode per stem, never a second one for a
+// cheap derived value). Only present when getAnalysis really decoded: a
+// persisted or adopted analysis never saw the buffer. LoopFolderPane reads
+// it to measure linked loops main cannot (non-WAV).
+const durations = new Map<string, number>()
 let sharedContext: AudioContext | null = null
 
 function getContext(): AudioContext {
@@ -68,6 +74,7 @@ function getAnalysis(path: string): Promise<WaveformAnalysis> {
       // body here was byte-for-byte what decodeStemFile already did.
       const audioBuffer = await decodeStemFile(path)
       const result = waveformFromBuffer(audioBuffer)
+      durations.set(path, audioBuffer.duration)
       settled.set(path, result)
       // Fire-and-forget -- a real library stem's path persists for next
       // session (this session's own renderer-memory `cache`/`settled`
@@ -147,6 +154,7 @@ export function adoptWaveformAnalysis(
 export function evictWaveform(path: string): void {
   cache.delete(path)
   settled.delete(path)
+  durations.delete(path)
 }
 
 /** True when this path already has an in-memory entry (settled or in
@@ -165,6 +173,15 @@ export function getPeaks(path: string): Promise<number[]> {
  * without a second decode of the same file getPeaks already triggered. */
 export function getBrightness(path: string): Promise<number[]> {
   return getAnalysis(path).then((a) => a.brightness)
+}
+
+/** The path's length in seconds, from the same (shared, cached) decode
+ * getPeaks uses -- awaiting it never starts a second decode. Null when the
+ * waveform came from somewhere that never decoded a buffer (the persisted
+ * peaks cache, an adopted analysis). Rejects, and is evicted, exactly as
+ * getPeaks does. */
+export function getDecodedDuration(path: string): Promise<number | null> {
+  return getAnalysis(path).then(() => durations.get(path) ?? null)
 }
 
 export function getAudioContext(): AudioContext {
