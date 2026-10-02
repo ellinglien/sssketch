@@ -64,6 +64,7 @@ export default defineConfig({
           'src/main/embeddingMatch.test.ts',
           'src/main/instrumentMaskCentroidBackfill.test.ts',
           'src/main/loopFolders.test.ts',
+          'src/main/loopFolderScan.test.ts',
           'src/main/resolveStemArrangeRole.test.ts',
           'src/main/scanTargetCache.test.ts',
           'src/main/stemAnalysisNeeds.test.ts',
