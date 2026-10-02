@@ -144,6 +144,39 @@ describe('createRemoteLoopRenderer', () => {
     }
   }, 120_000)
 
+  // The phone's loop is a mixdown (native radio sound plan, Task 14): it renders through the
+  // project's whole chain, master stages included, and a settings change is a new loop.
+  it("renders the loop through the project's master stage, and a settings change is a new loop", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-phone-loop-src-'))
+    const stemPath = join(dir, 'stem.wav')
+    writeConstantWav(stemPath, 0.5, 88200)
+    const midSample = (wav: Buffer): number => {
+      let offset = 12
+      while (offset + 8 <= wav.length) {
+        const size = wav.readUInt32LE(offset + 4)
+        if (wav.toString('ascii', offset, offset + 4) === 'data')
+          return wav.readInt16LE(offset + 8 + 44100 * 4) / 32767 // one second in, left
+        offset += 8 + size + (size % 2)
+      }
+      throw new Error('no data chunk')
+    }
+
+    const renderer = createRemoteLoopRenderer()
+    try {
+      renderer.setLoop(oneStemProject(stemPath))
+      const dry = await renderer.wav()
+      const mastered = oneStemProject(stemPath)
+      mastered.sound = { room: 'zita', mastering: { headroomDb: -4, ceilingDb: -1 } }
+      renderer.setLoop(mastered)
+      const wet = await renderer.wav()
+      expect(wet!.id).not.toBe(dry!.id)
+      expect(midSample(dry!.bytes)).toBeCloseTo(0.5, 3)
+      expect(midSample(wet!.bytes) / midSample(dry!.bytes)).toBeCloseTo(10 ** (-4 / 20), 3)
+    } finally {
+      renderer.stop()
+    }
+  }, 120_000)
+
   it('answers null when no loop is held', async () => {
     const renderer = createRemoteLoopRenderer()
     try {

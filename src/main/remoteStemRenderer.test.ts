@@ -196,3 +196,51 @@ describe('remoteStemRenderer bytes', () => {
     r.stop()
   }, 60_000)
 })
+
+// The phone's per-row files are per stem (native radio sound plan, Task 14): they carry the
+// row's own stages -- its gain and its pan, baked in -- and none of the master's. They are
+// transcodes, not engine renders, so the room, the throws and the toolkit are not in them
+// either (as before the radio sound); the phone's loop, a mixdown, has the whole chain.
+describe('remoteStemRenderer and the radio sound', () => {
+  it("ignores the project's master stages: the same row gives the same id and the same bytes", async () => {
+    const path = writeStereoWav(join(dir, 'master.wav'), 1)
+    const row = stemAt(path, 1, { pumpRole: 'pumped' })
+    const plain = projectOf([stemAt(path, 1)])
+    const radio: EngineProject = {
+      ...projectOf([row]),
+      sound: {
+        room: 'cavern',
+        mastering: { headroomDb: -4, ceilingDb: -1 },
+        glue: { thresholdDb: -14, ratio: 2, kneeDb: 6 },
+        tone: { lowShelfDb: 1, highShelfDb: 1 },
+        saturation: { drive: 0.9 },
+        pump: { depthDb: 4 }
+      }
+    }
+    const a = createRemoteStemRenderer()
+    const b = createRemoteStemRenderer()
+    a.setLoop(plain, ['slot-1'])
+    b.setLoop(radio, ['slot-1'])
+    const idA = a.stemIdsBySlotId().get('slot-1')!
+    const idB = b.stemIdsBySlotId().get('slot-1')!
+    expect(idB).toBe(idA)
+    const bytesA = await a.bytes(idA)
+    const bytesB = await b.bytes(idB)
+    expect((bytesB as Buffer).equals(bytesA as Buffer)).toBe(true)
+    a.stop()
+    b.stop()
+  }, 60_000)
+
+  it("bakes the row's pan, a per-stem stage", async () => {
+    const path = writeStereoWav(join(dir, 'pan.wav'), 1)
+    const centred = stemAt(path, 1)
+    const panned = stemAt(path, 1, { pan: 0.25 })
+    const r = createRemoteStemRenderer()
+    r.setLoop(projectOf([centred, panned]), ['slot-1', 'slot-2'])
+    expect(phoneStemAudioId(panned)).not.toBe(phoneStemAudioId(centred))
+    const a = await r.bytes(phoneStemAudioId(centred))
+    const b = await r.bytes(phoneStemAudioId(panned))
+    expect((b as Buffer).equals(a as Buffer)).toBe(false)
+    r.stop()
+  }, 60_000)
+})

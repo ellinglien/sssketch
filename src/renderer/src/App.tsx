@@ -57,7 +57,7 @@ import { UpdateAvailableDialog } from './components/UpdateAvailableDialog'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { ExportFormatPicker } from './components/ExportFormatPicker'
 import type { ToolkitExportMode } from '@shared/toolkit'
-import { exportToolkitChoice } from '@shared/exportToolkitChoice'
+import { dawExportLeavesMastering, exportToolkitChoice } from '@shared/exportToolkitChoice'
 import { StemsFormatPicker } from './components/StemsFormatPicker'
 import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
@@ -1015,6 +1015,8 @@ function ProjectMenu({
           // exportToolkitChoice.
           toolkitInUse={exportToolkitChoice(state).offer}
           defaultToolkitMode={exportToolkitChoice(state).defaultMode}
+          // The session's stems never carry the master stages (the D1/D2 ruling): say so.
+          masteringLeftToDaw={dawExportLeavesMastering(state)}
           onChoose={(format, toolkitMode) => {
             setExportFormatPickerOpen(false)
             void handleExportProject(format, toolkitMode)

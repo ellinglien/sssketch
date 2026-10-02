@@ -1,0 +1,6 @@
+{
+  "renderedBy": "the engine built at 926eb84 (before the radio sound plan), --render-test",
+  "arch": "arm64",
+  "format": "int16 LE, stereo interleaved, 44.1 kHz",
+  "frames": 55125
+}

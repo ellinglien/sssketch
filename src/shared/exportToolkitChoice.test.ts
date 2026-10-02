@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exportToolkitChoice } from './exportToolkitChoice'
+import { dawExportLeavesMastering, exportToolkitChoice } from './exportToolkitChoice'
 import { initialState, type AppState } from '../renderer/src/state/store'
 import { normalizeSoundSettings, type SoundSettings } from './radioSound'
 import { createRiser } from './riser'
@@ -84,5 +84,28 @@ describe('exportToolkitChoice', () => {
       offer: false,
       defaultMode: 'bake'
     })
+  })
+})
+
+describe('dawExportLeavesMastering', () => {
+  it('true with the defaults (mastering and the pump on)', () => {
+    expect(dawExportLeavesMastering(state({ sound: normalizeSoundSettings(undefined) }))).toBe(true)
+  })
+
+  it('true with mastering alone, or the pump alone', () => {
+    const mastering = normalizeSoundSettings(undefined)
+    mastering.pump.on = false
+    const pump = normalizeSoundSettings(undefined)
+    pump.mastering.on = false
+    expect(dawExportLeavesMastering(state({ sound: mastering }))).toBe(true)
+    expect(dawExportLeavesMastering(state({ sound: pump }))).toBe(true)
+  })
+
+  it('false with both off (glue, tone and saturation need mastering), or no sound settings', () => {
+    const neither = normalizeSoundSettings(undefined)
+    neither.mastering.on = false
+    neither.pump.on = false
+    expect(dawExportLeavesMastering(state({ sound: neither }))).toBe(false)
+    expect(dawExportLeavesMastering(state({ sound: undefined }))).toBe(false)
   })
 })

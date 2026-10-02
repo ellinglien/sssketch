@@ -166,6 +166,37 @@ describe('phoneLoopFingerprint', () => {
       phoneLoopFingerprint(project())
     )
   })
+
+  // The phone's loop is a mixdown (native radio sound plan, Task 14): it renders through the
+  // whole chain, so the settings are part of what it sounds like.
+  it('DIFFERS when the radio sound settings differ, and is unchanged without them', () => {
+    const plain = phoneLoopFingerprint(project())
+    const mastered = phoneLoopFingerprint(
+      project({ sound: { room: 'cavern', mastering: { headroomDb: -4, ceilingDb: -1 } } })
+    )
+    const louder = phoneLoopFingerprint(
+      project({ sound: { room: 'cavern', mastering: { headroomDb: -2, ceilingDb: -1 } } })
+    )
+    const zita = phoneLoopFingerprint(
+      project({ sound: { room: 'zita', mastering: { headroomDb: -4, ceilingDb: -1 } } })
+    )
+    expect(new Set([plain, mastered, louder, zita]).size).toBe(4)
+    expect(plain).not.toContain('sound=')
+  })
+
+  it("DIFFERS with a row's pump role, and a loop without roles keeps its fingerprint", () => {
+    const plain = project()
+    const keyed = project({
+      rifffs: [{ ...plain.rifffs[0], stems: [stem({ pumpRole: 'key' })] }]
+    })
+    const pumped = project({
+      rifffs: [{ ...plain.rifffs[0], stems: [stem({ pumpRole: 'pumped' })] }]
+    })
+    expect(phoneLoopFingerprint(keyed)).not.toBe(phoneLoopFingerprint(plain))
+    expect(phoneLoopFingerprint(keyed)).not.toBe(phoneLoopFingerprint(pumped))
+    // the row's own file is not pumped: its id does not move
+    expect(phoneStemAudioId(stem({ pumpRole: 'pumped' }))).toBe(phoneStemAudioId(stem()))
+  })
 })
 
 describe('phoneStemAudioId', () => {

@@ -1,9 +1,11 @@
 import { describe, expect, it, vi, beforeAll, afterAll } from 'vitest'
 import { execFileSync } from 'node:child_process'
-import { writeFileSync, mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { writeFileSync, mkdtempSync, mkdirSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { EngineProject } from '../../../src/shared/buildEngineProject'
+import type { EngineProject, EngineStem } from '../../../src/shared/buildEngineProject'
+import { buildEngineSound } from '../../../src/shared/buildEngineProject'
+import { DEFAULT_SOUND_SETTINGS, type SoundSettings } from '../../../src/shared/radioSound'
 
 // renderStretched (src/main/rubberband.ts) reaches into Electron's `app` object
 // (via its private cacheDir() helper) purely to find a writable cache directory —
@@ -493,4 +495,290 @@ describe('native engine vs Web Audio export — render parity', () => {
     console.log('render-parity: playedBars re-loop test maxDiff =', maxDiff)
     expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance, matching the other cases
   }, 30000)
+})
+
+// ---------------------------------------------------------------------------------------------
+// The radio sound (docs/superpowers/plans/2026-10-01-native-radio-sound.md, Task 14).
+//
+// OFF IS TODAY: a project with every stage off renders, through the CLI's RenderExport, exactly
+// what the engine rendered before the plan. The reference is a saved fixture rendered by the
+// engine built at 926eb84 (the commit before the plan's Task 0) from this same project: a tone
+// with a mute region, a filtered noise row sending to zita with drawn cutoff, send and volume
+// curves, a riser, two channels. To re-render it (never needed unless the fixture project here
+// changes), build that commit's engine and run this file with
+// SSSKETCH_OFF_FIXTURE_ENGINE=<its sssketch-engine binary>.
+//
+// EVERY STAGE ON: the same project with the radio sound's defaults (all on), as buildEngineSound
+// sends them, a planned throw, a key and pumped rows, pans and a riser character. There is no
+// reference for the whole chain outside the engine (each stage has its own golden and its own
+// live == export test natively: BounceParityTests), so this pins what a mixdown must be: it
+// renders, deterministically, at the same length, it is not today's render, and the limiter
+// holds the -1 dBTP ceiling.
+
+const FIXTURE_DIR = join(__dirname, 'fixtures')
+const OFF_FIXTURE = join(FIXTURE_DIR, 'off-is-today.s16')
+const OFF_FIXTURE_META = join(FIXTURE_DIR, 'off-is-today.json')
+// 480 bpm: half a second a bar, so 2.5 bars is 1.25 s (a 220 KB fixture)
+const FIXTURE_BARS = '2.5'
+
+function writeMonoWav16(path: string, sample: (i: number) => number, numSamples: number): void {
+  const dataSize = numSamples * 2
+  const buf = Buffer.alloc(44 + dataSize)
+  buf.write('RIFF', 0)
+  buf.writeUInt32LE(36 + dataSize, 4)
+  buf.write('WAVE', 8)
+  buf.write('fmt ', 12)
+  buf.writeUInt32LE(16, 16)
+  buf.writeUInt16LE(1, 20)
+  buf.writeUInt16LE(1, 22)
+  buf.writeUInt32LE(44100, 24)
+  buf.writeUInt32LE(44100 * 2, 28)
+  buf.writeUInt16LE(2, 32)
+  buf.writeUInt16LE(16, 34)
+  buf.write('data', 36)
+  buf.writeUInt32LE(dataSize, 40)
+  for (let i = 0; i < numSamples; i++) {
+    buf.writeInt16LE(Math.round(Math.max(-1, Math.min(1, sample(i))) * 32767), 44 + i * 2)
+  }
+  writeFileSync(path, buf)
+}
+
+describe('the radio sound: off is today, and every stage on (Task 14)', () => {
+  let dir: string
+  let files: { tone: string; noise: string; kick: string }
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'sssketch-radio-parity-'))
+    files = {
+      tone: join(dir, 'tone.wav'),
+      noise: join(dir, 'noise.wav'),
+      kick: join(dir, 'kick.wav')
+    }
+    const bar = 22050 // half a second at 44.1 kHz
+    writeMonoWav16(files.tone, (i) => 0.4 * Math.sin((2 * Math.PI * 220 * i) / 44100), bar)
+    // a seeded LCG: the same noise on every machine
+    let seed = 12345
+    writeMonoWav16(
+      files.noise,
+      (i) => {
+        seed = (Math.imul(seed, 1103515245) + 12345) >>> 0
+        const on = i % 5512 < 2756
+        return on ? 0.35 * ((seed / 4294967296) * 2 - 1) : 0
+      },
+      bar
+    )
+    writeMonoWav16(
+      files.kick,
+      (i) => {
+        const t = i % 5512
+        return 0.7 * Math.exp(-t / 2646) * Math.sin((2 * Math.PI * 60 * t) / 44100)
+      },
+      bar
+    )
+  })
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  /** The fixture project. `radio` adds what the radio sound sends with every stage on. */
+  function fixtureProject(radio: boolean): EngineProject {
+    const stem = (key: string, path: string, extra: Partial<EngineStem>): EngineStem => ({
+      stemKey: key,
+      resolvedPath: path,
+      durationSec: 0.5,
+      barLength: 1,
+      playedBars: 2.5,
+      leftCropBars: 0,
+      offsetSteps: 0,
+      startBarOverride: -1,
+      volume: 0.5,
+      muted: false,
+      muteRegions: [],
+      oneShot: false,
+      trimStartSec: 0,
+      trimEndSec: -1,
+      ...extra
+    })
+    const throwCurve = [
+      { bar: 1, value: 0 },
+      { bar: 1.01, value: 1 },
+      { bar: 1.49, value: 1 },
+      { bar: 1.5, value: 0 }
+    ]
+    const sound = radio
+      ? buildEngineSound(structuredClone(DEFAULT_SOUND_SETTINGS) as SoundSettings, {
+          timing: 'dotted-eighth',
+          feedback: 0.55
+        })
+      : undefined
+    return {
+      bpm: 480,
+      snapDiv: 16,
+      loopLengthBars: 2.5,
+      reverb: { roomSize: 0.6, damping: 0.4, preDelayMs: 30 },
+      masterChain: [],
+      channelChains: [],
+      risers: [
+        {
+          id: 'riser-1',
+          channelId: 'c2',
+          startBar: 0.5,
+          lengthBars: 1.5,
+          startCutoffValue: 0.2,
+          endCutoffValue: 0.9,
+          level: 0.2,
+          curve: [],
+          ...(radio ? { q: 4, colour: 'pink' as const, send: 0.3 } : {})
+        }
+      ],
+      ...(sound ? { sound } : {}),
+      rifffs: [
+        {
+          groupId: 'r1',
+          channelId: 'c1',
+          startBar: 0,
+          barLength: 1,
+          stems: [
+            stem('r1:1', files.kick, radio ? { pumpRole: 'key' } : {}),
+            stem('r1:2', files.tone, {
+              muteRegions: [{ startBar: 1, endBar: 1.25 }],
+              ...(radio ? { pan: -0.25, pumpRole: 'pumped' as const } : {})
+            })
+          ]
+        },
+        {
+          groupId: 'r2',
+          channelId: 'c2',
+          startBar: 0,
+          barLength: 1,
+          stems: [
+            stem('r2:3', files.noise, {
+              ...(radio ? { pan: 0.25, pumpRole: 'pumped' as const } : {}),
+              toolkit: {
+                filterMode: 'lowpass',
+                filterCutoff: 0.6,
+                filterResonance: 0.3,
+                reverbSend: 0.5,
+                volume: 1,
+                originBar: 0,
+                automation: {
+                  filterCutoff: [
+                    { bar: 0, value: 0.3 },
+                    { bar: 2, value: 0.9 }
+                  ],
+                  filterResonance: [],
+                  reverbSend: [
+                    { bar: 0, value: 0.2 },
+                    { bar: 2.5, value: 0.7 }
+                  ],
+                  volume: [
+                    { bar: 0, value: 1 },
+                    { bar: 1, value: 0.5 },
+                    { bar: 2, value: 1 }
+                  ],
+                  ...(radio ? { dubSend: throwCurve } : {})
+                }
+              }
+            })
+          ]
+        }
+      ]
+    } as EngineProject
+  }
+
+  function render(project: EngineProject, name: string, binary = ENGINE_BINARY): Int16Array {
+    const projectPath = join(dir, `${name}.json`)
+    const outPath = join(dir, `${name}.wav`)
+    writeFileSync(projectPath, JSON.stringify(project))
+    execFileSync(binary, ['--render-test', projectPath, outPath, FIXTURE_BARS])
+    return readWavSamples(outPath)
+  }
+
+  it('every stage off renders exactly what the pre-plan engine rendered (the saved fixture)', () => {
+    const preplanEngine = process.env.SSSKETCH_OFF_FIXTURE_ENGINE
+    if (preplanEngine) {
+      const samples = render(fixtureProject(false), 'fixture-preplan', preplanEngine)
+      mkdirSync(FIXTURE_DIR, { recursive: true })
+      writeFileSync(
+        OFF_FIXTURE,
+        Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength)
+      )
+      writeFileSync(
+        OFF_FIXTURE_META,
+        JSON.stringify(
+          {
+            renderedBy: 'the engine built at 926eb84 (before the radio sound plan), --render-test',
+            arch: process.arch,
+            format: 'int16 LE, stereo interleaved, 44.1 kHz',
+            frames: samples.length / 2
+          },
+          null,
+          2
+        ) + '\n'
+      )
+    }
+    const fixture = readFileSync(OFF_FIXTURE)
+    const today = new Int16Array(fixture.buffer, fixture.byteOffset, fixture.byteLength / 2)
+    expect(today.length).toBe(2 * Math.round(1.25 * 44100))
+
+    // Every stage off, three ways the wire can say it: no `sound` block (what buildEngineProject
+    // sends with every stage off), a block naming only today's room, and the pump's roles with
+    // the pump off (sent whenever a block is).
+    const off = fixtureProject(false)
+    const withBlock: EngineProject = { ...off, sound: { room: 'zita' } }
+    const withRoles: EngineProject = {
+      ...withBlock,
+      rifffs: off.rifffs.map((r) => ({
+        ...r,
+        stems: r.stems.map((s, i) => ({
+          ...s,
+          pumpRole: i === 0 && r.groupId === 'r1' ? 'key' : 'pumped'
+        }))
+      }))
+    }
+    // An x64 engine runs under Rosetta in CI (the release matrix): its float arithmetic can
+    // round differently from the arm64 build that rendered the fixture (no FMA contraction),
+    // which 16 bits mostly hide. Bit-identical on the fixture's own architecture; a one-step
+    // tolerance elsewhere.
+    const meta = JSON.parse(readFileSync(OFF_FIXTURE_META, 'utf8')) as { arch: string }
+    const tolerance = process.arch === meta.arch ? 0 : 1
+    for (const [name, project] of [
+      ['no sound block', off],
+      ['a block saying zita', withBlock],
+      ['pump roles with the pump off', withRoles]
+    ] as const) {
+      const samples = render(project, `off-${name.replace(/ /g, '-')}`)
+      expect(samples.length, name).toBe(today.length)
+      let worst = 0
+      let first = -1
+      for (let i = 0; i < today.length; i++) {
+        const d = Math.abs(samples[i] - today[i])
+        if (d > 0 && first < 0) first = i
+        worst = Math.max(worst, d)
+      }
+      expect(worst, `${name}: first difference at ${first}`).toBeLessThanOrEqual(tolerance)
+    }
+  }, 60000)
+
+  it('every stage on renders, deterministically, at the same length, not today, under the -1 dBTP ceiling', () => {
+    const project = fixtureProject(true)
+    // what buildEngineSound sends for the defaults: every stage
+    expect(Object.keys(project.sound ?? {}).sort()).toEqual(
+      ['dub', 'glue', 'mastering', 'pump', 'room', 'saturation', 'tone'].sort()
+    )
+    expect(project.sound?.room).toBe('cavern')
+    const a = render(project, 'all-on-a')
+    const b = render(project, 'all-on-b')
+    const fixture = readFileSync(OFF_FIXTURE)
+    expect(a.length).toBe(fixture.byteLength / 2)
+    expect(Buffer.from(a.buffer).equals(Buffer.from(b.buffer))).toBe(true)
+    expect(Buffer.from(a.buffer).equals(fixture)).toBe(false)
+    let peak = 0
+    for (let i = 0; i < a.length; i++) peak = Math.max(peak, Math.abs(a[i]))
+    // -1 dBFS is 29204 at 16 bits; the sample peak stays under the true-peak ceiling plus the
+    // limiter's measured worst overshoot on hot noise (Task 3: +0.4 dB)
+    expect(peak).toBeLessThan(Math.round(32767 * 10 ** (-0.6 / 20)))
+    expect(peak).toBeGreaterThan(1000)
+  }, 60000)
 })

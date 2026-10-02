@@ -20,7 +20,8 @@ export function ExportFormatPicker({
   onChoose,
   onCancel,
   toolkitInUse = false,
-  defaultToolkitMode = 'bake'
+  defaultToolkitMode = 'bake',
+  masteringLeftToDaw = false
 }: {
   onChoose: (format: 'ableton' | 'reaper', toolkitMode: ToolkitExportMode) => void
   onCancel: () => void
@@ -28,6 +29,9 @@ export function ExportFormatPicker({
   /** Which side the choice starts on (exportToolkitChoice): `automation` when the per-row pans
    * are the project's only per-stem stage. */
   defaultToolkitMode?: ToolkitExportMode
+  /** The project's mastering (limiter, glue, tone, saturation, the pump) is on but stays out of
+   * the session's stems (dawExportLeavesMastering): say so. */
+  masteringLeftToDaw?: boolean
 }): React.JSX.Element {
   const [toolkitMode, setToolkitMode] = useState<ToolkitExportMode>(defaultToolkitMode)
 
@@ -114,6 +118,14 @@ export function ExportFormatPicker({
               risers always come out as audio
             </p>
           </div>
+        )}
+        {masteringLeftToDaw && (
+          <p
+            style={{ margin: '10px 0 0', fontSize: 9, lineHeight: 1.4, color: 'var(--ra-text-3)' }}
+          >
+            the mastering is left to the daw: no limiter, glue, tone, saturation or pump in the
+            stems
+          </p>
         )}
         <div style={{ marginTop: toolkitInUse ? 14 : 10 }}>
           <button style={buttonStyle} onClick={() => onChoose('ableton', toolkitMode)}>

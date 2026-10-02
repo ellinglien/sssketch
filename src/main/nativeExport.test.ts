@@ -52,7 +52,11 @@ vi.mock('@shared/buildEngineProject', async (importOriginal) => {
   return { ...actual, buildEngineProject: vi.fn(actual.buildEngineProject) }
 })
 
-import { buildEngineProject } from '@shared/buildEngineProject'
+import {
+  buildEngineProject,
+  buildEngineSound,
+  type EngineProject
+} from '@shared/buildEngineProject'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import { timelineDubThrows } from '@shared/timelineThrows'
 import {
@@ -1314,6 +1318,203 @@ describe("the timeline's throws in every export (native radio sound plan, Task 1
       }
     } finally {
       rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 60000)
+})
+
+describe("every bounce follows the project's sound (native radio sound plan, Task 14)", () => {
+  // Two rows of one rifff on two buses: a drums row (centred, the pump's key) and a pad (panned,
+  // pumped), with a riser, so every per-stem and master field has somewhere to show.
+  const twoRows: Rifff = {
+    groupId: 'r1',
+    name: 'two rows',
+    bpm: 240,
+    barLength: 1,
+    folderPath: '/x',
+    startBar: 0,
+    stems: [
+      {
+        slot: 1,
+        author: 'e',
+        name: 'k',
+        type: 'drums',
+        path: '/no/k.wav',
+        durationSec: 1,
+        barLength: 1
+      },
+      {
+        slot: 2,
+        author: 'e',
+        name: 'p',
+        type: 'notes',
+        path: '/no/p.wav',
+        durationSec: 1,
+        barLength: 1
+      }
+    ]
+  }
+  const riser = {
+    id: 'ri1',
+    channelId: 'r1',
+    startBar: 0,
+    lengthBars: 1,
+    startCutoffValue: 0.3,
+    endCutoffValue: 0.95,
+    curve: [],
+    level: 0.4,
+    name: 'riser 1',
+    muted: false
+  }
+  const base: AppState = {
+    ...initialState,
+    bpm: 240,
+    rifffs: { r1: twoRows },
+    playedBars: { r1: 2 },
+    busOf: { 'r1:1': 'drums', 'r1:2': 'aux' },
+    risers: { ri1: riser },
+    sound: normalizeSoundSettings(undefined),
+    projectSeed: 'task-14'
+  }
+
+  async function builtProjects(run: () => Promise<unknown>): Promise<EngineProject[]> {
+    vi.mocked(buildEngineProject).mockClear()
+    await run()
+    return Promise.all(vi.mocked(buildEngineProject).mock.results.map((r) => r.value))
+  }
+
+  it('the mixdown sends the whole chain, as the project says it: every master stage, the room, pans and the pump', async () => {
+    const [project] = await builtProjects(() => nativeExport(base, null))
+    // the settings resolved as live playback resolves them, with the plan's echo
+    expect(project.sound).toEqual(buildEngineSound(base.sound, timelineDubThrows(base)?.echo))
+    expect(project.sound?.mastering).toEqual({ headroomDb: -4, ceilingDb: -1 })
+    expect(project.sound?.glue).toBeDefined()
+    expect(project.sound?.tone).toBeDefined()
+    expect(project.sound?.saturation).toBeDefined()
+    expect(project.sound?.pump).toBeDefined()
+    expect(project.sound?.room).toBe('cavern')
+    const [kick, pad] = project.rifffs[0].stems
+    expect(kick.pumpRole).toBe('key')
+    expect(kick.pan).toBeUndefined()
+    expect(pad.pumpRole).toBe('pumped')
+    expect(pad.pan).not.toBe(0)
+  }, 60000)
+
+  it("the mixdown follows a change to the project's settings", async () => {
+    const changed: AppState = {
+      ...base,
+      sound: normalizeSoundSettings({
+        ...base.sound,
+        mastering: { on: true, headroomDb: -6, ceilingDb: -2 },
+        glue: { on: false, amount: 0.5 },
+        reverb: { room: 'zita', amount: 0.75 },
+        pump: { on: true, depthDb: 6 },
+        panning: { on: false, width: 0.25 }
+      })
+    }
+    const [project] = await builtProjects(() => nativeExport(changed, null))
+    expect(project.sound?.mastering).toEqual({ headroomDb: -6, ceilingDb: -2 })
+    expect(project.sound?.glue).toBeUndefined()
+    expect(project.sound?.room).toBe('zita')
+    expect(project.sound?.reverbReturn).toBe(1.5)
+    expect(project.sound?.pump).toEqual({ depthDb: 6 })
+    for (const stem of project.rifffs[0].stems) expect(stem.pan).toBeUndefined()
+  }, 60000)
+
+  it('a project with every stage off sends no sound block to the mixdown (the wire of a pre-plan project)', async () => {
+    const off = normalizeSoundSettings(base.sound)
+    for (const stage of [
+      off.mastering,
+      off.glue,
+      off.tone,
+      off.saturation,
+      off.panning,
+      off.pump,
+      off.throws,
+      off.riserVariety
+    ])
+      stage.on = false
+    off.reverb = { room: 'zita', amount: 0.5 }
+    const [project] = await builtProjects(() => nativeExport({ ...base, sound: off }, null))
+    expect(project.sound).toBeUndefined()
+    for (const stem of project.rifffs[0].stems) {
+      expect(stem.pan).toBeUndefined()
+      expect(stem.pumpRole).toBeUndefined()
+    }
+  }, 60000)
+
+  it('every solo render -- bus files, track files, risers.wav -- keeps the room and the per-stem stages, and no master stage', async () => {
+    const destDir = mkdtempSync(join(tmpdir(), 'sssketch-task14-dest-'))
+    try {
+      const projects = [
+        ...(await builtProjects(() => renderStemsToDir(base, destDir))),
+        ...(await builtProjects(() => renderStemTracksToDir(base, destDir, 'p')))
+      ]
+      // two buses + risers.wav, then two tracks + risers.wav
+      expect(projects).toHaveLength(6)
+      const perStem = buildEngineSound(stemExportSound(base.sound))
+      for (const project of projects) {
+        expect(project.sound).toEqual(perStem)
+        expect(project.sound?.mastering).toBeUndefined()
+        expect(project.sound?.glue).toBeUndefined()
+        expect(project.sound?.tone).toBeUndefined()
+        expect(project.sound?.saturation).toBeUndefined()
+        expect(project.sound?.pump).toBeUndefined()
+        expect(project.sound?.room).toBe('cavern')
+        // the pad keeps its pan in every render it is in
+        const pad = project.rifffs[0].stems[1]
+        expect(pad.pan).not.toBe(0)
+        expect(pad.pan).toBeDefined()
+      }
+    } finally {
+      rmSync(destDir, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it('the mixdown performs the master stage: a steady row comes out at the headroom trim (real engine)', async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-task14-src-'))
+    try {
+      const stemPath = join(srcDir, 'steady.wav')
+      writeConstantWav(stemPath, 0.25, 44100)
+      const steady: Rifff = {
+        ...twoRows,
+        stems: [
+          {
+            slot: 1,
+            author: 'e',
+            name: 's',
+            type: 'drums',
+            path: stemPath,
+            durationSec: 1,
+            barLength: 1
+          }
+        ]
+      }
+      const masteringOnly = normalizeSoundSettings(undefined)
+      for (const stage of [
+        masteringOnly.glue,
+        masteringOnly.tone,
+        masteringOnly.saturation,
+        masteringOnly.panning,
+        masteringOnly.pump,
+        masteringOnly.throws
+      ])
+        stage.on = false
+      const level = async (sound: AppState['sound']): Promise<number> => {
+        const wav = Buffer.from(
+          await nativeExport(
+            { ...base, rifffs: { r1: steady }, playedBars: { r1: 1 }, risers: {}, sound },
+            null
+          )
+        )
+        // the middle of the bar, past the limiter's 75-sample delay and the edge fades
+        return wav.readInt16LE(findDataChunkOffset(wav) + 22050 * 4) / 32767
+      }
+      const dry = await level(undefined)
+      const mastered = await level(masteringOnly)
+      expect(dry).toBeCloseTo(0.25, 3)
+      expect(mastered / dry).toBeCloseTo(10 ** (-4 / 20), 3)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
     }
   }, 60000)
 })

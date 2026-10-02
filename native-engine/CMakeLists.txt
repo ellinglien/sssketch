@@ -200,6 +200,7 @@ target_sources(sssketch_engine PRIVATE
   Source/DubDelay.cpp
   Source/DubDelayBusTests.cpp
   Source/TimelineThrowsTests.cpp
+  Source/BounceParityTests.cpp
 )
 
 target_compile_definitions(sssketch_engine PRIVATE

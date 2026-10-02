@@ -94,7 +94,11 @@ function stemLine(startBar: number, barLength: number, stem: EngineStem): string
     stem.offsetSteps,
     stem.startBarOverride,
     stem.muted ? 1 : 0,
-    stem.muteRegions.map((region) => `${region.startBar}-${region.endBar}`).join(',')
+    stem.muteRegions.map((region) => `${region.startBar}-${region.endBar}`).join(','),
+    // The pump's role routes the row in the loop's render (keyed or ducked), not in its own file,
+    // so it is the loop's and not stemAudioFields'. Only a row with a role adds a field: a loop
+    // without the pump keeps the fingerprint it had before the radio sound.
+    ...(stem.pumpRole !== undefined ? [`pump:${stem.pumpRole}`] : [])
   ].join(FIELD)
 }
 
@@ -131,6 +135,10 @@ export function phoneLoopFingerprint(project: EngineProject): string {
     `bars=${project.loopLengthBars}`,
     `reverb=${JSON.stringify(project.reverb)}`,
     `risers=${JSON.stringify(project.risers)}`,
+    // The radio sound's settings (native radio sound plan, Task 14): the phone's loop is a
+    // mixdown, rendered through the whole chain, so a mastering, room or pump change is new
+    // audio. Absent (every stage off) adds nothing, so such a loop keeps its old id.
+    ...(project.sound !== undefined ? [`sound=${JSON.stringify(project.sound)}`] : []),
     ...lines
   ].join('\n')
 }
