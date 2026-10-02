@@ -12,7 +12,12 @@ import {
   type RadioPace,
   type RadioSettings
 } from '@shared/radioSchedule'
-import { RADIO_TURNAROUNDS_OPTIONS } from '@shared/radioTurnaround'
+import {
+  RADIO_TURNAROUNDS_OPTIONS,
+  TURNAROUND_DEPTH_OPTIONS,
+  TURNAROUND_FAMILIES,
+  toggleTurnaroundFamily
+} from '@shared/radioTurnaround'
 import { RADIO_DENSITY_OPTIONS, radioDensityOf } from '@shared/radioSchedule'
 import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
 
@@ -310,6 +315,28 @@ export function DiscoverRadioMenu({
             chip(d, settings.turnarounds === d, () => onChange({ turnarounds: d, dropOuts: d }))
           ),
           'end of phrase'
+        )}
+      {/* The turnarounds' controls (spec section 4a), only while they are on: which families a
+          phrase end may draw (none is off) and how deep they go. */}
+      {mode === 'running' &&
+        settings.turnarounds !== 'off' &&
+        row(
+          'moves',
+          TURNAROUND_FAMILIES.map((f) =>
+            chip(f, settings.turnaroundMoves.includes(f), () =>
+              onChange({ turnaroundMoves: toggleTurnaroundFamily(settings.turnaroundMoves, f) })
+            )
+          ),
+          'which moves'
+        )}
+      {mode === 'running' &&
+        settings.turnarounds !== 'off' &&
+        row(
+          'depth',
+          TURNAROUND_DEPTH_OPTIONS.map((d) =>
+            chip(d, settings.turnaroundDepth === d, () => onChange({ turnaroundDepth: d }))
+          ),
+          'how far'
         )}
       {/* The field shipped with the settings object on 2026-09-28 and had
           no row until phase E, deliberately: a chip for something nothing
