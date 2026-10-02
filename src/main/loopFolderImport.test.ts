@@ -162,4 +162,32 @@ describe('importLinkedLoops', () => {
     expect(rifffs.map((r) => r.name)).toEqual(['Odd Header 120'])
     expect(rifffs[0].barLength).toBe(4)
   })
+  it('still imports a bad-header wav whose duration the renderer already reported', async () => {
+    const id = idOf('Odd Header 120')
+    db.prepare(`UPDATE LoopFiles SET DurationSec = 8, Bars = 4 WHERE LoopId = ?`).run(id)
+    const decoder = fakeDecoder(8)
+    const rifffs = await importLinkedLoops(db, [id], 120, decoder.run)
+    imported.push(...rifffs)
+    expect(decoder.sessions()).toBe(1)
+    expect(rifffs.map((r) => r.name)).toEqual(['Odd Header 120'])
+    expect(rifffs[0].barLength).toBe(4)
+  })
+
+  it('keeps the bars the row showed when the decoded length matches its duration', async () => {
+    const id = idOf('Pad 120')
+    // The row showed 2 bars for an 8 s file; at the 120 bpm project tempo the
+    // length-only guess would be 4.
+    db.prepare(`UPDATE LoopFiles SET DurationSec = 8, Bars = 2 WHERE LoopId = ?`).run(id)
+    const rifffs = await importLinkedLoops(db, [id], 120, fakeDecoder(8).run)
+    imported.push(...rifffs)
+    expect(rifffs[0].barLength).toBe(2)
+  })
+
+  it('recomputes the bars when the decoded length differs from the row duration', async () => {
+    const id = idOf('Pad 120')
+    db.prepare(`UPDATE LoopFiles SET DurationSec = 5, Bars = 2 WHERE LoopId = ?`).run(id)
+    const rifffs = await importLinkedLoops(db, [id], 120, fakeDecoder(8).run)
+    imported.push(...rifffs)
+    expect(rifffs[0].barLength).toBe(4)
+  })
 })

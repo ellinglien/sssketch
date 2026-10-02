@@ -85,6 +85,16 @@ function barsForDecodedLoop(
   projectBpm: number
 ): number {
   if (row.OverrideBpm !== null) return barsAtTempo(durationSec, row.OverrideBpm).bars
+  // The engine decoded the very length the row was scanned at: keep the bars
+  // the row showed, so a changed project tempo cannot import a different count.
+  if (
+    row.Bars !== null &&
+    row.DurationSec !== null &&
+    row.DurationSec > 0 &&
+    Math.abs(durationSec - row.DurationSec) <= row.DurationSec * 0.01
+  ) {
+    return row.Bars
+  }
   const siblings = db
     .prepare(`SELECT Name FROM LoopFiles WHERE RootPath = ? AND GroupPath = ? AND Present = 1`)
     .all(row.RootPath, row.GroupPath) as { Name: string }[]
@@ -137,6 +147,7 @@ export async function importLinkedLoops(
     }
     const rifff = importLoop(row.Path, bars)
     if (rifff) results.set(row.LoopId, renamed(rifff, row.Name))
+    else toDecode.push(row) // the copy could not read it either; the engine may
   }
 
   if (toDecode.length > 0) {
