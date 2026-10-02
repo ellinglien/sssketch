@@ -126,10 +126,14 @@ export function useThrowawayStemPreview(): {
         stretch: { [rifff.groupId]: true }
       }
       try {
+        // No pump roles either (pumpRelease: false): this loads into the live engine, and a
+        // duck still releasing from the sketch must not reach the audition.
         const project = await buildEngineProject(
           previewState,
           resolveStretchedForPlayback,
-          pluginCatalog
+          pluginCatalog,
+          undefined,
+          { pumpRelease: false }
         )
         if (unmountedRef.current || generationRef.current !== myGeneration) return
         if (!stillOwnEngine(engineToken)) return

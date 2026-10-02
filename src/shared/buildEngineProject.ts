@@ -62,8 +62,11 @@ export interface EngineStem {
   pan?: number
   /** This row's part in the drum-keyed pump (native radio sound plan, Task 9; DrumPump.h): the
    * key (a drums row: the pump listens to it) or pumped (ducked a little on each kick). ABSENT
-   * for a row left alone (bass, and any row the rule gives 'none') and for every row while the
-   * project's pump is off -- absence is load-bearing, the same rule as `pan`. Twin of
+   * for a row left alone (bass, and any row the rule gives 'none'), for every row of a project
+   * with no sound settings, and for an audition's (`pumpRelease: false`) -- absence is
+   * load-bearing, the same rule as `pan`. Sent while the pump is OFF too: the engine routes an
+   * off project's roles only to release a duck still in progress (DrumPump.h), so a fresh
+   * render of it -- every export -- is exactly the render without roles. Twin of
    * EngineStem::pumpRole in native-engine/Source/EngineProject.h. */
   pumpRole?: 'key' | 'pumped'
 }
@@ -495,17 +498,38 @@ function pumpOn(state: Pick<AppState, 'sound'>): boolean {
   return state.sound !== undefined && normalizeSoundSettings(state.sound).pump.on
 }
 
+/** Whether the stems carry their pump roles: always while the pump is on; while it is off too
+ * (unless the caller says `pumpRelease: false`), so that a pump switched off mid-duck releases
+ * through pump.dsp's own 200 ms release in the engine instead of stepping (the engine only
+ * routes an off project's roles while it is still ducking from the project before -- never in a
+ * fresh render). Never with no sound settings, nor with every stage off (today's wire). */
+function pumpRolesSent(
+  state: Pick<AppState, 'sound'>,
+  options: BuildEngineProjectOptions
+): boolean {
+  if (state.sound === undefined) return false
+  if (pumpOn(state)) return true
+  // Off: for the release -- but not when every stage is off, where the project sends no `sound`
+  // block and its wire stays byte-identical to a pre-plan project's (Task 2's rule). Switching
+  // the pump off as the last stage on therefore still steps out of a duck in progress.
+  return (
+    options.pumpRelease !== false &&
+    buildEngineSound(normalizeSoundSettings(state.sound)) !== undefined
+  )
+}
+
 /** The timeline's pump roles, by stem key, for every stem of every placed rifff that keys the
  * pump or is pumped (native radio sound plan, Task 9): pumpRoleForSoundType by the stem's
  * SoundType -- drums key it, bass is left alone, the rest are pumped. Muted stems are included
  * (a muted key keys nothing in the engine; a mute should not reroute a row). The key is
- * project-wide: a drums stem on any channel ducks the pumped stems on every channel. Empty
- * while the project's pump is off. */
+ * project-wide: a drums stem on any channel ducks the pumped stems on every channel. The roles
+ * whether the pump is on or off (buildEngineProject sends them off too, for the engine's
+ * release); empty only with no sound settings. */
 export function timelineStemPumpRoles(
   state: Pick<AppState, 'rifffs' | 'sound'>
 ): Map<string, 'key' | 'pumped'> {
   const roles = new Map<string, 'key' | 'pumped'>()
-  if (!pumpOn(state)) return roles
+  if (state.sound === undefined) return roles
   for (const rifff of Object.values(state.rifffs)) {
     if (rifff.startBar === undefined) continue // only what is placed sounds
     for (const stem of rifff.stems) {
@@ -525,8 +549,14 @@ export interface BuildEngineProjectOptions {
   stemPans?: ReadonlyMap<string, number>
   /** Discover's pump roles by stem key (discoverStemPumpRoles in @shared/radioPump, by each
    * row's slot kinds), which REPLACE the timeline's rule (by SoundType) for every stem: a key not
-   * in the map, or mapped to 'none', has no part. Only applied while the state's pump is on. */
+   * in the map, or mapped to 'none', has no part. Sent whenever roles are (pumpRelease). */
   stemPumpRoles?: ReadonlyMap<string, PumpRole>
+  /** false: while the project's pump is off, send no pump roles at all, so the engine cannot
+   * release a duck into this project -- for auditions (Tidy Up, Auto Arrange, the library),
+   * which load into the live engine and must never be pumped. Default true: an off project
+   * still carries its roles, so switching the pump off mid-duck glides out (the web's
+   * setPump(0)) rather than stepping. Ignored while the pump is on. */
+  pumpRelease?: boolean
 }
 
 // Real perf bug, found live 2026-09-15 via a direct report ("it's all very
@@ -601,9 +631,10 @@ export async function buildEngineProject(
   // settings -- then no stem gets a `pan`, and the wire is what it was before panning existed.
   const pans =
     panningWidth(state) === undefined ? undefined : (options.stemPans ?? timelineStemPans(state))
-  // The drum-keyed pump's roles (Task 9), likewise: Discover's map or the timeline's rule while
-  // the pump is on; undefined when it is off -- then no stem gets a `pumpRole`.
-  const pumpRoles: ReadonlyMap<string, PumpRole> | undefined = pumpOn(state)
+  // The drum-keyed pump's roles (Task 9): Discover's map or the timeline's rule, while the pump
+  // is on and, for the engine's release, while it is off (pumpRolesSent); undefined with no
+  // sound settings or `pumpRelease: false` on an off pump -- then no stem gets a `pumpRole`.
+  const pumpRoles: ReadonlyMap<string, PumpRole> | undefined = pumpRolesSent(state, options)
     ? (options.stemPumpRoles ?? timelineStemPumpRoles(state))
     : undefined
 

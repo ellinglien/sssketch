@@ -25,6 +25,12 @@ namespace sssketch
      * (DrumPumpTests checks it against FaustStage fed the real program), for one instance's
      * cost whatever the channel count, and one envelope to carry across project swaps.
      *
+     * RELEASE. A project whose pump is switched off (or loses its last key) mid-duck does not
+     * drop the duck at once: PlaybackEngine keeps routing its pumped rows here at depth 0 while
+     * isDucking(), so the duck lets go through pump.dsp's own 200 ms release, as the web's
+     * setPump(0) does, and stops routing once the gain is exactly 1.0f -- from then on the rows
+     * are routed exactly as with no pump.
+     *
      * STATE. The envelope lives here, not in the project snapshot, so a re-sync (setProject at
      * live-drag rate, Discover's staged swaps, a depth change) carries it on. It is cleared:
      * when the pump engages after a block without it (process() after idle()), so switching it
@@ -75,15 +81,26 @@ namespace sssketch
                      const Target* targets, size_t numTargets);
 
         /** AUDIO THREAD. A block without the pump: the next process() starts from a cleared
-         * envelope. Nothing else. */
-        void idle() { engaged = false; }
+         * envelope, and nothing is ducking. */
+        void idle()
+        {
+            engaged = false;
+            lastGain = 1.0f;
+            duckMeter.store(0.0f, std::memory_order_relaxed);
+        }
+
+        /** AUDIO THREAD. Whether the last block ended with the pumped rows still ducked (its
+         * last gain was not exactly 1.0f). False after idle(), clear(), a rate mismatch, and
+         * before anything ran. A release (process() at depth 0) runs while this is true. */
+        bool isDucking() const { return engaged && lastGain != 1.0f; }
 
         /** AUDIO THREAD with no process() in flight (or the message thread with no callback
-         * running). Clears the envelope and filters; the depth stays. */
+         * running). Clears the envelope and filters; the depth stays. Nothing is ducking after. */
         void clear();
 
-        /** For tests and meters: the duck's current value, dB (<= 0), 0 with no instance. */
-        float currentDuckDb() const;
+        /** Any thread, for meters and tests: the duck at the end of the last block, dB (<= 0); 0
+         * when nothing has run, after clear() or idle(). Published once per block. */
+        float currentDuckDb() const { return duckMeter.load(std::memory_order_relaxed); }
 
         unsigned long long rateMismatchCount() const { return rateMismatches.load(std::memory_order_relaxed); }
 
@@ -104,6 +121,8 @@ namespace sssketch
 
         double builtRate = 0.0;
         bool engaged = false;
+        float lastGain = 1.0f; // the rendering thread's own; see isDucking
+        std::atomic<float> duckMeter { 0.0f };
         std::atomic<Instance*> current { nullptr };
         std::atomic<Instance*> pending { nullptr };
         std::atomic<Instance*> retired { nullptr };

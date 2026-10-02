@@ -209,7 +209,11 @@ export function useStemPreviewPlayback(): {
     if (groupIdToSelect) dispatch({ type: 'SELECT', groupId: groupIdToSelect })
     dispatch({ type: 'SET_POS', pos: targetBar })
     try {
-      await flushEngineSyncNow(overrides, () => !stillOwnEngine(engineToken))
+      // pumpRelease: false -- an audition carries no pump roles, so a duck still releasing from
+      // the arrangement cannot reach it (stemPreviewOverrides switches the pump off).
+      await flushEngineSyncNow(overrides, () => !stillOwnEngine(engineToken), {
+        pumpRelease: false
+      })
     } catch (err) {
       // A failed send must not leave this claim dangling forever -- unlike
       // cancelledRef/callGenerationRef (purely local, self-healing on the

@@ -1183,27 +1183,53 @@ describe('the drum-keyed pump on the wire (native radio sound plan, Task 9)', ()
     expect(rolesOf(project.rifffs[0].stems)).toEqual(['key', 'pumped', undefined, 'pumped'])
   })
 
-  it('pump off, and no sound settings, emit no `pumpRole` at all', async () => {
-    for (const sound of [withPump(false), undefined]) {
+  it('pump off: no depth, but the roles still ride, so the engine can release a duck in progress', async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: withPump(false) }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(project.sound?.pump).toBeUndefined()
+    expect(rolesOf(project.rifffs[0].stems)).toEqual(['key', 'pumped', undefined, 'pumped'])
+  })
+
+  it('no roles at all: with no sound settings, with every stage off, or an off pump with pumpRelease false', async () => {
+    const everyStageOff = normalizeSoundSettings(undefined)
+    for (const stage of Object.values(everyStageOff)) if ('on' in stage) stage.on = false
+    everyStageOff.reverb.room = 'zita'
+    const cases: [SoundSettings | undefined, { pumpRelease?: boolean }][] = [
+      [undefined, {}],
+      [everyStageOff, {}],
+      [withPump(false), { pumpRelease: false }]
+    ]
+    for (const [sound, opts] of cases) {
       const project = await buildEngineProject(
         stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound }),
         vi.fn(),
         emptyCatalog,
         {},
-        { stemPumpRoles: new Map([[stemKey('r1', 2), 'key' as const]]) }
+        { stemPumpRoles: new Map([[stemKey('r1', 2), 'key' as const]]), ...opts }
       )
       expect(project.rifffs[0].stems.some((s) => 'pumpRole' in s)).toBe(false)
       expect(project.sound?.pump).toBeUndefined()
     }
+    // pumpRelease is ignored while the pump is on
+    const on = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: withPump(true) }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      { pumpRelease: false }
+    )
+    expect(rolesOf(on.rifffs[0].stems)).toEqual(['key', 'pumped', undefined, 'pumped'])
   })
 
-  it('a per-stem export (stemExportSound) carries no pump: no depth and no roles', async () => {
+  it('a per-stem export (stemExportSound) carries no depth: it never pumps (a fresh render has no duck to release)', async () => {
     const project = await buildEngineProject(
       stateWith({ bpm: 150, rifffs: { r1: fourStems }, sound: stemExportSound(withPump(true)) }),
       vi.fn(),
       emptyCatalog
     )
-    expect(project.rifffs[0].stems.some((s) => 'pumpRole' in s)).toBe(false)
     expect(project.sound?.pump).toBeUndefined()
   })
 
@@ -1225,7 +1251,7 @@ describe('the drum-keyed pump on the wire (native radio sound plan, Task 9)', ()
 })
 
 describe('timelineStemPumpRoles', () => {
-  it('maps every keying or pumped stem of every PLACED rifff, and nothing while the pump is off', () => {
+  it('maps every keying or pumped stem of every PLACED rifff, the pump on or off; nothing with no sound settings', () => {
     const sound = normalizeSoundSettings(undefined)
     const placed: Rifff = {
       ...rifff,
@@ -1245,7 +1271,7 @@ describe('timelineStemPumpRoles', () => {
       [stemKey('r3', 3), 'pumped']
     ])
     sound.pump.on = false
-    expect(timelineStemPumpRoles(stateWith({ rifffs: { r1: placed }, sound })).size).toBe(0)
+    expect(timelineStemPumpRoles(stateWith({ rifffs: { r1: placed }, sound })).size).toBe(2)
     expect(timelineStemPumpRoles(stateWith({ rifffs: { r1: placed } })).size).toBe(0)
   })
 })

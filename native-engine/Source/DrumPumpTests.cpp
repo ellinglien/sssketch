@@ -515,6 +515,130 @@ namespace sssketch
                 expect(sameBits(muted.first, padAlone.first) && sameBits(muted.second, padAlone.second));
             }
 
+            beginTest("a muted key with two pumped rows on one channel: the mix is the unpumped one, rounding-close");
+            {
+                // Two pumped rows sum in their pumped buffer, are multiplied by exactly 1, and join
+                // the channel after its other rows: the same samples, added in another order.
+                auto tone = writeFloatWav("sssketch_pump_tone.wav", kBarSamples, kRate, [](int i) {
+                    return 0.2f * (float) std::sin(2.0 * juce::MathConstants<double>::pi * 330.0 * i / kRate);
+                });
+                const auto muted = render(makeProject({ { kick, Role::key, "a", true },
+                                                        { pad, Role::pumped, "b" },
+                                                        { bass, Role::none, "b" },
+                                                        { tone, Role::pumped, "b" } },
+                                                      4.0),
+                                          total);
+                const auto unpumped = render(
+                    makeProject({ { kick, Role::none, "a", true }, { pad, Role::none, "b" }, { bass, Role::none, "b" },
+                                  { tone, Role::none, "b" } },
+                                std::nullopt),
+                    total);
+                float worst = 0.0f;
+                for (int i = 0; i < total; ++i)
+                    worst = juce::jmax(worst, std::abs(muted.first[(size_t) i] - unpumped.first[(size_t) i]),
+                                       std::abs(muted.second[(size_t) i] - unpumped.second[(size_t) i]));
+                expect(worst <= 1.0e-7f, "worst " + juce::String(worst, 10));
+                tone.deleteFile();
+            }
+
+            beginTest("switching the pump off mid-duck releases through the .dsp's 200 ms release, with no step, "
+                      "and afterwards is exactly the unpumped render");
+            {
+                // 4 bars (8 s): the kick at 0.25 s of every bar, the pad throughout.
+                const auto longProject = [&](bool on, bool keyed) {
+                    auto p = makeProject({ { hotKick, keyed ? Role::key : Role::none }, { pad, Role::pumped } },
+                                         on ? std::optional<double>(4.0) : std::nullopt);
+                    for (auto& rifff : p.rifffs)
+                        rifff.stems[0].playedBars = 4.0;
+                    return p;
+                };
+                const int longTotal = 4 * kBarSamples;
+                const int switchAt = (int) (0.35 * kRate) / 512 * 512; // mid-kick, well ducked
+                // the reference: the same rows, never pumped
+                auto noRoles = longProject(false, false);
+                for (auto& rifff : noRoles.rifffs)
+                    rifff.stems[0].pumpRole = Role::none;
+                const auto today = render(noRoles, longTotal);
+                auto kickOnly = noRoles;
+                kickOnly.rifffs.pop_back();
+                const auto kickAlone = render(kickOnly, longTotal);
+
+                // off with roles kept (the TS wire's rule), and on with the key gone
+                for (const bool keyGone : { false, true })
+                {
+                    const auto onProject = longProject(true, true);
+                    const auto offProject = keyGone ? longProject(true, false) : longProject(false, true);
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    ChannelChainRegistry chains;
+                    engine.prepareMaster(kRate);
+                    engine.setProject(onProject);
+                    std::vector<float> l((size_t) longTotal, 0.0f), r((size_t) longTotal, 0.0f);
+                    float duckAtSwitch = 0.0f;
+                    for (int at = 0; at < longTotal; at += 512)
+                    {
+                        if (at == switchAt)
+                        {
+                            duckAtSwitch = engine.pumpDuckDb();
+                            engine.setProject(offProject);
+                        }
+                        const int n = juce::jmin(512, longTotal - at);
+                        engine.renderBlock((double) at / (double) kBarSamples, kRate, n, l.data() + at, r.data() + at, chains);
+                    }
+                    engine.drainRetiredProject();
+                    expect(duckAtSwitch < -3.0f, "ducked at the switch: " + juce::String(duckAtSwitch));
+
+                    // the pad's gain: rises smoothly, never jumps, never dips again
+                    double worstStep = 0.0, prev = 0.0;
+                    bool monotone = true;
+                    int unity = -1;
+                    for (int i = switchAt - 512; i < longTotal - (int) (0.1 * kRate); ++i)
+                    {
+                        const double g = ((double) l[(size_t) i] - kickAlone.first[(size_t) i]) / 0.25;
+                        if (i > switchAt - 512)
+                        {
+                            worstStep = juce::jmax(worstStep, std::abs(g - prev));
+                            monotone = monotone && (i < switchAt || g >= prev - 1.0e-6);
+                        }
+                        if (unity < 0 && i > switchAt && std::abs(g - 1.0) < 1.0e-6) unity = i;
+                        prev = g;
+                    }
+                    // a 4 dB step would be 0.37; the glide's largest step is the release's slope
+                    expect(worstStep < 1.0e-3, "largest per-sample change of the pad's gain " + juce::String(worstStep, 8));
+                    expect(monotone, "the gain dipped again during the release");
+                    // half of the duck (in dB) back after about 200 ms x ln 2
+                    const auto gAt = [&](int i) { return ((double) l[(size_t) i] - kickAlone.first[(size_t) i]) / 0.25; };
+                    const double halfDb = -toDb(gAt(switchAt + (int) (0.139 * kRate)));
+                    logMessage(juce::String(keyGone ? "key gone" : "pump off") + ": duck " + juce::String(-duckAtSwitch, 3)
+                               + " dB at the switch, " + juce::String(halfDb, 3) + " dB 139 ms later; unity after "
+                               + juce::String(1000.0 * (unity - switchAt) / kRate, 0) + " ms; largest step "
+                               + juce::String(worstStep, 8));
+                    expect(halfDb > 0.3 * -duckAtSwitch && halfDb < 0.7 * -duckAtSwitch, "half-way " + juce::String(halfDb));
+
+                    // after the ring-out, the very samples of the never-pumped render
+                    int sameFrom = longTotal;
+                    while (sameFrom > 0 && l[(size_t) sameFrom - 1] == today.first[(size_t) sameFrom - 1]
+                           && r[(size_t) sameFrom - 1] == today.second[(size_t) sameFrom - 1])
+                        --sameFrom;
+                    logMessage("  identical to the unpumped render from " + juce::String(1000.0 * sameFrom / kRate, 0) + " ms");
+                    expect(sameFrom < switchAt + (int) (5.0 * kRate), "never rejoined the unpumped render: "
+                                                                          + juce::String(sameFrom));
+                    expect(sameFrom > switchAt, "it released at once");
+                    expectEquals(engine.pumpDuckDb(), 0.0f);
+                }
+            }
+
+            beginTest("a fresh render of a project whose pump is off never pumps, even with roles on the wire");
+            {
+                // what every per-stem export and audition sends (the pump off, roles kept): a fresh
+                // engine has no duck to release, so not a sample is routed through the pump
+                const auto offWithRoles =
+                    render(makeProject({ { hotKick, Role::key }, { pad, Role::pumped }, { bass } }, std::nullopt), total,
+                           { 300 });
+                const auto noRoles = render(makeProject({ { hotKick }, { pad }, { bass } }, std::nullopt), total, { 300 });
+                expect(sameBits(offWithRoles.first, noRoles.first) && sameBits(offWithRoles.second, noRoles.second));
+            }
+
             beginTest("the reverb send is not pumped: once the dry rows end, the room is the same with the pump on and off");
             {
                 const int longer = 2 * kBarSamples;

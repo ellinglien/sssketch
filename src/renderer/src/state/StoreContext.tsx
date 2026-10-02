@@ -15,7 +15,7 @@ import { createEngineOwnershipTracker, type EngineOwner } from '@shared/engineOw
 import { createSequentialRunner } from '@shared/sequentialAsync'
 import { useSyncExternalStoreWithSelector } from 'use-sync-external-store/with-selector'
 import { createHistoryState, historyReducer, type HistoryAction } from './history'
-import { buildEngineProject } from '@shared/buildEngineProject'
+import { buildEngineProject, type BuildEngineProjectOptions } from '@shared/buildEngineProject'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { loopLengthBars } from './selectors'
 import { isWithinManualSeekGrace } from './manualSeek'
@@ -89,7 +89,11 @@ const RestoreStateCtx = createContext<(state: AppState, pluginStates: PluginStat
 )
 // See useFlushEngineSyncNow's own doc comment below for what this is for.
 const FlushEngineSyncNowCtx = createContext<
-  (overrides?: Partial<AppState>, shouldAbort?: () => boolean) => Promise<void>
+  (
+    overrides?: Partial<AppState>,
+    shouldAbort?: () => boolean,
+    buildOptions?: BuildEngineProjectOptions
+  ) => Promise<void>
 >(() => Promise.resolve())
 // See useEngineOwnership's own doc comment below for what this is for.
 const EngineOwnershipCtx = createContext<{
@@ -488,13 +492,19 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // never silently merged with a different caller's).
   const flushQueueRef = useRef(createSequentialRunner())
   const flushEngineSyncNow = useCallback(
-    (overrides?: Partial<AppState>, shouldAbort?: () => boolean): Promise<void> =>
+    (
+      overrides?: Partial<AppState>,
+      shouldAbort?: () => boolean,
+      buildOptions?: BuildEngineProjectOptions
+    ): Promise<void> =>
       flushQueueRef.current.run(async () => {
         if (shouldAbort?.()) return
         const project = await buildEngineProject(
           { ...stateRef.current, ...overrides },
           resolveStretchedForPlayback,
-          pluginCatalog
+          pluginCatalog,
+          undefined,
+          buildOptions
         )
         // Re-checked after the build too -- ownership (or whatever
         // condition shouldAbort tests) could have changed WHILE the build
@@ -1106,7 +1116,8 @@ export function useRestoreState(): (state: AppState, pluginStates: PluginStatesM
 // eslint-disable-next-line react-refresh/only-export-components -- context hook, not a component
 export function useFlushEngineSyncNow(): (
   overrides?: Partial<AppState>,
-  shouldAbort?: () => boolean
+  shouldAbort?: () => boolean,
+  buildOptions?: BuildEngineProjectOptions
 ) => Promise<void> {
   return useContext(FlushEngineSyncNowCtx)
 }

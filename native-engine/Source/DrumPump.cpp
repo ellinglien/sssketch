@@ -58,12 +58,8 @@ namespace sssketch
     {
         if (auto* inst = current.load(std::memory_order_acquire))
             inst->pump.reset();
-    }
-
-    float DrumPump::currentDuckDb() const
-    {
-        const auto* inst = current.load(std::memory_order_acquire);
-        return inst != nullptr ? inst->pump.meter("/pump/duck").value_or(0.0f) : 0.0f;
+        lastGain = 1.0f;
+        duckMeter.store(0.0f, std::memory_order_relaxed);
     }
 
     void DrumPump::process(double sampleRate, double depthDb, int numSamples, const float* keyL, const float* keyR,
@@ -76,7 +72,7 @@ namespace sssketch
             // No instance at this rate yet (prepareMaster builds one before a device start or an
             // export). Unducked beats both silence and allocating here.
             rateMismatches.fetch_add(1, std::memory_order_relaxed);
-            engaged = false;
+            idle();
             for (size_t t = 0; t < numTargets; ++t)
             {
                 const auto& target = targets[t];
@@ -127,6 +123,9 @@ namespace sssketch
                 }
             }
             done += n;
+            lastGain = gL[n - 1];
         }
+        if (numSamples > 0)
+            duckMeter.store(inst->pump.meter("/pump/duck").value_or(0.0f), std::memory_order_relaxed);
     }
 }

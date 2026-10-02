@@ -446,10 +446,17 @@ namespace sssketch
 
             // The drum-keyed pump (DrumPump.h; native radio sound plan, Task 9). True when the
             // project's pump is on AND it has at least one key stem and one pumped stem --
-            // decided here, off the real-time thread. When false every stem's pumpRole has been
-            // narrowed to none, so renderBlock routes exactly as before the pump existed.
+            // decided here, off the real-time thread. When it and pumpReleasing are both false
+            // every stem's pumpRole has been narrowed to none, so renderBlock routes exactly as
+            // before the pump existed.
             bool pumpActive = false;
             double pumpDepthDb = 0.0;
+            // A project with pumped stems that is NOT pumping (the pump switched off, or no key):
+            // its roles are kept so that, if the engine is still ducking from the project before,
+            // renderBlock routes the pumped rows through DrumPump at depth 0 until the duck has
+            // released (DrumPump.h, RELEASE). A fresh engine never ducks, so such a project
+            // otherwise renders exactly as one without roles.
+            bool pumpReleasing = false;
             // The pumped stems' dry sum per channel (channelGroups order), and the key stems' dry sum for the whole
             // project; sized lazily per numSamples, like the channel scratch. `mutable` for the
             // same reason. pumpTargets is reserved to the channel count here, so filling it per
@@ -549,6 +556,19 @@ namespace sssketch
             int numSamples,
             float* chOutL,
             float* chOutR) const;
+
+        /** AUDIO THREAD. The pump's routing tail of one stem, after its filter, volume, pan and
+         * send (renderBlock's finishStem): a pumped stem is summed into its channel's pumped
+         * buffer (cleared, and registered as a DrumPump target, by the channel's first pumped
+         * stem in the block: `pumpedReady`) and NOT into the channel -- returns true; anything
+         * else returns false, and the caller adds it into the channel, after which a key stem is
+         * also summed into the key buffer (addToKey). `role` is the effective role (none while
+         * the block does not route the pump). */
+        static bool routeToPumped(const ProjectSnapshot& snap, EngineStem::PumpRole role, size_t channel,
+                                  bool& pumpedReady, int numSamples, const float* stemL, const float* stemR,
+                                  float* chOutL, float* chOutR);
+        static void addToKey(const ProjectSnapshot& snap, EngineStem::PumpRole role, int numSamples,
+                             const float* stemL, const float* stemR);
 
         /** MESSAGE THREAD (drainRetiredProject). Drops the pool's voices whose id is in neither
          * the published nor the staged snapshot. */
