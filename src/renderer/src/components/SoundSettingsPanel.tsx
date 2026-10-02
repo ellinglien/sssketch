@@ -18,8 +18,10 @@
 // reloaded per frame (StoreContext's sync effect depends on state.sound: each change there is a
 // full project reload and a re-plan of the throws). Nothing is heard until the release -- there is
 // no live preview path, deliberately (a load-project per frame is not acceptable, and a light
-// live path for nine parameters is more than this panel is worth). A keyboard step (arrows) is a
-// release of its own: one change per key press.
+// live path for nine parameters is more than this panel is worth). The keyboard is the same
+// gesture: arrows held or tapped keep the value live in the slider, and the key's release (keyup,
+// or focus leaving) commits once -- a held arrow repeats at ~30 Hz and must not reload at that
+// rate. After a pointer drag the slider gives up focus, so Cmd+Z goes straight to undo.
 //
 // DEV READOUTS. In a dev build only (import.meta.env.DEV, the flag perf/radioTrace.ts and
 // perf/workCounters.ts use), the project panel polls the engine's master meters
@@ -43,7 +45,7 @@ import {
 } from '@shared/soundPanelModel'
 import { useAppSelector, useDispatch } from '../state/StoreContext'
 import { projectSoundSettings } from '../state/selectors'
-import { appSoundDefaults, forgetAppSoundDefaults } from '../state/appSoundDefaults'
+import { rememberAppSoundDefaults } from '../state/appSoundDefaults'
 
 const DEV_READOUTS = import.meta.env.DEV && import.meta.env.MODE !== 'test'
 const METER_POLL_MS = 250
@@ -105,7 +107,7 @@ const labelStyle: React.CSSProperties = {
   letterSpacing: 'var(--ra-track-eyebrow)'
 }
 
-/** A slider that keeps a drag's value to itself and commits once, on release. */
+/** A slider that keeps a drag's (or a key's) value to itself and commits once, on release. */
 function SoundSlider({
   control,
   onCommit
@@ -116,12 +118,16 @@ function SoundSlider({
   const [live, setLive] = useState<number | null>(null)
   const liveRef = useRef<number | null>(null)
   const draggingRef = useRef(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+  // The drag's window listeners, so an unmount mid-drag (the panel closed) drops them.
+  const dragEndRef = useRef<AbortController | null>(null)
+  useEffect(() => () => dragEndRef.current?.abort(), [])
   const value = live ?? control.value
   const fill = ((value - control.min) / (control.max - control.min)) * 100
 
-  // The release. `control` and `onCommit` are the ones from the drag's start (a window listener
-  // holds them): the patch depends only on the control's field, and onCommit only dispatches or
-  // merges, so neither can be stale in a way that matters.
+  // The release. `control` and `onCommit` may be the ones from the drag's start (a window
+  // listener holds them): the patch depends only on the control's field, and onCommit only
+  // dispatches or merges, so neither can be stale in a way that matters.
   function commit(): void {
     draggingRef.current = false
     const v = liveRef.current
@@ -144,23 +150,34 @@ function SoundSlider({
         step={control.step}
         value={value}
         disabled={control.disabled}
+        ref={inputRef}
         onPointerDown={() => {
           draggingRef.current = true
+          dragEndRef.current?.abort()
           // whichever ends the drag first, once; the other listener goes with it
           const ended = new AbortController()
+          dragEndRef.current = ended
           const release = (): void => {
             ended.abort()
+            dragEndRef.current = null
             commit()
+            // a focused range input would keep Cmd+Z (and arrow keys) for itself
+            inputRef.current?.blur()
           }
           window.addEventListener('pointerup', release, { signal: ended.signal })
           window.addEventListener('pointercancel', release, { signal: ended.signal })
         }}
         onChange={(e) => {
+          // live only: a drag commits on pointerup, the keyboard on keyup or blur
           const v = Number(e.target.value)
           liveRef.current = v
           setLive(v)
-          // not a drag (the keyboard): every step is its own release
-          if (!draggingRef.current) commit()
+        }}
+        onKeyUp={() => {
+          if (!draggingRef.current && liveRef.current !== null) commit()
+        }}
+        onBlur={() => {
+          if (!draggingRef.current && liveRef.current !== null) commit()
         }}
         style={{
           flex: 1,
@@ -260,10 +277,18 @@ function DevReadouts(): React.JSX.Element {
   const [meters, setMeters] = useState<SoundMeters | null>(null)
   useEffect(() => {
     let alive = true
+    let inFlight = false
     const poll = (): void => {
-      void window.rifffApi.engineGetSoundMeters().then((m) => {
-        if (alive) setMeters(m)
-      })
+      if (inFlight) return // a slow engine: skip a tick rather than queue requests
+      inFlight = true
+      void window.rifffApi
+        .engineGetSoundMeters()
+        .then((m) => {
+          if (alive) setMeters(m)
+        })
+        .finally(() => {
+          inFlight = false
+        })
     }
     poll()
     const id = setInterval(poll, METER_POLL_MS)
@@ -308,40 +333,62 @@ export function SoundSettingsPanel({
 
   // The app-wide defaults (mode `defaults` only): fetched as the panel opens, then kept here as
   // the truth while it is open -- each change is written straight back.
+  // A failed read leaves the panel saying so, its controls off: it must never write all-on plus
+  // a change over defaults it could not see.
   const [defaults, setDefaults] = useState<SoundSettings | null>(null)
+  const [defaultsLoad, setDefaultsLoad] = useState<'loading' | 'loaded' | 'failed'>('loading')
+  const [saveFailed, setSaveFailed] = useState(false)
   const defaultsRef = useRef<SoundSettings | null>(null)
   useEffect(() => {
     if (mode !== 'defaults') return
     let alive = true
-    void window.rifffApi
-      .getSoundSettings()
-      .catch(() => undefined)
-      .then((s) => {
+    window.rifffApi.getSoundSettings().then(
+      (s) => {
         if (!alive || defaultsRef.current !== null) return
         const next = normalizeSoundSettings(s)
         defaultsRef.current = next
         setDefaults(next)
-      })
+        setDefaultsLoad('loaded')
+      },
+      (err: unknown) => {
+        console.error('SoundSettingsPanel: could not read the sound defaults:', err)
+        if (alive) setDefaultsLoad('failed')
+      }
+    )
     return () => {
       alive = false
     }
   }, [mode])
 
-  /** Write the app-wide defaults, then make the renderer's memo of them fetch again (Task 2's
-   * review: forgetAppSoundDefaults), so the next new project and appSoundDefaultsNow() see them. */
+  /** Write the app-wide defaults, and tell the renderer's memo of them at once
+   * (rememberAppSoundDefaults), so the next new project and appSoundDefaultsNow() see them with no
+   * refetch gap. A failed write is said in the panel. */
   function saveDefaults(next: SoundSettings): void {
     defaultsRef.current = next
     setDefaults(next)
-    void window.rifffApi
-      .setSoundSettings(next)
-      .then(() => {
-        forgetAppSoundDefaults()
-        void appSoundDefaults()
-      })
-      .catch((err: unknown) =>
+    window.rifffApi.setSoundSettings(next).then(
+      () => {
+        rememberAppSoundDefaults(next)
+        setSaveFailed(false)
+      },
+      (err: unknown) => {
         console.error('SoundSettingsPanel: could not save the sound defaults:', err)
-      )
+        setSaveFailed(true)
+      }
+    )
   }
+
+  // Escape closes the panel, and only the panel (DiscoverRadioMenu's way: capture phase,
+  // propagation stopped, so a full-screen view's own Escape never sees it).
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 'Escape') return
+      e.stopPropagation()
+      onClose()
+    }
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
+  }, [onClose])
 
   const shown = mode === 'project' ? project : defaults
   const rows = useMemo(() => (shown ? soundPanelModel(shown) : []), [shown])
@@ -438,7 +485,9 @@ export function SoundSettingsPanel({
         </p>
 
         {shown === null ? (
-          <div style={{ fontSize: 9, color: 'var(--ra-text-3)', padding: '6px 0' }}>…</div>
+          <div style={{ fontSize: 9, color: 'var(--ra-text-3)', padding: '6px 0' }}>
+            {defaultsLoad === 'failed' ? 'could not load the sound defaults' : '…'}
+          </div>
         ) : (
           rows.map((row) => <Row key={row.stage} row={row} onCommit={commit} />)
         )}
@@ -476,6 +525,12 @@ export function SoundSettingsPanel({
             >
               reset to defaults
             </button>
+          </div>
+        )}
+
+        {mode === 'defaults' && saveFailed && (
+          <div style={{ fontSize: 9, color: 'var(--ra-text-2)', paddingTop: 6 }}>
+            could not save the sound defaults
           </div>
         )}
 

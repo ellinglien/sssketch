@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { appSoundDefaults, appSoundDefaultsNow, forgetAppSoundDefaults } from './appSoundDefaults'
+import {
+  appSoundDefaults,
+  appSoundDefaultsNow,
+  forgetAppSoundDefaults,
+  rememberAppSoundDefaults
+} from './appSoundDefaults'
 import { DEFAULT_SOUND_SETTINGS, normalizeSoundSettings } from '@shared/radioSound'
 
 describe('appSoundDefaults', () => {
@@ -57,5 +62,34 @@ describe('appSoundDefaults', () => {
     expect(appSoundDefaultsNow()).not.toBe(appSoundDefaultsNow())
     forgetAppSoundDefaults()
     expect(appSoundDefaultsNow()).toEqual(DEFAULT_SOUND_SETTINGS)
+  })
+
+  it('rememberAppSoundDefaults: appSoundDefaultsNow and appSoundDefaults see the saved settings at once, no fetch', async () => {
+    const fetch = vi.fn(async () => normalizeSoundSettings(undefined))
+    await appSoundDefaults(fetch)
+    const saved = normalizeSoundSettings(undefined)
+    saved.glue.on = false
+    saved.throws.rate = 'rare'
+    rememberAppSoundDefaults(saved)
+    saved.pump.on = false // the memo is a copy
+    const now = appSoundDefaultsNow()
+    expect(now.glue.on).toBe(false)
+    expect(now.throws.rate).toBe('rare')
+    expect(now.pump.on).toBe(true)
+    expect((await appSoundDefaults(fetch)).glue.on).toBe(false)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('rememberAppSoundDefaults wins over a fetch still in flight', async () => {
+    let resolveFetch: (v: unknown) => void = () => {}
+    const slow = (): Promise<unknown> => new Promise((r) => (resolveFetch = r))
+    const inFlight = appSoundDefaults(slow)
+    const saved = normalizeSoundSettings(undefined)
+    saved.reverb.room = 'zita'
+    rememberAppSoundDefaults(saved)
+    await Promise.resolve() // the fetch is called a microtask later
+    resolveFetch(normalizeSoundSettings(undefined))
+    await inFlight
+    expect(appSoundDefaultsNow().reverb.room).toBe('zita')
   })
 })

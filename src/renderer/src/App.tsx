@@ -2314,6 +2314,10 @@ function Frame(): React.JSX.Element {
   // Cmd/Ctrl+Z to undo, Cmd/Ctrl+Shift+Z (and the Windows-convention Ctrl+Y) to
   // redo. Skipped while focus is in a text input, same as Delete above — undoing
   // mid-typing in the tempo field should edit the field's text, not the arrangement.
+  // Only a TEXT input, though (native radio sound plan, Task 13 review): a slider,
+  // checkbox or radio has no text of its own to undo, and a range input keeps focus
+  // after a drag -- without this, Cmd+Z right after dragging a sound panel slider did
+  // nothing at all. The other global shortcuts keep their broader guard.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       const key = e.key.toLowerCase()
@@ -2322,7 +2326,10 @@ function Frame(): React.JSX.Element {
         ((e.metaKey || e.ctrlKey) && key === 'z' && e.shiftKey) || (e.ctrlKey && key === 'y')
       if (!isUndo && !isRedo) return
       const target = e.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      const textInput =
+        target?.tagName === 'INPUT' &&
+        !['range', 'checkbox', 'radio'].includes((target as HTMLInputElement).type)
+      if (textInput || target?.tagName === 'TEXTAREA') return
       e.preventDefault()
       if (isRedo) history.redo()
       else history.undo()

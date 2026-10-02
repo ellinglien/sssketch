@@ -57,3 +57,13 @@ export function forgetAppSoundDefaults(): void {
   pending = null
   resolved = null
 }
+
+/** The app-wide defaults have just been saved as `settings` (the sound panel's defaults mode,
+ * Task 13): memoise them as if a fetch had returned them, so appSoundDefaultsNow() and the next
+ * appSoundDefaults() see them at once, with no refetch gap. A fetch still in flight loses (its
+ * `pending === mine` check fails). Keeps a copy. */
+export function rememberAppSoundDefaults(settings: SoundSettings): void {
+  const copy = normalizeSoundSettings(settings)
+  pending = Promise.resolve(copy)
+  resolved = copy
+}

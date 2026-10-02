@@ -14,6 +14,7 @@
 // merge into the app-wide defaults), so the panel never builds one by hand. A slider's readout is
 // a function of the value, so the panel can label a drag's live value before it is committed.
 import {
+  MASTERING,
   REVERB_ROOMS,
   SOUND_LIMITS,
   THROW_RATES,
@@ -197,7 +198,7 @@ export function soundPanelModel(settings: DeepReadonly<SoundSettings>): SoundPan
         0.05,
         s.saturation.amount,
         off,
-        (v) => saturationDrive(v).toFixed(2)
+        (v) => pct(saturationDrive(v) / MASTERING.saturation.maxDrive)
       )
     ),
     masterStage('tone', 'tone', (off) =>
@@ -244,7 +245,7 @@ export function soundPanelModel(settings: DeepReadonly<SoundSettings>): SoundPan
           0.05,
           s.panning.width,
           !s.panning.on,
-          (v) => `±${v.toFixed(2)}`
+          pct
         )
       ]
     },
