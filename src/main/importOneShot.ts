@@ -132,15 +132,25 @@ export function importLoop(path: string, barCount: number): Rifff | null {
   const copied = copyIntoLibrary(path, 'importLoop')
   if (!copied) return null
   const { groupId, destPath, durationSec } = copied
+  return loopRifff(groupId, basename(path, '.wav'), path, destPath, durationSec, barCount)
+}
 
-  const displayName = basename(path, '.wav')
-  const bpm = bpmForLoopBars(durationSec, barCount)
+/** The one-stem loop rifff importLoop has always built -- shared with
+ * importLoopViaDecoder below so a decoded loop is built the same way. */
+function loopRifff(
+  groupId: string,
+  displayName: string,
+  sourcePath: string,
+  destPath: string,
+  durationSec: number,
+  barCount: number
+): Rifff {
   return {
     groupId,
     name: displayName,
-    bpm,
+    bpm: bpmForLoopBars(durationSec, barCount),
     barLength: barCount,
-    folderPath: path,
+    folderPath: sourcePath,
     stems: [
       {
         slot: 1,
@@ -152,6 +162,43 @@ export function importLoop(path: string, barCount: number): Rifff | null {
         barLength: barCount
       }
     ]
+  }
+}
+
+/** Decodes `sourcePath` (any format the native engine reads) to a WAV at
+ * `outputPath`, resolving that WAV's duration, or null on failure. */
+export type DecodeToWav = (sourcePath: string, outputPath: string) => Promise<number | null>
+
+/**
+ * importLoop for a file copyIntoLibrary cannot take: a linked loop that is
+ * AIFF, FLAC, MP3 or OGG (docs/superpowers/specs/2026-10-01-import-loop-
+ * folders-design.md). The decode writes straight into a new library
+ * folder, so the source is only ever read. The bar count is asked for
+ * once the real duration is known, since a non-WAV may not have had one
+ * before. Cleans up its folder on any failure, like copyIntoLibrary.
+ */
+export async function importLoopViaDecoder(
+  path: string,
+  displayName: string,
+  barCountFor: (durationSec: number) => number,
+  decode: DecodeToWav
+): Promise<Rifff | null> {
+  const groupId = randomUUID()
+  const destDir = join(libraryRoot(), groupId)
+  const destPath = join(destDir, `${displayName}.wav`)
+  try {
+    mkdirSync(destDir, { recursive: true })
+    const durationSec = await decode(path, destPath)
+    if (durationSec === null || durationSec <= 0) {
+      rmSync(destDir, { recursive: true, force: true })
+      return null
+    }
+    return loopRifff(groupId, displayName, path, destPath, durationSec, barCountFor(durationSec))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`importLoopViaDecoder: failed to import ${path}: ${message}`)
+    rmSync(destDir, { recursive: true, force: true })
+    return null
   }
 }
 

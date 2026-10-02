@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { encodeWavPCM16 } from '@shared/encodeWav'
 import {
@@ -8,7 +8,8 @@ import {
   importLoop,
   importRecordedTake,
   importRecordedStem,
-  importDiscoverLoopSeed
+  importDiscoverLoopSeed,
+  importLoopViaDecoder
 } from './importOneShot'
 
 function writeTestWav(dir: string, name: string, seconds: number, sampleRate = 44100): string {
@@ -328,5 +329,52 @@ describe('importDiscoverLoopSeed', () => {
 
   it('returns null for a path that does not exist, without throwing', () => {
     expect(importDiscoverLoopSeed('/no/such/file.wav', 120)).toBeNull()
+  })
+})
+
+describe('importLoopViaDecoder', () => {
+  it('decodes into its own library folder and builds the same loop rifff importLoop does', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-decoded-loop-test-'))
+    try {
+      const source = join(dir, 'Pad 120.flac')
+      writeFileSync(source, 'not really flac')
+      const rifff = await importLoopViaDecoder(
+        source,
+        'Pad 120',
+        () => 4,
+        async (_sourcePath, outputPath) => {
+          writeFileSync(outputPath, encodeWavPCM16([new Float32Array(8 * 8000)], 8000))
+          return 8
+        }
+      )
+      expect(rifff).not.toBeNull()
+      expect(rifff!.name).toBe('Pad 120')
+      expect(rifff!.bpm).toBeCloseTo(120, 6)
+      expect(rifff!.barLength).toBe(4)
+      expect(rifff!.folderPath).toBe(source)
+      expect(rifff!.stems[0]).toMatchObject({ slot: 1, type: 'fx', barLength: 4, durationSec: 8 })
+      expect(rifff!.stems[0].oneShot).toBeUndefined()
+      expect(rifff!.stems[0].path.endsWith('Pad 120.wav')).toBe(true)
+      expect(existsSync(rifff!.stems[0].path)).toBe(true)
+      rmSync(dirname(rifff!.stems[0].path), { recursive: true, force: true })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('leaves nothing behind when the decode fails', async () => {
+    let outputPath = ''
+    const rifff = await importLoopViaDecoder(
+      '/no/such/Pad 120.flac',
+      'Pad 120',
+      () => 1,
+      async (_s, out) => {
+        outputPath = out
+        return null
+      }
+    )
+    expect(rifff).toBeNull()
+    expect(outputPath).not.toBe('')
+    expect(existsSync(dirname(outputPath))).toBe(false)
   })
 })
