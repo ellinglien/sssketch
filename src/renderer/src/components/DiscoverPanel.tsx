@@ -170,6 +170,7 @@ import {
   initialDiscoverThrowState,
   stepDiscoverThrows,
   throwOutlivesLanding,
+  throwYieldsToLeadIn,
   type DiscoverThrowState
 } from '@shared/discoverThrows'
 import { backgroundScanGate } from '../audio/backgroundScanGate'
@@ -1833,7 +1834,19 @@ export function DiscoverPanel({
     // now, and carried it would play again a lap later; one in the next lap would be lost with
     // the swap. buildEngineProject sends it only while the project's throws are on, scaled by
     // their level.
-    const throwState = radioThrowRef.current
+    //
+    // And a hole, riser or drop-out armed after the throw was planned takes the throw back
+    // when it has not started and this push lands first (throwYieldsToLeadIn): no throw over
+    // a lead-in, which the web only checks when it plans one.
+    let throwState = radioThrowRef.current
+    if (
+      stage === undefined &&
+      gestureList.some((g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)) &&
+      throwYieldsToLeadIn(throwState)
+    ) {
+      throwState = { ...throwState, armed: null }
+      radioThrowRef.current = throwState
+    }
     const throwArmed =
       radioOnRef.current && (stage === undefined || throwOutlivesLanding(throwState, stage.atBars))
         ? throwState.armed
@@ -2001,6 +2014,9 @@ export function DiscoverPanel({
         groupId: rifff.groupId,
         slotIndexById: new Map(members.map(({ id }, i) => [id, i + 1]))
       }
+      // A project without a throw curve is now live, so a clear owed for an ended throw
+      // (radioThrowClearOwedRef) has been paid by this push: no extra one after a stage lands.
+      if (dubThrows === undefined) radioThrowClearOwedRef.current = false
 
       // The mapping is fresh and load-project has just called
       // liveOverrides().clearAll() (IpcServer.cpp:259), so this is the
@@ -2802,7 +2818,15 @@ export function DiscoverPanel({
    * With the project's throws off (or at level 0, which sends nothing) an armed throw is
    * cleared and the rule starts again from scratch when they come back on. */
   function radioThrowTick(pos: number, loopBars: number): void {
-    if (radioThrowClearOwedRef.current && radioStageRef.current === null) clearRadioThrowCurve()
+    // An owed clear, once the stage is gone -- unless a push is already on its way, which is
+    // built without the throw and pays it (buildAndPushPreview).
+    if (
+      radioThrowClearOwedRef.current &&
+      radioStageRef.current === null &&
+      liveSyncInFlightRef.current === 0 &&
+      pendingSyncRafRef.current === null
+    )
+      clearRadioThrowCurve()
     const throws = normalizeSoundSettings(sound ?? appSoundDefaultsNow()).throws
     if (!throws.on || !(throws.level > 0)) {
       resetRadioThrows(true)

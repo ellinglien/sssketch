@@ -4,6 +4,8 @@ import {
   buildEngineRisers,
   buildEngineSound,
   engineDubFor,
+  engineSoundSaysNothing,
+  isDubOnlyToolkit,
   timelineStemPans,
   timelineStemPumpRoles,
   withoutDubThrows,
@@ -1500,9 +1502,23 @@ describe('dub throws on the wire (native radio sound plan, Task 10)', () => {
       expect(phoneLoopFingerprint(withoutDubThrows(thrown))).toBe(phoneLoopFingerprint(plain))
       // the input is left as it was
       expect(thrown.rifffs[0].stems[1].toolkit?.automation.dubSend).toEqual(curve)
+      // the shared predicates: stem 2's toolkit only carries the throw
+      expect(isDubOnlyToolkit(thrown.rifffs[0].stems[1].toolkit!)).toBe(true)
+      expect(engineSoundSaysNothing(plain.sound ?? { room: 'zita' })).toBe(
+        plain.sound === undefined
+      )
     }
     // with no throws it is the same project
     const plain = await buildEngineProject(states[0], vi.fn(), emptyCatalog, {}, {})
     expect(withoutDubThrows(plain)).toEqual(plain)
+    // a toolkit with its own send is not a do-nothing one
+    const beside = await buildEngineProject(
+      states[0],
+      vi.fn(),
+      emptyCatalog,
+      {},
+      plan([[stemKey('r1', 1), curve]])
+    )
+    expect(isDubOnlyToolkit(beside.rifffs[0].stems[0].toolkit!)).toBe(false)
   })
 })

@@ -36,6 +36,16 @@ export const THROW_LEAD_BARS = 1
 export const THROW_MAX_BARS = THROW_BEATS[1] / 4
 const BEAT_BARS = 1 / 4
 const EPS = 1e-9
+/** A playhead that moved back counts as a WRAP only when the lap it skipped plus the new
+ * position is at most this much: the last tick near the loop's end, this one near its top.
+ * A 30 Hz tick covers ~0.025 bar at 180 bpm; the slack is for a late tick (a GC pause). */
+export const THROW_WRAP_WINDOW_BARS = 0.5
+/** A step back at most this long, mid-lap, is jitter in the position stream: no bars go by,
+ * and an armed throw stays. Anything longer back (and not a wrap) is a SEEK. */
+export const THROW_JITTER_BARS = 0.05
+/** A throw that starts at least this far ahead can still be taken back by a push without
+ * cutting into it (load-project lands within 0.22 bar). */
+export const THROW_RECALL_BARS = 0.25
 
 /** The first beat at or after `bars`, on the loop's own beat grid (4/4 from the loop top). */
 function ceilBeat(bars: number): number {
@@ -67,6 +77,20 @@ export function throwStartAhead(
   if (next + maxBars <= loopBars + EPS && next + maxBars <= pos + EPS)
     return { ahead: loopBars - pos + next, atBar: next }
   return null
+}
+
+/** How the playhead got from `lastPos` (in a loop of `lastLoopBars`) to `pos`, and the bars
+ * played on the way. See stepDiscoverThrows. */
+export function playheadStep(
+  lastPos: number,
+  lastLoopBars: number,
+  pos: number
+): { kind: 'forward' | 'wrap' | 'jitter' | 'seek'; played: number } {
+  if (pos >= lastPos) return { kind: 'forward', played: pos - lastPos }
+  const wrapped = Math.max(0, lastLoopBars - lastPos) + pos
+  if (wrapped <= THROW_WRAP_WINDOW_BARS + EPS) return { kind: 'wrap', played: wrapped }
+  if (lastPos - pos <= THROW_JITTER_BARS + EPS) return { kind: 'jitter', played: 0 }
+  return { kind: 'seek', played: 0 }
 }
 
 /** A throw as Discover arms it. */
@@ -128,8 +152,10 @@ export interface DiscoverThrowTick {
  * do not call stepThrows at all; the bars they cover still count at its next call (it measures
  * from its own last `now`), so a due throw just waits.
  *
- * The clock: a playhead that moved back is a wrap -- the rest of the last lap plus the new
- * position (a seek back counts the same, which can only end a throw early, never late).
+ * The clock (playheadStep): forward is bars played (a seek forward included); back across the
+ * loop top from its last stretch is a wrap (the rest of the last lap plus the new position);
+ * a tiny step back mid-lap is jitter (nothing played); any other step back is a seek --
+ * nothing played, and an armed throw ends (the playhead and the throw's bars no longer agree).
  */
 export function stepDiscoverThrows(
   state: DiscoverThrowState,
@@ -138,11 +164,11 @@ export function stepDiscoverThrows(
 ): { state: DiscoverThrowState; change: 'armed' | 'ended' | null } {
   const secPerBar = (4 * 60) / tick.bpm
   let delta = 0
+  let seek = false
   if (state.lastPos !== null && tick.playing) {
-    delta =
-      tick.pos >= state.lastPos
-        ? tick.pos - state.lastPos
-        : Math.max(0, state.lastLoopBars - state.lastPos) + tick.pos
+    const moved = playheadStep(state.lastPos, state.lastLoopBars, tick.pos)
+    delta = moved.played
+    seek = moved.kind === 'seek'
   }
   const next: DiscoverThrowState = {
     ...state,
@@ -155,7 +181,7 @@ export function stepDiscoverThrows(
   if (next.armed !== null) {
     // stopped: the playhead can come back anywhere (a stop puts it at the top), so the throw
     // is off rather than left to fire wherever the clock and the playhead now disagree
-    if (!tick.playing || next.elapsedBars >= next.armed.endBars - EPS) {
+    if (!tick.playing || seek || next.elapsedBars >= next.armed.endBars - EPS) {
       next.armed = null
       return { state: next, change: 'ended' }
     }
@@ -236,4 +262,15 @@ export function discoverThrowSends(
     echo: { timing: armed.timing, feedback: armed.feedback },
     sends: new Map([[stemKey(groupId, own), curve]])
   }
+}
+
+/**
+ * Whether a leading gesture (a hole, riser or drop-out) being armed should take the armed throw
+ * back: when the throw has not started and is far enough ahead that the push carrying the
+ * gesture lands before it (THROW_RECALL_BARS). stepThrows never plans a throw over an armed
+ * lead-in; this covers a lead-in armed after the throw was planned (the web has that gap). A
+ * throw already under way, or about to be, is left to finish: taking it back would cut it.
+ */
+export function throwYieldsToLeadIn(state: DiscoverThrowState): boolean {
+  return state.armed !== null && state.armed.startBars - state.elapsedBars >= THROW_RECALL_BARS
 }

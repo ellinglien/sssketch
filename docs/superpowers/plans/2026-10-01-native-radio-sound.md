@@ -893,6 +893,14 @@ The delay is `delayBeats × 60 / bpm`. A settings change is taken only while the
     - **Over a hole or riser, as the web:** `leadingArmed` is checked when a throw is planned, not after. A hole or riser armed later in the same lap can share it with a throw already planned (the web has the same gap).
     - **Delays.** A due throw waits while a stage is pending or a change waits for the loop top, so around radio's changes throws come a little later than the rate says.
     - The throws use `Math.random` (the web's controller has its own random); nothing is seeded, as nothing needs to repeat live.
+  - **Review follow-up (2026-10-02):**
+    - **`held`.** Discover's radio has no listener Hold (the web's `hold` event); `held` = the transport not playing is a stand-in.
+    - **The clock tells a wrap from a seek** (`playheadStep`). The first version counted any step back as a wrap, so jitter in the position stream mid-lap ended an armed throw early and brought the next one early. Now a step back is a **wrap** only when the rest of the last lap plus the new position is at most `THROW_WRAP_WINDOW_BARS` (0.5 bar; a 30 Hz tick is ~0.025 bar at 180 bpm, the slack is for a late tick); **jitter** when it is at most `THROW_JITTER_BARS` (0.05 bar) mid-lap (nothing played, the throw stays); otherwise a **seek** (nothing played, an armed throw ends). Tested case by case (3.98 → 0.02 a wrap, 2.40 → 2.38 jitter, 2.40 → 0.50 and 3.9 → 1.0 seeks).
+    - **A lead-in armed after a throw takes it back** (`throwYieldsToLeadIn`): when a hole, riser or drop-out is in a live push and the armed throw starts at least `THROW_RECALL_BARS` (0.25 bar, past load-project's 0.22) ahead, that push drops it. One under way, or about to be, finishes (taking it back would cut it). The web's gap (checked only at planning) is closed for Discover.
+    - **No extra load-project after a stage lands.** The owed clear is paid by any live push that goes out without a throw curve (`radioThrowClearOwedRef` cleared after the push's bail-out checks), and the tick pushes for it only when no push is pending or in flight.
+    - **`withoutDubThrows` uses the builder's own predicates**, `isDubOnlyToolkit` and `engineSoundSaysNothing` (both exported from `buildEngineProject.ts`, the latter also used by `buildEngineSound`), so taking a throw off cannot drift from putting it on.
+    - **The off-switch click** (above, "live stopping mid-throw") is being fixed natively by a separate de-click change; that commit notes itself.
+    - Vitest 4090 (was 4085): `discoverThrows` 25 (+5: the four playhead cases and `playheadStep`; `throwYieldsToLeadIn`); `buildEngineProject` checks the predicates in the `withoutDubThrows` test.
 
 **Walkthrough (Discover, radio on, throws on at `normal`, a loop of 2+ bars with drums, bass and two other rows):**
 1. Within ~16–32 bars a row that is not drums or bass opens into the echo for a beat or two, on a beat, then rings out darker. It happens again 16–32 bars later, not every lap.
@@ -904,7 +912,9 @@ The delay is `delayBeats × 60 / bpm`. A settings change is taken only while the
 
 **Elling listens:** occasional in-time echoes on leads and pads, never drums or bass, darker each repeat, none while held or over a hole or riser; the rate setting.
 - **added 2026-10-02:** a throw never crosses the loop top, so none starts in a lap's last half bar (the web's rows have no common loop top and can); a loop under 1.5 bars never throws. Missed?
-- switching throws or radio off while a throw is open (half a bar at most): a click into the echo?
+- switching throws or radio off while a throw is open (half a bar at most): a click into the echo? (a native de-click is landing separately)
+- **pre-existing, gestures too:** pushes go through `requestAnimationFrame`, which the browser throttles while the window is minimised or hidden. A throw's clear could be parked there, so its curve replays every lap until the window is visible again. Radio in the background for long stretches: listen for a throw that repeats.
+- **decision for Elling:** the 1-bar lead means loops under 1.5 bars never throw. A ~0.3-bar lead (still past load-project's 0.22) would let a 1-bar loop throw. Wanted?
 
 ---
 

@@ -338,8 +338,14 @@ export function buildEngineSound(
   if (reverbReturn !== 1) wire.reverbReturn = reverbReturn
   if (s.pump.on) wire.pump = { depthDb: s.pump.depthDb }
   if (echo && s.throws.on && s.throws.level > 0) wire.dub = engineDubFor(echo)
-  const saysNothing = wire.room === 'zita' && Object.keys(wire).length === 1
-  return saysNothing ? undefined : wire
+  return engineSoundSaysNothing(wire) ? undefined : wire
+}
+
+/** A `sound` block that carries nothing but today's behaviour: zita at today's return, every
+ * stage off -- which buildEngineSound leaves off the wire. Shared with withoutDubThrows, so the
+ * two cannot disagree on it. */
+export function engineSoundSaysNothing(wire: EngineSound): boolean {
+  return wire.room === 'zita' && Object.keys(wire).length === 1
 }
 
 export interface EngineMasterChainSlot {
@@ -618,6 +624,17 @@ function dubSendsSent(
     if (points.some((p) => p.value > 0)) out.set(key, points)
   }
   return out
+}
+
+/** Whether a toolkit, its dub send aside, is dubOnlyToolkit: one built only to carry a throw.
+ * Shared with withoutDubThrows, so taking a throw off cannot drift from putting it on. (An own
+ * toolkit is never this: buildStemToolkit drops a neutral one.) */
+export function isDubOnlyToolkit(toolkit: EngineStemToolkit): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { dubSend, ...automation } = toolkit.automation
+  return (
+    JSON.stringify({ ...toolkit, automation }) === JSON.stringify(dubOnlyToolkit(toolkit.originBar))
+  )
 }
 
 /** A toolkit that does nothing but carry a dub send (the engine keeps such a stem off the
@@ -955,7 +972,8 @@ export async function buildEngineProject(
 /**
  * The project as it would have been built with no `dubThrows`: every stem's `dubSend` taken off
  * (and a toolkit that only carried one, dubOnlyToolkit, taken off with it), and `sound.dub` with
- * it (and the whole `sound` block, if the echo was all it said). For Discover's phone loop
+ * it (and the whole `sound` block, if the echo was all it said) -- through the builder's own
+ * predicates, isDubOnlyToolkit and engineSoundSaysNothing. For Discover's phone loop
  * (native radio sound plan, Task 11): a live throw is a one-off, and the phone renders the loop
  * once and plays it on repeat -- with the throw baked in it would echo every lap there, and each
  * throw would re-render (and re-download) the loop twice. Equal, field for field and key order
@@ -969,15 +987,14 @@ export function withoutDubThrows(project: EngineProject): EngineProject {
       const toolkit = stem.toolkit
       if (toolkit?.automation.dubSend === undefined) return stem
       stemsTouched = true
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
-      const { dubSend, ...automation } = toolkit.automation
-      const rest: EngineStemToolkit = { ...toolkit, automation }
-      if (JSON.stringify(rest) === JSON.stringify(dubOnlyToolkit(toolkit.originBar))) {
+      if (isDubOnlyToolkit(toolkit)) {
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const { toolkit: _dropped, ...bare } = stem
         return bare
       }
-      return { ...stem, toolkit: rest }
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { dubSend, ...automation } = toolkit.automation
+      return { ...stem, toolkit: { ...toolkit, automation } }
     })
     if (!stemsTouched) return rifff
     touched = true
@@ -987,8 +1004,7 @@ export function withoutDubThrows(project: EngineProject): EngineProject {
   if (project.sound?.dub !== undefined) {
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { dub, ...sound } = project.sound
-    // buildEngineSound's "says nothing" rule: zita at today's return and nothing else
-    if (sound.room === 'zita' && Object.keys(sound).length === 1) delete out.sound
+    if (engineSoundSaysNothing(sound)) delete out.sound
     else out.sound = sound
   }
   return out

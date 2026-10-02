@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest'
 import {
   THROW_LEAD_BARS,
   THROW_MAX_BARS,
+  THROW_RECALL_BARS,
   discoverThrowSends,
   initialDiscoverThrowState,
+  playheadStep,
   stepDiscoverThrows,
   throwOutlivesLanding,
   throwStartAhead,
+  throwYieldsToLeadIn,
   type DiscoverThrow,
   type DiscoverThrowState,
   type DiscoverThrowTick
@@ -243,8 +246,23 @@ describe('stepDiscoverThrows', () => {
     expect(r.state.elapsedBars).toBe(s.elapsedBars) // no bars go by while stopped
   })
 
-  it('a seek back counts as a wrap: an armed throw can only end early, never late', () => {
-    let s: DiscoverThrowState = initialDiscoverThrowState()
+  describe('the playhead going back: a wrap, jitter or a seek', () => {
+    // a throw armed at 2.5-3 of a 4-bar lap, the playhead last seen at `lastPos`
+    const armedAt = (lastPos: number, start = 42.5): DiscoverThrowState => ({
+      ...initialDiscoverThrowState(),
+      elapsedBars: 40 + lastPos,
+      lastPos,
+      lastLoopBars: 4,
+      armed: {
+        slotId: 'lead',
+        atBar: start - 40,
+        beats: 2,
+        timing: 'quarter',
+        feedback: 0.5,
+        startBars: start,
+        endBars: start + 0.5
+      }
+    })
     const tick = (pos: number): DiscoverThrowTick => ({
       pos,
       loopBars: 4,
@@ -255,17 +273,75 @@ describe('stepDiscoverThrows', () => {
       rows,
       everyBars: [8, 16]
     })
-    const rnd = seededRandom(1)
-    let pos = 0
-    while (s.armed === null) {
-      s = stepDiscoverThrows(s, tick(pos % 4), rnd).state
-      pos += 0.01
+    const rnd = (): number => 0.5
+
+    it('a wrap (3.98 -> 0.02): the 0.04 bar across the top is played, the throw stays', () => {
+      const s = armedAt(3.98, 44.5)
+      const r = stepDiscoverThrows(s, tick(0.02), rnd)
+      expect(r.change).toBeNull()
+      expect(r.state.elapsedBars).toBeCloseTo(44.02, 9)
+      expect(r.state.armed).toBe(s.armed)
+    })
+
+    it('jitter mid-lap (2.40 -> 2.38): nothing played, the throw stays', () => {
+      const s = armedAt(2.4)
+      const r = stepDiscoverThrows(s, tick(2.38), rnd)
+      expect(r.change).toBeNull()
+      expect(r.state.elapsedBars).toBe(s.elapsedBars)
+      expect(r.state.armed).toBe(s.armed)
+    })
+
+    it('a seek back mid-lap (2.40 -> 0.50): nothing played, the throw ends', () => {
+      const s = armedAt(2.4)
+      const r = stepDiscoverThrows(s, tick(0.5), rnd)
+      expect(r.change).toBe('ended')
+      expect(r.state.elapsedBars).toBe(s.elapsedBars)
+      expect(r.state.armed).toBeNull()
+    })
+
+    it('a seek back from late in the lap to well past the top (3.9 -> 1.0) is a seek, not a wrap', () => {
+      const s = armedAt(3.9, 44.5)
+      const r = stepDiscoverThrows(s, tick(1), rnd)
+      expect(r.change).toBe('ended')
+      expect(r.state.elapsedBars).toBe(s.elapsedBars)
+    })
+
+    it('playheadStep names each', () => {
+      expect(playheadStep(1, 4, 1.5)).toEqual({ kind: 'forward', played: 0.5 })
+      expect(playheadStep(3.9, 4, 0.1).kind).toBe('wrap')
+      expect(playheadStep(3.9, 4, 0.1).played).toBeCloseTo(0.2, 12)
+      // the loop grew at the wrap: the old length is what was skipped
+      expect(playheadStep(1.95, 2, 0.05).played).toBeCloseTo(0.1, 12)
+      expect(playheadStep(2, 4, 1.97)).toEqual({ kind: 'jitter', played: 0 })
+      expect(playheadStep(2, 4, 1)).toEqual({ kind: 'seek', played: 0 })
+      expect(playheadStep(0.3, 4, 0.1)).toEqual({ kind: 'seek', played: 0 })
+    })
+  })
+})
+
+describe('throwYieldsToLeadIn (a hole or riser armed after a throw was planned)', () => {
+  const s = (elapsedBars: number, startBars: number): DiscoverThrowState => ({
+    ...initialDiscoverThrowState(),
+    elapsedBars,
+    lastPos: 0,
+    lastLoopBars: 4,
+    armed: {
+      slotId: 'lead',
+      atBar: 0,
+      beats: 1,
+      timing: 'quarter',
+      feedback: 0.5,
+      startBars,
+      endBars: startBars + 0.25
     }
-    const t = s.armed
-    // jump the playhead back to just after the loop top, before the throw
-    const r = stepDiscoverThrows(s, tick(0.05), rnd)
-    expect(r.state.elapsedBars).toBeGreaterThan(s.elapsedBars)
-    if (r.change !== 'ended') expect(r.state.armed).toBe(t)
+  })
+
+  it('a throw still far enough ahead gives way; one under way, or about to be, finishes', () => {
+    expect(throwYieldsToLeadIn(s(10, 11))).toBe(true)
+    expect(throwYieldsToLeadIn(s(10, 10 + THROW_RECALL_BARS))).toBe(true)
+    expect(throwYieldsToLeadIn(s(10, 10.1))).toBe(false)
+    expect(throwYieldsToLeadIn(s(10, 9.9))).toBe(false)
+    expect(throwYieldsToLeadIn(initialDiscoverThrowState())).toBe(false)
   })
 })
 
