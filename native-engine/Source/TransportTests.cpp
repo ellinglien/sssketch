@@ -1106,6 +1106,66 @@ namespace sssketch
                            "the first blocks after a stop are not the export's");
                 }
 
+                beginTest("master stage: a device (re)start (audioDeviceAboutToStart) resets it -- the limiter's line "
+                          "and the glue start empty, so the next play renders the export's first block");
+                {
+                    // The smallest real device: just what audioDeviceAboutToStart reads.
+                    struct StubDevice : juce::AudioIODevice
+                    {
+                        StubDevice() : juce::AudioIODevice("stub", "stub") {}
+                        juce::StringArray getOutputChannelNames() override { return { "l", "r" }; }
+                        juce::StringArray getInputChannelNames() override { return {}; }
+                        juce::Array<double> getAvailableSampleRates() override { return { kRate }; }
+                        juce::Array<int> getAvailableBufferSizes() override { return { 512 }; }
+                        int getDefaultBufferSize() override { return 512; }
+                        juce::String open(const juce::BigInteger&, const juce::BigInteger&, double, int) override { return {}; }
+                        void close() override {}
+                        bool isOpen() override { return true; }
+                        void start(juce::AudioIODeviceCallback*) override {}
+                        void stop() override {}
+                        bool isPlaying() override { return false; }
+                        juce::String getLastError() override { return {}; }
+                        int getCurrentBufferSizeSamples() override { return 512; }
+                        double getCurrentSampleRate() override { return kRate; }
+                        int getCurrentBitDepth() override { return 32; }
+                        juce::BigInteger getActiveOutputChannels() const override { return 3; }
+                        juce::BigInteger getActiveInputChannels() const override { return 0; }
+                        int getOutputLatencyInSamples() override { return 0; }
+                        int getInputLatencyInSamples() override { return 0; }
+                    } stub;
+
+                    auto project = makeProject(SoundSettings::Mastering {});
+                    project.sound.glue = SoundSettings::Glue {};
+                    const auto exported = renderExport(project);
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.audioDeviceAboutToStart(&stub); // the first start: prepares at the rate
+                    engine.setProject(project);
+                    transport.setBpm(kBpm);
+                    std::vector<float> l(512), r(512);
+                    float* channels[2] = { l.data(), r.data() };
+                    transport.play(0.0);
+                    for (int i = 0; i < 60; ++i) // a hot mix mid-play: the line full, the glue down
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                    // A restart (a buffer-size change, a device switch) with no stop: the stage
+                    // must not replay the last 75 samples, nor carry the glue's reduction.
+                    transport.audioDeviceAboutToStart(&stub);
+                    transport.play(0.0);
+                    std::vector<float> again(2048);
+                    for (int b = 0; b < 4; ++b)
+                    {
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, 512, {});
+                        std::copy(l.begin(), l.end(), again.begin() + b * 512);
+                    }
+                    expect(std::memcmp(again.data(), exported.first.data(), again.size() * sizeof(float)) == 0,
+                           "after a device restart the first blocks are not the export's");
+                    expect(again[(size_t) MasterStage::kLatencySamples - 1] == 0.0f, "the limiter's line was not empty");
+                    engine.drainRetiredProject();
+                }
+
                 beginTest("master stage: the device's rate reaches it (prepareMaster), and a mismatched block passes through");
                 {
                     StemBufferCache cache;
