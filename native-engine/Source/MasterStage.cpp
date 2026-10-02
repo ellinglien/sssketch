@@ -20,12 +20,11 @@ namespace sssketch
     {
         limiter.reset();
         engaged = false;
-        seeded = false;
         fadeLeft = 0;
         gainRampLeft = 0;
     }
 
-    void MasterStage::Instance::process(const SoundSettings::Mastering* settings, int numSamples, float* l, float* r)
+    void MasterStage::Instance::process(const SoundSettings::Mastering* settings, bool fadeOnEngage, int numSamples, float* l, float* r)
     {
         if (settings != nullptr)
         {
@@ -36,12 +35,11 @@ namespace sssketch
                 fadingIn = true;
                 gain = gainTarget = target;
                 gainRampLeft = 0;
-                if (seeded)
+                if (fadeOnEngage)
                 {
                     // Switched on while sounding: start the limiter clean (its line holds
                     // whatever it last saw, possibly long ago) and fade it in.
                     limiter.reset();
-                    fadingIn = true;
                     fadeLeft = fadeSamples;
                 }
                 else
@@ -79,7 +77,6 @@ namespace sssketch
                 }
             }
         }
-        seeded = true;
 
         for (int done = 0; done < numSamples && engaged;)
         {
@@ -181,8 +178,15 @@ namespace sssketch
 
     void MasterStage::reset()
     {
+        sounded = false;
         if (auto* inst = current.load(std::memory_order_acquire))
             inst->reset();
+    }
+
+    int MasterStage::currentLatencySamples() const
+    {
+        const auto* inst = current.load(std::memory_order_acquire);
+        return inst != nullptr && inst->engaged ? kLatencySamples : 0;
     }
 
     void MasterStage::process(const SoundSettings::Mastering* settings, double sampleRate, int numSamples, float* l, float* r)
@@ -198,6 +202,12 @@ namespace sssketch
             }
         }
 
+        // Whether anything has gone through since construction or reset(), this block not
+        // counted: an engage then crossfades in rather than cutting. Set on every call, off ones
+        // included -- a flag, not a sample.
+        const bool hadSounded = sounded;
+        sounded = true;
+
         auto* inst = current.load(std::memory_order_acquire);
         if (settings == nullptr && (inst == nullptr || ! inst->engaged))
             return;
@@ -208,6 +218,6 @@ namespace sssketch
             rateMismatches.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        inst->process(settings, numSamples, l, r);
+        inst->process(settings, hadSounded, numSamples, l, r);
     }
 }

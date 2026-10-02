@@ -754,6 +754,7 @@ namespace sssketch
                 repositionElapsedSec = 0.0;
             }
             repositionFadingIn = false;
+            repositionHoldSec = 0.0;
         }
 
         const double blockDurationSec = numSamples / deviceSampleRate;
@@ -770,7 +771,10 @@ namespace sssketch
             engine.processMaster(deviceSampleRate, numSamples, outL, outR);
             for (int i = 0; i < numSamples; ++i)
             {
-                const double elapsed = repositionElapsedSec + (double) i / deviceSampleRate;
+                // The fade-in starts repositionHoldSec late (0 unless the master stage is on;
+                // see where it is set below), so the jump lands under silence.
+                const double elapsed = repositionElapsedSec + (double) i / deviceSampleRate
+                    - (repositionFadingIn ? repositionHoldSec : 0.0);
                 const double frac = std::clamp(elapsed / kRepositionFadeSec, 0.0, 1.0);
                 const float gain = (float) (repositionFadingIn ? frac : 1.0 - frac);
                 outL[i] *= gain;
@@ -786,12 +790,18 @@ namespace sssketch
                     positionBars.store(repositionTarget.load());
                     repositionFadingIn = true;
                     repositionElapsedSec = 0.0;
+                    // The jump happens at the master stage's INPUT, but this fade is applied at
+                    // its output: with the limiter in, the next 75 samples out of it are still
+                    // the old position's (unfaded) audio. Hold at silence that much longer
+                    // before fading in, so they play at gain 0 and the new audio arrives at the
+                    // start of the fade, as it does with the stage off. Off: 0, today's timing.
+                    repositionHoldSec = engine.masterLatencySamples() / deviceSampleRate;
                 }
             }
             else
             {
                 positionBars.store(newPos);
-                if (repositionElapsedSec >= kRepositionFadeSec)
+                if (repositionElapsedSec >= kRepositionFadeSec + repositionHoldSec)
                     repositioning = false;
             }
             return;
@@ -837,6 +847,13 @@ namespace sssketch
     {
         deviceSampleRate = device->getCurrentSampleRate();
         deviceBlockSize = device->getCurrentBufferSizeSamples();
+        // A restart (at the same rate too, where prepareMaster below rebuilds nothing) must not
+        // replay the last 75 samples left in the limiter's line, or fade in from them. No
+        // callback is running here -- JUCE's AudioDeviceManager calls this before the device
+        // starts, under its audioCallbackLock (which every callback also takes), or before this
+        // callback is (re)added to its list -- so this is the "no process() in flight" reset()
+        // needs.
+        engine.resetMaster();
         // Called by JUCE on the thread that starts the device (the message thread, from
         // openDevice/setAudioDeviceSetup or a restart), before any callback at the new rate:
         // the master stage's limiter is rebuilt at it there, never on the audio thread. A

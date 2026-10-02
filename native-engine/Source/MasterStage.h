@@ -29,17 +29,26 @@ namespace sssketch
      * of the same project; its length is unchanged, so the last 75 samples stay in the line.
      *
      * Switching mastering on or off while sounding crossfades between the dry signal and the
-     * limited one over kFadeSec, rather than stepping by the trim and jumping 75 samples. The
-     * first block after a fresh instance or a reset() engages at once, with no fade: an export
-     * starts there, and so does live playback from a stop -- which is what keeps the two
-     * identical. During a crossfade the ceiling is not guaranteed (the dry part is unlimited).
+     * limited one over kFadeSec, rather than stepping by the trim and jumping 75 samples.
+     * "Sounding" is the stage's own: any process() call since construction or the last reset()
+     * counts, mastering on or off (an off block only sets a flag; its samples stay untouched).
+     * So switching on in the middle of a play that started with mastering off fades in, as does
+     * switching back on. Only the very first process() after construction or a reset() engages
+     * at once, with no fade: an export starts there, and so does live playback from a stop --
+     * which is what keeps the two identical. During a crossfade the ceiling is not guaranteed
+     * (the dry part is unlimited).
      *
      * THREADING. Two sides, the house pattern (PluginChain's slots): the message thread builds a
      * whole Instance for a sample rate (prepare(): the Faust object, its scratch) and parks it in
      * `pending`; the audio thread promotes it at the top of its next process() call, parking the
      * one it displaces in `retired`; the message thread frees that in drainRetired(). The audio
      * thread never allocates, frees or locks: with `retired` still occupied it leaves the new
-     * instance pending and tries again next block. */
+     * instance pending and tries again next block. Those deferred blocks run on the old
+     * instance, at the old rate -- so after a SECOND rate change before the first's retirement
+     * is collected, blocks at the new rate pass through unlimited (counted in
+     * rateMismatchCount) until the drain. PlaybackEngine::drainRetiredProject collects it: the
+     * IPC connection calls that on every message it receives, ~30 times a second while playing,
+     * and every 750 ms regardless, so the window is one message-thread tick, tens of ms. */
     class MasterStage
     {
     public:
@@ -72,10 +81,16 @@ namespace sssketch
         void process(const SoundSettings::Mastering* settings, double sampleRate, int numSamples, float* l, float* r);
 
         /** AUDIO THREAD (or with no process() in flight). Clears the limiter's lookahead and
-         * envelope, and makes the next block that has mastering on engage at once, as a fresh
-         * stage does. Transport calls it once a stop or pause has faded out, so the next play
-         * does not start with the last 75 samples of the previous one. */
+         * envelope, and forgets that the stage has sounded: the next process() is a fresh
+         * stage's, engaging at once if it has mastering on. Transport calls it once a stop or
+         * pause has faded out, so the next play does not start with the last 75 samples of the
+         * previous one, and when the device (re)starts. */
         void reset();
+
+        /** AUDIO THREAD. How late the stage's output is right now: kLatencySamples while the
+         * limited signal is in it (fully or partly, during a crossfade), else 0. Transport's
+         * seek holds at silence this much longer, so the jump lands under silence. */
+        int currentLatencySamples() const;
 
         /** How many blocks were passed through because the instance's rate did not match. */
         unsigned long long rateMismatchCount() const { return rateMismatches.load(std::memory_order_relaxed); }
@@ -101,13 +116,14 @@ namespace sssketch
             int gainRampLeft = 0;
 
             bool engaged = false; // the limited signal is (at least partly) in the output
-            bool seeded = false;  // false: the next engage is immediate, with no fade
             int fadeLeft = 0;     // samples of crossfade still to run
             bool fadingIn = true;
             SoundSettings::Mastering held {}; // the settings a fade-out keeps running on
 
             void reset();
-            void process(const SoundSettings::Mastering* settings, int numSamples, float* l, float* r);
+            /** `fadeOnEngage`: the stage has sounded since it was built or reset, so an engage
+             * here crossfades in; otherwise it is immediate. */
+            void process(const SoundSettings::Mastering* settings, bool fadeOnEngage, int numSamples, float* l, float* r);
             void processChunk(const SoundSettings::Mastering& m, int n, float* l, float* r);
         };
 
@@ -115,6 +131,7 @@ namespace sssketch
         std::atomic<Instance*> pending { nullptr };
         std::atomic<Instance*> retired { nullptr };
         double builtRate = 0.0; // message thread only
+        bool sounded = false;   // audio thread only: a process() call since construction or reset()
         std::atomic<unsigned long long> rateMismatches { 0 };
     };
 }

@@ -321,10 +321,9 @@ namespace sssketch
                 MasterStage stage;
                 stage.prepare(rate);
                 auto out = in;
-                stage.process(nullptr, rate, 4000, out.l.data(), out.r.data()); // seeds nothing
-                // a first engage after an off block that touched nothing is still the stage's
-                // first: immediate. Engage, switch off, then on again to get a real fade-in.
-                stage.process(&defaults, rate, 4000, out.l.data() + 4000, out.r.data() + 4000);
+                // Engage straight away (a fresh stage: immediate), switch off, then on again. The
+                // on-from-a-play-that-started-off case is the next test.
+                stage.process(&defaults, rate, 8000, out.l.data(), out.r.data());
                 stage.process(nullptr, rate, 4000, out.l.data() + 8000, out.r.data() + 8000);
                 stage.process(&defaults, rate, 8000, out.l.data() + 12000, out.r.data() + 12000);
                 float maxStep = 0.0f;
@@ -338,6 +337,83 @@ namespace sssketch
                 for (int i = 12000 + (int) (MasterStage::kFadeSec * rate) + 1; i < 20000; ++i)
                     limited = limited && out.l[(size_t) i] == in.l[(size_t) (i - MasterStage::kLatencySamples)] * g;
                 expect(limited, "not the trimmed, delayed signal after the fade-in");
+            }
+
+            beginTest("switching on in a play that started with mastering off crossfades too, rather than cutting");
+            {
+                const double rate = 48000.0;
+                const auto in = sine(rate, 16000, 220.0, 0.5);
+                MasterStage stage;
+                stage.prepare(rate);
+                auto out = in;
+                // off for 4 blocks: those touch no sample, but the stage has now sounded
+                for (int b = 0; b < 4; ++b)
+                    stage.process(nullptr, rate, 1000, out.l.data() + b * 1000, out.r.data() + b * 1000);
+                expect(out == in, "off blocks touched the signal");
+                for (int at = 4000; at < 16000; at += 500)
+                    stage.process(&defaults, rate, 500, out.l.data() + at, out.r.data() + at);
+                float maxStep = 0.0f;
+                for (int i = 1; i < 16000; ++i)
+                    maxStep = std::max(maxStep, std::abs(out.l[(size_t) i] - out.l[(size_t) i - 1]));
+                // the sine itself moves at most 0.0144 a sample; an instant engage would drop from
+                // the dry sine to the empty line's 0 at sample 4000 -- a step of up to 0.5
+                expect(maxStep < 0.02f, "a step of " + juce::String(maxStep));
+                // the first engaged sample is still almost all dry
+                expect(std::abs(out.l[4000] - in.l[4000]) < 0.01f);
+                const int fade = (int) std::lround(MasterStage::kFadeSec * rate);
+                // half way: a blend, neither dry nor limited
+                const float g = dbToGain(defaults.headroomDb);
+                const size_t mid = 4000 + (size_t) fade / 2;
+                expect(out.l[mid] != in.l[mid] && out.l[mid] != in.l[mid - MasterStage::kLatencySamples] * g);
+                // after the 20 ms: the trimmed sine, 75 samples late, exactly
+                bool limited = true;
+                for (int i = 4000 + fade; i < 16000; ++i)
+                    limited = limited && out.l[(size_t) i] == in.l[(size_t) (i - MasterStage::kLatencySamples)] * g;
+                expect(limited, "not the trimmed, delayed signal after the fade-in");
+
+                // ...and reset() makes it a fresh stage again: the next on block engages at once
+                stage.reset();
+                auto again = in;
+                stage.process(&defaults, rate, 512, again.l.data(), again.r.data());
+                expect(again.l[(size_t) MasterStage::kLatencySamples - 1] == 0.0f
+                       && again.l[(size_t) MasterStage::kLatencySamples + 10] == in.l[10] * g);
+            }
+
+            beginTest("fades and ramps are block-size invariant: the same switches at the same samples, any split");
+            {
+                const double rate = 44100.0;
+                const SoundSettings::Mastering quieter { -8.0, -1.0 };
+                const SoundSettings::Mastering lowCeiling { -4.0, -3.0 };
+                // (first sample, settings) -- off first (the on-from-off fade), off and back on,
+                // on again mid fade-out, a headroom ramp, a ceiling change, a ramp cut short
+                const std::vector<std::pair<int, const SoundSettings::Mastering*>> schedule {
+                    { 0, nullptr }, { 1700, &defaults }, { 6100, nullptr }, { 9000, &defaults },
+                    { 12000, nullptr }, { 12400, &defaults }, { 15000, &quieter }, { 15300, &defaults },
+                    { 18000, &lowCeiling }, { 21000, nullptr }, { 24000, &quieter }, { 26000, nullptr },
+                };
+                const auto in = hotProgramme(rate, 30000);
+                auto runSplit = [&](auto nextBlock) {
+                    MasterStage stage;
+                    stage.prepare(rate);
+                    auto out = in;
+                    size_t seg = 0;
+                    for (int at = 0; at < (int) out.size();)
+                    {
+                        while (seg + 1 < schedule.size() && schedule[seg + 1].first <= at) ++seg;
+                        const int segEnd = seg + 1 < schedule.size() ? schedule[seg + 1].first : (int) out.size();
+                        const int n = juce::jmin(juce::jmax(1, nextBlock()), segEnd - at);
+                        stage.process(schedule[seg].second, rate, n, out.l.data() + at, out.r.data() + at);
+                        at += n;
+                    }
+                    return out;
+                };
+                const auto reference = runSplit([] { return 512; });
+                expect(! (reference == in));
+                for (int block : { 1, 77, 300, 4096 })
+                    expect(runSplit([block] { return block; }) == reference, "block " + juce::String(block));
+                std::mt19937 rng(7);
+                std::uniform_int_distribution<int> size(1, 1300);
+                expect(runSplit([&] { return size(rng); }) == reference, "random blocks");
             }
 
             beginTest("a headroom change ramps over the fade time rather than stepping");
@@ -386,12 +462,17 @@ namespace sssketch
                 stage.prepare(44100.0); // same rate: nothing built
                 stage.prepare(48000.0);
                 expect(stage.preparedRate() == 48000.0);
+                // a device restart resets the stage (Transport::audioDeviceAboutToStart): without
+                // it, the new instance would crossfade in from the dry signal, the stage having
+                // sounded -- here each run should match a fresh stage's
+                stage.reset();
                 const auto before = stage.rateMismatchCount();
                 expect(run(stage, &defaults, 48000.0, in, [] { return 512; }) == runFresh(&defaults, 48000.0, in, 512));
                 expect(stage.rateMismatchCount() == before);
                 stage.drainRetired();
                 // with the retirement collected, a second swap goes through too
                 stage.prepare(44100.0);
+                stage.reset();
                 const auto in44 = sine(44100.0, 4096, 997.0, 0.1);
                 expect(run(stage, &defaults, 44100.0, in44, [] { return 512; }) == runFresh(&defaults, 44100.0, in44, 512));
                 stage.drainRetired();

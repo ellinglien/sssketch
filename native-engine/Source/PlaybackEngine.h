@@ -251,8 +251,13 @@ namespace sssketch
         void prepareMaster(double sampleRate);
 
         /** AUDIO THREAD, with no processMaster in flight. See MasterStage::reset: Transport
-         * calls it when a stop or pause has finished fading out. */
+         * calls it when a stop or pause has finished fading out, and when the device (re)starts
+         * (audioDeviceAboutToStart, before any callback). */
         void resetMaster() { masterStage.reset(); }
+
+        /** AUDIO THREAD. See MasterStage::currentLatencySamples: 75 while the master stage's
+         * limiter is in the output, else 0. Transport's seek holds at silence this much longer. */
+        int masterLatencySamples() const { return masterStage.currentLatencySamples(); }
 
         /** Blocks processMaster passed through because no instance at their rate was ready. */
         unsigned long long masterRateMismatchCount() const { return masterStage.rateMismatchCount(); }

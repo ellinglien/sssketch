@@ -387,6 +387,9 @@ namespace sssketch
         bool stagedApplyRetryDue = false;
         bool repositionFadingIn = false;
         double repositionElapsedSec = 0.0;
+        // How long the fade-in holds at silence first: the master stage's latency when it is
+        // in (so the jump lands under silence), else 0. Set when the fade-out completes.
+        double repositionHoldSec = 0.0;
         double bpm = 120.0;
         double secPerBar = 2.0; // updated via setBpm before play(); safe default avoids div-by-zero
         double deviceSampleRate = 44100.0;

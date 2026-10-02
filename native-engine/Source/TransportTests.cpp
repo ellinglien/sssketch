@@ -1042,6 +1042,10 @@ namespace sssketch
                     expect(l == dry, "a 48 kHz block went through a 44.1 kHz limiter");
                     expect(engine.masterRateMismatchCount() == 1);
 
+                    // as Transport::audioDeviceAboutToStart does: the reset makes the new
+                    // instance's first block a fresh stage's (immediate), not a crossfade from
+                    // the dry block that went through above
+                    engine.resetMaster();
                     engine.prepareMaster(48000.0);
                     std::fill(l.begin(), l.end(), 0.0f);
                     std::fill(r.begin(), r.end(), 0.0f);
@@ -1053,6 +1057,103 @@ namespace sssketch
                     for (float v : l) peak = std::max(peak, std::abs(v));
                     expect(peak > 0.1f && peak < 0.9f, "peak " + juce::String(peak));
                     engine.drainRetiredProject();
+                }
+
+                beginTest("master stage: a seek lands under silence -- the limiter's line never plays the old "
+                          "position's audio at a nonzero gain, and the new audio fades in from 0");
+                {
+                    // A loud sine for the first half bar, silence for the second.
+                    const int frames = (int) (2.0 * kRate), loud = frames / 2;
+                    auto halfFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                        .getChildFile("sssketch_transport_master_half.wav");
+                    halfFile.deleteFile();
+                    {
+                        juce::WavAudioFormat wavFormat;
+                        std::unique_ptr<juce::FileOutputStream> out(halfFile.createOutputStream());
+                        std::unique_ptr<juce::AudioFormatWriter> writer(
+                            wavFormat.createWriterFor(out.get(), kRate, 1, 16, {}, 0));
+                        out.release();
+                        juce::AudioBuffer<float> source(1, frames);
+                        source.clear();
+                        for (int i = 0; i < loud; ++i)
+                            source.setSample(0, i, 0.9f * (float) std::sin(2.0 * 3.14159265358979323846 * 220.0 * i / kRate));
+                        writer->writeFromAudioSampleBuffer(source, 0, frames);
+                    }
+                    EngineProject project;
+                    project.bpm = kBpm;
+                    project.snapDiv = 16.0;
+                    EngineRifff rifff;
+                    rifff.groupId = "half";
+                    rifff.channelId = "c1";
+                    rifff.startBar = 0.0;
+                    rifff.barLength = 1;
+                    EngineStem stem;
+                    stem.stemKey = "half:1";
+                    stem.resolvedPath = halfFile.getFullPathName();
+                    stem.durationSec = 2.0;
+                    stem.barLength = 1;
+                    rifff.stems.push_back(stem);
+                    project.rifffs.push_back(rifff);
+                    project.sound.mastering = SoundSettings::Mastering {};
+
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    engine.prepareMaster(kRate);
+                    engine.setProject(project);
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(kBpm);
+
+                    constexpr int kBlock = 64;
+                    auto runBlocks = [&](int count) {
+                        std::vector<float> l((size_t) (count * kBlock)), r((size_t) (count * kBlock));
+                        for (int b = 0; b < count; ++b)
+                        {
+                            float* channels[2] = { l.data() + b * kBlock, r.data() + b * kBlock };
+                            transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                        }
+                        return l;
+                    };
+                    // The fade-out completes at the end of the block that reaches 12 ms: 9 blocks.
+                    const int fadeSamples = (int) std::ceil(0.012 * kRate);
+                    const int jumpAt = ((fadeSamples + kBlock - 1) / kBlock) * kBlock;
+
+                    transport.play(0.0);
+                    const auto before = runBlocks(40); // in the loud half
+                    float peakBefore = 0.0f;
+                    for (float v : before) peakBefore = std::max(peakBefore, std::abs(v));
+                    expect(peakBefore > 0.3f, "not playing before the seek: peak " + juce::String(peakBefore));
+
+                    // loud -> silent: once faded out, nothing at all -- not the 75 old samples
+                    // still in the limiter's line
+                    transport.setPosition(0.75);
+                    const auto toSilent = runBlocks(100);
+                    float leak = 0.0f;
+                    for (size_t i = (size_t) jumpAt; i < toSilent.size(); ++i)
+                        leak = std::max(leak, std::abs(toSilent[i]));
+                    expect(leak == 0.0f, "old-position audio after the jump: " + juce::String(leak));
+
+                    // silent -> loud: the new audio comes out of the line 75 samples after the
+                    // jump, and the fade-in starts from 0 exactly there
+                    transport.setPosition(0.1);
+                    const auto toLoud = runBlocks(100);
+                    const int arrives = jumpAt + MasterStage::kLatencySamples;
+                    bool silentUntil = true;
+                    for (int i = 0; i < arrives; ++i)
+                        silentUntil = silentUntil && toLoud[(size_t) i] == 0.0f;
+                    expect(silentUntil, "sound before the new audio could have arrived");
+                    float worst = 0.0f; // how far over the fade-in's own gain envelope
+                    for (int k = 0; k < fadeSamples; ++k)
+                        worst = std::max(worst, std::abs(toLoud[(size_t) (arrives + k)]) - (float) (k + 1) / (float) (0.012 * kRate));
+                    expect(worst <= 1.0e-3f, "the new audio lands mid fade-in: " + juce::String(worst) + " over");
+                    float peakAfter = 0.0f;
+                    for (size_t i = (size_t) (arrives + fadeSamples); i < toLoud.size(); ++i)
+                        peakAfter = std::max(peakAfter, std::abs(toLoud[i]));
+                    expect(peakAfter > 0.3f, "not playing after the seek: peak " + juce::String(peakAfter));
+
+                    engine.drainRetiredProject();
+                    halfFile.deleteFile();
                 }
 
                 hot.deleteFile();
