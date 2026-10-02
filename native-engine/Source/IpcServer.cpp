@@ -789,6 +789,22 @@ namespace sssketch
             obj->setProperty("payload", juce::var(payloadObj.get()));
             sendJson(juce::var(obj.get()));
         }
+        else if (type == "get-sound-meters")
+        {
+            // Request/response, the get-buffer-size convention: the radio sound's master
+            // meters, for the sound panel's dev-only readouts (native radio sound plan, Task
+            // 13). Each is the value at the end of the last rendered block, dB (<= 0), 0 while
+            // its stage is not running. Polled a few times a second while the panel is open in
+            // a dev build; nothing else asks.
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            payloadObj->setProperty("glueGrDb", (double) engine.masterGlueGainReductionDb());
+            payloadObj->setProperty("pumpDuckDb", (double) engine.pumpDuckDb());
+            payloadObj->setProperty("limiterGrDb", (double) engine.masterLimiterGainReductionDb());
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "sound-meters");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
         else if (type == "set-buffer-size")
         {
             // Direct, standalone switch, same immediate-apply convention

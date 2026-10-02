@@ -145,7 +145,7 @@ import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
 import { loadSoundSettings, saveSoundSettings } from './soundSettingsStore'
-import type { SoundSettings } from '@shared/radioSound'
+import type { SoundMeters, SoundSettings } from '@shared/radioSound'
 import {
   getStemAutoClassifyProgress,
   applyYamnetZeroShotCategory,
@@ -1781,6 +1781,22 @@ app.whenReady().then(async () => {
       return result.bufferSize
     } catch (err) {
       console.error('engine-get-buffer-size: failed:', err)
+      return null
+    }
+  })
+
+  // The radio sound's master meters (native radio sound plan, Task 13), for the sound panel's
+  // dev-only readouts: dB at the end of the engine's last block, 0 while a stage is not running.
+  ipcMain.handle('engine-get-sound-meters', async (): Promise<SoundMeters | null> => {
+    if (!playbackEngine) return null
+    try {
+      return (await playbackEngine.client.sendAndAwaitType(
+        'get-sound-meters',
+        undefined,
+        'sound-meters'
+      )) as SoundMeters
+    } catch (err) {
+      console.error('engine-get-sound-meters: failed:', err)
       return null
     }
   })

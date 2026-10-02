@@ -157,6 +157,14 @@ namespace sssketch
         /** How many blocks were passed through because the instance's rate did not match. */
         unsigned long long rateMismatchCount() const { return rateMismatches.load(std::memory_order_relaxed); }
 
+        /** Any thread, for the dev readouts (Task 13) and tests: the glue's and the limiter's gain
+         * reduction at the end of the last block, dB (<= 0), from their Faust meters (glue.dsp's
+         * and truepeak.dsp's `gr` bargraphs). 0 while that stage is not running (mastering off, the
+         * glue switched off, a block passed through). Written once per process() call by the
+         * rendering thread; relaxed, a meter. */
+        float glueGainReductionDb() const { return glueGrMeter.load(std::memory_order_relaxed); }
+        float limiterGainReductionDb() const { return limiterGrMeter.load(std::memory_order_relaxed); }
+
     private:
         static constexpr int kChunk = 512;
 
@@ -224,5 +232,9 @@ namespace sssketch
         double builtRate = 0.0; // message thread only
         bool sounded = false;   // audio thread only: a process() call since construction or reset()
         std::atomic<unsigned long long> rateMismatches { 0 };
+        std::atomic<float> glueGrMeter { 0.0f };
+        std::atomic<float> limiterGrMeter { 0.0f };
+        /** AUDIO THREAD. The meters after a block: `inst` null (or not engaged) reads 0. */
+        void updateMeters(const Instance* inst);
     };
 }

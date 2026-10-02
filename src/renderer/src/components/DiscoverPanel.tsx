@@ -1296,6 +1296,8 @@ export function DiscoverPanel({
     // mount), but the same bug class as unmountedRef's -- fixed for
     // consistency/defense-in-depth.
     skipFirstBpmRetuneRef.current = true
+    // ...and the sound-settings resync's, below, for the same reason.
+    skipFirstSoundResyncRef.current = true
     return () => {
       unmountedRef.current = true
       // A scheduled-but-not-yet-fired coalesced sync (pendingSyncRafRef)
@@ -1483,8 +1485,8 @@ export function DiscoverPanel({
    * touched -- the thrown-together AppState here only copies bpm/
    * masterChain/channelPlugins/reverb/sound from the real one (sound: the
    * radio sound's settings; the app-wide defaults if the project has none).
-   * A sound settings change is picked up at the next sync, not mid-preview
-   * (the native radio sound plan's Task 13 adds the resync).
+   * A sound settings change resyncs the preview (the sound-resync effect,
+   * next to the bpm-retune one), so it is heard within a sync.
    *
    * MASTER plugin FX genuinely are applied while auditioning: Transport.cpp
    * runs masterChain.process() on the summed output for whatever project is
@@ -2244,6 +2246,28 @@ export function DiscoverPanel({
     // should retune.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bpm])
+
+  // Re-syncs the preview when the project's sound settings change (native radio sound plan, Task
+  // 13, carried over from Task 2's review): previewState copies `sound` only when it syncs, so
+  // without this a switch flipped in the sound panel (or undone, or a project opened) mid-preview
+  // would not be heard until the next unrelated sync. The bpm effect's shape: skip the first run
+  // (the mount; reset by the mount effect above for the same StrictMode reason). Only while a
+  // preview is loaded or being built -- with nothing previewing there is nothing of Discover's in
+  // the engine to update, and a sync would only claim the engine to release it again. One
+  // SET_SOUND_SETTINGS per committed change (the panel's sliders commit on release), so this is
+  // one load-project per change, never one per drag frame.
+  const skipFirstSoundResyncRef = useRef(true)
+  useEffect(() => {
+    if (skipFirstSoundResyncRef.current) {
+      skipFirstSoundResyncRef.current = false
+      return
+    }
+    const ids = previewingSlotIdsRef.current
+    if (ids.size === 0 && !previewLoadedRef.current) return
+    void syncPreviewToEngine(ids)
+    // syncPreviewToEngine: see the bpm effect above; only a sound change should resync.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sound])
 
   // Live-updates a slot's own committed gain -- both in `slots` state (so
   // the volume slider itself, and "plunk in arranger" later, read the

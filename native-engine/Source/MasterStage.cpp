@@ -350,6 +350,8 @@ namespace sssketch
     void MasterStage::reset()
     {
         sounded = false;
+        glueGrMeter.store(0.0f, std::memory_order_relaxed);
+        limiterGrMeter.store(0.0f, std::memory_order_relaxed);
         if (auto* inst = current.load(std::memory_order_acquire))
             inst->reset();
     }
@@ -398,14 +400,28 @@ namespace sssketch
 
         auto* inst = current.load(std::memory_order_acquire);
         if (settings == nullptr && (inst == nullptr || ! inst->engaged))
+        {
+            updateMeters(nullptr);
             return;
+        }
         if (inst == nullptr || inst->sampleRate != sampleRate)
         {
             // No instance at this rate yet (the message thread prepares one on a device start
             // and before an export). Passing through beats both silence and allocating here.
             rateMismatches.fetch_add(1, std::memory_order_relaxed);
+            updateMeters(nullptr);
             return;
         }
         inst->process(settings, hadSounded, numSamples, l, r);
+        updateMeters(inst);
+    }
+
+    void MasterStage::updateMeters(const Instance* inst)
+    {
+        const bool running = inst != nullptr && inst->engaged;
+        const float glueGr = running && inst->glueFade.engaged ? inst->glue.meter("/glue/gr").value_or(0.0f) : 0.0f;
+        const float limiterGr = running ? inst->limiter.meter("/truepeak/gr").value_or(0.0f) : 0.0f;
+        glueGrMeter.store(glueGr, std::memory_order_relaxed);
+        limiterGrMeter.store(limiterGr, std::memory_order_relaxed);
     }
 }

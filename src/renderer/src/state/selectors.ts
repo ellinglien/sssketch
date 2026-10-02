@@ -9,7 +9,17 @@ import {
 import type { StemAutomation } from '@shared/toolkit'
 import { riserEndBar, type RiserClip } from '@shared/riser'
 import { clipLengthBars } from '@shared/automationEdit'
+import type { SoundSettings } from '@shared/radioSound'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
+import { appSoundDefaultsNow } from './appSoundDefaults'
+
+/** The sound settings the project plays with, as the sound panel shows them (native radio sound
+ * plan, Task 13): its own, or -- for the pre-project startup state, which has none -- the
+ * app-wide defaults SET_SOUND_SETTINGS would merge onto (appSoundDefaultsNow), so the panel
+ * shows what its first change will build on. */
+export function projectSoundSettings(state: Pick<AppState, 'sound'>): SoundSettings {
+  return state.sound ?? appSoundDefaultsNow()
+}
 
 /** The played-bars override/fallback logic on its own, so a caller that
  * already has these two fields via individual selectors (see

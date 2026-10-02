@@ -7,6 +7,7 @@ import { positionLabel, elapsedLabel } from '@shared/visuals'
 import { loopLengthBars } from '../state/selectors'
 import { stopActivePreview } from '../audio/previewLoop'
 import { MasterChainPanel } from './MasterChainPanel'
+import { SoundSettingsPanel } from './SoundSettingsPanel'
 import { ContextMenu } from './ContextMenu'
 import { AudioDeviceModal } from './AudioDeviceModal'
 import { KeyGesturesModal } from './KeyGesturesModal'
@@ -198,6 +199,27 @@ function SlidersIcon(): React.JSX.Element {
   )
 }
 
+// The radio sound's settings (SoundSettingsPanel): a waveform passing through a limiter's
+// ceiling. Hand-drawn, the same stroke as SlidersIcon beside it.
+function SoundIcon(): React.JSX.Element {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.3"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M2 3 H14" />
+      <path d="M2 13 H14" />
+      <path d="M2 8 L4 5 L6 11 L8 4.5 L10 11.5 L12 5 L14 8" />
+    </svg>
+  )
+}
+
 function PlusMicIcon(): React.JSX.Element {
   return (
     <svg
@@ -278,6 +300,9 @@ export function TransportBar({
   const pos = usePos()
   const playing = usePlaying()
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
+  // The radio sound's settings: this project's (the sound button), or the app-wide defaults (the
+  // gear menu's "sound defaults…"). One panel, two bindings -- see SoundSettingsPanel.tsx.
+  const [soundPanel, setSoundPanel] = useState<'project' | 'defaults' | null>(null)
   const [settingsMenu, setSettingsMenu] = useState<{ x: number; y: number } | null>(null)
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   // The settings menu's "audio…" entry -- replaces the two dropdowns that
@@ -900,6 +925,25 @@ export function TransportBar({
       {masterChainPanelOpen && <MasterChainPanel onClose={() => setMasterChainPanelOpen(false)} />}
 
       <button
+        onClick={() => setSoundPanel((open) => (open === 'project' ? null : 'project'))}
+        aria-label="Toggle sound panel"
+        data-tooltip="sound"
+        style={{
+          height: 22,
+          borderRadius: 0,
+          padding: '0 8px',
+          fontSize: 10,
+          background:
+            soundPanel === 'project' ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${soundPanel === 'project' ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: soundPanel === 'project' ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+        }}
+      >
+        <SoundIcon />
+      </button>
+      {soundPanel && <SoundSettingsPanel mode={soundPanel} onClose={() => setSoundPanel(null)} />}
+
+      <button
         onClick={() => dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })}
         aria-label="add another recording channel"
         data-tooltip="add channel (/)"
@@ -1003,6 +1047,7 @@ export function TransportBar({
                   }
                 ]
               : []),
+            { label: 'sound defaults…', onClick: () => setSoundPanel('defaults') },
             { label: 'keys and gestures…', onClick: () => setKeysModalOpen(true) },
             { label: 'radio hearts key…', onClick: () => setRadioHeartsKeyOpen(true) },
             {

@@ -18,7 +18,7 @@ import type { ArtistIndex, ArtistMode, KeepRefused } from '@shared/discoverArtis
 import type { ArtistScanBatch } from '../main/discoverArtistScanQueue'
 import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
-import type { SoundSettings } from '@shared/radioSound'
+import type { SoundMeters, SoundSettings } from '@shared/radioSound'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { AutoClassifyStatus } from '../main/stemAutoClassifyScheduler'
 import type { LibraryScanTarget } from '../main/discoverLibraryStems'
@@ -530,6 +530,10 @@ const api = {
     ipcRenderer.invoke('set-stem-analysis-results', results),
   getYamnetModel: (): Promise<Uint8Array | null> => ipcRenderer.invoke('get-yamnet-model'),
   engineGetBufferSize: (): Promise<number | null> => ipcRenderer.invoke('engine-get-buffer-size'),
+  /** The radio sound's master meters, dB (the sound panel's dev-only readouts); null without an
+   * engine. */
+  engineGetSoundMeters: (): Promise<SoundMeters | null> =>
+    ipcRenderer.invoke('engine-get-sound-meters'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>
     ipcRenderer.invoke('engine-get-plugin-states'),
   engineSetBufferSize: (bufferSize: number): Promise<{ ok: true } | { ok: false; error: string }> =>

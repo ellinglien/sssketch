@@ -280,6 +280,15 @@ export function normalizeSoundSettings(
   }
 }
 
+/** The master stages' meters as the engine reports them (`get-sound-meters`, for the sound
+ * panel's dev-only readouts): dB at the end of the last rendered block, <= 0, and 0 while that
+ * stage is not running. */
+export interface SoundMeters {
+  glueGrDb: number
+  pumpDuckDb: number
+  limiterGrDb: number
+}
+
 /** A change to some settings: any stages, any fields of each (SET_SOUND_SETTINGS). */
 export type SoundSettingsPatch = { [K in keyof SoundSettings]?: Partial<SoundSettings[K]> }
 

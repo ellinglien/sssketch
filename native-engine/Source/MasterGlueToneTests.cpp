@@ -517,6 +517,46 @@ namespace sssketch
                 const float stepWet = maxStep(want.l, 0, (size_t) fade48 + 10);
                 expect(stepOut <= 1.05f * std::max(stepDry, stepWet), "a step of " + juce::String(stepOut));
             }
+
+            beginTest("the gain reduction meters (Task 13's dev readouts): 0 while off, the glue's and the "
+                      "limiter's reduction when driven, 0 for a stage switched off and after a reset");
+            {
+                const double r48 = 48000.0;
+                const int frames = (int) r48; // 1 s
+                const auto hot = sine(r48, frames, 1000.0, 2.0); // +6 dBFS: well over both
+                MasterStage stage;
+                stage.prepare(r48);
+                expectEquals(stage.glueGainReductionDb(), 0.0f);
+                expectEquals(stage.limiterGainReductionDb(), 0.0f);
+
+                auto x = hot;
+                stage.process(nullptr, r48, frames, x.l.data(), x.r.data());
+                expectEquals(stage.glueGainReductionDb(), 0.0f, "mastering off");
+                expectEquals(stage.limiterGainReductionDb(), 0.0f, "mastering off");
+
+                const Settings noHeadroomAllOn { { 0.0, -1.0 }, glue, tone };
+                x = hot;
+                stage.process(&noHeadroomAllOn, r48, frames, x.l.data(), x.r.data());
+                const float glueGr = stage.glueGainReductionDb(), limGr = stage.limiterGainReductionDb();
+                logMessage("+6 dBFS: glue " + juce::String(glueGr, 2) + " dB, limiter " + juce::String(limGr, 2) + " dB");
+                expect(glueGr < -3.0f && glueGr >= -24.0f, "glue " + juce::String(glueGr));
+                // the glue (2:1) has brought it to about -4 dBFS: under the limiter's ceiling
+                expect(limGr <= 0.0f && limGr >= -24.0f, "limiter " + juce::String(limGr));
+
+                const Settings noHeadroomNoGlue { { 0.0, -1.0 }, std::nullopt, tone };
+                MasterStage plain;
+                plain.prepare(r48);
+                x = hot;
+                plain.process(&noHeadroomNoGlue, r48, frames, x.l.data(), x.r.data());
+                expectEquals(plain.glueGainReductionDb(), 0.0f, "glue off");
+                // without the glue the +6 dBFS sine reaches the limiter: about 7 dB to lose
+                const float plainGr = plain.limiterGainReductionDb();
+                expect(plainGr < -5.0f && plainGr >= -24.0f, "limiter " + juce::String(plainGr));
+
+                stage.reset();
+                expectEquals(stage.glueGainReductionDb(), 0.0f, "after a reset");
+                expectEquals(stage.limiterGainReductionDb(), 0.0f, "after a reset");
+            }
         }
     };
 

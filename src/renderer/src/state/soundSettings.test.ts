@@ -7,6 +7,8 @@ import { createHistoryState, historyReducer } from './history'
 import { deserializeProject, serializeProject } from './serialize'
 import { hasUnsavedChanges } from './unsavedChanges'
 import { DEFAULT_SOUND_SETTINGS, normalizeSoundSettings } from '@shared/radioSound'
+import { soundPanelModel, type SoundControl } from '@shared/soundPanelModel'
+import { projectSoundSettings } from './selectors'
 import type { Rifff } from '@shared/types'
 
 const rifff: Rifff = {
@@ -179,5 +181,88 @@ describe('the startup state (before any project is created or opened)', () => {
       ifStill: startupState.sound!
     })
     expect(h.past).toHaveLength(0)
+  })
+})
+
+// The sound settings panel (Task 13): each control's change, through the reducer and the undo
+// history, and the selector the panel reads.
+describe("the sound panel's controls, through SET_SOUND_SETTINGS", () => {
+  /** A value for each control that differs from the default (and from every other control's
+   * field), so the test sees exactly which field moved. */
+  const VALUES: Record<string, unknown> = {
+    'mastering.on': false,
+    'mastering.headroomDb': -6.5,
+    'mastering.ceilingDb': -2,
+    'glue.on': false,
+    'glue.amount': 0.8,
+    'saturation.on': false,
+    'saturation.amount': 0.2,
+    'tone.on': false,
+    'tone.amount': -0.6,
+    'reverb.room': 'zita',
+    'reverb.amount': 0.7,
+    'panning.on': false,
+    'panning.width': 0.4,
+    'pump.on': false,
+    'pump.depthDb': 6,
+    'throws.on': false,
+    'throws.rate': 'often',
+    'throws.level': 0.35,
+    'riserVariety.on': false
+  }
+  const controls = soundPanelModel(DEFAULT_SOUND_SETTINGS).flatMap((r) => r.controls)
+  const patchOf = (c: SoundControl, v: unknown): ReturnType<SoundControl['patch']> =>
+    (c.patch as (x: unknown) => ReturnType<SoundControl['patch']>)(v)
+
+  it('the test covers every control the panel has', () => {
+    expect(controls.map((c) => c.id).sort()).toEqual(Object.keys(VALUES).sort())
+  })
+
+  for (const c of controls) {
+    it(`${c.id}: sets its field, and only its field, in one undo step`, () => {
+      const [stage, field] = c.id.split('.') as [keyof typeof DEFAULT_SOUND_SETTINGS, string]
+      const before = withSound()
+      let h = createHistoryState(before)
+      h = historyReducer(h, { type: 'SET_SOUND_SETTINGS', settings: patchOf(c, VALUES[c.id]) })
+      const expected = normalizeSoundSettings(undefined)
+      ;(expected[stage] as Record<string, unknown>)[field] = VALUES[c.id]
+      expect(h.present.sound).toEqual(expected)
+      expect(h.past).toHaveLength(1)
+      h = historyReducer(h, { type: 'UNDO' })
+      expect(h.present.sound).toEqual(before.sound)
+    })
+  }
+
+  it("'use these in this project': a whole settings object replaces the project's in one step", () => {
+    const appDefaults = normalizeSoundSettings(undefined)
+    appDefaults.pump.on = false
+    appDefaults.reverb = { room: 'zita', amount: 0.3 }
+    appDefaults.throws.rate = 'rare'
+    let h = createHistoryState(
+      reducer(withSound(), { type: 'SET_SOUND_SETTINGS', settings: { glue: { amount: 1 } } })
+    )
+    h = historyReducer(h, { type: 'SET_SOUND_SETTINGS', settings: appDefaults })
+    expect(h.present.sound).toEqual(appDefaults)
+    expect(h.past).toHaveLength(1)
+  })
+})
+
+describe('projectSoundSettings', () => {
+  afterEach(() => forgetAppSoundDefaults())
+
+  it("is the project's own settings", () => {
+    const state = reducer(withSound(), {
+      type: 'SET_SOUND_SETTINGS',
+      settings: { pump: { depthDb: 2 } }
+    })
+    expect(projectSoundSettings(state)).toBe(state.sound)
+  })
+
+  it('without any, the app-wide defaults once known (what SET_SOUND_SETTINGS merges onto)', async () => {
+    expect(projectSoundSettings(initialState)).toEqual(DEFAULT_SOUND_SETTINGS)
+    const appDefaults = normalizeSoundSettings(undefined)
+    appDefaults.saturation.on = false
+    await appSoundDefaults(async () => appDefaults)
+    expect(projectSoundSettings(initialState)).toEqual(appDefaults)
   })
 })

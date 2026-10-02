@@ -281,9 +281,9 @@ namespace sssketch
          * inherit the old one's duck. */
         void clearPump() { drumPump.clear(); }
 
-        /** For tests: the drum-keyed pump's current duck in dB (<= 0), the rate its instance was
-         * built at (0 if none), and blocks it passed unducked for want of an instance at their
-         * rate. */
+        /** For tests and the dev readouts (Task 13): the drum-keyed pump's current duck in dB
+         * (<= 0), the rate its instance was built at (0 if none), and blocks it passed unducked
+         * for want of an instance at their rate. */
         float pumpDuckDb() const { return drumPump.currentDuckDb(); }
         double pumpPreparedRate() const { return drumPump.preparedRate(); }
         unsigned long long pumpRateMismatchCount() const { return drumPump.rateMismatchCount(); }
@@ -291,6 +291,11 @@ namespace sssketch
         /** AUDIO THREAD. See MasterStage::currentLatencySamples: 75 while the master stage's
          * limiter is in the output, else 0. Transport's seek holds at silence this much longer. */
         int masterLatencySamples() const { return masterStage.currentLatencySamples(); }
+        /** Any thread, for the dev readouts (Task 13): the master stage's glue and limiter gain
+         * reduction at the end of the last block, dB (<= 0; 0 while the stage is not running).
+         * See MasterStage::glueGainReductionDb. */
+        float masterGlueGainReductionDb() const { return masterStage.glueGainReductionDb(); }
+        float masterLimiterGainReductionDb() const { return masterStage.limiterGainReductionDb(); }
 
         /** For tests: the rate of the convolver the audio thread is running (0 if none), and
          * whether a swapped-out one is waiting for drainRetiredProject. */
