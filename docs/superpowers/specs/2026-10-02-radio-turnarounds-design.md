@@ -141,6 +141,11 @@ whose shortest length does not fit is left out of the draw.
 | steady or off | 2 | 2 | 1 | 1 | 2 | 1 | 1 |
 
   - "Steady" means the arc is at a peak or trough hold, or density is off.
+  - **The leaving row in the radios (found in review, 2026-10-02).** Both radios pull an exiting row
+    with an 8-beat exit drop-out before the wrap, so a wash on that row would be silent. So the radios
+    never pass `leavingRowId`; they mark the exiting row not audible for the roll, and the wash goes
+    to the non-drums bed. A consumer whose exit really sounds up to the wrap, such as auto-arrange,
+    may pass it.
   - **Thinning drops nothing.** Rows that come back on the one read as growth (§0). So a thinning arc
     washes the row that is leaving, or dips the whole mix.
   - The stop is the rarest move everywhere (§0).
