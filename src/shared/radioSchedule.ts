@@ -12,6 +12,7 @@
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import { radioSlotFlagWeightFactor, type RadioSlotFlags } from './radioSlotFlags'
 import { DEFAULT_RADIO_DROP_OUTS, normalizeRadioDropOuts, type RadioDropOuts } from './radioDropOut'
+import { turnaroundPhraseLaps } from './radioTurnaround'
 import {
   DEFAULT_RADIO_TRANSITIONS,
   normalizeRadioTransitions,
@@ -347,10 +348,18 @@ export interface RadioClock {
    * has to be kept in step with the same event, one tick at 30Hz, and the
    * first time the two disagreed the phrase grid would silently walk. */
   lapsSincePhrase: number
+  /** The lap playing, counted within the TURNAROUND's phrase (radioTurnaround.ts):
+   * 0 .. turnaroundPhraseLaps - 1, advanced at every wrap. The same origin as
+   * lapsSincePhrase -- the loop top radio started inside -- so on a loop that divides the
+   * phrase a turnaround ends on the change grid's phrase wrap. Unlike lapsSincePhrase it runs
+   * whatever phraseBars is (0 counts 16 bars): the spec's "the turnaround count must not be"
+   * reset. Optional only so a clock written before it reads as lap 0; every function here
+   * sets it. */
+  turnaroundLap?: number
 }
 
 export function createRadioClock(intervalBars: number, startPos = 0): RadioClock {
-  return { barsElapsed: 0, intervalBars, lastPos: startPos, lapsSincePhrase: 0 }
+  return { barsElapsed: 0, intervalBars, lastPos: startPos, lapsSincePhrase: 0, turnaroundLap: 0 }
 }
 
 /** A fresh interval INSIDE the phrase that is already running. What the
@@ -391,7 +400,8 @@ export function restartRadioInterval(
     barsElapsed: overshoot,
     intervalBars,
     lastPos: pos,
-    lapsSincePhrase: clock.lapsSincePhrase
+    lapsSincePhrase: clock.lapsSincePhrase,
+    turnaroundLap: clock.turnaroundLap
   }
 }
 
@@ -413,6 +423,9 @@ export interface RadioClockStep {
    * first, so a finer grid can never make changes more frequent than the
    * pace asked for. It only stops the pace being silently rounded up. */
   due: boolean
+  /** The lap that STARTS at this wrap is the last lap of a turnaround phrase: roll the phrase
+   * end's turnaround now (radioTurnaround.ts rollTurnaround). Only ever true on a wrap. */
+  turnaroundLapStarts: boolean
 }
 
 /** One position tick. `loopBars` is the preview loop's own length --
@@ -431,7 +444,7 @@ export function advanceRadioClock(
   phraseBars: number = 0
 ): RadioClockStep {
   if (!(loopBars > 0) || !Number.isFinite(pos)) {
-    return { clock, wrapped: false, due: false }
+    return { clock, wrapped: false, due: false, turnaroundLapStarts: false }
   }
   const wrapped = pos < clock.lastPos
   // Across a wrap, count the tail of the old pass as well as the head of
@@ -466,10 +479,19 @@ export function advanceRadioClock(
   } else {
     lapsSincePhrase = 0
   }
+  // The turnaround's own count: every wrap, whatever phraseBars is, folding back to 0 at the
+  // phrase end (and from anywhere above the phrase, should the loop have grown under it).
+  const perTurnaround = turnaroundPhraseLaps(phraseBars, loopBars)
+  let turnaroundLap = clock.turnaroundLap ?? 0
+  if (wrapped) {
+    turnaroundLap += 1
+    if (turnaroundLap >= perTurnaround) turnaroundLap = 0
+  }
   return {
-    clock: { ...clock, barsElapsed, lastPos: pos, lapsSincePhrase },
+    clock: { ...clock, barsElapsed, lastPos: pos, lapsSincePhrase, turnaroundLap },
     wrapped,
-    due: crossed && onPhrase && barsElapsed >= clock.intervalBars
+    due: crossed && onPhrase && barsElapsed >= clock.intervalBars,
+    turnaroundLapStarts: wrapped && turnaroundLap === perTurnaround - 1
   }
 }
 
