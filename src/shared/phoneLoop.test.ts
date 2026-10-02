@@ -196,6 +196,13 @@ describe('phoneStemAudioId', () => {
     expect(phoneStemAudioId(stem({ pan: 0 }))).toBe(phoneStemAudioId(stem()))
   })
 
+  it('a centred stem keeps the id it had before panning existed', () => {
+    // This fixture's id as the pre-Task-4 stemAudioFields made it (no pan field at all):
+    // a centred row on the phone is not a new download.
+    expect(phoneStemAudioId(stem())).toBe('5849b38bf587d64c')
+    expect(phoneStemAudioId(stem({ pan: 0 }))).toBe('5849b38bf587d64c')
+  })
+
   it('changes with the duration, which is where the loop point is', () => {
     expect(phoneStemAudioId(stem({ durationSec: 8 }))).not.toBe(phoneStemAudioId(stem()))
   })

@@ -139,7 +139,7 @@ describe('stereoPanFrame (the StereoPannerNode law, twin of the engine StemPan.h
     expect(r).toBeCloseTo(-0.2 + 0.3 * Math.sin(Math.PI / 8), 12)
   })
 
-  it('-p: L + R cos((1 - p) pi/2), R sin((1 - p) pi/2)', () => {
+  it('-p: L + R cos((1 + p) pi/2), R sin((1 + p) pi/2)', () => {
     const [l, r] = stereoPanFrame(0.3, -0.2, -0.25)
     expect(l).toBeCloseTo(0.3 + -0.2 * Math.cos((0.75 * Math.PI) / 2), 12)
     expect(r).toBeCloseTo(-0.2 * Math.sin((0.75 * Math.PI) / 2), 12)

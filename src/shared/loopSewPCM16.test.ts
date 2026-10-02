@@ -253,6 +253,19 @@ describe('sewLoopPCM16 pan (the row pan, baked like the gain)', () => {
     expect(out[n * 2]).not.toBe(plain[n * 2])
   })
 
+  it('KNOWN LIMIT: the phone files are 16-bit, so a near-full-scale row panned hard clips on its near side', () => {
+    // 0.9 FS on both sides at +0.5: R = 0.9 x (1 + sin(pi/4)) = 1.54 FS, which 16 bits cannot
+    // hold. Documented rather than fixed (the plan's Task 4 notes): the phone's per-stem path
+    // has no master stage and its container is 16-bit ALAC.
+    const loud = stereoWav(
+      1000,
+      (): number => 29490,
+      (): number => 29490
+    )
+    const out = samplesOf(sewLoopPCM16(loud, 900, 1, 0.5))
+    expect(out[201]).toBe(32767)
+  })
+
   it('leaves a mono file alone (no second side to pan into)', () => {
     const mono = monoWav(1000, (): number => 500)
     expect(sewLoopPCM16(mono, 900, 1, 0.25)).toEqual(sewLoopPCM16(mono, 900, 1))

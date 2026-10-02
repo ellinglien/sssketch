@@ -60,29 +60,45 @@ function findDataChunkOffset(buf: Buffer): number {
   throw new Error(`no "data" chunk found in WAV (${buf.length} bytes)`)
 }
 
-/** Peak absolute sample in a rendered (16-bit stereo) WAV, and how many
- * frames long it is. */
-function renderStats(path: string): { peak: number; frames: number } {
+/** A rendered stereo WAV as interleaved floats, whichever way it was written: per-clip bakes are
+ * 32-bit float (RenderExport.h's WavSampleFormat -- no master stage, so a panned row may pass
+ * full scale), risers.wav is 16-bit PCM. */
+function readStereo(path: string): { samples: number[]; frames: number; float: boolean } {
   const buf = readFileSync(path)
-  const start = findDataChunkOffset(buf)
-  let peak = 0
-  for (let i = start; i + 1 < buf.length; i += 2) {
-    peak = Math.max(peak, Math.abs(buf.readInt16LE(i)) / 32767)
+  let offset = 12
+  let float = false
+  while (offset + 8 <= buf.length) {
+    const chunkId = buf.toString('ascii', offset, offset + 4)
+    const chunkSize = buf.readUInt32LE(offset + 4)
+    if (chunkId === 'fmt ') float = buf.readUInt16LE(offset + 8) === 3
+    if (chunkId === 'data') break
+    offset += 8 + chunkSize + (chunkSize % 2)
   }
-  return { peak, frames: (buf.length - start) / 4 }
+  const start = findDataChunkOffset(buf)
+  const bytes = float ? 4 : 2
+  const samples: number[] = []
+  for (let i = start; i + bytes <= buf.length; i += bytes) {
+    samples.push(float ? buf.readFloatLE(i) : buf.readInt16LE(i) / 32767)
+  }
+  return { samples, frames: samples.length / 2, float }
+}
+
+/** Peak absolute sample in a rendered stereo WAV, and how many frames long it is. */
+function renderStats(path: string): { peak: number; frames: number } {
+  const { samples, frames } = readStereo(path)
+  let peak = 0
+  for (const v of samples) peak = Math.max(peak, Math.abs(v))
+  return { peak, frames }
 }
 
 /** Peak absolute sample inside one half-open frame window of a rendered
- * (16-bit stereo) WAV -- what "is there actually audio HERE" needs, as
+ * stereo WAV -- what "is there actually audio HERE" needs, as
  * opposed to renderStats's whole-file peak. */
 function peakBetweenFrames(path: string, fromFrame: number, toFrame: number): number {
-  const buf = readFileSync(path)
-  const start = findDataChunkOffset(buf)
+  const { samples } = readStereo(path)
   let peak = 0
-  const first = start + fromFrame * 4
-  const last = Math.min(buf.length, start + toFrame * 4)
-  for (let i = Math.max(start, first); i + 1 < last; i += 2) {
-    peak = Math.max(peak, Math.abs(buf.readInt16LE(i)) / 32767)
+  for (let i = Math.max(0, fromFrame * 2); i < Math.min(samples.length, toFrame * 2); i++) {
+    peak = Math.max(peak, Math.abs(samples[i]))
   }
   return peak
 }
@@ -125,11 +141,10 @@ const riser = {
   muted: false
 }
 
-/** One frame's [left, right] of a rendered (16-bit stereo) WAV. */
+/** One frame's [left, right] of a rendered stereo WAV. */
 function frameAt(path: string, frame: number): [number, number] {
-  const buf = readFileSync(path)
-  const at = findDataChunkOffset(buf) + frame * 4
-  return [buf.readInt16LE(at) / 32767, buf.readInt16LE(at + 2) / 32767]
+  const { samples } = readStereo(path)
+  return [samples[frame * 2], samples[frame * 2 + 1]]
 }
 
 describe('renderToolkitAudio', () => {
@@ -166,9 +181,11 @@ describe('renderToolkitAudio', () => {
       expect(baked!.tailBars).toBe(0)
       const [left, right] = frameAt(join(outDir, 'Samples', 'Imported', baked!.fileName), 44100)
       // A mono stem at +0.25: L = cos(pi/8) x, R = (1 + sin(pi/8)) x -- and no mastering (a bake
-      // drops the master stages), so exactly that, to 16 bits.
-      expect(left).toBeCloseTo(Math.cos(Math.PI / 8) * 0.5, 3)
-      expect(right).toBeCloseTo((1 + Math.sin(Math.PI / 8)) * 0.5, 3)
+      // drops the master stages), so exactly that, in float.
+      expect(readStereo(join(outDir, 'Samples', 'Imported', baked!.fileName)).float).toBe(true)
+      const x = Math.round(0.5 * 32767) / 32768
+      expect(left).toBeCloseTo(Math.cos(Math.PI / 8) * x, 6)
+      expect(right).toBeCloseTo((1 + Math.sin(Math.PI / 8)) * x, 6)
 
       // The automation mode keeps the audio dry (the pan goes on the stem's own track instead).
       expect((await renderToolkitAudio(state, autoDir, 'automation')).bakedClips.size).toBe(0)
@@ -183,6 +200,26 @@ describe('renderToolkitAudio', () => {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(outDir, { recursive: true, force: true })
       rmSync(autoDir, { recursive: true, force: true })
+    }
+  }, 60000)
+
+  it("keeps a panned row's near side past full scale: bakes are float, not clipped 16-bit", async () => {
+    const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-src-'))
+    const outDir = mkdtempSync(join(tmpdir(), 'sssketch-toolkit-out-'))
+    try {
+      const stemPath = join(srcDir, 'loud.wav')
+      writeConstantWav(stemPath, 0.9, 44100 * 4)
+      const sound = normalizeSoundSettings(undefined)
+      sound.panning.width = 0.5
+      const audio = await renderToolkitAudio(oneBarState(stemPath, { sound }), outDir, 'bake')
+      const baked = audio.bakedClips.get('r1:1')!
+      const [, right] = frameAt(join(outDir, 'Samples', 'Imported', baked.fileName), 44100)
+      // 0.9 x (1 + sin(pi/4)) = 1.54: over 0 dBFS, which 16 bits would have clipped at 1.
+      expect(right).toBeCloseTo((1 + Math.sin(Math.PI / 4)) * (Math.round(0.9 * 32767) / 32768), 5)
+      expect(right).toBeGreaterThan(1)
+    } finally {
+      rmSync(srcDir, { recursive: true, force: true })
+      rmSync(outDir, { recursive: true, force: true })
     }
   }, 60000)
 

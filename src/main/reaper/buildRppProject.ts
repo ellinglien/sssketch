@@ -1029,9 +1029,10 @@ export function buildRppProject(
             : `${busLabel} (shared)`
 
       const toolkitNodes: RppNode[] = []
-      // A panned row's track pan, automation mode only (one stem per track there). REAPER's
-      // `VOLPAN <vol> <pan> <width> <pan law> <pan mode>` with everything but the pan at its
-      // default (-1 is "use the project's"). REAPER's pan law is its own, not the
+      // A panned row's track pan, automation mode only (one stem per track there): REAPER's
+      // `VOLPAN <vol> <pan> ...`, unity volume, our pan, and the trailing `-1 -1 1` exactly as
+      // REAPER writes them for a new track -- REAPER's own defaults, left as they come rather
+      // than set to anything. REAPER's pan law is its own, not the
       // StereoPannerNode law sssketch plays with: the row lands on the same side, but the near
       // side's level is REAPER's. A centred row writes nothing, as before.
       const trackPan = automationMode ? stemPans.get(trackEntries[0].key) : undefined

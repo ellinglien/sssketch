@@ -319,7 +319,9 @@ export async function renderStemsToDir(
       client.send('load-project', project)
       const result = (await client.sendAndAwaitType(
         'render-export',
-        { outputPath, durationBars },
+        // Float: a per-stem render drops the master stages (stemExportSound), and a panned
+        // row's near side can pass full scale, which 16 bits would clip (RenderExport.h).
+        { outputPath, durationBars, sampleFormat: 'float32' },
         'render-export-result',
         RENDER_EXPORT_TIMEOUT_MS
       )) as { success: boolean; error?: string }
@@ -505,7 +507,8 @@ export async function renderStemTracksToDir(
         client.send('load-project', project)
         const result = (await client.sendAndAwaitType(
           'render-export',
-          { outputPath, durationBars },
+          // Float, as renderStemsToDir's: see there.
+          { outputPath, durationBars, sampleFormat: 'float32' },
           'render-export-result',
           RENDER_EXPORT_TIMEOUT_MS
         )) as { success: boolean; error?: string }

@@ -99,7 +99,8 @@ namespace sssketch
         const EngineProject& project,
         const juce::String& outputPath,
         double durationBars,
-        juce::String& errorOut)
+        juce::String& errorOut,
+        WavSampleFormat format)
     {
         const double sampleRate = 44100.0;
         juce::AudioBuffer<float> output;
@@ -117,7 +118,8 @@ namespace sssketch
             return false;
         }
         std::unique_ptr<juce::AudioFormatWriter> writer(
-            wavFormat.createWriterFor(out.get(), sampleRate, 2, 16, {}, 0));
+            // 32 bits is IEEE float in JUCE's WAV writer: written as is, no clamp.
+            wavFormat.createWriterFor(out.get(), sampleRate, 2, format == WavSampleFormat::float32 ? 32 : 16, {}, 0));
         if (writer == nullptr)
         {
             errorOut = "failed to create WAV writer for: " + outputPath;

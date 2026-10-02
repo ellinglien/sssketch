@@ -2172,6 +2172,112 @@ namespace sssketch
                     expect(std::memcmp(aR.data(), cR.data(), sizeof(float) * aR.size()) == 0);
                 }
 
+                beginTest("a panned stem with nothing in the block leaves the mix exactly as without it");
+                {
+                    // The lazy buffer (PlaybackEngine.cpp's prepareStemBuffer): a panned,
+                    // toolkit-less stem far from the block clears nothing and adds nothing.
+                    auto with = panProject({ { mono, 0.0 }, { stereo, 0.25 }, { mono, -0.25 } });
+                    with.rifffs[0].stems[1].startBarOverride = 50.0;
+                    with.rifffs[0].stems[2].startBarOverride = 60.0;
+                    const auto without = panProject({ { mono, 0.0 } });
+                    std::vector<float> aL, aR, bL, bR;
+                    render(with, 44100, { 512, 300, 1 }, aL, aR);
+                    render(without, 44100, { 512, 300, 1 }, bL, bR);
+                    expect(std::memcmp(aL.data(), bL.data(), sizeof(float) * aL.size()) == 0);
+                    expect(std::memcmp(aR.data(), bR.data(), sizeof(float) * aR.size()) == 0);
+                    expect(std::abs(aL[3000]) > 0.01f, "it rendered something");
+                }
+
+                beginTest("a panned one-shot is panned like a tiled stem");
+                {
+                    auto oneShot = [&](double pan) {
+                        auto p = panProject({ { stereo, pan } });
+                        auto& stem = p.rifffs[0].stems[0];
+                        stem.oneShot = true;
+                        stem.trimStartSec = 0.1;
+                        stem.trimEndSec = 0.6;
+                        return p;
+                    };
+                    std::vector<float> dryL, dryR, panL, panR;
+                    render(oneShot(0.0), 44100, { 512 }, dryL, dryR);
+                    render(oneShot(0.25), 44100, { 512 }, panL, panR);
+                    const double gL = std::cos(0.25 * juce::MathConstants<double>::halfPi);
+                    const double gR = std::sin(0.25 * juce::MathConstants<double>::halfPi);
+                    int mismatches = 0;
+                    for (size_t i = 0; i < dryL.size(); ++i)
+                    {
+                        const double l = dryL[i], r = dryR[i];
+                        if (panL[i] != (float) (l * gL) || panR[i] != (float) (r + l * gR))
+                            ++mismatches;
+                    }
+                    expectEquals(mismatches, 0);
+                    expect(std::abs(dryL[10000]) > 0.01f, "the one-shot sounded");
+                    expectEquals(dryL[40000], 0.0f); // and stopped at its trim end
+                }
+
+                beginTest("a panned stem with a drawn volume curve: volume, then pan");
+                {
+                    auto curved = [&](double pan) {
+                        auto p = panProject({ { stereo, pan } });
+                        auto& stem = p.rifffs[0].stems[0];
+                        stem.hasToolkit = true;
+                        stem.toolkit.automation.volume = { { 0.0, 1.0 }, { 1.0, 0.2 } };
+                        return p;
+                    };
+                    std::vector<float> dryL, dryR, panL, panR;
+                    render(curved(0.0), 44100, { 512 }, dryL, dryR);
+                    render(curved(0.25), 44100, { 512 }, panL, panR);
+                    const double gL = std::cos(0.25 * juce::MathConstants<double>::halfPi);
+                    const double gR = std::sin(0.25 * juce::MathConstants<double>::halfPi);
+                    int mismatches = 0;
+                    for (size_t i = 0; i < dryL.size(); ++i)
+                    {
+                        const double l = dryL[i], r = dryR[i];
+                        if (panL[i] != (float) (l * gL) || panR[i] != (float) (r + l * gR))
+                            ++mismatches;
+                    }
+                    expectEquals(mismatches, 0);
+                    // The curve really is shaping it: late samples are quieter than early ones.
+                    float early = 0.0f, late = 0.0f;
+                    for (size_t i = 1000; i < 5000; ++i)
+                        early = juce::jmax(early, std::abs(dryL[i]));
+                    for (size_t i = 38000; i < 42000; ++i)
+                        late = juce::jmax(late, std::abs(dryL[i]));
+                    expect(late < 0.5f * early, "late " + juce::String(late) + " early " + juce::String(early));
+                }
+
+                beginTest("a per-stem render writes float, so a panned row's near side is not clipped");
+                {
+                    // Near full scale, panned hard enough that the near side passes 0 dBFS:
+                    // 0.9 x (1 + sin(pi/4)) = 1.54. 16 bits clips it at 1; float keeps it.
+                    auto loud = writeSineFixtureWav("sssketch_pe_pan_loud.wav", 220.0, 0.9f, 44100);
+                    const auto project = panProject({ { loud, 0.5 } });
+                    const auto peakOf = [&](WavSampleFormat format) {
+                        auto out = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                                       .getChildFile("sssketch_pe_pan_render.wav");
+                        juce::String error;
+                        expect(renderProjectToWavFile(project, out.getFullPathName(), 0.5, error, format), error);
+                        juce::AudioFormatManager formats;
+                        formats.registerBasicFormats();
+                        std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(out));
+                        float peak = 0.0f;
+                        if (reader != nullptr)
+                        {
+                            juce::AudioBuffer<float> buffer(2, (int) reader->lengthInSamples);
+                            reader->read(&buffer, 0, (int) reader->lengthInSamples, 0, true, true);
+                            peak = buffer.getMagnitude(1, 0, buffer.getNumSamples());
+                        }
+                        reader.reset();
+                        out.deleteFile();
+                        return peak;
+                    };
+                    const float floatPeak = peakOf(WavSampleFormat::float32);
+                    const float pcmPeak = peakOf(WavSampleFormat::pcm16);
+                    expect(floatPeak > 1.4f, "float peak " + juce::String(floatPeak));
+                    expect(pcmPeak <= 1.0f, "16-bit peak " + juce::String(pcmPeak));
+                    loud.deleteFile();
+                }
+
                 stereo.deleteFile();
                 mono.deleteFile();
             }

@@ -21,7 +21,19 @@ namespace sssketch
         juce::AudioBuffer<float>& out,
         juce::String& errorOut);
 
-    /** Renders `project` offline to a 16-bit stereo WAV at `outputPath`, covering
+    /** The file a render writes. 16-bit PCM is the mixdown's (it has been through the master
+     * stage, limiter included, so it cannot exceed full scale). 32-bit float is for the PER-STEM
+     * renders -- toolkit bakes, stem/bus/track exports (native radio sound plan, Task 4 review):
+     * those drop the master stages, and a panned row's near side is LOUDER than its source
+     * (StemPan.h: +2.8 dB for a mono stem at the default 0.25), which 16 bits would hard-clip.
+     * Float keeps the overs for the DAW's own gain staging. */
+    enum class WavSampleFormat
+    {
+        pcm16,
+        float32
+    };
+
+    /** Renders `project` offline to a stereo WAV (16-bit unless `format` says float) at `outputPath`, covering
      * `durationBars` bars from position 0, including the project's own master
      * plugin chain (see EngineProject::masterChain) processed in series over
      * each rendered block — matches live playback exactly. Returns false (with
@@ -34,5 +46,6 @@ namespace sssketch
         const EngineProject& project,
         const juce::String& outputPath,
         double durationBars,
-        juce::String& errorOut);
+        juce::String& errorOut,
+        WavSampleFormat format = WavSampleFormat::pcm16);
 }

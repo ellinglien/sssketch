@@ -10,21 +10,25 @@ import type { ToolkitExportMode } from '@shared/toolkit'
  * own dimmed-backdrop-plus-panel convention.
  *
  * When the project actually uses the built-in sound toolkit
- * (projectUsesToolkit, which the caller asks) or the radio sound's per-row
- * pans put a stem off centre (timelineStemPans), the modal also carries the
+ * (projectUsesToolkit) or the radio sound's per-row pans put a stem off
+ * centre -- exportToolkitChoice, which the caller asks -- the modal also carries the
  * bake/automation choice from the toolkit spec's section 4. It appears ONLY
  * then: a project with nothing drawn on it has nothing to choose between,
  * and would just be reading two paragraphs about a feature it isn't using. */
 export function ExportFormatPicker({
   onChoose,
   onCancel,
-  toolkitInUse = false
+  toolkitInUse = false,
+  defaultToolkitMode = 'bake'
 }: {
   onChoose: (format: 'ableton' | 'reaper', toolkitMode: ToolkitExportMode) => void
   onCancel: () => void
   toolkitInUse?: boolean
+  /** Which side the choice starts on (exportToolkitChoice): `automation` when the per-row pans
+   * are the project's only per-stem stage. */
+  defaultToolkitMode?: ToolkitExportMode
 }): React.JSX.Element {
-  const [toolkitMode, setToolkitMode] = useState<ToolkitExportMode>('bake')
+  const [toolkitMode, setToolkitMode] = useState<ToolkitExportMode>(defaultToolkitMode)
 
   const buttonStyle = {
     display: 'block',

@@ -1258,13 +1258,19 @@ namespace sssketch
             }
             const auto outputPath = payload.getProperty("outputPath", "").toString();
             const auto durationBars = (double) payload.getProperty("durationBars", 0.0);
+            // Optional: "float32" for a per-stem render (RenderExport.h's WavSampleFormat);
+            // anything else, or absent, is today's 16-bit.
+            const auto sampleFormat = payload.getProperty("sampleFormat", "").toString() == "float32"
+                ? WavSampleFormat::float32
+                : WavSampleFormat::pcm16;
 
             // Reuses whatever project was most recently set via load-project — the same
             // "load-project, then act on it" sequencing IPC clients already use for
             // play/pause/set-position, kept consistent rather than inventing a second
             // way to pass project data just for this one message type.
             juce::String error;
-            const bool ok = renderProjectToWavFile(engine.currentProjectForExport(), outputPath, durationBars, error);
+            const bool ok = renderProjectToWavFile(
+                engine.currentProjectForExport(), outputPath, durationBars, error, sampleFormat);
             sendJson(makeRenderExportResult(ok, ok ? juce::String() : error));
         }
         else if (type == "bake-stem")

@@ -200,6 +200,23 @@ function findDataChunkOffset(buf: Buffer): number {
   throw new Error(`no "data" chunk found in WAV (${buf.length} bytes)`)
 }
 
+/** The `fmt ` chunk's format tag (1 PCM, 3 IEEE float) and bit depth. */
+function wavFormatOf(buf: Buffer): { audioFormat: number; bitsPerSample: number } {
+  let offset = 12
+  while (offset + 8 <= buf.length) {
+    const chunkId = buf.toString('ascii', offset, offset + 4)
+    const chunkSize = buf.readUInt32LE(offset + 4)
+    if (chunkId === 'fmt ') {
+      return {
+        audioFormat: buf.readUInt16LE(offset + 8),
+        bitsPerSample: buf.readUInt16LE(offset + 22)
+      }
+    }
+    offset += 8 + chunkSize + (chunkSize % 2)
+  }
+  throw new Error('no "fmt " chunk found in WAV')
+}
+
 // Mirrors FadeGain.cpp's always-on ~3ms anti-click floor (see its own doc
 // comment) — this reference is computed independently by hand, so the floor
 // has to be reproduced here too or every segment in this fixture would
@@ -558,21 +575,24 @@ describe('renderStemsToDir', () => {
       await renderStemsToDir(state, destDir)
 
       const outBuf = readFileSync(join(destDir, 'drums.wav'))
+      // A per-stem render is 32-bit float (RenderExport.h's WavSampleFormat): it has no master
+      // stage, and a panned row can pass full scale.
+      expect(wavFormatOf(outBuf)).toEqual({ audioFormat: 3, bitsPerSample: 32 })
       const dataStart = findDataChunkOffset(outBuf)
-      const numFrames = (outBuf.length - dataStart) / 4 // stereo, 2 bytes/sample
+      const numFrames = (outBuf.length - dataStart) / 8 // stereo, 4 bytes/sample
       expect(numFrames).toBeGreaterThanOrEqual(numSamples)
 
-      const a16 = Math.round(volA * 32767)
-      const b16 = Math.round(volB * 32767)
+      // The engine reads the 16-bit fixtures as n / 32768.
+      const a = Math.round(volA * 32767) / 32768
+      const b = Math.round(volB * 32767) / 32768
       const segmentDurationSec = numSamples / sampleRate
       let maxDiff = 0
       for (let i = 0; i < numSamples; i++) {
         const gain = microFadeGain(i / sampleRate, segmentDurationSec)
-        const expected16 = Math.max(-32768, Math.min(32767, Math.round(a16 * gain + b16 * gain)))
-        const left = outBuf.readInt16LE(dataStart + i * 4)
-        maxDiff = Math.max(maxDiff, Math.abs(left - expected16))
+        const left = outBuf.readFloatLE(dataStart + i * 8)
+        maxDiff = Math.max(maxDiff, Math.abs(left - (a * gain + b * gain)))
       }
-      expect(maxDiff).toBeLessThanOrEqual(2) // 16-bit rounding tolerance
+      expect(maxDiff).toBeLessThanOrEqual(1e-6)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(destDir, { recursive: true, force: true })

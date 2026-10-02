@@ -533,8 +533,18 @@ namespace sssketch
                 const bool ownBuffer = stem.hasToolkit || stem.pan != 0.0;
                 float* stemOutL = chOutL;
                 float* stemOutR = chOutR;
-                if (ownBuffer)
-                {
+                // The own buffer is cleared LAZILY, by the first segment that
+                // actually overlaps this block -- not up front. With the radio
+                // sound's panning on by default most stems are panned, and a
+                // long arrangement has hundreds of them out of range of any
+                // given block: clearing (and later summing) a buffer for each
+                // of those every block would be pure audio-thread waste. A
+                // stem with nothing in range and no toolkit never touches the
+                // scratch or its channel at all (finishStem).
+                bool stemBufferReady = !ownBuffer; // the channel needs no preparing
+                const auto prepareStemBuffer = [&]() {
+                    if (stemBufferReady)
+                        return;
                     auto& sL = snap->scratchStemL;
                     auto& sR = snap->scratchStemR;
                     if (sL.size() != (size_t) numSamples)
@@ -546,7 +556,8 @@ namespace sssketch
                     std::fill(sR.begin(), sR.end(), 0.0f);
                     stemOutL = sL.data();
                     stemOutR = sR.data();
-                }
+                    stemBufferReady = true;
+                };
 
                 // Runs this clip's toolkit stage over whatever it just
                 // rendered and folds the result into the channel. Called on
@@ -566,6 +577,17 @@ namespace sssketch
                 const auto finishStem = [&]() {
                     if (!ownBuffer)
                         return;
+                    if (!stemBufferReady)
+                    {
+                        // Nothing of this stem fell in the block. A pan of
+                        // silence is silence, so a toolkit-less stem is done.
+                        // A toolkit still runs every block (its smoothers
+                        // advance and its filter rings out), over silence,
+                        // exactly as before the buffer was cleared lazily.
+                        if (!stem.hasToolkit)
+                            return;
+                        prepareStemBuffer();
+                    }
                     if (stem.hasToolkit)
                         applyStemToolkit(
                             stem.toolkit,
@@ -612,6 +634,7 @@ namespace sssketch
                     // declaration above the stem loop -- a one-shot is always
                     // exactly one segment, so isFirstSegment/isLastSegment are
                     // both unconditionally true here.
+                    prepareStemBuffer();
                     auto fadePoints = buildFadePoints(
                         segStartSec, segEndSec - segStartSec, true, true, true, fadeConfig);
 
@@ -761,6 +784,7 @@ namespace sssketch
                     const bool isFirstSegment = tileIdx == firstTileIdx;
                     const bool isLastSegment = tileIdx == totalTiles - 1;
 
+                    prepareStemBuffer();
                     auto fadePoints = buildFadePoints(
                         segStartSec, segEndSec - segStartSec,
                         isFirstSegment, isLastSegment,

@@ -215,7 +215,13 @@ export async function renderToolkitAudio(
       client.send('load-project', project)
       const result = (await client.sendAndAwaitType(
         'render-export',
-        { outputPath: join(samplesDir, fileName), durationBars: clip.endBar + tailBars },
+        {
+          outputPath: join(samplesDir, fileName),
+          durationBars: clip.endBar + tailBars,
+          // Float, not 16-bit: a bake has no master stage, and a panned row's near side is
+          // louder than its source (StemPan.h), so 16 bits could clip it.
+          sampleFormat: 'float32'
+        },
         'render-export-result',
         RENDER_EXPORT_TIMEOUT_MS
       )) as { success: boolean; error?: string }

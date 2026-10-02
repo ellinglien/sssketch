@@ -56,8 +56,8 @@ import { UnsavedChangesDialog } from './components/UnsavedChangesDialog'
 import { UpdateAvailableDialog } from './components/UpdateAvailableDialog'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { ExportFormatPicker } from './components/ExportFormatPicker'
-import { projectUsesToolkit, type ToolkitExportMode } from '@shared/toolkit'
-import { timelineStemPans } from '@shared/buildEngineProject'
+import type { ToolkitExportMode } from '@shared/toolkit'
+import { exportToolkitChoice } from '@shared/exportToolkitChoice'
 import { StemsFormatPicker } from './components/StemsFormatPicker'
 import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
@@ -1010,9 +1010,10 @@ function ProjectMenu({
       )}
       {exportFormatPickerOpen && (
         <ExportFormatPicker
-          // The per-row pans count: a DAW export bakes them or writes them as track pans, so
-          // a project whose only per-stem stage is its pans still has that choice to make.
-          toolkitInUse={projectUsesToolkit(state) || timelineStemPans(state).size > 0}
+          // The per-row pans count too, and a pans-only project starts on automation: see
+          // exportToolkitChoice.
+          toolkitInUse={exportToolkitChoice(state).offer}
+          defaultToolkitMode={exportToolkitChoice(state).defaultMode}
           onChoose={(format, toolkitMode) => {
             setExportFormatPickerOpen(false)
             void handleExportProject(format, toolkitMode)

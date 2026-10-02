@@ -57,8 +57,9 @@ export function stemAudioFields(stem: EngineStem): string {
     stem.trimEndSec,
     stem.toolkit === undefined ? '' : JSON.stringify(stem.toolkit),
     // The row's pan is baked into the bytes too (remoteStemRenderer), so a pan is different
-    // audio. Absent is centred.
-    stem.pan ?? 0
+    // audio. Only a non-zero pan adds a field: a centred stem keeps the id it had before panning
+    // existed (absence is load-bearing, as on the wire).
+    ...(stem.pan !== undefined && stem.pan !== 0 ? [stem.pan] : [])
   ].join(FIELD)
 }
 

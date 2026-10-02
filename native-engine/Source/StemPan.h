@@ -28,9 +28,9 @@ namespace sssketch
      * there is no state and nothing here can depend on where a block was split. */
     inline void applyStemPan(double pan, int numSamples, float* left, float* right)
     {
-        // `!(pan != 0)` rather than `pan == 0` so a NaN (which the parser never lets through)
-        // also leaves the samples alone instead of writing NaNs.
-        if (!(pan != 0.0) || std::isnan(pan) || numSamples <= 0 || left == nullptr || right == nullptr)
+        // 0 (and -0) is centred: nothing to do. A NaN, which the parser never lets through,
+        // also leaves the samples alone rather than writing NaNs.
+        if (pan == 0.0 || std::isnan(pan) || numSamples <= 0 || left == nullptr || right == nullptr)
             return;
         constexpr double halfPi = 1.57079632679489661923;
         const double p = std::clamp(pan, -1.0, 1.0);
