@@ -267,6 +267,11 @@ export interface TurnaroundInput {
   arc: TurnaroundArc
   /** The row the arc removes at this wrap, if any: the wash's target. */
   leavingRowId: string | null
+  /** The move families switched on (RadioSettings.turnaroundMoves); all when absent. None is
+   * off. */
+  moves?: readonly TurnaroundFamily[]
+  /** How far the moves go (RadioSettings.turnaroundDepth); bold when absent. */
+  depth?: TurnaroundDepth
 }
 
 /** Length menus, in beats unless named bars. The spec weights only the stop's. */
@@ -301,12 +306,6 @@ interface TurnaroundLooks {
   liftTop: number
   dipFloor: number
   washPeak: number
-}
-
-const BOLD_LOOKS: TurnaroundLooks = {
-  liftTop: TURNAROUND_LIFT_TOP,
-  dipFloor: TURNAROUND_DIP_FLOOR,
-  washPeak: TURNAROUND_WASH_PEAK
 }
 
 const isDrums = (r: TurnaroundRow): boolean => r.kinds.includes('drums')
@@ -382,21 +381,41 @@ function pickEven<T>(items: readonly T[], random: () => number): T {
   return items[Math.min(items.length - 1, Math.floor(random() * items.length))]
 }
 
-function drawOf(bed: Bed, arc: TurnaroundArc, capBeats: number): TurnaroundMove[] {
+function drawOf(
+  bed: Bed,
+  arc: TurnaroundArc,
+  capBeats: number,
+  moves: readonly TurnaroundFamily[]
+): TurnaroundMove[] {
   const weights = TURNAROUND_WEIGHTS[arc]
   return TURNAROUND_MOVES.filter(
-    (m) => weights[m] > 0 && SHORTEST_BEATS[m] <= capBeats && canSound(m, bed)
+    (m) =>
+      weights[m] > 0 &&
+      moves.includes(TURNAROUND_FAMILY_OF[m]) &&
+      SHORTEST_BEATS[m] <= capBeats &&
+      canSound(m, bed)
   )
 }
 
-/** The moves a phrase end could draw right now, with no randomness: the guards, the cap and the
- * arc's weights. rollTurnaround draws from exactly this. */
+/** min(half the loop, 4 bars), and never longer than the depth allows. */
+function capOf(input: Pick<TurnaroundInput, 'loopBars' | 'depth'>): number {
+  const depth = TURNAROUND_DEPTH[input.depth ?? DEFAULT_TURNAROUND_DEPTH]
+  return Math.min(turnaroundCapBeats(input.loopBars), depth.maxBeats)
+}
+
+/** The moves a phrase end could draw right now, with no randomness: the guards, the cap, the
+ * families switched on and the arc's weights. rollTurnaround draws from exactly this. */
 export function turnaroundDraw(
-  input: Pick<TurnaroundInput, 'rows' | 'leavingRowId' | 'loopBars' | 'arc'>
+  input: Pick<TurnaroundInput, 'rows' | 'leavingRowId' | 'loopBars' | 'arc' | 'moves' | 'depth'>
 ): TurnaroundMove[] {
-  const capBeats = turnaroundCapBeats(input.loopBars)
+  const capBeats = capOf(input)
   if (!(capBeats > 0)) return []
-  return drawOf(bedOf(input.rows, input.leavingRowId), input.arc, capBeats)
+  return drawOf(
+    bedOf(input.rows, input.leavingRowId),
+    input.arc,
+    capBeats,
+    input.moves ?? TURNAROUND_FAMILIES
+  )
 }
 
 function drawBeats(move: TurnaroundMove, bed: Bed, capBeats: number, random: () => number): number {
@@ -489,28 +508,32 @@ function build(
  *
  * Guards are checked before any draw, so a phrase end that cannot have one costs no randomness.
  * Every move ends exactly on the one; only WHEN a phrase end gets one is rolled.
+ * - The families switched off (`moves`) are never drawn; none switched on is off.
  */
 export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
   const { random, loopBars, lastPhrase, arc } = input
+  const moves = input.moves ?? TURNAROUND_FAMILIES
+  const looks = TURNAROUND_DEPTH[input.depth ?? DEFAULT_TURNAROUND_DEPTH]
   const chance = TURNAROUND_CHANCE[input.rate] ?? 0
-  const capBeats = turnaroundCapBeats(loopBars)
-  if (!(chance > 0) || !(capBeats > 0)) return null
+  const capBeats = capOf(input)
+  if (!(chance > 0) || !(capBeats > 0) || moves.length === 0) return null
   const bed = bedOf(input.rows, input.leavingRowId)
   if (lastPhrase !== null) {
     const { move } = lastPhrase
     if (!DIMINISHING.includes(move) || lastPhrase.halvings >= TURNAROUND_MAX_HALVINGS) return null
+    if (!moves.includes(TURNAROUND_FAMILY_OF[move])) return null
     const beats = Math.min(lastPhrase.beats / 2, capBeats)
     if (beats < 1 || !(TURNAROUND_WEIGHTS[arc][move] > 0) || !canSound(move, bed)) return null
     if (!(random() < chance)) return null
-    return build(move, beats, lastPhrase.halvings + 1, bed, loopBars, random, BOLD_LOOKS)
+    return build(move, beats, lastPhrase.halvings + 1, bed, loopBars, random, looks)
   }
-  const moves = drawOf(bed, arc, capBeats)
-  if (moves.length === 0 || !(random() < chance)) return null
+  const drawn = drawOf(bed, arc, capBeats, moves)
+  if (drawn.length === 0 || !(random() < chance)) return null
   const move = pickWeighted(
-    moves.map((m) => ({ item: m, weight: TURNAROUND_WEIGHTS[arc][m] })),
+    drawn.map((m) => ({ item: m, weight: TURNAROUND_WEIGHTS[arc][m] })),
     random
   )
-  return build(move, drawBeats(move, bed, capBeats, random), 0, bed, loopBars, random, BOLD_LOOKS)
+  return build(move, drawBeats(move, bed, capBeats, random), 0, bed, loopBars, random, looks)
 }
 
 /** What to remember of a phrase end for the next one. */
@@ -580,4 +603,73 @@ export function combineRadioCurves(
  * duck, or a cut): the turnaround is its lead-in, so a hole or a riser becomes a cut. */
 export function radioTransitionUnderTurnaround(kind: RadioTransitionKind): RadioTransitionKind {
   return radioGestureLeadsChange(kind) ? 'cut' : kind
+}
+
+// ---- the controls (spec section 4a) ----
+
+/** The four families a listener switches: drops (drum drop, low drop, stop), wash, filters
+ * (lift, dip) and the riser. */
+export type TurnaroundFamily = 'drops' | 'wash' | 'filters' | 'riser'
+
+export const TURNAROUND_FAMILIES: readonly TurnaroundFamily[] = [
+  'drops',
+  'wash',
+  'filters',
+  'riser'
+]
+
+export const TURNAROUND_FAMILY_OF: Readonly<Record<TurnaroundMove, TurnaroundFamily>> = {
+  'drum drop': 'drops',
+  'low drop': 'drops',
+  stop: 'drops',
+  wash: 'wash',
+  lift: 'filters',
+  dip: 'filters',
+  riser: 'riser'
+}
+
+/** The families switched on, in canonical order: an unknown entry is dropped, a non-array (a
+ * fresh setting) is all of them. An empty list stays empty -- none enabled behaves as off. */
+export function normalizeTurnaroundMoves(value: unknown): TurnaroundFamily[] {
+  if (!Array.isArray(value)) return [...TURNAROUND_FAMILIES]
+  return TURNAROUND_FAMILIES.filter((f) => value.includes(f))
+}
+
+/** One family switched, the rest kept, in canonical order. */
+export function toggleTurnaroundFamily(
+  moves: readonly TurnaroundFamily[],
+  family: TurnaroundFamily
+): TurnaroundFamily[] {
+  const on = moves.includes(family)
+  return TURNAROUND_FAMILIES.filter((f) => (f === family ? !on : moves.includes(f)))
+}
+
+export type TurnaroundDepth = 'subtle' | 'bold'
+
+export const TURNAROUND_DEPTH_OPTIONS: TurnaroundDepth[] = ['subtle', 'bold']
+
+/** `bold` on both radios: it is the spec's own numbers. */
+export const DEFAULT_TURNAROUND_DEPTH: TurnaroundDepth = 'bold'
+
+export function normalizeTurnaroundDepth(value: unknown): TurnaroundDepth {
+  return value === 'subtle' || value === 'bold' ? value : DEFAULT_TURNAROUND_DEPTH
+}
+
+export interface TurnaroundDepthValues {
+  liftTop: number
+  dipFloor: number
+  washPeak: number
+  /** The longest move, in beats (the loop's own cap still applies under it). */
+  maxBeats: number
+}
+
+/** What each depth does to the filter and wash moves, and how long any move may be. */
+export const TURNAROUND_DEPTH: Readonly<Record<TurnaroundDepth, TurnaroundDepthValues>> = {
+  bold: {
+    liftTop: TURNAROUND_LIFT_TOP,
+    dipFloor: TURNAROUND_DIP_FLOOR,
+    washPeak: TURNAROUND_WASH_PEAK,
+    maxBeats: TURNAROUND_MAX_BARS * BEATS_PER_BAR
+  },
+  subtle: { liftTop: 0.35, dipFloor: 0.6, washPeak: 0.6, maxBeats: BEATS_PER_BAR }
 }
