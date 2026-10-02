@@ -94,11 +94,13 @@ import { buildDropOutCurve, pickDropOutBeats } from '@shared/radioDropOut'
 import {
   combineRadioCurves,
   radioTransitionUnderTurnaround,
+  radioTurnaroundGate,
   rememberTurnaround,
   rollTurnaround,
   turnaroundArc,
   turnaroundToLoopBars,
   turnaroundWashSend,
+  type RadioTurnaroundGate,
   type TurnaroundMemory,
   type TurnaroundPlan
 } from '@shared/radioTurnaround'
@@ -2603,6 +2605,9 @@ export function DiscoverPanel({
   const radioTurnaroundRef = useRef<{ plan: TurnaroundPlan; armId: string } | null>(null)
   // What the last phrase end fired (rememberTurnaround): never two in a row, except diminution.
   const radioTurnaroundMemoryRef = useRef<TurnaroundMemory | null>(null)
+  // True from the wrap that starts a phrase's last lap until its roll (a microtask later) has
+  // run: the early decision and the manual draw wait it out (radioTurnaroundAtWrap).
+  const radioTurnaroundRollPendingRef = useRef(false)
   // The dub throws (native radio sound plan, Task 11): the web radio's own rule
   // (@shared/radioThrows stepThrows) on a clock of bars played, and the one throw armed
   // as a `dubSend` curve in the preview project, if any. See radioThrowTick. A REF, like
@@ -2914,9 +2919,14 @@ export function DiscoverPanel({
   }
   /** The turnaround at a wrap, from the clock effect. The one that played comes off; the wrap
    * that starts a phrase's last lap rolls the next. The roll is DEFERRED one microtask, queued
-   * right after densityTick's, so the arc's removal at this wrap (arcExitRef) is decided first --
-   * it is the wash's target -- while nothing else has armed the lap yet: the due branch's
-   * decision and a landing's arrivals run in microtasks queued later in the same tick. */
+   * right after densityTick's, so the arc's exit at this wrap (arcExitRef) is decided first:
+   * the roll leaves that row alone. The due branch's decision and a landing's arrivals run in
+   * microtasks queued later in the same tick, so they see the armed turnaround. What runs
+   * SYNCHRONOUSLY in this tick does not: stepRadioStage's early decision and its manual draw.
+   * So the roll is marked pending here, and while it is (radioTurnaroundGate's 'wait') those
+   * two decide on a later tick instead -- they are a lap early, so a tick costs nothing. Left
+   * unmarked, a hole or riser drawn on this tick would arm first, and the roll keeps an armed
+   * lead-in: the turnaround would lose the wrap the two most often share. */
   function radioTurnaroundAtWrap(lapStarts: boolean, loopBars: number): void {
     const had = radioTurnaroundRef.current !== null
     radioTurnaroundRef.current = null
@@ -2924,7 +2934,9 @@ export function DiscoverPanel({
       if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
       return
     }
+    radioTurnaroundRollPendingRef.current = true
     void Promise.resolve().then(() => {
+      radioTurnaroundRollPendingRef.current = false
       if (!radioOnRef.current) return
       rollRadioTurnaround(loopBars)
       if (had || radioTurnaroundRef.current !== null) {
@@ -2946,6 +2958,15 @@ export function DiscoverPanel({
     }
     const previewing = previewingSlotIdsRef.current
     const lengths = resolvedBarLengthsRef.current
+    // The row a thinning arc is taking out (stepArcExit) is left out of the turnaround, as if
+    // unheard. Its exit is an 8-beat drop-out (ARC_EXIT_BEATS, at most half the loop) that goes
+    // silent before the wrap and removes the row in the silence, so a move ending on the wrap
+    // -- a wash (one bar, at most half the loop, never longer than that silence) above all --
+    // would land on a row already gone; and if a stage or a lead-in holds the exit back a lap,
+    // the row is not leaving at this wrap at all. So no `leavingRowId` here: the planner's wash takes
+    // the non-drums bed. (The web radio's leaving row plays through to the wrap; sssketch's
+    // does not.) A stop never picks it as the one row left playing, either.
+    const exiting = arcExitRef.current?.slotId ?? null
     const plan = rollTurnaround({
       rate: radioSettings.turnarounds,
       random: Math.random,
@@ -2955,7 +2976,7 @@ export function DiscoverPanel({
         id: s.id,
         kinds: s.kinds,
         hooked: radioSlotFlagsRef.current[s.id] === 'hook',
-        audible: previewing.has(s.id) && lengths.has(s.id),
+        audible: previewing.has(s.id) && lengths.has(s.id) && s.id !== exiting,
         inFilterIn: radioGestureRef.current.some(
           (g) => g.slotId === s.id && g.kind === 'filter in'
         ),
@@ -2965,7 +2986,7 @@ export function DiscoverPanel({
         radioDensityOf(radioSettings) === 'arc'
           ? turnaroundArc(densityLegRef.current, slotsRef.current.length)
           : 'steady',
-      leavingRowId: arcExitRef.current?.slotId ?? null,
+      leavingRowId: null,
       moves: radioSettings.turnaroundMoves,
       depth: radioSettings.turnaroundDepth
     })
@@ -2974,8 +2995,16 @@ export function DiscoverPanel({
   }
   /** Radio off or a course change: the armed turnaround comes off, and the next phrase end
    * starts fresh. Wherever drop-outs were cleared (clearRadioGesture outside the clock). */
+  /** radioTurnaroundGate for a decision made now. */
+  function turnaroundGateNow(): RadioTurnaroundGate {
+    return radioTurnaroundGate(
+      radioTurnaroundRollPendingRef.current,
+      radioTurnaroundRef.current !== null
+    )
+  }
   function clearRadioTurnaround(): void {
     radioTurnaroundMemoryRef.current = null
+    radioTurnaroundRollPendingRef.current = false
     if (radioTurnaroundRef.current === null) return
     radioTurnaroundRef.current = null
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
@@ -3218,6 +3247,8 @@ export function DiscoverPanel({
       !appliedManualStillWaiting() &&
       radioLedChangeRef.current === null &&
       radioCourseChangeRef.current === null &&
+      // Not on the tick whose phrase turnaround is still to be rolled (radioTurnaroundAtWrap).
+      turnaroundGateNow() !== 'wait' &&
       // EVERY armed gesture spent -- true of an empty list, which is the
       // old "nothing armed". A leading gesture is never spent.
       radioGestureRef.current.every((g) => radioArrivalGestureSpent(g, pos, loopBars))
@@ -3252,7 +3283,7 @@ export function DiscoverPanel({
         // change's lead-in, so the change keeps only an arrival (spec section 3).
         const drawnTransition = pickTransition(radioSettings.transitions, changing?.kinds ?? [])
         const transition =
-          radioTurnaroundRef.current !== null
+          turnaroundGateNow() === 'arrival'
             ? radioTransitionUnderTurnaround(drawnTransition)
             : drawnTransition
         const beats = radioGestureBeats(transition, pickDropOutBeats)
@@ -3371,6 +3402,9 @@ export function DiscoverPanel({
       // Ready ones only: a leading gesture drawn for a change that then is
       // not ready at the wrap would play out with nothing arriving.
       const undrawn = [...manual.entries()].filter(([, m]) => m.arrival === null && m.stem !== null)
+      // A draw waits out the tick whose phrase turnaround is still to be rolled
+      // (radioTurnaroundAtWrap): staged a tick later, still a lap early.
+      if (undrawn.length > 0 && turnaroundGateNow() === 'wait') return
       if (undrawn.length > 0) {
         const drawn = drawManualTransitions(
           undrawn.map(([slotId, m]) => ({
@@ -3388,7 +3422,7 @@ export function DiscoverPanel({
             // manual one -- or this lap's turnaround, which is the lap's
             // lead-in. At most one leading gesture per lap.
             leadingArmed:
-              radioTurnaroundRef.current !== null ||
+              turnaroundGateNow() === 'arrival' ||
               radioGestureRef.current.some(
                 (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
               ),
@@ -4737,6 +4771,7 @@ export function DiscoverPanel({
       radioGestureRef.current = []
       radioTurnaroundRef.current = null
       radioTurnaroundMemoryRef.current = null
+      radioTurnaroundRollPendingRef.current = false
       radioThrowRef.current = initialDiscoverThrowState()
       radioThrowClearOwedRef.current = false
       setRadioLedChange(null)

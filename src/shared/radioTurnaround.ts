@@ -605,6 +605,20 @@ export function radioTransitionUnderTurnaround(kind: RadioTransitionKind): Radio
   return radioGestureLeadsChange(kind) ? 'cut' : kind
 }
 
+/** What a change decided now may draw, against the phrase turnaround (sssketch's Discover, where
+ * the roll runs a microtask after the wrap tick that starts a phrase's last lap):
+ *   - 'wait': that roll is still to come. Decide on a later tick: a hole or a riser drawn now
+ *     would arm first, and the roll keeps a lead-in already armed, so the turnaround would
+ *     never play on the wrap the two most often share;
+ *   - 'arrival': a turnaround is armed for the lap, so the change keeps only its arrival
+ *     (radioTransitionUnderTurnaround);
+ *   - 'any': no turnaround. */
+export type RadioTurnaroundGate = 'wait' | 'arrival' | 'any'
+export function radioTurnaroundGate(rollPending: boolean, armed: boolean): RadioTurnaroundGate {
+  if (rollPending) return 'wait'
+  return armed ? 'arrival' : 'any'
+}
+
 // ---- the controls (spec section 4a) ----
 
 /** The four families a listener switches: drops (drum drop, low drop, stop), wash, filters

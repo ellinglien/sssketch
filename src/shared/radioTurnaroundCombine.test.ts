@@ -4,6 +4,7 @@ import { buildBloomCurve, buildDuckCurve, buildFilterInCurve } from './radioTran
 import {
   combineRadioCurves,
   radioTransitionUnderTurnaround,
+  radioTurnaroundGate,
   turnaroundLiftCurve,
   turnaroundToLoopBars,
   turnaroundWashCurve,
@@ -95,5 +96,22 @@ describe('radioTransitionUnderTurnaround', () => {
     for (const kind of ['cut', 'filter in', 'bloom', 'duck'] as const) {
       expect(radioTransitionUnderTurnaround(kind)).toBe(kind)
     }
+  })
+})
+
+describe('radioTurnaroundGate', () => {
+  it('waits while the roll at the wrap that starts a phrase is still to come', () => {
+    // A lead-in drawn on that tick would arm first, and the roll keeps an armed lead-in -- the
+    // turnaround would never play on the wrap it collides with most.
+    expect(radioTurnaroundGate(true, false)).toBe('wait')
+    expect(radioTurnaroundGate(true, true)).toBe('wait')
+  })
+
+  it('keeps only an arrival under an armed turnaround', () => {
+    expect(radioTurnaroundGate(false, true)).toBe('arrival')
+  })
+
+  it('leaves the draw alone with no turnaround', () => {
+    expect(radioTurnaroundGate(false, false)).toBe('any')
   })
 })
