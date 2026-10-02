@@ -12,7 +12,7 @@ import {
   type RadioPace,
   type RadioSettings
 } from '@shared/radioSchedule'
-import { RADIO_DROP_OUT_OPTIONS } from '@shared/radioDropOut'
+import { RADIO_TURNAROUNDS_OPTIONS } from '@shared/radioTurnaround'
 import { RADIO_DENSITY_OPTIONS, radioDensityOf } from '@shared/radioSchedule'
 import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
 
@@ -164,10 +164,11 @@ export function DiscoverRadioMenu({
     )
   }
 
-  function row(label: string, chips: React.JSX.Element[]): React.JSX.Element {
+  function row(label: string, chips: React.JSX.Element[], tooltip?: string): React.JSX.Element {
     return (
       <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
         <span
+          data-tooltip={tooltip}
           style={{
             width: 76,
             fontSize: 9,
@@ -299,12 +300,16 @@ export function DiscoverRadioMenu({
         )}
       {densityRow}
       {channelsRow}
+      {/* The drop-outs row, renamed (2026-10-02, @shared/radioTurnaround): how often a phrase
+          end gets a turnaround -- a drop, a wash, a filter move or a riser. Writes the
+          deprecated dropOuts mirror too, until the plan's Task 16 deletes it. */}
       {mode === 'running' &&
         row(
-          'drop-outs',
-          RADIO_DROP_OUT_OPTIONS.map((d) =>
-            chip(d, settings.dropOuts === d, () => onChange({ dropOuts: d }))
-          )
+          'turnarounds',
+          RADIO_TURNAROUNDS_OPTIONS.map((d) =>
+            chip(d, settings.turnarounds === d, () => onChange({ turnarounds: d, dropOuts: d }))
+          ),
+          'end of phrase'
         )}
       {/* The field shipped with the settings object on 2026-09-28 and had
           no row until phase E, deliberately: a chip for something nothing
@@ -326,7 +331,7 @@ export function DiscoverRadioMenu({
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
         {mode === 'start'
           ? 'pick a pace to start'
-          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added'}
+          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added. turnarounds mark the end of each phrase'}
       </span>
     </div>
   )

@@ -90,7 +90,18 @@ import {
   type RadioSlotFlag,
   type RadioSlotFlags
 } from '@shared/radioSlotFlags'
-import { buildDropOutCurve, pickDropOutBeats, rollIntervalDropOut } from '@shared/radioDropOut'
+import { buildDropOutCurve, pickDropOutBeats } from '@shared/radioDropOut'
+import {
+  combineRadioCurves,
+  radioTransitionUnderTurnaround,
+  rememberTurnaround,
+  rollTurnaround,
+  turnaroundArc,
+  turnaroundToLoopBars,
+  turnaroundWashSend,
+  type TurnaroundMemory,
+  type TurnaroundPlan
+} from '@shared/radioTurnaround'
 import {
   buildBloomCurve,
   buildDuckCurve,
@@ -1748,6 +1759,19 @@ export function DiscoverPanel({
     function underMaster(key: string, curve: AutomationPoint[]): AutomationPoint[] {
       return masterScaledCurve(curve, (vol[key] ?? 1) * masterLevel01)
     }
+    // VOLUME SHAPES per stem, multiplied together (combineRadioCurves) and put under the master
+    // ONCE, at the end of this block -- scaling each under the master first and then multiplying
+    // would apply the master twice. Multiplying is the turnarounds spec's rule (section 3): a
+    // turnaround's drop never cancels a hole, a duck or the arc's exit; it stacks on them. Until
+    // 2026-10-02 the first volume curve on a stem won and every later one was dropped.
+    const volumeShapes = new Map<string, AutomationPoint[]>()
+    function addVolume(key: string, curve: AutomationPoint[]): void {
+      volumeShapes.set(key, combineRadioCurves(volumeShapes.get(key) ?? [], curve, 'volume'))
+    }
+    // A stem still ducks ONCE: two ducks landing at one wrap are one dip, not a deeper one.
+    const ducked = new Set<string>()
+    // A turnaround's lift switches its stems' filter to high-pass for the lap.
+    const stemFilters: Record<string, StemFilterSettings> = {}
     // One pass per gesture, merging rather than overwriting: with several
     // rows changing at one wrap, a bloom on one row and a duck from another
     // row's change can land on the same stem key.
@@ -1766,10 +1790,7 @@ export function DiscoverPanel({
           // hole drops the OUTGOING layer and the new one lands in the
           // space at the wrap (see radioLedChangeRef).
           const curve = buildDropOutCurve(maxBarLength, gesture.beats)
-          if (own > 0 && curve.length > 0) {
-            const key = stemKey(rifff.groupId, own)
-            stemAutomation[key] = { ...stemAutomation[key], volume: underMaster(key, curve) }
-          }
+          if (own > 0 && curve.length > 0) addVolume(stemKey(rifff.groupId, own), curve)
         } else if (gesture.kind === 'filter in') {
           const curve = buildFilterInCurve(maxBarLength, bars)
           if (own > 0 && curve.length > 0) {
@@ -1780,7 +1801,14 @@ export function DiscoverPanel({
           const curve = buildBloomCurve(maxBarLength, bars)
           if (own > 0 && curve.length > 0) {
             const key = stemKey(rifff.groupId, own)
-            stemAutomation[key] = { ...stemAutomation[key], reverbSend: curve }
+            stemAutomation[key] = {
+              ...stemAutomation[key],
+              reverbSend: combineRadioCurves(
+                stemAutomation[key]?.reverbSend ?? [],
+                curve,
+                'reverbSend'
+              )
+            }
           }
         } else if (gesture.kind === 'duck') {
           // Every OTHER audible layer dips, so the new one lands in space.
@@ -1789,13 +1817,9 @@ export function DiscoverPanel({
           // that follows a landing, other than every row that landed with
           // it (`spares`), so that push agrees with the stage it follows.
           //
-          // And a key that ALREADY carries a volume curve is skipped --
-          // ANY volume curve, not only another duck's. A second duck is the
-          // obvious case (duck curves are identical, and scaling one under
-          // the master twice would be wrong), but a hole or a drop-out
-          // written earlier in this loop keeps its stem too: one volume
-          // curve per stem, first writer wins. Deliberate -- do not narrow
-          // this into a duck-only check.
+          // A duck MULTIPLIES with any other volume curve on the stem (a
+          // hole, the arc's exit, a turnaround's drop) -- but a stem ducks
+          // once: a second duck at the same wrap is the same dip.
           const curve = buildDuckCurve(maxBarLength, bars)
           const changing = new Set(
             stage?.changes.map((c) => c.slotId) ?? gesture.spares ?? [gesture.slotId]
@@ -1804,8 +1828,9 @@ export function DiscoverPanel({
             members.forEach((m, i) => {
               if (!changing.has(m.id)) {
                 const key = stemKey(rifff.groupId, i + 1)
-                if (!stemAutomation[key]?.volume) {
-                  stemAutomation[key] = { ...stemAutomation[key], volume: underMaster(key, curve) }
+                if (!ducked.has(key)) {
+                  ducked.add(key)
+                  addVolume(key, curve)
                 }
               }
             })
@@ -1827,6 +1852,71 @@ export function DiscoverPanel({
         }
       }
     }
+    // THE PHRASE TURNAROUND (@shared/radioTurnaround), as lanes on the lap it plays in: the live
+    // project, and a stage landing at a BAR inside that lap (it replaces the live project there,
+    // so it must carry the move or the move would vanish mid-lap). Never a stage landing at the
+    // wrap: the turnaround ends on that wrap. Its curves are in beats before the wrap;
+    // turnaroundToLoopBars puts them on the lap, so they end exactly on the loop top.
+    const turnaround =
+      radioOnRef.current && (!stage || stage.atBars !== undefined)
+        ? radioTurnaroundRef.current
+        : null
+    if (turnaround !== null && maxBarLength !== undefined && maxBarLength > 0) {
+      const ownSend = masterSendRef.current / 100
+      for (const curves of turnaround.plan.rows) {
+        const own = members.findIndex((m) => m.id === curves.rowId) + 1
+        if (own === 0) continue
+        const key = stemKey(rifff.groupId, own)
+        if (curves.volume) addVolume(key, turnaroundToLoopBars(curves.volume, maxBarLength))
+        if (curves.reverbSend) {
+          // from the stem's own send (the master send, stemSends below) up to the peak
+          const wash = turnaroundToLoopBars(
+            turnaroundWashSend(curves.reverbSend, ownSend),
+            maxBarLength
+          )
+          stemAutomation[key] = {
+            ...stemAutomation[key],
+            reverbSend: combineRadioCurves(
+              stemAutomation[key]?.reverbSend ?? [],
+              wash,
+              'reverbSend'
+            )
+          }
+        }
+        if (curves.filter) {
+          // A stem already in a change's filter in keeps it, and its low-pass: one filter, one
+          // mode, one lap (combineRadioCurves keeps the curve already there).
+          const had = stemAutomation[key]?.filterCutoff ?? []
+          if (had.length === 0) {
+            stemAutomation[key] = {
+              ...stemAutomation[key],
+              filterCutoff: combineRadioCurves(
+                had,
+                turnaroundToLoopBars(curves.filter.cutoff, maxBarLength),
+                'filterCutoff'
+              )
+            }
+            if (curves.filter.mode === 'highpass') {
+              stemFilters[key] = {
+                mode: 'highpass',
+                cutoff: neutralCutoff('highpass'),
+                resonance: 0
+              }
+            }
+          }
+        }
+      }
+      if (turnaround.plan.riserBars !== undefined) {
+        const riser = buildTransitionRiser(rifff.groupId, maxBarLength, turnaround.plan.riserBars, {
+          variety: normalizeSoundSettings(sound ?? appSoundDefaultsNow()).riserVariety.on,
+          armId: turnaround.armId
+        })
+        if (riser) risers[riser.id] = riser
+      }
+    }
+    for (const [key, shape] of volumeShapes) {
+      stemAutomation[key] = { ...stemAutomation[key], volume: underMaster(key, shape) }
+    }
 
     // The armed dub throw (native radio sound plan, Task 11; @shared/discoverThrows), as a
     // `dubSend` curve on its row's stem, anchored at the loop top like the gestures above and
@@ -1839,11 +1929,14 @@ export function DiscoverPanel({
     //
     // And a hole, riser or drop-out armed after the throw was planned takes the throw back
     // when it has not started and this push lands first (throwYieldsToLeadIn): no throw over
-    // a lead-in, which the web only checks when it plans one.
+    // a lead-in, which the web only checks when it plans one. So does a phrase turnaround,
+    // which has its lap as a lead-in does: its roll is a microtask behind the wrap tick that
+    // may have armed a throw (radioTurnaroundAtWrap).
     let throwState = radioThrowRef.current
     if (
       stage === undefined &&
-      gestureList.some((g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)) &&
+      ((radioOnRef.current && radioTurnaroundRef.current !== null) ||
+        gestureList.some((g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind))) &&
       throwYieldsToLeadIn(throwState)
     ) {
       throwState = { ...throwState, armed: null }
@@ -1920,6 +2013,9 @@ export function DiscoverPanel({
       // state.
       masterFilter: masterFilterRef.current,
       stemAutomation,
+      // A turnaround's lift: the stems it high-passes for the lap (a cutoff curve rising from 0,
+      // above). Empty otherwise, which is initialState's own {}, so nothing else changes.
+      stemFilters,
       risers,
       stretch: { [rifff.groupId]: true }
     }
@@ -2496,6 +2592,17 @@ export function DiscoverPanel({
   // hole, a riser or a standalone drop-out) -- every path that arms one
   // checks that none is armed first. Empty is "nothing armed".
   const radioGestureRef = useRef<RadioGesture[]>([])
+  // The phrase turnaround armed for the lap that is playing (@shared/radioTurnaround; spec
+  // 2026-10-02-radio-turnarounds-design). Rolled at the wrap that starts a phrase's last lap
+  // (radioTurnaroundAtWrap), read by syncPreviewToEngine into the LIVE project (and a mid-lap
+  // stage, which replaces it inside the lap) -- never a stage landing at the wrap -- and taken
+  // off at the next wrap. Its own ref rather than an entry in radioGestureRef, deliberately:
+  // every gesture in that list holds radio's early decision until it is spent, and with a phrase
+  // grid the turnaround's lap is exactly the lap the next change is staged in. `armId` keys its
+  // riser (buildTransitionRiser), as a gesture's does.
+  const radioTurnaroundRef = useRef<{ plan: TurnaroundPlan; armId: string } | null>(null)
+  // What the last phrase end fired (rememberTurnaround): never two in a row, except diminution.
+  const radioTurnaroundMemoryRef = useRef<TurnaroundMemory | null>(null)
   // The dub throws (native radio sound plan, Task 11): the web radio's own rule
   // (@shared/radioThrows stepThrows) on a clock of bars played, and the one throw armed
   // as a `dubSend` curve in the preview project, if any. See radioThrowTick. A REF, like
@@ -2805,6 +2912,74 @@ export function DiscoverPanel({
     radioGestureRef.current = []
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
+  /** The turnaround at a wrap, from the clock effect. The one that played comes off; the wrap
+   * that starts a phrase's last lap rolls the next. The roll is DEFERRED one microtask, queued
+   * right after densityTick's, so the arc's removal at this wrap (arcExitRef) is decided first --
+   * it is the wash's target -- while nothing else has armed the lap yet: the due branch's
+   * decision and a landing's arrivals run in microtasks queued later in the same tick. */
+  function radioTurnaroundAtWrap(lapStarts: boolean, loopBars: number): void {
+    const had = radioTurnaroundRef.current !== null
+    radioTurnaroundRef.current = null
+    if (!lapStarts) {
+      if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+      return
+    }
+    void Promise.resolve().then(() => {
+      if (!radioOnRef.current) return
+      rollRadioTurnaround(loopBars)
+      if (had || radioTurnaroundRef.current !== null) {
+        scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+      }
+    })
+  }
+  /** The phrase end's roll (rollTurnaround). Math.random is passed, not called here (this
+   * repo's react-hooks/purity rule). No pushUndoSnapshot: a turnaround is performance, not an
+   * edit. A change's own lead-in already armed for this lap keeps it: no roll, and the next
+   * phrase end is not "after a turnaround". */
+  function rollRadioTurnaround(loopBars: number): void {
+    const leadArmed = radioGestureRef.current.some(
+      (g) => g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
+    )
+    if (leadArmed) {
+      radioTurnaroundMemoryRef.current = null
+      return
+    }
+    const previewing = previewingSlotIdsRef.current
+    const lengths = resolvedBarLengthsRef.current
+    const plan = rollTurnaround({
+      rate: radioSettings.turnarounds,
+      random: Math.random,
+      loopBars,
+      lastPhrase: radioTurnaroundMemoryRef.current,
+      rows: slotsRef.current.map((s) => ({
+        id: s.id,
+        kinds: s.kinds,
+        hooked: radioSlotFlagsRef.current[s.id] === 'hook',
+        audible: previewing.has(s.id) && lengths.has(s.id),
+        inFilterIn: radioGestureRef.current.some(
+          (g) => g.slotId === s.id && g.kind === 'filter in'
+        ),
+        barLength: lengths.get(s.id) ?? loopBars
+      })),
+      arc:
+        radioDensityOf(radioSettings) === 'arc'
+          ? turnaroundArc(densityLegRef.current, slotsRef.current.length)
+          : 'steady',
+      leavingRowId: arcExitRef.current?.slotId ?? null,
+      moves: radioSettings.turnaroundMoves,
+      depth: radioSettings.turnaroundDepth
+    })
+    radioTurnaroundMemoryRef.current = rememberTurnaround(plan)
+    radioTurnaroundRef.current = plan === null ? null : { plan, armId: newArmId() }
+  }
+  /** Radio off or a course change: the armed turnaround comes off, and the next phrase end
+   * starts fresh. Wherever drop-outs were cleared (clearRadioGesture outside the clock). */
+  function clearRadioTurnaround(): void {
+    radioTurnaroundMemoryRef.current = null
+    if (radioTurnaroundRef.current === null) return
+    radioTurnaroundRef.current = null
+    scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
   /** Takes the armed throw's curve off the preview: a push now, or -- while a staged swap
    * is pending, which an ordinary push would withdraw -- once it is gone. Whatever happens
    * to the stage puts a project on the wire anyway (its landing's commit, a cancel's
@@ -2871,9 +3046,12 @@ export function DiscoverPanel({
           manualChangesRef.current.size === 0 &&
           previewLoadedRef.current &&
           !radioThrowClearOwedRef.current,
-        leadingArmed: radioGestureRef.current.some(
-          (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
-        ),
+        // A turnaround has the lap, as a hole, a riser or a drop-out does.
+        leadingArmed:
+          radioTurnaroundRef.current !== null ||
+          radioGestureRef.current.some(
+            (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
+          ),
         rows: slotsRef.current.map((s) => ({
           slot: s.id,
           kinds: s.kinds,
@@ -2886,51 +3064,6 @@ export function DiscoverPanel({
     radioThrowRef.current = step.state
     if (step.change === 'armed') scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
     else if (step.change === 'ended') clearRadioThrowCurve()
-  }
-  /** The loop length once these rows have turned over -- the preview's
-   * maxBarLength with each landing row's incoming stem in place of its
-   * outgoing one, the same substitution syncPreviewToEngine makes for a
-   * stage (stagedBarLengths). A row whose incoming length is not known
-   * yet keeps the length it has. */
-  function loopBarsAfterLanding(
-    landing: readonly { slotId: string; bars: number | null | undefined }[]
-  ): number {
-    const lengths = new Map(resolvedBarLengthsRef.current)
-    for (const { slotId, bars } of landing) {
-      if (typeof bars === 'number' && bars > 0) lengths.set(slotId, bars)
-    }
-    return lengths.size > 0 ? Math.max(...lengths.values()) : 0
-  }
-  /** The interval's one drop-out roll (rollIntervalDropOut), made wherever
-   * an interval starts: a held change landing, early or not, and the due
-   * branch. `changedSlotId` is the row this interval's change turned over
-   * (or was aimed at), which is never the one dropped.
-   *
-   * Until 2026-09-30 the roll lived in the due branch alone, and the early
-   * decision (e5810f4) pre-empts that branch whenever the pick is warm --
-   * so drop-outs had all but stopped.
-   *
-   * No pushUndoSnapshot, for the same reason a radio change takes none: a
-   * drop-out is performance, not an edit. */
-  function rollRadioDropOut(changedSlotId: string | null, pos: number, loopBars: number): void {
-    const clock = radioClockRef.current
-    if (clock === null) return
-    const roll = rollIntervalDropOut({
-      rate: radioSettings.dropOuts,
-      audible: slotsRef.current
-        .filter((s) => previewingSlotIdsRef.current.has(s.id))
-        .map((s) => ({ id: s.id, kinds: s.kinds })),
-      changedSlotId,
-      gestureArmed: radioGestureRef.current.length > 0,
-      clock,
-      pos,
-      loopBars
-    })
-    if (roll === null) return
-    radioGestureRef.current = [
-      { kind: 'drop-out', slotId: roll.slotId, beats: roll.beats, lapsLeft: 1, armId: newArmId() }
-    ]
-    scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
   /** Everything the scheduled swap does on one position tick, in the one
    * order it is safe to do it in. Called from the clock effect below,
@@ -3115,7 +3248,13 @@ export function DiscoverPanel({
         // armed" rule and the same beats table as the due branch below.
         // Only the moment differs.
         const changing = slotsRef.current.find((sl) => sl.id === pending.slotId)
-        const transition = pickTransition(radioSettings.transitions, changing?.kinds ?? [])
+        // A turnaround armed for this lap ends on the wrap this change waits for: it is the
+        // change's lead-in, so the change keeps only an arrival (spec section 3).
+        const drawnTransition = pickTransition(radioSettings.transitions, changing?.kinds ?? [])
+        const transition =
+          radioTurnaroundRef.current !== null
+            ? radioTransitionUnderTurnaround(drawnTransition)
+            : drawnTransition
         const beats = radioGestureBeats(transition, pickDropOutBeats)
         setRadioPending(null)
         if (radioGestureLeadsChange(transition)) {
@@ -3245,11 +3384,14 @@ export function DiscoverPanel({
           {
             pick: (kinds) => pickTransition(radioSettings.transitions, kinds),
             dropOutBeats: pickDropOutBeats,
-            // A hole, a riser or a standalone drop-out -- radio's own or an
-            // earlier manual one. At most one leading gesture per lap.
-            leadingArmed: radioGestureRef.current.some(
-              (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
-            ),
+            // A hole, a riser or a drop-out -- radio's own or an earlier
+            // manual one -- or this lap's turnaround, which is the lap's
+            // lead-in. At most one leading gesture per lap.
+            leadingArmed:
+              radioTurnaroundRef.current !== null ||
+              radioGestureRef.current.some(
+                (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
+              ),
             barsToWrap: loopBars - pos,
             loopBars
           }
@@ -3506,6 +3648,9 @@ export function DiscoverPanel({
         : Math.floor(pos / traceGrid) * traceGrid
     // The density arc gets every tick, before any branch below can return.
     densityTick(step.wrapped, pos, loopBars)
+    // The phrase turnaround: off at every wrap, rolled on the wrap that starts a phrase's last
+    // lap. After densityTick, whose microtask decides the arc's removal at this wrap first.
+    if (step.wrapped) radioTurnaroundAtWrap(step.turnaroundLapStarts, loopBars)
     // So do the dub throws (Task 11).
     radioThrowTick(pos, loopBars)
     // A change that was WAITING for its boundary LANDS HERE and only
@@ -3774,33 +3919,6 @@ export function DiscoverPanel({
               : arriving)
           ]
         }
-        // Radio's own change landed (or was dropped at the boundary), so its
-        // interval starts here -- and this is where the interval's drop-out
-        // is rolled, whether the change was decided a lap early or held at
-        // its due tick. The due branch below never runs for either, and it
-        // rolls whether or not its own change commits, so this does too:
-        // once per interval. After the arrivals above, so an arrival curve
-        // keeps its lap.
-        //
-        // Against the loop this landing is ABOUT to be, not the one the
-        // tick measured: a 4-bar loop taking an 8-bar stem wraps at 8 from
-        // here, and a roll measured against 4 would take a lap the next
-        // change can land on.
-        if (led !== null && !ledOverridden) {
-          rollRadioDropOut(
-            led.slotId,
-            pos,
-            loopBarsAfterLanding([
-              ...(committed ? [{ slotId: led.slotId, bars: led.stem?.barLength ?? null }] : []),
-              ...landingReady
-                .filter(([slotId]) => slotsRef.current.some((sl) => sl.id === slotId))
-                .map(([slotId]) => ({
-                  slotId,
-                  bars: manualToLand.find(([id]) => id === slotId)?.[1].stem?.barLength ?? null
-                }))
-            ])
-          )
-        }
         if (committed || manualCommitted) {
           runAfterEngineSync(() => {
             if (!radioOnRef.current) return
@@ -4008,10 +4126,16 @@ export function DiscoverPanel({
         // lap is a wash, and a standalone drop-out that has not finished
         // has as much right to the lap as a transition does.
         const changing = slotsRef.current.find((sl) => sl.id === pending.slotId)
-        const transition =
+        const drawnTransition =
           radioGestureRef.current.length === 0
             ? pickTransition(radioSettings.transitions, changing?.kinds ?? [])
             : 'cut'
+        // Under this lap's turnaround a lead-in would land on its wrap: the turnaround is the
+        // change's lead-in, so it keeps only an arrival (spec section 3).
+        const transition =
+          radioTurnaroundRef.current !== null
+            ? radioTransitionUnderTurnaround(drawnTransition)
+            : drawnTransition
         // How long the move takes, in beats. A hole draws from the same
         // weighted 1/2/4 the standalone drop-out does, because it IS one
         // -- a fixed length is a rhythm and a varied one is a gesture. A
@@ -4133,23 +4257,12 @@ export function DiscoverPanel({
           // change it decorates" was supposed to mean. It also halves the
           // load-projects a decorated change costs.
           //
-          // The two sync calls nearby are deliberately untouched: the
+          // The sync call nearby is deliberately untouched: the
           // leading-gesture branch above (a hole or a riser) must fire
-          // NOW, a whole lap before its change, and the standalone
-          // drop-out below is not attached to a change at all.
+          // NOW, a whole lap before its change. (The standalone drop-out
+          // roll that followed here went with the turnarounds, 2026-10-02.)
         }
       }
-      // Roll ONCE per interval for a drop-out in the coming one -- no
-      // second clock. See rollRadioDropOut; a held change rolls it where it
-      // lands instead. Against the loop the commit above makes, as the
-      // landing does.
-      rollRadioDropOut(
-        pending?.slotId ?? null,
-        pos,
-        committed && pending !== null
-          ? loopBarsAfterLanding([{ slotId: pending.slotId, bars: pending.incomingBars }])
-          : loopBars
-      )
       // Arm the next one whether or not this one landed -- nothing
       // eligible is radio idling, not an error, and it retries here at
       // every boundary.
@@ -4622,6 +4735,8 @@ export function DiscoverPanel({
       // matters -- nothing can re-arm from a dead panel, and the engine
       // gets a fresh project from whatever claims it next.
       radioGestureRef.current = []
+      radioTurnaroundRef.current = null
+      radioTurnaroundMemoryRef.current = null
       radioThrowRef.current = initialDiscoverThrowState()
       radioThrowClearOwedRef.current = false
       setRadioLedChange(null)
@@ -6482,6 +6597,7 @@ export function DiscoverPanel({
     // radio has already stopped wanting.
     cancelStagedSwap('radio-off')
     clearRadioGesture()
+    clearRadioTurnaround()
     // An armed throw's curve comes off too (radioOnRef is false, so the rebuild carries
     // none); its echo rings out in the engine.
     resetRadioThrows(true)
@@ -6620,6 +6736,7 @@ export function DiscoverPanel({
     // that is being left behind.
     cancelStagedSwap('course-change')
     clearRadioGesture()
+    clearRadioTurnaround()
     void armRadioPick()
   }
 
