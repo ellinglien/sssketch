@@ -1288,7 +1288,10 @@ app.whenReady().then(async () => {
       rows: { row: string; id: string; bars: number; phaseBars: number }[],
       now: boolean
     ) => {
-      playbackEngine?.client.send('stage-cycles', { rows, now })
+      // The engine keeps at most 8 rows and drops bad ones; this only keeps a
+      // malformed call from the renderer off the socket.
+      if (!Array.isArray(rows)) return
+      playbackEngine?.client.send('stage-cycles', { rows: rows.slice(0, 8), now: now === true })
     }
   )
 
@@ -1410,7 +1413,9 @@ app.whenReady().then(async () => {
         soundSource,
         artistStemCIDs,
         // Fold mode's clash (radioClash): the renderer only ever sends 'rhythmic' and 'bright'.
-        alsoTraits: (alsoTraits ?? []).filter((k) => k === 'rhythmic' || k === 'bright')
+        alsoTraits: (Array.isArray(alsoTraits) ? alsoTraits : []).filter(
+          (k) => k === 'rhythmic' || k === 'bright'
+        )
       })
       console.log(
         `get-discover-candidates(${kinds.join('+')}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`
