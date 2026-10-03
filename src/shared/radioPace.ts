@@ -92,8 +92,10 @@ function geo(a: number, b: number, t: number): number {
   return Math.exp(Math.log(a) + (Math.log(b) - Math.log(a)) * t)
 }
 
-function windowAt(level: number): { min: number; max: number } {
-  const knots = RADIO_PACE_WINDOW_KNOTS
+function windowAt(
+  level: number,
+  knots: readonly (readonly [number, number, number])[] = RADIO_PACE_WINDOW_KNOTS
+): { min: number; max: number } {
   let i = 0
   while (i < knots.length - 2 && level > knots[i + 1][0]) i++
   const [l0, min0, max0] = knots[i]
@@ -227,4 +229,74 @@ export function nextRadioPaceAnchor(level: number): number {
     RADIO_PACE_ANCHORS.ludicrous
   ]
   return order.find((a) => a > p) ?? order[0]
+}
+
+// ---- fold mode follows the slider (docs/superpowers/specs/2026-10-03-radio-fold-follows-pace-design.md)
+
+/** At or below this level fold mode keeps its own cadence exactly: FOLD_PACE_BARS (8-32), the
+ * runtime's phrase, the realignment preference, one row, the fold machine unhurried. */
+export const RADIO_FOLD_PACE_FROM = RADIO_PACE_ANCHORS.fast
+/** At or above this level fold mode's change cadence IS the slider's (window, phrase, bar band,
+ * rows); only the folded rows themselves differ (radioCadenceBarEvery). */
+export const RADIO_FOLD_PACE_JOINS = 80
+/** Fold's window above RADIO_FOLD_PACE_FROM: [level, min, max], geometric between knots like the
+ * slider's. The first is FOLD_PACE_BARS (radioFold.ts; pinned equal by test, since this module
+ * imports nothing at runtime); the last is the slider's own window at RADIO_FOLD_PACE_JOINS. */
+export const RADIO_FOLD_PACE_WINDOW_KNOTS: readonly (readonly [number, number, number])[] =
+  Object.freeze([
+    [50, 8, 32],
+    [60, 4, 12],
+    [70, 2, 4],
+    [80, 1, 2]
+  ] as const)
+/** The laps a change may wait past its draw for a realignment top (radioFoldIntervalBars): fold's
+ * FOLD_PREFER_WAIT_LAPS (2) up to 60, 1 up to 70, none above -- "impolite" from the band where
+ * every loop top is a landing. */
+export const RADIO_FOLD_PREFER_WAIT_BANDS: readonly (readonly [number, number])[] = Object.freeze([
+  [60, 2],
+  [70, 1]
+] as const)
+/** The fold machine hurries above this level (radioFold's `hurry`, 0 here, 1 at 100). */
+export const RADIO_FOLD_HURRY_FROM = 70
+
+export interface RadioFoldPaceProfile extends RadioPaceProfile {
+  /** Laps a change may wait for a realignment top. */
+  preferWaitLaps: number
+  /** 0..1: how much the fold machine's own timers shorten (stepRadioFold's `hurry`). */
+  hurry: number
+}
+
+/** Fold mode's cadence at `level`. At or below RADIO_FOLD_PACE_FROM, fold's own exactly (8-32 bars,
+ * no phrase cap, one row, a 2-lap realignment preference, no hurry) whatever the level, as before
+ * the slider reached fold. Above, the window shrinks along RADIO_FOLD_PACE_WINDOW_KNOTS, the phrase
+ * cap and rows are the slider's, the preference fades out by 71; from RADIO_FOLD_PACE_JOINS
+ * everything but the hurry is the slider's profile, bar band included. Pure, no randomness. */
+export function radioFoldPaceProfile(level: number): RadioFoldPaceProfile {
+  const pace = radioPaceProfile(level)
+  const p = pace.level
+  if (p <= RADIO_FOLD_PACE_FROM) {
+    return {
+      level: p,
+      window: { min: 8, max: 32 },
+      phraseCap: null,
+      barEvery: null,
+      rows: 1,
+      preferWaitLaps: 2,
+      hurry: 0
+    }
+  }
+  let preferWaitLaps = 0
+  for (const [upTo, laps] of RADIO_FOLD_PREFER_WAIT_BANDS) {
+    if (p <= upTo) {
+      preferWaitLaps = laps
+      break
+    }
+  }
+  const hurry = Math.max(
+    0,
+    (p - RADIO_FOLD_HURRY_FROM) / (RADIO_PACE_LEVEL_MAX - RADIO_FOLD_HURRY_FROM)
+  )
+  const window =
+    p >= RADIO_FOLD_PACE_JOINS ? pace.window : windowAt(p, RADIO_FOLD_PACE_WINDOW_KNOTS)
+  return { ...pace, window: { ...window }, preferWaitLaps, hurry }
 }
