@@ -319,10 +319,20 @@ export function buildTransitionRiser(
      * each arming draws afresh. Without one (or with variety off) the id is today's,
      * `radio-riser-${channelId}`, so variety off stays wire-identical to before. */
     armId?: string
+    /** Bars before the loop top the riser ENDS (a turnaround's gap, spec
+     * 2026-10-03-radio-turnaround-combos-design): it sounds over the `bars` before that, and the
+     * whole of it -- riser and gap -- stays within the half loop. 0 or absent: it ends on the
+     * top, today's riser exactly. */
+    endBeforeBars?: number
   } = {}
 ): RiserClip | null {
   if (!(loopBars > 0) || !(bars > 0)) return null
-  const lengthBars = clampToHalfLoop(loopBars, bars)
+  const endBefore =
+    options.endBeforeBars !== undefined && options.endBeforeBars > 0
+      ? Math.min(options.endBeforeBars, loopBars / 2)
+      : 0
+  const lengthBars = clampToHalfLoop(loopBars, bars + endBefore) - endBefore
+  if (!(lengthBars > 0)) return null
   const variety = options.variety === true
   const armed = variety && typeof options.armId === 'string' && options.armId !== ''
   if (variety && !armed && !warnedUnarmedRiser) {
@@ -338,7 +348,7 @@ export function buildTransitionRiser(
   const riser: RiserClip = {
     id: armed ? `radio-riser-${options.armId}` : `radio-riser-${channelId}`,
     channelId,
-    startBar: loopBars - lengthBars,
+    startBar: loopBars - endBefore - lengthBars,
     lengthBars,
     startCutoffValue: 0.2,
     endCutoffValue: 0.95,

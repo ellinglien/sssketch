@@ -18,6 +18,7 @@
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import { buildDropOutCurve, pickDropOutBeats } from './radioDropOut'
 import { radioGestureLeadsChange, type RadioTransitionKind } from './radioTransition'
+import { seededRandom } from './seededRandom'
 import {
   evaluateAutomation,
   type AutomationParam,
@@ -261,15 +262,32 @@ export interface TurnaroundRowCurves {
   reverbSend?: TurnaroundWash
 }
 
-export interface TurnaroundPlan {
+/** One move of a combined turnaround (spec 2026-10-03-radio-turnaround-combos-design): its
+ * length in beats before the wrap and the rows it acts on ([] for the riser, its own voice). */
+export interface TurnaroundPart {
   move: TurnaroundMove
-  /** The move's length in beats, ending on the wrap. */
+  beats: number
+  rowIds: string[]
+}
+
+export interface TurnaroundPlan {
+  /** The LEAD move: the one drawn first (a phrase end's draw, or a turn's chip). */
+  move: TurnaroundMove
+  /** The whole turnaround's length in beats, ending on the wrap: its longest part. */
   beats: number
   /** 0 for a fresh move; 1 or 2 for a diminution (the same move at half the length). */
   halvings: number
+  /** Every row's curves, merged across the parts and the gap: one entry per row. */
   rows: TurnaroundRowCurves[]
-  /** The riser's length in bars (its own voice; `rows` is empty). */
+  /** The riser's SOUNDING length in bars (its own voice). With a gap it ends `gapBeats` before
+   * the wrap. */
   riserBars?: number
+  /** Combined plans only (TurnaroundInput.combine): every move, the lead first. */
+  parts?: TurnaroundPart[]
+  /** Combined plans only: the silence before the one after a riser, in beats (0 for none). */
+  gapBeats?: number
+  /** The melodic row that keeps playing through the gap, when one does. */
+  keeperId?: string
 }
 
 /** What a phrase end fired, kept for the next one: never twice in a row, except diminution. */
@@ -277,6 +295,9 @@ export interface TurnaroundMemory {
   move: TurnaroundMove
   beats: number
   halvings: number
+  /** A combined turnaround's moves (two or more), the lead first: diminution repeats the ones
+   * that can diminish, together. Absent for a single move. */
+  parts?: { move: TurnaroundMove; beats: number }[]
 }
 
 export interface TurnaroundInput {
@@ -297,6 +318,11 @@ export interface TurnaroundInput {
   depth?: TurnaroundDepth
   /** A TURN, not a phrase end (TurnaroundForce): it always fires when a move can sound. */
   force?: TurnaroundForce
+  /** Layer compatible moves onto the lead and put a gap after a riser (spec
+   * 2026-10-03-radio-turnaround-combos-design). Absent: one move, exactly as before, draw for
+   * draw. On, a fired fresh roll draws ONE more number after all of today's, which seeds every
+   * layering choice (turnaroundLayerRandom); a roll that does not fire draws nothing more. */
+  combine?: boolean
 }
 
 /** A turn: a turnaround on demand, at the next loop top
@@ -590,6 +616,9 @@ export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
   if (!(chance > 0) || !(capBeats > 0) || moves.length === 0) return null
   const bed = bedOf(input.rows, input.leavingRowId)
   if (lastPhrase !== null) {
+    if (lastPhrase.parts !== undefined && lastPhrase.parts.length > 1) {
+      return diminishParts(input, lastPhrase, bed, capBeats, chance, looks)
+    }
     const { move } = lastPhrase
     if (!DIMINISHING.includes(move) || lastPhrase.halvings >= TURNAROUND_MAX_HALVINGS) return null
     if (!moves.includes(TURNAROUND_FAMILY_OF[move])) return null
@@ -604,7 +633,10 @@ export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
     drawn.map((m) => ({ item: m, weight: TURNAROUND_WEIGHTS[arc][m] })),
     random
   )
-  return build(move, drawBeats(move, bed, capBeats, random), 0, bed, loopBars, random, looks)
+  const lead = build(move, drawBeats(move, bed, capBeats, random), 0, bed, loopBars, random, looks)
+  return lead !== null && input.combine === true
+    ? layerTurnaround(lead, input, bed, capBeats, capBeats, looks)
+    : lead
 }
 
 /** A turn's roll: no rate, no memory (a fresh move, `halvings` 0), the guards and the cap as
@@ -634,12 +666,20 @@ function rollForced(input: TurnaroundInput, force: TurnaroundForce): TurnaroundP
       ? Math.max(1, force.maxBeats)
       : capBeats
   const beats = Math.min(drawBeats(move, bed, capBeats, random), most)
-  return build(move, beats, 0, bed, loopBars, random, looks)
+  const lead = build(move, beats, 0, bed, loopBars, random, looks)
+  return lead !== null && input.combine === true
+    ? layerTurnaround(lead, input, bed, capBeats, most, looks)
+    : lead
 }
 
 /** What to remember of a phrase end for the next one. */
 export function rememberTurnaround(plan: TurnaroundPlan | null): TurnaroundMemory | null {
-  return plan === null ? null : { move: plan.move, beats: plan.beats, halvings: plan.halvings }
+  if (plan === null) return null
+  const memory: TurnaroundMemory = { move: plan.move, beats: plan.beats, halvings: plan.halvings }
+  if (plan.parts !== undefined && plan.parts.length > 1) {
+    memory.parts = plan.parts.map((p) => ({ move: p.move, beats: p.beats }))
+  }
+  return memory
 }
 
 /** The arc's direction from a density leg (radioDensity's DensityLeg, or the web radio's
@@ -788,4 +828,310 @@ export const TURNAROUND_DEPTH: Readonly<Record<TurnaroundDepth, TurnaroundDepthV
     maxBeats: TURNAROUND_MAX_BARS * BEATS_PER_BAR
   },
   subtle: { liftTop: 0.35, dipFloor: 0.6, washPeak: 0.6, maxBeats: BEATS_PER_BAR }
+}
+
+// ---- combined turnarounds and the gap (spec 2026-10-03-radio-turnaround-combos-design) ----
+//
+// A real turnaround is usually two or three moves at once -- a riser over a high-pass lift with
+// the kick and bass pulled, a wash on a dipping mix -- and a riser usually stops short of the
+// one: the bed drops out for a beat or two while the riser's tail and the room ring, and
+// everything comes back on the one. With `combine` on, the lead is drawn exactly as before, then
+// compatible moves are layered on and a riser may leave a gap. Every part still ends on the one.
+
+/** How well two moves sit together, symmetric: 0 never (they fight over one parameter, or one
+ * contains the other), 1 works, 2 a classic pairing (spec section 1). */
+export const TURNAROUND_AFFINITY: Readonly<
+  Record<TurnaroundMove, Readonly<Record<TurnaroundMove, number>>>
+> = {
+  'drum drop': { 'drum drop': 0, 'low drop': 0, stop: 0, wash: 1, lift: 1, dip: 1, riser: 1 },
+  'low drop': { 'drum drop': 0, 'low drop': 0, stop: 0, wash: 1, lift: 2, dip: 1, riser: 2 },
+  stop: { 'drum drop': 0, 'low drop': 0, stop: 0, wash: 2, lift: 1, dip: 1, riser: 0 },
+  wash: { 'drum drop': 1, 'low drop': 1, stop: 2, wash: 0, lift: 2, dip: 2, riser: 2 },
+  lift: { 'drum drop': 1, 'low drop': 2, stop: 1, wash: 2, lift: 0, dip: 0, riser: 2 },
+  dip: { 'drum drop': 1, 'low drop': 1, stop: 1, wash: 2, lift: 0, dip: 0, riser: 1 },
+  riser: { 'drum drop': 1, 'low drop': 2, stop: 0, wash: 2, lift: 2, dip: 1, riser: 0 }
+}
+
+/** How many moves a combined turnaround wants (1, 2, 3), by depth: subtle is mostly one, bold
+ * mostly two. The realised count is lower when nothing compatible can sound. */
+export const TURNAROUND_LAYER_ODDS: Readonly<Record<TurnaroundDepth, readonly number[]>> = {
+  subtle: [0.75, 0.25, 0],
+  bold: [0.3, 0.5, 0.2]
+}
+
+/** Chance a riser stops short of the one, leaving a gap (Elling: "usually there is a drop out
+ * after a riser... sometimes the riser works without it"). */
+export const TURNAROUND_GAP_CHANCE = 0.75
+
+/** Chance one melodic row keeps playing through the gap (the stop's rest measure), when one can. */
+export const TURNAROUND_GAP_KEEP_CHANCE = 1 / 3
+
+export const TURNAROUND_GAP_WORD = 'gap'
+
+/** The gap after a riser spanning `riserBeats` (its sounding length plus the gap): one beat at
+ * subtle and under a 2-bar riser, half a bar (2 beats) at bold from a 2-bar riser up; 0 when the
+ * riser spans under a bar (too short to stop early). */
+export function turnaroundGapBeats(riserBeats: number, depth: TurnaroundDepth): number {
+  if (!(riserBeats >= BEATS_PER_BAR)) return 0
+  return depth === 'bold' && riserBeats >= 2 * BEATS_PER_BAR ? 2 : 1
+}
+
+/** The layering's own random, seeded from ONE draw of the caller's: every layering choice comes
+ * from it, so the caller's stream moves on by exactly one number per combined roll. */
+export function turnaroundLayerRandom(draw: number): () => number {
+  return seededRandom(`turnaround-layers:${Math.floor(draw * 4294967296)}`)
+}
+
+/** Each drop's lengths (beats), for lengthening one past a gap: it must be heard before it. */
+const DROP_MENU: Partial<Record<TurnaroundMove, readonly number[]>> = {
+  'drum drop': [1, 2, 4],
+  'low drop': LOW_DROP_BEATS
+}
+
+/** A filter or wash curve whose peak lands where the gap starts and holds through it. */
+function holdThroughGap(points: TurnaroundPoint[], gap: number): TurnaroundPoint[] {
+  if (!(gap > 0) || points.length < 3) return points
+  const peak = points[points.length - 2]
+  return [...points.slice(0, -2), { beats: gap, value: peak.value }, ...points.slice(-2)]
+}
+
+/** The rows' curves for a set of parts and a gap: one entry per row, in the order rows are
+ * first touched. Every drop a row gets is the same shape, so its volume is the longest one. */
+function materialize(
+  parts: readonly TurnaroundPart[],
+  gap: number,
+  gapRows: readonly string[],
+  loopBars: number,
+  looks: TurnaroundLooks
+): TurnaroundRowCurves[] | null {
+  const drops = new Map<string, number>()
+  const out = new Map<string, TurnaroundRowCurves>()
+  const at = (id: string): TurnaroundRowCurves => {
+    let r = out.get(id)
+    if (r === undefined) out.set(id, (r = { rowId: id }))
+    return r
+  }
+  const drop = (id: string, beats: number): void => {
+    at(id)
+    drops.set(id, Math.max(drops.get(id) ?? 0, beats))
+  }
+  for (const p of parts) {
+    for (const id of p.rowIds) {
+      switch (p.move) {
+        case 'drum drop':
+        case 'low drop':
+        case 'stop':
+          drop(id, p.beats)
+          break
+        case 'lift': {
+          const f = turnaroundLiftCurve(p.beats, looks.liftTop)
+          at(id).filter = { ...f, cutoff: holdThroughGap(f.cutoff, gap) }
+          break
+        }
+        case 'dip': {
+          const f = turnaroundDipCurve(p.beats, looks.dipFloor)
+          at(id).filter = { ...f, cutoff: holdThroughGap(f.cutoff, gap) }
+          break
+        }
+        case 'wash': {
+          const w = turnaroundWashCurve(p.beats, looks.washPeak)
+          at(id).reverbSend = { ...w, points: holdThroughGap(w.points, gap) }
+          break
+        }
+        case 'riser':
+          break
+      }
+    }
+  }
+  if (gap > 0) for (const id of gapRows) drop(id, gap)
+  for (const [id, beats] of drops) {
+    const volume = turnaroundDropCurve(loopBars, beats)
+    if (volume.length === 0) return null
+    at(id).volume = volume
+  }
+  return [...out.values()]
+}
+
+/** The lead, layered (spec section 1-2): one draw from the caller, then from the layering's own
+ * random: how many moves; each added move by the arc's weight times its affinity with every
+ * move already in, among those that can sound, fit and whose family is on; its length (never
+ * past `most`) and rows; then, with a riser in, whether it leaves a gap and whether a melodic row
+ * keeps playing through it. Drops are lengthened past the gap (or the gap is dropped). */
+function layerTurnaround(
+  lead: TurnaroundPlan,
+  input: TurnaroundInput,
+  bed: Bed,
+  capBeats: number,
+  most: number,
+  looks: TurnaroundLooks
+): TurnaroundPlan | null {
+  const sub = turnaroundLayerRandom(input.random())
+  const depth = input.depth ?? DEFAULT_TURNAROUND_DEPTH
+  const families = input.moves ?? TURNAROUND_FAMILIES
+  const weights = TURNAROUND_WEIGHTS[input.arc]
+  const odds = TURNAROUND_LAYER_ODDS[depth]
+  const count = pickWeighted(
+    odds.map((weight, i) => ({ item: i + 1, weight })),
+    sub
+  )
+  const parts: TurnaroundPart[] = [
+    { move: lead.move, beats: lead.beats, rowIds: lead.rows.map((r) => r.rowId) }
+  ]
+  while (parts.length < count) {
+    const options = TURNAROUND_MOVES.filter(
+      (m) =>
+        !parts.some((p) => p.move === m) &&
+        families.includes(TURNAROUND_FAMILY_OF[m]) &&
+        fits(m, bed, capBeats)
+    )
+      .map((m) => ({
+        item: m,
+        weight: parts.reduce((w, p) => w * TURNAROUND_AFFINITY[p.move][m], weights[m])
+      }))
+      .filter((o) => o.weight > 0)
+    if (options.length === 0) break
+    const move = pickWeighted(options, sub)
+    const beats = Math.min(drawBeats(move, bed, capBeats, sub), most)
+    const one = build(move, beats, 0, bed, input.loopBars, sub, looks)
+    if (one === null) break
+    parts.push({ move, beats, rowIds: one.rows.map((r) => r.rowId) })
+  }
+  // the gap: a riser spanning a bar or more, with a bed of two or more to drop out
+  let gap = 0
+  let keeper: TurnaroundRow | null = null
+  const riser = parts.find((p) => p.move === 'riser')
+  if (riser !== undefined && riser.beats >= BEATS_PER_BAR && bed.audible.length >= 2) {
+    if (sub() < TURNAROUND_GAP_CHANCE) {
+      gap = turnaroundGapBeats(riser.beats, depth)
+      // a drop no longer than the gap would be swallowed by it: the next length past it, or no gap
+      const longer = parts.map((p) => {
+        const menu = DROP_MENU[p.move]
+        if (menu === undefined || p.beats > gap) return p.beats
+        return menu.find((b) => b > gap && b <= Math.min(capBeats, most)) ?? null
+      })
+      if (longer.some((b) => b === null)) gap = 0
+      else parts.forEach((p, i) => (p.beats = longer[i] as number))
+    }
+    const kept = bed.keeper
+    if (gap > 0 && kept !== null && kept.barLength * BEATS_PER_BAR >= gap) {
+      if (sub() < TURNAROUND_GAP_KEEP_CHANCE) keeper = kept
+    }
+  }
+  const gapRows = bed.audible.filter((r) => r !== keeper).map((r) => r.id)
+  const rows = materialize(parts, gap, gapRows, input.loopBars, looks)
+  if (rows === null) return lead
+  const plan: TurnaroundPlan = {
+    move: lead.move,
+    beats: Math.max(...parts.map((p) => p.beats)),
+    halvings: 0,
+    rows,
+    parts,
+    gapBeats: gap
+  }
+  if (riser !== undefined) plan.riserBars = (riser.beats - gap) / BEATS_PER_BAR
+  if (keeper !== null) plan.keeperId = keeper.id
+  return plan
+}
+
+/** A diminution of a combined phrase end: the moves in it that can diminish (drum drop, low drop,
+ * lift), together, each at half its length -- while the families, the arc and the guards still
+ * let it, never under a beat -- at the same rate, with no layering and no gap. The rate is today's
+ * one draw; then each part's rows (a drum drop's row), in order. */
+function diminishParts(
+  input: TurnaroundInput,
+  last: TurnaroundMemory,
+  bed: Bed,
+  capBeats: number,
+  chance: number,
+  looks: TurnaroundLooks
+): TurnaroundPlan | null {
+  if (last.halvings >= TURNAROUND_MAX_HALVINGS) return null
+  const families = input.moves ?? TURNAROUND_FAMILIES
+  const keep = (last.parts ?? [])
+    .filter(
+      (p) =>
+        DIMINISHING.includes(p.move) &&
+        families.includes(TURNAROUND_FAMILY_OF[p.move]) &&
+        TURNAROUND_WEIGHTS[input.arc][p.move] > 0 &&
+        canSound(p.move, bed)
+    )
+    .map((p) => ({ move: p.move, beats: Math.min(p.beats / 2, capBeats) }))
+    .filter((p) => p.beats >= 1)
+  if (keep.length === 0) return null
+  if (!(input.random() < chance)) return null
+  const parts: TurnaroundPart[] = []
+  for (const p of keep) {
+    const one = build(p.move, p.beats, 0, bed, input.loopBars, input.random, looks)
+    if (one === null) return null
+    parts.push({ move: p.move, beats: p.beats, rowIds: one.rows.map((r) => r.rowId) })
+  }
+  const rows = materialize(parts, 0, [], input.loopBars, looks)
+  if (rows === null) return null
+  return {
+    move: parts[0].move,
+    beats: Math.max(...parts.map((p) => p.beats)),
+    halvings: last.halvings + 1,
+    rows,
+    parts,
+    gapBeats: 0
+  }
+}
+
+// ---- saying it (the ruler, the flashes) ----
+
+/** The longest a turnaround's label may be before it is shortened to its lead and a count. */
+export const TURNAROUND_LABEL_MAX = 20
+
+/** A turnaround in words, the lead first: `riser + lift → gap`, `wash + dip`, `drop`. Longer than
+ * `max`: the lead and how many more, `riser +2 → gap`. */
+export function turnaroundLabel(
+  moves: readonly TurnaroundMove[],
+  gap: boolean,
+  max: number = TURNAROUND_LABEL_MAX
+): string {
+  if (moves.length === 0) return ''
+  const tail = gap ? ` → ${TURNAROUND_GAP_WORD}` : ''
+  const full = moves.map((m) => TURNAROUND_MOVE_LABEL[m]).join(' + ') + tail
+  if (full.length <= max || moves.length === 1) return full
+  return `${TURNAROUND_MOVE_LABEL[moves[0]]} +${moves.length - 1}${tail}`
+}
+
+/** A plan's moves, the lead first (a single move's plan is just its move). */
+export function turnaroundPlanMoves(
+  plan: Pick<TurnaroundPlan, 'move' | 'parts'>
+): TurnaroundMove[] {
+  return plan.parts !== undefined && plan.parts.length > 0
+    ? plan.parts.map((p) => p.move)
+    : [plan.move]
+}
+
+/** A word on a row, from `beats` before the wrap (when the move hitting it starts). */
+export interface TurnaroundFlash {
+  rowId: string
+  word: string
+  beats: number
+}
+
+/** Every word a plan flashes: each row its moves' words from where each starts, and `gap` on the
+ * rows that drop out, from where the gap starts. A plan with no parts (one move, `combine` off):
+ * every row its move's word from the plan's start, as before. The riser is its own voice: no row. */
+export function turnaroundFlashes(plan: TurnaroundPlan): TurnaroundFlash[] {
+  if (plan.parts === undefined) {
+    const word = TURNAROUND_MOVE_LABEL[plan.move]
+    return plan.rows.map((r) => ({ rowId: r.rowId, word, beats: plan.beats }))
+  }
+  const out: TurnaroundFlash[] = []
+  for (const p of plan.parts) {
+    for (const rowId of p.rowIds)
+      out.push({ rowId, word: TURNAROUND_MOVE_LABEL[p.move], beats: p.beats })
+  }
+  const gap = plan.gapBeats ?? 0
+  if (gap > 0) {
+    for (const r of plan.rows) {
+      if (r.rowId !== plan.keeperId && r.volume !== undefined) {
+        out.push({ rowId: r.rowId, word: TURNAROUND_GAP_WORD, beats: gap })
+      }
+    }
+  }
+  return out
 }
