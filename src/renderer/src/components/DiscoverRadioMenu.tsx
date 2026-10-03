@@ -175,7 +175,9 @@ export function DiscoverRadioMenu({
         <span
           data-tooltip={tooltip}
           style={{
-            width: 76,
+            // Fits the longest label, `turnarounds`, with room before its chips.
+            width: 92,
+            flexShrink: 0,
             fontSize: 9,
             color: 'var(--ra-text-3)',
             textTransform: 'uppercase',
