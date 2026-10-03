@@ -50,6 +50,7 @@ import { stemsToAvoid } from '@shared/discoverPickAvoid'
 import {
   DENSITY_MIN,
   advanceDensityLeg,
+  arcExitingRow,
   densityArrival,
   newDensityLeg,
   nextArcKind,
@@ -192,7 +193,6 @@ import {
   radioFoldIntervalBars,
   radioFoldTurnaroundRate,
   stepRadioFold,
-  type RadioFoldRow,
   type RadioFoldState,
   type RadioFoldStep
 } from '@shared/radioFold'
@@ -201,7 +201,10 @@ import {
   radioFoldCycleRows,
   radioFoldDriftCurves,
   radioFoldEngineRows,
-  radioFoldSound
+  radioFoldRowsAt,
+  radioFoldSound,
+  radioFoldStepLine,
+  type RadioFoldLanding
 } from '@shared/radioFoldLanes'
 import {
   CLASH_LOWPASS_CUTOFF,
@@ -594,6 +597,11 @@ const SYNC_HOLD_TIMEOUT_MS = 1200
  * to land -- tens to a couple of hundred ms, measured (holdSyncUntilResolved). A beat is that
  * at any tempo radio plays. */
 const TURNAROUND_ROLL_LATE_BARS = 0.25
+
+/** One line per fold step on the console (radioFoldStepLine), so a walkthrough can tell a mode
+ * with nothing to fold from one that is broken. Dev builds only, never under vitest: the flag
+ * perf/radioTrace.ts and perf/workCounters.ts gate on. */
+const FOLD_DEV_LOG = import.meta.env.DEV && import.meta.env.MODE !== 'test'
 
 /** The phrase end's roll while it is owed (radioTurnaroundAtWrap): the loop at its wrap, and
  * every row landing there with the bar length the roll should read -- null when that is not
@@ -2036,6 +2044,9 @@ export function DiscoverPanel({
     // there, by radioFoldAtWrap): the rows unfold, and the drift and the lean leave, on the top.
     const foldOn =
       radioOnRef.current && (radioSettings.foldMode || radioFoldNowRef.current !== null)
+    // A push carried the mode's sound (the clash low-pass, the lean): the wrap that puts the mode
+    // away pushes again even when no step was ever played (radioFoldAtWrap).
+    if (foldOn) radioFoldSoundedRef.current = true
     const foldStep = !foldOn
       ? null
       : !stage || stage.atBars !== undefined
@@ -3256,6 +3267,10 @@ export function DiscoverPanel({
    * change's own lead-in already armed for this lap keeps it: no roll, and the next phrase end is
    * not "after a turnaround". */
   function rollRadioTurnaround(owed: TurnaroundRollOwed): void {
+    // The rate below reads the coming top's realignment: a fold step still owed runs first,
+    // wherever this roll runs from (the wrap's deferred slot, the due branch's inline roll, a
+    // stem resolving).
+    runOwedRadioFoldStep()
     const leadArmed = radioGestureRef.current.some(
       (g) => g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
     )
@@ -3320,13 +3335,7 @@ export function DiscoverPanel({
     lengths: ReadonlyMap<string, number>,
     loopBars: number
   ): Omit<TurnaroundInput, 'rate' | 'random' | 'lastPhrase'> {
-    const exit = arcExitRef.current
-    const exiting =
-      exit !== null &&
-      ((exit.phase === 'fading' && exit.lap === arcLapRef.current) ||
-        (exit.phase === 'waiting' && !arcExitHeldBack()))
-        ? exit.slotId
-        : null
+    const exiting = arcExitingRowNow()
     return {
       loopBars,
       rows: discoverTurnaroundRows(slotsRef.current, {
@@ -3497,71 +3506,152 @@ export function DiscoverPanel({
   const radioFoldRef = useRef<RadioFoldState | null>(null)
   const radioFoldNowRef = useRef<RadioFoldStep | null>(null)
   const radioFoldNextRef = useRef<RadioFoldStep | null>(null)
-  /** The rows as fold mode sees them: every slot, in panel order (new folds draw by index). */
-  function radioFoldRowsNow(): RadioFoldRow[] {
-    const previewing = previewingSlotIdsRef.current
-    return slotsRef.current.map((s) => ({
-      id: s.id,
-      stemId: s.candidate?.stemCID ?? null,
-      kinds: s.kinds,
-      barLength: resolvedBarLengthsRef.current.get(s.id) ?? 0,
-      hooked: radioSlotFlagsRef.current[s.id] === 'hook',
-      audible: previewing.has(s.id) && resolvedBarLengthsRef.current.has(s.id),
-      percussive: resolvedStemsRef.current.get(s.id)?.type === 'drums'
-    }))
+  /** A wrap's step, owed until it runs (radioFoldAtWrap): the loop at the wrap, and every row
+   * landing there with the stem it brings (noteFoldLanding). */
+  const radioFoldStepOwedRef = useRef<{
+    loopBars: number
+    landed: Map<string, RadioFoldLanding>
+  } | null>(null)
+  /** A push has carried the mode's sound since fold mode was last put away (resetRadioFold). */
+  const radioFoldSoundedRef = useRef(false)
+  /** The row the density arc is taking out before the next top (arcExitingRow), or null. */
+  function arcExitingRowNow(): string | null {
+    return arcExitingRow(arcExitRef.current, arcLapRef.current, arcExitHeldBack())
   }
-  /** Every wrap while radio runs: the lap starting now plays what was decided a lap ago, the
-   * machine decides the next lap, and the engine gets that lap's cycles to take at its top. With
-   * the mode or radio off, a fold still around is put away. A new seed starts a new machine. */
+  /** A row turning over at this wrap while its fold step is owed: the step reads it with this
+   * stem (its length null while unresolved, and the row unheard). A no-op once the step ran. */
+  function noteFoldLanding(
+    slotId: string,
+    pick: SlotPick,
+    stem: ResolvedCandidateStem | null
+  ): void {
+    radioFoldStepOwedRef.current?.landed.set(slotId, {
+      stemId: pick.candidate?.stemCID ?? null,
+      barLength: stem !== null && stem.barLength > 0 ? stem.barLength : null,
+      percussive: stem?.type === 'drums'
+    })
+  }
+  /** Every wrap while radio runs: the step is owed, and runs two microtasks on (the turnaround's
+   * slot, radioTurnaroundAtWrap -- queued first, so it runs first there): after densityTick's
+   * microtask (the arc's exit decided at this wrap) and after every landing this tick commits, so
+   * it decides from the rows as the next lap will have them, as the web's foldRows does. With the
+   * mode or radio off, a fold still around -- or the mode's sound on a push -- is put away. */
   function radioFoldAtWrap(loopBars: number): void {
     if (!radioOnRef.current || !radioSettings.foldMode) {
-      if (radioFoldRef.current !== null || radioFoldNowRef.current !== null) resetRadioFold()
+      if (
+        radioFoldRef.current !== null ||
+        radioFoldNowRef.current !== null ||
+        radioFoldSoundedRef.current
+      ) {
+        resetRadioFold()
+      }
       return
     }
+    radioFoldStepOwedRef.current = { loopBars, landed: new Map() }
+    void Promise.resolve().then(() => Promise.resolve().then(() => runOwedRadioFoldStep()))
+  }
+  /** The owed step: the lap starting at the wrap plays what was decided a lap ago, the machine
+   * decides the next lap from the rows as the wrap's landings leave them (the arc's exiting row
+   * unheard), and the engine gets that lap's cycles to take at its top -- still a lap early. A new
+   * seed starts a new machine. A no-op with nothing owed: the turnaround's roll calls it first
+   * (rollRadioTurnaround), so a roll that runs early (the due branch's) reads this step too. */
+  function runOwedRadioFoldStep(): void {
+    const owed = radioFoldStepOwedRef.current
+    if (owed === null) return
+    radioFoldStepOwedRef.current = null
+    if (!radioOnRef.current || !radioSettings.foldMode) return
     radioFoldNowRef.current = radioFoldNextRef.current
     const was = radioFoldRef.current
     const state =
       was !== null && was.seed === radioSettings.foldSeed
         ? was
         : createRadioFold(radioSettings.foldSeed)
-    const step = stepRadioFold(state, {
-      rows: radioFoldRowsNow(),
-      loopBars,
-      bpm,
-      fold: radioSettings.fold
-    })
+    const lengths = new Map(resolvedBarLengthsRef.current)
+    for (const [id, l] of owed.landed) if (l.barLength !== null) lengths.set(id, l.barLength)
+    const loopBars = lengths.size > 0 ? Math.max(...lengths.values()) : owed.loopBars
+    const previewing = previewingSlotIdsRef.current
+    const rows = radioFoldRowsAt(
+      slotsRef.current.map((s) => ({
+        id: s.id,
+        stemId: s.candidate?.stemCID ?? null,
+        kinds: s.kinds,
+        barLength: resolvedBarLengthsRef.current.get(s.id) ?? null,
+        hooked: radioSlotFlagsRef.current[s.id] === 'hook',
+        previewing: previewing.has(s.id),
+        percussive: resolvedStemsRef.current.get(s.id)?.type === 'drums'
+      })),
+      owed.landed,
+      arcExitingRowNow()
+    )
+    const step = stepRadioFold(state, { rows, loopBars, bpm, fold: radioSettings.fold })
     radioFoldRef.current = step.state
     radioFoldNextRef.current = step
+    if (FOLD_DEV_LOG) console.log(radioFoldStepLine(step, rows))
     void window.rifffApi.engineStageCycles(radioFoldEngineRows(step), false)
     // the lap now playing has its own drift lanes
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
   /** Fold mode put away at once: every row full length from the next block, no drift, no lean. */
   function resetRadioFold(): void {
-    const had = radioFoldRef.current !== null || radioFoldNowRef.current !== null
+    const had =
+      radioFoldRef.current !== null ||
+      radioFoldNowRef.current !== null ||
+      radioFoldSoundedRef.current
     radioFoldRef.current = null
     radioFoldNowRef.current = null
     radioFoldNextRef.current = null
+    radioFoldStepOwedRef.current = null
+    radioFoldSoundedRef.current = false
     void window.rifffApi.engineStageCycles([], true)
     if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
   /** A change's interval: fold mode's window, moved to a realignment top when one is near, while
    * the mode is on (radioPaceWindowOf, radioFoldIntervalBars); the pace window otherwise. Counted
    * from `boundaryBars`, the bar restartRadioInterval counts it from (the fold's realignment tops
-   * are counted from the lap's top, so a sub-loop grid restart mid-lap shifts them). */
+   * are counted from the lap's top, so a sub-loop grid restart mid-lap shifts them). A landing at
+   * a wrap restarts it before that wrap's step has run: the machine's tops are then a lap behind
+   * (radioFoldIntervalBars' stepOwed). */
   function radioNextIntervalBars(loopBars: number, boundaryBars: number): number {
     const drawn = nextRadioIntervalBarsInWindow(radioPaceWindowOf(radioSettings))
     return radioSettings.foldMode
-      ? radioFoldIntervalBars(radioFoldRef.current, drawn, loopBars, boundaryBars)
+      ? radioFoldIntervalBars(
+          radioFoldRef.current,
+          drawn,
+          loopBars,
+          boundaryBars,
+          radioFoldStepOwedRef.current !== null
+        )
       : drawn
   }
-  // The mode going off while radio runs: every row back to full length at the next loop top
-  // (an empty table staged for it); the drift and the lean leave with the wrap's push.
+  // The mode switched while radio runs. The running interval was drawn from the other window (the
+  // pace's, or fold mode's 16-64 bars), so it is drawn again from the one that now applies
+  // (radioPaceWindowOf), counted from the last tick, as the web's foldModeInterval does: nothing
+  // else of radio's moves. Going off, every row goes back to full length at the next loop top (an
+  // empty table staged for it); the drift, the low-pass and the lean leave with the wrap's push
+  // (radioFoldAtWrap).
+  const radioFoldModeWasRef = useRef(radioSettings.foldMode)
   useEffect(() => {
-    if (radioSettings.foldMode || radioFoldRef.current === null) return
+    if (radioFoldModeWasRef.current === radioSettings.foldMode) return
+    radioFoldModeWasRef.current = radioSettings.foldMode
+    const clock = radioClockRef.current
+    if (radioOnRef.current && clock !== null) {
+      const lengths = resolvedBarLengthsRef.current
+      const loopBars = lengths.size > 0 ? Math.max(...lengths.values()) : 0
+      const at = clock.lastPos
+      radioClockRef.current = restartRadioInterval(
+        clock,
+        radioNextIntervalBars(loopBars, at),
+        at,
+        at
+      )
+    }
+    if (radioSettings.foldMode) return
+    radioFoldStepOwedRef.current = null
+    if (radioFoldRef.current === null) return
     radioFoldRef.current = null
     radioFoldNextRef.current = null
     void window.rifffApi.engineStageCycles([], false)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the switch itself restarts the interval; radioNextIntervalBars reads this render's settings
   }, [radioSettings.foldMode])
   /** Radio off or a course change: the armed turnaround comes off, and the next phrase end
    * starts fresh. Wherever drop-outs were cleared (clearRadioGesture outside the clock). */
@@ -3920,6 +4010,9 @@ export function DiscoverPanel({
     // (3) Push it. Once -- radioStageRef is the "already out there" flag
     // -- and only when nothing else is on its way to the engine.
     if (skipStage) return
+    // Nor on the wrap tick whose fold step is still owed (radioFoldAtWrap): a stage for the next
+    // top carries that step's drift and cycle rows. Staged a tick later, still a lap early.
+    if (radioFoldStepOwedRef.current !== null) return
     //
     // WHAT goes out is radio's held change and every manual change waiting
     // for the loop top, as ONE stage (mergeStageChanges): the engine holds
@@ -4254,8 +4347,10 @@ export function DiscoverPanel({
     // lap -- after densityTick's microtask (the arc's removal at this wrap) and after every
     // landing this tick commits (radioTurnaroundAtWrap). Between wraps, a roll still waiting on a
     // stem is given up once its move could no longer reach the engine in time.
-    // Fold mode decides the next lap first: the roll reads whether its phrase ends on a
-    // realignment top (radioFoldTurnaroundRate).
+    // Fold mode decides the next lap in that same deferred slot, queued first so it decides
+    // first: after the arc's exit and this tick's landings, before the roll, which reads whether
+    // its phrase ends on a realignment top (radioFoldTurnaroundRate). Still before the top the
+    // decided cycles are staged for.
     if (step.wrapped) radioFoldAtWrap(loopBars)
     if (step.wrapped) radioTurnaroundAtWrap(step.turnaroundLapStarts, loopBars)
     else {
@@ -4426,6 +4521,7 @@ export function DiscoverPanel({
           // The phrase end's roll, if this wrap owes one, runs after this and reads this row at
           // its incoming length (radioTurnaroundAtWrap).
           noteTurnaroundLanding(led.slotId, led.stem?.barLength ?? null)
+          noteFoldLanding(led.slotId, led.pick, led.stem)
           // Armed HERE rather than when the change was held, and only once
           // the commit has actually happened: an arrival curve belongs to
           // the stem that is arriving, so arming it a lap early would
@@ -4483,6 +4579,7 @@ export function DiscoverPanel({
           }
           commitSlotPick(slotId, change.pick)
           noteTurnaroundLanding(slotId, change.stem?.barLength ?? null)
+          noteFoldLanding(slotId, change.pick, change.stem)
           // One push for the whole landing, as for a course change: the
           // hold lifts when the LAST of them has resolved.
           holdSyncUntilResolved(slotId)
@@ -4633,6 +4730,7 @@ export function DiscoverPanel({
           commitSlotPick(slotId, pick)
           // No stem carried: a roll this wrap owes waits for these to resolve.
           noteTurnaroundLanding(slotId, null)
+          noteFoldLanding(slotId, pick, null)
           // One push for the whole turnover, not one per layer landing:
           // the hold lifts when the LAST of them has resolved.
           holdSyncUntilResolved(slotId)
@@ -4769,6 +4867,7 @@ export function DiscoverPanel({
           pending.stem !== null
         ) {
           noteTurnaroundLanding(pending.slotId, pending.stem.barLength)
+          noteFoldLanding(pending.slotId, pending.pick, pending.stem)
           rollOwedRadioTurnaround()
         }
         // Under this lap's turnaround a lead-in would land on its wrap: the turnaround is the
@@ -4843,6 +4942,7 @@ export function DiscoverPanel({
         radioTraceBegin(boundaryBars, bpmRef.current, `due-${transition}`) // TEMP
         commitSlotPick(pending.slotId, pending.pick)
         noteTurnaroundLanding(pending.slotId, pending.stem?.barLength ?? null)
+        noteFoldLanding(pending.slotId, pending.pick, pending.stem)
         // Nothing pushes until this pick's stem has resolved -- not the
         // previous lap's gesture coming off at this same wrap, not the
         // phrase turnaround rolled after this landing, not this change's
