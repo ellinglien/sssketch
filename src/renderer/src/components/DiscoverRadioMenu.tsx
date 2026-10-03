@@ -59,16 +59,20 @@ function FoldSlider({
 }
 
 /** The pace slider (@shared/radioPace, spec 2026-10-03-radio-pace-slider-design), 0..100, with
- * its readout in words (slow, mid, fast, ludicrous) or bars. Like FoldSlider it is local while
+ * its readout in words (slow, mid, fast, ludicrous) or bars -- in fold mode, fold's own window in
+ * bars below 80 (radioPaceLabel's `fold`). Like FoldSlider it is local while
  * dragging and commits only when the drag or key press ends -- one decision, one settings write,
  * and in a running radio one radioClockForPace. `onDraft` reports the position as it moves, for
  * the start chip, which starts at wherever the slider is even before a release has persisted. */
 function PaceSlider({
   value,
+  fold,
   onCommit,
   onDraft
 }: {
   value: number
+  /** Fold mode is on: below 80 the readout names fold's own window (`8-32 bars`). */
+  fold: boolean
   onCommit: (v: number) => void
   onDraft?: (v: number) => void
 }): React.JSX.Element {
@@ -86,7 +90,7 @@ function PaceSlider({
         max={100}
         step={1}
         aria-label={RADIO_PACE_LABEL}
-        aria-valuetext={radioPaceLabel(shown)}
+        aria-valuetext={radioPaceLabel(shown, { fold })}
         value={shown}
         onChange={(e) => {
           const v = Number(e.target.value)
@@ -99,7 +103,7 @@ function PaceSlider({
         style={{ width: 96, accentColor: 'var(--ra-text)' }}
       />
       <span style={{ fontSize: 9, minWidth: 64, color: 'var(--ra-text)' }}>
-        {radioPaceLabel(shown)}
+        {radioPaceLabel(shown, { fold })}
       </span>
     </span>
   )
@@ -333,6 +337,7 @@ export function DiscoverRadioMenu({
       <PaceSlider
         key="pace"
         value={paceLevel}
+        fold={settings.foldMode}
         onCommit={(v) => onChange({ paceLevel: v })}
         onDraft={setPaceDraft}
       />,

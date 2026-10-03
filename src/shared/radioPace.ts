@@ -155,9 +155,15 @@ export function radioPaceRowsThisChange(
 /** The readout: the word at its position (slow, mid, fast) and through the ludicrous band; the
  * bar line cadence in the mid-loop band; the drawn window otherwise. Lowercase, short enough for
  * a phone. */
-export function radioPaceLabel(level: number): string {
+export function radioPaceLabel(level: number, options: { fold?: boolean } = {}): string {
   const profile = radioPaceProfile(level)
   const p = profile.level
+  // Fold mode (2026-10-03 fold follows pace): fold's own window up to where it joins the slider,
+  // so the readout never names a word (slow / mid / fast) fold does not play.
+  if (options.fold === true && p < RADIO_FOLD_PACE_JOINS) {
+    const { min, max } = radioFoldPaceProfile(p).window
+    return min === max ? `${min} bar${min === 1 ? '' : 's'}` : `${min}-${max} bars`
+  }
   if (p >= RADIO_PACE_ANCHORS.ludicrous) return 'ludicrous'
   if (p === RADIO_PACE_ANCHORS.slow) return 'slow'
   if (p === RADIO_PACE_ANCHORS.mid) return 'mid'

@@ -6,6 +6,7 @@ import {
   RADIO_FOLD_PACE_JOINS,
   RADIO_FOLD_PACE_WINDOW_KNOTS,
   radioFoldPaceProfile,
+  radioPaceLabel,
   radioPaceProfile
 } from './radioPace'
 import { FOLD_PACE_BARS, FOLD_PREFER_WAIT_LAPS } from './radioFold'
@@ -154,5 +155,29 @@ describe('radioCadenceHasMidLoopLines', () => {
     expect(radioCadenceHasMidLoopLines(c(95), 0, 0)).toBe(false)
     expect(radioCadenceHasMidLoopLines(c(95), 0, 4.5)).toBe(false)
     expect(radioCadenceHasMidLoopLines(c(95), 0, Number.NaN)).toBe(false)
+  })
+})
+
+describe('radioPaceLabel in fold mode', () => {
+  it("names fold's own window below 80, and the slider's words from there", () => {
+    expect(radioPaceLabel(0, { fold: true })).toBe('8-32 bars')
+    expect(radioPaceLabel(50, { fold: true })).toBe('8-32 bars')
+    expect(radioPaceLabel(55, { fold: true })).toBe('6-20 bars')
+    expect(radioPaceLabel(70, { fold: true })).toBe('2-4 bars')
+    expect(radioPaceLabel(79, { fold: true })).toBe('1-2 bars')
+    expect(radioPaceLabel(80, { fold: true })).toBe(radioPaceLabel(80))
+    expect(radioPaceLabel(80, { fold: true })).toBe('every 4 bars')
+    expect(radioPaceLabel(95, { fold: true })).toBe('ludicrous')
+    expect(radioPaceLabel(50)).toBe('fast')
+    expect(radioPaceLabel(50, {})).toBe('fast')
+    expect(radioPaceLabel(50, { fold: false })).toBe('fast')
+  })
+  it('fits the phone strip (13ch) at every level, lowercase', () => {
+    for (let l = 0; l <= 100; l++)
+      for (const fold of [false, true]) {
+        const w = radioPaceLabel(l, { fold })
+        expect(w.length).toBeLessThanOrEqual(13)
+        expect(w).toBe(w.toLowerCase())
+      }
   })
 })
