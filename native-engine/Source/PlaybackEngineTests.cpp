@@ -648,6 +648,33 @@ namespace sssketch
                 ramp.deleteFile();
             }
 
+            // A stem a hair slower than the project (up to 0.1% slow skips the stretch --
+            // STRETCH_RATIO_EPSILON) has a cycle's audio run a little past the tile, which is cut
+            // at the tile's end: the fade-out has to end there, not where the audio would have.
+            beginTest("a slow stem's cycle seam still fades: the fade-out ends where the tile is cut");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_slow_seam_ramp.wav", 17 * 44100);
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                auto project = foldProject(ramp, "perc");
+                project.rifffs[0].stems[0].durationSec = 16.0 * 1.005; // 0.5% slow: a 7.035 s cycle in a 7 s tile
+                engine.setProject(project);
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                engine.applyStagedCycles(false);
+                const int n = (int) (0.1 * 44100.0);
+                std::vector<float> l((size_t) n, 0.0f), r((size_t) n, 0.0f);
+                engine.renderBlock((7.0 - 0.05) / 4.0, 44100.0, n, l.data(), r.data(), channelChains, LapClock { 0.0, 1 });
+                float worst = 0.0f;
+                for (int i = 1; i < n; ++i)
+                    worst = std::max(worst, std::abs(l[(size_t) i] - l[(size_t) i - 1]));
+                // the ramp's own step is 1 / (16 * 44100) = 1.4e-6; a 0.44 seam faded over 441
+                // samples steps about 0.001. Unfaded (the fade-out measured from 7.035 s), the
+                // seam is cut at gain ~1: a 0.44 jump.
+                expect(worst < 0.002f, "largest step at the slow seam " + juce::String(worst));
+                ramp.deleteFile();
+            }
+
             beginTest("a row the cycle table does not name plays exactly as a stem with no row");
             {
                 auto ramp = writeRampFixtureWav("sssketch_pe_fold_none_ramp.wav", 16 * 44100);

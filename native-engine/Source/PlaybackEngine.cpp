@@ -1005,7 +1005,12 @@ namespace sssketch
                         const double secPerBarNative = stem.durationSec / stem.barLength;
                         const double contentSec = cycleBars * secPerBarNative;
                         const double tileSec = cycleBars * spb;
-                        const double fadeSec = std::min(kCycleSeamFadeSec, contentSec / 2.0);
+                        // The tile is cut at tileSec, whatever the audio's own length: a stem a
+                        // hair slow (up to 0.1% skips the stretch, STRETCH_RATIO_EPSILON) runs past
+                        // it, so the fade-out has to end where the tile ends, not where the audio
+                        // would have -- otherwise every seam is cut at nearly full gain.
+                        const double endSec = std::min(contentSec, tileSec);
+                        const double fadeSec = std::min(kCycleSeamFadeSec, endSec / 2.0);
                         // seconds into the cycle grid at this block's first sample
                         const double gridStartSec =
                             (lapClock.baseBars + positionBars - originBars - cycle->row.phaseBars) * spb;
@@ -1017,13 +1022,13 @@ namespace sssketch
                             double inTile = std::fmod(gridStartSec + (double) i2 / sampleRate, tileSec);
                             if (inTile < 0.0)
                                 inTile += tileSec;
-                            if (inTile >= contentSec)
-                                continue; // a stem slower than the project leaves a gap, as a tile does
+                            if (inTile >= endSec)
+                                continue; // a stem faster than the project leaves a gap, as a tile does
                             const int srcSample = (int) std::llround(inTile * entry.sampleRate);
                             if (srcSample < 0 || srcSample >= bufferSamples)
                                 continue;
                             const double seam = fadeSec > 0.0
-                                ? std::min({ 1.0, inTile / fadeSec, (contentSec - inTile) / fadeSec })
+                                ? std::min({ 1.0, inTile / fadeSec, (endSec - inTile) / fadeSec })
                                 : 1.0;
                             const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
                             const double gain = seam * effectiveVolume
