@@ -36,9 +36,9 @@ describe('RadioSettings fold fields', () => {
     expect(normalizeRadioSettings({ foldSeed: '  ' }).foldSeed).toBe('autech')
   })
 
-  it('fold mode replaces the pace window with 16-64 bars, and gives the pace window back off', () => {
+  it('fold mode replaces the pace window with 8-32 bars, and gives the pace window back off', () => {
     const on = normalizeRadioSettings({ pace: 'fast', foldMode: true })
-    expect(radioPaceWindowOf(on)).toEqual({ min: 16, max: 64 })
+    expect(radioPaceWindowOf(on)).toEqual({ min: 8, max: 32 })
     expect(on.paceBars).toEqual(RADIO_PACE_BARS.fast)
     expect(radioPaceWindowOf({ ...on, foldMode: false })).toEqual(RADIO_PACE_BARS.fast)
   })

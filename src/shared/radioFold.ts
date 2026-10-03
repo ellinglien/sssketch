@@ -34,10 +34,11 @@ export const FOLD_MAX_ROWS = 2
 export const FOLD_MAX_ROW_BARS = 4
 /** The micro-fade at every cycle seam, both runtimes (spec section 1). */
 export const FOLD_SEAM_FADE_SEC = 0.01
-/** The pace window while the mode is on (spec section 1): it replaces the user's. */
+/** The pace window while the mode is on (spec section 1): it replaces the user's. 8-32 bars
+ * since v2 (2026-10-03-radio-fold-v2-design.md section 1: "faster changes"), 16-64 before. */
 export const FOLD_PACE_BARS: Readonly<{ min: number; max: number }> = Object.freeze({
-  min: 16,
-  max: 64
+  min: 8,
+  max: 32
 })
 /** A change prefers a realignment top at most this many laps past its drawn interval. */
 export const FOLD_PREFER_WAIT_LAPS = 2
