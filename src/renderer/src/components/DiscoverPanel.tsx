@@ -217,6 +217,17 @@ import {
   type RadioFoldStatusRow
 } from '@shared/radioFoldStatus'
 import {
+  RADIO_THROW_WORD,
+  pruneRadioFlashes,
+  radioFlashShown,
+  radioGestureFlashWord,
+  radioReadout,
+  radioReadoutArc,
+  radioReadoutBars,
+  type RadioFlash,
+  type RadioReadout
+} from '@shared/radioReadout'
+import {
   CLASH_LOWPASS_CUTOFF,
   CLASH_TRAITS,
   radioClashAmount,
@@ -2884,6 +2895,16 @@ export function DiscoverPanel({
   // A throw closed while a staged swap was pending: the push that would clear its curve
   // waits until the stage is gone (a push withdraws a stage). See radioThrowTick.
   const radioThrowClearOwedRef = useRef(false)
+  // THE RADIO READOUT (docs/superpowers/specs/2026-10-03-radio-readout-design.md, @shared/
+  // radioReadout): its own clock of laps and bars played since radio started (advanced at every
+  // wrap the clock effect sees), the lap each row's stem landed on (commitSlotPick: the row's
+  // age), the gesture flash log on that clock (radioFlashTick) and the armIds it has logged, and
+  // the readout itself -- state, as it is drawn; written once per tick (radioReadoutFrom).
+  const radioPlayRef = useRef<{ lap: number; startBars: number }>({ lap: 0, startBars: 0 })
+  const radioRowSinceRef = useRef<Map<string, number>>(new Map())
+  const radioFlashLogRef = useRef<RadioFlash[]>([])
+  const radioFlashSeenRef = useRef<Set<string>>(new Set())
+  const [radioReadoutNow, setRadioReadoutNow] = useState<RadioReadout | null>(null)
   // A change that is WAITING for the loop top, because the gesture it
   // carries can only be performed there.
   //
@@ -3838,6 +3859,122 @@ export function DiscoverPanel({
     if (step.change === 'armed') scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
     else if (step.change === 'ended') clearRadioThrowCurve()
   }
+  /** The readout's clock and logs back to nothing: radio starting or stopping. */
+  function resetRadioReadout(): void {
+    radioPlayRef.current = { lap: 0, startBars: 0 }
+    radioRowSinceRef.current = new Map()
+    radioFlashLogRef.current = []
+    radioFlashSeenRef.current = new Set()
+    setRadioReadoutNow(null)
+  }
+  /** THE GESTURE FLASH (spec 2026-10-03-radio-readout-design section 1). Each gesture armed into
+   * the preview project goes in the log once, with the bar it starts SOUNDING at on the readout's
+   * clock (radioPlayRef: bars played): a lead-in (hole, riser) over the beats before the wrap of
+   * the lap it is armed in; an arrival (filter in, bloom, duck) from the top of the lap it is armed
+   * at; a turnaround's or a turn's move, on each row it plays on, over its last beats; a throw from
+   * its own start. Read off what is armed, every tick, rather than at each of the places that arm
+   * one. A word not sounding yet whose gesture has been taken back goes with it. */
+  function radioFlashTick(pos: number, loopBars: number): void {
+    const lapStart = radioPlayRef.current.startBars
+    const now = lapStart + pos
+    const seen = radioFlashSeenRef.current
+    const live = new Set<string>()
+    const log = [...radioFlashLogRef.current]
+    for (const g of radioGestureRef.current) {
+      live.add(g.armId)
+      const word = radioGestureFlashWord(g.kind)
+      if (seen.has(g.armId) || word === null) continue
+      const leads = g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
+      log.push({
+        rowId: g.slotId,
+        word,
+        at: lapStart + (leads ? loopBars - g.beats / 4 : 0),
+        key: g.armId
+      })
+    }
+    const ta = radioTurnaroundRef.current
+    if (ta !== null) {
+      live.add(ta.armId)
+      if (!seen.has(ta.armId)) {
+        const at = lapStart + loopBars - ta.plan.beats / 4
+        const word = TURNAROUND_MOVE_LABEL[ta.plan.move]
+        for (const r of ta.plan.rows) log.push({ rowId: r.rowId, word, at, key: ta.armId })
+      }
+    }
+    const throws = radioThrowRef.current
+    if (throws.armed !== null) {
+      const key = `throw@${throws.armed.startBars}`
+      live.add(key)
+      if (!seen.has(key)) {
+        log.push({
+          rowId: throws.armed.slotId,
+          word: RADIO_THROW_WORD,
+          at: now + (throws.armed.startBars - throws.elapsedBars),
+          key
+        })
+      }
+    }
+    radioFlashLogRef.current = pruneRadioFlashes(log, now, 1, live)
+    radioFlashSeenRef.current = live
+  }
+  /** What the readout says now, from radio's refs (the clock tick's microtask only):
+   * `barsUntilChange` is the rows' own wait (radioChangeWait). */
+  function radioReadoutFrom(
+    pos: number,
+    loopBars: number,
+    barsUntilChange: number | null
+  ): RadioReadout {
+    const led = radioLedChangeRef.current
+    const pending = radioPendingRef.current
+    let nextChange: Parameters<typeof radioReadout>[0]['nextChange'] = null
+    if (led !== null) {
+      // a held change lands with its arrival, or the lead-in armed on its row, or as a cut
+      const lead = radioGestureRef.current.find(
+        (g) => g.slotId === led.slotId && g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
+      )
+      const leadKind = lead !== undefined && lead.kind !== 'drop-out' ? lead.kind : null
+      nextChange = {
+        rowId: led.slotId,
+        kind: led.arrival?.kind ?? leadKind ?? 'cut',
+        barsAway: barsUntilChange
+      }
+    } else if (pending !== null) {
+      nextChange = { rowId: pending.slotId, kind: null, barsAway: barsUntilChange }
+    }
+    const turnWaiting = radioTurnPendingRef.current
+    const armed = radioTurnaroundRef.current
+    const rows = slotsRef.current
+    const lap = radioPlayRef.current.lap
+    const now = radioPlayRef.current.startBars + pos
+    return radioReadout({
+      bars: radioReadoutBars(
+        radioClockRef.current?.turnaroundLap,
+        pos,
+        loopBars,
+        radioSettings.phraseBars
+      ),
+      nextChange,
+      armedTurnaround:
+        turnWaiting !== null
+          ? { move: turnWaiting.move ?? null, isTurn: true }
+          : armed !== null
+            ? { move: armed.plan.move, isTurn: armed.turn !== null }
+            : null,
+      arc: radioReadoutArc(
+        densityLegRef.current,
+        rows.length,
+        radioDensityOf(radioSettings) === 'arc'
+      ),
+      rows: rows.map((s) => ({
+        rowId: s.id,
+        kinds: s.kinds,
+        traits: s.candidate?.traitPercentiles ?? null,
+        author: s.candidate?.creatorUserName ?? null,
+        laps: lap - (radioRowSinceRef.current.get(s.id) ?? 0) + 1,
+        flash: radioFlashShown(radioFlashLogRef.current, s.id, now, 1)
+      }))
+    })
+  }
   /** Everything the scheduled swap does on one position tick, in the one
    * order it is safe to do it in. Called from the clock effect below,
    * after the two branches that LAND a change and before the one that
@@ -4396,6 +4533,13 @@ export function DiscoverPanel({
     const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, changeBars)
     const step = advanceRadioClock(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
     radioClockRef.current = step.clock
+    // The readout's clock (radioPlayRef): a lap more, and the bars of the lap that ended.
+    if (step.wrapped) {
+      radioPlayRef.current = {
+        lap: radioPlayRef.current.lap + 1,
+        startBars: radioPlayRef.current.startBars + loopBars
+      }
+    }
     // The bar a change detected on this tick was aiming at, so
     // `pos - boundaryBars` is how far past it this tick is. Mirrors
     // advanceRadioClock's own grid arithmetic; a wrap is always bar 0.
@@ -4866,6 +5010,10 @@ export function DiscoverPanel({
     void Promise.resolve().then(() => {
       setRadioProgress(progress)
       setRadioChangeWait(changeWait)
+      // the readout, from this tick: the flash log first, then what it all says
+      if (!radioOnRef.current) return
+      radioFlashTick(pos, loopBars)
+      setRadioReadoutNow(radioReadoutFrom(pos, loopBars, changeWait.barsUntilChange))
     })
     // Radio's scheduled swap gets its look at this tick here: after the
     // two branches that LAND a change (both of which return), and before
@@ -6464,6 +6612,8 @@ export function DiscoverPanel({
    * for itself (rerollSlot pushes one, rerollAll pushes one for the whole
    * batch, radio pushes none; see the spec's 3.4). */
   function commitSlotPick(id: string, pick: SlotPick): void {
+    // the row's age starts again (the radio readout)
+    radioRowSinceRef.current.set(id, radioPlayRef.current.lap)
     // A row changed by anyone counts as turned over (changeArtist) -- but
     // only by a pick rolled under the CURRENT selection: a manual reroll or
     // skip still in flight from before the switch lands the old artist's
@@ -7537,6 +7687,7 @@ export function DiscoverPanel({
     }
     setRadioProgress(0)
     setRadioChangeWait(null)
+    resetRadioReadout()
   }
 
   /** Starts radio at a chosen pace. Elling, 2026-09-28: "the initial
@@ -7567,6 +7718,7 @@ export function DiscoverPanel({
     radioOnRef.current = true
     resetDensityArc()
     resetRadioThrows(false)
+    resetRadioReadout()
     // createRadioClock, not restartRadioInterval: switching radio on is
     // where a phrase STARTS. The origin is the loop top radio started
     // inside (lapsSincePhrase counts whole laps, so a switch-on halfway
@@ -8637,6 +8789,47 @@ export function DiscoverPanel({
               })}
             </div>
           </div>
+        )}
+        {/* THE RADIO READOUT (spec 2026-10-03-radio-readout-design section 2), while radio runs:
+            where the density arc is heading and what changes next, and under it the phrase ruler
+            -- a 1px tick per bar, the bars played brighter, the turnaround armed for the phrase's
+            end at its right. Monochrome: chrome. Not a live region: its counts move every bar. */}
+        {radioOn && radioReadoutNow !== null && (
+          <span
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 3,
+              minWidth: 0,
+              fontSize: 9,
+              color: 'var(--ra-text-3)'
+            }}
+          >
+            {radioReadoutNow.statusLine !== '' && (
+              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {radioReadoutNow.statusLine}
+              </span>
+            )}
+            {radioReadoutNow.ruler.ticks > 0 && (
+              <span aria-hidden style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <span style={{ display: 'flex', gap: 1, width: 160, height: 1 }}>
+                  {Array.from({ length: radioReadoutNow.ruler.ticks }, (_, i) => (
+                    <span
+                      key={i}
+                      style={{
+                        flex: 1,
+                        background:
+                          i < radioReadoutNow.ruler.filled ? 'var(--ra-text-3)' : 'var(--ra-border)'
+                      }}
+                    />
+                  ))}
+                </span>
+                {radioReadoutNow.ruler.end !== null && (
+                  <span style={{ whiteSpace: 'nowrap' }}>{radioReadoutNow.ruler.end}</span>
+                )}
+              </span>
+            )}
+          </span>
         )}
         {/* FOLD MODE'S STATUS LINE (v2), while radio runs with fold on: what the folding is
             doing, in one terse line. Monochrome: chrome. */}
