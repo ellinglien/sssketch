@@ -352,6 +352,15 @@ describe('realignment marks', () => {
     expect(radioFoldIntervalBars(null, 24, 4)).toBe(24)
   })
 
+  it('counts a realignment from the boundary an interval restarts on, not the lap top', () => {
+    const s = settled(7, 16, 0) // marks at 32 and 60 bars from the lap top
+    // restarted 2 bars into the lap: the 32-bar mark is 30 bars from there
+    expect(radioFoldIntervalBars(s, 24, 4, 2)).toBe(30)
+    expect(radioFoldIntervalBars(s, 30, 4, 2)).toBe(30)
+    expect(radioFoldIntervalBars(s, 31, 4, 2)).toBe(31) // 58 is past two laps
+    expect(radioFoldIntervalBars(s, 24, 4, 0)).toBe(32)
+  })
+
   it('a phrase end on a realignment top rolls at often; off stays off', () => {
     expect(radioFoldTurnaroundRate('rare', true)).toBe('often')
     expect(radioFoldTurnaroundRate('rare', false)).toBe('rare')
@@ -378,6 +387,28 @@ describe('drift', () => {
         }
       }
     }
+  })
+
+  it('steps at most an eighth of a range a lap, on any loop length (a sweep is 8 laps or more)', () => {
+    for (const loopBars of [1, 4, 8, 16, 32]) {
+      const steps = run('k3x9pq', 120, () => ({ ...input(40), loopBars }))
+      for (const s of steps) {
+        for (const d of Object.values(s.drift)) {
+          for (const p of ['cutoff', 'send', 'dub'] as const) {
+            const [a, b] = d[p]
+            expect(Math.abs(b - a)).toBeLessThanOrEqual(
+              (FOLD_DRIFT_RANGE[p].max - FOLD_DRIFT_RANGE[p].min) / 8 + 1e-12
+            )
+          }
+        }
+      }
+    }
+  })
+
+  it('is deterministic for a seed', () => {
+    const a = run('k3x9pq', 60, () => ({ ...input(40), loopBars: 16 }))
+    const b = run('k3x9pq', 60, () => ({ ...input(40), loopBars: 16 }))
+    expect(a.map((s) => s.drift)).toEqual(b.map((s) => s.drift))
   })
 
   it('is continuous from lap to lap', () => {

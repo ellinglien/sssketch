@@ -183,6 +183,10 @@ export const FOLD_DRIFT_SWEEP_BARS: Readonly<{ min: number; max: number }> = Obj
   min: 32,
   max: 128
 })
+/** A sweep is never fewer laps than this, whatever its drawn bars: one lap moves a parameter at
+ * most an eighth of its range. A runtime holds each lap flat at its value (radioFoldDriftCurves)
+ * and its lanes can land a little after the top, so a lap's step is what a listener hears. */
+export const FOLD_DRIFT_MIN_SWEEP_LAPS = 8
 
 interface FoldSweep {
   from: number
@@ -191,7 +195,8 @@ interface FoldSweep {
   laps: number
 }
 type RowDrift = Record<FoldDriftParam, FoldSweep>
-/** A parameter's value at the start and at the end of the decided lap (a straight ramp). */
+/** A parameter's value at the start and at the end of the decided lap. A runtime plays the
+ * start value flat across the lap (radioFoldDriftCurves); the end is the next lap's start. */
 export type FoldDriftLap = Record<FoldDriftParam, readonly [number, number]>
 
 export interface RadioFoldRowState {
@@ -511,7 +516,7 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
           from: d[p].to,
           to: lerp(range.min, range.max, draw()),
           startLap: lap,
-          laps: stretchLaps(bars, input.loopBars)
+          laps: Math.max(FOLD_DRIFT_MIN_SWEEP_LAPS, stretchLaps(bars, input.loopBars))
         }
       }
     }
@@ -571,13 +576,15 @@ export function radioFoldMarkedBarsAhead(
 export function radioFoldIntervalBars(
   state: RadioFoldState | null,
   drawnBars: number,
-  loopBars: number
+  loopBars: number,
+  fromBars = 0
 ): number {
   if (state === null || !(loopBars > 0)) return drawnBars
   const limit = drawnBars + FOLD_PREFER_WAIT_LAPS * loopBars
-  const horizon = Math.ceil(limit / loopBars)
+  const horizon = Math.ceil((limit + fromBars) / loopBars)
   let best: number | null = null
-  for (const m of radioFoldMarkedBarsAhead(state, loopBars, horizon)) {
+  for (const top of radioFoldMarkedBarsAhead(state, loopBars, horizon)) {
+    const m = top - fromBars
     if (m >= drawnBars && m <= limit && (best === null || m < best)) best = m
   }
   return best ?? drawnBars

@@ -48,20 +48,24 @@ export function radioFoldCycleRows(
 }
 
 /** One row's drift over one lap as lane curves (clip-relative bars, 0 .. loopBars): the cutoff as
- * is, the reverb send as the row's own send plus the drift (never past 1), the dub send as is. */
+ * is, the reverb send as the row's own send plus the drift (never past 1), the dub send as is.
+ * Each is held FLAT at the lap's own (start) value, not ramped across it: a runtime pushes a lap's
+ * lanes a little after its top, and until they land the engine replays the previous lap's from
+ * bar 0. A ramp would step back to the previous lap's start and then forward again, twice a lap;
+ * flat lanes leave one step per top, at most an eighth of a range (FOLD_DRIFT_MIN_SWEEP_LAPS). */
 export function radioFoldDriftCurves(
   lap: FoldDriftLap,
   loopBars: number,
   ownSend: number
 ): { cutoff: AutomationPoint[]; send: AutomationPoint[]; dub: AutomationPoint[] } {
-  const ramp = ([a, b]: readonly [number, number], f: (v: number) => number): AutomationPoint[] => [
+  const flat = ([a]: readonly [number, number], f: (v: number) => number): AutomationPoint[] => [
     { bar: 0, value: f(a) },
-    { bar: loopBars, value: f(b) }
+    { bar: loopBars, value: f(a) }
   ]
   return {
-    cutoff: ramp(lap.cutoff, (v) => v),
-    send: ramp(lap.send, (v) => Math.min(1, ownSend + v)),
-    dub: ramp(lap.dub, (v) => v)
+    cutoff: flat(lap.cutoff, (v) => v),
+    send: flat(lap.send, (v) => Math.min(1, ownSend + v)),
+    dub: flat(lap.dub, (v) => v)
   }
 }
 

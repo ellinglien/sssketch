@@ -42,17 +42,30 @@ describe('radioFoldCycleRows', () => {
 })
 
 describe('radioFoldDriftCurves', () => {
-  it("ramps each parameter across the lap; the send sits on the row's own, never past 1", () => {
-    const c = radioFoldDriftCurves({ cutoff: [1, 0.9], send: [0, 0.1], dub: [0.05, 0.1] }, 4, 0.95)
+  it("holds each parameter flat at the lap's own value; the send sits on the row's own, never past 1", () => {
+    const c = radioFoldDriftCurves({ cutoff: [1, 0.9], send: [0.1, 0], dub: [0.05, 0.1] }, 4, 0.95)
     expect(c.cutoff).toEqual([
       { bar: 0, value: 1 },
-      { bar: 4, value: 0.9 }
-    ])
-    expect(c.send).toEqual([
-      { bar: 0, value: 0.95 },
       { bar: 4, value: 1 }
     ])
-    expect(c.dub[1]).toEqual({ bar: 4, value: 0.1 })
+    expect(c.send).toEqual([
+      { bar: 0, value: 1 },
+      { bar: 4, value: 1 }
+    ])
+    expect(c.dub).toEqual([
+      { bar: 0, value: 0.05 },
+      { bar: 4, value: 0.05 }
+    ])
+  })
+
+  it('a push landing late on a top leaves one step, the size of one lap of drift', () => {
+    // the engine replays lap n's lanes from bar 0 until lap n+1's land: flat lanes mean the
+    // value heard at the top is lap n's, then lap n+1's -- one step, never back and forth
+    const lapN = radioFoldDriftCurves({ cutoff: [0.9, 0.88], send: [0, 0], dub: [0, 0] }, 16, 0)
+    const lapN1 = radioFoldDriftCurves({ cutoff: [0.88, 0.86], send: [0, 0], dub: [0, 0] }, 16, 0)
+    const heard = [lapN.cutoff[1].value, lapN.cutoff[0].value, lapN1.cutoff[0].value]
+    expect(heard[1]).toBe(heard[0])
+    expect(Math.abs(heard[2] - heard[1])).toBeCloseTo(0.02, 12)
   })
 })
 
