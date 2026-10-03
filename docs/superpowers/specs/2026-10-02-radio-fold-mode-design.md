@@ -211,6 +211,70 @@ All copy is lowercase.
   6. Turnarounds and turns still land on the one.
   7. Turning the mode off restores normal pace and lengths.
 
+## 5. As built (2026-10-03): where the build departs from this spec
+
+The plan's "Spec points" and the reviews changed several things above. This section records what
+was built.
+
+- **No crop.** Scaling `barLength` and `durationSec` (§3) cannot phase, because both radios restart
+  every stem at each loop top. The engine's buffer cache would also sew the stem at the crop.
+  - **Engine (sssketch):** a lap clock, plus a per-row cycle table staged a lap ahead and applied at
+    the top (`CycleTable.h`, `Transport.cpp`, `stage-cycles`). A folded row plays its cycle on the
+    lap clock across tops.
+  - **Web:** each row carries a `CycleSpec`, and the timeline plays one voice per cycle on the
+    cycle's own grid.
+- **Seams.** Each end of a cycle has a 10 ms fade, so there is a dip of about 20 ms at each seam.
+  - A cycle carried across a top is not faded.
+  - Every change at a top crossfades over 10 ms: a new cycle id, length or phase, an unfold, or a
+    fold in from straight. The outgoing audio plays on as a tail.
+  - A phased cycle fades in from its origin.
+  - Tails are matched by row and audio file, so they survive a project swap.
+- **Drift.**
+  - Values are flat per lap, one step per top. This is because a lane pushed after the top would
+    otherwise step back and then forward.
+  - Sweeps last at least max(32 bars, 8 laps), so one lap moves a parameter by at most 1/8 of its
+    range.
+  - Ranges: cutoff 0.62–1 (never closed), added send 0–0.15, dub 0–0.18 (only ever added).
+  - On the web, drift has its own filter and send nodes, separate from the gesture nodes.
+- **Realignment and timing.**
+  - Realignment is measured against the loop, not the anchor.
+  - Curve steps run on every top, and a first fold starts at once.
+  - These wait for a marked top: settled unfolds (up to 8 laps), the second fold (half the time),
+    and the next change (at most 2 laps). A phrase end on a marked top rolls its turnaround at
+    `often`'s chance.
+  - A loop or tempo change unfolds any fold that is outside the window.
+  - Unfolding retraces the fold's own steps in reverse.
+  - A row that finishes unfolding plays full length for at least that top.
+- **Fader menus** (the plan's numbers, to tune by ear):
+  - below 50: 7 or 9 beats, no offset;
+  - 50–74: 5, 7 or 9, offsets 0 or a 1/4 beat;
+  - 75 and up: every length, offsets 0, 1/4, 1/3 or 1/2 beat;
+  - two rows only from 60. Below 60 it is one row at a time, unfolding rows included. Dropping the
+    fader under 60 lets an extra fold finish rather than yanking it.
+- **Window examples, corrected.** "11 against 13" passes the rule (71.5 s). Only the menu lengths are
+  ever used.
+  - At 120 bpm and `fold` 40:
+    - a 4-bar loop allows 7 and 9;
+    - an 8-bar loop allows only 7;
+    - 1-, 2- and 16-bar loops allow nothing.
+  - A 1-bar row folds only at 75+ (3.5 beats).
+  - Many beds therefore never fold at the defaults. A dev log line per fold step shows what the
+    machine decided.
+- **Clash.**
+  - The clash low-pass is 0.5 (about 630 Hz) on the brighter of a pair whose brightness differs by
+    at least 0.4.
+  - The lean (glue and saturation) is at most +0.15, and only above clash 50.
+  - The desktop applies both on its next push. The web applies them at once.
+- **Resets.**
+  - Mode off unfolds at the next top, on both radios.
+  - Radio off and a course change reset at once on the desktop, where the loop restarts anyway. The
+    web radio unfolds at the next top it can take.
+  - Turning the mode on or off restarts the change interval from the window that now applies.
+- **Seeds.**
+  - Default `autech`.
+  - A typed seed that does not clean to six characters is ignored, and the current seed stays.
+  - A new seed mid-fold jumps folded rows to the new table at the next top, crossfaded.
+
 ## Out of scope (phase 2 and later)
 
 - **Glitch:**
