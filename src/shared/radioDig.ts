@@ -26,6 +26,9 @@ export const NO_NEAR_FITS = 'no near fits'
 
 const TRAIT_KINDS: readonly DiscoverTraitKind[] = ['bassHeavy', 'rhythmic', 'bright', 'warm']
 
+const finite = (v: number | null | undefined): v is number =>
+  typeof v === 'number' && Number.isFinite(v)
+
 /** The dug stem, as both runtimes know it: the web from its index record, the desktop from its
  * candidate (riffCreationTime, traitPercentiles, riffCID). */
 export interface RadioDigAnchor {
@@ -60,6 +63,42 @@ export function radioDigAnchorStemId(
   return hookStemId ?? playingStemId
 }
 
+/** What a dug row's anchor is built from: the web's index record (`id`, `jam`, `t`, `traits`) or
+ * the desktop's candidate (`stemCID`, `jamCID`, `riffCreationTime`, `traitPercentiles`, `riffCID`). */
+export type RadioDigSource =
+  | {
+      id: string
+      jam: string
+      t: number | null
+      traits?: Partial<Record<DiscoverTraitKind, number | null>>
+    }
+  | Pick<
+      DiscoverCandidate,
+      'stemCID' | 'jamCID' | 'riffCID' | 'riffCreationTime' | 'traitPercentiles'
+    >
+
+/** The dug row's anchor, from the stem it anchors on (radioDigAnchorStemId's): a time that is not
+ * finite is unknown, no traits is {}, and an empty riffCID (the web has none) is left out. */
+export function radioDigAnchorOf(rowId: string, source: RadioDigSource): RadioDigAnchor {
+  if ('stemCID' in source) {
+    return {
+      rowId,
+      stemId: source.stemCID,
+      jamCID: source.jamCID,
+      t: finite(source.riffCreationTime) ? source.riffCreationTime : null,
+      traits: { ...(source.traitPercentiles ?? {}) },
+      ...(source.riffCID !== '' ? { riffCID: source.riffCID } : {})
+    }
+  }
+  return {
+    rowId,
+    stemId: source.id,
+    jamCID: source.jam,
+    t: finite(source.t) ? source.t : null,
+    traits: { ...(source.traits ?? {}) }
+  }
+}
+
 export function rankDigOf(
   anchor: RadioDigAnchor | null,
   nearRiffCIDs?: ReadonlySet<string>
@@ -90,9 +129,6 @@ export function isNearForDig(
   return Math.abs(record.t - anchor.t) <= DIG_NEAR_SEC
 }
 
-const finite = (v: number | null | undefined): v is number =>
-  typeof v === 'number' && Number.isFinite(v)
-
 /** How near a candidate is to the dug stem, 0..1: 0.5 the same jam, 0.3 closeness in time (1 for
  * a riff neighbour), 0.2 closeness in traits (0.5 when no trait is known on both sides). */
 export function radioDigCloseness(
@@ -116,7 +152,8 @@ export function radioDigCloseness(
       n++
     }
   }
-  const traitNear = n === 0 ? 0.5 : 1 - sum / n
+  // clamped: a percentile outside [0, 1] must not push closeness past its bounds
+  const traitNear = n === 0 ? 0.5 : Math.min(1, Math.max(0, 1 - sum / n))
   const p = DIG_CLOSENESS_PARTS
   return p.jam * sameJam + p.time * timeNear + p.traits * traitNear
 }
