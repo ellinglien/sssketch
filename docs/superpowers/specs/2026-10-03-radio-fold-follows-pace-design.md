@@ -135,8 +135,9 @@ With `h > 0`:
 - **A fold steps in** over `round(n × (1 − h))` tops, at least 1, where `n` is today's 2-4 draw. A
   re-fold steps over 1-2, scaled the same way. At full hurry a fold is a single crossfaded step.
   Elling's v1 rule "lengths move along curves, never jump" bends here: flag 4.
-- **An unfold's wait** for its realignment top, at most 8 laps, becomes `round(8 × (1 − h))`. At
-  100 it unfolds on the next top.
+- **An unfold's wait** for its realignment top, at most 8 laps, becomes `round(8 × (1 − h))`. From
+  `h` 0.94 (level 99) that is 0: the unfold starts in the very step that asks for it (a stretch
+  ending, a rotation), on that top, without waiting for the next.
 - **Rotation** comes after `round(drawn × (1 − h))` realignments, at least 1.
 - **Any top may open.** Once per step, while hurrying, one draw decides whether this top counts as
   a realignment for everything that waits on one: re-fold, rotation, an unfold's wait, a second

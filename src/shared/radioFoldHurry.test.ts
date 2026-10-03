@@ -8,7 +8,9 @@ import {
   radioFoldIntervalBars,
   radioFoldPickableIds,
   stepRadioFold,
+  FOLD_UNFOLD_MAX_WAIT_LAPS,
   type RadioFoldRow,
+  type RadioFoldState,
   type RadioFoldStep
 } from './radioFold'
 import { hashText, seededRandom } from './seededRandom'
@@ -35,6 +37,59 @@ function foldedStep(): RadioFoldStep {
   }
   throw new Error('no fold settled')
 }
+
+/** A drums anchor and one 4-bar row settled at 5.5 beats on a 4-bar loop since lap 0: it realigns
+ * only every 11 laps (32 half-beats a lap against 11), so nothing but the wait ends it early. */
+function settledAt(stretch: 'straight' | 'folded', stretchEndsLap: number): RadioFoldState {
+  return {
+    ...createRadioFold('autech'),
+    lap: 0,
+    loopBeats: 16,
+    bpm: 120,
+    stretch,
+    stretchEndsLap,
+    rows: [
+      {
+        rowId: 'p',
+        stemId: 'p-1',
+        fullBeats: 16,
+        targetBeats: 5.5,
+        cycleBeats: 5.5,
+        phaseBeats: 0,
+        originLap: 0,
+        path: [],
+        mode: 'settled',
+        unfoldSince: stretch === 'straight' ? 0 : null,
+        serial: 1
+      }
+    ],
+    serial: 1
+  }
+}
+const SETTLED_ROWS = [R('d', { kinds: ['drums'], percussive: true }), R('p')]
+
+describe('the unfold wait', () => {
+  it('unhurried, a fold asked to leave waits exactly FOLD_UNFOLD_MAX_WAIT_LAPS laps, no more', () => {
+    let s = settledAt('straight', 1000)
+    const modes: string[] = []
+    for (let k = 0; k < FOLD_UNFOLD_MAX_WAIT_LAPS + 1; k++) {
+      s = stepRadioFold(s, { rows: SETTLED_ROWS, loopBars: 4, bpm: 120, fold: 40, hurry: 0 }).state
+      modes.push(`${s.lap}:${s.rows.find((r) => r.rowId === 'p')?.mode ?? 'gone'}`)
+    }
+    const at = (lap: number): string | undefined => modes.find((m) => m.startsWith(`${lap}:`))
+    expect(at(FOLD_UNFOLD_MAX_WAIT_LAPS - 1)).toBe(`${FOLD_UNFOLD_MAX_WAIT_LAPS - 1}:settled`)
+    expect(at(FOLD_UNFOLD_MAX_WAIT_LAPS)).toBe(`${FOLD_UNFOLD_MAX_WAIT_LAPS}:unfolding`)
+  })
+
+  it('at full hurry, an unfold starts in the very step it is asked for', () => {
+    const input = { rows: SETTLED_ROWS, loopBars: 4, bpm: 120, fold: 40 }
+    // the folded stretch ends on lap 1: that step asks the fold to leave
+    const calm = stepRadioFold(settledAt('folded', 1), { ...input, hurry: 0 }).state
+    expect(calm.rows[0]).toMatchObject({ unfoldSince: 1, mode: 'settled' })
+    const hurried = stepRadioFold(settledAt('folded', 1), { ...input, hurry: 1 }).state
+    expect(hurried.rows[0]).toMatchObject({ unfoldSince: 1, mode: 'unfolding' })
+  })
+})
 
 describe('radioFoldIntervalBars preferWaitLaps', () => {
   it('0 is the draw itself; the default is FOLD_PREFER_WAIT_LAPS', () => {
@@ -97,6 +152,48 @@ describe('stepRadioFold hurry', () => {
     expect(hashText(trace())).toBe(BEFORE_HURRY)
     expect(hashText(trace(0))).toBe(BEFORE_HURRY)
     expect(hashText(trace(1))).not.toBe(BEFORE_HURRY)
+  })
+
+  it('marked is the true realignment: the same with or without a hurry, from the same state', () => {
+    const rows = [R('d', { kinds: ['drums'], percussive: true }), R('p'), R('q'), R('r')]
+    let s = createRadioFold('autech')
+    let marks = 0
+    for (let k = 0; k < 400; k++) {
+      const input = { rows, loopBars: 4, bpm: 120, fold: 60 }
+      const calm = stepRadioFold(s, { ...input, hurry: 0 })
+      const hurried = stepRadioFold(s, { ...input, hurry: 1 })
+      expect(hurried.marked).toBe(calm.marked)
+      expect(hurried.state.marked).toBe(calm.state.marked)
+      if (calm.marked) marks++
+      s = (k % 2 === 0 ? hurried : calm).state
+    }
+    expect(marks).toBeGreaterThan(0)
+  })
+
+  it('the machine decides more, never less, as the hurry rises', () => {
+    // Its decisions -- a fold entering, a new target or phase, an unfold starting -- not every
+    // cycle change: the hurry also cuts the steps a fold walks through, which alone would count
+    // fewer changes in the middle of the range.
+    const rows = [R('d', { kinds: ['drums'], percussive: true }), R('p'), R('q'), R('r')]
+    const decisions = (hurry: number): number => {
+      let n = 0
+      for (const seed of ['autech', 'k3x9pq', 'elling', 'nickel'])
+        for (const fold of [40, 60, 80]) {
+          let s = createRadioFold(seed)
+          let last = ''
+          for (let k = 0; k < 400; k++) {
+            s = stepRadioFold(s, { rows, loopBars: 4, bpm: 120, fold, hurry }).state
+            const key = JSON.stringify(
+              s.rows.map((r) => [r.rowId, r.targetBeats, r.phaseBeats, r.mode === 'unfolding'])
+            )
+            if (key !== last) n++
+            last = key
+          }
+        }
+      return n
+    }
+    const counts = [0, 0.25, 0.5, 0.75, 1].map(decisions)
+    for (let i = 1; i < counts.length; i++) expect(counts[i]).toBeGreaterThan(counts[i - 1])
   })
 
   it('folds move more at full hurry than at none, from the same seed, and still fold', () => {
