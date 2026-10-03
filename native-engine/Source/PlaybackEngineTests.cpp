@@ -56,8 +56,10 @@ namespace sssketch
 
     /** A linear ramp from ~0 to ~1 across the file, so a test can tell whether a
      * read landed near the buffer's head or its tail just from the sample value —
-     * a constant-value fixture can't distinguish that. */
-    static juce::File writeRampFixtureWav(const juce::String& name, int numSamples, double sampleRate = 44100.0)
+     * a constant-value fixture can't distinguish that. `descending` runs it from ~1 to ~0
+     * instead, so a test swapping one ramp for another can also tell which file sounded. */
+    static juce::File writeRampFixtureWav(const juce::String& name, int numSamples, double sampleRate = 44100.0,
+                                          bool descending = false)
     {
         auto file = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile(name);
         file.deleteFile();
@@ -68,7 +70,8 @@ namespace sssketch
         out.release();
         juce::AudioBuffer<float> source(1, numSamples);
         for (int i = 0; i < numSamples; ++i)
-            source.setSample(0, i, (float) i / (float) numSamples);
+            source.setSample(0, i, descending ? 1.0f - (float) i / (float) numSamples
+                                              : (float) i / (float) numSamples);
         writer->writeFromAudioSampleBuffer(source, 0, numSamples);
         writer.reset();
         return file;
@@ -862,6 +865,81 @@ namespace sssketch
                         expect(same, "another file in the row hears no tail");
                     }
                 }
+                ramp.deleteFile();
+                other.deleteFile();
+            }
+
+            // Radio fold, phase 2 (spec 2026-10-03-radio-fold-follows-pace-design section 3): a
+            // change landing mid-lap on a folded row whose incoming stem names the row CARRIES the
+            // fold -- the cycle table is keyed by row, so the live entry keeps its id and origin,
+            // and the incoming stem plays the running cycle from where it is. One whose stem does
+            // not name the row plays straight. The swap is the desktop's own bar landing
+            // (Transport::renderLoopAware's split: stageProject, then applyStagedProject between
+            // two renders), and the incoming file is a DESCENDING ramp, so every reading also
+            // says which file sounded.
+            beginTest("a stem swapped into a folded row mid-lap that names the row plays the running cycle on, origin kept");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_carry_a.wav", 16 * 44100);
+                auto other = writeRampFixtureWav("sssketch_pe_fold_carry_b.wav", 16 * 44100, 44100.0, true);
+                StemBufferCache cache;
+                ChannelChainRegistry channelChains;
+                PlaybackEngine engine(cache);
+                engine.setProject(foldProject(ramp, "perc"));
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                expect(engine.applyStagedCycles(false));
+                const auto at = [&](double lapSec, double baseBars) {
+                    float l = 0.0f, r = 0.0f;
+                    engine.renderBlock(lapSec / 4.0, 44100.0, 1, &l, &r, channelChains, LapClock { baseBars, 1 });
+                    return l;
+                };
+                const auto landAt = [&](const EngineProject& project) {
+                    engine.stageProject(project);
+                    expect(engine.applyStagedProject() == PlaybackEngine::StagedApply::Applied);
+                    engine.drainRetiredProject(); // the message thread's collection, or the next swap defers
+                };
+                // lap 0 stamps the origin at 0; lap 1 (base 4 bars, 16 s on the grid) runs on it
+                expectWithinAbsoluteError(at(0.5, 0.0), 0.5f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(7.5, 4.0), 2.5f / 16.0f, 0.002f); // 23.5 mod 7
+                expectWithinAbsoluteError(at(7.99, 4.0), 2.99f / 16.0f, 0.002f); // just before bar 2
+
+                // carried: another file, the same row, renamed, landing at bar 2 of lap 1 (8 s)
+                auto carried = foldProject(other, "perc");
+                carried.rifffs[0].stems[0].stemKey = "fold-carried:1";
+                carried.rifffs[0].stems[0].cycleStemHash = cycleStemHashOf(carried.rifffs[0].stems[0]);
+                landAt(carried);
+                // the incoming file at the running tile's position: 24 s is 3 s into a tile, so
+                // 1 - 3/16 -- not its loop position (1 - 8/16), not a restarted cycle (1 - 0/16)
+                expectWithinAbsoluteError(at(8.0, 4.0), 1.0f - 3.0f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(8.5, 4.0), 1.0f - 3.5f / 16.0f, 0.002f); // 24.5 mod 7
+                expectWithinAbsoluteError(at(9.5, 4.0), 1.0f - 4.5f / 16.0f, 0.002f);
+                // the next tile starts at 28 s (12 s into lap 1), on the same origin
+                expectWithinAbsoluteError(at(11.5, 4.0), 1.0f - 6.5f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(12.5, 4.0), 1.0f - 0.5f / 16.0f, 0.002f);
+                // and that seam is the usual 10 ms fade, on the incoming file: 50 ms either side
+                {
+                    const int n = (int) (0.1 * 44100.0);
+                    std::vector<float> l((size_t) n, 0.0f), r((size_t) n, 0.0f);
+                    engine.renderBlock((12.0 - 0.05) / 4.0, 44100.0, n, l.data(), r.data(), channelChains,
+                                       LapClock { 4.0, 1 });
+                    float worst = 0.0f;
+                    float lowest = 1.0f;
+                    for (int i = 1; i < n; ++i)
+                    {
+                        worst = std::max(worst, std::abs(l[(size_t) i] - l[(size_t) i - 1]));
+                        lowest = std::min(lowest, std::abs(l[(size_t) i]));
+                    }
+                    // unfaded, 1 - 7/16 up to 1 is a 0.44 jump; faded over 441 samples, each step
+                    // about 1 / 441 = 0.0023 at most (the fade-in rises to 1, not 0.44)
+                    expect(worst < 0.003f, "largest step at the carried cycle's seam " + juce::String(worst));
+                    expect(lowest < 0.003f, "the carried seam dips to silence, got " + juce::String(lowest));
+                }
+                // the lap after: still the same origin (lap 2 starts at 32 s, 4 s into a tile)
+                expectWithinAbsoluteError(at(0.5, 8.0), 1.0f - 4.5f / 16.0f, 0.002f);
+
+                // straight: the same file, its row not named, landing at bar 3 of lap 2 (12 s,
+                // 44 s on the grid, 2 s into a tile) -- the loop's own position
+                landAt(foldProject(other, ""));
+                expectWithinAbsoluteError(at(12.5, 8.0), 1.0f - 12.5f / 16.0f, 0.002f);
                 ramp.deleteFile();
                 other.deleteFile();
             }
