@@ -171,6 +171,26 @@ describe('radioCadenceOf', () => {
     })
   })
 
+  it('no level: `level` is still a plain number -- read, spread or serialised -- fold mode too', () => {
+    for (const foldMode of [false, true]) {
+      const legacy: RadioSettings = {
+        ...DEFAULT_RADIO_SETTINGS,
+        paceLevel: undefined,
+        foldMode,
+        paceBars: { min: 5, max: 9 },
+        phraseBars: 16
+      }
+      const c = radioCadenceOf(legacy)
+      const level = radioPaceLevelOf(legacy)
+      expect(c.level).toBe(level)
+      expect(c.level).toBe(level)
+      expect({ ...c }.level).toBe(level)
+      expect(JSON.parse(JSON.stringify(c)).level).toBe(level)
+      expect(c.fold).toBe(foldMode)
+      expect(c.window).toEqual(foldMode ? FOLD_PACE_BARS : { min: 5, max: 9 })
+    }
+  })
+
   it('fold mode keeps its own window, tops, one row', () => {
     const c = radioCadenceOf(at(100, 16, true))
     expect(c.window).toEqual(FOLD_PACE_BARS)

@@ -1235,6 +1235,19 @@ export interface RadioCadence {
 
 export function radioCadenceOf(settings: RadioSettings): RadioCadence {
   const base = settings.phraseBars
+  if (settings.paceLevel === undefined) {
+    // No level: the cadence never reads one, and the level a legacy window means is a log-space
+    // search (radioPaceLevelFromLegacy, ~10x the rest of this) -- and this runs several times a
+    // tick. So `level` is worked out only when something reads it, once.
+    return withLazyLevel(settings, {
+      window: settings.foldMode ? { ...FOLD_PACE_BARS } : { ...settings.paceBars },
+      phraseBars: base,
+      turnaroundPhraseBars: base,
+      barEvery: null,
+      rows: 1,
+      fold: Boolean(settings.foldMode)
+    })
+  }
   const level = radioPaceLevelOf(settings)
   if (settings.foldMode) {
     return {
@@ -1247,17 +1260,6 @@ export function radioCadenceOf(settings: RadioSettings): RadioCadence {
       fold: true
     }
   }
-  if (settings.paceLevel === undefined) {
-    return {
-      level,
-      window: { ...settings.paceBars },
-      phraseBars: base,
-      turnaroundPhraseBars: base,
-      barEvery: null,
-      rows: 1,
-      fold: false
-    }
-  }
   const profile = radioPaceProfile(level)
   return {
     level,
@@ -1267,6 +1269,19 @@ export function radioCadenceOf(settings: RadioSettings): RadioCadence {
     barEvery: profile.barEvery,
     rows: profile.rows,
     fold: false
+  }
+}
+
+/** A cadence whose `level` (radioPaceLevelOf) is computed on first read and kept. An enumerable
+ * getter, so toEqual, a spread and JSON all see the same plain number they always did. */
+function withLazyLevel(settings: RadioSettings, rest: Omit<RadioCadence, 'level'>): RadioCadence {
+  let level: number | undefined
+  return {
+    get level(): number {
+      if (level === undefined) level = radioPaceLevelOf(settings)
+      return level
+    },
+    ...rest
   }
 }
 
