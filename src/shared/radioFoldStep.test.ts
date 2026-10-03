@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   FOLD_DRIFT_RANGE,
   FOLD_MAX_ROWS,
+  FOLD_ROTATE_AFTER_REALIGNS,
   createRadioFold,
   foldSeedKey,
   radioFoldDriftRange,
@@ -37,7 +38,17 @@ const BAND: RadioFoldRow[] = [
   row('pad', { kinds: ['warm'], barLength: 4 })
 ]
 
-const input = (fold: number, rows: RadioFoldRow[] = BAND): RadioFoldInput => ({
+/** BAND plus two 4-bar rhythmic rows: below bend 50 a 2-bar row has one length (7; 9 is longer
+ * than it), a 4-bar row two (7 and 9), so it can re-fold, and a fold has a row to rotate to. */
+const WIDE: RadioFoldRow[] = [
+  ...BAND,
+  row('clap', { kinds: ['rhythmic'], barLength: 4 }),
+  row('shaker', { kinds: ['rhythmic'], barLength: 4 })
+]
+
+const SEEDS = ['k3x9pq', 'autech', 'gae4rb', 'qb78ma']
+
+const input = (fold: number, rows: readonly RadioFoldRow[] = BAND): RadioFoldInput => ({
   rows,
   loopBars: 4,
   bpm: 120,
@@ -154,8 +165,8 @@ describe('stepRadioFold: curves land on loop tops', () => {
     let checked = 0
     let fourStep = 0
     // 40 keeps to 8 -> 7; 90 reaches 8 -> 3, which takes four distinct lengths
-    for (const fold of [40, 90]) {
-      const steps = run('k3x9pq', 400, () => input(fold))
+    for (const [fold, seed] of [40, 90].flatMap((f) => SEEDS.map((sd) => [f, sd] as const))) {
+      const steps = run(seed, 400, () => input(fold))
       // follow every run of one row's fold, from its first folded lap
       let i = 0
       while (i < steps.length) {
@@ -200,28 +211,42 @@ describe('stepRadioFold: curves land on loop tops', () => {
     expect(fourStep).toBeGreaterThan(0)
   })
 
-  it("unfolding walks back the same way: the fold's own lengths in reverse, then full", () => {
+  it("unfolding walks back the way it came: up through the fold's own lengths, then full", () => {
     let checked = 0
-    for (const fold of [40, 90]) {
-      const steps = run('k3x9pq', 600, () => input(fold))
+    let refolded = 0
+    for (const [fold, rows] of [
+      [40, BAND],
+      [90, BAND],
+      [40, WIDE],
+      [90, WIDE]
+    ] as const) {
+      const steps = run('k3x9pq', 600, () => input(fold, rows))
       // every length each row's fold restarted on, from its first folded lap until it leaves
-      const open = new Map<string, { out: number[]; back: number[] }>()
+      const open = new Map<string, { out: number[]; back: number[]; refolded: boolean }>()
       for (const s of steps) {
         for (const [rowId, ep] of open) {
           if (s.state.rows.some((r) => r.rowId === rowId)) continue
-          expect(ep.back).toEqual(ep.out.slice(0, -1).reverse())
+          // never shrinking on the way back, and only through lengths the fold played
+          for (let k = 1; k < ep.back.length; k++)
+            expect(ep.back[k]).toBeGreaterThan(ep.back[k - 1])
+          for (const b of ep.back) expect(ep.out).toContain(b)
+          // a fold that never re-folded walks its own steps back exactly (v1)
+          if (!ep.refolded) expect(ep.back).toEqual(ep.out.slice(0, -1).reverse())
+          else refolded++
           if (ep.out.length > 1) checked++
           open.delete(rowId)
         }
         for (const r of s.state.rows) {
           if (r.originLap !== s.lap) continue
-          const ep = open.get(r.rowId) ?? { out: [], back: [] }
+          const ep = open.get(r.rowId) ?? { out: [], back: [], refolded: false }
           open.set(r.rowId, ep)
+          if (r.mode === 'refolding') ep.refolded = true
           ;(r.mode === 'unfolding' ? ep.back : ep.out).push(r.cycleBeats)
         }
       }
     }
     expect(checked).toBeGreaterThan(0)
+    expect(refolded).toBeGreaterThan(0)
   })
 
   it('a cycle id stays while the cycle runs on, and changes when it restarts', () => {
@@ -687,4 +712,162 @@ describe('stepRadioFold: a forced walk back', () => {
     }
     expect(walked).toBeGreaterThan(0)
   }, 20_000) // seeded walks over many laps: ~2.5 s alone, more under a full-suite load
+})
+
+describe('stepRadioFold v2: re-fold and rotate', () => {
+  /** Every top where a settled fold met its own realignment and stayed in (no rotation, no
+   * unfold), and whether it re-folded there. */
+  function realignTops(fold: number): { tops: number; refolds: number } {
+    let tops = 0
+    let refolds = 0
+    for (const seed of SEEDS) {
+      const steps = run(seed, 600, () => input(fold, WIDE))
+      for (let i = 1; i < steps.length; i++) {
+        for (const p of steps[i - 1].state.rows) {
+          if (p.mode !== 'settled' || p.unfoldSince !== null) continue
+          if (((steps[i].lap - p.originLap) * 32) % (p.cycleBeats * 2) !== 0) continue
+          const r = steps[i].state.rows.find((x) => x.rowId === p.rowId)
+          if (!r || r.mode === 'unfolding' || steps[i].stretch !== 'folded') continue
+          // a 4-bar row: below bend 50 a 2-bar row has no other length to go to
+          if (p.fullBeats !== 16) continue
+          tops++
+          if (r.mode === 'refolding') refolds++
+        }
+      }
+    }
+    return { tops, refolds }
+  }
+
+  it('re-folds only on its own realignment top, to another length or phase from the menu, in the window', () => {
+    let refolds = 0
+    let phaseOnly = 0
+    for (const fold of [40, 90]) {
+      for (const seed of SEEDS) {
+        const steps = run(seed, 400, () => input(fold, WIDE))
+        for (let i = 1; i < steps.length; i++) {
+          for (const r of steps[i].state.rows) {
+            const p = steps[i - 1].state.rows.find((x) => x.rowId === r.rowId)
+            if (!p || p.mode !== 'settled' || r.mode !== 'refolding') continue
+            refolds++
+            // whole laps since its origin are a whole number of its cycles: a realignment
+            expect(((steps[i].lap - p.originLap) * 32) % (p.cycleBeats * 2)).toBe(0)
+            expect(steps[i].marked).toBe(true)
+            expect(r.originLap).toBe(steps[i].lap)
+            expect([r.targetBeats, r.phaseBeats]).not.toEqual([p.targetBeats, p.phaseBeats])
+            expect(radioFoldAllowedCycles(16, 120)).toContain(r.targetBeats)
+            expect(r.targetBeats).toBeLessThan(r.fullBeats)
+            if (r.targetBeats === p.targetBeats) {
+              phaseOnly++
+              // a phase-only re-fold needs a menu with offsets: bend 50 and up
+              expect(fold).toBeGreaterThanOrEqual(50)
+            }
+          }
+        }
+      }
+    }
+    expect(refolds).toBeGreaterThan(0)
+    expect(phaseOnly).toBeGreaterThan(0)
+  })
+
+  it('a re-fold lands in one or two steps and is settled on the top after', () => {
+    let checked = 0
+    for (const seed of SEEDS) {
+      const steps = run(seed, 400, () => input(90, WIDE))
+      for (let i = 1; i + 1 < steps.length; i++) {
+        for (const r of steps[i].state.rows) {
+          const p = steps[i - 1].state.rows.find((x) => x.rowId === r.rowId)
+          if (!p || p.mode !== 'settled' || r.mode !== 'refolding') continue
+          const after = steps[i + 1].state.rows.find((x) => x.rowId === r.rowId)
+          if (!after || after.mode === 'unfolding') continue
+          expect(after.mode).toBe('settled')
+          expect(after.cycleBeats).toBe(r.targetBeats)
+          checked++
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(0)
+  })
+
+  it("re-folds more often at a higher bend (0.3 + 0.4 x bend's chance)", () => {
+    const low = realignTops(40)
+    const high = realignTops(100)
+    expect(low.tops).toBeGreaterThan(20)
+    expect(high.tops).toBeGreaterThan(20)
+    const lowRate = low.refolds / low.tops
+    const highRate = high.refolds / high.tops
+    expect(lowRate).toBeGreaterThan(0.25)
+    expect(lowRate).toBeLessThan(0.7)
+    expect(highRate).toBeGreaterThan(lowRate)
+  })
+
+  it('a fold rotates out after its drawn 2-4 realignment tops; its replacement folds in on the top it leaves', () => {
+    let rotations = 0
+    let landed = 0
+    for (const fold of [40, 90]) {
+      for (const seed of SEEDS) {
+        const steps = run(seed, 600, () => input(fold, WIDE))
+        for (let i = 1; i < steps.length; i++) {
+          const rot = steps[i].state.rotate
+          if (!rot || steps[i - 1].state.rotate) continue
+          rotations++
+          const was = steps[i - 1].state.rows.find((r) => r.rowId === rot.from)!
+          const from = steps[i].state.rows.find((r) => r.rowId === rot.from)!
+          expect(was.mode).toBe('settled')
+          expect(from.mode).toBe('unfolding')
+          expect(from.realigns).toBe(from.rotateAfter)
+          expect(from.rotateAfter).toBeGreaterThanOrEqual(FOLD_ROTATE_AFTER_REALIGNS.min)
+          expect(from.rotateAfter).toBeLessThanOrEqual(FOLD_ROTATE_AFTER_REALIGNS.max)
+          expect(rot.to).not.toBe(rot.from)
+          // nothing new folds while it walks back
+          let j = i + 1
+          while (j < steps.length && steps[j].state.rows.some((r) => r.rowId === rot.from)) {
+            const fresh = steps[j].state.rows.filter(
+              (r) => !steps[j - 1].state.rows.some((x) => x.rowId === r.rowId)
+            )
+            expect(fresh).toEqual([])
+            j++
+          }
+          // on the top it has left, its replacement folds in (a stretch ending first stops it)
+          if (j < steps.length && steps[j].stretch === 'folded') {
+            const to = steps[j].state.rows.find((r) => r.rowId === rot.to)
+            expect(to?.originLap).toBe(steps[j].lap)
+            landed++
+          }
+        }
+      }
+    }
+    expect(rotations).toBeGreaterThan(0)
+    expect(landed).toBeGreaterThan(0)
+  })
+
+  it('never more rows than the bend allows, through re-folds and rotations', () => {
+    for (const seed of SEEDS) {
+      for (const fold of [40, 59, 60, 100]) {
+        for (const s of run(seed, 400, () => input(fold, WIDE))) {
+          expect(s.cycles.length).toBeLessThanOrEqual(fold < 60 ? 1 : FOLD_MAX_ROWS)
+        }
+      }
+    }
+  })
+
+  it('the same seed and events give the same decisions, and a JSON round trip changes nothing', () => {
+    const a = run('k3x9pq', 400, () => input(90, WIDE))
+    expect(run('k3x9pq', 400, () => input(90, WIDE))).toEqual(a)
+    const mid = JSON.parse(JSON.stringify(a[150].state)) as RadioFoldState
+    const rest = run('k3x9pq', 249, () => input(90, WIDE), mid)
+    expect(rest).toEqual(a.slice(151))
+  })
+
+  it('a state saved before v2 (no rotation, no realign count) steps on', () => {
+    const a = run('k3x9pq', 200, () => input(90, WIDE))
+    const old = JSON.parse(JSON.stringify(a[120].state)) as Partial<RadioFoldState>
+    delete old.rotate
+    for (const r of old.rows ?? []) {
+      delete (r as { realigns?: number }).realigns
+      delete (r as { rotateAfter?: number }).rotateAfter
+    }
+    const steps = run('k3x9pq', 80, () => input(90, WIDE), old as RadioFoldState)
+    expect(steps).toEqual(run('k3x9pq', 80, () => input(90, WIDE), old as RadioFoldState))
+    for (const s of steps) expect(s.cycles.length).toBeLessThanOrEqual(FOLD_MAX_ROWS)
+  })
 })

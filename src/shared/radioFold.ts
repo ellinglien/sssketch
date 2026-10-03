@@ -40,6 +40,18 @@ export const FOLD_PACE_BARS: Readonly<{ min: number; max: number }> = Object.fre
   min: 8,
   max: 32
 })
+/** A settled fold re-folds at its own realignment top with this chance, from bend 0 to 100
+ * (v2 section 1): to a new length, or a new phase where the bend's menu has offsets. */
+export const FOLD_REFOLD_CHANCE: Readonly<{ atNone: number; atFull: number }> = Object.freeze({
+  atNone: 0.3,
+  atFull: 0.7
+})
+/** A fold rotates out after this many of its own realignment tops, drawn per fold (v2 section 1),
+ * when another row could take its place. */
+export const FOLD_ROTATE_AFTER_REALIGNS: Readonly<{ min: number; max: number }> = Object.freeze({
+  min: 2,
+  max: 4
+})
 /** A change prefers a realignment top at most this many laps past its drawn interval. */
 export const FOLD_PREFER_WAIT_LAPS = 2
 /** A settled row asked to unfold waits for its own realignment top, but no longer than this. */
@@ -245,10 +257,16 @@ export interface RadioFoldRowState {
   /** The lengths the fold has stepped through on its way in, in order, the latest last: an
    * unfold walks them back (spec section 1). Absent in a state saved before it was kept. */
   walk?: number[]
-  mode: 'folding' | 'settled' | 'unfolding'
+  /** `refolding`: a settled fold moving to a new length or phase at its realignment top (v2),
+   * one or two lengths, and settled again on the top after it lands. */
+  mode: 'folding' | 'settled' | 'unfolding' | 'refolding'
   /** The lap it was asked to unfold on (the stretch ended), or null. */
   unfoldSince: number | null
   serial: number
+  /** Its own realignment tops passed settled, and how many it rotates out after (drawn,
+   * FOLD_ROTATE_AFTER_REALIGNS). Absent in a state saved before v2: none, and the most. */
+  realigns?: number
+  rotateAfter?: number
 }
 
 export interface RadioFoldState {
@@ -269,6 +287,9 @@ export interface RadioFoldState {
   serial: number
   /** The decided lap's top is a realignment (radioFoldMarkedBarsAhead reads it). */
   marked: boolean
+  /** A rotation under way (v2): `from` walks back out, and `to` folds in on the top `from` has
+   * left. Absent in a state saved before v2: none. */
+  rotate?: { from: string; to: string } | null
 }
 
 export function createRadioFold(seed: string): RadioFoldState {
@@ -283,7 +304,8 @@ export function createRadioFold(seed: string): RadioFoldState {
     rows: [],
     drift: {},
     serial: 0,
-    marked: false
+    marked: false,
+    rotate: null
   }
 }
 
@@ -400,6 +422,18 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     r.originLap = lap
     r.serial = ++s.serial
   }
+  /** Rows that may start a fold on this top: foldable, with a target at this bend, not already
+   * folded and not just left (a row that leaves plays full length for at least this top). */
+  const foldable = (): RadioFoldRow[] => {
+    const taken = new Set(s.rows.map((r) => r.rowId))
+    return input.rows.filter(
+      (row) =>
+        !taken.has(row.id) &&
+        !left.has(row.id) &&
+        radioFoldCanFold(row, anchorId) &&
+        foldTargets(row, loopBeats, input.bpm, f).length > 0
+    )
+  }
 
   // 1. Rows already folded keep their fold only while they still may and still play the stem it
   //    was decided for, at the length it was decided at; a changed stem leaves the fold (the new
@@ -451,6 +485,53 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     }
   }
 
+  // 2b. A settled fold's own realignment top (v2 section 1). It counts the top; once it has passed
+  //     its drawn count it rotates out if another row could take its place -- it walks back from
+  //     here (3), and that row folds in on the top the walk-back ends (5). Otherwise it re-folds
+  //     by the bend's chance: a new length from the bend's menu (never its own) in one or two
+  //     steps, or, where the menu has offsets (bend 50 and up), the same length at a new phase.
+  //     Only in a folded stretch, never a fold already asked to leave.
+  if (s.stretch === 'folded' && f > 0) {
+    for (const r of s.rows) {
+      if (r.mode !== 'settled' || r.unfoldSince !== null || !realignsAt(r, lap, loopBeats)) continue
+      r.realigns = (r.realigns ?? 0) + 1
+      if (
+        (s.rotate ?? null) === null &&
+        r.realigns >= (r.rotateAfter ?? FOLD_ROTATE_AFTER_REALIGNS.max)
+      ) {
+        const others = foldable()
+        if (others.length > 0) {
+          s.rotate = { from: r.rowId, to: pickFrom(others, draw()).id }
+          r.unfoldSince = lap
+          continue
+        }
+      }
+      if (draw() >= lerp(FOLD_REFOLD_CHANCE.atNone, FOLD_REFOLD_CHANCE.atFull, f)) continue
+      const row = byId.get(r.rowId)!
+      const lengths = foldTargets(row, loopBeats, input.bpm, f).filter((c) => c !== r.targetBeats)
+      const phases = phaseMenu(f)
+      const otherPhases = phases.filter((p) => p !== r.phaseBeats)
+      // null: the same length at a new phase
+      const choices: (number | null)[] = [...lengths, ...(otherPhases.length > 0 ? [null] : [])]
+      if (choices.length === 0) continue
+      const pick = pickFrom(choices, draw())
+      r.mode = 'refolding'
+      if (pick === null) {
+        r.phaseBeats = pickFrom(otherPhases, draw())
+        r.path = []
+      } else {
+        r.phaseBeats = pickFrom(phases, draw())
+        r.targetBeats = pick
+        r.path = radioFoldPath(r.cycleBeats, pick, 1 + Math.floor(draw() * 2))
+        r.cycleBeats = r.path.shift() ?? pick
+        // the walk back out passes only lengths it played longer than the new target, at most
+        // three of them, the nearest: an unfold stays three steps at most, as in v1
+        r.walk = [...(r.walk ?? []).filter((w) => w > pick).slice(-3), pick]
+      }
+      restart(r)
+    }
+  }
+
   // 3. Unfolding starts: at once while still folding or outside the window, else on the row's own
   //    realignment top (or after FOLD_UNFOLD_MAX_WAIT_LAPS), walking back the way it came: the
   //    lengths it stepped in through, in reverse, then full length.
@@ -458,15 +539,23 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     if (r.unfoldSince === null || r.mode === 'unfolding') continue
     const due =
       r.mode === 'folding' ||
+      r.mode === 'refolding' ||
       outside.has(r.rowId) ||
       realignsAt(r, lap, loopBeats) ||
       lap - r.unfoldSince >= FOLD_UNFOLD_MAX_WAIT_LAPS
     if (!due) continue
     r.mode = 'unfolding'
     r.targetBeats = r.fullBeats
+    const from = r.cycleBeats
     r.path =
       r.walk !== undefined
-        ? [...r.walk.slice(0, -1).reverse(), r.fullBeats]
+        ? [
+            ...r.walk
+              .slice(0, -1)
+              .reverse()
+              .filter((w) => w > from),
+            r.fullBeats
+          ]
         : radioFoldPath(r.cycleBeats, r.fullBeats, 3)
     r.cycleBeats = r.path.shift() ?? r.fullBeats
     restart(r)
@@ -478,13 +567,13 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     if (r.mode === 'settled' || r.originLap === lap) continue
     const next = r.path.shift()
     if (next === undefined) {
-      if (r.mode === 'folding') r.mode = 'settled'
+      if (r.mode === 'folding' || r.mode === 'refolding') r.mode = 'settled'
       continue
     }
     r.cycleBeats = next
     restart(r)
     if (r.mode === 'folding') r.walk?.push(next)
-    if (r.path.length === 0 && r.mode === 'folding') r.mode = 'settled'
+    if (r.path.length === 0 && (r.mode === 'folding' || r.mode === 'refolding')) r.mode = 'settled'
   }
   s.rows = s.rows.filter((r) => {
     if (r.cycleBeats < r.fullBeats) return true
@@ -494,41 +583,47 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
 
   // 5. New folds, only in a folded stretch: one at once when none is folding, a second (high
   //    `fold` only) on a realignment top, half the time. A row still walking back holds its
-  //    place against the most rows at once, so below fold 60 one row at a time it is.
+  //    place against the most rows at once, so below fold 60 one row at a time it is. A rotation
+  //    (2b) holds every other new fold back until its `from` has left; on that top its `to` folds
+  //    in, if it still may (else the usual pick).
+  if (s.stretch !== 'folded' || f === 0) s.rotate = null
   if (s.stretch === 'folded' && f > 0) {
-    const active = s.rows.filter((r) => r.unfoldSince === null).length
-    const may = s.rows.length < maxRows(f) && (active === 0 || (marked && draw() < 0.5))
-    if (may) {
-      const taken = new Set(s.rows.map((r) => r.rowId))
-      const candidates = input.rows.filter(
-        (row) =>
-          !taken.has(row.id) &&
-          !left.has(row.id) &&
-          radioFoldCanFold(row, anchorId) &&
-          foldTargets(row, loopBeats, input.bpm, f).length > 0
-      )
-      if (candidates.length > 0) {
-        const row = pickFrom(candidates, draw())
-        const target = pickFrom(foldTargets(row, loopBeats, input.bpm, f), draw())
-        const phase = pickFrom(phaseMenu(f), draw())
-        const full = row.barLength * 4
-        const path = radioFoldPath(full, target, 2 + Math.floor(draw() * 3))
-        const first = path.shift() ?? target
-        s.rows.push({
-          rowId: row.id,
-          stemId: row.stemId!,
-          fullBeats: full,
-          targetBeats: target,
-          cycleBeats: first,
-          phaseBeats: phase,
-          originLap: lap,
-          path,
-          walk: [first],
-          mode: path.length === 0 ? 'settled' : 'folding',
-          unfoldSince: null,
-          serial: ++s.serial
-        })
-      }
+    let row: RadioFoldRow | undefined
+    const rotate = s.rotate ?? null
+    if (rotate !== null && !s.rows.some((r) => r.rowId === rotate.from)) {
+      s.rotate = null
+      if (s.rows.length < maxRows(f)) row = foldable().find((x) => x.id === rotate.to)
+    }
+    if (row === undefined && (s.rotate ?? null) === null) {
+      const active = s.rows.filter((r) => r.unfoldSince === null).length
+      const may = s.rows.length < maxRows(f) && (active === 0 || (marked && draw() < 0.5))
+      const candidates = may ? foldable() : []
+      if (candidates.length > 0) row = pickFrom(candidates, draw())
+    }
+    if (row !== undefined) {
+      const target = pickFrom(foldTargets(row, loopBeats, input.bpm, f), draw())
+      const phase = pickFrom(phaseMenu(f), draw())
+      const full = row.barLength * 4
+      const path = radioFoldPath(full, target, 2 + Math.floor(draw() * 3))
+      const first = path.shift() ?? target
+      const { min, max } = FOLD_ROTATE_AFTER_REALIGNS
+      const rotateAfter = min + Math.floor(draw() * (max - min + 1))
+      s.rows.push({
+        rowId: row.id,
+        stemId: row.stemId!,
+        fullBeats: full,
+        targetBeats: target,
+        cycleBeats: first,
+        phaseBeats: phase,
+        originLap: lap,
+        path,
+        walk: [first],
+        mode: path.length === 0 ? 'settled' : 'folding',
+        unfoldSince: null,
+        serial: ++s.serial,
+        realigns: 0,
+        rotateAfter
+      })
     }
   }
 
