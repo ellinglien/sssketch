@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   createRadioFold,
+  radioFoldRestartAt,
+  radioFoldRestartStep,
   stepRadioFold,
   type RadioFoldInput,
   type RadioFoldRow,
@@ -12,7 +14,8 @@ import {
   radioFoldBeatsLabel,
   radioFoldPhaseDot,
   radioFoldRowLabel,
-  radioFoldStatus
+  radioFoldStatus,
+  radioFoldTransportMove
 } from './radioFoldStatus'
 
 const row = (id: string, over: Partial<RadioFoldRow> = {}): RadioFoldRow => ({
@@ -174,5 +177,100 @@ describe('the row readout and the phase dot', () => {
     expect(radioFoldBeatsIn(r, 4, 0)).toBe(96)
     expect(radioFoldBeatsIn(r, 4, 4)).toBe(112)
     expect(radioFoldPhaseDot(7, 0, radioFoldBeatsIn({ ...r, lapsIn: 7 }, 4, 0))).toBe(0)
+  })
+})
+
+describe('a restart (a play after a pause, a seek, a snap)', () => {
+  it('beats in carries the tops passed since the rows were read', () => {
+    const r = {
+      rowId: 'p',
+      cycleBeats: 7,
+      fullBeats: 8,
+      phaseBeats: 0,
+      mode: 'settled' as const,
+      lapsIn: 6
+    }
+    // the wrap's first frame, before the step: still lap 6's rows, a top on
+    expect(radioFoldBeatsIn(r, 4, 0.5, 1)).toBe(114)
+    expect(radioFoldBeatsIn(r, 4, 0.5, -2)).toBe(radioFoldBeatsIn(r, 4, 0.5))
+  })
+
+  it('restarts every cycle that began before the lap, on its top, and draws nothing', () => {
+    const now = stepRadioFold(settled(4), input(40)) // decides lap 5
+    const next = stepRadioFold(now.state, input(40)) // decides lap 6; lap 5 plays
+    const before = JSON.stringify(next)
+    const again = radioFoldRestartStep(next, 5)
+    expect(JSON.stringify(next)).toBe(before) // pure
+    expect(again.state.rows.map((r) => r.originLap)).toEqual([5])
+    expect(again.state.draws).toBe(next.state.draws)
+    expect(again.state.serial).toBe(next.state.serial)
+    expect(again.cycles).toEqual(next.cycles) // the same cycle ids: the engine keeps its cycles
+    // a cycle that begins on or after the lap is left as it is
+    expect(radioFoldRestartAt(again.state, 5)).toBe(again.state)
+    expect(radioFoldRestartAt(again.state, 3)).toBe(again.state)
+  })
+
+  it('the dots and the status count from the restart, not from the fold', () => {
+    const now = stepRadioFold(settled(4), input(40))
+    const next = stepRadioFold(now.state, input(40))
+    expect(radioFoldStatus(next.state, now, 4, 40, null)!.realignsInLaps).toBe(2)
+    const st = radioFoldStatus(
+      radioFoldRestartAt(next.state, 5),
+      radioFoldRestartStep(now, 5),
+      4,
+      40,
+      null
+    )!
+    expect(st.rows[0].lapsIn).toBe(0)
+    // 7 against 16 realigns seven laps after its new origin, lap 5's top
+    expect(st.realignsInLaps).toBe(7)
+  })
+
+  it('a decided top marked as a realignment is not one after a restart', () => {
+    const now = stepRadioFold(settled(5), input(40)) // decides lap 6
+    const next = stepRadioFold(now.state, input(40)) // decides lap 7: marked
+    expect(next.marked).toBe(true)
+    const again = radioFoldRestartStep(next, 6)
+    expect(again.marked).toBe(false)
+    expect(again.state.marked).toBe(false)
+    expect(
+      radioFoldStatus(again.state, radioFoldRestartStep(now, 6), 4, 40, null)!.realignsInLaps
+    ).toBe(7)
+  })
+
+  it('the machine marks the tops the engine will play after a restart, and replays the same', () => {
+    const marks = (restart: boolean): number[] => {
+      const now = stepRadioFold(settled(4), input(40))
+      let s = stepRadioFold(now.state, input(40)).state // lap 5 plays
+      if (restart) s = radioFoldRestartAt(s, 5)
+      const out: number[] = []
+      for (let i = 0; i < 9; i++) {
+        const st = stepRadioFold(s, input(40))
+        if (st.marked) out.push(st.lap)
+        s = st.state
+      }
+      return out
+    }
+    expect(marks(false)).toEqual([7, 14])
+    expect(marks(true)).toEqual([12])
+    expect(marks(true)).toEqual(marks(true))
+  })
+})
+
+describe('radioFoldTransportMove', () => {
+  const at = (pos: number, playing = true): { pos: number; playing: boolean } => ({ pos, playing })
+  it('stopped is nothing, and playing again is a restart', () => {
+    expect(radioFoldTransportMove(at(1), 2, false, 4)).toBe('none')
+    expect(radioFoldTransportMove(at(1, false), 1, true, 4)).toBe('restart')
+  })
+  it('playback is nothing; a jump forward is a restart', () => {
+    expect(radioFoldTransportMove(at(1), 1.03, true, 4)).toBe('none')
+    expect(radioFoldTransportMove(at(1), 1, true, 4)).toBe('none')
+    expect(radioFoldTransportMove(at(0.5), 3, true, 4)).toBe('restart')
+  })
+  it('a top played through is a wrap; a seek back, or a snap from past the end, a restart', () => {
+    expect(radioFoldTransportMove(at(3.97), 0.02, true, 4)).toBe('wrap')
+    expect(radioFoldTransportMove(at(3), 1, true, 4)).toBe('restart')
+    expect(radioFoldTransportMove(at(7.9), 0.01, true, 4)).toBe('restart')
   })
 })

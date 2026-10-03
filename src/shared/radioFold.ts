@@ -688,6 +688,36 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
   }
 }
 
+/** Playback restarted while `lap` plays: a play after a pause, a seek, a snap back to the top.
+ * The engine starts a new lap clock on every such move (Transport.cpp) and every folded cycle
+ * restarts its phase from the top of the lap it restarted in (CycleTable::originFor), so the
+ * machine's own origins have to follow, or it would mark realignment tops (and re-fold, rotate,
+ * unfold on them) that the engine no longer plays. Every row whose cycle began before `lap` now
+ * begins on it; a cycle beginning on or after it is left alone. Ids are untouched (a restart is not
+ * a new cycle: the engine keeps the ones it has), nothing is drawn, so the seed still replays the
+ * same decisions from here. `marked` (the decided lap's top) holds only if a settled row still
+ * realigns there. Pure: `state` is untouched. */
+export function radioFoldRestartAt(state: RadioFoldState, lap: number): RadioFoldState {
+  if (!state.rows.some((r) => r.originLap < lap)) return state
+  const rows = state.rows.map((r) => (r.originLap < lap ? { ...r, originLap: lap } : r))
+  return { ...state, rows, marked: state.marked && marksTop(rows, state.lap, state.loopBeats) }
+}
+
+/** radioFoldRestartAt for a step: its state, and its own `marked` (the step's lap's top). */
+export function radioFoldRestartStep(step: RadioFoldStep, lap: number): RadioFoldStep {
+  const state = radioFoldRestartAt(step.state, lap)
+  if (state === step.state) return step
+  return {
+    ...step,
+    state,
+    marked: step.marked && marksTop(state.rows, step.lap, state.loopBeats)
+  }
+}
+
+function marksTop(rows: readonly RadioFoldRowState[], lap: number, loopBeats: number): boolean {
+  return rows.some((r) => r.mode === 'settled' && realignsAt(r, lap, loopBeats))
+}
+
 /** The tops ahead that are realignments if nothing changes, in bars from the top of the lap
  * playing now (the one before the decided lap): the decided lap's own top is `loopBars`. */
 export function radioFoldMarkedBarsAhead(

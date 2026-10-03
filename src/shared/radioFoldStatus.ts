@@ -115,11 +115,38 @@ export function radioFoldPhaseDot(cycleBeats: number, phaseBeats: number, beatsI
   return (x < 0 ? x + cycleBeats : x) / cycleBeats
 }
 
-/** Beats since a status row's cycle began, at `posBars` into the lap playing. */
+/** Beats since a status row's cycle began, at `posBars` into the lap playing. `lapsSince`: loop
+ * tops passed since the row was read -- a runtime that steps a moment after the wrap still holds
+ * the previous lap's rows on the wrap's first frame, and adds the difference (the web's foldDots
+ * does the same). */
 export function radioFoldBeatsIn(
   row: RadioFoldStatusRow,
   loopBars: number,
-  posBars: number
+  posBars: number,
+  lapsSince = 0
 ): number {
-  return (row.lapsIn * loopBars + posBars) * 4
+  return ((row.lapsIn + Math.max(0, lapsSince)) * loopBars + posBars) * 4
+}
+
+/** A move the playhead makes between two position ticks further than this, in bars, is a jump
+ * (a seek), not playback: ticks come about 30 times a second. */
+export const FOLD_JUMP_BARS = 1
+
+/** What the playhead did between two position ticks, as the engine's lap clock sees it
+ * (Transport.cpp): `wrap`, a loop top played through; `restart`, a new lap clock -- playing again
+ * after a pause or a stop, a seek either way, or a snap back to the top from past the loop's end --
+ * after which every folded cycle restarts its phase at the top of the lap it restarted in
+ * (radioFoldRestartAt); `none` otherwise, and always while stopped. */
+export function radioFoldTransportMove(
+  prev: { pos: number; playing: boolean },
+  pos: number,
+  playing: boolean,
+  loopBars: number
+): 'none' | 'wrap' | 'restart' {
+  if (!playing) return 'none'
+  if (!prev.playing) return 'restart'
+  if (!(loopBars > 0) || !Number.isFinite(pos) || !Number.isFinite(prev.pos)) return 'none'
+  if (pos >= prev.pos) return pos - prev.pos > FOLD_JUMP_BARS ? 'restart' : 'none'
+  if (prev.pos > loopBars + 1e-6) return 'restart'
+  return loopBars - prev.pos + pos <= FOLD_JUMP_BARS ? 'wrap' : 'restart'
 }
