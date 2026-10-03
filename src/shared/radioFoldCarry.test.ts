@@ -8,6 +8,7 @@ import {
   radioFoldRelease,
   stepRadioFold,
   type RadioFoldRow,
+  type RadioFoldRowState,
   type RadioFoldStep
 } from './radioFold'
 import { radioFoldCycleRows } from './radioFoldLanes'
@@ -35,6 +36,20 @@ function foldedStep(): { step: RadioFoldStep; rows: RadioFoldRow[] } {
   throw new Error('no fold settled')
 }
 
+/** `step` with its state's row `id` patched (and its cycle's length, if `cycleBeats` is). */
+function withRow(step: RadioFoldStep, id: string, o: Partial<RadioFoldRowState>): RadioFoldStep {
+  return {
+    ...step,
+    state: {
+      ...step.state,
+      rows: step.state.rows.map((r) => (r.rowId === id ? { ...r, ...o } : r))
+    },
+    cycles: step.cycles.map((c) =>
+      c.rowId === id && o.cycleBeats !== undefined ? { ...c, cycleBeats: o.cycleBeats } : c
+    )
+  }
+}
+
 describe('radioFoldCanCarry', () => {
   it("only a foldable stem at least as long as the fold's own carries it", () => {
     const { step } = foldedStep()
@@ -56,6 +71,65 @@ describe('radioFoldCanCarry', () => {
       rows: step.state.rows.map((r) => (r.rowId === id ? { ...r, unfoldSince: step.lap } : r))
     }
     expect(radioFoldCanCarry(leaving, id, R(id, { stemId: 'new' }), anchor)).toBe(false)
+  })
+})
+
+describe('radioFoldCanCarry, the edges', () => {
+  it('a row walking back is never carried, by its mode alone or by its ask alone', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const anchor = step.anchorId
+    const inc = R(id, { stemId: 'new' })
+    expect(radioFoldCanCarry(withRow(step, id, { mode: 'unfolding' }).state, id, inc, anchor)).toBe(
+      false
+    )
+    expect(
+      radioFoldCanCarry(withRow(step, id, { unfoldSince: step.lap }).state, id, inc, anchor)
+    ).toBe(false)
+  })
+
+  it('a straight stretch never carries: it has asked every fold to leave', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const straight = {
+      ...step.state,
+      stretch: 'straight' as const,
+      rows: step.state.rows.map((r) => ({ ...r, unfoldSince: step.lap }))
+    }
+    expect(radioFoldCanCarry(straight, id, R(id, { stemId: 'new' }), step.anchorId)).toBe(false)
+  })
+
+  it('a refolding row carries', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const refolding = withRow(step, id, { mode: 'refolding' }).state
+    expect(radioFoldCanCarry(refolding, id, R(id, { stemId: 'new' }), step.anchorId)).toBe(true)
+  })
+
+  it('a fractional length: an equal 1.5-bar stem carries, a shorter one does not', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const state = withRow(step, id, { fullBeats: 6, targetBeats: 5, cycleBeats: 5, path: [] }).state
+    const anchor = step.anchorId
+    expect(radioFoldCanCarry(state, id, R(id, { stemId: 'new', barLength: 1.5 }), anchor)).toBe(
+      true
+    )
+    expect(radioFoldCanCarry(state, id, R(id, { stemId: 'new', barLength: 1.25 }), anchor)).toBe(
+      false
+    )
+  })
+
+  it('never onto the anchor, never for a row the machine does not hold, never across rows', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    expect(radioFoldCanCarry(step.state, id, R(id, { stemId: 'new' }), id)).toBe(false)
+    const free = ['p', 'q'].find((x) => !step.state.rows.some((r) => r.rowId === x))!
+    expect(radioFoldCanCarry(step.state, free, R(free, { stemId: 'new' }), step.anchorId)).toBe(
+      false
+    )
+    expect(radioFoldCanCarry(step.state, id, R('other', { stemId: 'new' }), step.anchorId)).toBe(
+      false
+    )
   })
 })
 
@@ -94,6 +168,7 @@ describe('radioFoldCarry', () => {
     const row = carried.state.rows.find((r) => r.rowId === id)!
     expect(row.path).toEqual([12, 32])
     expect(row.fullBeats).toBe(32)
+    expect(row.targetBeats).toBe(32)
     // the machine runs on cleanly: the row walks out to full length and leaves, never stuck
     const nextRows = rows.map((r) => (r.id === id ? { ...r, stemId: `${id}-2`, barLength: 8 } : r))
     let s = carried.state
@@ -107,6 +182,34 @@ describe('radioFoldCarry', () => {
   })
 })
 
+describe('radioFoldCarry guards its own invariant', () => {
+  it('a take-back too short for what the fold has become releases it, never an overlong cycle', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    // an 8-bar stem carries the 4-bar row's fold, which then re-folds to 26 beats (longer than the
+    // 4-bar stem); a take-back re-carrying the 4-bar stem must release the fold
+    const longer = radioFoldCarry(step, id, `${id}-long`, 8)
+    const refolded = withRow(longer, id, { cycleBeats: 26, targetBeats: 26, path: [] })
+    const back = radioFoldCarry(refolded, id, `${id}-1`, 4)
+    expect(back).toEqual(radioFoldRelease(refolded, id))
+    expect(back.state.rows.some((r) => r.rowId === id)).toBe(false)
+    expect(back.cycles.some((c) => c.rowId === id)).toBe(false)
+    // still on its way to 26: the path alone is enough
+    const onTheWay = withRow(longer, id, { mode: 'refolding', targetBeats: 26, path: [26] })
+    expect(radioFoldCarry(onTheWay, id, `${id}-1`, 4).state.rows.some((r) => r.rowId === id)).toBe(
+      false
+    )
+  })
+
+  it('a walk back longer than the new stem is trimmed, so the unfold never passes its length', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const walked = withRow(step, id, { cycleBeats: 7, targetBeats: 7, path: [], walk: [13, 10, 7] })
+    const carried = radioFoldCarry(walked, id, `${id}-short`, 2)
+    expect(carried.state.rows.find((r) => r.rowId === id)?.walk).toEqual([7])
+  })
+})
+
 describe('radioFoldRelease', () => {
   it('the row leaves the state and the cycles, marked is recomputed, nothing drawn', () => {
     const { step } = foldedStep()
@@ -117,6 +220,21 @@ describe('radioFoldRelease', () => {
     expect(out.marked).toBe(false)
     expect(out.state.draws).toBe(step.state.draws)
     expect(radioFoldRelease(step, 'nobody')).toBe(step)
+  })
+
+  it('clears a rotation the released row is part of, either end, and keeps any other', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const rotating = (rotate: { from: string; to: string }): RadioFoldStep => ({
+      ...step,
+      state: { ...step.state, rotate }
+    })
+    expect(radioFoldRelease(rotating({ from: id, to: 'x' }), id).state.rotate).toBeNull()
+    expect(radioFoldRelease(rotating({ from: 'x', to: id }), id).state.rotate).toBeNull()
+    expect(radioFoldRelease(rotating({ from: 'x', to: 'y' }), id).state.rotate).toEqual({
+      from: 'x',
+      to: 'y'
+    })
   })
 })
 

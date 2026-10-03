@@ -840,6 +840,7 @@ export function radioFoldCanCarry(
   anchorId: string | null
 ): boolean {
   const r = state?.rows.find((x) => x.rowId === rowId)
+  // a straight stretch has asked every fold to leave (unfoldSince), so it never carries either
   if (r === undefined || r.mode === 'unfolding' || r.unfoldSince !== null) return false
   if (incoming.id !== rowId || incoming.stemId === null) return false
   if (!(incoming.barLength * 4 >= r.fullBeats)) return false
@@ -848,28 +849,48 @@ export function radioFoldCanCarry(
 
 /** PHASE 2. A carried change has landed on `rowId`: the fold now belongs to `stemId` (`barLength`
  * bars). The state's row and every step's cycle for it are re-pointed; nothing else moves (the
- * cycle id, origin, phase, path and walk are kept, so the engine's running cycle and the machine
- * agree) and nothing is drawn. A row the machine no longer holds is left alone: the engine plays
- * whatever is in force there (straight, if the fold has gone). Pure. */
+ * cycle id, origin, phase and path are kept, so the engine's running cycle and the machine agree)
+ * and nothing is drawn. A row walking back now walks back to the new full length; a walk (the
+ * lengths an unfold retraces) keeps only those shorter than it. A row the machine no longer holds
+ * is left alone: the engine plays whatever is in force there (straight, if the fold has gone).
+ *
+ * It guards its own invariant: if the new stem is shorter than any length the fold plays or still
+ * steps to (the step's cycle; the state's cycle, target and path), the fold is RELEASED instead
+ * (radioFoldRelease), never left longer than its stem. radioFoldCanCarry, checked at the decision,
+ * rules this out for the state it saw, but the machine may re-fold before the change lands: so
+ * the runtimes (Tasks 9-11) must check radioFoldCanCarry again against the CURRENT state whenever
+ * they re-carry, a take-back above all (the old stem coming back onto a fold the newer, longer
+ * stem took further). Pure. */
 export function radioFoldCarry(
   step: RadioFoldStep,
   rowId: string,
   stemId: string,
   barLength: number
 ): RadioFoldStep {
-  if (
-    !step.state.rows.some((r) => r.rowId === rowId) &&
-    !step.cycles.some((c) => c.rowId === rowId)
-  )
-    return step
+  const held = step.state.rows.find((r) => r.rowId === rowId)
+  if (held === undefined && !step.cycles.some((c) => c.rowId === rowId)) return step
+  const full = barLength * 4
+  const playing = step.cycles.filter((c) => c.rowId === rowId).map((c) => c.cycleBeats)
+  const ahead =
+    held === undefined
+      ? []
+      : held.mode === 'unfolding'
+        ? // walking back: its last step is the old full length, which becomes the new
+          [held.cycleBeats, ...held.path.slice(0, -1)]
+        : [held.cycleBeats, held.targetBeats, ...held.path]
+  if (!(full >= Math.max(...playing, ...ahead))) return radioFoldRelease(step, rowId)
   const rows = step.state.rows.map((r) =>
     r.rowId === rowId
       ? {
           ...r,
           stemId,
-          fullBeats: barLength * 4,
-          ...(r.mode === 'unfolding' && r.path.length > 0
-            ? { path: [...r.path.slice(0, -1), barLength * 4] }
+          fullBeats: full,
+          ...(r.walk !== undefined ? { walk: r.walk.filter((w) => w < full) } : {}),
+          ...(r.mode === 'unfolding'
+            ? {
+                targetBeats: full,
+                ...(r.path.length > 0 ? { path: [...r.path.slice(0, -1), full] } : {})
+              }
             : {})
         }
       : r
