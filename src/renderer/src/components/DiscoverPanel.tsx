@@ -224,8 +224,10 @@ import {
   radioReadout,
   radioReadoutArc,
   radioReadoutBars,
+  radioFlashOpacity,
   type RadioFlash,
-  type RadioReadout
+  type RadioReadout,
+  type RadioReadoutRow
 } from '@shared/radioReadout'
 import {
   CLASH_LOWPASS_CUTOFF,
@@ -8237,6 +8239,10 @@ export function DiscoverPanel({
           radioChangeWait?.barsUntilChange ?? null
         )
       : null
+  // THE RADIO READOUT on each row (radioReadoutNow), only while radio runs.
+  const radioReadoutRows = new Map(
+    (radioOn && radioReadoutNow !== null ? radioReadoutNow.rows : []).map((r) => [r.rowId, r])
+  )
   const radioFoldReadouts = new Map(
     (radioFoldStatusNow?.rows ?? []).map((r) => [
       r.rowId,
@@ -9187,6 +9193,7 @@ export function DiscoverPanel({
               soundSourceAudioIn={soundSourceForLean(sourceLean).audioIn}
               foldTrack={radioFoldTrack}
               foldReadout={radioFoldReadouts.get(slot.id) ?? null}
+              radioReadout={radioReadoutRows.get(slot.id) ?? null}
             />
           ))
         })()}
@@ -9787,7 +9794,8 @@ function DiscoverSlotRow({
   soundSourceEndlesss,
   soundSourceAudioIn,
   foldTrack,
-  foldReadout
+  foldReadout,
+  radioReadout
 }: {
   slot: DiscoverSlot
   /** Set while radio is about to change THIS row, and null otherwise.
@@ -9943,6 +9951,9 @@ function DiscoverSlotRow({
    * null on a straight row and while fold mode is off. The phase dot under it is moved by
    * DiscoverPanel's sweep layout effect (data-fold-dot), never by render. */
   foldReadout: string | null
+  /** The radio readout on this row (@shared/radioReadout): what it was picked as, its age,
+   * `next` and the gesture flash. Null unless radio runs. */
+  radioReadout: RadioReadoutRow | null
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- Waveform needs a real
@@ -10851,6 +10862,54 @@ function DiscoverSlotRow({
               {noMatchFound && (
                 <span style={{ fontSize: 9, color: 'var(--ra-mute-on)' }}>no match</span>
               )}
+            </div>
+          )}
+          {/* THE RADIO READOUT on the row (spec 2026-10-03-radio-readout-design section 2): what
+              it was picked as and how long it has played, small and dim over the waveform's top
+              left; the gesture flash (in and out over a bar) and `next` at its top right. Never
+              in the way of the gain drag. Chrome: monochrome. */}
+          {radioReadout !== null && (
+            <div
+              aria-hidden
+              style={{
+                position: 'absolute',
+                inset: 0,
+                pointerEvents: 'none',
+                fontSize: 8,
+                lineHeight: '10px',
+                color: 'var(--ra-text-3)'
+              }}
+            >
+              <span
+                style={{
+                  position: 'absolute',
+                  top: 1,
+                  left: 3,
+                  right: 90,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}
+              >
+                {[radioReadout.label, radioReadout.age].filter(Boolean).join(' · ')}
+              </span>
+              <span
+                style={{
+                  position: 'absolute',
+                  top: 1,
+                  right: 3,
+                  display: 'flex',
+                  gap: 6,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {radioReadout.flash !== null && (
+                  <span style={{ opacity: radioFlashOpacity(radioReadout.flash.t) }}>
+                    {radioReadout.flash.word}
+                  </span>
+                )}
+                {radioReadout.nextLabel !== null && <span>{radioReadout.nextLabel}</span>}
+              </span>
             </div>
           )}
         </div>
