@@ -68,7 +68,7 @@ a per-row readout plus a status line, renamed controls with tooltips, and seeds 
   The copy is lowercase and terse.
 - **Per-row readout.**
   - A folded row shows `7 / 16`, its cycle against the loop in beats. A half beat shows as `3½`.
-  - A **phase dot** travels around the cycle and lands on the downbeat at realignment. Its position
+  - A **phase dot** travels around the cycle and lands on the downbeat at realignment (a phase-shifted fold's dot lands on its offset just after the downbeat, which is where that cycle really restarts). Its position
     is `((lapPosBeats − phase) mod cycle) / cycle`.
   - A straight row shows nothing.
 - **Where.**
