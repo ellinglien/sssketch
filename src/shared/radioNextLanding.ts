@@ -32,7 +32,13 @@ export interface RadioNextLandingInput {
   pending: { rowId: string; barsUntil: number | null; with?: readonly string[] } | null
   /** Changes queued for the next top, the arc's joining row among them: how each arrives, and
    * whether its stem is warm (a cold one waits for a later top, bar unknown). */
-  manual: readonly { rowId: string; kind: RadioTransitionKind | null; ready: boolean }[]
+  manual: readonly {
+    rowId: string
+    kind: RadioTransitionKind | null
+    ready: boolean
+    /** A hook's own landing (radioHooks.ts), queued like a manual change. */
+    hook?: 'out' | 'back'
+  }[]
   /** The density arc, null when it is off. */
   arc: {
     /** The row it is bringing in (picking, then in `manual`). */
@@ -148,7 +154,12 @@ export function radioNextLanding(input: RadioNextLandingInput): Next | null {
 
   for (const m of input.manual) {
     if (arc?.adding?.rowId === m.rowId) continue
-    candidates.push({ rowId: m.rowId, kind: m.kind, barsAway: m.ready ? toWrap : null })
+    candidates.push({
+      rowId: m.rowId,
+      kind: m.kind,
+      barsAway: m.ready ? toWrap : null,
+      ...(m.hook !== undefined && { hook: m.hook })
+    })
   }
 
   let best: Next | null = null

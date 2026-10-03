@@ -135,8 +135,12 @@ export interface ArcRow {
   radioAdded: boolean
   locked: boolean
   soloed: boolean
-  /** "hold longer" (the hook). */
+  /** Reserved by a hook (radioHooks' radioHookReservesRow: in, away or resting): the arc never
+   * takes a hook's home row. */
   held: boolean
+  /** Heard now (absent: true). A hook resting leaves its row unheard: it does not count as the
+   * last of its kind, so the remaining drums or bass row stays protected. */
+  heard?: boolean
   /** A change waiting, radio's decided change, or a stem still resolving. */
   busy: boolean
   /** It is the only row as long as the loop: removing it would shorten
@@ -169,7 +173,8 @@ export function pickArcRemoval(rows: readonly ArcRow[]): string | null {
   const lastOfItsKind = (r: ArcRow): boolean =>
     r.kinds.some(
       (k) =>
-        (k === 'drums' || k === 'bass') && !rows.some((o) => o.id !== r.id && o.kinds.includes(k))
+        (k === 'drums' || k === 'bass') &&
+        !rows.some((o) => o.id !== r.id && o.heard !== false && o.kinds.includes(k))
     )
   let best: ArcRow | null = null
   for (const r of rows) {

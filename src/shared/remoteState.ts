@@ -1,4 +1,5 @@
 // src/shared/remoteState.ts
+import { RADIO_ROLE_WORDS_MAX } from './radioHooks'
 import type { SoundType } from './types'
 import type { CoachSlotSnapshot } from './coachClimax'
 import {
@@ -41,6 +42,19 @@ export interface RemoteSlotView {
    * identify a file and cannot be turned back into one, so this does not
    * widen the boundary this function IS. */
   peaks: number[] | null
+  /** Radio's roles on the row (spec 2026-10-03-radio-anointed-stems-design 5): its hook's state,
+   * whether it is dug, and the row's words (radioHooks' radioRoleWords, the phone's width). Absent
+   * while radio is off or the row has no role. */
+  role?: RemoteSlotRole
+}
+
+export interface RemoteSlotRole {
+  hook: 'in' | 'away' | 'resting' | null
+  dig: boolean
+  /** Bars until an away hook comes back, null otherwise. */
+  hookBarsAway: number | null
+  /** At most RADIO_ROLE_WORDS_MAX characters; null for none. */
+  words: string | null
 }
 
 /** What radio is about to do, as much of it as the phone needs.
@@ -206,6 +220,8 @@ export interface RemoteStateMeta {
   fold?: boolean | null
   /** Radio's turn while radio runs; absent or null while it is off. */
   turn?: RemoteTurnView | null
+  /** Radio's roles by slot id while radio runs (hooks, dig); absent while it is off. */
+  roles?: ReadonlyMap<string, RemoteSlotRole>
 }
 
 /** The whole privacy boundary of Part 2, in one pure function: whatever
@@ -251,8 +267,29 @@ export function remoteStateFromSlots(
       soundType: slot.stem?.type ?? null,
       muted: !slot.audible,
       soloed: slot.audible && audibleCount === 1,
-      peaks: quantiseRemotePeaks(peaksBySlotId?.get(slot.id) ?? [])
+      peaks: quantiseRemotePeaks(peaksBySlotId?.get(slot.id) ?? []),
+      ...roleOf(meta.roles?.get(slot.id))
     }))
+  }
+}
+
+/** A role leaves only with something in it, its words cut to the phone's width. */
+function roleOf(role: RemoteSlotRole | undefined): { role?: RemoteSlotRole } {
+  if (role === undefined || (role.hook === null && !role.dig)) return {}
+  const away = role.hookBarsAway
+  return {
+    role: {
+      hook: role.hook,
+      dig: role.dig === true,
+      hookBarsAway:
+        role.hook !== null &&
+        role.hook !== 'in' &&
+        typeof away === 'number' &&
+        Number.isFinite(away)
+          ? Math.max(0, Math.round(away))
+          : null,
+      words: typeof role.words === 'string' ? role.words.slice(0, RADIO_ROLE_WORDS_MAX) : null
+    }
   }
 }
 
@@ -342,7 +379,18 @@ export function parseRemoteFold(value: unknown): boolean | null {
  * also add solo? first press is solo, then second press is mute / like
  * double tap"). It is toggleSlotSolo and nothing else: drop every other
  * slot out of the mix. */
-export type RemoteSlotAction = 'mute' | 'solo' | 'similar' | 'adjacent' | 'random' | 'duplicate'
+export type RemoteSlotAction =
+  | 'mute'
+  | 'solo'
+  | 'similar'
+  | 'adjacent'
+  | 'random'
+  | 'duplicate'
+  // radio's roles (spec 2026-10-03-radio-anointed-stems-design 5): the hook and dig toggles, and
+  // bring an away hook back
+  | 'hook'
+  | 'dig'
+  | 'back'
 
 const REMOTE_SLOT_ACTIONS: RemoteSlotAction[] = [
   'mute',
@@ -350,7 +398,10 @@ const REMOTE_SLOT_ACTIONS: RemoteSlotAction[] = [
   'similar',
   'adjacent',
   'random',
-  'duplicate'
+  'duplicate',
+  'hook',
+  'dig',
+  'back'
 ]
 
 /** What POST /api/turn's body asked for: `{ move }` with a real move name, or the planner's

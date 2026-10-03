@@ -77,6 +77,9 @@ export interface RadioReadoutInput {
     /** The pace slider's extra rows riding radio's change (its companions), cuts landing with
      * it: `next: row 2 +2 → bloom`, and each of them reads `next · cut`. */
     with?: readonly string[]
+    /** A hook leaving (`out`) or coming back (`back`) on that row (radioHooks.ts):
+     * `next: row 2 → hook back · 4 bars`. */
+    hook?: 'out' | 'back'
     /* Which rows ride (held, locked or muted ones excluded) is the caller's call at decision
      * time; the readout only shows the ones that are rows and not the led row, once each. */
   } | null
@@ -240,7 +243,15 @@ function nextPart(input: RadioReadoutInput): string | null {
   const extra = companions.length > 0 ? ` +${companions.length}` : ''
   const who =
     (n.course ? 'course change' : i >= 0 && !n.adding ? `row ${i + 1}` : 'a new row') + extra
-  const how = n.course ? '' : n.leaving ? ' leaves' : n.kind !== null ? ` → ${n.kind}` : ''
+  const how = n.course
+    ? ''
+    : n.hook !== undefined
+      ? ` → hook ${n.hook}`
+      : n.leaving
+        ? ' leaves'
+        : n.kind !== null
+          ? ` → ${n.kind}`
+          : ''
   const bars = Math.max(1, Math.ceil(n.barsAway - 1e-6))
   return `next: ${who}${how} · ${plural(bars, 'bar')}`
 }
@@ -286,11 +297,13 @@ export function radioReadout(input: RadioReadoutInput): RadioReadout {
         nextKind,
         nextLabel: !isNext
           ? null
-          : leaving
-            ? 'next · leaves'
-            : nextKind !== null
-              ? `next · ${nextKind}`
-              : 'next',
+          : !companion && next.hook !== undefined
+            ? `next · hook ${next.hook}`
+            : leaving
+              ? 'next · leaves'
+              : nextKind !== null
+                ? `next · ${nextKind}`
+                : 'next',
         flash: r.flash ?? null
       }
     })
