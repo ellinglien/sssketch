@@ -87,6 +87,9 @@ export function advanceDensityLeg(
     canAdd: boolean
     canRemove: boolean
     random?: () => number
+    /** Sized builds (radioBuildSize's radioArcStepWaits): a step that is ready waits for a phrase
+     * start -- its bars keep counting, nothing turns. Absent: today. */
+    waits?: boolean
   }
 ): { leg: DensityLeg; step: 'add' | 'remove' | null } {
   const bars = leg.bars + (input.loopBars > 0 ? input.loopBars : 0)
@@ -98,9 +101,11 @@ export function advanceDensityLeg(
   })
   if (leg.phase === 'growing') {
     if (input.count >= leg.target || !input.canAdd) return turn()
+    if (input.waits === true) return { leg: counted, step: null }
     return { leg: { ...counted, bars: 0 }, step: 'add' }
   }
   if (input.count <= leg.target || !input.canRemove) return turn()
+  if (input.waits === true) return { leg: counted, step: null }
   return { leg: { ...counted, bars: 0 }, step: 'remove' }
 }
 

@@ -7,6 +7,7 @@
 // design.md). These are the two rules that decide what that swap carries.
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
+import type { RadioBuildSize } from './radioBuildSize'
 import { radioGestureLeadsChange, type RadioTransitionKind } from './radioTransition'
 
 export interface ManualArrival {
@@ -16,10 +17,17 @@ export interface ManualArrival {
 
 /** How long each gesture takes, in beats -- the one table for radio's
  * decision branches and the manual queue: a hole is a drop-out of the drawn
- * length, a riser two bars, everything else one bar. */
-export function radioGestureBeats(kind: RadioTransitionKind, dropOutBeats: () => number): number {
+ * length, a riser two bars, everything else one bar.
+ *
+ * `size` (spec 2026-10-03-radio-anointed-stems-design 4.3): a riser before a change smaller than
+ * `large` is the short one, a bar; absent or `large`, today's two bars. */
+export function radioGestureBeats(
+  kind: RadioTransitionKind,
+  dropOutBeats: () => number,
+  size?: RadioBuildSize
+): number {
   if (kind === 'hole') return dropOutBeats()
-  if (kind === 'riser') return 8
+  if (kind === 'riser') return size === undefined || size === 'large' ? 8 : 4
   return 4
 }
 
@@ -38,9 +46,21 @@ export function radioGestureBeats(kind: RadioTransitionKind, dropOutBeats: () =>
  * cut WITHOUT taking the lap's one leading slot, so the next row may still
  * lead. `canLead` defaults to true. */
 export function drawManualTransitions(
-  rows: readonly { slotId: string; kinds: readonly DiscoverSlotKind[]; canLead?: boolean }[],
+  rows: readonly {
+    slotId: string
+    kinds: readonly DiscoverSlotKind[]
+    canLead?: boolean
+    /** The build size of the change this row lands in (radioGestureBeats' `size`); absent:
+     * today's lengths. The caller's `pick` reads it (and `hookReturn`) for the draw. */
+    size?: RadioBuildSize
+    /** A hook coming back (radioHooks.ts): its pick leaves out the arrival sweeps. */
+    hookReturn?: boolean
+  }[],
   options: {
-    pick: (kinds: readonly DiscoverSlotKind[]) => RadioTransitionKind
+    pick: (
+      kinds: readonly DiscoverSlotKind[],
+      row: { size?: RadioBuildSize; hookReturn?: boolean }
+    ) => RadioTransitionKind
     dropOutBeats: () => number
     /** The lap's leading slot is taken: a hole, a riser or the density arc's exit drop-out is
      * armed, or a phrase turnaround is (it is the lap's lead-in). */
@@ -55,8 +75,8 @@ export function drawManualTransitions(
   const out = new Map<string, ManualArrival>()
   let leadingTaken = options.leadingArmed
   for (const row of rows) {
-    let kind = options.pick(row.kinds)
-    let beats = radioGestureBeats(kind, options.dropOutBeats)
+    let kind = options.pick(row.kinds, row)
+    let beats = radioGestureBeats(kind, options.dropOutBeats, row.size)
     if (radioGestureLeadsChange(kind)) {
       // The curve is clamped to half the loop (clampToHalfLoop in
       // radioTransition.ts, private there), so a riser on a short loop is

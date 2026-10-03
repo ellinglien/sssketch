@@ -1099,6 +1099,16 @@ export interface RadioSettings {
    * normalizeRadioSettings always sets it (migrating `pace` and a hand-tuned `paceBars`), and
    * absent reads as what `pace` / `paceBars` mean (radioPaceLevelOf). */
   paceLevel?: number
+  /** Build-ups sized to the change, and every turnaround paid off (@shared/radioBuildSize; spec
+   * 2026-10-03-radio-anointed-stems-design section 4). Absent or false: today's gestures,
+   * turnarounds and arc timing exactly. normalizeRadioSettings sets it, on unless saved off; the
+   * web radio's WEB_RADIO_DEFAULTS sets it on. */
+  sizedBuilds?: boolean
+}
+
+/** Sized builds are on for these settings (radioBuildSize.ts). */
+export function radioSizedBuildsOf(settings: Pick<RadioSettings, 'sizedBuilds'>): boolean {
+  return settings.sizedBuilds === true
 }
 
 export function radioDensityOf(settings: RadioSettings): RadioDensity {
@@ -1126,7 +1136,8 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   foldSeed: DEFAULT_FOLD_SEED,
   density: DEFAULT_RADIO_DENSITY,
   faves: DEFAULT_FAVES,
-  paceLevel: DEFAULT_RADIO_PACE_LEVEL
+  paceLevel: DEFAULT_RADIO_PACE_LEVEL,
+  sizedBuilds: true
 }
 
 /** The window the clock draws a change's interval from: radioCadenceOf's (fold mode's own, 8-32
@@ -1196,7 +1207,9 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
     paceLevel:
       typeof raw.paceLevel === 'number' && Number.isFinite(raw.paceLevel)
         ? normalizeRadioPaceLevel(raw.paceLevel)
-        : radioPaceLevelFromLegacy(pace, raw.paceBars)
+        : radioPaceLevelFromLegacy(pace, raw.paceBars),
+    // Sized builds (2026-10-03, Elling: on for everyone): on unless saved off.
+    sizedBuilds: raw.sizedBuilds !== false
   }
 }
 

@@ -18,6 +18,7 @@
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import { buildDropOutCurve, DROP_OUT_BEAT_WEIGHTS, pickDropOutBeats } from './radioDropOut'
 import { radioGestureLeadsChange, type RadioTransitionKind } from './radioTransition'
+import type { RadioBuildSize, RadioPayoff } from './radioBuildSize'
 import { seededRandom } from './seededRandom'
 import {
   evaluateAutomation,
@@ -252,6 +253,10 @@ export interface TurnaroundRow {
   inFilterIn: boolean
   /** Its own loop, in bars: a stop is never longer. */
   barLength: number
+  /** A hook leaving on this wrap (radioHooks.ts) with its echo throw: no drop, stop or gap
+   * silences it before the wrap, so the throw is heard, and it is the wash's row when a wash is
+   * drawn (a reverb swell on a part going out is dub too). Absent: false. */
+  exiting?: boolean
 }
 
 /** What a plan does to one row. Every curve is in beats before the wrap (see the curves). */
@@ -323,6 +328,64 @@ export interface TurnaroundInput {
    * draw. On, a fired fresh roll draws ONE more number after all of today's, which seeds every
    * layering choice (turnaroundLayerRandom); a roll that does not fire draws nothing more. */
   combine?: boolean
+  /** The build the change on this wrap earns (spec 2026-10-03-radio-anointed-stems-design 4.4,
+   * radioBuildSize.ts). Absent: today, draw for draw. A phrase end only; a turn ignores it.
+   *   - `none`, `small`: the riser at TURNAROUND_RISER_FACTOR's weight, at most 4 beats, no gap,
+   *     at most two moves layered;
+   *   - `medium`: the riser as today, at most 8 beats, no gap;
+   *   - `large`: the phrase end fires at every rate but `off`, the riser at twice its weight, the
+   *     gap as today.
+   * Every tier only reweights, clamps or skips a draw of the layering's own random: none adds a
+   * draw to `random`. */
+  size?: RadioBuildSize
+  /** The largest payoff the runtime can land on this wrap (radioBuildSize.ts radioPayoffOf, with
+   * its spare rows). A gap promises a large one, so a gap is drawn only when this is `large`.
+   * Absent: no limit (today). Applies to turns too. */
+  payoff?: RadioPayoff
+}
+
+/** The riser's weight factor in a phrase end's draw, and its longest, by build size (spec 4.4). */
+export const TURNAROUND_RISER_FACTOR: Readonly<Record<RadioBuildSize, number>> = {
+  none: 0.15,
+  small: 0.15,
+  medium: 1,
+  large: 2
+}
+export const TURNAROUND_RISER_CAP_BEATS: Readonly<Record<RadioBuildSize, number>> = {
+  none: 4,
+  small: 4,
+  medium: 8,
+  large: Number.POSITIVE_INFINITY
+}
+/** The most moves a phrase end layers at `none` and `small`. */
+export const TURNAROUND_SMALL_MAX_MOVES = 2
+
+/** What a size does to a roll, worked out once. Absent size: all neutral (factor 1, no cap). */
+interface Sizing {
+  riserFactor: number
+  riserCap: number
+  maxMoves: number
+  gap: boolean
+}
+
+function sizingOf(input: Pick<TurnaroundInput, 'size' | 'payoff' | 'force'>): Sizing {
+  const size = input.force !== undefined ? undefined : input.size
+  const gapPayoff = input.payoff === undefined || input.payoff === 'large'
+  if (size === undefined) {
+    return { riserFactor: 1, riserCap: Number.POSITIVE_INFINITY, maxMoves: 3, gap: gapPayoff }
+  }
+  return {
+    riserFactor: TURNAROUND_RISER_FACTOR[size],
+    riserCap: TURNAROUND_RISER_CAP_BEATS[size],
+    maxMoves: size === 'none' || size === 'small' ? TURNAROUND_SMALL_MAX_MOVES : 3,
+    gap: size === 'large' && gapPayoff
+  }
+}
+
+/** A move's weight in a phrase end's draw: the arc's, the riser's scaled by the size. */
+function moveWeight(arc: TurnaroundArc, m: TurnaroundMove, sizing: Sizing): number {
+  const w = TURNAROUND_WEIGHTS[arc][m]
+  return m === 'riser' && sizing.riserFactor !== 1 ? w * sizing.riserFactor : w
 }
 
 /** A turn: a turnaround on demand, at the next loop top
@@ -394,18 +457,29 @@ interface Bed {
   keeper: TurnaroundRow | null
   washed: TurnaroundRow[]
   filtered: TurnaroundRow[]
+  /** Rows a hook leaves on at this wrap (TurnaroundRow.exiting). */
+  exiting: TurnaroundRow[]
 }
 
 function bedOf(rows: readonly TurnaroundRow[], leavingRowId: string | null): Bed {
   const audible = rows.filter((r) => r.audible)
   const leaving = leavingRowId === null ? undefined : audible.find((r) => r.id === leavingRowId)
+  // a hook leaving on this wrap throws its echo before it: never dropped, stopped or gapped
+  const exiting = audible.filter((r) => r.exiting === true)
+  const droppable = exiting.length === 0 ? audible : audible.filter((r) => r.exiting !== true)
   return {
     audible,
-    drums: audible.filter(isDrums),
-    low: audible.filter(isLow),
+    drums: droppable.filter(isDrums),
+    low: droppable.filter(isLow),
     keeper: turnaroundStopKeeper(audible),
-    washed: leaving !== undefined ? [leaving] : audible.filter((r) => !isDrums(r)),
-    filtered: audible.filter((r) => !isDrums(r) && !r.inFilterIn)
+    washed:
+      leaving !== undefined
+        ? [leaving]
+        : exiting.length > 0
+          ? exiting
+          : audible.filter((r) => !isDrums(r)),
+    filtered: audible.filter((r) => !isDrums(r) && !r.inFilterIn),
+    exiting
   }
 }
 
@@ -419,7 +493,13 @@ function canSound(move: TurnaroundMove, bed: Bed): boolean {
     case 'low drop':
       return n >= 2 && bed.low.length > 0 && bed.low.length < n
     case 'stop':
-      return n >= 2 && bed.keeper !== null && bed.keeper.barLength * BEATS_PER_BAR >= 1
+      // something to stop besides the kept row and a hook leaving here (always, with none leaving)
+      return (
+        n >= 2 &&
+        bed.keeper !== null &&
+        bed.keeper.barLength * BEATS_PER_BAR >= 1 &&
+        bed.audible.some((r) => r !== bed.keeper && r.exiting !== true)
+      )
     case 'wash':
       return bed.washed.length > 0
     case 'lift':
@@ -513,7 +593,13 @@ export const TURNAROUND_MOVE_LABEL: Readonly<Record<TurnaroundMove, string>> = {
   riser: 'riser'
 }
 
-function drawBeats(move: TurnaroundMove, bed: Bed, capBeats: number, random: () => number): number {
+function drawBeats(
+  move: TurnaroundMove,
+  bed: Bed,
+  capBeats: number,
+  random: () => number,
+  riserCap: number = Number.POSITIVE_INFINITY
+): number {
   switch (move) {
     case 'drum drop':
       return Math.min(pickDropOutBeats(random), capBeats)
@@ -533,7 +619,7 @@ function drawBeats(move: TurnaroundMove, bed: Bed, capBeats: number, random: () 
     case 'lift':
       return Math.min(pickEven(LIFT_BEATS, random), capBeats)
     case 'riser':
-      return Math.min(pickEven(RISER_BARS, random) * BEATS_PER_BAR, capBeats)
+      return Math.min(pickEven(RISER_BARS, random) * BEATS_PER_BAR, capBeats, riserCap)
     case 'wash':
       return Math.min(WASH_BEATS, capBeats)
     case 'dip':
@@ -561,7 +647,10 @@ function build(
     case 'stop': {
       const volume = turnaroundDropCurve(loopBars, beats)
       if (volume.length === 0) return null
-      const dropped = move === 'low drop' ? bed.low : bed.audible.filter((r) => r !== bed.keeper)
+      const dropped =
+        move === 'low drop'
+          ? bed.low
+          : bed.audible.filter((r) => r !== bed.keeper && r.exiting !== true)
       return plan(dropped.map((r) => ({ rowId: r.id, volume: volume.map((p) => ({ ...p })) })))
     }
     case 'wash':
@@ -611,7 +700,10 @@ export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
   const { random, loopBars, lastPhrase, arc } = input
   const moves = input.moves ?? TURNAROUND_FAMILIES
   const looks = TURNAROUND_DEPTH[input.depth ?? DEFAULT_TURNAROUND_DEPTH]
-  const chance = TURNAROUND_CHANCE[input.rate] ?? 0
+  const rateChance = TURNAROUND_CHANCE[input.rate] ?? 0
+  // a large change makes its phrase end fire, at every rate but `off`
+  const chance = input.size === 'large' && rateChance > 0 ? 1 : rateChance
+  const sizing = sizingOf(input)
   const capBeats = capOf(input)
   if (!(chance > 0) || !(capBeats > 0) || moves.length === 0) return null
   const bed = bedOf(input.rows, input.leavingRowId)
@@ -630,12 +722,13 @@ export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
   const drawn = drawOf(bed, arc, capBeats, moves)
   if (drawn.length === 0 || !(random() < chance)) return null
   const move = pickWeighted(
-    drawn.map((m) => ({ item: m, weight: TURNAROUND_WEIGHTS[arc][m] })),
+    drawn.map((m) => ({ item: m, weight: moveWeight(arc, m, sizing) })),
     random
   )
-  const lead = build(move, drawBeats(move, bed, capBeats, random), 0, bed, loopBars, random, looks)
+  const beats = drawBeats(move, bed, capBeats, random, sizing.riserCap)
+  const lead = build(move, beats, 0, bed, loopBars, random, looks)
   return lead !== null && input.combine === true
-    ? layerTurnaround(lead, input, bed, capBeats, capBeats, looks)
+    ? layerTurnaround(lead, input, bed, capBeats, capBeats, looks, sizing)
     : lead
 }
 
@@ -668,7 +761,7 @@ function rollForced(input: TurnaroundInput, force: TurnaroundForce): TurnaroundP
   const beats = Math.min(drawBeats(move, bed, capBeats, random), most)
   const lead = build(move, beats, 0, bed, loopBars, random, looks)
   return lead !== null && input.combine === true
-    ? layerTurnaround(lead, input, bed, capBeats, most, looks)
+    ? layerTurnaround(lead, input, bed, capBeats, most, looks, sizingOf(input))
     : lead
 }
 
@@ -1006,13 +1099,15 @@ function layerTurnaround(
   bed: Bed,
   capBeats: number,
   most: number,
-  looks: TurnaroundLooks
+  looks: TurnaroundLooks,
+  sizing: Sizing
 ): TurnaroundPlan | null {
   const sub = turnaroundLayerRandom(input.random())
   const depth = input.depth ?? DEFAULT_TURNAROUND_DEPTH
   const families = input.moves ?? TURNAROUND_FAMILIES
   const weights = TURNAROUND_WEIGHTS[input.arc]
-  const odds = TURNAROUND_LAYER_ODDS[depth]
+  // at `none` and `small`, at most two moves: the odds truncated, renormalised by the draw
+  const odds = TURNAROUND_LAYER_ODDS[depth].slice(0, sizing.maxMoves)
   const count = pickWeighted(
     odds.map((weight, i) => ({ item: i + 1, weight })),
     sub
@@ -1029,12 +1124,15 @@ function layerTurnaround(
     )
       .map((m) => ({
         item: m,
-        weight: parts.reduce((w, p) => w * TURNAROUND_AFFINITY[p.move][m], weights[m])
+        weight: parts.reduce(
+          (w, p) => w * TURNAROUND_AFFINITY[p.move][m],
+          m === 'riser' ? weights[m] * sizing.riserFactor : weights[m]
+        )
       }))
       .filter((o) => o.weight > 0)
     if (options.length === 0) break
     const move = pickWeighted(options, sub)
-    const beats = Math.min(drawBeats(move, bed, capBeats, sub), most)
+    const beats = Math.min(drawBeats(move, bed, capBeats, sub, sizing.riserCap), most)
     const one = build(move, beats, 0, bed, input.loopBars, sub, looks)
     if (one === null) break
     parts.push({ move, beats, rowIds: one.rows.map((r) => r.rowId) })
@@ -1044,7 +1142,8 @@ function layerTurnaround(
   let keeper: TurnaroundRow | null = null
   const riser = parts.find((p) => p.move === 'riser')
   if (riser !== undefined && riser.beats >= BEATS_PER_BAR && bed.audible.length >= 2) {
-    if (sub() < TURNAROUND_GAP_CHANCE) {
+    // a gap only where the size allows one and a large payoff can follow it (no draw otherwise)
+    if (sizing.gap && sub() < TURNAROUND_GAP_CHANCE) {
       gap = turnaroundGapBeats(riser.beats, depth)
       // a drop no longer than the gap would be swallowed by it: the next length past it, or no gap
       const longer = parts.map((p) => {
@@ -1062,7 +1161,8 @@ function layerTurnaround(
       if (sub() < TURNAROUND_GAP_KEEP_CHANCE) keeper = kept
     }
   }
-  const gapRows = bed.audible.filter((r) => r !== keeper).map((r) => r.id)
+  // a hook leaving on this wrap throws into the gap: its row is never one the gap silences
+  const gapRows = bed.audible.filter((r) => r !== keeper && r.exiting !== true).map((r) => r.id)
   const thrown = throwWashes(parts, gap, gapRows, Math.min(capBeats, most))
   // the lead alone, as a combined plan, when layering can't stand: a lead wash whose every row
   // is silent from where it starts, or (never in practice: every part fits the cap, which fits the

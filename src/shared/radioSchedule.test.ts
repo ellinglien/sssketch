@@ -1097,7 +1097,8 @@ describe('RadioSettings', () => {
       foldSeed: 'autech',
       density: 'arc',
       faves: 0,
-      paceLevel: 25
+      paceLevel: 25,
+      sizedBuilds: true
     })
   })
 

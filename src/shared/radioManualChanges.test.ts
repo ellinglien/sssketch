@@ -122,8 +122,8 @@ describe('drawManualTransitions', () => {
       loopBars: 16
     })
     expect(pick).toHaveBeenCalledTimes(2)
-    expect(pick).toHaveBeenNthCalledWith(1, ['drums'])
-    expect(pick).toHaveBeenNthCalledWith(2, ['bass'])
+    expect(pick).toHaveBeenNthCalledWith(1, ['drums'], rows[0])
+    expect(pick).toHaveBeenNthCalledWith(2, ['bass'], rows[1])
   })
 
   it('fits a riser by its half-loop clamp: 2 bars on a 2-bar loop is 1 bar', () => {

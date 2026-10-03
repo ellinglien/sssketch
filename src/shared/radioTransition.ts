@@ -13,6 +13,7 @@
 // weighted gesture per change, and the curve builders at the bottom of
 // this file are what the engine actually performs.
 import type { DiscoverSlotKind } from './discoverSlotKind'
+import type { RadioBuildSize } from './radioBuildSize'
 import type { RiserClip } from './riser'
 import { riserCharacterForId, type RiserCharacter } from './riserCharacter'
 import type { AutomationPoint } from './toolkit'
@@ -95,16 +96,39 @@ function tableFor(temperament: 'subtle' | 'bold', kinds: readonly DiscoverSlotKi
   return { cut: 1 }
 }
 
+/** The riser's weight at each build size (spec 2026-10-03-radio-anointed-stems-design section
+ * 4.3): never before a one-row swap (`small`, and `none`), today's at `medium` (four beats long,
+ * radioGestureBeats), twice today's at `large` (today's eight). */
+export const RISER_WEIGHT_BY_SIZE: Readonly<Record<RadioBuildSize, number>> = {
+  none: 0,
+  small: 0,
+  medium: 1,
+  large: 2
+}
+
+/** What a sized draw knows: the change's build size, and whether it is a hook coming back (a
+ * return lands full -- turnarounds section 0, "release is return" -- so no `filter in` or
+ * `bloom`). */
+export interface RadioTransitionSizing {
+  size?: RadioBuildSize
+  hookReturn?: boolean
+}
+
 /** Which transition this change gets. `off` is always `cut`, which is
  * exactly what shipped 2026-09-26 -- and `cut` arms nothing at all, so a
- * cut project is byte-identical to a pre-transition one. */
+ * cut project is byte-identical to a pre-transition one.
+ *
+ * `sizing` (absent: exactly today's draw): the riser reweighted by the build size
+ * (RISER_WEIGHT_BY_SIZE), and a hook return's `filter in` and `bloom` taken out. The weights
+ * renormalise and there is still exactly one draw; `subtle` has no riser at any size. */
 export function pickTransition(
   temperament: RadioTransitions,
   kinds: readonly DiscoverSlotKind[],
-  random: () => number = Math.random
+  random: () => number = Math.random,
+  sizing?: RadioTransitionSizing
 ): RadioTransitionKind {
   if (temperament === 'off') return 'cut'
-  const table = tableFor(temperament, kinds)
+  const table = sizedTable(tableFor(temperament, kinds), sizing)
   const entries = Object.entries(table) as [RadioTransitionKind, number][]
   const total = entries.reduce((sum, [, w]) => sum + w, 0)
   if (!(total > 0)) return 'cut'
@@ -114,6 +138,22 @@ export function pickTransition(
     if (draw < 0) return kind
   }
   return 'cut'
+}
+
+/** The table as a sized draw sees it; the same object when `sizing` changes nothing. */
+function sizedTable(table: WeightTable, sizing: RadioTransitionSizing | undefined): WeightTable {
+  if (sizing === undefined || (sizing.size === undefined && sizing.hookReturn !== true)) {
+    return table
+  }
+  const out: WeightTable = {}
+  for (const [kind, weight] of Object.entries(table) as [RadioTransitionKind, number][]) {
+    if (sizing.hookReturn === true && (kind === 'filter in' || kind === 'bloom')) continue
+    out[kind] =
+      kind === 'riser' && sizing.size !== undefined
+        ? weight * RISER_WEIGHT_BY_SIZE[sizing.size]
+        : weight
+  }
+  return out
 }
 
 /** True for the two gestures that ANNOUNCE a change rather than decorate
