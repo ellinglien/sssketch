@@ -77,6 +77,7 @@ import {
   radioBarLandingAim,
   radioBarReaim,
   radioCadenceBarEvery,
+  radioCadenceHasMidLoopLines,
   radioCadenceTransition,
   radioClockForPace,
   radioPhraseNeedsReanchor,
@@ -3854,6 +3855,19 @@ export function DiscoverPanel({
    * line. */
   function radioFoldBandActive(): boolean {
     return radioCadence.fold && radioCadence.barEvery !== null
+  }
+  /** Fold's phase-1 pick filter is on (radioFoldPickableIds): fold mode with a bar line INSIDE
+   * the loop playing (radioCadenceHasMidLoopLines). Where the band has none ("every 4 bars" on
+   * a 4-bar loop, 80-85) every change lands on the top anyway, and keeping the folded rows from
+   * radio would only lose their changes. Narrower than radioFoldBandActive, which gates only
+   * what a mid-loop landing carries and so costs nothing where there are none. */
+  function radioFoldPickFilterActive(): boolean {
+    const lengths = resolvedBarLengthsRef.current
+    const loopBars = lengths.size > 0 ? Math.max(...lengths.values()) : 0
+    return (
+      radioCadence.fold &&
+      radioCadenceHasMidLoopLines(radioCadence, radioSettings.loopEndOverBars, loopBars)
+    )
   }
   /** The fold holds this row in the lap playing or the next (radioFoldHoldsRow). On a wrap tick
    * whose step is still owed the next lap's decision is not in yet: the stage waits for it
@@ -7988,8 +8002,9 @@ export function DiscoverPanel({
     // Never a row with a manual change waiting: that change wins its row
     // at the landing (mergeStageChanges), so radio's pick for it would be
     // dropped there -- a change radio lost to a manual one.
-    // Fold mode in the bar band (phase 1, spec 2026-10-03-radio-fold-follows-pace-design section
-    // 3): the folded rows keep their stems while the rest churn -- radio and its companions pick
+    // Fold mode in the bar band, with a bar line inside the loop (phase 1, spec
+    // 2026-10-03-radio-fold-follows-pace-design section 3; radioFoldPickFilterActive): the
+    // folded rows keep their stems while the rest churn -- radio and its companions pick
     // from the rows the fold does not hold (all of them when it holds every one); the same array
     // otherwise. Only the pick: radioEligibleSlotIds stays the "still eligible" test, so a pick on
     // a row the fold takes after it still lands, at its top (the clock's grid, the stage re-aim).
@@ -7997,7 +8012,7 @@ export function DiscoverPanel({
       radioEligibleSlotIds().filter((id) => !manualChangesRef.current.has(id)),
       radioFoldNowRef.current,
       radioFoldNextRef.current,
-      radioFoldBandActive()
+      radioFoldPickFilterActive()
     )
     // Rows per change (the pace slider, from 70, fold mode too; @shared/radioPace): no draw while
     // it is one, and the first row is exactly pickRadioSlotId's. The rest ride radio's change as
