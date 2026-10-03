@@ -191,6 +191,8 @@ import {
   FOLD_PACE_BARS,
   createRadioFold,
   radioFoldIntervalBars,
+  radioFoldRestartAt,
+  radioFoldRestartStep,
   radioFoldTurnaroundRate,
   stepRadioFold,
   type RadioFoldState,
@@ -211,6 +213,7 @@ import {
   radioFoldPhaseDot,
   radioFoldRowLabel,
   radioFoldStatus,
+  radioFoldTransportMove,
   type RadioFoldStatusRow
 } from '@shared/radioFoldStatus'
 import {
@@ -1069,8 +1072,19 @@ export function DiscoverPanel({
   // FOLD MODE'S READOUT (v2, @shared/radioFoldStatus): the folded rows of the lap playing, as its
   // step left them -- the phase dots read it below, straight to the DOM like the line -- and the
   // machine's state with that step, for the status line and each row's `7 / 16` (render reads
-  // these, so they are state, set a microtask after the step: radioFoldAtWrap).
-  const radioFoldDotsRef = useRef<RadioFoldStatusRow[]>([])
+  // these, so they are state, set a microtask after the step: radioFoldAtWrap). `laps` is the
+  // loop tops radioFoldMoveRef had counted when the rows were read: the step runs a couple of
+  // microtasks after the wrap, so the wrap's first frame still holds the previous lap's rows, and
+  // the dots add the difference.
+  const radioFoldDotsRef = useRef<{ rows: RadioFoldStatusRow[]; laps: number }>({
+    rows: [],
+    laps: 0
+  })
+  // What the playhead last did, as the engine's lap clock sees it (radioFoldTransportMove): the
+  // position and play state of the last tick, and the loop tops played through, never reset. A
+  // restart (playing again, a seek, a snap) restarts every folded cycle in the engine, so it
+  // restarts the fold machine's origins too (restartRadioFold).
+  const radioFoldMoveRef = useRef({ pos: 0, playing: false, laps: 0 })
   const [radioFoldView, setRadioFoldView] = useState<{
     state: RadioFoldState
     step: RadioFoldStep | null
@@ -1081,6 +1095,11 @@ export function DiscoverPanel({
   const previewLoopBars = resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : 0
   const sweepActive = previewingSlotIds.size > 0 && previewLoopBars > 0
   useLayoutEffect(() => {
+    const moved = radioFoldMoveRef.current
+    const move = radioFoldTransportMove(moved, pos, playing, previewLoopBars)
+    radioFoldMoveRef.current = { pos, playing, laps: moved.laps + (move === 'wrap' ? 1 : 0) }
+    // a move back is a wrap to radio's clock, so its fold step is about to run
+    if (move === 'restart') restartRadioFold(pos < moved.pos)
     const lap = sweepLapRef.current
     if (!sweepActive) {
       sweepLapRef.current = { lapIndex: 0, lastPos: pos, loopBars: 0 }
@@ -1112,14 +1131,16 @@ export function DiscoverPanel({
     rowsRef.current?.style.setProperty('--discover-breath', breath.toFixed(4))
     // FOLD MODE'S PHASE DOTS, off the same position: each folded row's dot goes round its cycle
     // and sits at the left end, the downbeat, when the row realigns (radioFoldPhaseDot).
+    const dots = radioFoldDotsRef.current
+    const lapsSinceDots = radioFoldMoveRef.current.laps - dots.laps
     rowsRef.current?.querySelectorAll<HTMLElement>('[data-fold-dot]').forEach((dot) => {
-      const r = radioFoldDotsRef.current.find((x) => x.rowId === dot.dataset.foldDot)
+      const r = dots.rows.find((x) => x.rowId === dot.dataset.foldDot)
       dot.style.display = r !== undefined && playing ? 'block' : 'none'
       if (r === undefined || !playing) return
       const frac = radioFoldPhaseDot(
         r.cycleBeats,
         r.phaseBeats,
-        radioFoldBeatsIn(r, previewLoopBars, pos)
+        radioFoldBeatsIn(r, previewLoopBars, pos, lapsSinceDots)
       )
       dot.style.left = `${(frac * 100).toFixed(2)}%`
     })
@@ -1132,6 +1153,7 @@ export function DiscoverPanel({
     const pct = discoverSweepPct(sweepLapRef.current.lapIndex, pos, previewLoopBars, windowBars)
     line.style.display = pct === null ? 'none' : 'block'
     if (pct !== null) line.style.left = `${pct}%`
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- restartRadioFold is re-created each render and reads the fold machine through refs on purpose
   }, [pos, playing, sweepActive, previewLoopBars])
 
   // True once a Discover preview project is actually loaded+playing in the
@@ -3615,16 +3637,40 @@ export function DiscoverPanel({
     const step = stepRadioFold(state, { rows, loopBars, bpm, fold: radioSettings.fold })
     radioFoldRef.current = step.state
     radioFoldNextRef.current = step
-    // the readout of the lap now playing (the step decided a lap ago), for the dots now and the
-    // status line and the rows' readouts on the next render
-    const now = radioFoldNowRef.current
-    const status = radioFoldStatus(step.state, now, loopBars, radioSettings.fold, null)
-    radioFoldDotsRef.current = status?.rows ?? []
-    void Promise.resolve().then(() => setRadioFoldView({ state: step.state, step: now }))
+    const status = publishRadioFoldStatus(loopBars)
     if (FOLD_DEV_LOG) console.log(`${radioFoldStepLine(step, rows)} · ${status?.summary ?? ''}`)
     void window.rifffApi.engineStageCycles(radioFoldEngineRows(step), false)
     // the lap now playing has its own drift lanes
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
+  /** The readout of the lap now playing (the step that decided it ran a lap ago), for the dots
+   * now and the status line and the rows' readouts on the next render. */
+  function publishRadioFoldStatus(loopBars: number): ReturnType<typeof radioFoldStatus> {
+    const state = radioFoldRef.current
+    const now = radioFoldNowRef.current
+    const status = radioFoldStatus(state, now, loopBars, radioSettings.fold, null)
+    radioFoldDotsRef.current = { rows: status?.rows ?? [], laps: radioFoldMoveRef.current.laps }
+    void Promise.resolve().then(() =>
+      setRadioFoldView(state === null ? null : { state, step: now })
+    )
+    return status
+  }
+  /** Playback restarted (radioFoldTransportMove: playing again, a seek, a snap). The engine starts
+   * a new lap clock and every folded cycle restarts from the top of the lap it restarted in
+   * (CycleTable::originFor), so the machine's origins move there too (radioFoldRestartAt): its
+   * realignment tops, and the dots, then count from where the engine's cycles do. `atWrap`: radio's
+   * clock saw this move as a wrap, so the step it owes decides from the lap being entered -- as it
+   * does while a step is already owed. */
+  function restartRadioFold(atWrap: boolean): void {
+    const state = radioFoldRef.current
+    if (state === null) return
+    const lap = atWrap || radioFoldStepOwedRef.current !== null ? state.lap : state.lap - 1
+    radioFoldRef.current = radioFoldRestartAt(state, lap)
+    const next = radioFoldNextRef.current
+    if (next !== null) radioFoldNextRef.current = radioFoldRestartStep(next, lap)
+    const now = radioFoldNowRef.current
+    if (now !== null) radioFoldNowRef.current = radioFoldRestartStep(now, lap)
+    publishRadioFoldStatus(previewLoopBars)
   }
   /** Fold mode put away at once: every row full length from the next block, no drift, no lean. */
   function resetRadioFold(): void {
@@ -3637,7 +3683,7 @@ export function DiscoverPanel({
     radioFoldNextRef.current = null
     radioFoldStepOwedRef.current = null
     radioFoldSoundedRef.current = false
-    radioFoldDotsRef.current = []
+    radioFoldDotsRef.current = { rows: [], laps: radioFoldMoveRef.current.laps }
     void Promise.resolve().then(() => setRadioFoldView(null))
     void window.rifffApi.engineStageCycles([], true)
     if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
@@ -3685,7 +3731,7 @@ export function DiscoverPanel({
     if (radioSettings.foldMode) return
     radioFoldStepOwedRef.current = null
     // the readout goes with the mode, at once (the folds themselves unfold at the next top)
-    radioFoldDotsRef.current = []
+    radioFoldDotsRef.current = { rows: [], laps: radioFoldMoveRef.current.laps }
     void Promise.resolve().then(() => setRadioFoldView(null))
     if (radioFoldRef.current === null) return
     radioFoldRef.current = null
@@ -8026,8 +8072,11 @@ export function DiscoverPanel({
   // FOLD MODE'S STATUS (v2, @shared/radioFoldStatus): the line in the radio bar and each folded
   // row's readout, only while radio runs with the mode on. The next change is the rows' own count
   // (radioChangeWait), so the line says what the rows show.
+  // The rows' 16th track (the readout) exists only while the mode is on, in the rows and in the
+  // playhead overlay alike (discoverRowGridColumns).
+  const radioFoldTrack = radioOn && radioSettings.foldMode
   const radioFoldStatusNow =
-    radioOn && radioSettings.foldMode && radioFoldView !== null
+    radioFoldTrack && radioFoldView !== null
       ? radioFoldStatus(
           radioFoldView.state,
           radioFoldView.step,
@@ -8593,8 +8642,14 @@ export function DiscoverPanel({
             doing, in one terse line. Monochrome: chrome. */}
         {radioFoldStatusNow !== null && (
           <span
-            role="status"
-            style={{ fontSize: 9, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}
+            style={{
+              fontSize: 9,
+              color: 'var(--ra-text-3)',
+              whiteSpace: 'nowrap',
+              minWidth: 0,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis'
+            }}
           >
             {radioFoldStatusNow.summary}
           </span>
@@ -8937,6 +8992,7 @@ export function DiscoverPanel({
               onReclassify={(role) => void reclassifySlot(slot.id, role)}
               soundSourceEndlesss={soundSourceForLean(sourceLean).endlesss}
               soundSourceAudioIn={soundSourceForLean(sourceLean).audioIn}
+              foldTrack={radioFoldTrack}
               foldReadout={radioFoldReadouts.get(slot.id) ?? null}
             />
           ))
@@ -8959,7 +9015,7 @@ export function DiscoverPanel({
               position: 'absolute',
               inset: 0,
               display: 'grid',
-              gridTemplateColumns: DISCOVER_ROW_GRID_COLUMNS,
+              gridTemplateColumns: discoverRowGridColumns(radioFoldTrack),
               gridTemplateRows: '100%',
               columnGap: DISCOVER_ROW_COLUMN_GAP,
               padding: 0,
@@ -9490,9 +9546,19 @@ const DISCOVER_WAVEFORM_HEIGHT = 40
 // track gets is identical. Change the template HERE, never inline -- see
 // the long comment where the row applies it for why each track is what
 // it is.
-// 2026-10-03, radio fold v2: a 16th track after 👎, 44px, for fold mode's readout (`3½ / 16`).
+// 2026-10-03, radio fold v2: a 16th track after 👎, 44px, for fold mode's readout (`3½ / 16`),
+// only while the mode is on (discoverRowGridColumns), so it takes no width otherwise. It is the
+// last track, so every other track keeps its number either way.
 const DISCOVER_ROW_GRID_COLUMNS =
-  '18px 18px 18px 18px 1fr 14px 110px 14px 1px 18px 18px 18px 18px 18px 18px 44px'
+  '18px 18px 18px 18px 1fr 14px 110px 14px 1px 18px 18px 18px 18px 18px 18px'
+const DISCOVER_FOLD_READOUT_TRACK = '44px'
+/** The row template, with fold mode's readout track while the mode is on: the rows and the
+ * playhead overlay both take it from here, with the same flag, so their columns stay one grid. */
+function discoverRowGridColumns(foldTrack: boolean): string {
+  return foldTrack
+    ? `${DISCOVER_ROW_GRID_COLUMNS} ${DISCOVER_FOLD_READOUT_TRACK}`
+    : DISCOVER_ROW_GRID_COLUMNS
+}
 const DISCOVER_ROW_COLUMN_GAP = 8
 const DISCOVER_WAVEFORM_COLUMN = 5
 const DISCOVER_WAVEFORM_MIN_WIDTH = 140
@@ -9527,6 +9593,7 @@ function DiscoverSlotRow({
   onReclassify,
   soundSourceEndlesss,
   soundSourceAudioIn,
+  foldTrack,
   foldReadout
 }: {
   slot: DiscoverSlot
@@ -9677,6 +9744,8 @@ function DiscoverSlotRow({
    * where actually needed below (the "explore nearby" popover). */
   soundSourceEndlesss: boolean
   soundSourceAudioIn: boolean
+  /** Fold mode is on: the row has its 16th track, the readout's (discoverRowGridColumns). */
+  foldTrack: boolean
   /** Fold mode's readout on a folded row (v2): its cycle against the loop in beats, `7 / 16`;
    * null on a straight row and while fold mode is off. The phase dot under it is moved by
    * DiscoverPanel's sweep layout effect (data-fold-dot), never by render. */
@@ -10160,7 +10229,7 @@ function DiscoverSlotRow({
           // The template itself is DISCOVER_ROW_GRID_COLUMNS, shared with
           // the one-playhead overlay above the row list so the two cannot
           // drift apart (2026-09-30).
-          gridTemplateColumns: DISCOVER_ROW_GRID_COLUMNS,
+          gridTemplateColumns: discoverRowGridColumns(foldTrack),
           alignItems: 'center',
           columnGap: DISCOVER_ROW_COLUMN_GAP,
           // No horizontal padding: the overlay relies on the rows' column
@@ -10863,39 +10932,43 @@ function DiscoverSlotRow({
         {/* FOLD MODE'S READOUT (v2, @shared/radioFoldStatus), track 16, after 👎: a folded
             row's cycle against the loop in beats, and under it the phase dot's track -- the dot
             at its left end on the downbeat, where it sits when the row realigns. Hidden with
-            `visibility` on a straight row, so the track stays. */}
-        <div
-          data-tooltip={foldReadout !== null ? 'its cycle against the loop, in beats' : undefined}
-          style={{
-            gridColumn: 16,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end',
-            gap: 3,
-            fontSize: 8,
-            color: 'var(--ra-text-3)',
-            visibility: foldReadout !== null ? 'visible' : 'hidden'
-          }}
-        >
-          <span>{foldReadout ?? ''}</span>
-          <span
-            aria-hidden
-            style={{ position: 'relative', width: 32, height: 1, background: 'var(--ra-border)' }}
+            `visibility` on a straight row, so the track stays. Only while fold mode is on, as the
+            track is (discoverRowGridColumns). */}
+        {foldTrack && (
+          <div
+            data-tooltip={foldReadout !== null ? 'its cycle against the loop, in beats' : undefined}
+            style={{
+              gridColumn: 16,
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'flex-end',
+              gap: 3,
+              fontSize: 8,
+              color: 'var(--ra-text-3)',
+              whiteSpace: 'nowrap',
+              visibility: foldReadout !== null ? 'visible' : 'hidden'
+            }}
           >
+            <span>{foldReadout ?? ''}</span>
             <span
-              data-fold-dot={slot.id}
-              style={{
-                position: 'absolute',
-                top: -1,
-                width: 3,
-                height: 3,
-                marginLeft: -1,
-                background: 'var(--ra-text)',
-                display: 'none'
-              }}
-            />
-          </span>
-        </div>
+              aria-hidden
+              style={{ position: 'relative', width: 32, height: 1, background: 'var(--ra-border)' }}
+            >
+              <span
+                data-fold-dot={slot.id}
+                style={{
+                  position: 'absolute',
+                  top: -1,
+                  width: 3,
+                  height: 3,
+                  marginLeft: -1,
+                  background: 'var(--ra-text)',
+                  display: 'none'
+                }}
+              />
+            </span>
+          </div>
+        )}
       </div>
       {nearbyMenu && nearbyAnchor !== null && (
         <DiscoverNearbyPopover
