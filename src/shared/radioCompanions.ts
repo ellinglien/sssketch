@@ -1,6 +1,6 @@
 // The pace slider's rows per change on the desktop (docs/superpowers/specs/2026-10-03-radio-pace-
 // slider-design.md): the rows that ride radio's own change, "companions". DiscoverPanel arms them
-// with its pick, holds the ready ones with its change and stages them inside it
+// with its pick, holds the ready, eligible ones with its change and stages them inside it
 // (@shared/radioManualChanges mergeStageChanges), so they land or are taken back with it. These
 // are the panel's pure decisions about them.
 
@@ -12,11 +12,13 @@ export function radioCompanionCap(cadence: { rows: number; fold: boolean }): num
   return Math.max(0, Math.ceil(cadence.rows) - 1)
 }
 
-/** The companions that may ride radio's change NOW, in order, at most `max`: a row other than
- * radio's own, once, still eligible (radioEligibleSlotIds: there, unlocked, audible, not
- * rerolling) and without a manual change waiting on it (that change wins its row). Decided at
- * decision time; the clock's grid reads the same set, so the two agree on what changes. */
-export function radioCompanionsRiding<T extends { slotId: string }>(
+/** The companions that may ride radio's change NOW, in order, at most `max`: READY (stem
+ * warmed), a row other than radio's own, once, still eligible (radioEligibleSlotIds: there,
+ * unlocked, audible, not rerolling) and without a manual change waiting on it (that change wins
+ * its row). One still warming is dropped, never waited for (spec section 3): the change grid and
+ * the decision both read exactly this set, so the grid never holds a change for a cold row and a
+ * decision holds exactly what the grid saw. */
+export function radioCompanionsRiding<S, T extends { slotId: string; stem: S | null }>(
   companions: readonly T[],
   opts: {
     primarySlotId: string
@@ -24,17 +26,29 @@ export function radioCompanionsRiding<T extends { slotId: string }>(
     manual: { has(slotId: string): boolean }
     max: number
   }
-): T[] {
-  const out: T[] = []
+): (T & { stem: S })[] {
+  const out: (T & { stem: S })[] = []
   const seen = new Set([opts.primarySlotId])
   for (const k of companions) {
     if (out.length >= opts.max) break
-    if (seen.has(k.slotId)) continue
+    if (k.stem === null || seen.has(k.slotId)) continue
     if (!opts.eligible.includes(k.slotId) || opts.manual.has(k.slotId)) continue
     seen.add(k.slotId)
-    out.push(k)
+    out.push(k as T & { stem: S })
   }
   return out
+}
+
+/** The held change's companions whose rows are still eligible. A padlock or a mute set after
+ * the decision stops a companion -- a padlock means never -- as it stops radio's own row; a
+ * removed row is gone too. The SAME array when nothing dropped, so the caller can tell that
+ * nothing needs re-staging. */
+export function radioHeldCompanionsKept<T extends { slotId: string }>(
+  companions: readonly T[],
+  eligible: readonly string[]
+): readonly T[] {
+  const kept = companions.filter((k) => eligible.includes(k.slotId))
+  return kept.length === companions.length ? companions : kept
 }
 
 /** The companion picks worth keeping once they return: one with a candidate, on a row no manual
@@ -59,9 +73,11 @@ export function radioUsableCompanionPicks<
   return out
 }
 
-/** What the change grid (radioPaceGridBars) reads for a change of several rows: the longest
- * outgoing and incoming lengths (null when any is unknown -- a companion's stem still warming
- * holds the whole change to the loop top, as a primary's does), and the loop as it will be once
+/** What the change grid (radioPaceGridBars) reads for a change of several rows: radio's own and
+ * its READY companions (radioCompanionsRiding -- a cold one is not in the change, so it holds
+ * nothing back). The longest outgoing and incoming lengths (null when any is unknown, i.e.
+ * radio's own stem still warming, which holds the change to the loop top as it always has), and
+ * the loop as it will be once
  * every one of them has turned over (the longest of the rows not changing and every incoming
  * stem; null when any incoming length is unknown). A change that would shorten the loop waits
  * for the top, all its rows together. */

@@ -292,8 +292,9 @@ import {
   radioChangeLengths,
   radioCompanionCap,
   radioCompanionsRiding,
+  radioHeldCompanionsKept,
   radioUsableCompanionPicks
-} from './radioCompanions'
+} from '@shared/radioCompanions'
 
 export interface ResolvedCandidateStem {
   author: string
@@ -2855,7 +2856,14 @@ export function DiscoverPanel({
   ): void {
     radioPendingRef.current = next
     const slotId = next?.slotId ?? null
-    const companionKey = next?.companions.map((k) => k.slotId).join('\n') ?? ''
+    // The ready ones at once; the clock tick narrows it to the riding set (eligible, under the
+    // cap) in radioReadoutFrom's microtask -- reading that here would tie this function to
+    // render state, and the unmount effect calls it.
+    const companionKey =
+      next?.companions
+        .filter((k) => k.stem !== null)
+        .map((k) => k.slotId)
+        .join('\n') ?? ''
     void Promise.resolve().then(() => {
       setRadioArmedSlotId(slotId)
       setRadioArmedCompanionKey(companionKey)
@@ -4201,6 +4209,24 @@ export function DiscoverPanel({
       })
       return
     }
+    // A COMPANION's row padlocked or muted (or removed) after the decision: it is stopped too --
+    // a padlock means never. It leaves the held change and any stage carrying it is withdrawn;
+    // the next tick re-stages radio's change without it (re-aimed if its bar is now too close).
+    // When the engine already took that stage (its ack won), the applied marker follows the
+    // held change, and the landing leaves the row out and pushes its truth back.
+    const heldNow = radioLedChangeRef.current
+    if (heldNow !== null && heldNow.companions !== undefined && heldNow.companions.length > 0) {
+      const kept = radioHeldCompanionsKept(heldNow.companions, radioEligibleSlotIds())
+      if (kept !== heldNow.companions) {
+        const next = { ...heldNow, companions: [...kept] }
+        if (radioStageAppliedLedRef.current === heldNow) radioStageAppliedLedRef.current = next
+        setRadioLedChange(next)
+        if (staged !== null && staged.ledSlotId !== null) {
+          cancelStagedSwap('companion-no-longer-eligible')
+          return
+        }
+      }
+    }
 
     // TEMP (2026-09-29): which gate is holding the swap, so a paste says
     // why a change was staged late. Remove with radioTrace.ts.
@@ -5335,6 +5361,8 @@ export function DiscoverPanel({
       if (!radioOnRef.current) return
       radioFlashTick(pos, loopBars)
       setRadioReadoutNow(radioReadoutFrom(pos, loopBars, changeWait.barsUntilChange))
+      // the armed companions as they ride now: one warmed, locked or muted since the last write
+      setRadioArmedCompanionKey(radioArmedCompanionKeyOf(radioPendingRef.current))
     })
     // Radio's scheduled swap gets its look at this tick here: after the
     // two branches that LAND a change (both of which return), and before
@@ -7678,12 +7706,15 @@ export function DiscoverPanel({
     return radioGestureRef.current.every((g) => radioArrivalGestureSpent(g, bar, loopBars))
   }
 
-  /** The held change's companions that still have a row to land on (one removed meanwhile is
-   * left out of the stage and the landing). Eligibility is not re-checked: it was decided with
-   * the change, and a companion whose row is locked or muted afterwards lands, as a manual
-   * change does -- only radio's own row withdraws the stage (stepRadioStage). */
-  function radioStagedCompanions(led: { companions?: RadioHeldCompanion[] }): RadioHeldCompanion[] {
-    return (led.companions ?? []).filter((k) => slotsRef.current.some((s) => s.id === k.slotId))
+  /** The held change's companions whose rows are still eligible (radioHeldCompanionsKept): what
+   * the stage carries and the landing commits. A padlock or a mute set after the decision stops
+   * one, as it stops radio's own row -- stepRadioStage (1) takes it out of the held change and
+   * withdraws the stage; this is the same rule at the stage build and at the landing (a lock in
+   * the last 30 ms before a wrap: not committed, and the landing's push puts the row back). */
+  function radioStagedCompanions(led: {
+    companions?: RadioHeldCompanion[]
+  }): readonly RadioHeldCompanion[] {
+    return radioHeldCompanionsKept(led.companions ?? [], radioEligibleSlotIds())
   }
 
   /** Commits radio's companions right after its own change has committed, in the same
@@ -7723,30 +7754,43 @@ export function DiscoverPanel({
     })
   }
 
-  /** The rows riding radio's armed pick NOW (radioCompanionsRiding: this tick's eligibility, the
-   * manual queue, the cadence's cap -- none while fold is on), warmed or not. What the clock's
-   * grid reads, so a decision on the same tick holds no row the grid did not see. */
+  /** The rows riding radio's armed pick NOW (radioCompanionsRiding: READY ones only, this tick's
+   * eligibility, the manual queue, the cadence's cap -- none while fold is on). One still warming
+   * is not in the change: dropped, never waited for (spec section 3). The ONE set the clock's
+   * grid reads, a decision holds, the readout counts and the rows breathe with, so a decision
+   * holds exactly what the grid saw. */
   function radioPendingCompanionsNow(pending: {
     slotId: string
     companions: RadioPendingCompanion[]
-  }): RadioPendingCompanion[] {
+  }): (RadioPendingCompanion & { stem: ResolvedCandidateStem })[] {
     if (pending.companions.length === 0) return []
-    return radioCompanionsRiding(pending.companions, {
+    return radioCompanionsRiding<ResolvedCandidateStem, RadioPendingCompanion>(pending.companions, {
       primarySlotId: pending.slotId,
       eligible: radioEligibleSlotIds(),
       manual: manualChangesRef.current,
       max: radioCompanionCap(radioCadence)
     })
   }
-  /** The companions a decision holds with radio's change: riding now and ready. One still
-   * warming is dropped, not waited for. */
+  /** The companions a decision holds with radio's change (radioPendingCompanionsNow). */
   function radioHeldCompanionsFrom(pending: {
     slotId: string
     companions: RadioPendingCompanion[]
   }): RadioHeldCompanion[] {
-    return radioPendingCompanionsNow(pending).flatMap((k) =>
-      k.stem !== null ? [{ slotId: k.slotId, pick: k.pick, stem: k.stem }] : []
-    )
+    return radioPendingCompanionsNow(pending).map((k) => ({
+      slotId: k.slotId,
+      pick: k.pick,
+      stem: k.stem
+    }))
+  }
+  /** The armed rows the rows breathe with: the riding set, joined (see radioArmedCompanionKey). */
+  function radioArmedCompanionKeyOf(
+    pending: { slotId: string; companions: RadioPendingCompanion[] } | null
+  ): string {
+    return pending === null
+      ? ''
+      : radioPendingCompanionsNow(pending)
+          .map((k) => k.slotId)
+          .join('\n')
   }
 
   /** An armRadioPick is awaiting its pick and has not been superseded (a superseded one writes

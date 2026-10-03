@@ -4248,11 +4248,12 @@ Claude-Session: https://claude.ai/code/session_01KK8TyKjVKvWU8ZjQCk3ozz"
 - Warm each companion with `resolveAndWarmPick`. In its `.then`, update only that companion's `stem` and `incomingBars`, and only if `radioPendingRef.current?.pick === pick`, the same guard the primary uses.
 - Imports: `pickRadioSlotIds` from `@shared/radioSchedule`, `radioPaceRowsThisChange` from `@shared/radioPace`.
 
-- [ ] **Step 2: The grid sees every incoming stem.** In the clock effect, where `outgoingBars` and `pendingPick?.incomingBars` feed `radioPaceGridBars`, use these instead:
-- **outgoing:** the max of the primary's and every companion's resolved length (`resolvedBarLengthsRef`), or null if any is unknown;
-- **incoming:** the max of the primary's and every companion's `incomingBars`, or null if any is still null.
+- [ ] **Step 2: The grid sees every incoming stem.** In the clock effect, where `outgoingBars` and `pendingPick?.incomingBars` feed `radioPaceGridBars`, use radio's own row and its READY, eligible companions (`radioCompanionsRiding`, the same set Step 3's decision holds) instead (`radioChangeLengths`):
+- **outgoing:** the max of the primary's and every riding companion's resolved length (`resolvedBarLengthsRef`), or null if any is unknown;
+- **incoming:** the max of the primary's and every riding companion's `incomingBars`, or null while the primary's is;
+- **loop after:** the loop with every one of them swapped in.
 
-A companion with a long stem must hold the whole change to the loop top, exactly as a long primary does.
+A companion with a long stem, or one whose change would shrink the loop, holds the whole change to the loop top, exactly as a long primary does. A companion still warming is not in the change: it is dropped, never waited for (spec section 3), so it never holds the change to the top. (As first written this step returned null while any companion was still warming, which dragged the change to the top and then dropped the cold row anyway; review of 00772e5.)
 
 - [ ] **Step 3: The held change carries the ready companions.**
 - Extend `radioLedChangeRef`'s type and `setRadioLedChange` with `companions?: { slotId: string; pick: SlotPick; stem: ResolvedCandidateStem }[]`.
@@ -4272,7 +4273,7 @@ A companion with a long stem must hold the whole change to the loop top, exactly
 - [ ] **Step 4: The stage carries them.**
 - In the stage build, find where radio's held change is passed to `mergeStageChanges(radioLed, manual)` (around the `radioStageRef` / `stage.manual` code). Pass `companions: led.companions?.map((k) => ({ slotId: k.slotId, stem: k.stem }))` on the `radioLed` argument.
 - Add the companions' slot ids to the stage's `slotIds`.
-- `ledSlotId` stays radio's own row. The per-tick eligibility withdraw checks only that row; a companion whose row turns ineligible after staging simply lands, as a manual change does.
+- `ledSlotId` stays radio's own row. A companion whose row turns ineligible after the decision (padlocked, muted, removed) is stopped, as radio's own row is -- a padlock means never: `stepRadioStage` step (1) takes it out of the held change and withdraws the stage, and the next tick re-stages without it (`radioHeldCompanionsKept`); the stage build and the landing apply the same rule. (As first written it simply landed; review of 00772e5.)
 
 - [ ] **Step 5: The landing commits them.** Wherever the held change commits, both on the staged-stage landing and on the unstaged commit-at-the-wrap or commit-on-the-boundary path, commit each companion right after the primary, in the same microtask. Model it on the `new bed` batch loop (`radioCourseChangeRef`, "The course change lands HERE"):
   ```ts

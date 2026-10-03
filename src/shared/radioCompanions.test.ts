@@ -3,6 +3,7 @@ import {
   radioChangeLengths,
   radioCompanionCap,
   radioCompanionsRiding,
+  radioHeldCompanionsKept,
   radioUsableCompanionPicks
 } from './radioCompanions'
 
@@ -18,11 +19,18 @@ describe('radioCompanionCap', () => {
 })
 
 describe('radioCompanionsRiding', () => {
-  const ks = [{ slotId: 'b' }, { slotId: 'c' }, { slotId: 'd' }]
+  const k = (
+    slotId: string,
+    stem: string | null = 's'
+  ): { slotId: string; stem: string | null } => ({
+    slotId,
+    stem
+  })
+  const ks = [k('b'), k('c'), k('d')]
   const base = { primarySlotId: 'a', eligible: ['a', 'b', 'c', 'd'], manual: new Set<string>() }
   it('keeps them in order, up to the cap', () => {
     expect(radioCompanionsRiding(ks, { ...base, max: 3 })).toEqual(ks)
-    expect(radioCompanionsRiding(ks, { ...base, max: 1 })).toEqual([{ slotId: 'b' }])
+    expect(radioCompanionsRiding(ks, { ...base, max: 1 })).toEqual([k('b')])
     expect(radioCompanionsRiding(ks, { ...base, max: 0 })).toEqual([])
   })
   it('drops an ineligible row (held, locked, muted, gone) and one a manual change waits on', () => {
@@ -33,20 +41,32 @@ describe('radioCompanionsRiding', () => {
         manual: new Set(['d']),
         max: 3
       })
-    ).toEqual([{ slotId: 'c' }])
+    ).toEqual([k('c')])
   })
   it('drops radio’s own row and a second entry for one row', () => {
-    expect(
-      radioCompanionsRiding([{ slotId: 'a' }, { slotId: 'b' }, { slotId: 'b' }], {
-        ...base,
-        max: 3
-      })
-    ).toEqual([{ slotId: 'b' }])
+    expect(radioCompanionsRiding([k('a'), k('b'), k('b')], { ...base, max: 3 })).toEqual([k('b')])
   })
   it('a dropped one frees its place under the cap', () => {
     expect(radioCompanionsRiding(ks, { ...base, eligible: ['a', 'c', 'd'], max: 1 })).toEqual([
-      { slotId: 'c' }
+      k('c')
     ])
+  })
+  it('never one still warming: it is dropped, not waited for (spec section 3)', () => {
+    expect(radioCompanionsRiding([k('b', null), k('c')], { ...base, max: 3 })).toEqual([k('c')])
+  })
+})
+
+describe('radioHeldCompanionsKept', () => {
+  it('drops a held companion whose row is no longer eligible (padlocked, muted, gone)', () => {
+    const held = [{ slotId: 'b' }, { slotId: 'c' }, { slotId: 'd' }]
+    expect(radioHeldCompanionsKept(held, ['a', 'b', 'd'])).toEqual([
+      { slotId: 'b' },
+      { slotId: 'd' }
+    ])
+  })
+  it('the same array when every one is still eligible, so nothing is re-staged', () => {
+    const held = [{ slotId: 'b' }]
+    expect(radioHeldCompanionsKept(held, ['a', 'b'])).toBe(held)
   })
 })
 
