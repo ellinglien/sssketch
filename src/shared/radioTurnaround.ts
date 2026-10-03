@@ -333,8 +333,10 @@ export interface TurnaroundInput {
    *   - `none`, `small`: the riser at TURNAROUND_RISER_FACTOR's weight, at most 4 beats, no gap,
    *     at most two moves layered;
    *   - `medium`: the riser as today, at most 8 beats, no gap;
-   *   - `large`: the phrase end fires at every rate but `off`, the riser at twice its weight, the
-   *     gap as today.
+   *   - `large`: the phrase end fires at every rate but `off`, rolls fresh (the memory --
+   *     diminution, never two in a row -- is skipped), the riser at twice its weight, the gap as
+   *     today.
+   * At `none` and `small` a diminution keeps at most two moves too.
    * Every tier only reweights, clamps or skips a draw of the layering's own random: none adds a
    * draw to `random`. */
   size?: RadioBuildSize
@@ -686,7 +688,7 @@ function build(
  * - Never at two phrase ends in a row, except DIMINUTION: after a drum drop, a low drop or a
  *   lift, the next phrase end may repeat the same move at half its length -- two halvings at
  *   most, at the same rate, never below one beat, and only while the arc still weights it and
- *   its guards pass.
+ *   its guards pass. A `size` of `large` skips this rule and rolls fresh.
  * - Otherwise: the rate, then a move weighted by the arc among those that can sound and fit
  *   min(half the loop, 4 bars), then its length, then (a drum drop) its row.
  *
@@ -707,9 +709,12 @@ export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
   const capBeats = capOf(input)
   if (!(chance > 0) || !(capBeats > 0) || moves.length === 0) return null
   const bed = bedOf(input.rows, input.leavingRowId)
-  if (lastPhrase !== null) {
+  // a large change rolls fresh: no diminution, and not the "never two in a row" rule (a riser,
+  // stop, wash or dip last phrase would otherwise leave the biggest moment with nothing, or a
+  // halved repeat with no riser and no gap). Only with a size passed: absent, today.
+  if (lastPhrase !== null && input.size !== 'large') {
     if (lastPhrase.parts !== undefined && lastPhrase.parts.length > 1) {
-      return diminishParts(input, lastPhrase, bed, capBeats, chance, looks)
+      return diminishParts(input, lastPhrase, bed, capBeats, chance, looks, sizing)
     }
     const { move } = lastPhrase
     if (!DIMINISHING.includes(move) || lastPhrase.halvings >= TURNAROUND_MAX_HALVINGS) return null
@@ -1189,7 +1194,7 @@ function layerTurnaround(
 }
 
 /** A diminution of a combined phrase end: the moves in it that can diminish (drum drop, low drop,
- * lift), together, each at half its length -- while the families, the arc and the guards still
+ * lift; the first two at a `none` or `small` size), together, each at half its length -- while the families, the arc and the guards still
  * let it, never under a beat -- at the same rate, with no layering and no gap. The rate is today's
  * one draw; then each part's rows (a drum drop's row), in order. */
 function diminishParts(
@@ -1198,7 +1203,8 @@ function diminishParts(
   bed: Bed,
   capBeats: number,
   chance: number,
-  looks: TurnaroundLooks
+  looks: TurnaroundLooks,
+  sizing: Sizing
 ): TurnaroundPlan | null {
   if (last.halvings >= TURNAROUND_MAX_HALVINGS) return null
   const families = input.moves ?? TURNAROUND_FAMILIES
@@ -1212,6 +1218,8 @@ function diminishParts(
     )
     .map((p) => ({ move: p.move, beats: Math.min(p.beats / 2, capBeats) }))
     .filter((p) => p.beats >= 1)
+    // at `none` and `small`, at most two moves (no draw: the memory's own order)
+    .slice(0, sizing.maxMoves)
   if (keep.length === 0) return null
   if (!(input.random() < chance)) return null
   const parts: TurnaroundPart[] = []

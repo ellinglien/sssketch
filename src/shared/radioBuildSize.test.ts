@@ -15,6 +15,7 @@ import {
   radioPayoffMet,
   radioPayoffOf,
   radioPayoffShortfall,
+  radioNoteTurnaround,
   radioPhraseEndBuild,
   radioTurnaroundPayoffNeed,
   type RadioChangeForecast
@@ -79,6 +80,33 @@ describe('the budget', () => {
     expect(c).toEqual({ sinceBuild: 4, sinceLarge: null })
     c = advanceRadioBuildClock(noteRadioBuild(c, true), 8)
     expect(c).toEqual({ sinceBuild: 8, sinceLarge: 8 })
+  })
+})
+
+describe('a large build without a riser', () => {
+  it('noteRadioBuild: a riserless large resets only the large count; riserless and small, nothing', () => {
+    const c = { sinceBuild: 4, sinceLarge: 40 }
+    expect(noteRadioBuild(c, true, false)).toEqual({ sinceBuild: 4, sinceLarge: 0 })
+    expect(noteRadioBuild(c, false, false)).toBe(c)
+    expect(noteRadioBuild(NO_RADIO_BUILDS, true, false)).toEqual({
+      sinceBuild: null,
+      sinceLarge: 0
+    })
+    // the riser is the default: today's two-argument calls
+    expect(noteRadioBuild(c, true)).toEqual({ sinceBuild: 0, sinceLarge: 0 })
+    expect(noteRadioBuild(c, false)).toEqual({ sinceBuild: 0, sinceLarge: 40 })
+  })
+
+  it('radioNoteTurnaround: a played turnaround, by its riser and whether it was rolled large', () => {
+    const c = { sinceBuild: 4, sinceLarge: 40 }
+    expect(radioNoteTurnaround(c, null, true)).toBe(c)
+    expect(radioNoteTurnaround(c, { riserBars: 2 }, false)).toEqual({
+      sinceBuild: 0,
+      sinceLarge: 40
+    })
+    expect(radioNoteTurnaround(c, { riserBars: 2 }, true)).toEqual({ sinceBuild: 0, sinceLarge: 0 })
+    expect(radioNoteTurnaround(c, {}, true)).toEqual({ sinceBuild: 4, sinceLarge: 0 })
+    expect(radioNoteTurnaround(c, {}, false)).toBe(c)
   })
 })
 
@@ -168,6 +196,21 @@ describe('radioPhraseEndBuild', () => {
       size: 'large',
       payoff: 'medium'
     })
+  })
+
+  it("a phrase end's large is spared the 8-bar spacing, not the once-a-phrase rule", () => {
+    // a cheap riser 4 bars before: a per-change large falls to small, the phrase end's stays large
+    const recent = { clock: { sinceBuild: 0, sinceLarge: null }, aheadBars: 4, phraseBars: 16 }
+    expect(radioBuildSize(F({ rows: 3 }), recent)).toBe('small')
+    expect(radioPhraseEndBuild(F({ rows: 3 }), 0, recent).size).toBe('large')
+    expect(radioApplyBuildBudget('large', { ...recent, phraseEnd: true })).toBe('large')
+    // a medium phrase end still keeps its spacing
+    expect(radioPhraseEndBuild(F({ rows: 2 }), 0, recent).size).toBe('small')
+    // a large a phrase ago or less: medium, and then the spacing applies to it
+    const both = { clock: { sinceBuild: 0, sinceLarge: 8 }, aheadBars: 4, phraseBars: 16 }
+    expect(radioPhraseEndBuild(F({ rows: 3 }), 0, both).size).toBe('small')
+    const lateLarge = { clock: { sinceBuild: 20, sinceLarge: 8 }, aheadBars: 4, phraseBars: 16 }
+    expect(radioPhraseEndBuild(F({ rows: 3 }), 0, lateLarge).size).toBe('medium')
   })
 
   it('the budget still applies', () => {

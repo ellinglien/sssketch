@@ -11,7 +11,10 @@ import {
   rollTurnaround,
   type RadioTurnarounds,
   type TurnaroundArc,
+  type TurnaroundForce,
   type TurnaroundInput,
+  type TurnaroundMemory,
+  type TurnaroundMove,
   type TurnaroundPlan,
   type TurnaroundRow
 } from './radioTurnaround'
@@ -88,9 +91,51 @@ function rollTrace(extra: Partial<TurnaroundInput> = {}, rows: TurnaroundRow[] =
   return out.join('\n')
 }
 
-// Recorded from the UNMODIFIED radioTransition.ts / radioTurnaround.ts (sssketch 78be6e5).
+/** Seeded turns (no memory, rate off) over every chip, the planner's choice and a short turn, by
+ * arc, loop, depth and combine, with the stream position after each. */
+function turnTrace(extra: Partial<TurnaroundInput> = {}): string {
+  const out: string[] = []
+  const forces: TurnaroundForce[] = [
+    {},
+    { maxBeats: 4 },
+    ...(['drum drop', 'low drop', 'stop', 'wash', 'lift', 'dip', 'riser'] as TurnaroundMove[]).map(
+      (move) => ({ move })
+    )
+  ]
+  for (const force of forces)
+    for (const arc of ['growing', 'thinning', 'steady'] as TurnaroundArc[])
+      for (const loopBars of [2, 4, 8])
+        for (const depth of ['subtle', 'bold'] as const)
+          for (const combine of [false, true]) {
+            const random = seededRandom(
+              `turn-${JSON.stringify(force)}-${arc}-${loopBars}-${depth}-${combine}`
+            )
+            for (let k = 0; k < 20; k++) {
+              const plan = rollTurnaround({
+                rate: 'off',
+                random,
+                loopBars,
+                lastPhrase: null,
+                rows: BED,
+                arc,
+                leavingRowId: null,
+                depth,
+                combine,
+                force,
+                ...extra
+              })
+              out.push(JSON.stringify(plan))
+              out.push(String(random()))
+            }
+          }
+  return out.join('\n')
+}
+
+// Recorded from the UNMODIFIED radioTransition.ts / radioTurnaround.ts (sssketch 78be6e5; the
+// turns' from 730e48d, the same code).
 const TRANSITIONS_BEFORE = 'd5e51d0c'
 const ROLLS_BEFORE = 'b5136502'
+const TURNS_BEFORE = 'c9a60f7b'
 
 describe('absent: today, draw for draw', () => {
   it('pickTransition with no sizing', () => {
@@ -101,6 +146,12 @@ describe('absent: today, draw for draw', () => {
   it('rollTurnaround with no size and no payoff', () => {
     expect(hashText(rollTrace())).toBe(ROLLS_BEFORE)
     expect(hashText(rollTrace({ payoff: 'large' }))).toBe(ROLLS_BEFORE)
+  })
+
+  it('turns with no payoff, whatever the size (a turn ignores it)', () => {
+    expect(hashText(turnTrace())).toBe(TURNS_BEFORE)
+    expect(hashText(turnTrace({ size: 'large' }))).toBe(TURNS_BEFORE)
+    expect(hashText(turnTrace({ size: 'small' }))).toBe(TURNS_BEFORE)
   })
 
   it('radioGestureBeats: a riser is 8 beats without a size and at large', () => {
@@ -244,6 +295,58 @@ describe('the phrase end by size', () => {
     for (const payoff of ['none', 'medium'] as const) {
       for (const p of plans({ size: 'large', payoff })) expect(p?.gapBeats ?? 0).toBe(0)
       for (const p of plans({ payoff, force: {} }, 'often', 1000)) expect(p?.gapBeats ?? 0).toBe(0)
+    }
+  })
+
+  it('large rolls fresh after any phrase end: no diminution, no "never two in a row"', () => {
+    const memories: TurnaroundMemory[] = [
+      { move: 'riser', beats: 8, halvings: 0 },
+      { move: 'stop', beats: 4, halvings: 0 },
+      { move: 'lift', beats: 8, halvings: 0 },
+      {
+        move: 'riser',
+        beats: 8,
+        halvings: 0,
+        parts: [
+          { move: 'riser', beats: 8 },
+          { move: 'low drop', beats: 4 }
+        ]
+      }
+    ]
+    for (const lastPhrase of memories) {
+      const ps = plans({ size: 'large', lastPhrase }, 'rare', 1000)
+      expect(ps.every((p) => p !== null && p.halvings === 0)).toBe(true)
+      expect(risers(ps).length).toBeGreaterThan(0)
+      expect(ps.some((p) => (p!.gapBeats ?? 0) > 0)).toBe(true)
+      // below large the memory still rules: a riser, a stop or a combined riser never repeats
+      if (lastPhrase.move !== 'lift') {
+        expect(plans({ size: 'medium', lastPhrase }, 'often', 200).every((p) => p === null)).toBe(
+          lastPhrase.parts === undefined
+        )
+      }
+    }
+  })
+
+  it('a diminution keeps at most two moves at none and small', () => {
+    const lastPhrase: TurnaroundMemory = {
+      move: 'drum drop',
+      beats: 8,
+      halvings: 0,
+      parts: [
+        { move: 'drum drop', beats: 8 },
+        { move: 'low drop', beats: 8 },
+        { move: 'lift', beats: 8 }
+      ]
+    }
+    const today = plans({ lastPhrase }, 'often', 200).filter((p) => p !== null)
+    expect(today.some((p) => p!.parts!.length === 3)).toBe(true)
+    for (const size of ['none', 'small', 'medium'] as const) {
+      const ps = plans({ size, lastPhrase }, 'often', 200).filter((p) => p !== null)
+      expect(ps.length).toBeGreaterThan(0)
+      for (const p of ps) {
+        expect(p!.halvings).toBe(1)
+        expect(p!.parts!.length).toBeLessThanOrEqual(size === 'medium' ? 3 : 2)
+      }
     }
   })
 

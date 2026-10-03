@@ -81,14 +81,33 @@ export function advanceRadioBuildClock(clock: RadioBuildClock, bars: number): Ra
   }
 }
 
-/** A build landed now: `large` when it was a turnaround rolled at large. */
-export function noteRadioBuild(clock: RadioBuildClock, large: boolean): RadioBuildClock {
-  return { sinceBuild: 0, sinceLarge: large ? 0 : clock.sinceLarge }
+/** A build landed now: `large` when it was a turnaround rolled at large that fired (spec 4.2: a
+ * large build is that, riser or not). `riser` (default true): a riser was in it, so it counts for
+ * the 8-bar spacing too; a riserless large resets only the large count, and a riserless anything
+ * else is no build at all. */
+export function noteRadioBuild(
+  clock: RadioBuildClock,
+  large: boolean,
+  riser = true
+): RadioBuildClock {
+  if (riser) return { sinceBuild: 0, sinceLarge: large ? 0 : clock.sinceLarge }
+  return large ? { sinceBuild: clock.sinceBuild, sinceLarge: 0 } : clock
 }
 
 /** Whether a plan or a gesture is a build for the clock: a riser in it. */
 export function radioPlanIsBuild(plan: Pick<TurnaroundPlan, 'riserBars'> | null): boolean {
   return plan !== null && (plan.riserBars ?? 0) > 0
+}
+
+/** A phrase-end turnaround that played at its wrap, for the clock: its riser (radioPlanIsBuild)
+ * and whether it was rolled at `large`. Null (none played): the clock as it was. */
+export function radioNoteTurnaround(
+  clock: RadioBuildClock,
+  plan: Pick<TurnaroundPlan, 'riserBars'> | null,
+  large: boolean
+): RadioBuildClock {
+  if (plan === null) return clock
+  return noteRadioBuild(clock, large, radioPlanIsBuild(plan))
 }
 
 const RANK: Readonly<Record<RadioBuildSize, number>> = { none: 0, small: 1, medium: 2, large: 3 }
@@ -121,17 +140,23 @@ export interface RadioBuildBudget {
   aheadBars: number
   /** The turnaround phrase, in bars: a large build at most once per phrase. */
   phraseBars: number
+  /** A phrase end's own build (radioPhraseEndBuild): its `large` is spared the 8-bar spacing, so
+   * a cheap mid-phrase riser (at a high pace) cannot eat the phrase start's big moment. The
+   * once-a-phrase rule still applies, and a `medium` keeps its spacing. Absent: false. */
+  phraseEnd?: boolean
 }
 
 /** The budget (Huron: a build that comes too often stops meaning anything): `large` falls to
  * `medium` within a phrase of the last large build; `medium` or `large` falls to `small` within
- * BUILD_SPACING_BARS of the last build of any size. */
+ * BUILD_SPACING_BARS of the last build of any size -- except a phrase end's `large`
+ * (`phraseEnd`), which only the once-a-phrase rule limits. */
 export function radioApplyBuildBudget(size: RadioBuildSize, b: RadioBuildBudget): RadioBuildSize {
   const ahead = Number.isFinite(b.aheadBars) && b.aheadBars > 0 ? b.aheadBars : 0
   const since = (x: number | null): number => (x === null ? Number.POSITIVE_INFINITY : x + ahead)
   let out = size
   if (out === 'large' && since(b.clock.sinceLarge) < b.phraseBars) out = 'medium'
-  if ((out === 'large' || out === 'medium') && since(b.clock.sinceBuild) < BUILD_SPACING_BARS) {
+  const spaced = out === 'medium' || (out === 'large' && b.phraseEnd !== true)
+  if (spaced && since(b.clock.sinceBuild) < BUILD_SPACING_BARS) {
     out = 'small'
   }
   return out
@@ -203,7 +228,8 @@ export function radioForecastWithRows(f: RadioChangeForecast, n: number): RadioC
  * - `skip`: no payoff is possible (`f` plus every spare row does not meet `medium`): the phrase
  *   end gets no turnaround, and its roll draws nothing.
  * - `size`: the tier `f` earns, raised to `medium` (a fired turnaround always brings at least a
- *   medium change: the runtime assembles it), then the budget.
+ *   medium change: the runtime assembles it), then the budget (a phrase end's: its `large` is
+ *   spared the 8-bar spacing).
  * - `payoff`: the largest payoff `f` plus the spares can meet. rollTurnaround's gap needs `large`.
  */
 export function radioPhraseEndBuild(
@@ -215,7 +241,8 @@ export function radioPhraseEndBuild(
   const payoff = radioPayoffOf(best)
   const raw = radioBuildTier(f, opts.hookScale)
   const floored: RadioBuildSize = radioBuildSizeAtLeast(raw, 'medium') ? raw : 'medium'
-  return { skip: payoff === 'none', size: radioApplyBuildBudget(floored, opts), payoff }
+  const size = radioApplyBuildBudget(floored, { ...opts, phraseEnd: true })
+  return { skip: payoff === 'none', size, payoff }
 }
 
 // ---- big moments on phrase starts (spec 4.5) ----
