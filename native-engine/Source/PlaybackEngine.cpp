@@ -806,7 +806,8 @@ namespace sssketch
                 // The stem is stamped on its cycle too, so a tail (CycleTable::Tail) plays only
                 // for the stem that was playing the cycle, never one swapped into the row -- and
                 // on a row it plays straight, so a row that folds in has a straight tail for it.
-                // The stem's hash is the parser's (EngineStem::cycleStemHash), not one per block.
+                // The stem's hash is the parser's (EngineStem::cycleStemHash: its audio file, so a
+                // project swap that renames every stemKey at the same top keeps the tail).
                 const uint64_t cycleStemHash = stem.cycleStemHash;
                 if (stem.cycleRowKey != 0)
                 {

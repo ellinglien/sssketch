@@ -77,6 +77,15 @@ namespace sssketch
         return std::clamp(raw, 0.0, 1.0);
     }
 
+    uint64_t cycleStemHashOf(const EngineStem& stem)
+    {
+        // The audio file, not stemKey: every Discover preview build mints a fresh groupId, so a
+        // staged project landing at a top renames every stem, and a tail matched on stemKey
+        // would never play across it (the outgoing cycle would stop at full gain). The tail is
+        // matched on its row as well, so the same file in another row is not confused for it.
+        return (uint64_t) stem.resolvedPath.hashCode64();
+    }
+
     bool parseEngineProject(const juce::String& json, EngineProject& projectOut, juce::String& errorOut)
     {
         auto parsed = juce::JSON::parse(json);
@@ -292,7 +301,7 @@ namespace sssketch
                         // Radio fold mode's row (CycleTable.h). Absent is empty: no fold.
                         stem.cycleRow = stemVar.getProperty("cycleRow", "").toString();
                         stem.cycleRowKey = cycleKeyOf(stem.cycleRow);
-                        stem.cycleStemHash = (uint64_t) stem.stemKey.hashCode64();
+                        stem.cycleStemHash = cycleStemHashOf(stem);
 
                         // The built-in toolkit, per CLIP (spec section 2b).
                         // An ABSENT `toolkit` key leaves hasToolkit false,

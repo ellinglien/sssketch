@@ -561,7 +561,7 @@ namespace sssketch
                 stem.durationSec = 16.0;
                 stem.cycleRow = row;
                 stem.cycleRowKey = cycleKeyOf(row);
-                stem.cycleStemHash = (uint64_t) stem.stemKey.hashCode64(); // the parser's
+                stem.cycleStemHash = cycleStemHashOf(stem); // the parser's
                 rifff.stems.push_back(stem);
                 project.rifffs.push_back(rifff);
                 return project;
@@ -811,6 +811,59 @@ namespace sssketch
                 expect(sameRamp, "a straight stem that ended with the lap leaves nothing to continue");
                 dc.deleteFile();
                 ramp.deleteFile();
+            }
+
+            // Every Discover preview build mints a fresh groupId, so a staged project landing at a
+            // top renames every stem. A row whose cycle changes at that same top still has to hear
+            // its outgoing cycle's tail: the tail is matched by row and audio file, not stemKey.
+            // A different file in the row is a different stem, and hears none.
+            beginTest("a fold tail is matched by row and audio file, so it survives a project swap at the same top");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_swap_ramp.wav", 16 * 44100);
+                auto other = writeRampFixtureWav("sssketch_pe_fold_swap_other.wav", 16 * 44100);
+                StemBufferCache cache;
+                ChannelChainRegistry channelChains;
+                for (const bool samePath : { true, false })
+                {
+                    PlaybackEngine engine(cache);
+                    engine.setProject(foldProject(ramp, "perc"));
+                    engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                    engine.applyStagedCycles(false);
+                    const int n = (int) (0.05 * 44100.0);
+                    std::vector<float> l0((size_t) n, 0.0f), r0((size_t) n, 0.0f);
+                    std::vector<float> l1((size_t) n, 0.0f), r1((size_t) n, 0.0f);
+                    engine.renderBlock((16.0 - 0.05) / 4.0, 44100.0, n, l0.data(), r0.data(), channelChains, LapClock { 0.0, 1 });
+                    // the staged project lands at the top, renamed, with the next lap's cycle
+                    auto swapped = foldProject(samePath ? ramp : other, "perc");
+                    swapped.rifffs[0].stems[0].stemKey = "fold-rebuilt:1";
+                    swapped.rifffs[0].stems[0].cycleStemHash = cycleStemHashOf(swapped.rifffs[0].stems[0]);
+                    engine.setProject(swapped);
+                    engine.stageCycles(foldRow(6.0 / 4.0, 0.0, "perc~2"), false);
+                    expect(engine.applyStagedCycles(true, 4.0));
+                    engine.renderBlock(0.0, 44100.0, n, l1.data(), r1.data(), channelChains, LapClock { 4.0, 1 });
+                    PlaybackEngine fresh(cache);
+                    fresh.setProject(swapped);
+                    fresh.stageCycles(foldRow(6.0 / 4.0, 0.0, "perc~2"), true);
+                    fresh.applyStagedCycles(false);
+                    std::vector<float> f((size_t) n, 0.0f), fr((size_t) n, 0.0f);
+                    fresh.renderBlock(0.0, 44100.0, n, f.data(), fr.data(), channelChains, LapClock { 4.0, 1 });
+                    if (samePath)
+                    {
+                        // cut dead, the outgoing's 0.125 steps at the top
+                        const float step = std::abs(l1[0] - l0[(size_t) n - 1]);
+                        expect(step < 0.002f, "step at the top across a renaming swap " + juce::String(step));
+                        expect(std::abs(l1[100] - f[100]) > 0.01f, "the tail sounds across the swap");
+                    }
+                    else
+                    {
+                        bool same = true;
+                        for (size_t i = 0; i < f.size(); ++i)
+                            same = same && l1[i] == f[i];
+                        expect(same, "another file in the row hears no tail");
+                    }
+                }
+                ramp.deleteFile();
+                other.deleteFile();
             }
 
             // A phased incoming cycle is mid-tile at its origin: the grid there is -phase, so the

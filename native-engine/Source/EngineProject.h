@@ -174,8 +174,8 @@ namespace sssketch
          * thread compares two integers. 0 for no row. */
         uint64_t cycleRowKey = 0;
         /** NOT ON THE WIRE: which stem this is, as a fold tail matches it (CycleTable::Tail: a
-         * tail plays only for the stem that played the outgoing), computed once by the parser so
-         * the audio thread does not hash a string per block. A hash of stemKey. */
+         * tail plays only for the stem that played the outgoing), computed once by the parser
+         * (cycleStemHashOf) so the audio thread does not hash a string per block. */
         uint64_t cycleStemHash = 0;
 
         /** NOT ON THE WIRE: this stem's index in PlaybackEngine's ProjectSnapshot::dubTaps (its
@@ -183,6 +183,12 @@ namespace sssketch
          * buildSnapshot on the snapshot's own copy; the parser leaves it -1. */
         int dubTap = -1;
     };
+
+    /** EngineStem::cycleStemHash's rule, the parser's: a hash of the stem's audio file
+     * (resolvedPath). A fold tail (CycleTable::Tail) plays only for the row and file that played
+     * the outgoing -- stable across a project swap that renames every stemKey, as each Discover
+     * preview build does; a different file swapped into the row hears none. */
+    uint64_t cycleStemHashOf(const EngineStem& stem);
 
     /** A riser's bandpass Q on the wire (EngineRiser::q): 2 is today's (NoiseRiser.h's
      * kRiserBandwidthQ), and the character draw's range is 1..6 (RISER_RANGES). */

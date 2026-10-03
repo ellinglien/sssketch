@@ -790,8 +790,9 @@ namespace sssketch
                 juce::String error;
                 expect(parseEngineProject(
                     R"({"bpm":120.0,"rifffs":[{"groupId":"g","stems":[
-                         {"stemKey":"absent"},
-                         {"stemKey":"folded","cycleRow":"slot-3"}
+                         {"stemKey":"absent","resolvedPath":"/a/bass.ogg"},
+                         {"stemKey":"folded","cycleRow":"slot-3","resolvedPath":"/a/perc.ogg"},
+                         {"stemKey":"rebuilt","cycleRow":"slot-3","resolvedPath":"/a/perc.ogg"}
                        ]}]})",
                     project, error), error);
                 const auto& stems = project.rifffs[0].stems;
@@ -799,8 +800,10 @@ namespace sssketch
                 expect(stems[0].cycleRowKey == 0);
                 expectEquals(stems[1].cycleRow, juce::String("slot-3"));
                 expect(stems[1].cycleRowKey == cycleKeyOf("slot-3"));
-                // which stem a fold tail is for, hashed once here rather than per block
-                expect(stems[1].cycleStemHash == (uint64_t) juce::String("folded").hashCode64());
+                // which stem a fold tail is for, hashed once here rather than per block: its audio
+                // file, so a rebuild that renames the stem keeps it
+                expect(stems[1].cycleStemHash == (uint64_t) juce::String("/a/perc.ogg").hashCode64());
+                expect(stems[2].cycleStemHash == stems[1].cycleStemHash);
                 expect(stems[0].cycleStemHash != stems[1].cycleStemHash);
             }
         }

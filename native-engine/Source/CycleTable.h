@@ -64,8 +64,9 @@ namespace sssketch
             double originBars = 0.0;
             uint32_t originEpoch = 0;
             bool hasOrigin = false;
-            // The stem that last played this cycle (a hash of its stemKey, set by renderBlock
-            // every block): a tail plays only for that stem, never one swapped into the row.
+            // The stem that last played this cycle (EngineStem::cycleStemHash, a hash of its
+            // audio file, set by renderBlock every block): a tail plays only for that stem, never
+            // one with another file swapped into the row.
             uint64_t stemHash = 0;
         };
 
