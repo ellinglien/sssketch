@@ -501,6 +501,49 @@ namespace sssketch
                 halfBar.deleteFile();
             }
 
+            // RADIO FOLD MODE, the proof the spec asked for first (spec 2026-10-02-radio-fold-mode
+            // section 3): a stem cropped by scaling barLength and durationSec together loops just
+            // its first N beats, at tempo, and offsetSteps moves the cycle's phase. 60 bpm: a beat
+            // is 1 s, a bar 4 s. A 16 s (4-bar) ramp cropped to 7 beats: every tile plays the
+            // ramp's first 7 s, 0 .. 7/16. This passes on the tile path as it stands; what it
+            // cannot do is keep the cycle running across a loop top or fade its seam, which is
+            // why fold mode plays through the cycle table instead (the tests after this one).
+            beginTest("a cropped stem (barLength and durationSec scaled together) loops its first 7 beats at tempo, offset by offsetSteps");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_crop7_ramp.wav", 16 * 44100);
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4.0;
+                EngineStem stem;
+                stem.resolvedPath = ramp.getFullPathName();
+                stem.barLength = 7.0 / 4.0;
+                stem.durationSec = 16.0 * (7.0 / 16.0); // scaled with it: 7 s
+                stem.offsetSteps = 4.0; // one beat (16 steps a bar)
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(project);
+                const auto at = [&](double sec) {
+                    float l = 0.0f, r = 0.0f;
+                    engine.renderBlock(sec / 4.0, 44100.0, 1, &l, &r, channelChains);
+                    return l;
+                };
+                // tiles at 1 s, 8 s and 15 s, each the ramp's first 7 s
+                expectWithinAbsoluteError(at(0.5), 0.0f, 1.0e-6f); // before the offset: nothing
+                expectWithinAbsoluteError(at(1.5), 0.5f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(7.9), 6.9f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(8.5), 0.5f / 16.0f, 0.002f); // restarted at 8 s
+                expectWithinAbsoluteError(at(14.5), 6.5f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(15.5), 0.5f / 16.0f, 0.002f);
+                ramp.deleteFile();
+            }
+
             beginTest("leftCropBars clips the first tile without moving startBar, and reads from the correct offset into the source buffer");
             {
                 // A 1-bar stem tiled twice (rifff.barLength=2), cropped 0.5
