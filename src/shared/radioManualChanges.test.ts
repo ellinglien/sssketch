@@ -346,4 +346,32 @@ describe('mergeStageChanges: the pace slider companions', () => {
         .changes
     ).toEqual([{ slotId: 'a', stem: 'A' }])
   })
+
+  it('dedupes companions (first wins) and a companion equal to the led row', () => {
+    const led = {
+      slotId: 'a',
+      stem: 'A',
+      arrival: null,
+      companions: [
+        { slotId: 'b', stem: 'B' },
+        { slotId: 'b', stem: 'B2' },
+        { slotId: 'a', stem: 'A2' }
+      ]
+    }
+    expect(mergeStageChanges(led, new Map()).changes).toEqual([
+      { slotId: 'a', stem: 'A' },
+      { slotId: 'b', stem: 'B' }
+    ])
+  })
+
+  it("a manual change on the led row withdraws radio's companions too", () => {
+    const led = {
+      slotId: 'a',
+      stem: 'A',
+      arrival: null,
+      companions: [{ slotId: 'b', stem: 'B' }]
+    }
+    const manual = new Map([['a', { stem: 'A2', joining: false, arrival: null }]])
+    expect(mergeStageChanges(led, manual).changes).toEqual([{ slotId: 'a', stem: 'A2' }])
+  })
 })

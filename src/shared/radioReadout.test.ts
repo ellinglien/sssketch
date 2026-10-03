@@ -322,3 +322,25 @@ describe("the pace slider: companions riding radio's change", () => {
     expect(r.statusLine).toBe('next: row 2 · 3 bars')
   })
 })
+
+describe('the pace slider companions: edge cases', () => {
+  const rows = ['a', 'b', 'c'].map((rowId) => ({ rowId, kinds: ['drums' as const], laps: 1 }))
+  const mk = (nextChange: RadioReadoutInput['nextChange']): ReturnType<typeof radioReadout> =>
+    radioReadout(input({ rows, nextChange }))
+  it('counts distinct rows, not the led row, not unknown ids', () => {
+    const r = mk({ rowId: 'a', kind: 'cut', barsAway: 1, with: ['b', 'b', 'a', 'zz'] })
+    expect(r.statusLine).toBe('next: row 1 +1 → cut · 1 bar')
+    expect(r.rows.map((x) => x.nextLabel)).toEqual(['next · cut', 'next · cut', null])
+  })
+  it('a leaving row does not make its companions leave', () => {
+    const r = mk({ rowId: 'a', kind: null, leaving: true, barsAway: 1, with: ['b'] })
+    expect(r.statusLine).toBe('next: row 1 +1 leaves · 1 bar')
+    expect(r.rows[0].nextLabel).not.toBe('next · cut')
+    expect(r.rows[1].nextLabel).toBe('next · cut')
+  })
+  it('a course change ignores with', () => {
+    const r = mk({ rowId: 'a', kind: 'bloom', barsAway: 1, course: ['a', 'b'], with: ['c'] })
+    expect(r.statusLine).toBe('next: course change · 1 bar')
+    expect(r.rows[2].nextLabel).toBeNull()
+  })
+})

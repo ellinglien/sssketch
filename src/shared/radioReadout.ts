@@ -76,6 +76,8 @@ export interface RadioReadoutInput {
     /** The pace slider's extra rows riding radio's change (its companions), cuts landing with
      * it: `next: row 2 +2 → bloom`, and each of them reads `next · cut`. */
     with?: readonly string[]
+    /* Which rows ride (held, locked or muted ones excluded) is the caller's call at decision
+     * time; the readout only shows the ones that are rows and not the led row, once each. */
   } | null
   /** The turnaround armed for the phrase's end, or a turn waiting; `move` null while a turn
    * waits for its roll. */
@@ -224,7 +226,11 @@ function nextPart(input: RadioReadoutInput): string | null {
   if (n === null) return null
   if (n.barsAway === null || !Number.isFinite(n.barsAway)) return 'next: soon'
   const i = input.rows.findIndex((r) => r.rowId === n.rowId)
-  const extra = !n.course && n.with && n.with.length > 0 ? ` +${n.with.length}` : ''
+  const present = new Set(input.rows.map((r) => r.rowId))
+  const companions = n.course
+    ? []
+    : [...new Set(n.with ?? [])].filter((id) => id !== n.rowId && present.has(id))
+  const extra = companions.length > 0 ? ` +${companions.length}` : ''
   const who =
     (n.course ? 'course change' : i >= 0 && !n.adding ? `row ${i + 1}` : 'a new row') + extra
   const how = n.course ? '' : n.leaving ? ' leaves' : n.kind !== null ? ` → ${n.kind}` : ''
@@ -250,7 +256,10 @@ export function radioReadout(input: RadioReadoutInput): RadioReadout {
     ruler: { ticks, filled, end: rulerEnd(input.armedTurnaround) },
     rows: input.rows.map((r) => {
       const companion =
-        next !== null && next.rowId !== r.rowId && (next.with?.includes(r.rowId) ?? false)
+        next !== null &&
+        !next.course &&
+        next.rowId !== r.rowId &&
+        (next.with?.includes(r.rowId) ?? false)
       const isNext =
         next !== null &&
         (next.rowId === r.rowId || (next.course?.includes(r.rowId) ?? false) || companion)

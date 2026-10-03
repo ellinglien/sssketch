@@ -112,15 +112,18 @@ export function mergeStageChanges<S>(
   const changes: { slotId: string; stem: S }[] = []
   const joining: string[] = []
   const arrivals: ({ slotId: string } & ManualArrival)[] = []
+  // A manual change on the led row withdraws radio's change, companions with it: they ride
+  // radio's change, so no radio change means none. Which rows may ride (held, locked, muted) is
+  // the caller's call at decision time.
   if (radioLed !== null && !manual.has(radioLed.slotId)) {
     changes.push({ slotId: radioLed.slotId, stem: radioLed.stem })
     if (radioLed.arrival !== null && carriesAsArrival(radioLed.arrival.kind)) {
       arrivals.push({ slotId: radioLed.slotId, ...radioLed.arrival })
     }
-  }
-  if (radioLed !== null) {
+    const seen = new Set([radioLed.slotId])
     for (const k of radioLed.companions ?? []) {
-      if (k.slotId === radioLed.slotId || manual.has(k.slotId)) continue
+      if (seen.has(k.slotId) || manual.has(k.slotId)) continue
+      seen.add(k.slotId)
       changes.push({ slotId: k.slotId, stem: k.stem })
     }
   }
