@@ -39,7 +39,8 @@ import {
   radioChangeDueAtNextWrap,
   radioChangeLandsAtBar,
   type RadioClock,
-  type RadioTurnover
+  type RadioTurnover,
+  radioFavesOf
 } from './radioSchedule'
 
 describe('radio paces', () => {
@@ -1094,7 +1095,8 @@ describe('RadioSettings', () => {
       fold: 40,
       clash: 25,
       foldSeed: 'autech',
-      density: 'arc'
+      density: 'arc',
+      faves: 0
     })
   })
 
@@ -1656,4 +1658,22 @@ describe('restartRadioInterval counts from the boundary, not the tick', () => {
       expect(run.late).toBe(0)
     })
   }
+})
+
+describe('RadioSettings.faves (the faves dial)', () => {
+  it('defaults to 0, keeps a saved value, clamps, and migrates prefer faves: on to 50', () => {
+    expect(normalizeRadioSettings({}).faves).toBe(0)
+    expect(normalizeRadioSettings({ faves: 35 }).faves).toBe(35)
+    expect(normalizeRadioSettings({ faves: 400 }).faves).toBe(100)
+    expect(normalizeRadioSettings({ preferFaves: true }).faves).toBe(50)
+    expect(normalizeRadioSettings({ preferFaves: false }).faves).toBe(0)
+    expect(normalizeRadioSettings({ faves: 10, preferFaves: true }).faves).toBe(10)
+  })
+
+  it('radioFavesOf reads an absent field (the web radio builds its own settings) as 0', () => {
+    const { faves: _drop, ...noFaves } = DEFAULT_RADIO_SETTINGS
+    void _drop
+    expect(radioFavesOf(noFaves)).toBe(0)
+    expect(radioFavesOf({ ...DEFAULT_RADIO_SETTINGS, faves: 70 })).toBe(70)
+  })
 })

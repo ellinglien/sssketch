@@ -11,6 +11,7 @@
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import { radioSlotFlagWeightFactor, type RadioSlotFlags } from './radioSlotFlags'
+import { DEFAULT_FAVES, normalizeFaves } from './discoverFaves'
 import {
   DEFAULT_RADIO_TURNAROUNDS,
   DEFAULT_TURNAROUND_DEPTH,
@@ -1074,10 +1075,19 @@ export interface RadioSettings {
    * has its own arc; normalizeRadioSettings always sets it, and absent
    * reads as the default (radioDensityOf). */
   density?: RadioDensity
+  /** The faves dial (@shared/discoverFaves), 0..100: how often a pick is drawn only from
+   * 👍-starred stems, and how much the rest lean to them. Discover's roll row and the radio menu
+   * set this one value. Optional for the same reason as `density`; normalizeRadioSettings
+   * always sets it, and absent reads as 0 (radioFavesOf). */
+  faves?: number
 }
 
 export function radioDensityOf(settings: RadioSettings): RadioDensity {
   return settings.density ?? DEFAULT_RADIO_DENSITY
+}
+
+export function radioFavesOf(settings: RadioSettings): number {
+  return normalizeFaves(settings.faves)
 }
 
 export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
@@ -1095,7 +1105,8 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   fold: DEFAULT_RADIO_FOLD,
   clash: DEFAULT_RADIO_CLASH,
   foldSeed: DEFAULT_FOLD_SEED,
-  density: DEFAULT_RADIO_DENSITY
+  density: DEFAULT_RADIO_DENSITY,
+  faves: DEFAULT_FAVES
 }
 
 /** The window the clock draws a change's interval from: fold mode's own (FOLD_PACE_BARS, 16-64
@@ -1153,6 +1164,8 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
     fold: normalizeFoldAmount(raw.fold, DEFAULT_RADIO_FOLD),
     clash: normalizeFoldAmount(raw.clash, DEFAULT_RADIO_CLASH),
     foldSeed: normalizeFoldSeed(raw.foldSeed),
-    density: normalizeRadioDensity(raw.density)
+    density: normalizeRadioDensity(raw.density),
+    // A saved `prefer faves: on` (the switch this replaced) reads as 50; a saved faves wins.
+    faves: normalizeFaves(raw.faves, (value as { preferFaves?: unknown } | null)?.preferFaves)
   }
 }
