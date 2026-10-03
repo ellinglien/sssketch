@@ -29,6 +29,7 @@ import {
   DEFAULT_RADIO_CLASH,
   DEFAULT_RADIO_FOLD,
   FOLD_PACE_BARS,
+  FOLD_PREFER_WAIT_LAPS,
   normalizeFoldAmount,
   normalizeFoldSeed
 } from './radioFold'
@@ -40,7 +41,9 @@ import {
 } from './radioTransition'
 import {
   DEFAULT_RADIO_PACE_LEVEL,
+  RADIO_FOLD_PACE_FROM,
   normalizeRadioPaceLevel,
+  radioFoldPaceProfile,
   radioPaceLevelFromLegacy,
   radioPacePhraseBars,
   radioPaceProfile
@@ -1126,8 +1129,9 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   paceLevel: DEFAULT_RADIO_PACE_LEVEL
 }
 
-/** The window the clock draws a change's interval from: fold mode's own (FOLD_PACE_BARS, 8-32
- * bars) while it is on, the user's pace window otherwise (the slider's level when one is set,
+/** The window the clock draws a change's interval from: radioCadenceOf's (fold mode's own, 8-32
+ * bars, at or below fast; above, the slider's, through radioFoldPaceProfile) while it is on, the
+ * user's pace window otherwise (the slider's level when one is set,
  * else `paceBars`) -- which comes back untouched when the mode goes off, since this never writes
  * it. */
 export function radioPaceWindowOf(settings: RadioSettings): RadioPaceWindow {
@@ -1206,9 +1210,9 @@ export function radioPaceLevelOf(settings: RadioSettings): number {
 
 /** Everything that sets radio's cadence, for both radios, from one place: the slider's profile
  * applied to the runtime's own phrase (`settings.phraseBars`: the web's 16, the desktop's chip),
- * with fold mode's override. Fold mode keeps today's rule -- its own window (FOLD_PACE_BARS)
- * replaces the pace's, changes land on tops, one row at a time -- so the slider does nothing
- * while fold is on.
+ * with fold mode's override. Fold mode keeps today's rule at or below fast (its own window,
+ * FOLD_PACE_BARS, tops, one row) and follows the slider above it (radioFoldPaceProfile: by 80 it
+ * is the slider's cadence; spec 2026-10-03-radio-fold-follows-pace-design).
  *
  * A RadioSettings with NO `paceLevel` is read exactly as before the slider: its `paceBars` window,
  * the runtime's phrase, one row, no mid-loop landings. That is every RadioSettings the web radio
@@ -1228,9 +1232,17 @@ export interface RadioCadence {
   barEvery: number | null
   /** Rows per change (radioPaceRowsThisChange). */
   rows: number
-  /** Fold mode's cadence, not the slider's: radioClockForPace then leaves the interval alone,
-   * since radioFoldIntervalBars stretches a draw past `window.max` to reach a realignment top. */
+  /** Fold mode is on. At or below fast (and with no level) its own cadence exactly; above, it
+   * follows the slider (radioFoldPaceProfile). */
   fold: boolean
+  /** Fold mode above fast: the slider moves its cadence, so radioClockForPace may redraw. */
+  foldPaced: boolean
+  /** Laps a change may wait past its draw for a realignment top (radioFoldIntervalBars'
+   * `preferWaitLaps`): FOLD_PREFER_WAIT_LAPS at or below fast, fading to 0 above 70; 0 with fold
+   * off. */
+  foldPreferWaitLaps: number
+  /** 0..1, stepRadioFold's `hurry`: 0 at or below 70 and with fold off. */
+  foldHurry: number
 }
 
 export function radioCadenceOf(settings: RadioSettings): RadioCadence {
@@ -1245,19 +1257,26 @@ export function radioCadenceOf(settings: RadioSettings): RadioCadence {
       turnaroundPhraseBars: base,
       barEvery: null,
       rows: 1,
-      fold: Boolean(settings.foldMode)
+      fold: Boolean(settings.foldMode),
+      foldPaced: false,
+      foldPreferWaitLaps: settings.foldMode ? FOLD_PREFER_WAIT_LAPS : 0,
+      foldHurry: 0
     })
   }
   const level = radioPaceLevelOf(settings)
   if (settings.foldMode) {
+    const fold = radioFoldPaceProfile(level)
     return {
       level,
-      window: { ...FOLD_PACE_BARS },
-      phraseBars: base,
+      window: { ...fold.window },
+      phraseBars: radioPacePhraseBars(fold, base),
       turnaroundPhraseBars: base,
-      barEvery: null,
-      rows: 1,
-      fold: true
+      barEvery: fold.barEvery,
+      rows: fold.rows,
+      fold: true,
+      foldPaced: level > RADIO_FOLD_PACE_FROM,
+      foldPreferWaitLaps: fold.preferWaitLaps,
+      foldHurry: fold.hurry
     }
   }
   const profile = radioPaceProfile(level)
@@ -1268,7 +1287,10 @@ export function radioCadenceOf(settings: RadioSettings): RadioCadence {
     turnaroundPhraseBars: base,
     barEvery: profile.barEvery,
     rows: profile.rows,
-    fold: false
+    fold: false,
+    foldPaced: false,
+    foldPreferWaitLaps: 0,
+    foldHurry: 0
   }
 }
 
@@ -1320,6 +1342,16 @@ export function radioPaceGridBars(
   let step = Math.min(Math.floor(barEvery), loopBars)
   while (step < loopBars && loopBars % step !== 0) step += 1
   return Math.min(base, step)
+}
+
+/** The bar band for a change on one row: the cadence's `barEvery`, except that in fold mode a
+ * row the fold machine holds (a cycle in the lap playing or the next: radioFoldHoldsRow) keeps to
+ * its loop tops -- phase 1 of fold following the slider. Pass the answer to radioPaceGridBars. */
+export function radioCadenceBarEvery(
+  cadence: Pick<RadioCadence, 'barEvery' | 'fold'>,
+  rowFolded: boolean
+): number | null {
+  return cadence.fold && rowFolded ? null : cadence.barEvery
 }
 
 /** The first line of a `gridBars` grid at or after `bars`, within the lap: `loopBars` (the wrap)
@@ -1382,19 +1414,29 @@ export function radioCadenceTransition(
  *     turnaroundLap modulo it, so a phrase end's turnaround still leads into a change phrase's
  *     top. Without it, a phrase that grows mid-stream would count from wherever its counter was
  *     and drift off the turnarounds for good.
- * In fold mode (`cadence.fold`) the interval is never redrawn: radioFoldIntervalBars stretches a
+ * In fold mode at or below fast the interval is never redrawn: radioFoldIntervalBars stretches a
  * draw up to FOLD_PREFER_WAIT_LAPS laps past the window to reach a realignment top, and a redraw
- * would drop that snap (and, on the web, spend a draw). The slider does nothing in fold anyway.
+ * would drop that snap (and, on the web, spend a draw). Above fast (`foldPaced`) an interval
+ * longer than the window plus that reach is redrawn, as outside fold.
  * `random` is drawn only when the interval is redrawn. */
 export function radioClockForPace(
   clock: RadioClock,
   cadence: Pick<RadioCadence, 'window' | 'phraseBars' | 'turnaroundPhraseBars'> &
-    Partial<Pick<RadioCadence, 'fold'>>,
+    Partial<Pick<RadioCadence, 'fold' | 'foldPaced' | 'foldPreferWaitLaps'>>,
   loopBars: number,
   random: () => number = Math.random
 ): RadioClock {
+  // Fold mode at or below fast: never redrawn, as before. Above, the realignment snap's own
+  // reach (the window plus the preferred wait) is the bound a running interval may keep.
+  const longest =
+    cadence.fold !== true
+      ? cadence.window.max
+      : cadence.foldPaced === true
+        ? cadence.window.max +
+          (cadence.foldPreferWaitLaps ?? FOLD_PREFER_WAIT_LAPS) * Math.max(0, loopBars)
+        : Number.POSITIVE_INFINITY
   const intervalBars =
-    cadence.fold !== true && clock.intervalBars > cadence.window.max
+    clock.intervalBars > longest
       ? nextRadioIntervalBarsInWindow(cadence.window, random)
       : clock.intervalBars
   return radioPhraseReanchored({ ...clock, intervalBars }, cadence, loopBars)
@@ -1408,9 +1450,9 @@ export function radioClockForPace(
  * or past the phrase (a loop that grew under it: advanceRadioClock folds it to 0 at the next
  * wrap, not modulo). Otherwise the clock comes back as it was (the same object).
  *
- * For a running clock whose phrases or loop moved without a pace move: fold mode switched (its
- * cadence has the base phrase), the `phrase` chip changed, or the loop's length changed -- see
- * radioPhraseNeedsReanchor for when. */
+ * For a running clock whose phrases or loop moved without a pace move: the `phrase` chip
+ * changed, or the loop's length changed (fold mode switching moves no phrase: fold's change
+ * phrase is the slider's at every level) -- see radioPhraseNeedsReanchor for when. */
 export function radioPhraseReanchored(
   clock: RadioClock,
   cadence: Pick<RadioCadence, 'phraseBars' | 'turnaroundPhraseBars'>,
@@ -1433,7 +1475,7 @@ export interface RadioPhraseAnchor {
 
 /** Whether a running clock needs radioPhraseReanchored because its change phrase, turnaround
  * phrase or loop moved since the last tick. Only when the two phrases differ, before or after:
- * where they are one number (every level up to fast, and fold mode) the two counters already run
+ * where they are one number (every level up to fast, fold mode or not) the two counters already run
  * together, so a loop or `phrase` chip change behaves exactly as before the slider. `prev` null is
  * the first tick: nothing moved. */
 export function radioPhraseNeedsReanchor(

@@ -1,6 +1,6 @@
 // Fold mode follows the pace slider (spec 2026-10-03-radio-fold-follows-pace-design.md): the
 // profile (radioPace.ts) and the cadence it gives (radioSchedule.ts).
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   RADIO_FOLD_PACE_FROM,
   RADIO_FOLD_PACE_JOINS,
@@ -9,6 +9,21 @@ import {
   radioPaceProfile
 } from './radioPace'
 import { FOLD_PACE_BARS, FOLD_PREFER_WAIT_LAPS } from './radioFold'
+import {
+  DEFAULT_RADIO_SETTINGS,
+  createRadioClock,
+  radioCadenceBarEvery,
+  radioCadenceOf,
+  radioClockForPace,
+  type RadioSettings
+} from './radioSchedule'
+
+const at = (level: number, foldMode = true): RadioSettings => ({
+  ...DEFAULT_RADIO_SETTINGS,
+  paceLevel: level,
+  phraseBars: 16,
+  foldMode
+})
 
 describe('radioFoldPaceProfile', () => {
   it('its first knot is FOLD_PACE_BARS and its preference FOLD_PREFER_WAIT_LAPS', () => {
@@ -59,5 +74,63 @@ describe('radioFoldPaceProfile', () => {
     expect(radioFoldPaceProfile(70).hurry).toBe(0)
     expect(radioFoldPaceProfile(85).hurry).toBeCloseTo(0.5)
     expect(radioFoldPaceProfile(100).hurry).toBe(1)
+  })
+})
+
+describe('radioCadenceOf in fold mode', () => {
+  it("above fast the phrase caps are the slider's", () => {
+    expect(radioCadenceOf(at(55)).phraseBars).toBe(8)
+    expect(radioCadenceOf(at(65)).phraseBars).toBe(4)
+    expect(radioCadenceOf(at(71)).phraseBars).toBe(0)
+    expect(radioCadenceOf(at(71)).turnaroundPhraseBars).toBe(16)
+  })
+
+  it("rows per change are the slider's above fast (companions from 71, 4 at 100); one at or below", () => {
+    for (let level = 0; level <= 100; level++) {
+      const fold = radioCadenceOf(at(level))
+      const plain = radioCadenceOf(at(level, false))
+      expect(fold.rows).toBe(level <= 50 ? 1 : plain.rows)
+    }
+    expect(radioCadenceOf(at(100)).rows).toBe(4)
+    expect(radioCadenceOf(at(80)).rows).toBe(2)
+  })
+
+  it('the hurry and the preference reach the cadence; none with fold off', () => {
+    expect(radioCadenceOf(at(100)).foldHurry).toBe(1)
+    expect(radioCadenceOf(at(70)).foldHurry).toBe(0)
+    expect(radioCadenceOf(at(65)).foldPreferWaitLaps).toBe(1)
+    expect(radioCadenceOf(at(75)).foldPreferWaitLaps).toBe(0)
+    const off = radioCadenceOf(at(100, false))
+    expect([off.foldPaced, off.foldPreferWaitLaps, off.foldHurry]).toEqual([false, 0, 0])
+  })
+})
+
+describe('radioClockForPace in fold mode', () => {
+  it('above fast a long fold interval is redrawn from the window; at or below it is kept, no draw', () => {
+    const random = vi.fn(() => 0)
+    const c = { ...createRadioClock(30, 0), barsElapsed: 3 }
+    expect(radioClockForPace(c, radioCadenceOf(at(50)), 4, random).intervalBars).toBe(30)
+    expect(radioClockForPace(c, radioCadenceOf(at(40)), 4, random).intervalBars).toBe(30)
+    expect(random).not.toHaveBeenCalled()
+    const ludicrous = radioClockForPace(c, radioCadenceOf(at(95)), 4, random)
+    expect(ludicrous.intervalBars).toBe(1)
+    expect(ludicrous.barsElapsed).toBe(3)
+    expect(random).toHaveBeenCalledTimes(1)
+    // 55: the window's max plus 2 laps of the snap is the most a running interval keeps
+    const p55 = radioCadenceOf(at(55))
+    expect(p55.foldPreferWaitLaps).toBe(2)
+    const keep = p55.window.max + 2 * 4
+    expect(radioClockForPace({ ...c, intervalBars: keep }, p55, 4, random).intervalBars).toBe(keep)
+    expect(random).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('radioCadenceBarEvery', () => {
+  it('fold mode keeps a held row to its tops; everything else takes the band', () => {
+    const fold = radioCadenceOf(at(95))
+    const plain = radioCadenceOf(at(95, false))
+    expect(radioCadenceBarEvery(fold, true)).toBeNull()
+    expect(radioCadenceBarEvery(fold, false)).toBe(1)
+    expect(radioCadenceBarEvery(plain, true)).toBe(1)
   })
 })

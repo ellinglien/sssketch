@@ -169,7 +169,10 @@ describe('radioCadenceOf', () => {
       turnaroundPhraseBars: 16,
       barEvery: null,
       rows: 1,
-      fold: false
+      fold: false,
+      foldPaced: false,
+      foldPreferWaitLaps: 0,
+      foldHurry: 0
     })
   })
 
@@ -193,13 +196,36 @@ describe('radioCadenceOf', () => {
     }
   })
 
-  it('fold mode keeps its own window, tops, one row', () => {
-    const c = radioCadenceOf(at(100, 16, true))
-    expect(c.window).toEqual(FOLD_PACE_BARS)
-    expect(c.phraseBars).toBe(16)
-    expect(c.barEvery).toBeNull()
-    expect(c.rows).toBe(1)
-    expect(c.fold).toBe(true)
+  it('fold mode at or below fast keeps its own window, tops, one row, whatever the level', () => {
+    for (const level of [0, 25, 50]) {
+      const c = radioCadenceOf(at(level, 16, true))
+      expect(c.window).toEqual(FOLD_PACE_BARS)
+      expect(c.phraseBars).toBe(16)
+      expect(c.turnaroundPhraseBars).toBe(16)
+      expect(c.barEvery).toBeNull()
+      expect(c.rows).toBe(1)
+      expect(c.fold).toBe(true)
+      expect(c.foldPaced).toBe(false)
+      expect(c.foldPreferWaitLaps).toBe(FOLD_PREFER_WAIT_LAPS)
+      expect(c.foldHurry).toBe(0)
+    }
+  })
+
+  it('fold mode above fast follows the slider: from 80 it IS the slider (bar band included)', () => {
+    for (let level = 80; level <= 100; level++) {
+      const fold = radioCadenceOf(at(level, 16, true))
+      const plain = radioCadenceOf(at(level, 16))
+      expect(fold.window).toEqual(plain.window)
+      expect(fold.phraseBars).toBe(plain.phraseBars)
+      expect(fold.barEvery).toBe(plain.barEvery)
+      expect(fold.rows).toBe(plain.rows)
+      expect(fold.turnaroundPhraseBars).toBe(16)
+      expect(fold.foldPreferWaitLaps).toBe(0)
+      expect(fold.foldPaced).toBe(true)
+    }
+    expect(radioCadenceOf(at(55, 16, true)).phraseBars).toBe(8)
+    expect(radioCadenceOf(at(65, 16, true)).phraseBars).toBe(4)
+    expect(radioCadenceOf(at(71, 16, true)).phraseBars).toBe(0)
   })
 })
 
@@ -369,9 +395,9 @@ describe('radioClockForPace', () => {
     expect(random).toHaveBeenCalledTimes(1)
   })
 
-  it("fold mode: a move leaves fold's stretched interval alone (its snap to a realignment top), no draw", () => {
+  it("fold mode at or below fast: a move leaves fold's stretched interval alone (its snap to a realignment top), no draw", () => {
     const random = vi.fn(() => 0)
-    const fold = radioCadenceOf({ ...DEFAULT_RADIO_SETTINGS, foldMode: true, paceLevel: 100 })
+    const fold = radioCadenceOf({ ...DEFAULT_RADIO_SETTINGS, foldMode: true, paceLevel: 50 })
     expect(72).toBeGreaterThan(fold.window.max)
     const moved = radioClockForPace(clock({ intervalBars: 72, barsElapsed: 9 }), fold, 8, random)
     expect(moved.intervalBars).toBe(72)
@@ -431,14 +457,15 @@ describe('radioClockForPace', () => {
 })
 
 describe('radioPhraseReanchored / radioPhraseNeedsReanchor (a phrase or loop moving under a running clock)', () => {
-  it('fold on mid-stream above fast: the change phrase grows 0 -> 16 and stays on the turnarounds', () => {
+  it('the change phrase growing 0 -> 16 mid-stream (pace 75, then fold on at fast) stays on the turnarounds', () => {
     // phrase 16, pace 75, a 4-bar loop: no change phrase (every loop top) until fold mode turns on
     // at turnaround lap 3, which brings the base 16 back as the change phrase
     const loose = radioCadenceOf({ ...DEFAULT_RADIO_SETTINGS, phraseBars: 16, paceLevel: 75 })
+    // fold at fast: its own cadence, the base phrase (above fast fold follows the slider's caps)
     const fold = radioCadenceOf({
       ...DEFAULT_RADIO_SETTINGS,
       phraseBars: 16,
-      paceLevel: 75,
+      paceLevel: 50,
       foldMode: true
     })
     expect(loose.phraseBars).toBe(0)
