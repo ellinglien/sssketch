@@ -14,10 +14,11 @@ import {
   radioGridLineAtOrAfter,
   radioPaceGridBars,
   radioPaceLevelOf,
+  radioPaceWindowOf,
   type RadioClock,
   type RadioSettings
 } from './radioSchedule'
-import { FOLD_PACE_BARS } from './radioFold'
+import { FOLD_PACE_BARS, FOLD_PREFER_WAIT_LAPS } from './radioFold'
 import { RADIO_PACE_ANCHORS } from './radioPace'
 
 /** mulberry32 -- a small seeded PRNG. */
@@ -119,14 +120,14 @@ describe('RadioSettings.paceLevel', () => {
   })
 })
 
-describe('radioCadenceOf', () => {
-  const at = (paceLevel: number, phraseBars: number, foldMode = false): RadioSettings => ({
-    ...DEFAULT_RADIO_SETTINGS,
-    paceLevel,
-    phraseBars,
-    foldMode
-  })
+const at = (paceLevel: number, phraseBars: number, foldMode = false): RadioSettings => ({
+  ...DEFAULT_RADIO_SETTINGS,
+  paceLevel,
+  phraseBars,
+  foldMode
+})
 
+describe('radioCadenceOf', () => {
   it("reproduces today at the anchors: the chip's window, the runtime's phrase, one row", () => {
     for (const word of ['slow', 'mid', 'fast'] as const) {
       for (const base of [0, 16, 32]) {
@@ -163,7 +164,8 @@ describe('radioCadenceOf', () => {
       phraseBars: 16,
       turnaroundPhraseBars: 16,
       barEvery: null,
-      rows: 1
+      rows: 1,
+      fold: false
     })
   })
 
@@ -173,6 +175,27 @@ describe('radioCadenceOf', () => {
     expect(c.phraseBars).toBe(16)
     expect(c.barEvery).toBeNull()
     expect(c.rows).toBe(1)
+    expect(c.fold).toBe(true)
+  })
+})
+
+describe('radioPaceWindowOf', () => {
+  it('a saved level wins over a stale chip window; no level is the window as stored', () => {
+    const saved: RadioSettings = {
+      ...DEFAULT_RADIO_SETTINGS,
+      pace: 'slow',
+      paceBars: { ...RADIO_PACE_BARS.slow },
+      paceLevel: RADIO_PACE_ANCHORS.fast
+    }
+    expect(radioPaceWindowOf(saved)).toEqual(RADIO_PACE_BARS.fast)
+    expect(radioPaceWindowOf(saved)).toEqual(radioCadenceOf(saved).window)
+    expect(
+      radioPaceWindowOf({ ...saved, paceLevel: undefined, paceBars: { min: 4, max: 4 } })
+    ).toEqual({
+      min: 4,
+      max: 4
+    })
+    expect(radioPaceWindowOf({ ...saved, foldMode: true })).toEqual(FOLD_PACE_BARS)
   })
 })
 
@@ -190,16 +213,34 @@ describe('radioPaceGridBars', () => {
     }
   })
 
-  it('in the band any stem no longer than the loop lands on the bar lines, stepped to divide the loop', () => {
+  it('in the band any stem no longer than the loop lands on the bar lines, coarsened to divide the loop', () => {
     expect(radioPaceGridBars(4, 0, 8, 8, 8)).toBe(4)
     expect(radioPaceGridBars(2, 0, 8, 8, 8)).toBe(2)
     expect(radioPaceGridBars(1, 4, 8, 8, 8)).toBe(1)
-    expect(radioPaceGridBars(4, 0, 6, 6, 6)).toBe(3)
+    expect(radioPaceGridBars(4, 0, 6, 6, 6)).toBe(6)
     expect(radioPaceGridBars(4, 0, 2, 2, 2)).toBe(2)
     // a finer own cycle (a 1-bar stem under loop end 4) is kept
     expect(radioPaceGridBars(4, 4, 8, 1, 1)).toBe(1)
     // fractional stems enter at their matching position too
     expect(radioPaceGridBars(2, 0, 8, 8, 1.5)).toBe(2)
+  })
+
+  it("a loop the profile's grid does not divide gets the next coarser divisor, never a finer one", () => {
+    const grid = (level: number, loop: number): number =>
+      radioPaceGridBars(radioCadenceOf(at(level, 16)).barEvery, 0, loop, loop, loop)
+    // levels 80 / 90 / 100 are every 4 / 2 / 1 bars
+    expect([80, 90, 100].map((l) => radioCadenceOf(at(l, 16)).barEvery)).toEqual([4, 2, 1])
+    expect([80, 90, 100].map((l) => grid(l, 5))).toEqual([5, 5, 1])
+    expect([80, 90, 100].map((l) => grid(l, 6))).toEqual([6, 2, 1])
+    expect([80, 90, 100].map((l) => grid(l, 7))).toEqual([7, 7, 1])
+    for (const loop of [5, 6, 7]) {
+      for (const level of [80, 90, 100]) {
+        const every = radioCadenceOf(at(level, 16)).barEvery as number
+        const g = grid(level, loop)
+        expect(loop % g).toBe(0)
+        expect(g).toBeGreaterThanOrEqual(Math.min(every, loop))
+      }
+    }
   })
 
   it('an unknown or longer incoming stem, or a fractional loop, still waits for the top', () => {
@@ -262,6 +303,22 @@ describe('radioClockForPace', () => {
     const slower = radioClockForPace(clock({ intervalBars: 3 }), cadence(24, 48, 16), 4, random)
     expect(slower.intervalBars).toBe(3)
     expect(random).toHaveBeenCalledTimes(1)
+  })
+
+  it("fold mode: a move leaves fold's stretched interval alone (its snap to a realignment top), no draw", () => {
+    const random = vi.fn(() => 0)
+    const fold = radioCadenceOf({ ...DEFAULT_RADIO_SETTINGS, foldMode: true, paceLevel: 100 })
+    expect(72).toBeGreaterThan(fold.window.max)
+    const moved = radioClockForPace(clock({ intervalBars: 72, barsElapsed: 9 }), fold, 8, random)
+    expect(moved.intervalBars).toBe(72)
+    expect(moved.barsElapsed).toBe(9)
+    expect(random).not.toHaveBeenCalled()
+    // the largest stretch radioFoldIntervalBars can actually give on an 8-bar loop
+    const stretched = fold.window.max + FOLD_PREFER_WAIT_LAPS * 8
+    expect(
+      radioClockForPace(clock({ intervalBars: stretched }), fold, 8, random).intervalBars
+    ).toBe(stretched)
+    expect(random).not.toHaveBeenCalled()
   })
 
   it('re-anchors the change phrase on the turnaround phrase when it divides it', () => {

@@ -163,7 +163,10 @@ Reading the table:
   on their own cycles (`loop end`), as they do today with its default phrase.
 - **80-100: the bar band (mid-loop).** Elling: "extreme should be extreme ... yes mid loop is fine".
   - **Where it can land.** Any stem no longer than the loop may come in on a bar line every 4, 2 or
-    1 bars (`radioPaceGridBars`, the grid stepped down to divide the loop).
+    1 bars (`radioPaceGridBars`). A loop that grid does not divide gets the next coarser spacing
+    that does (the smallest divisor of the loop at or above it, at most the loop itself, i.e. its
+    top), never a finer one: a 5- or 7-bar loop at "every 4" or "every 2" lands on its tops, a
+    6-bar loop at "every 4" too.
   - **What still waits for the loop top**, as now:
     - a stem **longer than the loop**: it would lengthen the loop mid-lap, and the web's
       `Timeline.swapAt` refuses it;
