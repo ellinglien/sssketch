@@ -100,9 +100,9 @@ a per-row readout plus a status line, renamed controls with tooltips, and seeds 
   the same form and styling as the existing **`visuals` switch** on the intro (`.intro-visuals`, its
   `sw-name` / `sw-value` with `data-state`): a name plus an on/off value, with the same dimming and
   hover. It replaces the plain underlined word.
-- **Full mode, fold off.** The fold settings (`bend`, `mismatch`, `seed`, `new`) stay visible but are
-  **disabled**: dimmed, not focusable, ignoring input. They are not hidden. Turning fold on enables
-  them. The status line and readout show only while fold is on.
+- **Full mode, fold off.** The fold settings (`bend`, `mismatch`, `seed`, `new`) stay **hidden** while
+  fold is off, as today (Elling, 2026-10-03: "oh they can be hidden"). The status line and readout
+  show only while fold is on.
 
 ## 4. Testing
 
