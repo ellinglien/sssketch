@@ -60,6 +60,10 @@ come". A full riser before a one-row swap promises a drop that never arrives.
 
    This applies to the per-change gestures (`radioTransition.ts`) AND to phrase-end turnarounds: a
    riser at a phrase end where nothing changes should be rare.
+6. **Every turnaround is paid off** (Elling, after this spec was first written: "a turnaround feels
+   like a letdown kinda if there isn't a somewhat dramatic change to the current state"). The
+   pairing goes both ways: a fired turnaround, any move, brings a noticeable change on its wrap,
+   sized to it; a phrase end where nothing can change gets no turnaround (§4.7).
 
 ## 0. The theory, and what it decides
 
@@ -519,7 +523,11 @@ size?)`:
   phrase-end fill (turnarounds §0) and stays one. Only the riser is made rare, short and gapless.
   So "a riser at a phrase end with no change" draws at roughly a seventh of today's weight, and never the full
   sweep.
-- **Turns** (the button and chips) ignore the size: a turn is asked for.
+- **Turns** (the button and chips) ignore the size: a turn is asked for. They do take the payoff
+  rule (§4.7).
+- **With the payoff rule (§4.7),** a phrase end that fires always brings at least a `medium`
+  change, so it is rolled at `medium` or above; `none` and `small` remain for a roll the budget
+  downgrades.
 - **Turnarounds `off`:** a large change gets only its per-change gesture (at most an 8-beat riser,
   no gap). The gap is a turnaround's, so it needs turnarounds on. Both radios default to on.
 
@@ -540,6 +548,59 @@ failure Elling heard, now rarer, never larger than today, and logged (`[radio-bu
 When it undersells (a manual change queued after the roll), the change lands with less build than
 it earned, which is the gentler failure. Hook events are decided before the roll and are binding,
 so the biggest builds are the reliable ones.
+
+### 4.7 Every turnaround is paid off (Decision 6)
+
+**The payoff a turnaround needs:** `large` when it leaves a gap (the silence before the one is the
+biggest promise radio makes); `medium` for any other move. A turn's too.
+
+**What pays off** (`radioPayoffMet`, rows counting every row that changes or joins at the wrap):
+
+| need | met by |
+|---|---|
+| `medium` | 2 or more rows, a hook back, a density-arc step, the low end back, a course change |
+| `large` | 3 or more rows, a hook back with another row, the low end back (drums or bass returning), a course change |
+
+**At the phrase end's roll** (sized builds on; the start of the lap ending at W):
+
+1. `f` = the forecast of what already lands at W (§4.1).
+2. `spare` = the rows the runtime could add at W, each warm and eligible:
+   - radio's armed pick, when it is not already landing at W (pulled forward: decided now, early);
+   - its companions;
+   - **spare picks** (at most 2), armed and warmed at the phrase start before, for rows radio may
+     change (not a hooked-in row, not a row with a manual change, not the pending pick's).
+3. `radioPhraseEndBuild(f, spare, budget)`:
+   - **skip** when `f` plus every spare row cannot meet `medium`: no turnaround at this phrase end,
+     no draw, memory null (logged `[radio-build] no payoff`);
+   - **size** = `f`'s tier raised to `medium`, then the budget (§4.2);
+   - **payoff** = the largest payoff `f` plus the spares can meet. `rollTurnaround` draws a gap
+     only when it is `large` (`TurnaroundInput.payoff`).
+4. The rate draws as today; at `large` the phrase end always fires (§4.4).
+5. **When it fires,** the runtime assembles the payoff the plan needs
+   (`radioTurnaroundPayoffNeed(plan)`), adding `radioPayoffShortfall(f, need)` rows in order: radio's
+   armed pick (pulled forward as an early decision), its companions, then spares (riding radio's
+   change as companions: cuts, landing or taken back with it). With no armed pick ready, the first
+   spare is radio's change.
+
+**Pace.** A pulled-forward pick IS radio's change: an early decision, so the interval restarts when
+it lands. A payoff never adds a change on top of radio's own; at a slow pace it brings radio's next
+change forward to the phrase end, and adds rows to it.
+
+**Fold.** Payoff rows are companions: the fold's carry and release rules for companions apply
+(fold-follows-pace).
+
+**The turn button.** A turn brings a payoff too, assembled the same way. A turn with nothing to
+change still plays (it was asked for), as a fill: no gap (`payoff: 'none'`). (Planning decision;
+Elling can ask for `nothing to turn` instead.)
+
+**Readout.** The payoff is radio's change with companions, so `next` already names it:
+`next: row 2 +2 → cut · 4 bars`.
+
+**Byte-identity.** With `sizedBuilds` absent, none of this runs: no spares are armed, no pick is
+pulled forward, `rollTurnaround` gets no `payoff`.
+
+**Failure direction.** A spare or the pulled pick can become ineligible after the roll (a mute, a
+lock): the payoff is then smaller than promised (logged `[radio-build] oversold`), never larger.
 
 ## 5. Interactions
 
@@ -633,6 +694,9 @@ same thing.
 
   All from the runtime's one stream (`c.rnd` on the web).
 - **Dig's draw** is one per pick, after the faves draw.
+- **The payoff (§4.7)** draws only through what it uses: arming spares draws their rows
+  (`pickRadioSlotIds`) and picks, at the phrase start, and only with sizedBuilds on; pulling radio's
+  pick forward draws its gesture as an early decision does.
 
 ## 8. Migration of today's hook
 
@@ -747,6 +811,9 @@ same thing.
 7. **The exit throw and an armed turnaround gap.** The throw must close before any fader drop on
    its row. `exiting` keeps the planner off that row, and a test checks
    `turnaroundSilencedRowIds(plan)` never includes it.
+8. **The payoff, decided a lap ahead.** Spares are warmed a phrase ahead (from the phrase start),
+   so the roll counts only warm rows. A row muted or locked between the roll and the wrap leaves
+   the payoff short: logged as oversold, the turnaround plays (it is already on the engine).
 
 ## 11. Testing
 
@@ -815,19 +882,20 @@ same thing.
      through it.
   8. Plain radio, no roles: one-row swaps never get the full sweep, and risers mostly come with
      bigger moments.
+  8a. Every turnaround is followed by a real change on its one: two rows or more, three or more
+     after a gap. With every row padlocked, phrase ends play nothing.
   9. The phone: hook, dig and bring back work, and the words fit at 320 px.
 
-## Flags for Elling
+## Decided (Elling, 2026-10-03, approving this spec)
 
-1. **A manual change on a hooked row clears the hook** (the hook is about that stem). The
-   alternative is that the new stem becomes the hook.
-2. **Dig follows the row,** re-anchoring when that row changes, so it wanders through the jam. The
-   alternative pins it to the stem tapped, and dig ends or goes stale once that stem leaves.
-3. **Sized builds are on for everyone,** roles or not. That changes how plain radio sounds: fewer
-   risers, and the big ones where a lot changes. The numbers to tune by ear: the 0.15 riser factor,
-   the x2 at large, and large always firing a turnaround.
-4. **The hook cap:** half the rows, with oldest-first release. Web visitors 👍 a lot, and every 👍
-   hooks.
+1. **A manual change on a hooked row clears the hook** (the hook is about that stem). Not chosen:
+   the new stem becomes the hook.
+2. **Dig follows the row,** re-anchoring when that row changes, so it wanders through the jam. Not
+   chosen: pinned to the stem tapped.
+3. **Sized builds are on for everyone,** roles or not (plain radio changes too): fewer risers, the
+   big ones where a lot changes, and every turnaround paid off (§4.7). Still to tune by ear: the
+   0.15 riser factor, the x2 at large, large always firing a turnaround, the payoff sizes.
+4. **The hook cap:** half the rows, oldest released first (one that is in before one that is away).
 5. **A bass hook leaves dry; drums leave with an echo.**
 
 ## Out of scope
