@@ -7,6 +7,7 @@ import {
 } from './discoverTraits'
 import type { DiscoverTraitKind } from './discoverSlotKind'
 import { radioClashBedScore, radioClashTraitScore, type RankClash } from './radioClash'
+import { DIG_WEIGHT, radioDigCloseness, type RankDig } from './radioDig'
 
 export interface RankedCandidate {
   candidate: DiscoverCandidate
@@ -83,7 +84,8 @@ export function rankCandidates(
     favouriteWeight,
     favouriteScale = 1,
     targetTraits = [],
-    clash
+    clash,
+    dig
   }: {
     targetBpm: number
     favouriteStemCIDs?: ReadonlySet<string>
@@ -101,6 +103,9 @@ export function rankCandidates(
      * turns toward its other end, and distance from the bed on those two traits scores. Absent
      * or amount 0: exactly the ranking without it. */
     clash?: RankClash
+    /** Radio's dig (@shared/radioDig): every candidate gains DIG_WEIGHT * its closeness to the
+     * dug stem (0 to 0.75). Absent: no term, exactly the ranking without it. */
+    dig?: RankDig
   }
 ): RankedCandidate[] {
   // Pool-relative values per kind, for candidates without a library
@@ -164,6 +169,7 @@ export function rankCandidates(
         score += radioClashTraitScore(kind, trait, clash?.amount ?? 0) * TRAIT_SCORE_WEIGHT
       }
       if (clash) score += radioClashBedScore(candidate.traitPercentiles ?? {}, clash)
+      if (dig) score += DIG_WEIGHT * radioDigCloseness(dig, candidate)
       return { candidate, score }
     })
     .sort((a, b) => b.score - a.score)
