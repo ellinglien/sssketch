@@ -97,13 +97,21 @@ import {
   radioTurnaroundGate,
   rememberTurnaround,
   rollTurnaround,
+  TURNAROUND_MOVE_LABEL,
+  TURNAROUND_MOVES,
   turnaroundArc,
+  turnaroundDraw,
   turnaroundFitsLoop,
+  turnaroundMoveCanSound,
   turnaroundToLoopBars,
+  turnaroundTurnBeats,
   turnaroundWashSend,
   type RadioTurnaroundGate,
+  type TurnaroundInput,
   type TurnaroundMemory,
-  type TurnaroundPlan
+  type TurnaroundMove,
+  type TurnaroundPlan,
+  type TurnaroundRow
 } from '@shared/radioTurnaround'
 import {
   buildBloomCurve,
@@ -567,6 +575,37 @@ const TURNAROUND_ROLL_LATE_BARS = 0.25
 interface TurnaroundRollOwed {
   loopBars: number
   landed: Map<string, number | null>
+  /** The wrap starts a phrase's last lap: the phrase end's own roll. False for a roll owed only
+   * because a turn was waiting (radioTurnPendingRef). */
+  phraseEnd: boolean
+}
+
+/** A turn's lead, in beats (turnaroundTurnBeats): the push carrying it must reach the engine
+ * before its move starts -- tens to a couple of hundred ms, measured (holdSyncUntilResolved), so
+ * a beat at any tempo radio plays, as TURNAROUND_ROLL_LATE_BARS is. */
+const TURN_LEAD_BEATS = TURNAROUND_ROLL_LATE_BARS * 4
+
+/** Discover's rows as the turnaround planner sees them (@shared/radioTurnaround TurnaroundRow):
+ * heard when previewing and resolved, and not the row a thinning arc is taking out (`exiting`). */
+function discoverTurnaroundRows(
+  slots: readonly DiscoverSlot[],
+  o: {
+    previewing: ReadonlySet<string>
+    lengths: ReadonlyMap<string, number>
+    loopBars: number
+    flags: RadioSlotFlags
+    exiting: string | null
+    filteringIn: (slotId: string) => boolean
+  }
+): TurnaroundRow[] {
+  return slots.map((s) => ({
+    id: s.id,
+    kinds: s.kinds,
+    hooked: o.flags[s.id] === 'hook',
+    audible: o.previewing.has(s.id) && o.lengths.has(s.id) && s.id !== o.exiting,
+    inFilterIn: o.filteringIn(s.id),
+    barLength: o.lengths.get(s.id) ?? o.loopBars
+  }))
 }
 
 export function DiscoverPanel({
@@ -2639,7 +2678,13 @@ export function DiscoverPanel({
   // every gesture in that list holds radio's early decision until it is spent, and with a phrase
   // grid the turnaround's lap is exactly the lap the next change is staged in. `armId` keys its
   // riser (buildTransitionRiser), as a gesture's does.
-  const radioTurnaroundRef = useRef<{ plan: TurnaroundPlan; armId: string } | null>(null)
+  // `turn`: armed by a turn (radioTurnPendingRef) rather than a phrase end, with the undo sequence
+  // it was pressed at (withdrawRadioTurn).
+  const radioTurnaroundRef = useRef<{
+    plan: TurnaroundPlan
+    armId: string
+    turn: { undoSeq: number } | null
+  } | null>(null)
   // What the last phrase end fired (rememberTurnaround): never two in a row, except diminution.
   const radioTurnaroundMemoryRef = useRef<TurnaroundMemory | null>(null)
   // True from the wrap that starts a phrase's last lap until its roll (a microtask later) has
@@ -2647,6 +2692,25 @@ export function DiscoverPanel({
   const radioTurnaroundRollPendingRef = useRef(false)
   // The phrase end's roll while it is owed (TurnaroundRollOwed); null when nothing is owed.
   const radioTurnaroundRollRef = useRef<TurnaroundRollOwed | null>(null)
+  // A TURN pressed and not rolled yet (docs/superpowers/specs/2026-10-02-radio-turn-button-
+  // design.md): a chip's `move`, absent for the planner's choice, and the undo sequence it was
+  // pressed at. The latest press wins. See radioTurnTick.
+  const radioTurnPendingRef = useRef<{ move?: TurnaroundMove; undoSeq: number } | null>(null)
+  // turnRadio, as THIS render has it, for the listeners registered once (`t`, the phone): set
+  // every render, for the reason remoteCommandRef is.
+  const turnRadioRef = useRef<(move?: TurnaroundMove) => void>(() => {})
+  // What the turn button shows: null at rest; otherwise a turn waits for the top (pressed, or
+  // armed and playing into it), and `move` is the chip it holds -- a chip's move, or the move
+  // rolled for the planner's choice (null until then).
+  const [radioTurnShown, setRadioTurnShown] = useState<{ move: TurnaroundMove | null } | null>(null)
+  // The turn button's flash (`nothing to turn`), for a couple of seconds.
+  const [radioTurnFlash, setRadioTurnFlash] = useState<string | null>(null)
+  // Which turns could sound now, refreshed by the clock effect (refreshRadioTurnCan): the
+  // planner's (`canTurn`) and each chip's (`moves`; the rest are dimmed). Null with radio off.
+  const [radioTurnCan, setRadioTurnCan] = useState<{
+    canTurn: boolean
+    moves: TurnaroundMove[]
+  } | null>(null)
   // The dub throws (native radio sound plan, Task 11): the web radio's own rule
   // (@shared/radioThrows stepThrows) on a clock of bars played, and the one throw armed
   // as a `dubSend` curve in the preview project, if any. See radioThrowTick. A REF, like
@@ -2993,18 +3057,26 @@ export function DiscoverPanel({
    * (see there). */
   function radioTurnaroundAtWrap(lapStarts: boolean, loopBars: number): void {
     const had = radioTurnaroundRef.current !== null
+    // A turn that played into this top is over: the button goes back to `turn` -- unless a later
+    // tap is already waiting, which the button is showing.
+    if (radioTurnaroundRef.current?.turn != null && radioTurnPendingRef.current === null) {
+      setRadioTurnShown(null)
+    }
     radioTurnaroundRef.current = null
     if (radioTurnaroundRollRef.current !== null) {
+      // given up: nothing fired at that phrase end (a roll owed only for a turn remembers nothing)
+      if (radioTurnaroundRollRef.current.phraseEnd) radioTurnaroundMemoryRef.current = null
       radioTurnaroundRollRef.current = null
-      radioTurnaroundMemoryRef.current = null
     }
     radioTurnaroundRollPendingRef.current = false
-    if (!lapStarts) {
+    // A turn waiting is rolled here too, in the same deferred slot as a phrase end's roll -- after
+    // this wrap's landings -- and in its place (rollRadioTurnaround).
+    if (!lapStarts && radioTurnPendingRef.current === null) {
       if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
       return
     }
     radioTurnaroundRollPendingRef.current = true
-    radioTurnaroundRollRef.current = { loopBars, landed: new Map() }
+    radioTurnaroundRollRef.current = { loopBars, landed: new Map(), phraseEnd: lapStarts }
     void Promise.resolve().then(() =>
       Promise.resolve().then(() => {
         const armed = rollOwedRadioTurnaround()
@@ -3038,11 +3110,14 @@ export function DiscoverPanel({
     const loopBars = Math.min(owed.loopBars, turnaroundRollLengths(owed).loopBars)
     return at >= loopBars / 2 - TURNAROUND_ROLL_LATE_BARS
   }
-  /** Gives the owed roll up: nothing fires at this phrase end. */
+  /** Gives the owed roll up: nothing fires at this phrase end. A turn waiting stays waiting:
+   * radioTurnTick rolls it, clamped to what is left of the lap. */
   function giveUpTurnaroundRoll(): void {
+    if (radioTurnaroundRollRef.current?.phraseEnd !== false) {
+      radioTurnaroundMemoryRef.current = null
+    }
     radioTurnaroundRollRef.current = null
     radioTurnaroundRollPendingRef.current = false
-    radioTurnaroundMemoryRef.current = null
   }
   /** The owed roll, once every landed row's length is known. True when it armed a turnaround
    * (the caller pushes). False with nothing owed, while it waits for a stem, or when given up. */
@@ -3082,24 +3157,61 @@ export function DiscoverPanel({
       (g) => g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
     )
     if (leadArmed) {
-      radioTurnaroundMemoryRef.current = null
+      // a turn waiting keeps waiting: the lead-in has this top, the turn takes the next
+      if (owed.phraseEnd) radioTurnaroundMemoryRef.current = null
       return
     }
-    // The landings at this wrap have run: a joining row is in the previewing mix
-    // (joinPreviewingMix), and an arrival gesture landing with its row is on radioGestureRef --
-    // a filter in there is `inFilterIn`, so the planner never aims a lift or a dip at a row the
-    // lane builder would then skip.
-    const previewing = previewingSlotIdsRef.current
     const { lengths, loopBars } = turnaroundRollLengths(owed)
-    // The row a thinning arc is taking out (stepArcExit) is left out of the turnaround, as if
-    // unheard, but only when its exit fades in this lap: an 8-beat drop-out (ARC_EXIT_BEATS, at
-    // most half the loop) that goes silent before the wrap and removes the row in the silence,
-    // so a move ending on the wrap -- a wash above all -- would land on a row already gone. An
-    // exit held back (arcExitHeldBack: a stage out, a drop-out or lead-in armed) is not leaving
-    // at this wrap: the row plays on, so it stays in, and a stop or low drop silences it as any
-    // other. No `leavingRowId` either way: the planner's wash takes the non-drums bed. (The web
-    // radio's leaving row goes silent before the wrap too -- the same 8-beat exit hole -- and its
-    // roll leaves it out the same way.)
+    const input = turnaroundInputNow(lengths, loopBars)
+    const turn = radioTurnPendingRef.current
+    if (turn !== null) {
+      // A TURN takes this top: the phrase end's own roll stands down and remembers nothing, so a
+      // turn never starts or extends a diminution.
+      if (owed.phraseEnd) radioTurnaroundMemoryRef.current = null
+      armRadioTurn(
+        rollTurnaround({
+          ...input,
+          rate: radioSettings.turnarounds,
+          random: Math.random,
+          lastPhrase: null,
+          force: turn.move === undefined ? {} : { move: turn.move }
+        }),
+        turn.undoSeq
+      )
+      return
+    }
+    // A roll owed only for a turn that was withdrawn since (undo): nothing to roll.
+    if (!owed.phraseEnd) return
+    const plan = rollTurnaround({
+      ...input,
+      rate: radioSettings.turnarounds,
+      random: Math.random,
+      lastPhrase: radioTurnaroundMemoryRef.current
+    })
+    radioTurnaroundMemoryRef.current = rememberTurnaround(plan)
+    radioTurnaroundRef.current = plan === null ? null : { plan, armId: newArmId(), turn: null }
+  }
+  /** What a roll reads now, but the rate, the randomness and the memory: the rows at `lengths`
+   * (a landing's known length over the old one), on `loopBars`.
+   *
+   * The landings at this wrap have run: a joining row is in the previewing mix
+   * (joinPreviewingMix), and an arrival gesture landing with its row is on radioGestureRef -- a
+   * filter in there is `inFilterIn`, so the planner never aims a lift or a dip at a row the lane
+   * builder would then skip.
+   *
+   * The row a thinning arc is taking out (stepArcExit) is left out of the turnaround, as if
+   * unheard, but only when its exit fades in this lap: an 8-beat drop-out (ARC_EXIT_BEATS, at
+   * most half the loop) that goes silent before the wrap and removes the row in the silence, so a
+   * move ending on the wrap -- a wash above all -- would land on a row already gone. An exit held
+   * back (arcExitHeldBack: a stage out, a drop-out or lead-in armed) is not leaving at this wrap:
+   * the row plays on, so it stays in, and a stop or low drop silences it as any other. No
+   * `leavingRowId` either way: the planner's wash takes the non-drums bed. (The web radio's
+   * leaving row goes silent before the wrap too -- the same 8-beat exit hole -- and its roll
+   * leaves it out the same way.) */
+  function turnaroundInputNow(
+    lengths: ReadonlyMap<string, number>,
+    loopBars: number
+  ): Omit<TurnaroundInput, 'rate' | 'random' | 'lastPhrase'> {
     const exit = arcExitRef.current
     const exiting =
       exit !== null &&
@@ -3107,21 +3219,17 @@ export function DiscoverPanel({
         (exit.phase === 'waiting' && !arcExitHeldBack()))
         ? exit.slotId
         : null
-    const plan = rollTurnaround({
-      rate: radioSettings.turnarounds,
-      random: Math.random,
+    return {
       loopBars,
-      lastPhrase: radioTurnaroundMemoryRef.current,
-      rows: slotsRef.current.map((s) => ({
-        id: s.id,
-        kinds: s.kinds,
-        hooked: radioSlotFlagsRef.current[s.id] === 'hook',
-        audible: previewing.has(s.id) && lengths.has(s.id) && s.id !== exiting,
-        inFilterIn: radioGestureRef.current.some(
-          (g) => g.slotId === s.id && g.kind === 'filter in'
-        ),
-        barLength: lengths.get(s.id) ?? loopBars
-      })),
+      rows: discoverTurnaroundRows(slotsRef.current, {
+        previewing: previewingSlotIdsRef.current,
+        lengths,
+        loopBars,
+        flags: radioSlotFlagsRef.current,
+        exiting,
+        filteringIn: (slotId) =>
+          radioGestureRef.current.some((g) => g.slotId === slotId && g.kind === 'filter in')
+      }),
       arc:
         radioDensityOf(radioSettings) === 'arc'
           ? turnaroundArc(densityLegRef.current, slotsRef.current.length)
@@ -3129,9 +3237,139 @@ export function DiscoverPanel({
       leavingRowId: null,
       moves: radioSettings.turnaroundMoves,
       depth: radioSettings.turnaroundDepth
+    }
+  }
+  /** The loop as it plays now: every resolved row's length, and the longest. */
+  function turnaroundLoopNow(): { lengths: Map<string, number>; loopBars: number } {
+    const lengths = new Map(resolvedBarLengthsRef.current)
+    return { lengths, loopBars: lengths.size > 0 ? Math.max(...lengths.values()) : 0 }
+  }
+  /** A turn's roll, armed: it has the lap, as a phrase end's does (radioTurnaroundGate, the
+   * throws). Null is nothing to turn: the button says so. No push here -- the caller's. */
+  function armRadioTurn(plan: TurnaroundPlan | null, undoSeq: number): void {
+    radioTurnPendingRef.current = null
+    if (plan === null) {
+      setRadioTurnShown(null)
+      flashRadioTurn('nothing to turn')
+      return
+    }
+    radioTurnaroundRef.current = { plan, armId: newArmId(), turn: { undoSeq } }
+    setRadioTurnShown({ move: plan.move })
+  }
+  /** The turn button's flash, for two seconds. */
+  function flashRadioTurn(text: string): void {
+    setRadioTurnFlash(text)
+    window.setTimeout(() => setRadioTurnFlash((f) => (f === text ? null : f)), 2000)
+  }
+  /** Every tick but a wrap: a turn waiting rolls as soon as the coming top can take it, its move
+   * clamped to the time left (turnaroundTurnBeats, less TURN_LEAD_BEATS). It waits -- for a later
+   * tick, or the next wrap's roll (radioTurnaroundAtWrap) -- while:
+   * - the wrap's own roll is still owed (radioTurnaroundRollRef): that roll takes the turn;
+   * - a change's lead-in (a hole, a riser) has this top: it keeps it;
+   * - a move already armed into this top has started, or starts within the lead: it is not cut;
+   * - under 1 beat plus the lead is left;
+   * - a stage is out that cannot be re-staged in time (a mid-lap cut at a bar, or under
+   *   MANUAL_RESTAGE_MIN_BARS to the wrap). Otherwise the stage is withdrawn and re-staged on a
+   *   later tick, after the push carrying the turn (an ordinary push withdraws a stage anyway).
+   * A turnaround armed for this lap -- a phrase end's, or an earlier turn's -- is replaced: the
+   * latest decision wins. Replacing a phrase end's means nothing fired there, so the memory goes.
+   * No pushUndoSnapshot: a turn is performance, not an edit (withdrawRadioTurn). */
+  function radioTurnTick(pos: number, loopBars: number): void {
+    const turn = radioTurnPendingRef.current
+    if (turn === null || radioTurnaroundRollRef.current !== null || !(loopBars > 0)) return
+    if (
+      radioGestureRef.current.some((g) => g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind))
+    ) {
+      return
+    }
+    const toTopBeats = (loopBars - pos) * 4
+    const armed = radioTurnaroundRef.current
+    if (armed !== null && toTopBeats - armed.plan.beats < TURN_LEAD_BEATS) return
+    const maxBeats = turnaroundTurnBeats(toTopBeats, TURN_LEAD_BEATS)
+    if (maxBeats === null) return
+    if (radioStageRef.current !== null) {
+      if (
+        radioLedChangeRef.current?.atBars !== undefined ||
+        loopBars - pos < MANUAL_RESTAGE_MIN_BARS
+      ) {
+        return
+      }
+      cancelStagedSwap('turn')
+    }
+    const { lengths } = turnaroundLoopNow()
+    const plan = rollTurnaround({
+      ...turnaroundInputNow(lengths, loopBars),
+      rate: radioSettings.turnarounds,
+      random: Math.random,
+      lastPhrase: null,
+      force: turn.move === undefined ? { maxBeats } : { move: turn.move, maxBeats }
     })
-    radioTurnaroundMemoryRef.current = rememberTurnaround(plan)
-    radioTurnaroundRef.current = plan === null ? null : { plan, armId: newArmId() }
+    if (plan !== null && armed !== null && armed.turn === null) {
+      radioTurnaroundMemoryRef.current = null
+    }
+    armRadioTurn(plan, turn.undoSeq)
+    if (plan !== null) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
+  /** Which turns could sound now (radioTurnCan), from the clock effect: kept when unchanged, so
+   * a tick re-renders nothing. */
+  function refreshRadioTurnCan(): void {
+    const { lengths, loopBars } = turnaroundLoopNow()
+    const input = turnaroundInputNow(lengths, loopBars)
+    const next = {
+      canTurn: turnaroundDraw(input).length > 0,
+      moves: TURNAROUND_MOVES.filter((m) => turnaroundMoveCanSound(input, m))
+    }
+    setRadioTurnCan((prev) =>
+      prev !== null && prev.canTurn === next.canTurn && prev.moves.join() === next.moves.join()
+        ? prev
+        : next
+    )
+  }
+  /** A TURN pressed: the desktop's `turn` and chips, `t`, and the phone (remoteCommandRef). A
+   * press that cannot sound now -- the chip's guards, or nothing the planner could draw -- says
+   * `nothing to turn` and waits for nothing. Otherwise it waits for the top (radioTurnTick, or
+   * the next wrap's roll); a later press replaces it. Turnarounds `off` stops only the phrase
+   * ends: a turn still works. */
+  function turnRadio(move?: TurnaroundMove): void {
+    if (!radioOnRef.current) return
+    const { lengths, loopBars } = turnaroundLoopNow()
+    const input = turnaroundInputNow(lengths, loopBars)
+    const can =
+      move !== undefined ? turnaroundMoveCanSound(input, move) : turnaroundDraw(input).length > 0
+    if (!can) {
+      flashRadioTurn('nothing to turn')
+      return
+    }
+    const undoSeq = undoSequence.latest()
+    radioTurnPendingRef.current = move === undefined ? { undoSeq } : { move, undoSeq }
+    setRadioTurnShown({ move: move ?? null })
+  }
+  /** Undo's first stop: a turn pressed after the latest undo point is taken back on its own, as
+   * the newest thing done (a turn pushes no snapshot -- it is not slot state). A turn waiting is
+   * dropped; one armed is taken off only while its move has not begun, by TURN_LEAD_BEATS. True
+   * when it took one back. A turn pressed BEFORE the latest undo point waits: that snapshot's
+   * edit is undone first, then the turn on the next undo. */
+  function withdrawRadioTurn(): boolean {
+    const pending = radioTurnPendingRef.current
+    const armed = radioTurnaroundRef.current?.turn != null ? radioTurnaroundRef.current : null
+    const undoSeq = pending?.undoSeq ?? armed?.turn?.undoSeq
+    if (undoSeq === undefined) return false
+    const top = undoStack[undoStack.length - 1]
+    const topSeq = top === undefined ? undefined : undoSequence.seqOf(top)
+    if (topSeq !== undefined && undoSeq < topSeq) return false
+    if (pending !== null) {
+      radioTurnPendingRef.current = null
+      setRadioTurnShown(armed === null ? null : { move: armed.plan.move })
+      return true
+    }
+    if (armed === null) return false
+    const { loopBars } = turnaroundLoopNow()
+    const at = radioClockRef.current?.lastPos ?? 0
+    if ((loopBars - at) * 4 - armed.plan.beats < TURN_LEAD_BEATS) return false
+    radioTurnaroundRef.current = null
+    setRadioTurnShown(null)
+    scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+    return true
   }
   /** radioTurnaroundGate for a decision made now. */
   function turnaroundGateNow(): RadioTurnaroundGate {
@@ -3146,6 +3384,10 @@ export function DiscoverPanel({
     radioTurnaroundMemoryRef.current = null
     radioTurnaroundRollPendingRef.current = false
     radioTurnaroundRollRef.current = null
+    // a turn waiting goes too (radio off, a course change)
+    radioTurnPendingRef.current = null
+    setRadioTurnShown(null)
+    if (!radioOnRef.current) setRadioTurnCan(null)
     if (radioTurnaroundRef.current === null) return
     radioTurnaroundRef.current = null
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
@@ -3828,7 +4070,13 @@ export function DiscoverPanel({
     // landing this tick commits (radioTurnaroundAtWrap). Between wraps, a roll still waiting on a
     // stem is given up once its move could no longer reach the engine in time.
     if (step.wrapped) radioTurnaroundAtWrap(step.turnaroundLapStarts, loopBars)
-    else radioTurnaroundOverdue()
+    else {
+      radioTurnaroundOverdue()
+      // A turn waiting rolls as soon as this lap's top can take it (radioTurnTick).
+      radioTurnTick(pos, loopBars)
+    }
+    // What the turn button and its chips can do now.
+    refreshRadioTurnCan()
     // So do the dub throws (Task 11).
     radioThrowTick(pos, loopBars)
     // A change that was WAITING for its boundary LANDS HERE and only
@@ -4692,6 +4940,9 @@ export function DiscoverPanel({
   }
 
   function undoDiscoverAction(): void {
+    // A turn waiting for the loop top, pressed since the latest undo point, is the newest thing
+    // done: it alone is taken back (withdrawRadioTurn).
+    if (withdrawRadioTurn()) return
     if (undoStack.length === 0) return
     const snapshot = undoStack[undoStack.length - 1]
     // Every change still waiting that was queued at or after this point
@@ -4945,6 +5196,7 @@ export function DiscoverPanel({
       radioTurnaroundMemoryRef.current = null
       radioTurnaroundRollPendingRef.current = false
       radioTurnaroundRollRef.current = null
+      radioTurnPendingRef.current = null
       radioThrowRef.current = initialDiscoverThrowState()
       radioThrowClearOwedRef.current = false
       setRadioLedChange(null)
@@ -5107,6 +5359,27 @@ export function DiscoverPanel({
   }
 
   const hasPendingAdd = pendingAddKinds.length > 0
+
+  // `t` turns (the turn button), while radio runs. Nothing else claims a plain `t`: App's
+  // shortcuts are Delete/Backspace, Escape, Space, Tab, Cmd/Ctrl-Z, Ctrl-Y, Cmd-0, Cmd-S, `\`
+  // and `/`; no component binds a letter. Not in a text field, not with a modifier (Cmd-T and
+  // friends belong to the system), and not a held key's repeats. In a ref, refreshed every
+  // render (turnRadioRef), for the reason remoteCommandRef is.
+  useEffect(() => {
+    turnRadioRef.current = turnRadio
+  })
+  useEffect(() => {
+    if (!radioOn) return
+    function handleKeyDown(e: KeyboardEvent): void {
+      if (e.key !== 't' || e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
+      const target = e.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      e.preventDefault()
+      turnRadioRef.current()
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [radioOn])
   useEffect(() => {
     if (!hasPendingAdd) return
     function handleKeyDown(e: KeyboardEvent): void {
@@ -7612,7 +7885,7 @@ export function DiscoverPanel({
             time or, worse, race/compete with the real one. */}
         <button
           onClick={undoDiscoverAction}
-          disabled={undoStack.length === 0}
+          disabled={undoStack.length === 0 && radioTurnShown === null}
           data-tooltip="undo"
           aria-label="undo"
           style={{
@@ -7624,8 +7897,11 @@ export function DiscoverPanel({
             padding: 0,
             background: 'transparent',
             border: '1px solid var(--ra-border)',
-            color: undoStack.length === 0 ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
-            cursor: undoStack.length === 0 ? 'default' : 'pointer'
+            color:
+              undoStack.length === 0 && radioTurnShown === null
+                ? 'var(--ra-text-4)'
+                : 'var(--ra-text-2)',
+            cursor: undoStack.length === 0 && radioTurnShown === null ? 'default' : 'pointer'
           }}
         >
           <UndoIcon />
@@ -7849,6 +8125,60 @@ export function DiscoverPanel({
           >
             v
           </button>
+        )}
+        {/* Radio's turn (docs/superpowers/specs/2026-10-02-radio-turn-button-design.md): a
+            turnaround at the next loop top. `turn` lets the planner choose; a chip plays its
+            move, whatever the menu's moves say. While one waits the button reads `turning` and
+            its move's chip is held; a chip that cannot sound now is dimmed. Monochrome: chrome. */}
+        {radioOn && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <button
+              onClick={() => turnRadio()}
+              data-tooltip="turn at the top"
+              aria-label="turn at the top"
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 10,
+                padding: '3px 10px',
+                background: radioTurnShown !== null ? 'var(--ra-text)' : 'transparent',
+                border: '1px solid var(--ra-border-strong)',
+                color: radioTurnShown !== null ? 'var(--ra-bg-page)' : 'var(--ra-text)',
+                cursor: 'pointer'
+              }}
+            >
+              {radioTurnFlash ?? (radioTurnShown !== null ? 'turning' : 'turn')}
+            </button>
+            <div style={{ display: 'flex', gap: 2 }}>
+              {TURNAROUND_MOVES.map((move) => {
+                const held = radioTurnShown !== null && radioTurnShown.move === move
+                const notNow = radioTurnCan !== null && !radioTurnCan.moves.includes(move)
+                return (
+                  <button
+                    key={move}
+                    onClick={() => turnRadio(move)}
+                    data-tooltip={notNow ? 'not now' : `turn: ${TURNAROUND_MOVE_LABEL[move]}`}
+                    aria-label={`turn: ${TURNAROUND_MOVE_LABEL[move]}`}
+                    aria-pressed={held}
+                    style={{
+                      fontFamily: 'inherit',
+                      fontSize: 8,
+                      padding: '1px 4px',
+                      background: held ? 'var(--ra-text)' : 'transparent',
+                      border: '1px solid var(--ra-border)',
+                      color: held
+                        ? 'var(--ra-bg-page)'
+                        : notNow
+                          ? 'var(--ra-text-4)'
+                          : 'var(--ra-text-3)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {TURNAROUND_MOVE_LABEL[move]}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
         )}
         {radioMenu && (
           <DiscoverRadioMenu
