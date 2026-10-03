@@ -4,6 +4,7 @@ import {
   THROW_MAX_BARS,
   THROW_RECALL_BARS,
   discoverThrowSends,
+  discoverThrowSilenced,
   initialDiscoverThrowState,
   playheadStep,
   stepDiscoverThrows,
@@ -462,5 +463,31 @@ describe('stepDiscoverThrows aimed at a turnaround (changeInBars)', () => {
     const aimed = armed.filter(({ t }) => t.aimed)
     expect(aimed.length).toBeGreaterThan(0)
     for (const { t } of aimed) expect(t.slotId).toBe('pad')
+  })
+})
+
+describe('discoverThrowSilenced', () => {
+  it("a turnaround's dropped rows and every drop-out's or hole's row (an arc exit can share the lap)", () => {
+    const plan = {
+      rows: [
+        {
+          rowId: 'drums',
+          volume: [
+            { beats: 4, value: 1 },
+            { beats: 3.9, value: 0 },
+            { beats: 0, value: 1 }
+          ]
+        },
+        { rowId: 'lead' }
+      ]
+    }
+    const gestures = [
+      { kind: 'drop-out', slotId: 'pad' },
+      { kind: 'hole', slotId: 'keys' },
+      { kind: 'riser', slotId: 'lead' },
+      { kind: 'filter in', slotId: 'bass' }
+    ]
+    expect(discoverThrowSilenced(plan, gestures).sort()).toEqual(['drums', 'keys', 'pad'])
+    expect(discoverThrowSilenced(null, [])).toEqual([])
   })
 })

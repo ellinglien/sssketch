@@ -111,11 +111,12 @@ const EPS = 1e-9
  *
  * AIMED (Elling, 2026-10-03: a throw belongs right before a transition). With a transition in
  * `changeAt`, a throw due within THROW_PREFER_SHARE of the shortest spacing (either way, and no
- * sooner than that long after the last throw) waits for it to come within
+ * sooner than that long after the last throw), the change coming before the throw would be
+ * twice that overdue, waits for it to come within
  * THROW_AIM_REACH_BEATS, then starts `beats` before it: `at = changeAt - beats * 60 / bpm`, so it
  * ENDS on the downbeat. A two-beat throw that no longer fits becomes a one-beat one; with no beat
- * left at all it is not aimed. Aimed, it is never on a `silenced` row, and an armed lead-in does
- * not stop it (it is what the lead-in leads to).
+ * left at all it is not aimed. An armed lead-in does not stop an aimed throw (it is what the
+ * lead-in leads to). No throw, aimed or not, is ever on a `silenced` row.
  *
  * UNAIMED. A throw with no transition in reach waits up to that same share for one, then goes on
  * the next beat as it always has: skipped while held, over an armed lead-in, or with nothing to
@@ -160,22 +161,26 @@ export function stepThrows(
     tick.changeAt > tick.nextBeat + EPS
       ? tick.changeAt
       : null
-  const audible = tick.rows.filter((r) => r.audible && !r.kinds.some((k) => NEVER.includes(k)))
+  const silenced = tick.silenced ?? []
+  // never on a row the build-up silences, aimed or not
+  const audible = tick.rows.filter(
+    (r) => r.audible && !r.kinds.some((k) => NEVER.includes(k)) && !silenced.includes(r.slot)
+  )
   if (
     changeAt !== null &&
     barsUntil <= prefer &&
     barsUntil > -2 * prefer &&
-    (barsSince === null || barsSince >= prefer - EPS)
+    (barsSince === null || barsSince >= prefer - EPS) &&
+    // only a change that comes before the wait would run out (a far one on a long loop is not
+    // waited for: the throw goes as an unaimed one)
+    (changeAt - tick.nextBeat) / barSec <= barsUntil + 2 * prefer + EPS
   ) {
     // a transition in sight: wait until it is within reach, then aim
     if (changeAt - tick.nextBeat > THROW_AIM_REACH_BEATS * beatSec + EPS)
       return { state: next, plan: null }
     redraw()
-    const silenced = tick.silenced ?? []
-    const eligible = audible.filter((r) => !silenced.includes(r.slot))
-    if (eligible.length === 0) return { state: next, plan: null }
-    const slot =
-      eligible[Math.min(eligible.length - 1, Math.floor(random() * eligible.length))].slot
+    if (audible.length === 0) return { state: next, plan: null }
+    const slot = audible[Math.min(audible.length - 1, Math.floor(random() * audible.length))].slot
     let beats = drawThrowBeats(random)
     const { timing, feedback } = drawThrowEcho(random)
     // the longer throw no longer fits before the change: the shorter one

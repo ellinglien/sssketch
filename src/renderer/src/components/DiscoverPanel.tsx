@@ -252,9 +252,9 @@ import {
 import { discoverStemPans } from '@shared/radioPan'
 import { discoverStemPumpRoles } from '@shared/radioPump'
 import { normalizeSoundSettings, throwEveryBars } from '@shared/radioSound'
-import { turnaroundSilencedRowIds } from '@shared/radioThrows'
 import {
   discoverThrowSends,
+  discoverThrowSilenced,
   initialDiscoverThrowState,
   stepDiscoverThrows,
   throwOutlivesLanding,
@@ -3978,10 +3978,10 @@ export function DiscoverPanel({
             (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
           ),
         // ...and a throw near it is AIMED at its wrap (it ends on the one), never on a row it
-        // drops. The turnaround is the one transition a throw can aim at here: a decided change
+        // drops, nor on a drop-out's or hole's row sharing the lap (an arc exit). The turnaround is the one transition a throw can aim at here: a decided change
         // is staged, and arming a throw pushes, which would withdraw the stage (canArm above).
         changeInBars: radioTurnaroundRef.current !== null ? loopBars - pos : null,
-        silenced: turnaroundSilencedRowIds(radioTurnaroundRef.current?.plan),
+        silenced: discoverThrowSilenced(radioTurnaroundRef.current?.plan, radioGestureRef.current),
         rows: slotsRef.current.map((s) => ({
           slot: s.id,
           kinds: s.kinds,

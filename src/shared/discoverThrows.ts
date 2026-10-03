@@ -21,6 +21,7 @@
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import {
   THROW_BEATS,
+  turnaroundSilencedRowIds,
   initialThrowState,
   stepThrows,
   throwCurveFor,
@@ -310,4 +311,19 @@ export function throwYieldsToLeadIn(state: DiscoverThrowState): boolean {
     state.armed.aimed !== true &&
     state.armed.startBars - state.elapsedBars >= THROW_RECALL_BARS
   )
+}
+
+/**
+ * The rows a throw is never put on (stepThrows' silenced): those an armed turnaround drops before
+ * its one, and the row of every drop-out or hole armed this lap -- an arc exit's drop-out can
+ * share the lap with a turnaround, and an aimed throw goes over a lead-in, so its row has to be
+ * named here too. The send is post-fader: a throw on a silenced row is heard as nothing.
+ */
+export function discoverThrowSilenced(
+  turnaround: Parameters<typeof turnaroundSilencedRowIds>[0],
+  gestures: readonly { kind: string; slotId: string }[]
+): string[] {
+  const rows = new Set(turnaroundSilencedRowIds(turnaround))
+  for (const g of gestures) if (g.kind === 'drop-out' || g.kind === 'hole') rows.add(g.slotId)
+  return [...rows]
 }

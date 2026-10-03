@@ -283,6 +283,12 @@ describe('stepThrows aimed at a transition (changeAt)', () => {
     expect(sim(1, 120, { silenced: ['r2', 'r3'] }).plans).toEqual([])
   })
 
+  it('nor an unaimed one (no transition in reach): a row on its way out is silenced all the same', () => {
+    const r = sim(1, 120, { silenced: ['r2'], changes: false })
+    expect(r.plans.length).toBeGreaterThan(0)
+    for (const p of r.plans) expect(p.slot).toBe('r3')
+  })
+
   // one tick from a hand-made state, at 120 bpm (0.5 s a beat, 2 s a bar)
   const one = (
     barsUntil: number,
@@ -318,6 +324,15 @@ describe('stepThrows aimed at a transition (changeAt)', () => {
     expect(one(W - 0.01, { changeAt: 12.5 }, W - 0.5)).toBeNull()
     expect(one(W - 0.01, { changeAt: 12.5 }, W)).not.toBeNull()
     expect(one(W + 0.01, { changeAt: 12.5 }, 100)).toBeNull()
+  })
+
+  it('a change too far to reach before the wait runs out is not waited for (a long loop): unaimed once due', () => {
+    // overdue by just over 8 bars: a change 10 bars on would need waiting past 16
+    expect(one(-W - 0.01, { changeAt: 10.5 + 10 * 2 })?.at).toBe(10.5)
+    // one that can still be reached in time is waited for
+    expect(one(-W - 0.01, { changeAt: 10.5 + 7 * 2 })).toBeNull()
+    // due now, a change 20 bars on: no aim, just the usual wait
+    expect(one(0, { changeAt: 10.5 + 20 * 2 })).toBeNull()
   })
 
   it('with no change at all, a due throw waits that long for one, then goes on the next beat (gaps still 16-32)', () => {
