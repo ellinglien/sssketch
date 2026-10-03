@@ -73,6 +73,9 @@ export interface RadioReadoutInput {
     adding?: boolean
     /** A course change: every row it turns over (`rowId` among them). */
     course?: readonly string[]
+    /** The pace slider's extra rows riding radio's change (its companions), cuts landing with
+     * it: `next: row 2 +2 → bloom`, and each of them reads `next · cut`. */
+    with?: readonly string[]
   } | null
   /** The turnaround armed for the phrase's end, or a turn waiting; `move` null while a turn
    * waits for its roll. */
@@ -221,7 +224,9 @@ function nextPart(input: RadioReadoutInput): string | null {
   if (n === null) return null
   if (n.barsAway === null || !Number.isFinite(n.barsAway)) return 'next: soon'
   const i = input.rows.findIndex((r) => r.rowId === n.rowId)
-  const who = n.course ? 'course change' : i >= 0 && !n.adding ? `row ${i + 1}` : 'a new row'
+  const extra = !n.course && n.with && n.with.length > 0 ? ` +${n.with.length}` : ''
+  const who =
+    (n.course ? 'course change' : i >= 0 && !n.adding ? `row ${i + 1}` : 'a new row') + extra
   const how = n.course ? '' : n.leaving ? ' leaves' : n.kind !== null ? ` → ${n.kind}` : ''
   const bars = Math.max(1, Math.ceil(n.barsAway - 1e-6))
   return `next: ${who}${how} · ${plural(bars, 'bar')}`
@@ -244,10 +249,13 @@ export function radioReadout(input: RadioReadoutInput): RadioReadout {
     statusLine,
     ruler: { ticks, filled, end: rulerEnd(input.armedTurnaround) },
     rows: input.rows.map((r) => {
+      const companion =
+        next !== null && next.rowId !== r.rowId && (next.with?.includes(r.rowId) ?? false)
       const isNext =
-        next !== null && (next.rowId === r.rowId || (next.course?.includes(r.rowId) ?? false))
-      const leaving = isNext && !!next.leaving
-      const nextKind = isNext && !leaving ? next.kind : null
+        next !== null &&
+        (next.rowId === r.rowId || (next.course?.includes(r.rowId) ?? false) || companion)
+      const leaving = isNext && !companion && !!next.leaving
+      const nextKind = companion ? 'cut' : isNext && !leaving ? next.kind : null
       return {
         rowId: r.rowId,
         label: radioRowLabel(r),

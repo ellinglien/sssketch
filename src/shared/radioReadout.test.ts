@@ -302,3 +302,23 @@ describe('the gesture flash', () => {
     expect(radioFlashOpacity(Number.NaN)).toBe(0)
   })
 })
+
+describe("the pace slider: companions riding radio's change", () => {
+  const rows = ['a', 'b', 'c', 'd'].map((rowId) => ({ rowId, kinds: ['drums' as const], laps: 1 }))
+  const mk = (nextChange: RadioReadoutInput['nextChange']): ReturnType<typeof radioReadout> =>
+    radioReadout(input({ rows, nextChange }))
+  it('the status line counts them; each reads next · cut', () => {
+    const r = mk({ rowId: 'b', kind: 'bloom', barsAway: 1, with: ['c', 'd'] })
+    expect(r.statusLine).toBe('next: row 2 +2 → bloom · 1 bar')
+    expect(r.rows.map((x) => x.nextLabel)).toEqual([
+      null,
+      'next · bloom',
+      'next · cut',
+      'next · cut'
+    ])
+  })
+  it('none, or an empty list, reads as before', () => {
+    const r = mk({ rowId: 'b', kind: null, barsAway: 3, with: [] })
+    expect(r.statusLine).toBe('next: row 2 · 3 bars')
+  })
+})

@@ -192,3 +192,26 @@ describe('radioNextLanding: the density arc', () => {
     expect(r.rows[1].nextLabel).toBe('next · bloom')
   })
 })
+
+describe('radioNextLanding: the pace slider companions', () => {
+  it("carries radio's companions on its next, held or armed", () => {
+    const base = { pos: 1, loopBars: 4, course: null, manual: [], arc: null }
+    expect(
+      radioNextLanding({
+        ...base,
+        led: { rowId: 'a', kind: 'cut', atBars: 2, with: ['b'] },
+        pending: null
+      })
+    ).toEqual({ rowId: 'a', kind: 'cut', barsAway: 1, with: ['b'] })
+    expect(
+      radioNextLanding({
+        ...base,
+        led: null,
+        pending: { rowId: 'a', barsUntil: 3, with: ['b', 'c'] }
+      })
+    ).toEqual({ rowId: 'a', kind: null, barsAway: 3, with: ['b', 'c'] })
+    expect(
+      radioNextLanding({ ...base, led: null, pending: { rowId: 'a', barsUntil: 3, with: [] } })
+    ).toEqual({ rowId: 'a', kind: null, barsAway: 3 })
+  })
+})

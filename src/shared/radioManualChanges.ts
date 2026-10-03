@@ -92,9 +92,17 @@ function carriesAsArrival(kind: RadioTransitionKind): boolean {
  *
  * A manual change on the row radio was about to turn over wins: the user
  * pointed at that row, radio only drew it. Generic over the stem type so
- * this stays free of the renderer's own stem shape. */
+ * this stays free of the renderer's own stem shape.
+ *
+ * `companions` (the pace slider's rows per change) ride radio's change as cuts in the same
+ * stage, so they land or are taken back with it. A manual change on a companion's row wins it. */
 export function mergeStageChanges<S>(
-  radioLed: { slotId: string; stem: S; arrival: ManualArrival | null } | null,
+  radioLed: {
+    slotId: string
+    stem: S
+    arrival: ManualArrival | null
+    companions?: readonly { slotId: string; stem: S }[]
+  } | null,
   manual: ReadonlyMap<string, { stem: S; joining: boolean; arrival: ManualArrival | null }>
 ): {
   changes: { slotId: string; stem: S }[]
@@ -108,6 +116,12 @@ export function mergeStageChanges<S>(
     changes.push({ slotId: radioLed.slotId, stem: radioLed.stem })
     if (radioLed.arrival !== null && carriesAsArrival(radioLed.arrival.kind)) {
       arrivals.push({ slotId: radioLed.slotId, ...radioLed.arrival })
+    }
+  }
+  if (radioLed !== null) {
+    for (const k of radioLed.companions ?? []) {
+      if (k.slotId === radioLed.slotId || manual.has(k.slotId)) continue
+      changes.push({ slotId: k.slotId, stem: k.stem })
     }
   }
   for (const [slotId, change] of manual) {

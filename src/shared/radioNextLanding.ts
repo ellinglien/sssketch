@@ -21,9 +21,15 @@ export interface RadioNextLandingInput {
   course: readonly string[] | null
   /** Radio's held change: how it arrives, and the bar of this lap it lands on (undefined: the
    * top). */
-  led: { rowId: string; kind: RadioTransitionKind; atBars?: number } | null
+  led: {
+    rowId: string
+    kind: RadioTransitionKind
+    atBars?: number
+    /** The pace slider's companions riding it (radioReadout's `with`). */
+    with?: readonly string[]
+  } | null
   /** Radio's armed pick and the bars until it comes due (radioBarsUntilChange), null unknown. */
-  pending: { rowId: string; barsUntil: number | null } | null
+  pending: { rowId: string; barsUntil: number | null; with?: readonly string[] } | null
   /** Changes queued for the next top, the arc's joining row among them: how each arrives, and
    * whether its stem is warm (a cold one waits for a later top, bar unknown). */
   manual: readonly { rowId: string; kind: RadioTransitionKind | null; ready: boolean }[]
@@ -127,14 +133,16 @@ export function radioNextLanding(input: RadioNextLandingInput): Next | null {
     candidates.push({
       rowId: input.led.rowId,
       kind: input.led.kind,
-      barsAway: Math.max(0, at - pos)
+      barsAway: Math.max(0, at - pos),
+      ...(input.led.with && input.led.with.length > 0 && { with: input.led.with })
     })
   } else if (input.pending !== null) {
     const b = input.pending.barsUntil
     candidates.push({
       rowId: input.pending.rowId,
       kind: null,
-      barsAway: b !== null && Number.isFinite(b) ? Math.max(0, b) : null
+      barsAway: b !== null && Number.isFinite(b) ? Math.max(0, b) : null,
+      ...(input.pending.with && input.pending.with.length > 0 && { with: input.pending.with })
     })
   }
 

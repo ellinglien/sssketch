@@ -315,3 +315,35 @@ describe('radioGestureBeats', () => {
     expect(radioGestureBeats('cut', () => 2)).toBe(4)
   })
 })
+
+describe('mergeStageChanges: the pace slider companions', () => {
+  it("ride radio's change as cuts; a manual change on a companion row wins it", () => {
+    const led = {
+      slotId: 'a',
+      stem: 'A',
+      arrival: { kind: 'bloom' as RadioTransitionKind, beats: 4 },
+      companions: [
+        { slotId: 'b', stem: 'B' },
+        { slotId: 'c', stem: 'C' }
+      ]
+    }
+    const manual = new Map([['c', { stem: 'C2', joining: false, arrival: null }]])
+    expect(mergeStageChanges(led, manual)).toEqual({
+      changes: [
+        { slotId: 'a', stem: 'A' },
+        { slotId: 'b', stem: 'B' },
+        { slotId: 'c', stem: 'C2' }
+      ],
+      joining: [],
+      arrivals: [{ slotId: 'a', kind: 'bloom', beats: 4 }]
+    })
+  })
+
+  it('none, or no radio change, is as before', () => {
+    expect(mergeStageChanges(null, new Map()).changes).toEqual([])
+    expect(
+      mergeStageChanges({ slotId: 'a', stem: 'A', arrival: null, companions: [] }, new Map())
+        .changes
+    ).toEqual([{ slotId: 'a', stem: 'A' }])
+  })
+})
