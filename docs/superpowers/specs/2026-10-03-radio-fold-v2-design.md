@@ -96,6 +96,14 @@ a per-row readout plus a status line, renamed controls with tooltips, and seeds 
   - `new` still draws a random six-character seed.
   - An empty box keeps the current seed.
 
+- **Web start-screen switch (Elling, 2026-10-03).** The `fold` switch beside the centred play takes
+  the same form and styling as the existing **`visuals` switch** on the intro (`.intro-visuals`, its
+  `sw-name` / `sw-value` with `data-state`): a name plus an on/off value, with the same dimming and
+  hover. It replaces the plain underlined word.
+- **Full mode, fold off.** The fold settings (`bend`, `mismatch`, `seed`, `new`) stay visible but are
+  **disabled**: dimmed, not focusable, ignoring input. They are not hidden. Turning fold on enables
+  them. The status line and readout show only while fold is on.
+
 ## 4. Testing
 
 - **Shared:**
