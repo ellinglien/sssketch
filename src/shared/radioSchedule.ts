@@ -24,6 +24,14 @@ import {
   type TurnaroundFamily
 } from './radioTurnaround'
 import {
+  DEFAULT_FOLD_SEED,
+  DEFAULT_RADIO_CLASH,
+  DEFAULT_RADIO_FOLD,
+  FOLD_PACE_BARS,
+  normalizeFoldAmount,
+  normalizeFoldSeed
+} from './radioFold'
+import {
   DEFAULT_RADIO_TRANSITIONS,
   normalizeRadioTransitions,
   type RadioTransitions
@@ -1053,6 +1061,15 @@ export interface RadioSettings {
   /** How far the moves go: `bold` (the spec's numbers) or `subtle`. */
   turnaroundDepth: TurnaroundDepth
   turnover: RadioTurnover
+  /** Fold mode (radioFold.ts, spec 2026-10-02-radio-fold-mode-design.md): off by default, and
+   * normal radio is untouched while it is off. */
+  foldMode: boolean
+  /** "how folded", 0..100 (DEFAULT_RADIO_FOLD 40). */
+  fold: number
+  /** "how mismatched", 0..100 (DEFAULT_RADIO_CLASH 25). */
+  clash: number
+  /** Six characters of FOLD_SEED_ALPHABET: the same seed replays the same rules. */
+  foldSeed: string
   /** Optional only because the web radio builds its own RadioSettings and
    * has its own arc; normalizeRadioSettings always sets it, and absent
    * reads as the default (radioDensityOf). */
@@ -1074,7 +1091,18 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   turnaroundMoves: [...TURNAROUND_FAMILIES],
   turnaroundDepth: DEFAULT_TURNAROUND_DEPTH,
   turnover: DEFAULT_RADIO_TURNOVER,
+  foldMode: false,
+  fold: DEFAULT_RADIO_FOLD,
+  clash: DEFAULT_RADIO_CLASH,
+  foldSeed: DEFAULT_FOLD_SEED,
   density: DEFAULT_RADIO_DENSITY
+}
+
+/** The window the clock draws a change's interval from: fold mode's own (FOLD_PACE_BARS, 16-64
+ * bars) while it is on, the user's pace window otherwise -- which comes back untouched when the
+ * mode goes off, since this never writes it. */
+export function radioPaceWindowOf(settings: RadioSettings): RadioPaceWindow {
+  return settings.foldMode ? { ...FOLD_PACE_BARS } : settings.paceBars
 }
 
 /** Field by field, never throwing -- the same shape loadDiscoverSettings
@@ -1121,6 +1149,10 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
     turnaroundMoves: normalizeTurnaroundMoves(raw.turnaroundMoves),
     turnaroundDepth: normalizeTurnaroundDepth(raw.turnaroundDepth),
     turnover: normalizeRadioTurnover(raw.turnover),
+    foldMode: raw.foldMode === true,
+    fold: normalizeFoldAmount(raw.fold, DEFAULT_RADIO_FOLD),
+    clash: normalizeFoldAmount(raw.clash, DEFAULT_RADIO_CLASH),
+    foldSeed: normalizeFoldSeed(raw.foldSeed),
     density: normalizeRadioDensity(raw.density)
   }
 }

@@ -91,6 +91,10 @@ describe('discoverSettingsStore', () => {
         turnaroundMoves: ['wash', 'riser'],
         turnaroundDepth: 'subtle',
         turnover: 'random',
+        foldMode: true,
+        fold: 70,
+        clash: 60,
+        foldSeed: 'k3x9pq',
         density: 'off'
       }
     })
@@ -105,6 +109,10 @@ describe('discoverSettingsStore', () => {
       turnaroundMoves: ['wash', 'riser'],
       turnaroundDepth: 'subtle',
       turnover: 'random',
+      foldMode: true,
+      fold: 70,
+      clash: 60,
+      foldSeed: 'k3x9pq',
       density: 'off'
     })
   })

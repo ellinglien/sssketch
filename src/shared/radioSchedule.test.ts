@@ -1090,6 +1090,10 @@ describe('RadioSettings', () => {
       turnaroundMoves: ['drops', 'wash', 'filters', 'riser'],
       turnaroundDepth: 'bold',
       turnover: 'even',
+      foldMode: false,
+      fold: 40,
+      clash: 25,
+      foldSeed: 'autech',
       density: 'arc'
     })
   })
