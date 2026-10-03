@@ -25,6 +25,7 @@ import {
   initialThrowState,
   stepThrows,
   throwCurveFor,
+  turnaroundThrowAim,
   type ThrowState,
   type ThrowTiming
 } from './radioThrows'
@@ -338,4 +339,38 @@ export function discoverThrowSilenced(
   for (const id of turnaroundGapLateRowIds(turnaround, liveRowIds)) rows.add(id)
   for (const g of gestures) if (g.kind === 'drop-out' || g.kind === 'hole') rows.add(g.slotId)
   return [...rows]
+}
+
+/**
+ * What a throw aims at in Discover (stepDiscoverThrows' changeInBars and silenced), with a phrase
+ * turnaround armed for the wrap `barsToWrap` ahead; null with none armed (nothing to aim at).
+ *
+ * No gap: the wrap, never on discoverThrowSilenced's rows. THROW INTO THE GAP (Elling,
+ * 2026-10-03): with a riser gap the throw ends where the gap STARTS (turnaroundThrowAim), its
+ * echoes ringing through the silence, so a row only the gap silences -- a gap drop, a late row
+ * the runtime silences through the gap -- is still playing when it closes and may take it; a row
+ * silent BEFORE the gap may not, nor the row of any drop-out or hole armed this lap (an arc exit
+ * sharing the lap). The send is post-fader: a throw on a silenced row is heard as nothing.
+ */
+export function discoverThrowAim(
+  turnaround:
+    | (NonNullable<Parameters<typeof discoverThrowSilenced>[0]> &
+        Parameters<typeof turnaroundThrowAim>[0])
+    | null
+    | undefined,
+  gestures: readonly { kind: string; slotId: string }[],
+  barsToWrap: number,
+  liveRowIds: Iterable<string> = []
+): { changeInBars: number; silenced: string[] } | null {
+  if (!turnaround) return null
+  if (!((turnaround.gapBeats ?? 0) > 0))
+    return {
+      changeInBars: barsToWrap,
+      silenced: discoverThrowSilenced(turnaround, gestures, liveRowIds)
+    }
+  // at 240 bpm a beat is a quarter of a second: seconds are bars
+  const aim = turnaroundThrowAim(turnaround, barsToWrap, 240)
+  const rows = new Set(aim.silenced)
+  for (const g of gestures) if (g.kind === 'drop-out' || g.kind === 'hole') rows.add(g.slotId)
+  return { changeInBars: aim.at, silenced: [...rows] }
 }

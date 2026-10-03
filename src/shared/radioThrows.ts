@@ -230,6 +230,37 @@ export function turnaroundSilencedRowIds(
     .map((r) => r.rowId)
 }
 
+/**
+ * Where a throw aims before an armed turnaround's wrap at `wrapAt`, and the rows it must not be on.
+ *
+ * THROW INTO THE GAP (Elling, 2026-10-03). A combined turnaround with a riser gap (`gapBeats` > 0)
+ * silences every row but the keeper for its last `gapBeats` beats. The throw ends where the gap
+ * STARTS (`wrapAt - gapBeats * 60 / bpm`), its echoes, already in the delay, ringing on through the
+ * silence. Its send is post-fader, so it closes before its row's fader drops: a row the gap alone
+ * silences (its drop starts at the gap) is fine; a row silent BEFORE the gap -- a drop longer than
+ * it -- is not. With no gap: the wrap itself, and every row the turnaround silences
+ * (turnaroundSilencedRowIds).
+ */
+export function turnaroundThrowAim(
+  plan: {
+    gapBeats?: number
+    rows: readonly { rowId: string; volume?: readonly { beats: number; value: number }[] }[]
+  },
+  wrapAt: number,
+  bpm: number
+): { at: number; silenced: string[] } {
+  const gap = plan.gapBeats ?? 0
+  if (!(gap > 0)) return { at: wrapAt, silenced: turnaroundSilencedRowIds(plan) }
+  return {
+    at: wrapAt - (gap * 60) / bpm,
+    silenced: plan.rows
+      .filter(
+        (r) => r.volume?.some((p) => p.beats > gap + EPS && p.value <= THROW_SILENT_GAIN) === true
+      )
+      .map((r) => r.rowId)
+  }
+}
+
 /** The send's ramps in and out, as the web's Engine.throwDelay draws them: 5 ms each. */
 export const THROW_RAMP_SEC = 0.005
 

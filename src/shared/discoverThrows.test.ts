@@ -4,6 +4,7 @@ import {
   THROW_MAX_BARS,
   THROW_RECALL_BARS,
   discoverThrowSends,
+  discoverThrowAim,
   discoverThrowSilenced,
   initialDiscoverThrowState,
   playheadStep,
@@ -563,4 +564,73 @@ describe('discoverThrowSilenced', () => {
     // without the live rows: the plan's own, as before
     expect(discoverThrowSilenced(plan, [])).toEqual(['drums'])
   })
+})
+
+describe('discoverThrowAim (throw into the gap)', () => {
+  const drop = (b: number): { beats: number; value: number }[] => [
+    { beats: b, value: 1 },
+    { beats: b - 0.08, value: 0 },
+    { beats: 0, value: 1 }
+  ]
+  it('no gap: the wrap, and discoverThrowSilenced', () => {
+    const plan = { rows: [{ rowId: 'drums', volume: drop(4) }, { rowId: 'lead' }] }
+    const gestures = [{ kind: 'drop-out', slotId: 'pad' }]
+    expect(discoverThrowAim(plan, gestures, 3)).toEqual({
+      changeInBars: 3,
+      silenced: discoverThrowSilenced(plan, gestures)
+    })
+  })
+  it('a gap: where it starts; rows silent before it and drop-out/hole rows, not the ones only the gap silences', () => {
+    const plan = {
+      gapBeats: 2,
+      keeperId: 'keys',
+      rows: [
+        { rowId: 'drums', volume: drop(4) },
+        { rowId: 'pad', volume: drop(2) }
+      ]
+    }
+    const r = discoverThrowAim(plan, [{ kind: 'hole', slotId: 'bass' }], 3, [
+      'drums',
+      'pad',
+      'joined',
+      'keys'
+    ])!
+    expect(r.changeInBars).toBe(2.5)
+    expect([...r.silenced].sort()).toEqual(['bass', 'drums'])
+  })
+  it('nothing armed: no aim', () => {
+    expect(discoverThrowAim(null, [{ kind: 'hole', slotId: 'keys' }], 3)).toBeNull()
+  })
+
+  for (const loopBars of [2, 4]) {
+    it(`a ${loopBars}-bar loop: an aimed throw ends where the gap starts, never on a row silent before it`, () => {
+      const plan = {
+        gapBeats: 2,
+        rows: [
+          { rowId: 'lead', volume: drop(4) },
+          { rowId: 'pad', volume: drop(2) }
+        ]
+      }
+      const plain = play(3000, { loopBars }).armed
+      const { armed } = play(3000, {
+        loopBars,
+        tickOver: (played) => {
+          const last = Math.floor(played / loopBars + 1e-9) % 2 === 1
+          if (!last) return { leadingArmed: false, changeInBars: null }
+          return {
+            leadingArmed: true,
+            ...discoverThrowAim(plan, [], loopBars - (played % loopBars))!
+          }
+        }
+      })
+      expect(armed.length).toBeGreaterThan(plain.length * 0.85)
+      expect(armed.length).toBeLessThan(plain.length * 1.15)
+      const aimed = armed.filter(({ t }) => t.aimed)
+      expect(aimed.length).toBeGreaterThan(armed.length * 0.5)
+      for (const { t } of aimed) {
+        expect(t.atBar + t.beats / 4).toBeCloseTo(loopBars - 0.5, 9)
+        expect(t.slotId).toBe('pad')
+      }
+    })
+  }
 })

@@ -9,6 +9,7 @@ import {
   throwDelaySec,
   throwTailSec,
   turnaroundSilencedRowIds,
+  turnaroundThrowAim,
   type ThrowPlan,
   type ThrowTick
 } from './radioThrows'
@@ -190,6 +191,8 @@ describe('stepThrows aimed at a transition (changeAt)', () => {
       silenced?: readonly string[]
       seed?: number
       changes?: boolean
+      /** An armed turnaround on every change: the throw aims as turnaroundThrowAim says. */
+      plan?: Parameters<typeof turnaroundThrowAim>[0]
     } = {}
   ): Sim {
     const bars = o.bars ?? 2000
@@ -210,14 +213,15 @@ describe('stepThrows aimed at a transition (changeAt)', () => {
       const change = changeLap * lap
       if (changes[changes.length - 1] !== change) changes.push(change)
       const inReach = o.changes !== false && change - t <= lap + 1e-9
+      const aim = o.plan && inReach ? turnaroundThrowAim(o.plan, change, bpm) : null
       const tick: ThrowTick = {
         now: t,
         bpm,
         nextBeat,
         held: false,
-        leadingArmed: !!o.leadIn && inReach,
-        changeAt: inReach ? change : null,
-        silenced: o.silenced,
+        leadingArmed: (!!o.leadIn || aim !== null) && inReach,
+        changeAt: aim?.at ?? (inReach ? change : null),
+        silenced: aim?.silenced ?? o.silenced,
         rows
       }
       const r = stepThrows(s, tick, rnd)
@@ -288,6 +292,51 @@ describe('stepThrows aimed at a transition (changeAt)', () => {
     expect(r.plans.length).toBeGreaterThan(0)
     for (const p of r.plans) expect(p.slot).toBe('r3')
   })
+
+  // THROW INTO THE GAP (Elling, 2026-10-03): a combined turnaround's riser gap silences every row
+  // but the keeper for its last `gapBeats`; the throw ends where the gap starts, its echoes ringing
+  // through the silence. r2 is drum-dropped for 4 beats (silent BEFORE the gap): never thrown;
+  // r3 only drops out for the gap itself: thrown.
+  const gapped = {
+    gapBeats: 2,
+    rows: [
+      {
+        rowId: 'r2',
+        volume: [
+          { beats: 4, value: 1 },
+          { beats: 3.92, value: 0 },
+          { beats: 0, value: 1 }
+        ]
+      },
+      {
+        rowId: 'r3',
+        volume: [
+          { beats: 2, value: 1 },
+          { beats: 1.92, value: 0 },
+          { beats: 0, value: 1 }
+        ]
+      }
+    ]
+  }
+  for (const loopBars of [1, 2, 4])
+    for (const bpm of [90, 120, 140])
+      it(`a ${loopBars}-bar loop at ${bpm}: a throw before a gapped turnaround ends exactly where the gap starts`, () => {
+        const beat = 60 / bpm
+        const r = sim(loopBars, bpm, { bars: 800, plan: gapped })
+        const plain = sim(loopBars, bpm, { bars: 800 })
+        expect(r.plans.length).toBeGreaterThan(20)
+        expect(Math.abs(r.plans.length - plain.plans.length)).toBeLessThanOrEqual(
+          Math.ceil(plain.plans.length * 0.1)
+        )
+        for (const p of r.plans) {
+          // the gap starts 2 beats before a change
+          const end = p.at + p.beats * beat
+          const change = r.changes.find((c) => Math.abs(c - 2 * beat - end) < 1e-6)
+          expect(change).toBeDefined()
+          expect(end).toBeCloseTo(change! - 2 * beat, 9)
+          expect(p.slot).toBe('r3')
+        }
+      })
 
   // one tick from a hand-made state, at 120 bpm (0.5 s a beat, 2 s a bar)
   const one = (
@@ -366,5 +415,53 @@ describe('turnaroundSilencedRowIds', () => {
     }
     expect(turnaroundSilencedRowIds(plan)).toEqual(['drums'])
     expect(turnaroundSilencedRowIds(null)).toEqual([])
+  })
+})
+
+describe('turnaroundThrowAim', () => {
+  const at = 100
+  it('no gap: the wrap, and every row the turnaround silences', () => {
+    const plan = {
+      rows: [
+        {
+          rowId: 'a',
+          volume: [
+            { beats: 4, value: 1 },
+            { beats: 3.92, value: 0 },
+            { beats: 0, value: 1 }
+          ]
+        },
+        { rowId: 'b' }
+      ]
+    }
+    expect(turnaroundThrowAim(plan, at, 120)).toEqual({ at, silenced: ['a'] })
+    expect(turnaroundThrowAim({ ...plan, gapBeats: 0 }, at, 120)).toEqual({ at, silenced: ['a'] })
+  })
+  it('a gap: where it starts, and only the rows silent before it (a gap-only drop is thrown into it)', () => {
+    const plan = {
+      gapBeats: 2,
+      rows: [
+        {
+          rowId: 'drum',
+          volume: [
+            { beats: 4, value: 1 },
+            { beats: 3.92, value: 0 },
+            { beats: 0, value: 1 }
+          ]
+        },
+        {
+          rowId: 'pad',
+          volume: [
+            { beats: 2, value: 1 },
+            { beats: 1.92, value: 0 },
+            { beats: 0, value: 1 }
+          ]
+        },
+        { rowId: 'keeper' }
+      ]
+    }
+    const r = turnaroundThrowAim(plan, at, 120)
+    expect(r.at).toBeCloseTo(at - 1, 12) // 2 beats at 120
+    expect(r.silenced).toEqual(['drum'])
   })
 })
