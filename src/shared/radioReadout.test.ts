@@ -77,6 +77,31 @@ describe('radioReadout: the status line', () => {
     const r = radioReadout(input({ nextChange: { rowId: 'z', kind: 'bloom', barsAway: 4 } }))
     expect(r.statusLine).toBe('next: a new row → bloom · 4 bars')
   })
+
+  it('says a row the arc takes out leaves, with no arrival', () => {
+    const r = radioReadout(
+      input({
+        arc: { state: 'thinning', count: 3, target: 2 },
+        nextChange: { rowId: 'b', kind: null, barsAway: 3.5, leaving: true }
+      })
+    )
+    expect(r.statusLine).toBe('thinning ↓ 3 → 2 · next: row 2 leaves · 4 bars')
+    expect(r.rows[1]).toMatchObject({ isNext: true, nextKind: null, nextLabel: 'next · leaves' })
+  })
+
+  it('held: the arc reads held, with no direction, and a change already on its way still shows', () => {
+    const held = (over: Partial<RadioReadoutInput>): string =>
+      radioReadout(input({ held: true, ...over })).statusLine
+    expect(held({ arc: { state: 'growing', count: 3, target: 5 } })).toBe('held · 3 rows')
+    expect(held({ arc: { state: 'thinning', count: 1, target: 0 } })).toBe('held · 1 row')
+    expect(held({})).toBe('held')
+    expect(
+      held({
+        arc: { state: 'thinning', count: 3, target: 2 },
+        nextChange: { rowId: 'c', kind: null, barsAway: 1, leaving: true }
+      })
+    ).toBe('held · 3 rows · next: row 3 leaves · 1 bar')
+  })
 })
 
 describe('radioReadout: the phrase ruler', () => {

@@ -60,13 +60,23 @@ export interface RadioReadoutRowInput {
 
 export interface RadioReadoutInput {
   bars: { intoPhrase: number; phraseBars: number; loopBars: number }
-  /** Radio's own next change: the row, how it arrives (null while only armed), and bars until it
-   * lands (null when its bar is not known yet). */
-  nextChange: { rowId: string; kind: RadioTransitionKind | null; barsAway: number | null } | null
+  /** Whatever lands next -- radio's own change, or the density arc adding a row (a row not on the
+   * bed: `a new row`) or taking one out (`leaving`: `row 2 leaves`) -- with how it arrives (null
+   * while only armed, and for a leaving row), and bars until it lands (null when its bar is not
+   * known yet). */
+  nextChange: {
+    rowId: string
+    kind: RadioTransitionKind | null
+    barsAway: number | null
+    leaving?: boolean
+  } | null
   /** The turnaround armed for the phrase's end, or a turn waiting; `move` null while a turn
    * waits for its roll. */
   armedTurnaround: { move: TurnaroundMove | null; isTurn: boolean } | null
   arc: { state: RadioReadoutArcState; count: number; target: number }
+  /** Radio is held: the arc part reads `held` (it goes nowhere while held). The runtime passes as
+   * `nextChange` only what still lands while held (an arc step already on the timeline), or null. */
+  held?: boolean
   rows: readonly RadioReadoutRowInput[]
 }
 
@@ -78,7 +88,8 @@ export interface RadioReadoutRow {
   age: string
   isNext: boolean
   nextKind: RadioTransitionKind | null
-  /** `next · filter in`, or `next` while the arrival is not drawn yet; null on other rows. */
+  /** `next · filter in`, `next · leaves` for a row the arc takes out, or `next` while the arrival
+   * is not drawn yet; null on other rows. */
   nextLabel: string | null
   flash: RadioFlashShown | null
 }
@@ -187,7 +198,8 @@ export function radioAgeLabel(laps: number): string {
   return plural(Number.isFinite(laps) ? Math.max(0, Math.floor(laps)) : 0, 'lap')
 }
 
-function arcPart(arc: RadioReadoutInput['arc']): string | null {
+function arcPart(arc: RadioReadoutInput['arc'], held: boolean): string | null {
+  if (held) return arc.state === 'off' ? 'held' : `held · ${plural(arc.count, 'row')}`
   switch (arc.state) {
     case 'growing':
       return `building ↑ ${arc.count} → ${arc.target}`
@@ -206,7 +218,7 @@ function nextPart(input: RadioReadoutInput): string | null {
   if (n.barsAway === null || !Number.isFinite(n.barsAway)) return 'next: soon'
   const i = input.rows.findIndex((r) => r.rowId === n.rowId)
   const who = i >= 0 ? `row ${i + 1}` : 'a new row'
-  const how = n.kind !== null ? ` → ${n.kind}` : ''
+  const how = n.leaving ? ' leaves' : n.kind !== null ? ` → ${n.kind}` : ''
   const bars = Math.max(1, Math.ceil(n.barsAway - 1e-6))
   return `next: ${who}${how} · ${plural(bars, 'bar')}`
 }
@@ -218,7 +230,7 @@ function rulerEnd(t: RadioReadoutInput['armedTurnaround']): string | null {
 }
 
 export function radioReadout(input: RadioReadoutInput): RadioReadout {
-  const statusLine = [arcPart(input.arc), nextPart(input)]
+  const statusLine = [arcPart(input.arc, !!input.held), nextPart(input)]
     .filter((p): p is string => p !== null)
     .join(' · ')
   const ticks = Math.max(0, Math.round(input.bars.phraseBars))
@@ -229,14 +241,21 @@ export function radioReadout(input: RadioReadoutInput): RadioReadout {
     ruler: { ticks, filled, end: rulerEnd(input.armedTurnaround) },
     rows: input.rows.map((r) => {
       const isNext = next !== null && next.rowId === r.rowId
-      const nextKind = isNext ? next.kind : null
+      const leaving = isNext && !!next.leaving
+      const nextKind = isNext && !leaving ? next.kind : null
       return {
         rowId: r.rowId,
         label: radioRowLabel(r),
         age: radioAgeLabel(r.laps),
         isNext,
         nextKind,
-        nextLabel: isNext ? (nextKind !== null ? `next · ${nextKind}` : 'next') : null,
+        nextLabel: !isNext
+          ? null
+          : leaving
+            ? 'next · leaves'
+            : nextKind !== null
+              ? `next · ${nextKind}`
+              : 'next',
         flash: r.flash ?? null
       }
     })
