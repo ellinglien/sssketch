@@ -5123,9 +5123,22 @@ export function DiscoverPanel({
           holdSyncUntilResolved(led.slotId)
           // Its companions, right after it -- the stage carried them as cuts, so the engine
           // swapped them with it. A manual change landing on one's row at this wrap won it.
-          companionsLanded = landRadioCompanions(
-            radioStagedCompanions(led).filter((k) => !manualLandedIds.has(k.slotId))
+          const companionsToLand = radioStagedCompanions(led).filter(
+            (k) => !manualLandedIds.has(k.slotId)
           )
+          companionsLanded = landRadioCompanions(companionsToLand)
+          // A companion the engine swapped in with the stage but the panel just left out (its
+          // row locked, muted or removed in the last ~30 ms, too late for stepRadioStage's
+          // withdrawal): put the truth back on the wire, deterministically, rather than relying
+          // on the commit's own push. Parked behind the hold above, so it goes out once, with it.
+          if (
+            engineSwapped &&
+            (led.companions ?? []).some(
+              (k) => !manualLandedIds.has(k.slotId) && !companionsLanded.includes(k.slotId)
+            )
+          ) {
+            scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+          }
           radioTraceMark('commit') // TEMP
           radioLastSlotRef.current = led.slotId
           landedIds.push(led.slotId, ...companionsLanded)
