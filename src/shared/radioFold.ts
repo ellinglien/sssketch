@@ -374,6 +374,15 @@ function realignsAt(r: RadioFoldRowState, lap: number, loopBeats: number): boole
   return ((lap - r.originLap) * halves(loopBeats)) % halves(r.cycleBeats) === 0
 }
 
+/** realignsAt, for radioFoldStatus (radioFoldStatus.ts). */
+export function radioFoldRowRealignsAt(
+  r: RadioFoldRowState,
+  lap: number,
+  loopBeats: number
+): boolean {
+  return realignsAt(r, lap, loopBeats)
+}
+
 function pickFrom<T>(items: readonly T[], r: number): T {
   return items[Math.min(items.length - 1, Math.floor(r * items.length))]
 }
