@@ -760,6 +760,64 @@ namespace sssketch
                 ramp.deleteFile();
             }
 
+            // A phased incoming cycle is mid-tile at its origin: the grid there is -phase, so the
+            // first sample is `tileSec - phase` into a tile, past the seam's 10 ms fade-in. It has
+            // to fade in from the origin, over the same 10 ms the outgoing fades out over.
+            beginTest("a phased incoming cycle fades in from its origin: no fold step starts mid-tile at full gain");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_phased_in_ramp.wav", 16 * 44100);
+                StemBufferCache cache;
+                ChannelChainRegistry channelChains;
+                for (const double phase : { 0.25, 1.0 / 16.0 }) // a beat, a sixteenth of a bar
+                {
+                    PlaybackEngine engine(cache);
+                    engine.setProject(foldProject(ramp, "perc"));
+                    engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                    engine.applyStagedCycles(false);
+                    std::vector<float> lap1;
+                    const float worst = acrossTop(engine, foldRow(6.0 / 4.0, phase, "perc~2"), channelChains, lap1);
+                    // the incoming is 6 beats - phase into a tile at the top (5 s: 0.31; 5.75 s:
+                    // 0.36), at full gain unfaded. Faded over 441 samples, with the outgoing's
+                    // 0.125 fading out beside it, about 0.001 a step.
+                    expect(worst < 0.002f, "largest step across the top into a cycle phased "
+                                               + juce::String(phase) + " bar: " + juce::String(worst));
+                    // and it does sound: past 10 ms it is the incoming cycle at full gain
+                    const double inTileSec = std::fmod(-phase * 4.0 + 6.0 + 0.02, 6.0);
+                    expectWithinAbsoluteError(lap1[(size_t) (0.02 * 44100.0)], (float) (inTileSec / 16.0), 0.002f);
+                }
+                ramp.deleteFile();
+            }
+
+            // A stem whose head is not silence: unfolding at the top hands over to the straight stem,
+            // which starts its lap as it always does -- tile 0 is its first segment, faded in over
+            // FadeGain's 3 ms micro-fade (a 0.5 head: 0.5 / 132 = 0.0038 a step), while the
+            // outgoing cycle fades out over 10 ms (0.5 / 441 = 0.0011 a step, the other way). The
+            // net 0.0026 is above the 0.002 a cycle-to-cycle step meets, and is the straight stem's
+            // own start, not the fold's: the bar here is that unfolding is no worse than the same
+            // straight stem wrapping the same top unfolded (its own 3 ms fade-out, then fade-in).
+            beginTest("a row with a non-silent head unfolds no worse than its straight stem wraps the top");
+            {
+                auto dc = writeFixtureWav("sssketch_pe_fold_unfold_dc.wav", 0.5f, 16 * 44100);
+                StemBufferCache cache;
+                ChannelChainRegistry channelChains;
+                PlaybackEngine engine(cache);
+                engine.setProject(foldProject(dc, "perc"));
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                engine.applyStagedCycles(false);
+                std::vector<float> lap1;
+                const float worst = acrossTop(engine, {}, channelChains, lap1);
+                PlaybackEngine plain(cache);
+                plain.setProject(foldProject(dc, "perc"));
+                std::vector<float> plainLap1;
+                const float plainWorst = acrossTop(plain, {}, channelChains, plainLap1);
+                expect(plainWorst > 0.003f, "the straight stem's own wrap steps by its 3 ms micro-fade, got "
+                                                + juce::String(plainWorst));
+                expect(worst <= plainWorst, "largest step unfolding " + juce::String(worst)
+                                                + ", the straight stem's own wrap " + juce::String(plainWorst));
+                expect(worst < 0.003f, "largest step unfolding a 0.5 head " + juce::String(worst));
+                dc.deleteFile();
+            }
+
             beginTest("a row the cycle table does not name plays exactly as a stem with no row");
             {
                 auto ramp = writeRampFixtureWav("sssketch_pe_fold_none_ramp.wav", 16 * 44100);

@@ -1045,6 +1045,11 @@ namespace sssketch
                     const double gridStartSec = (lapNowBars - originBars - phaseBars) * spb;
                     const bool isTail = tailStartBars >= 0.0;
                     const double tailElapsedSec = isTail ? (lapNowBars - tailStartBars) * spb : 0.0;
+                    // An incoming cycle fades in from its origin over kCycleSeamFadeSec too: with a
+                    // phase, the grid there is -phaseBars, so the first sample is mid-tile
+                    // (tileSec - phase in), past the seam's own fade-in. With no phase this
+                    // overlaps the seam fade-in, and both are over 10 ms after the origin.
+                    const double originElapsedSec = isTail ? 0.0 : (lapNowBars - originBars) * spb;
                     const int numCh = entry.buffer->getNumChannels();
                     const int bufferSamples = entry.buffer->getNumSamples();
                     prepareStemBuffer();
@@ -1056,6 +1061,12 @@ namespace sssketch
                             out = 1.0 - (tailElapsedSec + (double) i2 / sampleRate) / kCycleSeamFadeSec;
                             if (out <= 0.0)
                                 break; // the tail is over; CycleTable drops it next block
+                        }
+                        else
+                        {
+                            const double sinceOrigin = originElapsedSec + (double) i2 / sampleRate;
+                            if (sinceOrigin < kCycleSeamFadeSec)
+                                out = std::max(0.0, sinceOrigin / kCycleSeamFadeSec);
                         }
                         double inTile = std::fmod(gridStartSec + (double) i2 / sampleRate, tileSec);
                         if (inTile < 0.0)
@@ -1081,8 +1092,9 @@ namespace sssketch
 
                 // A cycle replaced or removed at the top (a fold step, the row unfolding, a `now`
                 // stage) was mid-tile at full gain there: its tail plays on beside whatever
-                // follows -- the incoming cycle, which fades in over the same 10 ms, or the
-                // straight stem below -- so the change is a 10 ms crossfade, not a cut. The tail
+                // follows -- the incoming cycle, which fades in from its origin over the same
+                // 10 ms (addCycle: even a phased one, mid-tile there), or the straight stem below
+                // -- so the change is a 10 ms crossfade, not a cut. The tail
                 // is in this stem's buffer before either path adds to it, and the guard folds it
                 // into the channel even if neither path gets as far as finishStem.
                 bool tailPlayed = false;
