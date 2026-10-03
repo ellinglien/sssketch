@@ -3165,20 +3165,21 @@ export function DiscoverPanel({
     const input = turnaroundInputNow(lengths, loopBars)
     const turn = radioTurnPendingRef.current
     if (turn !== null) {
+      const turnPlan = rollTurnaround({
+        ...input,
+        rate: radioSettings.turnarounds,
+        random: Math.random,
+        lastPhrase: null,
+        force: turn.move === undefined ? {} : { move: turn.move }
+      })
+      armRadioTurn(turnPlan, turn.undoSeq)
       // A TURN takes this top: the phrase end's own roll stands down and remembers nothing, so a
-      // turn never starts or extends a diminution.
-      if (owed.phraseEnd) radioTurnaroundMemoryRef.current = null
-      armRadioTurn(
-        rollTurnaround({
-          ...input,
-          rate: radioSettings.turnarounds,
-          random: Math.random,
-          lastPhrase: null,
-          force: turn.move === undefined ? {} : { move: turn.move }
-        }),
-        turn.undoSeq
-      )
-      return
+      // turn never starts or extends a diminution. A turn that cannot sound here (it flashed
+      // `nothing to turn`) costs the phrase end nothing: its own roll goes ahead below.
+      if (turnPlan !== null) {
+        if (owed.phraseEnd) radioTurnaroundMemoryRef.current = null
+        return
+      }
     }
     // A roll owed only for a turn that was withdrawn since (undo): nothing to roll.
     if (!owed.phraseEnd) return
@@ -3245,11 +3246,14 @@ export function DiscoverPanel({
     return { lengths, loopBars: lengths.size > 0 ? Math.max(...lengths.values()) : 0 }
   }
   /** A turn's roll, armed: it has the lap, as a phrase end's does (radioTurnaroundGate, the
-   * throws). Null is nothing to turn: the button says so. No push here -- the caller's. */
+   * throws). Null is nothing to turn: the button says so, and goes on showing an earlier turn
+   * still armed for this top (it plays, and undo can still take it back). No push here -- the
+   * caller's. */
   function armRadioTurn(plan: TurnaroundPlan | null, undoSeq: number): void {
     radioTurnPendingRef.current = null
     if (plan === null) {
-      setRadioTurnShown(null)
+      const armed = radioTurnaroundRef.current
+      setRadioTurnShown(armed?.turn != null ? { move: armed.plan.move } : null)
       flashRadioTurn('nothing to turn')
       return
     }
@@ -3269,8 +3273,9 @@ export function DiscoverPanel({
    * - a move already armed into this top has started, or starts within the lead: it is not cut;
    * - under 1 beat plus the lead is left;
    * - a stage is out that cannot be re-staged in time (a mid-lap cut at a bar, or under
-   *   MANUAL_RESTAGE_MIN_BARS to the wrap). Otherwise the stage is withdrawn and re-staged on a
-   *   later tick, after the push carrying the turn (an ordinary push withdraws a stage anyway).
+   *   MANUAL_RESTAGE_MIN_BARS to the wrap). Otherwise the stage is withdrawn -- once the roll has
+   *   a plan, before the push carrying it -- and re-staged on a later tick (an ordinary push
+   *   withdraws a stage anyway). A roll that finds nothing leaves the stage alone.
    * A turnaround armed for this lap -- a phrase end's, or an earlier turn's -- is replaced: the
    * latest decision wins. Replacing a phrase end's means nothing fired there, so the memory goes.
    * No pushUndoSnapshot: a turn is performance, not an edit (withdrawRadioTurn). */
@@ -3287,14 +3292,11 @@ export function DiscoverPanel({
     if (armed !== null && toTopBeats - armed.plan.beats < TURN_LEAD_BEATS) return
     const maxBeats = turnaroundTurnBeats(toTopBeats, TURN_LEAD_BEATS)
     if (maxBeats === null) return
-    if (radioStageRef.current !== null) {
-      if (
-        radioLedChangeRef.current?.atBars !== undefined ||
-        loopBars - pos < MANUAL_RESTAGE_MIN_BARS
-      ) {
-        return
-      }
-      cancelStagedSwap('turn')
+    if (
+      radioStageRef.current !== null &&
+      (radioLedChangeRef.current?.atBars !== undefined || loopBars - pos < MANUAL_RESTAGE_MIN_BARS)
+    ) {
+      return
     }
     const { lengths } = turnaroundLoopNow()
     const plan = rollTurnaround({
@@ -3304,11 +3306,15 @@ export function DiscoverPanel({
       lastPhrase: null,
       force: turn.move === undefined ? { maxBeats } : { move: turn.move, maxBeats }
     })
-    if (plan !== null && armed !== null && armed.turn === null) {
-      radioTurnaroundMemoryRef.current = null
+    if (plan === null) {
+      armRadioTurn(null, turn.undoSeq)
+      return
     }
+    // withdrawn only now there is something to push, and before that push
+    cancelStagedSwap('turn')
+    if (armed !== null && armed.turn === null) radioTurnaroundMemoryRef.current = null
     armRadioTurn(plan, turn.undoSeq)
-    if (plan !== null) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+    scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
   /** Which turns could sound now (radioTurnCan), from the clock effect: kept when unchanged, so
    * a tick re-renders nothing. */
@@ -5373,7 +5379,15 @@ export function DiscoverPanel({
     function handleKeyDown(e: KeyboardEvent): void {
       if (e.key !== 't' || e.repeat || e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return
       const target = e.target as HTMLElement | null
-      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return
+      }
       e.preventDefault()
       turnRadioRef.current()
     }
