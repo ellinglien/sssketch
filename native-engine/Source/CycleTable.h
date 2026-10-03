@@ -69,12 +69,24 @@ namespace sssketch
             uint64_t stemHash = 0;
         };
 
+        /** What a tail continues: an outgoing cycle, or the straight stem of a row folding in. */
+        enum class TailKind
+        {
+            cycle,
+            straight
+        };
+
         /** The outgoing cycle of a row whose cycle `apply` replaced (a new id, length or phase)
-         * or removed (the row unfolded, a `now` stage). It was mid-tile at full gain, and the
-         * incoming starts from silence (or the straight stem from wherever it is), so renderBlock
-         * plays the outgoing cycle's continuation beside it, fading out over kCycleSeamFadeSec:
-         * a crossfade, where cutting it would step. `startBars` is the lap-clock position of the
-         * first block after the apply (beginBlock stamps it); the tail expires 10 ms later. */
+         * or removed (the row unfolded, a `now` stage), or -- `straight` -- the straight stem of
+         * a row `apply` folded in. Either may be mid-tile at full gain, and the incoming starts
+         * from silence (or the straight stem from wherever it is), so renderBlock plays the
+         * outgoing's continuation beside it, fading out over kCycleSeamFadeSec: a crossfade,
+         * where cutting it would step. `startBars` is the lap-clock position of the first block
+         * after the apply (beginBlock stamps it); the tail expires 10 ms later. A straight tail's
+         * `continueOffsetBars` is the length of the lap that just ended when it folded in at a
+         * loop top (0 mid-lap): the continuation is the outgoing lap's, played that much on from
+         * the new lap's position, so a stem whose last tile ended with the lap continues as
+         * nothing, rather than as a ghost of its own restart. */
         struct Tail
         {
             CycleRow row;
@@ -83,12 +95,20 @@ namespace sssketch
             uint64_t stemHash = 0;
             double startBars = 0.0;
             bool started = false;
+            TailKind kind = TailKind::cycle;
+            double continueOffsetBars = 0.0;
         };
 
         /** AUDIO THREAD, at the top of every renderBlock: starts the tails `apply` left, at this
          * block's lap-clock position, and drops the ones whose 10 ms are over or whose cycle
          * belongs to another epoch (a seek or a play: there is nothing to continue). */
         void beginBlock(const LapClock& clock, double positionBars, double secPerBar);
+
+        /** AUDIO THREAD, from renderBlock, every block, for a stem with a row the live table does
+         * not fold: this stem played the row straight in this block, so if the row folds at the
+         * next apply, the straight stem gets a tail. Fixed capacity (kMaxCycleRows rows): a row
+         * not yet stamped takes a free slot, or the one least recently stamped. */
+        void noteStraight(uint64_t rowKey, uint64_t stemHash, uint32_t epoch);
 
         /** AUDIO THREAD. A started tail for this row, played by this stem, or null. */
         const Tail* findTail(uint64_t rowKey, uint64_t stemHash) const;
@@ -103,9 +123,12 @@ namespace sssketch
 
         /** AUDIO THREAD, from a point with no renderBlock in flight: takes the staged table if
          * there is one and it is due -- at a loop top (`atWrap`), or anywhere for a `now` stage or
-         * a retry. A row whose row key and cycle id were live before keeps its origin. Returns
-         * whether it applied. */
-        bool apply(bool atWrap);
+         * a retry. A row whose row key and cycle id were live before keeps its origin. A row
+         * that was not live, and was played straight in this block or the one before
+         * (noteStraight), gets a straight tail; `lapBars` is the length of the lap that just
+         * ended, for an apply at a loop top (Tail::continueOffsetBars). Returns whether it
+         * applied. */
+        bool apply(bool atWrap, double lapBars = 0.0);
 
         /** AUDIO THREAD. The live entry for a row, or null. */
         Live* find(uint64_t rowKey);
@@ -134,6 +157,17 @@ namespace sssketch
         int numLive = 0;
         std::array<Tail, kMaxCycleRows> tails {};
         int numTails = 0;
+        // Which stem played each not-folded row straight, and in which block (beginBlock counts).
+        struct StraightStamp
+        {
+            uint64_t rowKey = 0;
+            uint64_t stemHash = 0;
+            uint32_t epoch = 0;
+            uint64_t block = 0;
+        };
+        std::array<StraightStamp, kMaxCycleRows> straights {};
+        int numStraights = 0;
+        uint64_t blockCount = 0;
         std::atomic<unsigned long long> applies { 0 };
     };
 }

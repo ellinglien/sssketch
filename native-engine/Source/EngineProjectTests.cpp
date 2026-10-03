@@ -799,6 +799,9 @@ namespace sssketch
                 expect(stems[0].cycleRowKey == 0);
                 expectEquals(stems[1].cycleRow, juce::String("slot-3"));
                 expect(stems[1].cycleRowKey == cycleKeyOf("slot-3"));
+                // which stem a fold tail is for, hashed once here rather than per block
+                expect(stems[1].cycleStemHash == (uint64_t) juce::String("folded").hashCode64());
+                expect(stems[0].cycleStemHash != stems[1].cycleStemHash);
             }
         }
     };

@@ -27,7 +27,7 @@ namespace sssketch
         pending.store(now ? 2 : 1, std::memory_order_release);
     }
 
-    bool CycleTable::apply(bool atWrap)
+    bool CycleTable::apply(bool atWrap, double lapBars)
     {
         const int want = pending.load(std::memory_order_acquire);
         if (want == 0)
@@ -95,6 +95,42 @@ namespace sssketch
             t.stemHash = was.stemHash;
             tails[(size_t) slot] = t;
         }
+        // A row that folds in from straight leaves a straight tail, if its stem played it straight
+        // just now: in this block (an apply between two renders) or the last (one at a block top).
+        for (int i = 0; i < n; ++i)
+        {
+            const auto rowKey = next[(size_t) i].row.rowKey;
+            bool wasLive = false;
+            for (int j = 0; j < numLive && ! wasLive; ++j)
+                wasLive = live[(size_t) j].row.rowKey == rowKey;
+            if (wasLive)
+                continue;
+            const StraightStamp* heard = nullptr;
+            for (int k = 0; k < numStraights && heard == nullptr; ++k)
+            {
+                const auto& st = straights[(size_t) k];
+                if (st.rowKey == rowKey && blockCount - st.block <= 1)
+                    heard = &st;
+            }
+            if (heard == nullptr)
+                continue;
+            int slot = 0;
+            while (slot < numTails && tails[(size_t) slot].row.rowKey != rowKey)
+                ++slot;
+            if (slot == numTails)
+            {
+                if (numTails >= kMaxCycleRows)
+                    continue;
+                ++numTails;
+            }
+            Tail t;
+            t.row = next[(size_t) i].row;
+            t.epoch = heard->epoch;
+            t.stemHash = heard->stemHash;
+            t.kind = TailKind::straight;
+            t.continueOffsetBars = atWrap && std::isfinite(lapBars) && lapBars > 0.0 ? lapBars : 0.0;
+            tails[(size_t) slot] = t;
+        }
         for (int i = 0; i < n; ++i)
             for (int j = 0; j < numLive; ++j)
                 if (live[(size_t) j].row.rowKey == next[(size_t) i].row.rowKey)
@@ -128,8 +164,31 @@ namespace sssketch
         return l.originBars;
     }
 
+    void CycleTable::noteStraight(uint64_t rowKey, uint64_t stemHash, uint32_t epoch)
+    {
+        if (rowKey == 0)
+            return;
+        int slot = 0;
+        while (slot < numStraights && straights[(size_t) slot].rowKey != rowKey)
+            ++slot;
+        if (slot == numStraights)
+        {
+            if (numStraights < kMaxCycleRows)
+                ++numStraights;
+            else
+            {
+                slot = 0;
+                for (int k = 1; k < numStraights; ++k)
+                    if (straights[(size_t) k].block < straights[(size_t) slot].block)
+                        slot = k;
+            }
+        }
+        straights[(size_t) slot] = { rowKey, stemHash, epoch, blockCount };
+    }
+
     void CycleTable::beginBlock(const LapClock& clock, double positionBars, double secPerBar)
     {
+        ++blockCount;
         const double nowBars = clock.baseBars + positionBars;
         int kept = 0;
         for (int i = 0; i < numTails; ++i)

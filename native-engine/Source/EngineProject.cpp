@@ -292,6 +292,7 @@ namespace sssketch
                         // Radio fold mode's row (CycleTable.h). Absent is empty: no fold.
                         stem.cycleRow = stemVar.getProperty("cycleRow", "").toString();
                         stem.cycleRowKey = cycleKeyOf(stem.cycleRow);
+                        stem.cycleStemHash = (uint64_t) stem.stemKey.hashCode64();
 
                         // The built-in toolkit, per CLIP (spec section 2b).
                         // An ABSENT `toolkit` key leaves hasToolkit false,

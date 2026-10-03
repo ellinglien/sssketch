@@ -561,6 +561,7 @@ namespace sssketch
                 stem.durationSec = 16.0;
                 stem.cycleRow = row;
                 stem.cycleRowKey = cycleKeyOf(row);
+                stem.cycleStemHash = (uint64_t) stem.stemKey.hashCode64(); // the parser's
                 rifff.stems.push_back(stem);
                 project.rifffs.push_back(rifff);
                 return project;
@@ -688,7 +689,7 @@ namespace sssketch
                 lap1.assign((size_t) n, 0.0f);
                 engine.renderBlock((16.0 - 0.05) / 4.0, 44100.0, n, l0.data(), r0.data(), chains, LapClock { 0.0, 1 });
                 engine.stageCycles(next, false);
-                expect(engine.applyStagedCycles(true));
+                expect(engine.applyStagedCycles(true, 4.0)); // the 4-bar lap just played
                 engine.renderBlock(0.0, 44100.0, n, lap1.data(), r1.data(), chains, LapClock { 4.0, 1 });
                 float worst = 0.0f;
                 for (int i = 1; i < n; ++i)
@@ -757,6 +758,58 @@ namespace sssketch
                 for (size_t i = 442; i < p.size(); ++i)
                     same = same && lap1[i] == p[i];
                 expect(same, "after 10 ms only the straight stem is left");
+                ramp.deleteFile();
+            }
+
+            // A row folding in was playing straight, and a straight stem offset by a beat is
+            // mid-tile at the top (its window is 1 .. 17 s of a 16 s loop): cut there, it steps by
+            // its full level. Its continuation -- the outgoing lap's, 16 s on -- plays beside the
+            // incoming cycle, fading out over the same 10 ms.
+            beginTest("a row that folds in from straight crossfades the straight stem out over 10 ms");
+            {
+                auto dc = writeFixtureWav("sssketch_pe_fold_in_dc.wav", 0.5f, 16 * 44100);
+                StemBufferCache cache;
+                ChannelChainRegistry channelChains;
+                auto offset = foldProject(dc, "perc");
+                offset.rifffs[0].stems[0].offsetSteps = 4.0; // a beat
+                PlaybackEngine engine(cache);
+                engine.setProject(offset);
+                std::vector<float> lap1;
+                const float worst = acrossTop(engine, foldRow(7.0 / 4.0, 0.0), channelChains, lap1);
+                // cut dead, a 0.5 step; faded over 441 samples beside the incoming's fade-in,
+                // about 0.001 a step
+                expect(worst < 0.002f, "largest step folding in from straight " + juce::String(worst));
+                PlaybackEngine fresh(cache);
+                fresh.setProject(offset);
+                fresh.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                fresh.applyStagedCycles(false);
+                std::vector<float> f(lap1.size(), 0.0f), fr(lap1.size(), 0.0f);
+                fresh.renderBlock(0.0, 44100.0, (int) f.size(), f.data(), fr.data(), channelChains, LapClock { 4.0, 1 });
+                expect(std::abs(lap1[100] - f[100]) > 0.01f, "the straight stem's tail sounds in the first 10 ms");
+                bool same = true;
+                for (size_t i = 442; i < f.size(); ++i)
+                    same = same && lap1[i] == f[i];
+                expect(same, "after 10 ms only the cycle is left");
+
+                // A straight stem that ended with the lap (no offset: its last tile fades out on its
+                // own at 16 s) has no continuation: lap 1 is the cycle alone from its first sample,
+                // not a 10 ms ghost of the straight stem restarting.
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_in_ramp.wav", 16 * 44100);
+                PlaybackEngine plain(cache);
+                plain.setProject(foldProject(ramp, "perc"));
+                std::vector<float> p1;
+                acrossTop(plain, foldRow(7.0 / 4.0, 0.0), channelChains, p1);
+                PlaybackEngine freshRamp(cache);
+                freshRamp.setProject(foldProject(ramp, "perc"));
+                freshRamp.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                freshRamp.applyStagedCycles(false);
+                std::vector<float> g(p1.size(), 0.0f), gr(p1.size(), 0.0f);
+                freshRamp.renderBlock(0.0, 44100.0, (int) g.size(), g.data(), gr.data(), channelChains, LapClock { 4.0, 1 });
+                bool sameRamp = true;
+                for (size_t i = 0; i < g.size(); ++i)
+                    sameRamp = sameRamp && p1[i] == g[i];
+                expect(sameRamp, "a straight stem that ended with the lap leaves nothing to continue");
+                dc.deleteFile();
                 ramp.deleteFile();
             }
 

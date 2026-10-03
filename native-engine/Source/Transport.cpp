@@ -618,7 +618,7 @@ namespace sssketch
             // one rendered with them.
             lapBaseBars += loopBars;
             wrappedThisBlock = true;
-            engine.applyStagedCycles(true);
+            engine.applyStagedCycles(true, loopBars);
             // The clock restarts at the top, on the sample the lap turns over at.
             reanchor(loopStart, -(int64_t) splitIndex, spb);
             if (splitIndex < numSamples)

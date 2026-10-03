@@ -241,8 +241,8 @@ namespace sssketch
 
         /** AUDIO THREAD, at a point with no renderBlock in flight: Transport calls it at every
          * block top (`atWrap` false: a `now` stage, or a retry) and at every loop top (`atWrap`
-         * true). See CycleTable::apply. */
-        bool applyStagedCycles(bool atWrap) { return cycleTable.apply(atWrap); }
+         * true, with the length of the lap that just ended). See CycleTable::apply. */
+        bool applyStagedCycles(bool atWrap, double lapBars = 0.0) { return cycleTable.apply(atWrap, lapBars); }
 
         /** Any thread: how many cycle tables have gone live (for tests). */
         unsigned long long cycleApplyCount() const { return cycleTable.applyCount(); }

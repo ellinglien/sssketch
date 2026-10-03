@@ -173,6 +173,10 @@ namespace sssketch
         /** NOT ON THE WIRE: cycleKeyOf(cycleRow), computed once by the parser so the audio
          * thread compares two integers. 0 for no row. */
         uint64_t cycleRowKey = 0;
+        /** NOT ON THE WIRE: which stem this is, as a fold tail matches it (CycleTable::Tail: a
+         * tail plays only for the stem that played the outgoing), computed once by the parser so
+         * the audio thread does not hash a string per block. A hash of stemKey. */
+        uint64_t cycleStemHash = 0;
 
         /** NOT ON THE WIRE: this stem's index in PlaybackEngine's ProjectSnapshot::dubTaps (its
          * dub send -- a dubSend curve, or a ramp out after its curve has gone), or -1. Set by

@@ -804,15 +804,20 @@ namespace sssketch
                 // cycle and epoch; the cycle path below reads the same value. At most
                 // kMaxCycleRows entries to scan, no allocation, no lock.
                 // The stem is stamped on its cycle too, so a tail (CycleTable::Tail) plays only
-                // for the stem that was playing the cycle, never one swapped into the row.
-                const uint64_t cycleStemHash =
-                    stem.cycleRowKey != 0 ? (uint64_t) stem.stemKey.hashCode64() : 0;
+                // for the stem that was playing the cycle, never one swapped into the row -- and
+                // on a row it plays straight, so a row that folds in has a straight tail for it.
+                // The stem's hash is the parser's (EngineStem::cycleStemHash), not one per block.
+                const uint64_t cycleStemHash = stem.cycleStemHash;
                 if (stem.cycleRowKey != 0)
+                {
                     if (auto* live = cycleTable.find(stem.cycleRowKey))
                     {
                         CycleTable::originFor(*live, lapClock);
                         live->stemHash = cycleStemHash;
                     }
+                    else
+                        cycleTable.noteStraight(stem.cycleRowKey, cycleStemHash, lapClock.epoch);
+                }
 
                 // A drawn `volume` curve REPLACES this clip's own static
                 // level rather than multiplying with it -- Elling's explicit
@@ -1092,13 +1097,235 @@ namespace sssketch
                     return true;
                 };
 
+                // The straight path: the stem's tiles across the rifff's window. As a lambda so a
+                // straight tail (CycleTable::Tail, a row folding in) can play the outgoing lap's
+                // continuation of it -- `continueOffsetBars` on from this block, fading out over
+                // kCycleSeamFadeSec from `tailStartBars` -- with the very same code. With
+                // tailStartBars < 0 it is the stem's own straight playback, unshifted (the block
+                // window plus 0.0, and no fade: exactly as before). Returns false where the stem
+                // cannot play at all.
+                const auto addStraight = [&](double continueOffsetBars, double tailStartBars) {
+                    const bool isTail = tailStartBars >= 0.0;
+                    const double tailElapsedSec =
+                        isTail ? (lapClock.baseBars + positionBars - tailStartBars) * spb : 0.0;
+                    const double bStartSec = blockStartSec + continueOffsetBars * spb;
+                    const double bEndSec = blockEndSec + continueOffsetBars * spb;
+
+                    // barLength is in bars and may be fractional (a half-bar
+                    // Endlesss stem is 0.5, a 24-sixteenths one is 1.5). It used
+                    // to be an int, which made a half-bar stem 0 -- skipped here,
+                    // silent -- and tiled a 1.5-bar stem every 1 bar. As a double
+                    // it can now also be NaN (which `<= 0` lets through) or a
+                    // pathologically tiny value whose tile count would overflow
+                    // the int tile indices below, so both are rejected. The floor
+                    // (1/256 bar) is far below Endlesss's own 1/16-bar grain, and
+                    // keeps the per-block tile walk to a couple of tiles at most.
+                    if (!std::isfinite(stem.barLength) || stem.barLength < kMinStemBarLength)
+                        return false;
+
+                    // Which tile(s) of this stem's repeating pattern overlap this
+                    // block's time window — bounded to just those, rather than
+                    // (as a previous version of this function did, via
+                    // computeStemSchedule with an unbounded search) walking every
+                    // tile of the stem across the *whole* rifff on every single
+                    // block. That was unbounded work — and a heap allocation —
+                    // scaling with rifff length, not block size, and on a
+                    // real-time audio callback (Transport.cpp) that's exactly
+                    // the kind of per-block cost that shows up as coreaudiod CPU
+                    // spikes on longer or tile-dense arrangements.
+                    //
+                    // isFirstSegment/isLastSegment are computed from each tile's
+                    // own fixed index (0, and totalTiles - 1) rather than
+                    // position within a filtered list — the same fix
+                    // computeStemSchedule's own -infinity/projectPos trick was
+                    // working around (a shrinking filtered list changing which
+                    // "index" counts as first) can't reappear here, since we
+                    // never build a list at all.
+                    const double start = stem.startBarOverride >= 0.0 ? stem.startBarOverride : rifff.startBar;
+                    // Wrapped into [0, stem.barLength) — kept in sync by hand with
+                    // SchedulePlayback.cpp's identical fix/reasoning (this function
+                    // is a hand-optimized reimplementation of the same algorithm
+                    // for the real-time callback, not a caller of
+                    // computeStemSchedule — see the comment above this loop).
+                    const double rawOffsetBars = stem.offsetSteps / snap->project.snapDiv;
+                    double offsetBars = std::fmod(rawOffsetBars, stem.barLength);
+                    if (offsetBars < 0.0)
+                        offsetBars += stem.barLength;
+                    // lowerBound/upperBound together define the visible/audible
+                    // window as [lowerBound, upperBound) bars, relative to
+                    // start+offsetBars -- NEITHER start NOR offsetBars moves for
+                    // a crop (see docs/superpowers/specs/
+                    // 2026-08-04-tiled-clip-crop-trim-design.md); leftCropBars
+                    // can be negative (extend-left, revealing tiles before the
+                    // original anchor) just as playedBars can already exceed
+                    // rifff.barLength (extend-right).
+                    // Falls back to 0.0 (no crop) for a non-finite value (NaN/Infinity --
+                    // e.g. an oversized number in a hand-edited or corrupted project file)
+                    // rather than flowing straight into the tile-index arithmetic below,
+                    // where a float->int cast on a non-finite double is undefined behaviour
+                    // and could turn this real-time audio callback into a runaway loop.
+                    // upperBound already gets the same protection for free via its `>= 0.0`
+                    // ternary (NaN/-Infinity both fail that comparison and fall through to
+                    // the already-bounded rifff.barLength).
+                    const double lowerBound = std::isfinite(stem.leftCropBars) ? stem.leftCropBars : 0.0;
+                    const double upperBound = stem.playedBars >= 0.0 ? stem.playedBars : rifff.barLength;
+                    if (upperBound <= lowerBound)
+                        return false;
+                    const double secPerBarNative = stem.durationSec / stem.barLength;
+
+                    // Clamped in double space before the int cast: with a
+                    // fractional (smaller) divisor, an oversized or +Infinity
+                    // playedBars/leftCropBars from a corrupted file would
+                    // otherwise overflow int -- undefined behaviour on the
+                    // real-time thread.
+                    const int firstTileIdx = tileIndexFromDouble(std::floor(lowerBound / stem.barLength));
+                    const int totalTiles = tileIndexFromDouble(std::ceil(upperBound / stem.barLength));
+                    const double tileDurationSec = stem.barLength * spb;
+                    // The first AUDIBLE tile's own start (not tile 0's start,
+                    // unless lowerBound is itself 0) -- this is what the
+                    // one-tile-slack skip-ahead below measures forward from.
+                    const double firstTileStartSec = (start + offsetBars + lowerBound) * spb;
+
+                    // One tile of slack behind the naive floor absorbs floating-
+                    // point rounding at a tile boundary (positionBars is a bar
+                    // position converted from a sample count, and a seek can land
+                    // anywhere) — worst case the extra
+                    // tile checked here is immediately skipped by the per-tile
+                    // overlap test below, at negligible cost. Floored at
+                    // firstTileIdx now, not a hardcoded 0 -- firstTileIdx can be
+                    // negative (extend-left case).
+                    int tileIdx = firstTileIdx + std::max(
+                        0,
+                        tileIndexFromDouble(std::floor((bStartSec - firstTileStartSec) / tileDurationSec)) - 1);
+
+                    for (; tileIdx < totalTiles; ++tileIdx)
+                    {
+                        const double barOffset = (double) tileIdx * stem.barLength;
+                        // Clip THIS tile against both bounds symmetrically -- the
+                        // first audible tile gets clipped from the left when
+                        // lowerBound falls inside it (barOffset < lowerBound <
+                        // barOffset+barLength), the last gets clipped from the
+                        // right exactly as it always did.
+                        const double tileStart = std::max(barOffset, lowerBound);
+                        const double tileEnd = std::min(barOffset + stem.barLength, upperBound);
+                        if (tileEnd <= tileStart)
+                            continue; // shouldn't normally happen given firstTileIdx/totalTiles above; defensive
+                        const double segmentBarLength = tileEnd - tileStart;
+                        const double segStartSec = (start + offsetBars + tileStart) * spb;
+                        const double segEndSec = segStartSec + segmentBarLength * secPerBarNative;
+                        // How far into THIS tile's own native content segStartSec
+                        // actually begins -- zero for every tile except one
+                        // clipped from the left by lowerBound, where it's however
+                        // far past that tile's own natural start the crop point
+                        // falls. Without this, a left-clipped tile would read
+                        // from ITS OWN sample 0 at segStartSec instead of from
+                        // partway through -- the exact same "restarts instead of
+                        // continuing" bug this whole feature exists to fix, just
+                        // one layer deeper (source-buffer read position, not
+                        // just the rendered time window).
+                        const double sourceOffsetSec = (tileStart - barOffset) * secPerBarNative;
+
+                        // Tiles only get later from here on — nothing further in
+                        // this loop can overlap the block once one starts after it.
+                        if (segStartSec >= bEndSec)
+                            break;
+                        // Reached via the one-tile slack margin above; this
+                        // particular tile turned out to end before the block starts.
+                        if (segEndSec <= bStartSec)
+                            continue;
+
+                        const bool isFirstSegment = tileIdx == firstTileIdx;
+                        const bool isLastSegment = tileIdx == totalTiles - 1;
+
+                        prepareStemBuffer();
+                        auto fadePoints = buildFadePoints(
+                            segStartSec, segEndSec - segStartSec,
+                            isFirstSegment, isLastSegment,
+                            true, // renderBlock's fade points are anchored at each segment's
+                                  // own absolute start time (segStartSec), not at "now" the
+                                  // way AudioEngine.ts's Web Audio automation is (there,
+                                  // `when` gets clamped to the resume moment for a segment
+                                  // resumed mid-way, and isFreshStart=false suppresses the
+                                  // fade-in ramp so it doesn't restart from silence at that
+                                  // clamped time). evaluateGainAtTime here is a pure function
+                                  // of absolute time queried fresh every block — whichever
+                                  // block first renders a given segment's samples, the curve
+                                  // it evaluates against is identical, so there's no separate
+                                  // "resumed mid-way" case that needs a different curve: the
+                                  // gain at any sampleTimeSec is already correct regardless of
+                                  // when we started asking for it.
+                            fadeConfig);
+
+                        for (int i2 = 0; i2 < numSamples; ++i2)
+                        {
+                            const double sampleTimeSec = bStartSec + (double) i2 / sampleRate;
+                            if (sampleTimeSec < segStartSec || sampleTimeSec >= segEndSec)
+                                continue;
+                            const double posInSegSec = sampleTimeSec - segStartSec;
+                            // Kept as double until this final conversion so a source sample
+                            // rate that doesn't evenly match the output rate (e.g. 22050Hz
+                            // source under a 44100Hz device) still maps time to a source
+                            // sample index correctly — this is nearest-sample lookup (no
+                            // interpolation), which is exact when rates match and merely
+                            // lower quality (not wrong-speed/wrong-pitch) when they don't.
+                            //
+                            // Rounded to the nearest sample, NOT truncated. An earlier version
+                            // truncated (plain `(int)` cast) on the reasoning that the operand
+                            // is always >= 0 so truncation == floor == "the sample at or before
+                            // this time", which is mathematically fine in real-number terms.
+                            // But native-engine/test/parity/render-parity.test.ts's parity
+                            // test (Task 10) caught this failing in practice, even when
+                            // srcSampleRate and sampleRate hold the exact same 44100.0 bit
+                            // pattern: sampleTimeSec is built by dividing i2 by sampleRate and
+                            // adding it to bStartSec, then this line subtracts segStartSec
+                            // and multiplies by srcSampleRate again — a divide-then-add/subtract-
+                            // then-multiply round trip that is not guaranteed to exactly invert
+                            // in binary floating point, regardless of whether the two rate
+                            // values are the same double or different ones. That non-
+                            // associativity occasionally lands the product a hair below the
+                            // intended whole number (e.g. 14.999999999999998 instead of 15.0).
+                            // Truncating that silently re-reads the previous sample instead of
+                            // advancing, producing an audible repeated-sample glitch roughly
+                            // once every few dozen samples even when the source and output
+                            // rates match exactly. Rounding to nearest absorbs that sub-ULP
+                            // drift without changing behaviour for genuinely mismatched rates
+                            // (still nearest-sample, just correctly nearest instead of
+                            // always-floor).
+                            const int srcSample = (int) std::llround((posInSegSec + sourceOffsetSec) * entry.sampleRate);
+                            if (srcSample < 0 || srcSample >= entry.buffer->getNumSamples())
+                                continue;
+
+                            double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * effectiveVolume
+                                * muteRegionGainAt(sampleTimeSec, spb, stem.muteRegions);
+                            if (isTail)
+                            {
+                                const double out =
+                                    1.0 - (tailElapsedSec + (double) i2 / sampleRate) / kCycleSeamFadeSec;
+                                if (out <= 0.0)
+                                    break; // the tail is over; CycleTable drops it next block
+                                gain *= out;
+                            }
+                            const int numCh = entry.buffer->getNumChannels();
+                            const float l = entry.buffer->getSample(0, srcSample);
+                            const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
+                            stemOutL[i2] += (float) (l * gain);
+                            stemOutR[i2] += (float) (r * gain);
+                        }
+                    }
+
+                    return true;
+                };
+
                 // A cycle replaced or removed at the top (a fold step, the row unfolding, a `now`
                 // stage) was mid-tile at full gain there: its tail plays on beside whatever
                 // follows -- the incoming cycle, which fades in from its origin over the same
                 // 10 ms (addCycle: even a phased one, mid-tile there), or the straight stem below
-                // -- so the change is a 10 ms crossfade, not a cut. The tail
-                // is in this stem's buffer before either path adds to it, and the guard folds it
-                // into the channel even if neither path gets as far as finishStem.
+                // -- so the change is a 10 ms crossfade, not a cut. A row folding in from
+                // straight is the same the other way: the straight stem may be mid-tile at the
+                // top, and its continuation (addStraight, the outgoing lap's) fades out beside the
+                // incoming cycle; only while the row is folded, so the straight stem never plays
+                // twice. The tail is in this stem's buffer before either path adds to it, and the
+                // guard folds it into the channel even if neither path gets as far as finishStem.
                 bool tailPlayed = false;
                 const auto tailGuard = onScopeExit([&] {
                     if (tailPlayed && ! stemFinished)
@@ -1106,8 +1333,13 @@ namespace sssketch
                 });
                 if (stem.cycleRowKey != 0)
                     if (const auto* tail = cycleTable.findTail(stem.cycleRowKey, cycleStemHash))
-                        tailPlayed = addCycle(tail->row.bars, tail->row.phaseBars, tail->originBars,
-                                              tail->startBars);
+                    {
+                        if (tail->kind == CycleTable::TailKind::cycle)
+                            tailPlayed = addCycle(tail->row.bars, tail->row.phaseBars, tail->originBars,
+                                                  tail->startBars);
+                        else if (cycleTable.find(stem.cycleRowKey) != nullptr)
+                            tailPlayed = addStraight(tail->continueOffsetBars, tail->startBars);
+                    }
 
                 if (stem.cycleRowKey != 0)
                 {
@@ -1121,200 +1353,8 @@ namespace sssketch
                     }
                 }
 
-                // barLength is in bars and may be fractional (a half-bar
-                // Endlesss stem is 0.5, a 24-sixteenths one is 1.5). It used
-                // to be an int, which made a half-bar stem 0 -- skipped here,
-                // silent -- and tiled a 1.5-bar stem every 1 bar. As a double
-                // it can now also be NaN (which `<= 0` lets through) or a
-                // pathologically tiny value whose tile count would overflow
-                // the int tile indices below, so both are rejected. The floor
-                // (1/256 bar) is far below Endlesss's own 1/16-bar grain, and
-                // keeps the per-block tile walk to a couple of tiles at most.
-                if (!std::isfinite(stem.barLength) || stem.barLength < kMinStemBarLength)
+                if (! addStraight(0.0, -1.0))
                     continue;
-
-                // Which tile(s) of this stem's repeating pattern overlap this
-                // block's time window — bounded to just those, rather than
-                // (as a previous version of this function did, via
-                // computeStemSchedule with an unbounded search) walking every
-                // tile of the stem across the *whole* rifff on every single
-                // block. That was unbounded work — and a heap allocation —
-                // scaling with rifff length, not block size, and on a
-                // real-time audio callback (Transport.cpp) that's exactly
-                // the kind of per-block cost that shows up as coreaudiod CPU
-                // spikes on longer or tile-dense arrangements.
-                //
-                // isFirstSegment/isLastSegment are computed from each tile's
-                // own fixed index (0, and totalTiles - 1) rather than
-                // position within a filtered list — the same fix
-                // computeStemSchedule's own -infinity/projectPos trick was
-                // working around (a shrinking filtered list changing which
-                // "index" counts as first) can't reappear here, since we
-                // never build a list at all.
-                const double start = stem.startBarOverride >= 0.0 ? stem.startBarOverride : rifff.startBar;
-                // Wrapped into [0, stem.barLength) — kept in sync by hand with
-                // SchedulePlayback.cpp's identical fix/reasoning (this function
-                // is a hand-optimized reimplementation of the same algorithm
-                // for the real-time callback, not a caller of
-                // computeStemSchedule — see the comment above this loop).
-                const double rawOffsetBars = stem.offsetSteps / snap->project.snapDiv;
-                double offsetBars = std::fmod(rawOffsetBars, stem.barLength);
-                if (offsetBars < 0.0)
-                    offsetBars += stem.barLength;
-                // lowerBound/upperBound together define the visible/audible
-                // window as [lowerBound, upperBound) bars, relative to
-                // start+offsetBars -- NEITHER start NOR offsetBars moves for
-                // a crop (see docs/superpowers/specs/
-                // 2026-08-04-tiled-clip-crop-trim-design.md); leftCropBars
-                // can be negative (extend-left, revealing tiles before the
-                // original anchor) just as playedBars can already exceed
-                // rifff.barLength (extend-right).
-                // Falls back to 0.0 (no crop) for a non-finite value (NaN/Infinity --
-                // e.g. an oversized number in a hand-edited or corrupted project file)
-                // rather than flowing straight into the tile-index arithmetic below,
-                // where a float->int cast on a non-finite double is undefined behaviour
-                // and could turn this real-time audio callback into a runaway loop.
-                // upperBound already gets the same protection for free via its `>= 0.0`
-                // ternary (NaN/-Infinity both fail that comparison and fall through to
-                // the already-bounded rifff.barLength).
-                const double lowerBound = std::isfinite(stem.leftCropBars) ? stem.leftCropBars : 0.0;
-                const double upperBound = stem.playedBars >= 0.0 ? stem.playedBars : rifff.barLength;
-                if (upperBound <= lowerBound)
-                    continue;
-                const double secPerBarNative = stem.durationSec / stem.barLength;
-
-                // Clamped in double space before the int cast: with a
-                // fractional (smaller) divisor, an oversized or +Infinity
-                // playedBars/leftCropBars from a corrupted file would
-                // otherwise overflow int -- undefined behaviour on the
-                // real-time thread.
-                const int firstTileIdx = tileIndexFromDouble(std::floor(lowerBound / stem.barLength));
-                const int totalTiles = tileIndexFromDouble(std::ceil(upperBound / stem.barLength));
-                const double tileDurationSec = stem.barLength * spb;
-                // The first AUDIBLE tile's own start (not tile 0's start,
-                // unless lowerBound is itself 0) -- this is what the
-                // one-tile-slack skip-ahead below measures forward from.
-                const double firstTileStartSec = (start + offsetBars + lowerBound) * spb;
-
-                // One tile of slack behind the naive floor absorbs floating-
-                // point rounding at a tile boundary (positionBars is a bar
-                // position converted from a sample count, and a seek can land
-                // anywhere) — worst case the extra
-                // tile checked here is immediately skipped by the per-tile
-                // overlap test below, at negligible cost. Floored at
-                // firstTileIdx now, not a hardcoded 0 -- firstTileIdx can be
-                // negative (extend-left case).
-                int tileIdx = firstTileIdx + std::max(
-                    0,
-                    tileIndexFromDouble(std::floor((blockStartSec - firstTileStartSec) / tileDurationSec)) - 1);
-
-                for (; tileIdx < totalTiles; ++tileIdx)
-                {
-                    const double barOffset = (double) tileIdx * stem.barLength;
-                    // Clip THIS tile against both bounds symmetrically -- the
-                    // first audible tile gets clipped from the left when
-                    // lowerBound falls inside it (barOffset < lowerBound <
-                    // barOffset+barLength), the last gets clipped from the
-                    // right exactly as it always did.
-                    const double tileStart = std::max(barOffset, lowerBound);
-                    const double tileEnd = std::min(barOffset + stem.barLength, upperBound);
-                    if (tileEnd <= tileStart)
-                        continue; // shouldn't normally happen given firstTileIdx/totalTiles above; defensive
-                    const double segmentBarLength = tileEnd - tileStart;
-                    const double segStartSec = (start + offsetBars + tileStart) * spb;
-                    const double segEndSec = segStartSec + segmentBarLength * secPerBarNative;
-                    // How far into THIS tile's own native content segStartSec
-                    // actually begins -- zero for every tile except one
-                    // clipped from the left by lowerBound, where it's however
-                    // far past that tile's own natural start the crop point
-                    // falls. Without this, a left-clipped tile would read
-                    // from ITS OWN sample 0 at segStartSec instead of from
-                    // partway through -- the exact same "restarts instead of
-                    // continuing" bug this whole feature exists to fix, just
-                    // one layer deeper (source-buffer read position, not
-                    // just the rendered time window).
-                    const double sourceOffsetSec = (tileStart - barOffset) * secPerBarNative;
-
-                    // Tiles only get later from here on — nothing further in
-                    // this loop can overlap the block once one starts after it.
-                    if (segStartSec >= blockEndSec)
-                        break;
-                    // Reached via the one-tile slack margin above; this
-                    // particular tile turned out to end before the block starts.
-                    if (segEndSec <= blockStartSec)
-                        continue;
-
-                    const bool isFirstSegment = tileIdx == firstTileIdx;
-                    const bool isLastSegment = tileIdx == totalTiles - 1;
-
-                    prepareStemBuffer();
-                    auto fadePoints = buildFadePoints(
-                        segStartSec, segEndSec - segStartSec,
-                        isFirstSegment, isLastSegment,
-                        true, // renderBlock's fade points are anchored at each segment's
-                              // own absolute start time (segStartSec), not at "now" the
-                              // way AudioEngine.ts's Web Audio automation is (there,
-                              // `when` gets clamped to the resume moment for a segment
-                              // resumed mid-way, and isFreshStart=false suppresses the
-                              // fade-in ramp so it doesn't restart from silence at that
-                              // clamped time). evaluateGainAtTime here is a pure function
-                              // of absolute time queried fresh every block — whichever
-                              // block first renders a given segment's samples, the curve
-                              // it evaluates against is identical, so there's no separate
-                              // "resumed mid-way" case that needs a different curve: the
-                              // gain at any sampleTimeSec is already correct regardless of
-                              // when we started asking for it.
-                        fadeConfig);
-
-                    for (int i2 = 0; i2 < numSamples; ++i2)
-                    {
-                        const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
-                        if (sampleTimeSec < segStartSec || sampleTimeSec >= segEndSec)
-                            continue;
-                        const double posInSegSec = sampleTimeSec - segStartSec;
-                        // Kept as double until this final conversion so a source sample
-                        // rate that doesn't evenly match the output rate (e.g. 22050Hz
-                        // source under a 44100Hz device) still maps time to a source
-                        // sample index correctly — this is nearest-sample lookup (no
-                        // interpolation), which is exact when rates match and merely
-                        // lower quality (not wrong-speed/wrong-pitch) when they don't.
-                        //
-                        // Rounded to the nearest sample, NOT truncated. An earlier version
-                        // truncated (plain `(int)` cast) on the reasoning that the operand
-                        // is always >= 0 so truncation == floor == "the sample at or before
-                        // this time", which is mathematically fine in real-number terms.
-                        // But native-engine/test/parity/render-parity.test.ts's parity
-                        // test (Task 10) caught this failing in practice, even when
-                        // srcSampleRate and sampleRate hold the exact same 44100.0 bit
-                        // pattern: sampleTimeSec is built by dividing i2 by sampleRate and
-                        // adding it to blockStartSec, then this line subtracts segStartSec
-                        // and multiplies by srcSampleRate again — a divide-then-add/subtract-
-                        // then-multiply round trip that is not guaranteed to exactly invert
-                        // in binary floating point, regardless of whether the two rate
-                        // values are the same double or different ones. That non-
-                        // associativity occasionally lands the product a hair below the
-                        // intended whole number (e.g. 14.999999999999998 instead of 15.0).
-                        // Truncating that silently re-reads the previous sample instead of
-                        // advancing, producing an audible repeated-sample glitch roughly
-                        // once every few dozen samples even when the source and output
-                        // rates match exactly. Rounding to nearest absorbs that sub-ULP
-                        // drift without changing behaviour for genuinely mismatched rates
-                        // (still nearest-sample, just correctly nearest instead of
-                        // always-floor).
-                        const int srcSample = (int) std::llround((posInSegSec + sourceOffsetSec) * entry.sampleRate);
-                        if (srcSample < 0 || srcSample >= entry.buffer->getNumSamples())
-                            continue;
-
-                        const double gain = evaluateGainAtTime(fadePoints, sampleTimeSec) * effectiveVolume
-                            * muteRegionGainAt(sampleTimeSec, spb, stem.muteRegions);
-                        const int numCh = entry.buffer->getNumChannels();
-                        const float l = entry.buffer->getSample(0, srcSample);
-                        const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
-                        stemOutL[i2] += (float) (l * gain);
-                        stemOutR[i2] += (float) (r * gain);
-                    }
-                }
-
                 finishStem();
             }
             }
