@@ -3,6 +3,7 @@ import {
   FOLD_DRIFT_RANGE,
   FOLD_MAX_ROWS,
   createRadioFold,
+  foldSeedKey,
   radioFoldAllowedCycles,
   radioFoldIntervalBars,
   radioFoldMarkedBarsAhead,
@@ -13,6 +14,7 @@ import {
   type RadioFoldState,
   type RadioFoldStep
 } from './radioFold'
+import { seededRandom } from './seededRandom'
 
 const row = (id: string, over: Partial<RadioFoldRow> = {}): RadioFoldRow => ({
   id,
@@ -79,6 +81,23 @@ describe('stepRadioFold: replay', () => {
 
   it('decides one lap ahead: the first step is lap 0', () => {
     expect(stepRadioFold(createRadioFold('k3x9pq'), input(40)).lap).toBe(0)
+  })
+
+  it('an old six-character seed draws from itself, as it always has', () => {
+    // the first draw sizes the first folded stretch: 48 bars at fold 40, +-25%
+    const first = seededRandom('autech#0')()
+    const laps = Math.max(1, Math.round((48 * (0.75 + 0.5 * first)) / 4))
+    expect(stepRadioFold(createRadioFold('autech'), input(40)).state.stretchEndsLap).toBe(laps)
+  })
+
+  it('a text seed draws from its hash; the same text replays, in any case', () => {
+    const first = seededRandom(`${foldSeedKey('elling')}#0`)()
+    const laps = Math.max(1, Math.round((48 * (0.75 + 0.5 * first)) / 4))
+    expect(stepRadioFold(createRadioFold('elling'), input(40)).state.stretchEndsLap).toBe(laps)
+    const a = run('elling', 300, () => input(70)).map((s) => s.cycles)
+    const b = run('Elling', 300, () => input(70)).map((s) => s.cycles)
+    expect(b).toEqual(a)
+    expect(run('ellinh', 300, () => input(70)).map((s) => s.cycles)).not.toEqual(a)
   })
 })
 

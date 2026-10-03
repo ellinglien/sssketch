@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_FOLD_SEED,
   FOLD_SEED_ALPHABET,
+  FOLD_SEED_TEXT_MAX,
+  cleanFoldSeed,
+  foldSeedKey,
   newFoldSeed,
   normalizeFoldAmount,
   normalizeFoldSeed,
@@ -12,6 +15,7 @@ import {
   radioFoldRealignBeats,
   type RadioFoldRow
 } from './radioFold'
+import { hashText } from './seededRandom'
 
 const row = (id: string, over: Partial<RadioFoldRow> = {}): RadioFoldRow => ({
   id,
@@ -119,12 +123,36 @@ describe('fold settings', () => {
     expect(normalizeFoldAmount(Number.NaN, 25)).toBe(25)
   })
 
-  it('a seed is six characters of the alphabet; a pasted one is cleaned', () => {
+  it('a seed: a six-character code in any case is that code; any other text is kept as typed', () => {
     expect(normalizeFoldSeed('k3x9pq')).toBe('k3x9pq')
-    expect(normalizeFoldSeed(' K3X-9PQ ')).toBe('k3x9pq')
-    expect(normalizeFoldSeed('abc')).toBe(DEFAULT_FOLD_SEED)
-    expect(normalizeFoldSeed('k3x9pq0')).toBe('k3x9pq') // 0 is not in the alphabet
+    expect(normalizeFoldSeed(' K3X9PQ ')).toBe('k3x9pq')
+    expect(normalizeFoldSeed('autech')).toBe('autech')
+    // l and i are not in the alphabet, so `elling` is text, kept as typed (trimmed)
+    expect(normalizeFoldSeed('elling')).toBe('elling')
+    expect(normalizeFoldSeed(' Elling ')).toBe('Elling')
+    expect(normalizeFoldSeed('K3X-9PQ')).toBe('K3X-9PQ')
+    expect(normalizeFoldSeed('abc')).toBe('abc')
+    expect(normalizeFoldSeed('x'.repeat(40))).toBe('x'.repeat(FOLD_SEED_TEXT_MAX))
+    expect(normalizeFoldSeed('')).toBe(DEFAULT_FOLD_SEED)
+    expect(normalizeFoldSeed('   ')).toBe(DEFAULT_FOLD_SEED)
     expect(normalizeFoldSeed(42)).toBe(DEFAULT_FOLD_SEED)
+  })
+
+  it('nothing usable cleans to null, so a box left empty keeps the seed in use', () => {
+    expect(cleanFoldSeed('')).toBeNull()
+    expect(cleanFoldSeed('  ')).toBeNull()
+    expect(cleanFoldSeed(undefined)).toBeNull()
+    expect(cleanFoldSeed('elling')).toBe('elling')
+  })
+
+  it('the machine draws from a code as it is, and from any other text by a stable hash', () => {
+    expect(foldSeedKey('autech')).toBe('autech')
+    expect(foldSeedKey('k3x9pq')).toBe('k3x9pq')
+    expect(foldSeedKey('elling')).toBe(`~${hashText('elling')}`)
+    // FNV-1a (hashText): the same on every machine and every run
+    expect(foldSeedKey('elling')).toBe('~7c2b3586')
+    expect(foldSeedKey('Elling')).toBe(foldSeedKey('elling'))
+    expect(foldSeedKey('elling')).not.toBe(foldSeedKey('ellinh'))
   })
 
   it('new draws six characters from the alphabet', () => {

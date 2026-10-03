@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import { DEFAULT_TRAIT_BAR, normalizeTraitMatchBar } from '@shared/traitBar'
-import { newFoldSeed, normalizeFoldSeed } from '@shared/radioFold'
+import { cleanFoldSeed, newFoldSeed } from '@shared/radioFold'
 import {
   DEFAULT_RADIO_SETTINGS,
   normalizeRadioSettings,
@@ -69,16 +69,11 @@ export function loadDiscoverSettings(): DiscoverSettings {
   }
 }
 
-/** Fold mode's first seed is random, not the shared default (Elling, 2026-10-03): a seed
- * that was saved and is still a valid seed is kept; anything else draws a fresh one, which
- * the next save keeps. */
+/** Fold mode's first seed is random, not the shared default (Elling, 2026-10-03): a saved
+ * seed -- any text since v2 (cleanFoldSeed) -- is kept; none, or a blank one, draws a fresh one,
+ * which the next save keeps. */
 function withRandomFoldSeed(settings: DiscoverSettings, savedSeed: unknown): DiscoverSettings {
-  if (
-    typeof savedSeed === 'string' &&
-    normalizeFoldSeed(savedSeed) === savedSeed.trim().toLowerCase()
-  ) {
-    return settings
-  }
+  if (cleanFoldSeed(savedSeed) !== null) return settings
   return { ...settings, radio: { ...settings.radio, foldSeed: newFoldSeed() } }
 }
 

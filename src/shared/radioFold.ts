@@ -21,7 +21,7 @@
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import type { RadioTurnarounds } from './radioTurnaround'
-import { seededRandom } from './seededRandom'
+import { hashText, seededRandom } from './seededRandom'
 
 /** The cycle lengths a folded row may take, in beats (spec section 1). */
 export const FOLD_CYCLE_BEATS: readonly number[] = [3, 3.5, 5, 5.5, 7, 9]
@@ -58,6 +58,10 @@ export const DEFAULT_RADIO_CLASH = 25
 export const FOLD_SEED_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
 export const FOLD_SEED_LENGTH = 6
 export const DEFAULT_FOLD_SEED = 'autech'
+/** Any-text seeds (v2 section 3) are kept up to this many characters. */
+export const FOLD_SEED_TEXT_MAX = 32
+/** A six-character code: what `new` draws, and every seed saved before any-text seeds. */
+const FOLD_SEED_CODE = new RegExp(`^[${FOLD_SEED_ALPHABET}]{${FOLD_SEED_LENGTH}}$`)
 
 /** A 0..100 fader value, rounded; anything that is not a finite number is `fallback`. */
 export function normalizeFoldAmount(value: unknown, fallback: number): number {
@@ -65,12 +69,30 @@ export function normalizeFoldAmount(value: unknown, fallback: number): number {
   return Math.min(100, Math.max(0, Math.round(value)))
 }
 
-/** A typed or pasted seed: lowercased, everything outside the alphabet dropped. Exactly six
- * characters must remain, or it is the default. */
+/** A typed seed, or null when there is nothing to use (not a string, or blank: a box left empty
+ * keeps the seed in use). A six-character code, in any case, is that code lowercased, so every
+ * saved seed replays exactly as before; any other text is kept as typed, trimmed, at most
+ * FOLD_SEED_TEXT_MAX characters (v2 section 3). */
+export function cleanFoldSeed(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const t = value.trim()
+  if (t === '') return null
+  const lower = t.toLowerCase()
+  if (FOLD_SEED_CODE.test(lower)) return lower
+  return [...t].slice(0, FOLD_SEED_TEXT_MAX).join('')
+}
+
+/** A saved or typed seed, the default for nothing usable (cleanFoldSeed). */
 export function normalizeFoldSeed(value: unknown): string {
-  if (typeof value !== 'string') return DEFAULT_FOLD_SEED
-  const kept = [...value.trim().toLowerCase()].filter((ch) => FOLD_SEED_ALPHABET.includes(ch))
-  return kept.length === FOLD_SEED_LENGTH ? kept.join('') : DEFAULT_FOLD_SEED
+  return cleanFoldSeed(value) ?? DEFAULT_FOLD_SEED
+}
+
+/** What the machine draws from: a code as it is (so `autech` draws `autech#0`, `autech#1`... as
+ * it always has), any other text through FNV-1a (hashText), lowercased: `Elling` and `elling`
+ * fold the same. The `~` keeps a hashed text from ever equalling a code. */
+export function foldSeedKey(seed: string): string {
+  const lower = seed.toLowerCase()
+  return FOLD_SEED_CODE.test(lower) ? lower : `~${hashText(lower)}`
 }
 
 /** The `new` button: six characters drawn from the alphabet. */
@@ -354,7 +376,8 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     })),
     drift: { ...prev.drift }
   }
-  const draw = (): number => seededRandom(`${s.seed}#${s.draws++}`)()
+  const key = foldSeedKey(s.seed)
+  const draw = (): number => seededRandom(`${key}#${s.draws++}`)()
   const lap = s.lap + 1
   s.lap = lap
   const f = normalizeFoldAmount(input.fold, DEFAULT_RADIO_FOLD) / 100

@@ -31,6 +31,11 @@ describe('RadioSettings fold fields', () => {
     expect(normalizeRadioSettings({ foldMode: true }).foldMode).toBe(true)
   })
 
+  it('a text seed is kept as typed; a blank one is the default', () => {
+    expect(normalizeRadioSettings({ foldSeed: 'elling' }).foldSeed).toBe('elling')
+    expect(normalizeRadioSettings({ foldSeed: '  ' }).foldSeed).toBe('autech')
+  })
+
   it('fold mode replaces the pace window with 16-64 bars, and gives the pace window back off', () => {
     const on = normalizeRadioSettings({ pace: 'fast', foldMode: true })
     expect(radioPaceWindowOf(on)).toEqual({ min: 16, max: 64 })

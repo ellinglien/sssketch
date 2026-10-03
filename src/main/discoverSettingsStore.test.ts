@@ -47,6 +47,22 @@ describe('discoverSettingsStore', () => {
     expect(loadDiscoverSettings().radio.foldSeed).toMatch(FOLD_SEED)
   })
 
+  it('keeps a saved text seed as typed (v2: any text is a seed)', async () => {
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radio: { foldSeed: 'Elling' } }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radio.foldSeed).toBe('Elling')
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radio: { foldSeed: '   ' } }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radio.foldSeed).toMatch(FOLD_SEED)
+  })
+
   it('persists consent across a save/load round trip', async () => {
     const { loadDiscoverSettings, saveDiscoverSettings } = await import('./discoverSettingsStore')
     saveDiscoverSettings({
