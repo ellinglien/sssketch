@@ -109,6 +109,69 @@ namespace sssketch
                 }
                 expect(t.apply(false)); // the retry, a block later
             }
+
+            // A cycle replaced or removed at the top was mid-tile at full gain: it leaves a tail,
+            // its continuation for kCycleSeamFadeSec, so the change crossfades instead of
+            // stopping dead (PlaybackEngine::renderBlock renders it).
+            beginTest("a replaced cycle leaves a tail from the next block, for 10 ms, for the stem that played it");
+            {
+                CycleTable t;
+                const auto perc = cycleKeyOf("perc");
+                t.stage({ row("perc", "perc~1", 1.75, 0.25) }, true);
+                t.apply(false);
+                auto* live = t.find(perc);
+                CycleTable::originFor(*live, { 0.0, 1 });
+                live->stemHash = 77;
+                t.stage({ row("perc", "perc~2", 1.5) }, false);
+                expect(t.apply(true));
+                expect(t.tailCount() == 1);
+                // 60 bpm: a bar is 4 s. The first block of lap 1 starts the tail.
+                t.beginBlock({ 4.0, 1 }, 0.0, 4.0);
+                const auto* tail = t.findTail(perc, 77);
+                expect(tail != nullptr);
+                expect(t.findTail(perc, 78) == nullptr); // another stem in the row (a swap) has none
+                if (tail != nullptr)
+                {
+                    expectWithinAbsoluteError(tail->row.bars, 1.75, 1e-12);
+                    expectWithinAbsoluteError(tail->row.phaseBars, 0.25, 1e-12);
+                    expectWithinAbsoluteError(tail->originBars, 0.0, 1e-12);
+                    expectWithinAbsoluteError(tail->startBars, 4.0, 1e-12);
+                }
+                t.beginBlock({ 4.0, 1 }, 0.009 / 4.0, 4.0);
+                expect(t.tailCount() == 1);
+                t.beginBlock({ 4.0, 1 }, 0.0101 / 4.0, 4.0);
+                expect(t.tailCount() == 0);
+                expect(t.findTail(perc, 77) == nullptr);
+            }
+
+            beginTest("a row removed (unfolded) leaves a tail; the same cycle re-staged, or one never heard, does not");
+            {
+                CycleTable t;
+                t.stage({ row("perc", "perc~1", 1.75), row("bass", "bass~1", 1.25) }, true);
+                t.apply(false);
+                CycleTable::originFor(*t.find(cycleKeyOf("perc")), { 0.0, 1 }); // bass never rendered
+                t.stage({ row("perc", "perc~1", 1.75), row("bass", "bass~2", 1.5) }, false);
+                t.apply(true);
+                expect(t.tailCount() == 0);
+                t.stage({}, false);
+                t.apply(true);
+                expect(t.tailCount() == 1);
+                t.beginBlock({ 4.0, 1 }, 0.0, 4.0);
+                expect(t.findTail(cycleKeyOf("perc"), 0) != nullptr);
+            }
+
+            beginTest("a tail from another epoch (a seek, a play) is dropped, not played");
+            {
+                CycleTable t;
+                t.stage({ row("perc", "perc~1", 1.75) }, true);
+                t.apply(false);
+                CycleTable::originFor(*t.find(cycleKeyOf("perc")), { 0.0, 1 });
+                t.stage({}, true);
+                t.apply(false);
+                expect(t.tailCount() == 1);
+                t.beginBlock({ 0.0, 2 }, 1.0, 4.0);
+                expect(t.tailCount() == 0);
+            }
         }
     };
 

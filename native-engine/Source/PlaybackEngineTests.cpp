@@ -675,6 +675,91 @@ namespace sssketch
                 ramp.deleteFile();
             }
 
+            // A fold step at a loop top replaces a row's cycle (a new id, a new length) or removes
+            // it (the row unfolds), and the outgoing cycle is mid-tile there at full gain -- a 7-beat
+            // cycle in a 16-beat loop is 2 beats into a tile at the first top. The incoming fades in
+            // from 0; the outgoing has to fade out alongside it, over the same 10 ms.
+            // Renders the last 50 ms of lap 0 and the first 50 ms of lap 1, with `next` staged for
+            // the top between them; returns lap 1's half in `lap1` and the largest step overall.
+            const auto acrossTop = [&](PlaybackEngine& engine, const std::vector<CycleRow>& next,
+                                       ChannelChainRegistry& chains, std::vector<float>& lap1) {
+                const int n = (int) (0.05 * 44100.0);
+                std::vector<float> l0((size_t) n, 0.0f), r0((size_t) n, 0.0f), r1((size_t) n, 0.0f);
+                lap1.assign((size_t) n, 0.0f);
+                engine.renderBlock((16.0 - 0.05) / 4.0, 44100.0, n, l0.data(), r0.data(), chains, LapClock { 0.0, 1 });
+                engine.stageCycles(next, false);
+                expect(engine.applyStagedCycles(true));
+                engine.renderBlock(0.0, 44100.0, n, lap1.data(), r1.data(), chains, LapClock { 4.0, 1 });
+                float worst = 0.0f;
+                for (int i = 1; i < n; ++i)
+                    worst = std::max(worst, std::abs(l0[(size_t) i] - l0[(size_t) i - 1]));
+                worst = std::max(worst, std::abs(lap1[0] - l0[(size_t) n - 1]));
+                for (int i = 1; i < n; ++i)
+                    worst = std::max(worst, std::abs(lap1[(size_t) i] - lap1[(size_t) i - 1]));
+                return worst;
+            };
+
+            beginTest("a cycle that changes at the top crossfades out over 10 ms, then is gone");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_step_ramp.wav", 16 * 44100);
+                StemBufferCache cache;
+                ChannelChainRegistry channelChains;
+                PlaybackEngine engine(cache);
+                engine.setProject(foldProject(ramp, "perc"));
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                engine.applyStagedCycles(false);
+                std::vector<float> lap1;
+                const float worst = acrossTop(engine, foldRow(6.0 / 4.0, 0.0, "perc~2"), channelChains, lap1);
+                // the outgoing is 2 s into its tile at the top (0.125); cut dead, that is a 0.125
+                // step. Faded over 441 samples, about 0.0003 a step.
+                expect(worst < 0.002f, "largest step across the fold-step top " + juce::String(worst));
+
+                // past 10 ms nothing of the old cycle is left: lap 1 matches a fresh engine that only
+                // ever had the new cycle (its origin, too, is lap 1's top)
+                PlaybackEngine fresh(cache);
+                fresh.setProject(foldProject(ramp, "perc"));
+                fresh.stageCycles(foldRow(6.0 / 4.0, 0.0, "perc~2"), true);
+                fresh.applyStagedCycles(false);
+                std::vector<float> f((size_t) lap1.size(), 0.0f), fr((size_t) lap1.size(), 0.0f);
+                fresh.renderBlock(0.0, 44100.0, (int) f.size(), f.data(), fr.data(), channelChains, LapClock { 4.0, 1 });
+                expect(std::abs(lap1[100] - f[100]) > 0.01f, "the tail sounds in the first 10 ms");
+                bool same = true;
+                for (size_t i = 442; i < f.size(); ++i)
+                    same = same && lap1[i] == f[i];
+                expect(same, "after 10 ms the tail has expired");
+                // and a later block has no tail at all
+                std::vector<float> a(512, 0.0f), ar(512, 0.0f), b(512, 0.0f), br(512, 0.0f);
+                engine.renderBlock(1.0 / 4.0, 44100.0, 512, a.data(), ar.data(), channelChains, LapClock { 4.0, 1 });
+                fresh.renderBlock(1.0 / 4.0, 44100.0, 512, b.data(), br.data(), channelChains, LapClock { 4.0, 1 });
+                for (size_t i = 0; i < a.size(); ++i)
+                    expectEquals(a[i], b[i]);
+                ramp.deleteFile();
+            }
+
+            beginTest("a row that unfolds at the top fades its cycle out over 10 ms while the straight stem plays");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_unfold_ramp.wav", 16 * 44100);
+                StemBufferCache cache;
+                ChannelChainRegistry channelChains;
+                PlaybackEngine engine(cache);
+                engine.setProject(foldProject(ramp, "perc"));
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                engine.applyStagedCycles(false);
+                std::vector<float> lap1;
+                const float worst = acrossTop(engine, {}, channelChains, lap1);
+                expect(worst < 0.002f, "largest step across the unfolding top " + juce::String(worst));
+                // past 10 ms: exactly the straight stem
+                PlaybackEngine plain(cache);
+                plain.setProject(foldProject(ramp, "perc"));
+                std::vector<float> p(lap1.size(), 0.0f), pr(lap1.size(), 0.0f);
+                plain.renderBlock(0.0, 44100.0, (int) p.size(), p.data(), pr.data(), channelChains, LapClock { 4.0, 1 });
+                bool same = true;
+                for (size_t i = 442; i < p.size(); ++i)
+                    same = same && lap1[i] == p[i];
+                expect(same, "after 10 ms only the straight stem is left");
+                ramp.deleteFile();
+            }
+
             beginTest("a row the cycle table does not name plays exactly as a stem with no row");
             {
                 auto ramp = writeRampFixtureWav("sssketch_pe_fold_none_ramp.wav", 16 * 44100);

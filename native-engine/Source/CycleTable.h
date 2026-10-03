@@ -64,7 +64,37 @@ namespace sssketch
             double originBars = 0.0;
             uint32_t originEpoch = 0;
             bool hasOrigin = false;
+            // The stem that last played this cycle (a hash of its stemKey, set by renderBlock
+            // every block): a tail plays only for that stem, never one swapped into the row.
+            uint64_t stemHash = 0;
         };
+
+        /** The outgoing cycle of a row whose cycle `apply` replaced (a new id, length or phase)
+         * or removed (the row unfolded, a `now` stage). It was mid-tile at full gain, and the
+         * incoming starts from silence (or the straight stem from wherever it is), so renderBlock
+         * plays the outgoing cycle's continuation beside it, fading out over kCycleSeamFadeSec:
+         * a crossfade, where cutting it would step. `startBars` is the lap-clock position of the
+         * first block after the apply (beginBlock stamps it); the tail expires 10 ms later. */
+        struct Tail
+        {
+            CycleRow row;
+            double originBars = 0.0;
+            uint32_t epoch = 0;
+            uint64_t stemHash = 0;
+            double startBars = 0.0;
+            bool started = false;
+        };
+
+        /** AUDIO THREAD, at the top of every renderBlock: starts the tails `apply` left, at this
+         * block's lap-clock position, and drops the ones whose 10 ms are over or whose cycle
+         * belongs to another epoch (a seek or a play: there is nothing to continue). */
+        void beginBlock(const LapClock& clock, double positionBars, double secPerBar);
+
+        /** AUDIO THREAD. A started tail for this row, played by this stem, or null. */
+        const Tail* findTail(uint64_t rowKey, uint64_t stemHash) const;
+
+        /** AUDIO THREAD (or a test with none running): how many tails are pending or playing. */
+        int tailCount() const { return numTails; }
 
         /** MESSAGE THREAD. Replaces whatever is staged: applied at the next loop top, or at the
          * next block when `now` (radio stopping, the mode going off). Rows with no row key or no
@@ -102,6 +132,8 @@ namespace sssketch
         bool retryDue = false;
         std::array<Live, kMaxCycleRows> live {};
         int numLive = 0;
+        std::array<Tail, kMaxCycleRows> tails {};
+        int numTails = 0;
         std::atomic<unsigned long long> applies { 0 };
     };
 }

@@ -62,6 +62,43 @@ namespace sssketch
             }
             next[(size_t) n++] = l;
         }
+        // A live cycle that was heard and is not carried on unchanged (same id, length and
+        // phase) leaves a tail. A row's newer tail replaces its older one; with at most
+        // kMaxCycleRows rows there is always room.
+        for (int j = 0; j < numLive; ++j)
+        {
+            const auto& was = live[(size_t) j];
+            if (! was.hasOrigin)
+                continue;
+            bool carried = false;
+            for (int i = 0; i < n && ! carried; ++i)
+            {
+                const auto& now = next[(size_t) i].row;
+                carried = now.rowKey == was.row.rowKey && now.idKey == was.row.idKey
+                          && now.bars == was.row.bars && now.phaseBars == was.row.phaseBars;
+            }
+            if (carried)
+                continue;
+            int slot = 0;
+            while (slot < numTails && tails[(size_t) slot].row.rowKey != was.row.rowKey)
+                ++slot;
+            if (slot == numTails)
+            {
+                if (numTails >= kMaxCycleRows)
+                    continue;
+                ++numTails;
+            }
+            Tail t;
+            t.row = was.row;
+            t.originBars = was.originBars;
+            t.epoch = was.originEpoch;
+            t.stemHash = was.stemHash;
+            tails[(size_t) slot] = t;
+        }
+        for (int i = 0; i < n; ++i)
+            for (int j = 0; j < numLive; ++j)
+                if (live[(size_t) j].row.rowKey == next[(size_t) i].row.rowKey)
+                    next[(size_t) i].stemHash = live[(size_t) j].stemHash;
         live = next;
         numLive = n;
         pending.store(0, std::memory_order_release);
@@ -89,5 +126,40 @@ namespace sssketch
             l.hasOrigin = true;
         }
         return l.originBars;
+    }
+
+    void CycleTable::beginBlock(const LapClock& clock, double positionBars, double secPerBar)
+    {
+        const double nowBars = clock.baseBars + positionBars;
+        int kept = 0;
+        for (int i = 0; i < numTails; ++i)
+        {
+            auto t = tails[(size_t) i];
+            if (t.epoch != clock.epoch)
+                continue;
+            if (! t.started)
+            {
+                t.startBars = nowBars;
+                t.started = true;
+            }
+            const double elapsedSec = (nowBars - t.startBars) * secPerBar;
+            if (! (elapsedSec >= 0.0 && elapsedSec < kCycleSeamFadeSec))
+                continue;
+            tails[(size_t) kept++] = t;
+        }
+        numTails = kept;
+    }
+
+    const CycleTable::Tail* CycleTable::findTail(uint64_t rowKey, uint64_t stemHash) const
+    {
+        if (rowKey == 0)
+            return nullptr;
+        for (int i = 0; i < numTails; ++i)
+        {
+            const auto& t = tails[(size_t) i];
+            if (t.started && t.row.rowKey == rowKey && t.stemHash == stemHash)
+                return &t;
+        }
+        return nullptr;
     }
 }

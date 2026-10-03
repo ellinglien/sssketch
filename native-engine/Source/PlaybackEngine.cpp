@@ -11,6 +11,19 @@ namespace sssketch
 {
     namespace
     {
+        /** Runs `f` when it goes out of scope: no allocation, so fine on the audio thread. */
+        template <typename F>
+        struct OnScopeExit
+        {
+            F f;
+            ~OnScopeExit() { f(); }
+        };
+        template <typename F>
+        OnScopeExit<F> onScopeExit(F f)
+        {
+            return { std::move(f) };
+        }
+
         // Shared by secPerBar() and renderBlock() so the bpm->secPerBar
         // formula only exists once -- renderBlock() still can't call
         // secPerBar() itself (that would be a second, independent atomic
@@ -626,6 +639,10 @@ namespace sssketch
             return;
         }
 
+        // Radio fold mode: start the tails of cycles replaced at this top, and drop the ones
+        // whose 10 ms are over (CycleTable::Tail). Every block, whatever renders below.
+        cycleTable.beginBlock(lapClock, positionBars, spb);
+
         const double blockStartSec = positionBars * spb;
         const double blockDurationSec = numSamples / sampleRate;
 
@@ -786,9 +803,16 @@ namespace sssketch
                 // started from whichever lap it first sounded in. originFor only writes once per
                 // cycle and epoch; the cycle path below reads the same value. At most
                 // kMaxCycleRows entries to scan, no allocation, no lock.
+                // The stem is stamped on its cycle too, so a tail (CycleTable::Tail) plays only
+                // for the stem that was playing the cycle, never one swapped into the row.
+                const uint64_t cycleStemHash =
+                    stem.cycleRowKey != 0 ? (uint64_t) stem.stemKey.hashCode64() : 0;
                 if (stem.cycleRowKey != 0)
                     if (auto* live = cycleTable.find(stem.cycleRowKey))
+                    {
                         CycleTable::originFor(*live, lapClock);
+                        live->stemHash = cycleStemHash;
+                    }
 
                 // A drawn `volume` curve REPLACES this clip's own static
                 // level rather than multiplying with it -- Elling's explicit
@@ -883,7 +907,9 @@ namespace sssketch
                 // clip with no toolkit is panned and summed and that is
                 // all: it adds no send, so it neither opens the reverb bus
                 // nor feeds it, exactly like a centred clip without one.
+                bool stemFinished = false;
                 const auto finishStem = [&]() {
+                    stemFinished = true;
                     if (!ownBuffer)
                         return;
                     if (!stemBufferReady)
@@ -991,53 +1017,91 @@ namespace sssketch
                 // own end). The rifff's window and fades do not apply: a folded row plays the
                 // whole lap, every lap. Everything after -- gain, mute regions, toolkit, pan,
                 // sends, pump -- is the same as for any stem.
+                //
+                // addCycle adds one cycle of this stem: tiles of `rowBars` from originBars + phaseBars on
+                // the lap clock, each its first `rowBars` of audio with the seam fade. With
+                // tailStartBars >= 0 it is an outgoing cycle's tail (CycleTable::Tail), and fades
+                // out linearly over kCycleSeamFadeSec from there on top. Returns whether it could
+                // play at all (a degenerate stem or cycle cannot).
+                const auto addCycle = [&](double rowBars, double phaseBars, double originBars,
+                                          double tailStartBars) {
+                    if (! std::isfinite(stem.barLength) || stem.barLength < kMinStemBarLength
+                        || ! (stem.durationSec > 0.0))
+                        return false;
+                    const double cycleBars = std::min(rowBars, stem.barLength);
+                    if (! (cycleBars >= kMinStemBarLength))
+                        return false;
+                    const double secPerBarNative = stem.durationSec / stem.barLength;
+                    const double contentSec = cycleBars * secPerBarNative;
+                    const double tileSec = cycleBars * spb;
+                    // The tile is cut at tileSec, whatever the audio's own length: a stem a hair
+                    // slow (up to 0.1% skips the stretch, STRETCH_RATIO_EPSILON) runs past it, so
+                    // the fade-out has to end where the tile ends, not where the audio would
+                    // have -- otherwise every seam is cut at nearly full gain.
+                    const double endSec = std::min(contentSec, tileSec);
+                    const double fadeSec = std::min(kCycleSeamFadeSec, endSec / 2.0);
+                    const double lapNowBars = lapClock.baseBars + positionBars;
+                    // seconds into the cycle grid at this block's first sample
+                    const double gridStartSec = (lapNowBars - originBars - phaseBars) * spb;
+                    const bool isTail = tailStartBars >= 0.0;
+                    const double tailElapsedSec = isTail ? (lapNowBars - tailStartBars) * spb : 0.0;
+                    const int numCh = entry.buffer->getNumChannels();
+                    const int bufferSamples = entry.buffer->getNumSamples();
+                    prepareStemBuffer();
+                    for (int i2 = 0; i2 < numSamples; ++i2)
+                    {
+                        double out = 1.0;
+                        if (isTail)
+                        {
+                            out = 1.0 - (tailElapsedSec + (double) i2 / sampleRate) / kCycleSeamFadeSec;
+                            if (out <= 0.0)
+                                break; // the tail is over; CycleTable drops it next block
+                        }
+                        double inTile = std::fmod(gridStartSec + (double) i2 / sampleRate, tileSec);
+                        if (inTile < 0.0)
+                            inTile += tileSec;
+                        if (inTile >= endSec)
+                            continue; // a stem faster than the project leaves a gap, as a tile does
+                        const int srcSample = (int) std::llround(inTile * entry.sampleRate);
+                        if (srcSample < 0 || srcSample >= bufferSamples)
+                            continue;
+                        const double seam = fadeSec > 0.0
+                            ? std::min({ 1.0, inTile / fadeSec, (endSec - inTile) / fadeSec })
+                            : 1.0;
+                        const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
+                        const double gain = seam * out * effectiveVolume
+                            * muteRegionGainAt(sampleTimeSec, spb, stem.muteRegions);
+                        const float l = entry.buffer->getSample(0, srcSample);
+                        const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
+                        stemOutL[i2] += (float) (l * gain);
+                        stemOutR[i2] += (float) (r * gain);
+                    }
+                    return true;
+                };
+
+                // A cycle replaced or removed at the top (a fold step, the row unfolding, a `now`
+                // stage) was mid-tile at full gain there: its tail plays on beside whatever
+                // follows -- the incoming cycle, which fades in over the same 10 ms, or the
+                // straight stem below -- so the change is a 10 ms crossfade, not a cut. The tail
+                // is in this stem's buffer before either path adds to it, and the guard folds it
+                // into the channel even if neither path gets as far as finishStem.
+                bool tailPlayed = false;
+                const auto tailGuard = onScopeExit([&] {
+                    if (tailPlayed && ! stemFinished)
+                        finishStem();
+                });
+                if (stem.cycleRowKey != 0)
+                    if (const auto* tail = cycleTable.findTail(stem.cycleRowKey, cycleStemHash))
+                        tailPlayed = addCycle(tail->row.bars, tail->row.phaseBars, tail->originBars,
+                                              tail->startBars);
+
                 if (stem.cycleRowKey != 0)
                 {
                     if (auto* cycle = cycleTable.find(stem.cycleRowKey))
                     {
-                        if (! std::isfinite(stem.barLength) || stem.barLength < kMinStemBarLength
-                            || ! (stem.durationSec > 0.0))
-                            continue;
-                        const double cycleBars = std::min(cycle->row.bars, stem.barLength);
-                        if (! (cycleBars >= kMinStemBarLength))
-                            continue;
                         const double originBars = CycleTable::originFor(*cycle, lapClock);
-                        const double secPerBarNative = stem.durationSec / stem.barLength;
-                        const double contentSec = cycleBars * secPerBarNative;
-                        const double tileSec = cycleBars * spb;
-                        // The tile is cut at tileSec, whatever the audio's own length: a stem a
-                        // hair slow (up to 0.1% skips the stretch, STRETCH_RATIO_EPSILON) runs past
-                        // it, so the fade-out has to end where the tile ends, not where the audio
-                        // would have -- otherwise every seam is cut at nearly full gain.
-                        const double endSec = std::min(contentSec, tileSec);
-                        const double fadeSec = std::min(kCycleSeamFadeSec, endSec / 2.0);
-                        // seconds into the cycle grid at this block's first sample
-                        const double gridStartSec =
-                            (lapClock.baseBars + positionBars - originBars - cycle->row.phaseBars) * spb;
-                        const int numCh = entry.buffer->getNumChannels();
-                        const int bufferSamples = entry.buffer->getNumSamples();
-                        prepareStemBuffer();
-                        for (int i2 = 0; i2 < numSamples; ++i2)
-                        {
-                            double inTile = std::fmod(gridStartSec + (double) i2 / sampleRate, tileSec);
-                            if (inTile < 0.0)
-                                inTile += tileSec;
-                            if (inTile >= endSec)
-                                continue; // a stem faster than the project leaves a gap, as a tile does
-                            const int srcSample = (int) std::llround(inTile * entry.sampleRate);
-                            if (srcSample < 0 || srcSample >= bufferSamples)
-                                continue;
-                            const double seam = fadeSec > 0.0
-                                ? std::min({ 1.0, inTile / fadeSec, (endSec - inTile) / fadeSec })
-                                : 1.0;
-                            const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
-                            const double gain = seam * effectiveVolume
-                                * muteRegionGainAt(sampleTimeSec, spb, stem.muteRegions);
-                            const float l = entry.buffer->getSample(0, srcSample);
-                            const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
-                            stemOutL[i2] += (float) (l * gain);
-                            stemOutR[i2] += (float) (r * gain);
-                        }
+                        if (! addCycle(cycle->row.bars, cycle->row.phaseBars, originBars, -1.0))
+                            continue;
                         finishStem();
                         continue;
                     }
