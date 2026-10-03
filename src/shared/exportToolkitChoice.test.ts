@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { dawExportLeavesMastering, exportToolkitChoice } from './exportToolkitChoice'
+import {
+  dawExportLeavesMastering,
+  exportHasThrows,
+  exportToolkitChoice
+} from './exportToolkitChoice'
 import { initialState, type AppState } from '../renderer/src/state/store'
 import { normalizeSoundSettings, type SoundSettings } from './radioSound'
 import { createRiser } from './riser'
@@ -84,6 +88,10 @@ describe('exportToolkitChoice', () => {
       offer: false,
       defaultMode: 'bake'
     })
+    // the picker warns that automation leaves them out (Elling, 2026-10-03)
+    expect(exportHasThrows(throwing(true, true))).toBe(true)
+    expect(exportHasThrows(throwing(true, false))).toBe(false)
+    expect(exportHasThrows(state({ sound: panning(true) }))).toBe(false)
   })
 })
 

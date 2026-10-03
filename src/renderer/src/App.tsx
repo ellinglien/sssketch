@@ -57,7 +57,11 @@ import { UpdateAvailableDialog } from './components/UpdateAvailableDialog'
 import { TidyUpNudgeModal } from './components/TidyUpNudgeModal'
 import { ExportFormatPicker } from './components/ExportFormatPicker'
 import type { ToolkitExportMode } from '@shared/toolkit'
-import { dawExportLeavesMastering, exportToolkitChoice } from '@shared/exportToolkitChoice'
+import {
+  dawExportLeavesMastering,
+  exportHasThrows,
+  exportToolkitChoice
+} from '@shared/exportToolkitChoice'
 import { StemsFormatPicker } from './components/StemsFormatPicker'
 import { OnboardingModal } from './components/OnboardingModal'
 import { LibraryLocationModal } from './components/LibraryLocationModal'
@@ -1017,6 +1021,8 @@ function ProjectMenu({
           defaultToolkitMode={exportToolkitChoice(state).defaultMode}
           // The session's stems never carry the master stages (the D1/D2 ruling): say so.
           masteringLeftToDaw={dawExportLeavesMastering(state)}
+          // Automation mode has no echo bus for the planned throws: warn while it is chosen.
+          hasThrows={exportHasThrows(state)}
           onChoose={(format, toolkitMode) => {
             setExportFormatPickerOpen(false)
             void handleExportProject(format, toolkitMode)

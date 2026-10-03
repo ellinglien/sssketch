@@ -21,7 +21,8 @@ export function ExportFormatPicker({
   onCancel,
   toolkitInUse = false,
   defaultToolkitMode = 'bake',
-  masteringLeftToDaw = false
+  masteringLeftToDaw = false,
+  hasThrows = false
 }: {
   onChoose: (format: 'ableton' | 'reaper', toolkitMode: ToolkitExportMode) => void
   onCancel: () => void
@@ -32,6 +33,9 @@ export function ExportFormatPicker({
   /** The project's mastering (limiter, glue, tone, saturation, the pump) is on but stays out of
    * the session's stems (dawExportLeavesMastering): say so. */
   masteringLeftToDaw?: boolean
+  /** The timeline's planned throws throw somewhere (exportHasThrows): automation mode leaves
+   * them out, so say so while it is chosen. */
+  hasThrows?: boolean
 }): React.JSX.Element {
   const [toolkitMode, setToolkitMode] = useState<ToolkitExportMode>(defaultToolkitMode)
 
@@ -114,6 +118,11 @@ export function ExportFormatPicker({
                 </span>
               </button>
             </div>
+            {hasThrows && toolkitMode === 'automation' && (
+              <p style={{ margin: '6px 0 0', fontSize: 9, color: 'var(--ra-text)' }}>
+                this project&apos;s throws won&apos;t be in the export: bake to keep them
+              </p>
+            )}
             <p style={{ margin: '6px 0 0', fontSize: 9, color: 'var(--ra-text-3)' }}>
               risers always come out as audio
             </p>

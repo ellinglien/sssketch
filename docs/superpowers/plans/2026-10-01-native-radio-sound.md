@@ -1183,24 +1183,24 @@ One list, in order, from every task's "Elling listens" and "for Elling" notes (T
 
 **The timeline**
 - **Old projects and the cavern (T5).** Old timeline projects now play the cavern (longer, darker; DAW bakes about two seconds longer). Keep, or should old projects default to zita?
-- **The pump's reach (T9).** The key is project-wide: should a rifff only pump its own rows? Should a one-shot kick (typed anything but `drums`) key the pump? Is 4 dB enough on quiet drum stems (92% of the depth at −10 dBFS)?
-- **One echo per project (T12).** Every timeline throw shares one echo time and feedback; the web draws them per throw. Keep, or carry a per-throw schedule on the wire?
+- **The pump's reach (T9).** *Decided (Elling, 2026-10-03): drums duck every pad in the project; keep the project-wide key.* Still open: should a one-shot kick (typed anything but `drums`) key the pump? Is 4 dB enough on quiet drum stems? Original question: the key is project-wide: should a rifff only pump its own rows? Should a one-shot kick (typed anything but `drums`) key the pump? Is 4 dB enough on quiet drum stems (92% of the depth at −10 dBFS)?
+- **One echo per project (T12).** *Decided (Elling, 2026-10-03): keep one echo time per project.* Every timeline throw shares one echo time and feedback; the web draws them per throw. Keep, or carry a per-throw schedule on the wire?
 - **The master filter's place (T7).** Natively the master strip's filter runs after the user's master plugins, before the master stage; on the web it runs inside the chain after the headroom trim. They agree while it is parked open. Move it to the web's place?
 - **Discover to the timeline (T4).** A loop moved from Discover is re-panned by `SoundType`, so a row can switch sides. Fine?
 
 **Exports**
-- **Throws in a default DAW export (T12).** The picker's default (automation) has no throws; bake carries them. Should a throwing project start on bake (which also bakes every panned stem)?
+- **Throws in a default DAW export (T12).** *Decided (Elling, 2026-10-03): keep the automation default; the picker now says "this project's throws won't be in the export: bake to keep them" while automation is chosen on a throwing project (`exportHasThrows`).* The picker's default (automation) has no throws; bake carries them. Should a throwing project start on bake (which also bakes every panned stem)?
 - **The phone's per-row files (T14).** They carry gain and pan only: no room, throws or toolkit (as before the radio sound). Should they be engine-rendered per row instead (slower to build, a bigger change)?
 
 **The sound itself**
-- **The echo (T10).** It drifts 2.7 ms later each round trip (Chrome's render quantum) and narrows onto ~2.65 kHz (the web's decibel-Q quirk), both matched to the web. Keep both, or fix both repos (on the beat; `Q: biquadQ(0)`)?
+- **The echo (T10).** *Decided (Elling, 2026-10-03): keep both quirks, matched to the web.* It drifts 2.7 ms later each round trip (Chrome's render quantum) and narrows onto ~2.65 kHz (the web's decibel-Q quirk), both matched to the web. Keep both, or fix both repos (on the beat; `Q: biquadQ(0)`)?
 - **Saturation grit (T8).** If amount 1 is gritty, 2× oversampling would fix it but make the app differ from the web.
 
 **Settings panel**
 - **Height (T13).** About nine rows and nine sliders: too tall?
 
 **Engine**
-- **192 kHz (T14).** At 192 kHz with a 64-sample buffer the cavern alone takes about half of each buffer (a dense mix at its 99.9th percentile: 59%), measured offline on this Mac, not on your interface. Do you run 96/192 kHz sessions at small buffers? If so, the proposal is to run the room at 48 kHz internally above 48 kHz (a sixteenth of the work at 192 kHz), or a two-size partition scheme.
+- **192 kHz (T14).** *Elling will check his interface (2026-10-03).* At 192 kHz with a 64-sample buffer the cavern alone takes about half of each buffer (a dense mix at its 99.9th percentile: 59%), measured offline on this Mac, not on your interface. Do you run 96/192 kHz sessions at small buffers? If so, the proposal is to run the room at 48 kHz internally above 48 kHz (a sixteenth of the work at 192 kHz), or a two-size partition scheme.
 - **Device-block dependence, from before the plan (T14).** Zita, and a clip's drawn volume, cutoff and send curves, follow the device's buffer size: live equals the export to the bit only when the device runs at the export's 512 samples. The app's preferred buffer is 1024, so live rarely matches the export bit for bit for zita sends or drawn curves. The one number measured, 2e-4, is a single gentle ramp at 300-sample blocks; the gap grows with a curve's slope × the block size (the test now bounds it loosely at 1e-3 for its fixture). Changing the export would move every existing project's mixdown, but a **live-only** fix may be possible without touching exports: run zita's `prepare` on the export's 512-sample grid and evaluate the curves on the same grid, whatever the device's blocks. Untested. Worth doing?
 - **Already decided:** the limiter's −0.67 dBTP overshoot on hot noise stays (T3, 2026-10-02).
 

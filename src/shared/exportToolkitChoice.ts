@@ -23,18 +23,25 @@ import { timelineThrowPlan } from './timelineThrows'
  * Throws do NOT move the default (Task 12, conservative, flagged for Elling): throws are on by
  * default too, and a bake default would bring back the two-thirds-of-the-stems render the line
  * above avoids. A default DAW export of a throwing project is therefore dry of throws; bake
- * carries them. */
+ * carries them. Elling (2026-10-03): keep the default, but say so in the picker (exportHasThrows). */
 export function exportToolkitChoice(state: AppState): {
   offer: boolean
   defaultMode: ToolkitExportMode
 } {
   const clipToolkit = projectUsesToolkit({ ...state, risers: {} })
   const panned = timelineStemPans(state).size > 0
-  const throws = (timelineThrowPlan(state)?.throws.length ?? 0) > 0
+  const throws = exportHasThrows(state)
   return {
     offer: projectUsesToolkit(state) || panned || throws,
     defaultMode: panned && !clipToolkit ? 'automation' : 'bake'
   }
+}
+
+/** Whether the timeline's planned dub throws throw anywhere, so the picker can warn that
+ * automation mode leaves them out (neither DAW session has a matching echo bus; bake carries
+ * them). */
+export function exportHasThrows(state: AppState): boolean {
+  return (timelineThrowPlan(state)?.throws.length ?? 0) > 0
 }
 
 /** Whether a DAW export leaves some of the project's mastering behind (native radio sound plan,
