@@ -6,6 +6,7 @@ import {
   DISCOVER_TRAIT_PREFERRED_FIELD
 } from './discoverTraits'
 import type { DiscoverTraitKind } from './discoverSlotKind'
+import { radioClashBedScore, radioClashTraitScore, type RankClash } from './radioClash'
 
 export interface RankedCandidate {
   candidate: DiscoverCandidate
@@ -80,7 +81,8 @@ export function rankCandidates(
     targetBpm,
     favouriteStemCIDs,
     favouriteWeight,
-    targetTraits = []
+    targetTraits = [],
+    clash
   }: {
     targetBpm: number
     favouriteStemCIDs?: Set<string>
@@ -90,6 +92,10 @@ export function rankCandidates(
      * favouriteStemCIDs keeps its full boost; absent, nothing changes. */
     favouriteWeight?: (stemCID: string) => number
     targetTraits?: readonly DiscoverTraitKind[]
+    /** Radio fold mode's `clash` (@shared/radioClash): a requested rhythmic or bright trait
+     * turns toward its other end, and distance from the bed on those two traits scores. Absent
+     * or amount 0: exactly the ranking without it. */
+    clash?: RankClash
   }
 ): RankedCandidate[] {
   // Pool-relative values per kind, for candidates without a library
@@ -150,8 +156,9 @@ export function rankCandidates(
                 DISCOVER_TRAIT_DIRECTION[kind],
                 ranges.get(kind)
               )
-        score += trait * TRAIT_SCORE_WEIGHT
+        score += radioClashTraitScore(kind, trait, clash?.amount ?? 0) * TRAIT_SCORE_WEIGHT
       }
+      if (clash) score += radioClashBedScore(candidate.traitPercentiles ?? {}, clash)
       return { candidate, score }
     })
     .sort((a, b) => b.score - a.score)
