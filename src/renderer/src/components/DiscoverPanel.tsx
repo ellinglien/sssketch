@@ -73,6 +73,9 @@ import {
   pickRadioSlotId,
   radioCadenceOf,
   radioClockForPace,
+  radioPhraseNeedsReanchor,
+  radioPhraseReanchored,
+  type RadioPhraseAnchor,
   radioChangeBars,
   radioGridBars,
   radioDensityOf,
@@ -2757,6 +2760,9 @@ export function DiscoverPanel({
   // describes. See radioChangeBars.
   /** Bumped by every armRadioPick; see there. */
   const radioArmTokenRef = useRef(0)
+  /** The token of the armRadioPick awaiting its pick, or null. It is the LIVE arm only while it
+   * still equals radioArmTokenRef (radioArmInFlight). */
+  const radioArmInFlightRef = useRef<number | null>(null)
   // Rows radio's skip is picking a stem for (skipRadio), before the pick is
   // queued as a manual change -- radio arms nothing meanwhile.
   const radioSkipPickingRef = useRef<Set<string>>(new Set())
@@ -3810,6 +3816,12 @@ export function DiscoverPanel({
   // Declared BEFORE the clock effect on purpose: React runs a commit's effects in order, so the
   // tick that first sees the new cadence already has the re-anchored phrase.
   const radioPaceLevelWasRef = useRef(radioSettings.paceLevel)
+  // The change phrase, turnaround phrase and loop the clock last ticked under. When one moves
+  // without a pace move -- fold mode switched (its cadence has the base phrase), the `phrase` chip
+  // changed, the loop grew or shrank -- and the two phrases differ, the clock effect re-anchors
+  // the change phrase on the turnaround's before its tick (radioPhraseNeedsReanchor). Null until
+  // radio's first tick, and again at every start (a fresh clock is anchored already).
+  const radioPhraseAnchorRef = useRef<RadioPhraseAnchor | null>(null)
   useEffect(() => {
     if (radioPaceLevelWasRef.current === radioSettings.paceLevel) return
     radioPaceLevelWasRef.current = radioSettings.paceLevel
@@ -4597,13 +4609,25 @@ export function DiscoverPanel({
     // before anything noticed. Remove with radioTrace.ts.
     radioTraceTick(pos)
     if (!radioOn) return
-    const clock = radioClockRef.current
-    if (!clock) return
+    const clockWas = radioClockRef.current
+    if (!clockWas) return
     const loopBars =
       resolvedBarLengthsRef.current.size > 0
         ? Math.max(...resolvedBarLengthsRef.current.values())
         : 0
     if (!(loopBars > 0)) return
+    // The change phrase back on the turnaround's when a phrase or the loop moved under the clock
+    // (radioPhraseAnchorRef), BEFORE this tick's advance -- as the pace effect, which runs ahead of
+    // this one, does for a pace move. A no-op wherever the two phrases are one number.
+    const anchor: RadioPhraseAnchor = {
+      phraseBars: radioCadence.phraseBars,
+      turnaroundPhraseBars: radioCadence.turnaroundPhraseBars,
+      loopBars
+    }
+    const clock = radioPhraseNeedsReanchor(radioPhraseAnchorRef.current, anchor)
+      ? radioPhraseReanchored(clockWas, radioCadence, loopBars)
+      : clockWas
+    radioPhraseAnchorRef.current = anchor
     // WHERE a change may land -- the menu's `loop end` row
     // (radioSettings.loopEndOverBars, 2026-09-28). A layer at or under the
     // threshold turns over on its own cycle; a longer one waits for the
@@ -5344,11 +5368,16 @@ export function DiscoverPanel({
       // front of it and hold the change a whole second late); immediately
       // when nothing did, since then there is no push to get in front of
       // and waiting would only burn the backstop timer.
+      //
+      // Not while an arm is still waiting for its pick (radioArmInFlight): the latest arm wins, so
+      // re-arming here would supersede it, and with an interval shorter than a pick takes (1 bar
+      // above fast, 2026-10-03) every due tick would cancel the one before and radio would never
+      // change. The arm in flight lands its pick as usual; the next due tick takes it.
       if (committed) {
         runAfterEngineSync(() => {
           if (radioOnRef.current) void armRadioPick()
         })
-      } else {
+      } else if (!radioArmInFlight()) {
         void armRadioPick()
       }
     })
@@ -7400,6 +7429,15 @@ export function DiscoverPanel({
    * hits a SETTLED promise when the candidate is finally committed. Without
    * it a radio change would land hundreds of milliseconds -- or a whole
    * download -- after the downbeat it was scheduled for. */
+  /** An armRadioPick is awaiting its pick and has not been superseded (a superseded one writes
+   * nothing, so it does not count). */
+  function radioArmInFlight(): boolean {
+    return (
+      radioArmInFlightRef.current !== null &&
+      radioArmInFlightRef.current === radioArmTokenRef.current
+    )
+  }
+
   async function armRadioPick(): Promise<void> {
     // The LATEST arm wins. Several paths re-arm (a landing, a yielded row,
     // an ineligible pick), and one can start while another's pick is still
@@ -7434,7 +7472,13 @@ export function DiscoverPanel({
     if (slotId === null) return
     const slot = slotsRef.current.find((s) => s.id === slotId)
     if (!slot) return
-    const pick = await pickForSlot(slotId, slot.kinds, { avoidOwnStem: true })
+    radioArmInFlightRef.current = myArm
+    let pick: Awaited<ReturnType<typeof pickForSlot>>
+    try {
+      pick = await pickForSlot(slotId, slot.kinds, { avoidOwnStem: true })
+    } finally {
+      if (radioArmInFlightRef.current === myArm) radioArmInFlightRef.current = null
+    }
     if (radioArmTokenRef.current !== myArm) return
     if (pick === null || pick.candidate === null) return
     if (!radioOnRef.current) return
@@ -7823,7 +7867,8 @@ export function DiscoverPanel({
   /** Starts radio at a chosen pace. Elling, 2026-09-28: "the initial
    * prompt should be slow mid fast so the app knows how to start
    * everything." -- so the radio button opens DiscoverRadioMenu's `start`
-   * mode and a pace chip lands here. The two things that happen at the
+   * mode, and its `start` chip lands here with the pace slider's level
+   * (three pace chips did until 2026-10-03). The two things that happen at the
    * starting moment are now one gesture: the pace configures the clock and
    * the channel count sizes the bed.
    *
@@ -7859,6 +7904,7 @@ export function DiscoverPanel({
       nextRadioIntervalBarsInWindow(radioCadenceOf({ ...radioSettings, paceLevel: level }).window),
       pos
     )
+    radioPhraseAnchorRef.current = null
     radioLastSlotRef.current = null
     radioChangedAtRef.current = new Map()
     radioTurnRef.current = 0
@@ -8693,10 +8739,12 @@ export function DiscoverPanel({
               }
               // OFF -> the start prompt. Elling, 2026-09-28: "the initial
               // prompt should be slow mid fast so the app knows how to
-              // start everything." A pace chip is what actually starts
-              // radio (startRadio below), so this press only opens the
-              // choice -- Escape or a click elsewhere cancels it, which
-              // is why it is a popover and not a dialog with an OK.
+              // start everything." The prompt's `start` chip is what
+              // actually starts radio, at the pace slider's position
+              // (startRadio below; three pace chips did it until
+              // 2026-10-03), so this press only opens the choice --
+              // Escape or a click elsewhere cancels it, which is why it is
+              // a popover and not a dialog with an OK.
               if (radioMenu) {
                 closeRadioMenu()
                 return

@@ -340,7 +340,8 @@ export function DiscoverRadioMenu({
         ? [
             chip('start', false, () => {
               const level = paceDraft ?? paceLevel
-              onChange({ paceLevel: level })
+              // Written only when it moved: the slider's own release usually persisted it already.
+              if (level !== settings.paceLevel) onChange({ paceLevel: level })
               onStart(level)
             })
           ]

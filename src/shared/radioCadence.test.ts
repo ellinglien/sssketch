@@ -15,6 +15,8 @@ import {
   radioPaceGridBars,
   radioPaceLevelOf,
   radioPaceWindowOf,
+  radioPhraseNeedsReanchor,
+  radioPhraseReanchored,
   type RadioClock,
   type RadioSettings
 } from './radioSchedule'
@@ -363,6 +365,86 @@ describe('radioClockForPace', () => {
     let r = run(createRadioClock(1, 0), 3, 4, 4, 16)
     r = run(r.clock, 16, 4, 16, 16)
     expect(r.dueLaps.some((l) => l !== 0)).toBe(true)
+  })
+})
+
+describe('radioPhraseReanchored / radioPhraseNeedsReanchor (a phrase or loop moving under a running clock)', () => {
+  it('fold on mid-stream above fast: the change phrase grows 0 -> 16 and stays on the turnarounds', () => {
+    // phrase 16, pace 75, a 4-bar loop: no change phrase (every loop top) until fold mode turns on
+    // at turnaround lap 3, which brings the base 16 back as the change phrase
+    const loose = radioCadenceOf({ ...DEFAULT_RADIO_SETTINGS, phraseBars: 16, paceLevel: 75 })
+    const fold = radioCadenceOf({
+      ...DEFAULT_RADIO_SETTINGS,
+      phraseBars: 16,
+      paceLevel: 75,
+      foldMode: true
+    })
+    expect(loose.phraseBars).toBe(0)
+    expect(fold.phraseBars).toBe(16)
+    const before = run(createRadioClock(1, 0), 3, 4, loose.phraseBars, loose.turnaroundPhraseBars)
+    expect(before.clock.turnaroundLap).toBe(3)
+    const prev = { phraseBars: loose.phraseBars, turnaroundPhraseBars: 16, loopBars: 4 }
+    const next = { phraseBars: fold.phraseBars, turnaroundPhraseBars: 16, loopBars: 4 }
+    expect(radioPhraseNeedsReanchor(prev, next)).toBe(true)
+    // without it: every later change lands on turnaround lap 2
+    const drift = run(before.clock, 16, 4, 16, 16)
+    expect(drift.dueLaps.some((l) => l !== 0)).toBe(true)
+    const fixed = run(radioPhraseReanchored(before.clock, fold, 4), 16, 4, 16, 16)
+    expect(fixed.dues.length).toBeGreaterThan(0)
+    expect(fixed.dueLaps.every((l) => l === 0)).toBe(true)
+  })
+
+  it('a loop that grows under a shorter change phrase stays on the turnarounds, even past the old phrase', () => {
+    // change phrase 8, turnaround 16: on a 2-bar loop 4 and 8 laps; six laps in, the loop grows
+    // to 4 bars (2 and 4 laps), so turnaroundLap 6 is past the new phrase and folds to 0 at the
+    // next wrap -- which must also be a change phrase top
+    const before = run(createRadioClock(1, 0), 6.5, 2, 8, 16)
+    expect(before.clock.turnaroundLap).toBe(6)
+    const c = { phraseBars: 8, turnaroundPhraseBars: 16 }
+    expect(radioPhraseNeedsReanchor({ ...c, loopBars: 2 }, { ...c, loopBars: 4 })).toBe(true)
+    const fixed = run(radioPhraseReanchored(before.clock, c, 4), 32, 4, 8, 16)
+    expect(fixed.dues.length).toBeGreaterThan(0)
+    expect(fixed.dueLaps.every((l) => l % 2 === 0)).toBe(true)
+    // a plain modulo (6 % 2 = 0) would put the next phrase top on turnaround lap 1
+    const modulo = run({ ...before.clock, lapsSincePhrase: 0 }, 32, 4, 8, 16)
+    expect(modulo.dueLaps.some((l) => l % 2 !== 0)).toBe(true)
+  })
+
+  it('anchors to turnaroundLap modulo the change phrase inside the phrase; leaves it when it cannot', () => {
+    const c = { ...createRadioClock(12, 0), turnaroundLap: 3, lapsSincePhrase: 0 }
+    expect(
+      radioPhraseReanchored(c, { phraseBars: 8, turnaroundPhraseBars: 16 }, 4).lapsSincePhrase
+    ).toBe(1)
+    // no change phrase, a phrase that does not divide, no loop: the clock comes back as it was
+    expect(radioPhraseReanchored(c, { phraseBars: 0, turnaroundPhraseBars: 16 }, 4)).toBe(c)
+    expect(radioPhraseReanchored(c, { phraseBars: 12, turnaroundPhraseBars: 16 }, 4)).toBe(c)
+    expect(radioPhraseReanchored(c, { phraseBars: 8, turnaroundPhraseBars: 16 }, 0)).toBe(c)
+    // never touches the interval
+    const r = radioPhraseReanchored(
+      { ...c, intervalBars: 99, barsElapsed: 5 },
+      { phraseBars: 8, turnaroundPhraseBars: 16 },
+      4
+    )
+    expect([r.intervalBars, r.barsElapsed]).toEqual([99, 5])
+  })
+
+  it('needs a re-anchor only when something moved and the two phrases differ, before or after', () => {
+    const a = { phraseBars: 16, turnaroundPhraseBars: 16, loopBars: 4 }
+    expect(radioPhraseNeedsReanchor(null, a)).toBe(false)
+    expect(radioPhraseNeedsReanchor(a, { ...a })).toBe(false)
+    // at or below fast the two are one number: a loop or `phrase` chip change is as before
+    expect(radioPhraseNeedsReanchor(a, { ...a, loopBars: 8 })).toBe(false)
+    expect(
+      radioPhraseNeedsReanchor(a, { phraseBars: 32, turnaroundPhraseBars: 32, loopBars: 4 })
+    ).toBe(false)
+    // above fast they differ: a loop change, a chip change, fold on or off
+    const fast = { phraseBars: 4, turnaroundPhraseBars: 16, loopBars: 4 }
+    expect(radioPhraseNeedsReanchor(fast, { ...fast, loopBars: 8 })).toBe(true)
+    expect(
+      radioPhraseNeedsReanchor(fast, { phraseBars: 8, turnaroundPhraseBars: 32, loopBars: 4 })
+    ).toBe(true)
+    expect(radioPhraseNeedsReanchor(fast, a)).toBe(true)
+    expect(radioPhraseNeedsReanchor(a, fast)).toBe(true)
   })
 })
 

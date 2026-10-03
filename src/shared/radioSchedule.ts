@@ -1345,13 +1345,60 @@ export function radioClockForPace(
     cadence.fold !== true && clock.intervalBars > cadence.window.max
       ? nextRadioIntervalBarsInWindow(cadence.window, random)
       : clock.intervalBars
+  return radioPhraseReanchored({ ...clock, intervalBars }, cadence, loopBars)
+}
+
+/** radioClockForPace's re-anchor alone: the change phrase's lap count put back in step with the
+ * turnaround's, the interval untouched and no random draw. When the change phrase divides the
+ * turnaround phrase (in laps of this loop), lapsSincePhrase is set so the turnaround phrase's
+ * next top is a change phrase top too: turnaroundLap modulo the change phrase inside the
+ * turnaround phrase, and one lap short of a change phrase top when turnaroundLap is already at
+ * or past the phrase (a loop that grew under it: advanceRadioClock folds it to 0 at the next
+ * wrap, not modulo). Otherwise the clock comes back as it was (the same object).
+ *
+ * For a running clock whose phrases or loop moved without a pace move: fold mode switched (its
+ * cadence has the base phrase), the `phrase` chip changed, or the loop's length changed -- see
+ * radioPhraseNeedsReanchor for when. */
+export function radioPhraseReanchored(
+  clock: RadioClock,
+  cadence: Pick<RadioCadence, 'phraseBars' | 'turnaroundPhraseBars'>,
+  loopBars: number
+): RadioClock {
   const perPhrase = radioPhraseLaps(cadence.phraseBars, loopBars)
   const perTurnaround = turnaroundPhraseLaps(cadence.turnaroundPhraseBars, loopBars)
-  const lapsSincePhrase =
-    perPhrase > 0 && perTurnaround > 0 && perTurnaround % perPhrase === 0
-      ? (clock.turnaroundLap ?? 0) % perPhrase
-      : clock.lapsSincePhrase
-  return { ...clock, intervalBars, lapsSincePhrase }
+  if (!(perPhrase > 0 && perTurnaround > 0 && perTurnaround % perPhrase === 0)) return clock
+  const lap = clock.turnaroundLap ?? 0
+  const lapsSincePhrase = lap < perTurnaround ? lap % perPhrase : perPhrase - 1
+  return lapsSincePhrase === clock.lapsSincePhrase ? clock : { ...clock, lapsSincePhrase }
+}
+
+/** What radioPhraseNeedsReanchor compares between two ticks. */
+export interface RadioPhraseAnchor {
+  phraseBars: number
+  turnaroundPhraseBars: number
+  loopBars: number
+}
+
+/** Whether a running clock needs radioPhraseReanchored because its change phrase, turnaround
+ * phrase or loop moved since the last tick. Only when the two phrases differ, before or after:
+ * where they are one number (every level up to fast, and fold mode) the two counters already run
+ * together, so a loop or `phrase` chip change behaves exactly as before the slider. `prev` null is
+ * the first tick: nothing moved. */
+export function radioPhraseNeedsReanchor(
+  prev: RadioPhraseAnchor | null,
+  next: RadioPhraseAnchor
+): boolean {
+  if (prev === null) return false
+  if (
+    prev.phraseBars === next.phraseBars &&
+    prev.turnaroundPhraseBars === next.turnaroundPhraseBars &&
+    prev.loopBars === next.loopBars
+  ) {
+    return false
+  }
+  return (
+    prev.phraseBars !== prev.turnaroundPhraseBars || next.phraseBars !== next.turnaroundPhraseBars
+  )
 }
 
 /** Up to `count` DIFFERENT rows for one change, in order: the first is exactly pickRadioSlotId's
