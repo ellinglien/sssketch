@@ -4,14 +4,11 @@ import {
   RADIO_CHANNELS_MAX,
   RADIO_CHANNELS_MIN,
   RADIO_LOOP_END_OPTIONS,
-  RADIO_PACE_BARS,
-  RADIO_PACE_OPTIONS,
   RADIO_PHRASE_OPTIONS,
-  adjustRadioPaceWindow,
-  radioPaceWindowPreset,
-  type RadioPace,
+  radioPaceLevelOf,
   type RadioSettings
 } from '@shared/radioSchedule'
+import { RADIO_PACE_LABEL, RADIO_PACE_TOOLTIP, radioPaceLabel } from '@shared/radioPace'
 import {
   RADIO_TURNAROUNDS_OPTIONS,
   TURNAROUND_DEPTH_OPTIONS,
@@ -56,6 +53,53 @@ function FoldSlider({
       />
       <span style={{ fontSize: 9, minWidth: 20, textAlign: 'right', color: 'var(--ra-text)' }}>
         {draft ?? value}
+      </span>
+    </span>
+  )
+}
+
+/** The pace slider (@shared/radioPace, spec 2026-10-03-radio-pace-slider-design), 0..100, with
+ * its readout in words (slow, mid, fast, ludicrous) or bars. Like FoldSlider it is local while
+ * dragging and commits only when the drag or key press ends -- one decision, one settings write,
+ * and in a running radio one radioClockForPace. `onDraft` reports the position as it moves, for
+ * the start chip, which starts at wherever the slider is even before a release has persisted. */
+function PaceSlider({
+  value,
+  onCommit,
+  onDraft
+}: {
+  value: number
+  onCommit: (v: number) => void
+  onDraft?: (v: number) => void
+}): React.JSX.Element {
+  const [draft, setDraft] = useState<number | null>(null)
+  const commit = (): void => {
+    if (draft !== null && draft !== value) onCommit(draft)
+    setDraft(null)
+  }
+  const shown = draft ?? value
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        aria-label={RADIO_PACE_LABEL}
+        aria-valuetext={radioPaceLabel(shown)}
+        value={shown}
+        onChange={(e) => {
+          const v = Number(e.target.value)
+          setDraft(v)
+          onDraft?.(v)
+        }}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+        style={{ width: 96, accentColor: 'var(--ra-text)' }}
+      />
+      <span style={{ fontSize: 9, minWidth: 64, color: 'var(--ra-text)' }}>
+        {radioPaceLabel(shown)}
       </span>
     </span>
   )
@@ -134,18 +178,19 @@ function phraseLabel(bars: number): string {
  * otherwise changing course should reset the whole thing."
  *
  *   `start`   -- radio is off and the button was pressed. Pace is a
- *                PROMPT: picking one starts radio. Channels sits beside it
- *                because it is the other thing decided at the starting
- *                moment (it sizes the bed radio lays down), and nothing
- *                else is shown, because nothing else is a starting
- *                decision. No OK button -- the pace chip IS the commit,
- *                and Escape or a click outside cancels.
+ *                PROMPT: the slider and a `start` chip, which starts radio
+ *                at the slider's position (2026-10-03; three chips did it
+ *                before the slider). Channels sits beside it because it is
+ *                the other thing decided at the starting moment (it sizes
+ *                the bed radio lays down). Escape or a click outside
+ *                cancels.
  *   `running` -- radio is on and the chevron was pressed. Everything is
- *                here, and a pace chip is now a COURSE CHANGE: it resets
- *                the clock and rerolls the whole unlocked bed on the next
- *                loop top (see DiscoverPanel's armRadioCourseChange).
+ *                here. The pace slider is NOT a course change (it was a
+ *                chip that reset the clock and re-triggered the bed until
+ *                2026-10-03): it is heard from the next interval and takes
+ *                nothing back (DiscoverPanel's pace effect).
  *
- * The pace chips MOVED here from the actions row, which is the argument
+ * The pace control MOVED here from the actions row, which is the argument
  * for this menu existing at all rather than just being somewhere to put
  * new things: the row used to grow three chips whenever radio was on and
  * now grows one chevron. The row gets simpler as the feature gets richer.
@@ -172,7 +217,7 @@ export function DiscoverRadioMenu({
   mode,
   settings,
   onChange,
-  onPace,
+  onStart,
   onNewBed,
   onClose,
   ignoreRef
@@ -182,10 +227,9 @@ export function DiscoverRadioMenu({
   mode: 'start' | 'running'
   settings: RadioSettings
   onChange: (patch: Partial<RadioSettings>) => void
-  /** A pace CHIP, which is not an ordinary setting write: in `start` it
-   * starts radio, in `running` it is the dramatic course change. The panel
-   * owns both, so this only reports the chip. */
-  onPace: (pace: RadioPace) => void
+  /** The start prompt's `start` chip: radio starts at this pace level (the slider's position,
+   * which may not have persisted yet -- the panel must not read it back from settings). */
+  onStart: (level: number) => void
   /** Reroll every unlocked layer, landing together at the next loop top.
    * Separate from a pace change on purpose: changing how often a layer
    * turns over is not a request for different music. */
@@ -195,6 +239,8 @@ export function DiscoverRadioMenu({
 }): React.JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ left: x, top: y })
+  // Where the pace slider is, for the start chip: the draft while dragging, else the setting.
+  const [paceDraft, setPaceDraft] = useState<number | null>(null)
 
   useLayoutEffect(() => {
     const el = menuRef.current
@@ -274,64 +320,33 @@ export function DiscoverRadioMenu({
     )
   }
 
-  /** One edge of the pace window, as a value between two steppers.
-   *
-   * Elling, 2026-09-28: "maybe allow for a specific range selection
-   * instead of just slow mid and fast?". Steppers rather than a slider or
-   * a number field because the range is 1..64 -- too many for chips, and a
-   * drag cannot land on an exact bar count, which is the whole thing he
-   * asked for. Stepping an edge is deliberately NOT a course change: a
-   * reset per keypress while settling a number would be unusable. */
-  function stepper(edge: 'min' | 'max'): React.JSX.Element {
-    function step(delta: number): void {
-      onChange({ paceBars: adjustRadioPaceWindow(settings.paceBars, edge, delta) })
-    }
-    function arrow(label: string, delta: number, tooltip: string): React.JSX.Element {
-      return (
-        <button
-          onClick={() => step(delta)}
-          data-tooltip={tooltip}
-          aria-label={tooltip}
-          style={{
-            fontFamily: 'inherit',
-            fontSize: 9,
-            width: 16,
-            padding: 'var(--ra-s-0) 0',
-            background: 'transparent',
-            border: '1px solid var(--ra-border)',
-            color: 'var(--ra-text-2)',
-            cursor: 'pointer'
-          }}
-        >
-          {label}
-        </button>
-      )
-    }
-    return (
-      <span key={edge} style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
-        {arrow('-', -1, `${edge} down`)}
-        <span style={{ fontSize: 9, minWidth: 16, textAlign: 'center', color: 'var(--ra-text)' }}>
-          {settings.paceBars[edge]}
-        </span>
-        {arrow('+', 1, `${edge} up`)}
-      </span>
-    )
-  }
-
-  // Lit from the WINDOW, not from the stored preset -- once he steps an
-  // edge the window is no longer `mid`, and a chip still claiming to be
-  // would be lying about what the clock is drawing from.
-  const activePreset = radioPaceWindowPreset(settings.paceBars)
+  // THE PACE SLIDER (2026-10-03) replaces the slow / mid / fast chips and the min / max bar
+  // steppers: one value, 0..100, whose readout says slow, mid, fast or ludicrous at those
+  // positions and the bars between. Committed on release. While radio runs it is NOT a course
+  // change any more: it is heard from the next interval (sooner when moved faster), and takes
+  // nothing back (DiscoverPanel's pace effect, radioClockForPace). In the start prompt a `start`
+  // chip beside it starts radio at the slider's position.
+  const paceLevel = radioPaceLevelOf(settings)
   const paceRow = row(
-    'pace',
-    RADIO_PACE_OPTIONS.map((p) =>
-      chip(p, activePreset === p, () => {
-        // Sets the window too: a preset IS its window, and the point of
-        // pressing one is to go back to a known place.
-        onChange({ pace: p, paceBars: { ...RADIO_PACE_BARS[p] } })
-        onPace(p)
-      })
-    )
+    RADIO_PACE_LABEL,
+    [
+      <PaceSlider
+        key="pace"
+        value={paceLevel}
+        onCommit={(v) => onChange({ paceLevel: v })}
+        onDraft={setPaceDraft}
+      />,
+      ...(mode === 'start'
+        ? [
+            chip('start', false, () => {
+              const level = paceDraft ?? paceLevel
+              onChange({ paceLevel: level })
+              onStart(level)
+            })
+          ]
+        : [])
+    ],
+    RADIO_PACE_TOOLTIP
   )
   // `density: arc` (2026-10-01, @shared/radioDensity) grows and thins the
   // rows itself, starting from two on an empty panel, so `channels` -- the
@@ -371,7 +386,6 @@ export function DiscoverRadioMenu({
       }}
     >
       {paceRow}
-      {mode === 'running' && row('bars', [stepper('min'), stepper('max')])}
       {mode === 'running' &&
         row(
           'loop end',
@@ -514,8 +528,8 @@ export function DiscoverRadioMenu({
           the menu grows to fit it. */}
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
         {mode === 'start'
-          ? 'pick a pace to start'
-          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added. turnarounds mark the end of each phrase. fold loops one or two short layers at odd lengths against the beat, and changes come every 8 to 32 bars while it is on'}
+          ? 'set a pace and start'
+          : 'pace is heard from the next change, and takes nothing back. above fast the phrase shortens, and from 71 changes may come at every loop top. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added. turnarounds mark the end of each phrase. fold loops one or two short layers at odd lengths against the beat, and changes come every 8 to 32 bars while it is on'}
       </span>
     </div>
   )

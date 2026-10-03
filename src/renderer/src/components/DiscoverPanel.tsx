@@ -63,7 +63,6 @@ import { heartFetchLabel } from '@shared/radioHearts'
 import { manualChangesUndoneBy, UndoSnapshotSequence } from '@shared/discoverUndoWithdraw'
 import { applyTraitBar } from '@shared/traitBar'
 import {
-  RADIO_PACE_BARS,
   advanceRadioClock,
   radioBarsUntilChange,
   radioChangeDueAtNextWrap,
@@ -71,15 +70,15 @@ import {
   createRadioClock,
   isRadioEligibleSlot,
   nextRadioIntervalBarsInWindow,
-  radioPaceWindowOf,
   pickRadioSlotId,
+  radioCadenceOf,
+  radioClockForPace,
   radioChangeBars,
   radioGridBars,
   radioDensityOf,
   radioStarterKinds,
   restartRadioInterval,
   type RadioClock,
-  type RadioPace,
   type RadioSettings,
   radioFavesOf
 } from '@shared/radioSchedule'
@@ -196,7 +195,6 @@ import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/typ
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject, withoutDubThrows } from '@shared/buildEngineProject'
 import {
-  FOLD_PACE_BARS,
   createRadioFold,
   radioFoldIntervalBars,
   radioFoldRestartAt,
@@ -610,9 +608,13 @@ const MANUAL_RESTAGE_MIN_BARS = 1
 // anyway. A committed change whose stem never resolves schedules no sync at
 // all, and a pick that is simply never armed makes radio SKIP a change
 // outright -- a worse symptom than the late one this whole deferral exists
-// to fix. Comfortably under the shortest interval radio can draw (3 bars at
-// the "fast" pace, ~6s at 120bpm -- RADIO_PACE_BARS), and comfortably over
-// the warm build+send chain it normally waits on (tens of ms).
+// to fix. Comfortably under the shortest interval radio could draw when this
+// was set (3 bars at the "fast" pace, ~6s at 120bpm -- RADIO_PACE_BARS), and
+// comfortably over the warm build+send chain it normally waits on (tens of
+// ms). The pace slider (2026-10-03) draws down to 1 bar above fast, ~2s at
+// 120bpm and 1.5s at 160, so at the top of the slider this backstop is no
+// longer well under an interval -- it only fires when a commit never
+// resolves, so it stays as is, but a skipped change at ludicrous could be it.
 const AFTER_ENGINE_SYNC_TIMEOUT_MS = 1500
 
 // Backstop for the sync hold (holdSyncUntilResolved, below): how long
@@ -2710,6 +2712,12 @@ export function DiscoverPanel({
   useEffect(() => {
     radioOnRef.current = radioOn
   }, [radioOn])
+  // Everything that sets radio's cadence, from the pace slider and the menu's `phrase` (and fold
+  // mode's override): the interval window, the CHANGE phrase, the TURNAROUND phrase (never moved by
+  // the slider), mid-loop bar lines and rows per change (@shared/radioSchedule radioCadenceOf,
+  // spec 2026-10-03-radio-pace-slider-design). Per render, so the clock effect and everything it
+  // calls read this render's settings, as they read radioSettings.
+  const radioCadence = radioCadenceOf(radioSettings)
 
   // Radio holds the ambient background scans off for as long as it runs.
   //
@@ -3745,13 +3753,13 @@ export function DiscoverPanel({
     if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
   /** A change's interval: fold mode's window, moved to a realignment top when one is near, while
-   * the mode is on (radioPaceWindowOf, radioFoldIntervalBars); the pace window otherwise. Counted
+   * the mode is on (radioCadence.window, radioFoldIntervalBars); the pace window otherwise. Counted
    * from `boundaryBars`, the bar restartRadioInterval counts it from (the fold's realignment tops
    * are counted from the lap's top, so a sub-loop grid restart mid-lap shifts them). A landing at
    * a wrap restarts it before that wrap's step has run: the machine's tops are then a lap behind
    * (radioFoldIntervalBars' stepOwed). */
   function radioNextIntervalBars(loopBars: number, boundaryBars: number): number {
-    const drawn = nextRadioIntervalBarsInWindow(radioPaceWindowOf(radioSettings))
+    const drawn = nextRadioIntervalBarsInWindow(radioCadence.window)
     return radioSettings.foldMode
       ? radioFoldIntervalBars(
           radioFoldRef.current,
@@ -3764,7 +3772,7 @@ export function DiscoverPanel({
   }
   // The mode switched while radio runs. The running interval was drawn from the other window (the
   // pace's, or fold mode's 8-32 bars), so it is drawn again from the one that now applies
-  // (radioPaceWindowOf), counted from the last tick, as the web's foldModeInterval does: nothing
+  // (radioCadence.window), counted from the last tick, as the web's foldModeInterval does: nothing
   // else of radio's moves. Going off, every row goes back to full length at the next loop top (an
   // empty table staged for it); the drift, the low-pass and the lean leave with the wrap's push
   // (radioFoldAtWrap).
@@ -3795,6 +3803,23 @@ export function DiscoverPanel({
     void window.rifffApi.engineStageCycles([], false)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only the switch itself restarts the interval; radioNextIntervalBars reads this render's settings
   }, [radioSettings.foldMode])
+  // The pace slider released while radio runs (spec 2026-10-03-radio-pace-slider-design section
+  // 4). NOT a course change: the clock alone moves (radioClockForPace) -- an interval now longer
+  // than the new window is redrawn, and the change phrase is re-anchored on the turnaround's.
+  // The pick, a held or staged change, the turnaround, fold and the transport are all left alone.
+  // Declared BEFORE the clock effect on purpose: React runs a commit's effects in order, so the
+  // tick that first sees the new cadence already has the re-anchored phrase.
+  const radioPaceLevelWasRef = useRef(radioSettings.paceLevel)
+  useEffect(() => {
+    if (radioPaceLevelWasRef.current === radioSettings.paceLevel) return
+    radioPaceLevelWasRef.current = radioSettings.paceLevel
+    const clock = radioClockRef.current
+    if (!radioOnRef.current || clock === null) return
+    const lengths = resolvedBarLengthsRef.current
+    const loopBars = lengths.size > 0 ? Math.max(...lengths.values()) : 0
+    radioClockRef.current = radioClockForPace(clock, radioCadence, loopBars)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the level itself moves the clock; radioCadence is this render's
+  }, [radioSettings.paceLevel])
   /** Radio off or a course change: the armed turnaround comes off, and the next phrase end
    * starts fresh. Wherever drop-outs were cleared (clearRadioGesture outside the clock). */
   function clearRadioTurnaround(): void {
@@ -4015,7 +4040,7 @@ export function DiscoverPanel({
         radioClockRef.current?.turnaroundLap,
         pos,
         loopBars,
-        radioSettings.phraseBars
+        radioCadence.turnaroundPhraseBars
       ),
       nextChange,
       armedTurnaround:
@@ -4154,14 +4179,14 @@ export function DiscoverPanel({
                                   pos,
                                   loopBars,
                                   gridBars,
-                                  radioSettings.phraseBars
+                                  radioCadence.phraseBars
                                 ) ||
                                 radioChangeLandsAtBar(
                                   clock,
                                   pos,
                                   loopBars,
                                   gridBars,
-                                  radioSettings.phraseBars
+                                  radioCadence.phraseBars
                                 ) !== null
                               ? 'decide'
                               : `not-this-lap(interval ${clock.intervalBars} elapsed ${clock.barsElapsed.toFixed(2)})`
@@ -4208,10 +4233,10 @@ export function DiscoverPanel({
       // ordering is belt and braces rather than the guarantee.
       const dueAtWrap =
         clock !== null &&
-        radioChangeDueAtNextWrap(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
+        radioChangeDueAtNextWrap(clock, pos, loopBars, gridBars, radioCadence.phraseBars)
       const landsAtBar =
         clock !== null && !dueAtWrap
-          ? radioChangeLandsAtBar(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
+          ? radioChangeLandsAtBar(clock, pos, loopBars, gridBars, radioCadence.phraseBars)
           : null
       if (
         pending !== null &&
@@ -4553,7 +4578,7 @@ export function DiscoverPanel({
   // ceil(intervalBars / loopBars) * loopBars -- usually a doubling rather
   // than a rounding. See radioGridBars below.
   //
-  // The PHRASE grid (radioSettings.phraseBars) is the gate on top of
+  // The PHRASE grid (radioCadence.phraseBars) is the gate on top of
   // that: off by default, and when it is on a change may land only on a
   // 16- or 32-bar boundary counted in whole laps from where this clock
   // was created. It never drops a change, only holds it to the next
@@ -4595,7 +4620,14 @@ export function DiscoverPanel({
       pendingPick !== null ? (resolvedBarLengthsRef.current.get(pendingPick.slotId) ?? null) : null
     const changeBars = radioChangeBars(outgoingBars, pendingPick?.incomingBars ?? null)
     const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, changeBars)
-    const step = advanceRadioClock(clock, pos, loopBars, gridBars, radioSettings.phraseBars)
+    const step = advanceRadioClock(
+      clock,
+      pos,
+      loopBars,
+      gridBars,
+      radioCadence.phraseBars,
+      radioCadence.turnaroundPhraseBars
+    )
     radioClockRef.current = step.clock
     // The readout's clock (radioPlayRef): a lap more, and the bars of the lap that ended.
     if (step.wrapped) {
@@ -4995,19 +5027,19 @@ export function DiscoverPanel({
     // the transport happened to be at. At the wrap they all start at
     // their own zero.
     //
-    // Every pick was made and warmed when the pace chip was pressed, so
-    // this is one batched setSlots -> one render -> one rAF-coalesced
-    // sync -> one load-project. Locked and muted layers were never in the
+    // Every pick was made and warmed when `new bed` was pressed (or, until
+    // 2026-10-03, a pace chip), so this is one batched setSlots -> one
+    // render -> one rAF-coalesced sync -> one load-project. Locked and muted layers were never in the
     // batch: radioEligibleSlotIds excluded them, and the padlock has to
     // mean never or it means nothing.
     if (step.wrapped && radioCourseChangeRef.current !== null) {
       const batch = radioCourseChangeRef.current
       radioCourseChangeRef.current = null
-      // restartRadioInterval, not createRadioClock: the phrase was
-      // anchored when the pace chip was pressed and the transport was
-      // seeked to 0 (armRadioCourseChange). This is the batch LANDING a
-      // lap or two later, and re-anchoring here would shove the phrase
-      // origin forward by however long the slowest stem took to warm.
+      // restartRadioInterval, not createRadioClock: the phrase keeps its
+      // anchor (`new bed` re-anchors nothing; the pace chip that used to
+      // seek to 0 and restart it went 2026-10-03). This is the batch
+      // LANDING a lap or two later, and re-anchoring here would shove the
+      // phrase origin forward by however long the slowest stem took to warm.
       radioClockRef.current = restartRadioInterval(
         step.clock,
         radioNextIntervalBars(loopBars, boundaryBars),
@@ -5069,7 +5101,7 @@ export function DiscoverPanel({
       barsUntilChange:
         radioLedChangeRef.current !== null
           ? (radioLedChangeRef.current.atBars ?? loopBars) - pos
-          : radioBarsUntilChange(step.clock, pos, loopBars, gridBars, radioSettings.phraseBars)
+          : radioBarsUntilChange(step.clock, pos, loopBars, gridBars, radioCadence.phraseBars)
     }
     void Promise.resolve().then(() => {
       setRadioProgress(progress)
@@ -7801,12 +7833,12 @@ export function DiscoverPanel({
    * does its own first roll per slot, so this is the same clicks the user
    * would otherwise make.
    *
-   * Takes the window from RADIO_PACE_BARS rather than radioSettings, on
-   * purpose: the menu's own persisting write of {pace, paceBars} is async
-   * and this render's radioSettings prop is still the OLD pace. Reading it
-   * here would start the clock at the pace he just replaced.
+   * Takes the level as an argument rather than from radioSettings, on
+   * purpose: the menu's own persisting write of paceLevel is async and this
+   * render's radioSettings prop is still the OLD pace. Reading it here would
+   * start the clock at the pace he just replaced.
    */
-  function startRadio(pace: RadioPace): void {
+  function startRadio(level: number): void {
     if (slotsRef.current.length === 0) {
       // With the density arc on, the bed starts minimal (drums, bass) and
       // the arc grows it; otherwise it is `channels` rows, as before.
@@ -7824,9 +7856,7 @@ export function DiscoverPanel({
     // which is the only anchor radio can see -- the transport wraps, so
     // there is no absolute bar 0 to count from.
     radioClockRef.current = createRadioClock(
-      nextRadioIntervalBarsInWindow(
-        radioSettings.foldMode ? FOLD_PACE_BARS : RADIO_PACE_BARS[pace]
-      ),
+      nextRadioIntervalBarsInWindow(radioCadenceOf({ ...radioSettings, paceLevel: level }).window),
       pos
     )
     radioLastSlotRef.current = null
@@ -7835,79 +7865,6 @@ export function DiscoverPanel({
     radioCourseChangeRef.current = null
     setRadioProgress(0)
     setRadioOn(true)
-    void armRadioPick()
-  }
-
-  /** A pace chip pressed while radio is RUNNING. Elling, 2026-09-28:
-   * "changing course should reset the whole thing. okay to have it be
-   * dramatic."
-   *
-   * So this is not a re-tuning of the running clock. Four things happen:
-   *   - the clock restarts on the new window, immediately, so the progress
-   *     rule under the button visibly says something happened;
-   *   - the pending single pick is dropped, because it belonged to the old
-   *     section;
-   *   - any armed drop-out is cleared, so a half-finished gesture cannot
-   *     survive into the new one as a stuck layer;
-   *   - every eligible layer is re-picked and warmed now, and the whole
-   *     batch lands together on the next loop top (the wrap branch of the
-   *     clock effect).
-   *
-   * LOCKED LAYERS ARE NOT TOUCHED. radioEligibleSlotIds already excludes
-   * them, and that is the point: a padlock that a reset overrides is a
-   * padlock nobody can trust. Muted layers are out for the same reason
-   * they are out of every other radio path -- a change you cannot hear.
-   *
-   * Stepping a bar edge in the menu deliberately does NOT come through
-   * here. A reset per keypress while settling a number would be unusable;
-   * a preset is a course change, a stepper is an adjustment. */
-  function armRadioCourseChange(pace: RadioPace): void {
-    // Restart the loop from its top, immediately, KEEPING the stems that
-    // are there. Revised 2026-09-28 after he heard the first version:
-    // "oh instead of a dramatic change, just reload the stems that are
-    // there currently but fresh?"
-    //
-    // The first version re-picked every eligible layer, which is dramatic
-    // and also destroys the bed he had just spent a few minutes enjoying.
-    // A change of pace is a change of pace; it is not a request for
-    // different music.
-    //
-    // Note a plain reload would be SILENT: load-project deliberately never
-    // resets the transport (IpcServer.cpp), which is exactly what lets a
-    // new bed land without a jump. So the audible part is the seek. Every
-    // layer re-triggers together from its own zero, the mix survives, and
-    // it is a reset you can actually hear -- which "dramatic" was really
-    // asking for.
-    //
-    // Immediately rather than at the next loop top, on purpose: at the top
-    // everything is already at its zero, so a reset there would be
-    // inaudible. Snapping back mid-phrase is the whole gesture.
-    void window.rifffApi.engineSetPosition(0)
-    // lastPos 0, not `pos`: the transport is about to report ~0, and a
-    // clock still holding the old mid-loop position would read that as a
-    // wrap and bank a whole phantom lap on the very next tick.
-    //
-    // createRadioClock, so the PHRASE restarts here too. A course change
-    // is a new section and it seeks the transport to 0, so bar 0 of the
-    // new phrase and bar 0 of the transport are the same instant -- which
-    // is the one moment radio gets a phrase origin for free.
-    radioClockRef.current = createRadioClock(
-      nextRadioIntervalBarsInWindow(
-        radioSettings.foldMode ? FOLD_PACE_BARS : RADIO_PACE_BARS[pace]
-      ),
-      0
-    )
-    setRadioProgress(0)
-    setRadioPending(null)
-    radioCourseChangeRef.current = null
-    setRadioLedChange(null)
-    // A course change turns the whole bed over at the next wrap. A single
-    // staged layer aimed at that same wrap is a change from the section
-    // that is being left behind.
-    cancelStagedSwap('course-change')
-    clearRadioGesture()
-    clearRadioTurnaround()
-    resetRadioFold()
     void armRadioPick()
   }
 
@@ -8957,10 +8914,9 @@ export function DiscoverPanel({
             settings={radioSettings}
             onChange={(patch) => void onRadioSettingsChange(patch)}
             onNewBed={() => void collectRadioCourseChange()}
-            onPace={(pace) => {
+            onStart={(level) => {
               closeRadioMenu()
-              if (radioOn) armRadioCourseChange(pace)
-              else startRadio(pace)
+              startRadio(level)
             }}
             onClose={closeRadioMenu}
             ignoreRef={radioOn ? radioChevronRef : radioMenuButtonRef}
