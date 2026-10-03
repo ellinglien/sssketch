@@ -565,7 +565,8 @@ namespace sssketch
         int numSamples,
         float* outL,
         float* outR,
-        ChannelChainRegistry& channelChains) const
+        ChannelChainRegistry& channelChains,
+        const LapClock& lapClock) const
     {
         // Loaded ONCE, here, as this thread's own reference-counted copy,
         // and read through for the rest of this call -- not via secPerBar()
@@ -778,6 +779,17 @@ namespace sssketch
 
             for (const auto& stem : rifff.stems)
             {
+                // A folded row's cycle origin is the top of the lap its cycle went live on, so
+                // it is stamped here, every block, before any skip below (muted, silent, buffer
+                // not loaded yet, out of range): a row that comes in later in the lap -- an
+                // unmute, a late load -- still runs on the grid it was given, rather than one
+                // started from whichever lap it first sounded in. originFor only writes once per
+                // cycle and epoch; the cycle path below reads the same value. At most
+                // kMaxCycleRows entries to scan, no allocation, no lock.
+                if (stem.cycleRowKey != 0)
+                    if (auto* live = cycleTable.find(stem.cycleRowKey))
+                        CycleTable::originFor(*live, lapClock);
+
                 // A drawn `volume` curve REPLACES this clip's own static
                 // level rather than multiplying with it -- Elling's explicit
                 // choice (spec section 2b: "one place to draw a level"). So
@@ -965,6 +977,65 @@ namespace sssketch
                     }
                     finishStem();
                     continue; // handled -- skip the tile-loop path below entirely
+                }
+
+                // RADIO FOLD MODE (CycleTable.h): a row the live cycle table names loops only the
+                // first `bars` of its content, on the LAP clock -- positionBars restarts at every
+                // loop top, lapClock.baseBars + positionBars does not -- so a 7-beat cycle in a
+                // 16-beat loop drifts against the top and realigns every 112 beats, instead of
+                // restarting with the loop. Tile k starts at origin + phase + k * bars; each tile
+                // reads the stem's first `bars` of audio at its native rate (durationSec /
+                // barLength, the same rate the tile path below uses, so a stretched stem plays at
+                // tempo), and fades in and out over kCycleSeamFadeSec, because the cut is a jump
+                // in the audio that nothing else smooths (the buffer cache sews only the stem's
+                // own end). The rifff's window and fades do not apply: a folded row plays the
+                // whole lap, every lap. Everything after -- gain, mute regions, toolkit, pan,
+                // sends, pump -- is the same as for any stem.
+                if (stem.cycleRowKey != 0)
+                {
+                    if (auto* cycle = cycleTable.find(stem.cycleRowKey))
+                    {
+                        if (! std::isfinite(stem.barLength) || stem.barLength < kMinStemBarLength
+                            || ! (stem.durationSec > 0.0))
+                            continue;
+                        const double cycleBars = std::min(cycle->row.bars, stem.barLength);
+                        if (! (cycleBars >= kMinStemBarLength))
+                            continue;
+                        const double originBars = CycleTable::originFor(*cycle, lapClock);
+                        const double secPerBarNative = stem.durationSec / stem.barLength;
+                        const double contentSec = cycleBars * secPerBarNative;
+                        const double tileSec = cycleBars * spb;
+                        const double fadeSec = std::min(kCycleSeamFadeSec, contentSec / 2.0);
+                        // seconds into the cycle grid at this block's first sample
+                        const double gridStartSec =
+                            (lapClock.baseBars + positionBars - originBars - cycle->row.phaseBars) * spb;
+                        const int numCh = entry.buffer->getNumChannels();
+                        const int bufferSamples = entry.buffer->getNumSamples();
+                        prepareStemBuffer();
+                        for (int i2 = 0; i2 < numSamples; ++i2)
+                        {
+                            double inTile = std::fmod(gridStartSec + (double) i2 / sampleRate, tileSec);
+                            if (inTile < 0.0)
+                                inTile += tileSec;
+                            if (inTile >= contentSec)
+                                continue; // a stem slower than the project leaves a gap, as a tile does
+                            const int srcSample = (int) std::llround(inTile * entry.sampleRate);
+                            if (srcSample < 0 || srcSample >= bufferSamples)
+                                continue;
+                            const double seam = fadeSec > 0.0
+                                ? std::min({ 1.0, inTile / fadeSec, (contentSec - inTile) / fadeSec })
+                                : 1.0;
+                            const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
+                            const double gain = seam * effectiveVolume
+                                * muteRegionGainAt(sampleTimeSec, spb, stem.muteRegions);
+                            const float l = entry.buffer->getSample(0, srcSample);
+                            const float r = numCh > 1 ? entry.buffer->getSample(1, srcSample) : l;
+                            stemOutL[i2] += (float) (l * gain);
+                            stemOutR[i2] += (float) (r * gain);
+                        }
+                        finishStem();
+                        continue;
+                    }
                 }
 
                 // barLength is in bars and may be fractional (a half-bar

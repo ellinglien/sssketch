@@ -6,6 +6,7 @@
 #include "NoiseRiser.h"
 #include "StemBufferCache.h"
 #include "ChannelChainRegistry.h"
+#include "CycleTable.h"
 #include "LiveParamOverrides.h"
 #include "MasterStage.h"
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -222,13 +223,29 @@ namespace sssketch
          * thread (see their own doc comment), and a neutral project never
          * touches them at all, which is what keeps the out-of-order
          * guarantee true exactly where it was true before. */
+        /** `lapClock` (CycleTable.h) is the transport's lap clock, which only a stem folded by
+         * the cycle table reads: Transport passes it, and everything else (an export, a test)
+         * gets {0, 0}. */
         void renderBlock(
             double positionBars,
             double sampleRate,
             int numSamples,
             float* outL,
             float* outR,
-            ChannelChainRegistry& channelChains) const;
+            ChannelChainRegistry& channelChains,
+            const LapClock& lapClock = {}) const;
+
+        /** MESSAGE THREAD. Radio fold mode's cycles for the next loop top, or for the next block
+         * when `now` (CycleTable::stage). */
+        void stageCycles(const std::vector<CycleRow>& rows, bool now) { cycleTable.stage(rows, now); }
+
+        /** AUDIO THREAD, at a point with no renderBlock in flight: Transport calls it at every
+         * block top (`atWrap` false: a `now` stage, or a retry) and at every loop top (`atWrap`
+         * true). See CycleTable::apply. */
+        bool applyStagedCycles(bool atWrap) { return cycleTable.apply(atWrap); }
+
+        /** Any thread: how many cycle tables have gone live (for tests). */
+        unsigned long long cycleApplyCount() const { return cycleTable.applyCount(); }
 
         double secPerBar() const;
 
@@ -770,6 +787,11 @@ namespace sssketch
          * project with no risers. (Until 2026-10-02 this map was filled in
          * renderBlock, on the audio thread, and never pruned.) */
         std::map<juce::String, std::shared_ptr<RiserVoice>> riserVoicePool;
+
+        /** Radio fold mode's per-row cycles (CycleTable.h). `mutable` for the same reason as the
+         * snapshot's scratch: renderBlock is const and keeps each live cycle's origin here, and
+         * only the rendering thread touches the live table. */
+        mutable CycleTable cycleTable;
 
         mutable ReverbBus reverbBus;
 

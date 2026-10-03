@@ -544,6 +544,153 @@ namespace sssketch
                 ramp.deleteFile();
             }
 
+            // The cycle table (CycleTable.h): a stem whose row is folded loops its first `bars`
+            // at the stem's own full barLength/durationSec (so the buffer cache sews the stem's
+            // real end, never the crop point), on the lap clock, with a seam fade.
+            const auto foldProject = [](const juce::File& file, const juce::String& row) {
+                EngineProject project;
+                project.bpm = 60.0; // a beat is 1 s, a bar 4 s
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4.0; // a 16 s loop
+                EngineStem stem;
+                stem.stemKey = "fold:1";
+                stem.resolvedPath = file.getFullPathName();
+                stem.barLength = 4.0;
+                stem.durationSec = 16.0;
+                stem.cycleRow = row;
+                stem.cycleRowKey = cycleKeyOf(row);
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+                return project;
+            };
+            const auto foldRow = [](double bars, double phaseBars, const char* id = "perc~1") {
+                CycleRow r;
+                r.rowKey = cycleKeyOf("perc");
+                r.idKey = cycleKeyOf(id);
+                r.bars = bars;
+                r.phaseBars = phaseBars;
+                return std::vector<CycleRow> { r };
+            };
+
+            beginTest("a folded row loops its first 7 beats; the cycle runs on across the loop top");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_ramp.wav", 16 * 44100);
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(foldProject(ramp, "perc"));
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                expect(engine.applyStagedCycles(false));
+                const auto at = [&](double lapSec, double baseBars) {
+                    float l = 0.0f, r = 0.0f;
+                    engine.renderBlock(lapSec / 4.0, 44100.0, 1, &l, &r, channelChains, LapClock { baseBars, 1 });
+                    return l;
+                };
+                // lap 0 (base 0): tiles at 0, 7 and 14 s
+                expectWithinAbsoluteError(at(0.5, 0.0), 0.5f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(6.5, 0.0), 6.5f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(7.5, 0.0), 0.5f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(15.5, 0.0), 1.5f / 16.0f, 0.002f);
+                // lap 1 (base 4 bars): 16.5 s on the cycle grid is 2.5 s into a tile -- it did
+                // NOT restart with the loop (that would read 0.5 / 16)
+                expectWithinAbsoluteError(at(0.5, 4.0), 2.5f / 16.0f, 0.002f);
+                // 112 beats in (lap 7 starts at 112 s): the cycle and the loop line up again
+                expectWithinAbsoluteError(at(0.5, 28.0), 0.5f / 16.0f, 0.002f);
+                ramp.deleteFile();
+            }
+
+            beginTest("a folded row's phase offset starts each cycle that much later");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_phase_ramp.wav", 16 * 44100);
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(foldProject(ramp, "perc"));
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.25), true); // a beat late
+                engine.applyStagedCycles(false);
+                const auto at = [&](double lapSec) {
+                    float l = 0.0f, r = 0.0f;
+                    engine.renderBlock(lapSec / 4.0, 44100.0, 1, &l, &r, channelChains, LapClock { 0.0, 1 });
+                    return l;
+                };
+                expectWithinAbsoluteError(at(1.5), 0.5f / 16.0f, 0.002f);
+                expectWithinAbsoluteError(at(0.5), 6.5f / 16.0f, 0.002f); // the tail of the cycle before
+                expectWithinAbsoluteError(at(8.5), 0.5f / 16.0f, 0.002f);
+                ramp.deleteFile();
+            }
+
+            beginTest("a folded row's cycle seam fades over 10 ms: no step above threshold, a dip at the seam");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_seam_ramp.wav", 16 * 44100);
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                engine.setProject(foldProject(ramp, "perc"));
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                engine.applyStagedCycles(false);
+                // 50 ms either side of the seam at 7 s, in one block
+                const int n = (int) (0.1 * 44100.0);
+                std::vector<float> l((size_t) n, 0.0f), r((size_t) n, 0.0f);
+                engine.renderBlock((7.0 - 0.05) / 4.0, 44100.0, n, l.data(), r.data(), channelChains, LapClock { 0.0, 1 });
+                float worst = 0.0f;
+                float lowest = 1.0f;
+                for (int i = 1; i < n; ++i)
+                {
+                    worst = std::max(worst, std::abs(l[(size_t) i] - l[(size_t) i - 1]));
+                    lowest = std::min(lowest, std::abs(l[(size_t) i]));
+                }
+                // unfaded, the seam is a 7/16 = 0.44 jump; faded over 441 samples, each step is
+                // about 0.44 / 441 = 0.001
+                expect(worst < 0.002f, "largest step at the seam " + juce::String(worst));
+                expect(lowest < 0.001f, "the seam dips to silence, got " + juce::String(lowest));
+                ramp.deleteFile();
+            }
+
+            beginTest("a row the cycle table does not name plays exactly as a stem with no row");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_none_ramp.wav", 16 * 44100);
+                StemBufferCache cache;
+                PlaybackEngine withRow(cache);
+                PlaybackEngine plain(cache);
+                ChannelChainRegistry channelChains;
+                withRow.setProject(foldProject(ramp, "lead")); // the table folds "perc" only
+                withRow.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                withRow.applyStagedCycles(false);
+                plain.setProject(foldProject(ramp, ""));
+                std::vector<float> a(4096, 0.0f), ar(4096, 0.0f), b(4096, 0.0f), br(4096, 0.0f);
+                withRow.renderBlock(1.9, 44100.0, 4096, a.data(), ar.data(), channelChains, LapClock { 4.0, 1 });
+                plain.renderBlock(1.9, 44100.0, 4096, b.data(), br.data(), channelChains);
+                for (size_t i = 0; i < a.size(); ++i)
+                    expectEquals(a[i], b[i]);
+                ramp.deleteFile();
+            }
+
+            beginTest("a folded row's origin is the lap its cycle went live on, even if the row was silent then");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_origin_ramp.wav", 16 * 44100);
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                ChannelChainRegistry channelChains;
+                auto muted = foldProject(ramp, "perc");
+                muted.rifffs[0].stems[0].muted = true;
+                engine.setProject(muted);
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                engine.applyStagedCycles(false);
+                float l = 0.0f, r = 0.0f;
+                // lap 1 (base 4 bars): the cycle is live, the row is muted -- silent, but its
+                // origin is this lap's top
+                engine.renderBlock(0.5 / 4.0, 44100.0, 1, &l, &r, channelChains, LapClock { 4.0, 1 });
+                expectEquals(l, 0.0f);
+                // lap 2 (base 8 bars): unmuted. 16.5 s after the origin is 2.5 s into a tile; an
+                // origin taken lazily, here, would read 0.5 / 16
+                engine.setProject(foldProject(ramp, "perc"));
+                engine.renderBlock(0.5 / 4.0, 44100.0, 1, &l, &r, channelChains, LapClock { 8.0, 1 });
+                expectWithinAbsoluteError(l, 2.5f / 16.0f, 0.002f);
+                ramp.deleteFile();
+            }
+
             beginTest("leftCropBars clips the first tile without moving startBar, and reads from the correct offset into the source buffer");
             {
                 // A 1-bar stem tiled twice (rifff.barLength=2), cropped 0.5
