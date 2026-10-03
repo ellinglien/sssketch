@@ -141,6 +141,24 @@ export interface ArcRow {
   staleness: number
 }
 
+/** A thinning arc's row on its way out (sssketch's arcExitRef): waiting for its drop-out to be
+ * armed, or fading in the lap `lap`. */
+export interface ArcExit {
+  slotId: string
+  phase: 'waiting' | 'fading'
+  lap: number
+}
+
+/** The row the arc is taking out before the next top, which a decision for the lap after it
+ * treats as unheard (the turnaround's roll, the fold step): one fading in this lap, or one
+ * waiting whose exit is not held back (a stage out, a drop-out or lead-in armed), since it will
+ * arm and go silent this lap. Null for none. */
+export function arcExitingRow(exit: ArcExit | null, lap: number, heldBack: boolean): string | null {
+  if (exit === null) return null
+  if (exit.phase === 'fading') return exit.lap === lap ? exit.slotId : null
+  return heldBack ? null : exit.slotId
+}
+
 /** Which row a thinning arc removes: the stalest it is allowed to, or null. */
 export function pickArcRemoval(rows: readonly ArcRow[]): string | null {
   const lastOfItsKind = (r: ArcRow): boolean =>

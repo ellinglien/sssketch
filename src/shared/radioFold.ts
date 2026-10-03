@@ -572,19 +572,24 @@ export function radioFoldMarkedBarsAhead(
 }
 
 /** A change's interval under the mode: the drawn bars, moved later to a realignment top when one
- * comes within FOLD_PREFER_WAIT_LAPS laps of it (spec section 1: the next change prefers it). */
+ * comes within FOLD_PREFER_WAIT_LAPS laps of it (spec section 1: the next change prefers it).
+ * `stepOwed`: the lap playing now has started but its wrap's step has not run yet (sssketch steps
+ * a couple of microtasks after the wrap, behind that wrap's landings), so `state` still decided
+ * the lap playing now and counts its tops from the lap before: `fromBars` is a lap further on. */
 export function radioFoldIntervalBars(
   state: RadioFoldState | null,
   drawnBars: number,
   loopBars: number,
-  fromBars = 0
+  fromBars = 0,
+  stepOwed = false
 ): number {
   if (state === null || !(loopBars > 0)) return drawnBars
+  const from = fromBars + (stepOwed ? loopBars : 0)
   const limit = drawnBars + FOLD_PREFER_WAIT_LAPS * loopBars
-  const horizon = Math.ceil((limit + fromBars) / loopBars)
+  const horizon = Math.ceil((limit + from) / loopBars)
   let best: number | null = null
   for (const top of radioFoldMarkedBarsAhead(state, loopBars, horizon)) {
-    const m = top - fromBars
+    const m = top - from
     if (m >= drawnBars && m <= limit && (best === null || m < best)) best = m
   }
   return best ?? drawnBars

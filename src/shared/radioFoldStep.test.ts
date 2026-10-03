@@ -361,6 +361,15 @@ describe('realignment marks', () => {
     expect(radioFoldIntervalBars(s, 24, 4, 0)).toBe(32)
   })
 
+  it("counts a lap further on while the wrap's step is still owed", () => {
+    const s = settled(7, 16, 0) // marks at 32 and 60 bars from the top of the lap before
+    // the lap after it has started, unstepped: those marks are 28 and 56 bars from its top
+    expect(radioFoldIntervalBars(s, 24, 4, 0, true)).toBe(28)
+    expect(radioFoldIntervalBars(s, 24, 4, 2, true)).toBe(26)
+    expect(radioFoldIntervalBars(s, 29, 4, 0, true)).toBe(29) // 56 is past two laps
+    expect(radioFoldIntervalBars(s, 24, 4, 0, false)).toBe(32)
+  })
+
   it('a phrase end on a realignment top rolls at often; off stays off', () => {
     expect(radioFoldTurnaroundRate('rare', true)).toBe('often')
     expect(radioFoldTurnaroundRate('rare', false)).toBe('rare')

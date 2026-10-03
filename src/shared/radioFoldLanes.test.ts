@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { createRadioFold, stepRadioFold, type RadioFoldStep } from './radioFold'
+import { createRadioFold, stepRadioFold, type RadioFoldRow, type RadioFoldStep } from './radioFold'
 import {
   radioFoldCycleRows,
   radioFoldDriftCurves,
   radioFoldEngineRows,
-  radioFoldSound
+  radioFoldRowsAt,
+  radioFoldSound,
+  radioFoldStepLine,
+  type RadioFoldRowNow
 } from './radioFoldLanes'
 import { normalizeSoundSettings } from './radioSound'
 
@@ -78,5 +81,109 @@ describe('radioFoldSound', () => {
     expect(leaned.glue.amount).toBeCloseTo(s.glue.amount + 0.15)
     expect(leaned.saturation.amount).toBeCloseTo(s.saturation.amount + 0.15)
     expect(leaned.glue.on).toBe(s.glue.on)
+  })
+})
+
+describe('radioFoldRowsAt', () => {
+  const now = (id: string, over: Partial<RadioFoldRowNow> = {}): RadioFoldRowNow => ({
+    id,
+    stemId: `${id}-old`,
+    kinds: ['rhythmic'],
+    barLength: 4,
+    hooked: false,
+    previewing: true,
+    percussive: false,
+    ...over
+  })
+
+  it('reads every row as it plays now when nothing lands', () => {
+    expect(radioFoldRowsAt([now('a'), now('b', { barLength: null })], new Map(), null)).toEqual([
+      {
+        id: 'a',
+        stemId: 'a-old',
+        kinds: ['rhythmic'],
+        barLength: 4,
+        hooked: false,
+        audible: true,
+        percussive: false
+      },
+      // unresolved: no length, unheard
+      {
+        id: 'b',
+        stemId: 'b-old',
+        kinds: ['rhythmic'],
+        barLength: 0,
+        hooked: false,
+        audible: false,
+        percussive: false
+      }
+    ])
+  })
+
+  it("puts a landing's stem over the row's old one, and a cold landing unheard", () => {
+    const landed = new Map([
+      ['a', { stemId: 'a-new', barLength: 2, percussive: true }],
+      ['b', { stemId: 'b-new', barLength: null, percussive: false }]
+    ])
+    const [a, b] = radioFoldRowsAt([now('a'), now('b')], landed, null)
+    expect(a).toMatchObject({ stemId: 'a-new', barLength: 2, percussive: true, audible: true })
+    expect(b).toMatchObject({ stemId: 'b-new', barLength: 0, audible: false })
+  })
+
+  it("leaves the arc's exiting row unheard, and a row out of the mix", () => {
+    const rows = radioFoldRowsAt([now('a'), now('b', { previewing: false })], new Map(), 'a')
+    expect(rows.map((r) => r.audible)).toEqual([false, false])
+    expect(rows[0].stemId).toBe('a-old')
+  })
+})
+
+describe('radioFoldStepLine', () => {
+  const row = (id: string, kinds: RadioFoldRowNow['kinds'], barLength: number): RadioFoldRow => ({
+    id,
+    stemId: `${id}-1`,
+    kinds,
+    barLength,
+    hooked: false,
+    audible: true,
+    percussive: false
+  })
+
+  it('says when nothing qualifies', () => {
+    const rows = [row('bass', ['bass'], 4), row('lead', ['lead'], 4)]
+    const s = stepRadioFold(createRadioFold('k3x9pq'), { rows, loopBars: 4, bpm: 120, fold: 100 })
+    expect(radioFoldStepLine(s, rows)).toBe(
+      `[radio-fold] lap 0 · anchor bass · stretch ${s.stretch} · foldable 0/2 heard · folds none`
+    )
+  })
+
+  it('lists every row the machine holds, with its cycle, target and full length', () => {
+    const s = {
+      ...step([perc]),
+      anchorId: 'drums',
+      marked: true,
+      stretch: 'folded' as const
+    }
+    s.state = {
+      ...s.state,
+      rows: [
+        {
+          rowId: 'perc',
+          stemId: 'p1',
+          fullBeats: 16,
+          targetBeats: 7,
+          cycleBeats: 10,
+          phaseBeats: 0,
+          originLap: 0,
+          path: [7],
+          mode: 'folding',
+          unfoldSince: null,
+          serial: 3
+        }
+      ]
+    }
+    const rows = [row('drums', ['drums'], 4), row('perc', ['rhythmic'], 4)]
+    expect(radioFoldStepLine(s, rows)).toBe(
+      `[radio-fold] lap ${s.lap} · anchor drums · stretch folded · marked · foldable 1/2 heard · folds perc 10->7/16b folding`
+    )
   })
 })

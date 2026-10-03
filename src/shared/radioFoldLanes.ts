@@ -6,7 +6,12 @@
 // sssketch's Discover panel and the web radio, so the two cannot read a step differently.
 
 import type { AutomationPoint } from './toolkit'
-import type { RadioFoldStep, FoldDriftLap } from './radioFold'
+import {
+  radioFoldCanFold,
+  type FoldDriftLap,
+  type RadioFoldRow,
+  type RadioFoldStep
+} from './radioFold'
 import { radioClashLean, radioClashLeaned } from './radioClash'
 import type { SoundSettings } from './radioSound'
 import type { ThrowTiming } from './radioThrows'
@@ -90,4 +95,63 @@ export function radioFoldSound(
     glue: { ...sound.glue, amount: radioClashLeaned(sound.glue.amount, lean) },
     saturation: { ...sound.saturation, amount: radioClashLeaned(sound.saturation.amount, lean) }
   }
+}
+
+/** A row as a runtime knows it at a wrap, before that wrap's landings have reached it: its stem,
+ * and its length while resolved (null otherwise). `previewing`: in the mix. */
+export interface RadioFoldRowNow extends Omit<RadioFoldRow, 'barLength' | 'audible'> {
+  barLength: number | null
+  previewing: boolean
+}
+
+/** A change landing on a row at this wrap: the stem it brings, and that stem's length and type
+ * when it has resolved (barLength null while it has not). */
+export interface RadioFoldLanding {
+  stemId: string | null
+  barLength: number | null
+  percussive: boolean
+}
+
+/** The rows as the machine should see them for the lap after a wrap (sssketch's Discover, which
+ * steps after that wrap's landings and the density arc's decision; the web's foldRows): every
+ * landing's stem over the row's old one, and `exitingId` -- the row the arc is taking out before
+ * the next top -- unheard. A row is heard while it is in the mix with a known length. */
+export function radioFoldRowsAt(
+  rows: readonly RadioFoldRowNow[],
+  landed: ReadonlyMap<string, RadioFoldLanding>,
+  exitingId: string | null
+): RadioFoldRow[] {
+  return rows.map((r) => {
+    const l = landed.get(r.id)
+    const barLength = l ? l.barLength : r.barLength
+    return {
+      id: r.id,
+      stemId: l ? l.stemId : r.stemId,
+      kinds: r.kinds,
+      barLength: barLength ?? 0,
+      hooked: r.hooked,
+      audible: r.previewing && barLength !== null && r.id !== exitingId,
+      percussive: l ? l.percussive : r.percussive
+    }
+  })
+}
+
+/** One line per fold step for a dev log, so a walkthrough can tell "nothing qualifies" (no
+ * anchor, no row foldable) from a machine that should be folding and is not: the lap, the anchor,
+ * the stretch, a realignment top, how many of the heard rows could fold, and every row the
+ * machine holds with its cycle now, its target and its full length, in beats. */
+export function radioFoldStepLine(step: RadioFoldStep, rows: readonly RadioFoldRow[]): string {
+  const heard = rows.filter((r) => r.audible && r.barLength > 0).length
+  const foldable = rows.filter((r) => radioFoldCanFold(r, step.anchorId)).length
+  const folds = step.state.rows.map(
+    (r) => `${r.rowId} ${r.cycleBeats}->${r.targetBeats}/${r.fullBeats}b ${r.mode}`
+  )
+  return [
+    `[radio-fold] lap ${step.lap}`,
+    `anchor ${step.anchorId ?? 'none'}`,
+    `stretch ${step.stretch}`,
+    ...(step.marked ? ['marked'] : []),
+    `foldable ${foldable}/${heard} heard`,
+    `folds ${folds.length > 0 ? folds.join(', ') : 'none'}`
+  ].join(' · ')
 }

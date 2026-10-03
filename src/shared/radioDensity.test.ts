@@ -5,6 +5,7 @@ import {
   DENSITY_MAX,
   DENSITY_MIN,
   advanceDensityLeg,
+  arcExitingRow,
   densityArrival,
   newDensityLeg,
   nextArcKind,
@@ -216,5 +217,20 @@ describe('the density setting', () => {
     const { density: _omit, ...withoutDensity } = DEFAULT_RADIO_SETTINGS
     void _omit
     expect(radioDensityOf(withoutDensity)).toBe('arc')
+  })
+})
+
+describe('arcExitingRow', () => {
+  it('a row fading in this lap is leaving; one that faded in an earlier lap is not', () => {
+    expect(arcExitingRow({ slotId: 'a', phase: 'fading', lap: 3 }, 3, false)).toBe('a')
+    expect(arcExitingRow({ slotId: 'a', phase: 'fading', lap: 2 }, 3, false)).toBeNull()
+    // held back changes nothing once it is fading
+    expect(arcExitingRow({ slotId: 'a', phase: 'fading', lap: 3 }, 3, true)).toBe('a')
+  })
+
+  it('a waiting row is leaving unless its exit is held back', () => {
+    expect(arcExitingRow({ slotId: 'b', phase: 'waiting', lap: 1 }, 3, false)).toBe('b')
+    expect(arcExitingRow({ slotId: 'b', phase: 'waiting', lap: 1 }, 3, true)).toBeNull()
+    expect(arcExitingRow(null, 3, false)).toBeNull()
   })
 })
