@@ -20,6 +20,90 @@ import {
 } from '@shared/radioTurnaround'
 import { RADIO_DENSITY_OPTIONS, radioDensityOf } from '@shared/radioSchedule'
 import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
+import { FOLD_SEED_ALPHABET, FOLD_SEED_LENGTH, newFoldSeed } from '@shared/radioFold'
+
+/** A fold fader, 0..100. Local while dragging, and committed (persisted) only when the drag or
+ * key press ends: every step of a drag would otherwise write the settings file. */
+function FoldSlider({
+  label,
+  value,
+  onCommit
+}: {
+  label: string
+  value: number
+  onCommit: (v: number) => void
+}): React.JSX.Element {
+  const [draft, setDraft] = useState<number | null>(null)
+  const commit = (): void => {
+    if (draft !== null && draft !== value) onCommit(draft)
+    setDraft(null)
+  }
+  return (
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+      <input
+        type="range"
+        min={0}
+        max={100}
+        step={1}
+        aria-label={label}
+        value={draft ?? value}
+        onChange={(e) => setDraft(Number(e.target.value))}
+        onPointerUp={commit}
+        onKeyUp={commit}
+        onBlur={commit}
+        style={{ width: 96, accentColor: 'var(--ra-text)' }}
+      />
+      <span style={{ fontSize: 9, minWidth: 20, textAlign: 'right', color: 'var(--ra-text)' }}>
+        {draft ?? value}
+      </span>
+    </span>
+  )
+}
+
+/** The fold seed: six characters, typed or pasted, committed on enter or when focus leaves.
+ * Anything that does not clean up to six characters of the alphabet goes back to the seed in use. */
+function FoldSeedInput({
+  value,
+  onCommit
+}: {
+  value: string
+  onCommit: (seed: string) => void
+}): React.JSX.Element {
+  const [draft, setDraft] = useState<string | null>(null)
+  const commit = (): void => {
+    if (draft !== null) {
+      // the same cleaning as normalizeFoldSeed, but nothing falls back to the default here
+      const kept = [...draft.trim().toLowerCase()]
+        .filter((ch) => FOLD_SEED_ALPHABET.includes(ch))
+        .join('')
+      if (kept.length === FOLD_SEED_LENGTH && kept !== value) onCommit(kept)
+    }
+    setDraft(null)
+  }
+  return (
+    <input
+      key="seed"
+      aria-label="fold seed"
+      value={draft ?? value}
+      maxLength={FOLD_SEED_LENGTH + 4}
+      spellCheck={false}
+      onChange={(e) => setDraft(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit()
+      }}
+      onBlur={commit}
+      style={{
+        fontFamily: 'inherit',
+        fontSize: 9,
+        width: 56,
+        padding: 'var(--ra-s-0) 4px',
+        background: 'transparent',
+        border: '1px solid var(--ra-border)',
+        color: 'var(--ra-text)'
+      }}
+    />
+  )
+}
 
 const CHANNEL_OPTIONS: number[] = Array.from(
   { length: RADIO_CHANNELS_MAX - RADIO_CHANNELS_MIN + 1 },
@@ -352,6 +436,60 @@ export function DiscoverRadioMenu({
             chip(t, settings.transitions === t, () => onChange({ transitions: t }))
           )
         )}
+      {/* Fold mode (@shared/radioFold): one anchor at full length, one or two short rhythmic
+          rows looping at odd lengths against it and realigning every 30-120 s; seeded rules, so
+          a seed replays them. Only meaningful while radio runs, so only shown then. */}
+      {mode === 'running' &&
+        row(
+          'fold',
+          [
+            chip('off', !settings.foldMode, () => onChange({ foldMode: false })),
+            chip('on', settings.foldMode, () => onChange({ foldMode: true }))
+          ],
+          'layers in other time signatures'
+        )}
+      {mode === 'running' &&
+        settings.foldMode &&
+        row(
+          'how folded',
+          [
+            <FoldSlider
+              key="fold"
+              label="how folded"
+              value={settings.fold}
+              onCommit={(v) => onChange({ fold: v })}
+            />
+          ],
+          '0 is always straight'
+        )}
+      {mode === 'running' &&
+        settings.foldMode &&
+        row(
+          'clash',
+          [
+            <FoldSlider
+              key="clash"
+              label="how mismatched"
+              value={settings.clash}
+              onCommit={(v) => onChange({ clash: v })}
+            />
+          ],
+          'how mismatched'
+        )}
+      {mode === 'running' &&
+        settings.foldMode &&
+        row(
+          'seed',
+          [
+            <FoldSeedInput
+              key="seed"
+              value={settings.foldSeed}
+              onCommit={(seed) => onChange({ foldSeed: seed })}
+            />,
+            chip('new', false, () => onChange({ foldSeed: newFoldSeed() }))
+          ],
+          'the same seed replays the same rules. the stems also depend on the library, so a changed library can pick different ones'
+        )}
       {mode === 'running' && row('reroll', [chip('new bed', false, onNewBed)])}
       {/* maxWidth, not a wider menu: the chip rows set the width and the
           hint wraps inside it. Without it this span is one long line and
@@ -359,7 +497,7 @@ export function DiscoverRadioMenu({
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
         {mode === 'start'
           ? 'pick a pace to start'
-          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added. turnarounds mark the end of each phrase'}
+          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added. turnarounds mark the end of each phrase. fold loops one or two short layers at odd lengths against the beat, and changes come every 16 to 64 bars while it is on'}
       </span>
     </div>
   )
