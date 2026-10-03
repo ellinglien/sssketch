@@ -81,16 +81,21 @@ export function rankCandidates(
     targetBpm,
     favouriteStemCIDs,
     favouriteWeight,
+    favouriteScale = 1,
     targetTraits = [],
     clash
   }: {
     targetBpm: number
-    favouriteStemCIDs?: Set<string>
+    favouriteStemCIDs?: ReadonlySet<string>
     /** Optional per-stem favourite strength, clamped to [0, 1]: the boost
      * becomes FAVOURITE_BOOST * weight. For a crowd that hearts some stems
      * more than others (ell.ing/radio's ♥). A stem already in
      * favouriteStemCIDs keeps its full boost; absent, nothing changes. */
     favouriteWeight?: (stemCID: string) => number
+    /** The faves dial's lean (@shared/discoverFaves favesBoostScale), clamped to [0, 1]:
+     * multiplies the whole favourites boost. Absent: 1, the full boost, as before. 0: no boost
+     * at all -- exactly the ranking without favourites. */
+    favouriteScale?: number
     targetTraits?: readonly DiscoverTraitKind[]
     /** Radio fold mode's `clash` (@shared/radioClash): a requested rhythmic or bright trait
      * turns toward its other end, and distance from the bed on those two traits scores. Absent
@@ -136,13 +141,13 @@ export function rankCandidates(
     if (max > min) ranges.set(kind, { min, max })
   }
 
+  const boost = FAVOURITE_BOOST * clampWeight(favouriteScale)
   return candidates
     .map((candidate) => {
       const bpmDistance = Math.abs(candidate.riffBpm - targetBpm)
       let score = Math.max(0, 1 - bpmDistance / BPM_FALLOFF)
-      if (favouriteStemCIDs?.has(candidate.stemCID)) score += FAVOURITE_BOOST
-      else if (favouriteWeight)
-        score += FAVOURITE_BOOST * clampWeight(favouriteWeight(candidate.stemCID))
+      if (favouriteStemCIDs?.has(candidate.stemCID)) score += boost
+      else if (favouriteWeight) score += boost * clampWeight(favouriteWeight(candidate.stemCID))
       for (const kind of targetTraits) {
         // Library percentile (Phase 1 of the 2026-09-22 promise-vs-delivery
         // spec) when main attached one -- already direction-adjusted, and

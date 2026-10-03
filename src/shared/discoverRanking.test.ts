@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { rankCandidates, pickReroll } from './discoverRanking'
 import type { DiscoverCandidate } from './discoverCandidate'
+import { favesBoostScale } from './discoverFaves'
 
 function candidate(overrides: Partial<DiscoverCandidate>): DiscoverCandidate {
   return {
@@ -416,5 +417,73 @@ describe('pickReroll', () => {
     const nearTiedGap = Math.abs(nearTied.a - nearTied.b)
     const farApartGap = Math.abs(farApart.a - farApart.b)
     expect(nearTiedGap).toBeLessThan(farApartGap)
+  })
+})
+
+describe('rankCandidates: favouriteScale (the faves dial)', () => {
+  /** mulberry32 */
+  function seeded(seed: number): () => number {
+    let a = seed >>> 0
+    return () => {
+      a = (a + 0x6d2b79f5) >>> 0
+      let t = a
+      t = Math.imul(t ^ (t >>> 15), t | 1)
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+  }
+  function randomPool(seed: number): { pool: DiscoverCandidate[]; faves: Set<string> } {
+    const r = seeded(seed)
+    const pool = Array.from({ length: 30 }, (_, i) =>
+      candidate({
+        stemCID: `s${i}`,
+        riffBpm: Math.round(80 + r() * 80),
+        traitPercentiles: { warm: r() }
+      })
+    )
+    const faves = new Set(pool.filter(() => r() < 0.3).map((c) => c.stemCID))
+    return { pool, faves }
+  }
+
+  it('at faves 0 the ranking is identical to one without favourites, across many seeds', () => {
+    for (let s = 1; s <= 200; s++) {
+      const { pool, faves } = randomPool(s)
+      const opts = { targetBpm: 120, targetTraits: ['warm'] as const }
+      expect(
+        rankCandidates(pool, {
+          ...opts,
+          targetTraits: [...opts.targetTraits],
+          favouriteStemCIDs: faves,
+          favouriteScale: favesBoostScale(0)
+        })
+      ).toEqual(rankCandidates(pool, { ...opts, targetTraits: [...opts.targetTraits] }))
+    }
+  })
+
+  it('absent, the full boost as before', () => {
+    for (let s = 1; s <= 50; s++) {
+      const { pool, faves } = randomPool(s)
+      expect(
+        rankCandidates(pool, { targetBpm: 120, favouriteStemCIDs: faves, favouriteScale: 1 })
+      ).toEqual(rankCandidates(pool, { targetBpm: 120, favouriteStemCIDs: faves }))
+    }
+  })
+
+  it('scales the boost: half the dial, half the boost, for sets and weights alike', () => {
+    const fav = candidate({ stemCID: 'fav', riffBpm: 128 })
+    const full = rankCandidates([fav], { targetBpm: 128, favouriteStemCIDs: new Set(['fav']) })
+    const half = rankCandidates([fav], {
+      targetBpm: 128,
+      favouriteStemCIDs: new Set(['fav']),
+      favouriteScale: favesBoostScale(50)
+    })
+    expect(full[0].score - 1).toBeCloseTo(1.5, 6)
+    expect(half[0].score - 1).toBeCloseTo(0.75, 6)
+    const weighted = rankCandidates([fav], {
+      targetBpm: 128,
+      favouriteWeight: () => 0.5,
+      favouriteScale: 0.5
+    })
+    expect(weighted[0].score - 1).toBeCloseTo(0.375, 6)
   })
 })
