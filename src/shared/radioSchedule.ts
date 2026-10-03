@@ -1354,6 +1354,22 @@ export function radioCadenceBarEvery(
   return cadence.fold && rowFolded ? null : cadence.barEvery
 }
 
+/** Whether the cadence's bar band has a line INSIDE this loop for a stem that fits it: false
+ * below the band, for a loop that is not a positive whole number of bars, and where the band's
+ * spacing (or the next coarser one dividing the loop: radioPaceGridBars) is the loop itself --
+ * "every 4 bars" on a 4-bar loop lands every change on the top anyway. Fold mode's phase-1 pick
+ * filter (radioFoldPickableIds) turns on only when this is true, so a fold's rows are not kept
+ * from radio where nothing could land mid-loop. */
+export function radioCadenceHasMidLoopLines(
+  cadence: Pick<RadioCadence, 'barEvery'>,
+  loopEndOverBars: number,
+  loopBars: number
+): boolean {
+  if (cadence.barEvery === null) return false
+  if (!(loopBars > 0) || !Number.isInteger(loopBars)) return false
+  return radioPaceGridBars(cadence.barEvery, loopEndOverBars, loopBars, null, 1) < loopBars
+}
+
 /** The first line of a `gridBars` grid at or after `bars`, within the lap: `loopBars` (the wrap)
  * when none is left in it. The web radio aims a mid-loop change here (with its lead added to
  * `bars`). */

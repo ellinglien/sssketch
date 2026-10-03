@@ -13,8 +13,10 @@ import {
   DEFAULT_RADIO_SETTINGS,
   createRadioClock,
   radioCadenceBarEvery,
+  radioCadenceHasMidLoopLines,
   radioCadenceOf,
   radioClockForPace,
+  type RadioCadence,
   type RadioSettings
 } from './radioSchedule'
 
@@ -132,5 +134,25 @@ describe('radioCadenceBarEvery', () => {
     expect(radioCadenceBarEvery(fold, true)).toBeNull()
     expect(radioCadenceBarEvery(fold, false)).toBe(1)
     expect(radioCadenceBarEvery(plain, true)).toBe(1)
+  })
+})
+
+describe('radioCadenceHasMidLoopLines', () => {
+  it('true only when a bar line of the band falls inside the loop', () => {
+    const c = (level: number): RadioCadence => radioCadenceOf(at(level))
+    // every 4 bars (80-85) on a 4-bar loop: every change lands on the top anyway
+    expect(c(80).barEvery).toBe(4)
+    expect(radioCadenceHasMidLoopLines(c(80), 0, 4)).toBe(false)
+    expect(radioCadenceHasMidLoopLines(c(80), 0, 8)).toBe(true)
+    expect(radioCadenceHasMidLoopLines(c(90), 0, 4)).toBe(true)
+    expect(radioCadenceHasMidLoopLines(c(95), 0, 1)).toBe(false)
+    expect(radioCadenceHasMidLoopLines(c(95), 0, 2)).toBe(true)
+    // a 5-bar loop at "every 4": no coarser divisor but the loop itself
+    expect(radioCadenceHasMidLoopLines(c(80), 0, 5)).toBe(false)
+    // below the band, no loop, a loop that is not whole bars
+    expect(radioCadenceHasMidLoopLines(c(79), 0, 8)).toBe(false)
+    expect(radioCadenceHasMidLoopLines(c(95), 0, 0)).toBe(false)
+    expect(radioCadenceHasMidLoopLines(c(95), 0, 4.5)).toBe(false)
+    expect(radioCadenceHasMidLoopLines(c(95), 0, Number.NaN)).toBe(false)
   })
 })
