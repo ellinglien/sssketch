@@ -204,6 +204,7 @@ import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
+import { restrictStems } from '@shared/discoverFaves'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
 import { backfillStemCategoriesFromProjectLibrary } from './stemCategoriesBackfill'
@@ -1386,7 +1387,8 @@ app.whenReady().then(async () => {
       targetUser?: string,
       soundSource?: DiscoverSoundSourceFilter,
       artist?: string,
-      alsoTraits?: DiscoverTraitKind[]
+      alsoTraits?: DiscoverTraitKind[],
+      onlyStemCIDs?: string[]
     ): Promise<DiscoverCandidate[]> => {
       // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
       // staying stuck with no console errors made it impossible to tell,
@@ -1404,6 +1406,11 @@ app.whenReady().then(async () => {
       const artistStemCIDs = artistName
         ? await getArtistStemCIDs([...new Set(jams.map((j) => j.dbForJam))], artistName)
         : undefined
+      // The faves dial's favourites-only draw (@shared/discoverFaves): the same before-the-sample
+      // gate artist mode uses, so a handful of starred stems is not lost in a 1000-stem sample.
+      const favesStemCIDs = Array.isArray(onlyStemCIDs)
+        ? new Set(onlyStemCIDs.filter((s): s is string => typeof s === 'string'))
+        : undefined
       const result = await getDiscoverCandidates({
         ownDb: openOwnRiffLibraryDb(),
         jams,
@@ -1411,7 +1418,7 @@ app.whenReady().then(async () => {
         onlyOwnStems,
         targetUser,
         soundSource,
-        artistStemCIDs,
+        artistStemCIDs: restrictStems(artistStemCIDs, favesStemCIDs),
         // Fold mode's clash (radioClash): the renderer only ever sends 'rhythmic' and 'bright'.
         alsoTraits: (Array.isArray(alsoTraits) ? alsoTraits : []).filter(
           (k) => k === 'rhythmic' || k === 'bright'
