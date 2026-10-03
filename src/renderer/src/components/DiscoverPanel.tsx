@@ -1393,6 +1393,9 @@ export function DiscoverPanel({
     skipFirstSoundResyncRef.current = true
     return () => {
       unmountedRef.current = true
+      // Fold mode's cycle table lives in the engine, not here: clear it at once, so no row stays
+      // folded after the panel is gone.
+      void window.rifffApi.engineStageCycles([], true)
       // A scheduled-but-not-yet-fired coalesced sync (pendingSyncRafRef)
       // would otherwise still fire its rAF callback after unmount --
       // harmless in practice (syncPreviewToEngine's own unmountedRef
@@ -2025,14 +2028,19 @@ export function DiscoverPanel({
 
     // RADIO FOLD MODE (@shared/radioFold): which stems name their row for the engine's cycle
     // table (a fold decided for one stem never folds another, and a row a stage is replacing is
-    // never named), the drift's lanes over the lap, and the clash's low-pass. A stage lands on the
-    // next top, so it carries the next lap's drift. After every gesture and turnaround above: a
+    // never named), the drift's lanes over the lap, and the clash's low-pass. A stage landing on
+    // the next top carries the next lap's drift; one landing mid-lap (stage.atBars set, a bare
+    // cut) plays out the current lap, so it keeps the current lap's, as the turnaround does. After every gesture and turnaround above: a
     // filter already on a stem keeps it (no drift cutoff there), and sends take the max. The mode
     // going off keeps the lap playing as it is until the next top (radioFoldNowRef is put away
     // there, by radioFoldAtWrap): the rows unfold, and the drift and the lean leave, on the top.
     const foldOn =
       radioOnRef.current && (radioSettings.foldMode || radioFoldNowRef.current !== null)
-    const foldStep = !foldOn ? null : stage ? radioFoldNextRef.current : radioFoldNowRef.current
+    const foldStep = !foldOn
+      ? null
+      : !stage || stage.atBars !== undefined
+        ? radioFoldNowRef.current
+        : radioFoldNextRef.current
     const stemCycleRows = new Map<string, string>()
     const foldDubSends = new Map<string, AutomationPoint[]>()
     if (foldOn) {
@@ -3538,11 +3546,13 @@ export function DiscoverPanel({
     if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
   /** A change's interval: fold mode's window, moved to a realignment top when one is near, while
-   * the mode is on (radioPaceWindowOf, radioFoldIntervalBars); the pace window otherwise. */
-  function radioNextIntervalBars(loopBars: number): number {
+   * the mode is on (radioPaceWindowOf, radioFoldIntervalBars); the pace window otherwise. Counted
+   * from `boundaryBars`, the bar restartRadioInterval counts it from (the fold's realignment tops
+   * are counted from the lap's top, so a sub-loop grid restart mid-lap shifts them). */
+  function radioNextIntervalBars(loopBars: number, boundaryBars: number): number {
     const drawn = nextRadioIntervalBarsInWindow(radioPaceWindowOf(radioSettings))
     return radioSettings.foldMode
-      ? radioFoldIntervalBars(radioFoldRef.current, drawn, loopBars)
+      ? radioFoldIntervalBars(radioFoldRef.current, drawn, loopBars, boundaryBars)
       : drawn
   }
   // The mode going off while radio runs: every row back to full length at the next loop top
@@ -4381,7 +4391,7 @@ export function DiscoverPanel({
         if (led.early && !ledOverridden) {
           radioClockRef.current = restartRadioInterval(
             step.clock,
-            radioNextIntervalBars(loopBars),
+            radioNextIntervalBars(loopBars, boundaryBars),
             pos,
             boundaryBars
           )
@@ -4505,7 +4515,7 @@ export function DiscoverPanel({
           radioLastSlotRef.current = skipLanded
           radioClockRef.current = restartRadioInterval(
             radioClockRef.current,
-            radioNextIntervalBars(loopBars),
+            radioNextIntervalBars(loopBars, boundaryBars),
             pos,
             boundaryBars
           )
@@ -4609,7 +4619,7 @@ export function DiscoverPanel({
       // origin forward by however long the slowest stem took to warm.
       radioClockRef.current = restartRadioInterval(
         step.clock,
-        radioNextIntervalBars(loopBars),
+        radioNextIntervalBars(loopBars, boundaryBars),
         pos,
         boundaryBars
       )
@@ -4695,7 +4705,7 @@ export function DiscoverPanel({
     // change and the 16s would walk.
     radioClockRef.current = restartRadioInterval(
       step.clock,
-      radioNextIntervalBars(loopBars),
+      radioNextIntervalBars(loopBars, boundaryBars),
       pos,
       boundaryBars
     )
