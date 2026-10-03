@@ -160,6 +160,8 @@ export function radioPaceLabel(level: number): string {
   if (p === RADIO_PACE_ANCHORS.slow) return 'slow'
   if (p === RADIO_PACE_ANCHORS.mid) return 'mid'
   if (p === RADIO_PACE_ANCHORS.fast) return 'fast'
+  // The 'every bar' branch is unreachable while ludicrous starts at 90 and the one-bar grid at 94;
+  // it is reserved in case the ludicrous threshold moves (spec flag 13).
   if (profile.barEvery !== null)
     return profile.barEvery === 1 ? 'every bar' : `every ${profile.barEvery} bars`
   const { min, max } = profile.window
@@ -175,11 +177,11 @@ export const RADIO_PACE_TOOLTIP = 'how often radio changes something'
  * thing that differs, so a migrated window never quietly turns on a shorter phrase, mid-loop
  * landings or extra rows. A window equal to any preset's is that preset; no usable window is the
  * word's own anchor. */
-export function radioPaceLevelFromLegacy(pace: unknown, window?: unknown): number {
+export function radioPaceLevelFromLegacy(pace: unknown, legacyWindow?: unknown): number {
   const word: RadioPace | null =
     pace === 'slow' || pace === 'mid' || pace === 'fast' ? (pace as RadioPace) : null
   const anchor = word === null ? DEFAULT_RADIO_PACE_LEVEL : RADIO_PACE_ANCHORS[word]
-  const raw = (typeof window === 'object' && window !== null ? window : {}) as {
+  const raw = (typeof legacyWindow === 'object' && legacyWindow !== null ? legacyWindow : {}) as {
     min?: unknown
     max?: unknown
   }
@@ -214,7 +216,8 @@ export function radioPaceLevelFromLegacy(pace: unknown, window?: unknown): numbe
 }
 
 /** The web's simple-mode cycle (controlsModel's `pace` control): slow -> mid -> fast ->
- * ludicrous -> slow, from the first anchor above the level. */
+ * ludicrous -> slow, from the first anchor above the level. A non-finite level normalises to the
+ * default (25) first, so it steps to fast. */
 export function nextRadioPaceAnchor(level: number): number {
   const p = normalizeRadioPaceLevel(level)
   const order = [

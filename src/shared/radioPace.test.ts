@@ -72,6 +72,27 @@ describe('radioPaceProfile', () => {
     expect(radioPaceProfile(100).rows).toBe(RADIO_PACE_ROWS_MAX)
   })
 
+  it('the window at in-between levels, against the spec table', () => {
+    const table: [number, number, number][] = [
+      [12, 14, 28],
+      [38, 5, 10],
+      [55, 2, 5],
+      [60, 2, 4],
+      [65, 1, 3],
+      [70, 1, 2],
+      [75, 1, 2],
+      [80, 1, 2],
+      [85, 1, 1]
+    ]
+    for (const [level, min, max] of table)
+      expect(radioPaceProfile(level).window, `level ${level}`).toEqual({ min, max })
+  })
+
+  it('band boundaries: grid 2 at 93, rows start rising at 71', () => {
+    expect(radioPaceProfile(93).barEvery).toBe(2)
+    expect(radioPaceProfile(71).rows).toBeCloseTo(1.1)
+  })
+
   it('normalises the level first', () => {
     expect(radioPaceProfile(-5)).toEqual(radioPaceProfile(0))
     expect(radioPaceProfile(400)).toEqual(radioPaceProfile(100))
@@ -126,6 +147,7 @@ describe('radioPaceLabel', () => {
     expect(radioPaceLabel(100)).toBe('ludicrous')
     expect(radioPaceLabel(80)).toBe('every 4 bars')
     expect(radioPaceLabel(88)).toBe('every 2 bars')
+    expect(radioPaceLabel(89)).toBe('every 2 bars')
     expect(radioPaceLabel(60)).toBe('2-4 bars')
     expect(radioPaceLabel(12)).toMatch(/^\d+-\d+ bars$/)
   })
