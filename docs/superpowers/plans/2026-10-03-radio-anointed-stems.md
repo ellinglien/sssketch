@@ -1630,7 +1630,9 @@ Step 1).
 
   and note a riser landing: in `land` (:1009), when `led.kind === 'riser'` and sized, and in the
   turnaround-cleared branch at the top of `tick` (`if (s.turnaround && now >= s.turnaround.at - EPS)`),
-  when `radioPlanIsBuild(s.turnaround.plan)`: `s.builds = noteRadioBuild(s.builds, s.turnaround.large === true)`.
+  for the turnaround that played: `s.builds = radioNoteTurnaround(s.builds, s.turnaround.plan, s.turnaround.large === true)`
+  (a riser counts for the spacing; a large one resets the large count, riser or not; spec 4.2).
+  A per-change riser in `land` is `noteRadioBuild(s.builds, false)`.
   `RadioTurnaround` gains `large?: true` (set in Step 7 when the roll's size was `large`).
 
 - [ ] **Step 6: Spares, at each phrase start.** A new `sparesAtPhraseStart(c, t)` called in the wrap
@@ -1806,8 +1808,9 @@ everyone after Task 2 (and nothing reads it yet). Gate every change below on
   :5163-5169 that advances `radioPlayRef`): `radioBuildClockRef.current =
   advanceRadioBuildClock(radioBuildClockRef.current, loopBars)` when sized. In
   `radioTurnaroundAtWrap` (:3408), before `radioTurnaroundRef.current = null`: when the armed plan
-  played (`radioTurnaroundRef.current !== null`) and `radioPlanIsBuild(plan)`, note it with
-  `radioTurnaroundLargeRef.current`. A per-change riser lands where the due branch clears a fired
+  played (`radioTurnaroundRef.current !== null`), note it with
+  `radioNoteTurnaround(clock, plan, radioTurnaroundLargeRef.current)` (a riser counts for the
+  spacing; a large one resets the large count, riser or not; spec 4.2). A per-change riser lands where the due branch clears a fired
   leading gesture (the wrap landing, "A leading gesture is cleared in the same tick"): note it
   there when its kind is `riser`.
 

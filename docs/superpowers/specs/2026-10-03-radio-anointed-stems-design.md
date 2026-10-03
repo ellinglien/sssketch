@@ -474,7 +474,12 @@ none    otherwise
 build is any riser, per-change or turnaround part. A large build is a turnaround rolled at `large`
 that fired.
 - `large` falls to `medium` when the last large build was less than a phrase ago;
-- `medium` or `large` falls to `small` when the last build was less than 8 bars ago.
+- `medium` or `large` falls to `small` when the last build was less than 8 bars ago -- except a
+  phrase end's `large` (`radioPhraseEndBuild`), which only the once-a-phrase rule limits, so a
+  cheap mid-phrase riser at a high pace cannot eat the phrase start's big moment.
+
+A turnaround rolled at `large` that fires resets the large count whether or not it has a riser
+(`radioNoteTurnaround`); only a riser counts for the 8-bar spacing.
 
 The runtime keeps the two bar counts on its own play clock.
 
@@ -517,6 +522,9 @@ size?)`:
   there are no extra draws.
 - **Layering:** the "at most 2" cap truncates and renormalises `TURNAROUND_LAYER_ODDS` inside the
   layering's own seeded random (`turnaroundLayerRandom`), so the caller's stream is unchanged.
+- **Memory:** `large` rolls fresh: the memory (diminution, never two in a row) is skipped, so a
+  riser, stop, wash or dip at the last phrase end cannot leave the biggest moment with nothing or
+  with a halved repeat. At `none` and `small` a diminution keeps at most two moves.
 - **Chance:** `large` makes the phrase end fire, at every rate but `off`. Large boundaries are at
   least a phrase apart (the budget), so this is about one turnaround per hook cycle.
 - **`none` and `small`:** they keep their drops, stops, lifts and washes. A turnaround is the
@@ -528,6 +536,10 @@ size?)`:
 - **With the payoff rule (§4.7),** a phrase end that fires always brings at least a `medium`
   change, so it is rolled at `medium` or above; `none` and `small` remain for a roll the budget
   downgrades.
+- **Small or locked beds get no phrase-end fills.** With nothing landing at the wrap and at most
+  one spare row (a bed of one or two rows, or every other row locked, hooked in or under a manual
+  change), no `medium` payoff can be assembled, so the phrase end is skipped and draws nothing
+  (Decision 6: no payoff, no turnaround). Turns still play there, as fills with no gap.
 - **Turnarounds `off`:** a large change gets only its per-change gesture (at most an 8-beat riser,
   no gap). The gap is a turnaround's, so it needs turnarounds on. Both radios default to on.
 
