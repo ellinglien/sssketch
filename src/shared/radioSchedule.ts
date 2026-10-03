@@ -35,8 +35,16 @@ import {
 import {
   DEFAULT_RADIO_TRANSITIONS,
   normalizeRadioTransitions,
+  type RadioTransitionKind,
   type RadioTransitions
 } from './radioTransition'
+import {
+  DEFAULT_RADIO_PACE_LEVEL,
+  normalizeRadioPaceLevel,
+  radioPaceLevelFromLegacy,
+  radioPacePhraseBars,
+  radioPaceProfile
+} from './radioPace'
 
 /** The three speeds radio can run at. Literal values double as their own
  * UI text (the same convention DISCOVER_SLOT_KIND_OPTIONS uses for its
@@ -454,13 +462,17 @@ export interface RadioClockStep {
  * the slot that is about to change; passing loopBars reproduces the
  * pre-2026-09-28 behaviour exactly. `phraseBars` is the phrase ceiling
  * (RadioSettings.phraseBars); 0 is no phrase grid, which is the default
- * and changes nothing. */
+ * and changes nothing. `turnaroundPhraseBars` is the TURNAROUND's phrase (radioTurnaround's
+ * turnaroundPhraseLaps: 16 when 0), which defaults to `phraseBars` -- the two were one number until
+ * the pace slider (2026-10-03), which shortens the change phrase above fast while turnarounds keep
+ * the runtime's own (radioCadence.turnaroundPhraseBars). */
 export function advanceRadioClock(
   clock: RadioClock,
   pos: number,
   loopBars: number,
   gridBars: number = loopBars,
-  phraseBars: number = 0
+  phraseBars: number = 0,
+  turnaroundPhraseBars: number = phraseBars
 ): RadioClockStep {
   if (!(loopBars > 0) || !Number.isFinite(pos)) {
     return { clock, wrapped: false, due: false, turnaroundLapStarts: false }
@@ -500,7 +512,7 @@ export function advanceRadioClock(
   }
   // The turnaround's own count: every wrap, whatever phraseBars is, folding back to 0 at the
   // phrase end (and from anywhere above the phrase, should the loop have grown under it).
-  const perTurnaround = turnaroundPhraseLaps(phraseBars, loopBars)
+  const perTurnaround = turnaroundPhraseLaps(turnaroundPhraseBars, loopBars)
   let turnaroundLap = clock.turnaroundLap ?? 0
   if (wrapped) {
     turnaroundLap += 1
@@ -1080,6 +1092,10 @@ export interface RadioSettings {
    * set this one value. Optional for the same reason as `density`; normalizeRadioSettings
    * always sets it, and absent reads as 0 (radioFavesOf). */
   faves?: number
+  /** The pace slider (@shared/radioPace), 0..100. Optional for the same reason as `density`;
+   * normalizeRadioSettings always sets it (migrating `pace` and a hand-tuned `paceBars`), and
+   * absent reads as what `pace` / `paceBars` mean (radioPaceLevelOf). */
+  paceLevel?: number
 }
 
 export function radioDensityOf(settings: RadioSettings): RadioDensity {
@@ -1106,7 +1122,8 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   clash: DEFAULT_RADIO_CLASH,
   foldSeed: DEFAULT_FOLD_SEED,
   density: DEFAULT_RADIO_DENSITY,
-  faves: DEFAULT_FAVES
+  faves: DEFAULT_FAVES,
+  paceLevel: DEFAULT_RADIO_PACE_LEVEL
 }
 
 /** The window the clock draws a change's interval from: fold mode's own (FOLD_PACE_BARS, 16-64
@@ -1166,6 +1183,181 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
     foldSeed: normalizeFoldSeed(raw.foldSeed),
     density: normalizeRadioDensity(raw.density),
     // A saved `prefer faves: on` (the switch this replaced) reads as 50; a saved faves wins.
-    faves: normalizeFaves(raw.faves, (value as { preferFaves?: unknown } | null)?.preferFaves)
+    faves: normalizeFaves(raw.faves, (value as { preferFaves?: unknown } | null)?.preferFaves),
+    // The slider (2026-10-03): a saved level wins; otherwise the chip (or the flat 1.3.0
+    // radioPace) and any hand-tuned window become the nearest level (radioPaceLevelFromLegacy).
+    paceLevel:
+      typeof raw.paceLevel === 'number' && Number.isFinite(raw.paceLevel)
+        ? normalizeRadioPaceLevel(raw.paceLevel)
+        : radioPaceLevelFromLegacy(pace, raw.paceBars)
   }
+}
+
+/** The slider's level for these settings: `paceLevel`, or -- for a RadioSettings built before it
+ * existed (the web radio's own objects) -- what its `pace` chip and window mean. */
+export function radioPaceLevelOf(settings: RadioSettings): number {
+  return settings.paceLevel !== undefined
+    ? normalizeRadioPaceLevel(settings.paceLevel)
+    : radioPaceLevelFromLegacy(settings.pace, settings.paceBars)
+}
+
+/** Everything that sets radio's cadence, for both radios, from one place: the slider's profile
+ * applied to the runtime's own phrase (`settings.phraseBars`: the web's 16, the desktop's chip),
+ * with fold mode's override. Fold mode keeps today's rule -- its own window (FOLD_PACE_BARS)
+ * replaces the pace's, changes land on tops, one row at a time -- so the slider does nothing
+ * while fold is on.
+ *
+ * A RadioSettings with NO `paceLevel` is read exactly as before the slider: its `paceBars` window,
+ * the runtime's phrase, one row, no mid-loop landings. That is every RadioSettings the web radio
+ * builds without the listener's level (its tests pin a window that way), and it is why the web
+ * can move to the slider without any of its timing tests changing meaning. The desktop's
+ * normalizeRadioSettings always sets a level. */
+export interface RadioCadence {
+  level: number
+  /** The interval window (nextRadioIntervalBarsInWindow). */
+  window: RadioPaceWindow
+  /** The CHANGE phrase: advanceRadioClock's / radioChangeDueAtNextWrap's `phraseBars`. */
+  phraseBars: number
+  /** The TURNAROUND phrase: advanceRadioClock's `turnaroundPhraseBars`, radioReadoutBars'. Never
+   * moved by the slider, so turnarounds keep their 16 (or the desktop chip's) at every pace. */
+  turnaroundPhraseBars: number
+  /** Mid-loop landings on bar lines this many bars apart (radioPaceGridBars), or null. */
+  barEvery: number | null
+  /** Rows per change (radioPaceRowsThisChange). */
+  rows: number
+}
+
+export function radioCadenceOf(settings: RadioSettings): RadioCadence {
+  const base = settings.phraseBars
+  const level = radioPaceLevelOf(settings)
+  if (settings.foldMode) {
+    return {
+      level,
+      window: { ...FOLD_PACE_BARS },
+      phraseBars: base,
+      turnaroundPhraseBars: base,
+      barEvery: null,
+      rows: 1
+    }
+  }
+  if (settings.paceLevel === undefined) {
+    return {
+      level,
+      window: { ...settings.paceBars },
+      phraseBars: base,
+      turnaroundPhraseBars: base,
+      barEvery: null,
+      rows: 1
+    }
+  }
+  const profile = radioPaceProfile(level)
+  return {
+    level,
+    window: { ...profile.window },
+    phraseBars: radioPacePhraseBars(profile, base),
+    turnaroundPhraseBars: base,
+    barEvery: profile.barEvery,
+    rows: profile.rows
+  }
+}
+
+/** The change grid at this cadence. Below the bar band it is radioGridBars, exactly as before.
+ * In it a change may also land on any bar line `barEvery` apart (stepped down to divide the
+ * loop, as radioGridBars steps a cycle), whatever the stems' lengths: the incoming stem enters
+ * at its matching position (both engines tile a stem at its own length from the loop's top), the
+ * outgoing one is cut. Two cases still wait for the loop top, as they do today:
+ *   - the incoming stem is not known yet (null): its length cannot be checked;
+ *   - the incoming stem is LONGER than the loop: it would lengthen the loop mid-lap (the web's
+ *     Timeline.swapAt refuses it outright).
+ * A loop that is not a whole number of bars has no bar lines to share: radioGridBars' answer. */
+export function radioPaceGridBars(
+  barEvery: number | null,
+  loopEndOverBars: number,
+  loopBars: number,
+  outgoingBars: number | null,
+  incomingBars: number | null
+): number {
+  const base = radioGridBars(loopEndOverBars, loopBars, radioChangeBars(outgoingBars, incomingBars))
+  if (barEvery === null || !(barEvery >= 1)) return base
+  if (!(loopBars > 0) || !Number.isInteger(loopBars)) return base
+  if (incomingBars === null || !(incomingBars > 0) || incomingBars > loopBars) return base
+  let step = Math.min(Math.floor(barEvery), loopBars)
+  while (step > 1 && loopBars % step !== 0) step -= 1
+  return Math.min(base, step)
+}
+
+/** The first line of a `gridBars` grid at or after `bars`, within the lap: `loopBars` (the wrap)
+ * when none is left in it. The web radio aims a mid-loop change here (with its lead added to
+ * `bars`). */
+export function radioGridLineAtOrAfter(bars: number, gridBars: number, loopBars: number): number {
+  if (!(loopBars > 0) || !Number.isFinite(bars)) return loopBars
+  const step = gridBars > 0 ? gridBars : loopBars
+  const line = Math.ceil(Math.max(0, bars) / step - BOUNDARY_EPSILON) * step
+  return line >= loopBars - BOUNDARY_EPSILON ? loopBars : line
+}
+
+/** A change landing mid-loop in the bar band is a cut: an arrival gesture would otherwise be held
+ * to the loop top (radioChangeWaitsForLoopTop) and a leading one needs the lap before a wrap, and
+ * either would take the pace back. Loop-top landings keep their transition. */
+export function radioCadenceTransition(
+  cadence: Pick<RadioCadence, 'barEvery'>,
+  kind: RadioTransitionKind,
+  atLoopTop: boolean
+): RadioTransitionKind {
+  return cadence.barEvery !== null && !atLoopTop ? 'cut' : kind
+}
+
+/** The slider moved while radio runs (spec section 4): the clock as it should be under the new
+ * cadence. Two things, nothing else -- the pick, a decided change, a turnaround and fold all
+ * stay:
+ *   - the running interval is redrawn from the new window ONLY when it is now longer than the
+ *     window allows (barsElapsed kept, so an interval already spent is due at the next
+ *     boundary). Moving faster is heard within a change, not after a slow one finishes; moving
+ *     slower lets the short interval running finish and draws the next from the new window.
+ *   - the change phrase is re-anchored on the turnaround's: when the new change phrase divides
+ *     the turnaround phrase (16 / 8 / 4 laps of a 4-bar loop), lapsSincePhrase becomes
+ *     turnaroundLap modulo it, so a phrase end's turnaround still leads into a change phrase's
+ *     top. Without it, a phrase that grows mid-stream would count from wherever its counter was
+ *     and drift off the turnarounds for good.
+ * `random` is drawn only when the interval is redrawn. */
+export function radioClockForPace(
+  clock: RadioClock,
+  cadence: Pick<RadioCadence, 'window' | 'phraseBars' | 'turnaroundPhraseBars'>,
+  loopBars: number,
+  random: () => number = Math.random
+): RadioClock {
+  const intervalBars =
+    clock.intervalBars > cadence.window.max
+      ? nextRadioIntervalBarsInWindow(cadence.window, random)
+      : clock.intervalBars
+  const perPhrase = radioPhraseLaps(cadence.phraseBars, loopBars)
+  const perTurnaround = turnaroundPhraseLaps(cadence.turnaroundPhraseBars, loopBars)
+  const lapsSincePhrase =
+    perPhrase > 0 && perTurnaround > 0 && perTurnaround % perPhrase === 0
+      ? (clock.turnaroundLap ?? 0) % perPhrase
+      : clock.lapsSincePhrase
+  return { ...clock, intervalBars, lapsSincePhrase }
+}
+
+/** Up to `count` DIFFERENT rows for one change, in order: the first is exactly pickRadioSlotId's
+ * answer (same draw, same random calls), each next one is pickRadioSlotId over what is left with
+ * the row just chosen as "last changed". So at count 1 nothing differs from today. */
+export function pickRadioSlotIds(
+  eligible: readonly string[],
+  lastChangedId: string | null,
+  count: number,
+  options: RadioPickOptions = {}
+): string[] {
+  const out: string[] = []
+  let left = [...eligible]
+  let last = lastChangedId
+  const n = Math.max(0, Math.floor(count))
+  while (out.length < n && left.length > 0) {
+    const id = pickRadioSlotId(left, last, options)
+    if (id === null) break
+    out.push(id)
+    left = left.filter((x) => x !== id)
+    last = id
+  }
+  return out
 }

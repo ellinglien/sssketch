@@ -130,7 +130,8 @@ describe('discoverSettingsStore', () => {
         clash: 60,
         foldSeed: 'k3x9pq',
         density: 'off',
-        faves: 60
+        faves: 60,
+        paceLevel: 42
       }
     })
     expect(loadDiscoverSettings().radio).toEqual({
@@ -149,7 +150,8 @@ describe('discoverSettingsStore', () => {
       clash: 60,
       foldSeed: 'k3x9pq',
       density: 'off',
-      faves: 60
+      faves: 60,
+      paceLevel: 42
     })
   })
 
@@ -177,6 +179,7 @@ describe('discoverSettingsStore', () => {
       ...DEFAULT_RADIO_SETTINGS,
       pace: 'fast',
       paceBars: { min: 3, max: 6 },
+      paceLevel: 50,
       foldSeed: expect.stringMatching(FOLD_SEED)
     })
   })
@@ -205,6 +208,7 @@ describe('discoverSettingsStore', () => {
       ...DEFAULT_RADIO_SETTINGS,
       pace: 'fast',
       paceBars: { min: 3, max: 6 },
+      paceLevel: 50,
       loopEndOverBars: 0,
       foldSeed: expect.stringMatching(FOLD_SEED)
     })

@@ -1096,7 +1096,8 @@ describe('RadioSettings', () => {
       clash: 25,
       foldSeed: 'autech',
       density: 'arc',
-      faves: 0
+      faves: 0,
+      paceLevel: 25
     })
   })
 
@@ -1105,6 +1106,7 @@ describe('RadioSettings', () => {
       ...DEFAULT_RADIO_SETTINGS,
       pace: 'fast',
       paceBars: RADIO_PACE_BARS.fast,
+      paceLevel: 50,
       loopEndOverBars: 2,
       channels: 6
     })
@@ -1164,7 +1166,8 @@ describe('RadioSettings', () => {
     expect(normalizeRadioSettings(undefined, 'fast')).toEqual({
       ...DEFAULT_RADIO_SETTINGS,
       pace: 'fast',
-      paceBars: RADIO_PACE_BARS.fast
+      paceBars: RADIO_PACE_BARS.fast,
+      paceLevel: 50
     })
     expect(normalizeRadioSettings(undefined, 'glacial').pace).toBe('mid')
     expect(normalizeRadioSettings({ pace: 'slow' }, 'fast').pace).toBe('slow')
