@@ -4,6 +4,8 @@ import { tmpdir } from 'os'
 import { join } from 'path'
 import { DEFAULT_RADIO_SETTINGS } from '@shared/radioSchedule'
 
+const FOLD_SEED = /^[abcdefghjkmnpqrstuvwxyz23456789]{6}$/
+
 vi.mock('electron', () => ({ app: { getPath: vi.fn() } }))
 
 describe('discoverSettingsStore', () => {
@@ -25,8 +27,24 @@ describe('discoverSettingsStore', () => {
     expect(loadDiscoverSettings()).toEqual({
       consentedToLibraryScan: false,
       traitMatchBar: 0.75,
-      radio: DEFAULT_RADIO_SETTINGS
+      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) }
     })
+  })
+
+  // Elling, 2026-10-03: the first seed is random, not `autech`; a saved one is kept.
+  it('draws a random fold seed when none is saved, and keeps a saved one', async () => {
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    const seeds = new Set(Array.from({ length: 8 }, () => loadDiscoverSettings().radio.foldSeed))
+    expect(seeds.size).toBeGreaterThan(1)
+    for (const seed of seeds) expect(seed).toMatch(FOLD_SEED)
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radio: { foldSeed: 'k3x9pq' } }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radio.foldSeed).toBe('k3x9pq')
+    writeFileSync(join(dir, 'discoverSettings.json'), JSON.stringify({ radio: {} }), 'utf-8')
+    expect(loadDiscoverSettings().radio.foldSeed).toMatch(FOLD_SEED)
   })
 
   it('persists consent across a save/load round trip', async () => {
@@ -55,7 +73,7 @@ describe('discoverSettingsStore', () => {
     expect(loadDiscoverSettings()).toEqual({
       consentedToLibraryScan: false,
       traitMatchBar: 0.75,
-      radio: DEFAULT_RADIO_SETTINGS
+      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) }
     })
   })
 
@@ -140,7 +158,8 @@ describe('discoverSettingsStore', () => {
     expect(loaded.radio).toEqual({
       ...DEFAULT_RADIO_SETTINGS,
       pace: 'fast',
-      paceBars: { min: 3, max: 6 }
+      paceBars: { min: 3, max: 6 },
+      foldSeed: expect.stringMatching(FOLD_SEED)
     })
   })
 
@@ -168,7 +187,8 @@ describe('discoverSettingsStore', () => {
       ...DEFAULT_RADIO_SETTINGS,
       pace: 'fast',
       paceBars: { min: 3, max: 6 },
-      loopEndOverBars: 0
+      loopEndOverBars: 0,
+      foldSeed: expect.stringMatching(FOLD_SEED)
     })
   })
 
@@ -176,7 +196,10 @@ describe('discoverSettingsStore', () => {
     writeFileSync(join(dir, 'discoverSettings.json'), JSON.stringify({ radio: 7 }), 'utf-8')
     const { loadDiscoverSettings } = await import('./discoverSettingsStore')
     expect(() => loadDiscoverSettings()).not.toThrow()
-    expect(loadDiscoverSettings().radio).toEqual(DEFAULT_RADIO_SETTINGS)
+    expect(loadDiscoverSettings().radio).toEqual({
+      ...DEFAULT_RADIO_SETTINGS,
+      foldSeed: expect.stringMatching(FOLD_SEED)
+    })
   })
 
   it('defaults the radio settings for a file written before radio existed', async () => {
@@ -189,7 +212,7 @@ describe('discoverSettingsStore', () => {
     expect(loadDiscoverSettings()).toEqual({
       consentedToLibraryScan: true,
       traitMatchBar: 0.9,
-      radio: DEFAULT_RADIO_SETTINGS
+      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) }
     })
   })
 })

@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import { DEFAULT_TRAIT_BAR, normalizeTraitMatchBar } from '@shared/traitBar'
+import { newFoldSeed, normalizeFoldSeed } from '@shared/radioFold'
 import {
   DEFAULT_RADIO_SETTINGS,
   normalizeRadioSettings,
@@ -47,22 +48,38 @@ const DEFAULT_SETTINGS: DiscoverSettings = {
  * saved yet and when reading fails. */
 export function loadDiscoverSettings(): DiscoverSettings {
   const path = storePath()
-  if (!existsSync(path)) return { ...DEFAULT_SETTINGS }
+  if (!existsSync(path)) return withRandomFoldSeed({ ...DEFAULT_SETTINGS }, undefined)
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as Partial<DiscoverSettings>
-    return {
-      consentedToLibraryScan: parsed.consentedToLibraryScan ?? false,
-      traitMatchBar: normalizeTraitMatchBar(parsed.traitMatchBar),
-      // `parsed.radioPace` is the 1.3.0 shape -- flat, no `radio` object.
-      // Passing it through migrates a real user's chosen pace rather than
-      // silently resetting it. An explicit `radio.pace` always wins.
-      radio: normalizeRadioSettings(parsed.radio, (parsed as { radioPace?: unknown }).radioPace)
-    }
+    return withRandomFoldSeed(
+      {
+        consentedToLibraryScan: parsed.consentedToLibraryScan ?? false,
+        traitMatchBar: normalizeTraitMatchBar(parsed.traitMatchBar),
+        // `parsed.radioPace` is the 1.3.0 shape -- flat, no `radio` object.
+        // Passing it through migrates a real user's chosen pace rather than
+        // silently resetting it. An explicit `radio.pace` always wins.
+        radio: normalizeRadioSettings(parsed.radio, (parsed as { radioPace?: unknown }).radioPace)
+      },
+      parsed.radio?.foldSeed
+    )
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`loadDiscoverSettings: failed to read ${path}: ${message}`)
-    return { ...DEFAULT_SETTINGS }
+    return withRandomFoldSeed({ ...DEFAULT_SETTINGS }, undefined)
   }
+}
+
+/** Fold mode's first seed is random, not the shared default (Elling, 2026-10-03): a seed
+ * that was saved and is still a valid seed is kept; anything else draws a fresh one, which
+ * the next save keeps. */
+function withRandomFoldSeed(settings: DiscoverSettings, savedSeed: unknown): DiscoverSettings {
+  if (
+    typeof savedSeed === 'string' &&
+    normalizeFoldSeed(savedSeed) === savedSeed.trim().toLowerCase()
+  ) {
+    return settings
+  }
+  return { ...settings, radio: { ...settings.radio, foldSeed: newFoldSeed() } }
 }
 
 export function saveDiscoverSettings(settings: DiscoverSettings): void {
