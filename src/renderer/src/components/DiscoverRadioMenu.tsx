@@ -18,7 +18,8 @@ import {
   TURNAROUND_FAMILIES,
   toggleTurnaroundFamily
 } from '@shared/radioTurnaround'
-import { RADIO_DENSITY_OPTIONS, radioDensityOf } from '@shared/radioSchedule'
+import { RADIO_DENSITY_OPTIONS, radioDensityOf, radioFavesOf } from '@shared/radioSchedule'
+import { FAVES_LABEL, FAVES_TOOLTIP } from '@shared/discoverFaves'
 import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
 import { FOLD_SEED_TEXT_MAX, cleanFoldSeed, newFoldSeed } from '@shared/radioFold'
 
@@ -433,6 +434,22 @@ export function DiscoverRadioMenu({
           RADIO_TRANSITIONS_OPTIONS.map((t) =>
             chip(t, settings.transitions === t, () => onChange({ transitions: t }))
           )
+        )}
+      {/* The faves dial (@shared/discoverFaves): the same value as Discover's dial -- how often
+          a pick is drawn only from starred stems, and how much the rest lean to them. A fader
+          like bend's, committed on release so a drag writes the settings once. */}
+      {mode === 'running' &&
+        row(
+          FAVES_LABEL,
+          [
+            <FoldSlider
+              key="faves"
+              label={FAVES_LABEL}
+              value={radioFavesOf(settings)}
+              onCommit={(v) => onChange({ faves: v })}
+            />
+          ],
+          FAVES_TOOLTIP
         )}
       {/* Fold mode (@shared/radioFold): one anchor at full length, one or two short rhythmic
           rows looping at odd lengths against it and realigning every 30-120 s; seeded rules, so
