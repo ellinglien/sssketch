@@ -6,6 +6,7 @@ import {
   isTraitSlotKind
 } from '@shared/discoverSlotKind'
 import { buildSlotKindToggleTable } from '@shared/discoverSlotKindMask'
+import { TURNAROUND_MOVE_LABEL, TURNAROUND_MOVES } from '@shared/radioTurnaround'
 import { SILKSCREEN_REGULAR_WOFF2_BASE64 } from './remoteFont'
 
 /** The page's own Content-Security-Policy, sent as a header by
@@ -166,6 +167,10 @@ const STEM_ACTIONS = [
   { a: 'random', l: 'random', h: 'anything at all' },
   { a: 'duplicate', l: 'duplicate', h: 'one more row' }
 ]
+
+/** Radio's turn chips (2026-10-02): `m` is the wire value (the planner's TurnaroundMove, which
+ * POST /api/turn checks), `l` the chip's label -- the desktop's, from the same table. */
+const TURN_CHIPS = TURNAROUND_MOVES.map((move) => ({ m: move, l: TURNAROUND_MOVE_LABEL[move] }))
 
 /** The whole phone remote, as one string. NOT bundled by Vite and not part
  * of the renderer build: no asset-copying config, no hashed-filename lookup
@@ -557,6 +562,8 @@ button.chip {
 }
 button.chip:active { background: #161616; }
 button.chip.on { background: #ededed; border-color: #ededed; color: #050505; }
+/* A turn chip that cannot sound right now: still a target, quieter. */
+button.chip.dim { border-color: #161616; color: #3a3a3a; }
 input {
   width: 100%;
   padding: 16px 10px;
@@ -630,6 +637,15 @@ input {
            alone, so it does not want the best thumb space on the page -- and
            it lives inside #loop so it comes and goes with the loop it
            describes: an empty discover has no handover to place. -->
+      <!-- Radio's turn (2026-10-02): a turnaround at the next loop top. Shown
+           only while radio runs on the mac (state.turn). The big button lets
+           the mac choose; a chip plays its move. -->
+      <div class="swapgrid" id="turn-box" hidden>
+        <div class="actions">
+          <button class="big" id="turn">turn</button>
+        </div>
+        <div class="chips grid" id="chips-turn"></div>
+      </div>
       <div class="swapgrid">
         <div class="eyebrow">swap every</div>
         <div class="chips grid" id="chips-grid"></div>
@@ -2309,6 +2325,7 @@ input {
       if (!actStillThere) closeActionSheet()
     }
     renderRows()
+    paintTurn(state.turn)
     // A mute or a solo made on the MAC lands on the phone here, by the same
     // one line a tap on the phone takes. Nothing is re-fetched for it.
     applyMix()
@@ -2397,6 +2414,45 @@ input {
         if (keepPending && keepPending.id === id) { keepPending = null; flash('not kept') }
       })
   })
+
+  // --- radio's turn ------------------------------------------------------
+  // One tap, answered in the response: the mac says turning, nothing to
+  // turn or radio off, and that is the flash. The button reads turning
+  // and the chip of the move it plays is lit while the turn waits for the
+  // top -- the state poll says so. A dimmed chip still answers a tap: the
+  // mac's own answer says why nothing happened.
+  var TURN_CHIPS = ${JSON.stringify(TURN_CHIPS)}
+  var turnBoxEl = document.getElementById('turn-box')
+  var turnEl = document.getElementById('turn')
+  var turnChipsEl = document.getElementById('chips-turn')
+  var turnChipEls = []
+  function sendTurn(move) {
+    buzz()
+    api('/api/turn', move === null ? {} : { move: move })
+      .then(function (r) { return r.json() })
+      .then(function (body) { flash(body && body.answer ? body.answer : 'not turned') })
+      .catch(function () { flash('not turned') })
+  }
+  turnEl.addEventListener('click', function () { sendTurn(null) })
+  TURN_CHIPS.forEach(function (option) {
+    var chip = document.createElement('button')
+    chip.className = 'chip'
+    chip.textContent = option.l
+    chip.addEventListener('click', function () { sendTurn(option.m) })
+    turnChipEls.push(chip)
+    turnChipsEl.appendChild(chip)
+  })
+  function paintTurn(turn) {
+    turnBoxEl.hidden = !turn
+    if (!turn) return
+    turnEl.textContent = turn.waiting ? 'turning' : 'turn'
+    var can = turn.moves || []
+    for (var i = 0; i < TURN_CHIPS.length; i++) {
+      var m = TURN_CHIPS[i].m
+      turnChipEls[i].className =
+        turn.waiting && turn.move === m ? 'chip on' : can.indexOf(m) === -1 ? 'chip dim' : 'chip'
+    }
+  }
 
   function poll() {
     if (!token) return

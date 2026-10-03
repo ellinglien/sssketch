@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { REMOTE_PAIR_QUERY_PARAM } from '@shared/remoteAuth'
 import { DISCOVER_SLOT_KIND_LABEL, DISCOVER_SLOT_KIND_OPTIONS } from '@shared/discoverSlotKind'
 import { buildSlotKindToggleTable } from '@shared/discoverSlotKindMask'
+import { TURNAROUND_MOVE_LABEL, TURNAROUND_MOVES } from '@shared/radioTurnaround'
 import {
   REMOTE_NOTHING_HERE_NOTICE,
   REMOTE_PAGE_HTML,
@@ -157,7 +158,10 @@ describe('remotePage copy', () => {
       'loop end',
       '8 bars',
       '4 bars',
-      '2 bars'
+      '2 bars',
+      'turn',
+      'turning',
+      ...TURNAROUND_MOVES.map((m) => TURNAROUND_MOVE_LABEL[m])
     ]
     for (const label of [...buttonLabels, ...runtime]) {
       expect(label.split(/\s+/).filter(Boolean).length).toBeLessThanOrEqual(2)
@@ -527,7 +531,8 @@ describe('remotePage swap grid', () => {
       "api('/api/remove-slot'",
       "api('/api/roll'",
       "api('/api/slot-action'",
-      "api('/api/slot-action'"
+      "api('/api/slot-action'",
+      "api('/api/turn'"
     ])
   })
 
@@ -1296,5 +1301,31 @@ describe('remotePage keep', () => {
     expect(handler).toContain("flash('listening only')")
     expect(SCRIPT_TEXT).toContain('state.listenOnly === true')
     expect(SCRIPT_TEXT).toContain('keepEl.disabled = listenOnly')
+  })
+})
+
+describe('remotePage turn', () => {
+  it('offers turn and every move as a chip, labelled as the desktop labels them', () => {
+    expect(REMOTE_PAGE_HTML).toContain('<button class="big" id="turn">turn</button>')
+    for (const move of TURNAROUND_MOVES) {
+      expect(REMOTE_PAGE_HTML).toContain(
+        JSON.stringify({ m: move, l: TURNAROUND_MOVE_LABEL[move] })
+      )
+    }
+  })
+
+  it('posts to the turn route, with a move only for a chip', () => {
+    expect(REMOTE_PAGE_HTML).toContain("api('/api/turn', move === null ? {} : { move: move })")
+  })
+
+  it("flashes the mac's own answer", () => {
+    expect(REMOTE_PAGE_HTML).toContain('flash(body && body.answer ? body.answer : ')
+  })
+
+  it('shows the turn only while radio runs on the mac, and says when one waits', () => {
+    expect(REMOTE_PAGE_HTML).toContain('<div class="swapgrid" id="turn-box" hidden>')
+    expect(REMOTE_PAGE_HTML).toContain('turnBoxEl.hidden = !turn')
+    expect(REMOTE_PAGE_HTML).toContain("turn.waiting ? 'turning' : 'turn'")
+    expect(REMOTE_PAGE_HTML).toContain('paintTurn(state.turn)')
   })
 })

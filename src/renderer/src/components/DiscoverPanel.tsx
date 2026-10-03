@@ -178,7 +178,8 @@ import {
   type RemoteCommand,
   type RemoteKeepOutcome,
   type RemoteRadioView,
-  type RemoteSlotAction
+  type RemoteSlotAction,
+  type RemoteTurnView
 } from '@shared/remoteState'
 import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
@@ -5089,6 +5090,20 @@ export function DiscoverPanel({
     if (radioArmedSlotId === null && heldSlotIds.length === 0) return null
     return { armedSlotId: radioArmedSlotId, heldSlotIds }
   }, [radioArmedSlotId, radioHeldSlotId, manualWaitingKey])
+  // Radio's turn as the phone sees it (@shared/remoteState RemoteTurnView): what the desktop's
+  // turn button and chips show, and what POST /api/turn answers from. Null with radio off.
+  const radioTurnRemote = useMemo<RemoteTurnView | null>(
+    () =>
+      radioOn
+        ? {
+            waiting: radioTurnShown !== null,
+            move: radioTurnShown?.move ?? null,
+            canTurn: radioTurnCan?.canTurn ?? false,
+            moves: radioTurnCan?.moves ?? []
+          }
+        : null,
+    [radioOn, radioTurnShown, radioTurnCan]
+  )
 
   // The renderer PUSHES; main only ever answers GET /api/state with the
   // last thing pushed. What he sees on the Mac and what he sees on the
@@ -5144,7 +5159,8 @@ export function DiscoverPanel({
           rolled: rolledCount,
           lastKeptName,
           loopBars,
-          radio: radioRemote
+          radio: radioRemote,
+          turn: radioTurnRemote
         },
         peaksBySlotId
       )
@@ -5156,7 +5172,8 @@ export function DiscoverPanel({
     rolledCount,
     lastKeptName,
     remotePeaksTick,
-    radioRemote
+    radioRemote,
+    radioTurnRemote
   ])
 
   // What the unmount below does with manual changes still waiting. In a
@@ -5252,6 +5269,9 @@ export function DiscoverPanel({
       // The four actions are the four buttons on every desktop slot row,
       // plus that row's own mute and its own solo -- see runSlotAction.
       else if (command.kind === 'slot-action') runSlotAction(command.slotId, command.action)
+      // The desktop's own turn (turnRadio): the server forwards only a turn it answered
+      // `turning` to.
+      else if (command.kind === 'turn') turnRadioRef.current(command.move)
     }
   })
 
