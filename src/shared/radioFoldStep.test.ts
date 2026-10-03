@@ -283,12 +283,12 @@ describe('stepRadioFold: rows coming and going', () => {
     const steps = run('k3x9pq', 60, () => input(40))
     const i = steps.findIndex((s) => s.cycles.length > 0)
     const folded = steps[i].cycles[0].rowId
-    const longer = BAND.map((r) => (r.id === folded ? { ...r, barLength: r.barLength / 2 } : r))
-    const next = stepRadioFold(steps[i].state, input(40, longer))
+    const shorter = BAND.map((r) => (r.id === folded ? { ...r, barLength: r.barLength / 2 } : r))
+    const next = stepRadioFold(steps[i].state, input(40, shorter))
     expect(next.state.rows.map((r) => r.rowId)).not.toContain(folded)
     for (const r of next.state.rows) {
       expect(r.cycleBeats).toBeLessThan(r.fullBeats)
-      const row = longer.find((x) => x.id === r.rowId)!
+      const row = shorter.find((x) => x.id === r.rowId)!
       expect(r.fullBeats).toBe(row.barLength * 4)
     }
   })
@@ -443,18 +443,84 @@ describe('stepRadioFold: a loop or tempo change re-checks the window', () => {
     expect(next.state.bpm).toBe(110)
   })
 
-  it('a state saved before the tempo was tracked loads, and reads its tempo as unchanged', () => {
+  it('a state saved before the tempo was tracked still walks back a fold outside the window', () => {
+    // perc settled at 7 against 16, saved with no tempo: 7 realigns every 112 beats, 134 s at
+    // 50 bpm, outside the window; 56 s at 120, inside
+    expect(radioFoldAllowedCycles(16, 50)).not.toContain(7)
+    expect(radioFoldAllowedCycles(16, 120)).toContain(7)
+    const old: Partial<RadioFoldState> = {
+      ...createRadioFold('k3x9pq'),
+      lap: 10,
+      loopBeats: 16,
+      stretch: 'folded',
+      stretchEndsLap: 1000,
+      rows: [
+        {
+          rowId: 'perc',
+          stemId: 'perc-stem',
+          fullBeats: 8,
+          targetBeats: 7,
+          cycleBeats: 7,
+          phaseBeats: 0,
+          originLap: 5,
+          path: [],
+          mode: 'settled',
+          unfoldSince: null,
+          serial: 1
+        }
+      ]
+    }
+    delete old.bpm
+    // lap 11 is not its realignment top (that is lap 12), so only the window sends it back
+    const back = stepRadioFold(old as RadioFoldState, { ...input(40), bpm: 50 })
+    expect(back.state.rows.map((r) => [r.rowId, r.mode, r.cycleBeats])).toEqual([
+      ['perc', 'unfolding', 7.5]
+    ])
+    expect(back.state.bpm).toBe(50)
+    // with the tempo inside the window, it runs on
+    const kept = stepRadioFold(old as RadioFoldState, input(40))
+    expect(kept.state.rows.map((r) => [r.rowId, r.mode])).toEqual([['perc', 'settled']])
+  })
+
+  it('a state saved before the tempo was tracked, still inside the window, runs on', () => {
     const steps = run('k3x9pq', 200, () => input(40))
     const i = steps.findIndex((s) => s.state.rows.some((r) => r.mode === 'settled'))
     const old = JSON.parse(JSON.stringify(steps[i].state)) as Partial<RadioFoldState>
     delete old.bpm
-    // 9 is outside the window at 60 bpm, but with no tempo saved there is no change to see
-    const next = stepRadioFold(old as RadioFoldState, { ...input(40), bpm: 60 })
+    const next = stepRadioFold(old as RadioFoldState, input(40))
     const fresh = stepRadioFold(steps[i].state, input(40))
-    expect(next.state.rows.map((r) => [r.rowId, r.mode])).toEqual(
-      fresh.state.rows.map((r) => [r.rowId, r.mode])
-    )
-    expect(next.state.bpm).toBe(60)
+    expect(next).toEqual(fresh)
+  })
+
+  it('a state saved before the walk was kept unfolds all the way to full length', () => {
+    let checked = 0
+    for (const seed of ['k3x9pq', 'autech', 'gae4rb', 'qb78ma']) {
+      const steps = run(seed, 300, () => input(90))
+      for (let i = 0; i < steps.length; i++) {
+        if (!steps[i].state.rows.some((r) => r.mode === 'settled')) continue
+        const old = JSON.parse(JSON.stringify(steps[i].state)) as RadioFoldState
+        for (const r of old.rows) delete (r as { walk?: number[] }).walk
+        const ids = old.rows.map((r) => r.rowId)
+        // fold 0 sends every fold back; each must reach full length and leave, never shrinking
+        // once it has started back
+        let s = old
+        let last = new Map(old.rows.map((r) => [r.rowId, r.cycleBeats]))
+        for (let k = 0; k < 40; k++) {
+          const step = stepRadioFold(s, input(0))
+          for (const r of step.state.rows) {
+            expect(['settled', 'unfolding']).toContain(r.mode)
+            expect(r.cycleBeats).toBeGreaterThanOrEqual(last.get(r.rowId)!)
+            expect(r.cycleBeats).toBeLessThan(r.fullBeats)
+          }
+          last = new Map(step.state.rows.map((r) => [r.rowId, r.cycleBeats]))
+          s = step.state
+        }
+        expect(s.rows).toEqual([])
+        checked += ids.length
+        break
+      }
+    }
+    expect(checked).toBeGreaterThan(0)
   })
 
   it('the same seed and the same changes give the same decisions', () => {
@@ -464,5 +530,70 @@ describe('stepRadioFold: a loop or tempo change re-checks the window', () => {
       bpm: w < 80 ? 120 : 90
     })
     expect(run('k3x9pq', 250, at)).toEqual(run('k3x9pq', 250, at))
+  })
+})
+
+describe('stepRadioFold: a forced walk back', () => {
+  /** From every lap, change the tempo to `bpm` and keep it there for 30 tops. */
+  /** Four rows that fold at a low fold: three 2-bar rhythmic rows beside the anchor. */
+  const BUSY: RadioFoldRow[] = [
+    ...BAND,
+    row('clap', { kinds: ['rhythmic'], barLength: 2 }),
+    row('shaker', { kinds: ['rhythmic'], barLength: 2 })
+  ]
+
+  function afterChange(
+    seed: string,
+    fold: number,
+    bpm: number,
+    rows: RadioFoldRow[],
+    each: (prev: RadioFoldStep, next: RadioFoldStep) => void
+  ): void {
+    const steps = run(seed, 150, () => input(fold, rows))
+    for (let i = 10; i < steps.length; i++) {
+      let prev = steps[i]
+      for (let k = 0; k < 30; k++) {
+        const next = stepRadioFold(prev.state, { ...input(fold, rows), bpm })
+        each(prev, next)
+        prev = next
+      }
+    }
+  }
+
+  it('a row that finishes unfolding plays full length for that top before it can fold again', () => {
+    let landed = 0
+    for (const seed of ['k3x9pq', 'autech', 'gae4rb', 'qb78ma']) {
+      for (const bpm of [60, 75, 140, 174]) {
+        afterChange(seed, 90, bpm, BAND, (prev, next) => {
+          for (const p of prev.state.rows) {
+            if (p.mode !== 'unfolding') continue
+            const r = next.state.rows.find((x) => x.rowId === p.rowId)
+            if (r) {
+              expect(r.mode).toBe('unfolding')
+            } else {
+              landed++
+              expect(next.cycles.map((c) => c.rowId)).not.toContain(p.rowId)
+            }
+          }
+        })
+      }
+    }
+    expect(landed).toBeGreaterThan(0)
+  })
+
+  it('below fold 60, one row at a time, even while a forced walk back runs', () => {
+    let walked = 0
+    for (const seed of ['k3x9pq', 'autech', 'gae4rb', 'qb78ma']) {
+      for (const fold of [40, 50, 59]) {
+        for (const bpm of [60, 75, 140, 174]) {
+          afterChange(seed, fold, bpm, BUSY, (_prev, next) => {
+            if (next.state.rows.some((r) => r.mode === 'unfolding')) walked++
+            expect(next.state.rows.length).toBeLessThanOrEqual(1)
+            expect(next.cycles.length).toBeLessThanOrEqual(1)
+          })
+        }
+      }
+    }
+    expect(walked).toBeGreaterThan(0)
   })
 })

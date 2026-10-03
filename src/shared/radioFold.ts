@@ -355,7 +355,6 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
   const f = normalizeFoldAmount(input.fold, DEFAULT_RADIO_FOLD) / 100
   const loopBeats = input.loopBars * 4
   const loopChanged = prev.lap >= 0 && s.loopBeats !== loopBeats
-  const bpmChanged = prev.lap >= 0 && typeof prev.bpm === 'number' && prev.bpm !== input.bpm
   s.loopBeats = loopBeats
   s.bpm = input.bpm
   const anchorId = radioFoldAnchor(input.rows)
@@ -383,15 +382,14 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
   })
   if (loopChanged) for (const r of s.rows) restart(r)
   //    A changed loop or tempo moves every realignment: a fold whose target no longer realigns
-  //    inside the window walks back from this top.
+  //    inside the window walks back from this top. Checked on every top, not only on a change
+  //    seen here, so a state saved without its tempo is covered too.
   const outside = new Set<string>()
-  if (loopChanged || bpmChanged) {
-    const allowed = radioFoldAllowedCycles(loopBeats, input.bpm)
-    for (const r of s.rows) {
-      if (r.mode === 'unfolding' || allowed.includes(r.targetBeats)) continue
-      outside.add(r.rowId)
-      if (r.unfoldSince === null) r.unfoldSince = lap
-    }
+  const allowed = radioFoldAllowedCycles(loopBeats, input.bpm)
+  for (const r of s.rows) {
+    if (r.mode === 'unfolding' || allowed.includes(r.targetBeats)) continue
+    outside.add(r.rowId)
+    if (r.unfoldSince === null) r.unfoldSince = lap
   }
   const marked = s.rows.some((r) => r.mode === 'settled' && realignsAt(r, lap, loopBeats))
 
@@ -437,7 +435,8 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     restart(r)
   }
 
-  // 4. Curves step on, one length per loop top. A fold that reaches its target settles.
+  // 4. Curves step on, one length per loop top. A fold that reaches its target settles; a row
+  //    that walks back to full length leaves, and plays full length for at least this top.
   for (const r of s.rows) {
     if (r.mode === 'settled' || r.originLap === lap) continue
     const next = r.path.shift()
@@ -450,13 +449,18 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     if (r.mode === 'folding') r.walk?.push(next)
     if (r.path.length === 0 && r.mode === 'folding') r.mode = 'settled'
   }
-  s.rows = s.rows.filter((r) => r.cycleBeats < r.fullBeats)
+  s.rows = s.rows.filter((r) => {
+    if (r.cycleBeats < r.fullBeats) return true
+    left.add(r.rowId)
+    return false
+  })
 
   // 5. New folds, only in a folded stretch: one at once when none is folding, a second (high
-  //    `fold` only) on a realignment top, half the time.
+  //    `fold` only) on a realignment top, half the time. A row still walking back holds its
+  //    place against the most rows at once, so below fold 60 one row at a time it is.
   if (s.stretch === 'folded' && f > 0) {
     const active = s.rows.filter((r) => r.unfoldSince === null).length
-    const may = active === 0 || (active < maxRows(f) && marked && draw() < 0.5)
+    const may = s.rows.length < maxRows(f) && (active === 0 || (marked && draw() < 0.5))
     if (may) {
       const taken = new Set(s.rows.map((r) => r.rowId))
       const candidates = input.rows.filter(
