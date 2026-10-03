@@ -165,6 +165,7 @@ export function radioFoldPath(fromBeats: number, toBeats: number, steps: number)
   }
   return out
 }
+
 /** The parameters drift moves (spec section 1). `cutoff` is the row's own low-pass (1 open),
  * `send` an extra reverb send over the row's own, `dub` its send into the dub echo. */
 export type FoldDriftParam = 'cutoff' | 'send' | 'dub'
@@ -205,6 +206,9 @@ export interface RadioFoldRowState {
   originLap: number
   /** Lengths still to step through, one per loop top, in order. */
   path: number[]
+  /** The lengths the fold has stepped through on its way in, in order, the latest last: an
+   * unfold walks them back (spec section 1). Absent in a state saved before it was kept. */
+  walk?: number[]
   mode: 'folding' | 'settled' | 'unfolding'
   /** The lap it was asked to unfold on (the stretch ended), or null. */
   unfoldSince: number | null
@@ -218,6 +222,9 @@ export interface RadioFoldState {
   /** The lap the last step decided; -1 before the first. */
   lap: number
   loopBeats: number
+  /** The tempo the last step decided at; 0 before the first. Absent in a state saved before it
+   * was kept, which reads as no change. */
+  bpm: number
   stretch: 'straight' | 'folded'
   /** The lap the current stretch gives way on. */
   stretchEndsLap: number
@@ -234,6 +241,7 @@ export function createRadioFold(seed: string): RadioFoldState {
     draws: 0,
     lap: -1,
     loopBeats: 0,
+    bpm: 0,
     stretch: 'straight',
     stretchEndsLap: -1,
     rows: [],
@@ -334,7 +342,11 @@ function sweepAt(sw: FoldSweep, lap: number): readonly [number, number] {
 export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): RadioFoldStep {
   const s: RadioFoldState = {
     ...prev,
-    rows: prev.rows.map((r) => ({ ...r, path: [...r.path] })),
+    rows: prev.rows.map((r) => ({
+      ...r,
+      path: [...r.path],
+      ...(r.walk !== undefined ? { walk: [...r.walk] } : {})
+    })),
     drift: { ...prev.drift }
   }
   const draw = (): number => seededRandom(`${s.seed}#${s.draws++}`)()
@@ -343,7 +355,9 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
   const f = normalizeFoldAmount(input.fold, DEFAULT_RADIO_FOLD) / 100
   const loopBeats = input.loopBars * 4
   const loopChanged = prev.lap >= 0 && s.loopBeats !== loopBeats
+  const bpmChanged = prev.lap >= 0 && typeof prev.bpm === 'number' && prev.bpm !== input.bpm
   s.loopBeats = loopBeats
+  s.bpm = input.bpm
   const anchorId = radioFoldAnchor(input.rows)
   const byId = new Map(input.rows.map((r) => [r.id, r]))
   const restart = (r: RadioFoldRowState): void => {
@@ -352,17 +366,33 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
   }
 
   // 1. Rows already folded keep their fold only while they still may and still play the stem it
-  //    was decided for; a changed stem leaves the fold (the new layer arrives straight). A changed
-  //    loop restarts every cycle at this top, since the realignment arithmetic has changed.
-  //    A row that leaves here does not start a new fold on the same top.
+  //    was decided for, at the length it was decided at; a changed stem leaves the fold (the new
+  //    layer arrives straight). A changed loop restarts every cycle at this top, since the
+  //    realignment arithmetic has changed. A row that leaves here does not start a new fold on
+  //    the same top.
   const left = new Set<string>()
   s.rows = s.rows.filter((r) => {
     const row = byId.get(r.rowId)
-    const keep = row !== undefined && row.stemId === r.stemId && radioFoldCanFold(row, anchorId)
+    const keep =
+      row !== undefined &&
+      row.stemId === r.stemId &&
+      row.barLength * 4 === r.fullBeats &&
+      radioFoldCanFold(row, anchorId)
     if (!keep) left.add(r.rowId)
     return keep
   })
   if (loopChanged) for (const r of s.rows) restart(r)
+  //    A changed loop or tempo moves every realignment: a fold whose target no longer realigns
+  //    inside the window walks back from this top.
+  const outside = new Set<string>()
+  if (loopChanged || bpmChanged) {
+    const allowed = radioFoldAllowedCycles(loopBeats, input.bpm)
+    for (const r of s.rows) {
+      if (r.mode === 'unfolding' || allowed.includes(r.targetBeats)) continue
+      outside.add(r.rowId)
+      if (r.unfoldSince === null) r.unfoldSince = lap
+    }
+  }
   const marked = s.rows.some((r) => r.mode === 'settled' && realignsAt(r, lap, loopBeats))
 
   // 2. Stretches. `fold` 0 ends a folded stretch at once and keeps it straight. A straight
@@ -386,18 +416,23 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     }
   }
 
-  // 3. Unfolding starts: at once while still folding, else on the row's own realignment top (or
-  //    after FOLD_UNFOLD_MAX_WAIT_LAPS), walking back the way it came, in 2 to 4 steps.
+  // 3. Unfolding starts: at once while still folding or outside the window, else on the row's own
+  //    realignment top (or after FOLD_UNFOLD_MAX_WAIT_LAPS), walking back the way it came: the
+  //    lengths it stepped in through, in reverse, then full length.
   for (const r of s.rows) {
     if (r.unfoldSince === null || r.mode === 'unfolding') continue
     const due =
       r.mode === 'folding' ||
+      outside.has(r.rowId) ||
       realignsAt(r, lap, loopBeats) ||
       lap - r.unfoldSince >= FOLD_UNFOLD_MAX_WAIT_LAPS
     if (!due) continue
     r.mode = 'unfolding'
     r.targetBeats = r.fullBeats
-    r.path = radioFoldPath(r.cycleBeats, r.fullBeats, 2 + Math.floor(draw() * 3))
+    r.path =
+      r.walk !== undefined
+        ? [...r.walk.slice(0, -1).reverse(), r.fullBeats]
+        : radioFoldPath(r.cycleBeats, r.fullBeats, 3)
     r.cycleBeats = r.path.shift() ?? r.fullBeats
     restart(r)
   }
@@ -412,6 +447,7 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     }
     r.cycleBeats = next
     restart(r)
+    if (r.mode === 'folding') r.walk?.push(next)
     if (r.path.length === 0 && r.mode === 'folding') r.mode = 'settled'
   }
   s.rows = s.rows.filter((r) => r.cycleBeats < r.fullBeats)
@@ -446,6 +482,7 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
           phaseBeats: phase,
           originLap: lap,
           path,
+          walk: [first],
           mode: path.length === 0 ? 'settled' : 'folding',
           unfoldSince: null,
           serial: ++s.serial
