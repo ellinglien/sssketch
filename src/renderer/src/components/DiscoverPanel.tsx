@@ -5098,8 +5098,10 @@ export function DiscoverPanel({
         ? {
             waiting: radioTurnShown !== null,
             move: radioTurnShown?.move ?? null,
-            canTurn: radioTurnCan?.canTurn ?? false,
-            moves: radioTurnCan?.moves ?? []
+            // Not measured yet (before the first clock tick): allow, as the desktop's
+            // chips do, rather than dim every chip and answer `nothing to turn`.
+            canTurn: radioTurnCan?.canTurn ?? true,
+            moves: radioTurnCan?.moves ?? [...TURNAROUND_MOVES]
           }
         : null,
     [radioOn, radioTurnShown, radioTurnCan]
