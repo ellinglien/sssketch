@@ -4149,9 +4149,14 @@ export function DiscoverPanel({
       const pending = radioPendingRef.current
       const clock = radioClockRef.current
       const led = radioLedChangeRef.current
-      // The first armed gesture still playing, which is what holds (2).
-      const gesture =
+      // The first armed gesture still playing, which is what holds (2) -- below the bar band. In
+      // it (80+) a playing gesture holds (2) only when it is not spent by the landing bar, which
+      // is decided below; so there it is not a gate here, only a note on the line
+      // (`+gesture:<kind>`): a 'decide' with that note decides early only if the gesture is
+      // spent by the landing bar, and otherwise the change goes down the due branch (`due-cut`).
+      const playingGesture =
         radioGestureRef.current.find((g) => !radioArrivalGestureSpent(g, pos, loopBars)) ?? null
+      const gesture = radioCadence.barEvery === null ? playingGesture : null
       const manual = manualChangesRef.current
       const gate =
         radioStageRef.current !== null
@@ -4204,7 +4209,12 @@ export function DiscoverPanel({
                                 ) !== null
                               ? 'decide'
                               : `not-this-lap(interval ${clock.intervalBars} elapsed ${clock.barsElapsed.toFixed(2)})`
-      radioTraceStageGate(gate, pos)
+      radioTraceStageGate(
+        radioCadence.barEvery !== null && playingGesture !== null
+          ? `${gate}+gesture:${playingGesture.kind}`
+          : gate,
+        pos
+      )
     }
 
     // (2) Decide early. Never on a tick where a change is already coming
@@ -4401,10 +4411,11 @@ export function DiscoverPanel({
     // was decided, but a push in flight holds the stage back (the gate below), a re-stage after
     // an overtaking load-project comes later still, and the loop may have changed under it (a
     // row turned over, shrinking it, or the change would now shorten it). Too close, past the
-    // loop's end, or off the grid it can still land on: re-aimed at the next line far enough
-    // ahead, or the top (radioBarLandingAim), and written back before anything is staged -- the
-    // stage and the landing branch read the same number. Below the bar band the lead is 0, so
-    // only a bar the loop no longer has moves.
+    // loop's end, or with no mid-loop line left for it at all (its grid is now the whole loop):
+    // re-aimed at the next line far enough ahead, or the top (radioBarLandingAim), and written
+    // back before anything is staged -- the stage and the landing branch read the same number. A
+    // bar merely off a grid that has changed (a pace move) is kept, as a decided change is (spec
+    // section 4). Below the bar band the lead is 0, so only a bar the loop no longer has moves.
     if (led !== null && led.atBars !== undefined && radioStageRef.current === null) {
       const lead = radioCadence.barEvery !== null ? RADIO_BAR_STAGE_LEAD_BARS : 0
       const incoming = led.stem?.barLength ?? null
@@ -4812,9 +4823,12 @@ export function DiscoverPanel({
     // A leading gesture is cleared in the same tick. It has fired; a
     // second lap of it would turn one move into a rhythm, and (for a hole)
     // would punch the gap in the layer that just arrived. For an arrival
-    // hold the list is already empty and clearRadioGesture is a no-op -- and
-    // so it is for a mid-lap cut, which can only have been decided while
-    // nothing was armed.
+    // hold the list is already empty and clearRadioGesture is a no-op. A
+    // mid-lap cut below 80 was decided while nothing was armed, so the same;
+    // in the pace slider's bar band (80+) it may have been decided while a
+    // loop-top arrival was still armed but spent by this bar, and then this
+    // takes that curve off for real -- its push folded into the landing's one
+    // by holdSyncUntilResolved below.
     //
     // MANUAL CHANGES land here too (2026-09-29), at the WRAP only and never
     // at a held bar -- every waiting one whose stem is ready, together with
