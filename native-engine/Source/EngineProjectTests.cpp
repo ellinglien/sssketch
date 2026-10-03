@@ -1,4 +1,5 @@
 #include "EngineProject.h"
+#include "CycleTable.h"
 #include <juce_core/juce_core.h>
 
 namespace sssketch
@@ -781,6 +782,23 @@ namespace sssketch
                 for (size_t i = 0; i < stems.size(); ++i)
                     expect(stems[i].pumpRole == expected[i], stems[i].stemKey);
                 expect(! stems[1].hasToolkit);
+            }
+
+            beginTest("a stem's cycleRow parses with its key; absent is empty and key 0");
+            {
+                EngineProject project;
+                juce::String error;
+                expect(parseEngineProject(
+                    R"({"bpm":120.0,"rifffs":[{"groupId":"g","stems":[
+                         {"stemKey":"absent"},
+                         {"stemKey":"folded","cycleRow":"slot-3"}
+                       ]}]})",
+                    project, error), error);
+                const auto& stems = project.rifffs[0].stems;
+                expect(stems[0].cycleRow.isEmpty());
+                expect(stems[0].cycleRowKey == 0);
+                expectEquals(stems[1].cycleRow, juce::String("slot-3"));
+                expect(stems[1].cycleRowKey == cycleKeyOf("slot-3"));
             }
         }
     };

@@ -1522,3 +1522,34 @@ describe('dub throws on the wire (native radio sound plan, Task 10)', () => {
     expect(isDubOnlyToolkit(beside.rifffs[0].stems[0].toolkit!)).toBe(false)
   })
 })
+
+describe('radio fold mode on the wire: cycleRow', () => {
+  const twoStems: Rifff = {
+    ...rifff,
+    stems: [
+      { ...rifff.stems[0], slot: 1, type: 'drums', path: '/k.wav' },
+      { ...rifff.stems[0], slot: 2, type: 'drums', path: '/h.wav' }
+    ]
+  }
+
+  it('names the row only for the stems the map names', async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: twoStems } }),
+      vi.fn(),
+      emptyCatalog,
+      {},
+      { stemCycleRows: new Map([[stemKey('r1', 2), 'slot-7']]) }
+    )
+    expect(project.rifffs[0].stems.map((s) => s.cycleRow)).toEqual([undefined, 'slot-7'])
+    expect('cycleRow' in project.rifffs[0].stems[0]).toBe(false)
+  })
+
+  it('with no map, no stem has a cycleRow key at all (the wire is what it was)', async () => {
+    const project = await buildEngineProject(
+      stateWith({ bpm: 150, rifffs: { r1: twoStems } }),
+      vi.fn(),
+      emptyCatalog
+    )
+    expect(project.rifffs[0].stems.some((s) => 'cycleRow' in s)).toBe(false)
+  })
+})

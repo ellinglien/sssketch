@@ -165,6 +165,15 @@ namespace sssketch
         };
         PumpRole pumpRole = PumpRole::none;
 
+        /** Radio fold mode (CycleTable.h): the row this stem plays for, so a cycle staged for
+         * that row can fold it. Absent on the wire -- every project but a folding radio's -- is
+         * empty, and an empty row plays exactly as before. Twin of EngineStem.cycleRow in
+         * src/shared/buildEngineProject.ts. */
+        juce::String cycleRow;
+        /** NOT ON THE WIRE: cycleKeyOf(cycleRow), computed once by the parser so the audio
+         * thread compares two integers. 0 for no row. */
+        uint64_t cycleRowKey = 0;
+
         /** NOT ON THE WIRE: this stem's index in PlaybackEngine's ProjectSnapshot::dubTaps (its
          * dub send -- a dubSend curve, or a ramp out after its curve has gone), or -1. Set by
          * buildSnapshot on the snapshot's own copy; the parser leaves it -1. */

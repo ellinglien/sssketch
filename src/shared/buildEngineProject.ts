@@ -71,6 +71,12 @@ export interface EngineStem {
    * render of it -- every export -- is exactly the render without roles. Twin of
    * EngineStem::pumpRole in native-engine/Source/EngineProject.h. */
   pumpRole?: 'key' | 'pumped'
+  /** Radio fold mode (@shared/radioFold; native-engine/Source/CycleTable.h): the Discover row
+   * this stem plays for, so the cycle the renderer stages for that row (engineStageCycles) can
+   * fold it. ABSENT for every stem but a folding radio's, and that absence is load-bearing, the
+   * same rule as `pan`: such a stem sends the JSON it sent before. Twin of EngineStem::cycleRow
+   * in native-engine/Source/EngineProject.h. */
+  cycleRow?: string
 }
 
 /** The built-in sound toolkit on the wire, per placed stem clip. Twin of
@@ -594,6 +600,10 @@ export interface BuildEngineProjectOptions {
    * still carries its roles, so switching the pump off mid-duck glides out (the web's
    * setPump(0)) rather than stepping. Ignored while the pump is on. */
   pumpRelease?: boolean
+  /** Radio fold mode: the Discover row (slot id) each stem plays for, by stem key, while the
+   * mode is on (DiscoverPanel's syncPreviewToEngine). Each named stem carries it as
+   * EngineStem.cycleRow; nothing else changes. */
+  stemCycleRows?: ReadonlyMap<string, string>
   /** Dub throws planned for this project (native radio sound plan, Tasks 11/12; the engine half
    * is Task 10): the echo the current throw opens into, and each throwing stem's send curve by
    * stem key -- clip-relative bars (the lanes' convention: bar 0 is the clip's left edge), values
@@ -823,6 +833,7 @@ export async function buildEngineProject(
       const key = stemKey(rifff.groupId, stem.slot)
       const pan = pans?.get(key) ?? 0
       const pumpRole = pumpRoles?.get(key) ?? 'none'
+      const cycleRow = options.stemCycleRows?.get(key)
       const resolved: StretchedStem = resolvedByKey.get(key) ?? {
         path: stem.path,
         durationSec: stem.durationSec
@@ -903,7 +914,9 @@ export async function buildEngineProject(
         // `pan !== 0` is false for -0 too (a width of 0 alternates 0 and -0).
         ...(pan !== 0 && Number.isFinite(pan) ? { pan } : {}),
         // And again: a row with no part in the pump (or the pump off) has no `pumpRole` key.
-        ...(pumpRole !== 'none' ? { pumpRole } : {})
+        ...(pumpRole !== 'none' ? { pumpRole } : {}),
+        // And again: only a folding radio's stems name their row.
+        ...(cycleRow ? { cycleRow } : {})
       })
     }
 

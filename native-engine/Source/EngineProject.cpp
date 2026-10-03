@@ -1,4 +1,5 @@
 #include "EngineProject.h"
+#include "CycleTable.h"
 #include <algorithm>
 #include <cmath>
 
@@ -287,6 +288,10 @@ namespace sssketch
                                     stem.pumpRole = EngineStem::PumpRole::pumped;
                             }
                         }
+
+                        // Radio fold mode's row (CycleTable.h). Absent is empty: no fold.
+                        stem.cycleRow = stemVar.getProperty("cycleRow", "").toString();
+                        stem.cycleRowKey = cycleKeyOf(stem.cycleRow);
 
                         // The built-in toolkit, per CLIP (spec section 2b).
                         // An ABSENT `toolkit` key leaves hasToolkit false,
