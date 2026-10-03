@@ -252,18 +252,22 @@ export interface RadioHookSet {
   random: () => number
 }
 
-/** Hook the row's playing stem: in, with a stay drawn (one draw). Past the cap the oldest hook is
- * released first, preferring one that is in (an away one is coming back). */
+/** Hook the row's playing stem: in, with a stay drawn (one draw). At the cap, hooks are released
+ * until the new one fits -- more than one when the bed has shrunk since they were set -- each time
+ * the oldest that is in with nothing decided, else the oldest (an away one is coming back).
+ * `released` is in release order. */
 function setHook(
   state: RadioHooksState,
   o: RadioHookSet
-): { state: RadioHooksState; released: RadioHook | null } {
+): { state: RadioHooksState; released: RadioHook[] } {
   let hooks = [...state.hooks]
-  let released: RadioHook | null = null
-  if (hooks.length >= radioHooksMax(o.rowCount)) {
+  const released: RadioHook[] = []
+  const max = radioHooksMax(o.rowCount)
+  while (hooks.length > 0 && hooks.length >= max) {
     const bySeq = [...hooks].sort((a, b) => a.setSeq - b.setSeq)
-    released = bySeq.find((h) => h.state === 'in' && h.decided === null) ?? bySeq[0]
-    hooks = hooks.filter((h) => h !== released)
+    const out = bySeq.find((h) => h.state === 'in' && h.decided === null) ?? bySeq[0]
+    released.push(out)
+    hooks = hooks.filter((h) => h !== out)
   }
   hooks.push({
     rowId: o.rowId,
@@ -282,13 +286,16 @@ function setHook(
   return { state: withHooks(state, hooks, state.seq + 1), released }
 }
 
-/** The row's hook toggle: releases a hook there (any state), or hooks the playing stem. */
+/** The row's hook toggle: releases a hook there (any state), or hooks the playing stem (releasing
+ * what the cap needs: setHook). `released`: every hook let go, in release order. */
 export function toggleRadioHookStem(
   state: RadioHooksState,
   o: RadioHookSet
-): { state: RadioHooksState; released: RadioHook | null; set: boolean } {
-  if (radioHookOf(state, o.rowId) !== null)
-    return { ...releaseRadioHook(state, o.rowId), set: false }
+): { state: RadioHooksState; released: RadioHook[]; set: boolean } {
+  if (radioHookOf(state, o.rowId) !== null) {
+    const r = releaseRadioHook(state, o.rowId)
+    return { state: r.state, released: r.released === null ? [] : [r.released], set: false }
+  }
   return { ...setHook(state, o), set: true }
 }
 
@@ -298,8 +305,8 @@ export function toggleRadioHookStem(
 export function likeRadioStem(
   state: RadioHooksState,
   o: RadioHookSet & { canHold: boolean }
-): { state: RadioHooksState; released: RadioHook | null } {
-  if (!o.canHold || radioHookOf(state, o.rowId) !== null) return { state, released: null }
+): { state: RadioHooksState; released: RadioHook[] } {
+  if (!o.canHold || radioHookOf(state, o.rowId) !== null) return { state, released: [] }
   return setHook(state, o)
 }
 

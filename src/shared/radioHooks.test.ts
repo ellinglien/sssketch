@@ -502,6 +502,32 @@ describe('taps and other hands', () => {
     expect(s.hooks.map((h) => h.rowId)).toEqual(['b', 'w'])
   })
 
+  it('the cap after the bed shrank: releases until under it, in hooks first, then the oldest', () => {
+    const shrink = (s: RadioHooksState, rowCount: number): ReturnType<typeof toggleRadioHookStem> =>
+      toggleRadioHookStem(s, {
+        rowId: 'w',
+        stemId: 'w-1',
+        rowCount,
+        paceLevel: 50,
+        random: seededRandom('shrink')
+      })
+    // three hooks set on an 8-row bed; the bed shrinks to 2 rows (cap 1)
+    const three = set(set(set(NO_RADIO_HOOKS, 'd'), 'b'), 'l')
+    const one = shrink(three, 2)
+    expect(one.state.hooks.map((h) => h.rowId)).toEqual(['w'])
+    expect(one.released.map((h) => h.rowId)).toEqual(['d', 'b', 'l'])
+    // cap 2 (4 rows) with the middle one away: both hooks in go first, oldest first
+    const mixed = {
+      ...three,
+      hooks: three.hooks.map((h) => (h.rowId === 'b' ? { ...h, state: 'away' as const } : h))
+    }
+    const two = shrink(mixed, 4)
+    expect(two.state.hooks.map((h) => h.rowId)).toEqual(['b', 'w'])
+    expect(two.released.map((h) => h.rowId)).toEqual(['d', 'l'])
+    // under the cap: nothing released
+    expect(shrink(NO_RADIO_HOOKS, 8).released).toEqual([])
+  })
+
   it('👍 hooks and never un-hooks; on an away hook it does nothing', () => {
     const like = (s: RadioHooksState, canHold = true): RadioHooksState =>
       likeRadioStem(s, {
