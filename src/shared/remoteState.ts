@@ -126,6 +126,10 @@ export interface RemoteState {
   /** Null whenever radio is not running, which is also what a Mac that
    * has nothing armed says. The phone marks no row at all for null. */
   radio: RemoteRadioView | null
+  /** Radio fold mode's switch (@shared/radioFold): on or off while radio runs; null or absent
+   * while radio is off (an older Mac never sends it). The phone shows the switch only then, and
+   * POST /api/fold answers from it. A boolean names nothing, so the boundary is unchanged. */
+  fold?: boolean | null
   /** Radio's turn; null or absent while radio is off (an older Mac never sends it). It is what
    * POST /api/turn answers from (remoteTurnAnswer). */
   turn?: RemoteTurnView | null
@@ -198,6 +202,8 @@ export interface RemoteStateMeta {
    * exactly that. Normalized below -- an id naming no row becomes null, so
    * what leaves is always drawable. */
   radio?: RemoteRadioView | null
+  /** Fold mode's switch while radio runs; absent or null while it is off. */
+  fold?: boolean | null
   /** Radio's turn while radio runs; absent or null while it is off. */
   turn?: RemoteTurnView | null
 }
@@ -236,6 +242,7 @@ export function remoteStateFromSlots(
     // -- no mark -- rather than being passed on for the page to guard
     // against.
     radio: normalizeRemoteRadio(meta.radio ?? null, slots),
+    fold: typeof meta.fold === 'boolean' ? meta.fold : null,
     turn: normalizeRemoteTurn(meta.turn ?? null),
     slots: slots.map((slot) => ({
       id: slot.id,
@@ -311,9 +318,17 @@ export type RemoteCommand =
   | { kind: 'add-slot'; kinds: DiscoverSlotKind[] }
   | { kind: 'remove-slot'; slotId: string }
   | { kind: 'slot-action'; slotId: string; action: RemoteSlotAction }
+  /** Radio fold mode on or off (2026-10-02). Forwarded only while radio runs. */
+  | { kind: 'fold'; on: boolean }
   /** Radio's turn at the next loop top: a chip's `move`, absent for the planner's choice
    * (2026-10-02). Forwarded only when remoteTurnAnswer says `turning`. */
   | { kind: 'turn'; move?: TurnaroundMove }
+
+/** The fold switch's body (`{ on }`): only a boolean is an answer; anything else is null, and the
+ * route refuses the request (the same rule as parseRemoteSlotKinds). */
+export function parseRemoteFold(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null
+}
 
 /** The six things a long press (or a tap, for `mute` and `solo`) on a phone
  * row can ask for. Four of them are the buttons that have been on every

@@ -527,6 +527,7 @@ describe('remotePage swap grid', () => {
     const posts = SCRIPT.match(/api\('\/api\/[a-z-]+'/g) ?? []
     expect(posts.sort()).toEqual([
       "api('/api/add-slot'",
+      "api('/api/fold'",
       "api('/api/keep'",
       "api('/api/remove-slot'",
       "api('/api/roll'",
@@ -1327,5 +1328,23 @@ describe('remotePage turn', () => {
     expect(REMOTE_PAGE_HTML).toContain('turnBoxEl.hidden = !turn')
     expect(REMOTE_PAGE_HTML).toContain("turn.waiting ? 'turning' : 'turn'")
     expect(REMOTE_PAGE_HTML).toContain('paintTurn(state.turn)')
+  })
+})
+
+describe('the fold switch', () => {
+  it('sits in the loop block under the handover chips, hidden until radio runs', () => {
+    const loopBlock = (/<div id="loop" hidden>[\s\S]*?<\/div>\s*<div class="eyebrow foot"/.exec(
+      REMOTE_PAGE_HTML
+    ) ?? [''])[0]
+    expect(loopBlock).toContain('<div class="swapgrid" id="fold-row" hidden>')
+    expect(loopBlock.indexOf('id="chips-xfade"')).toBeLessThan(loopBlock.indexOf('id="chips-fold"'))
+  })
+
+  it('paints from the state, a boolean or nothing, and posts only a change', () => {
+    expect(REMOTE_PAGE_HTML).toContain(
+      "foldState = typeof state.fold === 'boolean' ? state.fold : null"
+    )
+    expect(REMOTE_PAGE_HTML).toContain("api('/api/fold', { on: on })")
+    expect(REMOTE_PAGE_HTML).toContain('if (foldState === null || foldState === on) return')
   })
 })

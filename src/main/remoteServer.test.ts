@@ -740,3 +740,85 @@ describe('the turn route', () => {
     expect(commands).toEqual([])
   })
 })
+
+describe('the fold route', () => {
+  async function pairedToken(port: number, pairingCode: string): Promise<string> {
+    const res = await send(
+      port,
+      '/api/pair',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      JSON.stringify({ code: pairingCode })
+    )
+    return JSON.parse(res.body).token as string
+  }
+  async function fold(port: number, token: string, body: unknown): Promise<RawResponse> {
+    return send(
+      port,
+      '/api/fold',
+      {
+        host: `192.168.1.40:${port}`,
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`
+      },
+      'POST',
+      JSON.stringify(body)
+    )
+  }
+  const radioOn =
+    (on: boolean): RemoteServerOptions['getState'] =>
+    () => ({
+      discoverOpen: true,
+      playing: true,
+      kept: 0,
+      rolled: 0,
+      lastKeptName: null,
+      loopBars: 8,
+      radio: null,
+      fold: on,
+      slots: [],
+      loopId: null
+    })
+
+  it('forwards on and off while radio runs', async () => {
+    const { port, pairingCode } = await start({ getState: radioOn(false) })
+    const token = await pairedToken(port, pairingCode)
+    const on = await fold(port, token, { on: true })
+    expect(on.status).toBe(200)
+    expect(JSON.parse(on.body)).toEqual({ answer: 'fold on' })
+    expect((await fold(port, token, { on: false })).status).toBe(200)
+    expect(commands).toEqual([
+      { kind: 'fold', on: true },
+      { kind: 'fold', on: false }
+    ])
+  })
+
+  it('answers 409 radio off with radio off, and forwards nothing', async () => {
+    const { port, pairingCode } = await start()
+    const res = await fold(port, await pairedToken(port, pairingCode), { on: true })
+    expect(res.status).toBe(409)
+    expect(JSON.parse(res.body)).toEqual({ answer: 'radio off' })
+    expect(commands).toEqual([])
+  })
+
+  it('refuses anything but a boolean, and forwards nothing', async () => {
+    const { port, pairingCode } = await start({ getState: radioOn(false) })
+    const token = await pairedToken(port, pairingCode)
+    for (const on of ['true', 1, null]) expect((await fold(port, token, { on })).status).toBe(400)
+    expect((await fold(port, token, {})).status).toBe(400)
+    expect(commands).toEqual([])
+  })
+
+  it('tells an unpaired caller nothing about the route existing', async () => {
+    const { port } = await start({ getState: radioOn(true) })
+    const res = await send(
+      port,
+      '/api/fold',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      '{}'
+    )
+    expect(res.status).toBe(401)
+    expect(commands).toEqual([])
+  })
+})

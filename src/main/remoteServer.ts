@@ -15,6 +15,7 @@ import {
   parseRemoteKeepId,
   parseRemoteSlotAction,
   parseRemoteSlotKinds,
+  parseRemoteFold,
   parseRemoteTurnMove,
   remoteTurnAnswer,
   type RemoteCommand,
@@ -225,10 +226,10 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
  * screen while this is on. That is the price of the phone reaching it at
  * all, and it is why this is off by default.
  *
- * Ten api routes, plus GET / itself, and no route takes or returns a
+ * Eleven api routes, plus GET / itself, and no route takes or returns a
  * filesystem path or reads the library. (The count in this comment was
  * already one behind before /api/stem: a596b39's /api/slot-action made
- * seven into eight, /api/stem makes it nine, and /api/turn ten.)
+ * seven into eight, /api/stem makes it nine, /api/turn ten, and /api/fold eleven.)
  *
  * GET /api/loop takes no parameters of any kind -- it serves the current
  * Discover loop's wav bytes and names it in an x-loop-id header, so there
@@ -443,6 +444,17 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
           )
         }
         return respond(res, answer === 'radio off' ? 409 : 200, { answer })
+      }
+
+      // Radio fold mode's switch (2026-10-02): `{ on }`, a boolean or a 400. 409 with radio off,
+      // the switch then not being there to throw; otherwise forwarded.
+      if (req.method === 'POST' && url === '/api/fold') {
+        const on = parseRemoteFold((await readJsonBody(req)).on)
+        if (on === null) return respond(res, 400)
+        const fold = options.getState().fold
+        if (fold === null || fold === undefined) return respond(res, 409, { answer: 'radio off' })
+        options.onCommand({ kind: 'fold', on })
+        return respond(res, 200, { answer: on ? 'fold on' : 'fold off' })
       }
 
       // The phone's kind picker. Kinds arrive as their own literal strings

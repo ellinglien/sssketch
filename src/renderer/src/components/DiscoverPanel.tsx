@@ -5343,6 +5343,8 @@ export function DiscoverPanel({
           lastKeptName,
           loopBars,
           radio: radioRemote,
+          // fold mode's switch, while radio runs (the phone's one radio setting)
+          fold: radioOn ? radioSettings.foldMode : null,
           turn: radioTurnRemote
         },
         peaksBySlotId
@@ -5356,6 +5358,8 @@ export function DiscoverPanel({
     lastKeptName,
     remotePeaksTick,
     radioRemote,
+    radioOn,
+    radioSettings.foldMode,
     radioTurnRemote
   ])
 
@@ -5452,6 +5456,8 @@ export function DiscoverPanel({
       // The four actions are the four buttons on every desktop slot row,
       // plus that row's own mute and its own solo -- see runSlotAction.
       else if (command.kind === 'slot-action') runSlotAction(command.slotId, command.action)
+      // Fold mode's switch (2026-10-02): the same setter the radio menu's chips call.
+      else if (command.kind === 'fold') void onRadioSettingsChange({ foldMode: command.on })
       // The desktop's own turn (turnRadio): the server forwards only a turn it answered
       // `turning` to.
       else if (command.kind === 'turn') turnRadioRef.current(command.move)

@@ -657,6 +657,12 @@ input {
         <div class="eyebrow">and take</div>
         <div class="chips grid" id="chips-xfade"></div>
       </div>
+      <!-- Radio fold mode's switch (2026-10-02): the one radio setting the phone has, shown only
+           while radio runs on the mac. -->
+      <div class="swapgrid" id="fold-row" hidden>
+        <div class="eyebrow">fold</div>
+        <div class="chips grid" id="chips-fold"></div>
+      </div>
     </div>
     <div class="eyebrow foot" id="mac"></div>
 
@@ -1614,6 +1620,34 @@ input {
   })
   paintXfadeChips()
 
+  // --- radio fold mode's switch -------------------------------------------
+  // Two chips, off and on, shown only while radio runs on the mac (the state's
+  // fold field is a boolean then, null otherwise). A tap posts /api/fold; the next
+  // poll paints what the mac says, so a lost tap never shows as taken.
+  var foldRowEl = document.getElementById('fold-row')
+  var foldChipsEl = document.getElementById('chips-fold')
+  var foldState = null
+  var foldChipEls = []
+
+  function paintFold() {
+    foldRowEl.hidden = foldState === null
+    foldChipEls[0].className = foldState === false ? 'chip on' : 'chip'
+    foldChipEls[1].className = foldState === true ? 'chip on' : 'chip'
+  }
+
+  ;[false, true].forEach(function (on) {
+    var chip = document.createElement('button')
+    chip.className = 'chip'
+    chip.textContent = on ? 'on' : 'off'
+    chip.addEventListener('click', function () {
+      if (foldState === null || foldState === on) return
+      api('/api/fold', { on: on })
+    })
+    foldChipEls.push(chip)
+    foldChipsEl.appendChild(chip)
+  })
+  paintFold()
+
   // --- the rows ----------------------------------------------------------
   // Removing has no undo on the phone (undo stayed on the mac on purpose),
   // so it takes two taps: the first arms this row, the second does it. The
@@ -2234,6 +2268,10 @@ input {
     // rows below. Null from a mac with radio off -- and from an older one
     // that has never heard of it, which is the same no-mark either way.
     radioAhead = state.radio || null
+    // Fold mode's switch: a boolean while radio runs, null (hidden) otherwise -- and from an
+    // older mac, which never sends it.
+    foldState = typeof state.fold === 'boolean' ? state.fold : null
+    paintFold()
     if (!state.discoverOpen) {
       radioAhead = null
       lastSlots = []

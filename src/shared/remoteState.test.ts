@@ -6,6 +6,7 @@ import {
   parseRemoteKeepOutcome,
   parseRemoteSlotAction,
   parseRemoteSlotKinds,
+  parseRemoteFold,
   parseRemoteTurnMove,
   remoteStateFromSlots,
   remoteTurnAnswer,
@@ -198,6 +199,7 @@ describe('remoteStateFromSlots', () => {
       lastKeptName: 'misty kestrel',
       loopBars: 8,
       radio: null,
+      fold: null,
       turn: null,
       slots: []
     })
@@ -598,5 +600,29 @@ describe('remoteTurnAnswer', () => {
   it('is nothing to turn otherwise', () => {
     expect(remoteTurnAnswer(turn, 'stop')).toBe('nothing to turn')
     expect(remoteTurnAnswer({ ...turn, canTurn: false }, null)).toBe('nothing to turn')
+  })
+})
+
+describe('the fold switch in the remote state', () => {
+  const meta = {
+    discoverOpen: true,
+    playing: true,
+    kept: 0,
+    rolled: 0,
+    lastKeptName: null,
+    loopBars: 8
+  }
+
+  it('passes the switch through while radio runs, and null otherwise', () => {
+    expect(remoteStateFromSlots([], { ...meta, fold: true }).fold).toBe(true)
+    expect(remoteStateFromSlots([], { ...meta, fold: false }).fold).toBe(false)
+    expect(remoteStateFromSlots([], { ...meta, fold: null }).fold).toBeNull()
+    expect(remoteStateFromSlots([], meta).fold).toBeNull()
+  })
+
+  it('parseRemoteFold takes only a boolean', () => {
+    expect(parseRemoteFold(true)).toBe(true)
+    expect(parseRemoteFold(false)).toBe(false)
+    for (const v of ['true', 1, null, undefined, {}]) expect(parseRemoteFold(v)).toBeNull()
   })
 })
