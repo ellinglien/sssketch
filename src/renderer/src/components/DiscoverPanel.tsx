@@ -252,6 +252,7 @@ import {
 import { discoverStemPans } from '@shared/radioPan'
 import { discoverStemPumpRoles } from '@shared/radioPump'
 import { normalizeSoundSettings, throwEveryBars } from '@shared/radioSound'
+import { turnaroundSilencedRowIds } from '@shared/radioThrows'
 import {
   discoverThrowSends,
   initialDiscoverThrowState,
@@ -3928,7 +3929,9 @@ export function DiscoverPanel({
    * unrolls the looping playhead into bars played and picks where a throw may start): now
    * and then one heard row that is neither drums nor bass opens its send into the echo for
    * a beat or two -- never while stopped, never over a hole, riser or drop-out, at the
-   * project's rate (throwEveryBars). The armed throw goes out as a curve on the next push,
+   * project's rate (throwEveryBars). One near an armed phrase turnaround is AIMED at its wrap
+   * (2026-10-03): it ends on the one, never on a row the turnaround drops, and the turnaround
+   * does not take it back (throwYieldsToLeadIn). The armed throw goes out as a curve on the next push,
    * at least a bar ahead; once it has closed its curve is cleared, long before the lap
    * comes back round to it.
    *
@@ -3974,6 +3977,11 @@ export function DiscoverPanel({
           radioGestureRef.current.some(
             (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
           ),
+        // ...and a throw near it is AIMED at its wrap (it ends on the one), never on a row it
+        // drops. The turnaround is the one transition a throw can aim at here: a decided change
+        // is staged, and arming a throw pushes, which would withdraw the stage (canArm above).
+        changeInBars: radioTurnaroundRef.current !== null ? loopBars - pos : null,
+        silenced: turnaroundSilencedRowIds(radioTurnaroundRef.current?.plan),
         rows: slotsRef.current.map((s) => ({
           slot: s.id,
           kinds: s.kinds,

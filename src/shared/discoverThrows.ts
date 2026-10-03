@@ -104,6 +104,8 @@ export interface DiscoverThrow {
   /** Where it starts and closes, in bars played (DiscoverThrowState.elapsedBars). */
   startBars: number
   endBars: number
+  /** Aimed at a transition (DiscoverThrowTick.changeInBars): it ends on that downbeat. */
+  aimed?: boolean
 }
 
 export interface DiscoverThrowState {
@@ -139,6 +141,11 @@ export interface DiscoverThrowTick {
   canArm: boolean
   /** A hole, riser or drop-out is armed (stepThrows' leadingArmed). */
   leadingArmed: boolean
+  /** Bars from the playhead to the transition a throw may aim at (stepThrows' changeAt): the
+   * armed phrase turnaround's wrap. Absent or null for none. */
+  changeInBars?: number | null
+  /** Rows the build-up before it silences (stepThrows' silenced). */
+  silenced?: readonly string[]
   /** Every row in the panel: its slot, kinds, and whether it is heard. */
   rows: readonly { slot: string; kinds: readonly DiscoverSlotKind[]; audible: boolean }[]
   /** The spacing, from the sound settings' rate (radioSound.ts throwEveryBars). */
@@ -192,6 +199,10 @@ export function stepDiscoverThrows(
   }
   const start = throwStartAhead(tick.pos, tick.loopBars)
   if (start === null) return { state: next, change: null }
+  const changeInBars =
+    tick.changeInBars !== undefined && tick.changeInBars !== null && tick.changeInBars > 0
+      ? tick.changeInBars
+      : null
   const r = stepThrows(
     next.throws,
     {
@@ -200,6 +211,8 @@ export function stepDiscoverThrows(
       nextBeat: next.elapsedSec + start.ahead * secPerBar,
       held: !tick.playing,
       leadingArmed: tick.leadingArmed,
+      changeAt: changeInBars === null ? null : next.elapsedSec + changeInBars * secPerBar,
+      silenced: tick.silenced,
       rows: tick.rows
     },
     random,
@@ -207,15 +220,33 @@ export function stepDiscoverThrows(
   )
   next.throws = r.state
   if (r.plan === null) return { state: next, change: null }
-  const startBars = next.elapsedBars + start.ahead
+  // where stepThrows put it: the start found above, or (aimed) its beats before the change
+  const ends = (r.plan.at - next.elapsedSec) / secPerBar + r.plan.beats / 4
+  const aimed = changeInBars !== null && Math.abs(ends - changeInBars) < 1e-6
+  let ahead = start.ahead
+  let atBar = start.atBar
+  if (aimed) {
+    ahead = changeInBars - r.plan.beats / 4
+    // on the loop's beat grid (the change is a loop top or a beat of the loop)
+    atBar = Math.round(((tick.pos + ahead) % tick.loopBars) / BEAT_BARS) * BEAT_BARS
+    // a start that does not fit the loop (a caller's change off the grid) is not armed
+    if (
+      ahead < THROW_LEAD_BARS - 1e-6 ||
+      atBar + r.plan.beats / 4 > tick.loopBars + 1e-6 ||
+      ahead + r.plan.beats / 4 > tick.loopBars + 1e-6
+    )
+      return { state: next, change: null }
+  }
+  const startBars = next.elapsedBars + ahead
   next.armed = {
     slotId: r.plan.slot,
-    atBar: start.atBar,
+    atBar,
     beats: r.plan.beats,
     timing: r.plan.timing,
     feedback: r.plan.feedback,
     startBars,
-    endBars: startBars + r.plan.beats / 4
+    endBars: startBars + r.plan.beats / 4,
+    ...(aimed ? { aimed: true } : {})
   }
   return { state: next, change: 'armed' }
 }
@@ -269,8 +300,14 @@ export function discoverThrowSends(
  * back: when the throw has not started and is far enough ahead that the push carrying the
  * gesture lands before it (THROW_RECALL_BARS). stepThrows never plans a throw over an armed
  * lead-in; this covers a lead-in armed after the throw was planned (the web has that gap). A
- * throw already under way, or about to be, is left to finish: taking it back would cut it.
+ * throw already under way, or about to be, is left to finish: taking it back would cut it. An
+ * AIMED throw never yields: it ends on the turnaround's wrap, is never on a row the turnaround
+ * silences, and is what the lead-in leads to.
  */
 export function throwYieldsToLeadIn(state: DiscoverThrowState): boolean {
-  return state.armed !== null && state.armed.startBars - state.elapsedBars >= THROW_RECALL_BARS
+  return (
+    state.armed !== null &&
+    state.armed.aimed !== true &&
+    state.armed.startBars - state.elapsedBars >= THROW_RECALL_BARS
+  )
 }

@@ -39,11 +39,16 @@ export interface ThrowPlan {
 }
 
 export interface ThrowState {
-  /** Bars still to play before the next throw is due; null until the first tick. */
+  /** Bars still to play before the next throw is due; null until the first tick. Negative: due
+   * that long ago (a throw waiting for a transition). The clock keeps its schedule: each next
+   * spacing is drawn on top of what is left (or overdue), so a throw pulled forward or held back
+   * to meet a transition never changes the long-run rate. */
   barsUntil: number | null
   lastNow: number | null
   /** The last throw's echoes are still ringing until then. */
   busyUntil: number
+  /** Bars played since the last throw was planned; null before the first. */
+  barsSince: number | null
 }
 
 export interface ThrowTick {
@@ -54,14 +59,34 @@ export interface ThrowTick {
   held: boolean
   /** A hole, riser or drop-out is armed: its wrap is spoken for. */
   leadingArmed: boolean
+  /** The next transition already decided or armed within reach (a change's landing, a mid-loop
+   * bar landing too, or an armed turnaround's wrap), on the beat grid; absent or null for none.
+   * A throw near it is AIMED: it ends on that downbeat, its echoes ringing over the change. */
+  changeAt?: number | null
+  /** Rows the build-up before `changeAt` silences (a hole's outgoing row, the rows a turnaround
+   * drops before the one): the send is post-fader, so a throw there would be heard as nothing. */
+  silenced?: readonly string[]
   rows: readonly { slot: string; kinds: readonly DiscoverSlotKind[]; audible: boolean }[]
 }
 
 export const initialThrowState = (): ThrowState => ({
   barsUntil: null,
   lastNow: null,
-  busyUntil: Number.NEGATIVE_INFINITY
+  busyUntil: Number.NEGATIVE_INFINITY,
+  barsSince: null
 })
+
+/** How far a throw may move to meet a transition, as a share of the shortest spacing (8 bars at
+ * THROW_EVERY_BARS, 4 at the busiest rate): pulled forward up to that much -- and only once that
+ * many bars have gone by since the last throw, so two never come closer than it -- or, due, held
+ * back up to that much waiting for one (up to twice it for a transition already in sight). Half
+ * the shortest spacing keeps the throws' own rhythm recognisable (a 16-32 bar spacing becomes at
+ * worst 8-48) while a change every ~25 bars (the pace slider at 50) is in reach of most throws. */
+export const THROW_PREFER_SHARE = 0.5
+/** An aimed throw is planned once its transition is at most this many beats past the next beat
+ * the caller can schedule on: late enough that a change taken back has mostly already been,
+ * early enough that the longest throw (THROW_BEATS) fits before it. */
+export const THROW_AIM_REACH_BEATS = 4
 
 const between = (r: number, [lo, hi]: readonly [number, number]): number => lo + (hi - lo) * r
 
@@ -78,6 +103,28 @@ export function drawThrowEcho(random: () => number): { timing: ThrowTiming; feed
   return { timing, feedback: between(random(), THROW_FEEDBACK) }
 }
 
+const EPS = 1e-9
+
+/**
+ * One tick of the throw clock. A throw comes round every `everyBars` (drawn per throw), on a
+ * beat, on one heard row that is neither drums nor bass, never while the last one still rings.
+ *
+ * AIMED (Elling, 2026-10-03: a throw belongs right before a transition). With a transition in
+ * `changeAt`, a throw due within THROW_PREFER_SHARE of the shortest spacing (either way, and no
+ * sooner than that long after the last throw) waits for it to come within
+ * THROW_AIM_REACH_BEATS, then starts `beats` before it: `at = changeAt - beats * 60 / bpm`, so it
+ * ENDS on the downbeat. A two-beat throw that no longer fits becomes a one-beat one; with no beat
+ * left at all it is not aimed. Aimed, it is never on a `silenced` row, and an armed lead-in does
+ * not stop it (it is what the lead-in leads to).
+ *
+ * UNAIMED. A throw with no transition in reach waits up to that same share for one, then goes on
+ * the next beat as it always has: skipped while held, over an armed lead-in, or with nothing to
+ * throw. Every throw (or skip) draws the next spacing on top of what was left of the last, so the
+ * rate is the clock's: one in 24 bars at THROW_EVERY_BARS.
+ *
+ * The random stream: one draw for the first spacing, then per throw the next spacing, the row,
+ * the beats and the echo (two), in that order; a skip draws only the spacing.
+ */
 export function stepThrows(
   state: ThrowState,
   tick: ThrowTick,
@@ -85,23 +132,97 @@ export function stepThrows(
   everyBars: readonly [number, number] = THROW_EVERY_BARS
 ): { state: ThrowState; plan: ThrowPlan | null } {
   const barSec = (4 * 60) / tick.bpm
+  const beatSec = 60 / tick.bpm
   let barsUntil = state.barsUntil ?? between(random(), everyBars)
+  let barsSince = state.barsSince ?? null
   // bars go by only while the radio plays on its own
-  if (state.lastNow !== null && !tick.held)
-    barsUntil -= Math.max(0, tick.now - state.lastNow) / barSec
-  const next: ThrowState = { barsUntil, lastNow: tick.now, busyUntil: state.busyUntil }
-  if (barsUntil > 0 || tick.nextBeat < state.busyUntil) return { state: next, plan: null }
-  // due: skipped (and the next drawn) while held, over an armed lead-in, or with nothing to throw
-  next.barsUntil = between(random(), everyBars)
-  const eligible = tick.rows.filter((r) => r.audible && !r.kinds.some((k) => NEVER.includes(k)))
-  if (tick.held || tick.leadingArmed || eligible.length === 0) return { state: next, plan: null }
-  const slot = eligible[Math.min(eligible.length - 1, Math.floor(random() * eligible.length))].slot
+  if (state.lastNow !== null && !tick.held) {
+    const played = Math.max(0, tick.now - state.lastNow) / barSec
+    barsUntil -= played
+    if (barsSince !== null) barsSince += played
+  }
+  const next: ThrowState = { barsUntil, lastNow: tick.now, busyUntil: state.busyUntil, barsSince }
+  if (tick.nextBeat < state.busyUntil) return { state: next, plan: null }
+  /** The next spacing, drawn on top of what is left (or overdue) of this one. */
+  const redraw = (): void => {
+    next.barsUntil = barsUntil + between(random(), everyBars)
+  }
+  if (tick.held) {
+    // due while held: skipped, and the next drawn
+    if (barsUntil <= 0) redraw()
+    return { state: next, plan: null }
+  }
+  const prefer = everyBars[0] * THROW_PREFER_SHARE
+  const changeAt =
+    tick.changeAt !== undefined &&
+    tick.changeAt !== null &&
+    Number.isFinite(tick.changeAt) &&
+    tick.changeAt > tick.nextBeat + EPS
+      ? tick.changeAt
+      : null
+  const audible = tick.rows.filter((r) => r.audible && !r.kinds.some((k) => NEVER.includes(k)))
+  if (
+    changeAt !== null &&
+    barsUntil <= prefer &&
+    barsUntil > -2 * prefer &&
+    (barsSince === null || barsSince >= prefer - EPS)
+  ) {
+    // a transition in sight: wait until it is within reach, then aim
+    if (changeAt - tick.nextBeat > THROW_AIM_REACH_BEATS * beatSec + EPS)
+      return { state: next, plan: null }
+    redraw()
+    const silenced = tick.silenced ?? []
+    const eligible = audible.filter((r) => !silenced.includes(r.slot))
+    if (eligible.length === 0) return { state: next, plan: null }
+    const slot =
+      eligible[Math.min(eligible.length - 1, Math.floor(random() * eligible.length))].slot
+    let beats = drawThrowBeats(random)
+    const { timing, feedback } = drawThrowEcho(random)
+    // the longer throw no longer fits before the change: the shorter one
+    if (changeAt - beats * beatSec < tick.nextBeat - EPS) beats = THROW_BEATS[0]
+    const aimed = changeAt - beats * beatSec >= tick.nextBeat - EPS
+    // nothing fits before it: as an unaimed throw (none over a lead-in)
+    if (!aimed && tick.leadingArmed) return { state: next, plan: null }
+    const at = aimed ? changeAt - beats * beatSec : tick.nextBeat
+    return throwPlanned(next, { slot, at, beats, timing, feedback }, tick.bpm)
+  }
+  // not due, or due and waiting a while for a transition
+  if (barsUntil > -prefer) return { state: next, plan: null }
+  // due: skipped (and the next drawn) over an armed lead-in, or with nothing to throw
+  redraw()
+  if (tick.leadingArmed || audible.length === 0) return { state: next, plan: null }
+  const slot = audible[Math.min(audible.length - 1, Math.floor(random() * audible.length))].slot
   const beats = drawThrowBeats(random)
   const { timing, feedback } = drawThrowEcho(random)
-  const plan: ThrowPlan = { slot, at: tick.nextBeat, beats, timing, feedback }
+  return throwPlanned(next, { slot, at: tick.nextBeat, beats, timing, feedback }, tick.bpm)
+}
+
+function throwPlanned(
+  next: ThrowState,
+  plan: ThrowPlan,
+  bpm: number
+): { state: ThrowState; plan: ThrowPlan } {
+  next.barsSince = 0
   next.busyUntil =
-    plan.at + (beats * 60) / tick.bpm + throwTailSec(throwDelaySec(tick.bpm, timing), feedback)
+    plan.at + (plan.beats * 60) / bpm + throwTailSec(throwDelaySec(bpm, plan.timing), plan.feedback)
   return { state: next, plan }
+}
+
+/** A row's gain at or below this, anywhere in a build-up, counts as silenced for a throw. */
+const THROW_SILENT_GAIN = 0.01
+
+/** The rows a turnaround silences before its one (a drum drop, a low drop, a stop, a combined
+ * plan's gap): those with a `volume` curve that reaches silence. A throw is never aimed at one
+ * (ThrowTick.silenced): its send is post-fader. Lifts, dips, washes and the riser only filter or
+ * send, and stay throwable. */
+export function turnaroundSilencedRowIds(
+  plan:
+    { rows: readonly { rowId: string; volume?: readonly { value: number }[] }[] } | null | undefined
+): string[] {
+  if (!plan) return []
+  return plan.rows
+    .filter((r) => r.volume?.some((p) => p.value <= THROW_SILENT_GAIN) === true)
+    .map((r) => r.rowId)
 }
 
 /** The send's ramps in and out, as the web's Engine.throwDelay draws them: 5 ms each. */

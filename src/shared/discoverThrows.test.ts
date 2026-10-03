@@ -417,3 +417,50 @@ describe('discoverThrowSends', () => {
     expect(discoverThrowSends(t, ['pad'], 'g1', 1, SPB)).toBeUndefined()
   })
 })
+
+// Aimed throws (2026-10-03): Discover passes the bars to its armed phrase turnaround's wrap (the
+// one transition it can aim at without withdrawing a stage), and a throw near it ends on it.
+describe('stepDiscoverThrows aimed at a turnaround (changeInBars)', () => {
+  /** A turnaround armed over the last lap of every 2-lap phrase, as radioTurnaroundAtWrap does. */
+  const phrase = (loopBars: number, silenced?: string[]) => (played: number) => {
+    const lap = Math.floor(played / loopBars + 1e-9)
+    const last = lap % 2 === 1
+    return last
+      ? { leadingArmed: true, changeInBars: loopBars - (played % loopBars), silenced }
+      : { leadingArmed: false, changeInBars: null }
+  }
+
+  for (const loopBars of [2, 4]) {
+    it(`a ${loopBars}-bar loop: throws end exactly on the turnaround's wrap, about as many as before`, () => {
+      const { armed } = play(3000, { loopBars, tickOver: phrase(loopBars) })
+      const plain = play(3000, { loopBars }).armed
+      expect(armed.length).toBeGreaterThan(plain.length * 0.85)
+      expect(armed.length).toBeLessThan(plain.length * 1.15)
+      const aimed = armed.filter(({ t }) => t.aimed)
+      // most throws land on one; every aimed one exactly
+      expect(aimed.length).toBeGreaterThan(armed.length * 0.6)
+      for (const { t, at } of aimed) {
+        expect(t.atBar + t.beats / 4).toBeCloseTo(loopBars, 9)
+        expect(t.endBars / loopBars).toBeCloseTo(Math.round(t.endBars / loopBars), 9)
+        expect(t.startBars - at).toBeGreaterThanOrEqual(THROW_LEAD_BARS - 1e-6)
+        expect(throwCurveFor(t, loopBars, SPB)).not.toBeNull()
+        // an aimed throw is what the turnaround leads to: it never yields to it
+        expect(
+          throwYieldsToLeadIn({ ...initialDiscoverThrowState(), elapsedBars: at, armed: t })
+        ).toBe(false)
+      }
+      // and none over the turnaround's lap that is not aimed at it
+      for (const { t } of armed.filter(({ t }) => !t.aimed)) {
+        const lap = Math.floor(t.startBars / loopBars + 1e-9)
+        expect(lap % 2).toBe(0)
+      }
+    })
+  }
+
+  it('never on a row the turnaround silences', () => {
+    const { armed } = play(3000, { tickOver: phrase(4, ['lead']) })
+    const aimed = armed.filter(({ t }) => t.aimed)
+    expect(aimed.length).toBeGreaterThan(0)
+    for (const { t } of aimed) expect(t.slotId).toBe('pad')
+  })
+})
