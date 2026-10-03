@@ -70,6 +70,7 @@ import {
   createRadioClock,
   isRadioEligibleSlot,
   nextRadioIntervalBarsInWindow,
+  radioPaceWindowOf,
   pickRadioSlotId,
   radioChangeBars,
   radioGridBars,
@@ -185,6 +186,30 @@ import { startPointerDrag } from './dragUtils'
 import { type ProjectRef, type SoundType, type Stem, stemKey } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject, withoutDubThrows } from '@shared/buildEngineProject'
+import {
+  FOLD_PACE_BARS,
+  createRadioFold,
+  radioFoldIntervalBars,
+  radioFoldTurnaroundRate,
+  stepRadioFold,
+  type RadioFoldRow,
+  type RadioFoldState,
+  type RadioFoldStep
+} from '@shared/radioFold'
+import {
+  FOLD_DRIFT_ECHO,
+  radioFoldCycleRows,
+  radioFoldDriftCurves,
+  radioFoldEngineRows,
+  radioFoldSound
+} from '@shared/radioFoldLanes'
+import {
+  CLASH_LOWPASS_CUTOFF,
+  CLASH_TRAITS,
+  radioClashAmount,
+  radioClashBed,
+  radioClashLowpassRow
+} from '@shared/radioClash'
 import { discoverStemPans } from '@shared/radioPan'
 import { discoverStemPumpRoles } from '@shared/radioPump'
 import { normalizeSoundSettings, throwEveryBars } from '@shared/radioSound'
@@ -1998,6 +2023,59 @@ export function DiscoverPanel({
       stemAutomation[key] = { ...stemAutomation[key], volume: underMaster(key, shape) }
     }
 
+    // RADIO FOLD MODE (@shared/radioFold): which stems name their row for the engine's cycle
+    // table (a fold decided for one stem never folds another, and a row a stage is replacing is
+    // never named), the drift's lanes over the lap, and the clash's low-pass. A stage lands on the
+    // next top, so it carries the next lap's drift. After every gesture and turnaround above: a
+    // filter already on a stem keeps it (no drift cutoff there), and sends take the max. The mode
+    // going off keeps the lap playing as it is until the next top (radioFoldNowRef is put away
+    // there, by radioFoldAtWrap): the rows unfold, and the drift and the lean leave, on the top.
+    const foldOn =
+      radioOnRef.current && (radioSettings.foldMode || radioFoldNowRef.current !== null)
+    const foldStep = !foldOn ? null : stage ? radioFoldNextRef.current : radioFoldNowRef.current
+    const stemCycleRows = new Map<string, string>()
+    const foldDubSends = new Map<string, AutomationPoint[]>()
+    if (foldOn) {
+      const slotById = new Map(slotsRef.current.map((s) => [s.id, s]))
+      const named = radioFoldCycleRows(
+        [radioFoldNowRef.current, radioFoldNextRef.current],
+        members.map((m) => ({ id: m.id, stemId: slotById.get(m.id)?.candidate?.stemCID ?? null })),
+        new Set(stage?.changes.map((c) => c.slotId) ?? [])
+      )
+      const clashRow = radioClashLowpassRow(
+        members.map((m) => ({
+          id: m.id,
+          bright: slotById.get(m.id)?.candidate?.traitPercentiles?.bright
+        })),
+        radioClashAmount(true, radioSettings.clash)
+      )
+      const ownSend = masterSendRef.current / 100
+      members.forEach((m, i) => {
+        const key = stemKey(rifff.groupId, i + 1)
+        if (named.has(m.id)) stemCycleRows.set(key, m.id)
+        const filtered =
+          stemFilters[key] !== undefined || (stemAutomation[key]?.filterCutoff ?? []).length > 0
+        if (m.id === clashRow && !filtered) {
+          stemFilters[key] = { mode: 'lowpass', cutoff: CLASH_LOWPASS_CUTOFF, resonance: 0 }
+        }
+        const lap = foldStep?.drift[m.id]
+        if (!lap || maxBarLength === undefined || !(maxBarLength > 0)) return
+        const curves = radioFoldDriftCurves(lap, maxBarLength, ownSend)
+        if (m.id !== clashRow && !filtered) {
+          stemAutomation[key] = { ...stemAutomation[key], filterCutoff: curves.cutoff }
+        }
+        stemAutomation[key] = {
+          ...stemAutomation[key],
+          reverbSend: combineRadioCurves(
+            stemAutomation[key]?.reverbSend ?? [],
+            curves.send,
+            'reverbSend'
+          )
+        }
+        foldDubSends.set(key, curves.dub)
+      })
+    }
+
     // The armed dub throw (native radio sound plan, Task 11; @shared/discoverThrows), as a
     // `dubSend` curve on its row's stem, anchored at the loop top like the gestures above and
     // cleared by the radio clock once the throw has closed (radioThrowTick). Gated on radioOnRef
@@ -2036,6 +2114,15 @@ export function DiscoverPanel({
             (4 * 60) / bpm
           )
         : undefined
+    // A drift's dub sends join the throw's, on its echo; with no throw armed they open into
+    // FOLD_DRIFT_ECHO. A throwing row keeps its throw.
+    const dubSent =
+      foldDubSends.size === 0
+        ? dubThrows
+        : {
+            echo: dubThrows?.echo ?? FOLD_DRIFT_ECHO,
+            sends: new Map([...foldDubSends, ...(dubThrows?.sends ?? [])])
+          }
 
     // A throwaway single-rifff AppState -- only bpm/masterChain/
     // channelPlugins/reverb/sound are copied from the real project; state.rifffs is
@@ -2051,7 +2138,8 @@ export function DiscoverPanel({
       channelPlugins,
       reverb,
       // explicit: initialState has none (absent is today's sound)
-      sound: sound ?? appSoundDefaultsNow(),
+      // fold mode's clash leans the master glue and saturation in (radioFoldSound)
+      sound: radioFoldSound(sound ?? appSoundDefaultsNow(), foldOn, radioSettings.clash),
       rifffs: { [rifff.groupId]: { ...rifff, startBar: 0 } },
       vol,
       // The master reverb: N equal sends into the ONE shared bus, which is
@@ -2132,7 +2220,7 @@ export function DiscoverPanel({
         resolveStretchedForPlayback,
         pluginCatalog,
         undefined,
-        { stemPans, stemPumpRoles, dubThrows }
+        { stemPans, stemPumpRoles, dubThrows: dubSent, stemCycleRows }
       )
       radioTraceMark('built') // TEMP
       if (unmountedRef.current || previewSyncGenerationRef.current !== myGeneration) return
@@ -2174,7 +2262,7 @@ export function DiscoverPanel({
       // The gestures do go to the phone; they belong to the layer changes, which change the loop
       // anyway.
       void window.rifffApi.setRemoteLoop(
-        dubThrows !== undefined ? withoutDubThrows(project) : project,
+        dubSent !== undefined ? withoutDubThrows(project) : project,
         members.map(function (m) {
           return m.id
         })
@@ -3192,7 +3280,11 @@ export function DiscoverPanel({
     if (!owed.phraseEnd) return
     const plan = rollTurnaround({
       ...input,
-      rate: radioSettings.turnarounds,
+      // a phrase ending on a fold's realignment top prefers a turnaround
+      rate: radioFoldTurnaroundRate(
+        radioSettings.turnarounds,
+        radioSettings.foldMode && radioFoldNextRef.current?.marked === true
+      ),
       random: Math.random,
       lastPhrase: radioTurnaroundMemoryRef.current
     })
@@ -3391,6 +3483,76 @@ export function DiscoverPanel({
       radioTurnaroundRef.current !== null
     )
   }
+  /** RADIO FOLD MODE (@shared/radioFold): the machine's state, and its decisions for the lap
+   * playing now and for the next one -- it decides a lap ahead, at every wrap, so the engine can
+   * take each lap's cycles exactly on its top (engineStageCycles; CycleTable.h). */
+  const radioFoldRef = useRef<RadioFoldState | null>(null)
+  const radioFoldNowRef = useRef<RadioFoldStep | null>(null)
+  const radioFoldNextRef = useRef<RadioFoldStep | null>(null)
+  /** The rows as fold mode sees them: every slot, in panel order (new folds draw by index). */
+  function radioFoldRowsNow(): RadioFoldRow[] {
+    const previewing = previewingSlotIdsRef.current
+    return slotsRef.current.map((s) => ({
+      id: s.id,
+      stemId: s.candidate?.stemCID ?? null,
+      kinds: s.kinds,
+      barLength: resolvedBarLengthsRef.current.get(s.id) ?? 0,
+      hooked: radioSlotFlagsRef.current[s.id] === 'hook',
+      audible: previewing.has(s.id) && resolvedBarLengthsRef.current.has(s.id),
+      percussive: resolvedStemsRef.current.get(s.id)?.type === 'drums'
+    }))
+  }
+  /** Every wrap while radio runs: the lap starting now plays what was decided a lap ago, the
+   * machine decides the next lap, and the engine gets that lap's cycles to take at its top. With
+   * the mode or radio off, a fold still around is put away. A new seed starts a new machine. */
+  function radioFoldAtWrap(loopBars: number): void {
+    if (!radioOnRef.current || !radioSettings.foldMode) {
+      if (radioFoldRef.current !== null || radioFoldNowRef.current !== null) resetRadioFold()
+      return
+    }
+    radioFoldNowRef.current = radioFoldNextRef.current
+    const was = radioFoldRef.current
+    const state =
+      was !== null && was.seed === radioSettings.foldSeed
+        ? was
+        : createRadioFold(radioSettings.foldSeed)
+    const step = stepRadioFold(state, {
+      rows: radioFoldRowsNow(),
+      loopBars,
+      bpm,
+      fold: radioSettings.fold
+    })
+    radioFoldRef.current = step.state
+    radioFoldNextRef.current = step
+    void window.rifffApi.engineStageCycles(radioFoldEngineRows(step), false)
+    // the lap now playing has its own drift lanes
+    scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
+  /** Fold mode put away at once: every row full length from the next block, no drift, no lean. */
+  function resetRadioFold(): void {
+    const had = radioFoldRef.current !== null || radioFoldNowRef.current !== null
+    radioFoldRef.current = null
+    radioFoldNowRef.current = null
+    radioFoldNextRef.current = null
+    void window.rifffApi.engineStageCycles([], true)
+    if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+  }
+  /** A change's interval: fold mode's window, moved to a realignment top when one is near, while
+   * the mode is on (radioPaceWindowOf, radioFoldIntervalBars); the pace window otherwise. */
+  function radioNextIntervalBars(loopBars: number): number {
+    const drawn = nextRadioIntervalBarsInWindow(radioPaceWindowOf(radioSettings))
+    return radioSettings.foldMode
+      ? radioFoldIntervalBars(radioFoldRef.current, drawn, loopBars)
+      : drawn
+  }
+  // The mode going off while radio runs: every row back to full length at the next loop top
+  // (an empty table staged for it); the drift and the lean leave with the wrap's push.
+  useEffect(() => {
+    if (radioSettings.foldMode || radioFoldRef.current === null) return
+    radioFoldRef.current = null
+    radioFoldNextRef.current = null
+    void window.rifffApi.engineStageCycles([], false)
+  }, [radioSettings.foldMode])
   /** Radio off or a course change: the armed turnaround comes off, and the next phrase end
    * starts fresh. Wherever drop-outs were cleared (clearRadioGesture outside the clock). */
   function clearRadioTurnaround(): void {
@@ -4082,6 +4244,9 @@ export function DiscoverPanel({
     // lap -- after densityTick's microtask (the arc's removal at this wrap) and after every
     // landing this tick commits (radioTurnaroundAtWrap). Between wraps, a roll still waiting on a
     // stem is given up once its move could no longer reach the engine in time.
+    // Fold mode decides the next lap first: the roll reads whether its phrase ends on a
+    // realignment top (radioFoldTurnaroundRate).
+    if (step.wrapped) radioFoldAtWrap(loopBars)
     if (step.wrapped) radioTurnaroundAtWrap(step.turnaroundLapStarts, loopBars)
     else {
       radioTurnaroundOverdue()
@@ -4216,7 +4381,7 @@ export function DiscoverPanel({
         if (led.early && !ledOverridden) {
           radioClockRef.current = restartRadioInterval(
             step.clock,
-            nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+            radioNextIntervalBars(loopBars),
             pos,
             boundaryBars
           )
@@ -4340,7 +4505,7 @@ export function DiscoverPanel({
           radioLastSlotRef.current = skipLanded
           radioClockRef.current = restartRadioInterval(
             radioClockRef.current,
-            nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+            radioNextIntervalBars(loopBars),
             pos,
             boundaryBars
           )
@@ -4444,7 +4609,7 @@ export function DiscoverPanel({
       // origin forward by however long the slowest stem took to warm.
       radioClockRef.current = restartRadioInterval(
         step.clock,
-        nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+        radioNextIntervalBars(loopBars),
         pos,
         boundaryBars
       )
@@ -4530,7 +4695,7 @@ export function DiscoverPanel({
     // change and the 16s would walk.
     radioClockRef.current = restartRadioInterval(
       step.clock,
-      nextRadioIntervalBarsInWindow(radioSettings.paceBars),
+      radioNextIntervalBars(loopBars),
       pos,
       boundaryBars
     )
@@ -5979,6 +6144,12 @@ export function DiscoverPanel({
       // use) would otherwise land a duplicate half the time while the other
       // source has fresh stems to offer.
       const draw = drawSoundSource(sourceLeanRef.current)
+      // Fold mode's clash (@shared/radioClash), while radio runs: every candidate carries its
+      // rhythm and brightness percentiles, and the ranking turns away from the bed's.
+      const clashAmount = radioOnRef.current
+        ? radioClashAmount(radioSettings.foldMode, radioSettings.clash)
+        : 0
+      const alsoTraits = clashAmount > 0 ? [...CLASH_TRAITS] : undefined
       // Tagged with the artist they were rolled under (pickedUnderArtist).
       let candidates = (
         await window.rifffApi.getDiscoverCandidates(
@@ -5986,7 +6157,8 @@ export function DiscoverPanel({
           f.onlyOwnStems,
           f.targetUser,
           draw.first,
-          f.artist
+          f.artist,
+          alsoTraits
         )
       ).map((c) => tagPickedUnderArtist(c, f.artist))
       const drawnHasUnused = candidates.some((c) => !usedElsewhere.has(c.stemCID))
@@ -5998,7 +6170,8 @@ export function DiscoverPanel({
             f.onlyOwnStems,
             f.targetUser,
             draw.fallback,
-            f.artist
+            f.artist,
+            alsoTraits
           )
         ).map((c) => tagPickedUnderArtist(c, f.artist))
         // Switch to the fallback when it has something new, or when the
@@ -6040,7 +6213,19 @@ export function DiscoverPanel({
         // Finding, 2026-09-21: trait kinds were never passed here before,
         // so a "warm" roll ranked by BPM alone. Every trait kind in the set
         // now adds its library percentile (rankCandidates).
-        targetTraits
+        targetTraits,
+        ...(clashAmount > 0
+          ? {
+              clash: {
+                amount: clashAmount,
+                bed: radioClashBed(
+                  slotsRef.current
+                    .filter((s) => s.id !== id && previewingSlotIdsRef.current.has(s.id))
+                    .map((s) => s.candidate?.traitPercentiles ?? {})
+                )
+              }
+            }
+          : {})
       })
       const picked = pickReroll(ranked, chaos)
       // TEMPORARY diagnostic log (2026-09-15) -- see the matching one
@@ -7126,6 +7311,7 @@ export function DiscoverPanel({
     cancelStagedSwap('radio-off')
     clearRadioGesture()
     clearRadioTurnaround()
+    resetRadioFold()
     // An armed throw's curve comes off too (radioOnRef is false, so the rebuild carries
     // none); its echo rings out in the engine.
     resetRadioThrows(true)
@@ -7186,7 +7372,9 @@ export function DiscoverPanel({
     // which is the only anchor radio can see -- the transport wraps, so
     // there is no absolute bar 0 to count from.
     radioClockRef.current = createRadioClock(
-      nextRadioIntervalBarsInWindow(RADIO_PACE_BARS[pace]),
+      nextRadioIntervalBarsInWindow(
+        radioSettings.foldMode ? FOLD_PACE_BARS : RADIO_PACE_BARS[pace]
+      ),
       pos
     )
     radioLastSlotRef.current = null
@@ -7252,7 +7440,9 @@ export function DiscoverPanel({
     // new phrase and bar 0 of the transport are the same instant -- which
     // is the one moment radio gets a phrase origin for free.
     radioClockRef.current = createRadioClock(
-      nextRadioIntervalBarsInWindow(RADIO_PACE_BARS[pace]),
+      nextRadioIntervalBarsInWindow(
+        radioSettings.foldMode ? FOLD_PACE_BARS : RADIO_PACE_BARS[pace]
+      ),
       0
     )
     setRadioProgress(0)
@@ -7265,6 +7455,7 @@ export function DiscoverPanel({
     cancelStagedSwap('course-change')
     clearRadioGesture()
     clearRadioTurnaround()
+    resetRadioFold()
     void armRadioPick()
   }
 
