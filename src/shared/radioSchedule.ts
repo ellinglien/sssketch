@@ -1407,6 +1407,20 @@ export function radioBarLandingAim(
   return line >= loopBars - BOUNDARY_EPSILON ? undefined : line
 }
 
+/** Whether a change `barsUntil` bars after `pos` lands off every loop top (a mid-loop bar line):
+ * what a readout needs to show the rows riding it as the landing will take them (fold's bar band
+ * leaves a companion on a held row that cannot carry its fold off such a line). None, or no loop:
+ * false. */
+export function radioLandsMidLoop(
+  pos: number,
+  barsUntil: number | null,
+  loopBars: number
+): boolean {
+  if (barsUntil === null || !(loopBars > 0) || !Number.isFinite(pos + barsUntil)) return false
+  const at = pos + barsUntil
+  return Math.abs(at - Math.round(at / loopBars) * loopBars) > 1e-6
+}
+
 /** The desktop's stage-time re-aim of a held mid-loop bar on a `gridBars` grid: the loop top
  * (undefined) when the grid is the whole loop, else radioBarLandingAim. `snap`: the grid became
  * coarser for this row after the bar was aimed (fold mode took the row: radioCadenceBarEvery keeps

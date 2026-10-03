@@ -3,8 +3,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   createRadioFold,
+  radioFoldBarCompanions,
   radioFoldCanCarry,
   radioFoldCarry,
+  radioFoldChangeCarries,
+  radioFoldLand,
   radioFoldRelease,
   stepRadioFold,
   type RadioFoldRow,
@@ -12,6 +15,7 @@ import {
   type RadioFoldStep
 } from './radioFold'
 import { radioFoldCycleRows } from './radioFoldLanes'
+import { radioLandsMidLoop } from './radioSchedule'
 
 const R = (id: string, o: Partial<RadioFoldRow> = {}): RadioFoldRow => ({
   id,
@@ -246,5 +250,115 @@ describe('radioFoldCycleRows carried', () => {
     expect(radioFoldCycleRows([step], members, new Set([id])).has(id)).toBe(false)
     expect(radioFoldCycleRows([step], members, new Set([id]), new Set([id])).has(id)).toBe(true)
     expect(radioFoldCycleRows([step], [{ id, stemId: step.cycles[0].stemId }]).has(id)).toBe(true)
+  })
+})
+
+describe("radioFoldChangeCarries (the runtimes' carry decision)", () => {
+  it('in the band, on a held row, when radioFoldCanCarry says so against the latest state', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const incoming = R(id, { stemId: 'new' })
+    expect(radioFoldChangeCarries(step.state, null, step, incoming, true)).toBe(true)
+    // the row held only in the lap playing still counts as held
+    expect(radioFoldChangeCarries(step.state, step, null, incoming, true)).toBe(true)
+    // outside fold's bar band nothing carries
+    expect(radioFoldChangeCarries(step.state, null, step, incoming, false)).toBe(false)
+    // a row the machine does not hold, a stem too short, no machine
+    expect(radioFoldChangeCarries(step.state, null, step, R('zz', { stemId: 'new' }), true)).toBe(
+      false
+    )
+    expect(
+      radioFoldChangeCarries(step.state, null, step, R(id, { stemId: 'new', barLength: 2 }), true)
+    ).toBe(false)
+    expect(radioFoldChangeCarries(null, null, null, incoming, true)).toBe(false)
+    // never onto the anchor of the latest step
+    const anchored = { ...step, anchorId: id }
+    expect(radioFoldChangeCarries(step.state, null, anchored, incoming, true)).toBe(false)
+  })
+})
+
+describe('radioFoldBarCompanions with a carry test (phase 2)', () => {
+  it('a companion on a held row rides a bar line only when it carries', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const ks = [{ slotId: 'x' }, { slotId: id }]
+    expect(radioFoldBarCompanions(ks, step, step, true, () => true)).toBe(ks)
+    expect(radioFoldBarCompanions(ks, step, step, true, () => false)).toEqual([{ slotId: 'x' }])
+    expect(radioFoldBarCompanions(ks, step, step, true, (s) => s !== id)).toEqual([{ slotId: 'x' }])
+    // not active: the same array, whatever the test
+    expect(radioFoldBarCompanions(ks, step, step, false, () => false)).toBe(ks)
+  })
+})
+
+describe('radioFoldLand (a change landed on a row: carry, release or leave)', () => {
+  it('carries the state and both steps together; nothing drawn', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const m = { state: step.state, now: step, next: step }
+    const out = radioFoldLand(m, id, { stemId: 'new', barLength: 4, carry: true, release: true })
+    expect(out.state?.rows.find((r) => r.rowId === id)?.stemId).toBe('new')
+    expect(out.next?.cycles.find((c) => c.rowId === id)?.stemId).toBe('new')
+    expect(out.now?.cycles.find((c) => c.rowId === id)?.stemId).toBe('new')
+    expect(out.next?.cycles.find((c) => c.rowId === id)?.cycleId).toBe(
+      step.cycles.find((c) => c.rowId === id)?.cycleId
+    )
+    expect(out.state?.draws).toBe(step.state.draws)
+  })
+
+  it('a straight landing on a held row releases it everywhere, when asked to', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const m = { state: step.state, now: step, next: step }
+    const out = radioFoldLand(m, id, { stemId: 'new', barLength: 2, carry: false, release: true })
+    expect(out.state?.rows.some((r) => r.rowId === id)).toBe(false)
+    expect(out.now?.cycles.some((c) => c.rowId === id)).toBe(false)
+    expect(out.next?.cycles.some((c) => c.rowId === id)).toBe(false)
+    // not asked to release (a top below the band: the wrap's own step lets it go): unchanged
+    expect(
+      radioFoldLand(m, id, { stemId: 'new', barLength: 2, carry: false, release: false })
+    ).toBe(m)
+  })
+
+  it('a carry the fold has outgrown since the decision releases it everywhere, never half', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    // the lap playing still at the old cycle, the next lap re-folded past a 1-bar stem
+    const next = withRow(step, id, { cycleBeats: 7, targetBeats: 7, path: [] })
+    const m = { state: next.state, now: step, next }
+    const out = radioFoldLand(m, id, { stemId: 'new', barLength: 1, carry: true, release: false })
+    expect(out.state?.rows.some((r) => r.rowId === id)).toBe(false)
+    expect(out.now?.cycles.some((c) => c.rowId === id)).toBe(false)
+    expect(out.next?.cycles.some((c) => c.rowId === id)).toBe(false)
+  })
+
+  it('a row the machine does not hold, or no machine at all: the same object', () => {
+    const { step } = foldedStep()
+    const m = { state: step.state, now: step, next: step }
+    expect(
+      radioFoldLand(m, 'nobody', { stemId: 'x', barLength: 4, carry: true, release: true })
+    ).toBe(m)
+    const none = { state: null, now: null, next: null }
+    expect(
+      radioFoldLand(none, 'p', { stemId: 'x', barLength: 4, carry: true, release: true })
+    ).toBe(none)
+  })
+
+  it('a row held only in the state (no step names it yet) is carried there too', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const m = { state: step.state, now: null, next: null }
+    const out = radioFoldLand(m, id, { stemId: 'new', barLength: 4, carry: true, release: true })
+    expect(out.state?.rows.find((r) => r.rowId === id)?.stemId).toBe('new')
+  })
+})
+
+describe('radioLandsMidLoop (which landing the readout shows companions for)', () => {
+  it('a landing off every loop top is mid-loop; a top, none, or no loop is not', () => {
+    expect(radioLandsMidLoop(1.5, 0.5, 4)).toBe(true)
+    expect(radioLandsMidLoop(1.5, 2.5, 4)).toBe(false)
+    expect(radioLandsMidLoop(3, 5, 4)).toBe(false)
+    expect(radioLandsMidLoop(3, 6, 4)).toBe(true)
+    expect(radioLandsMidLoop(1, null, 4)).toBe(false)
+    expect(radioLandsMidLoop(1, 1, 0)).toBe(false)
   })
 })

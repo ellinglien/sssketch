@@ -836,10 +836,15 @@ export function radioFoldBarCompanions<T extends { slotId: string }>(
   companions: readonly T[],
   now: RadioFoldStep | null,
   next: RadioFoldStep | null,
-  active: boolean
+  active: boolean,
+  /** PHASE 2: a companion on a held row still rides the line when this says its change carries
+   * the fold (radioFoldChangeCarries); one that would cut straight is left off, as in phase 1. */
+  carries: (slotId: string) => boolean = () => false
 ): readonly T[] {
   if (!active) return companions
-  const kept = companions.filter((k) => !radioFoldHoldsRow(now, next, k.slotId))
+  const kept = companions.filter(
+    (k) => !radioFoldHoldsRow(now, next, k.slotId) || carries(k.slotId)
+  )
   return kept.length === companions.length ? companions : kept
 }
 
@@ -942,4 +947,78 @@ export function radioFoldRelease(step: RadioFoldStep, rowId: string): RadioFoldS
     cycles: step.cycles.filter((c) => c.rowId !== rowId),
     marked
   }
+}
+
+/** PHASE 2. The runtimes' carry decision for a change bringing `incoming` onto its row: fold's
+ * bar band is on (`active`: fold mode with the slider's bar band), the machine holds the row in
+ * the lap playing or the next (radioFoldHoldsRow), and radioFoldCanCarry agrees against `state`
+ * (the machine's latest) with the anchor of the latest step. Anything else lands straight. */
+export function radioFoldChangeCarries(
+  state: RadioFoldState | null,
+  now: RadioFoldStep | null,
+  next: RadioFoldStep | null,
+  incoming: RadioFoldRow,
+  active: boolean
+): boolean {
+  if (!active || !radioFoldHoldsRow(now, next, incoming.id)) return false
+  return radioFoldCanCarry(state, incoming.id, incoming, (next ?? now)?.anchorId ?? null)
+}
+
+/** The fold machine as a runtime keeps it: its latest state, and its decisions for the lap
+ * playing (`now`) and the next (`next`). */
+export interface RadioFoldMachine {
+  state: RadioFoldState | null
+  now: RadioFoldStep | null
+  next: RadioFoldStep | null
+}
+
+/** A bare state as a step, so radioFoldCarry / radioFoldRelease can work on it. */
+function stateAsStep(state: RadioFoldState): RadioFoldStep {
+  return {
+    state,
+    lap: state.lap,
+    anchorId: null,
+    cycles: [],
+    marked: state.marked,
+    stretch: state.stretch,
+    drift: {}
+  }
+}
+
+function namesRow(step: RadioFoldStep, rowId: string): boolean {
+  return (
+    step.state.rows.some((r) => r.rowId === rowId) || step.cycles.some((c) => c.rowId === rowId)
+  )
+}
+
+/** PHASE 2. A change has LANDED on `rowId` (call it when the engine plays it, never when it is
+ * decided: a change taken back before then must leave the machine as it was). `carry` (the
+ * decision that went out with it, radioFoldChangeCarries): the state and both steps are
+ * re-pointed to the new stem (radioFoldCarry) -- or, should the fold have outgrown the stem in any
+ * of them, released in all three, never half. Otherwise, with `release`, a row the machine holds
+ * is released at once (radioFoldRelease): a straight landing ends its fold now. Without either,
+ * or for a row the machine does not hold, the same object. Pure, nothing drawn. */
+export function radioFoldLand(
+  m: RadioFoldMachine,
+  rowId: string,
+  landing: { stemId: string; barLength: number; carry: boolean; release: boolean }
+): RadioFoldMachine {
+  const steps = [m.now, m.next, m.state === null ? null : stateAsStep(m.state)]
+  if (!steps.some((s) => s !== null && namesRow(s, rowId))) return m
+  const release = (): RadioFoldMachine => ({
+    state: m.state === null ? null : radioFoldRelease(stateAsStep(m.state), rowId).state,
+    now: m.now === null ? null : radioFoldRelease(m.now, rowId),
+    next: m.next === null ? null : radioFoldRelease(m.next, rowId)
+  })
+  if (landing.carry) {
+    const carried = steps.map((s) =>
+      s === null ? null : radioFoldCarry(s, rowId, landing.stemId, landing.barLength)
+    )
+    const outgrown = steps.some(
+      (s, i) => s !== null && namesRow(s, rowId) && !namesRow(carried[i]!, rowId)
+    )
+    if (outgrown) return release()
+    return { now: carried[0], next: carried[1], state: carried[2]?.state ?? null }
+  }
+  return landing.release ? release() : m
 }
