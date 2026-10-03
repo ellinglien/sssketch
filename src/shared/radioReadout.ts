@@ -17,8 +17,9 @@ import {
 } from './discoverSlotKind'
 import type { RadioTransitionKind } from './radioTransition'
 import {
-  TURNAROUND_MOVE_LABEL,
+  TURNAROUND_LABEL_MAX,
   turnaroundArc,
+  turnaroundLabel,
   turnaroundPhraseLaps,
   type TurnaroundMove
 } from './radioTurnaround'
@@ -80,8 +81,14 @@ export interface RadioReadoutInput {
      * time; the readout only shows the ones that are rows and not the led row, once each. */
   } | null
   /** The turnaround armed for the phrase's end, or a turn waiting; `move` null while a turn
-   * waits for its roll. */
-  armedTurnaround: { move: TurnaroundMove | null; isTurn: boolean } | null
+   * waits for its roll. A combined one also gives `parts` (its moves, the lead first:
+   * turnaroundPlanMoves) and `gap` (it leaves a gap before the one). */
+  armedTurnaround: {
+    move: TurnaroundMove | null
+    isTurn: boolean
+    parts?: readonly TurnaroundMove[]
+    gap?: boolean
+  } | null
   arc: { state: RadioReadoutArcState; count: number; target: number }
   /** Radio is held: the arc part reads `held` (it goes nowhere while held). The runtime passes as
    * `nextChange` only what still lands while held (an arc step already on the timeline), or null. */
@@ -238,10 +245,16 @@ function nextPart(input: RadioReadoutInput): string | null {
   return `next: ${who}${how} · ${plural(bars, 'bar')}`
 }
 
+/** What a turn's ruler label starts with. */
+const TURN_PREFIX = 'turn: '
+
 function rulerEnd(t: RadioReadoutInput['armedTurnaround']): string | null {
   if (t === null) return null
-  if (t.isTurn) return t.move === null ? 'turn' : `turn: ${TURNAROUND_MOVE_LABEL[t.move]}`
-  return t.move === null ? null : TURNAROUND_MOVE_LABEL[t.move]
+  if (t.move === null) return t.isTurn ? 'turn' : null
+  const moves = t.parts !== undefined && t.parts.length > 0 ? t.parts : [t.move]
+  const gap = t.gap === true
+  if (!t.isTurn) return turnaroundLabel(moves, gap)
+  return TURN_PREFIX + turnaroundLabel(moves, gap, TURNAROUND_LABEL_MAX - TURN_PREFIX.length)
 }
 
 export function radioReadout(input: RadioReadoutInput): RadioReadout {
