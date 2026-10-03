@@ -295,6 +295,20 @@ export interface TurnaroundInput {
   moves?: readonly TurnaroundFamily[]
   /** How far the moves go (RadioSettings.turnaroundDepth); bold when absent. */
   depth?: TurnaroundDepth
+  /** A TURN, not a phrase end (TurnaroundForce): it always fires when a move can sound. */
+  force?: TurnaroundForce
+}
+
+/** A turn: a turnaround on demand, at the next loop top
+ * (docs/superpowers/specs/2026-10-02-radio-turn-button-design.md). It skips the rate, the
+ * never-two-in-a-row rule and diminution; the guards and the cap still apply. */
+export interface TurnaroundForce {
+  /** A chip's move, drawn whatever `moves` and the arc say. Absent: the planner draws by the arc,
+   * within `moves`, as a phrase end does. */
+  move?: TurnaroundMove
+  /** The beats left before the top (turnaroundTurnBeats): the move is never longer, nor shorter
+   * than 1 beat. */
+  maxBeats?: number
 }
 
 /** Length menus, in beats unless named bars. The spec weights only the stop's. */
@@ -404,6 +418,11 @@ function pickEven<T>(items: readonly T[], random: () => number): T {
   return items[Math.min(items.length - 1, Math.floor(random() * items.length))]
 }
 
+/** A move can sound and its shortest length fits the cap: the guards, with no randomness. */
+function fits(move: TurnaroundMove, bed: Bed, capBeats: number): boolean {
+  return SHORTEST_BEATS[move] <= capBeats && canSound(move, bed)
+}
+
 function drawOf(
   bed: Bed,
   arc: TurnaroundArc,
@@ -412,11 +431,7 @@ function drawOf(
 ): TurnaroundMove[] {
   const weights = TURNAROUND_WEIGHTS[arc]
   return TURNAROUND_MOVES.filter(
-    (m) =>
-      weights[m] > 0 &&
-      moves.includes(TURNAROUND_FAMILY_OF[m]) &&
-      SHORTEST_BEATS[m] <= capBeats &&
-      canSound(m, bed)
+    (m) => weights[m] > 0 && moves.includes(TURNAROUND_FAMILY_OF[m]) && fits(m, bed, capBeats)
   )
 }
 
@@ -439,6 +454,37 @@ export function turnaroundDraw(
     capBeats,
     input.moves ?? TURNAROUND_FAMILIES
   )
+}
+
+/** Whether a turn's chip could play `move` now: its guards and the cap, nothing else -- not the
+ * arc, not the families switched on (a chip ignores them), no randomness. rollTurnaround with
+ * `force.move` returns a plan exactly when this is true. */
+export function turnaroundMoveCanSound(
+  input: Pick<TurnaroundInput, 'rows' | 'leavingRowId' | 'loopBars' | 'depth'>,
+  move: TurnaroundMove
+): boolean {
+  const capBeats = capOf(input)
+  return capBeats > 0 && fits(move, bedOf(input.rows, input.leavingRowId), capBeats)
+}
+
+/** The longest a turn pressed now may be, in whole beats: the beats left before the top less the
+ * runtime's lead (the time a plan needs to reach the engine), rounded down so the move starts on
+ * a beat. Null when that is under 1 beat: the turn waits for the following top. */
+export function turnaroundTurnBeats(remainingBeats: number, leadBeats: number): number | null {
+  if (!Number.isFinite(remainingBeats) || !Number.isFinite(leadBeats)) return null
+  const left = Math.floor(remainingBeats - Math.max(0, leadBeats) + 1e-9)
+  return left >= 1 ? left : null
+}
+
+/** Each move's chip, lowercase, at most two words. */
+export const TURNAROUND_MOVE_LABEL: Readonly<Record<TurnaroundMove, string>> = {
+  'drum drop': 'drop',
+  'low drop': 'low drop',
+  stop: 'stop',
+  wash: 'wash',
+  lift: 'lift',
+  dip: 'dip',
+  riser: 'riser'
 }
 
 function drawBeats(move: TurnaroundMove, bed: Bed, capBeats: number, random: () => number): number {
@@ -532,8 +578,10 @@ function build(
  * Guards are checked before any draw, so a phrase end that cannot have one costs no randomness.
  * Every move ends exactly on the one; only WHEN a phrase end gets one is rolled.
  * - The families switched off (`moves`) are never drawn; none switched on is off.
+ * - `force` is a TURN (rollForced): it always fires when a move can sound.
  */
 export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
+  if (input.force !== undefined) return rollForced(input, input.force)
   const { random, loopBars, lastPhrase, arc } = input
   const moves = input.moves ?? TURNAROUND_FAMILIES
   const looks = TURNAROUND_DEPTH[input.depth ?? DEFAULT_TURNAROUND_DEPTH]
@@ -557,6 +605,36 @@ export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
     random
   )
   return build(move, drawBeats(move, bed, capBeats, random), 0, bed, loopBars, random, looks)
+}
+
+/** A turn's roll: no rate, no memory (a fresh move, `halvings` 0), the guards and the cap as
+ * ever. A chip's move is drawn whatever the arc and the families say; the planner's choice draws
+ * by the arc within the families. The draws, in order: which move (the planner's choice only),
+ * how long, which drums row (a drum drop). */
+function rollForced(input: TurnaroundInput, force: TurnaroundForce): TurnaroundPlan | null {
+  const { random, loopBars, arc } = input
+  const looks = TURNAROUND_DEPTH[input.depth ?? DEFAULT_TURNAROUND_DEPTH]
+  const capBeats = capOf(input)
+  if (!(capBeats > 0)) return null
+  const bed = bedOf(input.rows, input.leavingRowId)
+  let move: TurnaroundMove
+  if (force.move !== undefined) {
+    if (!fits(force.move, bed, capBeats)) return null
+    move = force.move
+  } else {
+    const drawn = drawOf(bed, arc, capBeats, input.moves ?? TURNAROUND_FAMILIES)
+    if (drawn.length === 0) return null
+    move = pickWeighted(
+      drawn.map((m) => ({ item: m, weight: TURNAROUND_WEIGHTS[arc][m] })),
+      random
+    )
+  }
+  const most =
+    force.maxBeats !== undefined && Number.isFinite(force.maxBeats)
+      ? Math.max(1, force.maxBeats)
+      : capBeats
+  const beats = Math.min(drawBeats(move, bed, capBeats, random), most)
+  return build(move, beats, 0, bed, loopBars, random, looks)
 }
 
 /** What to remember of a phrase end for the next one. */
