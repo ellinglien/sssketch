@@ -625,6 +625,59 @@ namespace sssketch
                     tone4.deleteFile();
                 }
 
+                // Radio fold mode (CycleTable.h): the lap clock runs on across loop tops, and a
+                // cycle table staged for "the next top" goes live in the wrapping block, between
+                // the outgoing lap's last sample and the incoming lap's first.
+                beginTest("the lap clock adds each lap at its wrap, a move starts a new one, and cycles "
+                          "staged for the top go live exactly there");
+                {
+                    StemBufferCache cache;
+                    PlaybackEngine engine(cache);
+                    engine.setProject(makeProject(kLoopBars));
+                    PluginChain masterChain(kNumMasterChainSlots);
+                    ChannelChainRegistry channelChains;
+                    Transport transport(engine, masterChain, channelChains);
+                    transport.setBpm(kBpm);
+                    transport.setLoopLengthBars(kLoopBars);
+                    transport.play(0.0);
+
+                    std::vector<float> l((size_t) kBlock), r((size_t) kBlock);
+                    float* channels[2] = { l.data(), r.data() };
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                    const LapClock first = transport.lapClockForTest();
+                    expectWithinAbsoluteError(first.baseBars, 0.0, 1.0e-12);
+
+                    CycleRow row;
+                    row.rowKey = cycleKeyOf("perc");
+                    row.idKey = cycleKeyOf("perc~1");
+                    row.bars = 0.1;
+                    engine.stageCycles({ row }, false);
+
+                    double posBeforeApplyBlock = -1.0;
+                    for (int i = 0; i < 200 && engine.cycleApplyCount() == 0; ++i)
+                    {
+                        posBeforeApplyBlock = transport.currentPositionBars();
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                    }
+                    expect(engine.cycleApplyCount() == 1);
+                    // in the block the loop end falls inside, not before it
+                    expect(posBeforeApplyBlock < kLoopBars);
+                    expect(posBeforeApplyBlock + blockBars >= kLoopBars);
+                    expectWithinAbsoluteError(transport.lapClockForTest().baseBars, kLoopBars, 1.0e-9);
+                    expect(transport.lapClockForTest().epoch == first.epoch);
+
+                    // another lap (21.5 blocks of 512): one more loop on the clock
+                    for (int i = 0; i < 25; ++i)
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                    expectWithinAbsoluteError(transport.lapClockForTest().baseBars, 2.0 * kLoopBars, 1.0e-9);
+
+                    // a seek is a move: a new lap clock
+                    transport.setPosition(0.1);
+                    for (int i = 0; i < 40; ++i)
+                        transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, kBlock, {});
+                    expect(transport.lapClockForTest().epoch > first.epoch);
+                }
+
                 beginTest("barsUntilNextWrap answers with the loop the audio thread actually wraps at, "
                           "and says -1 when nothing wraps at all");
                 {

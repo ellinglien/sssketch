@@ -50,6 +50,10 @@ namespace sssketch
         // settles on wherever it last landed.
         void setPosition(double positionBars);
         double currentPositionBars() const { return positionBars.load(); }
+
+        /** The audio thread's lap clock, for tests that drive the callback themselves (read it
+         * between callbacks, never while one runs). */
+        LapClock lapClockForTest() const { return lapClock(); }
         bool isPlaying() const { return playing.load(); }
 
         /** The real audio device's own sample rate / callback block size —
@@ -424,6 +428,13 @@ namespace sssketch
         double anchorSampleRate = 0.0;
         double lastReturnedPositionBars = -1.0; // what renderLoopAware last returned
         bool anchorValid = false;
+
+        // The lap clock (CycleTable.h's LapClock): the bars of the laps completed since the last
+        // play, seek or snap, and which of those it was. Audio thread only; passed to every
+        // renderBlock in renderLoopAware, where only a folded stem reads it.
+        double lapBaseBars = 0.0;
+        uint32_t lapEpoch = 0;
+        LapClock lapClock() const { return { lapBaseBars, lapEpoch }; }
         double barsAtSample(int64_t samplesIntoBlock) const
         {
             return anchorBars + ((double) (anchorSamples + samplesIntoBlock) / anchorSampleRate) / anchorSecPerBar;

@@ -1126,6 +1126,29 @@ namespace sssketch
             const double durationSec = (double) payload.getProperty("durationSec", -1.0);
             engine.preloadStem(path, durationSec);
         }
+        else if (type == "stage-cycles")
+        {
+            // Radio fold mode (CycleTable.h): the per-row cycles for the next loop top, or for the
+            // next block with `now`. Fire-and-forget, like preload-stem: the renderer stages the
+            // next lap's table every lap, and a lost one is corrected by the next. An empty
+            // `rows` unfolds everything.
+            if (!payload.isObject())
+                return;
+            std::vector<CycleRow> rows;
+            if (const auto* list = payload.getProperty("rows", juce::var()).getArray())
+            {
+                for (const auto& item : *list)
+                {
+                    CycleRow row;
+                    row.rowKey = cycleKeyOf(item.getProperty("row", "").toString());
+                    row.idKey = cycleKeyOf(item.getProperty("id", "").toString());
+                    row.bars = (double) item.getProperty("bars", 0.0);
+                    row.phaseBars = (double) item.getProperty("phaseBars", 0.0);
+                    rows.push_back(row);
+                }
+            }
+            engine.stageCycles(rows, (bool) payload.getProperty("now", false));
+        }
         else if (type == "set-metronome")
         {
             const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);

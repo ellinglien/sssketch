@@ -427,7 +427,20 @@ namespace sssketch
         // or the device rate changed under it: then the clock restarts from `pos`.
         if (! anchorValid || pos != lastReturnedPositionBars || spb != anchorSecPerBar
             || deviceSampleRate != anchorSampleRate)
+        {
+            // Only a MOVE starts a new lap clock (a play, a seek, a stop's landing): a tempo or
+            // device-rate change re-anchors the sample clock but the laps played stay played.
+            if (! anchorValid || pos != lastReturnedPositionBars)
+            {
+                lapBaseBars = 0.0;
+                ++lapEpoch;
+            }
             reanchor(pos, 0, spb);
+        }
+
+        // Radio fold mode's cycles (CycleTable.h): a `now` stage, or a loop top's apply that
+        // could not take the lock, lands here -- the top of a block, no renderBlock in flight.
+        engine.applyStagedCycles(false);
 
         // A recording loop, when active, is a second independent instance
         // of this exact same wrap mechanism (see
@@ -453,7 +466,7 @@ namespace sssketch
 
         if (loopBars <= 0.0)
         {
-            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
+            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains, lapClock());
             return advanceClock(numSamples);
         }
 
@@ -482,13 +495,18 @@ namespace sssketch
         //     FROM).
         if (pos < loopStart)
         {
-            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
+            engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains, lapClock());
             return advanceClock(numSamples);
         }
         if (pos >= loopEnd)
         {
             pos = loopStart;
             reanchor(loopStart, 0, spb);
+            // A snap is a jump, not a lap played through: a new lap clock, and the cycles
+            // staged for "the next top" take this one.
+            lapBaseBars = 0.0;
+            ++lapEpoch;
+            engine.applyStagedCycles(true);
             // A snap back to the top is a lap boundary too, as far as a
             // scheduled swap is concerned: the same "the loop starts over
             // here" moment, arrived at from a bounds change rather than
@@ -521,6 +539,7 @@ namespace sssketch
         }
 
         const double distToEnd = loopEnd - pos;
+        bool wrappedThisBlock = false;
         if (distToEnd >= blockDurationBars)
         {
             // No wrap within this block -- but possibly the requested bar.
@@ -547,7 +566,7 @@ namespace sssketch
                 const int splitIndex =
                     std::clamp((int) std::lround(barsIntoBlock / barsPerSample), 0, numSamples);
                 if (splitIndex > 0)
-                    engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR, channelChains);
+                    engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR, channelChains, lapClock());
                 // The same gap, for the same reason, as the wrap split
                 // below: the first render has returned and released its
                 // reference to the outgoing snapshot, and the second has
@@ -557,11 +576,11 @@ namespace sssketch
                 if (splitIndex < numSamples)
                     engine.renderBlock(barsAtSample(splitIndex), deviceSampleRate,
                                        numSamples - splitIndex, outL + splitIndex,
-                                       outR + splitIndex, channelChains);
+                                       outR + splitIndex, channelChains, lapClock());
             }
             else
             {
-                engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains);
+                engine.renderBlock(pos, deviceSampleRate, numSamples, outL, outR, channelChains, lapClock());
             }
         }
         else
@@ -582,7 +601,7 @@ namespace sssketch
             const int splitIndex =
                 std::clamp((int) std::lround(distToEnd / barsPerSample), 0, numSamples);
             if (splitIndex > 0)
-                engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR, channelChains);
+                engine.renderBlock(pos, deviceSampleRate, splitIndex, outL, outR, channelChains, lapClock());
             // Exactly here, between the outgoing lap's last sample and the
             // incoming lap's first, is what "apply at the next loop top"
             // means -- sample-accurate, not block-accurate. The first
@@ -594,11 +613,17 @@ namespace sssketch
             // project, which is also right: the outgoing tail should be
             // pulled toward whatever actually follows it.
             applyStagedProjectAtWrap(loopStart);
+            // The lap just played joins the lap clock, and the cycles staged for this top go
+            // live, in the same gap as the project: the incoming lap's first sample is the first
+            // one rendered with them.
+            lapBaseBars += loopBars;
+            wrappedThisBlock = true;
+            engine.applyStagedCycles(true);
             // The clock restarts at the top, on the sample the lap turns over at.
             reanchor(loopStart, -(int64_t) splitIndex, spb);
             if (splitIndex < numSamples)
                 engine.renderBlock(loopStart, deviceSampleRate, numSamples - splitIndex,
-                                    outL + splitIndex, outR + splitIndex, channelChains);
+                                    outL + splitIndex, outR + splitIndex, channelChains, lapClock());
         }
 
         // Declicks the seam by pulling the outgoing lap's last `fadeBars`
@@ -611,7 +636,9 @@ namespace sssketch
         if (distToEnd < fadeBars + blockDurationBars)
         {
             float anchorL = 0.0f, anchorR = 0.0f;
-            engine.renderBlock(loopStart, deviceSampleRate, 1, &anchorL, &anchorR, channelChains);
+            // The anchor is the NEXT lap's first sample, on the next lap's clock.
+            const LapClock anchorClock { wrappedThisBlock ? lapBaseBars : lapBaseBars + loopBars, lapEpoch };
+            engine.renderBlock(loopStart, deviceSampleRate, 1, &anchorL, &anchorR, channelChains, anchorClock);
             for (int i = 0; i < numSamples; ++i)
             {
                 const double samplePos = pos + (double) i * barsPerSample;
