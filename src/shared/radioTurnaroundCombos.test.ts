@@ -112,11 +112,19 @@ describe('combine off is today, draw for draw; on costs one draw per fired roll'
         continue
       }
       expect(combined?.move).toBe(single.move)
-      expect(combined?.parts?.[0]).toEqual({
-        move: single.move,
-        beats: combined!.parts![0].beats,
-        rowIds: single.rows.map((r) => r.rowId)
-      })
+      const lead = combined!.parts![0]
+      expect(lead.move).toBe(single.move)
+      expect(lead.rowIds).toEqual(single.rows.map((r) => r.rowId))
+      // the lead keeps its drawn length, except a drop lengthened past a riser's gap or a wash
+      // started earlier to throw before a drop on its row
+      const gapped = (combined!.gapBeats ?? 0) > 0
+      if (gapped && (single.move === 'drum drop' || single.move === 'low drop')) {
+        expect(lead.beats).toBeGreaterThanOrEqual(single.beats)
+      } else if (single.move === 'wash') {
+        expect(lead.beats).toBeGreaterThanOrEqual(single.beats)
+      } else {
+        expect(lead.beats).toBe(single.beats)
+      }
       expect(on.n()).toBe(off.n() + 1)
     }
   })
@@ -276,7 +284,9 @@ describe('the gap after a riser', () => {
         if (!pts) continue
         seen++
         const peak = pts[pts.length - 2].value
-        expect(pts.find((p) => p.beats === gap)?.value).toBe(peak)
+        // at its peak by where the gap starts (a wash on a row dropped earlier, from that drop)
+        expect(valueAt(pts, gap)).toBe(peak)
+        expect(pts.some((p) => p.beats >= gap && p.value === peak)).toBe(true)
         expect(pts[pts.length - 1].beats).toBe(0)
       }
     }
@@ -312,6 +322,56 @@ describe('every combined plan', () => {
   })
 })
 
+describe('a wash on a row a drop silences before the one', () => {
+  /** Where a row's drop starts, in beats before the wrap (its volume's first point). */
+  const dropStart = (r: { volume?: TurnaroundPoint[] }): number | null =>
+    r.volume !== undefined && r.volume.length > 0 ? r.volume[0].beats : null
+
+  const check = (plan: TurnaroundPlan): number => {
+    let seen = 0
+    for (const r of plan.rows) {
+      const send = r.reverbSend?.points
+      const hold = dropStart(r)
+      if (send === undefined || hold === null) continue
+      seen++
+      const peak = send[send.length - 2].value
+      // it rises before the drop, is at its peak where the drop starts and holds to the one: the
+      // send is post-fader, so a throw still rising when the row goes silent is lost
+      expect(send[0].beats).toBeGreaterThan(hold)
+      expect(send[0].value).toBe(0)
+      expect(valueAt(send, hold)).toBe(peak)
+      for (const p of send.slice(0, -1)) if (p.beats <= hold) expect(p.value).toBe(peak)
+      expect(send[send.length - 1]).toEqual({ beats: 0, value: 0 })
+      // never before the plan starts
+      expect(send[0].beats).toBeLessThanOrEqual(plan.beats)
+    }
+    return seen
+  }
+
+  it('peaks where the drop starts and holds (seed 2, a stop chip on a steady 8-bar loop)', () => {
+    const plan = rollTurnaround(
+      input({ random: mulberry32(2), arc: 'steady', loopBars: 8, force: { move: 'stop' } })
+    )!
+    expect(turnaroundPlanMoves(plan)).toContain('wash')
+    expect(check(plan)).toBeGreaterThan(0)
+  })
+
+  it('holds for every combined plan that puts a wash and a drop on one row', () => {
+    let seen = 0
+    for (const loopBars of [2, 4, 8, 16]) {
+      for (const depth of ['subtle', 'bold'] as const) {
+        for (const force of [undefined, { move: 'stop' as const }, { move: 'wash' as const }]) {
+          for (const plan of many({ arc: 'steady', loopBars, depth, force }, 400)) {
+            seen += check(plan)
+            expect(turnaroundFitsLoop(plan, loopBars)).toBe(true)
+          }
+        }
+      }
+    }
+    expect(seen).toBeGreaterThan(0)
+  })
+})
+
 describe('diminution of a combined phrase end', () => {
   it('repeats the parts that can diminish, together, at half their lengths', () => {
     const plan = rollTurnaround(
@@ -334,6 +394,52 @@ describe('diminution of a combined phrase end', () => {
       ['lift', 4],
       ['low drop', 2]
     ])
+  })
+
+  it('a part halving under a beat is left out; one part left is remembered as a single move', () => {
+    const plan = rollTurnaround(
+      input({
+        arc: 'growing',
+        lastPhrase: {
+          move: 'drum drop',
+          beats: 1,
+          halvings: 0,
+          parts: [
+            { move: 'drum drop', beats: 1 },
+            { move: 'lift', beats: 4 }
+          ]
+        }
+      })
+    )
+    expect(plan).toMatchObject({ move: 'lift', beats: 2, halvings: 1 })
+    expect(plan?.parts?.map((p) => [p.move, p.beats])).toEqual([['lift', 2]])
+    expect(rememberTurnaround(plan)).toEqual({ move: 'lift', beats: 2, halvings: 1 })
+  })
+
+  it('a part the arc or the families no longer allow is left out of the diminution', () => {
+    const last = {
+      move: 'drum drop' as const,
+      beats: 4,
+      halvings: 0,
+      parts: [
+        { move: 'drum drop' as const, beats: 4 },
+        { move: 'lift' as const, beats: 8 }
+      ]
+    }
+    // the drops family off: the lift alone
+    const lifted = rollTurnaround(input({ arc: 'growing', moves: ['filters'], lastPhrase: last }))
+    expect(lifted?.parts?.map((p) => [p.move, p.beats])).toEqual([['lift', 4]])
+    // a thinning arc weights neither: nothing, and no draw
+    const none = rollTurnaround(
+      input({
+        arc: 'thinning',
+        lastPhrase: last,
+        random: () => {
+          throw new Error('drew')
+        }
+      })
+    )
+    expect(none).toBeNull()
   })
 
   it('a combined phrase end with nothing to diminish skips the next, spending no draw', () => {

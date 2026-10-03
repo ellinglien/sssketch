@@ -122,6 +122,16 @@ There are seven moves. Writing **D** drum drop, **L** low drop, **S** stop, **W*
 and there is only one wash, no row ever gets two filter moves or two washes. Volume is the only
 lane two parts can share, and drops are all the same shape, so the longer one wins (§3).
 
+**A wash on a row that a drop silences peaks where that row's drop starts** (a stop, a drum drop or
+a low drop, or the gap; added in review, 2026-10-03). The send is post-fader in both engines, so a
+throw still rising when its row goes silent is lost: a 4-beat wash over a 2-beat stop loses about
+half of it. On such a row the wash rises to its peak by the drop and holds it to the one, the same
+idea as the gap (§3), so the room rings with the throw at full. A row silent for the whole wash
+would hear none of it, so the wash then starts earlier: it rises over its own length before the
+latest such drop, within the cap (and a turn's clamp), and the turnaround is that much longer. A
+row still silent from where the wash starts is left out of it; a layered wash left with no row is
+dropped, and a lead wash left with no row stands alone, unlayered.
+
 ## 2. How many moves, and which
 
 - **The lead** is drawn exactly as today, from the main random:
@@ -203,7 +213,8 @@ rows.
   - So does the room: every row's send is post-fader in both engines, so the reverb keeps the tail
     of what was playing.
 - **A lift, dip or wash in the same turnaround peaks where the gap starts** and holds through it, so
-  its last audible moment is its peak. On the one it snaps back to rest, as now.
+  its last audible moment is its peak. On the one it snaps back to rest, as now. A wash on a row a
+  longer drop silences peaks earlier still, where that drop starts (§1).
 - **A drop part must be heard before the gap.** A drum drop or low drop no longer than the gap would
   be swallowed by it. So it moves to the next length on its own menu that is longer than the gap,
   within the cap. If none fits, there is no gap: the riser runs to the one. A stop never meets a
@@ -453,6 +464,8 @@ a point in beats before that wrap. What it does add:
       - the keeper melodic;
       - drops lengthened past the gap;
       - filter and wash peaks holding through it;
+    - a wash on a row a drop silences: rising before the drop, at its peak where the drop starts,
+      holding to the one;
       - one row means no gap;
     - every plan fits its loop at 2, 4, 8 and 16 bars and both depths, every curve ending on the
       one, one entry per row;

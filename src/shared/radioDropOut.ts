@@ -14,7 +14,7 @@ import type { AutomationPoint } from './toolkit'
  * pace is a window rather than a number: a fixed length is a rhythm, a
  * varied length is a gesture. Two beats is the safe and common one; a full
  * bar is the dramatic one. */
-const DROP_OUT_BEAT_WEIGHTS: { beats: number; weight: number }[] = [
+export const DROP_OUT_BEAT_WEIGHTS: readonly { beats: number; weight: number }[] = [
   { beats: 1, weight: 0.2 },
   { beats: 2, weight: 0.5 },
   { beats: 4, weight: 0.3 }

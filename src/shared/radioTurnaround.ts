@@ -16,7 +16,7 @@
 // It must not import radioSchedule: radioSchedule imports it.
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
-import { buildDropOutCurve, pickDropOutBeats } from './radioDropOut'
+import { buildDropOutCurve, DROP_OUT_BEAT_WEIGHTS, pickDropOutBeats } from './radioDropOut'
 import { radioGestureLeadsChange, type RadioTransitionKind } from './radioTransition'
 import { seededRandom } from './seededRandom'
 import {
@@ -884,15 +884,62 @@ export function turnaroundLayerRandom(draw: number): () => number {
 
 /** Each drop's lengths (beats), for lengthening one past a gap: it must be heard before it. */
 const DROP_MENU: Partial<Record<TurnaroundMove, readonly number[]>> = {
-  'drum drop': [1, 2, 4],
+  'drum drop': DROP_OUT_BEAT_WEIGHTS.map((o) => o.beats),
   'low drop': LOW_DROP_BEATS
 }
 
-/** A filter or wash curve whose peak lands where the gap starts and holds through it. */
-function holdThroughGap(points: TurnaroundPoint[], gap: number): TurnaroundPoint[] {
-  if (!(gap > 0) || points.length < 3) return points
+/** A filter or wash curve whose peak lands `hold` beats before the wrap (where the gap, or the
+ * row's drop, starts) and holds from there to the one. */
+function holdFrom(points: TurnaroundPoint[], hold: number): TurnaroundPoint[] {
+  if (!(hold > 0) || points.length < 3) return points
   const peak = points[points.length - 2]
-  return [...points.slice(0, -2), { beats: gap, value: peak.value }, ...points.slice(-2)]
+  return [...points.slice(0, -2), { beats: hold, value: peak.value }, ...points.slice(-2)]
+}
+
+/** Where each row goes silent, in beats before the wrap: its longest drop, the gap included. */
+function silenceStarts(
+  parts: readonly TurnaroundPart[],
+  gap: number,
+  gapRows: readonly string[]
+): Map<string, number> {
+  const out = new Map<string, number>()
+  const silence = (id: string, beats: number): void => {
+    out.set(id, Math.max(out.get(id) ?? 0, beats))
+  }
+  for (const p of parts) {
+    if (p.move === 'drum drop' || p.move === 'low drop' || p.move === 'stop') {
+      for (const id of p.rowIds) silence(id, p.beats)
+    }
+  }
+  if (gap > 0) for (const id of gapRows) silence(id, gap)
+  return out
+}
+
+/** A wash on a row that goes silent before the one: the send is post-fader, so a throw still
+ * rising when the row drops out is lost. Its rise must end where the row's silence starts and its
+ * peak hold from there (materialize). A row silent for the whole wash needs it to start earlier:
+ * the wash then rises over its own length before the latest such silence, within `limit`; a row
+ * still silent from where the wash starts is left out of it. Returns the parts with the wash
+ * adjusted (removed when no row is left), or null when the lead is a wash with no row left. */
+function throwWashes(
+  parts: readonly TurnaroundPart[],
+  gap: number,
+  gapRows: readonly string[],
+  limit: number
+): TurnaroundPart[] | null {
+  const i = parts.findIndex((p) => p.move === 'wash')
+  if (i < 0) return [...parts]
+  const wash = parts[i]
+  const silent = silenceStarts(parts, gap, gapRows)
+  const holdOf = (id: string): number => silent.get(id) ?? 0
+  const latest = Math.max(0, ...wash.rowIds.map(holdOf).filter((h) => h >= wash.beats))
+  const beats = latest > 0 ? Math.max(wash.beats, Math.min(latest + wash.beats, limit)) : wash.beats
+  const rowIds = wash.rowIds.filter((id) => holdOf(id) < beats)
+  const out = [...parts]
+  if (rowIds.length > 0) out[i] = { move: 'wash', beats, rowIds }
+  else if (i === 0) return null
+  else out.splice(i, 1)
+  return out
 }
 
 /** The rows' curves for a set of parts and a gap: one entry per row, in the order rows are
@@ -904,46 +951,41 @@ function materialize(
   loopBars: number,
   looks: TurnaroundLooks
 ): TurnaroundRowCurves[] | null {
-  const drops = new Map<string, number>()
+  const drops = silenceStarts(parts, gap, gapRows)
   const out = new Map<string, TurnaroundRowCurves>()
   const at = (id: string): TurnaroundRowCurves => {
     let r = out.get(id)
     if (r === undefined) out.set(id, (r = { rowId: id }))
     return r
   }
-  const drop = (id: string, beats: number): void => {
-    at(id)
-    drops.set(id, Math.max(drops.get(id) ?? 0, beats))
-  }
+  // rows in the order they are first touched: the parts', then the gap's
+  for (const p of parts) for (const id of p.rowIds) at(id)
+  if (gap > 0) for (const id of gapRows) at(id)
   for (const p of parts) {
     for (const id of p.rowIds) {
       switch (p.move) {
-        case 'drum drop':
-        case 'low drop':
-        case 'stop':
-          drop(id, p.beats)
-          break
         case 'lift': {
           const f = turnaroundLiftCurve(p.beats, looks.liftTop)
-          at(id).filter = { ...f, cutoff: holdThroughGap(f.cutoff, gap) }
+          at(id).filter = { ...f, cutoff: holdFrom(f.cutoff, gap) }
           break
         }
         case 'dip': {
           const f = turnaroundDipCurve(p.beats, looks.dipFloor)
-          at(id).filter = { ...f, cutoff: holdThroughGap(f.cutoff, gap) }
+          at(id).filter = { ...f, cutoff: holdFrom(f.cutoff, gap) }
           break
         }
         case 'wash': {
+          // the send is post-fader: peak where the row goes silent (throwWashes saw it rises first)
           const w = turnaroundWashCurve(p.beats, looks.washPeak)
-          at(id).reverbSend = { ...w, points: holdThroughGap(w.points, gap) }
+          const hold = Math.max(gap, drops.get(id) ?? 0)
+          at(id).reverbSend = { ...w, points: holdFrom(w.points, hold) }
           break
         }
-        case 'riser':
+        default:
           break
       }
     }
   }
-  if (gap > 0) for (const id of gapRows) drop(id, gap)
   for (const [id, beats] of drops) {
     const volume = turnaroundDropCurve(loopBars, beats)
     if (volume.length === 0) return null
@@ -1010,7 +1052,9 @@ function layerTurnaround(
         return menu.find((b) => b > gap && b <= Math.min(capBeats, most)) ?? null
       })
       if (longer.some((b) => b === null)) gap = 0
-      else parts.forEach((p, i) => (p.beats = longer[i] as number))
+      else {
+        for (let i = 0; i < parts.length; i++) parts[i].beats = longer[i] as number
+      }
     }
     const kept = bed.keeper
     if (gap > 0 && kept !== null && kept.barLength * BEATS_PER_BAR >= gap) {
@@ -1018,14 +1062,24 @@ function layerTurnaround(
     }
   }
   const gapRows = bed.audible.filter((r) => r !== keeper).map((r) => r.id)
-  const rows = materialize(parts, gap, gapRows, input.loopBars, looks)
-  if (rows === null) return lead
+  const thrown = throwWashes(parts, gap, gapRows, Math.min(capBeats, most))
+  // the lead alone, as a combined plan, when layering can't stand: a lead wash whose every row
+  // is silent from where it starts, or (never in practice: every part fits the cap, which fits the
+  // loop) a drop curve that can't be placed
+  const alone = (): TurnaroundPlan => ({
+    ...lead,
+    parts: [{ move: lead.move, beats: lead.beats, rowIds: lead.rows.map((r) => r.rowId) }],
+    gapBeats: 0
+  })
+  if (thrown === null) return alone()
+  const rows = materialize(thrown, gap, gapRows, input.loopBars, looks)
+  if (rows === null) return alone()
   const plan: TurnaroundPlan = {
     move: lead.move,
-    beats: Math.max(...parts.map((p) => p.beats)),
+    beats: Math.max(...thrown.map((p) => p.beats)),
     halvings: 0,
     rows,
-    parts,
+    parts: thrown,
     gapBeats: gap
   }
   if (riser !== undefined) plan.riserBars = (riser.beats - gap) / BEATS_PER_BAR
