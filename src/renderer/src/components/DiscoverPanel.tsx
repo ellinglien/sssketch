@@ -71,6 +71,7 @@ import {
   isRadioEligibleSlot,
   nextRadioIntervalBarsInWindow,
   pickRadioSlotId,
+  pickRadioSlotIds,
   radioCadenceOf,
   RADIO_BAR_STAGE_LEAD_BARS,
   radioBarLandingAim,
@@ -286,6 +287,13 @@ import type { RiserClip } from '@shared/riser'
 import { masterScaledCurve, masterScaledGains, masterSendsFor } from '@shared/performanceDeck'
 import { MASTER_LIVE_PARAM_KEY } from '@shared/liveParam'
 import { scheduleLiveParamSync } from './liveParamSync'
+import { radioPaceRowsThisChange } from '@shared/radioPace'
+import {
+  radioChangeLengths,
+  radioCompanionCap,
+  radioCompanionsRiding,
+  radioUsableCompanionPicks
+} from './radioCompanions'
 
 export interface ResolvedCandidateStem {
   author: string
@@ -476,6 +484,22 @@ interface SlotPick {
   /** The faves dial drew favourites-only and none fit, so this is a normal pick
    * (@shared/discoverFaves). Logged; the web radio's readout shows it as `no fave fits`. */
   favesFallback?: true
+}
+
+/** A row riding radio's armed pick (the pace slider's rows per change, from 70; see
+ * ./radioCompanions): its own pick, and its stem and length once warmed (null until then). */
+interface RadioPendingCompanion {
+  slotId: string
+  pick: SlotPick
+  stem: ResolvedCandidateStem | null
+  incomingBars: number | null
+}
+/** A row riding radio's HELD change: ready, and staged inside it (mergeStageChanges' companions)
+ * as a cut, so it lands or is taken back with it. */
+interface RadioHeldCompanion {
+  slotId: string
+  pick: SlotPick
+  stem: ResolvedCandidateStem
 }
 
 // Real bug, live-reported 2026-09-17: "i clicked 'lock' on a set of
@@ -2793,6 +2817,9 @@ export function DiscoverPanel({
      * is therefore also the honest answer to "is this pick cold", which
      * is what stops a stage being aimed at a stem that is not there. */
     stem: ResolvedCandidateStem | null
+    /** The rows riding this change (the pace slider's rows per change, from 70), each picked
+     * and warmed alongside it. Empty at or below 70. See ./radioCompanions. */
+    companions: RadioPendingCompanion[]
   } | null>(null)
   // The RENDERABLE half of radioPendingRef: just which slot it names.
   //
@@ -2823,12 +2850,22 @@ export function DiscoverPanel({
       pick: SlotPick
       incomingBars: number | null
       stem: ResolvedCandidateStem | null
+      companions: RadioPendingCompanion[]
     } | null
   ): void {
     radioPendingRef.current = next
     const slotId = next?.slotId ?? null
-    void Promise.resolve().then(() => setRadioArmedSlotId(slotId))
+    const companionKey = next?.companions.map((k) => k.slotId).join('\n') ?? ''
+    void Promise.resolve().then(() => {
+      setRadioArmedSlotId(slotId)
+      setRadioArmedCompanionKey(companionKey)
+    })
   }
+  // The rows riding the armed pick and the held change (rows per change), drawn as that change
+  // is: the same approach on every row it turns over. Joined ids, so an unchanged set is no
+  // re-render.
+  const [radioArmedCompanionKey, setRadioArmedCompanionKey] = useState('')
+  const [radioHeldCompanionKey, setRadioHeldCompanionKey] = useState('')
   // Which slot radio changed last -- so it never changes the same one
   // twice running (pickRadioSlotId).
   const radioLastSlotRef = useRef<string | null>(null)
@@ -3016,6 +3053,10 @@ export function DiscoverPanel({
      * they have to be one number, or the engine would swap at a moment
      * the panel commits somewhere else. */
     atBars?: number
+    /** The rows riding this change (the pace slider's rows per change), ready ones only,
+     * decided with it. They go out inside its stage as cuts and commit right after it, so every
+     * path that takes this change back takes them too. */
+    companions?: RadioHeldCompanion[]
   } | null>(null)
   // The renderable half of radioLedChangeRef, exactly as radioArmedSlotId
   // is of radioPendingRef -- and the more urgent of the two to draw: a
@@ -3033,11 +3074,16 @@ export function DiscoverPanel({
       stem: ResolvedCandidateStem | null
       early?: boolean
       atBars?: number
+      companions?: RadioHeldCompanion[]
     } | null
   ): void {
     radioLedChangeRef.current = next
     const slotId = next?.slotId ?? null
-    void Promise.resolve().then(() => setRadioHeldSlotId(slotId))
+    const companionKey = next?.companions?.map((k) => k.slotId).join('\n') ?? ''
+    void Promise.resolve().then(() => {
+      setRadioHeldSlotId(slotId)
+      setRadioHeldCompanionKey(companionKey)
+    })
   }
   // MANUAL CHANGES WAITING FOR THE LOOP TOP (2026-09-29). While radio runs,
   // a reroll, a nearby pick, an added or duplicated row does not commit on
@@ -4017,11 +4063,24 @@ export function DiscoverPanel({
       pos,
       loopBars,
       course: radioCourseChangeRef.current?.map((c) => c.slotId) ?? null,
+      // with: the rows riding radio's change (the pace slider's rows per change)
       led:
         led === null
           ? null
-          : { rowId: led.slotId, kind: led.arrival?.kind ?? leadKind ?? 'cut', atBars: led.atBars },
-      pending: pending === null ? null : { rowId: pending.slotId, barsUntil: barsUntilChange },
+          : {
+              rowId: led.slotId,
+              kind: led.arrival?.kind ?? leadKind ?? 'cut',
+              atBars: led.atBars,
+              with: radioStagedCompanions(led).map((k) => k.slotId)
+            },
+      pending:
+        pending === null
+          ? null
+          : {
+              rowId: pending.slotId,
+              barsUntil: barsUntilChange,
+              with: radioPendingCompanionsNow(pending).map((k) => k.slotId)
+            },
       manual: [...manualChangesRef.current].map(([rowId, m]) => ({
         rowId,
         kind: m.arrival?.kind ?? null,
@@ -4317,6 +4376,8 @@ export function DiscoverPanel({
             ? radioTransitionUnderTurnaround(drawnTransition)
             : drawnTransition
         const beats = radioGestureBeats(transition, pickDropOutBeats)
+        // The rows riding this change, decided with it: the ones the grid above saw, ready.
+        const companions = radioHeldCompanionsFrom(pending)
         setRadioPending(null)
         if (radioGestureLeadsChange(transition)) {
           // A hole or a riser announces the change over the bars before
@@ -4341,7 +4402,8 @@ export function DiscoverPanel({
             slotId: pending.slotId,
             pick: pending.pick,
             stem: pending.stem,
-            early: true
+            early: true,
+            companions
           })
           scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
         } else {
@@ -4375,7 +4437,8 @@ export function DiscoverPanel({
             stem: pending.stem,
             early: true,
             arrival: transition === 'cut' ? undefined : { kind: transition, beats },
-            atBars: transition === 'cut' && landsAtBar !== null ? barAim : undefined
+            atBars: transition === 'cut' && landsAtBar !== null ? barAim : undefined,
+            companions
           })
         }
         // A manual-only stage is out: it now carries the wrong set. Withdraw
@@ -4418,14 +4481,24 @@ export function DiscoverPanel({
     // section 4). Below the bar band the lead is 0, so only a bar the loop no longer has moves.
     if (led !== null && led.atBars !== undefined && radioStageRef.current === null) {
       const lead = radioCadence.barEvery !== null ? RADIO_BAR_STAGE_LEAD_BARS : 0
-      const incoming = led.stem?.barLength ?? null
+      // Every row the stage will carry, companions included (radioChangeLengths).
+      const lengths = radioChangeLengths(
+        [
+          { slotId: led.slotId, incomingBars: led.stem?.barLength ?? null },
+          ...radioStagedCompanions(led).map((k) => ({
+            slotId: k.slotId,
+            incomingBars: k.stem.barLength
+          }))
+        ],
+        resolvedBarLengthsRef.current
+      )
       const grid = radioPaceGridBars(
         radioCadence.barEvery,
         radioSettings.loopEndOverBars,
         loopBars,
-        resolvedBarLengthsRef.current.get(led.slotId) ?? null,
-        incoming,
-        radioLoopBarsAfter(led.slotId, incoming)
+        lengths.outgoingBars,
+        lengths.incomingBars,
+        lengths.loopBarsAfter
       )
       if (led.atBars - pos < lead || led.atBars >= loopBars || grid >= loopBars) {
         const atBars =
@@ -4552,9 +4625,20 @@ export function DiscoverPanel({
         }
       }
     }
+    // Radio's companions ride inside its change, as cuts: they land with it or are taken back
+    // with it, and a manual change on one's row wins that row (mergeStageChanges). The stage's
+    // slotIds below are the merged changes, so they include them.
     const merged = mergeStageChanges(
       readyLed !== null
-        ? { slotId: readyLed.slotId, stem: readyLed.stem, arrival: readyLed.arrival ?? null }
+        ? {
+            slotId: readyLed.slotId,
+            stem: readyLed.stem,
+            arrival: readyLed.arrival ?? null,
+            companions: radioStagedCompanions(readyLed).map((k) => ({
+              slotId: k.slotId,
+              stem: k.stem
+            }))
+          }
         : null,
       readyManual
     )
@@ -4724,8 +4808,21 @@ export function DiscoverPanel({
     // the incoming stem has not resolved yet) falls back to the whole
     // loop, which is what shipped and can never be the worse cut.
     const pendingPick = radioPendingRef.current
-    const outgoingBars =
-      pendingPick !== null ? (resolvedBarLengthsRef.current.get(pendingPick.slotId) ?? null) : null
+    // Rows per change (from 70): every row riding the pick counts -- the longest outgoing and
+    // incoming lengths, unknown while any is, and the loop with all of them swapped in, so a
+    // companion with a long stem, or one whose change would shrink the loop, holds the whole
+    // change to the top exactly as radio's own row would (radioChangeLengths). One row: exactly
+    // that row's lengths, as before.
+    const changeLengths =
+      pendingPick !== null
+        ? radioChangeLengths(
+            [
+              { slotId: pendingPick.slotId, incomingBars: pendingPick.incomingBars },
+              ...radioPendingCompanionsNow(pendingPick)
+            ],
+            resolvedBarLengthsRef.current
+          )
+        : null
     // In the pace slider's bar band (80+) the grid is also its bar lines, for any incoming stem no
     // longer than the loop, whatever the two lengths: the incoming stem enters at its matching
     // position (the engine tiles every stem from the loop top), the outgoing one is cut
@@ -4735,9 +4832,9 @@ export function DiscoverPanel({
       radioCadence.barEvery,
       radioSettings.loopEndOverBars,
       loopBars,
-      outgoingBars,
-      pendingPick?.incomingBars ?? null,
-      pendingPick !== null ? radioLoopBarsAfter(pendingPick.slotId, pendingPick.incomingBars) : null
+      changeLengths?.outgoingBars ?? null,
+      changeLengths?.incomingBars ?? null,
+      changeLengths?.loopBarsAfter ?? null
     )
     const step = advanceRadioClock(
       clock,
@@ -4955,6 +5052,7 @@ export function DiscoverPanel({
         // gesture took, and swapping a layer the user just locked is
         // worse than skipping a change.
         let committed = false
+        let companionsLanded: string[] = []
         if (led !== null && !ledOverridden && radioEligibleSlotIds().includes(led.slotId)) {
           // No pushUndoSnapshot, for the same reason nothing else radio
           // does takes one: a transition is performance, not an edit.
@@ -4997,9 +5095,14 @@ export function DiscoverPanel({
           // would need a second push. Holding cancels it; it goes out
           // once, carrying both.
           holdSyncUntilResolved(led.slotId)
+          // Its companions, right after it -- the stage carried them as cuts, so the engine
+          // swapped them with it. A manual change landing on one's row at this wrap won it.
+          companionsLanded = landRadioCompanions(
+            radioStagedCompanions(led).filter((k) => !manualLandedIds.has(k.slotId))
+          )
           radioTraceMark('commit') // TEMP
           radioLastSlotRef.current = led.slotId
-          landedIds.push(led.slotId)
+          landedIds.push(led.slotId, ...companionsLanded)
           committed = true
         }
         if (led !== null && !ledOverridden && !committed && engineSwapped) {
@@ -5083,7 +5186,7 @@ export function DiscoverPanel({
         if (arriving.length > 0) {
           radioGestureRef.current = [
             ...radioGestureRef.current,
-            ...(manualCommitted
+            ...(manualCommitted || companionsLanded.length > 0
               ? arriving.map((g) => (g.kind === 'duck' ? { ...g, spares: landedIds } : g))
               : arriving)
           ]
@@ -5275,6 +5378,9 @@ export function DiscoverPanel({
     // resolving a few hundred milliseconds late is strictly better than
     // swapping a layer the user just locked.
     const eligibleNow = radioEligibleSlotIds()
+    // The rows riding this change (from 70), decided here, on the tick whose grid saw them:
+    // ready ones only. They land with it -- held with it, or committed right after it.
+    const companionsNow = pending !== null ? radioHeldCompanionsFrom(pending) : []
     // Everything below sets state, and this repo ERRORS on a synchronous
     // setState inside an effect -- commitSlotPick calls setSlots, and
     // armRadioPick reaches pickForSlot's setRolledCount/setRerollingSlotIds
@@ -5320,6 +5426,8 @@ export function DiscoverPanel({
         // change lands here as a cut (which it does if a turnaround comes up), with every landing
         // before it in this tick already noted. A cold pick has no length to roll with: the
         // lead-in keeps the lap, and the roll stands down when it runs.
+        // The rows landing with it, without one a manual change took at this wrap.
+        const companions = companionsNow.filter((k) => !manualLandedIds.has(k.slotId))
         if (
           turnaroundGateNow() === 'wait' &&
           radioGestureLeadsChange(drawnTransition) &&
@@ -5327,6 +5435,10 @@ export function DiscoverPanel({
         ) {
           noteTurnaroundLanding(pending.slotId, pending.stem.barLength)
           noteFoldLanding(pending.slotId, pending.pick, pending.stem)
+          for (const k of companions) {
+            noteTurnaroundLanding(k.slotId, k.stem.barLength)
+            noteFoldLanding(k.slotId, k.pick, k.stem)
+          }
           rollOwedRadioTurnaround()
         }
         // Under this lap's turnaround a lead-in would land on its wrap: the turnaround is the
@@ -5373,7 +5485,8 @@ export function DiscoverPanel({
             setRadioLedChange({
               slotId: pending.slotId,
               pick: pending.pick,
-              stem: pending.stem
+              stem: pending.stem,
+              companions
             })
             scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
           } else {
@@ -5387,7 +5500,8 @@ export function DiscoverPanel({
               slotId: pending.slotId,
               pick: pending.pick,
               stem: pending.stem,
-              arrival: { kind: transition, beats }
+              arrival: { kind: transition, beats },
+              companions
             })
           }
           // Nothing else this interval: the next pick waits for the change
@@ -5408,6 +5522,8 @@ export function DiscoverPanel({
         // own arrival gesture.
         // See holdSyncUntilResolved.
         holdSyncUntilResolved(pending.slotId)
+        // Its companions, in the same microtask, folded into the same held push.
+        const landedCompanions = landRadioCompanions(companions)
         radioTraceMark('commit') // TEMP
         radioLastSlotRef.current = pending.slotId
         committed = true
@@ -5432,7 +5548,11 @@ export function DiscoverPanel({
               slotId: pending.slotId,
               beats,
               lapsLeft: 1,
-              armId: newArmId()
+              armId: newArmId(),
+              // A duck spares every row that turned over here, its companions too.
+              ...(landedCompanions.length > 0 && {
+                spares: [pending.slotId, ...landedCompanions]
+              })
             }
           ]
           // NO sync scheduled here, deliberately -- this used to call
@@ -5826,15 +5946,25 @@ export function DiscoverPanel({
   // breathes as held. Keyed by the joined ids rather than the Set, whose
   // identity changes whenever a waiting entry resolves.
   const manualWaitingKey = [...manualWaitingSlotIds].join('\n')
+  const radioArmedCompanionIds = useMemo(
+    () => new Set(radioArmedCompanionKey === '' ? [] : radioArmedCompanionKey.split('\n')),
+    [radioArmedCompanionKey]
+  )
+  const radioHeldCompanionIds = useMemo(
+    () => new Set(radioHeldCompanionKey === '' ? [] : radioHeldCompanionKey.split('\n')),
+    [radioHeldCompanionKey]
+  )
   const radioRemote = useMemo<RemoteRadioView | null>(() => {
     const manualWaiting = manualWaitingKey === '' ? [] : manualWaitingKey.split('\n')
-    const heldSlotIds =
-      radioHeldSlotId !== null && !manualWaiting.includes(radioHeldSlotId)
-        ? [radioHeldSlotId, ...manualWaiting]
-        : manualWaiting
+    // radio's held row and its companions, then the manual ones, each once
+    const radioHeld = [
+      ...(radioHeldSlotId !== null ? [radioHeldSlotId] : []),
+      ...(radioHeldCompanionKey === '' ? [] : radioHeldCompanionKey.split('\n'))
+    ]
+    const heldSlotIds = [...new Set([...radioHeld, ...manualWaiting])]
     if (radioArmedSlotId === null && heldSlotIds.length === 0) return null
     return { armedSlotId: radioArmedSlotId, heldSlotIds }
-  }, [radioArmedSlotId, radioHeldSlotId, manualWaitingKey])
+  }, [radioArmedSlotId, radioHeldSlotId, radioHeldCompanionKey, manualWaitingKey])
   // Radio's turn as the phone sees it (@shared/remoteState RemoteTurnView): what the desktop's
   // turn button and chips show, and what POST /api/turn answers from. Null with radio off.
   const radioTurnRemote = useMemo<RemoteTurnView | null>(
@@ -7411,12 +7541,31 @@ export function DiscoverPanel({
     if (radioPendingRef.current?.slotId === slotId) {
       setRadioPending(null)
       droppedPick = true
-    }
+    } else dropRadioPendingCompanion(slotId)
     const led = radioLedChangeRef.current
     if (led !== null && led.slotId === slotId) {
       radioTakesBackLed(led)
       if (radioOnRef.current) void armRadioPick()
       return
+    }
+    // A companion of radio's held change on this row. QUEUED (the manual change is waiting):
+    // left in place -- the manual change wins the row in the stage once it is ready
+    // (mergeStageChanges) and at the landing, and until then the stage out lands as it is, as it
+    // does for any manual change too late for it (queueManualChange). COMMITTED at once (Cmd):
+    // the row is the user's now, so the companion leaves the held change and any stage carrying
+    // it is withdrawn (the commit's own push would withdraw it anyway); the next tick re-stages
+    // radio's change without it. When the engine had already taken that stage (its ack won the
+    // race), the applied marker follows the held change, as nothing is to be staged again: the
+    // landing commits the rest and its push puts this row's truth back.
+    if (
+      led !== null &&
+      !manualChangesRef.current.has(slotId) &&
+      (led.companions ?? []).some((k) => k.slotId === slotId)
+    ) {
+      const next = { ...led, companions: (led.companions ?? []).filter((k) => k.slotId !== slotId) }
+      if (radioStageAppliedLedRef.current === led) radioStageAppliedLedRef.current = next
+      setRadioLedChange(next)
+      cancelStagedSwap('manual-overrides-companion')
     }
     // Not while radio holds a change elsewhere: a pick armed now could be
     // used up by nothing, and the held change's own landing arms the next.
@@ -7529,17 +7678,75 @@ export function DiscoverPanel({
     return radioGestureRef.current.every((g) => radioArrivalGestureSpent(g, bar, loopBars))
   }
 
-  /** The loop as it will be once `slotId` turns over to a stem of `incomingBars` bars: the
-   * longest of the other resolved rows and the incoming stem -- what the stage's own loop length
-   * is built from (stagedBarLengths in buildAndPushPreview). Null when the incoming length is not
-   * known. radioPaceGridBars holds a change that would shorten the loop to the top. */
-  function radioLoopBarsAfter(slotId: string, incomingBars: number | null): number | null {
-    if (incomingBars === null) return null
-    let longest = incomingBars
-    for (const [id, bars] of resolvedBarLengthsRef.current) {
-      if (id !== slotId && bars > longest) longest = bars
+  /** The held change's companions that still have a row to land on (one removed meanwhile is
+   * left out of the stage and the landing). Eligibility is not re-checked: it was decided with
+   * the change, and a companion whose row is locked or muted afterwards lands, as a manual
+   * change does -- only radio's own row withdraws the stage (stepRadioStage). */
+  function radioStagedCompanions(led: { companions?: RadioHeldCompanion[] }): RadioHeldCompanion[] {
+    return (led.companions ?? []).filter((k) => slotsRef.current.some((s) => s.id === k.slotId))
+  }
+
+  /** Commits radio's companions right after its own change has committed, in the same
+   * microtask: each a cut, its push folded into the change's held one (holdSyncUntilResolved),
+   * noted for the turnaround's and fold's rolls as any landing is. A row removed meanwhile is
+   * skipped. The caller leaves out any a manual change won at this landing. Returns the rows
+   * that landed. radioLastSlotRef stays radio's own row. */
+  function landRadioCompanions(companions: readonly RadioHeldCompanion[]): string[] {
+    const landed: string[] = []
+    for (const k of companions) {
+      if (!slotsRef.current.some((s) => s.id === k.slotId)) continue
+      commitSlotPick(k.slotId, k.pick)
+      noteTurnaroundLanding(k.slotId, k.stem.barLength)
+      noteFoldLanding(k.slotId, k.pick, k.stem)
+      holdSyncUntilResolved(k.slotId)
+      landed.push(k.slotId)
     }
-    return longest
+    return landed
+  }
+
+  /** Whether `slotId` rides radio's held change or its armed pick as a companion. */
+  function radioCompanionOf(slotId: string): boolean {
+    return (
+      (radioLedChangeRef.current?.companions ?? []).some((k) => k.slotId === slotId) ||
+      (radioPendingRef.current?.companions ?? []).some((k) => k.slotId === slotId)
+    )
+  }
+
+  /** A row radio's armed pick had as a companion is someone else's now (claimed, removed): it
+   * leaves the pick; radio's own row and the other companions stay armed. */
+  function dropRadioPendingCompanion(slotId: string): void {
+    const pending = radioPendingRef.current
+    if (pending === null || !pending.companions.some((k) => k.slotId === slotId)) return
+    setRadioPending({
+      ...pending,
+      companions: pending.companions.filter((k) => k.slotId !== slotId)
+    })
+  }
+
+  /** The rows riding radio's armed pick NOW (radioCompanionsRiding: this tick's eligibility, the
+   * manual queue, the cadence's cap -- none while fold is on), warmed or not. What the clock's
+   * grid reads, so a decision on the same tick holds no row the grid did not see. */
+  function radioPendingCompanionsNow(pending: {
+    slotId: string
+    companions: RadioPendingCompanion[]
+  }): RadioPendingCompanion[] {
+    if (pending.companions.length === 0) return []
+    return radioCompanionsRiding(pending.companions, {
+      primarySlotId: pending.slotId,
+      eligible: radioEligibleSlotIds(),
+      manual: manualChangesRef.current,
+      max: radioCompanionCap(radioCadence)
+    })
+  }
+  /** The companions a decision holds with radio's change: riding now and ready. One still
+   * warming is dropped, not waited for. */
+  function radioHeldCompanionsFrom(pending: {
+    slotId: string
+    companions: RadioPendingCompanion[]
+  }): RadioHeldCompanion[] {
+    return radioPendingCompanionsNow(pending).flatMap((k) =>
+      k.stem !== null ? [{ slotId: k.slotId, pick: k.pick, stem: k.stem }] : []
+    )
   }
 
   /** An armRadioPick is awaiting its pick and has not been superseded (a superseded one writes
@@ -7588,19 +7795,35 @@ export function DiscoverPanel({
     // at the landing (mergeStageChanges), so radio's pick for it would be
     // dropped there -- a change radio lost to a manual one.
     const eligible = radioEligibleSlotIds().filter((id) => !manualChangesRef.current.has(id))
-    const slotId = pickRadioSlotId(eligible, radioLastSlotRef.current, {
+    // Rows per change (the pace slider, from 70; @shared/radioPace): no draw while it is one, and
+    // the first row is exactly pickRadioSlotId's. The rest ride radio's change as companions.
+    const rows = radioPaceRowsThisChange(radioCadence, Math.random)
+    const [slotId, ...more] = pickRadioSlotIds(eligible, radioLastSlotRef.current, rows, {
       turnover: radioSettings.turnover,
       changedAt: radioChangedAtRef.current,
       turn: radioTurnRef.current,
       flags: radioSlotFlagsRef.current
     })
-    if (slotId === null) return
+    if (slotId === undefined) return
     const slot = slotsRef.current.find((s) => s.id === slotId)
     if (!slot) return
+    const moreSlots = more.flatMap((id) => {
+      const s = slotsRef.current.find((x) => x.id === id)
+      return s ? [s] : []
+    })
+    // ONE in-flight token for the whole set: every pick is awaited together (in parallel, so a
+    // companion costs no extra wait), and the arm is either current when they have all returned
+    // or writes nothing. A slow pick holds the arm back as a slow primary always has -- the due
+    // branch leaves an arm in flight alone, and nothing is pending meanwhile, so nothing can land
+    // late on its account.
     radioArmInFlightRef.current = myArm
     let pick: Awaited<ReturnType<typeof pickForSlot>>
+    let morePicks: Awaited<ReturnType<typeof pickForSlot>>[]
     try {
-      pick = await pickForSlot(slotId, slot.kinds, { avoidOwnStem: true })
+      ;[pick, ...morePicks] = await Promise.all([
+        pickForSlot(slotId, slot.kinds, { avoidOwnStem: true }),
+        ...moreSlots.map((s) => pickForSlot(s.id, s.kinds, { avoidOwnStem: true }))
+      ])
     } finally {
       if (radioArmInFlightRef.current === myArm) radioArmInFlightRef.current = null
     }
@@ -7616,6 +7839,13 @@ export function DiscoverPanel({
       if (radioPendingRef.current === null) void armRadioPick()
       return
     }
+    // The companions worth keeping: a pick, a row no manual change has claimed meanwhile, and a
+    // stem nobody else drew (radioUsableCompanionPicks).
+    const companions: RadioPendingCompanion[] = radioUsableCompanionPicks(
+      pick.candidate.stemCID,
+      moreSlots.map((s, i) => ({ slotId: s.id, pick: morePicks[i] })),
+      manualChangesRef.current
+    ).map((k) => ({ slotId: k.slotId, pick: k.pick, stem: null, incomingBars: null }))
     // Resolve and warm it -- see resolveAndWarmPick for the three warms
     // and the four fixes they record.
     void resolveAndWarmPick(pick).then((stem) => {
@@ -7633,7 +7863,26 @@ export function DiscoverPanel({
         setRadioPending({ ...radioPendingRef.current, incomingBars: stem.barLength, stem })
       }
     })
-    setRadioPending({ slotId, pick, incomingBars: null, stem: null })
+    setRadioPending({ slotId, pick, incomingBars: null, stem: null, companions })
+    // Each companion warmed as radio's own pick is, and written back only while that pick is
+    // still the pending one. One that cannot resolve leaves: a length never known would hold
+    // the whole change to the loop top (radioChangeLengths) for nothing.
+    for (const k of companions) {
+      void resolveAndWarmPick(k.pick).then((stem) => {
+        const now = radioPendingRef.current
+        if (now === null || now.pick !== pick || !radioOnRef.current) return
+        setRadioPending({
+          ...now,
+          companions: now.companions.flatMap((c) =>
+            c.pick !== k.pick
+              ? [c]
+              : stem === null
+                ? []
+                : [{ ...c, stem, incomingBars: stem.barLength }]
+          )
+        })
+      })
+    }
   }
 
   // --- the density arc (2026-10-01; @shared/radioDensity) ---
@@ -7702,6 +7951,8 @@ export function DiscoverPanel({
           manualChangesRef.current.has(s.id) ||
           radioSkipPickingRef.current.has(s.id) ||
           led?.slotId === s.id ||
+          // a row riding radio's change, held or armed: never taken out mid-change
+          radioCompanionOf(s.id) ||
           !lengths.has(s.id),
         shrinksLoop: lengths.get(s.id) === longest && atLongest === 1,
         staleness: radioTurnRef.current - (radioChangedAtRef.current.get(s.id) ?? 0)
@@ -7778,7 +8029,9 @@ export function DiscoverPanel({
       radioSlotFlagsRef.current[slot.id] === 'hook' ||
       (previewing.size === 1 && previewing.has(slot.id)) ||
       manualChangesRef.current.has(slot.id) ||
-      radioLedChangeRef.current?.slotId === slot.id
+      radioLedChangeRef.current?.slotId === slot.id ||
+      // riding radio's held change (an armed pick riding it gives way: radioRemovesRow)
+      (radioLedChangeRef.current?.companions ?? []).some((k) => k.slotId === slot.id)
     ) {
       if (exit.phase === 'fading') {
         radioGestureRef.current = radioGestureRef.current.filter(
@@ -7838,7 +8091,7 @@ export function DiscoverPanel({
     if (radioPendingRef.current?.slotId === id) {
       setRadioPending(null)
       if (radioLedChangeRef.current === null && !radioSkipWaiting()) void armRadioPick()
-    }
+    } else dropRadioPendingCompanion(id)
   }
 
   /** A skip picking its stem, or queued and waiting for the loop top. */
@@ -9379,12 +9632,16 @@ export function DiscoverPanel({
               slot={slot}
               radioApproach={radioApproachFor({
                 slotId: slot.id,
-                armedSlotId: radioArmedSlotId,
+                // A companion reads as radio's own row: it turns over with it.
+                armedSlotId: radioArmedCompanionIds.has(slot.id) ? slot.id : radioArmedSlotId,
                 // A manual change waiting for the loop top reads exactly
                 // like radio's own held one -- the same breathing, spec
                 // behaviour 2. Only `state` is drawn, so the wait (radio's
                 // own) does not have to describe it.
-                heldSlotId: manualWaitingSlotIds.has(slot.id) ? slot.id : radioHeldSlotId,
+                heldSlotId:
+                  manualWaitingSlotIds.has(slot.id) || radioHeldCompanionIds.has(slot.id)
+                    ? slot.id
+                    : radioHeldSlotId,
                 wait: approachWait
               })}
               rerolling={rerollingSlotIds.has(slot.id)}
