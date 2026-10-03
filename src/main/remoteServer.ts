@@ -15,6 +15,8 @@ import {
   parseRemoteKeepId,
   parseRemoteSlotAction,
   parseRemoteSlotKinds,
+  parseRemoteTurnMove,
+  remoteTurnAnswer,
   type RemoteCommand,
   type RemoteStateResponse
 } from '@shared/remoteState'
@@ -223,10 +225,10 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
  * screen while this is on. That is the price of the phone reaching it at
  * all, and it is why this is off by default.
  *
- * Nine api routes, plus GET / itself, and no route takes or returns a
+ * Ten api routes, plus GET / itself, and no route takes or returns a
  * filesystem path or reads the library. (The count in this comment was
  * already one behind before /api/stem: a596b39's /api/slot-action made
- * seven into eight, and /api/stem makes it nine.)
+ * seven into eight, /api/stem makes it nine, and /api/turn ten.)
  *
  * GET /api/loop takes no parameters of any kind -- it serves the current
  * Discover loop's wav bytes and names it in an x-loop-id header, so there
@@ -424,6 +426,23 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
         const keepId = parseRemoteKeepId((await readJsonBody(req)).keepId)
         options.onCommand(keepId === null ? { kind: 'keep' } : { kind: 'keep', keepId })
         return respond(res, 200)
+      }
+
+      // Radio's turn (2026-10-02): `{ move }` for a chip, `{}` for the planner's choice. The
+      // answer is the phone's flash, worked out from the last state the Mac pushed
+      // (remoteTurnAnswer): 409 `radio off` with radio off, `nothing to turn` when nothing can
+      // sound -- neither forwards anything -- and `turning`, forwarded. A move that is not a
+      // move is a 400, as an unknown kind is on /api/add-slot.
+      if (req.method === 'POST' && url === '/api/turn') {
+        const parsed = parseRemoteTurnMove((await readJsonBody(req)).move)
+        if (parsed === null) return respond(res, 400)
+        const answer = remoteTurnAnswer(options.getState().turn, parsed.move)
+        if (answer === 'turning') {
+          options.onCommand(
+            parsed.move === null ? { kind: 'turn' } : { kind: 'turn', move: parsed.move }
+          )
+        }
+        return respond(res, answer === 'radio off' ? 409 : 200, { answer })
       }
 
       // The phone's kind picker. Kinds arrive as their own literal strings

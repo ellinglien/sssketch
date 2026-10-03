@@ -654,3 +654,89 @@ describe("the keep route carries the phone's keep id", () => {
     expect(commands).toEqual([{ kind: 'keep' }, { kind: 'keep' }, { kind: 'keep' }])
   })
 })
+
+describe('the turn route', () => {
+  async function pairedToken(port: number, pairingCode: string): Promise<string> {
+    const res = await send(
+      port,
+      '/api/pair',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      JSON.stringify({ code: pairingCode })
+    )
+    return JSON.parse(res.body).token as string
+  }
+  async function turn(port: number, token: string, body: unknown): Promise<RawResponse> {
+    return send(
+      port,
+      '/api/turn',
+      {
+        host: `192.168.1.40:${port}`,
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`
+      },
+      'POST',
+      JSON.stringify(body)
+    )
+  }
+  const radioOn = (): RemoteServerOptions['getState'] => () => ({
+    discoverOpen: true,
+    playing: true,
+    kept: 0,
+    rolled: 0,
+    lastKeptName: null,
+    loopBars: 8,
+    radio: null,
+    turn: { waiting: false, move: null, canTurn: true, moves: ['wash', 'riser'] },
+    slots: [],
+    loopId: null
+  })
+
+  it('answers turning and forwards a chip, or the planner with no move', async () => {
+    const { port, pairingCode } = await start({ getState: radioOn() })
+    const token = await pairedToken(port, pairingCode)
+    const chip = await turn(port, token, { move: 'wash' })
+    expect(chip.status).toBe(200)
+    expect(JSON.parse(chip.body)).toEqual({ answer: 'turning' })
+    expect((await turn(port, token, {})).status).toBe(200)
+    expect(commands).toEqual([{ kind: 'turn', move: 'wash' }, { kind: 'turn' }])
+  })
+
+  it('answers nothing to turn for a chip that cannot sound, and forwards nothing', async () => {
+    const { port, pairingCode } = await start({ getState: radioOn() })
+    const res = await turn(port, await pairedToken(port, pairingCode), { move: 'stop' })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ answer: 'nothing to turn' })
+    expect(commands).toEqual([])
+  })
+
+  it('answers 409 radio off with radio off, and forwards nothing', async () => {
+    const { port, pairingCode } = await start()
+    const res = await turn(port, await pairedToken(port, pairingCode), { move: 'wash' })
+    expect(res.status).toBe(409)
+    expect(JSON.parse(res.body)).toEqual({ answer: 'radio off' })
+    expect(commands).toEqual([])
+  })
+
+  it('refuses a move that is not a move, and forwards nothing', async () => {
+    const { port, pairingCode } = await start({ getState: radioOn() })
+    const token = await pairedToken(port, pairingCode)
+    for (const move of ['drop', '../x', 7]) {
+      expect((await turn(port, token, { move })).status).toBe(400)
+    }
+    expect(commands).toEqual([])
+  })
+
+  it('tells an unpaired caller nothing about the route existing', async () => {
+    const { port } = await start({ getState: radioOn() })
+    const res = await send(
+      port,
+      '/api/turn',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      '{}'
+    )
+    expect(res.status).toBe(401)
+    expect(commands).toEqual([])
+  })
+})
