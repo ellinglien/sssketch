@@ -932,7 +932,8 @@ function throwWashes(
   const wash = parts[i]
   const silent = silenceStarts(parts, gap, gapRows)
   const holdOf = (id: string): number => silent.get(id) ?? 0
-  const latest = Math.max(0, ...wash.rowIds.map(holdOf).filter((h) => h >= wash.beats))
+  // only rows the wash can keep: one silent from `limit` on is left out, and must not stretch it
+  const latest = Math.max(0, ...wash.rowIds.map(holdOf).filter((h) => h >= wash.beats && h < limit))
   const beats = latest > 0 ? Math.max(wash.beats, Math.min(latest + wash.beats, limit)) : wash.beats
   const rowIds = wash.rowIds.filter((id) => holdOf(id) < beats)
   const out = [...parts]

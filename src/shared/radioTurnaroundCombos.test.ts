@@ -114,7 +114,12 @@ describe('combine off is today, draw for draw; on costs one draw per fired roll'
       expect(combined?.move).toBe(single.move)
       const lead = combined!.parts![0]
       expect(lead.move).toBe(single.move)
-      expect(lead.rowIds).toEqual(single.rows.map((r) => r.rowId))
+      // a wash lead can lose a row its layered drop silences for the whole of it (throwWashes)
+      if (single.move === 'wash') {
+        for (const id of lead.rowIds) expect(single.rows.map((r) => r.rowId)).toContain(id)
+      } else {
+        expect(lead.rowIds).toEqual(single.rows.map((r) => r.rowId))
+      }
       // the lead keeps its drawn length, except a drop lengthened past a riser's gap or a wash
       // started earlier to throw before a drop on its row
       const gapped = (combined!.gapBeats ?? 0) > 0
@@ -367,6 +372,27 @@ describe('a wash on a row a drop silences before the one', () => {
           }
         }
       }
+    }
+    expect(seen).toBeGreaterThan(0)
+  })
+})
+
+describe('a wash starts earlier only for a row it keeps', () => {
+  it('is never stretched by a row left out of it (4-bar loop, bold, a wash chip)', () => {
+    const rows = ['r0:bass', 'r1:lead', 'r2:warm', 'r3:lead', 'r4:warm'].map((s) => {
+      const [id, kind] = s.split(':')
+      return row(id, [kind as DiscoverSlotKind])
+    })
+    let seen = 0
+    for (const plan of many({ loopBars: 4, depth: 'bold', force: { move: 'wash' }, rows }, 2000)) {
+      const wash = plan.parts!.find((p) => p.move === 'wash')!
+      if (wash.beats <= 4) continue
+      seen++
+      // longer than its own 4 beats only to rise before a drop on one of ITS rows
+      const holds = plan.rows
+        .filter((r) => wash.rowIds.includes(r.rowId) && r.volume !== undefined)
+        .map((r) => r.volume![0].beats)
+      expect(Math.max(0, ...holds)).toBeGreaterThanOrEqual(4)
     }
     expect(seen).toBeGreaterThan(0)
   })

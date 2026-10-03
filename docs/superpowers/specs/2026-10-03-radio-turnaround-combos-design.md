@@ -464,9 +464,9 @@ a point in beats before that wrap. What it does add:
       - the keeper melodic;
       - drops lengthened past the gap;
       - filter and wash peaks holding through it;
-    - a wash on a row a drop silences: rising before the drop, at its peak where the drop starts,
-      holding to the one;
       - one row means no gap;
+    - a wash on a row a drop silences: rising before the drop, at its peak where the drop starts,
+      holding to the one; never stretched by a row it leaves out;
     - every plan fits its loop at 2, 4, 8 and 16 bars and both depths, every curve ending on the
       one, one entry per row;
     - diminution of a combination, its draw-free skip, and the memory;
