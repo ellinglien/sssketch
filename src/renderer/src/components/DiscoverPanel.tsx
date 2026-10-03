@@ -117,7 +117,9 @@ import {
   turnaroundArc,
   turnaroundDraw,
   turnaroundFitsLoop,
+  turnaroundFlashes,
   turnaroundMoveCanSound,
+  turnaroundPlanMoves,
   turnaroundToLoopBars,
   turnaroundTurnBeats,
   turnaroundWashSend,
@@ -2148,6 +2150,8 @@ export function DiscoverPanel({
       if (
         turnaround.turn === null &&
         (turnaround.plan.move === 'lift' || turnaround.plan.move === 'dip') &&
+        // a combined plan's other parts still sounded: the phrase end stands
+        turnaroundPlanMoves(turnaround.plan).length === 1 &&
         filtered === 0
       ) {
         radioTurnaroundMemoryRef.current = null
@@ -2155,7 +2159,13 @@ export function DiscoverPanel({
       if (turnaround.plan.riserBars !== undefined) {
         const riser = buildTransitionRiser(rifff.groupId, maxBarLength, turnaround.plan.riserBars, {
           variety: normalizeSoundSettings(sound ?? appSoundDefaultsNow()).riserVariety.on,
-          armId: turnaround.armId
+          armId: turnaround.armId,
+          // A riser with a gap (spec 2026-10-03-radio-turnaround-combos-design section 3) ends
+          // where the gap starts: its tail (an eighth of a bar) and, with riser variety on, its
+          // send ring on into the gap while the bed's lanes above hold silent to the one. With
+          // variety off it has no send, so the gap holds only the noise tail and the rows' own
+          // room (spec flag 5). The return on the one is the engine's 15 ms volume smoother.
+          endBeforeBars: (turnaround.plan.gapBeats ?? 0) / 4
         })
         if (riser) risers[riser.id] = riser
       }
@@ -3531,7 +3541,10 @@ export function DiscoverPanel({
           : 'steady',
       leavingRowId: null,
       moves: radioSettings.turnaroundMoves,
-      depth: radioSettings.turnaroundDepth
+      depth: radioSettings.turnaroundDepth,
+      // layered moves and the riser's gap (spec 2026-10-03-radio-turnaround-combos-design):
+      // phrase ends, turns and chips alike (a chip is the lead; the planner may layer onto it)
+      combine: true
     }
   }
   /** The loop as it plays now: every resolved row's length, and the longest. */
@@ -3978,7 +3991,8 @@ export function DiscoverPanel({
             (g) => g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
           ),
         // ...and a throw near it is AIMED at its wrap (it ends on the one), never on a row it
-        // drops, nor on a drop-out's or hole's row sharing the lap (an arc exit). The turnaround is the one transition a throw can aim at here: a decided change
+        // drops (a combined plan's gap included: every row but its keeper), nor on a drop-out's
+        // or hole's row sharing the lap (an arc exit). The turnaround is the one transition a throw can aim at here: a decided change
         // is staged, and arming a throw pushes, which would withdraw the stage (canArm above).
         changeInBars: radioTurnaroundRef.current !== null ? loopBars - pos : null,
         silenced: discoverThrowSilenced(radioTurnaroundRef.current?.plan, radioGestureRef.current),
@@ -4032,9 +4046,15 @@ export function DiscoverPanel({
     if (ta !== null) {
       live.add(ta.armId)
       if (!seen.has(ta.armId)) {
-        const at = lapStart + loopBars - ta.plan.beats / 4
-        const word = TURNAROUND_MOVE_LABEL[ta.plan.move]
-        for (const r of ta.plan.rows) log.push({ rowId: r.rowId, word, at, key: ta.armId })
+        // each row its moves' words from where each starts, and `gap` where the gap starts
+        for (const f of turnaroundFlashes(ta.plan)) {
+          log.push({
+            rowId: f.rowId,
+            word: f.word,
+            at: lapStart + loopBars - f.beats / 4,
+            key: ta.armId
+          })
+        }
       }
     }
     const throws = radioThrowRef.current
@@ -4136,7 +4156,12 @@ export function DiscoverPanel({
         turnWaiting !== null
           ? { move: turnWaiting.move ?? null, isTurn: true }
           : armed !== null
-            ? { move: armed.plan.move, isTurn: armed.turn !== null }
+            ? {
+                move: armed.plan.move,
+                isTurn: armed.turn !== null,
+                parts: turnaroundPlanMoves(armed.plan),
+                gap: (armed.plan.gapBeats ?? 0) > 0
+              }
             : null,
       arc: radioReadoutArc(
         densityLegRef.current,

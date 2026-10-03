@@ -17,6 +17,8 @@ import {
 } from './discoverThrows'
 import { THROW_EVERY_BARS, throwCurveFor } from './radioThrows'
 import { stemKey } from './types'
+import type { DiscoverSlotKind } from './discoverSlotKind'
+import { rollTurnaround } from './radioTurnaround'
 
 // the same mulberry32 as radioThrows.test.ts
 function seededRandom(seed: number): () => number {
@@ -489,5 +491,54 @@ describe('discoverThrowSilenced', () => {
     ]
     expect(discoverThrowSilenced(plan, gestures).sort()).toEqual(['drums', 'keys', 'pad'])
     expect(discoverThrowSilenced(null, [])).toEqual([])
+  })
+
+  it("a combined turnaround's gap: every row it drops but the keeper, and no row it only filters", () => {
+    const random = seededRandom(5)
+    const bed = ['drums', 'bass', 'lead', 'warm'] as const
+    const rows = bed.map((id) => ({
+      id,
+      kinds: [id] as DiscoverSlotKind[],
+      hooked: false,
+      audible: true,
+      inFilterIn: false,
+      barLength: 8
+    }))
+    let gapped = 0
+    let kept = 0
+    for (let i = 0; i < 400; i++) {
+      const plan = rollTurnaround({
+        rate: 'often',
+        random,
+        loopBars: 8,
+        lastPhrase: null,
+        rows,
+        arc: 'growing',
+        leavingRowId: null,
+        depth: 'bold',
+        combine: true,
+        force: { move: 'riser' }
+      })
+      if (plan === null || (plan.gapBeats ?? 0) === 0) continue
+      gapped++
+      if (plan.keeperId !== undefined) kept++
+      const silenced = new Set(discoverThrowSilenced(plan, []))
+      for (const id of bed) expect(silenced.has(id)).toBe(id !== plan.keeperId)
+    }
+    expect(gapped).toBeGreaterThan(0)
+    expect(kept).toBeGreaterThan(0)
+    // a lift layered with no drop or gap leaves its rows throwable
+    const lifted = rollTurnaround({
+      rate: 'often',
+      random: () => 0.5,
+      loopBars: 8,
+      lastPhrase: null,
+      rows,
+      arc: 'growing',
+      leavingRowId: null,
+      depth: 'subtle',
+      force: { move: 'lift' }
+    })!
+    expect(discoverThrowSilenced(lifted, [])).toEqual([])
   })
 })

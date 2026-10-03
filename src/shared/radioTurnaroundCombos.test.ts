@@ -571,3 +571,28 @@ describe('buildTransitionRiser: a riser ending before the top', () => {
     )
   })
 })
+
+describe("the desktop's riser for a rolled plan (DiscoverPanel: endBeforeBars = gapBeats / 4)", () => {
+  it('sounds riserBars, never clamped, ending where the gap starts, inside the plan', () => {
+    let gapped = 0
+    for (const loopBars of [2, 4, 8, 16]) {
+      const rows = BED.map((r) => ({ ...r, barLength: loopBars }))
+      for (const depth of ['subtle', 'bold'] as const) {
+        for (const force of [undefined, { move: 'riser' as const }]) {
+          for (const plan of many({ loopBars, depth, arc: 'growing', rows, force }, 400)) {
+            if (plan.riserBars === undefined) continue
+            const gap = plan.gapBeats ?? 0
+            if (gap > 0) gapped++
+            const riser = buildTransitionRiser('c', loopBars, plan.riserBars, {
+              endBeforeBars: gap / 4
+            })!
+            expect(riser.lengthBars).toBeCloseTo(plan.riserBars, 9)
+            expect(riser.startBar + riser.lengthBars).toBeCloseTo(loopBars - gap / 4, 9)
+            expect(riser.startBar).toBeGreaterThanOrEqual(loopBars - plan.beats / 4 - 1e-9)
+          }
+        }
+      }
+    }
+    expect(gapped).toBeGreaterThan(0)
+  })
+})
