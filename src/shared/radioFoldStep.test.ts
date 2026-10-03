@@ -595,5 +595,5 @@ describe('stepRadioFold: a forced walk back', () => {
       }
     }
     expect(walked).toBeGreaterThan(0)
-  })
+  }, 20_000) // seeded walks over many laps: ~2.5 s alone, more under a full-suite load
 })
