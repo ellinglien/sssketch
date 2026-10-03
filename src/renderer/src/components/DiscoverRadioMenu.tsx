@@ -20,7 +20,7 @@ import {
 } from '@shared/radioTurnaround'
 import { RADIO_DENSITY_OPTIONS, radioDensityOf } from '@shared/radioSchedule'
 import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
-import { FOLD_SEED_ALPHABET, FOLD_SEED_LENGTH, newFoldSeed } from '@shared/radioFold'
+import { FOLD_SEED_TEXT_MAX, cleanFoldSeed, newFoldSeed } from '@shared/radioFold'
 
 /** A fold fader, 0..100. Local while dragging, and committed (persisted) only when the drag or
  * key press ends: every step of a drag would otherwise write the settings file. */
@@ -60,8 +60,8 @@ function FoldSlider({
   )
 }
 
-/** The fold seed: six characters, typed or pasted, committed on enter or when focus leaves.
- * Anything that does not clean up to six characters of the alphabet goes back to the seed in use. */
+/** The fold seed: any text (v2, cleanFoldSeed), typed or pasted, committed on enter or when
+ * focus leaves. A box left empty goes back to the seed in use. */
 function FoldSeedInput({
   value,
   onCommit
@@ -73,10 +73,8 @@ function FoldSeedInput({
   const commit = (): void => {
     if (draft !== null) {
       // the same cleaning as normalizeFoldSeed, but nothing falls back to the default here
-      const kept = [...draft.trim().toLowerCase()]
-        .filter((ch) => FOLD_SEED_ALPHABET.includes(ch))
-        .join('')
-      if (kept.length === FOLD_SEED_LENGTH && kept !== value) onCommit(kept)
+      const kept = cleanFoldSeed(draft)
+      if (kept !== null && kept !== value) onCommit(kept)
     }
     setDraft(null)
   }
@@ -85,7 +83,7 @@ function FoldSeedInput({
       key="seed"
       aria-label="fold seed"
       value={draft ?? value}
-      maxLength={FOLD_SEED_LENGTH + 4}
+      maxLength={FOLD_SEED_TEXT_MAX}
       spellCheck={false}
       onChange={(e) => setDraft(e.target.value)}
       onKeyDown={(e) => {
@@ -95,7 +93,7 @@ function FoldSeedInput({
       style={{
         fontFamily: 'inherit',
         fontSize: 9,
-        width: 56,
+        width: 84,
         padding: 'var(--ra-s-0) 4px',
         background: 'transparent',
         border: '1px solid var(--ra-border)',
@@ -448,33 +446,36 @@ export function DiscoverRadioMenu({
           ],
           'layers in other time signatures'
         )}
+      {/* Renamed (v2, 2026-10-03): `how folded` is bend, `clash` mismatch; the settings keep
+          `fold` and `clash`, so a saved file still reads. The tooltips are longer than this
+          menu's usual two or three words: Elling asked for the explanation. */}
       {mode === 'running' &&
         settings.foldMode &&
         row(
-          'how folded',
+          'bend',
           [
             <FoldSlider
               key="fold"
-              label="how folded"
+              label="bend"
               value={settings.fold}
               onCommit={(v) => onChange({ fold: v })}
             />
           ],
-          '0 is always straight'
+          'how far layers bend off the beat'
         )}
       {mode === 'running' &&
         settings.foldMode &&
         row(
-          'clash',
+          'mismatch',
           [
             <FoldSlider
               key="clash"
-              label="how mismatched"
+              label="mismatch"
               value={settings.clash}
               onCommit={(v) => onChange({ clash: v })}
             />
           ],
-          'how mismatched'
+          'how unlike the rest new layers are'
         )}
       {mode === 'running' &&
         settings.foldMode &&
@@ -488,7 +489,7 @@ export function DiscoverRadioMenu({
             />,
             chip('new', false, () => onChange({ foldSeed: newFoldSeed() }))
           ],
-          'the same seed replays the same rules. the stems also depend on the library, so a changed library can pick different ones'
+          'same seed, same folding. any text'
         )}
       {mode === 'running' && row('reroll', [chip('new bed', false, onNewBed)])}
       {/* maxWidth, not a wider menu: the chip rows set the width and the
@@ -497,7 +498,7 @@ export function DiscoverRadioMenu({
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
         {mode === 'start'
           ? 'pick a pace to start'
-          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added. turnarounds mark the end of each phrase. fold loops one or two short layers at odd lengths against the beat, and changes come every 16 to 64 bars while it is on'}
+          : 'a new pace restarts the loop, keeping these stems. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added. turnarounds mark the end of each phrase. fold loops one or two short layers at odd lengths against the beat, and changes come every 8 to 32 bars while it is on'}
       </span>
     </div>
   )
