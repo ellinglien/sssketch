@@ -8,7 +8,9 @@ import {
   radioFoldCarry,
   radioFoldChangeCarries,
   radioFoldLand,
+  radioFoldLandReleases,
   radioFoldRelease,
+  radioFoldStaleFor,
   stepRadioFold,
   type RadioFoldRow,
   type RadioFoldRowState,
@@ -400,5 +402,55 @@ describe('a released row keeps the machine\'s "just left" guard', () => {
     expect(landed.state?.released).toEqual(['p'])
     // a state never released carries no marker
     expect(st!.state.released).toBeUndefined()
+  })
+})
+
+describe('radioFoldStaleFor (a straight landing the fold step did not anticipate)', () => {
+  it("the landing lap's step still folds the row for another stem", () => {
+    const { step } = foldedStep()
+    const c = step.cycles[0]
+    expect(radioFoldStaleFor(step, c.rowId, 'new')).toBe(true)
+    // the step was decided for this very stem (anticipated, or a carry): not stale
+    expect(radioFoldStaleFor(step, c.rowId, c.stemId)).toBe(false)
+    // a row it does not fold, or no step: not stale
+    expect(radioFoldStaleFor(step, 'nobody', 'new')).toBe(false)
+    expect(radioFoldStaleFor(null, c.rowId, 'new')).toBe(false)
+  })
+})
+
+describe('radioFoldLandReleases (the straight-landing release rule, both radios)', () => {
+  const at = (
+    level: 'off' | 'le50' | 'paced' | 'band'
+  ): { fold: boolean; foldPaced: boolean; barEvery: number | null } => ({
+    fold: level !== 'off',
+    foldPaced: level === 'paced' || level === 'band',
+    barEvery: level === 'band' ? 4 : null
+  })
+  it("at 50 and below (and fold off) never: the wrap's own step lets the row go", () => {
+    for (const l of ['off', 'le50'] as const)
+      for (const midLoop of [false, true])
+        for (const stale of [false, true])
+          expect(radioFoldLandReleases(at(l), { midLoop, stale })).toBe(false)
+  })
+  it('51-79: mid-loop, or a top landing the fold step did not anticipate (stale)', () => {
+    expect(radioFoldLandReleases(at('paced'), { midLoop: true, stale: false })).toBe(true)
+    expect(radioFoldLandReleases(at('paced'), { midLoop: false, stale: true })).toBe(true)
+    // an anticipated top landing: the step already let the row go, nothing to release
+    expect(radioFoldLandReleases(at('paced'), { midLoop: false, stale: false })).toBe(false)
+  })
+  it("fold's bar band: always", () => {
+    expect(radioFoldLandReleases(at('band'), { midLoop: false, stale: false })).toBe(true)
+  })
+  it('a stale top landing at 51-79 releases the fold in the machine at once', () => {
+    const { step } = foldedStep()
+    const id = step.cycles[0].rowId
+    const m = { state: step.state, now: step, next: step }
+    const release = radioFoldLandReleases(at('paced'), {
+      midLoop: false,
+      stale: radioFoldStaleFor(m.next, id, 'new')
+    })
+    const out = radioFoldLand(m, id, { stemId: 'new', barLength: 2, carry: false, release })
+    expect(out.now?.cycles.some((c) => c.rowId === id)).toBe(false)
+    expect(out.state?.released).toEqual([id])
   })
 })

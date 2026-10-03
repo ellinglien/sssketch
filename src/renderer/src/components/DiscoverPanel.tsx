@@ -212,6 +212,8 @@ import {
   radioFoldChangeCarries,
   radioFoldIntervalBars,
   radioFoldLand,
+  radioFoldLandReleases,
+  radioFoldStaleFor,
   radioFoldRestartAt,
   radioFoldRestartStep,
   radioFoldTurnaroundRate,
@@ -3952,12 +3954,16 @@ export function DiscoverPanel({
    *   - `carry` (the decision that went out with the change): the machine follows the new stem,
    *     the cycle running on (radioFoldCarry; released instead, everywhere, should the fold have
    *     outgrown the stem);
-   *   - otherwise a row the fold holds is released at once (radioFoldRelease) when it landed
-   *     mid-loop above 50 (radioCadence.foldPaced: a loop-end own-cycle cut, spec gate 15, cuts
-   *     a folded row straight below the band too), or anywhere in fold's bar band. At 50 and
-   *     below, and on a loop top below the band, it is left to the wrap's own step, which lets
-   *     the row go as it always has (50 and below exactly as before, spec decision 1).
-   * Then the readout follows (the row's `7 / 16` stays, or clears). */
+   *   - otherwise a row the fold holds is released at once (radioFoldRelease) by the rule both
+   *     radios share (radioFoldLandReleases): anywhere in fold's bar band; above 50
+   *     (radioCadence.foldPaced) when it landed mid-loop (a loop-end own-cycle cut, spec gate 15,
+   *     a Cmd change) or on a top the fold step did not anticipate -- the step for the lap it
+   *     plays in still folds the row for the old stem (radioFoldStaleFor: decided after that
+   *     step went out, a manual change, a new bed). That step is the next one while this wrap's
+   *     step is owed, else the one playing. At 50 and below it is left to the wrap's own step,
+   *     which lets the row go as it always has (exactly as before, spec decision 1).
+   * Then the readout follows (the row's `7 / 16` stays, or clears). Manual changes (the wrap's
+   * queue, Cmd, a new bed) land through here too, straight, as the web's swap-nows do. */
   function radioFoldLandNow(
     slotId: string,
     pick: SlotPick,
@@ -3972,17 +3978,28 @@ export function DiscoverPanel({
       next: radioFoldNextRef.current
     }
     const stemId = pick.candidate?.stemCID ?? null
+    // the machine's decision for the lap this landing plays in
+    const landingLap = radioFoldStepOwedRef.current !== null ? m.next : m.now
     const out = radioFoldLand(m, slotId, {
       stemId: stemId ?? '',
       barLength: stem?.barLength ?? 0,
       carry: carry && stemId !== null && stem !== null && stem.barLength > 0,
-      release: (midLoop && radioCadence.foldPaced) || radioFoldBandActive()
+      release: radioFoldLandReleases(radioCadence, {
+        midLoop,
+        stale: radioFoldStaleFor(landingLap, slotId, stemId)
+      })
     })
     if (out === m) return
     radioFoldRef.current = out.state
     radioFoldNowRef.current = out.now
     radioFoldNextRef.current = out.next
     publishRadioFoldStatus(loopBars)
+  }
+  /** A Cmd change, committed at once while radio runs: a straight cut mid-loop (its stem still
+   * resolving), so the fold machine follows as for the web's swap-now at a bar line
+   * (radioFoldLandNow; at 50 and below nothing). */
+  function radioFoldCmdLandNow(slotId: string, pick: SlotPick): void {
+    if (radioOnRef.current) radioFoldLandNow(slotId, pick, null, false, true, previewLoopBars)
   }
   /** Fold mode put away at once: every row full length from the next block, no drift, no lean. */
   function resetRadioFold(): void {
@@ -5453,6 +5470,10 @@ export function DiscoverPanel({
           commitSlotPick(slotId, change.pick)
           noteTurnaroundLanding(slotId, change.stem?.barLength ?? null)
           noteFoldLanding(slotId, change.pick, change.stem)
+          // A manual change is a straight cut: on a row the fold holds, the machine follows by
+          // radio's own rule (radioFoldLandNow), as the web's swap-nows do. Before the wrap's
+          // owed fold step, as radio's own landing.
+          radioFoldLandNow(slotId, change.pick, change.stem, false, false, loopBars)
           // One push for the whole landing, as for a course change: the
           // hold lifts when the LAST of them has resolved.
           holdSyncUntilResolved(slotId)
@@ -5604,6 +5625,8 @@ export function DiscoverPanel({
           // No stem carried: a roll this wrap owes waits for these to resolve.
           noteTurnaroundLanding(slotId, null)
           noteFoldLanding(slotId, pick, null)
+          // straight, as a manual change: the fold machine follows (radioFoldLandNow)
+          radioFoldLandNow(slotId, pick, null, false, false, loopBars)
           // One push for the whole turnover, not one per layer landing:
           // the hold lifts when the LAST of them has resolved.
           holdSyncUntilResolved(slotId)
@@ -7045,7 +7068,14 @@ export function DiscoverPanel({
     pushUndoSnapshot()
     if (immediate && radioOnRef.current) {
       // See rollRandomForSlot's Cmd branch: commitSlotPick, same slot state.
-      commitSlotPick(id, { candidate, barUsed: null, barRequested: traitMatchBar, unranked: true })
+      const pick: SlotPick = {
+        candidate,
+        barUsed: null,
+        barRequested: traitMatchBar,
+        unranked: true
+      }
+      commitSlotPick(id, pick)
+      radioFoldCmdLandNow(id, pick)
       radioYieldsRow(id)
       return true
     }
@@ -7464,7 +7494,10 @@ export function DiscoverPanel({
     commitSlotPick(id, pick)
     // And radio gives the row up, as it does for a queued change -- after
     // the commit, so the row's fresh change time steers the re-arm away.
-    if (immediate && radioOnRef.current) radioYieldsRow(id)
+    if (immediate && radioOnRef.current) {
+      radioFoldCmdLandNow(id, pick)
+      radioYieldsRow(id)
+    }
   }
 
   // Match meter reclassify (promise-vs-delivery spec, Phase 2; user
@@ -7596,12 +7629,14 @@ export function DiscoverPanel({
         // steered off this row. The same slot state the write below makes
         // (unranked leaves the match-meter fields alone). Then radio gives
         // the row up -- see rollForSlot.
-        commitSlotPick(id, {
+        const pick: SlotPick = {
           candidate,
           barUsed: null,
           barRequested: traitMatchBar,
           unranked: true
-        })
+        }
+        commitSlotPick(id, pick)
+        radioFoldCmdLandNow(id, pick)
         radioYieldsRow(id)
       } else {
         setSlots((prev) =>

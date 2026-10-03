@@ -976,6 +976,32 @@ export function radioFoldChangeCarries(
   return radioFoldCanCarry(state, incoming.id, incoming, (next ?? now)?.anchorId ?? null)
 }
 
+/** Whether `step` -- the machine's decision for the lap a straight landing plays in -- still folds
+ * `rowId` for a stem other than `stemId`: a change decided after that lap's step went out (or a
+ * swap-now at a top), so the engine plays the new stem straight while the machine, its readout
+ * and the realignment preference, would name the old fold for a lap. False with no step, a row it
+ * does not fold, or a cycle decided for this very stem. */
+export function radioFoldStaleFor(
+  step: RadioFoldStep | null,
+  rowId: string,
+  stemId: string | null
+): boolean {
+  return step?.cycles.some((c) => c.rowId === rowId && c.stemId !== stemId) === true
+}
+
+/** The release rule for a STRAIGHT landing on a row the machine holds (radioFoldLand's `release`),
+ * the same in both radios (spec gate 15): anywhere in fold's bar band; above 50
+ * (`foldPaced`) on a mid-loop landing, or on a top landing the machine did not anticipate
+ * (`stale`, radioFoldStaleFor). At 50 and below never: the wrap's own step lets the row go, as
+ * it always has. */
+export function radioFoldLandReleases(
+  cadence: { fold: boolean; foldPaced: boolean; barEvery: number | null },
+  landing: { midLoop: boolean; stale: boolean }
+): boolean {
+  if (cadence.fold && cadence.barEvery !== null) return true
+  return cadence.foldPaced && (landing.midLoop || landing.stale)
+}
+
 /** The fold machine as a runtime keeps it: its latest state, and its decisions for the lap
  * playing (`now`) and the next (`next`). */
 export interface RadioFoldMachine {
