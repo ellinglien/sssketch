@@ -199,6 +199,8 @@ target_sources(sssketch_engine PRIVATE
   Source/DrumPumpTests.cpp
   Source/DubDelay.cpp
   Source/DubDelayBusTests.cpp
+  Source/CycleTable.cpp
+  Source/CycleTableTests.cpp
   Source/TimelineThrowsTests.cpp
   Source/BounceParityTests.cpp
 )
