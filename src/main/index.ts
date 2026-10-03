@@ -158,7 +158,7 @@ import { getStemAvailabilityReport, onStemAvailabilityNotice } from './stemAvail
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
 import type { LibraryScanTarget } from './discoverLibraryStems'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
-import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
+import type { DiscoverSlotKind, DiscoverTraitKind } from '@shared/discoverSlotKind'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
   loginWithCredentials,
@@ -1279,6 +1279,19 @@ app.whenReady().then(async () => {
     playbackEngine?.sendCancelStagedProject(token)
   })
 
+  // Radio fold mode (@shared/radioFold; native-engine/Source/CycleTable.h): the per-row cycles
+  // for the next loop top, or for the next block with `now`. Fire-and-forget, like play/stop.
+  ipcMain.handle(
+    'engine-stage-cycles',
+    (
+      _event,
+      rows: { row: string; id: string; bars: number; phaseBars: number }[],
+      now: boolean
+    ) => {
+      playbackEngine?.client.send('stage-cycles', { rows, now })
+    }
+  )
+
   ipcMain.handle('engine-play', (_event, fromPos: number) => {
     playbackEngine?.client.send('play', { fromPos })
   })
@@ -1369,7 +1382,8 @@ app.whenReady().then(async () => {
       onlyOwnStems: boolean,
       targetUser?: string,
       soundSource?: DiscoverSoundSourceFilter,
-      artist?: string
+      artist?: string,
+      alsoTraits?: DiscoverTraitKind[]
     ): Promise<DiscoverCandidate[]> => {
       // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
       // staying stuck with no console errors made it impossible to tell,
@@ -1394,7 +1408,9 @@ app.whenReady().then(async () => {
         onlyOwnStems,
         targetUser,
         soundSource,
-        artistStemCIDs
+        artistStemCIDs,
+        // Fold mode's clash (radioClash): the renderer only ever sends 'rhythmic' and 'bright'.
+        alsoTraits: (alsoTraits ?? []).filter((k) => k === 'rhythmic' || k === 'bright')
       })
       console.log(
         `get-discover-candidates(${kinds.join('+')}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`

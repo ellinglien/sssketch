@@ -1771,6 +1771,40 @@ describe('getDiscoverCandidates (kind sets)', () => {
     expect(c.traitPercentiles).toEqual({})
   })
 
+  it('alsoTraits (fold mode clash): a mask-only roll gets percentiles for the asked traits, nothing else changes', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['d'])
+    seedStem(own, 'd', 'jam1', { instrument: DRUM })
+    seedFeatures(own, 'd', featuresJSON({ transientDensity: 0.5, spectralCentroidHz: 4000 }))
+    seedFeatures(own, 'lib', featuresJSON({ transientDensity: 1, spectralCentroidHz: 400 }))
+
+    const [c] = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['drums'],
+      alsoTraits: ['rhythmic', 'bright']
+    })
+    expect(c.slotKinds).toEqual(['drums'])
+    expect(Object.keys(c.traitPercentiles).sort()).toEqual(['bright', 'rhythmic'])
+    expect(c.traitPercentiles.bright).toBeCloseTo(1)
+  })
+
+  it("alsoTraits on a trait-only roll adds to the slot's own kinds", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['s1'])
+    seedStem(own, 's1', 'jam1')
+    seedFeatures(own, 's1', featuresJSON({ transientDensity: 0.6, spectralCentroidHz: 900 }))
+
+    const [c] = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: own }],
+      kinds: ['warm'],
+      alsoTraits: ['rhythmic', 'bright']
+    })
+    expect(c.slotKinds).toEqual(['warm'])
+    expect(c.traitValues).toEqual({ warm: 900, rhythmic: 0.6, bright: 900 })
+  })
+
   it('an empty kind set returns []', async () => {
     const own = freshDb()
     expect(

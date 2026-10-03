@@ -859,7 +859,8 @@ export async function getDiscoverCandidates({
   onlyOwnStems = false,
   targetUser,
   soundSource = { endlesss: true, audioIn: true },
-  artistStemCIDs
+  artistStemCIDs,
+  alsoTraits = []
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
@@ -872,26 +873,36 @@ export async function getDiscoverCandidates({
    * docs/superpowers/plans/2026-10-01-discover-artist-mode.md, "READ THIS"
    * §2. Undefined (every `me` roll) takes today's path untouched. */
   artistStemCIDs?: ReadonlySet<string>
+  /** Radio fold mode's clash (@shared/radioClash): trait kinds to attach values and library
+   * percentiles for even though the slot does not ask for them, so the clash can measure every
+   * candidate against the bed. They never filter and never change `slotKinds`; empty (every
+   * other roll) takes today's path untouched. */
+  alsoTraits?: readonly DiscoverTraitKind[]
 }): Promise<DiscoverCandidate[]> {
   const normalized = normalizeSlotKinds(kinds)
   const maskKinds = normalized.filter(isMaskSlotKind)
   const traitKinds = normalized.filter(isTraitSlotKind)
+  // The slot's own trait kinds, then any the clash asks for on top (deduplicated, in order).
+  const valueKinds = [...traitKinds, ...alsoTraits.filter((k) => !traitKinds.includes(k))]
 
   if (maskKinds.length === 0) {
     if (traitKinds.length === 0) return []
+    const traitPool = await getTraitPoolCandidates({
+      ownDb,
+      jams,
+      traitKinds,
+      onlyOwnStems,
+      targetUser,
+      soundSource,
+      artistStemCIDs
+    })
     // traitKinds IS the whole normalized set here (no mask kinds), so the
     // pool's own slotKinds already match it.
     return attachTraitPercentiles(
       ownDb,
-      await getTraitPoolCandidates({
-        ownDb,
-        jams,
-        traitKinds,
-        onlyOwnStems,
-        targetUser,
-        soundSource,
-        artistStemCIDs
-      })
+      valueKinds.length > traitKinds.length
+        ? attachTraitValues(ownDb, traitPool, valueKinds)
+        : traitPool
     )
   }
 
@@ -925,8 +936,8 @@ export async function getDiscoverCandidates({
       pool.push({ ...candidate, slotKinds: normalized })
     }
   }
-  return traitKinds.length > 0
-    ? attachTraitPercentiles(ownDb, attachTraitValues(ownDb, pool, traitKinds))
+  return valueKinds.length > 0
+    ? attachTraitPercentiles(ownDb, attachTraitValues(ownDb, pool, valueKinds))
     : pool
 }
 

@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import type { Rifff, Stem, BusId, ProjectRef } from '@shared/types'
 import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
-import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
+import type { DiscoverSlotKind, DiscoverTraitKind } from '@shared/discoverSlotKind'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type { ToolkitExportMode } from '@shared/toolkit'
 import type { LiveParamField } from '@shared/liveParam'
@@ -289,6 +289,13 @@ const api = {
    * waiting for onEngineProjectApplied rather than assume a cancel won. */
   engineCancelStagedProject: (token: number): Promise<void> =>
     ipcRenderer.invoke('engine-cancel-staged-project', token),
+  /** Radio fold mode: the cycles each folded row plays from the next loop top (or the next block,
+   * `now`); a row not named plays full length. `row` is the Discover slot id each stem carries
+   * as its cycleRow, `id` the cycle's id (the same id keeps its phase), lengths in bars. */
+  engineStageCycles: (
+    rows: { row: string; id: string; bars: number; phaseBars: number }[],
+    now: boolean
+  ): Promise<void> => ipcRenderer.invoke('engine-stage-cycles', rows, now),
   /** Every staged token gets exactly one of these. `staged` means parked
    * for the loop top; `applied` means the engine did it immediately
    * (reason `not-playing`, `no-loop`, `tempo-change`, or a cancel that
@@ -359,7 +366,9 @@ const api = {
     onlyOwnStems: boolean,
     targetUser?: string,
     soundSource?: DiscoverSoundSourceFilter,
-    artist?: string
+    artist?: string,
+    /** Radio fold mode's clash: trait percentiles to attach on top of the slot's own. */
+    alsoTraits?: DiscoverTraitKind[]
   ): Promise<DiscoverCandidate[]> =>
     ipcRenderer.invoke(
       'get-discover-candidates',
@@ -367,7 +376,8 @@ const api = {
       onlyOwnStems,
       targetUser,
       soundSource,
-      artist
+      artist,
+      alsoTraits
     ),
   getRandomDiscoverCandidate: (
     kinds: DiscoverSlotKind[],
