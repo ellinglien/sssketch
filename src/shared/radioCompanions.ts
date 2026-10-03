@@ -6,9 +6,10 @@
 
 /** How many companions may ride one change at this cadence: rows less radio's own, rounded up
  * (a fractional row was a chance at arm time, radioPaceRowsThisChange, and an armed one may
- * ride). None while fold is on: fold mode turns one row at a time. */
-export function radioCompanionCap(cadence: { rows: number; fold: boolean }): number {
-  if (cadence.fold) return 0
+ * ride). Fold mode too: its rows are one at fast and below and the slider's above (fold follows
+ * pace, spec 2026-10-03-radio-fold-follows-pace-design: companions from 71); in the bar band a
+ * companion on a row the fold holds is left off a mid-loop line (radioFoldBarCompanions). */
+export function radioCompanionCap(cadence: { rows: number }): number {
   return Math.max(0, Math.ceil(cadence.rows) - 1)
 }
 

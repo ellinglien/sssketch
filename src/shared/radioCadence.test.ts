@@ -10,6 +10,7 @@ import {
   radioCadenceOf,
   RADIO_BAR_STAGE_LEAD_BARS,
   radioBarLandingAim,
+  radioBarReaim,
   radioCadenceTransition,
   radioClockForPace,
   radioGridBars,
@@ -322,6 +323,27 @@ describe('radioGridLineAtOrAfter', () => {
     expect(radioGridLineAtOrAfter(6.5, 2, 8)).toBe(8)
     expect(radioGridLineAtOrAfter(7.9, 4, 8)).toBe(8)
     expect(radioGridLineAtOrAfter(3, 0, 8)).toBe(8)
+  })
+})
+
+describe('radioBarReaim (the desktop stage re-aim of a held mid-loop bar)', () => {
+  it('without a snap it is radioBarLandingAim, and the top when the grid is the whole loop', () => {
+    expect(radioBarReaim(6, 5.03, 1, 8, 0.25, false)).toBe(6)
+    expect(radioBarReaim(6, 5.9, 1, 8, 0.25, false)).toBe(7)
+    expect(radioBarReaim(7, 6.9, 1, 8, 0.25, false)).toBeUndefined()
+    expect(radioBarReaim(3, 1, 8, 8, 0.25, false)).toBeUndefined()
+    expect(radioBarReaim(3, 1, 9, 8, 0.25, false)).toBeUndefined()
+  })
+
+  it("with a snap (fold took its row: a coarser grid) the bar moves to that grid's next line, or the top", () => {
+    // the 1-bar band's bar 1, now on its row's own 2-bar cycle: bar 2
+    expect(radioBarReaim(1, 0.2, 2, 8, 0.25, true)).toBe(2)
+    // already on the new grid: kept
+    expect(radioBarReaim(4, 1, 4, 8, 0.25, true)).toBe(4)
+    // no line of the new grid left in the lap: the top
+    expect(radioBarReaim(5, 1, 4, 8, 0.25, true)).toBeUndefined()
+    // the snapped line closer than the lead: the line after it
+    expect(radioBarReaim(1, 1.9, 2, 8, 0.25, true)).toBe(4)
   })
 })
 

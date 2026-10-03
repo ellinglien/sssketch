@@ -75,6 +75,8 @@ import {
   radioCadenceOf,
   RADIO_BAR_STAGE_LEAD_BARS,
   radioBarLandingAim,
+  radioBarReaim,
+  radioCadenceBarEvery,
   radioCadenceTransition,
   radioClockForPace,
   radioPhraseNeedsReanchor,
@@ -206,7 +208,10 @@ import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { buildEngineProject, withoutDubThrows } from '@shared/buildEngineProject'
 import {
   createRadioFold,
+  radioFoldBarCompanions,
+  radioFoldHoldsRow,
   radioFoldIntervalBars,
+  radioFoldPickableIds,
   radioFoldRestartAt,
   radioFoldRestartStep,
   radioFoldTurnaroundRate,
@@ -3796,7 +3801,16 @@ export function DiscoverPanel({
       owed.landed,
       arcExitingRowNow()
     )
-    const step = stepRadioFold(state, { rows, loopBars, bpm, fold: radioSettings.fold })
+    // the pace slider above 70 hurries the machine (radioCadence.foldHurry, this render's, as
+    // radioSettings.fold is); none below, where the input is exactly what it always was
+    const hurry = radioCadence.foldHurry
+    const step = stepRadioFold(state, {
+      rows,
+      loopBars,
+      bpm,
+      fold: radioSettings.fold,
+      ...(hurry > 0 && { hurry })
+    })
     radioFoldRef.current = step.state
     radioFoldNextRef.current = step
     const status = publishRadioFoldStatus(loopBars)
@@ -3834,6 +3848,31 @@ export function DiscoverPanel({
     if (now !== null) radioFoldNowRef.current = radioFoldRestartStep(now, lap)
     publishRadioFoldStatus(previewLoopBars)
   }
+  /** Fold mode in the slider's bar band (phase 1 of fold following pace, spec
+   * 2026-10-03-radio-fold-follows-pace-design section 3): the rows the fold holds are not picked,
+   * keep to their tops (radioCadenceBarEvery), and their companions are left off a mid-loop
+   * line. */
+  function radioFoldBandActive(): boolean {
+    return radioCadence.fold && radioCadence.barEvery !== null
+  }
+  /** The fold holds this row in the lap playing or the next (radioFoldHoldsRow). On a wrap tick
+   * whose step is still owed the next lap's decision is not in yet: the stage waits for it
+   * (stepRadioStage (3)), and its re-aim reads this again. */
+  function radioFoldHoldsRowNow(slotId: string): boolean {
+    return radioFoldHoldsRow(radioFoldNowRef.current, radioFoldNextRef.current, slotId)
+  }
+  /** The companions that may ride a mid-loop bar line now (radioFoldBarCompanions): all of them
+   * outside fold's bar band. */
+  function radioFoldBarCompanionsNow<T extends { slotId: string }>(
+    companions: readonly T[]
+  ): readonly T[] {
+    return radioFoldBarCompanions(
+      companions,
+      radioFoldNowRef.current,
+      radioFoldNextRef.current,
+      radioFoldBandActive()
+    )
+  }
   /** Fold mode put away at once: every row full length from the next block, no drift, no lean. */
   function resetRadioFold(): void {
     const had =
@@ -3850,12 +3889,14 @@ export function DiscoverPanel({
     void window.rifffApi.engineStageCycles([], true)
     if (had) scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
-  /** A change's interval: fold mode's window, moved to a realignment top when one is near, while
-   * the mode is on (radioCadence.window, radioFoldIntervalBars); the pace window otherwise. Counted
-   * from `boundaryBars`, the bar restartRadioInterval counts it from (the fold's realignment tops
-   * are counted from the lap's top, so a sub-loop grid restart mid-lap shifts them). A landing at
-   * a wrap restarts it before that wrap's step has run: the machine's tops are then a lap behind
-   * (radioFoldIntervalBars' stepOwed). */
+  /** A change's interval: the cadence's window (radioCadenceOf: fold mode's 8-32 bars at fast and
+   * below, the slider's above), moved to a realignment top when one is near while fold mode is on
+   * (radioFoldIntervalBars, with radioCadence.foldPreferWaitLaps: 2 laps at fast and below, none
+   * above 70); the pace window otherwise. Counted from `boundaryBars`, the bar
+   * restartRadioInterval counts it from (the fold's realignment tops are counted from the lap's
+   * top, so a sub-loop grid restart mid-lap shifts them). A landing at a wrap restarts it before
+   * that wrap's step has run: the machine's tops are then a lap behind (radioFoldIntervalBars'
+   * stepOwed). */
   function radioNextIntervalBars(loopBars: number, boundaryBars: number): number {
     const drawn = nextRadioIntervalBarsInWindow(radioCadence.window)
     return radioSettings.foldMode
@@ -3864,7 +3905,8 @@ export function DiscoverPanel({
           drawn,
           loopBars,
           boundaryBars,
-          radioFoldStepOwedRef.current !== null
+          radioFoldStepOwedRef.current !== null,
+          radioCadence.foldPreferWaitLaps
         )
       : drawn
   }
@@ -4463,8 +4505,12 @@ export function DiscoverPanel({
             ? radioTransitionUnderTurnaround(drawnTransition)
             : drawnTransition
         const beats = radioGestureBeats(transition, pickDropOutBeats)
-        // The rows riding this change, decided with it: the ones the grid above saw, ready.
-        const companions = radioHeldCompanionsFrom(pending)
+        // The rows riding this change, decided with it: the ones the grid above saw, ready. A cut
+        // aimed at a mid-loop bar in fold's bar band leaves a companion on a row the fold holds
+        // off it (radioFoldBarCompanionsNow): its row goes back to radio.
+        const companionsAll = radioHeldCompanionsFrom(pending)
+        const atBar = transition === 'cut' && landsAtBar !== null && barAim !== undefined
+        const companions = atBar ? [...radioFoldBarCompanionsNow(companionsAll)] : companionsAll
         setRadioPending(null)
         if (radioGestureLeadsChange(transition)) {
           // A hole or a riser announces the change over the bars before
@@ -4566,13 +4612,22 @@ export function DiscoverPanel({
     // back before anything is staged -- the stage and the landing branch read the same number. A
     // bar merely off a grid that has changed (a pace move) is kept, as a decided change is (spec
     // section 4). Below the bar band the lead is 0, so only a bar the loop no longer has moves.
+    //
+    // Fold mode in the bar band (phase 1): this runs only once the wrap's owed fold step is in
+    // (the gate just above), so it reads the fold's decision for the next lap. A change on a row
+    // the fold has taken since it was decided keeps to that row's tops (radioCadenceBarEvery):
+    // moved to its own grid's next line, or the top (radioBarReaim's snap). Its companions on
+    // held rows are left off a bar line (radioFoldBarCompanionsNow) and written back with it; a
+    // change moved to the top keeps them all.
     if (led !== null && led.atBars !== undefined && radioStageRef.current === null) {
       const lead = radioCadence.barEvery !== null ? RADIO_BAR_STAGE_LEAD_BARS : 0
+      const barEvery = radioCadenceBarEvery(radioCadence, radioFoldHoldsRowNow(led.slotId))
+      const foldTook = barEvery !== radioCadence.barEvery
       // Every row the stage will carry, companions included (radioChangeLengths).
       const lengths = radioChangeLengths(
         [
           { slotId: led.slotId, incomingBars: led.stem?.barLength ?? null },
-          ...radioStagedCompanions(led).map((k) => ({
+          ...radioFoldBarCompanionsNow(radioStagedCompanions(led)).map((k) => ({
             slotId: k.slotId,
             incomingBars: k.stem.barLength
           }))
@@ -4580,20 +4635,28 @@ export function DiscoverPanel({
         resolvedBarLengthsRef.current
       )
       const grid = radioPaceGridBars(
-        radioCadence.barEvery,
+        barEvery,
         radioSettings.loopEndOverBars,
         loopBars,
         lengths.outgoingBars,
         lengths.incomingBars,
         lengths.loopBarsAfter
       )
-      if (led.atBars - pos < lead || led.atBars >= loopBars || grid >= loopBars) {
-        const atBars =
-          grid >= loopBars ? undefined : radioBarLandingAim(led.atBars, pos, grid, loopBars, lead)
-        if (atBars !== led.atBars) {
-          led = { ...led, atBars }
-          setRadioLedChange(led)
+      const atBars =
+        foldTook || led.atBars - pos < lead || led.atBars >= loopBars || grid >= loopBars
+          ? radioBarReaim(led.atBars, pos, grid, loopBars, lead, foldTook)
+          : led.atBars
+      const companions =
+        atBars !== undefined && led.companions !== undefined
+          ? radioFoldBarCompanionsNow(led.companions)
+          : led.companions
+      if (atBars !== led.atBars || companions !== led.companions) {
+        led = {
+          ...led,
+          atBars,
+          ...(companions !== undefined && { companions: [...companions] })
         }
+        setRadioLedChange(led)
       }
     }
     const readyLed = led !== null && led.stem !== null ? { ...led, stem: led.stem } : null
@@ -4895,17 +4958,26 @@ export function DiscoverPanel({
     // the incoming stem has not resolved yet) falls back to the whole
     // loop, which is what shipped and can never be the worse cut.
     const pendingPick = radioPendingRef.current
+    // Fold mode in the bar band (phase 1): a pick on a row the fold holds (every row held, or a
+    // fold that came after the pick) keeps to its tops -- the bar band is not its grid
+    // (radioCadenceBarEvery). Outside fold, or below the band, exactly the cadence's barEvery.
+    const pendingBarEvery =
+      pendingPick !== null
+        ? radioCadenceBarEvery(radioCadence, radioFoldHoldsRowNow(pendingPick.slotId))
+        : radioCadence.barEvery
     // Rows per change (from 70): every row riding the pick counts -- the longest outgoing and
     // incoming lengths, unknown while any is, and the loop with all of them swapped in, so a
     // companion with a long stem, or one whose change would shrink the loop, holds the whole
     // change to the top exactly as radio's own row would (radioChangeLengths). One row: exactly
-    // that row's lengths, as before.
+    // that row's lengths, as before. In fold's bar band a companion on a held row is left off a
+    // mid-loop line (radioFoldBarCompanionsNow), so it holds nothing back there; a loop-top
+    // landing still takes it.
     const changeLengths =
       pendingPick !== null
         ? radioChangeLengths(
             [
               { slotId: pendingPick.slotId, incomingBars: pendingPick.incomingBars },
-              ...radioPendingCompanionsNow(pendingPick)
+              ...radioFoldBarCompanionsNow(radioPendingCompanionsNow(pendingPick))
             ],
             resolvedBarLengthsRef.current
           )
@@ -4916,7 +4988,7 @@ export function DiscoverPanel({
     // (radioPaceGridBars). Below the band this is exactly radioGridBars of the two lengths, as
     // before. No pending pick, or one whose stem has not resolved: the whole loop, as before.
     const gridBars = radioPaceGridBars(
-      radioCadence.barEvery,
+      pendingBarEvery,
       radioSettings.loopEndOverBars,
       loopBars,
       changeLengths?.outgoingBars ?? null,
@@ -5624,8 +5696,11 @@ export function DiscoverPanel({
         // own arrival gesture.
         // See holdSyncUntilResolved.
         holdSyncUntilResolved(pending.slotId)
-        // Its companions, in the same microtask, folded into the same held push.
-        const landedCompanions = landRadioCompanions(companions)
+        // Its companions, in the same microtask, folded into the same held push. Landing here on
+        // a mid-loop line, fold's bar band leaves a companion on a held row off it (phase 1).
+        const landedCompanions = landRadioCompanions(
+          step.wrapped ? companions : radioFoldBarCompanionsNow(companions)
+        )
         radioTraceMark('commit') // TEMP
         radioLastSlotRef.current = pending.slotId
         committed = true
@@ -7829,8 +7904,9 @@ export function DiscoverPanel({
   }
 
   /** The rows riding radio's armed pick NOW (radioCompanionsRiding: READY ones only, this tick's
-   * eligibility, the manual queue, the cadence's cap -- none while fold is on). One still warming
-   * is not in the change: dropped, never waited for (spec section 3). The ONE set the clock's
+   * eligibility, the manual queue, the cadence's cap -- fold mode's too, the slider's rows above
+   * fast). One still warming is not in the change: dropped, never waited for (spec section 3).
+   * The ONE set the clock's
    * grid reads, a decision holds, the readout counts and the rows breathe with, so a decision
    * holds exactly what the grid saw. */
   function radioPendingCompanionsNow(pending: {
@@ -7912,9 +7988,20 @@ export function DiscoverPanel({
     // Never a row with a manual change waiting: that change wins its row
     // at the landing (mergeStageChanges), so radio's pick for it would be
     // dropped there -- a change radio lost to a manual one.
-    const eligible = radioEligibleSlotIds().filter((id) => !manualChangesRef.current.has(id))
-    // Rows per change (the pace slider, from 70; @shared/radioPace): no draw while it is one, and
-    // the first row is exactly pickRadioSlotId's. The rest ride radio's change as companions.
+    // Fold mode in the bar band (phase 1, spec 2026-10-03-radio-fold-follows-pace-design section
+    // 3): the folded rows keep their stems while the rest churn -- radio and its companions pick
+    // from the rows the fold does not hold (all of them when it holds every one); the same array
+    // otherwise. Only the pick: radioEligibleSlotIds stays the "still eligible" test, so a pick on
+    // a row the fold takes after it still lands, at its top (the clock's grid, the stage re-aim).
+    const eligible = radioFoldPickableIds(
+      radioEligibleSlotIds().filter((id) => !manualChangesRef.current.has(id)),
+      radioFoldNowRef.current,
+      radioFoldNextRef.current,
+      radioFoldBandActive()
+    )
+    // Rows per change (the pace slider, from 70, fold mode too; @shared/radioPace): no draw while
+    // it is one, and the first row is exactly pickRadioSlotId's. The rest ride radio's change as
+    // companions.
     const rows = radioPaceRowsThisChange(radioCadence, Math.random)
     const [slotId, ...more] = pickRadioSlotIds(eligible, radioLastSlotRef.current, rows, {
       turnover: radioSettings.turnover,

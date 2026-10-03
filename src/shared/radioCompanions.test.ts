@@ -13,8 +13,11 @@ describe('radioCompanionCap', () => {
     expect(radioCompanionCap({ rows: 1.3, fold: false })).toBe(1)
     expect(radioCompanionCap({ rows: 4, fold: false })).toBe(3)
   })
-  it('is none while fold is on', () => {
-    expect(radioCompanionCap({ rows: 4, fold: true })).toBe(0)
+  it("fold mode too: its rows are the slider's above fast (fold follows pace), one below", () => {
+    const fold = (rows: number): { rows: number; fold: boolean } => ({ rows, fold: true })
+    expect(radioCompanionCap(fold(4))).toBe(3)
+    expect(radioCompanionCap(fold(1.5))).toBe(1)
+    expect(radioCompanionCap(fold(1))).toBe(0)
   })
 })
 

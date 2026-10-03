@@ -827,6 +827,22 @@ export function radioFoldPickableIds(
   return free.length > 0 ? free : ids
 }
 
+/** PHASE 1. The companions that may ride a change landing on a mid-loop bar line while fold mode
+ * runs in the slider's bar band (`active`): every one whose row the fold machine does not hold
+ * (radioFoldHoldsRow) -- a companion on a held row is left off the line, as one that is not ready
+ * is, and its row goes back to radio. A loop-top landing keeps them all. The same array when
+ * nothing is left off, or when not `active`. */
+export function radioFoldBarCompanions<T extends { slotId: string }>(
+  companions: readonly T[],
+  now: RadioFoldStep | null,
+  next: RadioFoldStep | null,
+  active: boolean
+): readonly T[] {
+  if (!active) return companions
+  const kept = companions.filter((k) => !radioFoldHoldsRow(now, next, k.slotId))
+  return kept.length === companions.length ? companions : kept
+}
+
 /** PHASE 2. Whether a change bringing `incoming` onto a folded row may CARRY its fold: the new
  * stem takes over the row's running cycle (same id, origin and phase) instead of arriving
  * straight. Only a fold still on its way in or settled (never one asked to leave or walking back),

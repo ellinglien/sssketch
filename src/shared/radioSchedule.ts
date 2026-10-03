@@ -1391,6 +1391,24 @@ export function radioBarLandingAim(
   return line >= loopBars - BOUNDARY_EPSILON ? undefined : line
 }
 
+/** The desktop's stage-time re-aim of a held mid-loop bar on a `gridBars` grid: the loop top
+ * (undefined) when the grid is the whole loop, else radioBarLandingAim. `snap`: the grid became
+ * coarser for this row after the bar was aimed (fold mode took the row: radioCadenceBarEvery keeps
+ * it to its own grid, phase 1), so the bar first moves to the new grid's next line at or after it
+ * (radioGridLineAtOrAfter) -- unlike a pace move, which keeps a decided bar as it is. */
+export function radioBarReaim(
+  atBars: number,
+  pos: number,
+  gridBars: number,
+  loopBars: number,
+  leadBars: number,
+  snap: boolean
+): number | undefined {
+  if (gridBars >= loopBars) return undefined
+  const bar = snap ? radioGridLineAtOrAfter(atBars, gridBars, loopBars) : atBars
+  return radioBarLandingAim(bar, pos, gridBars, loopBars, leadBars)
+}
+
 /** A change landing mid-loop in the bar band is a cut: an arrival gesture would otherwise be held
  * to the loop top (radioChangeWaitsForLoopTop) and a leading one needs the lap before a wrap, and
  * either would take the pace back. Loop-top landings keep their transition. */

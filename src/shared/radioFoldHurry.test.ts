@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   FOLD_PREFER_WAIT_LAPS,
   createRadioFold,
+  radioFoldBarCompanions,
   radioFoldHoldsRow,
   radioFoldIntervalBars,
   radioFoldPickableIds,
@@ -237,5 +238,17 @@ describe('the rows the machine holds', () => {
     expect(radioFoldPickableIds(ids, null, step, false)).toBe(ids)
     expect(radioFoldPickableIds(ids, null, step, true)).not.toContain(id)
     expect(radioFoldPickableIds([id], null, step, true)).toEqual([id])
+  })
+
+  it('radioFoldBarCompanions leaves a companion on a held row off a bar line, in order; the same array when nothing goes or not active', () => {
+    const step = foldedStep()
+    const id = step.cycles[0].rowId
+    const ks = [{ slotId: 'x' }, { slotId: id }, { slotId: 'y' }]
+    expect(radioFoldBarCompanions(ks, null, step, false)).toBe(ks)
+    expect(radioFoldBarCompanions(ks, step, null, true)).toEqual([{ slotId: 'x' }, { slotId: 'y' }])
+    const free = [{ slotId: 'x' }, { slotId: 'y' }]
+    expect(radioFoldBarCompanions(free, step, step, true)).toBe(free)
+    // every companion held: none rides the line (radio's own row still lands)
+    expect(radioFoldBarCompanions([{ slotId: id }], null, step, true)).toEqual([])
   })
 })
