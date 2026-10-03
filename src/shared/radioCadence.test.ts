@@ -8,6 +8,8 @@ import {
   pickRadioSlotId,
   pickRadioSlotIds,
   radioCadenceOf,
+  RADIO_BAR_STAGE_LEAD_BARS,
+  radioBarLandingAim,
   radioCadenceTransition,
   radioClockForPace,
   radioGridBars,
@@ -265,6 +267,20 @@ describe('radioPaceGridBars', () => {
     }
   })
 
+  it('a change that would SHORTEN the loop waits for the top (the engine would snap the playhead to 0)', () => {
+    // pace 90 (every 2): an 8-bar pad over a 4-bar bass and 2-bar drums, the pad row drawing a
+    // 4-bar pad -- the loop after the change is 4, so a landing at bar 6 would be past its end
+    expect(radioPaceGridBars(2, 4, 8, 8, 4, 4)).toBe(radioGridBars(4, 8, 8))
+    expect(radioPaceGridBars(2, 4, 8, 8, 4, 4)).toBe(8)
+    // another row keeps the loop at 8: the bar lines stand
+    expect(radioPaceGridBars(2, 4, 8, 8, 4, 8)).toBe(2)
+    // unknown (omitted or null) post-change length: as before
+    expect(radioPaceGridBars(2, 4, 8, 8, 4)).toBe(2)
+    expect(radioPaceGridBars(2, 4, 8, 8, 4, null)).toBe(2)
+    // below the band nothing changes
+    expect(radioPaceGridBars(null, 4, 8, 2, 2, 4)).toBe(radioGridBars(4, 8, 2))
+  })
+
   it('an unknown or longer incoming stem, or a fractional loop, still waits for the top', () => {
     expect(radioPaceGridBars(1, 0, 8, 8, null)).toBe(8)
     expect(radioPaceGridBars(1, 0, 4, 4, 8)).toBe(4)
@@ -280,6 +296,32 @@ describe('radioGridLineAtOrAfter', () => {
     expect(radioGridLineAtOrAfter(6.5, 2, 8)).toBe(8)
     expect(radioGridLineAtOrAfter(7.9, 4, 8)).toBe(8)
     expect(radioGridLineAtOrAfter(3, 0, 8)).toBe(8)
+  })
+})
+
+describe('radioBarLandingAim', () => {
+  it('keeps the bar radioChangeLandsAtBar named when a stage has time to get there', () => {
+    expect(radioBarLandingAim(6, 5.03, 1, 8, RADIO_BAR_STAGE_LEAD_BARS)).toBe(6)
+    expect(radioBarLandingAim(4, 1, 2, 8, 0.25)).toBe(4)
+    // exactly the lead is still in time
+    expect(radioBarLandingAim(6, 5.75, 1, 8, 0.25)).toBe(6)
+  })
+
+  it('a bar closer than the lead moves on to the next line of the grid', () => {
+    expect(radioBarLandingAim(6, 5.9, 1, 8, 0.25)).toBe(7)
+    expect(radioBarLandingAim(4, 3.95, 2, 8, 0.25)).toBe(6)
+  })
+
+  it('no line left in the lap, or a bar at or past the loop end: the loop top (undefined)', () => {
+    expect(radioBarLandingAim(7, 6.9, 1, 8, 0.25)).toBeUndefined()
+    expect(radioBarLandingAim(4, 3.9, 4, 8, 0.25)).toBeUndefined()
+    // the loop shrank under a held bar
+    expect(radioBarLandingAim(6, 1, 2, 4, 0.25)).toBeUndefined()
+    expect(radioBarLandingAim(4, 1, 2, 4, 0)).toBeUndefined()
+  })
+
+  it('a zero lead is the bar as named (below the bar band nothing is re-aimed)', () => {
+    expect(radioBarLandingAim(6, 5.99, 1, 8, 0)).toBe(6)
   })
 })
 

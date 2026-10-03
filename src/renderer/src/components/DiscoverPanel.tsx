@@ -11,7 +11,6 @@ import { DiscoverRadioMenu } from './DiscoverRadioMenu'
 import { DiscoverReclassifyPicker } from './DiscoverReclassifyPicker'
 import { ROLE_LABELS } from '@shared/autoArrangeLabels'
 import { BracketToggle } from './BracketToggle'
-import { RADIO_BAR_STAGE_LEAD_BARS, radioBarLandingAim } from './radioBarAim'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { warmEngineBuffer } from '../audio/warmEngineBuffer'
@@ -73,6 +72,8 @@ import {
   nextRadioIntervalBarsInWindow,
   pickRadioSlotId,
   radioCadenceOf,
+  RADIO_BAR_STAGE_LEAD_BARS,
+  radioBarLandingAim,
   radioCadenceTransition,
   radioClockForPace,
   radioPhraseNeedsReanchor,
@@ -4233,8 +4234,10 @@ export function DiscoverPanel({
       // Not on the tick whose phrase turnaround is still to be rolled (radioTurnaroundAtWrap).
       turnaroundGateNow() !== 'wait' &&
       // EVERY armed gesture spent -- true of an empty list, which is the
-      // old "nothing armed". A leading gesture is never spent.
-      radioGestureRef.current.every((g) => radioArrivalGestureSpent(g, pos, loopBars))
+      // old "nothing armed". A leading gesture is never spent. In the pace
+      // slider's bar band, spent BY THE BAR the change lands on is enough
+      // (checked below, once that bar is known).
+      (radioCadence.barEvery !== null || gesturesSpentAt(pos, loopBars))
     ) {
       const pending = radioPendingRef.current
       const clock = radioClockRef.current
@@ -4251,7 +4254,32 @@ export function DiscoverPanel({
         clock !== null && !dueAtWrap
           ? radioChangeLandsAtBar(clock, pos, loopBars, gridBars, radioCadence.phraseBars)
           : null
+      // Where a mid-loop cut would be staged (radioBarLandingAim: a beat ahead at least, in the
+      // bar band), and whether the gestures playing now are done by then. At 94+ a loop-top
+      // landing's one-bar arrival (a filter in, a bloom, a duck) plays through bar 1, the very
+      // line the next change comes due on: waiting for it to be spent NOW kept every such change
+      // undecided until the due branch, which sent it as an immediate load-project, late, after
+      // every arrival. An arrival curve holds its resting value once spent (radioArrivalGestureSpent),
+      // and a stage at a bar replaces the live project there, so a stage landing after the curve
+      // ends drops nothing that is still moving. A leading gesture is never spent, so a lap
+      // closing on a hole or a riser still decides nothing early. The wrap keeps its old rule.
+      const barAim =
+        landsAtBar !== null
+          ? radioBarLandingAim(
+              landsAtBar,
+              pos,
+              gridBars,
+              loopBars,
+              radioCadence.barEvery !== null ? RADIO_BAR_STAGE_LEAD_BARS : 0
+            )
+          : undefined
+      const gesturesDone =
+        gesturesSpentAt(pos, loopBars) ||
+        (radioCadence.barEvery !== null &&
+          barAim !== undefined &&
+          gesturesSpentAt(barAim, loopBars))
       if (
+        gesturesDone &&
         pending !== null &&
         pending.stem !== null &&
         clock !== null &&
@@ -4337,16 +4365,7 @@ export function DiscoverPanel({
             stem: pending.stem,
             early: true,
             arrival: transition === 'cut' ? undefined : { kind: transition, beats },
-            atBars:
-              transition === 'cut' && landsAtBar !== null
-                ? radioBarLandingAim(
-                    landsAtBar,
-                    pos,
-                    gridBars,
-                    loopBars,
-                    radioCadence.barEvery !== null ? RADIO_BAR_STAGE_LEAD_BARS : 0
-                  )
-                : undefined
+            atBars: transition === 'cut' && landsAtBar !== null ? barAim : undefined
           })
         }
         // A manual-only stage is out: it now carries the wrong set. Withdraw
@@ -4369,7 +4388,7 @@ export function DiscoverPanel({
     // one staged project at a time, and they all land at the same wrap.
     // With the manual queue empty every line below reduces to the single
     // held change this always staged.
-    const led = radioLedChangeRef.current
+    let led = radioLedChangeRef.current
     const manual = manualChangesRef.current
     // The engine has ALREADY swapped a stage in and the wrap tick has not
     // landed it yet -- see radioStageAppliedLedRef and
@@ -4378,6 +4397,34 @@ export function DiscoverPanel({
     // branch commits everything waiting at this one.
     if (led !== null && led === radioStageAppliedLedRef.current) return
     if (appliedManualStillWaiting()) return
+    // A held mid-loop bar, checked again while no stage carries it: the lead was checked when it
+    // was decided, but a push in flight holds the stage back (the gate below), a re-stage after
+    // an overtaking load-project comes later still, and the loop may have changed under it (a
+    // row turned over, shrinking it, or the change would now shorten it). Too close, past the
+    // loop's end, or off the grid it can still land on: re-aimed at the next line far enough
+    // ahead, or the top (radioBarLandingAim), and written back before anything is staged -- the
+    // stage and the landing branch read the same number. Below the bar band the lead is 0, so
+    // only a bar the loop no longer has moves.
+    if (led !== null && led.atBars !== undefined && radioStageRef.current === null) {
+      const lead = radioCadence.barEvery !== null ? RADIO_BAR_STAGE_LEAD_BARS : 0
+      const incoming = led.stem?.barLength ?? null
+      const grid = radioPaceGridBars(
+        radioCadence.barEvery,
+        radioSettings.loopEndOverBars,
+        loopBars,
+        resolvedBarLengthsRef.current.get(led.slotId) ?? null,
+        incoming,
+        radioLoopBarsAfter(led.slotId, incoming)
+      )
+      if (led.atBars - pos < lead || led.atBars >= loopBars || grid >= loopBars) {
+        const atBars =
+          grid >= loopBars ? undefined : radioBarLandingAim(led.atBars, pos, grid, loopBars, lead)
+        if (atBars !== led.atBars) {
+          led = { ...led, atBars }
+          setRadioLedChange(led)
+        }
+      }
+    }
     const readyLed = led !== null && led.stem !== null ? { ...led, stem: led.stem } : null
     // A bare cut radio aimed at a mid-lap bar (atBars) goes out ALONE, at
     // its bar. Manual changes land only at the wrap (spec behaviour 8),
@@ -4678,7 +4725,8 @@ export function DiscoverPanel({
       radioSettings.loopEndOverBars,
       loopBars,
       outgoingBars,
-      pendingPick?.incomingBars ?? null
+      pendingPick?.incomingBars ?? null,
+      pendingPick !== null ? radioLoopBarsAfter(pendingPick.slotId, pendingPick.incomingBars) : null
     )
     const step = advanceRadioClock(
       clock,
@@ -7459,6 +7507,25 @@ export function DiscoverPanel({
         : 0
     if (clock === null || !(loopBars > 0)) return 0
     return Math.max(0, loopBars - clock.lastPos)
+  }
+
+  /** Every armed gesture spent by `bar` of this lap (radioArrivalGestureSpent) -- true of an
+   * empty list. A leading gesture never is. */
+  function gesturesSpentAt(bar: number, loopBars: number): boolean {
+    return radioGestureRef.current.every((g) => radioArrivalGestureSpent(g, bar, loopBars))
+  }
+
+  /** The loop as it will be once `slotId` turns over to a stem of `incomingBars` bars: the
+   * longest of the other resolved rows and the incoming stem -- what the stage's own loop length
+   * is built from (stagedBarLengths in buildAndPushPreview). Null when the incoming length is not
+   * known. radioPaceGridBars holds a change that would shorten the loop to the top. */
+  function radioLoopBarsAfter(slotId: string, incomingBars: number | null): number | null {
+    if (incomingBars === null) return null
+    let longest = incomingBars
+    for (const [id, bars] of resolvedBarLengthsRef.current) {
+      if (id !== slotId && bars > longest) longest = bars
+    }
+    return longest
   }
 
   /** An armRadioPick is awaiting its pick and has not been superseded (a superseded one writes

@@ -1295,18 +1295,28 @@ function withLazyLevel(settings: RadioSettings, rest: Omit<RadioCadence, 'level'
  *   - the incoming stem is not known yet (null): its length cannot be checked;
  *   - the incoming stem is LONGER than the loop: it would lengthen the loop mid-lap (the web's
  *     Timeline.swapAt refuses it outright).
+ *   - the change would SHORTEN the loop (`loopBarsAfter`, the loop as it will be once the change
+ *     lands: the longest of the other rows and the incoming stem, below `loopBars`). The DESKTOP
+ *     engine adopts a staged project's loop length with the change, so a cut at bar 6 of an
+ *     8-bar loop that becomes 4 would put the playhead past the loop's end, and its Transport
+ *     snaps it to the top (a short lap the lap clock, phrase and fold all count). At the top it
+ *     is a clean wrap. The web keeps the lap's clock through a mid-loop cut and shrinks the loop
+ *     at the next top, so it has no such jump and need not pass it.
+ *     Omitted or null: not checked (the behaviour before this guard).
  * A loop that is not a whole number of bars has no bar lines to share: radioGridBars' answer. */
 export function radioPaceGridBars(
   barEvery: number | null,
   loopEndOverBars: number,
   loopBars: number,
   outgoingBars: number | null,
-  incomingBars: number | null
+  incomingBars: number | null,
+  loopBarsAfter: number | null = null
 ): number {
   const base = radioGridBars(loopEndOverBars, loopBars, radioChangeBars(outgoingBars, incomingBars))
   if (barEvery === null || !(barEvery >= 1)) return base
   if (!(loopBars > 0) || !Number.isInteger(loopBars)) return base
   if (incomingBars === null || !(incomingBars > 0) || incomingBars > loopBars) return base
+  if (loopBarsAfter !== null && loopBarsAfter < loopBars) return base
   let step = Math.min(Math.floor(barEvery), loopBars)
   while (step < loopBars && loopBars % step !== 0) step += 1
   return Math.min(base, step)
@@ -1320,6 +1330,33 @@ export function radioGridLineAtOrAfter(bars: number, gridBars: number, loopBars:
   const step = gridBars > 0 ? gridBars : loopBars
   const line = Math.ceil(Math.max(0, bars) / step - BOUNDARY_EPSILON) * step
   return line >= loopBars - BOUNDARY_EPSILON ? loopBars : line
+}
+
+/** How far ahead of the playhead the bar a mid-loop change is aimed at must be, in the pace
+ * slider's bar band (80+): a beat. The desktop checks it twice -- when the change is decided, and
+ * again just before the stage carrying it is built and sent (a push still in flight holds the
+ * stage back, and a re-stage after an overtaking load-project comes later still) -- because a bar
+ * the engine finds already behind it is applied at once ("bar-passed"), late, mid-bar. At a line
+ * every bar a stem resolving late in a bar is the ordinary case, not the rare one. A beat at any
+ * tempo radio plays, as the desktop turnaround's TURNAROUND_ROLL_LATE_BARS is. */
+export const RADIO_BAR_STAGE_LEAD_BARS = 0.25
+
+/** Where a mid-loop change is aimed: `atBars` (radioChangeLandsAtBar's bar, or one aimed
+ * earlier), or -- when that is closer than `leadBars` -- the next line of the `gridBars` grid
+ * that is not, or the loop top (undefined) when no line is left in the lap. A bar at or past the
+ * loop's end (the loop shrank under it) is the top too. A deferral to a later line, never a late
+ * landing mid-bar. */
+export function radioBarLandingAim(
+  atBars: number,
+  pos: number,
+  gridBars: number,
+  loopBars: number,
+  leadBars: number
+): number | undefined {
+  if (!(atBars < loopBars - BOUNDARY_EPSILON)) return undefined
+  if (atBars - pos >= leadBars) return atBars
+  const line = radioGridLineAtOrAfter(pos + leadBars, gridBars, loopBars)
+  return line >= loopBars - BOUNDARY_EPSILON ? undefined : line
 }
 
 /** A change landing mid-loop in the bar band is a cut: an arrival gesture would otherwise be held

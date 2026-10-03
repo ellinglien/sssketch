@@ -171,6 +171,11 @@ Reading the table:
     - a stem **longer than the loop**: it would lengthen the loop mid-lap, and the web's
       `Timeline.swapAt` refuses it;
     - a stem whose length is **not known yet**;
+    - **a cut that would shorten the loop** (the longest of the other rows and the incoming stem
+      is shorter than the loop): the desktop engine adopts the new loop length with the staged
+      project, so a cut at bar 6 of an 8-bar loop that becomes 4 would snap the playhead to 0
+      mid-lap. It waits for the top (`radioPaceGridBars`' `loopBarsAfter`). The web keeps the
+      lap's clock and shrinks the loop at the next top, so it has no jump;
     - a loop of fractional bars.
   - **How it enters: at its matching position, not from its start.** A stem landing at bar 5 of an
     8-bar loop plays its own bar 5. This is the right choice:
@@ -450,6 +455,14 @@ with a test or a stated reason:
      - The `phrase` chip still caps; `loop end` still works below 80.
   4. **Both, long stems at 90+:** an 8-bar stem enters mid-loop at its own matching bar. Elling
      to judge by ear whether that is the "extreme" he wanted.
+  5. **Desktop, mid-loop edge cases:**
+     - Pause between a mid-loop stage and its bar: the engine applies a held stage at once when
+       the transport stops, so on resume the stem is in early by however far the pause was from
+       its bar (up to most of a lap at 80, a beat or two at 94+). Expected.
+     - Fold toggled on with a mid-loop stage pending: it lands at its bar unfolded, fold starts
+       at the next top.
+     - A cut that would shorten the loop waits for the top (no jump to bar 0).
+     - After a loop-top arrival at 94+, the next change still lands on its bar on time.
 
 ## Flags for Elling
 

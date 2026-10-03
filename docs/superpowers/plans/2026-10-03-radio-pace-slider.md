@@ -4348,4 +4348,9 @@ Claude-Session: https://claude.ai/code/session_01KK8TyKjVKvWU8ZjQCk3ozz"
    - `phrase` still caps; `loop end` still works below 80.
 4. **Both, at 90+ with 8-bar stems:** a long stem enters mid-loop at its own matching bar. Is that the "extreme" he wanted?
 5. **Web, 95-100 on a phone:** do the extra rows actually come (fetch and stretch throughput), or mostly one row? Check with `?dev`.
+6. **Desktop, mid-loop edge cases (Task 6):**
+   - **Pause between staging and landing.** Pause the transport while a mid-loop cut is staged (watch `[radio]` / radioTrace for a stage sent with a bar, then pause before that bar). The engine applies a held stage at once when the transport stops (IpcServer's "transport-stopped": a missing change is worse than a late one), so on resume the new stem is already in from the paused position: early by however far the pause was from its bar (a decision is made as soon as its bar is in the lap, so up to most of a lap at 80, a beat or two at 94+), and the panel commits it when the playhead crosses that bar. Expected; listen that nothing doubles or skips.
+   - **Fold toggled on with a mid-loop stage pending.** At 80+, turn fold on just after a mid-loop cut is staged. The stage lands at its bar carrying the current lap's fold state (none), then fold takes over at the next top. Check that no row folds mid-lap and that the first fold step lands on a top.
+   - **A change that would shorten the loop** (an 8-bar row drawing a 4-bar stem over 4- and 2-bar rows) waits for the top: no playhead jump to bar 0 mid-lap.
+   - **After a loop-top arrival at 94+** (a filter in, bloom or duck), the next change still lands on bar 1 or 2 on time, not late (radioTrace: staged at a bar, not `due-cut`).
 
