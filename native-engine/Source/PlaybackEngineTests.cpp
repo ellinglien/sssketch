@@ -894,6 +894,30 @@ namespace sssketch
                 ramp.deleteFile();
             }
 
+            // v2's re-fold (spec 2026-10-03-radio-fold-v2-design section 1): a settled fold at its
+            // realignment top may keep its length and take a new phase under a new id. The table
+            // treats any change of id, length or phase as a change (CycleTable::apply's `carried`),
+            // so it crossfades like every other fold step at a top: the outgoing 7-beat cycle is
+            // 2 s into a tile at the top (0.125), the incoming 7 beats - a quarter beat in (0.42).
+            beginTest("a re-fold to the same length at a new phase crossfades at the top");
+            {
+                auto ramp = writeRampFixtureWav("sssketch_pe_fold_refold_phase_ramp.wav", 16 * 44100);
+                StemBufferCache cache;
+                ChannelChainRegistry channelChains;
+                PlaybackEngine engine(cache);
+                engine.setProject(foldProject(ramp, "perc"));
+                engine.stageCycles(foldRow(7.0 / 4.0, 0.0), true);
+                engine.applyStagedCycles(false);
+                std::vector<float> lap1;
+                const double phase = 1.0 / 16.0; // a sixteenth of a bar: a quarter beat
+                const float worst = acrossTop(engine, foldRow(7.0 / 4.0, phase, "perc~2"), channelChains, lap1);
+                expect(worst < 0.002f, "largest step across a phase-only re-fold " + juce::String(worst));
+                // past 10 ms it is the re-folded cycle at full gain, a quarter beat later on its grid
+                const double inTileSec = std::fmod(-phase * 4.0 + 7.0 + 0.02, 7.0);
+                expectWithinAbsoluteError(lap1[(size_t) (0.02 * 44100.0)], (float) (inTileSec / 16.0), 0.002f);
+                ramp.deleteFile();
+            }
+
             // A stem whose head is not silence: unfolding at the top hands over to the straight stem,
             // which starts its lap as it always does -- tile 0 is its first segment, faded in over
             // FadeGain's 3 ms micro-fade (a 0.5 head: 0.5 / 132 = 0.0038 a step), while the
