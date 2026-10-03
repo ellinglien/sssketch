@@ -237,6 +237,7 @@ import {
   type RadioReadout,
   type RadioReadoutRow
 } from '@shared/radioReadout'
+import { radioNextLanding } from '@shared/radioNextLanding'
 import {
   CLASH_LOWPASS_CUTOFF,
   CLASH_TRAITS,
@@ -3952,7 +3953,8 @@ export function DiscoverPanel({
     radioFlashSeenRef.current = live
   }
   /** What the readout says now, from radio's refs (the clock tick's microtask only):
-   * `barsUntilChange` is the rows' own wait (radioChangeWait). */
+   * `barsUntilChange` is the rows' own wait (radioChangeWait). `next` is whatever lands first
+   * (@shared/radioNextLanding): the arc's step, a course change, radio's change or a queued one. */
   function radioReadoutFrom(
     pos: number,
     loopBars: number,
@@ -3960,24 +3962,52 @@ export function DiscoverPanel({
   ): RadioReadout {
     const led = radioLedChangeRef.current
     const pending = radioPendingRef.current
-    let nextChange: Parameters<typeof radioReadout>[0]['nextChange'] = null
-    if (led !== null) {
-      // a held change lands with its arrival, or the lead-in armed on its row, or as a cut
-      const lead = radioGestureRef.current.find(
-        (g) => g.slotId === led.slotId && g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
-      )
-      const leadKind = lead !== undefined && lead.kind !== 'drop-out' ? lead.kind : null
-      nextChange = {
-        rowId: led.slotId,
-        kind: led.arrival?.kind ?? leadKind ?? 'cut',
-        barsAway: barsUntilChange
-      }
-    } else if (pending !== null) {
-      nextChange = { rowId: pending.slotId, kind: null, barsAway: barsUntilChange }
-    }
+    const rows = slotsRef.current
+    // a held change lands with its arrival, or the lead-in armed on its row, or as a cut
+    const lead =
+      led === null
+        ? undefined
+        : radioGestureRef.current.find(
+            (g) =>
+              g.slotId === led.slotId && g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
+          )
+    const leadKind = lead !== undefined && lead.kind !== 'drop-out' ? lead.kind : null
+    const exit = arcExitRef.current
+    const arcOn = radioDensityOf(radioSettings) === 'arc'
+    const nextChange = radioNextLanding({
+      pos,
+      loopBars,
+      course: radioCourseChangeRef.current?.map((c) => c.slotId) ?? null,
+      led:
+        led === null
+          ? null
+          : { rowId: led.slotId, kind: led.arrival?.kind ?? leadKind ?? 'cut', atBars: led.atBars },
+      pending: pending === null ? null : { rowId: pending.slotId, barsUntil: barsUntilChange },
+      manual: [...manualChangesRef.current].map(([rowId, m]) => ({
+        rowId,
+        kind: m.arrival?.kind ?? null,
+        ready: m.stem !== null
+      })),
+      arc: !arcOn
+        ? null
+        : {
+            adding: arcAddingRef.current && { rowId: arcAddingRef.current.slotId },
+            exit: exit && {
+              rowId: exit.slotId,
+              phase: exit.phase,
+              thisLap: exit.lap === arcLapRef.current,
+              heldBack: arcExitHeldBack(),
+              heard: previewingSlotIdsRef.current.has(exit.slotId)
+            },
+            exitBeats: ARC_EXIT_BEATS,
+            leg: densityLegRef.current,
+            count: rows.length,
+            canAdd: nextArcKind(rows.map((r) => r.kinds)) !== null,
+            removal: arcAddingRef.current === null && exit === null ? arcRemovalCandidate() : null
+          }
+    })
     const turnWaiting = radioTurnPendingRef.current
     const armed = radioTurnaroundRef.current
-    const rows = slotsRef.current
     const lap = radioPlayRef.current.lap
     const now = radioPlayRef.current.startBars + pos
     return radioReadout({
@@ -6302,7 +6332,11 @@ export function DiscoverPanel({
       else queueManualChange(copyId, pick, true, undoSequence.latest())
       return
     }
-    setSlots((prev) => [...prev, { ...slot, id: freshSlotId(), radioAdded: undefined }])
+    const copyId = freshSlotId()
+    // An instant copy while radio runs lands now: its age starts here (the radio readout), as
+    // commitSlotPick's does.
+    if (radioOnRef.current) radioRowSinceRef.current.set(copyId, radioPlayRef.current.lap)
+    setSlots((prev) => [...prev, { ...slot, id: copyId, radioAdded: undefined }])
   }
 
   // Direct reports, 2026-09-17, found in code review: a slot whose reroll
@@ -10963,36 +10997,38 @@ function DiscoverSlotRow({
                 color: 'var(--ra-text-3)'
               }}
             >
-              <span
+              {/* One line: the label gives way (ellipsized) to the flash and `next`, which keep
+                  their own width, so the two never overlap. */}
+              <div
                 style={{
                   position: 'absolute',
                   top: 1,
                   left: 3,
-                  right: 90,
-                  whiteSpace: 'nowrap',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis'
-                }}
-              >
-                {[radioReadout.label, radioReadout.age].filter(Boolean).join(' · ')}
-              </span>
-              <span
-                style={{
-                  position: 'absolute',
-                  top: 1,
                   right: 3,
                   display: 'flex',
                   gap: 6,
                   whiteSpace: 'nowrap'
                 }}
               >
-                {radioReadout.flash !== null && (
-                  <span style={{ opacity: radioFlashOpacity(radioReadout.flash.t) }}>
-                    {radioReadout.flash.word}
-                  </span>
-                )}
-                {radioReadout.nextLabel !== null && <span>{radioReadout.nextLabel}</span>}
-              </span>
+                <span
+                  style={{
+                    flex: '1 1 auto',
+                    minWidth: 0,
+                    overflow: 'hidden',
+                    textOverflow: 'ellipsis'
+                  }}
+                >
+                  {[radioReadout.label, radioReadout.age].filter(Boolean).join(' · ')}
+                </span>
+                <span style={{ flex: 'none', display: 'flex', gap: 6 }}>
+                  {radioReadout.flash !== null && (
+                    <span style={{ opacity: radioFlashOpacity(radioReadout.flash.t) }}>
+                      {radioReadout.flash.word}
+                    </span>
+                  )}
+                  {radioReadout.nextLabel !== null && <span>{radioReadout.nextLabel}</span>}
+                </span>
+              </div>
             </div>
           )}
         </div>

@@ -61,14 +61,18 @@ export interface RadioReadoutRowInput {
 export interface RadioReadoutInput {
   bars: { intoPhrase: number; phraseBars: number; loopBars: number }
   /** Whatever lands next -- radio's own change, or the density arc adding a row (a row not on the
-   * bed: `a new row`) or taking one out (`leaving`: `row 2 leaves`) -- with how it arrives (null
-   * while only armed, and for a leaving row), and bars until it lands (null when its bar is not
-   * known yet). */
+   * bed, or `adding`: `a new row`) or taking one out (`leaving`: `row 2 leaves`), or a course
+   * change turning the rows in `course` over at once -- with how it arrives (null while only
+   * armed, and for a leaving row), and bars until it lands (null when its bar is not known yet). */
   nextChange: {
     rowId: string
     kind: RadioTransitionKind | null
     barsAway: number | null
     leaving?: boolean
+    /** The arc's new row, already drawn as a row (sssketch: silent until it joins). */
+    adding?: boolean
+    /** A course change: every row it turns over (`rowId` among them). */
+    course?: readonly string[]
   } | null
   /** The turnaround armed for the phrase's end, or a turn waiting; `move` null while a turn
    * waits for its roll. */
@@ -217,8 +221,8 @@ function nextPart(input: RadioReadoutInput): string | null {
   if (n === null) return null
   if (n.barsAway === null || !Number.isFinite(n.barsAway)) return 'next: soon'
   const i = input.rows.findIndex((r) => r.rowId === n.rowId)
-  const who = i >= 0 ? `row ${i + 1}` : 'a new row'
-  const how = n.leaving ? ' leaves' : n.kind !== null ? ` → ${n.kind}` : ''
+  const who = n.course ? 'course change' : i >= 0 && !n.adding ? `row ${i + 1}` : 'a new row'
+  const how = n.course ? '' : n.leaving ? ' leaves' : n.kind !== null ? ` → ${n.kind}` : ''
   const bars = Math.max(1, Math.ceil(n.barsAway - 1e-6))
   return `next: ${who}${how} · ${plural(bars, 'bar')}`
 }
@@ -240,7 +244,8 @@ export function radioReadout(input: RadioReadoutInput): RadioReadout {
     statusLine,
     ruler: { ticks, filled, end: rulerEnd(input.armedTurnaround) },
     rows: input.rows.map((r) => {
-      const isNext = next !== null && next.rowId === r.rowId
+      const isNext =
+        next !== null && (next.rowId === r.rowId || (next.course?.includes(r.rowId) ?? false))
       const leaving = isNext && !!next.leaving
       const nextKind = isNext && !leaving ? next.kind : null
       return {

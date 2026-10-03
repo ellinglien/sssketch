@@ -89,6 +89,22 @@ describe('radioReadout: the status line', () => {
     expect(r.rows[1]).toMatchObject({ isNext: true, nextKind: null, nextLabel: 'next · leaves' })
   })
 
+  it('the arc’s new row reads as a new row even while drawn as one (sssketch)', () => {
+    const r = radioReadout(
+      input({ nextChange: { rowId: 'c', kind: 'filter in', barsAway: 2, adding: true } })
+    )
+    expect(r.statusLine).toBe('next: a new row → filter in · 2 bars')
+    expect(r.rows[2]).toMatchObject({ isNext: true, nextLabel: 'next · filter in' })
+  })
+
+  it('a course change names itself, and every row it turns over reads next', () => {
+    const r = radioReadout(
+      input({ nextChange: { rowId: 'a', kind: 'cut', barsAway: 3, course: ['a', 'c'] } })
+    )
+    expect(r.statusLine).toBe('next: course change · 3 bars')
+    expect(r.rows.map((x) => x.nextLabel)).toEqual(['next · cut', null, 'next · cut'])
+  })
+
   it('held: the arc reads held, with no direction, and a change already on its way still shows', () => {
     const held = (over: Partial<RadioReadoutInput>): string =>
       radioReadout(input({ held: true, ...over })).statusLine
