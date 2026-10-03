@@ -131,7 +131,8 @@ describe('discoverSettingsStore', () => {
         foldSeed: 'k3x9pq',
         density: 'off',
         faves: 60,
-        paceLevel: 42
+        paceLevel: 42,
+        sizedBuilds: false
       }
     })
     expect(loadDiscoverSettings().radio).toEqual({
@@ -151,7 +152,8 @@ describe('discoverSettingsStore', () => {
       foldSeed: 'k3x9pq',
       density: 'off',
       faves: 60,
-      paceLevel: 42
+      paceLevel: 42,
+      sizedBuilds: false
     })
   })
 

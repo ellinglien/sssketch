@@ -88,8 +88,30 @@ import {
   restartRadioInterval,
   type RadioClock,
   type RadioSettings,
-  radioFavesOf
+  radioFavesOf,
+  radioPaceLevelOf,
+  radioSizedBuildsOf
 } from '@shared/radioSchedule'
+import {
+  NO_CHANGE_FORECAST,
+  NO_RADIO_BUILDS,
+  advanceRadioBuildClock,
+  noteRadioBuild,
+  radioArcStepWaits,
+  radioBuildArc,
+  radioBuildSize,
+  radioForecastWithRows,
+  radioNoteTurnaround,
+  radioPayoffOf,
+  radioPayoffShortfall,
+  radioPhraseEndBuild,
+  radioTurnaroundPayoffNeed,
+  type RadioBuildClock,
+  type RadioBuildSize,
+  type RadioChangeForecast,
+  type RadioPayoff
+} from '@shared/radioBuildSize'
+import { radioHookPaceScale } from '@shared/radioHooks'
 import {
   DEFAULT_FAVES,
   FAVES_LABEL,
@@ -123,6 +145,7 @@ import {
   turnaroundFlashes,
   turnaroundGapLateRowIds,
   turnaroundMoveCanSound,
+  turnaroundPhraseLaps,
   turnaroundPlanMoves,
   turnaroundToLoopBars,
   turnaroundTurnBeats,
@@ -517,6 +540,38 @@ interface RadioHeldCompanion {
   /** Its change carries its row's fold (fold's bar band, radioFoldChangeCarriesNow): the stage
    * names the row for this stem, and the landing re-points the machine (radioFoldLandNow). */
   foldCarry?: boolean
+}
+/** Sized builds (spec 2026-10-03-radio-anointed-stems-design 4.7): a spare pick, for a row radio
+ * may change, picked at a phrase start and warmed (`stem`, null until then), so a turnaround's
+ * wrap can be paid off with more rows than radio's own change brings. At most RADIO_SPARES_MAX. */
+interface RadioSpare {
+  slotId: string
+  pick: SlotPick
+  stem: ResolvedCandidateStem | null
+}
+const RADIO_SPARES_MAX = 2
+/** What could pay off a turnaround's wrap beyond what already lands there (radioPayoffSparesNow),
+ * in the order a payoff takes it: radio's armed pick (pulled forward) with its riding companions,
+ * then the warm spares. `count` is every row of it. */
+interface RadioPayoffSpare {
+  pending: {
+    slotId: string
+    pick: SlotPick
+    stem: ResolvedCandidateStem
+    companions: RadioHeldCompanion[]
+  } | null
+  spares: RadioHeldCompanion[]
+  count: number
+}
+/** A payoff assembled for the turnaround armed as `armId` (assembleRadioPayoff), owed until
+ * stepRadioPayoff decides it: `pull`, radio's change for the wrap decided early (its armed pick,
+ * or a spare when that is not there), and `extra`, rows riding radio's change as companions. */
+interface RadioPayoffOwed {
+  armId: string
+  pull: (RadioHeldCompanion & { fromPending: boolean; companions: RadioHeldCompanion[] }) | null
+  extra: RadioHeldCompanion[]
+  /** The build size of the change the payoff makes (its per-change draw). */
+  size: RadioBuildSize
 }
 
 // Real bug, live-reported 2026-09-17: "i clicked 'lock' on a set of
@@ -2852,7 +2907,13 @@ export function DiscoverPanel({
   // bringing in (still picking, then waiting in the manual queue), the row
   // it is taking out, and a count of loop tops so an exit knows its lap.
   const densityLegRef = useRef<DensityLeg | null>(null)
-  const arcAddingRef = useRef<{ slotId: string; picking: boolean } | null>(null)
+  // `kinds`: the joining row's, known from the arc's decision (the row reaches slotsRef a render
+  // later), for sized builds' forecast (the low end returning).
+  const arcAddingRef = useRef<{
+    slotId: string
+    picking: boolean
+    kinds?: readonly DiscoverSlotKind[]
+  } | null>(null)
   const arcExitRef = useRef<{ slotId: string; phase: 'waiting' | 'fading'; lap: number } | null>(
     null
   )
@@ -3004,13 +3065,30 @@ export function DiscoverPanel({
   // riser (buildTransitionRiser), as a gesture's does.
   // `turn`: armed by a turn (radioTurnPendingRef) rather than a phrase end, with the undo sequence
   // it was pressed at (withdrawRadioTurn).
+  // `large`: a phrase end rolled at the build size `large` (sized builds), for the build clock
+  // (radioNoteTurnaround) once it has played.
   const radioTurnaroundRef = useRef<{
     plan: TurnaroundPlan
     armId: string
     turn: { undoSeq: number } | null
+    large?: boolean
   } | null>(null)
   // What the last phrase end fired (rememberTurnaround): never two in a row, except diminution.
   const radioTurnaroundMemoryRef = useRef<TurnaroundMemory | null>(null)
+  // SIZED BUILDS (@shared/radioBuildSize; spec 2026-10-03-radio-anointed-stems-design section 4),
+  // all gated on radioSizedBuildsOf(radioSettings), so with it off none of this is read or written:
+  // - the build clock: bars since the last riser and the last large turnaround, advanced at every
+  //   wrap the clock effect sees (so a paused transport stops it), noted where a riser plays;
+  // - the spare picks (at most two, picked and warmed from each phrase start; radioSparesWantedRef
+  //   asks for them, a tick with no arm in flight picks them) a payoff may add;
+  // - the payoff owed to the turnaround armed for this lap, until stepRadioPayoff decides it;
+  // - the grid the last tick's clock used, which the forecast's "radio's change is due at the
+  //   coming wrap" reads off the tick (a roll runs in a microtask after it).
+  const radioBuildClockRef = useRef<RadioBuildClock>(NO_RADIO_BUILDS)
+  const radioSparesRef = useRef<RadioSpare[]>([])
+  const radioSparesWantedRef = useRef(false)
+  const radioPayoffRef = useRef<RadioPayoffOwed | null>(null)
+  const radioGridBarsRef = useRef(0)
   // True from the wrap that starts a phrase's last lap until its roll (a microtask later) has
   // run: the early decision and the manual draw wait it out (radioTurnaroundAtWrap).
   const radioTurnaroundRollPendingRef = useRef(false)
@@ -3412,6 +3490,27 @@ export function DiscoverPanel({
     if (radioTurnaroundRef.current?.turn != null && radioTurnPendingRef.current === null) {
       setRadioTurnShown(null)
     }
+    if (radioSizedBuildsOf(radioSettings)) {
+      // Sized builds: the turnaround that played into this top is a build (a riser in it counts
+      // for the spacing; one rolled at large resets the large count, riser or not; spec 4.2).
+      const played = radioTurnaroundRef.current
+      if (played !== null) {
+        radioBuildClockRef.current = radioNoteTurnaround(
+          radioBuildClockRef.current,
+          played.plan,
+          played.large === true
+        )
+      }
+      // A payoff still owed at its wrap was never decided: the build played without it (spec
+      // 4.6: logged, never larger than today).
+      if (radioPayoffRef.current !== null) {
+        console.log('[radio-build] oversold: the payoff was not decided in time')
+      }
+      // Spares are picked from each phrase start, on a tick with no arm in flight
+      // (radioSparesTick), so each is warm by the phrase's last lap.
+      if (radioClockRef.current?.turnaroundLap === 0) radioSparesWantedRef.current = true
+    }
+    radioPayoffRef.current = null
     radioTurnaroundRef.current = null
     if (radioTurnaroundRollRef.current !== null) {
       // given up: nothing fired at that phrase end (a roll owed only for a turn remembers nothing)
@@ -3518,15 +3617,29 @@ export function DiscoverPanel({
     const { lengths, loopBars } = turnaroundRollLengths(owed)
     const input = turnaroundInputNow(lengths, loopBars)
     const turn = radioTurnPendingRef.current
+    // Sized builds: what lands at the coming top already, and what could be added there (spec
+    // 4.7). Read once, before anything below arms; null with sized builds off.
+    const sized = radioSizedBuildsOf(radioSettings)
+    const pos = radioClockRef.current?.lastPos ?? 0
+    const forecast = sized ? radioForecastNow(loopBars, pos) : null
+    const spare = forecast !== null ? radioPayoffSparesNow(loopBars, pos, forecast.rowIds) : null
     if (turn !== null) {
       const turnPlan = rollTurnaround({
         ...input,
         rate: radioSettings.turnarounds,
         random: Math.random,
         lastPhrase: null,
-        force: turn.move === undefined ? {} : { move: turn.move }
+        force: turn.move === undefined ? {} : { move: turn.move },
+        // a turn brings a payoff too: a gap only when a large one can be assembled
+        ...(forecast !== null &&
+          spare !== null && {
+            payoff: radioPayoffOf(radioForecastWithRows(forecast.f, spare.count))
+          })
       })
       armRadioTurn(turnPlan, turn.undoSeq)
+      if (turnPlan !== null && forecast !== null && spare !== null) {
+        assembleRadioPayoff(forecast.f, spare, turnPlan, loopBars, pos, forecast.radio)
+      }
       // A TURN takes this top: the phrase end's own roll stands down and remembers nothing, so a
       // turn never starts or extends a diminution. A turn that cannot sound here (it flashed
       // `nothing to turn`) costs the phrase end nothing: its own roll goes ahead below.
@@ -3537,18 +3650,48 @@ export function DiscoverPanel({
     }
     // A roll owed only for a turn that was withdrawn since (undo): nothing to roll.
     if (!owed.phraseEnd) return
+    // a phrase ending on a fold's realignment top prefers a turnaround
+    const rate = radioFoldTurnaroundRate(
+      radioSettings.turnarounds,
+      radioSettings.foldMode && radioFoldNextRef.current?.marked === true
+    )
+    if (forecast === null || spare === null) {
+      // sized builds off: today, exactly
+      const plan = rollTurnaround({
+        ...input,
+        rate,
+        random: Math.random,
+        lastPhrase: radioTurnaroundMemoryRef.current
+      })
+      radioTurnaroundMemoryRef.current = rememberTurnaround(plan)
+      radioTurnaroundRef.current = plan === null ? null : { plan, armId: newArmId(), turn: null }
+      return
+    }
+    // SIZED BUILDS (spec 4.4, 4.7): no payoff possible, no turnaround (and no draw); otherwise
+    // rolled at the forecast's tier raised to medium, after the budget, with a gap only when a
+    // large payoff can follow -- and when it fires, the payoff is assembled.
+    const build = radioPhraseEndBuild(forecast.f, spare.count, radioBuildBudgetNow(loopBars, pos))
+    if (build.skip) {
+      radioTurnaroundMemoryRef.current = null
+      radioTurnaroundRef.current = null
+      console.log('[radio-build] no payoff: no turnaround at this phrase end')
+      return
+    }
     const plan = rollTurnaround({
       ...input,
-      // a phrase ending on a fold's realignment top prefers a turnaround
-      rate: radioFoldTurnaroundRate(
-        radioSettings.turnarounds,
-        radioSettings.foldMode && radioFoldNextRef.current?.marked === true
-      ),
+      arc: radioBuildArc(forecast.f, input.arc),
+      size: build.size,
+      payoff: build.payoff,
+      rate,
       random: Math.random,
       lastPhrase: radioTurnaroundMemoryRef.current
     })
     radioTurnaroundMemoryRef.current = rememberTurnaround(plan)
-    radioTurnaroundRef.current = plan === null ? null : { plan, armId: newArmId(), turn: null }
+    radioTurnaroundRef.current =
+      plan === null
+        ? null
+        : { plan, armId: newArmId(), turn: null, ...(build.size === 'large' && { large: true }) }
+    if (plan !== null) assembleRadioPayoff(forecast.f, spare, plan, loopBars, pos, forecast.radio)
   }
   /** What a roll reads now, but the rate, the randomness and the memory: the rows at `lengths`
    * (a landing's known length over the old one), on `loopBars`.
@@ -3593,6 +3736,421 @@ export function DiscoverPanel({
       // layered moves and the riser's gap (spec 2026-10-03-radio-turnaround-combos-design):
       // phrase ends, turns and chips alike (a chip is the lead; the planner may layer onto it)
       combine: true
+    }
+  }
+  // --- sized builds (spec 2026-10-03-radio-anointed-stems-design section 4; @shared/
+  // radioBuildSize). Every caller gates on radioSizedBuildsOf(radioSettings). ---
+
+  /** What changes at the coming loop top, as the panel knows it now (spec 4.1): radio's held change
+   * landing there (not a mid-loop cut, which lands before it) with its kept companions, or else its
+   * armed pick, warm and due at that wrap, with its riding companions; every ready manual change;
+   * the density arc's row joining (from its decision: it is still picking at the phrase end's
+   * roll) or its exit; a course change. `rowIds` are the rows counted; `radio` says radio's own
+   * change is among them. No hooks yet (Task 9). */
+  function radioForecastNow(
+    loopBars: number,
+    pos: number
+  ): { f: RadioChangeForecast; rowIds: Set<string>; radio: boolean } {
+    const rowIds = new Set<string>()
+    const led = radioLedChangeRef.current
+    const pending = radioPendingRef.current
+    const clock = radioClockRef.current
+    let radio = false
+    if (led !== null) {
+      if (led.atBars === undefined) {
+        radio = true
+        rowIds.add(led.slotId)
+        for (const k of radioStagedCompanions(led)) rowIds.add(k.slotId)
+      }
+    } else if (
+      pending !== null &&
+      pending.stem !== null &&
+      clock !== null &&
+      radioEligibleSlotIds().includes(pending.slotId) &&
+      radioChangeDueAtNextWrap(
+        clock,
+        pos,
+        loopBars,
+        radioGridBarsRef.current > 0 ? radioGridBarsRef.current : loopBars,
+        radioCadence.phraseBars
+      )
+    ) {
+      radio = true
+      rowIds.add(pending.slotId)
+      for (const k of radioPendingCompanionsNow(pending)) rowIds.add(k.slotId)
+    }
+    for (const [slotId, m] of manualChangesRef.current) if (m.stem !== null) rowIds.add(slotId)
+    const adding = arcAddingRef.current
+    if (adding !== null) rowIds.add(adding.slotId)
+    const addingKinds =
+      adding === null
+        ? []
+        : (adding.kinds ?? slotsRef.current.find((s) => s.id === adding.slotId)?.kinds ?? [])
+    return {
+      f: {
+        ...NO_CHANGE_FORECAST,
+        rows: rowIds.size,
+        lowEndReturn: addingKinds.some((k) => k === 'drums' || k === 'bass'),
+        arcStep: adding !== null ? 'add' : arcExitingRowNow() !== null ? 'remove' : null,
+        course: radioCourseChangeRef.current !== null
+      },
+      rowIds,
+      radio
+    }
+  }
+  /** What could be added at the coming top for a payoff (spec 4.7), each warm and eligible, in the
+   * order a payoff takes it: radio's armed pick when it is not already landing there (nor landing
+   * on a mid-loop bar before it), with its riding companions; then the spares. Never a row in
+   * `rowIds` (already changing there), a row with a manual change, radio's held change's or armed
+   * pick's rows, or the row the arc is taking out. */
+  function radioPayoffSparesNow(
+    loopBars: number,
+    pos: number,
+    rowIds: ReadonlySet<string>
+  ): RadioPayoffSpare {
+    const eligible = radioEligibleSlotIds()
+    const manual = manualChangesRef.current
+    const led = radioLedChangeRef.current
+    const now = radioPendingRef.current
+    const clock = radioClockRef.current
+    const taken = new Set(rowIds)
+    if (led !== null) {
+      taken.add(led.slotId)
+      for (const k of led.companions ?? []) taken.add(k.slotId)
+    }
+    const exiting = arcExitingRowNow()
+    if (exiting !== null) taken.add(exiting)
+    let pending: RadioPayoffSpare['pending'] = null
+    if (
+      led === null &&
+      now !== null &&
+      now.stem !== null &&
+      clock !== null &&
+      !taken.has(now.slotId) &&
+      !manual.has(now.slotId) &&
+      eligible.includes(now.slotId) &&
+      radioChangeLandsAtBar(
+        clock,
+        pos,
+        loopBars,
+        radioGridBarsRef.current > 0 ? radioGridBarsRef.current : loopBars,
+        radioCadence.phraseBars
+      ) === null
+    ) {
+      const companions = radioHeldCompanionsFrom(now).filter((k) => !taken.has(k.slotId))
+      pending = { slotId: now.slotId, pick: now.pick, stem: now.stem, companions }
+    }
+    if (now !== null) {
+      taken.add(now.slotId)
+      for (const k of now.companions) taken.add(k.slotId)
+    }
+    const playing = new Set(
+      slotsRef.current.flatMap((s) => (s.candidate !== null ? [s.candidate.stemCID] : []))
+    )
+    const spares: RadioHeldCompanion[] = []
+    for (const k of radioSparesRef.current) {
+      if (
+        k.stem === null ||
+        k.pick.candidate === null ||
+        taken.has(k.slotId) ||
+        manual.has(k.slotId) ||
+        !eligible.includes(k.slotId) ||
+        playing.has(k.pick.candidate.stemCID)
+      ) {
+        continue
+      }
+      spares.push({ slotId: k.slotId, pick: k.pick, stem: k.stem })
+      taken.add(k.slotId)
+    }
+    return {
+      pending,
+      spares,
+      count: (pending !== null ? 1 + pending.companions.length : 0) + spares.length
+    }
+  }
+  /** The build budget for a top `loopBars - pos` bars away (radioApplyBuildBudget). */
+  function radioBuildBudgetNow(
+    loopBars: number,
+    pos: number
+  ): { hookScale: number; clock: RadioBuildClock; aheadBars: number; phraseBars: number } {
+    return {
+      hookScale: radioHookPaceScale(radioPaceLevelOf(radioSettings)),
+      clock: radioBuildClockRef.current,
+      aheadBars: Math.max(0, loopBars - pos),
+      phraseBars: turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars) * loopBars
+    }
+  }
+  /** The build size of a change decided now (spec 4.3) whose rows are `rows`, landing at the
+   * coming top with whatever else lands there (radioForecastNow), after the budget. Undefined with
+   * sized builds off: the draws are today's. A riser is the only gesture the size reweights, and
+   * it always leads into the coming top, so that is the top it is measured at. */
+  function radioChangeSizeNow(
+    rows: readonly string[],
+    loopBars: number,
+    pos: number
+  ): RadioBuildSize | undefined {
+    if (!radioSizedBuildsOf(radioSettings)) return undefined
+    const { f, rowIds } = radioForecastNow(loopBars, pos)
+    const all = new Set([...rowIds, ...rows])
+    return radioBuildSize({ ...f, rows: all.size }, radioBuildBudgetNow(loopBars, pos))
+  }
+  /** A turnaround just armed (`plan`, the phrase end's or a turn's) is paid off (spec 4.7): the
+   * rows its wrap still needs (radioPayoffShortfall of radioTurnaroundPayoffNeed) are taken from
+   * `spare` -- radio's armed pick pulled forward (an EARLY decision, so radio's interval restarts
+   * from its landing: a payoff never adds a change on top of radio's own) with its companions,
+   * then spares riding radio's change as companions. With radio's own change already landing
+   * there, only spares, joining it. With no armed pick to pull, the first spare is radio's change.
+   * Owed (radioPayoffRef) until stepRadioPayoff decides it, on the clock's tick. */
+  function assembleRadioPayoff(
+    f: RadioChangeForecast,
+    spare: RadioPayoffSpare,
+    plan: TurnaroundPlan,
+    loopBars: number,
+    pos: number,
+    radioInForecast: boolean
+  ): void {
+    const armed = radioTurnaroundRef.current
+    if (armed === null || armed.plan !== plan) return
+    const need: RadioPayoff = radioTurnaroundPayoffNeed(plan)
+    let n = radioPayoffShortfall(f, need)
+    if (n <= 0) return
+    const spares = [...spare.spares]
+    let pull: RadioPayoffOwed['pull'] = null
+    if (!radioInForecast) {
+      if (spare.pending !== null) {
+        pull = { ...spare.pending, fromPending: true }
+        n -= 1 + spare.pending.companions.length
+      } else {
+        const first = spares.shift()
+        if (first !== undefined) {
+          pull = { ...first, fromPending: false, companions: [] }
+          n -= 1
+        }
+      }
+    }
+    const extra: RadioHeldCompanion[] = []
+    for (const k of spares) {
+      if (n <= 0) break
+      extra.push(k)
+      n -= 1
+    }
+    if (pull === null && extra.length === 0) {
+      console.log(`[radio-build] payoff short: nothing to add (${need})`)
+      return
+    }
+    const added = (pull !== null ? 1 + pull.companions.length : 0) + extra.length
+    radioPayoffRef.current = {
+      armId: armed.armId,
+      pull,
+      extra,
+      size: radioBuildSize(radioForecastWithRows(f, added), radioBuildBudgetNow(loopBars, pos))
+    }
+    console.log(
+      `[radio-build] payoff +${added} (${need}${n > 0 ? `, short ${n}` : ''}): ` +
+        [
+          ...(pull !== null ? [pull.slotId, ...pull.companions.map((k) => k.slotId)] : []),
+          ...extra.map((k) => k.slotId)
+        ].join(' ')
+    )
+  }
+  /** The payoff owed to this lap's turnaround, decided on the clock's tick from stepRadioStage,
+   * before its early decision and with the same gates (spec 4.7). True when it decided radio's
+   * change (the caller returns, as after (2)); step (3) stages it on a later tick.
+   * - Radio's change already lands at the top (held, not a mid-loop cut): the extra rows join it as
+   *   companions; a stage already out is withdrawn and re-staged with them, unless the wrap is too
+   *   close (MANUAL_RESTAGE_MIN_BARS) or the engine already took it -- then it is oversold.
+   * - Otherwise radio's change is decided now, early (its interval restarts at the landing): the
+   *   pulled pick (or the first usable spare) with its companions and the extras, its gesture
+   *   drawn at the payoff's size and kept to an arrival under the turnaround. It waits while (2)
+   *   would: a change due on this tick, a stage carrying radio's change, a course change, the roll
+   *   still owed, a gesture playing, a mid-loop cut still to land.
+   * Dropped when the turnaround it pays off is no longer the armed one (a turn replaced it, undo). */
+  function stepRadioPayoff(due: boolean, pos: number, loopBars: number): boolean {
+    const owed = radioPayoffRef.current
+    if (owed === null) return false
+    if (radioTurnaroundRef.current?.armId !== owed.armId || !radioOnRef.current) {
+      radioPayoffRef.current = null
+      return false
+    }
+    const eligible = radioEligibleSlotIds()
+    const manual = manualChangesRef.current
+    const led = radioLedChangeRef.current
+    const exiting = arcExitingRowNow()
+    const ledRows = new Set(
+      led === null ? [] : [led.slotId, ...(led.companions ?? []).map((k) => k.slotId)]
+    )
+    const usable = (k: { slotId: string }): boolean =>
+      eligible.includes(k.slotId) &&
+      !manual.has(k.slotId) &&
+      !ledRows.has(k.slotId) &&
+      k.slotId !== exiting
+    const takeSpares = (rows: readonly { slotId: string }[]): void => {
+      const used = new Set(rows.map((k) => k.slotId))
+      radioSparesRef.current = radioSparesRef.current.filter((k) => !used.has(k.slotId))
+    }
+    if (led !== null && led.atBars === undefined) {
+      radioPayoffRef.current = null
+      const extra = [
+        ...(owed.pull !== null && !owed.pull.fromPending ? [owed.pull] : []),
+        ...owed.extra
+      ].filter(usable)
+      if (extra.length === 0) return false
+      if (led === radioStageAppliedLedRef.current) {
+        console.log('[radio-build] oversold: the stage was already taken')
+        return false
+      }
+      if (radioStageRef.current !== null) {
+        if (loopBars - pos < MANUAL_RESTAGE_MIN_BARS) {
+          console.log('[radio-build] oversold: too close to the top to re-stage')
+          return false
+        }
+        cancelStagedSwap('payoff')
+      }
+      takeSpares(extra)
+      setRadioLedChange({
+        ...led,
+        companions: [
+          ...(led.companions ?? []),
+          ...radioFoldCarryCompanionsNow(
+            extra.map((k) => ({ slotId: k.slotId, pick: k.pick, stem: k.stem }))
+          )
+        ]
+      })
+      return false
+    }
+    // Radio's own change was counted as landing at the top but is not decided yet: (2) decides
+    // it, and the extras join it on a later tick (above).
+    if (owed.pull === null) return false
+    const manualOnlyStage =
+      radioStageRef.current !== null && radioStageRef.current.ledSlotId === null
+    if (
+      led !== null ||
+      due ||
+      (radioStageRef.current !== null && !manualOnlyStage) ||
+      appliedManualStillWaiting() ||
+      radioCourseChangeRef.current !== null ||
+      turnaroundGateNow() === 'wait' ||
+      !gesturesSpentAt(pos, loopBars)
+    ) {
+      return false
+    }
+    const pull = owed.pull
+    const pendingNow = radioPendingRef.current
+    const pulled =
+      pull.fromPending && pendingNow !== null && pendingNow.pick === pull.pick && usable(pull)
+        ? {
+            ...pull,
+            companions: radioHeldCompanionsFrom(pendingNow).filter(usable)
+          }
+        : !pull.fromPending && usable(pull)
+          ? pull
+          : null
+    const rest = owed.extra.filter(usable)
+    const primary =
+      pulled ?? (rest.length > 0 ? { ...rest[0], fromPending: false, companions: [] } : null)
+    radioPayoffRef.current = null
+    if (primary === null) {
+      console.log('[radio-build] oversold: nothing left to pull')
+      return false
+    }
+    const riding = [...primary.companions, ...(pulled !== null ? rest : rest.slice(1))]
+    const changing = slotsRef.current.find((sl) => sl.id === primary.slotId)
+    const drawn = radioCadenceTransition(
+      radioCadence,
+      pickTransition(radioSettings.transitions, changing?.kinds ?? [], Math.random, {
+        size: owed.size
+      }),
+      true
+    )
+    const transition = radioTransitionUnderTurnaround(drawn)
+    const beats = radioGestureBeats(transition, pickDropOutBeats, owed.size)
+    if (primary.fromPending) setRadioPending(null)
+    takeSpares([primary, ...riding])
+    setRadioLedChange({
+      slotId: primary.slotId,
+      pick: primary.pick,
+      stem: primary.stem,
+      early: true,
+      arrival: transition === 'cut' ? undefined : { kind: transition, beats },
+      companions: [
+        ...radioFoldCarryCompanionsNow(
+          riding.map((k) => ({ slotId: k.slotId, pick: k.pick, stem: k.stem }))
+        )
+      ],
+      foldCarry: radioFoldChangeCarriesNow(primary.slotId, primary.pick, primary.stem)
+    })
+    if (manualOnlyStage) cancelStagedSwap('radio-joins')
+    console.log(`[radio-build] payoff decided: ${primary.slotId} +${riding.length} (${transition})`)
+    return true
+  }
+  /** Every tick: the spares asked for at a phrase start (radioSparesWantedRef) are picked on the
+   * first tick with no arm of radio's in flight -- a pick for a row supersedes one in flight for
+   * it (pickForSlot's generation), and radio's own must never lose to a spare. */
+  function radioSparesTick(): void {
+    if (!radioSparesWantedRef.current) return
+    if (!radioSizedBuildsOf(radioSettings)) {
+      radioSparesWantedRef.current = false
+      return
+    }
+    if (radioArmInFlight()) return
+    radioSparesWantedRef.current = false
+    // deferred: pickForSlot sets state before its first await
+    void Promise.resolve().then(() => {
+      if (radioOnRef.current) armRadioSpares()
+    })
+  }
+  /** Keeps up to RADIO_SPARES_MAX spare picks (spec 4.7): drops one whose row is gone or whose
+   * stem now plays on a row, then picks the missing rows as armRadioPick picks (pickRadioSlotIds)
+   * among the eligible rows radio is not already changing (its armed pick and held change and
+   * their companions, a manual change, the arc's joining or leaving row, a skip picking), and
+   * warms each. */
+  function armRadioSpares(): void {
+    const live = new Map(slotsRef.current.map((s) => [s.id, s]))
+    const playing = new Set(
+      slotsRef.current.flatMap((s) => (s.candidate !== null ? [s.candidate.stemCID] : []))
+    )
+    radioSparesRef.current = radioSparesRef.current.filter(
+      (k) =>
+        live.has(k.slotId) && k.pick.candidate !== null && !playing.has(k.pick.candidate.stemCID)
+    )
+    const missing = RADIO_SPARES_MAX - radioSparesRef.current.length
+    if (missing <= 0) return
+    const taken = new Set(radioSparesRef.current.map((k) => k.slotId))
+    const pending = radioPendingRef.current
+    if (pending !== null) {
+      taken.add(pending.slotId)
+      for (const k of pending.companions) taken.add(k.slotId)
+    }
+    const led = radioLedChangeRef.current
+    if (led !== null) {
+      taken.add(led.slotId)
+      for (const k of led.companions ?? []) taken.add(k.slotId)
+    }
+    for (const id of manualChangesRef.current.keys()) taken.add(id)
+    for (const id of radioSkipPickingRef.current) taken.add(id)
+    if (arcAddingRef.current !== null) taken.add(arcAddingRef.current.slotId)
+    if (arcExitRef.current !== null) taken.add(arcExitRef.current.slotId)
+    const eligible = radioEligibleSlotIds().filter((id) => !taken.has(id))
+    const ids = pickRadioSlotIds(eligible, radioLastSlotRef.current, missing, {
+      turnover: radioSettings.turnover,
+      changedAt: radioChangedAtRef.current,
+      turn: radioTurnRef.current,
+      flags: radioSlotFlagsRef.current
+    })
+    for (const id of ids) {
+      const slot = live.get(id)
+      if (slot === undefined) continue
+      void pickForSlot(id, slot.kinds, { avoidOwnStem: true }).then((pick) => {
+        if (pick === null || pick.candidate === null || !radioOnRef.current) return
+        const spares = radioSparesRef.current
+        if (spares.length >= RADIO_SPARES_MAX || spares.some((k) => k.slotId === id)) return
+        radioSparesRef.current = [...spares, { slotId: id, pick, stem: null }]
+        void resolveAndWarmPick(pick).then((stem) => {
+          radioSparesRef.current = radioSparesRef.current.flatMap((k) =>
+            k.pick !== pick ? [k] : stem === null ? [] : [{ ...k, stem }]
+          )
+        })
+      })
     }
   }
   /** The loop as it plays now: every resolved row's length, and the longest. */
@@ -3654,12 +4212,19 @@ export function DiscoverPanel({
       return
     }
     const { lengths } = turnaroundLoopNow()
+    // Sized builds: a turn brings a payoff too (spec 4.7), a gap only when a large one can follow.
+    const forecast = radioSizedBuildsOf(radioSettings) ? radioForecastNow(loopBars, pos) : null
+    const spare = forecast !== null ? radioPayoffSparesNow(loopBars, pos, forecast.rowIds) : null
     const plan = rollTurnaround({
       ...turnaroundInputNow(lengths, loopBars),
       rate: radioSettings.turnarounds,
       random: Math.random,
       lastPhrase: null,
-      force: turn.move === undefined ? { maxBeats } : { move: turn.move, maxBeats }
+      force: turn.move === undefined ? { maxBeats } : { move: turn.move, maxBeats },
+      ...(forecast !== null &&
+        spare !== null && {
+          payoff: radioPayoffOf(radioForecastWithRows(forecast.f, spare.count))
+        })
     })
     if (plan === null) {
       armRadioTurn(null, turn.undoSeq)
@@ -3669,6 +4234,9 @@ export function DiscoverPanel({
     cancelStagedSwap('turn')
     if (armed !== null && armed.turn === null) radioTurnaroundMemoryRef.current = null
     armRadioTurn(plan, turn.undoSeq)
+    if (forecast !== null && spare !== null) {
+      assembleRadioPayoff(forecast.f, spare, plan, loopBars, pos, forecast.radio)
+    }
     scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
   }
   /** Which turns could sound now (radioTurnCan), from the clock effect: kept when unchanged, so
@@ -4098,6 +4666,8 @@ export function DiscoverPanel({
    * starts fresh. Wherever drop-outs were cleared (clearRadioGesture outside the clock). */
   function clearRadioTurnaround(): void {
     radioTurnaroundMemoryRef.current = null
+    // the payoff owed to it goes with it (sized builds)
+    radioPayoffRef.current = null
     radioTurnaroundRollPendingRef.current = false
     radioTurnaroundRollRef.current = null
     // a turn waiting goes too (radio off, a course change)
@@ -4464,6 +5034,10 @@ export function DiscoverPanel({
       }
     }
 
+    // Sized builds: the payoff owed to this lap's turnaround (stepRadioPayoff), before (2) and
+    // with its gates. Nothing is ever owed with sized builds off.
+    if (stepRadioPayoff(due, pos, loopBars)) return
+
     // TEMP (2026-09-29): which gate is holding the swap, so a paste says
     // why a change was staged late. Remove with radioTrace.ts.
     {
@@ -4628,16 +5202,29 @@ export function DiscoverPanel({
         //
         // A turnaround armed for this lap ends on the wrap this change waits for: it is the
         // change's lead-in, so the change keeps only an arrival (spec section 3).
+        //
+        // Sized builds: the draw is sized to the change (spec 4.3): this row and its riding
+        // companions, with whatever else lands at the top (radioChangeSizeNow). Undefined off.
+        const size = radioChangeSizeNow(
+          [pending.slotId, ...radioPendingCompanionsNow(pending).map((k) => k.slotId)],
+          loopBars,
+          pos
+        )
         const drawnTransition = radioCadenceTransition(
           radioCadence,
-          pickTransition(radioSettings.transitions, changing?.kinds ?? []),
+          pickTransition(
+            radioSettings.transitions,
+            changing?.kinds ?? [],
+            Math.random,
+            size === undefined ? undefined : { size }
+          ),
           landsAtBar === null
         )
         const transition =
           turnaroundGateNow() === 'arrival'
             ? radioTransitionUnderTurnaround(drawnTransition)
             : drawnTransition
-        const beats = radioGestureBeats(transition, pickDropOutBeats)
+        const beats = radioGestureBeats(transition, pickDropOutBeats, size)
         // The rows riding this change, decided with it: the ones the grid above saw, ready. A cut
         // aimed at a mid-loop bar in fold's bar band leaves a companion on a row the fold holds
         // off it unless its change carries the fold (radioFoldBarCompanionsNow): its row goes back
@@ -4849,6 +5436,13 @@ export function DiscoverPanel({
       // (radioTurnaroundAtWrap): staged a tick later, still a lap early.
       if (undrawn.length > 0 && turnaroundGateNow() === 'wait') return
       if (undrawn.length > 0) {
+        // Sized builds: every row landing at this top draws at the size of all that lands there
+        // (spec 4.3). Undefined off: today's draws.
+        const size = radioChangeSizeNow(
+          undrawn.map(([slotId]) => slotId),
+          loopBars,
+          pos
+        )
         const drawn = drawManualTransitions(
           undrawn.map(([slotId, m]) => ({
             slotId,
@@ -4856,10 +5450,17 @@ export function DiscoverPanel({
             // A joining row has no outgoing stem for a hole or a riser to
             // play on. It takes a cut, and leaves the lap's one leading
             // gesture for a row that can use it.
-            canLead: !m.joining
+            canLead: !m.joining,
+            ...(size !== undefined && { size })
           })),
           {
-            pick: (kinds) => pickTransition(radioSettings.transitions, kinds),
+            pick: (kinds, row) =>
+              pickTransition(
+                radioSettings.transitions,
+                kinds,
+                Math.random,
+                row.size === undefined ? undefined : { size: row.size }
+              ),
             dropOutBeats: pickDropOutBeats,
             // A hole, a riser or a drop-out -- radio's own or an earlier
             // manual one -- or this lap's turnaround, which is the lap's
@@ -5160,11 +5761,21 @@ export function DiscoverPanel({
       radioCadence.turnaroundPhraseBars
     )
     radioClockRef.current = step.clock
+    radioGridBarsRef.current = gridBars
     // The readout's clock (radioPlayRef): a lap more, and the bars of the lap that ended.
     if (step.wrapped) {
       radioPlayRef.current = {
         lap: radioPlayRef.current.lap + 1,
         startBars: radioPlayRef.current.startBars + loopBars
+      }
+    }
+    // Sized builds' clock (spec 4.2): the lap that ended, then a riser that played into this top
+    // -- radio's lead-in or a manual one, still armed until the landing below clears it -- is a
+    // build. (The turnaround's is noted in radioTurnaroundAtWrap.)
+    if (step.wrapped && radioSizedBuildsOf(radioSettings)) {
+      radioBuildClockRef.current = advanceRadioBuildClock(radioBuildClockRef.current, loopBars)
+      if (radioGestureRef.current.some((g) => g.kind === 'riser')) {
+        radioBuildClockRef.current = noteRadioBuild(radioBuildClockRef.current, false)
       }
     }
     // The bar a change detected on this tick was aiming at, so
@@ -5199,7 +5810,7 @@ export function DiscoverPanel({
         ? heldBar
         : Math.floor(pos / traceGrid) * traceGrid
     // The density arc gets every tick, before any branch below can return.
-    densityTick(step.wrapped, pos, loopBars)
+    densityTick(step.wrapped, pos, loopBars, step.turnaroundLapStarts)
     // The phrase turnaround: off at every wrap, rolled on the wrap that starts a phrase's last
     // lap -- after densityTick's microtask (the arc's removal at this wrap) and after every
     // landing this tick commits (radioTurnaroundAtWrap). Between wraps, a roll still waiting on a
@@ -5215,6 +5826,8 @@ export function DiscoverPanel({
       // A turn waiting rolls as soon as this lap's top can take it (radioTurnTick).
       radioTurnTick(pos, loopBars)
     }
+    // Spares asked for at a phrase start, once no arm of radio's is in flight (sized builds).
+    radioSparesTick()
     // What the turn button and its chips can do now.
     refreshRadioTurnCan()
     // So do the dub throws (Task 11).
@@ -5766,10 +6379,22 @@ export function DiscoverPanel({
         // radioChangeWaitsForLoopTop below lets it land where it came due -- an immediate
         // load-project, 20-65 ms late, as a below-80 own-cycle cut not decided early is. Most
         // are decided early (step 2) and staged at their bar.
+        // Sized builds: sized to this change and its riding companions, at the top a riser would
+        // lead into (radioChangeSizeNow). Undefined off: today's draw.
+        const size = radioChangeSizeNow(
+          [pending.slotId, ...companionsNow.map((k) => k.slotId)],
+          loopBars,
+          pos
+        )
         const drawnTransition = radioCadenceTransition(
           radioCadence,
           radioGestureRef.current.length === 0
-            ? pickTransition(radioSettings.transitions, changing?.kinds ?? [])
+            ? pickTransition(
+                radioSettings.transitions,
+                changing?.kinds ?? [],
+                Math.random,
+                size === undefined ? undefined : { size }
+              )
             : 'cut',
           step.wrapped
         )
@@ -5810,7 +6435,7 @@ export function DiscoverPanel({
         // bloom and a duck get one bar, which is the arrival rather than
         // the approach. Everything is clamped to half the loop by the
         // curve builders, so a short loop shortens all of them.
-        const beats = radioGestureBeats(transition, pickDropOutBeats)
+        const beats = radioGestureBeats(transition, pickDropOutBeats, size)
         // Can this change land on the boundary it came due on, or does it
         // have to wait for the loop top? Every curve in radioTransition.ts
         // is anchored at bar 0 and structurally cannot be anywhere else,
@@ -8323,17 +8948,20 @@ export function DiscoverPanel({
   /** Every radio tick. At a loop top the leg advances and may start a
    * step; on every tick a row on its way out is moved along. Deferred, as
    * everything in the tick that sets state is. */
-  function densityTick(wrapped: boolean, pos: number, loopBars: number): void {
+  function densityTick(wrapped: boolean, pos: number, loopBars: number, lapStarts: boolean): void {
     if (radioDensityOf(radioSettings) !== 'arc') return
     if (wrapped) arcLapRef.current += 1
     void Promise.resolve().then(() => {
       if (!radioOnRef.current) return
       stepArcExit(pos, loopBars)
-      if (wrapped) densityAtWrap(loopBars)
+      if (wrapped) densityAtWrap(loopBars, lapStarts)
     })
   }
 
-  function densityAtWrap(loopBars: number): void {
+  /** `lapStarts`: this wrap starts a phrase's last lap (the clock's turnaroundLapStarts), so a
+   * step decided here lands on the phrase start. With sized builds a ready step waits for that
+   * wrap, at most a phrase past ready (radioArcStepWaits; spec 4.5). */
+  function densityAtWrap(loopBars: number, lapStarts: boolean): void {
     const rows = slotsRef.current
     const adding = arcAddingRef.current
     // A joining row is done once its change has landed or gone.
@@ -8342,16 +8970,20 @@ export function DiscoverPanel({
     }
     const kind = nextArcKind(rows.map((r) => r.kinds))
     const removal = arcRemovalCandidate()
-    const { leg, step } = advanceDensityLeg(
-      densityLegRef.current ?? newDensityLeg('growing', rows.length),
-      {
-        count: rows.length,
-        loopBars,
-        busy: arcAddingRef.current !== null || arcExitRef.current !== null,
-        canAdd: kind !== null,
-        canRemove: removal !== null
-      }
-    )
+    const legWas = densityLegRef.current ?? newDensityLeg('growing', rows.length)
+    const { leg, step } = advanceDensityLeg(legWas, {
+      count: rows.length,
+      loopBars,
+      busy: arcAddingRef.current !== null || arcExitRef.current !== null,
+      canAdd: kind !== null,
+      canRemove: removal !== null,
+      waits: radioArcStepWaits({
+        sized: radioSizedBuildsOf(radioSettings),
+        decidesForPhraseStart: lapStarts,
+        overdueBars: legWas.bars + loopBars - legWas.stepBars,
+        phraseBars: turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars) * loopBars
+      })
+    })
     densityLegRef.current = leg
     if (step === 'add' && kind !== null) void arcAddRow(kind)
     else if (step === 'remove' && removal !== null) {
@@ -8393,7 +9025,7 @@ export function DiscoverPanel({
    * point: the arc is radio, and radio is performance, not an edit. */
   async function arcAddRow(kind: DiscoverSlotKind): Promise<void> {
     const id = freshSlotId()
-    arcAddingRef.current = { slotId: id, picking: true }
+    arcAddingRef.current = { slotId: id, picking: true, kinds: [kind] }
     setSlots((prev) => [
       ...prev,
       {
@@ -8423,7 +9055,7 @@ export function DiscoverPanel({
       arcAddingRef.current = null
       return
     }
-    arcAddingRef.current = { slotId: id, picking: false }
+    arcAddingRef.current = { slotId: id, picking: false, kinds: [kind] }
     const queued = queueManualChange(
       id,
       pick,
@@ -8610,6 +9242,11 @@ export function DiscoverPanel({
   function stopRadio(): void {
     radioOnRef.current = false
     resetDensityArc()
+    // Sized builds belong to a run of radio: the build clock and the spares start again with the
+    // next one (the payoff goes with clearRadioTurnaround below).
+    radioBuildClockRef.current = NO_RADIO_BUILDS
+    radioSparesRef.current = []
+    radioSparesWantedRef.current = false
     setRadioOn(false)
     radioClockRef.current = null
     artistTurnoverRef.current = new Set()

@@ -15,7 +15,12 @@ import {
   TURNAROUND_FAMILIES,
   toggleTurnaroundFamily
 } from '@shared/radioTurnaround'
-import { RADIO_DENSITY_OPTIONS, radioDensityOf, radioFavesOf } from '@shared/radioSchedule'
+import {
+  RADIO_DENSITY_OPTIONS,
+  radioDensityOf,
+  radioFavesOf,
+  radioSizedBuildsOf
+} from '@shared/radioSchedule'
 import { FAVES_LABEL, FAVES_TOOLTIP } from '@shared/discoverFaves'
 import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
 import { FOLD_SEED_TEXT_MAX, cleanFoldSeed, newFoldSeed } from '@shared/radioFold'
@@ -441,6 +446,18 @@ export function DiscoverRadioMenu({
             chip(d, settings.turnaroundDepth === d, () => onChange({ turnaroundDepth: d }))
           ),
           'how far'
+        )}
+      {/* Sized builds (spec 2026-10-03-radio-anointed-stems-design section 4, @shared/
+          radioBuildSize): a build follows the size of the change it leads into, and every
+          turnaround is paid off. On for everyone; `off` is the old gestures, exactly. */}
+      {mode === 'running' &&
+        row(
+          'builds',
+          [
+            chip('sized', radioSizedBuildsOf(settings), () => onChange({ sizedBuilds: true })),
+            chip('off', !radioSizedBuildsOf(settings), () => onChange({ sizedBuilds: false }))
+          ],
+          'build-ups sized to the change; every turnaround paid off'
         )}
       {/* The field shipped with the settings object on 2026-09-28 and had
           no row until phase E, deliberately: a chip for something nothing
