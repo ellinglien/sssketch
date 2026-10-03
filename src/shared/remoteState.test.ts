@@ -6,7 +6,10 @@ import {
   parseRemoteKeepOutcome,
   parseRemoteSlotAction,
   parseRemoteSlotKinds,
+  parseRemoteTurnMove,
   remoteStateFromSlots,
+  remoteTurnAnswer,
+  type RemoteTurnView,
   type RemoteSlotResponse,
   type RemoteStateResponse
 } from './remoteState'
@@ -195,6 +198,7 @@ describe('remoteStateFromSlots', () => {
       lastKeptName: 'misty kestrel',
       loopBars: 8,
       radio: null,
+      turn: null,
       slots: []
     })
   })
@@ -516,5 +520,83 @@ describe('createRemoteKeepLedger', () => {
     expect(ledger.results().map((r) => r.id)).toEqual(['b', 'c', 'd'])
     // A dropped id is forgotten entirely, so it could begin again.
     expect(ledger.begin('a')).toBe(true)
+  })
+})
+
+describe('remoteStateFromSlots and the turn', () => {
+  const meta = {
+    discoverOpen: true,
+    playing: true,
+    kept: 0,
+    rolled: 0,
+    lastKeptName: null,
+    loopBars: 8
+  }
+  const turn: RemoteTurnView = {
+    waiting: true,
+    move: 'wash',
+    canTurn: true,
+    moves: ['riser', 'wash', 'drum drop']
+  }
+
+  it('says nothing about the turn while radio is off', () => {
+    expect(remoteStateFromSlots([slot()], meta).turn).toBeNull()
+    expect(remoteStateFromSlots([slot()], { ...meta, turn: null }).turn).toBeNull()
+  })
+
+  it("carries the turn, its moves in the planner's order", () => {
+    expect(remoteStateFromSlots([slot()], { ...meta, turn }).turn).toEqual({
+      waiting: true,
+      move: 'wash',
+      canTurn: true,
+      moves: ['drum drop', 'wash', 'riser']
+    })
+  })
+
+  it('lets only real move names out', () => {
+    const odd = {
+      ...turn,
+      move: '/Users/nickel/x' as unknown as RemoteTurnView['move'],
+      moves: ['wash', '../etc' as unknown as RemoteTurnView['moves'][number], 'wash']
+    }
+    expect(remoteStateFromSlots([slot()], { ...meta, turn: odd }).turn).toEqual({
+      waiting: true,
+      move: null,
+      canTurn: true,
+      moves: ['wash']
+    })
+  })
+})
+
+describe('parseRemoteTurnMove', () => {
+  it("reads no move as the planner's choice, and a real move as itself", () => {
+    expect(parseRemoteTurnMove(undefined)).toEqual({ move: null })
+    expect(parseRemoteTurnMove(null)).toEqual({ move: null })
+    expect(parseRemoteTurnMove('low drop')).toEqual({ move: 'low drop' })
+  })
+
+  it('refuses anything else outright', () => {
+    for (const bad of ['drop', 'WASH', '../x', 7, ['wash'], {}]) {
+      expect(parseRemoteTurnMove(bad)).toBeNull()
+    }
+  })
+})
+
+describe('remoteTurnAnswer', () => {
+  const turn: RemoteTurnView = { waiting: false, move: null, canTurn: true, moves: ['wash'] }
+
+  it('is radio off with no turn in the state', () => {
+    expect(remoteTurnAnswer(null, null)).toBe('radio off')
+    expect(remoteTurnAnswer(undefined, 'wash')).toBe('radio off')
+  })
+
+  it('is turning when the chip, or the planner, can sound now', () => {
+    expect(remoteTurnAnswer(turn, 'wash')).toBe('turning')
+    expect(remoteTurnAnswer(turn, null)).toBe('turning')
+  })
+
+  it('is nothing to turn otherwise', () => {
+    expect(remoteTurnAnswer(turn, 'stop')).toBe('nothing to turn')
+    expect(remoteTurnAnswer({ ...turn, canTurn: false }, null)).toBe('nothing to turn')
   })
 })

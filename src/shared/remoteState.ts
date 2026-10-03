@@ -8,6 +8,7 @@ import {
   type DiscoverSlotKind
 } from './discoverSlotKind'
 import { quantiseRemotePeaks } from './remotePeaks'
+import { TURNAROUND_MOVES, type TurnaroundMove } from './radioTurnaround'
 
 /** One row on the phone. `id` is Discover's own slot id -- needed so a tap
  * can reroll THAT slot, and not a filesystem path. There is deliberately
@@ -78,6 +79,21 @@ export interface RemoteRadioView {
   heldSlotIds: string[]
 }
 
+/** Radio's turn, as the phone needs it (docs/superpowers/specs/2026-10-02-radio-turn-button-
+ * design.md): the `turn` button and its chips. Move names are the planner's own
+ * (@shared/radioTurnaround TurnaroundMove) -- no slot, no stem, nothing about the library. */
+export interface RemoteTurnView {
+  /** A turn is waiting for the loop top (pressed, or rolled and playing into it). */
+  waiting: boolean
+  /** The chip it holds: a chip's move, or the move rolled for the planner's choice; null before
+   * that. */
+  move: TurnaroundMove | null
+  /** The planner has a move it could turn with now: the `turn` button's answer. */
+  canTurn: boolean
+  /** The chips that can sound now; the others are dimmed. */
+  moves: TurnaroundMove[]
+}
+
 export interface RemoteState {
   /** False when Discover is not open on the Mac -- the page then says
    * "open discover on the mac" and offers nothing else. It does not
@@ -110,6 +126,9 @@ export interface RemoteState {
   /** Null whenever radio is not running, which is also what a Mac that
    * has nothing armed says. The phone marks no row at all for null. */
   radio: RemoteRadioView | null
+  /** Radio's turn; null or absent while radio is off (an older Mac never sends it). It is what
+   * POST /api/turn answers from (remoteTurnAnswer). */
+  turn?: RemoteTurnView | null
   slots: RemoteSlotView[]
 }
 
@@ -179,6 +198,8 @@ export interface RemoteStateMeta {
    * exactly that. Normalized below -- an id naming no row becomes null, so
    * what leaves is always drawable. */
   radio?: RemoteRadioView | null
+  /** Radio's turn while radio runs; absent or null while it is off. */
+  turn?: RemoteTurnView | null
 }
 
 /** The whole privacy boundary of Part 2, in one pure function: whatever
@@ -215,6 +236,7 @@ export function remoteStateFromSlots(
     // -- no mark -- rather than being passed on for the page to guard
     // against.
     radio: normalizeRemoteRadio(meta.radio ?? null, slots),
+    turn: normalizeRemoteTurn(meta.turn ?? null),
     slots: slots.map((slot) => ({
       id: slot.id,
       kindLabel: slotKindsLabel(slot.kinds),
@@ -224,6 +246,18 @@ export function remoteStateFromSlots(
       soloed: slot.audible && audibleCount === 1,
       peaks: quantiseRemotePeaks(peaksBySlotId?.get(slot.id) ?? [])
     }))
+  }
+}
+
+/** Only real move names leave, in the planner's order, once each; anything else is dropped. */
+function normalizeRemoteTurn(turn: RemoteTurnView | null): RemoteTurnView | null {
+  if (turn === null) return null
+  const known = (m: unknown): m is TurnaroundMove => TURNAROUND_MOVES.includes(m as TurnaroundMove)
+  return {
+    waiting: turn.waiting === true,
+    move: known(turn.move) ? turn.move : null,
+    canTurn: turn.canTurn === true,
+    moves: TURNAROUND_MOVES.filter((m) => turn.moves.includes(m))
   }
 }
 
@@ -240,7 +274,7 @@ function normalizeRemoteRadio(
   }
 }
 
-/** Everything the phone can ask the Mac to do. SIX verbs, and nothing else:
+/** Everything the phone can ask the Mac to do. SEVEN verbs, and nothing else:
  * no arranging, no timeline, no gain, no settings, no library browsing. The
  * phone can now set the shape of the loop as well as roll it.
  *
@@ -277,6 +311,9 @@ export type RemoteCommand =
   | { kind: 'add-slot'; kinds: DiscoverSlotKind[] }
   | { kind: 'remove-slot'; slotId: string }
   | { kind: 'slot-action'; slotId: string; action: RemoteSlotAction }
+  /** Radio's turn at the next loop top: a chip's `move`, absent for the planner's choice
+   * (2026-10-02). Forwarded only when remoteTurnAnswer says `turning`. */
+  | { kind: 'turn'; move?: TurnaroundMove }
 
 /** The six things a long press (or a tap, for `mute` and `solo`) on a phone
  * row can ask for. Four of them are the buttons that have been on every
@@ -300,6 +337,30 @@ const REMOTE_SLOT_ACTIONS: RemoteSlotAction[] = [
   'random',
   'duplicate'
 ]
+
+/** What POST /api/turn's body asked for: `{ move }` with a real move name, or the planner's
+ * choice (`move` null) for a body with no move at all. Null for anything else -- an unknown
+ * string fails the whole request, as an unknown kind does on /api/add-slot. */
+export function parseRemoteTurnMove(value: unknown): { move: TurnaroundMove | null } | null {
+  if (value === undefined || value === null) return { move: null }
+  const move = TURNAROUND_MOVES.find((m) => m === value)
+  return move === undefined ? null : { move }
+}
+
+/** The phone's flash for a turn press, and the route's answer: `radio off` with no turn in the
+ * state, `nothing to turn` when the chip (or, for the planner's choice, every move) cannot sound
+ * now, `turning` otherwise. Answered from the last state the Mac pushed, so it can be a push
+ * behind; the Mac rolls the turn itself at the top. */
+export type RemoteTurnAnswer = 'turning' | 'nothing to turn' | 'radio off'
+
+export function remoteTurnAnswer(
+  turn: RemoteTurnView | null | undefined,
+  move: TurnaroundMove | null
+): RemoteTurnAnswer {
+  if (turn === null || turn === undefined) return 'radio off'
+  const can = move === null ? turn.canTurn : turn.moves.includes(move)
+  return can ? 'turning' : 'nothing to turn'
+}
 
 /** The whole trust boundary for the action sheet, in one pure function --
  * same shape and the same rule as parseRemoteSlotKinds below: an unknown
