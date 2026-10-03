@@ -7418,6 +7418,15 @@ export function DiscoverPanel({
     return Math.max(0, loopBars - clock.lastPos)
   }
 
+  /** An armRadioPick is awaiting its pick and has not been superseded (a superseded one writes
+   * nothing, so it does not count). */
+  function radioArmInFlight(): boolean {
+    return (
+      radioArmInFlightRef.current !== null &&
+      radioArmInFlightRef.current === radioArmTokenRef.current
+    )
+  }
+
   /** Chooses radio's NEXT change and warms it. Called right after each
    * change lands (and once when radio starts), so the prefetch gets the
    * whole interval -- 12 to 48 bars, long enough for a cold stem to
@@ -7429,14 +7438,6 @@ export function DiscoverPanel({
    * hits a SETTLED promise when the candidate is finally committed. Without
    * it a radio change would land hundreds of milliseconds -- or a whole
    * download -- after the downbeat it was scheduled for. */
-  /** An armRadioPick is awaiting its pick and has not been superseded (a superseded one writes
-   * nothing, so it does not count). */
-  function radioArmInFlight(): boolean {
-    return (
-      radioArmInFlightRef.current !== null &&
-      radioArmInFlightRef.current === radioArmTokenRef.current
-    )
-  }
 
   async function armRadioPick(): Promise<void> {
     // The LATEST arm wins. Several paths re-arm (a landing, a yielded row,
