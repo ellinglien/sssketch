@@ -23,7 +23,10 @@ import {
   THROW_BEATS,
   turnaroundSilencedRowIds,
   initialThrowState,
+  noteRadioExitThrow,
   stepThrows,
+  throwDelaySec,
+  throwTailSec,
   throwCurveFor,
   turnaroundThrowAim,
   type ThrowState,
@@ -373,4 +376,46 @@ export function discoverThrowAim(
   const rows = new Set(aim.silenced)
   for (const g of gestures) if (g.kind === 'drop-out' || g.kind === 'hole') rows.add(g.slotId)
   return { changeInBars: aim.at, silenced: [...rows] }
+}
+
+/**
+ * A hook's exit throw (spec 2026-10-03-radio-anointed-stems-design 2.5), armed by the panel when
+ * the exit is decided: on the hook's row, ENDING on the coming loop top (the exit line), so its
+ * echoes ring over the line. It is armed live, as a lead-in is (a load-project now, the
+ * substitute's stage on a later tick), and counts on the throw clock (noteRadioExitThrow: the
+ * next regular throw waits for its echoes), drawing nothing.
+ *
+ * Null -- the exit goes dry -- when a throw is already armed, or the throw cannot start at least
+ * THROW_LEAD_BARS ahead of the playhead (a loop too short, or a decision late in the lap).
+ */
+export function armDiscoverExitThrow(
+  state: DiscoverThrowState,
+  o: {
+    slotId: string
+    shape: { beats: number; timing: ThrowTiming; feedback: number }
+    pos: number
+    loopBars: number
+    bpm: number
+  }
+): DiscoverThrowState | null {
+  if (state.armed !== null || !(o.loopBars > 0) || !(o.bpm > 0)) return null
+  const atBar = o.loopBars - o.shape.beats / 4
+  const ahead = atBar - o.pos
+  if (atBar < 0 || ahead < THROW_LEAD_BARS - 1e-6) return null
+  const secPerBar = (4 * 60) / o.bpm
+  const startBars = state.elapsedBars + ahead
+  const endsAtSec = state.elapsedSec + (o.loopBars - o.pos) * secPerBar
+  const tail = throwTailSec(throwDelaySec(o.bpm, o.shape.timing), o.shape.feedback)
+  return {
+    ...state,
+    throws: noteRadioExitThrow(state.throws, endsAtSec, tail),
+    armed: {
+      slotId: o.slotId,
+      atBar,
+      ...o.shape,
+      startBars,
+      endBars: startBars + o.shape.beats / 4,
+      aimed: true
+    }
+  }
 }

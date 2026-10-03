@@ -295,3 +295,36 @@ export function throwCurveFor(
     { bar: Math.min(end, loopBars), value: 0 }
   ]
 }
+
+// ---- a hook's exit (spec 2026-10-03-radio-anointed-stems-design 2.5) ----
+
+/** A hook's exit throw on `slot`, ENDING on its line `endsAt` (AudioContext time): it starts
+ * `beats` before it, so its echoes ring over the line and into the substitute (or the silence).
+ * The shape is stepRadioHooks' (drawn there with drawThrowBeats and drawThrowEcho). */
+export function radioThrowEndingAt(
+  slot: string,
+  shape: { beats: number; timing: ThrowTiming; feedback: number },
+  endsAt: number,
+  bpm: number
+): ThrowPlan {
+  return { slot, at: endsAt - (shape.beats * 60) / bpm, ...shape }
+}
+
+/** The same throw on a loop-anchored timeline (sssketch, throwCurveFor): it starts `beats / 4`
+ * bars before the top, so it ends exactly on it. Null when the loop cannot hold it. */
+export function radioThrowEndingAtTop(
+  shape: { beats: number },
+  loopBars: number
+): { atBar: number; beats: number } | null {
+  const atBar = loopBars - shape.beats / 4
+  return loopBars > 0 && atBar >= 0 ? { atBar, beats: shape.beats } : null
+}
+
+/** A hook's exit throw counts on the throw clock: the next regular throw waits for its echoes
+ * (busyUntil) and counts its spacing from it (barsSince 0). It draws nothing and leaves the
+ * schedule (`barsUntil`) alone, so the regular throws keep their rate and never stack on an exit.
+ * Only ever later: an earlier busyUntil is kept. */
+export function noteRadioExitThrow(state: ThrowState, endsAt: number, tailSec: number): ThrowState {
+  const busy = endsAt + (Number.isFinite(tailSec) && tailSec > 0 ? tailSec : 0)
+  return { ...state, busyUntil: Math.max(state.busyUntil, busy), barsSince: 0 }
+}
