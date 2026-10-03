@@ -296,6 +296,11 @@ export interface RadioFoldState {
   /** A rotation under way (v2): `from` walks back out, and `to` folds in on the top `from` has
    * left. Absent in a state saved before v2: none. */
   rotate?: { from: string; to: string } | null
+  /** Rows a runtime released since the last step (radioFoldRelease: a change landed straight on
+   * them). The next step treats them as rows that just left -- none starts a new fold on that
+   * top, so the new stem plays straight at least that long -- and clears it. Absent when none
+   * (every unhurried, never-released machine, so its states are exactly as before). */
+  released?: string[]
 }
 
 export function createRadioFold(seed: string): RadioFoldState {
@@ -465,7 +470,9 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
   //    layer arrives straight). A changed loop restarts every cycle at this top, since the
   //    realignment arithmetic has changed. A row that leaves here does not start a new fold on
   //    the same top.
-  const left = new Set<string>()
+  //    A row a runtime released since the last step (state.released) has left too.
+  const left = new Set<string>(prev.released ?? [])
+  if (s.released !== undefined) delete s.released
   s.rows = s.rows.filter((r) => {
     const row = byId.get(r.rowId)
     const keep =
@@ -926,7 +933,9 @@ export function radioFoldCarry(
 /** PHASE 2. A change landed STRAIGHT on a row the machine held (it could not carry, or a
  * mid-loop cut): the fold is over now, not at the next step. The row leaves the state and every
  * step's cycles, and `marked` is worked out again without it, so the readout and the turnaround's
- * realignment preference stop naming a fold no longer heard. Nothing is drawn. Pure. */
+ * realignment preference stop naming a fold no longer heard. The state notes it as `released`,
+ * so the next step keeps the row out of a new fold on that top, as it does for a row that leaves
+ * there itself. Nothing is drawn. Pure. */
 export function radioFoldRelease(step: RadioFoldStep, rowId: string): RadioFoldStep {
   if (
     !step.state.rows.some((r) => r.rowId === rowId) &&
@@ -936,12 +945,15 @@ export function radioFoldRelease(step: RadioFoldStep, rowId: string): RadioFoldS
   const rows = step.state.rows.filter((r) => r.rowId !== rowId)
   const marked = marksTop(rows, step.lap, step.state.loopBeats)
   const rotate = step.state.rotate ?? null
+  const released = step.state.released ?? []
   return {
     ...step,
     state: {
       ...step.state,
       rows,
       marked,
+      // the next step treats it as just left: no new fold on that top (stepRadioFold step 1)
+      released: released.includes(rowId) ? released : [...released, rowId],
       rotate: rotate !== null && (rotate.from === rowId || rotate.to === rowId) ? null : rotate
     },
     cycles: step.cycles.filter((c) => c.rowId !== rowId),

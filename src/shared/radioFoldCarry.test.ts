@@ -362,3 +362,43 @@ describe('radioLandsMidLoop (which landing the readout shows companions for)', (
     expect(radioLandsMidLoop(1, 1, 0)).toBe(false)
   })
 })
+
+describe('a released row keeps the machine\'s "just left" guard', () => {
+  it('a row released before the step does not fold again on that step; the marker then clears', () => {
+    // a 4-bar loop at bend 100: every foldable row would fold on any top it may
+    const rows = [R('d', { kinds: ['drums'], percussive: true }), R('p')]
+    let s = createRadioFold('autech')
+    let st: RadioFoldStep | null = null
+    for (let k = 0; k < 400; k++) {
+      st = stepRadioFold(s, { rows, loopBars: 4, bpm: 120, fold: 100 })
+      s = st.state
+      if (st.state.rows.some((r) => r.rowId === 'p')) break
+    }
+    expect(st!.state.rows.some((r) => r.rowId === 'p')).toBe(true)
+    const released = radioFoldRelease(st!, 'p')
+    expect(released.state.released).toEqual(['p'])
+    // the new stem arrives straight: whatever the step decides, it does not fold `p` on this top
+    const newRows = rows.map((r) => (r.id === 'p' ? { ...r, stemId: 'p-2' } : r))
+    for (const hurry of [0, 0.5, 1]) {
+      const next = stepRadioFold(released.state, {
+        rows: newRows,
+        loopBars: 4,
+        bpm: 120,
+        fold: 100,
+        hurry
+      })
+      expect(next.state.rows.some((r) => r.rowId === 'p')).toBe(false)
+      expect(next.state.released).toBeUndefined()
+    }
+    // radioFoldLand's release leaves it too
+    const landed = radioFoldLand({ state: st!.state, now: st!, next: st! }, 'p', {
+      stemId: 'p-2',
+      barLength: 4,
+      carry: false,
+      release: true
+    })
+    expect(landed.state?.released).toEqual(['p'])
+    // a state never released carries no marker
+    expect(st!.state.released).toBeUndefined()
+  })
+})
