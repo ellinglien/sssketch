@@ -289,17 +289,26 @@ All of them go on the same lanes and nodes as today.
   - the wash to the send.
 
   Each row has at most one curve per param (§1), so nothing new can collide.
-- **The riser:** `planRiser('turnaround', wrap − gapBeats × secPerBeat, …)`.
-  - `planRiser` already counts back from the end it is given, so the riser starts `riserBars`
-    before the gap and its tail runs on into the gap.
+- **The riser:** `planRiser('turnaround', wrap, …, endBeforeBars = gapBeats / 4)`, a new optional
+  argument passed through to `buildTransitionRiser`'s `endBeforeBars`, as the desktop builds it.
+  - The riser starts `riserBars` before the gap and ends where the gap starts; its tail (an eighth
+    of a bar) runs on into the gap. Riser and gap together stay within the half loop, the desktop's
+    clamp. With 0 (the default) it is today's riser exactly.
   - The riser voice's send into the reverb (0.2-0.4, the web's riser character) is what rings.
 - **The return on the one, de-clicked.** Today a turnaround's volume curve ends with a step from 0
   to 1 at the wrap (`setValueAtTime`). On drums the transient masks it. A whole bed returning from
   silence, a sustained bass or pad among it, would click.
   - **The fix:** the last point moves to `wrap + ANTI_CLICK_SEC` (3 ms), as a linear ramp. That is
     the same fade-in a swapped stem gets at the wrap (`schedule.ts`).
-  - It applies to every turnaround drop, old ones included. A swap at the same wrap fades its new
-    stem in over the same 3 ms, so the two agree.
+  - It applies to every turnaround drop, old ones included, on a row whose audio carries on through
+    the wrap.
+  - **Except on a row that fades in on the wrap by itself** (a swap there, or a stem not dividing
+    the loop jumping back to its start): two 3 ms ramps would multiply into a t² rise, a softer
+    downbeat. There the return stays a step under the voice's own fade-in (added in review,
+    2026-10-03). `wrapDeclicksRow` decides from `planVoices` (a voice starting on the wrap with a
+    fresh fade-in, nothing running on past it); `Gestures` writes the step or the ramp
+    (`turnaroundGainReturn`) and follows a swap scheduled or taken back after the turnaround from
+    the engine's pump (`syncTurnaroundReturns`), up to 10 ms before the wrap.
 - **Cancel** (hold, a refused plan): unchanged. Every param glides back, and the riser fades from its
   start.
 
@@ -418,8 +427,9 @@ object armed at the start of the phrase's last lap and cleared at its wrap, and 
 a point in beats before that wrap. What it does add:
 
 1. **The gap must end exactly on the one.**
-   - **Web:** the return is a 3 ms ramp starting at the wrap's AudioContext time, the same time a
-     swap's fade-in starts. Tested (`turnaround.test.ts`).
+   - **Web:** the return is a 3 ms ramp starting at the wrap's AudioContext time, or, on a row whose
+     voice fades in there itself (a swap), a step under that fade-in (§5). Tested
+     (`turnaround.test.ts`, `gestures.test.ts`, engine check `turnaroundGap`).
    - **Desktop:** the volume lane's step lands on bar 0 of the lap. The transport splits its block
      at the wrap, so the smoother starts on the one (τ 15 ms). That is how every drop and hole
      already returns.

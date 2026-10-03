@@ -1262,6 +1262,8 @@ Claude-Session: https://claude.ai/code/session_01KK8TyKjVKvWU8ZjQCk3ozz"
 
 **Depends on:** Task 1 (`gapBeats` and `parts` on `TurnaroundPlan`) in sssketch's working tree. **Overlap with the pace slider:** none (it never touches `src/audio/turnaround.ts`), so it can run now.
 
+**As built (b46daa3, f7a81c2 in ell.ing/radio), differing from the diffs below:** the riser goes through a new optional `planRiser(..., endBeforeBars)` (passed to `buildTransitionRiser`, so riser and gap stay within the half loop, as the desktop), not `planRiser(wrap − gap, ...)`; and a row whose own voice fades in on the wrap (a swap) keeps a step there under that fade-in rather than the 3 ms ramp too (`wrapDeclicksRow`, `Gestures.syncTurnaroundReturns`; spec §5).
+
 **Timing risks (spec §9.1, 9.2):**
 - **The return.** Today the last two gain points are both at the wrap, a step from 0 to 1. The step becomes a linear ramp ending `ANTI_CLICK_SEC` (3 ms) after the wrap. It starts at the wrap's AudioContext time, the same instant a swapped stem starts its own 3 ms fade-in (`schedule.ts`), so a row swapping at that wrap and its turnaround gain rise together.
   - `applyTimedPoints` ramps linearly between points whose times differ, and steps where they are equal. So this needs no change in `gestures.ts`.
