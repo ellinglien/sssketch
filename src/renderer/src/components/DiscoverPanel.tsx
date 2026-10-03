@@ -1918,7 +1918,9 @@ export function DiscoverPanel({
     // A plan that no longer fits THIS loop (turnaroundFitsLoop: a landing changed the loop after
     // it was rolled) is dropped whole, as is a filter move left with no row to filter (every
     // target already in a change's filter in): either way nothing plays, so the phrase end is
-    // forgotten too -- a silent move must not be "repeated" by a diminution at the next one.
+    // forgotten too -- a silent move must not be "repeated" by a diminution at the next one. A
+    // turn's leaves the memory alone (plan point 5): it never wrote it, and one replacing a phrase
+    // end's has already cleared it.
     const turnaround =
       radioOnRef.current && (!stage || stage.atBars !== undefined)
         ? radioTurnaroundRef.current
@@ -1929,7 +1931,7 @@ export function DiscoverPanel({
       maxBarLength > 0 &&
       !turnaroundFitsLoop(turnaround.plan, maxBarLength)
     ) {
-      radioTurnaroundMemoryRef.current = null
+      if (turnaround.turn === null) radioTurnaroundMemoryRef.current = null
     } else if (turnaround !== null && maxBarLength !== undefined && maxBarLength > 0) {
       const ownSend = masterSendRef.current / 100
       let filtered = 0
@@ -1977,7 +1979,11 @@ export function DiscoverPanel({
           }
         }
       }
-      if ((turnaround.plan.move === 'lift' || turnaround.plan.move === 'dip') && filtered === 0) {
+      if (
+        turnaround.turn === null &&
+        (turnaround.plan.move === 'lift' || turnaround.plan.move === 'dip') &&
+        filtered === 0
+      ) {
         radioTurnaroundMemoryRef.current = null
       }
       if (turnaround.plan.riserBars !== undefined) {
