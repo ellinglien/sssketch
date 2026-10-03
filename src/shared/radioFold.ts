@@ -54,6 +54,12 @@ export const FOLD_ROTATE_AFTER_REALIGNS: Readonly<{ min: number; max: number }> 
 })
 /** A change prefers a realignment top at most this many laps past its drawn interval. */
 export const FOLD_PREFER_WAIT_LAPS = 2
+/** Fold following the pace slider above 70 (stepRadioFold's `hurry`, 0..1; 2026-10-03 fold
+ * follows pace): stretches shrink to this share of their drawn bars at full hurry ... */
+export const FOLD_HURRY_STRETCH_MIN_SCALE = 0.25
+/** ... and a top that is not a realignment still opens (re-fold, rotation, an unfold's wait, a
+ * second fold) with this chance at full hurry, drawn once per step and only while hurrying. */
+export const FOLD_HURRY_OPEN_CHANCE = 0.5
 /** A settled row asked to unfold waits for its own realignment top, but no longer than this. */
 export const FOLD_UNFOLD_MAX_WAIT_LAPS = 8
 /** Folded stretches: this many bars at `fold` 0 .. 100 (then +-25%, drawn). */
@@ -316,6 +322,11 @@ export interface RadioFoldInput {
   bpm: number
   /** The `fold` fader, 0..100. */
   fold: number
+  /** 0..1, from the pace slider above 70 (radioCadence.foldHurry): the machine's own timers
+   * shorten -- stretches, fold-in and re-fold steps, the unfold wait, the realignments before a
+   * rotation -- and any top may open like a realignment (FOLD_HURRY_OPEN_CHANCE). Absent or 0:
+   * exactly as before, the same draws. */
+  hurry?: number
 }
 
 /** What one row plays in the decided lap. Absent from `cycles`: full length. */
@@ -421,6 +432,11 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
   const lap = s.lap + 1
   s.lap = lap
   const f = normalizeFoldAmount(input.fold, DEFAULT_RADIO_FOLD) / 100
+  const h = Math.min(1, Math.max(0, Number.isFinite(input.hurry) ? (input.hurry as number) : 0))
+  /** A count of steps or laps, shortened by the hurry (never below `floor`); as drawn at 0. */
+  const hurried = (n: number, floor: number): number =>
+    h > 0 ? Math.max(floor, Math.round(n * (1 - h))) : n
+  const stretchScale = h > 0 ? 1 - (1 - FOLD_HURRY_STRETCH_MIN_SCALE) * h : 1
   const loopBeats = input.loopBars * 4
   const loopChanged = prev.lap >= 0 && s.loopBeats !== loopBeats
   s.loopBeats = loopBeats
@@ -472,6 +488,11 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     if (r.unfoldSince === null) r.unfoldSince = lap
   }
   const marked = s.rows.some((r) => r.mode === 'settled' && realignsAt(r, lap, loopBeats))
+  // Hurrying, a top that is not a realignment may still open for what waits on one. Drawn only
+  // while hurrying, so an unhurried machine draws exactly what it always did. `marked` stays the
+  // true realignment: the change and the turnaround prefer that one alone.
+  const opensAnyway = h > 0 && draw() < FOLD_HURRY_OPEN_CHANCE * h
+  const opens = (r: RadioFoldRowState): boolean => realignsAt(r, lap, loopBeats) || opensAnyway
 
   // 2. Stretches. `fold` 0 ends a folded stretch at once and keeps it straight. A straight
   //    stretch only counts its laps once every fold has walked back: it is meant to be heard.
@@ -482,14 +503,16 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
       s.stretch = 'straight'
       const bars =
         lerp(FOLD_STRAIGHT_STRETCH_BARS.atNone, FOLD_STRAIGHT_STRETCH_BARS.atFull, f) *
-        (0.75 + 0.5 * draw())
+        (0.75 + 0.5 * draw()) *
+        stretchScale
       s.stretchEndsLap = lap + stretchLaps(bars, input.loopBars)
       for (const r of s.rows) if (r.unfoldSince === null) r.unfoldSince = lap
     } else {
       s.stretch = 'folded'
       const bars =
         lerp(FOLD_FOLDED_STRETCH_BARS.atNone, FOLD_FOLDED_STRETCH_BARS.atFull, f) *
-        (0.75 + 0.5 * draw())
+        (0.75 + 0.5 * draw()) *
+        stretchScale
       s.stretchEndsLap = lap + stretchLaps(bars, input.loopBars)
     }
   }
@@ -502,11 +525,11 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
   //     Only in a folded stretch, never a fold already asked to leave.
   if (s.stretch === 'folded' && f > 0) {
     for (const r of s.rows) {
-      if (r.mode !== 'settled' || r.unfoldSince !== null || !realignsAt(r, lap, loopBeats)) continue
+      if (r.mode !== 'settled' || r.unfoldSince !== null || !opens(r)) continue
       r.realigns = (r.realigns ?? 0) + 1
       if (
         (s.rotate ?? null) === null &&
-        r.realigns >= (r.rotateAfter ?? FOLD_ROTATE_AFTER_REALIGNS.max)
+        r.realigns >= hurried(r.rotateAfter ?? FOLD_ROTATE_AFTER_REALIGNS.max, 1)
       ) {
         const others = foldable()
         if (others.length > 0) {
@@ -535,7 +558,7 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
       } else {
         r.phaseBeats = pickFrom(phases, draw())
         r.targetBeats = pick
-        r.path = radioFoldPath(r.cycleBeats, pick, 1 + Math.floor(draw() * 2))
+        r.path = radioFoldPath(r.cycleBeats, pick, hurried(1 + Math.floor(draw() * 2), 1))
         r.cycleBeats = r.path.shift() ?? pick
         // the walk back out passes only lengths it played longer than the new target, at most
         // three of them, the nearest: an unfold stays three steps at most, as in v1
@@ -554,8 +577,8 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
       r.mode === 'folding' ||
       r.mode === 'refolding' ||
       outside.has(r.rowId) ||
-      realignsAt(r, lap, loopBeats) ||
-      lap - r.unfoldSince >= FOLD_UNFOLD_MAX_WAIT_LAPS
+      opens(r) ||
+      lap - r.unfoldSince >= hurried(FOLD_UNFOLD_MAX_WAIT_LAPS, 0)
     if (!due) continue
     r.mode = 'unfolding'
     r.targetBeats = r.fullBeats
@@ -609,7 +632,8 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
     }
     if (row === undefined && (s.rotate ?? null) === null) {
       const active = s.rows.filter((r) => r.unfoldSince === null).length
-      const may = s.rows.length < maxRows(f) && (active === 0 || (marked && draw() < 0.5))
+      const may =
+        s.rows.length < maxRows(f) && (active === 0 || ((marked || opensAnyway) && draw() < 0.5))
       const candidates = may ? foldable() : []
       if (candidates.length > 0) row = pickFrom(candidates, draw())
     }
@@ -617,7 +641,7 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
       const target = pickFrom(foldTargets(row, loopBeats, input.bpm, f), draw())
       const phase = pickFrom(phaseMenu(f), draw())
       const full = row.barLength * 4
-      const path = radioFoldPath(full, target, 2 + Math.floor(draw() * 3))
+      const path = radioFoldPath(full, target, hurried(2 + Math.floor(draw() * 3), 1))
       const first = path.shift() ?? target
       const { min, max } = FOLD_ROTATE_AFTER_REALIGNS
       const rotateAfter = min + Math.floor(draw() * (max - min + 1))
@@ -743,7 +767,8 @@ export function radioFoldMarkedBarsAhead(
 }
 
 /** A change's interval under the mode: the drawn bars, moved later to a realignment top when one
- * comes within FOLD_PREFER_WAIT_LAPS laps of it (spec section 1: the next change prefers it).
+ * comes within at most `preferWaitLaps` laps of it (spec section 1: the next change prefers it;
+ * FOLD_PREFER_WAIT_LAPS by default, 0 never waits: fold following the pace slider fades it out).
  * `stepOwed`: the lap playing now has started but its wrap's step has not run yet (sssketch steps
  * a couple of microtasks after the wrap, behind that wrap's landings), so `state` still decided
  * the lap playing now and counts its tops from the lap before: `fromBars` is a lap further on. */
@@ -752,11 +777,12 @@ export function radioFoldIntervalBars(
   drawnBars: number,
   loopBars: number,
   fromBars = 0,
-  stepOwed = false
+  stepOwed = false,
+  preferWaitLaps: number = FOLD_PREFER_WAIT_LAPS
 ): number {
-  if (state === null || !(loopBars > 0)) return drawnBars
+  if (state === null || !(loopBars > 0) || !(preferWaitLaps > 0)) return drawnBars
   const from = fromBars + (stepOwed ? loopBars : 0)
-  const limit = drawnBars + FOLD_PREFER_WAIT_LAPS * loopBars
+  const limit = drawnBars + preferWaitLaps * loopBars
   const horizon = Math.ceil((limit + from) / loopBars)
   let best: number | null = null
   for (const top of radioFoldMarkedBarsAhead(state, loopBars, horizon)) {
@@ -773,4 +799,30 @@ export function radioFoldTurnaroundRate(
   markedTop: boolean
 ): RadioTurnarounds {
   return markedTop && rate !== 'off' ? 'often' : rate
+}
+
+/** Whether the fold machine holds `rowId` in the lap playing (`now`) or the next (`next`): a
+ * cycle for it in either step. Phase 1 of fold following the slider keeps such a row to its loop
+ * tops (radioCadenceBarEvery); phase 2 lets it cut mid-loop, carrying its fold (radioFoldCarry). */
+export function radioFoldHoldsRow(
+  now: RadioFoldStep | null,
+  next: RadioFoldStep | null,
+  rowId: string
+): boolean {
+  return [now, next].some((st) => st?.cycles.some((c) => c.rowId === rowId) === true)
+}
+
+/** PHASE 1. The rows radio may pick from while fold mode runs in the slider's bar band (`active`):
+ * every id the fold machine does not hold in the lap playing or the next (radioFoldHoldsRow), so
+ * the folded layers keep their stems while the rest churn; all of `ids` when that leaves none, or
+ * when not `active` (the same array, so nothing downstream draws differently). */
+export function radioFoldPickableIds(
+  ids: readonly string[],
+  now: RadioFoldStep | null,
+  next: RadioFoldStep | null,
+  active: boolean
+): readonly string[] {
+  if (!active) return ids
+  const free = ids.filter((id) => !radioFoldHoldsRow(now, next, id))
+  return free.length > 0 ? free : ids
 }
