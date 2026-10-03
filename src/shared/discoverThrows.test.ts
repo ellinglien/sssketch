@@ -541,4 +541,26 @@ describe('discoverThrowSilenced', () => {
     })!
     expect(discoverThrowSilenced(lifted, [])).toEqual([])
   })
+
+  it('a gapped turnaround also silences a live row it never saw (joined after its roll), not its keeper', () => {
+    const plan = {
+      rows: [
+        {
+          rowId: 'drums',
+          volume: [
+            { beats: 1, value: 0 },
+            { beats: 0, value: 1 }
+          ]
+        }
+      ],
+      gapBeats: 1,
+      keeperId: 'lead'
+    }
+    expect(discoverThrowSilenced(plan, [], ['drums', 'lead', 'joined']).sort()).toEqual([
+      'drums',
+      'joined'
+    ])
+    // without the live rows: the plan's own, as before
+    expect(discoverThrowSilenced(plan, [])).toEqual(['drums'])
+  })
 })

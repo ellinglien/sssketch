@@ -117,7 +117,9 @@ import {
   turnaroundArc,
   turnaroundDraw,
   turnaroundFitsLoop,
+  turnaroundDropCurve,
   turnaroundFlashes,
+  turnaroundGapLateRowIds,
   turnaroundMoveCanSound,
   turnaroundPlanMoves,
   turnaroundToLoopBars,
@@ -2147,6 +2149,26 @@ export function DiscoverPanel({
           }
         }
       }
+      // A row the roll never saw -- joined mid-lap (joinPreviewingMix) or resolved after the roll --
+      // is not in plan.rows: silenced through the gap with the same drop, so only the keeper plays
+      // through it (turnaroundGapLateRowIds; the throws keep off it the same way).
+      const gapBeats = turnaround.plan.gapBeats ?? 0
+      const late = turnaroundGapLateRowIds(
+        turnaround.plan,
+        members.map((m) => m.id)
+      )
+      if (late.length > 0) {
+        const gapDrop = turnaroundToLoopBars(
+          turnaroundDropCurve(maxBarLength, gapBeats),
+          maxBarLength
+        )
+        if (gapDrop.length > 0) {
+          for (const id of late) {
+            const own = members.findIndex((m) => m.id === id) + 1
+            if (own > 0) addVolume(stemKey(rifff.groupId, own), gapDrop)
+          }
+        }
+      }
       if (
         turnaround.turn === null &&
         (turnaround.plan.move === 'lift' || turnaround.plan.move === 'dip') &&
@@ -3995,7 +4017,11 @@ export function DiscoverPanel({
         // or hole's row sharing the lap (an arc exit). The turnaround is the one transition a throw can aim at here: a decided change
         // is staged, and arming a throw pushes, which would withdraw the stage (canArm above).
         changeInBars: radioTurnaroundRef.current !== null ? loopBars - pos : null,
-        silenced: discoverThrowSilenced(radioTurnaroundRef.current?.plan, radioGestureRef.current),
+        silenced: discoverThrowSilenced(
+          radioTurnaroundRef.current?.plan,
+          radioGestureRef.current,
+          previewingSlotIdsRef.current
+        ),
         rows: slotsRef.current.map((s) => ({
           slot: s.id,
           kinds: s.kinds,

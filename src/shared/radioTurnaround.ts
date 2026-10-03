@@ -1167,6 +1167,28 @@ export interface TurnaroundFlash {
   beats: number
 }
 
+/** The live rows a gapped plan never saw -- a row that joined, or resolved, after its roll -- which
+ * the runtime silences through the gap with the same drop curve (`turnaroundDropCurve` of
+ * `gapBeats`), so nothing but the keeper plays through it. Never the keeper, even when the plan
+ * does not list it. None without a gap. A row already in the plan keeps its own curves. */
+export function turnaroundGapLateRowIds(
+  plan:
+    | (Pick<TurnaroundPlan, 'gapBeats' | 'keeperId'> & {
+        rows: readonly { rowId: string }[]
+      })
+    | null
+    | undefined,
+  liveRowIds: Iterable<string>
+): string[] {
+  if (!plan || !((plan.gapBeats ?? 0) > 0)) return []
+  const planned = new Set(plan.rows.map((r) => r.rowId))
+  const out: string[] = []
+  for (const id of liveRowIds) {
+    if (!planned.has(id) && id !== plan.keeperId && !out.includes(id)) out.push(id)
+  }
+  return out
+}
+
 /** Every word a plan flashes: each row its moves' words from where each starts, and `gap` on the
  * rows that drop out, from where the gap starts. A plan with no parts (one move, `combine` off):
  * every row its move's word from the plan's start, as before. The riser is its own voice: no row. */

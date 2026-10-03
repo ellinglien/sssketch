@@ -28,6 +28,7 @@ import {
   type ThrowState,
   type ThrowTiming
 } from './radioThrows'
+import { turnaroundGapLateRowIds } from './radioTurnaround'
 import { stemKey } from './types'
 
 /** A throw starts at least this far ahead of the playhead: load-project lands 0.02-0.22 bar
@@ -317,13 +318,24 @@ export function throwYieldsToLeadIn(state: DiscoverThrowState): boolean {
  * The rows a throw is never put on (stepThrows' silenced): those an armed turnaround drops before
  * its one, and the row of every drop-out or hole armed this lap -- an arc exit's drop-out can
  * share the lap with a turnaround, and an aimed throw goes over a lead-in, so its row has to be
- * named here too. The send is post-fader: a throw on a silenced row is heard as nothing.
+ * named here too. With `liveRowIds` (the rows playing), a gapped turnaround's late rows too
+ * (turnaroundGapLateRowIds): the panel silences them through the gap. The send is post-fader: a
+ * throw on a silenced row is heard as nothing.
  */
 export function discoverThrowSilenced(
-  turnaround: Parameters<typeof turnaroundSilencedRowIds>[0],
-  gestures: readonly { kind: string; slotId: string }[]
+  turnaround:
+    | (NonNullable<Parameters<typeof turnaroundSilencedRowIds>[0]> & {
+        gapBeats?: number
+        keeperId?: string
+      })
+    | null
+    | undefined,
+  gestures: readonly { kind: string; slotId: string }[],
+  liveRowIds: Iterable<string> = []
 ): string[] {
   const rows = new Set(turnaroundSilencedRowIds(turnaround))
+  // and every live row a gapped plan never saw: the runtime silences it through the gap too
+  for (const id of turnaroundGapLateRowIds(turnaround, liveRowIds)) rows.add(id)
   for (const g of gestures) if (g.kind === 'drop-out' || g.kind === 'hole') rows.add(g.slotId)
   return [...rows]
 }

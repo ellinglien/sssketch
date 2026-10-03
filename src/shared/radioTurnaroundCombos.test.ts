@@ -9,6 +9,7 @@ import {
   turnaroundFitsLoop,
   turnaroundFlashes,
   turnaroundGapBeats,
+  turnaroundGapLateRowIds,
   turnaroundLabel,
   turnaroundPlanMoves,
   type TurnaroundInput,
@@ -594,5 +595,24 @@ describe("the desktop's riser for a rolled plan (DiscoverPanel: endBeforeBars = 
       }
     }
     expect(gapped).toBeGreaterThan(0)
+  })
+})
+
+describe('turnaroundGapLateRowIds: rows the roll never saw, silenced through the gap', () => {
+  const gapped = {
+    rows: [{ rowId: 'd' }, { rowId: 'b' }, { rowId: 'l' }],
+    gapBeats: 2,
+    keeperId: 'w'
+  }
+  it('every live row not in the plan, but the keeper', () => {
+    expect(turnaroundGapLateRowIds(gapped, ['d', 'b', 'l', 'w', 'j', 'k'])).toEqual(['j', 'k'])
+  })
+  it('none without a gap, or without a plan', () => {
+    expect(turnaroundGapLateRowIds({ ...gapped, gapBeats: 0 }, ['j'])).toEqual([])
+    expect(turnaroundGapLateRowIds({ rows: [], gapBeats: undefined }, ['j'])).toEqual([])
+    expect(turnaroundGapLateRowIds(null, ['j'])).toEqual([])
+  })
+  it('the keeper stays even when the plan does not list it', () => {
+    expect(turnaroundGapLateRowIds({ rows: [], gapBeats: 1, keeperId: 'w' }, ['w'])).toEqual([])
   })
 })
