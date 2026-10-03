@@ -4,6 +4,7 @@ import {
   FOLD_MAX_ROWS,
   createRadioFold,
   foldSeedKey,
+  radioFoldDriftRange,
   radioFoldAllowedCycles,
   radioFoldIntervalBars,
   radioFoldMarkedBarsAhead,
@@ -397,36 +398,67 @@ describe('realignment marks', () => {
 })
 
 describe('drift', () => {
+  it("scales with bend: v1's range at 0, a deeper cutoff and more send at 100", () => {
+    expect(radioFoldDriftRange(0)).toEqual(FOLD_DRIFT_RANGE)
+    expect(FOLD_DRIFT_RANGE.cutoff.min).toBeCloseTo(0.62, 12)
+    expect(FOLD_DRIFT_RANGE.send.max).toBeCloseTo(0.15, 12)
+    expect(FOLD_DRIFT_RANGE.dub.max).toBeCloseTo(0.18, 12)
+    const full = radioFoldDriftRange(100)
+    expect(full.cutoff.min).toBeCloseTo(0.4, 12)
+    expect(full.send.max).toBeCloseTo(0.3, 12)
+    expect(full.dub.max).toBeCloseTo(0.35, 12)
+    expect(radioFoldDriftRange(50).cutoff.min).toBeCloseTo(0.51, 12)
+    for (const bend of [0, 25, 50, 75, 100]) {
+      const r = radioFoldDriftRange(bend)
+      // the filter never closes; sends are only ever added
+      expect(r.cutoff.min).toBeGreaterThan(0.39)
+      expect(r.cutoff.max).toBe(1)
+      expect(r.send.min).toBe(0)
+      expect(r.dub.min).toBe(0)
+    }
+  })
+
   it('moves slowly inside its ranges, from rest, and never closes the filter', () => {
-    const steps = run('k3x9pq', 200, () => input(40))
-    expect(steps[0].drift.perc.cutoff[0]).toBe(FOLD_DRIFT_RANGE.cutoff.rest)
-    for (const s of steps) {
-      for (const d of Object.values(s.drift)) {
-        for (const p of ['cutoff', 'send', 'dub'] as const) {
-          const [a, b] = d[p]
-          expect(Math.min(a, b)).toBeGreaterThanOrEqual(
-            Math.min(FOLD_DRIFT_RANGE[p].min, FOLD_DRIFT_RANGE[p].rest) - 1e-12
-          )
-          expect(Math.max(a, b)).toBeLessThanOrEqual(FOLD_DRIFT_RANGE[p].max + 1e-12)
-          // a sweep is 32 bars at the least: on a 4-bar loop, under a ninth of the range a lap
-          expect(Math.abs(b - a)).toBeLessThanOrEqual(
-            (FOLD_DRIFT_RANGE[p].max - FOLD_DRIFT_RANGE[p].min) / 8 + 1e-12
-          )
+    for (const fold of [40, 100]) {
+      const R = radioFoldDriftRange(fold)
+      const steps = run('k3x9pq', 200, () => input(fold))
+      expect(steps[0].drift.perc.cutoff[0]).toBe(R.cutoff.rest)
+      for (const s of steps) {
+        for (const d of Object.values(s.drift)) {
+          for (const p of ['cutoff', 'send', 'dub'] as const) {
+            const [a, b] = d[p]
+            expect(Math.min(a, b)).toBeGreaterThanOrEqual(Math.min(R[p].min, R[p].rest) - 1e-12)
+            expect(Math.max(a, b)).toBeLessThanOrEqual(R[p].max + 1e-12)
+            // a sweep is 32 bars at the least: on a 4-bar loop, under a ninth of the range a lap
+            expect(Math.abs(b - a)).toBeLessThanOrEqual((R[p].max - R[p].min) / 8 + 1e-12)
+          }
         }
       }
     }
   })
 
+  it('at full bend it goes past the old range, so it is heard', () => {
+    let lowest = 1
+    let most = 0
+    for (const s of run('k3x9pq', 400, () => input(100))) {
+      for (const d of Object.values(s.drift)) {
+        lowest = Math.min(lowest, d.cutoff[0])
+        most = Math.max(most, d.send[0], d.dub[0] - 0.03)
+      }
+    }
+    expect(lowest).toBeLessThan(FOLD_DRIFT_RANGE.cutoff.min)
+    expect(most).toBeGreaterThan(FOLD_DRIFT_RANGE.send.max)
+  })
+
   it('steps at most an eighth of a range a lap, on any loop length (a sweep is 8 laps or more)', () => {
+    const R = radioFoldDriftRange(40)
     for (const loopBars of [1, 4, 8, 16, 32]) {
       const steps = run('k3x9pq', 120, () => ({ ...input(40), loopBars }))
       for (const s of steps) {
         for (const d of Object.values(s.drift)) {
           for (const p of ['cutoff', 'send', 'dub'] as const) {
             const [a, b] = d[p]
-            expect(Math.abs(b - a)).toBeLessThanOrEqual(
-              (FOLD_DRIFT_RANGE[p].max - FOLD_DRIFT_RANGE[p].min) / 8 + 1e-12
-            )
+            expect(Math.abs(b - a)).toBeLessThanOrEqual((R[p].max - R[p].min) / 8 + 1e-12)
           }
         }
       }

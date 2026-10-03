@@ -193,14 +193,22 @@ export function radioFoldPath(fromBeats: number, toBeats: number, steps: number)
  * `send` an extra reverb send over the row's own, `dub` its send into the dub echo. */
 export type FoldDriftParam = 'cutoff' | 'send' | 'dub'
 export const FOLD_DRIFT_PARAMS: readonly FoldDriftParam[] = ['cutoff', 'send', 'dub']
-/** Where drift may go, and where it rests. The cutoff never closes (0.62 is about 1.4 kHz). */
-export const FOLD_DRIFT_RANGE: Readonly<
+export type FoldDriftRange = Readonly<
   Record<FoldDriftParam, { min: number; max: number; rest: number }>
-> = Object.freeze({
-  cutoff: { min: 0.62, max: 1, rest: 1 },
-  send: { min: 0, max: 0.15, rest: 0 },
-  dub: { min: 0, max: 0.18, rest: 0 }
-})
+>
+/** Where drift may go at a bend (0..100), and where it rests (v2 section 1, "audible drift"): the
+ * cutoff from 1 down to 0.62 - 0.22b (0.4 at bend 100; never closed), the added reverb send up to
+ * 0.15 + 0.15b, the dub send up to 0.18 + 0.17b (sends only ever added). */
+export function radioFoldDriftRange(bend: number): FoldDriftRange {
+  const b = normalizeFoldAmount(bend, DEFAULT_RADIO_FOLD) / 100
+  return {
+    cutoff: { min: 0.62 - 0.22 * b, max: 1, rest: 1 },
+    send: { min: 0, max: 0.15 + 0.15 * b, rest: 0 },
+    dub: { min: 0, max: 0.18 + 0.17 * b, rest: 0 }
+  }
+}
+/** The range at bend 0: v1's fixed range (0.62 is about 1.4 kHz). */
+export const FOLD_DRIFT_RANGE: FoldDriftRange = Object.freeze(radioFoldDriftRange(0))
 /** One sweep's length, drawn (spec section 1). */
 export const FOLD_DRIFT_SWEEP_BARS: Readonly<{ min: number; max: number }> = Object.freeze({
   min: 32,
@@ -530,11 +538,12 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
   const audible = input.rows
     .filter((r) => r.audible)
     .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const ranges = radioFoldDriftRange(input.fold)
   for (const row of audible) {
     const d: RowDrift = { ...(s.drift[row.id] ?? restingDrift(lap)) }
     for (const p of FOLD_DRIFT_PARAMS) {
       if (lap >= d[p].startLap + d[p].laps) {
-        const range = FOLD_DRIFT_RANGE[p]
+        const range = ranges[p]
         const bars = lerp(FOLD_DRIFT_SWEEP_BARS.min, FOLD_DRIFT_SWEEP_BARS.max, draw())
         d[p] = {
           from: d[p].to,
