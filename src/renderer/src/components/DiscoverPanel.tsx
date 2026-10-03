@@ -3953,9 +3953,10 @@ export function DiscoverPanel({
    *     the cycle running on (radioFoldCarry; released instead, everywhere, should the fold have
    *     outgrown the stem);
    *   - otherwise a row the fold holds is released at once (radioFoldRelease) when it landed
-   *     mid-loop -- at any level: a loop-end own-cycle cut (spec gate 15) cuts a folded row
-   *     straight below the band too -- or anywhere in fold's bar band. A loop-top landing below
-   *     the band is left to the wrap's own step, which lets the row go as it always has.
+   *     mid-loop above 50 (radioCadence.foldPaced: a loop-end own-cycle cut, spec gate 15, cuts
+   *     a folded row straight below the band too), or anywhere in fold's bar band. At 50 and
+   *     below, and on a loop top below the band, it is left to the wrap's own step, which lets
+   *     the row go as it always has (50 and below exactly as before, spec decision 1).
    * Then the readout follows (the row's `7 / 16` stays, or clears). */
   function radioFoldLandNow(
     slotId: string,
@@ -3975,7 +3976,7 @@ export function DiscoverPanel({
       stemId: stemId ?? '',
       barLength: stem?.barLength ?? 0,
       carry: carry && stemId !== null && stem !== null && stem.barLength > 0,
-      release: midLoop || radioFoldBandActive()
+      release: (midLoop && radioCadence.foldPaced) || radioFoldBandActive()
     })
     if (out === m) return
     radioFoldRef.current = out.state
