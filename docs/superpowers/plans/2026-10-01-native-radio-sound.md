@@ -1182,7 +1182,7 @@ One list, in order, from every task's "Elling listens" and "for Elling" notes (T
 - **The riser's cut at the wrap (T6).** The riser's tail and its send stop at the loop top where the next staged project lands. Fine, or should it ring on?
 
 **The timeline**
-- **Old projects and the cavern (T5).** Old timeline projects now play the cavern (longer, darker; DAW bakes about two seconds longer). Keep, or should old projects default to zita?
+- **Old projects and the cavern (T5).** *Decided (Elling, 2026-10-03): keep — old projects play the cavern.* Old timeline projects now play the cavern (longer, darker; DAW bakes about two seconds longer). Keep, or should old projects default to zita?
 - **The pump's reach (T9).** *Decided (Elling, 2026-10-03): drums duck every pad in the project; keep the project-wide key.* Still open: should a one-shot kick (typed anything but `drums`) key the pump? Is 4 dB enough on quiet drum stems? Original question: the key is project-wide: should a rifff only pump its own rows? Should a one-shot kick (typed anything but `drums`) key the pump? Is 4 dB enough on quiet drum stems (92% of the depth at −10 dBFS)?
 - **One echo per project (T12).** *Decided (Elling, 2026-10-03): keep one echo time per project.* Every timeline throw shares one echo time and feedback; the web draws them per throw. Keep, or carry a per-throw schedule on the wire?
 - **The master filter's place (T7).** Natively the master strip's filter runs after the user's master plugins, before the master stage; on the web it runs inside the chain after the headroom trim. They agree while it is parked open. Move it to the web's place?
