@@ -1047,8 +1047,9 @@ namespace sssketch
                     const double tailElapsedSec = isTail ? (lapNowBars - tailStartBars) * spb : 0.0;
                     // An incoming cycle fades in from its origin over kCycleSeamFadeSec too: with a
                     // phase, the grid there is -phaseBars, so the first sample is mid-tile
-                    // (tileSec - phase in), past the seam's own fade-in. With no phase this
-                    // overlaps the seam fade-in, and both are over 10 ms after the origin.
+                    // (tileSec - phase in), past the seam's own fade-in. With no phase it is the
+                    // seam's fade-in (the lower of the two applies, not their product), and both
+                    // are over 10 ms after the origin.
                     const double originElapsedSec = isTail ? 0.0 : (lapNowBars - originBars) * spb;
                     const int numCh = entry.buffer->getNumChannels();
                     const int bufferSamples = entry.buffer->getNumSamples();
@@ -1056,6 +1057,7 @@ namespace sssketch
                     for (int i2 = 0; i2 < numSamples; ++i2)
                     {
                         double out = 1.0;
+                        double fadeIn = 1.0;
                         if (isTail)
                         {
                             out = 1.0 - (tailElapsedSec + (double) i2 / sampleRate) / kCycleSeamFadeSec;
@@ -1066,7 +1068,7 @@ namespace sssketch
                         {
                             const double sinceOrigin = originElapsedSec + (double) i2 / sampleRate;
                             if (sinceOrigin < kCycleSeamFadeSec)
-                                out = std::max(0.0, sinceOrigin / kCycleSeamFadeSec);
+                                fadeIn = std::max(0.0, sinceOrigin / kCycleSeamFadeSec);
                         }
                         double inTile = std::fmod(gridStartSec + (double) i2 / sampleRate, tileSec);
                         if (inTile < 0.0)
@@ -1077,8 +1079,8 @@ namespace sssketch
                         if (srcSample < 0 || srcSample >= bufferSamples)
                             continue;
                         const double seam = fadeSec > 0.0
-                            ? std::min({ 1.0, inTile / fadeSec, (endSec - inTile) / fadeSec })
-                            : 1.0;
+                            ? std::min({ fadeIn, inTile / fadeSec, (endSec - inTile) / fadeSec })
+                            : fadeIn;
                         const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
                         const double gain = seam * out * effectiveVolume
                             * muteRegionGainAt(sampleTimeSec, spb, stem.muteRegions);
