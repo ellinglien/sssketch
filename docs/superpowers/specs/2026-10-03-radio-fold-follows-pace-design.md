@@ -273,7 +273,7 @@ above.
 | 12 | turnarounds every 16 bars | both | keep (pace decision 4) |
 | 13 | the density arc's legs | both | keep (minutes, not cadence) |
 | 14 | drift sweeps, 32-128 bars | fold | not a gate. Keep |
-| 15 | desktop `loop end` own-cycle cuts already cut **folded** rows mid-loop, straight, at every level (folded rows are 4 bars or less, `loop end` defaults to 4) | desktop, fold | pre-existing. Below 80 it is left as it is (50 and below must not change). In phase 2, from 80, those rows go through carry or release |
+| 15 | desktop `loop end` own-cycle cuts already cut **folded** rows mid-loop, straight, at every level (folded rows are 4 bars or less, `loop end` defaults to 4) | desktop, fold | pre-existing. Decided (phase 2): above 50, a mid-loop straight landing on a folded row releases its fold at once (`radioFoldRelease`, the row kept out of a new fold on the next top); from 80 it carries the fold instead when its stem can. At 50 and below it is unchanged: the wrap's own step lets the row go, as before |
 
 ## 5. Live adjustment
 

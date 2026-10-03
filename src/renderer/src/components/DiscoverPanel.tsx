@@ -5769,6 +5769,9 @@ export function DiscoverPanel({
             noteTurnaroundLanding(k.slotId, k.stem.barLength)
             noteFoldLanding(k.slotId, k.pick, k.stem)
           }
+          // (The roll runs the owed fold step first, with these landings noted: a held row whose
+          // stem changes is let go there, so a change committed below on this path never carries
+          // its fold -- by design, the step already decided that row straight.)
           rollOwedRadioTurnaround()
         }
         // Under this lap's turnaround a lead-in would land on its wrap: the turnaround is the
