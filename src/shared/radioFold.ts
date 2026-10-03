@@ -826,3 +826,83 @@ export function radioFoldPickableIds(
   const free = ids.filter((id) => !radioFoldHoldsRow(now, next, id))
   return free.length > 0 ? free : ids
 }
+
+/** PHASE 2. Whether a change bringing `incoming` onto a folded row may CARRY its fold: the new
+ * stem takes over the row's running cycle (same id, origin and phase) instead of arriving
+ * straight. Only a fold still on its way in or settled (never one asked to leave or walking back),
+ * and only a stem that could fold here itself (radioFoldCanFold) and is at least as long as the
+ * stem the fold was decided for -- so every length the fold has played or may still step through
+ * (all shorter than the old stem) fits the new one, whatever the machine decides before it lands. */
+export function radioFoldCanCarry(
+  state: RadioFoldState | null,
+  rowId: string,
+  incoming: RadioFoldRow,
+  anchorId: string | null
+): boolean {
+  const r = state?.rows.find((x) => x.rowId === rowId)
+  if (r === undefined || r.mode === 'unfolding' || r.unfoldSince !== null) return false
+  if (incoming.id !== rowId || incoming.stemId === null) return false
+  if (!(incoming.barLength * 4 >= r.fullBeats)) return false
+  return radioFoldCanFold({ ...incoming, audible: true }, anchorId)
+}
+
+/** PHASE 2. A carried change has landed on `rowId`: the fold now belongs to `stemId` (`barLength`
+ * bars). The state's row and every step's cycle for it are re-pointed; nothing else moves (the
+ * cycle id, origin, phase, path and walk are kept, so the engine's running cycle and the machine
+ * agree) and nothing is drawn. A row the machine no longer holds is left alone: the engine plays
+ * whatever is in force there (straight, if the fold has gone). Pure. */
+export function radioFoldCarry(
+  step: RadioFoldStep,
+  rowId: string,
+  stemId: string,
+  barLength: number
+): RadioFoldStep {
+  if (
+    !step.state.rows.some((r) => r.rowId === rowId) &&
+    !step.cycles.some((c) => c.rowId === rowId)
+  )
+    return step
+  const rows = step.state.rows.map((r) =>
+    r.rowId === rowId
+      ? {
+          ...r,
+          stemId,
+          fullBeats: barLength * 4,
+          ...(r.mode === 'unfolding' && r.path.length > 0
+            ? { path: [...r.path.slice(0, -1), barLength * 4] }
+            : {})
+        }
+      : r
+  )
+  return {
+    ...step,
+    state: { ...step.state, rows },
+    cycles: step.cycles.map((c) => (c.rowId === rowId ? { ...c, stemId } : c))
+  }
+}
+
+/** PHASE 2. A change landed STRAIGHT on a row the machine held (it could not carry, or a
+ * mid-loop cut): the fold is over now, not at the next step. The row leaves the state and every
+ * step's cycles, and `marked` is worked out again without it, so the readout and the turnaround's
+ * realignment preference stop naming a fold no longer heard. Nothing is drawn. Pure. */
+export function radioFoldRelease(step: RadioFoldStep, rowId: string): RadioFoldStep {
+  if (
+    !step.state.rows.some((r) => r.rowId === rowId) &&
+    !step.cycles.some((c) => c.rowId === rowId)
+  )
+    return step
+  const rows = step.state.rows.filter((r) => r.rowId !== rowId)
+  const marked = marksTop(rows, step.lap, step.state.loopBeats)
+  const rotate = step.state.rotate ?? null
+  return {
+    ...step,
+    state: {
+      ...step.state,
+      rows,
+      marked,
+      rotate: rotate !== null && (rotate.from === rowId || rotate.to === rowId) ? null : rotate
+    },
+    cycles: step.cycles.filter((c) => c.rowId !== rowId),
+    marked
+  }
+}

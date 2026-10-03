@@ -36,15 +36,25 @@ export function radioFoldEngineRows(step: RadioFoldStep | null): RadioFoldEngine
 
 /** The rows whose stems should name their row (EngineStem.cycleRow): every member whose stem is
  * the one a fold in any of `steps` was decided for. A row in `changing` (its stem is about to be
- * replaced by a staged swap) never does: a fold decided for the old stem must not fold the new. */
+ * replaced by a staged swap) never does: a fold decided for the old stem must not fold the new.
+ * A row in `carried` (its change carries the fold, radioFoldCanCarry) is named for its incoming
+ * stem. */
 export function radioFoldCycleRows(
   steps: readonly (RadioFoldStep | null)[],
   members: readonly { id: string; stemId: string | null }[],
-  changing: ReadonlySet<string> = new Set()
+  changing: ReadonlySet<string> = new Set(),
+  carried: ReadonlySet<string> = new Set()
 ): Set<string> {
   const out = new Set<string>()
   for (const m of members) {
-    if (m.stemId === null || changing.has(m.id)) continue
+    if (m.stemId === null) continue
+    // a change carrying the row's fold (radioFoldCanCarry): its incoming stem takes the running
+    // cycle, so the row is named whatever stem the steps were decided for
+    if (carried.has(m.id) && steps.some((s) => s?.cycles.some((c) => c.rowId === m.id))) {
+      out.add(m.id)
+      continue
+    }
+    if (changing.has(m.id)) continue
     if (steps.some((s) => s?.cycles.some((c) => c.rowId === m.id && c.stemId === m.stemId))) {
       out.add(m.id)
     }
