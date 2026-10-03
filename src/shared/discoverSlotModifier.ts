@@ -1,14 +1,13 @@
 import type { DiscoverSoundSourceFilter } from './riffLibraryTypes'
 
-/** Discover's two remaining roll switches (prefer favourites, only my
- * stems). The endlesss/other source switches became the source dial on
- * 2026-09-29 -- see drawSoundSource. */
-export type DiscoverSlotModifier = 'preferFaves' | 'mine'
+/** Discover's one remaining roll switch (only my stems). The endlesss/other
+ * source switches became the source dial on 2026-09-29 (drawSoundSource), and
+ * `prefer faves` the faves dial on 2026-10-03 (@shared/discoverFaves). */
+export type DiscoverSlotModifier = 'mine'
 
-export const DISCOVER_SLOT_MODIFIER_OPTIONS: DiscoverSlotModifier[] = ['preferFaves', 'mine']
+export const DISCOVER_SLOT_MODIFIER_OPTIONS: DiscoverSlotModifier[] = ['mine']
 
 export const DISCOVER_SLOT_MODIFIER_LABEL: Record<DiscoverSlotModifier, string> = {
-  preferFaves: 'prefer faves',
   mine: 'my sounds'
 }
 
@@ -32,7 +31,6 @@ export function toggleSlotModifier(
 
 export interface DiscoverSlotRollOptions {
   onlyOwnStems: boolean
-  preferFavourites: boolean
 }
 
 /** What the switch set means for a roll. 'mine' only takes effect with a
@@ -44,8 +42,7 @@ export function slotRollOptions(
 ): DiscoverSlotRollOptions {
   const set = new Set(modifiers)
   return {
-    onlyOwnStems: set.has('mine') && hasUsername,
-    preferFavourites: set.has('preferFaves')
+    onlyOwnStems: set.has('mine') && hasUsername
   }
 }
 

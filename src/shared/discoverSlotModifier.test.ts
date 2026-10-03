@@ -10,50 +10,36 @@ import {
 } from './discoverSlotModifier'
 
 describe('DISCOVER_SLOT_MODIFIER_OPTIONS', () => {
-  it('lists the 2 modifiers in canonical order', () => {
-    expect(DISCOVER_SLOT_MODIFIER_OPTIONS).toEqual(['preferFaves', 'mine'])
+  it('is just my sounds: prefer faves became the faves dial (2026-10-03)', () => {
+    expect(DISCOVER_SLOT_MODIFIER_OPTIONS).toEqual(['mine'])
   })
 
   it('has lowercase display labels', () => {
-    expect(DISCOVER_SLOT_MODIFIER_LABEL).toEqual({
-      preferFaves: 'prefer faves',
-      mine: 'my sounds'
-    })
+    expect(DISCOVER_SLOT_MODIFIER_LABEL).toEqual({ mine: 'my sounds' })
   })
 })
 
 describe('toggleSlotModifier', () => {
-  it('turns a modifier on, keeping canonical order', () => {
-    expect(toggleSlotModifier(['mine'], 'preferFaves')).toEqual(['preferFaves', 'mine'])
-  })
-
-  it('turns a modifier off, including the last one', () => {
-    expect(toggleSlotModifier(['preferFaves', 'mine'], 'preferFaves')).toEqual(['mine'])
+  it('turns a modifier on and off, including the last one', () => {
+    expect(toggleSlotModifier([], 'mine')).toEqual(['mine'])
     expect(toggleSlotModifier(['mine'], 'mine')).toEqual([])
   })
 
   it('dedupes', () => {
-    expect(toggleSlotModifier(['mine', 'mine'], 'preferFaves')).toEqual(['preferFaves', 'mine'])
+    expect(toggleSlotModifier(['mine', 'mine'], 'mine')).toEqual([])
   })
 })
 
 describe('slotRollOptions', () => {
   const withUser = { hasUsername: true }
 
-  it('defaults to no ownership filter and no favourite preference', () => {
-    expect(slotRollOptions([], withUser)).toEqual({
-      onlyOwnStems: false,
-      preferFavourites: false
-    })
+  it('defaults to no ownership filter', () => {
+    expect(slotRollOptions([], withUser)).toEqual({ onlyOwnStems: false })
   })
 
   it("'mine' sets onlyOwnStems only with a username", () => {
     expect(slotRollOptions(['mine'], withUser).onlyOwnStems).toBe(true)
     expect(slotRollOptions(['mine'], { hasUsername: false }).onlyOwnStems).toBe(false)
-  })
-
-  it("'preferFaves' sets preferFavourites", () => {
-    expect(slotRollOptions(['preferFaves'], withUser).preferFavourites).toBe(true)
   })
 })
 

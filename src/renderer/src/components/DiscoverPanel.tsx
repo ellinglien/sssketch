@@ -80,8 +80,16 @@ import {
   restartRadioInterval,
   type RadioClock,
   type RadioPace,
-  type RadioSettings
+  type RadioSettings,
+  radioFavesOf
 } from '@shared/radioSchedule'
+import {
+  DEFAULT_FAVES,
+  FAVES_LABEL,
+  FAVES_TOOLTIP,
+  favesBoostScale,
+  favesDraw
+} from '@shared/discoverFaves'
 import {
   NO_RADIO_SLOT_FLAGS,
   forgetRadioSlotFlagOnChange,
@@ -461,6 +469,9 @@ interface SlotPick {
    * candidate that never had percentiles computed would draw empty trait
    * bars and misreport it as unanalysed (see meterEntries). */
   unranked?: true
+  /** The faves dial drew favourites-only and none fit, so this is a normal pick
+   * (@shared/discoverFaves). Logged; the web radio's readout shows it as `no fave fits`. */
+  favesFallback?: true
 }
 
 // Real bug, live-reported 2026-09-17: "i clicked 'lock' on a set of
@@ -864,9 +875,10 @@ export function DiscoverPanel({
     release: releaseEngine
   } = useEngineOwnership()
   const hasUsername = currentUsername.trim() !== ''
-  // Direct request, 2026-09-22: the roll filters (prefer faves, my sounds;
-  // the endlesss/other pair became the source dial on 2026-09-29) are
-  // GLOBAL sticky [x] toggles in their own row under the add row -- after a
+  // Direct request, 2026-09-22: the roll filters (my sounds -- prefer faves
+  // became the faves dial on 2026-10-03; the endlesss/other pair became the
+  // source dial on 2026-09-29) are GLOBAL sticky
+  // [x] toggles in their own row under the add row -- after a
   // same-day stint as per-slot modifiers. Every roll and reroll of every
   // slot reads the current set, so toggling one affects all future rolls.
   // In-memory only, like the pre-modifier globals were. 'my sounds' is shown unchecked and
@@ -927,6 +939,26 @@ export function DiscoverPanel({
   function changeSourceLean(lean: number): void {
     sourceLeanRef.current = lean
     setSourceLean(lean)
+  }
+  // The faves dial (@shared/discoverFaves, 2026-10-03), where `prefer faves` was: 0..100, how
+  // often a roll draws only starred stems and how much the rest lean to them. Persisted in the
+  // radio settings (the radio menu's `faves` row is the same value). A drag previews locally and
+  // persists once, on the gesture's end (Dial's onCommit). Mirrored into a ref like sourceLeanRef:
+  // radio's picks run from long-lived callbacks.
+  const faves = radioFavesOf(radioSettings)
+  const [favesDraft, setFavesDraft] = useState<number | null>(null)
+  const favesShown = favesDraft ?? faves
+  const favesRef = useRef(faves)
+  useEffect(() => {
+    favesRef.current = faves
+  }, [faves])
+  function previewFaves(value: number): void {
+    favesRef.current = value
+    setFavesDraft(value)
+  }
+  function commitFaves(value: number): void {
+    favesRef.current = value
+    void onRadioSettingsChange({ faves: value }).finally(() => setFavesDraft(null))
   }
   const stemFavourites = useStemFavourites()
   const { toggleStemFavourite, reloadStemFavourites } = useStemFavouritesActions()
@@ -6463,7 +6495,6 @@ export function DiscoverPanel({
       // that, (onlyOwnStems: true, targetUser: '') would make
       // getDiscoverCandidates' own `CreatorUserName !== targetUser` check
       // exclude essentially every real stem -- zero candidates, forever.
-      const rollOptions = globalRollOptions
       // The creator filter (artist mode) -- today's values in own mode.
       const f = rollFilter()
       // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
@@ -6502,37 +6533,64 @@ export function DiscoverPanel({
         ? radioClashAmount(radioSettings.foldMode, radioSettings.clash)
         : 0
       const alsoTraits = clashAmount > 0 ? [...CLASH_TRAITS] : undefined
-      // Tagged with the artist they were rolled under (pickedUnderArtist).
-      let candidates = (
-        await window.rifffApi.getDiscoverCandidates(
-          kinds,
-          f.onlyOwnStems,
-          f.targetUser,
-          draw.first,
-          f.artist,
-          alsoTraits
-        )
-      ).map((c) => tagPickedUnderArtist(c, f.artist))
-      const drawnHasUnused = candidates.some((c) => !usedElsewhere.has(c.stemCID))
-      if (!drawnHasUnused && draw.fallback !== null) {
-        if (rerollGenerationRef.current.get(id) !== myGeneration) return null
-        const fallbackCandidates = (
+      const unused = (c: DiscoverCandidate): boolean => !usedElsewhere.has(c.stemCID)
+      /** One source-dial roll: the drawn source, then the other when the drawn one has nothing
+       * new. `only` restricts it to those stems, before main's sample (the faves dial's
+       * favourites-only draw). Tagged with the artist they were rolled under
+       * (pickedUnderArtist). Null when a newer roll for this slot took over meanwhile. */
+      const fetchPool = async (only?: string[]): Promise<DiscoverCandidate[] | null> => {
+        let pool = (
           await window.rifffApi.getDiscoverCandidates(
             kinds,
             f.onlyOwnStems,
             f.targetUser,
-            draw.fallback,
+            draw.first,
             f.artist,
-            alsoTraits
+            alsoTraits,
+            only
           )
         ).map((c) => tagPickedUnderArtist(c, f.artist))
-        // Switch to the fallback when it has something new, or when the
-        // drawn source had nothing at all. Otherwise keep the drawn pool,
-        // all duplicates -- the dedupe below then uses it whole, which
-        // beats reporting "no match".
-        const fallbackHasUnused = fallbackCandidates.some((c) => !usedElsewhere.has(c.stemCID))
-        if (fallbackHasUnused || candidates.length === 0) candidates = fallbackCandidates
+        if (!pool.some(unused) && draw.fallback !== null) {
+          if (rerollGenerationRef.current.get(id) !== myGeneration) return null
+          const fallbackPool = (
+            await window.rifffApi.getDiscoverCandidates(
+              kinds,
+              f.onlyOwnStems,
+              f.targetUser,
+              draw.fallback,
+              f.artist,
+              alsoTraits,
+              only
+            )
+          ).map((c) => tagPickedUnderArtist(c, f.artist))
+          // Switch to the fallback when it has something new, or when the
+          // drawn source had nothing at all. Otherwise keep the drawn pool,
+          // all duplicates -- the dedupe below then uses it whole, which
+          // beats reporting "no match".
+          if (fallbackPool.some(unused) || pool.length === 0) pool = fallbackPool
+        }
+        return pool
       }
+      // The faves dial (@shared/discoverFaves): with probability faves/100 this roll draws only
+      // starred stems, under every other rule of the slot; when none fits (none starred, none of
+      // this kind or source, or all already on other rows) it rolls as usual and says so. Off in
+      // artist mode, where the dial is dimmed: your stars are not among the artist's stems.
+      const faves = f.artist === undefined ? favesRef.current : 0
+      let favesFallback = false
+      let candidates: DiscoverCandidate[] | null = null
+      if (favesDraw(faves) === 'only') {
+        const favePool = stemFavourites.size > 0 ? await fetchPool([...stemFavourites]) : []
+        if (favePool === null) return null
+        if (favePool.some(unused)) candidates = favePool
+        else favesFallback = true
+      }
+      if (candidates === null) {
+        if (rerollGenerationRef.current.get(id) !== myGeneration) return null
+        candidates = await fetchPool()
+        if (candidates === null) return null
+      }
+      if (favesFallback)
+        console.log(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- no fave fits`)
       console.log(
         `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- getDiscoverCandidates returned ${candidates.length} candidates`
       )
@@ -6558,10 +6616,9 @@ export function DiscoverPanel({
       const { pool: barred, barUsed } = applyTraitBar(pool, targetTraits, { bar: traitMatchBar })
       const ranked = rankCandidates(barred, {
         targetBpm: bpm,
-        // Off in artist mode, where the toggle is dimmed: your stars are
-        // not among the artist's stems.
-        favouriteStemCIDs:
-          rollOptions.preferFavourites && f.artist === undefined ? stemFavourites : undefined,
+        // The faves dial's lean: faves/100 of the favourites boost (0 in artist mode, above).
+        favouriteStemCIDs: faves > 0 ? stemFavourites : undefined,
+        favouriteScale: favesBoostScale(faves),
         // Finding, 2026-09-21: trait kinds were never passed here before,
         // so a "warm" roll ranked by BPM alone. Every trait kind in the set
         // now adds its library percentile (rankCandidates).
@@ -6585,7 +6642,12 @@ export function DiscoverPanel({
       console.log(
         `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- ranked/picked, returning pick (picked=${picked?.stemCID ?? 'null'})`
       )
-      return { candidate: picked, barUsed, barRequested: traitMatchBar }
+      return {
+        candidate: picked,
+        barUsed,
+        barRequested: traitMatchBar,
+        ...(favesFallback ? { favesFallback: true as const } : {})
+      }
     } catch (err) {
       // Degrade gracefully, log, don't throw -- same convention as this
       // file's own resolveCandidateStem above and LibraryBrowser.tsx's
@@ -9349,7 +9411,10 @@ export function DiscoverPanel({
               + sample
             </AddRowChip>
           </div>
-          {/* Global roll filters -- see globalModifiers. */}
+          {/* Global roll filters -- see globalModifiers -- and the faves dial where `prefer
+              faves` sat (@shared/discoverFaves): 0 no lean, 100 only starred stems (a roll with
+              none that fits rolls as usual). Dimmed in artist mode: your stars are not among
+              the artist's stems. */}
           <div
             style={{
               display: 'flex',
@@ -9359,10 +9424,28 @@ export function DiscoverPanel({
               justifyContent: 'center'
             }}
           >
+            <span
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 4,
+                opacity: mode === 'other' ? 0.4 : 1
+              }}
+            >
+              <Dial
+                value={favesShown}
+                onChange={previewFaves}
+                onCommit={commitFaves}
+                defaultValue={DEFAULT_FAVES}
+                size={22}
+                ariaLabel={FAVES_LABEL}
+                tooltip={mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP}
+              />
+              <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{FAVES_LABEL}</span>
+            </span>
             {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
               const needsUsername = modifier === 'mine' && !hasUsername
-              // Artist mode picks the artist's stems: `my sounds` is moot, and
-              // `prefer faves` too -- your stars are not among their stems.
+              // Artist mode picks the artist's stems: `my sounds` is moot.
               const overridden = mode === 'other'
               const disabled = needsUsername || overridden
               return (
