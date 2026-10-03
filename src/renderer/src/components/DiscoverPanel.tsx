@@ -11,6 +11,7 @@ import { DiscoverRadioMenu } from './DiscoverRadioMenu'
 import { DiscoverReclassifyPicker } from './DiscoverReclassifyPicker'
 import { ROLE_LABELS } from '@shared/autoArrangeLabels'
 import { BracketToggle } from './BracketToggle'
+import { RADIO_BAR_STAGE_LEAD_BARS, radioBarLandingAim } from './radioBarAim'
 import { stemColorVar } from '../theme/typeColor'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { warmEngineBuffer } from '../audio/warmEngineBuffer'
@@ -72,12 +73,12 @@ import {
   nextRadioIntervalBarsInWindow,
   pickRadioSlotId,
   radioCadenceOf,
+  radioCadenceTransition,
   radioClockForPace,
   radioPhraseNeedsReanchor,
   radioPhraseReanchored,
   type RadioPhraseAnchor,
-  radioChangeBars,
-  radioGridBars,
+  radioPaceGridBars,
   radioDensityOf,
   radioStarterKinds,
   restartRadioInterval,
@@ -4261,9 +4262,18 @@ export function DiscoverPanel({
         // armed" rule and the same beats table as the due branch below.
         // Only the moment differs.
         const changing = slotsRef.current.find((sl) => sl.id === pending.slotId)
+        // In the pace slider's bar band (80+) a change landing mid-loop is a cut
+        // (radioCadenceTransition): an arrival would be held to the top and a lead-in needs the
+        // lap before a wrap, and either would give the pace back. A loop-top landing keeps its
+        // draw. Below the band this is the draw, as before.
+        //
         // A turnaround armed for this lap ends on the wrap this change waits for: it is the
         // change's lead-in, so the change keeps only an arrival (spec section 3).
-        const drawnTransition = pickTransition(radioSettings.transitions, changing?.kinds ?? [])
+        const drawnTransition = radioCadenceTransition(
+          radioCadence,
+          pickTransition(radioSettings.transitions, changing?.kinds ?? []),
+          landsAtBar === null
+        )
         const transition =
           turnaroundGateNow() === 'arrival'
             ? radioTransitionUnderTurnaround(drawnTransition)
@@ -4314,13 +4324,29 @@ export function DiscoverPanel({
           // its curve is anchored at bar 0 and structurally cannot be
           // anywhere else, so one armed for bar 4 would already be
           // behind the playhead. Undefined IS the loop top.
+          //
+          // In the bar band the bar is kept only while a stage can still reach it
+          // (radioBarLandingAim): at a line every bar, a pick whose stem resolves in the last
+          // beat before one is the ordinary case, and a stage arriving after its bar is applied
+          // at once by the engine, late, mid-bar. So it is aimed at the next line instead (or
+          // the top, still a cut), and its interval counts from there when it lands. Below the
+          // band the bar is kept as named, exactly as before.
           setRadioLedChange({
             slotId: pending.slotId,
             pick: pending.pick,
             stem: pending.stem,
             early: true,
             arrival: transition === 'cut' ? undefined : { kind: transition, beats },
-            atBars: transition === 'cut' && landsAtBar !== null ? landsAtBar : undefined
+            atBars:
+              transition === 'cut' && landsAtBar !== null
+                ? radioBarLandingAim(
+                    landsAtBar,
+                    pos,
+                    gridBars,
+                    loopBars,
+                    radioCadence.barEvery !== null ? RADIO_BAR_STAGE_LEAD_BARS : 0
+                  )
+                : undefined
           })
         }
         // A manual-only stage is out: it now carries the wrong set. Withdraw
@@ -4642,8 +4668,18 @@ export function DiscoverPanel({
     const pendingPick = radioPendingRef.current
     const outgoingBars =
       pendingPick !== null ? (resolvedBarLengthsRef.current.get(pendingPick.slotId) ?? null) : null
-    const changeBars = radioChangeBars(outgoingBars, pendingPick?.incomingBars ?? null)
-    const gridBars = radioGridBars(radioSettings.loopEndOverBars, loopBars, changeBars)
+    // In the pace slider's bar band (80+) the grid is also its bar lines, for any incoming stem no
+    // longer than the loop, whatever the two lengths: the incoming stem enters at its matching
+    // position (the engine tiles every stem from the loop top), the outgoing one is cut
+    // (radioPaceGridBars). Below the band this is exactly radioGridBars of the two lengths, as
+    // before. No pending pick, or one whose stem has not resolved: the whole loop, as before.
+    const gridBars = radioPaceGridBars(
+      radioCadence.barEvery,
+      radioSettings.loopEndOverBars,
+      loopBars,
+      outgoingBars,
+      pendingPick?.incomingBars ?? null
+    )
     const step = advanceRadioClock(
       clock,
       pos,
@@ -5205,10 +5241,17 @@ export function DiscoverPanel({
         // has as much right to the lap as a transition does. (A phrase
         // turnaround is handled just below: the change keeps an arrival.)
         const changing = slotsRef.current.find((sl) => sl.id === pending.slotId)
-        const drawnTransition =
+        // The bar band: a change due on a mid-loop line is a cut (radioCadenceTransition), so
+        // radioChangeWaitsForLoopTop below lets it land where it came due -- an immediate
+        // load-project, 20-65 ms late, as a below-80 own-cycle cut not decided early is. Most
+        // are decided early (step 2) and staged at their bar.
+        const drawnTransition = radioCadenceTransition(
+          radioCadence,
           radioGestureRef.current.length === 0
             ? pickTransition(radioSettings.transitions, changing?.kinds ?? [])
-            : 'cut'
+            : 'cut',
+          step.wrapped
+        )
         // On the wrap that owes the phrase end's roll, that roll comes after this microtask
         // (radioTurnaroundAtWrap) -- but a lead-in drawn here would arm first and keep the lap,
         // and the turnaround would lose the wrap the two share. So the roll runs NOW, as if this

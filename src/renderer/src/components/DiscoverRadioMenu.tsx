@@ -530,7 +530,7 @@ export function DiscoverRadioMenu({
       <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
         {mode === 'start'
           ? 'set a pace and start'
-          : 'pace is heard from the next change, and takes nothing back. above fast the phrase shortens, and from 71 changes may come at every loop top. a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added. turnarounds mark the end of each phrase. fold loops one or two short layers at odd lengths against the beat, and changes come every 8 to 32 bars while it is on'}
+          : 'pace is heard from the next change, and takes nothing back. above fast the phrase shortens, and from 71 changes may come at every loop top. from 80 changes may land mid-loop on bar lines, every 4, 2 or 1 bars, as cuts, long layers included. below that, a layer longer than loop end changes at the top of the loop, a shorter one on its own cycle. phrase holds every change back to a 16 or 32 bar boundary, counted from where radio started. transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop. density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added. turnarounds mark the end of each phrase. fold loops one or two short layers at odd lengths against the beat, and changes come every 8 to 32 bars while it is on'}
       </span>
     </div>
   )
