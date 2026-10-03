@@ -20,6 +20,8 @@
 // It must not import radioSchedule: radioSchedule imports it.
 
 import type { DiscoverSlotKind } from './discoverSlotKind'
+import type { RadioTurnarounds } from './radioTurnaround'
+import { seededRandom } from './seededRandom'
 
 /** The cycle lengths a folded row may take, in beats (spec section 1). */
 export const FOLD_CYCLE_BEATS: readonly number[] = [3, 3.5, 5, 5.5, 7, 9]
@@ -162,4 +164,389 @@ export function radioFoldPath(fromBeats: number, toBeats: number, steps: number)
     if (v !== last) out.push(v)
   }
   return out
+}
+/** The parameters drift moves (spec section 1). `cutoff` is the row's own low-pass (1 open),
+ * `send` an extra reverb send over the row's own, `dub` its send into the dub echo. */
+export type FoldDriftParam = 'cutoff' | 'send' | 'dub'
+export const FOLD_DRIFT_PARAMS: readonly FoldDriftParam[] = ['cutoff', 'send', 'dub']
+/** Where drift may go, and where it rests. The cutoff never closes (0.62 is about 1.4 kHz). */
+export const FOLD_DRIFT_RANGE: Readonly<
+  Record<FoldDriftParam, { min: number; max: number; rest: number }>
+> = Object.freeze({
+  cutoff: { min: 0.62, max: 1, rest: 1 },
+  send: { min: 0, max: 0.15, rest: 0 },
+  dub: { min: 0, max: 0.18, rest: 0 }
+})
+/** One sweep's length, drawn (spec section 1). */
+export const FOLD_DRIFT_SWEEP_BARS: Readonly<{ min: number; max: number }> = Object.freeze({
+  min: 32,
+  max: 128
+})
+
+interface FoldSweep {
+  from: number
+  to: number
+  startLap: number
+  laps: number
+}
+type RowDrift = Record<FoldDriftParam, FoldSweep>
+/** A parameter's value at the start and at the end of the decided lap (a straight ramp). */
+export type FoldDriftLap = Record<FoldDriftParam, readonly [number, number]>
+
+export interface RadioFoldRowState {
+  rowId: string
+  stemId: string
+  fullBeats: number
+  targetBeats: number
+  /** The cycle the row plays in the decided lap. */
+  cycleBeats: number
+  phaseBeats: number
+  /** The lap whose top this cycle started on. */
+  originLap: number
+  /** Lengths still to step through, one per loop top, in order. */
+  path: number[]
+  mode: 'folding' | 'settled' | 'unfolding'
+  /** The lap it was asked to unfold on (the stretch ended), or null. */
+  unfoldSince: number | null
+  serial: number
+}
+
+export interface RadioFoldState {
+  seed: string
+  /** Draws made so far: the counter every draw is seeded from. */
+  draws: number
+  /** The lap the last step decided; -1 before the first. */
+  lap: number
+  loopBeats: number
+  stretch: 'straight' | 'folded'
+  /** The lap the current stretch gives way on. */
+  stretchEndsLap: number
+  rows: RadioFoldRowState[]
+  drift: Record<string, RowDrift>
+  serial: number
+  /** The decided lap's top is a realignment (radioFoldMarkedBarsAhead reads it). */
+  marked: boolean
+}
+
+export function createRadioFold(seed: string): RadioFoldState {
+  return {
+    seed: normalizeFoldSeed(seed),
+    draws: 0,
+    lap: -1,
+    loopBeats: 0,
+    stretch: 'straight',
+    stretchEndsLap: -1,
+    rows: [],
+    drift: {},
+    serial: 0,
+    marked: false
+  }
+}
+
+export interface RadioFoldInput {
+  /** In a stable order (the panel's slot order): new folds draw from it by index. */
+  rows: readonly RadioFoldRow[]
+  loopBars: number
+  bpm: number
+  /** The `fold` fader, 0..100. */
+  fold: number
+}
+
+/** What one row plays in the decided lap. Absent from `cycles`: full length. */
+export interface RadioFoldCycle {
+  rowId: string
+  /** The stem the fold was decided for: a runtime folds the row only while it plays this one. */
+  stemId: string
+  /** Changes whenever the cycle restarts; while unchanged the cycle runs on across tops. */
+  cycleId: string
+  cycleBeats: number
+  phaseBeats: number
+}
+
+export interface RadioFoldStep {
+  state: RadioFoldState
+  /** The lap these decisions are for: the one starting at the NEXT loop top. */
+  lap: number
+  anchorId: string | null
+  cycles: RadioFoldCycle[]
+  /** That lap's top is a realignment: a settled fold lines up with the loop there. */
+  marked: boolean
+  stretch: 'straight' | 'folded'
+  /** Every audible row's drift over that lap. */
+  drift: Record<string, FoldDriftLap>
+}
+
+const lerp = (a: number, b: number, t: number): number => a + (b - a) * t
+
+function stretchLaps(bars: number, loopBars: number): number {
+  return Math.max(1, Math.round(bars / Math.max(loopBars, 1e-9)))
+}
+
+function cycleMenu(f: number): readonly number[] {
+  return f < 0.5 ? [7, 9] : f < 0.75 ? [5, 7, 9] : FOLD_CYCLE_BEATS
+}
+
+function phaseMenu(f: number): readonly number[] {
+  return f < 0.5 ? [0] : f < 0.75 ? [0, 0.25] : [0, 0.25, 1 / 3, 0.5]
+}
+
+function maxRows(f: number): number {
+  return f >= 0.6 ? FOLD_MAX_ROWS : 1
+}
+
+/** The cycles `row` may fold to: the fader's menu, inside the allowed window, shorter than the
+ * row. Empty means the row does not fold at this `fold` (a 1-bar row has no 7 or 9 below it). */
+function foldTargets(row: RadioFoldRow, loopBeats: number, bpm: number, f: number): number[] {
+  const full = row.barLength * 4
+  const allowed = radioFoldAllowedCycles(loopBeats, bpm)
+  return cycleMenu(f).filter((c) => c < full && allowed.includes(c))
+}
+
+/** Whether a row's cycle lines up with the loop at the top of `lap`. */
+function realignsAt(r: RadioFoldRowState, lap: number, loopBeats: number): boolean {
+  if (lap <= r.originLap) return false
+  return ((lap - r.originLap) * halves(loopBeats)) % halves(r.cycleBeats) === 0
+}
+
+function pickFrom<T>(items: readonly T[], r: number): T {
+  return items[Math.min(items.length - 1, Math.floor(r * items.length))]
+}
+
+function restingDrift(lap: number): RowDrift {
+  const rest = (p: FoldDriftParam): FoldSweep => ({
+    from: FOLD_DRIFT_RANGE[p].rest,
+    to: FOLD_DRIFT_RANGE[p].rest,
+    startLap: lap,
+    laps: 0
+  })
+  return { cutoff: rest('cutoff'), send: rest('send'), dub: rest('dub') }
+}
+
+function sweepAt(sw: FoldSweep, lap: number): readonly [number, number] {
+  const at = (l: number): number =>
+    sw.laps <= 0
+      ? sw.to
+      : lerp(sw.from, sw.to, Math.min(1, Math.max(0, (l - sw.startLap) / sw.laps)))
+  return [at(lap), at(lap + 1)]
+}
+
+/** One loop top: decides the NEXT lap (see the top of this file). Pure: `prev` is untouched. */
+export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): RadioFoldStep {
+  const s: RadioFoldState = {
+    ...prev,
+    rows: prev.rows.map((r) => ({ ...r, path: [...r.path] })),
+    drift: { ...prev.drift }
+  }
+  const draw = (): number => seededRandom(`${s.seed}#${s.draws++}`)()
+  const lap = s.lap + 1
+  s.lap = lap
+  const f = normalizeFoldAmount(input.fold, DEFAULT_RADIO_FOLD) / 100
+  const loopBeats = input.loopBars * 4
+  const loopChanged = prev.lap >= 0 && s.loopBeats !== loopBeats
+  s.loopBeats = loopBeats
+  const anchorId = radioFoldAnchor(input.rows)
+  const byId = new Map(input.rows.map((r) => [r.id, r]))
+  const restart = (r: RadioFoldRowState): void => {
+    r.originLap = lap
+    r.serial = ++s.serial
+  }
+
+  // 1. Rows already folded keep their fold only while they still may and still play the stem it
+  //    was decided for; a changed stem leaves the fold (the new layer arrives straight). A changed
+  //    loop restarts every cycle at this top, since the realignment arithmetic has changed.
+  //    A row that leaves here does not start a new fold on the same top.
+  const left = new Set<string>()
+  s.rows = s.rows.filter((r) => {
+    const row = byId.get(r.rowId)
+    const keep = row !== undefined && row.stemId === r.stemId && radioFoldCanFold(row, anchorId)
+    if (!keep) left.add(r.rowId)
+    return keep
+  })
+  if (loopChanged) for (const r of s.rows) restart(r)
+  const marked = s.rows.some((r) => r.mode === 'settled' && realignsAt(r, lap, loopBeats))
+
+  // 2. Stretches. `fold` 0 ends a folded stretch at once and keeps it straight. A straight
+  //    stretch only counts its laps once every fold has walked back: it is meant to be heard.
+  if (f === 0 && s.stretch === 'folded') s.stretchEndsLap = lap
+  if (s.stretch === 'straight' && s.rows.length > 0) s.stretchEndsLap += 1
+  if (lap >= s.stretchEndsLap) {
+    if (s.stretch === 'folded' || f === 0) {
+      s.stretch = 'straight'
+      const bars =
+        lerp(FOLD_STRAIGHT_STRETCH_BARS.atNone, FOLD_STRAIGHT_STRETCH_BARS.atFull, f) *
+        (0.75 + 0.5 * draw())
+      s.stretchEndsLap = lap + stretchLaps(bars, input.loopBars)
+      for (const r of s.rows) if (r.unfoldSince === null) r.unfoldSince = lap
+    } else {
+      s.stretch = 'folded'
+      const bars =
+        lerp(FOLD_FOLDED_STRETCH_BARS.atNone, FOLD_FOLDED_STRETCH_BARS.atFull, f) *
+        (0.75 + 0.5 * draw())
+      s.stretchEndsLap = lap + stretchLaps(bars, input.loopBars)
+    }
+  }
+
+  // 3. Unfolding starts: at once while still folding, else on the row's own realignment top (or
+  //    after FOLD_UNFOLD_MAX_WAIT_LAPS), walking back the way it came, in 2 to 4 steps.
+  for (const r of s.rows) {
+    if (r.unfoldSince === null || r.mode === 'unfolding') continue
+    const due =
+      r.mode === 'folding' ||
+      realignsAt(r, lap, loopBeats) ||
+      lap - r.unfoldSince >= FOLD_UNFOLD_MAX_WAIT_LAPS
+    if (!due) continue
+    r.mode = 'unfolding'
+    r.targetBeats = r.fullBeats
+    r.path = radioFoldPath(r.cycleBeats, r.fullBeats, 2 + Math.floor(draw() * 3))
+    r.cycleBeats = r.path.shift() ?? r.fullBeats
+    restart(r)
+  }
+
+  // 4. Curves step on, one length per loop top. A fold that reaches its target settles.
+  for (const r of s.rows) {
+    if (r.mode === 'settled' || r.originLap === lap) continue
+    const next = r.path.shift()
+    if (next === undefined) {
+      if (r.mode === 'folding') r.mode = 'settled'
+      continue
+    }
+    r.cycleBeats = next
+    restart(r)
+    if (r.path.length === 0 && r.mode === 'folding') r.mode = 'settled'
+  }
+  s.rows = s.rows.filter((r) => r.cycleBeats < r.fullBeats)
+
+  // 5. New folds, only in a folded stretch: one at once when none is folding, a second (high
+  //    `fold` only) on a realignment top, half the time.
+  if (s.stretch === 'folded' && f > 0) {
+    const active = s.rows.filter((r) => r.unfoldSince === null).length
+    const may = active === 0 || (active < maxRows(f) && marked && draw() < 0.5)
+    if (may) {
+      const taken = new Set(s.rows.map((r) => r.rowId))
+      const candidates = input.rows.filter(
+        (row) =>
+          !taken.has(row.id) &&
+          !left.has(row.id) &&
+          radioFoldCanFold(row, anchorId) &&
+          foldTargets(row, loopBeats, input.bpm, f).length > 0
+      )
+      if (candidates.length > 0) {
+        const row = pickFrom(candidates, draw())
+        const target = pickFrom(foldTargets(row, loopBeats, input.bpm, f), draw())
+        const phase = pickFrom(phaseMenu(f), draw())
+        const full = row.barLength * 4
+        const path = radioFoldPath(full, target, 2 + Math.floor(draw() * 3))
+        const first = path.shift() ?? target
+        s.rows.push({
+          rowId: row.id,
+          stemId: row.stemId!,
+          fullBeats: full,
+          targetBeats: target,
+          cycleBeats: first,
+          phaseBeats: phase,
+          originLap: lap,
+          path,
+          mode: path.length === 0 ? 'settled' : 'folding',
+          unfoldSince: null,
+          serial: ++s.serial
+        })
+      }
+    }
+  }
+
+  // 6. Drift: every audible row, by id so the draws do not depend on the rows' order.
+  const drift: Record<string, FoldDriftLap> = {}
+  const nextDrift: Record<string, RowDrift> = {}
+  const audible = input.rows
+    .filter((r) => r.audible)
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  for (const row of audible) {
+    const d: RowDrift = { ...(s.drift[row.id] ?? restingDrift(lap)) }
+    for (const p of FOLD_DRIFT_PARAMS) {
+      if (lap >= d[p].startLap + d[p].laps) {
+        const range = FOLD_DRIFT_RANGE[p]
+        const bars = lerp(FOLD_DRIFT_SWEEP_BARS.min, FOLD_DRIFT_SWEEP_BARS.max, draw())
+        d[p] = {
+          from: d[p].to,
+          to: lerp(range.min, range.max, draw()),
+          startLap: lap,
+          laps: stretchLaps(bars, input.loopBars)
+        }
+      }
+    }
+    nextDrift[row.id] = d
+    drift[row.id] = {
+      cutoff: sweepAt(d.cutoff, lap),
+      send: sweepAt(d.send, lap),
+      dub: sweepAt(d.dub, lap)
+    }
+  }
+  s.drift = nextDrift
+  s.marked = marked
+
+  return {
+    state: s,
+    lap,
+    anchorId,
+    cycles: s.rows.map((r) => ({
+      rowId: r.rowId,
+      stemId: r.stemId,
+      cycleId: `${r.rowId}~${r.serial}`,
+      cycleBeats: r.cycleBeats,
+      phaseBeats: r.phaseBeats
+    })),
+    marked,
+    stretch: s.stretch,
+    drift
+  }
+}
+
+/** The tops ahead that are realignments if nothing changes, in bars from the top of the lap
+ * playing now (the one before the decided lap): the decided lap's own top is `loopBars`. */
+export function radioFoldMarkedBarsAhead(
+  state: RadioFoldState,
+  loopBars: number,
+  horizonLaps: number
+): number[] {
+  const out: number[] = []
+  if (state.lap < 0) return out
+  if (state.marked) out.push(loopBars)
+  const loopBeats = loopBars * 4
+  for (let k = 1; k <= horizonLaps; k++) {
+    const lap = state.lap + k
+    if (
+      state.rows.some(
+        (r) => r.mode === 'settled' && r.unfoldSince === null && realignsAt(r, lap, loopBeats)
+      )
+    ) {
+      out.push((k + 1) * loopBars)
+    }
+  }
+  return out
+}
+
+/** A change's interval under the mode: the drawn bars, moved later to a realignment top when one
+ * comes within FOLD_PREFER_WAIT_LAPS laps of it (spec section 1: the next change prefers it). */
+export function radioFoldIntervalBars(
+  state: RadioFoldState | null,
+  drawnBars: number,
+  loopBars: number
+): number {
+  if (state === null || !(loopBars > 0)) return drawnBars
+  const limit = drawnBars + FOLD_PREFER_WAIT_LAPS * loopBars
+  const horizon = Math.ceil(limit / loopBars)
+  let best: number | null = null
+  for (const m of radioFoldMarkedBarsAhead(state, loopBars, horizon)) {
+    if (m >= drawnBars && m <= limit && (best === null || m < best)) best = m
+  }
+  return best ?? drawnBars
+}
+
+/** A phrase end that is also a realignment top rolls its turnaround at `often`'s chance (spec
+ * section 1: the next turnaround prefers it); `off` stays off. */
+export function radioFoldTurnaroundRate(
+  rate: RadioTurnarounds,
+  markedTop: boolean
+): RadioTurnarounds {
+  return markedTop && rate !== 'off' ? 'often' : rate
 }
