@@ -521,7 +521,11 @@ export function stepRadioFold(prev: RadioFoldState, input: RadioFoldInput): Radi
       const phases = phaseMenu(f)
       const otherPhases = phases.filter((p) => p !== r.phaseBeats)
       // null: the same length at a new phase
-      const choices: (number | null)[] = [...lengths, ...(otherPhases.length > 0 ? [null] : [])]
+      const choices: (number | null)[] = [
+        ...lengths,
+        // a phase-only re-fold needs a phase menu (bend 50 and up), even if a fold drawn higher still sits off the beat
+        ...(phases.length > 1 && otherPhases.length > 0 ? [null] : [])
+      ]
       if (choices.length === 0) continue
       const pick = pickFrom(choices, draw())
       r.mode = 'refolding'
