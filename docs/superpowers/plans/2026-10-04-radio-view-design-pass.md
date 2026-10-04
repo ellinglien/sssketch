@@ -184,6 +184,16 @@ before Elling has seen these.
    with the cue plate's `next · filter in`. **Default: words as drawn, with `next`'s tooltip still
    `change soon`.**
 
+**Elling's answers (2026-10-04, relayed by the coordinator):**
+1. "add a stem that is" is **hidden while radio runs** (the default stands).
+2. Settings that do not apply are **greyed, not hidden**: channels (density arc), bend, mismatch
+   and seed (fold off), families and depth (turnarounds off).
+3. Row buttons **stay icons**, not words. Task 9 keeps today's Phosphor icon buttons and their
+   tooltips, and adopts only the design's grouping and sizes: live cluster `m s · skip like next
+   · hook dig` as icons, then the kind label with its meter, then the extras
+   (`any near dup lock x`) as icons, quieter (borderless, `--ra-text-3`). Task 9 Step 2's
+   `word`/`look` props become `look: 'live' | 'extra'` only (size and border, no word).
+
 ## Decisions made in planning
 
 1. **Tokens.** The canvas's colours map onto existing tokens (table below). Four tokens are new,
