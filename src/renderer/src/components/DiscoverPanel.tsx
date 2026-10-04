@@ -3083,7 +3083,13 @@ export function DiscoverPanel({
   const radioLandingsRef = useRef<RadioLandingWindow>(NO_RADIO_LANDINGS)
   /** The hook step owed at this wrap (radioHooksAtWrap): run in the fold step's deferred slot,
    * queued first, or by whichever of the fold step and the roll runs earlier. */
-  const radioHooksStepOwedRef = useRef<{ loopBars: number; lap: number } | null>(null)
+  const radioHooksStepOwedRef = useRef<{
+    loopBars: number
+    lap: number
+    /** Rows landing at its wrap and their bar lengths (null: not known until the stem resolves),
+     * laid over the resolved ones for the exit throw's lap, as the roll's are. */
+    landed: Map<string, number | null>
+  } | null>(null)
   // The armed GESTURE -- the density arc's exit drop-out (no stem change) or
   // a transition (one attached to a change). Both are the same thing to the
   // engine: curves written into the preview project, armed a lap early and
@@ -3622,6 +3628,8 @@ export function DiscoverPanel({
    * the roll has run. */
   function noteTurnaroundLanding(slotId: string, barLength: number | null): void {
     radioTurnaroundRollRef.current?.landed.set(slotId, barLength)
+    // the hook step owed at this wrap aims an exit throw at the lap these landings make
+    radioHooksStepOwedRef.current?.landed.set(slotId, barLength)
   }
   /** The row lengths and the loop the owed roll would see: the resolved ones, with every landed
    * row's known length over its old one. */
@@ -3911,7 +3919,9 @@ export function DiscoverPanel({
     for (const h of radioHooksRef.current.hooks) {
       const d = h.decided
       // (a row radio's change or a companion also names counts once: the return wins it)
+      // only while its entry is still queued: once it landed, the row is just playing
       if (d === null || d.event !== 'return') continue
+      if (manualChangesRef.current.get(h.rowId)?.hook !== 'return') continue
       rowIds.add(h.rowId)
       stems.add(h.stemId)
       if (hookReturn === null || d.awayBars > hookReturn.awayBars) {
@@ -4192,6 +4202,8 @@ export function DiscoverPanel({
     const usable = (k: { slotId: string }): boolean =>
       eligible.includes(k.slotId) &&
       !manual.has(k.slotId) &&
+      // a hook set since the payoff was assembled keeps its row
+      !radioHookTurnoverExcluded(radioHooksRef.current, k.slotId) &&
       !ledRows.has(k.slotId) &&
       k.slotId !== exiting
     // stems heard now, or landing at the top with radio's held change or a manual change
@@ -4716,7 +4728,7 @@ export function DiscoverPanel({
       turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars)
     )
     if (radioHooksRef.current.hooks.length === 0) return
-    radioHooksStepOwedRef.current = { loopBars, lap }
+    radioHooksStepOwedRef.current = { loopBars, lap, landed: new Map() }
     void Promise.resolve().then(() => Promise.resolve().then(() => runOwedRadioHooksStep()))
   }
   /** The owed hook step (stepRadioHooks): events decided at the last wrap have landed (the manual
@@ -4731,6 +4743,13 @@ export function DiscoverPanel({
     if (!radioOnRef.current) return
     const { loopBars, lap } = owed
     const slots = slotsRef.current
+    // a decided event whose landing is still waiting (its stem not ready at its line): it lands at
+    // the first wrap after it is ready; the step flips it here regardless
+    for (const h of radioHooksRef.current.hooks) {
+      if (h.decided !== null && manualChangesRef.current.get(h.rowId)?.hook !== undefined) {
+        console.log(`[radio-hook] late: ${h.decided.event} on ${h.rowId} still waiting at its line`)
+      }
+    }
     const live = new Set(slots.map((s) => s.id))
     for (const h of radioHooksRef.current.hooks) if (!live.has(h.rowId)) forgetRadioHookRow(h.rowId)
     let state = pruneRadioHooks(radioHooksRef.current, live)
@@ -4787,7 +4806,11 @@ export function DiscoverPanel({
     updateRadioHooks(r.state)
     for (const p of r.prepare) {
       if (p.event === 'exit') armRadioHookSub(p.rowId)
-      else warmRadioHookStem(p.rowId)
+      else {
+        warmRadioHookStem(p.rowId)
+        // the row is out of radio's turnover from here: its pick or change there gives way
+        radioYieldsRow(p.rowId)
+      }
     }
     // a prepare whose pick or warm failed is asked for again
     for (const h of r.state.hooks) {
@@ -4830,13 +4853,17 @@ export function DiscoverPanel({
       // throw is armed, the project's throws are off, or the row has bass (d.throw null).
       let thrown = false
       const throws = normalizeSoundSettings(sound ?? appSoundDefaultsNow()).throws
-      if (d.throw !== null && throws.on && throws.level > 0) {
-        const lengths = [...resolvedBarLengthsRef.current.values()]
+      // the lap the throw ends on: this wrap's landings' lengths over the resolved ones; one not
+      // known yet (its stem still resolving) makes the line unknown, and the exit dry
+      const lapKnown = [...owed.landed.values()].every((b) => b !== null)
+      if (d.throw !== null && throws.on && throws.level > 0 && lapKnown) {
+        const lengths = new Map(resolvedBarLengthsRef.current)
+        for (const [id, b] of owed.landed) if (b !== null && b > 0) lengths.set(id, b)
         const armed = armDiscoverExitThrow(radioThrowRef.current, {
           slotId: d.rowId,
           shape: d.throw,
           pos,
-          loopBars: lengths.length > 0 ? Math.max(...lengths) : loopBars,
+          loopBars: lengths.size > 0 ? Math.max(...lengths.values()) : loopBars,
           bpm: bpmRef.current
         })
         if (armed !== null) {
