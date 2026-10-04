@@ -1666,6 +1666,28 @@ input {
   // What is DRAWN. Not necessarily the newest poll -- see mergePolledSlots.
   var lastSlots = []
   var lastRowsKey = null
+  // Each row's role words element, by slot id: painted in place on every renderRows (paintRoles),
+  // since "back in 16" moves every bar and a rebuild would throw the scroll.
+  var roleEls = {}
+
+  // The rows' rebuild key: the slot data with each role cut to what changes the picture (its
+  // hook state and dig) -- never its words or bars away, which paintRoles writes in place.
+  function rowsKey(slots) {
+    return JSON.stringify(slots, function (k, v) {
+      if (k === 'role' && v) return { hook: v.hook, dig: v.dig }
+      return v
+    })
+  }
+
+  function paintRoles() {
+    for (var i = 0; i < lastSlots.length; i++) {
+      var slot = lastSlots[i]
+      var el = roleEls[slot.id]
+      if (!el) continue
+      var words = slot.role && slot.role.words ? slot.role.words : ''
+      el.textContent = words ? ' · ' + words : ''
+    }
+  }
   // The newest poll, whether or not it is drawn. reconcileGoing asks it
   // whether the mac itself still has a slot, which is a different question
   // from whether the row is still on screen.
@@ -1991,7 +2013,7 @@ input {
   // rebuild the stack 700ms after the tap, scroll jump and all.
   function paintMix() {
     for (var i = 0; i < lastSlots.length; i++) paintRowMix(lastSlots[i])
-    lastRowsKey = JSON.stringify(lastSlots)
+    lastRowsKey = rowsKey(lastSlots)
   }
 
   // The one way either verb leaves this page, whichever control asked for
@@ -2073,9 +2095,13 @@ input {
     // covers now -- the kind label, the name, the sound type, the mute and
     // the peaks -- is a different picture, not a different state of the
     // same one.
-    var key = JSON.stringify(lastSlots)
-    if (key === lastRowsKey) return
+    var key = rowsKey(lastSlots)
+    if (key === lastRowsKey) {
+      paintRoles()
+      return
+    }
     lastRowsKey = key
+    roleEls = {}
     rowsEl.innerHTML = ''
     rowCanvases = []
     dropEls = Object.create(null)
@@ -2099,13 +2125,12 @@ input {
       var name = document.createElement('span')
       name.className = 'name'
       name.textContent = slot.stemName || '…'
-      // radio's role words (hook · back in 16), after the name, dimmed
-      if (slot.role && slot.role.words) {
-        var role = document.createElement('span')
-        role.className = 'role'
-        role.textContent = ' · ' + slot.role.words
-        name.appendChild(role)
-      }
+      // radio's role words (hook · back in 16), after the name, dimmed; painted in place
+      // (paintRoles), so a word moving every bar never rebuilds the rows
+      var role = document.createElement('span')
+      role.className = 'role'
+      name.appendChild(role)
+      roleEls[slot.id] = role
 
       var stem = document.createElement('span')
       stem.className = 'stem'
@@ -2206,6 +2231,7 @@ input {
     // is re-appended rather than rebuilt, so lineEl -- still inside it --
     // keeps pointing at the element tick() is moving.
     rowsEl.appendChild(laneEl)
+    paintRoles()
   }
 
   // --- the stem action sheet ---------------------------------------------

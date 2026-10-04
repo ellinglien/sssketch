@@ -128,6 +128,8 @@ import {
   NO_RADIO_HOOKS,
   NO_RADIO_LANDINGS,
   RADIO_DIG_TOOLTIP,
+  RADIO_DIG_WORD,
+  RADIO_HOOK_WORD,
   RADIO_HOOK_BACK_WORD,
   RADIO_HOOK_BRING_BACK_TOOLTIP,
   RADIO_HOOK_OUT_WORD,
@@ -2752,6 +2754,13 @@ export function DiscoverPanel({
       // A phrase turnaround's roll waiting on this stem's length rolls now, before the push
       // below, so the push carries it (radioTurnaroundAtWrap).
       turnaroundRollOnResolve(id, stem.barLength)
+      // and the hook step owed at that wrap, if it has not run yet, aims its exit throw at it
+      // (it runs within the wrap's microtasks, so this is rare: a stem still unresolved then
+      // leaves the exit dry)
+      const hooksOwed = radioHooksStepOwedRef.current
+      if (hooksOwed !== null && hooksOwed.landed.get(id) === null) {
+        hooksOwed.landed.set(id, stem.barLength)
+      }
       const currentlyPreviewing = previewingSlotIdsRef.current
       if (!currentlyPreviewing.has(id)) {
         scheduleSyncPreviewToEngine(joinPreviewingMix(id))
@@ -10675,8 +10684,8 @@ export function DiscoverPanel({
   // FOLD MODE'S STATUS (v2, @shared/radioFoldStatus): the line in the radio bar and each folded
   // row's readout, only while radio runs with the mode on. The next change is the rows' own count
   // (radioChangeWait), so the line says what the rows show.
-  // The rows' 18th track (the readout, after radio's role tracks 16-17) exists only while the mode is on, in the rows and in the
-  // playhead overlay alike (discoverRowGridColumns).
+  // The rows' 18th track (the readout, after radio's role tracks 16-17) exists only while the mode
+  // is on, in the rows and in the playhead overlay alike (discoverRowGridColumns).
   const radioFoldTrack = radioOn && radioSettings.foldMode
   const radioFoldStatusNow =
     radioFoldTrack && radioFoldView !== null
@@ -12098,10 +12107,13 @@ function RowIconButton({
   hidden = false,
   toggle = false,
   ariaExpanded,
-  buttonRef
+  buttonRef,
+  ariaLabel
 }: {
   gridColumn: number
   tooltip: string
+  /** A stable accessible name for a toggle whose tooltip flips (default: the tooltip). */
+  ariaLabel?: string
   onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   children: React.ReactNode
   state?: 'off' | 'on' | 'soft'
@@ -12122,7 +12134,7 @@ function RowIconButton({
       onClick={onClick}
       disabled={disabled || hidden}
       data-tooltip={tooltip}
-      aria-label={tooltip}
+      aria-label={ariaLabel ?? tooltip}
       aria-pressed={toggle ? state !== 'off' : undefined}
       aria-expanded={ariaExpanded}
       aria-haspopup={ariaExpanded === undefined ? undefined : 'menu'}
@@ -12226,9 +12238,10 @@ const DISCOVER_WAVEFORM_HEIGHT = 40
 // track gets is identical. Change the template HERE, never inline -- see
 // the long comment where the row applies it for why each track is what
 // it is.
-// 2026-10-03, radio fold v2: a 16th track after 👎 (the 18th since radio's role tracks, below), 44px, for fold mode's readout (`3½ / 16`),
-// only while the mode is on (discoverRowGridColumns), so it takes no width otherwise. It is the
-// last track, so every other track keeps its number either way.
+// 2026-10-03, radio fold v2: a track after 👎, 44px, for fold mode's readout (`3½ / 16`), only
+// while the mode is on (discoverRowGridColumns), so it takes no width otherwise. It is the last
+// track, so every other track keeps its number either way: 16 when it was added, 18 since radio's
+// role tracks (16-17, below) came before it.
 const DISCOVER_ROW_GRID_COLUMNS =
   '18px 18px 18px 18px 1fr 14px 110px 14px 1px 18px 18px 18px 18px 18px 18px'
 const DISCOVER_FOLD_READOUT_TRACK = '44px'
@@ -12268,6 +12281,7 @@ function RadioRoleButtons({
       <RowIconButton
         gridColumn={16}
         tooltip={hookSet ? RADIO_HOOK_RELEASE_TOOLTIP : RADIO_HOOK_TOOLTIP}
+        ariaLabel={RADIO_HOOK_WORD}
         onClick={onToggleHook}
         toggle
         state={hookSet ? 'on' : 'off'}
@@ -12275,7 +12289,13 @@ function RadioRoleButtons({
       >
         <Repeat size={12} weight={hookSet ? 'fill' : 'regular'} />
       </RowIconButton>
-      <RowIconButton gridColumn={17} tooltip={RADIO_DIG_TOOLTIP} onClick={() => {}} hidden>
+      <RowIconButton
+        gridColumn={17}
+        tooltip={RADIO_DIG_TOOLTIP}
+        ariaLabel={RADIO_DIG_WORD}
+        onClick={() => {}}
+        hidden
+      >
         <Shovel size={12} />
       </RowIconButton>
     </>
@@ -12911,7 +12931,7 @@ function DiscoverSlotRow({
       <div
         style={{
           display: 'grid',
-          // 15 tracks, explicit gridColumn on every child below (including
+          // 15 tracks (17 or 18 while radio runs, below), explicit gridColumn on every child below (including
           // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
           // 5 waveform (1fr), 6 spacer, 7 kind/category label + match
           // meter, 8 spacer, 9 divider, 10 skip (SkipForward, the old
@@ -13438,22 +13458,31 @@ function DiscoverSlotRow({
                   {[radioReadout.label, radioReadout.age].filter(Boolean).join(' · ')}
                 </span>
                 {hookAwayName !== null && (
-                  <span
+                  <button
+                    type="button"
                     data-hook-away
                     data-tooltip={RADIO_HOOK_BRING_BACK_TOOLTIP}
+                    aria-label={RADIO_HOOK_BRING_BACK_TOOLTIP}
                     onClick={onBringHookBack}
                     style={{
                       flex: '0 1 auto',
                       minWidth: 0,
                       overflow: 'hidden',
                       textOverflow: 'ellipsis',
-                      color: 'var(--ra-text-4)',
+                      whiteSpace: 'nowrap',
+                      padding: 0,
+                      margin: 0,
+                      border: 'none',
+                      borderRadius: 0,
+                      background: 'transparent',
+                      font: 'inherit',
+                      color: 'var(--ra-text-3)',
                       pointerEvents: 'auto',
                       cursor: 'pointer'
                     }}
                   >
                     {hookAwayName}
-                  </span>
+                  </button>
                 )}
                 <span style={{ flex: 'none', display: 'flex', gap: 6 }}>
                   {radioReadout.flash !== null && (
@@ -13735,14 +13764,16 @@ function DiscoverSlotRow({
         >
           <ThumbsDown size={12} weight={radioFlag === 'replace-soon' ? 'fill' : 'regular'} />
         </RowIconButton>
-        {/* FOLD MODE'S READOUT (v2, @shared/radioFoldStatus), track 16, after 👎: a folded
-            row's cycle against the loop in beats, and under it the phase dot's track -- the dot
-            at its left end on the downbeat, where it sits when the row realigns. Hidden with
-            `visibility` on a straight row, so the track stays. Only while fold mode is on, as the
-            track is (discoverRowGridColumns). Track 18 since the role buttons took 16-17. */}
+        {/* RADIO'S ROLE TOGGLES (RadioRoleButtons), tracks 16-17 after 👎, only while radio
+            runs, as the tracks are (discoverRowGridColumns). */}
         {(radioOn || foldTrack) && (
           <RadioRoleButtons hookSet={hookSet} locked={slot.locked} onToggleHook={onToggleHook} />
         )}
+        {/* FOLD MODE'S READOUT (v2, @shared/radioFoldStatus), track 18, the last: a folded
+            row's cycle against the loop in beats, and under it the phase dot's track -- the dot
+            at its left end on the downbeat, where it sits when the row realigns. Hidden with
+            `visibility` on a straight row, so the track stays. Only while fold mode is on, as the
+            track is (discoverRowGridColumns). */}
         {foldTrack && (
           <div
             data-tooltip={foldReadout !== null ? 'its cycle against the loop, in beats' : undefined}

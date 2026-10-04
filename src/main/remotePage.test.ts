@@ -82,7 +82,7 @@ describe('remotePage slots', () => {
   })
 
   it('rebuilds the rows only when they changed, so a poll cannot eat a tap', () => {
-    expect(SCRIPT).toContain('if (key === lastRowsKey) return')
+    expect(SCRIPT).toContain('if (key === lastRowsKey) {')
   })
 
   it('arms by repainting one button, because a rebuild throws the scroll', () => {
@@ -92,7 +92,7 @@ describe('remotePage slots', () => {
     // part of the repaint key, so arming wiped rowsEl and rebuilt every row
     // and canvas; the list has no height for that instant, the document is
     // shorter than the scroll offset, and the browser clamps it.
-    expect(SCRIPT).toContain('var key = JSON.stringify(lastSlots)')
+    expect(SCRIPT).toContain('var key = rowsKey(lastSlots)')
     expect(SCRIPT).not.toContain("+ '|' + armedRemoveId")
     expect(SCRIPT).toContain('function paintDrop(')
     // One wipe of the row list in the whole script, and it is renderRows'.
@@ -116,8 +116,28 @@ describe('remotePage radio roles', () => {
     expect(REMOTE_PAGE_HTML).toContain('if (radioAhead) {')
   })
 
-  it("writes a row's role words after its stem name", () => {
-    expect(REMOTE_PAGE_HTML).toContain("role.textContent = ' · ' + slot.role.words")
+  it("paints a row's role words in place, after its stem name", () => {
+    expect(REMOTE_PAGE_HTML).toContain("el.textContent = words ? ' · ' + words : ''")
+    expect(REMOTE_PAGE_HTML).toContain('roleEls[slot.id] = role')
+  })
+
+  it('keys the row rebuild on a role cut to its hook and dig, never its words', () => {
+    expect(REMOTE_PAGE_HTML).toContain("if (k === 'role' && v) return { hook: v.hook, dig: v.dig }")
+    expect(REMOTE_PAGE_HTML).toContain('var key = rowsKey(lastSlots)')
+    expect(REMOTE_PAGE_HTML).not.toContain('var key = JSON.stringify(lastSlots)')
+    // the key function, run as the page runs it: words and bars away change nothing
+    const src = REMOTE_PAGE_HTML.match(/function rowsKey\(slots\) \{[\s\S]*?\n {2}\}/)
+    expect(src).not.toBeNull()
+    const rowsKey = new Function(`${src![0]}; return rowsKey`)() as (s: unknown) => string
+    const row = (words: string, away: number): object => ({
+      id: 'a',
+      stemName: 'x',
+      role: { hook: 'away', dig: false, hookBarsAway: away, words }
+    })
+    expect(rowsKey([row('back in 16', 16)])).toBe(rowsKey([row('back in 15', 15)]))
+    expect(rowsKey([row('back in 16', 16)])).not.toBe(
+      rowsKey([{ id: 'a', stemName: 'x', role: { hook: 'in', dig: false } }])
+    )
   })
 })
 
@@ -807,7 +827,7 @@ describe('remotePage s and m', () => {
     // is not a rebuild either.
     expect(SCRIPT).toContain('function paintRowMix(slot)')
     expect(SCRIPT).toContain('function paintMix()')
-    expect(SCRIPT).toContain('lastRowsKey = JSON.stringify(lastSlots)')
+    expect(SCRIPT).toContain('lastRowsKey = rowsKey(lastSlots)')
     // Still exactly one wipe of the row list, and it is renderRows'.
     const wipes = SCRIPT.match(/rowsEl\.innerHTML = ''/g) ?? []
     expect(wipes).toHaveLength(1)
@@ -889,7 +909,7 @@ describe('remotePage going away', () => {
     // arming one button rebuilt every row and threw the scroll. Going is
     // per-row presentational state of exactly the same kind and stays out
     // of the key for exactly the same reason.
-    expect(SCRIPT).toContain('var key = JSON.stringify(lastSlots)')
+    expect(SCRIPT).toContain('var key = rowsKey(lastSlots)')
     expect(SCRIPT).not.toMatch(/var key = .*goingRemoveIds/)
     expect(SCRIPT).toContain('function markGoing(id)')
     expect(SCRIPT).toContain('function paintGoingRow(id)')
