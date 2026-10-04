@@ -857,3 +857,88 @@ relaunch `npm run dev` first.
   `display: none`, not unmount.
 - **Width.** The 945 numbers are measured Silkscreen widths for text, not the app. The top line
   at 945 wraps by design; check it by eye (walkthrough 1).
+
+---
+
+## As built (2026-10-04, Task 13 review)
+
+Commits b4e9cc2..d25020d (Tasks 1-12), on `master`, not on the `radio-view-design-pass` branch the
+plan named. Unpushed. Checks at d25020d: `npm run typecheck` is clean, `npm run lint` has 0 errors
+(4 old prettier warnings in unrelated main-process files), and `npm test` passes 288 files and
+4805 tests, with the coverage test unchanged and the new "present in every state" test.
+
+**What was built, against the plan:**
+- The rows keep their Phosphor icons (Elling's answer 3). `s` on and `lock` on keep their old
+  `--ra-stretch-on` look, which is monochrome. They are not the plan's filled block.
+- Everything else is as planned: the top line with the mix, the live bar, the five columns
+  greyed-not-hidden, the plates as two bars, the frame, the add row hidden while radio runs, the
+  start prompt and the cleanup.
+
+**Geometry the plan got wrong.** Discover is not the whole window. It sits in LibraryBrowser's
+box, which is `min(1500px, 90vw)` by `min(900px, 85vh)`, inside a 10px padding.
+- **At the 945×614 minimum** the content is about 830px wide and the scroll area about 455px
+  tall. The plan assumed 945.
+- **At a 1440 window** the content is about 1275px wide. The 1440 frame cap only matters above a
+  ~1620px window.
+- **Rendered in headless Chrome** (real Silkscreen, the real tokens and components, placeholder
+  rows of real height):
+  - top line 122px at 945 (the mix wraps), 66px at 1440;
+  - live bar 150px (two lines) at both 945 and 1440; one line (79px) only at about 1920;
+  - room for rows between the sticky bars at 945: **about 163px, so 1.5 rows**, not the 2.5 the
+    walkthrough below used to expect.
+
+**Elling's walkthrough** (Cmd+Q, then relaunch `npm run dev`). Compare against
+`docs/superpowers/references/radio-view-design-pass/`. The references were drawn at the full window
+width, so the app at the same window size is narrower.
+1. **Widths.** Check at 945×614, at ~1440 and at full screen:
+   - nothing clips and there is no sideways scroll;
+   - the mix wraps under the readout at 945;
+   - five columns stay five;
+   - the left edges line up;
+   - at 945, count the rows between the sticky bars (about 1.5 expected).
+   Known at 945: the picks column's `source · endlesss - other` label pushes its number about
+   16px past the column edge. Known at 1440: `level` drops alone onto a second live-bar line.
+2. **No remount.** With a loop playing, start and stop radio. The music doesn't restart and no
+   waveform blinks.
+3. **The playhead** covers exactly the waveform's span, not the holding bar.
+4. **Rows:**
+   - the icons work as before (Cmd on skip, any, near and dup);
+   - `like`'s star shows when favourited;
+   - the kind label is in the row's colour, and `guess` reclassifies;
+   - the holding bar is in the row's colour;
+   - `next · …` is the inverted plate at the top right, and `no fave fits` / `no near fits` flash
+     there;
+   - a folded row shows `7 / 16` with a moving dot at the bottom right;
+   - the away hook sits at the bottom left and brings the hook back on a click;
+   - nothing overlaps on a busy row.
+5. **Live bar:**
+   - tempo −/+, typing and `match seed` work;
+   - pace works by drag, click, wheel, arrows and double-click, and its readout follows (the fold
+     window in fold mode);
+   - `t` works straight after a pace drag;
+   - skip flickers on each landing;
+   - turn and the moves fire, a held move inverts, and moves that can't sound are faint with
+     `not now`;
+   - level is greyed while nothing sounds.
+6. **Columns:**
+   - every choice sets what it did;
+   - the bars set any value, not just tens;
+   - dragging faves previews and commits once;
+   - reverb commits on release;
+   - the greyed controls (channels; families and depth; bend, mismatch and seed) are still
+     **readable**. The review found them at about 9% opacity;
+   - artist opens the picker;
+   - Escape in the seed field stays local;
+   - saturation, pump and echo grey as the sound panel greys them, and Cmd+Z undoes one change.
+     A double-click reset currently takes two undos.
+7. **Top line mix:** keep (pulse, `keeping…`), fetch hearts, add to shelf and add to timeline
+   (`✓ added`, listen-only dimming), and similar all (`rerolling…`, Cmd for immediate).
+8. **Start prompt:**
+   - `radio` opens it;
+   - drag pace, **then nudge it with an arrow key**, then `start`: radio should start at the
+     nudged pace. The review expects the drag position instead (a bug);
+   - density works, and channels greys with arc;
+   - Escape and a click outside close it.
+9. **Add row:** gone while radio runs, back with radio off.
+10. **Radio off:** Discover looks exactly as before.
+11. **Phone remote:** works as before.
