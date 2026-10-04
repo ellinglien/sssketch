@@ -370,7 +370,7 @@ import { DiscoverSlotRow } from './DiscoverSlotRow'
 import { radioRowPlates } from '@shared/radioRowPlates'
 import { resolveCandidateStem, type ResolvedCandidateStem } from './discoverCandidateStem'
 import {
-  discoverRowGridColumns,
+  DISCOVER_ROW_GRID_COLUMNS,
   DISCOVER_ROW_COLUMN_GAP,
   DISCOVER_WAVEFORM_COLUMN,
   DISCOVER_WAVEFORM_MIN_WIDTH
@@ -10996,8 +10996,8 @@ export function DiscoverPanel({
   // FOLD MODE'S STATUS (v2, @shared/radioFoldStatus): the line in the radio bar and each folded
   // row's readout, only while radio runs with the mode on. The next change is the rows' own count
   // (radioChangeWait), so the line says what the rows show.
-  // The rows' 18th track (the readout, after radio's role tracks 16-17) exists only while the mode
-  // is on, in the rows and in the playhead overlay alike (discoverRowGridColumns).
+  // radioFoldTrack: fold's status shows (radio runs with the mode on). It no longer feeds a grid
+  // track: the folded rows' readouts are the radio layout's plates (radioFoldReadouts).
   const radioFoldTrack = radioOn && radioSettings.foldMode
   const radioFoldStatusNow =
     radioFoldTrack && radioFoldView !== null
@@ -11757,15 +11757,16 @@ export function DiscoverPanel({
               onReclassify={(role) => void reclassifySlot(slot.id, role)}
               soundSourceEndlesss={soundSourceForLean(sourceLean).endlesss}
               soundSourceAudioIn={soundSourceForLean(sourceLean).audioIn}
-              foldTrack={radioFoldTrack}
-              foldReadout={radioFoldReadouts.get(slot.id) ?? null}
-              radioReadout={radioReadoutRows.get(slot.id) ?? null}
               layout={radioOn ? 'radio' : 'grid'}
               rowNumber={i + 1}
-              plates={radioRowPlates(
-                radioReadoutRows.get(slot.id) ?? null,
-                radioFoldReadouts.get(slot.id) ?? null
-              )}
+              plates={
+                radioOn
+                  ? radioRowPlates(
+                      radioReadoutRows.get(slot.id) ?? null,
+                      radioFoldReadouts.get(slot.id) ?? null
+                    )
+                  : null
+              }
             />
           ))
         })()}
@@ -11801,10 +11802,7 @@ export function DiscoverPanel({
                     position: 'absolute',
                     inset: 0,
                     display: 'grid',
-                    gridTemplateColumns: discoverRowGridColumns({
-                      radio: radioOn,
-                      fold: radioFoldTrack
-                    }),
+                    gridTemplateColumns: DISCOVER_ROW_GRID_COLUMNS,
                     gridTemplateRows: '100%',
                     columnGap: DISCOVER_ROW_COLUMN_GAP,
                     padding: 0,

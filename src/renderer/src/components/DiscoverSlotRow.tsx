@@ -28,7 +28,6 @@ import {
   RADIO_DIG_TOOLTIP,
   RADIO_DIG_WORD,
   RADIO_HOOK_WORD,
-  RADIO_HOOK_BRING_BACK_TOOLTIP,
   RADIO_HOOK_RELEASE_TOOLTIP,
   RADIO_HOOK_TOOLTIP
 } from '@shared/radioHooks'
@@ -45,7 +44,6 @@ import { discoverWindowLayout } from '@shared/discoverWindowLayout'
 import { startPointerDrag } from './dragUtils'
 import { type Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
-import { radioFlashOpacity, type RadioReadoutRow } from '@shared/radioReadout'
 import type { DiscoverSlot } from './DiscoverPanel'
 import { RadioRowPlates } from './RadioRowPlates'
 import type { RadioRowPlates as RadioRowPlatesModel } from '@shared/radioRowPlates'
@@ -55,8 +53,8 @@ import {
   type ResolvedCandidateStem
 } from './discoverCandidateStem'
 import {
-  discoverRowGridColumns,
   DISCOVER_ROW_COLUMN_GAP,
+  DISCOVER_ROW_GRID_COLUMNS,
   DISCOVER_WAVEFORM_COLUMN,
   DISCOVER_WAVEFORM_HEIGHT,
   DISCOVER_WAVEFORM_MIN_WIDTH
@@ -193,7 +191,7 @@ function RowIconButton({
 }
 
 /** Radio's role toggles on a row (spec anointed-stems sections 2 and 3; planning decision 7),
- * tracks 16 and 17 while radio runs: the hook (Phosphor Repeat, pressed while the row has a hook
+ * in the radio layout's button line: the hook (Phosphor Repeat, pressed while the row has a hook
  * in any state; greyed on a padlocked row) and dig (Shovel, pressed on the one dug row; a
  * padlocked row may be dug). One component so the radio-view redesign can move both into its
  * radio-role slot unchanged. */
@@ -202,21 +200,17 @@ function RadioRoleButtons({
   locked,
   onToggleHook,
   dug,
-  onToggleDig,
-  columns
+  onToggleDig
 }: {
   hookSet: boolean
   locked: boolean
   onToggleHook: () => void
   dug: boolean
   onToggleDig: () => void
-  /** The two buttons' grid tracks (the grid layout passes [16, 17]); omitted, no placement. */
-  columns?: [number, number]
 }): React.JSX.Element {
   return (
     <>
       <RowIconButton
-        gridColumn={columns?.[0]}
         tooltip={hookSet ? RADIO_HOOK_RELEASE_TOOLTIP : RADIO_HOOK_TOOLTIP}
         ariaLabel={RADIO_HOOK_WORD}
         onClick={onToggleHook}
@@ -227,7 +221,6 @@ function RadioRoleButtons({
         <Repeat size={12} weight={hookSet ? 'fill' : 'regular'} />
       </RowIconButton>
       <RowIconButton
-        gridColumn={columns?.[1]}
         tooltip={dug ? RADIO_DIG_STOP_TOOLTIP : RADIO_DIG_TOOLTIP}
         ariaLabel={RADIO_DIG_WORD}
         onClick={onToggleDig}
@@ -277,9 +270,6 @@ export function DiscoverSlotRow({
   onReclassify,
   soundSourceEndlesss,
   soundSourceAudioIn,
-  foldTrack,
-  foldReadout,
-  radioReadout,
   layout,
   rowNumber,
   plates
@@ -441,26 +431,18 @@ export function DiscoverSlotRow({
   hookAwayName: string | null
   onToggleHook: () => void
   onBringHookBack: () => void
-  /** Radio's dig (@shared/radioDig) is on this row: its toggle (track 17) is pressed. */
+  /** Radio's dig (@shared/radioDig) is on this row: its toggle is pressed. */
   dug: boolean
   onToggleDig: () => void
-  /** Fold mode is on: the row has its 18th track, the readout's (discoverRowGridColumns). */
-  foldTrack: boolean
-  /** Fold mode's readout on a folded row (v2): its cycle against the loop in beats, `7 / 16`;
-   * null on a straight row and while fold mode is off. The phase dot under it is moved by
-   * DiscoverPanel's sweep layout effect (data-fold-dot), never by render. */
-  foldReadout: string | null
-  /** The radio readout on this row (@shared/radioReadout): what it was picked as, its age,
-   * `next` and the gesture flash. Null unless radio runs. */
-  radioReadout: RadioReadoutRow | null
   /** Which assembly of the row's parts (radio view plan Task 7): today's grid, or, while radio
    * runs, the radio view's button line over a full-width waveform. The same parts either way,
    * and the same DiscoverSlotRow, so switching never remounts the row. */
   layout: 'grid' | 'radio'
   /** The row's place in the list, from 1: the radio layout's accessible name. */
   rowNumber: number
-  /** The radio layout's plates on the waveform (@shared/radioRowPlates). */
-  plates: RadioRowPlatesModel
+  /** The radio layout's plates on the waveform (@shared/radioRowPlates): label and tail, cue,
+   * fold. Null with radio off (the grid draws none). */
+  plates: RadioRowPlatesModel | null
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- Waveform needs a real
@@ -1244,85 +1226,8 @@ export function DiscoverSlotRow({
           )}
         </div>
       )}
-      {/* THE RADIO READOUT on the row (spec 2026-10-03-radio-readout-design section 2): what
-          it was picked as and how long it has played, small and dim over the waveform's top
-          left; the gesture flash (in and out over a bar) and `next` at its top right. Never
-          in the way of the gain drag. Chrome: monochrome. */}
-      {!radioLayout && radioReadout !== null && (
-        <div
-          aria-hidden
-          style={{
-            position: 'absolute',
-            inset: 0,
-            pointerEvents: 'none',
-            fontSize: 8,
-            lineHeight: '10px',
-            color: 'var(--ra-text-3)'
-          }}
-        >
-          {/* One line: the label gives way (ellipsized) to the flash and `next`, which keep
-              their own width, so the two never overlap. */}
-          <div
-            style={{
-              position: 'absolute',
-              top: 1,
-              left: 3,
-              right: 3,
-              display: 'flex',
-              gap: 6,
-              whiteSpace: 'nowrap'
-            }}
-          >
-            <span
-              style={{
-                flex: '1 1 auto',
-                minWidth: 0,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis'
-              }}
-            >
-              {[radioReadout.label, radioReadout.age].filter(Boolean).join(' · ')}
-            </span>
-            {hookAwayName !== null && (
-              <button
-                type="button"
-                data-hook-away
-                data-tooltip={RADIO_HOOK_BRING_BACK_TOOLTIP}
-                aria-label={RADIO_HOOK_BRING_BACK_TOOLTIP}
-                onClick={onBringHookBack}
-                style={{
-                  flex: '0 1 auto',
-                  minWidth: 0,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  padding: 0,
-                  margin: 0,
-                  border: 'none',
-                  borderRadius: 0,
-                  background: 'transparent',
-                  font: 'inherit',
-                  color: 'var(--ra-text-3)',
-                  pointerEvents: 'auto',
-                  cursor: 'pointer'
-                }}
-              >
-                {hookAwayName}
-              </button>
-            )}
-            <span style={{ flex: 'none', display: 'flex', gap: 6 }}>
-              {radioReadout.flash !== null && (
-                <span style={{ opacity: radioFlashOpacity(radioReadout.flash.t) }}>
-                  {radioReadout.flash.word}
-                </span>
-              )}
-              {radioReadout.nextLabel !== null && <span>{radioReadout.nextLabel}</span>}
-            </span>
-          </div>
-        </div>
-      )}
-      {/* The radio layout's plates replace the readout above (RadioRowPlates). */}
-      {radioLayout && (
+      {/* The radio layout's plates: label and tail, cue, fold (RadioRowPlates). */}
+      {radioLayout && plates !== null && (
         <RadioRowPlates
           plates={plates}
           slotId={slot.id}
@@ -1617,57 +1522,15 @@ export function DiscoverSlotRow({
       <ThumbsDown size={12} weight={radioFlag === 'replace-soon' ? 'fill' : 'regular'} />
     </RowIconButton>
   )
-  // RADIO'S ROLE TOGGLES (RadioRoleButtons), tracks 16-17 after 👎, only while radio
-  // runs, as the tracks are (discoverRowGridColumns).
-  const roleButtons = (radioOn || foldTrack) && (
+  // RADIO'S ROLE TOGGLES (RadioRoleButtons), after 👎 in the radio layout's button line.
+  const roleButtons = (
     <RadioRoleButtons
       hookSet={hookSet}
       locked={slot.locked}
       onToggleHook={onToggleHook}
       dug={dug}
       onToggleDig={onToggleDig}
-      columns={radioLayout ? undefined : [16, 17]}
     />
-  )
-  // FOLD MODE'S READOUT (v2, @shared/radioFoldStatus), track 18, the last: a folded
-  // row's cycle against the loop in beats, and under it the phase dot's track -- the dot
-  // at its left end on the downbeat, where it sits when the row realigns. Hidden with
-  // `visibility` on a straight row, so the track stays. Only while fold mode is on, as the
-  // track is (discoverRowGridColumns).
-  const foldReadoutCell = foldTrack && (
-    <div
-      data-tooltip={foldReadout !== null ? 'its cycle against the loop, in beats' : undefined}
-      style={{
-        ...at(18),
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'flex-end',
-        gap: 3,
-        fontSize: 8,
-        color: 'var(--ra-text-3)',
-        whiteSpace: 'nowrap',
-        visibility: foldReadout !== null ? 'visible' : 'hidden'
-      }}
-    >
-      <span>{foldReadout ?? ''}</span>
-      <span
-        aria-hidden
-        style={{ position: 'relative', width: 32, height: 1, background: 'var(--ra-border)' }}
-      >
-        <span
-          data-fold-dot={slot.id}
-          style={{
-            position: 'absolute',
-            top: -1,
-            width: 3,
-            height: 3,
-            marginLeft: -1,
-            background: 'var(--ra-text)',
-            display: 'none'
-          }}
-        />
-      </span>
-    </div>
   )
   const popovers = (
     <>
@@ -1728,8 +1591,8 @@ export function DiscoverSlotRow({
         <div
           role="group"
           aria-label={
-            radioReadout !== null && radioReadout.label !== ''
-              ? `row ${rowNumber}: ${radioReadout.label}`
+            plates?.info != null && plates.info.label !== ''
+              ? `row ${rowNumber}: ${plates.info.label}`
               : `row ${rowNumber}`
           }
           style={{
@@ -1781,13 +1644,14 @@ export function DiscoverSlotRow({
       <div
         style={{
           display: 'grid',
-          // 15 tracks (17 or 18 while radio runs, below), explicit gridColumn on every child below (including
+          // 15 tracks, explicit gridColumn on every child below (including
           // conditionally-rendered ones): 1 delete, 2 lock, 3 mute, 4 solo,
           // 5 waveform (1fr), 6 spacer, 7 kind/category label + match
           // meter, 8 spacer, 9 divider, 10 skip (SkipForward, the old
           // "same kind"), 11 nearby jam, 12 any stem, 13 duplicate, 14 👍
-          // like, 15 👎 change soon; while radio runs 16 hook, 17 dig
-          // (RadioRoleButtons), and with fold mode 18 its readout. (2026-10-01, the web radio's row
+          // like, 15 👎 change soon. (Radio's hook and dig, and fold's
+          // readout, are the radio layout's: this grid only renders with radio
+          // off, radio view plan Task 13.) (2026-10-01, the web radio's row
           // buttons: the star and "hold longer" tracks became one 👍, and
           // 👍/👎 then moved together to the END of the row, after
           // duplicate -- every gridColumn renumbered in one pass each time;
@@ -1837,7 +1701,7 @@ export function DiscoverSlotRow({
           // The template itself is DISCOVER_ROW_GRID_COLUMNS, shared with
           // the one-playhead overlay above the row list so the two cannot
           // drift apart (2026-09-30).
-          gridTemplateColumns: discoverRowGridColumns({ radio: radioOn, fold: foldTrack }),
+          gridTemplateColumns: DISCOVER_ROW_GRID_COLUMNS,
           alignItems: 'center',
           columnGap: DISCOVER_ROW_COLUMN_GAP,
           // No horizontal padding: the overlay relies on the rows' column
@@ -1924,8 +1788,6 @@ export function DiscoverSlotRow({
         {duplicateButton}
         {likeButton}
         {dislikeButton}
-        {roleButtons}
-        {foldReadoutCell}
       </div>
       {popovers}
     </>
