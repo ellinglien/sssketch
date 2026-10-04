@@ -455,7 +455,8 @@ export function SegmentBar({
   size,
   disabled = false,
   ariaValueText,
-  tooltip
+  tooltip,
+  cellHeight
 }: {
   label: string
   value: number
@@ -464,6 +465,8 @@ export function SegmentBar({
   onDraft?: (value: number) => void
   defaultValue: number
   cells?: number
+  /** A cell height other than the size's (the start prompt's bar is --ra-h-control tall). */
+  cellHeight?: string
   size: ControlSize
   disabled?: boolean
   ariaValueText?: string
@@ -583,7 +586,7 @@ export function SegmentBar({
       style={{
         display: 'flex',
         gap: 2,
-        height: size === 'live' ? 'var(--ra-h-live)' : 'var(--ra-s-6)',
+        height: cellHeight ?? (size === 'live' ? 'var(--ra-h-live)' : 'var(--ra-s-6)'),
         opacity: disabled ? 'var(--ra-opacity-disabled)' : 1,
         cursor: disabled ? 'default' : 'ew-resize',
         touchAction: 'none'

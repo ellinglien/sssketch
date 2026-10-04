@@ -6,9 +6,14 @@ import {
   radioPaceLevelOf,
   type RadioSettings
 } from '@shared/radioSchedule'
-import { RADIO_PACE_LABEL, RADIO_PACE_TOOLTIP } from '@shared/radioPace'
+import {
+  DEFAULT_RADIO_PACE_LEVEL,
+  RADIO_PACE_LABEL,
+  RADIO_PACE_TOOLTIP,
+  radioPaceLabel
+} from '@shared/radioPace'
 import { RADIO_CHANNEL_OPTIONS } from '@shared/radioStripModel'
-import { PaceSlider, StripChip } from './RadioControls'
+import { ControlField, SegmentBar, Segmented } from './RadioControls'
 
 /** Radio's start prompt: what the radio button opens while radio is off. Position, dismissal and
  * chip styling mirror DiscoverKindPicker.tsx.
@@ -82,32 +87,16 @@ export function RadioStartPrompt({
     }
   }, [onClose, ignoreRef])
 
-  function row(label: string, chips: React.JSX.Element[], tooltip?: string): React.JSX.Element {
-    return (
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-        <span
-          data-tooltip={tooltip}
-          style={{
-            width: 92,
-            flexShrink: 0,
-            fontSize: 9,
-            color: 'var(--ra-text-3)'
-          }}
-        >
-          {label}
-        </span>
-        {chips}
-      </div>
-    )
-  }
-
-  // THE PACE SLIDER (2026-10-03): one value, 0..100, whose readout says slow, mid, fast or
-  // ludicrous at those positions and the bars between; committed on release. The `start` chip
-  // beside it starts radio at the slider's position.
+  // THE PACE BAR (2026-10-03): one value, 0..100, whose readout says slow, mid, fast or
+  // ludicrous at those positions and the bars between; committed on release. The `start` button
+  // starts radio at the bar's position.
   const paceLevel = radioPaceLevelOf(settings)
   // `density: arc` (@shared/radioDensity) grows and thins the rows itself, starting from two on
-  // an empty panel, so `channels` -- the size of the starting bed -- only shows while it is off.
+  // an empty panel, so `channels` -- the size of the starting bed -- is greyed unless it is off.
   const density = radioDensityOf(settings)
+
+  const paceShown = paceDraft ?? paceLevel
+  const paceReadout = radioPaceLabel(paceShown, { fold: settings.foldMode })
 
   return (
     <div
@@ -119,64 +108,81 @@ export function RadioStartPrompt({
         left: position.left,
         top: position.top,
         zIndex: 1200,
+        width: 380,
+        boxSizing: 'border-box',
         background: 'var(--ra-bg-bar)',
         border: '1px solid var(--ra-border-strong)',
-        padding: 8,
+        padding: 18,
         display: 'flex',
         flexDirection: 'column',
-        gap: 8
+        gap: 18
       }}
     >
-      {row(
-        RADIO_PACE_LABEL,
-        [
-          <PaceSlider
-            key="pace"
-            value={paceLevel}
-            fold={settings.foldMode}
-            onCommit={(v) => onChange({ paceLevel: v })}
-            onDraft={setPaceDraft}
-          />,
-          <StripChip
-            key="start"
-            label="start"
-            on={false}
-            onClick={() => {
-              const level = paceDraft ?? paceLevel
-              // Written only when it moved: the slider's own release usually persisted it already.
-              if (level !== settings.paceLevel) onChange({ paceLevel: level })
-              onStart(level)
-            }}
-          />
-        ],
-        RADIO_PACE_TOOLTIP
-      )}
-      {row(
-        'density',
-        RADIO_DENSITY_OPTIONS.map((d) => (
-          <StripChip
-            key={d}
-            label={d}
-            on={density === d}
-            onClick={() => onChange({ density: d })}
-          />
-        ))
-      )}
-      {density === 'off' &&
-        row(
-          'channels',
-          RADIO_CHANNEL_OPTIONS.map((n) => (
-            <StripChip
-              key={n}
-              label={String(n)}
-              on={settings.channels === n}
-              onClick={() => onChange({ channels: n })}
-            />
-          ))
-        )}
-      <span style={{ fontSize: 9, color: 'var(--ra-text-3)', maxWidth: 260 }}>
-        set a pace and start
-      </span>
+      <span style={{ fontSize: 'var(--ra-fs-13)', color: 'var(--ra-text)' }}>start radio</span>
+      <ControlField label={RADIO_PACE_LABEL} tooltip={RADIO_PACE_TOOLTIP} readout={paceReadout}>
+        <SegmentBar
+          label={RADIO_PACE_LABEL}
+          value={paceLevel}
+          size="control"
+          cellHeight="var(--ra-h-control)"
+          defaultValue={DEFAULT_RADIO_PACE_LEVEL}
+          ariaValueText={paceReadout}
+          tooltip={RADIO_PACE_TOOLTIP}
+          onChange={() => {}}
+          onDraft={setPaceDraft}
+          onCommit={(v) => onChange({ paceLevel: v })}
+        />
+      </ControlField>
+      <ControlField label="density">
+        <Segmented
+          ariaLabel="density"
+          size="control"
+          options={RADIO_DENSITY_OPTIONS.map((d) => ({
+            label: d,
+            on: density === d,
+            onClick: () => onChange({ density: d })
+          }))}
+        />
+      </ControlField>
+      {/* Greyed, not hidden, while density arc sizes the rows itself (Elling, 2026-10-04). */}
+      <ControlField
+        label="channels"
+        disabled={density !== 'off'}
+        tooltip={density !== 'off' ? 'with density off' : undefined}
+      >
+        <Segmented
+          ariaLabel="channels"
+          size="control"
+          disabled={density !== 'off'}
+          options={RADIO_CHANNEL_OPTIONS.map((n) => ({
+            label: String(n),
+            on: settings.channels === n,
+            onClick: () => onChange({ channels: n })
+          }))}
+        />
+      </ControlField>
+      <button
+        type="button"
+        className="radio-fire"
+        onClick={() => {
+          const level = paceDraft ?? paceLevel
+          // Written only when it moved: the slider's own release usually persisted it already.
+          if (level !== settings.paceLevel) onChange({ paceLevel: level })
+          onStart(level)
+        }}
+        style={{
+          width: '100%',
+          height: 'var(--ra-h-transport)',
+          fontFamily: 'inherit',
+          fontSize: 'var(--ra-fs-13)',
+          background: 'transparent',
+          color: 'var(--ra-text)',
+          border: '1px solid var(--ra-text)',
+          cursor: 'pointer'
+        }}
+      >
+        start
+      </button>
     </div>
   )
 }
