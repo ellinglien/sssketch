@@ -8,7 +8,7 @@ import {
   radioPaceLevelOf,
   type RadioSettings
 } from '@shared/radioSchedule'
-import { RADIO_PACE_LABEL, RADIO_PACE_TOOLTIP, radioPaceLabel } from '@shared/radioPace'
+import { RADIO_PACE_LABEL, RADIO_PACE_TOOLTIP } from '@shared/radioPace'
 import {
   RADIO_TURNAROUNDS_OPTIONS,
   TURNAROUND_DEPTH_OPTIONS,
@@ -23,139 +23,8 @@ import {
 } from '@shared/radioSchedule'
 import { FAVES_LABEL, FAVES_TOOLTIP } from '@shared/discoverFaves'
 import { RADIO_TRANSITIONS_OPTIONS } from '@shared/radioTransition'
-import { FOLD_SEED_TEXT_MAX, cleanFoldSeed, newFoldSeed } from '@shared/radioFold'
-
-/** A fold fader, 0..100. Local while dragging, and committed (persisted) only when the drag or
- * key press ends: every step of a drag would otherwise write the settings file. */
-function FoldSlider({
-  label,
-  value,
-  onCommit
-}: {
-  label: string
-  value: number
-  onCommit: (v: number) => void
-}): React.JSX.Element {
-  const [draft, setDraft] = useState<number | null>(null)
-  const commit = (): void => {
-    if (draft !== null && draft !== value) onCommit(draft)
-    setDraft(null)
-  }
-  return (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <input
-        type="range"
-        min={0}
-        max={100}
-        step={1}
-        aria-label={label}
-        value={draft ?? value}
-        onChange={(e) => setDraft(Number(e.target.value))}
-        onPointerUp={commit}
-        onKeyUp={commit}
-        onBlur={commit}
-        style={{ width: 96, accentColor: 'var(--ra-text)' }}
-      />
-      <span style={{ fontSize: 9, minWidth: 20, textAlign: 'right', color: 'var(--ra-text)' }}>
-        {draft ?? value}
-      </span>
-    </span>
-  )
-}
-
-/** The pace slider (@shared/radioPace, spec 2026-10-03-radio-pace-slider-design), 0..100, with
- * its readout in words (slow, mid, fast, ludicrous) or bars -- in fold mode, fold's own window in
- * bars below 80 (radioPaceLabel's `fold`). Like FoldSlider it is local while
- * dragging and commits only when the drag or key press ends -- one decision, one settings write,
- * and in a running radio one radioClockForPace. `onDraft` reports the position as it moves, for
- * the start chip, which starts at wherever the slider is even before a release has persisted. */
-function PaceSlider({
-  value,
-  fold,
-  onCommit,
-  onDraft
-}: {
-  value: number
-  /** Fold mode is on: below 80 the readout names fold's own window (`8-32 bars`). */
-  fold: boolean
-  onCommit: (v: number) => void
-  onDraft?: (v: number) => void
-}): React.JSX.Element {
-  const [draft, setDraft] = useState<number | null>(null)
-  const commit = (): void => {
-    if (draft !== null && draft !== value) onCommit(draft)
-    setDraft(null)
-  }
-  const shown = draft ?? value
-  return (
-    <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-      <input
-        type="range"
-        min={0}
-        max={100}
-        step={1}
-        aria-label={RADIO_PACE_LABEL}
-        aria-valuetext={radioPaceLabel(shown, { fold })}
-        value={shown}
-        onChange={(e) => {
-          const v = Number(e.target.value)
-          setDraft(v)
-          onDraft?.(v)
-        }}
-        onPointerUp={commit}
-        onKeyUp={commit}
-        onBlur={commit}
-        style={{ width: 96, accentColor: 'var(--ra-text)' }}
-      />
-      <span style={{ fontSize: 9, minWidth: 64, color: 'var(--ra-text)' }}>
-        {radioPaceLabel(shown, { fold })}
-      </span>
-    </span>
-  )
-}
-
-/** The fold seed: any text (v2, cleanFoldSeed), typed or pasted, committed on enter or when
- * focus leaves. A box left empty goes back to the seed in use. */
-function FoldSeedInput({
-  value,
-  onCommit
-}: {
-  value: string
-  onCommit: (seed: string) => void
-}): React.JSX.Element {
-  const [draft, setDraft] = useState<string | null>(null)
-  const commit = (): void => {
-    if (draft !== null) {
-      // the same cleaning as normalizeFoldSeed, but nothing falls back to the default here
-      const kept = cleanFoldSeed(draft)
-      if (kept !== null && kept !== value) onCommit(kept)
-    }
-    setDraft(null)
-  }
-  return (
-    <input
-      key="seed"
-      aria-label="fold seed"
-      value={draft ?? value}
-      maxLength={FOLD_SEED_TEXT_MAX}
-      spellCheck={false}
-      onChange={(e) => setDraft(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') commit()
-      }}
-      onBlur={commit}
-      style={{
-        fontFamily: 'inherit',
-        fontSize: 9,
-        width: 84,
-        padding: 'var(--ra-s-0) 4px',
-        background: 'transparent',
-        border: '1px solid var(--ra-border)',
-        color: 'var(--ra-text)'
-      }}
-    />
-  )
-}
+import { newFoldSeed } from '@shared/radioFold'
+import { FoldSeedInput, FoldSlider, PaceSlider } from './RadioControls'
 
 const CHANNEL_OPTIONS: number[] = Array.from(
   { length: RADIO_CHANNELS_MAX - RADIO_CHANNELS_MIN + 1 },

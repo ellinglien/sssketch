@@ -54,7 +54,8 @@ export function Dial({
   defaultValue = 50,
   size = 26,
   ariaLabel,
-  tooltip
+  tooltip,
+  disabled = false
 }: {
   value: number
   onChange: (value: number) => void
@@ -70,16 +71,20 @@ export function Dial({
   size?: number
   ariaLabel: string
   tooltip?: string
+  /** Shown but inert: its value still draws (fainter), and no pointer, wheel, key or
+   * double-click changes it. Out of the Tab order. For a dial whose setting does nothing right
+   * now (radio's level/reverb/filter while nothing sounds; a sound dial whose stage is off). */
+  disabled?: boolean
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const dragRef = useRef<{ startY: number; startValue: number; latestValue: number } | null>(null)
   // Latest value/onChange/onCommit for the native wheel listener below,
   // which is attached once (it must be non-passive to preventDefault page
   // scroll, which React's own onWheel can't do).
-  const latest = useRef({ value, onChange, onCommit })
+  const latest = useRef({ value, onChange, onCommit, disabled })
   useEffect(() => {
-    latest.current = { value, onChange, onCommit }
-  }, [value, onChange, onCommit])
+    latest.current = { value, onChange, onCommit, disabled }
+  }, [value, onChange, onCommit, disabled])
 
   const wheelCommitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
@@ -87,6 +92,8 @@ export function Dial({
     const el = ref.current
     if (!el) return
     function handleWheel(e: WheelEvent): void {
+      // A disabled knob is not a knob: the wheel scrolls the page as it would anywhere else.
+      if (latest.current.disabled) return
       e.preventDefault()
       // ...and kept off the timeline's own wheel handler, which would
       // otherwise zoom or pan the arranger at the same time as the knob
@@ -121,6 +128,7 @@ export function Dial({
     onCommit?.(drag.latestValue)
   }
 
+  const ink = disabled ? 'var(--ra-text-4)' : 'var(--ra-text)'
   const r = size / 2 - 3
   const pointer = dialPointAt(dialAngleDeg(value), r - 2)
   const half = size / 2
@@ -129,13 +137,15 @@ export function Dial({
     <div
       ref={ref}
       role="slider"
-      tabIndex={0}
+      tabIndex={disabled ? -1 : 0}
       aria-label={ariaLabel}
+      aria-disabled={disabled || undefined}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={value}
       data-tooltip={tooltip}
       onPointerDown={(e) => {
+        if (disabled) return
         // preventDefault kills the press's own default action (a text
         // selection dragged out from under the knob, and on a knob nested
         // in a draggable ancestor a native drag that would cancel the
@@ -151,6 +161,7 @@ export function Dial({
         dragRef.current = { startY: e.clientY, startValue: value, latestValue: value }
       }}
       onMouseDown={(e) => {
+        if (disabled) return
         // The compatibility mouse event for the same press. Stopped here
         // so this knob needs no `stopPropagation` wrapper at its call
         // sites -- every ancestor drag in this app starts on mousedown.
@@ -159,7 +170,7 @@ export function Dial({
       }}
       onPointerMove={(e) => {
         const drag = dragRef.current
-        if (!drag) return
+        if (!drag || disabled) return
         const next = dialValueAfterDrag(drag.startValue, e.clientY - drag.startY)
         if (next === drag.latestValue) return
         drag.latestValue = next
@@ -178,11 +189,12 @@ export function Dial({
       onContextMenu={(e) => e.stopPropagation()}
       onDoubleClick={(e) => {
         e.stopPropagation()
-        if (value === defaultValue) return
+        if (disabled || value === defaultValue) return
         onChange(defaultValue)
         onCommit?.(defaultValue)
       }}
       onKeyDown={(e) => {
+        if (disabled) return
         const step = e.shiftKey ? 10 : 1
         let next: number | null = null
         if (e.key === 'ArrowUp' || e.key === 'ArrowRight') next = value + step
@@ -195,19 +207,17 @@ export function Dial({
         // A key press is its own finished gesture: one step, one commit.
         onCommit?.(clamped)
       }}
-      style={{ width: size, height: size, cursor: 'ns-resize', touchAction: 'none' }}
+      style={{
+        width: size,
+        height: size,
+        cursor: disabled ? 'default' : 'ns-resize',
+        touchAction: 'none'
+      }}
     >
       <svg width={size} height={size} viewBox={`${-half} ${-half} ${size} ${size}`}>
         <path d={dialTrackPath(r)} fill="none" stroke="var(--ra-border-strong)" strokeWidth={2} />
-        <path d={dialArcPath(value, r)} fill="none" stroke="var(--ra-text)" strokeWidth={2} />
-        <line
-          x1={0}
-          y1={0}
-          x2={pointer.x}
-          y2={pointer.y}
-          stroke="var(--ra-text)"
-          strokeWidth={1.5}
-        />
+        <path d={dialArcPath(value, r)} fill="none" stroke={ink} strokeWidth={2} />
+        <line x1={0} y1={0} x2={pointer.x} y2={pointer.y} stroke={ink} strokeWidth={1.5} />
       </svg>
     </div>
   )
