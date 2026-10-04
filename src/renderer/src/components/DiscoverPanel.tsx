@@ -4192,6 +4192,12 @@ export function DiscoverPanel({
       foldCarry: radioFoldChangeCarriesNow(first.slotId, first.pick, first.stem)
     })
     if (manualOnlyStage) cancelStagedSwap('radio-joins')
+    // The gates held it past the stage's own lead: its stage may reach the engine late.
+    if (loopBars - pos < stageLead) {
+      console.log(
+        `[radio-build] late: payoff decided ${(loopBars - pos).toFixed(2)} bars before the top`
+      )
+    }
     console.log(`[radio-build] payoff decided: ${first.slotId} +${riding.length} (${transition})`)
     return true
   }
@@ -7955,6 +7961,9 @@ export function DiscoverPanel({
     // pick claims nothing: it holds the generation as it is, so any later
     // claim makes IT the stale one.
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + (yieldRow ? 0 : 1)
+    // A yielding pick on a row never picked for has no entry yet: seed it at 0, so the staleness
+    // checks below (get(id) !== myGeneration) compare 0 with 0 rather than undefined with 0.
+    if (yieldRow && !rerollGenerationRef.current.has(id)) rerollGenerationRef.current.set(id, 0)
     if (!yieldRow) {
       rerollGenerationRef.current.set(id, myGeneration)
       // The phone's "rolled" counter. Counted in the two functions every roll
