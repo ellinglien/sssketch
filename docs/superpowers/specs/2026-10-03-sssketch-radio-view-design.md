@@ -602,3 +602,79 @@ view's width less 10px of padding on each side. These figures are estimated from
    small spec.
 3. **Saturation, pump and echo.** The strip's dials change the open project's sound, the same
    settings the sound panel edits: undoable, saved with the project, marking it unsaved.
+
+## As built (2026-10-04, sssketch 29d6a6a..0255dfa; final review, plan Task 14)
+
+**Shipped.** The three pure modules (`@shared/radioStripModel`, `radioRowPlates`, `radioLanding`,
+TDD), the row moved out of `DiscoverPanel.tsx` (`DiscoverSlotRow.tsx`, with
+`discoverCandidateStem.ts` and `discoverRowGrid.ts`), its parts named, the radio row layout over
+the same `rowsRef` wrapper, the strip (play, picks, shape, fold, sound, mix), its sound group, the
+sticky top line, `RadioStartPrompt` with `DiscoverRadioMenu.tsx` deleted, the landing flicker and
+the `no fave fits` / `no near fits` flashes, and the grid's dead radio branches removed (15 tracks
+again). `npm run typecheck`, `npm run lint` (0 errors; 4 warnings in unrelated files) and
+`npm test` (287 files, 4783 tests) are green at 0255dfa. The plan's grep sweep holds: one
+`ref={rowsRef}`, one `ref={sweepLineRef}`, `data-fold-dot=` only in `RadioRowPlates.tsx`, no
+`DiscoverRadioMenu` / `radioChevronRef` anywhere, no grid track 16-18, the seed field's Escape
+stops propagation.
+
+**Decided while building.**
+- The sticky bars sit on `--ra-bg-bar`, not `--ra-bg-page`: that is the library box's own fill
+  (`LibraryBrowser`), so the bars do not read as a band (`RADIO_STICKY_BACKGROUND`).
+- Every setting the running menu made, the strip makes (inventory against the deleted menu:
+  pace, loop end, phrase, density, channels, turnarounds, moves, depth, builds, transitions, faves,
+  fold, bend, mismatch, seed and `new`, `new bed`), plus `turnover`, which had no control before.
+  The start prompt keeps exactly the menu's start mode (pace and `start`, density, channels).
+- The switch between layouts keeps every `DiscoverSlotRow` mounted (its state, its resolution),
+  but the row's inner DOM is regrouped (a button line and the waveform in radio, grid cells
+  otherwise), so the waveform's element is rebuilt on the switch from the peak cache's
+  synchronous peek.
+
+**Known gaps from the final review** (see the review for file and line):
+- The lingering and artist notes keep their `marginTop: -6`, which tucked them under header row
+  2's 10px margin; under the sticky top line (no margin, opaque, `zIndex: 2`) their top 6px would
+  be painted over.
+- The strip's `skip` would flicker once each time radio starts after a landing in an earlier run
+  (`radioSkipFlicker` is not reset, and the strip remounts with the class on).
+- Several comments still name "the radio menu" (`DiscoverPanel.tsx`, `App.tsx`,
+  `LibraryBrowser.tsx`, `radioSchedule.ts`).
+
+**Not seen by any agent.** No agent can run the app, see it, hear it or click it. Everything
+above is typecheck, lint, the shared tests, grep checks and reading the code.
+
+**Elling's walkthrough** (14 items; none done yet):
+1. **Widths.** At the 945px minimum, at 1440px and full screen: the top line, rows and strip fit
+   with no horizontal scroll; the strip wraps into captioned groups; at 945x614 about three rows
+   show and the rest scroll between the sticky top line and strip; rows stop at 1200px wide and
+   centre on a big screen.
+2. **No remount.** With a loop playing, start radio and stop it: the music does not restart or
+   drop out, and no waveform blinks to the loading line.
+3. Open a row's kind picker or nearby popover, then press `t`: it stays open; a reroll in flight
+   (its button pulsing) keeps pulsing across a radio start.
+4. **The playhead** runs over the waveforms (not the buttons' column) in both layouts, also after
+   switching while paused; the breath (armed, held) lights the whole two-line row.
+5. **Rows:** every button works as before, Cmd-click included (skip, any stem, nearby, duplicate
+   land at once); hook and dig toggle; holding shows the left bar and 👍 shows only the star; the
+   away hook's name sits bottom left, tap brings it back; the label cuts before the age and role
+   words do; the cue (flash, `next · ...`) bottom right; folded rows show `7 / 16` with a moving
+   dot top right.
+6. **The strip:** each control does what the menu or old place did (pace's readout in fold mode,
+   phrase, loop end, transitions, turnarounds, moves/depth appearing with turnarounds on, builds,
+   density, channels appearing with density off, turnover now settable, fold switch and its
+   hidden-when-off sliders and seed, `new`).
+7. **Sound:** saturation greyed with mastering off (tooltip says so); pump / echo greyed when
+   switched off in the sound panel; a saturation change is undone by Cmd+Z in the arrangement and
+   marks the project unsaved; level, reverb, filter, res greyed while nothing sounds.
+8. **Escape in the seed field** reverts the text and the library stays open.
+9. **`t` after a pace or bend drag** turns at once.
+10. **Start prompt:** `radio` (off) opens it as before; `start` starts at the slider's pace and the
+    top line's `radio` has focus; pressing it stops radio, returns the normal layout and focuses
+    the header's `radio`.
+11. **Landing flicker:** `skip` in the strip flickers once when radio's change lands (once for a
+    combined change), not for a Cmd change; with reduced motion on (System Settings >
+    Accessibility > Display), no flicker and no pulse in the radio view.
+12. **`no fave fits`:** faves at 100 with no starred stem of a row's kind: the row flashes it.
+    **`no near fits`:** dig a row whose jam has nothing near: the row flashes it.
+13. Switching radio off mid-change (a row breathing, a turn waiting): the normal layout comes back
+    and the change lands or withdraws as it did before this work. Also check: with an artist
+    picked or the lingering notice showing, its note under the top line is fully readable.
+14. The phone remote works as before.
