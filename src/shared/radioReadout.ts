@@ -122,6 +122,16 @@ export interface RadioReadout {
   rows: RadioReadoutRow[]
 }
 
+export type RadioRulerCell = 'played' | 'now' | 'ahead' | 'ahead-bar'
+
+/** One cell per tick of the phrase ruler: the bars played, the bar in progress, and the bars
+ * ahead (every fourth, counting from the phrase's start, marked as a bar line). */
+export function radioRulerCells(ruler: RadioReadout['ruler']): RadioRulerCell[] {
+  return Array.from({ length: Math.max(0, ruler.ticks) }, (_, i) =>
+    i < ruler.filled ? 'played' : i === ruler.filled ? 'now' : i % 4 === 0 ? 'ahead-bar' : 'ahead'
+  )
+}
+
 /** A trait percentile at or above this is the stem's dominant trait, for a row picked by mask
  * alone (a stem barely bright is not called bright). */
 export const RADIO_TRAIT_DOMINANT = 0.6

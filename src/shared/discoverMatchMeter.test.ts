@@ -2,6 +2,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildMatchMeter,
+  compactRadioMeter,
+  type MatchMeterEntry,
   DISCOVER_RECLASSIFY_ROLES,
   discoverRoleLabel,
   reclassifyKindSources,
@@ -299,5 +301,34 @@ describe('match meter tooltips are at most three words', () => {
         }
       }
     }
+  })
+})
+
+describe('compactRadioMeter', () => {
+  const mask: MatchMeterEntry = {
+    type: 'mask',
+    kind: 'drums',
+    label: 'drummy',
+    source: 'tag',
+    text: 'drummy: tag',
+    tooltip: 'drummy: tag'
+  }
+  const trait: MatchMeterEntry = {
+    type: 'trait',
+    kind: 'punchy',
+    label: 'punchy',
+    filled: 3,
+    bars: '###..',
+    text: 'punchy ###..',
+    tooltip: 'punchy: 60%'
+  }
+  it('blanks a mask label when the row has one kind', () => {
+    const out = compactRadioMeter([mask, trait], 1)
+    expect(out[0]).toEqual({ ...mask, label: '' })
+    expect(out[1]).toBe(trait)
+  })
+  it('leaves the entries unchanged with more kinds', () => {
+    const entries = [mask, trait]
+    expect(compactRadioMeter(entries, 2)).toEqual(entries)
   })
 })

@@ -46,6 +46,17 @@ export interface MatchMeterTraitEntry {
 
 export type MatchMeterEntry = MatchMeterMaskEntry | MatchMeterTraitEntry
 
+/** The radio row's compact meter: with a single kind the row's kind button already names it, so
+ * the mask entry's visible label is dropped (its tooltip still says it). With more kinds, and
+ * for trait entries, the entries are unchanged. */
+export function compactRadioMeter(
+  entries: MatchMeterEntry[],
+  kindCount: number
+): MatchMeterEntry[] {
+  if (kindCount !== 1) return entries
+  return entries.map((e) => (e.type === 'mask' ? { ...e, label: '' } : e))
+}
+
 const SOURCE_DESCRIPTION: Record<DiscoverKindSource, string> = {
   confirmed: 'confirmed by you',
   tag: 'endlesss instrument tag',

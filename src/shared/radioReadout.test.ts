@@ -9,6 +9,7 @@ import {
   radioReadout,
   radioReadoutArc,
   radioReadoutBars,
+  radioRulerCells,
   radioRowLabel,
   type RadioFlash,
   type RadioReadoutInput,
@@ -342,5 +343,24 @@ describe('the pace slider companions: edge cases', () => {
     const r = mk({ rowId: 'a', kind: 'bloom', barsAway: 1, course: ['a', 'b'], with: ['c'] })
     expect(r.statusLine).toBe('next: course change · 1 bar')
     expect(r.rows[2].nextLabel).toBeNull()
+  })
+})
+
+describe('radioRulerCells', () => {
+  it('marks played, the bar in progress, and the bars ahead', () => {
+    const cells = radioRulerCells({ ticks: 16, filled: 4, end: null })
+    expect(cells).toHaveLength(16)
+    expect(cells.slice(0, 4)).toEqual(['played', 'played', 'played', 'played'])
+    expect(cells[4]).toBe('now')
+    expect(cells.slice(5, 8)).toEqual(['ahead', 'ahead', 'ahead'])
+    expect(cells[8]).toBe('ahead-bar')
+    expect(cells[12]).toBe('ahead-bar')
+    expect(cells[15]).toBe('ahead')
+  })
+  it('is all played when every bar has played', () => {
+    expect(radioRulerCells({ ticks: 8, filled: 8, end: null })).toEqual(Array(8).fill('played'))
+  })
+  it('is empty with no ticks', () => {
+    expect(radioRulerCells({ ticks: 0, filled: 0, end: null })).toEqual([])
   })
 })
