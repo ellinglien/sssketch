@@ -116,6 +116,14 @@ describe('remotePage radio roles', () => {
     expect(REMOTE_PAGE_HTML).toContain('if (radioAhead) {')
   })
 
+  it('offers dig on the action sheet while radio runs, and stop digging on the dug row', () => {
+    expect(REMOTE_PAGE_HTML).toContain('"a":"dig","l":"dig","h":"lean toward this"')
+    expect(REMOTE_PAGE_HTML).toContain('"a":"dig","l":"stop digging","h":"back to normal"')
+    expect(REMOTE_PAGE_HTML).toContain(
+      'acts.push(slot.role && slot.role.dig ? ROLE_ACTS.undig : ROLE_ACTS.dig)'
+    )
+  })
+
   it("paints a row's role words in place, after its stem name", () => {
     expect(REMOTE_PAGE_HTML).toContain("el.textContent = words ? ' · ' + words : ''")
     expect(REMOTE_PAGE_HTML).toContain('roleEls[slot.id] = role')
@@ -200,6 +208,9 @@ describe('remotePage copy', () => {
       'hook',
       'release',
       'back',
+      'dig',
+      'stop digging',
+      'digging',
       ...TURNAROUND_MOVES.map((m) => TURNAROUND_MOVE_LABEL[m])
     ]
     for (const label of [...buttonLabels, ...runtime]) {

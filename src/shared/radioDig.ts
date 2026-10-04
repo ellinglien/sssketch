@@ -157,3 +157,63 @@ export function radioDigCloseness(
   const p = DIG_CLOSENESS_PARTS
   return p.jam * sameJam + p.time * timeNear + p.traits * traitNear
 }
+
+// --- the desktop's rows (plan Task 14) ---
+
+/** The dug row after the rows changed: kept while its row is live, gone with it. */
+export function pruneRadioDig(dug: string | null, liveRowIds: ReadonlySet<string>): string | null {
+  return dug !== null && liveRowIds.has(dug) ? dug : null
+}
+
+/** The candidate a dug row anchors on (radioDigAnchorStemId's stem): its hook's, in or away, when
+ * that candidate is known; else what the row plays (a hook whose candidate is unknown anchors on
+ * the row, as a row without one does). */
+export function radioDigAnchorCandidate<C extends { stemCID: string }>(
+  playing: C | null,
+  hook: { stemId: string; candidate: C | null } | null
+): C | null {
+  const stemId = radioDigAnchorStemId(playing?.stemCID ?? null, hook?.stemId ?? null)
+  if (hook !== null && hook.candidate !== null && hook.candidate.stemCID === stemId) {
+    return hook.candidate
+  }
+  return playing
+}
+
+/** The anchor riff's neighbours the ranking reads as near in time, learned from the adjacency
+ * calls the near draw makes for it. */
+export interface RadioDigNearKnown {
+  riffCID: string
+  near: ReadonlySet<string>
+}
+
+/** Adds what a near call found to the anchor riff's neighbours; another anchor riff starts again.
+ * An empty riff is never a neighbour. */
+export function learnRadioDigNear(
+  known: RadioDigNearKnown | null,
+  anchorRiffCID: string,
+  learned: Iterable<string>
+): RadioDigNearKnown {
+  const near = new Set(known !== null && known.riffCID === anchorRiffCID ? known.near : [])
+  for (const r of learned) if (r !== '') near.add(r)
+  return { riffCID: anchorRiffCID, near }
+}
+
+/** The neighbours known for this anchor riff, for rankDigOf; undefined when none are. */
+export function radioDigNearOf(
+  known: RadioDigNearKnown | null,
+  anchorRiffCID: string
+): ReadonlySet<string> | undefined {
+  return known !== null && known.riffCID === anchorRiffCID && known.near.size > 0
+    ? known.near
+    : undefined
+}
+
+/** The desktop's near pool from its adjacency call (getAdjacentDiscoverCandidates): newer then
+ * older, when any is unused; null when none is (the pick falls back to a normal one). */
+export function radioDigNearPool<C>(
+  near: { newer: readonly C[]; older: readonly C[] },
+  unused: (c: C) => boolean
+): C[] | null {
+  const pool = [...near.newer, ...near.older]
+  return pool.some(unused) ? pool : null
+}

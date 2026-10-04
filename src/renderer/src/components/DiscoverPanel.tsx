@@ -127,6 +127,7 @@ import {
 import {
   NO_RADIO_HOOKS,
   NO_RADIO_LANDINGS,
+  RADIO_DIG_STOP_TOOLTIP,
   RADIO_DIG_TOOLTIP,
   RADIO_DIG_WORD,
   RADIO_HOOK_WORD,
@@ -162,6 +163,20 @@ import {
   type RadioLandingWindow
 } from '@shared/radioHooks'
 import { radioForecastWithUncertainRows, radioWrapBeforeLastLap } from '@shared/radioBuildForecast'
+import {
+  NO_NEAR_FITS,
+  digNearDraw,
+  learnRadioDigNear,
+  pruneRadioDig,
+  radioDigAnchorCandidate,
+  radioDigAnchorOf,
+  radioDigNearOf,
+  radioDigNearPool,
+  rankDigOf,
+  toggleRadioDig,
+  type RadioDigAnchor,
+  type RadioDigNearKnown
+} from '@shared/radioDig'
 import {
   DEFAULT_FAVES,
   FAVES_LABEL,
@@ -3111,6 +3126,15 @@ export function DiscoverPanel({
   )
   /** Row landings per lap over the last phrase (the hook's calm wait). */
   const radioLandingsRef = useRef<RadioLandingWindow>(NO_RADIO_LANDINGS)
+  // RADIO'S DIG (@shared/radioDig; spec anointed-stems section 3): the one dug row, or null. The
+  // anchor is read fresh at each pick (radioDigAnchorNow), so it follows the row. State for the
+  // rows' render, a ref for pickForSlot and the clock (written first, by updateRadioDig only). Kept,
+  // inert and hidden, while radio is off (spec 3.1); gone with its row. Not persisted.
+  const [radioDig, setRadioDig] = useState<string | null>(null)
+  const radioDigRef = useRef<string | null>(null)
+  /** The anchor riff's neighbours, learned from the near draw's adjacency calls: the ranking reads
+   * them as near in time (rankDigOf). Another anchor riff starts again. */
+  const radioDigNearRef = useRef<RadioDigNearKnown | null>(null)
   /** The hook step owed at this wrap (radioHooksAtWrap): run in the fold step's deferred slot,
    * queued first, or by whichever of the fold step and the roll runs earlier. */
   const radioHooksStepOwedRef = useRef<{
@@ -4676,15 +4700,71 @@ export function DiscoverPanel({
   function bringSlotHookBack(id: string): void {
     updateRadioHooks(bringRadioHookBack(radioHooksRef.current, id))
   }
+  // --- radio's dig (@shared/radioDig; spec anointed-stems section 3) ---
+
+  /** THE ONE WAY the dug row is written: the ref first (pickForSlot reads it), then the state. */
+  function updateRadioDig(next: string | null): void {
+    if (next === radioDigRef.current) return
+    radioDigRef.current = next
+    setRadioDig(next)
+  }
+  /** The row's dig toggle (track 17, the phone's `dig`): dig this row, move the dig here from
+   * another, or (tapped again) stop. Radio on only; a padlocked row may be dug (it is the anchor,
+   * and the anchor need not change). `dig` flashes on the row it is set on. */
+  function toggleSlotDig(id: string): void {
+    if (!radioOnRef.current || !slotsRef.current.some((s) => s.id === id)) return
+    const next = toggleRadioDig(radioDigRef.current, id)
+    updateRadioDig(next)
+    if (next !== null) {
+      const now = radioPlayRef.current.startBars + (radioClockRef.current?.lastPos ?? 0)
+      radioFlashLogRef.current = [
+        ...radioFlashLogRef.current,
+        { rowId: next, word: RADIO_DIG_WORD, at: now, key: `dig@${next}@${now}` }
+      ]
+    }
+  }
+  /** The dug row's anchor now (spec 3.1): the stem the row plays, or its hook's (in or away) when
+   * it has one, as radioDigAnchorOf builds it. Null with no dig, radio off, the row gone or
+   * playing nothing. Read at each pick, so the dig follows the row. */
+  function radioDigAnchorNow(): RadioDigAnchor | null {
+    const dug = radioDigRef.current
+    if (dug === null || !radioOnRef.current) return null
+    const slot = slotsRef.current.find((s) => s.id === dug)
+    if (slot === undefined) return null
+    const h = radioHookOf(radioHooksRef.current, dug)
+    const c = radioDigAnchorCandidate(
+      slot.candidate,
+      h === null
+        ? null
+        : { stemId: h.stemId, candidate: radioHookPicksRef.current.get(dug)?.candidate ?? null }
+    )
+    return c === null ? null : radioDigAnchorOf(dug, c)
+  }
+
   /** A row's role now, for its words (the readout's age, the phone): the hook's state and, while
-   * away, bars until its planned return. Null with no hook. Off the clock's refs: never in
-   * render. */
+   * away, bars until its planned return, and whether it is dug. Null with no role. Off the clock's
+   * refs: never in render. */
   function radioRoleNow(
     rowId: string,
     narrow: boolean
-  ): { hook: RadioHook['state']; barsToReturn: number | null; words: string | null } | null {
+  ): {
+    hook: RadioHook['state'] | null
+    dig: boolean
+    barsToReturn: number | null
+    words: string | null
+  } | null {
     const h = radioHookOf(radioHooksRef.current, rowId)
-    if (h === null) return null
+    const dig = radioDigRef.current === rowId
+    if (h === null) {
+      return dig
+        ? {
+            hook: null,
+            dig,
+            barsToReturn: null,
+            words: radioRoleWords({ hook: null, dig, narrow })
+          }
+        : null
+    }
     const clock = radioClockRef.current
     const lengths = [...resolvedBarLengthsRef.current.values()]
     const loopBars = lengths.length > 0 ? Math.max(...lengths) : 0
@@ -4699,10 +4779,11 @@ export function DiscoverPanel({
           })
     return {
       hook: h.state,
+      dig,
       barsToReturn,
       words: radioRoleWords({
         hook: { state: h.state, decided: h.decided?.event ?? null, barsToReturn },
-        dig: false,
+        dig,
         narrow
       })
     }
@@ -4846,6 +4927,8 @@ export function DiscoverPanel({
     const live = new Set(slots.map((s) => s.id))
     for (const h of radioHooksRef.current.hooks) if (!live.has(h.rowId)) forgetRadioHookRow(h.rowId)
     let state = pruneRadioHooks(radioHooksRef.current, live)
+    // a dug row that is gone (a project swap) takes the dig with it
+    updateRadioDig(pruneRadioDig(radioDigRef.current, live))
     // A hook in whose stem is no longer on its row and is not on its way back there (a project
     // swap, a change no rule saw), or one with nothing to come back with: gone.
     for (const h of state.hooks) {
@@ -7446,6 +7529,8 @@ export function DiscoverPanel({
     for (const h of radioHooksRef.current.hooks)
       if (!validIds.has(h.rowId)) forgetRadioHookRow(h.rowId)
     updateRadioHooks(pruneRadioHooks(radioHooksRef.current, validIds))
+    // and so does a dig on one
+    updateRadioDig(pruneRadioDig(radioDigRef.current, validIds))
     // forgetSlotResolution (not just resolvedStemsRef.current.delete(id))
     // as of code review, 2026-09-17 -- undo/redo dropping a resolved slot
     // used to leave its own barLength behind in resolvedBarLengthsRef/
@@ -7719,16 +7804,21 @@ export function DiscoverPanel({
           // radio's roles while it runs: the hook's state, bars away, the phone's words
           ...(radioOn && {
             roles: new Map(
-              radioHooks.hooks.flatMap((h) => {
-                const role = radioRoleNow(h.rowId, true)
+              [
+                ...new Set([
+                  ...radioHooks.hooks.map((h) => h.rowId),
+                  ...(radioDig !== null ? [radioDig] : [])
+                ])
+              ].flatMap((rowId) => {
+                const role = radioRoleNow(rowId, true)
                 return role === null
                   ? []
                   : [
                       [
-                        h.rowId,
+                        rowId,
                         {
                           hook: role.hook,
-                          dig: false,
+                          dig: role.dig,
                           hookBarsAway: role.barsToReturn,
                           words: role.words
                         }
@@ -7753,7 +7843,8 @@ export function DiscoverPanel({
     radioOn,
     radioSettings.foldMode,
     radioTurnRemote,
-    radioHooks
+    radioHooks,
+    radioDig
   ])
 
   // What the unmount below does with manual changes still waiting. In a
@@ -8264,6 +8355,8 @@ export function DiscoverPanel({
       )
     )
     forgetRadioHookRow(id)
+    // the dig goes with its row (spec 3.1: the anchor is that row's stem)
+    if (radioDigRef.current === id) updateRadioDig(null)
   }
 
   /** The row's 👍 and 👎 (2026-10-01, the web radio's full-mode row
@@ -8529,9 +8622,10 @@ export function DiscoverPanel({
     else if (action === 'random') void rerollRandomSlot(id)
     else if (action === 'duplicate') duplicateSlot(id)
     else if (action === 'adjacent') void rollAdjacentForSlot(id)
-    // radio's roles (spec anointed-stems 5): the hook toggle and bring back; dig is Task 14
+    // radio's roles (spec anointed-stems 5): the hook toggle, bring back, and the dig toggle
     else if (action === 'hook') toggleSlotHook(id)
     else if (action === 'back') bringSlotHookBack(id)
+    else if (action === 'dig') toggleSlotDig(id)
   }
 
   /** The fetch/dedupe/bar/rank/pick half of a roll. Owns the
@@ -8675,6 +8769,47 @@ export function DiscoverPanel({
         if (favePool.some(unused)) candidates = favePool
         else favesFallback = true
       }
+      // Radio's dig (@shared/radioDig, spec anointed-stems 3.2), for every row's pick while radio
+      // runs and a row is dug: after the faves draw, and only when it did not go favourites-only,
+      // one draw makes a third of picks near-only -- the dug stem's riff neighbours
+      // (getAdjacentDiscoverCandidates: this row's kinds, the drawn source then the other, the
+      // creator filter keeping artist mode inside the artist; own-stems-only as getDiscover-
+      // Candidates applies it). None unused: a normal pick, logged `no near fits`. What the call
+      // found is learned as the anchor riff's neighbours, for the ranking below.
+      const digAnchor = radioDigAnchorNow()
+      if (candidates === null && digAnchor !== null && digNearDraw(true)) {
+        const anchorRiff = digAnchor.riffCID
+        const nearFrom = async (source: typeof draw.first): Promise<DiscoverCandidate[] | null> => {
+          if (anchorRiff === undefined) return null
+          const raw = await window.rifffApi.getAdjacentDiscoverCandidates(
+            anchorRiff,
+            kinds,
+            source,
+            f.artist
+          )
+          const own = (c: DiscoverCandidate): boolean =>
+            !f.onlyOwnStems || f.targetUser === '' || c.creatorUserName === f.targetUser
+          const near = {
+            newer: raw.newer.filter(own).map((c) => tagPickedUnderArtist(c, f.artist)),
+            older: raw.older.filter(own).map((c) => tagPickedUnderArtist(c, f.artist))
+          }
+          radioDigNearRef.current = learnRadioDigNear(
+            radioDigNearRef.current,
+            anchorRiff,
+            [...near.newer, ...near.older].map((c) => c.riffCID)
+          )
+          return radioDigNearPool(near, unused)
+        }
+        candidates = await nearFrom(draw.first)
+        if (rerollGenerationRef.current.get(id) !== myGeneration) return null
+        if (candidates === null && draw.fallback !== null) {
+          candidates = await nearFrom(draw.fallback)
+          if (rerollGenerationRef.current.get(id) !== myGeneration) return null
+        }
+        if (candidates === null) {
+          console.log(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- ${NO_NEAR_FITS}`)
+        }
+      }
       if (candidates === null) {
         if (rerollGenerationRef.current.get(id) !== myGeneration) return null
         candidates = await fetchPool()
@@ -8724,6 +8859,18 @@ export function DiscoverPanel({
                     .map((s) => s.candidate?.traitPercentiles ?? {})
                 )
               }
+            }
+          : {}),
+        // dig's lean (spec 3.3): every candidate toward the dug stem, the anchor riff's learned
+        // neighbours counting as near in time. No dig: no term.
+        ...(digAnchor !== null
+          ? {
+              dig: rankDigOf(
+                digAnchor,
+                digAnchor.riffCID !== undefined
+                  ? radioDigNearOf(radioDigNearRef.current, digAnchor.riffCID)
+                  : undefined
+              )
             }
           : {})
       })
@@ -11639,6 +11786,8 @@ export function DiscoverPanel({
               hookAwayName={radioHookAwayNames.get(slot.id) ?? null}
               onToggleHook={() => toggleSlotHook(slot.id)}
               onBringHookBack={() => bringSlotHookBack(slot.id)}
+              dug={radioDig === slot.id}
+              onToggleDig={() => toggleSlotDig(slot.id)}
               onLike={() => likeSlot(slot.id)}
               listenOnlyStars={listenOnly.has('star')}
               nearbyCreator={artistCreator}
@@ -12263,18 +12412,23 @@ const DISCOVER_ROW_COLUMN_GAP = 8
 const DISCOVER_WAVEFORM_COLUMN = 5
 const DISCOVER_WAVEFORM_MIN_WIDTH = 140
 
-/** Radio's role toggles on a row (spec anointed-stems section 2; planning decision 7), tracks 16
- * and 17 while radio runs: the hook (Phosphor Repeat, pressed while the row has a hook in any
- * state; greyed on a padlocked row) and dig (Shovel, its track reserved and hidden until Task 14).
- * One component so the radio-view redesign can move both into its radio-role slot unchanged. */
+/** Radio's role toggles on a row (spec anointed-stems sections 2 and 3; planning decision 7),
+ * tracks 16 and 17 while radio runs: the hook (Phosphor Repeat, pressed while the row has a hook
+ * in any state; greyed on a padlocked row) and dig (Shovel, pressed on the one dug row; a
+ * padlocked row may be dug). One component so the radio-view redesign can move both into its
+ * radio-role slot unchanged. */
 function RadioRoleButtons({
   hookSet,
   locked,
-  onToggleHook
+  onToggleHook,
+  dug,
+  onToggleDig
 }: {
   hookSet: boolean
   locked: boolean
   onToggleHook: () => void
+  dug: boolean
+  onToggleDig: () => void
 }): React.JSX.Element {
   return (
     <>
@@ -12291,12 +12445,13 @@ function RadioRoleButtons({
       </RowIconButton>
       <RowIconButton
         gridColumn={17}
-        tooltip={RADIO_DIG_TOOLTIP}
+        tooltip={dug ? RADIO_DIG_STOP_TOOLTIP : RADIO_DIG_TOOLTIP}
         ariaLabel={RADIO_DIG_WORD}
-        onClick={() => {}}
-        hidden
+        onClick={onToggleDig}
+        toggle
+        state={dug ? 'on' : 'off'}
       >
-        <Shovel size={12} />
+        <Shovel size={12} weight={dug ? 'fill' : 'regular'} />
       </RowIconButton>
     </>
   )
@@ -12319,6 +12474,8 @@ function DiscoverSlotRow({
   hookAwayName,
   onToggleHook,
   onBringHookBack,
+  dug,
+  onToggleDig,
   onLike,
   listenOnlyStars,
   nearbyCreator,
@@ -12498,6 +12655,9 @@ function DiscoverSlotRow({
   hookAwayName: string | null
   onToggleHook: () => void
   onBringHookBack: () => void
+  /** Radio's dig (@shared/radioDig) is on this row: its toggle (track 17) is pressed. */
+  dug: boolean
+  onToggleDig: () => void
   /** Fold mode is on: the row has its 18th track, the readout's (discoverRowGridColumns). */
   foldTrack: boolean
   /** Fold mode's readout on a folded row (v2): its cycle against the loop in beats, `7 / 16`;
@@ -13767,7 +13927,13 @@ function DiscoverSlotRow({
         {/* RADIO'S ROLE TOGGLES (RadioRoleButtons), tracks 16-17 after 👎, only while radio
             runs, as the tracks are (discoverRowGridColumns). */}
         {(radioOn || foldTrack) && (
-          <RadioRoleButtons hookSet={hookSet} locked={slot.locked} onToggleHook={onToggleHook} />
+          <RadioRoleButtons
+            hookSet={hookSet}
+            locked={slot.locked}
+            onToggleHook={onToggleHook}
+            dug={dug}
+            onToggleDig={onToggleDig}
+          />
         )}
         {/* FOLD MODE'S READOUT (v2, @shared/radioFoldStatus), track 18, the last: a folded
             row's cycle against the loop in beats, and under it the phase dot's track -- the dot

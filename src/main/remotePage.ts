@@ -169,12 +169,15 @@ const STEM_ACTIONS = [
 ]
 
 /** Radio's role actions (spec 2026-10-03-radio-anointed-stems-design 5), offered after the four
- * above only while radio runs: the hook toggle (`release` on a row with a hook), and `back` on a
- * row whose hook is away. Dig joins with the desktop's dig (Task 14). */
+ * above only while radio runs: the hook toggle (`release` on a row with a hook), `back` on a
+ * row whose hook is away, and the dig toggle (`stop digging` on the dug row; digging another row
+ * moves it there). */
 const ROLE_ACTIONS = {
   hook: { a: 'hook', l: 'hook', h: 'leaves, comes back' },
   release: { a: 'hook', l: 'release', h: 'let the hook go' },
-  back: { a: 'back', l: 'back', h: 'next phrase' }
+  back: { a: 'back', l: 'back', h: 'next phrase' },
+  dig: { a: 'dig', l: 'dig', h: 'lean toward this' },
+  undig: { a: 'dig', l: 'stop digging', h: 'back to normal' }
 }
 
 /** Radio's turn chips (2026-10-02): `m` is the wire value (the planner's TurnaroundMove, which
@@ -2266,6 +2269,7 @@ input {
       var hook = slot.role ? slot.role.hook : null
       acts.push(hook ? ROLE_ACTS.release : ROLE_ACTS.hook)
       if (hook === 'away' || hook === 'resting') acts.push(ROLE_ACTS.back)
+      acts.push(slot.role && slot.role.dig ? ROLE_ACTS.undig : ROLE_ACTS.dig)
     }
     acts.forEach(function (act) {
       var b = document.createElement('button')
@@ -2286,7 +2290,8 @@ input {
             : act.a === 'adjacent' ? 'nearby'
               : act.a === 'hook' ? (act.l === 'release' ? 'released' : 'hooked')
                 : act.a === 'back' ? 'coming back'
-                  : 'rolling'
+                  : act.a === 'dig' ? (act.l === 'dig' ? 'digging' : 'stopped')
+                    : 'rolling'
         )
         closeActionSheet()
       })
