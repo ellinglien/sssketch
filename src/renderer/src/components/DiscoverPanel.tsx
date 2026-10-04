@@ -116,6 +116,7 @@ import {
   type RadioPayoff
 } from '@shared/radioBuildSize'
 import { radioHookPaceScale } from '@shared/radioHooks'
+import { radioForecastWithUncertainRows, radioWrapBeforeLastLap } from '@shared/radioBuildForecast'
 import {
   DEFAULT_FAVES,
   FAVES_LABEL,
@@ -2917,10 +2918,15 @@ export function DiscoverPanel({
   const densityLegRef = useRef<DensityLeg | null>(null)
   // `kinds`: the joining row's, known from the arc's decision (the row reaches slotsRef a render
   // later), for sized builds' forecast (the low end returning).
+  // `held` (sized builds): an add decided a lap before the phrase end's roll, its pick waiting to
+  // be queued at that roll's wrap so it joins on the phrase start; `warm` once its stem is (the
+  // roll then counts it as a sure, large change).
   const arcAddingRef = useRef<{
     slotId: string
     picking: boolean
     kinds?: readonly DiscoverSlotKind[]
+    held?: { pick: SlotPick }
+    warm?: boolean
   } | null>(null)
   const arcExitRef = useRef<{ slotId: string; phase: 'waiting' | 'fading'; lap: number } | null>(
     null
@@ -3802,9 +3808,14 @@ export function DiscoverPanel({
         add(led.slotId, led.pick)
         for (const k of radioStagedCompanions(led)) add(k.slotId, k.pick)
       }
-    } else if (
+    }
+    // Radio's armed pick due at that wrap: warm, it and its warm riding companions are sure rows;
+    // still warming (it or a companion), they count as uncertain ones -- medium at most
+    // (radioForecastWithUncertainRows), as they may not be ready in time.
+    let uncertain = 0
+    if (
+      led === null &&
       pending !== null &&
-      pending.stem !== null &&
       clock !== null &&
       radioEligibleSlotIds().includes(pending.slotId) &&
       radioChangeDueAtNextWrap(
@@ -3816,29 +3827,48 @@ export function DiscoverPanel({
       )
     ) {
       radio = true
-      add(pending.slotId, pending.pick)
-      for (const k of radioPendingCompanionsNow(pending)) add(k.slotId, k.pick)
+      const eligible = radioEligibleSlotIds()
+      const coldCompanions = pending.companions.filter(
+        (k) =>
+          k.stem === null && eligible.includes(k.slotId) && !manualChangesRef.current.has(k.slotId)
+      )
+      if (pending.stem !== null) {
+        add(pending.slotId, pending.pick)
+        for (const k of radioPendingCompanionsNow(pending)) add(k.slotId, k.pick)
+      } else {
+        rowIds.add(pending.slotId)
+        uncertain += 1
+      }
+      for (const k of coldCompanions) rowIds.add(k.slotId)
+      uncertain += coldCompanions.length
     }
     const adding = arcAddingRef.current
     for (const [slotId, m] of manualChangesRef.current) {
-      if (m.stem !== null && slotId !== adding?.slotId) add(slotId, m.pick)
+      if (m.stem !== null && slotId !== adding?.slotId && !rowIds.has(slotId)) add(slotId, m.pick)
     }
-    let f: RadioChangeForecast = {
-      ...NO_CHANGE_FORECAST,
-      rows: rowIds.size,
-      arcStep: arcExitingRowNow() !== null ? 'remove' : null,
-      course: radioCourseChangeRef.current !== null
-    }
+    let f: RadioChangeForecast = radioForecastWithUncertainRows(
+      {
+        ...NO_CHANGE_FORECAST,
+        rows: rowIds.size - uncertain,
+        arcStep: arcExitingRowNow() !== null ? 'remove' : null,
+        course: radioCourseChangeRef.current !== null
+      },
+      uncertain
+    )
     if (adding !== null) {
+      // Ready: its stem warm (a held add, decided a lap early) or its queued entry's. Still
+      // picking: a medium change at most (radioForecastWithArcAdd).
       const entry = manualChangesRef.current.get(adding.slotId)
-      const ready = !adding.picking && entry !== undefined && entry.stem !== null
+      const ready =
+        adding.warm === true || (!adding.picking && entry !== undefined && entry.stem !== null)
+      const pick = entry?.pick ?? adding.held?.pick
       const kinds =
         adding.kinds ?? slotsRef.current.find((s) => s.id === adding.slotId)?.kinds ?? []
       f = radioForecastWithArcAdd(f, {
         ready,
         lowEnd: kinds.some((k) => k === 'drums' || k === 'bass')
       })
-      if (ready && entry !== undefined) add(adding.slotId, entry.pick)
+      if (ready && pick !== undefined) add(adding.slotId, pick)
       else rowIds.add(adding.slotId)
     }
     return { f, rowIds, stems, radio }
@@ -9088,6 +9118,13 @@ export function DiscoverPanel({
   // --- the density arc (2026-10-01; @shared/radioDensity) ---
 
   function resetDensityArc(): void {
+    // An add held for the phrase start (sized builds) is a row already on the panel: it lands now
+    // (radio off), as every waiting change does when radio stops -- or joins at the next top.
+    const held = arcAddingRef.current
+    if (held?.held !== undefined && slotsRef.current.some((s) => s.id === held.slotId)) {
+      if (radioOnRef.current) queueHeldArcAdd()
+      else commitSlotPick(held.slotId, held.held.pick)
+    }
     densityLegRef.current = null
     arcAddingRef.current = null
     arcExitRef.current = null
@@ -9097,7 +9134,15 @@ export function DiscoverPanel({
    * step; on every tick a row on its way out is moved along. Deferred, as
    * everything in the tick that sets state is. */
   function densityTick(wrapped: boolean, pos: number, loopBars: number, lapStarts: boolean): void {
-    if (radioDensityOf(radioSettings) !== 'arc') return
+    if (radioDensityOf(radioSettings) !== 'arc') {
+      // the arc switched off with an add held for the phrase start: it joins at the next top
+      if (arcAddingRef.current?.held !== undefined) {
+        void Promise.resolve().then(() => {
+          if (radioOnRef.current) queueHeldArcAdd()
+        })
+      }
+      return
+    }
     if (wrapped) arcLapRef.current += 1
     void Promise.resolve().then(() => {
       if (!radioOnRef.current) return
@@ -9111,14 +9156,35 @@ export function DiscoverPanel({
    * wrap, at most a phrase past ready (radioArcStepWaits; spec 4.5). */
   function densityAtWrap(loopBars: number, lapStarts: boolean): void {
     const rows = slotsRef.current
+    // An add held for the phrase start (sized builds) is queued at the wrap that starts the
+    // phrase's last lap -- before this wrap's roll, which counts it -- so it joins on the phrase
+    // start.
+    if (lapStarts && arcAddingRef.current?.held !== undefined) queueHeldArcAdd()
     const adding = arcAddingRef.current
     // A joining row is done once its change has landed or gone.
-    if (adding !== null && !adding.picking && !manualChangesRef.current.has(adding.slotId)) {
+    if (
+      adding !== null &&
+      !adding.picking &&
+      adding.held === undefined &&
+      !manualChangesRef.current.has(adding.slotId)
+    ) {
       arcAddingRef.current = null
     }
     const kind = nextArcKind(rows.map((r) => r.kinds))
     const removal = arcRemovalCandidate()
     const legWas = densityLegRef.current ?? newDensityLeg('growing', rows.length)
+    // Sized builds: an add is decided a lap before the phrase end's roll (radioWrapBeforeLastLap),
+    // picked and warmed through that lap, and held until the roll's wrap (queueHeldArcAdd), so the
+    // roll counts it as ready and it joins on the phrase start; a removal at the roll's wrap, as
+    // its exit fades over the last lap.
+    const sized = radioSizedBuildsOf(radioSettings)
+    const addEarly =
+      sized &&
+      legWas.phase === 'growing' &&
+      radioWrapBeforeLastLap(
+        radioClockRef.current?.turnaroundLap ?? 0,
+        turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars)
+      )
     const { leg, step } = advanceDensityLeg(legWas, {
       count: rows.length,
       loopBars,
@@ -9126,14 +9192,14 @@ export function DiscoverPanel({
       canAdd: kind !== null,
       canRemove: removal !== null,
       waits: radioArcStepWaits({
-        sized: radioSizedBuildsOf(radioSettings),
-        decidesForPhraseStart: lapStarts,
+        sized,
+        decidesForPhraseStart: legWas.phase === 'growing' && sized ? addEarly : lapStarts,
         overdueBars: legWas.bars + loopBars - legWas.stepBars,
         phraseBars: turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars) * loopBars
       })
     })
     densityLegRef.current = leg
-    if (step === 'add' && kind !== null) void arcAddRow(kind)
+    if (step === 'add' && kind !== null) void arcAddRow(kind, addEarly)
     else if (step === 'remove' && removal !== null) {
       arcExitRef.current = { slotId: removal, phase: 'waiting', lap: arcLapRef.current }
     }
@@ -9171,7 +9237,7 @@ export function DiscoverPanel({
    * joins at the loop top through the manual queue (as a row added by hand
    * while radio runs does), arriving with a filter in or a bloom. No undo
    * point: the arc is radio, and radio is performance, not an edit. */
-  async function arcAddRow(kind: DiscoverSlotKind): Promise<void> {
+  async function arcAddRow(kind: DiscoverSlotKind, hold = false): Promise<void> {
     const id = freshSlotId()
     arcAddingRef.current = { slotId: id, picking: true, kinds: [kind] }
     setSlots((prev) => [
@@ -9203,6 +9269,23 @@ export function DiscoverPanel({
       arcAddingRef.current = null
       return
     }
+    if (hold) {
+      // Sized builds: decided a lap before the phrase end's roll -- warmed now, queued at the
+      // roll's wrap (queueHeldArcAdd, densityAtWrap), so it is ready there and joins on the phrase
+      // start. One that cannot resolve is queued at once, where the manual queue's own failure
+      // path deals with it.
+      arcAddingRef.current = { slotId: id, picking: false, kinds: [kind], held: { pick } }
+      void resolveAndWarmPick(pick).then((stem) => {
+        const now = arcAddingRef.current
+        if (now === null || now.slotId !== id || now.held?.pick !== pick) return
+        if (stem === null) {
+          if (radioOnRef.current) queueHeldArcAdd()
+          return
+        }
+        arcAddingRef.current = { ...now, warm: true }
+      })
+      return
+    }
     arcAddingRef.current = { slotId: id, picking: false, kinds: [kind] }
     const queued = queueManualChange(
       id,
@@ -9211,6 +9294,33 @@ export function DiscoverPanel({
       undoSequence.latest(),
       false,
       densityArrival(radioSettings.transitions, [kind])
+    )
+    if (!queued) arcAddingRef.current = null
+  }
+
+  /** Queues the arc's add held for the phrase start (arcAddRow's `hold`) as a joining manual
+   * change: it lands at the next top. Its warm flag stays, so the roll counts it as ready. */
+  function queueHeldArcAdd(): void {
+    const a = arcAddingRef.current
+    if (a === null || a.held === undefined) return
+    if (!slotsRef.current.some((s) => s.id === a.slotId)) {
+      arcAddingRef.current = null
+      return
+    }
+    const kinds = [...(a.kinds ?? [])]
+    arcAddingRef.current = {
+      slotId: a.slotId,
+      picking: false,
+      kinds,
+      ...(a.warm === true && { warm: true })
+    }
+    const queued = queueManualChange(
+      a.slotId,
+      a.held.pick,
+      true,
+      undoSequence.latest(),
+      false,
+      densityArrival(radioSettings.transitions, kinds)
     )
     if (!queued) arcAddingRef.current = null
   }

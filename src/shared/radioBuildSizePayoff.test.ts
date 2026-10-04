@@ -12,6 +12,7 @@ import {
   radioPayoffOf,
   type RadioChangeForecast
 } from './radioBuildSize'
+import { radioForecastWithUncertainRows, radioWrapBeforeLastLap } from './radioBuildForecast'
 
 const F = (o: Partial<RadioChangeForecast> = {}): RadioChangeForecast => ({
   ...NO_CHANGE_FORECAST,
@@ -75,5 +76,31 @@ describe('radioDistinctStemRows', () => {
     ]
     expect(radioDistinctStemRows(rows, ['s3']).map((r) => r.slotId)).toEqual(['a', 'b'])
     expect(radioDistinctStemRows([], ['s1'])).toEqual([])
+  })
+})
+
+describe('radioForecastWithUncertainRows', () => {
+  it('rows still warming raise the change to medium at most', () => {
+    expect(radioForecastWithUncertainRows(F(), 0)).toEqual(F())
+    expect(radioForecastWithUncertainRows(F(), 1).rows).toBe(1)
+    expect(radioForecastWithUncertainRows(F(), 3).rows).toBe(2)
+    expect(radioForecastWithUncertainRows(F({ rows: 1 }), 2).rows).toBe(2)
+    expect(radioBuildTier(radioForecastWithUncertainRows(F({ rows: 1 }), 5))).toBe('medium')
+    expect(radioForecastWithUncertainRows(F({ rows: 3 }), 2).rows).toBe(3)
+  })
+})
+
+describe('radioWrapBeforeLastLap', () => {
+  it('the wrap whose next wrap starts the phrase last lap', () => {
+    // a 4-lap phrase: laps 0 1 2 3; the roll at the wrap into lap 3, so this is the wrap into 2
+    expect([0, 1, 2, 3].map((lap) => radioWrapBeforeLastLap(lap, 4))).toEqual([
+      false,
+      false,
+      true,
+      false
+    ])
+    expect([0, 1].map((lap) => radioWrapBeforeLastLap(lap, 2))).toEqual([true, false])
+    // one lap a phrase: every wrap starts the last lap, so every wrap is the one before it
+    expect(radioWrapBeforeLastLap(0, 1)).toBe(true)
   })
 })
