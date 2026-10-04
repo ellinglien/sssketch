@@ -27,9 +27,9 @@ import { DEFAULT_FAVES } from '@shared/discoverFaves'
 import { DEFAULT_SOURCE_LEAN } from '@shared/discoverSlotModifier'
 import { DEFAULT_DISCOVER_CHAOS } from '@shared/discoverRanking'
 import { BracketToggle } from './BracketToggle'
-import { DiceIcon } from './DiceIcon'
 import { RADIO_STICKY_BACKGROUND } from './RadioTopLine'
 import {
+  ActionButton,
   FoldSeedInput,
   FoldSlider,
   PaceSlider,
@@ -108,14 +108,47 @@ export interface RadioStripProps {
     /** One SET_SOUND_SETTINGS: undoable, saved with the project. */
     onSoundPatch: (patch: SoundSettingsPatch) => void
   }
-  mix: {
-    rolling: boolean
-    onSimilarAll: (immediate: boolean) => void
-    keep: RadioStripAction
-    hearts: RadioStripAction
-    shelf: RadioStripAction
-    timeline: RadioStripAction & { listenOnly: boolean }
-  }
+}
+
+/** The mix actions' state and handlers: what the top line's RadioMixActions draws. */
+export interface RadioMixBundle {
+  rolling: boolean
+  onSimilarAll: (immediate: boolean) => void
+  keep: RadioStripAction
+  hearts: RadioStripAction
+  shelf: RadioStripAction
+  timeline: RadioStripAction
+}
+
+/** The model's `mix` group, as the top line's buttons: they act on what is playing. `keep` is
+ * the emphasised one; a dead button reads `--ra-text-4`; `similar all` is a word, `rerolling…`
+ * and disabled while it rolls (Cmd-click is still immediate). */
+export function RadioMixActions({ mix }: { mix: RadioMixBundle }): React.JSX.Element {
+  const b = (id: string, a: RadioStripAction, emphasis = false): React.JSX.Element => (
+    <ActionButton
+      key={id}
+      label={a.label}
+      onClick={a.onClick}
+      disabled={a.disabled}
+      tooltip={a.tooltip}
+      pulse={a.pulse}
+      emphasis={emphasis}
+    />
+  )
+  return (
+    <>
+      <ActionButton
+        label={mix.rolling ? 'rerolling…' : 'similar all'}
+        onClick={(e) => mix.onSimilarAll(e.metaKey)}
+        disabled={mix.rolling}
+        tooltip={mix.rolling ? 'rerolling…' : 'similar all'}
+      />
+      {b('fetch-hearts', mix.hearts)}
+      {b('add-to-shelf', mix.shelf)}
+      {b('add-to-timeline', mix.timeline)}
+      {b('keep', mix.keep, true)}
+    </>
+  )
 }
 
 /** Each sound panel slider's default, as a strip dial position: a sound dial's double-click. */
@@ -169,20 +202,6 @@ const tempoStepStyle: React.CSSProperties = {
   background: 'var(--ra-bg-row-active)',
   color: 'var(--ra-text)',
   cursor: 'pointer'
-}
-
-/** A header action button (keep, fetch hearts, add to shelf). */
-function actionStyle(a: RadioStripAction): React.CSSProperties {
-  return {
-    fontFamily: 'inherit',
-    fontSize: 10,
-    padding: '6px 14px',
-    background: 'transparent',
-    border: '1px solid var(--ra-border-strong)',
-    color: a.disabled ? 'var(--ra-text-4)' : 'var(--ra-text)',
-    cursor: a.disabled ? 'default' : 'pointer',
-    animation: a.pulse ? 'discover-add-pulse 500ms ease-out' : undefined
-  }
 }
 
 export function RadioStrip(props: RadioStripProps): React.JSX.Element {
@@ -274,7 +293,7 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
   }
 
   function panelControl(c: RadioStripControl): React.JSX.Element | null {
-    const { play, picks, turn, mix, sound } = props
+    const { play, picks, turn, sound } = props
     switch (c.id) {
       case 'level':
         return (
@@ -566,72 +585,6 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
             })}
           </span>
         )
-      case 'similar-all':
-        return (
-          <button
-            key={c.id}
-            onClick={(e) => mix.onSimilarAll(e.metaKey)}
-            disabled={mix.rolling}
-            aria-label={mix.rolling ? 'rerolling…' : 'similar all'}
-            data-tooltip={mix.rolling ? 'rerolling…' : 'similar all'}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 30,
-              height: 30,
-              padding: 0,
-              background: 'transparent',
-              border: 'none',
-              color: mix.rolling ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
-              cursor: mix.rolling ? 'default' : 'pointer'
-            }}
-          >
-            <DiceIcon size={18} spinning={mix.rolling} />
-          </button>
-        )
-      case 'keep':
-      case 'fetch-hearts':
-      case 'add-to-shelf': {
-        const a = c.id === 'keep' ? mix.keep : c.id === 'fetch-hearts' ? mix.hearts : mix.shelf
-        return (
-          <button
-            key={c.id}
-            onClick={a.onClick}
-            disabled={a.disabled}
-            data-tooltip={a.tooltip}
-            style={actionStyle(a)}
-          >
-            {a.label}
-          </button>
-        )
-      }
-      case 'add-to-timeline': {
-        const a = mix.timeline
-        return (
-          <button
-            key={c.id}
-            onClick={a.onClick}
-            disabled={a.disabled}
-            data-tooltip={a.tooltip}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 10,
-              padding: '6px 14px',
-              // A dead button carries no audio information, so no accent.
-              background: a.listenOnly ? 'transparent' : 'var(--ra-stretch-on-bg)',
-              border: a.listenOnly
-                ? '1px solid var(--ra-border)'
-                : '1px solid var(--ra-stretch-on)',
-              color: a.disabled ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
-              cursor: a.disabled ? 'default' : 'pointer',
-              animation: a.pulse ? 'discover-add-pulse 500ms ease-out' : undefined
-            }}
-          >
-            {a.label}
-          </button>
-        )
-      }
       default:
         return null
     }
@@ -655,11 +608,13 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
         background: RADIO_STICKY_BACKGROUND
       }}
     >
-      {groups.map((g) => (
-        <StripGroup key={g.id} caption={g.caption}>
-          {g.controls.map(control)}
-        </StripGroup>
-      ))}
+      {groups
+        .filter((g) => g.place !== 'top')
+        .map((g) => (
+          <StripGroup key={g.id} caption={g.caption}>
+            {g.controls.map(control)}
+          </StripGroup>
+        ))}
     </div>
   )
 }

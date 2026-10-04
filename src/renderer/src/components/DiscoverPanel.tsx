@@ -1,7 +1,7 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Dial } from './Dial'
-import { RadioStrip } from './RadioStrip'
+import { RadioMixActions, RadioStrip, type RadioMixBundle } from './RadioStrip'
 import { RadioTopLine, RedoIcon, UndoIcon } from './RadioTopLine'
 import { DiceIcon } from './DiceIcon'
 import { RadioStartPrompt } from './RadioStartPrompt'
@@ -11028,6 +11028,41 @@ export function DiscoverPanel({
     ])
   )
 
+  // The mix actions (similar all, fetch hearts, add to shelf, add to timeline, keep): drawn by the
+  // radio top line while radio runs. Built once, here, so the JSX below stays a plain tree.
+  const radioMix: RadioMixBundle = {
+    rolling: rerollingSlotIds.size > 0,
+    onSimilarAll: (immediate) => void rerollAll(immediate),
+    keep: {
+      label: keeping ? 'keeping…' : (keptLabel ?? 'keep'),
+      disabled: keeping || listenOnly.has('keep'),
+      tooltip: listenOnly.has('keep') ? listenOnlyTip : 'keep this group',
+      pulse: keptLabel !== null,
+      onClick: () => void keepGroup()
+    },
+    hearts: {
+      label: fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts'),
+      disabled: fetchingHearts || listenOnly.has('fetchHearts'),
+      tooltip: listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts',
+      pulse: heartsLabel !== null,
+      onClick: () => void fetchHearts()
+    },
+    shelf: {
+      label: addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf',
+      disabled: addingToShelf || listenOnly.has('addToShelf'),
+      tooltip: listenOnly.has('addToShelf') ? listenOnlyTip : undefined,
+      pulse: justAddedToShelf,
+      onClick: () => void addToShelf()
+    },
+    timeline: {
+      label: addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline',
+      disabled: addingToTimeline || listenOnly.has('addToTimeline'),
+      tooltip: listenOnly.has('addToTimeline') ? listenOnlyTip : undefined,
+      pulse: justAddedToTimeline,
+      onClick: () => void addToTimeline()
+    }
+  }
+
   return (
     <div
       style={{
@@ -11157,6 +11192,7 @@ export function DiscoverPanel({
           progress={radioProgress}
           readout={radioReadoutNow}
           foldSummary={radioFoldStatusNow?.summary ?? null}
+          actions={<RadioMixActions mix={radioMix} />}
           canUndo={undoStack.length > 0 || radioTurnShown !== null}
           canRedo={redoStack.length > 0}
           onUndo={undoDiscoverAction}
@@ -11937,43 +11973,6 @@ export function DiscoverPanel({
             can: radioTurnCan,
             flash: radioTurnFlash,
             onTurn: (move) => turnRadio(move)
-          }}
-          mix={{
-            rolling: rerollingSlotIds.size > 0,
-            onSimilarAll: (immediate) => void rerollAll(immediate),
-            keep: {
-              label: keeping ? 'keeping…' : (keptLabel ?? 'keep'),
-              disabled: keeping || listenOnly.has('keep'),
-              tooltip: listenOnly.has('keep') ? listenOnlyTip : 'keep this group',
-              pulse: keptLabel !== null,
-              onClick: () => void keepGroup()
-            },
-            hearts: {
-              label: fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts'),
-              disabled: fetchingHearts || listenOnly.has('fetchHearts'),
-              tooltip: listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts',
-              pulse: heartsLabel !== null,
-              onClick: () => void fetchHearts()
-            },
-            shelf: {
-              label: addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf',
-              disabled: addingToShelf || listenOnly.has('addToShelf'),
-              tooltip: listenOnly.has('addToShelf') ? listenOnlyTip : undefined,
-              pulse: justAddedToShelf,
-              onClick: () => void addToShelf()
-            },
-            timeline: {
-              label: addingToTimeline
-                ? 'adding…'
-                : justAddedToTimeline
-                  ? '✓ added'
-                  : 'add to timeline',
-              disabled: addingToTimeline || listenOnly.has('addToTimeline'),
-              listenOnly: listenOnly.has('addToTimeline'),
-              tooltip: listenOnly.has('addToTimeline') ? listenOnlyTip : undefined,
-              pulse: justAddedToTimeline,
-              onClick: () => void addToTimeline()
-            }
           }}
         />
       )}

@@ -716,7 +716,8 @@ export function ActionButton({
   emphasis = false
 }: {
   label: string
-  onClick: () => void
+  /** The click event comes through for Cmd (`similar all` is immediate with it). */
+  onClick: (e: React.MouseEvent<HTMLButtonElement>) => void
   disabled?: boolean
   tooltip?: string
   pulse?: boolean

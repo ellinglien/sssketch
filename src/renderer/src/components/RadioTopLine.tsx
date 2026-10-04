@@ -4,7 +4,8 @@
 // radio's `.top`): while radio runs, Discover's two header rows become this one sticky line.
 // Left, play/stop and `radio` (the stop) with its interval line; middle, the readout's status line,
 // the phrase ruler and fold's status line; right, undo and redo. Values and callbacks only.
-import type { RadioReadout } from '@shared/radioReadout'
+import type { ReactNode } from 'react'
+import { radioRulerCells, type RadioReadout } from '@shared/radioReadout'
 
 /** Behind the sticky bars: the library box's own fill (LibraryBrowser), so nothing shows through
  * and nothing looks like a second panel. */
@@ -19,6 +20,7 @@ export function RadioTopLine({
   progress,
   readout,
   foldSummary,
+  actions,
   canUndo,
   canRedo,
   onUndo,
@@ -34,6 +36,8 @@ export function RadioTopLine({
   progress: number
   readout: RadioReadout | null
   foldSummary: string | null
+  /** The mix actions (RadioMixActions): they act on what is playing. */
+  actions: ReactNode
   canUndo: boolean
   canRedo: boolean
   onUndo: () => void
@@ -43,10 +47,17 @@ export function RadioTopLine({
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: 22,
-    height: 22,
+    width: 'var(--ra-h-live)',
+    height: 'var(--ra-h-live)',
     padding: 0
   }
+  const rulerGap = readout !== null && readout.ruler.ticks > 32 ? 1 : 2
+  const rulerInk = {
+    played: 'var(--ra-text-2)',
+    now: 'var(--ra-text)',
+    'ahead-bar': 'var(--ra-border-strong)',
+    ahead: 'var(--ra-border)'
+  } as const
   return (
     <div
       style={{
@@ -56,12 +67,16 @@ export function RadioTopLine({
         zIndex: 2,
         background: RADIO_STICKY_BACKGROUND,
         display: 'flex',
-        alignItems: 'flex-start',
-        gap: 10,
-        padding: '4px 0 8px'
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: 'var(--ra-s-7)',
+        padding: 'var(--ra-s-4) var(--ra-s-7)',
+        borderBottom: '1px solid var(--ra-border)'
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, flexShrink: 0 }}>
+      {/* Transport: play/stop, then `radio` (the stop) with its interval line inside its bottom
+          edge: a line, not a number that jitters. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--ra-s-2)', flexShrink: 0 }}>
         <button
           onClick={onPlayToggle}
           disabled={!canPlay}
@@ -69,7 +84,7 @@ export function RadioTopLine({
           aria-label={playing ? 'stop' : 'play'}
           style={{
             ...square,
-            fontSize: 11,
+            fontSize: 'var(--ra-fs-13)',
             border: '1px solid var(--ra-border-strong)',
             background: !canPlay
               ? 'var(--ra-bg-row-active)'
@@ -86,71 +101,81 @@ export function RadioTopLine({
         >
           {playing ? '■' : '▶'}
         </button>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <button
-            ref={radioButtonRef}
-            onClick={onStopRadio}
-            data-tooltip="stop radio"
+        <button
+          ref={radioButtonRef}
+          onClick={onStopRadio}
+          data-tooltip="stop radio"
+          style={{
+            position: 'relative',
+            overflow: 'hidden',
+            fontFamily: 'inherit',
+            fontSize: 'var(--ra-fs-11)',
+            height: 'var(--ra-h-live)',
+            padding: '0 var(--ra-s-6)',
+            background: 'var(--ra-play-on)',
+            border: '1px solid var(--ra-border-strong)',
+            color: 'var(--ra-play-on-ink)',
+            cursor: 'pointer'
+          }}
+        >
+          radio
+          <span
+            aria-hidden
             style={{
-              fontFamily: 'inherit',
-              fontSize: 10,
-              padding: '6px 14px',
-              background: 'var(--ra-play-on)',
-              border: '1px solid var(--ra-border-strong)',
-              color: 'var(--ra-play-on-ink)',
-              cursor: 'pointer'
+              position: 'absolute',
+              left: 0,
+              bottom: 0,
+              height: 2,
+              width: `${Math.round(progress * 100)}%`,
+              background: 'var(--ra-play-on-ink)'
             }}
-          >
-            radio
-          </button>
-          {/* How far through the current interval: a line, not a number that jitters. */}
-          <div style={{ height: 2, background: 'var(--ra-border)' }}>
-            <div
-              style={{
-                height: '100%',
-                width: `${Math.round(progress * 100)}%`,
-                background: 'var(--ra-text-3)'
-              }}
-            />
-          </div>
-        </div>
+          />
+        </button>
       </div>
       {/* The readout. Not a live region: its counts move every bar. */}
       <div
         style={{
-          flex: '1 1 0',
+          flex: '1 1 360px',
           minWidth: 0,
           display: 'flex',
           flexDirection: 'column',
-          alignItems: 'center',
-          gap: 3,
-          fontSize: 9,
-          color: 'var(--ra-text-2)'
+          alignItems: 'flex-start',
+          gap: 5
         }}
       >
         {readout !== null && readout.statusLine !== '' && (
-          <span style={{ whiteSpace: 'normal', overflowWrap: 'anywhere', textAlign: 'center' }}>
+          <span
+            title={readout.statusLine}
+            style={{
+              fontSize: 'var(--ra-fs-10)',
+              color: 'var(--ra-text)',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              maxWidth: '100%'
+            }}
+          >
             {readout.statusLine}
           </span>
         )}
         {readout !== null && readout.ruler.ticks > 0 && (
           <span
             aria-hidden
-            style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', maxWidth: 320 }}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', maxWidth: 360 }}
           >
-            <span style={{ display: 'flex', gap: 1, flex: 1, height: 1 }}>
-              {Array.from({ length: readout.ruler.ticks }, (_, i) => (
-                <span
-                  key={i}
-                  style={{
-                    flex: 1,
-                    background: i < readout.ruler.filled ? 'var(--ra-text)' : 'var(--ra-text-4)'
-                  }}
-                />
+            <span style={{ display: 'flex', gap: rulerGap, flex: 1, height: 4 }}>
+              {radioRulerCells(readout.ruler).map((cell, i) => (
+                <span key={i} style={{ flex: 1, background: rulerInk[cell] }} />
               ))}
             </span>
             {readout.ruler.end !== null && (
-              <span style={{ whiteSpace: 'nowrap', fontSize: 9, color: 'var(--ra-text-3)' }}>
+              <span
+                style={{
+                  whiteSpace: 'nowrap',
+                  fontSize: 'var(--ra-fs-9)',
+                  color: 'var(--ra-text-3)'
+                }}
+              >
                 {readout.ruler.end}
               </span>
             )}
@@ -159,6 +184,8 @@ export function RadioTopLine({
         {foldSummary !== null && (
           <span
             style={{
+              fontSize: 'var(--ra-fs-9)',
+              color: 'var(--ra-text-2)',
               whiteSpace: 'nowrap',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
@@ -169,7 +196,20 @@ export function RadioTopLine({
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', gap: 10, flexShrink: 0 }}>
+      <div
+        style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 'var(--ra-s-1)' }}
+      >
+        {actions}
+      </div>
+      <div
+        style={{
+          display: 'flex',
+          gap: 'var(--ra-s-2)',
+          flexShrink: 0,
+          paddingLeft: 'var(--ra-s-5)',
+          borderLeft: '1px solid var(--ra-border)'
+        }}
+      >
         <button
           onClick={onUndo}
           disabled={!canUndo}
@@ -178,7 +218,7 @@ export function RadioTopLine({
           style={{
             ...square,
             background: 'transparent',
-            border: '1px solid var(--ra-border)',
+            border: '1px solid var(--ra-border-strong)',
             color: canUndo ? 'var(--ra-text-2)' : 'var(--ra-text-4)',
             cursor: canUndo ? 'pointer' : 'default'
           }}
@@ -193,7 +233,7 @@ export function RadioTopLine({
           style={{
             ...square,
             background: 'transparent',
-            border: '1px solid var(--ra-border)',
+            border: '1px solid var(--ra-border-strong)',
             color: canRedo ? 'var(--ra-text-2)' : 'var(--ra-text-4)',
             cursor: canRedo ? 'pointer' : 'default'
           }}
