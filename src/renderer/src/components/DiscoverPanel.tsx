@@ -3704,11 +3704,12 @@ export function DiscoverPanel({
     // SIZED BUILDS (spec 4.4, 4.7): no payoff possible, no turnaround (and no draw); otherwise
     // rolled at the forecast's tier raised to medium, after the budget, with a gap only when a
     // large payoff can follow -- and when it fires, the payoff is assembled.
-    const build = radioPhraseEndBuild(
-      forecast.f,
-      endSpare.count,
-      radioBuildBudgetNow(loopBars, pos)
-    )
+    // the build's arc: a growing mix earns its gap sooner (radioPhraseEndBuild's promotion)
+    const buildArc = radioBuildArc(forecast.f, input.arc)
+    const build = radioPhraseEndBuild(forecast.f, endSpare.count, {
+      ...radioBuildBudgetNow(loopBars, pos),
+      arc: buildArc
+    })
     if (build.skip) {
       radioTurnaroundMemoryRef.current = null
       radioTurnaroundRef.current = null
@@ -3717,7 +3718,7 @@ export function DiscoverPanel({
     }
     const plan = rollTurnaround({
       ...input,
-      arc: radioBuildArc(forecast.f, input.arc),
+      arc: buildArc,
       size: build.size,
       payoff: build.payoff,
       rate,
