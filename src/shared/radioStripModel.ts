@@ -119,7 +119,7 @@ export interface RadioStripContext {
   sounding: boolean
 }
 
-/** The running menu's hint paragraph, sentence by sentence, keyed by the control each now
+/** The old radio menu's hint paragraph, sentence by sentence, keyed by the control each now
  * explains. `loopEnd` drops the paragraph's leading `below that,`: its `that` was the pace
  * sentence before it, which is no longer beside it. */
 export const RADIO_STRIP_HINTS = {

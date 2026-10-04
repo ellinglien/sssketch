@@ -818,7 +818,7 @@ export function DiscoverPanel({
   /** Settings' "trait match" bar -- how strict trait kinds are
    * (applyTraitBar's `bar`). */
   traitMatchBar: number
-  /** Everything the radio menu sets (DiscoverSettings.radio), and its
+  /** Every radio setting (DiscoverSettings.radio: the start prompt and the radio strip), and its
    * persisting patch setter. See docs/superpowers/specs/2026-09-28-radio-
    * controls-design.md. */
   radioSettings: RadioSettings
@@ -1010,7 +1010,7 @@ export function DiscoverPanel({
   }
   // The faves dial (@shared/discoverFaves, 2026-10-03), where `prefer faves` was: 0..100, how
   // often a roll draws only starred stems and how much the rest lean to them. Persisted in the
-  // radio settings (the radio menu's `faves` row is the same value). A drag previews locally and
+  // radio settings (the radio strip's `faves` dial is the same value). A drag previews locally and
   // persists once, on the gesture's end (Dial's onCommit). Mirrored into a ref like sourceLeanRef:
   // radio's picks run from long-lived callbacks.
   const faves = radioFavesOf(radioSettings)
@@ -2877,7 +2877,7 @@ export function DiscoverPanel({
   useEffect(() => {
     radioOnRef.current = radioOn
   }, [radioOn])
-  // Everything that sets radio's cadence, from the pace slider and the menu's `phrase` (and fold
+  // Everything that sets radio's cadence, from the pace slider and the strip's `phrase` (and fold
   // mode's override): the interval window, the CHANGE phrase, the TURNAROUND phrase (never moved by
   // the slider), mid-loop bar lines and rows per change (@shared/radioSchedule radioCadenceOf,
   // spec 2026-10-03-radio-pace-slider-design). Per render, so the clock effect and everything it
@@ -6528,7 +6528,7 @@ export function DiscoverPanel({
       ? radioPhraseReanchored(clockWas, radioCadence, loopBars)
       : clockWas
     radioPhraseAnchorRef.current = anchor
-    // WHERE a change may land -- the menu's `loop end` row
+    // WHERE a change may land -- the strip's `loop end` chips
     // (radioSettings.loopEndOverBars, 2026-09-28). A layer at or under the
     // threshold turns over on its own cycle; a longer one waits for the
     // whole loop's wrap. See DEFAULT_RADIO_LOOP_END_BARS' own doc comment
@@ -6793,18 +6793,23 @@ export function DiscoverPanel({
       clearRadioGesture()
       void Promise.resolve().then(() => {
         if (!radioOnRef.current) return
-        // The strip's flicker, here in the microtask (a setState) rather than the effect body:
-        // radio's change, else a hook's exit or return, else the arc's row, else a manual change
-        // that waited for the top. A Cmd change commits elsewhere and never flickers.
-        noteRadioLanding(
-          led !== null
-            ? 'radio'
-            : manualToLand.some(([, m]) => m.hook !== undefined)
-              ? 'hook'
-              : manualToLand.some(([slotId]) => arcAddingRef.current?.slotId === slotId)
-                ? 'arc'
-                : 'manual-wait'
-        )
+        // The strip's flicker, here in the microtask (a setState) rather than the effect body,
+        // and only for a change that lands: radio's own (not overridden by a manual change on its
+        // row, its row still eligible -- the same test as its commit below), else a hook's exit or
+        // return, else the arc's row, else a manual change that waited for the top. A Cmd change
+        // commits elsewhere and never flickers.
+        const ledLands =
+          led !== null && !ledOverridden && radioEligibleSlotIds().includes(led.slotId)
+        if (ledLands || landingReady.length > 0)
+          noteRadioLanding(
+            ledLands
+              ? 'radio'
+              : landingReady.some(([, m]) => m.hook !== undefined)
+                ? 'hook'
+                : landingReady.some(([slotId]) => arcAddingRef.current?.slotId === slotId)
+                  ? 'arc'
+                  : 'manual-wait'
+          )
         // Every arrival curve landing at this wrap, radio's and the manual
         // ones, armed together once the commits below have happened.
         const arriving: RadioGesture[] = []
@@ -8053,7 +8058,7 @@ export function DiscoverPanel({
       // The four actions are the four buttons on every desktop slot row,
       // plus that row's own mute and its own solo -- see runSlotAction.
       else if (command.kind === 'slot-action') runSlotAction(command.slotId, command.action)
-      // Fold mode's switch (2026-10-02): the same setter the radio menu's chips call.
+      // Fold mode's switch (2026-10-02): the same setter the radio strip's fold switch calls.
       else if (command.kind === 'fold') void onRadioSettingsChange({ foldMode: command.on })
       // The desktop's own turn (turnRadio): the server forwards only a turn it answered
       // `turning` to.
@@ -10537,7 +10542,7 @@ export function DiscoverPanel({
    * would otherwise make.
    *
    * Takes the level as an argument rather than from radioSettings, on
-   * purpose: the menu's own persisting write of paceLevel is async and this
+   * purpose: the start prompt's own persisting write of paceLevel is async and this
    * render's radioSettings prop is still the OLD pace. Reading it here would
    * start the clock at the pace he just replaced.
    */
@@ -10550,6 +10555,9 @@ export function DiscoverPanel({
     }
     radioOnRef.current = true
     radioLandingAtRef.current = null
+    // Back to 0: a count left from the last run would give the strip's skip the flicker class
+    // the moment it mounts.
+    setRadioSkipFlicker(0)
     resetDensityArc()
     resetRadioThrows(false)
     resetRadioReadout()
@@ -11543,7 +11551,13 @@ export function DiscoverPanel({
       {lingeringBlocks && (
         <div
           role="note"
-          style={{ fontSize: 9, color: 'var(--ra-text-3)', marginTop: -6, marginBottom: 10 }}
+          // -6 tucks it under the header rows' marginBottom; the sticky top line has none.
+          style={{
+            fontSize: 9,
+            color: 'var(--ra-text-3)',
+            marginTop: radioOn ? 0 : -6,
+            marginBottom: 10
+          }}
         >
           {lingeringNotice(lingering, lingeringStuck)}
         </div>
@@ -11551,7 +11565,13 @@ export function DiscoverPanel({
       {mode === 'other' && artist !== null && (
         <div
           role="note"
-          style={{ fontSize: 9, color: 'var(--ra-text-3)', marginTop: -6, marginBottom: 10 }}
+          // -6 tucks it under the header rows' marginBottom; the sticky top line has none.
+          style={{
+            fontSize: 9,
+            color: 'var(--ra-text-3)',
+            marginTop: radioOn ? 0 : -6,
+            marginBottom: 10
+          }}
         >
           {artistNotice(artist)}
         </div>

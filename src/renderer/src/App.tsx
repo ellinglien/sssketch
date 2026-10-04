@@ -1734,7 +1734,7 @@ function Frame(): React.JSX.Element {
     await setDiscoverConsented(!discoverConsented)
   }
 
-  /** The one real setter for every radio menu control -- patches the
+  /** The one real setter for every radio control (start prompt, strip) -- patches the
    * nested object and routes through updateDiscoverSettings, which MERGES
    * (saving a partial object "would silently wipe traitMatchBar", see its
    * own doc comment above). */

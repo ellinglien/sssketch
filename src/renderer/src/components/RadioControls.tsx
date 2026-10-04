@@ -319,6 +319,8 @@ export function StripDial({
       data-tooltip={tooltip}
       style={{ display: 'flex', alignItems: 'center', gap: 4, opacity: dimmed ? 0.4 : 1 }}
     >
+      {/* With end captions the label leads (`source endlesss ◑ other`), else it follows. */}
+      {before !== undefined && <span style={caption}>{label}</span>}
       {before !== undefined && <span style={caption}>{before}</span>}
       <Dial
         value={value}
@@ -330,7 +332,7 @@ export function StripDial({
         disabled={disabled}
       />
       {after !== undefined && <span style={caption}>{after}</span>}
-      <span style={caption}>{label}</span>
+      {before === undefined && <span style={caption}>{label}</span>}
     </span>
   )
 }

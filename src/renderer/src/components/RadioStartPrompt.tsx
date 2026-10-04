@@ -91,9 +91,7 @@ export function RadioStartPrompt({
             width: 92,
             flexShrink: 0,
             fontSize: 9,
-            color: 'var(--ra-text-3)',
-            textTransform: 'uppercase',
-            letterSpacing: 'var(--ra-track-eyebrow)'
+            color: 'var(--ra-text-3)'
           }}
         >
           {label}
@@ -126,8 +124,7 @@ export function RadioStartPrompt({
         padding: 8,
         display: 'flex',
         flexDirection: 'column',
-        gap: 8,
-        boxShadow: '0 6px 20px rgba(0,0,0,0.4)'
+        gap: 8
       }}
     >
       {row(

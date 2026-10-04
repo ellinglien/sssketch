@@ -86,7 +86,8 @@ export interface RadioStripProps {
   }
   turn: {
     shown: { move: TurnaroundMove | null } | null
-    can: { canTurn: boolean; moves: readonly TurnaroundMove[] } | null
+    /** The moves that could sound now (the rest read `not now`); null until the clock says. */
+    can: { moves: readonly TurnaroundMove[] } | null
     flash: string | null
     onTurn: (move?: TurnaroundMove) => void
   }

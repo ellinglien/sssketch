@@ -222,7 +222,7 @@ export function LibraryBrowser({
   /** Radio mode's speed, and its setter -- both owned by App's
    * discoverSettings mirror and passed straight through to DiscoverPanel.
    * LibraryBrowser itself never reads either. */
-  /** Everything the radio menu sets (DiscoverSettings.radio), and its
+  /** Every radio setting (DiscoverSettings.radio: the start prompt and the radio strip), and its
    * persisting patch setter. See docs/superpowers/specs/2026-09-28-radio-
    * controls-design.md. */
   radioSettings: RadioSettings

@@ -1038,7 +1038,7 @@ export function radioStarterKinds(channels: number): DiscoverSlotKind[] {
   return RADIO_STARTER_ORDER.slice(0, n)
 }
 
-/** Everything the radio menu sets, in one object rather than seven flat
+/** Every radio setting (the start prompt and the radio strip), in one object rather than seven flat
  * fields on DiscoverSettings.
  *
  * Nested because the alternative is threading seven pairs of props through
@@ -1091,7 +1091,7 @@ export interface RadioSettings {
    * reads as the default (radioDensityOf). */
   density?: RadioDensity
   /** The faves dial (@shared/discoverFaves), 0..100: how often a pick is drawn only from
-   * 👍-starred stems, and how much the rest lean to them. Discover's roll row and the radio menu
+   * 👍-starred stems, and how much the rest lean to them. Discover's roll row and the radio strip
    * set this one value. Optional for the same reason as `density`; normalizeRadioSettings
    * always sets it, and absent reads as 0 (radioFavesOf). */
   faves?: number
