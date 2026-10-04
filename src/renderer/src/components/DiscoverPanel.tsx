@@ -1,8 +1,8 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { SkipForward } from '@phosphor-icons/react'
 import { Dial } from './Dial'
 import { RadioStrip } from './RadioStrip'
+import { RadioTopLine, RedoIcon, UndoIcon } from './RadioTopLine'
 import { DiceIcon } from './DiceIcon'
 import { DiscoverRadioMenu } from './DiscoverRadioMenu'
 import { BracketToggle } from './BracketToggle'
@@ -178,7 +178,6 @@ import {
   radioTurnaroundGate,
   rememberTurnaround,
   rollTurnaround,
-  TURNAROUND_MOVE_LABEL,
   TURNAROUND_MOVES,
   turnaroundArc,
   turnaroundDraw,
@@ -6447,7 +6446,8 @@ export function DiscoverPanel({
     if (!radioSkipWaiting()) void skipRadio()
   }
   const radioMenuButtonRef = useRef<HTMLButtonElement>(null)
-  const radioChevronRef = useRef<HTMLButtonElement>(null)
+  // The top line's `radio` (the stop), while radio runs.
+  const radioTopButtonRef = useRef<HTMLButtonElement>(null)
   // Stable identity -- same playhead-tick re-render reasoning as
   // closeNearbyMenu.
   const closeRadioMenu = useCallback(() => setRadioMenu(null), [])
@@ -11074,576 +11074,438 @@ export function DiscoverPanel({
         </div>
       )}
 
-      {/* Two rows -- filters/settings, then actions. Direct report, 2026-09-17:
-          "the top area is cluttered with buttons currently, youll need to
-          rethink it all" -- the single row (chaos slider, tempo controls, two
-          checkboxes, undo/redo, play/stop, reroll-all, plus the add-to-shelf/
-          add-to-timeline pair) packed in too much for one line. */}
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          gap: 10,
-          marginBottom: 10
-        }}
-      >
-        {/* Direct request, 2026-09-16: "we should add a play/stop button
-            for the discover playing, so user can stop it if they wish" --
-            same merged play/stop toggle + glyphs as TransportBar.tsx's own
-            (`■`/`▶`), dispatching the exact same shared PLAY/PAUSE this
-            panel's own syncPreviewToEngine already uses internally. Doesn't
-            touch previewingSlotIds (which slots are toggled into the mix)
-            -- just starts/stops the transport itself, same as muting
-            everything would achieve for audibility but without losing
-            track of what was toggled on. Moved to the front of the settings
-            row (was the actions row) -- direct request, 2026-09-17. */}
-        <button
-          onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
-          disabled={previewingSlotIds.size === 0}
-          data-tooltip={playing ? 'stop' : 'play'}
-          aria-label={playing ? 'stop' : 'play'}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 22,
-            height: 22,
-            padding: 0,
-            fontSize: 11,
-            border: '1px solid var(--ra-border-strong)',
-            background:
-              previewingSlotIds.size === 0
-                ? 'var(--ra-bg-row-active)'
-                : playing
-                  ? 'var(--ra-play-on)'
-                  : 'var(--ra-bg-row-active)',
-            color:
-              previewingSlotIds.size === 0
-                ? 'var(--ra-text-4)'
-                : playing
-                  ? 'var(--ra-play-on-ink)'
-                  : 'var(--ra-text)',
-            cursor: previewingSlotIds.size === 0 ? 'default' : 'pointer'
+      {/* THE HEADER. While radio runs: the top line (radio view plan Task 10, spec 1.1), sticky.
+          Otherwise the two rows below. One expression, so the rows wrapper's place among the
+          panel's children never moves (plan Task 7). */}
+      {radioOn ? (
+        <RadioTopLine
+          playing={playing}
+          canPlay={previewingSlotIds.size > 0}
+          onPlayToggle={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
+          onStopRadio={() => {
+            closeRadioMenu()
+            stopRadio()
           }}
-        >
-          {playing ? '■' : '▶'}
-        </button>
-        <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
-        {/* Direct request, 2026-09-15: "it'd be nice to be able to adjust
-            the track tempo from the discover section" -- same SET_TEMPO
-            dispatch, same free-type-until-blur pattern, and the same
-            [40, 200] clamp (enforced by the reducer, not re-checked here)
-            as TransportBar.tsx's own tempo field, just placed here so
-            retuning the loop doesn't require leaving the tab. */}
-        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tempo</span>
-        <button
-          onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm - 1 })}
-          aria-label="Decrease tempo"
-          style={{
-            width: 18,
-            height: 18,
-            padding: 0,
-            fontSize: 10,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text)',
-            cursor: 'pointer'
-          }}
-        >
-          −
-        </button>
-        <input
-          type="number"
-          value={tempoText}
-          onFocus={() => setTempoFocused(true)}
-          onChange={(e) => setTempoText(e.target.value)}
-          onBlur={commitTempo}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur()
-          }}
-          aria-label="Tempo (BPM)"
-          style={{
-            fontSize: 10,
-            width: 36,
-            textAlign: 'center',
-            background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text)',
-            border: '1px solid var(--ra-border)',
-            height: 18,
-            padding: 0,
-            WebkitAppearance: 'none',
-            MozAppearance: 'textfield'
-          }}
+          radioButtonRef={radioTopButtonRef}
+          progress={radioProgress}
+          readout={radioReadoutNow}
+          foldSummary={radioFoldStatusNow?.summary ?? null}
+          canUndo={undoStack.length > 0 || radioTurnShown !== null}
+          canRedo={redoStack.length > 0}
+          onUndo={undoDiscoverAction}
+          onRedo={redoDiscoverAction}
         />
-        <button
-          onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm + 1 })}
-          aria-label="Increase tempo"
-          style={{
-            width: 18,
-            height: 18,
-            padding: 0,
-            fontSize: 10,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text)',
-            cursor: 'pointer'
-          }}
-        >
-          +
-        </button>
-        <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
-        {seedTempo !== null && seedTempo !== bpm && (
-          <button
-            onClick={() => dispatch({ type: 'SET_TEMPO', bpm: seedTempo })}
-            title={`seed tempo ${seedTempo} bpm`}
-            aria-label="Match seeded riff's own tempo"
-            style={{
-              height: 18,
-              padding: '0 6px',
-              fontSize: 9,
-              border: '1px solid var(--ra-border)',
-              background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text)',
-              cursor: 'pointer'
-            }}
-          >
-            match seed ({seedTempo})
-          </button>
-        )}
-        <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
-        {/* Undo/redo for slot-content actions (add/remove slot, reroll one,
-            random-reroll one, reroll all) -- direct request, 2026-09-15,
-            inspired by Upcycle's own toolbar undo/redo arrows. Button-only
-            (no keyboard shortcut): this app already binds Cmd+Z globally to
-            the REAL arrangement's own undo system, and Discover's slots
-            aren't part of that reducer's state at all -- a second Cmd+Z
-            meaning here would either silently do nothing useful most of the
-            time or, worse, race/compete with the real one. */}
-        <button
-          onClick={undoDiscoverAction}
-          disabled={undoStack.length === 0 && radioTurnShown === null}
-          data-tooltip="undo"
-          aria-label="undo"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 22,
-            height: 22,
-            padding: 0,
-            background: 'transparent',
-            border: '1px solid var(--ra-border)',
-            color:
-              undoStack.length === 0 && radioTurnShown === null
-                ? 'var(--ra-text-4)'
-                : 'var(--ra-text-2)',
-            cursor: undoStack.length === 0 && radioTurnShown === null ? 'default' : 'pointer'
-          }}
-        >
-          <UndoIcon />
-        </button>
-        <button
-          onClick={redoDiscoverAction}
-          disabled={redoStack.length === 0}
-          data-tooltip="redo"
-          aria-label="redo"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 22,
-            height: 22,
-            padding: 0,
-            background: 'transparent',
-            border: '1px solid var(--ra-border)',
-            color: redoStack.length === 0 ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
-            cursor: redoStack.length === 0 ? 'default' : 'pointer'
-          }}
-        >
-          <RedoIcon />
-        </button>
-      </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <span style={{ marginLeft: 'auto' }} />
-        {/* While radio runs the artist button is the strip's (one artistButtonRef, one button at
-            a time); the picker below the strip serves both. */}
-        {!radioOn && (
-          <button
-            ref={artistButtonRef}
-            onClick={(e) => {
-              if (artistMenu) {
-                setArtistMenu(null)
-                return
-              }
-              const rect = e.currentTarget.getBoundingClientRect()
-              setArtistMenu({ x: rect.left, y: rect.bottom + 4 })
-            }}
-            aria-expanded={artistMenu !== null}
-            data-tooltip="whose stems discover plays"
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 10,
-              padding: '6px 10px',
-              background: 'transparent',
-              border: '1px solid var(--ra-border)',
-              color: mode === 'other' ? 'var(--ra-text)' : 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
-          >
-            {artistFieldLabel(artist, currentUsername)}
-          </button>
-        )}
-        {/* Radio -- docs/superpowers/specs/2026-09-26-radio-mode-design.md.
-            Lit with --ra-play-on when on, exactly like the play/stop button
-            in the settings row above: the transport is audio information
-            and so is this. The label is `radio` either way; the lit state
-            says the rest. */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-          <button
-            ref={radioMenuButtonRef}
-            onClick={(e) => {
-              // ON -> off is still one press; the button is the stop.
-              if (radioOn) {
-                closeRadioMenu()
-                stopRadio()
-                return
-              }
-              // OFF -> the start prompt. Elling, 2026-09-28: "the initial
-              // prompt should be slow mid fast so the app knows how to
-              // start everything." The prompt's `start` chip is what
-              // actually starts radio, at the pace slider's position
-              // (startRadio below; three pace chips did it until
-              // 2026-10-03), so this press only opens the choice --
-              // Escape or a click elsewhere cancels it, which is why it is
-              // a popover and not a dialog with an OK.
-              if (radioMenu) {
-                closeRadioMenu()
-                return
-              }
-              const rect = e.currentTarget.getBoundingClientRect()
-              setRadioMenu({ x: rect.left, y: rect.bottom + 4 })
-            }}
-            aria-expanded={!radioOn && radioMenu !== null}
-            data-tooltip={radioOn ? 'stop radio' : 'start radio'}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 10,
-              padding: '6px 14px',
-              background: radioOn ? 'var(--ra-play-on)' : 'transparent',
-              border: '1px solid var(--ra-border-strong)',
-              color: radioOn ? 'var(--ra-play-on-ink)' : 'var(--ra-text)',
-              cursor: 'pointer'
-            }}
-          >
-            radio
-          </button>
-          {/* How far through the current interval. Monochrome on purpose --
-              this is chrome, not audio information, and colour in this app
-              is spent only on things that carry audio information. A line
-              rather than a number because a number that jitters at 30Hz is
-              worse than a line that does. */}
+      ) : (
+        <>
+          {/* Two rows -- filters/settings, then actions. Direct report, 2026-09-17:
+              "the top area is cluttered with buttons currently, youll need to
+              rethink it all" -- the single row (chaos slider, tempo controls, two
+              checkboxes, undo/redo, play/stop, reroll-all, plus the add-to-shelf/
+              add-to-timeline pair) packed in too much for one line. */}
           <div
             style={{
-              height: 2,
-              background: 'var(--ra-border)',
-              visibility: radioOn ? 'visible' : 'hidden'
-            }}
-          >
-            <div
-              style={{
-                height: '100%',
-                width: `${Math.round(radioProgress * 100)}%`,
-                background: 'var(--ra-text-3)'
-              }}
-            />
-          </div>
-        </div>
-        {/* Radio's skip (the web radio's "next", 2026-10-01): radio picks a
-            row as it would and changes it at the loop top. Square, like
-            the settings chevron beside it; only while radio runs. */}
-        {radioOn && (
-          <button
-            onClick={() => void skipRadio()}
-            data-tooltip="skip a row"
-            aria-label="skip a row"
-            style={{
               display: 'flex',
+              flexWrap: 'wrap',
               alignItems: 'center',
-              justifyContent: 'center',
-              width: 22,
-              height: 22,
-              padding: 0,
-              background: 'transparent',
-              border: '1px solid var(--ra-border)',
-              color: 'var(--ra-text-3)',
-              cursor: 'pointer'
+              gap: 10,
+              marginBottom: 10
             }}
           >
-            <SkipForward size={12} />
-          </button>
-        )}
-        {radioOn && (
-          <button
-            ref={radioChevronRef}
-            onClick={(e) => {
-              if (radioMenu) {
-                closeRadioMenu()
-                return
-              }
-              const rect = e.currentTarget.getBoundingClientRect()
-              setRadioMenu({ x: rect.left, y: rect.bottom + 4 })
-            }}
-            aria-expanded={radioMenu !== null}
-            data-tooltip="radio settings"
-            aria-label="radio settings"
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 22,
-              height: 22,
-              padding: 0,
-              fontFamily: 'inherit',
-              fontSize: 9,
-              background: 'transparent',
-              border: '1px solid var(--ra-border)',
-              color: radioMenu ? 'var(--ra-text)' : 'var(--ra-text-3)',
-              cursor: 'pointer'
-            }}
-          >
-            v
-          </button>
-        )}
-        {/* Radio's turn (docs/superpowers/specs/2026-10-02-radio-turn-button-design.md): a
-            turnaround at the next loop top. `turn` lets the planner choose; a chip plays its
-            move, whatever the menu's moves say. While one waits the button reads `turning` and
-            its move's chip is held; a chip that cannot sound now is dimmed. Monochrome: chrome. */}
-        {radioOn && (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            {/* Direct request, 2026-09-16: "we should add a play/stop button
+                for the discover playing, so user can stop it if they wish" --
+                same merged play/stop toggle + glyphs as TransportBar.tsx's own
+                (`■`/`▶`), dispatching the exact same shared PLAY/PAUSE this
+                panel's own syncPreviewToEngine already uses internally. Doesn't
+                touch previewingSlotIds (which slots are toggled into the mix)
+                -- just starts/stops the transport itself, same as muting
+                everything would achieve for audibility but without losing
+                track of what was toggled on. Moved to the front of the settings
+                row (was the actions row) -- direct request, 2026-09-17. */}
             <button
-              onClick={() => turnRadio()}
-              data-tooltip="turn at the top"
-              aria-label="turn at the top"
+              onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
+              disabled={previewingSlotIds.size === 0}
+              data-tooltip={playing ? 'stop' : 'play'}
+              aria-label={playing ? 'stop' : 'play'}
               style={{
-                fontFamily: 'inherit',
-                fontSize: 10,
-                padding: '3px 10px',
-                background: radioTurnShown !== null ? 'var(--ra-text)' : 'transparent',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 22,
+                height: 22,
+                padding: 0,
+                fontSize: 11,
                 border: '1px solid var(--ra-border-strong)',
-                color: radioTurnShown !== null ? 'var(--ra-bg-page)' : 'var(--ra-text)',
+                background:
+                  previewingSlotIds.size === 0
+                    ? 'var(--ra-bg-row-active)'
+                    : playing
+                      ? 'var(--ra-play-on)'
+                      : 'var(--ra-bg-row-active)',
+                color:
+                  previewingSlotIds.size === 0
+                    ? 'var(--ra-text-4)'
+                    : playing
+                      ? 'var(--ra-play-on-ink)'
+                      : 'var(--ra-text)',
+                cursor: previewingSlotIds.size === 0 ? 'default' : 'pointer'
+              }}
+            >
+              {playing ? '■' : '▶'}
+            </button>
+            <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
+            {/* Direct request, 2026-09-15: "it'd be nice to be able to adjust
+                the track tempo from the discover section" -- same SET_TEMPO
+                dispatch, same free-type-until-blur pattern, and the same
+                [40, 200] clamp (enforced by the reducer, not re-checked here)
+                as TransportBar.tsx's own tempo field, just placed here so
+                retuning the loop doesn't require leaving the tab. */}
+            <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tempo</span>
+            <button
+              onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm - 1 })}
+              aria-label="Decrease tempo"
+              style={{
+                width: 18,
+                height: 18,
+                padding: 0,
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text)',
                 cursor: 'pointer'
               }}
             >
-              {radioTurnFlash ?? (radioTurnShown !== null ? 'turning' : 'turn')}
+              −
             </button>
-            <div style={{ display: 'flex', gap: 2 }}>
-              {TURNAROUND_MOVES.map((move) => {
-                const held = radioTurnShown !== null && radioTurnShown.move === move
-                const notNow = radioTurnCan !== null && !radioTurnCan.moves.includes(move)
-                return (
-                  <button
-                    key={move}
-                    onClick={() => turnRadio(move)}
-                    data-tooltip={notNow ? 'not now' : `turn: ${TURNAROUND_MOVE_LABEL[move]}`}
-                    aria-label={`turn: ${TURNAROUND_MOVE_LABEL[move]}`}
-                    aria-pressed={held}
-                    style={{
-                      fontFamily: 'inherit',
-                      fontSize: 8,
-                      padding: '1px 4px',
-                      background: held ? 'var(--ra-text)' : 'transparent',
-                      border: '1px solid var(--ra-border)',
-                      color: held
-                        ? 'var(--ra-bg-page)'
-                        : notNow
-                          ? 'var(--ra-text-4)'
-                          : 'var(--ra-text-3)',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {TURNAROUND_MOVE_LABEL[move]}
-                  </button>
-                )
-              })}
-            </div>
+            <input
+              type="number"
+              value={tempoText}
+              onFocus={() => setTempoFocused(true)}
+              onChange={(e) => setTempoText(e.target.value)}
+              onBlur={commitTempo}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+              }}
+              aria-label="Tempo (BPM)"
+              style={{
+                fontSize: 10,
+                width: 36,
+                textAlign: 'center',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text)',
+                border: '1px solid var(--ra-border)',
+                height: 18,
+                padding: 0,
+                WebkitAppearance: 'none',
+                MozAppearance: 'textfield'
+              }}
+            />
+            <button
+              onClick={() => dispatch({ type: 'SET_TEMPO', bpm: bpm + 1 })}
+              aria-label="Increase tempo"
+              style={{
+                width: 18,
+                height: 18,
+                padding: 0,
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text)',
+                cursor: 'pointer'
+              }}
+            >
+              +
+            </button>
+            <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>bpm</span>
+            {seedTempo !== null && seedTempo !== bpm && (
+              <button
+                onClick={() => dispatch({ type: 'SET_TEMPO', bpm: seedTempo })}
+                title={`seed tempo ${seedTempo} bpm`}
+                aria-label="Match seeded riff's own tempo"
+                style={{
+                  height: 18,
+                  padding: '0 6px',
+                  fontSize: 9,
+                  border: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text)',
+                  cursor: 'pointer'
+                }}
+              >
+                match seed ({seedTempo})
+              </button>
+            )}
+            <span style={{ width: 1, alignSelf: 'stretch', background: 'var(--ra-border)' }} />
+            {/* Undo/redo for slot-content actions (add/remove slot, reroll one,
+                random-reroll one, reroll all) -- direct request, 2026-09-15,
+                inspired by Upcycle's own toolbar undo/redo arrows. Button-only
+                (no keyboard shortcut): this app already binds Cmd+Z globally to
+                the REAL arrangement's own undo system, and Discover's slots
+                aren't part of that reducer's state at all -- a second Cmd+Z
+                meaning here would either silently do nothing useful most of the
+                time or, worse, race/compete with the real one. */}
+            <button
+              onClick={undoDiscoverAction}
+              disabled={undoStack.length === 0 && radioTurnShown === null}
+              data-tooltip="undo"
+              aria-label="undo"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 22,
+                height: 22,
+                padding: 0,
+                background: 'transparent',
+                border: '1px solid var(--ra-border)',
+                color:
+                  undoStack.length === 0 && radioTurnShown === null
+                    ? 'var(--ra-text-4)'
+                    : 'var(--ra-text-2)',
+                cursor: undoStack.length === 0 && radioTurnShown === null ? 'default' : 'pointer'
+              }}
+            >
+              <UndoIcon />
+            </button>
+            <button
+              onClick={redoDiscoverAction}
+              disabled={redoStack.length === 0}
+              data-tooltip="redo"
+              aria-label="redo"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 22,
+                height: 22,
+                padding: 0,
+                background: 'transparent',
+                border: '1px solid var(--ra-border)',
+                color: redoStack.length === 0 ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+                cursor: redoStack.length === 0 ? 'default' : 'pointer'
+              }}
+            >
+              <RedoIcon />
+            </button>
           </div>
-        )}
-        {/* THE RADIO READOUT (spec 2026-10-03-radio-readout-design section 2), while radio runs:
-            where the density arc is heading and what changes next, and under it the phrase ruler
-            -- a 1px tick per bar, the bars played brighter, the turnaround armed for the phrase's
-            end at its right. Monochrome: chrome. Not a live region: its counts move every bar. */}
-        {radioOn && radioReadoutNow !== null && (
-          <span
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 3,
-              minWidth: 0,
-              fontSize: 9,
-              color: 'var(--ra-text-3)'
-            }}
-          >
-            {radioReadoutNow.statusLine !== '' && (
-              <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                {radioReadoutNow.statusLine}
-              </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+            <span style={{ marginLeft: 'auto' }} />
+            {/* While radio runs the artist button is the strip's (one artistButtonRef, one button at
+                a time); the picker below the strip serves both. */}
+            {!radioOn && (
+              <button
+                ref={artistButtonRef}
+                onClick={(e) => {
+                  if (artistMenu) {
+                    setArtistMenu(null)
+                    return
+                  }
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  setArtistMenu({ x: rect.left, y: rect.bottom + 4 })
+                }}
+                aria-expanded={artistMenu !== null}
+                data-tooltip="whose stems discover plays"
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  padding: '6px 10px',
+                  background: 'transparent',
+                  border: '1px solid var(--ra-border)',
+                  color: mode === 'other' ? 'var(--ra-text)' : 'var(--ra-text-2)',
+                  cursor: 'pointer'
+                }}
+              >
+                {artistFieldLabel(artist, currentUsername)}
+              </button>
             )}
-            {radioReadoutNow.ruler.ticks > 0 && (
-              <span aria-hidden style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ display: 'flex', gap: 1, width: 160, height: 1 }}>
-                  {Array.from({ length: radioReadoutNow.ruler.ticks }, (_, i) => (
-                    <span
-                      key={i}
-                      style={{
-                        flex: 1,
-                        background:
-                          i < radioReadoutNow.ruler.filled ? 'var(--ra-text-3)' : 'var(--ra-border)'
-                      }}
-                    />
-                  ))}
-                </span>
-                {radioReadoutNow.ruler.end !== null && (
-                  <span style={{ whiteSpace: 'nowrap' }}>{radioReadoutNow.ruler.end}</span>
-                )}
-              </span>
+            {/* Radio -- docs/superpowers/specs/2026-09-26-radio-mode-design.md.
+                Lit with --ra-play-on when on, exactly like the play/stop button
+                in the settings row above: the transport is audio information
+                and so is this. The label is `radio` either way; the lit state
+                says the rest. */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              <button
+                ref={radioMenuButtonRef}
+                onClick={(e) => {
+                  // ON -> off is still one press; the button is the stop.
+                  if (radioOn) {
+                    closeRadioMenu()
+                    stopRadio()
+                    return
+                  }
+                  // OFF -> the start prompt. Elling, 2026-09-28: "the initial
+                  // prompt should be slow mid fast so the app knows how to
+                  // start everything." The prompt's `start` chip is what
+                  // actually starts radio, at the pace slider's position
+                  // (startRadio below; three pace chips did it until
+                  // 2026-10-03), so this press only opens the choice --
+                  // Escape or a click elsewhere cancels it, which is why it is
+                  // a popover and not a dialog with an OK.
+                  if (radioMenu) {
+                    closeRadioMenu()
+                    return
+                  }
+                  const rect = e.currentTarget.getBoundingClientRect()
+                  setRadioMenu({ x: rect.left, y: rect.bottom + 4 })
+                }}
+                aria-expanded={!radioOn && radioMenu !== null}
+                data-tooltip={radioOn ? 'stop radio' : 'start radio'}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  padding: '6px 14px',
+                  background: radioOn ? 'var(--ra-play-on)' : 'transparent',
+                  border: '1px solid var(--ra-border-strong)',
+                  color: radioOn ? 'var(--ra-play-on-ink)' : 'var(--ra-text)',
+                  cursor: 'pointer'
+                }}
+              >
+                radio
+              </button>
+              {/* How far through the current interval. Monochrome on purpose --
+                  this is chrome, not audio information, and colour in this app
+                  is spent only on things that carry audio information. A line
+                  rather than a number because a number that jitters at 30Hz is
+                  worse than a line that does. */}
+              <div
+                style={{
+                  height: 2,
+                  background: 'var(--ra-border)',
+                  visibility: radioOn ? 'visible' : 'hidden'
+                }}
+              >
+                <div
+                  style={{
+                    height: '100%',
+                    width: `${Math.round(radioProgress * 100)}%`,
+                    background: 'var(--ra-text-3)'
+                  }}
+                />
+              </div>
+            </div>
+            {radioMenu && (
+              <DiscoverRadioMenu
+                x={radioMenu.x}
+                y={radioMenu.y}
+                mode="start"
+                settings={radioSettings}
+                onChange={(patch) => void onRadioSettingsChange(patch)}
+                onNewBed={() => void collectRadioCourseChange()}
+                onStart={(level) => {
+                  closeRadioMenu()
+                  startRadio(level)
+                }}
+                onClose={closeRadioMenu}
+                ignoreRef={radioMenuButtonRef}
+              />
             )}
-          </span>
-        )}
-        {/* FOLD MODE'S STATUS LINE (v2), while radio runs with fold on: what the folding is
-            doing, in one terse line. Monochrome: chrome. */}
-        {radioFoldStatusNow !== null && (
-          <span
-            style={{
-              fontSize: 9,
-              color: 'var(--ra-text-3)',
-              whiteSpace: 'nowrap',
-              minWidth: 0,
-              overflow: 'hidden',
-              textOverflow: 'ellipsis'
-            }}
-          >
-            {radioFoldStatusNow.summary}
-          </span>
-        )}
-        {radioMenu && (
-          <DiscoverRadioMenu
-            x={radioMenu.x}
-            y={radioMenu.y}
-            mode={radioOn ? 'running' : 'start'}
-            settings={radioSettings}
-            onChange={(patch) => void onRadioSettingsChange(patch)}
-            onNewBed={() => void collectRadioCourseChange()}
-            onStart={(level) => {
-              closeRadioMenu()
-              startRadio(level)
-            }}
-            onClose={closeRadioMenu}
-            ignoreRef={radioOn ? radioChevronRef : radioMenuButtonRef}
-          />
-        )}
-        <button
-          onClick={(e) => void rerollAll(e.metaKey)}
-          disabled={rerollingSlotIds.size > 0}
-          aria-label={rerollingSlotIds.size > 0 ? 'rerolling…' : 'similar all'}
-          data-tooltip={rerollingSlotIds.size > 0 ? 'rerolling…' : 'similar all'}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 30,
-            height: 30,
-            padding: 0,
-            background: 'transparent',
-            border: 'none',
-            color: rerollingSlotIds.size > 0 ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
-            cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
-          }}
-        >
-          {/* Direct request, 2026-09-21: "instead of that loader, have the
-              dice spin intermittently" -- replaces the LoadingLoader that
-              used to swap in here while anything rerolls. */}
-          <DiceIcon size={18} spinning={rerollingSlotIds.size > 0} />
-        </button>
-        <button
-          onClick={() => void keepGroup()}
-          disabled={keeping || listenOnly.has('keep')}
-          data-tooltip={listenOnly.has('keep') ? listenOnlyTip : 'keep this group'}
-          style={{
-            fontFamily: 'inherit',
-            fontSize: 10,
-            padding: '6px 14px',
-            background: 'transparent',
-            border: '1px solid var(--ra-border-strong)',
-            color: keeping || listenOnly.has('keep') ? 'var(--ra-text-4)' : 'var(--ra-text)',
-            cursor: keeping || listenOnly.has('keep') ? 'default' : 'pointer',
-            animation: keptLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
-          }}
-        >
-          {keeping ? 'keeping…' : (keptLabel ?? 'keep')}
-        </button>
-        <button
-          onClick={() => void fetchHearts()}
-          disabled={fetchingHearts || listenOnly.has('fetchHearts')}
-          data-tooltip={listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts'}
-          style={{
-            fontFamily: 'inherit',
-            fontSize: 10,
-            padding: '6px 14px',
-            background: 'transparent',
-            border: '1px solid var(--ra-border-strong)',
-            color:
-              fetchingHearts || listenOnly.has('fetchHearts')
-                ? 'var(--ra-text-4)'
-                : 'var(--ra-text)',
-            cursor: fetchingHearts || listenOnly.has('fetchHearts') ? 'default' : 'pointer',
-            animation: heartsLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
-          }}
-        >
-          {fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts')}
-        </button>
-        <button
-          onClick={() => void addToShelf()}
-          disabled={addingToShelf || listenOnly.has('addToShelf')}
-          data-tooltip={listenOnly.has('addToShelf') ? listenOnlyTip : undefined}
-          style={{
-            fontFamily: 'inherit',
-            fontSize: 10,
-            padding: '6px 14px',
-            background: 'transparent',
-            border: '1px solid var(--ra-border-strong)',
-            color:
-              addingToShelf || listenOnly.has('addToShelf') ? 'var(--ra-text-4)' : 'var(--ra-text)',
-            cursor: addingToShelf || listenOnly.has('addToShelf') ? 'default' : 'pointer',
-            animation: justAddedToShelf ? 'discover-add-pulse 500ms ease-out' : undefined
-          }}
-        >
-          {addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf'}
-        </button>
-        <button
-          onClick={() => void addToTimeline()}
-          disabled={addingToTimeline || listenOnly.has('addToTimeline')}
-          data-tooltip={listenOnly.has('addToTimeline') ? listenOnlyTip : undefined}
-          style={{
-            fontFamily: 'inherit',
-            fontSize: 10,
-            padding: '6px 14px',
-            // A dead button carries no audio information, so no accent.
-            background: listenOnly.has('addToTimeline') ? 'transparent' : 'var(--ra-stretch-on-bg)',
-            border: listenOnly.has('addToTimeline')
-              ? '1px solid var(--ra-border)'
-              : '1px solid var(--ra-stretch-on)',
-            color:
-              addingToTimeline || listenOnly.has('addToTimeline')
-                ? 'var(--ra-text-4)'
-                : 'var(--ra-stretch-on)',
-            cursor: addingToTimeline || listenOnly.has('addToTimeline') ? 'default' : 'pointer',
-            animation: justAddedToTimeline ? 'discover-add-pulse 500ms ease-out' : undefined
-          }}
-        >
-          {addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline'}
-        </button>
-      </div>
+            <button
+              onClick={(e) => void rerollAll(e.metaKey)}
+              disabled={rerollingSlotIds.size > 0}
+              aria-label={rerollingSlotIds.size > 0 ? 'rerolling…' : 'similar all'}
+              data-tooltip={rerollingSlotIds.size > 0 ? 'rerolling…' : 'similar all'}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                width: 30,
+                height: 30,
+                padding: 0,
+                background: 'transparent',
+                border: 'none',
+                color: rerollingSlotIds.size > 0 ? 'var(--ra-text-4)' : 'var(--ra-stretch-on)',
+                cursor: rerollingSlotIds.size > 0 ? 'default' : 'pointer'
+              }}
+            >
+              {/* Direct request, 2026-09-21: "instead of that loader, have the
+                  dice spin intermittently" -- replaces the LoadingLoader that
+                  used to swap in here while anything rerolls. */}
+              <DiceIcon size={18} spinning={rerollingSlotIds.size > 0} />
+            </button>
+            <button
+              onClick={() => void keepGroup()}
+              disabled={keeping || listenOnly.has('keep')}
+              data-tooltip={listenOnly.has('keep') ? listenOnlyTip : 'keep this group'}
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 10,
+                padding: '6px 14px',
+                background: 'transparent',
+                border: '1px solid var(--ra-border-strong)',
+                color: keeping || listenOnly.has('keep') ? 'var(--ra-text-4)' : 'var(--ra-text)',
+                cursor: keeping || listenOnly.has('keep') ? 'default' : 'pointer',
+                animation: keptLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
+              }}
+            >
+              {keeping ? 'keeping…' : (keptLabel ?? 'keep')}
+            </button>
+            <button
+              onClick={() => void fetchHearts()}
+              disabled={fetchingHearts || listenOnly.has('fetchHearts')}
+              data-tooltip={listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts'}
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 10,
+                padding: '6px 14px',
+                background: 'transparent',
+                border: '1px solid var(--ra-border-strong)',
+                color:
+                  fetchingHearts || listenOnly.has('fetchHearts')
+                    ? 'var(--ra-text-4)'
+                    : 'var(--ra-text)',
+                cursor: fetchingHearts || listenOnly.has('fetchHearts') ? 'default' : 'pointer',
+                animation: heartsLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
+              }}
+            >
+              {fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts')}
+            </button>
+            <button
+              onClick={() => void addToShelf()}
+              disabled={addingToShelf || listenOnly.has('addToShelf')}
+              data-tooltip={listenOnly.has('addToShelf') ? listenOnlyTip : undefined}
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 10,
+                padding: '6px 14px',
+                background: 'transparent',
+                border: '1px solid var(--ra-border-strong)',
+                color:
+                  addingToShelf || listenOnly.has('addToShelf')
+                    ? 'var(--ra-text-4)'
+                    : 'var(--ra-text)',
+                cursor: addingToShelf || listenOnly.has('addToShelf') ? 'default' : 'pointer',
+                animation: justAddedToShelf ? 'discover-add-pulse 500ms ease-out' : undefined
+              }}
+            >
+              {addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf'}
+            </button>
+            <button
+              onClick={() => void addToTimeline()}
+              disabled={addingToTimeline || listenOnly.has('addToTimeline')}
+              data-tooltip={listenOnly.has('addToTimeline') ? listenOnlyTip : undefined}
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 10,
+                padding: '6px 14px',
+                // A dead button carries no audio information, so no accent.
+                background: listenOnly.has('addToTimeline')
+                  ? 'transparent'
+                  : 'var(--ra-stretch-on-bg)',
+                border: listenOnly.has('addToTimeline')
+                  ? '1px solid var(--ra-border)'
+                  : '1px solid var(--ra-stretch-on)',
+                color:
+                  addingToTimeline || listenOnly.has('addToTimeline')
+                    ? 'var(--ra-text-4)'
+                    : 'var(--ra-stretch-on)',
+                cursor: addingToTimeline || listenOnly.has('addToTimeline') ? 'default' : 'pointer',
+                animation: justAddedToTimeline ? 'discover-add-pulse 500ms ease-out' : undefined
+              }}
+            >
+              {addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline'}
+            </button>
+          </div>
+        </>
+      )}
       {lingeringBlocks && (
         <div
           role="note"
@@ -12419,50 +12281,5 @@ function AddRowChip({
     >
       {children}
     </button>
-  )
-}
-
-// Hand-drawn undo/redo glyphs (a curved "back" arrow, redo is the exact
-// same shape mirrored horizontally rather than a second hand-derived
-// coordinate set) -- same "no icon package" convention as every other
-// glyph in this file. Direct request, 2026-09-15 (Upcycle-inspired):
-// undo/redo for Discover's own reroll/add/remove actions.
-function UndoIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{ flexShrink: 0 }}
-    >
-      <path d="M13 6 H7 a4 4 0 0 0 -4 4 v1" />
-      <path d="M5.5 8 l-2.5 2 l2.5 2" />
-    </svg>
-  )
-}
-
-function RedoIcon(): React.JSX.Element {
-  return (
-    <svg
-      width="12"
-      height="12"
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{ flexShrink: 0 }}
-    >
-      <g transform="scale(-1,1) translate(-16,0)">
-        <path d="M13 6 H7 a4 4 0 0 0 -4 4 v1" />
-        <path d="M5.5 8 l-2.5 2 l2.5 2" />
-      </g>
-    </svg>
   )
 }

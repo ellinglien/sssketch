@@ -28,6 +28,7 @@ import { DEFAULT_SOURCE_LEAN } from '@shared/discoverSlotModifier'
 import { DEFAULT_DISCOVER_CHAOS } from '@shared/discoverRanking'
 import { BracketToggle } from './BracketToggle'
 import { DiceIcon } from './DiceIcon'
+import { RADIO_STICKY_BACKGROUND } from './RadioTopLine'
 import {
   FoldSeedInput,
   FoldSlider,
@@ -644,7 +645,13 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
         justifyContent: 'center',
         gap: '4px 24px',
         padding: '8px 12px 10px',
-        borderTop: '1px solid var(--ra-border)'
+        borderTop: '1px solid var(--ra-border)',
+        // Sticky at the bottom, above the rows wrapper (position: relative, which would paint
+        // over it), on the library box's own fill.
+        position: 'sticky',
+        bottom: 0,
+        zIndex: 2,
+        background: RADIO_STICKY_BACKGROUND
       }}
     >
       {groups.map((g) => (
