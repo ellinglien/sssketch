@@ -11083,6 +11083,7 @@ export function DiscoverPanel({
       <style>{`
         .radio-plate-away { color: var(--ra-text-2); }
         .radio-plate-away:hover { color: var(--ra-text); }
+        .radio-fire:active { background: var(--ra-text); color: var(--ra-bg-page); }
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
