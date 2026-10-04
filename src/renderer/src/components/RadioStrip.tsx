@@ -23,6 +23,7 @@ import {
   TURNAROUND_MOVES,
   type TurnaroundMove
 } from '@shared/radioTurnaround'
+import { DEFAULT_RADIO_PACE_LEVEL, radioPaceLabel } from '@shared/radioPace'
 import { DEFAULT_FAVES } from '@shared/discoverFaves'
 import { DEFAULT_SOURCE_LEAN } from '@shared/discoverSlotModifier'
 import { DEFAULT_DISCOVER_CHAOS } from '@shared/discoverRanking'
@@ -32,7 +33,9 @@ import {
   ActionButton,
   FoldSeedInput,
   FoldSlider,
-  PaceSlider,
+  ControlField,
+  FireButton,
+  SegmentBar,
   StripChip,
   StripDial,
   StripGroup,
@@ -192,16 +195,213 @@ function StripSoundDial({
 
 const caption: React.CSSProperties = { fontSize: 9, color: 'var(--ra-text-3)' }
 
-/** The tempo field's small square buttons and field, as header row 1 draws them. */
 const tempoStepStyle: React.CSSProperties = {
-  width: 18,
-  height: 18,
+  width: 'var(--ra-h-live)',
+  height: 'var(--ra-h-live)',
   padding: 0,
-  fontSize: 10,
-  border: '1px solid var(--ra-border)',
-  background: 'var(--ra-bg-row-active)',
+  fontFamily: 'inherit',
+  fontSize: 'var(--ra-fs-13)',
+  border: '1px solid var(--ra-border-strong)',
+  background: 'transparent',
   color: 'var(--ra-text)',
   cursor: 'pointer'
+}
+
+/** The live bar (design pass: the controls that PLAY, 36px, raised under the rows, sticky at the
+ * bottom): tempo, pace, skip, new bed, fire now (turn and the seven moves), level. */
+function RadioLiveBar(
+  props: RadioStripProps & { controls: readonly RadioStripControl[] }
+): React.JSX.Element {
+  const { settings, onSettingsChange, play, turn, sound, controls } = props
+  const byId = (id: string): RadioStripControl | undefined => controls.find((c) => c.id === id)
+  const pace = byId('pace')
+  const level = byId('level')
+  // The draft remembers the committed value it started from: a drag that ends where it began
+  // commits nothing, so its draft would linger; once the value moves, the draft is stale.
+  const paceValue = pace?.kind === 'slider' ? pace.value : 0
+  const [paceDraftRaw, setPaceDraft] = useState<{ from: number; v: number } | null>(null)
+  const paceDraft = paceDraftRaw !== null && paceDraftRaw.from === paceValue ? paceDraftRaw.v : null
+  const paceShown = paceDraft ?? paceValue
+  const paceReadout = radioPaceLabel(paceShown, { fold: settings.foldMode })
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-end',
+        flexWrap: 'wrap',
+        gap: 'var(--ra-s-7) 24px',
+        padding: 'var(--ra-s-5) var(--ra-s-7) var(--ra-s-6)',
+        background: 'var(--ra-bg-row-sub)',
+        borderTop: '1px solid var(--ra-border-strong)',
+        borderBottom: '1px solid var(--ra-border-strong)',
+        // Sticky at the bottom, above the rows wrapper (position: relative, which would paint
+        // over it), so the controls that play are always in reach.
+        position: 'sticky',
+        bottom: 0,
+        zIndex: 2
+      }}
+    >
+      <ControlField label="tempo" readout="bpm" live>
+        <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--ra-s-1)' }}>
+          <button
+            onClick={() => play.onTempoStep(-1)}
+            aria-label="Decrease tempo"
+            style={tempoStepStyle}
+          >
+            −
+          </button>
+          <input
+            type="number"
+            value={play.tempoText}
+            onFocus={play.onTempoFocus}
+            onChange={(e) => play.onTempoText(e.target.value)}
+            onBlur={play.onTempoCommit}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+            }}
+            aria-label="Tempo (BPM)"
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 'var(--ra-fs-13)',
+              width: 56,
+              height: 'var(--ra-h-live)',
+              textAlign: 'center',
+              background: 'var(--ra-bg-page)',
+              color: 'var(--ra-text)',
+              border: '1px solid var(--ra-border-strong)',
+              padding: 0,
+              WebkitAppearance: 'none',
+              MozAppearance: 'textfield'
+            }}
+          />
+          <button
+            onClick={() => play.onTempoStep(1)}
+            aria-label="Increase tempo"
+            style={tempoStepStyle}
+          >
+            +
+          </button>
+          {play.seedTempo !== null && play.seedTempo !== play.bpm && (
+            <button
+              onClick={play.onMatchSeed}
+              title={`seed tempo ${play.seedTempo} bpm`}
+              aria-label="Match seeded riff's own tempo"
+              style={{
+                ...tempoStepStyle,
+                width: 'auto',
+                padding: '0 var(--ra-s-4)',
+                fontSize: 'var(--ra-fs-9)',
+                whiteSpace: 'nowrap'
+              }}
+            >
+              match seed ({play.seedTempo})
+            </button>
+          )}
+        </span>
+      </ControlField>
+      {pace?.kind === 'slider' && (
+        <div style={{ width: 200 }}>
+          <ControlField label={pace.label} tooltip={pace.tooltip} readout={paceReadout} live>
+            <SegmentBar
+              label={pace.label}
+              value={pace.value}
+              size="live"
+              defaultValue={DEFAULT_RADIO_PACE_LEVEL}
+              ariaValueText={paceReadout}
+              tooltip={pace.tooltip}
+              onChange={(v) => setPaceDraft({ from: paceValue, v })}
+              onDraft={(v) => setPaceDraft({ from: paceValue, v })}
+              onCommit={(v) => {
+                onSettingsChange(pace.patch(v))
+                setPaceDraft(null)
+              }}
+            />
+          </ControlField>
+        </div>
+      )}
+      <button
+        onClick={play.onSkip}
+        data-tooltip={byId('skip')?.tooltip}
+        aria-label={byId('skip')?.tooltip}
+        style={{
+          fontFamily: 'inherit',
+          fontSize: 'var(--ra-fs-13)',
+          height: 'var(--ra-h-live)',
+          padding: '0 18px',
+          background: 'transparent',
+          border: '1px solid var(--ra-text)',
+          color: 'var(--ra-text)',
+          cursor: 'pointer'
+        }}
+      >
+        {/* Keyed by the landing count, so each landing restarts the flicker. */}
+        <span
+          key={play.skipFlicker}
+          className={play.skipFlicker > 0 ? 'radio-landing-flicker' : undefined}
+        >
+          skip
+        </span>
+      </button>
+      <button
+        onClick={play.onNewBed}
+        data-tooltip={byId('new-bed')?.tooltip}
+        style={{
+          fontFamily: 'inherit',
+          fontSize: 'var(--ra-fs-10)',
+          height: 'var(--ra-h-live)',
+          padding: '0 var(--ra-s-5)',
+          background: 'transparent',
+          border: '1px solid var(--ra-border-strong)',
+          color: 'var(--ra-text-2)',
+          cursor: 'pointer'
+        }}
+      >
+        new bed
+      </button>
+      <ControlField label="fire now">
+        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--ra-s-1)' }}>
+          <FireButton
+            primary
+            label={turn.flash ?? (turn.shown !== null ? 'turning' : 'turn')}
+            held={turn.shown !== null}
+            tooltip={byId('turn')?.tooltip}
+            ariaLabel={byId('turn')?.tooltip}
+            onClick={() => turn.onTurn()}
+          />
+          {TURNAROUND_MOVES.map((move) => {
+            const held = turn.shown !== null && turn.shown.move === move
+            const notNow = turn.can !== null && !turn.can.moves.includes(move)
+            return (
+              <FireButton
+                key={move}
+                label={TURNAROUND_MOVE_LABEL[move]}
+                held={held}
+                notNow={notNow}
+                tooltip={notNow ? 'not now' : `turn: ${TURNAROUND_MOVE_LABEL[move]}`}
+                ariaLabel={`turn: ${TURNAROUND_MOVE_LABEL[move]}`}
+                onClick={() => turn.onTurn(move)}
+              />
+            )
+          })}
+        </span>
+      </ControlField>
+      {level !== undefined && (
+        <div style={{ width: 150, marginLeft: 'auto' }}>
+          <ControlField label={level.label} tooltip={level.tooltip} readout={sound.level} live>
+            <SegmentBar
+              label="master level"
+              value={sound.level}
+              size="live"
+              defaultValue={100}
+              disabled={level.disabled}
+              tooltip={level.tooltip}
+              onChange={sound.onLevel}
+            />
+          </ControlField>
+        </div>
+      )}
+    </div>
+  )
 }
 
 export function RadioStrip(props: RadioStripProps): React.JSX.Element {
@@ -235,21 +435,14 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
             style={{ display: 'flex', alignItems: 'center', gap: 6 }}
           >
             <span style={caption}>{c.label}</span>
-            {c.id === 'pace' ? (
-              <PaceSlider
-                value={c.value}
-                fold={settings.foldMode}
-                width={72}
-                onCommit={(v) => onSettingsChange(c.patch(v))}
-              />
-            ) : (
+            {
               <FoldSlider
                 label={c.label}
                 value={c.value}
                 width={72}
                 onCommit={(v) => onSettingsChange(c.patch(v))}
               />
-            )}
+            }
           </span>
         )
       case 'switch':
@@ -293,21 +486,8 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
   }
 
   function panelControl(c: RadioStripControl): React.JSX.Element | null {
-    const { play, picks, turn, sound } = props
+    const { picks, sound } = props
     switch (c.id) {
-      case 'level':
-        return (
-          <StripDial
-            key={c.id}
-            label={c.label}
-            ariaLabel="master level"
-            value={sound.level}
-            onChange={sound.onLevel}
-            defaultValue={100}
-            tooltip={c.tooltip}
-            disabled={c.disabled}
-          />
-        )
       case 'reverb':
         return (
           <StripDial
@@ -368,104 +548,6 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
           >
             {sound.filterMode === 'lowpass' ? 'lo pass' : 'hi pass'}
           </button>
-        )
-      case 'tempo':
-        return (
-          <span key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span style={caption}>tempo</span>
-            <button
-              onClick={() => play.onTempoStep(-1)}
-              aria-label="Decrease tempo"
-              style={tempoStepStyle}
-            >
-              −
-            </button>
-            <input
-              type="number"
-              value={play.tempoText}
-              onFocus={play.onTempoFocus}
-              onChange={(e) => play.onTempoText(e.target.value)}
-              onBlur={play.onTempoCommit}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') e.currentTarget.blur()
-              }}
-              aria-label="Tempo (BPM)"
-              style={{
-                fontSize: 10,
-                width: 36,
-                textAlign: 'center',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text)',
-                border: '1px solid var(--ra-border)',
-                height: 18,
-                padding: 0,
-                WebkitAppearance: 'none',
-                MozAppearance: 'textfield'
-              }}
-            />
-            <button
-              onClick={() => play.onTempoStep(1)}
-              aria-label="Increase tempo"
-              style={tempoStepStyle}
-            >
-              +
-            </button>
-            <span style={caption}>bpm</span>
-            {play.seedTempo !== null && play.seedTempo !== play.bpm && (
-              <button
-                onClick={play.onMatchSeed}
-                title={`seed tempo ${play.seedTempo} bpm`}
-                aria-label="Match seeded riff's own tempo"
-                style={{
-                  height: 18,
-                  padding: '0 6px',
-                  fontSize: 9,
-                  border: '1px solid var(--ra-border)',
-                  background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text)',
-                  cursor: 'pointer'
-                }}
-              >
-                match seed ({play.seedTempo})
-              </button>
-            )}
-          </span>
-        )
-      case 'skip':
-        return (
-          <button
-            key={c.id}
-            onClick={play.onSkip}
-            data-tooltip={c.tooltip}
-            aria-label={c.tooltip}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 9,
-              padding: 'var(--ra-s-0) 8px',
-              background: 'transparent',
-              border: '1px solid var(--ra-border)',
-              color: 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
-          >
-            {/* Keyed by the landing count, so each landing restarts the flicker (Task 12's CSS). */}
-            <span
-              key={play.skipFlicker}
-              className={play.skipFlicker > 0 ? 'radio-landing-flicker' : undefined}
-            >
-              skip
-            </span>
-          </button>
-        )
-      case 'new-bed':
-        return (
-          <StripChip
-            key={c.id}
-            label={c.label}
-            on={false}
-            tooltip={c.tooltip}
-            onClick={play.onNewBed}
-          />
         )
       case 'faves':
         return (
@@ -536,85 +618,36 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
             tooltip={picks.mySoundsTooltip}
           />
         )
-      case 'turn':
-        return (
-          <span key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <button
-              onClick={() => turn.onTurn()}
-              data-tooltip={c.tooltip}
-              aria-label={c.tooltip}
-              style={{
-                fontFamily: 'inherit',
-                fontSize: 10,
-                padding: '3px 10px',
-                background: turn.shown !== null ? 'var(--ra-text)' : 'transparent',
-                border: '1px solid var(--ra-border-strong)',
-                color: turn.shown !== null ? 'var(--ra-bg-page)' : 'var(--ra-text)',
-                cursor: 'pointer'
-              }}
-            >
-              {turn.flash ?? (turn.shown !== null ? 'turning' : 'turn')}
-            </button>
-            {TURNAROUND_MOVES.map((move) => {
-              const held = turn.shown !== null && turn.shown.move === move
-              const notNow = turn.can !== null && !turn.can.moves.includes(move)
-              return (
-                <button
-                  key={move}
-                  onClick={() => turn.onTurn(move)}
-                  data-tooltip={notNow ? 'not now' : `turn: ${TURNAROUND_MOVE_LABEL[move]}`}
-                  aria-label={`turn: ${TURNAROUND_MOVE_LABEL[move]}`}
-                  aria-pressed={held}
-                  style={{
-                    fontFamily: 'inherit',
-                    fontSize: 8,
-                    padding: '1px 4px',
-                    background: held ? 'var(--ra-text)' : 'transparent',
-                    border: '1px solid var(--ra-border)',
-                    color: held
-                      ? 'var(--ra-bg-page)'
-                      : notNow
-                        ? 'var(--ra-text-4)'
-                        : 'var(--ra-text-3)',
-                    cursor: 'pointer'
-                  }}
-                >
-                  {TURNAROUND_MOVE_LABEL[move]}
-                </button>
-              )
-            })}
-          </span>
-        )
       default:
         return null
     }
   }
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: '4px 24px',
-        padding: '8px 12px 10px',
-        borderTop: '1px solid var(--ra-border)',
-        // Sticky at the bottom, above the rows wrapper (position: relative, which would paint
-        // over it), on the library box's own fill.
-        position: 'sticky',
-        bottom: 0,
-        zIndex: 2,
-        background: RADIO_STICKY_BACKGROUND
-      }}
-    >
-      {groups
-        .filter((g) => g.place !== 'top')
-        .map((g) => (
-          <StripGroup key={g.id} caption={g.caption}>
-            {g.controls.map(control)}
-          </StripGroup>
-        ))}
-    </div>
+    <>
+      <RadioLiveBar
+        {...props}
+        controls={groups.filter((g) => g.place === 'live').flatMap((g) => g.controls)}
+      />
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '4px 24px',
+          padding: '8px 12px 10px',
+          background: RADIO_STICKY_BACKGROUND
+        }}
+      >
+        {groups
+          .filter((g) => g.place === 'columns')
+          .map((g) => (
+            <StripGroup key={g.id} caption={g.caption}>
+              {g.controls.map(control)}
+            </StripGroup>
+          ))}
+      </div>
+    </>
   )
 }
