@@ -186,12 +186,13 @@ export function radioBuildArc(f: RadioChangeForecast, legArc: TurnaroundArc): Tu
 
 /** Whether what lands at a turnaround's wrap pays it off. `medium`: two or more rows, a hook back,
  * an arc step, the low end back or a course change. `large`: three or more rows, a hook back with
- * another row, the low end back or a course change. `none` is always met. */
+ * another row, an arc add, the low end back or a course change. `none` is always met. */
 export function radioPayoffMet(f: RadioChangeForecast, need: RadioPayoff): boolean {
   if (need === 'none') return true
   if (f.lowEndReturn || f.course) return true
   if (need === 'medium') return f.rows >= 2 || f.hookReturn !== null || f.arcStep !== null
-  return f.rows >= 3 || (f.hookReturn !== null && f.rows >= 2)
+  // an arc add is a large change (spec Decision 5: an arc step gets the riser and the gap)
+  return f.rows >= 3 || (f.hookReturn !== null && f.rows >= 2) || f.arcStep === 'add'
 }
 
 /** The largest payoff a forecast meets. */
@@ -231,18 +232,42 @@ export function radioForecastWithRows(f: RadioChangeForecast, n: number): RadioC
  *   medium change: the runtime assembles it), then the budget (a phrase end's: its `large` is
  *   spared the 8-bar spacing).
  * - `payoff`: the largest payoff `f` plus the spares can meet. rollTurnaround's gap needs `large`.
+ * - Promotion: a `medium` whose payoff can be `large` becomes `large` when the last large build
+ *   is PROMOTE_PHRASES[`arc`] phrases back (`arc` absent: `steady`).
  */
 export function radioPhraseEndBuild(
   f: RadioChangeForecast,
   spare: number,
-  opts: { hookScale?: number } & RadioBuildBudget
+  opts: { hookScale?: number; arc?: TurnaroundArc } & RadioBuildBudget
 ): { skip: boolean; size: RadioBuildSize; payoff: RadioPayoff } {
   const best = radioForecastWithRows(f, Math.max(0, Math.floor(spare)))
   const payoff = radioPayoffOf(best)
   const raw = radioBuildTier(f, opts.hookScale)
   const floored: RadioBuildSize = radioBuildSizeAtLeast(raw, 'medium') ? raw : 'medium'
-  const size = radioApplyBuildBudget(floored, { ...opts, phraseEnd: true })
+  const budget = { ...opts, phraseEnd: true }
+  let size = radioApplyBuildBudget(floored, budget)
+  // the gap's return (spec 4.4): a medium phrase end the spares can pay off large is promoted to
+  // large once the last large build is PROMOTE_PHRASES[arc] phrases back -- otherwise sized
+  // builds would leave almost no phrase end large enough for a gap. Pure: no draw.
+  if (size === 'medium' && payoff === 'large') {
+    const ahead = Number.isFinite(opts.aheadBars) && opts.aheadBars > 0 ? opts.aheadBars : 0
+    const since =
+      opts.clock.sinceLarge === null ? Number.POSITIVE_INFINITY : opts.clock.sinceLarge + ahead
+    const phrases = PROMOTE_PHRASES[opts.arc ?? 'steady']
+    if (Number.isFinite(phrases) && since >= phrases * opts.phraseBars) {
+      size = radioApplyBuildBudget('large', budget)
+    }
+  }
   return { skip: payoff === 'none', size, payoff }
+}
+
+/** Phrases since the last large build before a medium phrase end whose spares can pay off a large
+ * change is promoted to large (radioPhraseEndBuild), by the build's arc: a growing mix earns its
+ * gap sooner, a steady one later, a thinning one never (a thinning mix softens; it does not drop). */
+export const PROMOTE_PHRASES: Readonly<Record<TurnaroundArc, number>> = {
+  growing: 2,
+  steady: 3,
+  thinning: Number.POSITIVE_INFINITY
 }
 
 // ---- big moments on phrase starts (spec 4.5) ----

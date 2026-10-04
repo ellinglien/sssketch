@@ -525,6 +525,9 @@ size?)`:
 - **Memory:** `large` rolls fresh: the memory (diminution, never two in a row) is skipped, so a
   riser, stop, wash or dip at the last phrase end cannot leave the biggest moment with nothing or
   with a halved repeat. At `none` and `small` a diminution keeps at most two moves.
+- **Promotion (§4.7 step 3):** a phrase end rolled at `medium` whose spares can pay off a large
+  change is rolled at `large` once the last large build is two phrases back on a growing arc,
+  three on a steady one (never on a thinning one), so gaps keep coming at about today's rate.
 - **Chance:** `large` makes the phrase end fire, at every rate but `off`. Large boundaries are at
   least a phrase apart (the budget), so this is about one turnaround per hook cycle.
 - **`none` and `small`:** they keep their drops, stops, lifts and washes. A turnaround is the
@@ -571,7 +574,10 @@ biggest promise radio makes); `medium` for any other move. A turn's too.
 | need | met by |
 |---|---|
 | `medium` | 2 or more rows, a hook back, a density-arc step, the low end back, a course change |
-| `large` | 3 or more rows, a hook back with another row, the low end back (drums or bass returning), a course change |
+| `large` | 3 or more rows, a hook back with another row, a density-arc add, the low end back (drums or bass returning), a course change |
+
+An arc add pays off a gap (Decision 5: an arc step gets the full riser and the gap); an arc
+removal pays off only `medium`, since a thinning mix softens rather than drops (§4.2's arc).
 
 **At the phrase end's roll** (sized builds on; the start of the lap ending at W):
 
@@ -584,7 +590,12 @@ biggest promise radio makes); `medium` for any other move. A turn's too.
 3. `radioPhraseEndBuild(f, spare, budget)`:
    - **skip** when `f` plus every spare row cannot meet `medium`: no turnaround at this phrase end,
      no draw, memory null (logged `[radio-build] no payoff`);
-   - **size** = `f`'s tier raised to `medium`, then the budget (§4.2);
+   - **size** = `f`'s tier raised to `medium`, then the budget (§4.2); then **promotion**: a
+     `medium` whose payoff can be `large` becomes `large` once the last large build is
+     `PROMOTE_PHRASES[arc]` phrases back (growing 2, steady 3, thinning never; the arc absent
+     reads as steady), the budget re-applied. Without it almost no phrase end would be large
+     enough for a gap (review sim: gaps back to 5-10 an hour, against 8-12 before sized builds,
+     none oversold);
    - **payoff** = the largest payoff `f` plus the spares can meet. `rollTurnaround` draws a gap
      only when it is `large` (`TurnaroundInput.payoff`).
 4. The rate draws as today; at `large` the phrase end always fires (§4.4).

@@ -5,6 +5,7 @@ import {
   BUILD_SPACING_BARS,
   NO_CHANGE_FORECAST,
   NO_RADIO_BUILDS,
+  PROMOTE_PHRASES,
   advanceRadioBuildClock,
   noteRadioBuild,
   radioApplyBuildBudget,
@@ -136,7 +137,11 @@ describe('the payoff', () => {
     expect(radioPayoffMet(F({ rows: 3 }), 'large')).toBe(true)
     expect(radioPayoffMet(F({ rows: 1, hookReturn: { awayBars: 32 } }), 'large')).toBe(false)
     expect(radioPayoffMet(F({ rows: 2, hookReturn: { awayBars: 32 } }), 'large')).toBe(true)
-    expect(radioPayoffMet(F({ arcStep: 'add', rows: 1 }), 'large')).toBe(false)
+    // an arc add is a large change (spec Decision 5: the riser and the gap), a removal is not
+    expect(radioPayoffMet(F({ arcStep: 'add' }), 'large')).toBe(true)
+    expect(radioPayoffMet(F({ arcStep: 'remove', rows: 1 }), 'large')).toBe(false)
+    expect(radioPayoffOf(F({ arcStep: 'add' }))).toBe('large')
+    expect(radioPayoffShortfall(F({ arcStep: 'add' }), 'large')).toBe(0)
     expect(radioPayoffMet(F({ rows: 1, lowEndReturn: true }), 'large')).toBe(true)
     expect(radioPayoffOf(F({ rows: 2 }))).toBe('medium')
     expect(radioPayoffOf(F({ rows: 1 }))).toBe('none')
@@ -180,7 +185,7 @@ describe('radioPhraseEndBuild', () => {
       size: 'medium',
       payoff: 'medium'
     })
-    expect(radioPhraseEndBuild(F({ rows: 1 }), 2, FREE)).toEqual({
+    expect(radioPhraseEndBuild(F({ rows: 1 }), 2, { ...FREE, arc: 'thinning' })).toEqual({
       skip: false,
       size: 'medium',
       payoff: 'large'
@@ -211,6 +216,46 @@ describe('radioPhraseEndBuild', () => {
     expect(radioPhraseEndBuild(F({ rows: 3 }), 0, both).size).toBe('small')
     const lateLarge = { clock: { sinceBuild: 20, sinceLarge: 8 }, aheadBars: 4, phraseBars: 16 }
     expect(radioPhraseEndBuild(F({ rows: 3 }), 0, lateLarge).size).toBe('medium')
+  })
+
+  it('a medium phrase end the spares can pay off large is promoted, by the arc, after phrases', () => {
+    // a medium change (two rows), spares for a large payoff: promoted once the last large build
+    // is PROMOTE_PHRASES[arc] phrases back (counted at the wrap: + aheadBars)
+    const at = (
+      sinceLarge: number | null,
+      arc?: 'growing' | 'steady' | 'thinning'
+    ): ReturnType<typeof radioPhraseEndBuild> =>
+      radioPhraseEndBuild(F({ rows: 2 }), 1, {
+        clock: { sinceBuild: 40, sinceLarge },
+        aheadBars: 4,
+        phraseBars: 16,
+        ...(arc ? { arc } : {})
+      })
+    expect(PROMOTE_PHRASES).toEqual({ growing: 2, steady: 3, thinning: Infinity })
+    expect(at(27, 'growing').size).toBe('medium')
+    expect(at(28, 'growing')).toEqual({ skip: false, size: 'large', payoff: 'large' })
+    expect(at(43, 'steady').size).toBe('medium')
+    expect(at(44, 'steady').size).toBe('large')
+    expect(at(44).size).toBe('large') // absent: steady
+    expect(at(43).size).toBe('medium')
+    expect(at(1000, 'thinning').size).toBe('medium')
+    expect(at(null, 'growing').size).toBe('large') // no large build yet
+    expect(at(null, 'thinning').size).toBe('medium')
+  })
+
+  it('no promotion without a large payoff, or when the budget left it small', () => {
+    const clock = { sinceBuild: 40, sinceLarge: null }
+    const o = { clock, aheadBars: 4, phraseBars: 16, arc: 'growing' as const }
+    // spares for a medium payoff only
+    expect(radioPhraseEndBuild(F({ rows: 1 }), 0, o).skip).toBe(true)
+    expect(radioPhraseEndBuild(F(), 2, o)).toEqual({
+      skip: false,
+      size: 'medium',
+      payoff: 'medium'
+    })
+    // a build 4 bars ago: the medium falls to small, and stays there
+    const recent = { ...o, clock: { sinceBuild: 0, sinceLarge: null } }
+    expect(radioPhraseEndBuild(F({ rows: 2 }), 1, recent).size).toBe('small')
   })
 
   it('the budget still applies', () => {
