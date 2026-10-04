@@ -1039,6 +1039,43 @@ Nothing is pushed or deployed. **No agent has heard either radio, seen either UI
     `canHold: false` and clears it itself (`DiscoverPanel.tsx:4888`); the web clears it itself in
     `step.ts:2511`.
 
+**Fixed after the final review (2026-10-04).** sssketch `bd42f18`, ell.ing/radio `49b824d`.
+
+- **Web: a hook released too late to take back its rest.** `landRest` records no hook landing when
+  the hook is gone, then calls `restEnds`. The row rests at its line and takes a fresh pick at the
+  next top. Tested both ways: taken back (the row plays on and is never silent) and too late.
+- **Web: dub throws skip resting rows.** `radioThrowRows` (throwAim.ts) counts a row as audible
+  only when it has a stem, is not muted and is not resting. The controller's `throwTick` uses it.
+- **Web: the payoff check counts a rest as no row.** `payoffRows` subtracts only the exits that
+  landed a substitute. The extra `oversold` log is gone.
+- **Web: a return onto a resting row is booked as a cut.** Nothing is drawn, so there is no gesture
+  and no riser on the build clock. That matches what the engine plays when the row joins again. The
+  test fails without the fix: one return drew a `duck`.
+- **Desktop: putting a resting row back in the mix by hand is its return.** This was the proposed
+  rule. Unmuting or soloing a resting row calls the shared `returnRadioHookByHand`: the hook goes
+  `in` with a fresh stay and counts as a return. Any decided or queued return is withdrawn. The row
+  plays the hooked stem it still holds, at once.
+  - Un-solo brings back every resolved row except the ones radio is resting.
+  - The web needs no version of this: a resting row there is not `muted`, so there is nothing to
+    unmute.
+- **Desktop: a withdrawn exit takes its echo back.** This covers release, the cap, a manual change
+  winning the row and undo, all through `withdrawManualChange`. The shared
+  `withdrawDiscoverExitThrow` clears the throw and its curve, but only before the throw starts
+  (`THROW_RECALL_BARS` ahead). A throw already under way is left to finish, so the send is never
+  cut mid-throw. That differs from the web, which ramps the send down over 5 ms.
+- **Desktop: a rest never empties the preview.** If every other row was muted before the line, the
+  rest is withdrawn. The hook stays `in` and tries again at its next line.
+- **Stale leftovers removed.** The web's header no longer names `toggleRadioHook`, and
+  `RadioRowView.flag` is `'replace-soon' | null`. `likeRadioSlot` has lost its unused
+  clear-replace-soon branch, along with `canHold` and the id.
+- **Verified.** No hooks: the web's action log is byte-identical to `cfdeb16` (60 runs). sssketch:
+  typecheck, vitest (4754) and lint all pass; lint shows the same 4 unrelated prettier warnings.
+  ell.ing/radio: typecheck, vitest twice (961 each), build and `check:engine` all pass.
+- **Not verified.** The desktop changes are checked by typecheck and lint only: no agent can run
+  the app. No agent has heard either radio.
+- **Still open.** The cross-radio differences listed above, and holding radio still freezing a
+  resting row's absence.
+
 **Still to do (Task 16, Steps 5-6):** the memory file `radio_anointed_stems_shipped.md`, and deploying
 the web only with Elling's go-ahead (`deploy/deploy-page.sh`).
 
