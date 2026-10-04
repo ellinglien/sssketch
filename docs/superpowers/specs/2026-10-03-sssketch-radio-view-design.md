@@ -34,6 +34,53 @@ styles".
    placement and presentation change. The phone remote is not affected.
 7. **Hook/dig roles** (spec `2026-10-03-radio-anointed-stems-design.md`, being written separately).
    This spec leaves a place for their row buttons and does not design them.
+8. **The open questions, answered (Elling, 2026-10-04, the spec's defaults):** keep the start
+   prompt; no whole-mix `hold` now; the strip's saturation, pump and echo edit the open project's
+   sound (undoable, marks it unsaved). See the end of this spec.
+
+## Updated for the tree as of 2026-10-04 (sssketch 209878f, ell.ing/radio 49b824d)
+
+The tree moved while this spec waited: anointed stems (hooks, dig, resting exits, sized builds),
+the pace slider, fold following pace, combined turnarounds, aimed throws and companions all
+landed. The sections below are corrected in place where they were stale; this list is the
+summary, and the plan (`docs/superpowers/plans/2026-10-04-sssketch-radio-view.md`) is built on it.
+
+- **Sizes.** `DiscoverPanel.tsx` is 14,211 lines; `DiscoverSlotRow` and its helpers are lines
+  12,307-14,211 (about 1,900).
+- **The row grid** is 15 tracks, plus tracks 16-17 for `RadioRoleButtons` (hook: Phosphor
+  `Repeat`; dig: `Shovel`) while radio runs, plus track **18** (not 16) for fold's readout while
+  fold is on. The reserved `data-slot="radio-role"` slot is no longer empty: the hook and dig
+  buttons exist and go there, after 👎, in the web's order (`m s skip 👍 👎 hook dig`).
+- **Holding** is a hook in on the row (`hookIn`, `radioHookInRow`), not `radioFlag === 'hook'`:
+  the flag was retired (`RadioSlotFlag` is `'replace-soon'` only).
+- **The row readout's age already carries the role words** (`3 laps · hook · back in 16 bars`),
+  so the web's info plate is split into a label (cut with an ellipsis) and a tail kept whole
+  (ell.ing/radio 22de927). `radioRowPlates` returns `info: { label, tail }`.
+- **The away hook's name** (`data-hook-away`, tap: bring it back) is a button today, in the
+  readout's top line. On the web it sits at the waveform's bottom left, sharing one bar with the
+  cue plate (the name shrinks, the cue stays whole). The radio view does the same; it is the one
+  plate that takes clicks.
+- **`builds: sized / off`** (`sizedBuilds`) is a radio menu row this spec did not list. It goes in
+  the shape group.
+- **`no near fits`** (dig's near-only draw finding nothing) is flashed on the row on the web
+  (021f95c) and only logged on the desktop. It joins `no fave fits` in section 2.
+- **Dials are not inputs.** `Dial` is a `div role="slider"`; the `t` handler skips only
+  `INPUT`/`TEXTAREA`/`SELECT`, so `t` already works after a dial drag. Only the range inputs (pace,
+  bend, mismatch) blur after a pointer gesture. `Dial` has no `disabled` prop yet; the strip needs
+  one (additive).
+- **Components are one flat folder.** `src/renderer/src/components/` has no subfolders, so the new
+  files sit beside `DiscoverRadioMenu.tsx` with `Discover`/`Radio` prefixes, not in
+  `components/discover/radio/`.
+- **The row cannot move verbatim alone.** `resolveCandidateStem`, `peekResolvedCandidateStem` and
+  their two caches are module-level in `DiscoverPanel.tsx` and used by both the panel and the row;
+  the move lifts them into their own module first.
+- **The landing flicker** fires from the panel's clock tick where a change lands (radio's held
+  change, waiting manual changes, hook landings and arc rows, which ride the manual queue; and the
+  course change's own branch). Both routes of the engine's staged swap (its ack, or the tick
+  winning the race) converge there, so the ack itself is not the hook.
+- **The web's full mode now also has** `hold` (not taken, decision 8), the hook and dig toggles,
+  role words, the away name and `hook out` / `hook back` flashes: the desktop already has the last
+  four.
 
 ## 1. The view
 
@@ -120,14 +167,15 @@ Each row is a block of two lines. This replaces today's 15/16-track grid
        immediate;
      - **👍.** This is like (`likeSlot`). It now shows only the star, as described below;
      - **👎.** This is change soon (`onToggleReplaceSoon`);
-     - **the reserved slot.** It is an empty, zero-width flex item with
-       `data-slot="radio-role"`, where the anointed-stems spec's hook/dig buttons go.
+     - **hook, dig** (`RadioRoleButtons`, in a `data-slot="radio-role"` wrapper): the anointed
+       stems' toggles, which landed after this spec was written (2026-10-04 update).
    - **Desktop extras, pushed right (`margin-left: auto`), in this order:**
      - **any stem** (`Shuffle`, `onRerollRandom`);
      - **nearby jam** (`Compass`, popover unchanged);
      - **duplicate** (`Copy`);
      - **the kinds label with its match meter** (the 110px block from track 7: click for
-       `DiscoverKindPicker`, reclassify, match meter, `no match`);
+       `DiscoverKindPicker`, reclassify, match meter, `no match`), laid out on one line (label,
+       then meter) so the button line stays 20px tall;
      - **lock**;
      - **remove**, last and furthest from the gestures, because it is the destructive one.
    - Every button keeps its current size (18×18), tooltip, aria-label, disabled/dimmed/pulsing rule
@@ -143,11 +191,14 @@ Each row is a block of two lines. This replaces today's 15/16-track grid
      It is only as wide as its words, `padding: 1px 3px`, Silkscreen 8px, `line-height: 1`, with
      no radius:
      - **label plate, top-left (`top: 2px; left: 4px`)**:
-       - the text is `[label, age].join(' · ')`, e.g. `drums · heavy · 1 lap`, in `--ra-text`;
-       - it is one line, cut with an ellipsis at `max-width: calc(100% - 56px)`, so it stops
-         short of the fold plate;
-       - the anointed-stems spec's later wording (`hook · back in 16 bars`) arrives through the
-         same `label`/`age` fields and needs nothing here;
+       - the label then the tail, e.g. `drums · heavy` + ` · 1 lap · hook · back in 16 bars`, in
+         `--ra-text`;
+       - it is one line at `max-width: calc(100% - 56px)`, so it stops short of the fold plate;
+         the label is cut with an ellipsis and the tail (age and role words) is kept whole, as
+         the web does since 22de927;
+     - **away hook's name, bottom-left**, sharing one bar with the cue plate: the hooked stem's
+       name in `--ra-text-2` on a plate, inside a transparent hit box (`data-hook-away`, tap:
+       bring it back). The only plate with `pointer-events: auto`; it shrinks before the cue does;
      - **cue plate, bottom-right (`bottom: 2px; right: 4px; gap: 6px`)**:
        - it holds the flash word in `--ra-text`, at `radioFlashOpacity`, and `next · <arrival>` in
          `--ra-text-2`;
@@ -157,13 +208,15 @@ Each row is a block of two lines. This replaces today's 15/16-track grid
          line, 3×3 `--ra-text` dot);
        - the dot keeps `data-fold-dot={slot.id}`, so the sweep layout effect that positions it
          (`querySelectorAll('[data-fold-dot]')`) works unchanged;
-       - the plate is hidden on a row playing straight, and fold's grid track 16 goes away.
+       - the plate is hidden on a row playing straight, and fold's grid track (18 since the
+         role tracks came before it) goes away, with the role tracks 16-17.
 3. **Row frame:**
    - `padding: 4px 6px; margin-bottom: 4px`;
    - the approach breath (armed/held) is today's `color-mix` on `--discover-breath`, unchanged,
      and it now covers the whole two-line block, as the web's `.row[data-approach]` does;
-   - **Holding** (`radioFlag === 'hook'`) is drawn as the web draws it: a 2px bar at the row's left
-     edge (`top: 6px; bottom: 6px`, `color-mix(in srgb, var(--ra-text) 45%, transparent)`);
+   - **Holding** (a hook in on the row: `hookIn`, since the flag was retired) is drawn as the web
+     draws it: a 2px bar at the row's left edge (`top: 6px; bottom: 6px`,
+     `color-mix(in srgb, var(--ra-text) 45%, transparent)`);
    - 👍 drops its inverted holding fill and shows only the star (`--ra-recording-live` border and
      fill, `weight="fill"`), so the button says "liked" and the bar says "holding";
    - `aria-description="holding longer"` stays on 👍.
@@ -200,9 +253,11 @@ Controls use sssketch's widgets, and each control keeps its current widget and c
 - **Chips stay chips.** These use the radio menu's chip: 1px `--ra-border`, `--ra-text-2`. When
   on, a chip has a `--ra-text` border and ink on `--ra-bg-row-active`.
 
-A pointer drag on any strip slider or dial gives up focus on release, as the web's `range()` does.
+A pointer drag on any strip slider gives up focus on release, as the web's `range()` does.
 That way `t` (turn) works straight after a drag, since today's handler ignores keys while an
-`INPUT` has focus. Keyboard focus reached by Tab keeps focus.
+`INPUT` has focus. Keyboard focus reached by Tab keeps focus. (Dials need nothing: `Dial` is a
+`div role="slider"`, which the `t` handler does not skip.) Strip dials that cannot act take a new
+`disabled` prop on `Dial`: `--ra-text-4`, inert, no wheel, no keys.
 
 #### play
 
@@ -241,6 +296,7 @@ menu's comment saying it has "no row yet" is stale and goes with the menu.
 | turnarounds | radio menu chips (how often) | same |
 | moves | radio menu family chips, only while turnarounds is not `off` | same rule |
 | depth | radio menu chips, same condition | same rule |
+| builds | radio menu chips `sized` / `off` (`sizedBuilds`; added 2026-10-03 with the anointed stems, missing from this spec's first draft) | same chips, always shown |
 | turn and move chips | header row 2: `turn` / `turning` / `nothing to turn` and the chips (held: inverted; can't sound: `--ra-text-4`, tooltip `not now`) | same states, same look; the turn button keeps its inverted fill while a turn waits |
 
 #### fold
@@ -295,7 +351,11 @@ The paragraph at the foot of the running menu goes. Each of its sentences become
 - `loop end`, `phrase`, `transitions`, `density`, `turnarounds` and `fold` each get their own
   sentence.
 
-The words are kept as they are, cut at the sentence boundaries.
+The words are kept as they are, cut at the sentence boundaries, with two exceptions:
+`loop end`'s sentence drops its leading `below that,` (its `that` was the pace sentence before
+it), and `turnarounds` takes its sentence in place of today's `end of phrase`, which says the same
+thing. The new `turnover` chips get their own tooltip (`which row changes next: even, the one that
+has gone longest; random, any`).
 
 ### 1.4 Starting radio
 
@@ -338,13 +398,15 @@ event: the web uses its playhead colour for it for that reason.
 | row readout: one line across the top, `--ra-text-3`, 8px, no plate | `.info` plate top-left (ink), `.cue` plate bottom-right | label plate top-left `--ra-text`; cue plate bottom-right |
 | gesture flashes (transition words, turnaround moves, `gap`, `throw`) in the row's top-right run | `.flash` in `.cue`, opacity over its bar | in the cue plate, `radioFlashOpacity` as now |
 | `next · <arrival>` in the row's top-right run | `.next-note` in `.cue` | in the cue plate, `--ra-text-2` |
-| fold readout, grid track 16, outside the waveform | `.fold` plate over the waveform's top-right | fold plate on the waveform; track 16 goes |
+| fold readout, grid track 18, outside the waveform | `.fold` plate over the waveform's top-right | fold plate on the waveform; tracks 16-18 go |
 | approach breath, armed/held, on the row background | `.row[data-approach]`, same mix | unchanged, now the whole two-line block |
 | holding: 👍 inverted fill | `.row.holding::before`, 2px bar at the left edge | the bar; 👍 shows only the star |
 | 👎 filled while set | 👎 filled while set | unchanged |
 | skip pulsing while its roll is in flight (`discover-slot-pulse`) | `.pending`, slow pulse | unchanged (same idea) |
 | none | the strip's `skip` flickers in the mark colour when a change lands | **new**: the strip's `skip` flickers (`--ra-playhead`, 600ms, the web's `full-flicker`) once per landing moment |
 | `no fave fits`: console only (`pickForSlot`) | row flash `no fave fits` (`NO_FAVE_FITS`, `onFavesFallback`) | **new**: the same row flash on the desktop |
+| `no near fits` (dig): console only (`pickForSlot`) | row flash `no near fits` (`NO_NEAR_FITS`, `onNearFallback`, 021f95c) | **new**: the same row flash on the desktop |
+| `hook out` / `hook back`, `dig` flashes; role words in the age; away hook's name | the same (ell.ing/radio 00af232, 22de927) | unchanged words; the away name moves to the bottom bar |
 | turn button `turning` / `nothing to turn` (2s) plus held chip and `not now` chips | same words and states | unchanged, in the shape group |
 | radio button lit plus 2px interval-progress line | (none; play/stop is the radio) | unchanged, top line left |
 | manual change waiting: rerolls dimmed | (none) | desktop-only, unchanged |
@@ -354,40 +416,50 @@ event: the web uses its playhead colour for it for that reason.
 
 **The landing flicker:**
 
-- **When.** It fires when radio's change (or a course change, a density-arc add, or a manual
-  change waiting for the top) is heard. For a staged change, that is the engine's scheduled-swap
-  ack. For a change committed without a stage, it is `commitSlotPick`.
+- **When.** It fires when radio's change (or a course change, a density-arc add, a hook's exit or
+  return, or a manual change waiting for the top) is heard: in the panel's clock tick, in the
+  branch that lands them at the wrap or a held bar, and in the course change's own branch. A
+  staged change's engine swap (ack or tick, whichever wins) and an unstaged commit both pass
+  there. (The first draft named the ack and `commitSlotPick`; the ack races the tick, and
+  `commitSlotPick` also runs for manual Cmd changes, so neither is the right hook.)
 - **Once.** Several rows landing on one wrap flicker once, coalesced within 50ms as the web's
   `onLanding` does.
 - **Never from a manual Cmd change.** It answers the question "did radio's change just happen",
   and a manual Cmd change is not one.
 - **Reduced motion.** With `prefers-reduced-motion`, there is no animation.
 
-**`no fave fits`.**
+**`no fave fits` and `no near fits`.**
 
-- **What.** The fallback branch in `pickForSlot`, which today logs the message, also pushes a
-  `RadioFlash` for that row onto `radioFlashLogRef`. The flash has the word `NO_FAVE_FITS` and the
-  key `fave@<pick token>`, and it is shown by the readout's existing flash path.
+- **What.** The fallback branches in `pickForSlot`, which today log the messages, also push a
+  `RadioFlash` for that row onto `radioFlashLogRef`. The flashes have the words `NO_FAVE_FITS` and
+  `NO_NEAR_FITS` and the keys `fave@<row>@<roll generation>` and `near@<row>@<roll generation>`
+  (the web keys its by the arm token), and they are shown by the readout's existing flash path.
 - **Who sees it.** It is radio-only: a pick with radio off has no readout to show it in.
 - **What it changes.** It is the only notification in this spec that adds a write to readout
   state. It changes nothing about the pick.
 
 ## 3. Component structure
 
-`DiscoverPanel.tsx` is 12,192 lines. The radio view must not add to it, so the rendering moves out
-and the state stays where it is: refs, effects and callbacks remain in `DiscoverPanel`, which passes
-values and handlers down.
+`DiscoverPanel.tsx` is 14,211 lines (12,192 when this spec was first written). The radio view must
+not add to it, so the rendering moves out and the state stays where it is: refs, effects and
+callbacks remain in `DiscoverPanel`, which passes values and handlers down.
 
-- **`components/discover/DiscoverSlotRow.tsx`.** This is today's `DiscoverSlotRow`, with its
-  helpers (`RowIconButton`, `LockGlyph`, the grid constants), moved verbatim first as its own
-  commit with no change. It then gains `layout: 'grid' | 'radio'`. `grid` is today's row. `radio`
+All new files sit in `src/renderer/src/components/` itself, which has no subfolders (the first
+draft put them in `components/discover/` and `components/discover/radio/`).
+
+- **`components/discoverCandidateStem.ts`.** `ResolvedCandidateStem`, `resolveCandidateStem`,
+  `peekResolvedCandidateStem` and their two caches, moved out of `DiscoverPanel.tsx` verbatim,
+  because both the panel and the row use them.
+- **`components/DiscoverSlotRow.tsx`.** This is today's `DiscoverSlotRow`, with its
+  helpers (`RowIconButton`, `LockGlyph`, `RadioRoleButtons`, the grid constants), moved verbatim
+  first as its own commit with no change. It then gains `layout: 'grid' | 'radio'`. `grid` is today's row. `radio`
   is section 1.2, built from the same child elements, so every button keeps one implementation.
-- **`components/discover/radio/RadioRowPlates.tsx`.** It draws the label, cue and fold plates.
+- **`components/RadioRowPlates.tsx`.** It draws the label, cue, away-name and fold plates.
   Props are the row's `RadioReadoutRow`, the fold label and `slot.id` (for `data-fold-dot`). It is
   used only by the radio layout.
-- **`components/discover/radio/RadioTopLine.tsx`.** It draws play/stop, `radio` with its progress
+- **`components/RadioTopLine.tsx`.** It draws play/stop, `radio` with its progress
   line, status, ruler, fold status, and undo/redo. Props are values and callbacks only.
-- **`components/discover/radio/RadioStrip.tsx`.** It draws the six groups from `radioStripModel`
+- **`components/RadioStrip.tsx`.** It draws the six groups from `radioStripModel`
   (section 4). Props come in bundles, so the call site stays readable:
   - `settings` and `onRadioSettingsChange`;
   - `play`: tempo, `seedTempo`, `skip`, `newBed`, `skipFlickerKey`;
@@ -395,11 +467,11 @@ values and handlers down.
   - `turn`: `shown`, `can`, `flash`, `onTurn`;
   - `sound`: master values and setters, project sound and `onSoundPatch`, `sounding`;
   - `mix`: the five actions and their labels.
-- **`components/discover/radio/RadioControls.tsx`.** It holds `PaceSlider`, `FoldSlider` and
+- **`components/RadioControls.tsx`.** It holds `PaceSlider`, `FoldSlider` and
   `FoldSeedInput` (moved out of `DiscoverRadioMenu.tsx`), plus the strip's `Chip`, `WordSwitch` and
   `StripDial`. `StripDial` is a `Dial` at size 22 with the caption beside it, which blurs after a
   pointer gesture.
-- **`components/discover/radio/RadioStartPrompt.tsx`.** It is section 1.4.
+- **`components/RadioStartPrompt.tsx`.** It is section 1.4.
 
 **In `DiscoverPanel`'s return**, the header rows and master strip become
 `radioOn ? <RadioTopLine/> : <today's two rows/>` and `radioOn ? null : <master strip/>`. The rows
@@ -418,10 +490,13 @@ React components are untested by convention. The logic they draw goes in pure, t
 the web's `fullModel.ts` does and as `@shared/soundPanelModel` already does for the sound panel.
 
 - **`src/shared/radioStripModel.ts`.** It maps
-  `radioStripModel(settings, { foldOn, artistMode, hasUsername, sound })` to the groups, in order.
-  Each group carries its controls with `id`, `label`, `kind` (`chips | slider | dial | switch |
-  button | text`), `options`, `value`, `visible`, `disabled`, `tooltip` and the `RadioSettings`
-  patch a choice makes. The visibility rules live here:
+  `radioStripModel(settings, { artistMode, hasUsername, sound, sounding })` to the groups, in
+  order. Each group carries its controls with `id`, `label`, `kind` (`chips | slider | switch |
+  seed | sound | panel`: `sound` carries the sound panel's own slider control, `panel` is drawn by
+  the panel from its own state), `sets` (the `RadioSettings` keys it writes), `disabled`,
+  `dimmed`, `tooltip`, and the patch each choice makes. A control that does not show is not in its
+  group. `soundDialPosition` / `soundDialValue` map a 0..100 dial onto a sound slider's range and
+  step. The visibility rules live here:
   - channels shows only with density `off`;
   - moves and depth show only while turnarounds is not `off`;
   - bend, mismatch, seed and `new` show only with fold on.
@@ -438,10 +513,11 @@ the web's `fullModel.ts` does and as `@shared/soundPanelModel` already does for 
   - The saturation, pump and echo dials' greyed state equals `soundPanelModel`'s for the same
     settings, and their patches equal the panel's.
 - **`src/shared/radioRowPlates.ts`.** It maps `radioRowPlates(readoutRow, foldLabel)` to
-  `{ info: string | null; cue: { flash, next } | null; fold: string | null }`. This is the web's
-  `full.ts` render logic (the `info` join, the cue hidden when empty), lifted so both runtimes can
-  share it. Scope A does not change the web, so the web keeps its own copy for now. Tests: the
-  join, the empty cases, a folded row, and a flash with no `next`.
+  `{ info: { label, tail } | null; cue: { flash, next } | null; fold: string | null }`. This is the
+  web's `full.ts` render logic (the label and its whole tail, the cue hidden when empty), lifted so
+  both runtimes can share it. Scope A does not change the web, so the web keeps its own copy for
+  now. Tests: the split, role words kept in the tail, the empty cases, a folded row, and a flash
+  with no `next`.
 - **`src/shared/radioLanding.ts`.** It holds `shouldFlickerLanding(prevAt, at, source)`: the
   50ms coalescing, and manual-Cmd changes excluded. Tested.
 - **Checks.** `npm run typecheck`, `npm run lint` and `npm test` must pass.
@@ -503,29 +579,26 @@ view's width less 10px of padding on each side. These figures are estimated from
 - **Project sound from Discover.** Saturation, pump and echo edit the open project
   (`SET_SOUND_SETTINGS`). A change is undoable with Cmd+Z in the arrangement, marks the project
   unsaved, and reloads the engine project once per release, exactly as the sound panel does. The
-  dials' tooltip says `project sound`. See open question 3.
+  dials' tooltip says `project sound`. Decided 3 (end of this spec): this is what Elling wants.
 - **Two faves widgets become one.** In the radio view only the strip's dial sets faves. The add
   row's dial returns with radio off. Both use `previewFaves`/`commitFaves`, so there is no
   divergence.
-- **The anointed-stems spec.** It is being written concurrently and will add row buttons and
-  label wording. This spec reserves the place (`data-slot="radio-role"`) and the label/age path,
-  and must not be merged in a way that leaves that spec's buttons nowhere to go.
-- **File size.** Moving `DiscoverSlotRow` out (about 1,500 lines) is a pure move. It goes first,
-  alone, and typecheck and lint must pass before anything else changes, because explicit
+- **The anointed-stems spec.** It has landed (2026-10-04 update): its hook and dig buttons
+  (`RadioRoleButtons`) move from grid tracks 16-17 into the button line, its role words ride the
+  label plate's tail, and its away hook's name moves to the bottom bar. Nothing of it may be
+  dropped in the move.
+- **File size.** Moving `DiscoverSlotRow` out (about 1,900 lines with its helpers, plus the
+  candidate-stem resolver) is a pure move. It goes first, alone, and typecheck and lint must pass before anything else changes, because explicit
   `gridColumn` numbers have caused off-by-one bugs here before.
 - **Sticky strip at the minimum height.** Five or six strip lines plus the top line leave about
   three rows visible at 614px. That is acceptable: the rows scroll. If Elling finds it cramped,
   the fix is narrower captions or chip rows, not hiding settings.
 
-## Open questions for Elling
+## Decided (Elling, 2026-10-04): the three open questions, answered with this spec's defaults
 
 1. **Starting radio.** Keep the start prompt (pace, density, channels, `start`), as section 1.4
-   proposes? Or, now that the pace slider is in the strip, should `radio` start straight away at
-   the saved pace?
-2. **`hold`.** The web's play group has `hold`, which freezes the whole mix. The desktop has no
-   such control: stopping radio is the nearest thing, and it also resets the arc and phrase. This
-   spec leaves `hold` out, because adding it would be new behaviour. Do you want a real mix hold as
-   its own small spec?
-3. **Saturation, pump and echo.** In the strip, these change the open project's sound, the same
-   settings the sound panel edits (undoable, saved with the project). Is that right? Or should
-   radio have its own values that leave the project alone?
+   proposes.
+2. **`hold`.** No whole-mix hold now. The strip has no `hold`; a real mix hold would be its own
+   small spec.
+3. **Saturation, pump and echo.** The strip's dials change the open project's sound, the same
+   settings the sound panel edits: undoable, saved with the project, marking it unsaved.
