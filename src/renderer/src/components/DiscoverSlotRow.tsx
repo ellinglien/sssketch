@@ -121,7 +121,8 @@ function RowIconButton({
   buttonRef,
   ariaLabel
 }: {
-  gridColumn: number
+  /** The row grid's track; omitted, the button takes no placement (radio view plan Task 5). */
+  gridColumn?: number
   tooltip: string
   /** A stable accessible name for a toggle whose tooltip flips (default: the tooltip). */
   ariaLabel?: string
@@ -197,18 +198,21 @@ function RadioRoleButtons({
   locked,
   onToggleHook,
   dug,
-  onToggleDig
+  onToggleDig,
+  columns
 }: {
   hookSet: boolean
   locked: boolean
   onToggleHook: () => void
   dug: boolean
   onToggleDig: () => void
+  /** The two buttons' grid tracks (the grid layout passes [16, 17]); omitted, no placement. */
+  columns?: [number, number]
 }): React.JSX.Element {
   return (
     <>
       <RowIconButton
-        gridColumn={16}
+        gridColumn={columns?.[0]}
         tooltip={hookSet ? RADIO_HOOK_RELEASE_TOOLTIP : RADIO_HOOK_TOOLTIP}
         ariaLabel={RADIO_HOOK_WORD}
         onClick={onToggleHook}
@@ -219,7 +223,7 @@ function RadioRoleButtons({
         <Repeat size={12} weight={hookSet ? 'fill' : 'regular'} />
       </RowIconButton>
       <RowIconButton
-        gridColumn={17}
+        gridColumn={columns?.[1]}
         tooltip={dug ? RADIO_DIG_STOP_TOOLTIP : RADIO_DIG_TOOLTIP}
         ariaLabel={RADIO_DIG_WORD}
         onClick={onToggleDig}
@@ -861,6 +865,810 @@ export function DiscoverSlotRow({
   // The one row radio holds longer, drawn on its 👍 (see that button).
   const holding = radioOn && hookIn
 
+  // Where each part sits in the row grid (radio view plan Task 5).
+  const at = (n: number): { gridColumn?: number } => ({ gridColumn: n })
+
+  // Direct request, 2026-09-15: "an X for remove" -- icon-only, same
+  // as every other row button now.
+  const removeButton = (
+    <button
+      onClick={onRemove}
+      data-tooltip="remove"
+      aria-label="remove"
+      style={{
+        ...at(1),
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 18,
+        height: 18,
+        padding: 0,
+        fontFamily: 'inherit',
+        fontSize: 10,
+        background: 'transparent',
+        border: '1px solid var(--ra-border)',
+        color: 'var(--ra-text-2)',
+        cursor: 'pointer'
+      }}
+    >
+      X
+    </button>
+  )
+  const lockButton = (
+    <button
+      onClick={onToggleLock}
+      data-tooltip={slot.locked ? 'unlock' : 'lock'}
+      aria-label={slot.locked ? 'unlock' : 'lock'}
+      style={{
+        ...at(2),
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 18,
+        height: 18,
+        padding: 0,
+        background: slot.locked ? 'var(--ra-stretch-on-bg)' : 'transparent',
+        border: `1px solid ${slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+        color: slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+        cursor: 'pointer'
+      }}
+    >
+      <LockGlyph locked={slot.locked} />
+    </button>
+  )
+  // A single guard around a fragment is safe here (rather than one
+  // guard per button, as this used to be split) because each button
+  // below carries its own explicit gridColumn -- omitting all three
+  // leaves columns 3/4 (and 👍's 14) empty instead of shifting anything after
+  // them. See hasStemToActOn's own doc comment above for why it's
+  // "has a candidate OR resolvedStem," not resolvedStem alone.
+  const muteSolo = hasStemToActOn && (
+    <>
+      {/* Direct request, 2026-09-15: "can we add a mute for each
+            channel" -- toggleSlotPreview already existed (the waveform
+            itself was already clickable to the same effect), but wasn't
+            discoverable as a mute control -- only a hover tooltip
+            explained it. Same handler as the waveform click, so either
+            one keeps the other in sync; only shown once there's a real
+            stem to mute (matching the waveform toggle's own guard). */}
+      <button
+        onClick={onTogglePreview}
+        data-tooltip={showsAsMuted ? 'unmute' : 'mute'}
+        aria-label={showsAsMuted ? 'unmute' : 'mute'}
+        style={{
+          ...at(3),
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 18,
+          height: 18,
+          padding: 0,
+          fontFamily: 'inherit',
+          fontSize: 10,
+          // Direct request, 2026-09-15: "mute should look exactly
+          // like mute on the arrangement view" -- matches
+          // ChannelRow.tsx's own muteButtonStyle exactly
+          // (background/border/color-by-state, which reads as
+          // "inverted" at a glance: a hard filled/colored look
+          // when OFF/muted, a plain/transparent look when
+          // ON/playing), rather than this row's own earlier ad hoc
+          // treatment (transparent-when-off instead of the real
+          // `--ra-bg-row-active` fill every other unmuted mute
+          // button in this app uses). Driven by showsAsMuted (see
+          // its own doc comment above), not bare `previewing` --
+          // still-resolving no longer renders as falsely muted.
+          background: showsAsMuted ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${showsAsMuted ? 'var(--ra-mute-on)' : 'var(--ra-border)'}`,
+          color: showsAsMuted ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
+          cursor: 'pointer'
+        }}
+      >
+        {/* Lowercase "m" -- matches ChannelRow.tsx's own mute
+              button glyph exactly (its solo/record siblings are also
+              lowercase single letters), rather than this row's own
+              earlier uppercase "M". */}
+        m
+      </button>
+      {/* Direct request, 2026-09-15 (Upcycle-inspired): a solo
+            button next to mute, same M/S pairing Upcycle's own cards use
+            and ChannelRow.tsx already has on the real arrangement.
+            Matches ChannelRow.tsx's own soloButtonStyle exactly (a soft
+            tinted background with the accent color on border/text, not
+            a hard fill like mute's). */}
+      <button
+        onClick={onToggleSolo}
+        data-tooltip={soloed ? 'unsolo' : 'solo'}
+        aria-label={soloed ? 'unsolo' : 'solo'}
+        style={{
+          ...at(4),
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 18,
+          height: 18,
+          padding: 0,
+          fontFamily: 'inherit',
+          fontSize: 10,
+          background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+          cursor: 'pointer'
+        }}
+      >
+        s
+      </button>
+    </>
+  )
+  // Direct report, 2026-09-17: "tooltip over the waveforms on
+  // discover prevents user from dragging the volume, so remove it" --
+  // this wrapper used to carry a data-tooltip whose own text included
+  // a live `drag for volume (N%)` readout, updating on every tick of
+  // a gain drag -- the tooltip box re-rendering/resizing itself right
+  // above the cursor mid-drag read as actively interfering with the
+  // drag gesture, not just cosmetically noisy. Removed outright rather
+  // than trimmed -- the inner button's own aria-label (below) still
+  // carries a plain accessible name (drag to adjust volume), just
+  // without the drag hint or the live percentage.
+  const waveformCell = (
+    <div
+      style={{
+        ...at(DISCOVER_WAVEFORM_COLUMN),
+        minWidth: DISCOVER_WAVEFORM_MIN_WIDTH,
+        position: 'relative'
+      }}
+    >
+      {resolvedStem ? (
+        // Direct request, 2026-09-20: "clicking on wave shouldn't mute
+        // it, leave that to the M button" -- clicking the waveform used
+        // to double as mute/unmute (onTogglePreview), same click-the-
+        // thumbnail-to-hear-it convention Shelf.tsx's own tiles and
+        // ClusterStemsBrowser.tsx's own waveform rows use elsewhere in
+        // this app -- but that made it too easy to mute a slot by
+        // accident while reaching for the gain-drag gesture on the same
+        // element. The dedicated "m" button (below) is now the ONLY way
+        // to toggle this slot in/out of the shared mix; the waveform
+        // itself only responds to a vertical drag (handleGainDragStart).
+        // Direct report, 2026-09-15: the previewing-outline (a near-white
+        // `--ra-stretch-on` box around the whole waveform) read as an
+        // unwanted white halo -- removed; the dedicated mute button below
+        // already carries this row's own on/off state, and the playhead
+        // line (drawn over every row by DiscoverPanel) shows real
+        // playback directly.
+        <button
+          onMouseDown={handleGainDragStart}
+          aria-label="drag to adjust volume"
+          // Direct request, 2026-09-20: "date could be a tooltip on
+          // hover.. in discovery and in arranger or sketch" --
+          // resolvedStem.creationTime is the OWNING RIFF's own real
+          // creation date (see ResolvedCandidateStem's own doc
+          // comment), undefined only for content resolved via the
+          // live Endlesss API path (not Discover's own, which always
+          // reads the local, already-synced library), in which case
+          // this simply omits the tooltip rather than showing a wrong
+          // date. Same year/month/day format LibraryBrowser.tsx's own
+          // date-grouped riff listing already uses.
+          data-tooltip={
+            resolvedStem.creationTime
+              ? new Date(resolvedStem.creationTime * 1000).toLocaleDateString(undefined, {
+                  year: 'numeric',
+                  month: 'short',
+                  day: 'numeric'
+                })
+              : undefined
+          }
+          style={{
+            position: 'relative',
+            width: '100%',
+            height: DISCOVER_WAVEFORM_HEIGHT,
+            padding: 0,
+            background: 'transparent',
+            border: 'none',
+            overflow: 'hidden',
+            cursor: 'ns-resize',
+            // Same 2026-09-21 report as `working` above -- a slot that
+            // already has a stem keeps showing it while a reroll
+            // searches, so the waveform itself breathes until the new
+            // pick lands (then it swaps to the dotted placeholder while
+            // that pick downloads/decodes).
+            animation: rerolling ? 'discover-slot-working 1100ms ease-in-out infinite' : undefined
+          }}
+        >
+          {/* Tiled, not a single stretched-to-fit Waveform -- direct
+          report: every slot used to render at the same width regardless
+          of its real bar length, making a 1-bar drum hit look the same
+          size as an 8-bar bassline. Every row shows the SAME fixed
+          window of bars (32, or the loop's length when a longer stem is
+          in play -- discoverWindowLayout, spec 2026-09-29-discover-
+          fixed-waveform-window-design.md), so a bar is the same width in
+          every row and no row rescales when a longer or shorter stem
+          arrives elsewhere. The stem repeats from bar 0 to fill the
+          window, exactly how it will actually sound once looped, the
+          last tile cut off at the window edge (this button's own
+          `overflow: hidden` clips it). Restart lines mark each repeat,
+          loop-top lines each wrap of the whole loop (the shared
+          LoopLines, arrange's own restart line). Everything is a
+          PERCENT of the window, which keeps this row's own flex-fluid
+          width working without a real DOM measurement.
+          Direct request: gain is shown/adjusted directly on the
+          waveform (StemWaveformRow.tsx's own "envelope" volume
+          treatment), not a separate slider -- a dim gray layer always
+          renders full-height underneath; the real-color layer on top is
+          clipped from the top down by `gainClipPct`, so a lower gain
+          visibly cuts more of the bright waveform away, revealing gray
+          underneath (same "gray means quieter" language the real
+          envelope uses), with a thin line marking the exact cutoff. */}
+          {(() => {
+            // The tile cap (DISCOVER_MAX_TILES) lives in the layout
+            // module now: a real crash, found live, came from an
+            // unbounded tile count, each tile once mounting a real <Waveform>
+            // (dozens of SVG rects), twice. Tiles are CSS mask repeats now,
+            // but the cap still sets the minimum repeat width a sub-bar
+            // one-shot is drawn at.
+            const layout = discoverWindowLayout({
+              stemBars: resolvedStem.barLength,
+              loopBars: maxBarLength
+            })
+            const gainClipPct = (1 - slot.gain) * 100
+            return (
+              <>
+                {/* ONE element per layer, not one <Waveform> per tile
+                (Elling, 2026-09-30: "i think it's slowing the app down
+                having so many of them on there"). RepeatedWaveform
+                paints the stem once as a CSS mask and repeats it every
+                tile width, so a 1-bar stem is 2 divs instead of 64 SVGs
+                of ~128 rects each. The tile maths (and its minimum
+                width) still come from discoverWindowLayout. The old
+                per-tile blink (2026-09-17, keys shifting with the shared
+                loop length) cannot recur: there are no per-tile nodes
+                left to remount, and the mask is peeked synchronously
+                from the warm peak cache. */}
+                <RepeatedWaveform
+                  path={resolvedStem.path}
+                  color="var(--ra-text-4)"
+                  tileWidthPct={layout.tiles[0]?.widthPct ?? 100}
+                />
+                {/* Full-color layer on top -- suppressed entirely while
+                muted (not currently in the preview mix), same "mute
+                always wins" convention StemWaveformRow.tsx's own
+                real-arrangement waveform uses (its own `{!muted && ...}`
+                guard just above). Direct report, 2026-09-15: "when
+                muted, a waveform should be grey" -- muted rows here
+                used to still show the full-color layer (just clipped by
+                gain), reading as "playing, just quiet" rather than
+                "off," unlike every other muted waveform in this app. */}
+                {previewing && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      clipPath: `inset(${gainClipPct}% 0 0 0)`
+                    }}
+                  >
+                    <RepeatedWaveform
+                      path={resolvedStem.path}
+                      color={stemColorVar(resolvedStem)}
+                      tileWidthPct={layout.tiles[0]?.widthPct ?? 100}
+                    />
+                  </div>
+                )}
+                {previewing && (
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: 0,
+                      right: 0,
+                      top: `${gainClipPct}%`,
+                      height: 1,
+                      background: 'var(--ra-text)',
+                      pointerEvents: 'none'
+                    }}
+                  />
+                )}
+                <LoopLines lefts={layout.restartLinePcts.map((p) => `${p}%`)} kind="restart" />
+                <LoopLines lefts={layout.loopTopLinePcts.map((p) => `${p}%`)} kind="loopTop" />
+              </>
+            )
+          })()}
+        </button>
+      ) : (
+        <div
+          style={{
+            width: '100%',
+            height: 40,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            overflow: 'hidden',
+            border: `1px dashed ${
+              working
+                ? 'var(--ra-stretch-on)'
+                : resolveFailed || noMatchFound
+                  ? 'var(--ra-mute-on)'
+                  : 'var(--ra-border)'
+            }`,
+            // Static (no animation) once settled either way (failed/no-
+            // match, or truly empty) -- discover-slot-pulse is still
+            // used for both "this stopped" cases, not just resolveFailed
+            // -- a rerolled slot that found nothing is equally worth
+            // flagging, not a silent dead end.
+            animation:
+              resolveFailed || noMatchFound
+                ? 'discover-slot-pulse 900ms ease-in-out infinite'
+                : undefined
+          }}
+        >
+          {/* Direct report, 2026-09-15 (v3): the previous scrolling-
+            waveform reel read as too busy -- replaced with the shared
+            LoadingLoader component (the same "still working" indicator
+            BeatPicker.tsx/ClusterStemsBrowser.tsx already use), small
+            and subtle, for brand consistency instead of a custom
+            animation. */}
+          {/* Direct report, 2026-09-17: bumped this up to size={120} once
+              (read as "a jarring 2px sliver against the 40px-tall
+              waveform it replaces"), then reverted -- "i was fine with
+              it being the dotted line... add 1px to the height," then
+              "i think it needs 1 more px to be stable." size=16 (the
+              original) gave a 2px-tall, 1px-thick bar (LoadingLoader's
+              own height = round(size*9/60) formula); size=24 keeps the
+              same 1px-thick dotted-line look at 4px tall -- +2px total
+              from the original, arrived at over two rounds of "+1px." */}
+          {working && <LoadingLoader size={24} />}
+          {/* Visible, not just a hover tooltip -- direct report,
+              2026-09-17: rerolling into a genuine no-match dead end
+              ("just tried to add a vocal... no indication what
+              happened, no failure message") needs to read as a real
+              outcome, not just silently stay in the same empty-looking
+              box the slot started in before it was ever touched. */}
+          {noMatchFound && (
+            <span style={{ fontSize: 9, color: 'var(--ra-mute-on)' }}>no match</span>
+          )}
+        </div>
+      )}
+      {/* THE RADIO READOUT on the row (spec 2026-10-03-radio-readout-design section 2): what
+          it was picked as and how long it has played, small and dim over the waveform's top
+          left; the gesture flash (in and out over a bar) and `next` at its top right. Never
+          in the way of the gain drag. Chrome: monochrome. */}
+      {radioReadout !== null && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            pointerEvents: 'none',
+            fontSize: 8,
+            lineHeight: '10px',
+            color: 'var(--ra-text-3)'
+          }}
+        >
+          {/* One line: the label gives way (ellipsized) to the flash and `next`, which keep
+              their own width, so the two never overlap. */}
+          <div
+            style={{
+              position: 'absolute',
+              top: 1,
+              left: 3,
+              right: 3,
+              display: 'flex',
+              gap: 6,
+              whiteSpace: 'nowrap'
+            }}
+          >
+            <span
+              style={{
+                flex: '1 1 auto',
+                minWidth: 0,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis'
+              }}
+            >
+              {[radioReadout.label, radioReadout.age].filter(Boolean).join(' · ')}
+            </span>
+            {hookAwayName !== null && (
+              <button
+                type="button"
+                data-hook-away
+                data-tooltip={RADIO_HOOK_BRING_BACK_TOOLTIP}
+                aria-label={RADIO_HOOK_BRING_BACK_TOOLTIP}
+                onClick={onBringHookBack}
+                style={{
+                  flex: '0 1 auto',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  whiteSpace: 'nowrap',
+                  padding: 0,
+                  margin: 0,
+                  border: 'none',
+                  borderRadius: 0,
+                  background: 'transparent',
+                  font: 'inherit',
+                  color: 'var(--ra-text-3)',
+                  pointerEvents: 'auto',
+                  cursor: 'pointer'
+                }}
+              >
+                {hookAwayName}
+              </button>
+            )}
+            <span style={{ flex: 'none', display: 'flex', gap: 6 }}>
+              {radioReadout.flash !== null && (
+                <span style={{ opacity: radioFlashOpacity(radioReadout.flash.t) }}>
+                  {radioReadout.flash.word}
+                </span>
+              )}
+              {radioReadout.nextLabel !== null && <span>{radioReadout.nextLabel}</span>}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+  // Kind label + match meter stacked in the 110px label column --
+  // see the meter's own comment on meterEntries above.
+  const kindsBlock = (
+    <div
+      style={{
+        ...at(7),
+        width: 110,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 3,
+        minWidth: 0
+      }}
+    >
+      <button
+        ref={kindButtonRef}
+        disabled={slot.locked}
+        onClick={(e) => {
+          if (kindMenu) {
+            closeKindMenu()
+            return
+          }
+          const rect = e.currentTarget.getBoundingClientRect()
+          setKindMenu({ x: rect.left, y: rect.bottom + 4 })
+        }}
+        aria-expanded={kindMenu !== null}
+        aria-label={`kinds: ${slotKindsLabel(slot.kinds)}`}
+        data-tooltip={slot.locked ? 'unlock first' : slotKindsLabel(slot.kinds)}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 3,
+          width: 110,
+          padding: 0,
+          fontFamily: 'inherit',
+          fontSize: 9,
+          textAlign: 'left',
+          background: 'transparent',
+          border: 'none',
+          color: kindMenu ? 'var(--ra-text)' : 'var(--ra-text-3)',
+          cursor: slot.locked ? 'default' : 'pointer'
+        }}
+      >
+        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+          {slotKindsLabel(slot.kinds)}
+        </span>
+        {!slot.locked && <span aria-hidden="true">▾</span>}
+      </button>
+      {meterEntries.length > 0 && (
+        <div
+          ref={meterRef}
+          aria-label="match"
+          style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            columnGap: 6,
+            rowGap: 2,
+            fontSize: 8,
+            lineHeight: '10px',
+            color: 'var(--ra-text-3)'
+          }}
+        >
+          {meterEntries.map((entry) =>
+            entry.type === 'mask' ? (
+              <span key={`mask-${entry.kind ?? 'reclassified'}`} style={{ whiteSpace: 'nowrap' }}>
+                {entry.label}:{' '}
+                <button
+                  onClick={(e) => {
+                    if (reclassifyMenu) {
+                      closeReclassifyMenu()
+                      return
+                    }
+                    const rect = e.currentTarget.getBoundingClientRect()
+                    setReclassifyMenu({
+                      x: rect.left,
+                      y: rect.bottom + 4,
+                      currentRole:
+                        entry.kind !== null
+                          ? discoverSlotKindToArrangeRole(entry.kind)
+                          : (slot.reclassified?.role ?? null)
+                    })
+                  }}
+                  aria-expanded={reclassifyMenu !== null}
+                  aria-label={entry.tooltip}
+                  data-tooltip={entry.tooltip}
+                  style={{
+                    padding: 0,
+                    fontFamily: 'inherit',
+                    fontSize: 'inherit',
+                    lineHeight: 'inherit',
+                    background: 'transparent',
+                    border: 'none',
+                    borderBottom: '1px dotted var(--ra-text-4)',
+                    color: reclassifyMenu ? 'var(--ra-text)' : 'var(--ra-text-2)',
+                    cursor: 'pointer'
+                  }}
+                >
+                  {entry.source}
+                </button>
+              </span>
+            ) : (
+              <span
+                key={`trait-${entry.kind}`}
+                data-tooltip={entry.tooltip}
+                aria-label={entry.tooltip}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 3,
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                {entry.label}
+                {/* CSS cells, not the ▮▯ glyphs: Silkscreen has neither,
+                  and a fallback-font glyph would break the pixel look.
+                  Grey chrome only -- no new colour. */}
+                <span aria-hidden="true" style={{ display: 'inline-flex', gap: 1 }}>
+                  {Array.from({ length: MATCH_METER_STEPS }, (_, i) => (
+                    <span
+                      key={i}
+                      style={{
+                        width: 3,
+                        height: 6,
+                        background: i < entry.filled ? 'var(--ra-text-2)' : 'var(--ra-text-4)'
+                      }}
+                    />
+                  ))}
+                </span>
+              </span>
+            )
+          )}
+        </div>
+      )}
+    </div>
+  )
+  // The four rerolls, as icons (2026-09-29). The decorative dice that
+  // used to sit here and spin while a roll was in flight is gone:
+  // the button that STARTED the roll pulses instead, and the others
+  // dim, which says the same thing about the right button.
+  const skipButton = (
+    <RowIconButton
+      gridColumn={at(10).gridColumn}
+      tooltip="skip"
+      onClick={(e) => {
+        setRerollAction('similar')
+        onReroll(e.metaKey)
+      }}
+      disabled={rerolling}
+      dimmed={manualWaiting}
+      pulsing={rerolling && rerollAction === 'similar'}
+    >
+      <SkipForward size={12} />
+    </RowIconButton>
+  )
+  const nearbyButton = nearbyAnchor !== null && (
+    <RowIconButton
+      gridColumn={at(11).gridColumn}
+      tooltip="nearby jam"
+      buttonRef={nearbyButtonRef}
+      onClick={(e) => {
+        if (nearbyMenu) {
+          closeNearbyMenu()
+          return
+        }
+        const rect = e.currentTarget.getBoundingClientRect()
+        setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
+      }}
+      state={nearbyMenu ? 'soft' : 'off'}
+      ariaExpanded={nearbyMenu !== null}
+      disabled={rerolling}
+      dimmed={manualWaiting}
+    >
+      <Compass size={12} />
+    </RowIconButton>
+  )
+  const anyStemButton = (
+    <RowIconButton
+      gridColumn={at(12).gridColumn}
+      tooltip="any stem"
+      onClick={(e) => {
+        setRerollAction('random')
+        onRerollRandom(e.metaKey)
+      }}
+      disabled={rerolling}
+      dimmed={manualWaiting}
+      pulsing={rerolling && rerollAction === 'random'}
+    >
+      <Shuffle size={12} />
+    </RowIconButton>
+  )
+  const duplicateButton = (
+    <RowIconButton
+      gridColumn={at(13).gridColumn}
+      tooltip="duplicate"
+      onClick={(e) => onDuplicate(e.metaKey)}
+    >
+      <Copy size={12} />
+    </RowIconButton>
+  )
+  // 👍 (2026-10-01, the web radio's full-mode row buttons):
+  // replaces both the star (direct request, 2026-09-16) and the
+  // separate "hold longer" hand. With 👎, the last two tracks of
+  // the row, side by side (Elling, 2026-10-01). It TOGGLES
+  // the star -- filled ThumbsUp and the star's own
+  // `--ra-recording-live` treatment while the stem is starred --
+  // and, when it stars, turns hold longer on if it is off
+  // (likeRadioSlot). While this row holds, the button takes the
+  // padlock-style inverted fill the hand used to, so the one
+  // holding row is still visible. Only shown once there's a
+  // real stem to like, same guard as mute/solo -- its track stays
+  // reserved either way, so nothing shifts.
+  const likeButton = hasStemToActOn && (
+    <button
+      onClick={onLike}
+      // Listen-only with radio off: no star to give and no hold to
+      // take, so 👍 does nothing -- dimmed, like any dead control.
+      disabled={listenOnlyStars && !radioOn}
+      data-tooltip={
+        listenOnlyStars && !radioOn
+          ? 'listening only, nothing is starred'
+          : listenOnlyStars
+            ? holding
+              ? 'holding · listening only, nothing is starred'
+              : 'hold · listening only, nothing is starred'
+            : holding
+              ? favourited
+                ? 'unlike · holding'
+                : 'like · holding'
+              : favourited
+                ? 'unlike'
+                : 'like'
+      }
+      aria-label={listenOnlyStars ? 'hold, listening only' : favourited ? 'unlike' : 'like'}
+      aria-pressed={favourited}
+      aria-description={holding ? 'holding longer' : undefined}
+      style={{
+        ...at(14),
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: 18,
+        height: 18,
+        padding: 0,
+        background: holding ? 'var(--ra-text)' : 'var(--ra-bg-row-active)',
+        border: `1px solid ${favourited ? 'var(--ra-recording-live)' : holding ? 'var(--ra-text)' : 'var(--ra-border)'}`,
+        color: favourited
+          ? 'var(--ra-recording-live)'
+          : holding
+            ? 'var(--ra-bg-frame)'
+            : listenOnlyStars && !radioOn
+              ? 'var(--ra-text-4)'
+              : 'var(--ra-text-2)',
+        cursor: listenOnlyStars && !radioOn ? 'default' : 'pointer'
+      }}
+    >
+      <ThumbsUp size={12} weight={favourited ? 'fill' : 'regular'} />
+    </button>
+  )
+  // 👎, CHANGE SOON -- radio's replace-soon (once "change next",
+  // renamed with the web radio's row buttons, 2026-10-01): "replace
+  // this", on radio's clock instead of now. The LAST track, beside
+  // 👍 (Elling, 2026-10-01). Filled while set. Hidden while radio is
+  // off -- with `visibility`, so its track stays reserved and 👍
+  // never moves -- and greyed on a padlocked row.
+  const dislikeButton = (
+    <RowIconButton
+      gridColumn={at(15).gridColumn}
+      tooltip="change soon"
+      onClick={onToggleReplaceSoon}
+      toggle
+      state={radioFlag === 'replace-soon' ? 'soft' : 'off'}
+      disabled={slot.locked}
+      hidden={!radioOn}
+    >
+      <ThumbsDown size={12} weight={radioFlag === 'replace-soon' ? 'fill' : 'regular'} />
+    </RowIconButton>
+  )
+  // RADIO'S ROLE TOGGLES (RadioRoleButtons), tracks 16-17 after 👎, only while radio
+  // runs, as the tracks are (discoverRowGridColumns).
+  const roleButtons = (radioOn || foldTrack) && (
+    <RadioRoleButtons
+      hookSet={hookSet}
+      locked={slot.locked}
+      onToggleHook={onToggleHook}
+      dug={dug}
+      onToggleDig={onToggleDig}
+      columns={[16, 17]}
+    />
+  )
+  // FOLD MODE'S READOUT (v2, @shared/radioFoldStatus), track 18, the last: a folded
+  // row's cycle against the loop in beats, and under it the phase dot's track -- the dot
+  // at its left end on the downbeat, where it sits when the row realigns. Hidden with
+  // `visibility` on a straight row, so the track stays. Only while fold mode is on, as the
+  // track is (discoverRowGridColumns).
+  const foldReadoutCell = foldTrack && (
+    <div
+      data-tooltip={foldReadout !== null ? 'its cycle against the loop, in beats' : undefined}
+      style={{
+        ...at(18),
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'flex-end',
+        gap: 3,
+        fontSize: 8,
+        color: 'var(--ra-text-3)',
+        whiteSpace: 'nowrap',
+        visibility: foldReadout !== null ? 'visible' : 'hidden'
+      }}
+    >
+      <span>{foldReadout ?? ''}</span>
+      <span
+        aria-hidden
+        style={{ position: 'relative', width: 32, height: 1, background: 'var(--ra-border)' }}
+      >
+        <span
+          data-fold-dot={slot.id}
+          style={{
+            position: 'absolute',
+            top: -1,
+            width: 3,
+            height: 3,
+            marginLeft: -1,
+            background: 'var(--ra-text)',
+            display: 'none'
+          }}
+        />
+      </span>
+    </div>
+  )
+  const popovers = (
+    <>
+      {nearbyMenu && nearbyAnchor !== null && (
+        <DiscoverNearbyPopover
+          x={nearbyMenu.x}
+          y={nearbyMenu.y}
+          startCandidate={nearbyAnchor}
+          kinds={slot.kinds}
+          soundSource={{ endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }}
+          onPick={onSwapFromNearby}
+          onClose={closeNearbyMenu}
+          ignoreRef={nearbyButtonRef}
+          creator={nearbyCreator}
+        />
+      )}
+      {reclassifyMenu && slot.candidate && (
+        <DiscoverReclassifyPicker
+          x={reclassifyMenu.x}
+          y={reclassifyMenu.y}
+          currentRole={reclassifyMenu.currentRole}
+          onPick={onReclassify}
+          onClose={closeReclassifyMenu}
+          ignoreRef={meterRef}
+        />
+      )}
+      {kindMenu && !slot.locked && (
+        <DiscoverKindPicker
+          x={kindMenu.x}
+          y={kindMenu.y}
+          kinds={slot.kinds}
+          onChange={onChangeKinds}
+          onClose={closeKindMenu}
+          ignoreRef={kindButtonRef}
+        />
+      )}
+    </>
+  )
+
   return (
     <>
       <div
@@ -1000,790 +1808,24 @@ export function DiscoverSlotRow({
           borderBottom: '1px solid var(--ra-border-soft)'
         }}
       >
-        {/* Direct request, 2026-09-15: "an X for remove" -- icon-only, same
-          as every other row button now. */}
-        <button
-          onClick={onRemove}
-          data-tooltip="remove"
-          aria-label="remove"
-          style={{
-            gridColumn: 1,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 18,
-            height: 18,
-            padding: 0,
-            fontFamily: 'inherit',
-            fontSize: 10,
-            background: 'transparent',
-            border: '1px solid var(--ra-border)',
-            color: 'var(--ra-text-2)',
-            cursor: 'pointer'
-          }}
-        >
-          X
-        </button>
-        <button
-          onClick={onToggleLock}
-          data-tooltip={slot.locked ? 'unlock' : 'lock'}
-          aria-label={slot.locked ? 'unlock' : 'lock'}
-          style={{
-            gridColumn: 2,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            width: 18,
-            height: 18,
-            padding: 0,
-            background: slot.locked ? 'var(--ra-stretch-on-bg)' : 'transparent',
-            border: `1px solid ${slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-            color: slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-            cursor: 'pointer'
-          }}
-        >
-          <LockGlyph locked={slot.locked} />
-        </button>
-        {/* A single guard around a fragment is safe here (rather than one
-            guard per button, as this used to be split) because each button
-            below carries its own explicit gridColumn -- omitting all three
-            leaves columns 3/4 (and 👍's 14) empty instead of shifting anything after
-            them. See hasStemToActOn's own doc comment above for why it's
-            "has a candidate OR resolvedStem," not resolvedStem alone. */}
-        {hasStemToActOn && (
-          <>
-            {/* Direct request, 2026-09-15: "can we add a mute for each
-                channel" -- toggleSlotPreview already existed (the waveform
-                itself was already clickable to the same effect), but wasn't
-                discoverable as a mute control -- only a hover tooltip
-                explained it. Same handler as the waveform click, so either
-                one keeps the other in sync; only shown once there's a real
-                stem to mute (matching the waveform toggle's own guard). */}
-            <button
-              onClick={onTogglePreview}
-              data-tooltip={showsAsMuted ? 'unmute' : 'mute'}
-              aria-label={showsAsMuted ? 'unmute' : 'mute'}
-              style={{
-                gridColumn: 3,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 18,
-                height: 18,
-                padding: 0,
-                fontFamily: 'inherit',
-                fontSize: 10,
-                // Direct request, 2026-09-15: "mute should look exactly
-                // like mute on the arrangement view" -- matches
-                // ChannelRow.tsx's own muteButtonStyle exactly
-                // (background/border/color-by-state, which reads as
-                // "inverted" at a glance: a hard filled/colored look
-                // when OFF/muted, a plain/transparent look when
-                // ON/playing), rather than this row's own earlier ad hoc
-                // treatment (transparent-when-off instead of the real
-                // `--ra-bg-row-active` fill every other unmuted mute
-                // button in this app uses). Driven by showsAsMuted (see
-                // its own doc comment above), not bare `previewing` --
-                // still-resolving no longer renders as falsely muted.
-                background: showsAsMuted ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
-                border: `1px solid ${showsAsMuted ? 'var(--ra-mute-on)' : 'var(--ra-border)'}`,
-                color: showsAsMuted ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
-                cursor: 'pointer'
-              }}
-            >
-              {/* Lowercase "m" -- matches ChannelRow.tsx's own mute
-                  button glyph exactly (its solo/record siblings are also
-                  lowercase single letters), rather than this row's own
-                  earlier uppercase "M". */}
-              m
-            </button>
-            {/* Direct request, 2026-09-15 (Upcycle-inspired): a solo
-                button next to mute, same M/S pairing Upcycle's own cards use
-                and ChannelRow.tsx already has on the real arrangement.
-                Matches ChannelRow.tsx's own soloButtonStyle exactly (a soft
-                tinted background with the accent color on border/text, not
-                a hard fill like mute's). */}
-            <button
-              onClick={onToggleSolo}
-              data-tooltip={soloed ? 'unsolo' : 'solo'}
-              aria-label={soloed ? 'unsolo' : 'solo'}
-              style={{
-                gridColumn: 4,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                width: 18,
-                height: 18,
-                padding: 0,
-                fontFamily: 'inherit',
-                fontSize: 10,
-                background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-                border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-                color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-                cursor: 'pointer'
-              }}
-            >
-              s
-            </button>
-          </>
-        )}
-        {/* Direct report, 2026-09-17: "tooltip over the waveforms on
-          discover prevents user from dragging the volume, so remove it" --
-          this wrapper used to carry a data-tooltip whose own text included
-          a live `drag for volume (N%)` readout, updating on every tick of
-          a gain drag -- the tooltip box re-rendering/resizing itself right
-          above the cursor mid-drag read as actively interfering with the
-          drag gesture, not just cosmetically noisy. Removed outright rather
-          than trimmed -- the inner button's own aria-label (below) still
-          carries a plain accessible name (drag to adjust volume), just
-          without the drag hint or the live percentage. */}
-        <div
-          style={{
-            gridColumn: DISCOVER_WAVEFORM_COLUMN,
-            minWidth: DISCOVER_WAVEFORM_MIN_WIDTH,
-            position: 'relative'
-          }}
-        >
-          {resolvedStem ? (
-            // Direct request, 2026-09-20: "clicking on wave shouldn't mute
-            // it, leave that to the M button" -- clicking the waveform used
-            // to double as mute/unmute (onTogglePreview), same click-the-
-            // thumbnail-to-hear-it convention Shelf.tsx's own tiles and
-            // ClusterStemsBrowser.tsx's own waveform rows use elsewhere in
-            // this app -- but that made it too easy to mute a slot by
-            // accident while reaching for the gain-drag gesture on the same
-            // element. The dedicated "m" button (below) is now the ONLY way
-            // to toggle this slot in/out of the shared mix; the waveform
-            // itself only responds to a vertical drag (handleGainDragStart).
-            // Direct report, 2026-09-15: the previewing-outline (a near-white
-            // `--ra-stretch-on` box around the whole waveform) read as an
-            // unwanted white halo -- removed; the dedicated mute button below
-            // already carries this row's own on/off state, and the playhead
-            // line (drawn over every row by DiscoverPanel) shows real
-            // playback directly.
-            <button
-              onMouseDown={handleGainDragStart}
-              aria-label="drag to adjust volume"
-              // Direct request, 2026-09-20: "date could be a tooltip on
-              // hover.. in discovery and in arranger or sketch" --
-              // resolvedStem.creationTime is the OWNING RIFF's own real
-              // creation date (see ResolvedCandidateStem's own doc
-              // comment), undefined only for content resolved via the
-              // live Endlesss API path (not Discover's own, which always
-              // reads the local, already-synced library), in which case
-              // this simply omits the tooltip rather than showing a wrong
-              // date. Same year/month/day format LibraryBrowser.tsx's own
-              // date-grouped riff listing already uses.
-              data-tooltip={
-                resolvedStem.creationTime
-                  ? new Date(resolvedStem.creationTime * 1000).toLocaleDateString(undefined, {
-                      year: 'numeric',
-                      month: 'short',
-                      day: 'numeric'
-                    })
-                  : undefined
-              }
-              style={{
-                position: 'relative',
-                width: '100%',
-                height: DISCOVER_WAVEFORM_HEIGHT,
-                padding: 0,
-                background: 'transparent',
-                border: 'none',
-                overflow: 'hidden',
-                cursor: 'ns-resize',
-                // Same 2026-09-21 report as `working` above -- a slot that
-                // already has a stem keeps showing it while a reroll
-                // searches, so the waveform itself breathes until the new
-                // pick lands (then it swaps to the dotted placeholder while
-                // that pick downloads/decodes).
-                animation: rerolling
-                  ? 'discover-slot-working 1100ms ease-in-out infinite'
-                  : undefined
-              }}
-            >
-              {/* Tiled, not a single stretched-to-fit Waveform -- direct
-              report: every slot used to render at the same width regardless
-              of its real bar length, making a 1-bar drum hit look the same
-              size as an 8-bar bassline. Every row shows the SAME fixed
-              window of bars (32, or the loop's length when a longer stem is
-              in play -- discoverWindowLayout, spec 2026-09-29-discover-
-              fixed-waveform-window-design.md), so a bar is the same width in
-              every row and no row rescales when a longer or shorter stem
-              arrives elsewhere. The stem repeats from bar 0 to fill the
-              window, exactly how it will actually sound once looped, the
-              last tile cut off at the window edge (this button's own
-              `overflow: hidden` clips it). Restart lines mark each repeat,
-              loop-top lines each wrap of the whole loop (the shared
-              LoopLines, arrange's own restart line). Everything is a
-              PERCENT of the window, which keeps this row's own flex-fluid
-              width working without a real DOM measurement.
-              Direct request: gain is shown/adjusted directly on the
-              waveform (StemWaveformRow.tsx's own "envelope" volume
-              treatment), not a separate slider -- a dim gray layer always
-              renders full-height underneath; the real-color layer on top is
-              clipped from the top down by `gainClipPct`, so a lower gain
-              visibly cuts more of the bright waveform away, revealing gray
-              underneath (same "gray means quieter" language the real
-              envelope uses), with a thin line marking the exact cutoff. */}
-              {(() => {
-                // The tile cap (DISCOVER_MAX_TILES) lives in the layout
-                // module now: a real crash, found live, came from an
-                // unbounded tile count, each tile once mounting a real <Waveform>
-                // (dozens of SVG rects), twice. Tiles are CSS mask repeats now,
-                // but the cap still sets the minimum repeat width a sub-bar
-                // one-shot is drawn at.
-                const layout = discoverWindowLayout({
-                  stemBars: resolvedStem.barLength,
-                  loopBars: maxBarLength
-                })
-                const gainClipPct = (1 - slot.gain) * 100
-                return (
-                  <>
-                    {/* ONE element per layer, not one <Waveform> per tile
-                    (Elling, 2026-09-30: "i think it's slowing the app down
-                    having so many of them on there"). RepeatedWaveform
-                    paints the stem once as a CSS mask and repeats it every
-                    tile width, so a 1-bar stem is 2 divs instead of 64 SVGs
-                    of ~128 rects each. The tile maths (and its minimum
-                    width) still come from discoverWindowLayout. The old
-                    per-tile blink (2026-09-17, keys shifting with the shared
-                    loop length) cannot recur: there are no per-tile nodes
-                    left to remount, and the mask is peeked synchronously
-                    from the warm peak cache. */}
-                    <RepeatedWaveform
-                      path={resolvedStem.path}
-                      color="var(--ra-text-4)"
-                      tileWidthPct={layout.tiles[0]?.widthPct ?? 100}
-                    />
-                    {/* Full-color layer on top -- suppressed entirely while
-                    muted (not currently in the preview mix), same "mute
-                    always wins" convention StemWaveformRow.tsx's own
-                    real-arrangement waveform uses (its own `{!muted && ...}`
-                    guard just above). Direct report, 2026-09-15: "when
-                    muted, a waveform should be grey" -- muted rows here
-                    used to still show the full-color layer (just clipped by
-                    gain), reading as "playing, just quiet" rather than
-                    "off," unlike every other muted waveform in this app. */}
-                    {previewing && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          inset: 0,
-                          clipPath: `inset(${gainClipPct}% 0 0 0)`
-                        }}
-                      >
-                        <RepeatedWaveform
-                          path={resolvedStem.path}
-                          color={stemColorVar(resolvedStem)}
-                          tileWidthPct={layout.tiles[0]?.widthPct ?? 100}
-                        />
-                      </div>
-                    )}
-                    {previewing && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          left: 0,
-                          right: 0,
-                          top: `${gainClipPct}%`,
-                          height: 1,
-                          background: 'var(--ra-text)',
-                          pointerEvents: 'none'
-                        }}
-                      />
-                    )}
-                    <LoopLines lefts={layout.restartLinePcts.map((p) => `${p}%`)} kind="restart" />
-                    <LoopLines lefts={layout.loopTopLinePcts.map((p) => `${p}%`)} kind="loopTop" />
-                  </>
-                )
-              })()}
-            </button>
-          ) : (
-            <div
-              style={{
-                width: '100%',
-                height: 40,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                overflow: 'hidden',
-                border: `1px dashed ${
-                  working
-                    ? 'var(--ra-stretch-on)'
-                    : resolveFailed || noMatchFound
-                      ? 'var(--ra-mute-on)'
-                      : 'var(--ra-border)'
-                }`,
-                // Static (no animation) once settled either way (failed/no-
-                // match, or truly empty) -- discover-slot-pulse is still
-                // used for both "this stopped" cases, not just resolveFailed
-                // -- a rerolled slot that found nothing is equally worth
-                // flagging, not a silent dead end.
-                animation:
-                  resolveFailed || noMatchFound
-                    ? 'discover-slot-pulse 900ms ease-in-out infinite'
-                    : undefined
-              }}
-            >
-              {/* Direct report, 2026-09-15 (v3): the previous scrolling-
-                waveform reel read as too busy -- replaced with the shared
-                LoadingLoader component (the same "still working" indicator
-                BeatPicker.tsx/ClusterStemsBrowser.tsx already use), small
-                and subtle, for brand consistency instead of a custom
-                animation. */}
-              {/* Direct report, 2026-09-17: bumped this up to size={120} once
-                  (read as "a jarring 2px sliver against the 40px-tall
-                  waveform it replaces"), then reverted -- "i was fine with
-                  it being the dotted line... add 1px to the height," then
-                  "i think it needs 1 more px to be stable." size=16 (the
-                  original) gave a 2px-tall, 1px-thick bar (LoadingLoader's
-                  own height = round(size*9/60) formula); size=24 keeps the
-                  same 1px-thick dotted-line look at 4px tall -- +2px total
-                  from the original, arrived at over two rounds of "+1px." */}
-              {working && <LoadingLoader size={24} />}
-              {/* Visible, not just a hover tooltip -- direct report,
-                  2026-09-17: rerolling into a genuine no-match dead end
-                  ("just tried to add a vocal... no indication what
-                  happened, no failure message") needs to read as a real
-                  outcome, not just silently stay in the same empty-looking
-                  box the slot started in before it was ever touched. */}
-              {noMatchFound && (
-                <span style={{ fontSize: 9, color: 'var(--ra-mute-on)' }}>no match</span>
-              )}
-            </div>
-          )}
-          {/* THE RADIO READOUT on the row (spec 2026-10-03-radio-readout-design section 2): what
-              it was picked as and how long it has played, small and dim over the waveform's top
-              left; the gesture flash (in and out over a bar) and `next` at its top right. Never
-              in the way of the gain drag. Chrome: monochrome. */}
-          {radioReadout !== null && (
-            <div
-              aria-hidden
-              style={{
-                position: 'absolute',
-                inset: 0,
-                pointerEvents: 'none',
-                fontSize: 8,
-                lineHeight: '10px',
-                color: 'var(--ra-text-3)'
-              }}
-            >
-              {/* One line: the label gives way (ellipsized) to the flash and `next`, which keep
-                  their own width, so the two never overlap. */}
-              <div
-                style={{
-                  position: 'absolute',
-                  top: 1,
-                  left: 3,
-                  right: 3,
-                  display: 'flex',
-                  gap: 6,
-                  whiteSpace: 'nowrap'
-                }}
-              >
-                <span
-                  style={{
-                    flex: '1 1 auto',
-                    minWidth: 0,
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis'
-                  }}
-                >
-                  {[radioReadout.label, radioReadout.age].filter(Boolean).join(' · ')}
-                </span>
-                {hookAwayName !== null && (
-                  <button
-                    type="button"
-                    data-hook-away
-                    data-tooltip={RADIO_HOOK_BRING_BACK_TOOLTIP}
-                    aria-label={RADIO_HOOK_BRING_BACK_TOOLTIP}
-                    onClick={onBringHookBack}
-                    style={{
-                      flex: '0 1 auto',
-                      minWidth: 0,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                      padding: 0,
-                      margin: 0,
-                      border: 'none',
-                      borderRadius: 0,
-                      background: 'transparent',
-                      font: 'inherit',
-                      color: 'var(--ra-text-3)',
-                      pointerEvents: 'auto',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {hookAwayName}
-                  </button>
-                )}
-                <span style={{ flex: 'none', display: 'flex', gap: 6 }}>
-                  {radioReadout.flash !== null && (
-                    <span style={{ opacity: radioFlashOpacity(radioReadout.flash.t) }}>
-                      {radioReadout.flash.word}
-                    </span>
-                  )}
-                  {radioReadout.nextLabel !== null && <span>{radioReadout.nextLabel}</span>}
-                </span>
-              </div>
-            </div>
-          )}
-        </div>
+        {removeButton}
+        {lockButton}
+        {muteSolo}
+        {waveformCell}
         <div style={{ gridColumn: 6 }} />
-        {/* Kind label + match meter stacked in the 110px label column --
-            see the meter's own comment on meterEntries above. */}
-        <div
-          style={{
-            gridColumn: 7,
-            width: 110,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 3,
-            minWidth: 0
-          }}
-        >
-          <button
-            ref={kindButtonRef}
-            disabled={slot.locked}
-            onClick={(e) => {
-              if (kindMenu) {
-                closeKindMenu()
-                return
-              }
-              const rect = e.currentTarget.getBoundingClientRect()
-              setKindMenu({ x: rect.left, y: rect.bottom + 4 })
-            }}
-            aria-expanded={kindMenu !== null}
-            aria-label={`kinds: ${slotKindsLabel(slot.kinds)}`}
-            data-tooltip={slot.locked ? 'unlock first' : slotKindsLabel(slot.kinds)}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 3,
-              width: 110,
-              padding: 0,
-              fontFamily: 'inherit',
-              fontSize: 9,
-              textAlign: 'left',
-              background: 'transparent',
-              border: 'none',
-              color: kindMenu ? 'var(--ra-text)' : 'var(--ra-text-3)',
-              cursor: slot.locked ? 'default' : 'pointer'
-            }}
-          >
-            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-              {slotKindsLabel(slot.kinds)}
-            </span>
-            {!slot.locked && <span aria-hidden="true">▾</span>}
-          </button>
-          {meterEntries.length > 0 && (
-            <div
-              ref={meterRef}
-              aria-label="match"
-              style={{
-                display: 'flex',
-                flexWrap: 'wrap',
-                columnGap: 6,
-                rowGap: 2,
-                fontSize: 8,
-                lineHeight: '10px',
-                color: 'var(--ra-text-3)'
-              }}
-            >
-              {meterEntries.map((entry) =>
-                entry.type === 'mask' ? (
-                  <span
-                    key={`mask-${entry.kind ?? 'reclassified'}`}
-                    style={{ whiteSpace: 'nowrap' }}
-                  >
-                    {entry.label}:{' '}
-                    <button
-                      onClick={(e) => {
-                        if (reclassifyMenu) {
-                          closeReclassifyMenu()
-                          return
-                        }
-                        const rect = e.currentTarget.getBoundingClientRect()
-                        setReclassifyMenu({
-                          x: rect.left,
-                          y: rect.bottom + 4,
-                          currentRole:
-                            entry.kind !== null
-                              ? discoverSlotKindToArrangeRole(entry.kind)
-                              : (slot.reclassified?.role ?? null)
-                        })
-                      }}
-                      aria-expanded={reclassifyMenu !== null}
-                      aria-label={entry.tooltip}
-                      data-tooltip={entry.tooltip}
-                      style={{
-                        padding: 0,
-                        fontFamily: 'inherit',
-                        fontSize: 'inherit',
-                        lineHeight: 'inherit',
-                        background: 'transparent',
-                        border: 'none',
-                        borderBottom: '1px dotted var(--ra-text-4)',
-                        color: reclassifyMenu ? 'var(--ra-text)' : 'var(--ra-text-2)',
-                        cursor: 'pointer'
-                      }}
-                    >
-                      {entry.source}
-                    </button>
-                  </span>
-                ) : (
-                  <span
-                    key={`trait-${entry.kind}`}
-                    data-tooltip={entry.tooltip}
-                    aria-label={entry.tooltip}
-                    style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: 3,
-                      whiteSpace: 'nowrap'
-                    }}
-                  >
-                    {entry.label}
-                    {/* CSS cells, not the ▮▯ glyphs: Silkscreen has neither,
-                      and a fallback-font glyph would break the pixel look.
-                      Grey chrome only -- no new colour. */}
-                    <span aria-hidden="true" style={{ display: 'inline-flex', gap: 1 }}>
-                      {Array.from({ length: MATCH_METER_STEPS }, (_, i) => (
-                        <span
-                          key={i}
-                          style={{
-                            width: 3,
-                            height: 6,
-                            background: i < entry.filled ? 'var(--ra-text-2)' : 'var(--ra-text-4)'
-                          }}
-                        />
-                      ))}
-                    </span>
-                  </span>
-                )
-              )}
-            </div>
-          )}
-        </div>
+        {kindsBlock}
         <div style={{ gridColumn: 8 }} />
         <div style={{ gridColumn: 9, width: 1, height: 18, background: 'var(--ra-border)' }} />
-        {/* The four rerolls, as icons (2026-09-29). The decorative dice that
-            used to sit here and spin while a roll was in flight is gone:
-            the button that STARTED the roll pulses instead, and the others
-            dim, which says the same thing about the right button. */}
-        <RowIconButton
-          gridColumn={10}
-          tooltip="skip"
-          onClick={(e) => {
-            setRerollAction('similar')
-            onReroll(e.metaKey)
-          }}
-          disabled={rerolling}
-          dimmed={manualWaiting}
-          pulsing={rerolling && rerollAction === 'similar'}
-        >
-          <SkipForward size={12} />
-        </RowIconButton>
-        {nearbyAnchor !== null && (
-          <RowIconButton
-            gridColumn={11}
-            tooltip="nearby jam"
-            buttonRef={nearbyButtonRef}
-            onClick={(e) => {
-              if (nearbyMenu) {
-                closeNearbyMenu()
-                return
-              }
-              const rect = e.currentTarget.getBoundingClientRect()
-              setNearbyMenu({ x: rect.left, y: rect.bottom + 4 })
-            }}
-            state={nearbyMenu ? 'soft' : 'off'}
-            ariaExpanded={nearbyMenu !== null}
-            disabled={rerolling}
-            dimmed={manualWaiting}
-          >
-            <Compass size={12} />
-          </RowIconButton>
-        )}
-        <RowIconButton
-          gridColumn={12}
-          tooltip="any stem"
-          onClick={(e) => {
-            setRerollAction('random')
-            onRerollRandom(e.metaKey)
-          }}
-          disabled={rerolling}
-          dimmed={manualWaiting}
-          pulsing={rerolling && rerollAction === 'random'}
-        >
-          <Shuffle size={12} />
-        </RowIconButton>
-        <RowIconButton gridColumn={13} tooltip="duplicate" onClick={(e) => onDuplicate(e.metaKey)}>
-          <Copy size={12} />
-        </RowIconButton>
-        {/* 👍 (2026-10-01, the web radio's full-mode row buttons):
-            replaces both the star (direct request, 2026-09-16) and the
-            separate "hold longer" hand. With 👎, the last two tracks of
-            the row, side by side (Elling, 2026-10-01). It TOGGLES
-            the star -- filled ThumbsUp and the star's own
-            `--ra-recording-live` treatment while the stem is starred --
-            and, when it stars, turns hold longer on if it is off
-            (likeRadioSlot). While this row holds, the button takes the
-            padlock-style inverted fill the hand used to, so the one
-            holding row is still visible. Only shown once there's a
-            real stem to like, same guard as mute/solo -- its track stays
-            reserved either way, so nothing shifts. */}
-        {hasStemToActOn && (
-          <button
-            onClick={onLike}
-            // Listen-only with radio off: no star to give and no hold to
-            // take, so 👍 does nothing -- dimmed, like any dead control.
-            disabled={listenOnlyStars && !radioOn}
-            data-tooltip={
-              listenOnlyStars && !radioOn
-                ? 'listening only, nothing is starred'
-                : listenOnlyStars
-                  ? holding
-                    ? 'holding · listening only, nothing is starred'
-                    : 'hold · listening only, nothing is starred'
-                  : holding
-                    ? favourited
-                      ? 'unlike · holding'
-                      : 'like · holding'
-                    : favourited
-                      ? 'unlike'
-                      : 'like'
-            }
-            aria-label={listenOnlyStars ? 'hold, listening only' : favourited ? 'unlike' : 'like'}
-            aria-pressed={favourited}
-            aria-description={holding ? 'holding longer' : undefined}
-            style={{
-              gridColumn: 14,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              width: 18,
-              height: 18,
-              padding: 0,
-              background: holding ? 'var(--ra-text)' : 'var(--ra-bg-row-active)',
-              border: `1px solid ${favourited ? 'var(--ra-recording-live)' : holding ? 'var(--ra-text)' : 'var(--ra-border)'}`,
-              color: favourited
-                ? 'var(--ra-recording-live)'
-                : holding
-                  ? 'var(--ra-bg-frame)'
-                  : listenOnlyStars && !radioOn
-                    ? 'var(--ra-text-4)'
-                    : 'var(--ra-text-2)',
-              cursor: listenOnlyStars && !radioOn ? 'default' : 'pointer'
-            }}
-          >
-            <ThumbsUp size={12} weight={favourited ? 'fill' : 'regular'} />
-          </button>
-        )}
-        {/* 👎, CHANGE SOON -- radio's replace-soon (once "change next",
-            renamed with the web radio's row buttons, 2026-10-01): "replace
-            this", on radio's clock instead of now. The LAST track, beside
-            👍 (Elling, 2026-10-01). Filled while set. Hidden while radio is
-            off -- with `visibility`, so its track stays reserved and 👍
-            never moves -- and greyed on a padlocked row. */}
-        <RowIconButton
-          gridColumn={15}
-          tooltip="change soon"
-          onClick={onToggleReplaceSoon}
-          toggle
-          state={radioFlag === 'replace-soon' ? 'soft' : 'off'}
-          disabled={slot.locked}
-          hidden={!radioOn}
-        >
-          <ThumbsDown size={12} weight={radioFlag === 'replace-soon' ? 'fill' : 'regular'} />
-        </RowIconButton>
-        {/* RADIO'S ROLE TOGGLES (RadioRoleButtons), tracks 16-17 after 👎, only while radio
-            runs, as the tracks are (discoverRowGridColumns). */}
-        {(radioOn || foldTrack) && (
-          <RadioRoleButtons
-            hookSet={hookSet}
-            locked={slot.locked}
-            onToggleHook={onToggleHook}
-            dug={dug}
-            onToggleDig={onToggleDig}
-          />
-        )}
-        {/* FOLD MODE'S READOUT (v2, @shared/radioFoldStatus), track 18, the last: a folded
-            row's cycle against the loop in beats, and under it the phase dot's track -- the dot
-            at its left end on the downbeat, where it sits when the row realigns. Hidden with
-            `visibility` on a straight row, so the track stays. Only while fold mode is on, as the
-            track is (discoverRowGridColumns). */}
-        {foldTrack && (
-          <div
-            data-tooltip={foldReadout !== null ? 'its cycle against the loop, in beats' : undefined}
-            style={{
-              gridColumn: 18,
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'flex-end',
-              gap: 3,
-              fontSize: 8,
-              color: 'var(--ra-text-3)',
-              whiteSpace: 'nowrap',
-              visibility: foldReadout !== null ? 'visible' : 'hidden'
-            }}
-          >
-            <span>{foldReadout ?? ''}</span>
-            <span
-              aria-hidden
-              style={{ position: 'relative', width: 32, height: 1, background: 'var(--ra-border)' }}
-            >
-              <span
-                data-fold-dot={slot.id}
-                style={{
-                  position: 'absolute',
-                  top: -1,
-                  width: 3,
-                  height: 3,
-                  marginLeft: -1,
-                  background: 'var(--ra-text)',
-                  display: 'none'
-                }}
-              />
-            </span>
-          </div>
-        )}
+        {skipButton}
+        {nearbyButton}
+        {anyStemButton}
+        {duplicateButton}
+        {likeButton}
+        {dislikeButton}
+        {roleButtons}
+        {foldReadoutCell}
       </div>
-      {nearbyMenu && nearbyAnchor !== null && (
-        <DiscoverNearbyPopover
-          x={nearbyMenu.x}
-          y={nearbyMenu.y}
-          startCandidate={nearbyAnchor}
-          kinds={slot.kinds}
-          soundSource={{ endlesss: soundSourceEndlesss, audioIn: soundSourceAudioIn }}
-          onPick={onSwapFromNearby}
-          onClose={closeNearbyMenu}
-          ignoreRef={nearbyButtonRef}
-          creator={nearbyCreator}
-        />
-      )}
-      {reclassifyMenu && slot.candidate && (
-        <DiscoverReclassifyPicker
-          x={reclassifyMenu.x}
-          y={reclassifyMenu.y}
-          currentRole={reclassifyMenu.currentRole}
-          onPick={onReclassify}
-          onClose={closeReclassifyMenu}
-          ignoreRef={meterRef}
-        />
-      )}
-      {kindMenu && !slot.locked && (
-        <DiscoverKindPicker
-          x={kindMenu.x}
-          y={kindMenu.y}
-          kinds={slot.kinds}
-          onChange={onChangeKinds}
-          onClose={closeKindMenu}
-          ignoreRef={kindButtonRef}
-        />
-      )}
+      {popovers}
     </>
   )
 }
