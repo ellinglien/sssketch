@@ -2,6 +2,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { SkipForward } from '@phosphor-icons/react'
 import { Dial } from './Dial'
+import { RadioStrip } from './RadioStrip'
+import { DiceIcon } from './DiceIcon'
 import { DiscoverRadioMenu } from './DiscoverRadioMenu'
 import { BracketToggle } from './BracketToggle'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
@@ -930,6 +932,8 @@ export function DiscoverPanel({
   // the same way: Discover plays with the open project's mastering, room,
   // pump and the rest, and a stage switched off there is off here too.
   const sound = useAppSelector((s) => s.sound)
+  // The same, normalized against the app defaults (the radio strip's sound group reads it).
+  const soundNow = useMemo(() => normalizeSoundSettings(sound ?? appSoundDefaultsNow()), [sound])
   const pluginCatalog = usePluginCatalog()
   const flushEngineSyncNow = useFlushEngineSyncNow()
   const {
@@ -11229,83 +11233,33 @@ export function DiscoverPanel({
       </div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <span style={{ marginLeft: 'auto' }} />
-        <button
-          ref={artistButtonRef}
-          onClick={(e) => {
-            if (artistMenu) {
-              setArtistMenu(null)
-              return
-            }
-            const rect = e.currentTarget.getBoundingClientRect()
-            setArtistMenu({ x: rect.left, y: rect.bottom + 4 })
-          }}
-          aria-expanded={artistMenu !== null}
-          data-tooltip="whose stems discover plays"
-          style={{
-            fontFamily: 'inherit',
-            fontSize: 10,
-            padding: '6px 10px',
-            background: 'transparent',
-            border: '1px solid var(--ra-border)',
-            color: mode === 'other' ? 'var(--ra-text)' : 'var(--ra-text-2)',
-            cursor: 'pointer'
-          }}
-        >
-          {artistFieldLabel(artist, currentUsername)}
-        </button>
-        {artistMenu && (
-          <DiscoverArtistPicker
-            x={artistMenu.x}
-            y={artistMenu.y}
-            artist={artist}
-            ownUsername={currentUsername}
-            onPick={(next) => changeArtist(normalizeArtistPick(next, currentUsername))}
-            onClose={() => setArtistMenu(null)}
-            ignoreRef={artistButtonRef}
-            footerExtra={
-              artist !== null ? (
-                <button
-                  disabled={!discoverConsented || analysisQueued !== null}
-                  data-tooltip={
-                    discoverConsented
-                      ? "queue this artist's stems for the overnight scan"
-                      : 'turn on library analysis first'
-                  }
-                  onClick={() => {
-                    // Disabled while the call runs (the label is non-null).
-                    setAnalysisQueued('queueing…')
-                    window.rifffApi
-                      .discoverQueueArtistAnalysis(artist)
-                      .then((r) => {
-                        // The whole queue's size: "queued 0" says nothing
-                        // when this artist's stems were all queued already.
-                        setAnalysisQueued(`${r.size.toLocaleString('en-US')} queued`)
-                        announceArtistScanQueued(r.size)
-                      })
-                      .catch((err: unknown) => {
-                        console.error('DiscoverPanel: discoverQueueArtistAnalysis failed:', err)
-                        setAnalysisQueued('couldn’t queue')
-                        window.setTimeout(() => setAnalysisQueued(null), 2500)
-                      })
-                  }}
-                  style={{
-                    fontFamily: 'inherit',
-                    fontSize: 9,
-                    padding: '2px 6px',
-                    background: 'transparent',
-                    border: '1px solid var(--ra-border)',
-                    color:
-                      !discoverConsented || analysisQueued !== null
-                        ? 'var(--ra-text-4)'
-                        : 'var(--ra-text-2)',
-                    cursor: !discoverConsented || analysisQueued !== null ? 'default' : 'pointer'
-                  }}
-                >
-                  {analysisQueued ?? 'analyse overnight'}
-                </button>
-              ) : undefined
-            }
-          />
+        {/* While radio runs the artist button is the strip's (one artistButtonRef, one button at
+            a time); the picker below the strip serves both. */}
+        {!radioOn && (
+          <button
+            ref={artistButtonRef}
+            onClick={(e) => {
+              if (artistMenu) {
+                setArtistMenu(null)
+                return
+              }
+              const rect = e.currentTarget.getBoundingClientRect()
+              setArtistMenu({ x: rect.left, y: rect.bottom + 4 })
+            }}
+            aria-expanded={artistMenu !== null}
+            data-tooltip="whose stems discover plays"
+            style={{
+              fontFamily: 'inherit',
+              fontSize: 10,
+              padding: '6px 10px',
+              background: 'transparent',
+              border: '1px solid var(--ra-border)',
+              color: mode === 'other' ? 'var(--ra-text)' : 'var(--ra-text-2)',
+              cursor: 'pointer'
+            }}
+          >
+            {artistFieldLabel(artist, currentUsername)}
+          </button>
         )}
         {/* Radio -- docs/superpowers/specs/2026-09-26-radio-mode-design.md.
             Lit with --ra-play-on when on, exactly like the play/stop button
@@ -11981,6 +11935,167 @@ export function DiscoverPanel({
         )}
       </div>
 
+      {/* THE STRIP (radio view plan Task 8, spec 1.3): every radio setting, under the rows, while
+          radio runs. Its groups come from @shared/radioStripModel; every handler is this
+          panel's own, the header's and the add row's. */}
+      {radioOn && (
+        <RadioStrip
+          settings={radioSettings}
+          onSettingsChange={(p) => void onRadioSettingsChange(p)}
+          ctx={{
+            artistMode: mode === 'other',
+            hasUsername,
+            sound: soundNow,
+            sounding: previewingSlotIds.size > 0
+          }}
+          play={{
+            tempoText,
+            onTempoText: setTempoText,
+            onTempoFocus: () => setTempoFocused(true),
+            onTempoCommit: commitTempo,
+            onTempoStep: (delta) => dispatch({ type: 'SET_TEMPO', bpm: bpm + delta }),
+            seedTempo,
+            bpm,
+            onMatchSeed: () => {
+              if (seedTempo !== null) dispatch({ type: 'SET_TEMPO', bpm: seedTempo })
+            },
+            onSkip: () => void skipRadio(),
+            onNewBed: () => void collectRadioCourseChange(),
+            // The landing flicker arrives in plan Task 12.
+            skipFlicker: 0
+          }}
+          picks={{
+            faves: favesShown,
+            onFavesPreview: previewFaves,
+            onFavesCommit: commitFaves,
+            favesTooltip: mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP,
+            source: sourceLean,
+            onSource: changeSourceLean,
+            matching: 100 - chaos,
+            onMatching: (matching) => setChaos(100 - matching),
+            artistLabel: artistFieldLabel(artist, currentUsername),
+            artistActive: mode === 'other',
+            artistOpen: artistMenu !== null,
+            artistButtonRef,
+            onArtistButton: (e) => {
+              if (artistMenu) {
+                setArtistMenu(null)
+                return
+              }
+              const rect = e.currentTarget.getBoundingClientRect()
+              setArtistMenu({ x: rect.left, y: rect.bottom + 4 })
+            },
+            mySounds: globalModifiers.includes('mine'),
+            onMySounds: () => setGlobalModifiers((prev) => toggleSlotModifier(prev, 'mine')),
+            mySoundsTooltip:
+              mode === 'other'
+                ? `artist mode picks ${artist}'s stems`
+                : !hasUsername
+                  ? MY_SOUNDS_NEEDS_USERNAME
+                  : undefined
+          }}
+          turn={{
+            shown: radioTurnShown,
+            can: radioTurnCan,
+            flash: radioTurnFlash,
+            onTurn: (move) => turnRadio(move)
+          }}
+          mix={{
+            rolling: rerollingSlotIds.size > 0,
+            onSimilarAll: (immediate) => void rerollAll(immediate),
+            keep: {
+              label: keeping ? 'keeping…' : (keptLabel ?? 'keep'),
+              disabled: keeping || listenOnly.has('keep'),
+              tooltip: listenOnly.has('keep') ? listenOnlyTip : 'keep this group',
+              pulse: keptLabel !== null,
+              onClick: () => void keepGroup()
+            },
+            hearts: {
+              label: fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts'),
+              disabled: fetchingHearts || listenOnly.has('fetchHearts'),
+              tooltip: listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts',
+              pulse: heartsLabel !== null,
+              onClick: () => void fetchHearts()
+            },
+            shelf: {
+              label: addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf',
+              disabled: addingToShelf || listenOnly.has('addToShelf'),
+              tooltip: listenOnly.has('addToShelf') ? listenOnlyTip : undefined,
+              pulse: justAddedToShelf,
+              onClick: () => void addToShelf()
+            },
+            timeline: {
+              label: addingToTimeline
+                ? 'adding…'
+                : justAddedToTimeline
+                  ? '✓ added'
+                  : 'add to timeline',
+              disabled: addingToTimeline || listenOnly.has('addToTimeline'),
+              listenOnly: listenOnly.has('addToTimeline'),
+              tooltip: listenOnly.has('addToTimeline') ? listenOnlyTip : undefined,
+              pulse: justAddedToTimeline,
+              onClick: () => void addToTimeline()
+            }
+          }}
+        />
+      )}
+      {/* The artist picker, opened from the header's artist button (radio off) or the strip's
+          (radio on). Fixed-position, so where it sits in the tree changes nothing. */}
+      {artistMenu && (
+        <DiscoverArtistPicker
+          x={artistMenu.x}
+          y={artistMenu.y}
+          artist={artist}
+          ownUsername={currentUsername}
+          onPick={(next) => changeArtist(normalizeArtistPick(next, currentUsername))}
+          onClose={() => setArtistMenu(null)}
+          ignoreRef={artistButtonRef}
+          footerExtra={
+            artist !== null ? (
+              <button
+                disabled={!discoverConsented || analysisQueued !== null}
+                data-tooltip={
+                  discoverConsented
+                    ? "queue this artist's stems for the overnight scan"
+                    : 'turn on library analysis first'
+                }
+                onClick={() => {
+                  // Disabled while the call runs (the label is non-null).
+                  setAnalysisQueued('queueing…')
+                  window.rifffApi
+                    .discoverQueueArtistAnalysis(artist)
+                    .then((r) => {
+                      // The whole queue's size: "queued 0" says nothing
+                      // when this artist's stems were all queued already.
+                      setAnalysisQueued(`${r.size.toLocaleString('en-US')} queued`)
+                      announceArtistScanQueued(r.size)
+                    })
+                    .catch((err: unknown) => {
+                      console.error('DiscoverPanel: discoverQueueArtistAnalysis failed:', err)
+                      setAnalysisQueued('couldn’t queue')
+                      window.setTimeout(() => setAnalysisQueued(null), 2500)
+                    })
+                }}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 9,
+                  padding: '2px 6px',
+                  background: 'transparent',
+                  border: '1px solid var(--ra-border)',
+                  color:
+                    !discoverConsented || analysisQueued !== null
+                      ? 'var(--ra-text-4)'
+                      : 'var(--ra-text-2)',
+                  cursor: !discoverConsented || analysisQueued !== null ? 'default' : 'pointer'
+                }}
+              >
+                {analysisQueued ?? 'analyse overnight'}
+              </button>
+            ) : undefined
+          }
+        />
+      )}
+
       {/* Direct request, 2026-09-17: "can we move them to the middle" --
           first tried centered across the full row width; follow-up --
           "align it middle below the waveforms, not middle of the whole
@@ -12089,122 +12204,133 @@ export function DiscoverPanel({
               faves` sat (@shared/discoverFaves): 0 no lean, 100 only starred stems (a roll with
               none that fits rolls as usual). Dimmed in artist mode: your stars are not among
               the artist's stems. */}
-          <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              justifyContent: 'center'
-            }}
-          >
-            <span
+          {/* While radio runs the faves dial and my sounds are the strip's. */}
+          {!radioOn && (
+            <div
               style={{
                 display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap',
                 alignItems: 'center',
-                gap: 4,
-                opacity: mode === 'other' ? 0.4 : 1
+                justifyContent: 'center'
               }}
             >
-              <Dial
-                value={favesShown}
-                onChange={previewFaves}
-                onCommit={commitFaves}
-                defaultValue={DEFAULT_FAVES}
-                size={22}
-                ariaLabel={FAVES_LABEL}
-                tooltip={mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP}
-              />
-              <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{FAVES_LABEL}</span>
-            </span>
-            {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
-              const needsUsername = modifier === 'mine' && !hasUsername
-              // Artist mode picks the artist's stems: `my sounds` is moot.
-              const overridden = mode === 'other'
-              const disabled = needsUsername || overridden
-              return (
-                <BracketToggle
-                  key={modifier}
-                  checked={!disabled && globalModifiers.includes(modifier)}
-                  onChange={() => setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))}
-                  label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
-                  disabled={disabled}
-                  tooltip={
-                    overridden
-                      ? `artist mode picks ${artist}'s stems`
-                      : needsUsername
-                        ? MY_SOUNDS_NEEDS_USERNAME
-                        : undefined
-                  }
+              <span
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 4,
+                  opacity: mode === 'other' ? 0.4 : 1
+                }}
+              >
+                <Dial
+                  value={favesShown}
+                  onChange={previewFaves}
+                  onCommit={commitFaves}
+                  defaultValue={DEFAULT_FAVES}
+                  size={22}
+                  ariaLabel={FAVES_LABEL}
+                  tooltip={mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP}
                 />
-              )
-            })}
-          </div>
-        </div>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifySelf: 'start',
-            marginLeft: 8,
-            paddingLeft: 10,
-            borderLeft: '1px solid var(--ra-border)'
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              gap: 3,
-              marginRight: 12
-            }}
-          >
-            {/* The source dial (2026-09-29): 0 = endlesss sounds, 100 =
-                other sounds, 50 = half and half. The ends are "only". See
-                drawSoundSource. */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
-              <Dial
-                value={sourceLean}
-                onChange={changeSourceLean}
-                defaultValue={DEFAULT_SOURCE_LEAN}
-                size={30}
-                ariaLabel="source"
-                tooltip="other clockwise"
-              />
-              <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
+                <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{FAVES_LABEL}</span>
+              </span>
+              {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
+                const needsUsername = modifier === 'mine' && !hasUsername
+                // Artist mode picks the artist's stems: `my sounds` is moot.
+                const overridden = mode === 'other'
+                const disabled = needsUsername || overridden
+                return (
+                  <BracketToggle
+                    key={modifier}
+                    checked={!disabled && globalModifiers.includes(modifier)}
+                    onChange={() =>
+                      setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))
+                    }
+                    label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
+                    disabled={disabled}
+                    tooltip={
+                      overridden
+                        ? `artist mode picks ${artist}'s stems`
+                        : needsUsername
+                          ? MY_SOUNDS_NEEDS_USERNAME
+                          : undefined
+                    }
+                  />
+                )
+              })}
             </div>
-            <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
-              source
-            </span>
-          </div>
+          )}
+        </div>
+        {/* Source and matching are the strip's while radio runs; the empty cell keeps the grid's
+            columns, so the chip list stays centred. */}
+        {radioOn ? (
+          <div />
+        ) : (
           <div
             style={{
               display: 'flex',
-              flexDirection: 'column',
               alignItems: 'center',
-              gap: 3
+              justifySelf: 'start',
+              marginLeft: 8,
+              paddingLeft: 10,
+              borderLeft: '1px solid var(--ra-border)'
             }}
           >
-            {/* Captioned "matching", so clockwise = MORE matching: the dial
-                shows 100 - chaos (chaos itself stays "0 = strictest" for
-                pickReroll). Starts at, and double-click returns to, 100 -
-                DEFAULT_DISCOVER_CHAOS: about 25 (Elling, 2026-10-01; was
-                all the way up, 2026-09-22). */}
-            <Dial
-              value={100 - chaos}
-              onChange={(matching) => setChaos(100 - matching)}
-              defaultValue={100 - DEFAULT_DISCOVER_CHAOS}
-              size={30}
-              ariaLabel="matching"
-              tooltip="more matching clockwise"
-            />
-            <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
-              matching
-            </span>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 3,
+                marginRight: 12
+              }}
+            >
+              {/* The source dial (2026-09-29): 0 = endlesss sounds, 100 =
+                  other sounds, 50 = half and half. The ends are "only". See
+                  drawSoundSource. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
+                <Dial
+                  value={sourceLean}
+                  onChange={changeSourceLean}
+                  defaultValue={DEFAULT_SOURCE_LEAN}
+                  size={30}
+                  ariaLabel="source"
+                  tooltip="other clockwise"
+                />
+                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
+              </div>
+              <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+                source
+              </span>
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 3
+              }}
+            >
+              {/* Captioned "matching", so clockwise = MORE matching: the dial
+                  shows 100 - chaos (chaos itself stays "0 = strictest" for
+                  pickReroll). Starts at, and double-click returns to, 100 -
+                  DEFAULT_DISCOVER_CHAOS: about 25 (Elling, 2026-10-01; was
+                  all the way up, 2026-09-22). */}
+              <Dial
+                value={100 - chaos}
+                onChange={(matching) => setChaos(100 - matching)}
+                defaultValue={100 - DEFAULT_DISCOVER_CHAOS}
+                size={30}
+                ariaLabel="matching"
+                tooltip="more matching clockwise"
+              />
+              <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+                matching
+              </span>
+            </div>
           </div>
-        </div>
+        )}
         {/* Always rendered (fixed height) so nothing shifts on screen. */}
         <div
           style={{
@@ -12313,53 +12439,6 @@ function RedoIcon(): React.JSX.Element {
         <path d="M13 6 H7 a4 4 0 0 0 -4 4 v1" />
         <path d="M5.5 8 l-2.5 2 l2.5 2" />
       </g>
-    </svg>
-  )
-}
-
-// Hand-drawn dice glyph. It predates @phosphor-icons/react (2026-09-29),
-// which is scoped to the six Discover row icons only, so it stays
-// hand-drawn. One usage: the toolbar's own "similar all" button, which
-// passes size={18}; the default of 12 is a leftover from the row's old
-// decorative dice.
-// Direct request, 2026-09-21: "instead of that loader, have the dice spin
-// intermittently" -- a quick full turn, then a rest (discover-dice-spin's
-// own 0-35% / 35-100% split), for as long as a roll is in flight.
-function DiceIcon({
-  size = 12,
-  spinning = false
-}: {
-  size?: number
-  spinning?: boolean
-}): React.JSX.Element {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 16 16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.3"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      style={{
-        flexShrink: 0,
-        animation: spinning ? 'discover-dice-spin 1200ms ease-in-out infinite' : undefined,
-        // Direct request, 2026-09-22: "when dice are animated, turn them
-        // white to show they are active" -- overrides whatever dim color the
-        // surrounding button inherits (stroke/fill use currentColor).
-        color: spinning ? 'var(--ra-text)' : undefined
-      }}
-    >
-      <rect x="2" y="2" width="12" height="12" rx="2.5" />
-      {/* Five pips (a DiceFive face) -- doesn't need to represent any real
-          rolled value, it's decorative either way, and five reads clearly
-          at this size where six pips would blur together. */}
-      <circle cx="5" cy="5" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="11" cy="5" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="8" cy="8" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="5" cy="11" r="0.9" fill="currentColor" stroke="none" />
-      <circle cx="11" cy="11" r="0.9" fill="currentColor" stroke="none" />
     </svg>
   )
 }
