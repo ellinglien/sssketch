@@ -145,15 +145,17 @@ export function Dial({
       aria-valuenow={value}
       data-tooltip={tooltip}
       onPointerDown={(e) => {
-        if (disabled) return
         // preventDefault kills the press's own default action (a text
         // selection dragged out from under the knob, and on a knob nested
         // in a draggable ancestor a native drag that would cancel the
         // capture outright); stopPropagation keeps the press off every
         // ancestor gesture -- the lane's own draw, a riser's move, the
-        // timeline's cmd-pan.
+        // timeline's cmd-pan. A disabled knob still does both (a press on
+        // it must not start an ancestor's drag either); it only never
+        // starts its own turn.
         e.preventDefault()
         e.stopPropagation()
+        if (disabled) return
         // preventDefault also suppresses the focus the press would
         // normally give this element, and the arrow keys below need it.
         e.currentTarget.focus()
@@ -161,10 +163,10 @@ export function Dial({
         dragRef.current = { startY: e.clientY, startValue: value, latestValue: value }
       }}
       onMouseDown={(e) => {
-        if (disabled) return
         // The compatibility mouse event for the same press. Stopped here
         // so this knob needs no `stopPropagation` wrapper at its call
         // sites -- every ancestor drag in this app starts on mousedown.
+        // Disabled or not.
         e.preventDefault()
         e.stopPropagation()
       }}
