@@ -405,6 +405,11 @@ export interface RadioHookRowInput {
   eligible: boolean
   /** The last heard row of drums or of bass (the arc's lastOfItsKind, over heard rows). */
   lastLowHeard: boolean
+  /** Silencing this row would shorten the loop (its stem alone is the longest on it, the arc's
+   * shrinksLoop rule): it never rests, and its rest draw is not made. Absent: false. (The web,
+   * whose engine drops a removed row from the loop; the desktop's loop counts every resolved row,
+   * heard or not.) */
+  restShrinksLoop?: boolean
 }
 
 export interface RadioHooksStepInput {
@@ -561,7 +566,8 @@ export function stepRadioHooks(
       .sort((a, b) => b.bars - a.bars || order(a) - order(b))
     for (const h of due) {
       const row = rowOf(h.rowId)!
-      const mayRest = input.canRest && input.arcThinning && !row.lastLowHeard
+      const mayRest =
+        input.canRest && input.arcThinning && !row.lastLowHeard && row.restShrinksLoop !== true
       // the substitute must be warm, unless this exit can rest -- decided by its draw below
       if (!mayRest && !input.ready(h.rowId, 'exit')) continue
       const rest = mayRest && input.random() < HOOK_REST_CHANCE

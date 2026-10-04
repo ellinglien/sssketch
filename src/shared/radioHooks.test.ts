@@ -322,6 +322,30 @@ describe('the cycle', () => {
     }
   })
 
+  it('never rests a row whose silence would shorten the loop; its draw not made', () => {
+    // the arc's own shrinksLoop rule (Task 11): a resting row is gone from the mix, and a loop
+    // whose longest stem leaves shrinks under every hook's phrase
+    const rows = ROWS.map((r) => (r.id === 'l' ? { ...r, restShrinksLoop: true } : r))
+    const shrinks = run(hooked(['l']), 1000, {
+      arcThinning: true,
+      canRest: true,
+      rows,
+      seed: 'rest'
+    })
+    const exits = shrinks.log.flatMap((w) => w.r.decided).filter((d) => d.event === 'exit')
+    expect(exits.length).toBeGreaterThan(10)
+    expect(exits.some((d) => d.event === 'exit' && d.rest)).toBe(false)
+    // no rest draw: the same draws as a runtime that cannot rest
+    const plain = run(hooked(['l']), 300, { rows, seed: 'same' })
+    const other = run(hooked(['l']), 300, { arcThinning: true, canRest: true, rows, seed: 'same' })
+    expect(JSON.stringify(other.state)).toBe(JSON.stringify(plain.state))
+    // false or absent: today's
+    const off = ROWS.map((r) => (r.id === 'l' ? { ...r, restShrinksLoop: false } : r))
+    const a = run(hooked(['l']), 300, { arcThinning: true, canRest: true, rows: off, seed: 's' })
+    const b = run(hooked(['l']), 300, { arcThinning: true, canRest: true, seed: 's' })
+    expect(JSON.stringify(a.state)).toBe(JSON.stringify(b.state))
+  })
+
   it('after HOOK_RETURNS_BEFORE_REST returns, a long rest, and the count starts again', () => {
     const { log } = run(hooked(['l']), 3000)
     const exits = log.flatMap((w) => w.r.decided).filter((d) => d.event === 'exit')
