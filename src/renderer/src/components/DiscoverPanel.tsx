@@ -115,7 +115,33 @@ import {
   type RadioChangeForecast,
   type RadioPayoff
 } from '@shared/radioBuildSize'
-import { radioHookPaceScale } from '@shared/radioHooks'
+import {
+  NO_RADIO_HOOKS,
+  NO_RADIO_LANDINGS,
+  RADIO_HOOK_BACK_WORD,
+  RADIO_HOOK_OUT_WORD,
+  advanceRadioLandingWindow,
+  forgetRadioHookOnManualChange,
+  likeRadioStem,
+  noteRadioLandings,
+  pruneRadioHooks,
+  radioHookInRow,
+  radioHookInRowNext,
+  radioHookOf,
+  radioHookPaceScale,
+  radioHookReservesRow,
+  radioHookStemsAway,
+  radioHookTurnoverExcluded,
+  radioHooksStarted,
+  radioHooksStopped,
+  radioLandingsInPhrase,
+  releaseRadioHook,
+  stepRadioHooks,
+  withdrawRadioHookEvent,
+  type RadioHook,
+  type RadioHooksState,
+  type RadioLandingWindow
+} from '@shared/radioHooks'
 import { radioForecastWithUncertainRows, radioWrapBeforeLastLap } from '@shared/radioBuildForecast'
 import {
   DEFAULT_FAVES,
@@ -293,6 +319,7 @@ import { discoverStemPans } from '@shared/radioPan'
 import { discoverStemPumpRoles } from '@shared/radioPump'
 import { normalizeSoundSettings, throwEveryBars } from '@shared/radioSound'
 import {
+  armDiscoverExitThrow,
   discoverThrowSends,
   discoverThrowAim,
   initialDiscoverThrowState,
@@ -778,7 +805,9 @@ function discoverTurnaroundRows(
     previewing: ReadonlySet<string>
     lengths: ReadonlyMap<string, number>
     loopBars: number
-    flags: RadioSlotFlags
+    /** Radio's hooks: `hooked` is a hook IN on the row; `exiting`, a hook whose exit is decided
+     * for this wrap (its echo throw ends on it: the planner silences nothing on that row). */
+    hooks: RadioHooksState
     exiting: string | null
     filteringIn: (slotId: string) => boolean
   }
@@ -786,7 +815,8 @@ function discoverTurnaroundRows(
   return slots.map((s) => ({
     id: s.id,
     kinds: s.kinds,
-    hooked: o.flags[s.id] === 'hook',
+    hooked: radioHookInRow(o.hooks, s.id),
+    ...(radioHookOf(o.hooks, s.id)?.decided?.event === 'exit' && { exiting: true }),
     audible: o.previewing.has(s.id) && o.lengths.has(s.id) && s.id !== o.exiting,
     inFilterIn: o.filteringIn(s.id),
     barLength: o.lengths.get(s.id) ?? o.loopBars
@@ -3032,6 +3062,28 @@ export function DiscoverPanel({
   useEffect(() => {
     radioSlotFlagsRef.current = radioSlotFlags
   }, [radioSlotFlags])
+  // RADIO'S HOOKS (@shared/radioHooks; spec 2026-10-03-radio-anointed-stems-design section 2): a
+  // hooked STEM on its row, leaving on a line with an echo throw and coming back on a phrase
+  // start. The successor to the `hook` slot flag (no longer set). State for the rows' render, a
+  // ref for the clock effect (written first, by updateRadioHooks only). Not persisted.
+  const [radioHooks, setRadioHooks] = useState<RadioHooksState>(NO_RADIO_HOOKS)
+  const radioHooksRef = useRef<RadioHooksState>(NO_RADIO_HOOKS)
+  /** The hooked stem's pick by row: what a return queues. Set with the hook. */
+  const radioHookPicksRef = useRef(new Map<string, SlotPick>())
+  /** The hooked stem warmed for its return (prepare), by row; null while warming. */
+  const radioHookWarmRef = useRef(new Map<string, ResolvedCandidateStem | null>())
+  /** An exit's substitute, picked and warmed at `prepare`, by row; stem null while warming. */
+  const radioHookSubsRef = useRef(
+    new Map<
+      string,
+      { pick: SlotPick | null; stem: ResolvedCandidateStem | null; kindsKey: string }
+    >()
+  )
+  /** Row landings per lap over the last phrase (the hook's calm wait). */
+  const radioLandingsRef = useRef<RadioLandingWindow>(NO_RADIO_LANDINGS)
+  /** The hook step owed at this wrap (radioHooksAtWrap): run in the fold step's deferred slot,
+   * queued first, or by whichever of the fold step and the roll runs earlier. */
+  const radioHooksStepOwedRef = useRef<{ loopBars: number; lap: number } | null>(null)
   // The armed GESTURE -- the density arc's exit drop-out (no stem change) or
   // a transition (one attached to a change). Both are the same thing to the
   // engine: curves written into the preview project, armed a lap early and
@@ -3278,6 +3330,12 @@ export function DiscoverPanel({
          * for its row, restarting radio's interval from the landing, and
          * radio arms nothing while it waits. */
         radioSkip?: boolean
+        /** A hook's own landing (@shared/radioHooks), queued by the hook step a lap ahead: the
+         * exit's substitute (a cut: the echo throw is its gesture) or the hooked stem coming back.
+         * Never a manual change: it clears no hook and no replace-soon elsewhere, is never undone
+         * (undoSeq -Infinity), and gives way to any manual change for its row
+         * (withdrawRadioHookEvent: it is tried again at the next line or phrase start). */
+        hook?: 'exit' | 'return'
       }
     >
   >(new Map())
@@ -3628,7 +3686,8 @@ export function DiscoverPanel({
   function rollRadioTurnaround(owed: TurnaroundRollOwed): void {
     // The rate below reads the coming top's realignment: a fold step still owed runs first,
     // wherever this roll runs from (the wrap's deferred slot, the due branch's inline roll, a
-    // stem resolving).
+    // stem resolving) -- and the hook step before it (runOwedRadioFoldStep runs it), so the
+    // forecast counts a return and the planner keeps off an exiting row.
     runOwedRadioFoldStep()
     const leadArmed = radioGestureRef.current.some(
       (g) => g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
@@ -3762,7 +3821,7 @@ export function DiscoverPanel({
         previewing: previewingSlotIdsRef.current,
         lengths,
         loopBars,
-        flags: radioSlotFlagsRef.current,
+        hooks: radioHooksRef.current,
         exiting,
         filteringIn: (slotId) =>
           radioGestureRef.current.some((g) => g.slotId === slotId && g.kind === 'filter in')
@@ -3787,8 +3846,9 @@ export function DiscoverPanel({
    * armed pick, warm and due at that wrap, with its riding companions; every ready manual change;
    * the density arc's row joining (radioForecastWithArcAdd: a large change once its stem is ready,
    * at most a medium one while it is still picking -- it is, at the phrase end's roll) or its exit;
-   * a course change. `rowIds` are the rows counted, `stems` the stems they bring; `radio` says
-   * radio's own change is among them. No hooks yet (Task 9). */
+   * a course change; a hook's return decided for that top (hookReturn, lowEndReturn on drums or
+   * bass), never its exit. `rowIds` are the rows counted, `stems` the stems they bring; `radio`
+   * says radio's own change is among them. */
   function radioForecastNow(
     loopBars: number,
     pos: number
@@ -3843,13 +3903,39 @@ export function DiscoverPanel({
       for (const k of coldCompanions) rowIds.add(k.slotId)
       uncertain += coldCompanions.length
     }
+    // A hook coming back at that top (decided at the wrap that started this lap, binding): a row,
+    // and how long it was away; on a drums or bass row the low end returning (planning
+    // decision 2). An exit is a dub exit: no row, no build.
+    let hookReturn: RadioChangeForecast['hookReturn'] = null
+    let lowEndReturn = false
+    for (const h of radioHooksRef.current.hooks) {
+      const d = h.decided
+      // (a row radio's change or a companion also names counts once: the return wins it)
+      if (d === null || d.event !== 'return') continue
+      rowIds.add(h.rowId)
+      stems.add(h.stemId)
+      if (hookReturn === null || d.awayBars > hookReturn.awayBars) {
+        hookReturn = { awayBars: d.awayBars }
+      }
+      const kinds = slotsRef.current.find((s) => s.id === h.rowId)?.kinds ?? []
+      if (kinds.some((k) => k === 'drums' || k === 'bass')) lowEndReturn = true
+    }
     const adding = arcAddingRef.current
     for (const [slotId, m] of manualChangesRef.current) {
-      if (m.stem !== null && slotId !== adding?.slotId && !rowIds.has(slotId)) add(slotId, m.pick)
+      if (
+        m.stem !== null &&
+        m.hook !== 'exit' &&
+        slotId !== adding?.slotId &&
+        !rowIds.has(slotId)
+      ) {
+        add(slotId, m.pick)
+      }
     }
     let f: RadioChangeForecast = radioForecastWithUncertainRows(
       {
         ...NO_CHANGE_FORECAST,
+        hookReturn,
+        lowEndReturn,
         rows: rowIds.size - uncertain,
         arcStep: arcExitingRowNow() !== null ? 'remove' : null,
         course: radioCourseChangeRef.current !== null
@@ -3938,6 +4024,7 @@ export function DiscoverPanel({
       !taken.has(now.slotId) &&
       !manual.has(now.slotId) &&
       eligible.includes(now.slotId) &&
+      !radioHookTurnoverExcluded(radioHooksRef.current, now.slotId) &&
       !stems.has(now.pick.candidate.stemCID) &&
       radioChangeLandsAtBar(
         clock,
@@ -3951,7 +4038,10 @@ export function DiscoverPanel({
       stems.add(now.pick.candidate.stemCID)
       const companions = radioDistinctStemRows(
         radioHeldCompanionsFrom(now)
-          .filter((k) => !taken.has(k.slotId))
+          .filter(
+            (k) =>
+              !taken.has(k.slotId) && !radioHookTurnoverExcluded(radioHooksRef.current, k.slotId)
+          )
           .map((k) => ({ ...k, stemCID: stemOf(k) })),
         stems
       ).map(({ stemCID, ...k }) => {
@@ -3970,6 +4060,7 @@ export function DiscoverPanel({
         taken.has(k.slotId) ||
         manual.has(k.slotId) ||
         !eligible.includes(k.slotId) ||
+        radioHookTurnoverExcluded(radioHooksRef.current, k.slotId) ||
         !radioSpareFits(k)
           ? []
           : [{ slotId: k.slotId, pick: k.pick, stem: k.stem, stemCID: stemOf(k) }]
@@ -4290,7 +4381,9 @@ export function DiscoverPanel({
     for (const id of radioSkipPickingRef.current) taken.add(id)
     if (arcAddingRef.current !== null) taken.add(arcAddingRef.current.slotId)
     if (arcExitRef.current !== null) taken.add(arcExitRef.current.slotId)
-    const eligible = radioEligibleSlotIds().filter((id) => !taken.has(id))
+    const eligible = radioEligibleSlotIds().filter(
+      (id) => !taken.has(id) && !radioHookTurnoverExcluded(radioHooksRef.current, id)
+    )
     const ids = pickRadioSlotIds(eligible, radioLastSlotRef.current, missing, {
       turnover: radioSettings.turnover,
       changedAt: radioChangedAtRef.current,
@@ -4500,6 +4593,263 @@ export function DiscoverPanel({
       percussive: stem?.type === 'drums'
     })
   }
+  // --- radio's hooks (@shared/radioHooks; spec anointed-stems section 2) ---
+
+  /** THE ONE WAY the hooks are written: the ref first (the clock effect's closures read it), then
+   * the state the rows render from. */
+  function updateRadioHooks(next: RadioHooksState): void {
+    if (next === radioHooksRef.current) return
+    radioHooksRef.current = next
+    setRadioHooks(next)
+  }
+  /** What the panel keeps for a hook's row (its pick, the warm return, the substitute) goes. */
+  function forgetRadioHookRow(rowId: string): void {
+    radioHookPicksRef.current.delete(rowId)
+    radioHookWarmRef.current.delete(rowId)
+    radioHookSubsRef.current.delete(rowId)
+  }
+  /** Hooks let go (a release, the cap, 👎): what was kept for them goes, and a landing of theirs
+   * still queued is withdrawn -- an away hook's substitute stays on its row (spec 2.7). */
+  function radioHooksReleased(released: readonly RadioHook[]): void {
+    for (const h of released) {
+      forgetRadioHookRow(h.rowId)
+      if (manualChangesRef.current.get(h.rowId)?.hook !== undefined) {
+        withdrawManualChange(h.rowId, 'hook-released')
+      }
+    }
+  }
+  /** The pick a hook's return queues: the slot's playing stem, with its match-meter bar when the
+   * slot has one for it, else unranked (commitSlotPick then leaves the meter as it is). */
+  function radioHookPickOf(slot: DiscoverSlot & { candidate: DiscoverCandidate }): SlotPick {
+    const bar = slot.pickBar
+    return bar !== undefined && bar.candidate === slot.candidate
+      ? { candidate: slot.candidate, barUsed: bar.barUsed, barRequested: bar.barRequested }
+      : { candidate: slot.candidate, barUsed: null, barRequested: traitMatchBar, unranked: true }
+  }
+  /** 👍's hold: hooks the row's playing stem (likeRadioStem: radio on, the row unlocked and without
+   * a hook; the cap releases the oldest). Radio's change or pick on the row gives way (a hook in is
+   * out of radio's turnover), and the row's replace-soon goes, as the old hold took it. */
+  function likeRadioHook(slot: DiscoverSlot, canHold: boolean): void {
+    if (slot.candidate === null) return
+    const r = likeRadioStem(radioHooksRef.current, {
+      rowId: slot.id,
+      stemId: slot.candidate.stemCID,
+      rowCount: slotsRef.current.length,
+      paceLevel: radioPaceLevelOf(radioSettings),
+      random: Math.random,
+      canHold
+    })
+    if (r.state === radioHooksRef.current) return
+    updateRadioHooks(r.state)
+    radioHooksReleased(r.released)
+    radioHookPicksRef.current.set(slot.id, radioHookPickOf({ ...slot, candidate: slot.candidate }))
+    radioSparesRef.current = radioSparesRef.current.filter((k) => k.slotId !== slot.id)
+    setRadioSlotFlags((prev) =>
+      prev[slot.id] === 'replace-soon' ? toggleRadioReplaceSoon(prev, slot.id) : prev
+    )
+    radioYieldsRow(slot.id)
+  }
+  /** An exit's substitute is warm and still fits: its row has the kinds it was picked for, and its
+   * stem plays on no row. One that no longer fits is dropped (picked again at the next wrap). */
+  function radioHookSubReady(rowId: string): boolean {
+    const sub = radioHookSubsRef.current.get(rowId)
+    if (sub === undefined || sub.stem === null || sub.pick?.candidate == null) return false
+    const stemId = sub.pick.candidate.stemCID
+    const slot = slotsRef.current.find((s) => s.id === rowId)
+    const fits =
+      slot !== undefined &&
+      slotKindsKey(slot.kinds) === sub.kindsKey &&
+      !slotsRef.current.some((s) => s.candidate?.stemCID === stemId)
+    if (!fits) radioHookSubsRef.current.delete(rowId)
+    return fits
+  }
+  /** Picks and warms an exit's substitute (prepare): radio's ordinary pick for the row's kinds,
+   * off the hooked stem (avoidOwnStem) and every away hook's (pickForSlot). It yields the row to
+   * any other pick for it. A failed pick is asked for again at the next wrap. */
+  function armRadioHookSub(rowId: string): void {
+    const slot = slotsRef.current.find((s) => s.id === rowId)
+    if (slot === undefined || radioHookSubsRef.current.has(rowId)) return
+    const sub: {
+      pick: SlotPick | null
+      stem: ResolvedCandidateStem | null
+      kindsKey: string
+    } = { pick: null, stem: null, kindsKey: slotKindsKey(slot.kinds) }
+    radioHookSubsRef.current.set(rowId, sub)
+    const gone = (): boolean => radioHookSubsRef.current.get(rowId) !== sub
+    void pickForSlot(rowId, slot.kinds, { avoidOwnStem: true, yieldRow: true }).then((pick) => {
+      if (gone()) return
+      if (pick === null || pick.candidate === null || !radioOnRef.current) {
+        radioHookSubsRef.current.delete(rowId)
+        return
+      }
+      sub.pick = pick
+      void resolveAndWarmPick(pick).then((stem) => {
+        if (gone()) return
+        if (stem === null) radioHookSubsRef.current.delete(rowId)
+        else sub.stem = stem
+      })
+    })
+  }
+  /** Warms the hooked stem for its return (prepare): resolved, stretched, decoded. A failed warm
+   * is asked for again at the next wrap. */
+  function warmRadioHookStem(rowId: string): void {
+    const pick = radioHookPicksRef.current.get(rowId)
+    if (pick === undefined || radioHookWarmRef.current.has(rowId)) return
+    radioHookWarmRef.current.set(rowId, null)
+    void resolveAndWarmPick(pick).then((stem) => {
+      if (radioHookWarmRef.current.get(rowId) !== null) return
+      if (radioHookPicksRef.current.get(rowId) !== pick) return
+      if (stem === null) radioHookWarmRef.current.delete(rowId)
+      else radioHookWarmRef.current.set(rowId, stem)
+    })
+  }
+  /** Every wrap while radio runs: a new lap in the landing window (the calm wait reads it), and,
+   * with hooks set, the hook step is owed -- queued in the fold step's deferred slot (two
+   * microtasks on) BEFORE the fold step and the turnaround roll, so it runs after densityTick's
+   * microtask and this tick's landings and before the two that read it (spec section 10, risk 1):
+   * the fold step sees a decided return as hooked, the roll counts it and keeps off an exiting
+   * row. Either of those running early (the roll inline, a stem resolving) runs it first. */
+  function radioHooksAtWrap(loopBars: number, lap: number): void {
+    if (!radioOnRef.current) return
+    radioLandingsRef.current = advanceRadioLandingWindow(
+      radioLandingsRef.current,
+      turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars)
+    )
+    if (radioHooksRef.current.hooks.length === 0) return
+    radioHooksStepOwedRef.current = { loopBars, lap }
+    void Promise.resolve().then(() => Promise.resolve().then(() => runOwedRadioHooksStep()))
+  }
+  /** The owed hook step (stepRadioHooks): events decided at the last wrap have landed (the manual
+   * path landed them) and flip; the hook clock adds the lap; returns are decided on phrase starts
+   * and at most one exit on a line, each queued now as a hook-marked manual change for the next
+   * wrap (its stem already warm); an exit's echo throw is armed live, at once. A no-op with
+   * nothing owed. */
+  function runOwedRadioHooksStep(): void {
+    const owed = radioHooksStepOwedRef.current
+    if (owed === null) return
+    radioHooksStepOwedRef.current = null
+    if (!radioOnRef.current) return
+    const { loopBars, lap } = owed
+    const slots = slotsRef.current
+    const live = new Set(slots.map((s) => s.id))
+    for (const h of radioHooksRef.current.hooks) if (!live.has(h.rowId)) forgetRadioHookRow(h.rowId)
+    let state = pruneRadioHooks(radioHooksRef.current, live)
+    // A hook in whose stem is no longer on its row and is not on its way back there (a project
+    // swap, a change no rule saw), or one with nothing to come back with: gone.
+    for (const h of state.hooks) {
+      if (h.decided !== null || manualChangesRef.current.get(h.rowId)?.hook !== undefined) continue
+      const stale =
+        !radioHookPicksRef.current.has(h.rowId) ||
+        (h.state === 'in' && slots.find((s) => s.id === h.rowId)?.candidate?.stemCID !== h.stemId)
+      if (stale) {
+        state = releaseRadioHook(state, h.rowId).state
+        forgetRadioHookRow(h.rowId)
+      }
+    }
+    const eligible = new Set(radioEligibleSlotIds())
+    const heard = slots.filter((s) => previewingSlotIdsRef.current.has(s.id))
+    const lowHeard = (kind: DiscoverSlotKind): number =>
+      heard.filter((s) => s.kinds.includes(kind)).length
+    const pos = radioClockRef.current?.lastPos ?? 0
+    const coming = radioForecastNow(loopBars, pos).f
+    const leg = densityLegRef.current
+    const r = stepRadioHooks(state, {
+      loopBars,
+      lap,
+      phraseLaps: turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars),
+      paceLevel: radioPaceLevelOf(radioSettings),
+      held: false,
+      rows: slots.map((s) => ({
+        id: s.id,
+        stemId: s.candidate?.stemCID ?? null,
+        kinds: s.kinds,
+        eligible: eligible.has(s.id) && !manualChangesRef.current.has(s.id),
+        lastLowHeard:
+          previewingSlotIdsRef.current.has(s.id) &&
+          ((s.kinds.includes('drums') && lowHeard('drums') === 1) ||
+            (s.kinds.includes('bass') && lowHeard('bass') === 1))
+      })),
+      ready: (rowId, event) =>
+        event === 'exit'
+          ? radioHookSubReady(rowId)
+          : (radioHookWarmRef.current.get(rowId) ?? null) !== null,
+      changeAtNextWrap: coming.rows > 0 || coming.arcStep !== null || coming.course,
+      calmLandings: radioLandingsInPhrase(radioLandingsRef.current),
+      arcThinning:
+        radioDensityOf(radioSettings) === 'arc' &&
+        leg !== null &&
+        leg.phase === 'thinning' &&
+        slots.length > leg.target,
+      // resting exits: Task 11
+      canRest: false,
+      random: Math.random
+    })
+    updateRadioHooks(r.state)
+    for (const p of r.prepare) {
+      if (p.event === 'exit') armRadioHookSub(p.rowId)
+      else warmRadioHookStem(p.rowId)
+    }
+    // a prepare whose pick or warm failed is asked for again
+    for (const h of r.state.hooks) {
+      if (!h.prepared || h.decided !== null) continue
+      if (h.state === 'in') armRadioHookSub(h.rowId)
+      else warmRadioHookStem(h.rowId)
+    }
+    for (const d of r.decided) {
+      const sub = radioHookSubsRef.current.get(d.rowId)
+      const pick = d.event === 'exit' ? sub?.pick : radioHookPicksRef.current.get(d.rowId)
+      const stem = d.event === 'exit' ? sub?.stem : (radioHookWarmRef.current.get(d.rowId) ?? null)
+      // binding once queued; a row with a manual change waiting keeps it, and the event is tried
+      // again at the next line (an exit) or phrase start (a return)
+      const queued =
+        pick != null &&
+        stem != null &&
+        queueManualChange(
+          d.rowId,
+          pick,
+          false,
+          Number.NEGATIVE_INFINITY,
+          false,
+          // the exit's substitute lands as a cut: the echo throw is its gesture. The return's
+          // arrival is drawn when it is staged, sized, with no filter in or bloom.
+          d.event === 'exit' ? { kind: 'cut', beats: 4 } : null,
+          { hook: d.event, stem }
+        )
+      if (!queued) {
+        updateRadioHooks(withdrawRadioHookEvent(radioHooksRef.current, d.rowId))
+        continue
+      }
+      if (d.event === 'return') {
+        radioHookWarmRef.current.delete(d.rowId)
+        console.log(`[radio-hook] back on ${d.rowId} (away ${d.awayBars} bars)`)
+        continue
+      }
+      radioHookSubsRef.current.delete(d.rowId)
+      // The echo throw, armed live now as a lead-in is: its push goes out at once and the
+      // substitute's stage follows on a later tick. Dry when it cannot start a bar ahead, another
+      // throw is armed, the project's throws are off, or the row has bass (d.throw null).
+      let thrown = false
+      const throws = normalizeSoundSettings(sound ?? appSoundDefaultsNow()).throws
+      if (d.throw !== null && throws.on && throws.level > 0) {
+        const lengths = [...resolvedBarLengthsRef.current.values()]
+        const armed = armDiscoverExitThrow(radioThrowRef.current, {
+          slotId: d.rowId,
+          shape: d.throw,
+          pos,
+          loopBars: lengths.length > 0 ? Math.max(...lengths) : loopBars,
+          bpm: bpmRef.current
+        })
+        if (armed !== null) {
+          radioThrowRef.current = armed
+          scheduleSyncPreviewToEngine(previewingSlotIdsRef.current)
+          thrown = true
+        }
+      }
+      console.log(
+        `[radio-hook] out on ${d.rowId} (${thrown && d.throw !== null ? `echo ${d.throw.beats} beats` : 'dry'}, away ${d.awayBars} bars)`
+      )
+    }
+  }
   /** Every wrap while radio runs: the step is owed, and runs two microtasks on (the turnaround's
    * slot, radioTurnaroundAtWrap -- queued first, so it runs first there): after densityTick's
    * microtask (the arc's exit decided at this wrap) and after every landing this tick commits, so
@@ -4525,6 +4875,8 @@ export function DiscoverPanel({
    * seed starts a new machine. A no-op with nothing owed: the turnaround's roll calls it first
    * (rollRadioTurnaround), so a roll that runs early (the due branch's) reads this step too. */
   function runOwedRadioFoldStep(): void {
+    // the hook step decides first: a return decided for the next lap reads as hooked here
+    runOwedRadioHooksStep()
     const owed = radioFoldStepOwedRef.current
     if (owed === null) return
     radioFoldStepOwedRef.current = null
@@ -4545,7 +4897,8 @@ export function DiscoverPanel({
         stemId: s.candidate?.stemCID ?? null,
         kinds: s.kinds,
         barLength: resolvedBarLengthsRef.current.get(s.id) ?? null,
-        hooked: radioSlotFlagsRef.current[s.id] === 'hook',
+        // the step decides the NEXT lap: a hook in and not leaving, or coming back
+        hooked: radioHookInRowNext(radioHooksRef.current, s.id),
         previewing: previewing.has(s.id),
         percussive: resolvedStemsRef.current.get(s.id)?.type === 'drums'
       })),
@@ -4619,7 +4972,7 @@ export function DiscoverPanel({
       stemId: pick.candidate?.stemCID ?? null,
       kinds: slotsRef.current.find((s) => s.id === slotId)?.kinds ?? [],
       barLength: stem.barLength,
-      hooked: radioSlotFlagsRef.current[slotId] === 'hook',
+      hooked: radioHookInRowNext(radioHooksRef.current, slotId),
       audible: true,
       percussive: stem.type === 'drums'
     }
@@ -5000,6 +5353,19 @@ export function DiscoverPanel({
         })
       }
     }
+    // A hook's landing: `hook out` / `hook back` on its row from the top it lands on.
+    for (const [rowId, m] of manualChangesRef.current) {
+      if (m.hook === undefined) continue
+      const key = `hook-${m.hook}@${rowId}@${m.pick.candidate?.stemCID ?? ''}`
+      live.add(key)
+      if (seen.has(key)) continue
+      log.push({
+        rowId,
+        word: m.hook === 'exit' ? RADIO_HOOK_OUT_WORD : RADIO_HOOK_BACK_WORD,
+        at: lapStart + loopBars,
+        key
+      })
+    }
     radioFlashLogRef.current = pruneRadioFlashes(log, now, 1, live)
     radioFlashSeenRef.current = live
   }
@@ -5055,7 +5421,11 @@ export function DiscoverPanel({
       manual: [...manualChangesRef.current].map(([rowId, m]) => ({
         rowId,
         kind: m.arrival?.kind ?? null,
-        ready: m.stem !== null
+        ready: m.stem !== null,
+        // a hook's own landing reads as one (next: row 2 → hook back)
+        ...(m.hook !== undefined && {
+          hook: m.hook === 'exit' ? ('out' as const) : ('back' as const)
+        })
       })),
       arc: !arcOn
         ? null
@@ -5613,7 +5983,9 @@ export function DiscoverPanel({
             // play on. It takes a cut, and leaves the lap's one leading
             // gesture for a row that can use it.
             canLead: !m.joining,
-            ...(size !== undefined && { size })
+            ...(size !== undefined && { size }),
+            // a hook coming back: no filter in or bloom (it returns whole, as the drop)
+            ...(m.hook === 'return' && { hookReturn: true })
           })),
           {
             pick: (kinds, row) =>
@@ -5621,7 +5993,12 @@ export function DiscoverPanel({
                 radioSettings.transitions,
                 kinds,
                 Math.random,
-                row.size === undefined ? undefined : { size: row.size }
+                row.size === undefined && row.hookReturn !== true
+                  ? undefined
+                  : {
+                      ...(row.size !== undefined && { size: row.size }),
+                      ...(row.hookReturn === true && { hookReturn: true })
+                    }
               ),
             dropOutBeats: pickDropOutBeats,
             // A hole, a riser or a drop-out -- radio's own or an earlier
@@ -5981,6 +6358,9 @@ export function DiscoverPanel({
     // first: after the arc's exit and this tick's landings, before the roll, which reads whether
     // its phrase ends on a realignment top (radioFoldTurnaroundRate). Still before the top the
     // decided cycles are staged for.
+    // Radio's hooks step at every wrap in that same slot, queued before both (spec anointed-stems
+    // section 10, risk 1): after this tick's landings, before the fold step and the roll.
+    if (step.wrapped) radioHooksAtWrap(loopBars, step.clock.turnaroundLap ?? 0)
     if (step.wrapped) radioFoldAtWrap(loopBars)
     if (step.wrapped) radioTurnaroundAtWrap(step.turnaroundLapStarts, loopBars)
     else {
@@ -6069,6 +6449,7 @@ export function DiscoverPanel({
           joining: boolean
           arrival: ManualArrival | null
           radioSkip?: boolean
+          hook?: 'exit' | 'return'
         }
       ][] = manualToLand
       if (landingReady.length > 0) {
@@ -6242,7 +6623,8 @@ export function DiscoverPanel({
           if (!committed && !manualCommitted) {
             radioTraceBegin(boundaryBars, bpmRef.current, 'manual') // TEMP
           }
-          commitSlotPick(slotId, change.pick)
+          // a hook's own landing is not a manual change: it clears no hook
+          commitSlotPick(slotId, change.pick, change.hook !== undefined)
           noteTurnaroundLanding(slotId, change.stem?.barLength ?? null)
           noteFoldLanding(slotId, change.pick, change.stem)
           // A manual change is a straight cut: on a row the fold holds, the machine follows by
@@ -6932,6 +7314,10 @@ export function DiscoverPanel({
     for (const slotId of [...manualChangesRef.current.keys()]) {
       if (!validIds.has(slotId)) withdrawManualChange(slotId, 'manual-change-undone')
     }
+    // a hook on a row the snapshot does not have goes with it
+    for (const h of radioHooksRef.current.hooks)
+      if (!validIds.has(h.rowId)) forgetRadioHookRow(h.rowId)
+    updateRadioHooks(pruneRadioHooks(radioHooksRef.current, validIds))
     // forgetSlotResolution (not just resolvedStemsRef.current.delete(id))
     // as of code review, 2026-09-17 -- undo/redo dropping a resolved slot
     // used to leave its own barLength behind in resolvedBarLengthsRef/
@@ -7230,6 +7616,7 @@ export function DiscoverPanel({
       setManualChanges(new Map())
       for (const [slotId, change] of waiting) {
         if (!slotsRef.current.some((s) => s.id === slotId)) continue
+        if (change.hook !== undefined) continue
         commitSlotPick(slotId, change.pick)
       }
     }
@@ -7672,11 +8059,24 @@ export function DiscoverPanel({
    * else was waiting. A no-op for a row with nothing waiting -- and so
    * always, with radio off, where nothing ever waits. */
   function withdrawManualChange(id: string, reason: string): void {
-    if (!manualChangesRef.current.has(id)) return
+    const entry = manualChangesRef.current.get(id)
+    if (entry === undefined) return
     const next = new Map(manualChangesRef.current)
     next.delete(id)
     setManualChanges(next)
     cancelStagedSwap(reason)
+    // A hook's landing taken out of the queue (a manual change won its row, undo, the row
+    // removed, Cmd): its decision is withdrawn, to be tried again at the next line.
+    if (entry.hook !== undefined) {
+      updateRadioHooks(withdrawRadioHookEvent(radioHooksRef.current, id))
+    }
+  }
+  /** A manual change (not a hook's own landing) waits for the loop top on this row: a second
+   * click there is ignored. A hook's landing waiting there gives way instead
+   * (queueManualChange). */
+  function manualWaitingOn(id: string): boolean {
+    const m = manualChangesRef.current.get(id)
+    return m !== undefined && m.hook === undefined
   }
 
   function removeSlot(id: string): void {
@@ -7705,6 +8105,14 @@ export function DiscoverPanel({
       survivors.delete(id)
       return pruneRadioSlotFlags(prev, survivors)
     })
+    // its hook goes with it, in any state (spec 2.7)
+    updateRadioHooks(
+      pruneRadioHooks(
+        radioHooksRef.current,
+        new Set(radioHooksRef.current.hooks.map((h) => h.rowId).filter((r) => r !== id))
+      )
+    )
+    forgetRadioHookRow(id)
   }
 
   /** The row's 👍 and 👎 (2026-10-01, the web radio's full-mode row
@@ -7723,14 +8131,25 @@ export function DiscoverPanel({
     // Listen-only (spec §2): 👍 still holds the row longer, but stars
     // nothing -- always the "would star" branch, never toggleStemFavourite.
     const listening = refusesNow('star')
-    const opts = {
+    // The star half stays likeRadioSlot's (canHold false: it sets no `hook` flag any more). The
+    // hold is a HOOK on the playing stem now (likeRadioStem, spec anointed-stems 2.7): when it
+    // stars, with radio on and the row unlocked; it never un-hooks, and on a row whose hook is
+    // away it stars the substitute only.
+    const stars = likeRadioSlot(radioSlotFlagsRef.current, id, {
       starred: listening ? false : stemFavourites.has(stemCID),
-      canHold: radioOn && !slot.locked
-    }
-    setRadioSlotFlags((prev) => likeRadioSlot(prev, id, opts).flags)
+      canHold: false
+    }).starred
+    if (stars) likeRadioHook(slot, radioOn && !slot.locked)
     if (!listening) toggleStemFavourite(stemCID)
   }
   function toggleSlotReplaceSoon(id: string): void {
+    // 👎 on a row whose hook is in releases the hook first (spec 2.7); on an away row it marks the
+    // substitute and the hook is untouched.
+    if (radioHookInRow(radioHooksRef.current, id)) {
+      const r = releaseRadioHook(radioHooksRef.current, id)
+      updateRadioHooks(r.state)
+      if (r.released !== null) radioHooksReleased([r.released])
+    }
     setRadioSlotFlags((prev) => toggleRadioReplaceSoon(prev, id))
   }
 
@@ -7840,7 +8259,7 @@ export function DiscoverPanel({
     immediate = false
   ): boolean {
     if (radioOnRef.current && !immediate) {
-      if (manualChangesRef.current.has(id)) return false
+      if (manualWaitingOn(id)) return false
       pushUndoSnapshot()
       return queueManualChange(
         id,
@@ -7897,7 +8316,7 @@ export function DiscoverPanel({
     if (!slot || !anchor) return
     // A row waiting for the loop top ignores it (swapSlotFromNearby would
     // too) -- checked before the lookup, so it costs nothing.
-    if (radioOnRef.current && manualChangesRef.current.has(id)) return
+    if (radioOnRef.current && manualWaitingOn(id)) return
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
     rerollGenerationRef.current.set(id, myGeneration)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
@@ -8035,6 +8454,8 @@ export function DiscoverPanel({
         id,
         { own: avoidOwnStem }
       )
+      // an away hook's stem is used: it is coming back to its row
+      for (const stem of radioHookStemsAway(radioHooksRef.current)) usedElsewhere.add(stem)
       // The source dial: this roll's source is drawn here, and the other
       // source is tried only if the drawn one has nothing NEW for this slot
       // (never at an end -- see drawSoundSource). A drawn pool made only of
@@ -8191,9 +8612,24 @@ export function DiscoverPanel({
    * slot shape. No undo snapshot of its own -- every caller decides that
    * for itself (rerollSlot pushes one, rerollAll pushes one for the whole
    * batch, radio pushes none; see the spec's 3.4). */
-  function commitSlotPick(id: string, pick: SlotPick): void {
+  function commitSlotPick(id: string, pick: SlotPick, hookLanding = false): void {
     // the row's age starts again (the radio readout)
     radioRowSinceRef.current.set(id, radioPlayRef.current.lap)
+    // A landing of any kind, for the hooks' calm wait (radioLandingsInPhrase).
+    if (radioOnRef.current) {
+      radioLandingsRef.current = noteRadioLandings(radioLandingsRef.current, 1)
+    }
+    // A change on a row whose hook is IN, other than the hook's own landing, clears the hook: the
+    // hooked stem is gone, and a hook is about that stem (spec Decided 1). Radio's own turnover
+    // never reaches such a row, so this is a manual change (similar, adjacent, random, swap, Cmd,
+    // the phone). On an away row it replaced the substitute: the hook still comes back.
+    if (!hookLanding) {
+      const h = radioHookOf(radioHooksRef.current, id)
+      if (h !== null && h.state === 'in' && pick.candidate?.stemCID !== h.stemId) {
+        updateRadioHooks(forgetRadioHookOnManualChange(radioHooksRef.current, id))
+        forgetRadioHookRow(id)
+      }
+    }
     // A row changed by anyone counts as turned over (changeArtist) -- but
     // only by a pick rolled under the CURRENT selection: a manual reroll or
     // skip still in flight from before the switch lands the old artist's
@@ -8285,7 +8721,7 @@ export function DiscoverPanel({
     const undoSeq = undoSequence.latest()
     // A row already waiting ignores a second roll -- checked before the
     // pick, so it costs nothing.
-    if (queue && manualChangesRef.current.has(id)) return
+    if (queue && manualWaitingOn(id)) return
     const pick = await pickForSlot(id, kinds)
     if (pick === null) return
     if (queue && radioOnRef.current) {
@@ -8341,7 +8777,7 @@ export function DiscoverPanel({
     if (!slot) return
     // A waiting row ignores it (rollForSlot would too) -- checked before
     // the undo snapshot, so an ignored click leaves no empty undo step.
-    if (radioOnRef.current && !immediate && manualChangesRef.current.has(id)) return
+    if (radioOnRef.current && !immediate && manualWaitingOn(id)) return
     pushUndoSnapshot()
     await rollForSlot(id, slot.kinds, immediate)
   }
@@ -8383,7 +8819,7 @@ export function DiscoverPanel({
     // See rollForSlot: the callers (rerollRandomSlot, addSlot,
     // addRandomSlot) pushed this roll's undo point just before.
     const undoSeq = undoSequence.latest()
-    if (queue && manualChangesRef.current.has(id)) return
+    if (queue && manualWaitingOn(id)) return
     const myGeneration = (rerollGenerationRef.current.get(id) ?? 0) + 1
     rerollGenerationRef.current.set(id, myGeneration)
     setRolledCount((n) => n + 1)
@@ -8466,7 +8902,7 @@ export function DiscoverPanel({
     const slot = slots.find((s) => s.id === id)
     if (!slot) return
     // See rerollSlot: an ignored click leaves no empty undo step.
-    if (radioOnRef.current && !immediate && manualChangesRef.current.has(id)) return
+    if (radioOnRef.current && !immediate && manualWaitingOn(id)) return
     pushUndoSnapshot()
     await rollRandomForSlot(id, slot.kinds, immediate)
   }
@@ -8496,7 +8932,7 @@ export function DiscoverPanel({
     if (
       radioOnRef.current &&
       !immediate &&
-      !slots.some((s) => !s.locked && !manualChangesRef.current.has(s.id))
+      !slots.some((s) => !s.locked && !manualWaitingOn(s.id))
     ) {
       return
     }
@@ -8556,7 +8992,7 @@ export function DiscoverPanel({
     for (const slotId of slotIds) {
       const current = slotsRef.current.find((s) => s.id === slotId)
       if (!current || current.locked) continue
-      if (manualChangesRef.current.has(slotId)) continue
+      if (manualWaitingOn(slotId)) continue
       const pick = await pickForSlot(current.id, current.kinds)
       if (pick === null) continue
       picks.push({ id: current.id, kindsKey: slotKindsKey(current.kinds), pick })
@@ -8789,11 +9225,29 @@ export function DiscoverPanel({
     joining: boolean,
     undoSeq: number,
     radioSkip = false,
-    arrival: ManualArrival | null = null
+    arrival: ManualArrival | null = null,
+    /** A hook's own landing (the hook step): `stem` is its stem, already warm, so the entry is
+     * ready at once and the turnaround's roll in this same deferred slot counts it. */
+    opts: { hook?: 'exit' | 'return'; stem?: ResolvedCandidateStem } = {}
   ): boolean {
-    if (manualChangesRef.current.has(slotId)) return false
+    const waiting = manualChangesRef.current.get(slotId)
+    if (waiting !== undefined) {
+      // A hook's landing gives way to any manual change for its row (spec 2.7): withdrawn, it is
+      // tried again at the next line or phrase start. A hook never displaces anything.
+      if (waiting.hook === undefined || opts.hook !== undefined) return false
+      withdrawManualChange(slotId, 'hook-yields-to-manual')
+    }
     const next = new Map(manualChangesRef.current)
-    next.set(slotId, { pick, stem: null, joining, arrival, undoSeq, radioSkip })
+    const preset = opts.stem ?? null
+    next.set(slotId, {
+      pick,
+      stem: preset,
+      joining,
+      arrival,
+      undoSeq,
+      radioSkip,
+      ...(opts.hook !== undefined && { hook: opts.hook })
+    })
     setManualChanges(next)
     // NO withdrawal of the stage that is out for this entry itself, on
     // purpose. Its stem is still null, so a re-stage now would carry
@@ -8811,6 +9265,10 @@ export function DiscoverPanel({
     // change, and armRadioPick's latest-wins token covers an arm still in
     // flight, so this can never make two.
     radioYieldsRow(slotId)
+    if (preset !== null) {
+      manualChangeReady(slotId)
+      return true
+    }
     void resolveAndWarmPick(pick).then((stem) => {
       const entry = manualChangesRef.current.get(slotId)
       if (entry === undefined || entry.pick !== pick) return
@@ -8820,6 +9278,9 @@ export function DiscoverPanel({
         const dropped = new Map(manualChangesRef.current)
         dropped.delete(slotId)
         setManualChanges(dropped)
+        if (entry.hook !== undefined) {
+          updateRadioHooks(withdrawRadioHookEvent(radioHooksRef.current, slotId))
+        }
         // A JOINING row had nothing to keep: dropping its change alone would
         // leave it blank and silent for good. Commit the pick instead, so it
         // shows "no match" or its failed resolve exactly as it would with
@@ -8830,25 +9291,27 @@ export function DiscoverPanel({
       const ready = new Map(manualChangesRef.current)
       ready.set(slotId, { ...entry, stem })
       setManualChanges(ready)
-      // A stage already out was built without this change (it was still
-      // resolving). Withdraw it so the next tick re-stages with it --
-      // unless the wrap is too close for a rebuild to get there, in which
-      // case the stage that is out lands as it is and this one waits for
-      // the following wrap (the landing only commits what the engine
-      // took). And never a stage radio aimed at a mid-lap bar: that one
-      // can never carry a manual change.
-      const staged = radioStageRef.current
-      if (
-        staged !== null &&
-        // This manual entry is not in the stage (radio's own row may be).
-        (staged.manual === null || !staged.manual.has(slotId)) &&
-        radioLedChangeRef.current?.atBars === undefined &&
-        radioBarsToWrapNow() >= MANUAL_RESTAGE_MIN_BARS
-      ) {
-        cancelStagedSwap('manual-ready')
-      }
+      manualChangeReady(slotId)
     })
     return true
+  }
+  /** A queued manual change just became ready (its stem resolved). A stage already out was built
+   * without it (it was still resolving): withdraw it so the next tick re-stages with it --
+   * unless the wrap is too close for a rebuild to get there, in which case the stage that is out
+   * lands as it is and this one waits for the following wrap (the landing only commits what the
+   * engine took). And never a stage radio aimed at a mid-lap bar: that one can never carry a
+   * manual change. */
+  function manualChangeReady(slotId: string): void {
+    const staged = radioStageRef.current
+    if (
+      staged !== null &&
+      // This manual entry is not in the stage (radio's own row may be).
+      (staged.manual === null || !staged.manual.has(slotId)) &&
+      radioLedChangeRef.current?.atBars === undefined &&
+      radioBarsToWrapNow() >= MANUAL_RESTAGE_MIN_BARS
+    ) {
+      cancelStagedSwap('manual-ready')
+    }
   }
   /** Bars from the last position tick to the next wrap, or 0 when that is
    * not knowable (no clock, nothing resolved). For decisions made off the
@@ -9011,7 +9474,11 @@ export function DiscoverPanel({
     // before radio's own picking resumes.
     if (
       nextTurnoverSlotId(
-        radioEligibleSlotIds().filter((id) => !manualChangesRef.current.has(id)),
+        radioEligibleSlotIds().filter(
+          (id) =>
+            !manualChangesRef.current.has(id) &&
+            !radioHookTurnoverExcluded(radioHooksRef.current, id)
+        ),
         artistTurnoverRef.current
       ) !== null
     ) {
@@ -9024,7 +9491,12 @@ export function DiscoverPanel({
     // Fold mode's folded rows are picked like any other (phase 2 of fold following pace, spec
     // 2026-10-03-radio-fold-follows-pace-design section 3): in its bar band a change on one
     // carries the fold when its stem can, else cuts straight and releases it (radioFoldLandNow).
-    const eligible = radioEligibleSlotIds().filter((id) => !manualChangesRef.current.has(id))
+    // Nor a row a hook keeps (radioHookTurnoverExcluded: a hook in, an event decided on it, or a
+    // return being prepared): only the hook's own cycle changes it. So never a companion either.
+    const eligible = radioEligibleSlotIds().filter(
+      (id) =>
+        !manualChangesRef.current.has(id) && !radioHookTurnoverExcluded(radioHooksRef.current, id)
+    )
     // Rows per change (the pace slider, from 70, fold mode too; @shared/radioPace): no draw while
     // it is one, and the first row is exactly pickRadioSlotId's. The rest ride radio's change as
     // companions.
@@ -9220,7 +9692,8 @@ export function DiscoverPanel({
         radioAdded: s.radioAdded === true,
         locked: s.locked,
         soloed: previewing.size === 1 && previewing.has(s.id),
-        held: radioSlotFlagsRef.current[s.id] === 'hook',
+        // a hook's home, in any state: reserved for it
+        held: radioHookReservesRow(radioHooksRef.current, s.id),
         busy:
           manualChangesRef.current.has(s.id) ||
           radioSkipPickingRef.current.has(s.id) ||
@@ -9344,7 +9817,7 @@ export function DiscoverPanel({
     if (
       !slot ||
       slot.locked ||
-      radioSlotFlagsRef.current[slot.id] === 'hook' ||
+      radioHookReservesRow(radioHooksRef.current, slot.id) ||
       (previewing.size === 1 && previewing.has(slot.id)) ||
       manualChangesRef.current.has(slot.id) ||
       radioLedChangeRef.current?.slotId === slot.id ||
@@ -9434,7 +9907,10 @@ export function DiscoverPanel({
   async function skipRadio(): Promise<void> {
     if (!radioOnRef.current) return
     const eligible = radioEligibleSlotIds().filter(
-      (id) => !manualChangesRef.current.has(id) && !radioSkipPickingRef.current.has(id)
+      (id) =>
+        !manualChangesRef.current.has(id) &&
+        !radioSkipPickingRef.current.has(id) &&
+        !radioHookTurnoverExcluded(radioHooksRef.current, id)
     )
     // A mid-radio artist change's rows go first (changeArtist).
     const turnoverId = nextTurnoverSlotId(eligible, artistTurnoverRef.current)
@@ -9506,6 +9982,20 @@ export function DiscoverPanel({
     radioBuildClockRef.current = NO_RADIO_BUILDS
     radioSparesRef.current = []
     radioSparesWantedRef.current = false
+    // Hooks in are kept, inert (a fresh stay is drawn when radio starts); away hooks are dropped
+    // and their rows keep what they play (radioHooksStopped, spec 2.7). Nothing armed for them
+    // survives, and a hook landing still queued is dropped below, not committed.
+    radioHooksStepOwedRef.current = null
+    radioHookWarmRef.current = new Map()
+    radioHookSubsRef.current = new Map()
+    radioLandingsRef.current = NO_RADIO_LANDINGS
+    {
+      const kept = radioHooksStopped(radioHooksRef.current)
+      for (const h of radioHooksRef.current.hooks) {
+        if (!kept.hooks.some((k) => k.rowId === h.rowId)) radioHookPicksRef.current.delete(h.rowId)
+      }
+      updateRadioHooks(kept)
+    }
     setRadioOn(false)
     radioClockRef.current = null
     artistTurnoverRef.current = new Set()
@@ -9557,6 +10047,8 @@ export function DiscoverPanel({
       setManualChanges(new Map())
       for (const [slotId, change] of waiting) {
         if (!slotsRef.current.some((s) => s.id === slotId)) continue
+        // a hook's landing belongs to radio's run: dropped (radioHooksStopped above undid it)
+        if (change.hook !== undefined) continue
         commitSlotPick(slotId, change.pick)
       }
     }
@@ -9595,6 +10087,15 @@ export function DiscoverPanel({
     resetDensityArc()
     resetRadioThrows(false)
     resetRadioReadout()
+    // hooks kept from the last run start a fresh stay from here
+    radioLandingsRef.current = NO_RADIO_LANDINGS
+    radioHooksStepOwedRef.current = null
+    updateRadioHooks(
+      radioHooksStarted(radioHooksRef.current, {
+        paceLevel: radioPaceLevelOf({ ...radioSettings, paceLevel: level }),
+        random: Math.random
+      })
+    )
     // createRadioClock, not restartRadioInterval: switching radio on is
     // where a phrase STARTS. The origin is the loop top radio started
     // inside (lapsSincePhrase counts whole laps, so a switch-on halfway
@@ -9627,7 +10128,10 @@ export function DiscoverPanel({
    * No pushUndoSnapshot: radio is performance, not an edit, and that holds
    * for the dramatic version too. */
   async function collectRadioCourseChange(): Promise<void> {
-    const eligible = radioEligibleSlotIds()
+    // a row a hook keeps stays out of radio's turnover, a course change included
+    const eligible = radioEligibleSlotIds().filter(
+      (id) => !radioHookTurnoverExcluded(radioHooksRef.current, id)
+    )
     if (eligible.length === 0) {
       void armRadioPick()
       return
@@ -10974,7 +11478,13 @@ export function DiscoverPanel({
               favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
               maxBarLength={maxBarLength}
               onToggleLock={() => toggleLock(slot.id)}
-              radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
+              // 👍's holding mark reads a hook IN (the `hook` flag is no longer set); Task 10
+              // gives the row its own hookIn prop
+              radioFlag={
+                radioHookInRow(radioHooks, slot.id)
+                  ? 'hook'
+                  : radioSlotFlagOf(radioSlotFlags, slot.id)
+              }
               radioOn={radioOn}
               onLike={() => likeSlot(slot.id)}
               listenOnlyStars={listenOnly.has('star')}
