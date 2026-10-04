@@ -937,3 +937,132 @@ same thing.
 - Auto-arrange's use of hooks or build sizing.
 - Steering radio's own change onto a hook's return line. The return prefers lines where changes
   already land, and pulls nothing.
+
+## Anointed stems: as built (handoff, 2026-10-04)
+
+All 16 plan tasks are in, in both radios. sssketch `78be6e5..b0d890d`, ell.ing/radio `b8feb8a..cfdeb16`.
+Nothing is pushed or deployed. **No agent has heard either radio, seen either UI or held a phone.**
+
+**What shipped**
+
+- **Sized builds and the payoff (§4).** Shared: `03d8fc8`, `78522b9`, plus review fixes `f280cda`, `1158040`.
+  Desktop: `03f6d29`, `608e30f`, `bd576a7`, `ab44827`, `1830740`. Web: `b8feb8a`, `cba3a15`, `f61209a`.
+  This is on for everyone (Decided 3). A fired phrase-end turnaround is paid off from radio's pick and
+  two warm spares. A short payoff is logged as `[radio-build] oversold`.
+- **Hooks (§2).** Shared: `4c34750`, `2efb273`, `8925cce`. Desktop: `78db0b9`, `df26aac`, `ec07856`, `3c40d23`.
+  Web: `aba2394`, `f5c01e7`, `00af232`, `22de927`. The toggle is the Phosphor Repeat icon (desktop track 16,
+  web full mode after 👎). Its words come from `radioRoleWords`, and the dimmed name brings the hook back.
+- **Resting exits (Task 11).** Shared: `b6baa50` (`restShrinksLoop`). Web: `cfdeb16`. Desktop: `7dcf85f`.
+  A due exit may rest only while the arc is thinning. Each rest draw is 0.5. A row never rests if it
+  is the last heard drums or bass row, not counting the arc's leaving row.
+  - On the web, the row also never rests if its stem alone is the loop's longest.
+  - On the desktop, a rest needs at least two heard rows.
+  - Web, measured: about 9% of exits rest at the defaults and 13 to 16% in thinning-heavy runs.
+    No rests while not thinning, never a tick without drums and bass, and one hook out at most.
+  - Desktop: typecheck and lint only.
+- **Dig (§3).** Shared: `eeb86ba`, `0db3d07`. Desktop: `6531384`, `1e97f09`. Web: `021f95c`.
+  The near draw never downloads (`AdjacentDiscoverOptions.skipDownload`).
+- **The old hook flag is gone (Task 15):** `b0d890d`. `RadioSlotFlag` is now `replace-soon` only. A 👍
+  that holds clears the row's change-soon.
+
+**Decisions made while building**
+
+- **Rest is radio's silence, not a mute.**
+  - Web: `RadioRow.resting`. `sounding()` drives radio, the planner, fold, clash and the view.
+    `heard()` stays the mute and solo set the engine is told.
+  - Desktop: `radioRestingRef`. The row leaves `previewingSlotIds`, carried by the stage's `leaving`.
+  - A rest commits nothing. A return onto a resting row joins it again (web: `swapAt` with `muted`;
+    desktop: a `joining` landing, with no sync hold for the same stem).
+- **When a resting hook is let go** (toggle, the cap, 👎, a dropped return, a prune), the row gets a
+  fresh pick at the next top. Radio off or stop puts the row back with the stem it rested with.
+- **A manual change or swap-now on a resting row plays the new stem.** The hook stays away and still
+  returns (§2.7: the change replaced its substitute).
+
+**Verified 2026-10-04 (Task 16, Step 1)**
+
+- sssketch: typecheck clean; lint shows 0 errors and 4 prettier warnings in unrelated files; vitest
+  284 files, 4752 tests, all passing.
+- ell.ing/radio (reading this tree): typecheck clean; vitest 64 files, 956 tests, all passing;
+  build OK; `check:engine` all passed, including `restAfterThrow`. The echo after the line measures
+  -8.98 dB against the row's -7.01; silent after the line measures -240 dB.
+- The fold fingerprint (`radioFoldHurry.test.ts`) is green.
+- The web's no-hooks action log is byte-identical to `22de927` (cfdeb16, 60 runs).
+- Task 16 Step 2 (a byte-identity rerun against the commit before Task 3) and Step 3 (offline renders
+  of a hook exit and a return under a riser and gap) were not rerun in this check.
+
+**Known gaps (review of Tasks 11 and 15, 2026-10-04)**
+
+- **Web: releasing the hook too late to take back a rest leaves the row silent with no hook.**
+  - Path: `hookTakenBack` with `!ok` and why `release` deletes `m.hook` but keeps `m.rest`.
+    `landRest` then marks the row resting and nobody calls `restEnds`.
+  - Effect: the row stays silent until stop or a swap-now.
+  - `hookLanded` also pushes `event: undefined`.
+  - Fix: `landRest` ends with `restEnds(c, m.slot)` and skips `hookLanded` without `m.hook`.
+  - There is no test of a rest taken back, `ok` or not.
+- **Web: dub throws can land on a resting row.** The controller's `throwTick` rows read
+  `audible: !!row.record && !row.muted`, not `sounding`. The throw is spent on silence, flashes
+  `throw` on a silent row, and `dub.set` re-times the shared echo.
+- **Web: the payoff check over-subtracts a rest.** `rows = landed - hook exits`, but a rest emits no
+  `landed`, so the count comes out one short and a spurious `oversold` is logged. This affects the log only.
+- **Desktop: a rest looks like a mute** (the row is out of the mix).
+  - Putting it back by hand (unmute, or un-solo, which restores every resolved row) plays the hooked
+    stem at once.
+  - At the next wrap `radioRestEnds` forgets the rest, but the hook stays `resting`. It reads
+    `hook · back in N`, and its return later re-lands the same stem. The forecast counts that as a
+    hook back, so the build can be sized for a drop that changes nothing.
+  - Proposed rule: putting a resting row back in the mix by hand *is* its return, now. The hook goes
+    `in` with a fresh stay, and any decided or queued return is withdrawn. This needs a small shared
+    `returnRadioHookByHand`. Un-solo should not end radio's rest: leave `radioRestingRef` rows out of
+    the restored set.
+  - The other option, `bringRadioHookBack` (back at the next phrase start), keeps the drop but makes
+    the unmute look ignored.
+- **Web: a return onto a resting row may draw a leading gesture** (`pickTransition(…, hookReturn)`).
+  The engine plays it as a cut (a joining row), while the step still books the drawn kind (builds
+  clock, ruler).
+- **Desktop: an exit's echo is never taken back.** It is armed live (`DiscoverPanel.tsx:5130`). If the
+  exit is then withdrawn (release, the cap, a manual change winning the row, undo), the echo still
+  plays at the line over a row that stays. The web takes it back (`f5c01e7`, `22de927`).
+- **Cross-radio differences, all minor:**
+  - The desktop's build budget doesn't count an armed build that hasn't landed (web `budgetOf`).
+  - The desktop has no "oversold" check at landing.
+  - The phone always gets the short role words, and the 360 px breakpoint is a literal in the web's
+    `main.ts`.
+  - The phone's hook hints (`remotePage.ts:176-180`) are worded differently from the shared tooltips.
+  - `no near fits` is flashed on the web but only logged on the desktop.
+- **Holding radio** freezes a resting row's absence along with the hook clock: the row stays silent
+  until radio runs again.
+- **Stale leftovers:**
+  - The web's `step.ts:29` comment still names `toggleRadioHook`.
+  - `RadioRowView.flag` (`step.ts:4262`) still types `'hook'`. b0d890d's message says nothing was
+    left over, and it missed these two.
+  - `likeRadioSlot`'s new clear-replace-soon branch is not used by either runtime: the desktop passes
+    `canHold: false` and clears it itself (`DiscoverPanel.tsx:4888`); the web clears it itself in
+    `step.ts:2511`.
+
+**Still to do (Task 16, Steps 5-6):** the memory file `radio_anointed_stems_shipped.md`, and deploying
+the web only with Elling's go-ahead (`deploy/deploy-page.sh`).
+
+**Elling's walkthrough** (no agent can do any of it):
+
+1. Hook a drums row at fast. It stays 16-32 bars, then leaves on a line with an echo, and another drums part plays.
+2. 16-32 bars later it comes back on a phrase start, with a riser and a gap. It lands as the drop.
+3. With two hooks, only one is ever out.
+4. At slow, the cycles are long. At ludicrous, they are quick.
+5. Calm (slow pace): a return sometimes comes a phrase late. Busy: it comes on time.
+6. Tap the dimmed name: it comes back at the next phrase start.
+7. Dig a row. Over a few minutes, more picks come from that jam, and the dug row wanders through it.
+8. Plain radio, no roles: one-row swaps never get the full sweep, and risers mostly come with bigger moments.
+   - 8a. Every turnaround is followed by a real change on its one: two rows or more, three or more
+     after a gap.
+   - With every row padlocked (desktop), or every row muted but one (web), phrase ends play nothing,
+     and a turn still plays without a gap.
+9. The phone: hook, dig and bring-back work, and the words fit at 320 px.
+10. Resting exits (thinning arc, several hooks).
+    - Sometimes a hook leaves to silence: the echo rings over the line and nothing replaces it.
+    - The bed never loses its last drums or bass.
+    - It comes back as the drop.
+    - Desktop: unmute a resting row, and check what the row and its words do.
+    - Stop or radio off while resting: the row plays again.
+
+To tune by ear: the riser factor 0.15, x2 at large, large always firing, the payoff sizes, the calm
+wait's 0.5, and the rest chance 0.5.
