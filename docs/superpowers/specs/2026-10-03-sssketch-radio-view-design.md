@@ -678,3 +678,67 @@ above is typecheck, lint, the shared tests, grep checks and reading the code.
     and the change lands or withdraws as it did before this work. Also check: with an artist
     picked or the lingering notice showing, its note under the top line is fully readable.
 14. The phone remote works as before.
+
+## As built (design pass, 2026-10-04, sssketch b4e9cc2..b9565a0)
+
+The look of the radio view was rebuilt to Elling's design pass (claude.ai/design board 3a "radio
+view · playing over shaping" and 3b "start prompt"). Plan:
+`plans/2026-10-04-radio-view-design-pass.md`; brief: `specs/2026-10-04-radio-view-design-pass-brief.md`.
+Layout, hierarchy and visual consistency changed; every control keeps what it does, when it
+commits, its undo and its keys. **No agent has seen it, heard it or clicked it** (checks are
+typecheck, lint, the shared tests and a headless-Chrome harness that renders the components, not
+the app); Elling's walkthrough is open.
+
+**Two weights, one control language.**
+- Playing controls are 36px (`--ra-h-live`) in a raised **live bar** under the rows: tempo (typed
+  field, `match seed` when the seed's tempo differs), pace, skip (the one bright border, flickers
+  on each landing), new bed, `fire now` (turn and the seven moves, dashed, inverted while held,
+  faint with `not now`) and level.
+- Shaping controls are 26px (`--ra-h-control`) in **five quiet titled columns**: picks, shape,
+  moves, fold, sound. The mix actions moved to the top line, `keep` emphasised.
+- One language (`RadioControls.tsx`): selected is a filled `--ra-text` block with dark ink; every
+  0-100 value is a 10-cell **segment bar** at full resolution (the last lit cell partly filled;
+  `@shared/radioSegmentBar` holds the math); choices are rows of equal-width segments; `fire now`
+  is dashed and never selected.
+- Four tokens: `--ra-h-live`, `--ra-h-control`, `--ra-h-row-button`, `--ra-opacity-disabled`.
+
+**Decisions (Elling's answers, 2026-10-04).**
+1. "add a stem that is" and "hold shift to combine" are **hidden while radio runs**.
+2. Settings that do not apply are **greyed, not hidden**: channels (density arc), bend, mismatch
+   and seed (fold off), families and depth (turnarounds off). The strip model now keeps every
+   control present in every state (a test), with a tooltip saying what a greyed one needs.
+3. Row buttons **stay icons**. The design's grouping and sizes are adopted: a live cluster
+   (`m s`, `skip like next`, `hook dig`, 24px, strong border), then the kind label in the stem's
+   colour with its meter, then the quiet extras (any, nearby, duplicate, lock, remove).
+
+**Behaviour details worth knowing.**
+- Greyed means one dimming, `--ra-opacity-disabled`, applied by `ControlField` only; the widgets
+  inside just go inert (the review found them compounding to about 9%).
+- A bar's pointer press sets the value under it; a plain click commits 300ms later so a
+  double-click (reset to default) replaces it: one commit, one undo entry. Arrow keys move live and
+  commit once on key-up or blur. The wheel commits 200ms after the last notch.
+- The start prompt's `start` uses the pace shown, including after keys, wheel or a reset.
+- The playhead overlay's insets are `RADIO_ROW_INSET_LEFT/RIGHT` (15, 9) in `discoverRowGrid.ts`,
+  the same numbers as the row's border and the waveform's margins.
+- One frame width, `RADIO_VIEW_MAX_WIDTH` 1440 (`RADIO_VIEW_FRAME`), for the top line, notes,
+  rows, live bar and columns.
+
+**Geometry (Discover sits in LibraryBrowser's box, `min(1500px, 90vw)` by `min(900px, 85vh)`).**
+At the 945×614 minimum the content is about 830px wide and the scroll area about 480px tall; at a
+1440 window about 1275px by 720px. Measured in headless Chrome with real Silkscreen and rows of
+112px:
+
+| | before the review fixes | after |
+|---|---|---|
+| live bar, 945 | 150px, sticky | 136px (two lines), **not sticky** while the scroll area is under 600px |
+| live bar, 1440 | 150px (two lines, `level` alone) | 73px, one line |
+| top line, 945 / 1440 | 122px / 66px | 101px / 58px |
+| room for rows, 945 | 187px, 1.7 rows | 378px, **3.4 rows** |
+| room for rows, 1440 | 486px, 4.3 rows | 664px, **5.9 rows** |
+
+While radio runs the panel has no top or bottom padding, so the sticky bars sit flush with the
+scroll area's edges. `source · endlesss - other` wraps inside its column.
+
+**Known and open.** The walkthrough in the plan's "As built" section still applies, minus the
+items the review fixes closed (greyed legibility, double-click undo, start at the nudged pace, the
+source label spill, `level` alone, the 1.5 rows).
