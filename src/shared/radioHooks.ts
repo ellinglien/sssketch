@@ -323,6 +323,39 @@ export function bringRadioHookBack(state: RadioHooksState, rowId: string): Radio
   )
 }
 
+/** A resting row put back in the mix by hand (desktop: unmuted, or soloed): that IS its hook's
+ * return, now -- the hook is `in` with a fresh stay drawn (one draw), counted as a return (as the
+ * step counts one: a long rest's return does not), and any return decided for it is withdrawn (the
+ * runtime drops a queued landing of it). Anything but a resting hook: the same state, nothing
+ * drawn. */
+export function returnRadioHookByHand(
+  state: RadioHooksState,
+  o: { rowId: string; paceLevel: number; random: () => number }
+): RadioHooksState {
+  const h = radioHookOf(state, o.rowId)
+  if (h === null || h.state !== 'resting') return state
+  const targetBars = drawRadioHookBars(HOOK_STAY, radioHookPaceScale(o.paceLevel), o.random)
+  return withHooks(
+    state,
+    state.hooks.map((x) =>
+      x === h
+        ? {
+            ...x,
+            state: 'in' as const,
+            bars: 0,
+            targetBars,
+            returns: x.longRest ? 0 : x.returns + 1,
+            longRest: false,
+            waited: false,
+            broughtBack: false,
+            prepared: false,
+            decided: null
+          }
+        : x
+    )
+  )
+}
+
 /** A manual change committed on the row (similar, adjacent, random, swap-now, Cmd, the phone --
  * never a hook's own landing): a hook IN is cleared (the hooked stem is gone, and a hook is about
  * that stem); an away or resting hook stays (the change replaced its substitute). */

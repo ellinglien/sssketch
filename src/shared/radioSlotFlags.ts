@@ -134,19 +134,16 @@ export function radioSlotFlagOf(flags: RadioSlotFlags, id: string): RadioSlotFla
  * press that says "i like this stem" twice -- a star, and radio's hold.
  *
  * The STAR toggles here. The HOLD is radioHooks' likeRadioStem (2026-10-03: the hook is a stem,
- * not a flag), called beside this; it only ever turns on. What is left of the flags' side: a 👍
- * that holds (`canHold`: radio on, the row not padlocked) takes the row's change soon away, since
- * the row is now held. Un-starring leaves the flags alone.
+ * not a flag), called beside this; it only ever turns on. A 👍 that holds takes the row's change
+ * soon away, and each runtime does that itself (the desktop's likeRadioHook, the web's hookLike),
+ * so the flags are always returned as they are.
  *
- * Returns the SAME flags object when they do not change. */
+ * Returns the SAME flags object. */
 export function likeRadioSlot(
   flags: RadioSlotFlags,
-  id: string,
-  opts: { starred: boolean; canHold: boolean }
+  opts: { starred: boolean }
 ): { flags: RadioSlotFlags; starred: boolean } {
-  if (opts.starred) return { flags, starred: false }
-  if (!opts.canHold || flags[id] !== 'replace-soon') return { flags, starred: true }
-  return { flags: toggleRadioReplaceSoon(flags, id), starred: true }
+  return { flags, starred: !opts.starred }
 }
 
 /** The row's "change next" control: mark this slot to be replaced soon,

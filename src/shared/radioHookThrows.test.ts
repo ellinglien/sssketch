@@ -12,7 +12,12 @@ import {
   type ThrowTick
 } from './radioThrows'
 import { seededRandom } from './seededRandom'
-import { armDiscoverExitThrow, initialDiscoverThrowState } from './discoverThrows'
+import {
+  THROW_RECALL_BARS,
+  armDiscoverExitThrow,
+  initialDiscoverThrowState,
+  withdrawDiscoverExitThrow
+} from './discoverThrows'
 
 describe('the exit throw', () => {
   it('ends on its line', () => {
@@ -66,7 +71,7 @@ describe('the desktop exit throw (armDiscoverExitThrow)', () => {
     }
     const shape = { beats: 2, timing: 'quarter' as const, feedback: 0.5 }
     const s = armDiscoverExitThrow(s0, { slotId: 'd', shape, pos: 0.1, loopBars: 4, bpm: 120 })!
-    expect(s.armed).toMatchObject({ slotId: 'd', atBar: 3.5, beats: 2, aimed: true })
+    expect(s.armed).toMatchObject({ slotId: 'd', atBar: 3.5, beats: 2, aimed: true, exit: true })
     expect(s.armed!.endBars - s.armed!.startBars).toBe(0.5)
     // ends on the top: 3.9 bars from 0.1, at 2 s a bar
     expect(s.throws.busyUntil).toBeCloseTo(
@@ -84,5 +89,35 @@ describe('the desktop exit throw (armDiscoverExitThrow)', () => {
     expect(
       armDiscoverExitThrow(s, { slotId: 'd', shape, pos: 0.1, loopBars: 4, bpm: 120 })
     ).toBeNull()
+  })
+})
+
+describe('the desktop exit throw withdrawn with its exit (withdrawDiscoverExitThrow)', () => {
+  const s0 = {
+    ...initialDiscoverThrowState(),
+    elapsedBars: 10,
+    elapsedSec: 20,
+    lastPos: 0.1,
+    lastLoopBars: 4
+  }
+  const shape = { beats: 2, timing: 'quarter' as const, feedback: 0.5 }
+  const armed = armDiscoverExitThrow(s0, { slotId: 'd', shape, pos: 0.1, loopBars: 4, bpm: 120 })!
+
+  it('takes the exit throw on its row back while it has not started', () => {
+    const out = withdrawDiscoverExitThrow(armed, 'd')!
+    expect(out.armed).toBeNull()
+    expect(out.elapsedBars).toBe(armed.elapsedBars)
+    // up to THROW_RECALL_BARS before it starts
+    const late = { ...armed, elapsedBars: armed.armed!.startBars - THROW_RECALL_BARS }
+    expect(withdrawDiscoverExitThrow(late, 'd')!.armed).toBeNull()
+  })
+
+  it('nothing on another row, a regular throw, none armed, or one under way', () => {
+    expect(withdrawDiscoverExitThrow(armed, 'b')).toBeNull()
+    expect(withdrawDiscoverExitThrow(s0, 'd')).toBeNull()
+    const regular = { ...armed, armed: { ...armed.armed!, exit: undefined } }
+    expect(withdrawDiscoverExitThrow(regular, 'd')).toBeNull()
+    const underWay = { ...armed, elapsedBars: armed.armed!.startBars + 0.1 }
+    expect(withdrawDiscoverExitThrow(underWay, 'd')).toBeNull()
   })
 })

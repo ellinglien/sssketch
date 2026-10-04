@@ -19,19 +19,14 @@ describe('radioSlotFlagWeightFactor', () => {
 })
 
 describe('likeRadioSlot', () => {
-  it('stars an unstarred stem; holding, it clears change soon on the liked row', () => {
+  it('toggles the star and leaves the flags alone (each runtime clears change soon itself)', () => {
     const tired = toggleRadioReplaceSoon(NO_RADIO_SLOT_FLAGS, 'a')
-    const out = likeRadioSlot(tired, 'a', { starred: false, canHold: true })
-    expect(out.starred).toBe(true)
-    expect(radioSlotFlagOf(out.flags, 'a')).toBeNull()
-    expect(likeRadioSlot(tired, 'a', { starred: false, canHold: false }).flags).toBe(tired)
-  })
-
-  it('un-stars a starred stem and leaves the flags alone', () => {
-    const tired = toggleRadioReplaceSoon(NO_RADIO_SLOT_FLAGS, 'a')
-    const out = likeRadioSlot(tired, 'a', { starred: true, canHold: true })
-    expect(out.starred).toBe(false)
-    expect(out.flags).toBe(tired)
+    const on = likeRadioSlot(tired, { starred: false })
+    expect(on.starred).toBe(true)
+    expect(on.flags).toBe(tired)
+    const off = likeRadioSlot(tired, { starred: true })
+    expect(off.starred).toBe(false)
+    expect(off.flags).toBe(tired)
   })
 })
 

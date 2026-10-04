@@ -156,6 +156,7 @@ import {
   radioHooksStopped,
   radioLandingsInPhrase,
   releaseRadioHook,
+  returnRadioHookByHand,
   stepRadioHooks,
   withdrawRadioHookEvent,
   type RadioHook,
@@ -361,6 +362,7 @@ import {
   stepDiscoverThrows,
   throwOutlivesLanding,
   throwYieldsToLeadIn,
+  withdrawDiscoverExitThrow,
   type DiscoverThrowState
 } from '@shared/discoverThrows'
 import { backgroundScanGate } from '../audio/backgroundScanGate'
@@ -2698,7 +2700,11 @@ export function DiscoverPanel({
   function toggleSlotPreview(id: string): void {
     const next = new Set(previewingSlotIds)
     if (next.has(id)) next.delete(id)
-    else next.add(id)
+    else {
+      next.add(id)
+      // a row radio is resting, put back in the mix by hand: its hook's return, now
+      radioRestReturnsByHand(id)
+    }
     previewingSlotIdsRef.current = next
     setPreviewingSlotIds(next)
     void syncPreviewToEngine(next)
@@ -2719,7 +2725,13 @@ export function DiscoverPanel({
   // slots happened to be included right before the solo.
   function toggleSlotSolo(id: string): void {
     const alreadySoleSoloed = previewingSlotIds.size === 1 && previewingSlotIds.has(id)
-    const next = alreadySoleSoloed ? new Set(resolvedStemsRef.current.keys()) : new Set([id])
+    // Un-solo brings back every resolved row but those radio is resting: its rest is not the
+    // user's mute, and un-soloing does not end it. Soloing a resting row puts it back in the mix
+    // by hand: its hook's return, now.
+    const next = alreadySoleSoloed
+      ? new Set([...resolvedStemsRef.current.keys()].filter((k) => !radioRestingRef.current.has(k)))
+      : new Set([id])
+    if (!alreadySoleSoloed) radioRestReturnsByHand(id)
     previewingSlotIdsRef.current = next
     setPreviewingSlotIds(next)
     void syncPreviewToEngine(next)
@@ -4858,6 +4870,25 @@ export function DiscoverPanel({
       if (!queued) rejoin()
     })
   }
+  /** A row radio is resting, put back in the mix by hand (unmuted, or soloed): that IS its hook's
+   * return, now (returnRadioHookByHand). The row still holds the hooked stem, so it plays at once
+   * with the caller's push; the hook is in with a fresh stay, and a return decided or queued for it
+   * is withdrawn (its warm stem let go). Nothing for a row radio is not resting. */
+  function radioRestReturnsByHand(rowId: string): void {
+    if (!radioRestingRef.current.delete(rowId)) return
+    if (manualChangesRef.current.get(rowId)?.hook === 'return') {
+      withdrawManualChange(rowId, 'hook-returned-by-hand')
+    }
+    radioHookWarmRef.current.delete(rowId)
+    updateRadioHooks(
+      returnRadioHookByHand(radioHooksRef.current, {
+        rowId,
+        paceLevel: radioPaceLevelOf(radioSettings),
+        random: Math.random
+      })
+    )
+    console.log(`[radio-hook] back on ${rowId} by hand`)
+  }
   /** The pick a hook's return queues: the slot's playing stem, with its match-meter bar when the
    * slot has one for it, else unranked (commitSlotPick then leaves the meter as it is). */
   function radioHookPickOf(slot: DiscoverSlot & { candidate: DiscoverCandidate }): SlotPick {
@@ -6932,6 +6963,16 @@ export function DiscoverPanel({
           // it out; without one, this push takes it out, after the line) and rests until its
           // hook's return joins it again. Not a change of the row: nothing committed.
           if (change.rest === true) {
+            // Every other row muted since it was decided: resting would empty the preview (torn
+            // down). The rest is withdrawn (the hook stays in, and tries again at its next line),
+            // and the row plays on: the truth goes back on the wire.
+            const mix = previewingSlotIdsRef.current
+            if (mix.size === 1 && mix.has(slotId)) {
+              updateRadioHooks(withdrawRadioHookEvent(radioHooksRef.current, slotId))
+              scheduleSyncPreviewToEngine(mix)
+              console.log(`[radio-hook] ${slotId} keeps playing: the last row in the mix`)
+              continue
+            }
             radioRestingRef.current.add(slotId)
             dropFromPreviewingMix(slotId)
             console.log(`[radio-hook] ${slotId} rests`)
@@ -8428,6 +8469,16 @@ export function DiscoverPanel({
     if (entry.hook !== undefined) {
       updateRadioHooks(withdrawRadioHookEvent(radioHooksRef.current, id))
     }
+    // An exit withdrawn takes its echo back with it (withdrawDiscoverExitThrow: not one under way),
+    // so no echo rings at the line over a row that stays.
+    if (entry.hook === 'exit') {
+      const throws = withdrawDiscoverExitThrow(radioThrowRef.current, id)
+      if (throws !== null) {
+        radioThrowRef.current = throws
+        clearRadioThrowCurve()
+        console.log(`[radio-hook] exit on ${id} withdrawn: its echo taken back`)
+      }
+    }
   }
   /** A manual change (not a hook's own landing) waits for the loop top on this row: a second
    * click there is ignored. A hook's landing waiting there gives way instead
@@ -8491,13 +8542,12 @@ export function DiscoverPanel({
     // Listen-only (spec §2): 👍 still holds the row longer, but stars
     // nothing -- always the "would star" branch, never toggleStemFavourite.
     const listening = refusesNow('star')
-    // The star half stays likeRadioSlot's (canHold false: the flags are left as they are). The
-    // hold is a HOOK on the playing stem now (likeRadioStem, spec anointed-stems 2.7): when it
-    // stars, with radio on and the row unlocked; it never un-hooks, and on a row whose hook is
-    // away it stars the substitute only.
-    const stars = likeRadioSlot(radioSlotFlagsRef.current, id, {
-      starred: listening ? false : stemFavourites.has(stemCID),
-      canHold: false
+    // The star half stays likeRadioSlot's (the flags are left as they are: likeRadioHook clears
+    // change soon). The hold is a HOOK on the playing stem now (likeRadioStem, spec anointed-stems
+    // 2.7): when it stars, with radio on and the row unlocked; it never un-hooks, and on a row
+    // whose hook is away it stars the substitute only.
+    const stars = likeRadioSlot(radioSlotFlagsRef.current, {
+      starred: listening ? false : stemFavourites.has(stemCID)
     }).starred
     if (stars) likeRadioHook(slot, radioOn && !slot.locked)
     if (!listening) toggleStemFavourite(stemCID)

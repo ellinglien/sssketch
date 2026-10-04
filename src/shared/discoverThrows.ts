@@ -112,6 +112,9 @@ export interface DiscoverThrow {
   endBars: number
   /** Aimed at a transition (DiscoverThrowTick.changeInBars): it ends on that downbeat. */
   aimed?: boolean
+  /** A hook's exit throw (armDiscoverExitThrow): taken back with its exit
+   * (withdrawDiscoverExitThrow). */
+  exit?: true
 }
 
 export interface DiscoverThrowState {
@@ -415,7 +418,28 @@ export function armDiscoverExitThrow(
       ...o.shape,
       startBars,
       endBars: startBars + o.shape.beats / 4,
-      aimed: true
+      aimed: true,
+      exit: true
     }
   }
+}
+
+/**
+ * A hook's exit withdrawn before its line (the hook released, the cap, a manual change winning the
+ * row, undo): its echo throw on `slotId` is taken back with it (the web's Engine.cancelThrow), so
+ * no echo rings over a row that stays. The panel clears the curve (a push). Only while the throw
+ * has not started and the push lands before it (THROW_RECALL_BARS, as throwYieldsToLeadIn): one
+ * under way, or about to be, is left to finish -- taking it back would cut the send mid-throw.
+ * The throw clock is left as the exit noted it (the next regular throw waits as it would have).
+ *
+ * Null when there is nothing to take back: no exit throw armed on that row, or it is under way.
+ */
+export function withdrawDiscoverExitThrow(
+  state: DiscoverThrowState,
+  slotId: string
+): DiscoverThrowState | null {
+  const a = state.armed
+  if (a === null || a.exit !== true || a.slotId !== slotId) return null
+  if (a.startBars - state.elapsedBars < THROW_RECALL_BARS - EPS) return null
+  return { ...state, armed: null }
 }

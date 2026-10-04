@@ -31,6 +31,7 @@ import {
   radioLandingsInPhrase,
   radioRoleWords,
   releaseRadioHook,
+  returnRadioHookByHand,
   stepRadioHooks,
   toggleRadioHookStem,
   withdrawRadioHookEvent,
@@ -606,6 +607,49 @@ describe('taps and other hands', () => {
     const started = radioHooksStarted(stopped, { paceLevel: 50, random: c.random })
     expect(c.n()).toBe(1)
     expect(radioHookOf(started, 'l')!.bars).toBe(0)
+  })
+
+  it('a resting row put back in the mix by hand is its return: in, a fresh stay, any return withdrawn', () => {
+    const on = set(NO_RADIO_HOOKS, 'l')
+    const resting = {
+      ...on,
+      hooks: on.hooks.map((h) => ({
+        ...h,
+        state: 'resting' as const,
+        bars: 24,
+        targetBars: 32,
+        returns: 1,
+        waited: true,
+        broughtBack: true,
+        prepared: true,
+        decided: { event: 'return' as const, stayBars: 16, awayBars: 32 }
+      }))
+    }
+    const c = counted('hand')
+    const back = returnRadioHookByHand(resting, { rowId: 'l', paceLevel: 50, random: c.random })
+    expect(c.n()).toBe(1)
+    const h = radioHookOf(back, 'l')!
+    expect(h.state).toBe('in')
+    expect(h.stemId).toBe('l-1')
+    expect(h.bars).toBe(0)
+    expect(HOOK_STAY.map((x) => x.bars)).toContain(h.targetBars)
+    expect(h.decided).toBeNull()
+    expect([h.prepared, h.waited, h.broughtBack]).toEqual([false, false, false])
+    // a return, as the step counts one
+    expect(h.returns).toBe(2)
+    const long = { ...resting, hooks: resting.hooks.map((x) => ({ ...x, longRest: true })) }
+    const afterLong = radioHookOf(
+      returnRadioHookByHand(long, { rowId: 'l', paceLevel: 50, random: seededRandom('x') }),
+      'l'
+    )!
+    expect([afterLong.returns, afterLong.longRest]).toEqual([0, false])
+    // anything but a resting hook: the same state, nothing drawn
+    const n = counted('none')
+    const away = { ...on, hooks: on.hooks.map((x) => ({ ...x, state: 'away' as const })) }
+    for (const st of [NO_RADIO_HOOKS, on, away]) {
+      expect(returnRadioHookByHand(st, { rowId: 'l', paceLevel: 50, random: n.random })).toBe(st)
+    }
+    expect(n.n()).toBe(0)
   })
 
   it('who holds what: in, in next, reserved, turnover, stems away', () => {
