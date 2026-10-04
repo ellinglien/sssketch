@@ -3092,10 +3092,9 @@ export function DiscoverPanel({
   // across a real IPC await, and nothing renders them.
   const radioChangedAtRef = useRef<Map<string, number>>(new Map())
   const radioTurnRef = useRef(0)
-  // The row's two radio controls -- hold longer (hook) and change next
-  // (replace soon). See
-  // src/shared/radioSlotFlags.ts, which owns every rule about it and the
-  // reasoning for each one.
+  // The row's change next (replace soon). See src/shared/radioSlotFlags.ts,
+  // which owns every rule about it and the reasoning for each one. (Its
+  // other flag, the hook, is a stem now: radioHooksRef, @shared/radioHooks.)
   //
   // State AND a ref, the same pairing radioPendingRef/radioArmedSlotId
   // uses just above: the rows render from the state, and armRadioPick
@@ -8482,9 +8481,9 @@ export function DiscoverPanel({
    * should do next (and, for 👍, a favourite), not an edit to the loop.
    *
    * 👍 toggles the star (toggleStemFavourite) and, only when it STARS,
-   * turns hold longer on if it is off -- likeRadioSlot decides both. A
-   * second 👍 un-stars and leaves the hold as it is. Radio off or a
-   * padlocked row: star only. */
+   * hooks the playing stem if the row has no hook (likeRadioSlot decides the
+   * star, likeRadioStem the hook). A second 👍 un-stars and leaves the hook
+   * as it is. Radio off or a padlocked row: star only. */
   function likeSlot(id: string): void {
     const slot = slots.find((s) => s.id === id)
     if (!slot || slot.candidate === null) return
@@ -8492,7 +8491,7 @@ export function DiscoverPanel({
     // Listen-only (spec §2): 👍 still holds the row longer, but stars
     // nothing -- always the "would star" branch, never toggleStemFavourite.
     const listening = refusesNow('star')
-    // The star half stays likeRadioSlot's (canHold false: it sets no `hook` flag any more). The
+    // The star half stays likeRadioSlot's (canHold false: the flags are left as they are). The
     // hold is a HOOK on the playing stem now (likeRadioStem, spec anointed-stems 2.7): when it
     // stars, with radio on and the row unlocked; it never un-hooks, and on a row whose hook is
     // away it stars the substitute only.
@@ -12708,8 +12707,8 @@ function DiscoverSlotRow({
    * is hidden -- but still RENDERED -- when it is not; 👍's hold half is
    * skipped, and its holding look not drawn. */
   radioOn: boolean
-  /** The 👍 -- toggles this stem's star and, when starring, turns hold
-   * longer on (DiscoverPanel's likeSlot -> likeRadioSlot). */
+  /** The 👍 -- toggles this stem's star and, when starring, hooks the
+   * stem (DiscoverPanel's likeSlot -> likeRadioSlot, likeRadioStem). */
   onLike: () => void
   /** Discover artist mode, listen only: 👍 holds but stars nothing, and
    * its tooltip says so. The button stays un-dimmed -- it still holds. */

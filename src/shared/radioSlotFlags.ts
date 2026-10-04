@@ -15,9 +15,16 @@
 //    had a way to flag it as one to replace soon for replacement."
 //                                                              (2026-09-29)
 //
-// They are the same gesture pointed in opposite directions, and they are
-// TWO CONTROLS on the row: "hold longer" (toggleRadioHook), beside the
+// They are the same gesture pointed in opposite directions, and they were
+// TWO CONTROLS on the row: "hold longer" (the `hook` flag), beside the
 // padlock, and "change next" (toggleRadioReplaceSoon), beside the rerolls.
+//
+// (2026-10-03) THE HOOK IS NO LONGER A FLAG. It is a STEM on its row that
+// leaves and comes back (radioHooks.ts, docs/superpowers/specs/2026-10-03-
+// radio-anointed-stems-design.md section 2): a flag is about the present
+// stem and dies with it, while a hook outlives its stem's absences. What is
+// left here is replace-soon. The history below is kept as the record of why
+// replace-soon is shaped as it is.
 // They began as one three-state cycle button -- normal -> replace soon ->
 // hook -- on the argument that two buttons pushing one draw in opposite
 // directions could be made to argue with each other. Split on 2026-09-29
@@ -38,48 +45,31 @@
 // The padlock is the thing that survives a restart, and it survives it by
 // living on the slot.
 
-/** What one layer has been told.
+/** What one layer has been told: `replace-soon`, a layer that has outstayed
+ * its welcome and should go next, or nearly next. (The hook was the other
+ * flag until 2026-10-03; it is radioHooks.ts now.) It is not the padlock:
  *
- * `hook` is the centre of the track -- held, but not frozen. `replace-soon`
- * is a layer that has outstayed its welcome and should go next, or nearly
- * next. Neither is the padlock, and the difference is one line:
+ *   > The padlock is never. Replace-soon is soon.
  *
- *   > The padlock is never. The hook is rarely.
- *
- * A slot can carry a flag AND a padlock; the padlock wins, because "never"
- * contains "rarely" and also contains "soon". That needs no code here --
- * isRadioEligibleSlot drops a locked slot before any weight is computed, so
- * a flag on a locked layer is simply inert until the lock comes off, which
- * is the same thing the spec means by the hook surviving a lock. */
-export type RadioSlotFlag = 'hook' | 'replace-soon'
+ * A slot can carry the flag AND a padlock; the padlock wins. That needs no
+ * code here -- isRadioEligibleSlot drops a locked slot before any weight is
+ * computed, so a flag on a locked layer is simply inert until the lock comes
+ * off. */
+export type RadioSlotFlag = 'replace-soon'
 
-/** Flags by slot id, absent meaning normal.
- *
- * ONE map rather than a `hookSlotId` scalar beside a `replaceSoonIds` set,
- * because a slot holds one flag: it cannot be both, and two stores could
- * disagree about that. The at-most-one-hook invariant is enforced in
- * toggleRadioHook instead, which is the only writer of `hook`. */
+/** Flags by slot id, absent meaning normal. (A map rather than a set: it
+ * held two kinds of flag, one per slot, until the hook moved to
+ * radioHooks.ts.) */
 export type RadioSlotFlags = Readonly<Record<string, RadioSlotFlag>>
 
 export const NO_RADIO_SLOT_FLAGS: RadioSlotFlags = {}
 
-/** How much longer the hook holds than everything else -- a DIVISOR on its
- * draw weight, which is why it composes with both turnover modes for free:
- * under `random` every base weight is 1, so the hook is simply drawn an
- * eighth as often, and under `even` its staleness keeps growing while it
- * waits, so it climbs back toward eligibility on its own.
- *
- * That last part is the answer to "does the hook ever turn over?" -- yes,
- * and it has to, because a layer that never turns over is what the padlock
- * is already for.
- *
- * It is also why the hold is NOT eight times in practice. Measured over
- * four layers under `even`: a normal layer changes every 4.0 turns and a
- * hooked one every 9.7, because the divisor is being climbed at every turn
- * by the hook's own growing staleness. At `mid` (about 28s realised per
- * turn) that is two minutes against four and a half -- which is the hold
- * Elling noticed and liked before anyone built a control for it. */
-export const HOOK_HOLD_FACTOR = 8
+/** (2026-10-03) The hook is no longer a flag: it is a STEM that leaves and comes back
+ * (radioHooks.ts, spec 2026-10-03-radio-anointed-stems-design). Its old divisor (HOOK_HOLD_FACTOR,
+ * 8: "a normal layer changes every 4.0 turns and a hooked one every 9.7") is gone with it; a hook
+ * in is simply left out of radio's turnover (radioHookTurnoverExcluded). The comments below that
+ * argue against the hook's numbers are kept as the record of why replace-soon's are what they
+ * are. */
 
 /** How much sooner a layer flagged `replace-soon` comes round -- a
  * MULTIPLIER, and deliberately not 8.
@@ -132,7 +122,6 @@ export const REPLACE_SOON_FACTOR = 4
  * controls together are a single term in pickRadioSlotId's formula rather
  * than a branch in it. */
 export function radioSlotFlagWeightFactor(flag: RadioSlotFlag | null): number {
-  if (flag === 'hook') return 1 / HOOK_HOLD_FACTOR
   if (flag === 'replace-soon') return REPLACE_SOON_FACTOR
   return 1
 }
@@ -141,61 +130,23 @@ export function radioSlotFlagOf(flags: RadioSlotFlags, id: string): RadioSlotFla
   return flags[id] ?? null
 }
 
-/** The hooked slot, or null. At most one can exist -- toggleRadioHook is
- * the only writer of `hook` and it guarantees it -- so this is a lookup,
- * not a choice. */
-export function radioHookSlotId(flags: RadioSlotFlags): string | null {
-  for (const [id, flag] of Object.entries(flags)) if (flag === 'hook') return id
-  return null
-}
-
-/** The row's "hold longer" control: hook this slot, or release it.
- *
- * AT MOST ONE HOOK. Two hooks is two centres, which is no centre, so
- * hooking this slot releases any hook on another -- the way a radio button
- * does. That release is visible: every row is on screen, and the other
- * row's hand goes dark in the same render. (The old single cycle button
- * could reach this state by accident on its way somewhere else; two
- * separate controls cannot.)
- *
- * One flag per slot, so hooking a slot that was marked replace-soon
- * replaces that mark. Replace-soon on OTHER slots is untouched. */
-export function toggleRadioHook(flags: RadioSlotFlags, id: string): RadioSlotFlags {
-  const turningOn = flags[id] !== 'hook'
-  const out: Record<string, RadioSlotFlag> = {}
-  for (const [otherId, flag] of Object.entries(flags)) {
-    if (otherId === id) continue
-    if (turningOn && flag === 'hook') continue
-    out[otherId] = flag
-  }
-  if (turningOn) out[id] = 'hook'
-  return out
-}
-
 /** The row's 👍 (2026-10-01, from the web radio's full-mode rows): one
  * press that says "i like this stem" twice -- a star, and radio's hold.
  *
- * Elling: "👍 replaces the star ... and toggles it." So the STAR toggles,
- * and the HOLD only ever turns on:
- *   - unstarred: star it, and hook the slot if it is not hooked already
- *     (toggleRadioHook, so the one-hold rule still holds and a replace-soon
- *     on this slot becomes the hook). Never turns a hook off.
- *   - starred: un-star it; the flags are untouched.
+ * The STAR toggles here. The HOLD is radioHooks' likeRadioStem (2026-10-03: the hook is a stem,
+ * not a flag), called beside this; it only ever turns on. What is left of the flags' side: a 👍
+ * that holds (`canHold`: radio on, the row not padlocked) takes the row's change soon away, since
+ * the row is now held. Un-starring leaves the flags alone.
  *
- * `canHold` is false while radio is off ("👍 only stars or un-stars") and
- * on a padlocked row, where a hook is inert and would only steal the one
- * hold from a row radio can still turn over -- the same reason the old
- * "hold longer" button was disabled there.
- *
- * Returns the SAME flags object when the hold does not change. */
+ * Returns the SAME flags object when they do not change. */
 export function likeRadioSlot(
   flags: RadioSlotFlags,
   id: string,
   opts: { starred: boolean; canHold: boolean }
 ): { flags: RadioSlotFlags; starred: boolean } {
   if (opts.starred) return { flags, starred: false }
-  if (!opts.canHold || flags[id] === 'hook') return { flags, starred: true }
-  return { flags: toggleRadioHook(flags, id), starred: true }
+  if (!opts.canHold || flags[id] !== 'replace-soon') return { flags, starred: true }
+  return { flags: toggleRadioReplaceSoon(flags, id), starred: true }
 }
 
 /** The row's "change next" control: mark this slot to be replaced soon,
@@ -213,11 +164,9 @@ export function likeRadioSlot(
  * a lie about another -- the exact failure the clear-on-change rule below
  * exists to avoid.
  *
- * So: marking a hook releases any other hook, visibly, the way a radio
- * button does. Marking a replace-soon releases nothing, and never touches
- * another slot's flag of either kind.
- *
- * One flag per slot, so marking a hooked slot replaces its hook. */
+ * So: marking a replace-soon releases nothing, and never touches another
+ * slot's flag. (A hook -- radioHooks.ts -- is let go by the runtime when 👎
+ * marks its row.) */
 export function toggleRadioReplaceSoon(flags: RadioSlotFlags, id: string): RadioSlotFlags {
   const out: Record<string, RadioSlotFlag> = {}
   for (const [otherId, flag] of Object.entries(flags)) if (otherId !== id) out[otherId] = flag

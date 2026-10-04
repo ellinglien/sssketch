@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { HOOK_HOLD_FACTOR, REPLACE_SOON_FACTOR, type RadioSlotFlags } from './radioSlotFlags'
+import { REPLACE_SOON_FACTOR, type RadioSlotFlags } from './radioSlotFlags'
 import {
   DEFAULT_RADIO_LOOP_END_BARS,
   DEFAULT_RADIO_PACE,
@@ -774,61 +774,6 @@ describe('turnover fairness, the hook and replace-soon', () => {
     expect(seen).toEqual(new Set(['a', 'b', 'c']))
   })
 
-  it('holds the hook eight times longer, under either turnover mode', () => {
-    const random = lcg(11)
-    let hookWins = 0
-    for (let i = 0; i < 400; i++) {
-      const picked = pickRadioSlotId(['hook', 'other'], null, {
-        turnover: 'random',
-        flags: { hook: 'hook' },
-        random
-      })
-      if (picked === 'hook') hookWins++
-    }
-    expect(HOOK_HOLD_FACTOR).toBe(8)
-    // weights 1/8 and 1 -> the hook takes about one in nine.
-    expect(hookWins).toBeGreaterThan(10)
-    expect(hookWins).toBeLessThan(100)
-  })
-
-  it('still turns the hook over eventually, because its staleness grows', () => {
-    const ids = ['hook', 'b', 'c']
-    const changedAt = new Map<string, number>()
-    let last: string | null = null
-    const random = lcg(5)
-    let hookPicked = false
-    for (let turn = 1; turn <= 200; turn++) {
-      const picked = pickRadioSlotId(ids, last, {
-        turnover: 'even',
-        changedAt,
-        turn,
-        flags: { hook: 'hook' },
-        random
-      })
-      if (picked === null) continue
-      if (picked === 'hook') hookPicked = true
-      changedAt.set(picked, turn)
-      last = picked
-    }
-    // A hook that NEVER turns over is the padlock, which already exists.
-    expect(hookPicked).toBe(true)
-  })
-
-  it('holds a hooked layer more than twice as long as a normal one', () => {
-    // The steady-state numbers Elling can hear. Four layers, `even`.
-    // Measured: a normal layer every 4.0 turns, a hooked one every 9.7 --
-    // NOT eight times, because the divisor is fighting the hook's own
-    // staleness, which grows every turn it is passed over. That is the
-    // design working, not the design missing: at `mid` (about 28s a turn)
-    // it is two minutes against four and a half.
-    const ids = ['a', 'b', 'c', 'd']
-    const plain = meanTurnsBetweenChanges('even', ids, 'a', {}, 4000, lcg(21))
-    const hooked = meanTurnsBetweenChanges('even', ids, 'a', { a: 'hook' }, 4000, lcg(21))
-    expect(plain).toBeGreaterThan(3.5)
-    expect(plain).toBeLessThan(4.5)
-    expect(hooked).toBeGreaterThan(2 * plain)
-  })
-
   it('makes a tired layer the next change more often than not', () => {
     // The ONE-SHOT number, which is the right one for replace-soon: the
     // flag is cleared by the change that honours it, so what matters is
@@ -904,12 +849,6 @@ describe('turnover fairness, the hook and replace-soon', () => {
         })
       ).not.toBe('a')
     }
-  })
-
-  it('still answers when the hook is the only eligible layer left', () => {
-    expect(pickRadioSlotId(['hook'], null, { turnover: 'even', flags: { hook: 'hook' } })).toBe(
-      'hook'
-    )
   })
 })
 
