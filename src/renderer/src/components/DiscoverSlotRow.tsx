@@ -35,6 +35,7 @@ import { type RadioSlotFlag } from '@shared/radioSlotFlags'
 import { type RadioApproach } from '@shared/radioApproach'
 import {
   buildMatchMeter,
+  compactRadioMeter,
   discoverRoleLabel,
   reclassifyKindSources,
   MATCH_METER_STEPS
@@ -57,7 +58,8 @@ import {
   DISCOVER_ROW_GRID_COLUMNS,
   DISCOVER_WAVEFORM_COLUMN,
   DISCOVER_WAVEFORM_HEIGHT,
-  DISCOVER_WAVEFORM_MIN_WIDTH
+  DISCOVER_WAVEFORM_MIN_WIDTH,
+  RADIO_WAVEFORM_HEIGHT
 } from './discoverRowGrid'
 
 // Hand-drawn padlock glyph (open/closed shackle), styled after Phosphor's
@@ -119,7 +121,8 @@ function RowIconButton({
   toggle = false,
   ariaExpanded,
   buttonRef,
-  ariaLabel
+  ariaLabel,
+  look
 }: {
   /** The row grid's track; omitted, the button takes no placement (radio view plan Task 5). */
   gridColumn?: number
@@ -139,7 +142,13 @@ function RowIconButton({
   toggle?: boolean
   ariaExpanded?: boolean
   buttonRef?: React.Ref<HTMLButtonElement>
+  /** The radio layout's two weights (design pass Task 9): `live` is a 24px square with a strong
+   * border in the row's cluster, `extra` a quiet borderless one (any, nearby, duplicate). Only
+   * the radio assembly passes it; without it the button is the grid's 18px square, unchanged. */
+  look?: 'live' | 'extra'
 }): React.JSX.Element {
+  const extra = look === 'extra'
+  const size = look === undefined ? 18 : 'var(--ra-h-row-button)'
   return (
     <button
       ref={buttonRef}
@@ -158,8 +167,8 @@ function RowIconButton({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 18,
-        height: 18,
+        width: size,
+        height: size,
         padding: 0,
         visibility: hidden ? 'hidden' : 'visible',
         pointerEvents: hidden ? 'none' : 'auto',
@@ -169,13 +178,23 @@ function RowIconButton({
             : state === 'soft'
               ? 'var(--ra-bg-row-active)'
               : 'transparent',
-        border: `1px solid ${state === 'off' ? 'var(--ra-border)' : 'var(--ra-text)'}`,
+        border: `1px solid ${
+          state !== 'off'
+            ? 'var(--ra-text)'
+            : extra
+              ? 'transparent'
+              : look === 'live'
+                ? 'var(--ra-border-strong)'
+                : 'var(--ra-border)'
+        }`,
         color:
           state === 'on'
             ? 'var(--ra-bg-frame)'
             : state === 'soft'
               ? 'var(--ra-text)'
-              : 'var(--ra-text-2)',
+              : extra
+                ? 'var(--ra-text-3)'
+                : 'var(--ra-text-2)',
         // Disabled dims the WHOLE button and keeps its state styling, so a
         // padlocked row that is hooked reads as a dimmed lit hand: the flag
         // is inert but still readable. A pulsing button is also disabled
@@ -213,6 +232,7 @@ function RadioRoleButtons({
       <RowIconButton
         tooltip={hookSet ? RADIO_HOOK_RELEASE_TOOLTIP : RADIO_HOOK_TOOLTIP}
         ariaLabel={RADIO_HOOK_WORD}
+        look="live"
         onClick={onToggleHook}
         toggle
         state={hookSet ? 'on' : 'off'}
@@ -223,6 +243,7 @@ function RadioRoleButtons({
       <RowIconButton
         tooltip={dug ? RADIO_DIG_STOP_TOOLTIP : RADIO_DIG_TOOLTIP}
         ariaLabel={RADIO_DIG_WORD}
+        look="live"
         onClick={onToggleDig}
         toggle
         state={dug ? 'on' : 'off'}
@@ -745,7 +766,16 @@ export function DiscoverSlotRow({
   function handleGainDragStart(e: React.MouseEvent): void {
     const startGain = slot.gain
     startPointerDrag(e, (_dx, deltaY) => {
-      onGainChange(Math.max(0, Math.min(1, startGain - deltaY / DISCOVER_WAVEFORM_HEIGHT)))
+      onGainChange(
+        Math.max(
+          0,
+          Math.min(
+            1,
+            startGain -
+              deltaY / (layout === 'radio' ? RADIO_WAVEFORM_HEIGHT : DISCOVER_WAVEFORM_HEIGHT)
+          )
+        )
+      )
     })
   }
 
@@ -866,6 +896,11 @@ export function DiscoverSlotRow({
   // which is a flex line and a waveform, not a grid (Task 7).
   const radioLayout = layout === 'radio'
   const at = (n: number): { gridColumn?: number } => (radioLayout ? {} : { gridColumn: n })
+  // The radio layout's row buttons are 24px squares with a strong border; the grid's are 18px
+  // with the plain one.
+  const rowBtn = radioLayout ? 'var(--ra-h-row-button)' : 18
+  const liveBorder = radioLayout ? 'var(--ra-border-strong)' : 'var(--ra-border)'
+  const waveHeight = radioLayout ? RADIO_WAVEFORM_HEIGHT : DISCOVER_WAVEFORM_HEIGHT
 
   // Direct request, 2026-09-15: "an X for remove" -- icon-only, same
   // as every other row button now.
@@ -879,14 +914,14 @@ export function DiscoverSlotRow({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 18,
-        height: 18,
+        width: rowBtn,
+        height: rowBtn,
         padding: 0,
         fontFamily: 'inherit',
         fontSize: 10,
         background: 'transparent',
-        border: '1px solid var(--ra-border)',
-        color: 'var(--ra-text-2)',
+        border: `1px solid ${radioLayout ? 'transparent' : 'var(--ra-border)'}`,
+        color: radioLayout ? 'var(--ra-text-3)' : 'var(--ra-text-2)',
         cursor: 'pointer'
       }}
     >
@@ -903,12 +938,16 @@ export function DiscoverSlotRow({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 18,
-        height: 18,
+        width: rowBtn,
+        height: rowBtn,
         padding: 0,
         background: slot.locked ? 'var(--ra-stretch-on-bg)' : 'transparent',
-        border: `1px solid ${slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-        color: slot.locked ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+        border: `1px solid ${slot.locked ? 'var(--ra-stretch-on)' : radioLayout ? 'transparent' : 'var(--ra-border)'}`,
+        color: slot.locked
+          ? 'var(--ra-stretch-on)'
+          : radioLayout
+            ? 'var(--ra-text-3)'
+            : 'var(--ra-text-2)',
         cursor: 'pointer'
       }}
     >
@@ -939,8 +978,8 @@ export function DiscoverSlotRow({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          width: 18,
-          height: 18,
+          width: rowBtn,
+          height: rowBtn,
           padding: 0,
           fontFamily: 'inherit',
           fontSize: 10,
@@ -957,7 +996,7 @@ export function DiscoverSlotRow({
           // its own doc comment above), not bare `previewing` --
           // still-resolving no longer renders as falsely muted.
           background: showsAsMuted ? 'var(--ra-mute-on)' : 'var(--ra-bg-row-active)',
-          border: `1px solid ${showsAsMuted ? 'var(--ra-mute-on)' : 'var(--ra-border)'}`,
+          border: `1px solid ${showsAsMuted ? 'var(--ra-mute-on)' : liveBorder}`,
           color: showsAsMuted ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)',
           cursor: 'pointer'
         }}
@@ -983,13 +1022,13 @@ export function DiscoverSlotRow({
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          width: 18,
-          height: 18,
+          width: rowBtn,
+          height: rowBtn,
           padding: 0,
           fontFamily: 'inherit',
           fontSize: 10,
           background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-          border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+          border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : liveBorder}`,
           color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
           cursor: 'pointer'
         }}
@@ -1014,7 +1053,7 @@ export function DiscoverSlotRow({
         ...at(DISCOVER_WAVEFORM_COLUMN),
         // The radio layout's waveform is the row's full width (less its padding).
         ...(radioLayout
-          ? { width: '100%', minWidth: 0 }
+          ? { width: 'auto', minWidth: 0, margin: '0 8px 8px 14px' }
           : { minWidth: DISCOVER_WAVEFORM_MIN_WIDTH }),
         position: 'relative'
       }}
@@ -1061,7 +1100,7 @@ export function DiscoverSlotRow({
           style={{
             position: 'relative',
             width: '100%',
-            height: DISCOVER_WAVEFORM_HEIGHT,
+            height: waveHeight,
             padding: 0,
             background: 'transparent',
             border: 'none',
@@ -1176,7 +1215,7 @@ export function DiscoverSlotRow({
         <div
           style={{
             width: '100%',
-            height: 40,
+            height: radioLayout ? RADIO_WAVEFORM_HEIGHT : 40,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -1239,6 +1278,14 @@ export function DiscoverSlotRow({
   )
   // Kind label + match meter stacked in the 110px label column --
   // see the meter's own comment on meterEntries above.
+  // The radio layout's meter: with one kind the kind button names it, so the mask entry's label
+  // goes (compactRadioMeter), and the cells come before the source word (`guess`).
+  const shownMeter = radioLayout
+    ? [
+        ...compactRadioMeter(meterEntries, slot.kinds.length).filter((e) => e.type === 'trait'),
+        ...compactRadioMeter(meterEntries, slot.kinds.length).filter((e) => e.type === 'mask')
+      ]
+    : meterEntries
   const kindsBlock = (
     <div
       style={{
@@ -1278,11 +1325,18 @@ export function DiscoverSlotRow({
           ...(radioLayout ? { maxWidth: 110 } : { width: 110 }),
           padding: 0,
           fontFamily: 'inherit',
-          fontSize: 9,
+          fontSize: radioLayout ? 'var(--ra-fs-10)' : 9,
           textAlign: 'left',
           background: 'transparent',
           border: 'none',
-          color: kindMenu ? 'var(--ra-text)' : 'var(--ra-text-3)',
+          // The radio layout's kind label is in the stem's own type colour (audio information).
+          color: radioLayout
+            ? resolvedStem !== null
+              ? stemColorVar(resolvedStem)
+              : 'var(--ra-text-2)'
+            : kindMenu
+              ? 'var(--ra-text)'
+              : 'var(--ra-text-3)',
           cursor: slot.locked ? 'default' : 'pointer'
         }}
       >
@@ -1291,7 +1345,7 @@ export function DiscoverSlotRow({
         </span>
         {!slot.locked && <span aria-hidden="true">▾</span>}
       </button>
-      {meterEntries.length > 0 && (
+      {shownMeter.length > 0 && (
         <div
           ref={meterRef}
           aria-label="match"
@@ -1305,10 +1359,10 @@ export function DiscoverSlotRow({
             color: 'var(--ra-text-3)'
           }}
         >
-          {meterEntries.map((entry) =>
+          {shownMeter.map((entry) =>
             entry.type === 'mask' ? (
               <span key={`mask-${entry.kind ?? 'reclassified'}`} style={{ whiteSpace: 'nowrap' }}>
-                {entry.label}:{' '}
+                {entry.label !== '' && `${entry.label}: `}
                 <button
                   onClick={(e) => {
                     if (reclassifyMenu) {
@@ -1364,9 +1418,14 @@ export function DiscoverSlotRow({
                     <span
                       key={i}
                       style={{
-                        width: 3,
-                        height: 6,
-                        background: i < entry.filled ? 'var(--ra-text-2)' : 'var(--ra-text-4)'
+                        width: radioLayout ? 4 : 3,
+                        height: radioLayout ? 9 : 6,
+                        background:
+                          i < entry.filled
+                            ? 'var(--ra-text-2)'
+                            : radioLayout
+                              ? 'var(--ra-border)'
+                              : 'var(--ra-text-4)'
                       }}
                     />
                   ))}
@@ -1386,6 +1445,7 @@ export function DiscoverSlotRow({
     <RowIconButton
       gridColumn={at(10).gridColumn}
       tooltip="skip"
+      look={radioLayout ? 'live' : undefined}
       onClick={(e) => {
         setRerollAction('similar')
         onReroll(e.metaKey)
@@ -1401,6 +1461,7 @@ export function DiscoverSlotRow({
     <RowIconButton
       gridColumn={at(11).gridColumn}
       tooltip="nearby jam"
+      look={radioLayout ? 'extra' : undefined}
       buttonRef={nearbyButtonRef}
       onClick={(e) => {
         if (nearbyMenu) {
@@ -1422,6 +1483,7 @@ export function DiscoverSlotRow({
     <RowIconButton
       gridColumn={at(12).gridColumn}
       tooltip="any stem"
+      look={radioLayout ? 'extra' : undefined}
       onClick={(e) => {
         setRerollAction('random')
         onRerollRandom(e.metaKey)
@@ -1437,6 +1499,7 @@ export function DiscoverSlotRow({
     <RowIconButton
       gridColumn={at(13).gridColumn}
       tooltip="duplicate"
+      look={radioLayout ? 'extra' : undefined}
       onClick={(e) => onDuplicate(e.metaKey)}
     >
       <Copy size={12} />
@@ -1485,11 +1548,11 @@ export function DiscoverSlotRow({
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        width: 18,
-        height: 18,
+        width: rowBtn,
+        height: rowBtn,
         padding: 0,
         background: likeInverted ? 'var(--ra-text)' : 'var(--ra-bg-row-active)',
-        border: `1px solid ${favourited ? 'var(--ra-recording-live)' : likeInverted ? 'var(--ra-text)' : 'var(--ra-border)'}`,
+        border: `1px solid ${favourited ? 'var(--ra-recording-live)' : likeInverted ? 'var(--ra-text)' : liveBorder}`,
         color: favourited
           ? 'var(--ra-recording-live)'
           : likeInverted
@@ -1513,6 +1576,7 @@ export function DiscoverSlotRow({
     <RowIconButton
       gridColumn={at(15).gridColumn}
       tooltip="change soon"
+      look={radioLayout ? 'live' : undefined}
       onClick={onToggleReplaceSoon}
       toggle
       state={radioFlag === 'replace-soon' ? 'soft' : 'off'}
@@ -1597,9 +1661,9 @@ export function DiscoverSlotRow({
           }
           style={{
             position: 'relative',
-            padding: '4px 6px',
-            marginBottom: 4,
-            background: approachBackground
+            border: `1px solid ${radioApproach !== null ? 'var(--ra-border-strong)' : 'var(--ra-border)'}`,
+            marginBottom: 6,
+            background: approachBackground ?? 'var(--ra-bg-row)'
           }}
         >
           {holding && (
@@ -1608,27 +1672,43 @@ export function DiscoverSlotRow({
               style={{
                 position: 'absolute',
                 left: 0,
-                top: 6,
-                bottom: 6,
-                width: 2,
-                background: 'color-mix(in srgb, var(--ra-text) 45%, transparent)',
+                top: 0,
+                bottom: 0,
+                width: 3,
+                // The holding row's bar is in its stem's type colour.
+                background: resolvedStem !== null ? stemColorVar(resolvedStem) : 'var(--ra-text-2)',
                 pointerEvents: 'none'
               }}
             />
           )}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 20 }}>
-            {muteSolo}
-            {skipButton}
-            {likeButton}
-            {dislikeButton}
-            <span data-slot="radio-role" style={{ display: 'contents' }}>
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 'var(--ra-s-5)',
+              flexWrap: 'wrap',
+              padding: '6px 8px 6px 14px'
+            }}
+          >
+            {/* The live cluster: m s, skip like next, hook dig, as icons. */}
+            <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>{muteSolo}</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: 6 }}>
+              {skipButton}
+              {likeButton}
+              {dislikeButton}
+            </span>
+            <span
+              data-slot="radio-role"
+              style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: 6 }}
+            >
               {roleButtons}
             </span>
-            <span style={{ marginLeft: 'auto' }} />
+            {kindsBlock}
+            <span style={{ flex: 1 }} />
+            {/* The extras, quieter. */}
             {anyStemButton}
             {nearbyButton}
             {duplicateButton}
-            {kindsBlock}
             {lockButton}
             {removeButton}
           </div>

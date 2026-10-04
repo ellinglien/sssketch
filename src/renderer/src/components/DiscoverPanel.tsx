@@ -373,7 +373,9 @@ import {
   DISCOVER_ROW_GRID_COLUMNS,
   DISCOVER_ROW_COLUMN_GAP,
   DISCOVER_WAVEFORM_COLUMN,
-  DISCOVER_WAVEFORM_MIN_WIDTH
+  DISCOVER_WAVEFORM_MIN_WIDTH,
+  RADIO_ROW_INSET_LEFT,
+  RADIO_ROW_INSET_RIGHT
 } from './discoverRowGrid'
 
 export type { ResolvedCandidateStem } from './discoverCandidateStem'
@@ -11841,8 +11843,8 @@ export function DiscoverPanel({
         {sweepActive && (
           // Radio view plan Task 7: the same three elements in both layouts, only their styles
           // switch, so the line (sweepLineRef) never changes parent. In the radio layout the
-          // waveform is the row's width less its 6px side padding (DiscoverSlotRow's radio
-          // assembly), so the box is inset 6px each side and the cell fills it.
+          // waveform is the row's width less its border and margins (DiscoverSlotRow's radio
+          // assembly), so the box is inset by RADIO_ROW_INSET_LEFT/RIGHT and the cell fills it.
           <div
             aria-hidden
             style={
@@ -11851,8 +11853,8 @@ export function DiscoverPanel({
                     position: 'absolute',
                     top: 0,
                     bottom: 0,
-                    left: 6,
-                    right: 6,
+                    left: RADIO_ROW_INSET_LEFT,
+                    right: RADIO_ROW_INSET_RIGHT,
                     pointerEvents: 'none'
                   }
                 : {

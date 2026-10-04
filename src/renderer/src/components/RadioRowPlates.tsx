@@ -2,18 +2,20 @@
 //
 // The radio view's plates ON a row's waveform (spec 2026-10-03-sssketch-radio-view-design section
 // 1.2; radio view plan Task 7): the web radio's full-mode row plates, from @shared/radioRowPlates.
-// Info top left (label ellipsized, its tail kept whole), fold's `7 / 16` and its phase dot top
-// right, and one bottom bar: the away hook's name at its left (the one real control here), the
-// cue (flash and `next`) at its right. Rendered inside the waveform cell, which is
-// `position: relative`. Monochrome chrome; everything but the away button ignores the pointer,
-// so the gain drag underneath keeps working.
+// Two flex bars (design pass 2026-10-04, decision 11), so plates never collide on a busy row.
+// The top bar: info at the left (label ellipsized, its tail kept whole), the cue at the right
+// (the flash word, and `next · ...` inverted). The bottom bar: the away hook's name at the left
+// (the one real control here), fold's `7 / 16` with its phase dot at the right. Rendered inside
+// the waveform cell, which is `position: relative`. Monochrome chrome; everything but the away
+// button ignores the pointer, so the gain drag underneath keeps working.
 import { RADIO_HOOK_BRING_BACK_TOOLTIP } from '@shared/radioHooks'
 import type { RadioRowPlates as RadioRowPlatesModel } from '@shared/radioRowPlates'
 
 const PLATE: React.CSSProperties = {
-  background: 'color-mix(in srgb, var(--ra-bg-page) 80%, transparent)',
-  padding: '1px 3px',
-  fontSize: 8,
+  background: 'var(--ra-bg-page)',
+  border: '1px solid var(--ra-border)',
+  padding: '3px 6px',
+  fontSize: 'var(--ra-fs-9)',
   lineHeight: 1,
   whiteSpace: 'nowrap'
 }
@@ -31,76 +33,90 @@ export function RadioRowPlates({
 }): React.JSX.Element {
   return (
     <>
-      {plates.info !== null && (
+      {(plates.info !== null || plates.cue !== null) && (
         <div
-          aria-hidden
           style={{
-            ...PLATE,
             position: 'absolute',
-            top: 2,
-            left: 4,
+            top: 0,
+            left: 0,
+            right: 0,
             display: 'flex',
-            maxWidth: 'calc(100% - 56px)',
-            color: 'var(--ra-text)',
+            alignItems: 'flex-start',
+            gap: 'var(--ra-s-1)',
             pointerEvents: 'none'
           }}
         >
-          <span
-            style={{ flex: '0 1 auto', minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis' }}
-          >
-            {plates.info.label}
-          </span>
-          <span style={{ flex: 'none' }}>{plates.info.tail}</span>
-        </div>
-      )}
-      {/* Fold's readout and the phase dot. The dot is the same element the grid's readout cell
-          carries (data-fold-dot): DiscoverPanel's sweep layout effect shows, hides and moves it
-          under rowsRef, never render. */}
-      {plates.fold !== null && (
-        <div
-          aria-hidden
-          style={{
-            ...PLATE,
-            position: 'absolute',
-            top: 2,
-            right: 4,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'flex-end',
-            gap: 3,
-            color: 'var(--ra-text-2)',
-            pointerEvents: 'none'
-          }}
-        >
-          <span>{plates.fold}</span>
-          <span
-            style={{ position: 'relative', width: 28, height: 1, background: 'var(--ra-text-3)' }}
-          >
-            <span
-              data-fold-dot={slotId}
+          {plates.info !== null && (
+            <div
+              aria-hidden
               style={{
-                position: 'absolute',
-                top: -1,
-                width: 3,
-                height: 3,
-                marginLeft: -1,
-                background: 'var(--ra-text)',
-                display: 'none'
+                ...PLATE,
+                display: 'flex',
+                flex: '0 1 auto',
+                minWidth: 0,
+                color: 'var(--ra-text)'
               }}
-            />
-          </span>
+            >
+              <span
+                style={{
+                  flex: '0 1 auto',
+                  minWidth: 0,
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis'
+                }}
+              >
+                {plates.info.label}
+              </span>
+              <span style={{ flex: 'none' }}>{plates.info.tail}</span>
+            </div>
+          )}
+          {plates.cue !== null && (
+            <div
+              aria-hidden
+              style={{
+                marginLeft: 'auto',
+                display: 'flex',
+                gap: 'var(--ra-s-1)',
+                flex: 'none'
+              }}
+            >
+              {plates.cue.flash !== null && (
+                <span
+                  style={{
+                    ...PLATE,
+                    color: 'var(--ra-text)',
+                    opacity: plates.cue.flash.opacity
+                  }}
+                >
+                  {plates.cue.flash.word}
+                </span>
+              )}
+              {plates.cue.next !== null && (
+                <span
+                  style={{
+                    ...PLATE,
+                    background: 'var(--ra-text)',
+                    color: 'var(--ra-bg-page)',
+                    borderColor: 'var(--ra-text)'
+                  }}
+                >
+                  {plates.cue.next}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       )}
-      {(hookAwayName !== null || plates.cue !== null) && (
+      {(hookAwayName !== null || plates.fold !== null) && (
         <div
           style={{
             position: 'absolute',
             bottom: 0,
             left: 0,
-            right: 4,
+            right: 0,
             display: 'flex',
             alignItems: 'flex-end',
-            gap: 6,
+            gap: 'var(--ra-s-1)',
             pointerEvents: 'none'
           }}
         >
@@ -117,7 +133,7 @@ export function RadioRowPlates({
               style={{
                 flex: '0 1 auto',
                 minWidth: 0,
-                padding: '17px 8px 2px 4px',
+                padding: '17px 8px 0 0',
                 margin: 0,
                 border: 'none',
                 borderRadius: 0,
@@ -139,24 +155,44 @@ export function RadioRowPlates({
               </span>
             </button>
           )}
-          {plates.cue !== null && (
+          {/* Fold's readout and the phase dot. The dot is the same element the grid's readout
+              cell carries (data-fold-dot): DiscoverPanel's sweep layout effect shows, hides and
+              moves it under rowsRef, never render. */}
+          {plates.fold !== null && (
             <div
               aria-hidden
               style={{
                 ...PLATE,
+                marginLeft: 'auto',
                 flex: 'none',
-                margin: '0 0 2px auto',
                 display: 'flex',
+                alignItems: 'center',
                 gap: 6,
                 color: 'var(--ra-text-2)'
               }}
             >
-              {plates.cue.flash !== null && (
-                <span style={{ color: 'var(--ra-text)', opacity: plates.cue.flash.opacity }}>
-                  {plates.cue.flash.word}
-                </span>
-              )}
-              {plates.cue.next !== null && <span>{plates.cue.next}</span>}
+              <span>{plates.fold}</span>
+              <span
+                style={{
+                  position: 'relative',
+                  width: 28,
+                  height: 1,
+                  background: 'var(--ra-text-3)'
+                }}
+              >
+                <span
+                  data-fold-dot={slotId}
+                  style={{
+                    position: 'absolute',
+                    top: -1,
+                    width: 3,
+                    height: 3,
+                    marginLeft: -1,
+                    background: 'var(--ra-text)',
+                    display: 'none'
+                  }}
+                />
+              </span>
             </div>
           )}
         </div>

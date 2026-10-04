@@ -23,3 +23,11 @@ export const DISCOVER_ROW_GRID_COLUMNS =
 export const DISCOVER_ROW_COLUMN_GAP = 8
 export const DISCOVER_WAVEFORM_COLUMN = 5
 export const DISCOVER_WAVEFORM_MIN_WIDTH = 140
+
+// THE RADIO LAYOUT's row geometry (radio view design pass, Task 9). The waveform is the row's
+// full width less these insets, and the one playhead overlay (DiscoverPanel) is inset by the same
+// numbers: the row's 1px border plus 14px at the left (room for the holding bar) and 8px at the
+// right. Change them here, never inline, or the playhead lands off the waveform.
+export const RADIO_WAVEFORM_HEIGHT = 60
+export const RADIO_ROW_INSET_LEFT = 15
+export const RADIO_ROW_INSET_RIGHT = 9
