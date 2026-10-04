@@ -5,10 +5,16 @@
 // control, in what order, when it shows, what it says, what it sets). This file only draws them.
 // Values and callbacks only: every handler is DiscoverPanel's own, passed in bundles, and every
 // panel control is the element the header or the add row draws, with its look.
+import { useState } from 'react'
 import { newFoldSeed } from '@shared/radioFold'
+import { DEFAULT_SOUND_SETTINGS, type SoundSettingsPatch } from '@shared/radioSound'
+import { soundPanelModel, type SoundSliderControl } from '@shared/soundPanelModel'
+import { neutralCutoff, type FilterMode } from '@shared/toolkit'
 import type { RadioSettings } from '@shared/radioSchedule'
 import {
   radioStripModel,
+  soundDialPosition,
+  soundDialValue,
   type RadioStripContext,
   type RadioStripControl
 } from '@shared/radioStripModel'
@@ -83,6 +89,23 @@ export interface RadioStripProps {
     flash: string | null
     onTurn: (move?: TurnaroundMove) => void
   }
+  /** The master strip's dials (the strip's sound group, plan Task 9), and the open project's
+   * sound for saturation, pump and echo. */
+  sound: {
+    level: number
+    onLevel: (v: number) => void
+    reverb: number
+    onReverbDraft: (v: number) => void
+    onReverbCommit: (v: number) => void
+    cutoff: number
+    onCutoff: (v: number) => void
+    resonance: number
+    onResonance: (v: number) => void
+    filterMode: FilterMode
+    onFilterMode: () => void
+    /** One SET_SOUND_SETTINGS: undoable, saved with the project. */
+    onSoundPatch: (patch: SoundSettingsPatch) => void
+  }
   mix: {
     rolling: boolean
     onSimilarAll: (immediate: boolean) => void
@@ -91,6 +114,45 @@ export interface RadioStripProps {
     shelf: RadioStripAction
     timeline: RadioStripAction & { listenOnly: boolean }
   }
+}
+
+/** Each sound panel slider's default, as a strip dial position: a sound dial's double-click. */
+const SOUND_DIAL_DEFAULTS: ReadonlyMap<string, number> = new Map(
+  soundPanelModel(DEFAULT_SOUND_SETTINGS)
+    .flatMap((r) => r.controls)
+    .flatMap((c) => (c.kind === 'slider' ? [[c.id, soundDialPosition(c)] as const] : []))
+)
+
+/** A sound panel slider as a strip dial (saturation, pump, echo): local while it turns, and one
+ * SET_SOUND_SETTINGS on release, exactly as the sound panel's project mode commits. */
+function StripSoundDial({
+  label,
+  control,
+  tooltip,
+  disabled,
+  onSoundPatch
+}: {
+  label: string
+  control: SoundSliderControl
+  tooltip: string | undefined
+  disabled: boolean
+  onSoundPatch: (patch: SoundSettingsPatch) => void
+}): React.JSX.Element {
+  const [draft, setDraft] = useState<number | null>(null)
+  return (
+    <StripDial
+      label={label}
+      value={draft ?? soundDialPosition(control)}
+      onChange={setDraft}
+      onCommit={(pos) => {
+        onSoundPatch(control.patch(soundDialValue(control, pos)))
+        setDraft(null)
+      }}
+      defaultValue={SOUND_DIAL_DEFAULTS.get(control.id) ?? soundDialPosition(control)}
+      tooltip={tooltip}
+      disabled={disabled}
+    />
+  )
 }
 
 const caption: React.CSSProperties = { fontSize: 9, color: 'var(--ra-text-3)' }
@@ -194,15 +256,98 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
           </span>
         )
       case 'sound':
-        return null
+        return (
+          <StripSoundDial
+            key={c.id}
+            label={c.label}
+            control={c.control}
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+            onSoundPatch={props.sound.onSoundPatch}
+          />
+        )
       case 'panel':
         return panelControl(c)
     }
   }
 
   function panelControl(c: RadioStripControl): React.JSX.Element | null {
-    const { play, picks, turn, mix } = props
+    const { play, picks, turn, mix, sound } = props
     switch (c.id) {
+      case 'level':
+        return (
+          <StripDial
+            key={c.id}
+            label={c.label}
+            ariaLabel="master level"
+            value={sound.level}
+            onChange={sound.onLevel}
+            defaultValue={100}
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+          />
+        )
+      case 'reverb':
+        return (
+          <StripDial
+            key={c.id}
+            label={c.label}
+            ariaLabel="master reverb"
+            value={sound.reverb}
+            onChange={sound.onReverbDraft}
+            onCommit={sound.onReverbCommit}
+            defaultValue={0}
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+          />
+        )
+      case 'filter':
+        return (
+          <StripDial
+            key={c.id}
+            label={c.label}
+            ariaLabel="master filter cutoff"
+            value={sound.cutoff}
+            onChange={sound.onCutoff}
+            // The mode's own open end, as the master strip's: "nothing is happening" either way.
+            defaultValue={neutralCutoff(sound.filterMode) * 100}
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+          />
+        )
+      case 'res':
+        return (
+          <StripDial
+            key={c.id}
+            label={c.label}
+            ariaLabel="master filter resonance"
+            value={sound.resonance}
+            onChange={sound.onResonance}
+            defaultValue={0}
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+          />
+        )
+      case 'filter-mode':
+        return (
+          <button
+            key={c.id}
+            onClick={sound.onFilterMode}
+            disabled={c.disabled}
+            title={sound.filterMode === 'lowpass' ? 'low pass' : 'high pass'}
+            style={{
+              fontFamily: 'inherit',
+              background: 'transparent',
+              border: '1px solid var(--ra-border)',
+              color: c.disabled ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
+              fontSize: 'var(--ra-fs-9)',
+              padding: '2px 5px',
+              cursor: c.disabled ? 'default' : 'pointer'
+            }}
+          >
+            {sound.filterMode === 'lowpass' ? 'lo pass' : 'hi pass'}
+          </button>
+        )
       case 'tempo':
         return (
           <span key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -502,14 +647,11 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
         borderTop: '1px solid var(--ra-border)'
       }}
     >
-      {groups
-        // The sound group lands in plan Task 9.
-        .filter((g) => g.id !== 'sound')
-        .map((g) => (
-          <StripGroup key={g.id} caption={g.caption}>
-            {g.controls.map(control)}
-          </StripGroup>
-        ))}
+      {groups.map((g) => (
+        <StripGroup key={g.id} caption={g.caption}>
+          {g.controls.map(control)}
+        </StripGroup>
+      ))}
     </div>
   )
 }

@@ -298,7 +298,8 @@ export function StripDial({
   disabled = false,
   dimmed = false,
   before,
-  after
+  after,
+  ariaLabel = label
 }: {
   label: string
   value: number
@@ -310,6 +311,8 @@ export function StripDial({
   dimmed?: boolean
   before?: ReactNode
   after?: ReactNode
+  /** When the caption alone is not a good name (the master dials: `master level`). */
+  ariaLabel?: string
 }): React.JSX.Element {
   const caption = { fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' } as const
   return (
@@ -324,7 +327,7 @@ export function StripDial({
         onCommit={onCommit}
         defaultValue={defaultValue}
         size={22}
-        ariaLabel={label}
+        ariaLabel={ariaLabel}
         disabled={disabled}
       />
       {after !== undefined && <span style={caption}>{after}</span>}

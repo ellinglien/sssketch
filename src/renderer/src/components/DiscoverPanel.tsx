@@ -1734,6 +1734,39 @@ export function DiscoverPanel({
     if (ids.size > 0) scheduleSyncPreviewToEngine(new Set(ids))
   }
 
+  /** The master level dial, live (the master strip's and the radio strip's). The ref is
+   * written here as well as through its effect: pushMasterLevel reads the ref and must see
+   * THIS value, not the one from a render ago. */
+  function setMasterLevelLive(v: number): void {
+    setMasterLevel(v)
+    masterLevelRef.current = v
+    pushMasterLevel()
+  }
+
+  /** The master filter's cutoff dial, live. Written into the ref as well as into state, for
+   * the same reason the level dial does: pushMasterFilter reads the ref and must see THIS
+   * value, not a render ago's. */
+  function setMasterCutoffLive(v: number): void {
+    setMasterCutoff(v)
+    masterFilterRef.current = {
+      mode: masterFilterMode,
+      cutoff: v / 100,
+      resonance: masterResonance / 100
+    }
+    pushMasterFilter()
+  }
+
+  /** The master filter's resonance dial, live; as setMasterCutoffLive. */
+  function setMasterResonanceLive(v: number): void {
+    setMasterResonance(v)
+    masterFilterRef.current = {
+      mode: masterFilterMode,
+      cutoff: masterCutoff / 100,
+      resonance: v / 100
+    }
+    pushMasterFilter()
+  }
+
   /** One send value on every preview stem. Committed on release, not on
    * every drag frame -- see the state's own comment above for why. */
   function commitMasterSend(value: number): void {
@@ -11637,7 +11670,8 @@ export function DiscoverPanel({
           is the one control here you actually SWEEP -- it rides a real
           field on the engine's project (spec 4A.3), with its own
           ChannelFilter over the summed master pair. */}
-      {previewingSlotIds.size > 0 && (
+      {/* While radio runs these dials are the strip's sound group (radio view plan Task 9). */}
+      {previewingSlotIds.size > 0 && !radioOn && (
         <div
           style={{
             display: 'flex',
@@ -11654,14 +11688,7 @@ export function DiscoverPanel({
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
             <Dial
               value={masterLevel}
-              onChange={(v): void => {
-                // The ref is written here as well as through its effect:
-                // pushMasterLevel reads the ref and must see THIS value,
-                // not the one from a render ago.
-                setMasterLevel(v)
-                masterLevelRef.current = v
-                pushMasterLevel()
-              }}
+              onChange={setMasterLevelLive}
               defaultValue={100}
               size={30}
               ariaLabel="master level"
@@ -11688,18 +11715,7 @@ export function DiscoverPanel({
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
             <Dial
               value={masterCutoff}
-              onChange={(v): void => {
-                // Written into the ref here as well as into state, for the
-                // same reason the level dial does: pushMasterFilter reads
-                // the ref and must see THIS value, not a render ago's.
-                setMasterCutoff(v)
-                masterFilterRef.current = {
-                  mode: masterFilterMode,
-                  cutoff: v / 100,
-                  resonance: masterResonance / 100
-                }
-                pushMasterFilter()
-              }}
+              onChange={setMasterCutoffLive}
               // The resting position is the mode's own open end, which is
               // the top for a lowpass and the bottom for a highpass -- so
               // double-click goes back to "nothing is happening" either
@@ -11717,15 +11733,7 @@ export function DiscoverPanel({
           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
             <Dial
               value={masterResonance}
-              onChange={(v): void => {
-                setMasterResonance(v)
-                masterFilterRef.current = {
-                  mode: masterFilterMode,
-                  cutoff: masterCutoff / 100,
-                  resonance: v / 100
-                }
-                pushMasterFilter()
-              }}
+              onChange={setMasterResonanceLive}
               defaultValue={0}
               size={30}
               ariaLabel="master filter resonance"
@@ -11993,6 +12001,22 @@ export function DiscoverPanel({
                 : !hasUsername
                   ? MY_SOUNDS_NEEDS_USERNAME
                   : undefined
+          }}
+          sound={{
+            level: masterLevel,
+            onLevel: setMasterLevelLive,
+            reverb: masterSendDraft,
+            onReverbDraft: setMasterSendDraft,
+            onReverbCommit: commitMasterSend,
+            cutoff: masterCutoff,
+            onCutoff: setMasterCutoffLive,
+            resonance: masterResonance,
+            onResonance: setMasterResonanceLive,
+            filterMode: masterFilterMode,
+            onFilterMode: toggleMasterFilterMode,
+            // SoundSettingsPanel's project-mode commit: undoable, saved with the project; the
+            // [sound] effect resyncs the preview once per release.
+            onSoundPatch: (patch) => dispatch({ type: 'SET_SOUND_SETTINGS', settings: patch })
           }}
           turn={{
             shown: radioTurnShown,
