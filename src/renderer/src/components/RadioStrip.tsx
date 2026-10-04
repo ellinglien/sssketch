@@ -10,13 +10,14 @@ import { newFoldSeed } from '@shared/radioFold'
 import { DEFAULT_SOUND_SETTINGS, type SoundSettingsPatch } from '@shared/radioSound'
 import { soundPanelModel, type SoundSliderControl } from '@shared/soundPanelModel'
 import { neutralCutoff, type FilterMode } from '@shared/toolkit'
-import type { RadioSettings } from '@shared/radioSchedule'
+import { DEFAULT_RADIO_SETTINGS, type RadioSettings } from '@shared/radioSchedule'
 import {
   radioStripModel,
   soundDialPosition,
   soundDialValue,
   type RadioStripContext,
-  type RadioStripControl
+  type RadioStripControl,
+  type RadioStripGroup
 } from '@shared/radioStripModel'
 import {
   TURNAROUND_MOVE_LABEL,
@@ -27,19 +28,14 @@ import { DEFAULT_RADIO_PACE_LEVEL, radioPaceLabel } from '@shared/radioPace'
 import { DEFAULT_FAVES } from '@shared/discoverFaves'
 import { DEFAULT_SOURCE_LEAN } from '@shared/discoverSlotModifier'
 import { DEFAULT_DISCOVER_CHAOS } from '@shared/discoverRanking'
-import { BracketToggle } from './BracketToggle'
 import { RADIO_STICKY_BACKGROUND } from './RadioTopLine'
 import {
   ActionButton,
-  FoldSeedInput,
-  FoldSlider,
   ControlField,
   FireButton,
+  FoldSeedInput,
   SegmentBar,
-  StripChip,
-  StripDial,
-  StripGroup,
-  StripWordSwitch
+  Segmented
 } from './RadioControls'
 
 /** One of the mix group's action buttons: label, state and handler, as the header has them. */
@@ -161,9 +157,69 @@ const SOUND_DIAL_DEFAULTS: ReadonlyMap<string, number> = new Map(
     .flatMap((c) => (c.kind === 'slider' ? [[c.id, soundDialPosition(c)] as const] : []))
 )
 
-/** A sound panel slider as a strip dial (saturation, pump, echo): local while it turns, and one
+/** One 0-100 value of a column: a ControlField over a SegmentBar, with its number as the
+ * readout. `onChange` is the live half (a preview, a draft), `onCommit` the release; a caller
+ * with only `onChange` is live (source, matching, filter, res). The local draft only feeds the
+ * readout, and remembers the committed value it started from: a drag that ends where it began
+ * commits nothing, and its draft is stale once the value moves. */
+function ColumnBar({
+  label,
+  ariaLabel = label,
+  value,
+  defaultValue,
+  onChange,
+  onCommit,
+  disabled = false,
+  dimmed = false,
+  tooltip
+}: {
+  label: string
+  ariaLabel?: string
+  value: number
+  defaultValue: number
+  onChange?: (v: number) => void
+  onCommit?: (v: number) => void
+  disabled?: boolean
+  dimmed?: boolean
+  tooltip?: string
+}): React.JSX.Element {
+  const [draftRaw, setDraft] = useState<{ from: number; v: number } | null>(null)
+  const shown = draftRaw !== null && draftRaw.from === value ? draftRaw.v : value
+  return (
+    <ControlField
+      label={label}
+      readout={shown}
+      tooltip={tooltip}
+      disabled={disabled}
+      dimmed={dimmed}
+    >
+      <SegmentBar
+        label={ariaLabel}
+        value={value}
+        size="control"
+        defaultValue={defaultValue}
+        disabled={disabled}
+        tooltip={tooltip}
+        onChange={(v) => {
+          setDraft({ from: value, v })
+          onChange?.(v)
+        }}
+        onCommit={
+          onCommit === undefined
+            ? undefined
+            : (v) => {
+                onCommit(v)
+                setDraft(null)
+              }
+        }
+      />
+    </ControlField>
+  )
+}
+
+/** A sound panel slider (saturation, pump, echo) as a column bar: local while it moves, and one
  * SET_SOUND_SETTINGS on release, exactly as the sound panel's project mode commits. */
-function StripSoundDial({
+function ColumnSoundBar({
   label,
   control,
   tooltip,
@@ -176,24 +232,17 @@ function StripSoundDial({
   disabled: boolean
   onSoundPatch: (patch: SoundSettingsPatch) => void
 }): React.JSX.Element {
-  const [draft, setDraft] = useState<number | null>(null)
   return (
-    <StripDial
+    <ColumnBar
       label={label}
-      value={draft ?? soundDialPosition(control)}
-      onChange={setDraft}
-      onCommit={(pos) => {
-        onSoundPatch(control.patch(soundDialValue(control, pos)))
-        setDraft(null)
-      }}
+      value={soundDialPosition(control)}
       defaultValue={SOUND_DIAL_DEFAULTS.get(control.id) ?? soundDialPosition(control)}
       tooltip={tooltip}
       disabled={disabled}
+      onCommit={(pos) => onSoundPatch(control.patch(soundDialValue(control, pos)))}
     />
   )
 }
-
-const caption: React.CSSProperties = { fontSize: 9, color: 'var(--ra-text-3)' }
 
 const tempoStepStyle: React.CSSProperties = {
   width: 'var(--ra-h-live)',
@@ -404,80 +453,104 @@ function RadioLiveBar(
   )
 }
 
-export function RadioStrip(props: RadioStripProps): React.JSX.Element {
-  const { settings, onSettingsChange, ctx } = props
-  const groups = radioStripModel(settings, ctx)
+/** The shaping columns (design pass: five quiet titled columns under the live bar, 26px
+ * controls): picks, shape, moves, fold, sound. */
+function RadioShapingColumns(
+  props: RadioStripProps & { groups: readonly RadioStripGroup[] }
+): React.JSX.Element {
+  const { onSettingsChange, picks, sound, groups } = props
+
+  function chipsLike(c: Extract<RadioStripControl, { kind: 'chips' }>): React.JSX.Element {
+    return (
+      <ControlField key={c.id} label={c.label} tooltip={c.tooltip} disabled={c.disabled}>
+        <Segmented
+          ariaLabel={c.label}
+          size="control"
+          multi={c.id === 'moves'}
+          disabled={c.disabled}
+          options={c.chips.map((chip) => ({
+            label: chip.label,
+            on: chip.on,
+            onClick: () => onSettingsChange(chip.patch)
+          }))}
+        />
+      </ControlField>
+    )
+  }
 
   function control(c: RadioStripControl): React.JSX.Element | null {
     switch (c.kind) {
       case 'chips':
-        return (
-          <span key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span data-tooltip={c.tooltip} style={caption}>
-              {c.label}
-            </span>
-            {c.chips.map((chip) => (
-              <StripChip
-                key={chip.label}
-                label={chip.label}
-                on={chip.on}
-                disabled={c.disabled}
-                onClick={() => onSettingsChange(chip.patch)}
-              />
-            ))}
-          </span>
-        )
+        return chipsLike(c)
       case 'slider':
         return (
-          <span
+          <ColumnBar
             key={c.id}
-            data-tooltip={c.tooltip}
-            style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-          >
-            <span style={caption}>{c.label}</span>
-            {
-              <FoldSlider
-                label={c.label}
-                value={c.value}
-                width={72}
-                onCommit={(v) => onSettingsChange(c.patch(v))}
-              />
+            label={c.label}
+            value={c.value}
+            defaultValue={
+              c.id === 'bend' ? DEFAULT_RADIO_SETTINGS.fold : DEFAULT_RADIO_SETTINGS.clash
             }
-          </span>
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+            onCommit={(v) => onSettingsChange(c.patch(v))}
+          />
         )
       case 'switch':
         return (
-          <StripWordSwitch
-            key={c.id}
-            label={c.label}
-            on={c.on}
-            tooltip={c.tooltip}
-            onChange={(on) => onSettingsChange(c.patch(on))}
-          />
+          <ControlField key={c.id} label={c.label} tooltip={c.tooltip} disabled={c.disabled}>
+            <Segmented
+              ariaLabel={`${c.label} mode`}
+              size="control"
+              disabled={c.disabled}
+              options={[
+                { label: 'on', on: c.on, onClick: () => onSettingsChange(c.patch(true)) },
+                { label: 'off', on: !c.on, onClick: () => onSettingsChange(c.patch(false)) }
+              ]}
+            />
+          </ControlField>
         )
       case 'seed':
         return (
-          <span key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span data-tooltip={c.tooltip} style={caption}>
-              {c.label}
+          <ControlField key={c.id} label={c.label} tooltip={c.tooltip} disabled={c.disabled}>
+            <span
+              style={{
+                display: 'flex',
+                gap: 'var(--ra-s-1)',
+                pointerEvents: c.disabled ? 'none' : undefined
+              }}
+            >
+              <FoldSeedInput value={c.value} onCommit={(s) => onSettingsChange(c.patch(s))} />
+              <button
+                type="button"
+                disabled={c.disabled}
+                tabIndex={c.disabled ? -1 : undefined}
+                onClick={() => onSettingsChange(c.patch(newFoldSeed()))}
+                style={{
+                  height: 'var(--ra-h-control)',
+                  padding: '0 var(--ra-s-3)',
+                  fontFamily: 'inherit',
+                  fontSize: 'var(--ra-fs-9)',
+                  background: 'transparent',
+                  color: 'var(--ra-text-2)',
+                  border: '1px solid var(--ra-border-strong)',
+                  cursor: c.disabled ? 'default' : 'pointer'
+                }}
+              >
+                new
+              </button>
             </span>
-            <FoldSeedInput value={c.value} onCommit={(s) => onSettingsChange(c.patch(s))} />
-            <StripChip
-              label="new"
-              on={false}
-              onClick={() => onSettingsChange(c.patch(newFoldSeed()))}
-            />
-          </span>
+          </ControlField>
         )
       case 'sound':
         return (
-          <StripSoundDial
+          <ColumnSoundBar
             key={c.id}
             label={c.label}
             control={c.control}
             tooltip={c.tooltip}
             disabled={c.disabled}
-            onSoundPatch={props.sound.onSoundPatch}
+            onSoundPatch={sound.onSoundPatch}
           />
         )
       case 'panel':
@@ -486,168 +559,236 @@ export function RadioStrip(props: RadioStripProps): React.JSX.Element {
   }
 
   function panelControl(c: RadioStripControl): React.JSX.Element | null {
-    const { picks, sound } = props
     switch (c.id) {
-      case 'reverb':
-        return (
-          <StripDial
-            key={c.id}
-            label={c.label}
-            ariaLabel="master reverb"
-            value={sound.reverb}
-            onChange={sound.onReverbDraft}
-            onCommit={sound.onReverbCommit}
-            defaultValue={0}
-            tooltip={c.tooltip}
-            disabled={c.disabled}
-          />
-        )
-      case 'filter':
-        return (
-          <StripDial
-            key={c.id}
-            label={c.label}
-            ariaLabel="master filter cutoff"
-            value={sound.cutoff}
-            onChange={sound.onCutoff}
-            // The mode's own open end, as the master strip's: "nothing is happening" either way.
-            defaultValue={neutralCutoff(sound.filterMode) * 100}
-            tooltip={c.tooltip}
-            disabled={c.disabled}
-          />
-        )
-      case 'res':
-        return (
-          <StripDial
-            key={c.id}
-            label={c.label}
-            ariaLabel="master filter resonance"
-            value={sound.resonance}
-            onChange={sound.onResonance}
-            defaultValue={0}
-            tooltip={c.tooltip}
-            disabled={c.disabled}
-          />
-        )
-      case 'filter-mode':
-        return (
-          <button
-            key={c.id}
-            onClick={sound.onFilterMode}
-            disabled={c.disabled}
-            title={sound.filterMode === 'lowpass' ? 'low pass' : 'high pass'}
-            style={{
-              fontFamily: 'inherit',
-              background: 'transparent',
-              border: '1px solid var(--ra-border)',
-              color: c.disabled ? 'var(--ra-text-4)' : 'var(--ra-text-2)',
-              fontSize: 'var(--ra-fs-9)',
-              padding: '2px 5px',
-              cursor: c.disabled ? 'default' : 'pointer'
-            }}
-          >
-            {sound.filterMode === 'lowpass' ? 'lo pass' : 'hi pass'}
-          </button>
-        )
       case 'faves':
         return (
-          <StripDial
+          <ColumnBar
             key={c.id}
             label={c.label}
             value={picks.faves}
-            onChange={picks.onFavesPreview}
-            onCommit={picks.onFavesCommit}
             defaultValue={DEFAULT_FAVES}
             tooltip={picks.favesTooltip}
             dimmed={c.dimmed}
+            onChange={picks.onFavesPreview}
+            onCommit={picks.onFavesCommit}
           />
         )
       case 'source':
         return (
-          <StripDial
+          <ColumnBar
             key={c.id}
             label={c.label}
+            ariaLabel="source"
             value={picks.source}
-            onChange={picks.onSource}
             defaultValue={DEFAULT_SOURCE_LEAN}
             tooltip={c.tooltip}
-            before="endlesss"
-            after="other"
+            onChange={picks.onSource}
           />
         )
       case 'matching':
         return (
-          <StripDial
+          <ColumnBar
             key={c.id}
             label={c.label}
             value={picks.matching}
-            onChange={picks.onMatching}
             defaultValue={100 - DEFAULT_DISCOVER_CHAOS}
             tooltip={c.tooltip}
+            onChange={picks.onMatching}
           />
         )
       case 'artist':
         return (
-          <button
-            key={c.id}
-            ref={picks.artistButtonRef}
-            onClick={picks.onArtistButton}
-            aria-expanded={picks.artistOpen}
-            data-tooltip={c.tooltip}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 10,
-              padding: '6px 10px',
-              background: 'transparent',
-              border: '1px solid var(--ra-border)',
-              color: picks.artistActive ? 'var(--ra-text)' : 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
-          >
-            {picks.artistLabel}
-          </button>
+          <ControlField key={c.id} label={c.label} tooltip={c.tooltip}>
+            <button
+              type="button"
+              ref={picks.artistButtonRef}
+              onClick={picks.onArtistButton}
+              aria-expanded={picks.artistOpen}
+              data-tooltip={c.tooltip}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 'var(--ra-s-2)',
+                width: '100%',
+                minHeight: 'var(--ra-h-control)',
+                padding: '0 var(--ra-s-2)',
+                fontFamily: 'inherit',
+                fontSize: 'var(--ra-fs-10)',
+                background: picks.artistActive ? 'var(--ra-text)' : 'transparent',
+                color: picks.artistActive ? 'var(--ra-bg-page)' : 'var(--ra-text-2)',
+                border: `1px solid ${picks.artistActive ? 'var(--ra-text)' : 'var(--ra-border-strong)'}`,
+                cursor: 'pointer'
+              }}
+            >
+              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {picks.artistLabel.replace(/^artist: /, '')}
+              </span>
+              <span aria-hidden>▾</span>
+            </button>
+          </ControlField>
         )
-      case 'my-sounds':
+      case 'my-sounds': {
+        const on = !c.disabled && picks.mySounds
         return (
-          <BracketToggle
+          <ControlField
             key={c.id}
-            checked={!c.disabled && picks.mySounds}
-            onChange={picks.onMySounds}
             label={c.label}
-            disabled={c.disabled}
             tooltip={picks.mySoundsTooltip}
+            disabled={c.disabled}
+          >
+            <Segmented
+              ariaLabel={c.label}
+              size="control"
+              disabled={c.disabled}
+              options={[
+                { label: 'on', on, onClick: () => (on ? undefined : picks.onMySounds()) },
+                { label: 'off', on: !on, onClick: () => (on ? picks.onMySounds() : undefined) }
+              ]}
+            />
+          </ControlField>
+        )
+      }
+      case 'reverb':
+        return (
+          <ColumnBar
+            key={c.id}
+            label={c.label}
+            ariaLabel="master reverb"
+            value={sound.reverb}
+            defaultValue={0}
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+            onChange={sound.onReverbDraft}
+            onCommit={sound.onReverbCommit}
           />
         )
+      case 'filter':
+        return (
+          <ColumnBar
+            key={c.id}
+            label={c.label}
+            ariaLabel="master filter cutoff"
+            value={sound.cutoff}
+            // The mode's own open end, as the master strip's: "nothing is happening" either way.
+            defaultValue={neutralCutoff(sound.filterMode) * 100}
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+            onChange={sound.onCutoff}
+          />
+        )
+      case 'res':
+        return (
+          <ColumnBar
+            key={c.id}
+            label={c.label}
+            ariaLabel="master filter resonance"
+            value={sound.resonance}
+            defaultValue={0}
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+            onChange={sound.onResonance}
+          />
+        )
+      case 'filter-mode': {
+        const low = sound.filterMode === 'lowpass'
+        return (
+          <ControlField key={c.id} label={c.label} tooltip={c.tooltip} disabled={c.disabled}>
+            <Segmented
+              ariaLabel="filter mode"
+              size="control"
+              disabled={c.disabled}
+              options={[
+                {
+                  label: 'lo pass',
+                  on: low,
+                  onClick: () => (low ? undefined : sound.onFilterMode())
+                },
+                {
+                  label: 'hi pass',
+                  on: !low,
+                  onClick: () => (low ? sound.onFilterMode() : undefined)
+                }
+              ]}
+            />
+          </ControlField>
+        )
+      }
       default:
         return null
     }
   }
 
   return (
+    <div
+      style={{
+        display: 'grid',
+        gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
+        background: RADIO_STICKY_BACKGROUND
+      }}
+    >
+      {groups.map((g) => (
+        <div
+          key={g.id}
+          role="group"
+          aria-label={g.caption}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 'var(--ra-s-6)',
+            minWidth: 0,
+            padding: 'var(--ra-s-6) var(--ra-s-5) 18px',
+            borderRight: '1px solid var(--ra-border)',
+            borderBottom: '1px solid var(--ra-border)'
+          }}
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ fontSize: 'var(--ra-fs-10)', color: 'var(--ra-text-2)' }}>
+              {g.caption}
+            </span>
+            {g.subtitle !== null && (
+              <span style={{ fontSize: 'var(--ra-fs-9)', color: 'var(--ra-text-3)' }}>
+                {g.subtitle}
+              </span>
+            )}
+          </div>
+          {g.controls.map((c) =>
+            c.id === 'saturation' ? (
+              <div
+                key={c.id}
+                style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-6)' }}
+              >
+                <span
+                  style={{
+                    fontSize: 'var(--ra-fs-9)',
+                    color: 'var(--ra-text-3)',
+                    paddingBottom: 'var(--ra-s-1)',
+                    borderBottom: '1px solid var(--ra-border)'
+                  }}
+                >
+                  project sound · undoable
+                </span>
+                {control(c)}
+              </div>
+            ) : (
+              control(c)
+            )
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function RadioStrip(props: RadioStripProps): React.JSX.Element {
+  const groups = radioStripModel(props.settings, props.ctx)
+  return (
     <>
       <RadioLiveBar
         {...props}
         controls={groups.filter((g) => g.place === 'live').flatMap((g) => g.controls)}
       />
-      <div
-        style={{
-          display: 'flex',
-          flexWrap: 'wrap',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: '4px 24px',
-          padding: '8px 12px 10px',
-          background: RADIO_STICKY_BACKGROUND
-        }}
-      >
-        {groups
-          .filter((g) => g.place === 'columns')
-          .map((g) => (
-            <StripGroup key={g.id} caption={g.caption}>
-              {g.controls.map(control)}
-            </StripGroup>
-          ))}
-      </div>
+      <RadioShapingColumns {...props} groups={groups.filter((g) => g.place === 'columns')} />
     </>
   )
 }
