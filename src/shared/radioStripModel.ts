@@ -298,8 +298,8 @@ export function radioStripModel(
       sets: ['faves'],
       dimmed: ctx.artistMode
     }),
-    panel('source', 'source · endlesss - other', { tooltip: 'other clockwise' }),
-    panel('matching', 'matching', { tooltip: 'more matching clockwise' }),
+    panel('source', 'source · endlesss - other', { tooltip: 'right for other, left for endlesss' }),
+    panel('matching', 'matching', { tooltip: 'right for more matching' }),
     panel('artist', 'artist', { tooltip: 'whose stems discover plays' }),
     panel('my-sounds', 'my sounds', { disabled: !ctx.hasUsername || ctx.artistMode }),
     {

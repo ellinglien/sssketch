@@ -128,8 +128,9 @@ export function RadioStartPrompt({
           defaultValue={DEFAULT_RADIO_PACE_LEVEL}
           ariaValueText={paceReadout}
           tooltip={RADIO_PACE_TOOLTIP}
-          onChange={() => {}}
-          onDraft={setPaceDraft}
+          // onChange covers every way the value moves (drag, wheel, keys, double-click), so
+          // `start` below always starts at the value shown, even before a commit has persisted.
+          onChange={setPaceDraft}
           onCommit={(v) => onChange({ paceLevel: v })}
         />
       </ControlField>

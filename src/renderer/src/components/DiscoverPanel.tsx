@@ -11070,7 +11070,9 @@ export function DiscoverPanel({
   return (
     <div
       style={{
-        padding: 10,
+        // No top or bottom padding while radio runs: the sticky top line and live bar sit flush
+        // with the scroll area's edges, so nothing scrolls visibly through a 10px gap around them.
+        padding: radioOn ? '0 10px' : 10,
         overflowY: 'auto',
         flex: 1,
         // Cosmetic-only drag-over highlight, see isDraggingOverExternalFile's
@@ -12156,135 +12158,126 @@ export function DiscoverPanel({
               faves` sat (@shared/discoverFaves): 0 no lean, 100 only starred stems (a roll with
               none that fits rolls as usual). Dimmed in artist mode: your stars are not among
               the artist's stems. */}
-            {/* While radio runs the faves dial and my sounds are the strip's. */}
-            {!radioOn && (
-              <div
-                style={{
-                  display: 'flex',
-                  gap: 8,
-                  flexWrap: 'wrap',
-                  alignItems: 'center',
-                  justifyContent: 'center'
-                }}
-              >
-                <span
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 4,
-                    opacity: mode === 'other' ? 0.4 : 1
-                  }}
-                >
-                  <Dial
-                    value={favesShown}
-                    onChange={previewFaves}
-                    onCommit={commitFaves}
-                    defaultValue={DEFAULT_FAVES}
-                    size={22}
-                    ariaLabel={FAVES_LABEL}
-                    tooltip={
-                      mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP
-                    }
-                  />
-                  <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{FAVES_LABEL}</span>
-                </span>
-                {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
-                  const needsUsername = modifier === 'mine' && !hasUsername
-                  // Artist mode picks the artist's stems: `my sounds` is moot.
-                  const overridden = mode === 'other'
-                  const disabled = needsUsername || overridden
-                  return (
-                    <BracketToggle
-                      key={modifier}
-                      checked={!disabled && globalModifiers.includes(modifier)}
-                      onChange={() =>
-                        setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))
-                      }
-                      label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
-                      disabled={disabled}
-                      tooltip={
-                        overridden
-                          ? `artist mode picks ${artist}'s stems`
-                          : needsUsername
-                            ? MY_SOUNDS_NEEDS_USERNAME
-                            : undefined
-                      }
-                    />
-                  )
-                })}
-              </div>
-            )}
-          </div>
-          {/* Source and matching are the strip's while radio runs; the empty cell keeps the grid's
-            columns, so the chip list stays centred. */}
-          {radioOn ? (
-            <div />
-          ) : (
+            {/* The faves dial and my sounds toggle (the add row only shows with radio off). */}
             <div
               style={{
                 display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap',
                 alignItems: 'center',
-                justifySelf: 'start',
-                marginLeft: 8,
-                paddingLeft: 10,
-                borderLeft: '1px solid var(--ra-border)'
+                justifyContent: 'center'
               }}
             >
-              <div
+              <span
                 style={{
                   display: 'flex',
-                  flexDirection: 'column',
                   alignItems: 'center',
-                  gap: 3,
-                  marginRight: 12
+                  gap: 4,
+                  opacity: mode === 'other' ? 0.4 : 1
                 }}
               >
-                {/* The source dial (2026-09-29): 0 = endlesss sounds, 100 =
+                <Dial
+                  value={favesShown}
+                  onChange={previewFaves}
+                  onCommit={commitFaves}
+                  defaultValue={DEFAULT_FAVES}
+                  size={22}
+                  ariaLabel={FAVES_LABEL}
+                  tooltip={mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP}
+                />
+                <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{FAVES_LABEL}</span>
+              </span>
+              {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
+                const needsUsername = modifier === 'mine' && !hasUsername
+                // Artist mode picks the artist's stems: `my sounds` is moot.
+                const overridden = mode === 'other'
+                const disabled = needsUsername || overridden
+                return (
+                  <BracketToggle
+                    key={modifier}
+                    checked={!disabled && globalModifiers.includes(modifier)}
+                    onChange={() =>
+                      setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))
+                    }
+                    label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
+                    disabled={disabled}
+                    tooltip={
+                      overridden
+                        ? `artist mode picks ${artist}'s stems`
+                        : needsUsername
+                          ? MY_SOUNDS_NEEDS_USERNAME
+                          : undefined
+                    }
+                  />
+                )
+              })}
+            </div>
+          </div>
+          {/* Source and matching dials. */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifySelf: 'start',
+              marginLeft: 8,
+              paddingLeft: 10,
+              borderLeft: '1px solid var(--ra-border)'
+            }}
+          >
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 3,
+                marginRight: 12
+              }}
+            >
+              {/* The source dial (2026-09-29): 0 = endlesss sounds, 100 =
                   other sounds, 50 = half and half. The ends are "only". See
                   drawSoundSource. */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
-                  <Dial
-                    value={sourceLean}
-                    onChange={changeSourceLean}
-                    defaultValue={DEFAULT_SOURCE_LEAN}
-                    size={30}
-                    ariaLabel="source"
-                    tooltip="other clockwise"
-                  />
-                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
-                </div>
-                <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
-                  source
-                </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
+                <Dial
+                  value={sourceLean}
+                  onChange={changeSourceLean}
+                  defaultValue={DEFAULT_SOURCE_LEAN}
+                  size={30}
+                  ariaLabel="source"
+                  tooltip="other clockwise"
+                />
+                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
               </div>
-              <div
-                style={{
-                  display: 'flex',
-                  flexDirection: 'column',
-                  alignItems: 'center',
-                  gap: 3
-                }}
-              >
-                {/* Captioned "matching", so clockwise = MORE matching: the dial
+              <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+                source
+              </span>
+            </div>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 3
+              }}
+            >
+              {/* Captioned "matching", so clockwise = MORE matching: the dial
                   shows 100 - chaos (chaos itself stays "0 = strictest" for
                   pickReroll). Starts at, and double-click returns to, 100 -
                   DEFAULT_DISCOVER_CHAOS: about 25 (Elling, 2026-10-01; was
                   all the way up, 2026-09-22). */}
-                <Dial
-                  value={100 - chaos}
-                  onChange={(matching) => setChaos(100 - matching)}
-                  defaultValue={100 - DEFAULT_DISCOVER_CHAOS}
-                  size={30}
-                  ariaLabel="matching"
-                  tooltip="more matching clockwise"
-                />
-                <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
-                  matching
-                </span>
-              </div>
+              <Dial
+                value={100 - chaos}
+                onChange={(matching) => setChaos(100 - matching)}
+                defaultValue={100 - DEFAULT_DISCOVER_CHAOS}
+                size={30}
+                ariaLabel="matching"
+                tooltip="more matching clockwise"
+              />
+              <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+                matching
+              </span>
             </div>
-          )}
+          </div>
           {/* Always rendered (fixed height) so nothing shifts on screen. */}
           <div
             style={{

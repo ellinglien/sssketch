@@ -19,10 +19,13 @@ import { suppressNextSyntheticClick } from './dragUtils'
  * App's window shortcuts (the seed field lives in the strip, which has no Escape of its own). */
 export function FoldSeedInput({
   value,
-  onCommit
+  onCommit,
+  disabled = false
 }: {
   value: string
   onCommit: (seed: string) => void
+  /** A real disabled input: inert and out of the Tab order. Its dimming is its ControlField's. */
+  disabled?: boolean
 }): React.JSX.Element {
   const [draft, setDraft] = useState<string | null>(null)
   // As the sliders' draftRef: Escape's blur() fires onBlur in the same handler, before the
@@ -42,6 +45,7 @@ export function FoldSeedInput({
     <input
       key="seed"
       aria-label="fold seed"
+      disabled={disabled}
       value={draft ?? value}
       maxLength={FOLD_SEED_TEXT_MAX}
       spellCheck={false}
@@ -85,8 +89,9 @@ export type ControlSize = 'live' | 'control'
 const sizeHeight = (size: ControlSize): string =>
   size === 'live' ? 'var(--ra-h-live)' : 'var(--ra-h-control)'
 
-/** The label/readout header every control has, over its control. `dimmed` is StripDial's 0.4
- * (faves in artist mode: dimmed but live). */
+/** The label/readout header every control has, over its control. THE ONE PLACE a greyed control is
+ * dimmed (`--ra-opacity-disabled`): the widgets inside only go inert, so the two never compound.
+ * `dimmed` is 0.4 (faves in artist mode: dimmed but live). */
 export function ControlField({
   label,
   readout,
@@ -123,11 +128,23 @@ export function ControlField({
           fontSize: 'var(--ra-fs-9)'
         }}
       >
-        <span data-tooltip={tooltip} style={{ color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+        {/* The label wraps rather than spilling out of a narrow column (source's is long). */}
+        <span
+          data-tooltip={tooltip}
+          style={{ color: 'var(--ra-text-3)', minWidth: 0, overflowWrap: 'anywhere' }}
+        >
           {label}
         </span>
         {readout !== undefined && (
-          <span style={{ color: live ? 'var(--ra-text)' : 'var(--ra-text-2)' }}>{readout}</span>
+          <span
+            style={{
+              flex: 'none',
+              whiteSpace: 'nowrap',
+              color: live ? 'var(--ra-text)' : 'var(--ra-text-2)'
+            }}
+          >
+            {readout}
+          </span>
         )}
       </div>
       {children}
@@ -137,6 +154,9 @@ export function ControlField({
 
 /** The wheel commits this long after the last notch, as Dial's does. */
 const WHEEL_COMMIT_DELAY_MS = 200
+/** A plain click on a bar commits this long after release, so a double-click (which resets to the
+ * default) replaces it instead of adding a second commit: one undo entry for one gesture. */
+const CLICK_COMMIT_DELAY_MS = 300
 
 /** A 0-100 value as cells (`cells`, default 10), at full resolution: the last lit cell is
  * partly filled. Press or drag sets the value under the pointer to 1; the wheel moves it as a
@@ -179,7 +199,12 @@ export function SegmentBar({
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
   const [draft, setDraft] = useState<number | null>(null)
-  const dragRef = useRef<{ startValue: number; latest: number } | null>(null)
+  const dragRef = useRef<{ startValue: number; latest: number; moves: number } | null>(null)
+  // A click's commit, waiting out the double-click window (see CLICK_COMMIT_DELAY_MS).
+  const clickRef = useRef<{ start: number; timer: ReturnType<typeof setTimeout> } | null>(null)
+  // Arrow keys: each press moves the value live; the commit is one, when the key is released (or
+  // focus leaves), so holding an arrow is one decision, as the old range sliders were.
+  const keyRef = useRef<{ start: number; latest: number } | null>(null)
   const latest = useRef({ value, onChange, onCommit, disabled })
   useEffect(() => {
     latest.current = { value, onChange, onCommit, disabled }
@@ -213,6 +238,17 @@ export function SegmentBar({
       if (wheelTimerRef.current !== null) clearTimeout(wheelTimerRef.current)
     }
   }, [])
+  const clearClick = (): void => {
+    if (clickRef.current !== null) clearTimeout(clickRef.current.timer)
+    clickRef.current = null
+  }
+  const flushKey = (): void => {
+    const k = keyRef.current
+    keyRef.current = null
+    if (k === null) return
+    setDraft(null)
+    if (k.latest !== k.start) onCommit?.(k.latest)
+  }
 
   const valueAt = (e: React.PointerEvent<HTMLDivElement>): number => {
     const r = e.currentTarget.getBoundingClientRect()
@@ -230,10 +266,29 @@ export function SegmentBar({
   const endDrag = (el: HTMLDivElement | null): void => {
     const drag = dragRef.current
     dragRef.current = null
-    setDraft(null)
     if (!drag) return
     el?.blur()
-    if (drag.latest === drag.startValue) return
+    if (drag.latest === drag.startValue) {
+      setDraft(null)
+      return
+    }
+    // A press that only set the value under the pointer (no drag after it) is a click: its
+    // commit waits for a possible double-click. A real drag commits now, and supersedes a click.
+    if (drag.moves === 0 && onCommit !== undefined) {
+      clearClick()
+      const v = drag.latest
+      clickRef.current = {
+        start: drag.startValue,
+        timer: setTimeout(() => {
+          clickRef.current = null
+          setDraft(null)
+          onCommit(v)
+        }, CLICK_COMMIT_DELAY_MS)
+      }
+      return
+    }
+    clearClick()
+    setDraft(null)
     suppressNextSyntheticClick()
     onCommit?.(drag.latest)
   }
@@ -258,7 +313,7 @@ export function SegmentBar({
         if (disabled) return
         e.currentTarget.focus()
         e.currentTarget.setPointerCapture(e.pointerId)
-        dragRef.current = { startValue: value, latest: value }
+        dragRef.current = { startValue: value, latest: value, moves: 0 }
         move(valueAt(e))
       }}
       onMouseDown={(e) => {
@@ -266,7 +321,11 @@ export function SegmentBar({
         e.stopPropagation()
       }}
       onPointerMove={(e) => {
-        if (dragRef.current && !disabled) move(valueAt(e))
+        const drag = dragRef.current
+        if (!drag || disabled) return
+        const next = valueAt(e)
+        if (next !== drag.latest) drag.moves += 1
+        move(next)
       }}
       onPointerUp={(e) => endDrag(e.currentTarget)}
       onPointerCancel={(e) => endDrag(e.currentTarget)}
@@ -275,24 +334,36 @@ export function SegmentBar({
       onContextMenu={(e) => e.stopPropagation()}
       onDoubleClick={(e) => {
         e.stopPropagation()
-        if (disabled || value === defaultValue) return
+        if (disabled) return
+        // The double-click's own clicks set a value and queued a commit: replace it, so the
+        // gesture is one commit (none at all if the reset lands where the bar began).
+        const pending = clickRef.current
+        clearClick()
+        setDraft(null)
+        const from = pending !== null ? pending.start : value
+        if (from === defaultValue) {
+          if (pending !== null) onChange(defaultValue)
+          return
+        }
         onChange(defaultValue)
         onCommit?.(defaultValue)
       }}
       onKeyDown={(e) => {
         if (disabled) return
-        const next = segmentBarKey(value, e.key, e.shiftKey)
+        const base = keyRef.current?.latest ?? value
+        const next = segmentBarKey(base, e.key, e.shiftKey)
         if (next === null) return
         e.preventDefault()
+        keyRef.current = { start: keyRef.current?.start ?? value, latest: next }
+        setDraft(next)
         onChange(next)
-        // A key press is its own finished gesture: one step, one commit.
-        onCommit?.(next)
       }}
+      onKeyUp={flushKey}
+      onBlur={flushKey}
       style={{
         display: 'flex',
         gap: 2,
         height: cellHeight ?? (size === 'live' ? 'var(--ra-h-live)' : 'var(--ra-s-6)'),
-        opacity: disabled ? 'var(--ra-opacity-disabled)' : 1,
         cursor: disabled ? 'default' : 'ew-resize',
         touchAction: 'none'
       }}
@@ -327,12 +398,7 @@ export function Segmented({
       role="group"
       aria-label={ariaLabel}
       data-multi={multi || undefined}
-      style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        gap: 2,
-        opacity: disabled ? 'var(--ra-opacity-disabled)' : 1
-      }}
+      style={{ display: 'flex', flexWrap: 'wrap', gap: 2 }}
     >
       {options.map((o) => (
         <button
@@ -398,7 +464,7 @@ export function FireButton({
       onClick={onClick}
       style={{
         height: 'var(--ra-h-live)',
-        padding: '0 var(--ra-s-3)',
+        padding: '0 var(--ra-s-2)',
         fontFamily: 'inherit',
         fontSize: 'var(--ra-fs-10)',
         whiteSpace: 'nowrap',

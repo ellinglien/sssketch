@@ -71,8 +71,9 @@ export function RadioTopLine({
         display: 'flex',
         alignItems: 'center',
         flexWrap: 'wrap',
-        gap: 'var(--ra-s-7)',
-        padding: 'var(--ra-s-4) var(--ra-s-7)',
+        // Tight rows: at the 945 minimum it wraps to two lines, and the box is short.
+        gap: 'var(--ra-s-2) var(--ra-s-7)',
+        padding: '6px var(--ra-s-7)',
         borderBottom: '1px solid var(--ra-border)',
         ...RADIO_VIEW_FRAME
       }}

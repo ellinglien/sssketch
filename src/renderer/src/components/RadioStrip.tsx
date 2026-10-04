@@ -10,7 +10,7 @@
 //   RadioShapingColumns picks, shape, moves, fold and sound, five quiet titled columns of 26px
 //                      controls. A control that does not apply is greyed, never hidden.
 // Values and callbacks only: every handler is DiscoverPanel's own, passed in bundles.
-import { useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { newFoldSeed } from '@shared/radioFold'
 import { DEFAULT_SOUND_SETTINGS, type SoundSettingsPatch } from '@shared/radioSound'
 import { soundPanelModel, type SoundSliderControl } from '@shared/soundPanelModel'
@@ -262,6 +262,30 @@ const tempoStepStyle: React.CSSProperties = {
   cursor: 'pointer'
 }
 
+/** Below this scroll-area height the live bar stops being sticky and scrolls with the columns:
+ * Discover sits in the library's box (85vh), and a pinned bar of one to two lines would leave a
+ * row and a half of rows at the 945 x 614 minimum. */
+const SHORT_SCROLL_PX = 600
+
+/** True while the nearest scrolling ancestor of `ref` is shorter than SHORT_SCROLL_PX. */
+function useShortScrollArea(ref: React.RefObject<HTMLElement | null>): boolean {
+  const [short, setShort] = useState(false)
+  useLayoutEffect(() => {
+    let el = ref.current?.parentElement ?? null
+    while (el !== null && !/(auto|scroll)/.test(getComputedStyle(el).overflowY)) {
+      el = el.parentElement
+    }
+    if (el === null) return
+    const area = el
+    const measure = (): void => setShort(area.clientHeight < SHORT_SCROLL_PX)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(area)
+    return () => ro.disconnect()
+  }, [ref])
+  return short
+}
+
 /** The live bar (design pass: the controls that PLAY, 36px, raised under the rows, sticky at the
  * bottom): tempo, pace, skip, new bed, fire now (turn and the seven moves), level. */
 function RadioLiveBar(
@@ -278,20 +302,25 @@ function RadioLiveBar(
   const paceDraft = paceDraftRaw !== null && paceDraftRaw.from === paceValue ? paceDraftRaw.v : null
   const paceShown = paceDraft ?? paceValue
   const paceReadout = radioPaceLabel(paceShown, { fold: settings.foldMode })
+  const barRef = useRef<HTMLDivElement>(null)
+  const shortArea = useShortScrollArea(barRef)
   return (
     <div
+      ref={barRef}
       style={{
         display: 'flex',
         alignItems: 'flex-end',
         flexWrap: 'wrap',
-        gap: 'var(--ra-s-7) 24px',
-        padding: 'var(--ra-s-5) var(--ra-s-7) var(--ra-s-6)',
+        // Tight enough that the whole bar is ONE line at the 1294px content width.
+        gap: 'var(--ra-s-5) var(--ra-s-6)',
+        padding: 'var(--ra-s-4) var(--ra-s-7)',
         background: 'var(--ra-bg-row-sub)',
         borderTop: '1px solid var(--ra-border-strong)',
         borderBottom: '1px solid var(--ra-border-strong)',
         // Sticky at the bottom, above the rows wrapper (position: relative, which would paint
-        // over it), so the controls that play are always in reach.
-        position: 'sticky',
+        // over it), so the controls that play are always in reach; in a short scroll area it
+        // scrolls with the columns instead, so the rows get the space.
+        position: shortArea ? 'relative' : 'sticky',
         bottom: 0,
         zIndex: 2,
         ...RADIO_VIEW_FRAME
@@ -356,7 +385,7 @@ function RadioLiveBar(
         </span>
       </ControlField>
       {pace?.kind === 'slider' && (
-        <div style={{ width: 200 }}>
+        <div style={{ width: 160 }}>
           <ControlField label={pace.label} tooltip={pace.tooltip} readout={paceReadout} live>
             <SegmentBar
               label={pace.label}
@@ -442,8 +471,14 @@ function RadioLiveBar(
         </span>
       </ControlField>
       {level !== undefined && (
-        <div style={{ width: 150, marginLeft: 'auto' }}>
-          <ControlField label={level.label} tooltip={level.tooltip} readout={sound.level} live>
+        <div style={{ width: 120, marginLeft: 'auto' }}>
+          <ControlField
+            label={level.label}
+            tooltip={level.tooltip}
+            readout={sound.level}
+            live
+            disabled={level.disabled}
+          >
             <SegmentBar
               label="master level"
               value={sound.level}
@@ -520,14 +555,12 @@ function RadioShapingColumns(
       case 'seed':
         return (
           <ControlField key={c.id} label={c.label} tooltip={c.tooltip} disabled={c.disabled}>
-            <span
-              style={{
-                display: 'flex',
-                gap: 'var(--ra-s-1)',
-                pointerEvents: c.disabled ? 'none' : undefined
-              }}
-            >
-              <FoldSeedInput value={c.value} onCommit={(s) => onSettingsChange(c.patch(s))} />
+            <span style={{ display: 'flex', gap: 'var(--ra-s-1)' }}>
+              <FoldSeedInput
+                disabled={c.disabled}
+                value={c.value}
+                onCommit={(s) => onSettingsChange(c.patch(s))}
+              />
               <button
                 type="button"
                 disabled={c.disabled}

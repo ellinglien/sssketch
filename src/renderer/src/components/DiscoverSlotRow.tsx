@@ -1280,10 +1280,11 @@ export function DiscoverSlotRow({
   // see the meter's own comment on meterEntries above.
   // The radio layout's meter: with one kind the kind button names it, so the mask entry's label
   // goes (compactRadioMeter), and the cells come before the source word (`guess`).
+  const compactMeter = radioLayout ? compactRadioMeter(meterEntries, slot.kinds.length) : []
   const shownMeter = radioLayout
     ? [
-        ...compactRadioMeter(meterEntries, slot.kinds.length).filter((e) => e.type === 'trait'),
-        ...compactRadioMeter(meterEntries, slot.kinds.length).filter((e) => e.type === 'mask')
+        ...compactMeter.filter((e) => e.type === 'trait'),
+        ...compactMeter.filter((e) => e.type === 'mask')
       ]
     : meterEntries
   const kindsBlock = (
@@ -1643,12 +1644,14 @@ export function DiscoverSlotRow({
         ? 'color-mix(in srgb, var(--ra-bg-row-active), var(--ra-border) calc(var(--discover-breath, 0.5) * 100%))'
         : 'color-mix(in srgb, transparent, var(--ra-bg-row-active) calc(var(--discover-breath, 0.5) * 100%))'
 
-  // THE RADIO LAYOUT (radio view plan Task 7, spec 1.2): the web radio's full-mode row. A button
-  // line (m s skip 👍 👎 hook dig, then any stem, nearby, duplicate, kinds and meter, lock,
+  // THE RADIO LAYOUT (radio view plan Task 7, design pass 2026-10-04 Task 9): the web radio's
+  // full-mode row. A button line (the live cluster `m s`, `skip like next`, `hook dig`, all icons;
+  // then the kind label with its meter; then the quiet extras: any stem, nearby, duplicate, lock,
   // remove) over a full-width waveform carrying the plates. The SAME part constants as the grid,
   // so every button keeps one implementation; a missing conditional part just closes up the flex
   // line. The row's root stays a div in a Fragment with the popovers after it, as in the grid.
-  // Its 6px side padding is the playhead overlay's inset in DiscoverPanel: keep them equal.
+  // Its border and the waveform's margins are the playhead overlay's inset in DiscoverPanel
+  // (RADIO_ROW_INSET_LEFT/RIGHT in discoverRowGrid): keep them equal.
   if (radioLayout) {
     return (
       <>
