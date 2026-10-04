@@ -375,7 +375,9 @@ import {
   DISCOVER_WAVEFORM_COLUMN,
   DISCOVER_WAVEFORM_MIN_WIDTH,
   RADIO_ROW_INSET_LEFT,
-  RADIO_ROW_INSET_RIGHT
+  RADIO_ROW_INSET_RIGHT,
+  RADIO_VIEW_FRAME,
+  RADIO_VIEW_MAX_WIDTH
 } from './discoverRowGrid'
 
 export type { ResolvedCandidateStem } from './discoverCandidateStem'
@@ -11595,7 +11597,8 @@ export function DiscoverPanel({
             fontSize: 9,
             color: 'var(--ra-text-3)',
             marginTop: radioOn ? 0 : -6,
-            marginBottom: 10
+            marginBottom: 10,
+            ...(radioOn ? RADIO_VIEW_FRAME : {})
           }}
         >
           {lingeringNotice(lingering, lingeringStuck)}
@@ -11609,7 +11612,8 @@ export function DiscoverPanel({
             fontSize: 9,
             color: 'var(--ra-text-3)',
             marginTop: radioOn ? 0 : -6,
-            marginBottom: 10
+            marginBottom: 10,
+            ...(radioOn ? RADIO_VIEW_FRAME : {})
           }}
         >
           {artistNotice(artist)}
@@ -11745,7 +11749,12 @@ export function DiscoverPanel({
         data-radio-view={radioOn ? '' : undefined}
         style={
           radioOn
-            ? { position: 'relative', maxWidth: 1200, margin: '0 auto' }
+            ? {
+                position: 'relative',
+                maxWidth: RADIO_VIEW_MAX_WIDTH,
+                margin: '0 auto',
+                width: '100%'
+              }
             : { position: 'relative' }
         }
       >
@@ -12068,222 +12077,229 @@ export function DiscoverPanel({
           trait group. The dial column is vertically centred beside both
           rows; the hint line sits in a second grid row so it doesn't pull
           the dial off-centre. */}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: `minmax(${ADD_ROW_DIAL_COLUMN_WIDTH}px, 1fr) auto minmax(${ADD_ROW_DIAL_COLUMN_WIDTH}px, 1fr)`,
-          marginTop: 10
-        }}
-      >
-        <div />
+      {/* Hidden while radio runs (Elling, 2026-10-04: the design pass drops it; rows still change
+          via skip and the kinds menu). It owns no ref and no popover, so it unmounts; its state
+          (pendingAddKinds, the modifiers) lives in the panel and is back with radio off. */}
+      {!radioOn && (
         <div
           style={{
-            minWidth: 0,
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            gap: 6
+            display: 'grid',
+            gridTemplateColumns: `minmax(${ADD_ROW_DIAL_COLUMN_WIDTH}px, 1fr) auto minmax(${ADD_ROW_DIAL_COLUMN_WIDTH}px, 1fr)`,
+            marginTop: 10
           }}
         >
+          <div />
           <div
             style={{
+              minWidth: 0,
               display: 'flex',
-              gap: 4,
-              flexWrap: 'wrap',
+              flexDirection: 'column',
               alignItems: 'center',
-              justifyContent: 'center'
+              gap: 6
             }}
           >
-            {/* Direct request, 2026-09-22: a bright "add a stem that is:" lead-in. Silkscreen
-                renders it in caps, like every other label here. */}
-            <span
-              style={{
-                fontSize: 12,
-                color: 'var(--ra-text)',
-                marginRight: 4
-              }}
-            >
-              add a stem that is:
-            </span>
-            {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => {
-              const selected = pendingAddKinds.includes(kind)
-              return (
-                <Fragment key={kind}>
-                  {kind === DISCOVER_TRAIT_SLOT_KINDS[0] && <AddRowDivider />}
-                  <AddRowChip
-                    selected={selected}
-                    onClick={(e) => handleAddRowKindClick(kind, e.shiftKey, e.metaKey)}
-                  >
-                    {DISCOVER_SLOT_KIND_LABEL[kind]}
-                  </AddRowChip>
-                </Fragment>
-              )
-            })}
-            {/* Direct request, 2026-09-20: "add + Random to the bottom list" --
-                a slot seeded from a genuinely random stem rather than any
-                one kind's own pool (see addRandomSlot's own doc comment).
-                Sits right after warm, in the trait group, since 2026-09-22. */}
-            <AddRowChip
-              selected={false}
-              title="random stem"
-              onClick={(e) => addRandomSlot(e.metaKey)}
-            >
-              + random
-            </AddRowChip>
-            <AddRowDivider />
-            <AddRowChip
-              selected={false}
-              title="import a wav"
-              onClick={() => void handlePickSampleImport()}
-            >
-              + sample
-            </AddRowChip>
-          </div>
-          {/* Global roll filters -- see globalModifiers -- and the faves dial where `prefer
-              faves` sat (@shared/discoverFaves): 0 no lean, 100 only starred stems (a roll with
-              none that fits rolls as usual). Dimmed in artist mode: your stars are not among
-              the artist's stems. */}
-          {/* While radio runs the faves dial and my sounds are the strip's. */}
-          {!radioOn && (
             <div
               style={{
                 display: 'flex',
-                gap: 8,
+                gap: 4,
                 flexWrap: 'wrap',
                 alignItems: 'center',
                 justifyContent: 'center'
               }}
             >
+              {/* Direct request, 2026-09-22: a bright "add a stem that is:" lead-in. Silkscreen
+                renders it in caps, like every other label here. */}
               <span
                 style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 4,
-                  opacity: mode === 'other' ? 0.4 : 1
+                  fontSize: 12,
+                  color: 'var(--ra-text)',
+                  marginRight: 4
                 }}
               >
-                <Dial
-                  value={favesShown}
-                  onChange={previewFaves}
-                  onCommit={commitFaves}
-                  defaultValue={DEFAULT_FAVES}
-                  size={22}
-                  ariaLabel={FAVES_LABEL}
-                  tooltip={mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP}
-                />
-                <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{FAVES_LABEL}</span>
+                add a stem that is:
               </span>
-              {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
-                const needsUsername = modifier === 'mine' && !hasUsername
-                // Artist mode picks the artist's stems: `my sounds` is moot.
-                const overridden = mode === 'other'
-                const disabled = needsUsername || overridden
+              {DISCOVER_SLOT_KIND_OPTIONS.map((kind) => {
+                const selected = pendingAddKinds.includes(kind)
                 return (
-                  <BracketToggle
-                    key={modifier}
-                    checked={!disabled && globalModifiers.includes(modifier)}
-                    onChange={() =>
-                      setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))
-                    }
-                    label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
-                    disabled={disabled}
-                    tooltip={
-                      overridden
-                        ? `artist mode picks ${artist}'s stems`
-                        : needsUsername
-                          ? MY_SOUNDS_NEEDS_USERNAME
-                          : undefined
-                    }
-                  />
+                  <Fragment key={kind}>
+                    {kind === DISCOVER_TRAIT_SLOT_KINDS[0] && <AddRowDivider />}
+                    <AddRowChip
+                      selected={selected}
+                      onClick={(e) => handleAddRowKindClick(kind, e.shiftKey, e.metaKey)}
+                    >
+                      {DISCOVER_SLOT_KIND_LABEL[kind]}
+                    </AddRowChip>
+                  </Fragment>
                 )
               })}
+              {/* Direct request, 2026-09-20: "add + Random to the bottom list" --
+                a slot seeded from a genuinely random stem rather than any
+                one kind's own pool (see addRandomSlot's own doc comment).
+                Sits right after warm, in the trait group, since 2026-09-22. */}
+              <AddRowChip
+                selected={false}
+                title="random stem"
+                onClick={(e) => addRandomSlot(e.metaKey)}
+              >
+                + random
+              </AddRowChip>
+              <AddRowDivider />
+              <AddRowChip
+                selected={false}
+                title="import a wav"
+                onClick={() => void handlePickSampleImport()}
+              >
+                + sample
+              </AddRowChip>
             </div>
-          )}
-        </div>
-        {/* Source and matching are the strip's while radio runs; the empty cell keeps the grid's
+            {/* Global roll filters -- see globalModifiers -- and the faves dial where `prefer
+              faves` sat (@shared/discoverFaves): 0 no lean, 100 only starred stems (a roll with
+              none that fits rolls as usual). Dimmed in artist mode: your stars are not among
+              the artist's stems. */}
+            {/* While radio runs the faves dial and my sounds are the strip's. */}
+            {!radioOn && (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  alignItems: 'center',
+                  justifyContent: 'center'
+                }}
+              >
+                <span
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 4,
+                    opacity: mode === 'other' ? 0.4 : 1
+                  }}
+                >
+                  <Dial
+                    value={favesShown}
+                    onChange={previewFaves}
+                    onCommit={commitFaves}
+                    defaultValue={DEFAULT_FAVES}
+                    size={22}
+                    ariaLabel={FAVES_LABEL}
+                    tooltip={
+                      mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP
+                    }
+                  />
+                  <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{FAVES_LABEL}</span>
+                </span>
+                {DISCOVER_SLOT_MODIFIER_OPTIONS.map((modifier) => {
+                  const needsUsername = modifier === 'mine' && !hasUsername
+                  // Artist mode picks the artist's stems: `my sounds` is moot.
+                  const overridden = mode === 'other'
+                  const disabled = needsUsername || overridden
+                  return (
+                    <BracketToggle
+                      key={modifier}
+                      checked={!disabled && globalModifiers.includes(modifier)}
+                      onChange={() =>
+                        setGlobalModifiers((prev) => toggleSlotModifier(prev, modifier))
+                      }
+                      label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
+                      disabled={disabled}
+                      tooltip={
+                        overridden
+                          ? `artist mode picks ${artist}'s stems`
+                          : needsUsername
+                            ? MY_SOUNDS_NEEDS_USERNAME
+                            : undefined
+                      }
+                    />
+                  )
+                })}
+              </div>
+            )}
+          </div>
+          {/* Source and matching are the strip's while radio runs; the empty cell keeps the grid's
             columns, so the chip list stays centred. */}
-        {radioOn ? (
-          <div />
-        ) : (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              justifySelf: 'start',
-              marginLeft: 8,
-              paddingLeft: 10,
-              borderLeft: '1px solid var(--ra-border)'
-            }}
-          >
+          {radioOn ? (
+            <div />
+          ) : (
             <div
               style={{
                 display: 'flex',
-                flexDirection: 'column',
                 alignItems: 'center',
-                gap: 3,
-                marginRight: 12
+                justifySelf: 'start',
+                marginLeft: 8,
+                paddingLeft: 10,
+                borderLeft: '1px solid var(--ra-border)'
               }}
             >
-              {/* The source dial (2026-09-29): 0 = endlesss sounds, 100 =
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 3,
+                  marginRight: 12
+                }}
+              >
+                {/* The source dial (2026-09-29): 0 = endlesss sounds, 100 =
                   other sounds, 50 = half and half. The ends are "only". See
                   drawSoundSource. */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
-                <Dial
-                  value={sourceLean}
-                  onChange={changeSourceLean}
-                  defaultValue={DEFAULT_SOURCE_LEAN}
-                  size={30}
-                  ariaLabel="source"
-                  tooltip="other clockwise"
-                />
-                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
+                  <Dial
+                    value={sourceLean}
+                    onChange={changeSourceLean}
+                    defaultValue={DEFAULT_SOURCE_LEAN}
+                    size={30}
+                    ariaLabel="source"
+                    tooltip="other clockwise"
+                  />
+                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
+                </div>
+                <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+                  source
+                </span>
               </div>
-              <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
-                source
-              </span>
-            </div>
-            <div
-              style={{
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 3
-              }}
-            >
-              {/* Captioned "matching", so clockwise = MORE matching: the dial
+              <div
+                style={{
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 3
+                }}
+              >
+                {/* Captioned "matching", so clockwise = MORE matching: the dial
                   shows 100 - chaos (chaos itself stays "0 = strictest" for
                   pickReroll). Starts at, and double-click returns to, 100 -
                   DEFAULT_DISCOVER_CHAOS: about 25 (Elling, 2026-10-01; was
                   all the way up, 2026-09-22). */}
-              <Dial
-                value={100 - chaos}
-                onChange={(matching) => setChaos(100 - matching)}
-                defaultValue={100 - DEFAULT_DISCOVER_CHAOS}
-                size={30}
-                ariaLabel="matching"
-                tooltip="more matching clockwise"
-              />
-              <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
-                matching
-              </span>
+                <Dial
+                  value={100 - chaos}
+                  onChange={(matching) => setChaos(100 - matching)}
+                  defaultValue={100 - DEFAULT_DISCOVER_CHAOS}
+                  size={30}
+                  ariaLabel="matching"
+                  tooltip="more matching clockwise"
+                />
+                <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
+                  matching
+                </span>
+              </div>
             </div>
+          )}
+          {/* Always rendered (fixed height) so nothing shifts on screen. */}
+          <div
+            style={{
+              gridColumn: 2,
+              height: 14,
+              marginTop: 6,
+              textAlign: 'center',
+              fontSize: 9,
+              color: 'var(--ra-text-3)'
+            }}
+          >
+            hold shift to combine
           </div>
-        )}
-        {/* Always rendered (fixed height) so nothing shifts on screen. */}
-        <div
-          style={{
-            gridColumn: 2,
-            height: 14,
-            marginTop: 6,
-            textAlign: 'center',
-            fontSize: 9,
-            color: 'var(--ra-text-3)'
-          }}
-        >
-          hold shift to combine
         </div>
-      </div>
+      )}
     </div>
   )
 }

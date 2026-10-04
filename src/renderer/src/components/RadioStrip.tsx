@@ -29,6 +29,7 @@ import { DEFAULT_FAVES } from '@shared/discoverFaves'
 import { DEFAULT_SOURCE_LEAN } from '@shared/discoverSlotModifier'
 import { DEFAULT_DISCOVER_CHAOS } from '@shared/discoverRanking'
 import { RADIO_STICKY_BACKGROUND } from './RadioTopLine'
+import { RADIO_VIEW_FRAME } from './discoverRowGrid'
 import {
   ActionButton,
   ControlField,
@@ -287,7 +288,8 @@ function RadioLiveBar(
         // over it), so the controls that play are always in reach.
         position: 'sticky',
         bottom: 0,
-        zIndex: 2
+        zIndex: 2,
+        ...RADIO_VIEW_FRAME
       }}
     >
       <ControlField label="tempo" readout="bpm" live>
@@ -724,7 +726,8 @@ function RadioShapingColumns(
       style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(5, minmax(0, 1fr))',
-        background: RADIO_STICKY_BACKGROUND
+        background: RADIO_STICKY_BACKGROUND,
+        ...RADIO_VIEW_FRAME
       }}
     >
       {groups.map((g) => (

@@ -5,6 +5,7 @@
 // Left, play/stop and `radio` (the stop) with its interval line; middle, the readout's status line,
 // the phrase ruler and fold's status line; right, undo and redo. Values and callbacks only.
 import type { ReactNode } from 'react'
+import { RADIO_VIEW_FRAME } from './discoverRowGrid'
 import { radioRulerCells, type RadioReadout } from '@shared/radioReadout'
 
 /** Behind the sticky bars: the library box's own fill (LibraryBrowser), so nothing shows through
@@ -71,7 +72,8 @@ export function RadioTopLine({
         flexWrap: 'wrap',
         gap: 'var(--ra-s-7)',
         padding: 'var(--ra-s-4) var(--ra-s-7)',
-        borderBottom: '1px solid var(--ra-border)'
+        borderBottom: '1px solid var(--ra-border)',
+        ...RADIO_VIEW_FRAME
       }}
     >
       {/* Transport: play/stop, then `radio` (the stop) with its interval line inside its bottom

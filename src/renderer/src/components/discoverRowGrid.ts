@@ -31,3 +31,12 @@ export const DISCOVER_WAVEFORM_MIN_WIDTH = 140
 export const RADIO_WAVEFORM_HEIGHT = 60
 export const RADIO_ROW_INSET_LEFT = 15
 export const RADIO_ROW_INSET_RIGHT = 9
+
+/** One column width for the whole radio view (design pass decision 9): the top line, notes, rows,
+ * live bar and columns share it, centred, so their left edges align. */
+export const RADIO_VIEW_MAX_WIDTH = 1440
+export const RADIO_VIEW_FRAME = {
+  maxWidth: RADIO_VIEW_MAX_WIDTH,
+  margin: '0 auto',
+  width: '100%'
+} as const
