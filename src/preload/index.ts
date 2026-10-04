@@ -16,7 +16,7 @@ import type { PluginCatalog } from '../main/pluginCatalog'
 import type { DiscoverCandidate } from '../main/discoverCandidates'
 import type { ArtistIndex, ArtistMode, KeepRefused } from '@shared/discoverArtist'
 import type { ArtistScanBatch } from '../main/discoverArtistScanQueue'
-import type { AdjacentDiscoverCandidate } from '../main/discoverAdjacency'
+import type { AdjacentDiscoverCandidate, AdjacentDiscoverOptions } from '../main/discoverAdjacency'
 import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { SoundMeters, SoundSettings } from '@shared/radioSound'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
@@ -399,14 +399,18 @@ const api = {
     centerRiffCID: string,
     kinds: DiscoverSlotKind[],
     soundSource?: DiscoverSoundSourceFilter,
-    creator?: string
+    creator?: string,
+    /** Optional (discoverAdjacency's AdjacentDiscoverOptions): radio's dig asks for 8 per
+     * direction, no downloads, and trait percentiles. Absent: today's behaviour. */
+    options?: AdjacentDiscoverOptions
   ): Promise<{ newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }> =>
     ipcRenderer.invoke(
       'get-adjacent-discover-candidates',
       centerRiffCID,
       kinds,
       soundSource,
-      creator
+      creator,
+      options
     ),
   discoverArtistIndex: (ownUsername: string): Promise<ArtistIndex> =>
     ipcRenderer.invoke('discover-artist-index', ownUsername),

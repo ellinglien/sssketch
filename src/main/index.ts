@@ -120,7 +120,11 @@ import {
   type RemoteState
 } from '@shared/remoteState'
 import type { PairingGate } from '@shared/remoteAuth'
-import { getAdjacentDiscoverCandidates, findRiffForStemPath } from './discoverAdjacency'
+import {
+  getAdjacentDiscoverCandidates,
+  findRiffForStemPath,
+  type AdjacentDiscoverOptions
+} from './discoverAdjacency'
 import { getArtistStemCIDs, getArtistStemRows } from './discoverArtistStems'
 import {
   artistScanQueueSize,
@@ -1457,9 +1461,16 @@ app.whenReady().then(async () => {
       centerRiffCID: string,
       kinds: DiscoverSlotKind[],
       soundSource?: DiscoverSoundSourceFilter,
-      creator?: string
+      creator?: string,
+      options?: AdjacentDiscoverOptions
     ) =>
-      getAdjacentDiscoverCandidates(centerRiffCID, kinds, soundSource, creator?.trim() || undefined)
+      getAdjacentDiscoverCandidates(
+        centerRiffCID,
+        kinds,
+        soundSource,
+        creator?.trim() || undefined,
+        options ?? {}
+      )
   )
 
   // Discover artist mode (2026-10-01): the picker's data. The dbs are the

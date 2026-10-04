@@ -4536,6 +4536,13 @@ export function radioDigCloseness(
   - every roll while dug: `rankCandidates(..., { ..., dig: rankDigOf(anchor, new Set(neighbour
     riffCIDs)) })` -- the neighbours from the same call, cached per anchor riff
     (`radioDigNearRef`, refreshed when the anchor changes).
+  - **As built (review of 6531384):** the adjacency call takes optional `AdjacentDiscoverOptions`
+    (`discoverAdjacency.ts`; absent, today's behaviour for the popover and the phone's `adjacent`):
+    dig passes `matchesPerDirection: 8` (`DIG_NEAR_PER_DIRECTION`), `skipDownload: true` (the
+    pick path resolves only the stem picked, so a near draw never makes a swap late) and
+    `percentileTraits` (the clash's and the anchor's known traits; the slot's own are added in
+    main), so the trait bar, the clash and dig's closeness read the near pool as a normal one. The
+    one main-process change spec 3.2 did not foresee. Logs: `no near fits` vs `dig: no riff`.
 - [ ] **Step 3: UI and phone.** Track 17's dig button unhidden; role words with `dig`; flash `dig`
   on set; `runSlotAction` `'dig'`; the phone's sheet gains dig (Task 10 Step 4).
 - [ ] **Step 4: Verify, commit.** Message: `discover radio: dig (spec anointed-stems section 3) -- one dug row (track 17, the phone), its anchor following the row; a third of radio's picks from its riff neighbours (getAdjacentDiscoverCandidates, the creator filter kept), every pick leaning to it (rankCandidates dig with the neighbours as near in time). Unheard by any agent`, then the trailer.

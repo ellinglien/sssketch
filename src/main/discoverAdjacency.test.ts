@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { walkAdjacentWindow } from './discoverAdjacency'
+import { adjacentWalkSizes, walkAdjacentWindow } from './discoverAdjacency'
 
 describe('walkAdjacentWindow', () => {
   it('walks outward from the center in both directions, closest first', async () => {
@@ -67,5 +67,22 @@ describe('walkAdjacentWindow', () => {
     expect(result.newer).toEqual([])
     expect(result.older).toEqual([])
     expect(matcher).not.toHaveBeenCalled()
+  })
+})
+
+describe('adjacentWalkSizes', () => {
+  it('defaults to 4 matches per direction, fetching 8 riffs per match', () => {
+    expect(adjacentWalkSizes()).toEqual({ matchesPerDirection: 4, fetchPerDirection: 32 })
+    expect(adjacentWalkSizes(undefined)).toEqual(adjacentWalkSizes(4))
+  })
+  it("dig's 8 per direction fetches a window to match", () => {
+    expect(adjacentWalkSizes(8)).toEqual({ matchesPerDirection: 8, fetchPerDirection: 64 })
+  })
+  it('whole numbers from 1 to 16; anything else is the default', () => {
+    expect(adjacentWalkSizes(0).matchesPerDirection).toBe(4)
+    expect(adjacentWalkSizes(-2).matchesPerDirection).toBe(4)
+    expect(adjacentWalkSizes(Number.NaN).matchesPerDirection).toBe(4)
+    expect(adjacentWalkSizes(2.6).matchesPerDirection).toBe(2)
+    expect(adjacentWalkSizes(100).matchesPerDirection).toBe(16)
   })
 })

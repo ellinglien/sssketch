@@ -7,7 +7,8 @@ import {
   isMaskSlotKind,
   isTraitSlotKind,
   normalizeSlotKinds,
-  type DiscoverSlotKind
+  type DiscoverSlotKind,
+  type DiscoverTraitKind
 } from '@shared/discoverSlotKind'
 import {
   stemMatchesSlotKinds,
@@ -29,7 +30,11 @@ import {
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
-import { getRiffIndexForDb, type DiscoverCandidate } from './discoverCandidates'
+import {
+  attachDiscoverTraits,
+  getRiffIndexForDb,
+  type DiscoverCandidate
+} from './discoverCandidates'
 
 /** Result of walking outward from a center index in both directions --
  * `newer`/`older` name the two directions unambiguously in real, wall-clock
@@ -91,7 +96,39 @@ const ADJACENT_MATCHES_PER_DIRECTION = 4
 // ADJACENT_MATCHES_PER_DIRECTION, since most riffs in a jam won't have a
 // stem in any one specific requested role at all.
 const ADJACENT_FETCH_MULTIPLIER = 8
-const ADJACENT_FETCH_PER_DIRECTION = ADJACENT_MATCHES_PER_DIRECTION * ADJACENT_FETCH_MULTIPLIER
+/** The most matches per direction a caller may ask for (the window grows with it). */
+const ADJACENT_MATCHES_MAX = 16
+
+/** The walk's sizes for a caller's `matchesPerDirection`: whole numbers 1 to ADJACENT_MATCHES_MAX
+ * (anything not a positive number is the default, 4), and the raw window fetched per direction
+ * ADJACENT_FETCH_MULTIPLIER times that. Pure. */
+export function adjacentWalkSizes(matchesPerDirection?: number): {
+  matchesPerDirection: number
+  fetchPerDirection: number
+} {
+  const n =
+    typeof matchesPerDirection === 'number' &&
+    Number.isFinite(matchesPerDirection) &&
+    matchesPerDirection >= 1
+      ? Math.min(ADJACENT_MATCHES_MAX, Math.floor(matchesPerDirection))
+      : ADJACENT_MATCHES_PER_DIRECTION
+  return { matchesPerDirection: n, fetchPerDirection: n * ADJACENT_FETCH_MULTIPLIER }
+}
+
+/** The adjacency call's options; absent, every one is today's behaviour (the popover, the
+ * phone's `adjacent`). */
+export interface AdjacentDiscoverOptions {
+  /** Matches per direction (adjacentWalkSizes); default 4. Radio's dig asks for 8. */
+  matchesPerDirection?: number
+  /** Download nothing: the caller resolves only the stem it picks (radio's dig near draw, inside
+   * a pick, where downloading every returned riff would make swaps late). Default false: every
+   * returned riff's missing stems are downloaded before this returns. */
+  skipDownload?: boolean
+  /** Attach library trait values and percentiles (as getDiscoverCandidates does) for the slot's
+   * own trait kinds plus these, so the trait bar, the ranking's trait terms, fold's clash and
+   * dig's closeness read them. Absent: traitPercentiles stays {} (today's). */
+  percentileTraits?: readonly DiscoverTraitKind[]
+}
 
 /** A DiscoverCandidate plus its own already-resolved local file path --
  * see matchRole's own doc comment (below) for why this is precomputed
@@ -123,17 +160,19 @@ export async function getAdjacentDiscoverCandidates(
   // can match drums/bass/lead). Defaults to no filtering.
   soundSource: DiscoverSoundSourceFilter = { endlesss: true, audioIn: true },
   /** Discover artist mode: only this creator's stems (creatorAllowed). */
-  creator?: string
+  creator?: string,
+  options: AdjacentDiscoverOptions = {}
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
+  const sizes = adjacentWalkSizes(options.matchesPerDirection)
   // A blank creator is no filter, never "only stems with no creator".
   const creatorName = creator?.trim() || undefined
   const context = resolveRiffWithContext(centerRiffCID)
   if (!context) return { newer: [], older: [] }
 
-  const windowOffset = Math.max(0, context.rank - ADJACENT_FETCH_PER_DIRECTION)
+  const windowOffset = Math.max(0, context.rank - sizes.fetchPerDirection)
   const page = listRiffs(context.jamCID, {
     offset: windowOffset,
-    limit: ADJACENT_FETCH_PER_DIRECTION * 2 + 1
+    limit: sizes.fetchPerDirection * 2 + 1
   })
   const centerIndex = page.riffs.findIndex((r) => r.riffCID === context.matchedRiffCID)
   // Shouldn't happen (the center riff itself is always inside a window
@@ -253,16 +292,37 @@ export async function getAdjacentDiscoverCandidates(
     page.riffs,
     centerIndex,
     matchRole,
-    ADJACENT_MATCHES_PER_DIRECTION
+    sizes.matchesPerDirection
   )
 
   // Download audio only for riffs actually being returned (has a role
   // match) -- not speculatively for the whole fetched window, most of
   // which gets discarded before ever needing its audio. Matches the design
-  // spec's own "Resolve concurrency" note.
-  await Promise.all([...result.newer, ...result.older].map((c) => downloadMissingStems(c.riffCID)))
+  // spec's own "Resolve concurrency" note. Skipped on request (radio's dig:
+  // the pick path resolves, and downloads, only the stem it picks).
+  if (options.skipDownload !== true) {
+    await Promise.all(
+      [...result.newer, ...result.older].map((c) => downloadMissingStems(c.riffCID))
+    )
+  }
 
-  return result
+  const percentileTraits = options.percentileTraits
+  if (percentileTraits === undefined) return result
+  const valueKinds = [...traitKinds, ...percentileTraits.filter((k) => !traitKinds.includes(k))]
+  if (valueKinds.length === 0) return result
+  // Re-attached per direction, keeping each candidate's own extra fields (path, soundType).
+  const withTraits = async (
+    list: AdjacentDiscoverCandidate[]
+  ): Promise<AdjacentDiscoverCandidate[]> => {
+    const attached = await attachDiscoverTraits(ownDb, list, valueKinds)
+    return list.map((c, i) => ({
+      ...c,
+      traitValues: attached[i].traitValues,
+      traitFieldValues: attached[i].traitFieldValues,
+      traitPercentiles: attached[i].traitPercentiles
+    }))
+  }
+  return { newer: await withTraits(result.newer), older: await withTraits(result.older) }
 }
 
 /** Recovers a stem's own riffCID/jamCID/bpm from nothing but its local file

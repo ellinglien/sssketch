@@ -941,6 +941,20 @@ export async function getDiscoverCandidates({
     : pool
 }
 
+/** Trait values for `kinds` (attachTraitValues) and their library percentiles
+ * (attachTraitPercentiles) on a pool built elsewhere -- radio's dig near pool
+ * (getAdjacentDiscoverCandidates' percentileTraits), so it is ranked and
+ * barred on the same footing as getDiscoverCandidates' own. Same order, same
+ * length; empty `kinds` returns the pool as it is. */
+export async function attachDiscoverTraits(
+  ownDb: Database.Database,
+  pool: DiscoverCandidate[],
+  kinds: readonly DiscoverTraitKind[]
+): Promise<DiscoverCandidate[]> {
+  if (kinds.length === 0 || pool.length === 0) return pool
+  return attachTraitPercentiles(ownDb, attachTraitValues(ownDb, pool, kinds))
+}
+
 /** Library-wide trait percentiles (docs/superpowers/specs/2026-09-22-
  * discover-promise-vs-delivery-design.md, Phase 1) for every candidate
  * that has trait values, from the cached quantile tables

@@ -21,6 +21,9 @@ export const DIG_TIME_SCALE_SEC = 6 * 3600
 export const DIG_WEIGHT = 0.75
 /** The parts of closeness. */
 export const DIG_CLOSENESS_PARTS = Object.freeze({ jam: 0.5, time: 0.3, traits: 0.2 })
+/** The desktop's near pool: riff neighbours asked for per direction (getAdjacentDiscoverCandidates'
+ * matchesPerDirection; its own default is 4). */
+export const DIG_NEAR_PER_DIRECTION = 8
 /** The readout's log word when a near-only pick found nothing. */
 export const NO_NEAR_FITS = 'no near fits'
 

@@ -164,6 +164,7 @@ import {
 } from '@shared/radioHooks'
 import { radioForecastWithUncertainRows, radioWrapBeforeLastLap } from '@shared/radioBuildForecast'
 import {
+  DIG_NEAR_PER_DIRECTION,
   NO_NEAR_FITS,
   digNearDraw,
   learnRadioDigNear,
@@ -8774,18 +8775,31 @@ export function DiscoverPanel({
       // one draw makes a third of picks near-only -- the dug stem's riff neighbours
       // (getAdjacentDiscoverCandidates: this row's kinds, the drawn source then the other, the
       // creator filter keeping artist mode inside the artist; own-stems-only as getDiscover-
-      // Candidates applies it). None unused: a normal pick, logged `no near fits`. What the call
-      // found is learned as the anchor riff's neighbours, for the ranking below.
+      // Candidates applies it). 8 per direction, nothing downloaded (resolveCandidateStem fetches
+      // only the stem picked, so the near draw never makes a swap late), and with library trait
+      // percentiles for the slot's traits, the clash's and the anchor's, so the trait bar, fold's
+      // clash and dig's closeness read the near pool as they read a normal one. None unused: a
+      // normal pick, logged `no near fits`; an anchor with no riff (nothing to walk): `dig: no
+      // riff`. What the call found is learned as the anchor riff's neighbours, for the ranking.
       const digAnchor = radioDigAnchorNow()
       if (candidates === null && digAnchor !== null && digNearDraw(true)) {
         const anchorRiff = digAnchor.riffCID
+        const percentileTraits = [
+          ...new Set([
+            ...(alsoTraits ?? []),
+            ...DISCOVER_TRAIT_SLOT_KINDS.filter(isTraitSlotKind).filter(
+              (k) => digAnchor.traits[k] != null
+            )
+          ])
+        ]
         const nearFrom = async (source: typeof draw.first): Promise<DiscoverCandidate[] | null> => {
           if (anchorRiff === undefined) return null
           const raw = await window.rifffApi.getAdjacentDiscoverCandidates(
             anchorRiff,
             kinds,
             source,
-            f.artist
+            f.artist,
+            { matchesPerDirection: DIG_NEAR_PER_DIRECTION, skipDownload: true, percentileTraits }
           )
           const own = (c: DiscoverCandidate): boolean =>
             !f.onlyOwnStems || f.targetUser === '' || c.creatorUserName === f.targetUser
@@ -8806,7 +8820,9 @@ export function DiscoverPanel({
           candidates = await nearFrom(draw.fallback)
           if (rerollGenerationRef.current.get(id) !== myGeneration) return null
         }
-        if (candidates === null) {
+        if (anchorRiff === undefined) {
+          console.log(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- dig: no riff`)
+        } else if (candidates === null) {
           console.log(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- ${NO_NEAR_FITS}`)
         }
       }
