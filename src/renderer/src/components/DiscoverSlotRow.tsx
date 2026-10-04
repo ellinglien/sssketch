@@ -47,6 +47,8 @@ import { type Stem } from '@shared/types'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import { radioFlashOpacity, type RadioReadoutRow } from '@shared/radioReadout'
 import type { DiscoverSlot } from './DiscoverPanel'
+import { RadioRowPlates } from './RadioRowPlates'
+import type { RadioRowPlates as RadioRowPlatesModel } from '@shared/radioRowPlates'
 import {
   peekResolvedCandidateStem,
   resolveCandidateStem,
@@ -275,7 +277,10 @@ export function DiscoverSlotRow({
   soundSourceAudioIn,
   foldTrack,
   foldReadout,
-  radioReadout
+  radioReadout,
+  layout,
+  rowNumber,
+  plates
 }: {
   slot: DiscoverSlot
   /** Set while radio is about to change THIS row, and null otherwise.
@@ -446,6 +451,14 @@ export function DiscoverSlotRow({
   /** The radio readout on this row (@shared/radioReadout): what it was picked as, its age,
    * `next` and the gesture flash. Null unless radio runs. */
   radioReadout: RadioReadoutRow | null
+  /** Which assembly of the row's parts (radio view plan Task 7): today's grid, or, while radio
+   * runs, the radio view's button line over a full-width waveform. The same parts either way,
+   * and the same DiscoverSlotRow, so switching never remounts the row. */
+  layout: 'grid' | 'radio'
+  /** The row's place in the list, from 1: the radio layout's accessible name. */
+  rowNumber: number
+  /** The radio layout's plates on the waveform (@shared/radioRowPlates). */
+  plates: RadioRowPlatesModel
 }): React.JSX.Element {
   // Resolves the slot's own candidate down to a real, locally-downloaded
   // Stem (resolveCandidateStem, defined above) -- Waveform needs a real
@@ -865,8 +878,10 @@ export function DiscoverSlotRow({
   // The one row radio holds longer, drawn on its 👍 (see that button).
   const holding = radioOn && hookIn
 
-  // Where each part sits in the row grid (radio view plan Task 5).
-  const at = (n: number): { gridColumn?: number } => ({ gridColumn: n })
+  // Where each part sits in the row grid (radio view plan Task 5); nowhere in the radio layout,
+  // which is a flex line and a waveform, not a grid (Task 7).
+  const radioLayout = layout === 'radio'
+  const at = (n: number): { gridColumn?: number } => (radioLayout ? {} : { gridColumn: n })
 
   // Direct request, 2026-09-15: "an X for remove" -- icon-only, same
   // as every other row button now.
@@ -1013,7 +1028,10 @@ export function DiscoverSlotRow({
     <div
       style={{
         ...at(DISCOVER_WAVEFORM_COLUMN),
-        minWidth: DISCOVER_WAVEFORM_MIN_WIDTH,
+        // The radio layout's waveform is the row's full width (less its padding).
+        ...(radioLayout
+          ? { width: '100%', minWidth: 0 }
+          : { minWidth: DISCOVER_WAVEFORM_MIN_WIDTH }),
         position: 'relative'
       }}
     >
@@ -1228,7 +1246,7 @@ export function DiscoverSlotRow({
           it was picked as and how long it has played, small and dim over the waveform's top
           left; the gesture flash (in and out over a bar) and `next` at its top right. Never
           in the way of the gain drag. Chrome: monochrome. */}
-      {radioReadout !== null && (
+      {!radioLayout && radioReadout !== null && (
         <div
           aria-hidden
           style={{
@@ -1301,6 +1319,15 @@ export function DiscoverSlotRow({
           </div>
         </div>
       )}
+      {/* The radio layout's plates replace the readout above (RadioRowPlates). */}
+      {radioLayout && (
+        <RadioRowPlates
+          plates={plates}
+          slotId={slot.id}
+          hookAwayName={hookAwayName}
+          onBringHookBack={onBringHookBack}
+        />
+      )}
     </div>
   )
   // Kind label + match meter stacked in the 110px label column --
@@ -1309,10 +1336,17 @@ export function DiscoverSlotRow({
     <div
       style={{
         ...at(7),
-        width: 110,
+        // The radio layout keeps the button line one 20px line: the label, then the meter.
+        ...(radioLayout
+          ? {
+              width: 'auto',
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              whiteSpace: 'nowrap'
+            }
+          : { width: 110, flexDirection: 'column', gap: 3 }),
         display: 'flex',
-        flexDirection: 'column',
-        gap: 3,
         minWidth: 0
       }}
     >
@@ -1334,7 +1368,7 @@ export function DiscoverSlotRow({
           display: 'flex',
           alignItems: 'center',
           gap: 3,
-          width: 110,
+          ...(radioLayout ? { maxWidth: 110 } : { width: 110 }),
           padding: 0,
           fontFamily: 'inherit',
           fontSize: 9,
@@ -1356,7 +1390,7 @@ export function DiscoverSlotRow({
           aria-label="match"
           style={{
             display: 'flex',
-            flexWrap: 'wrap',
+            flexWrap: radioLayout ? 'nowrap' : 'wrap',
             columnGap: 6,
             rowGap: 2,
             fontSize: 8,
@@ -1513,6 +1547,8 @@ export function DiscoverSlotRow({
   // holding row is still visible. Only shown once there's a
   // real stem to like, same guard as mute/solo -- its track stays
   // reserved either way, so nothing shifts.
+  // In the radio layout 👍 shows only the star: holding is the bar at the row's left edge there.
+  const likeInverted = holding && !radioLayout
   const likeButton = hasStemToActOn && (
     <button
       onClick={onLike}
@@ -1545,11 +1581,11 @@ export function DiscoverSlotRow({
         width: 18,
         height: 18,
         padding: 0,
-        background: holding ? 'var(--ra-text)' : 'var(--ra-bg-row-active)',
-        border: `1px solid ${favourited ? 'var(--ra-recording-live)' : holding ? 'var(--ra-text)' : 'var(--ra-border)'}`,
+        background: likeInverted ? 'var(--ra-text)' : 'var(--ra-bg-row-active)',
+        border: `1px solid ${favourited ? 'var(--ra-recording-live)' : likeInverted ? 'var(--ra-text)' : 'var(--ra-border)'}`,
         color: favourited
           ? 'var(--ra-recording-live)'
-          : holding
+          : likeInverted
             ? 'var(--ra-bg-frame)'
             : listenOnlyStars && !radioOn
               ? 'var(--ra-text-4)'
@@ -1588,7 +1624,7 @@ export function DiscoverSlotRow({
       onToggleHook={onToggleHook}
       dug={dug}
       onToggleDig={onToggleDig}
-      columns={[16, 17]}
+      columns={radioLayout ? undefined : [16, 17]}
     />
   )
   // FOLD MODE'S READOUT (v2, @shared/radioFoldStatus), track 18, the last: a folded
@@ -1668,6 +1704,75 @@ export function DiscoverSlotRow({
       )}
     </>
   )
+
+  // The breath (see the grid's `background` below for why it is what it is): one expression,
+  // read by both layouts.
+  const approachBackground =
+    radioApproach === null
+      ? undefined
+      : radioApproach.state === 'held'
+        ? 'color-mix(in srgb, var(--ra-bg-row-active), var(--ra-border) calc(var(--discover-breath, 0.5) * 100%))'
+        : 'color-mix(in srgb, transparent, var(--ra-bg-row-active) calc(var(--discover-breath, 0.5) * 100%))'
+
+  // THE RADIO LAYOUT (radio view plan Task 7, spec 1.2): the web radio's full-mode row. A button
+  // line (m s skip 👍 👎 hook dig, then any stem, nearby, duplicate, kinds and meter, lock,
+  // remove) over a full-width waveform carrying the plates. The SAME part constants as the grid,
+  // so every button keeps one implementation; a missing conditional part just closes up the flex
+  // line. The row's root stays a div in a Fragment with the popovers after it, as in the grid.
+  // Its 6px side padding is the playhead overlay's inset in DiscoverPanel: keep them equal.
+  if (radioLayout) {
+    return (
+      <>
+        <div
+          role="group"
+          aria-label={
+            radioReadout !== null && radioReadout.label !== ''
+              ? `row ${rowNumber}: ${radioReadout.label}`
+              : `row ${rowNumber}`
+          }
+          style={{
+            position: 'relative',
+            padding: '4px 6px',
+            marginBottom: 4,
+            background: approachBackground
+          }}
+        >
+          {holding && (
+            <span
+              aria-hidden
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: 6,
+                bottom: 6,
+                width: 2,
+                background: 'color-mix(in srgb, var(--ra-text) 45%, transparent)',
+                pointerEvents: 'none'
+              }}
+            />
+          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4, height: 20 }}>
+            {muteSolo}
+            {skipButton}
+            {likeButton}
+            {dislikeButton}
+            <span data-slot="radio-role" style={{ display: 'contents' }}>
+              {roleButtons}
+            </span>
+            <span style={{ marginLeft: 'auto' }} />
+            {anyStemButton}
+            {nearbyButton}
+            {duplicateButton}
+            {kindsBlock}
+            {lockButton}
+            {removeButton}
+          </div>
+          {waveformCell}
+        </div>
+        {popovers}
+      </>
+    )
+  }
 
   return (
     <>
@@ -1799,12 +1904,7 @@ export function DiscoverSlotRow({
           // the difference reads as weight rather than as urgency
           // counting down. The 0.5 fallback is the stopped value, for the
           // one frame before the effect has written the variable.
-          background:
-            radioApproach === null
-              ? undefined
-              : radioApproach.state === 'held'
-                ? 'color-mix(in srgb, var(--ra-bg-row-active), var(--ra-border) calc(var(--discover-breath, 0.5) * 100%))'
-                : 'color-mix(in srgb, transparent, var(--ra-bg-row-active) calc(var(--discover-breath, 0.5) * 100%))',
+          background: approachBackground,
           borderBottom: '1px solid var(--ra-border-soft)'
         }}
       >

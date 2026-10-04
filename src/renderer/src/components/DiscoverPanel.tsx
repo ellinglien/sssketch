@@ -364,6 +364,7 @@ import {
   radioUsableCompanionPicks
 } from '@shared/radioCompanions'
 import { DiscoverSlotRow } from './DiscoverSlotRow'
+import { radioRowPlates } from '@shared/radioRowPlates'
 import { resolveCandidateStem, type ResolvedCandidateStem } from './discoverCandidateStem'
 import {
   discoverRowGridColumns,
@@ -1196,6 +1197,9 @@ export function DiscoverPanel({
     state: RadioFoldState
     step: RadioFoldStep | null
   } | null>(null)
+  // Radio mode is on (see "radio mode" below, where its wiring lives). Declared here because the
+  // sweep layout effect just below re-runs on it: the radio view moves the waveforms (Task 7).
+  const [radioOn, setRadioOn] = useState(false)
   // The rows' wrapper, which carries --discover-breath for every row.
   const rowsRef = useRef<HTMLDivElement>(null)
   const sweepLapRef = useRef({ lapIndex: 0, lastPos: 0, loopBars: 0 })
@@ -1260,8 +1264,9 @@ export function DiscoverPanel({
     const pct = discoverSweepPct(sweepLapRef.current.lapIndex, pos, previewLoopBars, windowBars)
     line.style.display = pct === null ? 'none' : 'block'
     if (pct !== null) line.style.left = `${pct}%`
+    // radioOn: the line is re-placed when the radio layout switches, even with the transport paused.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- restartRadioFold is re-created each render and reads the fold machine through refs on purpose
-  }, [pos, playing, sweepActive, previewLoopBars])
+  }, [pos, playing, sweepActive, previewLoopBars, radioOn])
 
   // True once a Discover preview project is actually loaded+playing in the
   // real engine -- the empty-to-non-empty transition (see
@@ -2808,8 +2813,8 @@ export function DiscoverPanel({
   //
   // Radio is Discover with a clock: while the preview plays, one unlocked,
   // audible layer rerolls on its own every so often. Everything schedulable
-  // lives in @shared/radioSchedule; what is here is the wiring.
-  const [radioOn, setRadioOn] = useState(false)
+  // lives in @shared/radioSchedule; what is here is the wiring. radioOn itself is declared
+  // above the playhead's sweep layout effect, which re-runs on it (radio view plan Task 7).
   // Synchronously-current mirror of radioOn, for the same stale-closure
   // reason previewingSlotIdsRef and slotsRef exist: armRadioPick awaits a
   // real IPC round trip and must see a switch-off that happened during it.
@@ -10980,6 +10985,8 @@ export function DiscoverPanel({
           now pulses (discover-slot-pulse) -- it replaced the row's
           spinning dice. */}
       <style>{`
+        .radio-plate-away { color: var(--ra-text-2); }
+        .radio-plate-away:hover { color: var(--ra-text); }
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
           50% { opacity: 0.35; }
@@ -11812,7 +11819,19 @@ export function DiscoverPanel({
           The rows sit in one positioned wrapper so the ONE playhead
           (2026-09-30) can be drawn over all of them as a single line --
           see the overlay after the rows, and sweepLineRef above. */}
-      <div ref={rowsRef} style={{ position: 'relative' }}>
+      {/* Radio view plan Task 7: the SAME wrapper element in both modes (its style switches,
+          never the element), so no row remounts when radio toggles. While radio runs the rows
+          are capped at 1200px and centred, the playhead overlay inside with them;
+          data-radio-view scopes the radio view's CSS. */}
+      <div
+        ref={rowsRef}
+        data-radio-view={radioOn ? '' : undefined}
+        style={
+          radioOn
+            ? { position: 'relative', maxWidth: 1200, margin: '0 auto' }
+            : { position: 'relative' }
+        }
+      >
         {(() => {
           const maxBarLength = previewLoopBars
           // THE ONE WAIT a row can be on, read once for the whole list
@@ -11826,7 +11845,7 @@ export function DiscoverPanel({
             elapsedBars: 0,
             barsUntilChange: null
           }
-          return slots.map((slot) => (
+          return slots.map((slot, i) => (
             <DiscoverSlotRow
               key={slot.id}
               slot={slot}
@@ -11883,6 +11902,12 @@ export function DiscoverPanel({
               foldTrack={radioFoldTrack}
               foldReadout={radioFoldReadouts.get(slot.id) ?? null}
               radioReadout={radioReadoutRows.get(slot.id) ?? null}
+              layout={radioOn ? 'radio' : 'grid'}
+              rowNumber={i + 1}
+              plates={radioRowPlates(
+                radioReadoutRows.get(slot.id) ?? null,
+                radioFoldReadouts.get(slot.id) ?? null
+              )}
             />
           ))
         })()}
@@ -11898,25 +11923,47 @@ export function DiscoverPanel({
             loop position otherwise. The same `--ra-playhead` accent
             Playhead.tsx uses on the real timeline. */}
         {sweepActive && (
+          // Radio view plan Task 7: the same three elements in both layouts, only their styles
+          // switch, so the line (sweepLineRef) never changes parent. In the radio layout the
+          // waveform is the row's width less its 6px side padding (DiscoverSlotRow's radio
+          // assembly), so the box is inset 6px each side and the cell fills it.
           <div
             aria-hidden
-            style={{
-              position: 'absolute',
-              inset: 0,
-              display: 'grid',
-              gridTemplateColumns: discoverRowGridColumns({ radio: radioOn, fold: radioFoldTrack }),
-              gridTemplateRows: '100%',
-              columnGap: DISCOVER_ROW_COLUMN_GAP,
-              padding: 0,
-              pointerEvents: 'none'
-            }}
+            style={
+              radioOn
+                ? {
+                    position: 'absolute',
+                    top: 0,
+                    bottom: 0,
+                    left: 6,
+                    right: 6,
+                    pointerEvents: 'none'
+                  }
+                : {
+                    position: 'absolute',
+                    inset: 0,
+                    display: 'grid',
+                    gridTemplateColumns: discoverRowGridColumns({
+                      radio: radioOn,
+                      fold: radioFoldTrack
+                    }),
+                    gridTemplateRows: '100%',
+                    columnGap: DISCOVER_ROW_COLUMN_GAP,
+                    padding: 0,
+                    pointerEvents: 'none'
+                  }
+            }
           >
             <div
-              style={{
-                gridColumn: DISCOVER_WAVEFORM_COLUMN,
-                minWidth: DISCOVER_WAVEFORM_MIN_WIDTH,
-                position: 'relative'
-              }}
+              style={
+                radioOn
+                  ? { position: 'absolute', inset: 0 }
+                  : {
+                      gridColumn: DISCOVER_WAVEFORM_COLUMN,
+                      minWidth: DISCOVER_WAVEFORM_MIN_WIDTH,
+                      position: 'relative'
+                    }
+              }
             >
               <div
                 ref={sweepLineRef}
