@@ -157,6 +157,22 @@ describe('discoverSettingsStore', () => {
     })
   })
 
+  it('sized builds: a saved file without the field loads on, one saved off stays off', async () => {
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radio: { pace: 'mid' } }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radio.sizedBuilds).toBe(true)
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radio: { pace: 'mid', sizedBuilds: false } }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radio.sizedBuilds).toBe(false)
+  })
+
   it('normalizes an unknown pace inside the radio object', async () => {
     const { loadDiscoverSettings } = await import('./discoverSettingsStore')
     writeFileSync(

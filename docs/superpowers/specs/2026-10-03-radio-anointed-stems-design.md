@@ -595,8 +595,14 @@ biggest promise radio makes); `medium` for any other move. A turn's too.
    spare is radio's change.
 
 **Pace.** A pulled-forward pick IS radio's change: an early decision, so the interval restarts when
-it lands. A payoff never adds a change on top of radio's own; at a slow pace it brings radio's next
-change forward to the phrase end, and adds rows to it.
+it lands. A payoff never adds a change on top of radio's own. Below the pace slider's bar band, a
+phrase end offers radio's pick and the spares only when radio's next change is due within about a
+phrase of the wrap (`radioPayoffInReach`: the interval still to run is at most the bars to the wrap
+plus one turnaround phrase); otherwise only what already lands at the wrap counts, and with nothing
+there the phrase end takes the skip path (no turnaround, no draw). So at a slow pace a payoff brings
+radio's next change forward by at most a phrase, and adds rows to it; it never makes a change radio
+was not about to make. In the bar band (changes every few bars) the offer is unchanged. A turn
+(asked for) is offered everything, at any pace.
 
 **Fold.** Payoff rows are companions: the fold's carry and release rules for companions apply
 (fold-follows-pace).

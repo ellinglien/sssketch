@@ -263,3 +263,62 @@ export function radioArcStepWaits(o: {
   if (!o.sized || o.decidesForPhraseStart) return false
   return o.overdueBars < o.phraseBars
 }
+
+// ---- the desktop's payoff, assembled from what it knows (DiscoverPanel; spec 4.7) ----
+
+/** `f` with the density arc's joining row. `ready` (its stem is picked and warm): a row, an arc
+ * step, and the low end back when it is drums or bass -- a large change. Still picking (it may
+ * not land in time): it promises a medium change and no more -- two rows' worth at most, no arc
+ * step, no low end -- so an uncertain add never makes a gap. */
+export function radioForecastWithArcAdd(
+  f: RadioChangeForecast,
+  add: { ready: boolean; lowEnd: boolean }
+): RadioChangeForecast {
+  if (add.ready) {
+    return { ...f, rows: f.rows + 1, arcStep: 'add', lowEndReturn: f.lowEndReturn || add.lowEnd }
+  }
+  return { ...f, rows: Math.max(f.rows, 2) }
+}
+
+/** Whether, below the pace slider's bar band, radio's next change is near enough to bring forward
+ * for a payoff -- due (`barsToDue`, the interval still to run) within a phrase of the top it would
+ * land on (`aheadBars` away). Out of reach, the phrase end counts neither radio's pick nor the
+ * spares (at a slow pace a payoff would otherwise add a change radio was not about to make), so
+ * with nothing else landing there it gets no turnaround. In the bar band: always. */
+export function radioPayoffInReach(o: {
+  barBand: boolean
+  barsToDue: number
+  aheadBars: number
+  phraseBars: number
+}): boolean {
+  if (o.barBand) return true
+  if (!Number.isFinite(o.barsToDue)) return false
+  return Math.max(0, o.barsToDue) <= Math.max(0, o.aheadBars) + Math.max(0, o.phraseBars)
+}
+
+/** Bars of slack, beyond the stage's own lead, a payoff is decided before its top. */
+export const PAYOFF_DECIDE_MARGIN_BARS = 1
+
+/** A payoff is decided late in the lap (the desktop: once the top is within `leadBars` -- what a
+ * stage needs to reach the engine -- plus PAYOFF_DECIDE_MARGIN_BARS), so a throw aimed at the
+ * turnaround can arm before it: a held change stops throws arming. */
+export function radioPayoffDecidesNow(barsToWrap: number, leadBars: number): boolean {
+  return barsToWrap <= leadBars + PAYOFF_DECIDE_MARGIN_BARS
+}
+
+/** Rows that bring a stem not already landing (`taken`) nor brought by an earlier row: the first of
+ * each stem, in order (as radioUsableCompanionPicks does for radio's companions). A row with no
+ * stem is left out. */
+export function radioDistinctStemRows<T extends { stemCID: string | null }>(
+  rows: readonly T[],
+  taken: Iterable<string>
+): T[] {
+  const stems = new Set(taken)
+  const out: T[] = []
+  for (const r of rows) {
+    if (r.stemCID === null || stems.has(r.stemCID)) continue
+    stems.add(r.stemCID)
+    out.push(r)
+  }
+  return out
+}
