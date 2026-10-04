@@ -1,6 +1,15 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { Compass, Copy, Shuffle, SkipForward, ThumbsDown, ThumbsUp } from '@phosphor-icons/react'
+import {
+  Compass,
+  Copy,
+  Repeat,
+  Shovel,
+  Shuffle,
+  SkipForward,
+  ThumbsDown,
+  ThumbsUp
+} from '@phosphor-icons/react'
 import { RepeatedWaveform } from './RepeatedWaveform'
 import { LoopLines } from './LoopLines'
 import { LoadingLoader } from './LoadingLoader'
@@ -118,8 +127,16 @@ import {
 import {
   NO_RADIO_HOOKS,
   NO_RADIO_LANDINGS,
+  RADIO_DIG_TOOLTIP,
   RADIO_HOOK_BACK_WORD,
+  RADIO_HOOK_BRING_BACK_TOOLTIP,
   RADIO_HOOK_OUT_WORD,
+  RADIO_HOOK_RELEASE_TOOLTIP,
+  RADIO_HOOK_TOOLTIP,
+  bringRadioHookBack,
+  radioHookBarsToReturn,
+  radioRoleWords,
+  toggleRadioHookStem,
   advanceRadioLandingWindow,
   forgetRadioHookOnManualChange,
   likeRadioStem,
@@ -3068,6 +3085,10 @@ export function DiscoverPanel({
   // ref for the clock effect (written first, by updateRadioHooks only). Not persisted.
   const [radioHooks, setRadioHooks] = useState<RadioHooksState>(NO_RADIO_HOOKS)
   const radioHooksRef = useRef<RadioHooksState>(NO_RADIO_HOOKS)
+  /** The away hooks' stem names by row, for the row's dimmed name (set with the hooks). */
+  const [radioHookAwayNames, setRadioHookAwayNames] = useState<ReadonlyMap<string, string>>(
+    new Map()
+  )
   /** The hooked stem's pick by row: what a return queues. Set with the hook. */
   const radioHookPicksRef = useRef(new Map<string, SlotPick>())
   /** The hooked stem warmed for its return (prepare), by row; null while warming. */
@@ -4613,6 +4634,69 @@ export function DiscoverPanel({
     if (next === radioHooksRef.current) return
     radioHooksRef.current = next
     setRadioHooks(next)
+    const away = new Map<string, string>()
+    for (const h of next.hooks) {
+      const name = radioHookPicksRef.current.get(h.rowId)?.candidate?.presetName
+      if (h.state !== 'in' && name !== undefined) away.set(h.rowId, name)
+    }
+    setRadioHookAwayNames(away)
+  }
+  /** The row's hook toggle (track 16, the phone's `hook`): releases its hook in any state (an away
+   * hook's return is cancelled, the substitute stays), or hooks the playing stem (the cap releases
+   * the oldest). Radio on and the row unlocked only. */
+  function toggleSlotHook(id: string): void {
+    const slot = slotsRef.current.find((s) => s.id === id)
+    if (!radioOnRef.current || slot === undefined) return
+    if (radioHookOf(radioHooksRef.current, id) === null) {
+      likeRadioHook(slot, !slot.locked)
+      return
+    }
+    if (slot.candidate === null) return
+    const r = toggleRadioHookStem(radioHooksRef.current, {
+      rowId: id,
+      stemId: slot.candidate.stemCID,
+      rowCount: slotsRef.current.length,
+      paceLevel: radioPaceLevelOf(radioSettings),
+      random: Math.random
+    })
+    updateRadioHooks(r.state)
+    radioHooksReleased(r.released)
+  }
+  /** Tapping an away hook's dimmed name (the phone's `back`): it comes back at the next phrase
+   * start whose decision is still to come, with no calm wait. */
+  function bringSlotHookBack(id: string): void {
+    updateRadioHooks(bringRadioHookBack(radioHooksRef.current, id))
+  }
+  /** A row's role now, for its words (the readout's age, the phone): the hook's state and, while
+   * away, bars until its planned return. Null with no hook. Off the clock's refs: never in
+   * render. */
+  function radioRoleNow(
+    rowId: string,
+    narrow: boolean
+  ): { hook: RadioHook['state']; barsToReturn: number | null; words: string | null } | null {
+    const h = radioHookOf(radioHooksRef.current, rowId)
+    if (h === null) return null
+    const clock = radioClockRef.current
+    const lengths = [...resolvedBarLengthsRef.current.values()]
+    const loopBars = lengths.length > 0 ? Math.max(...lengths) : 0
+    const barsToReturn =
+      clock === null
+        ? null
+        : radioHookBarsToReturn(h, {
+            lap: clock.turnaroundLap ?? 0,
+            phraseLaps: turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars),
+            loopBars,
+            pos: clock.lastPos
+          })
+    return {
+      hook: h.state,
+      barsToReturn,
+      words: radioRoleWords({
+        hook: { state: h.state, decided: h.decided?.event ?? null, barsToReturn },
+        dig: false,
+        narrow
+      })
+    }
   }
   /** What the panel keeps for a hook's row (its pick, the warm return, the substitute) goes. */
   function forgetRadioHookRow(rowId: string): void {
@@ -5476,7 +5560,7 @@ export function DiscoverPanel({
     const armed = radioTurnaroundRef.current
     const lap = radioPlayRef.current.lap
     const now = radioPlayRef.current.startBars + pos
-    return radioReadout({
+    const readout = radioReadout({
       bars: radioReadoutBars(
         radioClockRef.current?.turnaroundLap,
         pos,
@@ -5509,6 +5593,14 @@ export function DiscoverPanel({
         flash: radioFlashShown(radioFlashLogRef.current, s.id, now, 1)
       }))
     })
+    // a row's role (its hook) after its age: `3 laps · hook · back in 16 bars`
+    return {
+      ...readout,
+      rows: readout.rows.map((r) => {
+        const words = radioRoleNow(r.rowId, false)?.words ?? null
+        return words === null ? r : { ...r, age: r.age === '' ? words : `${r.age} · ${words}` }
+      })
+    }
   }
   /** Everything the scheduled swap does on one position tick, in the one
    * order it is safe to do it in. Called from the clock effect below,
@@ -7614,11 +7706,33 @@ export function DiscoverPanel({
           radio: radioRemote,
           // fold mode's switch, while radio runs (the phone's one radio setting)
           fold: radioOn ? radioSettings.foldMode : null,
-          turn: radioTurnRemote
+          turn: radioTurnRemote,
+          // radio's roles while it runs: the hook's state, bars away, the phone's words
+          ...(radioOn && {
+            roles: new Map(
+              radioHooks.hooks.flatMap((h) => {
+                const role = radioRoleNow(h.rowId, true)
+                return role === null
+                  ? []
+                  : [
+                      [
+                        h.rowId,
+                        {
+                          hook: role.hook,
+                          dig: false,
+                          hookBarsAway: role.barsToReturn,
+                          words: role.words
+                        }
+                      ] as const
+                    ]
+              })
+            )
+          })
         },
         peaksBySlotId
       )
     )
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- radioRoleNow is re-created each render and reads the hooks and the clock through refs on purpose
   }, [
     buildSlotSnapshots,
     playing,
@@ -7629,7 +7743,8 @@ export function DiscoverPanel({
     radioRemote,
     radioOn,
     radioSettings.foldMode,
-    radioTurnRemote
+    radioTurnRemote,
+    radioHooks
   ])
 
   // What the unmount below does with manual changes still waiting. In a
@@ -8405,6 +8520,9 @@ export function DiscoverPanel({
     else if (action === 'random') void rerollRandomSlot(id)
     else if (action === 'duplicate') duplicateSlot(id)
     else if (action === 'adjacent') void rollAdjacentForSlot(id)
+    // radio's roles (spec anointed-stems 5): the hook toggle and bring back; dig is Task 14
+    else if (action === 'hook') toggleSlotHook(id)
+    else if (action === 'back') bringSlotHookBack(id)
   }
 
   /** The fetch/dedupe/bar/rank/pick half of a roll. Owns the
@@ -10557,7 +10675,7 @@ export function DiscoverPanel({
   // FOLD MODE'S STATUS (v2, @shared/radioFoldStatus): the line in the radio bar and each folded
   // row's readout, only while radio runs with the mode on. The next change is the rows' own count
   // (radioChangeWait), so the line says what the rows show.
-  // The rows' 16th track (the readout) exists only while the mode is on, in the rows and in the
+  // The rows' 18th track (the readout, after radio's role tracks 16-17) exists only while the mode is on, in the rows and in the
   // playhead overlay alike (discoverRowGridColumns).
   const radioFoldTrack = radioOn && radioSettings.foldMode
   const radioFoldStatusNow =
@@ -11505,14 +11623,13 @@ export function DiscoverPanel({
               favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
               maxBarLength={maxBarLength}
               onToggleLock={() => toggleLock(slot.id)}
-              // 👍's holding mark reads a hook IN (the `hook` flag is no longer set); Task 10
-              // gives the row its own hookIn prop
-              radioFlag={
-                radioHookInRow(radioHooks, slot.id)
-                  ? 'hook'
-                  : radioSlotFlagOf(radioSlotFlags, slot.id)
-              }
+              radioFlag={radioSlotFlagOf(radioSlotFlags, slot.id)}
               radioOn={radioOn}
+              hookIn={radioHookInRow(radioHooks, slot.id)}
+              hookSet={radioHookOf(radioHooks, slot.id) !== null}
+              hookAwayName={radioHookAwayNames.get(slot.id) ?? null}
+              onToggleHook={() => toggleSlotHook(slot.id)}
+              onBringHookBack={() => bringSlotHookBack(slot.id)}
               onLike={() => likeSlot(slot.id)}
               listenOnlyStars={listenOnly.has('star')}
               nearbyCreator={artistCreator}
@@ -11557,7 +11674,7 @@ export function DiscoverPanel({
               position: 'absolute',
               inset: 0,
               display: 'grid',
-              gridTemplateColumns: discoverRowGridColumns(radioFoldTrack),
+              gridTemplateColumns: discoverRowGridColumns({ radio: radioOn, fold: radioFoldTrack }),
               gridTemplateRows: '100%',
               columnGap: DISCOVER_ROW_COLUMN_GAP,
               padding: 0,
@@ -12109,22 +12226,61 @@ const DISCOVER_WAVEFORM_HEIGHT = 40
 // track gets is identical. Change the template HERE, never inline -- see
 // the long comment where the row applies it for why each track is what
 // it is.
-// 2026-10-03, radio fold v2: a 16th track after 👎, 44px, for fold mode's readout (`3½ / 16`),
+// 2026-10-03, radio fold v2: a 16th track after 👎 (the 18th since radio's role tracks, below), 44px, for fold mode's readout (`3½ / 16`),
 // only while the mode is on (discoverRowGridColumns), so it takes no width otherwise. It is the
 // last track, so every other track keeps its number either way.
 const DISCOVER_ROW_GRID_COLUMNS =
   '18px 18px 18px 18px 1fr 14px 110px 14px 1px 18px 18px 18px 18px 18px 18px'
 const DISCOVER_FOLD_READOUT_TRACK = '44px'
-/** The row template, with fold mode's readout track while the mode is on: the rows and the
- * playhead overlay both take it from here, with the same flag, so their columns stay one grid. */
-function discoverRowGridColumns(foldTrack: boolean): string {
-  return foldTrack
-    ? `${DISCOVER_ROW_GRID_COLUMNS} ${DISCOVER_FOLD_READOUT_TRACK}`
-    : DISCOVER_ROW_GRID_COLUMNS
+// 2026-10-03, radio anointed stems (planning decision 7): while radio runs, tracks 16 and 17 for
+// the row's hook and dig toggles (RadioRoleButtons), after 👎; fold's readout moves to 18, still
+// last. The radio-view spec (c3ff2dd) later moves the two buttons into its radio-role slot.
+const DISCOVER_RADIO_ROLE_TRACKS = '18px 18px'
+/** The row template, with radio's role tracks while radio runs and fold mode's readout track
+ * while the mode is on (only ever with radio on): the rows and the playhead overlay both take it
+ * from here, with the same flags, so their columns stay one grid. */
+function discoverRowGridColumns(o: { radio: boolean; fold: boolean }): string {
+  return [
+    DISCOVER_ROW_GRID_COLUMNS,
+    ...(o.radio || o.fold ? [DISCOVER_RADIO_ROLE_TRACKS] : []),
+    ...(o.fold ? [DISCOVER_FOLD_READOUT_TRACK] : [])
+  ].join(' ')
 }
 const DISCOVER_ROW_COLUMN_GAP = 8
 const DISCOVER_WAVEFORM_COLUMN = 5
 const DISCOVER_WAVEFORM_MIN_WIDTH = 140
+
+/** Radio's role toggles on a row (spec anointed-stems section 2; planning decision 7), tracks 16
+ * and 17 while radio runs: the hook (Phosphor Repeat, pressed while the row has a hook in any
+ * state; greyed on a padlocked row) and dig (Shovel, its track reserved and hidden until Task 14).
+ * One component so the radio-view redesign can move both into its radio-role slot unchanged. */
+function RadioRoleButtons({
+  hookSet,
+  locked,
+  onToggleHook
+}: {
+  hookSet: boolean
+  locked: boolean
+  onToggleHook: () => void
+}): React.JSX.Element {
+  return (
+    <>
+      <RowIconButton
+        gridColumn={16}
+        tooltip={hookSet ? RADIO_HOOK_RELEASE_TOOLTIP : RADIO_HOOK_TOOLTIP}
+        onClick={onToggleHook}
+        toggle
+        state={hookSet ? 'on' : 'off'}
+        disabled={locked && !hookSet}
+      >
+        <Repeat size={12} weight={hookSet ? 'fill' : 'regular'} />
+      </RowIconButton>
+      <RowIconButton gridColumn={17} tooltip={RADIO_DIG_TOOLTIP} onClick={() => {}} hidden>
+        <Shovel size={12} />
+      </RowIconButton>
+    </>
+  )
+}
 
 function DiscoverSlotRow({
   slot,
@@ -12138,6 +12294,11 @@ function DiscoverSlotRow({
   onToggleLock,
   radioFlag,
   radioOn,
+  hookIn,
+  hookSet,
+  hookAwayName,
+  onToggleHook,
+  onBringHookBack,
   onLike,
   listenOnlyStars,
   nearbyCreator,
@@ -12308,7 +12469,16 @@ function DiscoverSlotRow({
    * where actually needed below (the "explore nearby" popover). */
   soundSourceEndlesss: boolean
   soundSourceAudioIn: boolean
-  /** Fold mode is on: the row has its 16th track, the readout's (discoverRowGridColumns). */
+  /** Radio's hook (@shared/radioHooks) is IN on this row: 👍's holding mark. */
+  hookIn: boolean
+  /** The row has a hook in any state: its toggle (track 16) is pressed. */
+  hookSet: boolean
+  /** The away hook's stem name, shown dimmed after the readout's label (tap: bring it back);
+   * null unless its hook is away. */
+  hookAwayName: string | null
+  onToggleHook: () => void
+  onBringHookBack: () => void
+  /** Fold mode is on: the row has its 18th track, the readout's (discoverRowGridColumns). */
   foldTrack: boolean
   /** Fold mode's readout on a folded row (v2): its cycle against the loop in beats, `7 / 16`;
    * null on a straight row and while fold mode is off. The phase dot under it is moved by
@@ -12734,7 +12904,7 @@ function DiscoverSlotRow({
   // before.
   const showsAsMuted = resolvedStem !== null ? !previewing : resolveFailed
   // The one row radio holds longer, drawn on its 👍 (see that button).
-  const holding = radioOn && radioFlag === 'hook'
+  const holding = radioOn && hookIn
 
   return (
     <>
@@ -12746,7 +12916,8 @@ function DiscoverSlotRow({
           // 5 waveform (1fr), 6 spacer, 7 kind/category label + match
           // meter, 8 spacer, 9 divider, 10 skip (SkipForward, the old
           // "same kind"), 11 nearby jam, 12 any stem, 13 duplicate, 14 👍
-          // like, 15 👎 change soon. (2026-10-01, the web radio's row
+          // like, 15 👎 change soon; while radio runs 16 hook, 17 dig
+          // (RadioRoleButtons), and with fold mode 18 its readout. (2026-10-01, the web radio's row
           // buttons: the star and "hold longer" tracks became one 👍, and
           // 👍/👎 then moved together to the END of the row, after
           // duplicate -- every gridColumn renumbered in one pass each time;
@@ -12796,7 +12967,7 @@ function DiscoverSlotRow({
           // The template itself is DISCOVER_ROW_GRID_COLUMNS, shared with
           // the one-playhead overlay above the row list so the two cannot
           // drift apart (2026-09-30).
-          gridTemplateColumns: discoverRowGridColumns(foldTrack),
+          gridTemplateColumns: discoverRowGridColumns({ radio: radioOn, fold: foldTrack }),
           alignItems: 'center',
           columnGap: DISCOVER_ROW_COLUMN_GAP,
           // No horizontal padding: the overlay relies on the rows' column
@@ -13266,6 +13437,24 @@ function DiscoverSlotRow({
                 >
                   {[radioReadout.label, radioReadout.age].filter(Boolean).join(' · ')}
                 </span>
+                {hookAwayName !== null && (
+                  <span
+                    data-hook-away
+                    data-tooltip={RADIO_HOOK_BRING_BACK_TOOLTIP}
+                    onClick={onBringHookBack}
+                    style={{
+                      flex: '0 1 auto',
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      color: 'var(--ra-text-4)',
+                      pointerEvents: 'auto',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {hookAwayName}
+                  </span>
+                )}
                 <span style={{ flex: 'none', display: 'flex', gap: 6 }}>
                   {radioReadout.flash !== null && (
                     <span style={{ opacity: radioFlashOpacity(radioReadout.flash.t) }}>
@@ -13550,12 +13739,15 @@ function DiscoverSlotRow({
             row's cycle against the loop in beats, and under it the phase dot's track -- the dot
             at its left end on the downbeat, where it sits when the row realigns. Hidden with
             `visibility` on a straight row, so the track stays. Only while fold mode is on, as the
-            track is (discoverRowGridColumns). */}
+            track is (discoverRowGridColumns). Track 18 since the role buttons took 16-17. */}
+        {(radioOn || foldTrack) && (
+          <RadioRoleButtons hookSet={hookSet} locked={slot.locked} onToggleHook={onToggleHook} />
+        )}
         {foldTrack && (
           <div
             data-tooltip={foldReadout !== null ? 'its cycle against the loop, in beats' : undefined}
             style={{
-              gridColumn: 16,
+              gridColumn: 18,
               display: 'flex',
               flexDirection: 'column',
               alignItems: 'flex-end',

@@ -105,6 +105,22 @@ describe('remotePage slots', () => {
   })
 })
 
+describe('remotePage radio roles', () => {
+  it('offers the hook on the action sheet, and back for an away hook, while radio runs', () => {
+    expect(REMOTE_PAGE_HTML).toContain('"a":"hook","l":"hook","h":"leaves, comes back"')
+    expect(REMOTE_PAGE_HTML).toContain('"a":"hook","l":"release"')
+    expect(REMOTE_PAGE_HTML).toContain('"a":"back","l":"back","h":"next phrase"')
+    expect(REMOTE_PAGE_HTML).toContain(
+      "if (hook === 'away' || hook === 'resting') acts.push(ROLE_ACTS.back)"
+    )
+    expect(REMOTE_PAGE_HTML).toContain('if (radioAhead) {')
+  })
+
+  it("writes a row's role words after its stem name", () => {
+    expect(REMOTE_PAGE_HTML).toContain("role.textContent = ' · ' + slot.role.words")
+  })
+})
+
 describe('remotePage empty state', () => {
   it('invites the first add rather than reporting emptiness', () => {
     expect(REMOTE_PAGE_HTML).toContain('pick what you want below, then add it')
@@ -161,6 +177,9 @@ describe('remotePage copy', () => {
       '2 bars',
       'turn',
       'turning',
+      'hook',
+      'release',
+      'back',
       ...TURNAROUND_MOVES.map((m) => TURNAROUND_MOVE_LABEL[m])
     ]
     for (const label of [...buttonLabels, ...runtime]) {

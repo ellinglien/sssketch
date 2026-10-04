@@ -168,6 +168,15 @@ const STEM_ACTIONS = [
   { a: 'duplicate', l: 'duplicate', h: 'one more row' }
 ]
 
+/** Radio's role actions (spec 2026-10-03-radio-anointed-stems-design 5), offered after the four
+ * above only while radio runs: the hook toggle (`release` on a row with a hook), and `back` on a
+ * row whose hook is away. Dig joins with the desktop's dig (Task 14). */
+const ROLE_ACTIONS = {
+  hook: { a: 'hook', l: 'hook', h: 'leaves, comes back' },
+  release: { a: 'hook', l: 'release', h: 'let the hook go' },
+  back: { a: 'back', l: 'back', h: 'next phrase' }
+}
+
 /** Radio's turn chips (2026-10-02): `m` is the wire value (the planner's TurnaroundMove, which
  * POST /api/turn checks), `l` the chip's label -- the desktop's, from the same table. */
 const TURN_CHIPS = TURNAROUND_MOVES.map((move) => ({ m: move, l: TURNAROUND_MOVE_LABEL[move] }))
@@ -383,6 +392,7 @@ h1 { font-size: 15px; font-weight: 400; margin: 0 0 2px; }
  * without it the 1fr column would be sized to that rather than to what is
  * left of the row. */
 .row .stem { grid-area: wave; min-width: 0; }
+.row .name .role { color: #8a8a8a; }
 .row .name {
   grid-area: name;
   /* The row has no right padding of its own -- x is flush with the border
@@ -2089,6 +2099,13 @@ input {
       var name = document.createElement('span')
       name.className = 'name'
       name.textContent = slot.stemName || '…'
+      // radio's role words (hook · back in 16), after the name, dimmed
+      if (slot.role && slot.role.words) {
+        var role = document.createElement('span')
+        role.className = 'role'
+        role.textContent = ' · ' + slot.role.words
+        name.appendChild(role)
+      }
 
       var stem = document.createElement('span')
       stem.className = 'stem'
@@ -2193,6 +2210,7 @@ input {
 
   // --- the stem action sheet ---------------------------------------------
   var ACTS = ${JSON.stringify(STEM_ACTIONS)}
+  var ROLE_ACTS = ${JSON.stringify(ROLE_ACTIONS)}
   var actSheetEl = document.getElementById('act-sheet')
   var actsEl = document.getElementById('acts')
   var actSlot = null
@@ -2216,7 +2234,14 @@ input {
     document.getElementById('act-kind').style.color = rowColor(slot)
     document.getElementById('act-name').textContent = slot.stemName || '…'
     actsEl.innerHTML = ''
-    ACTS.forEach(function (act) {
+    // radio's roles, only while radio runs
+    var acts = ACTS.slice()
+    if (radioAhead) {
+      var hook = slot.role ? slot.role.hook : null
+      acts.push(hook ? ROLE_ACTS.release : ROLE_ACTS.hook)
+      if (hook === 'away' || hook === 'resting') acts.push(ROLE_ACTS.back)
+    }
+    acts.forEach(function (act) {
       var b = document.createElement('button')
       b.className = 'act'
       b.appendChild(document.createTextNode(act.l))
@@ -2230,7 +2255,13 @@ input {
         // adjacent is not a roll -- it swaps in a stem from the jam next
         // door, so saying "rolling" would describe the wrong thing
         // happening. duplicate does not roll either; it clones.
-        flash(act.a === 'duplicate' ? 'copied' : act.a === 'adjacent' ? 'nearby' : 'rolling')
+        flash(
+          act.a === 'duplicate' ? 'copied'
+            : act.a === 'adjacent' ? 'nearby'
+              : act.a === 'hook' ? (act.l === 'release' ? 'released' : 'hooked')
+                : act.a === 'back' ? 'coming back'
+                  : 'rolling'
+        )
         closeActionSheet()
       })
       actsEl.appendChild(b)
