@@ -7,6 +7,7 @@ import {
   RADIO_STRIP_GROUPS,
   RADIO_STRIP_HINTS,
   RADIO_STRIP_LEGACY_KEYS,
+  RADIO_STRIP_SUBTITLES,
   radioStripModel,
   soundDialPosition,
   soundDialValue,
@@ -101,10 +102,41 @@ describe('radioStripModel: nothing hidden', () => {
 })
 
 describe('radioStripModel: groups and order', () => {
-  it('has the six groups in order, each captioned with its name', () => {
+  it('has the seven groups in order, each captioned with its name', () => {
     const groups = radioStripModel(settings(), CTX)
-    expect(groups.map((g) => g.id)).toEqual(['play', 'picks', 'shape', 'fold', 'sound', 'mix'])
+    expect(groups.map((g) => g.id)).toEqual([
+      'play',
+      'picks',
+      'shape',
+      'moves',
+      'fold',
+      'sound',
+      'mix'
+    ])
     expect(groups.map((g) => g.caption)).toEqual([...RADIO_STRIP_GROUPS])
+  })
+
+  it('places each group on the top line, the live bar or the columns, with its subtitle', () => {
+    const groups = radioStripModel(settings(), CTX)
+    expect(groups.map((g) => [g.id, g.place])).toEqual([
+      ['play', 'live'],
+      ['picks', 'columns'],
+      ['shape', 'columns'],
+      ['moves', 'columns'],
+      ['fold', 'columns'],
+      ['sound', 'columns'],
+      ['mix', 'top']
+    ])
+    expect(RADIO_STRIP_SUBTITLES).toEqual({
+      play: null,
+      picks: 'which stems come up',
+      shape: 'how long things last',
+      moves: 'what happens between',
+      fold: 'how far it drifts',
+      sound: 'the output',
+      mix: null
+    })
+    for (const g of groups) expect(g.subtitle).toBe(RADIO_STRIP_SUBTITLES[g.id])
   })
 
   it('places every control in its group, in reading order', () => {
@@ -112,7 +144,7 @@ describe('radioStripModel: groups and order', () => {
       settings({ density: 'off', turnarounds: 'rare', foldMode: true }),
       CTX
     )
-    expect(ids(g, 'play')).toEqual(['tempo', 'pace', 'skip', 'new-bed'])
+    expect(ids(g, 'play')).toEqual(['tempo', 'pace', 'skip', 'new-bed', 'turn', 'level'])
     expect(ids(g, 'picks')).toEqual([
       'faves',
       'source',
@@ -123,19 +155,10 @@ describe('radioStripModel: groups and order', () => {
       'channels',
       'turnover'
     ])
-    expect(ids(g, 'shape')).toEqual([
-      'phrase',
-      'loop-end',
-      'transitions',
-      'turnarounds',
-      'moves',
-      'depth',
-      'builds',
-      'turn'
-    ])
+    expect(ids(g, 'shape')).toEqual(['phrase', 'loop-end', 'transitions', 'builds'])
+    expect(ids(g, 'moves')).toEqual(['turnarounds', 'moves', 'depth'])
     expect(ids(g, 'fold')).toEqual(['fold', 'bend', 'mismatch', 'seed'])
     expect(ids(g, 'sound')).toEqual([
-      'level',
       'reverb',
       'filter',
       'res',
@@ -146,36 +169,57 @@ describe('radioStripModel: groups and order', () => {
     ])
     expect(ids(g, 'mix')).toEqual([
       'similar-all',
-      'keep',
       'fetch-hearts',
       'add-to-shelf',
-      'add-to-timeline'
+      'add-to-timeline',
+      'keep'
     ])
   })
 })
 
-describe('radioStripModel: visibility', () => {
-  it('shows channels only with density off', () => {
-    expect(control(radioStripModel(settings({ density: 'off' }), CTX), 'channels')).toBeDefined()
-    expect(control(radioStripModel(settings({ density: 'arc' }), CTX), 'channels')).toBeUndefined()
-  })
-
-  it('shows moves and depth only while turnarounds is not off', () => {
-    for (const t of RADIO_TURNAROUNDS_OPTIONS) {
-      const g = radioStripModel(settings({ turnarounds: t }), CTX)
-      expect(control(g, 'moves') !== undefined).toBe(t !== 'off')
-      expect(control(g, 'depth') !== undefined).toBe(t !== 'off')
+describe('radioStripModel: greyed, not omitted', () => {
+  it('has every control present in every state', () => {
+    const first = radioStripModel(STATES[0], CTX).map((g) => [g.id, g.controls.map((c) => c.id)])
+    for (const s of STATES) {
+      expect(radioStripModel(s, CTX).map((g) => [g.id, g.controls.map((c) => c.id)])).toEqual(first)
     }
   })
 
-  it('shows bend, mismatch and the seed only with fold on; the switch always', () => {
-    expect(ids(radioStripModel(settings({ foldMode: false }), CTX), 'fold')).toEqual(['fold'])
-    expect(ids(radioStripModel(settings({ foldMode: true }), CTX), 'fold')).toEqual([
-      'fold',
-      'bend',
-      'mismatch',
-      'seed'
-    ])
+  it('greys channels unless density is off', () => {
+    for (const d of RADIO_DENSITY_OPTIONS) {
+      const c = control(radioStripModel(settings({ density: d }), CTX), 'channels')
+      expect(c?.disabled, d).toBe(d !== 'off')
+      expect(c?.tooltip === 'with density off', d).toBe(d !== 'off')
+    }
+  })
+
+  it('greys families and depth while turnarounds is off', () => {
+    for (const t of RADIO_TURNAROUNDS_OPTIONS) {
+      const g = radioStripModel(settings({ turnarounds: t }), CTX)
+      for (const id of ['moves', 'depth']) {
+        expect(control(g, id)?.disabled, `${id} ${t}`).toBe(t === 'off')
+        expect(control(g, id)?.tooltip?.endsWith('· with turnarounds on'), `${id} ${t}`).toBe(
+          t === 'off'
+        )
+      }
+    }
+  })
+
+  it('greys bend, mismatch and the seed with fold off; the switch never', () => {
+    for (const on of [false, true]) {
+      const g = radioStripModel(settings({ foldMode: on }), CTX)
+      expect(control(g, 'fold')?.disabled).toBe(false)
+      for (const id of ['bend', 'mismatch', 'seed']) {
+        expect(control(g, id)?.disabled, id).toBe(!on)
+        expect(control(g, id)?.tooltip?.endsWith('· with fold on'), id).toBe(!on)
+      }
+    }
+  })
+
+  it('keeps a disabled chip control carrying its patches', () => {
+    const c = control(radioStripModel(settings({ density: 'arc' }), CTX), 'channels')
+    if (c?.kind !== 'chips') throw new Error('channels')
+    expect(c.chips.map((x) => x.patch.channels)).toEqual([...RADIO_CHANNEL_OPTIONS])
   })
 
   it('greys the master dials while nothing sounds, and nothing else', () => {
@@ -183,7 +227,19 @@ describe('radioStripModel: visibility', () => {
     for (const id of ['level', 'reverb', 'filter', 'res', 'filter-mode']) {
       expect(control(g, id)?.disabled, id).toBe(true)
     }
-    expect(control(g, 'pace')?.disabled).toBe(false)
+    const off = (gs: RadioStripGroup[]): string[] =>
+      controls(gs)
+        .filter((c) => c.disabled)
+        .map((c) => c.id)
+    const loud = off(radioStripModel(settings(), CTX))
+    expect(off(g).filter((id) => !loud.includes(id))).toEqual([
+      'level',
+      'reverb',
+      'filter',
+      'res',
+      'filter-mode'
+    ])
+    expect(loud.filter((id) => !off(g).includes(id))).toEqual([])
     expect(control(radioStripModel(settings(), CTX), 'level')?.disabled).toBe(false)
   })
 
@@ -238,9 +294,10 @@ describe('radioStripModel: options come from the shared constants', () => {
     }
   })
 
-  it('labels loop end and phrase as the menu did', () => {
+  it('labels loop end (in bars, the label says so) and phrase', () => {
+    expect(control(all, 'loop-end')?.label).toBe('loop end · bars')
     expect(chipsOf(all, 'loop-end').map((c) => c.label)).toEqual(
-      RADIO_LOOP_END_OPTIONS.map((n) => (n === 0 ? 'always' : `${n} bars`))
+      RADIO_LOOP_END_OPTIONS.map((n) => (n === 0 ? 'always' : String(n)))
     )
     expect(chipsOf(all, 'phrase').map((c) => c.label)).toEqual(
       RADIO_PHRASE_OPTIONS.map((n) => (n === 0 ? 'loop' : `${n} bars`))
@@ -277,11 +334,20 @@ describe('radioStripModel: words', () => {
     ...(c.tooltip !== undefined ? [c.tooltip] : []),
     ...(c.kind === 'chips' ? c.chips.map((x) => x.label) : [])
   ]
+  it('labels source with its ends, in words (no arrow glyph)', () => {
+    expect(control(radioStripModel(settings(), CTX), 'source')?.label).toBe(
+      'source · endlesss - other'
+    )
+  })
 
   it('is lowercase, with no emoji and no exclamation mark', () => {
     for (const s of STATES) {
       for (const g of radioStripModel(s, CTX)) {
-        for (const w of [g.caption, ...g.controls.flatMap(words)]) {
+        for (const w of [
+          g.caption,
+          ...(g.subtitle !== null ? [g.subtitle] : []),
+          ...g.controls.flatMap(words)
+        ]) {
           expect(w, w).toBe(w.toLowerCase())
           expect(w, w).not.toMatch(/!|\p{Extended_Pictographic}/u)
         }

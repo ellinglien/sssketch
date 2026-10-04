@@ -1,6 +1,7 @@
 // src/shared/radioStripModel.ts -- the radio view's strip (spec
-// 2026-10-03-sssketch-radio-view-design section 1.3): every radio setting out front, in six
-// groups, while radio runs. Pure, as soundPanelModel is for the sound panel: RadioStrip.tsx draws
+// 2026-10-03-sssketch-radio-view-design section 1.3): every radio setting out front, in seven
+// groups (design pass 2026-10-04: play in the live bar, mix on the top line, the rest in columns),
+// while radio runs. Pure, as soundPanelModel is for the sound panel: RadioStrip.tsx draws
 // these groups as they come, so which control is in which group, in what order, when it shows,
 // what it says, and which RadioSettings patch a choice makes are decided (and tested) here.
 //
@@ -16,9 +17,9 @@
 // from its own state (the tempo field, the dials it already owns, the artist picker, the mix
 // actions); the model only places it and says what it sets.
 //
-// VISIBILITY is omission: a control that does not show is not in its group. Channels shows only
-// with density `off`; moves and depth only while turnarounds is not `off`; bend, mismatch and the
-// seed only with fold on (Elling, 2026-10-03: hidden as before, not disabled).
+// GREYED, NOT HIDDEN (Elling, 2026-10-04): every control is present in every state. One that does
+// not apply is `disabled`, with its tooltip saying what it needs: channels (with density off),
+// families and depth (with turnarounds on), bend, mismatch and the seed (with fold on).
 //
 // THE HINTS. The running radio menu's hint paragraph went with the menu; each of its sentences is
 // now the tooltip of the control it explains (RADIO_STRIP_HINTS), every one on exactly one control.
@@ -46,17 +47,43 @@ import { FAVES_LABEL, FAVES_TOOLTIP } from './discoverFaves'
 import { soundPanelModel, type SoundSliderControl } from './soundPanelModel'
 import type { DeepReadonly, SoundSettings } from './radioSound'
 
-export type RadioStripGroupId = 'play' | 'picks' | 'shape' | 'fold' | 'sound' | 'mix'
+export type RadioStripGroupId = 'play' | 'picks' | 'shape' | 'moves' | 'fold' | 'sound' | 'mix'
 
 /** The groups in order; each group's caption is its id. */
 export const RADIO_STRIP_GROUPS: readonly RadioStripGroupId[] = [
   'play',
   'picks',
   'shape',
+  'moves',
   'fold',
   'sound',
   'mix'
 ]
+
+/** Where the radio view draws a group: `top` on the top line, `live` in the live bar under the
+ * rows (the controls that play), `columns` in the quiet shaping columns. */
+export type RadioStripPlace = 'top' | 'live' | 'columns'
+
+/** Each group's one-line subtitle in the columns; play and mix have none. */
+export const RADIO_STRIP_SUBTITLES: Readonly<Record<RadioStripGroupId, string | null>> = {
+  play: null,
+  picks: 'which stems come up',
+  shape: 'how long things last',
+  moves: 'what happens between',
+  fold: 'how far it drifts',
+  sound: 'the output',
+  mix: null
+}
+
+const RADIO_STRIP_PLACE: Readonly<Record<RadioStripGroupId, RadioStripPlace>> = {
+  play: 'live',
+  picks: 'columns',
+  shape: 'columns',
+  moves: 'columns',
+  fold: 'columns',
+  sound: 'columns',
+  mix: 'top'
+}
 
 export type RadioSettingKey = keyof RadioSettings
 
@@ -105,6 +132,8 @@ export type RadioStripControl =
 export interface RadioStripGroup {
   id: RadioStripGroupId
   caption: string
+  place: RadioStripPlace
+  subtitle: string | null
   controls: RadioStripControl[]
 }
 
@@ -154,7 +183,7 @@ function tip(...parts: readonly string[]): string {
 
 /** The `loop end` chips: 0 is every layer waiting for the loop top. */
 export function radioLoopEndLabel(bars: number): string {
-  return bars === 0 ? 'always' : `${bars} bars`
+  return bars === 0 ? 'always' : String(bars)
 }
 
 /** The `phrase` chips: 0 is no phrase grid, every boundary the loop offers. */
@@ -257,7 +286,9 @@ export function radioStripModel(
       patch: (v) => ({ paceLevel: v })
     },
     panel('skip', 'skip', { tooltip: 'skip a row' }),
-    panel('new-bed', 'new bed', { tooltip: RADIO_NEW_BED_TOOLTIP })
+    panel('new-bed', 'new bed', { tooltip: RADIO_NEW_BED_TOOLTIP }),
+    panel('turn', 'turn', { tooltip: 'turn at the top' }),
+    panel('level', 'level', { tooltip: 'whole mix level', disabled: !ctx.sounding })
   ]
 
   const picks: RadioStripControl[] = [
@@ -266,7 +297,7 @@ export function radioStripModel(
       sets: ['faves'],
       dimmed: ctx.artistMode
     }),
-    panel('source', 'source', { tooltip: 'other clockwise' }),
+    panel('source', 'source · endlesss - other', { tooltip: 'other clockwise' }),
     panel('matching', 'matching', { tooltip: 'more matching clockwise' }),
     panel('artist', 'artist', { tooltip: 'whose stems discover plays' }),
     panel('my-sounds', 'my sounds', { disabled: !ctx.hasUsername || ctx.artistMode }),
@@ -284,23 +315,20 @@ export function radioStripModel(
         (d) => ({ density: d })
       )
     },
-    ...(density === 'off'
-      ? [
-          {
-            kind: 'chips' as const,
-            id: 'channels',
-            label: 'channels',
-            sets: ['channels'] as const,
-            disabled: false,
-            chips: chips(
-              RADIO_CHANNEL_OPTIONS,
-              (n) => String(n),
-              (n) => settings.channels === n,
-              (n) => ({ channels: n })
-            )
-          }
-        ]
-      : []),
+    {
+      kind: 'chips',
+      id: 'channels',
+      label: 'channels',
+      ...(density !== 'off' ? { tooltip: 'with density off' } : {}),
+      sets: ['channels'],
+      disabled: density !== 'off',
+      chips: chips(
+        RADIO_CHANNEL_OPTIONS,
+        (n) => String(n),
+        (n) => settings.channels === n,
+        (n) => ({ channels: n })
+      )
+    },
     {
       kind: 'chips',
       id: 'turnover',
@@ -335,7 +363,7 @@ export function radioStripModel(
     {
       kind: 'chips',
       id: 'loop-end',
-      label: 'loop end',
+      label: 'loop end · bars',
       tooltip: tip(...RADIO_STRIP_HINTS.loopEnd),
       sets: ['loopEndOverBars'],
       disabled: false,
@@ -362,6 +390,21 @@ export function radioStripModel(
     },
     {
       kind: 'chips',
+      id: 'builds',
+      label: 'builds',
+      tooltip: RADIO_BUILDS_TOOLTIP,
+      sets: ['sizedBuilds'],
+      disabled: false,
+      chips: [
+        { label: 'sized', on: sizedBuilds, patch: { sizedBuilds: true } },
+        { label: 'off', on: !sizedBuilds, patch: { sizedBuilds: false } }
+      ]
+    }
+  ]
+
+  const moves: RadioStripControl[] = [
+    {
+      kind: 'chips',
       id: 'turnarounds',
       label: 'turnarounds',
       tooltip: tip(...RADIO_STRIP_HINTS.turnarounds),
@@ -374,51 +417,34 @@ export function radioStripModel(
         (t) => ({ turnarounds: t })
       )
     },
-    ...(turnaroundsOn
-      ? [
-          {
-            kind: 'chips' as const,
-            id: 'moves',
-            label: 'moves',
-            tooltip: 'which moves',
-            sets: ['turnaroundMoves'] as const,
-            disabled: false,
-            chips: chips(
-              TURNAROUND_FAMILIES,
-              (f) => f,
-              (f) => settings.turnaroundMoves.includes(f),
-              (f) => ({ turnaroundMoves: toggleTurnaroundFamily(settings.turnaroundMoves, f) })
-            )
-          },
-          {
-            kind: 'chips' as const,
-            id: 'depth',
-            label: 'depth',
-            tooltip: 'how far',
-            sets: ['turnaroundDepth'] as const,
-            disabled: false,
-            chips: chips(
-              TURNAROUND_DEPTH_OPTIONS,
-              (d) => d,
-              (d) => settings.turnaroundDepth === d,
-              (d) => ({ turnaroundDepth: d })
-            )
-          }
-        ]
-      : []),
     {
       kind: 'chips',
-      id: 'builds',
-      label: 'builds',
-      tooltip: RADIO_BUILDS_TOOLTIP,
-      sets: ['sizedBuilds'],
-      disabled: false,
-      chips: [
-        { label: 'sized', on: sizedBuilds, patch: { sizedBuilds: true } },
-        { label: 'off', on: !sizedBuilds, patch: { sizedBuilds: false } }
-      ]
+      id: 'moves',
+      label: 'families',
+      tooltip: turnaroundsOn ? 'which moves' : 'which moves · with turnarounds on',
+      sets: ['turnaroundMoves'],
+      disabled: !turnaroundsOn,
+      chips: chips(
+        TURNAROUND_FAMILIES,
+        (f) => f,
+        (f) => settings.turnaroundMoves.includes(f),
+        (f) => ({ turnaroundMoves: toggleTurnaroundFamily(settings.turnaroundMoves, f) })
+      )
     },
-    panel('turn', 'turn', { tooltip: 'turn at the top' })
+    {
+      kind: 'chips',
+      id: 'depth',
+      label: 'depth',
+      tooltip: turnaroundsOn ? 'how far' : 'how far · with turnarounds on',
+      sets: ['turnaroundDepth'],
+      disabled: !turnaroundsOn,
+      chips: chips(
+        TURNAROUND_DEPTH_OPTIONS,
+        (d) => d,
+        (d) => settings.turnaroundDepth === d,
+        (d) => ({ turnaroundDepth: d })
+      )
+    }
   ]
 
   const fold: RadioStripControl[] = [
@@ -432,40 +458,42 @@ export function radioStripModel(
       on: foldOn,
       patch: (on) => ({ foldMode: on })
     },
-    ...(foldOn
-      ? [
-          {
-            kind: 'slider' as const,
-            id: 'bend',
-            label: 'bend',
-            tooltip: 'how far layers bend off the beat',
-            sets: ['fold'] as const,
-            disabled: false,
-            value: settings.fold,
-            patch: (v: number) => ({ fold: v })
-          },
-          {
-            kind: 'slider' as const,
-            id: 'mismatch',
-            label: 'mismatch',
-            tooltip: 'how unlike the rest new layers are',
-            sets: ['clash'] as const,
-            disabled: false,
-            value: settings.clash,
-            patch: (v: number) => ({ clash: v })
-          },
-          {
-            kind: 'seed' as const,
-            id: 'seed',
-            label: 'seed',
-            tooltip: 'same seed, same folding. any text',
-            sets: ['foldSeed'] as const,
-            disabled: false,
-            value: settings.foldSeed,
-            patch: (seed: string) => ({ foldSeed: seed })
-          }
-        ]
-      : [])
+    {
+      kind: 'slider',
+      id: 'bend',
+      label: 'bend',
+      tooltip: foldOn
+        ? 'how far layers bend off the beat'
+        : 'how far layers bend off the beat · with fold on',
+      sets: ['fold'],
+      disabled: !foldOn,
+      value: settings.fold,
+      patch: (v: number) => ({ fold: v })
+    },
+    {
+      kind: 'slider',
+      id: 'mismatch',
+      label: 'mismatch',
+      tooltip: foldOn
+        ? 'how unlike the rest new layers are'
+        : 'how unlike the rest new layers are · with fold on',
+      sets: ['clash'],
+      disabled: !foldOn,
+      value: settings.clash,
+      patch: (v: number) => ({ clash: v })
+    },
+    {
+      kind: 'seed',
+      id: 'seed',
+      label: 'seed',
+      tooltip: foldOn
+        ? 'same seed, same folding. any text'
+        : 'same seed, same folding. any text · with fold on',
+      sets: ['foldSeed'],
+      disabled: !foldOn,
+      value: settings.foldSeed,
+      patch: (seed: string) => ({ foldSeed: seed })
+    }
   ]
 
   const soundControls = soundPanelModel(ctx.sound).flatMap((r) => r.controls)
@@ -476,7 +504,6 @@ export function radioStripModel(
   }
   const quiet = !ctx.sounding
   const sound: RadioStripControl[] = [
-    panel('level', 'level', { tooltip: 'whole mix level', disabled: quiet }),
     panel('reverb', 'reverb', { tooltip: 'whole mix reverb', disabled: quiet }),
     panel('filter', 'filter', { tooltip: 'whole mix filter', disabled: quiet }),
     panel('res', 'res', { tooltip: 'filter resonance', disabled: quiet }),
@@ -488,21 +515,28 @@ export function radioStripModel(
 
   const mix: RadioStripControl[] = [
     panel('similar-all', 'similar all'),
-    panel('keep', 'keep', { tooltip: 'keep this group' }),
     panel('fetch-hearts', 'fetch hearts', { tooltip: 'fetch radio hearts' }),
     panel('add-to-shelf', 'add to shelf'),
-    panel('add-to-timeline', 'add to timeline')
+    panel('add-to-timeline', 'add to timeline'),
+    panel('keep', 'keep', { tooltip: 'keep this group' })
   ]
 
   const byId: Record<RadioStripGroupId, RadioStripControl[]> = {
     play,
     picks,
     shape,
+    moves,
     fold,
     sound,
     mix
   }
-  return RADIO_STRIP_GROUPS.map((id) => ({ id, caption: id, controls: byId[id] }))
+  return RADIO_STRIP_GROUPS.map((id) => ({
+    id,
+    caption: id,
+    place: RADIO_STRIP_PLACE[id],
+    subtitle: RADIO_STRIP_SUBTITLES[id],
+    controls: byId[id]
+  }))
 }
 
 /** A 0..100 strip dial's position for a sound panel slider's value. */
