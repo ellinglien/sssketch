@@ -1,10 +1,15 @@
 // src/renderer/src/components/RadioStrip.tsx
 //
-// The radio view's strip (spec 2026-10-03-sssketch-radio-view-design section 1.3): every radio
-// setting out front while radio runs, in the groups @shared/radioStripModel decides (which
-// control, in what order, when it shows, what it says, what it sets). This file only draws them.
-// Values and callbacks only: every handler is DiscoverPanel's own, passed in bundles, and every
-// panel control is the element the header or the add row draws, with its look.
+// The radio view's controls (spec 2026-10-03-sssketch-radio-view-design section 1.3; design pass
+// 2026-10-04): every radio setting out front while radio runs, in the groups
+// @shared/radioStripModel decides (which control, in what order, where it is drawn, what it says,
+// what it sets). This file only draws them, in three places:
+//   RadioMixActions    the `mix` group, on the top line (RadioTopLine), keep emphasised;
+//   RadioLiveBar       the `play` group, 36px, raised and sticky under the rows: tempo, pace,
+//                      skip, new bed, fire now, level;
+//   RadioShapingColumns picks, shape, moves, fold and sound, five quiet titled columns of 26px
+//                      controls. A control that does not apply is greyed, never hidden.
+// Values and callbacks only: every handler is DiscoverPanel's own, passed in bundles.
 import { useState } from 'react'
 import { newFoldSeed } from '@shared/radioFold'
 import { DEFAULT_SOUND_SETTINGS, type SoundSettingsPatch } from '@shared/radioSound'

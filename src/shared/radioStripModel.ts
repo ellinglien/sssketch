@@ -5,11 +5,12 @@
 // these groups as they come, so which control is in which group, in what order, when it shows,
 // what it says, and which RadioSettings patch a choice makes are decided (and tested) here.
 //
-// THE GROUPS, in order: play (tempo, pace, skip, new bed), picks (faves, source, matching,
-// artist, my sounds, density, channels, turnover), shape (phrase, loop end, transitions,
-// turnarounds, moves, depth, builds, turn), fold (the switch; bend, mismatch, seed), sound
-// (level, reverb, filter, res, filter mode; saturation, pump, echo), mix (similar all, keep,
-// fetch hearts, add to shelf, add to timeline).
+// THE GROUPS, in order, each with a `place` (top line, live bar, or columns) and a subtitle:
+// play (live: tempo, pace, skip, new bed, turn, level), picks (columns: faves, source, matching,
+// artist, my sounds, density, channels, turnover), shape (phrase, loop end, transitions, builds),
+// moves (turnarounds, families, depth), fold (the switch; bend, mismatch, seed), sound (reverb,
+// filter, res, filter mode; saturation, pump, echo), mix (top: similar all, fetch hearts, add to
+// shelf, add to timeline, keep).
 //
 // THE KINDS. `chips`, `slider`, `switch` and `seed` are RadioSettings controls and carry their
 // patches. `sound` carries the sound panel's own slider control (soundPanelModel), so its greyed

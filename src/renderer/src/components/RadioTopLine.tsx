@@ -2,8 +2,9 @@
 //
 // The radio view's top line (spec 2026-10-03-sssketch-radio-view-design section 1.1; the web
 // radio's `.top`): while radio runs, Discover's two header rows become this one sticky line.
-// Left, play/stop and `radio` (the stop) with its interval line; middle, the readout's status line,
-// the phrase ruler and fold's status line; right, undo and redo. Values and callbacks only.
+// Left, play/stop and `radio` (the stop) with its interval line inside its bottom edge; then the
+// readout (status line, phrase ruler, fold's line); then the mix actions (RadioMixActions, passed
+// in: they act on what is playing); right, undo and redo. Values and callbacks only.
 import type { ReactNode } from 'react'
 import { RADIO_VIEW_FRAME } from './discoverRowGrid'
 import { radioRulerCells, type RadioReadout } from '@shared/radioReadout'

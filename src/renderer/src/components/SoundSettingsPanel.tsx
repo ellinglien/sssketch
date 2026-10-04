@@ -64,7 +64,7 @@ function buttonStyle(disabled?: boolean): React.CSSProperties {
   }
 }
 
-/** The radio chip (RadioControls' StripChip): a selected chip is a brighter border and ink, never a colour. */
+/** The radio chip (once RadioControls' StripChip, now its Segmented): a selected chip is a brighter border and ink, never a colour. */
 function Chip({
   label,
   on,
