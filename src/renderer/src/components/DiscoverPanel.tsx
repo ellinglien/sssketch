@@ -159,9 +159,11 @@ import {
   DEFAULT_FAVES,
   FAVES_LABEL,
   FAVES_TOOLTIP,
+  NO_FAVE_FITS,
   favesBoostScale,
   favesDraw
 } from '@shared/discoverFaves'
+import { shouldFlickerLanding, type RadioLandingSource } from '@shared/radioLanding'
 import {
   NO_RADIO_SLOT_FLAGS,
   forgetRadioSlotFlagOnChange,
@@ -2860,6 +2862,18 @@ export function DiscoverPanel({
   // pattern. stopRadio also sets it synchronously on switch-off, so a
   // stop takes effect before the next tick rather than a render later.
   const radioOnRef = useRef(false)
+  // THE LANDING FLICKER (radio view plan Task 12, spec 2): when the last flicker was, and how many
+  // there have been (the strip's `skip` is keyed by the count, so each one restarts it).
+  const radioLandingAtRef = useRef<number | null>(null)
+  const [radioSkipFlicker, setRadioSkipFlicker] = useState(0)
+  /** The strip's `skip` flickers once per landing moment (@shared/radioLanding). */
+  function noteRadioLanding(source: RadioLandingSource): void {
+    if (!radioOnRef.current) return
+    const at = performance.now()
+    if (!shouldFlickerLanding(radioLandingAtRef.current, at, source)) return
+    radioLandingAtRef.current = at
+    setRadioSkipFlicker((n) => n + 1)
+  }
   useEffect(() => {
     radioOnRef.current = radioOn
   }, [radioOn])
@@ -6779,6 +6793,18 @@ export function DiscoverPanel({
       clearRadioGesture()
       void Promise.resolve().then(() => {
         if (!radioOnRef.current) return
+        // The strip's flicker, here in the microtask (a setState) rather than the effect body:
+        // radio's change, else a hook's exit or return, else the arc's row, else a manual change
+        // that waited for the top. A Cmd change commits elsewhere and never flickers.
+        noteRadioLanding(
+          led !== null
+            ? 'radio'
+            : manualToLand.some(([, m]) => m.hook !== undefined)
+              ? 'hook'
+              : manualToLand.some(([slotId]) => arcAddingRef.current?.slotId === slotId)
+                ? 'arc'
+                : 'manual-wait'
+        )
         // Every arrival curve landing at this wrap, radio's and the manual
         // ones, armed together once the commits below have happened.
         const arriving: RadioGesture[] = []
@@ -7069,6 +7095,7 @@ export function DiscoverPanel({
       )
       void Promise.resolve().then(() => {
         if (!radioOnRef.current) return
+        noteRadioLanding('course')
         radioTraceBegin(boundaryBars, bpmRef.current, 'course-change') // TEMP
         for (const { slotId, pick } of batch) {
           // A manual change just landed on this row at this same wrap, and
@@ -8855,6 +8882,16 @@ export function DiscoverPanel({
       // this kind or source, or all already on other rows) it rolls as usual and says so. Off in
       // artist mode, where the dial is dimmed: your stars are not among the artist's stems.
       const faves = f.artist === undefined ? favesRef.current : 0
+      // `no fave fits` / `no near fits` flash on the row while radio runs, as on the web (spec 2):
+      // the readout's flash path shows them. Nothing about the pick changes.
+      const flashPickFallback = (word: string, tag: string): void => {
+        if (!radioOnRef.current) return
+        const now = radioPlayRef.current.startBars + (radioClockRef.current?.lastPos ?? 0)
+        radioFlashLogRef.current = [
+          ...radioFlashLogRef.current,
+          { rowId: id, word, at: now, key: `${tag}@${id}@${myGeneration}` }
+        ]
+      }
       let favesFallback = false
       let candidates: DiscoverCandidate[] | null = null
       if (favesDraw(faves) === 'only') {
@@ -8917,6 +8954,7 @@ export function DiscoverPanel({
           console.log(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- dig: no riff`)
         } else if (candidates === null) {
           console.log(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- ${NO_NEAR_FITS}`)
+          flashPickFallback(NO_NEAR_FITS, 'near')
         }
       }
       if (candidates === null) {
@@ -8924,8 +8962,10 @@ export function DiscoverPanel({
         candidates = await fetchPool()
         if (candidates === null) return null
       }
-      if (favesFallback)
-        console.log(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- no fave fits`)
+      if (favesFallback) {
+        console.log(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- ${NO_FAVE_FITS}`)
+        flashPickFallback(NO_FAVE_FITS, 'fave')
+      }
       console.log(
         `DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- getDiscoverCandidates returned ${candidates.length} candidates`
       )
@@ -10509,6 +10549,7 @@ export function DiscoverPanel({
       for (const kind of radioStarterKinds(bed)) addSlot([kind], false, true)
     }
     radioOnRef.current = true
+    radioLandingAtRef.current = null
     resetDensityArc()
     resetRadioThrows(false)
     resetRadioReadout()
@@ -11050,6 +11091,13 @@ export function DiscoverPanel({
           0% { box-shadow: 0 0 0 0 var(--ra-stretch-on); }
           35% { box-shadow: 0 0 0 3px var(--ra-stretch-on); }
           100% { box-shadow: 0 0 0 0 transparent; }
+        }
+        @keyframes radio-landing-flicker { 50% { color: var(--ra-playhead); } }
+        .radio-landing-flicker { animation: radio-landing-flicker 600ms ease-in-out; }
+        .discover-pending { animation: discover-slot-pulse 900ms ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+          .radio-landing-flicker { animation: none; }
+          [data-radio-view] .discover-pending { animation: none; opacity: 0.45; }
         }
       `}</style>
       {showConsentPrompt && (
@@ -11817,8 +11865,7 @@ export function DiscoverPanel({
             },
             onSkip: () => void skipRadio(),
             onNewBed: () => void collectRadioCourseChange(),
-            // The landing flicker arrives in plan Task 12.
-            skipFlicker: 0
+            skipFlicker: radioSkipFlicker
           }}
           picks={{
             faves: favesShown,

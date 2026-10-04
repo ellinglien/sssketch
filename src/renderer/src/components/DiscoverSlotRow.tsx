@@ -152,6 +152,9 @@ function RowIconButton({
       aria-pressed={toggle ? state !== 'off' : undefined}
       aria-expanded={ariaExpanded}
       aria-haspopup={ariaExpanded === undefined ? undefined : 'menu'}
+      // The pending pulse is a class (DiscoverPanel's <style>), so the radio view's
+      // reduced-motion rule can stop it.
+      className={pulsing ? 'discover-pending' : undefined}
       style={{
         gridColumn,
         display: 'flex',
@@ -181,8 +184,7 @@ function RowIconButton({
         // (it started the roll in flight), and its pulse is on opacity, so
         // the animation wins there rather than fighting a fixed value.
         opacity: (disabled || dimmed) && !pulsing ? 0.35 : undefined,
-        cursor: disabled ? 'default' : 'pointer',
-        animation: pulsing ? 'discover-slot-pulse 900ms ease-in-out infinite' : undefined
+        cursor: disabled ? 'default' : 'pointer'
       }}
     >
       {children}
