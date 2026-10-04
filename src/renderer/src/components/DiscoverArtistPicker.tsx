@@ -1,6 +1,6 @@
 // src/renderer/src/components/DiscoverArtistPicker.tsx
 //
-// Discover artist mode's search (spec §1). A popover in DiscoverRadioMenu's
+// Discover artist mode's search (spec §1). A popover in RadioStartPrompt's
 // shape: positioned at (x, y), clamped to the window, dismissed by Escape or
 // a click outside (ignoreRef excepted). Monochrome -- this is chrome.
 //
@@ -67,7 +67,7 @@ export function DiscoverArtistPicker({
     })
   }, [x, y])
 
-  // Same dismissal as DiscoverRadioMenu. Escape in the CAPTURE phase with
+  // Same dismissal as RadioStartPrompt. Escape in the CAPTURE phase with
   // propagation stopped, so the library modal behind never sees it.
   useEffect(() => {
     function handleDismiss(e: MouseEvent): void {
@@ -175,7 +175,7 @@ export function DiscoverArtistPicker({
         position: 'fixed',
         left: position.left,
         top: position.top,
-        zIndex: 1200, // DiscoverRadioMenu.tsx:267's own value
+        zIndex: 1200, // RadioStartPrompt's own value
         width: 260,
         display: 'flex',
         flexDirection: 'column',

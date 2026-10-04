@@ -4,7 +4,7 @@ import { Dial } from './Dial'
 import { RadioStrip } from './RadioStrip'
 import { RadioTopLine, RedoIcon, UndoIcon } from './RadioTopLine'
 import { DiceIcon } from './DiceIcon'
-import { DiscoverRadioMenu } from './DiscoverRadioMenu'
+import { RadioStartPrompt } from './RadioStartPrompt'
 import { BracketToggle } from './BracketToggle'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { warmEngineBuffer } from '../audio/warmEngineBuffer'
@@ -6415,11 +6415,11 @@ export function DiscoverPanel({
   // the interval only ever said the earliest that could be. See
   // radioBarsUntilChange.
   const [radioChangeWait, setRadioChangeWait] = useState<RadioApproachWait | null>(null)
-  // Radio's own controls -- same position/dismissal pattern as the slot
-  // row's nearbyMenu and kindMenu. See DiscoverRadioMenu.tsx. Opened by
-  // the radio BUTTON while radio is off (the start prompt) and by the
-  // chevron while it is on (the full menu).
-  const [radioMenu, setRadioMenu] = useState<{ x: number; y: number } | null>(null)
+  // Radio's start prompt (RadioStartPrompt.tsx) -- same position/dismissal
+  // pattern as the slot row's nearbyMenu and kindMenu. Opened by the header's
+  // radio BUTTON while radio is off. While radio runs every setting is in the
+  // strip (RadioStrip), so there is nothing to open.
+  const [radioPrompt, setRadioPrompt] = useState<{ x: number; y: number } | null>(null)
   // Discover artist mode's field and its search popover.
   const [artistMenu, setArtistMenu] = useState<{ x: number; y: number } | null>(null)
   const artistButtonRef = useRef<HTMLButtonElement>(null)
@@ -6450,7 +6450,18 @@ export function DiscoverPanel({
   const radioTopButtonRef = useRef<HTMLButtonElement>(null)
   // Stable identity -- same playhead-tick re-render reasoning as
   // closeNearbyMenu.
-  const closeRadioMenu = useCallback(() => setRadioMenu(null), [])
+  const closeRadioPrompt = useCallback(() => setRadioPrompt(null), [])
+  // FOCUS FOLLOWS THE SWITCH (radio view plan, decision 14): the radio button a press used goes
+  // away with the layout it was in, so the press that starts radio focuses the top line's
+  // `radio`, and the one that stops it the header's. Set only by those two presses: a start or
+  // stop from the phone never steals focus.
+  const focusAfterSwitchRef = useRef<'top' | 'header' | null>(null)
+  useEffect(() => {
+    const target = focusAfterSwitchRef.current
+    if (target === null) return
+    focusAfterSwitchRef.current = null
+    ;(target === 'top' ? radioTopButtonRef : radioMenuButtonRef).current?.focus()
+  }, [radioOn])
 
   // Radio's clock. Driven ONLY by the engine's real position stream -- no
   // setInterval anywhere, on purpose: the engine stops its 33ms timer on
@@ -10474,8 +10485,7 @@ export function DiscoverPanel({
 
   /** Starts radio at a chosen pace. Elling, 2026-09-28: "the initial
    * prompt should be slow mid fast so the app knows how to start
-   * everything." -- so the radio button opens DiscoverRadioMenu's `start`
-   * mode, and its `start` chip lands here with the pace slider's level
+   * everything." -- so the radio button opens RadioStartPrompt, and its `start` chip lands here with the pace slider's level
    * (three pace chips did until 2026-10-03). The two things that happen at the
    * starting moment are now one gesture: the pace configures the clock and
    * the channel count sizes the bed.
@@ -11083,7 +11093,7 @@ export function DiscoverPanel({
           canPlay={previewingSlotIds.size > 0}
           onPlayToggle={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
           onStopRadio={() => {
-            closeRadioMenu()
+            focusAfterSwitchRef.current = 'header'
             stopRadio()
           }}
           radioButtonRef={radioTopButtonRef}
@@ -11326,13 +11336,7 @@ export function DiscoverPanel({
               <button
                 ref={radioMenuButtonRef}
                 onClick={(e) => {
-                  // ON -> off is still one press; the button is the stop.
-                  if (radioOn) {
-                    closeRadioMenu()
-                    stopRadio()
-                    return
-                  }
-                  // OFF -> the start prompt. Elling, 2026-09-28: "the initial
+                  // Radio off only (the top line's `radio` is the stop): the start prompt. Elling, 2026-09-28: "the initial
                   // prompt should be slow mid fast so the app knows how to
                   // start everything." The prompt's `start` chip is what
                   // actually starts radio, at the pace slider's position
@@ -11340,61 +11344,43 @@ export function DiscoverPanel({
                   // 2026-10-03), so this press only opens the choice --
                   // Escape or a click elsewhere cancels it, which is why it is
                   // a popover and not a dialog with an OK.
-                  if (radioMenu) {
-                    closeRadioMenu()
+                  if (radioPrompt) {
+                    closeRadioPrompt()
                     return
                   }
                   const rect = e.currentTarget.getBoundingClientRect()
-                  setRadioMenu({ x: rect.left, y: rect.bottom + 4 })
+                  setRadioPrompt({ x: rect.left, y: rect.bottom + 4 })
                 }}
-                aria-expanded={!radioOn && radioMenu !== null}
-                data-tooltip={radioOn ? 'stop radio' : 'start radio'}
+                aria-expanded={radioPrompt !== null}
+                data-tooltip="start radio"
                 style={{
                   fontFamily: 'inherit',
                   fontSize: 10,
                   padding: '6px 14px',
-                  background: radioOn ? 'var(--ra-play-on)' : 'transparent',
+                  background: 'transparent',
                   border: '1px solid var(--ra-border-strong)',
-                  color: radioOn ? 'var(--ra-play-on-ink)' : 'var(--ra-text)',
+                  color: 'var(--ra-text)',
                   cursor: 'pointer'
                 }}
               >
                 radio
               </button>
-              {/* How far through the current interval. Monochrome on purpose --
-                  this is chrome, not audio information, and colour in this app
-                  is spent only on things that carry audio information. A line
-                  rather than a number because a number that jitters at 30Hz is
-                  worse than a line that does. */}
-              <div
-                style={{
-                  height: 2,
-                  background: 'var(--ra-border)',
-                  visibility: radioOn ? 'visible' : 'hidden'
-                }}
-              >
-                <div
-                  style={{
-                    height: '100%',
-                    width: `${Math.round(radioProgress * 100)}%`,
-                    background: 'var(--ra-text-3)'
-                  }}
-                />
-              </div>
+              {/* The interval line's room (RadioTopLine draws it while radio runs), kept so the
+                  row is the height it always was. */}
+              <div style={{ height: 2 }} />
             </div>
-            {radioMenu && (
-              <DiscoverRadioMenu
-                x={radioMenu.x}
-                y={radioMenu.y}
-                mode="start"
+            {radioPrompt && (
+              <RadioStartPrompt
+                x={radioPrompt.x}
+                y={radioPrompt.y}
                 settings={radioSettings}
                 onChange={(patch) => void onRadioSettingsChange(patch)}
-                onNewBed={() => void collectRadioCourseChange()}
                 onStart={(level) => {
-                  closeRadioMenu()
+                  closeRadioPrompt()
+                  focusAfterSwitchRef.current = 'top'
                   startRadio(level)
                 }}
-                onClose={closeRadioMenu}
+                onClose={closeRadioPrompt}
                 ignoreRef={radioMenuButtonRef}
               />
             )}

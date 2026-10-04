@@ -1,6 +1,6 @@
 // src/renderer/src/components/RadioControls.tsx
 //
-// Radio's controls, shared by the start prompt / running menu (DiscoverRadioMenu) and the radio
+// Radio's controls, shared by the start prompt (RadioStartPrompt) and the radio
 // view's strip (spec 2026-10-03-sssketch-radio-view-design). Values and callbacks only: no
 // state here outlives a gesture, and nothing reads the panel.
 import { useRef, useState, type ReactNode } from 'react'
@@ -151,8 +151,7 @@ export function PaceSlider({
  *
  * Escape reverts the box and stops THERE: React's stopPropagation stops the native event at the
  * React root, before LibraryBrowser's window-level Escape (which closes the whole library) and
- * App's window shortcuts. Inside the running menu nothing changes: the menu's capture-phase
- * Escape sees it first and closes the menu. */
+ * App's window shortcuts (the seed field lives in the strip, which has no Escape of its own). */
 export function FoldSeedInput({
   value,
   onCommit
@@ -212,7 +211,7 @@ export function FoldSeedInput({
 // ---------------------------------------------------------------------------------------------
 // The strip's widgets (RadioStrip, plan Task 8). Monochrome, sharp corners, the app's font.
 
-/** A chip: the running menu's, as a component. `dimmed` draws faint ink (the turn chips'
+/** A chip: the old radio menu's, as a component. `dimmed` draws faint ink (the turn chips'
  * `not now`); `disabled` is the browser's. */
 export function StripChip({
   label,

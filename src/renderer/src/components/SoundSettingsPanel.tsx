@@ -64,7 +64,7 @@ function buttonStyle(disabled?: boolean): React.CSSProperties {
   }
 }
 
-/** DiscoverRadioMenu's chip: a selected chip is a brighter border and ink, never a colour. */
+/** The radio chip (RadioControls' StripChip): a selected chip is a brighter border and ink, never a colour. */
 function Chip({
   label,
   on,
@@ -378,7 +378,7 @@ export function SoundSettingsPanel({
     )
   }
 
-  // Escape closes the panel, and only the panel (DiscoverRadioMenu's way: capture phase,
+  // Escape closes the panel, and only the panel (RadioStartPrompt's way: capture phase,
   // propagation stopped, so a full-screen view's own Escape never sees it).
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
