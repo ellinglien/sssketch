@@ -173,7 +173,8 @@ worker (`stemAnalysis.ts:68`) on **channel 0 only** (`stemFeaturesCache.ts`, `fe
 (`radioHooks.ts:463`, :569). Nothing pulls a return forward (the anointed spec's Out of scope).
 
 **The turn chips** label `drum drop` as `drop` (`TURNAROUND_MOVE_LABEL`, `radioTurnaround.ts:588`).
-That is the opposite of what "the drop" means here (open question 1).
+That is the opposite of what "the drop" means here. Decided: the chips become `drums out` and
+`low out` (open question 1).
 
 ## 2. The per-stem intensity score
 
@@ -681,7 +682,7 @@ and a loudness that ignored the right channel would be wrong for stereo stems.
   - simple mode gets no controls, and plays what is stored or the defaults;
   - `densityArc.on` follows: `off` turns it off, and `arc` and `intensity` both keep it on (its
     min, max and starter order bound the rows).
-- **Web defaults** (open question 3): `density: intensity`, energy 50, drama 60, proposed for
+- **Web defaults** (open question 3, Decided): `density: intensity`, energy 50, drama 60, for
   everyone. `WEB_RADIO_DEFAULTS` gains `density`, `energy` and `drama`.
 - **Nothing radio-side is persisted** beyond these three settings. The arc's state starts fresh with
   each run.
@@ -914,18 +915,32 @@ Measured and asserted (first targets, [INF], to tune by ear):
   9. The phone: build and drop work, and the words fit at 320 px.
   10. The backfill runs in the background without slowing the UI (the dev counters).
 
-## Open questions for Elling
+## Open questions for Elling (all Decided, 2026-10-05)
 
-1. **The turn chip `drop`** is a drum drop-out, the opposite of the drop. Rename the chips to
-   `drums out` and `low out`? (Proposed: yes. Otherwise `drop` means two opposite things a few
-   pixels apart.)
-2. **`drop` pressed while building or riding:** a quick drop (drums and bass out for a bar or two,
-   then back on the one, skipping the breakdown), as proposed? Or jump to a full breakdown at the
-   next phrase start, with the drop after it?
-3. **Web default:** `intensity` on for every visitor (energy 50, drama 60), as proposed? Or keep the
-   row arc until you have heard it? (The desktop stays on `arc` until you switch.)
-4. **Drums and bass on the drop:** usually their own stems (release is return), and a heavier fresh
-   pick with chance 0.25 + 0.5 × drama (55% at the default)? Or always new, or never?
+Elling answered all four on 2026-10-05. The implementation plan
+(`docs/superpowers/plans/2026-10-05-radio-intensity-arc.md`) builds these answers.
+
+1. **The turn chip `drop`** is a drum drop-out, the opposite of the drop.
+   - **Decided: rename the chips to `drums out` and `low out`.** This is a copy change only:
+     chips, row flashes, the ruler's turnaround label, the desktop strip and the phone's chips
+     (all read `TURNAROUND_MOVE_LABEL`), and the web's full mode.
+   - The move ids `drum drop` and `low drop` stay. They are on the phone's wire (`/api/turn`'s
+     `move`) and in dozens of tests, so renaming them is not cheap, and nothing user-facing shows
+     them.
+   - A turn's ruler label with a two-word lead that cannot fit says the lead and the gap
+     (`turn: drums out → gap`). The phone's 23-character limit holds.
+2. **`drop` pressed while building or riding.**
+   - **Decided: a quick drop.** Drums and bass go out for a bar or two (the planner's `low drop`
+     in the lap before the top, the gap by drama), and they are back on the one. There is no full
+     breakdown first. Then a fresh ride (section 6).
+3. **Web default.**
+   - **Decided: `intensity` for every visitor, energy 50, drama 60.**
+   - The desktop stays on `arc` until Elling switches it.
+4. **Drums and bass on the drop.**
+   - **Decided: as proposed.** Each returning drums or bass row comes back on its own stem by
+     default. With chance 25% + 50% × drama (55% at the default), it comes back on a fresh,
+     heavier pick that is leaned to the top target at full weight and warmed a phrase ahead
+     (section 4.4).
 
 ## Out of scope
 
