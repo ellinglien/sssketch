@@ -4,7 +4,12 @@ import type Database from 'better-sqlite3'
 import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import { countWork } from './workCounters'
 import { writeStemPeaksRow } from './stemPeaksCacheStore'
-import { afterStemFeatureRowWritten, writeStemFeatureRow } from './stemFeatureCacheStore'
+import {
+  afterStemFeatureRowWritten,
+  mergeStemFeatureLevelRow,
+  writeStemFeatureRow
+} from './stemFeatureCacheStore'
+import { noteStemFeatureRowWritten } from './traitQuantileCache'
 import { afterStemEmbeddingRowWritten, writeStemEmbeddingRow } from './stemEmbeddingCacheStore'
 import { applyYamnetZeroShotCategory, markYamnetZeroShotAttempted } from './stemAutoCategoryStore'
 
@@ -91,6 +96,11 @@ export async function writeStemAnalysisResults(
         if (result.zeroShotAttempted) markYamnetZeroShotAttempted(db, stemCID, extractedAt)
         if (result.zeroShotClassIndex !== undefined) {
           applyYamnetZeroShotCategory(db, stemCID, result.zeroShotClassIndex, extractedAt)
+        }
+        // the level backfill: merged into the row as it now stands (spec 2026-10-05 7.3)
+        if (result.level) {
+          const merged = mergeStemFeatureLevelRow(db, stemCID, result.level)
+          if (merged !== null) followUps.push(() => noteStemFeatureRowWritten(db, merged, stemCID))
         }
       } while (index < results.length && performance.now() - start < TRANSACTION_BUDGET_MS)
     })()

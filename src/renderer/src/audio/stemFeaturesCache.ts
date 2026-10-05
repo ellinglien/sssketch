@@ -4,7 +4,7 @@ import { countWork } from '../perf/workCounters'
 import { decodeStemFile } from './decodeStemFile'
 import { getBrightness } from './peakCache'
 import { primePitchContour } from './pitchCache'
-import { analyzeStemSamplesOffThread } from './stemAnalysisClient'
+import { analyzeStemSamplesOffThread, channelsAfterFirst } from './stemAnalysisClient'
 import { queueStemAnalysisWrite } from './analysisWriteQueue'
 
 const cache = new Map<string, Promise<StemFeatures>>()
@@ -138,9 +138,11 @@ async function featuresFromDecoded(
   brightness: number[],
   persist: (features: StemFeatures) => void = (features) => persistFeaturesNow(path, features)
 ): Promise<StemFeatures> {
+  // every channel goes over: a fresh row measures the level pass too (spec 2026-10-05 7.2)
   const analysis = await analyzeStemSamplesOffThread(
     audioBuffer.getChannelData(0),
-    audioBuffer.sampleRate
+    audioBuffer.sampleRate,
+    channelsAfterFirst(audioBuffer)
   )
   primePitchContour(path, analysis.pitchContour)
   const features = assembleStemFeatures(analysis, brightness)

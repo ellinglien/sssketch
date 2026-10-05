@@ -189,3 +189,68 @@ describe('writeStemAnalysisResults (B7)', () => {
     expect(db.prepare(`SELECT COUNT(*) AS n FROM StemEmbeddingCache`).get()).toEqual({ n: 30 })
   })
 })
+
+describe('the level backfill (spec 2026-10-05-radio-intensity-arc-design 7.3)', () => {
+  const LEVEL = { loudnessLufs: -14.2, lowLevelDb: -21.5, activeFraction: 0.9, levelVersion: 1 }
+
+  it('merges into the existing row, keeping every other field, featureVersion and ExtractedAt', async () => {
+    const db = freshDb()
+    addStem(db, 'cid-1')
+    await writeStemAnalysisResults(db, [{ path: '/lib/cid-1', features: features(3) }], 111)
+    const before = db.prepare(`SELECT * FROM StemFeatureCache`).get() as {
+      FeaturesJSON: string
+      ExtractedAt: number
+    }
+    await writeStemAnalysisResults(db, [{ path: '/lib/cid-1', level: LEVEL }], 222)
+    const after = db.prepare(`SELECT * FROM StemFeatureCache`).get() as {
+      FeaturesJSON: string
+      ExtractedAt: number
+    }
+    expect(after.ExtractedAt).toBe(111)
+    expect(JSON.parse(after.FeaturesJSON)).toEqual({ ...JSON.parse(before.FeaturesJSON), ...LEVEL })
+  })
+
+  it('merges only the four level fields, whatever else the write carries', async () => {
+    const db = freshDb()
+    addStem(db, 'cid-5')
+    await writeStemAnalysisResults(db, [{ path: '/lib/cid-5', features: features(2) }], 1)
+    const sneaky = { ...LEVEL, mfcc: [], featureVersion: 99 } as typeof LEVEL
+    await writeStemAnalysisResults(db, [{ path: '/lib/cid-5', level: sneaky }], 2)
+    const row = db.prepare(`SELECT FeaturesJSON FROM StemFeatureCache`).get() as {
+      FeaturesJSON: string
+    }
+    expect(JSON.parse(row.FeaturesJSON)).toEqual({ ...features(2), ...LEVEL })
+  })
+
+  it('writes nothing without a current row to merge into', async () => {
+    const db = freshDb()
+    addStem(db, 'cid-2')
+    addStem(db, 'cid-3')
+    db.prepare(`INSERT INTO StemFeatureCache VALUES ('cid-3', '{"mfcc":[]}', 5)`).run()
+    await writeStemAnalysisResults(
+      db,
+      [
+        { path: '/lib/cid-2', level: LEVEL },
+        { path: '/lib/cid-3', level: LEVEL }
+      ],
+      9
+    )
+    expect(db.prepare(`SELECT StemCID, FeaturesJSON FROM StemFeatureCache`).all()).toEqual([
+      { StemCID: 'cid-3', FeaturesJSON: '{"mfcc":[]}' }
+    ])
+  })
+
+  it('tells the value table, and does not wake the classifier', async () => {
+    const db = freshDb()
+    addStem(db, 'cid-4')
+    await writeStemAnalysisResults(db, [{ path: '/lib/cid-4', features: features(1) }], 1)
+    const noted = vi.spyOn(traitQuantileCache, 'noteStemFeatureRowWritten')
+    const woke = vi.spyOn(wake, 'noteAutoClassifyInputRow')
+    await writeStemAnalysisResults(db, [{ path: '/lib/cid-4', level: LEVEL }], 2)
+    expect(noted).toHaveBeenCalledTimes(1)
+    expect(noted.mock.calls[0][1]).toMatchObject(LEVEL)
+    expect(woke).not.toHaveBeenCalled()
+    noted.mockRestore()
+    woke.mockRestore()
+  })
+})

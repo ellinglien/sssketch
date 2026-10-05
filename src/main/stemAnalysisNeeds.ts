@@ -1,7 +1,13 @@
 // src/main/stemAnalysisNeeds.ts
 import { basename } from 'node:path'
 import type Database from 'better-sqlite3'
-import { stemFeatureVersionOf, STEM_FEATURE_VERSION, type StemFeatures } from '@shared/stemFeatures'
+import {
+  stemFeatureVersionOf,
+  stemLevelVersionOf,
+  STEM_FEATURE_VERSION,
+  type StemFeatures
+} from '@shared/stemFeatures'
+import { STEM_LEVEL_VERSION } from '@shared/stemLevel'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import { countWork } from './workCounters'
 
@@ -25,12 +31,16 @@ function presentStemCIDs(
   return new Set(rows.map((r) => r.StemCID))
 }
 
-/** StemCIDs whose feature row exists AND is at STEM_FEATURE_VERSION. The
- * version lives inside FeaturesJSON (no json_extract anywhere in this
- * codebase), so it's parsed here in JS -- only for rows that exist, one
- * chunk at a time. An unparseable row counts as missing, matching
- * getStemFeatureCache (which returns null for it). */
-function currentFeatureStemCIDs(db: Database.Database, stemCIDs: string[]): Set<string> {
+/** StemCIDs whose feature row exists AND is at STEM_FEATURE_VERSION, and of those the ones whose
+ * level pass is older than STEM_LEVEL_VERSION (or missing: spec 2026-10-05-radio-intensity-arc-
+ * design 7.3) -- read in the same parse. The version lives inside FeaturesJSON (no json_extract
+ * anywhere in this codebase), so it's parsed here in JS -- only for rows that exist, one chunk at
+ * a time. An unparseable row counts as missing, matching getStemFeatureCache (which returns null
+ * for it). */
+function currentFeatureStemCIDs(
+  db: Database.Database,
+  stemCIDs: string[]
+): { current: Set<string>; needsLevel: Set<string> } {
   countWork('sql:stem-analysis-needs.StemFeatureCache')
   const placeholders = stemCIDs.map(() => '?').join(',')
   const rows = db
@@ -39,15 +49,19 @@ function currentFeatureStemCIDs(db: Database.Database, stemCIDs: string[]): Set<
     )
     .all(...stemCIDs) as { StemCID: string; FeaturesJSON: string }[]
   const current = new Set<string>()
+  const needsLevel = new Set<string>()
   for (const row of rows) {
     try {
       const features = JSON.parse(row.FeaturesJSON) as StemFeatures
-      if (stemFeatureVersionOf(features) >= STEM_FEATURE_VERSION) current.add(row.StemCID)
+      if (stemFeatureVersionOf(features) >= STEM_FEATURE_VERSION) {
+        current.add(row.StemCID)
+        if (stemLevelVersionOf(features) < STEM_LEVEL_VERSION) needsLevel.add(row.StemCID)
+      }
     } catch {
       // missing, as above
     }
   }
-  return current
+  return { current, needsLevel }
 }
 
 /** StemCIDs (of these) that still need the YAMNet zero-shot step
@@ -108,9 +122,11 @@ export async function getStemAnalysisNeeds(
       const stemCID = basename(path)
       out.push({
         peaks: !peaks.has(stemCID),
-        features: !features.has(stemCID),
+        features: !features.current.has(stemCID),
         embedding: !embeddings.has(stemCID),
-        zeroShot: zeroShot.has(stemCID)
+        zeroShot: zeroShot.has(stemCID),
+        // only when it is needed: an answer without it reads as no level work
+        ...(features.needsLevel.has(stemCID) && { level: true })
       })
     }
   }

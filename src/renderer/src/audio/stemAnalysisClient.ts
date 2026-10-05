@@ -7,6 +7,7 @@
 // scans; this moves it off.
 import { analyzeStemSamples, type StemAnalysis } from '@shared/stemAnalysis'
 import { computePitchContour, type PitchContour } from '@shared/pitchContour'
+import { stemLevelFeatures, type StemLevel } from '@shared/stemLevel'
 import { countWork } from '../perf/workCounters'
 
 let worker: Worker | null = null
@@ -45,28 +46,60 @@ function getWorker(): Worker {
   return w
 }
 
-function request<T>(kind: 'full' | 'pitch', samples: Float32Array, sampleRate: number): Promise<T> {
+function request<T>(
+  kind: 'full' | 'pitch' | 'level',
+  samples: Float32Array,
+  sampleRate: number,
+  extraChannels?: readonly Float32Array[]
+): Promise<T> {
   const requestId = nextRequestId++
   // COPIED before transfer -- callers usually pass an AudioBuffer's own
-  // channel data, which must stay intact on this side.
+  // channel data, which must stay intact on this side. The other channels (the level pass) are
+  // transient copies too.
   const copy = samples.slice()
+  const extra = extraChannels?.map((c) => c.slice())
   return new Promise<T>((resolve, reject) => {
     pending.set(requestId, { resolve: resolve as (payload: unknown) => void, reject })
-    getWorker().postMessage({ requestId, kind, samples: copy, sampleRate }, [copy.buffer])
+    getWorker().postMessage(
+      { requestId, kind, samples: copy, sampleRate, ...(extra && { extraChannels: extra }) },
+      [copy.buffer, ...(extra ?? []).map((c) => c.buffer)]
+    )
   })
+}
+
+/** An AudioBuffer's channels after the first (the level pass reads every channel). */
+export function channelsAfterFirst(buffer: AudioBuffer): Float32Array[] {
+  const out: Float32Array[] = []
+  for (let c = 1; c < buffer.numberOfChannels; c++) out.push(buffer.getChannelData(c))
+  return out
 }
 
 /** analyzeStemSamples, off the main thread. Falls back to running inline
  * where no Worker exists (vitest), so callers don't need two code paths. */
 export function analyzeStemSamplesOffThread(
   samples: Float32Array,
-  sampleRate: number
+  sampleRate: number,
+  extraChannels?: readonly Float32Array[]
 ): Promise<StemAnalysis> {
   countWork('analysis')
   if (typeof Worker === 'undefined') {
-    return Promise.resolve(analyzeStemSamples(samples, sampleRate))
+    return Promise.resolve(analyzeStemSamples(samples, sampleRate, extraChannels))
   }
-  return request<StemAnalysis>('full', samples, sampleRate)
+  return request<StemAnalysis>('full', samples, sampleRate, extraChannels)
+}
+
+/** The level pass alone (@shared/stemLevel), off the main thread -- the backfill of a stem whose
+ * feature row is current (analyzeStemOnce's needs.level). Same inline fallback. */
+export function measureStemLevelOffThread(
+  channels: readonly Float32Array[],
+  sampleRate: number
+): Promise<StemLevel> {
+  countWork('analysis:level')
+  if (channels.length === 0) return Promise.resolve(stemLevelFeatures([], sampleRate))
+  if (typeof Worker === 'undefined') {
+    return Promise.resolve(stemLevelFeatures(channels, sampleRate))
+  }
+  return request<StemLevel>('level', channels[0], sampleRate, channels.slice(1))
 }
 
 /** computePitchContour, off the main thread -- pitchCache.ts's own path

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import Database from 'better-sqlite3'
 import { STEM_FEATURE_VERSION } from '@shared/stemFeatures'
+import { STEM_LEVEL_VERSION } from '@shared/stemLevel'
 import { getStemAnalysisNeeds } from './stemAnalysisNeeds'
 
 function freshDb(): Database.Database {
@@ -37,7 +38,12 @@ function addEmbedding(db: Database.Database, stemCID: string): void {
   db.prepare(`INSERT INTO StemEmbeddingCache VALUES (?, '[1]', 0)`).run(stemCID)
 }
 
-const current = JSON.stringify({ mfcc: [], featureVersion: STEM_FEATURE_VERSION })
+const current = JSON.stringify({
+  mfcc: [],
+  featureVersion: STEM_FEATURE_VERSION,
+  levelVersion: STEM_LEVEL_VERSION
+})
+const noLevel = JSON.stringify({ mfcc: [], featureVersion: STEM_FEATURE_VERSION })
 const v1 = JSON.stringify({ mfcc: [] })
 
 describe('getStemAnalysisNeeds', () => {
@@ -113,6 +119,32 @@ describe('getStemAnalysisNeeds', () => {
     // The one without an embedding needs the embedding (which runs the
     // zero-shot step itself), not a separate zero-shot pass.
     expect(needs[5].embedding).toBe(true)
+  })
+
+  it('asks for the level pass only on a current row without it (spec 2026-10-05 7.3)', async () => {
+    const db = freshDb()
+    addFeatures(db, 'done', current)
+    addFeatures(db, 'unlevelled', noLevel)
+    addFeatures(
+      db,
+      'old-level',
+      JSON.stringify({ mfcc: [], featureVersion: STEM_FEATURE_VERSION, levelVersion: 0 })
+    )
+    addFeatures(db, 'stale', v1)
+    const needs = await getStemAnalysisNeeds(db, [
+      '/lib/jam/done',
+      '/lib/jam/unlevelled',
+      '/lib/jam/old-level',
+      '/lib/jam/stale',
+      '/lib/jam/never'
+    ])
+    expect(needs.map((n) => [n.features, n.level ?? false])).toEqual([
+      [false, false],
+      [false, true],
+      [false, true],
+      [true, false],
+      [true, false]
+    ])
   })
 
   it('returns an empty list for no paths without querying', async () => {

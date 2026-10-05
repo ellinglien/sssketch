@@ -1,8 +1,8 @@
 // src/shared/stemAnalysisWrite.ts
 import type { StemFeatures } from './stemFeatures'
 
-/** The level pass's fields, merged into an existing feature row (stemAnalysisResultsWriter's
- * mergeStemFeatureLevel): never a whole row, never featureVersion. */
+/** The level pass's fields, merged into an existing feature row (stemFeatureCacheStore.ts's
+ * mergeStemFeatureLevelRow): never a whole row, never featureVersion. */
 export type StemLevelWrite = Required<
   Pick<StemFeatures, 'loudnessLufs' | 'lowLevelDb' | 'activeFraction' | 'levelVersion'>
 >

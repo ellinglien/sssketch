@@ -6,6 +6,9 @@ import { decodeStemFile } from './decodeStemFile'
 import { isStemNotDownloadedError } from '@shared/stemNotDownloaded'
 import { adoptWaveformAnalysis, hasWaveformEntry, waveformFromBuffer } from './peakCache'
 import { adoptStemFeaturesFromBuffer, peekStemFeaturesEntry } from './stemFeaturesCache'
+import { channelsAfterFirst, measureStemLevelOffThread } from './stemAnalysisClient'
+import { queueStemAnalysisWrite } from './analysisWriteQueue'
+import { stemLevelFields } from '@shared/stemAnalysis'
 import {
   adoptStemEmbeddingFromBuffer,
   adoptZeroShotFromBuffer,
@@ -20,6 +23,8 @@ export interface AnalyzeStemOnceResult {
   features: StemAnalysisOutcome
   embedding: StemAnalysisOutcome
   zeroShot: StemAnalysisOutcome
+  /** Present only when `needs.level` asked for the level pass. */
+  level?: StemAnalysisOutcome
 }
 
 const ALL_SKIPPED: AnalyzeStemOnceResult = {
@@ -28,6 +33,9 @@ const ALL_SKIPPED: AnalyzeStemOnceResult = {
   embedding: 'skipped',
   zeroShot: 'skipped'
 }
+
+/** Level passes in flight, by path: a second scan asking for the same stem shares it. */
+const levelInFlight = new Map<string, Promise<void>>()
 
 /**
  * "Analyse once" (docs/superpowers/specs/2026-09-22-background-efficiency-
@@ -51,6 +59,13 @@ const ALL_SKIPPED: AnalyzeStemOnceResult = {
  * inference on the same decoded buffer (stemEmbeddingCache.ts's
  * adoptZeroShotFromBuffer). A fresh embedding runs it as part of its own
  * extraction.
+ *
+ * `needs.level` (spec 2026-10-05-radio-intensity-arc-design 7.2-7.3): the
+ * level pass alone (@shared/stemLevel, every channel, in the worker) for a
+ * stem whose feature row is current but unmeasured -- on the SAME decode,
+ * queued as a `level` write that main merges into the row in place. A fresh
+ * feature extraction measures the level itself, so the two never both run.
+ * `level` is in the result only when `needs.level` asked for it.
  *
  * An output is skipped when its module already has an in-memory entry that
  * serves it (in flight, or settled -- for features, settled at the current
@@ -91,7 +106,12 @@ export async function analyzeStemOnce(
   const wantPeaks = needs.peaks && !hasWaveformEntry(path)
   const wantEmbedding = needs.embedding && !hasStemEmbeddingEntry(path)
   const wantZeroShot = needs.zeroShot && !wantEmbedding && !hasZeroShotEntry(path)
-  if (!wantPeaks && !wantFeatures && !wantEmbedding && !wantZeroShot) return ALL_SKIPPED
+  // the level backfill (spec 2026-10-05-radio-intensity-arc-design 7.3): a current row without
+  // the level pass. A fresh feature extraction measures it itself.
+  const wantLevel = needs.level === true && !wantFeatures && !levelInFlight.has(path)
+  if (!wantPeaks && !wantFeatures && !wantEmbedding && !wantZeroShot && !wantLevel) {
+    return needs.level === true ? { ...ALL_SKIPPED, level: 'skipped' } : ALL_SKIPPED
+  }
 
   const decoded = decodeStemFile(path)
   // Rejections are handled by each consumer below; this only stops an
@@ -121,12 +141,31 @@ export async function analyzeStemOnce(
 
   const embeddingPromise = wantEmbedding ? adoptStemEmbeddingFromBuffer(path, decoded) : null
   const zeroShotPromise = wantZeroShot ? adoptZeroShotFromBuffer(path, decoded) : null
+  // the SAME decode, every channel, merged into the row by main (never a second decode)
+  const levelPromise = wantLevel
+    ? decoded
+        .then((buffer) =>
+          measureStemLevelOffThread(
+            [buffer.getChannelData(0), ...channelsAfterFirst(buffer)],
+            buffer.sampleRate
+          )
+        )
+        .then((level) => queueStemAnalysisWrite(path, { level: stemLevelFields(level) }))
+    : null
+  if (levelPromise !== null) {
+    levelInFlight.set(path, levelPromise)
+    void levelPromise.then(
+      () => levelInFlight.delete(path),
+      () => levelInFlight.delete(path)
+    )
+  }
 
-  const [peaks, features, embedding, zeroShot] = await Promise.allSettled([
+  const [peaks, features, embedding, zeroShot, level] = await Promise.allSettled([
     peaksPromise,
     featuresPromise,
     embeddingPromise,
-    zeroShotPromise
+    zeroShotPromise,
+    levelPromise
   ])
 
   // One short line per stem, never one stack trace per output: a decode
@@ -147,6 +186,9 @@ export async function analyzeStemOnce(
     }
     if (features.status === 'rejected') {
       console.error(`analyzeStemOnce: features failed for ${path}: ${describe(features.reason)}`)
+    }
+    if (level.status === 'rejected') {
+      console.error(`analyzeStemOnce: level failed for ${path}: ${describe(level.reason)}`)
     }
   }
 
@@ -172,7 +214,10 @@ export async function analyzeStemOnce(
         ? 'skipped'
         : zeroShot.status === 'fulfilled' && zeroShot.value
           ? 'done'
-          : 'failed'
+          : 'failed',
+    ...(needs.level === true && {
+      level: levelPromise === null ? 'skipped' : level.status === 'fulfilled' ? 'done' : 'failed'
+    })
   }
 }
 

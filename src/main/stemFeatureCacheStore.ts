@@ -1,6 +1,7 @@
 // src/main/stemFeatureCacheStore.ts
 import type Database from 'better-sqlite3'
-import type { StemFeatures } from '@shared/stemFeatures'
+import { isCurrentStemFeatureVersion, type StemFeatures } from '@shared/stemFeatures'
+import type { StemLevelWrite } from '@shared/stemAnalysisWrite'
 import { stemCIDForPath } from './stemCategoriesStore'
 import { countWork } from './workCounters'
 import { noteStemFeatureRowWritten } from './traitQuantileCache'
@@ -98,4 +99,44 @@ export function afterStemFeatureRowWritten(
   noteStemFeatureRowWritten(db, features, stemCID)
   // Wakes the overnight classifier with this stem (background efficiency B4).
   noteAutoClassifyInputRow(db, 'feature', stemCID)
+}
+
+/** The level pass's backfill (spec 2026-10-05-radio-intensity-arc-design 7.3): merges `level` into
+ * the stem's existing feature row -- read, merge, write, inside the caller's transaction -- and
+ * returns the merged row, or null when there is no row to merge into (none, unparseable, or
+ * older than STEM_FEATURE_VERSION: the scan's fresh extraction measures the level itself). Every
+ * other field, featureVersion and ExtractedAt stay as they were. Pair with
+ * noteStemFeatureRowWritten once committed (not the classifier's wake: none of its inputs moved). */
+export function mergeStemFeatureLevelRow(
+  db: Database.Database,
+  stemCID: string,
+  level: StemLevelWrite
+): StemFeatures | null {
+  countWork('sql:stem-feature-cache.merge-level')
+  const row = db
+    .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
+    .get(stemCID) as { FeaturesJSON: string } | undefined
+  if (!row) return null
+  let features: StemFeatures
+  try {
+    features = JSON.parse(row.FeaturesJSON) as StemFeatures
+  } catch {
+    return null
+  }
+  if (!features || typeof features !== 'object' || !isCurrentStemFeatureVersion(features)) {
+    return null
+  }
+  // only the pass's own four fields, whatever else the renderer's object carries
+  const merged: StemFeatures = {
+    ...features,
+    loudnessLufs: level.loudnessLufs,
+    lowLevelDb: level.lowLevelDb,
+    activeFraction: level.activeFraction,
+    levelVersion: level.levelVersion
+  }
+  db.prepare(`UPDATE StemFeatureCache SET FeaturesJSON = ? WHERE StemCID = ?`).run(
+    JSON.stringify(merged),
+    stemCID
+  )
+  return merged
 }
