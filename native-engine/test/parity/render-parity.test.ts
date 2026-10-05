@@ -148,6 +148,18 @@ function applyLoopSewingBlend(samples: Float64Array, loopEndSample = samples.len
   }
 }
 
+/** The engine binary's CPU, from a thin Mach-O header ('arm64', 'x64'), or process.arch when the
+ * header isn't one we know (a universal binary, say). */
+function engineArch(): string {
+  const head = readFileSync(ENGINE_BINARY).subarray(0, 8)
+  const magic = head.readUInt32LE(0)
+  if (magic !== 0xfeedfacf) return process.arch
+  const cpu = head.readUInt32LE(4)
+  if (cpu === 0x0100000c) return 'arm64'
+  if (cpu === 0x01000007) return 'x64'
+  return process.arch
+}
+
 describe('native engine vs Web Audio export — render parity', () => {
   let dir: string
   let tonePath: string
@@ -740,9 +752,12 @@ describe('the radio sound: off is today, and every stage on (Task 14)', () => {
     // An x64 engine runs under Rosetta in CI (the release matrix): its float arithmetic can
     // round differently from the arm64 build that rendered the fixture (no FMA contraction),
     // which 16 bits mostly hide. Bit-identical on the fixture's own architecture; a one-step
-    // tolerance elsewhere.
+    // tolerance elsewhere. The ENGINE's architecture, read from its Mach-O header -- not
+    // process.arch: on the release matrix's x64 leg Node itself runs natively on the arm64
+    // runner while the engine is x86_64 under Rosetta, which is how v1.4.0's first runs failed
+    // here by one step at sample 3980.
     const meta = JSON.parse(readFileSync(OFF_FIXTURE_META, 'utf8')) as { arch: string }
-    const tolerance = process.arch === meta.arch ? 0 : 1
+    const tolerance = engineArch() === meta.arch ? 0 : 1
     for (const [name, project] of [
       ['no sound block', off],
       ['a block saying zita', withBlock],

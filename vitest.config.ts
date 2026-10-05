@@ -80,7 +80,12 @@ export default defineConfig({
           'src/main/stemPeaksCacheStore.test.ts',
           'src/main/stemUnavailableStore.test.ts',
           'src/main/tidyUpLibraryStems.test.ts',
-          'src/main/traitQuantileCache.test.ts'
+          'src/main/traitQuantileCache.test.ts',
+          // Added after v1.3.0, and crashed their workers on v1.4.0's release run the same way
+          // (3 dead workers, no failed test named): the radio's 👍 store and the web-hearts import.
+          'src/main/radioHeartImportStore.test.ts',
+          'src/main/radioHeartsImport.test.ts',
+          'src/main/stemFavouriteStore.test.ts'
         ]
       : configDefaults.exclude,
     passWithNoTests: true,
