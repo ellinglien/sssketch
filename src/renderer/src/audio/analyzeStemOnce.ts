@@ -5,7 +5,11 @@ import { countWork } from '../perf/workCounters'
 import { decodeStemFile } from './decodeStemFile'
 import { isStemNotDownloadedError } from '@shared/stemNotDownloaded'
 import { adoptWaveformAnalysis, hasWaveformEntry, waveformFromBuffer } from './peakCache'
-import { adoptStemFeaturesFromBuffer, peekStemFeaturesEntry } from './stemFeaturesCache'
+import {
+  adoptStemFeaturesFromBuffer,
+  adoptStemLevelIntoFeaturesEntry,
+  peekStemFeaturesEntry
+} from './stemFeaturesCache'
 import { channelsAfterFirst, measureStemLevelOffThread } from './stemAnalysisClient'
 import { queueStemAnalysisWrite } from './analysisWriteQueue'
 import { stemLevelFields } from '@shared/stemAnalysis'
@@ -34,8 +38,12 @@ const ALL_SKIPPED: AnalyzeStemOnceResult = {
   zeroShot: 'skipped'
 }
 
-/** Level passes in flight, by path: a second scan asking for the same stem shares it. */
-const levelInFlight = new Map<string, Promise<void>>()
+/** Paths whose level pass this session has run or is running. A second scan asking for the same
+ * stem -- at once, or later from a needs page fetched before the write landed (DiscoverLibraryScan
+ * fetches 500 ahead; BackgroundFeatureScan runs alongside) -- skips it rather than reading and
+ * decoding again. Removed only on failure, so a later scan retries (as stemFeaturesCache.ts's
+ * remember() evicts on rejection). */
+const levelMeasured = new Set<string>()
 
 /**
  * "Analyse once" (docs/superpowers/specs/2026-09-22-background-efficiency-
@@ -108,7 +116,7 @@ export async function analyzeStemOnce(
   const wantZeroShot = needs.zeroShot && !wantEmbedding && !hasZeroShotEntry(path)
   // the level backfill (spec 2026-10-05-radio-intensity-arc-design 7.3): a current row without
   // the level pass. A fresh feature extraction measures it itself.
-  const wantLevel = needs.level === true && !wantFeatures && !levelInFlight.has(path)
+  const wantLevel = needs.level === true && !wantFeatures && !levelMeasured.has(path)
   if (!wantPeaks && !wantFeatures && !wantEmbedding && !wantZeroShot && !wantLevel) {
     return needs.level === true ? { ...ALL_SKIPPED, level: 'skipped' } : ALL_SKIPPED
   }
@@ -150,14 +158,16 @@ export async function analyzeStemOnce(
             buffer.sampleRate
           )
         )
-        .then((level) => queueStemAnalysisWrite(path, { level: stemLevelFields(level) }))
+        .then((measured) => {
+          const level = stemLevelFields(measured)
+          queueStemAnalysisWrite(path, { level })
+          // this session's feature entry, too, so a renderer reader sees what main now holds
+          adoptStemLevelIntoFeaturesEntry(path, level)
+        })
     : null
   if (levelPromise !== null) {
-    levelInFlight.set(path, levelPromise)
-    void levelPromise.then(
-      () => levelInFlight.delete(path),
-      () => levelInFlight.delete(path)
-    )
+    levelMeasured.add(path)
+    levelPromise.catch(() => levelMeasured.delete(path))
   }
 
   const [peaks, features, embedding, zeroShot, level] = await Promise.allSettled([

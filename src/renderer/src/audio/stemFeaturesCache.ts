@@ -6,6 +6,7 @@ import { getBrightness } from './peakCache'
 import { primePitchContour } from './pitchCache'
 import { analyzeStemSamplesOffThread, channelsAfterFirst } from './stemAnalysisClient'
 import { queueStemAnalysisWrite } from './analysisWriteQueue'
+import type { StemLevelWrite } from '@shared/stemAnalysisWrite'
 
 const cache = new Map<string, Promise<StemFeatures>>()
 
@@ -118,6 +119,23 @@ export function adoptStemFeaturesFromBuffer(
         queueStemAnalysisWrite(path, { features })
       )
     )
+  )
+}
+
+/** analyzeStemOnce.ts's level backfill (spec 2026-10-05-radio-intensity-arc-design 7.3) measured
+ * `level` for a stem whose row main merges it into: patch this session's entry the same way, so a
+ * reader here sees the row as main now holds it. Only a settled, current entry that is still the
+ * entry is replaced (a stale one is being re-extracted, and that measures the level itself); none
+ * is created. */
+export function adoptStemLevelIntoFeaturesEntry(path: string, level: StemLevelWrite): void {
+  const entry = cache.get(path)
+  if (!entry) return
+  void entry.then(
+    (features) => {
+      if (cache.get(path) !== entry || !isCurrentStemFeatureVersion(features)) return
+      cache.set(path, Promise.resolve({ ...features, ...level }))
+    },
+    () => {}
   )
 }
 

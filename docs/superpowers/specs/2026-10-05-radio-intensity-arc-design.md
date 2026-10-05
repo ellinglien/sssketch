@@ -637,8 +637,10 @@ and a loudness that ignored the right channel would be wrong for stereo stems.
   - The write queue gets a `level` entry.
   - `writeStemAnalysisResults` merges it into the existing FeaturesJSON row (read, merge, write)
     in the same budgeted transaction. It never touches `featureVersion` or any other field.
-  - `afterStemFeatureRowWritten` fires, so the `TraitValueTable` and the quantile tables' growth
-    counter see the new fields. The tables rebuild at 5% growth (`traitQuantileCache.ts`).
+  - `noteStemFeatureRowWritten` fires (not `afterStemFeatureRowWritten`, which would also wake the
+    overnight classifier once per backfilled stem though none of its inputs moved), so the
+    `TraitValueTable` and the quantile tables' growth counter see the new fields. The tables
+    rebuild at 5% growth (`traitQuantileCache.ts`).
 - **It rides the ambient scans that already run,** and their consent gates (memory: whole-library
   and overnight scans are consent-gated). There is no new scan.
 - **Cost:**

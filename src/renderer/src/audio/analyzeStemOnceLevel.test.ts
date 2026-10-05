@@ -2,6 +2,7 @@
 // analyzeStemOnce's needs.level, and a fresh extraction's level from every channel.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { stemLevelFeatures } from '@shared/stemLevel'
+import { STEM_FEATURE_VERSION } from '@shared/stemFeatures'
 
 const NONE = { peaks: false, features: false, embedding: false, zeroShot: false }
 
@@ -96,6 +97,32 @@ describe('analyzeStemOnce: the level pass', () => {
     expect([a.level, b.level].sort()).toEqual(['done', 'skipped'])
     expect(decode).toHaveBeenCalledTimes(1)
     expect(await writes()).toHaveLength(1)
+  })
+
+  it('a stale needs page asking again later in the session decodes nothing more', async () => {
+    const { analyzeStemOnce } = await import('./analyzeStemOnce')
+    expect((await analyzeStemOnce('/lib/cid-q', { ...NONE, level: true })).level).toBe('done')
+    await writes()
+    expect((await analyzeStemOnce('/lib/cid-q', { ...NONE, level: true })).level).toBe('skipped')
+    expect(api.readAudioFile).toHaveBeenCalledTimes(1)
+    expect(decode).toHaveBeenCalledTimes(1)
+    expect(await writes()).toHaveLength(1)
+  })
+
+  it("patches the session's feature entry with the level once it is measured", async () => {
+    const row = { mfcc: [1, 2], transientDensity: 3, featureVersion: STEM_FEATURE_VERSION }
+    api.getStemFeatureCache.mockResolvedValue(row)
+    const { getStemFeatures } = await import('./stemFeaturesCache')
+    const { analyzeStemOnce } = await import('./analyzeStemOnce')
+    expect(await getStemFeatures('/lib/cid-e')).toEqual(row)
+    await analyzeStemOnce('/lib/cid-e', { ...NONE, level: true })
+    const want = { ...stemLevelFeatures([left, right], 44100), levelVersion: 1 }
+    expect(await getStemFeatures('/lib/cid-e')).toEqual({ ...row, ...want })
+    expect(await getStemFeatures('/lib/cid-e', { requireCurrentVersion: true })).toEqual({
+      ...row,
+      ...want
+    })
+    expect(decode).toHaveBeenCalledTimes(1)
   })
 
   it('a level pass alongside peaks still decodes once', async () => {
