@@ -78,4 +78,8 @@ export interface DiscoverCandidate {
    * through duplicates, nearby picks and undo/redo. It drives the radio
    * turnover after a switch and the keep block while such stems remain. */
   pickedUnderArtist?: string
+  /** The radio's intensity score (@shared/radioIntensity stemIntensityScore), [0, 1], or null
+   * when the stem is unscored. Attached only when a roll asks for it (getDiscoverCandidates'
+   * `alsoIntensity`, the web index's `x`): absent on every other roll. */
+  intensity?: number | null
 }

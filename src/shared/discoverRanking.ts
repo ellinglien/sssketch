@@ -8,6 +8,7 @@ import {
 import type { DiscoverTraitKind } from './discoverSlotKind'
 import { radioClashBedScore, radioClashTraitScore, type RankClash } from './radioClash'
 import { DIG_WEIGHT, radioDigCloseness, type RankDig } from './radioDig'
+import { intensityTerms, type RankIntensity } from './radioIntensity'
 
 export interface RankedCandidate {
   candidate: DiscoverCandidate
@@ -85,7 +86,8 @@ export function rankCandidates(
     favouriteScale = 1,
     targetTraits = [],
     clash,
-    dig
+    dig,
+    intensity
   }: {
     targetBpm: number
     favouriteStemCIDs?: ReadonlySet<string>
@@ -106,6 +108,11 @@ export function rankCandidates(
     /** Radio's dig (@shared/radioDig): every candidate gains DIG_WEIGHT * its closeness to the
      * dug stem (0 to 0.75). Absent: no term, exactly the ranking without it. */
     dig?: RankDig
+    /** Radio's intensity lean (@shared/radioIntensity, spec 2026-10-05-radio-intensity-arc-design
+     * 2.3): every candidate gains INTENSITY_WEIGHT * weight * (1 - |its rank by score in this pool
+     * - target|), an unscored one the neutral 0.5 closeness. Absent: no term, exactly the ranking
+     * without it. */
+    intensity?: RankIntensity
   }
 ): RankedCandidate[] {
   // Pool-relative values per kind, for candidates without a library
@@ -147,8 +154,9 @@ export function rankCandidates(
   }
 
   const boost = FAVOURITE_BOOST * clampWeight(favouriteScale)
+  const leaned = intensity ? intensityTerms(candidates, intensity) : null
   return candidates
-    .map((candidate) => {
+    .map((candidate, i) => {
       const bpmDistance = Math.abs(candidate.riffBpm - targetBpm)
       let score = Math.max(0, 1 - bpmDistance / BPM_FALLOFF)
       if (favouriteStemCIDs?.has(candidate.stemCID)) score += boost
@@ -170,6 +178,7 @@ export function rankCandidates(
       }
       if (clash) score += radioClashBedScore(candidate.traitPercentiles ?? {}, clash)
       if (dig) score += DIG_WEIGHT * radioDigCloseness(dig, candidate)
+      if (leaned) score += leaned[i]
       return { candidate, score }
     })
     .sort((a, b) => b.score - a.score)

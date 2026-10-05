@@ -34,8 +34,25 @@ export const TRAIT_FIELDS: readonly TraitField[] = [
   ])
 ]
 
+/** The level pass's fields (stemLevel.ts; spec 2026-10-05-radio-intensity-arc-design section
+ * 2.1): tables for the radio's intensity score (radioIntensity.ts), BESIDE the trait fields, never
+ * among them -- no trait kind reads them, so TRAIT_FIELDS and every trait percentile stay as they
+ * are. Preferred-only by tableForField's rule (none is a fallback field): a table exists once
+ * min(PREFERRED_TABLE_MIN_ROWS, half the rows) carry the field, so a half-backfilled library
+ * never compares a measured stem with nothing. */
+export type IntensityLevelField = 'lowLevelDb' | 'loudnessLufs' | 'activeFraction'
+export const INTENSITY_FIELDS: readonly IntensityLevelField[] = [
+  'lowLevelDb',
+  'loudnessLufs',
+  'activeFraction'
+]
+
+/** Every field a quantile table is built for: the trait fields, then the level fields. */
+export type QuantileField = TraitField | IntensityLevelField
+export const QUANTILE_FIELDS: readonly QuantileField[] = [...TRAIT_FIELDS, ...INTENSITY_FIELDS]
+
 /** The fields every analysed row carries, of every feature version. */
-export const FALLBACK_FIELDS: ReadonlySet<TraitField> = new Set<TraitField>(
+export const FALLBACK_FIELDS: ReadonlySet<QuantileField> = new Set<QuantileField>(
   Object.values(DISCOVER_TRAIT_FIELD)
 )
 
@@ -45,8 +62,9 @@ export const FALLBACK_FIELDS: ReadonlySet<TraitField> = new Set<TraitField>(
  * stems are placed by their fallback field (traitPercentilesFromValues). */
 export const PREFERRED_TABLE_MIN_ROWS = 200
 
-/** One table per field (keyed by FIELD, not kind, so bright/warm share). */
-export type TraitQuantileTables = Partial<Record<TraitField, QuantileTable>>
+/** One table per field (keyed by FIELD, not kind, so bright/warm share), the level fields
+ * included once enough rows carry them. */
+export type TraitQuantileTables = Partial<Record<QuantileField, QuantileTable>>
 
 /** Library percentile per requested trait kind, in [0, 1], already
  * direction-adjusted (warm = low centroid -> high percentile). null = the
@@ -78,7 +96,7 @@ export function buildQuantileTable(values: readonly number[]): QuantileTable | n
  * only once min(PREFERRED_TABLE_MIN_ROWS, half the parsed rows) carry it.
  * null when skipped or when nothing finite is left. */
 export function tableForField(
-  field: TraitField,
+  field: QuantileField,
   values: readonly number[],
   parsedRows: number
 ): QuantileTable | null {
