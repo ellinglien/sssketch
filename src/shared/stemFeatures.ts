@@ -38,6 +38,26 @@ export interface StemFeatures {
    * STEM_FEATURE_VERSION get re-extracted by the ambient background scans
    * (stemFeaturesCache.ts's requireCurrentVersion). */
   featureVersion?: number
+
+  // ---- the level pass (docs/superpowers/specs/2026-10-05-radio-intensity-arc-design.md
+  // section 7, stemLevel.ts), all optional: rows measured before it lack them, and the backfill
+  // adds them in place (levelVersion) without re-extracting anything else. NOT part of
+  // toFeatureArray, as for the Phase 3 fields. Null: silence.
+
+  /** Integrated loudness, BS.1770-4, from every channel. */
+  loudnessLufs?: number | null
+  /** The level under ~150 Hz, dBFS, ungated mean square (a level, not bassEnergyRatio's balance). */
+  lowLevelDb?: number | null
+  /** The share of 100 ms hops within 20 LU of the loudness, [0, 1]. */
+  activeFraction?: number
+  /** Which level pass measured this row (stemLevel.ts STEM_LEVEL_VERSION); absent: none yet. */
+  levelVersion?: number
+}
+
+/** A row's level-pass version: 0 when it has none. */
+export function stemLevelVersionOf(features: StemFeatures): number {
+  const v = features.levelVersion
+  return typeof v === 'number' && Number.isFinite(v) ? v : 0
 }
 
 /** Current StemFeatures extraction version. 2 = Phase 3 fields added

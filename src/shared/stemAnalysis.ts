@@ -14,6 +14,7 @@ import { computeBandEnergy } from './bandEnergy'
 import { computePitchContour, voicedPitchFeatures, type PitchContour } from './pitchContour'
 import { computeMfccAndCentroid } from './mfcc'
 import { STEM_FEATURE_VERSION, type StemFeatures } from './stemFeatures'
+import { STEM_LEVEL_VERSION, stemLevelFeatures, type StemLevel } from './stemLevel'
 
 export interface StemAnalysis {
   /** Also handed to pitchCache.ts, so Waveform/PolarGlyph never need a
@@ -28,6 +29,9 @@ export interface StemAnalysis {
   spectralCentroidFftHz: number
   onsetRegularity: number
   rhythmicStrength: number
+  /** The level pass (stemLevel.ts), from every channel -- present when the caller handed the
+   * other channels over (`extraChannels`), so a fresh extraction measures both in one message. */
+  level?: StemLevel
 }
 
 // Geometric-mean center frequency of each of computeBandEnergy's own fixed
@@ -65,7 +69,13 @@ function spectralCentroidFromBandEnergy(
   return totalEnergy > 1e-10 ? weightedSum / totalEnergy : 0
 }
 
-export function analyzeStemSamples(samples: Float32Array, sampleRate: number): StemAnalysis {
+/** `extraChannels`: the buffer's channels after the first (`samples`), for the level pass. Absent:
+ * no level (the analysis is today's, channel 0 only). */
+export function analyzeStemSamples(
+  samples: Float32Array,
+  sampleRate: number,
+  extraChannels?: readonly Float32Array[]
+): StemAnalysis {
   const bandEnergy = computeBandEnergy(samples, sampleRate)
   // One onset pass feeds both transientDensity (identical to typeGuess.ts's
   // transientDensity -- onsets per second) and the regularity measure.
@@ -85,7 +95,22 @@ export function analyzeStemSamples(samples: Float32Array, sampleRate: number): S
     mfcc,
     spectralCentroidFftHz: fftCentroid,
     onsetRegularity: regularity,
-    rhythmicStrength: rhythmicStrength(density, regularity)
+    rhythmicStrength: rhythmicStrength(density, regularity),
+    ...(extraChannels !== undefined && {
+      level: stemLevelFeatures([samples, ...extraChannels], sampleRate)
+    })
+  }
+}
+
+/** A level as the fields a feature row stores, stamped with the pass's version. */
+export function stemLevelFields(
+  level: StemLevel
+): Required<Pick<StemFeatures, 'loudnessLufs' | 'lowLevelDb' | 'activeFraction' | 'levelVersion'>> {
+  return {
+    loudnessLufs: level.loudnessLufs,
+    lowLevelDb: level.lowLevelDb,
+    activeFraction: level.activeFraction,
+    levelVersion: STEM_LEVEL_VERSION
   }
 }
 
@@ -104,6 +129,7 @@ export function assembleStemFeatures(analysis: StemAnalysis, brightness: number[
     spectralCentroidFftHz: analysis.spectralCentroidFftHz,
     onsetRegularity: analysis.onsetRegularity,
     rhythmicStrength: analysis.rhythmicStrength,
-    featureVersion: STEM_FEATURE_VERSION
+    featureVersion: STEM_FEATURE_VERSION,
+    ...(analysis.level !== undefined && stemLevelFields(analysis.level))
   }
 }
