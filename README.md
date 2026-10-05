@@ -60,10 +60,10 @@ Plugins are the one thing no export carries. Stem and mix audio include whatever
 
 ## Installing
 
-Latest version: **1.3.0**
+Latest version: **1.4.0**
 
-- [**sssketch-1.3.0.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.3.0/sssketch-1.3.0.dmg) — Apple Silicon (M1/M2/M3/M4)
-- [**sssketch-1.3.0-x64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.3.0/sssketch-1.3.0-x64.dmg) — Intel
+- [**sssketch-1.4.0-arm64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.4.0/sssketch-1.4.0-arm64.dmg) — Apple Silicon (M1/M2/M3/M4)
+- [**sssketch-1.4.0-x64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.4.0/sssketch-1.4.0-x64.dmg) — Intel
 
 Not sure which you have? Apple menu → About This Mac — it lists the chip.
 
