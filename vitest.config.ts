@@ -83,6 +83,10 @@ export default defineConfig({
           'src/main/traitQuantileCache.test.ts'
         ]
       : configDefaults.exclude,
-    passWithNoTests: true
+    passWithNoTests: true,
+    // 30 s, not vitest's 5 s default: the radio's seeded simulations (e.g. radioSchedule.test.ts's
+    // "decided early even off the bar grid") finish in about a second here but ran past 5 s on
+    // GitHub's macOS runner and failed v1.4.0's first release run. A real hang still fails.
+    testTimeout: 30_000
   }
 })

@@ -28,6 +28,18 @@ juce_add_gui_app(sssketch_bridge
   PLIST_TO_MERGE "<key>LSUIElement</key><true/>"
 )
 
+# JUCE puts a target's bundle in ${CMAKE_CURRENT_BINARY_DIR}/<target>_artefacts/$<CONFIG>, so a
+# Release configure (-DCMAKE_BUILD_TYPE=Release, what release.yml has used since 2026-10-01)
+# moves the .app into a Release/ subfolder that nothing looks in: electron-builder.yml,
+# engineProcess.ts, pluginScan.ts and the tests all expect build/sssketch_bridge_artefacts/<name>.app.
+# v1.4.0's release run failed on exactly that (every engine-spawning test: binary not found).
+# Pin the folder for every build type. The `$<0:>` is an empty generator expression: it keeps
+# multi-config generators from adding their own per-config subfolder.
+set_target_properties(sssketch_bridge PROPERTIES
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sssketch_bridge_artefacts$<0:>"
+  LIBRARY_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sssketch_bridge_artefacts$<0:>"
+  RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/sssketch_bridge_artefacts$<0:>")
+
 # See native-engine/CMakeLists.txt's own identical addition -- PRIVATE so
 # this only applies to our own sources, not JUCE's.
 target_compile_options(sssketch_bridge PRIVATE -Wall -Wextra)
