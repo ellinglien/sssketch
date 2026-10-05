@@ -1037,7 +1037,9 @@ describe('RadioSettings', () => {
       density: 'arc',
       faves: 0,
       paceLevel: 25,
-      sizedBuilds: true
+      sizedBuilds: true,
+      energy: 50,
+      drama: 60
     })
   })
 

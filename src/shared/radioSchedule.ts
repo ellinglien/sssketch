@@ -1053,12 +1053,26 @@ export function radioStarterKinds(channels: number): DiscoverSlotKind[] {
  * starts life as that preset's own numbers and diverges only if he steps
  * an edge. radioPaceWindowPreset reconciles the two for display. */
 /** The density arc (radioDensity.ts): `arc` grows and thins the rows while
- * radio runs; `off` keeps the count where it is. Elling likes it on. */
-export type RadioDensity = 'off' | 'arc'
-export const RADIO_DENSITY_OPTIONS: RadioDensity[] = ['off', 'arc']
+ * radio runs; `off` keeps the count where it is. Elling likes it on.
+ * `intensity` (radioIntensityArc.ts, spec 2026-10-05-radio-intensity-arc-design): builds, breaks
+ * down and drops, led by drums and bass -- it replaces the row-count arc while chosen, and drives
+ * the row count too. An older app reading a saved `intensity` normalises it to `arc`. */
+export type RadioDensity = 'off' | 'arc' | 'intensity'
+export const RADIO_DENSITY_OPTIONS: RadioDensity[] = ['off', 'arc', 'intensity']
 export const DEFAULT_RADIO_DENSITY: RadioDensity = 'arc'
 export function normalizeRadioDensity(value: unknown): RadioDensity {
-  return value === 'off' || value === 'arc' ? value : DEFAULT_RADIO_DENSITY
+  return value === 'off' || value === 'arc' || value === 'intensity' ? value : DEFAULT_RADIO_DENSITY
+}
+
+/** The intensity arc's two dials (spec 8), 0..100, whole: `energy` (where it sits, gentle with
+ * long breakdowns to driving with short ones) and `drama` (how far it swings, a subtle swell to
+ * the full breakdown and drop). */
+export const DEFAULT_RADIO_ENERGY = 50
+export const DEFAULT_RADIO_DRAMA = 60
+export function normalizeRadioDial(value: unknown, fallback: number): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.round(Math.min(100, Math.max(0, value)))
+    : fallback
 }
 
 export interface RadioSettings {
@@ -1104,6 +1118,24 @@ export interface RadioSettings {
    * turnarounds and arc timing exactly. normalizeRadioSettings sets it, on unless saved off; the
    * web radio's WEB_RADIO_DEFAULTS sets it on. */
   sizedBuilds?: boolean
+  /** The intensity arc's dials (DEFAULT_RADIO_ENERGY, DEFAULT_RADIO_DRAMA), 0..100. Optional for
+   * the same reason as `density`; normalizeRadioSettings always sets them, and absent reads as the
+   * defaults (radioEnergyOf, radioDramaOf). Nothing reads them unless density is `intensity`. */
+  energy?: number
+  drama?: number
+}
+
+/** Density is `intensity` for these settings: the intensity arc runs (radioIntensityArc.ts). */
+export function radioIntensityOn(settings: Pick<RadioSettings, 'density'>): boolean {
+  return settings.density === 'intensity'
+}
+
+export function radioEnergyOf(settings: Pick<RadioSettings, 'energy'>): number {
+  return normalizeRadioDial(settings.energy, DEFAULT_RADIO_ENERGY)
+}
+
+export function radioDramaOf(settings: Pick<RadioSettings, 'drama'>): number {
+  return normalizeRadioDial(settings.drama, DEFAULT_RADIO_DRAMA)
 }
 
 /** Sized builds are on for these settings (radioBuildSize.ts). */
@@ -1137,7 +1169,9 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   density: DEFAULT_RADIO_DENSITY,
   faves: DEFAULT_FAVES,
   paceLevel: DEFAULT_RADIO_PACE_LEVEL,
-  sizedBuilds: true
+  sizedBuilds: true,
+  energy: DEFAULT_RADIO_ENERGY,
+  drama: DEFAULT_RADIO_DRAMA
 }
 
 /** The window the clock draws a change's interval from: radioCadenceOf's (fold mode's own, 8-32
@@ -1209,7 +1243,10 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
         ? normalizeRadioPaceLevel(raw.paceLevel)
         : radioPaceLevelFromLegacy(pace, raw.paceBars),
     // Sized builds (2026-10-03, Elling: on for everyone): on unless saved off.
-    sizedBuilds: raw.sizedBuilds !== false
+    sizedBuilds: raw.sizedBuilds !== false,
+    // The intensity arc's dials (2026-10-05): saved values clamped and rounded, else 50 and 60.
+    energy: normalizeRadioDial(raw.energy, DEFAULT_RADIO_ENERGY),
+    drama: normalizeRadioDial(raw.drama, DEFAULT_RADIO_DRAMA)
   }
 }
 

@@ -3,6 +3,11 @@
 // a strip control fails it.
 import { describe, expect, it } from 'vitest'
 import {
+  RADIO_BUILD_TOOLTIP,
+  RADIO_DRAMA_TOOLTIP,
+  RADIO_DROP_TOOLTIP,
+  RADIO_ENERGY_TOOLTIP,
+  RADIO_WITH_INTENSITY,
   RADIO_CHANNEL_OPTIONS,
   RADIO_STRIP_GROUPS,
   RADIO_STRIP_HINTS,
@@ -144,7 +149,16 @@ describe('radioStripModel: groups and order', () => {
       settings({ density: 'off', turnarounds: 'rare', foldMode: true }),
       CTX
     )
-    expect(ids(g, 'play')).toEqual(['tempo', 'pace', 'skip', 'new-bed', 'turn', 'level'])
+    expect(ids(g, 'play')).toEqual([
+      'tempo',
+      'pace',
+      'skip',
+      'new-bed',
+      'turn',
+      'build',
+      'drop',
+      'level'
+    ])
     expect(ids(g, 'picks')).toEqual([
       'faves',
       'source',
@@ -152,6 +166,8 @@ describe('radioStripModel: groups and order', () => {
       'artist',
       'my-sounds',
       'density',
+      'energy',
+      'drama',
       'channels',
       'turnover'
     ])
@@ -191,6 +207,36 @@ describe('radioStripModel: greyed, not omitted', () => {
       expect(c?.disabled, d).toBe(d !== 'off')
       expect(c?.tooltip === 'with density off', d).toBe(d !== 'off')
     }
+  })
+
+  it('greys energy, drama, build and drop unless density is intensity, saying so', () => {
+    const want: Record<string, string> = {
+      energy: RADIO_ENERGY_TOOLTIP,
+      drama: RADIO_DRAMA_TOOLTIP,
+      build: RADIO_BUILD_TOOLTIP,
+      drop: RADIO_DROP_TOOLTIP
+    }
+    for (const d of RADIO_DENSITY_OPTIONS) {
+      const g = radioStripModel(settings({ density: d }), CTX)
+      for (const id of Object.keys(want)) {
+        const c = control(g, id)
+        expect(c?.disabled, `${id} ${d}`).toBe(d !== 'intensity')
+        expect(c?.tooltip, `${id} ${d}`).toBe(
+          d === 'intensity' ? want[id] : `${want[id]} · ${RADIO_WITH_INTENSITY}`
+        )
+      }
+    }
+  })
+
+  it('reads and patches energy and drama as sliders, the defaults when unset', () => {
+    const g = radioStripModel(settings({ density: 'intensity', energy: 30 }), CTX)
+    const e = control(g, 'energy')
+    const d = control(radioStripModel(settings({ drama: undefined }), CTX), 'drama')
+    if (e?.kind !== 'slider' || d?.kind !== 'slider') throw new Error('dials')
+    expect(e.value).toBe(30)
+    expect(e.patch(80)).toEqual({ energy: 80 })
+    expect(d.value).toBe(60)
+    expect(d.patch(10)).toEqual({ drama: 10 })
   })
 
   it('greys families and depth while turnarounds is off', () => {

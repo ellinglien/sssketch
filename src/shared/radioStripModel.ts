@@ -6,8 +6,8 @@
 // what it says, and which RadioSettings patch a choice makes are decided (and tested) here.
 //
 // THE GROUPS, in order, each with a `place` (top line, live bar, or columns) and a subtitle:
-// play (live: tempo, pace, skip, new bed, turn, level), picks (columns: faves, source, matching,
-// artist, my sounds, density, channels, turnover), shape (phrase, loop end, transitions, builds),
+// play (live: tempo, pace, skip, new bed, turn, build, drop, level), picks (columns: faves, source,
+// matching, artist, my sounds, density, energy, drama, channels, turnover), shape (phrase, loop end, transitions, builds),
 // moves (turnarounds, families, depth), fold (the switch; bend, mismatch, seed), sound (reverb,
 // filter, res, filter mode; saturation, pump, echo), mix (top: similar all, fetch hearts, add to
 // shelf, add to timeline, keep).
@@ -20,6 +20,7 @@
 //
 // GREYED, NOT HIDDEN (Elling, 2026-10-04): every control is present in every state. One that does
 // not apply is `disabled`, with its tooltip saying what it needs: channels (with density off),
+// energy, drama, build and drop (with density intensity),
 // families and depth (with turnarounds on), bend, mismatch and the seed (with fold on).
 //
 // THE HINTS. The running radio menu's hint paragraph went with the menu; each of its sentences is
@@ -32,6 +33,8 @@ import {
   RADIO_PHRASE_OPTIONS,
   RADIO_TURNOVER_OPTIONS,
   radioDensityOf,
+  radioDramaOf,
+  radioEnergyOf,
   radioPaceLevelOf,
   radioSizedBuildsOf,
   type RadioSettings
@@ -169,7 +172,8 @@ export const RADIO_STRIP_HINTS = {
     'transitions decide how a layer arrives, and a hole or a riser holds its change to the top of the loop'
   ],
   density: [
-    'density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added'
+    'density arc grows the rows to four or five and thins them to two or three, only ever removing rows radio added',
+    'intensity builds, breaks down and drops, led by drums and bass'
   ],
   turnarounds: ['turnarounds mark the end of each phrase'],
   fold: [
@@ -202,6 +206,13 @@ export const RADIO_TURNOVER_TOOLTIP =
 export const RADIO_BUILDS_TOOLTIP = 'build-ups sized to the change; every turnaround paid off'
 export const RADIO_NEW_BED_TOOLTIP = 'every unlocked row at once, at the next loop top'
 export const RADIO_SOUND_TOOLTIP = 'project sound'
+/** The intensity arc's controls (spec 2026-10-05-radio-intensity-arc-design sections 6, 8, 9):
+ * greyed, not hidden, with density not `intensity`. */
+export const RADIO_WITH_INTENSITY = 'with density intensity'
+export const RADIO_ENERGY_TOOLTIP = 'gentle to driving'
+export const RADIO_DRAMA_TOOLTIP = 'how far it swings'
+export const RADIO_BUILD_TOOLTIP = 'build: go up now'
+export const RADIO_DROP_TOOLTIP = 'drop: the drop at the next top'
 
 /** The strip's sound dials, from the sound panel's own controls: [strip id, panel id, label]. */
 export const RADIO_STRIP_SOUND_DIALS: readonly (readonly [string, string, string])[] = [
@@ -273,6 +284,9 @@ export function radioStripModel(
   const turnaroundsOn = settings.turnarounds !== 'off'
   const foldOn = settings.foldMode
   const sizedBuilds = radioSizedBuildsOf(settings)
+  const intensity = density === 'intensity'
+  /** A tooltip, with what it needs while density is not intensity. */
+  const withIntensity = (t: string): string => (intensity ? t : `${t} · ${RADIO_WITH_INTENSITY}`)
 
   const play: RadioStripControl[] = [
     panel('tempo', 'tempo'),
@@ -289,6 +303,8 @@ export function radioStripModel(
     panel('skip', 'skip', { tooltip: 'skip a row' }),
     panel('new-bed', 'new bed', { tooltip: RADIO_NEW_BED_TOOLTIP }),
     panel('turn', 'turn', { tooltip: 'turn at the top' }),
+    panel('build', 'build', { tooltip: withIntensity(RADIO_BUILD_TOOLTIP), disabled: !intensity }),
+    panel('drop', 'drop', { tooltip: withIntensity(RADIO_DROP_TOOLTIP), disabled: !intensity }),
     panel('level', 'level', { tooltip: 'whole mix level', disabled: !ctx.sounding })
   ]
 
@@ -315,6 +331,26 @@ export function radioStripModel(
         (d) => density === d,
         (d) => ({ density: d })
       )
+    },
+    {
+      kind: 'slider',
+      id: 'energy',
+      label: 'energy',
+      tooltip: withIntensity(RADIO_ENERGY_TOOLTIP),
+      sets: ['energy'],
+      disabled: !intensity,
+      value: radioEnergyOf(settings),
+      patch: (v: number) => ({ energy: v })
+    },
+    {
+      kind: 'slider',
+      id: 'drama',
+      label: 'drama',
+      tooltip: withIntensity(RADIO_DRAMA_TOOLTIP),
+      sets: ['drama'],
+      disabled: !intensity,
+      value: radioDramaOf(settings),
+      patch: (v: number) => ({ drama: v })
     },
     {
       kind: 'chips',

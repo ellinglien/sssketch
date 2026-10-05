@@ -129,10 +129,12 @@ describe('discoverSettingsStore', () => {
         fold: 70,
         clash: 60,
         foldSeed: 'k3x9pq',
-        density: 'off',
+        density: 'intensity',
         faves: 60,
         paceLevel: 42,
-        sizedBuilds: false
+        sizedBuilds: false,
+        energy: 20,
+        drama: 85
       }
     })
     expect(loadDiscoverSettings().radio).toEqual({
@@ -150,10 +152,12 @@ describe('discoverSettingsStore', () => {
       fold: 70,
       clash: 60,
       foldSeed: 'k3x9pq',
-      density: 'off',
+      density: 'intensity',
       faves: 60,
       paceLevel: 42,
-      sizedBuilds: false
+      sizedBuilds: false,
+      energy: 20,
+      drama: 85
     })
   })
 
