@@ -95,3 +95,84 @@ describe('stemLevelFeatures', () => {
     expect(r.activeFraction).toBe(1)
   })
 })
+
+describe('stemLevelFeatures: edges (Task 12 review follow-ups)', () => {
+  const finiteOrNull = (v: number | null): boolean => v === null || Number.isFinite(v)
+
+  it('a stem under one 100 ms hop is one short block: it still has a loudness', () => {
+    const r = stemLevelFeatures([sine(997, -20, 0.05, 48000)], 48000)
+    expect(r.loudnessLufs).not.toBeNull()
+    expect(r.loudnessLufs!).toBeCloseTo(-23.0, 0)
+    expect(r.activeFraction).toBe(1)
+    // a 99 ms stem, just under the hop, reads within a dB of a 250 ms one
+    const short = stemLevelFeatures([sine(997, -20, 0.099, 48000)], 48000).loudnessLufs!
+    const block = stemLevelFeatures([sine(997, -20, 0.25, 48000)], 48000).loudnessLufs!
+    expect(Math.abs(short - block)).toBeLessThan(1)
+  })
+
+  it('a single sample neither throws nor gives NaN', () => {
+    const r = stemLevelFeatures([new Float32Array([0.5])], 44100)
+    expect(finiteOrNull(r.loudnessLufs)).toBe(true)
+    expect(finiteOrNull(r.lowLevelDb)).toBe(true)
+    expect(Number.isFinite(r.activeFraction)).toBe(true)
+  })
+
+  it('NaN and infinite samples read as silence: nothing non-finite comes out', () => {
+    const fs = 48000
+    const clean = sine(997, -20, 4, fs)
+    const dirty = clean.slice()
+    dirty[1000] = NaN
+    dirty[90000] = Infinity
+    dirty[150000] = -Infinity
+    const zeroed = clean.slice()
+    zeroed[1000] = 0
+    zeroed[90000] = 0
+    zeroed[150000] = 0
+    const got = stemLevelFeatures([dirty], fs)
+    expect(Number.isFinite(got.loudnessLufs)).toBe(true)
+    expect(Number.isFinite(got.lowLevelDb)).toBe(true)
+    expect(Number.isFinite(got.activeFraction)).toBe(true)
+    expect(got).toEqual(stemLevelFeatures([zeroed], fs))
+    const allNaN = stemLevelFeatures([new Float32Array(fs).fill(NaN)], fs)
+    expect(allNaN).toEqual({ loudnessLufs: null, lowLevelDb: null, activeFraction: 0 })
+  })
+
+  it('unequal stereo channels: the shorter one is silent past its end', () => {
+    const fs = 48000
+    const left = sine(997, -20, 4, fs)
+    const right = sine(220, -26, 2, fs)
+    const padded = new Float32Array(left.length)
+    padded.set(right)
+    const a = stemLevelFeatures([left, right], fs)
+    const b = stemLevelFeatures([left, padded], fs)
+    expect(a.loudnessLufs!).toBeCloseTo(b.loudnessLufs!, 1)
+    expect(a.lowLevelDb!).toBeCloseTo(b.lowLevelDb!, 1)
+    expect(a.activeFraction).toBe(b.activeFraction)
+    // and the order of the channels does not matter
+    expect(stemLevelFeatures([right, left], fs)).toEqual(a)
+  })
+
+  it('the relative gate leaves out a section 35 dB down (it would pull the loudness ~3 LU)', () => {
+    const fs = 48000
+    const loud = sine(997, -20, 5, fs)
+    const quiet = sine(997, -55, 5, fs)
+    const both = new Float32Array(loud.length + quiet.length)
+    both.set(loud, 0)
+    both.set(quiet, loud.length)
+    const r = stemLevelFeatures([both], fs)
+    const alone = stemLevelFeatures([loud], fs).loudnessLufs!
+    // the quiet half passes the absolute gate (-58 LUFS > -70), so only the relative gate keeps it
+    // out: averaged in, the two halves would read about 3 LU under the loud one
+    expect(Math.abs(r.loudnessLufs! - alone)).toBeLessThanOrEqual(0.2)
+    expect(r.activeFraction).toBeGreaterThan(0.45)
+    expect(r.activeFraction).toBeLessThan(0.55)
+  })
+
+  it('lowLevelDb reads the same at 44.1 and 48 kHz, through the corner', () => {
+    for (const hz of [40, 100, 150, 300]) {
+      const a = stemLevelFeatures([sine(hz, -12, 6, 44100)], 44100).lowLevelDb!
+      const b = stemLevelFeatures([sine(hz, -12, 6, 48000)], 48000).lowLevelDb!
+      expect(Math.abs(a - b), `${hz} Hz`).toBeLessThanOrEqual(0.1)
+    }
+  })
+})

@@ -97,7 +97,8 @@ export function butterworthLowPass(fc: number, fs: number): Biquad {
 }
 
 /** Runs `x` through the biquads in series (direct form II transposed), returning the squared
- * output per sample through `sink`. */
+ * output per sample through `sink`. A non-finite sample (NaN, +-Infinity) reads as silence: one
+ * would otherwise poison the filters' state for the rest of the stem. */
 function filterSquares(
   x: Float32Array,
   stages: readonly Biquad[],
@@ -107,6 +108,7 @@ function filterSquares(
   const z2 = new Float64Array(stages.length)
   for (let i = 0; i < x.length; i++) {
     let v = x[i]
+    if (!Number.isFinite(v)) v = 0
     for (let s = 0; s < stages.length; s++) {
       const f = stages[s]
       const y = f.b0 * v + z1[s]
@@ -134,8 +136,9 @@ export function stemLevelFeatures(
   const n = channels.reduce((m, c) => Math.max(m, c.length), 0)
   if (channels.length === 0 || n === 0 || !(sampleRate > 0)) return silent
 
-  // K-weighted energy per 100 ms hop, summed over channels (G = 1 each)
-  const hop = Math.max(1, Math.round(LOUDNESS_HOP_SEC * sampleRate))
+  // K-weighted energy per 100 ms hop, summed over channels (G = 1 each). A stem shorter than one
+  // hop is one short block of all its samples (else it would have no block, and no loudness).
+  const hop = Math.min(n, Math.max(1, Math.round(LOUDNESS_HOP_SEC * sampleRate)))
   const hops = Math.floor(n / hop)
   const hopEnergy = new Float64Array(Math.max(1, hops))
   const k = [kWeightingShelf(sampleRate), kWeightingHighPass(sampleRate)]
