@@ -1,0 +1,895 @@
+// The intensity arc: build, breakdown, drop (spec 2026-10-05-radio-intensity-arc-design sections
+// 3, 4, 6): radioIntensityArc.ts.
+import { describe, expect, it } from 'vitest'
+import {
+  INTENSITY_PHRASES,
+  NO_RADIO_INTENSITY_ARC,
+  newRadioIntensityArc,
+  pressRadioIntensity,
+  radioBreakdownDepth,
+  radioBreakdownRests,
+  radioCarryKind,
+  radioIntensityArcRole,
+  radioIntensityBend,
+  radioIntensityButtonLabel,
+  radioIntensityDropInBars,
+  radioIntensityHookInputs,
+  radioIntensityStarted,
+  radioIntensityStopped,
+  radioIntensityTarget,
+  radioIntensityTargets,
+  radioIntensityTurnaroundArc,
+  releaseRadioIntensityRest,
+  stepRadioIntensityArc,
+  type RadioIntensityArc,
+  type RadioIntensityDecided,
+  type RadioIntensityRow,
+  type RadioIntensityStepInput,
+  type RadioIntensityStepResult
+} from './radioIntensityArc'
+import { DENSITY_MAX, DENSITY_MIN, nextArcKind } from './radioDensity'
+import { turnaroundPhraseLaps } from './radioTurnaround'
+import { seededRandom } from './seededRandom'
+import type { DiscoverSlotKind } from './discoverSlotKind'
+
+// ---- a small runtime: rows, rests, the clock ----
+
+interface SimRow {
+  id: string
+  kinds: DiscoverSlotKind[]
+  score: number | null
+  staleness: number
+  resting: boolean
+  locked?: boolean
+  muted?: boolean
+}
+
+interface Trace {
+  wrap: number
+  lap: number
+  applied: RadioIntensityDecided | null
+  decided: RadioIntensityDecided | null
+  prepare: RadioIntensityStepResult['prepare']
+  phase: RadioIntensityArc['phase']
+  rows: number
+  sounding: number
+  low: boolean
+}
+
+/** Runs the arc for `wraps` loop tops on a `loopBars` loop, doing what it says. */
+function simulate(o: {
+  loopBars: number
+  wraps: number
+  energy?: number
+  drama?: number
+  seed?: string
+  rows?: SimRow[]
+  held?: (wrap: number) => boolean
+  press?: (wrap: number, arc: RadioIntensityArc) => 'build' | 'drop' | null
+}): { trace: Trace[]; arc: RadioIntensityArc } {
+  const random = seededRandom(o.seed ?? 'arc')
+  const P = turnaroundPhraseLaps(16, o.loopBars)
+  let n = 0
+  const row = (kinds: DiscoverSlotKind[]): SimRow => ({
+    id: `r${n++}`,
+    kinds,
+    score: random(),
+    staleness: 0,
+    resting: false
+  })
+  const rows: SimRow[] = o.rows ?? [row(['drums']), row(['bass'])]
+  const energy = o.energy ?? 50
+  const drama = o.drama ?? 60
+  const view = (): RadioIntensityRow[] =>
+    rows.map((r) => ({
+      id: r.id,
+      kinds: r.kinds,
+      score: r.score,
+      staleness: r.staleness,
+      sounding: !r.resting && !r.muted,
+      restable: !r.locked && !r.muted && !r.resting
+    }))
+  let arc = radioIntensityStarted({
+    energy,
+    drama,
+    min: DENSITY_MIN,
+    max: DENSITY_MAX,
+    count: rows.length,
+    random
+  })
+  const trace: Trace[] = []
+  let lap = 0
+  let carry = false
+  const warm = new Set<string>()
+  for (let w = 1; w <= o.wraps; w++) {
+    lap = (lap + 1) % P
+    for (const r of rows) r.staleness += 1
+    const held = o.held?.(w) ?? false
+    const step = stepRadioIntensityArc(arc, {
+      energy,
+      drama,
+      loopBars: o.loopBars,
+      lap,
+      phraseLaps: P,
+      held,
+      count: rows.length,
+      min: DENSITY_MIN,
+      max: DENSITY_MAX,
+      rows: view(),
+      canAdd: rows.length < DENSITY_MAX && nextArcKind(rows.map((r) => r.kinds)) !== null,
+      canStrip: rows.length > DENSITY_MIN,
+      carryReady: carry,
+      renewReady: (id) => warm.has(id),
+      random
+    })
+    arc = step.state
+    const a = step.applied
+    if (a?.event === 'cycle' && a.strip && rows.length > DENSITY_MIN) {
+      // the stalest that is not the last drums or bass
+      const ok = rows.filter(
+        (r) =>
+          !(['drums', 'bass'] as const).some(
+            (k) => r.kinds.includes(k) && !rows.some((x) => x !== r && x.kinds.includes(k))
+          )
+      )
+      const victim = ok.sort((x, y) => y.staleness - x.staleness)[0]
+      if (victim) rows.splice(rows.indexOf(victim), 1)
+    }
+    if (a?.event === 'add') {
+      const k = nextArcKind(rows.map((r) => r.kinds))
+      if (k !== null) rows.push(row([k]))
+    }
+    if (a?.event === 'breakdown') {
+      for (const r of rows) if (a.rest.includes(r.id)) r.resting = true
+      if (a.carry) rows.push(row([radioCarryKind(rows)]))
+      carry = false
+    }
+    if (a?.event === 'drop') {
+      for (const r of rows) {
+        if (a.returning.includes(r.id)) r.resting = false
+        if (a.renew.includes(r.id)) {
+          r.score = Math.min(1, (r.score ?? 0.5) + 0.2)
+          r.staleness = 0
+        }
+      }
+      warm.clear()
+    }
+    if (step.prepare?.carry) carry = true
+    for (const id of step.prepare?.renew ?? []) warm.add(id)
+    const pressed = o.press?.(w, arc) ?? null
+    if (pressed !== null) {
+      const next = pressRadioIntensity(arc, pressed, { lap, phraseLaps: P, late: false })
+      if (next !== null) arc = next
+    }
+    const sounding = rows.filter((r) => !r.resting && !r.muted)
+    trace.push({
+      wrap: w,
+      lap,
+      applied: a,
+      decided: step.decided,
+      prepare: step.prepare,
+      phase: arc.phase,
+      rows: rows.length,
+      sounding: sounding.length,
+      low: sounding.some((r) => r.kinds.includes('drums') || r.kinds.includes('bass'))
+    })
+  }
+  return { trace, arc }
+}
+
+const changes = (t: Trace[]): Trace[] => t.filter((x) => x.applied !== null)
+
+describe('targets', () => {
+  it('match the knots (section 3.2)', () => {
+    const at = (e: number, d: number, big = false): number[] => {
+      const t = radioIntensityTargets(e, d, big)
+      return [Math.round(t.lo * 100) / 100, Math.round(t.hi * 100) / 100]
+    }
+    expect(at(0, 0)).toEqual([0.2, 0.5])
+    expect(at(50, 60)).toEqual([0.14, 0.86])
+    expect(at(100, 100)).toEqual([0.15, 1])
+    expect(at(50, 60, true)).toEqual([0.14, 1])
+    expect(at(0, 0, true)).toEqual([0.2, 0.65])
+  })
+
+  it('rise by phrase through the build, lo in the breakdown, hi in the drop', () => {
+    const arc: RadioIntensityArc = { ...newRadioIntensityArc(), begun: true, phrases: 4 }
+    const { lo, hi } = radioIntensityTargets(50, 60, false)
+    const ks = [0, 1, 2, 3].map((done) => radioIntensityTarget({ ...arc, done }, 50, 60))
+    ks.forEach((t, k) => expect(t).toBeCloseTo(lo + ((hi - lo) * (k + 1)) / 4, 9))
+    expect(radioIntensityTarget({ ...arc, phase: 'breakdown' }, 50, 60)).toBeCloseTo(lo, 9)
+    expect(radioIntensityTarget({ ...arc, phase: 'drop' }, 50, 60)).toBeCloseTo(hi, 9)
+  })
+})
+
+describe('lengths', () => {
+  it('draw from the energy menus (big: build and ride +1)', () => {
+    expect(INTENSITY_PHRASES).toEqual({
+      build: { low: [3, 4], mid: [2, 3, 4], high: [2, 3] },
+      breakdown: { low: [2], mid: [1, 2], high: [1] },
+      drop: { low: [1], mid: [1, 2], high: [2, 3] }
+    })
+    for (const [energy, band] of [
+      [0, 'low'],
+      [33, 'low'],
+      [34, 'mid'],
+      [66, 'mid'],
+      [67, 'high'],
+      [100, 'high']
+    ] as const) {
+      const { trace } = simulate({ loopBars: 4, wraps: 2400, energy, seed: `len${energy}` })
+      const seen = { breakdown: new Set<number>(), drop: new Set<number>() }
+      for (const c of changes(trace)) {
+        const a = c.applied!
+        if (a.event === 'breakdown') seen.breakdown.add(a.next!.phrases)
+        if (a.event === 'drop' && a.next) seen.drop.add(a.next.phrases)
+      }
+      expect([...seen.breakdown].sort(), `${energy}`).toEqual([
+        ...INTENSITY_PHRASES.breakdown[band]
+      ])
+      for (const p of seen.drop) {
+        const menu = INTENSITY_PHRASES.drop[band]
+        expect(menu.includes(p) || menu.includes(p - 1), `${energy} drop ${p}`).toBe(true)
+      }
+    }
+  })
+
+  it('a build is raised to fit its adds: one per phrase start after the first', () => {
+    // energy 50 can draw a 2-phrase build; from 2 rows to 5 needs 3 adds, so 4 phrases
+    for (const seed of ['a', 'b', 'c', 'd']) {
+      const arc = radioIntensityStarted({
+        energy: 60,
+        drama: 60,
+        min: 2,
+        max: 5,
+        count: 2,
+        random: seededRandom(seed)
+      })
+      expect(arc.peakRows).toBe(5)
+      expect(arc.phrases).toBeGreaterThanOrEqual(4)
+      expect(arc.first).toBe(true)
+      expect(arc.big).toBe(false)
+    }
+  })
+
+  it('a cycle at the defaults averages about six phrases', () => {
+    const { trace } = simulate({ loopBars: 4, wraps: 4 * 2000, seed: 'mean' })
+    const starts = changes(trace).filter((c) => c.applied!.event === 'cycle')
+    const span = (starts[starts.length - 1].wrap - starts[0].wrap) / (starts.length - 1) / 4
+    expect(span).toBeGreaterThan(5)
+    expect(span).toBeLessThan(7.5)
+  })
+})
+
+describe('the clock', () => {
+  it('changes phase only on phrase starts, at loops of 1 to 32 bars', () => {
+    for (const loopBars of [1, 2, 3, 4, 5, 8, 16, 32]) {
+      const { trace } = simulate({ loopBars, wraps: 600, seed: `clock${loopBars}` })
+      const phaseChanges = changes(trace).filter((c) => c.applied!.event !== 'add')
+      expect(phaseChanges.length, `${loopBars}`).toBeGreaterThan(3)
+      for (const c of changes(trace)) expect(c.lap, `${loopBars} wrap ${c.wrap}`).toBe(0)
+    }
+  })
+
+  it('decides one wrap ahead (binding), and prepares a phrase ahead of the decision', () => {
+    for (const loopBars of [2, 4, 16]) {
+      const { trace } = simulate({ loopBars, wraps: 800, seed: `ahead${loopBars}` })
+      for (let i = 1; i < trace.length; i++) {
+        if (trace[i].applied !== null) expect(trace[i].applied).toEqual(trace[i - 1].decided)
+      }
+      const P = turnaroundPhraseLaps(16, loopBars)
+      for (const t of trace) {
+        if (t.applied?.event !== 'drop') continue
+        const prep = trace.filter((x) => x.wrap < t.wrap && (x.prepare?.renew.length ?? 0) > 0)
+        const last = prep[prep.length - 1]
+        expect(last, `${loopBars}: a drop at ${t.wrap} was prepared`).toBeDefined()
+        // prepared before it was decided (two wraps with a one-lap phrase)
+        expect(t.wrap - last.wrap, `${loopBars}`).toBeGreaterThanOrEqual(Math.max(P, 2))
+      }
+    }
+  })
+
+  it('held: the clock stops and nothing is decided; a decided event still lands', () => {
+    const arc = radioIntensityStarted({
+      energy: 50,
+      drama: 60,
+      min: 2,
+      max: 5,
+      count: 2,
+      random: () => 0
+    })
+    let draws = 0
+    const input: RadioIntensityStepInput = {
+      energy: 50,
+      drama: 60,
+      loopBars: 4,
+      lap: 3,
+      phraseLaps: 4,
+      held: true,
+      count: 2,
+      min: 2,
+      max: 5,
+      rows: [],
+      canAdd: true,
+      canStrip: false,
+      carryReady: false,
+      renewReady: () => true,
+      random: () => {
+        draws += 1
+        return 0
+      }
+    }
+    const r = stepRadioIntensityArc(arc, input)
+    expect(r.state).toEqual(arc)
+    expect(r.decided).toBeNull()
+    expect(draws).toBe(0)
+    const decided: RadioIntensityArc = { ...arc, decided: { event: 'add' } }
+    const landed = stepRadioIntensityArc(decided, { ...input, lap: 0 })
+    expect(landed.applied).toEqual({ event: 'add' })
+    expect(landed.state.decided).toBeNull()
+    expect(landed.state.done).toBe(arc.done)
+  })
+
+  it('a machine switched on mid-run begins at the next phrase start, drawing nothing before', () => {
+    let draws = 0
+    const random = (): number => {
+      draws += 1
+      return 0.5
+    }
+    const base = {
+      energy: 50,
+      drama: 60,
+      loopBars: 4,
+      phraseLaps: 4,
+      held: false,
+      count: 4,
+      min: 2,
+      max: 5,
+      rows: [],
+      canAdd: true,
+      canStrip: true,
+      carryReady: false,
+      renewReady: () => false,
+      random
+    }
+    let arc = newRadioIntensityArc()
+    for (const lap of [2, 3]) arc = stepRadioIntensityArc(arc, { ...base, lap }).state
+    expect(arc.begun).toBe(false)
+    expect(draws).toBe(0)
+    arc = stepRadioIntensityArc(arc, { ...base, lap: 0 }).state
+    expect(arc).toMatchObject({ begun: true, phase: 'build', done: 0, first: true })
+    expect(draws).toBeGreaterThan(0)
+  })
+})
+
+describe('the cycle', () => {
+  it('runs build, breakdown, drop, build ... and strips back at each later build', () => {
+    const { trace } = simulate({ loopBars: 4, wraps: 1200, seed: 'cycle' })
+    const order = changes(trace)
+      .map((c) => c.applied!.event)
+      .filter((e) => e !== 'add')
+    for (let i = 0; i < order.length; i++) {
+      expect(order[i]).toBe(['breakdown', 'drop', 'cycle'][i % 3])
+    }
+    for (const c of changes(trace))
+      if (c.applied!.event === 'cycle') expect(c.applied).toMatchObject({ strip: true })
+  })
+
+  it('grows one row per phrase start to the peak, and the drop keeps the count', () => {
+    const { trace } = simulate({ loopBars: 4, wraps: 1200, energy: 80, seed: 'peak' })
+    let last = 2
+    for (const t of trace) {
+      expect(Math.abs(t.rows - last)).toBeLessThanOrEqual(1)
+      last = t.rows
+      if (t.applied?.event === 'breakdown') expect(t.rows).toBeGreaterThanOrEqual(4)
+    }
+  })
+
+  it('bigger peaks: never the first cycle, then every 3-4 cycles', () => {
+    const { trace } = simulate({ loopBars: 4, wraps: 4 * 600, seed: 'big' })
+    const cycles = changes(trace).filter((c) => c.applied!.event === 'cycle')
+    const bigs = cycles
+      .map((c, i) => ({ i: i + 2, big: (c.applied as { next?: { big?: boolean } }).next?.big }))
+      .filter((c) => c.big)
+      .map((c) => c.i)
+    expect(bigs.length).toBeGreaterThan(5)
+    expect(bigs[0]).toBeGreaterThanOrEqual(4)
+    for (let i = 1; i < bigs.length; i++) expect([3, 4]).toContain(bigs[i] - bigs[i - 1])
+  })
+
+  it('a big cycle heads for DENSITY_MAX and breaks down one level deeper', () => {
+    expect(radioBreakdownDepth(10, false)).toBe('swell')
+    expect(radioBreakdownDepth(10, true)).toBe('thin')
+    expect(radioBreakdownDepth(40, false)).toBe('thin')
+    expect(radioBreakdownDepth(40, true)).toBe('full')
+    expect(radioBreakdownDepth(60, false)).toBe('full')
+    expect(radioBreakdownDepth(100, true)).toBe('full')
+    const { trace } = simulate({ loopBars: 4, wraps: 4 * 300, energy: 20, seed: 'bigpeak' })
+    for (const c of changes(trace)) {
+      const a = c.applied!
+      if (a.event === 'cycle' && a.next?.big) expect(a.next.peakRows).toBe(DENSITY_MAX)
+    }
+  })
+})
+
+describe('the breakdown', () => {
+  const R = (
+    id: string,
+    kinds: DiscoverSlotKind[],
+    o: Partial<RadioIntensityRow> = {}
+  ): RadioIntensityRow => ({
+    id,
+    kinds,
+    score: 0.5,
+    staleness: 0,
+    sounding: true,
+    restable: true,
+    ...o
+  })
+
+  it('swell rests nothing; thin keeps the sparsest drums; full rests every drums and bass row', () => {
+    const bed = [
+      R('d1', ['drums'], { score: 0.9 }),
+      R('d2', ['drums'], { score: 0.2 }),
+      R('b', ['bass']),
+      R('l', ['lead']),
+      R('w', ['warm'])
+    ]
+    expect(radioBreakdownRests(bed, 'swell', false).rest).toEqual([])
+    expect(radioBreakdownRests(bed, 'thin', false)).toMatchObject({
+      depth: 'thin',
+      rest: ['d1', 'b'],
+      throwRowId: 'd1'
+    })
+    expect(radioBreakdownRests(bed, 'full', false)).toMatchObject({
+      depth: 'full',
+      rest: ['d1', 'd2', 'b'],
+      throwRowId: 'd1',
+      carry: false
+    })
+  })
+
+  it('counts a combination row as low; bassHeavy and rhythmic are not', () => {
+    const bed = [R('db', ['drums', 'bass']), R('h', ['bassHeavy']), R('r', ['rhythmic'])]
+    expect(radioBreakdownRests(bed, 'full', false).rest).toEqual(['db'])
+  })
+
+  it('unknown scores read 0.5, ties go to the stalest; an unrestable drums row is the kept one', () => {
+    const bed = [
+      R('a', ['drums'], { score: null, staleness: 1 }),
+      R('b', ['drums'], { score: 0.5, staleness: 9 }),
+      R('l', ['lead'])
+    ]
+    expect(radioBreakdownRests(bed, 'thin', false).rest).toEqual(['a'])
+    const locked = [R('a', ['drums'], { restable: false }), R('b', ['drums']), R('l', ['lead'])]
+    expect(radioBreakdownRests(locked, 'thin', false).rest).toEqual(['b'])
+  })
+
+  it('with no carrier: a carry row when one is ready, else full falls to thin', () => {
+    const bed = [R('d', ['drums']), R('b', ['bass'])]
+    expect(radioBreakdownRests(bed, 'full', true)).toMatchObject({ rest: ['d', 'b'], carry: true })
+    expect(radioBreakdownRests(bed, 'full', false)).toMatchObject({ depth: 'thin', rest: ['b'] })
+    expect(radioCarryKind([{ kinds: ['drums'] }])).toBe('lead')
+    expect(radioCarryKind([{ kinds: ['lead'] }])).toBe('warm')
+  })
+
+  it('never silence: something always sounds (10k random beds)', () => {
+    const r = seededRandom('never-silence')
+    const kinds: DiscoverSlotKind[] = ['drums', 'bass', 'lead', 'warm', 'bright', 'rhythmic']
+    for (let i = 0; i < 10000; i++) {
+      const n = 1 + Math.floor(r() * 6)
+      const bed: RadioIntensityRow[] = Array.from({ length: n }, (_, j) => {
+        const ks: DiscoverSlotKind[] = [kinds[Math.floor(r() * kinds.length)]]
+        if (r() < 0.15) ks.push(kinds[Math.floor(r() * kinds.length)])
+        const sounding = r() < 0.85
+        return R(`x${j}`, ks, {
+          score: r() < 0.2 ? null : r(),
+          staleness: Math.floor(r() * 10),
+          sounding,
+          restable: sounding && r() < 0.8
+        })
+      })
+      if (!bed.some((x) => x.sounding)) continue
+      const depth = (['thin', 'full'] as const)[Math.floor(r() * 2)]
+      const carry = r() < 0.5
+      const out = radioBreakdownRests(bed, depth, carry)
+      const left = bed.filter((x) => x.sounding && !out.rest.includes(x.id))
+      expect(left.length > 0 || out.carry, JSON.stringify({ bed, out })).toBe(true)
+      for (const id of out.rest) {
+        const row = bed.find((x) => x.id === id)!
+        expect(row.restable && row.sounding).toBe(true)
+        expect(row.kinds.includes('drums') || row.kinds.includes('bass')).toBe(true)
+      }
+      if (out.throwRowId !== null) {
+        expect(out.rest).toContain(out.throwRowId)
+        expect(bed.find((x) => x.id === out.throwRowId)!.kinds).toContain('drums')
+      }
+    }
+  })
+
+  it('in a run, the low end is missing only in a breakdown, and nothing is ever silent', () => {
+    for (const drama of [0, 40, 100]) {
+      const { trace } = simulate({ loopBars: 4, wraps: 2000, drama, seed: `low${drama}` })
+      for (const t of trace) {
+        expect(t.sounding, `${drama} wrap ${t.wrap}`).toBeGreaterThan(0)
+        if (!t.low) expect(t.phase, `${drama} wrap ${t.wrap}`).toBe('breakdown')
+      }
+      const breakdowns = trace.filter((t) => t.phase === 'breakdown')
+      const lowShare = breakdowns.filter((t) => t.low).length / Math.max(1, breakdowns.length)
+      if (drama >= 60) expect(lowShare).toBeLessThan(0.5)
+      if (drama < 25) expect(lowShare).toBe(1)
+    }
+  })
+
+  it('ends after phrases + 1 phrase starts in any case (overran)', () => {
+    const arc: RadioIntensityArc = {
+      ...newRadioIntensityArc(),
+      begun: true,
+      phase: 'breakdown',
+      phrases: 1,
+      done: 1,
+      rests: ['d']
+    }
+    const r = stepRadioIntensityArc(arc, {
+      energy: 50,
+      drama: 60,
+      loopBars: 4,
+      lap: 0,
+      phraseLaps: 4,
+      held: false,
+      count: 3,
+      min: 2,
+      max: 5,
+      rows: [],
+      canAdd: false,
+      canStrip: false,
+      carryReady: false,
+      renewReady: () => false,
+      random: () => 0.5
+    })
+    expect(r.overran).toBe(true)
+    expect(r.decided).toMatchObject({ event: 'drop', returning: ['d'] })
+  })
+})
+
+describe('the drop', () => {
+  it('brings every rested row back; renews warm drums and bass at 0.25 + 0.5 drama', () => {
+    const counts = { renewed: 0, returning: 0 }
+    for (let s = 0; s < 40; s++) {
+      const { trace } = simulate({ loopBars: 4, wraps: 600, drama: 60, seed: `renew${s}` })
+      for (const c of changes(trace)) {
+        const a = c.applied!
+        if (a.event !== 'drop') continue
+        counts.returning += a.returning.length
+        counts.renewed += a.renew.length
+        for (const id of a.renew) expect(a.returning).toContain(id)
+      }
+    }
+    expect(counts.returning).toBeGreaterThan(100)
+    expect(counts.renewed / counts.returning).toBeGreaterThan(0.45)
+    expect(counts.renewed / counts.returning).toBeLessThan(0.65)
+  })
+
+  it('a renewal not warm by the decide wrap is the own stem, with no draw', () => {
+    const arc: RadioIntensityArc = {
+      ...newRadioIntensityArc(),
+      begun: true,
+      phase: 'breakdown',
+      phrases: 1,
+      done: 0,
+      rests: ['d', 'b']
+    }
+    const draws: number[] = []
+    const r = stepRadioIntensityArc(arc, {
+      energy: 50,
+      drama: 60,
+      loopBars: 4,
+      lap: 3,
+      phraseLaps: 4,
+      held: false,
+      count: 3,
+      min: 2,
+      max: 5,
+      rows: [
+        { id: 'd', kinds: ['drums'], score: 0.5, staleness: 0, sounding: false, restable: false },
+        { id: 'b', kinds: ['bass'], score: 0.5, staleness: 0, sounding: false, restable: false },
+        { id: 'l', kinds: ['lead'], score: 0.5, staleness: 0, sounding: true, restable: true }
+      ],
+      canAdd: false,
+      canStrip: false,
+      carryReady: false,
+      renewReady: (id) => id === 'b',
+      random: () => {
+        draws.push(0)
+        return 0
+      }
+    })
+    expect(r.decided).toMatchObject({ event: 'drop', returning: ['d', 'b'], renew: ['b'] })
+    // one renewal draw (b), then the ride's length (energy 50: {1, 2})
+    expect(draws).toHaveLength(2)
+  })
+})
+
+describe('the buttons', () => {
+  const at = (
+    phase: RadioIntensityArc['phase'],
+    o: Partial<RadioIntensityArc> = {}
+  ): RadioIntensityArc => ({
+    ...newRadioIntensityArc(),
+    begun: true,
+    phase,
+    phrases: 3,
+    done: 1,
+    ...o
+  })
+  const where = { lap: 1, phraseLaps: 4, late: false }
+
+  it('build in the ride: a new cycle at the next top', () => {
+    expect(pressRadioIntensity(at('drop'), 'build', where)?.decided).toEqual({
+      event: 'cycle',
+      strip: true,
+      forced: true
+    })
+  })
+
+  it('build in the build: an add at the top, the remaining phrases halved', () => {
+    const r = pressRadioIntensity(at('build', { phrases: 5, done: 1 }), 'build', where)!
+    expect(r.decided).toEqual({ event: 'add', forced: true })
+    expect(r.phrases).toBe(3)
+    expect(pressRadioIntensity(at('build', { phrases: 2, done: 1 }), 'build', where)!.phrases).toBe(
+      2
+    )
+  })
+
+  it('build in the breakdown: the drop at the next phrase start whose decide wrap has not passed', () => {
+    const b = at('breakdown', { phrases: 2, done: 0 })
+    expect(pressRadioIntensity(b, 'build', where)).toMatchObject({ phrases: 1, decided: null })
+    expect(pressRadioIntensity(b, 'build', { ...where, lap: 3 })).toMatchObject({ phrases: 2 })
+  })
+
+  it('drop in the breakdown: the rested rows back at the top, no renewals', () => {
+    expect(pressRadioIntensity(at('breakdown', { rests: ['d'] }), 'drop', where)?.decided).toEqual({
+      event: 'drop',
+      returning: ['d'],
+      renew: [],
+      forced: true
+    })
+  })
+
+  it('drop while building or riding: a quick drop, then a fresh ride', () => {
+    for (const p of ['build', 'drop'] as const) {
+      expect(pressRadioIntensity(at(p), 'drop', where)?.decided).toEqual({
+        event: 'drop',
+        returning: [],
+        renew: [],
+        quick: true,
+        forced: true
+      })
+    }
+  })
+
+  it('late, or with the top already spoken for: the top after; labels say it waits', () => {
+    const late = pressRadioIntensity(at('drop'), 'build', { ...where, late: true })!
+    expect(late).toMatchObject({ forced: 'build', decided: null })
+    expect(radioIntensityButtonLabel('build', late)).toBe('building')
+    expect(radioIntensityButtonLabel('drop', late)).toBe('drop')
+    const taken = pressRadioIntensity(at('build', { decided: { event: 'add' } }), 'drop', where)!
+    expect(taken).toMatchObject({ forced: 'drop', decided: { event: 'add' } })
+    expect(radioIntensityButtonLabel('drop', taken)).toBe('dropping')
+    const now = pressRadioIntensity(at('build'), 'drop', where)!
+    expect(radioIntensityButtonLabel('drop', now)).toBe('dropping')
+    expect(radioIntensityButtonLabel('build', now)).toBe('build')
+    expect(pressRadioIntensity(newRadioIntensityArc(), 'drop', where)).toBeNull()
+  })
+
+  it('every press lands in a run, and the cycle goes on', () => {
+    const { trace } = simulate({
+      loopBars: 4,
+      wraps: 800,
+      seed: 'press',
+      press: (w) => (w % 37 === 0 ? 'drop' : w % 53 === 0 ? 'build' : null)
+    })
+    expect(changes(trace).some((c) => (c.applied as { quick?: boolean }).quick === true)).toBe(true)
+    for (const t of trace) expect(t.sounding).toBeGreaterThan(0)
+  })
+})
+
+describe('what the rest of radio reads', () => {
+  const arc = (o: Partial<RadioIntensityArc>): RadioIntensityArc => ({
+    ...newRadioIntensityArc(),
+    begun: true,
+    ...o
+  })
+  const bd: RadioIntensityDecided = {
+    event: 'breakdown',
+    depth: 'full',
+    rest: [],
+    throwRowId: null,
+    throw: null,
+    carry: false
+  }
+  const drop: RadioIntensityDecided = { event: 'drop', returning: [], renew: [] }
+
+  it('the arcRole and the turnaround arc follow the decided event', () => {
+    expect(radioIntensityArcRole(arc({}))).toBe('hold')
+    expect(radioIntensityArcRole(arc({ decided: { event: 'add' } }))).toBe('build')
+    expect(radioIntensityArcRole(arc({ decided: { event: 'cycle', strip: true } }))).toBe('strip')
+    expect(radioIntensityArcRole(arc({ decided: { event: 'cycle', strip: false } }))).toBe('build')
+    expect(radioIntensityArcRole(arc({ decided: bd }))).toBe('breakdown')
+    expect(radioIntensityArcRole(arc({ decided: drop }))).toBe('drop')
+    expect(radioIntensityTurnaroundArc(arc({ phase: 'build' }))).toBe('growing')
+    expect(radioIntensityTurnaroundArc(arc({ phase: 'build', decided: bd }))).toBe('thinning')
+    expect(radioIntensityTurnaroundArc(arc({ phase: 'breakdown' }))).toBe('thinning')
+    expect(radioIntensityTurnaroundArc(arc({ phase: 'breakdown', decided: drop }))).toBe('growing')
+    expect(radioIntensityTurnaroundArc(arc({ phase: 'drop' }))).toBe('steady')
+  })
+
+  it("the hooks' inputs", () => {
+    expect(radioIntensityHookInputs(arc({ phase: 'build' }))).toEqual({
+      dropAtNextWrap: false,
+      inBreakdown: false
+    })
+    expect(radioIntensityHookInputs(arc({ phase: 'build', decided: bd }))).toEqual({
+      dropAtNextWrap: false,
+      inBreakdown: true
+    })
+    expect(radioIntensityHookInputs(arc({ phase: 'breakdown' }))).toEqual({
+      dropAtNextWrap: false,
+      inBreakdown: true
+    })
+    expect(radioIntensityHookInputs(arc({ phase: 'breakdown', decided: drop }))).toEqual({
+      dropAtNextWrap: true,
+      inBreakdown: false
+    })
+  })
+
+  it('the bend: about +-15 at the default drama, clamped', () => {
+    expect(radioIntensityBend(40, 60, 0.86)).toBeCloseTo(40 + 25 * 0.6 * 0.72, 9)
+    expect(radioIntensityBend(40, 60, 0.14)).toBeCloseTo(40 - 25 * 0.6 * 0.72, 9)
+    expect(radioIntensityBend(95, 100, 1)).toBe(100)
+    expect(radioIntensityBend(5, 100, 0)).toBe(0)
+    expect(radioIntensityBend(40, 0, 1)).toBe(40)
+  })
+
+  it('bars to the drop in a breakdown', () => {
+    const b = arc({ phase: 'breakdown', phrases: 2, done: 0 })
+    expect(radioIntensityDropInBars(b, { lap: 1, phraseLaps: 4, loopBars: 4, pos: 2 })).toBe(
+      (4 + 3) * 4 - 2
+    )
+    expect(
+      radioIntensityDropInBars(arc({ phase: 'build' }), {
+        lap: 1,
+        phraseLaps: 4,
+        loopBars: 4,
+        pos: 2
+      })
+    ).toBeNull()
+    expect(
+      radioIntensityDropInBars(arc({ phase: 'breakdown', decided: drop }), {
+        lap: 3,
+        phraseLaps: 4,
+        loopBars: 4,
+        pos: 1
+      })
+    ).toBe(3)
+  })
+
+  it('a row given back by hand leaves the rests and the decided lists', () => {
+    const resting = arc({
+      phase: 'breakdown',
+      rests: ['d', 'b'],
+      decided: { ...drop, returning: ['d', 'b'], renew: ['b'] }
+    })
+    const r = releaseRadioIntensityRest(resting, 'b')
+    expect(r.rests).toEqual(['d'])
+    expect(r.decided).toEqual({ ...drop, returning: ['d'], renew: [] })
+    const soon = arc({
+      phase: 'build',
+      decided: {
+        ...bd,
+        rest: ['d'],
+        throwRowId: 'd',
+        throw: { beats: 1, timing: 'quarter', feedback: 0.5 }
+      }
+    })
+    expect(releaseRadioIntensityRest(soon, 'd').decided).toMatchObject({
+      rest: [],
+      throwRowId: null,
+      throw: null
+    })
+    const plain = arc({ phase: 'drop' })
+    expect(releaseRadioIntensityRest(plain, 'x')).toBe(plain)
+  })
+
+  it('stopping puts every rested row back (and the ones about to rest)', () => {
+    const r = radioIntensityStopped(
+      arc({ phase: 'build', rests: ['a'], decided: { ...bd, rest: ['b'] } })
+    )
+    expect(r.unrest.sort()).toEqual(['a', 'b'])
+    expect(r.state).toEqual(newRadioIntensityArc())
+    expect(NO_RADIO_INTENSITY_ARC.begun).toBe(false)
+  })
+})
+
+describe('draws (section 3.5)', () => {
+  it('draw only at a cycle, a phase change and the renewals: nothing on a plain wrap', () => {
+    let draws = 0
+    const random = (): number => {
+      draws += 1
+      return 0.3
+    }
+    let arc = radioIntensityStarted({ energy: 50, drama: 60, min: 2, max: 5, count: 4, random })
+    expect(draws).toBe(2) // the countdown, the build's length
+    draws = 0
+    const input = (lap: number): RadioIntensityStepInput => ({
+      energy: 50,
+      drama: 60,
+      loopBars: 4,
+      lap,
+      phraseLaps: 4,
+      held: false,
+      count: 4,
+      min: 2,
+      max: 5,
+      rows: [],
+      canAdd: false,
+      canStrip: true,
+      carryReady: false,
+      renewReady: () => false,
+      random
+    })
+    // a build's middle laps: no draws
+    for (const lap of [1, 2]) arc = stepRadioIntensityArc(arc, input(lap)).state
+    expect(draws).toBe(0)
+  })
+
+  it('a breakdown with a drums row resting draws the throw (3), then its length', () => {
+    const order: string[] = []
+    let k = 0
+    const random = (): number => {
+      order.push(`d${k++}`)
+      return 0.4
+    }
+    const arc: RadioIntensityArc = {
+      ...newRadioIntensityArc(),
+      begun: true,
+      phase: 'build',
+      phrases: 2,
+      done: 1
+    }
+    const r = stepRadioIntensityArc(arc, {
+      energy: 50,
+      drama: 80,
+      loopBars: 4,
+      lap: 3,
+      phraseLaps: 4,
+      held: false,
+      count: 3,
+      min: 2,
+      max: 5,
+      rows: [
+        { id: 'd', kinds: ['drums'], score: 0.5, staleness: 0, sounding: true, restable: true },
+        { id: 'b', kinds: ['bass'], score: 0.5, staleness: 0, sounding: true, restable: true },
+        { id: 'l', kinds: ['lead'], score: 0.5, staleness: 0, sounding: true, restable: true }
+      ],
+      canAdd: false,
+      canStrip: false,
+      carryReady: false,
+      renewReady: () => false,
+      random
+    })
+    expect(r.decided).toMatchObject({
+      event: 'breakdown',
+      depth: 'full',
+      rest: ['d', 'b'],
+      throwRowId: 'd'
+    })
+    expect(order).toHaveLength(4)
+  })
+
+  it('the same seed replays the same arc', () => {
+    const a = simulate({ loopBars: 4, wraps: 500, seed: 'replay' }).trace
+    const b = simulate({ loopBars: 4, wraps: 500, seed: 'replay' }).trace
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b))
+  })
+})
