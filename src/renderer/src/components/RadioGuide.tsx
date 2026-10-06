@@ -14,7 +14,7 @@
 // The diagrams are small static SVGs. Colour only on audio information: a lane's bars are its kind
 // of sound, in its type colour (typeColorVar); an ink lane (the intensity wave, not a sound),
 // lines, ramps and the pace scale are ink.
-import { useEffect, useRef } from 'react'
+import { memo, useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
   radioGuideFor,
@@ -299,14 +299,13 @@ function Block({ block }: { block: RadioGuideBlock }): React.JSX.Element {
   }
 }
 
-export function RadioGuide({
-  onClose,
-  returnFocusRef
-}: {
+interface RadioGuideProps {
   onClose: () => void
   /** Focused again when the guide closes (the `?` that opened it). */
   returnFocusRef?: React.RefObject<HTMLElement | null>
-}): React.JSX.Element {
+}
+
+function RadioGuideImpl({ onClose, returnFocusRef }: RadioGuideProps): React.JSX.Element {
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const closeRef = useRef<HTMLButtonElement | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
@@ -474,3 +473,7 @@ export function RadioGuide({
     document.body
   )
 }
+
+/** Memoised: RadioTopLine re-renders every bar (its readout and ruler), and the guide's props
+ * (a stable onClose, the `?`'s ref) do not change while it is open. */
+export const RadioGuide = memo(RadioGuideImpl)

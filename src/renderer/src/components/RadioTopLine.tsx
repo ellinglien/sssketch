@@ -8,7 +8,7 @@
 // 2026-10-05-radio-simple-view-design), undo, redo and `?`, the guide to how radio works
 // (RadioGuide, in both views). Values and callbacks only; the guide's open state is the top line's
 // own, so opening it re-renders nothing but this line.
-import { useRef, useState, type ReactNode } from 'react'
+import { useCallback, useRef, useState, type ReactNode } from 'react'
 import { RADIO_VIEW_FRAME } from './discoverRowGrid'
 import { Segmented } from './RadioControls'
 import { radioRulerCells, type RadioReadout } from '@shared/radioReadout'
@@ -62,6 +62,8 @@ export function RadioTopLine({
   onRedo: () => void
 }): React.JSX.Element {
   const [guideOpen, setGuideOpen] = useState(false)
+  // stable, so the memoised guide is not re-rendered by the top line's every-bar readout
+  const closeGuide = useCallback(() => setGuideOpen(false), [])
   const guideButtonRef = useRef<HTMLButtonElement | null>(null)
   const square: React.CSSProperties = {
     display: 'flex',
@@ -313,9 +315,7 @@ export function RadioTopLine({
           {RADIO_GUIDE_BUTTON}
         </button>
       </div>
-      {guideOpen && (
-        <RadioGuide onClose={() => setGuideOpen(false)} returnFocusRef={guideButtonRef} />
-      )}
+      {guideOpen && <RadioGuide onClose={closeGuide} returnFocusRef={guideButtonRef} />}
     </div>
   )
 }
