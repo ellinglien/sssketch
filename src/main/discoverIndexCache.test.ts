@@ -341,3 +341,23 @@ describe('persistRiffIndexPage (sliced saves)', () => {
     expect((await loadCachedRiffIndex(own, 'k')).size).toBe(0)
   })
 })
+
+describe('ensureDiscoverIndexWatermarkSchema inside a transaction', () => {
+  it('a first use inside a transaction that rolls back does not leave the connection marked ready', () => {
+    const db = freshOwnDb()
+    // A keep (saveDiscoveredRifff) is the first thing to touch these tables
+    // on this connection, inside its own transaction, and that transaction fails.
+    expect(() =>
+      db.transaction(() => {
+        appendRiffIndexRows(db, 'key1', [], 0)
+        throw new Error('the keep failed')
+      })()
+    ).toThrow('the keep failed')
+    // The ALTERs rolled back with it: the next use must add the columns again.
+    expect(() => readRiffIndexMeta(db, 'key1')).not.toThrow()
+    const columns = (
+      db.prepare(`PRAGMA table_info(DiscoverRiffIndexCacheMeta)`).all() as { name: string }[]
+    ).map((c) => c.name)
+    expect(columns).toContain('MaxRowid')
+  })
+})

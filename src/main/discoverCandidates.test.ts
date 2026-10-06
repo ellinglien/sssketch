@@ -8,6 +8,7 @@ import {
   getRiffIndexForDb,
   appendToInMemoryDiscoverCaches,
   getInstrumentMaskLookup,
+  instrumentRowsInMemoryForTests,
   sampleDistinctIndices
 } from './discoverCandidates'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -3059,6 +3060,63 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
     expect(walkedRiffs()).toBe(2) // the open riff, re-read, and the new one
   })
 
+  it('a skeleton riff filled in place with nothing else changed between launches is picked up', async () => {
+    const path = archivePath()
+    const w = new Database(path)
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('a', 'j', 1, 's1')`
+    ).run()
+    w.prepare(`INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd) VALUES ('skel', 'j', 1)`).run()
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('z', 'j', 1, 's2')`
+    ).run()
+    w.close()
+    const own = freshDb()
+    await prewarm(launch(path), own)
+
+    // The sync fills the skeleton in place: count, MAX(rowid) and the RiffCID
+    // at it are all unchanged, so the saved index reads as current.
+    const w2 = new Database(path)
+    w2.prepare(`UPDATE Riffs SET StemCID_1 = 'filled' WHERE RiffCID = 'skel'`).run()
+    w2.close()
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect((await getRiffIndexForDb(src)).get('filled')?.riffCID).toBe('skel')
+    expect(walkedRiffs()).toBe(1) // only the open riff, re-read
+    expect(((await persisted(own, path)).get('filled') as { riffCID: string }).riffCID).toBe('skel')
+    // Closed once filled: the launch after that reads nothing.
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedRiffs()).toBe(0)
+  })
+
+  it('slots 9+ of a riff committed mid-walk are indexed (extras read with each page)', async () => {
+    const { walkRiffs, emptyRiffIndexState } = await import('./riffIndexWalk')
+    const path = archivePath()
+    seedRiffs(path, 2_500, 17)
+    const w = new Database(path)
+    w.exec(RIFF_STEMS_EXTRA_DDL)
+    const src = launch(path)
+    const state = emptyRiffIndexState()
+    let pages = 0
+    await walkRiffs(src, state, {
+      onPage: async () => {
+        if (pages++ > 0) return
+        // A twelve-stem riff lands after the walk started, past its first page.
+        w.prepare(
+          `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('mid', 'j', 1, 'm1')`
+        ).run()
+        w.prepare(
+          `INSERT INTO RiffStemsExtra (RiffCID, Slot, StemCID) VALUES ('mid', 9, 'm9')`
+        ).run()
+      }
+    })
+    w.close()
+    expect(state.index.get('m1')?.riffCID).toBe('mid')
+    expect(state.index.get('m9')?.riffCID).toBe('mid')
+  })
+
   it('a delete rebuilds', async () => {
     const path = archivePath()
     seedRiffs(path, 500, 6)
@@ -3373,6 +3431,68 @@ describe('instrument rows walk and extension (scan plan Task 3)', () => {
       }
     ).n
     expect(n).toBe(301)
+  })
+
+  function duplicateStemCIDs(src: Database.Database): string[] {
+    const rows = instrumentRowsInMemoryForTests(src)
+    expect(rows).not.toBeNull()
+    const seen = new Set<string>()
+    const dups: string[] = []
+    for (const row of rows!) {
+      if (seen.has(row.StemCID)) dups.push(row.StemCID)
+      seen.add(row.StemCID)
+    }
+    return dups
+  }
+
+  it('a kept stem saved past the watermark is not duplicated in memory by the next launch', async () => {
+    const { appendInstrumentRows } = await import('./discoverIndexCache')
+    const path = archive()
+    seedStems(path, 50, 12)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    const w = new Database(path)
+    w.prepare(`INSERT INTO Stems VALUES ('kept', 'discovered', 1, 'me')`).run()
+    w.close()
+    appendInstrumentRows(
+      own,
+      path,
+      [{ StemCID: 'kept', Instrument: 1, OwnerJamCID: 'discovered' }],
+      1
+    )
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(duplicateStemCIDs(src)).toEqual([])
+    expect(instrumentRowsInMemoryForTests(src)!.length).toBe(51)
+    expect(getInstrumentMaskLookup(src)!('kept')).toBe(1)
+  })
+
+  it('in session, a kept stem folded in memory is not duplicated by the next extension', async () => {
+    const path = archive()
+    seedStems(path, 50, 13)
+    const own = freshDb()
+    const src = launch(path)
+    await prewarm(src, own)
+    const w = new Database(path)
+    w.prepare(`INSERT INTO Stems VALUES ('kept', 'discovered', 1, 'me')`).run()
+    appendToInMemoryDiscoverCaches(
+      src,
+      [],
+      [{ StemCID: 'kept', Instrument: 1, OwnerJamCID: 'discovered' }]
+    )
+    w.prepare(`INSERT INTO Stems VALUES ('synced', 'jam1', 2, 'u')`).run() // a sync, later
+    w.close()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 60_000)
+    vi.mocked(countWork).mockClear()
+    await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: src }],
+      kinds: ['drums']
+    })
+    expect(walkedStems()).toBe(2) // the extension read both
+    expect(duplicateStemCIDs(src)).toEqual([])
+    expect(instrumentRowsInMemoryForTests(src)!.length).toBe(52)
   })
 
   it('a delete, or a different StemCID at the watermark, rebuilds', async () => {

@@ -31,14 +31,18 @@ import type Database from 'better-sqlite3'
 import { columnStemSlots, mergeStemSlots, type StemSlotRef } from '@shared/riffStemSlots'
 import type { RiffIndexEntry } from './discoverCandidates'
 import type { RiffIndexPage } from './discoverIndexCache'
-import { readAllExtraStemSlots } from './riffStemsExtra'
+import { hasExtraStemSlotsTable, readExtraStemSlots } from './riffStemsExtra'
 import type { RowidWatermark } from './rowidWatermark'
 import { countWork } from './workCounters'
 
 /** Rows per page. A cold page of 2,000 riffs read by rowid is 15-70 ms on
  * the USB archive (measured), and this slice must not grow. */
 export const RIFF_WALK_PAGE_SIZE = 2000
-const OPEN_RECHECK_CHUNK = 500
+/** Open riffs re-read per statement. They are scattered rowids -- a random
+ * read each, not a sequential page -- so a chunk of 500 was an estimated
+ * 200-300 ms cold on USB in one synchronous call; 100 keeps each well
+ * under a page's cost, with a yield between chunks. */
+const OPEN_RECHECK_CHUNK = 100
 /** Main-process budget for the JS part of a page between yields. */
 const SLICE_MS = 8
 
@@ -175,9 +179,20 @@ export async function walkRiffs(
 ): Promise<void> {
   const watermark = state.watermark
   if (!watermark) throw new Error('walkRiffs: a legacy index has no watermark to extend from')
-  // ONCE per walk, never per page or riff -- jams share one database.
-  // Free for an external archive, which has no such table.
-  const extras = readAllExtraStemSlots(db)
+  // Slots 9+ (sssketch's own db only; an external archive has no such
+  // table, checked once per walk) are read with each batch of riffs, one
+  // `RiffCID IN (...)` query per statement's rows -- never per riff, and
+  // never once up front: a riff committed while the walk runs (its
+  // RiffStemsExtra rows land in the same transaction) would otherwise be
+  // folded in without them, and nothing re-reads a closed riff.
+  const extrasTable = hasExtraStemSlotsTable(db)
+  const extrasFor = (rows: RiffRow[]): Map<string, StemSlotRef[]> =>
+    extrasTable
+      ? readExtraStemSlots(
+          db,
+          rows.map((r) => r.RiffCID)
+        )
+      : new Map()
 
   // The open (skeleton) riffs first: a filled one is folded in like a new riff.
   if (state.open.size > 0) {
@@ -187,27 +202,24 @@ export async function walkRiffs(
       const chunk = open.slice(i, i + OPEN_RECHECK_CHUNK)
       countWork('sql:riff-index.open-recheck')
       let rows: RiffRow[]
+      let extras: Map<string, StemSlotRef[]>
       try {
-        rows = db
-          .prepare(
-            `SELECT ${RIFF_COLUMNS} FROM Riffs WHERE rowid IN (${chunk.map(() => '?').join(',')})`
-          )
-          .all(...chunk) as RiffRow[]
+        rows = (
+          db
+            .prepare(
+              `SELECT ${RIFF_COLUMNS} FROM Riffs WHERE rowid IN (${chunk.map(() => '?').join(',')})`
+            )
+            .all(...chunk) as RiffRow[]
+        )
+          // Rows past the watermark are read by the page walk below; only
+          // the ones it won't reach are folded in here.
+          .filter((r) => r.RowId <= (watermark.maxRowid ?? 0))
+        extras = extrasFor(rows)
       } catch {
         return
       }
-      countWork(
-        'walk:riff-index.rows',
-        rows.filter((r) => r.RowId <= (watermark.maxRowid ?? 0)).length
-      )
-      // Rows past the watermark are read by the page walk below; only the
-      // ones it won't reach are folded in here.
-      await applyRows(
-        rows.filter((r) => r.RowId <= (watermark.maxRowid ?? 0)),
-        extras,
-        state,
-        acc
-      )
+      countWork('walk:riff-index.rows', rows.length)
+      await applyRows(rows, extras, state, acc)
       await yieldToEventLoop()
     }
     if (acc.changed.size > 0 || acc.closed.length > 0) {
@@ -221,8 +233,10 @@ export async function walkRiffs(
   for (;;) {
     const pageStarted = performance.now()
     let rows: RiffRow[]
+    let extras: Map<string, StemSlotRef[]>
     try {
       rows = statement.all(watermark.maxRowid ?? 0, RIFF_WALK_PAGE_SIZE) as RiffRow[]
+      extras = extrasFor(rows)
     } catch {
       return
     }

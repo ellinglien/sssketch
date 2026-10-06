@@ -44,7 +44,11 @@ import {
   resetInstrumentRowsCache
 } from './discoverIndexCache'
 import { getStemClassificationVersion } from './stemClassificationVersion'
-import { createInstrumentRowsLookup, type InstrumentRowsLookup } from './instrumentRowsLookup'
+import {
+  createInstrumentRowsLookup,
+  rowsNotIn,
+  type InstrumentRowsLookup
+} from './instrumentRowsLookup'
 import { emptyRiffIndexState, walkRiffs, type RiffIndexState } from './riffIndexWalk'
 import { canExtendByRowid, keyAtRowid, type RowidWatermark } from './rowidWatermark'
 import { sortInstrumentRowsSliced, walkStems } from './stemsTableWalk'
@@ -318,7 +322,10 @@ async function warmRiffIndex(
     await resetRiffIndexCache(ownDb, key)
     walk = emptyRiffIndexState()
   }
-  if (!current) {
+  // A current copy still re-reads its open (skeleton) riffs: the sync fills
+  // them in place, which moves no count, MAX(rowid) or RiffCID at it. With
+  // nothing past the watermark that is the open riffs plus one empty page.
+  if (!current || (walk.watermark !== null && walk.open.size > 0)) {
     if (extendable) countWork('riff-index:extend')
     await walkRiffs(db, walk, {
       onProgress,
@@ -486,7 +493,13 @@ function shareInstrumentRowsBuild(
 /** An extension's rows appended to `base` -- a NEW array when anything was
  * added (the kind index is keyed by array identity and must rebuild), the
  * same one when nothing was. Rows appended out of StemCID order are the
- * mask lookup's small tail map; a big tail is sorted in instead. */
+ * mask lookup's small tail map; a big tail is sorted in instead.
+ *
+ * Walked rows `base` already holds are skipped (rowsNotIn): the walk past a
+ * watermark re-reads a kept stem that appendInstrumentRows saved (so the
+ * loaded copy has it), one appendToInMemoryDiscoverCaches folded in this
+ * session, and the rows of a page a quit left saved in part. Appended
+ * again, each would be in the array twice. */
 const SORT_TAIL_LIMIT = 10_000
 
 async function withWalkedRows(
@@ -494,8 +507,10 @@ async function withWalkedRows(
   walked: InstrumentRow[]
 ): Promise<InstrumentRow[]> {
   if (walked.length === 0) return base
-  const rows = base.concat(walked)
-  return walked.length > SORT_TAIL_LIMIT ? sortInstrumentRowsSliced(rows) : rows
+  const fresh = await rowsNotIn(base, walked)
+  if (fresh.length === 0) return base
+  const rows = base.concat(fresh)
+  return fresh.length > SORT_TAIL_LIMIT ? sortInstrumentRowsSliced(rows) : rows
 }
 
 /** The prewarm's half for the instrument rows -- warmRiffIndex's three cases
@@ -2254,6 +2269,24 @@ async function getRandomOwnStemCandidate(
     }
   }
   return null
+}
+
+/** Forgets `db`'s in-memory riff index, so the next read walks it afresh.
+ * For forgetDiscoveredRifff: a kept group folded in by
+ * appendToInMemoryDiscoverCaches leaves no trace in the index's watermark,
+ * so once its Riffs row is deleted an extension would find nothing to
+ * read (count and watermark agree again) and keep its stems pointing at a
+ * riff that is gone. Forgetting is rare and outside the roll/keep loop; one
+ * walk of the own db is the honest price. */
+export function dropInMemoryRiffIndex(db: Database.Database): void {
+  riffIndexCache.delete(db)
+}
+
+/** Tests only: `db`'s in-memory instrument rows, or null when none. */
+export function instrumentRowsInMemoryForTests(
+  db: Database.Database
+): readonly InstrumentRow[] | null {
+  return instrumentRowsCache.get(db)?.rows ?? null
 }
 
 /** Folds one just-committed riff into the IN-MEMORY caches, instead of

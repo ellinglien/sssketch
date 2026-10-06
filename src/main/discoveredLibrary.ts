@@ -14,7 +14,12 @@ import { discoveredStemPath } from './riffLibraryStore'
 import { stemCIDForPath } from './stemCategoriesStore'
 import { isUsableStemFile } from './stemFile'
 import { upsertJam, writeRiffDetail } from './riffLibraryWriter'
-import { appendInstrumentRows, appendRiffIndexRows } from './discoverIndexCache'
+import {
+  appendInstrumentRows,
+  appendRiffIndexRows,
+  invalidateRiffIndexCache
+} from './discoverIndexCache'
+import { dropInMemoryRiffIndex } from './discoverCandidates'
 import {
   MAX_RIFFF_STEM_SLOTS,
   STEM_SLOT_COLUMNS,
@@ -300,13 +305,19 @@ export function saveDiscoveredRifff(
  * / StemFavourite: those are keyed by StemCID and are still true about the
  * stem, wherever else it lives.
  *
- * Deliberately does NOT touch the Discover index caches. Deleting a Riffs
- * row moves the count they are validated against, so within
- * CACHE_CHANGE_CHECK_INTERVAL_MS the own db's in-memory index rebuilds
- * once. Forgetting is not in the roll/keep loop, and a symmetric delete
- * would have to decide what to do about a stem the index maps to this riff
- * but that other riffs also contain -- a correctness risk for no benefit
- * here. */
+ * Drops the own db's riff index, saved and in memory, so both rebuild once
+ * (the next launch; the next roll). It cannot be left to the change check:
+ * a keep appends its rows to the index without moving the index's rowid
+ * watermark (scan plan decision 5), so a group forgotten before any
+ * extension has read it puts Riffs' count, MAX(rowid) and the RiffCID at
+ * it back where that watermark stands -- the saved copy reads as current,
+ * an in-memory extension finds nothing to read, and both keep its stems
+ * mapped to a riff that no longer exists, across relaunches. Deleting just
+ * this riff's index rows instead would have to decide what to do about a
+ * stem the index maps to this riff but that other riffs also contain;
+ * forgetting is not in the roll/keep loop, so a rebuild is the honest
+ * price. The instrument rows and the artist pairs index Stems, which
+ * forget never deletes from: they stay. */
 export function forgetDiscoveredRifff(ownDb: Database.Database, riffCID: string): void {
   const groups = listDiscoveredGroups(ownDb)
   const target = groups.find((g) => g.riffCID === riffCID)
@@ -323,7 +334,9 @@ export function forgetDiscoveredRifff(ownDb: Database.Database, riffCID: string)
       .prepare(`DELETE FROM Riffs WHERE RiffCID = ? AND OwnerJamCID = ?`)
       .run(riffCID, DISCOVERED_JAM_CID)
     ownDb.prepare(`DELETE FROM Tags WHERE RiffCID = ?`).run(riffCID)
+    invalidateRiffIndexCache(ownDb, ownDb.name)
   })()
+  dropInMemoryRiffIndex(ownDb)
 
   for (const stemCID of target.stemCIDs) {
     if (stillUsed.has(stemCID)) continue

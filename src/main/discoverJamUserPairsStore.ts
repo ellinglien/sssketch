@@ -105,12 +105,14 @@ export function loadSavedPairs(ownDb: Database.Database, sourceDbKey: string): S
 }
 
 /** Starts one source db's saved pairs over, at an empty watermark (count 0)
- * -- the first page of a full walk. Never throws. */
+ * -- the first page of a full walk. Never throws; false when it failed (the
+ * caller then saves none of the walk's pages: appended to the old copy,
+ * they would sit under a watermark that no longer describes it). */
 export function resetSavedPairs(
   ownDb: Database.Database,
   sourceDbKey: string,
   now = Date.now()
-): void {
+): boolean {
   try {
     ensureTables(ownDb)
     ownDb.transaction(() => {
@@ -123,21 +125,27 @@ export function resetSavedPairs(
         )
         .run(sourceDbKey, now)
     })()
+    return true
   } catch (err) {
     console.error('discoverJamUserPairsStore: reset failed:', err)
+    return false
   }
 }
 
 /** One walked page's new pairs, and the watermark after it, in one small
- * transaction (a page brings a handful of new pairs at most). Never throws:
- * a failed write only costs a re-walk from the last saved page. */
+ * transaction (a page brings a handful of new pairs at most). Never throws;
+ * false when the write failed. The caller must then save no LATER page of
+ * that walk: the next one's watermark would cover this page's pairs
+ * without them, and they would never be read again. Stopped there, the
+ * saved copy stays a whole-page prefix, and the next launch re-walks from
+ * its last page. */
 export function appendSavedPairs(
   ownDb: Database.Database,
   sourceDbKey: string,
   pairs: readonly (readonly [string, string])[],
   watermark: { count: number; maxRowid: number | null; keyAtMax: string | null },
   now = Date.now()
-): void {
+): boolean {
   try {
     ensureTables(ownDb)
     const insertPair = ownDb.prepare(
@@ -153,7 +161,9 @@ export function appendSavedPairs(
         )
         .run(sourceDbKey, watermark.count, watermark.maxRowid, watermark.keyAtMax, now)
     })()
+    return true
   } catch (err) {
     console.error('discoverJamUserPairsStore: append failed:', err)
+    return false
   }
 }

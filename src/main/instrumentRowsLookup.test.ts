@@ -1,6 +1,6 @@
 // src/main/instrumentRowsLookup.test.ts -- pure, no database (stays in CI).
 import { describe, expect, it } from 'vitest'
-import { createInstrumentRowsLookup, type InstrumentRow } from './instrumentRowsLookup'
+import { createInstrumentRowsLookup, rowsNotIn, type InstrumentRow } from './instrumentRowsLookup'
 
 function row(StemCID: string, Instrument: number | null): InstrumentRow {
   return { StemCID, Instrument, OwnerJamCID: 'jam' }
@@ -52,5 +52,29 @@ describe('createInstrumentRowsLookup', () => {
 
   it('an empty array finds nothing', () => {
     expect(createInstrumentRowsLookup([])('a')).toBeUndefined()
+  })
+})
+
+describe('rowsNotIn', () => {
+  it('drops candidates the rows already hold, in the sorted prefix or the unsorted tail', async () => {
+    const rows = [
+      ...Array.from({ length: 5000 }, (_, i) => row(`s${String(i).padStart(5, '0')}`, i)),
+      row('kept-b', 1), // folded in at the end, out of order
+      row('kept-a', 2)
+    ]
+    const candidates = [
+      row('s00007', 7),
+      row('kept-a', 2),
+      row('new-1', 3),
+      row('kept-b', 1),
+      row('new-0', 4)
+    ]
+    expect((await rowsNotIn(rows, candidates)).map((r) => r.StemCID)).toEqual(['new-1', 'new-0'])
+  })
+
+  it('keeps every candidate against an empty base, and none against itself', async () => {
+    const candidates = [row('b', 1), row('a', 2)]
+    expect(await rowsNotIn([], candidates)).toEqual(candidates)
+    expect(await rowsNotIn(candidates, candidates)).toEqual([])
   })
 })

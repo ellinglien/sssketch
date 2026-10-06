@@ -17,8 +17,8 @@ vi.mock('electron', () => ({
 /** The subset of riffLibrarySchema.ts's SCHEMA_SQL these tests actually
  * touch -- same convention as riffLibraryWriter.test.ts, which duplicates
  * the DDL rather than opening the real db. */
-function freshOwnDb(): Database.Database {
-  const db = new Database(':memory:')
+function freshOwnDb(path = ':memory:'): Database.Database {
+  const db = new Database(path)
   db.exec(`
     CREATE TABLE Jams (JamCID TEXT PRIMARY KEY, PublicName TEXT NOT NULL, SyncComplete INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE Riffs (
@@ -300,6 +300,50 @@ describe('discoveredLibrary', () => {
     expect(existsSync(discoveredStemPath('f1'))).toBe(true)
     expect(db.prepare(`SELECT 1 FROM Stems WHERE StemCID = 'f1'`).get()).toEqual({ 1: 1 })
     db.close()
+  })
+
+  it('forget leaves no index entry for the forgotten group, in memory or after a relaunch', async () => {
+    const { saveDiscoveredRifff, forgetDiscoveredRifff } = await import('./discoveredLibrary')
+    const { appendToInMemoryDiscoverCaches, getRiffIndexForDb, prewarmDiscoverCandidateCaches } =
+      await import('./discoverCandidates')
+    const path = join(userDataDir, 'own.db')
+    const db = freshOwnDb(path)
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('r1', 'j1', 120, 'old1')`
+    ).run()
+    db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES ('k1', 'j1')`).run()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'j1', dbForJam: db }], db)
+
+    // Keep, then forget before any launch extends the saved index over the keep:
+    // the Riffs count, MAX(rowid) and the RiffCID at it are back where the
+    // saved index's watermark stands, so it would read as current.
+    const kept = saveDiscoveredRifff(db, [], {
+      members: [
+        {
+          path: seedStemOnDisk('k1'),
+          gain: 1,
+          name: 'n',
+          author: 'a',
+          barLength: 1,
+          durationSec: 1
+        }
+      ],
+      bpm: 120,
+      barLength: 1,
+      creationTime: 1
+    })
+    appendToInMemoryDiscoverCaches(db, kept!.indexRows, kept!.newInstrumentRows)
+    expect((await getRiffIndexForDb(db)).get('k1')?.riffCID).toBe(kept!.riffCID)
+    forgetDiscoveredRifff(db, kept!.riffCID)
+
+    expect((await getRiffIndexForDb(db)).get('k1')).toBeUndefined()
+    expect((await getRiffIndexForDb(db)).get('old1')?.riffCID).toBe('r1')
+    db.close()
+    const relaunched = new Database(path)
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'j1', dbForJam: relaunched }], relaunched)
+    expect((await getRiffIndexForDb(relaunched)).get('k1')).toBeUndefined()
+    expect((await getRiffIndexForDb(relaunched)).get('old1')?.riffCID).toBe('r1')
+    relaunched.close()
   })
 
   it('forget removes a copy nothing else references', async () => {

@@ -189,7 +189,14 @@ page. The archive's pages are not held, so each page can be a cold multi-second 
 
 5. **Kept discovered groups** (`appendRiffIndexRows`, `appendInstrumentRows`, `saveDiscoveredRifff`).
    - Once a meta row carries a watermark, these append rows but **leave the meta alone**. The next
-     extension reads those few riffs and stems again, harmlessly, because the upserts are idempotent.
+     extension reads those few riffs and stems again. The persisted upserts are idempotent, but the
+     in-memory instrument-row array is not: the copy loaded from disk (or folded in this session by
+     `appendToInMemoryDiscoverCaches`) already holds the kept stems, so the extension must skip walked
+     rows its base holds (`withWalkedRows` via `rowsNotIn`, added in review) or they appear twice.
+   - Forgetting a kept group (`forgetDiscoveredRifff`) before an extension has read it puts Riffs'
+     count, MAX(rowid) and the RiffCID at it back on the watermark, so the saved index would read as
+     current with the forgotten riff's stems still in it. Forget therefore drops the own db's riff-index
+     meta (`invalidateRiffIndexCache`) and its in-memory index (`dropInMemoryRiffIndex`): one rebuild.
    - A meta row without a watermark (written before T2) keeps today's behaviour.
    - So a keep never needs to know whether other riffs arrived in between, which today's count bump
      silently assumes.

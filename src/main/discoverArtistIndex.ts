@@ -189,6 +189,8 @@ interface Building {
   ownDb: Database.Database | undefined
 }
 let building = new WeakMap<Database.Database, Building>()
+/** Walks (by their `from`) already taken up or turned down on their first page. */
+let walksSeen = new WeakSet<RowidWatermark>()
 /** The own db the picker last passed: where pages of walks started without
  * one (an in-session instrument-row refresh) are saved. */
 let lastOwnDb: Database.Database | undefined
@@ -294,13 +296,21 @@ function onWalkPage(db: Database.Database, page: StemsWalkPage): void {
   if (aborted) return
   let b = building.get(db)
   if (!b || b.from !== page.from) {
+    // A walk is taken or turned down on its FIRST page, once: alignedBase
+    // may read the saved pairs (~13k rows) and must not run again for every
+    // page of a walk it can't use; and a walk taken up mid-way would miss
+    // its earlier pages' pairs. `from` is the same object for every page of
+    // one walk.
+    if (walksSeen.has(page.from)) return
+    walksSeen.add(page.from)
     if (b) return // another walk is already building this db's pairs
     const ownDb = page.ownDb ?? lastOwnDb
     const base = alignedBase(db, page.from, ownDb)
     if (!base) return
     b = { from: page.from, value: base.value.slice(), keys: new Set(base.keys), ownDb }
     building.set(db, b)
-    if (page.from.count === 0 && ownDb) resetSavedPairs(ownDb, db.name)
+    // A failed reset saves nothing of this walk (the in-memory pairs still build).
+    if (page.from.count === 0 && ownDb && !resetSavedPairs(ownDb, db.name)) b.ownDb = undefined
   }
   const added: [string, string][] = []
   for (const [jam, user] of page.pairs) {
@@ -310,7 +320,11 @@ function onWalkPage(db: Database.Database, page: StemsWalkPage): void {
     b.value.push([jam, user])
     added.push([jam, user])
   }
-  if (b.ownDb) appendSavedPairs(b.ownDb, db.name, added, page.watermark)
+  // A page that fails to save ends the saving for this walk (the in-memory
+  // pairs still build): a later page's watermark would cover this one's
+  // pairs on disk without them. The saved copy stays a whole-page prefix,
+  // and the next launch extends from it.
+  if (b.ownDb && !appendSavedPairs(b.ownDb, db.name, added, page.watermark)) b.ownDb = undefined
 }
 
 function onWalkEnd(
@@ -517,6 +531,7 @@ export function resetArtistIndexForTests(): void {
   pairsInFlight = new WeakMap()
   pairsBase = new WeakMap()
   building = new WeakMap()
+  walksSeen = new WeakSet()
   lastOwnDb = undefined
   stalePairs = new WeakMap()
   diskTried = new WeakSet()

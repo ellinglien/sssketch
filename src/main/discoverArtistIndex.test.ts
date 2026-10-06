@@ -416,6 +416,54 @@ describe('pairs from the shared Stems walk (scan plan Task 4)', () => {
     expect(index.jammedWith?.some((j) => j.user === 'latecomer')).toBe(true)
   })
 
+  it("a page whose pairs fail to save stops the saving: the saved copy never skips that page's pairs", async () => {
+    const own = ownDb()
+    const db = archive()
+    const insert = db.prepare(`INSERT INTO Stems VALUES (?, ?, ?)`)
+    db.transaction(() => {
+      // Three pages; the second page's pair appears nowhere else.
+      for (let i = 0; i < 6_000; i++) {
+        const page = Math.floor(i / 2_000)
+        insert.run(`s${i}`, `jam${page}`, page === 1 ? 'only-page-2' : `user${i % 5}`)
+      }
+    })()
+    const realPrepare = own.prepare.bind(own)
+    let pairInserts = 0
+    vi.spyOn(own, 'prepare').mockImplementation(((sql: string) => {
+      if (sql.includes('INSERT OR IGNORE INTO DiscoverJamUserPairs') && ++pairInserts === 2) {
+        throw new Error('disk full')
+      }
+      return realPrepare(sql)
+    }) as typeof own.prepare)
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    await settled(own, [db])
+    vi.restoreAllMocks()
+    const meta = own
+      .prepare(`SELECT StemCount FROM DiscoverJamUserPairsMeta WHERE SourceDbKey = ?`)
+      .get(db.name) as { StemCount: number }
+    expect(meta.StemCount).toBe(2_000) // the last page saved whole
+    // The next launch extends from there, and the saved copy is whole again.
+    resetArtistIndexForTests()
+    await settled(own, [db])
+    expect(await savedPairs(own, db)).toEqual(await fullWalkPairs(db))
+  })
+
+  it('a walk that does not start where the pairs stand reads the saved pairs once, not per page', async () => {
+    const { walkStems } = await import('./stemsTableWalk')
+    const own = ownDb()
+    const db = archive()
+    many(db, 0, 6_500)
+    await settled(own, [db])
+    resetArtistIndexForTests() // nothing in memory: only the saved copy could align
+    const spy = vi.spyOn(own, 'prepare')
+    // E.g. an instrument-row walk from a watermark the pairs never stood at.
+    await walkStems(db, { count: 1, maxRowid: 1, keyAtMax: 's0' }, { ownDb: own })
+    const loads = spy.mock.calls.filter(([sql]) =>
+      sql.includes('SELECT JamCID, User FROM DiscoverJamUserPairs')
+    ).length
+    expect(loads).toBeLessThanOrEqual(1)
+  })
+
   it('a delete rebuilds', async () => {
     const own = ownDb()
     const db = archive()

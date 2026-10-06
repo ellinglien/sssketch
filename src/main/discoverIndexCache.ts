@@ -40,6 +40,12 @@ function yieldToEventLoop(): Promise<void> {
 // Ensured lazily, once per connection: a column added to an existing tiny
 // meta table and one CREATE TABLE IF NOT EXISTS -- instant even on the
 // 3.6 GB warehouse, and it also covers tests' hand-written schemas.
+//
+// "Once" is remembered only when the DDL ran outside a transaction. Inside
+// one (a keep's saveDiscoveredRifff can be the first caller on a
+// connection) the ALTERs belong to that transaction: if it rolls back, the
+// columns go with it, so the next call has to look again rather than trust
+// a mark that outlived them.
 const watermarkSchemaReady = new WeakSet<Database.Database>()
 
 function addColumnsIfMissing(
@@ -71,7 +77,7 @@ export function ensureDiscoverIndexWatermarkSchema(ownDb: Database.Database): vo
     RiffRowid INTEGER NOT NULL,
     PRIMARY KEY (SourceDbKey, RiffRowid)
   )`)
-  watermarkSchemaReady.add(ownDb)
+  if (!ownDb.inTransaction) watermarkSchemaReady.add(ownDb)
 }
 
 /** A saved index's meta: the rows it accounts for, and its watermark --
@@ -562,15 +568,30 @@ export function appendRiffIndexRows(
     insert.run(sourceDbKey, row.stemCID, row.riffCID, row.ownerJamCID, row.bpmRnd, row.creationTime)
   }
   // Scan plan decision 5: a watermarked meta is left alone -- the next
-  // extension reads the kept riff (past the watermark) again, harmlessly,
-  // and never has to assume no other riff arrived meanwhile. A legacy meta
-  // (no watermark) keeps the count bump it always had.
+  // extension reads the kept riff (past the watermark) again, and the
+  // upserts are idempotent, so it never has to assume no other riff arrived
+  // meanwhile. A legacy meta (no watermark) keeps the count bump it always
+  // had. Forgetting the group before that extension has to drop the meta
+  // (invalidateRiffIndexCache, below).
   if (meta.MaxRowid !== null) return
   ownDb
     .prepare(
       `UPDATE DiscoverRiffIndexCacheMeta SET RiffCount = ?, ComputedAt = ? WHERE SourceDbKey = ?`
     )
     .run(meta.RiffCount + riffCountDelta, Date.now(), sourceDbKey)
+}
+
+/** Drops the saved riff index's meta for `sourceDbKey`, so the next launch
+ * rebuilds it (no meta = never cached; appendRiffIndexRows writes nothing
+ * to it meanwhile). For a forgotten kept group (forgetDiscoveredRifff):
+ * its rows were appended past the watermark, and once its Riffs row is
+ * deleted before any extension has read it, the count, MAX(rowid) and the
+ * RiffCID at it are back where the watermark stands -- the saved index
+ * reads as current and keeps pointing its stems at a riff that is gone.
+ * (Forgotten after an extension, the count moves and it rebuilds anyway.)
+ * No transaction of its own: forget runs it inside its own. */
+export function invalidateRiffIndexCache(ownDb: Database.Database, sourceDbKey: string): void {
+  ownDb.prepare(`DELETE FROM DiscoverRiffIndexCacheMeta WHERE SourceDbKey = ?`).run(sourceDbKey)
 }
 
 /** Same shape and the same reasoning as appendRiffIndexRows above, for
@@ -597,6 +618,9 @@ export function appendInstrumentRows(
   )
   for (const row of rows) insert.run(sourceDbKey, row.StemCID, row.Instrument, row.OwnerJamCID)
   // Decision 5, as appendRiffIndexRows: a watermarked meta is left alone.
+  // The next extension walks these stems again: harmless here (DO NOTHING),
+  // and the in-memory rows it extends skip the ones they already hold
+  // (discoverCandidates.ts's withWalkedRows) -- the loaded copy has them.
   if (meta.MaxRowid !== null) return
   ownDb
     .prepare(

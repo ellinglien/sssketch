@@ -107,10 +107,11 @@ export function readExtraStemSlots(
   return out
 }
 
-/** The whole table, in one pass. For the three readers that walk ALL of
- * Riffs in pages (scanTargetCache.ts, discoverCandidates.ts,
- * discoverLibraryStems.ts): call this ONCE per database connection and
- * hold the map. Do NOT re-query it per page and never per riff -- jams
+/** The whole table, in one pass. For the readers that walk ALL of Riffs in
+ * pages (scanTargetCache.ts, discoverLibraryStems.ts): call this ONCE per
+ * database connection and hold the map. (The riff index's walk,
+ * riffIndexWalk.ts, reads readExtraStemSlots per page instead, so a riff
+ * committed mid-walk keeps its slots 9+.) Do NOT re-query it per page and never per riff -- jams
  * share one database, and per-jam loop-requerying is the pattern that
  * caused two real bugs in a day (CLAUDE.md).
  *

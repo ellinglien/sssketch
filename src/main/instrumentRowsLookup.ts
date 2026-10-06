@@ -65,3 +65,56 @@ export function createInstrumentRowsLookup(rows: readonly InstrumentRow[]): Inst
     return tail.get(stemCID)
   }
 }
+
+/** Rows of work between checks of the slice clock in rowsNotIn. */
+const ORDER_CHECK_BATCH = 4096
+const ORDER_CHECK_SLICE_MS = 8
+
+/** `candidates` minus every row whose StemCID `rows` already holds, in
+ * their order -- for an extension whose walk re-reads rows its base
+ * already has: a kept stem saved past the watermark (appendInstrumentRows)
+ * and loaded with the saved copy, one folded in memory
+ * (appendToInMemoryDiscoverCaches), or a page saved in part before a quit.
+ * Appending those again would put the same StemCID in the array twice.
+ *
+ * The same shape as the lookup above, without a copy of `rows`: one pass
+ * finds the StemCID-ordered prefix (in time-budgeted slices with yields --
+ * `rows` is the archive's ~900k), each candidate is then a binary search of
+ * it, and the few rows past it go in a Set. */
+export async function rowsNotIn(
+  rows: readonly InstrumentRow[],
+  candidates: readonly InstrumentRow[]
+): Promise<InstrumentRow[]> {
+  if (rows.length === 0 || candidates.length === 0) return candidates.slice()
+  let sortedLength = 1
+  let started = performance.now()
+  while (
+    sortedLength < rows.length &&
+    rows[sortedLength - 1].StemCID < rows[sortedLength].StemCID
+  ) {
+    sortedLength += 1
+    if (
+      sortedLength % ORDER_CHECK_BATCH === 0 &&
+      performance.now() - started >= ORDER_CHECK_SLICE_MS
+    ) {
+      await new Promise((resolve) => setImmediate(resolve))
+      started = performance.now()
+    }
+  }
+  const tail = new Set<string>()
+  for (let i = sortedLength; i < rows.length; i++) tail.add(rows[i].StemCID)
+
+  const inSortedPrefix = (stemCID: string): boolean => {
+    let lo = 0
+    let hi = sortedLength - 1
+    while (lo <= hi) {
+      const mid = (lo + hi) >>> 1
+      const at = rows[mid].StemCID
+      if (at === stemCID) return true
+      if (at < stemCID) lo = mid + 1
+      else hi = mid - 1
+    }
+    return false
+  }
+  return candidates.filter((c) => !tail.has(c.StemCID) && !inSortedPrefix(c.StemCID))
+}
