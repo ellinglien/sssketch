@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { StemFeatures } from '@shared/stemFeatures'
 import { emptyCategoryCentroidStore } from '@shared/categoryCentroids'
+import type { StemRoleCategoryEntry } from './stemCategoriesStore'
 
 let userDataDir: string
 
@@ -49,6 +50,14 @@ function seedFeatures(db: Database.Database, stemCID: string): void {
   ).run(stemCID, JSON.stringify(fakeFeatures()), 1000)
 }
 
+function recordRoles(
+  record: typeof import('./categoryCentroidTraining').recordStemCategoryRole,
+  db: Database.Database,
+  entries: StemRoleCategoryEntry[]
+): void {
+  record(db, entries, 'tidyup', null, 1000)
+}
+
 describe('categoryCentroidTraining', () => {
   beforeEach(() => {
     userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-category-centroid-training-test-'))
@@ -91,14 +100,14 @@ describe('categoryCentroidTraining', () => {
     expect(loadCategoryCentroidStore()).toEqual(emptyCategoryCentroidStore())
   })
 
-  it('trainCentroidsFromRoleEntries trains the arrangeRole axis', async () => {
+  it('recordStemCategoryRole trains the arrangeRole axis', async () => {
     const db = freshDb()
     seedFeatures(db, 'cid-1')
     seedFeatures(db, 'cid-2')
     seedFeatures(db, 'cid-3')
-    const { trainCentroidsFromRoleEntries } = await import('./categoryCentroidTraining')
+    const { recordStemCategoryRole } = await import('./categoryCentroidTraining')
     const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-    trainCentroidsFromRoleEntries(db, [
+    recordRoles(recordStemCategoryRole, db, [
       { path: '/lib/cid-1', arrangeRole: 'vocal' },
       { path: '/lib/cid-2', arrangeRole: 'vocal' },
       { path: '/lib/cid-3', arrangeRole: 'vocal' }
@@ -106,14 +115,14 @@ describe('categoryCentroidTraining', () => {
     expect(loadCategoryCentroidStore().arrangeRoles.vocal?.count).toBe(3)
   })
 
-  it('trainCentroidsFromRoleEntries ALSO trains the drumSubRole axis when an entry has one', async () => {
+  it('recordStemCategoryRole ALSO trains the drumSubRole axis when an entry has one', async () => {
     const db = freshDb()
     seedFeatures(db, 'cid-1')
     seedFeatures(db, 'cid-2')
     seedFeatures(db, 'cid-3')
-    const { trainCentroidsFromRoleEntries } = await import('./categoryCentroidTraining')
+    const { recordStemCategoryRole } = await import('./categoryCentroidTraining')
     const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-    trainCentroidsFromRoleEntries(db, [
+    recordRoles(recordStemCategoryRole, db, [
       { path: '/lib/cid-1', arrangeRole: 'drums', drumSubRole: 'kick' },
       { path: '/lib/cid-2', arrangeRole: 'drums', drumSubRole: 'kick' },
       { path: '/lib/cid-3', arrangeRole: 'drums', drumSubRole: 'kick' }
@@ -128,9 +137,9 @@ describe('categoryCentroidTraining', () => {
     seedFeatures(db, 'cid-1')
     seedFeatures(db, 'cid-2')
     seedFeatures(db, 'cid-3')
-    const { trainCentroidsFromRoleEntries } = await import('./categoryCentroidTraining')
+    const { recordStemCategoryRole } = await import('./categoryCentroidTraining')
     const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-    trainCentroidsFromRoleEntries(db, [
+    recordRoles(recordStemCategoryRole, db, [
       { path: '/lib/cid-1', arrangeRole: 'drums' },
       { path: '/lib/cid-2', arrangeRole: 'drums' },
       { path: '/lib/cid-3', arrangeRole: 'drums' }

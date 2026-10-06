@@ -26,27 +26,40 @@ function storePath(): string {
   return join(app.getPath('userData'), STORE_FILENAME)
 }
 
-/** Where the store lives: the key of its trained record in the own db. The
- * dev and the packaged app each have their own (userData) over one own db. */
+/** Where the store lives (for messages). */
 export function categoryCentroidStorePath(): string {
   return storePath()
 }
 
-/** What is on disk: no file yet, a file that won't load (unreadable or not
- * a store), or the store it holds and its generation. Training reads this
- * rather than loadCategoryCentroidStore, so that it never mistakes a file
- * that won't load for an empty store and saves over it (review of b4d9924a,
- * important 1).
+/** One (stem, bus) pair whose features are in the store's bus axis. */
+export interface TrainedBusPair {
+  stemCID: string
+  busId: string
+}
+
+/** What is on disk: no file yet, a file that won't load (unreadable, not a
+ * store, or a malformed trainedPairs), or the store it holds and the
+ * (stem, bus) pairs trained into it. Training reads this rather than
+ * loadCategoryCentroidStore, so that it never mistakes a file that won't
+ * load for an empty store and saves over it (review of b4d9924a, important
+ * 1). trainedPairs is null for a file saved before the pairs were kept in it
+ * (categoryCentroidTraining.ts seeds those once).
  *
- * The generation names one store file's lineage: a random id given to a new
- * file (or to one from before generations, null here) and kept by every save
- * of it. The own db records which generation its trained record describes
- * (categoryCentroidTraining.ts), so a file replaced, lost or recreated is
- * told apart from the one the record was built for. */
+ * The pairs live in the file itself, written in the same atomic save as the
+ * samples, so the two can never disagree: the dev and the packaged app each
+ * have their own file (userData), a deleted or new library db changes
+ * nothing about what a file holds, and a backup restored brings its own
+ * pairs with it. */
 export type CategoryCentroidStoreFile =
   | { kind: 'missing' }
   | { kind: 'unreadable'; error: string }
-  | { kind: 'ok'; store: CategoryCentroidStore; generation: string | null }
+  | { kind: 'ok'; store: CategoryCentroidStore; trainedPairs: TrainedBusPair[] | null }
+
+function isTrainedBusPair(value: unknown): value is TrainedBusPair {
+  if (typeof value !== 'object' || value === null) return false
+  const pair = value as Record<string, unknown>
+  return typeof pair.stemCID === 'string' && typeof pair.busId === 'string'
+}
 
 /** A pre-existing file from before arrangeRoles/drumSubRoles existed (shaped
  * {buses, global} only) loads correctly, with both new axes defaulted to {}
@@ -60,11 +73,18 @@ export function readCategoryCentroidStoreFile(): CategoryCentroidStoreFile {
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       throw new Error('not a JSON object')
     }
-    const fields = parsed as Partial<CategoryCentroidStore> & { generation?: unknown }
+    const fields = parsed as Partial<CategoryCentroidStore> & { trainedPairs?: unknown }
+    let trainedPairs: TrainedBusPair[] | null = null
+    if (fields.trainedPairs !== undefined) {
+      if (!Array.isArray(fields.trainedPairs) || !fields.trainedPairs.every(isTrainedBusPair)) {
+        throw new Error('trainedPairs is not a list of { stemCID, busId }')
+      }
+      trainedPairs = fields.trainedPairs.map(({ stemCID, busId }) => ({ stemCID, busId }))
+    }
     const empty = emptyCategoryCentroidStore()
     return {
       kind: 'ok',
-      generation: typeof fields.generation === 'string' ? fields.generation : null,
+      trainedPairs,
       store: {
         buses: fields.buses ?? empty.buses,
         arrangeRoles: fields.arrangeRoles ?? empty.arrangeRoles,
@@ -99,19 +119,20 @@ export function loadCategoryCentroidStore(): CategoryCentroidStore {
  * far). The temp file is fsynced before the rename: without that, a power
  * loss can put the rename on disk before the data, leaving the renamed file
  * empty. The rename is atomic within the userData folder. Synchronous, so
- * two saves in this process never share the temp file. `generation` is
- * written beside the store (null only keeps a file from before generations
- * as it was). True once saved. */
+ * two saves in this process never share the temp file. `trainedPairs` (the
+ * (stem, bus) pairs in the bus axis) goes into the same file, so the
+ * samples and the record of them land in one rename, or neither does.
+ * Readers never see it. True once saved. */
 export function saveCategoryCentroidStore(
   store: CategoryCentroidStore,
-  generation: string | null
+  trainedPairs: readonly TrainedBusPair[]
 ): boolean {
   const path = storePath()
   const tmpPath = `${path}.tmp`
   try {
     const fd = openSync(tmpPath, 'w')
     try {
-      const contents = generation === null ? store : { generation, ...store }
+      const contents = { ...store, trainedPairs }
       writeFileSync(fd, JSON.stringify(contents, null, 2), 'utf-8') // loops until all written
       fsyncSync(fd)
     } finally {

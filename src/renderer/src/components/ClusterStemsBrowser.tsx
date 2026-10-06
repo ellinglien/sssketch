@@ -828,7 +828,7 @@ export function ClusterStemsBrowser({
   // every Tidy Up assignment now trains BOTH the bus and arrangeRole/
   // drumSubRole centroid classifiers, not just AutoArrangeWizard/
   // DrawArrangeWizard's own role-confirmation step (see
-  // categoryCentroidTraining.ts's trainCentroidsFromRoleEntries, wired into
+  // categoryCentroidTraining.ts's recordStemCategoryRole, wired into
   // the SAME upsert-stem-category-role IPC handler this calls into) --
   // Tidy Up is used far more often than the auto-arrange role step, so this
   // is a real accuracy win with no extra clicks for the 5 shared

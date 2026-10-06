@@ -47,7 +47,7 @@ function analysedStem(db: Database.Database, stemCID: string): void {
   ).run(stemCID, JSON.stringify(FEATURES))
 }
 
-/** A store file from before generations: one sample on each named bus. */
+/** A store file from before trainedPairs: one sample on each named bus. */
 function legacyStore(buses: string[]): Record<string, unknown> {
   const mean = new Array(19).fill(0.5)
   return {
@@ -60,15 +60,29 @@ function storeFilePath(): string {
   return join(userDataDir, 'busCentroids.json')
 }
 
-function fileGeneration(): unknown {
-  return (JSON.parse(readFileSync(storeFilePath(), 'utf-8')) as { generation?: unknown }).generation
+function fileTrainedPairs(): unknown {
+  return (JSON.parse(readFileSync(storeFilePath(), 'utf-8')) as { trainedPairs?: unknown })
+    .trainedPairs
 }
 
-function recordedGeneration(db: Database.Database): string | undefined {
-  const row = db
-    .prepare(`SELECT Generation FROM CentroidStoreGeneration WHERE StorePath = ?`)
-    .get(storeFilePath()) as { Generation: string } | undefined
-  return row?.Generation
+function tableNames(db: Database.Database): string[] {
+  return (
+    db.prepare(`SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name`).all() as {
+      name: string
+    }[]
+  ).map(({ name }) => name)
+}
+
+/** A StemCategories row written directly, as an earlier version left it. */
+function labelRow(
+  db: Database.Database,
+  stemCID: string,
+  labels: { busId?: string; arrangeRole?: string; drumSubRole?: string }
+): void {
+  db.prepare(
+    `INSERT INTO StemCategories (StemCID, BusId, ArrangeRole, DrumSubRole, Source, UpdatedAt)
+     VALUES (?, ?, ?, ?, 'tidyup', 1)`
+  ).run(stemCID, labels.busId ?? null, labels.arrangeRole ?? null, labels.drumSubRole ?? null)
 }
 
 function writeSketch(
@@ -420,7 +434,7 @@ describe('stemCategoriesBackfill', () => {
       `INSERT INTO StemCategories (StemCID, BusId, Source, UpdatedAt)
        VALUES ('cid-1', 'drums', 'tidyup', 1), ('cid-2', 'bass', 'tidyup', 1)`
     ).run()
-    // The store those writes trained, from before generations.
+    // The store those writes trained, from before trainedPairs.
     writeFileSync(join(userDataDir, 'busCentroids.json'), JSON.stringify(legacyStore(['drums'])))
     writeSketch('old', {
       busOf: { 'group-a:1': 'drums', 'group-a:2': 'bass' },
@@ -520,7 +534,7 @@ describe('stemCategoriesBackfill', () => {
   })
 
   // Review of b4d9924a, important 1: a store file that would not load read as
-  // an empty store, the next training save replaced it, and StemBusTrained
+  // an empty store, the next training save replaced it, and the trained record
   // said its pairs were trained: every sample in it lost for good.
   describe('a store file that exists but will not load', () => {
     it('is never overwritten: nothing trains, nothing is recorded, and its entries wait', async () => {
@@ -528,18 +542,29 @@ describe('stemCategoriesBackfill', () => {
       analysedStem(db, 'cid-1')
       const storeFile = join(userDataDir, 'busCentroids.json')
       writeFileSync(storeFile, '{"buses": {"drums": {"mean": [1], "cou')
-      const { recordStemCategoryBus, trainCentroidsFromRoleEntries } =
+      const { recordStemCategoryBus, recordStemCategoryRole, setCentroidStoreUnreadableListener } =
         await import('./categoryCentroidTraining')
       const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
       const { getStemCategory } = await import('./stemCategoriesStore')
       const entries = [{ path: '/lib/cid-1', busId: 'drums' as const }]
       const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const told: string[] = []
+      setCentroidStoreUnreadableListener((path) => told.push(path))
       const result = recordStemCategoryBus(db, entries, 'tidyup', null, 1000)
-      trainCentroidsFromRoleEntries(db, [{ path: '/lib/cid-1', arrangeRole: 'lead' }])
+      recordStemCategoryRole(
+        db,
+        [{ path: '/lib/cid-1', arrangeRole: 'lead' }],
+        'tidyup',
+        null,
+        1000
+      )
+      setCentroidStoreUnreadableListener(null)
       expect(errors.mock.calls.some(([message]) => /not train/.test(String(message)))).toBe(true)
       errors.mockRestore()
+      expect(told).toEqual([storeFile]) // the user is told once, not per write
       expect(result.waiting).toEqual(entries)
-      expect(getStemCategory(db, 'cid-1')?.busId).toBe('drums') // the label itself lands
+      // The labels themselves land.
+      expect(getStemCategory(db, 'cid-1')).toMatchObject({ busId: 'drums', arrangeRole: 'lead' })
       expect(readFileSync(storeFile, 'utf-8')).toBe('{"buses": {"drums": {"mean": [1], "cou')
 
       // Once the file is dealt with (here removed), the same write trains.
@@ -564,150 +589,223 @@ describe('stemCategoriesBackfill', () => {
     })
   })
 
-  // Review of b4d9924a, important 1: busCentroids.json (userData) and the
-  // trained record (own db) can drift apart. Each store file carries a
-  // generation; the own db records, per store file, the generation its
-  // record describes.
-  describe('the store file and the trained record stay in step', () => {
+  // Review of 89bf2a4c: which (stem, bus) pairs a store holds is kept in the
+  // store file itself, saved in the same write as its samples.
+  describe('the trained pairs live in the store file', () => {
     const drums = { path: '/lib/cid-1', busId: 'drums' as const }
     const bass = { path: '/lib/cid-2', busId: 'bass' as const }
 
-    it('a saved store carries a generation, and the own db records the same one', async () => {
+    it('a save writes the pairs beside the samples, and the library db gets no tables for them', async () => {
       const db = freshDb()
       analysedStem(db, 'cid-1')
+      const before = tableNames(db)
       const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
       recordStemCategoryBus(db, [drums], 'tidyup', null, 1000)
-      expect(typeof fileGeneration()).toBe('string')
-      expect(recordedGeneration(db)).toBe(fileGeneration())
+      expect(fileTrainedPairs()).toEqual([{ stemCID: 'cid-1', busId: 'drums' }])
+      expect(tableNames(db)).toEqual(before)
     })
 
-    it('a store file that is gone restarts the record: every bus the db holds trains into the new one, once', async () => {
+    // One file, one rename: a crash can no longer land between the samples
+    // and the record of them. A failed save leaves both as they were.
+    it('a failed save leaves the samples and the pairs both as they were', async () => {
       const db = freshDb()
       analysedStem(db, 'cid-1')
       analysedStem(db, 'cid-2')
-      analysedStem(db, 'cid-3')
       const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
-      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-      recordStemCategoryBus(db, [drums, bass], 'tidyup', null, 1000)
-      const before = fileGeneration()
-      rmSync(storeFilePath())
-
-      // Any write retrains what the db holds, without a project being parsed.
-      recordStemCategoryBus(db, [{ path: '/lib/cid-3', busId: 'lead' }], 'tidyup', null, 2000)
-      let store = loadCategoryCentroidStore()
-      expect(store.buses).toMatchObject({ drums: { count: 1 }, bass: { count: 1 } })
-      expect(store.buses.lead?.count).toBe(1)
-      expect(fileGeneration()).not.toBe(before)
-      expect(recordedGeneration(db)).toBe(fileGeneration())
-
-      recordStemCategoryBus(db, [drums, bass], 'tidyup', null, 3000)
-      store = loadCategoryCentroidStore()
-      expect([store.buses.drums?.count, store.buses.bass?.count]).toEqual([1, 1])
+      recordStemCategoryBus(db, [drums], 'tidyup', null, 1000)
+      const onDisk = readFileSync(storeFilePath(), 'utf-8')
+      mkdirSync(`${storeFilePath()}.tmp`)
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      expect(recordStemCategoryBus(db, [bass], 'tidyup', null, 2000).waiting).toEqual([bass])
+      errors.mockRestore()
+      expect(readFileSync(storeFilePath(), 'utf-8')).toBe(onDisk)
     })
 
-    it('a role write that finds no store file trains the bus record into the new file too', async () => {
+    it('a missing store file is rebuilt from the db on every axis, and nothing in it trains twice', async () => {
       const db = freshDb()
-      analysedStem(db, 'cid-1')
-      analysedStem(db, 'cid-2')
-      const { recordStemCategoryBus, trainCentroidsFromRoleEntries } =
-        await import('./categoryCentroidTraining')
-      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-      recordStemCategoryBus(db, [drums], 'tidyup', null, 1000)
-      rmSync(storeFilePath())
-      trainCentroidsFromRoleEntries(db, [{ path: '/lib/cid-2', arrangeRole: 'lead' }])
-      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
-      expect(recordedGeneration(db)).toBe(fileGeneration())
-      recordStemCategoryBus(db, [drums], 'tidyup', null, 2000)
-      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
-    })
-
-    it('a store file of another generation is kept as it is, and the record restarts for it', async () => {
-      const db = freshDb()
-      analysedStem(db, 'cid-1')
+      for (const cid of ['cid-1', 'cid-2', 'cid-3', 'cid-5']) analysedStem(db, cid)
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES ('cid-4')`).run() // no features
+      labelRow(db, 'cid-1', { busId: 'drums', arrangeRole: 'drums', drumSubRole: 'kick' })
+      labelRow(db, 'cid-2', { busId: 'bass', arrangeRole: 'bass' })
+      labelRow(db, 'cid-3', { arrangeRole: 'vocal' })
+      labelRow(db, 'cid-4', { busId: 'lead', arrangeRole: 'lead' })
       const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
       const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-      recordStemCategoryBus(db, [drums], 'tidyup', null, 1000)
-      // Another store put in its place (a backup restored, a file copied in).
-      writeFileSync(
-        storeFilePath(),
-        JSON.stringify({ ...legacyStore(['bass', 'lead']), generation: 'restored' })
-      )
-      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      recordStemCategoryBus(db, [drums], 'tidyup', null, 2000)
-      expect(warnings).toHaveBeenCalledTimes(1)
-      warnings.mockRestore()
+      recordStemCategoryBus(db, [{ path: '/lib/cid-5', busId: 'backing' }], 'tidyup', null, 2000)
       const store = loadCategoryCentroidStore()
-      // Its samples stand; the pair it may not hold trains into it once.
-      expect(store.buses).toMatchObject({ bass: { count: 1 }, lead: { count: 1 } })
-      expect(store.buses.drums?.count).toBe(1)
-      expect(fileGeneration()).toBe('restored')
-      expect(recordedGeneration(db)).toBe('restored')
-      recordStemCategoryBus(db, [drums], 'tidyup', null, 3000)
-      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+      expect(store.buses).toEqual({
+        drums: expect.objectContaining({ count: 1 }),
+        bass: expect.objectContaining({ count: 1 }),
+        backing: expect.objectContaining({ count: 1 })
+      })
+      expect(store.arrangeRoles).toEqual({
+        drums: expect.objectContaining({ count: 1 }),
+        bass: expect.objectContaining({ count: 1 }),
+        vocal: expect.objectContaining({ count: 1 })
+      })
+      expect(store.drumSubRoles).toEqual({ kick: expect.objectContaining({ count: 1 }) })
+      expect(store.global.count).toBe(7) // cid-1 x3, cid-2 x2, cid-3, cid-5
+      expect(fileTrainedPairs()).toEqual([
+        { stemCID: 'cid-1', busId: 'drums' },
+        { stemCID: 'cid-2', busId: 'bass' },
+        { stemCID: 'cid-5', busId: 'backing' }
+      ])
+
+      // Deleted again: rebuilt again, one sample per label, never two.
+      rmSync(storeFilePath())
+      recordStemCategoryBus(db, [drums, bass], 'tidyup', null, 3000)
+      const rebuilt = loadCategoryCentroidStore()
+      expect(rebuilt.buses.drums?.count).toBe(1)
+      expect(rebuilt.buses.backing?.count).toBe(1)
+      expect(rebuilt.arrangeRoles.vocal?.count).toBe(1)
+      expect(rebuilt.global.count).toBe(7)
     })
 
-    // The own db deleted (or a new one) under an existing store: nothing
-    // tells which pairs the file holds. It is kept, and each pair the new db
-    // learns trains into it once more -- once, not on every launch.
-    it('a store file with a generation the db has never recorded: each pair trains once more, then never', async () => {
-      const db = freshDb()
-      analysedStem(db, 'cid-1')
-      writeFileSync(
-        storeFilePath(),
-        JSON.stringify({ ...legacyStore(['drums']), generation: 'from-the-old-db' })
-      )
-      writeSketch('one', {
-        busOf: { 'group-a:1': 'drums' },
-        rifffs: { 'group-a': { groupId: 'group-a', stems: [{ slot: 1, path: '/lib/cid-1' }] } }
-      })
-      const { backfillStemCategoriesFromProjectLibrary } = await import('./stemCategoriesBackfill')
-      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
-      backfillStemCategoriesFromProjectLibrary(db)
-      writeSketch('one', {
-        busOf: { 'group-a:1': 'drums', 'group-a:9': 'bass' },
-        rifffs: { 'group-a': { groupId: 'group-a', stems: [{ slot: 1, path: '/lib/cid-1' }] } }
-      })
-      backfillStemCategoriesFromProjectLibrary(db)
-      warnings.mockRestore()
-      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(2)
-      expect(recordedGeneration(db)).toBe('from-the-old-db')
-    })
-
-    it('a store from before generations is adopted: the bus rows it trained are recorded, not trained again', async () => {
+    it('a role write that finds no store file rebuilds every axis, and its own batch is counted once', async () => {
       const db = freshDb()
       analysedStem(db, 'cid-1')
       analysedStem(db, 'cid-2')
       analysedStem(db, 'cid-3')
-      db.prepare(
-        `INSERT INTO StemCategories (StemCID, BusId, Source, UpdatedAt)
-         VALUES ('cid-1', 'drums', 'tidyup', 1)`
-      ).run()
-      // b4d9924a's record (no store path): cid-2's move off bass was trained.
-      db.exec(`CREATE TABLE StemBusTrained (
-        StemCID TEXT NOT NULL, BusId TEXT NOT NULL, PRIMARY KEY (StemCID, BusId)
-      )`)
-      db.prepare(`INSERT INTO StemBusTrained VALUES ('cid-1', 'drums'), ('cid-2', 'bass')`).run()
-      writeFileSync(storeFilePath(), JSON.stringify(legacyStore(['drums', 'bass'])))
+      labelRow(db, 'cid-1', { busId: 'drums' })
+      const { recordStemCategoryRole } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      const roleWrite = (path: string, arrangeRole: 'lead' | 'vocal', at: number): void =>
+        recordStemCategoryRole(db, [{ path, arrangeRole }], 'tidyup', null, at)
+      roleWrite('/lib/cid-2', 'lead', 2000)
+      let store = loadCategoryCentroidStore()
+      expect(store.buses.drums?.count).toBe(1)
+      expect(store.arrangeRoles.lead?.count).toBe(1)
+      expect(fileTrainedPairs()).toEqual([{ stemCID: 'cid-1', busId: 'drums' }])
+      roleWrite('/lib/cid-3', 'vocal', 3000)
+      store = loadCategoryCentroidStore()
+      expect([store.arrangeRoles.lead?.count, store.arrangeRoles.vocal?.count]).toEqual([1, 1])
+    })
+
+    // Review of 89bf2a4c, minor: a rebuild (or a seed) taken by a write that
+    // trains nothing used to be thrown away and redone at the next write.
+    it('a write with nothing to train still saves the rebuild', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      analysedStem(db, 'cid-2')
+      labelRow(db, 'cid-1', { busId: 'drums', arrangeRole: 'drums' })
       const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
       const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-      recordStemCategoryBus(
+      recordStemCategoryBus(db, [{ path: '/lib/cid-2', busId: 'aux' }], 'tidyup', null, 2000)
+      expect(fileTrainedPairs()).toEqual([{ stemCID: 'cid-1', busId: 'drums' }])
+      expect(loadCategoryCentroidStore().arrangeRoles.drums?.count).toBe(1)
+    })
+
+    // Each user's first launch on this code: the store's counts were inflated
+    // by every launch re-training every project, so every bus row it could
+    // have trained is credited, once, rather than trained once more.
+    it('a store file from before trainedPairs is seeded once from the bus rows with features', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES ('cid-2')`).run() // features come later
+      analysedStem(db, 'cid-3')
+      analysedStem(db, 'cid-4')
+      labelRow(db, 'cid-1', { busId: 'drums' })
+      labelRow(db, 'cid-2', { busId: 'bass' })
+      const inflated = legacyStore(['drums'])
+      ;(inflated.buses as Record<string, { count: number }>).drums.count = 5
+      writeFileSync(storeFilePath(), JSON.stringify(inflated))
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+
+      const first = recordStemCategoryBus(
         db,
         [drums, bass, { path: '/lib/cid-3', busId: 'lead' }],
         'tidyup',
         null,
-        1000
+        2000
       )
-      const store = loadCategoryCentroidStore()
-      expect(store.buses).toMatchObject({ drums: { count: 1 }, bass: { count: 1 } })
+      let store = loadCategoryCentroidStore()
+      expect(store.buses.drums?.count).toBe(5) // credited, not trained again
       expect(store.buses.lead?.count).toBe(1)
-      expect(typeof fileGeneration()).toBe('string')
-      expect(recordedGeneration(db)).toBe(fileGeneration())
+      expect(first.waiting).toEqual([bass])
+      expect(fileTrainedPairs()).toEqual([
+        { stemCID: 'cid-1', busId: 'drums' },
+        { stemCID: 'cid-3', busId: 'lead' }
+      ])
+
+      // cid-2 was never trained (no features): it trains once they arrive.
+      db.prepare(
+        `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 0)`
+      ).run('cid-2', JSON.stringify(FEATURES))
+      recordStemCategoryBus(db, [bass], 'tidyup', null, 3000)
+      recordStemCategoryBus(db, [bass], 'tidyup', null, 4000)
+      expect(loadCategoryCentroidStore().buses.bass?.count).toBe(1)
+
+      // The seed is not taken again: a row labelled since (here written
+      // directly) is not credited, and trains when it is written.
+      labelRow(db, 'cid-4', { busId: 'drums' })
+      recordStemCategoryBus(db, [{ path: '/lib/cid-4', busId: 'drums' }], 'tidyup', null, 5000)
+      store = loadCategoryCentroidStore()
+      expect(store.buses.drums?.count).toBe(6)
+    })
+
+    it('a seed taken by a write with nothing to train is saved', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      labelRow(db, 'cid-1', { busId: 'drums' })
+      writeFileSync(storeFilePath(), JSON.stringify(legacyStore(['drums'])))
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      recordStemCategoryBus(db, [{ path: '/drops/kick.wav', busId: 'drums' }], 'tidyup', null, 2000)
+      expect(fileTrainedPairs()).toEqual([{ stemCID: 'cid-1', busId: 'drums' }])
+    })
+
+    // The library db deleted or replaced under an existing store: the file
+    // still knows what it holds.
+    it('a store over a new library db does not train a pair it already holds', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      recordStemCategoryBus(db, [drums], 'tidyup', null, 1000)
+      const newDb = freshDb()
+      analysedStem(newDb, 'cid-1')
+      analysedStem(newDb, 'cid-2')
+      recordStemCategoryBus(newDb, [drums, bass], 'tidyup', null, 2000)
+      const store = loadCategoryCentroidStore()
+      expect([store.buses.drums?.count, store.buses.bass?.count]).toEqual([1, 1])
+    })
+
+    it('a backup put back holds exactly its own pairs', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      analysedStem(db, 'cid-2')
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      recordStemCategoryBus(db, [drums], 'tidyup', null, 1000)
+      const backup = readFileSync(storeFilePath(), 'utf-8')
+      recordStemCategoryBus(db, [bass], 'tidyup', null, 2000)
+      writeFileSync(storeFilePath(), backup) // the backup, which never held bass
+      recordStemCategoryBus(db, [drums, bass], 'tidyup', null, 3000)
+      const store = loadCategoryCentroidStore()
+      expect([store.buses.drums?.count, store.buses.bass?.count]).toEqual([1, 1])
+    })
+
+    // The project is backfilled first, then Tidy Up confirms the same bus.
+    it('a bus from a project and then confirmed live is counted once', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      writeSketch('first', {
+        busOf: { 'group-a:1': 'drums' },
+        rifffs: { 'group-a': { groupId: 'group-a', stems: [{ slot: 1, path: '/lib/cid-1' }] } }
+      })
+      const { backfillStemCategoriesFromProjectLibrary } = await import('./stemCategoriesBackfill')
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      const { getStemCategory } = await import('./stemCategoriesStore')
+      backfillStemCategoriesFromProjectLibrary(db)
+      recordStemCategoryBus(db, [drums], 'tidyup', null, Date.now() / 1000 + 60)
+      expect(getStemCategory(db, 'cid-1')?.source).toBe('tidyup') // the live write landed
+      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
     })
 
     // The dev and the packaged app keep separate stores (userData) over one
-    // own db (~/Music): switching between them must not restart either record.
-    it('two store files over one db each keep their own record', async () => {
+    // own db (~/Music): each file holds its own pairs.
+    it('two store files over one db each train a pair once', async () => {
       const db = freshDb()
       analysedStem(db, 'cid-1')
       const { recordStemCategoryBus } = await import('./categoryCentroidTraining')

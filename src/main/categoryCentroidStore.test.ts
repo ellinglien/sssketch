@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { emptyCategoryCentroidStore, recordConfirmedCategory } from '@shared/categoryCentroids'
@@ -55,8 +55,8 @@ describe('categoryCentroidStore', () => {
     store = recordConfirmedCategory(store, 'bus', 'drums', new Array(19).fill(1))
     store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', new Array(19).fill(2))
     store = recordConfirmedCategory(store, 'drumSubRole', 'kick', new Array(19).fill(3))
-    saveCategoryCentroidStore(store, 'gen-1')
-    // The generation is the file's, not the store's: readers never see it.
+    saveCategoryCentroidStore(store, [{ stemCID: 'cid-1', busId: 'drums' }])
+    // The trained pairs are the file's, not the store's: readers never see them.
     expect(loadCategoryCentroidStore()).toEqual(store)
   })
 
@@ -92,7 +92,7 @@ describe('categoryCentroidStore', () => {
       'drums',
       new Array(19).fill(1)
     )
-    saveCategoryCentroidStore(before, 'gen-1')
+    saveCategoryCentroidStore(before, [])
     expect(readdirSync(userDataDir)).toEqual(['busCentroids.json'])
 
     // The temp file cannot be written: a directory stands in its place.
@@ -100,7 +100,7 @@ describe('categoryCentroidStore', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
     saveCategoryCentroidStore(
       recordConfirmedCategory(before, 'bus', 'bass', new Array(19).fill(2)),
-      'gen-1'
+      [{ stemCID: 'cid-2', busId: 'bass' }]
     )
     expect(errors).toHaveBeenCalled()
     errors.mockRestore()
@@ -113,7 +113,7 @@ describe('categoryCentroidStore', () => {
   it('the temp file is flushed to disk before it is renamed over the store', async () => {
     const { saveCategoryCentroidStore } = await import('./categoryCentroidStore')
     fsCalls.length = 0
-    expect(saveCategoryCentroidStore(emptyCategoryCentroidStore(), 'gen-1')).toBe(true)
+    expect(saveCategoryCentroidStore(emptyCategoryCentroidStore(), [])).toBe(true)
     const fsync = fsCalls.indexOf('fsyncSync')
     expect(fsync).toBeGreaterThanOrEqual(0)
     expect(fsync).toBeLessThan(fsCalls.indexOf('renameSync'))
@@ -136,11 +136,34 @@ describe('categoryCentroidStore', () => {
       'drums',
       new Array(19).fill(1)
     )
-    saveCategoryCentroidStore(store, 'gen-1')
-    expect(readCategoryCentroidStoreFile()).toEqual({ kind: 'ok', store, generation: 'gen-1' })
-    // A file from before generations reads as generation null, and a save
-    // with null keeps it that way.
-    saveCategoryCentroidStore(store, null)
-    expect(readCategoryCentroidStoreFile()).toEqual({ kind: 'ok', store, generation: null })
+    const trainedPairs = [{ stemCID: 'cid-1', busId: 'drums' }]
+    saveCategoryCentroidStore(store, trainedPairs)
+    expect(readCategoryCentroidStoreFile()).toEqual({ kind: 'ok', store, trainedPairs })
+    // A file saved before trainedPairs existed reads with trainedPairs null.
+    writeFileSync(path, JSON.stringify(store))
+    expect(readCategoryCentroidStoreFile()).toEqual({ kind: 'ok', store, trainedPairs: null })
+    // A trainedPairs that is not a list of pairs: what the file holds is
+    // unknown, so it is a file that won't load, never one to train into.
+    for (const bad of [{}, [['cid-1', 'drums']], [{ stemCID: 'cid-1' }], 'cid-1']) {
+      writeFileSync(path, JSON.stringify({ ...store, trainedPairs: bad }))
+      expect(readCategoryCentroidStoreFile().kind).toBe('unreadable')
+    }
+  })
+
+  // The samples and the pairs trained into them are one file, one rename:
+  // there is no second write for a crash to fall between.
+  it('the samples and the trained pairs are saved in one rename', async () => {
+    const { saveCategoryCentroidStore } = await import('./categoryCentroidStore')
+    const store = recordConfirmedCategory(
+      emptyCategoryCentroidStore(),
+      'bus',
+      'drums',
+      new Array(19).fill(1)
+    )
+    fsCalls.length = 0
+    saveCategoryCentroidStore(store, [{ stemCID: 'cid-1', busId: 'drums' }])
+    expect(fsCalls.filter((call) => call === 'renameSync')).toHaveLength(1)
+    const onDisk = JSON.parse(readFileSync(join(userDataDir, 'busCentroids.json'), 'utf-8'))
+    expect(onDisk).toEqual({ ...store, trainedPairs: [{ stemCID: 'cid-1', busId: 'drums' }] })
   })
 })

@@ -61,7 +61,11 @@ import { loadCategoryCentroidStore } from './categoryCentroidStore'
 import { getConfirmedEmbeddings } from './embeddingMatch'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
-import { recordStemCategoryBus, trainCentroidsFromRoleEntries } from './categoryCentroidTraining'
+import {
+  recordStemCategoryBus,
+  recordStemCategoryRole,
+  setCentroidStoreUnreadableListener
+} from './categoryCentroidTraining'
 import { nextUpdateState, type UpdateState } from '@shared/updateState'
 import {
   instrumentMaskToSoundType,
@@ -185,7 +189,6 @@ import { listStemFavourites, toggleStemFavourite } from './stemFavouriteStore'
 import { listTidyUpLibraryStems, type TidyUpLibraryStem } from './tidyUpLibraryStems'
 import {
   getStemCategoryRolesForPaths,
-  upsertStemCategoryRole,
   resolveSourceProjectPath,
   stemCIDForPath,
   type StemBusCategoryEntry,
@@ -632,6 +635,23 @@ app.whenReady().then(async () => {
   // riffFavouritesMigration.ts's own doc comment for why this is safe to
   // run unconditionally on every startup.
   migrateLegacyFavourites(openOwnRiffLibraryDb())
+
+  // A classifier training file (busCentroids.json) that exists but will not
+  // load is never trained into or saved over (categoryCentroidTraining.ts),
+  // so nothing learns from new confirmations until it is fixed or moved
+  // aside: say so, once per distinct error, not only in the console. Set
+  // before the backfill below, the first training write of a launch.
+  setCentroidStoreUnreadableListener((path, error) => {
+    void dialog.showMessageBox({
+      type: 'warning',
+      message: "sssketch can't read its classifier training file.",
+      detail:
+        `${path}\n\n${error}\n\n` +
+        'Until it can be read, sssketch leaves it untouched and does not learn from new ' +
+        'bus or role confirmations (they are still saved). Moving the file aside lets ' +
+        'sssketch rebuild it from your confirmed stems.'
+    })
+  })
 
   // One-time-in-spirit, safe-to-call-on-every-startup migration recovering
   // busOf bus assignments trapped in old .sssketchproj files under the
@@ -1646,9 +1666,11 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'upsert-stem-category-bus',
     (_event, entries: StemBusCategoryEntry[], source: string, project: ProjectRef): void => {
-      // Each (stem, bus) pair trains once, ever, whoever writes it first:
-      // the startup backfill reading the same assignment from the saved
-      // project later adds nothing (recordStemCategoryBus).
+      // Each (stem, bus) pair trains once into this app's store file
+      // (busCentroids.json keeps the pairs it holds), whoever writes it
+      // first: the startup backfill reading the same assignment from the
+      // saved project later adds nothing. A store rebuilt from the db (the
+      // file was missing) starts over from the rows (recordStemCategoryBus).
       recordStemCategoryBus(
         openOwnRiffLibraryDb(),
         entries,
@@ -1663,17 +1685,14 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'upsert-stem-category-role',
     (_event, entries: StemRoleCategoryEntry[], source: string, project: ProjectRef) => {
-      const db = openOwnRiffLibraryDb()
-      const extraCandidateDbs = candidateDbsForRiff()
-      upsertStemCategoryRole(
-        db,
+      recordStemCategoryRole(
+        openOwnRiffLibraryDb(),
         entries,
         source,
         resolveSourceProjectPath(project),
         Date.now() / 1000,
-        extraCandidateDbs
+        candidateDbsForRiff()
       )
-      trainCentroidsFromRoleEntries(db, entries, extraCandidateDbs)
     }
   )
 

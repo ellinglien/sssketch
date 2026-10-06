@@ -1,7 +1,7 @@
 // src/main/instrumentMaskCentroidBackfill.ts
 import type Database from 'better-sqlite3'
-import { upsertStemCategoryRole, type StemRoleCategoryEntry } from './stemCategoriesStore'
-import { trainCentroidsFromRoleEntries } from './categoryCentroidTraining'
+import type { StemRoleCategoryEntry } from './stemCategoriesStore'
+import { recordStemCategoryRole } from './categoryCentroidTraining'
 import { resolveStemPath, candidateDbsForRiff } from './riffLibraryStore'
 
 export interface InstrumentMaskBackfillSummary {
@@ -34,7 +34,7 @@ interface EligibleStemRow {
  * references instrumentMaskToSoundType -- it only takes an opaque
  * caller-supplied fallback) -- the real value is in FEEDING TWO DOWNSTREAM
  * CLASSIFIERS this same StemCategories write already reaches:
- * trainCentroidsFromRoleEntries (below, the DSP-
+ * recordStemCategoryRole (below, the DSP-
  * feature centroid classifier) and getConfirmedEmbeddings (embeddingMatch.ts,
  * a live JOIN against StemCategories -- no separate training call needed,
  * it just reads whatever's there) -- vastly more drums/bass reference
@@ -71,8 +71,7 @@ export function backfillInstrumentMaskCategories(
 
   const extraCandidateDbs = candidateDbsForRiff()
   const updatedAt = Date.now() / 1000
-  upsertStemCategoryRole(db, entries, 'instrumentMask', null, updatedAt, extraCandidateDbs)
-  trainCentroidsFromRoleEntries(db, entries, extraCandidateDbs)
+  recordStemCategoryRole(db, entries, 'instrumentMask', null, updatedAt, extraCandidateDbs)
 
   return { categorizedStems: entries.length }
 }

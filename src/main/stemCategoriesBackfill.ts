@@ -65,8 +65,9 @@ interface ParsedSketch {
  * later, whose archive was unmounted, or which is analysed later still
  * lands and still trains. A file that fails to parse records no stamp
  * either (tried, and reported, again next launch). Parsing a file again
- * never trains a stem twice: each (stem, bus) pair is trained once, ever
- * (recordStemCategoryBus), here or in the live Tidy Up handler.
+ * never trains a stem twice: each (stem, bus) pair is trained once into a
+ * store file, which keeps the pairs it holds (recordStemCategoryBus), here
+ * or in the live Tidy Up handler.
  * `readFile` is injectable for tests. */
 export function backfillStemCategoriesFromProjectLibrary(
   db: Database.Database,
@@ -129,7 +130,8 @@ export function backfillStemCategoriesFromProjectLibrary(
       // upsertStemCategoryBus's own "most recent wins" guard silently fall
       // back to iteration order instead, which is exactly what this
       // migration must not depend on (see this function's own doc
-      // comment). Each (stem, bus) trains once (recordStemCategoryBus).
+      // comment). Each (stem, bus) trains once per store file
+      // (recordStemCategoryBus).
       ;({ unresolved, waiting } = recordStemCategoryBus(
         db,
         entries,
