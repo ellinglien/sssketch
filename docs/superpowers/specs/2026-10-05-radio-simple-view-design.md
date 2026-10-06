@@ -54,3 +54,26 @@ whatever they're set to and keep working. Simple changes only what's on screen, 
   - Start radio and confirm it opens in simple.
   - Switch to advanced and back mid-loop: no audible restart, the switch is remembered across a
     relaunch, and a locked row shows its lock in simple.
+
+## As built (2026-10-06)
+
+Plan `docs/superpowers/plans/2026-10-06-radio-simple-view.md`, on master, unpushed:
+
+- `91db983e` `@shared/radioView` (what each view draws; simple's lists pinned by tests; the strip's
+  coverage test runs against advanced and was shown to still fail when advanced drops a group).
+- `2a450796` `DiscoverSettings.radioView`, normalized on load (simple unless saved advanced).
+- `99a28ce6` the switch, the strip and the rows (plan Tasks 3-5 together).
+
+Deviations from the plan:
+- No `LIVE_DIAL_DEFAULTS`: intensity arc Task 11 already had a module `SLIDER_DEFAULTS` map
+  (`bend`, `mismatch`, `energy`, `drama`); it moved above `ColumnBar` and the live dials share it.
+- T11's `build` / `drop` buttons are gated with `.filter(has)` on their `map`, not one wrapper each.
+- `radioMixShown` is only computed while radio runs (an empty set otherwise; the top line is not
+  drawn then).
+
+Open question for Elling (plan decision 3): in simple with density `arc`, `build`, `drop`,
+`energy` and `drama` are out of sight, not greyed. The flip is `RADIO_SIMPLE_INTENSITY_ONLY` and
+one test.
+
+**Unseen by any agent:** nothing here has been looked at, clicked or heard. The walkthrough is the
+plan's Task 6 Step 5.
