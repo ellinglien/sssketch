@@ -1,10 +1,12 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { percentileOf } from '@shared/traitQuantiles'
 import { traitFieldValuesFromFeatures, traitValuesFromFeatures } from '@shared/discoverTraits'
 import type { DiscoverTraitKind } from '@shared/discoverSlotKind'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
+  awaitTraitQuantileBuild,
+  getTraitQuantileBuildInfo,
   getTraitQuantileTables,
   getTraitValueTable,
   noteStemFeatureRowWritten,
@@ -87,6 +89,10 @@ describe('getTraitQuantileTables', () => {
     insert(db, 100, 104) // +4%
     expect(await getTraitQuantileTables(db)).toBe(first)
     insert(db, 104, 105) // +5%
+    // Inserted behind the value table's back, so this rebuild re-reads SQL --
+    // in the background, serving the existing tables meanwhile (audit item 4).
+    expect(await getTraitQuantileTables(db)).toBe(first)
+    await awaitTraitQuantileBuild(db)
     const rebuilt = await getTraitQuantileTables(db)
     expect(rebuilt).not.toBe(first)
     expect(rebuilt.transientDensity![100]).toBe(104)
@@ -116,8 +122,11 @@ describe('getTraitQuantileTables', () => {
           rhythmicStrength: i / 1000,
           featureVersion: 2
         }
-        stmt.run(JSON.stringify(features), `stem${String(i).padStart(6, '0')}`)
-        if (note) noteStemFeatureRowWritten(db, features)
+        const stemCID = `stem${String(i).padStart(6, '0')}`
+        stmt.run(JSON.stringify(features), stemCID)
+        // With its StemCID, as the stores note it (so the value table stays
+        // current and the rebuild comes from memory).
+        if (note) noteStemFeatureRowWritten(db, features, stemCID)
       }
     }
 
@@ -386,5 +395,225 @@ describe('the level fields (spec 2026-10-05-radio-intensity-arc-design 2.1)', ()
       lowLevelDb: -20,
       activeFraction: 1
     })
+  })
+})
+
+// Background scan audit item 4 (2026-10-05): while the value table accounts
+// for every row, a rebuild sorts its columns instead of re-parsing every
+// FeaturesJSON (88.7 MB on Elling's library, ~20 times over the level
+// backfill, each awaited inside a radio pick).
+describe('rebuilding from the in-memory value table (audit item 4)', () => {
+  /** Deterministic PRNG, so a failure reproduces. */
+  function prng(seed: number): () => number {
+    let x = seed
+    return () => {
+      x = (x * 1103515245 + 12345) % 2147483648
+      return x / 2147483648
+    }
+  }
+
+  const upsertSql = `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 0)
+     ON CONFLICT(StemCID) DO UPDATE SET FeaturesJSON = excluded.FeaturesJSON`
+
+  /** What stemFeatureCacheStore.ts does: JSON.stringify into the row, then
+   * the in-memory note with the same object. */
+  function write(db: Database.Database, stemCID: string, features: Record<string, unknown>): void {
+    db.prepare(upsertSql).run(stemCID, JSON.stringify(features))
+    noteStemFeatureRowWritten(db, features as unknown as StemFeatures, stemCID)
+  }
+
+  /** A row the way an analysis pass would produce it, with the awkward
+   * values: -0, NaN, Infinity (JSON writes null), missing fields, and the
+   * Phase 3 and level fields on some rows only. */
+  function features(rand: () => number): Record<string, unknown> {
+    const pick = (): number => {
+      const r = rand()
+      if (r < 0.03) return -0
+      if (r < 0.05) return NaN
+      if (r < 0.06) return Infinity
+      if (r < 0.1) return 0
+      return Math.round(rand() * 1e6) / 1e3 - 200
+    }
+    const out: Record<string, unknown> = {
+      transientDensity: pick(),
+      bassEnergyRatio: pick(),
+      spectralCentroidHz: pick(),
+      zcrBrightness: pick(),
+      voicedFraction: 0,
+      pitchVarianceCents: 0,
+      mfcc: []
+    }
+    if (rand() < 0.6) {
+      out.spectralCentroidFftHz = pick()
+      out.onsetRegularity = pick()
+      out.rhythmicStrength = pick()
+      out.featureVersion = 2
+    }
+    if (rand() < 0.5) {
+      out.loudnessLufs = pick()
+      out.lowLevelDb = pick()
+      out.activeFraction = pick()
+      out.levelVersion = 1
+    }
+    if (rand() < 0.05) delete out.transientDensity
+    return out
+  }
+
+  function seedAwkward(db: Database.Database, rand: () => number, n: number): void {
+    const stmt = db.prepare(`INSERT INTO StemFeatureCache VALUES (?, ?, 0)`)
+    for (let i = 0; i < n; i++) {
+      stmt.run(`s${String(i).padStart(6, '0')}`, JSON.stringify(features(rand)))
+    }
+    for (const [cid, json] of [
+      ['bad', 'not json'],
+      ['nulljson', 'null'],
+      ['number', '5'],
+      ['string', '"str"'],
+      ['truthy', 'true'],
+      ['array', '[1, 2]'],
+      ['partial', '{"transientDensity":"x","bassEnergyRatio":null}'],
+      ['negzero', '{"transientDensity":-0,"bassEnergyRatio":0.5,"spectralCentroidHz":-0}']
+    ]) {
+      stmt.run(cid, json)
+    }
+  }
+
+  function featureJsonReads(db: Database.Database): () => number {
+    const spy = vi.spyOn(db, 'prepare')
+    return () => spy.mock.calls.filter(([sql]) => String(sql).includes('FeaturesJSON FROM')).length
+  }
+
+  it('gives exactly the tables a full DB rebuild gives, round after round, without reading FeaturesJSON', async () => {
+    const rand = prng(7)
+    const db = freshDb()
+    seedAwkward(db, rand, 3000)
+    let previous = await getTraitQuantileTables(db) // first build: from SQL
+    expect(getTraitQuantileBuildInfo(db)).toEqual(getTraitQuantileBuildInfo(db))
+
+    for (let round = 0; round < 6; round++) {
+      // New rows, rewrites (a level merge, a re-extraction), and rewrites
+      // of the malformed / non-object rows into real ones.
+      for (let i = 0; i < 200; i++) write(db, `new${round}-${i}`, features(rand))
+      for (let i = 0; i < 150; i++) {
+        const cid = `s${String(Math.floor(rand() * 3000)).padStart(6, '0')}`
+        write(db, cid, features(rand))
+      }
+      if (round === 2) {
+        write(db, 'bad', features(rand))
+        write(db, 'number', features(rand))
+        write(db, 'array', features(rand))
+      }
+      const reads = featureJsonReads(db)
+      const fromMemory = await getTraitQuantileTables(db)
+      expect(fromMemory).not.toBe(previous) // it did rebuild
+      expect(reads()).toBe(0)
+      expect(getTraitValueTable(db)).not.toBeNull()
+
+      const copy = freshCopy(db)
+      const fromSql = await getTraitQuantileTables(copy)
+      expect(fromMemory).toEqual(fromSql)
+      expect(Object.keys(fromMemory).sort()).toEqual(Object.keys(fromSql).sort())
+      for (const field of Object.keys(fromSql) as (keyof typeof fromSql)[]) {
+        fromSql[field]!.forEach((v, i) => expect(Object.is(fromMemory[field]![i], v)).toBe(true))
+      }
+      expect(getTraitQuantileBuildInfo(db)).toEqual(getTraitQuantileBuildInfo(copy))
+      previous = fromMemory
+    }
+  })
+
+  it('counts parsed rows as the DB build does: a non-object row is not one (the half-the-rows rule)', async () => {
+    // 40 object rows, 21 carrying rhythmicStrength: a preferred table needs
+    // ceil(40 / 2) = 20 of them. Non-object rows ('5', '"x"', 'true') must
+    // not raise that bar; an array parses to an object and does count.
+    const db = freshDb()
+    insert(db, 0, 1)
+    await getTraitQuantileTables(db)
+    for (let i = 0; i < 39; i++) {
+      write(db, `obj${i}`, {
+        transientDensity: i,
+        bassEnergyRatio: 0.1,
+        spectralCentroidHz: 100,
+        ...(i < 21 ? { rhythmicStrength: i / 100, featureVersion: 2 } : {})
+      })
+    }
+    for (const [cid, json] of [
+      ['number', '5'],
+      ['string', '"x"'],
+      ['truthy', 'true']
+    ]) {
+      db.prepare(upsertSql).run(cid, json)
+      noteStemFeatureRowWritten(db, JSON.parse(json) as StemFeatures, cid)
+    }
+    const reads = featureJsonReads(db)
+    const fromMemory = await getTraitQuantileTables(db)
+    expect(reads()).toBe(0)
+    const fromSql = await getTraitQuantileTables(freshCopy(db))
+    expect(fromSql.rhythmicStrength).toBeDefined()
+    expect(fromMemory).toEqual(fromSql)
+
+    // And a non-object row rewritten into a real one counts again.
+    write(db, 'number', { transientDensity: 1, bassEnergyRatio: 0.1, spectralCentroidHz: 1 })
+    expect(getTraitValueTable(db)).not.toBeNull()
+  })
+
+  it('a level-only merge (the backfill) rebuilds from memory once 5% of rows gained the fields', async () => {
+    const db = freshDb()
+    insert(db, 0, 1000)
+    const first = await getTraitQuantileTables(db)
+    const reads = featureJsonReads(db)
+    const merge = (i: number): void => {
+      const cid = `stem${String(i).padStart(6, '0')}`
+      const row = db
+        .prepare(`SELECT FeaturesJSON FROM StemFeatureCache WHERE StemCID = ?`)
+        .get(cid) as { FeaturesJSON: string }
+      const merged = {
+        ...JSON.parse(row.FeaturesJSON),
+        loudnessLufs: -20 - (i % 7),
+        lowLevelDb: -30,
+        activeFraction: 0.5,
+        levelVersion: 1,
+        spectralCentroidFftHz: i,
+        rhythmicStrength: 0.1,
+        onsetRegularity: 0.2,
+        featureVersion: 2
+      }
+      db.prepare(`UPDATE StemFeatureCache SET FeaturesJSON = ? WHERE StemCID = ?`).run(
+        JSON.stringify(merged),
+        cid
+      )
+      noteStemFeatureRowWritten(db, merged as StemFeatures, cid)
+    }
+    for (let i = 0; i < 49; i++) merge(i)
+    expect(await getTraitQuantileTables(db)).toBe(first)
+    merge(49)
+    const rebuilt = await getTraitQuantileTables(db)
+    expect(rebuilt).not.toBe(first)
+    expect(rebuilt).toEqual(await getTraitQuantileTables(freshCopy(db)))
+    // Only merge()'s own single-row reads, never the build's page read.
+    expect(reads()).toBe(50)
+  })
+
+  it('falls back to the DB rebuild when the value table no longer accounts for every row -- the same result', async () => {
+    const db = freshDb()
+    insert(db, 0, 100)
+    const first = await getTraitQuantileTables(db)
+    insert(db, 100, 110) // behind its back: no note
+    expect(getTraitValueTable(db)).toBeNull()
+    const reads = featureJsonReads(db)
+    // An existing table is served while the DB rebuild runs: a pick never
+    // waits on a full re-parse.
+    expect(await getTraitQuantileTables(db)).toBe(first)
+    await awaitTraitQuantileBuild(db)
+    expect(reads()).toBeGreaterThan(0)
+    const rebuilt = await getTraitQuantileTables(db)
+    expect(rebuilt).not.toBe(first)
+    expect(rebuilt).toEqual(await getTraitQuantileTables(freshCopy(db)))
+    expect(getTraitValueTable(db)).not.toBeNull() // and the value table is current again
+  })
+
+  it('the very first build is still awaited (there is nothing to serve before it)', async () => {
+    const db = freshDb()
+    insert(db, 0, 10)
+    expect((await getTraitQuantileTables(db)).transientDensity![100]).toBe(9)
   })
 })

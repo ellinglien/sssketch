@@ -32,6 +32,15 @@
 // by the same write hook (noteStemFeatureRowWritten), and a roll only uses
 // it while the live row count still matches what it accounts for
 // (getTraitValueTable); otherwise the roll falls back to reading SQL.
+//
+// Background scan audit item 4 (2026-10-05): a REBUILD reads that same
+// value table too, while it accounts for every row -- a sort of its columns
+// (~90 ms on Elling's 146k rows) instead of re-parsing all 88.7 MB of
+// FeaturesJSON (0.8 s warm, 3.8 s cold), which the level backfill used to
+// trigger about 20 times, each awaited inside a radio pick. Only the first
+// build, or one after the value table lost track of a write, re-parses SQL,
+// and once tables exist that one runs in the background while they're
+// served.
 import type Database from 'better-sqlite3'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
@@ -73,7 +82,7 @@ interface CacheEntry {
 }
 
 const cache = new WeakMap<Database.Database, CacheEntry>()
-const inFlight = new WeakMap<Database.Database, Promise<CacheEntry>>()
+const inFlight = new WeakMap<Database.Database, Build>()
 /** Feature-row writes carrying a Phase 3 field since the last build began.
  * Approximate on purpose (a rewrite of an already-new row counts too) --
  * it only decides WHEN to rebuild; the build itself recounts exactly. */
@@ -93,6 +102,9 @@ export class TraitValueTable {
   private readonly stemCIDs: string[] = []
   private columns: Float64Array[] = QUANTILE_FIELDS.map(() => new Float64Array(0))
   private readonly malformed = new Set<string>()
+  /** Rows whose parsed value is truthy but not an object (`5`, `"x"`,
+   * `true`): a row here, all NaN, but not one of the build's parsedRows. */
+  private readonly nonObject = new Set<string>()
   /** StemFeatureCache rows this table accounts for (parsed + malformed) --
    * compared against the live COUNT(*) before a roll trusts it. */
   rowsSeen = 0
@@ -140,6 +152,24 @@ export class TraitValueTable {
     if (features) this.set(stemCID, features)
   }
 
+  /** What buildTables would collect from the rows this table holds, read in
+   * one synchronous pass (background scan audit item 4): each quantile
+   * field's finite values (unordered -- the table sorts them), the rows
+   * that parsed to an object, and those carrying a Phase 3 field. */
+  quantileInputs(): { values: number[][]; parsedRows: number; newFieldRows: number } {
+    const values: number[][] = QUANTILE_FIELDS.map(() => [])
+    const newFieldColumns = NEW_FIELDS.map((f) => this.columns[FIELD_COLUMN.get(f)!])
+    let newFieldRows = 0
+    for (let row = 0; row < this.stemCIDs.length; row++) {
+      for (let col = 0; col < this.columns.length; col++) {
+        const v = this.columns[col][row]
+        if (!Number.isNaN(v)) values[col].push(v)
+      }
+      if (newFieldColumns.some((column) => !Number.isNaN(column[row]))) newFieldRows += 1
+    }
+    return { values, parsedRows: this.stemCIDs.length - this.nonObject.size, newFieldRows }
+  }
+
   private set(stemCID: string, parsed: unknown): void {
     let row = this.rowByStemCID.get(stemCID)
     if (row === undefined) {
@@ -148,6 +178,8 @@ export class TraitValueTable {
       this.stemCIDs.push(stemCID)
       this.rowByStemCID.set(stemCID, row)
     }
+    if (typeof parsed === 'object') this.nonObject.delete(stemCID)
+    else this.nonObject.add(stemCID)
     const record = parsed as Record<string, unknown>
     for (const [field, col] of FIELD_COLUMN) {
       const v = typeof record === 'object' ? record[field] : undefined
@@ -312,9 +344,75 @@ function needsRebuild(
   return (newFieldWrites.get(db) ?? 0) >= REBUILD_GROWTH * growthBase
 }
 
+/** A rebuild from the value table (audit item 4): one synchronous pass
+ * over its columns, then the same tableForField per field (sorts, with a
+ * yield before each) as buildTables -- no SQL, no JSON. Identical tables
+ * by construction: the columns are exactly the parsed rows (applyWrite
+ * keeps them in step with every store write, level merges included), and
+ * tableForField sorts, so order doesn't matter. */
+async function buildTablesFromValueTable(
+  db: Database.Database,
+  table: TraitValueTable,
+  rowCount: number
+): Promise<CacheEntry> {
+  // Same rule as buildTables: writes from here on count toward the NEXT
+  // rebuild. The snapshot below is synchronous, so none can slip into it.
+  newFieldWrites.set(db, 0)
+  const { values, parsedRows, newFieldRows } = table.quantileInputs()
+  const tables: TraitQuantileTables = {}
+  for (let i = 0; i < QUANTILE_FIELDS.length; i++) {
+    await yieldToEventLoop()
+    const built = tableForField(QUANTILE_FIELDS[i], values[i], parsedRows)
+    if (built) tables[QUANTILE_FIELDS[i]] = built
+  }
+  return { tables, rowCount, newFieldRows }
+}
+
+interface Build {
+  promise: Promise<CacheEntry>
+  /** Re-parsing every FeaturesJSON (the first build, or a value table that
+   * no longer accounts for every row). */
+  fromSql: boolean
+}
+
+function startBuild(db: Database.Database, count: number): Build {
+  const started = performance.now()
+  const table = valueTables.get(db)
+  if (table && table.rowsSeen === count) {
+    countWork('trait-quantile:rebuild.memory')
+    const promise = buildTablesFromValueTable(db, table, count).then((built) => {
+      cache.set(db, built)
+      countWork('ms:trait-quantile.rebuild.memory', Math.round(performance.now() - started))
+      return built
+    })
+    return { promise, fromSql: false }
+  }
+  countWork('trait-quantile:rebuild.sql')
+  const promise = buildTables(db, count)
+    .then(({ valueTable, ...built }) => {
+      cache.set(db, built)
+      installValueTable(db, valueTable)
+      countWork('ms:trait-quantile.rebuild.sql', Math.round(performance.now() - started))
+      return built
+    })
+    .catch((err: unknown) => {
+      pendingWrites.delete(db)
+      poisonedBuilds.delete(db)
+      throw err
+    })
+  return { promise, fromSql: true }
+}
+
 /** The current quantile tables for `db`'s StemFeatureCache (keyed by
  * field). {} when the table is missing/empty or a build fails -- callers
- * then just get null percentiles (unanalysed), never an error. */
+ * then just get null percentiles (unanalysed), never an error.
+ *
+ * A rebuild comes from the in-memory value table whenever it accounts for
+ * every row (tens of ms; awaited). Only the first build, or one after the
+ * value table lost track, re-parses the whole table from SQL -- and when
+ * tables already exist that one runs in the background while the existing
+ * tables are served: a radio pick awaits this, and must never wait on a
+ * full re-parse (background scan audit item 4). */
 export async function getTraitQuantileTables(db: Database.Database): Promise<TraitQuantileTables> {
   countWork('sql:trait-quantile.count')
   const count = countRows(db)
@@ -324,25 +422,44 @@ export async function getTraitQuantileTables(db: Database.Database): Promise<Tra
 
   let build = inFlight.get(db)
   if (!build) {
-    build = buildTables(db, count)
-      .then(({ valueTable, ...built }) => {
-        cache.set(db, built)
-        installValueTable(db, valueTable)
-        return built
-      })
-      .catch((err: unknown) => {
-        pendingWrites.delete(db)
-        poisonedBuilds.delete(db)
-        throw err
-      })
-      .finally(() => inFlight.delete(db))
+    const started = startBuild(db, count)
+    const settled = started.promise.finally(() => inFlight.delete(db))
+    // Handled here too: a background build nobody awaits must not surface
+    // as an unhandled rejection (callers that do await still see it).
+    settled.catch(() => undefined)
+    build = { promise: settled, fromSql: started.fromSql }
     inFlight.set(db, build)
   }
+  if (entry && build.fromSql) {
+    countWork('trait-quantile:served-stale')
+    return entry.tables
+  }
   try {
-    return (await build).tables
+    return (await build.promise).tables
   } catch {
     return entry?.tables ?? {}
   }
+}
+
+/** Resolves once any build in flight for `db` has settled (tests, and
+ * anything that wants the fresh tables rather than the served ones). */
+export async function awaitTraitQuantileBuild(db: Database.Database): Promise<void> {
+  try {
+    await inFlight.get(db)?.promise
+  } catch {
+    // a failed build keeps the old tables -- nothing to wait for
+  }
+}
+
+/** What the current tables were built against (row count, rows carrying a
+ * Phase 3 field) -- null before the first build. For tests: a rebuild from
+ * memory and one from SQL must agree on these too, since they decide when
+ * the next rebuild happens. */
+export function getTraitQuantileBuildInfo(
+  db: Database.Database
+): { rowCount: number; newFieldRows: number } | null {
+  const entry = cache.get(db)
+  return entry ? { rowCount: entry.rowCount, newFieldRows: entry.newFieldRows } : null
 }
 
 /** Builds the tables ahead of the first trait roll (called once the
