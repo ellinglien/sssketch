@@ -251,4 +251,39 @@ describe('createAsyncDirListing', () => {
     expect(results[2]).toBe(results[0])
     expect(results[4]).toBeNull()
   })
+
+  it('a freed slot goes to the waiter: a list() landing before the waiter resumes queues behind it', async () => {
+    // The late call is fired `hops` microtasks after the first listing's
+    // readdir settles, so one of these lands between the slot being freed
+    // and the waiter resuming.
+    for (let hops = 0; hops < 8; hops++) {
+      let inFlight = 0
+      let maxInFlight = 0
+      const releases: (() => void)[] = []
+      const asked: Promise<Set<string> | null>[] = []
+      const listing = createAsyncDirListing({
+        concurrency: 1,
+        readdirFn: async (dir) => {
+          inFlight += 1
+          maxInFlight = Math.max(maxInFlight, inFlight)
+          await new Promise<void>((resolve) => releases.push(resolve))
+          inFlight -= 1
+          if (dir === '/a') {
+            let chain = Promise.resolve()
+            for (let i = 0; i < hops; i++) chain = chain.then(() => undefined)
+            void chain.then(() => asked.push(listing.list('/late')))
+          }
+          return [dir]
+        }
+      })
+      asked.push(listing.list('/a'), listing.list('/b'))
+      for (let i = 0; i < 20; i++) {
+        await new Promise((resolve) => setImmediate(resolve))
+        releases.splice(0).forEach((release) => release())
+      }
+      const results = await Promise.all(asked)
+      expect({ hops, maxInFlight }).toEqual({ hops, maxInFlight: 1 })
+      expect(results.map((r) => [...(r ?? [])][0])).toEqual(['/a', '/b', '/late'])
+    }
+  })
 })

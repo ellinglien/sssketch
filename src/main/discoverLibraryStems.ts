@@ -133,8 +133,10 @@ export function createAsyncDirListing(
   const waiting: (() => void)[] = []
 
   async function take(dir: string): Promise<Set<string> | null> {
+    // A freed slot is handed straight to the next waiter (active unchanged),
+    // so a list() landing before that waiter resumes can't take it as well.
     if (active >= concurrency) await new Promise<void>((resolve) => waiting.push(resolve))
-    active += 1
+    else active += 1
     const started = performance.now()
     try {
       return new Set(await readdirFn(dir))
@@ -143,8 +145,9 @@ export function createAsyncDirListing(
     } finally {
       countWork('fs:readdir')
       countWork('ms:fs.readdir', Math.round(performance.now() - started))
-      active -= 1
-      waiting.shift()?.()
+      const next = waiting.shift()
+      if (next) next()
+      else active -= 1
     }
   }
 
