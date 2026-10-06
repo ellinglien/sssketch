@@ -2,6 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Waveform } from './Waveform'
 import { tagPickedUnderArtist } from '@shared/discoverArtist'
+import { tagByCreator } from '@shared/artistSelection'
 import { slotKindsKey, type DiscoverSlotKind } from '@shared/discoverSlotKind'
 import type { DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
@@ -158,7 +159,8 @@ export function DiscoverNearbyPopover({
   onPick,
   onClose,
   ignoreRef,
-  creator
+  creator,
+  ownUsername
 }: {
   x: number
   y: number
@@ -185,8 +187,12 @@ export function DiscoverNearbyPopover({
   onClose: () => void
   ignoreRef: React.RefObject<HTMLElement | null>
   /** Discover artist mode (2026-10-01): only this creator's stems. Undefined
-   * (every `me` roll) filters nothing. */
-  creator?: string
+   * (every `me` roll) filters nothing. Combine artists (2026-10-06): any of
+   * these; tagged by creator. */
+  creator?: string | readonly string[]
+  /** The own username, so a combination tags `me`'s stems untagged, as `me`
+   * rolls are (tagByCreator). */
+  ownUsername?: string
 }): React.JSX.Element {
   // Tracks the full candidate, not just its riffCID -- the header below
   // shows this candidate's own presetName/creatorUserName for orientation
@@ -206,7 +212,9 @@ export function DiscoverNearbyPopover({
     candidates: { newer: AdjacentDiscoverCandidate[]; older: AdjacentDiscoverCandidate[] }
   } | null>(null)
   const kindsKey = slotKindsKey(kinds)
-  const resultKey = `${centerCandidate.riffCID}:${kindsKey}:${soundSource.endlesss}:${soundSource.audioIn}:${creator ?? ''}`
+  // A list (combine artists) keys by its names: a new array with the same names is the same key.
+  const creatorKey = typeof creator === 'string' ? creator : (creator ?? []).join(',')
+  const resultKey = `${centerCandidate.riffCID}:${kindsKey}:${soundSource.endlesss}:${soundSource.audioIn}:${creatorKey}`
 
   useEffect(() => {
     let cancelled = false
@@ -214,11 +222,12 @@ export function DiscoverNearbyPopover({
       .getAdjacentDiscoverCandidates(centerCandidate.riffCID, kinds, soundSource, creator)
       .then((candidates) => {
         // Tagged with the artist they were browsed under (pickedUnderArtist),
-        // like every roll's results.
-        const tagged = {
-          newer: candidates.newer.map((c) => tagPickedUnderArtist(c, creator)),
-          older: candidates.older.map((c) => tagPickedUnderArtist(c, creator))
-        }
+        // like every roll's results; in a combination, by each stem's creator.
+        const tag = (c: AdjacentDiscoverCandidate): AdjacentDiscoverCandidate =>
+          typeof creator === 'object'
+            ? tagByCreator(c, creator, ownUsername ?? '')
+            : tagPickedUnderArtist(c, creator)
+        const tagged = { newer: candidates.newer.map(tag), older: candidates.older.map(tag) }
         if (!cancelled) setResult({ key: resultKey, candidates: tagged })
       })
       .catch((err) => {
@@ -235,14 +244,15 @@ export function DiscoverNearbyPopover({
     // of whether either actual value changed, not just when this
     // popover's own resultKey (which already encodes both values) does.
     // `kinds` itself is also omitted -- it's a fresh array every render;
-    // `kindsKey` carries its identity instead.
+    // `kindsKey` carries its identity instead. So is `creator`, which may be
+    // a fresh list (combine artists) every render: `creatorKey` carries it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     centerCandidate.riffCID,
     kindsKey,
     soundSource.endlesss,
     soundSource.audioIn,
-    creator,
+    creatorKey,
     resultKey
   ])
 

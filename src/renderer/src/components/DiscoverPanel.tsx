@@ -260,13 +260,13 @@ import {
   isCombined,
   memberOfPick,
   pickMatchesArtistSelection,
-  rollFilterForMember,
   selectionCreatorFilter,
   selectionHasMe,
   selectionMode,
   selectionOthers,
   selectionTurnoverIds,
   selectionsEqual,
+  tagByCreator,
   type ArtistSelection
 } from '@shared/artistSelection'
 import {
@@ -9172,22 +9172,21 @@ export function DiscoverPanel({
     rerollGenerationRef.current.set(id, myGeneration)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
-      const nearbyArtist = rollFilterForMember(
-        artistsRef.current[0],
-        artistsRef.current,
-        currentUsername,
-        false
-      ).artist
+      // One artist: today's creator (or none) and tag. A combination: any member, tagged by
+      // creator (combine artists).
+      const sel = artistsRef.current
+      const nearbyArtist = selectionCreatorFilter(sel, currentUsername)
       const nearbyRaw = await window.rifffApi.getAdjacentDiscoverCandidates(
         anchor.riffCID,
         slot.kinds,
         soundSourceForLean(sourceLeanRef.current),
         nearbyArtist
       )
-      const nearby = {
-        older: nearbyRaw.older.map((c) => tagPickedUnderArtist(c, nearbyArtist)),
-        newer: nearbyRaw.newer.map((c) => tagPickedUnderArtist(c, nearbyArtist))
-      }
+      const tagNear = <T extends DiscoverCandidate>(c: T): T =>
+        typeof nearbyArtist === 'object'
+          ? tagByCreator(c, sel, currentUsername)
+          : tagPickedUnderArtist(c, nearbyArtist)
+      const nearby = { older: nearbyRaw.older.map(tagNear), newer: nearbyRaw.newer.map(tagNear) }
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       const pick = pickAdjacentCandidate(nearby.older, nearby.newer, anchor.stemCID)
       // Nothing nearby: the stem that is already playing is still the right
@@ -9444,13 +9443,16 @@ export function DiscoverPanel({
             )
           ])
         ]
+        // Combine artists (decision 9): the near draw spans the whole selection, each neighbour
+        // tagged by its creator, and the ledger charges whoever lands. One artist: today's.
+        const nearCombined = isCombined(selection)
         const nearFrom = async (source: typeof draw.first): Promise<DiscoverCandidate[] | null> => {
           if (anchorRiff === undefined) return null
           const raw = await window.rifffApi.getAdjacentDiscoverCandidates(
             anchorRiff,
             kinds,
             source,
-            f.artist,
+            nearCombined ? selectionCreatorFilter(selection, currentUsername) : f.artist,
             {
               matchesPerDirection: DIG_NEAR_PER_DIRECTION,
               skipDownload: true,
@@ -9458,11 +9460,19 @@ export function DiscoverPanel({
               ...(lean !== null && { intensity: true })
             }
           )
+          // a combination's creator list already restricts the creators
           const own = (c: DiscoverCandidate): boolean =>
-            !f.onlyOwnStems || f.targetUser === '' || c.creatorUserName === f.targetUser
+            nearCombined ||
+            !f.onlyOwnStems ||
+            f.targetUser === '' ||
+            c.creatorUserName === f.targetUser
+          const tagNear = (c: DiscoverCandidate): DiscoverCandidate =>
+            nearCombined
+              ? tagByCreator(c, selection, currentUsername)
+              : tagPickedUnderArtist(c, f.artist)
           const near = {
-            newer: raw.newer.filter(own).map((c) => tagPickedUnderArtist(c, f.artist)),
-            older: raw.older.filter(own).map((c) => tagPickedUnderArtist(c, f.artist))
+            newer: raw.newer.filter(own).map(tagNear),
+            older: raw.older.filter(own).map(tagNear)
           }
           radioDigNearRef.current = learnRadioDigNear(
             radioDigNearRef.current,
@@ -13453,7 +13463,8 @@ export function DiscoverPanel({
               onToggleDig={() => toggleSlotDig(slot.id)}
               onLike={() => likeSlot(slot.id)}
               listenOnlyStars={listenOnly.has('star')}
-              nearbyCreator={typeof artistCreator === 'string' ? artistCreator : undefined}
+              nearbyCreator={artistCreator}
+              ownUsername={currentUsername}
               onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
               onRemove={() => removeSlot(slot.id)}
               onDuplicate={(immediate) => duplicateSlot(slot.id, immediate)}

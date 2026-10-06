@@ -282,6 +282,7 @@ export function DiscoverSlotRow({
   onLike,
   listenOnlyStars,
   nearbyCreator,
+  ownUsername,
   onToggleReplaceSoon,
   onRemove,
   onDuplicate,
@@ -371,8 +372,10 @@ export function DiscoverSlotRow({
    * its tooltip says so. The button stays un-dimmed -- it still holds. */
   listenOnlyStars: boolean
   /** Discover artist mode: the nearby popover shows only this creator's
-   * stems. Undefined in own mode. */
-  nearbyCreator: string | undefined
+   * stems. Undefined in own mode. Combine artists: any of these. */
+  nearbyCreator: string | readonly string[] | undefined
+  /** The own username (the nearby popover tags a combination's stems by it). */
+  ownUsername: string
   /** The 👎 ("change soon", once "change next") -- toggles `replace-soon`
    * on this row (toggleRadioReplaceSoon). */
   onToggleReplaceSoon: () => void
@@ -1673,6 +1676,7 @@ export function DiscoverSlotRow({
           onClose={closeNearbyMenu}
           ignoreRef={nearbyButtonRef}
           creator={nearbyCreator}
+          ownUsername={ownUsername}
         />
       )}
       {reclassifyMenu && slot.candidate && shows('meter') && (
