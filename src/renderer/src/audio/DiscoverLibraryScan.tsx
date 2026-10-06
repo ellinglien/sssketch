@@ -1,23 +1,20 @@
 // src/renderer/src/audio/DiscoverLibraryScan.tsx
-import { backgroundScanGate } from './backgroundScanGate'
 import { ARTIST_SCAN_QUEUED_EVENT } from './artistScanQueueEvent'
 import { backgroundWorkRegistry } from './backgroundWorkRegistry'
 import { countWork } from '../perf/workCounters'
 import { useEffect, useRef, useState } from 'react'
-import { needsAnyAnalysis, type StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
-import type { LibraryScanTarget } from '../../../main/discoverLibraryStems'
-import { analyzeStemOnce, fetchStemAnalysisNeeds } from './analyzeStemOnce'
+import { needsAnyAnalysis } from '@shared/stemAnalysisNeeds'
+import { fetchStemAnalysisNeeds } from './analyzeStemOnce'
+import {
+  IDLE_REST_MS,
+  backgroundAnalysisQueue,
+  type AnalysisSource,
+  type AnalysisWorkItem
+} from './backgroundAnalysisQueue'
 
-// Mirrors BackgroundFeatureScan.tsx's own throttle constants exactly --
-// deliberately NOT imported from there. This is genuinely separate,
-// wider-scope code (this plan's own Architecture section): duplicating two
-// small constants is cheaper than coupling two independently-scoped scan
-// mechanisms together.
-const BATCH_SIZE = 3
-const BATCH_DELAY_MS = 500
-/** Once the local walk is done, how often the scan looks at the artist
- * analysis queue (Discover artist mode's "analyse overnight"). */
-const PRIORITY_IDLE_POLL_MS = 30_000
+/** After a failed or partly-failed artist batch, the artist queue rests
+ * this long rather than being retried (and logged) on every step. */
+const PRIORITY_IDLE_POLL_MS = IDLE_REST_MS
 // Targets per get-stem-analysis-needs call, fetched ahead of processing
 // (background-efficiency spec, A3) -- matches main's own SQL chunk size.
 const NEEDS_PAGE_SIZE = 500
@@ -46,10 +43,13 @@ const NEEDS_PAGE_SIZE = 500
  * work is worked out first, in SQL and from the trait value table, and only
  * that is checked against the disk, asynchronously, with 0-byte
  * placeholders dropped -- background scan audit 3; never triggers a fresh
- * download) -- then runs the exact same throttled batch/extract loop
- * BackgroundFeatureScan.tsx already established for placed stems, over
- * that list. Needs are still asked a page at a time, so the per-stem
- * answer stays the needs function's.
+ * download) -- and hands it to the one analysis queue
+ * (backgroundAnalysisQueue.ts, background scan audit 7) as its library
+ * source, beside the artist "analyse overnight" queue as its artist source.
+ * The queue runs placed stems first, then the artist queue, then this walk,
+ * 3 analyses at a time across all of them. Needs are still asked a page at
+ * a time, so the per-stem answer stays the needs function's. Unmounting
+ * (consent off) removes both sources: only placed stems remain.
  *
  * It renders nothing: its progress is reported to backgroundWorkRegistry
  * and shown by the app-wide BackgroundWorkIndicator (see the reporting
@@ -57,7 +57,7 @@ const NEEDS_PAGE_SIZE = 500
  *
  * HONEST ABOUT SCALE: for a real library the size of Elling's own (52,493
  * total stems, some smaller-but-still-large fraction already downloaded
- * locally), one full pass at BATCH_SIZE=3 / BATCH_DELAY_MS=500 is a
+ * locally), one full pass at the queue's 3 at a time / 500 ms gap is a
  * genuinely long-running background process -- order of HOURS, not
  * something that finishes in one sitting. Expected, not a bug: the
  * throttle exists specifically so this never meaningfully competes with
@@ -92,7 +92,49 @@ export function DiscoverLibraryScan(): null {
 
   useEffect(() => {
     let cancelled = false
-    let removeQueuedListener = (): void => {}
+
+    // The artist "analyse overnight" queue (main's DiscoverArtistScanQueue):
+    // the queue's artist tier, ahead of the library walk. Installed at once
+    // -- it doesn't wait for the work list.
+    let priorityPausedUntil = 0
+    const artist: AnalysisSource = {
+      async next(n) {
+        if (performance.now() < priorityPausedUntil) return 'idle'
+        let batch: Awaited<ReturnType<typeof window.rifffApi.takeArtistScanBatch>>
+        try {
+          batch = await window.rifffApi.takeArtistScanBatch(n)
+        } catch (err) {
+          console.error('DiscoverLibraryScan: priority batch failed:', err)
+          priorityPausedUntil = performance.now() + PRIORITY_IDLE_POLL_MS
+          return 'idle'
+        }
+        if (cancelled) return 'done'
+        setPriorityLeft(batch.remaining)
+        // Paused (the archive drive is not mounted), an empty queue, or
+        // nothing but temporary failures: rest instead of asking again on
+        // every step. A new enqueue ends the rest (the event below).
+        if (batch.status === 'paused' || batch.targets.length === 0) return 'idle'
+        // Temporary download failures were kept in the queue by main, and
+        // rest the queue a while after this batch.
+        if (batch.transient > 0) priorityPausedUntil = performance.now() + PRIORITY_IDLE_POLL_MS
+        return batch.targets
+      },
+      // Downloaded and attempted: finished either way -- a failed analysis
+      // must not loop.
+      done: (keys) => window.rifffApi.finishArtistScanBatch(keys)
+    }
+    backgroundAnalysisQueue.setSource('artist', artist)
+
+    // "analyse overnight" just queued stems: show the new size and stop
+    // resting, so the queue starts at the next step.
+    function onQueued(e: Event): void {
+      const size = (e as CustomEvent<{ size: number }>).detail?.size
+      if (typeof size === 'number') setPriorityLeft(size)
+      priorityPausedUntil = 0
+      backgroundAnalysisQueue.wake('artist')
+    }
+    window.addEventListener(ARTIST_SCAN_QUEUED_EVENT, onQueued)
+
     countWork('ipc:get-discover-library-scan-work')
     void window.rifffApi
       .getDiscoverLibraryScanWork()
@@ -105,156 +147,55 @@ export function DiscoverLibraryScan(): null {
 
         // Background-efficiency spec, A2/A3: main answers "what does each
         // stem still need" a page at a time (one batched call per
-        // NEEDS_PAGE_SIZE targets, fetched ahead of processing), stems
-        // needing nothing count as completed straight away -- no decode
-        // and no per-stem "do you have it?" round trips -- and the rest get
-        // exactly one decode via analyzeStemOnce, for only what's missing.
-        // A fully analysed library makes a session's pass ~one IPC call
-        // per page.
+        // NEEDS_PAGE_SIZE targets, fetched when the queue asks for more),
+        // stems needing nothing count as completed straight away -- no
+        // decode and no per-stem "do you have it?" round trips -- and the
+        // rest go to the queue with their needs, so it asks none itself.
         let nextPageStart = 0
-        let work: { target: LibraryScanTarget; needs: StemAnalysisNeeds }[] = []
-        let workIndex = 0
-
-        // Loads the next page of needs into `work`; stems needing nothing
-        // are marked done right away (progress reflects them). Resolves
-        // false when the target list is exhausted.
-        async function loadNextPage(): Promise<boolean> {
-          if (nextPageStart >= toScan.length) return false
-          const page = toScan.slice(nextPageStart, nextPageStart + NEEDS_PAGE_SIZE)
-          const needs = await fetchStemAnalysisNeeds(page.map((t) => t.path))
-          if (cancelled) return false
-          nextPageStart += page.length
-          work = []
-          workIndex = 0
-          let alreadyDone = 0
-          page.forEach((target, i) => {
-            const targetNeeds = needs[i]
-            if (targetNeeds && needsAnyAnalysis(targetNeeds)) {
-              work.push({ target, needs: targetNeeds })
-            } else {
-              attemptedRef.current.add(target.key)
-              alreadyDone += 1
-            }
-          })
-          if (alreadyDone > 0) setCompleted((c) => c + alreadyDone)
-          return true
-        }
-
-        // After a failed priority batch, the queue rests this long rather
-        // than being retried (and logged) on every step.
-        let priorityPausedUntil = 0
-
-        /** One priority batch (artist "analyse overnight"). True when it did work. */
-        async function runPriorityBatch(): Promise<boolean> {
-          if (performance.now() < priorityPausedUntil) return false
-          const batch = await window.rifffApi.takeArtistScanBatch(BATCH_SIZE)
-          if (cancelled) return false
-          setPriorityLeft(batch.remaining)
-          // Paused (the archive drive is not mounted), an empty queue, or
-          // nothing but temporary failures: rest instead of asking again on
-          // every step. A new enqueue ends the rest (the event below).
-          if (batch.status === 'paused' || batch.targets.length === 0) {
-            priorityPausedUntil = performance.now() + PRIORITY_IDLE_POLL_MS
-            return false
-          }
-          const ready = batch.targets
-          const needs = await fetchStemAnalysisNeeds(ready.map((t) => t.path))
-          await Promise.allSettled(
-            ready.map((t, i) =>
-              needs[i] && needsAnyAnalysis(needs[i]) ? analyzeStemOnce(t.path, needs[i]) : undefined
-            )
-          )
-          // Downloaded and attempted: finished either way -- a failed
-          // analysis must not loop. Temporary download failures were kept
-          // in the queue by main, and rest the queue a while.
-          await window.rifffApi.finishArtistScanBatch(ready.map((t) => t.key))
-          if (batch.transient > 0) priorityPausedUntil = performance.now() + PRIORITY_IDLE_POLL_MS
-          return true
-        }
-
-        // "analyse overnight" just queued stems: show the new size and stop
-        // resting, so the queue starts at the next step.
-        function onQueued(e: Event): void {
-          const size = (e as CustomEvent<{ size: number }>).detail?.size
-          if (typeof size === 'number') setPriorityLeft(size)
-          priorityPausedUntil = 0
-        }
-        window.addEventListener(ARTIST_SCAN_QUEUED_EVENT, onQueued)
-        removeQueuedListener = () => window.removeEventListener(ARTIST_SCAN_QUEUED_EVENT, onQueued)
-
-        // Real regression, found live 2026-09-18 (direct report: "very
-        // sluggish buttons... click similar and loader running for about
-        // 3 minutes"): batches used to be fired without awaiting the
-        // previous one's work, so after a few seconds dozens of
-        // decode+inference jobs were in flight at once. Each batch's real
-        // work (an IPC file read, a Web Audio decode, Worker round-trips
-        // for analysis and embedding inference) is awaited before the next
-        // step is scheduled, capping real concurrency at BATCH_SIZE and
-        // making BATCH_DELAY_MS a genuine gap after real work finishes.
-        function step(): void {
-          if (cancelled) return
-          // Yield to the user -- see backgroundScanGate.ts (2026-09-21):
-          // wait while a modal is open or input just happened. Deferred,
-          // never skipped -- applies to fetching a needs page too.
-          if (!backgroundScanGate.mayRun(performance.now())) {
-            window.setTimeout(step, BATCH_DELAY_MS)
-            return
-          }
-          // The artist analysis queue goes first, one batch per step.
-          void runPriorityBatch()
-            .then((didWork) => {
-              if (cancelled) return
-              if (didWork) {
-                window.setTimeout(step, BATCH_DELAY_MS)
-                return
-              }
-              stepLocal()
-            })
-            .catch((err: unknown) => {
-              console.error('DiscoverLibraryScan: priority batch failed:', err)
-              priorityPausedUntil = performance.now() + PRIORITY_IDLE_POLL_MS
-              if (!cancelled) stepLocal()
-            })
-        }
-
-        function stepLocal(): void {
-          if (cancelled) return
-          if (workIndex >= work.length) {
-            void loadNextPage()
-              .then((more) => {
-                // The local walk done, keep idling for the artist queue.
-                if (!cancelled)
-                  window.setTimeout(step, more ? BATCH_DELAY_MS : PRIORITY_IDLE_POLL_MS)
-              })
-              .catch((err: unknown) => {
+        let buffer: AnalysisWorkItem[] = []
+        const library: AnalysisSource = {
+          async next(n) {
+            while (buffer.length === 0) {
+              if (cancelled || nextPageStart >= toScan.length) return 'done'
+              const page = toScan.slice(nextPageStart, nextPageStart + NEEDS_PAGE_SIZE)
+              let needs: Awaited<ReturnType<typeof fetchStemAnalysisNeeds>>
+              try {
+                needs = await fetchStemAnalysisNeeds(page.map((t) => t.path))
+              } catch (err) {
                 // Stops this session's pass (nothing is lost -- the next
                 // mount starts over from main's persisted state).
                 console.error('DiscoverLibraryScan: failed to load analysis needs:', err)
                 if (!cancelled) setStopped(true)
+                return 'done'
+              }
+              if (cancelled) return 'done'
+              nextPageStart += page.length
+              let alreadyDone = 0
+              page.forEach((target, i) => {
+                const targetNeeds = needs[i]
+                if (targetNeeds && needsAnyAnalysis(targetNeeds)) {
+                  buffer.push({ key: target.key, path: target.path, needs: targetNeeds })
+                } else {
+                  attemptedRef.current.add(target.key)
+                  alreadyDone += 1
+                }
               })
-            return
+              if (alreadyDone > 0) setCompleted((c) => c + alreadyDone)
+            }
+            const taken = buffer.slice(0, n)
+            buffer = buffer.slice(n)
+            return taken
+          },
+          // Features older than STEM_FEATURE_VERSION come back as needed
+          // (Phase 3 re-extraction), alongside anything missing outright --
+          // and `zeroShot` for stems embedded before the YAMNet zero-shot
+          // step existed (B5: this used to be a second, separate scan).
+          done(keys) {
+            for (const key of keys) attemptedRef.current.add(key)
+            if (!cancelled) setCompleted((c) => c + keys.length)
           }
-          const batch = work.slice(workIndex, workIndex + BATCH_SIZE)
-          workIndex += batch.length
-          void (async () => {
-            await Promise.allSettled(
-              batch.map(({ target, needs }) => {
-                attemptedRef.current.add(target.key)
-                // Never rejects; logs its own failures. Features older than
-                // STEM_FEATURE_VERSION come back as needed (Phase 3
-                // re-extraction), alongside anything missing outright --
-                // and `zeroShot` for stems embedded before the YAMNet
-                // zero-shot step existed (B5: this used to be a second,
-                // separate scan that re-listed and decoded those stems).
-                return analyzeStemOnce(target.path, needs)
-              })
-            )
-            if (cancelled) return
-            setCompleted((c) => c + batch.length)
-            window.setTimeout(step, BATCH_DELAY_MS)
-          })()
         }
-        step()
+        backgroundAnalysisQueue.setSource('library', library)
       })
       .catch((err: unknown) => {
         // A real main-process rejection (e.g. the IPC call itself
@@ -268,7 +209,10 @@ export function DiscoverLibraryScan(): null {
       })
     return () => {
       cancelled = true
-      removeQueuedListener()
+      window.removeEventListener(ARTIST_SCAN_QUEUED_EVENT, onQueued)
+      // Consent off: both tiers go; a batch in flight finishes.
+      backgroundAnalysisQueue.setSource('artist', null)
+      backgroundAnalysisQueue.setSource('library', null)
     }
   }, [])
 
