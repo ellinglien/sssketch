@@ -323,3 +323,68 @@ describe('trait value table (B1)', () => {
     ).toEqual({ rhythmic: 999 })
   })
 })
+
+describe('the level fields (spec 2026-10-05-radio-intensity-arc-design 2.1)', () => {
+  function insertLevelled(db: Database.Database, from: number, to: number): void {
+    const stmt = db.prepare(
+      `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 0)`
+    )
+    for (let i = from; i < to; i++) {
+      stmt.run(
+        `lvl${String(i).padStart(6, '0')}`,
+        JSON.stringify({
+          transientDensity: i,
+          bassEnergyRatio: 0.1,
+          spectralCentroidHz: 100,
+          mfcc: [],
+          loudnessLufs: -30 + (i % 20),
+          lowLevelDb: -40 + (i % 30),
+          activeFraction: (i % 10) / 10,
+          levelVersion: 1
+        })
+      )
+    }
+  }
+
+  it('get tables beside the trait fields once PREFERRED_TABLE_MIN_ROWS carry them', async () => {
+    const db = freshDb()
+    insert(db, 0, 1000)
+    insertLevelled(db, 0, PREFERRED_TABLE_MIN_ROWS - 1)
+    expect((await getTraitQuantileTables(db)).loudnessLufs).toBeUndefined()
+    const more = freshDb()
+    insert(more, 0, 1000)
+    insertLevelled(more, 0, PREFERRED_TABLE_MIN_ROWS)
+    const tables = await getTraitQuantileTables(more)
+    for (const f of ['loudnessLufs', 'lowLevelDb', 'activeFraction'] as const) {
+      expect(tables[f], f).toBeDefined()
+    }
+    expect(percentileOf(tables.loudnessLufs, -30)).toBeLessThan(0.1)
+    expect(tables.transientDensity).toBeDefined()
+  })
+
+  it('the value table carries them, and a merged write updates them', async () => {
+    const db = freshDb()
+    insert(db, 0, 10)
+    await getTraitQuantileTables(db)
+    const table = getTraitValueTable(db)!
+    const row = table.rowOf('stem000003')!
+    expect(
+      Number.isNaN((table.features(row) as unknown as { loudnessLufs: number }).loudnessLufs)
+    ).toBe(true)
+    noteStemFeatureRowWritten(
+      db,
+      {
+        transientDensity: 3,
+        loudnessLufs: -12,
+        lowLevelDb: -20,
+        activeFraction: 1
+      } as StemFeatures,
+      'stem000003'
+    )
+    expect(table.features(row)).toMatchObject({
+      loudnessLufs: -12,
+      lowLevelDb: -20,
+      activeFraction: 1
+    })
+  })
+})

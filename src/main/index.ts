@@ -1392,7 +1392,8 @@ app.whenReady().then(async () => {
       soundSource?: DiscoverSoundSourceFilter,
       artist?: string,
       alsoTraits?: DiscoverTraitKind[],
-      onlyStemCIDs?: string[]
+      onlyStemCIDs?: string[],
+      alsoIntensity?: boolean
     ): Promise<DiscoverCandidate[]> => {
       // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
       // staying stuck with no console errors made it impossible to tell,
@@ -1426,7 +1427,9 @@ app.whenReady().then(async () => {
         // Fold mode's clash (radioClash): the renderer only ever sends 'rhythmic' and 'bright'.
         alsoTraits: (Array.isArray(alsoTraits) ? alsoTraits : []).filter(
           (k) => k === 'rhythmic' || k === 'bright'
-        )
+        ),
+        // The radio's intensity arc (@shared/radioIntensity): only an explicit true attaches it.
+        alsoIntensity: alsoIntensity === true
       })
       console.log(
         `get-discover-candidates(${kinds.join('+')}): getDiscoverCandidates -- ${result.length} candidates in ${Date.now() - t1}ms`

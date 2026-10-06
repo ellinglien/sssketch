@@ -370,7 +370,9 @@ const api = {
     /** Radio fold mode's clash: trait percentiles to attach on top of the slot's own. */
     alsoTraits?: DiscoverTraitKind[],
     /** The faves dial's favourites-only draw: only these stems, before the sample. */
-    onlyStemCIDs?: string[]
+    onlyStemCIDs?: string[],
+    /** The radio's intensity arc: attach each candidate's intensity score. */
+    alsoIntensity?: boolean
   ): Promise<DiscoverCandidate[]> =>
     ipcRenderer.invoke(
       'get-discover-candidates',
@@ -380,7 +382,8 @@ const api = {
       soundSource,
       artist,
       alsoTraits,
-      onlyStemCIDs
+      onlyStemCIDs,
+      alsoIntensity
     ),
   getRandomDiscoverCandidate: (
     kinds: DiscoverSlotKind[],

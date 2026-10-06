@@ -1,5 +1,6 @@
 // src/main/discoverAdjacency.ts
 import { basename } from 'node:path'
+import type Database from 'better-sqlite3'
 import { instrumentMaskToSoundType, type DiscoverSoundSourceFilter } from '@shared/riffLibraryTypes'
 import type { SoundType } from '@shared/types'
 import type { ArrangeRole } from '@shared/stemRole'
@@ -31,6 +32,7 @@ import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
 import {
+  attachDiscoverIntensity,
   attachDiscoverTraits,
   getRiffIndexForDb,
   type DiscoverCandidate
@@ -128,6 +130,9 @@ export interface AdjacentDiscoverOptions {
    * own trait kinds plus these, so the trait bar, the ranking's trait terms, fold's clash and
    * dig's closeness read them. Absent: traitPercentiles stays {} (today's). */
   percentileTraits?: readonly DiscoverTraitKind[]
+  /** The radio's intensity arc (spec 2026-10-05 2.2): attach each candidate's intensity score
+   * (attachDiscoverIntensity), so dig's near pool is leaned like getDiscoverCandidates' own. */
+  intensity?: boolean
 }
 
 /** A DiscoverCandidate plus its own already-resolved local file path --
@@ -306,7 +311,24 @@ export async function getAdjacentDiscoverCandidates(
     )
   }
 
-  const percentileTraits = options.percentileTraits
+  const traited = await attachAdjacentTraits(ownDb, result, traitKinds, options.percentileTraits)
+  if (options.intensity !== true) return traited
+  const withIntensity = async (
+    list: AdjacentDiscoverCandidate[]
+  ): Promise<AdjacentDiscoverCandidate[]> => {
+    const attached = await attachDiscoverIntensity(ownDb, list)
+    return list.map((c, i) => ({ ...c, intensity: attached[i].intensity ?? null }))
+  }
+  return { newer: await withIntensity(traited.newer), older: await withIntensity(traited.older) }
+}
+
+/** Trait values and percentiles for `percentileTraits` (plus the slot's own) on both directions. */
+async function attachAdjacentTraits(
+  ownDb: Database.Database,
+  result: AdjacentWalkResult<AdjacentDiscoverCandidate>,
+  traitKinds: readonly DiscoverTraitKind[],
+  percentileTraits: readonly DiscoverTraitKind[] | undefined
+): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   if (percentileTraits === undefined) return result
   const valueKinds = [...traitKinds, ...percentileTraits.filter((k) => !traitKinds.includes(k))]
   if (valueKinds.length === 0) return result

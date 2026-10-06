@@ -16,7 +16,9 @@
 //   table. Concurrent callers share one in-flight build.
 //
 // Phase 3 (feature versions): tables exist per FIELD, fallback and
-// preferred (five). While the background scan re-extracts old rows, the
+// preferred (five), and the level pass's three for the radio's intensity score (QUANTILE_FIELDS;
+// a level-backfilled row carries the Phase 3 fields too, so the same growth counter rebuilds the
+// tables as the backfill proceeds). While the background scan re-extracts old rows, the
 // tables also rebuild once rows carrying the new fields have grown >= 5%
 // -- tracked with an in-memory counter bumped by every feature-row write
 // (noteStemFeatureRowWritten, called from stemFeatureCacheStore.ts), never
@@ -25,7 +27,7 @@
 // Background efficiency B1 (docs/superpowers/specs/2026-09-22-background-
 // efficiency-design.md): the same build also keeps a compact per-stem
 // TRAIT VALUE TABLE (TraitValueTable, below) -- StemCID -> the five trait
-// fields -- so a Discover roll reads trait values from memory instead of
+// fields (and the level pass's three) -- so a Discover roll reads trait values from memory instead of
 // re-reading and re-parsing FeaturesJSON. It's kept current between builds
 // by the same write hook (noteStemFeatureRowWritten), and a roll only uses
 // it while the live row count still matches what it accounts for
@@ -35,9 +37,10 @@ import type { StemFeatures } from '@shared/stemFeatures'
 import {
   FALLBACK_FIELDS,
   PREFERRED_TABLE_MIN_ROWS,
+  QUANTILE_FIELDS,
   TRAIT_FIELDS,
   tableForField,
-  type TraitField,
+  type QuantileField,
   type TraitQuantileTables
 } from '@shared/traitQuantiles'
 import { countWork } from './workCounters'
@@ -77,17 +80,18 @@ const inFlight = new WeakMap<Database.Database, Promise<CacheEntry>>()
 const newFieldWrites = new WeakMap<Database.Database, number>()
 
 /** Column index of each trait field in TraitValueTable. */
-const FIELD_COLUMN = new Map<TraitField, number>(TRAIT_FIELDS.map((f, i) => [f, i]))
+const FIELD_COLUMN = new Map<QuantileField, number>(QUANTILE_FIELDS.map((f, i) => [f, i]))
 
 /** Compact in-memory per-stem trait values (B1): one Float64Array column
- * per trait field (NaN = absent/non-finite) plus a StemCID -> row Map.
+ * per quantile field -- the trait fields and, since the intensity arc (spec 2026-10-05 2.2), the
+ * level pass's three (NaN = absent/non-finite) -- plus a StemCID -> row Map.
  * Holds every StemFeatureCache row whose FeaturesJSON parses to a truthy
  * value -- exactly the rows a roll's own JSON.parse path would have given
  * trait values to; anything else is "malformed" and gets none. */
 export class TraitValueTable {
   private readonly rowByStemCID = new Map<string, number>()
   private readonly stemCIDs: string[] = []
-  private columns: Float64Array[] = TRAIT_FIELDS.map(() => new Float64Array(0))
+  private columns: Float64Array[] = QUANTILE_FIELDS.map(() => new Float64Array(0))
   private readonly malformed = new Set<string>()
   /** StemFeatureCache rows this table accounts for (parsed + malformed) --
    * compared against the live COUNT(*) before a roll trusts it. */
@@ -111,7 +115,7 @@ export class TraitValueTable {
    * or non-numeric field). */
   features(row: number): StemFeatures {
     const out: Record<string, number> = {}
-    TRAIT_FIELDS.forEach((field, i) => {
+    QUANTILE_FIELDS.forEach((field, i) => {
       out[field] = this.columns[i][row]
     })
     return out as unknown as StemFeatures
@@ -229,7 +233,7 @@ async function buildTables(db: Database.Database, rowCount: number): Promise<Bui
   newFieldWrites.set(db, 0)
   pendingWrites.set(db, new Map())
   const valueTable = new TraitValueTable()
-  const valuesByField = new Map<TraitField, number[]>(TRAIT_FIELDS.map((f) => [f, []]))
+  const valuesByField = new Map<QuantileField, number[]>(QUANTILE_FIELDS.map((f) => [f, []]))
   let parsedRows = 0
   let newFieldRows = 0
   const page = db.prepare(
@@ -255,7 +259,7 @@ async function buildTables(db: Database.Database, rowCount: number): Promise<Bui
       if (!features || typeof features !== 'object') continue
       parsedRows += 1
       if (hasNewField(features)) newFieldRows += 1
-      for (const field of TRAIT_FIELDS) {
+      for (const field of QUANTILE_FIELDS) {
         const v = features[field]
         if (typeof v === 'number' && Number.isFinite(v)) valuesByField.get(field)!.push(v)
       }
@@ -266,7 +270,7 @@ async function buildTables(db: Database.Database, rowCount: number): Promise<Bui
   }
 
   const tables: TraitQuantileTables = {}
-  for (const field of TRAIT_FIELDS) {
+  for (const field of QUANTILE_FIELDS) {
     await yieldToEventLoop()
     const table = tableForField(field, valuesByField.get(field)!, parsedRows)
     if (table) tables[field] = table

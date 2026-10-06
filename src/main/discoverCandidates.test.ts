@@ -1805,6 +1805,30 @@ describe('getDiscoverCandidates (kind sets)', () => {
     expect(c.traitValues).toEqual({ warm: 900, rhythmic: 0.6, bright: 900 })
   })
 
+  it('alsoIntensity: every candidate carries its intensity score; absent, none does', async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 128, ['busy', 'calm', 'none'])
+    seedStem(own, 'busy', 'jam1', { instrument: DRUM })
+    seedStem(own, 'calm', 'jam1', { instrument: DRUM })
+    seedStem(own, 'none', 'jam1', { instrument: DRUM })
+    seedFeatures(own, 'busy', featuresJSON({ transientDensity: 9, bassEnergyRatio: 0.9 }))
+    seedFeatures(own, 'calm', featuresJSON({ transientDensity: 1, bassEnergyRatio: 0.1 }))
+    const roll = (alsoIntensity?: boolean): ReturnType<typeof getDiscoverCandidates> =>
+      getDiscoverCandidates({
+        ownDb: own,
+        jams: [{ jamCID: 'jam1', dbForJam: own }],
+        kinds: ['drums'],
+        ...(alsoIntensity !== undefined && { alsoIntensity })
+      })
+    const leaned = await roll(true)
+    const of = (id: string): number | null | undefined =>
+      leaned.find((c) => c.stemCID === id)!.intensity
+    expect(of('busy')!).toBeGreaterThan(of('calm')!)
+    expect(of('none')).toBeNull()
+    for (const c of await roll()) expect('intensity' in c).toBe(false)
+    for (const c of await roll(false)) expect('intensity' in c).toBe(false)
+  })
+
   it('an empty kind set returns []', async () => {
     const own = freshDb()
     expect(

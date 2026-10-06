@@ -24,6 +24,11 @@ import {
   type TraitValues
 } from '@shared/discoverTraits'
 import { traitPercentilesFromValues } from '@shared/traitQuantiles'
+import {
+  INTENSITY_INPUT_FIELDS,
+  stemIntensityScore,
+  type IntensityValues
+} from '@shared/radioIntensity'
 import { getTraitQuantileTables, getTraitValueTable } from './traitQuantileCache'
 import { countWork } from './workCounters'
 import type { StemFeatures } from '@shared/stemFeatures'
@@ -860,7 +865,8 @@ export async function getDiscoverCandidates({
   targetUser,
   soundSource = { endlesss: true, audioIn: true },
   artistStemCIDs,
-  alsoTraits = []
+  alsoTraits = [],
+  alsoIntensity = false
 }: {
   ownDb: Database.Database
   jams: JamDbPair[]
@@ -878,6 +884,42 @@ export async function getDiscoverCandidates({
    * candidate against the bed. They never filter and never change `slotKinds`; empty (every
    * other roll) takes today's path untouched. */
   alsoTraits?: readonly DiscoverTraitKind[]
+  /** The radio's intensity arc (@shared/radioIntensity, spec 2026-10-05-radio-intensity-arc-design
+   * 2.2): attach every candidate's `intensity` score. False (every other roll): nothing attached,
+   * the payload as before. */
+  alsoIntensity?: boolean
+}): Promise<DiscoverCandidate[]> {
+  const pool = await getDiscoverCandidatesPool({
+    ownDb,
+    jams,
+    kinds,
+    onlyOwnStems,
+    targetUser,
+    soundSource,
+    artistStemCIDs,
+    alsoTraits
+  })
+  return alsoIntensity ? attachDiscoverIntensity(ownDb, pool) : pool
+}
+
+async function getDiscoverCandidatesPool({
+  ownDb,
+  jams,
+  kinds,
+  onlyOwnStems,
+  targetUser,
+  soundSource,
+  artistStemCIDs,
+  alsoTraits
+}: {
+  ownDb: Database.Database
+  jams: JamDbPair[]
+  kinds: readonly DiscoverSlotKind[]
+  onlyOwnStems: boolean
+  targetUser?: string
+  soundSource: DiscoverSoundSourceFilter
+  artistStemCIDs?: ReadonlySet<string>
+  alsoTraits: readonly DiscoverTraitKind[]
 }): Promise<DiscoverCandidate[]> {
   const normalized = normalizeSlotKinds(kinds)
   const maskKinds = normalized.filter(isMaskSlotKind)
@@ -955,6 +997,100 @@ export async function attachDiscoverTraits(
   return attachTraitPercentiles(ownDb, attachTraitValues(ownDb, pool, kinds))
 }
 
+/** The radio's intensity score on every candidate of a pool (spec 2026-10-05-radio-intensity-arc-
+ * design 2.2): its values from the in-memory value table (traitQuantileCache.ts, which carries the
+ * level pass's fields too) or, until that table is current, ownDb's feature rows; the library
+ * percentiles from the cached quantile tables. A stem with no row, or neither busy nor low, is
+ * null (unscored). Same order, same length; yields like attachTraitPercentiles. Radio's dig near
+ * pool (discoverAdjacency.ts) takes it too. */
+export async function attachDiscoverIntensity(
+  ownDb: Database.Database,
+  pool: DiscoverCandidate[]
+): Promise<DiscoverCandidate[]> {
+  if (pool.length === 0) return pool
+  const tables = await getTraitQuantileTables(ownDb)
+  const valuesOf = intensityValueSource(
+    ownDb,
+    pool.map((c) => c.stemCID)
+  )
+  const out: DiscoverCandidate[] = []
+  let sinceYield = 0
+  for (const c of pool) {
+    const values = valuesOf(c.stemCID)
+    out.push({ ...c, intensity: values === null ? null : stemIntensityScore(values, tables) })
+    sinceYield += 1
+    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+      sinceYield = 0
+      await yieldToEventLoop()
+    }
+  }
+  countWork('discover:intensity-attached', out.length)
+  return out
+}
+
+/** Each stem's intensity inputs: from the value table when it is current, else read from ownDb's
+ * StemFeatureCache (chunked, as attachTraitValues' fallback). Null: no (parseable) row. */
+function intensityValueSource(
+  ownDb: Database.Database,
+  stemCIDs: readonly string[]
+): (stemCID: string) => IntensityValues | null {
+  const pick = (f: Record<string, unknown>): IntensityValues => {
+    const v: IntensityValues = {}
+    for (const field of INTENSITY_INPUT_FIELDS) {
+      const x = f[field]
+      if (typeof x === 'number' && Number.isFinite(x)) v[field] = x
+    }
+    return v
+  }
+  const table = getTraitValueTable(ownDb)
+  if (table) {
+    return (stemCID) => {
+      const row = table.rowOf(stemCID)
+      return row === undefined
+        ? null
+        : pick(table.features(row) as unknown as Record<string, unknown>)
+    }
+  }
+  const rows = featureRowsByStemCID(ownDb, stemCIDs)
+  return (stemCID) => {
+    const f = rows.get(stemCID)
+    // A row that parses to something other than an object reads as no row (as the value table's
+    // build leaves it out).
+    return f && typeof f === 'object' ? pick(f as unknown as Record<string, unknown>) : null
+  }
+}
+
+/** Parsed StemFeatureCache rows for these stems, chunked; a malformed row is left out. */
+function featureRowsByStemCID(
+  ownDb: Database.Database,
+  stemCIDs: readonly string[]
+): Map<string, StemFeatures> {
+  const featuresByStemCID = new Map<string, StemFeatures>()
+  for (const cidChunk of chunk([...stemCIDs], CANDIDATE_QUERY_CHUNK_SIZE)) {
+    const placeholders = cidChunk.map(() => '?').join(', ')
+    let rows: FeatureCandidateRow[]
+    try {
+      countWork('sql:discover.feature-rows')
+      rows = ownDb
+        .prepare(
+          `SELECT StemCID, FeaturesJSON FROM StemFeatureCache WHERE StemCID IN (${placeholders})`
+        )
+        .all(...cidChunk) as FeatureCandidateRow[]
+    } catch {
+      continue
+    }
+    countWork('parse:stem-features', rows.length)
+    for (const row of rows) {
+      try {
+        featuresByStemCID.set(row.StemCID, JSON.parse(row.FeaturesJSON) as StemFeatures)
+      } catch {
+        // malformed row -- this stem just gets no values
+      }
+    }
+  }
+  return featuresByStemCID
+}
+
 /** Library-wide trait percentiles (docs/superpowers/specs/2026-09-22-
  * discover-promise-vs-delivery-design.md, Phase 1) for every candidate
  * that has trait values, from the cached quantile tables
@@ -1015,32 +1151,10 @@ function attachTraitValues(
     })
   }
 
-  const featuresByStemCID = new Map<string, StemFeatures>()
-  for (const cidChunk of chunk(
-    pool.map((c) => c.stemCID),
-    CANDIDATE_QUERY_CHUNK_SIZE
-  )) {
-    const placeholders = cidChunk.map(() => '?').join(', ')
-    let rows: FeatureCandidateRow[]
-    try {
-      countWork('sql:discover.feature-rows')
-      rows = ownDb
-        .prepare(
-          `SELECT StemCID, FeaturesJSON FROM StemFeatureCache WHERE StemCID IN (${placeholders})`
-        )
-        .all(...cidChunk) as FeatureCandidateRow[]
-    } catch {
-      continue
-    }
-    countWork('parse:stem-features', rows.length)
-    for (const row of rows) {
-      try {
-        featuresByStemCID.set(row.StemCID, JSON.parse(row.FeaturesJSON) as StemFeatures)
-      } catch {
-        // malformed row -- this stem just gets no trait values
-      }
-    }
-  }
+  const featuresByStemCID = featureRowsByStemCID(
+    ownDb,
+    pool.map((c) => c.stemCID)
+  )
   return pool.map((c) => {
     const features = featuresByStemCID.get(c.stemCID)
     return features
