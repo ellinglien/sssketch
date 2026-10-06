@@ -252,10 +252,13 @@ import {
 } from '@shared/discoverArtist'
 import {
   applyArtistPick,
+  artistSelectionKey,
   artistSelectionLabel,
   artistSelectionNotice,
   artistSelectionTooltip,
+  artistSkipWord,
   isCombined,
+  memberOfPick,
   pickMatchesArtistSelection,
   rollFilterForMember,
   selectionCreatorFilter,
@@ -270,9 +273,16 @@ import {
   EMPTY_ARTIST_MEMO,
   EMPTY_ARTIST_SHARE,
   reconcileArtistShare,
+  artistKnownEmpty,
+  artistPickAttempts,
+  beginArtistTurn,
+  endArtistTurn,
+  landArtistTurn,
+  noteArtistEmpty,
   type ArtistEmptyMemo,
   type ArtistShareLedger
 } from '@shared/artistShare'
+import { wallClockMs } from '../audio/wallClock'
 import { DiscoverArtistPicker } from './DiscoverArtistPicker'
 import { announceArtistScanQueued } from '../audio/artistScanQueueEvent'
 import { recordStemRoles } from '../state/stemCategoryCapture'
@@ -569,8 +579,9 @@ interface RadioSpare {
   slotId: string
   pick: SlotPick
   stem: ResolvedCandidateStem | null
-  /** The row's kinds and the roll filter it was picked under (slotKindsKey, JSON of rollFilter):
-   * a spare whose row was re-kinded, or picked under another artist or filter, is stale. */
+  /** The row's kinds, and the selection and my sounds it was picked under (slotKindsKey,
+   * artistSelectionKey): a spare whose row was re-kinded, or picked under another selection or
+   * filter, is stale. */
   kindsKey: string
   filterKey: string
 }
@@ -1079,12 +1090,6 @@ export function DiscoverPanel({
     const nowMode = selectionMode(artistsRef.current, currentUsername)
     const still = nowMode === 'own' ? lingeringArtists(slotsRef.current) : []
     return blockedActions(nowMode, still).has(action)
-  }
-  /** TEMPORARY until the share is in every pick: the first member's filter -- for one artist
-   * exactly today's rollFilterForArtist (artistSelection.test.ts). */
-  function rollFilter(): ArtistRollFilter {
-    const sel = artistsRef.current
-    return rollFilterForMember(sel[0], sel, currentUsername, globalRollOptions.onlyOwnStems)
   }
   // In `me`, the artists whose stems still play on the rows (picked under
   // artist mode): keep is blocked until they are gone (Elling, 2026-10-01).
@@ -4215,13 +4220,13 @@ export function DiscoverPanel({
     return { f, rowIds, stems, radio }
   }
   /** A spare's pick still fits its row: the row is there with the kinds it was picked for, and the
-   * roll filter (artist mode, own stems) is the one it was picked under. */
+   * selection and my sounds (artistSelectionKey) are the ones it was picked under. */
   function radioSpareFits(k: RadioSpare): boolean {
     const slot = slotsRef.current.find((s) => s.id === k.slotId)
     return (
       slot !== undefined &&
       slotKindsKey(slot.kinds) === k.kindsKey &&
-      JSON.stringify(rollFilter()) === k.filterKey
+      artistSelectionKey(artistsRef.current, globalRollOptions.onlyOwnStems) === k.filterKey
     )
   }
   /** What could be added at the coming top for a payoff (spec 4.7), each warm and eligible, in the
@@ -4646,7 +4651,7 @@ export function DiscoverPanel({
       turn: radioTurnRef.current,
       flags: radioSlotFlagsRef.current
     })
-    const filterKey = JSON.stringify(rollFilter())
+    const filterKey = artistSelectionKey(artistsRef.current, globalRollOptions.onlyOwnStems)
     for (const id of ids) {
       const slot = live.get(id)
       if (slot === undefined) continue
@@ -6831,6 +6836,16 @@ export function DiscoverPanel({
     // starts the turnover. A pick still in flight for the OLD selection is
     // dropped by skipRadio itself.
     if (!radioSkipWaiting()) void skipRadio()
+  }
+  /** A fresh pick landed on a row: it counts as a turn for its member (spec §3). Only in a
+   * combination; a one-artist selection keeps no score. */
+  function noteArtistLanding(candidate: DiscoverCandidate | null): void {
+    const sel = artistsRef.current
+    if (!isCombined(sel)) return
+    const member = memberOfPick(candidate, sel)
+    if (member === undefined) return
+    artistShareRef.current = landArtistTurn(artistShareRef.current, member)
+    setArtistShareTick((n) => n + 1)
   }
   const radioMenuButtonRef = useRef<HTMLButtonElement>(null)
   // The top line's `radio` (the stop), while radio runs.
@@ -9042,6 +9057,8 @@ export function DiscoverPanel({
     // commitSlotPick's does.
     if (radioOnRef.current) radioRowSinceRef.current.set(copyId, radioPlayRef.current.lap)
     setSlots((prev) => [...prev, { ...slot, id: copyId, radioAdded: undefined }])
+    // A duplicate is a turn: that artist now holds another row (combine artists, decision 5).
+    noteArtistLanding(candidate)
   }
 
   // Direct reports, 2026-09-17, found in code review: a slot whose reroll
@@ -9122,6 +9139,8 @@ export function DiscoverPanel({
         s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
       )
     )
+    // The direct write (radio off): a turn for its member, as commitSlotPick counts one.
+    noteArtistLanding(candidate)
     return true
   }
 
@@ -9153,7 +9172,12 @@ export function DiscoverPanel({
     rerollGenerationRef.current.set(id, myGeneration)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
     try {
-      const nearbyArtist = rollFilter().artist
+      const nearbyArtist = rollFilterForMember(
+        artistsRef.current[0],
+        artistsRef.current,
+        currentUsername,
+        false
+      ).artist
       const nearbyRaw = await window.rifffApi.getAdjacentDiscoverCandidates(
         anchor.riffCID,
         slot.kinds,
@@ -9265,6 +9289,21 @@ export function DiscoverPanel({
       setRolledCount((n) => n + 1)
       setRerollingSlotIds((prev) => new Set(prev).add(id))
     }
+    // Combine artists (@shared/artistShare): who this pick asks, in order. One artist: one
+    // attempt, today's filter, and no random draw (artistShare.test.ts). The turn begun here ends
+    // in the finally below, for whichever member the pick ended on.
+    const selection = artistsRef.current
+    const kindsKeyNow = slotKindsKey(kinds)
+    const attempts = artistPickAttempts(
+      selection,
+      artistShareRef.current,
+      Math.random,
+      currentUsername,
+      globalRollOptions.onlyOwnStems,
+      artistKnownEmpty(artistEmptyRef.current, selection, kindsKeyNow, wallClockMs())
+    )
+    let attempt = 0
+    artistShareRef.current = beginArtistTurn(artistShareRef.current, attempts[0].member)
     try {
       // The global [x] toggles under the add row (globalRollOptions). An empty
       // currentUsername means "no known identity," not "filter to the empty
@@ -9273,8 +9312,9 @@ export function DiscoverPanel({
       // that, (onlyOwnStems: true, targetUser: '') would make
       // getDiscoverCandidates' own `CreatorUserName !== targetUser` check
       // exclude essentially every real stem -- zero candidates, forever.
-      // The creator filter (artist mode) -- today's values in own mode.
-      const f = rollFilter()
+      // The creator filter (artist mode) -- today's values in own mode. The first member asked
+      // (combine artists); a pass-on below fetches under the next member's filter.
+      const f = attempts[0].filter
       // TEMPORARY diagnostic log (2026-09-15) -- a live report of rolling
       // staying stuck with no console errors made it impossible to tell,
       // from the outside, whether the IPC call itself was the slow part
@@ -9318,35 +9358,39 @@ export function DiscoverPanel({
       const alsoIntensity = lean !== null ? true : undefined
       /** One source-dial roll: the drawn source, then the other when the drawn one has nothing
        * new. `only` restricts it to those stems, before main's sample (the faves dial's
-       * favourites-only draw). Tagged with the artist they were rolled under
+       * favourites-only draw). `ff` is the filter it fetches under: the first member's unless a
+       * pass-on gives the next one's. Tagged with the artist they were rolled under
        * (pickedUnderArtist). Null when a newer roll for this slot took over meanwhile. */
-      const fetchPool = async (only?: string[]): Promise<DiscoverCandidate[] | null> => {
+      const fetchPool = async (
+        only?: string[],
+        ff: ArtistRollFilter = f
+      ): Promise<DiscoverCandidate[] | null> => {
         let pool = (
           await window.rifffApi.getDiscoverCandidates(
             kinds,
-            f.onlyOwnStems,
-            f.targetUser,
+            ff.onlyOwnStems,
+            ff.targetUser,
             draw.first,
-            f.artist,
+            ff.artist,
             alsoTraits,
             only,
             alsoIntensity
           )
-        ).map((c) => tagPickedUnderArtist(c, f.artist))
+        ).map((c) => tagPickedUnderArtist(c, ff.artist))
         if (!pool.some(unused) && draw.fallback !== null) {
           if (rerollGenerationRef.current.get(id) !== myGeneration) return null
           const fallbackPool = (
             await window.rifffApi.getDiscoverCandidates(
               kinds,
-              f.onlyOwnStems,
-              f.targetUser,
+              ff.onlyOwnStems,
+              ff.targetUser,
               draw.fallback,
-              f.artist,
+              ff.artist,
               alsoTraits,
               only,
               alsoIntensity
             )
-          ).map((c) => tagPickedUnderArtist(c, f.artist))
+          ).map((c) => tagPickedUnderArtist(c, ff.artist))
           // Switch to the fallback when it has something new, or when the
           // drawn source had nothing at all. Otherwise keep the drawn pool,
           // all duplicates -- the dedupe below then uses it whole, which
@@ -9444,6 +9488,35 @@ export function DiscoverPanel({
         if (rerollGenerationRef.current.get(id) !== myGeneration) return null
         candidates = await fetchPool()
         if (candidates === null) return null
+        // Combine artists: a member with nothing new for this row passes its turn on to the next
+        // (never silent: logged, and flashed on the row while radio runs). An EMPTY pool is
+        // remembered for these kinds; one that is all duplicates is not (that changes pick to
+        // pick). Nobody with anything new: the first non-empty pool, whole -- duplicates beat
+        // nothing, as today. One artist: one attempt, so this never loops.
+        let firstNonEmpty: DiscoverCandidate[] | null = candidates.length > 0 ? candidates : null
+        while (!candidates.some(unused) && attempt + 1 < attempts.length) {
+          const skipped = attempts[attempt].member
+          if (candidates.length === 0) {
+            artistEmptyRef.current = noteArtistEmpty(
+              artistEmptyRef.current,
+              skipped,
+              kindsKeyNow,
+              wallClockMs()
+            )
+          }
+          const word = artistSkipWord(skipped, currentUsername)
+          console.log(`[artist-share] pickForSlot(${kindsKeyNow}) -- ${word}`)
+          flashPickFallback(word, `artist-${attempt}`)
+          artistShareRef.current = endArtistTurn(artistShareRef.current, skipped)
+          attempt += 1
+          artistShareRef.current = beginArtistTurn(artistShareRef.current, attempts[attempt].member)
+          if (rerollGenerationRef.current.get(id) !== myGeneration) return null
+          const next = await fetchPool(undefined, attempts[attempt].filter)
+          if (next === null) return null
+          candidates = next
+          if (firstNonEmpty === null && next.length > 0) firstNonEmpty = next
+        }
+        if (!candidates.some(unused) && firstNonEmpty !== null) candidates = firstNonEmpty
       }
       if (favesFallback) {
         console.log(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) -- ${NO_FAVE_FITS}`)
@@ -9552,6 +9625,7 @@ export function DiscoverPanel({
       console.error(`DiscoverPanel: pickForSlot(${slotKindsKey(kinds)}) failed:`, err)
       return null
     } finally {
+      artistShareRef.current = endArtistTurn(artistShareRef.current, attempts[attempt].member)
       if (!yieldRow && rerollGenerationRef.current.get(id) === myGeneration) {
         setRerollingSlotIds((prev) => {
           const next = new Set(prev)
@@ -9589,6 +9663,9 @@ export function DiscoverPanel({
     // only by a pick rolled under the CURRENT selection: a manual reroll or
     // skip still in flight from before the switch lands the old artist's
     // stem, and that row still has to turn over.
+    // A fresh pick landing is a turn for its member (combine artists); a hook's or the arc's own
+    // landing is a stem coming back, not a turn.
+    if (!hookLanding) noteArtistLanding(pick.candidate)
     if (pickMatchesArtistSelection(pick.candidate, artistsRef.current)) {
       artistTurnoverRef.current.delete(id)
     } else if (pick.candidate !== null && radioOnRef.current) {
@@ -9776,30 +9853,54 @@ export function DiscoverPanel({
     rerollGenerationRef.current.set(id, myGeneration)
     setRolledCount((n) => n + 1)
     setRerollingSlotIds((prev) => new Set(prev).add(id))
+    // Combine artists: the same plan as pickForSlot's (one artist: one attempt, no random draw).
+    const selection = artistsRef.current
+    const attempts = artistPickAttempts(
+      selection,
+      artistShareRef.current,
+      Math.random,
+      currentUsername,
+      globalRollOptions.onlyOwnStems,
+      artistKnownEmpty(artistEmptyRef.current, selection, slotKindsKey(kinds), wallClockMs())
+    )
+    let attempt = 0
+    artistShareRef.current = beginArtistTurn(artistShareRef.current, attempts[0].member)
     try {
-      // The creator filter (artist mode) -- today's values in own mode.
-      const f = rollFilter()
       const draw = drawSoundSource(sourceLeanRef.current)
-      // Falls back only on no candidate at all, unlike pickForSlot, which
-      // also falls back when everything drawn is already on another slot:
-      // this path has never skipped duplicates, so there is nothing to be
-      // "all duplicates" of.
-      let candidate = await window.rifffApi.getRandomDiscoverCandidate(
-        kinds,
-        f.onlyOwnStems,
-        f.targetUser,
-        draw.first
-      )
-      if (candidate !== null) candidate = tagPickedUnderArtist(candidate, f.artist)
-      if (candidate === null && draw.fallback !== null) {
-        if (rerollGenerationRef.current.get(id) !== myGeneration) return
+      let candidate: DiscoverCandidate | null = null
+      for (;;) {
+        // The creator filter (artist mode) -- today's values in own mode; the member asked now.
+        const f = attempts[attempt].filter
+        // Falls back only on no candidate at all, unlike pickForSlot, which
+        // also falls back when everything drawn is already on another slot:
+        // this path has never skipped duplicates, so there is nothing to be
+        // "all duplicates" of. The same holds for passing the turn on.
         candidate = await window.rifffApi.getRandomDiscoverCandidate(
           kinds,
           f.onlyOwnStems,
           f.targetUser,
-          draw.fallback
+          draw.first
         )
         if (candidate !== null) candidate = tagPickedUnderArtist(candidate, f.artist)
+        if (candidate === null && draw.fallback !== null) {
+          if (rerollGenerationRef.current.get(id) !== myGeneration) return
+          candidate = await window.rifffApi.getRandomDiscoverCandidate(
+            kinds,
+            f.onlyOwnStems,
+            f.targetUser,
+            draw.fallback
+          )
+          if (candidate !== null) candidate = tagPickedUnderArtist(candidate, f.artist)
+        }
+        if (candidate !== null || attempt + 1 >= attempts.length) break
+        if (rerollGenerationRef.current.get(id) !== myGeneration) return
+        const skipped = attempts[attempt].member
+        console.log(
+          `[artist-share] rollRandomForSlot -- ${artistSkipWord(skipped, currentUsername)}`
+        )
+        artistShareRef.current = endArtistTurn(artistShareRef.current, skipped)
+        attempt += 1
+        artistShareRef.current = beginArtistTurn(artistShareRef.current, attempts[attempt].member)
       }
       if (rerollGenerationRef.current.get(id) !== myGeneration) return
       if (queue && radioOnRef.current) {
@@ -9835,10 +9936,12 @@ export function DiscoverPanel({
             s.id === id ? { ...s, candidate, hasRerolled: true, seedStem: undefined } : s
           )
         )
+        noteArtistLanding(candidate)
       }
     } catch (err) {
       console.error(`DiscoverPanel: rollRandomForSlot(${slotKindsKey(kinds)}) failed:`, err)
     } finally {
+      artistShareRef.current = endArtistTurn(artistShareRef.current, attempts[attempt].member)
       if (rerollGenerationRef.current.get(id) === myGeneration) {
         setRerollingSlotIds((prev) => {
           const next = new Set(prev)
