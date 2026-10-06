@@ -9,6 +9,13 @@ import {
 } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
+import type Database from 'better-sqlite3'
+import {
+  MIGRATION_DONE_STAMP,
+  STEM_CACHE_MIGRATION_MARKER,
+  recordSeen,
+  seenStamp
+} from './startupBackfillGate'
 
 const OLD_SOURCES: ('shared' | 'jam')[] = ['shared', 'jam']
 
@@ -45,8 +52,16 @@ function newStemPath(stemCID: string): string {
  * needed. Also discards stale `.downloading` leftovers from an interrupted
  * download (see downloadOneEndlesssStem in endlesssApi.ts) rather than
  * migrating one as if it were a real stemCID.
+ *
+ * With `db` (ownDb), that no-op scan is skipped too (background scan audit
+ * "Minor", startupBackfillGate.ts): a pass that moved, deduped or discarded
+ * nothing records a done-marker there, and a launch that finds it lists
+ * nothing. Nothing writes under the old trees any more, so once a pass finds
+ * only symlinks (or no tree at all) there is nothing left to migrate.
  */
-export function migrateEndlesssStemCache(): void {
+export function migrateEndlesssStemCache(db?: Database.Database): void {
+  if (db && seenStamp(db, STEM_CACHE_MIGRATION_MARKER) === MIGRATION_DONE_STAMP) return
+  let changed = 0
   for (const source of OLD_SOURCES) {
     const sourceDir = oldSourceDir(source)
     if (!existsSync(sourceDir)) continue
@@ -56,6 +71,7 @@ export function migrateEndlesssStemCache(): void {
       for (const entryName of readdirSync(riffDir)) {
         const oldPath = join(riffDir, entryName)
         if (lstatSync(oldPath).isSymbolicLink()) continue
+        changed += 1
         if (entryName.endsWith('.downloading')) {
           unlinkSync(oldPath)
           continue
@@ -72,4 +88,5 @@ export function migrateEndlesssStemCache(): void {
       }
     }
   }
+  if (db && changed === 0) recordSeen(db, STEM_CACHE_MIGRATION_MARKER, MIGRATION_DONE_STAMP)
 }

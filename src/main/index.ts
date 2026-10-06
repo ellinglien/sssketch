@@ -619,17 +619,17 @@ app.whenReady().then(async () => {
   migrateProjectLibraryLocation()
 
   // Same for the riff library -- see riffLibraryMigration.ts's own doc
-  // comment. MUST run before migrateLegacyFavourites' own
-  // openOwnRiffLibraryDb() call a few lines below, which is this process's
-  // first time opening that connection -- moving the directory out from
-  // under an already-open one would corrupt it.
+  // comment. MUST run before migrateEndlesssStemCache's
+  // openOwnRiffLibraryDb() call just below, which is this process's first
+  // time opening that connection -- moving the directory out from under an
+  // already-open one would corrupt it.
   migrateRiffLibraryLocation()
 
   // One-time (idempotent) migration off the old source-partitioned Endlesss
-  // stem cache -- see stemCacheMigration.ts's own doc comment. Cheap once
-  // already migrated (a symlink-recognizing scan, no real work), so no need
-  // to gate this behind anything or run it off the main thread.
-  migrateEndlesssStemCache()
+  // stem cache -- see stemCacheMigration.ts's own doc comment. Once a pass
+  // finds nothing left to move it records a done-marker in ownDb
+  // (startupBackfillGate.ts), and later launches skip the listing entirely.
+  migrateEndlesssStemCache(openOwnRiffLibraryDb())
 
   // One-time-in-spirit, idempotent migration of favourites off the old
   // flat-JSON file onto the new warehouse's Tags table -- see
@@ -640,7 +640,8 @@ app.whenReady().then(async () => {
   // One-time-in-spirit, safe-to-call-on-every-startup migration recovering
   // busOf bus assignments trapped in old .sssketchproj files under the
   // project library folder -- see stemCategoriesBackfill.ts's own doc
-  // comment.
+  // comment. A project file unchanged since it was backfilled completely is
+  // not parsed again (startupBackfillGate.ts).
   backfillStemCategoriesFromProjectLibrary(openOwnRiffLibraryDb())
 
   // Idempotent, safe-to-call-on-every-startup backfill of drums/bass

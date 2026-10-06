@@ -1,14 +1,20 @@
 // src/main/stemCategoriesBackfill.ts
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
+import { basename } from 'node:path'
 import type Database from 'better-sqlite3'
 import { listLibrarySketches, sketchProjectPath } from './projectLibrary'
 import { upsertStemCategoryBus, type StemBusCategoryEntry } from './stemCategoriesStore'
 import { candidateDbsForRiff } from './riffLibraryStore'
 import { trainCentroidsFromBusEntries } from './categoryCentroidTraining'
+import { getStemFeatureCache } from './stemFeatureCacheStore'
 import type { BusId } from '@shared/types'
+import { fileStamp, recordSeen, seenStamps } from './startupBackfillGate'
 
 export interface BackfillSummary {
   scannedProjects: number
+  /** Projects unchanged (same size and mtime) since a previous run backfilled
+   * them: not parsed again. */
+  unchangedProjects: number
   categorizedStems: number
   /** Names of sketches whose .sssketchproj failed to parse as JSON --
    * reported, not thrown, so one corrupt project file doesn't abort the
@@ -47,17 +53,49 @@ interface ParsedSketch {
  * app startup" convention. Scoped to the project LIBRARY folder only
  * (listLibrarySketches) -- a sketch opened from an arbitrary external
  * Finder location is out of scope, matching the design spec's own "under
- * the project library folder" wording. */
-export function backfillStemCategoriesFromProjectLibrary(db: Database.Database): BackfillSummary {
+ * the project library folder" wording.
+ *
+ * Gated per file (background scan audit "Minor", startupBackfillGate.ts): a
+ * project whose `size:mtimeMs` matches the stamp recorded when it was last
+ * backfilled completely is not read or parsed again -- it holds nothing new,
+ * and its upserts would change nothing (they only ever replace an older
+ * UpdatedAt). "Completely": every assignment whose stem is a library stem
+ * (a basename without '.': plan decision 10) resolved to a Stems row with
+ * cached features. Until then the file is parsed every launch as before, so
+ * a stem whose jam syncs later, whose archive was unmounted, or which is
+ * analysed later still lands and still trains. A file that fails to parse
+ * records no stamp either (tried, and reported, again next launch).
+ * Centroid training follows the gate: once a project version is complete
+ * its samples are not added again on every launch, as they used to be.
+ * `readFile` is injectable for tests. */
+export function backfillStemCategoriesFromProjectLibrary(
+  db: Database.Database,
+  options: { readFile?: (path: string) => string } = {}
+): BackfillSummary {
+  const readFile = options.readFile ?? ((path: string) => readFileSync(path, 'utf-8'))
   const sketches = listLibrarySketches()
+  const seen = seenStamps(db)
   let categorizedStems = 0
+  let unchangedProjects = 0
   const skippedProjects: string[] = []
 
   for (const sketch of sketches) {
     const projectPath = sketchProjectPath(sketch.name)
+    // Stamped before the read: a write landing in between leaves an older
+    // stamp, so the file is simply parsed again next launch.
+    let stamp: string | null
+    try {
+      stamp = fileStamp(statSync(projectPath))
+    } catch {
+      stamp = null
+    }
+    if (stamp !== null && seen.get(projectPath) === stamp) {
+      unchangedProjects += 1
+      continue
+    }
     let parsed: ParsedSketch
     try {
-      parsed = JSON.parse(readFileSync(projectPath, 'utf-8')) as ParsedSketch
+      parsed = JSON.parse(readFile(projectPath)) as ParsedSketch
     } catch {
       skippedProjects.push(sketch.name)
       continue
@@ -78,6 +116,7 @@ export function backfillStemCategoriesFromProjectLibrary(db: Database.Database):
       if (path) entries.push({ path, busId: busId as BusId })
     }
 
+    const extraCandidateDbs = entries.length > 0 ? candidateDbsForRiff() : []
     if (entries.length > 0) {
       // Deliberately NOT Math.floor()'d to whole seconds: unrounded
       // fractional-seconds-since-epoch is this whole subsystem's house
@@ -90,7 +129,6 @@ export function backfillStemCategoriesFromProjectLibrary(db: Database.Database):
       // back to iteration order instead, which is exactly what this
       // migration must not depend on (see this function's own doc
       // comment).
-      const extraCandidateDbs = candidateDbsForRiff()
       upsertStemCategoryBus(
         db,
         entries,
@@ -102,7 +140,13 @@ export function backfillStemCategoriesFromProjectLibrary(db: Database.Database):
       trainCentroidsFromBusEntries(db, entries, extraCandidateDbs)
       categorizedStems += entries.length
     }
+    const complete = entries.every(
+      (entry) =>
+        basename(entry.path).includes('.') ||
+        getStemFeatureCache(db, entry.path, extraCandidateDbs) !== null
+    )
+    if (stamp !== null && complete) recordSeen(db, projectPath, stamp)
   }
 
-  return { scannedProjects: sketches.length, categorizedStems, skippedProjects }
+  return { scannedProjects: sketches.length, unchangedProjects, categorizedStems, skippedProjects }
 }

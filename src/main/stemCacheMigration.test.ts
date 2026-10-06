@@ -10,6 +10,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import Database from 'better-sqlite3'
 
 let userDataDir: string
 
@@ -86,6 +87,40 @@ describe('migrateEndlesssStemCache', () => {
     const { migrateEndlesssStemCache } = await import('./stemCacheMigration')
     migrateEndlesssStemCache()
     expect(existsSync(staleDownloadPath)).toBe(false)
+  })
+
+  // Background scan audit "Minor" (plan Task 13 M1): the old dirs were
+  // listed on every launch, long after the migration finished.
+  describe('the done-marker', () => {
+    function markerOf(db: Database.Database): string | undefined {
+      const row = db
+        .prepare(`SELECT Stamp FROM StartupBackfillSeen WHERE Path = ?`)
+        .get('migration:endlesss-stem-cache') as { Stamp: string } | undefined
+      return row?.Stamp
+    }
+
+    it('is written by a pass that moved nothing, not by one that moved something', async () => {
+      writeOldStem('jam', 'riff_1', 'stem_abc', 'audio bytes')
+      const db = new Database(':memory:')
+      const { migrateEndlesssStemCache } = await import('./stemCacheMigration')
+      migrateEndlesssStemCache(db)
+      expect(markerOf(db)).toBeUndefined()
+      migrateEndlesssStemCache(db) // only symlinks left
+      expect(markerOf(db)).toBe('done')
+      db.close()
+    })
+
+    it('with the marker present, the old dirs are never listed', async () => {
+      const db = new Database(':memory:')
+      const { migrateEndlesssStemCache } = await import('./stemCacheMigration')
+      migrateEndlesssStemCache(db) // neither old tree: done at once
+      expect(markerOf(db)).toBe('done')
+      const oldPath = writeOldStem('jam', 'riff_1', 'stem_late', 'audio bytes')
+      migrateEndlesssStemCache(db)
+      expect(lstatSync(oldPath).isSymbolicLink()).toBe(false)
+      expect(existsSync(join(userDataDir, 'endlesss-cache', 'stems', 's', 'stem_late'))).toBe(false)
+      db.close()
+    })
   })
 
   it('does nothing when neither old tree exists', async () => {
