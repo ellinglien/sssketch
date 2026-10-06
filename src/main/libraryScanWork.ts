@@ -17,9 +17,10 @@
 // 1. refresh the persisted pairs (scanTargetCache.ts: extend or rebuild);
 // 2. never or partly analysed: the pairs whose StemCID lacks a peaks,
 //    embedding or feature row, by SQL anti-join in ownDb, read in key
-//    windows of `windowSize` pairs (each statement bounded, a yield between;
-//    measured read-only 2026-10-06 on Elling's ownDb: 179 windows of 5,000
-//    for the 894k external pairs, at most 23 ms each);
+//    windows of `windowSize` pairs (default 2,000; each statement bounded, a
+//    yield between. Measured read-only 2026-10-06 on Elling's ownDb with
+//    windows of 5,000: 179 of them for the 894k external pairs, at most 23 ms
+//    each -- the default's windows are smaller still);
 // 3. analysed but needing work: stemCIDsNeedingRework (stemAnalysisNeeds.ts:
 //    stale features or level from the trait value table's versions, and
 //    zero-shot pending) -- those with all three rows, their pairs by IN-list;
