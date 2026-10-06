@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -34,6 +34,28 @@ describe('ownUsernameStore', () => {
     saveOwnUsername('elling')
     saveOwnUsername('   ')
     expect(loadOwnUsername()).toBeNull()
+  })
+
+  it('saves through a temp file renamed over the old one: nothing left behind', async () => {
+    const { loadOwnUsername, saveOwnUsername } = await import('./ownUsernameStore')
+    saveOwnUsername('elling')
+    saveOwnUsername('other')
+    expect(loadOwnUsername()).toBe('other')
+    expect(readdirSync(dir)).toEqual(['ownUsername.json'])
+  })
+
+  it('a save that fails leaves the saved name as it was, never a throw', async () => {
+    const { loadOwnUsername, saveOwnUsername } = await import('./ownUsernameStore')
+    saveOwnUsername('elling')
+    // The temp file can't be opened for writing: a direct writeFileSync would
+    // have truncated the real file before failing; this never touches it.
+    mkdirSync(join(dir, 'ownUsername.json.tmp'))
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(() => saveOwnUsername('other')).not.toThrow()
+    expect(error).toHaveBeenCalled()
+    expect(loadOwnUsername()).toBe('elling')
+    expect(existsSync(join(dir, 'ownUsername.json.tmp'))).toBe(true)
+    error.mockRestore()
   })
 
   it('a broken file reads as none, never a throw', async () => {
