@@ -16,7 +16,10 @@ import {
   radioIntensityHookInputs,
   radioIntensityStarted,
   radioIntensityStopped,
+  radioIntensityAhead,
+  radioIntensityLandingTarget,
   radioIntensityTarget,
+  radioIntensityTargetAhead,
   radioIntensityTargets,
   radioIntensityTurnaroundArc,
   releaseRadioIntensityRest,
@@ -1138,5 +1141,168 @@ describe('draws (section 3.5)', () => {
     const a = simulate({ loopBars: 4, wraps: 500, seed: 'replay' }).trace
     const b = simulate({ loopBars: 4, wraps: 500, seed: 'replay' }).trace
     expect(JSON.stringify(a)).toBe(JSON.stringify(b))
+  })
+})
+
+describe('radioIntensityTargetAhead: the target where a change lands (option A, 2026-10-06)', () => {
+  // a 4-bar loop: a 16-bar phrase is 4 laps; the arc as the machine has it at a phrase start
+  const where = {
+    energy: 50,
+    drama: 60,
+    loopBars: 4,
+    lap: 0,
+    phraseLaps: 4,
+    count: 4,
+    min: 2,
+    max: 5
+  }
+  const { lo, hi } = radioIntensityTargets(50, 60, false)
+  const building = (phrases: number, done: number): RadioIntensityArc => ({
+    ...newRadioIntensityArc(),
+    begun: true,
+    first: false,
+    untilBig: 3,
+    peakRows: 5,
+    phrases,
+    done
+  })
+
+  it('reads the target now with no wraps ahead', () => {
+    const arc = building(3, 1)
+    expect(radioIntensityTargetAhead(arc, where, 0)).toBe(radioIntensityTarget(arc, 50, 60))
+  })
+
+  it('a change landing at the next phrase start leans to that phrase, not this one', () => {
+    const arc = building(3, 0)
+    expect(radioIntensityTargetAhead(arc, where, 3)).toBe(radioIntensityTarget(arc, 50, 60))
+    expect(radioIntensityTargetAhead(arc, where, 4)).toBeCloseTo(lo + ((hi - lo) * 2) / 3, 9)
+    // from the phrase's third lap, the next phrase start is two tops away
+    expect(radioIntensityTargetAhead(arc, { ...where, lap: 2 }, 2)).toBeCloseTo(
+      lo + ((hi - lo) * 2) / 3,
+      9
+    )
+  })
+
+  it("across the phases: the build's last phrase into the breakdown, the breakdown into the drop", () => {
+    expect(radioIntensityTargetAhead(building(3, 2), where, 4)).toBeCloseTo(lo, 9)
+    const breakdown: RadioIntensityArc = {
+      ...building(1, 0),
+      phase: 'breakdown',
+      depth: 'full',
+      rests: ['r0']
+    }
+    expect(radioIntensityTarget(breakdown, 50, 60)).toBeCloseTo(lo, 9)
+    expect(radioIntensityTargetAhead(breakdown, where, 4)).toBeCloseTo(hi, 9)
+    // a two-phrase breakdown is still lo a phrase on
+    expect(radioIntensityTargetAhead({ ...breakdown, phrases: 2 }, where, 4)).toBeCloseTo(lo, 9)
+  })
+
+  it("the next build: as decided, or before its draw at its menu's middle, a bigger peak from the countdown", () => {
+    const ride: RadioIntensityArc = { ...building(1, 0), phase: 'drop' }
+    const decided: RadioIntensityArc = {
+      ...ride,
+      decided: {
+        event: 'cycle',
+        strip: true,
+        next: { phrases: 2, big: false, untilBig: 2, peakRows: 5 }
+      }
+    }
+    expect(radioIntensityTargetAhead(decided, { ...where, lap: 3 }, 1)).toBeCloseTo(
+      lo + (hi - lo) / 2,
+      9
+    )
+    // not decided yet (energy 50: the menu 2, 3, 4, its middle 3)
+    expect(radioIntensityTargetAhead(ride, where, 4)).toBeCloseTo(lo + (hi - lo) / 3, 9)
+    // the countdown says the next cycle is a bigger peak: its top is lifted and its build is longer
+    const big = radioIntensityTargets(50, 60, true)
+    expect(radioIntensityTargetAhead({ ...ride, untilBig: 1 }, where, 4)).toBeCloseTo(
+      big.lo + (big.hi - big.lo) / 4,
+      9
+    )
+  })
+
+  it('a press moves where it lands: a quick drop pressed in the build is the drop at the next top', () => {
+    const arc = building(3, 0)
+    const pressed = pressRadioIntensity(arc, 'drop', { lap: 1, phraseLaps: 4, late: false })!
+    expect(radioIntensityTargetAhead(pressed, { ...where, lap: 1 }, 1)).toBeCloseTo(hi, 9)
+    expect(radioIntensityTargetAhead(pressed, { ...where, lap: 1 }, 3)).toBeCloseTo(hi, 9)
+    expect(radioIntensityTargetAhead(arc, { ...where, lap: 1 }, 3)).toBeCloseTo(
+      lo + ((hi - lo) * 2) / 3,
+      9
+    )
+  })
+
+  it('a one-lap phrase (16-bar loops): every top is a phrase start', () => {
+    const one = { ...where, loopBars: 16, phraseLaps: 1 }
+    expect(radioIntensityTargetAhead(building(3, 0), one, 1)).toBeCloseTo(
+      lo + ((hi - lo) * 2) / 3,
+      9
+    )
+    expect(radioIntensityTargetAhead(building(3, 1), one, 1)).toBeCloseTo(hi, 9)
+    // (the build's last phrase start decided its breakdown at that same top)
+    const last: RadioIntensityArc = {
+      ...building(3, 2),
+      decided: {
+        event: 'breakdown',
+        depth: 'full',
+        rest: [],
+        throwRowId: null,
+        throw: null,
+        carry: false,
+        next: { phrases: 1 }
+      }
+    }
+    expect(radioIntensityTargetAhead(last, one, 1)).toBeCloseTo(lo, 9)
+  })
+
+  it("marks the tops an arc step takes: the next cycle's strip-back, then its adds up to the peak", () => {
+    const ride: RadioIntensityArc = { ...building(1, 0), phase: 'drop' }
+    const steps = (count: number): number[] =>
+      radioIntensityAhead(ride, { ...where, count }, 16)
+        .map((t, i) => (t.step ? i : -1))
+        .filter((i) => i >= 0)
+    // 5 rows: one stripped at the cycle's top (4), one added back at the next phrase start (8)
+    expect(steps(5)).toEqual([4, 8])
+    // at the fewest rows nothing is stripped, and the build is raised to fit its three adds
+    expect(steps(2)).toEqual([8, 12, 16])
+  })
+
+  it("radio's change lands past the tops an arc step takes, on its own grid", () => {
+    const ride: RadioIntensityArc = { ...building(1, 0), phase: 'drop' }
+    // due at the cycle's top (4), which the strip-back takes, then the add's (8): it lands at 12,
+    // the build's third phrase (the menu's middle, 3 phrases: the top target)
+    const five = { ...where, count: 5 }
+    expect(radioIntensityLandingTarget(ride, five, 4, 4)).toBeCloseTo(hi, 9)
+    // with no phrase grid it takes the next free top: still the build's first phrase
+    expect(radioIntensityLandingTarget(ride, five, 4, 0)).toBeCloseTo(lo + (hi - lo) / 3, 9)
+    // (and with nothing stepping there, the build's first phrase too)
+    expect(radioIntensityTargetAhead(ride, five, 4)).toBeCloseTo(lo + (hi - lo) / 3, 9)
+    // a top no step takes is where it lands (the build at its peak adds nothing)
+    expect(radioIntensityLandingTarget(building(3, 0), five, 4, 4)).toBeCloseTo(
+      lo + ((hi - lo) * 2) / 3,
+      9
+    )
+    // a build's add takes its phrase start: radio's change lands at the next
+    expect(radioIntensityLandingTarget(building(3, 0), where, 4, 4)).toBeCloseTo(hi, 9)
+    expect(radioIntensityLandingTarget(building(3, 2), where, 4, 4)).toBeCloseTo(lo, 9)
+  })
+
+  it('is pure: the arc is left as it was, and nothing is drawn from Math.random', () => {
+    const arc = building(3, 2)
+    const before = JSON.stringify(arc)
+    const real = Math.random
+    let draws = 0
+    Math.random = () => {
+      draws++
+      return real()
+    }
+    try {
+      radioIntensityTargetAhead(arc, where, 16)
+      radioIntensityLandingTarget(arc, where, 4, 4)
+    } finally {
+      Math.random = real
+    }
+    expect(JSON.stringify(arc)).toBe(before)
+    expect(draws).toBe(0)
   })
 })

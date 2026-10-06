@@ -156,6 +156,10 @@ export const INTENSITY_RENEW_SPAN = 0.5
 export const INTENSITY_BREAKDOWN_OVERRUN = 1
 /** The fold bend's swing at full drama: bend + SWING * d * (2 tau - 1). */
 export const INTENSITY_BEND_SWING = 25
+/** Radio's pick, armed for the target where it lands, is armed again when that target moves by
+ * more than this (radioIntensityLandingTarget; option A, 2026-10-06). A smaller move shifts the
+ * pick's ranking by under a tenth of one trait, not worth a fresh stem. */
+export const INTENSITY_RELEAN_TOLERANCE = 0.1
 
 const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
 const pickEven = <T>(items: readonly T[], random: () => number): T =>
@@ -814,6 +818,117 @@ export function radioIntensityAddComing(arc: RadioIntensityArc, count: number): 
     arc.done + 1 < arc.phrases &&
     count < arc.peakRows
   )
+}
+
+/** What radioIntensityAhead reads: the dials, the clock as it stands (the turnaroundLap playing,
+ * the phrase in laps) and the rows on the bed with the arc's bounds. */
+export interface RadioIntensityAheadInput {
+  energy: number
+  drama: number
+  loopBars: number
+  /** The turnaroundLap playing now. */
+  lap: number
+  phraseLaps: number
+  count: number
+  min: number
+  max: number
+}
+
+/** A loop top ahead: the target for picks from it, and whether an arc step (a row added, or one
+ * stripped back) lands on it. */
+export interface RadioIntensityTop {
+  target: number
+  step: boolean
+}
+
+/** A length still to be drawn reads as its menu's middle (pickEven at 0.5). */
+const MENU_MIDDLE = (): number => 0.5
+
+/**
+ * The next `wraps` loop tops as the machine will have them (index 0: now, no step), for picks that
+ * land ahead (option A, 2026-10-06: radio's own pick leans to where it lands, not to where it is
+ * picked). The machine is stepped forward, never held, drawing from nothing: an event decided (or
+ * a press waiting) lands as it will, a phase ends when its phrases are done, and a length or a
+ * bigger peak not drawn yet reads as its menu's middle (a bigger peak is known from the
+ * countdown). Its adds are taken as warm while the count is under the most rows, from the build's
+ * second phrase start (its third with a one-lap phrase), the count following its adds and
+ * strip-backs; no carry row, no renewal, which moves no target. Pure: the caller's stream is
+ * untouched.
+ */
+export function radioIntensityAhead(
+  arc: RadioIntensityArc,
+  input: RadioIntensityAheadInput,
+  wraps: number
+): RadioIntensityTop[] {
+  const P = Math.max(1, Math.floor(input.phraseLaps))
+  const n = Number.isFinite(wraps) ? Math.max(0, Math.floor(wraps)) : 0
+  const tops: RadioIntensityTop[] = [
+    { target: radioIntensityTarget(arc, input.energy, input.drama), step: false }
+  ]
+  let state = arc
+  let count = input.count
+  for (let i = 1; i <= n; i++) {
+    const r = stepRadioIntensityArc(state, {
+      energy: input.energy,
+      drama: input.drama,
+      loopBars: input.loopBars,
+      lap: (((Math.floor(input.lap) + i) % P) + P) % P,
+      phraseLaps: input.phraseLaps,
+      held: false,
+      count,
+      min: input.min,
+      max: input.max,
+      rows: [],
+      // (an add is picked a lap before the wrap that decides it: with a one-lap phrase the
+      // build's first phrase start decides none, its first add joins at the one after next)
+      canAdd: count < input.max && !(P <= 1 && state.decided?.event === 'cycle'),
+      canStrip: count > input.min,
+      carryReady: false,
+      renewReady: () => false,
+      random: MENU_MIDDLE
+    })
+    state = r.state
+    const a = r.applied
+    const added = a?.event === 'add'
+    const stripped = a?.event === 'cycle' && a.strip
+    count += (added ? 1 : 0) - (stripped ? 1 : 0)
+    tops.push({
+      target: radioIntensityTarget(state, input.energy, input.drama),
+      step: added || stripped
+    })
+  }
+  return tops
+}
+
+/** The target in force after `wraps` more loop tops (0: now): radioIntensityAhead's. */
+export function radioIntensityTargetAhead(
+  arc: RadioIntensityArc,
+  input: RadioIntensityAheadInput,
+  wraps: number
+): number {
+  const tops = radioIntensityAhead(arc, input, wraps)
+  return tops[tops.length - 1].target
+}
+
+/**
+ * The target where radio's own change lands, the clock saying `wraps` tops from now: there, or --
+ * an arc step taking that top (radio's change takes the one after, as both runtimes schedule it) --
+ * the next top on radio's change grid, every `everyLaps` (radioPhraseLaps; 0: every top), with
+ * none. Looked for over a few phrases, then the last one looked at.
+ */
+export function radioIntensityLandingTarget(
+  arc: RadioIntensityArc,
+  input: RadioIntensityAheadInput,
+  wraps: number,
+  everyLaps: number
+): number {
+  const every = Math.max(1, Math.floor(everyLaps))
+  const first = Number.isFinite(wraps) ? Math.max(0, Math.floor(wraps)) : 0
+  const horizon = first + 4 * Math.max(every, Math.floor(input.phraseLaps))
+  const tops = radioIntensityAhead(arc, input, horizon)
+  let w = first
+  while (w + every <= horizon && tops[w].step) w += every
+  return tops[w].target
 }
 
 /** The arc a phrase end's turnaround is drawn for (section 5.6): growing through the build and
