@@ -390,3 +390,75 @@ panel uses them.
    - the faves dial is live;
    - `my sounds` is greyed.
 6. **Phone:** reroll a row a few times. The rows still alternate between artists.
+
+## As built (2026-10-06)
+
+Plan `docs/superpowers/plans/2026-10-06-combine-artists.md`, on **master** (not the plan's
+`combine-artists` branch: other agents share this working tree, and switching branches under them
+would move their files), unpushed:
+
+- `da4cf0a4` Task 1, `@shared/artistSelection` (the scratch copy's file, verbatim; 38 tests, the
+  7 × 3 one-member grid among them).
+- `9c2911ed` Task 2, `@shared/artistShare` (verbatim; 14 seeded tests, no re-pinned seeds).
+- `fc1e63f1` Task 3, main's mirror holds the selection; `creatorAllowed` takes a list; the
+  `discover-set-artist` 4th argument.
+- `67a1c3e8` Task 4, the adjacency creator list, `discover-prewarm-artists`, the cache-size pin.
+- `7c2214c3` Task 5, `artistsIncludeMe` in the strip model.
+- `1676e16e` Task 6, the panel holds a selection; labels, notices, `changeArtists`, the mirror.
+- `bba70921` Task 7, the share in every pick; landings; spares by `artistSelectionKey`.
+- `e2de6bf9` Task 8, neighbour lookups span the selection.
+- `18663ed4` Task 9, the multi-select picker.
+- `2ad862e8` Task 10, `by <creator>` in a combined row's tooltip.
+- `e49d2a10` review fixes (below).
+
+**Deviations from the plan:**
+- **Branch:** master, as above.
+- **The one-tap adjacent write moved:** `rollAdjacentForSlot` now lands through
+  `swapSlotFromNearby`, so the radio-off landing is counted there. The nearby popover lands
+  through it too, so its picks count as turns.
+- **Duplicates count:** `duplicateSlot`'s instant copy (radio off, or Cmd on a row with a stem)
+  calls `noteArtistLanding`, per decision 5. The plan listed only `commitSlotPick` and two direct
+  writes.
+- **A hook exit's substitute counts:** it lands with `hookLanding`, so the plan's rule missed it.
+  §4 says a substitute pick is a turn. The hook's return, a resting exit and the arc's landings
+  (rest and return, renewals included) are not turns.
+- **The `turns:` line reads state:** `artistTurnsShown` mirrors the ledger's `landed` at each
+  landing or change. The plan's `artistShareTick` + ref read would read a ref during render, which
+  react-hooks rejects.
+- **`fetchPool(only, ff = f)` with `f` a const:** the pass-on passes
+  `attempts[attempt].filter` explicitly, rather than reassigning a `let f` that closures capture.
+- **Prewarm only for a combination:** me → X or X → Y makes no extra IPC call, so §9 holds
+  literally.
+
+**Review (code-reviewer agent).** §9 holds on every pick path. Begin/end pair on every return
+path, and no landing is counted twice. One important finding, fixed in `e49d2a10`:
+- **While radio runs, a roll-all didn't spread.** `rerollAllOnTheTop` picks one after another and
+  queues everything for the loop top. Each pick's in-flight count had ended before the next pick
+  began, and nothing had landed yet, so an artist one turn behind got all four rows.
+- **The fix:** the share's order now takes `pending`, which counts picks waiting to land: queued
+  manual changes, minus hook and arc landings, plus the batch not yet queued. It's empty for one
+  artist. A seeded test covers pick → queue → land at the top.
+
+Minor findings fixed in the same commit:
+- `random`'s pass-on now flashes `no <name> fits`;
+- the empty memo is keyed by kinds plus the sources the dial allows;
+- the picker's `+`/`−` and chips keep focus in the search field;
+- an empty creator list allows nobody in main.
+
+**Left as is:**
+- **The ledger lives in `DiscoverPanel`,** as §3 says. It starts over when the library modal is
+  reopened, while the selection, held in `App.tsx`, stays. Move it to `App.tsx` if `turns:`
+  should last the whole app session.
+- **Spares and radio's own armed pick are not in `pending`.** Each lands before the next pick of
+  its kind is made.
+
+**Checks:**
+- **typecheck:** clean.
+- **lint:** no errors. The only warnings are prettier warnings in another agent's uncommitted
+  `radioIntensityArc.test.ts`.
+- **`npx vitest run`:** 320 files, 5356 tests, all green.
+- **`CI=1 npx vitest run`:** green apart from one run of `remoteStemRenderer.test.ts`, which
+  passed 3/3 on rerun and in the full run, and touches nothing here.
+
+**Unseen by any agent:** nothing here has been clicked, looked at or heard. The walkthrough above
+is Elling's.
