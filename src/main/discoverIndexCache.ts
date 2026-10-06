@@ -1,6 +1,7 @@
 // src/main/discoverIndexCache.ts
 import type Database from 'better-sqlite3'
 import type { RiffIndexEntry } from './discoverCandidates'
+import type { RowidWatermark } from './rowidWatermark'
 import { countWork } from './workCounters'
 
 /** Persisted counterpart to discoverCandidates.ts's own in-memory
@@ -16,11 +17,235 @@ import { countWork } from './workCounters'
 
 const PAGE_SIZE = 5000
 
+/** Same budget as scanTargetCache.ts's writePairs: one transaction holds
+ * the main process at most about this long before it commits and yields. */
+const TRANSACTION_BUDGET_MS = 16
+
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
 
-/** The row count this SourceDbKey's riff index was last saved with, or
+// --- Rowid watermarks (scan plan b21ea5a2 Task 2) ---------------------------
+//
+// The meta rows gain the watermark the shared extension rule needs
+// (rowidWatermark.ts): MaxRowid, and the key of the row at it. A meta row
+// written before this has MaxRowid NULL with a non-zero count: "legacy" --
+// it loads as before while the counts match, and the first move rebuilds it
+// once, with a watermark from then on. The riff index also keeps the
+// skeleton riffs it has seen (no stems yet; the sync fills them in place
+// later, which no count or watermark can see) so every extension re-reads
+// them: DiscoverRiffIndexOpenRiffs, as DiscoverScanTargetOpenRiffs does for
+// the scan targets.
+//
+// Ensured lazily, once per connection: a column added to an existing tiny
+// meta table and one CREATE TABLE IF NOT EXISTS -- instant even on the
+// 3.6 GB warehouse, and it also covers tests' hand-written schemas.
+const watermarkSchemaReady = new WeakSet<Database.Database>()
+
+function addColumnsIfMissing(
+  db: Database.Database,
+  table: string,
+  columns: readonly [string, string][]
+): void {
+  const existing = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]
+  if (existing.length === 0) return
+  for (const [name, type] of columns) {
+    if (!existing.some((c) => c.name === name)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`)
+    }
+  }
+}
+
+export function ensureDiscoverIndexWatermarkSchema(ownDb: Database.Database): void {
+  if (watermarkSchemaReady.has(ownDb)) return
+  addColumnsIfMissing(ownDb, 'DiscoverRiffIndexCacheMeta', [
+    ['MaxRowid', 'INTEGER'],
+    ['WatermarkRiffCID', 'TEXT']
+  ])
+  addColumnsIfMissing(ownDb, 'DiscoverInstrumentRowsCacheMeta', [
+    ['MaxRowid', 'INTEGER'],
+    ['WatermarkStemCID', 'TEXT']
+  ])
+  ownDb.exec(`CREATE TABLE IF NOT EXISTS DiscoverRiffIndexOpenRiffs (
+    SourceDbKey TEXT NOT NULL,
+    RiffRowid INTEGER NOT NULL,
+    PRIMARY KEY (SourceDbKey, RiffRowid)
+  )`)
+  watermarkSchemaReady.add(ownDb)
+}
+
+/** A saved index's meta: the rows it accounts for, and its watermark --
+ * null for a legacy row (saved before watermarks: loads while the count
+ * matches, never extends). */
+export interface IndexCacheMeta {
+  count: number
+  watermark: RowidWatermark | null
+}
+
+function metaOf(count: number, maxRowid: number | null, key: string | null): IndexCacheMeta {
+  if (maxRowid === null && count > 0) return { count, watermark: null }
+  return { count, watermark: { count, maxRowid, keyAtMax: key } }
+}
+
+export function readRiffIndexMeta(
+  ownDb: Database.Database,
+  sourceDbKey: string
+): IndexCacheMeta | null {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  const row = ownDb
+    .prepare(
+      `SELECT RiffCount, MaxRowid, WatermarkRiffCID FROM DiscoverRiffIndexCacheMeta
+       WHERE SourceDbKey = ?`
+    )
+    .get(sourceDbKey) as
+    { RiffCount: number; MaxRowid: number | null; WatermarkRiffCID: string | null } | undefined
+  return row ? metaOf(row.RiffCount, row.MaxRowid, row.WatermarkRiffCID) : null
+}
+
+function writeRiffIndexMeta(
+  ownDb: Database.Database,
+  sourceDbKey: string,
+  watermark: RowidWatermark
+): void {
+  ownDb
+    .prepare(
+      `INSERT INTO DiscoverRiffIndexCacheMeta
+         (SourceDbKey, RiffCount, MaxRowid, WatermarkRiffCID, ComputedAt)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(SourceDbKey) DO UPDATE SET
+         RiffCount = excluded.RiffCount, MaxRowid = excluded.MaxRowid,
+         WatermarkRiffCID = excluded.WatermarkRiffCID, ComputedAt = excluded.ComputedAt`
+    )
+    .run(sourceDbKey, watermark.count, watermark.maxRowid, watermark.keyAtMax, Date.now())
+}
+
+/** Runs `steps` in time-budgeted transactions (TRANSACTION_BUDGET_MS each),
+ * yielding between them; `finish` runs in the last one. Never one long
+ * synchronous block, however many rows a page brings. */
+async function runSliced(
+  ownDb: Database.Database,
+  steps: number,
+  step: (i: number) => void,
+  finish: () => void
+): Promise<void> {
+  let i = 0
+  for (;;) {
+    const done = ownDb.transaction((): boolean => {
+      const started = performance.now()
+      while (i < steps) {
+        step(i++)
+        if (performance.now() - started >= TRANSACTION_BUDGET_MS) return false
+      }
+      finish()
+      return true
+    })()
+    countWork('sql:discover-index.slice')
+    if (done) return
+    await yieldToEventLoop()
+  }
+}
+
+/** Deletes `table`'s rows for `sourceDbKey` in bounded chunks with yields --
+ * a big archive's cache is hundreds of thousands of rows, and one DELETE
+ * would block for a while. */
+async function deleteKeyInChunks(
+  ownDb: Database.Database,
+  table: string,
+  sourceDbKey: string
+): Promise<void> {
+  const deleteChunk = ownDb.prepare(
+    `DELETE FROM ${table} WHERE rowid IN
+       (SELECT rowid FROM ${table} WHERE SourceDbKey = ? LIMIT ${PAGE_SIZE})`
+  )
+  while (deleteChunk.run(sourceDbKey).changes > 0) await yieldToEventLoop()
+}
+
+/** Starts the riff index for `sourceDbKey` over: meta first (so a partial
+ * cache is never read as the old complete one), then the rows and open
+ * riffs in chunks, then an EMPTY watermark -- a valid base the walk extends
+ * page by page, so an interrupted rebuild resumes where it stopped. */
+export async function resetRiffIndexCache(
+  ownDb: Database.Database,
+  sourceDbKey: string
+): Promise<void> {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  countWork('discover-index:reset.riff-index')
+  ownDb.prepare(`DELETE FROM DiscoverRiffIndexCacheMeta WHERE SourceDbKey = ?`).run(sourceDbKey)
+  await deleteKeyInChunks(ownDb, 'DiscoverRiffIndexCache', sourceDbKey)
+  await deleteKeyInChunks(ownDb, 'DiscoverRiffIndexOpenRiffs', sourceDbKey)
+  writeRiffIndexMeta(ownDb, sourceDbKey, { count: 0, maxRowid: null, keyAtMax: null })
+}
+
+/** One walked page's effect on the riff index. */
+export interface RiffIndexPage {
+  /** Entries set or moved to an earlier riff (by RiffCID) in this page. */
+  changed: [string, RiffIndexEntry][]
+  /** Skeleton riffs seen (rowids), and open riffs found filled in. */
+  opened: number[]
+  closed: number[]
+  /** The walk's watermark after this page. */
+  watermark: RowidWatermark
+}
+
+/** Persists one walked page in time-budgeted transactions: entries (an
+ * existing entry moves only to an earlier RiffCID -- first seen in RiffCID
+ * order wins, decision 4), open riffs, then the meta in the last
+ * transaction. Interrupted part-way, the meta still describes a page
+ * boundary and the rows past it are re-read on resume (every write here is
+ * idempotent). */
+export async function persistRiffIndexPage(
+  ownDb: Database.Database,
+  sourceDbKey: string,
+  page: RiffIndexPage
+): Promise<void> {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  const upsert = ownDb.prepare(
+    `INSERT INTO DiscoverRiffIndexCache
+       (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(SourceDbKey, StemCID) DO UPDATE SET
+       RiffCID = excluded.RiffCID, OwnerJamCID = excluded.OwnerJamCID,
+       BPMrnd = excluded.BPMrnd, CreationTime = excluded.CreationTime
+     WHERE excluded.RiffCID < DiscoverRiffIndexCache.RiffCID`
+  )
+  const open = ownDb.prepare(
+    `INSERT OR IGNORE INTO DiscoverRiffIndexOpenRiffs (SourceDbKey, RiffRowid) VALUES (?, ?)`
+  )
+  const close = ownDb.prepare(
+    `DELETE FROM DiscoverRiffIndexOpenRiffs WHERE SourceDbKey = ? AND RiffRowid = ?`
+  )
+  const { changed, opened, closed } = page
+  const total = changed.length + opened.length + closed.length
+  await runSliced(
+    ownDb,
+    total,
+    (i) => {
+      if (i < changed.length) {
+        const [stemCID, e] = changed[i]
+        upsert.run(sourceDbKey, stemCID, e.riffCID, e.ownerJamCID, e.bpmRnd, e.creationTime)
+      } else if (i < changed.length + opened.length) {
+        open.run(sourceDbKey, opened[i - changed.length])
+      } else {
+        close.run(sourceDbKey, closed[i - changed.length - opened.length])
+      }
+    },
+    () => writeRiffIndexMeta(ownDb, sourceDbKey, page.watermark)
+  )
+}
+
+export function loadCachedRiffOpenRowids(
+  ownDb: Database.Database,
+  sourceDbKey: string
+): Set<number> {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  const rows = ownDb
+    .prepare(`SELECT RiffRowid FROM DiscoverRiffIndexOpenRiffs WHERE SourceDbKey = ?`)
+    .all(sourceDbKey) as { RiffRowid: number }[]
+  return new Set(rows.map((r) => r.RiffRowid))
+}
+
+/** (Tests and the legacy shape; the prewarm reads readRiffIndexMeta.)
+ * The row count this SourceDbKey's riff index was last saved with, or
  * null if nothing has ever been cached for it -- the freshness check a
  * caller compares against a fresh `SELECT COUNT(*) FROM Riffs` before
  * trusting the cache. */
@@ -58,14 +283,15 @@ export async function loadCachedRiffIndex(
   ).n
   if (total === 0) return index
 
-  let offset = 0
-  while (offset < total) {
-    const page = ownDb
-      .prepare(
-        `SELECT StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime FROM DiscoverRiffIndexCache
-         WHERE SourceDbKey = ? ORDER BY StemCID LIMIT ? OFFSET ?`
-      )
-      .all(sourceDbKey, PAGE_SIZE, offset) as {
+  // Keyset on the primary key (SourceDbKey, StemCID): no OFFSET re-skip.
+  const statement = ownDb.prepare(
+    `SELECT StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime FROM DiscoverRiffIndexCache
+     WHERE SourceDbKey = ? AND StemCID > ? ORDER BY StemCID LIMIT ?`
+  )
+  let after = ''
+  let loaded = 0
+  for (;;) {
+    const page = statement.all(sourceDbKey, after, PAGE_SIZE) as {
       StemCID: string
       RiffCID: string
       OwnerJamCID: string
@@ -83,15 +309,21 @@ export async function loadCachedRiffIndex(
         creationTime: row.CreationTime
       })
     }
-    offset += page.length
-    onProgress?.(offset, total)
+    loaded += page.length
+    onProgress?.(loaded, total)
     if (page.length < PAGE_SIZE) break
+    after = page[page.length - 1].StemCID
     await yieldToEventLoop()
   }
   return index
 }
 
-/** Replaces whatever was previously cached for `sourceDbKey` with `index`
+/** LEGACY shape (no watermark), kept for what still reads it: a cache saved
+ * before Task 2, which tests simulate with this. Production saves go page by
+ * page through resetRiffIndexCache + persistRiffIndexPage instead, never as
+ * one transaction.
+ *
+ * Replaces whatever was previously cached for `sourceDbKey` with `index`
  * -- a real DELETE+bulk-INSERT inside one transaction (not a row-by-row
  * loop with no transaction, which would be dramatically slower for a
  * 300k+-row index and could leave a half-written cache behind if
@@ -114,8 +346,12 @@ export function saveRiffIndexCache(
     `INSERT INTO DiscoverRiffIndexCacheMeta (SourceDbKey, RiffCount, ComputedAt) VALUES (?, ?, ?)
      ON CONFLICT(SourceDbKey) DO UPDATE SET RiffCount = excluded.RiffCount, ComputedAt = excluded.ComputedAt`
   )
+  // The meta row is replaced, not updated, so a watermark from an earlier
+  // walk can't outlive it.
+  const delMeta = ownDb.prepare(`DELETE FROM DiscoverRiffIndexCacheMeta WHERE SourceDbKey = ?`)
   const tx = ownDb.transaction(() => {
     del.run(sourceDbKey)
+    delMeta.run(sourceDbKey)
     for (const [stemCID, entry] of index) {
       insert.run(
         sourceDbKey,
@@ -238,8 +474,11 @@ export function appendRiffIndexRows(
   }[],
   riffCountDelta: number
 ): void {
-  const existing = getCachedRiffCount(ownDb, sourceDbKey)
-  if (existing === null) return
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  const meta = ownDb
+    .prepare(`SELECT RiffCount, MaxRowid FROM DiscoverRiffIndexCacheMeta WHERE SourceDbKey = ?`)
+    .get(sourceDbKey) as { RiffCount: number; MaxRowid: number | null } | undefined
+  if (!meta) return
   const insert = ownDb.prepare(
     `INSERT INTO DiscoverRiffIndexCache (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime)
      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(SourceDbKey, StemCID) DO NOTHING`
@@ -247,11 +486,16 @@ export function appendRiffIndexRows(
   for (const row of rows) {
     insert.run(sourceDbKey, row.stemCID, row.riffCID, row.ownerJamCID, row.bpmRnd, row.creationTime)
   }
+  // Scan plan decision 5: a watermarked meta is left alone -- the next
+  // extension reads the kept riff (past the watermark) again, harmlessly,
+  // and never has to assume no other riff arrived meanwhile. A legacy meta
+  // (no watermark) keeps the count bump it always had.
+  if (meta.MaxRowid !== null) return
   ownDb
     .prepare(
       `UPDATE DiscoverRiffIndexCacheMeta SET RiffCount = ?, ComputedAt = ? WHERE SourceDbKey = ?`
     )
-    .run(existing + riffCountDelta, Date.now(), sourceDbKey)
+    .run(meta.RiffCount + riffCountDelta, Date.now(), sourceDbKey)
 }
 
 /** Same shape and the same reasoning as appendRiffIndexRows above, for

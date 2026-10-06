@@ -1,5 +1,5 @@
 // src/main/discoverIndexCache.test.ts
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import {
   appendInstrumentRows,
@@ -9,7 +9,11 @@ import {
   loadCachedRiffIndex,
   saveRiffIndexCache,
   loadCachedInstrumentRows,
-  saveInstrumentRowsCache
+  saveInstrumentRowsCache,
+  persistRiffIndexPage,
+  readRiffIndexMeta,
+  resetRiffIndexCache,
+  loadCachedRiffOpenRowids
 } from './discoverIndexCache'
 
 function freshOwnDb(): Database.Database {
@@ -248,5 +252,92 @@ describe('discoverIndexCache', () => {
       appendInstrumentRows(db, 'never', [{ StemCID: 's1', Instrument: 1, OwnerJamCID: 'j' }], 1)
       expect(getCachedStemCount(db, 'never')).toBe(null)
     })
+  })
+})
+
+// Scan plan b21ea5a2 Task 2: the walk persists page by page, never as one
+// 844k-row transaction.
+describe('persistRiffIndexPage (sliced saves)', () => {
+  const entry = (
+    i: number
+  ): { riffCID: string; ownerJamCID: string; bpmRnd: number; creationTime: number } => ({
+    riffCID: `r${i}`,
+    ownerJamCID: 'j',
+    bpmRnd: 120,
+    creationTime: i
+  })
+
+  it('commits 50k rows in many transactions with a yield between them, the meta in the last', async () => {
+    const own = freshOwnDb()
+    await resetRiffIndexCache(own, 'k')
+    const changed: [string, ReturnType<typeof entry>][] = Array.from({ length: 50_000 }, (_, i) => [
+      `s${String(i).padStart(6, '0')}`,
+      entry(i)
+    ])
+    const transactions = vi.spyOn(own, 'transaction')
+    const yields = vi.spyOn(globalThis, 'setImmediate')
+    const metaAtEachYield: (number | null)[] = []
+    yields.mockImplementation(((fn: () => void) => {
+      metaAtEachYield.push(readRiffIndexMeta(own, 'k')?.watermark?.maxRowid ?? null)
+      fn()
+      return 0 as unknown as NodeJS.Immediate
+    }) as unknown as typeof setImmediate)
+    await persistRiffIndexPage(own, 'k', {
+      changed,
+      opened: [7, 8],
+      closed: [],
+      watermark: { count: 50_002, maxRowid: 50_002, keyAtMax: 'last' }
+    })
+    yields.mockRestore()
+    expect(transactions.mock.calls.length).toBeGreaterThan(1)
+    expect(metaAtEachYield.length).toBeGreaterThan(0)
+    // Until the last slice, the meta is still the empty watermark.
+    expect(metaAtEachYield.every((m) => m === null)).toBe(true)
+    expect(readRiffIndexMeta(own, 'k')?.watermark).toEqual({
+      count: 50_002,
+      maxRowid: 50_002,
+      keyAtMax: 'last'
+    })
+    const loaded = await loadCachedRiffIndex(own, 'k')
+    expect(loaded).toEqual(new Map(changed))
+    expect(loadCachedRiffOpenRowids(own, 'k')).toEqual(new Set([7, 8]))
+  })
+
+  it('moves an entry only to an earlier RiffCID', async () => {
+    const own = freshOwnDb()
+    await resetRiffIndexCache(own, 'k')
+    const wm = { count: 1, maxRowid: 1, keyAtMax: 'x' }
+    await persistRiffIndexPage(own, 'k', {
+      changed: [['s', { ...entry(1), riffCID: 'm' }]],
+      opened: [],
+      closed: [],
+      watermark: wm
+    })
+    await persistRiffIndexPage(own, 'k', {
+      changed: [['s', { ...entry(2), riffCID: 'z' }]],
+      opened: [],
+      closed: [],
+      watermark: wm
+    })
+    expect((await loadCachedRiffIndex(own, 'k')).get('s')?.riffCID).toBe('m')
+    await persistRiffIndexPage(own, 'k', {
+      changed: [['s', { ...entry(3), riffCID: 'a' }]],
+      opened: [],
+      closed: [],
+      watermark: wm
+    })
+    expect((await loadCachedRiffIndex(own, 'k')).get('s')?.riffCID).toBe('a')
+  })
+
+  it('a reset drops the old rows and open riffs, and leaves an empty watermark to extend from', async () => {
+    const own = freshOwnDb()
+    saveRiffIndexCache(own, 'k', new Map([['s1', entry(1)]]), 1)
+    expect(readRiffIndexMeta(own, 'k')).toEqual({ count: 1, watermark: null }) // legacy
+    await resetRiffIndexCache(own, 'k')
+    expect(readRiffIndexMeta(own, 'k')).toEqual({
+      count: 0,
+      watermark: { count: 0, maxRowid: null, keyAtMax: null }
+    })
+    expect((await loadCachedRiffIndex(own, 'k')).size).toBe(0)
   })
 })

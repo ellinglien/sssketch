@@ -67,6 +67,7 @@ export default defineConfig({
           'src/main/loopFolderScan.test.ts',
           'src/main/loopFolderImport.test.ts',
           'src/main/resolveStemArrangeRole.test.ts',
+          'src/main/rowidWatermark.test.ts',
           'src/main/scanTargetCache.test.ts',
           'src/main/stemAnalysisNeeds.test.ts',
           'src/main/stemAnalysisResultsWriter.test.ts',

@@ -33,15 +33,19 @@ import { getTraitQuantileTables, getTraitValueTable } from './traitQuantileCache
 import { countWork } from './workCounters'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
-  getCachedRiffCount,
   getCachedStemCount,
   loadCachedRiffIndex,
-  saveRiffIndexCache,
+  loadCachedRiffOpenRowids,
+  persistRiffIndexPage,
+  readRiffIndexMeta,
+  resetRiffIndexCache,
   loadCachedInstrumentRows,
   saveInstrumentRowsCache
 } from './discoverIndexCache'
 import { getStemClassificationVersion } from './stemClassificationVersion'
 import { createInstrumentRowsLookup, type InstrumentRowsLookup } from './instrumentRowsLookup'
+import { emptyRiffIndexState, walkRiffs, type RiffIndexState } from './riffIndexWalk'
+import { canExtendByRowid } from './rowidWatermark'
 import {
   isScanCacheCurrent,
   newScanCacheState,
@@ -50,8 +54,7 @@ import {
 } from './tableChangeSignal'
 import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
-import { columnStemSlots, mergeStemSlots } from '@shared/riffStemSlots'
-import { hasExtraStemSlotsTable, readAllExtraStemSlots } from './riffStemsExtra'
+import { hasExtraStemSlotsTable } from './riffStemsExtra'
 import type { DiscoverCandidate } from '@shared/discoverCandidate'
 
 export type { DiscoverCandidate } from '@shared/discoverCandidate'
@@ -114,21 +117,6 @@ type PrewarmProgressCallback = (progress: PrewarmScanProgress) => void
 // the one place that knows enough to wrap that into a full
 // PrewarmScanProgress before forwarding to its own caller's onProgress.
 type ScanProgressCallback = (completed: number, total: number) => void
-
-interface RiffCandidateRow {
-  RiffCID: string
-  OwnerJamCID: string
-  BPMrnd: number
-  CreationTime: number | null
-  StemCID_1: string | null
-  StemCID_2: string | null
-  StemCID_3: string | null
-  StemCID_4: string | null
-  StemCID_5: string | null
-  StemCID_6: string | null
-  StemCID_7: string | null
-  StemCID_8: string | null
-}
 
 // Real bug this guards against, learned the hard way earlier this same
 // session (see discoverLibraryStems.ts's own YIELD_EVERY): the Electron
@@ -205,9 +193,11 @@ export interface RiffIndexEntry {
   creationTime: number | null
 }
 
+// `walk` holds what an extension needs (open riffs, rowid watermark --
+// riffIndexWalk.ts); `index` is walk.index.
 const riffIndexCache = new WeakMap<
   Database.Database,
-  { index: Map<string, RiffIndexEntry>; state: ScanCacheState }
+  { index: Map<string, RiffIndexEntry>; state: ScanCacheState; walk: RiffIndexState }
 >()
 
 // In-flight de-duplication -- direct request, 2026-09-16 ("can we take a
@@ -246,117 +236,104 @@ export async function getRiffIndexForDb(
   const cached = riffIndexCache.get(db)
   if (cached && isScanCacheCurrent(db, 'Riffs', cached.state)) return cached.index
 
-  const promise = buildRiffIndex(db, onProgress).finally(() => {
+  return shareRiffIndexBuild(db, buildRiffIndex(db, cached?.walk, onProgress))
+}
+
+function shareRiffIndexBuild(
+  db: Database.Database,
+  build: Promise<Map<string, RiffIndexEntry>>
+): Promise<Map<string, RiffIndexEntry>> {
+  const promise = build.finally(() => {
     riffIndexInFlight.delete(db)
   })
   riffIndexInFlight.set(db, promise)
   return promise
 }
 
-/** The actual scan, split out from getRiffIndexForDb itself so that
- * function's own cache/in-flight checks stay simple early-returns rather
- * than wrapping this whole body in an extra layer of indirection. A stem
- * that appears in more than one riff (shouldn't normally happen, but a
- * hand-edited or corrupted archive could) keeps whichever riff this scan
- * saw FIRST -- an arbitrary but stable, good-enough tiebreak for what's
- * fundamentally an edge case.
- *
- * Paginates via `ORDER BY RiffCID LIMIT/OFFSET` (PREWARM_CHUNK_SIZE rows
- * at a time, yielding between pages) rather than one single `SELECT *` --
- * see that constant's own doc comment for the real live incident this
- * fixes (a single un-chunked fetch of the whole table blocked the main
- * process, including window creation, for minutes on a large external
- * archive). The explicit ORDER BY (code review, 2026-09-18) matters
- * because `db` can be the app's OWN always-on riff-sync db, which DOES
- * receive concurrent writes/deletes from other IPC handlers while this
- * scan runs (the app stays usable during warmup, by design) -- LIMIT/
- * OFFSET with no stable ordering can silently skip a row that a
- * concurrent delete shifts backward across an already-consumed OFFSET
- * boundary. A cheap `SELECT COUNT(*)` upfront gives onProgress a real
- * `total` to report against from the very first page, rather than only
- * knowing the true total once the last page comes back short.
- *
- * Also yields WITHIN a page, not just between pages (code review,
- * 2026-09-18): a page can hold up to PREWARM_CHUNK_SIZE=5000 riffs, each
- * walking 8 stem slots -- up to 40,000 synchronous Map operations with no
- * yield point, well past CLASSIFY_YIELD_EVERY's own established "safe
- * cap for cheap JS-only work" threshold elsewhere in this file. Reuses
- * that same constant so both loops share one definition of "too much
- * synchronous work without yielding." */
+/** The in-session refresh (no ownDb, nothing persisted -- the next launch's
+ * prewarm extends the saved copy itself): extends `previous` from its rowid
+ * watermark when the shared rule allows (rowidWatermark.ts), else walks the
+ * whole table. Either way by rowid, page by page (riffIndexWalk.ts: why
+ * rowid order, and why the result is the old RiffCID-ordered walk's
+ * exactly). The signal is read BEFORE the walk, so a riff added mid-walk
+ * reads as a change next time. */
 async function buildRiffIndex(
   db: Database.Database,
+  previous: RiffIndexState | undefined,
   onProgress?: ScanProgressCallback
 ): Promise<Map<string, RiffIndexEntry>> {
-  const index = new Map<string, RiffIndexEntry>()
-  // The change signal doubles as the page loop's `total` (its COUNT(*)).
   const signal = readTableSignal(db, 'Riffs')
   const state = newScanCacheState(signal)
   if (!signal) {
-    // Same defensive handling as the page-fetch loop below -- `db` may be
-    // an external file missing even a core table. Cache the empty result
-    // so a broken db doesn't retry this same expensive-to-fail scan on
-    // every call.
-    riffIndexCache.set(db, { index, state })
-    return index
+    // `db` may be an external file missing even a core table. Cache the
+    // empty result so a broken db doesn't retry this scan on every call.
+    const walk = emptyRiffIndexState()
+    riffIndexCache.set(db, { index: walk.index, state, walk })
+    return walk.index
   }
-  const total = signal.count
+  const walk =
+    previous?.watermark && canExtendByRowid(db, 'Riffs', 'RiffCID', previous.watermark, signal)
+      ? previous
+      : emptyRiffIndexState()
+  countWork(walk === previous ? 'riff-index:extend' : 'riff-index:rebuild')
+  await walkRiffs(db, walk, { onProgress, total: signal.count })
+  riffIndexCache.set(db, { index: walk.index, state, walk })
+  return walk.index
+}
 
-  // ONCE per database connection, held for the whole paged walk. Not per
-  // page and never per riff -- jams share one database. readAllExtraStemSlots
-  // uses .all(), so nothing here holds an open cursor across the awaits
-  // below. Free for an external OUROVEON/LORE archive, which has no such
-  // table.
-  const extras = readAllExtraStemSlots(db)
+/** The prewarm's half for the riff index, against the copy saved in ownDb
+ * (scan plan Task 2):
+ * 1. saved and current (same count and MAX(rowid); a legacy row without a
+ *    watermark: same count) -> load it;
+ * 2. saved with a watermark the live table extends (rowidWatermark.ts) ->
+ *    load it, then walk only the open riffs and the riffs past it,
+ *    persisting page by page;
+ * 3. otherwise -> start the saved copy over and walk the whole table,
+ *    persisting page by page -- so an interrupted rebuild is case 2 on the
+ *    next launch, and resumes.
+ * Saves are time-budgeted transactions (discoverIndexCache.ts), never the
+ * one 844k-row INSERT the whole-index save was. */
+async function warmRiffIndex(
+  db: Database.Database,
+  ownDb: Database.Database,
+  onProgress: ScanProgressCallback
+): Promise<Map<string, RiffIndexEntry>> {
+  const key = db.name
+  const live = readTableSignal(db, 'Riffs')
+  if (!live) return buildRiffIndex(db, undefined, onProgress)
+  const meta = readRiffIndexMeta(ownDb, key)
+  const state = newScanCacheState(live)
+  const current =
+    meta !== null &&
+    meta.count === live.count &&
+    (meta.watermark === null || meta.watermark.maxRowid === live.maxRowid)
+  const extendable =
+    !current &&
+    meta?.watermark != null &&
+    canExtendByRowid(db, 'Riffs', 'RiffCID', meta.watermark, live)
 
-  let offset = 0
-  while (offset < total) {
-    let page: RiffCandidateRow[]
-    const pageStarted = performance.now()
-    try {
-      page = db
-        .prepare(
-          `SELECT RiffCID, OwnerJamCID, BPMrnd, CreationTime,
-                  StemCID_1, StemCID_2, StemCID_3, StemCID_4,
-                  StemCID_5, StemCID_6, StemCID_7, StemCID_8
-           FROM Riffs ORDER BY RiffCID LIMIT ? OFFSET ?`
-        )
-        .all(PREWARM_CHUNK_SIZE, offset) as RiffCandidateRow[]
-    } catch {
-      break
+  let walk: RiffIndexState
+  if (current || extendable) {
+    walk = {
+      index: await loadCachedRiffIndex(ownDb, key, onProgress),
+      open: loadCachedRiffOpenRowids(ownDb, key),
+      watermark: meta!.watermark
     }
-    countWork('walk:riff-index.page')
-    countWork('ms:walk.riff-index', Math.round(performance.now() - pageStarted))
-    if (page.length === 0) break
-
-    let sinceYield = 0
-    for (const riff of page) {
-      for (const { stemCID } of mergeStemSlots(
-        columnStemSlots(riff as unknown as Record<string, unknown>),
-        extras.get(riff.RiffCID) ?? []
-      )) {
-        if (index.has(stemCID)) continue
-        index.set(stemCID, {
-          riffCID: riff.RiffCID,
-          ownerJamCID: riff.OwnerJamCID,
-          bpmRnd: riff.BPMrnd,
-          creationTime: riff.CreationTime
-        })
-      }
-      sinceYield += 1
-      if (sinceYield >= CLASSIFY_YIELD_EVERY) {
-        sinceYield = 0
-        await yieldToEventLoop()
-      }
-    }
-
-    offset += page.length
-    onProgress?.(offset, total)
-    if (page.length < PREWARM_CHUNK_SIZE) break
-    await yieldToEventLoop()
+  } else {
+    countWork('riff-index:rebuild')
+    await resetRiffIndexCache(ownDb, key)
+    walk = emptyRiffIndexState()
   }
-
-  riffIndexCache.set(db, { index, state })
-  return index
+  if (!current) {
+    if (extendable) countWork('riff-index:extend')
+    await walkRiffs(db, walk, {
+      onProgress,
+      total: live.count,
+      onPage: (page) => persistRiffIndexPage(ownDb, key, page)
+    })
+  }
+  riffIndexCache.set(db, { index: walk.index, state, walk })
+  return walk.index
 }
 
 /** Kicks off getRiffIndexForDb (above) for every unique db connection in
@@ -412,15 +389,10 @@ export async function prewarmDiscoverCandidateCaches(
       })
 
     try {
-      const riffSignal = readTableSignal(db, 'Riffs')
-      const liveRiffCount = riffSignal?.count ?? null
-      if (liveRiffCount !== null && getCachedRiffCount(ownDb, sourceDbKey) === liveRiffCount) {
-        const index = await loadCachedRiffIndex(ownDb, sourceDbKey, reportRiffIndexProgress)
-        riffIndexCache.set(db, { index, state: newScanCacheState(riffSignal) })
-      } else {
-        const index = await getRiffIndexForDb(db, reportRiffIndexProgress)
-        if (liveRiffCount !== null) saveRiffIndexCache(ownDb, sourceDbKey, index, liveRiffCount)
-      }
+      // Shared with any getRiffIndexForDb call that lands meanwhile.
+      const pending = riffIndexInFlight.get(db)
+      if (pending) await pending
+      else await shareRiffIndexBuild(db, warmRiffIndex(db, ownDb, reportRiffIndexProgress))
     } catch (err) {
       console.error('prewarmDiscoverCandidateCaches: failed to warm riff index:', err)
     }

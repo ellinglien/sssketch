@@ -29,6 +29,7 @@ import { countWork } from './workCounters'
 import { columnStemSlots, mergeStemSlots, type StemSlotRef } from '@shared/riffStemSlots'
 import { readAllExtraStemSlots } from './riffStemsExtra'
 import { readTableSignal } from './tableChangeSignal'
+import { canExtendByRowid, keyAtRowid } from './rowidWatermark'
 
 export interface StemJamPair {
   stemCID: string
@@ -161,22 +162,19 @@ interface MetaRow {
 }
 
 function riffCIDAtRowid(sourceDb: Database.Database, rowid: number): string | null {
-  const row = sourceDb.prepare(`SELECT RiffCID FROM Riffs WHERE rowid = ?`).get(rowid) as
-    { RiffCID: string } | undefined
-  return row?.RiffCID ?? null
+  return keyAtRowid(sourceDb, 'Riffs', 'RiffCID', rowid)
 }
 
-/** Whether the cached state can be extended rather than rebuilt. */
+/** Whether the cached state can be extended rather than rebuilt -- the
+ * shared watermark rule (rowidWatermark.ts, extracted from here). */
 function canExtend(sourceDb: Database.Database, meta: MetaRow, live: LiveSignal): boolean {
-  if (live.count < meta.RiffCount) return false
-  if (meta.MaxRowid === null) return meta.RiffCount === 0
-  if (riffCIDAtRowid(sourceDb, meta.MaxRowid) !== meta.WatermarkRiffCID) return false
-  const added = (
-    sourceDb.prepare(`SELECT COUNT(*) AS n FROM Riffs WHERE rowid > ?`).get(meta.MaxRowid) as {
-      n: number
-    }
-  ).n
-  return meta.RiffCount + added === live.count
+  return canExtendByRowid(
+    sourceDb,
+    'Riffs',
+    'RiffCID',
+    { count: meta.RiffCount, maxRowid: meta.MaxRowid, keyAtMax: meta.WatermarkRiffCID },
+    live
+  )
 }
 
 /** Inserts/merges `pairs` (keeping the earlier position on conflict) and

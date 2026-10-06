@@ -524,10 +524,12 @@ describe('getDiscoverCandidates', () => {
       ([sql]) => sql.includes('FROM Riffs') && !isSignalHead(sql)
     )
     expect(riffsQueries.length).toBe(2)
-    // Neither query has a WHERE clause -- a plain sequential
-    // COUNT/LIMIT-OFFSET scan, not a per-row-predicate evaluation.
-    expect(riffsQueries[0][0]).not.toMatch(/WHERE/)
-    expect(riffsQueries[1][0]).not.toMatch(/WHERE/)
+    // No per-row predicate -- a plain sequential scan: the COUNT, and the
+    // walk's rowid range (`WHERE rowid > ?`, scan plan Task 2), which is the
+    // table's own order, not a filter evaluated on every row.
+    const withoutRowidRange = (sql: string): string => sql.replace(/WHERE rowid > \?/, '')
+    expect(withoutRowidRange(riffsQueries[0][0])).not.toMatch(/WHERE/)
+    expect(withoutRowidRange(riffsQueries[1][0])).not.toMatch(/WHERE/)
   })
 
   // Direct request, 2026-09-16 ("can we take a good look at the things we
@@ -2319,15 +2321,17 @@ describe('background efficiency B3: change detection instead of a TTL', () => {
     expect(spy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))).toEqual([])
   })
 
-  it('rebuilds the riff index after an insert, on the next check', async () => {
+  it('picks up an insert on the next check -- by extending the index, not rebuilding it', async () => {
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 128, ['s1'])
     const first = await getRiffIndexForDb(own)
     seedRiff(own, 'r2', 'jam1', 128, ['s2'])
     advance(31_000)
     const second = await getRiffIndexForDb(own)
-    expect(second).not.toBe(first)
+    // Extended in place from its rowid watermark (scan plan Task 2).
+    expect(second).toBe(first)
     expect(second.get('s2')?.riffCID).toBe('r2')
+    expect(second.get('s1')?.riffCID).toBe('r1')
   })
 
   it('rebuilds after a delete (count moved, max rowid did not)', async () => {
@@ -2842,5 +2846,342 @@ describe('getInstrumentMaskLookup', () => {
     seedStem(own, 's1', 'jam1', { instrument: 2 })
     await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], own)
     expect(getInstrumentMaskLookup(own)).toBeNull()
+  })
+})
+
+// Scan plan b21ea5a2 Task 2 (audit 5A): the riff index walks Riffs by rowid
+// (sequential on the USB archive: 15-70 ms per 2,000-row page cold, against
+// 0.8-1.2 s for a RiffCID-ordered keyset page and multi-second deep OFFSET
+// pages), keeps the smallest RiffCID per stem (the old RiffCID-order walk's
+// first-seen rule, exactly), persists page by page, and extends from a rowid
+// watermark instead of rebuilding when the count moves.
+describe('riff index walk and extension (scan plan Task 2)', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'riff-walk-'))
+    vi.mocked(countWork).mockClear()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  const ARCHIVE_DDL = `
+    CREATE TABLE Riffs (
+      RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER, BPMrnd REAL,
+      StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
+      StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY (RiffCID)
+    );
+    CREATE TABLE Stems (
+      StemCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, Instrument INTEGER,
+      CreatorUserName TEXT, PRIMARY KEY (StemCID)
+    );`
+
+  function archivePath(name = 'archive.db'): string {
+    const path = join(dir, name)
+    const db = new Database(path)
+    db.exec(ARCHIVE_DDL)
+    db.close()
+    return path
+  }
+
+  /** Deterministic ids that land all over RiffCID order. */
+  function prng(seed: number): () => number {
+    let x = seed
+    return () => {
+      x = (x * 1103515245 + 12345) % 2147483648
+      return x / 2147483648
+    }
+  }
+
+  function seedRiffs(path: string, n: number, seed: number, prefix = 'r'): void {
+    const db = new Database(path)
+    const rand = prng(seed)
+    const insert = db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, StemCID_1, StemCID_2, StemCID_3)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    db.transaction(() => {
+      for (let i = 0; i < n; i++) {
+        const riffCID = `${Math.floor(rand() * 1e9)
+          .toString(16)
+          .padStart(8, '0')}-${prefix}${i}`
+        // Stems shared across riffs: the smallest RiffCID must win.
+        insert.run(
+          riffCID,
+          `jam${i % 7}`,
+          i,
+          100 + (i % 40),
+          `${prefix}s${i}`,
+          `shared${Math.floor(rand() * 500)}`,
+          i % 3 === 0 ? null : `${prefix}t${i % 900}`
+        )
+      }
+    })()
+    db.close()
+  }
+
+  /** The index the old RiffCID-ordered walk built: first seen wins. */
+  function oracle(
+    path: string
+  ): Map<
+    string,
+    { riffCID: string; ownerJamCID: string; bpmRnd: number; creationTime: number | null }
+  > {
+    const db = new Database(path, { readonly: true })
+    const rows = db.prepare(`SELECT * FROM Riffs ORDER BY RiffCID`).all() as Record<
+      string,
+      string | number | null
+    >[]
+    const index = new Map()
+    for (const r of rows) {
+      for (let s = 1; s <= 8; s++) {
+        const stem = r[`StemCID_${s}`] as string | null
+        if (!stem || index.has(stem)) continue
+        index.set(stem, {
+          riffCID: r.RiffCID,
+          ownerJamCID: r.OwnerJamCID,
+          bpmRnd: r.BPMrnd,
+          creationTime: r.CreationTime
+        })
+      }
+    }
+    db.close()
+    return index
+  }
+
+  /** A fresh connection: a new launch, as far as the in-memory caches go. */
+  function launch(path: string): Database.Database {
+    return new Database(path, { readonly: true })
+  }
+
+  async function prewarm(src: Database.Database, own: Database.Database): Promise<void> {
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own)
+  }
+
+  function walkedRiffs(): number {
+    return vi
+      .mocked(countWork)
+      .mock.calls.filter(([kind]) => kind === 'walk:riff-index.rows')
+      .reduce((sum, [, n]) => sum + (n ?? 1), 0)
+  }
+
+  async function persisted(own: Database.Database, path: string): Promise<Map<string, unknown>> {
+    const { loadCachedRiffIndex } = await import('./discoverIndexCache')
+    return loadCachedRiffIndex(own, path)
+  }
+
+  it('walks without OFFSET, and the index equals the old RiffCID-ordered read', async () => {
+    const path = archivePath()
+    seedRiffs(path, 12_345, 1)
+    const src = launch(path)
+    const own = freshDb()
+    const spy = vi.spyOn(src, 'prepare')
+    await prewarm(src, own)
+    expect(spy.mock.calls.some(([sql]) => /OFFSET/i.test(sql))).toBe(false)
+    const expected = oracle(path)
+    expect(await getRiffIndexForDb(src)).toEqual(expected)
+    expect(await persisted(own, path)).toEqual(expected)
+    expect(walkedRiffs()).toBe(12_345)
+  })
+
+  it('an in-session rebuild (no prewarm) gives the same index', async () => {
+    const path = archivePath()
+    seedRiffs(path, 3_000, 2)
+    expect(await getRiffIndexForDb(launch(path))).toEqual(oracle(path))
+  })
+
+  it('extends: the next launch reads only the riffs past the watermark', async () => {
+    const path = archivePath()
+    seedRiffs(path, 5_000, 3)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    seedRiffs(path, 30, 4, 'n') // new riffs, some sharing stems with older ones
+    vi.mocked(countWork).mockClear()
+
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(walkedRiffs()).toBe(30)
+    const expected = oracle(path)
+    expect(await getRiffIndexForDb(src)).toEqual(expected)
+    expect(await persisted(own, path)).toEqual(expected)
+  })
+
+  it('a new riff with an earlier RiffCID takes over a stem it shares', async () => {
+    const path = archivePath()
+    const w = new Database(path)
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('m', 'j1', 120, 'x')`
+    ).run()
+    w.close()
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    const w2 = new Database(path)
+    w2.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('a', 'j2', 90, 'x')`
+    ).run()
+    w2.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('z', 'j3', 80, 'x')`
+    ).run()
+    w2.close()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect((await getRiffIndexForDb(src)).get('x')?.riffCID).toBe('a')
+    expect(((await persisted(own, path)).get('x') as { riffCID: string }).riffCID).toBe('a')
+  })
+
+  it('a skeleton riff filled in place between launches is picked up (open riffs)', async () => {
+    const path = archivePath()
+    seedRiffs(path, 100, 5)
+    const w = new Database(path)
+    w.prepare(`INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd) VALUES ('skel', 'j1', 120)`).run()
+    w.close()
+    const own = freshDb()
+    await prewarm(launch(path), own)
+
+    const w2 = new Database(path)
+    w2.prepare(`UPDATE Riffs SET StemCID_1 = 'filled' WHERE RiffCID = 'skel'`).run()
+    w2.prepare(`INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd) VALUES ('later', 'j1', 1)`).run()
+    w2.close()
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect((await getRiffIndexForDb(src)).get('filled')?.riffCID).toBe('skel')
+    expect(await getRiffIndexForDb(src)).toEqual(oracle(path))
+    expect(walkedRiffs()).toBe(2) // the open riff, re-read, and the new one
+  })
+
+  it('a delete rebuilds', async () => {
+    const path = archivePath()
+    seedRiffs(path, 500, 6)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    const w = new Database(path)
+    w.prepare(`DELETE FROM Riffs WHERE rowid = 10`).run()
+    w.close()
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(walkedRiffs()).toBe(499)
+    expect(await getRiffIndexForDb(src)).toEqual(oracle(path))
+    expect(await persisted(own, path)).toEqual(oracle(path))
+  })
+
+  it('a different RiffCID at the watermark rowid (a replaced file) rebuilds', async () => {
+    const path = archivePath()
+    seedRiffs(path, 300, 7)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    rmSync(path)
+    archivePath()
+    seedRiffs(path, 320, 8, 'other')
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(walkedRiffs()).toBe(320)
+    expect(await persisted(own, path)).toEqual(oracle(path))
+  })
+
+  it('a kept group appends rows and leaves the watermark alone; the next launch extends over it', async () => {
+    const { appendRiffIndexRows, readRiffIndexMeta } = await import('./discoverIndexCache')
+    const path = archivePath()
+    seedRiffs(path, 200, 9)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    const before = readRiffIndexMeta(own, path)
+    const w = new Database(path)
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('kept', 'discovered', 120, 'k1')`
+    ).run()
+    w.close()
+    appendRiffIndexRows(
+      own,
+      path,
+      [
+        {
+          stemCID: 'k1',
+          riffCID: 'kept',
+          ownerJamCID: 'discovered',
+          bpmRnd: 120,
+          creationTime: null
+        }
+      ],
+      1
+    )
+    expect(readRiffIndexMeta(own, path)).toEqual(before)
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(walkedRiffs()).toBe(1)
+    expect(await persisted(own, path)).toEqual(oracle(path))
+    const n = (
+      own
+        .prepare(`SELECT COUNT(*) AS n FROM DiscoverRiffIndexCache WHERE SourceDbKey = ?`)
+        .get(path) as {
+        n: number
+      }
+    ).n
+    expect(n).toBe(oracle(path).size)
+  })
+
+  it('a legacy meta row (no watermark) loads while counts match, rebuilds once when they move, then extends', async () => {
+    const path = archivePath()
+    seedRiffs(path, 50, 10)
+    const own = freshDb()
+    saveRiffIndexCache(own, path, oracle(path), 50)
+    vi.mocked(countWork).mockClear()
+    const first = launch(path)
+    await prewarm(first, own)
+    expect(walkedRiffs()).toBe(0)
+    expect(await getRiffIndexForDb(first)).toEqual(oracle(path))
+
+    seedRiffs(path, 1, 11, 'a')
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedRiffs()).toBe(51) // once, in full
+
+    seedRiffs(path, 1, 12, 'b')
+    vi.mocked(countWork).mockClear()
+    const third = launch(path)
+    await prewarm(third, own)
+    expect(walkedRiffs()).toBe(1)
+    expect(await getRiffIndexForDb(third)).toEqual(oracle(path))
+  })
+
+  it('an interrupted rebuild resumes where it stopped on the next launch', async () => {
+    const indexCache = await import('./discoverIndexCache')
+    const path = archivePath()
+    seedRiffs(path, 5_000, 13)
+    const own = freshDb()
+    const real = indexCache.persistRiffIndexPage
+    const persist = vi
+      .spyOn(indexCache, 'persistRiffIndexPage')
+      .mockImplementationOnce(real)
+      .mockRejectedValueOnce(new Error('quit mid-walk'))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    await prewarm(launch(path), own)
+    persist.mockRestore()
+    errors.mockRestore()
+
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(walkedRiffs()).toBe(5_000 - 2_000) // the first page was saved
+    expect(await getRiffIndexForDb(src)).toEqual(oracle(path))
+    expect(await persisted(own, path)).toEqual(oracle(path))
+  })
+
+  it('in session, a stale index extends in memory rather than rewalking', async () => {
+    const path = archivePath()
+    seedRiffs(path, 2_500, 14)
+    const own = freshDb()
+    const src = launch(path)
+    await prewarm(src, own)
+    seedRiffs(path, 12, 15, 'late')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 60_000)
+    vi.mocked(countWork).mockClear()
+    expect(await getRiffIndexForDb(src)).toEqual(oracle(path))
+    expect(walkedRiffs()).toBe(12)
   })
 })
