@@ -420,4 +420,50 @@ describe('stemCategoriesBackfill', () => {
     backfillStemCategoriesFromProjectLibrary(db)
     expect(loadCategoryCentroidStore().buses.bass?.count).toBe(1)
   })
+
+  // Review of b4d9924a, minor 7: a sample is recorded as trained only once
+  // the store holding it is on disk.
+  it('a failed save records nothing, and its entries stay waiting until a save succeeds', async () => {
+    const db = freshDb()
+    analysedStem(db, 'cid-1')
+    const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+    const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+    const entries = [{ path: '/lib/cid-1', busId: 'drums' as const }]
+    // The temp file cannot be written: a directory stands in its place.
+    const blocker = join(userDataDir, 'busCentroids.json.tmp')
+    mkdirSync(blocker)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const failed = recordStemCategoryBus(db, entries, 'tidyup', null, 1000)
+    errors.mockRestore()
+    expect(failed.waiting).toEqual(entries)
+    expect(loadCategoryCentroidStore().buses.drums?.count).toBeUndefined()
+
+    rmSync(blocker, { recursive: true })
+    const saved = recordStemCategoryBus(db, entries, 'tidyup', null, 2000)
+    expect(saved.waiting).toEqual([])
+    expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+  })
+
+  // Review of b4d9924a, minor 7: a stem from an external LORE archive has its
+  // Stems row there, and its features in the own db.
+  it('a stem found only in the LORE db is written and trained through recordStemCategoryBus', async () => {
+    const db = freshDb()
+    const loreDb = freshDb()
+    loreDb.prepare(`INSERT INTO Stems (StemCID) VALUES ('cid-lore')`).run()
+    db.prepare(
+      `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 0)`
+    ).run('cid-lore', JSON.stringify(FEATURES))
+    const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+    const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+    const { getStemCategory } = await import('./stemCategoriesStore')
+    const entries = [{ path: '/lore-archive/cid-lore', busId: 'bass' as const }]
+    const first = recordStemCategoryBus(db, entries, 'tidyup', null, 1000, [loreDb])
+    expect(first).toEqual({ unresolved: [], waiting: [] })
+    expect(getStemCategory(db, 'cid-lore')?.busId).toBe('bass')
+    expect(loadCategoryCentroidStore().buses.bass?.count).toBe(1)
+    // Without the LORE db the stem does not resolve, and nothing is written.
+    expect(recordStemCategoryBus(db, entries, 'tidyup', null, 2000).unresolved).toEqual(entries)
+    recordStemCategoryBus(db, entries, 'tidyup', null, 3000, [loreDb])
+    expect(loadCategoryCentroidStore().buses.bass?.count).toBe(1)
+  })
 })
