@@ -2,6 +2,7 @@ import { peaksFromChannel, zcrFromChannel } from '@shared/visuals'
 import { countWork } from '../perf/workCounters'
 import { queueStemAnalysisWrite } from './analysisWriteQueue'
 import { decodeStemFile } from './decodeStemFile'
+import { createPrimedEntries } from './primedEntries'
 
 export interface WaveformAnalysis {
   peaks: number[]
@@ -35,6 +36,16 @@ const settled = new Map<string, WaveformAnalysis>()
 // persisted or adopted analysis never saw the buffer. LoopFolderPane reads
 // it to measure linked loops main cannot (non-WAV).
 const durations = new Map<string, number>()
+/** Entries the background scan adopted (adoptWaveformAnalysis) and nobody
+ * has asked for yet: bounded to the newest PRIMED_ENTRY_CAP (primedEntries.ts),
+ * so a long library scan doesn't keep every analysed stem's waveform for the
+ * session. An evicted one asked for later is read back from its persisted
+ * row (peaks and brightness together, as one entry) or decoded, once. */
+const adopted = createPrimedEntries((path) => {
+  cache.delete(path)
+  settled.delete(path)
+  durations.delete(path)
+})
 let sharedContext: AudioContext | null = null
 
 function getContext(): AudioContext {
@@ -44,7 +55,10 @@ function getContext(): AudioContext {
 
 function getAnalysis(path: string): Promise<WaveformAnalysis> {
   const cached = cache.get(path)
-  if (cached) return cached
+  if (cached) {
+    adopted.promote(path)
+    return cached
+  }
 
   const promise = (async () => {
     try {
@@ -113,8 +127,8 @@ export function waveformFromBuffer(audioBuffer: AudioBuffer): WaveformAnalysis {
  * this path's entry, so getPeaks/getBrightness/peek* share it -- including
  * while it's still in flight, so an interactive call mid-analysis never
  * starts a second decode. Returns the installed promise, or null (nothing
- * installed) when the path already has an entry. Same eviction-on-
- * rejection as getAnalysis; `persist` also writes the result to the
+ * installed) when the path already has an entry. Bounded: see `adopted`.
+ * Same eviction-on-rejection as getAnalysis; `persist` also writes the result to the
  * persisted cache on success (same row as a fresh decode here, via the
  * ambient scans' batched write queue). */
 export function adoptWaveformAnalysis(
@@ -125,7 +139,9 @@ export function adoptWaveformAnalysis(
   if (cache.has(path)) return null
   const promise = analysis.then(
     (result) => {
-      settled.set(path, result)
+      // Only while still the entry: one evicted mid-flight (the cap, or a
+      // re-bake's evictWaveform) must not leave a peek behind.
+      if (cache.get(path) === promise) settled.set(path, result)
       // Batched with the stem's other writes (analysisWriteQueue.ts, B7).
       if (persist) {
         queueStemAnalysisWrite(path, {
@@ -135,11 +151,15 @@ export function adoptWaveformAnalysis(
       return result
     },
     (err: unknown) => {
-      if (cache.get(path) === promise) cache.delete(path)
+      if (cache.get(path) === promise) {
+        cache.delete(path)
+        adopted.forget(path)
+      }
       throw err
     }
   )
   cache.set(path, promise)
+  adopted.add(path)
   return promise
 }
 
@@ -152,6 +172,7 @@ export function adoptWaveformAnalysis(
  * baked path's basename is not a StemCID, so stemPeaksCacheStore.ts never
  * stored a row for it in the first place. */
 export function evictWaveform(path: string): void {
+  adopted.forget(path)
   cache.delete(path)
   settled.delete(path)
   durations.delete(path)

@@ -205,4 +205,64 @@ describe('peakCache', () => {
       expect(await getDecodedDuration('/loops/a.wav')).toBe(2)
     })
   })
+
+  describe('scan-adopted entries (bounded like the other primed caches)', () => {
+    const analysis = (): { peaks: number[]; brightness: number[] } => ({
+      peaks: [0.5],
+      brightness: [0.1]
+    })
+
+    it('keeps at most PRIMED_ENTRY_CAP adopted entries; requested ones survive; an evicted one is read back once', async () => {
+      readAudioFileMock.mockResolvedValue(fakeBytes())
+      decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+      const { adoptWaveformAnalysis, getPeaks, getBrightness, hasWaveformEntry, peekPeaks } =
+        await import('./peakCache')
+      const { PRIMED_ENTRY_CAP } = await import('./primedEntries')
+
+      // a screen asks for an adopted path (promoted), and decodes another itself
+      const requested = analysis()
+      await adoptWaveformAnalysis('/requested', Promise.resolve(requested), { persist: false })
+      expect(await getPeaks('/requested')).toBe(requested.peaks)
+      await getPeaks('/decoded')
+      expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+
+      for (let i = 0; i <= PRIMED_ENTRY_CAP; i++) {
+        await adoptWaveformAnalysis(`/a${i}`, Promise.resolve(analysis()), { persist: false })
+      }
+
+      // the oldest adopted path is gone, settled peek included; the next one is kept
+      expect(hasWaveformEntry('/a0')).toBe(false)
+      expect(peekPeaks('/a0')).toBeNull()
+      expect(hasWaveformEntry('/a1')).toBe(true)
+      expect(hasWaveformEntry('/requested')).toBe(true)
+      expect(hasWaveformEntry('/decoded')).toBe(true)
+      expect(await getPeaks('/requested')).toBe(requested.peaks)
+      expect(getStemPeaksCacheMock).toHaveBeenCalledTimes(1) // /decoded's own miss
+
+      // re-asked: the persisted row is read back once, peaks and brightness together
+      getStemPeaksCacheMock.mockResolvedValue({ peaks: [0.7], brightness: [0.3] })
+      const [peaks, brightness] = await Promise.all([getPeaks('/a0'), getBrightness('/a0')])
+      expect(peaks).toEqual([0.7])
+      expect(brightness).toEqual([0.3])
+      await getPeaks('/a0')
+      expect(getStemPeaksCacheMock).toHaveBeenCalledTimes(2)
+      expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('an adoption evicted while still in flight leaves no settled peek behind', async () => {
+      const { adoptWaveformAnalysis, evictWaveform, peekPeaks } = await import('./peakCache')
+      let resolve!: (a: { peaks: number[]; brightness: number[] }) => void
+      const pending = adoptWaveformAnalysis(
+        '/late',
+        new Promise((r) => {
+          resolve = r
+        }),
+        { persist: false }
+      )
+      evictWaveform('/late')
+      resolve(analysis())
+      await pending
+      expect(peekPeaks('/late')).toBeNull()
+    })
+  })
 })
