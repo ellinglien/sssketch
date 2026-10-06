@@ -69,13 +69,36 @@ export interface StemBusUpsertResult {
   unresolved: StemBusCategoryEntry[]
 }
 
-/** Column-scoped: only ever touches BusId/Source/SourceProject/UpdatedAt,
- * never ArrangeRole/DrumSubRole -- a bus write must never clobber an
- * independently-confirmed role on the same row. The `WHERE
- * excluded.UpdatedAt >= StemCategories.UpdatedAt` guard makes this safe to
- * call in any order across multiple sources (forward capture, backfill)
- * without needing to sort by recency first. Training is not decided here:
- * see recordStemCategoryBus (categoryCentroidTraining.ts). */
+// StemCategories.BusUpdatedAt: when the row's bus was written (review of
+// b4d9924a, minor 4). Lazy, like StemBusTrained: a nullable column added on
+// the first bus write, so an existing db (and a test's own table) needs no
+// migration. NULL on every row written before it existed.
+const busStampReady = new WeakSet<Database.Database>()
+
+function ensureBusStampColumn(db: Database.Database): void {
+  if (busStampReady.has(db)) return
+  const columns = db.prepare(`PRAGMA table_info(StemCategories)`).all() as { name: string }[]
+  if (!columns.some((column) => column.name === 'BusUpdatedAt')) {
+    db.exec(`ALTER TABLE StemCategories ADD COLUMN BusUpdatedAt REAL`)
+  }
+  if (!db.inTransaction) busStampReady.add(db)
+}
+
+/** Column-scoped: only ever touches BusId/BusUpdatedAt/Source/SourceProject/
+ * UpdatedAt, never ArrangeRole/DrumSubRole -- a bus write must never clobber
+ * an independently-confirmed role on the same row. The bus is guarded by its
+ * own stamp, BusUpdatedAt (`>=`, so of two writes stamped the same instant
+ * the later stands), which makes this safe to call in any order across
+ * multiple sources (forward capture, backfill) without needing to sort by
+ * recency first. UpdatedAt stays the row's newest write of either kind, and
+ * Source/SourceProject name that write: a bus landing under an older stamp
+ * than a later role leaves them to the role. Before BusUpdatedAt existed one
+ * UpdatedAt guarded both, so a role confirmed after a project was saved
+ * refused that project's bus for good (the backfill then stamped the project
+ * complete). A row from then (BusUpdatedAt NULL) is still guarded by its
+ * UpdatedAt if it holds a bus, which may be that new; a row with no bus takes
+ * any. Training is not decided here: see recordStemCategoryBus
+ * (categoryCentroidTraining.ts). */
 export function upsertStemCategoryBus(
   db: Database.Database,
   entries: StemBusCategoryEntry[],
@@ -84,15 +107,24 @@ export function upsertStemCategoryBus(
   updatedAt: number,
   extraCandidateDbs: Database.Database[] = []
 ): StemBusUpsertResult {
+  ensureBusStampColumn(db)
+  // Every right-hand side reads the row as it was before this write.
   const stmt = db.prepare(
-    `INSERT INTO StemCategories (StemCID, BusId, Source, SourceProject, UpdatedAt)
-     VALUES (@stemCID, @busId, @source, @sourceProject, @updatedAt)
+    `INSERT INTO StemCategories (StemCID, BusId, BusUpdatedAt, Source, SourceProject, UpdatedAt)
+     VALUES (@stemCID, @busId, @updatedAt, @source, @sourceProject, @updatedAt)
      ON CONFLICT(StemCID) DO UPDATE SET
        BusId = excluded.BusId,
-       Source = excluded.Source,
-       SourceProject = excluded.SourceProject,
-       UpdatedAt = excluded.UpdatedAt
-     WHERE excluded.UpdatedAt >= StemCategories.UpdatedAt`
+       BusUpdatedAt = excluded.BusUpdatedAt,
+       Source = CASE WHEN excluded.UpdatedAt >= StemCategories.UpdatedAt
+         THEN excluded.Source ELSE StemCategories.Source END,
+       SourceProject = CASE WHEN excluded.UpdatedAt >= StemCategories.UpdatedAt
+         THEN excluded.SourceProject ELSE StemCategories.SourceProject END,
+       UpdatedAt = MAX(excluded.UpdatedAt, StemCategories.UpdatedAt)
+     WHERE excluded.BusUpdatedAt >= COALESCE(
+       StemCategories.BusUpdatedAt,
+       CASE WHEN StemCategories.BusId IS NULL THEN excluded.BusUpdatedAt
+         ELSE StemCategories.UpdatedAt END
+     )`
   )
   const result: StemBusUpsertResult = { resolved: [], unresolved: [] }
   const txn = db.transaction((rows: StemBusCategoryEntry[]) => {

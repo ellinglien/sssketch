@@ -63,7 +63,9 @@ export interface StemBusRecordResult {
  * stem assigned before it had features still trains, once, the first time
  * the assignment is written after they exist (the backfill keeps parsing
  * such a project until then: `waiting`). An entry trains only while the row
- * holds its bus, so a write the UpdatedAt guard refused teaches nothing. */
+ * holds its bus, so a write the guard refused teaches nothing: the row holds
+ * a newer bus of its own (BusUpdatedAt, upsertStemCategoryBus), so it is
+ * complete, not waiting. */
 export function recordStemCategoryBus(
   db: Database.Database,
   entries: StemBusCategoryEntry[],
@@ -94,7 +96,7 @@ export function recordStemCategoryBus(
     if (seen.has(key)) continue // one batch naming the same pair twice
     seen.add(key)
     const row = busOf.get(stemCID) as { BusId: string | null } | undefined
-    if (row?.BusId !== entry.busId) continue // refused by the guard
+    if (row?.BusId !== entry.busId) continue // refused: a newer bus stands
     if (trained.get(stemCID, entry.busId)) continue
     untrained.push(entry)
     stemCIDOf.set(entry, stemCID)

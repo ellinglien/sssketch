@@ -152,6 +152,66 @@ describe('stemCategoriesStore', () => {
       expect(row?.arrangeRole).toBe('lead')
       expect(row?.busId).toBe('drums')
     })
+
+    // Review of b4d9924a, minor 4: the bus and role columns shared one
+    // UpdatedAt, so a role confirmed after a project was saved refused that
+    // project's bus (older than the role, though nothing newer said anything
+    // about the bus), and the bus never landed.
+    it('a newer role write does not refuse an older bus write: the bus has a stamp of its own', async () => {
+      const db = freshDb()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
+      const { upsertStemCategoryBus, upsertStemCategoryRole, getStemCategory } =
+        await import('./stemCategoriesStore')
+      upsertStemCategoryRole(db, [{ path: '/x/cid-1', arrangeRole: 'lead' }], 'tidyup', null, 2000)
+      upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'drums' }], 'backfill', '/p', 1000)
+      expect(getStemCategory(db, 'cid-1')).toMatchObject({
+        busId: 'drums',
+        arrangeRole: 'lead',
+        // The row's newest write is still the role's.
+        source: 'tidyup',
+        sourceProject: null,
+        updatedAt: 2000
+      })
+      // A bus between the row's own bus and the later role still lands...
+      upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'bass' }], 'backfill', '/p', 1500)
+      expect(getStemCategory(db, 'cid-1')?.busId).toBe('bass')
+      // ...and one older than the row's own bus still does not.
+      upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'lead' }], 'backfill', '/p', 1200)
+      expect(getStemCategory(db, 'cid-1')?.busId).toBe('bass')
+      // The newest write of all sets the row's source and stamp, as before.
+      upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'lead' }], 'tidyup', '/q', 3000)
+      expect(getStemCategory(db, 'cid-1')).toMatchObject({
+        busId: 'lead',
+        arrangeRole: 'lead',
+        source: 'tidyup',
+        sourceProject: '/q',
+        updatedAt: 3000
+      })
+    })
+
+    // A row written before the bus had its own stamp: its bus may be as new
+    // as its UpdatedAt, so that still guards it (the old rule).
+    it('a row from before the bus stamp: its UpdatedAt guards its bus, and a role-only row takes any bus', async () => {
+      const db = freshDb()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES ('cid-1'), ('cid-2')`).run()
+      db.prepare(
+        `INSERT INTO StemCategories (StemCID, ArrangeRole, BusId, Source, UpdatedAt)
+         VALUES ('cid-1', 'lead', 'drums', 'tidyup', 2000), ('cid-2', 'lead', NULL, 'tidyup', 2000)`
+      ).run()
+      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      upsertStemCategoryBus(
+        db,
+        [
+          { path: '/x/cid-1', busId: 'bass' },
+          { path: '/x/cid-2', busId: 'bass' }
+        ],
+        'backfill',
+        '/p',
+        1000
+      )
+      expect(getStemCategory(db, 'cid-1')?.busId).toBe('drums')
+      expect(getStemCategory(db, 'cid-2')?.busId).toBe('bass')
+    })
   })
 
   describe('upsertStemCategoryRole', () => {

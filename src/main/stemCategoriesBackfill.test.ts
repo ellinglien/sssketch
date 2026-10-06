@@ -466,4 +466,30 @@ describe('stemCategoriesBackfill', () => {
     recordStemCategoryBus(db, entries, 'tidyup', null, 3000, [loreDb])
     expect(loadCategoryCentroidStore().buses.bass?.count).toBe(1)
   })
+
+  // Review of b4d9924a, minor 4: a role confirmed after the project was saved
+  // used to refuse the project's bus (one shared UpdatedAt), and the project
+  // was stamped complete, so that bus never landed.
+  it("a role confirmed after the project was saved does not keep the project's bus out", async () => {
+    const db = freshDb()
+    analysedStem(db, 'cid-1')
+    writeSketch('older-than-the-role', {
+      busOf: { 'group-a:1': 'drums' },
+      rifffs: { 'group-a': { groupId: 'group-a', stems: [{ slot: 1, path: '/lib/cid-1' }] } }
+    })
+    const { upsertStemCategoryRole, getStemCategory } = await import('./stemCategoriesStore')
+    const { backfillStemCategoriesFromProjectLibrary } = await import('./stemCategoriesBackfill')
+    const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+    upsertStemCategoryRole(
+      db,
+      [{ path: '/lib/cid-1', arrangeRole: 'lead' }],
+      'tidyup',
+      null,
+      Date.now() / 1000 + 60
+    )
+    backfillStemCategoriesFromProjectLibrary(db)
+    expect(getStemCategory(db, 'cid-1')).toMatchObject({ busId: 'drums', arrangeRole: 'lead' })
+    expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+    expect(backfillStemCategoriesFromProjectLibrary(db).unchangedProjects).toBe(1)
+  })
 })
