@@ -672,3 +672,26 @@ export function radioRestVisual(r: {
     points: [...points, { at: r.until, value: 0 }, { at: r.until, value: 1 }]
   }
 }
+
+/** A row's rest as it should be logged this tick (sssketch's tick calls it every tick for each row
+ * resting or with a rest decided): a rest decided but not landed is placed on the coming wrap,
+ * again every tick until it lands, so one that slips a wrap is never drawn silent through a lap the
+ * row still plays; a landed rest logged from by `now` and still in force (open, or closed later
+ * than `now`) is left as it is (its way in, a close to come); one logged to start after `now` (it
+ * landed ahead of where it was placed), one whose close has passed with the row still resting (its
+ * return slipped a wrap), or none logged, is silent from `now`. Only `key`'s visuals change. */
+export function placeRadioRestVisual(
+  visuals: readonly RadioMoveVisual[],
+  r: { rowId: string; key: string; landed: boolean; now: number; wrapAt: number }
+): RadioMoveVisual[] {
+  const mine = visuals.filter((v) => v.key === r.key)
+  const started = mine.every((v) => v.points.length > 0 && v.points[0].at <= r.now)
+  const inForce = mine.some(
+    (v) => v.holds === true || (v.points.length > 0 && v.points[v.points.length - 1].at > r.now)
+  )
+  if (r.landed && mine.length > 0 && started && inForce) return [...visuals]
+  return [
+    ...dropRadioMoveVisuals(visuals, r.key),
+    radioRestVisual({ rowId: r.rowId, from: r.landed ? r.now : r.wrapAt, until: null, key: r.key })
+  ]
+}

@@ -8,6 +8,7 @@ import {
   RADIO_VISUAL_STEADY_CUT,
   closeRadioRestVisuals,
   dropRadioMoveVisuals,
+  placeRadioRestVisual,
   pruneRadioMoveVisuals,
   radioGestureVisuals,
   radioMoveVisualsSounding,
@@ -878,5 +879,62 @@ describe('a row ducks once at a wrap (review of 1a060a2f, minor 4)', () => {
       ]
     }
     expect(at([...v, ...duck('c', 64), drop], 'drums', 64).level).toBeCloseTo(0.225, 9)
+  })
+})
+
+describe('a rest placed where it lands, each tick until it does (review of 1a060a2f, minor 5)', () => {
+  const other = radioRestVisual({ rowId: 'pad', from: 8, until: null, key: 'rest@pad' })
+  const place = (
+    v: readonly RadioMoveVisual[],
+    landed: boolean,
+    now: number,
+    wrapAt: number
+  ): RadioMoveVisual[] =>
+    placeRadioRestVisual(v, { rowId: 'drums', key: 'rest@drums', landed, now, wrapAt })
+
+  it('a decided rest is placed on the coming wrap; the row is heard until it', () => {
+    const v = place([other], false, 12, 16)
+    expect(at(v, 'drums', 15.9).level).toBe(1)
+    expect(at(v, 'drums', 16).level).toBe(0)
+    expect(at(v, 'pad', 12).level).toBe(0) // another row's rest untouched
+  })
+
+  it('one that slips a wrap is placed again on the next: heard through the lap it did not land on', () => {
+    let v = place([other], false, 12, 16)
+    v = place(v, false, 16.05, 24) // the wrap at 16 passed, the rest still decided
+    expect(at(v, 'drums', 16.5).level).toBe(1)
+    expect(at(v, 'drums', 23.9).level).toBe(1)
+    expect(at(v, 'drums', 24).level).toBe(0)
+    expect(v.filter((x) => x.key === 'rest@drums')).toHaveLength(1)
+  })
+
+  it('landed where it was placed: kept as it is (its fade, a close)', () => {
+    const placed = place([other], false, 12, 16)
+    expect(place(placed, true, 16.05, 24)).toEqual(placed)
+    const closed = closeRadioRestVisuals(placed, 'drums', 32)
+    expect(place(closed, true, 20, 24)).toEqual(closed)
+  })
+
+  it('landed ahead of where it was placed (a line inside the lap): silent from now', () => {
+    const v = place(place([other], false, 12, 16), true, 13, 16)
+    expect(at(v, 'drums', 13).level).toBe(0)
+    expect(at(v, 'drums', 15).level).toBe(0)
+    expect(v.filter((x) => x.key === 'rest@drums')).toHaveLength(1)
+  })
+
+  it('a close passed while the row still rests (its return slipped): silent again from now', () => {
+    const closed = closeRadioRestVisuals(place([other], true, 13, 16), 'drums', 24)
+    expect(place(closed, true, 23, 24)).toEqual(closed)
+    const v = place(closed, true, 24.02, 32)
+    expect(at(v, 'drums', 24.02).level).toBe(0)
+    expect(at(v, 'drums', 31.9).level).toBe(0)
+    expect(v.filter((x) => x.key === 'rest@drums')).toHaveLength(1)
+  })
+
+  it('landed with none logged: silent from now', () => {
+    const v = place([other], true, 13, 16)
+    expect(at(v, 'drums', 12.9).level).toBe(1)
+    expect(at(v, 'drums', 13).level).toBe(0)
+    expect(at(v, 'drums', 40).level).toBe(0)
   })
 })

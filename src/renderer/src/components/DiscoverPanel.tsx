@@ -411,10 +411,10 @@ import {
   RADIO_VISUAL_FADE_SEC,
   closeRadioRestVisuals,
   dropRadioMoveVisuals,
+  placeRadioRestVisual,
   pruneRadioMoveVisuals,
   radioGestureVisuals,
   radioMoveVisualsSounding,
-  radioRestVisual,
   radioRowVisualAt,
   radioRowVisualVars,
   radioThrowVisual,
@@ -6167,8 +6167,9 @@ export function DiscoverPanel({
    *     late rows silenced through its gap as they are now;
    *   - the armed throw's echo, once, from where its send opens;
    *   - each rest (a row resting for radio, or a decided rest not landed yet: from the top it lands
-   *     on), open until a return is decided for it (closed on the top it lands on), opened again if
-   *     that return is taken back.
+   *     on, placed again every tick until it lands: placeRadioRestVisual), open until a return
+   *     is decided for it (closed on the top it lands on, and again on the next if it slips),
+   *     opened again if that return is taken back.
    * A key no longer armed drops its visuals, even mid-move (its curve has left the project), but an
    * echo already ringing rings on (pruneRadioMoveVisuals). */
   function radioMoveVisualsTick(pos: number, loopBars: number): void {
@@ -6250,15 +6251,22 @@ export function DiscoverPanel({
     for (const rowId of restRows) {
       const key = `rest@${rowId}`
       live.add(key)
-      if (!seen.has(key)) {
-        visuals.push(
-          radioRestVisual({ rowId, from: resting.has(rowId) ? now : wrapAt, until: null, key })
-        )
-      }
+      // decided: on the coming wrap, placed again every tick until it lands (one that slips a wrap
+      // never draws its row silent through a lap it still plays); landed: as logged, or from now
+      visuals = placeRadioRestVisual(visuals, {
+        rowId,
+        key,
+        landed: resting.has(rowId),
+        now,
+        wrapAt
+      })
       const m = manual.get(rowId)
       const returning = resting.has(rowId) && (m?.hook === 'return' || m?.arc === 'return')
       const closedAt = closed.get(rowId)
-      if (returning && closedAt === undefined) {
+      // an open rest on a returning row closes on the coming top: once, or again when the return
+      // slipped a wrap and placeRadioRestVisual opened it again from there
+      const restOpen = visuals.some((v) => v.key === key && v.holds === true)
+      if (returning && restOpen) {
         visuals = closeRadioRestVisuals(visuals, rowId, wrapAt)
         closed.set(rowId, wrapAt)
       } else if (!returning && closedAt !== undefined && resting.has(rowId)) {
