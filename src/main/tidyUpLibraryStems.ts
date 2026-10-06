@@ -5,7 +5,8 @@ import type { ArrangeRole } from '@shared/stemRole'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { resolveStemPath } from './riffLibraryStore'
-import { createDirListingExists } from './discoverLibraryStems'
+import { basename, dirname } from 'node:path'
+import { createAsyncDirListing } from './discoverLibraryStems'
 import { countWork } from './workCounters'
 
 /** One library stem, as Tidy Up's library population needs it. */
@@ -55,6 +56,12 @@ interface MetadataRow {
   Instrument: number | null
 }
 
+/** Present by name in its folder, one async listing per folder per call. */
+function asyncListingExists(): (path: string) => Promise<boolean> {
+  const listing = createAsyncDirListing()
+  return async (path) => (await listing.list(dirname(path)))?.has(basename(path)) ?? false
+}
+
 /**
  * The library population, in the order the spec chose.
  *
@@ -79,6 +86,11 @@ interface MetadataRow {
  * same reason: Elling's consent is about working with what is already
  * there, not triggering tens of thousands of downloads.
  *
+ * `existsFn` may answer synchronously or not. The default lists each folder
+ * once with the library scan's async listing (createAsyncDirListing, 2 at a
+ * time, off the main thread -- scan plan Task 13 M4), where it used to build
+ * a readdirSync listing of its own.
+ *
  * Paged with a yield between pages, and `.all()` per page -- never a
  * statement held open across an await (MEMORY.md's hard-won SQLite rule).
  *
@@ -97,7 +109,7 @@ export async function listTidyUpLibraryStems(
   ownDb: Database.Database,
   extraCandidateDbs: Database.Database[],
   limit: number,
-  existsFn: (path: string) => boolean = createDirListingExists()
+  existsFn: (path: string) => boolean | Promise<boolean> = asyncListingExists()
 ): Promise<TidyUpLibraryStem[]> {
   if (limit <= 0) return []
 
@@ -152,13 +164,19 @@ export async function listTidyUpLibraryStems(
   }
 
   // Assemble, dropping anything with no metadata row and anything whose
-  // audio is not already on disk.
-  const assembled: { stem: TidyUpLibraryStem; creationTime: number }[] = []
+  // audio is not already on disk. Every existence check is asked at once:
+  // the default listing shares one listing per folder and caps how many run.
+  const located: { row: EligibleRow; meta: MetadataRow; path: string }[] = []
   for (const row of eligible) {
     const meta = metadata.get(row.StemCID)
     if (meta === undefined) continue
-    const path = resolveStemPath(meta.OwnerJamCID, row.StemCID)
-    if (!existsFn(path)) continue
+    located.push({ row, meta, path: resolveStemPath(meta.OwnerJamCID, row.StemCID) })
+  }
+  const present = await Promise.all(located.map(({ path }) => existsFn(path)))
+  const assembled: { stem: TidyUpLibraryStem; creationTime: number }[] = []
+  for (let i = 0; i < located.length; i++) {
+    if (!present[i]) continue
+    const { row, meta, path } = located[i]
     // Derived exactly as riffLibraryStore.ts's own resolveRiff does --
     // Length16s (the stem's native loop length in sixteenth notes), NOT the
     // Stems table's BarLength column, which that file records as having

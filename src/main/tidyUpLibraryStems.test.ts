@@ -1,6 +1,18 @@
 // src/main/tidyUpLibraryStems.test.ts
 import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { dirname, join } from 'node:path'
+
+const fsSpies = vi.hoisted(() => ({ readdirSync: vi.fn() }))
+// discoverLibraryStems.ts imports readdirSync from 'fs' (the same builtin):
+// wrapped once, so a call shows (ESM namespaces can't be spied per test).
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  fsSpies.readdirSync.mockImplementation(actual.readdirSync)
+  return { ...actual, readdirSync: fsSpies.readdirSync }
+})
 
 // listTidyUpLibraryStems calls resolveStemPath (riffLibraryStore.ts), which
 // reads app.getPath('userData')/app.getPath('music') on every call (via
@@ -121,6 +133,30 @@ describe('listTidyUpLibraryStems', () => {
     seedStem(db, 'gone')
     const out = await listTidyUpLibraryStems(db, [], 10, (path) => path.endsWith('here'))
     expect(out.map((s) => s.stemCID)).toEqual(['here'])
+  })
+
+  // Scan plan Task 13 M4 (audit minor): the default check lists each folder
+  // once with the library scan's async listing, never readdirSync.
+  it('by default, checks the disk through async folder listings', async () => {
+    const { listTidyUpLibraryStems } = await import('./tidyUpLibraryStems')
+    const { resolveStemPath, setRiffLibraryRootForTests } = await import('./riffLibraryStore')
+    const root = mkdtempSync(join(tmpdir(), 'tidy-up-library-'))
+    try {
+      setRiffLibraryRootForTests(root)
+      const db = freshDb()
+      seedStem(db, 'ondisk')
+      seedStem(db, 'absent')
+      const path = resolveStemPath('jam', 'ondisk')
+      mkdirSync(dirname(path), { recursive: true })
+      writeFileSync(path, 'audio')
+      fsSpies.readdirSync.mockClear()
+      const out = await listTidyUpLibraryStems(db, [], 10)
+      expect(out.map((s) => s.stemCID)).toEqual(['ondisk'])
+      expect(fsSpies.readdirSync).not.toHaveBeenCalled()
+    } finally {
+      setRiffLibraryRootForTests(null)
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 
   it('carries the classifier own guess through, when there is one', async () => {
