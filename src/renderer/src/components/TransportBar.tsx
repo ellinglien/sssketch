@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { announceEndlesssLoggedOut } from '../audio/riffLibraryUsername'
 import { traitMatchBarLabel } from '@shared/traitBar'
 import { phoneRemoteModalView, type PhoneRemoteStatus } from '@shared/phoneRemoteView'
 import { useAppState, useDispatch, usePos, usePlaying } from '../state/StoreContext'
@@ -1067,7 +1068,9 @@ export function TransportBar({
             endlesssStatus?.loggedIn
               ? {
                   label: `log out of endlesss (${endlesssStatus.username})`,
-                  onClick: () => void window.rifffApi.endlesssLogout(),
+                  // A deliberate logout: "me" is nobody now, unless typed.
+                  onClick: () =>
+                    void window.rifffApi.endlesssLogout().then(announceEndlesssLoggedOut),
                   danger: true
                 }
               : { label: 'log into endlesss', onClick: onOpenEndlesss }

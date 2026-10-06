@@ -92,6 +92,7 @@ import { BackgroundWorkIndicator } from './components/BackgroundWorkIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { StemsUnavailableIndicator } from './components/StemsUnavailableIndicator'
 import { StartupGate } from './components/StartupGate'
+import { OwnUsernameReporter } from './components/OwnUsernameReporter'
 import { markManualSeek } from './state/manualSeek'
 import { useGatedRecordingControls } from './state/useGatedRecordingControls'
 import {
@@ -2625,6 +2626,7 @@ function Frame(): React.JSX.Element {
   return (
     <div className="ra-viewport">
       <StartupGate />
+      <OwnUsernameReporter />
       <SketchModeAutoFollow />
       <BackgroundFeatureScan />
       {/* The one app-wide "what is running in the background" line --

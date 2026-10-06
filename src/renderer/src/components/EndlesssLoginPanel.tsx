@@ -1,5 +1,6 @@
 // src/renderer/src/components/EndlesssLoginPanel.tsx
 import { useEffect, useMemo, useState } from 'react'
+import { announceEndlesssLoggedOut } from '../audio/riffLibraryUsername'
 
 type AuthStatus =
   { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
@@ -73,6 +74,8 @@ export function EndlesssLoginPanel({
 
   async function handleLogout(): Promise<void> {
     await window.rifffApi.endlesssLogout()
+    // A deliberate logout: "me" is nobody now, unless a username is typed.
+    announceEndlesssLoggedOut()
     const s: AuthStatus = { loggedIn: false }
     setStatus(s)
     onStatusChange(s)

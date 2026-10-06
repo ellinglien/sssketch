@@ -1,10 +1,6 @@
 import { useEffect, useState } from 'react'
 import { LoadingLoader } from './LoadingLoader'
 import type { PrewarmScanProgress } from '../../../main/discoverCandidates'
-import {
-  RIFF_LIBRARY_USERNAME_CHANGED_EVENT,
-  resolveRiffLibraryUsername
-} from '../audio/riffLibraryUsername'
 
 const WORDMARK = 'SSSKETCH'.split('')
 
@@ -48,9 +44,8 @@ const PHASE_LABEL: Record<PrewarmScanProgress['phase'], string> = {
  * not at the end of the walks -- the saved copies loaded (and served while
  * they are extended), or, when a copy has to be rebuilt, his own stems
  * indexed so "only my stems" rolls. The walks then run under
- * BackgroundWorkIndicator's "indexing library". This is also where the
- * renderer tells main who "me" is (report-own-username), first thing, so a
- * rebuild knows whose stems to index first.
+ * BackgroundWorkIndicator's "indexing library". (Who "me" is, which a
+ * rebuild needs first, is reported by OwnUsernameReporter.)
  *
  * Reuses OnboardingModal's own wordmark/black-panel visual language
  * ("the welcome thing") rather than inventing a separate splash design --
@@ -89,14 +84,6 @@ export function StartupGate(): React.JSX.Element | null {
       if (!cancelled) setEngineDone(true)
     })
 
-    const reportUsername = (): void => {
-      void resolveRiffLibraryUsername()
-        .then((name) => window.rifffApi.reportOwnUsername(name))
-        .catch((err) => console.error('StartupGate: reportOwnUsername failed:', err))
-    }
-    reportUsername()
-    window.addEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, reportUsername)
-
     window.rifffApi
       .getLibraryIndexUsable()
       .then((status) => {
@@ -112,23 +99,27 @@ export function StartupGate(): React.JSX.Element | null {
         setProgress(null)
       }
     })
-    const unsubscribeWarmupProgress = window.rifffApi.onLibraryWarmupProgress((update) => {
-      if (cancelled) return
+    return () => {
+      cancelled = true
+      unsubscribeEngine()
+      unsubscribeWarmupComplete()
+    }
+  }, [])
+
+  const closed = engineDone === true && warmupDone === true
+
+  // Progress only while the gate is up: the walks after usable report on
+  // every page for minutes, and a closed gate has nothing to show them on.
+  useEffect(() => {
+    if (closed) return
+    return window.rifffApi.onLibraryWarmupProgress((update) => {
       const key = `${update.phase}:${update.dbIndex}`
       setPhaseStartedAt((prev) => (prev?.key === key ? prev : { key, startedAt: Date.now() }))
       setProgress(update)
     })
+  }, [closed])
 
-    return () => {
-      cancelled = true
-      window.removeEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, reportUsername)
-      unsubscribeEngine()
-      unsubscribeWarmupComplete()
-      unsubscribeWarmupProgress()
-    }
-  }, [])
-
-  if (engineDone === true && warmupDone === true) return null
+  if (closed) return null
 
   const etaText = describeEta(progress, phaseStartedAt?.startedAt ?? null)
 

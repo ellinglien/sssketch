@@ -12,6 +12,12 @@
 // logout) with RIFF_LIBRARY_USERNAME_CHANGED_EVENT on `window`; listeners
 // resolve again and compare.
 
+import {
+  ownUsernameReportFrom,
+  type EndlesssAuthAnswer,
+  type OwnUsernameReport
+} from '@shared/ownUsernameReport'
+
 /** LibraryBrowser's persisted username (localStorage). */
 export const RIFF_LIBRARY_USERNAME_STORAGE_KEY = 'sssketch:riffLibraryUsername'
 /** The pre-rename key LibraryBrowser carries forward once. */
@@ -21,6 +27,21 @@ export const RIFF_LIBRARY_USERNAME_CHANGED_EVENT = 'riff-library-username-change
 
 export function announceRiffLibraryUsernameChanged(): void {
   window.dispatchEvent(new Event(RIFF_LIBRARY_USERNAME_CHANGED_EVENT))
+}
+
+/** The user just logged out of Endlesss: the same change, plus the one fact a
+ * later lookup can't tell apart from a failed one -- no session now means
+ * nobody (OwnUsernameReporter). Call it once the logout has resolved. */
+export function announceEndlesssLoggedOut(): void {
+  window.dispatchEvent(
+    new CustomEvent(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, { detail: { loggedOut: true } })
+  )
+}
+
+/** Whether a RIFF_LIBRARY_USERNAME_CHANGED_EVENT came from a logout. */
+export function isLoggedOutEvent(event: Event): boolean {
+  const detail = (event as CustomEvent<{ loggedOut?: boolean } | null>).detail
+  return detail?.loggedOut === true
 }
 
 /** The typed username: a string (maybe empty) when one was ever set, else
@@ -34,6 +55,22 @@ function storedUsername(): string | null {
   } catch {
     return null
   }
+}
+
+/** What to tell main about "me" (report-own-username): unlike
+ * resolveRiffLibraryUsername, a failed session lookup is 'unknown', never
+ * "nobody" -- it must not wipe the name main saved (ownUsernameReport.ts). */
+export async function resolveOwnUsernameReport(afterLogout = false): Promise<OwnUsernameReport> {
+  const typed = storedUsername()
+  let auth: EndlesssAuthAnswer = 'failed'
+  if (typed === null) {
+    try {
+      auth = await window.rifffApi.endlesssAuthStatus()
+    } catch (err) {
+      console.error('resolveOwnUsernameReport: endlesssAuthStatus() failed:', err)
+    }
+  }
+  return ownUsernameReportFrom(typed, auth, afterLogout)
 }
 
 /** The configured username, or null when there is none. */

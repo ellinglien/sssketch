@@ -5,6 +5,7 @@ import type { DiscoverSlotKind, DiscoverTraitKind } from '@shared/discoverSlotKi
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type { ToolkitExportMode } from '@shared/toolkit'
 import type { LiveParamField } from '@shared/liveParam'
+import type { OwnUsernameReport } from '@shared/ownUsernameReport'
 import type {
   RiffLibraryJam,
   RiffLibraryRiffSummary,
@@ -466,8 +467,8 @@ const api = {
     ipcRenderer.on('library-index-usable', listener)
     return () => ipcRenderer.removeListener('library-index-usable', listener)
   },
-  reportOwnUsername: (username: string | null): Promise<void> =>
-    ipcRenderer.invoke('report-own-username', username),
+  reportOwnUsername: (report: OwnUsernameReport): Promise<void> =>
+    ipcRenderer.invoke('report-own-username', report),
   onLibraryWarmupComplete: (callback: () => void): (() => void) => {
     const listener = (): void => callback()
     ipcRenderer.on('library-warmup-complete', listener)

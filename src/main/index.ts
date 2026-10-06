@@ -168,6 +168,7 @@ import { getStemPriority, seedStemPriorityOwnStems, setStemPriorityUsername } fr
 import { loadOwnUsername, saveOwnUsername } from './ownUsernameStore'
 import { seedTableCounts, whenTableCountsSeeded } from './tableCountSeed'
 import { whenAllTableCountsSettled } from './tableChangeSignal'
+import { ownUsernameAfterReport, parseOwnUsernameReport } from '@shared/ownUsernameReport'
 import { stemPriorityRank } from '@shared/stemPriorityOrder'
 import { getStemAvailabilityReport, onStemAvailabilityNotice } from './stemAvailability'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
@@ -1747,14 +1748,17 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('get-library-warmup-status', (): boolean => libraryWarmupDone)
   ipcMain.handle('get-library-index-usable', (): boolean => libraryIndexUsable)
-  // The renderer's "me" (resolveRiffLibraryUsername), reported at mount and
-  // on every change: the background passes rank by it (stemPriority.ts), and
-  // it is kept for the next launch's own-only index (ownUsernameStore.ts).
-  ipcMain.handle('report-own-username', (_event, username: unknown): void => {
-    const name = typeof username === 'string' ? username.trim() || null : null
-    ownUsername = name
-    setStemPriorityUsername(name)
-    saveOwnUsername(name)
+  // The renderer's "me" (OwnUsernameReporter), reported at mount and on every
+  // change: the background passes rank by it (stemPriority.ts), and it is
+  // kept for the next launch's own-only index (ownUsernameStore.ts). An
+  // 'unknown' report (a failed session lookup) changes nothing: only a name,
+  // a typed empty username or a logout replace or clear it.
+  ipcMain.handle('report-own-username', (_event, value: unknown): void => {
+    const report = parseOwnUsernameReport(value)
+    if (report.kind === 'unknown') return
+    ownUsername = ownUsernameAfterReport(ownUsername, report)
+    setStemPriorityUsername(ownUsername)
+    saveOwnUsername(ownUsername)
   })
 
   ipcMain.handle('get-engine-startup-status', (): boolean => engineStartupDone)
