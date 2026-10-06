@@ -1,5 +1,5 @@
 // src/main/categoryCentroidStore.ts
-import { readFileSync, writeFileSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, renameSync, rmSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import type { CategoryCentroidStore } from '@shared/categoryCentroids'
@@ -46,14 +46,27 @@ export function loadCategoryCentroidStore(): CategoryCentroidStore {
   }
 }
 
+/** Written to a temp file beside it, then renamed over it: a crash or a full
+ * disk mid-write leaves the previous store whole, never a truncated file
+ * (which would load as an empty store and lose every sample trained so
+ * far). The rename is atomic within the userData folder. Synchronous, so
+ * two saves in this process never share the temp file. */
 export function saveCategoryCentroidStore(store: CategoryCentroidStore): void {
+  const path = storePath()
+  const tmpPath = `${path}.tmp`
   try {
-    writeFileSync(storePath(), JSON.stringify(store, null, 2), 'utf-8')
+    writeFileSync(tmpPath, JSON.stringify(store, null, 2), 'utf-8')
+    renameSync(tmpPath, path)
     // Retrained centroids can place stems the classifier couldn't before --
     // its pending lists rebuild on the next batch (background efficiency B4).
     noteAutoClassifyTrainingChanged()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    console.error(`saveCategoryCentroidStore: failed to write ${storePath()}: ${message}`)
+    console.error(`saveCategoryCentroidStore: failed to write ${path}: ${message}`)
+    try {
+      rmSync(tmpPath, { force: true })
+    } catch {
+      // Best effort: a stray temp file is never read.
+    }
   }
 }

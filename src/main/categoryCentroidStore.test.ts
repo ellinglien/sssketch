@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { emptyCategoryCentroidStore, recordConfirmedCategory } from '@shared/categoryCentroids'
@@ -56,5 +56,29 @@ describe('categoryCentroidStore', () => {
     expect(loaded.arrangeRoles).toEqual({})
     expect(loaded.drumSubRoles).toEqual({})
     expect(loaded.global).toEqual(legacyShape.global)
+  })
+
+  // Review of plan b21ea5a2 Task 13: the store was written in place, so a
+  // crash or a full disk mid-write left a truncated file, which loads as an
+  // empty store (every bus trained so far lost). Now: a temp file, renamed.
+  it('a save that fails part-way leaves the previous file intact', async () => {
+    const { loadCategoryCentroidStore, saveCategoryCentroidStore } =
+      await import('./categoryCentroidStore')
+    const before = recordConfirmedCategory(
+      emptyCategoryCentroidStore(),
+      'bus',
+      'drums',
+      new Array(19).fill(1)
+    )
+    saveCategoryCentroidStore(before)
+    expect(readdirSync(userDataDir)).toEqual(['busCentroids.json'])
+
+    // The temp file cannot be written: a directory stands in its place.
+    mkdirSync(join(userDataDir, 'busCentroids.json.tmp'))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    saveCategoryCentroidStore(recordConfirmedCategory(before, 'bus', 'bass', new Array(19).fill(2)))
+    expect(errors).toHaveBeenCalled()
+    errors.mockRestore()
+    expect(loadCategoryCentroidStore()).toEqual(before)
   })
 })
