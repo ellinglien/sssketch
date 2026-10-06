@@ -114,4 +114,35 @@ describe('pitchCache', () => {
     expect(getStemGlyphCacheMock).not.toHaveBeenCalled()
     expect(setStemGlyphCacheMock).not.toHaveBeenCalled()
   })
+
+  it('keeps at most PRIMED_ENTRY_CAP primed contours; requested ones survive; an evicted one recomputes once', async () => {
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+    const { getPitchContour, primePitchContour } = await import('./pitchCache')
+    const { PRIMED_ENTRY_CAP } = await import('./primedEntries')
+    const contour = (): { numFrames: number; freqHz: Float32Array } => ({
+      numFrames: 1,
+      freqHz: new Float32Array([100])
+    })
+
+    // a screen asks for a primed path (promoted), and computes another
+    const requested = contour()
+    primePitchContour('/requested', requested)
+    expect(await getPitchContour('/requested')).toBe(requested)
+    const computed = await getPitchContour('/computed')
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+
+    for (let i = 0; i <= PRIMED_ENTRY_CAP; i++) primePitchContour(`/p${i}`, contour())
+
+    expect(await getPitchContour('/requested')).toBe(requested)
+    expect(await getPitchContour('/computed')).toBe(computed)
+    await getPitchContour('/p1')
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+
+    // /p0 was the oldest primed path: evicted, computed again once
+    const [a, b] = await Promise.all([getPitchContour('/p0'), getPitchContour('/p0')])
+    expect(a).toBe(b)
+    await getPitchContour('/p0')
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(2)
+  })
 })

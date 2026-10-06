@@ -40,7 +40,8 @@ describe('stemFeaturesCache', () => {
         getStemPeaksCache: vi.fn().mockResolvedValue(null),
         setStemPeaksCache: vi.fn().mockResolvedValue(undefined),
         getStemGlyphCache: getStemGlyphCacheMock,
-        setStemGlyphCache: setStemGlyphCacheMock
+        setStemGlyphCache: setStemGlyphCacheMock,
+        setStemAnalysisResults: vi.fn().mockResolvedValue(undefined)
       }
     })
     class FakeAudioContext {
@@ -232,5 +233,37 @@ describe('stemFeaturesCache', () => {
       expect(a).toBe(b)
       expect(setStemFeatureCacheMock).toHaveBeenCalledTimes(1)
     })
+  })
+
+  it('keeps at most PRIMED_ENTRY_CAP scan-adopted entries; requested ones survive; an evicted one is read again once', async () => {
+    const tiny = new Float32Array(512).fill(0.25)
+    const buffer = { getChannelData: () => tiny, sampleRate: 44100, numberOfChannels: 1 }
+    const adopt = async (path: string): Promise<void> => {
+      const { adoptStemFeaturesFromBuffer } = await import('./stemFeaturesCache')
+      await adoptStemFeaturesFromBuffer(
+        path,
+        undefined,
+        Promise.resolve(buffer as unknown as AudioBuffer),
+        Promise.resolve([0.1])
+      )
+    }
+    const { getStemFeatures, peekStemFeaturesEntry } = await import('./stemFeaturesCache')
+    const { PRIMED_ENTRY_CAP } = await import('./primedEntries')
+
+    await adopt('/requested')
+    const requested = await getStemFeatures('/requested')
+    for (let i = 0; i <= PRIMED_ENTRY_CAP; i++) await adopt(`/a${i}`)
+
+    expect(peekStemFeaturesEntry('/a0')).toBeUndefined()
+    expect(peekStemFeaturesEntry('/a1')).toBeDefined()
+    expect(await getStemFeatures('/requested')).toBe(requested)
+    expect(getStemFeatureCacheMock).not.toHaveBeenCalled()
+
+    // main holds the row the adoption persisted: an evicted entry is read back, not decoded
+    getStemFeatureCacheMock.mockResolvedValue(requested)
+    await Promise.all([getStemFeatures('/a0'), getStemFeatures('/a0')])
+    await getStemFeatures('/a0')
+    expect(getStemFeatureCacheMock).toHaveBeenCalledTimes(1)
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
   })
 })

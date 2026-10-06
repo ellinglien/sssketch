@@ -137,4 +137,24 @@ describe('bandEnergyCache', () => {
     expect(getStemGlyphCacheMock).toHaveBeenCalledTimes(1)
     expect(decodeAudioDataMock).not.toHaveBeenCalled()
   })
+
+  it('keeps at most PRIMED_ENTRY_CAP primed bands; requested ones survive; an evicted one recomputes once', async () => {
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+    const bands = glyphBandsFrom(computeBandEnergy(samples, 44100))
+    const { getGlyphBands, primeGlyphBands } = await import('./bandEnergyCache')
+    const { PRIMED_ENTRY_CAP } = await import('./primedEntries')
+
+    const requested = { ...bands }
+    primeGlyphBands('/requested', requested)
+    expect(await getGlyphBands('/requested')).toBe(requested)
+    for (let i = 0; i <= PRIMED_ENTRY_CAP; i++) primeGlyphBands(`/p${i}`, { ...bands })
+
+    expect(await getGlyphBands('/requested')).toBe(requested)
+    await getGlyphBands('/p1')
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
+    await Promise.all([getGlyphBands('/p0'), getGlyphBands('/p0')])
+    await getGlyphBands('/p0')
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+  })
 })

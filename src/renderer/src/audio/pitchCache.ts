@@ -4,8 +4,11 @@ import { decodeStemFile } from './decodeStemFile'
 import { computePitchContourOffThread } from './stemAnalysisClient'
 import { countWork } from '../perf/workCounters'
 import { readPersistedStemGlyph, writePersistedStemGlyph } from './stemGlyphCache'
+import { createPrimedEntries } from './primedEntries'
 
 const cache = new Map<string, Promise<PitchContour>>()
+/** Primed contours are bounded (primedEntries.ts); requested ones are not. */
+const primed = createPrimedEntries((path) => cache.delete(path))
 
 /** Per-path pitch-contour cache, mirroring peakCache.ts's own shape and
  * eviction-on-rejection behavior. Kept separate from bandEnergyCache.ts
@@ -16,7 +19,10 @@ const cache = new Map<string, Promise<PitchContour>>()
  * merged pass. */
 export function getPitchContour(path: string): Promise<PitchContour> {
   const cached = cache.get(path)
-  if (cached) return cached
+  if (cached) {
+    primed.promote(path)
+    return cached
+  }
 
   const promise = (async () => {
     // Persisted first (plan 2026-10-05-merge-background-scans T9): one IPC
@@ -42,7 +48,10 @@ export function getPitchContour(path: string): Promise<PitchContour> {
 
   cache.set(path, promise)
   promise.catch(() => {
-    if (cache.get(path) === promise) cache.delete(path)
+    if (cache.get(path) === promise) {
+      cache.delete(path)
+      primed.forget(path)
+    }
   })
   return promise
 }
@@ -50,14 +59,19 @@ export function getPitchContour(path: string): Promise<PitchContour> {
 /** Seeds the cache with a contour computed elsewhere -- stemFeaturesCache.ts
  * gets one for free from its own full analysis, so a stem the background
  * scan already analyzed never pays a second decode + pitch pass here. Not
- * persisted (stemGlyphCache.ts's writePersistedStemGlyph says why). A path
- * that's already cached (or in flight) is left alone. */
+ * persisted (stemGlyphCache.ts's writePersistedStemGlyph says why), and
+ * bounded: only the newest PRIMED_ENTRY_CAP primed paths are kept until a
+ * caller asks for one (primedEntries.ts). A path that's already cached (or
+ * in flight) is left alone. */
 export function primePitchContour(path: string, contour: PitchContour): void {
-  if (!cache.has(path)) cache.set(path, Promise.resolve(contour))
+  if (cache.has(path)) return
+  cache.set(path, Promise.resolve(contour))
+  primed.add(path)
 }
 
 /** Forgets this path's pitch contour -- see peakCache.ts's evictWaveform for
  * why an in-place rewrite is the one case that needs this. */
 export function evictPitchContour(path: string): void {
   cache.delete(path)
+  primed.forget(path)
 }

@@ -8,8 +8,14 @@ import { primeGlyphBands } from './bandEnergyCache'
 import { analyzeStemSamplesOffThread, channelsAfterFirst } from './stemAnalysisClient'
 import { queueStemAnalysisWrite } from './analysisWriteQueue'
 import type { StemLevelWrite } from '@shared/stemAnalysisWrite'
+import { createPrimedEntries } from './primedEntries'
 
 const cache = new Map<string, Promise<StemFeatures>>()
+/** Entries the background scan adopted (adoptStemFeaturesFromBuffer) and no
+ * caller has asked for yet: bounded (primedEntries.ts), so a long library
+ * scan doesn't keep every analysed stem's features for the session. Main
+ * holds the persisted row; an evicted one is read back over IPC once. */
+const primed = createPrimedEntries((path) => cache.delete(path))
 
 export interface GetStemFeaturesOptions {
   /** Treat a persisted/cached row older than STEM_FEATURE_VERSION as stale:
@@ -45,6 +51,7 @@ export function getStemFeatures(
 ): Promise<StemFeatures> {
   const cached = cache.get(path)
   if (cached) {
+    primed.promote(path)
     if (!requireCurrentVersion) return cached
     return cached.then((features) =>
       isCurrentStemFeatureVersion(features) ? features : refreshStale(path, cached)
@@ -72,11 +79,21 @@ export function getStemFeatures(
 }
 
 /** Caches `promise` for `path`, evicting it on rejection so a later call
- * retries (only if it's still the cached entry). */
-function remember(path: string, promise: Promise<StemFeatures>): Promise<StemFeatures> {
+ * retries (only if it's still the cached entry). `adopted`: installed by the
+ * scan, not asked for -- bounded with the other primed entries. */
+function remember(
+  path: string,
+  promise: Promise<StemFeatures>,
+  adopted = false
+): Promise<StemFeatures> {
   cache.set(path, promise)
+  if (adopted) primed.add(path)
+  else primed.promote(path)
   promise.catch(() => {
-    if (cache.get(path) === promise) cache.delete(path)
+    if (cache.get(path) === promise) {
+      cache.delete(path)
+      primed.forget(path)
+    }
   })
   return promise
 }
@@ -120,7 +137,8 @@ export function adoptStemFeaturesFromBuffer(
         // Batched with the stem's other writes (analysisWriteQueue.ts, B7).
         queueStemAnalysisWrite(path, { features })
       )
-    )
+    ),
+    true
   )
 }
 
