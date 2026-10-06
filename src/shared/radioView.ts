@@ -9,7 +9,11 @@
 // advanced (the strip's coverage test runs there) and in simple only when it is named below, so
 // nothing silently joins simple (radioView.test.ts pins both lists).
 import { radioIntensityOn, type RadioSettings } from './radioSchedule'
-import type { RadioStripControl, RadioStripGroup } from './radioStripModel'
+import {
+  radioStripMixControls,
+  type RadioStripControl,
+  type RadioStripGroup
+} from './radioStripModel'
 
 export type RadioView = 'simple' | 'advanced'
 
@@ -96,6 +100,14 @@ export function radioViewStrip(
     moveChips: false,
     columns: []
   }
+}
+
+/** The top line's mix action ids in `view`, the same as radioViewStrip's `top` for any settings
+ * and context (pinned by radioView.test.ts), without building the strip model: the mix group
+ * depends on neither. */
+export function radioViewTopIds(view: RadioView): readonly string[] {
+  const mix = radioStripMixControls().map((c) => c.id)
+  return view === 'advanced' ? mix : RADIO_SIMPLE_TOP.filter((id) => mix.includes(id))
 }
 
 /** A radio-layout row's parts in its button line (DiscoverSlotRow's radio assembly). The

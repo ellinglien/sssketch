@@ -13,6 +13,7 @@ import {
   normalizeRadioView,
   radioRowParts,
   radioViewStrip,
+  radioViewTopIds,
   type RadioView
 } from './radioView'
 import { radioStripModel, type RadioStripContext, type RadioStripGroup } from './radioStripModel'
@@ -183,5 +184,21 @@ describe('radioView: simple, pinned', () => {
         expect(p.has(hidden), hidden).toBe(false)
       }
     }
+  })
+})
+
+describe('radioViewTopIds: the top line without the model', () => {
+  it("is radioViewStrip's top in both views, for every state and context", () => {
+    const ctxs: RadioStripContext[] = [
+      CTX,
+      { ...CTX, artistMode: true },
+      { ...CTX, hasUsername: false },
+      { ...CTX, sounding: false }
+    ]
+    for (const v of RADIO_VIEWS)
+      for (const s of STATES)
+        for (const ctx of ctxs)
+          expect(radioViewTopIds(v)).toEqual(ids(radioViewStrip(radioStripModel(s, ctx), v, s).top))
+    expect(radioViewTopIds('simple')).toEqual(['keep'])
   })
 })

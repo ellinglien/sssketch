@@ -691,6 +691,17 @@ export function DiscoverSlotRow({
   const meterRef = useRef<HTMLDivElement>(null)
   const closeReclassifyMenu = useCallback(() => setReclassifyMenu(null), [])
 
+  // A view switch closes the row's popovers: each is gated by the part that opens it, so one
+  // hidden by simple would otherwise reopen, stale, on the way back to advanced. Adjusted while
+  // rendering (React's "adjust state when a prop changes"), not in an effect.
+  const [popoversView, setPopoversView] = useState(radioView)
+  if (popoversView !== radioView) {
+    setPopoversView(radioView)
+    setNearbyMenu(null)
+    setKindMenu(null)
+    setReclassifyMenu(null)
+  }
+
   // Direct request, 2026-09-16: "i imported a batch of rifffs using the
   // import from library feature and attempting to discover the individual
   // riffs i find that i cannot use the adjacent rifffs feature. it should
@@ -973,7 +984,7 @@ export function DiscoverSlotRow({
   const lockMark = (
     <span
       role="img"
-      aria-label="locked"
+      aria-label={RADIO_LOCK_MARK_TOOLTIP}
       data-tooltip={RADIO_LOCK_MARK_TOOLTIP}
       style={{
         display: 'flex',

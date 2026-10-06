@@ -235,7 +235,15 @@ export function SegmentBar({
     el.addEventListener('wheel', handleWheel, { passive: false })
     return () => {
       el.removeEventListener('wheel', handleWheel)
-      if (wheelTimerRef.current !== null) clearTimeout(wheelTimerRef.current)
+      // A burst still waiting out its delay commits now: the bar can unmount mid-burst (a view
+      // switch hides it), and its value was already shown live, so dropping it would revert.
+      if (wheelTimerRef.current !== null) {
+        clearTimeout(wheelTimerRef.current)
+        wheelTimerRef.current = null
+        const pending = wheelValueRef.current
+        wheelValueRef.current = null
+        if (pending !== null) latest.current.onCommit?.(pending)
+      }
     }
   }, [])
   const clearClick = (): void => {
@@ -282,7 +290,8 @@ export function SegmentBar({
         timer: setTimeout(() => {
           clickRef.current = null
           setDraft(null)
-          onCommit(v)
+          // The latest commit, not this render's: the caller may have re-rendered in the window.
+          latest.current.onCommit?.(v)
         }, CLICK_COMMIT_DELAY_MS)
       }
       return

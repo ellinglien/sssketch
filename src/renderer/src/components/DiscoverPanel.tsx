@@ -2,8 +2,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Dial } from './Dial'
 import { RadioMixActions, RadioStrip, type RadioMixBundle } from './RadioStrip'
-import { radioStripModel, type RadioStripContext } from '@shared/radioStripModel'
-import { radioViewStrip, type RadioView } from '@shared/radioView'
+import type { RadioStripContext } from '@shared/radioStripModel'
+import { radioViewTopIds, type RadioView } from '@shared/radioView'
 import { RadioTopLine, RedoIcon, UndoIcon } from './RadioTopLine'
 import { DiceIcon } from './DiceIcon'
 import { RadioStartPrompt } from './RadioStartPrompt'
@@ -6754,6 +6754,13 @@ export function DiscoverPanel({
   // Discover artist mode's field and its search popover.
   const [artistMenu, setArtistMenu] = useState<{ x: number; y: number } | null>(null)
   const artistButtonRef = useRef<HTMLButtonElement>(null)
+  // A view switch closes the picker: simple unmounts the strip's artist button it is anchored on
+  // (and its ignoreRef with it). Adjusted while rendering, not in an effect.
+  const [artistMenuView, setArtistMenuView] = useState(radioView)
+  if (artistMenuView !== radioView) {
+    setArtistMenuView(radioView)
+    setArtistMenu(null)
+  }
   // "analyse overnight"'s answer for the current artist ("queued 31,013").
   const [analysisQueued, setAnalysisQueued] = useState<string | null>(null)
   /** The artist field's pick. Radio off: the next rolls just use it.
@@ -12500,22 +12507,18 @@ export function DiscoverPanel({
   )
 
   // What the radio view draws (spec 2026-10-05-radio-simple-view-design): the strip model's
-  // groups through the view. The top line's mix reads it here; the strip reads it from the same
-  // settings, context and view.
+  // groups through the view. The strip builds them from this context, the settings and the view;
+  // the top line's mix asks the view alone (its ids depend on nothing else).
   const radioStripCtx: RadioStripContext = {
     artistMode: mode === 'other',
     hasUsername,
     sound: soundNow,
     sounding: previewingSlotIds.size > 0
   }
-  const radioMixShown: ReadonlySet<string> = new Set(
-    radioOn
-      ? radioViewStrip(
-          radioStripModel(radioSettings, radioStripCtx),
-          radioView,
-          radioSettings
-        ).top.map((c) => c.id)
-      : []
+  // The mix ids depend on the view alone (radioViewTopIds), so no strip model per render here.
+  const radioMixShown: ReadonlySet<string> = useMemo(
+    () => new Set(radioOn ? radioViewTopIds(radioView) : []),
+    [radioOn, radioView]
   )
 
   // The mix actions (similar all, fetch hearts, add to shelf, add to timeline, keep): drawn by the

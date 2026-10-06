@@ -275,6 +275,18 @@ function soundDial(
   }
 }
 
+/** The mix group (the top line's actions): the same whatever the settings and context, so the
+ * top line can ask for it without building the whole model (radioViewTopIds). */
+export function radioStripMixControls(): RadioStripControl[] {
+  return [
+    panel('similar-all', 'similar all'),
+    panel('fetch-hearts', 'fetch hearts', { tooltip: 'fetch radio hearts' }),
+    panel('add-to-shelf', 'add to shelf'),
+    panel('add-to-timeline', 'add to timeline'),
+    panel('keep', 'keep', { tooltip: 'keep this group' })
+  ]
+}
+
 /** The strip for these settings, group by group, only what shows. */
 export function radioStripModel(
   settings: RadioSettings,
@@ -550,13 +562,7 @@ export function radioStripModel(
     )
   ]
 
-  const mix: RadioStripControl[] = [
-    panel('similar-all', 'similar all'),
-    panel('fetch-hearts', 'fetch hearts', { tooltip: 'fetch radio hearts' }),
-    panel('add-to-shelf', 'add to shelf'),
-    panel('add-to-timeline', 'add to timeline'),
-    panel('keep', 'keep', { tooltip: 'keep this group' })
-  ]
+  const mix = radioStripMixControls()
 
   const byId: Record<RadioStripGroupId, RadioStripControl[]> = {
     play,

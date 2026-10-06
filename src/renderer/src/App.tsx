@@ -118,6 +118,7 @@ import type { DiscoverSettings } from '../../main/discoverSettingsStore'
 import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
 import { DEFAULT_RADIO_SETTINGS, type RadioSettings } from '@shared/radioSchedule'
 import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
+import { mergeLatestSettings, nestedPatchFromLatest } from '@shared/latestSettings'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 
 /** Tracks what the currently-open project actually is, so Save/Export know
@@ -1703,17 +1704,25 @@ function Frame(): React.JSX.Element {
   const traitMatchBar = discoverSettings.traitMatchBar
   const radioSettings = discoverSettings.radio
   const radioView = discoverSettings.radioView
+  // The latest settings, always current: every save merges onto this, never onto a render's
+  // `discoverSettings`. A control can commit late through an older render's callback (a radio
+  // bar's click waits out the double-click window), and merging onto that render's copy rolled
+  // back a save made in between, e.g. the view switch (latestSettings.ts).
+  const discoverSettingsRef = useRef<DiscoverSettings>(discoverSettings)
   useEffect(() => {
     void window.rifffApi
       .getDiscoverSettings()
-      .then((s) => setDiscoverSettingsState(s))
+      .then((s) => {
+        discoverSettingsRef.current = s
+        setDiscoverSettingsState(s)
+      })
       .catch((err) => {
         console.error('Frame: getDiscoverSettings() failed:', err)
       })
   }, [])
 
   async function updateDiscoverSettings(patch: Partial<DiscoverSettings>): Promise<void> {
-    const next = { ...discoverSettings, ...patch }
+    const next = mergeLatestSettings(discoverSettingsRef, patch)
     setDiscoverSettingsState(next)
     await window.rifffApi.setDiscoverSettings(next)
   }
@@ -1721,7 +1730,9 @@ function Frame(): React.JSX.Element {
   /** Settings menu's "trait match" entry -- steps loosest to strictest,
    * then wraps (nextTraitMatchBar). */
   async function cycleTraitMatchBar(): Promise<void> {
-    await updateDiscoverSettings({ traitMatchBar: nextTraitMatchBar(traitMatchBar) })
+    await updateDiscoverSettings({
+      traitMatchBar: nextTraitMatchBar(discoverSettingsRef.current.traitMatchBar)
+    })
   }
 
   /** The one real setter for discoverConsented -- updates the local mirror
@@ -1734,7 +1745,7 @@ function Frame(): React.JSX.Element {
   }
 
   async function toggleDiscoverConsent(): Promise<void> {
-    await setDiscoverConsented(!discoverConsented)
+    await setDiscoverConsented(!discoverSettingsRef.current.consentedToLibraryScan)
   }
 
   /** The one real setter for every radio control (start prompt, strip) -- patches the
@@ -1742,7 +1753,7 @@ function Frame(): React.JSX.Element {
    * (saving a partial object "would silently wipe traitMatchBar", see its
    * own doc comment above). */
   async function setRadioSettings(patch: Partial<RadioSettings>): Promise<void> {
-    await updateDiscoverSettings({ radio: { ...radioSettings, ...patch } })
+    await updateDiscoverSettings(nestedPatchFromLatest(discoverSettingsRef, 'radio', patch))
   }
 
   /** The radio view's simple / advanced switch (spec 2026-10-05-radio-simple-view-design). Its
