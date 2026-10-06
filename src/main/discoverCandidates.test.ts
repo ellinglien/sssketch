@@ -15,6 +15,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
+import { discoverStemRestriction } from './discoverArtistStems'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { upsertStemCategoryRole } from './stemCategoriesStore'
 import { upsertStemAutoCategory } from './stemAutoCategoryStore'
@@ -2740,6 +2741,77 @@ describe('artist mode: artistStemCIDs filters before the bounded sample', () => 
       artistStemCIDs: new Set()
     })
     expect(candidates).toEqual([])
+  })
+})
+
+// "Only my stems" sampled 1,000 stems from the WHOLE library and filtered by
+// owner afterwards, so a library where his own are 1% gave ~10 candidates.
+// discoverStemRestriction (the get-discover-candidates handler's gate) now
+// hands his own stems in as the before-the-sample set, as artist mode does.
+describe('only my stems: restricted before the bounded sample', () => {
+  /** 9,900 stems by others and 100 of his own (1%), every one a drums stem
+   * with features. */
+  function seedMostlyOthers(own: Database.Database): void {
+    const insertRiff = own.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, StemCID_1) VALUES (?, 'jam1', 1000, 128, ?)`
+    )
+    const insertStem = own.prepare(
+      `INSERT INTO Stems (StemCID, OwnerJamCID, PresetName, CreatorUserName) VALUES (?, 'jam1', 'p', ?)`
+    )
+    const insertCategory = own.prepare(
+      `INSERT INTO StemCategories (StemCID, ArrangeRole, BusId, Source, UpdatedAt) VALUES (?, 'drums', 'drums', 'tidyup', 1000)`
+    )
+    const insertFeatures = own.prepare(
+      `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 1000)`
+    )
+    const features = featuresJSON({ zcrBrightness: 0.5 })
+    own.transaction(() => {
+      for (let i = 0; i < 10_000; i++) {
+        const cid = i % 100 === 0 ? `mine-${i}` : `other-${i}`
+        insertRiff.run(`r-${cid}`, cid)
+        insertStem.run(cid, cid.startsWith('mine-') ? 'elling' : 'someone-else')
+        insertCategory.run(cid)
+        insertFeatures.run(cid, features)
+      }
+    })()
+  }
+
+  for (const kinds of [['drums'], ['bright']] as const) {
+    it(`a "mine" roll (${kinds[0]}) returns every one of his stems, not ~1% of a 1,000 sample`, async () => {
+      const own = freshDb()
+      seedMostlyOthers(own)
+      const jams = [{ jamCID: 'jam1', dbForJam: own }]
+      const restriction = await discoverStemRestriction([own], {
+        onlyOwnStems: true,
+        targetUser: 'elling'
+      })
+      const candidates = await getDiscoverCandidates({
+        ownDb: own,
+        jams,
+        kinds: [...kinds],
+        onlyOwnStems: true,
+        targetUser: 'elling',
+        artistStemCIDs: restriction
+      })
+      expect(candidates).toHaveLength(100)
+      expect(candidates.every((c) => c.stemCID.startsWith('mine-'))).toBe(true)
+    })
+  }
+
+  it('an artist wins over "mine"; neither (or no user) restricts nothing', async () => {
+    const own = freshDb()
+    seedStem(own, 'e1', 'jam1', { creatorUserName: 'elling' })
+    seedStem(own, 't1', 'jam1', { creatorUserName: 'tiny' })
+    const dbs = [own]
+    const all = { onlyOwnStems: true, targetUser: 'elling' }
+    expect([...((await discoverStemRestriction(dbs, { ...all, artist: 'tiny' })) ?? [])]).toEqual([
+      't1'
+    ])
+    expect([...((await discoverStemRestriction(dbs, all)) ?? [])]).toEqual(['e1'])
+    expect(
+      await discoverStemRestriction(dbs, { onlyOwnStems: false, targetUser: 'elling' })
+    ).toBeUndefined()
+    expect(await discoverStemRestriction(dbs, { onlyOwnStems: true })).toBeUndefined()
   })
 })
 

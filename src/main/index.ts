@@ -127,7 +127,11 @@ import {
   findRiffForStemPath,
   type AdjacentDiscoverOptions
 } from './discoverAdjacency'
-import { getArtistStemCIDs, getArtistStemRows } from './discoverArtistStems'
+import {
+  discoverStemRestriction,
+  getArtistStemCIDs,
+  getArtistStemRows
+} from './discoverArtistStems'
 import {
   artistScanQueueSize,
   queueArtistStems,
@@ -1458,12 +1462,15 @@ app.whenReady().then(async () => {
       console.log(
         `get-discover-candidates(${kinds.join('+')}): listJamsWithDb -- ${jams.length} jams in ${t1 - t0}ms`
       )
-      // Artist mode only. `me` never sends `artist`, so this stays undefined
-      // and getDiscoverCandidates takes today's path.
-      const artistName = artist?.trim() || undefined
-      const artistStemCIDs = artistName
-        ? await getArtistStemCIDs([...new Set(jams.map((j) => j.dbForJam))], artistName)
-        : undefined
+      // Before-the-sample gate (discoverStemRestriction): artist mode's
+      // artist, else with "only my stems" the target user's own stems --
+      // so a 1,000-stem sample is drawn from them, not from the whole
+      // library and then filtered down to ~1% of it. Neither: undefined,
+      // today's path.
+      const artistStemCIDs = await discoverStemRestriction(
+        [...new Set(jams.map((j) => j.dbForJam))],
+        { artist, onlyOwnStems, targetUser }
+      )
       // The faves dial's favourites-only draw (@shared/discoverFaves): the same before-the-sample
       // gate artist mode uses, so a handful of starred stems is not lost in a 1000-stem sample.
       const favesStemCIDs = Array.isArray(onlyStemCIDs)

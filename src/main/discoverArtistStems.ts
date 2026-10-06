@@ -172,3 +172,29 @@ export async function getArtistStemCIDs(
 ): Promise<ReadonlySet<string>> {
   return new Set((await getArtistStemRows(dbs, artist)).map((r) => r.stemCID))
 }
+
+/** The stems a Discover roll may draw from, applied BEFORE each pool's
+ * bounded random sample (getDiscoverCandidates' `artistStemCIDs`): artist
+ * mode's artist; else, with "only my stems", the target user's own; else
+ * undefined (no restriction).
+ *
+ * "Only my stems" used to sample 1,000 stems from the whole library and
+ * filter by owner afterwards (the pools' post-filters, kept as a safety
+ * net), so where his own are 1% a roll had ~10 candidates. Read the same
+ * way as an artist's (cached per db and name, Stems_IndexUser windows) --
+ * not through stemPriority.ts, which caches one username, while Discover's
+ * targetUser may be the RIFF_LIBRARY_USERNAME fallback: the two would
+ * evict each other. */
+export async function discoverStemRestriction(
+  dbs: readonly Database.Database[],
+  {
+    artist,
+    onlyOwnStems,
+    targetUser
+  }: { artist?: string; onlyOwnStems: boolean; targetUser?: string }
+): Promise<ReadonlySet<string> | undefined> {
+  const artistName = artist?.trim() || undefined
+  if (artistName) return getArtistStemCIDs(dbs, artistName)
+  if (onlyOwnStems && targetUser) return getArtistStemCIDs(dbs, targetUser)
+  return undefined
+}
