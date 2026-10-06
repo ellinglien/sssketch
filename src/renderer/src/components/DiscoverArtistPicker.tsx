@@ -9,6 +9,13 @@
 // (capture phase, propagation stopped -- LibraryBrowser closes the whole
 // library on a window-level Escape), and Escape or a pick hands focus back
 // to the artist field (ignoreRef).
+//
+// Combine artists (spec 2026-10-06-combine-artists-design §1): several can be
+// chosen. A click or Enter is still "only this artist" and closes; the `+`/`−`
+// on each row, Shift+click and Shift+Enter add or remove one and keep the
+// picker open; Backspace on an empty query removes the last chip. With two or
+// more chosen, chips sit above the field and the footer lists each named
+// artist's analysed share and the turns this session.
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   analysedLabel,
@@ -18,6 +25,15 @@ import {
   type ArtistIndex,
   type ArtistSuggestion
 } from '@shared/discoverArtist'
+import {
+  applyArtistPick,
+  canAddMember,
+  selectionOthers,
+  type ArtistMember,
+  type ArtistSelection
+} from '@shared/artistSelection'
+
+type AnalysedValue = { analysed: number; total: number } | 'failed'
 
 const JAMMED_WITH_POLL_MS = 2000
 /** After a failed load: 2 s, doubling, at most 30 s. */
@@ -27,22 +43,26 @@ const RETRY_MAX_MS = 30_000
 export function DiscoverArtistPicker({
   x,
   y,
-  artist,
+  selection,
   ownUsername,
-  onPick,
+  onChange,
   onClose,
   ignoreRef,
-  footerExtra
+  footerExtra,
+  turns
 }: {
   x: number
   y: number
-  artist: string | null
+  /** The chosen artists (`[null]` = me). */
+  selection: ArtistSelection
   ownUsername: string
-  onPick: (artist: string | null) => void
+  onChange: (next: ArtistSelection) => void
   onClose: () => void
   ignoreRef: React.RefObject<HTMLElement | null>
   /** Task 8's analyse-overnight button, rendered beside the analysed share. */
   footerExtra?: React.ReactNode
+  /** The share this session (`turns: a 6 · b 5`), shown under the footer; null with one artist. */
+  turns?: string | null
 }): React.JSX.Element {
   const menuRef = useRef<HTMLDivElement>(null)
   const listId = useId()
@@ -51,10 +71,11 @@ export function DiscoverArtistPicker({
   const [highlight, setHighlight] = useState(0)
   const [index, setIndex] = useState<ArtistIndex | null>(null)
   const [indexFailed, setIndexFailed] = useState(false)
-  const [analysed, setAnalysed] = useState<{
-    artist: string
-    value: { analysed: number; total: number } | 'failed'
-  } | null>(null)
+  const [analysed, setAnalysed] = useState<{ key: string; values: AnalysedValue[] } | null>(null)
+  const combined = selection.length > 1
+  /** The named artists whose analysed share the footer shows, in selection order. */
+  const analysedNames = selectionOthers(selection)
+  const analysedKey = JSON.stringify(analysedNames)
 
   useLayoutEffect(() => {
     const el = menuRef.current
@@ -122,22 +143,28 @@ export function DiscoverArtistPicker({
     }
   }, [ownUsername])
 
+  // Each named artist's analysed share, one after another (one artist: today's one call).
   useEffect(() => {
-    if (artist === null) return
+    const names = JSON.parse(analysedKey) as string[]
+    if (names.length === 0) return
     let cancelled = false
-    window.rifffApi
-      .discoverArtistAnalysed(artist)
-      .then((value) => {
-        if (!cancelled) setAnalysed({ artist, value })
-      })
-      .catch((err: unknown) => {
-        console.error('DiscoverArtistPicker: discoverArtistAnalysed failed:', err)
-        if (!cancelled) setAnalysed({ artist, value: 'failed' })
-      })
+    void (async () => {
+      const values: AnalysedValue[] = []
+      for (const name of names) {
+        try {
+          values.push(await window.rifffApi.discoverArtistAnalysed(name))
+        } catch (err: unknown) {
+          console.error('DiscoverArtistPicker: discoverArtistAnalysed failed:', err)
+          values.push('failed')
+        }
+        if (cancelled) return
+      }
+      setAnalysed({ key: analysedKey, values })
+    })()
     return () => {
       cancelled = true
     }
-  }, [artist])
+  }, [analysedKey])
 
   const suggestions = useMemo(
     () => (index ? suggestArtists(index, query, ownUsername) : []),
@@ -154,17 +181,48 @@ export function DiscoverArtistPicker({
     document.getElementById(`${listId}-option-${active}`)?.scrollIntoView({ block: 'nearest' })
   }, [active, listId])
 
-  function pick(s: ArtistSuggestion): void {
-    onPick(s.kind === 'me' ? null : normalizeArtistPick(s.user, ownUsername))
+  function memberOf(s: ArtistSuggestion): ArtistMember {
+    return s.kind === 'me' ? null : normalizeArtistPick(s.user, ownUsername)
+  }
+  /** Click / Enter: only this artist, and close -- today's pick. */
+  function pickOnly(s: ArtistSuggestion): void {
+    onChange(applyArtistPick(selection, memberOf(s), 'only', ownUsername))
     ignoreRef.current?.focus()
     onClose()
+  }
+  /** `+`/`−`, Shift+click, Shift+Enter: add or remove, and stay open. */
+  function toggle(s: ArtistSuggestion): void {
+    onChange(applyArtistPick(selection, memberOf(s), 'toggle', ownUsername))
+    setQuery('')
+  }
+  function memberLabel(member: ArtistMember): string {
+    return member ?? (ownUsername.trim() || 'me')
   }
 
   function optionId(i: number): string {
     return `${listId}-option-${i}`
   }
 
-  const analysedNow = analysed !== null && analysed.artist === artist ? analysed.value : null
+  const analysedNow = analysed !== null && analysed.key === analysedKey ? analysed.values : null
+  /** One artist: today's line. A combination: each named artist's share, `a 3% · b <1%`. */
+  const analysedText = combined
+    ? `analysed: ${analysedNames
+        .map((name, i) => {
+          const v = analysedNow?.[i]
+          const share =
+            v === undefined
+              ? '…'
+              : v === 'failed'
+                ? 'couldn’t load'
+                : analysedLabel(v.analysed, v.total).replace(/^analysed: /, '')
+          return `${name} ${share}`
+        })
+        .join(' · ')}`
+    : analysedNow === null
+      ? 'analysed: …'
+      : analysedNow[0] === 'failed'
+        ? 'analysed: couldn’t load'
+        : analysedLabel(analysedNow[0].analysed, analysedNow[0].total)
 
   return (
     <div
@@ -185,6 +243,32 @@ export function DiscoverArtistPicker({
         border: '1px solid var(--ra-border-strong)'
       }}
     >
+      {combined && (
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+          {selection.map((member) => {
+            const name = memberLabel(member)
+            return (
+              <button
+                key={member ?? ':me'}
+                type="button"
+                aria-label={`remove ${name}`}
+                onClick={() => onChange(applyArtistPick(selection, member, 'toggle', ownUsername))}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 9,
+                  padding: '2px 6px',
+                  background: 'transparent',
+                  border: '1px solid var(--ra-border-strong)',
+                  color: 'var(--ra-text)',
+                  cursor: 'pointer'
+                }}
+              >
+                {name} ×
+              </button>
+            )
+          })}
+        </div>
+      )}
       <input
         autoFocus
         role="combobox"
@@ -206,7 +290,15 @@ export function DiscoverArtistPicker({
             e.preventDefault()
             if (active >= 0) setHighlight(Math.max(active - 1, 0))
           } else if (e.key === 'Enter' && active >= 0) {
-            pick(suggestions[active])
+            if (e.shiftKey) {
+              e.preventDefault()
+              toggle(suggestions[active])
+            } else pickOnly(suggestions[active])
+          } else if (e.key === 'Backspace' && query === '' && selection.length > 1) {
+            e.preventDefault()
+            onChange(
+              applyArtistPick(selection, selection[selection.length - 1], 'toggle', ownUsername)
+            )
           }
         }}
         style={{
@@ -243,44 +335,82 @@ export function DiscoverArtistPicker({
         id={listId}
         role="listbox"
         aria-label="artists"
+        aria-multiselectable="true"
         style={{ display: 'flex', flexDirection: 'column', maxHeight: 260, overflowY: 'auto' }}
       >
-        {suggestions.map((s, i) => (
-          <button
-            key={s.kind === 'me' ? ':me' : s.user}
-            id={optionId(i)}
-            role="option"
-            aria-selected={i === active}
-            tabIndex={-1}
-            onMouseEnter={() => setHighlight(i)}
-            onClick={() => pick(s)}
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 10,
-              textAlign: 'left',
-              padding: '3px 6px',
-              background: i === active ? 'var(--ra-bg-row-active)' : 'transparent',
-              border: 'none',
-              color: i === active ? 'var(--ra-text)' : 'var(--ra-text-2)',
-              cursor: 'pointer'
-            }}
-          >
-            {suggestionLabel(s, ownUsername)}
-          </button>
-        ))}
+        {suggestions.map((s, i) => {
+          const member = memberOf(s)
+          const chosen = selection.includes(member)
+          const canToggle = canAddMember(selection, member, ownUsername)
+          const name = memberLabel(member)
+          return (
+            <div
+              key={s.kind === 'me' ? ':me' : s.user}
+              role="none"
+              style={{ display: 'grid', gridTemplateColumns: '1fr 18px', gap: 4 }}
+            >
+              <button
+                id={optionId(i)}
+                role="option"
+                aria-selected={chosen}
+                tabIndex={-1}
+                onMouseEnter={() => setHighlight(i)}
+                onClick={(e) => (e.shiftKey ? toggle(s) : pickOnly(s))}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  textAlign: 'left',
+                  padding: '3px 6px',
+                  background: i === active ? 'var(--ra-bg-row-active)' : 'transparent',
+                  border: 'none',
+                  color: chosen || i === active ? 'var(--ra-text)' : 'var(--ra-text-2)',
+                  cursor: 'pointer'
+                }}
+              >
+                {suggestionLabel(s, ownUsername)}
+              </button>
+              <button
+                type="button"
+                tabIndex={-1}
+                aria-label={`${chosen ? 'remove' : 'add'} ${name}`}
+                disabled={!canToggle}
+                data-tooltip={
+                  canToggle
+                    ? undefined
+                    : member === null
+                      ? 'set your endlesss username to combine me'
+                      : 'six at most'
+                }
+                onClick={() => toggle(s)}
+                style={{
+                  alignSelf: 'center',
+                  width: 18,
+                  height: 18,
+                  padding: 0,
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  lineHeight: 1,
+                  background: 'transparent',
+                  border: '1px solid var(--ra-border)',
+                  color: canToggle ? 'var(--ra-text-2)' : 'var(--ra-text-4)',
+                  cursor: canToggle ? 'pointer' : 'default'
+                }}
+              >
+                {chosen ? '−' : '+'}
+              </button>
+            </div>
+          )
+        })}
       </div>
-      {artist !== null && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 9 }}>
-          <span style={{ color: 'var(--ra-text-3)' }}>
-            {analysedNow === null
-              ? 'analysed: …'
-              : analysedNow === 'failed'
-                ? 'analysed: couldn’t load'
-                : analysedLabel(analysedNow.analysed, analysedNow.total)}
-          </span>
+      {analysedNames.length > 0 && (
+        <div
+          style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 8, fontSize: 9 }}
+        >
+          <span style={{ color: 'var(--ra-text-3)' }}>{analysedText}</span>
           {footerExtra}
         </div>
       )}
+      {turns != null && <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>{turns}</span>}
     </div>
   )
 }

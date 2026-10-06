@@ -245,13 +245,11 @@ import {
   lingeringNotice,
   listenOnlyTooltip,
   nextTurnoverSlotId,
-  normalizeArtistPick,
   tagPickedUnderArtist,
   type ArtistRollFilter,
   type ListenOnlyAction
 } from '@shared/discoverArtist'
 import {
-  applyArtistPick,
   artistSelectionKey,
   artistSelectionLabel,
   artistSelectionNotice,
@@ -266,6 +264,7 @@ import {
   selectionOthers,
   selectionTurnoverIds,
   selectionsEqual,
+  memberKey,
   tagByCreator,
   type ArtistSelection
 } from '@shared/artistSelection'
@@ -1069,8 +1068,6 @@ export function DiscoverPanel({
   const artistCreator = selectionCreatorFilter(artists, currentUsername)
   /** The others' names, for the single-name tooltips (one other artist: that name). */
   const othersLabel = selectionOthers(artists).join(' + ')
-  /** TEMPORARY until the picker chooses several: the one artist it shows (the first other). */
-  const pickerArtist = artists.length === 1 ? artists[0] : (selectionOthers(artists)[0] ?? null)
   /** Combine artists' even share (@shared/artistShare): turns landed and picks in flight per
    * member, this session. Reconciled on every selection change (changeArtists). */
   const artistShareRef = useRef<ArtistShareLedger>(
@@ -1078,8 +1075,11 @@ export function DiscoverPanel({
   )
   /** Members known to have nothing for a row's kinds (noteArtistEmpty), for 5 minutes. */
   const artistEmptyRef = useRef<ArtistEmptyMemo>(EMPTY_ARTIST_MEMO)
-  /** The picker's `turns:` line re-reads the ledger on this tick. */
-  const [, setArtistShareTick] = useState(0)
+  /** The ledger's landed turns as of the last change, for the picker's `turns:` line (render
+   * never reads the ref). */
+  const [artistTurnsShown, setArtistTurnsShown] = useState<Readonly<Record<string, number>>>(
+    () => artistShareRef.current.landed
+  )
   // Listen-only (spec §2): the one list the buttons dim by and main refuses.
   /** The same set as `listenOnly` below, as of NOW (artistsRef, slotsRef),
    * for the functions themselves: the phone's keep and long-lived callbacks
@@ -6818,7 +6818,7 @@ export function DiscoverPanel({
     artistsRef.current = next
     artistShareRef.current = reconcileArtistShare(artistShareRef.current, next)
     artistEmptyRef.current = EMPTY_ARTIST_MEMO
-    setArtistShareTick((n) => n + 1)
+    setArtistTurnsShown(artistShareRef.current.landed)
     onArtistsChange(next)
     setAnalysisQueued(null)
     const added = selectionOthers(next).filter((m) => !prev.includes(m))
@@ -6845,7 +6845,7 @@ export function DiscoverPanel({
     const member = memberOfPick(candidate, sel)
     if (member === undefined) return
     artistShareRef.current = landArtistTurn(artistShareRef.current, member)
-    setArtistShareTick((n) => n + 1)
+    setArtistTurnsShown(artistShareRef.current.landed)
   }
   const radioMenuButtonRef = useRef<HTMLButtonElement>(null)
   // The top line's `radio` (the stop), while radio runs.
@@ -13658,39 +13658,51 @@ export function DiscoverPanel({
         <DiscoverArtistPicker
           x={artistMenu.x}
           y={artistMenu.y}
-          artist={pickerArtist}
+          selection={artists}
           ownUsername={currentUsername}
-          onPick={(next) =>
-            changeArtists(
-              applyArtistPick(
-                artistsRef.current,
-                normalizeArtistPick(next, currentUsername),
-                'only',
-                currentUsername
-              )
-            )
-          }
+          onChange={changeArtists}
           onClose={() => setArtistMenu(null)}
           ignoreRef={artistButtonRef}
+          turns={
+            combined
+              ? `turns: ${artists
+                  .map(
+                    (m) =>
+                      `${m ?? (currentUsername.trim() || 'me')} ${artistTurnsShown[memberKey(m)] ?? 0}`
+                  )
+                  .join(' · ')}`
+              : null
+          }
           footerExtra={
-            pickerArtist !== null ? (
+            selectionOthers(artists).length > 0 ? (
               <button
                 disabled={!discoverConsented || analysisQueued !== null}
                 data-tooltip={
                   discoverConsented
-                    ? "queue this artist's stems for the overnight scan"
+                    ? combined
+                      ? "queue these artists' stems for the overnight scan"
+                      : "queue this artist's stems for the overnight scan"
                     : 'turn on library analysis first'
                 }
                 onClick={() => {
                   // Disabled while the call runs (the label is non-null).
                   setAnalysisQueued('queueing…')
-                  window.rifffApi
-                    .discoverQueueArtistAnalysis(pickerArtist)
-                    .then((r) => {
+                  // Every named artist, one after another (combine artists; `me` is never
+                  // queued). One artist: today's one call.
+                  const names = selectionOthers(artists)
+                  const queueAll = async (): Promise<number> => {
+                    let size = 0
+                    for (const name of names) {
+                      size = (await window.rifffApi.discoverQueueArtistAnalysis(name)).size
+                    }
+                    return size
+                  }
+                  queueAll()
+                    .then((size) => {
                       // The whole queue's size: "queued 0" says nothing
                       // when this artist's stems were all queued already.
-                      setAnalysisQueued(`${r.size.toLocaleString('en-US')} queued`)
-                      announceArtistScanQueued(r.size)
+                      setAnalysisQueued(`${size.toLocaleString('en-US')} queued`)
+                      announceArtistScanQueued(size)
                     })
                     .catch((err: unknown) => {
                       console.error('DiscoverPanel: discoverQueueArtistAnalysis failed:', err)
