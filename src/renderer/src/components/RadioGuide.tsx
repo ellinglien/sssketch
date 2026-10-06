@@ -299,6 +299,20 @@ function Block({ block }: { block: RadioGuideBlock }): React.JSX.Element {
   }
 }
 
+/** React's portal bubbles a DOM event to the guide's React ancestors (DiscoverPanel's root), not
+ * its DOM ones: a file dragged over or dropped on the guide would light up Discover's drop target
+ * and import. The guide takes every drag event itself (and swallows the drop). The other events
+ * that bubble are harmless: a click stops at the Library Browser's card (its own stopPropagation),
+ * no ancestor listens for mousedown, wheel, pointer or context-menu events, and keys never get
+ * that far (the capture listener below). */
+function stopDrag(e: React.DragEvent): void {
+  e.stopPropagation()
+}
+function swallowDrop(e: React.DragEvent): void {
+  e.stopPropagation()
+  e.preventDefault()
+}
+
 interface RadioGuideProps {
   onClose: () => void
   /** Focused again when the guide closes (the `?` that opened it). */
@@ -348,6 +362,10 @@ function RadioGuideImpl({ onClose, returnFocusRef }: RadioGuideProps): React.JSX
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
+      onDragEnter={stopDrag}
+      onDragLeave={stopDrag}
+      onDragOver={swallowDrop}
+      onDrop={swallowDrop}
       style={{
         position: 'fixed',
         inset: 0,
