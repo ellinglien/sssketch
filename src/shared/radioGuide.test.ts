@@ -231,6 +231,18 @@ describe('the radio guide: every control it names exists', () => {
     }
   })
 
+  it('the desktop says a build-up pays off only with builds sized, its default; the web always', () => {
+    const builds = strip.find((c) => c.id === 'builds')
+    expect(builds?.label).toBe('builds')
+    expect(builds?.kind === 'chips' ? builds.chips.map((c) => c.label) : []).toContain('sized')
+    expect(DEFAULT_RADIO_SETTINGS.sizedBuilds).toBe(true)
+    expect(textOf('desktop')).toContain(
+      'with builds sized (the default), a build-up always pays off'
+    )
+    expect(textOf('web')).toContain('a build-up always pays off')
+    expect(textOf('web')).not.toContain('builds sized')
+  })
+
   it('the density line names every density option', () => {
     const density = itemsIn('web', true).find((i) => i.key === 'density')
     for (const d of RADIO_DENSITY_OPTIONS) {

@@ -467,6 +467,11 @@ const [[band4At], [band2At], [band1At]] = RADIO_PACE_BAR_BANDS
 const pct = (x: number): number => Math.round(x * 100)
 const foldBeats = FOLD_CYCLE_BEATS.filter((b) => Number.isInteger(b))
 
+/** What a sized build promises (radioBuildSize): the web always sizes its builds; the desktop
+ * only with `builds` on sized, its default. */
+const PAYOFF =
+  'something real changes when the next phrase lands, so it never builds up to nothing, and a small change gets a small move or none.'
+
 /** The move cards, in the planner's order, then the gap. */
 const MOVE_TEXT: Readonly<Record<TurnaroundMove, string>> = {
   'drum drop': 'a drums row drops out for the end of the phrase',
@@ -567,7 +572,13 @@ export const RADIO_GUIDE: RadioGuide = {
         },
         {
           type: 'text',
-          text: 'a build-up always pays off: something real changes when the next phrase lands, so it never builds up to nothing, and a small change gets a small move or none.'
+          only: 'web',
+          text: `a build-up always pays off: ${PAYOFF}`
+        },
+        {
+          type: 'text',
+          only: 'desktop',
+          text: `with builds sized (the default), a build-up always pays off: ${PAYOFF}`
         },
         {
           type: 'cards',
