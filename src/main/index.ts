@@ -160,7 +160,7 @@ import {
 } from './stemAutoCategoryStore'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
-import { getStemPriority, setStemPriorityUsername, type StemPriority } from './stemPriority'
+import { getStemPriority, setStemPriorityUsername } from './stemPriority'
 import { stemPriorityRank } from '@shared/stemPriorityOrder'
 import { getStemAvailabilityReport, onStemAvailabilityNotice } from './stemAvailability'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
@@ -1722,17 +1722,15 @@ app.whenReady().then(async () => {
     'get-discover-library-scan-work',
     async (_event, username: string | null = null): Promise<LibraryScanWork> => {
       setStemPriorityUsername(username)
-      let priority: StemPriority | undefined
-      try {
-        priority = await getStemPriority()
-      } catch (err) {
-        // today's order rather than no work list
-        console.error('get-discover-library-scan-work: stem priority failed:', err)
-      }
+      // Read alongside the listing, not before it (the first build takes
+      // 4 s or more on the USB archive): both are `.all()` per bounded
+      // statement with yields between, so they interleave safely on the
+      // shared connection. The order is applied once both are done; a
+      // failed read leaves today's order (listLibraryScanWork logs it).
       return listLibraryScanWork(
         listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
         openOwnRiffLibraryDb(),
-        { priority }
+        { priority: getStemPriority() }
       )
     }
   )

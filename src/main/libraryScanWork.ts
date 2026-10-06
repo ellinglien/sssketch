@@ -45,7 +45,9 @@
 // Order (2026-10-06, Elling: own stems first): with `priority`, the list is
 // then stably partitioned -- his own stems, his favourites, the rest
 // (@shared/stemPriorityOrder; the sets from stemPriority.ts), each group in
-// the order above. One pass over the finished list, no extra SQL here.
+// the order above. One pass over the finished list, no extra SQL here. The
+// priority may arrive as a promise: it is read while the list is built, and
+// only the final partition waits for it.
 //
 // Main-process rules: `.all()` per bounded statement, never `.iterate()`
 // across an await; JS slices of at most 8 ms (yieldSlice); per-db SQL, never
@@ -88,8 +90,10 @@ export interface LibraryScanWorkOptions {
   readdirFn?: (dir: string) => Promise<string[]>
   statFn?: (path: string) => Promise<{ size: number; isFile(): boolean }>
   /** Own stems, then favourites, first (stemPriority.ts). Absent: the
-   * order above. */
-  priority?: StemPrioritySets
+   * order above. May still be on its way (main's first build takes seconds
+   * on the USB archive): the listing runs meanwhile, and the order is
+   * applied once both are done. One that fails leaves the order above. */
+  priority?: StemPrioritySets | PromiseLike<StemPrioritySets | undefined>
 }
 
 const DEFAULT_WINDOW_SIZE = 2000
@@ -215,6 +219,17 @@ export async function listLibraryScanWork(
   ownDb: Database.Database,
   options: LibraryScanWorkOptions = {}
 ): Promise<LibraryScanWork> {
+  // Handled at once, so one that fails while the listing runs is never an
+  // unhandled rejection.
+  const priorityReady: Promise<StemPrioritySets | undefined> = Promise.resolve(
+    options.priority
+  ).then(
+    (priority) => priority,
+    (err: unknown) => {
+      console.error('listLibraryScanWork: stem priority failed (unordered list):', err)
+      return undefined
+    }
+  )
   const windowSize = Math.max(1, options.windowSize ?? DEFAULT_WINDOW_SIZE)
   const statFn = options.statFn ?? ((path: string) => statAsync(path))
   const listing = createAsyncDirListing({
@@ -455,9 +470,10 @@ export async function listLibraryScanWork(
 
   countWork('library-scan-work.work', work.length)
   countWork('library-scan-work.placeholders', placeholdersSkipped)
-  if (!options.priority) return { work, placeholdersSkipped }
+  const priority = await priorityReady
+  if (!priority) return { work, placeholdersSkipped }
   const started = performance.now()
-  const ordered = orderByStemPriority(work, (t) => t.key, options.priority)
+  const ordered = orderByStemPriority(work, (t) => t.key, priority)
   countWork('ms:library-scan-work.order', Math.round(performance.now() - started))
   return { work: ordered, placeholdersSkipped }
 }

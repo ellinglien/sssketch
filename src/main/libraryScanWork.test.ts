@@ -411,6 +411,44 @@ describe('listLibraryScanWork: own stems first (2026-10-06)', () => {
     expect(asMap(result.work)).toEqual(asMap((await listLibraryScanWork(jams, own)).work))
   })
 
+  // Review of 06eecbdc: main waited for the priority (4.3 s or more on
+  // Elling's archive) before listing any work. Now the two run together.
+  it('a priority still being read runs alongside the listing, and orders it at the end', async () => {
+    const { own, jams, dbs } = withPriority()
+    const ordered = (
+      await listLibraryScanWork(jams, own, {
+        priority: await buildStemPriority(dbs, own, 'me', { windowSize: 1 })
+      })
+    ).work.map((t) => t.key)
+    let release: (() => void) | null = null
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    // The priority is ready only once the listing has reached the disk:
+    // waiting for it first would never get there.
+    const priority = gate.then(() => buildStemPriority(dbs, own, 'me', { windowSize: 1 }))
+    const statFn = (path: string): Promise<{ size: number; isFile(): boolean }> => {
+      release?.()
+      return stat(path)
+    }
+    const timeout = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('waited for the priority before listing')), 2000)
+    )
+    const result = await Promise.race([
+      listLibraryScanWork(jams, own, { priority, statFn }),
+      timeout
+    ])
+    expect(result.work.map((t) => t.key)).toEqual(ordered)
+  })
+
+  it('a priority that fails leaves the list in today order', async () => {
+    const { own, jams } = withPriority()
+    const today = (await listLibraryScanWork(jams, own)).work.map((t) => t.key)
+    const failed = Promise.reject(new Error('archive unreadable'))
+    const keys = (await listLibraryScanWork(jams, own, { priority: failed })).work.map((t) => t.key)
+    expect(keys).toEqual(today)
+  })
+
   it('no username: favourites first, otherwise today order; nothing either: today order', async () => {
     const { own, jams, dbs } = withPriority()
     const today = (await listLibraryScanWork(jams, own)).work.map((t) => t.key)
