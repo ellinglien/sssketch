@@ -4,10 +4,13 @@
 // radio's `.top`): while radio runs, Discover's two header rows become this one sticky line.
 // Left, play/stop and `radio` (the stop) with its interval line inside its bottom edge; then the
 // readout (status line, phrase ruler, fold's line); then the mix actions (RadioMixActions, passed
-// in: they act on what is playing); right, undo and redo. Values and callbacks only.
+// in: they act on what is playing); right, the `simple / advanced` switch (spec
+// 2026-10-05-radio-simple-view-design), undo and redo. Values and callbacks only.
 import type { ReactNode } from 'react'
 import { RADIO_VIEW_FRAME } from './discoverRowGrid'
+import { Segmented } from './RadioControls'
 import { radioRulerCells, type RadioReadout } from '@shared/radioReadout'
+import { RADIO_VIEWS, RADIO_VIEW_TOOLTIP, type RadioView } from '@shared/radioView'
 
 /** Behind the sticky bars: the library box's own fill (LibraryBrowser), so nothing shows through
  * and nothing looks like a second panel. */
@@ -23,6 +26,8 @@ export function RadioTopLine({
   readout,
   foldSummary,
   actions,
+  view,
+  onViewChange,
   canUndo,
   canRedo,
   onUndo,
@@ -40,6 +45,9 @@ export function RadioTopLine({
   foldSummary: string | null
   /** The mix actions (RadioMixActions): they act on what is playing. */
   actions: ReactNode
+  /** The view shown (simple or advanced), and the switch's choice. What shows, never what plays. */
+  view: RadioView
+  onViewChange: (view: RadioView) => void
   canUndo: boolean
   canRedo: boolean
   onUndo: () => void
@@ -214,6 +222,18 @@ export function RadioTopLine({
           borderLeft: '1px solid var(--ra-border)'
         }}
       >
+        {/* The view switch: the strip's word switch (Segmented), buttons, so Tab and Enter
+            reach it. Its tooltip says what the other view adds or leaves out. */}
+        <Segmented
+          ariaLabel="radio view"
+          size="live"
+          options={RADIO_VIEWS.map((v) => ({
+            label: v,
+            on: view === v,
+            tooltip: RADIO_VIEW_TOOLTIP[view],
+            onClick: () => (view === v ? undefined : onViewChange(v))
+          }))}
+        />
         <button
           onClick={onUndo}
           disabled={!canUndo}

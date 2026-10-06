@@ -117,7 +117,7 @@ import { usePlacedFlatStems } from './state/usePlacedFlatStems'
 import type { DiscoverSettings } from '../../main/discoverSettingsStore'
 import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
 import { DEFAULT_RADIO_SETTINGS, type RadioSettings } from '@shared/radioSchedule'
-import { DEFAULT_RADIO_VIEW } from '@shared/radioView'
+import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 
 /** Tracks what the currently-open project actually is, so Save/Export know
@@ -1702,6 +1702,7 @@ function Frame(): React.JSX.Element {
   const discoverConsented = discoverSettings.consentedToLibraryScan
   const traitMatchBar = discoverSettings.traitMatchBar
   const radioSettings = discoverSettings.radio
+  const radioView = discoverSettings.radioView
   useEffect(() => {
     void window.rifffApi
       .getDiscoverSettings()
@@ -1742,6 +1743,12 @@ function Frame(): React.JSX.Element {
    * own doc comment above). */
   async function setRadioSettings(patch: Partial<RadioSettings>): Promise<void> {
     await updateDiscoverSettings({ radio: { ...radioSettings, ...patch } })
+  }
+
+  /** The radio view's simple / advanced switch (spec 2026-10-05-radio-simple-view-design). Its
+   * own field, so `radio` keeps its identity and nothing radio does re-runs on a switch. */
+  async function setRadioView(view: RadioView): Promise<void> {
+    await updateDiscoverSettings({ radioView: view })
   }
 
   async function startTour(): Promise<void> {
@@ -2810,6 +2817,8 @@ function Frame(): React.JSX.Element {
             traitMatchBar={traitMatchBar}
             radioSettings={radioSettings}
             onRadioSettingsChange={setRadioSettings}
+            radioView={radioView}
+            onRadioViewChange={setRadioView}
             setDiscoverConsented={setDiscoverConsented}
             discoverSlots={discoverSlots}
             setDiscoverSlots={setDiscoverSlots}

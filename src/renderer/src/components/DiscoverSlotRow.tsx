@@ -49,6 +49,12 @@ import type { DiscoverSlot } from './DiscoverPanel'
 import { RadioRowPlates } from './RadioRowPlates'
 import type { RadioRowPlates as RadioRowPlatesModel } from '@shared/radioRowPlates'
 import {
+  RADIO_LOCK_MARK_TOOLTIP,
+  radioRowParts,
+  type RadioRowPart,
+  type RadioView
+} from '@shared/radioView'
+import {
   peekResolvedCandidateStem,
   resolveCandidateStem,
   type ResolvedCandidateStem
@@ -292,6 +298,7 @@ export function DiscoverSlotRow({
   soundSourceEndlesss,
   soundSourceAudioIn,
   layout,
+  radioView,
   rowNumber,
   plates
 }: {
@@ -459,6 +466,10 @@ export function DiscoverSlotRow({
    * runs, the radio view's button line over a full-width waveform. The same parts either way,
    * and the same DiscoverSlotRow, so switching never remounts the row. */
   layout: 'grid' | 'radio'
+  /** The radio layout's view (@shared/radioView): simple draws the live cluster and the label,
+   * advanced every part. Only conditional children of the button line change; the waveform cell
+   * stays where it is, so a switch remounts nothing. The grid ignores it. */
+  radioView: RadioView
   /** The row's place in the list, from 1: the radio layout's accessible name. */
   rowNumber: number
   /** The radio layout's plates on the waveform (@shared/radioRowPlates): label and tail, cue,
@@ -901,6 +912,9 @@ export function DiscoverSlotRow({
   const rowBtn = radioLayout ? 'var(--ra-h-row-button)' : 18
   const liveBorder = radioLayout ? 'var(--ra-border-strong)' : 'var(--ra-border)'
   const waveHeight = radioLayout ? RADIO_WAVEFORM_HEIGHT : DISCOVER_WAVEFORM_HEIGHT
+  // Which button-line parts the radio layout's view draws; the grid draws them all, as before.
+  const radioParts = radioRowParts(radioView, { locked: slot.locked })
+  const shows = (part: RadioRowPart): boolean => !radioLayout || radioParts.has(part)
 
   // Direct request, 2026-09-15: "an X for remove" -- icon-only, same
   // as every other row button now.
@@ -953,6 +967,27 @@ export function DiscoverSlotRow({
     >
       <LockGlyph locked={slot.locked} />
     </button>
+  )
+  // Simple's padlock on a locked row: the lock button's locked look, as a status mark, not a
+  // button (spec: hiding an active lock would be confusing).
+  const lockMark = (
+    <span
+      role="img"
+      aria-label="locked"
+      data-tooltip={RADIO_LOCK_MARK_TOOLTIP}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        width: rowBtn,
+        height: rowBtn,
+        background: 'var(--ra-stretch-on-bg)',
+        border: '1px solid var(--ra-stretch-on)',
+        color: 'var(--ra-stretch-on)'
+      }}
+    >
+      <LockGlyph locked />
+    </span>
   )
   // A single guard around a fragment is safe here (rather than one
   // guard per button, as this used to be split) because each button
@@ -1305,48 +1340,65 @@ export function DiscoverSlotRow({
         minWidth: 0
       }}
     >
-      <button
-        ref={kindButtonRef}
-        disabled={slot.locked}
-        onClick={(e) => {
-          if (kindMenu) {
-            closeKindMenu()
-            return
-          }
-          const rect = e.currentTarget.getBoundingClientRect()
-          setKindMenu({ x: rect.left, y: rect.bottom + 4 })
-        }}
-        aria-expanded={kindMenu !== null}
-        aria-label={`kinds: ${slotKindsLabel(slot.kinds)}`}
-        data-tooltip={slot.locked ? 'unlock first' : slotKindsLabel(slot.kinds)}
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 3,
-          ...(radioLayout ? { maxWidth: 110 } : { width: 110 }),
-          padding: 0,
-          fontFamily: 'inherit',
-          fontSize: radioLayout ? 'var(--ra-fs-10)' : 9,
-          textAlign: 'left',
-          background: 'transparent',
-          border: 'none',
-          // The radio layout's kind label is in the stem's own type colour (audio information).
-          color: radioLayout
-            ? resolvedStem !== null
-              ? stemColorVar(resolvedStem)
-              : 'var(--ra-text-2)'
-            : kindMenu
-              ? 'var(--ra-text)'
-              : 'var(--ra-text-3)',
-          cursor: slot.locked ? 'default' : 'pointer'
-        }}
-      >
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      {shows('kind-menu') ? (
+        <button
+          ref={kindButtonRef}
+          disabled={slot.locked}
+          onClick={(e) => {
+            if (kindMenu) {
+              closeKindMenu()
+              return
+            }
+            const rect = e.currentTarget.getBoundingClientRect()
+            setKindMenu({ x: rect.left, y: rect.bottom + 4 })
+          }}
+          aria-expanded={kindMenu !== null}
+          aria-label={`kinds: ${slotKindsLabel(slot.kinds)}`}
+          data-tooltip={slot.locked ? 'unlock first' : slotKindsLabel(slot.kinds)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 3,
+            ...(radioLayout ? { maxWidth: 110 } : { width: 110 }),
+            padding: 0,
+            fontFamily: 'inherit',
+            fontSize: radioLayout ? 'var(--ra-fs-10)' : 9,
+            textAlign: 'left',
+            background: 'transparent',
+            border: 'none',
+            // The radio layout's kind label is in the stem's own type colour (audio information).
+            color: radioLayout
+              ? resolvedStem !== null
+                ? stemColorVar(resolvedStem)
+                : 'var(--ra-text-2)'
+              : kindMenu
+                ? 'var(--ra-text)'
+                : 'var(--ra-text-3)',
+            cursor: slot.locked ? 'default' : 'pointer'
+          }}
+        >
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {slotKindsLabel(slot.kinds)}
+          </span>
+          {!slot.locked && <span aria-hidden="true">▾</span>}
+        </button>
+      ) : (
+        // Simple: the kind label in the stem's type colour, not a menu.
+        <span
+          data-tooltip={slotKindsLabel(slot.kinds)}
+          style={{
+            maxWidth: 110,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+            whiteSpace: 'nowrap',
+            fontSize: 'var(--ra-fs-10)',
+            color: resolvedStem !== null ? stemColorVar(resolvedStem) : 'var(--ra-text-2)'
+          }}
+        >
           {slotKindsLabel(slot.kinds)}
         </span>
-        {!slot.locked && <span aria-hidden="true">▾</span>}
-      </button>
-      {shownMeter.length > 0 && (
+      )}
+      {shows('meter') && shownMeter.length > 0 && (
         <div
           ref={meterRef}
           aria-label="match"
@@ -1599,7 +1651,7 @@ export function DiscoverSlotRow({
   )
   const popovers = (
     <>
-      {nearbyMenu && nearbyAnchor !== null && (
+      {nearbyMenu && nearbyAnchor !== null && shows('nearby') && (
         <DiscoverNearbyPopover
           x={nearbyMenu.x}
           y={nearbyMenu.y}
@@ -1612,7 +1664,7 @@ export function DiscoverSlotRow({
           creator={nearbyCreator}
         />
       )}
-      {reclassifyMenu && slot.candidate && (
+      {reclassifyMenu && slot.candidate && shows('meter') && (
         <DiscoverReclassifyPicker
           x={reclassifyMenu.x}
           y={reclassifyMenu.y}
@@ -1622,7 +1674,7 @@ export function DiscoverSlotRow({
           ignoreRef={meterRef}
         />
       )}
-      {kindMenu && !slot.locked && (
+      {kindMenu && !slot.locked && shows('kind-menu') && (
         <DiscoverKindPicker
           x={kindMenu.x}
           y={kindMenu.y}
@@ -1694,26 +1746,30 @@ export function DiscoverSlotRow({
             }}
           >
             {/* The live cluster: m s, skip like next, hook dig, as icons. */}
-            <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>{muteSolo}</span>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 3 }}>
+              {shows('mute-solo') && muteSolo}
+            </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: 6 }}>
-              {skipButton}
-              {likeButton}
-              {dislikeButton}
+              {shows('skip') && skipButton}
+              {shows('like') && likeButton}
+              {shows('change-soon') && dislikeButton}
             </span>
             <span
               data-slot="radio-role"
               style={{ display: 'flex', alignItems: 'center', gap: 3, marginLeft: 6 }}
             >
-              {roleButtons}
+              {shows('hook-dig') && roleButtons}
             </span>
-            {kindsBlock}
+            {shows('kind') && kindsBlock}
             <span style={{ flex: 1 }} />
-            {/* The extras, quieter. */}
-            {anyStemButton}
-            {nearbyButton}
-            {duplicateButton}
-            {lockButton}
-            {removeButton}
+            {/* The extras, quieter: advanced only. Simple shows a locked row's lock as a mark.
+                Each slot is fixed, so a switch shifts nothing and remounts nothing. */}
+            {shows('any-stem') && anyStemButton}
+            {shows('nearby') && nearbyButton}
+            {shows('duplicate') && duplicateButton}
+            {shows('lock') && lockButton}
+            {shows('lock-mark') && lockMark}
+            {shows('remove') && removeButton}
           </div>
           {waveformCell}
         </div>

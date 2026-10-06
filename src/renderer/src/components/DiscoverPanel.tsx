@@ -2,6 +2,8 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Dial } from './Dial'
 import { RadioMixActions, RadioStrip, type RadioMixBundle } from './RadioStrip'
+import { radioStripModel, type RadioStripContext } from '@shared/radioStripModel'
+import { radioViewStrip, type RadioView } from '@shared/radioView'
 import { RadioTopLine, RedoIcon, UndoIcon } from './RadioTopLine'
 import { DiceIcon } from './DiceIcon'
 import { RadioStartPrompt } from './RadioStartPrompt'
@@ -821,6 +823,8 @@ export function DiscoverPanel({
   traitMatchBar,
   radioSettings,
   onRadioSettingsChange,
+  radioView,
+  onRadioViewChange,
   setDiscoverConsented,
   seedBpm,
   onCoachSlotsChange
@@ -885,6 +889,11 @@ export function DiscoverPanel({
    * controls-design.md. */
   radioSettings: RadioSettings
   onRadioSettingsChange: (patch: Partial<RadioSettings>) => Promise<void>
+  /** The radio view's simple / advanced switch (spec 2026-10-05-radio-simple-view-design), and
+   * its persisting setter (App's DiscoverSettings.radioView). What shows, never what radio does:
+   * nothing radio runs reads it. */
+  radioView: RadioView
+  onRadioViewChange: (view: RadioView) => Promise<void>
   /** Persists + updates the shared consent value above (App.tsx's
    * setDiscoverConsented) -- the "yes, analyze" button below calls this
    * directly with `true` rather than maintaining its own independently
@@ -12490,6 +12499,25 @@ export function DiscoverPanel({
     ])
   )
 
+  // What the radio view draws (spec 2026-10-05-radio-simple-view-design): the strip model's
+  // groups through the view. The top line's mix reads it here; the strip reads it from the same
+  // settings, context and view.
+  const radioStripCtx: RadioStripContext = {
+    artistMode: mode === 'other',
+    hasUsername,
+    sound: soundNow,
+    sounding: previewingSlotIds.size > 0
+  }
+  const radioMixShown: ReadonlySet<string> = new Set(
+    radioOn
+      ? radioViewStrip(
+          radioStripModel(radioSettings, radioStripCtx),
+          radioView,
+          radioSettings
+        ).top.map((c) => c.id)
+      : []
+  )
+
   // The mix actions (similar all, fetch hearts, add to shelf, add to timeline, keep): drawn by the
   // radio top line while radio runs. Built once, here, so the JSX below stays a plain tree.
   const radioMix: RadioMixBundle = {
@@ -12656,7 +12684,9 @@ export function DiscoverPanel({
           progress={radioProgress}
           readout={radioReadoutNow}
           foldSummary={radioFoldStatusNow?.summary ?? null}
-          actions={<RadioMixActions mix={radioMix} />}
+          actions={<RadioMixActions mix={radioMix} shown={radioMixShown} />}
+          view={radioView}
+          onViewChange={(v) => void onRadioViewChange(v)}
           canUndo={undoStack.length > 0 || radioTurnShown !== null}
           canRedo={redoStack.length > 0}
           onUndo={undoDiscoverAction}
@@ -13286,6 +13316,7 @@ export function DiscoverPanel({
               soundSourceEndlesss={soundSourceForLean(sourceLean).endlesss}
               soundSourceAudioIn={soundSourceForLean(sourceLean).audioIn}
               layout={radioOn ? 'radio' : 'grid'}
+              radioView={radioView}
               rowNumber={i + 1}
               plates={
                 radioOn
@@ -13372,12 +13403,8 @@ export function DiscoverPanel({
         <RadioStrip
           settings={radioSettings}
           onSettingsChange={(p) => void onRadioSettingsChange(p)}
-          ctx={{
-            artistMode: mode === 'other',
-            hasUsername,
-            sound: soundNow,
-            sounding: previewingSlotIds.size > 0
-          }}
+          ctx={radioStripCtx}
+          view={radioView}
           play={{
             tempoText,
             onTempoText: setTempoText,

@@ -35,6 +35,7 @@ import { useBusy } from '../state/BusyContext'
 import { formatBpm } from '@shared/format'
 import { libraryModeLabel, type LibraryMode } from '@shared/libraryEntryPoints'
 import type { RadioSettings } from '@shared/radioSchedule'
+import type { RadioView } from '@shared/radioView'
 import { bytesLabel } from '@shared/visuals'
 import { stemKey, type Rifff } from '@shared/types'
 import type { ProjectRef } from '@shared/types'
@@ -181,6 +182,8 @@ export function LibraryBrowser({
   traitMatchBar,
   radioSettings,
   onRadioSettingsChange,
+  radioView,
+  onRadioViewChange,
   setDiscoverConsented,
   discoverSlots,
   setDiscoverSlots,
@@ -227,6 +230,10 @@ export function LibraryBrowser({
    * controls-design.md. */
   radioSettings: RadioSettings
   onRadioSettingsChange: (patch: Partial<RadioSettings>) => Promise<void>
+  /** The radio view's simple / advanced switch (DiscoverSettings.radioView) and its persisting
+   * setter: a pass-through, as radioSettings. */
+  radioView: RadioView
+  onRadioViewChange: (view: RadioView) => Promise<void>
   setDiscoverConsented: (value: boolean) => Promise<void>
   /** App.tsx's own lifted Discover session state -- see its own doc
    * comment for why it lives there now (survives the WHOLE LibraryBrowser
@@ -2519,6 +2526,8 @@ export function LibraryBrowser({
             traitMatchBar={traitMatchBar}
             radioSettings={radioSettings}
             onRadioSettingsChange={onRadioSettingsChange}
+            radioView={radioView}
+            onRadioViewChange={onRadioViewChange}
             setDiscoverConsented={setDiscoverConsented}
             seedBpm={discoverSeedBpm}
             onCoachSlotsChange={onCoachSlotsChange}

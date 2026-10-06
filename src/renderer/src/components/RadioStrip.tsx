@@ -9,6 +9,10 @@
 //                      skip, new bed, fire now (turn, build, drop, the moves), level;
 //   RadioShapingColumns picks, shape, moves, fold and sound, five quiet titled columns of 26px
 //                      controls. A control that does not apply is greyed, never hidden.
+// Each place draws what the radio view gives it (@shared/radioView; spec
+// 2026-10-05-radio-simple-view-design): advanced is all of the above; simple keeps `keep` alone
+// on the top line, has no columns and no move chips, and (density intensity) draws the arc's
+// energy and drama in the live bar. Visibility only: a hidden setting keeps working.
 // Values and callbacks only: every handler is DiscoverPanel's own, passed in bundles.
 import { useLayoutEffect, useRef, useState } from 'react'
 import { newFoldSeed } from '@shared/radioFold'
@@ -22,6 +26,7 @@ import {
   type RadioSettings
 } from '@shared/radioSchedule'
 import type { RadioIntensityAction } from '@shared/radioIntensityArc'
+import { radioViewStrip, type RadioView } from '@shared/radioView'
 import {
   radioStripModel,
   soundDialPosition,
@@ -45,6 +50,7 @@ import { RADIO_VIEW_FRAME } from './discoverRowGrid'
 import {
   ActionButton,
   ControlField,
+  type ControlSize,
   FireButton,
   FoldSeedInput,
   SegmentBar,
@@ -64,6 +70,8 @@ export interface RadioStripProps {
   settings: RadioSettings
   onSettingsChange: (patch: Partial<RadioSettings>) => void
   ctx: RadioStripContext
+  /** Simple or advanced (@shared/radioView): which of the model's controls are drawn. */
+  view: RadioView
   play: {
     tempoText: string
     onTempoText: (t: string) => void
@@ -141,8 +149,15 @@ export interface RadioMixBundle {
 
 /** The model's `mix` group, as the top line's buttons: they act on what is playing. `keep` is
  * the emphasised one; a dead button reads `--ra-text-4`; `similar all` is a word, `rerolling…`
- * and disabled while it rolls (Cmd-click is still immediate). */
-export function RadioMixActions({ mix }: { mix: RadioMixBundle }): React.JSX.Element {
+ * and disabled while it rolls (Cmd-click is still immediate). `shown` is the view's mix
+ * (radioViewStrip's `top`, by id): simple keeps `keep` alone. */
+export function RadioMixActions({
+  mix,
+  shown
+}: {
+  mix: RadioMixBundle
+  shown: ReadonlySet<string>
+}): React.JSX.Element {
   const b = (id: string, a: RadioStripAction, emphasis = false): React.JSX.Element => (
     <ActionButton
       key={id}
@@ -156,19 +171,30 @@ export function RadioMixActions({ mix }: { mix: RadioMixBundle }): React.JSX.Ele
   )
   return (
     <>
-      <ActionButton
-        label={mix.rolling ? 'rerolling…' : 'similar all'}
-        onClick={(e) => mix.onSimilarAll(e.metaKey)}
-        disabled={mix.rolling}
-        tooltip={mix.rolling ? 'rerolling…' : 'similar all'}
-      />
-      {b('fetch-hearts', mix.hearts)}
-      {b('add-to-shelf', mix.shelf)}
-      {b('add-to-timeline', mix.timeline)}
-      {b('keep', mix.keep, true)}
+      {shown.has('similar-all') && (
+        <ActionButton
+          label={mix.rolling ? 'rerolling…' : 'similar all'}
+          onClick={(e) => mix.onSimilarAll(e.metaKey)}
+          disabled={mix.rolling}
+          tooltip={mix.rolling ? 'rerolling…' : 'similar all'}
+        />
+      )}
+      {shown.has('fetch-hearts') && b('fetch-hearts', mix.hearts)}
+      {shown.has('add-to-shelf') && b('add-to-shelf', mix.shelf)}
+      {shown.has('add-to-timeline') && b('add-to-timeline', mix.timeline)}
+      {shown.has('keep') && b('keep', mix.keep, true)}
     </>
   )
 }
+
+/** A slider's default (its double-click reset), by the strip model's id: the columns', and the
+ * arc's dials where simple's live bar draws them. */
+const SLIDER_DEFAULTS: ReadonlyMap<string, number> = new Map([
+  ['bend', DEFAULT_RADIO_SETTINGS.fold],
+  ['mismatch', DEFAULT_RADIO_SETTINGS.clash],
+  ['energy', DEFAULT_RADIO_ENERGY],
+  ['drama', DEFAULT_RADIO_DRAMA]
+])
 
 /** Each sound panel slider's default, as a strip dial position: a sound dial's double-click. */
 const SOUND_DIAL_DEFAULTS: ReadonlyMap<string, number> = new Map(
@@ -177,9 +203,9 @@ const SOUND_DIAL_DEFAULTS: ReadonlyMap<string, number> = new Map(
     .flatMap((c) => (c.kind === 'slider' ? [[c.id, soundDialPosition(c)] as const] : []))
 )
 
-/** One 0-100 value of a column: a ControlField over a SegmentBar, with its number as the
- * readout. `onChange` is the live half (a preview, a draft), `onCommit` the release; a caller
- * with only `onChange` is live (source, matching, filter, res). The local draft only feeds the
+/** One 0-100 value of a column (or, `size` live, of the live bar): a ControlField over a
+ * SegmentBar, with its number as the readout. `onChange` is the live half (a preview, a draft),
+ * `onCommit` the release; a caller with only `onChange` is live (source, matching, filter, res). The local draft only feeds the
  * readout, and remembers the committed value it started from: a drag that ends where it began
  * commits nothing, and its draft is stale once the value moves. */
 function ColumnBar({
@@ -191,7 +217,8 @@ function ColumnBar({
   onCommit,
   disabled = false,
   dimmed = false,
-  tooltip
+  tooltip,
+  size = 'control'
 }: {
   label: string
   ariaLabel?: string
@@ -202,6 +229,7 @@ function ColumnBar({
   disabled?: boolean
   dimmed?: boolean
   tooltip?: string
+  size?: ControlSize
 }): React.JSX.Element {
   const [draftRaw, setDraft] = useState<{ from: number; v: number } | null>(null)
   const shown = draftRaw !== null && draftRaw.from === value ? draftRaw.v : value
@@ -212,11 +240,12 @@ function ColumnBar({
       tooltip={tooltip}
       disabled={disabled}
       dimmed={dimmed}
+      live={size === 'live'}
     >
       <SegmentBar
         label={ariaLabel}
         value={value}
-        size="control"
+        size={size}
         defaultValue={defaultValue}
         disabled={disabled}
         tooltip={tooltip}
@@ -301,12 +330,21 @@ function useShortScrollArea(ref: React.RefObject<HTMLElement | null>): boolean {
 }
 
 /** The live bar (design pass: the controls that PLAY, 36px, raised under the rows, sticky at the
- * bottom): tempo, pace, skip, new bed, fire now (turn, build, drop and the seven moves), level. */
+ * bottom): tempo, pace, skip, new bed, fire now (turn, build, drop and the seven moves), level.
+ * It draws the controls the view gives it (`controls`, radioViewStrip's `live`), each only when
+ * given: simple leaves out the move chips (`moveChips`) and, with density intensity, adds the
+ * arc's dials, energy and drama. */
 function RadioLiveBar(
-  props: RadioStripProps & { controls: readonly RadioStripControl[] }
+  props: RadioStripProps & { controls: readonly RadioStripControl[]; moveChips: boolean }
 ): React.JSX.Element {
-  const { settings, onSettingsChange, play, turn, arc, sound, controls } = props
+  const { settings, onSettingsChange, play, turn, arc, sound, controls, moveChips } = props
   const byId = (id: string): RadioStripControl | undefined => controls.find((c) => c.id === id)
+  const has = (id: string): boolean => byId(id) !== undefined
+  // The arc's dials, when the view puts them here (simple, density intensity).
+  const liveDials = (['energy', 'drama'] as const).flatMap((id) => {
+    const c = byId(id)
+    return c?.kind === 'slider' ? [c] : []
+  })
   const pace = byId('pace')
   const level = byId('level')
   // The draft remembers the committed value it started from: a drag that ends where it began
@@ -340,64 +378,66 @@ function RadioLiveBar(
         ...RADIO_VIEW_FRAME
       }}
     >
-      <ControlField label="tempo" readout="bpm" live>
-        <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--ra-s-1)' }}>
-          <button
-            onClick={() => play.onTempoStep(-1)}
-            aria-label="Decrease tempo"
-            style={tempoStepStyle}
-          >
-            −
-          </button>
-          <input
-            type="number"
-            value={play.tempoText}
-            onFocus={play.onTempoFocus}
-            onChange={(e) => play.onTempoText(e.target.value)}
-            onBlur={play.onTempoCommit}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') e.currentTarget.blur()
-            }}
-            aria-label="Tempo (BPM)"
-            style={{
-              fontFamily: 'inherit',
-              fontSize: 'var(--ra-fs-13)',
-              width: 56,
-              height: 'var(--ra-h-live)',
-              textAlign: 'center',
-              background: 'var(--ra-bg-page)',
-              color: 'var(--ra-text)',
-              border: '1px solid var(--ra-border-strong)',
-              padding: 0,
-              WebkitAppearance: 'none',
-              MozAppearance: 'textfield'
-            }}
-          />
-          <button
-            onClick={() => play.onTempoStep(1)}
-            aria-label="Increase tempo"
-            style={tempoStepStyle}
-          >
-            +
-          </button>
-          {play.seedTempo !== null && play.seedTempo !== play.bpm && (
+      {has('tempo') && (
+        <ControlField label="tempo" readout="bpm" live>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--ra-s-1)' }}>
             <button
-              onClick={play.onMatchSeed}
-              title={`seed tempo ${play.seedTempo} bpm`}
-              aria-label="Match seeded riff's own tempo"
-              style={{
-                ...tempoStepStyle,
-                width: 'auto',
-                padding: '0 var(--ra-s-4)',
-                fontSize: 'var(--ra-fs-9)',
-                whiteSpace: 'nowrap'
-              }}
+              onClick={() => play.onTempoStep(-1)}
+              aria-label="Decrease tempo"
+              style={tempoStepStyle}
             >
-              match seed ({play.seedTempo})
+              −
             </button>
-          )}
-        </span>
-      </ControlField>
+            <input
+              type="number"
+              value={play.tempoText}
+              onFocus={play.onTempoFocus}
+              onChange={(e) => play.onTempoText(e.target.value)}
+              onBlur={play.onTempoCommit}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') e.currentTarget.blur()
+              }}
+              aria-label="Tempo (BPM)"
+              style={{
+                fontFamily: 'inherit',
+                fontSize: 'var(--ra-fs-13)',
+                width: 56,
+                height: 'var(--ra-h-live)',
+                textAlign: 'center',
+                background: 'var(--ra-bg-page)',
+                color: 'var(--ra-text)',
+                border: '1px solid var(--ra-border-strong)',
+                padding: 0,
+                WebkitAppearance: 'none',
+                MozAppearance: 'textfield'
+              }}
+            />
+            <button
+              onClick={() => play.onTempoStep(1)}
+              aria-label="Increase tempo"
+              style={tempoStepStyle}
+            >
+              +
+            </button>
+            {play.seedTempo !== null && play.seedTempo !== play.bpm && (
+              <button
+                onClick={play.onMatchSeed}
+                title={`seed tempo ${play.seedTempo} bpm`}
+                aria-label="Match seeded riff's own tempo"
+                style={{
+                  ...tempoStepStyle,
+                  width: 'auto',
+                  padding: '0 var(--ra-s-4)',
+                  fontSize: 'var(--ra-fs-9)',
+                  whiteSpace: 'nowrap'
+                }}
+              >
+                match seed ({play.seedTempo})
+              </button>
+            )}
+          </span>
+        </ControlField>
+      )}
       {pace?.kind === 'slider' && (
         <div style={{ width: 160 }}>
           <ControlField label={pace.label} tooltip={pace.tooltip} readout={paceReadout} live>
@@ -418,91 +458,111 @@ function RadioLiveBar(
           </ControlField>
         </div>
       )}
-      <button
-        onClick={play.onSkip}
-        data-tooltip={byId('skip')?.tooltip}
-        aria-label={byId('skip')?.tooltip}
-        style={{
-          fontFamily: 'inherit',
-          fontSize: 'var(--ra-fs-13)',
-          height: 'var(--ra-h-live)',
-          padding: '0 18px',
-          background: 'transparent',
-          border: '1px solid var(--ra-text)',
-          color: 'var(--ra-text)',
-          cursor: 'pointer'
-        }}
-      >
-        {/* Keyed by the landing count, so each landing restarts the flicker. */}
-        <span
-          key={play.skipFlicker}
-          className={play.skipFlicker > 0 ? 'radio-landing-flicker' : undefined}
+      {has('skip') && (
+        <button
+          onClick={play.onSkip}
+          data-tooltip={byId('skip')?.tooltip}
+          aria-label={byId('skip')?.tooltip}
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 'var(--ra-fs-13)',
+            height: 'var(--ra-h-live)',
+            padding: '0 18px',
+            background: 'transparent',
+            border: '1px solid var(--ra-text)',
+            color: 'var(--ra-text)',
+            cursor: 'pointer'
+          }}
         >
-          skip
-        </span>
-      </button>
-      <button
-        onClick={play.onNewBed}
-        data-tooltip={byId('new-bed')?.tooltip}
-        style={{
-          fontFamily: 'inherit',
-          fontSize: 'var(--ra-fs-10)',
-          height: 'var(--ra-h-live)',
-          padding: '0 var(--ra-s-5)',
-          background: 'transparent',
-          border: '1px solid var(--ra-border-strong)',
-          color: 'var(--ra-text-2)',
-          cursor: 'pointer'
-        }}
-      >
-        new bed
-      </button>
-      <ControlField label="fire now">
-        <span style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--ra-s-1)' }}>
-          <FireButton
-            primary
-            label={turn.flash ?? (turn.shown !== null ? 'turning' : 'turn')}
-            held={turn.shown !== null}
-            tooltip={byId('turn')?.tooltip}
-            ariaLabel={byId('turn')?.tooltip}
-            onClick={() => turn.onTurn()}
+          {/* Keyed by the landing count, so each landing restarts the flicker. */}
+          <span
+            key={play.skipFlicker}
+            className={play.skipFlicker > 0 ? 'radio-landing-flicker' : undefined}
+          >
+            skip
+          </span>
+        </button>
+      )}
+      {has('new-bed') && (
+        <button
+          onClick={play.onNewBed}
+          data-tooltip={byId('new-bed')?.tooltip}
+          style={{
+            fontFamily: 'inherit',
+            fontSize: 'var(--ra-fs-10)',
+            height: 'var(--ra-h-live)',
+            padding: '0 var(--ra-s-5)',
+            background: 'transparent',
+            border: '1px solid var(--ra-border-strong)',
+            color: 'var(--ra-text-2)',
+            cursor: 'pointer'
+          }}
+        >
+          new bed
+        </button>
+      )}
+      {has('turn') && (
+        <ControlField label="fire now">
+          <span style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--ra-s-1)' }}>
+            <FireButton
+              primary
+              label={turn.flash ?? (turn.shown !== null ? 'turning' : 'turn')}
+              held={turn.shown !== null}
+              tooltip={byId('turn')?.tooltip}
+              ariaLabel={byId('turn')?.tooltip}
+              onClick={() => turn.onTurn()}
+            />
+            {(['build', 'drop'] as const).filter(has).map((action) => {
+              const c = byId(action)
+              const disabled = c?.disabled ?? true
+              const label = arc.shown?.[action] ?? action
+              const can = action === 'build' ? arc.shown?.canBuild : arc.shown?.canDrop
+              const notNow = !disabled && can === false
+              return (
+                <FireButton
+                  key={action}
+                  label={label}
+                  held={label !== action}
+                  notNow={notNow}
+                  disabled={disabled}
+                  tooltip={notNow ? 'not now' : c?.tooltip}
+                  ariaLabel={c?.tooltip ?? action}
+                  onClick={() => arc.onPress(action)}
+                />
+              )
+            })}
+            {moveChips &&
+              TURNAROUND_MOVES.map((move) => {
+                const held = turn.shown !== null && turn.shown.move === move
+                const notNow = turn.can !== null && !turn.can.moves.includes(move)
+                return (
+                  <FireButton
+                    key={move}
+                    label={TURNAROUND_MOVE_LABEL[move]}
+                    held={held}
+                    notNow={notNow}
+                    tooltip={notNow ? 'not now' : `turn: ${TURNAROUND_MOVE_LABEL[move]}`}
+                    ariaLabel={`turn: ${TURNAROUND_MOVE_LABEL[move]}`}
+                    onClick={() => turn.onTurn(move)}
+                  />
+                )
+              })}
+          </span>
+        </ControlField>
+      )}
+      {liveDials.map((c) => (
+        <div key={c.id} style={{ width: 120 }}>
+          <ColumnBar
+            label={c.label}
+            value={c.value}
+            defaultValue={SLIDER_DEFAULTS.get(c.id) ?? c.value}
+            tooltip={c.tooltip}
+            disabled={c.disabled}
+            size="live"
+            onCommit={(v) => onSettingsChange(c.patch(v))}
           />
-          {(['build', 'drop'] as const).map((action) => {
-            const c = byId(action)
-            const disabled = c?.disabled ?? true
-            const label = arc.shown?.[action] ?? action
-            const can = action === 'build' ? arc.shown?.canBuild : arc.shown?.canDrop
-            const notNow = !disabled && can === false
-            return (
-              <FireButton
-                key={action}
-                label={label}
-                held={label !== action}
-                notNow={notNow}
-                disabled={disabled}
-                tooltip={notNow ? 'not now' : c?.tooltip}
-                ariaLabel={c?.tooltip ?? action}
-                onClick={() => arc.onPress(action)}
-              />
-            )
-          })}
-          {TURNAROUND_MOVES.map((move) => {
-            const held = turn.shown !== null && turn.shown.move === move
-            const notNow = turn.can !== null && !turn.can.moves.includes(move)
-            return (
-              <FireButton
-                key={move}
-                label={TURNAROUND_MOVE_LABEL[move]}
-                held={held}
-                notNow={notNow}
-                tooltip={notNow ? 'not now' : `turn: ${TURNAROUND_MOVE_LABEL[move]}`}
-                ariaLabel={`turn: ${TURNAROUND_MOVE_LABEL[move]}`}
-                onClick={() => turn.onTurn(move)}
-              />
-            )
-          })}
-        </span>
-      </ControlField>
+        </div>
+      ))}
       {level !== undefined && (
         <div style={{ width: 120, marginLeft: 'auto' }}>
           <ControlField
@@ -527,14 +587,6 @@ function RadioLiveBar(
     </div>
   )
 }
-
-/** A column slider's default (its double-click reset), by the strip model's id. */
-const SLIDER_DEFAULTS: ReadonlyMap<string, number> = new Map([
-  ['bend', DEFAULT_RADIO_SETTINGS.fold],
-  ['mismatch', DEFAULT_RADIO_SETTINGS.clash],
-  ['energy', DEFAULT_RADIO_ENERGY],
-  ['drama', DEFAULT_RADIO_DRAMA]
-])
 
 /** The shaping columns (design pass: five quiet titled columns under the live bar, 26px
  * controls): picks, shape, moves, fold, sound. */
@@ -861,14 +913,16 @@ function RadioShapingColumns(
 }
 
 export function RadioStrip(props: RadioStripProps): React.JSX.Element {
-  const groups = radioStripModel(props.settings, props.ctx)
+  const shown = radioViewStrip(
+    radioStripModel(props.settings, props.ctx),
+    props.view,
+    props.settings
+  )
   return (
     <>
-      <RadioLiveBar
-        {...props}
-        controls={groups.filter((g) => g.place === 'live').flatMap((g) => g.controls)}
-      />
-      <RadioShapingColumns {...props} groups={groups.filter((g) => g.place === 'columns')} />
+      <RadioLiveBar {...props} controls={shown.live} moveChips={shown.moveChips} />
+      {/* Simple has no columns: nothing is drawn, the settings keep their values. */}
+      {shown.columns.length > 0 && <RadioShapingColumns {...props} groups={shown.columns} />}
     </>
   )
 }
