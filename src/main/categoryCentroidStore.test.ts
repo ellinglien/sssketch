@@ -114,4 +114,25 @@ describe('categoryCentroidStore', () => {
     expect(fsync).toBeGreaterThanOrEqual(0)
     expect(fsync).toBeLessThan(fsCalls.indexOf('renameSync'))
   })
+
+  // Review of b4d9924a, important 1: training must tell a file that won't
+  // load from no file at all (loadCategoryCentroidStore reads both as empty).
+  it('readCategoryCentroidStoreFile tells no file, a file that will not load, and a store apart', async () => {
+    const { readCategoryCentroidStoreFile, saveCategoryCentroidStore } =
+      await import('./categoryCentroidStore')
+    const path = join(userDataDir, 'busCentroids.json')
+    expect(readCategoryCentroidStoreFile()).toEqual({ kind: 'missing' })
+    for (const contents of ['', 'not json', 'null', '[]', '3']) {
+      writeFileSync(path, contents)
+      expect(readCategoryCentroidStoreFile().kind).toBe('unreadable')
+    }
+    const store = recordConfirmedCategory(
+      emptyCategoryCentroidStore(),
+      'bus',
+      'drums',
+      new Array(19).fill(1)
+    )
+    saveCategoryCentroidStore(store)
+    expect(readCategoryCentroidStoreFile()).toEqual({ kind: 'ok', store })
+  })
 })

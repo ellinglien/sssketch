@@ -492,4 +492,49 @@ describe('stemCategoriesBackfill', () => {
     expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
     expect(backfillStemCategoriesFromProjectLibrary(db).unchangedProjects).toBe(1)
   })
+
+  // Review of b4d9924a, important 1: a store file that would not load read as
+  // an empty store, the next training save replaced it, and StemBusTrained
+  // said its pairs were trained: every sample in it lost for good.
+  describe('a store file that exists but will not load', () => {
+    it('is never overwritten: nothing trains, nothing is recorded, and its entries wait', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      const storeFile = join(userDataDir, 'busCentroids.json')
+      writeFileSync(storeFile, '{"buses": {"drums": {"mean": [1], "cou')
+      const { recordStemCategoryBus, trainCentroidsFromRoleEntries } =
+        await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      const { getStemCategory } = await import('./stemCategoriesStore')
+      const entries = [{ path: '/lib/cid-1', busId: 'drums' as const }]
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const result = recordStemCategoryBus(db, entries, 'tidyup', null, 1000)
+      trainCentroidsFromRoleEntries(db, [{ path: '/lib/cid-1', arrangeRole: 'lead' }])
+      expect(errors.mock.calls.some(([message]) => /not train/.test(String(message)))).toBe(true)
+      errors.mockRestore()
+      expect(result.waiting).toEqual(entries)
+      expect(getStemCategory(db, 'cid-1')?.busId).toBe('drums') // the label itself lands
+      expect(readFileSync(storeFile, 'utf-8')).toBe('{"buses": {"drums": {"mean": [1], "cou')
+
+      // Once the file is dealt with (here removed), the same write trains.
+      rmSync(storeFile)
+      expect(recordStemCategoryBus(db, entries, 'tidyup', null, 2000).waiting).toEqual([])
+      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+    })
+
+    it('leaves a project parsed again next launch', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      writeFileSync(join(userDataDir, 'busCentroids.json'), 'not json')
+      writeSketch('one', {
+        busOf: { 'group-a:1': 'drums' },
+        rifffs: { 'group-a': { groupId: 'group-a', stems: [{ slot: 1, path: '/lib/cid-1' }] } }
+      })
+      const { backfillStemCategoriesFromProjectLibrary } = await import('./stemCategoriesBackfill')
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      backfillStemCategoriesFromProjectLibrary(db)
+      expect(backfillStemCategoriesFromProjectLibrary(db).unchangedProjects).toBe(0)
+      errors.mockRestore()
+    })
+  })
 })

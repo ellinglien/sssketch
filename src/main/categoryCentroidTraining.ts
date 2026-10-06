@@ -2,17 +2,40 @@
 import type Database from 'better-sqlite3'
 import { toFeatureArray } from '@shared/stemFeatures'
 import {
+  emptyCategoryCentroidStore,
   isTrainableCategory,
   recordConfirmedCategory,
   type CategoryCentroidStore
 } from '@shared/categoryCentroids'
-import { loadCategoryCentroidStore, saveCategoryCentroidStore } from './categoryCentroidStore'
+import { readCategoryCentroidStoreFile, saveCategoryCentroidStore } from './categoryCentroidStore'
 import { getStemFeatureCache } from './stemFeatureCacheStore'
 import {
   upsertStemCategoryBus,
   type StemBusCategoryEntry,
   type StemRoleCategoryEntry
 } from './stemCategoriesStore'
+
+let lastRefusal: string | null = null
+
+/** The store a training write adds to: the file's, or a new empty one when
+ * there is no file yet. Null when the file exists but won't load: training
+ * then neither trains nor saves (a save would replace every sample in it
+ * with this write's), so its bus entries stay `waiting` and a project that
+ * has them is parsed again next launch, until the file loads or is removed.
+ * Logged once per distinct error. */
+function openStoreForTraining(): CategoryCentroidStore | null {
+  const file = readCategoryCentroidStoreFile()
+  if (file.kind === 'missing') return emptyCategoryCentroidStore()
+  if (file.kind === 'ok') return file.store
+  if (file.error !== lastRefusal) {
+    lastRefusal = file.error
+    console.error(
+      `categoryCentroidTraining: busCentroids.json exists but will not load (${file.error}); ` +
+        'not training or saving until it loads or is removed, so the samples in it are kept'
+    )
+  }
+  return null
+}
 
 // StemBusTrained(StemCID, BusId): every (stem, bus) pair whose features are
 // already in the bus centroids. Lazy, in ownDb (review of plan b21ea5a2
@@ -76,6 +99,7 @@ export function recordStemCategoryBus(
 ): StemBusRecordResult {
   // Before the write: the seed must see only what earlier writes trained.
   ensureBusTrainedSchema(db)
+  const target = openStoreForTraining()
   const { resolved, unresolved } = upsertStemCategoryBus(
     db,
     entries,
@@ -101,7 +125,9 @@ export function recordStemCategoryBus(
     untrained.push(entry)
     stemCIDOf.set(entry, stemCID)
   }
-  const nowTrained = new Set(trainCentroidsFromBusEntries(db, untrained, extraCandidateDbs))
+  if (!target) return { unresolved, waiting: untrained } // the file won't load
+  const { store, trained: added } = trainBusInto(db, target, untrained, extraCandidateDbs)
+  const nowTrained = new Set(added.length > 0 && saveCategoryCentroidStore(store) ? added : [])
   if (nowTrained.size > 0) {
     const mark = db.prepare(`INSERT OR IGNORE INTO StemBusTrained (StemCID, BusId) VALUES (?, ?)`)
     db.transaction(() => {
@@ -111,44 +137,54 @@ export function recordStemCategoryBus(
   return { unresolved, waiting: untrained.filter((entry) => !nowTrained.has(entry)) }
 }
 
+/** Adds each entry whose stem has features to `store`'s bus axis: the new
+ * store, and the entries that added a sample. Saves nothing. */
+function trainBusInto(
+  db: Database.Database,
+  store: CategoryCentroidStore,
+  entries: StemBusCategoryEntry[],
+  extraCandidateDbs: Database.Database[]
+): { store: CategoryCentroidStore; trained: StemBusCategoryEntry[] } {
+  const trained: StemBusCategoryEntry[] = []
+  for (const entry of entries) {
+    const features = getStemFeatureCache(db, entry.path, extraCandidateDbs)
+    if (!features) continue
+    const next = recordConfirmedCategory(store, 'bus', entry.busId, toFeatureArray(features))
+    if (next !== store) trained.push(entry)
+    store = next
+  }
+  return { store, trained }
+}
+
 /** The server-side half of "every StemCategories write trains the
- * classifier, not just Tidy Up's own" (design spec §6). Called from every
- * real write site (the upsert-stem-category-bus/-role IPC handlers, and
- * the backfill migration) right after their own StemCategories write --
- * reads each entry's ALREADY-PERSISTED StemFeatures (Plan A's
- * StemFeatureCache, via getStemFeatureCache) rather than needing a fresh
+ * classifier, not just Tidy Up's own" (design spec §6), for the bus axis
+ * outside the trained record (recordStemCategoryBus is the path every real
+ * bus write takes). Reads each entry's ALREADY-PERSISTED StemFeatures (Plan
+ * A's StemFeatureCache, via getStemFeatureCache) rather than needing a fresh
  * Web Audio decode, which is what makes training possible entirely
  * server-side with no renderer involvement. A stem whose features haven't
- * been scanned/persisted yet is silently skipped for training purposes
- * (not an error) -- it simply doesn't contribute a data point this time;
- * a later StemCategories write for the same stem, once its features exist,
- * trains it then (on the bus axis once per stem and bus, through
- * recordStemCategoryBus). Returns the entries that added a sample, once the
- * store is saved. extraCandidateDbs is passed straight through to
- * getStemFeatureCache, mirroring stemCategoriesStore.ts's own
- * upsertStemCategoryBus/-Role -- a stem from an external LORE archive
- * needs the same candidate-db lookup to find its cached features that it
- * already needed to validate its StemCID in the first place. */
+ * been scanned/persisted yet is silently skipped (not an error). Returns the
+ * entries that added a sample, once the store is saved; none if it wasn't,
+ * or if the store file exists but won't load (openStoreForTraining).
+ * extraCandidateDbs is passed straight through to getStemFeatureCache,
+ * mirroring stemCategoriesStore.ts's own upsertStemCategoryBus/-Role -- a
+ * stem from an external LORE archive needs the same candidate-db lookup to
+ * find its cached features that it already needed to validate its StemCID
+ * in the first place. */
 export function trainCentroidsFromBusEntries(
   db: Database.Database,
   entries: StemBusCategoryEntry[],
   extraCandidateDbs: Database.Database[] = []
 ): StemBusCategoryEntry[] {
-  let store: CategoryCentroidStore | null = null
-  const trained: StemBusCategoryEntry[] = []
-  for (const entry of entries) {
-    const features = getStemFeatureCache(db, entry.path, extraCandidateDbs)
-    if (!features) continue
-    store ??= loadCategoryCentroidStore()
-    const next = recordConfirmedCategory(store, 'bus', entry.busId, toFeatureArray(features))
-    if (next !== store) trained.push(entry)
-    store = next
-  }
-  // The entries that added a sample, once it is saved; none if it wasn't.
-  if (trained.length > 0 && store && saveCategoryCentroidStore(store)) return trained
+  const target = openStoreForTraining()
+  if (!target) return []
+  const { store, trained } = trainBusInto(db, target, entries, extraCandidateDbs)
+  if (trained.length > 0 && saveCategoryCentroidStore(store)) return trained
   return []
 }
 
+/** The role axes: trained on every write that has features (no trained
+ * record), into the same file, under the same refusal when it won't load. */
 export function trainCentroidsFromRoleEntries(
   db: Database.Database,
   entries: StemRoleCategoryEntry[],
@@ -159,7 +195,10 @@ export function trainCentroidsFromRoleEntries(
   for (const entry of entries) {
     const features = getStemFeatureCache(db, entry.path, extraCandidateDbs)
     if (!features) continue
-    store ??= loadCategoryCentroidStore()
+    if (!store) {
+      store = openStoreForTraining()
+      if (!store) return // the file won't load: never saved over
+    }
     const raw = toFeatureArray(features)
     const afterArrangeRole = recordConfirmedCategory(store, 'arrangeRole', entry.arrangeRole, raw)
     if (afterArrangeRole !== store) changed = true
