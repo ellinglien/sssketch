@@ -190,11 +190,17 @@ export class TraitValueTable {
 
   /** One row written through the app's own store (upsert). */
   applyWrite(stemCID: string, features: unknown): void {
-    if (!this.rowByStemCID.has(stemCID)) {
-      if (this.malformed.has(stemCID)) this.malformed.delete(stemCID)
-      else this.rowsSeen += 1
+    const hasRow = this.rowByStemCID.has(stemCID)
+    if (!hasRow && !this.malformed.has(stemCID)) this.rowsSeen += 1
+    if (features) {
+      this.malformed.delete(stemCID)
+      this.set(stemCID, features)
+    } else if (!hasRow) {
+      // As addFromBuild reads it: a row that is there but parses to nothing.
+      // (A falsy write over a parsed row keeps that row: the app's own store
+      // never writes one.)
+      this.malformed.add(stemCID)
     }
-    if (features) this.set(stemCID, features)
   }
 
   /** What buildTables would collect from the rows this table holds, read in

@@ -666,6 +666,26 @@ describe('versionsOf (audit 4(b))', () => {
     expect(table.versionsOf('bad')).toEqual({ feature: 2, level: 1 })
   })
 
+  it('a falsy write to a new stem is malformed, as the build would read it, and still counted', async () => {
+    const db = freshDb()
+    add(db, 'row', JSON.stringify({ featureVersion: 2, levelVersion: 1 }))
+    await getTraitQuantileTables(db)
+    const table = getTraitValueTable(db)!
+    add(db, 'nothing', 'null')
+    table.applyWrite('nothing', null)
+    expect(table.versionsOf('nothing')).toBe('malformed')
+    const seen: string[] = []
+    table.forEachVersions((stemCID, versions) => {
+      if (versions === 'malformed') seen.push(stemCID)
+    })
+    expect(seen).toEqual(['nothing'])
+    expect(getTraitValueTable(db)).toBe(table) // rowsSeen still matches the db's count
+    // and a later real write over it is a row again, counted once
+    table.applyWrite('nothing', { featureVersion: 2, levelVersion: 1 })
+    expect(table.versionsOf('nothing')).toEqual({ feature: 2, level: 1 })
+    expect(getTraitValueTable(db)).toBe(table)
+  })
+
   it('follows a level merge (the backfill) without touching the feature version', async () => {
     const db = freshDb()
     add(db, 'row', JSON.stringify({ featureVersion: 2, transientDensity: 4 }))
