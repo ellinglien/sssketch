@@ -9,6 +9,7 @@
 // It never touches radio: it reads only the static guide, holds no radio state, and is opened by
 // RadioTopLine's own state, so opening it re-renders the top line and nothing else (no row
 // remounts). While it is open, keys stay in it: the app's shortcuts (space for play) never see them.
+// It opens with focus on its text, so space scrolls it.
 //
 // The diagrams are small static SVGs. Colour only on audio information: a lane's bars are its kind
 // of sound, in its type colour (typeColorVar); an ink lane (the intensity wave, not a sound),
@@ -310,15 +311,16 @@ export function RadioGuide({
   const closeRef = useRef<HTMLButtonElement | null>(null)
   const bodyRef = useRef<HTMLDivElement | null>(null)
 
-  // Focus the close button on open, and the opener again on close.
+  // Focus the text on open (space and the arrows scroll it, where on the close button space would
+  // close the guide), and the opener again on close.
   useEffect(() => {
-    closeRef.current?.focus()
+    bodyRef.current?.focus()
     const back = returnFocusRef?.current ?? null
     return () => back?.focus()
   }, [returnFocusRef])
 
   // Keys stay in the guide (capture phase, before the app's window shortcuts and the Library
-  // Browser's own Escape): Escape closes it; Tab moves between the close button and the text;
+  // Browser's own Escape): Escape closes it; Tab moves between the text and the close button;
   // every other key does only its default here (space scrolls the text or presses the button).
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent): void {
@@ -414,9 +416,12 @@ export function RadioGuide({
         </div>
         <div
           ref={bodyRef}
-          tabIndex={0}
+          // focused on open, and reached by Tab through the guide's own key handler (not the page's
+          // tab order); a named region, so a screen reader says what it is on landing there
+          tabIndex={-1}
+          role="region"
           aria-label="guide text"
-          // the app's focus ring (global.css), on a scroll box reached by tab
+          // the app's focus ring (global.css), on the scroll box
           data-focus-ring
           style={{
             overflowY: 'auto',
