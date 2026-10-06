@@ -337,6 +337,7 @@ import {
   RADIO_FLASH_FADE_IN_SEC,
   RADIO_FLASH_FADE_OUT_SEC,
   RADIO_THROW_WORD,
+  dropRadioFlashes,
   pruneRadioFlashes,
   radioFlashShown,
   radioGestureFlashWord,
@@ -3549,12 +3550,9 @@ export function DiscoverPanel({
   const radioFlashLogRef = useRef<RadioFlash[]>([])
   const radioFlashSeenRef = useRef<Set<string>>(new Set())
   // The moves' visuals log's bookkeeping (radioMoveVisualsTick; the log is radioMoveVisualsRef,
-  // above): the keys it has logged, the wrap each turnaround it has seen ends on (its visuals are
-  // rebuilt every tick from it, so a row joining or a filter in arming later in its lap shows as
-  // the lane build plays it), and each resting row's rest closed by a decided return, with where
-  // (reopened if that return is taken back).
+  // above): the keys it has logged, and each resting row's rest closed by a decided return, with
+  // where (reopened if that return is taken back).
   const radioMoveSeenRef = useRef<Set<string>>(new Set())
-  const radioMoveTurnaroundRef = useRef<{ armId: string; wrapAt: number } | null>(null)
   const radioRestClosedRef = useRef<Map<string, number>>(new Map())
   // The rows resting for radio, as render needs them (the waveform's colour layer drawn at the dim
   // floor, DiscoverSlotRow's radioResting): set from the tick's microtask when it changes.
@@ -6031,7 +6029,6 @@ export function DiscoverPanel({
     radioFlashSeenRef.current = new Set()
     radioMoveVisualsRef.current = { visuals: [], startBars: 0, laps: 0, resting: new Set() }
     radioMoveSeenRef.current = new Set()
-    radioMoveTurnaroundRef.current = null
     radioRestClosedRef.current = new Map()
     setRadioRestingShown(new Set())
     setRadioReadoutNow(null)
@@ -6053,7 +6050,7 @@ export function DiscoverPanel({
     const now = lapStart + pos
     const seen = radioFlashSeenRef.current
     const live = new Set<string>()
-    const log = [...radioFlashLogRef.current]
+    let log = [...radioFlashLogRef.current]
     for (const g of radioGestureRef.current) {
       live.add(g.armId)
       const word = radioGestureFlashWord(g.kind)
@@ -6070,17 +6067,20 @@ export function DiscoverPanel({
     const ta = radioTurnaroundRef.current
     if (ta !== null) {
       live.add(ta.armId)
-      if (!seen.has(ta.armId)) {
-        // each row its moves' words from where each starts, and `gap` where the gap starts
-        for (const f of turnaroundFlashes(ta.plan)) {
-          log.push({
-            rowId: f.rowId,
-            word: f.word,
-            at: lapStart + loopBars - f.beats / 4,
-            key: ta.armId,
-            until: lapStart + loopBars
-          })
-        }
+      // each row its moves' words from where each starts, and `gap` where the gap starts -- placed
+      // again every tick on the wrap ending this lap as the loop is now, as its visuals are
+      // (radioMoveVisualsTick): placed once, a loop learned a tick late put them on the wrong wrap
+      // for the whole lap. radioTurnaroundAtWrap takes the turnaround off at its wrap, so the words
+      // already shown fade out from there and are never placed on the lap after.
+      log = dropRadioFlashes(log, ta.armId)
+      for (const f of turnaroundFlashes(ta.plan)) {
+        log.push({
+          rowId: f.rowId,
+          word: f.word,
+          at: lapStart + loopBars - f.beats / 4,
+          key: ta.armId,
+          until: lapStart + loopBars
+        })
       }
     }
     const throws = radioThrowRef.current
@@ -6135,10 +6135,13 @@ export function DiscoverPanel({
    *   - each gesture once (by armId): a lead-in (a hole, a riser, the arc's exit drop-out) into the
    *     wrap that ends this lap, an arrival (a filter in, a bloom, a duck) from this lap's top; a duck
    *     dips every row in the mix but the ones landing with it (`spares`), as the lane build does;
-   *   - the turnaround, rebuilt every tick on the wrap it was first seen to end on: nothing when it
-   *     no longer fits the loop (turnaroundFitsLoop: the lane build drops it whole), only on the
-   *     rows in the mix, no lift or dip on a row a change's filter in already has (one filter a
-   *     lap), and the late rows silenced through its gap as they are now;
+   *   - the turnaround, rebuilt every tick on the wrap that ends this lap as the loop is now (the
+   *     lane build's turnaroundToLoopBars(..., maxBarLength): a stem of another length landing on
+   *     the lap's top, or learned a render late, moves it with the loop, and radioTurnaroundAtWrap
+   *     takes it off at that wrap, so it never reads the lap after): nothing when it no longer
+   *     fits the loop (turnaroundFitsLoop: the lane build drops it whole), only on the rows in the
+   *     mix, no lift or dip on a row a change's filter in already has (one filter a lap), and the
+   *     late rows silenced through its gap as they are now;
    *   - the armed throw's echo, once, from where its send opens;
    *   - each rest (a row resting for radio, or a decided rest not landed yet: from the top it lands
    *     on), open until a return is decided for it (closed on the top it lands on), opened again if
@@ -6174,19 +6177,13 @@ export function DiscoverPanel({
       )
     }
     const ta = radioTurnaroundRef.current
-    if (ta === null) radioMoveTurnaroundRef.current = null
-    else {
+    if (ta !== null) {
       live.add(ta.armId)
-      let placed = radioMoveTurnaroundRef.current
-      if (placed === null || placed.armId !== ta.armId) {
-        placed = { armId: ta.armId, wrapAt }
-        radioMoveTurnaroundRef.current = placed
-      }
       visuals = dropRadioMoveVisuals(visuals, ta.armId)
       if (turnaroundFitsLoop(ta.plan, loopBars)) {
         visuals.push(
           ...radioTurnaroundVisuals(ta.plan, {
-            wrapAt: placed.wrapAt,
+            wrapAt,
             unitsPerBeat: 0.25,
             loopBars,
             key: ta.armId,
