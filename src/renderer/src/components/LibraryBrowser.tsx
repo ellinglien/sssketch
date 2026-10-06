@@ -1678,10 +1678,11 @@ export function LibraryBrowser({
       <style>{`@keyframes ra-rec-pulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.6); } }`}</style>
       <div
         style={{
-          width: 'min(1500px, 90vw)',
-          height: 'min(900px, 85vh)',
+          // The whole window (Elling, 2026-10-06): the backdrop is opaque anyway, so a framed card
+          // only gave away space. Closes with its close button or Escape.
+          width: '100%',
+          height: '100%',
           background: 'var(--ra-bg-bar)',
-          border: '1px solid var(--ra-border-strong)',
           display: 'flex',
           flexDirection: 'column'
         }}
