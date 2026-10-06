@@ -201,6 +201,33 @@ describe('createStemPriorityCache', () => {
     expect([...p.own].sort()).toEqual(['a1', 'a3', 'a5', 'a7', 's2', 's5'])
   })
 
+  // Review of 99b33f45: the catch in refresh had no test.
+  it('one db that fails its read keeps its last set; the other dbs still update', async () => {
+    const { archive, own } = fixture()
+    const cache = createStemPriorityCache({
+      sourceDbs: () => [archive, own],
+      ownDb: () => own,
+      windowSize: 2
+    })
+    await cache.get('me')
+    stem(archive, 'a8', 'me')
+    stem(own, 's6', 'me')
+    const real = archive.prepare.bind(archive)
+    const spy = vi.spyOn(archive, 'prepare').mockImplementation(((sql: string) => {
+      if (sql.includes('CreatorUserName = ?')) throw new Error('disk I/O error')
+      return real(sql)
+    }) as typeof archive.prepare)
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const p = await cache.get('me')
+    expect([...p.own].sort()).toEqual(['a1', 'a3', 'a5', 'a7', 's2', 's5', 's6'])
+    expect(errors).toHaveBeenCalledTimes(1)
+    // readable again: picks up where it left off
+    spy.mockRestore()
+    errors.mockRestore()
+    const q = await cache.get('me')
+    expect([...q.own].sort()).toEqual(['a1', 'a3', 'a5', 'a7', 'a8', 's2', 's5', 's6'])
+  })
+
   it('a version that moves when either set changes, even at the same sizes, and only then', async () => {
     const { archive, own } = fixture()
     const cache = createStemPriorityCache({ sourceDbs: () => [archive, own], ownDb: () => own })
