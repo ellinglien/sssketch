@@ -307,6 +307,23 @@ describe('rescanLoopFolder', () => {
     expect(listLoopFolders(db).find((f) => f.rootPath === hits)!.loops).toEqual(serialLoops)
   })
 
+  // Review of plan b21ea5a2 Task 13 M3: `statFile(path).catch(...)` only
+  // catches a rejection. An injected stat that throws synchronously escaped
+  // it, rejected the worker and failed the whole rescan.
+  it('a stat that throws synchronously leaves that file out, like one that rejects', async () => {
+    const { stat } = await import('node:fs/promises')
+    const summary = await rescanLoopFolder(db, root, 120, {
+      ...DEFAULT_LOOP_SCAN_DEPS,
+      statFile: (path) => {
+        if (path === creekPath) throw new Error('EIO')
+        return stat(path)
+      }
+    })
+    expect(summary.available).toBe(true)
+    expect(loopsByName().has('Creek Break 160')).toBe(false)
+    expect(loopsByName().has('cw_amen01_175')).toBe(true)
+  })
+
   it('shares one scan between two callers asking at once', async () => {
     const first = rescanLoopFolder(db, root, 120)
     const second = rescanLoopFolder(db, root, 120)

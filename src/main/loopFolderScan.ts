@@ -197,7 +197,14 @@ async function statInWalkOrder(
     while (next < files.length) {
       const index = next++
       const file = files[index]
-      const fileStat = await statFile(file.path).catch(() => null)
+      // try, not .catch(): an injected statFile may throw synchronously,
+      // which a .catch() on its (never returned) promise would not see.
+      let fileStat: { size: number; mtimeMs: number } | null
+      try {
+        fileStat = await statFile(file.path)
+      } catch {
+        fileStat = null
+      }
       if (fileStat) {
         results[index] = { file, size: fileStat.size, mtimeMs: Math.trunc(fileStat.mtimeMs) }
       }
