@@ -32,7 +32,8 @@ export const RADIO_PACE_ANCHORS: Readonly<Record<RadioPaceWord, number>> = Objec
   ludicrous: 90
 })
 
-/** The desktop's default (its old default chip, mid). The web starts at fast. */
+/** The desktop's default (its old default chip, mid). The web's is its own (ell.ing/radio's
+ * DEFAULT_WEB_PACE_LEVEL, 60). */
 export const DEFAULT_RADIO_PACE_LEVEL = RADIO_PACE_ANCHORS.mid
 
 /** The drawn window at each knot: [level, min bars, max bars]. Between knots each edge is

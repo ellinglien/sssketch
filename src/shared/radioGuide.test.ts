@@ -5,6 +5,7 @@ import {
   RADIO_GUIDE,
   RADIO_GUIDE_BUTTON,
   RADIO_GUIDE_LABEL,
+  RADIO_GUIDE_WEB_START_PACE,
   radioGuideFor,
   radioGuideWave,
   type RadioGuideApp,
@@ -15,20 +16,25 @@ import {
 import { radioStripModel } from './radioStripModel'
 import { RADIO_ROW_PARTS, type RadioRowPart } from './radioView'
 import {
+  DEFAULT_RADIO_DENSITY,
   DEFAULT_RADIO_SETTINGS,
   RADIO_DENSITY_OPTIONS,
   RADIO_PHRASE_OPTIONS
 } from './radioSchedule'
 import { normalizeSoundSettings } from './radioSound'
 import {
+  DEFAULT_RADIO_PACE_LEVEL,
   RADIO_PACE_ANCHORS,
   RADIO_PACE_BAR_BANDS,
   RADIO_PACE_PHRASE_CAPS,
   RADIO_PACE_ROWS_FROM,
+  radioPaceLabel,
+  radioPacePhraseBars,
   radioPaceProfile
 } from './radioPace'
 import {
   TURNAROUND_CHANCE,
+  TURNAROUND_DEFAULT_PHRASE_BARS,
   TURNAROUND_FAMILIES,
   TURNAROUND_GAP_WORD,
   TURNAROUND_MOVE_LABEL,
@@ -276,6 +282,27 @@ describe('the radio guide: its claims match the code', () => {
     expect(pace.find((i) => i.key === '25 mid')?.text).toContain('8 to 16 bars')
     expect(pace.find((i) => i.key === '50 fast')?.text).toContain('3 to 6 bars')
     expect(pace.find((i) => i.key === '90 ludicrous')?.text).toBe('something changes every bar')
+  })
+
+  it('the desktop starts where it says: its default pace and density', () => {
+    const t = textOf('desktop')
+    expect(DEFAULT_RADIO_SETTINGS.paceLevel).toBe(DEFAULT_RADIO_PACE_LEVEL)
+    expect(DEFAULT_RADIO_SETTINGS.density).toBe(DEFAULT_RADIO_DENSITY)
+    expect(t).toContain(`sssketch starts at ${radioPaceLabel(DEFAULT_RADIO_PACE_LEVEL)}.`)
+    expect(t).toContain(`sssketch starts on ${DEFAULT_RADIO_DENSITY};`)
+  })
+
+  it('the web starts where it says: its window and its phrase at that level', () => {
+    // ell.ing/radio's guide.test.ts holds RADIO_GUIDE_WEB_START_PACE to its DEFAULT_WEB_PACE_LEVEL
+    const p = radioPaceProfile(RADIO_GUIDE_WEB_START_PACE)
+    const t = textOf('web')
+    expect(t).not.toContain('starts at fast')
+    expect(t).toContain(
+      `this radio starts at ${RADIO_GUIDE_WEB_START_PACE}: a change every ${p.window.min} to ${p.window.max} bars`
+    )
+    expect(t).toContain(
+      `the next ${radioPacePhraseBars(p, TURNAROUND_DEFAULT_PHRASE_BARS)}-bar phrase.`
+    )
   })
 
   it('the phrase options are the ones the desktop line names', () => {

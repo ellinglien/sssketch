@@ -28,6 +28,7 @@ import {
   RADIO_PACE_PHRASE_CAPS,
   RADIO_PACE_ROWS_FROM,
   RADIO_PACE_ROWS_MAX,
+  radioPacePhraseBars,
   radioPaceProfile
 } from './radioPace'
 import { HOOK_AWAY, HOOK_LONG_REST, HOOK_RETURNS_BEFORE_REST, HOOK_STAY } from './radioHooks'
@@ -151,6 +152,11 @@ export interface RadioGuide {
   sections: readonly RadioGuideSection[]
   foot: string
 }
+
+/** Where the web radio's pace slider starts for a visitor with nothing saved: ell.ing/radio's
+ * DEFAULT_WEB_PACE_LEVEL (src/ui/pacePrefs.ts), which @shared cannot import; that repo's
+ * guide.test.ts holds the two equal. */
+export const RADIO_GUIDE_WEB_START_PACE = 60
 
 /** The button that opens the guide, and its accessible name (both apps). */
 export const RADIO_GUIDE_BUTTON = '?'
@@ -537,7 +543,7 @@ export const RADIO_GUIDE: RadioGuide = {
         {
           type: 'text',
           only: 'web',
-          text: `this radio starts at fast. up to fast, a change also waits for the start of the next ${PHRASE}-bar phrase; above fast the phrase shortens to ${cap1} bars, then ${cap2}, and from ${RADIO_PACE_ROWS_FROM + 1} a change may land at any loop top.`
+          text: `this radio starts at ${RADIO_GUIDE_WEB_START_PACE}: a change every ${everyBars(RADIO_GUIDE_WEB_START_PACE)}, and it waits for the next ${radioPacePhraseBars(radioPaceProfile(RADIO_GUIDE_WEB_START_PACE), PHRASE)}-bar phrase. up to fast, a change waits for the next ${PHRASE}-bar phrase; above fast the phrase shortens to ${cap1} bars, then ${cap2}, and from ${RADIO_PACE_ROWS_FROM + 1} a change may land at any loop top.`
         },
         {
           type: 'text',
