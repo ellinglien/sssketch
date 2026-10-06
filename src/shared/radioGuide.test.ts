@@ -405,6 +405,17 @@ describe('the radio guide: the diagrams', () => {
     expect(scale.words.map((w) => w.text)).toEqual(['slow', 'mid', 'fast', 'ludicrous'])
   })
 
+  it('the pace scale ticks the levels the pace list starts its lines at', () => {
+    const scale = figures.find((f) => f.type === 'scale')
+    if (scale?.type !== 'scale') throw new Error('no pace scale')
+    const pace = RADIO_GUIDE.sections.find((s) => s.id === 'pace')!
+    const starts = new Set(
+      pace.blocks.flatMap((b) => (b.type === 'keys' ? b.items.map((i) => parseInt(i.key, 10)) : []))
+    )
+    for (const t of scale.ticks.filter((t) => t !== 100))
+      expect(starts.has(t), String(t)).toBe(true)
+  })
+
   it('draws the same waveform every time', () => {
     expect(radioGuideWave('drums', 12)).toEqual(radioGuideWave('drums', 12))
     expect(JSON.stringify(RADIO_GUIDE)).toBe(JSON.stringify(RADIO_GUIDE))

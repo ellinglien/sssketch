@@ -271,7 +271,8 @@ function paceFigure(): RadioGuideScale {
       RADIO_PACE_ANCHORS.slow,
       RADIO_PACE_ANCHORS.mid,
       RADIO_PACE_ANCHORS.fast,
-      RADIO_PACE_ROWS_FROM,
+      // the list's "71" line: more than one row per change from here (and any loop top)
+      RADIO_PACE_ROWS_FROM + 1,
       RADIO_PACE_BAR_BANDS[0][0],
       RADIO_PACE_ANCHORS.ludicrous,
       RADIO_PACE_LEVEL_MAX
