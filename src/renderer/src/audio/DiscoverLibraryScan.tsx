@@ -6,6 +6,11 @@ import { useEffect, useRef, useState } from 'react'
 import { needsAnyAnalysis } from '@shared/stemAnalysisNeeds'
 import { fetchStemAnalysisNeeds } from './analyzeStemOnce'
 import {
+  RIFF_LIBRARY_USERNAME_CHANGED_EVENT,
+  resolveRiffLibraryUsername
+} from './riffLibraryUsername'
+import { orderByStemPriority } from '@shared/stemPriorityOrder'
+import {
   IDLE_REST_MS,
   backgroundAnalysisQueue,
   type AnalysisSource,
@@ -18,6 +23,8 @@ const PRIORITY_IDLE_POLL_MS = IDLE_REST_MS
 // Targets per get-stem-analysis-needs call, fetched ahead of processing
 // (background-efficiency spec, A3) -- matches main's own SQL chunk size.
 const NEEDS_PAGE_SIZE = 500
+/** A username edit arrives a keystroke at a time: re-rank once it settles. */
+const USERNAME_SETTLE_MS = 1500
 
 /** The real whole-library background scan Task 9's own consent prompt
  * gates -- mounted ONCE, at the app's own top level (App.tsx's Frame(),
@@ -50,6 +57,11 @@ const NEEDS_PAGE_SIZE = 500
  * 3 analyses at a time across all of them. Needs are still asked a page at
  * a time, so the per-stem answer stays the needs function's. Unmounting
  * (consent off) removes both sources: only placed stems remain.
+ *
+ * Order (2026-10-06): the work list comes from main ordered for the
+ * configured username (riffLibraryUsername.ts) -- his own stems, then his
+ * favourites, then the rest (stemPriority.ts). A username change later in
+ * the session re-ranks what is left, without fetching the list again.
  *
  * It renders nothing: its progress is reported to backgroundWorkRegistry
  * and shown by the app-wide BackgroundWorkIndicator (see the reporting
@@ -135,15 +147,45 @@ export function DiscoverLibraryScan(): null {
     }
     window.addEventListener(ARTIST_SCAN_QUEUED_EVENT, onQueued)
 
+    // Own stems first (stemPriority.ts): main orders the list for this
+    // username -- own stems, then favourites, then the rest. A later change
+    // of username re-ranks what is left (onUsernameChanged below).
+    let priorityUsername: string | null = null
+    /** Re-ranks the library tier's remaining targets; set once it exists. */
+    let rerank: ((username: string | null) => Promise<void>) | null = null
+    let settleTimer: number | null = null
+    let recheckWhenListed = false
+    function onUsernameChanged(): void {
+      if (settleTimer !== null) window.clearTimeout(settleTimer)
+      settleTimer = window.setTimeout(() => {
+        settleTimer = null
+        void resolveRiffLibraryUsername().then((username) => {
+          if (cancelled || username === priorityUsername) return
+          // The list is still on its way (ordered for the old name): look
+          // again once it is here.
+          if (!rerank) {
+            recheckWhenListed = true
+            return
+          }
+          priorityUsername = username
+          return rerank(username)
+        })
+      }, USERNAME_SETTLE_MS)
+    }
+    window.addEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onUsernameChanged)
+
     countWork('ipc:get-discover-library-scan-work')
-    void window.rifffApi
-      .getDiscoverLibraryScanWork()
+    void resolveRiffLibraryUsername()
+      .then((username) => {
+        priorityUsername = username
+        return window.rifffApi.getDiscoverLibraryScanWork(username)
+      })
       .then(({ work: targets }) => {
         if (cancelled) return
         // What is left to look at: already-analysed stems are no longer in
         // the list, so this starts lower than the library's size.
         setTotal(targets.length)
-        const toScan = targets.filter((t) => !attemptedRef.current.has(t.key))
+        let toScan = targets.filter((t) => !attemptedRef.current.has(t.key))
 
         // Background-efficiency spec, A2/A3: main answers "what does each
         // stem still need" a page at a time (one batched call per
@@ -158,6 +200,10 @@ export function DiscoverLibraryScan(): null {
             while (buffer.length === 0) {
               if (cancelled || nextPageStart >= toScan.length) return 'done'
               const page = toScan.slice(nextPageStart, nextPageStart + NEEDS_PAGE_SIZE)
+              // Advanced before the await, so a re-rank meanwhile (which
+              // reorders only toScan from nextPageStart on) can't move this
+              // page's targets under it.
+              nextPageStart += page.length
               let needs: Awaited<ReturnType<typeof fetchStemAnalysisNeeds>>
               try {
                 needs = await fetchStemAnalysisNeeds(page.map((t) => t.path))
@@ -169,7 +215,6 @@ export function DiscoverLibraryScan(): null {
                 return 'done'
               }
               if (cancelled) return 'done'
-              nextPageStart += page.length
               let alreadyDone = 0
               page.forEach((target, i) => {
                 const targetNeeds = needs[i]
@@ -196,6 +241,42 @@ export function DiscoverLibraryScan(): null {
           }
         }
         backgroundAnalysisQueue.setSource('library', library)
+
+        // A new username mid-session: what is left (the buffered page and
+        // the targets not yet paged) is ranked again by main and reordered,
+        // each rank group keeping the order it had.
+        rerank = async (username) => {
+          const keys = [
+            ...buffer.map((item) => item.key),
+            ...toScan.slice(nextPageStart).map((t) => t.key)
+          ]
+          // Asked even with nothing left: the call also tells main the new
+          // name, which its own passes (auto-classify) rank by.
+          let ranks: number[]
+          try {
+            ranks = await window.rifffApi.getStemPriorityRanks(keys, username)
+          } catch (err) {
+            console.error('DiscoverLibraryScan: re-ranking for a new username failed:', err)
+            return
+          }
+          if (cancelled) return
+          const own = new Set<string>()
+          const favourites = new Set<string>()
+          keys.forEach((key, i) => {
+            if (ranks[i] === 0) own.add(key)
+            else if (ranks[i] === 1) favourites.add(key)
+          })
+          // Applied to whatever is left NOW (pages may have been taken
+          // during the call); keys not ranked count as the rest.
+          const priority = { own, favourites }
+          buffer = orderByStemPriority(buffer, (item) => item.key, priority)
+          toScan = [
+            ...toScan.slice(0, nextPageStart),
+            ...orderByStemPriority(toScan.slice(nextPageStart), (t) => t.key, priority)
+          ]
+          countWork('library-scan:rerank')
+        }
+        if (recheckWhenListed) onUsernameChanged()
       })
       .catch((err: unknown) => {
         // A real main-process rejection (e.g. the IPC call itself
@@ -210,6 +291,8 @@ export function DiscoverLibraryScan(): null {
     return () => {
       cancelled = true
       window.removeEventListener(ARTIST_SCAN_QUEUED_EVENT, onQueued)
+      window.removeEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onUsernameChanged)
+      if (settleTimer !== null) window.clearTimeout(settleTimer)
       // Consent off: both tiers go; a batch in flight finishes.
       backgroundAnalysisQueue.setSource('artist', null)
       backgroundAnalysisQueue.setSource('library', null)

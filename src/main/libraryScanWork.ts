@@ -42,6 +42,11 @@
 // `.`; none exist, measured) lacking an embedding -- the renderer still asks
 // needs per page, so an extra costs one needs row, never a decode.
 //
+// Order (2026-10-06, Elling: own stems first): with `priority`, the list is
+// then stably partitioned -- his own stems, his favourites, the rest
+// (@shared/stemPriorityOrder; the sets from stemPriority.ts), each group in
+// the order above. One pass over the finished list, no extra SQL here.
+//
 // Main-process rules: `.all()` per bounded statement, never `.iterate()`
 // across an await; JS slices of at most 8 ms (yieldSlice); per-db SQL, never
 // per jam.
@@ -63,6 +68,7 @@ import {
 import { stemCIDsNeedingRework } from './stemAnalysisNeeds'
 import { awaitTraitQuantileBuild, prewarmTraitQuantileTables } from './traitQuantileCache'
 import { countWork } from './workCounters'
+import { orderByStemPriority, type StemPrioritySets } from '@shared/stemPriorityOrder'
 
 interface JamDbPair {
   jamCID: string
@@ -81,6 +87,9 @@ export interface LibraryScanWorkOptions {
   windowSize?: number
   readdirFn?: (dir: string) => Promise<string[]>
   statFn?: (path: string) => Promise<{ size: number; isFile(): boolean }>
+  /** Own stems, then favourites, first (stemPriority.ts). Absent: the
+   * order above. */
+  priority?: StemPrioritySets
 }
 
 const DEFAULT_WINDOW_SIZE = 2000
@@ -446,5 +455,9 @@ export async function listLibraryScanWork(
 
   countWork('library-scan-work.work', work.length)
   countWork('library-scan-work.placeholders', placeholdersSkipped)
-  return { work, placeholdersSkipped }
+  if (!options.priority) return { work, placeholdersSkipped }
+  const started = performance.now()
+  const ordered = orderByStemPriority(work, (t) => t.key, options.priority)
+  countWork('ms:library-scan-work.order', Math.round(performance.now() - started))
+  return { work: ordered, placeholdersSkipped }
 }

@@ -58,12 +58,17 @@ import {
   discoverHasRealContent
 } from '../audio/discoverSeed'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
+import {
+  RIFF_LIBRARY_USERNAME_STORAGE_KEY,
+  announceRiffLibraryUsernameChanged
+} from '../audio/riffLibraryUsername'
 
 // Persisted locally (not in project files or app state) since it's a
 // per-person identity setting, not something that travels with a project —
 // each tester on their own machine sets their own username once here and
 // it sticks across sessions, rather than being baked into the app.
-const RIFF_LIBRARY_USERNAME_STORAGE_KEY = 'sssketch:riffLibraryUsername'
+// (The key itself lives with the background passes' resolver,
+// riffLibraryUsername.ts, which reads the same setting.)
 // Pre-rename key -- see docs/superpowers/specs/
 // 2026-08-14-riff-library-rename-design.md §3. Only ever read once, by
 // loadStoredRiffLibraryUsername's own one-time carry-forward below; never
@@ -1730,7 +1735,14 @@ export function LibraryBrowser({
 
         {libraryMode === 'browse' && (
           <>
-            <EndlesssLoginPanel onStatusChange={setAuthStatus} />
+            <EndlesssLoginPanel
+              onStatusChange={(next) => {
+                setAuthStatus(next)
+                // A login or logout can change who "me" is for the
+                // background passes (own stems first).
+                announceRiffLibraryUsernameChanged()
+              }}
+            />
 
             {/* available === false in practice only happens for a misconfigured
             or unmounted EXTERNAL folder -- the self-built warehouse is
@@ -2241,6 +2253,8 @@ export function LibraryBrowser({
                             // one-time carry-forward ever wrote the key,
                             // so an edit used to last one session.
                             storeRiffLibraryUsername(e.target.value)
+                            // The background passes rank own stems first.
+                            announceRiffLibraryUsernameChanged()
                           }}
                           placeholder="your username"
                           title="your username"

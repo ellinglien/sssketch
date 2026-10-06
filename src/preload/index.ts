@@ -506,8 +506,14 @@ const api = {
     ipcRenderer.invoke('sound-settings:set', settings),
   getDiscoverClassifyProgress: (): Promise<StemAutoClassifyProgress> =>
     ipcRenderer.invoke('get-discover-classify-progress'),
-  getDiscoverLibraryScanWork: (): Promise<LibraryScanWork> =>
-    ipcRenderer.invoke('get-discover-library-scan-work'),
+  /** The library tier's work list, own stems first for `username` (then
+   * favourites; null: no own stems). Also sets main's priority username. */
+  getDiscoverLibraryScanWork: (username: string | null): Promise<LibraryScanWork> =>
+    ipcRenderer.invoke('get-discover-library-scan-work', username),
+  /** Each key's priority rank for `username` (0 own, 1 favourite, 2 the
+   * rest; stemPriority.ts). Also sets main's priority username. */
+  getStemPriorityRanks: (keys: string[], username: string | null): Promise<number[]> =>
+    ipcRenderer.invoke('get-stem-priority-ranks', keys, username),
   upsertStemCategoryBus: (
     entries: { path: string; busId: BusId }[],
     source: string,

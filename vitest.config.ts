@@ -92,7 +92,9 @@ export default defineConfig({
           // (3 dead workers, no failed test named): the radio's 👍 store and the web-hearts import.
           'src/main/radioHeartImportStore.test.ts',
           'src/main/radioHeartsImport.test.ts',
-          'src/main/stemFavouriteStore.test.ts'
+          'src/main/stemFavouriteStore.test.ts',
+          // Own stems first (2026-10-06): opens fixture dbs, so excluded before it can crash.
+          'src/main/stemPriority.test.ts'
         ]
       : configDefaults.exclude,
     passWithNoTests: true,

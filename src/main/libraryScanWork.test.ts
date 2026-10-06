@@ -11,6 +11,7 @@ import { needsAnyAnalysis } from '@shared/stemAnalysisNeeds'
 import { createDirListingExists, listLibraryScanTargets } from './discoverLibraryStems'
 import { getStemAnalysisNeeds } from './stemAnalysisNeeds'
 import { listLibraryScanWork } from './libraryScanWork'
+import { buildStemPriority } from './stemPriority'
 import { countWork } from './workCounters'
 
 const fsSpies = vi.hoisted(() => ({ readdirSync: vi.fn() }))
@@ -363,5 +364,67 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
     expect(asMap(result.work)).toEqual(await oracle(jams, own))
     // shared1 was decided by the in-memory db (absent there), so not by the file db
     expect([...asMap(result.work).keys()].sort()).toEqual(['u1', 'v1'])
+  })
+})
+
+describe('listLibraryScanWork: own stems first (2026-10-06)', () => {
+  /** The fixture, with Stems rows naming creators in both source dbs and
+   * stars in the own db. */
+  function withPriority(): { own: Database.Database; jams: Jams; dbs: Database.Database[] } {
+    const { own, jams } = fixture()
+    const src1 = jams[0].dbForJam
+    const src2 = jams[3].dbForJam
+    for (const db of [src1, src2]) {
+      db.exec(`CREATE TABLE Stems (StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT, CreatorUserName TEXT);
+        CREATE INDEX Stems_IndexUser ON Stems (CreatorUserName);`)
+    }
+    const creator = (db: Database.Database, cid: string, user: string): void => {
+      db.prepare(`INSERT INTO Stems VALUES (?, 'j', ?)`).run(cid, user)
+    }
+    creator(src1, 'b2never', 'me')
+    creator(src1, 'a4corrupt', 'me')
+    creator(src1, 'a2nolevel', 'other')
+    creator(src2, 'd3src2only', 'me')
+    creator(src2, 'd2laterdb', 'other')
+    own.exec(`CREATE TABLE StemFavourite (StemCID TEXT PRIMARY KEY, FavouritedAt INTEGER NOT NULL)`)
+    own
+      .prepare(`INSERT INTO StemFavourite VALUES ('a3v1', 0), ('d2laterdb', 0), ('b2never', 0)`)
+      .run()
+    return { own, jams, dbs: [src1, src2] }
+  }
+
+  it('own stems, then favourites, then the rest, each in the order without a priority', async () => {
+    const { own, jams, dbs } = withPriority()
+    const today = (await listLibraryScanWork(jams, own)).work.map((t) => t.key)
+    const priority = await buildStemPriority(dbs, own, 'me', { windowSize: 1 })
+    const result = await listLibraryScanWork(jams, own, { priority })
+    const keys = result.work.map((t) => t.key)
+    const own3 = ['b2never', 'a4corrupt', 'd3src2only']
+    const favs = ['a3v1', 'd2laterdb']
+    const inToday = (set: string[]): string[] => today.filter((k) => set.includes(k))
+    expect(keys).toEqual([
+      ...inToday(own3),
+      ...inToday(favs),
+      ...today.filter((k) => !own3.includes(k) && !favs.includes(k))
+    ])
+    expect(new Set(keys)).toEqual(new Set(today))
+    expect(asMap(result.work)).toEqual(asMap((await listLibraryScanWork(jams, own)).work))
+  })
+
+  it('no username: favourites first, otherwise today order; nothing either: today order', async () => {
+    const { own, jams, dbs } = withPriority()
+    const today = (await listLibraryScanWork(jams, own)).work.map((t) => t.key)
+    const favsOnly = await buildStemPriority(dbs, own, null)
+    const keys = (await listLibraryScanWork(jams, own, { priority: favsOnly })).work.map(
+      (t) => t.key
+    )
+    const favs = ['a3v1', 'b2never', 'd2laterdb']
+    expect(keys).toEqual([
+      ...today.filter((k) => favs.includes(k)),
+      ...today.filter((k) => !favs.includes(k))
+    ])
+    const empty = { own: new Set<string>(), favourites: new Set<string>() }
+    const plain = (await listLibraryScanWork(jams, own, { priority: empty })).work
+    expect(plain.map((t) => t.key)).toEqual(today)
   })
 })

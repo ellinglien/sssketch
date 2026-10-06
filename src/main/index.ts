@@ -160,6 +160,8 @@ import {
 } from './stemAutoCategoryStore'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
+import { getStemPriority, setStemPriorityUsername, type StemPriority } from './stemPriority'
+import { stemPriorityRank } from '@shared/stemPriorityOrder'
 import { getStemAvailabilityReport, onStemAvailabilityNotice } from './stemAvailability'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
@@ -1713,11 +1715,36 @@ app.whenReady().then(async () => {
   // The library scan's work list (background scan audit 3, libraryScanWork.ts):
   // what needs analysis first (SQL preselect over the persisted stem/jam pairs,
   // B6, and the trait value table's versions), then existence, asynchronously.
-  ipcMain.handle('get-discover-library-scan-work', (): Promise<LibraryScanWork> =>
-    listLibraryScanWork(
-      listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
-      openOwnRiffLibraryDb()
-    )
+  // Own stems first, then favourites (stemPriority.ts): the renderer passes
+  // its username (typed, else the Endlesss session's; null when none), which
+  // also becomes the one main's own background passes rank by.
+  ipcMain.handle(
+    'get-discover-library-scan-work',
+    async (_event, username: string | null = null): Promise<LibraryScanWork> => {
+      setStemPriorityUsername(username)
+      let priority: StemPriority | undefined
+      try {
+        priority = await getStemPriority()
+      } catch (err) {
+        // today's order rather than no work list
+        console.error('get-discover-library-scan-work: stem priority failed:', err)
+      }
+      return listLibraryScanWork(
+        listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
+        openOwnRiffLibraryDb(),
+        { priority }
+      )
+    }
+  )
+  // A username change mid-session: the renderer re-ranks what its library
+  // tier has left (DiscoverLibraryScan).
+  ipcMain.handle(
+    'get-stem-priority-ranks',
+    async (_event, keys: string[], username: string | null): Promise<number[]> => {
+      setStemPriorityUsername(username)
+      const priority = await getStemPriority()
+      return keys.map((key) => stemPriorityRank(priority, key))
+    }
   )
 
   ipcMain.handle(
