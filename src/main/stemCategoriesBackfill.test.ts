@@ -661,6 +661,28 @@ describe('stemCategoriesBackfill', () => {
       expect(rebuilt.global.count).toBe(7)
     })
 
+    // Review of 6fd465fe, minor 5: a store moved aside stayed empty for the
+    // classifier until the next training write, which may be days away.
+    it('a missing store file is rebuilt at startup, and only a missing one', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      labelRow(db, 'cid-1', { busId: 'drums', arrangeRole: 'drums' })
+      const { rebuildMissingCentroidStore } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      expect(rebuildMissingCentroidStore(db)).toBe(true)
+      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+      expect(loadCategoryCentroidStore().arrangeRoles.drums?.count).toBe(1)
+      expect(fileTrainedPairs()).toEqual([{ stemCID: 'cid-1', busId: 'drums' }])
+
+      // A file that is there, whatever it holds, is left as it is.
+      const saved = readFileSync(storeFilePath(), 'utf-8')
+      expect(rebuildMissingCentroidStore(db)).toBe(false)
+      expect(readFileSync(storeFilePath(), 'utf-8')).toBe(saved)
+      writeFileSync(storeFilePath(), 'not json')
+      expect(rebuildMissingCentroidStore(db)).toBe(false)
+      expect(readFileSync(storeFilePath(), 'utf-8')).toBe('not json')
+    })
+
     it('a role write that finds no store file rebuilds every axis, and its own batch is counted once', async () => {
       const db = freshDb()
       analysedStem(db, 'cid-1')

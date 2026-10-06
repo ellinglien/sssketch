@@ -64,6 +64,7 @@ import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentro
 import {
   recordStemCategoryBus,
   recordStemCategoryRole,
+  rebuildMissingCentroidStore,
   setCentroidStoreUnreadableListener
 } from './categoryCentroidTraining'
 import { nextUpdateState, type UpdateState } from '@shared/updateState'
@@ -675,6 +676,17 @@ app.whenReady().then(async () => {
   console.log(
     `backfillInstrumentMaskCategories: categorized ${instrumentMaskBackfillSummary.categorizedStems} stems`
   )
+
+  // A classifier training file (busCentroids.json) that is missing -- first
+  // run, or moved aside -- and that neither backfill above rebuilt (they
+  // rebuild it only on a write, and an unchanged library writes nothing) is
+  // rebuilt from the db now, so the classifier doesn't run on an empty store
+  // until the next bus or role confirmation. After the backfills, so it
+  // holds what they wrote. Synchronous, ~50 ms on Elling's db; a no-op when
+  // the file is there.
+  if (rebuildMissingCentroidStore(openOwnRiffLibraryDb())) {
+    console.log('rebuildMissingCentroidStore: rebuilt busCentroids.json from the library db')
+  }
 
   // Background "pre-categorize the whole library" scheduler -- direct
   // request, 2026-09-15 ("why not just do a prelim scan that

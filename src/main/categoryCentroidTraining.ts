@@ -182,6 +182,18 @@ function rebuildStoreFromDb(db: Database.Database): {
   return { store, trainedPairs }
 }
 
+/** At startup, after the backfills (index.ts): a store file that is missing
+ * (first run, or moved aside or deleted) is rebuilt from the db and saved
+ * now, rather than left empty for the classifier until the next training
+ * write, which may be days away (review of 6fd465fe, minor 5). A file that
+ * is there is left alone, whether or not it loads. Synchronous, one .all()
+ * (~50 ms on Elling's db). True when it saved a rebuilt file. */
+export function rebuildMissingCentroidStore(db: Database.Database): boolean {
+  if (readCategoryCentroidStoreFile().kind !== 'missing') return false
+  const { store, trainedPairs } = rebuildStoreFromDb(db)
+  return saveCategoryCentroidStore(store, trainedPairs)
+}
+
 /** A store file saved before trainedPairs existed (each user's first launch
  * on this code): every trainable bus row written by the code before it whose
  * stem has features is credited as already held. Those stores were trained
