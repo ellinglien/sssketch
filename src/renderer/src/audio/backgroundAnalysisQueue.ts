@@ -240,6 +240,8 @@ export function createBackgroundAnalysisQueue(
   async function step(): Promise<void> {
     running = true
     kickedWhileRunning = false
+    /** The placed batch counted in placedInFlight and not yet settled. */
+    let placedTaken: Batch['items'] = []
     try {
       // Yield to the user (backgroundScanGate.ts): deferred, never skipped --
       // fetching needs included.
@@ -264,18 +266,20 @@ export function createBackgroundAnalysisQueue(
         countWork(`queue:batch.${batch.tier}`)
         countWork(`queue:in-flight.${batch.items.length}`)
         if (batch.tier === 'placed') {
+          placedTaken = batch.items
           placedInFlight += batch.items.length
           reportPlaced()
         }
         // The batch's real work is awaited before the next one is scheduled
         // (DiscoverLibraryScan's 2026-09-18 regression): BATCH_SIZE is a real cap.
         await Promise.allSettled(
-          batch.items.map(({ path, needs }) => {
+          batch.items.map(async ({ path, needs }) => {
             analysed.add(path)
             return deps.analyze(path, needs)
           })
         )
         if (batch.tier === 'placed') {
+          placedTaken = []
           placedInFlight -= batch.items.length
           reportPlaced()
         }
@@ -288,6 +292,25 @@ export function createBackgroundAnalysisQueue(
         }
       }
       schedule(batch.items.length > 0 ? BATCH_DELAY_MS : 0, 'delay')
+    } catch (err) {
+      // Review of T7: nothing here may stop the loop for the session (a
+      // throwing gate or progress listener). Undo the batch's in-flight
+      // count, put back its placed paths that never started, try again later.
+      console.error('backgroundAnalysisQueue: a step failed:', err)
+      if (placedTaken.length > 0) {
+        placedInFlight -= placedTaken.length
+        const queued = new Set(placed.map((item) => item.path))
+        const unstarted = placedTaken.filter(
+          (item) => !analysed.has(item.path) && !queued.has(item.path)
+        )
+        placed = [...unstarted, ...placed]
+        try {
+          reportPlaced()
+        } catch {
+          // a listener throwing again: already logged once, the loop goes on
+        }
+      }
+      schedule(BATCH_DELAY_MS, 'delay')
     } finally {
       running = false
     }

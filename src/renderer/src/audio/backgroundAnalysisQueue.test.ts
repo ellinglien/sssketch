@@ -286,4 +286,58 @@ describe('backgroundAnalysisQueue (background scan audit 7)', () => {
     await run(BATCH_DELAY_MS)
     expect(reports.at(-1)).toBe(0)
   })
+
+  // Review of T7: `void step()` had no catch -- a throw stopped the loop for
+  // the session and left placed paths counted as in flight forever.
+  it('a step that throws is logged, its in-flight count undone, its paths kept, and the loop goes on', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const h = harness()
+    const reports: number[] = []
+    let thrown = false
+    h.queue.onProgress((_kind, left) => {
+      reports.push(left)
+      if (left === 4 && !thrown) {
+        thrown = true // the report as the first batch starts
+        throw new Error('listener')
+      }
+    })
+    h.queue.setPlaced(['/p/1', '/p/2', '/p/3', '/p/4'])
+    await run(0)
+    expect(thrown).toBe(true)
+    expect(errors).toHaveBeenCalledTimes(1)
+    expect(h.analyzed).toEqual([])
+    await run(BATCH_DELAY_MS * 4)
+    expect(h.analyzed).toEqual(['/p/1', '/p/2', '/p/3', '/p/4'])
+    expect(reports.at(-1)).toBe(0)
+    errors.mockRestore()
+  })
+
+  it('a gate that throws is logged and asked again after the batch gap', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const analyzed: string[] = []
+    let calls = 0
+    const queue = createBackgroundAnalysisQueue({
+      analyze: async (path) => {
+        analyzed.push(path)
+      },
+      fetchNeeds: async (paths) => paths.map(() => NEEDY),
+      gate: {
+        mayRun: () => {
+          calls += 1
+          if (calls === 1) throw new Error('gate')
+          return true
+        }
+      },
+      setTimeout: (fn, ms) => setTimeout(fn, ms),
+      clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+      now: () => Date.now()
+    })
+    queue.setPlaced(['/p/1'])
+    await run(BATCH_DELAY_MS - 1)
+    expect(errors).toHaveBeenCalledTimes(1)
+    expect(analyzed).toEqual([])
+    await run(1)
+    expect(analyzed).toEqual(['/p/1'])
+    errors.mockRestore()
+  })
 })
