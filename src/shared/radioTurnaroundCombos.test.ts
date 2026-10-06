@@ -508,7 +508,8 @@ describe('saying it', () => {
   it('names the moves, the lead first, and the gap', () => {
     expect(turnaroundLabel(['riser', 'lift'], true)).toBe('riser + lift → gap')
     expect(turnaroundLabel(['wash', 'dip'], false)).toBe('wash + dip')
-    expect(turnaroundLabel(['drum drop'], false)).toBe('drop')
+    expect(turnaroundLabel(['drum drop'], false)).toBe('drums out')
+    expect(turnaroundLabel(['drum drop', 'lift'], true)).toBe('drums out +1 → gap')
     expect(turnaroundLabel(['riser'], true)).toBe('riser → gap')
     expect(turnaroundLabel(['riser', 'low drop', 'lift'], true)).toBe('riser +2 → gap')
   })
@@ -550,8 +551,8 @@ describe('saying it', () => {
         rows: [{ rowId: 'd' }, { rowId: 'b' }]
       })
     ).toEqual([
-      { rowId: 'd', word: 'low drop', beats: 4 },
-      { rowId: 'b', word: 'low drop', beats: 4 }
+      { rowId: 'd', word: 'low out', beats: 4 },
+      { rowId: 'b', word: 'low out', beats: 4 }
     ])
   })
 })

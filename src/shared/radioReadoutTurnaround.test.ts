@@ -41,7 +41,7 @@ function combinations(): TurnaroundMove[][] {
 
 describe('the ruler names a combined turnaround (combos spec section 6)', () => {
   it('reads a single move exactly as before', () => {
-    expect(end({ move: 'drum drop', isTurn: false })).toBe('drop')
+    expect(end({ move: 'drum drop', isTurn: false })).toBe('drums out')
     expect(end({ move: 'wash', isTurn: true })).toBe('turn: wash')
     expect(end({ move: null, isTurn: true })).toBe('turn')
     expect(end({ move: null, isTurn: false })).toBeNull()

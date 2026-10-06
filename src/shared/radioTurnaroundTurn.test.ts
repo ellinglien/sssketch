@@ -214,12 +214,15 @@ describe('turnaroundMoveCanSound', () => {
 })
 
 describe('TURNAROUND_MOVE_LABEL', () => {
-  it('names every move in lowercase, at most two words; the drum drop is `drop`', () => {
+  it('names every move in lowercase, at most two words; the drop-outs say what goes out', () => {
     for (const move of TURNAROUND_MOVES) {
       const label = TURNAROUND_MOVE_LABEL[move]
       expect(label).toBe(label.toLowerCase())
       expect(label.split(' ').length).toBeLessThanOrEqual(2)
     }
-    expect(TURNAROUND_MOVE_LABEL['drum drop']).toBe('drop')
+    // Elling, 2026-10-05: `drop` is the intensity arc's drop (the low end back), never a chip
+    expect(TURNAROUND_MOVE_LABEL['drum drop']).toBe('drums out')
+    expect(TURNAROUND_MOVE_LABEL['low drop']).toBe('low out')
+    expect(Object.values(TURNAROUND_MOVE_LABEL)).not.toContain('drop')
   })
 })

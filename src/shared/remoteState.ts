@@ -108,6 +108,18 @@ export interface RemoteTurnView {
   moves: TurnaroundMove[]
 }
 
+/** The intensity arc, as the phone needs it (spec 2026-10-05-radio-intensity-arc-design 6): its
+ * phase and the `build` and `drop` buttons. Sent only while radio runs with density `intensity`;
+ * null or absent otherwise, and the phone shows no buttons. Phase words and booleans name nothing,
+ * so the boundary is unchanged. */
+export interface RemoteArcView {
+  phase: 'build' | 'breakdown' | 'drop'
+  /** A press waiting for its top: the button reads `building` or `dropping`. */
+  waiting: 'build' | 'drop' | null
+  canBuild: boolean
+  canDrop: boolean
+}
+
 export interface RemoteState {
   /** False when Discover is not open on the Mac -- the page then says
    * "open discover on the mac" and offers nothing else. It does not
@@ -147,6 +159,9 @@ export interface RemoteState {
   /** Radio's turn; null or absent while radio is off (an older Mac never sends it). It is what
    * POST /api/turn answers from (remoteTurnAnswer). */
   turn?: RemoteTurnView | null
+  /** The intensity arc; null or absent unless radio runs with density `intensity` (an older Mac
+   * never sends it). POST /api/arc answers from it (remoteArcAnswer). */
+  arc?: RemoteArcView | null
   slots: RemoteSlotView[]
 }
 
@@ -220,6 +235,8 @@ export interface RemoteStateMeta {
   fold?: boolean | null
   /** Radio's turn while radio runs; absent or null while it is off. */
   turn?: RemoteTurnView | null
+  /** The intensity arc while it runs; absent or null otherwise. */
+  arc?: RemoteArcView | null
   /** Radio's roles by slot id while radio runs (hooks, dig); absent while it is off. */
   roles?: ReadonlyMap<string, RemoteSlotRole>
 }
@@ -260,6 +277,7 @@ export function remoteStateFromSlots(
     radio: normalizeRemoteRadio(meta.radio ?? null, slots),
     fold: typeof meta.fold === 'boolean' ? meta.fold : null,
     turn: normalizeRemoteTurn(meta.turn ?? null),
+    arc: normalizeRemoteArc(meta.arc ?? null),
     slots: slots.map((slot) => ({
       id: slot.id,
       kindLabel: slotKindsLabel(slot.kinds),
@@ -302,6 +320,18 @@ function normalizeRemoteTurn(turn: RemoteTurnView | null): RemoteTurnView | null
     move: known(turn.move) ? turn.move : null,
     canTurn: turn.canTurn === true,
     moves: TURNAROUND_MOVES.filter((m) => turn.moves.includes(m))
+  }
+}
+
+/** Only a real phase leaves; anything else is no arc at all. */
+function normalizeRemoteArc(arc: RemoteArcView | null): RemoteArcView | null {
+  if (arc === null) return null
+  if (arc.phase !== 'build' && arc.phase !== 'breakdown' && arc.phase !== 'drop') return null
+  return {
+    phase: arc.phase,
+    waiting: arc.waiting === 'build' || arc.waiting === 'drop' ? arc.waiting : null,
+    canBuild: arc.canBuild === true,
+    canDrop: arc.canDrop === true
   }
 }
 
@@ -360,6 +390,9 @@ export type RemoteCommand =
   /** Radio's turn at the next loop top: a chip's `move`, absent for the planner's choice
    * (2026-10-02). Forwarded only when remoteTurnAnswer says `turning`. */
   | { kind: 'turn'; move?: TurnaroundMove }
+  /** The intensity arc's `build` or `drop` at the next loop top (2026-10-05). Forwarded only when
+   * remoteArcAnswer says `building` or `dropping`. */
+  | { kind: 'arc'; action: 'build' | 'drop' }
 
 /** The fold switch's body (`{ on }`): only a boolean is an answer; anything else is null, and the
  * route refuses the request (the same rule as parseRemoteSlotKinds). */
@@ -426,6 +459,26 @@ export function remoteTurnAnswer(
   if (turn === null || turn === undefined) return 'radio off'
   const can = move === null ? turn.canTurn : turn.moves.includes(move)
   return can ? 'turning' : 'nothing to turn'
+}
+
+/** POST /api/arc's `action`: exactly `build` or `drop`; anything else is null and the route
+ * refuses the request. */
+export function parseRemoteArcAction(value: unknown): 'build' | 'drop' | null {
+  return value === 'build' || value === 'drop' ? value : null
+}
+
+/** The phone's flash for a build or drop press, and the route's answer: `radio off` with no arc in
+ * the state (radio off, or density not intensity), `not now` when the Mac says that button cannot
+ * act now, else `building` or `dropping`. */
+export type RemoteArcAnswer = 'building' | 'dropping' | 'not now' | 'radio off'
+
+export function remoteArcAnswer(
+  arc: RemoteArcView | null | undefined,
+  action: 'build' | 'drop'
+): RemoteArcAnswer {
+  if (arc === null || arc === undefined) return 'radio off'
+  if (action === 'build') return arc.canBuild ? 'building' : 'not now'
+  return arc.canDrop ? 'dropping' : 'not now'
 }
 
 /** The whole trust boundary for the action sheet, in one pure function --

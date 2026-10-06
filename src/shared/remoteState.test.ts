@@ -201,6 +201,7 @@ describe('remoteStateFromSlots', () => {
       radio: null,
       fold: null,
       turn: null,
+      arc: null,
       slots: []
     })
   })

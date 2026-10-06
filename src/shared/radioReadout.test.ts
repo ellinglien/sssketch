@@ -129,7 +129,7 @@ describe('radioReadout: the phrase ruler', () => {
   it("a phrase end's turnaround is its move's label; a turn is turn: <move>", () => {
     expect(
       radioReadout(input({ armedTurnaround: { move: 'drum drop', isTurn: false } })).ruler.end
-    ).toBe('drop')
+    ).toBe('drums out')
     expect(radioReadout(input({ armedTurnaround: { move: 'wash', isTurn: true } })).ruler.end).toBe(
       'turn: wash'
     )

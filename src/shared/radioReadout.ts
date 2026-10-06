@@ -42,7 +42,8 @@ export interface RadioFlashShown {
   t: number
 }
 
-export type RadioReadoutArcState = 'growing' | 'thinning' | 'steady' | 'off'
+/** `breakdown` and `drop`: the intensity arc's (radioReadoutIntensityArc). */
+export type RadioReadoutArcState = 'growing' | 'thinning' | 'steady' | 'off' | 'breakdown' | 'drop'
 
 export interface RadioReadoutRowInput {
   rowId: string
@@ -80,6 +81,11 @@ export interface RadioReadoutInput {
     /** A hook leaving (`out`) or coming back (`back`) on that row (radioHooks.ts):
      * `next: row 2 → hook back · 4 bars`. */
     hook?: 'out' | 'back'
+    /** The intensity arc's drop is decided for that top: `next: drop · 4 bars` (`rowId` one of
+     * the rows coming back). */
+    drop?: boolean
+    /** The breakdown rests that row there: `next: row 2 rests · 4 bars`. */
+    rests?: boolean
     /* Which rows ride (held, locked or muted ones excluded) is the caller's call at decision
      * time; the readout only shows the ones that are rows and not the led row, once each. */
   } | null
@@ -92,7 +98,17 @@ export interface RadioReadoutInput {
     parts?: readonly TurnaroundMove[]
     gap?: boolean
   } | null
-  arc: { state: RadioReadoutArcState; count: number; target: number }
+  arc: {
+    state: RadioReadoutArcState
+    count: number
+    target: number
+    /** A breakdown: bars to the drop's planned top (null: not known). */
+    dropInBars?: number | null
+    /** A bigger peak's build: `building ↑↑`. */
+    big?: boolean
+  }
+  /** Under 360 px: the short forms (`breakdown · 12`). */
+  narrow?: boolean
   /** Radio is held: the arc part reads `held` (it goes nowhere while held). The runtime passes as
    * `nextChange` only what still lands while held (an arc step already on the timeline), or null. */
   held?: boolean
@@ -227,11 +243,45 @@ export function radioAgeLabel(laps: number): string {
   return plural(Number.isFinite(laps) ? Math.max(0, Math.floor(laps)) : 0, 'lap')
 }
 
-function arcPart(arc: RadioReadoutInput['arc'], held: boolean): string | null {
+/** The intensity arc as the readout reads it (spec 2026-10-05-radio-intensity-arc-design 9): the
+ * build as `growing` toward its peak (`big` on a bigger peak), the breakdown with the bars to its
+ * drop, the ride as `drop`. Before the machine has begun: steady. */
+export function radioReadoutIntensityArc(
+  arc: {
+    begun: boolean
+    phase: 'build' | 'breakdown' | 'drop'
+    peakRows: number
+    big: boolean
+  },
+  count: number,
+  dropInBars: number | null
+): RadioReadoutInput['arc'] {
+  if (!arc.begun) return { state: 'steady', count, target: count }
+  switch (arc.phase) {
+    case 'build':
+      return count < arc.peakRows
+        ? { state: 'growing', count, target: arc.peakRows, ...(arc.big && { big: true }) }
+        : { state: 'steady', count, target: count }
+    case 'breakdown':
+      return { state: 'breakdown', count, target: count, dropInBars }
+    case 'drop':
+      return { state: 'drop', count, target: count }
+  }
+}
+
+function arcPart(arc: RadioReadoutInput['arc'], held: boolean, narrow: boolean): string | null {
   if (held) return arc.state === 'off' ? 'held' : `held · ${plural(arc.count, 'row')}`
   switch (arc.state) {
     case 'growing':
-      return `building ↑ ${arc.count} → ${arc.target}`
+      return `building ${arc.big === true ? '↑↑' : '↑'} ${arc.count} → ${arc.target}`
+    case 'breakdown': {
+      const bars = arc.dropInBars
+      if (bars === null || bars === undefined || !Number.isFinite(bars)) return 'breakdown'
+      const n = Math.max(1, Math.ceil(bars - 1e-6))
+      return narrow ? `breakdown · ${n}` : `breakdown · drop in ${plural(n, 'bar')}`
+    }
+    case 'drop':
+      return `drop · ${plural(arc.count, 'row')}`
     case 'thinning':
       return `thinning ↓ ${arc.count} → ${arc.target}`
     case 'steady':
@@ -251,17 +301,21 @@ function nextPart(input: RadioReadoutInput): string | null {
     ? []
     : [...new Set(n.with ?? [])].filter((id) => id !== n.rowId && present.has(id))
   const extra = companions.length > 0 ? ` +${companions.length}` : ''
+  const bars0 = Math.max(1, Math.ceil(n.barsAway - 1e-6))
+  if (n.drop === true) return `next: drop · ${plural(bars0, 'bar')}`
   const who =
     (n.course ? 'course change' : i >= 0 && !n.adding ? `row ${i + 1}` : 'a new row') + extra
   const how = n.course
     ? ''
-    : n.hook !== undefined
-      ? ` → hook ${n.hook}`
-      : n.leaving
-        ? ' leaves'
-        : n.kind !== null
-          ? ` → ${n.kind}`
-          : ''
+    : n.rests === true
+      ? ' rests'
+      : n.hook !== undefined
+        ? ` → hook ${n.hook}`
+        : n.leaving
+          ? ' leaves'
+          : n.kind !== null
+            ? ` → ${n.kind}`
+            : ''
   const bars = Math.max(1, Math.ceil(n.barsAway - 1e-6))
   return `next: ${who}${how} · ${plural(bars, 'bar')}`
 }
@@ -279,7 +333,7 @@ function rulerEnd(t: RadioReadoutInput['armedTurnaround']): string | null {
 }
 
 export function radioReadout(input: RadioReadoutInput): RadioReadout {
-  const statusLine = [arcPart(input.arc, !!input.held), nextPart(input)]
+  const statusLine = [arcPart(input.arc, !!input.held, input.narrow === true), nextPart(input)]
     .filter((p): p is string => p !== null)
     .join(' · ')
   const ticks = Math.max(0, Math.round(input.bars.phraseBars))
@@ -307,13 +361,15 @@ export function radioReadout(input: RadioReadoutInput): RadioReadout {
         nextKind,
         nextLabel: !isNext
           ? null
-          : !companion && next.hook !== undefined
-            ? `next · hook ${next.hook}`
-            : leaving
-              ? 'next · leaves'
-              : nextKind !== null
-                ? `next · ${nextKind}`
-                : 'next',
+          : !companion && next.rests === true
+            ? 'next · rests'
+            : !companion && next.hook !== undefined
+              ? `next · hook ${next.hook}`
+              : leaving
+                ? 'next · leaves'
+                : nextKind !== null
+                  ? `next · ${nextKind}`
+                  : 'next',
         flash: r.flash ?? null
       }
     })

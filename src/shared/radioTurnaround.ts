@@ -599,10 +599,12 @@ export function turnaroundTurnBeats(remainingBeats: number, leadBeats: number): 
   return left >= 1 ? left : null
 }
 
-/** Each move's chip, lowercase, at most two words. */
+/** Each move's chip, lowercase, at most two words. The drop-outs read as what they take OUT
+ * (Elling, 2026-10-05): `drop` now means the intensity arc's drop, the low end coming BACK. The
+ * move ids stay (`drum drop`, `low drop`): the phone's wire and every test name them. */
 export const TURNAROUND_MOVE_LABEL: Readonly<Record<TurnaroundMove, string>> = {
-  'drum drop': 'drop',
-  'low drop': 'low drop',
+  'drum drop': 'drums out',
+  'low drop': 'low out',
   stop: 'stop',
   wash: 'wash',
   lift: 'lift',
@@ -1273,8 +1275,9 @@ function diminishParts(
 /** The longest a turnaround's label may be before it is shortened to its lead and a count. */
 export const TURNAROUND_LABEL_MAX = 20
 
-/** A turnaround in words, the lead first: `riser + lift → gap`, `wash + dip`, `drop`. Longer than
- * `max`: the lead and how many more, `riser +2 → gap`. */
+/** A turnaround in words, the lead first: `riser + lift → gap`, `wash + dip`, `drums out`. Longer
+ * than `max`: the lead and how many more, `riser +2 → gap`; still longer (a two-word lead, since
+ * the drop-outs became `drums out` and `low out`): the lead and the gap, `drums out → gap`. */
 export function turnaroundLabel(
   moves: readonly TurnaroundMove[],
   gap: boolean,
@@ -1284,7 +1287,8 @@ export function turnaroundLabel(
   const tail = gap ? ` → ${TURNAROUND_GAP_WORD}` : ''
   const full = moves.map((m) => TURNAROUND_MOVE_LABEL[m]).join(' + ') + tail
   if (full.length <= max || moves.length === 1) return full
-  return `${TURNAROUND_MOVE_LABEL[moves[0]]} +${moves.length - 1}${tail}`
+  const counted = `${TURNAROUND_MOVE_LABEL[moves[0]]} +${moves.length - 1}${tail}`
+  return counted.length <= max ? counted : `${TURNAROUND_MOVE_LABEL[moves[0]]}${tail}`
 }
 
 /** A plan's moves, the lead first (a single move's plan is just its move). */
