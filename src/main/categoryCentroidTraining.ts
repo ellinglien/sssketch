@@ -15,6 +15,7 @@ import {
 } from './categoryCentroidStore'
 import { getStemFeatureCache } from './stemFeatureCacheStore'
 import {
+  hasBusStampColumn,
   upsertStemCategoryBus,
   upsertStemCategoryRole,
   type StemBusCategoryEntry,
@@ -105,15 +106,25 @@ interface LabelledRow {
   features: StemFeatures
 }
 
-/** Every StemCategories row whose stem has readable features, with them (only
- * rows holding a bus, if `busOnly`). One .all(): nothing is held open across
- * the training, and nothing here awaits. */
-function labelledRowsWithFeatures(db: Database.Database, busOnly: boolean): LabelledRow[] {
+/** Every StemCategories row whose stem has readable features, with them; or,
+ * with 'unstampedBus', only the rows holding a bus written before
+ * BusUpdatedAt existed (NULL there, or no such column yet). One .all():
+ * nothing is held open across the training, and nothing here awaits. */
+function labelledRowsWithFeatures(
+  db: Database.Database,
+  only: 'all' | 'unstampedBus'
+): LabelledRow[] {
+  const where =
+    only === 'all'
+      ? ''
+      : hasBusStampColumn(db)
+        ? 'WHERE c.BusId IS NOT NULL AND c.BusUpdatedAt IS NULL'
+        : 'WHERE c.BusId IS NOT NULL'
   const rows = db
     .prepare(
       `SELECT c.StemCID, c.BusId, c.ArrangeRole, c.DrumSubRole, f.FeaturesJSON
        FROM StemCategories c JOIN StemFeatureCache f ON f.StemCID = c.StemCID
-       ${busOnly ? 'WHERE c.BusId IS NOT NULL' : ''}`
+       ${where}`
     )
     .all() as {
     StemCID: string
@@ -155,7 +166,7 @@ function rebuildStoreFromDb(db: Database.Database): {
 } {
   let store = emptyCategoryCentroidStore()
   const trainedPairs: TrainedBusPair[] = []
-  for (const row of labelledRowsWithFeatures(db, false)) {
+  for (const row of labelledRowsWithFeatures(db, 'all')) {
     const raw = toFeatureArray(row.features)
     if (row.busId !== null && isTrainableCategory('bus', row.busId)) {
       store = recordConfirmedCategory(store, 'bus', row.busId, raw)
@@ -172,15 +183,25 @@ function rebuildStoreFromDb(db: Database.Database): {
 }
 
 /** A store file saved before trainedPairs existed (each user's first launch
- * on this code): every current trainable bus row whose stem has features is
- * credited as already held. Those stores were trained by every such write,
- * most of them many times over (the startup backfill re-trained every
- * project on every launch, so their counts are inflated): training them
- * once more would only inflate them further. A row without features was
- * never trained, and trains once when they arrive. Taken once: the first
- * save writes the pairs into the file. */
+ * on this code): every trainable bus row written by the code before it whose
+ * stem has features is credited as already held. Those stores were trained
+ * by every such write, most of them many times over (the startup backfill
+ * re-trained every project on every launch, so their counts are inflated):
+ * training them once more would only inflate them further. A row without
+ * features was never trained, and trains once when they arrive.
+ *
+ * Only rows whose bus was written before BusUpdatedAt existed (NULL there)
+ * are credited. A bus written since was written by this code, which records
+ * each pair in the file it trains into, in the same save: so a stamped row
+ * was never trained into a file without trainedPairs. That matters because
+ * the seed is taken again at every write until one saves it (review of
+ * 6fd465fe, minor 2): a write whose save failed has already written its row,
+ * and crediting that row at the next write -- in this launch or a later
+ * one -- would mean its pair never trained. The cost, also only after a
+ * failed save: an old row the failed write re-stamped (the same bus written
+ * again) trains once more. */
 function seedTrainedPairs(db: Database.Database): TrainedBusPair[] {
-  return labelledRowsWithFeatures(db, true)
+  return labelledRowsWithFeatures(db, 'unstampedBus')
     .filter((row) => isTrainableCategory('bus', row.busId!))
     .map((row) => ({ stemCID: row.stemCID, busId: row.busId! }))
 }

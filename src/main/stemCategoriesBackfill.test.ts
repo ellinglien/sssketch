@@ -744,6 +744,37 @@ describe('stemCategoriesBackfill', () => {
       expect(store.buses.drums?.count).toBe(6)
     })
 
+    // Review of 6fd465fe, minor 2: the seed is taken again at every write
+    // until one saves it. A pair whose first training failed to save was then
+    // in the bus rows the next seed credited, so it never trained.
+    it('a pair whose training failed to save is not credited by the next seed', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      analysedStem(db, 'cid-2')
+      writeFileSync(storeFilePath(), JSON.stringify(legacyStore(['drums'])))
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      mkdirSync(`${storeFilePath()}.tmp`) // the save fails
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+      expect(recordStemCategoryBus(db, [drums], 'tidyup', null, 1000).waiting).toEqual([drums])
+      errors.mockRestore()
+      rmSync(`${storeFilePath()}.tmp`, { recursive: true })
+
+      // A later launch (nothing kept in memory); its first write is another
+      // stem's: it takes the seed, and saves it.
+      vi.resetModules()
+      const relaunched = await import('./categoryCentroidTraining')
+      relaunched.recordStemCategoryBus(db, [bass], 'tidyup', null, 2000)
+      expect(fileTrainedPairs()).toEqual([{ stemCID: 'cid-2', busId: 'bass' }])
+      // Written again, cid-1's pair trains: once.
+      expect(relaunched.recordStemCategoryBus(db, [drums], 'tidyup', null, 3000).waiting).toEqual(
+        []
+      )
+      relaunched.recordStemCategoryBus(db, [drums], 'tidyup', null, 4000)
+      const store = loadCategoryCentroidStore()
+      expect([store.buses.drums?.count, store.buses.bass?.count]).toEqual([2, 1])
+    })
+
     it('a seed taken by a write with nothing to train is saved', async () => {
       const db = freshDb()
       analysedStem(db, 'cid-1')

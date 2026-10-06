@@ -75,7 +75,8 @@ export interface StemBusUpsertResult {
 // every row written before it existed.
 const busStampReady = new WeakSet<Database.Database>()
 
-function hasBusStampColumn(db: Database.Database): boolean {
+/** Whether StemCategories has BusUpdatedAt yet (it is added lazily). */
+export function hasBusStampColumn(db: Database.Database): boolean {
   const columns = db.prepare(`PRAGMA table_info(StemCategories)`).all() as { name: string }[]
   return columns.some((column) => column.name === 'BusUpdatedAt')
 }
