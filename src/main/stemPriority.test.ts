@@ -153,4 +153,51 @@ describe('createStemPriorityCache', () => {
     const none = await cache.get(null)
     expect(none.own.size).toBe(0)
   })
+
+  // Review of 06eecbdc: a plain `rowid > watermark` misses a stem that
+  // reuses a deleted top rowid (deleteJamRows dropping a jam's orphaned
+  // stems, then a sync inserting more: a rowid table hands out MAX+1 again).
+  it('a stem inserted after the top rows were deleted is picked up (and the deleted ones dropped)', async () => {
+    const { archive, own } = fixture()
+    const cache = createStemPriorityCache({
+      sourceDbs: () => [archive, own],
+      ownDb: () => own,
+      windowSize: 2
+    })
+    await cache.get('me')
+    // a7 ('me') holds the archive's top rowid; s5 ('me') the own db's
+    archive.prepare(`DELETE FROM Stems WHERE StemCID IN ('a6', 'a7')`).run()
+    own.prepare(`DELETE FROM Stems WHERE StemCID = 's5'`).run()
+    stem(archive, 'a9', 'me') // rowid 6 again
+    stem(own, 's9', 'me') // rowid 5 again
+    const p = await cache.get('me')
+    expect([...p.own].sort()).toEqual(['a1', 'a3', 'a5', 'a9', 's2', 's9'])
+  })
+
+  it('a renumbered table (VACUUM, a replaced file) is read again', async () => {
+    const { archive, own } = fixture()
+    const cache = createStemPriorityCache({ sourceDbs: () => [archive], ownDb: () => own })
+    await cache.get('me')
+    // same count, same MAX(rowid), different row there: as after a VACUUM
+    // renumbered rowids, or the file was swapped for another
+    archive.prepare(`DELETE FROM Stems WHERE StemCID = 'a7'`).run()
+    archive
+      .prepare(
+        `INSERT INTO Stems (rowid, StemCID, OwnerJamCID, CreatorUserName) VALUES (7, 'b7', 'jam', 'me')`
+      )
+      .run()
+    const p = await cache.get('me')
+    expect([...p.own].sort()).toEqual(['a1', 'a3', 'a5', 'b7', 's2', 's5'])
+  })
+
+  it('a failed PRAGMA reads the db unindexed rather than as having no creator column', async () => {
+    const { archive, own } = fixture()
+    const real = archive.prepare.bind(archive)
+    vi.spyOn(archive, 'prepare').mockImplementation(((sql: string) => {
+      if (sql.trim().startsWith('PRAGMA')) throw new Error('database is locked')
+      return real(sql)
+    }) as typeof archive.prepare)
+    const p = await buildStemPriority([archive], own, 'me', { windowSize: 2 })
+    expect([...p.own].sort()).toEqual(['a1', 'a3', 'a5', 'a7', 's2', 's5'])
+  })
 })

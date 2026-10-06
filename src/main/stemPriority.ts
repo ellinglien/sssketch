@@ -15,8 +15,13 @@
 //   the 68,251 'elling' rows as one statement took 4.2 s cold off the USB
 //   drive (one table lookup per row) -- windows of OWN_WINDOW keep each
 //   statement short, with a yield between.
-//   Kept per username with a rowid watermark per db: a later call reads
-//   only rows added since (a sync bringing new own stems), one index seek.
+//   Kept per username with a rowid watermark per db (rowidWatermark.ts, the
+//   rule every archive index here uses): a later call reads only rows added
+//   since (a sync bringing new own stems), one index seek -- unless rows at
+//   or below the watermark were deleted (deleteJamRows, then a sync reusing
+//   the freed top rowids), VACUUM renumbered them, or the file was
+//   replaced: then that db's set is read again from the start. An in-place
+//   UPDATE of CreatorUserName is not seen (no row count or rowid moves).
 // - favourites: StemFavourite (the stars; radio hearts and likes land there
 //   too, radioHeartsImport.ts) and the stems of favourite riffs (Tags.Favour
 //   = 1, slots 1-8 and RiffStemsExtra). A few hundred rows: re-read on every
@@ -31,6 +36,8 @@ import type Database from 'better-sqlite3'
 import type { StemPrioritySets } from '@shared/stemPriorityOrder'
 import { candidateDbsForRiff } from './riffLibraryStore'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
+import { canExtendByRowid, keyAtRowid, type RowidWatermark } from './rowidWatermark'
+import { readTableSignal } from './tableChangeSignal'
 import { countWork } from './workCounters'
 
 export interface StemPriority extends StemPrioritySets {
@@ -54,7 +61,10 @@ function normalUsername(username: string | null | undefined): string | null {
 }
 
 /** Whether `db`'s Stems has CreatorUserName at all, and an index leading
- * with it. */
+ * with it. A PRAGMA that fails (a busy or flaky connection) reads as
+ * present but unindexed: the bounded rowid windows work either way, and a
+ * db without the column then fails its window read, which refresh skips
+ * -- never "no own stems here" with the watermark moved past them. */
 function creatorColumn(db: Database.Database): { present: boolean; indexed: boolean } {
   try {
     const cols = db.prepare(`PRAGMA table_info(Stems)`).all() as { name: string }[]
@@ -69,43 +79,49 @@ function creatorColumn(db: Database.Database): { present: boolean; indexed: bool
     })
     return { present: true, indexed }
   } catch {
-    return { present: false, indexed: false }
+    return { present: true, indexed: false }
   }
 }
 
-/** One db's own-stem reader: adds `username`'s StemCIDs with rowid above the
- * watermark to `into`, window by window, and returns the new watermark. */
+/** One db's own-stem reader: adds `username`'s StemCIDs with rowid in
+ * (after, through] to `into`, window by window. `through` is the MAX(rowid)
+ * the watermark records, so a row inserted mid-walk is left for the next
+ * call rather than read without being counted. */
 async function readOwnStems(
   db: Database.Database,
   username: string,
   after: number,
+  through: number,
   into: Set<string>,
   windowSize: number,
   onWindow?: () => void
-): Promise<number> {
+): Promise<void> {
   const column = creatorColumn(db)
-  if (!column.present) return after
+  if (!column.present) return
   if (column.indexed) {
     const windowed = db.prepare(
       `SELECT rowid AS rid, StemCID FROM Stems
-       WHERE CreatorUserName = ? AND rowid > ? ORDER BY rowid LIMIT ?`
+       WHERE CreatorUserName = ? AND rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?`
     )
     for (;;) {
-      const rows = windowed.all(username, after, windowSize) as { rid: number; StemCID: string }[]
+      const rows = windowed.all(username, after, through, windowSize) as {
+        rid: number
+        StemCID: string
+      }[]
       onWindow?.()
       countWork('sql:stem-priority.own-window')
       for (const row of rows) into.add(row.StemCID)
       if (rows.length > 0) after = rows[rows.length - 1].rid
-      if (rows.length < windowSize) return after
+      if (rows.length < windowSize) return
       await yieldToEventLoop()
     }
   }
   const windowed = db.prepare(
     `SELECT rowid AS rid, StemCID, CreatorUserName = ? AS mine FROM Stems
-     WHERE rowid > ? ORDER BY rowid LIMIT ?`
+     WHERE rowid > ? AND rowid <= ? ORDER BY rowid LIMIT ?`
   )
   for (;;) {
-    const rows = windowed.all(username, after, windowSize) as {
+    const rows = windowed.all(username, after, through, windowSize) as {
       rid: number
       StemCID: string
       mine: number | null
@@ -114,9 +130,52 @@ async function readOwnStems(
     countWork('sql:stem-priority.own-window')
     for (const row of rows) if (row.mine === 1) into.add(row.StemCID)
     if (rows.length > 0) after = rows[rows.length - 1].rid
-    if (rows.length < windowSize) return after
+    if (rows.length < windowSize) return
     await yieldToEventLoop()
   }
+}
+
+/** One db's own stems and the watermark they were read through. */
+interface DbOwnStems {
+  watermark: RowidWatermark
+  own: Set<string>
+}
+
+/** Brings `previous` (this db's last read, if any) up to date: extended by
+ * the rows past its watermark when rowidWatermark.ts's rule allows, else
+ * read again from the start. Undefined when the table can't be read now
+ * (missing, or an I/O error): the caller keeps what it had. */
+async function refreshDbOwnStems(
+  db: Database.Database,
+  username: string,
+  previous: DbOwnStems | undefined,
+  windowSize: number,
+  onWindow?: () => void
+): Promise<DbOwnStems | undefined> {
+  const live = readTableSignal(db, 'Stems')
+  if (!live) return undefined
+  if (live.maxRowid === null) {
+    return { watermark: { count: live.count, maxRowid: null, keyAtMax: null }, own: new Set() }
+  }
+  const extend =
+    previous !== undefined && canExtendByRowid(db, 'Stems', 'StemCID', previous.watermark, live)
+  countWork(extend ? 'stem-priority:extend' : 'stem-priority:rebuild')
+  // Read with the signal, before the walk yields: the watermark describes
+  // the table as it stood when the walk's bound was taken.
+  const keyAtMax = keyAtRowid(db, 'Stems', 'StemCID', live.maxRowid)
+  const watermark = { count: live.count, maxRowid: live.maxRowid, keyAtMax }
+  if (!extend) {
+    // A new set, so the old one stays whole if the walk fails part way.
+    const own = new Set<string>()
+    await readOwnStems(db, username, 0, live.maxRowid, own, windowSize, onWindow)
+    return { watermark, own }
+  }
+  const added = new Set<string>()
+  const after = previous.watermark.maxRowid ?? 0
+  await readOwnStems(db, username, after, live.maxRowid, added, windowSize, onWindow)
+  // Nothing new (most calls): the same set, not a 70k-entry copy per tick.
+  if (added.size === 0) return { watermark, own: previous.own }
+  return { watermark, own: new Set([...previous.own, ...added]) }
 }
 
 /** Stars plus the stems of favourite riffs, from every db given. */
@@ -201,34 +260,38 @@ export interface StemPriorityCache {
 
 export function createStemPriorityCache(deps: StemPriorityCacheDeps): StemPriorityCache {
   const windowSize = Math.max(1, deps.windowSize ?? OWN_WINDOW)
+  // Keyed by connection, weakly: a db closed and reopened (a switched
+  // archive) is a new key, and the old one's set goes with it.
   let state: {
     username: string | null
-    own: Set<string>
-    after: Map<Database.Database, number>
+    perDb: WeakMap<Database.Database, DbOwnStems>
   } | null = null
   let inFlight: { username: string | null; promise: Promise<StemPriority> } | null = null
 
   async function refresh(username: string | null): Promise<StemPriority> {
     const dbs = [...new Set([...deps.sourceDbs(), deps.ownDb()])]
     if (!state || state.username !== username) {
-      state = { username, own: new Set(), after: new Map() }
+      state = { username, perDb: new WeakMap() }
     }
     const current = state
+    const own = new Set<string>()
     if (username !== null) {
       for (const db of dbs) {
-        const after = await readOwnStems(
-          db,
-          username,
-          current.after.get(db) ?? 0,
-          current.own,
-          windowSize,
-          deps.onOwnWindow
-        )
-        current.after.set(db, after)
+        const previous = current.perDb.get(db)
+        try {
+          const next = await refreshDbOwnStems(db, username, previous, windowSize, deps.onOwnWindow)
+          if (next) current.perDb.set(db, next)
+        } catch (err) {
+          // One unreadable db (an external file, a failed read off the USB
+          // volume) keeps what it had; the others still count.
+          countWork('stem-priority:db-error')
+          console.error('stemPriority: reading own stems failed for a db:', err)
+        }
+        for (const stemCID of current.perDb.get(db)?.own ?? []) own.add(stemCID)
       }
     }
     const favourites = readFavourites(deps.sourceDbs(), deps.ownDb())
-    return { username, own: new Set(current.own), favourites }
+    return { username, own, favourites }
   }
 
   return {
