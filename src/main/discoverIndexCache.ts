@@ -367,6 +367,74 @@ export function saveRiffIndexCache(
   tx()
 }
 
+export function readInstrumentRowsMeta(
+  ownDb: Database.Database,
+  sourceDbKey: string
+): IndexCacheMeta | null {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  const row = ownDb
+    .prepare(
+      `SELECT StemCount, MaxRowid, WatermarkStemCID FROM DiscoverInstrumentRowsCacheMeta
+       WHERE SourceDbKey = ?`
+    )
+    .get(sourceDbKey) as
+    { StemCount: number; MaxRowid: number | null; WatermarkStemCID: string | null } | undefined
+  return row ? metaOf(row.StemCount, row.MaxRowid, row.WatermarkStemCID) : null
+}
+
+function writeInstrumentRowsMeta(
+  ownDb: Database.Database,
+  sourceDbKey: string,
+  watermark: RowidWatermark
+): void {
+  ownDb
+    .prepare(
+      `INSERT INTO DiscoverInstrumentRowsCacheMeta
+         (SourceDbKey, StemCount, MaxRowid, WatermarkStemCID, ComputedAt)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(SourceDbKey) DO UPDATE SET
+         StemCount = excluded.StemCount, MaxRowid = excluded.MaxRowid,
+         WatermarkStemCID = excluded.WatermarkStemCID, ComputedAt = excluded.ComputedAt`
+    )
+    .run(sourceDbKey, watermark.count, watermark.maxRowid, watermark.keyAtMax, Date.now())
+}
+
+/** resetRiffIndexCache's counterpart for the instrument rows (Task 3). */
+export async function resetInstrumentRowsCache(
+  ownDb: Database.Database,
+  sourceDbKey: string
+): Promise<void> {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  countWork('discover-index:reset.instrument-rows')
+  ownDb
+    .prepare(`DELETE FROM DiscoverInstrumentRowsCacheMeta WHERE SourceDbKey = ?`)
+    .run(sourceDbKey)
+  await deleteKeyInChunks(ownDb, 'DiscoverInstrumentRowsCache', sourceDbKey)
+  writeInstrumentRowsMeta(ownDb, sourceDbKey, { count: 0, maxRowid: null, keyAtMax: null })
+}
+
+/** Persists one walked Stems page (stemsTableWalk.ts) in time-budgeted
+ * transactions, the watermark in the last. Stems rows are written once
+ * (never filled in place), so a row already saved is left as it is. */
+export async function persistInstrumentRowsPage(
+  ownDb: Database.Database,
+  sourceDbKey: string,
+  rows: readonly CachedInstrumentRow[],
+  watermark: RowidWatermark
+): Promise<void> {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  const insert = ownDb.prepare(
+    `INSERT INTO DiscoverInstrumentRowsCache (SourceDbKey, StemCID, Instrument, OwnerJamCID)
+     VALUES (?, ?, ?, ?) ON CONFLICT(SourceDbKey, StemCID) DO NOTHING`
+  )
+  await runSliced(
+    ownDb,
+    rows.length,
+    (i) => insert.run(sourceDbKey, rows[i].StemCID, rows[i].Instrument, rows[i].OwnerJamCID),
+    () => writeInstrumentRowsMeta(ownDb, sourceDbKey, watermark)
+  )
+}
+
 export interface CachedInstrumentRow {
   StemCID: string
   Instrument: number | null
@@ -388,27 +456,32 @@ export async function loadCachedInstrumentRows(
   ).n
   if (total === 0) return rows
 
-  let offset = 0
-  while (offset < total) {
-    const page = ownDb
-      .prepare(
-        `SELECT StemCID, Instrument, OwnerJamCID FROM DiscoverInstrumentRowsCache
-         WHERE SourceDbKey = ? ORDER BY StemCID LIMIT ? OFFSET ?`
-      )
-      .all(sourceDbKey, PAGE_SIZE, offset) as CachedInstrumentRow[]
+  // Keyset on the primary key (SourceDbKey, StemCID): StemCID order, which
+  // the mask lookup binary-searches (instrumentRowsLookup.ts), and no
+  // OFFSET re-skip.
+  const statement = ownDb.prepare(
+    `SELECT StemCID, Instrument, OwnerJamCID FROM DiscoverInstrumentRowsCache
+     WHERE SourceDbKey = ? AND StemCID > ? ORDER BY StemCID LIMIT ?`
+  )
+  let after = ''
+  for (;;) {
+    const page = statement.all(sourceDbKey, after, PAGE_SIZE) as CachedInstrumentRow[]
     if (page.length === 0) break
     countWork('prewarm:rows-loaded.instrument-rows', page.length)
-
-    rows.push(...page)
-    offset += page.length
-    onProgress?.(offset, total)
+    for (const row of page) rows.push(row)
+    onProgress?.(rows.length, total)
     if (page.length < PAGE_SIZE) break
+    after = page[page.length - 1].StemCID
     await yieldToEventLoop()
   }
   return rows
 }
 
-/** Same replace-in-one-transaction shape as saveRiffIndexCache above.
+/** LEGACY shape (no watermark), like saveRiffIndexCache above: production
+ * saves go page by page through resetInstrumentRowsCache +
+ * persistInstrumentRowsPage.
+ *
+ * Same replace-in-one-transaction shape as saveRiffIndexCache above.
  * `stemCount` is the real `SELECT COUNT(*) FROM Stems` the caller already
  * measured -- always equal to `rows.length` in practice (this cache has
  * no dedup step, unlike the riff index), but passed explicitly rather
@@ -429,8 +502,10 @@ export function saveInstrumentRowsCache(
     `INSERT INTO DiscoverInstrumentRowsCacheMeta (SourceDbKey, StemCount, ComputedAt) VALUES (?, ?, ?)
      ON CONFLICT(SourceDbKey) DO UPDATE SET StemCount = excluded.StemCount, ComputedAt = excluded.ComputedAt`
   )
+  const delMeta = ownDb.prepare(`DELETE FROM DiscoverInstrumentRowsCacheMeta WHERE SourceDbKey = ?`)
   const tx = ownDb.transaction(() => {
     del.run(sourceDbKey)
+    delMeta.run(sourceDbKey)
     for (const row of rows) {
       insert.run(sourceDbKey, row.StemCID, row.Instrument, row.OwnerJamCID)
     }
@@ -509,16 +584,23 @@ export function appendInstrumentRows(
   rows: readonly CachedInstrumentRow[],
   stemCountDelta: number
 ): void {
-  const existing = getCachedStemCount(ownDb, sourceDbKey)
-  if (existing === null) return
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  const meta = ownDb
+    .prepare(
+      `SELECT StemCount, MaxRowid FROM DiscoverInstrumentRowsCacheMeta WHERE SourceDbKey = ?`
+    )
+    .get(sourceDbKey) as { StemCount: number; MaxRowid: number | null } | undefined
+  if (!meta) return
   const insert = ownDb.prepare(
     `INSERT INTO DiscoverInstrumentRowsCache (SourceDbKey, StemCID, Instrument, OwnerJamCID)
      VALUES (?, ?, ?, ?) ON CONFLICT(SourceDbKey, StemCID) DO NOTHING`
   )
   for (const row of rows) insert.run(sourceDbKey, row.StemCID, row.Instrument, row.OwnerJamCID)
+  // Decision 5, as appendRiffIndexRows: a watermarked meta is left alone.
+  if (meta.MaxRowid !== null) return
   ownDb
     .prepare(
       `UPDATE DiscoverInstrumentRowsCacheMeta SET StemCount = ?, ComputedAt = ? WHERE SourceDbKey = ?`
     )
-    .run(existing + stemCountDelta, Date.now(), sourceDbKey)
+    .run(meta.StemCount + stemCountDelta, Date.now(), sourceDbKey)
 }

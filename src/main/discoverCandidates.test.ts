@@ -815,7 +815,9 @@ describe('getDiscoverCandidates', () => {
       ([sql]) => sql.includes('FROM Stems') && sql.includes('Instrument')
     )
     expect(stemsInstrumentQueries.length).toBe(1)
-    expect(stemsInstrumentQueries[0][0]).not.toMatch(/WHERE/)
+    // No per-jam or per-row predicate: only the walk's own rowid range
+    // (scan plan Task 3), the table's own order.
+    expect(stemsInstrumentQueries[0][0].replace(/WHERE rowid > \?/, '')).not.toMatch(/WHERE/)
   })
 
   // Real perf bug, found live 2026-09-15 via a direct question ("if 15,054
@@ -3082,6 +3084,24 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
     expect(await persisted(own, path)).toEqual(oracle(path))
   })
 
+  it('the max riff deleted and a new one reusing its rowid (same count) rebuilds', async () => {
+    const path = archivePath()
+    seedRiffs(path, 200, 16)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    const w = new Database(path)
+    w.prepare(`DELETE FROM Riffs WHERE rowid = (SELECT MAX(rowid) FROM Riffs)`).run()
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('swap', 'j', 1, 'sw')`
+    ).run()
+    w.close()
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(walkedRiffs()).toBe(200)
+    expect(await getRiffIndexForDb(src)).toEqual(oracle(path))
+  })
+
   it('a kept group appends rows and leaves the watermark alone; the next launch extends over it', async () => {
     const { appendRiffIndexRows, readRiffIndexMeta } = await import('./discoverIndexCache')
     const path = archivePath()
@@ -3183,5 +3203,256 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
     vi.mocked(countWork).mockClear()
     expect(await getRiffIndexForDb(src)).toEqual(oracle(path))
     expect(walkedRiffs()).toBe(12)
+  })
+})
+
+// Scan plan b21ea5a2 Task 3 (audit 5A): the instrument rows come from one
+// rowid-order Stems walk (stemsTableWalk.ts), persisted page by page with a
+// rowid watermark, extended rather than rebuilt, and sorted by StemCID in
+// slices for the mask lookup.
+describe('instrument rows walk and extension (scan plan Task 3)', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'stems-walk-'))
+    vi.mocked(countWork).mockClear()
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function archive(): string {
+    const path = join(dir, 'archive.db')
+    const db = new Database(path)
+    db.exec(`
+      CREATE TABLE Riffs (RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
+        BPMrnd REAL, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
+        StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY (RiffCID));
+      CREATE TABLE Stems (StemCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, Instrument INTEGER,
+        CreatorUserName TEXT, PRIMARY KEY (StemCID));`)
+    db.close()
+    return path
+  }
+
+  function seedStems(path: string, n: number, seed: number, prefix = 's'): void {
+    const db = new Database(path)
+    let x = seed
+    const insert = db.prepare(`INSERT INTO Stems VALUES (?, ?, ?, ?)`)
+    db.transaction(() => {
+      for (let i = 0; i < n; i++) {
+        x = (x * 1103515245 + 12345) % 2147483648
+        insert.run(
+          `${x.toString(16).padStart(8, '0')}${prefix}${i}`,
+          `jam${i % 4}`,
+          i % 7 === 0 ? null : i % 40,
+          `u${i % 9}`
+        )
+      }
+    })()
+    db.close()
+  }
+
+  function oracle(
+    path: string
+  ): Map<string, { StemCID: string; Instrument: number | null; OwnerJamCID: string }> {
+    const db = new Database(path, { readonly: true })
+    const rows = db.prepare(`SELECT StemCID, Instrument, OwnerJamCID FROM Stems`).all() as {
+      StemCID: string
+      Instrument: number | null
+      OwnerJamCID: string
+    }[]
+    db.close()
+    return new Map(rows.map((r) => [r.StemCID, r]))
+  }
+
+  const launch = (path: string): Database.Database => new Database(path, { readonly: true })
+
+  async function prewarm(src: Database.Database, own: Database.Database): Promise<void> {
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own)
+  }
+
+  function walkedStems(): number {
+    return vi
+      .mocked(countWork)
+      .mock.calls.filter(([kind]) => kind === 'walk:stems.rows')
+      .reduce((sum, [, n]) => sum + (n ?? 1), 0)
+  }
+
+  /** The in-memory rows, seen through the mask lookup (the only reader that
+   * cares about their order) plus a full read of them via the lookup. */
+  function lookupMap(
+    src: Database.Database,
+    ids: Iterable<string>
+  ): Map<string, number | null | undefined> {
+    const lookup = getInstrumentMaskLookup(src)
+    expect(lookup).not.toBeNull()
+    return new Map([...ids].map((id) => [id, lookup!(id)]))
+  }
+
+  async function persistedRows(
+    own: Database.Database,
+    path: string
+  ): Promise<Map<string, unknown>> {
+    const { loadCachedInstrumentRows } = await import('./discoverIndexCache')
+    const rows = await loadCachedInstrumentRows(own, path)
+    return new Map(rows.map((r) => [r.StemCID, r]))
+  }
+
+  it('walks Stems without OFFSET; rows saved and in memory equal the table, in StemCID order', async () => {
+    const path = archive()
+    seedStems(path, 9_000, 1)
+    const src = launch(path)
+    const own = freshDb()
+    const spy = vi.spyOn(src, 'prepare')
+    await prewarm(src, own)
+    const stemsSql = spy.mock.calls.map(([sql]) => sql).filter((sql) => sql.includes('FROM Stems'))
+    expect(stemsSql.some((sql) => /OFFSET/i.test(sql))).toBe(false)
+    expect(walkedStems()).toBe(9_000)
+    const expected = oracle(path)
+    expect(await persistedRows(own, path)).toEqual(expected)
+    const masks = lookupMap(src, expected.keys())
+    for (const [id, row] of expected) expect(masks.get(id)).toBe(row.Instrument)
+    // Sorted after the walk: the lookup's binary-searched prefix covers every row.
+    const sortedIds = [...expected.keys()].sort()
+    const lookup = getInstrumentMaskLookup(src)!
+    expect(sortedIds.every((id) => lookup(id) !== undefined)).toBe(true)
+  })
+
+  it('extends: the next launch reads only the stems past the watermark, and answers the same masks', async () => {
+    const path = archive()
+    seedStems(path, 5_000, 2)
+    const own = freshDb()
+    const first = launch(path)
+    await prewarm(first, own)
+    const before = lookupMap(first, oracle(path).keys())
+    seedStems(path, 40, 3, 'n')
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(walkedStems()).toBe(40)
+    const expected = oracle(path)
+    expect(await persistedRows(own, path)).toEqual(expected)
+    const after = lookupMap(src, expected.keys())
+    for (const [id, mask] of before) expect(after.get(id)).toBe(mask)
+    for (const [id, row] of expected) expect(after.get(id)).toBe(row.Instrument)
+  })
+
+  it('a kept group appends rows and leaves the watermark alone; the next launch extends with no duplicates', async () => {
+    const { appendInstrumentRows, readInstrumentRowsMeta } = await import('./discoverIndexCache')
+    const path = archive()
+    seedStems(path, 300, 4)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    const before = readInstrumentRowsMeta(own, path)
+    const w = new Database(path)
+    w.prepare(`INSERT INTO Stems VALUES ('kept', 'discovered', 4, 'me')`).run()
+    w.close()
+    appendInstrumentRows(
+      own,
+      path,
+      [{ StemCID: 'kept', Instrument: 4, OwnerJamCID: 'discovered' }],
+      1
+    )
+    expect(readInstrumentRowsMeta(own, path)).toEqual(before)
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedStems()).toBe(1)
+    expect(await persistedRows(own, path)).toEqual(oracle(path))
+    const n = (
+      own
+        .prepare(`SELECT COUNT(*) AS n FROM DiscoverInstrumentRowsCache WHERE SourceDbKey = ?`)
+        .get(path) as {
+        n: number
+      }
+    ).n
+    expect(n).toBe(301)
+  })
+
+  it('a delete, or a different StemCID at the watermark, rebuilds', async () => {
+    const path = archive()
+    seedStems(path, 400, 5)
+    const own = freshDb()
+    await prewarm(launch(path), own)
+    const w = new Database(path)
+    w.prepare(`DELETE FROM Stems WHERE rowid = 3`).run()
+    w.close()
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedStems()).toBe(399)
+    expect(await persistedRows(own, path)).toEqual(oracle(path))
+
+    const w2 = new Database(path)
+    w2.prepare(`DELETE FROM Stems WHERE rowid = (SELECT MAX(rowid) FROM Stems)`).run()
+    w2.prepare(`INSERT INTO Stems VALUES ('replacement', 'jam1', 2, 'u')`).run() // reuses the max rowid
+    w2.close()
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(walkedStems()).toBe(399)
+    expect(await persistedRows(own, path)).toEqual(oracle(path))
+    expect(getInstrumentMaskLookup(src)!('replacement')).toBe(2)
+  })
+
+  it('a legacy saved copy (no watermark) loads while its count matches, then rebuilds once, then extends', async () => {
+    const path = archive()
+    seedStems(path, 60, 6)
+    const own = freshDb()
+    saveInstrumentRowsCache(own, path, [...oracle(path).values()], 60)
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedStems()).toBe(0)
+    seedStems(path, 1, 7, 'a')
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedStems()).toBe(61)
+    seedStems(path, 1, 8, 'b')
+    vi.mocked(countWork).mockClear()
+    await prewarm(launch(path), own)
+    expect(walkedStems()).toBe(1)
+    expect(await persistedRows(own, path)).toEqual(oracle(path))
+  })
+
+  it('an interrupted rebuild resumes from its last saved page', async () => {
+    const indexCache = await import('./discoverIndexCache')
+    const path = archive()
+    seedStems(path, 5_000, 9)
+    const own = freshDb()
+    const real = indexCache.persistInstrumentRowsPage
+    const persist = vi
+      .spyOn(indexCache, 'persistInstrumentRowsPage')
+      .mockImplementationOnce(real)
+      .mockRejectedValueOnce(new Error('quit mid-walk'))
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    await prewarm(launch(path), own)
+    persist.mockRestore()
+    vi.mocked(countWork).mockClear()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect(walkedStems()).toBe(3_000)
+    expect(await persistedRows(own, path)).toEqual(oracle(path))
+    const lookup = getInstrumentMaskLookup(src)!
+    for (const [id, row] of oracle(path)) expect(lookup(id)).toBe(row.Instrument)
+  })
+
+  it('in session, a stale copy extends in memory into a new array', async () => {
+    const path = archive()
+    seedStems(path, 2_500, 10)
+    const own = freshDb()
+    const src = launch(path)
+    await prewarm(src, own)
+    seedStems(path, 15, 11, 'late')
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + 60_000)
+    vi.mocked(countWork).mockClear()
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam1', dbForJam: src }],
+      kinds: ['drums']
+    })
+    void candidates
+    expect(walkedStems()).toBe(15)
+    const lookup = getInstrumentMaskLookup(src)!
+    for (const [id, row] of oracle(path)) expect(lookup(id)).toBe(row.Instrument)
   })
 })

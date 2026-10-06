@@ -33,19 +33,21 @@ import { getTraitQuantileTables, getTraitValueTable } from './traitQuantileCache
 import { countWork } from './workCounters'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
-  getCachedStemCount,
   loadCachedRiffIndex,
   loadCachedRiffOpenRowids,
   persistRiffIndexPage,
   readRiffIndexMeta,
   resetRiffIndexCache,
   loadCachedInstrumentRows,
-  saveInstrumentRowsCache
+  persistInstrumentRowsPage,
+  readInstrumentRowsMeta,
+  resetInstrumentRowsCache
 } from './discoverIndexCache'
 import { getStemClassificationVersion } from './stemClassificationVersion'
 import { createInstrumentRowsLookup, type InstrumentRowsLookup } from './instrumentRowsLookup'
 import { emptyRiffIndexState, walkRiffs, type RiffIndexState } from './riffIndexWalk'
-import { canExtendByRowid } from './rowidWatermark'
+import { canExtendByRowid, keyAtRowid, type RowidWatermark } from './rowidWatermark'
+import { sortInstrumentRowsSliced, walkStems } from './stemsTableWalk'
 import {
   isScanCacheCurrent,
   newScanCacheState,
@@ -129,23 +131,12 @@ type ScanProgressCallback = (completed: number, total: number) => void
 // takes, the exact same beachball this session already fixed once.
 const CLASSIFY_YIELD_EVERY = 200
 
-// Direct request, 2026-09-18 ("ideally it would also show a progress bar
-// or meter, or something telling details about what is happening and how
-// long to expect"): rows-per-page for buildRiffIndex/getInstrumentRowsForDb's
-// own table scans, below. Real report on the SAME day ("still
-// hanging... 5 minutes") root-caused to these two functions each doing
-// ONE single, un-chunked `SELECT * FROM <table>` -- entirely synchronous,
-// no yield point reachable until the WHOLE fetch (372,297 rows on
-// Elling's real external archive) finished, which blocked the single-
-// threaded main process for that whole stretch (moving the caller to only
-// start after the window shows, see main/index.ts's own fix, stopped this
-// from blocking the WINDOW specifically, but the scan itself was still
-// one giant synchronous chunk once it started). Paginating via LIMIT/
-// OFFSET, yielding between pages, bounds any ONE synchronous fetch to
-// roughly PREWARM_CHUNK_SIZE rows' worth of work, AND gives onProgress
-// something real to report between chunks -- both problems share the same
-// fix.
-const PREWARM_CHUNK_SIZE = 5000
+// The startup walks (riff index, instrument rows) used to page with
+// `LIMIT/OFFSET` here (PREWARM_CHUNK_SIZE, 2026-09-18, after one un-chunked
+// SELECT * blocked the main process for minutes). They now page by rowid in
+// riffIndexWalk.ts and stemsTableWalk.ts (scan plan b21ea5a2 Tasks 2-3):
+// an OFFSET re-skips everything before each page, seconds per deep page on
+// the USB archive.
 
 // Real crash, found live via a full macOS crash report: SQLite trapping
 // (EXC_BREAKPOINT, inside sqlite3CodeRhsOfIN/sqlite3FindInIndex) while
@@ -283,8 +274,8 @@ async function buildRiffIndex(
 
 /** The prewarm's half for the riff index, against the copy saved in ownDb
  * (scan plan Task 2):
- * 1. saved and current (same count and MAX(rowid); a legacy row without a
- *    watermark: same count) -> load it;
+ * 1. saved and current (same count, MAX(rowid) and RiffCID at it; a legacy
+ *    row without a watermark: same count) -> load it;
  * 2. saved with a watermark the live table extends (rowidWatermark.ts) ->
  *    load it, then walk only the open riffs and the riffs past it,
  *    persisting page by page;
@@ -306,7 +297,10 @@ async function warmRiffIndex(
   const current =
     meta !== null &&
     meta.count === live.count &&
-    (meta.watermark === null || meta.watermark.maxRowid === live.maxRowid)
+    (meta.watermark === null ||
+      (meta.watermark.maxRowid === live.maxRowid &&
+        (live.maxRowid === null ||
+          keyAtRowid(db, 'Riffs', 'RiffCID', live.maxRowid) === meta.watermark.keyAtMax)))
   const extendable =
     !current &&
     meta?.watermark != null &&
@@ -376,7 +370,6 @@ export async function prewarmDiscoverCandidateCaches(
   const uniqueDbs = [...new Set(jams.map((j) => j.dbForJam))]
   for (let dbIndex = 0; dbIndex < uniqueDbs.length; dbIndex++) {
     const db = uniqueDbs[dbIndex]
-    const sourceDbKey = db.name
     const reportRiffIndexProgress = (completed: number, total: number): void =>
       onProgress?.({ phase: 'riffIndex', dbIndex, dbCount: uniqueDbs.length, completed, total })
     const reportInstrumentRowsProgress = (completed: number, total: number): void =>
@@ -408,20 +401,18 @@ export async function prewarmDiscoverCandidateCaches(
     // try/catch needed, getInstrumentRowsForDb already swallows its own
     // errors internally (an empty cached result, never a throw). Same
     // own-db cache check as the riff index above.
-    const stemSignal = readTableSignal(db, 'Stems')
-    const liveStemCount = stemSignal?.count ?? null
-    if (liveStemCount !== null && getCachedStemCount(ownDb, sourceDbKey) === liveStemCount) {
-      const rows = await loadCachedInstrumentRows(ownDb, sourceDbKey, reportInstrumentRowsProgress)
-      // TODO(scan plan b21ea5a2 Task 3): saved rows are trusted on a matching
-      // COUNT alone and stamped with today's signal as "built", so a delete +
-      // insert of equal size between launches goes unseen -- here, and in
-      // getInstrumentMaskLookup, which trusts this stamp. Task 3 stores
-      // MaxRowid + WatermarkStemCID in DiscoverInstrumentRowsCacheMeta and
-      // loads only when they match too (else extend or rebuild).
-      instrumentRowsCache.set(db, { rows, state: newScanCacheState(stemSignal) })
-    } else {
-      const rows = await getInstrumentRowsForDb(db, reportInstrumentRowsProgress)
-      if (liveStemCount !== null) saveInstrumentRowsCache(ownDb, sourceDbKey, rows, liveStemCount)
+    // One rowid-order Stems walk, persisted page by page, extended from
+    // its watermark (scan plan Task 3) -- warmInstrumentRows below.
+    try {
+      const pending = instrumentRowsInFlight.get(db)
+      if (pending) await pending
+      else
+        await shareInstrumentRowsBuild(
+          db,
+          warmInstrumentRows(db, ownDb, reportInstrumentRowsProgress)
+        )
+    } catch (err) {
+      console.error('prewarmDiscoverCandidateCaches: failed to warm instrument rows:', err)
     }
   }
 }
@@ -471,13 +462,130 @@ function pickRandomSample<T>(items: T[], size: number): T[] {
 // change-detection rule as the riff index (isScanCacheCurrent, against
 // the Stems table -- background efficiency B3; it used to share the riff
 // index's 5-minute TTL).
+// `watermark` (rowidWatermark.ts) is what an extension continues from; null
+// only for rows loaded from a legacy saved copy, which can't be extended.
 const instrumentRowsCache = new WeakMap<
   Database.Database,
   {
     rows: { StemCID: string; Instrument: number | null; OwnerJamCID: string }[]
     state: ScanCacheState
+    watermark: RowidWatermark | null
   }
 >()
+const instrumentRowsInFlight = new WeakMap<Database.Database, Promise<InstrumentRow[]>>()
+
+function shareInstrumentRowsBuild(
+  db: Database.Database,
+  build: Promise<InstrumentRow[]>
+): Promise<InstrumentRow[]> {
+  const promise = build.finally(() => instrumentRowsInFlight.delete(db))
+  instrumentRowsInFlight.set(db, promise)
+  return promise
+}
+
+/** An extension's rows appended to `base` -- a NEW array when anything was
+ * added (the kind index is keyed by array identity and must rebuild), the
+ * same one when nothing was. Rows appended out of StemCID order are the
+ * mask lookup's small tail map; a big tail is sorted in instead. */
+const SORT_TAIL_LIMIT = 10_000
+
+async function withWalkedRows(
+  base: InstrumentRow[],
+  walked: InstrumentRow[]
+): Promise<InstrumentRow[]> {
+  if (walked.length === 0) return base
+  const rows = base.concat(walked)
+  return walked.length > SORT_TAIL_LIMIT ? sortInstrumentRowsSliced(rows) : rows
+}
+
+/** The prewarm's half for the instrument rows -- warmRiffIndex's three cases
+ * against the copy saved in ownDb, over Stems:
+ * 1. saved and current (same count, MAX(rowid) and StemCID at it; a legacy
+ *    copy without a watermark: same count) -> load it (StemCID order);
+ * 2. saved with a watermark the live table extends -> load it, then walk
+ *    only the stems past it, persisting page by page;
+ * 3. otherwise -> start over and walk the whole table, persisting page by
+ *    page (an interrupted rebuild is case 2 next launch), then sort the
+ *    rowid-ordered rows by StemCID in slices for the mask lookup.
+ * Whatever walk runs also feeds stemsTableWalk.ts's sinks (the artist
+ * pairs, Task 4): one Stems walk per change. */
+async function warmInstrumentRows(
+  db: Database.Database,
+  ownDb: Database.Database,
+  onProgress: ScanProgressCallback
+): Promise<InstrumentRow[]> {
+  const key = db.name
+  const live = readTableSignal(db, 'Stems')
+  if (!live) return buildInstrumentRows(db, undefined, onProgress)
+  const meta = readInstrumentRowsMeta(ownDb, key)
+  const state = newScanCacheState(live)
+  const current =
+    meta !== null &&
+    meta.count === live.count &&
+    (meta.watermark === null ||
+      (meta.watermark.maxRowid === live.maxRowid &&
+        (live.maxRowid === null ||
+          keyAtRowid(db, 'Stems', 'StemCID', live.maxRowid) === meta.watermark.keyAtMax)))
+  const extendable =
+    !current &&
+    meta?.watermark != null &&
+    canExtendByRowid(db, 'Stems', 'StemCID', meta.watermark, live)
+
+  let rows: InstrumentRow[]
+  let watermark: RowidWatermark | null
+  if (current || extendable) {
+    rows = await loadCachedInstrumentRows(ownDb, key, onProgress)
+    watermark = meta!.watermark && { ...meta!.watermark }
+  } else {
+    countWork('instrument-rows:rebuild')
+    await resetInstrumentRowsCache(ownDb, key)
+    rows = []
+    watermark = { count: 0, maxRowid: null, keyAtMax: null }
+  }
+  if (!current) {
+    if (extendable) countWork('instrument-rows:extend')
+    const walked = await walkStems(db, watermark!, {
+      onProgress,
+      total: live.count,
+      onPage: (page) => persistInstrumentRowsPage(ownDb, key, page.rows, page.watermark)
+    })
+    rows = extendable
+      ? await withWalkedRows(rows, walked.rows)
+      : await sortInstrumentRowsSliced(walked.rows)
+    watermark = walked.watermark
+  }
+  instrumentRowsCache.set(db, { rows, state, watermark })
+  return rows
+}
+
+/** The in-session refresh (nothing persisted; the next launch's prewarm
+ * extends the saved copy): extends `previous` from its watermark when the
+ * shared rule allows, else walks the whole table. */
+async function buildInstrumentRows(
+  db: Database.Database,
+  previous: { rows: InstrumentRow[]; watermark: RowidWatermark | null } | undefined,
+  onProgress?: ScanProgressCallback
+): Promise<InstrumentRow[]> {
+  const signal = readTableSignal(db, 'Stems')
+  const state = newScanCacheState(signal)
+  if (!signal) {
+    // An external db missing even a core table shouldn't abort the whole
+    // multi-db scan. Cache the empty result so a broken db doesn't retry.
+    instrumentRowsCache.set(db, { rows: [], state, watermark: null })
+    return []
+  }
+  const extend =
+    previous?.watermark != null &&
+    canExtendByRowid(db, 'Stems', 'StemCID', previous.watermark, signal)
+  countWork(extend ? 'instrument-rows:extend' : 'instrument-rows:rebuild')
+  const from = extend ? previous!.watermark! : { count: 0, maxRowid: null, keyAtMax: null }
+  const walked = await walkStems(db, from, { onProgress, total: signal.count })
+  const rows = extend
+    ? await withWalkedRows(previous!.rows, walked.rows)
+    : await sortInstrumentRowsSliced(walked.rows)
+  instrumentRowsCache.set(db, { rows, state, watermark: walked.watermark })
+  return rows
+}
 
 /** The whole `Stems` table's own StemCID/Instrument/OwnerJamCID columns for
  * `db`, cached in memory -- the expensive, disk-bound part of
@@ -509,53 +617,12 @@ const instrumentRowsCache = new WeakMap<
 async function getInstrumentRowsForDb(
   db: Database.Database,
   onProgress?: ScanProgressCallback
-): Promise<{ StemCID: string; Instrument: number | null; OwnerJamCID: string }[]> {
+): Promise<InstrumentRow[]> {
+  const pending = instrumentRowsInFlight.get(db)
+  if (pending) return pending
   const cached = instrumentRowsCache.get(db)
   if (cached && isScanCacheCurrent(db, 'Stems', cached.state)) return cached.rows
-
-  type Row = { StemCID: string; Instrument: number | null; OwnerJamCID: string }
-  const rows: Row[] = []
-  // The change signal doubles as the page loop's `total` (its COUNT(*)).
-  const signal = readTableSignal(db, 'Stems')
-  const state = newScanCacheState(signal)
-  if (!signal) {
-    // Same defensive handling as every other per-db query in this file --
-    // an external db missing even a core table shouldn't abort the whole
-    // multi-db scan. Cache the empty result so a broken db doesn't retry
-    // this same expensive-to-fail scan on every call.
-    instrumentRowsCache.set(db, { rows, state })
-    return rows
-  }
-  const total = signal.count
-
-  // Same PREWARM_CHUNK_SIZE/LIMIT-OFFSET pagination as buildRiffIndex, and
-  // for the identical reason -- see PREWARM_CHUNK_SIZE's own doc comment.
-  let offset = 0
-  while (offset < total) {
-    let page: Row[]
-    const pageStarted = performance.now()
-    try {
-      page = db
-        .prepare(
-          `SELECT StemCID, Instrument, OwnerJamCID FROM Stems ORDER BY StemCID LIMIT ? OFFSET ?`
-        )
-        .all(PREWARM_CHUNK_SIZE, offset) as Row[]
-    } catch {
-      break
-    }
-    countWork('walk:instrument-rows.page')
-    countWork('ms:walk.instrument-rows', Math.round(performance.now() - pageStarted))
-    if (page.length === 0) break
-
-    rows.push(...page)
-    offset += page.length
-    onProgress?.(offset, total)
-    if (page.length < PREWARM_CHUNK_SIZE) break
-    await yieldToEventLoop()
-  }
-
-  instrumentRowsCache.set(db, { rows, state })
-  return rows
+  return shareInstrumentRowsBuild(db, buildInstrumentRows(db, cached, onProgress))
 }
 
 const instrumentMaskLookups = new WeakMap<object, InstrumentRowsLookup>()
@@ -576,11 +643,10 @@ const instrumentMaskLookups = new WeakMap<object, InstrumentRowsLookup>()
  * is written all the time and its Stems IN query is an index lookup on the
  * internal disk (~0.5 ms), so it stays on SQL.
  *
- * "Built" for rows loaded from the saved cache at startup is that launch's
- * signal, checked against the saved row count only (see the TODO in
- * prewarmDiscoverCandidateCaches: scan plan Task 3 adds the rowid
- * watermark). Stems rows are written once, so the gap is a same-size
- * delete + insert between launches. */
+ * Rows loaded from the saved copy at startup are trusted only when its
+ * count, MAX(rowid) and the StemCID at it all match the live table (scan
+ * plan Task 3; warmInstrumentRows), so a same-size delete + insert between
+ * launches is seen. Stems rows are written once, never filled in place. */
 export function getInstrumentMaskLookup(db: Database.Database): InstrumentRowsLookup | null {
   if (!db.readonly) return null
   const cached = instrumentRowsCache.get(db)

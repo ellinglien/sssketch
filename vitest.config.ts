@@ -80,6 +80,7 @@ export default defineConfig({
           'src/main/stemFeatureCacheStore.test.ts',
           'src/main/stemGlyphCacheStore.test.ts',
           'src/main/stemPeaksCacheStore.test.ts',
+          'src/main/stemsTableWalk.test.ts',
           'src/main/stemUnavailableStore.test.ts',
           'src/main/tableChangeSignalSql.test.ts',
           'src/main/tidyUpLibraryStems.test.ts',
