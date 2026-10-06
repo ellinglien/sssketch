@@ -1045,6 +1045,27 @@ describe('classifyAutoCategoryBatch (own stems first, 2026-10-06)', () => {
     expect(allClassifiedStemCIDs(db).has('own-late')).toBe(true)
   })
 
+  // Review of 147dca78: the lists were keyed by username and set SIZES, so
+  // a star swapped for another (or an own stem for another) kept the old
+  // layout.
+  it('a favourite swapped for another at the same size lays the lists out again', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    seedGroup(db, 'rest', 400)
+    const favA = seedGroup(db, 'favA', 100)
+    const favB = seedGroup(db, 'favB', 100)
+    const none = new Set<string>()
+    await classifyAutoCategoryBatch(db, [db], {
+      priority: { own: none, favourites: new Set(favA) }
+    })
+    expect(classified(db).filter((c) => c.startsWith('favA-'))).toHaveLength(100)
+    await classifyAutoCategoryBatch(db, [db], {
+      priority: { own: none, favourites: new Set(favB) }
+    })
+    // every favB left was taken before any more of the rest
+    expect(classified(db).filter((c) => c.startsWith('favB-'))).toHaveLength(100)
+  })
+
   it('a priority arriving after the list was built reorders it, without a rebuild', async () => {
     const db = freshDb()
     seedTrainedEmbeddings(db)

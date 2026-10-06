@@ -200,4 +200,25 @@ describe('createStemPriorityCache', () => {
     const p = await buildStemPriority([archive], own, 'me', { windowSize: 2 })
     expect([...p.own].sort()).toEqual(['a1', 'a3', 'a5', 'a7', 's2', 's5'])
   })
+
+  it('a version that moves when either set changes, even at the same sizes, and only then', async () => {
+    const { archive, own } = fixture()
+    const cache = createStemPriorityCache({ sourceDbs: () => [archive, own], ownDb: () => own })
+    const p1 = await cache.get('me')
+    const p2 = await cache.get('me')
+    expect(p2.version).toBe(p1.version)
+    // a star swapped for another: same size, different set
+    own.prepare(`DELETE FROM StemFavourite WHERE StemCID = 'star1'`).run()
+    own.prepare(`INSERT INTO StemFavourite VALUES ('star9', 0)`).run()
+    const p3 = await cache.get('me')
+    expect(p3.favourites.size).toBe(p1.favourites.size)
+    expect(p3.version).not.toBe(p2.version)
+    // an own stem swapped for another: same size, different set
+    archive.prepare(`DELETE FROM Stems WHERE StemCID = 'a7'`).run()
+    stem(archive, 'a9', 'me')
+    const p4 = await cache.get('me')
+    expect(p4.own.size).toBe(p1.own.size)
+    expect(p4.version).not.toBe(p3.version)
+    expect((await cache.get('me')).version).toBe(p4.version)
+  })
 })

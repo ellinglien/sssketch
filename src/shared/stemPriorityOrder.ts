@@ -21,6 +21,10 @@ export interface StemPrioritySets {
   own: ReadonlySet<string>
   /** Starred stems and the stems of favourite riffs. */
   favourites: ReadonlySet<string>
+  /** Moves whenever either set's contents change (stemPriority.ts's cache),
+   * so a consumer can tell "same sets" without comparing them. Absent (a
+   * hand-made priority): compare by contents. */
+  version?: number
 }
 
 export function stemPriorityRank(priority: StemPrioritySets, stemCID: string): StemPriorityRank {

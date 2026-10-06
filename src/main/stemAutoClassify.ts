@@ -348,11 +348,27 @@ function takePending(list: PendingList, n: number): string[] {
   return taken
 }
 
-/** Which priority a list was laid out for: the sets are rebuilt on every
- * ask, so compared by username and sizes, not identity. */
+/** Which priority a list was laid out for. Sizes alone missed a star
+ * swapped for another (review of 147dca78), so: stemPriority.ts's version,
+ * which moves whenever either set's contents do; a priority without one
+ * (hand-made) by an order-free hash of its contents. */
 function priorityKeyOf(priority: StemPrioritySets): string {
   const username = (priority as { username?: string | null }).username ?? ''
-  return `${username}|${priority.own.size}|${priority.favourites.size}`
+  const sizes = `${priority.own.size}|${priority.favourites.size}`
+  if (priority.version !== undefined) return `${username}|${sizes}|v${priority.version}`
+  return `${username}|${sizes}|${membersHash(priority.own)}|${membersHash(priority.favourites)}`
+}
+
+/** A sum of each member's FNV-1a hash: the same for the same members in
+ * any order. */
+function membersHash(set: ReadonlySet<string>): number {
+  let sum = 0
+  for (const member of set) {
+    let h = 0x811c9dc5
+    for (let i = 0; i < member.length; i++) h = Math.imul(h ^ member.charCodeAt(i), 0x01000193)
+    sum = (sum + (h >>> 0)) >>> 0
+  }
+  return sum
 }
 
 /** Background efficiency B4: the classifier's own pending lists, built once

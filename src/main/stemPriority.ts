@@ -43,6 +43,9 @@ import { countWork } from './workCounters'
 export interface StemPriority extends StemPrioritySets {
   /** The username the own set was read for; null when none is configured. */
   username: string | null
+  /** Moves exactly when `own` or `favourites` changed since the last call
+   * (or the username did); the sets themselves are then new objects. */
+  version: number
 }
 
 /** Rows per own-stem window (indexed: matches; unindexed: rowids). */
@@ -224,6 +227,19 @@ function readFavourites(dbs: readonly Database.Database[], ownDb: Database.Datab
   return favourites
 }
 
+function unionOf(parts: readonly ReadonlySet<string>[]): ReadonlySet<string> {
+  if (parts.length === 1) return parts[0]
+  const union = new Set<string>()
+  for (const part of parts) for (const stemCID of part) union.add(stemCID)
+  return union
+}
+
+function sameMembers(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const x of a) if (!b.has(x)) return false
+  return true
+}
+
 export interface BuildStemPriorityOptions {
   /** Rows per own-stem window (default 500). */
   windowSize?: number
@@ -267,6 +283,15 @@ export function createStemPriorityCache(deps: StemPriorityCacheDeps): StemPriori
     perDb: WeakMap<Database.Database, DbOwnStems>
   } | null = null
   let inFlight: { username: string | null; promise: Promise<StemPriority> } | null = null
+  // What the last call returned, so an unchanged answer is the same sets
+  // (no union per tick) under the same version.
+  let version = 0
+  let last: {
+    username: string | null
+    parts: ReadonlySet<string>[]
+    own: ReadonlySet<string>
+    favourites: ReadonlySet<string>
+  } | null = null
 
   async function refresh(username: string | null): Promise<StemPriority> {
     const dbs = [...new Set([...deps.sourceDbs(), deps.ownDb()])]
@@ -274,7 +299,7 @@ export function createStemPriorityCache(deps: StemPriorityCacheDeps): StemPriori
       state = { username, perDb: new WeakMap() }
     }
     const current = state
-    const own = new Set<string>()
+    const parts: ReadonlySet<string>[] = []
     if (username !== null) {
       for (const db of dbs) {
         const previous = current.perDb.get(db)
@@ -287,11 +312,24 @@ export function createStemPriorityCache(deps: StemPriorityCacheDeps): StemPriori
           countWork('stem-priority:db-error')
           console.error('stemPriority: reading own stems failed for a db:', err)
         }
-        for (const stemCID of current.perDb.get(db)?.own ?? []) own.add(stemCID)
+        const part = current.perDb.get(db)?.own
+        if (part) parts.push(part)
       }
     }
-    const favourites = readFavourites(deps.sourceDbs(), deps.ownDb())
-    return { username, own, favourites }
+    // A db's set is replaced, never mutated, whenever it changes: the same
+    // parts are the same union.
+    const sameOwn =
+      last !== null &&
+      last.username === username &&
+      last.parts.length === parts.length &&
+      parts.every((part, i) => part === last!.parts[i])
+    const own = sameOwn ? last!.own : unionOf(parts)
+    const read = readFavourites(deps.sourceDbs(), deps.ownDb())
+    const sameFavourites = last !== null && sameMembers(last.favourites, read)
+    const favourites = sameFavourites ? last!.favourites : read
+    if (!sameOwn || !sameFavourites) version += 1
+    last = { username, parts, own, favourites }
+    return { username, own, favourites, version }
   }
 
   return {
