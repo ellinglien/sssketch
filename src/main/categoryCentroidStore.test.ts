@@ -6,6 +6,28 @@ import { emptyCategoryCentroidStore, recordConfirmedCategory } from '@shared/cat
 
 let userDataDir: string
 
+// The store module's own 'fs' calls (the same builtin as 'node:fs'), in order,
+// for the durability test below. Each one still runs for real.
+const fsCalls: string[] = []
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const traced =
+    <A extends unknown[], R>(name: string, fn: (...args: A) => R) =>
+    (...args: A): R => {
+      fsCalls.push(name)
+      return fn(...args)
+    }
+  return {
+    ...actual,
+    openSync: traced('openSync', actual.openSync),
+    writeSync: traced('writeSync', actual.writeSync),
+    writeFileSync: traced('writeFileSync', actual.writeFileSync),
+    fsyncSync: traced('fsyncSync', actual.fsyncSync),
+    closeSync: traced('closeSync', actual.closeSync),
+    renameSync: traced('renameSync', actual.renameSync)
+  }
+})
+
 vi.mock('electron', () => ({
   app: {
     getPath: () => userDataDir
@@ -27,9 +49,8 @@ describe('categoryCentroidStore', () => {
   })
 
   it('saveCategoryCentroidStore then loadCategoryCentroidStore round-trips', async () => {
-    const { loadCategoryCentroidStore, saveCategoryCentroidStore } = await import(
-      './categoryCentroidStore'
-    )
+    const { loadCategoryCentroidStore, saveCategoryCentroidStore } =
+      await import('./categoryCentroidStore')
     let store = emptyCategoryCentroidStore()
     store = recordConfirmedCategory(store, 'bus', 'drums', new Array(19).fill(1))
     store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', new Array(19).fill(2))
@@ -80,5 +101,17 @@ describe('categoryCentroidStore', () => {
     expect(errors).toHaveBeenCalled()
     errors.mockRestore()
     expect(loadCategoryCentroidStore()).toEqual(before)
+  })
+
+  // Review of b4d9924a, minor 6: without an fsync, a power loss after the
+  // rename can leave the renamed file empty on some filesystems (the rename
+  // reaches the disk before the data does).
+  it('the temp file is flushed to disk before it is renamed over the store', async () => {
+    const { saveCategoryCentroidStore } = await import('./categoryCentroidStore')
+    fsCalls.length = 0
+    expect(saveCategoryCentroidStore(emptyCategoryCentroidStore())).toBe(true)
+    const fsync = fsCalls.indexOf('fsyncSync')
+    expect(fsync).toBeGreaterThanOrEqual(0)
+    expect(fsync).toBeLessThan(fsCalls.indexOf('renameSync'))
   })
 })

@@ -1,5 +1,14 @@
 // src/main/categoryCentroidStore.ts
-import { readFileSync, writeFileSync, existsSync, renameSync, rmSync } from 'fs'
+import {
+  closeSync,
+  existsSync,
+  fsyncSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
 import type { CategoryCentroidStore } from '@shared/categoryCentroids'
@@ -49,13 +58,21 @@ export function loadCategoryCentroidStore(): CategoryCentroidStore {
 /** Written to a temp file beside it, then renamed over it: a crash or a full
  * disk mid-write leaves the previous store whole, never a truncated file
  * (which would load as an empty store and lose every sample trained so
- * far). The rename is atomic within the userData folder. Synchronous, so
+ * far). The temp file is fsynced before the rename: without that, a power
+ * loss can put the rename on disk before the data, leaving the renamed file
+ * empty. The rename is atomic within the userData folder. Synchronous, so
  * two saves in this process never share the temp file. True once saved. */
 export function saveCategoryCentroidStore(store: CategoryCentroidStore): boolean {
   const path = storePath()
   const tmpPath = `${path}.tmp`
   try {
-    writeFileSync(tmpPath, JSON.stringify(store, null, 2), 'utf-8')
+    const fd = openSync(tmpPath, 'w')
+    try {
+      writeFileSync(fd, JSON.stringify(store, null, 2), 'utf-8') // loops until all written
+      fsyncSync(fd)
+    } finally {
+      closeSync(fd)
+    }
     renameSync(tmpPath, path)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
