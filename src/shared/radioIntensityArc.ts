@@ -115,8 +115,10 @@ export interface RadioIntensityArc {
   forced: RadioIntensityAction | null
   /** The event landing at the next wrap, or null. */
   decided: RadioIntensityDecided | null
-  /** The runtime was asked to prepare for the phase change coming (once per change). */
-  prepared: boolean
+  /** The phase whose ending the runtime was asked to prepare for (once per change), null since
+   * the last phase change. A phase, not a flag: with a one-lap phrase the build's prepare and the
+   * coming breakdown's fall on consecutive wraps of the same build (review, 2026-10-05). */
+  prepared: RadioIntensityPhase | null
 }
 
 export const NO_RADIO_INTENSITY_ARC: RadioIntensityArc = Object.freeze({
@@ -132,7 +134,7 @@ export const NO_RADIO_INTENSITY_ARC: RadioIntensityArc = Object.freeze({
   rests: Object.freeze([]) as unknown as string[],
   forced: null,
   decided: null,
-  prepared: false
+  prepared: null
 }) as RadioIntensityArc
 
 // ---- the numbers (section 3; every one [INF], to tune by ear) ----
@@ -204,7 +206,8 @@ export function radioIntensityTarget(
   switch (arc.phase) {
     case 'build': {
       const n = Math.max(1, arc.phrases)
-      return lo + ((hi - lo) * (Math.min(arc.done, n - 1) + 1)) / n
+      // never past hi (so never past 1): the last phrase's sum can round an ulp over
+      return Math.min(hi, lo + ((hi - lo) * (Math.min(arc.done, n - 1) + 1)) / n)
     }
     case 'breakdown':
       return lo
@@ -410,7 +413,7 @@ function applyBuild(
     first,
     depth: null,
     rests: [],
-    prepared: false
+    prepared: null
   }
 }
 
@@ -455,7 +458,7 @@ function land(
         done: 0,
         depth: d.depth,
         rests: [...d.rest],
-        prepared: false
+        prepared: null
       }
     case 'drop':
       return {
@@ -465,7 +468,7 @@ function land(
         done: 0,
         depth: null,
         rests: [],
-        prepared: false
+        prepared: null
       }
   }
 }
@@ -481,7 +484,7 @@ function decide(
   switch (arc.phase) {
     case 'build': {
       if (ending) return breakdownEvent(arc, input)
-      if (input.canAdd && input.count < arc.peakRows) return { event: 'add' }
+      if (addFits(arc, input)) return { event: 'add' }
       return null
     }
     case 'breakdown':
@@ -539,10 +542,31 @@ function dropEvent(arc: RadioIntensityArc, input: RadioIntensityStepInput): Radi
   return { event: 'drop', returning: [...arc.rests], renew, next: nextLength('drop', arc, input) }
 }
 
-/** A button's event (section 6), landing at the next top. */
+/** What a button's event may do with the rows at its top (RadioIntensityStepInput's fields).
+ * Unknown (a press without them): it adds and strips, the runtime's own pick deciding. */
+export type RadioIntensityRoom = Pick<
+  RadioIntensityStepInput,
+  'count' | 'max' | 'canAdd' | 'canStrip'
+>
+
+/** An add fits: the arc can add one, under the build's peak and the most rows. */
+function addFits(arc: RadioIntensityArc, room: RadioIntensityRoom): boolean {
+  return room.canAdd && room.count < arc.peakRows && room.count < room.max
+}
+
+/** The decided event already does what the button asks (review, 2026-10-05): a drop for `drop`, a
+ * cycle or an add for `build`. The press changes nothing then. */
+function answers(d: RadioIntensityDecided | null, action: RadioIntensityAction): boolean {
+  if (d === null) return false
+  return action === 'drop' ? d.event === 'drop' : d.event === 'cycle' || d.event === 'add'
+}
+
+/** A button's event (section 6), landing at the next top. `room`: the rows there (null: unknown;
+ * see RadioIntensityRoom). */
 function forcedEvent(
   arc: RadioIntensityArc,
-  action: RadioIntensityAction
+  action: RadioIntensityAction,
+  room: RadioIntensityRoom | null
 ): RadioIntensityDecided | null {
   if (action === 'drop') {
     if (arc.phase === 'breakdown') {
@@ -551,8 +575,13 @@ function forcedEvent(
     return { event: 'drop', returning: [], renew: [], quick: true, forced: true }
   }
   // build
-  if (arc.phase === 'drop') return { event: 'cycle', strip: true, forced: true }
-  if (arc.phase === 'build') return { event: 'add', forced: true }
+  if (arc.phase === 'drop') {
+    return { event: 'cycle', strip: room === null || room.canStrip, forced: true }
+  }
+  if (arc.phase === 'build') {
+    // no room: the halved build alone goes up sooner (pressRadioIntensity)
+    return room === null || addFits(arc, room) ? { event: 'add', forced: true } : null
+  }
   return null // in a breakdown, `build` only shortens it (pressRadioIntensity)
 }
 
@@ -585,12 +614,25 @@ export function stepRadioIntensityArc(
     overran = false
   ): RadioIntensityStepResult => ({ state, applied, decided, prepare, overran })
   if (input.held || !(input.loopBars > 0)) return out(null, null)
+  // `input.count` is the rows before this wrap's event lands; the runtime applies it at this wrap,
+  // so what is decided now (every wrap with a one-lap phrase) reads the rows after it (review,
+  // 2026-10-05: else a one-lap build adds one past its peak)
+  const grown =
+    applied === null
+      ? 0
+      : applied.event === 'add' || (applied.event === 'breakdown' && applied.carry)
+        ? 1
+        : applied.event === 'cycle' && applied.strip
+          ? -1
+          : 0
+  const now: RadioIntensityStepInput =
+    grown === 0 ? input : { ...input, count: Math.max(0, input.count + grown) }
   // 2. count
   const phraseStart = lap === 0
   let overran = false
   if (!state.begun) {
     if (!phraseStart) return out(null, null)
-    state = applyBuild(state, nextBuild(state, input, input.count, true), true)
+    state = applyBuild(state, nextBuild(state, now, now.count, true), true)
   } else if (phraseStart && applied === null) {
     state = { ...state, done: state.done + 1 }
   } else if (phraseStart && applied !== null && applied.event === 'add') {
@@ -602,21 +644,23 @@ export function stepRadioIntensityArc(
     state.decided === null
   ) {
     overran = true
-    const d = dropEvent(state, input)
+    const d = dropEvent(state, now)
     state = { ...state, decided: d }
     return out(d, null, overran)
   }
-  // 3. decide
+  // 3. decide: a press waiting for this top first (unless what just landed answered it); one
+  // that comes to nothing leaves the decision to the clock
   let decided: RadioIntensityDecided | null = null
   const decideWrap = lap === P - 1
   const pending = state.forced
   if (pending !== null && state.decided === null) {
-    decided = forcedEvent(state, pending)
-    state = { ...state, forced: null, decided }
-  } else if (decideWrap && state.decided === null) {
-    decided = decide(state, input, null)
-    if (decided !== null) state = { ...state, decided }
+    state = { ...state, forced: null }
+    if (!answers(applied, pending)) decided = forcedEvent(state, pending, now)
   }
+  if (decided === null && decideWrap && state.decided === null) {
+    decided = decide(state, now, null)
+  }
+  if (decided !== null) state = { ...state, decided }
   // 4. prepare: a phrase ahead (two wraps with a one-lap phrase), once per phase change
   let prepare: RadioIntensityStepResult['prepare'] = null
   const ending = (): RadioIntensityPhase | null => {
@@ -631,7 +675,8 @@ export function stepRadioIntensityArc(
     }
     return state.done + 2 >= state.phrases ? state.phase : null
   }
-  const endingPhase = state.prepared ? null : ending()
+  const coming = ending()
+  const endingPhase = coming === state.prepared ? null : coming
   if (endingPhase === 'build') {
     const depth = radioBreakdownDepth(input.drama, state.big)
     const carriers = input.rows.filter(radioBreakdownCarrier)
@@ -641,7 +686,7 @@ export function stepRadioIntensityArc(
     const rests = d?.event === 'breakdown' ? d.rest : state.rests
     prepare = { carry: false, renew: renewalRows({ ...state, rests }, input.rows) }
   }
-  if (prepare !== null) state = { ...state, prepared: true }
+  if (prepare !== null) state = { ...state, prepared: endingPhase }
   return out(decided, prepare, overran)
 }
 
@@ -649,19 +694,25 @@ export function stepRadioIntensityArc(
  * A button (section 6), pressed mid-lap: it lands at the next loop top, or -- `late` (pressed in
  * the lap's last stretch, too late to arm) or with an event already decided for that top -- the
  * top after. Returns the new state; the press is null when it does nothing here:
- *   - build in the ride: the next cycle's build (its strip-back) at the top;
- *   - build in the build: the next add at the top, and the remaining phrases halve (at least 1);
+ *   - build in the ride: the next cycle's build (its strip-back, when one can go) at the top;
+ *   - build in the build: the next add at the top (when one fits), and the remaining phrases
+ *     halve (at least 1);
  *   - build in the breakdown: the drop at the next phrase start whose decide wrap has not passed
  *     (the breakdown shortened; nothing lands at the top);
  *   - drop in the breakdown: the rested rows back at the top;
  *   - drop in the build or the ride: a quick drop at the top.
+ * A press the decided event already answers (a drop for `drop`, a cycle or an add for `build`),
+ * or one already waiting for its top, returns the arc unchanged: it lands once (review,
+ * 2026-10-05). `where.can`: the rows now (RadioIntensityRoom); absent, an add and a strip are
+ * left to the runtime's own pick, as before.
  */
 export function pressRadioIntensity(
   arc: RadioIntensityArc,
   action: RadioIntensityAction,
-  where: { lap: number; phraseLaps: number; late: boolean }
+  where: { lap: number; phraseLaps: number; late: boolean; can?: RadioIntensityRoom }
 ): RadioIntensityArc | null {
   if (!arc.begun) return null
+  if (answers(arc.decided, action) || arc.forced === action) return arc
   const P = Math.max(1, Math.floor(where.phraseLaps))
   if (action === 'build' && arc.phase === 'breakdown') {
     // the decide wrap of the next phrase start begins the last lap: passed once we are in it
@@ -674,8 +725,8 @@ export function pressRadioIntensity(
       ? arc.done + Math.max(1, Math.floor((arc.phrases - arc.done) / 2))
       : arc.phrases
   if (where.late || arc.decided !== null) return { ...arc, phrases: halved, forced: action }
-  const decided = forcedEvent(arc, action)
-  if (decided === null) return null
+  const decided = forcedEvent(arc, action, where.can ?? null)
+  if (decided === null) return halved === arc.phrases ? null : { ...arc, phrases: halved }
   return { ...arc, phrases: halved, decided }
 }
 

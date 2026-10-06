@@ -54,6 +54,7 @@ interface Trace {
   rows: number
   sounding: number
   low: boolean
+  peakRows: number
 }
 
 /** Runs the arc for `wraps` loop tops on a `loopBars` loop, doing what it says. */
@@ -171,7 +172,8 @@ function simulate(o: {
       phase: arc.phase,
       rows: rows.length,
       sounding: sounding.length,
-      low: sounding.some((r) => r.kinds.includes('drums') || r.kinds.includes('bass'))
+      low: sounding.some((r) => r.kinds.includes('drums') || r.kinds.includes('bass')),
+      peakRows: arc.peakRows
     })
   }
   return { trace, arc }
@@ -190,6 +192,30 @@ describe('targets', () => {
     expect(at(100, 100)).toEqual([0.15, 1])
     expect(at(50, 60, true)).toEqual([0.14, 1])
     expect(at(0, 0, true)).toEqual([0.2, 0.65])
+  })
+
+  it('never past hi (nor 1) in any build, big or not', () => {
+    for (const e of [0, 33, 50, 67, 100]) {
+      for (const d of [0, 25, 60, 100]) {
+        for (const big of [false, true]) {
+          const { hi } = radioIntensityTargets(e, d, big)
+          for (let phrases = 0; phrases <= 12; phrases++) {
+            for (let done = 0; done <= 14; done++) {
+              const arc: RadioIntensityArc = {
+                ...newRadioIntensityArc(),
+                begun: true,
+                big,
+                phrases,
+                done
+              }
+              const t = radioIntensityTarget(arc, e, d)
+              expect(t).toBeLessThanOrEqual(hi)
+              expect(t).toBeLessThanOrEqual(1)
+            }
+          }
+        }
+      }
+    }
   })
 
   it('rise by phrase through the build, lo in the breakdown, hi in the drop', () => {
@@ -272,20 +298,50 @@ describe('the clock', () => {
   })
 
   it('decides one wrap ahead (binding), and prepares a phrase ahead of the decision', () => {
-    for (const loopBars of [2, 4, 16]) {
-      const { trace } = simulate({ loopBars, wraps: 800, seed: `ahead${loopBars}` })
+    const bed = (): SimRow[] =>
+      (['drums', 'bass', 'lead', 'warm'] as const).map((k, i) => ({
+        id: `b${i}`,
+        kinds: [k],
+        score: 0.5,
+        staleness: 0,
+        resting: false
+      }))
+    const runs = [
+      ...[2, 4, 16, 32].map((loopBars) => ({ loopBars, energy: 50, drama: 60, rows: undefined })),
+      // a one-phrase breakdown at a one-lap phrase (review, 2026-10-05): the build's own prepare
+      // must not stand in for the drop's
+      ...[16, 32].map((loopBars) => ({ loopBars, energy: 100, drama: 100, rows: bed() }))
+    ]
+    for (const { loopBars, energy, drama, rows } of runs) {
+      const { trace } = simulate({
+        loopBars,
+        wraps: 800,
+        energy,
+        drama,
+        rows,
+        seed: `ahead${loopBars}`
+      })
       for (let i = 1; i < trace.length; i++) {
         if (trace[i].applied !== null) expect(trace[i].applied).toEqual(trace[i - 1].decided)
       }
       const P = turnaroundPhraseLaps(16, loopBars)
+      let previousDrop = 0
+      let drops = 0
       for (const t of trace) {
         if (t.applied?.event !== 'drop') continue
-        const prep = trace.filter((x) => x.wrap < t.wrap && (x.prepare?.renew.length ?? 0) > 0)
+        drops += 1
+        // this drop's own prepare: after the previous drop, not an earlier cycle's
+        const prep = trace.filter(
+          (x) => x.wrap > previousDrop && x.wrap < t.wrap && (x.prepare?.renew.length ?? 0) > 0
+        )
         const last = prep[prep.length - 1]
-        expect(last, `${loopBars}: a drop at ${t.wrap} was prepared`).toBeDefined()
+        const label = `${loopBars} e${energy} d${drama}: the drop at ${t.wrap}`
+        expect(last, `${label} was prepared`).toBeDefined()
         // prepared before it was decided (two wraps with a one-lap phrase)
-        expect(t.wrap - last.wrap, `${loopBars}`).toBeGreaterThanOrEqual(Math.max(P, 2))
+        expect(t.wrap - last.wrap, label).toBeGreaterThanOrEqual(Math.max(P, 2))
+        previousDrop = t.wrap
       }
+      expect(drops, `${loopBars} e${energy} d${drama}`).toBeGreaterThan(5)
     }
   })
 
@@ -373,6 +429,28 @@ describe('the cycle', () => {
     }
     for (const c of changes(trace))
       if (c.applied!.event === 'cycle') expect(c.applied).toMatchObject({ strip: true })
+  })
+
+  it('at a one-lap phrase, the adds stop at the peak: the add landing this wrap is counted', () => {
+    for (const loopBars of [16, 32]) {
+      for (const energy of [20, 80, 100]) {
+        for (const seed of ['p1', 'p2', 'p3']) {
+          const { trace } = simulate({ loopBars, wraps: 1500, energy, seed: `${seed}${energy}` })
+          let start = 2
+          for (const t of trace) {
+            if (t.applied?.event === 'cycle') start = t.rows
+            expect(t.rows, `${loopBars} e${energy} ${seed} wrap ${t.wrap}`).toBeLessThanOrEqual(
+              DENSITY_MAX
+            )
+            if (t.phase === 'build') {
+              expect(t.rows, `${loopBars} e${energy} ${seed} wrap ${t.wrap}`).toBeLessThanOrEqual(
+                Math.max(t.peakRows, start)
+              )
+            }
+          }
+        }
+      }
+    }
   })
 
   it('grows one row per phrase start to the peak, and the drop keeps the count', () => {
@@ -680,6 +758,124 @@ describe('the buttons', () => {
     expect(radioIntensityButtonLabel('drop', now)).toBe('dropping')
     expect(radioIntensityButtonLabel('build', now)).toBe('build')
     expect(pressRadioIntensity(newRadioIntensityArc(), 'drop', where)).toBeNull()
+  })
+
+  it('a press the decided event already answers changes nothing (review, 2026-10-05)', () => {
+    const drop: RadioIntensityDecided = { event: 'drop', returning: ['d'], renew: [] }
+    const breakdown = at('breakdown', { rests: ['d'], decided: drop })
+    for (const late of [false, true]) {
+      expect(pressRadioIntensity(breakdown, 'drop', { ...where, late })).toBe(breakdown)
+    }
+    const once = pressRadioIntensity(at('build'), 'drop', where)!
+    expect(pressRadioIntensity(once, 'drop', where)).toBe(once)
+    for (const decided of [
+      { event: 'cycle', strip: true },
+      { event: 'add' }
+    ] as RadioIntensityDecided[]) {
+      const a = at(decided.event === 'add' ? 'build' : 'drop', { phrases: 5, decided })
+      expect(pressRadioIntensity(a, 'build', where)).toBe(a)
+    }
+    const twice = pressRadioIntensity(at('build', { phrases: 7, done: 1 }), 'build', where)!
+    expect(pressRadioIntensity(twice, 'build', where)).toBe(twice)
+    const waiting = pressRadioIntensity(at('drop'), 'build', { ...where, late: true })!
+    expect(pressRadioIntensity(waiting, 'build', { ...where, late: true })).toBe(waiting)
+  })
+
+  it('pressed against the decided event in a run: one drop, one cycle, no second event', () => {
+    const drops = simulate({
+      loopBars: 4,
+      wraps: 1200,
+      seed: 'answered-drop',
+      // pressed once the clock's own drop is decided (the breakdown's last lap)
+      press: (_, arc) => (arc.decided?.event === 'drop' ? 'drop' : null)
+    })
+    const ds = changes(drops.trace)
+    for (let i = 1; i < ds.length; i++) {
+      if (ds[i - 1].applied!.event === 'drop') expect(ds[i].applied!.event).not.toBe('drop')
+    }
+    expect(ds.filter((c) => c.applied!.event === 'drop').length).toBeGreaterThan(5)
+    const builds = simulate({
+      loopBars: 4,
+      wraps: 1200,
+      seed: 'answered-build',
+      press: (_, arc) => (arc.decided?.event === 'cycle' ? 'build' : null)
+    })
+    const bs = changes(builds.trace)
+    expect(bs.filter((c) => c.applied!.event === 'cycle').length).toBeGreaterThan(5)
+    for (const c of bs) expect(c.applied).not.toMatchObject({ event: 'add', forced: true })
+  })
+
+  it('a forced add fits the peak, the most rows and canAdd; a forced cycle strips only when it can', () => {
+    const b = at('build', { phrases: 5, done: 1, peakRows: 4 })
+    const can = { count: 3, max: 5, canAdd: true, canStrip: true }
+    expect(pressRadioIntensity(b, 'build', { ...where, can })?.decided).toEqual({
+      event: 'add',
+      forced: true
+    })
+    for (const no of [{ count: 4 }, { canAdd: false }, { count: 3, max: 3 }]) {
+      const r = pressRadioIntensity(b, 'build', { ...where, can: { ...can, ...no } })!
+      expect(r.decided, JSON.stringify(no)).toBeNull()
+      expect(r.forced).toBeNull()
+      expect(r.phrases).toBe(3)
+    }
+    expect(
+      pressRadioIntensity(at('drop'), 'build', { ...where, can: { ...can, canStrip: false } })
+        ?.decided
+    ).toEqual({ event: 'cycle', strip: false, forced: true })
+    // a press waiting for its top reads the rows there
+    const waiting: RadioIntensityArc = { ...b, forced: 'build' }
+    const input: RadioIntensityStepInput = {
+      energy: 50,
+      drama: 60,
+      loopBars: 4,
+      lap: 1,
+      phraseLaps: 4,
+      held: false,
+      count: 4,
+      min: 2,
+      max: 5,
+      rows: [],
+      canAdd: true,
+      canStrip: true,
+      carryReady: false,
+      renewReady: () => false,
+      random: () => 0.5
+    }
+    const r = stepRadioIntensityArc(waiting, input)
+    expect(r.decided).toBeNull()
+    expect(r.state.forced).toBeNull()
+    expect(stepRadioIntensityArc(waiting, { ...input, count: 3 }).decided).toEqual({
+      event: 'add',
+      forced: true
+    })
+    const stripping = stepRadioIntensityArc(
+      { ...at('drop'), forced: 'build' },
+      { ...input, canStrip: false }
+    )
+    expect(stripping.decided).toEqual({ event: 'cycle', strip: false, forced: true })
+  })
+
+  it('a press that comes to nothing at a decide wrap leaves the decision to the clock', () => {
+    const b = at('build', { phrases: 2, done: 1, peakRows: 3, forced: 'build' })
+    const r = stepRadioIntensityArc(b, {
+      energy: 50,
+      drama: 10,
+      loopBars: 4,
+      lap: 3,
+      phraseLaps: 4,
+      held: false,
+      count: 3,
+      min: 2,
+      max: 5,
+      rows: [],
+      canAdd: true,
+      canStrip: true,
+      carryReady: false,
+      renewReady: () => false,
+      random: () => 0.5
+    })
+    expect(r.decided).toMatchObject({ event: 'breakdown' })
+    expect(r.state.forced).toBeNull()
   })
 
   it('every press lands in a run, and the cycle goes on', () => {

@@ -226,6 +226,38 @@ describe('the band draw', () => {
     expect(n).toBe(3)
   })
 
+  it('ranks from the pool before the band: the term means the same target banded or not', () => {
+    const banded = applyIntensityBand(big, {
+      target: 0.9,
+      kinds: ['drums'],
+      drama: 100,
+      random: () => 0
+    })
+    expect(banded.banded).toBe(true)
+    const lean = radioIntensityRankOf(0.9, ['drums'], 100, banded.ranks)
+    const whole = intensityTerms(big, lean)
+    const kept = intensityTerms(banded.pool, lean)
+    banded.pool.forEach((c, i) => expect(kept[i]).toBeCloseTo(whole[big.indexOf(c)], 12))
+    // ranked inside the band alone, the same stems would read differently
+    expect(intensityTerms(banded.pool, radioIntensityRankOf(0.9, ['drums'], 100))).not.toEqual(kept)
+    const all = rankCandidates(big, { targetBpm: 120, intensity: lean })
+    for (const x of rankCandidates(banded.pool, { targetBpm: 120, intensity: lean })) {
+      const same = all.find((y) => y.candidate === x.candidate)!
+      expect(x.score).toBeCloseTo(same.score, 12)
+    }
+    // not banded: the ranks are the pool's own, the term as without them
+    const open = applyIntensityBand(big, {
+      target: 0.9,
+      kinds: ['drums'],
+      drama: 100,
+      random: () => 0.99
+    })
+    expect(open.banded).toBe(false)
+    expect(
+      intensityTerms(open.pool, radioIntensityRankOf(0.9, ['drums'], 100, open.ranks))
+    ).toEqual(intensityTerms(big, radioIntensityRankOf(0.9, ['drums'], 100)))
+  })
+
   it('backs off when too few would remain (max(8, pool / 8))', () => {
     const small = Array.from({ length: 12 }, (_, i) => C(i / 11, `t${i}`))
     const r = applyIntensityBand(small, {

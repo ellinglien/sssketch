@@ -186,6 +186,10 @@ export const INTENSITY_UNSCORED_CLOSENESS = 0.5
 export interface RankIntensity {
   target: number
   weight: number
+  /** Each scored candidate's rank in the pool BEFORE the band (applyIntensityBand's `ranks`), so
+   * a rank means the same place in the pool whether or not the band kept only its middle (review,
+   * 2026-10-05). Absent: ranks in the pool ranked. A candidate missing from it is unscored. */
+  ranks?: ReadonlyMap<object, number>
 }
 
 const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
@@ -194,10 +198,16 @@ const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.ma
 export function radioIntensityRankOf(
   target: number,
   kinds: readonly DiscoverSlotKind[],
-  drama: number
+  drama: number,
+  /** The band's `ranks` (applyIntensityBand), when the pool ranked went through it. */
+  ranks?: ReadonlyMap<object, number>
 ): RankIntensity {
   const d = clamp01(drama / 100)
-  return { target: clamp01(target), weight: radioIntensityRoleWeight(kinds) * (0.4 + 0.6 * d) }
+  return {
+    target: clamp01(target),
+    weight: radioIntensityRoleWeight(kinds) * (0.4 + 0.6 * d),
+    ...(ranks !== undefined && { ranks })
+  }
 }
 
 /**
@@ -232,16 +242,18 @@ export function intensityPoolRanks(
 }
 
 /** The ranking term for each candidate of `pool` (rankCandidates adds it): INTENSITY_WEIGHT *
- * weight * closeness, closeness = 1 - |r - target| (unscored: 0.5). In [0, weight]. */
+ * weight * closeness, closeness = 1 - |r - target| (unscored: 0.5), r from `lean.ranks` when
+ * given, else the rank in `pool`. In [0, weight]. */
 export function intensityTerms(
   pool: readonly Pick<DiscoverCandidate, 'intensity'>[],
   lean: RankIntensity
 ): number[] {
-  const ranks = intensityPoolRanks(pool)
+  const given = lean.ranks
+  const ranks = given === undefined ? intensityPoolRanks(pool) : null
   const target = clamp01(lean.target)
   const weight = Number.isFinite(lean.weight) ? Math.max(0, lean.weight) : 0
-  return pool.map((_, i) => {
-    const r = ranks.get(i)
+  return pool.map((c, i) => {
+    const r = given !== undefined ? given.get(c) : ranks!.get(i)
     const closeness = r === undefined ? INTENSITY_UNSCORED_CLOSENESS : 1 - Math.abs(r - target)
     return INTENSITY_WEIGHT * weight * closeness
   })
@@ -249,6 +261,9 @@ export function intensityTerms(
 
 export interface IntensityBandResult<T> {
   pool: T[]
+  /** Every scored candidate of the pool as given, by its rank there (intensityPoolRanks): pass
+   * it on to the ranking (radioIntensityRankOf) so the term ranks against the whole pool. */
+  ranks: ReadonlyMap<T, number>
   /** The draw kept only the band. */
   banded: boolean
   /** The draw asked for the band but too few were in it: the pool as it was. */
@@ -268,16 +283,18 @@ export function applyIntensityBand<T extends Pick<DiscoverCandidate, 'intensity'
 ): IntensityBandResult<T> {
   const d = clamp01(o.drama / 100)
   const chance = INTENSITY_BAND_CHANCE * radioIntensityRoleWeight(o.kinds) * d
-  if (!(o.random() < chance)) return { pool: [...pool], banded: false, backedOff: false }
-  const ranks = intensityPoolRanks(pool)
+  const byPosition = intensityPoolRanks(pool)
+  const ranks = new Map<T, number>()
+  for (const [i, r] of byPosition) ranks.set(pool[i], r)
+  if (!(o.random() < chance)) return { pool: [...pool], ranks, banded: false, backedOff: false }
   const target = clamp01(o.target)
   const kept = pool.filter((_, i) => {
-    const r = ranks.get(i)
+    const r = byPosition.get(i)
     return r !== undefined && Math.abs(r - target) <= INTENSITY_BAND_HALF_WIDTH + 1e-9
   })
   const least = Math.max(INTENSITY_BAND_MIN, Math.ceil(pool.length / 8))
-  if (kept.length < least) return { pool: [...pool], banded: false, backedOff: true }
-  return { pool: kept, banded: true, backedOff: false }
+  if (kept.length < least) return { pool: [...pool], ranks, banded: false, backedOff: true }
+  return { pool: kept, ranks, banded: true, backedOff: false }
 }
 
 /** The bed's intensity (sims and tests): the role-weighted mean score of the sounding rows that

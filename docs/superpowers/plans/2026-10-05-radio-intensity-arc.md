@@ -196,7 +196,28 @@ Planning scratchpad:
      and here for a pressed drop in a breakdown too);
    - a press is refused before the machine begins, and while held;
    - a press with its top already spoken for (an event decided for it) takes the top after
-     (`forced`), and so does a `late` press.
+     (`forced`), and so does a `late` press;
+   - **a press the decided event already answers changes nothing** (review, 2026-10-05): a
+     decided drop for `drop`, a decided cycle or add for `build`, or the same press already
+     waiting (`forced`). `pressRadioIntensity` returns the arc unchanged (the same object), so it
+     lands once: no quick drop after the clock's own drop, no forced add after a cycle. The label
+     reads what the decided event says (`drop`/`build` for the clock's own event). A runtime arms
+     its drop turn only when the press changed the arc (`next !== arc`);
+   - a forced add fits like the clock's (`canAdd`, under the build's peak and the most rows), and
+     a forced cycle strips only when one can go: `pressRadioIntensity`'s `where.can`
+     (`RadioIntensityRoom`: `count`, `max`, `canAdd`, `canStrip`, the rows now), and a press
+     waiting for its top reads the step's input there. With no add room a build press only halves
+     the build. Absent `can`, as before (the runtime's pick decides). A waiting press that comes
+     to nothing at a decide wrap leaves that wrap's decision to the clock.
+
+   **Review fixes after the plan (2026-10-05).** Tasks 2 and 3 landed as written, then a review
+   changed them (`radioIntensityArc.ts`, `radioIntensity.ts`; the code blocks below are the
+   pre-review version, the repo is the truth): decision 8's last two points; `prepared` is the
+   phase whose ending was prepared (a one-lap phrase's build prepare no longer stands in for the
+   drop's); what is decided at a wrap reads the rows after that wrap's own event lands (a one-lap
+   build no longer adds past its peak); the build target never passes `hi`; and the ranking's
+   intensity term ranks against the pool BEFORE the band: `applyIntensityBand` returns `ranks`,
+   passed on as `radioIntensityRankOf(target, kinds, drama, band.ranks)` (Tasks 7 and 10).
 9. **Loudness:**
    - `levelVersion` is a sub-version (spec §7.3). `StemAnalysisNeeds.level` is optional
      (absent = false), and main's answer carries `level: true` only when it is needed. So today's
@@ -5113,7 +5134,7 @@ called and radio draws exactly what it drew before.
      ...(clash ? { clash } : {}),
 -    ...(dig ? { dig: rankDigOf(dig) } : {})
 +    ...(dig ? { dig: rankDigOf(dig) } : {}),
-+    ...(intensity ? { intensity: radioIntensityRankOf(intensity.target, slotKinds, intensity.drama) } : {})
++    ...(intensity ? { intensity: radioIntensityRankOf(intensity.target, slotKinds, intensity.drama, band?.ranks) } : {})
    })
    const candidate = pickReroll(ranked, chaos, random)
    if (!candidate) return null
@@ -5676,8 +5697,11 @@ describe('densityPrefs', () => {
     - Nothing unless `intensityOn` and running and not held.
     - `late` = `turnaroundTurnBeats((nextWrap - now) / beat, TURN_LEAD_SEC / beat) === null`, the
       turn's own rule.
-    - `s.intensity = pressRadioIntensity(s.intensity, action, { lap, phraseLaps, late }) ?? s.intensity`.
-  - Then, when the press decided a `drop` for the coming top: set the turn request
+    - `s.intensity = pressRadioIntensity(s.intensity, action, { lap, phraseLaps, late, can }) ?? s.intensity`,
+      `can` the rows now (`RadioIntensityRoom`: `count`, `max`, `canAdd`, `canStrip`, as the
+      step's input; planning decision 8).
+  - Then, when the press decided a `drop` for the coming top (and changed the arc: an answered
+    press returns it unchanged): set the turn request
     (`s.turnRequest`, :1614's shape) with a new `drop: true`:
     - in a breakdown: `{ move: 'riser' }`, a riser fitted to the lap;
     - a quick drop: `{ move: 'low drop' }`, `maxBeats` clamped to 8 (2 bars).
@@ -6430,9 +6454,10 @@ it. The desktop's settings are normalized, so `energy` and `drama` are always se
 
 - [ ] **Step 4: The buttons and the readout.**
   - `intensityPress(action)`:
-    - `pressRadioIntensity(arc, action, { lap, phraseLaps, late })`. `late` is the turn's rule
-      (`turnaroundTurnBeats(...) === null` at the panel's lead).
-    - A decided drop arms a turn (`radioTurnPendingRef`, :3193) with `move: 'riser'` (in a
+    - `pressRadioIntensity(arc, action, { lap, phraseLaps, late, can })`. `late` is the turn's rule
+      (`turnaroundTurnBeats(...) === null` at the panel's lead); `can` the rows now
+      (`RadioIntensityRoom`, as the step's input; planning decision 8).
+    - A decided drop (when the press changed the arc) arms a turn (`radioTurnPendingRef`, :3193) with `move: 'riser'` (in a
       breakdown) or `'low drop'` (quick, `maxBeats` ≤ 8), plus a `drop` flag that
       `rollRadioTurnaround`'s turn branch turns into `drop: { gapChance }` and `payoff: 'large'`.
     - A decided `cycle` sets `arcExitRef` for the coming top.
@@ -6453,7 +6478,8 @@ it. The desktop's settings are normalized, so `energy` and `drama` are always se
     `getDiscoverCandidates`). Dig's near fetch passes `intensity: true` in its options.
   - After `applyTraitBar` (:9000), call `applyIntensityBand(pool, { target, kinds, drama, random: Math.random })`.
     Log a back-off.
-  - `rankCandidates` (:9001) gets `intensity: radioIntensityRankOf(target, kinds, drama)`.
+  - `rankCandidates` (:9001) gets `intensity: radioIntensityRankOf(target, kinds, drama, band.ranks)`
+    (the band's pre-band ranks; review, 2026-10-05).
   - Throws: `radioThrowTick` (:5494) passes `dropInBars` in the breakdown's last phrase.
 
 - [ ] **Step 6: Verify, commit.**
