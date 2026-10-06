@@ -29,6 +29,7 @@ import {
   resolveStemPath
 } from './riffLibraryStore'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
+import { whenAllTableCountsSettled } from './tableChangeSignal'
 import { loadUnavailableStemCIDs } from './stemUnavailableStore'
 import { stemIsUsable } from '@shared/stemAvailability'
 import {
@@ -385,6 +386,9 @@ export async function findRiffForStemPath(stemPath: string): Promise<{
   creationTime: number | null
 } | null> {
   const stemCID = basename(stemPath)
+  // listJamsWithDb reads the archive's Riffs signal: after the startup
+  // worker's count (tableCountSeed.ts).
+  await whenAllTableCountsSettled()
   const uniqueDbs = new Set(listJamsWithDb().map(({ db }) => db))
   for (const db of uniqueDbs) {
     // A loaded copy still being extended at startup answers at once; a stem

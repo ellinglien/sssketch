@@ -35,7 +35,7 @@ import type { InstrumentRow } from './instrumentRowsLookup'
 import { hasExtraStemSlotsTable, readExtraStemSlots } from './riffStemsExtra'
 import { keyAtRowid } from './rowidWatermark'
 import type { OwnStemsSnapshot } from './stemPriority'
-import { readTableHead, readTableSignal } from './tableChangeSignal'
+import { readTableHead, readTableSignal, whenTableCountsSettled } from './tableChangeSignal'
 import { countWork } from './workCounters'
 
 export interface OwnStemIndex {
@@ -198,6 +198,8 @@ export async function buildOwnStemIndex(
   options: OwnStemIndexOptions = {}
 ): Promise<OwnStemIndex> {
   const pageSize = options.pageSize ?? 1000
+  // The Stems signal below, after the startup worker's count (tableCountSeed.ts).
+  await whenTableCountsSettled(db, ['Stems'])
   let read = 0
   let rows: InstrumentRow[] = []
   let snapshot: Omit<OwnStemsSnapshot, 'own'> | null = null

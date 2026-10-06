@@ -115,11 +115,107 @@ function remember(db: Database.Database, table: ChangeSignalTable, memo: CountMe
   perTable.set(table, memo)
 }
 
+/** Counts being taken elsewhere right now: tableCountSeed.ts counts the
+ * archive's Riffs/Stems on a worker thread at startup and primes the memo
+ * above when it's back. A reader that counted meanwhile would block the main
+ * process on the very statement the worker is there to take off it (1.7-2.3 s
+ * cold on Elling's USB archive; review of the faster-startup commits,
+ * 2026-10-06). Readers wait (readTableSignalSettled, whenTableCountsSettled,
+ * whenAllTableCountsSettled); a cached scan's check is put off
+ * (isScanCacheCurrent); one that counts anyway is noted (countedSignal). */
+const countsInFlight = new WeakMap<Database.Database, Map<ChangeSignalTable, Promise<void>>>()
+const allCountsInFlight = new Set<Promise<void>>()
+
+/** Records that `count` (which never needs to resolve to anything) is taking
+ * `table`'s row count for `db` and will prime it: until it settles,
+ * isTableCountInFlight is true and the waits below wait for it. */
+export function noteCountInFlight(
+  db: Database.Database,
+  table: ChangeSignalTable,
+  count: Promise<unknown>
+): void {
+  let perTable = countsInFlight.get(db)
+  if (!perTable) {
+    perTable = new Map()
+    countsInFlight.set(db, perTable)
+  }
+  const tables = perTable
+  const settled: Promise<void> = count.then(
+    () => forget(),
+    () => forget()
+  )
+  function forget(): void {
+    if (tables.get(table) === settled) tables.delete(table)
+    allCountsInFlight.delete(settled)
+  }
+  tables.set(table, settled)
+  allCountsInFlight.add(settled)
+}
+
+export function isTableCountInFlight(db: Database.Database, table: ChangeSignalTable): boolean {
+  return countsInFlight.get(db)?.has(table) ?? false
+}
+
+/** Resolves once every count in flight for `db` (or for `tables` of it) has
+ * settled -- at once when none is. Never rejects. */
+export function whenTableCountsSettled(
+  db: Database.Database,
+  tables?: readonly ChangeSignalTable[]
+): Promise<void> {
+  const perTable = countsInFlight.get(db)
+  if (!perTable || perTable.size === 0) return Promise.resolve()
+  const waits = [...perTable]
+    .filter(([table]) => !tables || tables.includes(table))
+    .map(([, settled]) => settled)
+  return waits.length === 0 ? Promise.resolve() : Promise.all(waits).then(() => undefined)
+}
+
+/** whenTableCountsSettled for every db: for a reader that can't name its dbs
+ * before reading (listJamsWithDb, the IPC handlers built on it). */
+export function whenAllTableCountsSettled(): Promise<void> {
+  if (allCountsInFlight.size === 0) return Promise.resolve()
+  return Promise.all([...allCountsInFlight]).then(() => undefined)
+}
+
+/** readTableSignal once any count in flight for `db`'s `table` is back -- so
+ * it answers from that count instead of taking its own. */
+export async function readTableSignalSettled(
+  db: Database.Database,
+  table: ChangeSignalTable
+): Promise<TableSignal | null> {
+  await whenTableCountsSettled(db, [table])
+  return readTableSignal(db, table)
+}
+
+const warnedDuringSeed = new WeakMap<Database.Database, Set<ChangeSignalTable>>()
+
+/** A COUNT about to run while the same count is being taken elsewhere: a
+ * reader that should have waited. Counted for the dev [work] line, and
+ * logged once per db and table with where it came from. */
+function noteCountDuringSeed(db: Database.Database, table: ChangeSignalTable): void {
+  countWork(`sql:signal-count-during-seed.${table}`)
+  let warned = warnedDuringSeed.get(db)
+  if (!warned) {
+    warned = new Set()
+    warnedDuringSeed.set(db, warned)
+  }
+  if (warned.has(table)) return
+  warned.add(table)
+  console.warn(
+    `readTableSignal(${table}): counting on the main thread while the worker counts -- ` +
+      `this reader should wait (readTableSignalSettled):\n${new Error().stack ?? ''}`
+  )
+}
+
 /** The live TableSignal for `table`, or null when it can't be read (a
  * broken/foreign db missing the table -- same "not an error" convention as
  * every other query in this area). Runs `COUNT(*) AS n FROM <table>` only
  * when the cheap half of the signal (CountMemo above) says the table could
- * have changed since the last count on this connection. */
+ * have changed since the last count on this connection.
+ *
+ * Synchronous, so it can't wait for a count in flight elsewhere
+ * (noteCountInFlight): a reader that may run while one is should use
+ * readTableSignalSettled, or wait first. */
 export function readTableSignal(
   db: Database.Database,
   table: ChangeSignalTable
@@ -250,6 +346,7 @@ function countedSignal(
     countWork(`signal:count-reused.${table}`)
     count = memo.count
   } else {
+    if (isTableCountInFlight(db, table)) noteCountDuringSeed(db, table)
     countWork(`sql:signal-count.${table}`)
     count = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
     if (!db.inTransaction) remember(db, table, { ...head, writes, totalChanges, count })
@@ -297,7 +394,12 @@ export function newScanCacheState(signal: TableSignal | null): ScanCacheState {
  *
  * Mutates `state.checkedAt` as a deliberate part of its contract -- the
  * caller holds one ScanCacheState per cached scan and this is what rations
- * the checks to one per CACHE_CHANGE_CHECK_INTERVAL_MS. */
+ * the checks to one per CACHE_CHANGE_CHECK_INTERVAL_MS.
+ *
+ * While the table's count is in flight elsewhere (noteCountInFlight), the
+ * check is put off, not taken: current for now, and `checkedAt` is left
+ * alone so the first call after the count lands really checks. A few
+ * seconds' grace, against a 30-second interval. */
 export function isScanCacheCurrent(
   db: Database.Database,
   table: ChangeSignalTable,
@@ -305,6 +407,10 @@ export function isScanCacheCurrent(
 ): boolean {
   const now = Date.now()
   if (now - state.checkedAt < CACHE_CHANGE_CHECK_INTERVAL_MS) return true
+  if (isTableCountInFlight(db, table)) {
+    countWork(`signal:check-deferred.${table}`)
+    return true
+  }
   state.checkedAt = now
   countWork(`sql:cache-check.${table}`)
   return isTableSignalCurrent(state.signal, readTableSignal(db, table), state.builtAt, now)

@@ -167,6 +167,7 @@ import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
 import { getStemPriority, seedStemPriorityOwnStems, setStemPriorityUsername } from './stemPriority'
 import { loadOwnUsername, saveOwnUsername } from './ownUsernameStore'
 import { seedTableCounts, whenTableCountsSeeded } from './tableCountSeed'
+import { whenAllTableCountsSettled } from './tableChangeSignal'
 import { stemPriorityRank } from '@shared/stemPriorityOrder'
 import { getStemAvailabilityReport, onStemAvailabilityNotice } from './stemAvailability'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
@@ -933,7 +934,12 @@ app.whenReady().then(async () => {
     // targetUser is the renderer's own "your username" setting -- passing
     // it asks for each jam's authorship counts (jamOwnership.ts), which is
     // what the sidebar's ordering and its "only my jams" filter run on.
-    (_event, filterText: string, targetUser?: string) => listJams(filterText, targetUser)
+    // After the startup worker's archive count (tableCountSeed.ts): the
+    // ownership counts' cache reads the Riffs signal.
+    async (_event, filterText: string, targetUser?: string) => {
+      await whenAllTableCountsSettled()
+      return listJams(filterText, targetUser)
+    }
   )
 
   ipcMain.handle('riff-library-list-riffs', (_event, jamCID: string, filters: RiffFilters) =>
@@ -1509,6 +1515,9 @@ app.whenReady().then(async () => {
       // staying stuck with no console errors made it impossible to tell,
       // from the outside, which part of this handler was slow. Remove
       // once confirmed.
+      // listJamsWithDb reads the archive's Riffs signal: after the startup
+      // worker's count, never a COUNT of its own on the main thread.
+      await whenAllTableCountsSettled()
       const t0 = Date.now()
       const jams = listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db }))
       const t1 = Date.now()
@@ -1559,14 +1568,15 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'get-random-discover-candidate',
-    (
+    async (
       _event,
       kinds: DiscoverSlotKind[],
       onlyOwnStems: boolean,
       targetUser?: string,
       soundSource?: DiscoverSoundSourceFilter
-    ): Promise<DiscoverCandidate | null> =>
-      getRandomLibraryCandidate({
+    ): Promise<DiscoverCandidate | null> => {
+      await whenAllTableCountsSettled()
+      return getRandomLibraryCandidate({
         ownDb: openOwnRiffLibraryDb(),
         jams: listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
         kinds,
@@ -1574,6 +1584,7 @@ app.whenReady().then(async () => {
         targetUser,
         soundSource
       })
+    }
   )
 
   ipcMain.handle(
@@ -1602,23 +1613,25 @@ app.whenReady().then(async () => {
 
   // Discover artist mode (2026-10-01): the picker's data. The dbs are the
   // ones Discover rolls from -- the same distinct set get-discover-candidates
-  // derives from listJamsWithDb.
-  function discoverSourceDbs(): Database.Database[] {
+  // derives from listJamsWithDb -- read after the startup worker's archive
+  // count (tableCountSeed.ts), as listJamsWithDb reads the Riffs signal.
+  async function discoverSourceDbs(): Promise<Database.Database[]> {
+    await whenAllTableCountsSettled()
     return [...new Set(listJamsWithDb().map(({ db }) => db))]
   }
 
-  ipcMain.handle('discover-artist-index', (_event, ownUsername: unknown) =>
+  ipcMain.handle('discover-artist-index', async (_event, ownUsername: unknown) =>
     getArtistIndex(
       openOwnRiffLibraryDb(),
-      discoverSourceDbs(),
+      await discoverSourceDbs(),
       typeof ownUsername === 'string' ? ownUsername : ''
     )
   )
 
-  ipcMain.handle('discover-artist-analysed', (_event, artist: unknown) => {
+  ipcMain.handle('discover-artist-analysed', async (_event, artist: unknown) => {
     const name = (typeof artist === 'string' ? artist.trim() : '') || undefined
     return name
-      ? getArtistAnalysed(openOwnRiffLibraryDb(), discoverSourceDbs(), name)
+      ? getArtistAnalysed(openOwnRiffLibraryDb(), await discoverSourceDbs(), name)
       : { analysed: 0, total: 0 }
   })
 
@@ -1627,7 +1640,7 @@ app.whenReady().then(async () => {
   // cold index read on the USB archive. A warm-up only: failures are logged, never thrown.
   ipcMain.handle('discover-prewarm-artists', async (_event, names: unknown) => {
     if (!Array.isArray(names)) return
-    const dbs = discoverSourceDbs()
+    const dbs = await discoverSourceDbs()
     for (const name of names) {
       if (typeof name !== 'string' || name.trim() === '') continue
       try {
@@ -1651,7 +1664,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('discover-queue-artist-analysis', async (_event, artist: unknown) => {
     const name = typeof artist === 'string' ? artist.trim() : ''
     if (name === '') return { queued: 0, total: 0, size: 0 }
-    const rows = await getArtistStemRows(discoverSourceDbs(), name)
+    const rows = await getArtistStemRows(await discoverSourceDbs(), name)
     const ownDb = openOwnRiffLibraryDb()
     const queued = queueArtistStems(ownDb, rows, name)
     // `size`: the whole queue now (every artist), for the button and the
@@ -1798,6 +1811,9 @@ app.whenReady().then(async () => {
     'get-discover-library-scan-work',
     async (_event, username: string | null = null): Promise<LibraryScanWork> => {
       setStemPriorityUsername(username)
+      // listJamsWithDb and the scan targets read the archive's Riffs signal:
+      // after the startup worker's count (tableCountSeed.ts).
+      await whenAllTableCountsSettled()
       // Read alongside the listing, not before it (the first build takes
       // 4 s or more on the USB archive): both are `.all()` per bounded
       // statement with yields between, so they interleave safely on the

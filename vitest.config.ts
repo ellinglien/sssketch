@@ -87,6 +87,7 @@ export default defineConfig({
           'src/main/stemUnavailableStore.test.ts',
           'src/main/tableChangeSignalSql.test.ts',
           'src/main/tableCountSeed.test.ts',
+          'src/main/tableCountsInFlight.test.ts',
           'src/main/ownStemIndex.test.ts',
           'src/main/tidyUpLibraryStems.test.ts',
           'src/main/traitQuantileCache.test.ts',

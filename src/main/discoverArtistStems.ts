@@ -11,8 +11,10 @@ import { countWork } from './workCounters'
 import { getStemPriority, getStemPriorityUsername } from './stemPriority'
 import {
   isScanCacheCurrent,
+  isTableCountInFlight,
   newScanCacheState,
   readTableSignal,
+  whenTableCountsSettled,
   type ScanCacheState
 } from './tableChangeSignal'
 
@@ -168,6 +170,9 @@ export async function getArtistStemRows(
   const seen = new Set<string>()
   const out: ArtistStemRow[] = []
   for (const db of dbs) {
+    // rowsForDb reads the Stems signal: after the startup worker's count, if
+    // one is running (tableCountSeed.ts). Only then, so nothing else yields.
+    if (isTableCountInFlight(db, 'Stems')) await whenTableCountsSettled(db, ['Stems'])
     for (const row of await rowsForDb(db, artist, pageSize)) {
       if (seen.has(row.stemCID)) continue
       seen.add(row.stemCID)

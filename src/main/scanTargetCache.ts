@@ -28,7 +28,7 @@ import type Database from 'better-sqlite3'
 import { countWork } from './workCounters'
 import { columnStemSlots, mergeStemSlots, type StemSlotRef } from '@shared/riffStemSlots'
 import { readAllExtraStemSlots } from './riffStemsExtra'
-import { readTableSignal } from './tableChangeSignal'
+import { readTableSignal, whenTableCountsSettled } from './tableChangeSignal'
 import { canExtendByRowid, keyAtRowid } from './rowidWatermark'
 
 export interface StemJamPair {
@@ -396,6 +396,9 @@ export async function refreshStemJamPairs(
   sourceDb: Database.Database
 ): Promise<boolean> {
   if (sourceDb.memory) return false
+  // After the startup worker's count, if one is running (tableCountSeed.ts):
+  // never a second COUNT of the archive's Riffs on the main thread.
+  await whenTableCountsSettled(sourceDb, ['Riffs'])
   const live = readLiveSignal(sourceDb)
   if (!live) return false
   ensureSchema(ownDb)

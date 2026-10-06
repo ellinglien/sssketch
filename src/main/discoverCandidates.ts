@@ -58,9 +58,11 @@ import { buildOwnStemIndex, type OwnStemIndex } from './ownStemIndex'
 import { seedTableCounts } from './tableCountSeed'
 import {
   isScanCacheCurrent,
+  isTableCountInFlight,
   newScanCacheState,
   readTableHead,
   readTableSignal,
+  whenTableCountsSettled,
   type ScanCacheState
 } from './tableChangeSignal'
 import { loadUnavailableStemCIDs } from './stemUnavailableStore'
@@ -330,6 +332,9 @@ export async function getRiffIndexForDb(
   db: Database.Database,
   scope: IndexScope = {}
 ): Promise<Map<string, RiffIndexEntry>> {
+  // A build reads the Riffs signal: after the startup worker's count, if one
+  // is running (tableCountSeed.ts). Only then, so no other call yields here.
+  if (isTableCountInFlight(db, 'Riffs')) await whenTableCountsSettled(db, ['Riffs'])
   const served = servedFor(servedRiffIndex.get(db), scope)
   if (served) return served
 
@@ -990,6 +995,7 @@ async function getInstrumentRowsForDb(
   db: Database.Database,
   scope: IndexScope = {}
 ): Promise<InstrumentRow[]> {
+  if (isTableCountInFlight(db, 'Stems')) await whenTableCountsSettled(db, ['Stems'])
   const served = servedFor(servedInstrumentRows.get(db), scope)
   if (served) return served
   const pending = instrumentRowsInFlight.get(db)

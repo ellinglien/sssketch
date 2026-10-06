@@ -34,7 +34,7 @@ import type Database from 'better-sqlite3'
 import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { Worker } from 'node:worker_threads'
-import { primeTableCount, readTableHead } from './tableChangeSignal'
+import { noteCountInFlight, primeTableCount, readTableHead } from './tableChangeSignal'
 import type { ChangeSignalTable } from './tableWriteVersion'
 import { countWork } from './workCounters'
 
@@ -167,13 +167,17 @@ export function seedTableCounts(
   if (!db.readonly) return Promise.resolve()
   const running = seeding.get(db)
   if (running) return running
-  // The tables' workers run side by side.
+  // The tables' workers run side by side. Each is noted as in flight
+  // (tableChangeSignal.ts): until it is back, readers wait for it, or put
+  // their check off, instead of counting on the main thread themselves.
   const promise = Promise.all(
-    (options.tables ?? (['Riffs', 'Stems'] as const)).map((table) =>
-      seedOne(db, ownDb, table, options).catch((err) => {
+    (options.tables ?? (['Riffs', 'Stems'] as const)).map((table) => {
+      const one = seedOne(db, ownDb, table, options).catch((err) => {
         console.error(`seedTableCounts(${table}) failed; readTableSignal will count:`, err)
       })
-    )
+      noteCountInFlight(db, table, one)
+      return one
+    })
   ).then(() => undefined)
   seeding.set(db, promise)
   return promise

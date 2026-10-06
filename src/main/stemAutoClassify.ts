@@ -9,7 +9,7 @@ import { getConfirmedEmbeddings } from './embeddingMatch'
 import { loadCategoryCentroidStore } from './categoryCentroidStore'
 import { upsertStemAutoCategory } from './stemAutoCategoryStore'
 import { countWork } from './workCounters'
-import { readTableSignal } from './tableChangeSignal'
+import { readTableSignal, whenTableCountsSettled } from './tableChangeSignal'
 import {
   STEM_PRIORITY_FAVOURITE,
   STEM_PRIORITY_OWN,
@@ -682,6 +682,10 @@ export async function classifyAutoCategoryBatch(
   options: ClassifyBatchOptions = {}
 ): Promise<ClassifyBatchResult> {
   let processed = 0
+  // trainingKey reads each db's Stems signal (and instrumentLookup the
+  // archive's): after the startup worker's count, if one is running
+  // (tableCountSeed.ts), never a COUNT of its own on the main thread.
+  await Promise.all(stemDbs.map((db) => whenTableCountsSettled(db)))
 
   // Computed ONCE per call, shared by both passes below -- the feature
   // pass's own eligibility depends on whether the embedding axis is

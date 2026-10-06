@@ -26,9 +26,11 @@ import { countWork } from './workCounters'
 import { getTraitValueTable } from './traitQuantileCache'
 import {
   CACHE_CHANGE_CHECK_INTERVAL_MS,
+  isTableCountInFlight,
   isTableSignalCurrent,
   newScanCacheState,
   readTableSignal,
+  whenTableCountsSettled,
   type ScanCacheState,
   type TableSignal
 } from './tableChangeSignal'
@@ -158,6 +160,8 @@ function signalReader(): SignalOf {
 function isCurrent(db: Database.Database, state: ScanCacheState, signalOf: SignalOf): boolean {
   const now = Date.now()
   if (now - state.checkedAt < CACHE_CHANGE_CHECK_INTERVAL_MS) return true
+  // Put off while the startup worker counts Stems, as isScanCacheCurrent does.
+  if (isTableCountInFlight(db, 'Stems')) return true
   state.checkedAt = now
   countWork('sql:cache-check.Stems')
   return isTableSignalCurrent(state.signal, signalOf(db), state.builtAt, now)
@@ -463,6 +467,8 @@ export async function getArtistIndex(
   ownUsername: string
 ): Promise<ArtistIndex> {
   const own = ownUsername.trim()
+  // The Stems signal below, after the startup worker's count (tableCountSeed.ts).
+  await Promise.all(dbs.map((db) => whenTableCountsSettled(db, ['Stems'])))
   lastOwnDb = ownDb
   const signalOf = signalReader()
   const perDb = dbs.map((db) => pairsFor(ownDb, db, signalOf))
