@@ -1,4 +1,5 @@
 import { applyLoopMicroFade } from './microFade'
+import { decodeStemFile } from './decodeStemFile'
 
 export interface PreviewStemInput {
   path: string
@@ -37,9 +38,11 @@ async function buildPreviewSources(
 ): Promise<PreviewSource[]> {
   const decodeResults = await Promise.allSettled(
     stems.map(async (stem) => {
-      const bytes = await window.rifffApi.readAudioFile(stem.path)
-      const arrayBuffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
-      const buffer = await ctx.decodeAudioData(arrayBuffer as ArrayBuffer)
+      // Through decodeStemFile (audit 8(c)): one read+decode shared with any
+      // analysis of the same stem in flight, counted, and a 0-byte placeholder
+      // rejects as not downloaded. It decodes on the shared context, which is
+      // the `ctx` every caller passes (getAudioContext()).
+      const buffer = await decodeStemFile(stem.path)
       return { stem, buffer }
     })
   )

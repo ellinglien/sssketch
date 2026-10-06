@@ -3,6 +3,7 @@ import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { offsetStepsForBeatIndex, rotationSecondsForStem } from '../state/selectors'
 import type { Action, AppState } from '../state/store'
 import { getAudioContext } from '../audio/peakCache'
+import { decodeStemFile } from '../audio/decodeStemFile'
 import { stopActivePreview } from '../audio/previewLoop'
 import { applyLoopMicroFade } from '../audio/microFade'
 import { buildMetronomeBuffer } from '../audio/metronome'
@@ -378,12 +379,9 @@ export function BeatPicker({
     Promise.all(
       rifff.stems.map(async (s) => {
         try {
-          const bytes = await window.rifffApi.readAudioFile(s.path)
-          const arrayBuffer = bytes.buffer.slice(
-            bytes.byteOffset,
-            bytes.byteOffset + bytes.byteLength
-          )
-          const decoded = await getAudioContext().decodeAudioData(arrayBuffer as ArrayBuffer)
+          // Shared with any analysis decoding the same stem right now (audit
+          // 8(c)); rejects with StemNotDownloadedError for a 0-byte placeholder.
+          const decoded = await decodeStemFile(s.path)
           return [s.slot, decoded] as const
         } catch (err) {
           console.error(`BeatPicker: failed to decode audio for preview playback: ${s.path}`, err)
