@@ -333,6 +333,8 @@ import {
   type RadioFoldStatusRow
 } from '@shared/radioFoldStatus'
 import {
+  RADIO_FLASH_FADE_IN_SEC,
+  RADIO_FLASH_FADE_OUT_SEC,
   RADIO_THROW_WORD,
   pruneRadioFlashes,
   radioFlashShown,
@@ -398,7 +400,18 @@ import {
 import { discoverStemPans } from '@shared/radioPan'
 import { discoverStemPumpRoles } from '@shared/radioPump'
 import { normalizeSoundSettings, throwEveryBars } from '@shared/radioSound'
-import { drawThrowBeats, drawThrowEcho } from '@shared/radioThrows'
+import { drawThrowBeats, drawThrowEcho, throwDelaySec } from '@shared/radioThrows'
+import {
+  closeRadioRestVisuals,
+  dropRadioMoveVisuals,
+  pruneRadioMoveVisuals,
+  radioGestureVisuals,
+  radioRestVisual,
+  radioThrowVisual,
+  radioTurnaroundVisuals,
+  reopenRadioRestVisuals,
+  type RadioMoveVisual
+} from '@shared/radioMoveVisuals'
 import {
   armDiscoverAimedThrow,
   armDiscoverExitThrow,
@@ -1317,6 +1330,19 @@ export function DiscoverPanel({
   // restart (playing again, a seek, a snap) restarts every folded cycle in the engine, so it
   // restarts the fold machine's origins too (restartRadioFold).
   const radioFoldMoveRef = useRef({ pos: 0, playing: false, laps: 0 })
+  // THE MOVES SHOWN WHILE THEY SOUND (spec 2026-10-05-radio-move-visuals-design): what is armed,
+  // as @shared/radioMoveVisuals on the readout's clock (bars played since radio started,
+  // radioPlayRef), rebuilt every tick (radioMoveVisualsTick), with the readout's lap start and the
+  // laps radioFoldMoveRef had counted when it was taken, so the sweep effect below can read it at
+  // every position tick across a wrap (as the fold dots do); and the rows resting for radio then
+  // (drawn at the dim floor: a rest is radio's move). Read only by that effect, written only by
+  // the tick and resetRadioReadout.
+  const radioMoveVisualsRef = useRef<{
+    visuals: RadioMoveVisual[]
+    startBars: number
+    laps: number
+    resting: ReadonlySet<string>
+  }>({ visuals: [], startBars: 0, laps: 0, resting: new Set() })
   const [radioFoldView, setRadioFoldView] = useState<{
     state: RadioFoldState
     step: RadioFoldStep | null
@@ -3418,6 +3444,14 @@ export function DiscoverPanel({
   const radioRowSinceRef = useRef<Map<string, number>>(new Map())
   const radioFlashLogRef = useRef<RadioFlash[]>([])
   const radioFlashSeenRef = useRef<Set<string>>(new Set())
+  // The moves' visuals log's bookkeeping (radioMoveVisualsTick; the log is radioMoveVisualsRef,
+  // above): the keys it has logged, the wrap each turnaround it has seen ends on (its visuals are
+  // rebuilt every tick from it, so a row joining or a filter in arming later in its lap shows as
+  // the lane build plays it), and each resting row's rest closed by a decided return, with where
+  // (reopened if that return is taken back).
+  const radioMoveSeenRef = useRef<Set<string>>(new Set())
+  const radioMoveTurnaroundRef = useRef<{ armId: string; wrapAt: number } | null>(null)
+  const radioRestClosedRef = useRef<Map<string, number>>(new Map())
   const [radioReadoutNow, setRadioReadoutNow] = useState<RadioReadout | null>(null)
   // A change that is WAITING for the loop top, because the gesture it
   // carries can only be performed there.
@@ -5888,6 +5922,10 @@ export function DiscoverPanel({
     radioRowSinceRef.current = new Map()
     radioFlashLogRef.current = []
     radioFlashSeenRef.current = new Set()
+    radioMoveVisualsRef.current = { visuals: [], startBars: 0, laps: 0, resting: new Set() }
+    radioMoveSeenRef.current = new Set()
+    radioMoveTurnaroundRef.current = null
+    radioRestClosedRef.current = new Map()
     setRadioReadoutNow(null)
   }
   /** THE GESTURE FLASH (spec 2026-10-03-radio-readout-design section 1). Each gesture armed into
@@ -5896,7 +5934,12 @@ export function DiscoverPanel({
    * the lap it is armed in; an arrival (filter in, bloom, duck) from the top of the lap it is armed
    * at; a turnaround's or a turn's move, on each row it plays on, over its last beats; a throw from
    * its own start. Read off what is armed, every tick, rather than at each of the places that arm
-   * one. A word not sounding yet whose gesture has been taken back goes with it. */
+   * one. A word not sounding yet whose gesture has been taken back goes with it.
+   *
+   * Each move's word carries where the move ends (`until`, spec 2026-10-05-radio-move-visuals-
+   * design: on for the move, then a quick fade out): a lead-in's and a turnaround's the wrap, an
+   * arrival's the end of its curve, a throw's where its send closes. A moment's word (a hook's
+   * landing, the intensity arc's) has none: one bar. */
   function radioFlashTick(pos: number, loopBars: number): void {
     const lapStart = radioPlayRef.current.startBars
     const now = lapStart + pos
@@ -5912,7 +5955,8 @@ export function DiscoverPanel({
         rowId: g.slotId,
         word,
         at: lapStart + (leads ? loopBars - g.beats / 4 : 0),
-        key: g.armId
+        key: g.armId,
+        until: lapStart + (leads ? loopBars : Math.min(g.beats / 4, loopBars / 2))
       })
     }
     const ta = radioTurnaroundRef.current
@@ -5925,7 +5969,8 @@ export function DiscoverPanel({
             rowId: f.rowId,
             word: f.word,
             at: lapStart + loopBars - f.beats / 4,
-            key: ta.armId
+            key: ta.armId,
+            until: lapStart + loopBars
           })
         }
       }
@@ -5935,11 +5980,13 @@ export function DiscoverPanel({
       const key = `throw@${throws.armed.startBars}`
       live.add(key)
       if (!seen.has(key)) {
+        const at = now + (throws.armed.startBars - throws.elapsedBars)
         log.push({
           rowId: throws.armed.slotId,
           word: RADIO_THROW_WORD,
-          at: now + (throws.armed.startBars - throws.elapsedBars),
-          key
+          at,
+          key,
+          until: at + (throws.armed.endBars - throws.armed.startBars)
         })
       }
     }
@@ -5964,8 +6011,142 @@ export function DiscoverPanel({
       if (seen.has(f.key)) continue
       log.push({ ...f, at: lapStart + loopBars })
     }
-    radioFlashLogRef.current = pruneRadioFlashes(log, now, 1, live)
+    radioFlashLogRef.current = pruneRadioFlashes(log, now, 1, live, radioFlashFadeBars().out)
     radioFlashSeenRef.current = live
+  }
+  /** The flash's quick fades on the readout's clock (bars): RADIO_FLASH_FADE_IN_SEC / _OUT_SEC at
+   * the tempo now. */
+  function radioFlashFadeBars(): { in: number; out: number } {
+    const barsPerSec = bpmRef.current / 240
+    return { in: RADIO_FLASH_FADE_IN_SEC * barsPerSec, out: RADIO_FLASH_FADE_OUT_SEC * barsPerSec }
+  }
+  /** THE MOVES' VISUALS (spec 2026-10-05-radio-move-visuals-design, @shared/radioMoveVisuals): what
+   * is armed, every tick, as visuals on the readout's clock (bars played since radio started), for
+   * the sweep effect to draw at every position tick. Read off what is armed, as radioFlashTick
+   * reads its words, and only what the lane build lays down (buildAndPushPreview):
+   *   - each gesture once (by armId): a lead-in (a hole, a riser, the arc's exit drop-out) into the
+   *     wrap that ends this lap, an arrival (a filter in, a bloom, a duck) from this lap's top; a duck
+   *     dips every row in the mix but the ones landing with it (`spares`), as the lane build does;
+   *   - the turnaround, rebuilt every tick on the wrap it was first seen to end on: nothing when it
+   *     no longer fits the loop (turnaroundFitsLoop: the lane build drops it whole), only on the
+   *     rows in the mix, no lift or dip on a row a change's filter in already has (one filter a
+   *     lap), and the late rows silenced through its gap as they are now;
+   *   - the armed throw's echo, once, from where its send opens;
+   *   - each rest (a row resting for radio, or a decided rest not landed yet: from the top it lands
+   *     on), open until a return is decided for it (closed on the top it lands on), opened again if
+   *     that return is taken back.
+   * A key no longer armed drops its visuals, even mid-move (its curve has left the project), but an
+   * echo already ringing rings on (pruneRadioMoveVisuals). */
+  function radioMoveVisualsTick(pos: number, loopBars: number): void {
+    const lapStart = radioPlayRef.current.startBars
+    const now = lapStart + pos
+    const wrapAt = lapStart + loopBars
+    const lap = { loopBars, unitsPerBar: 1 }
+    const seen = radioMoveSeenRef.current
+    const live = new Set<string>()
+    const heard = [...previewingSlotIdsRef.current]
+    const was = radioMoveVisualsRef.current
+    let visuals = [...was.visuals]
+    for (const g of radioGestureRef.current) {
+      live.add(g.armId)
+      if (seen.has(g.armId)) continue
+      const leads = g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
+      const spared = new Set([g.slotId, ...(g.spares ?? [])])
+      visuals.push(
+        ...radioGestureVisuals({
+          kind: g.kind,
+          rowId: g.slotId,
+          beats: g.beats,
+          wrapAt: leads ? wrapAt : lapStart,
+          before: lap,
+          after: lap,
+          duckRowIds: heard.filter((id) => !spared.has(id)),
+          key: g.armId
+        })
+      )
+    }
+    const ta = radioTurnaroundRef.current
+    if (ta === null) radioMoveTurnaroundRef.current = null
+    else {
+      live.add(ta.armId)
+      let placed = radioMoveTurnaroundRef.current
+      if (placed === null || placed.armId !== ta.armId) {
+        placed = { armId: ta.armId, wrapAt }
+        radioMoveTurnaroundRef.current = placed
+      }
+      visuals = dropRadioMoveVisuals(visuals, ta.armId)
+      if (turnaroundFitsLoop(ta.plan, loopBars)) {
+        visuals.push(
+          ...radioTurnaroundVisuals(ta.plan, {
+            wrapAt: placed.wrapAt,
+            unitsPerBeat: 0.25,
+            loopBars,
+            key: ta.armId,
+            lateRowIds: turnaroundGapLateRowIds(ta.plan, heard),
+            heardRowIds: heard,
+            filterSkippedRowIds: radioGestureRef.current
+              .filter(
+                (g) =>
+                  g.kind === 'filter in' && buildFilterInCurve(loopBars, g.beats / 4).length > 0
+              )
+              .map((g) => g.slotId)
+          })
+        )
+      }
+    }
+    const throws = radioThrowRef.current
+    if (throws.armed !== null) {
+      const armed = throws.armed
+      const key = `throw@${armed.startBars}`
+      live.add(key)
+      if (!seen.has(key)) {
+        const barsPerSec = bpmRef.current / 240
+        const delay = throwDelaySec(bpmRef.current, armed.timing) * barsPerSec
+        const echo = radioThrowVisual({
+          rowId: armed.slotId,
+          at: now + (armed.startBars - throws.elapsedBars),
+          open: armed.endBars - armed.startBars,
+          delay,
+          feedback: armed.feedback,
+          shiftBars: delay,
+          key
+        })
+        if (echo !== null) visuals.push(echo)
+      }
+    }
+    const resting = radioRestingRef.current
+    const manual = manualChangesRef.current
+    const restRows = new Set(resting.keys())
+    for (const [rowId, m] of manual) if (m.rest === true) restRows.add(rowId)
+    const closed = radioRestClosedRef.current
+    for (const rowId of restRows) {
+      const key = `rest@${rowId}`
+      live.add(key)
+      if (!seen.has(key)) {
+        visuals.push(
+          radioRestVisual({ rowId, from: resting.has(rowId) ? now : wrapAt, until: null, key })
+        )
+      }
+      const m = manual.get(rowId)
+      const returning = resting.has(rowId) && (m?.hook === 'return' || m?.arc === 'return')
+      const closedAt = closed.get(rowId)
+      if (returning && closedAt === undefined) {
+        visuals = closeRadioRestVisuals(visuals, rowId, wrapAt)
+        closed.set(rowId, wrapAt)
+      } else if (!returning && closedAt !== undefined && resting.has(rowId)) {
+        visuals = reopenRadioRestVisuals(visuals, rowId, closedAt)
+        closed.delete(rowId)
+      }
+    }
+    for (const rowId of [...closed.keys()]) if (!restRows.has(rowId)) closed.delete(rowId)
+    const restingNow = new Set(resting.keys())
+    radioMoveVisualsRef.current = {
+      visuals: pruneRadioMoveVisuals(visuals, now, live),
+      startBars: lapStart,
+      laps: radioFoldMoveRef.current.laps,
+      resting: restingNow
+    }
+    radioMoveSeenRef.current = live
   }
   /** What the readout says now, from radio's refs (the clock tick's microtask only):
    * `barsUntilChange` is the rows' own wait (radioChangeWait). `next` is whatever lands first
@@ -6103,7 +6284,7 @@ export function DiscoverPanel({
         traits: s.candidate?.traitPercentiles ?? null,
         author: s.candidate?.creatorUserName ?? null,
         laps: lap - (radioRowSinceRef.current.get(s.id) ?? 0) + 1,
-        flash: radioFlashShown(radioFlashLogRef.current, s.id, now, 1)
+        flash: radioFlashShown(radioFlashLogRef.current, s.id, now, 1, radioFlashFadeBars())
       }))
     })
     // a row's role (its hook) after its age: `3 laps · hook · back in 16 bars`
@@ -7630,6 +7811,7 @@ export function DiscoverPanel({
       // the readout, from this tick: the flash log first, then what it all says
       if (!radioOnRef.current) return
       radioFlashTick(pos, loopBars)
+      radioMoveVisualsTick(pos, loopBars)
       setRadioReadoutNow(radioReadoutFrom(pos, loopBars, changeWait.barsUntilChange))
       // the armed companions as they ride now: one warmed, locked or muted since the last write,
       // or (fold's bar band) left off the mid-loop line the change will land on
