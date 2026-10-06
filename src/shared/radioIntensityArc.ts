@@ -479,7 +479,7 @@ function decide(
   input: RadioIntensityStepInput,
   forcedNow: RadioIntensityAction | null
 ): RadioIntensityDecided | null {
-  if (forcedNow !== null) return forcedEvent(arc, forcedNow)
+  if (forcedNow !== null) return forcedEvent(arc, forcedNow, input)
   const ending = arc.done + 1 >= arc.phrases
   switch (arc.phase) {
     case 'build': {
