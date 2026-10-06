@@ -179,8 +179,11 @@ Commits: 49b65dce, 9853f44c, 7522cf9d, 72b398d6, 7fa09e42. Changes from the plan
   can't start leaves the count to `readTableSignal`, as before. It's **unverified in a packaged
   build** (better-sqlite3 loaded from inside app.asar in a worker).
 - Counts are seeded when the archive opens (index.ts, `whenReady`). A matching saved count is primed
-  synchronously. `listJamsWithDb` and stemPriority's first read wait for the worker
-  (`whenTableCountsSeeded`).
+  synchronously. ~~`listJamsWithDb` and stemPriority's first read wait for the worker
+  (`whenTableCountsSeeded`).~~ **Corrected after review:** only the prewarm's `listJamsWithDb` and
+  stemPriority waited. The renderer's handlers (`get-discover-library-scan-work`,
+  `discover-artist-index`, list-jams, rolls) and the background passes still ran the 1.7 s COUNT on
+  the main thread when they landed first. Fixed (review follow-ups below).
 - A saved copy that may be kept is loaded while the worker counts (`mayKeepSavedCopy`).
 - `canExtendByRowidSliced` counts the rows past a watermark in 1,000-rowid windows. It's used by the
   four extend checks in discoverCandidates. Other callers (artist pairs, scan targets, stemPriority)
@@ -214,7 +217,33 @@ Notes on the table:
   6.5 s, and the own db 0.3 s. That's not the hoped-for ~4 s: the own index reads 68k stems and
   78k riffs through the username indexes (3.0 s + 3.8 s measured alone).
 
+### Review follow-ups (2026-10-06)
+
+- **No reader counts while the worker does.** `tableChangeSignal.ts` keeps the counts in flight
+  (`noteCountInFlight`, set by `seedTableCounts`). Every entry point that reads the archive's signal
+  waits for them (`whenTableCountsSettled` / `whenAllTableCountsSettled` / `readTableSignalSettled`):
+  the IPC handlers built on `listJamsWithDb`, `refreshStemJamPairs`, `getArtistIndex`,
+  `getArtistStemRows`, `getRiffIndexForDb`, `getInstrumentRowsForDb`, `buildOwnStemIndex`,
+  `classifyAutoCategoryBatch`, `findRiffForStemPath`. A cached scan's 30-second check is put off
+  while its table is counted. `readTableSignal` is synchronous, so it can't wait: one that counts
+  anyway is noted (`sql:signal-count-during-seed.<table>` in the dev [work] line, plus one warning
+  with its stack). Test: `tableCountsInFlight.test.ts`.
+- A reset of a saved copy that throws no longer leaves the own index served for the session.
+- The saved username is written through a temp file, fsync and rename. A failed Endlesss session
+  lookup no longer clears it: the renderer reports a name, "none" (a typed empty username, or
+  right after a logout) or "unknown", and main ignores "unknown" (`@shared/ownUsernameReport`).
+  Reporting moved to `OwnUsernameReporter`, mounted once in App.
+- When the worker can't run, the seed counts on the main thread itself and saves that count, so
+  the next launch on an unchanged file takes none.
+- The seed moved to right after `createWindow()`. Measured warm: 1-5 ms synchronous (not
+  measured cold: needs `sudo purge`).
+- StartupGate stops listening for progress once it has closed.
+
 ### Still open, for Elling
+- **No username at all** (nothing typed, not logged into Endlesss): on a full rebuild the gate opens
+  after about 4 s (the worker count and the decisions), but nothing is rollable for about 2.5
+  minutes, until the walks finish. There's no own index to serve without a username. The
+  bottom-right indicator shows "indexing library" meanwhile.
 - A first roll's Stems IN lookup blocks ~1 s per 200 ids, cold. Smaller chunks only spread the
   same I/O.
 - Other `canExtendByRowid` callers still count new rows in one statement after a sync.
