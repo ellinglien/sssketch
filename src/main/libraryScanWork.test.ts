@@ -431,13 +431,17 @@ describe('listLibraryScanWork: own stems first (2026-10-06)', () => {
       release?.()
       return stat(path)
     }
-    const timeout = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('waited for the priority before listing')), 2000)
-    )
-    const result = await Promise.race([
-      listLibraryScanWork(jams, own, { priority, statFn }),
-      timeout
-    ])
+    let guard: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<never>((_, reject) => {
+      guard = setTimeout(() => reject(new Error('waited for the priority before listing')), 2000)
+    })
+    let result: Awaited<ReturnType<typeof listLibraryScanWork>>
+    try {
+      result = await Promise.race([listLibraryScanWork(jams, own, { priority, statFn }), timeout])
+    } finally {
+      // The race is won: the guard must not fire into a later test.
+      clearTimeout(guard)
+    }
     expect(result.work.map((t) => t.key)).toEqual(ordered)
   })
 
