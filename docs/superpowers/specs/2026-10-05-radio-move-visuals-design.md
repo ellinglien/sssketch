@@ -116,9 +116,13 @@ a phone; the web was seen in headless Chrome only.
 - **The web's simple mode gets nothing** (decision 12), confirmed by Elling on 2026-10-06, as is
   the wash's blur on waveforms only (decision 7).
 
-**Checks** (2026-10-06, after `dd4923e2`): see the intensity arc handoff for the full runs of both
-repos; the move-visuals tests are in `radioMoveVisuals.test.ts`, `radioReadout.test.ts` and the
-web's `moveFrame.test.ts` / controller tests.
+**Checks** (2026-10-06, sssketch at `dd4923e2`, web at `55c7023`):
+- sssketch: `npm test` 320 files, 5406 tests green; typecheck clean; lint 0 errors (one prettier
+  warning in `scripts/generate-x64-test-config.js`, not this work).
+- ell.ing/radio: vitest 68 files, 1064 tests green; typecheck clean; build clean; `check:engine`
+  all passed.
+- The move-visuals tests: `radioMoveVisuals.test.ts`, `radioReadout.test.ts`, and the web's
+  `moveFrame.test.ts` and controller tests.
 
 **Open, for Elling's eye:**
 - **The throw's ghost is faint.** It is the faintest look (one repeat's trail, floored at 6 px, at
