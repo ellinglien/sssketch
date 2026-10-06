@@ -274,6 +274,39 @@ describe('rescanLoopFolder', () => {
     expect(await run(0)).toBe(0)
   })
 
+  // Scan plan Task 13 M3 (audit minor): the files were stat'ed one after
+  // another, each a round trip to his USB volume.
+  it('stats at most 8 files at once, and the result follows the walk, not the stats', async () => {
+    const hits = join(dir, 'Hits')
+    for (let i = 0; i < 20; i++)
+      writeWav(join(hits, `hit ${String(i).padStart(2, '0')} 120.wav`), 0.5)
+    linkLoopFolder(db, hits)
+    const serial = await rescanLoopFolder(db, hits, 120)
+    const serialLoops = listLoopFolders(db).find((f) => f.rootPath === hits)!.loops
+    db.prepare(`DELETE FROM LoopFiles WHERE RootPath = ?`).run(hits)
+
+    let inFlight = 0
+    let maxInFlight = 0
+    let calls = 0
+    const { stat } = await import('node:fs/promises')
+    const concurrent = await rescanLoopFolder(db, hits, 120, {
+      ...DEFAULT_LOOP_SCAN_DEPS,
+      statFile: async (path) => {
+        const order = calls++
+        inFlight += 1
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        // later calls finish first: completion order is not walk order
+        for (let i = 0; i < 40 - order; i++) await new Promise((r) => setImmediate(r))
+        inFlight -= 1
+        return stat(path)
+      }
+    })
+    expect(calls).toBe(20)
+    expect(maxInFlight).toBe(8)
+    expect(concurrent).toEqual(serial)
+    expect(listLoopFolders(db).find((f) => f.rootPath === hits)!.loops).toEqual(serialLoops)
+  })
+
   it('shares one scan between two callers asking at once', async () => {
     const first = rescanLoopFolder(db, root, 120)
     const second = rescanLoopFolder(db, root, 120)

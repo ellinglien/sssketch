@@ -26,7 +26,14 @@ export interface LoopScanDeps {
   measureDurationSec: (path: string) => number | null
   now: () => number
   yieldToEventLoop: () => Promise<void>
+  /** Each found file's size and mtime (default: fs.promises.stat). */
+  statFile?: (path: string) => Promise<{ size: number; mtimeMs: number }>
 }
+
+/** File stats in flight at once during a rescan (scan plan Task 13 M3):
+ * each is a round trip to the volume, and on his USB/ExFAT drive the serial
+ * loop was most of a rescan's wait. */
+export const LOOP_SCAN_STAT_CONCURRENCY = 8
 
 /** WAV only: main has no reader for any other format (importOneShot.ts
  * says the same). One stat plus a 4 KB read, via the existing helpers. */
@@ -177,6 +184,30 @@ interface StatedFile {
   mtimeMs: number
 }
 
+/** Every file's stat, at most LOOP_SCAN_STAT_CONCURRENCY in flight, in the
+ * walk's order whatever order they finish in. A file that can't be stat'ed
+ * (gone since the walk) is left out, as before. */
+async function statInWalkOrder(
+  files: FoundLoopFile[],
+  statFile: (path: string) => Promise<{ size: number; mtimeMs: number }>
+): Promise<StatedFile[]> {
+  const results: (StatedFile | null)[] = new Array(files.length).fill(null)
+  let next = 0
+  const worker = async (): Promise<void> => {
+    while (next < files.length) {
+      const index = next++
+      const file = files[index]
+      const fileStat = await statFile(file.path).catch(() => null)
+      if (fileStat) {
+        results[index] = { file, size: fileStat.size, mtimeMs: Math.trunc(fileStat.mtimeMs) }
+      }
+    }
+  }
+  const workers = Math.min(LOOP_SCAN_STAT_CONCURRENCY, files.length)
+  await Promise.all(Array.from({ length: workers }, worker))
+  return results.filter((result): result is StatedFile => result !== null)
+}
+
 async function doRescan(
   db: Database.Database,
   rootPath: string,
@@ -195,11 +226,7 @@ async function doRescan(
   // Null when the root itself cannot be read -- the same as not there.
   const files = await walkLoopFolder(rootPath)
   if (files === null) return markUnavailable()
-  const stated: StatedFile[] = []
-  for (const file of files) {
-    const fileStat = await stat(file.path).catch(() => null)
-    if (fileStat) stated.push({ file, size: fileStat.size, mtimeMs: Math.trunc(fileStat.mtimeMs) })
-  }
+  const stated = await statInWalkOrder(files, deps.statFile ?? stat)
 
   // .all(), then the statement is closed before any await below.
   const knownRows = db
