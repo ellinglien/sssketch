@@ -112,3 +112,83 @@ export function intensityThrowDropDue(arc: RadioIntensityArc): boolean {
   if (!arc.begun || arc.decided?.event === 'drop') return false
   return arc.phase === 'breakdown' && arc.done + 1 >= arc.phrases
 }
+
+/** The loop the lap after a wrap's landings plays (the hook exit's and the breakdown echo's
+ * rule): the resolved row lengths with every landed row's known length over its old one, the
+ * longest of them (`fallback` with no rows). Null while a landed row's length is not known yet
+ * (its stem still resolving): the lap is unknown, and nothing is aimed at its end. */
+export function intensityLapAfterLandings(
+  resolved: ReadonlyMap<string, number>,
+  landed: ReadonlyMap<string, number | null>,
+  fallback: number
+): number | null {
+  const lengths = new Map(resolved)
+  for (const [id, bars] of landed) {
+    if (bars === null) return null
+    if (bars > 0) lengths.set(id, bars)
+  }
+  return lengths.size > 0 ? Math.max(...lengths.values()) : fallback
+}
+
+/** What the drop's owed throw does on a tick (the panel's intensityDropThrowTick, once the drop
+ * is still decided and the throws are on):
+ *   - give up once the lap it was owed in has ended -- the drop's top has come (an aim from
+ *     there would end a lap after the drop), whatever it was waiting on;
+ *   - wait while a roll, a turn or a stage is out (`waitingOn`), a landing's length is not known
+ *     (`loopBars` null), or the throw clock has not ticked (`pos` null);
+ *   - else arm, at the throw clock's own position (`pos`, the throws' lastPos, which their
+ *     elapsed bars count to) in the lap the landings make. */
+export function intensityDropThrowStep(o: {
+  owedLap: number
+  lap: number
+  /** What it last waited on, for the give-up's log. */
+  waited: string | null
+  waitingOn: string | null
+  loopBars: number | null
+  pos: number | null
+}):
+  | { act: 'arm'; loopBars: number; pos: number }
+  | { act: 'wait'; on: string }
+  | { act: 'give-up'; why: string } {
+  if (o.lap !== o.owedLap) {
+    return {
+      act: 'give-up',
+      why: `dry (the drop's top came ${o.waited !== null ? `while it waited on ${o.waited}` : 'before it armed'})`
+    }
+  }
+  if (o.waitingOn !== null) return { act: 'wait', on: o.waitingOn }
+  if (o.loopBars === null || !(o.loopBars > 0)) return { act: 'wait', on: "a landing's length" }
+  if (o.pos === null) return { act: 'wait', on: 'the throw clock' }
+  return { act: 'arm', loopBars: o.loopBars, pos: o.pos }
+}
+
+/** Whether the arc may put a new add's row on the panel now (a button's add with nothing held,
+ * the lap-early pick): no add of its own on the way, and no one-lap phrase's next add picked
+ * ahead (that row takes the held slot once picked: another would be a second silent row). */
+export function intensityMayPickAdd(o: { adding: boolean; nextAdd: boolean }): boolean {
+  return !o.adding && !o.nextAdd
+}
+
+/** The arc's rests to sweep (radio's resting rows, owner `arc` only): `gone` leave radio's rests
+ * at once -- rows no longer on the panel, and (`inMix` given) rows already back in the mix;
+ * `back` come back at the next top with their own stem (intensityBringBack) -- on the panel, not
+ * held by the arc (`holds`: none once it is gone), nothing queued on them (a change given up to a
+ * withdrawn hand change leaves a rest with nothing to end it). */
+export function intensityRestSweep(
+  resting: Iterable<readonly [string, string]>,
+  o: {
+    live: ReadonlySet<string>
+    holds: ReadonlySet<string>
+    queued: (rowId: string) => boolean
+    inMix?: (rowId: string) => boolean
+  }
+): { gone: string[]; back: string[] } {
+  const gone: string[] = []
+  const back: string[] = []
+  for (const [id, owner] of resting) {
+    if (owner !== 'arc') continue
+    if (!o.live.has(id) || (o.inMix?.(id) ?? false)) gone.push(id)
+    else if (!o.holds.has(id) && !o.queued(id)) back.push(id)
+  }
+  return { gone, back }
+}

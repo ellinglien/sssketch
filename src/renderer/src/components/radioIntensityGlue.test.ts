@@ -5,9 +5,13 @@ import {
   type RadioIntensityDecided
 } from '@shared/radioIntensityArc'
 import {
+  intensityDropThrowStep,
   intensityFlashRows,
   intensityHeldAddGoes,
+  intensityLapAfterLandings,
+  intensityMayPickAdd,
   intensityNextChange,
+  intensityRestSweep,
   intensityRestsDecided,
   intensityRowsHeld,
   intensityThrowDropDue
@@ -174,5 +178,108 @@ describe('intensityThrowDropDue', () => {
     expect(intensityThrowDropDue(arcWith({ phase: 'build', decided: drop([], [], true) }))).toBe(
       false
     )
+  })
+})
+
+describe('intensityLapAfterLandings', () => {
+  const resolved = new Map([
+    ['a', 4],
+    ['b', 2]
+  ])
+  it('reads a landing that lengthens the loop (4 -> 8)', () => {
+    expect(intensityLapAfterLandings(resolved, new Map([['b', 8]]), 0)).toBe(8)
+  })
+  it('reads a landing that shortens it (8 -> 4)', () => {
+    const long = new Map([
+      ['a', 8],
+      ['b', 2]
+    ])
+    expect(intensityLapAfterLandings(long, new Map([['a', 4]]), 0)).toBe(4)
+  })
+  it('is the resolved loop with nothing landed, the fallback with no rows', () => {
+    expect(intensityLapAfterLandings(resolved, new Map(), 0)).toBe(4)
+    expect(intensityLapAfterLandings(new Map(), new Map(), 16)).toBe(16)
+  })
+  it('is unknown while a landed length is', () => {
+    expect(
+      intensityLapAfterLandings(
+        resolved,
+        new Map<string, number | null>([
+          ['a', 8],
+          ['b', null]
+        ]),
+        0
+      )
+    ).toBeNull()
+  })
+})
+
+describe('intensityDropThrowStep', () => {
+  const o = {
+    owedLap: 3,
+    lap: 3,
+    waited: null,
+    waitingOn: null,
+    loopBars: 8,
+    pos: 0.1
+  }
+  it('arms in the lap the landings make, at the throw clock', () => {
+    expect(intensityDropThrowStep(o)).toEqual({ act: 'arm', loopBars: 8, pos: 0.1 })
+  })
+  it('waits on a roll, a turn or a stage, an unknown length, the throw clock', () => {
+    expect(intensityDropThrowStep({ ...o, waitingOn: 'a stage' })).toEqual({
+      act: 'wait',
+      on: 'a stage'
+    })
+    expect(intensityDropThrowStep({ ...o, loopBars: null }).act).toBe('wait')
+    expect(intensityDropThrowStep({ ...o, loopBars: 0 }).act).toBe('wait')
+    expect(intensityDropThrowStep({ ...o, pos: null }).act).toBe('wait')
+  })
+  it("gives up on the drop's own top, logging what it waited on", () => {
+    // on the top itself the drop is still decided and pos is ~0: it must not arm a lap late
+    const top = intensityDropThrowStep({ ...o, lap: 4, pos: 0.01 })
+    expect(top).toEqual({ act: 'give-up', why: "dry (the drop's top came before it armed)" })
+    expect(
+      intensityDropThrowStep({ ...o, lap: 4, waited: 'a stage', waitingOn: 'a stage' })
+    ).toEqual({ act: 'give-up', why: "dry (the drop's top came while it waited on a stage)" })
+  })
+})
+
+describe('intensityMayPickAdd', () => {
+  it('only with no add on the way and no next add picked ahead', () => {
+    expect(intensityMayPickAdd({ adding: false, nextAdd: false })).toBe(true)
+    expect(intensityMayPickAdd({ adding: true, nextAdd: false })).toBe(false)
+    // a one-lap phrase's next add whose pick is still out: no second silent row
+    expect(intensityMayPickAdd({ adding: false, nextAdd: true })).toBe(false)
+  })
+})
+
+describe('intensityRestSweep', () => {
+  const resting: [string, string][] = [
+    ['a', 'arc'],
+    ['b', 'arc'],
+    ['c', 'arc'],
+    ['d', 'hook'],
+    ['gone', 'arc']
+  ]
+  const live = new Set(['a', 'b', 'c', 'd'])
+  it('under intensity: rows gone leave, rows held or queued stay, the rest come back', () => {
+    expect(
+      intensityRestSweep(resting, {
+        live,
+        holds: new Set(['a']),
+        queued: (id) => id === 'b'
+      })
+    ).toEqual({ gone: ['gone'], back: ['c'] })
+  })
+  it('the arc gone: a rest back in the mix leaves, one with nothing queued comes back', () => {
+    expect(
+      intensityRestSweep(resting, {
+        live,
+        holds: new Set(),
+        queued: (id) => id === 'b',
+        inMix: (id) => id === 'a'
+      })
+    ).toEqual({ gone: ['a', 'gone'], back: ['c'] })
   })
 })

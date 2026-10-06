@@ -318,9 +318,13 @@ import {
 import { radioNextLanding } from '@shared/radioNextLanding'
 import { applyIntensityBand, radioIntensityRankOf } from '@shared/radioIntensity'
 import {
+  intensityDropThrowStep,
   intensityFlashRows,
   intensityHeldAddGoes,
+  intensityLapAfterLandings,
+  intensityMayPickAdd,
   intensityNextChange,
+  intensityRestSweep,
   intensityRestsDecided,
   intensityRowsHeld,
   intensityThrowDropDue
@@ -2765,6 +2769,11 @@ export function DiscoverPanel({
       if (hooksOwed !== null && hooksOwed.landed.get(id) === null) {
         hooksOwed.landed.set(id, stem.barLength)
       }
+      // the drop's owed throw, waiting on that length, can arm at its next tick
+      const dropOwed = intensityDropThrowRef.current
+      if (dropOwed !== null && dropOwed.landed.get(id) === null) {
+        dropOwed.landed.set(id, stem.barLength)
+      }
       const currentlyPreviewing = previewingSlotIdsRef.current
       if (!currentlyPreviewing.has(id)) {
         scheduleSyncPreviewToEngine(joinPreviewingMix(id))
@@ -3042,8 +3051,16 @@ export function DiscoverPanel({
   /** Counts the arc's decisions: a flash is keyed by the one it shows (intensityFlashesNow). */
   const intensityDecidedSeqRef = useRef(0)
   /** The drop's own aimed throw, owed from the decision (intensityDropThrowOwed) until armed or
-   * given up: the decision it is for (intensityDecidedSeqRef). */
-  const intensityDropThrowRef = useRef<number | null>(null)
+   * given up: the decision it is for (intensityDecidedSeqRef), the lap it was owed in (the
+   * readout's radioPlayRef: given up once that lap ends, i.e. on the drop's own top), the rows
+   * landing at the decide wrap (noteTurnaroundLanding; the lap it ends on is the one they make,
+   * as the breakdown echo's and a hook exit's), and what it last waited on (for the log). */
+  const intensityDropThrowRef = useRef<{
+    seq: number
+    lap: number
+    landed: Map<string, number | null>
+    waited: string | null
+  } | null>(null)
   /** With a one-lap phrase, the add after the one just decided (every wrap is a decide wrap, so
    * the lap-early pick has no lap): picked and warmed now, on the panel and silent, and moved into
    * arcAddingRef once the earlier add has landed (intensityAtWrap). */
@@ -3760,6 +3777,8 @@ export function DiscoverPanel({
     intensityThrowOwedRef.current?.landed.set(slotId, barLength)
     // the hook step owed at this wrap aims an exit throw at the lap these landings make
     radioHooksStepOwedRef.current?.landed.set(slotId, barLength)
+    // and so does the drop's own throw, owed from the decide wrap
+    intensityDropThrowRef.current?.landed.set(slotId, barLength)
   }
   /** The row lengths and the loop the owed roll would see: the resolved ones, with every landed
    * row's known length over its old one. */
@@ -5715,7 +5734,9 @@ export function DiscoverPanel({
       resetRadioThrows(true)
       return
     }
-    // the intensity arc's drop throw, owed until it can be armed (a no-op with none owed)
+    // the intensity arc's drop throw, owed until it can be armed (a no-op with none owed): before
+    // the step, so it has the lap first; it arms at the throw clock's last position (lastPos),
+    // the one its elapsed bars count to, which the step below then carries on from
     intensityDropThrowTick()
     const step = stepDiscoverThrows(
       radioThrowRef.current,
@@ -10450,11 +10471,31 @@ export function DiscoverPanel({
       void Promise.resolve().then(() => intensityLeft(was))
     } else if (density !== 'intensity' && radioRestingRef.current.size > 0) {
       // the arc gone: a rest of its that is back in the mix (by hand, or a return that landed
-      // late) is no rest
-      for (const [id, owner] of [...radioRestingRef.current]) {
-        if (owner === 'arc' && previewingSlotIdsRef.current.has(id)) {
-          radioRestingRef.current.delete(id)
-        }
+      // late) is no rest; one with nothing queued to end it (its bring-back lost to a hand change
+      // since withdrawn) comes back at the next top with its own stem, as intensityAtWrap's
+      // "rests for nothing" -- deferred, as everything in the tick that sets state is
+      const sweep = intensityRestSweep([...radioRestingRef.current], {
+        live: new Set(slotsRef.current.map((s) => s.id)),
+        holds: new Set(),
+        queued: (id) => manualChangesRef.current.has(id),
+        inMix: (id) => previewingSlotIdsRef.current.has(id)
+      })
+      for (const id of sweep.gone) radioRestingRef.current.delete(id)
+      if (sweep.back.length > 0) {
+        void Promise.resolve().then(() => {
+          if (!radioOnRef.current || intensityOn()) return
+          for (const id of sweep.back) {
+            if (
+              radioRestingRef.current.get(id) !== 'arc' ||
+              manualChangesRef.current.has(id) ||
+              previewingSlotIdsRef.current.has(id)
+            ) {
+              continue
+            }
+            console.log(`[radio-intensity] ${id} rests for nothing (arc off): back at the next top`)
+            intensityBringBack(id, null)
+          }
+        })
       }
     }
     if (density === 'intensity') {
@@ -10773,7 +10814,11 @@ export function DiscoverPanel({
         (adding?.held !== undefined &&
           adding.warm === true &&
           slotsRef.current.some((s) => s.id === adding.slotId)) ||
-        (adding === null && nextArcKind(bed.map((s) => s.kinds)) !== null),
+        (intensityMayPickAdd({
+          adding: adding !== null,
+          nextAdd: intensityNextAddRef.current !== null
+        }) &&
+          nextArcKind(bed.map((s) => s.kinds)) !== null),
       canStrip: arcExitRef.current === null && arcRemovalCandidate() !== null
     }
   }
@@ -10827,14 +10872,15 @@ export function DiscoverPanel({
     // back (its return given up to a manual change since withdrawn, a release that left it
     // resting): back at the next top with its own stem. Read before the step, so the rows a drop
     // landing at this wrap brings back are still the arc's.
-    const holds = new Set(intensityRowsHeld(arc))
-    for (const [id, owner] of [...radioRestingRef.current]) {
-      if (owner !== 'arc') continue
-      if (!live.has(id)) radioRestingRef.current.delete(id)
-      else if (!holds.has(id) && !manualChangesRef.current.has(id)) {
-        console.log(`[radio-intensity] ${id} rests for nothing: back at the next top`)
-        intensityBringBack(id, null)
-      }
+    const sweep = intensityRestSweep([...radioRestingRef.current], {
+      live,
+      holds: new Set(intensityRowsHeld(arc)),
+      queued: (id) => manualChangesRef.current.has(id)
+    })
+    for (const id of sweep.gone) radioRestingRef.current.delete(id)
+    for (const id of sweep.back) {
+      console.log(`[radio-intensity] ${id} rests for nothing: back at the next top`)
+      intensityBringBack(id, null)
     }
     for (const id of [...intensityJoiningRef.current]) {
       if (!live.has(id) && !(intensityJoinDecidedRef.current === id)) {
@@ -10925,8 +10971,15 @@ export function DiscoverPanel({
         if (kind !== null) intensityPickNextAdd(kind)
       }
     }
-    // a lap early: the add the coming decide wrap will want
-    if (arcAddingRef.current === null && radioWrapBeforeLastLap(lap, phraseLaps)) {
+    // a lap early: the add the coming decide wrap will want -- not while a one-lap phrase's next
+    // add is still picking (it takes the held slot once picked: this would be a second silent row)
+    if (
+      intensityMayPickAdd({
+        adding: arcAddingRef.current !== null,
+        nextAdd: intensityNextAddRef.current !== null
+      }) &&
+      radioWrapBeforeLastLap(lap, phraseLaps)
+    ) {
       const { bed: after } = intensityRowsNow()
       if (radioIntensityAddComing(now, after.length)) {
         const kind = nextArcKind(after.map((s) => s.kinds))
@@ -11007,7 +11060,12 @@ export function DiscoverPanel({
    * and the phrase end's roll, whose gap it reads -- and, while a roll or a turn for the drop's
    * top is still to come, on the ticks after (intensityDropThrowTick), never with a stage out. */
   function intensityDropThrowOwed(): void {
-    intensityDropThrowRef.current = intensityDecidedSeqRef.current
+    intensityDropThrowRef.current = {
+      seq: intensityDecidedSeqRef.current,
+      lap: radioPlayRef.current.lap,
+      landed: new Map(),
+      waited: null
+    }
     void Promise.resolve().then(() => Promise.resolve().then(() => intensityDropThrowTick()))
   }
 
@@ -11015,10 +11073,15 @@ export function DiscoverPanel({
    * drums or bass, never one silenced before it closes), ending on the drop's top or, with a riser
    * gap armed, where the gap starts (discoverThrowAim), its shape drawn here. Waits while the
    * roll or a turn for that top is still to come, or a stage is out (arming pushes, and a push
-   * withdraws a stage); given up once it no longer fits the lap, or with nothing to throw. */
+   * withdraws a stage), or a length landed at the decide wrap is not known yet; given up once its
+   * lap has ended (the drop's own top: it would end a lap late), it no longer fits the lap, or with
+   * nothing to throw (intensityDropThrowStep). The lap is the one the decide wrap's landings make
+   * (intensityLapAfterLandings: resolvedBarLengthsRef learns them only a render later), and the
+   * position the throw clock's own (its lastPos, which its elapsed bars count to: this runs
+   * before radioThrowTick steps it). */
   function intensityDropThrowTick(): void {
-    const seq = intensityDropThrowRef.current
-    if (seq === null) return
+    const owed = intensityDropThrowRef.current
+    if (owed === null) return
     const arc = intensityOn() ? intensityArcRef.current : null
     const giveUp = (why: string | null): void => {
       intensityDropThrowRef.current = null
@@ -11028,7 +11091,7 @@ export function DiscoverPanel({
       !radioOnRef.current ||
       arc === null ||
       arc.decided?.event !== 'drop' ||
-      intensityDecidedSeqRef.current !== seq
+      intensityDecidedSeqRef.current !== owed.seq
     ) {
       giveUp(null)
       return
@@ -11038,16 +11101,34 @@ export function DiscoverPanel({
       giveUp(null)
       return
     }
-    if (
-      radioTurnaroundRollRef.current !== null ||
-      radioTurnPendingRef.current !== null ||
-      radioStageRef.current !== null
-    ) {
+    const step = intensityDropThrowStep({
+      owedLap: owed.lap,
+      lap: radioPlayRef.current.lap,
+      waited: owed.waited,
+      waitingOn:
+        radioTurnaroundRollRef.current !== null
+          ? 'the roll'
+          : radioTurnPendingRef.current !== null
+            ? 'the turn'
+            : radioStageRef.current !== null
+              ? 'a stage'
+              : null,
+      loopBars: intensityLapAfterLandings(
+        resolvedBarLengthsRef.current,
+        owed.landed,
+        turnaroundLoopNow().loopBars
+      ),
+      pos: radioThrowRef.current.lastPos
+    })
+    if (step.act === 'give-up') {
+      giveUp(step.why)
       return
     }
-    const { loopBars } = turnaroundLoopNow()
-    const pos = radioClockRef.current?.lastPos ?? 0
-    if (!(loopBars > 0)) return
+    if (step.act === 'wait') {
+      owed.waited = step.on
+      return
+    }
+    const { loopBars, pos } = step
     const previewing = previewingSlotIdsRef.current
     const aim = discoverThrowAim(
       radioTurnaroundRef.current?.plan,
@@ -11267,11 +11348,15 @@ export function DiscoverPanel({
           id = a.slotId
           queueHeldArcAdd()
           if (arcAddingRef.current?.slotId !== id) id = null
-        } else if (a === null) {
+        } else if (a !== null) id = a.slotId
+        else if (
+          intensityMayPickAdd({ adding: false, nextAdd: intensityNextAddRef.current !== null })
+        ) {
           // a button's add with nothing held: picked now, joining at the first top it is ready
+          // (not while a one-lap phrase's next add is still picking: intensityRoomNow)
           const kind = nextArcKind(intensityRowsNow().bed.map((s) => s.kinds))
           if (kind !== null) id = intensityAddRow(kind, false)
-        } else id = a.slotId
+        }
         intensityJoinDecidedRef.current = id
         console.log(
           `[radio-intensity] ${d.forced === true ? 'build pressed: ' : ''}adds ${id ?? 'nothing (no row to add)'}`
