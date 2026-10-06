@@ -326,6 +326,7 @@ import {
   intensityLapAfterLandings,
   intensityMayPickAdd,
   intensityNextChange,
+  intensityPressNow,
   intensityRestSweep,
   intensityRestsDecided,
   intensityRowsHeld,
@@ -337,7 +338,6 @@ import {
   RADIO_ARC_REST_SHORT,
   RADIO_ARC_REST_WORD,
   newRadioIntensityArc,
-  pressRadioIntensity,
   radioCarryKind,
   radioIntensityAddComing,
   radioIntensityArcRole,
@@ -4729,14 +4729,16 @@ export function DiscoverPanel({
   function refreshRadioArcShown(): void {
     const arc = radioOnRef.current && intensityOn() ? intensityArcRef.current : null
     let next: RadioArcShown | null = null
-    if (arc !== null) {
-      const { lengths, loopBars } = turnaroundLoopNow()
+    const { lengths, loopBars } =
+      arc !== null ? turnaroundLoopNow() : { lengths: null, loopBars: 0 }
+    // No landing's length yet: intensityPress bails too, so nothing can act (and the phrase is
+    // never asked of a 0-bar loop).
+    if (arc !== null && lengths !== null && loopBars > 0) {
       next = intensityArcShown(arc, {
         lap: radioClockRef.current?.turnaroundLap ?? 0,
         phraseLaps: turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars),
         room: intensityRoomNow(),
-        quickDropCanSound:
-          loopBars > 0 && turnaroundMoveCanSound(turnaroundInputNow(lengths, loopBars), 'low drop')
+        quickDropCanSound: turnaroundMoveCanSound(turnaroundInputNow(lengths, loopBars), 'low drop')
       })
     }
     setRadioArcShown((prev) => (sameArcShown(prev, next) ? prev : next))
@@ -8287,16 +8289,22 @@ export function DiscoverPanel({
                   )
                 ])
               ].flatMap((rowId) => {
+                const role = radioRoleNow(rowId, true)
                 if (radioRestingRef.current.get(rowId) === 'arc') {
-                  const dig = radioDigRef.current === rowId
+                  // the words are the rest's; a hook the row holds stays its own, so the
+                  // phone's action sheet still offers its release
                   return [
                     [
                       rowId,
-                      { hook: null, dig, hookBarsAway: null, words: RADIO_ARC_REST_SHORT }
+                      {
+                        hook: role?.hook ?? null,
+                        dig: role?.dig ?? radioDigRef.current === rowId,
+                        hookBarsAway: role?.barsToReturn ?? null,
+                        words: RADIO_ARC_REST_SHORT
+                      }
                     ] as const
                   ]
                 }
-                const role = radioRoleNow(rowId, true)
                 return role === null
                   ? []
                   : [
@@ -11653,10 +11661,11 @@ export function DiscoverPanel({
 
   /** BUILD and DROP (spec 6), pressed: the strip's and the phone's (Task 11, through
    * intensityPressRef). Nothing unless radio runs the intensity arc, it has begun, and the press
-   * does something (pressRadioIntensity). `late` is the turn's own rule (too late in the lap to
-   * arm): the press then takes the top after, as one whose top is spoken for does. A press that
-   * decides a new event carries it out at once (intensityDecided): a drop arms its turn there. A
-   * quick drop needs a row to keep sounding under its low drop. */
+   * does something (intensityPressNow: a late press whose event would do nothing is refused, as an
+   * early one is, so a press acts exactly when its button says it can). `late` is the turn's own
+   * rule (too late in the lap to arm): the press then takes the top after, as one whose top is
+   * spoken for does. A press that decides a new event carries it out at once (intensityDecided):
+   * a drop arms its turn there. A quick drop needs a row to keep sounding under its low drop. */
   function intensityPress(action: RadioIntensityAction): void {
     const arc = intensityOn() ? intensityArcRef.current : null
     if (!radioOnRef.current || arc === null) return
@@ -11673,7 +11682,7 @@ export function DiscoverPanel({
       console.log('[radio-intensity] drop pressed: not now (nothing to drop)')
       return
     }
-    const next = pressRadioIntensity(arc, action, {
+    const next = intensityPressNow(arc, action, {
       lap: clock?.turnaroundLap ?? 0,
       phraseLaps: turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars),
       late: turnaroundTurnBeats((loopBars - pos) * 4, TURN_LEAD_BEATS) === null,

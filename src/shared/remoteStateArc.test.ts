@@ -74,4 +74,24 @@ describe('the arc on the phone', () => {
     ])
     expect('role' in remoteStateFromSlots([slot], { ...META, roles: none }).slots[0]).toBe(false)
   })
+
+  it('a hooked row the arc rests keeps its hook beside `rests`, so the phone offers release', () => {
+    const slot: CoachSlotSnapshot = {
+      id: 'a',
+      kinds: ['drums'],
+      stem: null,
+      gain: 1,
+      audible: false,
+      rolling: false
+    }
+    const roles = new Map<string, RemoteSlotRole>([
+      ['a', { hook: 'away', dig: true, hookBarsAway: 8, words: RADIO_ARC_REST_SHORT }]
+    ])
+    expect(remoteStateFromSlots([slot], { ...META, roles }).slots[0].role).toEqual({
+      hook: 'away',
+      dig: true,
+      hookBarsAway: 8,
+      words: 'rests'
+    })
+  })
 })

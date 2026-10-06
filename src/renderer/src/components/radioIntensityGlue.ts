@@ -15,6 +15,7 @@ import {
   RADIO_DROPPING_WORD,
   pressRadioIntensity,
   radioIntensityButtonLabel,
+  type RadioIntensityAction,
   type RadioIntensityArc,
   type RadioIntensityPhase,
   type RadioIntensityRoom
@@ -201,11 +202,28 @@ export function intensityRestSweep(
   return { gone, back }
 }
 
+/** A press of build or drop as intensityPress makes it (pressRadioIntensity, `late` the turn's
+ * too-late-to-arm): null when it would do nothing. Late, pressRadioIntensity stores any press for
+ * the top after, even one whose event would do nothing there (a build with no room); this asks
+ * the press as if early first, so a late press is refused, or only halves the build, exactly when
+ * an early one would. Only a press that would decide an event now waits for the top after. The
+ * strip and the phone grey their buttons from the early answer (intensityArcShown), so a press
+ * acts exactly when its button says it can (review of 6b57ace0). */
+export function intensityPressNow(
+  arc: RadioIntensityArc,
+  action: RadioIntensityAction,
+  where: { lap: number; phraseLaps: number; late: boolean; can: RadioIntensityRoom }
+): RadioIntensityArc | null {
+  const early = pressRadioIntensity(arc, action, { ...where, late: false })
+  if (early === null || !where.late || early.decided === arc.decided) return early
+  return pressRadioIntensity(arc, action, where)
+}
+
 /** What the strip's `build` and `drop` buttons show (radioArcShown; spec 6): the phase, each
  * button's label (`building` / `dropping` while its press waits for the top), and whether a press
  * would act now -- what intensityPress does with it, asked of the machine itself
- * (pressRadioIntensity with the rows now, `room`; the lap's late stretch only moves a press to the
- * top after, so it is not asked). Neither acts before the machine has begun; `drop` outside a
+ * (intensityPressNow with the rows now, `room`; the lap's late stretch only moves a press to the
+ * top after, never makes one act, so it is not asked). Neither acts before the machine has begun; `drop` outside a
  * breakdown, with no drop decided, is the quick drop, which needs the planner's `low drop` to
  * sound (`quickDropCanSound`, the check intensityPress makes). */
 export interface RadioArcShown {
@@ -226,11 +244,9 @@ export function intensityArcShown(
     phase: arc.phase,
     build: radioIntensityButtonLabel('build', arc),
     drop: radioIntensityButtonLabel('drop', arc),
-    canBuild: arc.begun && pressRadioIntensity(arc, 'build', where) !== null,
+    canBuild: arc.begun && intensityPressNow(arc, 'build', where) !== null,
     canDrop:
-      arc.begun &&
-      (!quick || o.quickDropCanSound) &&
-      pressRadioIntensity(arc, 'drop', where) !== null
+      arc.begun && (!quick || o.quickDropCanSound) && intensityPressNow(arc, 'drop', where) !== null
   }
 }
 

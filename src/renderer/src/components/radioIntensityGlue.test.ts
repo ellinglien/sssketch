@@ -13,6 +13,7 @@ import {
   intensityLapAfterLandings,
   intensityMayPickAdd,
   intensityNextChange,
+  intensityPressNow,
   intensityRestSweep,
   intensityRestsDecided,
   intensityRowsHeld,
@@ -328,6 +329,68 @@ describe('intensityArcShown', () => {
     const shown = intensityArcShown(dropping, { ...at, quickDropCanSound: false })
     expect(shown.canDrop).toBe(true)
     expect(intensityArcShown(arcWith({ forced: 'drop' }), at).drop).toBe('dropping')
+  })
+})
+
+describe('intensityPressNow', () => {
+  const room = { count: 3, max: 6, canAdd: true, canStrip: true }
+  const at = { lap: 0, phraseLaps: 2, can: room }
+  const noRoom = { ...room, canAdd: false }
+
+  it('refuses late what it refuses early: a build with no room and nothing to halve', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 3, phrases: 1, done: 0 })
+    for (const late of [false, true]) {
+      expect(intensityPressNow(arc, 'build', { ...at, late, can: noRoom }), String(late)).toBe(null)
+    }
+  })
+
+  it('late, a press whose event would do nothing only halves, as it would early (no forced)', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 3, phrases: 4, done: 0 })
+    const early = intensityPressNow(arc, 'build', { ...at, late: false, can: noRoom })
+    const late = intensityPressNow(arc, 'build', { ...at, late: true, can: noRoom })
+    expect(late).toEqual(early)
+    expect(late).toMatchObject({ phrases: 2, forced: null, decided: null })
+  })
+
+  it('late, a press with an event to land still waits for the top after', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 5 })
+    expect(intensityPressNow(arc, 'build', { ...at, late: true })).toMatchObject({
+      forced: 'build',
+      decided: null
+    })
+    expect(intensityPressNow(arc, 'build', { ...at, late: false })?.decided).toMatchObject({
+      event: 'add'
+    })
+    expect(intensityPressNow(arc, 'drop', { ...at, late: true })).toMatchObject({
+      forced: 'drop',
+      decided: null
+    })
+  })
+
+  it('agrees with what the buttons show, late or not', () => {
+    const arcs = [
+      arcWith({ phase: 'build', peakRows: 3, phrases: 1, done: 0 }),
+      arcWith({ phase: 'build', peakRows: 5 }),
+      arcWith({ phase: 'breakdown', rests: ['d'] }),
+      arcWith({ phase: 'drop' }),
+      newRadioIntensityArc()
+    ]
+    for (const arc of arcs) {
+      for (const can of [room, noRoom]) {
+        const shown = intensityArcShown(arc, {
+          lap: 0,
+          phraseLaps: 2,
+          room: can,
+          quickDropCanSound: true
+        })
+        for (const late of [false, true]) {
+          expect(intensityPressNow(arc, 'build', { ...at, late, can }) !== null).toBe(
+            shown.canBuild
+          )
+          expect(intensityPressNow(arc, 'drop', { ...at, late, can }) !== null).toBe(shown.canDrop)
+        }
+      }
+    }
   })
 })
 
