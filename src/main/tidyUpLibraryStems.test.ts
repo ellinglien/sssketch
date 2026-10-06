@@ -4,6 +4,7 @@ import Database from 'better-sqlite3'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
+import type { FolderListing } from './tidyUpLibraryStems'
 
 const fsSpies = vi.hoisted(() => ({ readdirSync: vi.fn() }))
 // discoverLibraryStems.ts imports readdirSync from 'fs' (the same builtin):
@@ -92,7 +93,8 @@ function autoClassify(db: Database.Database, stemCID: string, role: string): voi
   ).run(stemCID, role)
 }
 
-const allExist = (): boolean => true
+/** A folder listing that holds every name asked about. */
+const allExist = async (): Promise<FolderListing> => ({ has: () => true })
 
 describe('listTidyUpLibraryStems', () => {
   it('puts UNCONFIRMED stems before confirmed ones', async () => {
@@ -131,8 +133,38 @@ describe('listTidyUpLibraryStems', () => {
     const db = freshDb()
     seedStem(db, 'here')
     seedStem(db, 'gone')
-    const out = await listTidyUpLibraryStems(db, [], 10, (path) => path.endsWith('here'))
+    const out = await listTidyUpLibraryStems(db, [], 10, async () => ({
+      has: (name) => name.endsWith('here')
+    }))
     expect(out.map((s) => s.stemCID)).toEqual(['here'])
+  })
+
+  // Review of plan b21ea5a2 Task 13 M4: one existence promise per stem was
+  // 45k-140k promises at once. The folders are listed first (one each), and
+  // every stem is then answered synchronously from its folder's listing.
+  it('lists each folder once, then answers every stem from the listings', async () => {
+    const { listTidyUpLibraryStems } = await import('./tidyUpLibraryStems')
+    const db = freshDb()
+    for (const cid of ['a1', 'a2', 'a3', 'b1', 'b2']) seedStem(db, cid) // shards a and b
+    const listed: string[] = []
+    const out = await listTidyUpLibraryStems(db, [], 10, async (dir) => {
+      listed.push(dir)
+      return { has: (name) => name !== 'a2' }
+    })
+    expect(listed).toHaveLength(2)
+    expect(new Set(listed).size).toBe(2)
+    expect(out.map((s) => s.stemCID).sort()).toEqual(['a1', 'a3', 'b1', 'b2'])
+  })
+
+  it('a folder that cannot be listed holds nothing', async () => {
+    const { listTidyUpLibraryStems } = await import('./tidyUpLibraryStems')
+    const db = freshDb()
+    seedStem(db, 'a1')
+    seedStem(db, 'b1')
+    const out = await listTidyUpLibraryStems(db, [], 10, async (dir) =>
+      dir.endsWith('/a') ? null : { has: () => true }
+    )
+    expect(out.map((s) => s.stemCID)).toEqual(['b1'])
   })
 
   // Scan plan Task 13 M4 (audit minor): the default check lists each folder
