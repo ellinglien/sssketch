@@ -6,6 +6,8 @@ import { candidateDbsForRiff } from './riffLibraryStore'
 import { getInstrumentMaskLookup } from './discoverCandidates'
 import { setAutoClassifyWakeListener } from './stemAutoClassifyWake'
 import { countWork } from './workCounters'
+import { getStemPriority } from './stemPriority'
+import type { StemPrioritySets } from '@shared/stemPriorityOrder'
 
 // Delay between batches while there's known work waiting -- keeps this
 // from ever monopolizing the main process for long, same "batch, then
@@ -120,10 +122,19 @@ async function runOnce(): Promise<void> {
     // rows prewarm already holds in memory, instead of an IN query on the
     // USB volume per batch (background scan audit item 2b); SQL whenever
     // those rows aren't exactly current.
+    // Own stems first, then favourites (stemPriority.ts): the sets for the
+    // username the renderer last reported (none yet: favourites only). After
+    // the first build, an ask is a watermark seek per db plus the stars.
+    let priority: StemPrioritySets | undefined
+    try {
+      priority = await getStemPriority()
+    } catch (err) {
+      console.error('stemAutoClassifyScheduler: stem priority failed:', err)
+    }
     const { remaining } = await classifyAutoCategoryBatch(
       openOwnRiffLibraryDb(),
       candidateDbsForRiff(),
-      { instrumentLookup: getInstrumentMaskLookup }
+      { instrumentLookup: getInstrumentMaskLookup, priority }
     )
     setStatus({ active: remaining > 0, remaining })
     if (remaining > 0 || wokeWhileRunning) scheduleNext(BUSY_DELAY_MS)

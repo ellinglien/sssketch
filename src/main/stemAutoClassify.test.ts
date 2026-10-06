@@ -975,3 +975,93 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
     expect(allClassifiedStemCIDs(db).has(leftover)).toBe(false)
   })
 })
+
+describe('classifyAutoCategoryBatch (own stems first, 2026-10-06)', () => {
+  function classified(db: Database.Database): string[] {
+    return [...allClassifiedStemCIDs(db)].filter((cid) => !cid.startsWith('train-'))
+  }
+
+  function seedGroup(db: Database.Database, prefix: string, n: number): string[] {
+    const ids = Array.from({ length: n }, (_, i) => `${prefix}-${i}`)
+    for (const id of ids) seedEmbedding(db, id, [0.9, 0.1, 0])
+    return ids
+  }
+
+  it('takes own stems first, then favourites, then the rest', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    seedGroup(db, 'rest', 300)
+    const own = seedGroup(db, 'own', 150)
+    const favs = seedGroup(db, 'fav', 100)
+    const priority = { own: new Set(own), favourites: new Set(favs) }
+
+    await classifyAutoCategoryBatch(db, [db], { priority })
+    const first = classified(db)
+    expect(first.filter((c) => c.startsWith('own-'))).toHaveLength(150)
+    expect(first.filter((c) => c.startsWith('fav-'))).toHaveLength(50)
+    expect(first.filter((c) => c.startsWith('rest-'))).toHaveLength(0)
+
+    await classifyAutoCategoryBatch(db, [db], { priority })
+    const second = classified(db)
+    expect(second.filter((c) => c.startsWith('fav-'))).toHaveLength(100)
+    expect(second.filter((c) => c.startsWith('rest-'))).toHaveLength(150)
+  })
+
+  it('applies to the feature pass too', async () => {
+    const db = freshDb()
+    // untrained embedding axis: feature-only stems go to the centroid pass
+    let store = emptyCategoryCentroidStore()
+    const zeros = new Array(13).fill(0)
+    for (let i = 0; i < 3; i++) {
+      store = recordConfirmedCategory(store, 'arrangeRole', 'drums', [1, 0, 0, 0, 0, 0, ...zeros])
+      store = recordConfirmedCategory(store, 'arrangeRole', 'bass', [0, 1, 0, 0, 0, 0, ...zeros])
+    }
+    vi.spyOn(categoryCentroidStore, 'loadCategoryCentroidStore').mockReturnValue(store)
+    const ids = (prefix: string, n: number): string[] =>
+      Array.from({ length: n }, (_, i) => `${prefix}-${i}`)
+    for (const id of [...ids('rest', 250), ...ids('own', 120)])
+      seedFeatures(db, id, { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+    const priority = { own: new Set(ids('own', 120)), favourites: new Set<string>() }
+    await classifyAutoCategoryBatch(db, [db], { priority })
+    const first = classified(db)
+    expect(first.filter((c) => c.startsWith('own-'))).toHaveLength(120)
+    expect(first.filter((c) => c.startsWith('rest-'))).toHaveLength(80)
+  })
+
+  it('a stem noted mid-pass joins its own group', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    seedGroup(db, 'rest', 500)
+    const own = seedGroup(db, 'own', 150)
+    const priority = { own: new Set([...own, 'own-late']), favourites: new Set<string>() }
+    await classifyAutoCategoryBatch(db, [db], { priority })
+    // the store resolves a path to a StemCID through a Stems row
+    seedInstrument(db, 'own-late', AUDIO_IN_BIT)
+    seedInstrument(db, 'rest-late', AUDIO_IN_BIT)
+    setStemEmbeddingCache(db, '/x/own-late', [0.9, 0.1, 0], 1000)
+    // and a rest stem noted at the same time stays behind the own one
+    setStemEmbeddingCache(db, '/x/rest-late', [0.9, 0.1, 0], 1000)
+    await classifyAutoCategoryBatch(db, [db], { priority })
+    expect(allClassifiedStemCIDs(db).has('own-late')).toBe(true)
+  })
+
+  it('a priority arriving after the list was built reorders it, without a rebuild', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    seedGroup(db, 'rest', 600)
+    const own = seedGroup(db, 'own', 100)
+    const spy = vi.spyOn(db, 'prepare')
+    const builds = (): number =>
+      spy.mock.calls.filter(([sql]) => String(sql).includes('ORDER BY t.StemCID')).length
+
+    await classifyAutoCategoryBatch(db) // no priority yet (no username reported)
+    const before = classified(db).filter((c) => c.startsWith('own-')).length
+    const buildsBefore = builds()
+    await classifyAutoCategoryBatch(db, [db], {
+      priority: { own: new Set(own), favourites: new Set<string>() }
+    })
+    expect(classified(db).filter((c) => c.startsWith('own-'))).toHaveLength(100)
+    expect(before).toBeLessThan(100)
+    expect(builds()).toBe(buildsBefore)
+  })
+})

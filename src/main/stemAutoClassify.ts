@@ -11,6 +11,14 @@ import { upsertStemAutoCategory } from './stemAutoCategoryStore'
 import { countWork } from './workCounters'
 import { readTableSignal } from './tableChangeSignal'
 import {
+  STEM_PRIORITY_FAVOURITE,
+  STEM_PRIORITY_OWN,
+  STEM_PRIORITY_REST,
+  orderByStemPriority,
+  stemPriorityRank,
+  type StemPrioritySets
+} from '@shared/stemPriorityOrder'
+import {
   drainAutoClassifyInputRows,
   getAutoClassifyTrainingGeneration
 } from './stemAutoClassifyWake'
@@ -193,6 +201,9 @@ export type InstrumentLookupFor = (
 
 export interface ClassifyBatchOptions {
   instrumentLookup?: InstrumentLookupFor
+  /** Own stems, then favourites, first (stemPriority.ts; 2026-10-06). The
+   * pending lists keep their random order within each group. */
+  priority?: StemPrioritySets
 }
 
 interface EmbeddingCandidateRow {
@@ -278,34 +289,70 @@ function shuffleInPlace(ids: string[]): void {
 }
 
 /** One pass's pending ids: shuffled, consumed from the end. `members`
- * mirrors `ids` so a noted row already waiting isn't queued twice. */
+ * mirrors `ids` so a noted row already waiting isn't queued twice.
+ *
+ * With a priority (own stems first, 2026-10-06) the ids are laid out
+ * [rest | favourites | own], each segment shuffled, so the end -- taken
+ * first -- is own stems; `counts` holds each rank's segment length
+ * (indexed by StemPriorityRank). Without one, everything is one segment:
+ * the plain shuffle as before. */
 interface PendingList {
   ids: string[]
   members: Set<string>
+  counts: [number, number, number]
 }
 
-function pendingListOf(ids: string[]): PendingList {
+const NO_PRIORITY: StemPrioritySets = { own: new Set(), favourites: new Set() }
+
+/** The ids laid out by rank, [rest | favourites | own], each group keeping
+ * the order it had. */
+function layOut(ids: string[], priority: StemPrioritySets): PendingList {
+  // orderByStemPriority gives [own | favourites | rest]: reversed, the end
+  // (taken first) is own. Reversing a shuffled group leaves it shuffled.
+  const ordered = orderByStemPriority(ids, (id) => id, priority).reverse()
+  const counts: [number, number, number] = [0, 0, 0]
+  for (const id of ordered) counts[stemPriorityRank(priority, id)] += 1
+  return { ids: ordered, members: new Set(ordered), counts }
+}
+
+function pendingListOf(ids: string[], priority: StemPrioritySets): PendingList {
   shuffleInPlace(ids)
-  return { ids, members: new Set(ids) }
+  return layOut(ids, priority)
 }
 
-/** Adds `stemCID` at a uniformly random position among the ids still
- * waiting -- keeps the list a random order, same as a fresh shuffle. */
-function addPending(list: PendingList, stemCID: string): void {
+/** Adds `stemCID` at a uniformly random position within its rank's segment
+ * -- keeps each segment a random order, same as a fresh shuffle. */
+function addPending(list: PendingList, stemCID: string, priority: StemPrioritySets): void {
   if (list.members.has(stemCID)) return
   list.members.add(stemCID)
-  list.ids.push(stemCID)
-  const j = Math.floor(Math.random() * list.ids.length)
-  const last = list.ids.length - 1
-  const tmp = list.ids[last]
-  list.ids[last] = list.ids[j]
-  list.ids[j] = tmp
+  const rank = stemPriorityRank(priority, stemCID)
+  const [own, favourites, rest] = list.counts
+  const start =
+    rank === STEM_PRIORITY_REST ? 0 : rank === STEM_PRIORITY_FAVOURITE ? rest : rest + favourites
+  const length =
+    rank === STEM_PRIORITY_REST ? rest : rank === STEM_PRIORITY_FAVOURITE ? favourites : own
+  list.ids.splice(start + Math.floor(Math.random() * (length + 1)), 0, stemCID)
+  list.counts[rank] += 1
 }
 
 function takePending(list: PendingList, n: number): string[] {
   const taken = list.ids.splice(Math.max(0, list.ids.length - n))
   for (const id of taken) list.members.delete(id)
+  // taken from the end: own first, then favourites, then the rest
+  let left = taken.length
+  for (const rank of [STEM_PRIORITY_OWN, STEM_PRIORITY_FAVOURITE, STEM_PRIORITY_REST] as const) {
+    const fromRank = Math.min(left, list.counts[rank])
+    list.counts[rank] -= fromRank
+    left -= fromRank
+  }
   return taken
+}
+
+/** Which priority a list was laid out for: the sets are rebuilt on every
+ * ask, so compared by username and sizes, not identity. */
+function priorityKeyOf(priority: StemPrioritySets): string {
+  const username = (priority as { username?: string | null }).username ?? ''
+  return `${username}|${priority.own.size}|${priority.favourites.size}`
 }
 
 /** Background efficiency B4: the classifier's own pending lists, built once
@@ -322,6 +369,8 @@ function takePending(list: PendingList, n: number): string[] {
 interface PendingState {
   fingerprint: string
   trainingGeneration: number
+  /** priorityKeyOf the priority the lists are laid out for. */
+  priorityKey: string
   embedding: PendingList
   feature: PendingList
 }
@@ -422,7 +471,8 @@ function withoutAttempted(ids: string[], attempted: Set<string>, noted: string[]
 async function getPendingState(
   ownDb: Database.Database,
   prepared: PreparedConfirmed,
-  attempted: AttemptedState
+  attempted: AttemptedState,
+  priority: StemPrioritySets
 ): Promise<PendingState> {
   const state = pendingByDb.get(ownDb)
   const added = drainAutoClassifyInputRows(ownDb)
@@ -439,8 +489,17 @@ async function getPendingState(
     state.fingerprint === prepared.fingerprint &&
     state.trainingGeneration === generation
   ) {
-    for (const id of added.embedding) addPending(state.embedding, id)
-    for (const id of added.feature) addPending(state.feature, id)
+    // A new priority (the username reported after the lists were built, a
+    // new star): lay the lists out again, no rebuild.
+    const priorityKey = priorityKeyOf(priority)
+    if (state.priorityKey !== priorityKey) {
+      countWork('auto-classify:priority-relayout')
+      state.embedding = layOut(state.embedding.ids, priority)
+      state.feature = layOut(state.feature.ids, priority)
+      state.priorityKey = priorityKey
+    }
+    for (const id of added.embedding) addPending(state.embedding, id, priority)
+    for (const id of added.feature) addPending(state.feature, id, priority)
     return state
   }
   countWork('auto-classify:rebuild')
@@ -453,8 +512,12 @@ async function getPendingState(
   const rebuilt: PendingState = {
     fingerprint: prepared.fingerprint,
     trainingGeneration: generation,
-    embedding: pendingListOf(withoutAttempted(embedding, attempted.embedding, added.embedding)),
-    feature: pendingListOf(withoutAttempted(feature, attempted.feature, added.feature))
+    priorityKey: priorityKeyOf(priority),
+    embedding: pendingListOf(
+      withoutAttempted(embedding, attempted.embedding, added.embedding),
+      priority
+    ),
+    feature: pendingListOf(withoutAttempted(feature, attempted.feature, added.feature), priority)
   }
   pendingByDb.set(ownDb, rebuilt)
   return rebuilt
@@ -553,7 +616,10 @@ export interface ClassifyBatchResult {
  * unclassifiable stems forever once they out-number BATCH_SIZE, starving
  * every classifiable stem elsewhere in a real multi-thousand-stem table.
  * The list is consumed through to the end before it's rebuilt, so every
- * eligible stem gets its turn.
+ * eligible stem gets its turn. With `options.priority` (2026-10-06) the
+ * shuffle is per group -- own stems are taken first, then favourites, then
+ * the rest (PendingList) -- and a new priority lays the lists out again
+ * without a rebuild.
  *
  * Eligibility is decided IN SQL (NOT EXISTS) both when the pending list is
  * built (ids only, keyset pages with yields -- background efficiency B4:
@@ -611,7 +677,7 @@ export async function classifyAutoCategoryBatch(
     ownDb,
     trainingKey(prepared, getAutoClassifyTrainingGeneration(), stemDbs)
   )
-  const pending = await getPendingState(ownDb, prepared, attempted)
+  const pending = await getPendingState(ownDb, prepared, attempted, options.priority ?? NO_PRIORITY)
 
   // --- Embedding pass (preferred) ---
   if (pending.embedding.ids.length > 0) {

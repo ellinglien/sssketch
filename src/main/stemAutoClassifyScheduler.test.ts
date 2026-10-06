@@ -10,12 +10,15 @@ const loadDiscoverSettings = vi.fn()
 const openOwnRiffLibraryDb = vi.fn(() => ({}) as never)
 const candidateDbsForRiff = vi.fn(() => [] as never[])
 const getInstrumentMaskLookup = vi.fn(() => null)
+const PRIORITY = { username: 'me', own: new Set(['o1']), favourites: new Set(['f1']) }
+const getStemPriority = vi.fn(async () => PRIORITY)
 
 vi.mock('./stemAutoClassify', () => ({ classifyAutoCategoryBatch }))
 vi.mock('./riffLibrarySchema', () => ({ openOwnRiffLibraryDb }))
 vi.mock('./discoverSettingsStore', () => ({ loadDiscoverSettings }))
 vi.mock('./riffLibraryStore', () => ({ candidateDbsForRiff }))
 vi.mock('./discoverCandidates', () => ({ getInstrumentMaskLookup }))
+vi.mock('./stemPriority', () => ({ getStemPriority }))
 
 // vi.resetModules() before each test, then a fresh dynamic import --
 // startStemAutoClassifyScheduler's own idempotency guard (`started`) is
@@ -67,7 +70,27 @@ describe('startStemAutoClassifyScheduler', () => {
     startStemAutoClassifyScheduler()
     await vi.advanceTimersByTimeAsync(3000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledWith(expect.anything(), [], {
-      instrumentLookup: getInstrumentMaskLookup
+      instrumentLookup: getInstrumentMaskLookup,
+      priority: PRIORITY
+    })
+  })
+
+  it('passes the stem priority (own stems first); a failed ask classifies in plain order', async () => {
+    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
+    classifyAutoCategoryBatch.mockResolvedValue({ processed: 0, remaining: 1 })
+    getStemPriority.mockRejectedValueOnce(new Error('archive gone'))
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
+    startStemAutoClassifyScheduler()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(classifyAutoCategoryBatch).toHaveBeenLastCalledWith(expect.anything(), [], {
+      instrumentLookup: getInstrumentMaskLookup,
+      priority: undefined
+    })
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(classifyAutoCategoryBatch).toHaveBeenLastCalledWith(expect.anything(), [], {
+      instrumentLookup: getInstrumentMaskLookup,
+      priority: PRIORITY
     })
   })
 
