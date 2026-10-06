@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   INTENSITY_PHRASES,
+  INTENSITY_RELEAN_TOLERANCE,
   NO_RADIO_INTENSITY_ARC,
   intensityArcShown,
   intensityPressNow,
@@ -20,6 +21,8 @@ import {
   radioIntensityStopped,
   radioIntensityAhead,
   radioIntensityLandingTarget,
+  radioIntensityReleanNow,
+  radioIntensityReleanSwap,
   radioIntensityTarget,
   radioIntensityTargetAhead,
   radioIntensityTargets,
@@ -1306,6 +1309,90 @@ describe('radioIntensityTargetAhead: the target where a change lands (option A, 
     }
     expect(JSON.stringify(arc)).toBe(before)
     expect(draws).toBe(0)
+  })
+})
+
+// ---- option A's re-arm, as both radios ask it (review of 37bf711b, 84f54546, web d056c84) ----
+
+describe("radioIntensityReleanNow: radio's pick armed again only while that is safe", () => {
+  // a 4-bar loop, the change two tops off (7 bars from bar 1), its target moved well past the
+  // tolerance
+  const ok = {
+    armed: 0.38,
+    target: 0.86,
+    decided: false,
+    held: false,
+    armInFlight: false,
+    payoffPull: false,
+    turnaroundPending: false,
+    untilBars: 7,
+    loopBars: 4
+  }
+
+  it('re-arms a pick whose landing target moved past the tolerance, more than a lap ahead', () => {
+    expect(radioIntensityReleanNow(ok)).toBe(true)
+    // either way: a move down is a move
+    expect(radioIntensityReleanNow({ ...ok, armed: 0.86, target: 0.14 })).toBe(true)
+  })
+
+  it('never within the tolerance, nor with the target unknown', () => {
+    expect(radioIntensityReleanNow({ ...ok, target: ok.armed + INTENSITY_RELEAN_TOLERANCE })).toBe(
+      false
+    )
+    expect(
+      radioIntensityReleanNow({ ...ok, target: ok.armed + INTENSITY_RELEAN_TOLERANCE + 0.001 })
+    ).toBe(true)
+    expect(radioIntensityReleanNow({ ...ok, target: null })).toBe(false)
+  })
+
+  it('never with the change decided, radio held, an arm in flight or a payoff pulling the pick', () => {
+    expect(radioIntensityReleanNow({ ...ok, decided: true })).toBe(false)
+    expect(radioIntensityReleanNow({ ...ok, held: true })).toBe(false)
+    expect(radioIntensityReleanNow({ ...ok, armInFlight: true })).toBe(false)
+    expect(radioIntensityReleanNow({ ...ok, payoffPull: true })).toBe(false)
+  })
+
+  it("never on the arc's decision wrap, while its turnaround is still to be planned: the forecast and the payoff read radio's pick as it is", () => {
+    expect(radioIntensityReleanNow({ ...ok, turnaroundPending: true })).toBe(false)
+  })
+
+  it('never within one lap of its landing (the replacement would have less than a lap to warm)', () => {
+    // at the wrap, the change on the next top: exactly a lap off
+    expect(radioIntensityReleanNow({ ...ok, untilBars: 4 })).toBe(false)
+    expect(radioIntensityReleanNow({ ...ok, untilBars: 1.5 })).toBe(false)
+    expect(radioIntensityReleanNow({ ...ok, untilBars: 4.25 })).toBe(true)
+    expect(radioIntensityReleanNow({ ...ok, untilBars: null })).toBe(false)
+    expect(radioIntensityReleanNow({ ...ok, loopBars: 0 })).toBe(false)
+  })
+})
+
+describe('radioIntensityReleanSwap: the warm replacement goes in only while it can', () => {
+  const ok = {
+    decided: false,
+    held: false,
+    payoffPull: false,
+    turnaroundPending: false,
+    untilBars: 7,
+    loopBars: 4
+  }
+
+  it('swaps a warm replacement in with the change still more than a lap off', () => {
+    expect(radioIntensityReleanSwap(ok)).toBe('swap')
+  })
+
+  it('drops it (the old pick lands) once the change is decided, pulled for a payoff, or within a lap', () => {
+    expect(radioIntensityReleanSwap({ ...ok, decided: true })).toBe('drop')
+    expect(radioIntensityReleanSwap({ ...ok, payoffPull: true })).toBe('drop')
+    expect(radioIntensityReleanSwap({ ...ok, untilBars: 4 })).toBe('drop')
+    expect(radioIntensityReleanSwap({ ...ok, untilBars: 0.5 })).toBe('drop')
+  })
+
+  it('waits while held, while a turnaround is still to be planned, or with the landing unknown', () => {
+    expect(radioIntensityReleanSwap({ ...ok, held: true })).toBe('wait')
+    expect(radioIntensityReleanSwap({ ...ok, turnaroundPending: true })).toBe('wait')
+    expect(radioIntensityReleanSwap({ ...ok, untilBars: null })).toBe('wait')
+    // a decided change wins over a wait
+    expect(radioIntensityReleanSwap({ ...ok, turnaroundPending: true, decided: true })).toBe('drop')
   })
 })
 

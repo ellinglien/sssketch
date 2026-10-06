@@ -59,6 +59,7 @@ import { applyTraitBar } from '@shared/traitBar'
 import {
   advanceRadioClock,
   radioBarsUntilChange,
+  radioWrapsUntilChange,
   radioChangeDueAtNextWrap,
   radioChangeLandsAtBar,
   createRadioClock,
@@ -366,7 +367,6 @@ import {
   type RadioArcShown
 } from './radioIntensityGlue'
 import {
-  INTENSITY_RELEAN_TOLERANCE,
   RADIO_ARC_REST_SHORT,
   RADIO_ARC_REST_WORD,
   newRadioIntensityArc,
@@ -376,6 +376,8 @@ import {
   radioIntensityBend,
   radioIntensityDropInBars,
   radioIntensityHookInputs,
+  radioIntensityReleanNow,
+  radioIntensityReleanSwap,
   radioIntensityStarted,
   radioIntensityStopped,
   radioIntensityTarget,
@@ -387,6 +389,7 @@ import {
   type RadioIntensityAction,
   type RadioIntensityArc,
   type RadioIntensityDecided,
+  type RadioIntensityReleanWhere,
   type RadioIntensityRoom,
   type RadioIntensityRow
 } from '@shared/radioIntensityArc'
@@ -3258,6 +3261,20 @@ export function DiscoverPanel({
   /** The intensity arc's target radio's pending pick was armed with (option A, 2026-10-06: where
    * its change lands), for that pick; null with no lean. intensityRelean arms again when it moves. */
   const radioPendingLeanRef = useRef<{ pick: SlotPick; target: number } | null>(null)
+  /** Radio's pick armed again for a moved landing target (intensityRelean), warming beside the
+   * pick it replaces (`of`), which stays radio's pending until intensityRearmSwap puts this one in
+   * (`ready`: picked and warm) -- or lets it go: the change decided, pulled for a payoff, within a
+   * lap of landing (radioIntensityReleanSwap), or nothing found. Null with none. */
+  const intensityRearmRef = useRef<{
+    of: SlotPick
+    target: number
+    ready: {
+      slotId: string
+      pick: SlotPick
+      stem: ResolvedCandidateStem
+      companions: RadioPendingCompanion[]
+    } | null
+  } | null>(null)
   // The RENDERABLE half of radioPendingRef: just which slot it names.
   //
   // Direct report, 2026-09-29: "i don't see any preparatory blinking on
@@ -7347,6 +7364,8 @@ export function DiscoverPanel({
     }
     // Spares asked for at a phrase start, once no arm of radio's is in flight (sized builds).
     radioSparesTick(step.wrapped)
+    // Radio's pick armed again for the intensity arc, warm: in, once it may be (option A).
+    intensityRearmSwap()
     // What the turn button and its chips can do now; so build and drop.
     refreshRadioTurnCan()
     refreshRadioArcShown()
@@ -10984,9 +11003,16 @@ export function DiscoverPanel({
     })
     setRadioPending({ slotId, pick, incomingBars: null, stem: null, companions })
     radioPendingLeanRef.current = lean === undefined ? null : { pick, target: lean.target }
-    // Each companion warmed as radio's own pick is, and written back only while that pick is
-    // still the pending one. One that cannot resolve leaves: a length never known would hold
-    // the whole change to the loop top (radioChangeLengths) for nothing.
+    warmRadioPendingCompanions(pick, companions)
+  }
+
+  /** Each companion of radio's pending `pick` warmed as radio's own pick is, and written back only
+   * while that pick is still the pending one. One that cannot resolve leaves: a length never known
+   * would hold the whole change to the loop top (radioChangeLengths) for nothing. */
+  function warmRadioPendingCompanions(
+    pick: SlotPick,
+    companions: readonly RadioPendingCompanion[]
+  ): void {
     for (const k of companions) {
       void resolveAndWarmPick(k.pick).then((stem) => {
         const now = radioPendingRef.current
@@ -11308,6 +11334,7 @@ export function DiscoverPanel({
   /** Radio starting or stopping: no machine, nothing prepared. */
   function resetIntensityArc(): void {
     intensityArcRef.current = null
+    intensityRearmRef.current = null
     setRadioArcShown(null)
     intensityDropThrowRef.current = null
     dropIntensityNextAdd()
@@ -11325,6 +11352,7 @@ export function DiscoverPanel({
   function intensityLeft(was: RadioIntensityArc): void {
     const { unrest } = radioIntensityStopped(was)
     setRadioArcShown(null)
+    intensityRearmRef.current = null
     intensityDropThrowRef.current = null
     dropIntensityNextAdd()
     intensityCarryRef.current = null
@@ -12201,14 +12229,11 @@ export function DiscoverPanel({
   function intensityLeanForChange(): { target: number; drama: number } | null {
     return intensityLeanAhead((clock, loopBars) => {
       const grid = radioGridBarsRef.current > 0 ? radioGridBarsRef.current : loopBars
-      const until = radioBarsUntilChange(
-        clock,
+      return radioWrapsUntilChange(
         clock.lastPos,
         loopBars,
-        grid,
-        radioCadence.phraseBars
+        radioBarsUntilChange(clock, clock.lastPos, loopBars, grid, radioCadence.phraseBars)
       )
-      return until === null ? null : Math.floor((clock.lastPos + until) / loopBars + 1e-9)
     })
   }
 
@@ -12221,21 +12246,161 @@ export function DiscoverPanel({
     })
   }
 
+  /** Where radio's change stands, as radioIntensityReleanSwap reads it, for its pending `pick`:
+   * decided (a change held), pulled for a payoff (the payoff's pull from the pending pick), a
+   * turnaround still to be planned (the phrase end's roll owed at this wrap, or a turn waiting:
+   * their forecast and payoff read the pick as it is), and the bars to its landing from the last
+   * tick (radioBarsUntilChange). The desktop's clock stops on pause: never held. */
+  function intensityReleanWhere(pick: SlotPick): RadioIntensityReleanWhere {
+    const clock = radioClockRef.current
+    const { loopBars } = turnaroundLoopNow()
+    const grid = radioGridBarsRef.current > 0 ? radioGridBarsRef.current : loopBars
+    const pull = radioPayoffRef.current?.pull ?? null
+    return {
+      decided: radioLedChangeRef.current !== null,
+      held: false,
+      payoffPull: pull !== null && pull.fromPending && pull.pick === pick,
+      turnaroundPending:
+        radioTurnaroundRollPendingRef.current ||
+        radioTurnaroundRollRef.current !== null ||
+        radioTurnPendingRef.current !== null,
+      untilBars:
+        clock === null || !(loopBars > 0)
+          ? null
+          : radioBarsUntilChange(clock, clock.lastPos, loopBars, grid, radioCadence.phraseBars),
+      loopBars
+    }
+  }
+
+  /** A row radio's pick (or a companion of it) may be armed again on: still radio's to change --
+   * eligible, no manual change waiting, no hook keeping it, not the row the arc is taking out. */
+  function intensityRearmable(id: string): boolean {
+    return (
+      radioEligibleSlotIds().includes(id) &&
+      !manualChangesRef.current.has(id) &&
+      !radioHookTurnoverExcluded(radioHooksRef.current, id) &&
+      arcExitRef.current?.slotId !== id
+    )
+  }
+
   /** Radio's pending pick, undecided, whose landing target has moved past
    * INTENSITY_RELEAN_TOLERANCE (the arc decided a phase change, a press moved it, a length was
-   * drawn): armed again (armRadioPick) for the new one. After the arc's step at each wrap and
-   * after a press; not while a change is held or an arm is in flight. */
+   * drawn): armed again on its row (intensityRearm) for the new one, when @shared
+   * radioIntensityReleanNow says it is safe -- never on the arc's decide wrap while its turnaround
+   * is still to be planned, never with a payoff pulling the pick, never within a lap of its
+   * landing, not while a change is held or an arm is in flight. After the arc's step at each wrap
+   * and after a press. */
   function intensityRelean(): void {
     const pending = radioPendingRef.current
     const armed = radioPendingLeanRef.current
     if (pending === null || armed === null || armed.pick !== pending.pick) return
-    if (radioLedChangeRef.current !== null || radioArmInFlight() || !radioOnRef.current) return
+    if (!radioOnRef.current) return
+    // a replacement already warming: measured against what it was armed for
+    const warming = intensityRearmRef.current
+    const from = warming !== null && warming.of === pending.pick ? warming.target : armed.target
     const lean = intensityLeanForChange()
-    if (lean === null || Math.abs(lean.target - armed.target) <= INTENSITY_RELEAN_TOLERANCE) return
+    const now = radioIntensityReleanNow({
+      ...intensityReleanWhere(pending.pick),
+      armed: from,
+      target: lean?.target ?? null,
+      armInFlight: radioArmInFlight()
+    })
+    if (!now || lean === null || !intensityRearmable(pending.slotId)) return
     console.log(
-      `[radio-intensity] radio's pick on ${pending.slotId} leans again: ${armed.target.toFixed(2)} -> ${lean.target.toFixed(2)}`
+      `[radio-intensity] radio's pick on ${pending.slotId} leans again: ${from.toFixed(2)} -> ${lean.target.toFixed(2)}`
     )
-    void armRadioPick()
+    void intensityRearm(pending, lean)
+  }
+
+  /** Radio's pick armed again (intensityRelean): its row and its companions' picked anew for the
+   * new lean, each yielding its row to any other pick, and warmed -- beside the pick it replaces,
+   * which stays radio's pending (and warm) until intensityRearmSwap puts this one in. One that
+   * finds nothing, or whose stem does not resolve, leaves the pick as it was. */
+  async function intensityRearm(
+    pending: NonNullable<typeof radioPendingRef.current>,
+    lean: { target: number; drama: number }
+  ): Promise<void> {
+    const me: NonNullable<typeof intensityRearmRef.current> = {
+      of: pending.pick,
+      target: lean.target,
+      ready: null
+    }
+    intensityRearmRef.current = me
+    const live = (): boolean =>
+      intensityRearmRef.current === me &&
+      radioPendingRef.current?.pick === me.of &&
+      radioOnRef.current
+    const stays = (why: string): void => {
+      if (intensityRearmRef.current === me) intensityRearmRef.current = null
+      console.log(`[radio-intensity] radio's pick on ${pending.slotId} stays: ${why}`)
+    }
+    const slot = slotsRef.current.find((s) => s.id === pending.slotId)
+    const comps = pending.companions.flatMap((k) => {
+      const s = slotsRef.current.find((x) => x.id === k.slotId)
+      return s !== undefined && intensityRearmable(k.slotId) ? [s] : []
+    })
+    if (slot === undefined) return stays('its row is gone')
+    const opts = { avoidOwnStem: true, yieldRow: true, intensity: lean }
+    const [pick, ...more] = await Promise.all([
+      pickForSlot(slot.id, slot.kinds, opts),
+      ...comps.map((s) => pickForSlot(s.id, s.kinds, opts))
+    ])
+    if (!live()) {
+      if (intensityRearmRef.current === me) intensityRearmRef.current = null
+      return
+    }
+    if (pick === null || pick.candidate === null) return stays('the new lean found nothing')
+    const companions: RadioPendingCompanion[] = radioUsableCompanionPicks(
+      pick.candidate.stemCID,
+      comps.map((s, i) => ({ slotId: s.id, pick: more[i] })),
+      manualChangesRef.current
+    ).map((k) => ({ slotId: k.slotId, pick: k.pick, stem: null, incomingBars: null }))
+    const stem = await resolveAndWarmPick(pick)
+    if (!live()) {
+      if (intensityRearmRef.current === me) intensityRearmRef.current = null
+      return
+    }
+    if (stem === null) return stays('the new pick did not resolve')
+    me.ready = { slotId: pending.slotId, pick, stem, companions }
+    intensityRearmSwap()
+  }
+
+  /** Radio's warm replacement (intensityRearm) goes in as its pending pick, when @shared
+   * radioIntensityReleanSwap says it can (its row still radio's to change); it waits while a
+   * turnaround is still to be planned, and is let go -- the old pick landing as it is -- once the
+   * change is decided, pulled for a payoff or within a lap of its landing. Every tick, and as soon
+   * as it is warm. */
+  function intensityRearmSwap(): void {
+    const r = intensityRearmRef.current
+    if (r === null || r.ready === null) return
+    const pending = radioPendingRef.current
+    if (pending === null || pending.pick !== r.of || !radioOnRef.current) {
+      intensityRearmRef.current = null
+      return
+    }
+    const ready = r.ready
+    const verdict = intensityRearmable(ready.slotId)
+      ? radioIntensityReleanSwap(intensityReleanWhere(pending.pick))
+      : 'drop'
+    if (verdict === 'wait') return
+    intensityRearmRef.current = null
+    if (verdict === 'drop') {
+      console.log(`[radio-intensity] radio's pick on ${ready.slotId} stays: too late to swap`)
+      return
+    }
+    const companions = ready.companions.filter((k) => intensityRearmable(k.slotId))
+    setRadioPending({
+      slotId: ready.slotId,
+      pick: ready.pick,
+      incomingBars: ready.stem.barLength,
+      stem: ready.stem,
+      companions
+    })
+    radioPendingLeanRef.current = { pick: ready.pick, target: r.target }
+    warmRadioPendingCompanions(ready.pick, companions)
+    console.log(
+      `[radio-intensity] radio's pick on ${ready.slotId} is warm: in at ${r.target.toFixed(2)}`
+    )
   }
 
   /** BUILD and DROP (spec 6), pressed: the strip's and the phone's (Task 11, through

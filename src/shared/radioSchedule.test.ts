@@ -38,6 +38,7 @@ import {
   radioBarsUntilChange,
   radioChangeDueAtNextWrap,
   radioChangeLandsAtBar,
+  radioWrapsUntilChange,
   type RadioClock,
   type RadioTurnover,
   radioFavesOf
@@ -1620,5 +1621,25 @@ describe('RadioSettings.faves (the faves dial)', () => {
     void _drop
     expect(radioFavesOf(noFaves)).toBe(0)
     expect(radioFavesOf({ ...DEFAULT_RADIO_SETTINGS, faves: 70 })).toBe(70)
+  })
+})
+
+describe('radioWrapsUntilChange: the tops from the playhead to where a change lands', () => {
+  it('counts a top landed on, and the tops before a bar line inside a lap', () => {
+    // a 4-bar loop at bar 1: the next top is 3 bars off
+    expect(radioWrapsUntilChange(1, 4, 3)).toBe(1)
+    expect(radioWrapsUntilChange(1, 4, 7)).toBe(2)
+    // a bar line inside the lap after next
+    expect(radioWrapsUntilChange(1, 4, 9)).toBe(2)
+    // in this lap: no top
+    expect(radioWrapsUntilChange(1, 4, 2)).toBe(0)
+    // the sum of 30 Hz deltas a hair under the top still counts it
+    expect(radioWrapsUntilChange(0.1, 4, 3.9 - 1e-12)).toBe(1)
+  })
+
+  it('null when the landing or the loop is unknown', () => {
+    expect(radioWrapsUntilChange(1, 4, null)).toBeNull()
+    expect(radioWrapsUntilChange(1, 0, 3)).toBeNull()
+    expect(radioWrapsUntilChange(Number.NaN, 4, 3)).toBeNull()
   })
 })

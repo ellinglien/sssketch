@@ -161,6 +161,11 @@ export const INTENSITY_BEND_SWING = 25
  * pick's ranking by under a tenth of one trait, not worth a fresh stem. */
 export const INTENSITY_RELEAN_TOLERANCE = 0.1
 
+/** Radio's pick is not armed again within this many laps of its landing, and its replacement is
+ * not swapped in there: a fresh stem needs the lap to warm, and the change keeps the stem the
+ * forecast and the payoff were assembled with (review of option A, 2026-10-06). */
+export const INTENSITY_RELEAN_LEAD_LAPS = 1
+
 const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
 const pickEven = <T>(items: readonly T[], random: () => number): T =>
   items[Math.min(items.length - 1, Math.floor(random() * items.length))]
@@ -1071,4 +1076,70 @@ export function intensityArcShown(
     canBuild: intensityPressNow(arc, 'build', where) !== null,
     canDrop: intensityPressNow(arc, 'drop', where) !== null
   }
+}
+
+// ---- option A's re-arm: when radio's pick may be armed again, and its replacement swapped in
+// (review of 37bf711b, 84f54546 and web d056c84: both radios ask these, so they agree) ----
+
+/** What radioIntensityReleanSwap reads: where radio's change stands. */
+export interface RadioIntensityReleanWhere {
+  /** Radio's change is decided (held, sent or committed), or decides on this tick. */
+  decided: boolean
+  /** Radio is held (the web's hold): nothing moves. */
+  held: boolean
+  /** The pick is pulled forward to pay off a turnaround (it lands on that top as it is). */
+  payoffPull: boolean
+  /** A phrase end's turnaround, or a turn, is still to be rolled: its forecast and its payoff are
+   * assembled from radio's pick as it stands (the arc's decide wrap is a phrase end's roll). */
+  turnaroundPending: boolean
+  /** Bars from the playhead to where the change lands (radioBarsUntilChange); null: unknown. */
+  untilBars: number | null
+  loopBars: number
+}
+
+/** What radioIntensityReleanNow reads: radioIntensityReleanSwap's, and the targets. */
+export interface RadioIntensityReleanInput extends RadioIntensityReleanWhere {
+  /** The target the pick (or its replacement still warming) was armed with. */
+  armed: number
+  /** The target where the change lands now (radioIntensityLandingTarget); null: unknown. */
+  target: number | null
+  /** An arm of radio's is still picking (the desktop's in-flight arm). */
+  armInFlight: boolean
+}
+
+/** The change lands more than INTENSITY_RELEAN_LEAD_LAPS from the playhead. */
+function landsBeyondLead(w: RadioIntensityReleanWhere): boolean {
+  return (
+    w.loopBars > 0 &&
+    w.untilBars !== null &&
+    Number.isFinite(w.untilBars) &&
+    w.untilBars > INTENSITY_RELEAN_LEAD_LAPS * w.loopBars + 1e-9
+  )
+}
+
+/**
+ * Radio's pick is armed again for a moved landing target (option A): only when its target moved by
+ * more than INTENSITY_RELEAN_TOLERANCE, and only while that is safe -- the change not decided, radio
+ * not held, no arm in flight, the pick not pulled for a payoff, no turnaround still to be planned
+ * (its forecast and payoff count the pick as it is), and the landing more than a lap off (the
+ * replacement needs the lap to warm). The replacement warms beside the pick it replaces and goes
+ * in only once warm (radioIntensityReleanSwap); one that finds nothing leaves the pick as it was.
+ */
+export function radioIntensityReleanNow(i: RadioIntensityReleanInput): boolean {
+  if (i.decided || i.held || i.armInFlight || i.payoffPull || i.turnaroundPending) return false
+  if (i.target === null || !Number.isFinite(i.target) || !Number.isFinite(i.armed)) return false
+  if (!(Math.abs(i.target - i.armed) > INTENSITY_RELEAN_TOLERANCE + 1e-9)) return false
+  return landsBeyondLead(i)
+}
+
+/**
+ * A warm replacement for radio's pick (radioIntensityReleanNow armed it): `swap` it in now; `wait`
+ * (radio held, a turnaround still to be planned, the landing not known); or `drop` it, the old pick
+ * landing as it is -- the change decided, pulled for a payoff, or within a lap of its landing.
+ */
+export function radioIntensityReleanSwap(w: RadioIntensityReleanWhere): 'swap' | 'wait' | 'drop' {
+  if (w.decided || w.payoffPull) return 'drop'
+  if (w.untilBars !== null && !landsBeyondLead(w)) return 'drop'
+  if (w.held || w.turnaroundPending || w.untilBars === null) return 'wait'
+  return 'swap'
 }

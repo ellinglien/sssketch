@@ -698,6 +698,22 @@ export function radioBarsUntilChange(
   return Math.min(grid, wrap) - pos
 }
 
+/**
+ * The loop tops from the playhead (`pos`) to where a change lands `untilBars` ahead
+ * (radioBarsUntilChange): a top landed on counts, and a bar line inside a later lap counts the
+ * tops before it. Null when the landing or the loop is not known. The one count both radios'
+ * intensity leans read (option A, 2026-10-06), so they agree on which top a change lands on.
+ */
+export function radioWrapsUntilChange(
+  pos: number,
+  loopBars: number,
+  untilBars: number | null
+): number | null {
+  if (untilBars === null || !Number.isFinite(untilBars) || !Number.isFinite(pos)) return null
+  if (!(loopBars > 0)) return null
+  return Math.floor((pos + untilBars) / loopBars + 1e-9)
+}
+
 /** WHICH BAR of this lap the next change lands on, when that is not the
  * wrap -- or null when it is the wrap, when it is in some later lap, or
  * when it is not knowable at all.
