@@ -144,6 +144,9 @@ export interface RadioStripGroup {
 export interface RadioStripContext {
   /** Discover artist mode (another artist's stems). */
   artistMode: boolean
+  /** Combine artists: `me` is one of several chosen artists, so the faves dial still acts on
+   * `me`'s turns and is not dimmed. Absent: false (today). */
+  artistsIncludeMe?: boolean
   /** The user's own username is known (`my sounds` needs it). */
   hasUsername: boolean
   /** The open project's sound settings, normalized (the panel's `sound ?? app defaults`). */
@@ -324,7 +327,7 @@ export function radioStripModel(
     panel('faves', FAVES_LABEL, {
       tooltip: FAVES_TOOLTIP,
       sets: ['faves'],
-      dimmed: ctx.artistMode
+      dimmed: ctx.artistMode && ctx.artistsIncludeMe !== true
     }),
     panel('source', 'source · endlesss - other', { tooltip: 'right for other, left for endlesss' }),
     panel('matching', 'matching', { tooltip: 'right for more matching' }),

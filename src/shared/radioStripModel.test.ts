@@ -309,6 +309,15 @@ describe('radioStripModel: greyed, not omitted', () => {
       control(radioStripModel(settings(), { ...CTX, artistMode: true }), 'my-sounds')?.disabled
     ).toBe(true)
   })
+
+  it("combined with me: faves live (it acts on me's turns), my sounds still greyed", () => {
+    const combined = { ...CTX, artistMode: true, artistsIncludeMe: true }
+    expect(control(radioStripModel(settings(), combined), 'faves')?.dimmed).toBe(false)
+    expect(control(radioStripModel(settings(), combined), 'my-sounds')?.disabled).toBe(true)
+    expect(
+      control(radioStripModel(settings(), { ...CTX, artistsIncludeMe: true }), 'faves')?.dimmed
+    ).toBe(false)
+  })
 })
 
 describe('radioStripModel: options come from the shared constants', () => {
