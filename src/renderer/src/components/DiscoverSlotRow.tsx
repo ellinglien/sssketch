@@ -266,6 +266,7 @@ export function DiscoverSlotRow({
   rerolling,
   manualWaiting,
   previewing,
+  radioResting = false,
   soloed,
   favourited,
   maxBarLength,
@@ -334,6 +335,11 @@ export function DiscoverSlotRow({
    * TOGETHER, looped, like the Upcycle reference this screen is modeled on
    * -- not a one-at-a-time solo. */
   previewing: boolean
+  /** Radio is resting this row (a hook's rest, the intensity arc's breakdown: spec
+   * 2026-10-05-radio-move-visuals-design, decision 11): out of the mix for radio, so its colour
+   * layer stays, drawn at the dim floor ([data-mv-rest]) and following the music with radio's
+   * moves, where a mute is grey. The radio layout only. */
+  radioResting?: boolean
   /** True while THIS slot is the ONLY one currently in the playing mix
    * (DiscoverPanel's own `previewingSlotIds.size === 1 && ...has(slot.id)`)
    * -- drives the "S" button's active state, matching ChannelRow.tsx's own
@@ -1099,8 +1105,15 @@ export function DiscoverSlotRow({
   // than trimmed -- the inner button's own aria-label (below) still
   // carries a plain accessible name (drag to adjust volume), just
   // without the drag hint or the live percentage.
+  // Radio's moves while they sound (spec 2026-10-05-radio-move-visuals-design): the panel's sweep
+  // effect writes --mv-* on this cell (data-move-row) at every position tick; its rules dim and
+  // shape the colour layer (mv-colour), show the echo's ghost and a change's riser line. The same
+  // one element in both radio views.
+  const colourShown = previewing || (radioLayout && radioResting)
   const waveformCell = (
     <div
+      data-move-row={radioLayout ? slot.id : undefined}
+      data-mv-rest={radioLayout && radioResting ? '' : undefined}
       style={{
         ...at(DISCOVER_WAVEFORM_COLUMN),
         // The radio layout's waveform is the row's full width (less its padding).
@@ -1237,8 +1250,11 @@ export function DiscoverSlotRow({
                 used to still show the full-color layer (just clipped by
                 gain), reading as "playing, just quiet" rather than
                 "off," unlike every other muted waveform in this app. */}
-                {previewing && (
+                {colourShown && (
+                  // mv-colour: a radio move's rules filter and mask this wrapper, which reaches
+                  // the masked waveform inside (on that element its own mask would cut them away)
                   <div
+                    className="mv-colour"
                     style={{
                       position: 'absolute',
                       inset: 0,
@@ -1251,6 +1267,23 @@ export function DiscoverSlotRow({
                       tileWidthPct={layout.tiles[0]?.widthPct ?? 100}
                     />
                   </div>
+                )}
+                {radioLayout && colourShown && (
+                  // a throw's ghost: the waveform again, trailing by one repeat (hidden unless a
+                  // move is on the row)
+                  <div className="mv-ghost" aria-hidden>
+                    <div className="mv-ghost-inner">
+                      <RepeatedWaveform
+                        path={resolvedStem.path}
+                        color={stemColorVar(resolvedStem)}
+                        tileWidthPct={layout.tiles[0]?.widthPct ?? 100}
+                      />
+                    </div>
+                  </div>
+                )}
+                {radioLayout && (
+                  // a change's riser, filling along the row's foot toward the one
+                  <div className="mv-riser" aria-hidden />
                 )}
                 {previewing && (
                   <div

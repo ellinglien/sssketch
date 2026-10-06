@@ -22,6 +22,7 @@ export function RadioTopLine({
   onPlayToggle,
   onStopRadio,
   radioButtonRef,
+  riserRef,
   progress,
   readout,
   foldSummary,
@@ -39,6 +40,9 @@ export function RadioTopLine({
   onPlayToggle: () => void
   onStopRadio: () => void
   radioButtonRef: React.RefObject<HTMLButtonElement | null>
+  /** A turnaround's riser line under the ruler (spec 2026-10-05-radio-move-visuals-design): the
+   * panel's sweep effect writes its transform at every position tick; at rest scaleX(0). */
+  riserRef?: React.RefObject<HTMLSpanElement | null>
   /** How far through the current interval, 0..1. */
   progress: number
   readout: RadioReadout | null
@@ -175,10 +179,28 @@ export function RadioTopLine({
             aria-hidden
             style={{ display: 'flex', alignItems: 'center', gap: 6, width: '100%', maxWidth: 360 }}
           >
-            <span style={{ display: 'flex', gap: rulerGap, flex: 1, height: 4 }}>
+            <span
+              style={{ display: 'flex', gap: rulerGap, flex: 1, height: 4, position: 'relative' }}
+            >
               {radioRulerCells(readout.ruler).map((cell, i) => (
                 <span key={i} style={{ flex: 1, background: rulerInk[cell] }} />
               ))}
+              {/* a turnaround's riser: its own voice, no row's, so it fills under the ruler
+                  toward the one, and is gone where it ends */}
+              <span
+                ref={riserRef}
+                style={{
+                  position: 'absolute',
+                  left: 0,
+                  right: 0,
+                  bottom: -3,
+                  height: 1,
+                  background: 'var(--ra-text)',
+                  transform: 'scaleX(0)',
+                  transformOrigin: 'left',
+                  pointerEvents: 'none'
+                }}
+              />
             </span>
             {readout.ruler.end !== null && (
               <span

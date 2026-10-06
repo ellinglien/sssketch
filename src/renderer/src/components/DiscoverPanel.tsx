@@ -402,11 +402,16 @@ import { discoverStemPumpRoles } from '@shared/radioPump'
 import { normalizeSoundSettings, throwEveryBars } from '@shared/radioSound'
 import { drawThrowBeats, drawThrowEcho, throwDelaySec } from '@shared/radioThrows'
 import {
+  RADIO_VISUAL_DIM_FLOOR,
+  RADIO_VISUAL_FADE_SEC,
   closeRadioRestVisuals,
   dropRadioMoveVisuals,
   pruneRadioMoveVisuals,
   radioGestureVisuals,
+  radioMoveVisualsSounding,
   radioRestVisual,
+  radioRowVisualAt,
+  radioRowVisualVars,
   radioThrowVisual,
   radioTurnaroundVisuals,
   reopenRadioRestVisuals,
@@ -818,6 +823,25 @@ const TURN_LEAD_BEATS = TURNAROUND_ROLL_LATE_BARS * 4
 /** The intensity arc's quick drop (the drop button while building or riding): the planner's low
  * drop, at most two bars (spec 2026-10-05-radio-intensity-arc-design 6). */
 const INTENSITY_QUICK_DROP_BEATS = 8
+
+/** prefers-reduced-motion, read at each position tick (the moves' steady states: the sweep effect).
+ * Null where there is no matchMedia (no DOM). */
+const REDUCED_MOTION_QUERY: MediaQueryList | null =
+  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)')
+    : null
+
+/** The custom properties the sweep effect writes on a radio row's waveform cell
+ * (@shared/radioMoveVisuals radioRowVisualVars), so it can clear them. */
+const RADIO_MOVE_VARS = [
+  '--mv-bright',
+  '--mv-low',
+  '--mv-high',
+  '--mv-wash',
+  '--mv-riser',
+  '--mv-ghost',
+  '--mv-ghost-shift'
+] as const
 
 /** Discover's rows as the turnaround planner sees them (@shared/radioTurnaround TurnaroundRow):
  * heard when previewing and resolved, and not the row a thinning arc is taking out (`exiting`). */
@@ -1343,6 +1367,10 @@ export function DiscoverPanel({
     laps: number
     resting: ReadonlySet<string>
   }>({ visuals: [], startBars: 0, laps: 0, resting: new Set() })
+  // The turnaround's riser line, under the top line's ruler (RadioTopLine's riserRef).
+  const radioRiserRef = useRef<HTMLSpanElement>(null)
+  // Whether the sweep effect last wrote a move onto the rows: it clears them once, then idles.
+  const radioMovesShownRef = useRef(false)
   const [radioFoldView, setRadioFoldView] = useState<{
     state: RadioFoldState
     step: RadioFoldStep | null
@@ -1361,6 +1389,58 @@ export function DiscoverPanel({
     radioFoldMoveRef.current = { pos, playing, laps: moved.laps + (move === 'wrap' ? 1 : 0) }
     // a move back is a wrap to radio's clock, so its fold step is about to run
     if (move === 'restart') restartRadioFold(pos < moved.pos)
+    // RADIO'S MOVES WHILE THEY SOUND (spec 2026-10-05-radio-move-visuals-design), off the same
+    // position: the tick's log (radioMoveVisualsTick) read on the readout's clock, carried across
+    // the wrap by the laps counted since it was taken (as the fold dots do), written straight onto
+    // each radio row's waveform cell as --mv-* (DiscoverSlotRow's mv-colour, mv-ghost, mv-riser;
+    // the rules in the panel's <style>), [data-mv] only on a row a move is on. Only while a move
+    // sounds or a row rests; otherwise cleared once, then nothing runs.
+    const mv = radioMoveVisualsRef.current
+    const mvAt = mv.startBars + (radioFoldMoveRef.current.laps - mv.laps) * previewLoopBars + pos
+    if (
+      radioOn &&
+      playing &&
+      sweepActive &&
+      (mv.resting.size > 0 || radioMoveVisualsSounding(mv.visuals, mvAt))
+    ) {
+      const reduced = REDUCED_MOTION_QUERY?.matches === true
+      const fade = reduced ? 0 : (RADIO_VISUAL_FADE_SEC * bpmRef.current) / 240
+      const mvWindowBars = discoverWindowLayout({
+        stemBars: previewLoopBars,
+        loopBars: previewLoopBars
+      }).windowBars
+      rowsRef.current?.querySelectorAll<HTMLElement>('[data-move-row]').forEach((cell) => {
+        const rowId = cell.dataset.moveRow ?? ''
+        const look = radioRowVisualAt(mv.visuals, rowId, mvAt, fade)
+        // a row resting for radio is silent, logged or not (a rest is radio's move)
+        if (mv.resting.has(rowId)) look.level = 0
+        const vars = radioRowVisualVars(look, { windowBars: mvWindowBars, reducedMotion: reduced })
+        if (
+          vars['--mv-bright'] === '1.000' &&
+          vars['--mv-low'] === '0.000' &&
+          vars['--mv-high'] === '0.000' &&
+          vars['--mv-wash'] === '0.000' &&
+          vars['--mv-riser'] === '0.000' &&
+          vars['--mv-ghost'] === '0.000'
+        ) {
+          delete cell.dataset.mv
+          return
+        }
+        for (const [name, value] of Object.entries(vars)) cell.style.setProperty(name, value)
+        cell.dataset.mv = ''
+      })
+      const riser = reduced ? 0 : radioRowVisualAt(mv.visuals, null, mvAt).riser
+      radioRiserRef.current?.style.setProperty('transform', `scaleX(${riser.toFixed(3)})`)
+      radioMovesShownRef.current = true
+    } else if (radioMovesShownRef.current) {
+      // by [data-mv], not [data-move-row]: radio going off takes the latter away first
+      rowsRef.current?.querySelectorAll<HTMLElement>('[data-mv]').forEach((cell) => {
+        for (const name of RADIO_MOVE_VARS) cell.style.removeProperty(name)
+        delete cell.dataset.mv
+      })
+      radioRiserRef.current?.style.setProperty('transform', 'scaleX(0)')
+      radioMovesShownRef.current = false
+    }
     const lap = sweepLapRef.current
     if (!sweepActive) {
       sweepLapRef.current = { lapIndex: 0, lastPos: pos, loopBars: 0 }
@@ -3452,6 +3532,9 @@ export function DiscoverPanel({
   const radioMoveSeenRef = useRef<Set<string>>(new Set())
   const radioMoveTurnaroundRef = useRef<{ armId: string; wrapAt: number } | null>(null)
   const radioRestClosedRef = useRef<Map<string, number>>(new Map())
+  // The rows resting for radio, as render needs them (the waveform's colour layer drawn at the dim
+  // floor, DiscoverSlotRow's radioResting): set from the tick's microtask when it changes.
+  const [radioRestingShown, setRadioRestingShown] = useState<ReadonlySet<string>>(new Set())
   const [radioReadoutNow, setRadioReadoutNow] = useState<RadioReadout | null>(null)
   // A change that is WAITING for the loop top, because the gesture it
   // carries can only be performed there.
@@ -5926,6 +6009,7 @@ export function DiscoverPanel({
     radioMoveSeenRef.current = new Set()
     radioMoveTurnaroundRef.current = null
     radioRestClosedRef.current = new Map()
+    setRadioRestingShown(new Set())
     setRadioReadoutNow(null)
   }
   /** THE GESTURE FLASH (spec 2026-10-03-radio-readout-design section 1). Each gesture armed into
@@ -6147,6 +6231,12 @@ export function DiscoverPanel({
       resting: restingNow
     }
     radioMoveSeenRef.current = live
+    if (
+      restingNow.size !== was.resting.size ||
+      [...restingNow].some((id) => !was.resting.has(id))
+    ) {
+      setRadioRestingShown(restingNow)
+    }
   }
   /** What the readout says now, from radio's refs (the clock tick's microtask only):
    * `barsUntilChange` is the rows' own wait (radioChangeWait). `next` is whatever lands first
@@ -13089,6 +13179,35 @@ export function DiscoverPanel({
       <style>{`
         .radio-plate-away { color: var(--ra-text-2); }
         .radio-plate-away:hover { color: var(--ra-text); }
+        /* a radio move while it sounds (spec 2026-10-05-radio-move-visuals-design): the sweep
+           effect sets --mv-* on the row's waveform cell, [data-mv] only while a move is on it. The
+           stem's own colour layer, dimmed and shaped: never a new colour. The grey layer under it
+           stays full, so a dimmed row reads grey-ish, the gain envelope's "grey means quieter". The
+           wash's blur is on the waveform only (audio information, not chrome). A row resting for
+           radio keeps its colour layer at the dim floor ([data-mv-rest]) even with the transport
+           stopped; a mute stays grey */
+        [data-radio-view] [data-move-row] .mv-ghost,
+        [data-radio-view] [data-move-row] .mv-riser { display: none; }
+        [data-radio-view] [data-move-row][data-mv-rest] .mv-colour { opacity: ${RADIO_VISUAL_DIM_FLOOR}; }
+        [data-radio-view] [data-move-row][data-mv] .mv-colour {
+          opacity: var(--mv-bright);
+          filter: blur(calc(var(--mv-wash) * 1.5px));
+          -webkit-mask-image: linear-gradient(to bottom, rgb(0 0 0 / calc(1 - 0.85 * var(--mv-high))), #000 50%, rgb(0 0 0 / calc(1 - 0.85 * var(--mv-low))));
+          mask-image: linear-gradient(to bottom, rgb(0 0 0 / calc(1 - 0.85 * var(--mv-high))), #000 50%, rgb(0 0 0 / calc(1 - 0.85 * var(--mv-low))));
+        }
+        [data-radio-view] [data-move-row][data-mv] .mv-ghost {
+          display: block; position: absolute; inset: 0; overflow: hidden; pointer-events: none;
+          opacity: calc(var(--mv-ghost) * 0.45);
+        }
+        [data-radio-view] [data-move-row][data-mv] .mv-ghost-inner {
+          position: absolute; inset: 0;
+          transform: translateX(max(var(--mv-ghost-shift), 6px));
+        }
+        [data-radio-view] [data-move-row][data-mv] .mv-riser {
+          display: block; position: absolute; left: 0; right: 0; bottom: 0; height: 1px;
+          background: var(--ra-text); pointer-events: none;
+          transform: scaleX(var(--mv-riser)); transform-origin: left;
+        }
         .radio-fire:active { background: var(--ra-text); color: var(--ra-bg-page); }
         @keyframes discover-slot-pulse {
           0%, 100% { opacity: 1; }
@@ -13160,6 +13279,7 @@ export function DiscoverPanel({
             stopRadio()
           }}
           radioButtonRef={radioTopButtonRef}
+          riserRef={radioRiserRef}
           progress={radioProgress}
           readout={radioReadoutNow}
           foldSummary={radioFoldStatusNow?.summary ?? null}
@@ -13761,6 +13881,7 @@ export function DiscoverPanel({
               rerolling={rerollingSlotIds.has(slot.id)}
               manualWaiting={manualWaitingSlotIds.has(slot.id)}
               previewing={previewingSlotIds.has(slot.id)}
+              radioResting={radioOn && radioRestingShown.has(slot.id)}
               soloed={previewingSlotIds.size === 1 && previewingSlotIds.has(slot.id)}
               favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
               maxBarLength={maxBarLength}
