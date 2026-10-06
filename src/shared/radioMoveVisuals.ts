@@ -23,7 +23,8 @@
 //   volume    the row's gain, 0..1: a drop, a stop, a gap, a hole, a duck, a rest. At rest 1.
 //   highpass  a lift's normalised cutoff, open at 0. At rest 0.
 //   lowpass   a dip's or a filter in's normalised cutoff, open at 1. At rest 1.
-//   wash      a wash's or a bloom's share of its peak, 0..1. At rest 0.
+//   wash      a wash's or a bloom's share of its peak, 0..1 (a turnaround's wash at its depth: the
+//             bold peak is 1, a subtle one less). At rest 0.
 //   riser     a riser's progress, 0 where it starts .. 1 where it ends. At rest 0.
 //   echo      a throw's echo, 0..1: full while what was sent repeats, then each repeat
 //             `feedback` as loud. At rest 0.
@@ -49,6 +50,7 @@ import {
 import {
   TURNAROUND_DIP_FLOOR,
   TURNAROUND_LIFT_TOP,
+  TURNAROUND_WASH_PEAK,
   turnaroundDropCurve,
   type TurnaroundPlan,
   type TurnaroundPoint
@@ -80,6 +82,9 @@ export interface RadioMoveVisual {
   /** An open rest: its last value holds after its last point, until it is closed
    * (closeRadioRestVisuals) or its key goes (pruneRadioMoveVisuals' `live`). */
   holds?: true
+  /** A rest closed by closeRadioRestVisuals: only such a rest opens again
+   * (reopenRadioRestVisuals), never one logged closed from the start. */
+  closed?: true
   /** An echo: how far its ghost trails the row, in bars (one repeat's delay). */
   shiftBars?: number
 }
@@ -164,8 +169,14 @@ function drawnPoints(v: RadioMoveVisual, fade: number): RadioVisualPoint[] {
 }
 
 /** One visual's value at `t`: linear between its points, a stacked pair a step to the later
- * value, the rest value outside them (the last value after them while it holds). */
+ * value, the rest value outside them (the last value after them while it holds). A value that
+ * is not a number (a NaN point) is the rest value: a bad point never draws a row silent. */
 export function radioMoveVisualValueAt(v: RadioMoveVisual, t: number, fade = 0): number {
+  const x = valueAt(v, t, fade)
+  return Number.isFinite(x) ? x : REST[v.param]
+}
+
+function valueAt(v: RadioMoveVisual, t: number, fade: number): number {
   const rest = REST[v.param]
   const pts = drawnPoints(v, fade)
   if (pts.length === 0 || !Number.isFinite(t) || t < pts[0].at) return rest
@@ -321,13 +332,15 @@ export function closeRadioRestVisuals(
       rowId: v.rowId,
       param: v.param,
       move: v.move,
-      points: [...v.points, { at: until, value: 0 }, { at: until, value: 1 }]
+      points: [...v.points, { at: until, value: 0 }, { at: until, value: 1 }],
+      closed: true
     })
   }
   return out
 }
 
-/** The row's rests closed at `until` open again (the return there was taken back). */
+/** The row's rests closed at `until` (by closeRadioRestVisuals) open again (the return there was
+ * taken back). A rest logged closed from the start (radioRestVisual with an `until`) stays. */
 export function reopenRadioRestVisuals(
   visuals: readonly RadioMoveVisual[],
   rowId: string,
@@ -338,13 +351,20 @@ export function reopenRadioRestVisuals(
     if (
       v.rowId !== rowId ||
       v.move !== 'rest' ||
-      v.holds === true ||
+      v.closed !== true ||
       n < 4 ||
       v.points[n - 1].at !== until
     ) {
       return v
     }
-    return { ...v, points: v.points.slice(0, -2), holds: true }
+    return {
+      key: v.key,
+      rowId: v.rowId,
+      param: v.param,
+      move: v.move,
+      points: v.points.slice(0, -2),
+      holds: true
+    }
   })
 }
 
@@ -421,12 +441,17 @@ export function radioTurnaroundVisuals(
       })
     }
     if (r.reverbSend !== undefined && r.reverbSend.points.length > 0) {
+      // its share of the peak, at its depth: the bold peak is a full wash, a subtle one less
+      const depth = r.reverbSend.peak / TURNAROUND_WASH_PEAK
       out.push({
         key,
         rowId: r.rowId,
         param: 'wash',
         move: 'wash',
-        points: beforeWrap(r.reverbSend.points, wrapAt, unitsPerBeat)
+        points: beforeWrap(r.reverbSend.points, wrapAt, unitsPerBeat).map((p) => ({
+          at: p.at,
+          value: p.value * depth
+        }))
       })
     }
   }

@@ -14,6 +14,7 @@ import {
   radioRestVisual,
   radioRowVisualAt,
   radioRowVisualSteady,
+  radioMoveVisualValueAt,
   radioRowVisualVars,
   radioThrowVisual,
   radioTurnaroundVisuals,
@@ -23,13 +24,18 @@ import {
   type RadioRowVisual
 } from './radioMoveVisuals'
 import {
+  TURNAROUND_DEPTH,
   TURNAROUND_DIP_FLOOR,
   TURNAROUND_LIFT_TOP,
+  TURNAROUND_WASH_PEAK,
+  rollTurnaround,
   turnaroundDipCurve,
   turnaroundDropCurve,
   turnaroundLiftCurve,
   turnaroundWashCurve,
-  type TurnaroundPlan
+  type TurnaroundPlan,
+  type TurnaroundPoint,
+  type TurnaroundRow
 } from './radioTurnaround'
 
 // sssketch's clock: bars played since radio started; one beat is a quarter bar
@@ -540,5 +546,236 @@ describe('drawing it', () => {
     expect(vars['--mv-wash']).toBe('0.000')
     expect(vars['--mv-riser']).toBe('0.000')
     expect(vars['--mv-ghost']).toBe('0.000')
+  })
+})
+
+describe('review minors', () => {
+  it('a point that is not a number leaves the row at rest, not silent', () => {
+    const v: RadioMoveVisual = {
+      key: 'k',
+      rowId: 'r',
+      param: 'volume',
+      move: 'drop',
+      points: [
+        { at: 0, value: 1 },
+        { at: 1, value: Number.NaN },
+        { at: 2, value: 1 }
+      ]
+    }
+    expect(radioMoveVisualValueAt(v, 0.5)).toBe(1)
+    expect(radioMoveVisualValueAt(v, 1.5)).toBe(1)
+    expect(at([v], 'r', 0.5).level).toBe(1)
+    const held: RadioMoveVisual = { ...v, points: [{ at: 0, value: Number.NaN }], holds: true }
+    expect(radioMoveVisualValueAt(held, 5)).toBe(1)
+    const wash: RadioMoveVisual = { ...v, param: 'wash', move: 'wash' }
+    expect(radioMoveVisualValueAt(wash, 0.5)).toBe(0)
+  })
+
+  it('reopening leaves a rest logged closed from the start alone (only a closed-open one opens)', () => {
+    const fixed = radioRestVisual({ rowId: 'r', from: 8, until: 16, key: 'k' })
+    expect(reopenRadioRestVisuals([fixed], 'r', 16)).toEqual([fixed])
+    const open = radioRestVisual({ rowId: 'r', from: 8, until: null, key: 'k' })
+    const closed = closeRadioRestVisuals([open], 'r', 16)
+    expect(closed[0].closed).toBe(true)
+    expect(reopenRadioRestVisuals(closed, 'r', 16)).toEqual([open])
+    expect(reopenRadioRestVisuals(closed, 'r', 12)).toEqual(closed) // closed elsewhere
+  })
+
+  it('a wash is drawn at its depth: subtle less washed than bold', () => {
+    const wash = (peak: number): RadioMoveVisual[] =>
+      radioTurnaroundVisuals(
+        {
+          move: 'wash',
+          beats: 4,
+          halvings: 0,
+          rows: [{ rowId: 'pad', reverbSend: turnaroundWashCurve(4, peak) }]
+        },
+        { wrapAt: 32, loopBars: 8, key: 'ta', ...BARS }
+      )
+    const bold = wash(TURNAROUND_DEPTH.bold.washPeak)
+    const subtle = wash(TURNAROUND_DEPTH.subtle.washPeak)
+    expect(at(bold, 'pad', 31.999).wash).toBeCloseTo(1, 2)
+    expect(at(subtle, 'pad', 31.999).wash).toBeCloseTo(
+      TURNAROUND_DEPTH.subtle.washPeak / TURNAROUND_WASH_PEAK,
+      2
+    )
+    expect(at(subtle, 'pad', 31.5).wash).toBeCloseTo(
+      (0.5 * TURNAROUND_DEPTH.subtle.washPeak) / TURNAROUND_WASH_PEAK,
+      9
+    )
+    expect(at(subtle, 'pad', 32).wash).toBe(0)
+  })
+
+  it('two volume moves on one row multiply, each on its own span', () => {
+    // a half-level duck over bars 2..4 and a drop to 0.5 over bars 3..5
+    const duck: RadioMoveVisual = {
+      key: 'a',
+      rowId: 'r',
+      param: 'volume',
+      move: 'duck',
+      points: [
+        { at: 2, value: 0.5 },
+        { at: 4, value: 0.5 }
+      ]
+    }
+    const drop: RadioMoveVisual = {
+      key: 'b',
+      rowId: 'r',
+      param: 'volume',
+      move: 'drop',
+      points: [
+        { at: 3, value: 0.5 },
+        { at: 5, value: 0.5 }
+      ]
+    }
+    const v = [duck, drop]
+    expect(at(v, 'r', 1).level).toBe(1)
+    expect(at(v, 'r', 2.5).level).toBe(0.5)
+    expect(at(v, 'r', 3.5).level).toBe(0.25)
+    expect(at(v, 'r', 4.5).level).toBe(0.5)
+    expect(at(v, 'r', 5).level).toBe(1)
+    // a gesture's duck and a turnaround's drop, from their own builders, on one row
+    const built = [
+      ...radioGestureVisuals({
+        kind: 'duck',
+        rowId: 'new',
+        beats: 4,
+        wrapAt: 56,
+        before: { loopBars: 8, unitsPerBar: 1 },
+        after: { loopBars: 8, unitsPerBar: 1 },
+        duckRowIds: ['drums'],
+        key: 'new@56'
+      }),
+      ...radioTurnaroundVisuals(
+        {
+          move: 'drum drop',
+          beats: 4,
+          halvings: 0,
+          rows: [{ rowId: 'drums', volume: turnaroundDropCurve(8, 4) }]
+        },
+        { wrapAt: 64, loopBars: 8, key: 'ta@64', ...BARS }
+      )
+    ]
+    const duckOnly = radioMoveVisualValueAt(built[0], 56.5)
+    expect(duckOnly).toBeLessThan(1)
+    expect(at(built, 'drums', 56.5).level).toBeCloseTo(duckOnly, 9)
+    expect(at(built, 'drums', 63.5).level).toBe(0)
+    expect(at(built, 'drums', 64).level).toBe(1)
+  })
+})
+
+describe("the planner's own combined turnaround (rollTurnaround, combine on)", () => {
+  /** mulberry32: the same run every time. */
+  const mulberry32 = (seed: number): (() => number) => {
+    let a = seed >>> 0
+    return (): number => {
+      a = (a + 0x6d2b79f5) >>> 0
+      let t = a
+      t = Math.imul(t ^ (t >>> 15), t | 1)
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61)
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    }
+  }
+  const row = (id: string, kind: TurnaroundRow['kinds'][number]): TurnaroundRow => ({
+    id,
+    kinds: [kind],
+    hooked: false,
+    audible: true,
+    inFilterIn: false,
+    barLength: 4
+  })
+  const bed = [row('d', 'drums'), row('b', 'bass'), row('l', 'lead'), row('w', 'warm')]
+  // the first seeded riser turn that layers a move with volume and leaves a gap
+  let plan: TurnaroundPlan | null = null
+  for (let seed = 1; seed < 2000 && plan === null; seed++) {
+    const p = rollTurnaround({
+      rate: 'often',
+      random: mulberry32(seed),
+      loopBars: 8,
+      lastPhrase: null,
+      rows: bed,
+      arc: 'steady',
+      leavingRowId: null,
+      combine: true,
+      depth: 'bold',
+      force: { move: 'riser' }
+    })
+    if (
+      p !== null &&
+      (p.parts?.length ?? 0) > 1 &&
+      (p.gapBeats ?? 0) > 0 &&
+      p.riserBars !== undefined &&
+      p.rows.some((r) => r.volume !== undefined) &&
+      p.rows.some((r) => r.filter !== undefined || r.reverbSend !== undefined)
+    ) {
+      plan = p
+    }
+  }
+  const WRAP = 64
+  const UPB = BARS.unitsPerBeat
+
+  /** A plan curve (beats before the wrap) at `t`, off its breakpoints: linear, rest outside. */
+  const curveAt = (pts: readonly TurnaroundPoint[], t: number, rest: number): number => {
+    const b = (WRAP - t) / UPB
+    if (pts.length === 0 || b > pts[0].beats || b < pts[pts.length - 1].beats) return rest
+    for (let i = 1; i < pts.length; i++) {
+      const p = pts[i - 1]
+      const q = pts[i]
+      if (b <= p.beats && b > q.beats) {
+        return p.value + ((q.value - p.value) * (p.beats - b)) / (p.beats - q.beats)
+      }
+    }
+    return rest
+  }
+
+  it('the roll gives one (a riser leading layered moves, with a gap)', () => {
+    expect(plan).not.toBeNull()
+  })
+
+  it("every row's look follows its merged curves, the riser stops at the gap, the one brings all back", () => {
+    const p = plan!
+    const v = radioTurnaroundVisuals(p, { wrapAt: WRAP, loopBars: 8, key: 'ta', ...BARS })
+    const beats = Math.max(p.beats, ...p.rows.flatMap((r) => r.volume?.map((x) => x.beats) ?? []))
+    let checked = 0
+    for (const r of p.rows) {
+      // every breakpoint, sampled between them (a step's two sides differ only on it)
+      const bps = [
+        ...(r.volume ?? []),
+        ...(r.filter?.cutoff ?? []),
+        ...(r.reverbSend?.points ?? [])
+      ].map((x) => WRAP - x.beats * UPB)
+      const ts = [...new Set([WRAP - beats * UPB - 1, ...bps, WRAP])].sort((a, b) => a - b)
+      for (let i = 1; i < ts.length; i++) {
+        for (const f of [0.25, 0.5, 0.75]) {
+          const t = ts[i - 1] + (ts[i] - ts[i - 1]) * f
+          const look = at(v, r.rowId, t)
+          expect(look.level).toBeCloseTo(r.volume ? curveAt(r.volume, t, 1) : 1, 9)
+          if (r.filter?.mode === 'highpass')
+            expect(look.lowCut).toBeCloseTo(curveAt(r.filter.cutoff, t, 0) / TURNAROUND_LIFT_TOP, 9)
+          if (r.filter?.mode === 'lowpass')
+            expect(look.highCut).toBeCloseTo(
+              (1 - curveAt(r.filter.cutoff, t, 1)) / (1 - TURNAROUND_DIP_FLOOR),
+              9
+            )
+          if (r.reverbSend)
+            expect(look.wash).toBeCloseTo(
+              (curveAt(r.reverbSend.points, t, 0) * r.reverbSend.peak) / TURNAROUND_WASH_PEAK,
+              9
+            )
+          checked++
+        }
+      }
+      expect(at(v, r.rowId, WRAP)).toEqual(RADIO_ROW_VISUAL_REST)
+    }
+    expect(checked).toBeGreaterThan(0)
+    const gapStart = WRAP - p.gapBeats! * UPB
+    expect(at(v, null, gapStart - 0.01).riser).toBeGreaterThan(0.9)
+    expect(at(v, null, gapStart).riser).toBe(0)
+    expect(at(v, null, WRAP)).toEqual(RADIO_ROW_VISUAL_REST)
+    // through the gap only the keeper (if any) is heard
+    for (const r of p.rows) {
+      if (r.rowId === p.keeperId) continue
+      expect(at(v, r.rowId, WRAP - 0.01).level).toBe(0)
+    }
   })
 })

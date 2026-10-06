@@ -2495,6 +2495,20 @@ the flash fades `{ in: RADIO_FLASH_FADE_IN_SEC * bpm / 240, out: RADIO_FLASH_FAD
   `discover radio: the moves' visuals log (spec 2026-10-05-radio-move-visuals-design) -- radioMoveVisualsTick, beside the flash tick: what is armed every tick as @shared radioMoveVisuals on the readout's clock (gestures from radioGestureRef, the turnaround when it fits the loop with its late gap rows, the armed throw's echo, hook and arc rests closed by a decided return), keyed by what armed them, so a take-back drops them; the resting rows for render; flashes carry their move's end and fade in 100 ms / out 150 ms. No panel tests (convention); unseen by any agent`,
   then the trailer.
 
+**Note (review of Tasks 1-2, 2026-10-06): log visuals only for what was actually laid down.**
+The turnaround's lane build (`DiscoverPanel.tsx`, ~2278-2335) does not always play the plan
+whole, and the visuals must not show more than it plays:
+- it drops the whole plan when `!turnaroundFitsLoop(ta.plan, loopBars)` (a landing changed the
+  loop after the roll) -- log nothing for it then (Step 2 already gates on this; keep the same
+  test, against the same loop length the lane build used);
+- it skips a turnaround filter on a stem already in a change's filter in (`had.length > 0`: one
+  filter, one mode, one lap) -- log no `lift` / `dip` visual for that row, only its volume and
+  wash. The simplest honest shape: build the visuals from a copy of the plan with `filter`
+  removed from every row the lane build skipped (the same `filterCutoff` check, or a set the
+  lane build records), rather than re-deriving it in the tick. A lone lift or dip with every
+  row skipped then lays down nothing (the panel forgets the phrase end: `filtered === 0`), and
+  the per-row rule leaves it no visuals either.
+
 ### Task 7: The rows and the top line draw them
 
 **Repo:** sssketch. **Depends on:** Task 6.

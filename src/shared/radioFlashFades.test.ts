@@ -80,3 +80,14 @@ describe("a move's word", () => {
     expect(plates.cue?.flash).toEqual({ word: 'lift', opacity: 1 })
   })
 })
+
+describe('the prune without the fades', () => {
+  it("keeps a word exactly as long as radioFlashShown shows it (today's `now - at < window`)", () => {
+    // 0.7 + 0.1 and 0.8 - 0.7 disagree in floating point: the word still shows here
+    const l: RadioFlash[] = [{ rowId: 'a', word: 'hole', at: 0.7, key: 'k' }]
+    const now = 0.7999999999999999
+    expect(radioFlashShown(l, 'a', now, 0.1)).not.toBeNull()
+    expect(pruneRadioFlashes(l, now, 0.1)).toEqual(l)
+    expect(pruneRadioFlashes(l, 0.8, 0.1)).toEqual([])
+  })
+})

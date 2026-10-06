@@ -468,10 +468,15 @@ export function pruneRadioFlashes(
   live?: ReadonlySet<string>,
   fadeOut = 0
 ): RadioFlash[] {
+  const out = Math.max(0, fadeOut)
   return log.filter((f) =>
     f.at > now
       ? live === undefined || live.has(f.key)
-      : now < flashEnd(f, window) + Math.max(0, fadeOut)
+      : f.until === undefined && out === 0
+        ? // today's expression, as radioFlashShown's without the fades: `f.at + window` can
+          // round the other way at the boundary
+          now - f.at < window
+        : now < flashEnd(f, window) + out
   )
 }
 
