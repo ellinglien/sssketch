@@ -16,6 +16,8 @@ describe('stemFeaturesCache', () => {
   let decodeAudioDataMock: ReturnType<typeof vi.fn>
   let getStemFeatureCacheMock: ReturnType<typeof vi.fn>
   let setStemFeatureCacheMock: ReturnType<typeof vi.fn>
+  let getStemGlyphCacheMock: ReturnType<typeof vi.fn>
+  let setStemGlyphCacheMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     vi.resetModules()
@@ -23,6 +25,8 @@ describe('stemFeaturesCache', () => {
     decodeAudioDataMock = vi.fn()
     getStemFeatureCacheMock = vi.fn().mockResolvedValue(null)
     setStemFeatureCacheMock = vi.fn().mockResolvedValue(undefined)
+    getStemGlyphCacheMock = vi.fn().mockResolvedValue(null)
+    setStemGlyphCacheMock = vi.fn().mockResolvedValue(undefined)
 
     vi.stubGlobal('window', {
       rifffApi: {
@@ -34,7 +38,9 @@ describe('stemFeaturesCache', () => {
         // stubbed as a permanent miss so this file's own decode-path
         // tests keep exercising a real decode, same as before that change.
         getStemPeaksCache: vi.fn().mockResolvedValue(null),
-        setStemPeaksCache: vi.fn().mockResolvedValue(undefined)
+        setStemPeaksCache: vi.fn().mockResolvedValue(undefined),
+        getStemGlyphCache: getStemGlyphCacheMock,
+        setStemGlyphCache: setStemGlyphCacheMock
       }
     })
     class FakeAudioContext {
@@ -90,6 +96,27 @@ describe('stemFeaturesCache', () => {
     // concurrently inside getStemFeatures and decodeStemFile shares a
     // read+decode already in flight for the path (2026-09-28).
     expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('primes the glyph bands and pitch too: a later glyph neither decodes, reads nor writes (plan T9)', async () => {
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+
+    const { getStemFeatures } = await import('./stemFeaturesCache')
+    const { getGlyphBands } = await import('./bandEnergyCache')
+    const { getPitchContour } = await import('./pitchCache')
+    const { computeBandEnergy } = await import('@shared/bandEnergy')
+    const { glyphBandsFrom } = await import('@shared/glyphBands')
+    await getStemFeatures('/some/stem.wav')
+    const bands = await getGlyphBands('/some/stem.wav')
+    await getPitchContour('/some/stem.wav')
+
+    expect(bands).toEqual(
+      glyphBandsFrom(computeBandEnergy(fakeAudioBuffer().getChannelData(), 44100))
+    )
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+    expect(getStemGlyphCacheMock).not.toHaveBeenCalled()
+    expect(setStemGlyphCacheMock).not.toHaveBeenCalled()
   })
 
   it('evicts a rejected computation from the cache so a later call retries', async () => {

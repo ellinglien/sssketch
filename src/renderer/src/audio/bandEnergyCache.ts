@@ -1,36 +1,65 @@
-import { computeBandEnergy, type BandEnergy } from '@shared/bandEnergy'
+import { computeBandEnergy } from '@shared/bandEnergy'
+import { glyphBandsFrom, type GlyphBands } from '@shared/glyphBands'
 import { decodeStemFile } from './decodeStemFile'
 import { countWork } from '../perf/workCounters'
+import { readPersistedStemGlyph, writePersistedStemGlyph } from './stemGlyphCache'
 
-const cache = new Map<string, Promise<BandEnergy>>()
+const cache = new Map<string, Promise<GlyphBands>>()
 
-/** Per-path band-energy cache, mirroring peakCache.ts's own shape and
- * eviction-on-rejection behavior — kept as a separate cache (not merged
- * into peakCache's own WaveformAnalysis) since this decodes and runs a
- * real FFT pass (via computeSpectrogram), a meaningfully heavier cost than
- * peaks/brightness's cheap bucket scan, and not every getPeaks caller
- * needs it. */
-export function getBandEnergy(path: string): Promise<BandEnergy> {
-  const cached = cache.get(path)
-  if (cached) return cached
-
-  const promise = (async () => {
-    try {
-      const audioBuffer = await decodeStemFile(path)
-      countWork('analysis:band-energy')
-      return computeBandEnergy(audioBuffer.getChannelData(0), audioBuffer.sampleRate)
-    } catch (err) {
-      cache.delete(path)
-      throw err
-    }
-  })()
-
+/** Caches `promise` for `path`, evicting it on rejection so a later call
+ * retries (only if it's still the cached entry). */
+function remember(path: string, promise: Promise<GlyphBands>): Promise<GlyphBands> {
   cache.set(path, promise)
+  promise.catch(() => {
+    if (cache.get(path) === promise) cache.delete(path)
+  })
   return promise
 }
 
-/** Forgets this path's band energy -- see peakCache.ts's evictWaveform for
- * why an in-place rewrite is the one case that needs this. */
+/** Per-path glyph rings (bass/mid/treble at the 16 points PolarGlyph draws,
+ * @shared/glyphBands), mirroring peakCache.ts's own shape and
+ * eviction-on-rejection behavior. Kept separate from peakCache's own
+ * WaveformAnalysis since computing it runs a real FFT pass (via
+ * computeSpectrogram), a meaningfully heavier cost than peaks/brightness's
+ * cheap bucket scan, and not every getPeaks caller needs it.
+ *
+ * Order (plan 2026-10-05-merge-background-scans T9): this session's entry
+ * (computed, or primed by stemFeaturesCache.ts from its own analysis); then
+ * the persisted row (stemGlyphCache.ts, one IPC shared with pitchCache.ts);
+ * only then a decode + band pass, whose result is persisted for next time. */
+export function getGlyphBands(path: string): Promise<GlyphBands> {
+  const cached = cache.get(path)
+  if (cached) return cached
+
+  return remember(
+    path,
+    (async () => {
+      const persisted = await readPersistedStemGlyph(path)
+      if (persisted?.bands) return persisted.bands
+      const audioBuffer = await decodeStemFile(path)
+      countWork('analysis:band-energy')
+      const bands = glyphBandsFrom(
+        computeBandEnergy(audioBuffer.getChannelData(0), audioBuffer.sampleRate)
+      )
+      writePersistedStemGlyph(path, { bands })
+      return bands
+    })()
+  )
+}
+
+/** Seeds the cache with bands computed elsewhere -- stemFeaturesCache.ts
+ * gets them for free from its own full analysis (StemAnalysis.glyphBands),
+ * so a stem the background scan already analyzed never pays a second decode
+ * + FFT here. Not persisted (see writePersistedStemGlyph). A path that's
+ * already cached (or in flight) is left alone. */
+export function primeGlyphBands(path: string, bands: GlyphBands): void {
+  if (!cache.has(path)) cache.set(path, Promise.resolve(bands))
+}
+
+/** Forgets this path's glyph bands -- see peakCache.ts's evictWaveform for
+ * why an in-place rewrite is the one case that needs this. (The persisted
+ * row needs nothing: a rewritten file's size:mtimeMs stamp no longer
+ * matches it.) */
 export function evictBandEnergy(path: string): void {
   cache.delete(path)
 }

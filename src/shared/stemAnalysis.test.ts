@@ -4,6 +4,8 @@ import { computePitchContour, voicedPitchFeatures } from './pitchContour'
 import { transientDensity } from './typeGuess'
 import { computeMfcc } from './mfcc'
 import { STEM_FEATURE_VERSION } from './stemFeatures'
+import { computeBandEnergy } from './bandEnergy'
+import { glyphBandsFrom } from './glyphBands'
 
 function sine(freqHz: number, seconds = 0.5, sampleRate = 44100): Float32Array {
   const n = Math.round(seconds * sampleRate)
@@ -27,6 +29,12 @@ describe('analyzeStemSamples', () => {
     const direct = computePitchContour(samples, 44100)
     expect(a.pitchContour.numFrames).toBe(direct.numFrames)
     expect(Array.from(a.pitchContour.freqHz)).toEqual(Array.from(direct.freqHz))
+  })
+
+  it('glyph bands are the glyph-resolution read of the same band energy (plan T9)', () => {
+    const samples = sine(220)
+    const a = analyzeStemSamples(samples, 44100)
+    expect(a.glyphBands).toEqual(glyphBandsFrom(computeBandEnergy(samples, 44100)))
   })
 
   it('a higher tone has a higher spectral centroid', () => {

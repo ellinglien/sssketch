@@ -4,6 +4,7 @@ import { countWork } from '../perf/workCounters'
 import { decodeStemFile } from './decodeStemFile'
 import { getBrightness } from './peakCache'
 import { primePitchContour } from './pitchCache'
+import { primeGlyphBands } from './bandEnergyCache'
 import { analyzeStemSamplesOffThread, channelsAfterFirst } from './stemAnalysisClient'
 import { queueStemAnalysisWrite } from './analysisWriteQueue'
 import type { StemLevelWrite } from '@shared/stemAnalysisWrite'
@@ -28,8 +29,9 @@ export interface GetStemFeaturesOptions {
  * tracking, MFCC, band energy, transients -- in a Web Worker, off the
  * renderer's main thread (direct report, 2026-09-21: the background
  * library scans running this inline froze typing and clicks). The pitch
- * contour that analysis produces is also primed into pitchCache.ts, so
- * this no longer costs a second, separate decode just for pitch.
+ * contour that analysis produces is also primed into pitchCache.ts, and its
+ * glyph bands into bandEnergyCache.ts, so neither costs a second, separate
+ * decode.
  * Brightness still comes from getBrightness (peakCache.ts), usually its
  * persisted cache.
  *
@@ -163,6 +165,7 @@ async function featuresFromDecoded(
     channelsAfterFirst(audioBuffer)
   )
   primePitchContour(path, analysis.pitchContour)
+  if (analysis.glyphBands) primeGlyphBands(path, analysis.glyphBands)
   const features = assembleStemFeatures(analysis, brightness)
   persist(features)
   return features

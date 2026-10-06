@@ -14,13 +14,23 @@ function fakeAudioBuffer(): { getChannelData: () => Float32Array; sampleRate: nu
 describe('pitchCache', () => {
   let readAudioFileMock: ReturnType<typeof vi.fn>
   let decodeAudioDataMock: ReturnType<typeof vi.fn>
+  let getStemGlyphCacheMock: ReturnType<typeof vi.fn>
+  let setStemGlyphCacheMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     vi.resetModules()
     readAudioFileMock = vi.fn()
     decodeAudioDataMock = vi.fn()
+    getStemGlyphCacheMock = vi.fn().mockResolvedValue(null)
+    setStemGlyphCacheMock = vi.fn().mockResolvedValue(undefined)
 
-    vi.stubGlobal('window', { rifffApi: { readAudioFile: readAudioFileMock } })
+    vi.stubGlobal('window', {
+      rifffApi: {
+        readAudioFile: readAudioFileMock,
+        getStemGlyphCache: getStemGlyphCacheMock,
+        setStemGlyphCache: setStemGlyphCacheMock
+      }
+    })
     class FakeAudioContext {
       decodeAudioData = decodeAudioDataMock
     }
@@ -60,5 +70,48 @@ describe('pitchCache', () => {
     const result = await getPitchContour('/some/path.wav')
     expect(result.freqHz.length).toBe(result.numFrames)
     expect(readAudioFileMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('a persisted hit decodes nothing and writes nothing', async () => {
+    const freqHz = new Float32Array([0, 220.5, 441.25])
+    getStemGlyphCacheMock.mockResolvedValue({
+      bands: null,
+      pitch: { numFrames: 3, bytes: new Uint8Array(freqHz.buffer.slice(0)) }
+    })
+
+    const { getPitchContour } = await import('./pitchCache')
+    const contour = await getPitchContour('/some/path.wav')
+    expect(contour.numFrames).toBe(3)
+    expect(Array.from(contour.freqHz)).toEqual(Array.from(freqHz))
+    expect(readAudioFileMock).not.toHaveBeenCalled()
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
+    expect(setStemGlyphCacheMock).not.toHaveBeenCalled()
+  })
+
+  it('a miss decodes once and writes the full-resolution contour once', async () => {
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+
+    const { getPitchContour } = await import('./pitchCache')
+    const contour = await getPitchContour('/some/path.wav')
+
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+    expect(setStemGlyphCacheMock).toHaveBeenCalledTimes(1)
+    const [path, write] = setStemGlyphCacheMock.mock.calls[0]
+    expect(path).toBe('/some/path.wav')
+    expect(write.bands).toBeUndefined()
+    expect(write.pitch.numFrames).toBe(contour.numFrames)
+    expect(Array.from(new Float32Array(write.pitch.bytes.buffer))).toEqual(
+      Array.from(contour.freqHz)
+    )
+  })
+
+  it('a primed contour is not written', async () => {
+    const { getPitchContour, primePitchContour } = await import('./pitchCache')
+    const contour = { numFrames: 1, freqHz: new Float32Array([100]) }
+    primePitchContour('/some/path.wav', contour)
+    expect(await getPitchContour('/some/path.wav')).toBe(contour)
+    expect(getStemGlyphCacheMock).not.toHaveBeenCalled()
+    expect(setStemGlyphCacheMock).not.toHaveBeenCalled()
   })
 })

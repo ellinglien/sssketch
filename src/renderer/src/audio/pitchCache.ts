@@ -1,7 +1,9 @@
 import type { PitchContour } from '@shared/pitchContour'
+import { pitchContourFromBytes, pitchContourToBytes } from '@shared/glyphBands'
 import { decodeStemFile } from './decodeStemFile'
 import { computePitchContourOffThread } from './stemAnalysisClient'
 import { countWork } from '../perf/workCounters'
+import { readPersistedStemGlyph, writePersistedStemGlyph } from './stemGlyphCache'
 
 const cache = new Map<string, Promise<PitchContour>>()
 
@@ -17,28 +19,39 @@ export function getPitchContour(path: string): Promise<PitchContour> {
   if (cached) return cached
 
   const promise = (async () => {
-    try {
-      const audioBuffer = await decodeStemFile(path)
-      countWork('analysis:pitch-contour')
-      // Off the main thread (stemAnalysisClient.ts, 2026-09-21).
-      return await computePitchContourOffThread(
-        audioBuffer.getChannelData(0),
-        audioBuffer.sampleRate
-      )
-    } catch (err) {
-      cache.delete(path)
-      throw err
-    }
+    // Persisted first (plan 2026-10-05-merge-background-scans T9): one IPC
+    // shared with bandEnergyCache.ts's glyph read for the same path.
+    const persisted = await readPersistedStemGlyph(path)
+    const fromDb = persisted?.pitch
+      ? pitchContourFromBytes(persisted.pitch.bytes, persisted.pitch.numFrames)
+      : null
+    if (fromDb) return fromDb
+    const audioBuffer = await decodeStemFile(path)
+    countWork('analysis:pitch-contour')
+    // Off the main thread (stemAnalysisClient.ts, 2026-09-21).
+    const contour = await computePitchContourOffThread(
+      audioBuffer.getChannelData(0),
+      audioBuffer.sampleRate
+    )
+    // Every frame, Float32: both pitch lines draw every frame.
+    writePersistedStemGlyph(path, {
+      pitch: { numFrames: contour.freqHz.length, bytes: pitchContourToBytes(contour.freqHz) }
+    })
+    return contour
   })()
 
   cache.set(path, promise)
+  promise.catch(() => {
+    if (cache.get(path) === promise) cache.delete(path)
+  })
   return promise
 }
 
 /** Seeds the cache with a contour computed elsewhere -- stemFeaturesCache.ts
  * gets one for free from its own full analysis, so a stem the background
- * scan already analyzed never pays a second decode + pitch pass here. A
- * path that's already cached (or in flight) is left alone. */
+ * scan already analyzed never pays a second decode + pitch pass here. Not
+ * persisted (stemGlyphCache.ts's writePersistedStemGlyph says why). A path
+ * that's already cached (or in flight) is left alone. */
 export function primePitchContour(path: string, contour: PitchContour): void {
   if (!cache.has(path)) cache.set(path, Promise.resolve(contour))
 }

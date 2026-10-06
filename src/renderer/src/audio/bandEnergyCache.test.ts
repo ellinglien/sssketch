@@ -1,26 +1,42 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { computeBandEnergy } from '@shared/bandEnergy'
+import { glyphBandsFrom, GLYPH_BAND_POINTS } from '@shared/glyphBands'
 
 function fakeBytes(): Uint8Array {
   return new Uint8Array([1, 2, 3, 4])
 }
 
+const samples = (() => {
+  const n = 8192
+  const data = new Float32Array(n)
+  for (let i = 0; i < n; i++) data[i] = Math.sin((2 * Math.PI * 220 * i) / 44100) * 0.5
+  return data
+})()
+
 function fakeAudioBuffer(): { getChannelData: () => Float32Array; sampleRate: number } {
-  return {
-    getChannelData: () => new Float32Array(256).fill(0.3),
-    sampleRate: 44100
-  }
+  return { getChannelData: () => samples, sampleRate: 44100 }
 }
 
 describe('bandEnergyCache', () => {
   let readAudioFileMock: ReturnType<typeof vi.fn>
   let decodeAudioDataMock: ReturnType<typeof vi.fn>
+  let getStemGlyphCacheMock: ReturnType<typeof vi.fn>
+  let setStemGlyphCacheMock: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     vi.resetModules()
     readAudioFileMock = vi.fn()
     decodeAudioDataMock = vi.fn()
+    getStemGlyphCacheMock = vi.fn().mockResolvedValue(null)
+    setStemGlyphCacheMock = vi.fn().mockResolvedValue(undefined)
 
-    vi.stubGlobal('window', { rifffApi: { readAudioFile: readAudioFileMock } })
+    vi.stubGlobal('window', {
+      rifffApi: {
+        readAudioFile: readAudioFileMock,
+        getStemGlyphCache: getStemGlyphCacheMock,
+        setStemGlyphCache: setStemGlyphCacheMock
+      }
+    })
     class FakeAudioContext {
       decodeAudioData = decodeAudioDataMock
     }
@@ -35,14 +51,15 @@ describe('bandEnergyCache', () => {
     readAudioFileMock.mockResolvedValue(fakeBytes())
     decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
 
-    const { getBandEnergy } = await import('./bandEnergyCache')
+    const { getGlyphBands } = await import('./bandEnergyCache')
 
     const [a, b] = await Promise.all([
-      getBandEnergy('/some/path.wav'),
-      getBandEnergy('/some/path.wav')
+      getGlyphBands('/some/path.wav'),
+      getGlyphBands('/some/path.wav')
     ])
 
-    expect(a).toEqual(b)
+    expect(a).toBe(b)
+    expect(getStemGlyphCacheMock).toHaveBeenCalledTimes(1)
     expect(readAudioFileMock).toHaveBeenCalledTimes(1)
     expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
   })
@@ -53,24 +70,71 @@ describe('bandEnergyCache', () => {
       .mockResolvedValueOnce(fakeBytes())
     decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
 
-    const { getBandEnergy } = await import('./bandEnergyCache')
+    const { getGlyphBands } = await import('./bandEnergyCache')
 
-    await expect(getBandEnergy('/some/path.wav')).rejects.toThrow('permission denied')
+    await expect(getGlyphBands('/some/path.wav')).rejects.toThrow('permission denied')
 
-    const result = await getBandEnergy('/some/path.wav')
-    expect(result.numFrames).toBeGreaterThan(0)
+    const result = await getGlyphBands('/some/path.wav')
+    expect(result.bass).toHaveLength(GLYPH_BAND_POINTS)
     expect(readAudioFileMock).toHaveBeenCalledTimes(2)
   })
 
-  it('returns bass/mid/treble arrays matching numFrames', async () => {
+  it('a miss decodes once, computes the glyph-resolution bands and writes them once', async () => {
     readAudioFileMock.mockResolvedValue(fakeBytes())
     decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
 
-    const { getBandEnergy } = await import('./bandEnergyCache')
-    const result = await getBandEnergy('/some/path.wav')
+    const { getGlyphBands } = await import('./bandEnergyCache')
+    const result = await getGlyphBands('/some/path.wav')
 
-    expect(result.bass.length).toBe(result.numFrames)
-    expect(result.mid.length).toBe(result.numFrames)
-    expect(result.treble.length).toBe(result.numFrames)
+    expect(result).toEqual(glyphBandsFrom(computeBandEnergy(samples, 44100)))
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+    expect(setStemGlyphCacheMock).toHaveBeenCalledTimes(1)
+    expect(setStemGlyphCacheMock).toHaveBeenCalledWith('/some/path.wav', { bands: result })
+  })
+
+  it('a persisted hit decodes nothing and writes nothing', async () => {
+    const bands = glyphBandsFrom(computeBandEnergy(samples, 44100))
+    getStemGlyphCacheMock.mockResolvedValue({ bands, pitch: null })
+
+    const { getGlyphBands } = await import('./bandEnergyCache')
+    expect(await getGlyphBands('/some/path.wav')).toEqual(bands)
+    expect(readAudioFileMock).not.toHaveBeenCalled()
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
+    expect(setStemGlyphCacheMock).not.toHaveBeenCalled()
+  })
+
+  it('a failed persisted read counts as a miss', async () => {
+    getStemGlyphCacheMock.mockRejectedValue(new Error('ipc down'))
+    readAudioFileMock.mockResolvedValue(fakeBytes())
+    decodeAudioDataMock.mockResolvedValue(fakeAudioBuffer())
+
+    const { getGlyphBands } = await import('./bandEnergyCache')
+    expect((await getGlyphBands('/some/path.wav')).mid).toHaveLength(GLYPH_BAND_POINTS)
+    expect(decodeAudioDataMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('a primed path reads, decodes and writes nothing', async () => {
+    const bands = glyphBandsFrom(computeBandEnergy(samples, 44100))
+    const { getGlyphBands, primeGlyphBands } = await import('./bandEnergyCache')
+    primeGlyphBands('/some/path.wav', bands)
+    expect(await getGlyphBands('/some/path.wav')).toBe(bands)
+    expect(getStemGlyphCacheMock).not.toHaveBeenCalled()
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
+    expect(setStemGlyphCacheMock).not.toHaveBeenCalled()
+  })
+
+  it('bands and pitch for the same path share one persisted read', async () => {
+    const bands = glyphBandsFrom(computeBandEnergy(samples, 44100))
+    getStemGlyphCacheMock.mockResolvedValue({
+      bands,
+      pitch: { numFrames: 2, bytes: new Uint8Array(new Float32Array([110, 0]).buffer) }
+    })
+    const { getGlyphBands } = await import('./bandEnergyCache')
+    const { getPitchContour } = await import('./pitchCache')
+    const [b, p] = await Promise.all([getGlyphBands('/x'), getPitchContour('/x')])
+    expect(b).toEqual(bands)
+    expect(Array.from(p.freqHz)).toEqual([110, 0])
+    expect(getStemGlyphCacheMock).toHaveBeenCalledTimes(1)
+    expect(decodeAudioDataMock).not.toHaveBeenCalled()
   })
 })

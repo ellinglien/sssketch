@@ -199,6 +199,8 @@ import {
 } from './stemCategoriesStore'
 import { getStemFeatureCache, setStemFeatureCache } from './stemFeatureCacheStore'
 import { getStemPeaksCache, setStemPeaksCache, type StemPeaks } from './stemPeaksCacheStore'
+import { getStemGlyphCache, setStemGlyphCache } from './stemGlyphCacheStore'
+import type { StemGlyphCacheEntry, StemGlyphCacheWrite } from '@shared/glyphBands'
 import { getStemEmbeddingCache, setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { readYamnetModelBytes } from './yamnetModel'
 import { enableWorkCounters } from './workCounters'
@@ -1725,6 +1727,21 @@ app.whenReady().then(async () => {
       candidateDbsForRiff()
     )
   })
+
+  // A stem's glyph rings and pitch line, persisted at drawn resolution (plan
+  // 2026-10-05-merge-background-scans T9): StemCID-keyed for a library stem,
+  // path + size:mtimeMs for any other file (an async stat, before any SQL).
+  ipcMain.handle(
+    'get-stem-glyph-cache',
+    (_event, path: string): Promise<StemGlyphCacheEntry | null> =>
+      getStemGlyphCache(openOwnRiffLibraryDb(), path)
+  )
+
+  ipcMain.handle(
+    'set-stem-glyph-cache',
+    (_event, path: string, write: StemGlyphCacheWrite): Promise<void> =>
+      setStemGlyphCache(openOwnRiffLibraryDb(), path, write, Math.floor(Date.now() / 1000))
+  )
 
   ipcMain.handle('get-yamnet-model', (): Promise<Uint8Array | null> => readYamnetModelBytes())
 

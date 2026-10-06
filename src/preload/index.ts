@@ -31,6 +31,7 @@ import type { UpdateState } from '@shared/updateState'
 import type { RadioHeartsKeyStatus, RadioHeartsResult } from '@shared/radioHearts'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { StemPeaks } from '../main/stemPeaksCacheStore'
+import type { StemGlyphCacheEntry, StemGlyphCacheWrite } from '@shared/glyphBands'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
 import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
@@ -538,6 +539,12 @@ const api = {
     ipcRenderer.invoke('get-stem-peaks-cache', path),
   setStemPeaksCache: (path: string, peaks: StemPeaks): Promise<void> =>
     ipcRenderer.invoke('set-stem-peaks-cache', path, peaks),
+  /** Glyph rings and pitch line persisted per stem (stemGlyphCacheStore.ts):
+   * null on a miss, a changed file, or a path that can't be stamped. */
+  getStemGlyphCache: (path: string): Promise<StemGlyphCacheEntry | null> =>
+    ipcRenderer.invoke('get-stem-glyph-cache', path),
+  setStemGlyphCache: (path: string, write: StemGlyphCacheWrite): Promise<void> =>
+    ipcRenderer.invoke('set-stem-glyph-cache', path, write),
   getStemEmbeddingCache: (path: string): Promise<number[] | null> =>
     ipcRenderer.invoke('get-stem-embedding-cache', path),
   setStemEmbeddingCache: (path: string, embedding: number[]): Promise<void> =>

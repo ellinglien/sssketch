@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { polarGlyph, polarPitchLine } from '@shared/visuals'
-import { getBandEnergy } from '../audio/bandEnergyCache'
+import { getGlyphBands } from '../audio/bandEnergyCache'
 import { getPitchContour } from '../audio/pitchCache'
 import type { Stem } from '@shared/types'
 import { stemColorVar } from '../theme/typeColor'
@@ -51,14 +51,17 @@ export function PolarGlyph({
     // Promise.all, matching this component's own pre-existing convention.
     Promise.allSettled(
       stems.map((s) =>
-        Promise.all([getBandEnergy(s.path), getPitchContour(s.path)]).then(
+        // Bands arrive at the 16 points polarGlyph draws (@shared/glyphBands),
+        // usually from the persisted cache -- the same rings as the full
+        // per-frame arrays drew (glyphBands.test.ts proves the identity).
+        Promise.all([getGlyphBands(s.path), getPitchContour(s.path)]).then(
           ([band, pitch]) =>
             [
               s.path,
               {
-                bass: Array.from(band.bass),
-                mid: Array.from(band.mid),
-                treble: Array.from(band.treble),
+                bass: band.bass,
+                mid: band.mid,
+                treble: band.treble,
                 freqHz: Array.from(pitch.freqHz)
               }
             ] as const

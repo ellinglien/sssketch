@@ -77,6 +77,7 @@ export default defineConfig({
           'src/main/stemCategoriesStore.test.ts',
           'src/main/stemEmbeddingCacheStore.test.ts',
           'src/main/stemFeatureCacheStore.test.ts',
+          'src/main/stemGlyphCacheStore.test.ts',
           'src/main/stemPeaksCacheStore.test.ts',
           'src/main/stemUnavailableStore.test.ts',
           'src/main/tableChangeSignalSql.test.ts',

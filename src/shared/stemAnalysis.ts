@@ -15,6 +15,7 @@ import { computePitchContour, voicedPitchFeatures, type PitchContour } from './p
 import { computeMfccAndCentroid } from './mfcc'
 import { STEM_FEATURE_VERSION, type StemFeatures } from './stemFeatures'
 import { STEM_LEVEL_VERSION, stemLevelFeatures, type StemLevel } from './stemLevel'
+import { glyphBandsFrom, type GlyphBands } from './glyphBands'
 
 export interface StemAnalysis {
   /** Also handed to pitchCache.ts, so Waveform/PolarGlyph never need a
@@ -32,6 +33,11 @@ export interface StemAnalysis {
   /** The level pass (stemLevel.ts), from every channel -- present when the caller handed the
    * other channels over (`extraChannels`), so a fresh extraction measures both in one message. */
   level?: StemLevel
+  /** The glyph rings at the resolution PolarGlyph draws them (glyphBands.ts),
+   * read off the band-energy pass this analysis already runs -- handed to
+   * bandEnergyCache.ts the same way pitchContour is handed to pitchCache.ts,
+   * so a stem the scan analyzed never decodes again for its glyph. */
+  glyphBands?: GlyphBands
 }
 
 // Geometric-mean center frequency of each of computeBandEnergy's own fixed
@@ -96,6 +102,7 @@ export function analyzeStemSamples(
     spectralCentroidFftHz: fftCentroid,
     onsetRegularity: regularity,
     rhythmicStrength: rhythmicStrength(density, regularity),
+    glyphBands: glyphBandsFrom(bandEnergy),
     ...(extraChannels !== undefined && {
       level: stemLevelFeatures([samples, ...extraChannels], sampleRate)
     })
