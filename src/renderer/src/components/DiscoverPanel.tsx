@@ -364,6 +364,7 @@ import {
   type RadioArcShown
 } from './radioIntensityGlue'
 import {
+  INTENSITY_RELEAN_TOLERANCE,
   RADIO_ARC_REST_SHORT,
   RADIO_ARC_REST_WORD,
   newRadioIntensityArc,
@@ -376,6 +377,7 @@ import {
   radioIntensityStarted,
   radioIntensityStopped,
   radioIntensityTarget,
+  radioIntensityTargetAhead,
   radioIntensityTargets,
   radioIntensityTurnaroundArc,
   releaseRadioIntensityRest,
@@ -3147,6 +3149,9 @@ export function DiscoverPanel({
      * and warmed alongside it. Empty at or below 70. See ./radioCompanions. */
     companions: RadioPendingCompanion[]
   } | null>(null)
+  /** The intensity arc's target radio's pending pick was armed with (option A, 2026-10-06: where
+   * its change lands), for that pick; null with no lean. intensityRelean arms again when it moves. */
+  const radioPendingLeanRef = useRef<{ pick: SlotPick; target: number } | null>(null)
   // The RENDERABLE half of radioPendingRef: just which slot it names.
   //
   // Direct report, 2026-09-29: "i don't see any preparatory blinking on
@@ -4657,7 +4662,11 @@ export function DiscoverPanel({
       const slot = live.get(id)
       if (slot === undefined) continue
       const kindsKey = slotKindsKey(slot.kinds)
-      void pickForSlot(id, slot.kinds, { avoidOwnStem: true, yieldRow: true }).then((pick) => {
+      void pickForSlot(id, slot.kinds, {
+        avoidOwnStem: true,
+        yieldRow: true,
+        intensity: intensityLeanForSpare() ?? undefined
+      }).then((pick) => {
         if (pick === null || pick.candidate === null || !radioOnRef.current) return
         const spares = radioSparesRef.current
         if (spares.length >= RADIO_SPARES_MAX || spares.some((k) => k.slotId === id)) return
@@ -10653,12 +10662,14 @@ export function DiscoverPanel({
     // branch leaves an arm in flight alone, and nothing is pending meanwhile, so nothing can land
     // late on its account.
     radioArmInFlightRef.current = myArm
+    // the intensity arc: leaned to the target where the change lands, not where it is picked
+    const lean = intensityLeanForChange() ?? undefined
     let pick: Awaited<ReturnType<typeof pickForSlot>>
     let morePicks: Awaited<ReturnType<typeof pickForSlot>>[]
     try {
       ;[pick, ...morePicks] = await Promise.all([
-        pickForSlot(slotId, slot.kinds, { avoidOwnStem: true }),
-        ...moreSlots.map((s) => pickForSlot(s.id, s.kinds, { avoidOwnStem: true }))
+        pickForSlot(slotId, slot.kinds, { avoidOwnStem: true, intensity: lean }),
+        ...moreSlots.map((s) => pickForSlot(s.id, s.kinds, { avoidOwnStem: true, intensity: lean }))
       ])
     } finally {
       if (radioArmInFlightRef.current === myArm) radioArmInFlightRef.current = null
@@ -10700,6 +10711,7 @@ export function DiscoverPanel({
       }
     })
     setRadioPending({ slotId, pick, incomingBars: null, stem: null, companions })
+    radioPendingLeanRef.current = lean === undefined ? null : { pick, target: lean.target }
     // Each companion warmed as radio's own pick is, and written back only while that pick is
     // still the pending one. One that cannot resolve leaves: a length never known would hold
     // the whole change to the loop top (radioChangeLengths) for nothing.
@@ -10799,6 +10811,8 @@ export function DiscoverPanel({
         if (wrapped) {
           intensityAtWrap(loopBars, lap)
           refreshRadioArcShown()
+          // radio's pick leans to where it lands: armed again when the arc moved that target
+          intensityRelean()
         }
       })
       return
@@ -11880,6 +11894,78 @@ export function DiscoverPanel({
     return { target: radioIntensityTarget(arc, radioEnergyOf(radioSettings), drama), drama }
   }
 
+  /** The lean on a pick landing `wraps` tops from now (radioIntensityTargetAhead), or -- `wraps`
+   * null, the clock not knowing yet -- the target now. Null unless radio runs the intensity arc. */
+  function intensityLeanAhead(
+    wraps: (clock: RadioClock, loopBars: number, phraseLaps: number) => number | null
+  ): { target: number; drama: number } | null {
+    const arc = intensityOn() && radioOnRef.current ? intensityArcRef.current : null
+    const clock = radioClockRef.current
+    const { loopBars } = turnaroundLoopNow()
+    if (arc === null || clock === null || !(loopBars > 0)) return intensityLeanNow()
+    const phraseLaps = turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars)
+    const n = wraps(clock, loopBars, phraseLaps)
+    if (n === null) return intensityLeanNow()
+    const energy = radioEnergyOf(radioSettings)
+    const drama = radioDramaOf(radioSettings)
+    const count = intensityRowsNow().bed.length
+    const lap = clock.turnaroundLap ?? 0
+    const input = {
+      energy,
+      drama,
+      loopBars,
+      lap,
+      phraseLaps,
+      count,
+      min: DENSITY_MIN,
+      max: DENSITY_MAX
+    }
+    return { target: radioIntensityTargetAhead(arc, input, n), drama }
+  }
+
+  /** The lean on radio's own pick (option A, Elling 2026-10-06): the arc's target where its
+   * change lands, at the tops radioBarsUntilChange counts from the last tick (here an arc step and
+   * radio's change share a top, so none is skipped). */
+  function intensityLeanForChange(): { target: number; drama: number } | null {
+    return intensityLeanAhead((clock, loopBars) => {
+      const grid = radioGridBarsRef.current > 0 ? radioGridBarsRef.current : loopBars
+      const until = radioBarsUntilChange(
+        clock,
+        clock.lastPos,
+        loopBars,
+        grid,
+        radioCadence.phraseBars
+      )
+      return until === null ? null : Math.floor((clock.lastPos + until) / loopBars + 1e-9)
+    })
+  }
+
+  /** The lean on a spare pick (sized builds): the target at the next phrase start, where a phrase
+   * end's payoff lands it. Not armed again when that moves. */
+  function intensityLeanForSpare(): { target: number; drama: number } | null {
+    return intensityLeanAhead((clock, _loopBars, phraseLaps) => {
+      const P = Math.max(1, Math.floor(phraseLaps))
+      return P - ((((clock.turnaroundLap ?? 0) % P) + P) % P)
+    })
+  }
+
+  /** Radio's pending pick, undecided, whose landing target has moved past
+   * INTENSITY_RELEAN_TOLERANCE (the arc decided a phase change, a press moved it, a length was
+   * drawn): armed again (armRadioPick) for the new one. After the arc's step at each wrap and
+   * after a press; not while a change is held or an arm is in flight. */
+  function intensityRelean(): void {
+    const pending = radioPendingRef.current
+    const armed = radioPendingLeanRef.current
+    if (pending === null || armed === null || armed.pick !== pending.pick) return
+    if (radioLedChangeRef.current !== null || radioArmInFlight() || !radioOnRef.current) return
+    const lean = intensityLeanForChange()
+    if (lean === null || Math.abs(lean.target - armed.target) <= INTENSITY_RELEAN_TOLERANCE) return
+    console.log(
+      `[radio-intensity] radio's pick on ${pending.slotId} leans again: ${armed.target.toFixed(2)} -> ${lean.target.toFixed(2)}`
+    )
+    void armRadioPick()
+  }
+
   /** BUILD and DROP (spec 6), pressed: the strip's and the phone's (Task 11, through
    * intensityPressRef). Nothing unless radio runs the intensity arc, it has begun, and the press
    * does something (intensityPressNow: a late press whose event would do nothing is refused, as an
@@ -11922,6 +12008,8 @@ export function DiscoverPanel({
       console.log(
         `[radio-intensity] ${action} pressed: ${next.phrases} phrase${next.phrases === 1 ? '' : 's'} now`
       )
+    // the press moved where radio's pick lands
+    intensityRelean()
   }
 
   /** A thinning arc's row on its way out, moved along each tick:
