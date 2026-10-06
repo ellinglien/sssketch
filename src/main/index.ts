@@ -221,6 +221,7 @@ import {
   type AutoClassifyStatus
 } from './stemAutoClassifyScheduler'
 import { migrateProjectLibraryLocation } from './projectLibraryMigration'
+import { createWindowNoticeQueue } from './windowNoticeQueue'
 import { migrateRiffLibraryLocation } from './riffLibraryMigration'
 import {
   listLibrarySketches,
@@ -282,6 +283,12 @@ async function fetchLivePluginStates(logLabel: string): Promise<RawPluginStatesC
 // synchronously inside EngineClient's socket 'data' handler and can crash
 // the whole main process.
 let mainWindow: BrowserWindow | undefined
+// Warnings raised before the window exists (the startup backfill) or after:
+// each is shown as a sheet on the main window once it is ready to show,
+// never as a parentless dialog, which on macOS blocks the main process
+// (windowNoticeQueue.ts). createWindow() tells it when the window is ready
+// and when it is closed.
+const windowNotices = createWindowNoticeQueue<BrowserWindow>()
 // Single source of truth for the auto-update flow -- see @shared/updateState's
 // own doc comment. Only ever mutated by pushUpdateState, defined inside the
 // `if (app.isPackaged)` block below (stays 'idle' forever in dev, where that
@@ -496,6 +503,7 @@ function createWindow(): BrowserWindow {
 
   win.on('ready-to-show', () => {
     win.show()
+    windowNotices.windowReady(win)
     // Direct report, 2026-09-18: "still hanging... stuck for a minute"
     // (then several more minutes, CPU climbing the whole time -- 57%,
     // 67%...) against Elling's real, large external LORE archive
@@ -539,6 +547,8 @@ function createWindow(): BrowserWindow {
       void prewarmTraitQuantileTables(openOwnRiffLibraryDb())
     })
   })
+
+  win.on('closed', () => windowNotices.windowGone(win))
 
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -641,16 +651,27 @@ app.whenReady().then(async () => {
   // load is never trained into or saved over (categoryCentroidTraining.ts),
   // so nothing learns from new confirmations until it is fixed or moved
   // aside: say so, once per distinct error, not only in the console. Set
-  // before the backfill below, the first training write of a launch.
+  // before the backfill below, the first training write of a launch. The
+  // backfill runs before the window exists, so the warning waits for it
+  // (windowNotices): a dialog with no parent window would block startup.
   setCentroidStoreUnreadableListener((path, error) => {
-    void dialog.showMessageBox({
-      type: 'warning',
-      message: "sssketch can't read its classifier training file.",
-      detail:
-        `${path}\n\n${error}\n\n` +
-        'Until it can be read, sssketch leaves it untouched and does not learn from new ' +
-        'bus or role confirmations (they are still saved). Moving the file aside lets ' +
-        'sssketch rebuild it from your confirmed stems.'
+    windowNotices.post(`centroid-store-unreadable:${error}`, (win) => {
+      void dialog
+        .showMessageBox(win, {
+          type: 'warning',
+          buttons: ['show in finder', 'ok'],
+          defaultId: 1,
+          cancelId: 1,
+          message:
+            "sssketch couldn't read the file where it keeps what it has learned from your " +
+            "confirmed stems, so it won't learn new ones until this is fixed.",
+          detail:
+            'your confirmed stems themselves are still saved. move this file somewhere else ' +
+            `and sssketch rebuilds it from them.\n\n${path}\n(${error})`
+        })
+        .then(({ response }) => {
+          if (response === 0) shell.showItemInFolder(path)
+        })
     })
   })
 
