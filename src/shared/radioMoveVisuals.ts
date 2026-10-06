@@ -46,6 +46,7 @@ import {
   buildDuckCurve,
   buildFilterInCurve,
   buildTransitionRiser,
+  radioGestureLeadsChange,
   type RadioTransitionKind
 } from './radioTransition'
 import {
@@ -607,6 +608,47 @@ export function radioGestureVisuals(g: RadioGestureVisualInput): RadioMoveVisual
       }))
     }
   }
+}
+
+/** A gesture armed for the lap playing now, as a runtime that lays its curves into a loop holds it
+ * (sssketch's radioGestureRef): the lap's start on the visuals' clock and the loop as it is now. */
+export interface RadioGestureInLap {
+  kind: RadioTransitionKind | 'drop-out'
+  rowId: string
+  beats: number
+  /** Where the lap playing now started. */
+  lapStart: number
+  /** Its loop as the lane build lays it now (sssketch: the longest stem's bars). */
+  lap: RadioVisualLap
+  duckRowIds?: readonly string[]
+  key: string
+}
+
+/** The gesture's visuals placed again on the lap as it is now (sssketch's tick calls it every tick
+ * for each armed gesture, as it places a turnaround): a lead-in (a hole, a riser, the arc's exit
+ * drop-out) into the wrap that ends the lap, an arrival (a filter in, a bloom, a duck) from its top,
+ * each curve at the loop's length now. Placed once, a stem of another length landing on the lap's
+ * top, its length learned a render late, left it on the wrong wrap for the whole lap. Only `key`'s
+ * visuals change, and the gestures keep the order they are placed in (a row ducks once at a wrap:
+ * the first placed is the dip). */
+export function placeRadioGestureVisuals(
+  visuals: readonly RadioMoveVisual[],
+  g: RadioGestureInLap
+): RadioMoveVisual[] {
+  const leads = g.kind === 'drop-out' || (g.kind !== 'cut' && radioGestureLeadsChange(g.kind))
+  return [
+    ...dropRadioMoveVisuals(visuals, g.key),
+    ...radioGestureVisuals({
+      kind: g.kind,
+      rowId: g.rowId,
+      beats: g.beats,
+      wrapAt: leads ? g.lapStart + g.lap.loopBars * g.lap.unitsPerBar : g.lapStart,
+      before: g.lap,
+      after: g.lap,
+      duckRowIds: g.duckRowIds,
+      key: g.key
+    })
+  ]
 }
 
 export interface RadioThrowVisualInput {

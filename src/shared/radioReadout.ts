@@ -15,7 +15,7 @@ import {
   type DiscoverSlotKind,
   type DiscoverTraitKind
 } from './discoverSlotKind'
-import type { RadioTransitionKind } from './radioTransition'
+import { radioGestureLeadsChange, type RadioTransitionKind } from './radioTransition'
 import {
   TURNAROUND_LABEL_MAX,
   turnaroundArc,
@@ -408,6 +408,39 @@ export function radioReadout(input: RadioReadoutInput): RadioReadout {
 /** The word a transition gesture flashes: its kind; none for a cut or the arc's exit. */
 export function radioGestureFlashWord(kind: RadioTransitionKind | 'drop-out'): string | null {
   return kind === 'cut' || kind === 'drop-out' ? null : kind
+}
+
+/** A gesture's word placed again on the lap as it is now (sssketch's tick, every tick for each
+ * armed gesture, as its visuals: radioMoveVisuals' placeRadioGestureVisuals; the clock is bars): a
+ * lead-in's (a hole, a riser) over its beats before the wrap ending the lap, on until that wrap; an
+ * arrival's (a filter in, a bloom, a duck) from the lap's top, on until its curve ends (half the
+ * loop at most). A cut and the arc's exit say nothing. Only `key`'s words change. */
+export function placeRadioGestureFlash(
+  log: readonly RadioFlash[],
+  g: {
+    kind: RadioTransitionKind | 'drop-out'
+    rowId: string
+    beats: number
+    lapStart: number
+    loopBars: number
+    key: string
+  }
+): RadioFlash[] {
+  const rest = dropRadioFlashes(log, g.key)
+  const word = radioGestureFlashWord(g.kind)
+  if (word === null || g.kind === 'drop-out') return rest
+  const bars = g.beats / 4
+  const leads = radioGestureLeadsChange(g.kind)
+  return [
+    ...rest,
+    {
+      rowId: g.rowId,
+      word,
+      at: g.lapStart + (leads ? g.loopBars - bars : 0),
+      key: g.key,
+      until: g.lapStart + (leads ? g.loopBars : Math.min(bars, g.loopBars / 2))
+    }
+  ]
 }
 
 /** Where a flash's word stops showing at full: its move's end, or one window after it starts. */

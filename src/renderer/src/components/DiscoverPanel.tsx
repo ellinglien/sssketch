@@ -338,9 +338,9 @@ import {
   RADIO_FLASH_FADE_OUT_SEC,
   RADIO_THROW_WORD,
   dropRadioFlashes,
+  placeRadioGestureFlash,
   pruneRadioFlashes,
   radioFlashShown,
-  radioGestureFlashWord,
   radioReadout,
   radioReadoutArc,
   radioReadoutBars,
@@ -413,9 +413,9 @@ import {
   RADIO_VISUAL_FADE_SEC,
   closeRadioRestVisuals,
   dropRadioMoveVisuals,
+  placeRadioGestureVisuals,
   placeRadioRestVisual,
   pruneRadioMoveVisuals,
-  radioGestureVisuals,
   radioMoveVisualsSounding,
   radioRowVisualAt,
   radioRowVisualVars,
@@ -6059,11 +6059,12 @@ export function DiscoverPanel({
     setRadioReadoutNow(null)
   }
   /** THE GESTURE FLASH (spec 2026-10-03-radio-readout-design section 1). Each gesture armed into
-   * the preview project goes in the log once, with the bar it starts SOUNDING at on the readout's
-   * clock (radioPlayRef: bars played): a lead-in (hole, riser) over the beats before the wrap of
-   * the lap it is armed in; an arrival (filter in, bloom, duck) from the top of the lap it is armed
-   * at; a turnaround's or a turn's move, on each row it plays on, over its last beats; a throw from
-   * its own start. Read off what is armed, every tick, rather than at each of the places that arm
+   * the preview project is in the log with the bar it starts SOUNDING at on the readout's clock
+   * (radioPlayRef: bars played): a lead-in (hole, riser) over the beats before the wrap of the lap
+   * it is armed in; an arrival (filter in, bloom, duck) from the top of the lap it is armed at --
+   * both placed again every tick on the loop as it is now (placeRadioGestureFlash), as a
+   * turnaround's or a turn's move is, on each row it plays on, over its last beats; a throw from
+   * its own start, once. Read off what is armed, every tick, rather than at each of the places that arm
    * one. A word not sounding yet whose gesture has been taken back goes with it.
    *
    * Each move's word carries where the move ends (`until`, spec 2026-10-05-radio-move-visuals-
@@ -6076,17 +6077,19 @@ export function DiscoverPanel({
     const seen = radioFlashSeenRef.current
     const live = new Set<string>()
     let log = [...radioFlashLogRef.current]
+    // each gesture's word placed again every tick on the lap as the loop is now, as its visuals are
+    // (radioMoveVisualsTick): placed once, a loop learned a tick late put a lead-in's word on the
+    // wrong wrap, and an arrival's end on the wrong bar, for the whole lap. The wrap's countdown
+    // takes a gesture off at the wrap ending its lap, so none is placed on the lap after.
     for (const g of radioGestureRef.current) {
       live.add(g.armId)
-      const word = radioGestureFlashWord(g.kind)
-      if (seen.has(g.armId) || word === null) continue
-      const leads = g.kind !== 'drop-out' && radioGestureLeadsChange(g.kind)
-      log.push({
+      log = placeRadioGestureFlash(log, {
+        kind: g.kind,
         rowId: g.slotId,
-        word,
-        at: lapStart + (leads ? loopBars - g.beats / 4 : 0),
-        key: g.armId,
-        until: lapStart + (leads ? loopBars : Math.min(g.beats / 4, loopBars / 2))
+        beats: g.beats,
+        lapStart,
+        loopBars,
+        key: g.armId
       })
     }
     const ta = radioTurnaroundRef.current
@@ -6157,9 +6160,13 @@ export function DiscoverPanel({
    * is armed, every tick, as visuals on the readout's clock (bars played since radio started), for
    * the sweep effect to draw at every position tick. Read off what is armed, as radioFlashTick
    * reads its words, and only what the lane build lays down (buildAndPushPreview):
-   *   - each gesture once (by armId): a lead-in (a hole, a riser, the arc's exit drop-out) into the
-   *     wrap that ends this lap, an arrival (a filter in, a bloom, a duck) from this lap's top; a duck
-   *     dips every row in the mix but the ones landing with it (`spares`), as the lane build does;
+   *   - each gesture (by armId), placed again every tick on the lap as the loop is now
+   *     (placeRadioGestureVisuals; the lane build lays its curves at the loop's length, so a stem
+   *     of another length landing on the lap's top, or learned a render late, moves them with the
+   *     loop, and the wrap's countdown takes a gesture off at the wrap ending its lap): a lead-in
+   *     (a hole, a riser, the arc's exit drop-out) into the wrap that ends this lap, an arrival (a
+   *     filter in, a bloom, a duck) from this lap's top; a duck dips every row in the mix now but
+   *     the ones landing with it (`spares`), as the lane build does;
    *   - the turnaround, rebuilt every tick on the wrap that ends this lap as the loop is now (the
    *     lane build's turnaroundToLoopBars(..., maxBarLength): a stem of another length landing on
    *     the lap's top, or learned a render late, moves it with the loop, and radioTurnaroundAtWrap
@@ -6186,21 +6193,16 @@ export function DiscoverPanel({
     let visuals = [...was.visuals]
     for (const g of radioGestureRef.current) {
       live.add(g.armId)
-      if (seen.has(g.armId)) continue
-      const leads = g.kind === 'drop-out' || radioGestureLeadsChange(g.kind)
       const spared = new Set([g.slotId, ...(g.spares ?? [])])
-      visuals.push(
-        ...radioGestureVisuals({
-          kind: g.kind,
-          rowId: g.slotId,
-          beats: g.beats,
-          wrapAt: leads ? wrapAt : lapStart,
-          before: lap,
-          after: lap,
-          duckRowIds: heard.filter((id) => !spared.has(id)),
-          key: g.armId
-        })
-      )
+      visuals = placeRadioGestureVisuals(visuals, {
+        kind: g.kind,
+        rowId: g.slotId,
+        beats: g.beats,
+        lapStart,
+        lap,
+        duckRowIds: heard.filter((id) => !spared.has(id)),
+        key: g.armId
+      })
     }
     const ta = radioTurnaroundRef.current
     if (ta !== null) {

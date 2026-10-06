@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   dropRadioFlashes,
+  placeRadioGestureFlash,
   pruneRadioFlashes,
   radioAgeLabel,
   radioFlashOpacity,
@@ -362,5 +363,42 @@ describe('radioRulerCells', () => {
   })
   it('is empty with no ticks', () => {
     expect(radioRulerCells({ ticks: 0, filled: 0, end: null })).toEqual([])
+  })
+})
+
+describe("a gesture's word placed on the lap as it is now, every tick (as its visuals are)", () => {
+  const other: RadioFlash = { rowId: 'b', word: 'throw', at: 66, key: 'k9' }
+  const place = (
+    log: readonly RadioFlash[],
+    kind: 'hole' | 'riser' | 'filter in' | 'duck' | 'cut' | 'drop-out',
+    loopBars: number,
+    beats = 8
+  ): RadioFlash[] =>
+    placeRadioGestureFlash(log, { kind, rowId: 'a', beats, lapStart: 64, loopBars, key: 'g1' })
+
+  it("a lead-in's word over its beats before the wrap ending the lap, on until the wrap", () => {
+    expect(place([other], 'hole', 8)).toEqual([
+      other,
+      { rowId: 'a', word: 'hole', at: 70, key: 'g1', until: 72 }
+    ])
+  })
+
+  it('a loop learned longer moves it to the wrap that ends the lap now, once', () => {
+    const log = place(place([other], 'riser', 8), 'riser', 16)
+    expect(log).toEqual([other, { rowId: 'a', word: 'riser', at: 78, key: 'g1', until: 80 }])
+  })
+
+  it("an arrival's from the lap top, on until its curve ends (half the loop at most, as it is now)", () => {
+    expect(place([], 'filter in', 4, 16)).toEqual([
+      { rowId: 'a', word: 'filter in', at: 64, key: 'g1', until: 66 }
+    ])
+    expect(place(place([], 'filter in', 4, 16), 'filter in', 8, 16)).toEqual([
+      { rowId: 'a', word: 'filter in', at: 64, key: 'g1', until: 68 }
+    ])
+  })
+
+  it('a cut and the arc exit say nothing', () => {
+    expect(place([other], 'cut', 8)).toEqual([other])
+    expect(place([other], 'drop-out', 8)).toEqual([other])
   })
 })

@@ -8,6 +8,7 @@ import {
   RADIO_VISUAL_STEADY_CUT,
   closeRadioRestVisuals,
   dropRadioMoveVisuals,
+  placeRadioGestureVisuals,
   placeRadioRestVisual,
   pruneRadioMoveVisuals,
   radioGestureVisuals,
@@ -936,5 +937,75 @@ describe('a rest placed where it lands, each tick until it does (review of 1a060
     expect(at(v, 'drums', 12.9).level).toBe(1)
     expect(at(v, 'drums', 13).level).toBe(0)
     expect(at(v, 'drums', 40).level).toBe(0)
+  })
+})
+
+describe('a gesture placed on the lap as it is now, every tick (as the lane build lays it)', () => {
+  const other = radioRestVisual({ rowId: 'pad', from: 8, until: null, key: 'rest@pad' })
+  const place = (
+    v: readonly RadioMoveVisual[],
+    kind: 'hole' | 'riser' | 'filter in' | 'duck' | 'cut',
+    loopBars: number,
+    over: { key?: string; beats?: number; lapStart?: number } = {}
+  ): RadioMoveVisual[] =>
+    placeRadioGestureVisuals(v, {
+      kind,
+      rowId: 'drums',
+      beats: over.beats ?? 8,
+      lapStart: over.lapStart ?? 64,
+      lap: { loopBars, unitsPerBar: 1 },
+      duckRowIds: ['pad', 'keys'],
+      key: over.key ?? 'g1'
+    })
+
+  it('a lead-in plays into the wrap ending the lap; a loop learned longer moves it there', () => {
+    const v = place([other], 'hole', 8)
+    expect(at(v, 'drums', 71).level).toBe(0)
+    expect(at(v, 'drums', 72).level).toBe(1)
+    const moved = place(v, 'hole', 16)
+    expect(at(moved, 'drums', 71).level).toBe(1)
+    expect(at(moved, 'drums', 79).level).toBe(0)
+    expect(at(moved, 'drums', 80).level).toBe(1)
+    expect(moved.filter((x) => x.key === 'g1')).toHaveLength(1)
+    expect(at(moved, 'pad', 70).level).toBe(0) // another key untouched
+  })
+
+  it("a riser's line ends on the wrap ending the lap as it is now", () => {
+    const short = place([], 'riser', 4)
+    const long = place(short, 'riser', 8)
+    expect(at(short, 'drums', 67.5).riser).toBeGreaterThan(0)
+    expect(at(long, 'drums', 67.5).riser).toBe(0)
+    expect(at(long, 'drums', 71.5).riser).toBeGreaterThan(0)
+    expect(at(long, 'drums', 72).riser).toBe(0)
+  })
+
+  it('an arrival plays from the lap top, its curve clamped to half the loop as it is now', () => {
+    const short = place([], 'filter in', 4, { beats: 16 }) // 4 bars wanted, 2 at a 4-bar loop
+    expect(at(short, 'drums', 64).highCut).toBe(1)
+    expect(at(short, 'drums', 66.5).highCut).toBe(0)
+    const long = place(short, 'filter in', 8, { beats: 16 })
+    expect(at(long, 'drums', 64).highCut).toBe(1)
+    expect(at(long, 'drums', 66.5).highCut).toBeGreaterThan(0)
+    expect(at(long, 'drums', 68).highCut).toBe(0)
+    expect(long).toHaveLength(1)
+  })
+
+  it('ducks placed again tick after tick stay one dip, the first armed', () => {
+    let v: RadioMoveVisual[] = []
+    for (let tick = 0; tick < 3; tick++) {
+      v = place(v, 'duck', 8, { key: 'a', beats: 4 })
+      v = place(v, 'duck', 8, { key: 'b', beats: 2 })
+    }
+    const a = place([], 'duck', 8, { key: 'a', beats: 4 })
+    for (const t of [64, 64.25, 64.75]) {
+      expect(at(v, 'pad', t).level).toBeCloseTo(at(a, 'pad', t).level, 9)
+    }
+    expect(v).toHaveLength(4) // two rows each, no copies
+  })
+
+  it('a gesture with no room in the loop as it is now (a cut) leaves nothing of its key', () => {
+    const v = place([other], 'hole', 8)
+    expect(place(v, 'cut', 8)).toEqual([other])
+    expect(place(v, 'hole', 8, { beats: 0 })).toEqual([other])
   })
 })
