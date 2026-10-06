@@ -134,6 +134,52 @@ describe('getArtistAnalysed', () => {
     own.prepare(`INSERT INTO StemFeatureCache VALUES ('t0', '{}', 1)`).run()
     expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual({ analysed: 1, total: 1 })
   })
+
+  // Scan plan Task 13 M2 (audit minor): StemFeatureCache's count moves on
+  // every write while scanning, so the cache keyed on it missed on every
+  // picker poll and re-ran every IN-COUNT chunk. The trait value table
+  // already knows which stems have a row.
+  it('with the trait value table current: the same answer, no chunked count', async () => {
+    const { getTraitQuantileTables, noteStemFeatureRowWritten } =
+      await import('./traitQuantileCache')
+    const own = ownDb()
+    const db = archive()
+    for (let i = 0; i < 10; i++) seed(db, `t${i}`, 'j1', 'tpj')
+    seed(db, 'e0', 'j1', 'elling')
+    own
+      .prepare(
+        `INSERT INTO StemFeatureCache VALUES ('t0', '{}', 1), ('t1', 'null', 1),
+         ('t2', '{not json', 1), ('e0', '{}', 1)`
+      )
+      .run()
+    const viaSql = await getArtistAnalysed(own, [db], 'tpj')
+    expect(viaSql).toEqual({ analysed: 3, total: 10 })
+    resetArtistIndexForTests()
+
+    await getTraitQuantileTables(own)
+    vi.mocked(countWork).mockClear()
+    expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual(viaSql)
+    // a write through the app's own store moves the answer at once
+    own.prepare(`INSERT INTO StemFeatureCache VALUES ('t3', '{}', 1)`).run()
+    noteStemFeatureRowWritten(own, {} as never, 't3')
+    expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual({ analysed: 4, total: 10 })
+    const kinds = vi.mocked(countWork).mock.calls.map(([kind]) => kind)
+    expect(kinds).not.toContain('sql:discover.artist-analysed-chunk')
+  })
+
+  it('falls back to the chunked count when the table is behind', async () => {
+    const { getTraitQuantileTables } = await import('./traitQuantileCache')
+    const own = ownDb()
+    const db = archive()
+    seed(db, 't0', 'j1', 'tpj')
+    seed(db, 't1', 'j1', 'tpj')
+    await getTraitQuantileTables(own)
+    own.prepare(`INSERT INTO StemFeatureCache VALUES ('t0', '{}', 1)`).run() // behind its back
+    vi.mocked(countWork).mockClear()
+    expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual({ analysed: 1, total: 2 })
+    const kinds = vi.mocked(countWork).mock.calls.map(([kind]) => kind)
+    expect(kinds).toContain('sql:discover.artist-analysed-chunk')
+  })
 })
 
 // Elling's decision (2026-10-01), as revised in review: each source db's

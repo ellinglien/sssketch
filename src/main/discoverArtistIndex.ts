@@ -23,6 +23,7 @@
 // in-place-update signal survives a restart): see the store's header.
 import type Database from 'better-sqlite3'
 import { countWork } from './workCounters'
+import { getTraitValueTable } from './traitQuantileCache'
 import {
   CACHE_CHANGE_CHECK_INTERVAL_MS,
   isTableSignalCurrent,
@@ -487,6 +488,19 @@ export async function getArtistAnalysed(
   artist: string
 ): Promise<{ analysed: number; total: number }> {
   const ids = [...(await getArtistStemCIDs(dbs, artist))]
+  // Scan plan Task 13 M2 (audit minor): while the trait value table accounts
+  // for every StemFeatureCache row (one COUNT), it answers "has a row" for
+  // each stem -- a parsed row or a malformed one, as the IN-COUNT below
+  // counts both -- from memory. No cache needed: the count it would be keyed
+  // on moves with every write while scanning, so the cache missed on every
+  // picker poll anyway.
+  const table = getTraitValueTable(ownDb)
+  if (table) {
+    if (aborted) throw new Error('discoverArtistIndex: aborted (quitting)')
+    let analysed = 0
+    for (const id of ids) if (table.versionsOf(id) !== undefined) analysed += 1
+    return { analysed, total: ids.length }
+  }
   let featureRows = 0
   try {
     featureRows = (
