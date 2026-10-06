@@ -18,6 +18,13 @@ import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { countWork } from './workCounters'
 import { instrumentMaskToSoundType, soundSourceMatchesFilter } from '@shared/riffLibraryTypes'
 
+/** tableChangeSignal.ts's cheap half of a table's change signal (MAX(rowid)
+ * + data_version): not a read of the table's rows, so the query-count tests
+ * below leave it out and count only the COUNT(*) and the walk's pages. */
+function isSignalHead(sql: string): boolean {
+  return sql.includes('pragma_data_version')
+}
+
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
   db.exec(`
@@ -431,7 +438,9 @@ describe('getDiscoverCandidates', () => {
     // page (PREWARM_CHUNK_SIZE=5000, this fixture's 3 rows fit in one page)
     // rather than a single un-chunked SELECT *; see PREWARM_CHUNK_SIZE's
     // own doc comment for why.
-    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    const riffsQueries = prepareSpy.mock.calls.filter(
+      ([sql]) => sql.includes('FROM Riffs') && !isSignalHead(sql)
+    )
     expect(riffsQueries.length).toBe(2)
   })
 
@@ -507,7 +516,9 @@ describe('getDiscoverCandidates', () => {
 
     // 2, not 1 -- see the "single query per chunk" test above for why
     // (COUNT(*) + one LIMIT/OFFSET page for this fixture's row count).
-    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    const riffsQueries = prepareSpy.mock.calls.filter(
+      ([sql]) => sql.includes('FROM Riffs') && !isSignalHead(sql)
+    )
     expect(riffsQueries.length).toBe(2)
     // Neither query has a WHERE clause -- a plain sequential
     // COUNT/LIMIT-OFFSET scan, not a per-row-predicate evaluation.
@@ -537,7 +548,9 @@ describe('getDiscoverCandidates', () => {
     expect(indexA).toBe(indexB)
     expect(indexA.get('s1')?.riffCID).toBe('r1')
     // 2, not 1 -- see the "single query per chunk" test above for why.
-    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    const riffsQueries = prepareSpy.mock.calls.filter(
+      ([sql]) => sql.includes('FROM Riffs') && !isSignalHead(sql)
+    )
     expect(riffsQueries.length).toBe(2)
   })
 
@@ -899,16 +912,18 @@ describe('prewarmDiscoverCandidateCaches', () => {
       own
     )
 
-    // 3, not 2 -- prewarmDiscoverCandidateCaches now runs its own cheap
-    // `SELECT COUNT(*) FROM Riffs` cache-freshness check (tryCountRows)
-    // BEFORE buildRiffIndex's own COUNT(*) + one LIMIT/OFFSET page (see
-    // the "single query per chunk" test above for why THAT part is 2, not
-    // 1) -- own is passed as both the source db AND the cache-storage
-    // ownDb here, a realistic case (no external archive configured), and
-    // there's no pre-existing cache yet, so this always takes the live-
-    // scan path.
-    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
-    expect(riffsQueries.length).toBe(3)
+    // 2: prewarmDiscoverCandidateCaches' own cache-freshness signal (one
+    // COUNT(*)), then buildRiffIndex's one LIMIT/OFFSET page. buildRiffIndex
+    // reads the Riffs signal again, but nothing moved in between, so that
+    // read reuses the count (tableChangeSignal.ts's shared memo, background
+    // scan audit item 1; it was 3 before). own is passed as both the source
+    // db AND the cache-storage ownDb here, a realistic case (no external
+    // archive configured), and there's no pre-existing cache yet, so this
+    // always takes the live-scan path.
+    const riffsQueries = prepareSpy.mock.calls.filter(
+      ([sql]) => sql.includes('FROM Riffs') && !isSignalHead(sql)
+    )
+    expect(riffsQueries.length).toBe(2)
   })
 
   it('does not throw when a db lacks a Riffs table', async () => {
@@ -950,7 +965,9 @@ describe('prewarmDiscoverCandidateCaches', () => {
     // Only the cheap freshness-check COUNT(*) against the real Riffs/Stems
     // tables runs (1 each) -- no page-scan query against either live table
     // at all, unlike the cache-miss case above (3 "FROM Riffs" queries).
-    const riffsQueries = prepareSpy.mock.calls.filter(([sql]) => sql.includes('FROM Riffs'))
+    const riffsQueries = prepareSpy.mock.calls.filter(
+      ([sql]) => sql.includes('FROM Riffs') && !isSignalHead(sql)
+    )
     const stemsInstrumentQueries = prepareSpy.mock.calls.filter(([sql]) =>
       /SELECT StemCID, Instrument, OwnerJamCID FROM Stems|COUNT\(\*\) AS n FROM Stems/.test(sql)
     )

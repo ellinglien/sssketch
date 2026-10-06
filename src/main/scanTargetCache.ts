@@ -28,6 +28,7 @@ import type Database from 'better-sqlite3'
 import { countWork } from './workCounters'
 import { columnStemSlots, mergeStemSlots, type StemSlotRef } from '@shared/riffStemSlots'
 import { readAllExtraStemSlots } from './riffStemsExtra'
+import { readTableSignal } from './tableChangeSignal'
 
 export interface StemJamPair {
   stemCID: string
@@ -141,15 +142,16 @@ interface LiveSignal {
   maxRowid: number | null
 }
 
+/** The source's Riffs count and MAX(rowid), from the one signal every
+ * cache of that table shares (tableChangeSignal.ts): its own COUNT used to
+ * be a second full count of a table listJamsWithDb and the riff index had
+ * usually just counted (background scan audit item 1). Null when there is
+ * no Riffs table, or it has no rowid (dataVersion is null only on that
+ * count-alone path): not cacheable, the caller walks it as before. */
 function readLiveSignal(sourceDb: Database.Database): LiveSignal | null {
-  try {
-    const row = sourceDb
-      .prepare(`SELECT COUNT(*) AS n, MAX(rowid) AS maxRowid FROM Riffs`)
-      .get() as { n: number; maxRowid: number | null }
-    return { count: row.n, maxRowid: row.maxRowid }
-  } catch {
-    return null
-  }
+  const signal = readTableSignal(sourceDb, 'Riffs')
+  if (!signal || signal.dataVersion === null) return null
+  return { count: signal.count, maxRowid: signal.maxRowid }
 }
 
 interface MetaRow {

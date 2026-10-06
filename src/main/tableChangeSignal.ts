@@ -54,7 +54,11 @@ export const SCAN_CACHE_INPLACE_TTL_MS = 5 * 60_000
  * cold page cache -- it is a USB/ExFAT volume, so this matters: 300 ms for
  * Riffs, 5 ms for Jams, both ~1-7 ms once warm. Still an order of
  * magnitude under the read it protects. maxRowid/changes/dataVersion are
- * null when the table has no rowid (count alone then). */
+ * null when the table has no rowid (count alone then).
+ *
+ * `count` is the expensive part (a full COUNT is 0.5-1.3 s cold on the USB
+ * archive), so it is memoised per connection and table (CountMemo below)
+ * and re-taken only when the cheap part says the table could have moved. */
 export interface TableSignal {
   count: number
   maxRowid: number | null
@@ -71,37 +75,105 @@ export interface ScanCacheState {
   signal: TableSignal | null
 }
 
+/** What a COUNT was taken against, so the next read can tell whether the
+ * table could have changed since -- one per (connection, table), shared by
+ * every cache that change-checks that table (background scan audit item 1,
+ * 2026-10-05). Before it, up to seven caches each ran their own COUNT on
+ * their own 30 s clock: 562 ms (Riffs) / 1,342 ms (Stems) cold on Elling's
+ * USB archive, synchronous on the main process.
+ *
+ * The guard is exact, not a time window, so a cache sees a change exactly
+ * as soon as it did before:
+ * - every connection: MAX(rowid), data_version (another connection
+ *   committed to the FILE) and this process's own write count;
+ * - a read-write connection also: total_changes() (every row THIS
+ *   connection has inserted/updated/deleted, in any table). A read-only
+ *   connection cannot write, so any change to its rows is another
+ *   connection's commit, which data_version already sees.
+ * Nothing moved, so no row was added, removed or changed by anyone: the
+ * count is the count. Anything moved (the classifier writing ownDb's cache
+ * tables moves total_changes every few seconds): count again. */
+interface CountMemo {
+  maxRowid: number | null
+  dataVersion: number
+  writes: number
+  totalChanges: number | null
+  count: number
+}
+const countMemos = new WeakMap<Database.Database, Map<ChangeSignalTable, CountMemo>>()
+
+function memoFor(db: Database.Database, table: ChangeSignalTable): CountMemo | undefined {
+  return countMemos.get(db)?.get(table)
+}
+
+function remember(db: Database.Database, table: ChangeSignalTable, memo: CountMemo): void {
+  let perTable = countMemos.get(db)
+  if (!perTable) {
+    perTable = new Map()
+    countMemos.set(db, perTable)
+  }
+  perTable.set(table, memo)
+}
+
 /** The live TableSignal for `table`, or null when it can't be read (a
  * broken/foreign db missing the table -- same "not an error" convention as
- * every other query in this area). Its text keeps `COUNT(*) AS n FROM
- * <table>` so it reads as the count it mostly is. */
+ * every other query in this area). Runs `COUNT(*) AS n FROM <table>` only
+ * when the cheap half of the signal (CountMemo above) says the table could
+ * have changed since the last count on this connection. */
 export function readTableSignal(
   db: Database.Database,
   table: ChangeSignalTable
 ): TableSignal | null {
-  const writes = getTableWriteVersion(db, table)
+  const started = performance.now()
   try {
-    const row = db
+    return readSignal(db, table)
+  } finally {
+    countWork(`ms:signal.${table}`, Math.round(performance.now() - started))
+  }
+}
+
+function readSignal(db: Database.Database, table: ChangeSignalTable): TableSignal | null {
+  const writes = getTableWriteVersion(db, table)
+  let head: { maxRowid: number | null; dataVersion: number }
+  try {
+    head = db
       .prepare(
         `SELECT MAX(rowid) AS maxRowid,
-                (SELECT data_version FROM pragma_data_version) AS dataVersion,
-                COUNT(*) AS n FROM ${table}`
+                (SELECT data_version FROM pragma_data_version) AS dataVersion FROM ${table}`
       )
-      .get() as { maxRowid: number | null; dataVersion: number; n: number }
-    return {
-      count: row.n,
-      maxRowid: row.maxRowid,
-      writes,
-      dataVersion: row.dataVersion
-    }
+      .get() as { maxRowid: number | null; dataVersion: number }
   } catch {
+    // No rowid (or no table): the count alone, never memoised.
     try {
+      countWork(`sql:signal-count.${table}`)
       const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
       return { count: row.n, maxRowid: null, writes, dataVersion: null }
     } catch {
       return null
     }
   }
+  const totalChanges = db.readonly
+    ? null
+    : (db.prepare(`SELECT total_changes() AS n`).get() as { n: number }).n
+  // Inside an open transaction the rows may yet roll back, which
+  // total_changes() would not undo: count, and don't remember it.
+  const memo = db.inTransaction ? undefined : memoFor(db, table)
+  let count: number
+  if (
+    memo &&
+    memo.maxRowid === head.maxRowid &&
+    memo.dataVersion === head.dataVersion &&
+    memo.writes === writes &&
+    memo.totalChanges === totalChanges
+  ) {
+    countWork(`signal:count-reused.${table}`)
+    count = memo.count
+  } else {
+    countWork(`sql:signal-count.${table}`)
+    count = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+    if (!db.inTransaction) remember(db, table, { ...head, writes, totalChanges, count })
+  }
+  return { count, maxRowid: head.maxRowid, writes, dataVersion: head.dataVersion }
 }
 
 /** The pure decision behind isScanCacheCurrent -- whether a cache built

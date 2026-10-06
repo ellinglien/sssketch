@@ -79,6 +79,7 @@ export default defineConfig({
           'src/main/stemFeatureCacheStore.test.ts',
           'src/main/stemPeaksCacheStore.test.ts',
           'src/main/stemUnavailableStore.test.ts',
+          'src/main/tableChangeSignalSql.test.ts',
           'src/main/tidyUpLibraryStems.test.ts',
           'src/main/traitQuantileCache.test.ts',
           // Added after v1.3.0, and crashed their workers on v1.4.0's release run the same way

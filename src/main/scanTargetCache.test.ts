@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import { listLibraryScanTargets } from './discoverLibraryStems'
 import { getCachedStemJamPairs } from './scanTargetCache'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
+import { readTableSignal } from './tableChangeSignal'
 
 // resolveStemPath reads app.getPath('userData') -- mock just that, as
 // discoverLibraryStems.test.ts does.
@@ -232,6 +233,27 @@ describe('listLibraryScanTargets with the scan-target cache (B6)', () => {
     expect((await listLibraryScanTargets(jamsFor(src), allExist, own)).map((t) => t.key)).toEqual([
       's1'
     ])
+  })
+
+  it("shares the Riffs signal's count with every other cache (no full COUNT of its own)", async () => {
+    // Background scan audit item 1: on the read-only archive the full
+    // COUNT is the 0.5-1.3 s part, and listJamsWithDb / the riff index have
+    // usually just read the same table's signal.
+    const path = join(dir, 'archive.db')
+    const writer = sourceDb('archive.db')
+    seedLibrary(writer, 'a', 50, 1)
+    writer.close()
+    const src = new Database(path, { readonly: true })
+    const own = new Database(':memory:')
+    readTableSignal(src, 'Riffs')
+    const spy = vi.spyOn(src, 'prepare')
+    const fullCounts = (): number =>
+      spy.mock.calls.filter(
+        ([sql]) => /COUNT\(\*\)/.test(String(sql)) && !/rowid >/.test(String(sql))
+      ).length
+    const first = await listLibraryScanTargets(jamsFor(src), allExist, own)
+    expect(await listLibraryScanTargets(jamsFor(src), allExist, own)).toEqual(first)
+    expect(fullCounts()).toBe(0)
   })
 
   it('records a stem that only appears past the eighth slot', async () => {

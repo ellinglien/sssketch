@@ -7,7 +7,8 @@ import {
 
 // Pure-decision tests only -- no database is opened here, so this file
 // stays off vitest.config.ts's CI exclusion list (see its own doc comment).
-// readTableSignal's SQL is exercised through riffLibraryStore.test.ts.
+// readTableSignal's SQL (and its shared COUNT memo) is tested in
+// tableChangeSignalSql.test.ts, and through riffLibraryStore.test.ts.
 
 const base: TableSignal = { count: 10, maxRowid: 10, writes: 0, dataVersion: 1 }
 
