@@ -30,6 +30,9 @@ export interface BackgroundWork {
   paused?: boolean
   /** Whether the indicator may offer pause/resume for this one. */
   pausable?: boolean
+  /** A short aside after the progress, e.g. 'your stems ready' while the
+   * library index rebuilds but his own stems can already roll. */
+  note?: string
 }
 
 export interface BackgroundWorkSummary {
@@ -100,6 +103,7 @@ export function describeBackgroundWork(work: BackgroundWork): string {
   const parts = [VERB[work.kind]]
   const progress = progressPart(work)
   if (progress) parts.push(progress)
+  if (work.note) parts.push(work.note)
   if (work.paused) parts.push('paused')
   else if (SLOWS_UI.has(work.kind)) parts.push('may slow things down')
   if (parts.length === 1) return `${parts[0]}…`

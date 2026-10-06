@@ -387,8 +387,12 @@ export async function findRiffForStemPath(stemPath: string): Promise<{
   const stemCID = basename(stemPath)
   const uniqueDbs = new Set(listJamsWithDb().map(({ db }) => db))
   for (const db of uniqueDbs) {
-    const index = await getRiffIndexForDb(db)
-    const entry = index.get(stemCID)
+    // A loaded copy still being extended at startup answers at once; a stem
+    // it lacks may be one the walk hasn't reached, so ask the finished index
+    // before saying "not found" (faster startup).
+    const entry =
+      (await getRiffIndexForDb(db)).get(stemCID) ??
+      (await getRiffIndexForDb(db, { complete: true })).get(stemCID)
     if (entry)
       return {
         stemCID,

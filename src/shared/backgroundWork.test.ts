@@ -30,6 +30,17 @@ describe('describeBackgroundWork', () => {
     )
   })
 
+  it('carries a note after the progress (the own-only index served while the library index rebuilds)', () => {
+    expect(
+      describeBackgroundWork({
+        kind: 'libraryIndex',
+        done: 1200,
+        total: 900000,
+        note: 'your stems ready'
+      })
+    ).toBe('indexing library · 1,200 of 900,000 · your stems ready · may slow things down')
+  })
+
   it('counts done of total when both are known', () => {
     expect(describeBackgroundWork({ kind: 'pluginScan', done: 12, total: 80 })).toBe(
       'scanning plugins · 12 of 80'

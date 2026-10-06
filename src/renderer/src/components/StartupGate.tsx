@@ -1,18 +1,23 @@
 import { useEffect, useState } from 'react'
 import { LoadingLoader } from './LoadingLoader'
 import type { PrewarmScanProgress } from '../../../main/discoverCandidates'
+import {
+  RIFF_LIBRARY_USERNAME_CHANGED_EVENT,
+  resolveRiffLibraryUsername
+} from '../audio/riffLibraryUsername'
 
 const WORDMARK = 'SSSKETCH'.split('')
 
 const PHASE_LABEL: Record<PrewarmScanProgress['phase'], string> = {
   riffIndex: 'riffs',
-  instrumentRows: 'stems'
+  instrumentRows: 'stems',
+  ownStems: 'your stems'
 }
 
 /** Full-screen, genuinely BLOCKING gate shown from the moment the window
- * appears until both the native engine has finished starting AND the
- * library warmup scan (prewarmDiscoverCandidateCaches, main/index.ts) has
- * finished -- direct request, 2026-09-18: "have it appear on the welcome
+ * appears until both the native engine has finished starting AND every
+ * library index can answer reads (prewarmDiscoverCandidateCaches's
+ * onUsable, main/index.ts) -- direct request, 2026-09-18: "have it appear on the welcome
  * thing, and prevent people from opening the app until it's complete...
  * i want to make sure the app is usable when it's usable... put as much
  * of the indexing and processing to app startup as possible."
@@ -38,6 +43,14 @@ const PHASE_LABEL: Record<PrewarmScanProgress['phase'], string> = {
  * (engine spawn, and the riff/instrument index scan -- now persisted to
  * disk, see discoverIndexCache.ts, so most launches finish this near-
  * instantly) gate this screen.
+ *
+ * Faster startup (approved 2026-10-06): the index part closes at "usable",
+ * not at the end of the walks -- the saved copies loaded (and served while
+ * they are extended), or, when a copy has to be rebuilt, his own stems
+ * indexed so "only my stems" rolls. The walks then run under
+ * BackgroundWorkIndicator's "indexing library". This is also where the
+ * renderer tells main who "me" is (report-own-username), first thing, so a
+ * rebuild knows whose stems to index first.
  *
  * Reuses OnboardingModal's own wordmark/black-panel visual language
  * ("the welcome thing") rather than inventing a separate splash design --
@@ -76,16 +89,24 @@ export function StartupGate(): React.JSX.Element | null {
       if (!cancelled) setEngineDone(true)
     })
 
+    const reportUsername = (): void => {
+      void resolveRiffLibraryUsername()
+        .then((name) => window.rifffApi.reportOwnUsername(name))
+        .catch((err) => console.error('StartupGate: reportOwnUsername failed:', err))
+    }
+    reportUsername()
+    window.addEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, reportUsername)
+
     window.rifffApi
-      .getLibraryWarmupStatus()
+      .getLibraryIndexUsable()
       .then((status) => {
         if (!cancelled) setWarmupDone((prev) => prev === true || status)
       })
       .catch((err) => {
-        console.error('StartupGate: getLibraryWarmupStatus failed:', err)
+        console.error('StartupGate: getLibraryIndexUsable failed:', err)
         if (!cancelled) setWarmupDone(true)
       })
-    const unsubscribeWarmupComplete = window.rifffApi.onLibraryWarmupComplete(() => {
+    const unsubscribeWarmupComplete = window.rifffApi.onLibraryIndexUsable(() => {
       if (!cancelled) {
         setWarmupDone(true)
         setProgress(null)
@@ -100,6 +121,7 @@ export function StartupGate(): React.JSX.Element | null {
 
     return () => {
       cancelled = true
+      window.removeEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, reportUsername)
       unsubscribeEngine()
       unsubscribeWarmupComplete()
       unsubscribeWarmupProgress()
@@ -145,6 +167,7 @@ export function StartupGate(): React.JSX.Element | null {
 function describeStatus(engineDone: boolean, progress: PrewarmScanProgress | null): string {
   if (!engineDone) return 'starting engine…'
   if (!progress) return 'indexing library…'
+  if (progress.phase === 'ownStems') return 'indexing your stems first…'
   const dbSuffix = progress.dbCount > 1 ? `, db ${progress.dbIndex + 1}/${progress.dbCount}` : ''
   return `indexing ${PHASE_LABEL[progress.phase]}: ${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()}${dbSuffix}`
 }
@@ -154,6 +177,7 @@ function describeEta(
   startedAt: number | null
 ): string | null {
   if (!progress || !startedAt || progress.completed <= 0 || progress.total <= 0) return null
+  if (progress.phase === 'ownStems') return null
   const elapsedMs = Date.now() - startedAt
   const fractionDone = progress.completed / progress.total
   const remainingMs = elapsedMs / fractionDone - elapsedMs

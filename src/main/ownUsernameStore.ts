@@ -1,0 +1,41 @@
+// src/main/ownUsernameStore.ts
+//
+// The last username the renderer reported as "me" (its riff library
+// username: typed, else the Endlesss session's), kept across launches so the
+// startup prewarm knows whose own-only index to build on a rebuild before
+// the renderer has said anything (faster startup plan,
+// docs/superpowers/plans/2026-10-06-faster-startup.md). The renderer reports
+// it again at every launch and on every change; this is only the head start.
+import { existsSync, readFileSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { app } from 'electron'
+
+const STORE_FILENAME = 'ownUsername.json'
+
+function storePath(): string {
+  return join(app.getPath('userData'), STORE_FILENAME)
+}
+
+/** The saved username, or null (none saved, or the file can't be read). */
+export function loadOwnUsername(): string | null {
+  const path = storePath()
+  if (!existsSync(path)) return null
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf-8')) as { username?: unknown }
+    const name = typeof parsed.username === 'string' ? parsed.username.trim() : ''
+    return name === '' ? null : name
+  } catch (err) {
+    console.error(`loadOwnUsername: failed to read ${path}:`, err)
+    return null
+  }
+}
+
+/** Saves `username` (null or blank: none). Never throws. */
+export function saveOwnUsername(username: string | null): void {
+  const name = username?.trim() ?? ''
+  try {
+    writeFileSync(storePath(), JSON.stringify({ username: name === '' ? null : name }))
+  } catch (err) {
+    console.error('saveOwnUsername: failed to write:', err)
+  }
+}

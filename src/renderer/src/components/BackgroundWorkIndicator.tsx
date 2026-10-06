@@ -150,8 +150,9 @@ export function BackgroundWorkIndicator(): React.JSX.Element | null {
 /** The startup library index (prewarmDiscoverCandidateCaches) -- the same
  * query-once-plus-push plumbing LibraryWarmupIndicator used: the query
  * covers a warmup that finished before this mounted, the pushes cover one
- * that hasn't. Usually hidden behind StartupGate; this covers the rare
- * case of warmup still running once the gate has closed. */
+ * that hasn't. Since faster startup (2026-10-06) the gate closes once the
+ * indexes can answer reads, so this is where the walks that extend or
+ * rebuild them show. */
 function useLibraryIndexWork(): BackgroundWork | null {
   const [done, setDone] = useState(true)
   const [progress, setProgress] = useState<PrewarmScanProgress | null>(null)
@@ -183,9 +184,11 @@ function useLibraryIndexWork(): BackgroundWork | null {
   }, [])
 
   if (done) return null
-  return progress
-    ? { kind: 'libraryIndex', done: progress.completed, total: progress.total }
-    : { kind: 'libraryIndex' }
+  // While a rebuild serves only his own stems (faster startup), say so.
+  const note = progress?.ownOnly ? 'your stems ready' : undefined
+  return progress && progress.total > 0
+    ? { kind: 'libraryIndex', done: progress.completed, total: progress.total, note }
+    : { kind: 'libraryIndex', note }
 }
 
 function useAutoClassifyWork(): BackgroundWork | null {

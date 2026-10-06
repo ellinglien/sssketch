@@ -165,6 +165,8 @@ import {
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
 import { getStemPriority, setStemPriorityUsername } from './stemPriority'
+import { loadOwnUsername, saveOwnUsername } from './ownUsernameStore'
+import { seedTableCounts, whenTableCountsSeeded } from './tableCountSeed'
 import { stemPriorityRank } from '@shared/stemPriorityOrder'
 import { getStemAvailabilityReport, onStemAvailabilityNotice } from './stemAvailability'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
@@ -313,6 +315,18 @@ let isQuitting = false
 // could otherwise miss it entirely if warmup finishes first (a real
 // possibility on a small/already-cached library).
 let libraryWarmupDone = false
+
+// True once every library index can answer reads (faster startup,
+// 2026-10-06): saved copies loaded, or the own-only index built where a copy
+// has to be rebuilt. StartupGate closes here, not at libraryWarmupDone; the
+// walks that extend or rebuild run after it, under BackgroundWorkIndicator's
+// "indexing library". Same query-plus-push pattern.
+let libraryIndexUsable = false
+
+// Whose own-only index a startup rebuild serves first: the last username the
+// renderer reported (ownUsernameStore.ts), so it is known before the renderer
+// has spoken; updated by every report-own-username.
+let ownUsername: string | null = null
 
 // Direct report, 2026-09-17: "startup is quite sluggish... could we show
 // welcome first to indicate it's loading?... otherwise the user thinks
@@ -538,20 +552,41 @@ function createWindow(): BrowserWindow {
     // this call still belongs here regardless, since even a well-chunked
     // scan is real ongoing work that should never compete with the
     // window's own first paint.
-    void prewarmDiscoverCandidateCaches(
-      listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
-      openOwnRiffLibraryDb(),
-      (progress: PrewarmScanProgress) => {
-        mainWindow?.webContents.send('library-warmup-progress', progress)
-      }
-    ).finally(() => {
-      libraryWarmupDone = true
-      mainWindow?.webContents.send('library-warmup-complete')
-      // Library-wide trait percentiles (Discover promise-vs-delivery spec,
-      // Phase 1): build the quantile tables now, after the warmup, so the
-      // first trait roll doesn't pay for it. Paginated + yielding.
-      void prewarmTraitQuantileTables(openOwnRiffLibraryDb())
-    })
+    // listJamsWithDb reads the archive's Riffs signal: after the worker's
+    // count, so that read takes none of its own on the main thread.
+    void Promise.all(candidateDbsForRiff().map((db) => whenTableCountsSeeded(db)))
+      .then(() =>
+        prewarmDiscoverCandidateCaches(
+          listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
+          openOwnRiffLibraryDb(),
+          (progress: PrewarmScanProgress) => {
+            mainWindow?.webContents.send('library-warmup-progress', progress)
+          },
+          {
+            ownUsername: () => ownUsername,
+            // Faster startup (2026-10-06): the gate opens once every index can
+            // answer reads; the walks that extend or rebuild them follow.
+            onUsable: () => {
+              libraryIndexUsable = true
+              mainWindow?.webContents.send('library-index-usable')
+              // Library-wide trait percentiles (Discover promise-vs-delivery spec,
+              // Phase 1): built now, so the first trait roll doesn't pay for it.
+              // Paginated + yielding; it reads only ownDb.
+              void prewarmTraitQuantileTables(openOwnRiffLibraryDb())
+            }
+          }
+        )
+      )
+      .finally(() => {
+        // A prewarm that failed before it was usable must not keep the gate up.
+        if (!libraryIndexUsable) {
+          libraryIndexUsable = true
+          mainWindow?.webContents.send('library-index-usable')
+          void prewarmTraitQuantileTables(openOwnRiffLibraryDb())
+        }
+        libraryWarmupDone = true
+        mainWindow?.webContents.send('library-warmup-complete')
+      })
   })
 
   win.on('closed', () => windowNotices.windowGone(win))
@@ -640,6 +675,19 @@ app.whenReady().then(async () => {
   // time opening that connection -- moving the directory out from under an
   // already-open one would corrupt it.
   migrateRiffLibraryLocation()
+
+  // Whose own stems come first, known from the last launch until the
+  // renderer reports it again (report-own-username): the startup prewarm's
+  // own-only index needs it before the renderer has said anything.
+  ownUsername = loadOwnUsername()
+  setStemPriorityUsername(ownUsername)
+
+  // The archive's row counts, before anything reads them (faster startup,
+  // tableCountSeed.ts): a count saved at a launch the file is unchanged
+  // since is primed right here, synchronously; otherwise one is taken on a
+  // worker thread. Either way no reader pays the 1.7-2.3 s COUNT on the main
+  // thread (only one that runs before a worker count is back, after a sync).
+  for (const db of candidateDbsForRiff()) void seedTableCounts(db, openOwnRiffLibraryDb())
 
   // One-time (idempotent) migration off the old source-partitioned Endlesss
   // stem cache -- see stemCacheMigration.ts's own doc comment. Once a pass
@@ -1484,6 +1532,12 @@ app.whenReady().then(async () => {
         targetUser,
         soundSource,
         artistStemCIDs: restrictStems(artistStemCIDs, favesStemCIDs),
+        // Whose stems alone this roll can draw (artist mode's artist, else
+        // "only my stems"' user): while the library index is still being
+        // rebuilt at startup, that user's own-only index may answer it.
+        ownStemsOf:
+          (typeof artist === 'string' ? artist.trim() : '') ||
+          (onlyOwnStems ? targetUser?.trim() || undefined : undefined),
         // Fold mode's clash (radioClash): the renderer only ever sends 'rhythmic' and 'bright'.
         alsoTraits: (Array.isArray(alsoTraits) ? alsoTraits : []).filter(
           (k) => k === 'rhythmic' || k === 'bright'
@@ -1674,6 +1728,16 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('get-library-warmup-status', (): boolean => libraryWarmupDone)
+  ipcMain.handle('get-library-index-usable', (): boolean => libraryIndexUsable)
+  // The renderer's "me" (resolveRiffLibraryUsername), reported at mount and
+  // on every change: the background passes rank by it (stemPriority.ts), and
+  // it is kept for the next launch's own-only index (ownUsernameStore.ts).
+  ipcMain.handle('report-own-username', (_event, username: unknown): void => {
+    const name = typeof username === 'string' ? username.trim() || null : null
+    ownUsername = name
+    setStemPriorityUsername(name)
+    saveOwnUsername(name)
+  })
 
   ipcMain.handle('get-engine-startup-status', (): boolean => engineStartupDone)
 

@@ -3772,3 +3772,181 @@ describe('kind index layers (scan plan Task 10)', () => {
     for (const kind of kinds) expect(await pool(own, kind)).toEqual(await fromScratch(own, kind))
   })
 })
+
+describe('faster startup: usable before complete (2026-10-06)', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'faster-startup-'))
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  // Riff index rows past RIFF_WALK_PAGE_SIZE, so the walk takes many pages.
+  const N = 4_500
+
+  function archive(): string {
+    const path = join(dir, 'archive.db')
+    const db = new Database(path)
+    db.exec(`
+      CREATE TABLE Riffs (RiffCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
+        BPMrnd REAL, UserName TEXT, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
+        StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT, PRIMARY KEY (RiffCID));
+      CREATE TABLE Stems (StemCID TEXT NOT NULL UNIQUE, OwnerJamCID TEXT NOT NULL, Instrument INTEGER,
+        PresetName TEXT, CreatorUserName TEXT, PRIMARY KEY (StemCID));
+      CREATE INDEX Stems_IndexUser ON Stems (CreatorUserName);
+      CREATE INDEX Riff_IndexUser ON Riffs (UserName);`)
+    db.close()
+    add(path, 0, N)
+    return path
+  }
+
+  /** Riffs i in [from, to), each holding its own stem; every 10th is elling's
+   * (Instrument 2 = drums), the rest belong to 'other'. */
+  function add(path: string, from: number, to: number): void {
+    const db = new Database(path)
+    const riff = db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, UserName, StemCID_1)
+       VALUES (?, 'jam0', ?, 120, ?, ?)`
+    )
+    const stem = db.prepare(`INSERT INTO Stems VALUES (?, 'jam0', 2, 'p', ?)`)
+    db.transaction(() => {
+      for (let i = from; i < to; i++) {
+        const user = i % 10 === 0 ? 'elling' : 'other'
+        const cid = `${(i * 7919).toString(16).padStart(6, '0')}x${i}`
+        riff.run(`r${cid}`, i, user, `s${cid}`)
+        stem.run(`s${cid}`, user)
+      }
+    })()
+    db.close()
+  }
+
+  const stemOf = (i: number): string => `s${(i * 7919).toString(16).padStart(6, '0')}x${i}`
+  const launch = (path: string): Database.Database => new Database(path, { readonly: true })
+
+  it('extend: the gate opens on the loaded copy, rolls are served from it while the walk runs, and see the new stems after', async () => {
+    const path = archive()
+    const own = freshDb()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: launch(path) }], own)
+    add(path, N, N + 3_000)
+
+    const src = launch(path)
+    let complete = false
+    let atUsable: { hasOld: boolean; hasNew: boolean; complete: boolean } | null = null
+    let rollAtUsable: Promise<string[]> | null = null
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, undefined, {
+      ownUsername: () => 'elling',
+      onUsable: () => {
+        void getRiffIndexForDb(src).then((index) => {
+          atUsable = { hasOld: index.has(stemOf(5)), hasNew: index.has(stemOf(N + 5)), complete }
+        })
+        rollAtUsable = getDiscoverCandidates({
+          ownDb: own,
+          jams: [{ jamCID: 'jam0', dbForJam: src }],
+          kinds: ['drums']
+        }).then((pool) => pool.map((c) => c.stemCID))
+      }
+    })
+    complete = true
+    expect(atUsable).toEqual({ hasOld: true, hasNew: false, complete: false })
+    // Drawn from the loaded rows: had it waited for the walk, a 1,000-stem
+    // sample of 7,500 would hold some of the 3,000 new ones.
+    const rolled = await rollAtUsable!
+    expect(rolled.length).toBe(1000)
+    expect(rolled.every((cid) => Number(cid.split('x')[1]) < N)).toBe(true)
+    const after = await getRiffIndexForDb(src)
+    expect(after.has(stemOf(N + 5))).toBe(true)
+    expect(after.size).toBe(N + 3_000)
+  })
+
+  it('rebuild: "only my stems" rolls from the own index before the walk ends; everything else waits for it', async () => {
+    const path = archive()
+    const own = freshDb()
+    const src = launch(path)
+    let complete = false
+    let ownAtUsable: Promise<{ size: number; complete: boolean }> | null = null
+    let allAtUsable: Promise<{ size: number; complete: boolean }> | null = null
+    let mineRoll: Promise<string[]> | null = null
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, undefined, {
+      ownUsername: () => 'elling',
+      onUsable: () => {
+        ownAtUsable = getRiffIndexForDb(src, { ownStemsOf: 'elling' }).then((i) => ({
+          size: i.size,
+          complete
+        }))
+        allAtUsable = getRiffIndexForDb(src).then((i) => ({ size: i.size, complete }))
+        mineRoll = getDiscoverCandidates({
+          ownDb: own,
+          jams: [{ jamCID: 'jam0', dbForJam: src }],
+          kinds: ['drums'],
+          onlyOwnStems: true,
+          targetUser: 'elling',
+          ownStemsOf: 'elling'
+        }).then((pool) => {
+          expect(complete).toBe(false)
+          return pool.map((c) => c.creatorUserName)
+        })
+      }
+    })
+    complete = true
+    expect(await ownAtUsable!).toEqual({ size: N / 10, complete: false })
+    const mine = await mineRoll!
+    expect(mine.length).toBe(N / 10)
+    expect(new Set(mine)).toEqual(new Set(['elling']))
+    // The all-stems read waited for the full walk.
+    expect((await allAtUsable!).size).toBe(N)
+    // Another user's "own" never gets elling's index.
+    expect((await getRiffIndexForDb(src, { ownStemsOf: 'other' })).size).toBe(N)
+  })
+
+  it('a saved copy below whose watermark a row was deleted is rebuilt, and never served', async () => {
+    const path = archive()
+    const own = freshDb()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: launch(path) }], own)
+    const w = new Database(path)
+    w.prepare(`DELETE FROM Riffs WHERE StemCID_1 = ?`).run(stemOf(7))
+    w.prepare(`DELETE FROM Stems WHERE StemCID = ?`).run(stemOf(7))
+    w.close()
+    add(path, N, N + 1)
+
+    const src = launch(path)
+    let sawDeleted: Promise<boolean> | null = null
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, undefined, {
+      ownUsername: () => 'elling',
+      onUsable: () => {
+        sawDeleted = getRiffIndexForDb(src).then((i) => i.has(stemOf(7)))
+      }
+    })
+    expect(await sawDeleted!).toBe(false)
+  })
+
+  it('a point lookup that asks for the complete index waits for the walk', async () => {
+    const path = archive()
+    const own = freshDb()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: launch(path) }], own)
+    add(path, N, N + 3_000)
+    const src = launch(path)
+    let complete: Promise<boolean> | null = null
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, undefined, {
+      onUsable: () => {
+        complete = getRiffIndexForDb(src, { complete: true }).then((i) => i.has(stemOf(N + 5)))
+      }
+    })
+    expect(await complete!).toBe(true)
+  })
+
+  it('no username: a rebuild serves nothing early, and usable still comes before complete', async () => {
+    const path = archive()
+    const own = freshDb()
+    const src = launch(path)
+    const order: string[] = []
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, undefined, {
+      ownUsername: () => null,
+      onUsable: () => order.push('usable')
+    })
+    order.push('complete')
+    expect(order).toEqual(['usable', 'complete'])
+    expect((await getRiffIndexForDb(src, { ownStemsOf: 'elling' })).size).toBe(N)
+  })
+})

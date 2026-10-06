@@ -457,6 +457,17 @@ const api = {
   ): Promise<Record<string, ArrangeRole | null>> =>
     ipcRenderer.invoke('resolve-stem-arrange-roles', entries),
   getLibraryWarmupStatus: (): Promise<boolean> => ipcRenderer.invoke('get-library-warmup-status'),
+  // Faster startup (2026-10-06): every library index can answer reads (saved
+  // copies loaded, or the own-only index on a rebuild) -- StartupGate closes
+  // here; the walks after it are the warmup above.
+  getLibraryIndexUsable: (): Promise<boolean> => ipcRenderer.invoke('get-library-index-usable'),
+  onLibraryIndexUsable: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('library-index-usable', listener)
+    return () => ipcRenderer.removeListener('library-index-usable', listener)
+  },
+  reportOwnUsername: (username: string | null): Promise<void> =>
+    ipcRenderer.invoke('report-own-username', username),
   onLibraryWarmupComplete: (callback: () => void): (() => void) => {
     const listener = (): void => callback()
     ipcRenderer.on('library-warmup-complete', listener)
