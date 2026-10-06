@@ -150,6 +150,28 @@ describe('categoryCentroidStore', () => {
     }
   })
 
+  // Review of 6fd465fe, minor 3: the pairs are training's record, not part of
+  // the store. A malformed one made the whole file read as an empty store,
+  // so the classifier lost every centroid over a field it never uses.
+  it('loadCategoryCentroidStore reads the store even when trainedPairs is malformed', async () => {
+    const { loadCategoryCentroidStore, readCategoryCentroidStoreFile } =
+      await import('./categoryCentroidStore')
+    const store = recordConfirmedCategory(
+      emptyCategoryCentroidStore(),
+      'bus',
+      'drums',
+      new Array(19).fill(1)
+    )
+    const path = join(userDataDir, 'busCentroids.json')
+    writeFileSync(path, JSON.stringify({ ...store, trainedPairs: [{ stemCID: 'cid-1' }] }))
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(loadCategoryCentroidStore()).toEqual(store)
+    expect(errors).not.toHaveBeenCalled()
+    errors.mockRestore()
+    // Training still refuses it.
+    expect(readCategoryCentroidStoreFile().kind).toBe('unreadable')
+  })
+
   // The samples and the pairs trained into them are one file, one rename:
   // there is no second write for a crash to fall between.
   it('the samples and the trained pairs are saved in one rename', async () => {

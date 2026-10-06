@@ -61,11 +61,16 @@ function isTrainedBusPair(value: unknown): value is TrainedBusPair {
   return typeof pair.stemCID === 'string' && typeof pair.busId === 'string'
 }
 
-/** A pre-existing file from before arrangeRoles/drumSubRoles existed (shaped
- * {buses, global} only) loads correctly, with both new axes defaulted to {}
- * rather than causing a mismatched-shape bug -- real existing users'
- * already-trained bus data stays intact. */
-export function readCategoryCentroidStoreFile(): CategoryCentroidStoreFile {
+/** The file as parsed: its store, and its trainedPairs field unchecked
+ * (undefined in a file from before it). A pre-existing file from before
+ * arrangeRoles/drumSubRoles existed (shaped {buses, global} only) loads
+ * correctly, with both new axes defaulted to {} rather than causing a
+ * mismatched-shape bug -- real existing users' already-trained bus data
+ * stays intact. */
+function readStoreFile():
+  | { kind: 'missing' }
+  | { kind: 'unreadable'; error: string }
+  | { kind: 'ok'; store: CategoryCentroidStore; rawTrainedPairs: unknown } {
   const path = storePath()
   if (!existsSync(path)) return { kind: 'missing' }
   try {
@@ -74,17 +79,10 @@ export function readCategoryCentroidStoreFile(): CategoryCentroidStoreFile {
       throw new Error('not a JSON object')
     }
     const fields = parsed as Partial<CategoryCentroidStore> & { trainedPairs?: unknown }
-    let trainedPairs: TrainedBusPair[] | null = null
-    if (fields.trainedPairs !== undefined) {
-      if (!Array.isArray(fields.trainedPairs) || !fields.trainedPairs.every(isTrainedBusPair)) {
-        throw new Error('trainedPairs is not a list of { stemCID, busId }')
-      }
-      trainedPairs = fields.trainedPairs.map(({ stemCID, busId }) => ({ stemCID, busId }))
-    }
     const empty = emptyCategoryCentroidStore()
     return {
       kind: 'ok',
-      trainedPairs,
+      rawTrainedPairs: fields.trainedPairs,
       store: {
         buses: fields.buses ?? empty.buses,
         arrangeRoles: fields.arrangeRoles ?? empty.arrangeRoles,
@@ -97,15 +95,36 @@ export function readCategoryCentroidStoreFile(): CategoryCentroidStoreFile {
   }
 }
 
+/** For training: the store and its pairs. A trainedPairs that is not a list
+ * of { stemCID, busId } makes the file one that won't load, since what it
+ * holds is then unknown. */
+export function readCategoryCentroidStoreFile(): CategoryCentroidStoreFile {
+  const file = readStoreFile()
+  if (file.kind !== 'ok') return file
+  const raw = file.rawTrainedPairs
+  if (raw === undefined) return { kind: 'ok', store: file.store, trainedPairs: null }
+  if (!Array.isArray(raw) || !raw.every(isTrainedBusPair)) {
+    return { kind: 'unreadable', error: 'trainedPairs is not a list of { stemCID, busId }' }
+  }
+  return {
+    kind: 'ok',
+    store: file.store,
+    trainedPairs: raw.map(({ stemCID, busId }) => ({ stemCID, busId }))
+  }
+}
+
 /** For the readers (the classifier, the renderer): mirrors pluginCatalog.ts's
  * own loadCatalog -- an empty store (never a thrown error) both when nothing
- * has ever been confirmed yet and when reading one fails. Training never
- * uses this: see readCategoryCentroidStoreFile. Deliberately GLOBAL (not
- * per-project), same reasoning as the original busCentroidStore.ts: the
- * whole point of a classifier here is to generalize across every sketch the
- * user tidies/arranges, not start over cold on each new one. */
+ * has ever been confirmed yet and when reading one fails. trainedPairs is
+ * training's record, not part of the store, so it is never looked at here: a
+ * malformed one keeps training out (readCategoryCentroidStoreFile) but the
+ * classifier still reads every centroid (review of 6fd465fe, minor 3).
+ * Deliberately GLOBAL (not per-project), same reasoning as the original
+ * busCentroidStore.ts: the whole point of a classifier here is to generalize
+ * across every sketch the user tidies/arranges, not start over cold on each
+ * new one. */
 export function loadCategoryCentroidStore(): CategoryCentroidStore {
-  const file = readCategoryCentroidStoreFile()
+  const file = readStoreFile()
   if (file.kind === 'ok') return file.store
   if (file.kind === 'unreadable') {
     console.error(`loadCategoryCentroidStore: failed to read ${storePath()}: ${file.error}`)
