@@ -22,8 +22,10 @@
 //   counts again, three times at most. A worker that can't run (it fails to
 //   start or load the addon, e.g. in a packaged build that can't reach
 //   better-sqlite3 from a worker -- not verifiable without running one)
-//   leaves the memo alone: readTableSignal counts on the main thread, as
-//   before this module.
+//   counts on the main thread instead, as readTableSignal would have, and
+//   saves that count too, so the next launch on an unchanged file reuses it.
+//   A torn count (three commits in a row) leaves the memo alone:
+//   readTableSignal counts, as before this module.
 //   (Counting on the main thread in key-range slices was measured too:
 //   about 6 s per table instead of 2, the CID indexes being much larger
 //   than the small index SQLite counts with. Not kept.)
@@ -225,6 +227,7 @@ async function seedOne(
     } catch (err) {
       countWork(`table-count:worker-failed.${table}`)
       console.error(`seedTableCounts(${table}): counting off the main thread failed:`, err)
+      countOnMainThread(db, ownDb, table)
       return
     }
     // No other connection committed while the worker counted: the file,
@@ -233,17 +236,57 @@ async function seedOne(
     if (readFileFingerprint(db.name) !== printBefore) continue
     if (!primeTableCount(db, signalTable, count, before)) continue
     countWork(`table-count:worker.${table}`)
-    ownDb
-      .prepare(
-        `INSERT INTO SourceTableCountCache
-           (SourceDbKey, TableName, Fingerprint, MaxRowid, RowCount, ComputedAt)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(SourceDbKey, TableName) DO UPDATE SET
-           Fingerprint = excluded.Fingerprint, MaxRowid = excluded.MaxRowid,
-           RowCount = excluded.RowCount, ComputedAt = excluded.ComputedAt`
-      )
-      .run(db.name, table, printBefore, before.maxRowid, count, Date.now())
+    saveCount(ownDb, db.name, table, printBefore, before.maxRowid, count)
     return
   }
   countWork(`table-count:torn.${table}`)
+}
+
+/** The worker couldn't count (it can't start or load the addon -- possible
+ * in a packaged build, unverified): the same COUNT on the main thread, the
+ * one readTableSignal's first reader would otherwise take -- and saved, so
+ * the next launch on an unchanged file takes none (review of the
+ * faster-startup commits, 2026-10-06: it used to be left to readTableSignal,
+ * which can't save it, so every such launch paid it again). Readers wait for
+ * this seed meanwhile. */
+function countOnMainThread(
+  db: Database.Database,
+  ownDb: Database.Database,
+  table: SeededTable
+): void {
+  const before = readTableHead(db, table)
+  const printBefore = readFileFingerprint(db.name)
+  if (!before || printBefore === null) return
+  let count: number
+  try {
+    countWork(`table-count:main-thread.${table}`)
+    count = (db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }).n
+  } catch (err) {
+    console.error(`seedTableCounts(${table}): counting on the main thread failed:`, err)
+    return
+  }
+  // One statement, but a commit could land between the head and it.
+  if (readFileFingerprint(db.name) !== printBefore) return
+  if (!primeTableCount(db, table, count, before)) return
+  saveCount(ownDb, db.name, table, printBefore, before.maxRowid, count)
+}
+
+function saveCount(
+  ownDb: Database.Database,
+  key: string,
+  table: SeededTable,
+  fingerprint: string,
+  maxRowid: number | null,
+  count: number
+): void {
+  ownDb
+    .prepare(
+      `INSERT INTO SourceTableCountCache
+         (SourceDbKey, TableName, Fingerprint, MaxRowid, RowCount, ComputedAt)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON CONFLICT(SourceDbKey, TableName) DO UPDATE SET
+         Fingerprint = excluded.Fingerprint, MaxRowid = excluded.MaxRowid,
+         RowCount = excluded.RowCount, ComputedAt = excluded.ComputedAt`
+    )
+    .run(key, table, fingerprint, maxRowid, count, Date.now())
 }

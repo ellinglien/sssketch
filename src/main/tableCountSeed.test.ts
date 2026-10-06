@@ -149,17 +149,28 @@ describe('seedTableCounts', () => {
     expect(counted()).toBe(0)
   })
 
-  it('a worker that fails leaves the count to readTableSignal, never a wrong one', async () => {
+  it('a worker that fails: counted once on the main thread, and saved for the next launch', async () => {
     const path = archive(300, 0)
     const own = ownDb()
     const ro = new Database(path, { readonly: true })
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const counted = fullCounts(ro)
     await seedTableCounts(ro, own, {
       tables: ['Stems'],
       countRows: () => Promise.reject(new Error('no worker here'))
     })
-    const counted = fullCounts(ro)
     expect(readTableSignal(ro, 'Stems')?.count).toBe(300)
     expect(counted()).toBe(1)
+    ro.close()
+
+    // Next launch, the worker still failing: the saved count, no COUNT at all.
+    const next = new Database(path, { readonly: true })
+    const nextCounted = fullCounts(next)
+    const countRows = vi.fn(() => Promise.reject(new Error('no worker here')))
+    await seedTableCounts(next, own, { tables: ['Stems'], countRows })
+    expect(countRows).not.toHaveBeenCalled()
+    expect(readTableSignal(next, 'Stems')?.count).toBe(300)
+    expect(nextCounted()).toBe(0)
   })
 
   it('leaves a read-write connection (the own db) to readTableSignal', async () => {
