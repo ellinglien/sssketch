@@ -355,11 +355,15 @@ export function radioIntensityLightTarget(energy: number, drama: number): number
  * The heavy drums and bass a new build starts without (option C, Elling 2026-10-06): the heaviest
  * sounding drums row and the heaviest sounding bass row the arc may touch (`restable`), each when
  * its score (unknown 0.5) is above `target` by more than INTENSITY_LIGHTEN_MARGIN. A combination
- * row counts once. In row order. Renewed, not rested: the bed keeps its rhythm, lighter.
+ * row counts once. In row order. Renewed, not rested: the bed keeps its rhythm, lighter. `strips`:
+ * the row the cycle's strip-back takes (pickArcRemoval's `heavy`), left out -- the next heaviest of
+ * its kind is lightened instead (review of option C, 2026-10-06: else a second drums row was never
+ * lightened once the strip took the heaviest).
  */
 export function radioBuildLightenRows(
   rows: readonly RadioIntensityRow[],
-  target: number
+  target: number,
+  strips: string | null = null
 ): string[] {
   const score = (r: RadioIntensityRow): number =>
     typeof r.score === 'number' && Number.isFinite(r.score) ? r.score : 0.5
@@ -367,7 +371,7 @@ export function radioBuildLightenRows(
   for (const kind of ['drums', 'bass'] as const) {
     let heaviest: RadioIntensityRow | null = null
     for (const r of rows) {
-      if (!r.sounding || !r.restable || !r.kinds.includes(kind)) continue
+      if (!r.sounding || !r.restable || !r.kinds.includes(kind) || r.id === strips) continue
       if (heaviest === null || score(r) > score(heaviest)) heaviest = r
     }
     if (heaviest !== null && score(heaviest) > target + INTENSITY_LIGHTEN_MARGIN + 1e-9) {
@@ -375,6 +379,30 @@ export function radioBuildLightenRows(
     }
   }
   return rows.filter((r) => out.has(r.id)).map((r) => r.id)
+}
+
+/**
+ * The rows as a drop leaves them (option C's prepare, review of 2026-10-06): its returning rows
+ * sounding (the arc may touch them), and each row it renews at `hi` -- its renewal, leaned to the
+ * top target at full weight, takes the row -- unless the drop has `landed` and the row reads as
+ * sounding (the runtime already has the renewal's own score).
+ */
+export function radioRowsAfterDrop(
+  rows: readonly RadioIntensityRow[],
+  d: Extract<RadioIntensityDecided, { event: 'drop' }>,
+  hi: number,
+  landed: boolean
+): RadioIntensityRow[] {
+  return rows.map((r) => {
+    const back = d.returning.includes(r.id) && !r.sounding
+    const renewed = d.renew.includes(r.id) && (!landed || !r.sounding)
+    if (!back && !renewed) return r
+    return {
+      ...r,
+      ...(back && { sounding: true, restable: true }),
+      ...(renewed && { score: hi })
+    }
+  })
 }
 
 // ---- the step (sections 3.1-3.4, 4.3-4.4) ----
@@ -406,7 +434,29 @@ export interface RadioIntensityStepInput {
   /** A heavy drums or bass row's light pick, prepared for the next build's start, is warm (option
    * C). Absent: no row is renewed light (the arc as before). */
   lightReady?: (rowId: string) => boolean
+  /** The row the cycle's strip-back would take now (pickArcRemoval's `heavy`; null or absent:
+   * none, or unknown), left out of the rows lightened (radioBuildLightenRows). Read only with
+   * `canStrip`. */
+  strips?: string | null
   random: () => number
+}
+
+/** What the lighten reads (decide's cycle, a pressed build's, the ride's prepare). */
+type LightenInput = Pick<
+  RadioIntensityStepInput,
+  'energy' | 'drama' | 'rows' | 'canStrip' | 'lightReady' | 'strips'
+>
+
+/** The heavy drums and bass rows a new cycle renews at its top: those radioBuildLightenRows names
+ * (the strip-back's row left out) whose light pick is warm. No draw. */
+function cycleLighten(input: LightenInput): string[] {
+  const ready = input.lightReady
+  if (ready === undefined) return []
+  return radioBuildLightenRows(
+    input.rows,
+    radioIntensityLightTarget(input.energy, input.drama),
+    input.canStrip ? (input.strips ?? null) : null
+  ).filter((id) => ready(id))
 }
 
 /** What the step asks the runtime to warm (RadioIntensityStepResult.prepare). */
@@ -559,14 +609,7 @@ function decide(
       if (!ending) return null
       const next = nextBuild(arc, input, input.count - (input.canStrip ? 1 : 0), false)
       // option C: the heavy drums and bass whose light pick is warm, renewed at its top (no draw)
-      const ready = input.lightReady
-      const lighten =
-        ready === undefined
-          ? []
-          : radioBuildLightenRows(
-              input.rows,
-              radioIntensityLightTarget(input.energy, input.drama)
-            ).filter((id) => ready(id))
+      const lighten = cycleLighten(input)
       return {
         event: 'cycle',
         strip: input.canStrip,
@@ -621,11 +664,15 @@ function dropEvent(arc: RadioIntensityArc, input: RadioIntensityStepInput): Radi
 }
 
 /** What a button's event may do with the rows at its top (RadioIntensityStepInput's fields).
- * Unknown (a press without them): it adds and strips, the runtime's own pick deciding. */
+ * Unknown (a press without them): it adds and strips, the runtime's own pick deciding. With the
+ * rows, the dials, `lightReady` and `strips` too, a pressed build in the ride renews the heavy
+ * drums and bass whose light pick is already warm (option C; review, 2026-10-06), as the clock's
+ * cycle does; without them it lightens nothing. */
 export type RadioIntensityRoom = Pick<
   RadioIntensityStepInput,
   'count' | 'max' | 'canAdd' | 'canStrip'
->
+> &
+  Partial<Pick<RadioIntensityStepInput, 'energy' | 'drama' | 'rows' | 'lightReady' | 'strips'>>
 
 /** An add fits: the arc can add one, under the build's peak and the most rows. */
 function addFits(arc: RadioIntensityArc, room: RadioIntensityRoom): boolean {
@@ -654,7 +701,22 @@ function forcedEvent(
   }
   // build
   if (arc.phase === 'drop') {
-    return { event: 'cycle', strip: room === null || room.canStrip, forced: true }
+    const strip = room === null || room.canStrip
+    const lighten =
+      room !== null &&
+      room.rows !== undefined &&
+      room.energy !== undefined &&
+      room.drama !== undefined
+        ? cycleLighten({
+            energy: room.energy,
+            drama: room.drama,
+            rows: room.rows,
+            canStrip: strip,
+            lightReady: room.lightReady,
+            strips: room.strips
+          })
+        : []
+    return { event: 'cycle', strip, ...(lighten.length > 0 && { lighten }), forced: true }
   }
   if (arc.phase === 'build') {
     // no room: the halved build alone goes up sooner (pressRadioIntensity)
@@ -768,9 +830,31 @@ export function stepRadioIntensityArc(
     const rests = d?.event === 'breakdown' ? d.rest : state.rests
     prepare = { carry: false, renew: renewalRows({ ...state, rests }, input.rows) }
   } else if (endingPhase === 'drop') {
-    // option C: light picks for the heavy drums and bass, for the next build's start
+    // option C: light picks for the heavy drums and bass, for the next build's start -- read from
+    // the rows as the drop leaves them: with a one-lap phrase and a one-phrase ride this is the
+    // breakdown's last wrap (the drop decided here), its drums and bass still resting (review of
+    // option C, 2026-10-06: else nothing was prepared and that build started heavy)
     const target = radioIntensityLightTarget(input.energy, input.drama)
-    const rows = radioBuildLightenRows(input.rows, target)
+    const drop =
+      state.decided?.event === 'drop'
+        ? { d: state.decided, landed: false }
+        : applied?.event === 'drop'
+          ? { d: applied, landed: true }
+          : null
+    const after =
+      drop === null
+        ? input.rows
+        : radioRowsAfterDrop(
+            input.rows,
+            drop.d,
+            radioIntensityTargets(input.energy, input.drama, state.big).hi,
+            drop.landed
+          )
+    const rows = radioBuildLightenRows(
+      after,
+      target,
+      input.canStrip ? (input.strips ?? null) : null
+    )
     if (rows.length > 0) prepare = { carry: false, renew: [], lighten: { rows, target } }
   }
   if (prepare !== null) state = { ...state, prepared: endingPhase }
@@ -1206,6 +1290,28 @@ export function radioIntensityReleanNow(i: RadioIntensityReleanInput): boolean {
   if (i.target === null || !Number.isFinite(i.target) || !Number.isFinite(i.armed)) return false
   if (!(Math.abs(i.target - i.armed) > INTENSITY_RELEAN_TOLERANCE + 1e-9)) return false
   return landsBeyondLead(i)
+}
+
+/**
+ * A replacement for radio's pick, still warming or warm and waiting, is let go -- the pick landing
+ * as it is -- when the landing target has come back within INTENSITY_RELEAN_TOLERANCE of the
+ * target the pick itself was armed with (`armed`): the pick fits again, and a third stem is not
+ * worth arming (review of option C, 2026-10-06). `target` null (unknown): kept.
+ */
+export function radioIntensityReleanBack(armed: number, target: number | null): boolean {
+  return (
+    target !== null &&
+    Number.isFinite(target) &&
+    Number.isFinite(armed) &&
+    Math.abs(target - armed) <= INTENSITY_RELEAN_TOLERANCE + 1e-9
+  )
+}
+
+/** Why radioIntensityReleanSwap let a replacement go (its `drop`), for the log. */
+export function radioIntensityReleanDropWhy(w: RadioIntensityReleanWhere): string {
+  if (w.decided) return 'the change is decided'
+  if (w.payoffPull) return 'pulled for a payoff'
+  return 'too late to swap'
 }
 
 /**

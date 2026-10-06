@@ -56,6 +56,32 @@ breakdown out of scope (its Out of scope, handoff open thread 4); this is it.
    drop), fold (it bends harder near peaks), pace (independent: the arc moves in phrases), throws
    (aimed into the drop) and turnarounds.
 
+## Decisions (Elling, 2026-10-06)
+
+After the first measurements (the web's harness: the real index, `x` from traits, real picks):
+
+1. **Option A: radio's pick leans to where its change lands.** It was picked a phrase ahead and
+   leaned to the target of the phrase it was picked in, so a breakdown's changes leaned to the
+   build's top and the drop's to the breakdown's.
+   - Radio's pick and its companions are leaned to the target where the change lands
+     (`radioIntensityLandingTarget`, `radioIntensityTargetAhead`); a spare (sized builds) to the
+     next phrase start's.
+   - When that target moves by more than `INTENSITY_RELEAN_TOLERANCE` (0.1) -- the arc decided a
+     phase change, a press moved it, a length was drawn -- the pick is armed again on the same row,
+     only while that is safe (`radioIntensityReleanNow`): never with the change decided or due,
+     held, pulled for a payoff, with a turnaround still to roll, or within
+     `INTENSITY_RELEAN_LEAD_LAPS` (1 lap) of its landing.
+   - The replacement warms beside the pick, which stays radio's until the new one is warm
+     (`radioIntensityReleanSwap`: swap, wait, or let go); one that finds nothing leaves the pick
+     as it was. A target that comes back within the tolerance of the pick as armed lets the
+     replacement go, rather than arming a third stem (`radioIntensityReleanBack`).
+2. **Option C: each build starts low** (§3.4). The bed did not rise through a build: its first
+   phrase still sounded like the drop before it, its heavy drums and bass carried over. The
+   cycle's strip-back takes the busiest row it may, and the heavy drums and bass left are renewed
+   to light picks at the build's top. Renewed, never rested: the bed keeps its rhythm, lighter.
+3. **A firmer lean** (§2.3). Picks aimed near 0.9 landed near 0.6-0.67: the band is drawn at the
+   term's own weight and is narrower (0.15 either side, was 0.25).
+
 ## 0. The theory, and what it decides
 
 Tags as in the anointed spec: **[EV]** an empirical study; **[SRC]** a scholarly source that is
@@ -255,8 +281,21 @@ Inside the existing pipelines, after `applyTraitBar` and before `rankCandidates`
 | weight `w` | 1 | 1 | 0.8 | 0.8 | 0.35 | 0.35 | 0.25 |
 
 **1. The band draw**, like the faves draw:
-- one draw `< INTENSITY_BAND_CHANCE · w · d` (`INTENSITY_BAND_CHANCE` 0.5, `d` = drama / 100)
-  keeps only the candidates with `|r - τ| <= 0.25`;
+- one draw `< w · (0.4 + 0.6 d)` (`radioIntensityLeanWeight`, the ranking term's own weight;
+  `d` = drama / 100) keeps only the candidates with `|r - τ| <= 0.15`
+  (`INTENSITY_BAND_HALF_WIDTH`);
+- the chance, by role weight:
+
+  | `w` | drama 0 | drama 60 (default) | drama 100 |
+  |---|---|---|---|
+  | 1 (drums, bass) | 0.40 | 0.76 | 1 |
+  | 0.8 (bassHeavy, rhythmic) | 0.32 | 0.61 | 0.80 |
+  | 0.35 (lead, bright) | 0.14 | 0.27 | 0.35 |
+  | 0.25 (warm) | 0.10 | 0.19 | 0.25 |
+
+- the firmer lean (Elling, 2026-10-06). It was `0.5 · w · d` with a half-width of 0.25, so a drums
+  pick at the default drama was banded 3 times in 10, never at drama 0, and picks aimed near 0.9
+  landed near 0.6-0.67. `INTENSITY_BAND_CHANCE` is gone;
 - when fewer than `max(8, ceil(pool / 8))` would remain, it keeps the pool as it was (logged
   `[radio-intensity] band too small`). This is `applyTraitBar`'s back-off;
 - the draw is made only while intensity runs, and after dig's near draw.
@@ -266,7 +305,7 @@ and adds, for every candidate:
 
 ```
 INTENSITY_WEIGHT · weight · closeness
-weight    = w · (0.4 + 0.6 d)
+weight    = w · (0.4 + 0.6 d)          (radioIntensityLeanWeight)
 closeness = 1 - |r - τ|      (unscored: 0.5, neutral)
 ```
 
@@ -305,7 +344,8 @@ forced     a button's request, landing at the next top
 - **A phrase start** is a wrap where the new `turnaroundLap` is 0. Phases change only on phrase
   starts. The buttons are the one exception (§6).
 - **Two moments per event,** as hooks have:
-  - **prepare**, at the phrase start before: warm what the event needs (renewal picks, a carry row);
+  - **prepare**, at the phrase start before: warm what the event needs (renewal picks, a carry row,
+    and -- before a new cycle -- light picks for the heavy drums and bass, §3.4);
   - **decide**, at the wrap starting the phrase's last lap (the turnaround roll's wrap, the
     clock's `turnaroundLapStarts`). Decided events are binding.
   - With a one-lap phrase (loops of 16 bars or more), prepare and decide fall on the previous
@@ -363,8 +403,31 @@ desktop `arcAddRow` / the arc exit.
 - **The peak:** `peakRows` = 4 when e < 0.5, else 5; `DENSITY_MAX` when big. Clamped to the arc's
   min and max.
 - **Strip back:** at the build's first phrase start, one row leaves, by the arc's own
-  `pickArcRemoval`: stalest, radio-added, never the last drums or bass. A build therefore starts
-  from about a row under the peak.
+  `pickArcRemoval` with `heavy` (option C, Elling 2026-10-06): the busiest by score (`ArcRow.score`,
+  unknown 0.5, ties to the stalest) among the same rows the density arc may remove -- radio-added,
+  never the last drums or bass. A build therefore starts from about a row under the peak, and from
+  a lighter one. The density arc's removal is unchanged (the stalest).
+- **The build starts low** (option C):
+  - **Prepare,** at the ride's last phrase start (the prepare moment before a new cycle):
+    `radioBuildLightenRows` names the heaviest sounding drums row and the heaviest sounding bass
+    row the arc may touch, each when its score (unknown 0.5) is above `radioIntensityLightTarget`
+    (τ_lo, the breakdown's target) by more than `INTENSITY_LIGHTEN_MARGIN` (0.1). A combination row
+    counts once. The strip-back's row (the step input's `strips`, read with `canStrip`) is left
+    out, so the next heaviest of its kind is named instead. Each named row gets a light pick,
+    leaned to τ_lo at full weight and warmed (`RadioIntensityPrepare.lighten`).
+  - **One-lap phrases** (loops of 16 bars or more) with a one-phrase ride: that prepare falls on
+    the breakdown's last wrap, where the drop is decided, with the drums and bass still resting.
+    It reads the rows as the drop leaves them (`radioRowsAfterDrop`): the returning rows sounding,
+    each renewed row at τ_hi (its renewal's target). The same when the drop has just landed and the
+    runtime does not yet read its rows as sounding.
+  - **Decide,** at the ride's decide wrap: the cycle renews the rows `radioBuildLightenRows` still
+    names (the rows as they are then) whose light pick is warm (`lightReady`):
+    `RadioIntensityDecided.lighten`. Each lands at the build's top as an arc `return`, a cut under
+    the phrase end's turnaround, as a swell's renewals cut onto the playing rows. A row that is not
+    warm, or no longer heavy (radio's own change renewed it since), keeps its stem.
+  - **A pressed build** in the ride uses the light picks already warm (the press's room carries the
+    rows, the dials, `lightReady` and `strips`); before the ride's last phrase start none are.
+  - Without `lightReady` (a runtime that does not prepare them) the arc is as before.
 - **Add:** at each later phrase start of the build, one row joins (`nextArcKind`) until the count
   reaches `peakRows`. Each arrives with a filter in or a bloom (`densityArrival`). The fifth place
   in the starter order is a second drums row: the top of a big build gets busier drums.
@@ -379,7 +442,9 @@ desktop `arcAddRow` / the arc exit.
   1. a cycle start: the big redraw (only when due);
   2. each phase start: its length;
   3. the breakdown's decide wrap: nothing (rows are chosen by rule, §4.1);
-  4. the drop's decide wrap: one renewal draw per returning drums or bass row, in row order (§4.4).
+  4. the drop's decide wrap: one renewal draw per returning drums or bass row, in row order (§4.4);
+  5. the ride's decide wrap (a new cycle): nothing more -- the rows a build starts without are
+     chosen by rule, and their light picks were made at the prepare (§3.4).
 - **Desktop:** `Math.random`, as the rest of its radio.
 - **Picks:** the band draw comes after dig's, from the pick's own random.
 
@@ -465,6 +530,9 @@ being removed. A breakdown deliberately breaks that, and only that:
   - **renewal:** each returning drums or bass row comes back on a fresh pick with chance
     `0.25 + 0.5 d` (one draw each, in row order), leaned to τ_hi at full weight (§2.3);
   - renewal picks are armed and warmed at the prepare moment, a phrase ahead;
+  - at full weight (drama 100 for the lean) a drums or bass pick (`w` = 1) is always banded
+    (§2.3's chance is 1): the renewals, and the build's light picks (§3.4), are drawn from within
+    0.15 of their target whenever the band does not back off;
   - a renewal pick not warm by the decide wrap falls back to the row's own stem, with no draw;
   - the default stays the row's own stem: release is return (§0, open question 4).
 - **The forecast** has `lowEndReturn` (the rows were silent in the lap before W) and `arcRole:
@@ -737,15 +805,26 @@ the phone say the same thing.
 - **`radioIntensity.ts` (new):**
   - `INTENSITY_FIELDS`, `INTENSITY_WEIGHTS`, `stemIntensityScore`;
   - `INTENSITY_ROLE_WEIGHT`, `radioIntensityRoleWeight`;
-  - `RankIntensity`, `intensityPoolRanks`, `applyIntensityBand`, `INTENSITY_BAND_CHANCE`,
-    `INTENSITY_WEIGHT`;
+  - `RankIntensity`, `intensityPoolRanks`, `applyIntensityBand`, `INTENSITY_WEIGHT`;
+  - `radioIntensityLeanWeight` (the band's chance and the term's weight) and
+    `INTENSITY_BAND_HALF_WIDTH` 0.15 (2026-10-06; `INTENSITY_BAND_CHANCE` removed);
   - `radioBedIntensity` (for sims and tests).
 - **`radioIntensityArc.ts` (new):**
   - `RadioIntensityArc`, `newRadioIntensityArc`, `radioIntensityTargets(e, d, big)`,
     `drawIntensityPhrases`;
   - `stepRadioIntensityArc(state, input)`. It returns the next state plus `prepare`, `decided`
     (strip, add, breakdown with rows and throw, drop with renewals) and `target`;
-  - `radioBreakdownRests`, `pressRadioIntensity(state, 'build' | 'drop', where)`.
+  - `radioBreakdownRests`, `pressRadioIntensity(state, 'build' | 'drop', where)`;
+  - option A (2026-10-06): `radioIntensityAhead`, `radioIntensityTargetAhead`,
+    `radioIntensityLandingTarget`, `INTENSITY_RELEAN_TOLERANCE`, `INTENSITY_RELEAN_LEAD_LAPS`,
+    `RadioIntensityReleanWhere` / `RadioIntensityReleanInput`, `radioIntensityReleanNow`,
+    `radioIntensityReleanSwap`, `radioIntensityReleanBack`, `radioIntensityReleanDropWhy`; and in
+    `radioSchedule.ts`, `radioWrapsUntilChange`;
+  - option C (2026-10-06): `radioIntensityLightTarget`, `radioBuildLightenRows`,
+    `INTENSITY_LIGHTEN_MARGIN`, `radioRowsAfterDrop`, `RadioIntensityPrepare` (`lighten`),
+    `RadioIntensityStepInput.lightReady` and `.strips`, the cycle's `lighten`,
+    `RadioIntensityRoom`'s optional `energy`, `drama`, `rows`, `lightReady` and `strips`; and in
+    `radioDensity.ts`, `pickArcRemoval(rows, 'heavy')` with `ArcRow.score`.
 - **`stemLevel.ts` (new):** `stemLevelFeatures`, K-weighting and low-pass coefficients by sample
   rate.
 - **Changed:**
@@ -902,10 +981,14 @@ Measured and asserted (first targets, [INF], to tune by ear):
 - The backfill: run the dev scan on a library and read the `[work]` counters (decodes,
   `analysis:level`) before claiming any cost.
 - **No agent can hear either radio, see the UI or hold a phone.** Elling's walkthrough:
-  1. Density `intensity` at the defaults: over 5 minutes, a build (rows join, drums get busier),
-     then on a phrase start the drums echo out and the bass goes, the pads carry, and 16-32 bars
-     later the riser and gap bring them back as the drop.
-  2. Drama 10: a swell, with nothing dropped out and no gap. Drama 100: full breakdowns.
+  1. Density `intensity` at the defaults: over 5 minutes, a build that starts lighter than the
+     drop before it (the busiest row strips back, and the heavy drums and bass cut to lighter
+     stems on the build's top: `the build starts lighter` / `starts lighter` in the log), rows
+     join and the drums get busier, then on a phrase start the drums echo out and the bass goes,
+     the pads carry, and 16-32 bars later the riser and gap bring them back as the drop. With
+     16-bar loops too.
+  2. Drama 10: a swell, with nothing dropped out and no gap -- but a cut on the build's top, where
+     the heavy drums and bass turn lighter. Drama 100: full breakdowns.
   3. Energy 0: long builds, two-phrase breakdowns. Energy 100: short breakdowns, long rides.
   4. A bigger peak within about 15 minutes: five rows, a second drums layer, a deeper breakdown.
   5. `build` in the ride: the build starts at the next top. `drop` in a breakdown: the drop at the

@@ -377,6 +377,8 @@ import {
   radioIntensityBend,
   radioIntensityDropInBars,
   radioIntensityHookInputs,
+  radioIntensityReleanBack,
+  radioIntensityReleanDropWhy,
   radioIntensityReleanNow,
   radioIntensityReleanSwap,
   radioIntensityStarted,
@@ -11445,11 +11447,21 @@ export function DiscoverPanel({
   }
 
   /** What a button's event may do with the rows now (planning decision 8): an add when the arc's
-   * held add is warm or one can be picked, a strip when a row can go. */
-  function intensityRoomNow(): RadioIntensityRoom {
-    const { bed } = intensityRowsNow()
+   * held add is warm or one can be picked, a strip when a row can go. `light` (a press): the rows,
+   * the dials, the light picks warm and the strip-back's row too, so a pressed build in the ride
+   * renews the heavy drums and bass whose light pick is already warm (option C). */
+  function intensityRoomNow(light = false): RadioIntensityRoom {
+    const { bed, rows } = intensityRowsNow()
     const adding = arcAddingRef.current
+    const canStrip = arcExitRef.current === null && arcRemovalCandidate() !== null
     return {
+      ...(light && {
+        energy: radioEnergyOf(radioSettings),
+        drama: radioDramaOf(radioSettings),
+        rows,
+        lightReady: (id: string) => intensityRenewalOf(id, intensityLightRef.current) !== null,
+        strips: canStrip ? arcRemovalCandidate('heavy') : null
+      }),
       count: bed.length,
       max: DENSITY_MAX,
       canAdd:
@@ -11461,7 +11473,7 @@ export function DiscoverPanel({
           nextAdd: intensityNextAddRef.current !== null
         }) &&
           nextArcKind(bed.map((s) => s.kinds)) !== null),
-      canStrip: arcExitRef.current === null && arcRemovalCandidate() !== null
+      canStrip
     }
   }
 
@@ -11563,6 +11575,7 @@ export function DiscoverPanel({
     const { bed, rows } = intensityRowsNow()
     const held = arcAddingRef.current
     const carry = intensityCarryRef.current
+    const canStrip = arcExitRef.current === null && arcRemovalCandidate() !== null
     const r = stepRadioIntensityArc(arc, {
       energy: radioEnergyOf(radioSettings),
       drama: radioDramaOf(radioSettings),
@@ -11579,10 +11592,12 @@ export function DiscoverPanel({
         held?.held !== undefined &&
         held.warm === true &&
         slotsRef.current.some((s) => s.id === held.slotId),
-      canStrip: arcExitRef.current === null && arcRemovalCandidate() !== null,
+      canStrip,
       carryReady: carry !== null && carry.pick !== null && carry.stem !== null,
       renewReady: (id) => (intensityRenewRef.current.get(id)?.stem ?? null) !== null,
       lightReady: (id) => intensityRenewalOf(id, intensityLightRef.current) !== null,
+      // the cycle's strip-back takes the busiest row it may: the lighten leaves it out
+      strips: canStrip ? arcRemovalCandidate('heavy') : null,
       random: Math.random
     })
     intensityArcRef.current = r.state
@@ -11886,7 +11901,7 @@ export function DiscoverPanel({
     // option C: light picks for the heavy drums and bass, for the next build's start
     if (p.lighten !== undefined) {
       intensityLightRef.current = new Map()
-      intensityPrepareFresh(intensityLightRef.current, p.lighten.rows, p.lighten.target)
+      intensityPrepareFresh(intensityLightRef, p.lighten.rows, p.lighten.target)
       console.log(`[radio-intensity] prepares light picks for ${p.lighten.rows.join(', ')}`)
     }
     if (p.renew.length === 0) return
@@ -11895,16 +11910,17 @@ export function DiscoverPanel({
       radioDramaOf(radioSettings),
       arc.big
     ).hi
-    intensityPrepareFresh(intensityRenewRef.current, p.renew, hi)
+    intensityPrepareFresh(intensityRenewRef, p.renew, hi)
     console.log(
       `[radio-intensity] prepares ${[p.carry ? 'a carry row' : '', p.renew.length > 0 ? `renewals for ${p.renew.join(', ')}` : ''].filter((w) => w !== '').join(' and ')}`
     )
   }
 
-  /** Fresh picks for `ids` (unlocked rows) into `map`, leaned to `target` at full weight, each
-   * yielding its row to any other pick and warmed; one that fails leaves the map. */
+  /** Fresh picks for `ids` (unlocked rows) into `ref`'s map, leaned to `target` at full weight,
+   * each yielding its row to any other pick and warmed; one that fails leaves the map. Each step
+   * reads the live map (a reset puts a new one in: what was asked for the old is let go). */
   function intensityPrepareFresh(
-    map: Map<string, { pick: SlotPick | null; stem: ResolvedCandidateStem | null }>,
+    ref: { current: Map<string, { pick: SlotPick | null; stem: ResolvedCandidateStem | null }> },
     ids: readonly string[],
     target: number
   ): void {
@@ -11915,21 +11931,21 @@ export function DiscoverPanel({
         pick: null,
         stem: null
       }
-      map.set(id, entry)
+      ref.current.set(id, entry)
       void pickForSlot(id, slot.kinds, {
         avoidOwnStem: true,
         yieldRow: true,
         intensity: { target, drama: 100 }
       }).then((pick) => {
-        if (map.get(id) !== entry) return
+        if (ref.current.get(id) !== entry) return
         if (pick === null || pick.candidate === null || !radioOnRef.current) {
-          map.delete(id)
+          ref.current.delete(id)
           return
         }
         entry.pick = pick
         void resolveAndWarmPick(pick).then((stem) => {
-          if (map.get(id) !== entry) return
-          if (stem === null) map.delete(id)
+          if (ref.current.get(id) !== entry) return
+          if (stem === null) ref.current.delete(id)
           else entry.stem = stem
         })
       })
@@ -12376,14 +12392,26 @@ export function DiscoverPanel({
     if (pending === null || armed === null || armed.pick !== pending.pick) return
     if (!radioOnRef.current) return
     // a replacement already warming: measured against what it was armed for
-    const warming = intensityRearmRef.current
-    const from = warming !== null && warming.of === pending.pick ? warming.target : armed.target
+    const warming =
+      intensityRearmRef.current !== null && intensityRearmRef.current.of === pending.pick
+        ? intensityRearmRef.current
+        : null
+    const from = warming !== null ? warming.target : armed.target
     const lean = intensityLeanForChange()
+    // the target came back to the pick's own: the replacement goes, rather than a third stem
+    if (warming !== null && radioIntensityReleanBack(armed.target, lean?.target ?? null)) {
+      intensityRearmRef.current = null
+      console.log(
+        `[radio-intensity] radio's pick on ${pending.slotId} stays: its lean came back to ${armed.target.toFixed(2)}`
+      )
+      return
+    }
     const now = radioIntensityReleanNow({
       ...intensityReleanWhere(pending.pick),
       armed: from,
       target: lean?.target ?? null,
-      armInFlight: radioArmInFlight()
+      // a re-arm still picking or warming counts as an arm in flight: no second one starts on it
+      armInFlight: radioArmInFlight() || (warming !== null && warming.ready === null)
     })
     if (!now || lean === null || !intensityRearmable(pending.slotId)) return
     console.log(
@@ -12459,16 +12487,33 @@ export function DiscoverPanel({
       return
     }
     const ready = r.ready
-    const verdict = intensityRearmable(ready.slotId)
-      ? radioIntensityReleanSwap(intensityReleanWhere(pending.pick))
-      : 'drop'
+    const stemId = ready.pick.candidate?.stemCID ?? null
+    const why = !intensityRearmable(ready.slotId)
+      ? "its row is no longer radio's to change"
+      : stemId === null || slotsRef.current.some((s) => s.candidate?.stemCID === stemId)
+        ? 'its new stem is taken'
+        : null
+    const where = intensityReleanWhere(pending.pick)
+    const verdict = why === null ? radioIntensityReleanSwap(where) : 'drop'
     if (verdict === 'wait') return
     intensityRearmRef.current = null
-    if (verdict === 'drop') {
-      console.log(`[radio-intensity] radio's pick on ${ready.slotId} stays: too late to swap`)
+    if (verdict === 'drop' || stemId === null) {
+      console.log(
+        `[radio-intensity] radio's pick on ${ready.slotId} stays: ${why ?? radioIntensityReleanDropWhy(where)}`
+      )
       return
     }
-    const companions = ready.companions.filter((k) => intensityRearmable(k.slotId))
+    // the companions armed again, and the old pick's others riding the new one as they were (the
+    // web's `carried`), no stem twice
+    const rearmed = ready.companions.filter((k) => intensityRearmable(k.slotId))
+    const carried = pending.companions.filter(
+      (k) => k.slotId !== ready.slotId && !ready.companions.some((x) => x.slotId === k.slotId)
+    )
+    const companions = radioUsableCompanionPicks(
+      stemId,
+      [...rearmed, ...carried],
+      manualChangesRef.current
+    )
     setRadioPending({
       slotId: ready.slotId,
       pick: ready.pick,
@@ -12477,7 +12522,10 @@ export function DiscoverPanel({
       companions
     })
     radioPendingLeanRef.current = { pick: ready.pick, target: r.target }
-    warmRadioPendingCompanions(ready.pick, companions)
+    warmRadioPendingCompanions(
+      ready.pick,
+      companions.filter((k) => k.stem === null)
+    )
     console.log(
       `[radio-intensity] radio's pick on ${ready.slotId} is warm: in at ${r.target.toFixed(2)}`
     )
@@ -12510,7 +12558,7 @@ export function DiscoverPanel({
       lap: clock?.turnaroundLap ?? 0,
       phraseLaps: turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars),
       late: turnaroundTurnBeats((loopBars - pos) * 4, TURN_LEAD_BEATS) === null,
-      can: intensityRoomNow()
+      can: intensityRoomNow(true)
     })
     if (next === null) {
       console.log(`[radio-intensity] ${action} pressed: not now`)
