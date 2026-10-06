@@ -403,7 +403,7 @@ const api = {
     centerRiffCID: string,
     kinds: DiscoverSlotKind[],
     soundSource?: DiscoverSoundSourceFilter,
-    creator?: string,
+    creator?: string | readonly string[],
     /** Optional (discoverAdjacency's AdjacentDiscoverOptions): radio's dig asks for 8 per
      * direction, no downloads, and trait percentiles. Absent: today's behaviour. */
     options?: AdjacentDiscoverOptions
@@ -420,6 +420,9 @@ const api = {
     ipcRenderer.invoke('discover-artist-index', ownUsername),
   discoverArtistAnalysed: (artist: string): Promise<{ analysed: number; total: number }> =>
     ipcRenderer.invoke('discover-artist-analysed', artist),
+  /** Combine artists: warm newly chosen artists' stem lists in main. */
+  discoverPrewarmArtists: (names: string[]): Promise<void> =>
+    ipcRenderer.invoke('discover-prewarm-artists', names),
   /** What a phone keep (by its tap id) came to -- served back to the phone
    * in /api/state's `keeps`. */
   reportRemoteKeep: (keepId: string, outcome: RemoteKeepOutcome): Promise<void> =>

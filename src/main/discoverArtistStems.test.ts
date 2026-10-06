@@ -6,8 +6,10 @@ import {
   getArtistStemCIDs,
   getArtistStemRows,
   readArtistStemRows,
+  MAX_CACHED_ARTISTS,
   resetArtistStemAbortForTests
 } from './discoverArtistStems'
+import { MAX_COMBINED_ARTISTS } from '@shared/artistSelection'
 import { countWork } from './workCounters'
 import { readTableSignal } from './tableChangeSignal'
 
@@ -196,5 +198,11 @@ describe('abort on quit', () => {
     abortArtistStemWalks()
     await expect(walk).rejects.toThrow(/aborted/)
     expect(pageReads()).toBe(1)
+  })
+})
+
+describe('combine artists', () => {
+  it('a whole selection fits the per-db artist cache', () => {
+    expect(MAX_CACHED_ARTISTS).toBeGreaterThanOrEqual(MAX_COMBINED_ARTISTS)
   })
 })

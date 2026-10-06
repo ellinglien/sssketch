@@ -164,13 +164,23 @@ export async function getAdjacentDiscoverCandidates(
   // "endlesss" is off; an audio-in stem the overnight classifier placed
   // can match drums/bass/lead). Defaults to no filtering.
   soundSource: DiscoverSoundSourceFilter = { endlesss: true, audioIn: true },
-  /** Discover artist mode: only this creator's stems (creatorAllowed). */
-  creator?: string,
+  /** Discover artist mode: only this creator's stems; combine artists: any of these
+   * (creatorAllowed). */
+  creator?: string | readonly string[],
   options: AdjacentDiscoverOptions = {}
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   const sizes = adjacentWalkSizes(options.matchesPerDirection)
-  // A blank creator is no filter, never "only stems with no creator".
-  const creatorName = creator?.trim() || undefined
+  // A blank creator is no filter, never "only stems with no creator". A list (combine artists)
+  // is trimmed and kept only when something is left in it.
+  const creatorName: string | readonly string[] | undefined =
+    typeof creator === 'string'
+      ? creator.trim() || undefined
+      : creator !== undefined
+        ? (() => {
+            const names = creator.map((c) => c.trim()).filter((c) => c !== '')
+            return names.length > 0 ? names : undefined
+          })()
+        : undefined
   const context = resolveRiffWithContext(centerRiffCID)
   if (!context) return { newer: [], older: [] }
 

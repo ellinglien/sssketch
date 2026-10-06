@@ -1515,14 +1515,19 @@ app.whenReady().then(async () => {
       centerRiffCID: string,
       kinds: DiscoverSlotKind[],
       soundSource?: DiscoverSoundSourceFilter,
-      creator?: string,
+      creator?: unknown,
       options?: AdjacentDiscoverOptions
     ) =>
       getAdjacentDiscoverCandidates(
         centerRiffCID,
         kinds,
         soundSource,
-        creator?.trim() || undefined,
+        // One creator (artist mode) or a list (combine artists); anything else is no filter.
+        typeof creator === 'string'
+          ? creator.trim() || undefined
+          : Array.isArray(creator)
+            ? creator.filter((c): c is string => typeof c === 'string')
+            : undefined,
         options ?? {}
       )
   )
@@ -1547,6 +1552,22 @@ app.whenReady().then(async () => {
     return name
       ? getArtistAnalysed(openOwnRiffLibraryDb(), discoverSourceDbs(), name)
       : { analysed: 0, total: 0 }
+  })
+
+  // Combine artists (spec 2026-10-06-combine-artists-design §6): warm each newly chosen artist's
+  // stem list (getArtistStemCIDs' cache) one after another, so a new artist's first turn is not a
+  // cold index read on the USB archive. A warm-up only: failures are logged, never thrown.
+  ipcMain.handle('discover-prewarm-artists', async (_event, names: unknown) => {
+    if (!Array.isArray(names)) return
+    const dbs = discoverSourceDbs()
+    for (const name of names) {
+      if (typeof name !== 'string' || name.trim() === '') continue
+      try {
+        await getArtistStemCIDs(dbs, name.trim())
+      } catch (err) {
+        console.error(`discover-prewarm-artists(${name}) failed:`, err)
+      }
+    }
   })
 
   // The renderer's answer to a phone keep: what keepGroup came to, by the

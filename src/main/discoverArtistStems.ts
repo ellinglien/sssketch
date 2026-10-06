@@ -22,8 +22,9 @@ export interface ArtistStemRow {
 
 const ARTIST_PAGE = 2000
 /** Per db. 31k rows is ~4.6 MB of row objects and CID strings; a handful
- * of artists per session is plenty. */
-const MAX_CACHED_ARTISTS = 8
+ * of artists per session is plenty. Combine artists keeps a whole selection
+ * (at most MAX_COMBINED_ARTISTS) cached: discoverArtistStems.test.ts pins it. */
+export const MAX_CACHED_ARTISTS = 8
 
 /** Set on quit (abortArtistIndexWork calls it): running walks stop at
  * their next page, so none holds a statement on a closing db. */
