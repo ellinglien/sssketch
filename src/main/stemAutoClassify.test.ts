@@ -1041,8 +1041,18 @@ describe('classifyAutoCategoryBatch (own stems first, 2026-10-06)', () => {
     setStemEmbeddingCache(db, '/x/own-late', [0.9, 0.1, 0], 1000)
     // and a rest stem noted at the same time stays behind the own one
     setStemEmbeddingCache(db, '/x/rest-late', [0.9, 0.1, 0], 1000)
-    await classifyAutoCategoryBatch(db, [db], { priority })
+    // Each noted stem lands at a random place in its group's segment: pinned
+    // to the segment's far end (taken last), so neither can be taken by luck
+    // -- the own one is taken only because its segment comes first, and the
+    // rest one, behind 450 others in a batch of 199 more, is not.
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0)
+    try {
+      await classifyAutoCategoryBatch(db, [db], { priority })
+    } finally {
+      random.mockRestore()
+    }
     expect(allClassifiedStemCIDs(db).has('own-late')).toBe(true)
+    expect(allClassifiedStemCIDs(db).has('rest-late')).toBe(false)
   })
 
   // Review of 147dca78: the lists were keyed by username and set SIZES, so
