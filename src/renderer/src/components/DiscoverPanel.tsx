@@ -419,6 +419,7 @@ import {
   radioRowVisualVars,
   radioThrowVisual,
   radioTurnaroundVisuals,
+  radioVisualBrightness,
   reopenRadioRestVisuals,
   type RadioMoveVisual
 } from '@shared/radioMoveVisuals'
@@ -1376,6 +1377,12 @@ export function DiscoverPanel({
   const radioRiserRef = useRef<HTMLSpanElement>(null)
   // Whether the sweep effect last wrote a move onto the rows: it clears them once, then idles.
   const radioMovesShownRef = useRef(false)
+  // What the sweep effect last wrote on each waveform cell ('' for no [data-mv]) and on the riser
+  // line, so a tick that changes nothing writes nothing (a long rest is the same look every tick).
+  const radioMoveWrittenRef = useRef<{ cells: WeakMap<HTMLElement, string>; riser: string }>({
+    cells: new WeakMap(),
+    riser: ''
+  })
   const [radioFoldView, setRadioFoldView] = useState<{
     state: RadioFoldState
     step: RadioFoldStep | null
@@ -1414,28 +1421,43 @@ export function DiscoverPanel({
         stemBars: previewLoopBars,
         loopBars: previewLoopBars
       }).windowBars
+      // a resting row with no rest logged (one that slipped past its close, say) is still silent:
+      // a rest is radio's move. A logged rest draws itself, with its fade, its close and reopen.
+      const restLogged = new Set<string>()
+      for (const v of mv.visuals) if (v.move === 'rest' && v.rowId !== null) restLogged.add(v.rowId)
+      const floor = radioVisualBrightness(0).toFixed(3)
+      const written = radioMoveWrittenRef.current
       rowsRef.current?.querySelectorAll<HTMLElement>('[data-move-row]').forEach((cell) => {
         const rowId = cell.dataset.moveRow ?? ''
         const look = radioRowVisualAt(mv.visuals, rowId, mvAt, fade)
-        // a row resting for radio is silent, logged or not (a rest is radio's move)
-        if (mv.resting.has(rowId)) look.level = 0
+        if (mv.resting.has(rowId) && !restLogged.has(rowId)) look.level = 0
         const vars = radioRowVisualVars(look, { windowBars: mvWindowBars, reducedMotion: reduced })
-        if (
-          vars['--mv-bright'] === '1.000' &&
-          vars['--mv-low'] === '0.000' &&
-          vars['--mv-high'] === '0.000' &&
-          vars['--mv-wash'] === '0.000' &&
-          vars['--mv-riser'] === '0.000' &&
-          vars['--mv-ghost'] === '0.000'
-        ) {
+        const bright = vars['--mv-bright']
+        const shaped =
+          vars['--mv-low'] !== '0.000' ||
+          vars['--mv-high'] !== '0.000' ||
+          vars['--mv-wash'] !== '0.000' ||
+          vars['--mv-riser'] !== '0.000' ||
+          vars['--mv-ghost'] !== '0.000'
+        // at rest, or just the rest floor on a row [data-mv-rest] already draws there: no
+        // [data-mv] (its mask and blur, for nothing)
+        const plain =
+          !shaped && (bright === '1.000' || (bright === floor && cell.dataset.mvRest !== undefined))
+        const sig = plain ? '' : Object.values(vars).join(' ')
+        if (written.cells.get(cell) === sig) return
+        written.cells.set(cell, sig)
+        if (plain) {
           delete cell.dataset.mv
           return
         }
         for (const [name, value] of Object.entries(vars)) cell.style.setProperty(name, value)
         cell.dataset.mv = ''
       })
-      const riser = reduced ? 0 : radioRowVisualAt(mv.visuals, null, mvAt).riser
-      radioRiserRef.current?.style.setProperty('transform', `scaleX(${riser.toFixed(3)})`)
+      const riser = (reduced ? 0 : radioRowVisualAt(mv.visuals, null, mvAt).riser).toFixed(3)
+      if (written.riser !== riser) {
+        written.riser = riser
+        radioRiserRef.current?.style.setProperty('transform', `scaleX(${riser})`)
+      }
       radioMovesShownRef.current = true
     } else if (radioMovesShownRef.current) {
       // by [data-mv], not [data-move-row]: radio going off takes the latter away first
@@ -1444,6 +1466,7 @@ export function DiscoverPanel({
         delete cell.dataset.mv
       })
       radioRiserRef.current?.style.setProperty('transform', 'scaleX(0)')
+      radioMoveWrittenRef.current = { cells: new WeakMap(), riser: '' }
       radioMovesShownRef.current = false
     }
     const lap = sweepLapRef.current
