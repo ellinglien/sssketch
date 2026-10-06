@@ -125,6 +125,37 @@ describe('discoverIndexCache', () => {
       expect(updates[updates.length - 1]).toEqual({ completed: 2, total: 2 })
     })
 
+    it('the loads run no COUNT (1.3 s cold on his ownDb) and report the total they are given', async () => {
+      const own = freshOwnDb()
+      const index = new Map(
+        [...Array(2500)].map((_, i) => [
+          `s${String(i).padStart(5, '0')}`,
+          { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 128, creationTime: 1 }
+        ])
+      )
+      saveRiffIndexCache(own, 'db-a', index, 1)
+      saveInstrumentRowsCache(
+        own,
+        'db-a',
+        [...index.keys()].map((StemCID) => ({ StemCID, Instrument: 1, OwnerJamCID: 'j1' })),
+        index.size
+      )
+      const prepare = vi.spyOn(own, 'prepare')
+      const updates: Array<{ completed: number; total: number }> = []
+      const loaded = await loadCachedRiffIndex(
+        own,
+        'db-a',
+        (completed, total) => updates.push({ completed, total }),
+        3000
+      )
+      const rows = await loadCachedInstrumentRows(own, 'db-a', undefined, 3000)
+      expect(loaded.size).toBe(2500)
+      expect(rows).toHaveLength(2500)
+      expect(prepare.mock.calls.some(([sql]) => String(sql).includes('COUNT('))).toBe(false)
+      expect(updates[0]).toEqual({ completed: expect.any(Number), total: 3000 })
+      expect(updates[updates.length - 1]).toEqual({ completed: 2500, total: 2500 })
+    })
+
     it('loadCachedRiffIndex returns an empty map for an unknown key', async () => {
       const own = freshOwnDb()
       expect(await loadCachedRiffIndex(own, 'never-saved')).toEqual(new Map())

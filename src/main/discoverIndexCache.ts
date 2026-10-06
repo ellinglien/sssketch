@@ -17,6 +17,11 @@ import { countWork } from './workCounters'
 
 const PAGE_SIZE = 5000
 
+/** Rows per page when loading a saved index at startup. Measured on a cold
+ * copy of Elling's ownDb (891k rows): 5,000-row pages blocked up to 430 ms;
+ * 2,000-row pages at most 86 ms, and the whole load got no slower. */
+const LOAD_PAGE_SIZE = 2000
+
 /** Same budget as scanTargetCache.ts's writePairs: one transaction holds
  * the main process at most about this long before it commits and yields. */
 const TRANSACTION_BUDGET_MS = 16
@@ -269,44 +274,39 @@ export function getCachedStemCount(ownDb: Database.Database, sourceDbKey: string
   return row?.StemCount ?? null
 }
 
-/** Reads a previously-saved riff index back out, paginated + yielded the
- * same way as discoverCandidates.ts's own buildRiffIndex (same
- * PAGE_SIZE/yield-between-pages discipline, for the same "don't block the
- * main process on one huge synchronous fetch" reason -- this cache can
- * legitimately hold hundreds of thousands of rows too). Returns an empty
- * map for a key that's never been saved, same "absent = empty, never
- * throw" convention as the live scan's own missing-table handling. */
+/** Reads a previously-saved riff index back out, LOAD_PAGE_SIZE rows per
+ * synchronous page with a yield between (this cache holds hundreds of
+ * thousands of rows). Returns an empty map for a key that's never been
+ * saved, same "absent = empty, never throw" convention as the live scan's
+ * own missing-table handling.
+ *
+ * No COUNT first (faster startup, 2026-10-06): one `COUNT(*) ... WHERE
+ * SourceDbKey = ?` over 891k rows took 1.26 s cold on Elling's ownDb, one
+ * statement, only to give the progress line a total. The caller's
+ * `totalHint` (a meta count) stands in for it; the last update is always
+ * completed === total. */
 export async function loadCachedRiffIndex(
   ownDb: Database.Database,
   sourceDbKey: string,
-  onProgress?: (completed: number, total: number) => void
+  onProgress?: (completed: number, total: number) => void,
+  totalHint = 0
 ): Promise<Map<string, RiffIndexEntry>> {
   const index = new Map<string, RiffIndexEntry>()
-  const total = (
-    ownDb
-      .prepare(`SELECT COUNT(*) AS n FROM DiscoverRiffIndexCache WHERE SourceDbKey = ?`)
-      .get(sourceDbKey) as { n: number }
-  ).n
-  if (total === 0) return index
-
   // Keyset on the primary key (SourceDbKey, StemCID): no OFFSET re-skip.
   const statement = ownDb.prepare(
     `SELECT StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime FROM DiscoverRiffIndexCache
      WHERE SourceDbKey = ? AND StemCID > ? ORDER BY StemCID LIMIT ?`
   )
   let after = ''
-  let loaded = 0
   for (;;) {
-    const page = statement.all(sourceDbKey, after, PAGE_SIZE) as {
+    const page = statement.all(sourceDbKey, after, LOAD_PAGE_SIZE) as {
       StemCID: string
       RiffCID: string
       OwnerJamCID: string
       BPMrnd: number
       CreationTime: number | null
     }[]
-    if (page.length === 0) break
     countWork('prewarm:rows-loaded.riff-index', page.length)
-
     for (const row of page) {
       index.set(row.StemCID, {
         riffCID: row.RiffCID,
@@ -315,12 +315,12 @@ export async function loadCachedRiffIndex(
         creationTime: row.CreationTime
       })
     }
-    loaded += page.length
-    onProgress?.(loaded, total)
-    if (page.length < PAGE_SIZE) break
+    if (page.length < LOAD_PAGE_SIZE) break
+    onProgress?.(index.size, Math.max(totalHint, index.size))
     after = page[page.length - 1].StemCID
     await yieldToEventLoop()
   }
+  if (index.size > 0) onProgress?.(index.size, index.size)
   return index
 }
 
@@ -452,16 +452,10 @@ export interface CachedInstrumentRow {
 export async function loadCachedInstrumentRows(
   ownDb: Database.Database,
   sourceDbKey: string,
-  onProgress?: (completed: number, total: number) => void
+  onProgress?: (completed: number, total: number) => void,
+  totalHint = 0
 ): Promise<CachedInstrumentRow[]> {
   const rows: CachedInstrumentRow[] = []
-  const total = (
-    ownDb
-      .prepare(`SELECT COUNT(*) AS n FROM DiscoverInstrumentRowsCache WHERE SourceDbKey = ?`)
-      .get(sourceDbKey) as { n: number }
-  ).n
-  if (total === 0) return rows
-
   // Keyset on the primary key (SourceDbKey, StemCID): StemCID order, which
   // the mask lookup binary-searches (instrumentRowsLookup.ts), and no
   // OFFSET re-skip.
@@ -471,15 +465,15 @@ export async function loadCachedInstrumentRows(
   )
   let after = ''
   for (;;) {
-    const page = statement.all(sourceDbKey, after, PAGE_SIZE) as CachedInstrumentRow[]
-    if (page.length === 0) break
+    const page = statement.all(sourceDbKey, after, LOAD_PAGE_SIZE) as CachedInstrumentRow[]
     countWork('prewarm:rows-loaded.instrument-rows', page.length)
     for (const row of page) rows.push(row)
-    onProgress?.(rows.length, total)
-    if (page.length < PAGE_SIZE) break
+    if (page.length < LOAD_PAGE_SIZE) break
+    onProgress?.(rows.length, Math.max(totalHint, rows.length))
     after = page[page.length - 1].StemCID
     await yieldToEventLoop()
   }
+  if (rows.length > 0) onProgress?.(rows.length, rows.length)
   return rows
 }
 
