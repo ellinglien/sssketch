@@ -33,6 +33,9 @@ import { columnStemSlots, mergeStemSlots, type StemSlotRef } from '@shared/riffS
 import type { RiffIndexEntry } from './discoverCandidates'
 import type { InstrumentRow } from './instrumentRowsLookup'
 import { hasExtraStemSlotsTable, readExtraStemSlots } from './riffStemsExtra'
+import { keyAtRowid } from './rowidWatermark'
+import type { OwnStemsSnapshot } from './stemPriority'
+import { readTableHead, readTableSignal } from './tableChangeSignal'
 import { countWork } from './workCounters'
 
 export interface OwnStemIndex {
@@ -41,6 +44,11 @@ export interface OwnStemIndex {
   riffIndex: Map<string, RiffIndexEntry>
   /** The user's Stems rows, in StemCID order. */
   rows: InstrumentRow[]
+  /** The same stems as stemPriority.ts reads them for "only my stems", with
+   * the Stems watermark and head taken before this read: handed to it
+   * (seedStemPriorityOwnStems) so a "mine" roll doesn't read them a second
+   * time while the rebuild walk runs. Null when Stems couldn't be read. */
+  stems: OwnStemsSnapshot | null
 }
 
 export interface OwnStemIndexOptions {
@@ -192,10 +200,26 @@ export async function buildOwnStemIndex(
   const pageSize = options.pageSize ?? 1000
   let read = 0
   let rows: InstrumentRow[] = []
+  let snapshot: Omit<OwnStemsSnapshot, 'own'> | null = null
   try {
+    // Before the read, as stemPriority records it: a row added meanwhile is
+    // read again by its next extension, never missed.
+    const head = db.inTransaction ? null : readTableHead(db, 'Stems')
+    const live = readTableSignal(db, 'Stems')
+    if (live) {
+      snapshot = {
+        head,
+        watermark: {
+          count: live.count,
+          maxRowid: live.maxRowid,
+          keyAtMax:
+            live.maxRowid === null ? null : keyAtRowid(db, 'Stems', 'StemCID', live.maxRowid)
+        }
+      }
+    }
     rows = await readOwnStemRows(db, username, pageSize, (n) => options.onProgress?.(n))
   } catch {
-    return { username, riffIndex: new Map(), rows: [] }
+    return { username, riffIndex: new Map(), rows: [], stems: null }
   }
   read = rows.length
   options.onProgress?.(read)
@@ -216,5 +240,6 @@ export async function buildOwnStemIndex(
     // No Riffs table: no riff to put a stem in, so nothing can be rolled.
   }
   countWork('own-index:built')
-  return { username, riffIndex, rows }
+  const stems = snapshot && { ...snapshot, own: new Set(rows.map((r) => r.StemCID)) }
+  return { username, riffIndex, rows, stems }
 }

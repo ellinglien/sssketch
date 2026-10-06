@@ -1,8 +1,13 @@
 // src/main/rowidWatermark.test.ts -- opens sqlite: on vitest.config.ts's CI
 // exclude list.
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
-import { canExtendByRowid, keyAtRowid, type RowidWatermark } from './rowidWatermark'
+import {
+  canExtendByRowid,
+  canExtendByRowidSliced,
+  keyAtRowid,
+  type RowidWatermark
+} from './rowidWatermark'
 
 function source(keys: string[]): Database.Database {
   const db = new Database(':memory:')
@@ -92,5 +97,45 @@ describe('canExtendByRowid', () => {
     const db = source(['a', 'b', 'c', 'd'])
     const meta = { count: 2, maxRowid: 2, keyAtMax: keyAtRowid(db, 'Riffs', 'RiffCID', 2) }
     expect(extendable(db, meta)).toBe(true)
+  })
+})
+
+describe('canExtendByRowidSliced (faster startup: the rows past the watermark counted in windows)', () => {
+  it('agrees with canExtendByRowid on every case above', async () => {
+    const cases: [Database.Database, RowidWatermark][] = []
+    const append = source(['a', 'b', 'c'])
+    cases.push([append, builtOver(append)])
+    append.prepare(`INSERT INTO Riffs (RiffCID) VALUES ('d'), ('e')`).run()
+    const deleted = source(['a', 'b', 'c'])
+    cases.push([deleted, builtOver(deleted)])
+    deleted.prepare(`DELETE FROM Riffs WHERE RiffCID = 'b'`).run()
+    const swapped = source(['a', 'b', 'c'])
+    cases.push([swapped, builtOver(swapped)])
+    swapped.prepare(`DELETE FROM Riffs WHERE RiffCID = 'a'`).run()
+    swapped.prepare(`INSERT INTO Riffs (RiffCID) VALUES ('z')`).run()
+    cases.push([source(['x', 'y', 'z', 'w']), builtOver(source(['a', 'b', 'c']))])
+    const short = source(['a', 'b', 'c'])
+    cases.push([short, { ...builtOver(short), count: 2 }])
+    const empty = source([])
+    cases.push([empty, builtOver(empty)])
+    for (const [db, meta] of cases) {
+      expect(await canExtendByRowidSliced(db, 'Riffs', 'RiffCID', meta, live(db), 2)).toBe(
+        canExtendByRowid(db, 'Riffs', 'RiffCID', meta, live(db))
+      )
+    }
+  })
+
+  it('counts a big append in bounded windows, never one statement over all of it', async () => {
+    const db = source(['a'])
+    const meta = builtOver(db)
+    const insert = db.prepare(`INSERT INTO Riffs (RiffCID) VALUES (?)`)
+    for (let i = 0; i < 5000; i++) insert.run(`n${i}`)
+    const prepare = vi.spyOn(db, 'prepare')
+    expect(await canExtendByRowidSliced(db, 'Riffs', 'RiffCID', meta, live(db), 1000)).toBe(true)
+    const windowed = prepare.mock.calls.filter(([sql]) => String(sql).includes('rowid <= ?'))
+    expect(windowed.length).toBeGreaterThan(0)
+    expect(prepare.mock.calls.some(([sql]) => /WHERE rowid > \?$/.test(String(sql).trim()))).toBe(
+      false
+    )
   })
 })

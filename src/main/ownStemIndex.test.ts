@@ -63,6 +63,12 @@ describe('buildOwnStemIndex on an archive with username indexes', () => {
       { StemCID: 'mine2', Instrument: 8, OwnerJamCID: 'jam1' },
       { StemCID: 'mine3', Instrument: 2, OwnerJamCID: 'jam1' }
     ])
+    // What stemPriority would have read for the same user, and its watermark.
+    expect(own.stems).toEqual({
+      own: new Set(['mine1', 'mine2', 'mine3']),
+      watermark: { count: 4, maxRowid: 4, keyAtMax: 'theirs' },
+      head: expect.objectContaining({ maxRowid: 4 })
+    })
   })
 })
 
@@ -94,5 +100,6 @@ describe('buildOwnStemIndex on a db without them (the own db)', () => {
     const own = await buildOwnStemIndex(db, 'elling')
     expect(own.rows).toEqual([])
     expect(own.riffIndex.size).toBe(0)
+    expect(own.stems?.own.size).toBe(0)
   })
 })

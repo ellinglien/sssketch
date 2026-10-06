@@ -42,7 +42,8 @@ import {
   loadCachedInstrumentRows,
   persistInstrumentRowsPage,
   readInstrumentRowsMeta,
-  resetInstrumentRowsCache
+  resetInstrumentRowsCache,
+  type IndexCacheMeta
 } from './discoverIndexCache'
 import { getStemClassificationVersion } from './stemClassificationVersion'
 import {
@@ -51,13 +52,14 @@ import {
   type InstrumentRowsLookup
 } from './instrumentRowsLookup'
 import { emptyRiffIndexState, walkRiffs, type RiffIndexState } from './riffIndexWalk'
-import { canExtendByRowid, keyAtRowid, type RowidWatermark } from './rowidWatermark'
+import { canExtendByRowidSliced, keyAtRowid, type RowidWatermark } from './rowidWatermark'
 import { sortInstrumentRowsSliced, walkStems } from './stemsTableWalk'
-import { buildOwnStemIndex } from './ownStemIndex'
+import { buildOwnStemIndex, type OwnStemIndex } from './ownStemIndex'
 import { seedTableCounts } from './tableCountSeed'
 import {
   isScanCacheCurrent,
   newScanCacheState,
+  readTableHead,
   readTableSignal,
   type ScanCacheState
 } from './tableChangeSignal'
@@ -167,6 +169,37 @@ type WarmDecision = 'complete' | 'extending' | 'rebuild'
 interface WarmPhase {
   decided: (decision: WarmDecision) => void
   walk: Promise<void>
+  /** The archive's row counts (tableCountSeed.ts): a saved copy that may be
+   * kept is loaded while they are still being taken, then decided. */
+  counted?: Promise<void>
+}
+
+/** Whether a saved copy could still be kept (current or extendable), from
+ * the head alone, with no count: false when the table's top fell below the
+ * copy's watermark or the row at the watermark changed (a rebuild). Lets
+ * the load overlap the archive's count; the real decision is still made
+ * after it. A legacy copy (no watermark) is not guessed at. */
+function mayKeepSavedCopy(
+  db: Database.Database,
+  table: 'Riffs' | 'Stems',
+  keyColumn: 'RiffCID' | 'StemCID',
+  meta: IndexCacheMeta | null
+): boolean {
+  const w = meta?.watermark
+  if (!w) return false
+  if (w.maxRowid === null) return true
+  const head = readTableHead(db, table)
+  if (!head || head.maxRowid === null || head.maxRowid < w.maxRowid) return false
+  return keyAtRowid(db, table, keyColumn, w.maxRowid) === w.keyAtMax
+}
+
+function sameSavedCopy(a: IndexCacheMeta, b: IndexCacheMeta | null): boolean {
+  return (
+    b !== null &&
+    a.count === b.count &&
+    a.watermark?.maxRowid === b.watermark?.maxRowid &&
+    a.watermark?.keyAtMax === b.watermark?.keyAtMax
+  )
 }
 
 type PrewarmProgressCallback = (progress: PrewarmScanProgress) => void
@@ -364,9 +397,14 @@ async function buildRiffIndex(
     return walk.index
   }
   const walk =
-    previous?.watermark && canExtendByRowid(db, 'Riffs', 'RiffCID', previous.watermark, signal)
+    previous?.watermark &&
+    (await canExtendByRowidSliced(db, 'Riffs', 'RiffCID', previous.watermark, signal))
       ? previous
       : emptyRiffIndexState()
+  // Forgotten while the extend check yielded: this walk would extend the
+  // pre-forget index (and serve it) -- start afresh at once instead.
+  if (riffIndexForgetGeneration(db) !== generation)
+    return restartRiffIndexAfterForget(db, onProgress)
   countWork(walk === previous ? 'riff-index:extend' : 'riff-index:rebuild')
   // An extension serves the index it grows in place meanwhile (faster
   // startup): entries are only added, or moved to a smaller RiffCID.
@@ -410,6 +448,17 @@ async function warmRiffIndex(
   const key = db.name
   const generation = riffIndexForgetGeneration(db)
   const forgotten = (): boolean => riffIndexForgetGeneration(db) !== generation
+  let preloaded: { meta: IndexCacheMeta; index: Map<string, RiffIndexEntry> } | undefined
+  if (phase.counted) {
+    const early = readRiffIndexMeta(ownDb, key)
+    if (early && mayKeepSavedCopy(db, 'Riffs', 'RiffCID', early)) {
+      preloaded = {
+        meta: early,
+        index: await loadCachedRiffIndex(ownDb, key, onProgress, early.count)
+      }
+    }
+    await phase.counted
+  }
   const live = readTableSignal(db, 'Riffs')
   if (!live) {
     phase.decided('complete')
@@ -427,13 +476,16 @@ async function warmRiffIndex(
   const extendable =
     !current &&
     meta?.watermark != null &&
-    canExtendByRowid(db, 'Riffs', 'RiffCID', meta.watermark, live)
+    (await canExtendByRowidSliced(db, 'Riffs', 'RiffCID', meta.watermark, live))
 
   let walk: RiffIndexState
   let served: ServedIndex<Map<string, RiffIndexEntry>> | undefined
   if (current || extendable) {
     walk = {
-      index: await loadCachedRiffIndex(ownDb, key, onProgress, meta!.count),
+      index:
+        preloaded && sameSavedCopy(preloaded.meta, meta)
+          ? preloaded.index
+          : await loadCachedRiffIndex(ownDb, key, onProgress, meta!.count),
       open: loadCachedRiffOpenRowids(ownDb, key),
       watermark: meta!.watermark
     }
@@ -448,8 +500,12 @@ async function warmRiffIndex(
     // Served while it is extended (faster startup): a copy the shared rule
     // extends is a subset of the live table, and the walk only adds entries
     // or moves one to a smaller RiffCID.
-    served = { scope: 'extending', value: walk.index }
-    servedRiffIndex.set(db, served)
+    // (Not after a forget: that copy is the pre-forget one, and this walk
+    // restarts once it ends.)
+    if (!forgotten()) {
+      served = { scope: 'extending', value: walk.index }
+      servedRiffIndex.set(db, served)
+    }
     phase.decided('extending')
     await phase.walk
   } else {
@@ -536,11 +592,17 @@ export interface PrewarmOptions {
    * loaded (complete, or served while they are extended), or the own index
    * built where a copy has to be rebuilt. The walks run after it. */
   onUsable?: () => void
+  /** Each own-only index built (a db that has to be rebuilt): index.ts hands
+   * its stems to stemPriority.ts, so "only my stems" doesn't read them again. */
+  onOwnIndex?: (db: Database.Database, own: OwnStemIndex) => void
 }
 
 /** A WarmPhase whose walk waits for open(), and whose decision is known as
  * soon as the step makes it (or fails). */
-function gatedWarmStep<T>(run: (phase: WarmPhase) => Promise<T>): {
+function gatedWarmStep<T>(
+  counted: Promise<void>,
+  run: (phase: WarmPhase) => Promise<T>
+): {
   promise: Promise<T>
   decided: Promise<WarmDecision>
   open: () => void
@@ -553,7 +615,7 @@ function gatedWarmStep<T>(run: (phase: WarmPhase) => Promise<T>): {
   const decided = new Promise<WarmDecision>((resolve) => {
     decide = resolve
   })
-  const promise = run({ decided: decide, walk })
+  const promise = run({ decided: decide, walk, counted })
   // A step that failed before deciding: nothing to serve, nothing to wait for.
   promise.then(
     () => decide('complete'),
@@ -586,10 +648,11 @@ export async function prewarmDiscoverCandidateCaches(
         ...(ownOnly() ? { ownOnly: true } : {})
       })
 
-  // The archive's row counts first, without one long COUNT where the file
-  // hasn't changed since the last launch (tableCountSeed.ts): every check
-  // below reads them.
-  for (const db of uniqueDbs) await seedTableCounts(db, ownDb)
+  // The archive's row counts, with no COUNT on the main thread
+  // (tableCountSeed.ts; index.ts started them when the archive opened, and
+  // this joins those): each step loads a copy it may keep meanwhile, then
+  // decides once they are in.
+  const counted = new Map(uniqueDbs.map((db) => [db, seedTableCounts(db, ownDb)]))
 
   // Usable phase: decide each index, load what is kept, and on a rebuild
   // build the own-only index -- then open the gate. Walks wait for it.
@@ -612,7 +675,7 @@ export async function prewarmDiscoverCandidateCaches(
       // than it, or the restarted walk would wait on itself.
       let step!: ReturnType<typeof gatedWarmStep<Map<string, RiffIndexEntry>>>
       void shareRiffIndexBuild(db, () => {
-        step = gatedWarmStep((phase) =>
+        step = gatedWarmStep(counted.get(db)!, (phase) =>
           warmRiffIndex(db, ownDb, reporter('riffIndex', dbIndex), phase)
         )
         return step.promise
@@ -635,7 +698,7 @@ export async function prewarmDiscoverCandidateCaches(
         console.error('prewarmDiscoverCandidateCaches: failed to warm instrument rows:', err)
       )
     } else {
-      const step = gatedWarmStep((phase) =>
+      const step = gatedWarmStep(counted.get(db)!, (phase) =>
         warmInstrumentRows(db, ownDb, reporter('instrumentRows', dbIndex), phase)
       )
       void shareInstrumentRowsBuild(db, step.promise).catch(() => undefined)
@@ -653,6 +716,7 @@ export async function prewarmDiscoverCandidateCaches(
       try {
         const report = reporter('ownStems', dbIndex)
         const own = await buildOwnStemIndex(db, username, { onProgress: (n) => report(n, 0) })
+        options.onOwnIndex?.(db, own)
         if (riffDecision === 'rebuild') {
           servedRiffIndex.set(db, { scope: 'own', username, value: own.riffIndex })
         }
@@ -781,6 +845,17 @@ async function warmInstrumentRows(
   phase: WarmPhase
 ): Promise<InstrumentRow[]> {
   const key = db.name
+  let preloaded: { meta: IndexCacheMeta; rows: InstrumentRow[] } | undefined
+  if (phase.counted) {
+    const early = readInstrumentRowsMeta(ownDb, key)
+    if (early && mayKeepSavedCopy(db, 'Stems', 'StemCID', early)) {
+      preloaded = {
+        meta: early,
+        rows: await loadCachedInstrumentRows(ownDb, key, onProgress, early.count)
+      }
+    }
+    await phase.counted
+  }
   const live = readTableSignal(db, 'Stems')
   if (!live) {
     phase.decided('complete')
@@ -798,13 +873,16 @@ async function warmInstrumentRows(
   const extendable =
     !current &&
     meta?.watermark != null &&
-    canExtendByRowid(db, 'Stems', 'StemCID', meta.watermark, live)
+    (await canExtendByRowidSliced(db, 'Stems', 'StemCID', meta.watermark, live))
 
   let rows: InstrumentRow[]
   let watermark: RowidWatermark | null
   let served: ServedIndex<InstrumentRow[]> | undefined
   if (current || extendable) {
-    rows = await loadCachedInstrumentRows(ownDb, key, onProgress, meta!.count)
+    rows =
+      preloaded && sameSavedCopy(preloaded.meta, meta)
+        ? preloaded.rows
+        : await loadCachedInstrumentRows(ownDb, key, onProgress, meta!.count)
     watermark = meta!.watermark && { ...meta!.watermark }
     if (current) {
       instrumentRowsCache.set(db, { rows, state, watermark })
@@ -863,7 +941,7 @@ async function buildInstrumentRows(
   }
   const extend =
     previous?.watermark != null &&
-    canExtendByRowid(db, 'Stems', 'StemCID', previous.watermark, signal)
+    (await canExtendByRowidSliced(db, 'Stems', 'StemCID', previous.watermark, signal))
   countWork(extend ? 'instrument-rows:extend' : 'instrument-rows:rebuild')
   const from = extend ? previous!.watermark! : { count: 0, maxRowid: null, keyAtMax: null }
   // An extension serves the rows it extends meanwhile (faster startup).
@@ -972,6 +1050,24 @@ function chunk<T>(items: T[], size: number): T[][] {
   return out
 }
 
+/** The per-row loops below check the clock every CLASSIFY_YIELD_EVERY rows
+ * (or RIFF_QUERY_YIELD_EVERY queries) but yield only once their slice has
+ * run ROLL_SLICE_MS. Yielding on the count alone made a roll during a
+ * startup walk crawl: each yield waits behind one walk slice (~100-150 ms on
+ * the USB archive), so a "mine" roll over 68k own rows, a few hundred
+ * yields, took ~90 s while the rebuild ran (faster startup, measured). */
+const ROLL_SLICE_MS = 8
+
+function newSlice(): { started: number } {
+  return { started: performance.now() }
+}
+
+async function yieldIfSliceSpent(slice: { started: number }): Promise<void> {
+  if (performance.now() - slice.started < ROLL_SLICE_MS) return
+  await yieldToEventLoop()
+  slice.started = performance.now()
+}
+
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
@@ -1049,6 +1145,7 @@ async function getMaskKindStemMasks(
 
   const maskByStemCID = new Map<string, MaskKindAdmission>()
   let sinceYield = 0
+  const slice = newSlice()
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
     const rows = await getInstrumentRowsForDb(db, scope)
     const index = await getMaskKindIndex(db, rows, ownDb, signature)
@@ -1072,7 +1169,7 @@ async function getMaskKindStemMasks(
         sinceYield += 1
         if (sinceYield >= CLASSIFY_YIELD_EVERY) {
           sinceYield = 0
-          await yieldToEventLoop()
+          await yieldIfSliceSpent(slice)
         }
       }
     }
@@ -1281,6 +1378,7 @@ async function buildMaskKindIndex(
 
   countWork('scan:discover.kind-index-rows', rows.length)
   let sinceYield = 0
+  const slice = newSlice()
   for (const row of rows) {
     const confirmedRole = confirmedRoleByStemCID.get(row.StemCID)
     if (confirmedRole !== undefined) {
@@ -1297,7 +1395,7 @@ async function buildMaskKindIndex(
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
       sinceYield = 0
-      await yieldToEventLoop()
+      await yieldIfSliceSpent(slice)
     }
   }
   return {
@@ -1330,6 +1428,7 @@ async function buildGuessLayer(
   const roles = kindByRole()
   const byKind = emptyKindLists()
   let sinceYield = 0
+  const slice = newSlice()
   for (const row of residue) {
     const kind = roles.get(autoRoleByStemCID.get(row.StemCID) ?? '')
     if (kind) {
@@ -1340,7 +1439,7 @@ async function buildGuessLayer(
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
       sinceYield = 0
-      await yieldToEventLoop()
+      await yieldIfSliceSpent(slice)
     }
   }
   return { autoSignature, builtAt: Date.now(), byKind }
@@ -1531,13 +1630,14 @@ export async function attachDiscoverIntensity(
   )
   const out: DiscoverCandidate[] = []
   let sinceYield = 0
+  const slice = newSlice()
   for (const c of pool) {
     const values = valuesOf(c.stemCID)
     out.push({ ...c, intensity: values === null ? null : stemIntensityScore(values, tables) })
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
       sinceYield = 0
-      await yieldToEventLoop()
+      await yieldIfSliceSpent(slice)
     }
   }
   countWork('discover:intensity-attached', out.length)
@@ -1622,6 +1722,7 @@ async function attachTraitPercentiles(
   const tables = await getTraitQuantileTables(ownDb)
   const out: DiscoverCandidate[] = []
   let sinceYield = 0
+  const slice = newSlice()
   for (const c of pool) {
     out.push({
       ...c,
@@ -1630,7 +1731,7 @@ async function attachTraitPercentiles(
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
       sinceYield = 0
-      await yieldToEventLoop()
+      await yieldIfSliceSpent(slice)
     }
   }
   return out
@@ -1854,6 +1955,8 @@ async function getMaskDiscoverCandidates({
   }
 
   let sinceYield = 0
+
+  const slice = newSlice()
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
     const riffIndex = await getRiffIndexForDb(db, scope)
     // In-memory lookups -- no SQL round trip for this part at all. Keeps
@@ -1926,7 +2029,7 @@ async function getMaskDiscoverCandidates({
       sinceYield += 1
       if (sinceYield >= RIFF_QUERY_YIELD_EVERY) {
         sinceYield = 0
-        await yieldToEventLoop()
+        await yieldIfSliceSpent(slice)
       }
     }
   }
@@ -2040,6 +2143,7 @@ async function sampleTraitStems(
 
   const sampled: TraitSampledStem[] = []
   let sinceYield = 0
+  const slice = newSlice()
   for (const row of rows) {
     try {
       const features = JSON.parse(row.FeaturesJSON) as StemFeatures
@@ -2054,7 +2158,7 @@ async function sampleTraitStems(
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
       sinceYield = 0
-      await yieldToEventLoop()
+      await yieldIfSliceSpent(slice)
     }
   }
   return sampled
@@ -2197,6 +2301,7 @@ async function getTraitPoolCandidates({
 
   const stemByCID = new Map<string, { db: Database.Database; row: TraitStemRow }>()
   let sinceYield = 0
+  const slice = newSlice()
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
     for (const cidChunk of chunk(
       sampled.map((s) => s.stemCID),
@@ -2223,7 +2328,7 @@ async function getTraitPoolCandidates({
       sinceYield += 1
       if (sinceYield >= RIFF_QUERY_YIELD_EVERY) {
         sinceYield = 0
-        await yieldToEventLoop()
+        await yieldIfSliceSpent(slice)
       }
     }
   }

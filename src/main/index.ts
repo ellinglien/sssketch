@@ -164,7 +164,7 @@ import {
 } from './stemAutoCategoryStore'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
-import { getStemPriority, setStemPriorityUsername } from './stemPriority'
+import { getStemPriority, seedStemPriorityOwnStems, setStemPriorityUsername } from './stemPriority'
 import { loadOwnUsername, saveOwnUsername } from './ownUsernameStore'
 import { seedTableCounts, whenTableCountsSeeded } from './tableCountSeed'
 import { stemPriorityRank } from '@shared/stemPriorityOrder'
@@ -564,6 +564,11 @@ function createWindow(): BrowserWindow {
           },
           {
             ownUsername: () => ownUsername,
+            // Its stems are "only my stems"' restriction set too: handed over,
+            // not read a second time while the rebuild walk runs.
+            onOwnIndex: (db, own) => {
+              if (own.stems) seedStemPriorityOwnStems(db, own.username, own.stems)
+            },
             // Faster startup (2026-10-06): the gate opens once every index can
             // answer reads; the walks that extend or rebuild them follow.
             onUsable: () => {

@@ -17,6 +17,8 @@ import { join } from 'node:path'
 import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
 import { discoverStemRestriction } from './discoverArtistStems'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
+import { RIFF_WALK_PAGE_SIZE } from './riffIndexWalk'
+import { STEMS_WALK_PAGE_SIZE } from './stemsTableWalk'
 import { upsertStemCategoryRole } from './stemCategoriesStore'
 import { upsertStemAutoCategory } from './stemAutoCategoryStore'
 import { bumpTableWriteVersion } from './tableWriteVersion'
@@ -3322,7 +3324,7 @@ describe('riff index walk and extension (scan plan Task 2)', () => {
     vi.mocked(countWork).mockClear()
     const src = launch(path)
     await prewarm(src, own)
-    expect(walkedRiffs()).toBe(5_000 - 2_000) // the first page was saved
+    expect(walkedRiffs()).toBe(5_000 - RIFF_WALK_PAGE_SIZE) // the first page was saved
     expect(await getRiffIndexForDb(src)).toEqual(oracle(path))
     expect(await persisted(own, path)).toEqual(oracle(path))
   })
@@ -3627,7 +3629,7 @@ describe('instrument rows walk and extension (scan plan Task 3)', () => {
     vi.mocked(countWork).mockClear()
     const src = launch(path)
     await prewarm(src, own)
-    expect(walkedStems()).toBe(3_000)
+    expect(walkedStems()).toBe(5_000 - STEMS_WALK_PAGE_SIZE) // the first page was saved
     expect(await persistedRows(own, path)).toEqual(oracle(path))
     const lookup = getInstrumentMaskLookup(src)!
     for (const [id, row] of oracle(path)) expect(lookup(id)).toBe(row.Instrument)

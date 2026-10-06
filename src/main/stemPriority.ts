@@ -294,10 +294,24 @@ export interface StemPriorityCacheDeps {
   onOwnWindow?: () => void
 }
 
+/** One db's own stems as read elsewhere (ownStemIndex.ts, the startup
+ * prewarm's own-only index): the set, and the Stems watermark and head
+ * taken BEFORE that read -- what refreshDbOwnStems would have recorded. */
+export interface OwnStemsSnapshot {
+  own: Set<string>
+  watermark: RowidWatermark
+  head: TableHead | null
+}
+
 export interface StemPriorityCache {
   /** The current sets for `username`: the own set extended by rows added
    * since the last call, favourites re-read. Calls in flight are shared. */
   get(username: string | null): Promise<StemPriority>
+  /** Takes `db`'s own stems for `username` from a read already made, so the
+   * next get doesn't read them again (the startup prewarm reads them for its
+   * own-only index, and this read, competing with the walk, took ~20 s).
+   * Ignored when another username is current, or `db` already has a set. */
+  seed(db: Database.Database, username: string, snapshot: OwnStemsSnapshot): void
 }
 
 export function createStemPriorityCache(deps: StemPriorityCacheDeps): StemPriorityCache {
@@ -359,6 +373,14 @@ export function createStemPriorityCache(deps: StemPriorityCacheDeps): StemPriori
   }
 
   return {
+    seed(db, rawUsername, snapshot) {
+      const username = normalUsername(rawUsername)
+      if (username === null) return
+      if (!state) state = { username, perDb: new WeakMap() }
+      if (state.username !== username || state.perDb.has(db)) return
+      countWork('stem-priority:seeded')
+      state.perDb.set(db, snapshot)
+    },
     get(rawUsername) {
       const username = normalUsername(rawUsername)
       if (inFlight && inFlight.username === username) return inFlight.promise
@@ -382,6 +404,21 @@ export function createStemPriorityCache(deps: StemPriorityCacheDeps): StemPriori
 
 let appCache: StemPriorityCache | null = null
 let configuredUsername: string | null = null
+
+/** createStemPriorityCache's seed, on the app-wide instance. */
+export function seedStemPriorityOwnStems(
+  db: Database.Database,
+  username: string,
+  snapshot: OwnStemsSnapshot
+): void {
+  if (!appCache) {
+    appCache = createStemPriorityCache({
+      sourceDbs: () => candidateDbsForRiff(),
+      ownDb: () => openOwnRiffLibraryDb()
+    })
+  }
+  appCache.seed(db, username, snapshot)
+}
 
 /** The username the renderer last reported (its riff library username: the
  * one typed, else the Endlesss session's; null when neither). */

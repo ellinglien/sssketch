@@ -5,6 +5,7 @@ import Database from 'better-sqlite3'
 import {
   addStemsWalkSink,
   sortInstrumentRowsSliced,
+  STEMS_WALK_PAGE_SIZE,
   walkStems,
   type StemsWalkPage
 } from './stemsTableWalk'
@@ -104,7 +105,8 @@ describe('walkStems', () => {
     })
     await walkStems(db, EMPTY)
     remove()
-    expect(seen).toEqual([2_000, 2_000, 100])
+    const P = STEMS_WALK_PAGE_SIZE
+    expect(seen).toEqual([...Array<number>(Math.floor(4_100 / P)).fill(P), 4_100 % P])
     expect(ended).toEqual([true])
   })
 

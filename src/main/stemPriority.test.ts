@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildStemPriority, createStemPriorityCache } from './stemPriority'
 import { bumpTableWriteVersion } from './tableWriteVersion'
+import { readTableHead } from './tableChangeSignal'
+import { keyAtRowid } from './rowidWatermark'
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
 
@@ -295,5 +297,68 @@ describe('createStemPriorityCache', () => {
     expect(p4.own.size).toBe(p1.own.size)
     expect(p4.version).not.toBe(p3.version)
     expect((await cache.get('me')).version).toBe(p4.version)
+  })
+})
+
+describe('createStemPriorityCache seeded (faster startup: the own index already read them)', () => {
+  /** What ownStemIndex.ts hands over: the user's stems, the watermark and
+   * head taken before its read. */
+  function snapshot(
+    db: Database.Database,
+    user: string
+  ): Parameters<ReturnType<typeof createStemPriorityCache>['seed']>[2] {
+    const head = readTableHead(db, 'Stems')
+    const { n, m } = db.prepare(`SELECT COUNT(*) AS n, MAX(rowid) AS m FROM Stems`).get() as {
+      n: number
+      m: number
+    }
+    const own = new Set(
+      (
+        db.prepare(`SELECT StemCID FROM Stems WHERE CreatorUserName = ?`).all(user) as {
+          StemCID: string
+        }[]
+      ).map((r) => r.StemCID)
+    )
+    return {
+      own,
+      watermark: { count: n, maxRowid: m, keyAtMax: keyAtRowid(db, 'Stems', 'StemCID', m) },
+      head
+    }
+  }
+
+  it('a seeded db is not read again, and a later sync still extends it', async () => {
+    const { archive, own } = fixture()
+    let windows = 0
+    const unseeded = createStemPriorityCache({
+      sourceDbs: () => [archive, own],
+      ownDb: () => own,
+      windowSize: 2,
+      onOwnWindow: () => (windows += 1)
+    })
+    const expected = await unseeded.get('me')
+    const unseededWindows = windows
+
+    windows = 0
+    const cache = createStemPriorityCache({
+      sourceDbs: () => [archive, own],
+      ownDb: () => own,
+      windowSize: 2,
+      onOwnWindow: () => (windows += 1)
+    })
+    cache.seed(archive, 'me', snapshot(archive, 'me'))
+    const seeded = await cache.get('me')
+    expect([...seeded.own].sort()).toEqual([...expected.own].sort())
+    expect(windows).toBeLessThan(unseededWindows)
+
+    loreWrite(`INSERT INTO Stems VALUES ('a8', 'jam', 'me')`)
+    expect((await cache.get('me')).own.has('a8')).toBe(true)
+  })
+
+  it('a seed for another username is ignored once a different one is current', async () => {
+    const { archive, own } = fixture()
+    const cache = createStemPriorityCache({ sourceDbs: () => [archive, own], ownDb: () => own })
+    await cache.get('me')
+    cache.seed(archive, 'other', { ...snapshot(archive, 'other'), own: new Set(['bogus']) })
+    expect((await cache.get('me')).own.has('bogus')).toBe(false)
   })
 })

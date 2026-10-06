@@ -19,8 +19,9 @@ const PAGE_SIZE = 5000
 
 /** Rows per page when loading a saved index at startup. Measured on a cold
  * copy of Elling's ownDb (891k rows): 5,000-row pages blocked up to 430 ms;
- * 2,000-row pages at most 86 ms, and the whole load got no slower. */
-const LOAD_PAGE_SIZE = 2000
+ * 2,000-row pages up to 155 ms in the full startup (the 3.5 GB file's pages
+ * cold); 1,000 keeps a page well under 100 ms. */
+const LOAD_PAGE_SIZE = 1000
 
 /** Same budget as scanTargetCache.ts's writePairs: one transaction holds
  * the main process at most about this long before it commits and yields. */

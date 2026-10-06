@@ -1,6 +1,7 @@
 // src/main/discoverArtistIndex.test.ts
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
+import { STEMS_WALK_PAGE_SIZE } from './stemsTableWalk'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -356,7 +357,7 @@ describe('pairs walk: failure and quit', () => {
       .prepare(`SELECT StemCount, MaxRowid FROM DiscoverJamUserPairsMeta WHERE SourceDbKey = ?`)
       .get(db.name) as { StemCount: number; MaxRowid: number } | undefined
     if (meta) {
-      expect(meta.StemCount % 2000).toBe(0)
+      expect(meta.StemCount % STEMS_WALK_PAGE_SIZE).toBe(0)
       expect(meta.MaxRowid).toBe(meta.StemCount)
     }
     expect((await getArtistIndex(own, [db], 'elling')).jammedWith).toBeNull()
@@ -413,7 +414,7 @@ describe('pairs from the shared Stems walk (scan plan Task 4)', () => {
     vi.mocked(countWork).mockClear()
     await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: db }], own)
     const walkPages = pairPages()
-    expect(walkPages).toBe(3)
+    expect(walkPages).toBe(Math.ceil(4_500 / STEMS_WALK_PAGE_SIZE))
     const prepareSpy = vi.spyOn(db, 'prepare')
     const index = await getArtistIndex(own, [db], 'elling')
     expect(index.jammedWithPending).toBe(false)
@@ -469,7 +470,7 @@ describe('pairs from the shared Stems walk (scan plan Task 4)', () => {
     db.transaction(() => {
       // Three pages; the second page's pair appears nowhere else.
       for (let i = 0; i < 6_000; i++) {
-        const page = Math.floor(i / 2_000)
+        const page = Math.floor(i / STEMS_WALK_PAGE_SIZE)
         insert.run(`s${i}`, `jam${page}`, page === 1 ? 'only-page-2' : `user${i % 5}`)
       }
     })()
@@ -487,7 +488,7 @@ describe('pairs from the shared Stems walk (scan plan Task 4)', () => {
     const meta = own
       .prepare(`SELECT StemCount FROM DiscoverJamUserPairsMeta WHERE SourceDbKey = ?`)
       .get(db.name) as { StemCount: number }
-    expect(meta.StemCount).toBe(2_000) // the last page saved whole
+    expect(meta.StemCount).toBe(STEMS_WALK_PAGE_SIZE) // the last page saved whole
     // The next launch extends from there, and the saved copy is whole again.
     resetArtistIndexForTests()
     await settled(own, [db])
@@ -519,7 +520,7 @@ describe('pairs from the shared Stems walk (scan plan Task 4)', () => {
     resetArtistIndexForTests()
     vi.mocked(countWork).mockClear()
     await settled(own, [db])
-    expect(pairPages()).toBe(2) // the whole table again
+    expect(pairPages()).toBe(Math.ceil(2_500 / STEMS_WALK_PAGE_SIZE)) // the whole table again
     expect(await savedPairs(own, db)).toEqual(await fullWalkPairs(db))
   })
 

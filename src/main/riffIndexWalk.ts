@@ -35,9 +35,11 @@ import { hasExtraStemSlotsTable, readExtraStemSlots } from './riffStemsExtra'
 import type { RowidWatermark } from './rowidWatermark'
 import { countWork } from './workCounters'
 
-/** Rows per page. A cold page of 2,000 riffs read by rowid is 15-70 ms on
- * the USB archive (measured), and this slice must not grow. */
-export const RIFF_WALK_PAGE_SIZE = 2000
+/** Rows per page. A cold page of 2,000 riffs read by rowid was 15-70 ms on
+ * the USB archive in isolation, but 100-160 ms per page through a whole
+ * rebuild (faster startup, 2026-10-06) -- which now runs with the app open,
+ * so 1,000. This slice must not grow. */
+export const RIFF_WALK_PAGE_SIZE = 1000
 /** Open riffs re-read per statement. They are scattered rowids -- a random
  * read each, not a sequential page -- so a chunk of 500 was an estimated
  * 200-300 ms cold on USB in one synchronous call; 100 keeps each well

@@ -26,8 +26,10 @@ import type { RowidWatermark } from './rowidWatermark'
 import { countWork } from './workCounters'
 
 /** Rows per page: one synchronous read. 21-40 ms cold on the USB archive by
- * rowid (measured); this slice must not grow. */
-export const STEMS_WALK_PAGE_SIZE = 2000
+ * rowid at 2,000 rows in isolation, but 100-130 ms through a whole rebuild
+ * (faster startup, 2026-10-06), which now runs with the app open: 1,000.
+ * This slice must not grow. */
+export const STEMS_WALK_PAGE_SIZE = 1000
 const SLICE_MS = 8
 
 function yieldToEventLoop(): Promise<void> {
