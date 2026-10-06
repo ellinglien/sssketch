@@ -169,3 +169,54 @@ Only read-only connections (the archive) take this path. The own db's counts are
   in a worker can't be checked without running the packaged app.
 - The 30-second re-check (`readTableSignal`) still runs a synchronous COUNT after an in-session sync.
 - The own index differs from the full one for 8% of his stems (another riff that holds the stem).
+
+## As built (2026-10-06)
+
+Commits: 49b65dce, 9853f44c, 7522cf9d, 72b398d6, 7fa09e42. Changes from the plan above:
+- **The archive count runs on a worker thread, not in slices.** Key-range slices were measured at
+  about 6 s per table (the CID indexes are much bigger than the small index one COUNT(*) uses).
+  `countRowsInWorker` runs the same COUNT on a worker's own read-only connection. A worker that
+  can't start leaves the count to `readTableSignal`, as before. It's **unverified in a packaged
+  build** (better-sqlite3 loaded from inside app.asar in a worker).
+- Counts are seeded when the archive opens (index.ts, `whenReady`). A matching saved count is primed
+  synchronously. `listJamsWithDb` and stemPriority's first read wait for the worker
+  (`whenTableCountsSeeded`).
+- A saved copy that may be kept is loaded while the worker counts (`mayKeepSavedCopy`).
+- `canExtendByRowidSliced` counts the rows past a watermark in 1,000-rowid windows. It's used by the
+  four extend checks in discoverCandidates. Other callers (artist pairs, scan targets, stemPriority)
+  still use the one-statement version.
+- Walk pages and saved-copy load pages are 1,000 rows (2,000 blocked 100-160 ms through a rebuild).
+- Roll loops yield on time (8 ms), not every 200 rows. Each yield used to wait behind a walk page,
+  so a roll during a rebuild took ~90 s.
+- The own index hands its stems to stemPriority (`seedStemPriorityOwnStems`), so "only my stems"
+  doesn't read them a second time (that read took 19.5 s behind the walk).
+
+### Measurements (read-only; archive on USB, scratch snapshot of ownDb)
+
+| Case | Before: usable (= complete) | After: usable | After: complete | First "mine" roll | Longest block, before → after |
+|---|---|---|---|---|---|
+| warm, later launches | 4.4 s cold / 8.2 s | 3.0 s | 3.0 s | 7.4 s | 1,695 / 2,429 ms → 27 ms |
+| warm, first launch on this code (no saved count) | same | 4.1 s | 4.1 s | 8.6 s | → 40 ms |
+| extend (20,000 riffs + 20,000 stems) | 10.6 / 12.5 s | 8.8 s | 11.3 s | 14.6 s | 2,950 / 4,161 ms → 200-273 ms |
+| full rebuild | 148 s | 10.6 s | 150 s | 12.4 s | 1,746 ms → 1,045 ms |
+
+Notes on the table:
+- **Before** for "mine" is the same as usable: nothing could roll until complete.
+- **Warm and extend** were each run more than once. The archive's pages stayed cached between
+  runs, so the after numbers are warm-cache. The first before-run was cold.
+- **Extend, longest block (200-273 ms):** the first 1,000-row page of the saved copy, read off a
+  cold ownDb file, under the gate.
+- **Full rebuild, longest block (1,045 ms):** the first roll's own Stems lookup. That's
+  `SELECT ... FROM Stems WHERE StemCID IN (200 ids)` against the USB archive, a random read per
+  stem. It's roll-path and already there before this work. Everything else in the walks stayed
+  under ~230 ms; 58 blocks went over 100 ms in 150 s (most were walk pages).
+- **Full rebuild, usable (10.6 s):** the worker count took 3.7 s, his own stems on the archive
+  6.5 s, and the own db 0.3 s. That's not the hoped-for ~4 s: the own index reads 68k stems and
+  78k riffs through the username indexes (3.0 s + 3.8 s measured alone).
+
+### Still open, for Elling
+- A first roll's Stems IN lookup blocks ~1 s per 200 ids, cold. Smaller chunks only spread the
+  same I/O.
+- Other `canExtendByRowid` callers still count new rows in one statement after a sync.
+- The 30-second re-check can still run a main-thread COUNT after an in-session sync.
+- All-stems rolls during a full rebuild wait for the walk (~2.5 minutes).
