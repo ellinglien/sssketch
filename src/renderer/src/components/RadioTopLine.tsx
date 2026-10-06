@@ -5,12 +5,16 @@
 // Left, play/stop and `radio` (the stop) with its interval line inside its bottom edge; then the
 // readout (status line, phrase ruler, fold's line); then the mix actions (RadioMixActions, passed
 // in: they act on what is playing); right, the `simple / advanced` switch (spec
-// 2026-10-05-radio-simple-view-design), undo and redo. Values and callbacks only.
-import type { ReactNode } from 'react'
+// 2026-10-05-radio-simple-view-design), undo, redo and `?`, the guide to how radio works
+// (RadioGuide, in both views). Values and callbacks only; the guide's open state is the top line's
+// own, so opening it re-renders nothing but this line.
+import { useRef, useState, type ReactNode } from 'react'
 import { RADIO_VIEW_FRAME } from './discoverRowGrid'
 import { Segmented } from './RadioControls'
 import { radioRulerCells, type RadioReadout } from '@shared/radioReadout'
 import { RADIO_VIEWS, RADIO_VIEW_TOOLTIP, type RadioView } from '@shared/radioView'
+import { RADIO_GUIDE_BUTTON, RADIO_GUIDE_LABEL } from '@shared/radioGuide'
+import { RadioGuide } from './RadioGuide'
 
 /** Behind the sticky bars: the library box's own fill (LibraryBrowser), so nothing shows through
  * and nothing looks like a second panel. */
@@ -57,6 +61,8 @@ export function RadioTopLine({
   onUndo: () => void
   onRedo: () => void
 }): React.JSX.Element {
+  const [guideOpen, setGuideOpen] = useState(false)
+  const guideButtonRef = useRef<HTMLButtonElement | null>(null)
   const square: React.CSSProperties = {
     display: 'flex',
     alignItems: 'center',
@@ -286,7 +292,30 @@ export function RadioTopLine({
         >
           <RedoIcon />
         </button>
+        {/* The guide: how radio works, for a casual listener (@shared/radioGuide). */}
+        <button
+          ref={guideButtonRef}
+          onClick={() => setGuideOpen(true)}
+          data-tooltip={RADIO_GUIDE_LABEL}
+          aria-label={RADIO_GUIDE_LABEL}
+          aria-haspopup="dialog"
+          aria-expanded={guideOpen}
+          style={{
+            ...square,
+            fontFamily: 'inherit',
+            fontSize: 'var(--ra-fs-11)',
+            background: 'transparent',
+            border: '1px solid var(--ra-border-strong)',
+            color: 'var(--ra-text-2)',
+            cursor: 'pointer'
+          }}
+        >
+          {RADIO_GUIDE_BUTTON}
+        </button>
       </div>
+      {guideOpen && (
+        <RadioGuide onClose={() => setGuideOpen(false)} returnFocusRef={guideButtonRef} />
+      )}
     </div>
   )
 }
