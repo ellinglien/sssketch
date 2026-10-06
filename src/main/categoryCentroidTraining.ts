@@ -4,7 +4,41 @@ import { toFeatureArray } from '@shared/stemFeatures'
 import { recordConfirmedCategory, type CategoryCentroidStore } from '@shared/categoryCentroids'
 import { loadCategoryCentroidStore, saveCategoryCentroidStore } from './categoryCentroidStore'
 import { getStemFeatureCache } from './stemFeatureCacheStore'
-import type { StemBusCategoryEntry, StemRoleCategoryEntry } from './stemCategoriesStore'
+import {
+  upsertStemCategoryBus,
+  type StemBusCategoryEntry,
+  type StemBusUpsertResult,
+  type StemRoleCategoryEntry
+} from './stemCategoriesStore'
+
+/** A bus confirmation, written and learned from: the one path both the
+ * upsert-stem-category-bus IPC handler and the startup backfill take. Only
+ * the entries the write newly assigned are trained (see
+ * StemBusUpsertResult), so a stem is counted once per bus it is given, no
+ * matter how often the same assignment is written again: a later Tidy Up
+ * re-confirming it, the project file saved after the live write, or an
+ * unchanged project parsed on every launch while one of its stems is still
+ * unresolved (review of plan b21ea5a2 Task 13 M1). The cost: a stem
+ * assigned before it had features is not trained when they arrive later. */
+export function recordStemCategoryBus(
+  db: Database.Database,
+  entries: StemBusCategoryEntry[],
+  source: string,
+  sourceProject: string | null,
+  updatedAt: number,
+  extraCandidateDbs: Database.Database[] = []
+): StemBusUpsertResult {
+  const result = upsertStemCategoryBus(
+    db,
+    entries,
+    source,
+    sourceProject,
+    updatedAt,
+    extraCandidateDbs
+  )
+  trainCentroidsFromBusEntries(db, result.newlyAssigned, extraCandidateDbs)
+  return result
+}
 
 /** The server-side half of "every StemCategories write trains the
  * classifier, not just Tidy Up's own" (design spec §6). Called from every
@@ -17,7 +51,8 @@ import type { StemBusCategoryEntry, StemRoleCategoryEntry } from './stemCategori
  * been scanned/persisted yet is silently skipped for training purposes
  * (not an error) -- it simply doesn't contribute a data point this time;
  * a later StemCategories write for the same stem, once its features exist,
- * trains it then. extraCandidateDbs is passed straight through to
+ * trains it then (on the bus axis only a write that gives it a different
+ * bus: recordStemCategoryBus). extraCandidateDbs is passed straight through to
  * getStemFeatureCache, mirroring stemCategoriesStore.ts's own
  * upsertStemCategoryBus/-Role -- a stem from an external LORE archive
  * needs the same candidate-db lookup to find its cached features that it

@@ -61,10 +61,7 @@ import { loadCategoryCentroidStore } from './categoryCentroidStore'
 import { getConfirmedEmbeddings } from './embeddingMatch'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 import type { CategoryCentroidStore, CategoryAxis } from '@shared/categoryCentroids'
-import {
-  trainCentroidsFromBusEntries,
-  trainCentroidsFromRoleEntries
-} from './categoryCentroidTraining'
+import { recordStemCategoryBus, trainCentroidsFromRoleEntries } from './categoryCentroidTraining'
 import { nextUpdateState, type UpdateState } from '@shared/updateState'
 import {
   instrumentMaskToSoundType,
@@ -188,7 +185,6 @@ import { listStemFavourites, toggleStemFavourite } from './stemFavouriteStore'
 import { listTidyUpLibraryStems, type TidyUpLibraryStem } from './tidyUpLibraryStems'
 import {
   getStemCategoryRolesForPaths,
-  upsertStemCategoryBus,
   upsertStemCategoryRole,
   resolveSourceProjectPath,
   stemCIDForPath,
@@ -1649,18 +1645,18 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'upsert-stem-category-bus',
-    (_event, entries: StemBusCategoryEntry[], source: string, project: ProjectRef) => {
-      const db = openOwnRiffLibraryDb()
-      const extraCandidateDbs = candidateDbsForRiff()
-      upsertStemCategoryBus(
-        db,
+    (_event, entries: StemBusCategoryEntry[], source: string, project: ProjectRef): void => {
+      // Trains only the stems this write newly assigned, so the startup
+      // backfill reading the same assignment from the saved project later
+      // never counts them a second time (recordStemCategoryBus).
+      recordStemCategoryBus(
+        openOwnRiffLibraryDb(),
         entries,
         source,
         resolveSourceProjectPath(project),
         Date.now() / 1000,
-        extraCandidateDbs
+        candidateDbsForRiff()
       )
-      trainCentroidsFromBusEntries(db, entries, extraCandidateDbs)
     }
   )
 
