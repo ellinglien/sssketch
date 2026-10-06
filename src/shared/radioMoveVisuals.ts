@@ -408,19 +408,30 @@ export interface RadioTurnaroundVisualsAt {
   /** Rows the plan never saw that the runtime silences through the gap
    * (turnaroundGapLateRowIds). */
   lateRowIds?: readonly string[]
+  /** The rows the runtime lays the plan on (sssketch: the mix the lane build plays); a plan row
+   * outside them plays nothing and shows nothing. Absent: every row. */
+  heardRowIds?: readonly string[]
+  /** Rows whose filter the runtime did not lay down (sssketch's lane build: a stem already in a
+   * change's filter in keeps it, one filter a lap): no lift or dip drawn there, the row's volume
+   * and wash as planned. Absent: none. */
+  filterSkippedRowIds?: readonly string[]
 }
 
 /** A phrase turnaround (or a turn) as visuals: each row's volume (its drops, the stop and the gap,
  * merged by the planner), filter (a lift's high-pass or a dip's low-pass) and wash; each late row
  * silent through the gap; the riser, when there is one, on the mix -- from its start to where it
- * ends (the gap's start, or the one). */
+ * ends (the gap's start, or the one). Only what the runtime laid down: `heardRowIds`,
+ * `filterSkippedRowIds`. */
 export function radioTurnaroundVisuals(
   plan: TurnaroundPlan,
   at: RadioTurnaroundVisualsAt
 ): RadioMoveVisual[] {
   const { wrapAt, unitsPerBeat, key } = at
   const out: RadioMoveVisual[] = []
+  const heard = at.heardRowIds === undefined ? null : new Set(at.heardRowIds)
+  const filterSkipped = new Set(at.filterSkippedRowIds ?? [])
   for (const r of plan.rows) {
+    if (heard !== null && !heard.has(r.rowId)) continue
     if (r.volume !== undefined && r.volume.length > 0) {
       out.push({
         key,
@@ -430,7 +441,7 @@ export function radioTurnaroundVisuals(
         points: beforeWrap(r.volume, wrapAt, unitsPerBeat)
       })
     }
-    if (r.filter !== undefined && r.filter.cutoff.length > 0) {
+    if (r.filter !== undefined && r.filter.cutoff.length > 0 && !filterSkipped.has(r.rowId)) {
       const lift = r.filter.mode === 'highpass'
       out.push({
         key,

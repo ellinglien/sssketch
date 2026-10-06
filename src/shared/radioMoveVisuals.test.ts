@@ -779,3 +779,55 @@ describe("the planner's own combined turnaround (rollTurnaround, combine on)", (
     }
   })
 })
+
+describe('as the runtime laid it down (plan Task 6 note: only what plays)', () => {
+  // a combined lift with a drop: pad and lead lifted, drums dropped, the bass washed
+  const plan: TurnaroundPlan = {
+    move: 'lift',
+    beats: 8,
+    halvings: 0,
+    rows: [
+      { rowId: 'pad', filter: turnaroundLiftCurve(8) },
+      { rowId: 'lead', filter: turnaroundLiftCurve(8), volume: turnaroundDropCurve(8, 4) },
+      { rowId: 'drums', volume: turnaroundDropCurve(8, 4) },
+      { rowId: 'bass', reverbSend: turnaroundWashCurve(8) }
+    ]
+  }
+  const base = { wrapAt: 32, loopBars: 8, key: 'ta', ...BARS }
+
+  it('a row whose filter the lane build skipped (a change filter in had it) shows no lift, its volume still', () => {
+    const v = radioTurnaroundVisuals(plan, { ...base, filterSkippedRowIds: ['lead'] })
+    expect(at(v, 'lead', 31.5).lowCut).toBe(0)
+    expect(at(v, 'lead', 31.5).level).toBe(0)
+    expect(at(v, 'pad', 31).lowCut).toBeCloseTo(0.5, 9)
+    expect(v.some((x) => x.rowId === 'lead' && x.param === 'highpass')).toBe(false)
+  })
+
+  it('a lone lift with every row skipped lays down nothing, and shows nothing', () => {
+    const lone: TurnaroundPlan = {
+      move: 'lift',
+      beats: 8,
+      halvings: 0,
+      rows: [
+        { rowId: 'pad', filter: turnaroundLiftCurve(8) },
+        { rowId: 'lead', filter: turnaroundLiftCurve(8) }
+      ]
+    }
+    expect(radioTurnaroundVisuals(lone, { ...base, filterSkippedRowIds: ['pad', 'lead'] })).toEqual(
+      []
+    )
+  })
+
+  it('a plan row the runtime does not play (not in the mix) shows nothing; the rest as before', () => {
+    const v = radioTurnaroundVisuals(plan, { ...base, heardRowIds: ['pad', 'bass'] })
+    expect(v.some((x) => x.rowId === 'drums' || x.rowId === 'lead')).toBe(false)
+    expect(at(v, 'pad', 31).lowCut).toBeCloseTo(0.5, 9)
+    expect(at(v, 'bass', 31.99).wash).toBeGreaterThan(0)
+  })
+
+  it('without either, every row as planned (the web, unchanged)', () => {
+    const all = radioTurnaroundVisuals(plan, base)
+    expect(radioTurnaroundVisuals(plan, { ...base, heardRowIds: undefined })).toEqual(all)
+    expect(new Set(all.map((x) => x.rowId))).toEqual(new Set(['pad', 'lead', 'drums', 'bass']))
+  })
+})
