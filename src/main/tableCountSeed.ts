@@ -1,7 +1,8 @@
 // src/main/tableCountSeed.ts
 //
-// The archive's Stems/Riffs row counts at startup without one long COUNT
-// (faster startup plan, docs/superpowers/plans/2026-10-06-faster-startup.md).
+// The archive's Stems/Riffs row counts at startup without one long COUNT on
+// the main thread (faster startup plan,
+// docs/superpowers/plans/2026-10-06-faster-startup.md).
 //
 // readTableSignal (tableChangeSignal.ts) needs a live count -- the shared
 // extend-or-rebuild rule (rowidWatermark.ts) rests on it, it is how a delete
@@ -14,33 +15,35 @@
 //   bumps in rollback-journal mode, plus the db's and any -wal's size and
 //   mtime) and MAX(rowid) agrees: that count is the count. No SQL beyond
 //   the head. Most launches don't follow a sync.
-// - otherwise it counts in key-range slices (slicedKeyRangeCount), each a
-//   covering-index range count, yielding between them: measured 5.5-6.5 s
-//   in total cold, against 2.3 s for the one statement, but never more than
-//   about 100 ms at once with 256 ranges (4,096 are used). A count is only
-//   primed when no other connection committed while the slices ran
-//   (data_version and MAX(rowid) unchanged, and the fingerprint too).
+// - otherwise the same COUNT runs on a worker thread with its own read-only
+//   connection, so the main process never waits on it. It is primed only
+//   when no other connection committed meanwhile (the main connection's
+//   MAX(rowid) and data_version, and the fingerprint, unchanged); else it
+//   counts again, three times at most. A worker that can't run (it fails to
+//   start or load the addon, e.g. in a packaged build that can't reach
+//   better-sqlite3 from a worker -- not verifiable without running one)
+//   leaves the memo alone: readTableSignal counts on the main thread, as
+//   before this module.
+//   (Counting on the main thread in key-range slices was measured too:
+//   about 6 s per table instead of 2, the CID indexes being much larger
+//   than the small index SQLite counts with. Not kept.)
 //
 // Read-only connections only (the external archive): the own db's counts
 // are a few ms on the internal SSD, and its writes are this process's own.
 import type Database from 'better-sqlite3'
 import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
+import { Worker } from 'node:worker_threads'
 import { primeTableCount, readTableHead } from './tableChangeSignal'
 import type { ChangeSignalTable } from './tableWriteVersion'
 import { countWork } from './workCounters'
 
 type SeededTable = 'Riffs' | 'Stems'
 
-const KEY_COLUMN: Record<SeededTable, string> = { Riffs: 'RiffCID', Stems: 'StemCID' }
-
-/** Main-process budget for slices between yields. */
-const SLICE_MS = 8
 /** Attempts at a count no commit tore, before leaving it to readTableSignal. */
 const MAX_ATTEMPTS = 3
-
-function yieldToEventLoop(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve))
-}
+/** A worker count still running after this is given up on (terminated). */
+const WORKER_TIMEOUT_MS = 60_000
 
 /** The file's identity for "has anything been committed since": the SQLite
  * header's file-change counter (bytes 24-27), the db's size and mtime, and
@@ -69,41 +72,64 @@ export function readFileFingerprint(path: string): string | null {
   }
 }
 
-export interface SlicedCountOptions {
-  /** Ranges are the 16^hexDigits key prefixes (default 3: 4,096 ranges). */
-  hexDigits?: number
+/** The worker's whole program: one read-only connection, one COUNT. */
+const WORKER_SOURCE = `
+const { parentPort, workerData } = require('node:worker_threads')
+const Database = require(workerData.module)
+const db = new Database(workerData.path, { readonly: true, fileMustExist: true })
+try {
+  const row = db.prepare('SELECT COUNT(*) AS n FROM ' + workerData.table).get()
+  parentPort.postMessage(row.n)
+} finally {
+  db.close()
 }
+`
 
-/** COUNT(*) of `table`, as key-range counts with yields between them. Every
- * value has exactly one range, whatever its shape: `< b1`, `[b_i, b_i+1)`,
- * `>= b_last` (numbers sort below text and blobs above it in SQLite, so
- * they land in the first and last range), plus `IS NULL`. Throws what a
- * slice throws (a missing table or column). */
-export async function slicedKeyRangeCount(
-  db: Database.Database,
-  table: SeededTable,
-  options: SlicedCountOptions = {}
-): Promise<number> {
-  const key = KEY_COLUMN[table]
-  const digits = options.hexDigits ?? 3
-  const ranges = 16 ** digits
-  const bound = (i: number): string => i.toString(16).padStart(digits, '0')
-  const below = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${key} < ?`)
-  const between = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${key} >= ? AND ${key} < ?`)
-  const above = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${key} >= ?`)
-  const nulls = db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE ${key} IS NULL`)
-  let total = (nulls.get() as { n: number }).n + (below.get(bound(1)) as { n: number }).n
-  let started = performance.now()
-  for (let i = 1; i < ranges - 1; i++) {
-    total += (between.get(bound(i), bound(i + 1)) as { n: number }).n
-    if (performance.now() - started >= SLICE_MS) {
-      await yieldToEventLoop()
-      started = performance.now()
+let addonPath: string | null = null
+
+/** `table`'s COUNT(*) in the db file at `path`, counted on a worker thread
+ * (its own read-only connection). Rejects when the worker can't run, the
+ * count fails, or it takes longer than WORKER_TIMEOUT_MS. */
+export function countRowsInWorker(path: string, table: SeededTable | 'Jams'): Promise<number> {
+  return new Promise((resolve, reject) => {
+    let worker: Worker
+    try {
+      addonPath ??= createRequire(__filename).resolve('better-sqlite3')
+      worker = new Worker(WORKER_SOURCE, {
+        eval: true,
+        workerData: { module: addonPath, path, table }
+      })
+    } catch (err) {
+      reject(err)
+      return
     }
-  }
-  total += (above.get(bound(ranges - 1)) as { n: number }).n
-  countWork(`table-count:sliced.${table}`)
-  return total
+    let settled = false
+    const timer = setTimeout(() => {
+      settled = true
+      void worker.terminate()
+      reject(new Error(`countRowsInWorker(${table}): timed out`))
+    }, WORKER_TIMEOUT_MS)
+    timer.unref()
+    worker.once('message', (n: unknown) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (typeof n === 'number') resolve(n)
+      else reject(new Error(`countRowsInWorker(${table}): no count`))
+    })
+    worker.once('error', (err) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(err)
+    })
+    worker.once('exit', (code) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      reject(new Error(`countRowsInWorker(${table}): worker exited (${code})`))
+    })
+  })
 }
 
 function ensureSchema(ownDb: Database.Database): void {
@@ -118,33 +144,54 @@ function ensureSchema(ownDb: Database.Database): void {
   )`)
 }
 
-export interface SeedTableCountsOptions extends SlicedCountOptions {
+export interface SeedTableCountsOptions {
   tables?: readonly SeededTable[]
+  /** Tests: how a count is taken off the main thread (countRowsInWorker). */
+  countRows?: (path: string, table: SeededTable) => Promise<number>
 }
 
+const seeding = new WeakMap<Database.Database, Promise<void>>()
+
 /** Fills readTableSignal's count memo for `db`'s Riffs and Stems (or
- * `tables`) without a full COUNT -- see the module comment. Never throws:
- * whatever it can't seed is left to readTableSignal's own COUNT. */
-export async function seedTableCounts(
+ * `tables`) without a full COUNT on the main thread -- see the module
+ * comment. Once per connection: a later call gets the first call's promise.
+ * A saved count the file still matches is primed synchronously, before this
+ * returns, so calling it right after the archive is opened (index.ts)
+ * spares every later reader the COUNT; a worker count resolves later.
+ * Never rejects: whatever it can't seed is left to readTableSignal. */
+export function seedTableCounts(
   db: Database.Database,
   ownDb: Database.Database,
   options: SeedTableCountsOptions = {}
 ): Promise<void> {
-  if (!db.readonly) return
-  for (const table of options.tables ?? (['Riffs', 'Stems'] as const)) {
-    try {
-      await seedOne(db, ownDb, table, options)
-    } catch (err) {
-      console.error(`seedTableCounts(${table}) failed; readTableSignal will count:`, err)
-    }
-  }
+  if (!db.readonly) return Promise.resolve()
+  const running = seeding.get(db)
+  if (running) return running
+  // The tables' workers run side by side.
+  const promise = Promise.all(
+    (options.tables ?? (['Riffs', 'Stems'] as const)).map((table) =>
+      seedOne(db, ownDb, table, options).catch((err) => {
+        console.error(`seedTableCounts(${table}) failed; readTableSignal will count:`, err)
+      })
+    )
+  ).then(() => undefined)
+  seeding.set(db, promise)
+  return promise
+}
+
+/** Resolves once seedTableCounts for `db` has finished (at once when none
+ * was started): a reader about to call readTableSignal on the archive at
+ * startup waits for the worker's count instead of taking its own on the
+ * main thread. */
+export function whenTableCountsSeeded(db: Database.Database): Promise<void> {
+  return seeding.get(db) ?? Promise.resolve()
 }
 
 async function seedOne(
   db: Database.Database,
   ownDb: Database.Database,
   table: SeededTable,
-  options: SlicedCountOptions
+  options: SeedTableCountsOptions
 ): Promise<void> {
   ensureSchema(ownDb)
   const signalTable: ChangeSignalTable = table
@@ -168,12 +215,20 @@ async function seedOne(
     const before = readTableHead(db, signalTable)
     const printBefore = readFileFingerprint(db.name)
     if (!before || printBefore === null) return
-    const count = await slicedKeyRangeCount(db, table, options)
-    // No other connection committed while the slices ran: the file, MAX(rowid)
-    // and data_version are where they were. primeTableCount re-checks the head
-    // in the same synchronous step that records it.
+    let count: number
+    try {
+      count = await (options.countRows ?? countRowsInWorker)(db.name, table)
+    } catch (err) {
+      countWork(`table-count:worker-failed.${table}`)
+      console.error(`seedTableCounts(${table}): counting off the main thread failed:`, err)
+      return
+    }
+    // No other connection committed while the worker counted: the file,
+    // MAX(rowid) and data_version are where they were. primeTableCount
+    // re-checks the head in the same synchronous step that records it.
     if (readFileFingerprint(db.name) !== printBefore) continue
     if (!primeTableCount(db, signalTable, count, before)) continue
+    countWork(`table-count:worker.${table}`)
     ownDb
       .prepare(
         `INSERT INTO SourceTableCountCache

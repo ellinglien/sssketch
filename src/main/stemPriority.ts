@@ -38,6 +38,7 @@ import { candidateDbsForRiff } from './riffLibraryStore'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import { canExtendByRowid, keyAtRowid, type RowidWatermark } from './rowidWatermark'
 import { readTableHead, readTableSignal, sameTableHead, type TableHead } from './tableChangeSignal'
+import { whenTableCountsSeeded } from './tableCountSeed'
 import { countWork } from './workCounters'
 
 export interface StemPriority extends StemPrioritySets {
@@ -173,6 +174,9 @@ async function refreshDbOwnStems(
     countWork('stem-priority:unmoved')
     return previous
   }
+  // At startup, after the archive's count is in (tableCountSeed.ts): taken
+  // here instead, it would be 2.3 s cold on the main thread.
+  await whenTableCountsSeeded(db)
   const live = readTableSignal(db, 'Stems')
   if (!live) return undefined
   if (live.maxRowid === null) {

@@ -1,6 +1,7 @@
 // src/main/tableCountSeed.test.ts
 //
-// The archive's row counts known at startup without one long COUNT (faster
+// The archive's row counts known at startup without one long COUNT on the
+// main thread (faster
 // startup plan, docs/superpowers/plans/2026-10-06-faster-startup.md). Opens
 // databases, so it is on vitest.config.ts's CI exclusion list.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -9,7 +10,12 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readTableSignal } from './tableChangeSignal'
-import { readFileFingerprint, seedTableCounts, slicedKeyRangeCount } from './tableCountSeed'
+import {
+  countRowsInWorker,
+  readFileFingerprint,
+  seedTableCounts,
+  whenTableCountsSeeded
+} from './tableCountSeed'
 
 let dir: string
 beforeEach(() => {
@@ -54,34 +60,17 @@ function fullCounts(db: Database.Database): () => number {
       .length
 }
 
-describe('slicedKeyRangeCount', () => {
-  it('equals COUNT(*) for keys of any shape: hex, upper case, numbers, blobs, NULL', async () => {
-    const db = new Database(':memory:')
-    db.exec(`CREATE TABLE Stems (StemCID TEXT, Note TEXT)`)
-    const insert = db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`)
-    for (let i = 0; i < 500; i++) insert.run(hex(i))
-    for (const odd of [
-      '',
-      '0',
-      'fff',
-      'ffff',
-      'FFFF',
-      'Zebra',
-      '~',
-      'g',
-      '000',
-      '0000',
-      '9ff',
-      'a00'
-    ]) {
-      insert.run(odd)
-    }
-    db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run(42)
-    db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run(Buffer.from([1, 2, 3]))
-    db.prepare(`INSERT INTO Stems (StemCID) VALUES (NULL)`).run()
-    const exact = (db.prepare(`SELECT COUNT(*) AS n FROM Stems`).get() as { n: number }).n
-    expect(await slicedKeyRangeCount(db, 'Stems')).toBe(exact)
-    expect(await slicedKeyRangeCount(db, 'Stems', { hexDigits: 1 })).toBe(exact)
+describe('countRowsInWorker', () => {
+  it("counts on a worker thread's own read-only connection", async () => {
+    const path = archive(1234, 56)
+    expect(await countRowsInWorker(path, 'Stems')).toBe(1234)
+    expect(await countRowsInWorker(path, 'Riffs')).toBe(56)
+  })
+
+  it('rejects for a table the file lacks, or a file that is not there', async () => {
+    const path = archive(1, 1)
+    await expect(countRowsInWorker(path, 'Jams')).rejects.toThrow()
+    await expect(countRowsInWorker(join(dir, 'missing.db'), 'Stems')).rejects.toThrow()
   })
 })
 
@@ -103,7 +92,7 @@ describe('readFileFingerprint', () => {
 })
 
 describe('seedTableCounts', () => {
-  it('counts in slices the first time, then reuses the saved count while the file is unchanged', async () => {
+  it('counts off the main thread the first time, then reuses the saved count while the file is unchanged', async () => {
     const path = archive(300, 200)
     const own = ownDb()
     const first = new Database(path, { readonly: true })
@@ -141,31 +130,36 @@ describe('seedTableCounts', () => {
     expect(counted()).toBe(0)
   })
 
-  it('a commit landing during the slices is not primed from a torn count', async () => {
+  it('a commit landing during the count is not primed from a torn count', async () => {
     const path = archive(300, 0)
     const own = ownDb()
     const ro = new Database(path, { readonly: true })
     const rw = new Database(path)
-    let committed = 0
-    const real = ro.prepare.bind(ro)
-    vi.spyOn(ro, 'prepare').mockImplementation(((sql: string) => {
-      const stmt = real(sql)
-      if (!/WHERE StemCID >= \?/.test(sql) || committed >= 3) return stmt
-      // Every slice statement in the first passes is followed by a foreign commit.
-      return {
-        get: (...args: unknown[]) => {
-          const out = stmt.get(...args)
-          if (committed < 3) {
-            rw.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run(`0late${committed++}`)
-          }
-          return out
-        }
-      } as unknown as Database.Statement
-    }) as typeof ro.prepare)
-    await seedTableCounts(ro, own, { tables: ['Stems'], hexDigits: 1 })
-    vi.restoreAllMocks()
-    // Whatever was primed (or not), the signal is the live truth.
-    expect(readTableSignal(ro, 'Stems')?.count).toBe(303)
+    let calls = 0
+    // Counts, then a commit lands before the count is back: twice.
+    const countRows = async (file: string, table: string): Promise<number> => {
+      const n = await countRowsInWorker(file, table as 'Stems')
+      if (calls++ < 2) rw.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run(`late${calls}`)
+      return n
+    }
+    const counted = fullCounts(ro)
+    await seedTableCounts(ro, own, { tables: ['Stems'], countRows })
+    expect(calls).toBe(3)
+    expect(readTableSignal(ro, 'Stems')?.count).toBe(302)
+    expect(counted()).toBe(0)
+  })
+
+  it('a worker that fails leaves the count to readTableSignal, never a wrong one', async () => {
+    const path = archive(300, 0)
+    const own = ownDb()
+    const ro = new Database(path, { readonly: true })
+    await seedTableCounts(ro, own, {
+      tables: ['Stems'],
+      countRows: () => Promise.reject(new Error('no worker here'))
+    })
+    const counted = fullCounts(ro)
+    expect(readTableSignal(ro, 'Stems')?.count).toBe(300)
+    expect(counted()).toBe(1)
   })
 
   it('leaves a read-write connection (the own db) to readTableSignal', async () => {
@@ -187,5 +181,23 @@ describe('seedTableCounts', () => {
     const counted = fullCounts(ro)
     expect(readTableSignal(ro, 'Stems')?.count).toBe(2)
     expect(counted()).toBe(0)
+  })
+})
+
+describe('seedTableCounts once per connection', () => {
+  it('primes a saved count synchronously, and a second call shares the first', async () => {
+    const path = archive(30, 20)
+    const own = ownDb()
+    await seedTableCounts(new Database(path, { readonly: true }), own)
+    const ro = new Database(path, { readonly: true })
+    const first = seedTableCounts(ro, own)
+    // Before any await: the reuse path has already primed both tables.
+    const counted = fullCounts(ro)
+    expect(readTableSignal(ro, 'Stems')?.count).toBe(30)
+    expect(readTableSignal(ro, 'Riffs')?.count).toBe(20)
+    expect(counted()).toBe(0)
+    expect(seedTableCounts(ro, own)).toBe(first)
+    expect(whenTableCountsSeeded(ro)).toBe(first)
+    await first
   })
 })
