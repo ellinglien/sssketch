@@ -10,8 +10,11 @@
 // any page whose needs are still loading, and the targets not yet paged.
 // Its answer is kept (`applied`) and every page that lands later is ordered
 // by it, so a page in flight across the re-rank is ranked like the rest
-// (review of 06eecbdc). Only the newest re-rank's answer is applied: one
-// that a newer re-rank overtook is dropped, whenever it arrives.
+// (review of 06eecbdc). Answers apply in the order the re-ranks were asked:
+// one arriving after a newer re-rank's answer was applied is dropped. One
+// arriving while a newer re-rank is still out is applied (the newer one
+// replaces it when it lands), so a newer re-rank that fails leaves the
+// older answer in place rather than neither (review of 99b33f45).
 import { needsAnyAnalysis, type StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import { orderByStemPriority, type StemPrioritySets } from '@shared/stemPriorityOrder'
 import type { AnalysisSource, AnalysisWorkItem } from './backgroundAnalysisQueue'
@@ -36,8 +39,8 @@ export interface LibraryScanSourceDeps {
   onNeedsFailed: (err: unknown) => void
 }
 
-/** What a re-rank did: applied, overtaken by a newer one (its answer
- * dropped), or the source was cancelled meanwhile. */
+/** What a re-rank did: applied, overtaken by a newer one that was applied
+ * first (its answer dropped), or the source was cancelled meanwhile. */
 export type RerankOutcome = 'applied' | 'superseded' | 'cancelled'
 
 export interface LibraryScanSource extends AnalysisSource {
@@ -55,8 +58,10 @@ export function createLibraryScanSource(deps: LibraryScanSourceDeps): LibrarySca
   const loading = new Set<string>()
   /** The newest applied re-rank's answer: pages landing later sort by it. */
   let applied: StemPrioritySets | null = null
-  /** Bumped by every re-rank; an answer for an older one is dropped. */
+  /** Bumped by every re-rank. */
   let rerankSeq = 0
+  /** The seq of the answer in `applied`; an answer older than it is dropped. */
+  let appliedSeq = 0
 
   return {
     async next(n) {
@@ -109,7 +114,7 @@ export function createLibraryScanSource(deps: LibraryScanSourceDeps): LibrarySca
       ]
       const ranks = await ranksFor(keys)
       if (deps.isCancelled()) return 'cancelled'
-      if (seq !== rerankSeq) return 'superseded'
+      if (seq < appliedSeq) return 'superseded'
       const own = new Set<string>()
       const favourites = new Set<string>()
       keys.forEach((key, i) => {
@@ -120,6 +125,7 @@ export function createLibraryScanSource(deps: LibraryScanSourceDeps): LibrarySca
       // the call); keys not ranked count as the rest.
       const priority: StemPrioritySets = { own, favourites }
       applied = priority
+      appliedSeq = seq
       buffer = orderByStemPriority(buffer, (item) => item.key, priority)
       toScan = [
         ...toScan.slice(0, nextPageStart),

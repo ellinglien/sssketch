@@ -149,4 +149,43 @@ describe('createLibraryScanSource', () => {
     expect(await first).toBe('superseded')
     expect(await drain((n) => source.next(n))).toEqual(['own-1', 'fav-1', 'r1', 'r2'])
   })
+
+  // Review of 99b33f45: a newer re-rank that failed still dropped the older
+  // one's answer, so neither was applied.
+  it('applies an older answer when the newer re-rank fails', async () => {
+    const { source } = harness(['r1', 'own-1', 'fav-1', 'r2'], 10)
+    const older = deferred<number[]>()
+    let olderKeys: string[] = []
+    const first = source.rerank((keys) => {
+      olderKeys = keys
+      return older.promise
+    })
+    const second = source.rerank(() => Promise.reject(new Error('ipc failed')))
+    await expect(second).rejects.toThrow('ipc failed')
+    older.resolve(rankByPrefix(olderKeys))
+    expect(await first).toBe('applied')
+    expect(await drain((n) => source.next(n))).toEqual(['own-1', 'fav-1', 'r1', 'r2'])
+  })
+
+  it('an older answer arriving before the newer one is applied, then the newer one wins', async () => {
+    const { source } = harness(['r1', 'own-1', 'fav-1', 'r2'], 10)
+    const older = deferred<number[]>()
+    const newer = deferred<number[]>()
+    let olderKeys: string[] = []
+    let newerKeys: string[] = []
+    const first = source.rerank((keys) => {
+      olderKeys = keys
+      return older.promise
+    })
+    const second = source.rerank((keys) => {
+      newerKeys = keys
+      return newer.promise
+    })
+    // the older answer ranks the r- stems first
+    older.resolve(olderKeys.map((k) => (k.startsWith('r') ? 0 : 2)))
+    expect(await first).toBe('applied')
+    newer.resolve(rankByPrefix(newerKeys))
+    expect(await second).toBe('applied')
+    expect(await drain((n) => source.next(n))).toEqual(['own-1', 'fav-1', 'r1', 'r2'])
+  })
 })
