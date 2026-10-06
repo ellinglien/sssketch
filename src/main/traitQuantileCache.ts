@@ -41,8 +41,13 @@
 // build, or one after the value table lost track of a write, re-parses SQL,
 // and once tables exist that one runs in the background while they're
 // served.
+//
+// Background scan audit 4(b): the value table also carries each row's
+// feature and level versions (two Uint16 columns, ~0.6 MB at 146k rows), so
+// the analysis needs (stemAnalysisNeeds.ts) answer "current / needs the
+// level pass" from memory instead of parsing every FeaturesJSON again.
 import type Database from 'better-sqlite3'
-import type { StemFeatures } from '@shared/stemFeatures'
+import { stemFeatureVersionOf, stemLevelVersionOf, type StemFeatures } from '@shared/stemFeatures'
 import {
   FALLBACK_FIELDS,
   PREFERRED_TABLE_MIN_ROWS,
@@ -88,6 +93,20 @@ const inFlight = new WeakMap<Database.Database, Build>()
  * it only decides WHEN to rebuild; the build itself recounts exactly. */
 const newFieldWrites = new WeakMap<Database.Database, number>()
 
+/** A version as the Uint16 columns hold it: floored and clamped to [0, 65535].
+ * For any integer threshold T in that range, `stored >= T` iff `v >= T`, so
+ * every comparison the needs make (`>= STEM_FEATURE_VERSION`, `<
+ * STEM_LEVEL_VERSION`) answers exactly as the parsed number would. */
+function storedVersion(v: number): number {
+  return Math.min(65535, Math.max(0, Math.floor(v)))
+}
+
+/** A row's versions in the value table (audit 4(b)). */
+export interface StemRowVersions {
+  feature: number
+  level: number
+}
+
 /** Column index of each trait field in TraitValueTable. */
 const FIELD_COLUMN = new Map<QuantileField, number>(QUANTILE_FIELDS.map((f, i) => [f, i]))
 
@@ -101,6 +120,9 @@ export class TraitValueTable {
   private readonly rowByStemCID = new Map<string, number>()
   private readonly stemCIDs: string[] = []
   private columns: Float64Array[] = QUANTILE_FIELDS.map(() => new Float64Array(0))
+  /** stemFeatureVersionOf / stemLevelVersionOf per row (storedVersion). */
+  private featureVersion = new Uint16Array(0)
+  private levelVersion = new Uint16Array(0)
   private readonly malformed = new Set<string>()
   /** Rows whose parsed value is truthy but not an object (`5`, `"x"`,
    * `true`): a row here, all NaN, but not one of the build's parsedRows. */
@@ -131,6 +153,17 @@ export class TraitValueTable {
       out[field] = this.columns[i][row]
     })
     return out as unknown as StemFeatures
+  }
+
+  /** The row's feature and level versions, read exactly as the JSON path
+   * (stemFeatureVersionOf / stemLevelVersionOf of the parsed value) would:
+   * 'malformed' for a row that didn't parse to a truthy value (the JSON
+   * path's `catch`: counts as missing), undefined for no row at all. */
+  versionsOf(stemCID: string): StemRowVersions | 'malformed' | undefined {
+    if (this.malformed.has(stemCID)) return 'malformed'
+    const row = this.rowByStemCID.get(stemCID)
+    if (row === undefined) return undefined
+    return { feature: this.featureVersion[row], level: this.levelVersion[row] }
   }
 
   /** One row as read by the build (counts toward rowsSeen). */
@@ -185,6 +218,9 @@ export class TraitValueTable {
       const v = typeof record === 'object' ? record[field] : undefined
       this.columns[col][row] = typeof v === 'number' && Number.isFinite(v) ? v : NaN
     }
+    // parsed is truthy here, so property reads are safe on any JSON value
+    this.featureVersion[row] = storedVersion(stemFeatureVersionOf(parsed as StemFeatures))
+    this.levelVersion[row] = storedVersion(stemLevelVersionOf(parsed as StemFeatures))
   }
 
   private grow(capacity: number): void {
@@ -193,6 +229,12 @@ export class TraitValueTable {
       next.set(old)
       return next
     })
+    const feature = new Uint16Array(capacity)
+    feature.set(this.featureVersion)
+    this.featureVersion = feature
+    const level = new Uint16Array(capacity)
+    level.set(this.levelVersion)
+    this.levelVersion = level
   }
 }
 

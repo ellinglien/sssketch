@@ -1,8 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { STEM_FEATURE_VERSION } from '@shared/stemFeatures'
 import { STEM_LEVEL_VERSION } from '@shared/stemLevel'
 import { getStemAnalysisNeeds } from './stemAnalysisNeeds'
+import { getTraitQuantileTables, getTraitValueTable } from './traitQuantileCache'
+import { mergeStemFeatureLevelRow } from './stemFeatureCacheStore'
+import { noteStemFeatureRowWritten } from './traitQuantileCache'
+import { countWork } from './workCounters'
+
+vi.mock('./workCounters', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./workCounters')>()
+  return { ...actual, countWork: vi.fn() }
+})
 
 function freshDb(): Database.Database {
   const db = new Database(':memory:')
@@ -153,6 +162,103 @@ describe('getStemAnalysisNeeds', () => {
       [false, true],
       [true, false],
       [true, false]
+    ])
+  })
+
+  // Background scan audit 4(b): while the trait value table accounts for every
+  // StemFeatureCache row, its version columns answer `features` and `level` --
+  // the same rule, read without parsing a single FeaturesJSON.
+  it('answers identically from the trait value table and from the JSON, without parsing', async () => {
+    const db = freshDb()
+    const rows: [string, string][] = [
+      ['current', current],
+      ['no-level', noLevel],
+      ['v1', v1],
+      ['corrupt', '{not json'],
+      ['json-null', 'null'],
+      ['json-number', '5'],
+      ['json-zero', '0'],
+      ['odd-versions', JSON.stringify({ mfcc: [], featureVersion: 2.5, levelVersion: 0.5 })],
+      ['negative', JSON.stringify({ mfcc: [], featureVersion: -1 })],
+      ['huge', JSON.stringify({ mfcc: [], featureVersion: 1e9, levelVersion: 1e9 })],
+      ['merged-later', noLevel]
+    ]
+    for (const [cid, json] of rows) {
+      addFeatures(db, cid, json)
+      addPeaks(db, cid)
+    }
+    await getTraitQuantileTables(db)
+    expect(getTraitValueTable(db)).not.toBeNull()
+    // the level backfill, after the build: merged and noted as the writer does
+    const merged = mergeStemFeatureLevelRow(db, 'merged-later', {
+      loudnessLufs: -14,
+      lowLevelDb: -30,
+      activeFraction: 0.9,
+      levelVersion: STEM_LEVEL_VERSION
+    })
+    expect(merged).not.toBeNull()
+    noteStemFeatureRowWritten(db, merged!, 'merged-later')
+    expect(getTraitValueTable(db)).not.toBeNull()
+
+    const paths = [...rows.map(([cid]) => `/lib/jam/${cid}`), '/lib/jam/missing']
+    // the same rows on a connection with no value table: the JSON path
+    const withoutTable = new Database(db.serialize())
+    expect(getTraitValueTable(withoutTable)).toBeNull()
+    const fromJson = await getStemAnalysisNeeds(withoutTable, paths)
+
+    vi.mocked(countWork).mockClear()
+    const prepare = vi.spyOn(db, 'prepare')
+    const fromTable = await getStemAnalysisNeeds(db, paths)
+    const sql = prepare.mock.calls.map(([text]) => String(text))
+    prepare.mockRestore()
+
+    expect(fromTable).toEqual(fromJson)
+    expect(sql.filter((text) => text.includes('FeaturesJSON'))).toEqual([])
+    expect(
+      vi.mocked(countWork).mock.calls.filter(([kind]) => kind === 'parse:stem-features')
+    ).toEqual([])
+    // and the JSON path counts its parses
+    vi.mocked(countWork).mockClear()
+    await getStemAnalysisNeeds(withoutTable, paths)
+    expect(vi.mocked(countWork).mock.calls.some(([kind]) => kind === 'parse:stem-features')).toBe(
+      true
+    )
+    // spot-check the answer itself
+    const byCid = new Map(paths.map((p, i) => [p.split('/').pop()!, fromTable[i]]))
+    expect(byCid.get('current')).toMatchObject({ features: false })
+    expect(byCid.get('current')!.level).toBeUndefined()
+    expect(byCid.get('no-level')).toMatchObject({ features: false, level: true })
+    expect(byCid.get('merged-later')!.features).toBe(false)
+    expect(byCid.get('merged-later')!.level).toBeUndefined()
+    for (const cid of [
+      'v1',
+      'corrupt',
+      'json-null',
+      'json-number',
+      'json-zero',
+      'negative',
+      'missing'
+    ]) {
+      expect(byCid.get(cid)!.features, cid).toBe(true)
+      expect(byCid.get(cid)!.level, cid).toBeUndefined()
+    }
+    expect(byCid.get('odd-versions')).toMatchObject({ features: false, level: true })
+    expect(byCid.get('huge')!.features).toBe(false)
+    expect(byCid.get('huge')!.level).toBeUndefined()
+  })
+
+  it('falls back to the JSON once the value table stops accounting for every row', async () => {
+    const db = freshDb()
+    addFeatures(db, 'a', current)
+    await getTraitQuantileTables(db)
+    expect(getTraitValueTable(db)).not.toBeNull()
+    // written behind the table's back: it no longer accounts for every row
+    addFeatures(db, 'b', noLevel)
+    expect(getTraitValueTable(db)).toBeNull()
+    const needs = await getStemAnalysisNeeds(db, ['/lib/j/a', '/lib/j/b'])
+    expect(needs.map((n) => [n.features, n.level ?? false])).toEqual([
+      [false, false],
+      [false, true]
     ])
   })
 

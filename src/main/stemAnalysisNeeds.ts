@@ -11,6 +11,7 @@ import { STEM_LEVEL_VERSION } from '@shared/stemLevel'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import { isLibraryStemName } from '@shared/stemPathKind'
 import { countWork } from './workCounters'
+import { getTraitValueTable, type TraitValueTable } from './traitQuantileCache'
 
 const DEFAULT_CHUNK_SIZE = 500
 
@@ -32,16 +33,45 @@ function presentStemCIDs(
   return new Set(rows.map((r) => r.StemCID))
 }
 
+interface FeatureVersionSets {
+  current: Set<string>
+  needsLevel: Set<string>
+}
+
+/** The same rule as the JSON path below, read from the trait value table's version columns
+ * (background scan audit 4(b)) -- no SQL, no parse. A malformed row counts as missing, as the
+ * JSON path's `catch` does. */
+function currentFeatureStemCIDsFromTable(
+  table: TraitValueTable,
+  stemCIDs: string[]
+): FeatureVersionSets {
+  countWork('stem-analysis-needs:value-table')
+  const current = new Set<string>()
+  const needsLevel = new Set<string>()
+  for (const stemCID of stemCIDs) {
+    const versions = table.versionsOf(stemCID)
+    if (versions === undefined || versions === 'malformed') continue
+    if (versions.feature >= STEM_FEATURE_VERSION) {
+      current.add(stemCID)
+      if (versions.level < STEM_LEVEL_VERSION) needsLevel.add(stemCID)
+    }
+  }
+  return { current, needsLevel }
+}
+
 /** StemCIDs whose feature row exists AND is at STEM_FEATURE_VERSION, and of those the ones whose
  * level pass is older than STEM_LEVEL_VERSION (or missing: spec 2026-10-05-radio-intensity-arc-
  * design 7.3) -- read in the same parse. The version lives inside FeaturesJSON (no json_extract
  * anywhere in this codebase), so it's parsed here in JS -- only for rows that exist, one chunk at
  * a time. An unparseable row counts as missing, matching getStemFeatureCache (which returns null
- * for it). */
-function currentFeatureStemCIDs(
-  db: Database.Database,
-  stemCIDs: string[]
-): { current: Set<string>; needsLevel: Set<string> } {
+ * for it).
+ *
+ * While the trait value table accounts for every StemFeatureCache row (getTraitValueTable: one
+ * COUNT on ownDb), its version columns give the same answer without the read or the parse
+ * (audit 4(b)). */
+function currentFeatureStemCIDs(db: Database.Database, stemCIDs: string[]): FeatureVersionSets {
+  const table = getTraitValueTable(db)
+  if (table) return currentFeatureStemCIDsFromTable(table, stemCIDs)
   countWork('sql:stem-analysis-needs.StemFeatureCache')
   const placeholders = stemCIDs.map(() => '?').join(',')
   const rows = db
@@ -49,6 +79,7 @@ function currentFeatureStemCIDs(
       `SELECT StemCID, FeaturesJSON FROM StemFeatureCache WHERE StemCID IN (${placeholders})`
     )
     .all(...stemCIDs) as { StemCID: string; FeaturesJSON: string }[]
+  countWork('parse:stem-features', rows.length)
   const current = new Set<string>()
   const needsLevel = new Set<string>()
   for (const row of rows) {

@@ -617,3 +617,87 @@ describe('rebuilding from the in-memory value table (audit item 4)', () => {
     expect((await getTraitQuantileTables(db)).transientDensity![100]).toBe(9)
   })
 })
+
+// Background scan audit 4(b): the value table carries each row's feature and
+// level versions, so the analysis needs read them without parsing FeaturesJSON.
+describe('versionsOf (audit 4(b))', () => {
+  function add(db: Database.Database, stemCID: string, json: string): void {
+    db.prepare(`INSERT INTO StemFeatureCache VALUES (?, ?, 0)`).run(stemCID, json)
+  }
+
+  it("after a build: the JSON path's versions, malformed rows marked, missing rows undefined", async () => {
+    const db = freshDb()
+    add(db, 'current', JSON.stringify({ featureVersion: 2, levelVersion: 1 }))
+    add(db, 'no-level', JSON.stringify({ featureVersion: 2 }))
+    add(db, 'v1', JSON.stringify({ mfcc: [] }))
+    add(db, 'bad', '{not json')
+    add(db, 'null', 'null')
+    add(db, 'number', '5')
+    add(db, 'negative', JSON.stringify({ featureVersion: -3, levelVersion: -1 }))
+    add(db, 'fraction', JSON.stringify({ featureVersion: 2.5, levelVersion: 0.5 }))
+    add(db, 'huge', JSON.stringify({ featureVersion: 1e9 }))
+    await getTraitQuantileTables(db)
+    const table = getTraitValueTable(db)!
+    expect(table.versionsOf('current')).toEqual({ feature: 2, level: 1 })
+    expect(table.versionsOf('no-level')).toEqual({ feature: 2, level: 0 })
+    expect(table.versionsOf('v1')).toEqual({ feature: 1, level: 0 })
+    expect(table.versionsOf('bad')).toBe('malformed')
+    expect(table.versionsOf('null')).toBe('malformed')
+    expect(table.versionsOf('number')).toEqual({ feature: 1, level: 0 })
+    // clamped to [0, 65535] and floored: every comparison with an integer
+    // version still answers as the JSON's own number would
+    expect(table.versionsOf('negative')).toEqual({ feature: 0, level: 0 })
+    expect(table.versionsOf('fraction')).toEqual({ feature: 2, level: 0 })
+    expect(table.versionsOf('huge')).toEqual({ feature: 65535, level: 0 })
+    expect(table.versionsOf('missing')).toBeUndefined()
+  })
+
+  it('follows applyWrite: a new row, a re-extraction, a malformed row written over', async () => {
+    const db = freshDb()
+    add(db, 'old', JSON.stringify({ mfcc: [] }))
+    add(db, 'bad', '{not json')
+    await getTraitQuantileTables(db)
+    const table = getTraitValueTable(db)!
+    noteStemFeatureRowWritten(db, { featureVersion: 2, levelVersion: 1 } as StemFeatures, 'new')
+    noteStemFeatureRowWritten(db, { featureVersion: 2 } as StemFeatures, 'old')
+    noteStemFeatureRowWritten(db, { featureVersion: 2, levelVersion: 1 } as StemFeatures, 'bad')
+    expect(table.versionsOf('new')).toEqual({ feature: 2, level: 1 })
+    expect(table.versionsOf('old')).toEqual({ feature: 2, level: 0 })
+    expect(table.versionsOf('bad')).toEqual({ feature: 2, level: 1 })
+  })
+
+  it('follows a level merge (the backfill) without touching the feature version', async () => {
+    const db = freshDb()
+    add(db, 'row', JSON.stringify({ featureVersion: 2, transientDensity: 4 }))
+    await getTraitQuantileTables(db)
+    const table = getTraitValueTable(db)!
+    expect(table.versionsOf('row')).toEqual({ feature: 2, level: 0 })
+    noteStemFeatureRowWritten(
+      db,
+      {
+        featureVersion: 2,
+        transientDensity: 4,
+        loudnessLufs: -12,
+        lowLevelDb: -20,
+        activeFraction: 1,
+        levelVersion: 1
+      } as StemFeatures,
+      'row'
+    )
+    expect(table.versionsOf('row')).toEqual({ feature: 2, level: 1 })
+  })
+
+  it('a write that lands mid-build carries its versions into the installed table', async () => {
+    const db = freshDb()
+    insert(db, 0, TRAIT_QUANTILE_PAGE_SIZE + 5)
+    const building = getTraitQuantileTables(db)
+    noteStemFeatureRowWritten(
+      db,
+      { featureVersion: 2, levelVersion: 1 } as StemFeatures,
+      'stem000001'
+    )
+    await building
+    expect(getTraitValueTable(db)!.versionsOf('stem000001')).toEqual({ feature: 2, level: 1 })
+    expect(getTraitValueTable(db)!.versionsOf('stem000002')).toEqual({ feature: 1, level: 0 })
+  })
+})
