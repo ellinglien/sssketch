@@ -21,7 +21,7 @@ import type { DiscoverSettings } from '../main/discoverSettingsStore'
 import type { SoundMeters, SoundSettings } from '@shared/radioSound'
 import type { StemAutoClassifyProgress } from '../main/stemAutoCategoryStore'
 import type { AutoClassifyStatus } from '../main/stemAutoClassifyScheduler'
-import type { LibraryScanTarget } from '../main/discoverLibraryStems'
+import type { LibraryScanWork } from '../main/libraryScanWork'
 import type { TidyUpLibraryStem } from '../main/tidyUpLibraryStems'
 import type { DiscoverLoopSeedResult } from '../main/importOneShot'
 import type { PrewarmScanProgress } from '../main/discoverCandidates'
@@ -501,8 +501,8 @@ const api = {
     ipcRenderer.invoke('sound-settings:set', settings),
   getDiscoverClassifyProgress: (): Promise<StemAutoClassifyProgress> =>
     ipcRenderer.invoke('get-discover-classify-progress'),
-  getDiscoverLibraryScanTargets: (): Promise<LibraryScanTarget[]> =>
-    ipcRenderer.invoke('get-discover-library-scan-targets'),
+  getDiscoverLibraryScanWork: (): Promise<LibraryScanWork> =>
+    ipcRenderer.invoke('get-discover-library-scan-work'),
   upsertStemCategoryBus: (
     entries: { path: string; busId: BusId }[],
     source: string,

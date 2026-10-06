@@ -63,6 +63,7 @@ export default defineConfig({
           'src/main/discoverArtistScanQueue.test.ts',
           'src/main/embeddingMatch.test.ts',
           'src/main/instrumentMaskCentroidBackfill.test.ts',
+          'src/main/libraryScanWork.test.ts',
           'src/main/loopFolders.test.ts',
           'src/main/loopFolderScan.test.ts',
           'src/main/loopFolderImport.test.ts',

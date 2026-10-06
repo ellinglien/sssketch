@@ -1,5 +1,6 @@
 // src/main/discoverLibraryStems.ts
 import { readdirSync } from 'fs'
+import { readdir } from 'fs/promises'
 import { basename, dirname } from 'path'
 import type Database from 'better-sqlite3'
 import { resolveStemPath } from './riffLibraryStore'
@@ -63,8 +64,9 @@ interface RiffStemColumnsRow {
 //
 // What this does NOT fix, and cannot: one `readdirSync` of a large shard
 // folder on that USB volume is a single uninterruptible 626ms, and no
-// yield policy can subdivide one syscall. That needs an async listing and
-// is deliberately left alone here.
+// yield policy can subdivide one syscall. The library scan itself no longer
+// lists through here: libraryScanWork.ts uses createAsyncDirListing (below),
+// off the main thread. listLibraryScanTargets stays as its tests' oracle.
 const YIELD_SLICE_BUDGET_MS = 8
 
 // Rows per keyset page when walking a db's whole Riffs table -- see
@@ -107,6 +109,111 @@ export function createDirListingExists(): (path: string) => boolean {
       listings.set(dir, entries)
     }
     return entries?.has(basename(path)) ?? false
+  }
+}
+
+/** The async counterpart of createDirListingExists (background scan audit 3,
+ * plan decision 8): each folder is listed once per instance with
+ * `fs.promises.readdir`, at most `concurrency` listings in flight, so a cold
+ * listing of a big shard folder on the USB archive (626 ms, measured) runs
+ * on libuv's thread pool instead of blocking the main process. Concurrent
+ * asks for one folder share its listing. A folder that can't be read lists
+ * as null: nothing exists there. `readdirFn` is injectable for tests. */
+export interface AsyncDirListing {
+  list(dir: string): Promise<Set<string> | null>
+}
+
+export function createAsyncDirListing(
+  options: { concurrency?: number; readdirFn?: (dir: string) => Promise<string[]> } = {}
+): AsyncDirListing {
+  const concurrency = Math.max(1, options.concurrency ?? 2)
+  const readdirFn = options.readdirFn ?? ((dir: string) => readdir(dir))
+  const listings = new Map<string, Promise<Set<string> | null>>()
+  let active = 0
+  const waiting: (() => void)[] = []
+
+  async function take(dir: string): Promise<Set<string> | null> {
+    if (active >= concurrency) await new Promise<void>((resolve) => waiting.push(resolve))
+    active += 1
+    const started = performance.now()
+    try {
+      return new Set(await readdirFn(dir))
+    } catch {
+      return null
+    } finally {
+      countWork('fs:readdir')
+      countWork('ms:fs.readdir', Math.round(performance.now() - started))
+      active -= 1
+      waiting.shift()?.()
+    }
+  }
+
+  return {
+    list(dir) {
+      let listing = listings.get(dir)
+      if (!listing) {
+        listing = take(dir)
+        listings.set(dir, listing)
+      }
+      return listing
+    }
+  }
+}
+
+/** Walks `db`'s whole Riffs table once, in RiffCID keyset pages, calling
+ * `visit(stemCID, jamCID)` for every slot (1..8, then 9+) of every riff whose
+ * jam is in `allowedJamCIDs`, in RiffCID then slot order -- the order
+ * listLibraryScanTargets has always met them in. `visit` returns true when
+ * its time slice is spent; the walk then awaits `yieldSlice`, and it always
+ * does after each page. A db whose Riffs can't be read is walked as empty.
+ * Shared with the library scan's fallback for a db the pair cache can't hold
+ * (libraryScanWork.ts). */
+export async function walkAllowedRiffStems(
+  db: Database.Database,
+  allowedJamCIDs: ReadonlySet<string>,
+  visit: (stemCID: string, jamCID: string) => boolean,
+  yieldSlice: () => Promise<void>
+): Promise<void> {
+  // ONCE per database connection, held for the whole paged walk. Not
+  // per page and never per riff -- jams share one database. Free for an
+  // external OUROVEON/LORE archive, which has no such table.
+  const extras = readAllExtraStemSlots(db)
+
+  countWork('sql:scan-targets.walk')
+  let page: RiffPageRow[]
+  let afterRiffCID = ''
+  let statement: Database.Statement
+  try {
+    statement = db.prepare(
+      `SELECT RiffCID, OwnerJamCID, StemCID_1, StemCID_2, StemCID_3, StemCID_4,
+              StemCID_5, StemCID_6, StemCID_7, StemCID_8
+       FROM Riffs WHERE RiffCID > ? ORDER BY RiffCID LIMIT ?`
+    )
+  } catch {
+    return
+  }
+  for (;;) {
+    try {
+      page = statement.all(afterRiffCID, RIFF_PAGE_SIZE) as RiffPageRow[]
+    } catch {
+      break
+    }
+    if (page.length === 0) break
+    afterRiffCID = page[page.length - 1].RiffCID
+    for (const riff of page) {
+      if (!allowedJamCIDs.has(riff.OwnerJamCID)) continue
+      for (const { stemCID } of mergeStemSlots(
+        columnStemSlots(riff as unknown as Record<string, unknown>),
+        extras.get(riff.RiffCID) ?? []
+      )) {
+        if (visit(stemCID, riff.OwnerJamCID)) await yieldSlice()
+      }
+    }
+    // The page's own SQL fetch is real work too, and it happens outside
+    // `visit` where the budget is measured -- so this end-of-page yield
+    // stays unconditional, and goes through yieldSlice so the fetch that
+    // follows starts a fresh slice rather than inheriting a spent one.
+    await yieldSlice()
   }
 }
 
@@ -197,48 +304,7 @@ export async function listLibraryScanTargets(
       continue
     }
 
-    // ONCE per database connection, held for the whole paged walk. Not
-    // per page and never per riff -- jams share one database. Free for an
-    // external OUROVEON/LORE archive, which has no such table.
-    const extras = readAllExtraStemSlots(db)
-
-    countWork('sql:scan-targets.walk')
-    let page: RiffPageRow[]
-    let afterRiffCID = ''
-    let statement: Database.Statement
-    try {
-      statement = db.prepare(
-        `SELECT RiffCID, OwnerJamCID, StemCID_1, StemCID_2, StemCID_3, StemCID_4,
-                StemCID_5, StemCID_6, StemCID_7, StemCID_8
-         FROM Riffs WHERE RiffCID > ? ORDER BY RiffCID LIMIT ?`
-      )
-    } catch {
-      continue
-    }
-    for (;;) {
-      try {
-        page = statement.all(afterRiffCID, RIFF_PAGE_SIZE) as RiffPageRow[]
-      } catch {
-        break
-      }
-      if (page.length === 0) break
-      afterRiffCID = page[page.length - 1].RiffCID
-      for (const riff of page) {
-        if (!allowedJamCIDs.has(riff.OwnerJamCID)) continue
-        for (const { stemCID } of mergeStemSlots(
-          columnStemSlots(riff as unknown as Record<string, unknown>),
-          extras.get(riff.RiffCID) ?? []
-        )) {
-          if (consider(stemCID, riff.OwnerJamCID)) await yieldSlice()
-        }
-      }
-      // The page's own SQL fetch is real work too, and it happens outside
-      // `consider` where the budget is measured -- so this end-of-page
-      // yield stays unconditional, and goes through yieldSlice so the
-      // fetch that follows starts a fresh slice rather than inheriting a
-      // spent one.
-      await yieldSlice()
-    }
+    await walkAllowedRiffStems(db, allowedJamCIDs, consider, yieldSlice)
   }
   return out
 }

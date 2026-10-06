@@ -380,20 +380,26 @@ async function loadPairs(ownDb: Database.Database, key: string): Promise<StemJam
   return out
 }
 
-/** Every distinct (StemCID, OwnerJamCID) pair `sourceDb`'s Riffs reference,
- * in the order a RiffCID-ordered walk of its riffs (slots 1..8) first
- * meets them -- from the cache in `ownDb`, extended or rebuilt first as
- * needed. Null when `sourceDb` can't be cached (in-memory, no Riffs table,
- * no rowid): the caller walks it directly. */
-export async function getCachedStemJamPairs(
+/** The cache key of `sourceDb`'s pairs (SourceDbKey): its file path. */
+export function scanTargetSourceKey(sourceDb: Database.Database): string {
+  return sourceDb.name
+}
+
+/** Brings the cached pairs for `sourceDb` up to date in `ownDb` -- extended
+ * from the rowid watermark when the shared rule allows, else rebuilt -- and
+ * says whether there is a cache to read: false when `sourceDb` can't be
+ * cached (in-memory, no Riffs table, no rowid), and the caller walks it
+ * directly. (Background scan audit 3: the library scan reads only the
+ * pairs it needs from here, never the whole list.) */
+export async function refreshStemJamPairs(
   ownDb: Database.Database,
   sourceDb: Database.Database
-): Promise<StemJamPair[] | null> {
-  if (sourceDb.memory) return null
+): Promise<boolean> {
+  if (sourceDb.memory) return false
   const live = readLiveSignal(sourceDb)
-  if (!live) return null
+  if (!live) return false
   ensureSchema(ownDb)
-  const key = sourceDb.name
+  const key = scanTargetSourceKey(sourceDb)
   const meta = ownDb
     .prepare(
       `SELECT RiffCount, MaxRowid, WatermarkRiffCID FROM DiscoverScanTargetCacheMeta
@@ -405,5 +411,62 @@ export async function getCachedStemJamPairs(
   } else {
     await rebuild(ownDb, sourceDb, key, live)
   }
-  return loadPairs(ownDb, key)
+  return true
+}
+
+/** Every distinct (StemCID, OwnerJamCID) pair `sourceDb`'s Riffs reference,
+ * in the order a RiffCID-ordered walk of its riffs (slots 1..8) first
+ * meets them -- from the cache in `ownDb`, extended or rebuilt first as
+ * needed. Null when `sourceDb` can't be cached (in-memory, no Riffs table,
+ * no rowid): the caller walks it directly. */
+export async function getCachedStemJamPairs(
+  ownDb: Database.Database,
+  sourceDb: Database.Database
+): Promise<StemJamPair[] | null> {
+  if (!(await refreshStemJamPairs(ownDb, sourceDb))) return null
+  return loadPairs(ownDb, scanTargetSourceKey(sourceDb))
+}
+
+/** A cached pair with the first (RiffCID, slot) it appears at. */
+export interface PositionedStemJamPair extends StemJamPair {
+  riffCID: string
+  slot: number
+}
+
+/** IDs per IN-list in readPairsForStemCIDs. */
+const PAIRS_FOR_STEMS_CHUNK = 500
+
+/** The cached pairs (refreshed by refreshStemJamPairs) for just these
+ * StemCIDs, each with its first position -- one IN-list query per 500 IDs
+ * on the primary key's (SourceDbKey, StemCID) prefix. Unordered. */
+export function readPairsForStemCIDs(
+  ownDb: Database.Database,
+  key: string,
+  stemCIDs: readonly string[]
+): PositionedStemJamPair[] {
+  const out: PositionedStemJamPair[] = []
+  for (let i = 0; i < stemCIDs.length; i += PAIRS_FOR_STEMS_CHUNK) {
+    const chunk = stemCIDs.slice(i, i + PAIRS_FOR_STEMS_CHUNK)
+    countWork('sql:scan-targets.pairs-for-stems')
+    const rows = ownDb
+      .prepare(
+        `SELECT StemCID, OwnerJamCID, RiffCID, Slot FROM DiscoverScanTargetCache
+         WHERE SourceDbKey = ? AND StemCID IN (${chunk.map(() => '?').join(',')})`
+      )
+      .all(key, ...chunk) as {
+      StemCID: string
+      OwnerJamCID: string
+      RiffCID: string
+      Slot: number
+    }[]
+    for (const row of rows) {
+      out.push({
+        stemCID: row.StemCID,
+        jamCID: row.OwnerJamCID,
+        riffCID: row.RiffCID,
+        slot: row.Slot
+      })
+    }
+  }
+  return out
 }

@@ -423,7 +423,7 @@ export function listJams(filterText: string, targetUser?: string): RiffLibraryJa
 // JOIN+GROUP BY+ORDER BY over the whole Jams/Riffs tables (listJams's
 // own queryJamsFromDb), re-run from scratch on EVERY single roll (each
 // of get-discover-candidates/get-random-discover-candidate/
-// get-discover-library-scan-targets calls this fresh, uncached, every
+// get-discover-library-scan-work calls this fresh, uncached, every
 // time -- see main/index.ts's own call sites, the ONLY callers of this
 // function in the whole codebase, all Discover-related).
 //

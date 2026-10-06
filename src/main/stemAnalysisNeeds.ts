@@ -11,7 +11,11 @@ import { STEM_LEVEL_VERSION } from '@shared/stemLevel'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import { isLibraryStemName } from '@shared/stemPathKind'
 import { countWork } from './workCounters'
-import { getTraitValueTable, type TraitValueTable } from './traitQuantileCache'
+import {
+  getTraitValueTable,
+  type StemRowVersions,
+  type TraitValueTable
+} from './traitQuantileCache'
 
 const DEFAULT_CHUNK_SIZE = 500
 
@@ -38,6 +42,29 @@ interface FeatureVersionSets {
   needsLevel: Set<string>
 }
 
+/** THE rule for an existing feature row, wherever its versions were read from: current when
+ * at STEM_FEATURE_VERSION, and then needing the level pass when that is older than
+ * STEM_LEVEL_VERSION (spec 2026-10-05-radio-intensity-arc-design 7.3). A malformed row is
+ * neither (it counts as missing). */
+function featureRowState(versions: StemRowVersions | 'malformed'): {
+  current: boolean
+  needsLevel: boolean
+} {
+  if (versions === 'malformed') return { current: false, needsLevel: false }
+  const current = versions.feature >= STEM_FEATURE_VERSION
+  return { current, needsLevel: current && versions.level < STEM_LEVEL_VERSION }
+}
+
+/** A parsed FeaturesJSON's versions, or 'malformed' -- exactly what the value table stores. */
+function parsedVersions(json: string): StemRowVersions | 'malformed' {
+  try {
+    const features = JSON.parse(json) as StemFeatures
+    return { feature: stemFeatureVersionOf(features), level: stemLevelVersionOf(features) }
+  } catch {
+    return 'malformed' // unparseable, or a JSON null (a property read on it throws)
+  }
+}
+
 /** The same rule as the JSON path below, read from the trait value table's version columns
  * (background scan audit 4(b)) -- no SQL, no parse. A malformed row counts as missing, as the
  * JSON path's `catch` does. */
@@ -50,11 +77,10 @@ function currentFeatureStemCIDsFromTable(
   const needsLevel = new Set<string>()
   for (const stemCID of stemCIDs) {
     const versions = table.versionsOf(stemCID)
-    if (versions === undefined || versions === 'malformed') continue
-    if (versions.feature >= STEM_FEATURE_VERSION) {
-      current.add(stemCID)
-      if (versions.level < STEM_LEVEL_VERSION) needsLevel.add(stemCID)
-    }
+    if (versions === undefined) continue
+    const state = featureRowState(versions)
+    if (state.current) current.add(stemCID)
+    if (state.needsLevel) needsLevel.add(stemCID)
   }
   return { current, needsLevel }
 }
@@ -83,17 +109,105 @@ function currentFeatureStemCIDs(db: Database.Database, stemCIDs: string[]): Feat
   const current = new Set<string>()
   const needsLevel = new Set<string>()
   for (const row of rows) {
-    try {
-      const features = JSON.parse(row.FeaturesJSON) as StemFeatures
-      if (stemFeatureVersionOf(features) >= STEM_FEATURE_VERSION) {
-        current.add(row.StemCID)
-        if (stemLevelVersionOf(features) < STEM_LEVEL_VERSION) needsLevel.add(row.StemCID)
-      }
-    } catch {
-      // missing, as above
-    }
+    const state = featureRowState(parsedVersions(row.FeaturesJSON))
+    if (state.current) current.add(row.StemCID)
+    if (state.needsLevel) needsLevel.add(row.StemCID)
   }
   return { current, needsLevel }
+}
+
+/** Rows per keyset page / window in the whole-table passes below. */
+const REWORK_PAGE_SIZE = 2000
+
+/** Every StemCID whose feature row exists but still needs work -- malformed, older than
+ * STEM_FEATURE_VERSION, or current without the level pass -- plus every stem whose zero-shot
+ * step is pending (zeroShotPendingStemCIDs' rule, over the whole table): the analysed half of
+ * the library scan's preselect (background scan audit 3). With a peaks, embedding and feature
+ * row, a stem needs work exactly when it is in this set (for a library stem name), so the
+ * scan never asks needs for, or touches the disk for, anything else that is analysed.
+ *
+ * Read from the trait value table while it accounts for every row (no SQL, no parse); else
+ * one JSON pass over StemFeatureCache in keyset pages with a yield after each. The zero-shot
+ * half reads StemEmbeddingCache in key windows of REWORK_PAGE_SIZE (bounded statements, a yield
+ * between). Never `.iterate()`. */
+export async function stemCIDsNeedingRework(db: Database.Database): Promise<Set<string>> {
+  const out = new Set<string>()
+  const table = getTraitValueTable(db)
+  if (table) {
+    countWork('stem-analysis-needs:value-table')
+    table.forEachVersions((stemCID, versions) => {
+      const state = featureRowState(versions)
+      if (!state.current || state.needsLevel) out.add(stemCID)
+    })
+  } else {
+    let page: Database.Statement | null = null
+    try {
+      page = db.prepare(
+        `SELECT StemCID, FeaturesJSON FROM StemFeatureCache WHERE StemCID > ? ORDER BY StemCID LIMIT ?`
+      )
+    } catch {
+      // no table: nothing analysed
+    }
+    let after = ''
+    while (page) {
+      countWork('sql:stem-analysis-needs.rework-page')
+      const rows = page.all(after, REWORK_PAGE_SIZE) as { StemCID: string; FeaturesJSON: string }[]
+      countWork('parse:stem-features', rows.length)
+      for (const row of rows) {
+        const state = featureRowState(parsedVersions(row.FeaturesJSON))
+        if (!state.current || state.needsLevel) out.add(row.StemCID)
+      }
+      if (rows.length < REWORK_PAGE_SIZE) break
+      after = rows[rows.length - 1].StemCID
+      await yieldToEventLoop()
+    }
+  }
+  for (const stemCID of await allZeroShotPendingStemCIDs(db)) out.add(stemCID)
+  return out
+}
+
+/** zeroShotPendingStemCIDs' join over the whole of StemEmbeddingCache, in key windows: each
+ * statement covers the next REWORK_PAGE_SIZE embedding rows (its upper key from one LIMIT 1
+ * OFFSET probe on the primary key), so no one statement runs long. None when a table is
+ * missing. */
+async function allZeroShotPendingStemCIDs(db: Database.Database): Promise<string[]> {
+  const out: string[] = []
+  let bound: Database.Statement
+  let windowed: Database.Statement
+  let last: Database.Statement
+  const pending = `JOIN Stems s ON s.StemCID = e.StemCID
+     WHERE NOT EXISTS (SELECT 1 FROM StemYamnetZeroShotAttempted t WHERE t.StemCID = e.StemCID)
+     AND NOT EXISTS (
+       SELECT 1 FROM StemCategories c WHERE c.StemCID = e.StemCID AND c.ArrangeRole IS NOT NULL
+     )
+     AND NOT EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = e.StemCID)`
+  try {
+    bound = db.prepare(
+      `SELECT StemCID FROM StemEmbeddingCache WHERE StemCID > ? ORDER BY StemCID
+       LIMIT 1 OFFSET ${REWORK_PAGE_SIZE - 1}`
+    )
+    windowed = db.prepare(
+      `SELECT e.StemCID AS StemCID FROM StemEmbeddingCache e ${pending}
+       AND e.StemCID > ? AND e.StemCID <= ?`
+    )
+    last = db.prepare(
+      `SELECT e.StemCID AS StemCID FROM StemEmbeddingCache e ${pending} AND e.StemCID > ?`
+    )
+  } catch {
+    return out
+  }
+  let after = ''
+  for (;;) {
+    countWork('sql:stem-analysis-needs.zeroShot-window')
+    const upper = bound.get(after) as { StemCID: string } | undefined
+    const rows = (upper ? windowed.all(after, upper.StemCID) : last.all(after)) as {
+      StemCID: string
+    }[]
+    for (const row of rows) out.push(row.StemCID)
+    if (!upper) return out
+    after = upper.StemCID
+    await yieldToEventLoop()
+  }
 }
 
 /** StemCIDs (of these) that still need the YAMNet zero-shot step

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
+import { needsAnyAnalysis } from '@shared/stemAnalysisNeeds'
 import Database from 'better-sqlite3'
 import { STEM_FEATURE_VERSION } from '@shared/stemFeatures'
 import { STEM_LEVEL_VERSION } from '@shared/stemLevel'
-import { getStemAnalysisNeeds } from './stemAnalysisNeeds'
+import { getStemAnalysisNeeds, stemCIDsNeedingRework } from './stemAnalysisNeeds'
 import { getTraitQuantileTables, getTraitValueTable } from './traitQuantileCache'
 import { mergeStemFeatureLevelRow } from './stemFeatureCacheStore'
 import { noteStemFeatureRowWritten } from './traitQuantileCache'
@@ -260,6 +261,76 @@ describe('getStemAnalysisNeeds', () => {
       [false, false],
       [false, true]
     ])
+  })
+
+  // Background scan audit 3: the library scan's analysed half. For a stem with
+  // a peaks, embedding and feature row, "needs any analysis" must be exactly
+  // "in this set" -- from the value table and from the JSON alike.
+  it('stemCIDsNeedingRework: exactly the fully-rowed stems that still need work, table or JSON', async () => {
+    const db = freshDb()
+    const rows: [string, string][] = [
+      ['current', current],
+      ['no-level', noLevel],
+      ['v1', v1],
+      ['corrupt', '{not json'],
+      ['json-null', 'null'],
+      ['json-number', '5'],
+      ['zero-shot', current],
+      ['attempted', current]
+    ]
+    for (const [cid, json] of rows) {
+      addFeatures(db, cid, json)
+      addPeaks(db, cid)
+      addEmbedding(db, cid)
+    }
+    for (const cid of ['zero-shot', 'attempted']) {
+      db.prepare(`INSERT INTO Stems VALUES (?, 'jam', NULL)`).run(cid)
+    }
+    db.prepare(`INSERT INTO StemYamnetZeroShotAttempted VALUES ('attempted', 1)`).run()
+    // features only: not fully rowed, but its row's state still counts
+    addFeatures(db, 'feature-only-v1', v1)
+
+    const fromJson = await stemCIDsNeedingRework(db)
+    await getTraitQuantileTables(db)
+    expect(getTraitValueTable(db)).not.toBeNull()
+    vi.mocked(countWork).mockClear()
+    const fromTable = await stemCIDsNeedingRework(db)
+    expect(
+      vi.mocked(countWork).mock.calls.filter(([kind]) => kind === 'parse:stem-features')
+    ).toEqual([])
+    expect(fromTable).toEqual(fromJson)
+    expect([...fromTable].sort()).toEqual(
+      [
+        'corrupt',
+        'feature-only-v1',
+        'json-null',
+        'json-number',
+        'no-level',
+        'v1',
+        'zero-shot'
+      ].sort()
+    )
+    const fullyRowed = rows.map(([cid]) => cid)
+    const needs = await getStemAnalysisNeeds(
+      db,
+      fullyRowed.map((cid) => `/lib/j/${cid}`)
+    )
+    fullyRowed.forEach((cid, i) => {
+      expect(fromTable.has(cid), cid).toBe(needsAnyAnalysis(needs[i]))
+    })
+  })
+
+  it('stemCIDsNeedingRework: zero-shot windows span more than one window', async () => {
+    const db = freshDb()
+    for (let i = 0; i < 2005; i++) {
+      const cid = `z${String(i).padStart(5, '0')}`
+      addEmbedding(db, cid)
+      if (i % 2 === 0) db.prepare(`INSERT INTO Stems VALUES (?, 'jam', NULL)`).run(cid)
+    }
+    const pending = await stemCIDsNeedingRework(db)
+    expect(pending.size).toBe(1003)
+    expect(pending.has('z02004')).toBe(true)
+    expect(pending.has('z01999')).toBe(false)
   })
 
   it('returns an empty list for no paths without querying', async () => {

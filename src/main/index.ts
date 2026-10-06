@@ -157,10 +157,9 @@ import {
   type StemAutoClassifyProgress
 } from './stemAutoCategoryStore'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
-import { listLibraryScanTargets } from './discoverLibraryStems'
+import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
 import { getStemAvailabilityReport, onStemAvailabilityNotice } from './stemAvailability'
 import type { StemAvailabilityNotice } from '@shared/stemAvailability'
-import type { LibraryScanTarget } from './discoverLibraryStems'
 import { SOUND_TYPE_TO_ARRANGE_ROLE, type ArrangeRole } from '@shared/stemRole'
 import type { DiscoverSlotKind, DiscoverTraitKind } from '@shared/discoverSlotKind'
 import type { RawPluginStatesCapture } from '@shared/pluginStates'
@@ -1637,11 +1636,12 @@ app.whenReady().then(async () => {
     getStemAutoClassifyProgress(openOwnRiffLibraryDb())
   )
 
-  ipcMain.handle('get-discover-library-scan-targets', (): Promise<LibraryScanTarget[]> =>
-    listLibraryScanTargets(
+  // The library scan's work list (background scan audit 3, libraryScanWork.ts):
+  // what needs analysis first (SQL preselect over the persisted stem/jam pairs,
+  // B6, and the trait value table's versions), then existence, asynchronously.
+  ipcMain.handle('get-discover-library-scan-work', (): Promise<LibraryScanWork> =>
+    listLibraryScanWork(
       listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
-      undefined,
-      // Persisted, incrementally extended stem/jam pairs (B6).
       openOwnRiffLibraryDb()
     )
   )

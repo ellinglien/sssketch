@@ -40,12 +40,16 @@ const NEEDS_PAGE_SIZE = 500
  * means toggling consent off while Discover is open now genuinely stops
  * the scan (React unmounts this), and toggling it on genuinely starts it,
  * rather than that toggle only taking effect on DiscoverPanel's next
- * remount. Enumerates every synced stem whose audio is already
- * downloaded locally (get-discover-library-scan-targets,
- * discoverLibraryStems.ts -- never triggers a fresh download) ONCE on
- * mount, then runs the exact same throttled batch/extract loop
+ * remount. Asks main ONCE on mount for the work list -- every synced stem
+ * whose audio is already downloaded locally AND that still needs some
+ * analysis (get-discover-library-scan-work, libraryScanWork.ts: what needs
+ * work is worked out first, in SQL and from the trait value table, and only
+ * that is checked against the disk, asynchronously, with 0-byte
+ * placeholders dropped -- background scan audit 3; never triggers a fresh
+ * download) -- then runs the exact same throttled batch/extract loop
  * BackgroundFeatureScan.tsx already established for placed stems, over
- * this much larger target list.
+ * that list. Needs are still asked a page at a time, so the per-stem
+ * answer stays the needs function's.
  *
  * It renders nothing: its progress is reported to backgroundWorkRegistry
  * and shown by the app-wide BackgroundWorkIndicator (see the reporting
@@ -89,11 +93,13 @@ export function DiscoverLibraryScan(): null {
   useEffect(() => {
     let cancelled = false
     let removeQueuedListener = (): void => {}
-    countWork('ipc:get-discover-library-scan-targets')
+    countWork('ipc:get-discover-library-scan-work')
     void window.rifffApi
-      .getDiscoverLibraryScanTargets()
-      .then((targets) => {
+      .getDiscoverLibraryScanWork()
+      .then(({ work: targets }) => {
         if (cancelled) return
+        // What is left to look at: already-analysed stems are no longer in
+        // the list, so this starts lower than the library's size.
         setTotal(targets.length)
         const toScan = targets.filter((t) => !attemptedRef.current.has(t.key))
 

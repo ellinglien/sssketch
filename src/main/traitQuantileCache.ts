@@ -166,6 +166,18 @@ export class TraitValueTable {
     return { feature: this.featureVersion[row], level: this.levelVersion[row] }
   }
 
+  /** Every row this table accounts for, with versionsOf's answer (audit 3:
+   * the library scan's stale set). Synchronous; malformed rows first. */
+  forEachVersions(visit: (stemCID: string, versions: StemRowVersions | 'malformed') => void): void {
+    for (const stemCID of this.malformed) visit(stemCID, 'malformed')
+    for (let row = 0; row < this.stemCIDs.length; row++) {
+      visit(this.stemCIDs[row], {
+        feature: this.featureVersion[row],
+        level: this.levelVersion[row]
+      })
+    }
+  }
+
   /** One row as read by the build (counts toward rowsSeen). */
   addFromBuild(stemCID: string, parsed: unknown): void {
     this.rowsSeen += 1

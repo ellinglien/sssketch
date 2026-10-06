@@ -1,7 +1,7 @@
 // src/main/discoverLibraryStems.test.ts
 import { describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
-import { listLibraryScanTargets } from './discoverLibraryStems'
+import { createAsyncDirListing, listLibraryScanTargets } from './discoverLibraryStems'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 
 // listLibraryScanTargets calls resolveStemPath (riffLibraryStore.ts), which
@@ -216,5 +216,39 @@ describe('createDirListingExists', () => {
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+// Background scan audit 3 / plan decision 8: listings leave the main thread.
+describe('createAsyncDirListing', () => {
+  it('lists each folder once, at most `concurrency` at a time, a failed one as null', async () => {
+    let inFlight = 0
+    let maxInFlight = 0
+    const calls: string[] = []
+    const releases: (() => void)[] = []
+    const listing = createAsyncDirListing({
+      concurrency: 2,
+      readdirFn: async (dir) => {
+        calls.push(dir)
+        inFlight += 1
+        maxInFlight = Math.max(maxInFlight, inFlight)
+        await new Promise<void>((resolve) => releases.push(resolve))
+        inFlight -= 1
+        if (dir === '/bad') throw new Error('ENOENT')
+        return [`${dir.slice(1)}-file`]
+      }
+    })
+    const asked = ['/a', '/b', '/a', '/c', '/bad'].map((dir) => listing.list(dir))
+    // drain: release whatever is waiting until everything settles
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setImmediate(resolve))
+      releases.splice(0).forEach((release) => release())
+    }
+    const results = await Promise.all(asked)
+    expect(calls.sort()).toEqual(['/a', '/b', '/bad', '/c'])
+    expect(maxInFlight).toBe(2)
+    expect(results[0]).toEqual(new Set(['a-file']))
+    expect(results[2]).toBe(results[0])
+    expect(results[4]).toBeNull()
   })
 })
