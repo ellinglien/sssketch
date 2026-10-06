@@ -831,3 +831,52 @@ describe('as the runtime laid it down (plan Task 6 note: only what plays)', () =
     expect(new Set(all.map((x) => x.rowId))).toEqual(new Set(['pad', 'lead', 'drums', 'bass']))
   })
 })
+
+describe('a row ducks once at a wrap (review of 1a060a2f, minor 4)', () => {
+  const lap = { loopBars: 8, unitsPerBar: 1 }
+  const duck = (slot: string, wrapAt: number, beats = 4): RadioMoveVisual[] =>
+    radioGestureVisuals({
+      kind: 'duck',
+      rowId: slot,
+      beats,
+      wrapAt,
+      before: lap,
+      after: lap,
+      duckRowIds: ['drums', 'pad'].filter((id) => id !== slot),
+      key: `${slot}@${wrapAt}`
+    })
+
+  it('two ducks landing at one wrap are one dip, not a deeper one (as the lane build ducks a stem once)', () => {
+    const one = duck('a', 64)
+    const two = [...one, ...duck('b', 64)]
+    for (const t of [64, 64.25, 64.5, 64.9, 65]) {
+      expect(at(two, 'drums', t).level).toBeCloseTo(at(one, 'drums', t).level, 9)
+    }
+    expect(at(two, 'drums', 64).level).toBeCloseTo(0.45, 9)
+  })
+
+  it('the first logged duck is the dip (the lane build keeps the first)', () => {
+    const v = [...duck('a', 64, 4), ...duck('b', 64, 2)]
+    for (const t of [64, 64.25, 64.75]) {
+      expect(at(v, 'drums', t).level).toBeCloseTo(at(duck('a', 64, 4), 'drums', t).level, 9)
+    }
+    expect(at(v, 'drums', 64.75).level).toBeLessThan(1)
+  })
+
+  it('ducks at different wraps each dip, and a duck still multiplies with a drop', () => {
+    const v = [...duck('a', 64), ...duck('b', 72)]
+    expect(at(v, 'drums', 64).level).toBeCloseTo(0.45, 9)
+    expect(at(v, 'drums', 72).level).toBeCloseTo(0.45, 9)
+    const drop: RadioMoveVisual = {
+      key: 'ta',
+      rowId: 'drums',
+      param: 'volume',
+      move: 'drop',
+      points: [
+        { at: 64, value: 0.5 },
+        { at: 65, value: 0.5 }
+      ]
+    }
+    expect(at([...v, ...duck('c', 64), drop], 'drums', 64).level).toBeCloseTo(0.225, 9)
+  })
+})

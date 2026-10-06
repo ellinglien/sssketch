@@ -29,7 +29,8 @@
 //   echo      a throw's echo, 0..1: full while what was sent repeats, then each repeat
 //             `feedback` as loud. At rest 0.
 // A row's look is all of them at once: the volumes MULTIPLY (as both engines multiply a
-// turnaround's drop into a hole or a duck: combineRadioCurves, the web's separate gain nodes),
+// turnaround's drop into a hole or a duck: combineRadioCurves, the web's separate gain nodes;
+// but a row ducks once at a wrap, radioRowVisualAt),
 // everything else takes the strongest. So an intensity breakdown's rest, a hook's rest, the drop's
 // gap and a duck compose without knowing about each other, and the one -- where every curve steps
 // back to rest -- brings everything back at once.
@@ -193,7 +194,12 @@ function valueAt(v: RadioMoveVisual, t: number, fade: number): number {
 }
 
 /** A row's look at `t` (rowId null: the mix's, for the ruler). `fade`: the shortest way into a
- * move on the visuals' clock (RADIO_VISUAL_FADE_SEC there; 0 under reduced motion). */
+ * move on the visuals' clock (RADIO_VISUAL_FADE_SEC there; 0 under reduced motion).
+ *
+ * A row ducks ONCE at a wrap: two ducks landing at one wrap (two rows changing there, each armed
+ * with a duck) are one dip, the first logged -- as sssketch's lane build ducks a stem once (its
+ * `ducked` set) and the web's second duck replaces the first on the row's gesture gain. A duck
+ * still multiplies with every other volume move. */
 export function radioRowVisualAt(
   visuals: readonly RadioMoveVisual[],
   rowId: string | null,
@@ -201,8 +207,14 @@ export function radioRowVisualAt(
   fade = 0
 ): RadioRowVisual {
   const out: RadioRowVisual = { ...RADIO_ROW_VISUAL_REST }
+  // where each duck on the row lands: a second duck landing there is the same dip
+  const ducked = new Set<number>()
   for (const v of visuals) {
     if (v.rowId !== rowId) continue
+    if (v.move === 'duck' && v.param === 'volume' && v.points.length > 0) {
+      if (ducked.has(v.points[0].at)) continue
+      ducked.add(v.points[0].at)
+    }
     const x = radioMoveVisualValueAt(v, t, fade)
     switch (v.param) {
       case 'volume':
