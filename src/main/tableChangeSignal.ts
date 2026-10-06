@@ -132,26 +132,59 @@ export function readTableSignal(
   }
 }
 
-function readSignal(db: Database.Database, table: ChangeSignalTable): TableSignal | null {
+/** The cheap half of a table's signal, with no COUNT: MAX(rowid),
+ * data_version (another connection committed to the file) and this
+ * process's own writes to the table (tableWriteVersion.ts -- every writer
+ * of Jams/Riffs/Stems here bumps it). None moved: no row of the table was
+ * added, removed or changed by anyone, whatever else the connection wrote
+ * (the classifier's own-db analysis tables move total_changes(), which
+ * the COUNT memo below has to respect; a caller that only asks "did this
+ * table move?" need not). Null when the table has no rowid or can't be
+ * read. */
+export interface TableHead {
+  maxRowid: number | null
+  dataVersion: number
+  writes: number
+}
+
+export function readTableHead(db: Database.Database, table: ChangeSignalTable): TableHead | null {
+  // Taken before the query, as readTableSignal always has.
   const writes = getTableWriteVersion(db, table)
-  let head: { maxRowid: number | null; dataVersion: number }
   try {
-    head = db
+    const head = db
       .prepare(
         `SELECT MAX(rowid) AS maxRowid,
                 (SELECT data_version FROM pragma_data_version) AS dataVersion FROM ${table}`
       )
       .get() as { maxRowid: number | null; dataVersion: number }
+    return { maxRowid: head.maxRowid, dataVersion: head.dataVersion, writes }
   } catch {
+    return null
+  }
+}
+
+export function sameTableHead(a: TableHead, b: TableHead): boolean {
+  return a.maxRowid === b.maxRowid && a.dataVersion === b.dataVersion && a.writes === b.writes
+}
+
+function readSignal(db: Database.Database, table: ChangeSignalTable): TableSignal | null {
+  const read = readTableHead(db, table)
+  if (!read) {
     // No rowid (or no table): the count alone, never memoised.
     try {
       countWork(`sql:signal-count.${table}`)
       const row = db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).get() as { n: number }
-      return { count: row.n, maxRowid: null, writes, dataVersion: null }
+      return {
+        count: row.n,
+        maxRowid: null,
+        writes: getTableWriteVersion(db, table),
+        dataVersion: null
+      }
     } catch {
       return null
     }
   }
+  const { writes, ...head } = read
   // Every read below can still fail (an I/O error on the USB volume, a
   // busy connection): null, the same "can't read it" answer as a missing
   // table -- callers treat that as no signal, never as an exception.

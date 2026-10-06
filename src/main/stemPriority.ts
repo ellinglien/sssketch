@@ -37,7 +37,7 @@ import type { StemPrioritySets } from '@shared/stemPriorityOrder'
 import { candidateDbsForRiff } from './riffLibraryStore'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import { canExtendByRowid, keyAtRowid, type RowidWatermark } from './rowidWatermark'
-import { readTableSignal } from './tableChangeSignal'
+import { readTableHead, readTableSignal, sameTableHead, type TableHead } from './tableChangeSignal'
 import { countWork } from './workCounters'
 
 export interface StemPriority extends StemPrioritySets {
@@ -142,12 +142,25 @@ async function readOwnStems(
 interface DbOwnStems {
   watermark: RowidWatermark
   own: Set<string>
+  /** Stems' cheap head as it stood before the read (null when it could not
+   * be read): unmoved at the next call means nothing to do there. */
+  head: TableHead | null
 }
 
 /** Brings `previous` (this db's last read, if any) up to date: extended by
  * the rows past its watermark when rowidWatermark.ts's rule allows, else
  * read again from the start. Undefined when the table can't be read now
- * (missing, or an I/O error): the caller keeps what it had. */
+ * (missing, or an I/O error): the caller keeps what it had.
+ *
+ * First, Stems' head (MAX(rowid), data_version, this process's Stems
+ * writes -- tableChangeSignal.ts's readTableHead): unmoved since the last
+ * read, `previous` is current and nothing else is read. Without it, every
+ * auto-classify tick paid readTableSignal on the own db, whose COUNT(*)
+ * memo is keyed on total_changes(), which the classifier's own writes to
+ * StemAutoCategory move: a full COUNT of Stems per tick (measured
+ * 2026-10-06 on a synthetic read-write db: 0.2 ms at the own db's 81,902
+ * rows, 18 ms at 891,062 -- an own db that is the whole library), plus the
+ * watermark checks and a window read. */
 async function refreshDbOwnStems(
   db: Database.Database,
   username: string,
@@ -155,10 +168,19 @@ async function refreshDbOwnStems(
   windowSize: number,
   onWindow?: () => void
 ): Promise<DbOwnStems | undefined> {
+  const head = db.inTransaction ? null : readTableHead(db, 'Stems')
+  if (previous?.head && head && sameTableHead(previous.head, head)) {
+    countWork('stem-priority:unmoved')
+    return previous
+  }
   const live = readTableSignal(db, 'Stems')
   if (!live) return undefined
   if (live.maxRowid === null) {
-    return { watermark: { count: live.count, maxRowid: null, keyAtMax: null }, own: new Set() }
+    return {
+      watermark: { count: live.count, maxRowid: null, keyAtMax: null },
+      own: new Set(),
+      head
+    }
   }
   const extend =
     previous !== undefined && canExtendByRowid(db, 'Stems', 'StemCID', previous.watermark, live)
@@ -171,14 +193,14 @@ async function refreshDbOwnStems(
     // A new set, so the old one stays whole if the walk fails part way.
     const own = new Set<string>()
     await readOwnStems(db, username, 0, live.maxRowid, own, windowSize, onWindow)
-    return { watermark, own }
+    return { watermark, own, head }
   }
   const added = new Set<string>()
   const after = previous.watermark.maxRowid ?? 0
   await readOwnStems(db, username, after, live.maxRowid, added, windowSize, onWindow)
   // Nothing new (most calls): the same set, not a 70k-entry copy per tick.
-  if (added.size === 0) return { watermark, own: previous.own }
-  return { watermark, own: new Set([...previous.own, ...added]) }
+  if (added.size === 0) return { watermark, own: previous.own, head }
+  return { watermark, own: new Set([...previous.own, ...added]), head }
 }
 
 /** Stars plus the stems of favourite riffs, from every db given. */

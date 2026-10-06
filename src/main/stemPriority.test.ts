@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { buildStemPriority, createStemPriorityCache } from './stemPriority'
+import { bumpTableWriteVersion } from './tableWriteVersion'
 
 vi.mock('electron', () => ({ app: { getPath: () => tmpdir() } }))
 
@@ -52,6 +53,24 @@ function ownDb(): Database.Database {
 
 function stem(db: Database.Database, stemCID: string, user: string | null): void {
   db.prepare(`INSERT INTO Stems VALUES (?, 'jam', ?)`).run(stemCID, user)
+}
+
+/** A Stems write on the app's own connection, as riffLibraryWriter.ts makes
+ * it: announced through the table's write version. */
+function ownWrite(db: Database.Database, sql: string): void {
+  db.prepare(sql).run()
+  bumpTableWriteVersion(db, 'Stems')
+}
+
+/** A write to the archive's file by another process (a LORE sync, a
+ * VACUUM): another connection, seen through data_version. */
+function loreWrite(sql: string): void {
+  const other = new Database(join(dir, 'archive.db'))
+  try {
+    other.prepare(sql).run()
+  } finally {
+    other.close()
+  }
 }
 
 function riff(db: Database.Database, riffCID: string, stems: string[]): void {
@@ -166,10 +185,11 @@ describe('createStemPriorityCache', () => {
     })
     await cache.get('me')
     // a7 ('me') holds the archive's top rowid; s5 ('me') the own db's
-    archive.prepare(`DELETE FROM Stems WHERE StemCID IN ('a6', 'a7')`).run()
-    own.prepare(`DELETE FROM Stems WHERE StemCID = 's5'`).run()
-    stem(archive, 'a9', 'me') // rowid 6 again
-    stem(own, 's9', 'me') // rowid 5 again
+    loreWrite(`DELETE FROM Stems WHERE StemCID IN ('a6', 'a7')`)
+    ownWrite(own, `DELETE FROM Stems WHERE StemCID = 's5'`)
+    loreWrite(`INSERT INTO Stems VALUES ('a9', 'jam', 'me')`) // rowid 6 again
+    // rowid 5 again: MAX(rowid) is where it was, the write version is not
+    ownWrite(own, `INSERT INTO Stems VALUES ('s9', 'jam', 'me')`)
     const p = await cache.get('me')
     expect([...p.own].sort()).toEqual(['a1', 'a3', 'a5', 'a9', 's2', 's9'])
   })
@@ -180,12 +200,10 @@ describe('createStemPriorityCache', () => {
     await cache.get('me')
     // same count, same MAX(rowid), different row there: as after a VACUUM
     // renumbered rowids, or the file was swapped for another
-    archive.prepare(`DELETE FROM Stems WHERE StemCID = 'a7'`).run()
-    archive
-      .prepare(
-        `INSERT INTO Stems (rowid, StemCID, OwnerJamCID, CreatorUserName) VALUES (7, 'b7', 'jam', 'me')`
-      )
-      .run()
+    loreWrite(`DELETE FROM Stems WHERE StemCID = 'a7'`)
+    loreWrite(
+      `INSERT INTO Stems (rowid, StemCID, OwnerJamCID, CreatorUserName) VALUES (7, 'b7', 'jam', 'me')`
+    )
     const p = await cache.get('me')
     expect([...p.own].sort()).toEqual(['a1', 'a3', 'a5', 'b7', 's2', 's5'])
   })
@@ -228,6 +246,36 @@ describe('createStemPriorityCache', () => {
     expect([...q.own].sort()).toEqual(['a1', 'a3', 'a5', 'a7', 'a8', 's2', 's5', 's6'])
   })
 
+  // Review of 99b33f45: the own db is a read-write connection, so every
+  // classifier write (StemAutoCategory, another table) moved total_changes
+  // and readTableSignal re-ran COUNT(*) on Stems at every scheduler tick.
+  it('a write to another table costs no Stems COUNT(*) and no window read', async () => {
+    const { archive, own } = fixture()
+    own.exec(`CREATE TABLE StemAutoCategory (StemCID TEXT PRIMARY KEY, Kind TEXT)`)
+    let windows = 0
+    const cache = createStemPriorityCache({
+      sourceDbs: () => [archive, own],
+      ownDb: () => own,
+      onOwnWindow: () => {
+        windows += 1
+      }
+    })
+    const first = await cache.get('me')
+    const real = own.prepare.bind(own)
+    let fullCounts = 0
+    vi.spyOn(own, 'prepare').mockImplementation(((sql: string) => {
+      if (/^SELECT COUNT\(\*\) AS n FROM Stems$/.test(sql.trim())) fullCounts += 1
+      return real(sql)
+    }) as typeof own.prepare)
+    windows = 0
+    for (let i = 0; i < 3; i++) {
+      own.prepare(`INSERT INTO StemAutoCategory VALUES (?, 'drums')`).run(`c${i}`)
+      expect((await cache.get('me')).own).toBe(first.own)
+    }
+    expect(fullCounts).toBe(0)
+    expect(windows).toBe(0)
+  })
+
   it('a version that moves when either set changes, even at the same sizes, and only then', async () => {
     const { archive, own } = fixture()
     const cache = createStemPriorityCache({ sourceDbs: () => [archive, own], ownDb: () => own })
@@ -241,8 +289,8 @@ describe('createStemPriorityCache', () => {
     expect(p3.favourites.size).toBe(p1.favourites.size)
     expect(p3.version).not.toBe(p2.version)
     // an own stem swapped for another: same size, different set
-    archive.prepare(`DELETE FROM Stems WHERE StemCID = 'a7'`).run()
-    stem(archive, 'a9', 'me')
+    loreWrite(`DELETE FROM Stems WHERE StemCID = 'a7'`)
+    loreWrite(`INSERT INTO Stems VALUES ('a9', 'jam', 'me')`) // a7's rowid again
     const p4 = await cache.get('me')
     expect(p4.own.size).toBe(p1.own.size)
     expect(p4.version).not.toBe(p3.version)
