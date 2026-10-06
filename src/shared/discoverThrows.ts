@@ -155,6 +155,9 @@ export interface DiscoverThrowTick {
   changeInBars?: number | null
   /** Rows the build-up before it silences (stepThrows' silenced). */
   silenced?: readonly string[]
+  /** Bars from the playhead to the intensity arc's drop, in the breakdown's last phrase
+   * (stepThrows' dropAt). Absent or null: today. */
+  dropInBars?: number | null
   /** Every row in the panel: its slot, kinds, and whether it is heard. */
   rows: readonly { slot: string; kinds: readonly DiscoverSlotKind[]; audible: boolean }[]
   /** The spacing, from the sound settings' rate (radioSound.ts throwEveryBars). */
@@ -212,6 +215,10 @@ export function stepDiscoverThrows(
     tick.changeInBars !== undefined && tick.changeInBars !== null && tick.changeInBars > 0
       ? tick.changeInBars
       : null
+  const dropInBars =
+    tick.dropInBars !== undefined && tick.dropInBars !== null && tick.dropInBars > 0
+      ? tick.dropInBars
+      : null
   const r = stepThrows(
     next.throws,
     {
@@ -222,20 +229,23 @@ export function stepDiscoverThrows(
       leadingArmed: tick.leadingArmed,
       changeAt: changeInBars === null ? null : next.elapsedSec + changeInBars * secPerBar,
       silenced: tick.silenced,
-      rows: tick.rows
+      rows: tick.rows,
+      ...(dropInBars !== null && { dropAt: next.elapsedSec + dropInBars * secPerBar })
     },
     random,
     tick.everyBars
   )
   next.throws = r.state
   if (r.plan === null) return { state: next, change: null }
-  // where stepThrows put it: the start found above, or (aimed) its beats before the change
+  // where stepThrows put it: the start found above, or (aimed) its beats before the change or
+  // the drop
   const ends = (r.plan.at - next.elapsedSec) / secPerBar + r.plan.beats / 4
-  const aimed = changeInBars !== null && Math.abs(ends - changeInBars) < 1e-6
+  const aimAt = [changeInBars, dropInBars].find((t) => t !== null && Math.abs(ends - t) < 1e-6)
+  const aimed = aimAt !== undefined && aimAt !== null
   let ahead = start.ahead
   let atBar = start.atBar
   if (aimed) {
-    ahead = changeInBars - r.plan.beats / 4
+    ahead = aimAt - r.plan.beats / 4
     // on the loop's beat grid (the change is a loop top or a beat of the loop)
     atBar = Math.round(((tick.pos + ahead) % tick.loopBars) / BEAT_BARS) * BEAT_BARS
     // a start that does not fit the loop (a caller's change off the grid) is not armed

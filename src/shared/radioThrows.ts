@@ -67,6 +67,12 @@ export interface ThrowTick {
    * drops before the one): the send is post-fader, so a throw there would be heard as nothing. */
   silenced?: readonly string[]
   rows: readonly { slot: string; kinds: readonly DiscoverSlotKind[]; audible: boolean }[]
+  /** The intensity arc's drop, on the beat grid, passed only in the breakdown's last phrase (spec
+   * 2026-10-05-radio-intensity-arc-design 5.5): a throw falling due (within THROW_PREFER_SHARE of
+   * the shortest spacing) waits for it, however long, and ends on its downbeat -- or where the
+   * drop's gap starts, when `changeAt` (an armed turnaround's aim) comes first -- on a carrying
+   * row. Absent or null: today. */
+  dropAt?: number | null
 }
 
 export const initialThrowState = (): ThrowState => ({
@@ -166,6 +172,31 @@ export function stepThrows(
   const audible = tick.rows.filter(
     (r) => r.audible && !r.kinds.some((k) => NEVER.includes(k)) && !silenced.includes(r.slot)
   )
+  const dropAt =
+    tick.dropAt !== undefined &&
+    tick.dropAt !== null &&
+    Number.isFinite(tick.dropAt) &&
+    tick.dropAt > tick.nextBeat + EPS
+      ? tick.dropAt
+      : null
+  if (dropAt !== null && barsUntil <= prefer && (barsSince === null || barsSince >= prefer - EPS)) {
+    // aimed into the drop: wait for it (or its gap) to come within reach, then end on it
+    const aim = changeAt !== null && changeAt <= dropAt + EPS ? changeAt : dropAt
+    if (aim - tick.nextBeat > THROW_AIM_REACH_BEATS * beatSec + EPS)
+      return { state: next, plan: null }
+    redraw()
+    if (audible.length === 0) return { state: next, plan: null }
+    const slot = audible[Math.min(audible.length - 1, Math.floor(random() * audible.length))].slot
+    let beats = drawThrowBeats(random)
+    const { timing, feedback } = drawThrowEcho(random)
+    if (aim - beats * beatSec < tick.nextBeat - EPS) beats = THROW_BEATS[0]
+    if (aim - beats * beatSec < tick.nextBeat - EPS) return { state: next, plan: null }
+    return throwPlanned(
+      next,
+      { slot, at: aim - beats * beatSec, beats, timing, feedback },
+      tick.bpm
+    )
+  }
   if (
     changeAt !== null &&
     barsUntil <= prefer &&

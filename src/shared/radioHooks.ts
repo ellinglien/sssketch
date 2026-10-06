@@ -443,6 +443,10 @@ export interface RadioHookRowInput {
    * whose engine drops a removed row from the loop; the desktop's loop counts every resolved row,
    * heard or not.) */
   restShrinksLoop?: boolean
+  /** The intensity arc's breakdown rests this row (spec 2026-10-05-radio-intensity-arc-design
+   * 5.2): a hook in on it keeps its state with its clock stopped, and no exit is decided for it.
+   * Absent: false. */
+  arcResting?: boolean
 }
 
 export interface RadioHooksStepInput {
@@ -469,6 +473,13 @@ export interface RadioHooksStepInput {
    * rest draw is never made. */
   canRest: boolean
   random: () => number
+  /** The intensity arc (radioIntensityArc's radioIntensityHookInputs; spec 5.2). Absent: today.
+   *   - `dropAtNextWrap`: the drop lands on the next wrap -- a return due within a phrase after it
+   *     is decided for it now (up to a phrase early), with no calm wait; no exit;
+   *   - `inBreakdown`: the next wrap is in a breakdown or starts one -- returns wait for the drop
+   *     (a breakdown is at most two phrases, so the drop is never further), and no exit. */
+  dropAtNextWrap?: boolean
+  inBreakdown?: boolean
 }
 
 export interface RadioHooksStepResult {
@@ -539,7 +550,12 @@ export function stepRadioHooks(
         decided: null
       }
     }
-    return input.held || loopBars === 0 ? h : { ...h, bars: h.bars + loopBars }
+    if (input.held || loopBars === 0) return h
+    // a hook in on a row the arc's breakdown rests: its clock stops (it comes back at the drop)
+    if (h.state === 'in' && input.rows.some((r) => r.id === h.rowId && r.arcResting === true)) {
+      return h
+    }
+    return { ...h, bars: h.bars + loopBars }
   })
   if (input.held || loopBars === 0) {
     return applied.length === 0 ? none : { ...none, state: withHooks(state, hooks), applied }
@@ -557,16 +573,20 @@ export function stepRadioHooks(
     hooks = hooks.map((x) => (x === h ? next : x))
   }
   const byRow = [...hooks].sort((a, b) => order(a) - order(b))
-  // 3a. returns, on phrase starts only
-  if (line === 'phrase') {
+  const drop = input.dropAtNextWrap === true
+  const waitForDrop = input.inBreakdown === true && !drop
+  // 3a. returns, on phrase starts only -- pulled to the drop (a phrase early at most), and held
+  // through a breakdown until it
+  if (line === 'phrase' && !waitForDrop) {
     for (const h of byRow) {
       if (h.state === 'in' || h.decided !== null) continue
       const row = rowOf(h.rowId)
       if (row === undefined || !row.eligible) continue
-      if (h.bars + loopBars < h.targetBars - 1e-9) continue
+      const early = drop ? phraseBars : 0
+      if (h.bars + loopBars < h.targetBars - early - 1e-9) continue
       if (!input.ready(h.rowId, 'return')) continue
       const calm = input.calmLandings <= HOOK_CALM_LANDINGS
-      if (!input.changeAtNextWrap && calm && !h.waited && !h.broughtBack) {
+      if (!drop && !input.changeAtNextWrap && calm && !h.waited && !h.broughtBack) {
         if (input.random() < HOOK_CALM_WAIT_CHANCE) {
           set(h, { ...h, targetBars: h.targetBars + phraseBars, waited: true })
           continue
@@ -581,8 +601,9 @@ export function stepRadioHooks(
       decided.push({ rowId: h.rowId, stemId: h.stemId, ...d })
     }
   }
-  // 3b. at most one exit, on a line, none while another hook is out
-  if (line !== null) {
+  // 3b. at most one exit, on a line, none while another hook is out -- and none into a
+  // breakdown, through one, or onto the drop
+  if (line !== null && !drop && input.inBreakdown !== true) {
     const now = { hooks, seq: state.seq }
     const due = [...hooks]
       .filter((h) => {
@@ -591,6 +612,7 @@ export function stepRadioHooks(
         return (
           row !== undefined &&
           row.eligible &&
+          row.arcResting !== true &&
           row.stemId === h.stemId &&
           h.bars + loopBars >= h.targetBars - 1e-9 &&
           !anyOut(now, h.rowId)

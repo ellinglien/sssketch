@@ -3828,49 +3828,79 @@ const THROWS_BEFORE = '9207add6'
 ```
 
 - [ ] **Step 3: The drop's roll.** `src/shared/radioTurnaround.ts`. These are the drop's hunks
-  only; Task 5 renames the labels:
+  only; Task 5 renames the labels. (Corrected 2026-10-05 at Task 4: this block was the reverse of
+  Task 5's label hunks; it is now the drop's diff, `stages/radioTurnaround.t4.ts` against the
+  base.)
 
 ```diff
 --- a/src/shared/radioTurnaround.ts
 +++ b/src/shared/radioTurnaround.ts
-@@ -599,12 +599,10 @@
-   return left >= 1 ? left : null
+@@ -344,6 +344,21 @@ export interface TurnaroundInput {
+    * its spare rows). A gap promises a large one, so a gap is drawn only when this is `large`.
+    * Absent: no limit (today). Applies to turns too. */
+   payoff?: RadioPayoff
++  /** The intensity arc's drop lands on this wrap (spec 2026-10-05-radio-intensity-arc-design 4.4,
++   * 6). Absent: today, draw for draw. With it:
++   *   - a phrase end rolled at `large`: the riser is the lead whenever its family is on and it
++   *     fits -- no move draw, and the longest the planner allows (the cap: min(half the loop, 4
++   *     bars)), no length draw;
++   *   - the gap is drawn with `gapChance` instead of TURNAROUND_GAP_CHANCE (one draw either way),
++   *     and needs only one row to silence (the rows coming back make the one);
++   *   - a turn (the drop button) keeps its own move and length (`force`), and takes the gap
++   *     chance. */
++  drop?: { gapChance: number }
++}
++
++/** The drop's gap chance (spec 4.4): certain from drama 50, else today's. */
++export function turnaroundDropGapChance(drama: number): number {
++  return Number.isFinite(drama) && drama >= 50 ? 1 : TURNAROUND_GAP_CHANCE
  }
  
--/** Each move's chip, lowercase, at most two words. The drop-outs read as what they take OUT
-- * (Elling, 2026-10-05): `drop` now means the intensity arc's drop, the low end coming BACK. The
-- * move ids stay (`drum drop`, `low drop`): the phone's wire and every test name them. */
-+/** Each move's chip, lowercase, at most two words. */
- export const TURNAROUND_MOVE_LABEL: Readonly<Record<TurnaroundMove, string>> = {
--  'drum drop': 'drums out',
--  'low drop': 'low out',
-+  'drum drop': 'drop',
-+  'low drop': 'low drop',
-   stop: 'stop',
-   wash: 'wash',
-   lift: 'lift',
-@@ -1275,9 +1273,8 @@
- /** The longest a turnaround's label may be before it is shortened to its lead and a count. */
- export const TURNAROUND_LABEL_MAX = 20
- 
--/** A turnaround in words, the lead first: `riser + lift → gap`, `wash + dip`, `drums out`. Longer
-- * than `max`: the lead and how many more, `riser +2 → gap`; still longer (a two-word lead, since
-- * the drop-outs became `drums out` and `low out`): the lead and the gap, `drums out → gap`. */
-+/** A turnaround in words, the lead first: `riser + lift → gap`, `wash + dip`, `drop`. Longer than
-+ * `max`: the lead and how many more, `riser +2 → gap`. */
- export function turnaroundLabel(
-   moves: readonly TurnaroundMove[],
-   gap: boolean,
-@@ -1287,8 +1284,7 @@
-   const tail = gap ? ` → ${TURNAROUND_GAP_WORD}` : ''
-   const full = moves.map((m) => TURNAROUND_MOVE_LABEL[m]).join(' + ') + tail
-   if (full.length <= max || moves.length === 1) return full
--  const counted = `${TURNAROUND_MOVE_LABEL[moves[0]]} +${moves.length - 1}${tail}`
--  return counted.length <= max ? counted : `${TURNAROUND_MOVE_LABEL[moves[0]]}${tail}`
-+  return `${TURNAROUND_MOVE_LABEL[moves[0]]} +${moves.length - 1}${tail}`
- }
- 
- /** A plan's moves, the lead first (a single move's plan is just its move). */
+ /** The riser's weight factor in a phrase end's draw, and its longest, by build size (spec 4.4). */
+@@ -725,12 +740,23 @@ export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
+     return build(move, beats, lastPhrase.halvings + 1, bed, loopBars, random, looks)
+   }
+   const drawn = drawOf(bed, arc, capBeats, moves)
+-  if (drawn.length === 0 || !(random() < chance)) return null
+-  const move = pickWeighted(
+-    drawn.map((m) => ({ item: m, weight: moveWeight(arc, m, sizing) })),
+-    random
+-  )
+-  const beats = drawBeats(move, bed, capBeats, random, sizing.riserCap)
++  // the drop's build: the riser leads, at its longest, with no draw for either (spec 4.4)
++  const dropRiser =
++    input.drop !== undefined &&
++    input.size === 'large' &&
++    moves.includes('riser') &&
++    fits('riser', bed, capBeats)
++  if (!dropRiser && drawn.length === 0) return null
++  if (!(random() < chance)) return null
++  const move: TurnaroundMove = dropRiser
++    ? 'riser'
++    : pickWeighted(
++        drawn.map((m) => ({ item: m, weight: moveWeight(arc, m, sizing) })),
++        random
++      )
++  const beats = dropRiser
++    ? Math.min(capBeats, sizing.riserCap)
++    : drawBeats(move, bed, capBeats, random, sizing.riserCap)
+   const lead = build(move, beats, 0, bed, loopBars, random, looks)
+   return lead !== null && input.combine === true
+     ? layerTurnaround(lead, input, bed, capBeats, capBeats, looks, sizing)
+@@ -1146,9 +1172,11 @@ function layerTurnaround(
+   let gap = 0
+   let keeper: TurnaroundRow | null = null
+   const riser = parts.find((p) => p.move === 'riser')
+-  if (riser !== undefined && riser.beats >= BEATS_PER_BAR && bed.audible.length >= 2) {
++  // the drop's gap needs only one row to silence: the rows coming back make the one
++  const gapBed = input.drop !== undefined ? 1 : 2
++  if (riser !== undefined && riser.beats >= BEATS_PER_BAR && bed.audible.length >= gapBed) {
+     // a gap only where the size allows one and a large payoff can follow it (no draw otherwise)
+-    if (sizing.gap && sub() < TURNAROUND_GAP_CHANCE) {
++    if (sizing.gap && sub() < (input.drop?.gapChance ?? TURNAROUND_GAP_CHANCE)) {
+       gap = turnaroundGapBeats(riser.beats, depth)
+       // a drop no longer than the gap would be swallowed by it: the next length past it, or no gap
+       const longer = parts.map((p) => {
 ```
 
 - [ ] **Step 4: The hooks.** `src/shared/radioHooks.ts`:

@@ -344,6 +344,21 @@ export interface TurnaroundInput {
    * its spare rows). A gap promises a large one, so a gap is drawn only when this is `large`.
    * Absent: no limit (today). Applies to turns too. */
   payoff?: RadioPayoff
+  /** The intensity arc's drop lands on this wrap (spec 2026-10-05-radio-intensity-arc-design 4.4,
+   * 6). Absent: today, draw for draw. With it:
+   *   - a phrase end rolled at `large`: the riser is the lead whenever its family is on and it
+   *     fits -- no move draw, and the longest the planner allows (the cap: min(half the loop, 4
+   *     bars)), no length draw;
+   *   - the gap is drawn with `gapChance` instead of TURNAROUND_GAP_CHANCE (one draw either way),
+   *     and needs only one row to silence (the rows coming back make the one);
+   *   - a turn (the drop button) keeps its own move and length (`force`), and takes the gap
+   *     chance. */
+  drop?: { gapChance: number }
+}
+
+/** The drop's gap chance (spec 4.4): certain from drama 50, else today's. */
+export function turnaroundDropGapChance(drama: number): number {
+  return Number.isFinite(drama) && drama >= 50 ? 1 : TURNAROUND_GAP_CHANCE
 }
 
 /** The riser's weight factor in a phrase end's draw, and its longest, by build size (spec 4.4). */
@@ -725,12 +740,23 @@ export function rollTurnaround(input: TurnaroundInput): TurnaroundPlan | null {
     return build(move, beats, lastPhrase.halvings + 1, bed, loopBars, random, looks)
   }
   const drawn = drawOf(bed, arc, capBeats, moves)
-  if (drawn.length === 0 || !(random() < chance)) return null
-  const move = pickWeighted(
-    drawn.map((m) => ({ item: m, weight: moveWeight(arc, m, sizing) })),
-    random
-  )
-  const beats = drawBeats(move, bed, capBeats, random, sizing.riserCap)
+  // the drop's build: the riser leads, at its longest, with no draw for either (spec 4.4)
+  const dropRiser =
+    input.drop !== undefined &&
+    input.size === 'large' &&
+    moves.includes('riser') &&
+    fits('riser', bed, capBeats)
+  if (!dropRiser && drawn.length === 0) return null
+  if (!(random() < chance)) return null
+  const move: TurnaroundMove = dropRiser
+    ? 'riser'
+    : pickWeighted(
+        drawn.map((m) => ({ item: m, weight: moveWeight(arc, m, sizing) })),
+        random
+      )
+  const beats = dropRiser
+    ? Math.min(capBeats, sizing.riserCap)
+    : drawBeats(move, bed, capBeats, random, sizing.riserCap)
   const lead = build(move, beats, 0, bed, loopBars, random, looks)
   return lead !== null && input.combine === true
     ? layerTurnaround(lead, input, bed, capBeats, capBeats, looks, sizing)
@@ -1146,9 +1172,11 @@ function layerTurnaround(
   let gap = 0
   let keeper: TurnaroundRow | null = null
   const riser = parts.find((p) => p.move === 'riser')
-  if (riser !== undefined && riser.beats >= BEATS_PER_BAR && bed.audible.length >= 2) {
+  // the drop's gap needs only one row to silence: the rows coming back make the one
+  const gapBed = input.drop !== undefined ? 1 : 2
+  if (riser !== undefined && riser.beats >= BEATS_PER_BAR && bed.audible.length >= gapBed) {
     // a gap only where the size allows one and a large payoff can follow it (no draw otherwise)
-    if (sizing.gap && sub() < TURNAROUND_GAP_CHANCE) {
+    if (sizing.gap && sub() < (input.drop?.gapChance ?? TURNAROUND_GAP_CHANCE)) {
       gap = turnaroundGapBeats(riser.beats, depth)
       // a drop no longer than the gap would be swallowed by it: the next length past it, or no gap
       const longer = parts.map((p) => {

@@ -15,6 +15,7 @@
 // from what is due (radio's armed pick, its companions, spare picks).
 
 import type { TurnaroundArc, TurnaroundPlan } from './radioTurnaround'
+import type { RadioArcRole } from './radioIntensityArc'
 
 /** How big a build a change earns. */
 export type RadioBuildSize = 'none' | 'small' | 'medium' | 'large'
@@ -41,6 +42,12 @@ export interface RadioChangeForecast {
   arcStep: 'add' | 'remove' | null
   /** A desktop course change at this top (every row at once). */
   course: boolean
+  /** The intensity arc's part in this top (radioIntensityArc's radioIntensityArcRole; spec
+   * 2026-10-05-radio-intensity-arc-design 5.1), set only while density is `intensity`: `build` (an
+   * add) and `strip` (the build's strip-back) and `breakdown` medium at most, `drop` large when
+   * the low end comes back (exempt from the budget), `hold` every other phrase end of a cycle
+   * (medium at most). Promotion is off under any role. Absent: today. */
+  arcRole?: RadioArcRole
 }
 
 export const NO_CHANGE_FORECAST: RadioChangeForecast = Object.freeze({
@@ -190,6 +197,8 @@ export function radioBuildArc(f: RadioChangeForecast, legArc: TurnaroundArc): Tu
 export function radioPayoffMet(f: RadioChangeForecast, need: RadioPayoff): boolean {
   if (need === 'none') return true
   if (f.lowEndReturn || f.course) return true
+  // the breakdown pays off a medium build (spec 5.1): the drums and bass going is the change
+  if (need === 'medium' && f.arcRole === 'breakdown') return true
   if (need === 'medium') return f.rows >= 2 || f.hookReturn !== null || f.arcStep !== null
   // an arc add is a large change (spec Decision 5: an arc step gets the riser and the gap)
   return f.rows >= 3 || (f.hookReturn !== null && f.rows >= 2) || f.arcStep === 'add'
@@ -242,14 +251,18 @@ export function radioPhraseEndBuild(
 ): { skip: boolean; size: RadioBuildSize; payoff: RadioPayoff } {
   const best = radioForecastWithRows(f, Math.max(0, Math.floor(spare)))
   const payoff = radioPayoffOf(best)
-  const raw = radioBuildTier(f, opts.hookScale)
+  const raw = radioArcRoleTier(f, radioBuildTier(f, opts.hookScale))
   const floored: RadioBuildSize = radioBuildSizeAtLeast(raw, 'medium') ? raw : 'medium'
   const budget = { ...opts, phraseEnd: true }
+  // the drop is the cycle's moment: exempt from the once-a-phrase rule and the spacing (spec 5.1)
+  if (f.arcRole === 'drop' && floored === 'large')
+    return { skip: payoff === 'none', size: 'large', payoff }
   let size = radioApplyBuildBudget(floored, budget)
   // the gap's return (spec 4.4): a medium phrase end the spares can pay off large is promoted to
   // large once the last large build is PROMOTE_PHRASES[arc] phrases back -- otherwise sized
-  // builds would leave almost no phrase end large enough for a gap. Pure: no draw.
-  if (size === 'medium' && payoff === 'large') {
+  // builds would leave almost no phrase end large enough for a gap. Pure: no draw. Never under the
+  // intensity arc: the gap belongs to its drop.
+  if (size === 'medium' && payoff === 'large' && f.arcRole === undefined) {
     const ahead = Number.isFinite(opts.aheadBars) && opts.aheadBars > 0 ? opts.aheadBars : 0
     const since =
       opts.clock.sinceLarge === null ? Number.POSITIVE_INFINITY : opts.clock.sinceLarge + ahead
@@ -259,6 +272,15 @@ export function radioPhraseEndBuild(
     }
   }
   return { skip: payoff === 'none', size, payoff }
+}
+
+/** A phrase end's tier under the intensity arc (spec 5.1): the drop is large when the low end
+ * comes back (at swell depth it is the renewals and the lean: medium at most); every other role
+ * is medium at most. No role: the tier as it is. */
+export function radioArcRoleTier(f: RadioChangeForecast, tier: RadioBuildSize): RadioBuildSize {
+  if (f.arcRole === undefined) return tier
+  if (f.arcRole === 'drop' && f.lowEndReturn) return 'large'
+  return radioBuildSizeAtLeast(tier, 'medium') ? 'medium' : tier
 }
 
 /** Phrases since the last large build before a medium phrase end whose spares can pay off a large
