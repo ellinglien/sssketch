@@ -38,6 +38,7 @@ import {
 import { RADIO_TRANSITIONS_OPTIONS } from './radioTransition'
 import { DEFAULT_SOUND_SETTINGS, normalizeSoundSettings } from './radioSound'
 import { soundPanelModel, type SoundSliderControl } from './soundPanelModel'
+import { radioViewStrip } from './radioView'
 
 const CTX: RadioStripContext = {
   artistMode: false,
@@ -69,11 +70,17 @@ const STATES: RadioSettings[] = RADIO_DENSITY_OPTIONS.flatMap((density) =>
   )
 )
 
+/** The controls the advanced view draws (radioView.ts): the coverage test runs there. Simple
+ * keeps fewer on purpose; its list is pinned in radioView.test.ts. */
+function advancedControls(s: RadioSettings): RadioStripControl[] {
+  const v = radioViewStrip(radioStripModel(s, CTX), 'advanced', s)
+  return [...v.top, ...v.live, ...v.columns.flatMap((g) => g.controls)]
+}
+
 describe('radioStripModel: nothing hidden', () => {
-  it('sets every radio setting from some control (the legacy pace pair aside)', () => {
+  it('sets every radio setting from some control in the advanced view (the legacy pace pair aside)', () => {
     const set = new Set<RadioSettingKey>()
-    for (const s of STATES)
-      for (const c of controls(radioStripModel(s, CTX))) c.sets.forEach((k) => set.add(k))
+    for (const s of STATES) for (const c of advancedControls(s)) c.sets.forEach((k) => set.add(k))
     const keys = (Object.keys(DEFAULT_RADIO_SETTINGS) as RadioSettingKey[]).filter(
       (k) => !RADIO_STRIP_LEGACY_KEYS.includes(k)
     )
