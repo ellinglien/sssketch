@@ -137,12 +137,32 @@ function reliableMaskSoundType(instrument: number): 'drums' | 'notes' | 'bass' |
  * Bounded to exactly the StemCIDs asked for (a plain primary-key
  * `IN (...)` lookup per db, up to BATCH_SIZE=200 at a time) rather than a
  * full table scan -- cheap even against a huge external archive. */
-function lookupInstrumentMasks(dbs: Database.Database[], stemCIDs: string[]): Map<string, number> {
+function lookupInstrumentMasks(
+  dbs: Database.Database[],
+  stemCIDs: string[],
+  instrumentLookup: InstrumentLookupFor | undefined
+): Map<string, number> {
   const found = new Map<string, number>()
   if (stemCIDs.length === 0) return found
   const remaining = new Set(stemCIDs)
   for (const db of dbs) {
     if (remaining.size === 0) break
+    // The same answer from the rows already in memory, when they're current
+    // for this db (background scan audit item 2b): a stem the rows don't
+    // have, or have with no mask, goes on to the next db exactly as a
+    // missing/NULL SQL row did.
+    const inMemory = instrumentLookup?.(db)
+    if (inMemory) {
+      countWork('auto-classify:mask-from-memory', remaining.size)
+      for (const stemCID of [...remaining]) {
+        const instrument = inMemory(stemCID)
+        if (instrument === null || instrument === undefined) continue
+        found.set(stemCID, instrument)
+        remaining.delete(stemCID)
+      }
+      continue
+    }
+    countWork('sql:auto-classify.mask-lookup')
     const placeholders = [...remaining].map(() => '?').join(',')
     let rows: { StemCID: string; Instrument: number | null }[]
     try {
@@ -159,6 +179,19 @@ function lookupInstrumentMasks(dbs: Database.Database[], stemCIDs: string[]): Ma
     }
   }
   return found
+}
+
+/** For a db, a StemCID -> Stems.Instrument lookup over rows already in
+ * memory (number, null for no mask, undefined for no such stem), or null to
+ * ask that db's Stems table. Injected (the scheduler passes
+ * discoverCandidates.ts's getInstrumentMaskLookup) so this module doesn't
+ * depend on the Discover caches and stays testable on its own. */
+export type InstrumentLookupFor = (
+  db: Database.Database
+) => ((stemCID: string) => number | null | undefined) | null
+
+export interface ClassifyBatchOptions {
+  instrumentLookup?: InstrumentLookupFor
 }
 
 interface EmbeddingCandidateRow {
@@ -293,9 +326,86 @@ interface PendingState {
 }
 const pendingByDb = new WeakMap<Database.Database, PendingState>()
 
+/** Background scan audit item 2 (2026-10-05): the ids each pass has already
+ * taken under the current TRAINING KEY -- the confirmed-embedding
+ * fingerprint, the training generation (confirmations, centroid retrains)
+ * and the mask dbs (an archive connected later can give a stem the mask it
+ * lacked). A stem neither classifier could place gets the same answer
+ * again until one of those moves, so the scheduler's 10-minute safety
+ * rebuild leaves these out instead of re-running them: on Elling's library
+ * that was the ~20k-stem residue, about 5 minutes of busy work (2.3 MB of
+ * EmbeddingJSON parsed, 1.7 G multiply-adds and a USB mask lookup per
+ * batch) in every ~15, all to reach the answer of 10 minutes before.
+ *
+ * A new key starts empty sets (so a retrain re-tries everything, as
+ * before). A stem whose row a store rewrites joins through the wake path
+ * as before and is tried again (a re-extraction can change the answer);
+ * a row written outside the stores is a new id, which the safety rebuild
+ * still finds. Session-only, like the pending lists: a relaunch tries
+ * everything once. One set per pass -- with an untrained embedding axis a
+ * stem is in both lists, and the embedding pass taking it (mask only) must
+ * not keep it from the centroid pass. */
+interface AttemptedState {
+  key: string
+  embedding: Set<string>
+  feature: Set<string>
+}
+const attemptedByDb = new WeakMap<Database.Database, AttemptedState>()
+
+const dbIdentity = new WeakMap<Database.Database, number>()
+let nextDbIdentity = 0
+function identityOf(db: Database.Database): number {
+  let id = dbIdentity.get(db)
+  if (id === undefined) {
+    id = nextDbIdentity++
+    dbIdentity.set(db, id)
+  }
+  return id
+}
+
+function trainingKey(
+  prepared: PreparedConfirmed,
+  generation: number,
+  stemDbs: Database.Database[]
+): string {
+  return `${prepared.fingerprint}|${generation}|${stemDbs.map(identityOf).join(',')}`
+}
+
+function attemptedFor(ownDb: Database.Database, key: string): AttemptedState {
+  const existing = attemptedByDb.get(ownDb)
+  if (existing && existing.key === key) return existing
+  const fresh: AttemptedState = { key, embedding: new Set(), feature: new Set() }
+  attemptedByDb.set(ownDb, fresh)
+  return fresh
+}
+
+/** Takes up to `n` ids from `list`, recording them as attempted under the
+ * current key; counts any taken again under the same key (a stem a store
+ * rewrote -- expected to stay near 0 once the first drain is done). */
+function takeAttempted(list: PendingList, attempted: Set<string>, n: number): string[] {
+  const taken = takePending(list, n)
+  let retried = 0
+  for (const id of taken) {
+    if (attempted.has(id)) retried += 1
+    else attempted.add(id)
+  }
+  countWork('auto-classify:rows-attempted', taken.length)
+  if (retried > 0) countWork('auto-classify:rows-retried', retried)
+  return taken
+}
+
+function withoutAttempted(ids: string[], attempted: Set<string>, noted: string[]): string[] {
+  if (attempted.size === 0) return ids
+  const keep = new Set(noted)
+  const out = ids.filter((id) => !attempted.has(id) || keep.has(id))
+  countWork('auto-classify:rows-skipped-tried', ids.length - out.length)
+  return out
+}
+
 async function getPendingState(
   ownDb: Database.Database,
-  prepared: PreparedConfirmed
+  prepared: PreparedConfirmed,
+  attempted: AttemptedState
 ): Promise<PendingState> {
   const state = pendingByDb.get(ownDb)
   const added = drainAutoClassifyInputRows(ownDb)
@@ -316,6 +426,7 @@ async function getPendingState(
     for (const id of added.feature) addPending(state.feature, id)
     return state
   }
+  countWork('auto-classify:rebuild')
   const embedding = await eligibleStemCIDs(ownDb, 'StemEmbeddingCache', BASE_ELIGIBILITY_WHERE('t'))
   const feature = await eligibleStemCIDs(
     ownDb,
@@ -325,8 +436,8 @@ async function getPendingState(
   const rebuilt: PendingState = {
     fingerprint: prepared.fingerprint,
     trainingGeneration: generation,
-    embedding: pendingListOf(embedding),
-    feature: pendingListOf(feature)
+    embedding: pendingListOf(withoutAttempted(embedding, attempted.embedding, added.embedding)),
+    feature: pendingListOf(withoutAttempted(feature, attempted.feature, added.feature))
   }
   pendingByDb.set(ownDb, rebuilt)
   return rebuilt
@@ -416,9 +527,10 @@ export interface ClassifyBatchResult {
  * stem classifiable later) at the cost of some repeated work on stems
  * that stay unclassifiable indefinitely -- re-attempted once the training
  * changes (a confirmation or centroid retrain rebuilds the pending lists,
- * see PendingState) or at the scheduler's long safety interval, rather
- * than on every batch as before B4 (the answer can't change until the
- * training does). Each call's batch is taken from a SHUFFLED pending list,
+ * see PendingState) or a store rewrites its row, rather than on every
+ * batch as before B4 (the answer can't change until the training does),
+ * and no longer at the scheduler's safety rebuild either (AttemptedState,
+ * background scan audit item 2). Each call's batch is taken from a SHUFFLED pending list,
  * not a deterministic "first N" -- a real live bug found this way: a
  * deterministic batch can get permanently stuck retrying the exact same
  * unclassifiable stems forever once they out-number BATCH_SIZE, starving
@@ -467,7 +579,8 @@ export async function classifyAutoCategoryBatch(
   // (stemAutoClassifyScheduler.ts) passes candidateDbsForRiff() so the
   // mask short-circuit below also covers stems synced from an external
   // LORE archive.
-  stemDbs: Database.Database[] = [ownDb]
+  stemDbs: Database.Database[] = [ownDb],
+  options: ClassifyBatchOptions = {}
 ): Promise<ClassifyBatchResult> {
   let processed = 0
 
@@ -477,7 +590,11 @@ export async function classifyAutoCategoryBatch(
   // passes must agree on the same answer within one call.
   const prepared = getPreparedConfirmedEmbeddings(ownDb)
   const { embeddingAxisTrained, suggestFromEmbedding } = prepared
-  const pending = await getPendingState(ownDb, prepared)
+  const attempted = attemptedFor(
+    ownDb,
+    trainingKey(prepared, getAutoClassifyTrainingGeneration(), stemDbs)
+  )
+  const pending = await getPendingState(ownDb, prepared, attempted)
 
   // --- Embedding pass (preferred) ---
   if (pending.embedding.ids.length > 0) {
@@ -492,10 +609,14 @@ export async function classifyAutoCategoryBatch(
     // untrained) stays eligible for the next rebuild, same accepted cost
     // as an ambiguous embedding guess (see "leaves an unclassifiable stem
     // out of StemAutoCategory", above).
-    const batchRows = fetchPendingEmbeddingRows(ownDb, takePending(pending.embedding, BATCH_SIZE))
+    const batchRows = fetchPendingEmbeddingRows(
+      ownDb,
+      takeAttempted(pending.embedding, attempted.embedding, BATCH_SIZE)
+    )
     const masks = lookupInstrumentMasks(
       stemDbs,
-      batchRows.map((r) => r.StemCID)
+      batchRows.map((r) => r.StemCID),
+      options.instrumentLookup
     )
     const now = Date.now()
     processed += await classifyInYieldingChunks(ownDb, batchRows, (row) => {
@@ -535,14 +656,15 @@ export async function classifyAutoCategoryBatch(
     const centroidStore = loadCategoryCentroidStore()
     const batchRows = fetchPendingFeatureRows(
       ownDb,
-      takePending(pending.feature, BATCH_SIZE),
+      takeAttempted(pending.feature, attempted.feature, BATCH_SIZE),
       embeddingAxisTrained
     )
     // Same instrument-mask short-circuit as the embedding pass above --
     // see reliableMaskSoundType's own doc comment for why.
     const masks = lookupInstrumentMasks(
       stemDbs,
-      batchRows.map((r) => r.StemCID)
+      batchRows.map((r) => r.StemCID),
+      options.instrumentLookup
     )
     const now = Date.now()
     processed += await classifyInYieldingChunks(ownDb, batchRows, (row) => {

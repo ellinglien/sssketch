@@ -7,8 +7,12 @@ import {
   prewarmDiscoverCandidateCaches,
   getRiffIndexForDb,
   appendToInMemoryDiscoverCaches,
+  getInstrumentMaskLookup,
   sampleDistinctIndices
 } from './discoverCandidates'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { upsertStemCategoryRole } from './stemCategoriesStore'
@@ -2764,5 +2768,79 @@ describe('artist mode: trait value-table fast path', () => {
     expect(kinds).toContain('sql:trait-value-table.count')
     // ... so the SQL fallback never ran.
     expect(kinds).not.toContain('sql:discover.artist-trait-page')
+  })
+})
+
+// Background scan audit item 2b: the overnight classifier reads each stem's
+// Instrument from the instrument rows prewarm already holds, instead of an
+// IN query against the USB archive per batch.
+describe('getInstrumentMaskLookup', () => {
+  let dir: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'mask-lookup-'))
+  })
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  /** A file-backed archive, seeded through a writer and opened read-only
+   * the way riffLibraryStore.ts opens the external LORE archive. */
+  function archive(): { path: string; ro: Database.Database } {
+    const path = join(dir, 'archive.db')
+    const writer = new Database(path)
+    writer.exec(`
+      CREATE TABLE Riffs (
+        RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER, BPMrnd REAL,
+        StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT,
+        StemCID_5 TEXT, StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT
+      );
+      CREATE TABLE Stems (
+        StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
+        FileEndpoint TEXT, FileBucket TEXT, FileKey TEXT, BPMrnd REAL,
+        Instrument INTEGER, Length16s REAL, PresetName TEXT, CreatorUserName TEXT
+      );
+    `)
+    seedRiff(writer, 'r1', 'jam1', 120, ['s-drums', 's-mic', 's-none'])
+    seedStem(writer, 's-drums', 'jam1', { instrument: 2 })
+    seedStem(writer, 's-mic', 'jam1', { instrument: 16 })
+    seedStem(writer, 's-none', 'jam1')
+    writer.close()
+    return { path, ro: new Database(path, { readonly: true }) }
+  }
+
+  it('is null until the rows are in memory', () => {
+    const { ro } = archive()
+    expect(getInstrumentMaskLookup(ro)).toBeNull()
+  })
+
+  it("answers from prewarm's rows: the mask, null for none, undefined for no such stem", async () => {
+    const { ro } = archive()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: ro }], freshDb())
+    const spy = vi.spyOn(ro, 'prepare')
+    const lookup = getInstrumentMaskLookup(ro)
+    expect(lookup).not.toBeNull()
+    expect(lookup?.('s-drums')).toBe(2)
+    expect(lookup?.('s-mic')).toBe(16)
+    expect(lookup?.('s-none')).toBeNull()
+    expect(lookup?.('elsewhere')).toBeUndefined()
+    // Only the cheap change signal touched the archive, never a Stems row read.
+    expect(spy.mock.calls.filter(([sql]) => /FROM Stems WHERE|COUNT\(\*\)/.test(sql))).toEqual([])
+  })
+
+  it('is null once the archive changed under the rows (SQL decides until they are rebuilt)', async () => {
+    const { path, ro } = archive()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: ro }], freshDb())
+    const writer = new Database(path)
+    seedStem(writer, 's-new', 'jam1', { instrument: 4 })
+    writer.close()
+    expect(getInstrumentMaskLookup(ro)).toBeNull()
+  })
+
+  it("leaves sssketch's own writable db to SQL (an index lookup on the internal disk)", async () => {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 120, ['s1'])
+    seedStem(own, 's1', 'jam1', { instrument: 2 })
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam1', dbForJam: own }], own)
+    expect(getInstrumentMaskLookup(own)).toBeNull()
   })
 })

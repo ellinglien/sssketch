@@ -41,6 +41,7 @@ import {
   saveInstrumentRowsCache
 } from './discoverIndexCache'
 import { getStemClassificationVersion } from './stemClassificationVersion'
+import { createInstrumentRowsLookup, type InstrumentRowsLookup } from './instrumentRowsLookup'
 import {
   isScanCacheCurrent,
   newScanCacheState,
@@ -571,6 +572,46 @@ async function getInstrumentRowsForDb(
 
   instrumentRowsCache.set(db, { rows, state })
   return rows
+}
+
+const instrumentMaskLookups = new WeakMap<object, InstrumentRowsLookup>()
+
+/** Stems.Instrument by StemCID from the instrument rows already in memory
+ * for `db` (prewarm loads them at startup) -- for the overnight classifier,
+ * which otherwise ran a 200-id IN query against the external archive on
+ * USB for every batch (background scan audit item 2b, 2026-10-05). The
+ * lookup answers the mask, null for a row without one, or undefined for a
+ * stem `db` doesn't have: exactly what that query would have said.
+ *
+ * Null (ask SQL instead) unless the rows are exactly current: built, and
+ * the Stems signal unchanged since in every part (count, MAX(rowid),
+ * data_version, this process's writes) -- stricter than isScanCacheCurrent,
+ * which trusts a cache for up to 30 s between checks; the signal read is
+ * ~0.05 ms when nothing moved (tableChangeSignal.ts's shared count). Only a
+ * read-only connection (the external archive): sssketch's own warehouse
+ * is written all the time and its Stems IN query is an index lookup on the
+ * internal disk (~0.5 ms), so it stays on SQL. */
+export function getInstrumentMaskLookup(db: Database.Database): InstrumentRowsLookup | null {
+  if (!db.readonly) return null
+  const cached = instrumentRowsCache.get(db)
+  if (!cached || !cached.state.signal) return null
+  const built = cached.state.signal
+  const live = readTableSignal(db, 'Stems')
+  if (
+    !live ||
+    live.count !== built.count ||
+    live.maxRowid !== built.maxRowid ||
+    live.dataVersion !== built.dataVersion ||
+    live.writes !== built.writes
+  ) {
+    return null
+  }
+  let lookup = instrumentMaskLookups.get(cached.rows)
+  if (!lookup) {
+    lookup = createInstrumentRowsLookup(cached.rows)
+    instrumentMaskLookups.set(cached.rows, lookup)
+  }
+  return lookup
 }
 
 function chunk<T>(items: T[], size: number): T[][] {

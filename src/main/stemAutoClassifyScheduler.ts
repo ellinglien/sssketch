@@ -3,6 +3,7 @@ import { classifyAutoCategoryBatch } from './stemAutoClassify'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
 import { loadDiscoverSettings } from './discoverSettingsStore'
 import { candidateDbsForRiff } from './riffLibraryStore'
+import { getInstrumentMaskLookup } from './discoverCandidates'
 import { setAutoClassifyWakeListener } from './stemAutoClassifyWake'
 import { countWork } from './workCounters'
 
@@ -115,9 +116,14 @@ async function runOnce(): Promise<void> {
     // classifyAutoCategoryBatch (see its own doc comment) can find a
     // stem's real Instrument mask even when that stem's own "Stems" row
     // lives in an external, read-only LORE archive rather than ownDb.
+    // getInstrumentMaskLookup -- the archive's masks from the instrument
+    // rows prewarm already holds in memory, instead of an IN query on the
+    // USB volume per batch (background scan audit item 2b); SQL whenever
+    // those rows aren't exactly current.
     const { remaining } = await classifyAutoCategoryBatch(
       openOwnRiffLibraryDb(),
-      candidateDbsForRiff()
+      candidateDbsForRiff(),
+      { instrumentLookup: getInstrumentMaskLookup }
     )
     setStatus({ active: remaining > 0, remaining })
     if (remaining > 0 || wokeWhileRunning) scheduleNext(BUSY_DELAY_MS)

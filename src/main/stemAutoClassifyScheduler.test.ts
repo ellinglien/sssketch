@@ -9,11 +9,13 @@ const classifyAutoCategoryBatch = vi.fn()
 const loadDiscoverSettings = vi.fn()
 const openOwnRiffLibraryDb = vi.fn(() => ({}) as never)
 const candidateDbsForRiff = vi.fn(() => [] as never[])
+const getInstrumentMaskLookup = vi.fn(() => null)
 
 vi.mock('./stemAutoClassify', () => ({ classifyAutoCategoryBatch }))
 vi.mock('./riffLibrarySchema', () => ({ openOwnRiffLibraryDb }))
 vi.mock('./discoverSettingsStore', () => ({ loadDiscoverSettings }))
 vi.mock('./riffLibraryStore', () => ({ candidateDbsForRiff }))
+vi.mock('./discoverCandidates', () => ({ getInstrumentMaskLookup }))
 
 // vi.resetModules() before each test, then a fresh dynamic import --
 // startStemAutoClassifyScheduler's own idempotency guard (`started`) is
@@ -56,6 +58,17 @@ describe('startStemAutoClassifyScheduler', () => {
     // remaining > 0 -- reschedules at BUSY_DELAY_MS (3000ms), not idle.
     await vi.advanceTimersByTimeAsync(3000)
     expect(classifyAutoCategoryBatch).toHaveBeenCalledTimes(2)
+  })
+
+  it('reads instrument masks from the Discover caches already in memory (audit item 2b)', async () => {
+    loadDiscoverSettings.mockReturnValue({ consentedToLibraryScan: true })
+    classifyAutoCategoryBatch.mockResolvedValue({ processed: 0, remaining: 0 })
+    const { startStemAutoClassifyScheduler } = await import('./stemAutoClassifyScheduler')
+    startStemAutoClassifyScheduler()
+    await vi.advanceTimersByTimeAsync(3000)
+    expect(classifyAutoCategoryBatch).toHaveBeenCalledWith(expect.anything(), [], {
+      instrumentLookup: getInstrumentMaskLookup
+    })
   })
 
   it('sleeps once a batch reports no remaining work -- no further calls until the safety interval', async () => {
