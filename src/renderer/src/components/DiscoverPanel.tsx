@@ -13465,6 +13465,7 @@ export function DiscoverPanel({
               listenOnlyStars={listenOnly.has('star')}
               nearbyCreator={artistCreator}
               ownUsername={currentUsername}
+              creatorInTooltip={combined}
               onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
               onRemove={() => removeSlot(slot.id)}
               onDuplicate={(immediate) => duplicateSlot(slot.id, immediate)}

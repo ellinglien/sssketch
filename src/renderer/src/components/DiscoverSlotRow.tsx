@@ -283,6 +283,7 @@ export function DiscoverSlotRow({
   listenOnlyStars,
   nearbyCreator,
   ownUsername,
+  creatorInTooltip,
   onToggleReplaceSoon,
   onRemove,
   onDuplicate,
@@ -376,6 +377,8 @@ export function DiscoverSlotRow({
   nearbyCreator: string | readonly string[] | undefined
   /** The own username (the nearby popover tags a combination's stems by it). */
   ownUsername: string
+  /** Combine artists: the waveform's tooltip adds `by <creator>` (several artists chosen). */
+  creatorInTooltip?: boolean
   /** The 👎 ("change soon", once "change next") -- toggles `replace-soon`
    * on this row (toggleRadioReplaceSoon). */
   onToggleReplaceSoon: () => void
@@ -1136,15 +1139,23 @@ export function DiscoverSlotRow({
           // reads the local, already-synced library), in which case
           // this simply omits the tooltip rather than showing a wrong
           // date. Same year/month/day format LibraryBrowser.tsx's own
-          // date-grouped riff listing already uses.
+          // date-grouped riff listing already uses. Combine artists: with
+          // several artists chosen, `by <creator>` follows the date.
           data-tooltip={
-            resolvedStem.creationTime
-              ? new Date(resolvedStem.creationTime * 1000).toLocaleDateString(undefined, {
-                  year: 'numeric',
-                  month: 'short',
-                  day: 'numeric'
-                })
-              : undefined
+            [
+              resolvedStem.creationTime
+                ? new Date(resolvedStem.creationTime * 1000).toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                  })
+                : null,
+              creatorInTooltip && slot.candidate?.creatorUserName
+                ? `by ${slot.candidate.creatorUserName}`
+                : null
+            ]
+              .filter((p): p is string => p !== null)
+              .join(' · ') || undefined
           }
           style={{
             position: 'relative',
