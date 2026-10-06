@@ -199,7 +199,16 @@ function rebuildStoreFromDb(db: Database.Database): {
  * and crediting that row at the next write -- in this launch or a later
  * one -- would mean its pair never trained. The cost, also only after a
  * failed save: an old row the failed write re-stamped (the same bus written
- * again) trains once more. */
+ * again) trains once more.
+ *
+ * The rows are the shared own db's (~/Music), not this store's: the dev and
+ * the packaged app each have their own store file over the one db. So the
+ * seed also credits an unstamped bus labelled in the other app (a Tidy Up
+ * there, live, or a project only it backfilled), a pair this store may never
+ * have held; being in trainedPairs from then on, that pair never trains
+ * here. The other way round, a stamped bus from the other app trains here
+ * once even if this store had it from an old backfill of the same project.
+ * Either way one sample per pair, against counts inflated by thousands. */
 function seedTrainedPairs(db: Database.Database): TrainedBusPair[] {
   return labelledRowsWithFeatures(db, 'unstampedBus')
     .filter((row) => isTrainableCategory('bus', row.busId!))
