@@ -3,18 +3,16 @@ import { ARTIST_SCAN_QUEUED_EVENT } from './artistScanQueueEvent'
 import { backgroundWorkRegistry } from './backgroundWorkRegistry'
 import { countWork } from '../perf/workCounters'
 import { useEffect, useRef, useState } from 'react'
-import { needsAnyAnalysis } from '@shared/stemAnalysisNeeds'
 import { fetchStemAnalysisNeeds } from './analyzeStemOnce'
 import {
   RIFF_LIBRARY_USERNAME_CHANGED_EVENT,
   resolveRiffLibraryUsername
 } from './riffLibraryUsername'
-import { orderByStemPriority } from '@shared/stemPriorityOrder'
+import { createLibraryScanSource } from './libraryScanSource'
 import {
   IDLE_REST_MS,
   backgroundAnalysisQueue,
-  type AnalysisSource,
-  type AnalysisWorkItem
+  type AnalysisSource
 } from './backgroundAnalysisQueue'
 
 /** After a failed or partly-failed artist batch, the artist queue rests
@@ -185,7 +183,7 @@ export function DiscoverLibraryScan(): null {
         // What is left to look at: already-analysed stems are no longer in
         // the list, so this starts lower than the library's size.
         setTotal(targets.length)
-        let toScan = targets.filter((t) => !attemptedRef.current.has(t.key))
+        const toScan = targets.filter((t) => !attemptedRef.current.has(t.key))
 
         // Background-efficiency spec, A2/A3: main answers "what does each
         // stem still need" a page at a time (one batched call per
@@ -193,88 +191,49 @@ export function DiscoverLibraryScan(): null {
         // stems needing nothing count as completed straight away -- no
         // decode and no per-stem "do you have it?" round trips -- and the
         // rest go to the queue with their needs, so it asks none itself.
-        let nextPageStart = 0
-        let buffer: AnalysisWorkItem[] = []
-        const library: AnalysisSource = {
-          async next(n) {
-            while (buffer.length === 0) {
-              if (cancelled || nextPageStart >= toScan.length) return 'done'
-              const page = toScan.slice(nextPageStart, nextPageStart + NEEDS_PAGE_SIZE)
-              // Advanced before the await, so a re-rank meanwhile (which
-              // reorders only toScan from nextPageStart on) can't move this
-              // page's targets under it.
-              nextPageStart += page.length
-              let needs: Awaited<ReturnType<typeof fetchStemAnalysisNeeds>>
-              try {
-                needs = await fetchStemAnalysisNeeds(page.map((t) => t.path))
-              } catch (err) {
-                // Stops this session's pass (nothing is lost -- the next
-                // mount starts over from main's persisted state).
-                console.error('DiscoverLibraryScan: failed to load analysis needs:', err)
-                if (!cancelled) setStopped(true)
-                return 'done'
-              }
-              if (cancelled) return 'done'
-              let alreadyDone = 0
-              page.forEach((target, i) => {
-                const targetNeeds = needs[i]
-                if (targetNeeds && needsAnyAnalysis(targetNeeds)) {
-                  buffer.push({ key: target.key, path: target.path, needs: targetNeeds })
-                } else {
-                  attemptedRef.current.add(target.key)
-                  alreadyDone += 1
-                }
-              })
-              if (alreadyDone > 0) setCompleted((c) => c + alreadyDone)
-            }
-            const taken = buffer.slice(0, n)
-            buffer = buffer.slice(n)
-            return taken
+        // Features older than STEM_FEATURE_VERSION come back as needed
+        // (Phase 3 re-extraction), alongside anything missing outright --
+        // and `zeroShot` for stems embedded before the YAMNet zero-shot
+        // step existed (B5: this used to be a second, separate scan).
+        const library = createLibraryScanSource({
+          targets: toScan,
+          pageSize: NEEDS_PAGE_SIZE,
+          fetchNeeds: fetchStemAnalysisNeeds,
+          isCancelled: () => cancelled,
+          onAlreadyDone(keys) {
+            for (const key of keys) attemptedRef.current.add(key)
+            setCompleted((c) => c + keys.length)
           },
-          // Features older than STEM_FEATURE_VERSION come back as needed
-          // (Phase 3 re-extraction), alongside anything missing outright --
-          // and `zeroShot` for stems embedded before the YAMNet zero-shot
-          // step existed (B5: this used to be a second, separate scan).
-          done(keys) {
+          onDone(keys) {
             for (const key of keys) attemptedRef.current.add(key)
             if (!cancelled) setCompleted((c) => c + keys.length)
+          },
+          onNeedsFailed(err) {
+            // Stops this session's pass (nothing is lost -- the next
+            // mount starts over from main's persisted state).
+            console.error('DiscoverLibraryScan: failed to load analysis needs:', err)
+            if (!cancelled) setStopped(true)
           }
-        }
+        })
         backgroundAnalysisQueue.setSource('library', library)
 
-        // A new username mid-session: what is left (the buffered page and
-        // the targets not yet paged) is ranked again by main and reordered,
-        // each rank group keeping the order it had.
+        // A new username mid-session: what is left (the buffered page, a
+        // page still loading, the targets not yet paged) is ranked again by
+        // main and reordered, each rank group keeping the order it had
+        // (libraryScanSource.ts; an overtaken re-rank's answer is dropped).
+        // Asked even with nothing left: the call also tells main the new
+        // name, which its own passes (auto-classify) rank by.
         rerank = async (username) => {
-          const keys = [
-            ...buffer.map((item) => item.key),
-            ...toScan.slice(nextPageStart).map((t) => t.key)
-          ]
-          // Asked even with nothing left: the call also tells main the new
-          // name, which its own passes (auto-classify) rank by.
-          let ranks: number[]
+          let outcome: Awaited<ReturnType<typeof library.rerank>>
           try {
-            ranks = await window.rifffApi.getStemPriorityRanks(keys, username)
+            outcome = await library.rerank((keys) =>
+              window.rifffApi.getStemPriorityRanks(keys, username)
+            )
           } catch (err) {
             console.error('DiscoverLibraryScan: re-ranking for a new username failed:', err)
             return
           }
-          if (cancelled) return
-          const own = new Set<string>()
-          const favourites = new Set<string>()
-          keys.forEach((key, i) => {
-            if (ranks[i] === 0) own.add(key)
-            else if (ranks[i] === 1) favourites.add(key)
-          })
-          // Applied to whatever is left NOW (pages may have been taken
-          // during the call); keys not ranked count as the rest.
-          const priority = { own, favourites }
-          buffer = orderByStemPriority(buffer, (item) => item.key, priority)
-          toScan = [
-            ...toScan.slice(0, nextPageStart),
-            ...orderByStemPriority(toScan.slice(nextPageStart), (t) => t.key, priority)
-          ]
-          countWork('library-scan:rerank')
+          if (outcome === 'applied') countWork('library-scan:rerank')
         }
         if (recheckWhenListed) onUsernameChanged()
       })
