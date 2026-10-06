@@ -21,6 +21,7 @@
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import {
   THROW_BEATS,
+  THROW_NEVER_KINDS,
   turnaroundSilencedRowIds,
   initialThrowState,
   noteRadioExitThrow,
@@ -432,6 +433,80 @@ export function armDiscoverExitThrow(
       exit: true
     }
   }
+}
+
+/**
+ * A throw aimed at a transition the panel knows a lap ahead -- the intensity arc's drop (spec
+ * 2026-10-05-radio-intensity-arc-design 5.5) -- armed live as a hook's exit throw is
+ * (armDiscoverExitThrow), so no stage it would withdraw is out yet: on `slotId`, ENDING
+ * `endInBars` from the playhead (the drop's top, or where its gap starts: discoverThrowAim), in
+ * the lap playing. It counts on the throw clock (noteRadioExitThrow: the next regular throw waits
+ * for its echoes) and draws nothing; the caller draws its shape.
+ *
+ * Null when a throw is already armed, the end is not in this lap, or the throw cannot start at
+ * least THROW_LEAD_BARS ahead.
+ */
+export function armDiscoverAimedThrow(
+  state: DiscoverThrowState,
+  o: {
+    slotId: string
+    shape: { beats: number; timing: ThrowTiming; feedback: number }
+    pos: number
+    loopBars: number
+    endInBars: number
+    bpm: number
+  }
+): DiscoverThrowState | null {
+  if (state.armed !== null || !(o.loopBars > 0) || !(o.bpm > 0)) return null
+  if (!Number.isFinite(o.endInBars) || !(o.endInBars > 0)) return null
+  const endBar = o.pos + o.endInBars
+  if (endBar > o.loopBars + 1e-6) return null
+  const atBar = endBar - o.shape.beats / 4
+  const ahead = atBar - o.pos
+  if (atBar < 0 || ahead < THROW_LEAD_BARS - 1e-6) return null
+  const secPerBar = (4 * 60) / o.bpm
+  const startBars = state.elapsedBars + ahead
+  const endsAtSec = state.elapsedSec + o.endInBars * secPerBar
+  const tail = throwTailSec(throwDelaySec(o.bpm, o.shape.timing), o.shape.feedback)
+  return {
+    ...state,
+    throws: noteRadioExitThrow(state.throws, endsAtSec, tail),
+    armed: {
+      slotId: o.slotId,
+      atBar,
+      ...o.shape,
+      startBars,
+      endBars: startBars + o.shape.beats / 4,
+      aimed: true
+    }
+  }
+}
+
+/** The rows an aimed throw may take (stepThrows' own rule): heard, neither drums nor bass, and
+ * not silenced before the throw closes (discoverThrowAim's `silenced`). */
+export function discoverAimedThrowRows(
+  rows: readonly { slot: string; kinds: readonly DiscoverSlotKind[]; audible: boolean }[],
+  silenced: readonly string[]
+): string[] {
+  return rows
+    .filter(
+      (r) =>
+        r.audible &&
+        !r.kinds.some((k) => THROW_NEVER_KINDS.includes(k)) &&
+        !silenced.includes(r.slot)
+    )
+    .map((r) => r.slot)
+}
+
+/** One of discoverAimedThrowRows, drawn evenly (one number); null with none (no draw). */
+export function pickDiscoverAimedThrowRow(
+  rows: Parameters<typeof discoverAimedThrowRows>[0],
+  silenced: readonly string[],
+  random: () => number
+): string | null {
+  const ids = discoverAimedThrowRows(rows, silenced)
+  if (ids.length === 0) return null
+  return ids[Math.min(ids.length - 1, Math.floor(random() * ids.length))]
 }
 
 /**

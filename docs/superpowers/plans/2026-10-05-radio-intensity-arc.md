@@ -6508,7 +6508,8 @@ it. The desktop's settings are normalized, so `energy` and `drama` are always se
       `rollRadioTurnaround`'s turn branch turns into `drop: { gapChance }` and `payoff: 'large'`.
     - A decided `cycle` sets `arcExitRef` for the coming top.
   - State for the strip: `radioArcShown` (`{ phase, build, drop, canBuild, canDrop }`), refreshed
-    when the arc changes.
+    when the arc changes. **Moved to Task 11** (d360770d): the strip is its only reader, and an
+    unread state fails `noUnusedLocals`. Task 10 leaves the presses on `intensityPressRef`.
   - `radioReadoutFrom` (:5635), under intensity: `arc` becomes
     `radioReadoutIntensityArc(arc, rows.length, radioIntensityDropInBars(arc, { lap, phraseLaps, loopBars, pos }))`.
     `nextChange` gets `drop` and `rests` as on the web.
@@ -6549,6 +6550,14 @@ it. The desktop's settings are normalized, so `energy` and `drama` are always se
 - [ ] **Step 1: The live bar.**
   - `RadioLiveBar` (:292), in the `fire now` field after the turn button (:448-455): two
     `FireButton`s, `build` and `drop`.
+  - **First, in `DiscoverPanel.tsx`, add the state Task 10 left here:** `radioArcShown`
+    (`{ phase, build, drop, canBuild, canDrop } | null`, null unless intensity runs), set from
+    `intensityArcRef` wherever the arc changes -- after `intensityAtWrap`'s step (a wrap's
+    microtask), after `intensityPress`, and to null in `resetIntensityArc` / `intensityLeft` --
+    kept when unchanged (as `refreshRadioTurnCan` does), so a tick re-renders nothing.
+    `build`/`drop` are `radioIntensityButtonLabel`; `canBuild` / `canDrop` read
+    `intensityRoomNow()` and, for a quick drop, `turnaroundMoveCanSound(input, 'low drop')` (the
+    check `intensityPress` already makes). The strip presses through `intensityPressRef`.
   - Labels come from the panel's `radioArcShown` (`building` / `dropping` while waiting).
   - `held` while waiting; `disabled` from `byId('build')?.disabled` (the strip model greys them
     with density not intensity); `notNow` when `can*` is false.

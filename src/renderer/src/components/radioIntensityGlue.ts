@@ -104,9 +104,11 @@ export function intensityHeldAddGoes(
   return !(arc.phase === 'build' && arc.decided === null && arc.forced === null)
 }
 
-/** The throws aim at the drop (spec 5.5): in the breakdown's last phrase, or with the drop
- * decided for the coming top. */
+/** The regular throws aim at the drop (spec 5.5): in the breakdown's last phrase, until the
+ * drop is decided. From there the panel arms the drop's own aimed throw at the decide wrap
+ * (armDiscoverAimedThrow), before the drop's stage exists: the regular rule could not, as the
+ * returns queued for the drop keep it from arming (stepDiscoverThrows' canArm). */
 export function intensityThrowDropDue(arc: RadioIntensityArc): boolean {
-  if (!arc.begun) return false
-  return arc.decided?.event === 'drop' || (arc.phase === 'breakdown' && arc.done + 1 >= arc.phrases)
+  if (!arc.begun || arc.decided?.event === 'drop') return false
+  return arc.phase === 'breakdown' && arc.done + 1 >= arc.phrases
 }

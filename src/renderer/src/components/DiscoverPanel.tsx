@@ -358,11 +358,14 @@ import {
 import { discoverStemPans } from '@shared/radioPan'
 import { discoverStemPumpRoles } from '@shared/radioPump'
 import { normalizeSoundSettings, throwEveryBars } from '@shared/radioSound'
+import { drawThrowBeats, drawThrowEcho } from '@shared/radioThrows'
 import {
+  armDiscoverAimedThrow,
   armDiscoverExitThrow,
   discoverThrowSends,
   discoverThrowAim,
   initialDiscoverThrowState,
+  pickDiscoverAimedThrowRow,
   stepDiscoverThrows,
   throwOutlivesLanding,
   throwYieldsToLeadIn,
@@ -3038,6 +3041,18 @@ export function DiscoverPanel({
   const intensityPressRef = useRef<(action: RadioIntensityAction) => void>(() => {})
   /** Counts the arc's decisions: a flash is keyed by the one it shows (intensityFlashesNow). */
   const intensityDecidedSeqRef = useRef(0)
+  /** The drop's own aimed throw, owed from the decision (intensityDropThrowOwed) until armed or
+   * given up: the decision it is for (intensityDecidedSeqRef). */
+  const intensityDropThrowRef = useRef<number | null>(null)
+  /** With a one-lap phrase, the add after the one just decided (every wrap is a decide wrap, so
+   * the lap-early pick has no lap): picked and warmed now, on the panel and silent, and moved into
+   * arcAddingRef once the earlier add has landed (intensityAtWrap). */
+  const intensityNextAddRef = useRef<{
+    slotId: string
+    kinds: readonly DiscoverSlotKind[]
+    pick: SlotPick | null
+    warm: boolean
+  } | null>(null)
   const radioPendingRef = useRef<{
     slotId: string
     pick: SlotPick
@@ -3885,13 +3900,17 @@ export function DiscoverPanel({
     // large) and the gap is drawn at the drop's chance (spec 4.4). Absent otherwise.
     const dropRoll = intensityDropRoll()
     if (forecast === null || endSpare === null) {
-      // sized builds off: today, exactly
+      // sized builds off: today, exactly -- but the intensity arc's drop with the low end coming
+      // back is rolled at large (spec 4.4: its riser leads at its longest; a swell's is not)
+      const dropLarge =
+        dropRoll.drop !== undefined && radioForecastNow(loopBars, pos).f.lowEndReturn
       const plan = rollTurnaround({
         ...input,
         rate,
         random: Math.random,
         lastPhrase: radioTurnaroundMemoryRef.current,
-        ...dropRoll
+        ...dropRoll,
+        ...(dropLarge && { size: 'large' as const })
       })
       radioTurnaroundMemoryRef.current = rememberTurnaround(plan)
       radioTurnaroundRef.current = plan === null ? null : { plan, armId: newArmId(), turn: null }
@@ -4952,6 +4971,11 @@ export function DiscoverPanel({
     // A row the intensity arc rests, put back by hand: it plays at once and is the arc's no
     // longer (spec 4.2); the drop still lands for the others.
     if (radioRestingRef.current.get(rowId) === 'arc') {
+      // a hook's return queued to come back with the drop (it replaced the arc's): withdrawn, the
+      // row plays what it has (the hook tries again at its next phrase start)
+      if (manualChangesRef.current.get(rowId)?.hook === 'return') {
+        withdrawManualChange(rowId, 'hook-returned-by-hand')
+      }
       // the caller puts the row in the mix and pushes
       releaseIntensityRow(rowId, false)
       console.log(`[radio-intensity] ${rowId} back by hand: it leaves the arc`)
@@ -5521,6 +5545,14 @@ export function DiscoverPanel({
   function radioFoldCmdLandNow(slotId: string, pick: SlotPick): void {
     if (radioOnRef.current) radioFoldLandNow(slotId, pick, null, false, true, previewLoopBars)
   }
+  /** A Cmd change, committed at once while radio runs: the fold follows (radioFoldCmdLandNow),
+   * radio gives the row up (radioYieldsRow), and a row the intensity arc rests is the user's now:
+   * it leaves the arc and plays at once, with the stem just committed (spec 4.2). */
+  function radioCmdLanded(id: string, pick: SlotPick): void {
+    radioFoldCmdLandNow(id, pick)
+    radioYieldsRow(id)
+    if (radioRestingRef.current.get(id) === 'arc') releaseIntensityRow(id)
+  }
   /** Fold mode put away at once: every row full length from the next block, no drift, no lean. */
   function resetRadioFold(): void {
     const had =
@@ -5683,6 +5715,8 @@ export function DiscoverPanel({
       resetRadioThrows(true)
       return
     }
+    // the intensity arc's drop throw, owed until it can be armed (a no-op with none owed)
+    intensityDropThrowTick()
     const step = stepDiscoverThrows(
       radioThrowRef.current,
       {
@@ -8881,10 +8915,11 @@ export function DiscoverPanel({
   }
 
   function toggleLock(id: string): void {
-    // A row padlocked while the intensity arc holds it (rested, or about to be): the arc lets it
-    // go, and a resting one plays again at once (spec 4.2; planning decision 15).
+    // A row padlocked while the intensity arc holds it (rested, or about to be, or renewed): the
+    // arc lets it go, and a resting one comes back with its own stem at the next top (spec 4.2;
+    // planning decision 15).
     const locking = slotsRef.current.find((s) => s.id === id)?.locked === false
-    if (locking && intensityArcRef.current !== null) releaseIntensityRow(id)
+    if (locking && intensityArcRef.current !== null) intensityEndRest(id)
     setSlots((prev) => prev.map((s) => (s.id === id ? { ...s, locked: !s.locked } : s)))
   }
 
@@ -8930,8 +8965,7 @@ export function DiscoverPanel({
         unranked: true
       }
       commitSlotPick(id, pick)
-      radioFoldCmdLandNow(id, pick)
-      radioYieldsRow(id)
+      radioCmdLanded(id, pick)
       return true
     }
     setSlots((prev) =>
@@ -9506,10 +9540,7 @@ export function DiscoverPanel({
     commitSlotPick(id, pick)
     // And radio gives the row up, as it does for a queued change -- after
     // the commit, so the row's fresh change time steers the re-arm away.
-    if (immediate && radioOnRef.current) {
-      radioFoldCmdLandNow(id, pick)
-      radioYieldsRow(id)
-    }
+    if (immediate && radioOnRef.current) radioCmdLanded(id, pick)
   }
 
   // Match meter reclassify (promise-vs-delivery spec, Phase 2; user
@@ -9648,8 +9679,7 @@ export function DiscoverPanel({
           unranked: true
         }
         commitSlotPick(id, pick)
-        radioFoldCmdLandNow(id, pick)
-        radioYieldsRow(id)
+        radioCmdLanded(id, pick)
       } else {
         setSlots((prev) =>
           prev.map((s) =>
@@ -10012,6 +10042,15 @@ export function DiscoverPanel({
     // A hook's return due with the drop on a row the drop brings back: the hook's stem comes back
     // in place of the arc's (spec 5.2: returns pulled to the drop land with it).
     const hookOverArc = waiting?.arc === 'return' && opts.hook === 'return'
+    if (hookOverArc) {
+      // The arc's return may already ride a stage: the engine would swap its stem in, not the
+      // hook's. Withdrawn while it can be re-staged; too late, or already taken, the hook gives
+      // way (it is tried again at its next phrase start).
+      const staged = radioStageRef.current?.manual?.has(slotId) === true
+      const taken = radioStageAppliedManualRef.current?.has(slotId) === true
+      if (taken || (staged && radioBarsToWrapNow() < MANUAL_RESTAGE_MIN_BARS)) return false
+      if (staged) cancelStagedSwap('hook-over-arc')
+    }
     if (waiting !== undefined && !hookOverArc) {
       // A hook's landing gives way to any manual change for its row (spec 2.7): withdrawn, it is
       // tried again at the next line or phrase start. A hook never displaces anything. The
@@ -10409,6 +10448,14 @@ export function DiscoverPanel({
       const was = intensityArcRef.current
       intensityArcRef.current = null
       void Promise.resolve().then(() => intensityLeft(was))
+    } else if (density !== 'intensity' && radioRestingRef.current.size > 0) {
+      // the arc gone: a rest of its that is back in the mix (by hand, or a return that landed
+      // late) is no rest
+      for (const [id, owner] of [...radioRestingRef.current]) {
+        if (owner === 'arc' && previewingSlotIdsRef.current.has(id)) {
+          radioRestingRef.current.delete(id)
+        }
+      }
     }
     if (density === 'intensity') {
       if (wrapped) arcLapRef.current += 1
@@ -10647,6 +10694,8 @@ export function DiscoverPanel({
   /** Radio starting or stopping: no machine, nothing prepared. */
   function resetIntensityArc(): void {
     intensityArcRef.current = null
+    intensityDropThrowRef.current = null
+    dropIntensityNextAdd()
     intensityCarryRef.current = null
     intensityRenewRef.current = new Map()
     intensityJoiningRef.current = new Set()
@@ -10660,6 +10709,8 @@ export function DiscoverPanel({
    * meanwhile: stopRadio put the rows back. */
   function intensityLeft(was: RadioIntensityArc): void {
     const { unrest } = radioIntensityStopped(was)
+    intensityDropThrowRef.current = null
+    dropIntensityNextAdd()
     intensityCarryRef.current = null
     intensityRenewRef.current = new Map()
     intensityJoiningRef.current = new Set()
@@ -10719,7 +10770,9 @@ export function DiscoverPanel({
       count: bed.length,
       max: DENSITY_MAX,
       canAdd:
-        (adding?.held !== undefined && adding.warm === true) ||
+        (adding?.held !== undefined &&
+          adding.warm === true &&
+          slotsRef.current.some((s) => s.id === adding.slotId)) ||
         (adding === null && nextArcKind(bed.map((s) => s.kinds)) !== null),
       canStrip: arcExitRef.current === null && arcRemovalCandidate() !== null
     }
@@ -10801,6 +10854,20 @@ export function DiscoverPanel({
     ) {
       arcAddingRef.current = null
     }
+    // the next add (a one-lap phrase's), picked, takes the held slot once the earlier has landed
+    const nx = intensityNextAddRef.current
+    if (arcAddingRef.current === null && nx !== null && nx.pick !== null) {
+      intensityNextAddRef.current = null
+      if (slotsRef.current.some((s) => s.id === nx.slotId)) {
+        arcAddingRef.current = {
+          slotId: nx.slotId,
+          picking: false,
+          kinds: [...nx.kinds],
+          held: { pick: nx.pick },
+          ...(nx.warm && { warm: true })
+        }
+      } else intensityJoiningRef.current.delete(nx.slotId)
+    }
     const phraseLaps = turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars)
     const { bed, rows } = intensityRowsNow()
     const held = arcAddingRef.current
@@ -10817,7 +10884,10 @@ export function DiscoverPanel({
       min: DENSITY_MIN,
       max: DENSITY_MAX,
       rows,
-      canAdd: held?.held !== undefined && held.warm === true,
+      canAdd:
+        held?.held !== undefined &&
+        held.warm === true &&
+        slotsRef.current.some((s) => s.id === held.slotId),
       canStrip: arcExitRef.current === null && arcRemovalCandidate() !== null,
       carryReady: carry !== null && carry.pick !== null && carry.stem !== null,
       renewReady: (id) => (intensityRenewRef.current.get(id)?.stem ?? null) !== null,
@@ -10827,21 +10897,33 @@ export function DiscoverPanel({
     if (r.overran) console.log('[radio-intensity] breakdown overran')
     if (r.applied !== null) intensityApplied(r.applied)
     if (r.prepare !== null) intensityPrepare(r.prepare, r.state)
-    if (r.decided !== null) intensityDecided(r.decided)
     const P = Math.max(1, Math.floor(phraseLaps))
     const decideWrap = ((Math.floor(lap) % P) + P) % P === P - 1
-    const now = intensityArcRef.current
     // An add held for a phrase start its decide wrap did not take (not warm, or another event
     // came): kept while the build goes on, else it goes (a silent row with nothing to join).
+    // Before the decision is carried out, so a breakdown's carry row is the arc's joining row.
     const a = arcAddingRef.current
     if (
       a !== null &&
       a.held !== undefined &&
-      intensityHeldAddGoes(now, { decideWrap, tookAdd: r.decided?.event === 'add' })
+      intensityHeldAddGoes(r.state, { decideWrap, tookAdd: r.decided?.event === 'add' })
     ) {
       arcAddingRef.current = null
       intensityJoiningRef.current.delete(a.slotId)
       if (slotsRef.current.some((s) => s.id === a.slotId)) dropSlot(a.slotId)
+    }
+    if (r.decided !== null) intensityDecided(r.decided)
+    const now = intensityArcRef.current
+    // A one-lap phrase decides at every wrap, so the add after the one just decided has no lap to
+    // be picked in: picked and warmed now, as if that add had landed (its phrase counted), and
+    // held for the next decide wrap (intensityNextAddRef).
+    if (P === 1 && r.decided?.event === 'add' && arcAddingRef.current !== null) {
+      const { bed: after } = intensityRowsNow()
+      const landed = { ...now, decided: null, done: now.done + 1 }
+      if (radioIntensityAddComing(landed, after.length + 1)) {
+        const kind = nextArcKind([...after.map((s) => s.kinds), arcAddingRef.current.kinds ?? []])
+        if (kind !== null) intensityPickNextAdd(kind)
+      }
     }
     // a lap early: the add the coming decide wrap will want
     if (arcAddingRef.current === null && radioWrapBeforeLastLap(lap, phraseLaps)) {
@@ -10851,6 +10933,176 @@ export function DiscoverPanel({
         if (kind !== null) intensityAddRow(kind, true)
       }
     }
+  }
+
+  /** The next add for a one-lap phrase (intensityAtWrap): a silent row on the panel at once
+   * (the arc's joining row), picked and warmed; it takes the held slot once the earlier add has
+   * landed. One that cannot be picked goes. */
+  function intensityPickNextAdd(kind: DiscoverSlotKind): void {
+    if (intensityNextAddRef.current !== null) return
+    const next: {
+      slotId: string
+      kinds: readonly DiscoverSlotKind[]
+      pick: SlotPick | null
+      warm: boolean
+    } = {
+      slotId: freshSlotId(),
+      kinds: [kind],
+      pick: null,
+      warm: false
+    }
+    const id = next.slotId
+    intensityNextAddRef.current = next
+    setSlots((prev) => [
+      ...prev,
+      {
+        id,
+        kinds: [kind],
+        locked: false,
+        candidate: null,
+        hasRerolled: false,
+        gain: 1,
+        radioAdded: true
+      }
+    ])
+    intensityJoiningRef.current.add(id)
+    void pickForSlot(id, [kind]).then((pick) => {
+      if (intensityNextAddRef.current !== next) return
+      if (pick === null || pick.candidate === null || !radioOnRef.current) {
+        dropIntensityNextAdd()
+        return
+      }
+      next.pick = pick
+      void resolveAndWarmPick(pick).then((stem) => {
+        if (stem === null) {
+          if (intensityNextAddRef.current === next) dropIntensityNextAdd()
+          return
+        }
+        next.warm = true
+        // taken into the held slot meanwhile: warm there too (the decide wrap's canAdd)
+        const a = arcAddingRef.current
+        if (a !== null && a.slotId === id && a.held !== undefined) {
+          arcAddingRef.current = { ...a, warm: true }
+        }
+      })
+    })
+    console.log(`[radio-intensity] the next add (${kind}) picked a phrase early on ${id}`)
+  }
+
+  /** The next add let go: radio off with its pick, it lands as a held add does
+   * (resetDensityArc); otherwise its silent row goes. */
+  function dropIntensityNextAdd(): void {
+    const next = intensityNextAddRef.current
+    if (next === null) return
+    intensityNextAddRef.current = null
+    intensityJoiningRef.current.delete(next.slotId)
+    if (!slotsRef.current.some((s) => s.id === next.slotId)) return
+    if (!radioOnRef.current && next.pick !== null) commitSlotPick(next.slotId, next.pick)
+    else dropSlot(next.slotId)
+  }
+
+  /** The drop's own throw (spec 5.5), owed from the decision: the regular throws cannot aim into
+   * it (the returns queued for the drop keep them from arming, and they are not loosened for it),
+   * so it is armed live as the breakdown's echo is, two microtasks on -- after the wrap's landings
+   * and the phrase end's roll, whose gap it reads -- and, while a roll or a turn for the drop's
+   * top is still to come, on the ticks after (intensityDropThrowTick), never with a stage out. */
+  function intensityDropThrowOwed(): void {
+    intensityDropThrowRef.current = intensityDecidedSeqRef.current
+    void Promise.resolve().then(() => Promise.resolve().then(() => intensityDropThrowTick()))
+  }
+
+  /** The drop's owed throw, armed when it can be: on one heard row that may take a throw (never
+   * drums or bass, never one silenced before it closes), ending on the drop's top or, with a riser
+   * gap armed, where the gap starts (discoverThrowAim), its shape drawn here. Waits while the
+   * roll or a turn for that top is still to come, or a stage is out (arming pushes, and a push
+   * withdraws a stage); given up once it no longer fits the lap, or with nothing to throw. */
+  function intensityDropThrowTick(): void {
+    const seq = intensityDropThrowRef.current
+    if (seq === null) return
+    const arc = intensityOn() ? intensityArcRef.current : null
+    const giveUp = (why: string | null): void => {
+      intensityDropThrowRef.current = null
+      if (why !== null) console.log(`[radio-intensity] the drop's throw: ${why}`)
+    }
+    if (
+      !radioOnRef.current ||
+      arc === null ||
+      arc.decided?.event !== 'drop' ||
+      intensityDecidedSeqRef.current !== seq
+    ) {
+      giveUp(null)
+      return
+    }
+    const throws = normalizeSoundSettings(sound ?? appSoundDefaultsNow()).throws
+    if (!throws.on || !(throws.level > 0)) {
+      giveUp(null)
+      return
+    }
+    if (
+      radioTurnaroundRollRef.current !== null ||
+      radioTurnPendingRef.current !== null ||
+      radioStageRef.current !== null
+    ) {
+      return
+    }
+    const { loopBars } = turnaroundLoopNow()
+    const pos = radioClockRef.current?.lastPos ?? 0
+    if (!(loopBars > 0)) return
+    const previewing = previewingSlotIdsRef.current
+    const aim = discoverThrowAim(
+      radioTurnaroundRef.current?.plan,
+      radioGestureRef.current,
+      loopBars - pos,
+      previewing
+    )
+    const slotId = pickDiscoverAimedThrowRow(
+      slotsRef.current.map((s) => ({
+        slot: s.id,
+        kinds: s.kinds,
+        audible:
+          previewing.has(s.id) &&
+          !radioRestingRef.current.has(s.id) &&
+          manualChangesRef.current.get(s.id)?.rest !== true
+      })),
+      aim?.silenced ?? [],
+      Math.random
+    )
+    if (slotId === null) {
+      giveUp('dry (no row to throw)')
+      return
+    }
+    const shape = { beats: drawThrowBeats(Math.random), ...drawThrowEcho(Math.random) }
+    const armed = armDiscoverAimedThrow(radioThrowRef.current, {
+      slotId,
+      shape,
+      pos,
+      loopBars,
+      endInBars: aim?.changeInBars ?? loopBars - pos,
+      bpm: bpmRef.current
+    })
+    if (armed === null) {
+      giveUp('dry (no room in the lap, or a throw already armed)')
+      return
+    }
+    radioThrowRef.current = armed
+    scheduleSyncPreviewToEngine(previewing)
+    giveUp(
+      `on ${slotId}, ${shape.beats} beats, ending on the ${(aim?.changeInBars ?? loopBars - pos) < loopBars - pos - 1e-6 ? 'gap' : 'drop'}`
+    )
+  }
+
+  /** The arc ends a row's rest (a course change, the padlock): it lets the row go and brings it
+   * back at the next top with its own stem, as the drop would; a landing of the arc's still
+   * queued is withdrawn (a rest: the row plays on; a renewal: the row keeps its stem). */
+  function intensityEndRest(rowId: string): void {
+    const arc = intensityArcRef.current
+    if (arc !== null) intensityArcRef.current = releaseRadioIntensityRest(arc, rowId)
+    intensityRenewRef.current.delete(rowId)
+    // a rest not landed: the row plays on; a return (perhaps a renewal): its own stem instead
+    if (manualChangesRef.current.get(rowId)?.arc !== undefined) {
+      withdrawManualChange(rowId, 'arc-rest-ended')
+    }
+    if (radioRestingRef.current.get(rowId) === 'arc') intensityBringBack(rowId, null)
   }
 
   /** The event decided at the last wrap landed in the machine (its rows land through the manual
@@ -11080,6 +11332,8 @@ export function DiscoverPanel({
         intensityRenewRef.current = new Map()
         // a button's drop rolls its own turn: a riser after a breakdown, the quick drop's low drop
         if (d.forced === true) intensityDropTurn(d.quick === true)
+        // and its own aimed throw, ending on the drop (or its gap)
+        intensityDropThrowOwed()
         console.log(
           `[radio-intensity] ${d.quick === true ? 'quick ' : ''}drop: back ${back.length > 0 ? back.join(', ') : 'nothing'}, renewed ${renewed.length > 0 ? renewed.join(', ') : 'nothing'}`
         )
@@ -11672,6 +11926,14 @@ export function DiscoverPanel({
     if (!radioOnRef.current) return
     const ready = picks.filter((p): p is { slotId: string; pick: SlotPick } => p !== null)
     radioCourseChangeRef.current = ready.length > 0 ? ready : null
+    // A new bed ends the intensity arc's rests: its rows come back with it, at the next top.
+    const arc = intensityOn() ? intensityArcRef.current : null
+    if (ready.length > 0 && arc !== null) {
+      const resting = [...radioRestingRef.current].flatMap(([id, o]) => (o === 'arc' ? [id] : []))
+      const ended = [...new Set([...intensityRestsDecided(arc), ...arc.rests, ...resting])]
+      for (const id of ended) intensityEndRest(id)
+      if (ended.length > 0) console.log(`[radio-intensity] a new bed: ${ended.join(', ')} back`)
+    }
     if (ready.length === 0) void armRadioPick()
   }
 

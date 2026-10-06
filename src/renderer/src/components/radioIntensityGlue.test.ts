@@ -159,14 +159,19 @@ describe('intensityHeldAddGoes', () => {
 })
 
 describe('intensityThrowDropDue', () => {
-  it('is the breakdown last phrase, or a decided drop', () => {
+  it('is the breakdown last phrase before the drop is decided', () => {
     expect(intensityThrowDropDue(arcWith({ phase: 'breakdown', phrases: 2, done: 1 }))).toBe(true)
     expect(intensityThrowDropDue(arcWith({ phase: 'breakdown', phrases: 2, done: 0 }))).toBe(false)
-    expect(intensityThrowDropDue(arcWith({ phase: 'build', decided: drop([], [], true) }))).toBe(
-      true
-    )
     expect(intensityThrowDropDue(arcWith({ phase: 'drop' }))).toBe(false)
     expect(intensityThrowDropDue(arcWith({ begun: false, phase: 'breakdown', done: 5 }))).toBe(
+      false
+    )
+  })
+  it('stops once the drop is decided: its throw is armed at the decide wrap', () => {
+    expect(
+      intensityThrowDropDue(arcWith({ phase: 'breakdown', phrases: 2, done: 1, decided: drop([]) }))
+    ).toBe(false)
+    expect(intensityThrowDropDue(arcWith({ phase: 'build', decided: drop([], [], true) }))).toBe(
       false
     )
   })

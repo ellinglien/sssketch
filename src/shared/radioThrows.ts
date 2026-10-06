@@ -28,6 +28,8 @@ export const THROW_BEATS = [1, 2] as const
 export const THROW_FEEDBACK = [0.45, 0.6] as const
 /** Rows a throw never picks: the floor of the mix stays dry. */
 const NEVER: readonly DiscoverSlotKind[] = ['drums', 'bass']
+/** NEVER, for a runtime choosing a throw's row itself (discoverAimedThrowRows). */
+export const THROW_NEVER_KINDS: readonly DiscoverSlotKind[] = NEVER
 
 export interface ThrowPlan {
   slot: string
