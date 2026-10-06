@@ -822,3 +822,112 @@ describe('the fold route', () => {
     expect(commands).toEqual([])
   })
 })
+
+describe('the arc route', () => {
+  async function pairedToken(port: number, pairingCode: string): Promise<string> {
+    const res = await send(
+      port,
+      '/api/pair',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      JSON.stringify({ code: pairingCode })
+    )
+    return JSON.parse(res.body).token as string
+  }
+  async function arc(port: number, token: string, body: unknown): Promise<RawResponse> {
+    return send(
+      port,
+      '/api/arc',
+      {
+        host: `192.168.1.40:${port}`,
+        'content-type': 'application/json',
+        authorization: `Bearer ${token}`
+      },
+      'POST',
+      JSON.stringify(body)
+    )
+  }
+  const radioOn =
+    (arcView: { canBuild: boolean; canDrop: boolean } | null): RemoteServerOptions['getState'] =>
+    () => ({
+      discoverOpen: true,
+      playing: true,
+      kept: 0,
+      rolled: 0,
+      lastKeptName: null,
+      loopBars: 8,
+      radio: null,
+      turn: { waiting: false, move: null, canTurn: true, moves: ['wash'] },
+      arc: arcView === null ? null : { phase: 'build', waiting: null, ...arcView },
+      slots: [],
+      loopId: null
+    })
+
+  it('answers building or dropping and forwards the press', async () => {
+    const { port, pairingCode } = await start({
+      getState: radioOn({ canBuild: true, canDrop: true })
+    })
+    const token = await pairedToken(port, pairingCode)
+    const build = await arc(port, token, { action: 'build' })
+    expect(build.status).toBe(200)
+    expect(JSON.parse(build.body)).toEqual({ answer: 'building' })
+    const drop = await arc(port, token, { action: 'drop' })
+    expect(drop.status).toBe(200)
+    expect(JSON.parse(drop.body)).toEqual({ answer: 'dropping' })
+    expect(commands).toEqual([
+      { kind: 'arc', action: 'build' },
+      { kind: 'arc', action: 'drop' }
+    ])
+  })
+
+  it('answers not now when the Mac says the button cannot act, and forwards nothing', async () => {
+    const { port, pairingCode } = await start({
+      getState: radioOn({ canBuild: true, canDrop: false })
+    })
+    const res = await arc(port, await pairedToken(port, pairingCode), { action: 'drop' })
+    expect(res.status).toBe(200)
+    expect(JSON.parse(res.body)).toEqual({ answer: 'not now' })
+    expect(commands).toEqual([])
+  })
+
+  it('answers 409 density not intensity while radio runs another density', async () => {
+    const { port, pairingCode } = await start({ getState: radioOn(null) })
+    const res = await arc(port, await pairedToken(port, pairingCode), { action: 'build' })
+    expect(res.status).toBe(409)
+    expect(JSON.parse(res.body)).toEqual({ answer: 'density not intensity' })
+    expect(commands).toEqual([])
+  })
+
+  it('answers 409 radio off with radio off, and forwards nothing', async () => {
+    const { port, pairingCode } = await start()
+    const res = await arc(port, await pairedToken(port, pairingCode), { action: 'drop' })
+    expect(res.status).toBe(409)
+    expect(JSON.parse(res.body)).toEqual({ answer: 'radio off' })
+    expect(commands).toEqual([])
+  })
+
+  it('refuses an action that is not build or drop, and forwards nothing', async () => {
+    const { port, pairingCode } = await start({
+      getState: radioOn({ canBuild: true, canDrop: true })
+    })
+    const token = await pairedToken(port, pairingCode)
+    for (const action of ['turn', '../x', 7, null]) {
+      expect((await arc(port, token, { action })).status).toBe(400)
+    }
+    expect((await arc(port, token, {})).status).toBe(400)
+    expect(commands).toEqual([])
+  })
+
+  it('tells an unpaired caller nothing about the route existing', async () => {
+    const { port } = await start({ getState: radioOn({ canBuild: true, canDrop: true }) })
+    const res = await send(
+      port,
+      '/api/arc',
+      { host: `192.168.1.40:${port}`, 'content-type': 'application/json' },
+      'POST',
+      '{}'
+    )
+    expect(res.status).toBe(401)
+    expect(commands).toEqual([])
+  })
+})

@@ -3,16 +3,24 @@
 // The Discover panel's pure reads of the intensity arc (@shared/radioIntensityArc; spec
 // docs/superpowers/specs/2026-10-05-radio-intensity-arc-design.md), kept beside the panel so they
 // are tested: which rows the arc holds, what the readout says next, which rows flash, whether an
-// add held for a phrase start goes, whether the throws aim at the drop. The panel
+// add held for a phrase start goes, whether the throws aim at the drop, what the strip's and the
+// phone's build and drop buttons show. The panel
 // (DiscoverPanel.tsx) does the rest from its refs.
 
 import {
   RADIO_BREAKDOWN_WORD,
   RADIO_BUILD_WORD,
+  RADIO_BUILDING_WORD,
   RADIO_DROP_WORD,
-  type RadioIntensityArc
+  RADIO_DROPPING_WORD,
+  pressRadioIntensity,
+  radioIntensityButtonLabel,
+  type RadioIntensityArc,
+  type RadioIntensityPhase,
+  type RadioIntensityRoom
 } from '@shared/radioIntensityArc'
 import type { RadioReadoutInput } from '@shared/radioReadout'
+import type { RemoteArcView } from '@shared/remoteState'
 
 type Next = RadioReadoutInput['nextChange']
 
@@ -191,4 +199,62 @@ export function intensityRestSweep(
     else if (!o.holds.has(id) && !o.queued(id)) back.push(id)
   }
   return { gone, back }
+}
+
+/** What the strip's `build` and `drop` buttons show (radioArcShown; spec 6): the phase, each
+ * button's label (`building` / `dropping` while its press waits for the top), and whether a press
+ * would act now -- what intensityPress does with it, asked of the machine itself
+ * (pressRadioIntensity with the rows now, `room`; the lap's late stretch only moves a press to the
+ * top after, so it is not asked). Neither acts before the machine has begun; `drop` outside a
+ * breakdown, with no drop decided, is the quick drop, which needs the planner's `low drop` to
+ * sound (`quickDropCanSound`, the check intensityPress makes). */
+export interface RadioArcShown {
+  phase: RadioIntensityPhase
+  build: string
+  drop: string
+  canBuild: boolean
+  canDrop: boolean
+}
+
+export function intensityArcShown(
+  arc: RadioIntensityArc,
+  o: { lap: number; phraseLaps: number; room: RadioIntensityRoom; quickDropCanSound: boolean }
+): RadioArcShown {
+  const where = { lap: o.lap, phraseLaps: o.phraseLaps, late: false, can: o.room }
+  const quick = arc.phase !== 'breakdown' && arc.decided?.event !== 'drop'
+  return {
+    phase: arc.phase,
+    build: radioIntensityButtonLabel('build', arc),
+    drop: radioIntensityButtonLabel('drop', arc),
+    canBuild: arc.begun && pressRadioIntensity(arc, 'build', where) !== null,
+    canDrop:
+      arc.begun &&
+      (!quick || o.quickDropCanSound) &&
+      pressRadioIntensity(arc, 'drop', where) !== null
+  }
+}
+
+/** Field by field: the strip's state is kept when unchanged, so a tick re-renders nothing. */
+export function sameArcShown(a: RadioArcShown | null, b: RadioArcShown | null): boolean {
+  if (a === null || b === null) return a === b
+  return (
+    a.phase === b.phase &&
+    a.build === b.build &&
+    a.drop === b.drop &&
+    a.canBuild === b.canBuild &&
+    a.canDrop === b.canDrop
+  )
+}
+
+/** The phone's view of the buttons (RemoteArcView): `waiting` read off the labels, a drop's first
+ * (it lands at the next top; a build pressed after it waits for the top after). */
+export function intensityArcRemote(shown: RadioArcShown | null): RemoteArcView | null {
+  if (shown === null) return null
+  const waiting =
+    shown.drop === RADIO_DROPPING_WORD
+      ? 'drop'
+      : shown.build === RADIO_BUILDING_WORD
+        ? 'build'
+        : null
+  return { phase: shown.phase, waiting, canBuild: shown.canBuild, canDrop: shown.canDrop }
 }

@@ -3,6 +3,12 @@ import { REMOTE_PAIR_QUERY_PARAM } from '@shared/remoteAuth'
 import { DISCOVER_SLOT_KIND_LABEL, DISCOVER_SLOT_KIND_OPTIONS } from '@shared/discoverSlotKind'
 import { buildSlotKindToggleTable } from '@shared/discoverSlotKindMask'
 import { TURNAROUND_MOVE_LABEL, TURNAROUND_MOVES } from '@shared/radioTurnaround'
+import type { RemoteArcAnswer } from '@shared/remoteState'
+import {
+  RADIO_ARC_REST_SHORT,
+  RADIO_BUILDING_WORD,
+  RADIO_DROPPING_WORD
+} from '@shared/radioIntensityArc'
 import {
   REMOTE_NOTHING_HERE_NOTICE,
   REMOTE_PAGE_HTML,
@@ -205,6 +211,10 @@ describe('remotePage copy', () => {
       '2 bars',
       'turn',
       'turning',
+      'build',
+      'building',
+      'drop',
+      'dropping',
       'hook',
       'release',
       'back',
@@ -577,6 +587,7 @@ describe('remotePage swap grid', () => {
     const posts = SCRIPT.match(/api\('\/api\/[a-z-]+'/g) ?? []
     expect(posts.sort()).toEqual([
       "api('/api/add-slot'",
+      "api('/api/arc'",
       "api('/api/fold'",
       "api('/api/keep'",
       "api('/api/remove-slot'",
@@ -1396,5 +1407,93 @@ describe('the fold switch', () => {
     )
     expect(REMOTE_PAGE_HTML).toContain("api('/api/fold', { on: on })")
     expect(REMOTE_PAGE_HTML).toContain('if (foldState === null || foldState === on) return')
+  })
+})
+
+describe('remotePage build and drop', () => {
+  /** paintArc as the page runs it, against two fake buttons and a fake box. */
+  function paintWith(arc: unknown): {
+    box: { hidden: boolean }
+    build: { textContent: string; className: string }
+    drop: { textContent: string; className: string }
+  } {
+    const src = /function paintArc\(arc\) \{[\s\S]*?\n {2}\}/.exec(REMOTE_PAGE_HTML)
+    expect(src).not.toBeNull()
+    const box = { hidden: true }
+    const build = { textContent: 'build', className: 'big' }
+    const drop = { textContent: 'drop', className: 'big' }
+    const paint = new Function(
+      'arcBoxEl',
+      'arcBuildEl',
+      'arcDropEl',
+      `${src![0]}; return paintArc`
+    )(box, build, drop) as (a: unknown) => void
+    paint(arc)
+    return { box, build, drop }
+  }
+
+  it('sits under the turn, hidden until the mac sends an arc', () => {
+    expect(REMOTE_PAGE_HTML).toContain('<div class="swapgrid" id="arc-box" hidden>')
+    expect(REMOTE_PAGE_HTML).toContain('<button class="big" id="arc-build">build</button>')
+    expect(REMOTE_PAGE_HTML).toContain('<button class="big" id="arc-drop">drop</button>')
+    expect(REMOTE_PAGE_HTML.indexOf('id="turn-box"')).toBeLessThan(
+      REMOTE_PAGE_HTML.indexOf('id="arc-box"')
+    )
+    expect(REMOTE_PAGE_HTML).toContain('paintArc(state.arc)')
+  })
+
+  it('shows the buttons only while there is an arc, painted from waiting and can', () => {
+    expect(paintWith(null).box.hidden).toBe(true)
+    expect(paintWith(undefined).box.hidden).toBe(true)
+    const idle = paintWith({ phase: 'build', waiting: null, canBuild: true, canDrop: false })
+    expect(idle.box.hidden).toBe(false)
+    expect(idle.build).toEqual({ textContent: 'build', className: 'big' })
+    expect(idle.drop).toEqual({ textContent: 'drop', className: 'big dim' })
+    const waiting = paintWith({
+      phase: 'breakdown',
+      waiting: 'drop',
+      canBuild: true,
+      canDrop: true
+    })
+    expect(waiting.drop).toEqual({ textContent: RADIO_DROPPING_WORD, className: 'big on' })
+    const building = paintWith({ phase: 'build', waiting: 'build', canBuild: true, canDrop: true })
+    expect(building.build).toEqual({ textContent: RADIO_BUILDING_WORD, className: 'big on' })
+  })
+
+  it("posts the action to the arc route and flashes the mac's answer", () => {
+    expect(SCRIPT).toContain("api('/api/arc', { action: action })")
+    expect(SCRIPT).toContain(
+      "arcBuildEl.addEventListener('click', function () { sendArc('build') })"
+    )
+    expect(SCRIPT).toContain("arcDropEl.addEventListener('click', function () { sendArc('drop') })")
+  })
+
+  it('fits its words at 320 px', () => {
+    // Silkscreen is a wide pixel face; one em per character is a generous upper bound on its
+    // advance. 320 px less the body's 16 px gutters each side.
+    const content = 320 - 2 * 16
+    const px = (rule: RegExp): number => Number((rule.exec(REMOTE_PAGE_HTML) ?? ['', '0'])[1])
+    const bigFont = px(/button\.big \{[^}]*?font-size: (\d+)px/)
+    const bigPad = px(/button\.big \{[^}]*?padding: 0 (\d+)px/)
+    const gap = px(/\.actions \{[^}]*?gap: (\d+)px/)
+    const msgFont = px(/\.msg \{ font-size: (\d+)px/)
+    expect(bigFont).toBeGreaterThan(0)
+    expect(msgFont).toBeGreaterThan(0)
+    // two buttons side by side, each its share of the row less its padding
+    const perButton = (content - gap) / 2 - 2 * bigPad
+    for (const word of ['build', 'drop', RADIO_BUILDING_WORD, RADIO_DROPPING_WORD]) {
+      expect(word.length * bigFont).toBeLessThanOrEqual(perButton)
+    }
+    // the press's answer, flashed on the status line
+    const answers: RemoteArcAnswer[] = [
+      'building',
+      'dropping',
+      'not now',
+      'radio off',
+      'density not intensity'
+    ]
+    for (const answer of answers) expect(answer.length * msgFont).toBeLessThanOrEqual(content)
+    // a resting row's words, after its stem name
+    expect(RADIO_ARC_REST_SHORT.length * 13).toBeLessThanOrEqual(content / 4)
   })
 })

@@ -5,8 +5,11 @@ import {
   remoteArcAnswer,
   remoteStateFromSlots,
   type RemoteArcView,
+  type RemoteSlotRole,
   type RemoteStateMeta
 } from './remoteState'
+import { RADIO_ARC_REST_SHORT } from './radioIntensityArc'
+import type { CoachSlotSnapshot } from './coachClimax'
 
 const META: RemoteStateMeta = {
   discoverOpen: true,
@@ -45,5 +48,30 @@ describe('the arc on the phone', () => {
     expect(remoteArcAnswer(ARC, 'build')).toBe('building')
     expect(remoteArcAnswer(ARC, 'drop')).toBe('dropping')
     expect(remoteArcAnswer({ ...ARC, canDrop: false }, 'drop')).toBe('not now')
+  })
+
+  it('a row the arc rests carries its words alone (no hook, no dig): `rests`', () => {
+    const slot: CoachSlotSnapshot = {
+      id: 'a',
+      kinds: ['drums'],
+      stem: null,
+      gain: 1,
+      audible: false,
+      rolling: false
+    }
+    const roles = new Map<string, RemoteSlotRole>([
+      ['a', { hook: null, dig: false, hookBarsAway: null, words: RADIO_ARC_REST_SHORT }]
+    ])
+    expect(remoteStateFromSlots([slot], { ...META, roles }).slots[0].role).toEqual({
+      hook: null,
+      dig: false,
+      hookBarsAway: null,
+      words: 'rests'
+    })
+    // an empty word is still nothing
+    const none = new Map<string, RemoteSlotRole>([
+      ['a', { hook: null, dig: false, hookBarsAway: null, words: '' }]
+    ])
+    expect('role' in remoteStateFromSlots([slot], { ...META, roles: none }).slots[0]).toBe(false)
   })
 })

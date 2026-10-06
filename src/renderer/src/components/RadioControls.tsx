@@ -431,11 +431,14 @@ export function Segmented({
 
 /** A momentary move (`fire now`): dashed, fires once and is never selected. `held` is a move
  * that is armed and waiting (inverted, aria-pressed); `notNow` is one that cannot fire right
- * now (faint). `:active` inverts too, via `.radio-fire` in DiscoverPanel's style block. */
+ * now (faint, still a target: its press says why); `disabled` is one that does not apply in this
+ * state (greyed, as a dead ActionButton, and not a target: build and drop with density not
+ * intensity). `:active` inverts too, via `.radio-fire` in DiscoverPanel's style block. */
 export function FireButton({
   label,
   held = false,
   notNow = false,
+  disabled = false,
   onClick,
   tooltip,
   ariaLabel,
@@ -444,21 +447,21 @@ export function FireButton({
   label: string
   held?: boolean
   notNow?: boolean
+  disabled?: boolean
   onClick: () => void
   tooltip?: string
   ariaLabel?: string
   primary?: boolean
 }): React.JSX.Element {
-  const border = notNow
-    ? 'var(--ra-border-strong)'
-    : primary
-      ? 'var(--ra-text)'
-      : 'var(--ra-text-2)'
+  const shownHeld = held && !disabled
+  const border =
+    notNow || disabled ? 'var(--ra-border-strong)' : primary ? 'var(--ra-text)' : 'var(--ra-text-2)'
   return (
     <button
       type="button"
-      className="radio-fire"
-      aria-pressed={held || undefined}
+      className={disabled ? undefined : 'radio-fire'}
+      disabled={disabled}
+      aria-pressed={shownHeld || undefined}
       aria-label={ariaLabel}
       data-tooltip={tooltip}
       onClick={onClick}
@@ -468,10 +471,16 @@ export function FireButton({
         fontFamily: 'inherit',
         fontSize: 'var(--ra-fs-10)',
         whiteSpace: 'nowrap',
-        background: held ? 'var(--ra-text)' : 'transparent',
-        color: held ? 'var(--ra-bg-page)' : notNow ? 'var(--ra-text-3)' : 'var(--ra-text)',
-        border: `1px dashed ${held ? 'var(--ra-text)' : border}`,
-        cursor: 'pointer'
+        background: shownHeld ? 'var(--ra-text)' : 'transparent',
+        color: shownHeld
+          ? 'var(--ra-bg-page)'
+          : disabled
+            ? 'var(--ra-text-4)'
+            : notNow
+              ? 'var(--ra-text-3)'
+              : 'var(--ra-text)',
+        border: `1px dashed ${shownHeld ? 'var(--ra-text)' : border}`,
+        cursor: disabled ? 'default' : 'pointer'
       }}
     >
       {label}

@@ -5,6 +5,8 @@ import {
   type RadioIntensityDecided
 } from '@shared/radioIntensityArc'
 import {
+  intensityArcRemote,
+  intensityArcShown,
   intensityDropThrowStep,
   intensityFlashRows,
   intensityHeldAddGoes,
@@ -14,7 +16,8 @@ import {
   intensityRestSweep,
   intensityRestsDecided,
   intensityRowsHeld,
-  intensityThrowDropDue
+  intensityThrowDropDue,
+  sameArcShown
 } from './radioIntensityGlue'
 
 const arcWith = (o: Partial<RadioIntensityArc>): RadioIntensityArc => ({
@@ -281,5 +284,88 @@ describe('intensityRestSweep', () => {
         inMix: (id) => id === 'a'
       })
     ).toEqual({ gone: ['a', 'gone'], back: ['c'] })
+  })
+})
+
+describe('intensityArcShown', () => {
+  const room = { count: 3, max: 6, canAdd: true, canStrip: true }
+  const at = { lap: 0, phraseLaps: 2, room, quickDropCanSound: true }
+
+  it('before the machine has begun, neither button can act', () => {
+    const shown = intensityArcShown(newRadioIntensityArc(), at)
+    expect(shown).toEqual({
+      phase: 'build',
+      build: 'build',
+      drop: 'drop',
+      canBuild: false,
+      canDrop: false
+    })
+  })
+
+  it('in a build: build adds (with room), drop is the quick drop when its low drop can sound', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 5 })
+    expect(intensityArcShown(arc, at)).toMatchObject({ canBuild: true, canDrop: true })
+    expect(intensityArcShown(arc, { ...at, quickDropCanSound: false }).canDrop).toBe(false)
+  })
+
+  it('build in a build with no room and nothing left to halve cannot act', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 3, phrases: 1, done: 0 })
+    expect(intensityArcShown(arc, { ...at, room: { ...room, canAdd: false } }).canBuild).toBe(false)
+  })
+
+  it('in a breakdown: drop brings the rests back whatever the low drop says', () => {
+    const arc = arcWith({ phase: 'breakdown', rests: ['d'], phrases: 2 })
+    expect(intensityArcShown(arc, { ...at, quickDropCanSound: false })).toMatchObject({
+      phase: 'breakdown',
+      canBuild: true,
+      canDrop: true
+    })
+  })
+
+  it('a press waiting reads building or dropping, and a decided drop still answers drop', () => {
+    expect(intensityArcShown(arcWith({ forced: 'build' }), at).build).toBe('building')
+    const dropping = arcWith({ phase: 'breakdown', decided: drop(['d']) })
+    const shown = intensityArcShown(dropping, { ...at, quickDropCanSound: false })
+    expect(shown.canDrop).toBe(true)
+    expect(intensityArcShown(arcWith({ forced: 'drop' }), at).drop).toBe('dropping')
+  })
+})
+
+describe('sameArcShown', () => {
+  const a = {
+    phase: 'build' as const,
+    build: 'build',
+    drop: 'drop',
+    canBuild: true,
+    canDrop: false
+  }
+  it('compares every field, and null', () => {
+    expect(sameArcShown(a, { ...a })).toBe(true)
+    expect(sameArcShown(a, { ...a, canDrop: true })).toBe(false)
+    expect(sameArcShown(a, { ...a, build: 'building' })).toBe(false)
+    expect(sameArcShown(null, null)).toBe(true)
+    expect(sameArcShown(a, null)).toBe(false)
+  })
+})
+
+describe('intensityArcRemote', () => {
+  const a = {
+    phase: 'build' as const,
+    build: 'build',
+    drop: 'drop',
+    canBuild: true,
+    canDrop: false
+  }
+  it("the phone's view: waiting from the labels, a drop's first", () => {
+    expect(intensityArcRemote(null)).toBeNull()
+    expect(intensityArcRemote(a)).toEqual({
+      phase: 'build',
+      waiting: null,
+      canBuild: true,
+      canDrop: false
+    })
+    expect(intensityArcRemote({ ...a, build: 'building' })?.waiting).toBe('build')
+    expect(intensityArcRemote({ ...a, drop: 'dropping' })?.waiting).toBe('drop')
+    expect(intensityArcRemote({ ...a, build: 'building', drop: 'dropping' })?.waiting).toBe('drop')
   })
 })

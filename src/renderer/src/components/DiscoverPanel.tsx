@@ -318,6 +318,8 @@ import {
 import { radioNextLanding } from '@shared/radioNextLanding'
 import { applyIntensityBand, radioIntensityRankOf } from '@shared/radioIntensity'
 import {
+  intensityArcRemote,
+  intensityArcShown,
   intensityDropThrowStep,
   intensityFlashRows,
   intensityHeldAddGoes,
@@ -327,9 +329,12 @@ import {
   intensityRestSweep,
   intensityRestsDecided,
   intensityRowsHeld,
-  intensityThrowDropDue
+  intensityThrowDropDue,
+  sameArcShown,
+  type RadioArcShown
 } from './radioIntensityGlue'
 import {
+  RADIO_ARC_REST_SHORT,
   RADIO_ARC_REST_WORD,
   newRadioIntensityArc,
   pressRadioIntensity,
@@ -3330,6 +3335,12 @@ export function DiscoverPanel({
     canTurn: boolean
     moves: TurnaroundMove[]
   } | null>(null)
+  // What the strip's (and the phone's) build and drop show (radioIntensityGlue intensityArcShown):
+  // the phase, the labels (`building` / `dropping` while a press waits) and whether each can act
+  // now. Null unless radio runs with density intensity. Refreshed where the arc changes (a
+  // wrap's step, a press) and on every clock tick (the rows decide what a press can do), kept
+  // when unchanged (refreshRadioArcShown), so a tick re-renders nothing.
+  const [radioArcShown, setRadioArcShown] = useState<RadioArcShown | null>(null)
   // The dub throws (native radio sound plan, Task 11): the web radio's own rule
   // (@shared/radioThrows stepThrows) on a clock of bars played, and the one throw armed
   // as a `dubSend` curve in the preview project, if any. See radioThrowTick. A REF, like
@@ -4711,6 +4722,24 @@ export function DiscoverPanel({
         ? prev
         : next
     )
+  }
+  /** What build and drop show (radioArcShown), from the machine and the rows now: kept when
+   * unchanged, so a tick re-renders nothing. `canDrop` asks the quick drop's `low drop` as
+   * intensityPress does. Null unless radio runs the intensity arc. */
+  function refreshRadioArcShown(): void {
+    const arc = radioOnRef.current && intensityOn() ? intensityArcRef.current : null
+    let next: RadioArcShown | null = null
+    if (arc !== null) {
+      const { lengths, loopBars } = turnaroundLoopNow()
+      next = intensityArcShown(arc, {
+        lap: radioClockRef.current?.turnaroundLap ?? 0,
+        phraseLaps: turnaroundPhraseLaps(radioCadence.turnaroundPhraseBars, loopBars),
+        room: intensityRoomNow(),
+        quickDropCanSound:
+          loopBars > 0 && turnaroundMoveCanSound(turnaroundInputNow(lengths, loopBars), 'low drop')
+      })
+    }
+    setRadioArcShown((prev) => (sameArcShown(prev, next) ? prev : next))
   }
   /** A TURN pressed: the desktop's `turn` and chips, `t`, and the phone (remoteCommandRef). A
    * press that cannot sound now -- the chip's guards, or nothing the planner could draw -- says
@@ -6933,8 +6962,9 @@ export function DiscoverPanel({
     }
     // Spares asked for at a phrase start, once no arm of radio's is in flight (sized builds).
     radioSparesTick(step.wrapped)
-    // What the turn button and its chips can do now.
+    // What the turn button and its chips can do now; so build and drop.
     refreshRadioTurnCan()
+    refreshRadioArcShown()
     // So do the dub throws (Task 11).
     radioThrowTick(pos, loopBars)
     // A change that was WAITING for its boundary LANDS HERE and only
@@ -8177,6 +8207,13 @@ export function DiscoverPanel({
         : null,
     [radioOn, radioTurnShown, radioTurnCan]
   )
+  // The intensity arc's build and drop as the phone sees them (@shared/remoteState
+  // RemoteArcView): what the strip shows, and what POST /api/arc answers from. Null unless radio
+  // runs with density intensity.
+  const radioArcRemote = useMemo(
+    () => (radioOn ? intensityArcRemote(radioArcShown) : null),
+    [radioOn, radioArcShown]
+  )
 
   // The renderer PUSHES; main only ever answers GET /api/state with the
   // last thing pushed. What he sees on the Mac and what he sees on the
@@ -8236,15 +8273,29 @@ export function DiscoverPanel({
           // fold mode's switch, while radio runs (the phone's one radio setting)
           fold: radioOn ? radioSettings.foldMode : null,
           turn: radioTurnRemote,
-          // radio's roles while it runs: the hook's state, bars away, the phone's words
+          arc: radioArcRemote,
+          // radio's roles while it runs: the hook's state, bars away, the phone's words; a row
+          // the intensity arc rests says `rests` (the short form of `rests till the drop`)
           ...(radioOn && {
             roles: new Map(
               [
                 ...new Set([
                   ...radioHooks.hooks.map((h) => h.rowId),
-                  ...(radioDig !== null ? [radioDig] : [])
+                  ...(radioDig !== null ? [radioDig] : []),
+                  ...[...radioRestingRef.current].flatMap(([id, owner]) =>
+                    owner === 'arc' ? [id] : []
+                  )
                 ])
               ].flatMap((rowId) => {
+                if (radioRestingRef.current.get(rowId) === 'arc') {
+                  const dig = radioDigRef.current === rowId
+                  return [
+                    [
+                      rowId,
+                      { hook: null, dig, hookBarsAway: null, words: RADIO_ARC_REST_SHORT }
+                    ] as const
+                  ]
+                }
                 const role = radioRoleNow(rowId, true)
                 return role === null
                   ? []
@@ -8278,6 +8329,7 @@ export function DiscoverPanel({
     radioOn,
     radioSettings.foldMode,
     radioTurnRemote,
+    radioArcRemote,
     radioHooks,
     radioDig
   ])
@@ -8381,6 +8433,9 @@ export function DiscoverPanel({
       // The desktop's own turn (turnRadio): the server forwards only a turn it answered
       // `turning` to.
       else if (command.kind === 'turn') turnRadioRef.current(command.move)
+      // The intensity arc's build and drop (intensityPress): forwarded only when POST /api/arc
+      // answered `building` or `dropping`.
+      else if (command.kind === 'arc') intensityPressRef.current(command.action)
     }
   })
 
@@ -10512,7 +10567,10 @@ export function DiscoverPanel({
         if (!radioOnRef.current) return
         if (switched && arcAddingRef.current?.held !== undefined) queueHeldArcAdd()
         stepArcExit(pos, loopBars)
-        if (wrapped) intensityAtWrap(loopBars, lap)
+        if (wrapped) {
+          intensityAtWrap(loopBars, lap)
+          refreshRadioArcShown()
+        }
       })
       return
     }
@@ -10735,6 +10793,7 @@ export function DiscoverPanel({
   /** Radio starting or stopping: no machine, nothing prepared. */
   function resetIntensityArc(): void {
     intensityArcRef.current = null
+    setRadioArcShown(null)
     intensityDropThrowRef.current = null
     dropIntensityNextAdd()
     intensityCarryRef.current = null
@@ -10750,6 +10809,7 @@ export function DiscoverPanel({
    * meanwhile: stopRadio put the rows back. */
   function intensityLeft(was: RadioIntensityArc): void {
     const { unrest } = radioIntensityStopped(was)
+    setRadioArcShown(null)
     intensityDropThrowRef.current = null
     dropIntensityNextAdd()
     intensityCarryRef.current = null
@@ -11624,6 +11684,7 @@ export function DiscoverPanel({
       return
     }
     intensityArcRef.current = next
+    refreshRadioArcShown()
     if (next.decided !== null && next.decided !== arc.decided) intensityDecided(next.decided)
     else if (next.forced !== null) {
       console.log(`[radio-intensity] ${action} pressed: waits for the top after`)
@@ -13374,6 +13435,10 @@ export function DiscoverPanel({
             can: radioTurnCan,
             flash: radioTurnFlash,
             onTurn: (move) => turnRadio(move)
+          }}
+          arc={{
+            shown: radioArcShown,
+            onPress: (action) => intensityPressRef.current(action)
           }}
         />
       )}

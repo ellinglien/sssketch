@@ -659,6 +659,14 @@ input {
         </div>
         <div class="chips grid" id="chips-turn"></div>
       </div>
+      <!-- The intensity arc's build and drop (2026-10-05): at the next loop top. Shown only
+           while radio runs on the mac with density intensity (state.arc). -->
+      <div class="swapgrid" id="arc-box" hidden>
+        <div class="actions">
+          <button class="big" id="arc-build">build</button>
+          <button class="big" id="arc-drop">drop</button>
+        </div>
+      </div>
       <div class="swapgrid">
         <div class="eyebrow">swap every</div>
         <div class="chips grid" id="chips-grid"></div>
@@ -2426,6 +2434,7 @@ input {
     }
     renderRows()
     paintTurn(state.turn)
+    paintArc(state.arc)
     // A mute or a solo made on the MAC lands on the phone here, by the same
     // one line a tap on the phone takes. Nothing is re-fetched for it.
     applyMix()
@@ -2552,6 +2561,34 @@ input {
       turnChipEls[i].className =
         turn.waiting && turn.move === m ? 'chip on' : can.indexOf(m) === -1 ? 'chip dim' : 'chip'
     }
+  }
+
+  // --- the intensity arc's build and drop -----------------------------
+  // The turn's idiom: one tap, the mac's answer is the flash (building,
+  // dropping, not now, density not intensity, radio off). A press waiting
+  // for its top reads building or dropping, lit; one the mac says cannot
+  // act now is dimmed and still answers a tap.
+  var arcBoxEl = document.getElementById('arc-box')
+  var arcBuildEl = document.getElementById('arc-build')
+  var arcDropEl = document.getElementById('arc-drop')
+  function sendArc(action) {
+    buzz()
+    api('/api/arc', { action: action })
+      .then(function (r) { return r.json() })
+      .then(function (body) { flash(body && body.answer ? body.answer : 'not now') })
+      .catch(function () { flash('not now') })
+  }
+  arcBuildEl.addEventListener('click', function () { sendArc('build') })
+  arcDropEl.addEventListener('click', function () { sendArc('drop') })
+  function paintArc(arc) {
+    arcBoxEl.hidden = !arc
+    if (!arc) return
+    arcBuildEl.textContent = arc.waiting === 'build' ? 'building' : 'build'
+    arcDropEl.textContent = arc.waiting === 'drop' ? 'dropping' : 'drop'
+    arcBuildEl.className =
+      arc.waiting === 'build' ? 'big on' : arc.canBuild ? 'big' : 'big dim'
+    arcDropEl.className =
+      arc.waiting === 'drop' ? 'big on' : arc.canDrop ? 'big' : 'big dim'
   }
 
   function poll() {

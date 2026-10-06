@@ -17,6 +17,8 @@ import {
   parseRemoteSlotKinds,
   parseRemoteFold,
   parseRemoteTurnMove,
+  parseRemoteArcAction,
+  remoteArcAnswer,
   remoteTurnAnswer,
   type RemoteCommand,
   type RemoteStateResponse
@@ -226,10 +228,11 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
  * screen while this is on. That is the price of the phone reaching it at
  * all, and it is why this is off by default.
  *
- * Eleven api routes, plus GET / itself, and no route takes or returns a
+ * Twelve api routes, plus GET / itself, and no route takes or returns a
  * filesystem path or reads the library. (The count in this comment was
  * already one behind before /api/stem: a596b39's /api/slot-action made
- * seven into eight, /api/stem makes it nine, /api/turn ten, and /api/fold eleven.)
+ * seven into eight, /api/stem makes it nine, /api/turn ten, /api/fold eleven,
+ * and /api/arc twelve.)
  *
  * GET /api/loop takes no parameters of any kind -- it serves the current
  * Discover loop's wav bytes and names it in an x-loop-id header, so there
@@ -444,6 +447,23 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
           )
         }
         return respond(res, answer === 'radio off' ? 409 : 200, { answer })
+      }
+
+      // The intensity arc's build and drop (2026-10-05): `{ action }`, `build` or `drop`, or a
+      // 400. The answer is the phone's flash, from the last state the Mac pushed
+      // (remoteArcAnswer): 409 `radio off` with radio off and `density not intensity` while it
+      // runs another density (the buttons are not there), `not now` when the Mac says that button
+      // cannot act -- none forwards anything -- and `building` / `dropping`, forwarded.
+      if (req.method === 'POST' && url === '/api/arc') {
+        const action = parseRemoteArcAction((await readJsonBody(req)).action)
+        if (action === null) return respond(res, 400)
+        const state = options.getState()
+        const answer = remoteArcAnswer(state.arc, action, state.turn != null)
+        if (answer === 'building' || answer === 'dropping') {
+          options.onCommand({ kind: 'arc', action })
+        }
+        const absent = answer === 'radio off' || answer === 'density not intensity'
+        return respond(res, absent ? 409 : 200, { answer })
       }
 
       // Radio fold mode's switch (2026-10-02): `{ on }`, a boolean or a 400. 409 with radio off,

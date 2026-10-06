@@ -6,7 +6,7 @@
 // what it sets). This file only draws them, in three places:
 //   RadioMixActions    the `mix` group, on the top line (RadioTopLine), keep emphasised;
 //   RadioLiveBar       the `play` group, 36px, raised and sticky under the rows: tempo, pace,
-//                      skip, new bed, fire now, level;
+//                      skip, new bed, fire now (turn, build, drop, the moves), level;
 //   RadioShapingColumns picks, shape, moves, fold and sound, five quiet titled columns of 26px
 //                      controls. A control that does not apply is greyed, never hidden.
 // Values and callbacks only: every handler is DiscoverPanel's own, passed in bundles.
@@ -15,7 +15,13 @@ import { newFoldSeed } from '@shared/radioFold'
 import { DEFAULT_SOUND_SETTINGS, type SoundSettingsPatch } from '@shared/radioSound'
 import { soundPanelModel, type SoundSliderControl } from '@shared/soundPanelModel'
 import { neutralCutoff, type FilterMode } from '@shared/toolkit'
-import { DEFAULT_RADIO_SETTINGS, type RadioSettings } from '@shared/radioSchedule'
+import {
+  DEFAULT_RADIO_DRAMA,
+  DEFAULT_RADIO_ENERGY,
+  DEFAULT_RADIO_SETTINGS,
+  type RadioSettings
+} from '@shared/radioSchedule'
+import type { RadioIntensityAction } from '@shared/radioIntensityArc'
 import {
   radioStripModel,
   soundDialPosition,
@@ -33,6 +39,7 @@ import { DEFAULT_RADIO_PACE_LEVEL, radioPaceLabel } from '@shared/radioPace'
 import { DEFAULT_FAVES } from '@shared/discoverFaves'
 import { DEFAULT_SOURCE_LEAN } from '@shared/discoverSlotModifier'
 import { DEFAULT_DISCOVER_CHAOS } from '@shared/discoverRanking'
+import type { RadioArcShown } from './radioIntensityGlue'
 import { RADIO_STICKY_BACKGROUND } from './RadioTopLine'
 import { RADIO_VIEW_FRAME } from './discoverRowGrid'
 import {
@@ -95,6 +102,13 @@ export interface RadioStripProps {
     can: { moves: readonly TurnaroundMove[] } | null
     flash: string | null
     onTurn: (move?: TurnaroundMove) => void
+  }
+  /** The intensity arc's `build` and `drop` (spec 2026-10-05-radio-intensity-arc-design 6):
+   * what the panel shows (radioArcShown: labels, `building`/`dropping` while a press waits, and
+   * whether each can act now; null unless radio runs with density intensity) and the press. */
+  arc: {
+    shown: RadioArcShown | null
+    onPress: (action: RadioIntensityAction) => void
   }
   /** The master strip's dials (the strip's sound group, plan Task 9), and the open project's
    * sound for saturation, pump and echo. */
@@ -287,11 +301,11 @@ function useShortScrollArea(ref: React.RefObject<HTMLElement | null>): boolean {
 }
 
 /** The live bar (design pass: the controls that PLAY, 36px, raised under the rows, sticky at the
- * bottom): tempo, pace, skip, new bed, fire now (turn and the seven moves), level. */
+ * bottom): tempo, pace, skip, new bed, fire now (turn, build, drop and the seven moves), level. */
 function RadioLiveBar(
   props: RadioStripProps & { controls: readonly RadioStripControl[] }
 ): React.JSX.Element {
-  const { settings, onSettingsChange, play, turn, sound, controls } = props
+  const { settings, onSettingsChange, play, turn, arc, sound, controls } = props
   const byId = (id: string): RadioStripControl | undefined => controls.find((c) => c.id === id)
   const pace = byId('pace')
   const level = byId('level')
@@ -453,6 +467,25 @@ function RadioLiveBar(
             ariaLabel={byId('turn')?.tooltip}
             onClick={() => turn.onTurn()}
           />
+          {(['build', 'drop'] as const).map((action) => {
+            const c = byId(action)
+            const disabled = c?.disabled ?? true
+            const label = arc.shown?.[action] ?? action
+            const can = action === 'build' ? arc.shown?.canBuild : arc.shown?.canDrop
+            const notNow = !disabled && can === false
+            return (
+              <FireButton
+                key={action}
+                label={label}
+                held={label !== action}
+                notNow={notNow}
+                disabled={disabled}
+                tooltip={notNow ? 'not now' : c?.tooltip}
+                ariaLabel={c?.tooltip ?? action}
+                onClick={() => arc.onPress(action)}
+              />
+            )
+          })}
           {TURNAROUND_MOVES.map((move) => {
             const held = turn.shown !== null && turn.shown.move === move
             const notNow = turn.can !== null && !turn.can.moves.includes(move)
@@ -495,6 +528,14 @@ function RadioLiveBar(
   )
 }
 
+/** A column slider's default (its double-click reset), by the strip model's id. */
+const SLIDER_DEFAULTS: ReadonlyMap<string, number> = new Map([
+  ['bend', DEFAULT_RADIO_SETTINGS.fold],
+  ['mismatch', DEFAULT_RADIO_SETTINGS.clash],
+  ['energy', DEFAULT_RADIO_ENERGY],
+  ['drama', DEFAULT_RADIO_DRAMA]
+])
+
 /** The shaping columns (design pass: five quiet titled columns under the live bar, 26px
  * controls): picks, shape, moves, fold, sound. */
 function RadioShapingColumns(
@@ -530,9 +571,7 @@ function RadioShapingColumns(
             key={c.id}
             label={c.label}
             value={c.value}
-            defaultValue={
-              c.id === 'bend' ? DEFAULT_RADIO_SETTINGS.fold : DEFAULT_RADIO_SETTINGS.clash
-            }
+            defaultValue={SLIDER_DEFAULTS.get(c.id) ?? c.value}
             tooltip={c.tooltip}
             disabled={c.disabled}
             onCommit={(v) => onSettingsChange(c.patch(v))}

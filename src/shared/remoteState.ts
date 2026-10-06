@@ -291,9 +291,11 @@ export function remoteStateFromSlots(
   }
 }
 
-/** A role leaves only with something in it, its words cut to the phone's width. */
+/** A role leaves only with something in it -- a hook, dig, or words alone (a row the intensity
+ * arc rests: `rests`) -- its words cut to the phone's width. */
 function roleOf(role: RemoteSlotRole | undefined): { role?: RemoteSlotRole } {
-  if (role === undefined || (role.hook === null && !role.dig)) return {}
+  const hasWords = typeof role?.words === 'string' && role.words !== ''
+  if (role === undefined || (role.hook === null && !role.dig && !hasWords)) return {}
   const away = role.hookBarsAway
   return {
     role: {
