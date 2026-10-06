@@ -208,7 +208,12 @@ const riffIndexCache = new WeakMap<
 // most needs to stay responsive. Cleared once the scan settles (success
 // or failure) so a later call, once the cache is stale, starts a fresh
 // scan rather than reusing a long-finished promise forever.
-const riffIndexInFlight = new WeakMap<Database.Database, Promise<Map<string, RiffIndexEntry>>>()
+// Each entry carries the forget generation its walk started at (below): a
+// walk restarted after a forget joins only an entry from the current one.
+const riffIndexInFlight = new WeakMap<
+  Database.Database,
+  { promise: Promise<Map<string, RiffIndexEntry>>; generation: number }
+>()
 
 /** Bumped by dropInMemoryRiffIndex (forgetDiscoveredRifff). A riff-index walk
  * records it at its start: one that finishes after a forget holds the
@@ -239,25 +244,44 @@ export async function getRiffIndexForDb(
   onProgress?: ScanProgressCallback
 ): Promise<Map<string, RiffIndexEntry>> {
   const inFlight = riffIndexInFlight.get(db)
-  if (inFlight) return inFlight
+  if (inFlight) return inFlight.promise
 
   const cached = riffIndexCache.get(db)
   if (cached && isScanCacheCurrent(db, 'Riffs', cached.state)) return cached.index
 
-  return shareRiffIndexBuild(db, buildRiffIndex(db, cached?.walk, onProgress))
+  return shareRiffIndexBuild(db, () => buildRiffIndex(db, cached?.walk, onProgress))
 }
 
+/** Starts `start` (a walk, which records the forget generation first thing)
+ * and registers it in riffIndexInFlight with that generation. */
 function shareRiffIndexBuild(
   db: Database.Database,
-  build: Promise<Map<string, RiffIndexEntry>>
+  start: () => Promise<Map<string, RiffIndexEntry>>
 ): Promise<Map<string, RiffIndexEntry>> {
-  const promise: Promise<Map<string, RiffIndexEntry>> = build.finally(() => {
+  const generation = riffIndexForgetGeneration(db)
+  const promise: Promise<Map<string, RiffIndexEntry>> = start().finally(() => {
     // Only its own entry: a forget mid-walk drops it, and a newer build may
     // have registered meanwhile.
-    if (riffIndexInFlight.get(db) === promise) riffIndexInFlight.delete(db)
+    if (riffIndexInFlight.get(db)?.promise === promise) riffIndexInFlight.delete(db)
   })
-  riffIndexInFlight.set(db, promise)
+  riffIndexInFlight.set(db, { promise, generation })
   return promise
+}
+
+/** A walk that finished after a forget starts afresh, shared (review of
+ * T5-T7: run outside riffIndexInFlight, a caller arriving after the forget
+ * walked the whole table beside it). It joins a walk registered since the
+ * latest forget; otherwise it registers its own, replacing any entry from
+ * before the forget -- which may be this very walk's (a forget that landed
+ * before the walk was registered, e.g. from the prewarm's progress callback,
+ * deleted nothing), and it must not wait on itself. */
+function restartRiffIndexAfterForget(
+  db: Database.Database,
+  onProgress?: ScanProgressCallback
+): Promise<Map<string, RiffIndexEntry>> {
+  const inFlight = riffIndexInFlight.get(db)
+  if (inFlight && inFlight.generation === riffIndexForgetGeneration(db)) return inFlight.promise
+  return shareRiffIndexBuild(db, () => buildRiffIndex(db, undefined, onProgress))
 }
 
 /** The in-session refresh (no ownDb, nothing persisted -- the next launch's
@@ -289,10 +313,8 @@ async function buildRiffIndex(
   countWork(walk === previous ? 'riff-index:extend' : 'riff-index:rebuild')
   await walkRiffs(db, walk, { onProgress, total: signal.count })
   // Forgotten mid-walk: this index is the pre-forget one -- start afresh.
-  // (A fresh walk, not getRiffIndexForDb: a forget that landed before this
-  // build was registered left it in riffIndexInFlight, and it can't wait on
-  // itself.)
-  if (riffIndexForgetGeneration(db) !== generation) return buildRiffIndex(db, undefined, onProgress)
+  if (riffIndexForgetGeneration(db) !== generation)
+    return restartRiffIndexAfterForget(db, onProgress)
   riffIndexCache.set(db, { index: walk.index, state, walk })
   return walk.index
 }
@@ -364,7 +386,7 @@ async function warmRiffIndex(
     // A page saved across the forget (its sliced transactions yield) may
     // have written the meta again: drop it, so the next launch rebuilds.
     invalidateRiffIndexCache(ownDb, key)
-    return buildRiffIndex(db, undefined, onProgress)
+    return restartRiffIndexAfterForget(db, onProgress)
   }
   riffIndexCache.set(db, { index: walk.index, state, walk })
   return walk.index
@@ -424,8 +446,8 @@ export async function prewarmDiscoverCandidateCaches(
     try {
       // Shared with any getRiffIndexForDb call that lands meanwhile.
       const pending = riffIndexInFlight.get(db)
-      if (pending) await pending
-      else await shareRiffIndexBuild(db, warmRiffIndex(db, ownDb, reportRiffIndexProgress))
+      if (pending) await pending.promise
+      else await shareRiffIndexBuild(db, () => warmRiffIndex(db, ownDb, reportRiffIndexProgress))
     } catch (err) {
       console.error('prewarmDiscoverCandidateCaches: failed to warm riff index:', err)
     }

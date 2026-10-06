@@ -411,6 +411,41 @@ describe('discoveredLibrary', () => {
     db.close()
   })
 
+  // Review of T5-T7: the stale walk's fresh restart ran outside
+  // riffIndexInFlight, so a caller arriving after the forget started a second
+  // whole walk beside it. Now the restart joins a walk registered since the
+  // forget (or registers itself): one walk, one index.
+  it('forget during a walk: the restarted walk and a caller arriving after the forget share one walk', async () => {
+    const { saveDiscoveredRifff, forgetDiscoveredRifff } = await import('./discoveredLibrary')
+    const { appendToInMemoryDiscoverCaches, getRiffIndexForDb, prewarmDiscoverCandidateCaches } =
+      await import('./discoverCandidates')
+    const db = freshOwnDb(join(userDataDir, 'own.db'))
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('r1', 'j1', 120, 'old1')`
+    ).run()
+    db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES ('k1', 'j1')`).run()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'j1', dbForJam: db }], db)
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('r2', 'j1', 120, 'new2')`
+    ).run()
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + CACHE_CHANGE_CHECK_INTERVAL_MS + 1_000)
+
+    const extending = getRiffIndexForDb(db)
+    const kept = keepOne(saveDiscoveredRifff, db, 'k1')
+    appendToInMemoryDiscoverCaches(db, kept!.indexRows, kept!.newInstrumentRows)
+    forgetDiscoveredRifff(db, kept!.riffCID)
+    const late = getRiffIndexForDb(db)
+    const [fromWalk, fromLate] = await Promise.all([extending, late])
+
+    expect(fromWalk).toBe(fromLate)
+    expect(fromWalk.get('k1')).toBeUndefined()
+    expect(fromWalk.get('new2')?.riffCID).toBe('r2')
+    expect(await getRiffIndexForDb(db)).toBe(fromWalk)
+    vi.useRealTimers()
+    db.close()
+  })
+
   it("forget during the prewarm's extension: neither restored in memory nor persisted", async () => {
     const { saveDiscoveredRifff, forgetDiscoveredRifff } = await import('./discoveredLibrary')
     const { getRiffIndexForDb, prewarmDiscoverCandidateCaches } =
