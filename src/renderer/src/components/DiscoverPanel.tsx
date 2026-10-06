@@ -239,10 +239,6 @@ import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { discoverSweepPct, discoverWindowLayout } from '@shared/discoverWindowLayout'
 import { discoverBreath } from '@shared/discoverBreath'
 import {
-  artistFieldLabel,
-  artistMode,
-  artistNotice,
-  artistTurnoverIds,
   blockedActions,
   isKeepRefused,
   lingeringArtists,
@@ -250,12 +246,33 @@ import {
   listenOnlyTooltip,
   nextTurnoverSlotId,
   normalizeArtistPick,
-  pickMatchesSelection,
-  rollFilterForArtist,
   tagPickedUnderArtist,
   type ArtistRollFilter,
   type ListenOnlyAction
 } from '@shared/discoverArtist'
+import {
+  applyArtistPick,
+  artistSelectionLabel,
+  artistSelectionNotice,
+  artistSelectionTooltip,
+  isCombined,
+  pickMatchesArtistSelection,
+  rollFilterForMember,
+  selectionCreatorFilter,
+  selectionHasMe,
+  selectionMode,
+  selectionOthers,
+  selectionTurnoverIds,
+  selectionsEqual,
+  type ArtistSelection
+} from '@shared/artistSelection'
+import {
+  EMPTY_ARTIST_MEMO,
+  EMPTY_ARTIST_SHARE,
+  reconcileArtistShare,
+  type ArtistEmptyMemo,
+  type ArtistShareLedger
+} from '@shared/artistShare'
 import { DiscoverArtistPicker } from './DiscoverArtistPicker'
 import { announceArtistScanQueued } from '../audio/artistScanQueueEvent'
 import { recordStemRoles } from '../state/stemCategoryCapture'
@@ -817,8 +834,8 @@ export function DiscoverPanel({
   redoStack,
   setRedoStack,
   currentUsername,
-  artist,
-  onArtistChange,
+  artists,
+  onArtistsChange,
   discoverConsented,
   traitMatchBar,
   radioSettings,
@@ -869,9 +886,10 @@ export function DiscoverPanel({
    * real per-machine value down keeps "only own stems" rerolls scoped to
    * whoever is actually using this install. */
   currentUsername: string
-  /** Discover artist mode (2026-10-01): null = me. App.tsx state. */
-  artist: string | null
-  onArtistChange: (artist: string | null) => void
+  /** Discover artist mode (2026-10-01), now the chosen artists (combine artists, 2026-10-06):
+   * `[null]` = me. App.tsx state. */
+  artists: ArtistSelection
+  onArtistsChange: (next: ArtistSelection) => void
   /** App.tsx's Frame() own single source of truth for Discover's
    * whole-library-scan consent, threaded down through LibraryBrowser.tsx
    * -- the real scan itself (DiscoverLibraryScan) is mounted once at that
@@ -1025,32 +1043,48 @@ export function DiscoverPanel({
   const [globalModifiers, setGlobalModifiers] =
     useState<DiscoverSlotModifier[]>(DEFAULT_GLOBAL_MODIFIERS)
   const globalRollOptions = slotRollOptions(globalModifiers, { hasUsername })
-  // Artist mode. Mirrored into a ref for the same reason sourceLeanRef is:
-  // radio's picks run from long-lived callbacks. Written from an effect,
-  // this file's ref-mirroring convention, and synchronously by
-  // changeArtist so a pick is in force before the next render lands.
-  const artistRef = useRef<string | null>(artist)
+  // Artist mode, now a selection (combine artists, spec 2026-10-06-combine-artists-design).
+  // Mirrored into a ref for the same reason sourceLeanRef is: radio's picks run from long-lived
+  // callbacks. Written from an effect, this file's ref-mirroring convention, and synchronously by
+  // changeArtists so a pick is in force before the next render lands.
+  const artistsRef = useRef<ArtistSelection>(artists)
   useEffect(() => {
-    artistRef.current = artist
-  }, [artist])
-  const mode = artistMode(artist, currentUsername)
-  /** The creator filter as of this render, for children (the nearby
-   * popover); rolls read rollFilter() instead, which follows the ref. */
-  const artistCreator = rollFilterForArtist(artist, currentUsername, false).artist
+    artistsRef.current = artists
+  }, [artists])
+  const mode = selectionMode(artists, currentUsername)
+  const combined = isCombined(artists)
+  /** The creator filter as of this render, for children (the nearby popover): today's single
+   * creator for one artist, every member's name for a combination. */
+  const artistCreator = selectionCreatorFilter(artists, currentUsername)
+  /** The others' names, for the single-name tooltips (one other artist: that name). */
+  const othersLabel = selectionOthers(artists).join(' + ')
+  /** TEMPORARY until the picker chooses several: the one artist it shows (the first other). */
+  const pickerArtist = artists.length === 1 ? artists[0] : (selectionOthers(artists)[0] ?? null)
+  /** Combine artists' even share (@shared/artistShare): turns landed and picks in flight per
+   * member, this session. Reconciled on every selection change (changeArtists). */
+  const artistShareRef = useRef<ArtistShareLedger>(
+    reconcileArtistShare(EMPTY_ARTIST_SHARE, artists)
+  )
+  /** Members known to have nothing for a row's kinds (noteArtistEmpty), for 5 minutes. */
+  const artistEmptyRef = useRef<ArtistEmptyMemo>(EMPTY_ARTIST_MEMO)
+  /** The picker's `turns:` line re-reads the ledger on this tick. */
+  const [, setArtistShareTick] = useState(0)
   // Listen-only (spec §2): the one list the buttons dim by and main refuses.
-  /** The same set as `listenOnly` below, as of NOW (artistRef, slotsRef),
+  /** The same set as `listenOnly` below, as of NOW (artistsRef, slotsRef),
    * for the functions themselves: the phone's keep and long-lived callbacks
    * call them too, and a pick must be in force before the render that dims
    * the buttons -- otherwise an other->own (or own->other) switch has a
    * window where main's mirror and this panel disagree. */
   function refusesNow(action: ListenOnlyAction): boolean {
-    const nowMode = artistMode(artistRef.current, currentUsername)
+    const nowMode = selectionMode(artistsRef.current, currentUsername)
     const still = nowMode === 'own' ? lingeringArtists(slotsRef.current) : []
     return blockedActions(nowMode, still).has(action)
   }
-  /** What every roll sends main -- today's values in own mode (rollFilterForArtist). */
+  /** TEMPORARY until the share is in every pick: the first member's filter -- for one artist
+   * exactly today's rollFilterForArtist (artistSelection.test.ts). */
   function rollFilter(): ArtistRollFilter {
-    return rollFilterForArtist(artistRef.current, currentUsername, globalRollOptions.onlyOwnStems)
+    const sel = artistsRef.current
+    return rollFilterForMember(sel[0], sel, currentUsername, globalRollOptions.onlyOwnStems)
   }
   // In `me`, the artists whose stems still play on the rows (picked under
   // artist mode): keep is blocked until they are gone (Elling, 2026-10-01).
@@ -1062,13 +1096,19 @@ export function DiscoverPanel({
   const listenOnly = blockedActions(mode, lingering)
   // Main's mirror, for the guards. Re-sent on the own username changing, and
   // on the lingering artists changing (the phone's keep reads it there).
+  // `artist` is the single member (today's push, for an older main); `artists`
+  // the whole selection. Keyed by JSON so a new array with the same members
+  // does not re-push.
+  const artistsKey = JSON.stringify(artists)
   useEffect(() => {
+    const sel = JSON.parse(artistsKey) as (string | null)[]
     void window.rifffApi.discoverSetArtist(
-      artist,
+      sel.length === 1 ? sel[0] : (sel.find((m) => m !== null) ?? null),
       currentUsername,
-      lingeringKey === '' ? [] : lingeringKey.split('\n')
+      lingeringKey === '' ? [] : lingeringKey.split('\n'),
+      sel
     )
-  }, [artist, currentUsername, lingeringKey])
+  }, [artistsKey, currentUsername, lingeringKey])
   // The source dial (2026-09-29): 0 = endlesss, 100 = other, 50 = half and
   // half. In-memory, like the switches it replaced. Mirrored into a ref
   // because radio's picks run from long-lived callbacks that would
@@ -3005,7 +3045,7 @@ export function DiscoverPanel({
   // queued as a manual change -- radio arms nothing meanwhile.
   const radioSkipPickingRef = useRef<Set<string>>(new Set())
   /** Rows still to turn over after a mid-radio artist change -- one per
-   * loop top, through skipRadio (@shared/discoverArtist artistTurnoverIds). */
+   * loop top, through skipRadio (@shared/artistSelection selectionTurnoverIds). */
   const artistTurnoverRef = useRef<Set<string>>(new Set())
   // The density arc (@shared/radioDensity): its current leg, the row it is
   // bringing in (still picking, then waiting in the manual queue), the row
@@ -6763,23 +6803,32 @@ export function DiscoverPanel({
   }
   // "analyse overnight"'s answer for the current artist ("queued 31,013").
   const [analysisQueued, setAnalysisQueued] = useState<string | null>(null)
-  /** The artist field's pick. Radio off: the next rolls just use it.
-   * Radio on: a course change -- every row not by the new artist turns
-   * over, one per loop top (spec §1), through skipRadio. */
-  function changeArtist(next: string | null): void {
-    if (next === artistRef.current) return
-    artistRef.current = next
-    onArtistChange(next)
+  /** The artist field's pick. Radio off: the next rolls just use it. Radio on: a course change --
+   * every row by nobody chosen turns over, one per loop top (spec §4), through skipRadio. One
+   * artist to one artist is today's switch exactly; a combination skips only when something has
+   * to turn over, so adding an artist changes no row (the share brings them in). */
+  function changeArtists(next: ArtistSelection): void {
+    const prev = artistsRef.current
+    if (selectionsEqual(next, prev)) return
+    artistsRef.current = next
+    artistShareRef.current = reconcileArtistShare(artistShareRef.current, next)
+    artistEmptyRef.current = EMPTY_ARTIST_MEMO
+    setArtistShareTick((n) => n + 1)
+    onArtistsChange(next)
     setAnalysisQueued(null)
+    const added = selectionOthers(next).filter((m) => !prev.includes(m))
+    if (added.length > 0) void window.rifffApi.discoverPrewarmArtists(added)
     if (!radioOnRef.current) return
-    artistTurnoverRef.current = artistTurnoverIds(
+    artistTurnoverRef.current = selectionTurnoverIds(
       slotsRef.current.map((s) => ({ id: s.id, creator: s.candidate?.creatorUserName ?? null })),
       next,
       currentUsername
     )
+    const bothSingle = prev.length === 1 && next.length === 1
+    if (!bothSingle && artistTurnoverRef.current.size === 0) return
     // Never two rows at one loop top: a skip already waiting (or still
     // picking) lands first, and its landing re-arms -- armRadioPick then
-    // starts the turnover. A pick still in flight for the OLD artist is
+    // starts the turnover. A pick still in flight for the OLD selection is
     // dropped by skipRadio itself.
     if (!radioSkipWaiting()) void skipRadio()
   }
@@ -9536,11 +9585,11 @@ export function DiscoverPanel({
         forgetRadioHookRow(id)
       }
     }
-    // A row changed by anyone counts as turned over (changeArtist) -- but
+    // A row changed by anyone counts as turned over (changeArtists) -- but
     // only by a pick rolled under the CURRENT selection: a manual reroll or
     // skip still in flight from before the switch lands the old artist's
     // stem, and that row still has to turn over.
-    if (pickMatchesSelection(pick.candidate, artistRef.current)) {
+    if (pickMatchesArtistSelection(pick.candidate, artistsRef.current)) {
       artistTurnoverRef.current.delete(id)
     } else if (pick.candidate !== null && radioOnRef.current) {
       // Rolled under a different selection than the current one -- a
@@ -11832,7 +11881,7 @@ export function DiscoverPanel({
         !radioSkipPickingRef.current.has(id) &&
         !radioHookTurnoverExcluded(radioHooksRef.current, id)
     )
-    // A mid-radio artist change's rows go first (changeArtist).
+    // A mid-radio artist change's rows go first (changeArtists).
     const turnoverId = nextTurnoverSlotId(eligible, artistTurnoverRef.current)
     const slotId =
       turnoverId ??
@@ -11846,7 +11895,7 @@ export function DiscoverPanel({
     const slot = slotsRef.current.find((s) => s.id === slotId)
     if (!slot) return
     radioSkipPickingRef.current.add(slotId)
-    // The turnover set this pick serves. changeArtist REPLACES the set, so a
+    // The turnover set this pick serves. changeArtists REPLACES the set, so a
     // different object after the await means the artist changed meanwhile:
     // the pick was rolled for the old one.
     const turnoverAtStart = artistTurnoverRef.current
@@ -12385,7 +12434,7 @@ export function DiscoverPanel({
     // Inlined rather than refusesNow('keep'): through refusesNow, this line
     // makes the React Compiler reject the whole component (18 lint errors,
     // bisected in review). Same rule, through blockedActions.
-    const nowMode = artistMode(artistRef.current, currentUsername)
+    const nowMode = selectionMode(artistsRef.current, currentUsername)
     const still = nowMode === 'own' ? lingeringArtists(slotsRef.current) : []
     if (blockedActions(nowMode, still).has('keep')) return 'refused'
     setKeeping(true)
@@ -12473,8 +12522,8 @@ export function DiscoverPanel({
         s.candidate?.pickedUnderArtist !== undefined && (s.locked || !previewingSlotIds.has(s.id))
     )
   const listenOnlyTip =
-    mode === 'other' && artist !== null
-      ? listenOnlyTooltip(artist)
+    mode === 'other'
+      ? listenOnlyTooltip(othersLabel)
       : lingeringBlocks
         ? lingeringNotice(lingering, lingeringStuck)
         : undefined
@@ -12511,6 +12560,7 @@ export function DiscoverPanel({
   // the top line's mix asks the view alone (its ids depend on nothing else).
   const radioStripCtx: RadioStripContext = {
     artistMode: mode === 'other',
+    artistsIncludeMe: combined && selectionHasMe(artists),
     hasUsername,
     sound: soundNow,
     sounding: previewingSlotIds.size > 0
@@ -12903,7 +12953,7 @@ export function DiscoverPanel({
                   setArtistMenu({ x: rect.left, y: rect.bottom + 4 })
                 }}
                 aria-expanded={artistMenu !== null}
-                data-tooltip="whose stems discover plays"
+                data-tooltip={artistSelectionTooltip(artists, currentUsername)}
                 style={{
                   fontFamily: 'inherit',
                   fontSize: 10,
@@ -12914,7 +12964,7 @@ export function DiscoverPanel({
                   cursor: 'pointer'
                 }}
               >
-                {artistFieldLabel(artist, currentUsername)}
+                {artistSelectionLabel(artists, currentUsername)}
               </button>
             )}
             {/* Radio -- docs/superpowers/specs/2026-09-26-radio-mode-design.md.
@@ -13097,7 +13147,7 @@ export function DiscoverPanel({
           {lingeringNotice(lingering, lingeringStuck)}
         </div>
       )}
-      {mode === 'other' && artist !== null && (
+      {artistSelectionNotice(artists, currentUsername) !== null && (
         <div
           role="note"
           // -6 tucks it under the header rows' marginBottom; the sticky top line has none.
@@ -13109,7 +13159,7 @@ export function DiscoverPanel({
             ...(radioOn ? RADIO_VIEW_FRAME : {})
           }}
         >
-          {artistNotice(artist)}
+          {artistSelectionNotice(artists, currentUsername)}
         </div>
       )}
 
@@ -13300,7 +13350,7 @@ export function DiscoverPanel({
               onToggleDig={() => toggleSlotDig(slot.id)}
               onLike={() => likeSlot(slot.id)}
               listenOnlyStars={listenOnly.has('star')}
-              nearbyCreator={artistCreator}
+              nearbyCreator={typeof artistCreator === 'string' ? artistCreator : undefined}
               onToggleReplaceSoon={() => toggleSlotReplaceSoon(slot.id)}
               onRemove={() => removeSlot(slot.id)}
               onDuplicate={(immediate) => duplicateSlot(slot.id, immediate)}
@@ -13427,12 +13477,18 @@ export function DiscoverPanel({
             faves: favesShown,
             onFavesPreview: previewFaves,
             onFavesCommit: commitFaves,
-            favesTooltip: mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP,
+            favesTooltip:
+              mode === 'other' && !selectionHasMe(artists)
+                ? `artist mode picks ${othersLabel}'s stems`
+                : combined
+                  ? 'faves act on your turns'
+                  : FAVES_TOOLTIP,
             source: sourceLean,
             onSource: changeSourceLean,
             matching: 100 - chaos,
             onMatching: (matching) => setChaos(100 - matching),
-            artistLabel: artistFieldLabel(artist, currentUsername),
+            artistLabel: artistSelectionLabel(artists, currentUsername),
+            artistTooltip: artistSelectionTooltip(artists, currentUsername),
             artistActive: mode === 'other',
             artistOpen: artistMenu !== null,
             artistButtonRef,
@@ -13446,9 +13502,10 @@ export function DiscoverPanel({
             },
             mySounds: globalModifiers.includes('mine'),
             onMySounds: () => setGlobalModifiers((prev) => toggleSlotModifier(prev, 'mine')),
-            mySoundsTooltip:
-              mode === 'other'
-                ? `artist mode picks ${artist}'s stems`
+            mySoundsTooltip: combined
+              ? 'combined: me is your own stems'
+              : mode === 'other'
+                ? `artist mode picks ${othersLabel}'s stems`
                 : !hasUsername
                   ? MY_SOUNDS_NEEDS_USERNAME
                   : undefined
@@ -13487,13 +13544,22 @@ export function DiscoverPanel({
         <DiscoverArtistPicker
           x={artistMenu.x}
           y={artistMenu.y}
-          artist={artist}
+          artist={pickerArtist}
           ownUsername={currentUsername}
-          onPick={(next) => changeArtist(normalizeArtistPick(next, currentUsername))}
+          onPick={(next) =>
+            changeArtists(
+              applyArtistPick(
+                artistsRef.current,
+                normalizeArtistPick(next, currentUsername),
+                'only',
+                currentUsername
+              )
+            )
+          }
           onClose={() => setArtistMenu(null)}
           ignoreRef={artistButtonRef}
           footerExtra={
-            artist !== null ? (
+            pickerArtist !== null ? (
               <button
                 disabled={!discoverConsented || analysisQueued !== null}
                 data-tooltip={
@@ -13505,7 +13571,7 @@ export function DiscoverPanel({
                   // Disabled while the call runs (the label is non-null).
                   setAnalysisQueued('queueing…')
                   window.rifffApi
-                    .discoverQueueArtistAnalysis(artist)
+                    .discoverQueueArtistAnalysis(pickerArtist)
                     .then((r) => {
                       // The whole queue's size: "queued 0" says nothing
                       // when this artist's stems were all queued already.
@@ -13665,7 +13731,7 @@ export function DiscoverPanel({
                   display: 'flex',
                   alignItems: 'center',
                   gap: 4,
-                  opacity: mode === 'other' ? 0.4 : 1
+                  opacity: mode === 'other' && !selectionHasMe(artists) ? 0.4 : 1
                 }}
               >
                 <Dial
@@ -13675,7 +13741,13 @@ export function DiscoverPanel({
                   defaultValue={DEFAULT_FAVES}
                   size={22}
                   ariaLabel={FAVES_LABEL}
-                  tooltip={mode === 'other' ? `artist mode picks ${artist}'s stems` : FAVES_TOOLTIP}
+                  tooltip={
+                    mode === 'other' && !selectionHasMe(artists)
+                      ? `artist mode picks ${othersLabel}'s stems`
+                      : combined
+                        ? 'faves act on your turns'
+                        : FAVES_TOOLTIP
+                  }
                 />
                 <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{FAVES_LABEL}</span>
               </span>
@@ -13694,11 +13766,13 @@ export function DiscoverPanel({
                     label={DISCOVER_SLOT_MODIFIER_LABEL[modifier]}
                     disabled={disabled}
                     tooltip={
-                      overridden
-                        ? `artist mode picks ${artist}'s stems`
-                        : needsUsername
-                          ? MY_SOUNDS_NEEDS_USERNAME
-                          : undefined
+                      combined
+                        ? 'combined: me is your own stems'
+                        : overridden
+                          ? `artist mode picks ${othersLabel}'s stems`
+                          : needsUsername
+                            ? MY_SOUNDS_NEEDS_USERNAME
+                            : undefined
                     }
                   />
                 )

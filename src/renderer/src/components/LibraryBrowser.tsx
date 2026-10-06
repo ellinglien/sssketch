@@ -13,6 +13,7 @@ import {
   RIFF_LIBRARY_SCALE_NAMES
 } from '@shared/riffLibraryTypes'
 import { jamMightBeMine, sortJamsByOwnRiffs } from '@shared/jamOwnership'
+import type { ArtistSelection } from '@shared/artistSelection'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
@@ -187,8 +188,8 @@ export function LibraryBrowser({
   setDiscoverConsented,
   discoverSlots,
   setDiscoverSlots,
-  discoverArtist,
-  setDiscoverArtist,
+  discoverArtists,
+  setDiscoverArtists,
   discoverChaos,
   setDiscoverChaos,
   discoverUndoStack,
@@ -247,9 +248,9 @@ export function LibraryBrowser({
   discoverSlots: DiscoverSlot[]
   setDiscoverSlots: React.Dispatch<React.SetStateAction<DiscoverSlot[]>>
   /** Discover artist mode -- App.tsx's own state, a pure pass-through like
-   * discoverSlots. null = me. */
-  discoverArtist: string | null
-  setDiscoverArtist: (artist: string | null) => void
+   * discoverSlots. The chosen artists (combine artists); `[null]` = me. */
+  discoverArtists: ArtistSelection
+  setDiscoverArtists: (next: ArtistSelection) => void
   discoverChaos: number
   setDiscoverChaos: React.Dispatch<React.SetStateAction<number>>
   discoverUndoStack: DiscoverSlot[][]
@@ -2520,8 +2521,8 @@ export function LibraryBrowser({
             redoStack={discoverRedoStack}
             setRedoStack={setDiscoverRedoStack}
             currentUsername={riffLibraryUsername}
-            artist={discoverArtist}
-            onArtistChange={setDiscoverArtist}
+            artists={discoverArtists}
+            onArtistsChange={setDiscoverArtists}
             discoverConsented={discoverConsented}
             traitMatchBar={traitMatchBar}
             radioSettings={radioSettings}

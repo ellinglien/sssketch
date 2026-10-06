@@ -96,6 +96,8 @@ export interface RadioStripProps {
     matching: number
     onMatching: (v: number) => void
     artistLabel: string
+    /** The artist button's tooltip: today's for one artist, every name for a combination. */
+    artistTooltip: string
     artistActive: boolean
     artistOpen: boolean
     artistButtonRef: React.RefObject<HTMLButtonElement | null>
@@ -735,7 +737,7 @@ function RadioShapingColumns(
               ref={picks.artistButtonRef}
               onClick={picks.onArtistButton}
               aria-expanded={picks.artistOpen}
-              data-tooltip={c.tooltip}
+              data-tooltip={picks.artistTooltip}
               style={{
                 display: 'flex',
                 alignItems: 'center',

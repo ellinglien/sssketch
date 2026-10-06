@@ -48,6 +48,7 @@ import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './components/Loop
 import { importPathsWithChoice } from './audio/importPathsWithChoice'
 import { ContextMenu, type ContextMenuItem } from './components/ContextMenu'
 import { DEFAULT_DISCOVER_CHAOS } from '@shared/discoverRanking'
+import { ME_SELECTION, type ArtistSelection } from '@shared/artistSelection'
 import { createRiser } from '@shared/riser'
 import { BusyOverlay } from './components/BusyOverlay'
 import { NewProjectModal } from './components/NewProjectModal'
@@ -1530,9 +1531,10 @@ function Frame(): React.JSX.Element {
   // within one already-open session -- App.tsx itself never unmounts for
   // the life of the app, LibraryBrowser does every time the modal closes.
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
-  // Discover artist mode: the chosen artist, null = me. Session-only, the
-  // same lifetime as discoverSlots -- Discover opens on `me` at launch.
-  const [discoverArtist, setDiscoverArtist] = useState<string | null>(null)
+  // Discover artist mode: the chosen artists (combine artists, spec
+  // 2026-10-06), `[null]` = me. Session-only, the same lifetime as
+  // discoverSlots -- Discover opens on `me` at launch.
+  const [discoverArtists, setDiscoverArtists] = useState<ArtistSelection>(ME_SELECTION)
   // What the guided flow sees of Discover. Published by DiscoverPanel (the
   // only component that knows whether a slot has really resolved) and kept
   // here rather than inside the bubble so it survives the library modal
@@ -2833,8 +2835,8 @@ function Frame(): React.JSX.Element {
             setDiscoverConsented={setDiscoverConsented}
             discoverSlots={discoverSlots}
             setDiscoverSlots={setDiscoverSlots}
-            discoverArtist={discoverArtist}
-            setDiscoverArtist={setDiscoverArtist}
+            discoverArtists={discoverArtists}
+            setDiscoverArtists={setDiscoverArtists}
             discoverChaos={discoverChaos}
             setDiscoverChaos={setDiscoverChaos}
             discoverUndoStack={discoverUndoStack}
