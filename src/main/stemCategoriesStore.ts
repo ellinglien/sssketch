@@ -70,16 +70,27 @@ export interface StemBusUpsertResult {
 }
 
 // StemCategories.BusUpdatedAt: when the row's bus was written (review of
-// b4d9924a, minor 4). Lazy, like StemBusTrained: a nullable column added on
-// the first bus write, so an existing db (and a test's own table) needs no
-// migration. NULL on every row written before it existed.
+// b4d9924a, minor 4). Lazy: a nullable column added on the first bus write,
+// so an existing db (and a test's own table) needs no migration. NULL on
+// every row written before it existed.
 const busStampReady = new WeakSet<Database.Database>()
+
+function hasBusStampColumn(db: Database.Database): boolean {
+  const columns = db.prepare(`PRAGMA table_info(StemCategories)`).all() as { name: string }[]
+  return columns.some((column) => column.name === 'BusUpdatedAt')
+}
 
 function ensureBusStampColumn(db: Database.Database): void {
   if (busStampReady.has(db)) return
-  const columns = db.prepare(`PRAGMA table_info(StemCategories)`).all() as { name: string }[]
-  if (!columns.some((column) => column.name === 'BusUpdatedAt')) {
-    db.exec(`ALTER TABLE StemCategories ADD COLUMN BusUpdatedAt REAL`)
+  if (!hasBusStampColumn(db)) {
+    try {
+      db.exec(`ALTER TABLE StemCategories ADD COLUMN BusUpdatedAt REAL`)
+    } catch (err) {
+      // Another connection to the same file (the dev and the packaged app
+      // share the own db) can add it between the check and the ALTER.
+      const duplicate = /duplicate column/i.test(err instanceof Error ? err.message : String(err))
+      if (!duplicate || !hasBusStampColumn(db)) throw err
+    }
   }
   if (!db.inTransaction) busStampReady.add(db)
 }

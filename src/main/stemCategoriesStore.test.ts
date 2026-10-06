@@ -212,6 +212,37 @@ describe('stemCategoriesStore', () => {
       expect(getStemCategory(db, 'cid-1')?.busId).toBe('drums')
       expect(getStemCategory(db, 'cid-2')?.busId).toBe('bass')
     })
+
+    // Review of c4f18877: the dev and the packaged app share the own db, so
+    // another connection can add the column between the check and the ALTER.
+    it('a bus stamp column added by another connection after the check is used, not an error', async () => {
+      const db = freshDb()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES ('cid-1')`).run()
+      db.exec(`ALTER TABLE StemCategories ADD COLUMN BusUpdatedAt REAL`) // the other connection
+      let stale = true
+      // The first column check answers as it stood before the other connection's ALTER.
+      const racing = new Proxy(db, {
+        get(target, property) {
+          if (property === 'prepare') {
+            return (sql: string) => {
+              if (stale && sql.includes('table_info')) {
+                stale = false
+                return { all: () => [{ name: 'StemCID' }, { name: 'BusId' }] }
+              }
+              return target.prepare(sql)
+            }
+          }
+          const value = Reflect.get(target, property, target) as unknown
+          return typeof value === 'function' ? value.bind(target) : value
+        }
+      })
+      const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
+      expect(() =>
+        upsertStemCategoryBus(racing, [{ path: '/x/cid-1', busId: 'bass' }], 'tidyup', null, 1000)
+      ).not.toThrow()
+      expect(stale).toBe(false)
+      expect(getStemCategory(db, 'cid-1')?.busId).toBe('bass')
+    })
   })
 
   describe('upsertStemCategoryRole', () => {
