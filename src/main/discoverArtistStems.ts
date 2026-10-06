@@ -202,7 +202,10 @@ export async function getArtistStemCIDs(
  * Discover's jams from -- so `dbs` is not consulted on that path. Any other
  * name (the RIFF_LIBRARY_USERNAME fallback) is read as an artist is (cached
  * per db and name, Stems_IndexUser windows) in OWN_STEMS_PAGE pages.
- */
+ *
+ * A failed or aborted "mine" read is logged and gives undefined: the roll
+ * falls back to the whole-library sample and the post-filters, rather than
+ * failing. An artist's read still rejects (as before). */
 export async function discoverStemRestriction(
   dbs: readonly Database.Database[],
   {
@@ -215,6 +218,11 @@ export async function discoverStemRestriction(
   if (artistName) return getArtistStemCIDs(dbs, artistName)
   const ownName = onlyOwnStems ? targetUser?.trim() || undefined : undefined
   if (!ownName) return undefined
-  if (ownName === getStemPriorityUsername()) return (await getStemPriority(ownName)).own
-  return getArtistStemCIDs(dbs, ownName, OWN_STEMS_PAGE)
+  try {
+    if (ownName === getStemPriorityUsername()) return (await getStemPriority(ownName)).own
+    return await getArtistStemCIDs(dbs, ownName, OWN_STEMS_PAGE)
+  } catch (err) {
+    console.error('discoverStemRestriction: reading own stems failed, rolling unrestricted:', err)
+    return undefined
+  }
 }

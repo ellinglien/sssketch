@@ -254,4 +254,23 @@ describe('discoverStemRestriction: only my stems', () => {
     expect(pageReads()).toBe(3)
     expect(vi.mocked(getStemPriority)).not.toHaveBeenCalled()
   })
+
+  it('a failed read gives no restriction (the post-filter still applies), never a rejected roll', async () => {
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      vi.mocked(getStemPriorityUsername).mockReturnValue('elling')
+      vi.mocked(getStemPriority).mockRejectedValue(new Error('disk I/O error'))
+      const mine = { onlyOwnStems: true, targetUser: 'elling' }
+      expect(await discoverStemRestriction([archive()], mine)).toBeUndefined()
+      // quitting: the paged walk stops
+      vi.mocked(getStemPriorityUsername).mockReturnValue(null)
+      const db = archive()
+      seed(db, 'e1', 'jam1', 'elling')
+      abortArtistStemWalks()
+      expect(await discoverStemRestriction([db], mine)).toBeUndefined()
+      expect(errors).toHaveBeenCalledTimes(2)
+    } finally {
+      errors.mockRestore()
+    }
+  })
 })
