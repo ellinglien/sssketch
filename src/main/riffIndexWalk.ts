@@ -180,7 +180,10 @@ export async function walkRiffs(
   const watermark = state.watermark
   if (!watermark) throw new Error('walkRiffs: a legacy index has no watermark to extend from')
   // Slots 9+ (sssketch's own db only; an external archive has no such
-  // table, checked once per walk) are read with each batch of riffs, one
+  // table: checked here once per walk, so a db without it never calls the
+  // reader -- on the own db readExtraStemSlots repeats that cheap PRAGMA
+  // table_info, against the in-memory schema, once per call, i.e. per page
+  // or open-riff chunk) are read with each batch of riffs, one
   // `RiffCID IN (...)` query per statement's rows -- never per riff, and
   // never once up front: a riff committed while the walk runs (its
   // RiffStemsExtra rows land in the same transaction) would otherwise be

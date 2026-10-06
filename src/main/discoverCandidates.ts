@@ -33,6 +33,7 @@ import { getTraitQuantileTables, getTraitValueTable } from './traitQuantileCache
 import { countWork } from './workCounters'
 import type { StemFeatures } from '@shared/stemFeatures'
 import {
+  invalidateRiffIndexCache,
   loadCachedRiffIndex,
   loadCachedRiffOpenRowids,
   persistRiffIndexPage,
@@ -209,6 +210,18 @@ const riffIndexCache = new WeakMap<
 // scan rather than reusing a long-finished promise forever.
 const riffIndexInFlight = new WeakMap<Database.Database, Promise<Map<string, RiffIndexEntry>>>()
 
+/** Bumped by dropInMemoryRiffIndex (forgetDiscoveredRifff). A riff-index walk
+ * records it at its start: one that finishes after a forget holds the
+ * pre-forget index (the kept group folded in by appendToInMemoryDiscoverCaches)
+ * and a watermark that never counted the forgotten riff, so the shared rule
+ * would extend it as current for the whole session. Such a walk neither
+ * installs its index nor leaves a saved meta behind (review of bc6baef0 fix 2). */
+const riffIndexForgets = new WeakMap<Database.Database, number>()
+
+function riffIndexForgetGeneration(db: Database.Database): number {
+  return riffIndexForgets.get(db) ?? 0
+}
+
 /** Every StemCID in `db`'s own Riffs table, mapped to its owning riff's
  * {RiffCID, OwnerJamCID, BPMrnd} -- built via ONE unfiltered `SELECT *`
  * (no per-row WHERE-clause evaluation at all, the cheapest possible shape
@@ -238,8 +251,10 @@ function shareRiffIndexBuild(
   db: Database.Database,
   build: Promise<Map<string, RiffIndexEntry>>
 ): Promise<Map<string, RiffIndexEntry>> {
-  const promise = build.finally(() => {
-    riffIndexInFlight.delete(db)
+  const promise: Promise<Map<string, RiffIndexEntry>> = build.finally(() => {
+    // Only its own entry: a forget mid-walk drops it, and a newer build may
+    // have registered meanwhile.
+    if (riffIndexInFlight.get(db) === promise) riffIndexInFlight.delete(db)
   })
   riffIndexInFlight.set(db, promise)
   return promise
@@ -257,6 +272,7 @@ async function buildRiffIndex(
   previous: RiffIndexState | undefined,
   onProgress?: ScanProgressCallback
 ): Promise<Map<string, RiffIndexEntry>> {
+  const generation = riffIndexForgetGeneration(db)
   const signal = readTableSignal(db, 'Riffs')
   const state = newScanCacheState(signal)
   if (!signal) {
@@ -272,6 +288,11 @@ async function buildRiffIndex(
       : emptyRiffIndexState()
   countWork(walk === previous ? 'riff-index:extend' : 'riff-index:rebuild')
   await walkRiffs(db, walk, { onProgress, total: signal.count })
+  // Forgotten mid-walk: this index is the pre-forget one -- start afresh.
+  // (A fresh walk, not getRiffIndexForDb: a forget that landed before this
+  // build was registered left it in riffIndexInFlight, and it can't wait on
+  // itself.)
+  if (riffIndexForgetGeneration(db) !== generation) return buildRiffIndex(db, undefined, onProgress)
   riffIndexCache.set(db, { index: walk.index, state, walk })
   return walk.index
 }
@@ -294,6 +315,8 @@ async function warmRiffIndex(
   onProgress: ScanProgressCallback
 ): Promise<Map<string, RiffIndexEntry>> {
   const key = db.name
+  const generation = riffIndexForgetGeneration(db)
+  const forgotten = (): boolean => riffIndexForgetGeneration(db) !== generation
   const live = readTableSignal(db, 'Riffs')
   if (!live) return buildRiffIndex(db, undefined, onProgress)
   const meta = readRiffIndexMeta(ownDb, key)
@@ -330,8 +353,18 @@ async function warmRiffIndex(
     await walkRiffs(db, walk, {
       onProgress,
       total: live.count,
-      onPage: (page) => persistRiffIndexPage(ownDb, key, page)
+      // Once forgotten, nothing more is saved: a page's meta would re-create
+      // the one forget just deleted.
+      onPage: async (page) => {
+        if (!forgotten()) await persistRiffIndexPage(ownDb, key, page)
+      }
     })
+  }
+  if (forgotten()) {
+    // A page saved across the forget (its sliced transactions yield) may
+    // have written the meta again: drop it, so the next launch rebuilds.
+    invalidateRiffIndexCache(ownDb, key)
+    return buildRiffIndex(db, undefined, onProgress)
   }
   riffIndexCache.set(db, { index: walk.index, state, walk })
   return walk.index
@@ -2280,6 +2313,10 @@ async function getRandomOwnStemCandidate(
  * walk of the own db is the honest price. */
 export function dropInMemoryRiffIndex(db: Database.Database): void {
   riffIndexCache.delete(db)
+  // A walk already running holds the pre-forget index: it must not install
+  // it (or save its meta), and later callers must not wait on it.
+  riffIndexForgets.set(db, riffIndexForgetGeneration(db) + 1)
+  riffIndexInFlight.delete(db)
 }
 
 /** Tests only: `db`'s in-memory instrument rows, or null when none. */

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import type { DiscoveredMemberInput } from './discoveredLibrary'
+import { CACHE_CHANGE_CHECK_INTERVAL_MS } from './tableChangeSignal'
 
 let userDataDir: string
 
@@ -70,6 +71,7 @@ describe('discoveredLibrary', () => {
   })
 
   afterEach(async () => {
+    vi.useRealTimers()
     const { setRiffLibraryRootForTests } = await import('./riffLibraryStore')
     setRiffLibraryRootForTests(null)
     rmSync(userDataDir, { recursive: true, force: true })
@@ -343,6 +345,111 @@ describe('discoveredLibrary', () => {
     await prewarmDiscoverCandidateCaches([{ jamCID: 'j1', dbForJam: relaunched }], relaunched)
     expect((await getRiffIndexForDb(relaunched)).get('k1')).toBeUndefined()
     expect((await getRiffIndexForDb(relaunched)).get('old1')?.riffCID).toBe('r1')
+    relaunched.close()
+  })
+
+  // Review of bc6baef0 fix 2: a forget that lands while a riff-index walk is
+  // running. The walk holds the pre-forget index (with the kept group folded
+  // in) and a watermark that never counted the kept riff, so without a guard
+  // it put that index back in memory -- and the prewarm's walk re-wrote the
+  // meta forget had just deleted, so the stale rows persisted too.
+  // Synchronous on purpose: the keep and the forget must land between two of
+  // the walk's awaits, not after it.
+  function keepOne(
+    save: typeof import('./discoveredLibrary').saveDiscoveredRifff,
+    db: Database.Database,
+    stemCID: string
+  ): ReturnType<typeof save> {
+    return save(db, [], {
+      members: [
+        {
+          path: seedStemOnDisk(stemCID),
+          gain: 1,
+          name: 'n',
+          author: 'a',
+          barLength: 1,
+          durationSec: 1
+        }
+      ],
+      bpm: 120,
+      barLength: 1,
+      creationTime: 1
+    })
+  }
+
+  it('forget during an in-session extension: the walk does not restore the forgotten group', async () => {
+    const { saveDiscoveredRifff, forgetDiscoveredRifff } = await import('./discoveredLibrary')
+    const { appendToInMemoryDiscoverCaches, getRiffIndexForDb, prewarmDiscoverCandidateCaches } =
+      await import('./discoverCandidates')
+    const db = freshOwnDb(join(userDataDir, 'own.db'))
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('r1', 'j1', 120, 'old1')`
+    ).run()
+    db.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES ('k1', 'j1')`).run()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'j1', dbForJam: db }], db)
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('r2', 'j1', 120, 'new2')`
+    ).run()
+    // past the change-check interval, so the next read sees r2 and extends
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(Date.now() + CACHE_CHANGE_CHECK_INTERVAL_MS + 1_000)
+
+    // The extension starts (and reads r2) up to its first await...
+    const extending = getRiffIndexForDb(db)
+    // ...then, before it finishes, a keep folds in and is forgotten.
+    const kept = keepOne(saveDiscoveredRifff, db, 'k1')
+    appendToInMemoryDiscoverCaches(db, kept!.indexRows, kept!.newInstrumentRows)
+    forgetDiscoveredRifff(db, kept!.riffCID)
+    const fromWalk = await extending
+
+    expect(fromWalk.get('k1')).toBeUndefined()
+    const after = await getRiffIndexForDb(db)
+    expect(after.get('k1')).toBeUndefined()
+    expect(after.get('old1')?.riffCID).toBe('r1')
+    expect(after.get('new2')?.riffCID).toBe('r2')
+    vi.useRealTimers()
+    db.close()
+  })
+
+  it("forget during the prewarm's extension: neither restored in memory nor persisted", async () => {
+    const { saveDiscoveredRifff, forgetDiscoveredRifff } = await import('./discoveredLibrary')
+    const { getRiffIndexForDb, prewarmDiscoverCandidateCaches } =
+      await import('./discoverCandidates')
+    const path = join(userDataDir, 'own.db')
+    const first = freshOwnDb(path)
+    first
+      .prepare(
+        `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('r1', 'j1', 120, 'old1')`
+      )
+      .run()
+    first.prepare(`INSERT INTO Stems (StemCID, OwnerJamCID) VALUES ('k1', 'j1')`).run()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'j1', dbForJam: first }], first)
+    first.close()
+
+    // A relaunch: the saved index extends over r2. While it is loading the
+    // saved copy, a keep lands (its index rows appended to the saved copy)
+    // and is forgotten (the meta deleted).
+    const db = new Database(path)
+    db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('r2', 'j1', 120, 'new2')`
+    ).run()
+    let landed = false
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'j1', dbForJam: db }], db, (progress) => {
+      if (landed || progress.phase !== 'riffIndex') return
+      landed = true
+      const kept = keepOne(saveDiscoveredRifff, db, 'k1')
+      forgetDiscoveredRifff(db, kept!.riffCID)
+    })
+    expect(landed).toBe(true)
+    expect((await getRiffIndexForDb(db)).get('k1')).toBeUndefined()
+    db.close()
+
+    const relaunched = new Database(path)
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'j1', dbForJam: relaunched }], relaunched)
+    const index = await getRiffIndexForDb(relaunched)
+    expect(index.get('k1')).toBeUndefined()
+    expect(index.get('old1')?.riffCID).toBe('r1')
+    expect(index.get('new2')?.riffCID).toBe('r2')
     relaunched.close()
   })
 
