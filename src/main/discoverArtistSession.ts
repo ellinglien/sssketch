@@ -63,7 +63,8 @@ export function setDiscoverArtistSession(next: DiscoverArtistSessionUpdate): Art
   return currentArtistMode()
 }
 
-/** The whole selection, for anything main does per artist (the prewarm). */
+/** The whole selection, as main's mirror holds it (the session's tests read it; nothing in main
+ * acts per artist on it yet -- the prewarm takes its names from the renderer). */
 export function getDiscoverArtistSelection(): ArtistSelection {
   return selection
 }

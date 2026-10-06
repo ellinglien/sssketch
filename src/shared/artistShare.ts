@@ -16,6 +16,7 @@
 // they did before (artistShare.test.ts pins it).
 import {
   memberKey,
+  memberOfPick,
   rollFilterForMember,
   type ArtistMember,
   type ArtistSelection
@@ -50,18 +51,23 @@ function get(record: Readonly<Record<string, number>>, key: string): number {
  * where there is a tie, so never for one member). Members in `skip` (memberKey; known to have
  * nothing for this row, artistKnownEmpty) are left out, unless that would leave nobody, in which
  * case they are all asked anyway (the memo can be wrong, and a row must never go unpicked because
- * of it). */
+ * of it). `pending` (memberKey -> count, pendingArtistTurns) counts picks already made but still
+ * waiting to land: while radio runs, a roll-all's picks are made one after another and all land
+ * at the loop top, so without it every pick of the batch would see the same ledger. */
 export function artistShareOrder(
   selection: ArtistSelection,
   ledger: ArtistShareLedger,
   random: () => number,
-  skip: ReadonlySet<string> = new Set()
+  skip: ReadonlySet<string> = new Set(),
+  pending: Readonly<Record<string, number>> = {}
 ): ArtistMember[] {
   const asked = selection.filter((m) => !skip.has(memberKey(m)))
   const members = asked.length > 0 ? asked : [...selection]
   if (members.length === 1) return members
   const load = (m: ArtistMember): number =>
-    get(ledger.landed, memberKey(m)) + get(ledger.inFlight, memberKey(m))
+    get(ledger.landed, memberKey(m)) +
+    get(ledger.inFlight, memberKey(m)) +
+    get(pending, memberKey(m))
   const byLoad = new Map<number, ArtistMember[]>()
   for (const m of members) {
     const l = load(m)
@@ -96,9 +102,10 @@ export function artistPickAttempts(
   random: () => number,
   ownUsername: string,
   onlyOwnStems: boolean,
-  skip?: ReadonlySet<string>
+  skip?: ReadonlySet<string>,
+  pending?: Readonly<Record<string, number>>
 ): ArtistPickAttempt[] {
-  return artistShareOrder(selection, ledger, random, skip).map((member) => ({
+  return artistShareOrder(selection, ledger, random, skip, pending).map((member) => ({
     member,
     filter: rollFilterForMember(member, selection, ownUsername, onlyOwnStems)
   }))
@@ -152,6 +159,22 @@ export function reconcileArtistShare(
     if (get(ledger.inFlight, k) > 0) inFlight[k] = ledger.inFlight[k]
   }
   return { landed, inFlight }
+}
+
+/** Picks made but not landed yet (queued for radio's loop top), per member (memberKey), for
+ * artistShareOrder's `pending`. A pick that belongs to no member (memberOfPick) counts for nobody. */
+export function pendingArtistTurns(
+  candidates: Iterable<{ pickedUnderArtist?: string } | null | undefined>,
+  selection: ArtistSelection
+): Record<string, number> {
+  const out: Record<string, number> = {}
+  for (const c of candidates) {
+    const member = memberOfPick(c, selection)
+    if (member === undefined) continue
+    const key = memberKey(member)
+    out[key] = (out[key] ?? 0) + 1
+  }
+  return out
 }
 
 /** "This member had nothing for these kinds" (memberKey|kindsKey -> expiry, ms). */

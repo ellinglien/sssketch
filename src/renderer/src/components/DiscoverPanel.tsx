@@ -278,6 +278,7 @@ import {
   endArtistTurn,
   landArtistTurn,
   noteArtistEmpty,
+  pendingArtistTurns,
   type ArtistEmptyMemo,
   type ArtistShareLedger
 } from '@shared/artistShare'
@@ -6822,7 +6823,8 @@ export function DiscoverPanel({
     onArtistsChange(next)
     setAnalysisQueued(null)
     const added = selectionOthers(next).filter((m) => !prev.includes(m))
-    if (added.length > 0) void window.rifffApi.discoverPrewarmArtists(added)
+    // A combination only: one artist's first pick reads its list at once anyway (§9).
+    if (added.length > 0 && isCombined(next)) void window.rifffApi.discoverPrewarmArtists(added)
     if (!radioOnRef.current) return
     artistTurnoverRef.current = selectionTurnoverIds(
       slotsRef.current.map((s) => ({ id: s.id, creator: s.candidate?.creatorUserName ?? null })),
@@ -6846,6 +6848,27 @@ export function DiscoverPanel({
     if (member === undefined) return
     artistShareRef.current = landArtistTurn(artistShareRef.current, member)
     setArtistTurnsShown(artistShareRef.current.landed)
+  }
+  /** A roll-all's picks made while radio runs and not queued yet (rerollAllOnTheTop), by row. */
+  const artistBatchPicksRef = useRef<Map<string, DiscoverCandidate | null>>(new Map())
+  /** Picks made but still waiting to land, per member: the manual changes queued for the loop
+   * top (a hook's or the arc's own landing excepted) and a roll-all batch not yet queued. Without
+   * them every pick of a roll-all would see the same ledger and go to the same artist (review of
+   * bba70921). Empty for one artist. */
+  function artistPendingNow(selection: ArtistSelection): Record<string, number> {
+    if (!isCombined(selection)) return {}
+    const waiting: (DiscoverCandidate | null)[] = [...artistBatchPicksRef.current.values()]
+    for (const change of manualChangesRef.current.values()) {
+      if (change.hook !== undefined || change.arc !== undefined) continue
+      waiting.push(change.pick.candidate)
+    }
+    return pendingArtistTurns(waiting, selection)
+  }
+  /** The empty memo's key: the row's kinds and the sources the dial allows now (at an end of the
+   * dial, empty means empty for that one source). */
+  function artistMemoKey(kinds: DiscoverSlotKind[]): string {
+    const source = soundSourceForLean(sourceLeanRef.current)
+    return `${slotKindsKey(kinds)}|${source.endlesss ? 'e' : ''}${source.audioIn ? 'a' : ''}`
   }
   const radioMenuButtonRef = useRef<HTMLButtonElement>(null)
   // The top line's `radio` (the stop), while radio runs.
@@ -7370,6 +7393,10 @@ export function DiscoverPanel({
           }
           // a hook's (or the intensity arc's) own landing is not a manual change: it clears no hook
           commitSlotPick(slotId, change.pick, change.hook !== undefined || change.arc !== undefined)
+          // A hook exit's substitute is a fresh pick, so a turn for its member (combine artists);
+          // the hooked stem's return, a resting exit and the arc's landings are not.
+          if (change.hook === 'exit' && change.rest !== true)
+            noteArtistLanding(change.pick.candidate)
           noteTurnaroundLanding(slotId, change.stem?.barLength ?? null)
           noteFoldLanding(slotId, change.pick, change.stem)
           // A manual change is a straight cut: on a row the fold holds, the machine follows by
@@ -9293,13 +9320,15 @@ export function DiscoverPanel({
     // in the finally below, for whichever member the pick ended on.
     const selection = artistsRef.current
     const kindsKeyNow = slotKindsKey(kinds)
+    const memoKeyNow = artistMemoKey(kinds)
     const attempts = artistPickAttempts(
       selection,
       artistShareRef.current,
       Math.random,
       currentUsername,
       globalRollOptions.onlyOwnStems,
-      artistKnownEmpty(artistEmptyRef.current, selection, kindsKeyNow, wallClockMs())
+      artistKnownEmpty(artistEmptyRef.current, selection, memoKeyNow, wallClockMs()),
+      artistPendingNow(selection)
     )
     let attempt = 0
     artistShareRef.current = beginArtistTurn(artistShareRef.current, attempts[0].member)
@@ -9510,7 +9539,7 @@ export function DiscoverPanel({
             artistEmptyRef.current = noteArtistEmpty(
               artistEmptyRef.current,
               skipped,
-              kindsKeyNow,
+              memoKeyNow,
               wallClockMs()
             )
           }
@@ -9871,7 +9900,8 @@ export function DiscoverPanel({
       Math.random,
       currentUsername,
       globalRollOptions.onlyOwnStems,
-      artistKnownEmpty(artistEmptyRef.current, selection, slotKindsKey(kinds), wallClockMs())
+      artistKnownEmpty(artistEmptyRef.current, selection, artistMemoKey(kinds), wallClockMs()),
+      artistPendingNow(selection)
     )
     let attempt = 0
     artistShareRef.current = beginArtistTurn(artistShareRef.current, attempts[0].member)
@@ -9905,9 +9935,16 @@ export function DiscoverPanel({
         if (candidate !== null || attempt + 1 >= attempts.length) break
         if (rerollGenerationRef.current.get(id) !== myGeneration) return
         const skipped = attempts[attempt].member
-        console.log(
-          `[artist-share] rollRandomForSlot -- ${artistSkipWord(skipped, currentUsername)}`
-        )
+        const word = artistSkipWord(skipped, currentUsername)
+        console.log(`[artist-share] rollRandomForSlot -- ${word}`)
+        // flashed on the row while radio runs, as pickForSlot's pass-on is (decision 13)
+        if (radioOnRef.current) {
+          const at = radioPlayRef.current.startBars + (radioClockRef.current?.lastPos ?? 0)
+          radioFlashLogRef.current = [
+            ...radioFlashLogRef.current,
+            { rowId: id, word, at, key: `artist-random-${attempt}@${id}@${myGeneration}` }
+          ]
+        }
         artistShareRef.current = endArtistTurn(artistShareRef.current, skipped)
         attempt += 1
         artistShareRef.current = beginArtistTurn(artistShareRef.current, attempts[attempt].member)
@@ -10053,13 +10090,19 @@ export function DiscoverPanel({
     // picks take and whatever else is pushed meanwhile.
     const undoSeq = undoSequence.latest()
     const picks: { id: string; kindsKey: string; pick: SlotPick }[] = []
-    for (const slotId of slotIds) {
-      const current = slotsRef.current.find((s) => s.id === slotId)
-      if (!current || current.locked) continue
-      if (manualWaitingOn(slotId)) continue
-      const pick = await pickForSlot(current.id, current.kinds)
-      if (pick === null) continue
-      picks.push({ id: current.id, kindsKey: slotKindsKey(current.kinds), pick })
+    try {
+      for (const slotId of slotIds) {
+        const current = slotsRef.current.find((s) => s.id === slotId)
+        if (!current || current.locked) continue
+        if (manualWaitingOn(slotId)) continue
+        const pick = await pickForSlot(current.id, current.kinds)
+        if (pick === null) continue
+        picks.push({ id: current.id, kindsKey: slotKindsKey(current.kinds), pick })
+        // waiting to land: the batch's next picks count it (combine artists, artistPendingNow)
+        artistBatchPicksRef.current.set(current.id, pick.candidate)
+      }
+    } finally {
+      for (const { id } of picks) artistBatchPicksRef.current.delete(id)
     }
     for (const { id, kindsKey, pick } of picks) {
       const now = slotsRef.current.find((s) => s.id === id)

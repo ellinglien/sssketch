@@ -13,6 +13,7 @@ import {
   endArtistTurn,
   landArtistTurn,
   noteArtistEmpty,
+  pendingArtistTurns,
   reconcileArtistShare,
   type ArtistShareLedger
 } from './artistShare'
@@ -204,5 +205,54 @@ describe('reconcileArtistShare', () => {
     let ledger = reconcileArtistShare(EMPTY_ARTIST_SHARE, ['a', 'b'])
     for (let i = 0; i < 50; i += 1) ledger = landArtistTurn(ledger, 'b')
     expect(ledger.landed).toEqual({ a: 48, b: 50 })
+  })
+})
+
+describe('picks waiting to land (radio queues them for the loop top)', () => {
+  it('count toward their member, so a member with picks waiting is asked later', () => {
+    const ledger = landArtistTurn(reconcileArtistShare(EMPTY_ARTIST_SHARE, ['a', 'b']), 'a')
+    const r = counting(seededRandom('pending'))
+    expect(artistShareOrder(['a', 'b'], ledger, r.random, undefined, { b: 2 })).toEqual(['a', 'b'])
+    expect(r.calls()).toBe(0)
+  })
+  it('one member still draws nothing', () => {
+    const r = counting(seededRandom('pending-one'))
+    expect(
+      artistPickAttempts(['a'], EMPTY_ARTIST_SHARE, r.random, 'elling', false, undefined, { a: 3 })
+    ).toHaveLength(1)
+    expect(r.calls()).toBe(0)
+  })
+  it('a roll-all picked one after another and landed at the top spreads evenly', () => {
+    for (const seed of ['t1', 't2', 't3', 't4']) {
+      const random = seededRandom(seed)
+      const sel: ArtistSelection = ['a', 'b']
+      // a is one turn behind b
+      let ledger = landArtistTurn(reconcileArtistShare(EMPTY_ARTIST_SHARE, sel), 'b')
+      const queued: { pickedUnderArtist?: string }[] = []
+      for (let i = 0; i < 4; i += 1) {
+        const pending = pendingArtistTurns(queued, sel)
+        const m = artistShareOrder(sel, ledger, random, undefined, pending)[0]
+        ledger = endArtistTurn(beginArtistTurn(ledger, m), m)
+        queued.push(m === null ? {} : { pickedUnderArtist: m })
+      }
+      expect(tally(queued.map((c) => c.pickedUnderArtist ?? null))).not.toEqual({ a: 4 })
+      for (const c of queued) ledger = landArtistTurn(ledger, c.pickedUnderArtist ?? null)
+      expect(Math.abs(ledger.landed.a - ledger.landed.b)).toBeLessThanOrEqual(1)
+    }
+  })
+  it('pendingArtistTurns counts members only, me for an untagged pick when me is in', () => {
+    expect(
+      pendingArtistTurns(
+        [
+          { pickedUnderArtist: 'a' },
+          {},
+          null,
+          { pickedUnderArtist: 'x' },
+          { pickedUnderArtist: 'a' }
+        ],
+        ['a', null]
+      )
+    ).toEqual({ a: 2, ':me': 1 })
+    expect(pendingArtistTurns([{}], ['a', 'b'])).toEqual({})
   })
 })

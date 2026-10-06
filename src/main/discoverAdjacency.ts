@@ -171,16 +171,11 @@ export async function getAdjacentDiscoverCandidates(
 ): Promise<AdjacentWalkResult<AdjacentDiscoverCandidate>> {
   const sizes = adjacentWalkSizes(options.matchesPerDirection)
   // A blank creator is no filter, never "only stems with no creator". A list (combine artists)
-  // is trimmed and kept only when something is left in it.
+  // is trimmed; an empty one allows nobody (creatorAllowed), never everybody.
   const creatorName: string | readonly string[] | undefined =
     typeof creator === 'string'
       ? creator.trim() || undefined
-      : creator !== undefined
-        ? (() => {
-            const names = creator.map((c) => c.trim()).filter((c) => c !== '')
-            return names.length > 0 ? names : undefined
-          })()
-        : undefined
+      : creator?.map((c) => c.trim()).filter((c) => c !== '')
   const context = resolveRiffWithContext(centerRiffCID)
   if (!context) return { newer: [], older: [] }
 

@@ -252,6 +252,8 @@ export function DiscoverArtistPicker({
                 key={member ?? ':me'}
                 type="button"
                 aria-label={`remove ${name}`}
+                // the search field keeps focus (Shift+Enter, Backspace, the arrows)
+                onMouseDown={(e) => e.preventDefault()}
                 onClick={() => onChange(applyArtistPick(selection, member, 'toggle', ownUsername))}
                 style={{
                   fontFamily: 'inherit',
@@ -374,6 +376,8 @@ export function DiscoverArtistPicker({
                 tabIndex={-1}
                 aria-label={`${chosen ? 'remove' : 'add'} ${name}`}
                 disabled={!canToggle}
+                // the search field keeps focus, as for the chips
+                onMouseDown={(e) => e.preventDefault()}
                 data-tooltip={
                   canToggle
                     ? undefined

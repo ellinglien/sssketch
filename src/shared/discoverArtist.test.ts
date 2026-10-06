@@ -132,6 +132,8 @@ describe('creatorAllowed', () => {
     expect(creatorAllowed('bananepoep', ['elling', 'tpj'])).toBe(false)
     expect(creatorAllowed(null, ['elling', 'tpj'])).toBe(false)
     expect(creatorAllowed(undefined, ['elling'])).toBe(false)
+    // an empty list (main's adjacency after trimming) allows nobody, never everybody
+    expect(creatorAllowed('tpj', [])).toBe(false)
   })
 })
 
