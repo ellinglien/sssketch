@@ -2270,14 +2270,20 @@ describe('background efficiency B2: per-kind stem lists', () => {
   })
 
   it('picks up a StemAutoCategory row written straight to SQL (change signal query)', async () => {
+    let now = 3_000_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
     const own = freshDb()
     seedRiff(own, 'r1', 'jam1', 120, ['mic'])
     seedStem(own, 'mic', 'jam1', { instrument: 1 << 4 })
     const jams = [{ jamCID: 'jam1', dbForJam: own }]
     expect(await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'] })).toEqual([])
     seedAutoCategory(own, 'mic', 'lead')
+    // The guess layer rebuilds at most every GUESS_LAYER_MIN_MS (scan plan
+    // Task 10): the signal still sees the write, on the next rebuild.
+    now += 10_000
     const lead = await getDiscoverCandidates({ ownDb: own, jams, kinds: ['lead'] })
     expect(lead.map((c) => [c.stemCID, c.kindSources.lead])).toEqual([['mic', 'guess']])
+    vi.restoreAllMocks()
   })
 })
 
@@ -3454,5 +3460,123 @@ describe('instrument rows walk and extension (scan plan Task 3)', () => {
     expect(walkedStems()).toBe(15)
     const lookup = getInstrumentMaskLookup(src)!
     for (const [id, row] of oracle(path)) expect(lookup(id)).toBe(row.Instrument)
+  })
+})
+
+// Scan plan b21ea5a2 Task 10 (audit 9): the kind index keeps a base layer
+// (confirmed + tag, plus the residue rows the mask can't place) and rebuilds
+// only its small guess layer when StemAutoCategory moves -- at most once per
+// GUESS_LAYER_MIN_MS (10 s). Confirmations rebuild both at once.
+describe('kind index layers (scan plan Task 10)', () => {
+  const T0 = 2_000_000_000
+  let now = T0
+  beforeEach(() => {
+    now = T0
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    vi.mocked(countWork).mockClear()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const count = (kind: string): number =>
+    vi.mocked(countWork).mock.calls.filter(([k]) => k === kind).length
+
+  function library(): Database.Database {
+    const own = freshDb()
+    seedRiff(own, 'r1', 'jam1', 120, ['d1', 'mic1', 'mic2', 'b1', 'c1'])
+    seedStem(own, 'd1', 'jam1', { instrument: 1 << 1 })
+    seedStem(own, 'mic1', 'jam1', { instrument: 1 << 4 })
+    seedStem(own, 'mic2', 'jam1', { instrument: 1 << 4 })
+    seedStem(own, 'b1', 'jam1', { instrument: 1 << 3 })
+    seedStem(own, 'c1', 'jam1', { instrument: 1 << 4 })
+    seedCategory(own, 'c1', { arrangeRole: 'lead' })
+    return own
+  }
+  const jamsOf = (db: Database.Database): { jamCID: string; dbForJam: Database.Database }[] => [
+    { jamCID: 'jam1', dbForJam: db }
+  ]
+
+  async function pool(
+    own: Database.Database,
+    kind: 'drums' | 'bass' | 'lead'
+  ): Promise<Map<string, string | undefined>> {
+    const got = await getDiscoverCandidates({ ownDb: own, jams: jamsOf(own), kinds: [kind] })
+    return new Map(got.map((c) => [c.stemCID, c.kindSources[kind]]))
+  }
+
+  /** The same library, indexed from scratch (a fresh connection). */
+  async function fromScratch(
+    own: Database.Database,
+    kind: 'drums' | 'bass' | 'lead'
+  ): Promise<Map<string, string | undefined>> {
+    return pool(new Database(own.serialize()), kind)
+  }
+
+  it('an auto write does not re-run the base pass; the guess shows once 10 s have passed', async () => {
+    const own = library()
+    expect(await pool(own, 'drums')).toEqual(new Map([['d1', 'tag']]))
+    expect(count('scan:discover.kind-index-rows')).toBe(1)
+
+    upsertStemAutoCategory(own, 'mic1', 'drums', 'embedding', 5)
+    now += 1_000
+    expect(await pool(own, 'drums')).toEqual(new Map([['d1', 'tag']])) // up to 10 s stale
+    now += 9_500
+    expect(await pool(own, 'drums')).toEqual(
+      new Map([
+        ['d1', 'tag'],
+        ['mic1', 'guess']
+      ])
+    )
+    expect(count('scan:discover.kind-index-rows')).toBe(1) // the base pass never re-ran
+    expect(count('kind-index:guess-rebuild')).toBe(1)
+  })
+
+  it('a confirmation rebuilds both layers at once', async () => {
+    const own = library()
+    upsertStemAutoCategory(own, 'mic1', 'drums', 'embedding', 5)
+    expect(await pool(own, 'drums')).toEqual(
+      new Map([
+        ['d1', 'tag'],
+        ['mic1', 'guess']
+      ])
+    )
+    upsertStemAutoCategory(own, 'mic2', 'drums', 'embedding', 6)
+    upsertStemCategoryRole(own, [{ path: 'mic1', arrangeRole: 'bass' }], 'discover', null, 7)
+    expect(await pool(own, 'drums')).toEqual(
+      new Map([
+        ['d1', 'tag'],
+        ['mic2', 'guess']
+      ])
+    )
+    expect(await pool(own, 'bass')).toEqual(
+      new Map([
+        ['b1', 'tag'],
+        ['mic1', 'confirmed']
+      ])
+    )
+    expect(count('scan:discover.kind-index-rows')).toBe(2)
+  })
+
+  it('after any mix of writes, once settled, the pools equal a from-scratch build', async () => {
+    const own = library()
+    const kinds = ['drums', 'bass', 'lead'] as const
+    for (const kind of kinds) await pool(own, kind)
+    const writes: (() => void)[] = [
+      () => upsertStemAutoCategory(own, 'mic1', 'lead', 'embedding', 10),
+      () => upsertStemAutoCategory(own, 'mic2', 'bass', 'yamnet-zeroshot', 11),
+      () => upsertStemAutoCategory(own, 'c1', 'drums', 'embedding', 12), // confirmed wins
+      () => upsertStemAutoCategory(own, 'd1', 'bass', 'embedding', 13), // the tag wins
+      () =>
+        upsertStemCategoryRole(own, [{ path: 'mic2', arrangeRole: 'drums' }], 'discover', null, 14),
+      () => upsertStemAutoCategory(own, 'mic1', 'drums', 'centroid', 15)
+    ]
+    for (const write of writes) {
+      write()
+      now += 3_000
+      for (const kind of kinds) await pool(own, kind)
+    }
+    now += 10_001
+    for (const kind of kinds) expect(await pool(own, kind)).toEqual(await fromScratch(own, kind))
   })
 })

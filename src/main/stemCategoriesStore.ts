@@ -151,7 +151,7 @@ export function upsertStemCategoryRole(
   })
   txn(entries)
   // Discover's precomputed per-kind stem lists read ArrangeRole.
-  bumpStemClassificationVersion(db)
+  bumpStemClassificationVersion(db, 'confirmed')
   // A confirmation changes the classifier's training and eligibility --
   // its pending lists rebuild on the next batch (background efficiency B4).
   noteAutoClassifyTrainingChanged()

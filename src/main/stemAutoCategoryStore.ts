@@ -159,5 +159,5 @@ export function upsertStemAutoCategory(
     )
     .run({ stemCID, arrangeRole, source, computedAt })
   // Discover's precomputed per-kind stem lists read this table.
-  bumpStemClassificationVersion(ownDb)
+  bumpStemClassificationVersion(ownDb, 'auto')
 }

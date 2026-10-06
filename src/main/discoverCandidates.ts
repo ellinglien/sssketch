@@ -756,18 +756,28 @@ async function getMaskKindStemMasks(
   for (const [db, allowedJamCIDs] of jamCIDsByDb) {
     const rows = await getInstrumentRowsForDb(db)
     const index = await getMaskKindIndex(db, rows, ownDb, signature)
-    const admitted = index.byKind.get(kind as DiscoverMaskKind)
-    if (!admitted) continue
-    countWork('scan:discover.kind-list-rows', admitted.rows.length)
-    for (let i = 0; i < admitted.rows.length; i++) {
-      const row = admitted.rows[i]
-      if (allowedJamCIDs.has(row.OwnerJamCID) && !maskByStemCID.has(row.StemCID)) {
-        maskByStemCID.set(row.StemCID, { instrument: row.Instrument, source: admitted.sources[i] })
-      }
-      sinceYield += 1
-      if (sinceYield >= CLASSIFY_YIELD_EVERY) {
-        sinceYield = 0
-        await yieldToEventLoop()
+    // The base list (confirmed + tag), then the guess list: disjoint by
+    // StemCID within a db (one Stems row per StemCID), so the order between
+    // them changes nothing but iteration order.
+    for (const admitted of [
+      index.byKind.get(kind as DiscoverMaskKind),
+      index.guess.byKind.get(kind as DiscoverMaskKind)
+    ]) {
+      if (!admitted) continue
+      countWork('scan:discover.kind-list-rows', admitted.rows.length)
+      for (let i = 0; i < admitted.rows.length; i++) {
+        const row = admitted.rows[i]
+        if (allowedJamCIDs.has(row.OwnerJamCID) && !maskByStemCID.has(row.StemCID)) {
+          maskByStemCID.set(row.StemCID, {
+            instrument: row.Instrument,
+            source: admitted.sources[i]
+          })
+        }
+        sinceYield += 1
+        if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+          sinceYield = 0
+          await yieldToEventLoop()
+        }
       }
     }
   }
@@ -785,14 +795,43 @@ interface MaskKindList {
 
 /** Background efficiency B2: per db, every instrument row admitted to each
  * mask kind (getMaskKindStemMasks's own rule), computed once from the
- * cached instrument rows + ownDb's StemCategories/StemAutoCategory. Valid
- * while `rows` is the same cached array (a rebuilt instrument-row cache is
- * a new array) and the classification signature hasn't moved. */
+ * cached instrument rows + ownDb's StemCategories/StemAutoCategory.
+ *
+ * In two layers since scan plan b21ea5a2 Task 10 (audit 9):
+ * - the BASE (`byKind`: confirmed + tag, and `residue`: the rows neither
+ *   confirmed nor placed by their mask) -- valid while `rows` is the same
+ *   cached array (a rebuilt or extended instrument-row cache is a new
+ *   array) and the confirmed signature hasn't moved;
+ * - the GUESS layer (`guess.byKind`): residue rows whose overnight guess is
+ *   the kind's role, rebuilt from the residue alone when only
+ *   StemAutoCategory moved, at most once per GUESS_LAYER_MIN_MS. Guesses
+ *   only ever add `guess` admissions for stems nothing else places, so a
+ *   guess up to 10 s late in a pool is acceptable (decision 13);
+ *   confirmations rebuild both at once. */
 interface MaskKindIndex {
   rows: InstrumentRow[]
   ownDb: Database.Database
-  signature: string
+  confirmedSignature: string
   byKind: Map<DiscoverMaskKind, MaskKindList>
+  residue: InstrumentRow[]
+  guess: GuessLayer
+  guessInFlight?: Promise<void>
+}
+
+interface GuessLayer {
+  autoSignature: string
+  builtAt: number
+  byKind: Map<DiscoverMaskKind, MaskKindList>
+}
+
+/** The guess layer is rebuilt at most this often while StemAutoCategory
+ * keeps moving (the classifier and zero-shot write about once a second
+ * while they have work). */
+export const GUESS_LAYER_MIN_MS = 10_000
+
+interface ClassificationSignature {
+  confirmed: string
+  auto: string
 }
 
 const maskKindIndexCache = new WeakMap<Database.Database, MaskKindIndex>()
@@ -801,18 +840,18 @@ const maskKindIndexInFlight = new WeakMap<
   {
     rows: InstrumentRow[]
     ownDb: Database.Database
-    signature: string
+    confirmedSignature: string
     promise: Promise<MaskKindIndex>
   }
 >()
 
-/** Cheap change signal for the classification tables, read once per roll:
- * the in-process write counter (stemClassificationVersion.ts -- catches
- * every write this app makes, even one that leaves counts/timestamps
- * alone) plus row counts and UpdatedAt/ComputedAt aggregates (catches a
- * write made straight to SQL). One small query on ownDb; both tables are
- * narrow (hundreds / tens of thousands of rows). */
-function readClassificationSignature(ownDb: Database.Database): string {
+/** Cheap change signal for the classification tables, read once per roll,
+ * split per table (Task 10): the in-process write counter
+ * (stemClassificationVersion.ts -- catches every write this app makes, even
+ * one that leaves counts/timestamps alone) plus row counts and
+ * UpdatedAt/ComputedAt aggregates (catches a write made straight to SQL).
+ * One small query on ownDb; both tables are narrow. */
+function readClassificationSignature(ownDb: Database.Database): ClassificationSignature {
   countWork('sql:discover.classification-signal')
   const row = ownDb
     .prepare(
@@ -825,25 +864,51 @@ function readClassificationSignature(ownDb: Database.Database): string {
          (SELECT TOTAL(ComputedAt) FROM StemAutoCategory) AS autoTotal`
     )
     .get() as Record<string, number | null>
-  return [
-    getStemClassificationVersion(ownDb),
-    row.confirmedCount,
-    row.confirmedMax,
-    row.confirmedTotal,
-    row.autoCount,
-    row.autoMax,
-    row.autoTotal
-  ].join('|')
+  return {
+    confirmed: [
+      getStemClassificationVersion(ownDb, 'confirmed'),
+      row.confirmedCount,
+      row.confirmedMax,
+      row.confirmedTotal
+    ].join('|'),
+    auto: [
+      getStemClassificationVersion(ownDb, 'auto'),
+      row.autoCount,
+      row.autoMax,
+      row.autoTotal
+    ].join('|')
+  }
 }
 
 async function getMaskKindIndex(
   db: Database.Database,
   rows: InstrumentRow[],
   ownDb: Database.Database,
-  signature: string
+  signature: ClassificationSignature
 ): Promise<MaskKindIndex> {
   const cached = maskKindIndexCache.get(db)
-  if (cached && cached.rows === rows && cached.ownDb === ownDb && cached.signature === signature) {
+  if (
+    cached &&
+    cached.rows === rows &&
+    cached.ownDb === ownDb &&
+    cached.confirmedSignature === signature.confirmed
+  ) {
+    if (
+      !cached.guessInFlight &&
+      cached.guess.autoSignature !== signature.auto &&
+      Date.now() - cached.guess.builtAt >= GUESS_LAYER_MIN_MS
+    ) {
+      // Shared by every roll that lands meanwhile.
+      countWork('kind-index:guess-rebuild')
+      cached.guessInFlight = buildGuessLayer(cached.residue, ownDb, signature.auto)
+        .then((guess) => {
+          cached.guess = guess
+        })
+        .finally(() => {
+          cached.guessInFlight = undefined
+        })
+    }
+    if (cached.guessInFlight) await cached.guessInFlight
     return cached
   }
   const inFlight = maskKindIndexInFlight.get(db)
@@ -851,7 +916,7 @@ async function getMaskKindIndex(
     inFlight &&
     inFlight.rows === rows &&
     inFlight.ownDb === ownDb &&
-    inFlight.signature === signature
+    inFlight.confirmedSignature === signature.confirmed
   ) {
     return inFlight.promise
   }
@@ -863,23 +928,40 @@ async function getMaskKindIndex(
     .finally(() => {
       if (maskKindIndexInFlight.get(db)?.promise === promise) maskKindIndexInFlight.delete(db)
     })
-  maskKindIndexInFlight.set(db, { rows, ownDb, signature, promise })
+  maskKindIndexInFlight.set(db, {
+    rows,
+    ownDb,
+    confirmedSignature: signature.confirmed,
+    promise
+  })
   return promise
 }
 
-/** One pass over `rows` for all three mask kinds. StemCategories is read
- * ONLY from ownDb (an external archive never has it -- see
- * getMaskDiscoverCandidates's own CRITICAL note). A stem confirmed for any
- * role is admitted only to that role's kind ('confirmed'); otherwise a
- * mask that places it decides alone ('tag'); otherwise the overnight
- * classifier's guess ('guess'). `.all()`, never `.iterate()` across the
+function kindByRole(): Map<string, DiscoverMaskKind> {
+  return new Map<string, DiscoverMaskKind>(
+    DISCOVER_MASK_SLOT_KINDS.map((k) => [discoverSlotKindToArrangeRole(k), k as DiscoverMaskKind])
+  )
+}
+
+function emptyKindLists(): Map<DiscoverMaskKind, MaskKindList> {
+  return new Map<DiscoverMaskKind, MaskKindList>(
+    DISCOVER_MASK_SLOT_KINDS.map((k) => [k as DiscoverMaskKind, { rows: [], sources: [] }])
+  )
+}
+
+/** The base layer: one pass over `rows` for all three mask kinds.
+ * StemCategories is read ONLY from ownDb (an external archive never has it
+ * -- see getMaskDiscoverCandidates's own CRITICAL note). A stem confirmed
+ * for any role is admitted only to that role's kind ('confirmed');
+ * otherwise a mask that places it decides alone ('tag'); otherwise it is
+ * residue, for the guess layer. `.all()`, never `.iterate()` across the
  * awaits below. */
 async function buildMaskKindIndex(
   rows: InstrumentRow[],
   ownDb: Database.Database,
-  signature: string
+  signature: ClassificationSignature
 ): Promise<MaskKindIndex> {
-  countWork('sql:discover.kind-index-build', 2)
+  countWork('sql:discover.kind-index-build')
   const confirmedRoleByStemCID = new Map(
     (
       ownDb
@@ -887,21 +969,9 @@ async function buildMaskKindIndex(
         .all() as { StemCID: string; ArrangeRole: string }[]
     ).map((r) => [r.StemCID, r.ArrangeRole])
   )
-  const autoRoleByStemCID = new Map(
-    (
-      ownDb.prepare(`SELECT StemCID, ArrangeRole FROM StemAutoCategory`).all() as {
-        StemCID: string
-        ArrangeRole: string
-      }[]
-    ).map((r) => [r.StemCID, r.ArrangeRole])
-  )
-
-  const kindByRole = new Map<string, DiscoverMaskKind>(
-    DISCOVER_MASK_SLOT_KINDS.map((k) => [discoverSlotKindToArrangeRole(k), k as DiscoverMaskKind])
-  )
-  const byKind = new Map<DiscoverMaskKind, MaskKindList>(
-    DISCOVER_MASK_SLOT_KINDS.map((k) => [k as DiscoverMaskKind, { rows: [], sources: [] }])
-  )
+  const roles = kindByRole()
+  const byKind = emptyKindLists()
+  const residue: InstrumentRow[] = []
   const admit = (
     kind: DiscoverMaskKind | undefined,
     row: InstrumentRow,
@@ -920,16 +990,13 @@ async function buildMaskKindIndex(
     if (confirmedRole !== undefined) {
       // Confirmed for a mask kind's role: that kind's own source.
       // Confirmed for any other role: excluded from every mask kind.
-      admit(kindByRole.get(confirmedRole), row, 'confirmed')
+      admit(roles.get(confirmedRole), row, 'confirmed')
     } else {
       const soundType = row.Instrument === null ? null : instrumentMaskToSoundType(row.Instrument)
       if (soundType === 'drums') admit('drums', row, 'tag')
       else if (soundType === 'bass') admit('bass', row, 'tag')
       else if (soundType === 'notes') admit('lead', row, 'tag')
-      else {
-        const autoRole = autoRoleByStemCID.get(row.StemCID)
-        if (autoRole !== undefined) admit(kindByRole.get(autoRole), row, 'guess')
-      }
+      else residue.push(row)
     }
     sinceYield += 1
     if (sinceYield >= CLASSIFY_YIELD_EVERY) {
@@ -937,7 +1004,50 @@ async function buildMaskKindIndex(
       await yieldToEventLoop()
     }
   }
-  return { rows, ownDb, signature, byKind }
+  return {
+    rows,
+    ownDb,
+    confirmedSignature: signature.confirmed,
+    byKind,
+    residue,
+    guess: await buildGuessLayer(residue, ownDb, signature.auto)
+  }
+}
+
+/** The guess layer: the residue rows whose overnight guess
+ * (StemAutoCategory) is a mask kind's role -- a fresh read of that table
+ * and one pass over the residue only. */
+async function buildGuessLayer(
+  residue: InstrumentRow[],
+  ownDb: Database.Database,
+  autoSignature: string
+): Promise<GuessLayer> {
+  countWork('sql:discover.kind-index-build')
+  const autoRoleByStemCID = new Map(
+    (
+      ownDb.prepare(`SELECT StemCID, ArrangeRole FROM StemAutoCategory`).all() as {
+        StemCID: string
+        ArrangeRole: string
+      }[]
+    ).map((r) => [r.StemCID, r.ArrangeRole])
+  )
+  const roles = kindByRole()
+  const byKind = emptyKindLists()
+  let sinceYield = 0
+  for (const row of residue) {
+    const kind = roles.get(autoRoleByStemCID.get(row.StemCID) ?? '')
+    if (kind) {
+      const list = byKind.get(kind)!
+      list.rows.push(row)
+      list.sources.push('guess')
+    }
+    sinceYield += 1
+    if (sinceYield >= CLASSIFY_YIELD_EVERY) {
+      sinceYield = 0
+      await yieldToEventLoop()
+    }
+  }
+  return { autoSignature, builtAt: Date.now(), byKind }
 }
 
 /** Combination slots (docs/superpowers/specs/2026-09-21-discover-combo-
