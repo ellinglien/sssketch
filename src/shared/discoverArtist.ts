@@ -101,12 +101,15 @@ export function rollFilterForArtist(
   return { onlyOwnStems: true, targetUser: name, artist: name }
 }
 
-/** The nearby-jam filter: no artist allows everything. */
+/** The nearby-jam filter: no artist allows everything; one artist (a string, today's) only that
+ * creator; a combination (a list, @shared/artistSelection selectionCreatorFilter) any of them. */
 export function creatorAllowed(
   creator: string | null | undefined,
-  artist: string | undefined
+  artist: string | readonly string[] | undefined
 ): boolean {
-  return artist === undefined || creator === artist
+  if (artist === undefined) return true
+  if (typeof artist === 'string') return creator === artist
+  return creator != null && artist.includes(creator)
 }
 
 /** Rows a mid-radio artist change turns over: every row holding a stem

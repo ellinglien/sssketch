@@ -435,9 +435,11 @@ const api = {
   discoverSetArtist: (
     artist: string | null,
     ownUsername: string,
-    lingering?: string[]
+    lingering?: string[],
+    /** Combine artists: the whole selection (null = me). */
+    artists?: readonly (string | null)[]
   ): Promise<ArtistMode> =>
-    ipcRenderer.invoke('discover-set-artist', artist, ownUsername, lingering),
+    ipcRenderer.invoke('discover-set-artist', artist, ownUsername, lingering, artists),
   findRiffForStemPath: (
     stemPath: string
   ): Promise<{

@@ -1593,12 +1593,15 @@ app.whenReady().then(async () => {
 
   ipcMain.handle(
     'discover-set-artist',
-    (_event, artist: unknown, ownUsername: unknown, lingering?: unknown) =>
+    (_event, artist: unknown, ownUsername: unknown, lingering?: unknown, artists?: unknown) =>
       setDiscoverArtistSession({
         artist: typeof artist === 'string' ? artist : null,
         ownUsername: typeof ownUsername === 'string' ? ownUsername : '',
         // Sanitised in the session (only non-empty strings count).
-        lingering: Array.isArray(lingering) ? (lingering as string[]) : []
+        lingering: Array.isArray(lingering) ? (lingering as string[]) : [],
+        // Combine artists: the whole selection, normalized in the session. Absent (an older
+        // renderer): `artist` alone is the selection, as before.
+        ...(artists !== undefined ? { artists } : {})
       })
   )
 

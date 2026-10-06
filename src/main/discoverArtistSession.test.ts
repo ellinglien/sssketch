@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   currentArtistMode,
+  getDiscoverArtistSelection,
   getDiscoverArtistSession,
   keepBlockedForPhone,
   refusesKeep,
@@ -51,6 +52,32 @@ describe('discover artist session', () => {
     setDiscoverArtistSession({ artist: 'tpj', ownUsername: 'elling' })
     resetDiscoverArtistSession()
     expect(currentArtistMode()).toBe('own')
+  })
+
+  it("reads a combined selection; one member stays today's push", () => {
+    expect(
+      setDiscoverArtistSession({
+        artist: 'bananepoep',
+        ownUsername: 'elling',
+        artists: ['bananepoep', null, 'tpj']
+      })
+    ).toBe('other')
+    expect(getDiscoverArtistSelection()).toEqual(['bananepoep', null, 'tpj'])
+    expect(getDiscoverArtistSession()).toEqual({
+      artist: 'bananepoep + tpj',
+      ownUsername: 'elling'
+    })
+    expect(setDiscoverArtistSession({ artist: null, ownUsername: 'elling', artists: [null] })).toBe(
+      'own'
+    )
+    expect(getDiscoverArtistSession()).toEqual({ artist: null, ownUsername: 'elling' })
+    setDiscoverArtistSession({ artist: 'tpj', ownUsername: 'elling' })
+    expect(getDiscoverArtistSelection()).toEqual(['tpj'])
+    expect(currentArtistMode()).toBe('other')
+    setDiscoverArtistSession({ artist: null, ownUsername: 'elling', artists: 'junk-but-a-name' })
+    expect(getDiscoverArtistSelection()).toEqual(['junk-but-a-name'])
+    resetDiscoverArtistSession()
+    expect(getDiscoverArtistSelection()).toEqual([null])
   })
 
   it('the refused fetch reads as a label', () => {

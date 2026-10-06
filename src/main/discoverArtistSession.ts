@@ -6,12 +6,18 @@
 // main refusing keep while the UI shows `me`. No electron, no sqlite --
 // unit-tested in CI.
 import {
-  artistMode,
   blockedActions,
   listenOnlyActions,
   type ArtistMode,
   type ListenOnlyAction
 } from '@shared/discoverArtist'
+import {
+  ME_SELECTION,
+  normalizeArtistSelection,
+  selectionMode,
+  selectionOthers,
+  type ArtistSelection
+} from '@shared/artistSelection'
 
 export interface DiscoverArtistSession {
   artist: string | null
@@ -19,15 +25,21 @@ export interface DiscoverArtistSession {
 }
 
 /** What the renderer pushes: the session, plus (optionally) the artists
- * whose stems still play on Discover's rows (lingeringArtists). */
+ * whose stems still play on Discover's rows (lingeringArtists), and the
+ * whole selection when several artists are combined (spec 2026-10-06-
+ * combine-artists-design §6). Without `artists`, `artist` alone is the
+ * selection -- today's push, read exactly as before. */
 export interface DiscoverArtistSessionUpdate extends DiscoverArtistSession {
   lingering?: readonly string[]
+  artists?: unknown
 }
 
 const ME: DiscoverArtistSession = Object.freeze({ artist: null, ownUsername: '' })
 let session: DiscoverArtistSession = ME
 /** Kept apart from `session` so its shape stays the two fields. */
 let lingering: readonly string[] = []
+/** The whole selection (combine artists); `[artist]` when the push named one. */
+let selection: ArtistSelection = ME_SELECTION
 
 /** Only non-empty strings; anything else is not a list of artists. */
 function artistList(value: unknown): string[] {
@@ -36,10 +48,24 @@ function artistList(value: unknown): string[] {
 }
 
 export function setDiscoverArtistSession(next: DiscoverArtistSessionUpdate): ArtistMode {
-  const artist = next.artist === null ? null : next.artist.trim() || null
-  session = { artist, ownUsername: next.ownUsername.trim() }
+  const ownUsername = next.ownUsername.trim()
+  if (next.artists !== undefined) {
+    selection = normalizeArtistSelection(next.artists, ownUsername)
+    // `artist` names the others for the refusal log: one member is that member, as before.
+    const named = selection.length === 1 ? selection[0] : selectionOthers(selection).join(' + ')
+    session = { artist: named, ownUsername }
+  } else {
+    const artist = next.artist === null ? null : next.artist.trim() || null
+    session = { artist, ownUsername }
+    selection = artist === null ? ME_SELECTION : [artist]
+  }
   lingering = artistList(next.lingering)
   return currentArtistMode()
+}
+
+/** The whole selection, for anything main does per artist (the prewarm). */
+export function getDiscoverArtistSelection(): ArtistSelection {
+  return selection
 }
 
 export function getDiscoverArtistSession(): DiscoverArtistSession {
@@ -47,7 +73,7 @@ export function getDiscoverArtistSession(): DiscoverArtistSession {
 }
 
 export function currentArtistMode(): ArtistMode {
-  return artistMode(session.artist, session.ownUsername)
+  return selectionMode(selection, session.ownUsername)
 }
 
 /** True when `action` must be refused now. While the mode is `other`, the
@@ -92,5 +118,6 @@ export function keepBlockedForPhone(): boolean {
 
 export function resetDiscoverArtistSession(): void {
   lingering = []
+  selection = ME_SELECTION
   session = ME
 }

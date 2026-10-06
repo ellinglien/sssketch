@@ -127,6 +127,12 @@ describe('creatorAllowed', () => {
     expect(creatorAllowed('elling', 'tpj')).toBe(false)
     expect(creatorAllowed(null, 'tpj')).toBe(false)
   })
+  it('allows any of a combination', () => {
+    expect(creatorAllowed('tpj', ['elling', 'tpj'])).toBe(true)
+    expect(creatorAllowed('bananepoep', ['elling', 'tpj'])).toBe(false)
+    expect(creatorAllowed(null, ['elling', 'tpj'])).toBe(false)
+    expect(creatorAllowed(undefined, ['elling'])).toBe(false)
+  })
 })
 
 describe('artist turnover (course change on switch)', () => {
