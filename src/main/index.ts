@@ -1646,9 +1646,9 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'upsert-stem-category-bus',
     (_event, entries: StemBusCategoryEntry[], source: string, project: ProjectRef): void => {
-      // Trains only the stems this write newly assigned, so the startup
-      // backfill reading the same assignment from the saved project later
-      // never counts them a second time (recordStemCategoryBus).
+      // Each (stem, bus) pair trains once, ever, whoever writes it first:
+      // the startup backfill reading the same assignment from the saved
+      // project later adds nothing (recordStemCategoryBus).
       recordStemCategoryBus(
         openOwnRiffLibraryDb(),
         entries,
