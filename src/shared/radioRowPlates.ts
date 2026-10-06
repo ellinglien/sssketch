@@ -6,7 +6,8 @@
 //   info  top left: the readout's label, cut with an ellipsis, then its tail kept whole -- the age
 //         and the role words after it (`3 laps · hook · back in 16 bars`). The web's tail starts
 //         with a no-break space, since a flex item's leading space would collapse.
-//   cue   bottom right: the gesture flash (its word and opacity over its bar) and `next · ...`.
+//   cue   bottom right: the gesture flash (its word and opacity: the quick fades' when the
+//         readout carries one, else in and out over its bar) and `next · ...`.
 //         Hidden when it has neither.
 //   fold  top right: fold mode's `7 / 16` on a folded row; the phase dot under it is the
 //         panel's (data-fold-dot), never this module's.
@@ -33,7 +34,9 @@ export function radioRowPlates(
   const age = row?.age ?? ''
   const tail = age === '' ? '' : label === '' ? age : `\u00a0· ${age}`
   const flash =
-    row?.flash != null ? { word: row.flash.word, opacity: radioFlashOpacity(row.flash.t) } : null
+    row?.flash != null
+      ? { word: row.flash.word, opacity: row.flash.opacity ?? radioFlashOpacity(row.flash.t) }
+      : null
   const next = row?.nextLabel != null && row.nextLabel !== '' ? row.nextLabel : null
   return {
     info: label === '' && tail === '' ? null : { label, tail },

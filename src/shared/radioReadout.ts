@@ -34,12 +34,30 @@ export interface RadioFlash {
   word: string
   at: number
   key: string
+  /** Where the move it names ends, on the same clock (spec 2026-10-05-radio-move-visuals-design:
+   * "the move's word stays on for the move's duration"). Absent: a moment's word (hook out, dig,
+   * no fave fits), shown for one window. */
+  until?: number
 }
 
-/** A flash showing now: its word, and how far through its window it is (0..1). */
+/** A flash showing now: its word, and how far through its window it is (0..1). `opacity` only
+ * when it was asked for with a fade (radioFlashShown's `fade`): drawn at that, not
+ * radioFlashOpacity(t). */
 export interface RadioFlashShown {
   word: string
   t: number
+  opacity?: number
+}
+
+/** The flash's quick fades, in seconds (each runtime puts them on its clock): in, and out once
+ * its move has ended (Elling, 2026-10-05: "maybe a quicker fade in and out"). */
+export const RADIO_FLASH_FADE_IN_SEC = 0.1
+export const RADIO_FLASH_FADE_OUT_SEC = 0.15
+
+/** Fades on a runtime's clock. */
+export interface RadioFlashFade {
+  in: number
+  out: number
 }
 
 /** `breakdown` and `drop`: the intensity arc's (radioReadoutIntensityArc). */
@@ -392,35 +410,68 @@ export function radioGestureFlashWord(kind: RadioTransitionKind | 'drop-out'): s
   return kind === 'cut' || kind === 'drop-out' ? null : kind
 }
 
+/** Where a flash's word stops showing at full: its move's end, or one window after it starts. */
+function flashEnd(f: RadioFlash, window: number): number {
+  return f.until !== undefined && f.until > f.at ? f.until : f.at + window
+}
+
 /** The row's flash at `now`: the latest word whose start lies within the last `window` (one
- * bar on the log's clock), or null. A word not sounding yet does not show. */
+ * bar on the log's clock), or null. A word not sounding yet does not show.
+ *
+ * With `fade` (the quick fades, RADIO_FLASH_FADE_IN_SEC / _OUT_SEC on the log's clock): a word
+ * shows from its start until its move ends (`until`; else one window), at full after a fade in,
+ * then fades out over `fade.out`; the latest start still wins. Its `opacity` says how visible it
+ * is, and `t` is how far through that whole showing it is. Without, exactly as before. */
 export function radioFlashShown(
   log: readonly RadioFlash[],
   rowId: string,
   now: number,
-  window: number
+  window: number,
+  fade?: RadioFlashFade
 ): RadioFlashShown | null {
   if (!(window > 0) || !Number.isFinite(now)) return null
+  if (fade === undefined) {
+    let best: RadioFlash | null = null
+    for (const f of log) {
+      if (f.rowId !== rowId || f.at > now + 1e-9 || now - f.at >= window) continue
+      if (best === null || f.at > best.at) best = f
+    }
+    return best === null
+      ? null
+      : { word: best.word, t: Math.min(1, Math.max(0, (now - best.at) / window)) }
+  }
+  const out = Math.max(0, fade.out)
   let best: RadioFlash | null = null
   for (const f of log) {
-    if (f.rowId !== rowId || f.at > now + 1e-9 || now - f.at >= window) continue
+    if (f.rowId !== rowId || f.at > now + 1e-9 || now >= flashEnd(f, window) + out) continue
     if (best === null || f.at > best.at) best = f
   }
-  return best === null
-    ? null
-    : { word: best.word, t: Math.min(1, Math.max(0, (now - best.at) / window)) }
+  if (best === null) return null
+  const end = flashEnd(best, window)
+  const fadeIn = fade.in > 0 ? Math.min(1, (now - best.at) / fade.in) : 1
+  const fadeOut = now < end ? 1 : out > 0 ? Math.max(0, 1 - (now - end) / out) : 0
+  return {
+    word: best.word,
+    t: Math.min(1, Math.max(0, (now - best.at) / (end + out - best.at))),
+    opacity: Math.min(1, Math.max(0, Math.min(fadeIn, fadeOut)))
+  }
 }
 
 /** The log without words whose window has passed, and -- given `live`, the keys still armed --
- * without words not sounding yet whose gesture has been taken back. */
+ * without words not sounding yet whose gesture has been taken back. `fadeOut` (the quick fade's,
+ * on the log's clock): a word is kept until its move's end (`until`, else its window) and its
+ * fade out are over. Absent, and with no `until`, exactly as before. */
 export function pruneRadioFlashes(
   log: readonly RadioFlash[],
   now: number,
   window: number,
-  live?: ReadonlySet<string>
+  live?: ReadonlySet<string>,
+  fadeOut = 0
 ): RadioFlash[] {
   return log.filter((f) =>
-    f.at > now ? live === undefined || live.has(f.key) : now - f.at < window
+    f.at > now
+      ? live === undefined || live.has(f.key)
+      : now < flashEnd(f, window) + Math.max(0, fadeOut)
   )
 }
 
