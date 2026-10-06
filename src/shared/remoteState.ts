@@ -467,16 +467,19 @@ export function parseRemoteArcAction(value: unknown): 'build' | 'drop' | null {
   return value === 'build' || value === 'drop' ? value : null
 }
 
-/** The phone's flash for a build or drop press, and the route's answer: `radio off` with no arc in
- * the state (radio off, or density not intensity), `not now` when the Mac says that button cannot
- * act now, else `building` or `dropping`. */
-export type RemoteArcAnswer = 'building' | 'dropping' | 'not now' | 'radio off'
+/** The phone's flash for a build or drop press, and the route's answer: with no arc in the state,
+ * `density not intensity` while radio runs (`radioRunning`, e.g. the state's `turn` is sent), else
+ * `radio off`; `not now` when the Mac says that button cannot act now; else `building` or
+ * `dropping`. */
+export type RemoteArcAnswer =
+  'building' | 'dropping' | 'not now' | 'radio off' | 'density not intensity'
 
 export function remoteArcAnswer(
   arc: RemoteArcView | null | undefined,
-  action: 'build' | 'drop'
+  action: 'build' | 'drop',
+  radioRunning = false
 ): RemoteArcAnswer {
-  if (arc === null || arc === undefined) return 'radio off'
+  if (arc === null || arc === undefined) return radioRunning ? 'density not intensity' : 'radio off'
   if (action === 'build') return arc.canBuild ? 'building' : 'not now'
   return arc.canDrop ? 'dropping' : 'not now'
 }

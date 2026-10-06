@@ -768,17 +768,68 @@ describe('the buttons', () => {
     }
     const once = pressRadioIntensity(at('build'), 'drop', where)!
     expect(pressRadioIntensity(once, 'drop', where)).toBe(once)
-    for (const decided of [
-      { event: 'cycle', strip: true },
-      { event: 'add' }
-    ] as RadioIntensityDecided[]) {
-      const a = at(decided.event === 'add' ? 'build' : 'drop', { phrases: 5, decided })
-      expect(pressRadioIntensity(a, 'build', where)).toBe(a)
-    }
+    const cycle = at('drop', { phrases: 5, decided: { event: 'cycle', strip: true } })
+    expect(pressRadioIntensity(cycle, 'build', where)).toBe(cycle)
+    // build in the build with an add decided: the add is answered, the build still hurries (spec
+    // 6: the remaining phrases halve), and nothing new is decided or left waiting
+    const adding = at('build', { phrases: 7, done: 1, decided: { event: 'add' } })
+    expect(pressRadioIntensity(adding, 'build', where)).toEqual({ ...adding, phrases: 4 })
     const twice = pressRadioIntensity(at('build', { phrases: 7, done: 1 }), 'build', where)!
-    expect(pressRadioIntensity(twice, 'build', where)).toBe(twice)
+    expect(twice).toMatchObject({ phrases: 4, decided: { event: 'add', forced: true } })
+    expect(pressRadioIntensity(twice, 'build', where)).toEqual({ ...twice, phrases: 2 })
+    const last = at('build', { phrases: 2, done: 1, decided: { event: 'add' } })
+    expect(pressRadioIntensity(last, 'build', where)).toBe(last)
     const waiting = pressRadioIntensity(at('drop'), 'build', { ...where, late: true })!
     expect(pressRadioIntensity(waiting, 'build', { ...where, late: true })).toBe(waiting)
+  })
+
+  it('a later press replaces an earlier waiting one', () => {
+    const late = { ...where, late: true }
+    const waitingDrop = pressRadioIntensity(at('drop'), 'drop', late)!
+    expect(waitingDrop.forced).toBe('drop')
+    // pressed in time: decided now, the waiting drop gone
+    const now = pressRadioIntensity(waitingDrop, 'build', where)!
+    expect(now).toMatchObject({ forced: null, decided: { event: 'cycle', forced: true } })
+    // pressed late again: the newer one waits
+    expect(pressRadioIntensity(waitingDrop, 'build', late)!.forced).toBe('build')
+    // answered by the decided event: the waiting one goes too
+    const answered = pressRadioIntensity(
+      { ...at('breakdown', { decided: { event: 'drop', returning: [], renew: [] } }) },
+      'build',
+      late
+    )!
+    const both = { ...answered, forced: 'build' as const }
+    expect(pressRadioIntensity(both, 'drop', where)).toMatchObject({ forced: null })
+    // build in a breakdown shortens it, and the waiting drop goes
+    const b = at('breakdown', { phrases: 2, done: 0, forced: 'drop' })
+    expect(pressRadioIntensity(b, 'build', where)).toMatchObject({ phrases: 1, forced: null })
+  })
+
+  it('a waiting build that meets a breakdown brings the drop forward', () => {
+    // pressed (too late) while the breakdown was decided; it lands, and the build press waits
+    const arc = at('breakdown', { phrases: 2, done: 0, forced: 'build' })
+    const input: RadioIntensityStepInput = {
+      energy: 50,
+      drama: 60,
+      loopBars: 4,
+      lap: 1,
+      phraseLaps: 4,
+      held: false,
+      count: 4,
+      min: 2,
+      max: 5,
+      rows: [],
+      canAdd: true,
+      canStrip: true,
+      carryReady: false,
+      renewReady: () => false,
+      random: () => 0.5
+    }
+    const r = stepRadioIntensityArc(arc, input)
+    expect(r.state).toMatchObject({ forced: null, phrases: 1, decided: null })
+    // at this phrase's decide wrap, the drop is decided
+    const d = stepRadioIntensityArc(r.state, { ...input, lap: 3 })
+    expect(d.decided).toMatchObject({ event: 'drop' })
   })
 
   it('pressed against the decided event in a run: one drop, one cycle, no second event', () => {

@@ -301,8 +301,16 @@ function nextPart(input: RadioReadoutInput): string | null {
     ? []
     : [...new Set(n.with ?? [])].filter((id) => id !== n.rowId && present.has(id))
   const extra = companions.length > 0 ? ` +${companions.length}` : ''
-  const bars0 = Math.max(1, Math.ceil(n.barsAway - 1e-6))
-  if (n.drop === true) return `next: drop · ${plural(bars0, 'bar')}`
+  const bars = Math.max(1, Math.ceil(n.barsAway - 1e-6))
+  if (n.drop === true) {
+    // a breakdown counting down to it says the drop already
+    const counting =
+      input.held !== true &&
+      input.arc.state === 'breakdown' &&
+      typeof input.arc.dropInBars === 'number' &&
+      Number.isFinite(input.arc.dropInBars)
+    return counting ? null : `next: drop · ${plural(bars, 'bar')}`
+  }
   const who =
     (n.course ? 'course change' : i >= 0 && !n.adding ? `row ${i + 1}` : 'a new row') + extra
   const how = n.course
@@ -316,7 +324,6 @@ function nextPart(input: RadioReadoutInput): string | null {
           : n.kind !== null
             ? ` → ${n.kind}`
             : ''
-  const bars = Math.max(1, Math.ceil(n.barsAway - 1e-6))
   return `next: ${who}${how} · ${plural(bars, 'bar')}`
 }
 
@@ -352,7 +359,9 @@ export function radioReadout(input: RadioReadoutInput): RadioReadout {
         next !== null &&
         (next.rowId === r.rowId || (next.course?.includes(r.rowId) ?? false) || companion)
       const leaving = isNext && !companion && !!next.leaving
-      const nextKind = companion ? 'cut' : isNext && !leaving ? next.kind : null
+      // every row the breakdown rests reads it, its companions too (no cut there)
+      const rests = isNext && next.rests === true
+      const nextKind = rests ? null : companion ? 'cut' : isNext && !leaving ? next.kind : null
       return {
         rowId: r.rowId,
         label: radioRowLabel(r),
@@ -361,7 +370,7 @@ export function radioReadout(input: RadioReadoutInput): RadioReadout {
         nextKind,
         nextLabel: !isNext
           ? null
-          : !companion && next.rests === true
+          : rests
             ? 'next · rests'
             : !companion && next.hook !== undefined
               ? `next · hook ${next.hook}`

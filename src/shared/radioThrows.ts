@@ -70,8 +70,9 @@ export interface ThrowTick {
   /** The intensity arc's drop, on the beat grid, passed only in the breakdown's last phrase (spec
    * 2026-10-05-radio-intensity-arc-design 5.5): a throw falling due (within THROW_PREFER_SHARE of
    * the shortest spacing) waits for it, however long, and ends on its downbeat -- or where the
-   * drop's gap starts, when `changeAt` (an armed turnaround's aim) comes first -- on a carrying
-   * row. Absent or null: today. */
+   * drop's gap starts, when `changeAt` is that gap (at most THROW_DROP_GAP_BEATS before the
+   * drop); any other change coming first is passed over for the drop -- on a carrying row.
+   * Absent or null: today. */
   dropAt?: number | null
 }
 
@@ -93,6 +94,10 @@ export const THROW_PREFER_SHARE = 0.5
  * the caller can schedule on: late enough that a change taken back has mostly already been,
  * early enough that the longest throw (THROW_BEATS) fits before it. */
 export const THROW_AIM_REACH_BEATS = 4
+/** The longest gap before the drop: radioTurnaround's TURNAROUND_GAP_MAX_BEATS (pinned equal by
+ * radioIntensityThrows.test.ts; not imported, since radioTurnaround reaches this module through
+ * radioBuildSize and radioIntensityArc). A `changeAt` this close before the drop is its gap. */
+export const THROW_DROP_GAP_BEATS = 2
 
 const between = (r: number, [lo, hi]: readonly [number, number]): number => lo + (hi - lo) * r
 
@@ -181,7 +186,9 @@ export function stepThrows(
       : null
   if (dropAt !== null && barsUntil <= prefer && (barsSince === null || barsSince >= prefer - EPS)) {
     // aimed into the drop: wait for it (or its gap) to come within reach, then end on it
-    const aim = changeAt !== null && changeAt <= dropAt + EPS ? changeAt : dropAt
+    const gapStart = dropAt - THROW_DROP_GAP_BEATS * beatSec - EPS
+    const aim =
+      changeAt !== null && changeAt <= dropAt + EPS && changeAt >= gapStart ? changeAt : dropAt
     if (aim - tick.nextBeat > THROW_AIM_REACH_BEATS * beatSec + EPS)
       return { state: next, plan: null }
     redraw()

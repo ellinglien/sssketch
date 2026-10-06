@@ -158,9 +158,10 @@ Planning scratchpad:
    - The ids `drum drop` and `low drop` stay. They are the phone's wire value (`/api/turn`'s
      `move`), the planner's tables and dozens of test names. Nothing user-facing shows them. The
      family name `drops` stays too.
-   - `turnaroundLabel` gains a third, shorter form, the lead and the gap. A turn's ruler with a
-     two-word lead (`turn: drums out +2 → gap`, 24 characters) broke the phone's 23-character
-     test. It now reads `turn: drums out → gap`.
+   - `turnaroundLabel` gains a third, shorter form, the lead and the gap, and a fourth, the lead
+     alone. A turn's ruler with a two-word lead (`turn: drums out +2 → gap`, 24 characters) broke
+     the phone's test. Every turn ruler now fits TURNAROUND_LABEL_MAX (20, review 2026-10-05):
+     `turn: low out → gap`, and `turn: drums out` where the gap would not fit.
 2. **A phase's length is drawn when the phase is decided**, not at its start.
    - This lets a one-lap phrase (loops of 16 bars or more) prepare two wraps ahead (spec §3.1).
    - It also makes "drop in N bars" exact from the breakdown's first bar.
@@ -182,27 +183,38 @@ Planning scratchpad:
 5. **The drop's gap needs only one audible row** (`TurnaroundInput.drop`). Today a gap needs two.
    After a full breakdown with one carrier, the spec's "gaps at drama 50 and up are 100% of drops"
    could not hold otherwise, and silencing the lone carrier before the one is exactly the pre-drop
-   silence.
+   silence. A gap follows only a riser, so a forced drop's turn (the quick drop's `low drop`) with
+   its gap certain (drama 50 and up) layers the riser in with no draw, the longest the turn allows,
+   when the riser family is on (review, 2026-10-05). At loops under 2 bars the cap is under a bar:
+   no riser can leave a gap, and the drop has none there.
 6. **Hooks:**
    - `inBreakdown` means the next wrap is in a breakdown or starts one. Returns then wait for the
      drop, always: a breakdown is at most 2 phrases (plus the 1-phrase safety), so the spec's
      "when the drop is at most 2 phrases away" always holds.
    - A row's new `arcResting` stops a hooked-in row's clock and keeps its exit off.
 7. **Throws aimed into the drop** (`ThrowTick.dropAt`) aim at the drop's downbeat, or at its gap's
-   start when an armed turnaround's aim (`changeAt`) comes first. The send is post-fader, so the
-   throw must close before the gap.
+   start when an armed turnaround's aim (`changeAt`) is that gap (at most
+   `THROW_DROP_GAP_BEATS`, 2, before the drop). The send is post-fader, so the throw must close
+   before the gap. Any other change coming first in the drop's lap is passed over for the drop
+   (review, 2026-10-05).
 8. **Buttons:**
    - a forced drop renews nothing (renewals need a phrase of warming; spec §6 for the quick drop,
      and here for a pressed drop in a breakdown too);
    - a press is refused before the machine begins, and while held;
    - a press with its top already spoken for (an event decided for it) takes the top after
      (`forced`), and so does a `late` press;
-   - **a press the decided event already answers changes nothing** (review, 2026-10-05): a
+   - **a press the decided event already answers decides nothing more** (review, 2026-10-05): a
      decided drop for `drop`, a decided cycle or add for `build`, or the same press already
-     waiting (`forced`). `pressRadioIntensity` returns the arc unchanged (the same object), so it
-     lands once: no quick drop after the clock's own drop, no forced add after a cycle. The label
-     reads what the decided event says (`drop`/`build` for the clock's own event). A runtime arms
-     its drop turn only when the press changed the arc (`next !== arc`);
+     waiting (`forced`). It lands once: no quick drop after the clock's own drop, no forced add
+     after a cycle. `pressRadioIntensity` returns the arc unchanged (the same object), except that
+     a build in the build still halves the remaining phrases (spec §6), and a different press
+     waiting is dropped. The label reads what the decided event says (`drop`/`build` for the
+     clock's own event). A runtime arms its drop turn only when the press decided a new drop
+     (`next.decided !== arc.decided`);
+   - **a later press replaces an earlier one still waiting** (`forced`): decided now, the waiting
+     one goes; late again, the newer one waits;
+   - **a waiting `build` that meets a breakdown** (pressed while the breakdown was decided) brings
+     its drop forward at the step: that phrase is the breakdown's last;
    - a forced add fits like the clock's (`canAdd`, under the build's peak and the most rows), and
      a forced cycle strips only when one can go: `pressRadioIntensity`'s `where.can`
      (`RadioIntensityRoom`: `count`, `max`, `canAdd`, `canStrip`, the rows now), and a press
@@ -239,13 +251,17 @@ Planning scratchpad:
     - `RemoteState.arc?: RemoteArcView` (`{ phase, waiting, canBuild, canDrop }`) is the
       `turn`'s sibling;
     - `POST /api/arc` takes `{ action }`;
-    - its answers are `building`, `dropping`, `not now` and `radio off` (`radio off` also when
-      density is not `intensity`: the Mac sends no `arc`).
+    - its answers are `building`, `dropping`, `not now`, `radio off`, and `density not intensity`
+      while radio runs with another density (the Mac sends no `arc`, but a `turn`):
+      `remoteArcAnswer(state.arc, action, state.turn != null)` (review, 2026-10-05).
 12. **The readout:**
     - `next: row 2 rests · 2 bars` keeps the bars, as every other `next` part does (the spec's
       table shows it without them);
     - a new input `narrow` gives the breakdown's short form (`breakdown · 12`);
-    - the row word is the role words' `rests till the drop`, or `rests` on the phone.
+    - the row word is the role words' `rests till the drop`, or `rests` on the phone; every
+      row the breakdown rests (the `with` companions too) reads `next · rests`;
+    - in a breakdown counting down to its drop, a decided drop's `next: drop` is not said again
+      (review, 2026-10-05).
 13. **The strip:**
     - `build` and `drop` are `panel` controls in the play group, after `turn`;
     - `energy` and `drama` are `slider`s after `density`;
@@ -5730,8 +5746,8 @@ describe('densityPrefs', () => {
     - `s.intensity = pressRadioIntensity(s.intensity, action, { lap, phraseLaps, late, can }) ?? s.intensity`,
       `can` the rows now (`RadioIntensityRoom`: `count`, `max`, `canAdd`, `canStrip`, as the
       step's input; planning decision 8).
-  - Then, when the press decided a `drop` for the coming top (and changed the arc: an answered
-    press returns it unchanged): set the turn request
+  - Then, when the press decided a new `drop` for the coming top (`next.decided !== arc.decided`:
+    an answered press decides nothing): set the turn request
     (`s.turnRequest`, :1614's shape) with a new `drop: true`:
     - in a breakdown: `{ move: 'riser' }`, a riser fitted to the lap;
     - a quick drop: `{ move: 'low drop' }`, `maxBeats` clamped to 8 (2 bars).
@@ -6487,7 +6503,7 @@ it. The desktop's settings are normalized, so `energy` and `drama` are always se
     - `pressRadioIntensity(arc, action, { lap, phraseLaps, late, can })`. `late` is the turn's rule
       (`turnaroundTurnBeats(...) === null` at the panel's lead); `can` the rows now
       (`RadioIntensityRoom`, as the step's input; planning decision 8).
-    - A decided drop (when the press changed the arc) arms a turn (`radioTurnPendingRef`, :3193) with `move: 'riser'` (in a
+    - A newly decided drop (`next.decided !== arc.decided`) arms a turn (`radioTurnPendingRef`, :3193) with `move: 'riser'` (in a
       breakdown) or `'low drop'` (quick, `maxBeats` ≤ 8), plus a `drop` flag that
       `rollRadioTurnaround`'s turn branch turns into `drop: { gapChance }` and `payoff: 'large'`.
     - A decided `cycle` sets `arcExitRef` for the coming top.
@@ -6546,11 +6562,13 @@ it. The desktop's settings are normalized, so `energy` and `drama` are always se
 - [ ] **Step 2: The phone.**
   - `remoteServer.ts`: `POST /api/arc` beside `/api/turn` (:437-447):
     - `parseRemoteArcAction((await readJsonBody(req)).action)`; null gives 400;
-    - `remoteArcAnswer(options.getState().arc, action)`; on `building` / `dropping`,
+    - `remoteArcAnswer(state.arc, action, state.turn != null)` (`state = options.getState()`);
+      on `building` / `dropping`,
       `options.onCommand({ kind: 'arc', action })`;
     - respond with the answer;
     - update the route count comment (:232).
-  - `remoteServer.test.ts`: the route's 400, `radio off`, `not now`, and the forwarded command.
+  - `remoteServer.test.ts`: the route's 400, `radio off`, `density not intensity`, `not now`,
+    and the forwarded command.
   - `remotePage.ts`:
     - beside the turn section (:2518-2552), `build` and `drop` buttons, shown only while
       `state.arc` is non-null, painted from `arc.waiting`;

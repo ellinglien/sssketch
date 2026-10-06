@@ -1,9 +1,16 @@
 // Throws aimed into the drop (spec 2026-10-05-radio-intensity-arc-design 5.5): stepThrows'
 // dropAt and stepDiscoverThrows' dropInBars.
 import { describe, expect, it } from 'vitest'
-import { initialThrowState, stepThrows, type ThrowState, type ThrowTick } from './radioThrows'
+import {
+  THROW_DROP_GAP_BEATS,
+  initialThrowState,
+  stepThrows,
+  type ThrowState,
+  type ThrowTick
+} from './radioThrows'
 import { initialDiscoverThrowState, stepDiscoverThrows } from './discoverThrows'
 import { hashText, seededRandom } from './seededRandom'
+import { TURNAROUND_GAP_MAX_BEATS } from './radioTurnaround'
 
 const BPM = 120
 const BAR = 2 // seconds
@@ -45,6 +52,19 @@ describe('throws and the drop', () => {
     const r = stepThrows(due, tick(dropAt - 1.75, { dropAt, changeAt: gapAt }), () => 0)
     expect(r.plan).not.toBeNull()
     expect(r.plan!.at + (r.plan!.beats * 60) / BPM).toBeCloseTo(gapAt, 9)
+  })
+
+  it('prefers the drop when another armed change comes first in its lap', () => {
+    expect(THROW_DROP_GAP_BEATS).toBe(TURNAROUND_GAP_MAX_BEATS)
+    const due: ThrowState = { ...initialThrowState(), barsUntil: 0, lastNow: 0, barsSince: 30 }
+    const dropAt = 4 * BAR
+    // a row's change at the lap's bar 2: not the drop's gap (that is at most two beats before it)
+    const otherAt = dropAt - BAR
+    const early = stepThrows(due, tick(otherAt - 1.75, { dropAt, changeAt: otherAt }), () => 0)
+    expect(early.plan).toBeNull()
+    const r = stepThrows(due, tick(dropAt - 1.75, { dropAt, changeAt: otherAt }), () => 0)
+    expect(r.plan).not.toBeNull()
+    expect(r.plan!.at + (r.plan!.beats * 60) / BPM).toBeCloseTo(dropAt, 9)
   })
 
   it('not due: nothing changes', () => {

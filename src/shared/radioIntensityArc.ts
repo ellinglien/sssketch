@@ -476,10 +476,8 @@ function land(
 /** What the phase change at the coming phrase start (or a pending press) is, decided now. */
 function decide(
   arc: RadioIntensityArc,
-  input: RadioIntensityStepInput,
-  forcedNow: RadioIntensityAction | null
+  input: RadioIntensityStepInput
 ): RadioIntensityDecided | null {
-  if (forcedNow !== null) return forcedEvent(arc, forcedNow, input)
   const ending = arc.done + 1 >= arc.phrases
   switch (arc.phase) {
     case 'build': {
@@ -655,10 +653,14 @@ export function stepRadioIntensityArc(
   const pending = state.forced
   if (pending !== null && state.decided === null) {
     state = { ...state, forced: null }
-    if (!answers(applied, pending)) decided = forcedEvent(state, pending, now)
+    if (pending === 'build' && state.phase === 'breakdown') {
+      // a waiting build that meets a breakdown brings the drop forward (spec 6): this phrase is
+      // its last, and the clock decides the drop at its decide wrap
+      if (state.done + 1 < state.phrases) state = { ...state, phrases: state.done + 1 }
+    } else if (!answers(applied, pending)) decided = forcedEvent(state, pending, now)
   }
   if (decided === null && decideWrap && state.decided === null) {
-    decided = decide(state, now, null)
+    decided = decide(state, now)
   }
   if (decided !== null) state = { ...state, decided }
   // 4. prepare: a phrase ahead (two wraps with a one-lap phrase), once per phase change
@@ -702,8 +704,9 @@ export function stepRadioIntensityArc(
  *   - drop in the breakdown: the rested rows back at the top;
  *   - drop in the build or the ride: a quick drop at the top.
  * A press the decided event already answers (a drop for `drop`, a cycle or an add for `build`),
- * or one already waiting for its top, returns the arc unchanged: it lands once (review,
- * 2026-10-05). `where.can`: the rows now (RadioIntensityRoom); absent, an add and a strip are
+ * or one already waiting for its top, decides nothing more: it lands once (review, 2026-10-05);
+ * a build in the build still halves the remaining phrases. A later press replaces an earlier one
+ * still waiting; a waiting build that meets a breakdown brings its drop forward (the step). `where.can`: the rows now (RadioIntensityRoom); absent, an add and a strip are
  * left to the runtime's own pick, as before.
  */
 export function pressRadioIntensity(
@@ -712,22 +715,33 @@ export function pressRadioIntensity(
   where: { lap: number; phraseLaps: number; late: boolean; can?: RadioIntensityRoom }
 ): RadioIntensityArc | null {
   if (!arc.begun) return null
-  if (answers(arc.decided, action) || arc.forced === action) return arc
   const P = Math.max(1, Math.floor(where.phraseLaps))
-  if (action === 'build' && arc.phase === 'breakdown') {
-    // the decide wrap of the next phrase start begins the last lap: passed once we are in it
-    const passed = where.lap >= P - 1
-    const phrases = arc.done + (passed ? 2 : 1)
-    return phrases < arc.phrases ? { ...arc, phrases } : arc
-  }
   const halved =
     action === 'build' && arc.phase === 'build'
       ? arc.done + Math.max(1, Math.floor((arc.phrases - arc.done) / 2))
       : arc.phrases
+  if (answers(arc.decided, action) || arc.forced === action) {
+    // nothing new lands; a build in the build still hurries (spec 6), and a different press
+    // waiting for its top is replaced by this one
+    const forced = arc.forced === action ? arc.forced : null
+    if (halved === arc.phrases && forced === arc.forced) return arc
+    return { ...arc, phrases: halved, forced }
+  }
+  if (action === 'build' && arc.phase === 'breakdown') {
+    // the decide wrap of the next phrase start begins the last lap: passed once we are in it
+    const passed = where.lap >= P - 1
+    const phrases = Math.min(arc.phrases, arc.done + (passed ? 2 : 1))
+    if (phrases === arc.phrases && arc.forced === null) return arc
+    return { ...arc, phrases, forced: null }
+  }
+  // a later press replaces an earlier one still waiting
   if (where.late || arc.decided !== null) return { ...arc, phrases: halved, forced: action }
   const decided = forcedEvent(arc, action, where.can ?? null)
-  if (decided === null) return halved === arc.phrases ? null : { ...arc, phrases: halved }
-  return { ...arc, phrases: halved, decided }
+  if (decided === null) {
+    if (halved === arc.phrases && arc.forced === null) return null
+    return { ...arc, phrases: halved, forced: null }
+  }
+  return { ...arc, phrases: halved, decided, forced: null }
 }
 
 /** A rested row is no longer the arc's (spec 4.2): unmuted or soloed by hand (it plays at once),

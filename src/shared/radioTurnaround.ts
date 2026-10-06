@@ -999,8 +999,12 @@ export const TURNAROUND_GAP_WORD = 'gap'
  * riser spans under a bar (too short to stop early). */
 export function turnaroundGapBeats(riserBeats: number, depth: TurnaroundDepth): number {
   if (!(riserBeats >= BEATS_PER_BAR)) return 0
-  return depth === 'bold' && riserBeats >= 2 * BEATS_PER_BAR ? 2 : 1
+  return depth === 'bold' && riserBeats >= 2 * BEATS_PER_BAR ? TURNAROUND_GAP_MAX_BEATS : 1
 }
+
+/** The longest gap turnaroundGapBeats leaves, in beats (the throws tell the drop's gap from any
+ * other change by it). */
+export const TURNAROUND_GAP_MAX_BEATS = 2
 
 /** The layering's own random, seeded from ONE draw of the caller's: every layering choice comes
  * from it, so the caller's stream moves on by exactly one number per combined roll. */
@@ -1170,6 +1174,21 @@ function layerTurnaround(
     if (one === null) break
     parts.push({ move, beats, rowIds: one.rows.map((r) => r.rowId) })
   }
+  // a forced drop (the drop button's turn) with its gap certain (drama 50 and up, spec 4.4, 6):
+  // the gap follows only a riser, so with none drawn in the riser joins -- the longest the turn
+  // allows, with no draw -- when its family is on and it can carry a gap. At a loop under 2 bars
+  // the cap (half the loop) is under a bar: no riser can, and the drop has no gap there.
+  if (
+    input.force !== undefined &&
+    input.drop !== undefined &&
+    input.drop.gapChance >= 1 &&
+    !parts.some((p) => p.move === 'riser') &&
+    families.includes(TURNAROUND_FAMILY_OF.riser) &&
+    fits('riser', bed, capBeats) &&
+    Math.min(capBeats, most) >= BEATS_PER_BAR
+  ) {
+    parts.push({ move: 'riser', beats: Math.min(capBeats, most), rowIds: [] })
+  }
   // the gap: a riser spanning a bar or more, with a bed of two or more to drop out
   let gap = 0
   let keeper: TurnaroundRow | null = null
@@ -1277,7 +1296,8 @@ export const TURNAROUND_LABEL_MAX = 20
 
 /** A turnaround in words, the lead first: `riser + lift → gap`, `wash + dip`, `drums out`. Longer
  * than `max`: the lead and how many more, `riser +2 → gap`; still longer (a two-word lead, since
- * the drop-outs became `drums out` and `low out`): the lead and the gap, `drums out → gap`. */
+ * the drop-outs became `drums out` and `low out`): the lead and the gap, `low out → gap`; still
+ * longer (a turn's room, 14): the lead alone, `drums out`. A single move is never shortened. */
 export function turnaroundLabel(
   moves: readonly TurnaroundMove[],
   gap: boolean,
@@ -1287,8 +1307,10 @@ export function turnaroundLabel(
   const tail = gap ? ` → ${TURNAROUND_GAP_WORD}` : ''
   const full = moves.map((m) => TURNAROUND_MOVE_LABEL[m]).join(' + ') + tail
   if (full.length <= max || moves.length === 1) return full
-  const counted = `${TURNAROUND_MOVE_LABEL[moves[0]]} +${moves.length - 1}${tail}`
-  return counted.length <= max ? counted : `${TURNAROUND_MOVE_LABEL[moves[0]]}${tail}`
+  const lead = TURNAROUND_MOVE_LABEL[moves[0]]
+  const counted = `${lead} +${moves.length - 1}${tail}`
+  if (counted.length <= max) return counted
+  return `${lead}${tail}`.length <= max ? `${lead}${tail}` : lead
 }
 
 /** A plan's moves, the lead first (a single move's plan is just its move). */

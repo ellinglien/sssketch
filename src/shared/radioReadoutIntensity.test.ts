@@ -73,12 +73,36 @@ describe('the status line under intensity', () => {
   })
 
   it('next: the drop, and the rows the breakdown rests', () => {
+    // the breakdown's own count says the drop already: not twice
     expect(
       line({
         arc: { state: 'breakdown', count: 3, target: 3, dropInBars: 4 },
         nextChange: { rowId: 'a', kind: null, barsAway: 4, drop: true }
       })
-    ).toBe('breakdown · drop in 4 bars · next: drop · 4 bars')
+    ).toBe('breakdown · drop in 4 bars')
+    expect(
+      line({
+        arc: { state: 'breakdown', count: 3, target: 3, dropInBars: 4 },
+        nextChange: { rowId: 'a', kind: null, barsAway: 4, drop: true },
+        narrow: true
+      })
+    ).toBe('breakdown · 4')
+    // a quick drop (no breakdown counting it): the next part says it
+    expect(
+      line({
+        arc: { state: 'growing', count: 3, target: 5 },
+        nextChange: { rowId: 'a', kind: null, barsAway: 4, drop: true }
+      })
+    ).toBe('building ↑ 3 → 5 · next: drop · 4 bars')
+    // every row the breakdown rests reads it, the companions too
+    const all = radioReadout(
+      input({
+        arc: { state: 'growing', count: 3, target: 3 },
+        nextChange: { rowId: 'a', kind: null, barsAway: 2, rests: true, with: ['b'] }
+      })
+    )
+    expect(all.statusLine).toBe('building ↑ 3 → 3 · next: row 1 +1 rests · 2 bars')
+    expect(all.rows.map((x) => x.nextLabel)).toEqual(['next · rests', 'next · rests', null])
     const r = radioReadout(
       input({
         arc: { state: 'growing', count: 3, target: 3 },
@@ -111,8 +135,12 @@ describe('words', () => {
     expect(TURNAROUND_MOVE_LABEL['drum drop']).toBe('drums out')
     expect(TURNAROUND_MOVE_LABEL['low drop']).toBe('low out')
     expect(turnaroundLabel(['drum drop', 'lift', 'riser'], true)).toBe('drums out +2 → gap')
+    // a turn's room (the ruler's 20 less `turn: `): the lead and its gap, else the lead alone
     expect(turnaroundLabel(['drum drop', 'lift', 'riser'], true, TURNAROUND_LABEL_MAX - 6)).toBe(
-      'drums out → gap'
+      'drums out'
+    )
+    expect(turnaroundLabel(['low drop', 'lift', 'riser'], true, TURNAROUND_LABEL_MAX - 6)).toBe(
+      'low out → gap'
     )
     expect(
       radioReadout(
@@ -125,6 +153,6 @@ describe('words', () => {
           }
         })
       ).ruler.end
-    ).toBe('turn: drums out → gap')
+    ).toBe('turn: drums out')
   })
 })

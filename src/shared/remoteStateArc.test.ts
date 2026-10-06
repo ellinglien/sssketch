@@ -38,6 +38,10 @@ describe('the arc on the phone', () => {
     expect(parseRemoteArcAction('turn')).toBeNull()
     expect(parseRemoteArcAction(undefined)).toBeNull()
     expect(remoteArcAnswer(null, 'drop')).toBe('radio off')
+    expect(remoteArcAnswer(undefined, 'build', false)).toBe('radio off')
+    // radio runs with another density: not `radio off`
+    expect(remoteArcAnswer(null, 'drop', true)).toBe('density not intensity')
+    expect(remoteArcAnswer(ARC, 'drop', true)).toBe('dropping')
     expect(remoteArcAnswer(ARC, 'build')).toBe('building')
     expect(remoteArcAnswer(ARC, 'drop')).toBe('dropping')
     expect(remoteArcAnswer({ ...ARC, canDrop: false }, 'drop')).toBe('not now')

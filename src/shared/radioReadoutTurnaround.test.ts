@@ -57,13 +57,13 @@ describe('the ruler names a combined turnaround (combos spec section 6)', () => 
     )
   })
 
-  it('every combination fits a phone: at most 20 characters, a turn at most 23', () => {
+  it('every combination fits a phone: at most 20 characters, a turn too', () => {
     for (const parts of combinations()) {
       for (const gap of parts.includes('riser') ? [false, true] : [false]) {
         const phrase = end({ move: parts[0], isTurn: false, parts, gap })!
         const turn = end({ move: parts[0], isTurn: true, parts, gap })!
         expect(phrase.length).toBeLessThanOrEqual(TURNAROUND_LABEL_MAX)
-        expect(turn.length).toBeLessThanOrEqual(TURNAROUND_LABEL_MAX + 3)
+        expect(turn.length, turn).toBeLessThanOrEqual(TURNAROUND_LABEL_MAX)
         expect(turn.startsWith('turn: ')).toBe(true)
       }
     }

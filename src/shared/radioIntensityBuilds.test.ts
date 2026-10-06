@@ -161,6 +161,65 @@ describe('the drop roll', () => {
     }
   })
 
+  it("the quick drop's low-drop turn has its gap from drama 50: the riser joins, with no draw", () => {
+    // a quick drop is pressed in the build or the ride: drums and bass are playing
+    const playing = [
+      row('d', ['drums']),
+      row('b', ['bass']),
+      row('l', ['lead']),
+      row('w', ['warm'])
+    ]
+    const quick = (o: Partial<TurnaroundInput>): TurnaroundInput =>
+      input({ rows: playing, force: { move: 'low drop', maxBeats: 8 }, ...o })
+    for (const loopBars of [2, 4, 8, 16]) {
+      const r = seededRandom(`quick${loopBars}`)
+      for (let i = 0; i < 300; i++) {
+        const plan = rollTurnaround(quick({ loopBars, random: r, drop: { gapChance: 1 } }))!
+        expect(plan.move, `${loopBars}`).toBe('low drop')
+        expect(
+          plan.parts!.map((p) => p.move),
+          `${loopBars}`
+        ).toContain('riser')
+        expect(plan.gapBeats, `${loopBars}`).toBeGreaterThan(0)
+      }
+    }
+    // the caller's random: as many draws as without the riser joining (below 50 it never does)
+    const counted = (gapChance: number, seed: string): number => {
+      const r = seededRandom(seed)
+      let n = 0
+      rollTurnaround(
+        quick({
+          random: () => {
+            n += 1
+            return r()
+          },
+          drop: { gapChance }
+        })
+      )
+      return n
+    }
+    for (let s = 0; s < 50; s++) {
+      expect(counted(1, `n${s}`)).toBe(counted(TURNAROUND_GAP_CHANCE, `n${s}`))
+    }
+    // below drama 50, or with the riser family off: the turn as it was
+    const noRiser = TURNAROUND_FAMILIES.filter((f) => f !== 'riser')
+    for (let s = 0; s < 50; s++) {
+      const a = rollTurnaround(
+        quick({ random: seededRandom(`q${s}`), drop: { gapChance: TURNAROUND_GAP_CHANCE } })
+      )
+      const b = rollTurnaround(quick({ random: seededRandom(`q${s}`) }))
+      expect(a).toEqual(b)
+      const c = rollTurnaround(
+        quick({ random: seededRandom(`q${s}`), moves: noRiser, drop: { gapChance: 1 } })
+      )
+      expect(c?.parts?.map((p) => p.move) ?? []).not.toContain('riser')
+    }
+    // a 1-bar loop: the cap is half the loop (2 beats), too short for a riser to leave a gap
+    const one = rollTurnaround(quick({ loopBars: 1, drop: { gapChance: 1 } }))!
+    expect(one.move).toBe('low drop')
+    expect(one.gapBeats ?? 0).toBe(0)
+  })
+
   it("a turn keeps its own move and length, and takes the drop's gap chance", () => {
     const r = seededRandom('turn-drop')
     let gaps = 0
