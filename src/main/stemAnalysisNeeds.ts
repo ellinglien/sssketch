@@ -9,6 +9,7 @@ import {
 } from '@shared/stemFeatures'
 import { STEM_LEVEL_VERSION } from '@shared/stemLevel'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
+import { isLibraryStemName } from '@shared/stemPathKind'
 import { countWork } from './workCounters'
 
 const DEFAULT_CHUNK_SIZE = 500
@@ -98,9 +99,10 @@ function zeroShotPendingStemCIDs(db: Database.Database, stemCIDs: string[]): Set
  * spec, A3) -- lets the ambient scans skip already-analysed stems without
  * a per-stem "do you have it?" round trip. Result is index-aligned with
  * `paths`. StemCID = the path's basename (the content-addressed library
- * layout, see stemCIDForPath); a path with no cache rows -- including one
- * that isn't a library stem at all -- simply needs everything, exactly
- * what the per-module getters would conclude. Batched: one query per cache
+ * layout, see stemCIDForPath); a path with no cache rows simply needs
+ * everything, exactly what the per-module getters would conclude -- except
+ * that a path whose basename is not a library stem name (isLibraryStemName:
+ * it contains `.`) never needs the embedding or zero-shot (YAMNet) step. Batched: one query per cache
  * table per chunk of `chunkSize` paths (via `.all()`, never `.iterate()`
  * across the yields), yielding to the event loop between chunks.
  */
@@ -120,11 +122,15 @@ export async function getStemAnalysisNeeds(
     const zeroShot = zeroShotPendingStemCIDs(db, stemCIDs)
     for (const path of chunkPaths) {
       const stemCID = basename(path)
+      // Not a library stem name (a drag-imported, baked or loop-folder file):
+      // its YAMNet result could never be stored, so it never needs one (audit
+      // 6). Peaks and features stay needed -- they are used in-session.
+      const library = isLibraryStemName(stemCID)
       out.push({
         peaks: !peaks.has(stemCID),
         features: !features.current.has(stemCID),
-        embedding: !embeddings.has(stemCID),
-        zeroShot: zeroShot.has(stemCID),
+        embedding: library && !embeddings.has(stemCID),
+        zeroShot: library && zeroShot.has(stemCID),
         // only when it is needed: an answer without it reads as no level work
         ...(features.needsLevel.has(stemCID) && { level: true })
       })

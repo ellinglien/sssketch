@@ -72,8 +72,17 @@ describe('getStemAnalysisNeeds', () => {
       { peaks: false, features: true, embedding: true, zeroShot: false },
       { peaks: true, features: true, embedding: true, zeroShot: false },
       { peaks: true, features: true, embedding: true, zeroShot: false },
-      { peaks: true, features: true, embedding: true, zeroShot: false }
+      // not a library stem name: YAMNet's result could never be stored (audit 6)
+      { peaks: true, features: true, embedding: false, zeroShot: false }
     ])
+  })
+
+  it('a baked stem with no rows needs peaks and features only (audit 6)', async () => {
+    const db = freshDb()
+    const needs = await getStemAnalysisNeeds(db, [
+      '/projects/p/baked/0123456789abcdef0123456789abcdef.baked.wav'
+    ])
+    expect(needs).toEqual([{ peaks: true, features: true, embedding: false, zeroShot: false }])
   })
 
   it('answers across chunk boundaries and for duplicate paths', async () => {
