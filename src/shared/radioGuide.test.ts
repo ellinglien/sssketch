@@ -338,6 +338,16 @@ describe('the radio guide: its claims match the code', () => {
     expect(textOf('desktop')).toContain('it plays for 16 to 32 bars')
   })
 
+  it('a hook comes back on a phrase start, preferring one where something else changes (radioHooks)', () => {
+    for (const app of APPS) {
+      const t = textOf(app)
+      expect(t).toContain(
+        'it comes back on a phrase start, preferring one where something else changes too, so its return lands as the drop.'
+      )
+      expect(t).not.toContain('where it can on one')
+    }
+  })
+
   it('the drama thresholds are the breakdown depths the guide describes', () => {
     expect(radioBreakdownDepth(24, false)).toBe('swell')
     expect(radioBreakdownDepth(25, false)).toBe('thin')

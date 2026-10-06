@@ -687,7 +687,7 @@ export const RADIO_GUIDE: RadioGuide = {
       blocks: [
         {
           type: 'text',
-          text: `hook a row (hook, or like) and radio treats its sound as a favourite. it plays for ${barsRange(HOOK_STAY)}, leaves on an echo (a bassline leaves dry), stays away ${barsRange(HOOK_AWAY)}, then comes back on a phrase start, where it can on one where something else changes too, so its return is the drop.`
+          text: `hook a row (hook, or like) and radio treats its sound as a favourite. it plays for ${barsRange(HOOK_STAY)}, leaves on an echo (a bassline leaves dry) and stays away ${barsRange(HOOK_AWAY)}. it comes back on a phrase start, preferring one where something else changes too, so its return lands as the drop.`
         },
         {
           type: 'figure',
