@@ -389,6 +389,7 @@ import {
   type RadioIntensityAction,
   type RadioIntensityArc,
   type RadioIntensityDecided,
+  type RadioIntensityPrepare,
   type RadioIntensityReleanWhere,
   type RadioIntensityRoom,
   type RadioIntensityRow
@@ -3200,6 +3201,12 @@ export function DiscoverPanel({
   /** Fresh picks for the drop's returning drums and bass rows (rowId -> its warm pick), prepared
    * a phrase ahead, leaned to the top target at full weight. */
   const intensityRenewRef = useRef(
+    new Map<string, { pick: SlotPick | null; stem: ResolvedCandidateStem | null }>()
+  )
+  /** Light picks for the heavy drums and bass rows (rowId -> its warm pick), prepared a phrase
+   * before a new cycle, leaned to the build's first target at full weight: a row the cycle's
+   * decision lightens is renewed to it at the build's top (option C, Elling 2026-10-06). */
+  const intensityLightRef = useRef(
     new Map<string, { pick: SlotPick | null; stem: ResolvedCandidateStem | null }>()
   )
   /** Rows the arc put on the panel (its adds, the carry row) that are not on its bed yet: silent
@@ -11193,7 +11200,7 @@ export function DiscoverPanel({
     return d?.event === 'exit' && d.rest
   }
   /** The row a thinning arc would remove now (pickArcRemoval), or null. */
-  function arcRemovalCandidate(): string | null {
+  function arcRemovalCandidate(by: 'stale' | 'heavy' = 'stale'): string | null {
     const lengths = resolvedBarLengthsRef.current
     const longest = lengths.size > 0 ? Math.max(...lengths.values()) : 0
     const atLongest = [...lengths.values()].filter((b) => b === longest).length
@@ -11219,8 +11226,10 @@ export function DiscoverPanel({
           radioCompanionOf(s.id) ||
           !lengths.has(s.id),
         shrinksLoop: lengths.get(s.id) === longest && atLongest === 1,
-        staleness: radioTurnRef.current - (radioChangedAtRef.current.get(s.id) ?? 0)
-      }))
+        staleness: radioTurnRef.current - (radioChangedAtRef.current.get(s.id) ?? 0),
+        ...(by === 'heavy' && { score: s.candidate?.intensity ?? null })
+      })),
+      by
     )
   }
 
@@ -11340,6 +11349,7 @@ export function DiscoverPanel({
     dropIntensityNextAdd()
     intensityCarryRef.current = null
     intensityRenewRef.current = new Map()
+    intensityLightRef.current = new Map()
     intensityJoiningRef.current = new Set()
     intensityJoinDecidedRef.current = null
     intensityThrowOwedRef.current = null
@@ -11357,6 +11367,7 @@ export function DiscoverPanel({
     dropIntensityNextAdd()
     intensityCarryRef.current = null
     intensityRenewRef.current = new Map()
+    intensityLightRef.current = new Map()
     intensityJoiningRef.current = new Set()
     intensityJoinDecidedRef.current = null
     intensityThrowOwedRef.current = null
@@ -11493,6 +11504,9 @@ export function DiscoverPanel({
     for (const id of [...intensityRenewRef.current.keys()]) {
       if (!live.has(id)) intensityRenewRef.current.delete(id)
     }
+    for (const id of [...intensityLightRef.current.keys()]) {
+      if (!live.has(id)) intensityLightRef.current.delete(id)
+    }
     // the arc's joining row is done once its change has landed or gone (as densityAtWrap)
     const adding = arcAddingRef.current
     if (
@@ -11540,6 +11554,7 @@ export function DiscoverPanel({
       canStrip: arcExitRef.current === null && arcRemovalCandidate() !== null,
       carryReady: carry !== null && carry.pick !== null && carry.stem !== null,
       renewReady: (id) => (intensityRenewRef.current.get(id)?.stem ?? null) !== null,
+      lightReady: (id) => intensityRenewalOf(id, intensityLightRef.current) !== null,
       random: Math.random
     })
     intensityArcRef.current = r.state
@@ -11816,7 +11831,7 @@ export function DiscoverPanel({
    * bass rows, leaned to the top target at full weight. Each yields its row to any other pick
    * (pickForSlot's yieldRow, the spares' way); one that fails is simply not ready at the decide
    * wrap (the own stem comes back; no carry row). */
-  function intensityPrepare(p: { carry: boolean; renew: string[] }, arc: RadioIntensityArc): void {
+  function intensityPrepare(p: RadioIntensityPrepare, arc: RadioIntensityArc): void {
     if (p.carry) {
       const kind = radioCarryKind(intensityRowsNow().bed)
       const carry: NonNullable<typeof intensityCarryRef.current> = {
@@ -11840,48 +11855,65 @@ export function DiscoverPanel({
         })
       })
     }
+    // option C: light picks for the heavy drums and bass, for the next build's start
+    if (p.lighten !== undefined) {
+      intensityLightRef.current = new Map()
+      intensityPrepareFresh(intensityLightRef.current, p.lighten.rows, p.lighten.target)
+      console.log(`[radio-intensity] prepares light picks for ${p.lighten.rows.join(', ')}`)
+    }
     if (p.renew.length === 0) return
     const hi = radioIntensityTargets(
       radioEnergyOf(radioSettings),
       radioDramaOf(radioSettings),
       arc.big
     ).hi
-    for (const id of p.renew) {
+    intensityPrepareFresh(intensityRenewRef.current, p.renew, hi)
+    console.log(
+      `[radio-intensity] prepares ${[p.carry ? 'a carry row' : '', p.renew.length > 0 ? `renewals for ${p.renew.join(', ')}` : ''].filter((w) => w !== '').join(' and ')}`
+    )
+  }
+
+  /** Fresh picks for `ids` (unlocked rows) into `map`, leaned to `target` at full weight, each
+   * yielding its row to any other pick and warmed; one that fails leaves the map. */
+  function intensityPrepareFresh(
+    map: Map<string, { pick: SlotPick | null; stem: ResolvedCandidateStem | null }>,
+    ids: readonly string[],
+    target: number
+  ): void {
+    for (const id of ids) {
       const slot = slotsRef.current.find((s) => s.id === id)
       if (slot === undefined || slot.locked) continue
       const entry: { pick: SlotPick | null; stem: ResolvedCandidateStem | null } = {
         pick: null,
         stem: null
       }
-      intensityRenewRef.current.set(id, entry)
+      map.set(id, entry)
       void pickForSlot(id, slot.kinds, {
         avoidOwnStem: true,
         yieldRow: true,
-        intensity: { target: hi, drama: 100 }
+        intensity: { target, drama: 100 }
       }).then((pick) => {
-        if (intensityRenewRef.current.get(id) !== entry) return
+        if (map.get(id) !== entry) return
         if (pick === null || pick.candidate === null || !radioOnRef.current) {
-          intensityRenewRef.current.delete(id)
+          map.delete(id)
           return
         }
         entry.pick = pick
         void resolveAndWarmPick(pick).then((stem) => {
-          if (intensityRenewRef.current.get(id) !== entry) return
-          if (stem === null) intensityRenewRef.current.delete(id)
+          if (map.get(id) !== entry) return
+          if (stem === null) map.delete(id)
           else entry.stem = stem
         })
       })
     }
-    console.log(
-      `[radio-intensity] prepares ${[p.carry ? 'a carry row' : '', p.renew.length > 0 ? `renewals for ${p.renew.join(', ')}` : ''].filter((w) => w !== '').join(' and ')}`
-    )
   }
 
-  /** A row's warm renewal, when its stem still plays on no row. */
+  /** A row's warm renewal (or, from `map`, its light pick), when its stem still plays on no row. */
   function intensityRenewalOf(
-    rowId: string
+    rowId: string,
+    map = intensityRenewRef.current
   ): { pick: SlotPick; stem: ResolvedCandidateStem } | null {
-    const r = intensityRenewRef.current.get(rowId)
+    const r = map.get(rowId)
     if (r === undefined || r.pick === null || r.stem === null || r.pick.candidate === null) {
       return null
     }
@@ -11932,15 +11964,35 @@ export function DiscoverPanel({
     switch (d.event) {
       case 'cycle': {
         // the strip-back: the density arc's removal path (its exit fades over the lap)
+        // (option C: the busiest row it may, so the build starts lighter)
         let stripped: string | null = null
         if (d.strip && arcExitRef.current === null) {
-          stripped = arcRemovalCandidate()
+          stripped = arcRemovalCandidate('heavy')
           if (stripped !== null) {
             arcExitRef.current = { slotId: stripped, phase: 'waiting', lap: arcLapRef.current }
           }
         }
+        // and the heavy drums and bass left are renewed to their light picks at its top: a cut
+        // under the phrase end's turnaround, as a swell's renewals cut onto the playing rows
+        const lit: string[] = []
+        for (const id of d.lighten ?? []) {
+          const slot = slotsRef.current.find((s) => s.id === id)
+          const light = intensityRenewalOf(id, intensityLightRef.current)
+          if (
+            light !== null &&
+            slot !== undefined &&
+            !slot.locked &&
+            id !== stripped &&
+            previewingSlotIdsRef.current.has(id) &&
+            !radioHookTurnoverExcluded(radioHooksRef.current, id) &&
+            intensityBringBack(id, light)
+          ) {
+            lit.push(id)
+          }
+        }
+        intensityLightRef.current = new Map()
         console.log(
-          `[radio-intensity] ${d.forced === true ? 'build pressed: ' : ''}a new cycle${d.next?.big === true ? ', a bigger peak' : ''}${stripped !== null ? `: strips ${stripped}` : ''}`
+          `[radio-intensity] ${d.forced === true ? 'build pressed: ' : ''}a new cycle${d.next?.big === true ? ', a bigger peak' : ''}${stripped !== null ? `: strips ${stripped}` : ''}${lit.length > 0 ? `; starts lighter: ${lit.join(', ')}` : ''}`
         )
         return
       }

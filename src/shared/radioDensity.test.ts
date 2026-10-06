@@ -189,6 +189,26 @@ describe('pickArcRemoval', () => {
   it('is null with nothing removable', () => {
     expect(pickArcRemoval([])).toBeNull()
   })
+
+  it("by `heavy` (the intensity arc's strip-back, option C): the busiest by score, the same rows allowed", () => {
+    const rows = [
+      row('stale', { staleness: 9, score: 0.2 }),
+      row('heavy', { staleness: 1, score: 0.9 }),
+      row('unknown', { staleness: 5 }),
+      row('locked', { locked: true, score: 1 }),
+      row('his', { radioAdded: false, score: 1 })
+    ]
+    expect(pickArcRemoval(rows)).toBe('stale')
+    expect(pickArcRemoval(rows, 'heavy')).toBe('heavy')
+    // unknown reads 0.5; ties to the stalest
+    expect(
+      pickArcRemoval([row('a', { staleness: 2 }), row('b', { staleness: 4, score: 0.5 })], 'heavy')
+    ).toBe('b')
+    // never the last drums or bass, however heavy
+    expect(
+      pickArcRemoval([row('d', { kinds: ['drums'], score: 1 }), row('l', { score: 0.1 })], 'heavy')
+    ).toBe('l')
+  })
 })
 
 describe('densityArrival', () => {

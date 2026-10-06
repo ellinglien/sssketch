@@ -170,10 +170,9 @@ export function radioIntensityRoleWeight(kinds: readonly DiscoverSlotKind[]): nu
   return w
 }
 
-/** The band draw's chance at full role weight and full drama. */
-export const INTENSITY_BAND_CHANCE = 0.5
-/** How far from the target a rank may sit and stay in the band. */
-export const INTENSITY_BAND_HALF_WIDTH = 0.25
+/** How far from the target a rank may sit and stay in the band. 0.25 at first; Elling, 2026-10-06
+ * ("a firmer lean": picks aimed at 0.9 landed near 0.6): 0.15, a third of the pool still in it. */
+export const INTENSITY_BAND_HALF_WIDTH = 0.15
 /** The band backs off when fewer than max(this, ceil(pool / 8)) candidates would remain. */
 export const INTENSITY_BAND_MIN = 8
 /** The ranking term's most (one trait's worth, under the favourite boost's 1.5). */
@@ -194,6 +193,16 @@ export interface RankIntensity {
 
 const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0)
 
+/** How much the lean counts on a slot at a drama: w * (0.4 + 0.6 d), d = drama / 100 -- the
+ * ranking term's weight, and the band draw's chance (a firmer lean, 2026-10-06: the band was drawn
+ * at 0.5 w d, so a drums pick at the default drama was banded 3 times in 10). */
+export function radioIntensityLeanWeight(
+  kinds: readonly DiscoverSlotKind[],
+  drama: number
+): number {
+  return radioIntensityRoleWeight(kinds) * (0.4 + 0.6 * clamp01(drama / 100))
+}
+
 /** The term's input for a slot: weight = w * (0.4 + 0.6 d), d = drama / 100. */
 export function radioIntensityRankOf(
   target: number,
@@ -202,10 +211,9 @@ export function radioIntensityRankOf(
   /** The band's `ranks` (applyIntensityBand), when the pool ranked went through it. */
   ranks?: ReadonlyMap<object, number>
 ): RankIntensity {
-  const d = clamp01(drama / 100)
   return {
     target: clamp01(target),
-    weight: radioIntensityRoleWeight(kinds) * (0.4 + 0.6 * d),
+    weight: radioIntensityLeanWeight(kinds, drama),
     ...(ranks !== undefined && { ranks })
   }
 }
@@ -271,7 +279,7 @@ export interface IntensityBandResult<T> {
 }
 
 /**
- * THE BAND DRAW, like the faves draw: ONE draw `< INTENSITY_BAND_CHANCE * w * d` keeps only the
+ * THE BAND DRAW, like the faves draw: ONE draw `< w (0.4 + 0.6 d)` (radioIntensityLeanWeight) keeps only the
  * candidates whose rank is within INTENSITY_BAND_HALF_WIDTH of the target -- unless fewer than
  * max(INTENSITY_BAND_MIN, ceil(pool / 8)) would remain, when the pool stays as it was
  * (`backedOff`; applyTraitBar's back-off). The draw is always made (one number) when called; the
@@ -281,8 +289,7 @@ export function applyIntensityBand<T extends Pick<DiscoverCandidate, 'intensity'
   pool: readonly T[],
   o: { target: number; kinds: readonly DiscoverSlotKind[]; drama: number; random: () => number }
 ): IntensityBandResult<T> {
-  const d = clamp01(o.drama / 100)
-  const chance = INTENSITY_BAND_CHANCE * radioIntensityRoleWeight(o.kinds) * d
+  const chance = radioIntensityLeanWeight(o.kinds, o.drama)
   const byPosition = intensityPoolRanks(pool)
   const ranks = new Map<T, number>()
   for (const [i, r] of byPosition) ranks.set(pool[i], r)

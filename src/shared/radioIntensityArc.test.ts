@@ -3,6 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   INTENSITY_PHRASES,
+  INTENSITY_LIGHTEN_MARGIN,
   INTENSITY_RELEAN_TOLERANCE,
   NO_RADIO_INTENSITY_ARC,
   intensityArcShown,
@@ -11,6 +12,7 @@ import {
   pressRadioIntensity,
   radioBreakdownDepth,
   radioBreakdownRests,
+  radioBuildLightenRows,
   radioCarryKind,
   radioIntensityArcRole,
   radioIntensityBend,
@@ -21,6 +23,7 @@ import {
   radioIntensityStopped,
   radioIntensityAhead,
   radioIntensityLandingTarget,
+  radioIntensityLightTarget,
   radioIntensityReleanNow,
   radioIntensityReleanSwap,
   radioIntensityTarget,
@@ -1309,6 +1312,162 @@ describe('radioIntensityTargetAhead: the target where a change lands (option A, 
     }
     expect(JSON.stringify(arc)).toBe(before)
     expect(draws).toBe(0)
+  })
+})
+
+// ---- option C: each build starts low (Elling, 2026-10-06) ----
+
+const lowRow = (
+  id: string,
+  kinds: DiscoverSlotKind[],
+  score: number | null,
+  over: Partial<RadioIntensityRow> = {}
+): RadioIntensityRow => ({
+  id,
+  kinds,
+  score,
+  staleness: 0,
+  sounding: true,
+  restable: true,
+  ...over
+})
+
+describe('radioIntensityLightTarget: where a build starts', () => {
+  it("is the arc's low target, the breakdown's, whatever the bigger peak", () => {
+    expect(radioIntensityLightTarget(50, 60)).toBeCloseTo(
+      radioIntensityTargets(50, 60, false).lo,
+      12
+    )
+    expect(radioIntensityLightTarget(50, 60)).toBeCloseTo(0.14, 9)
+    expect(radioIntensityLightTarget(0, 0)).toBeCloseTo(0.2, 9)
+    expect(radioIntensityLightTarget(100, 100)).toBeCloseTo(
+      radioIntensityTargets(100, 100, true).lo,
+      12
+    )
+  })
+})
+
+describe('radioBuildLightenRows: the heavy drums and bass a build starts without', () => {
+  it('the heaviest sounding drums row and bass row above the target by more than the margin', () => {
+    const rows = [
+      lowRow('d1', ['drums'], 0.6),
+      lowRow('d2', ['drums'], 0.9),
+      lowRow('b', ['bass'], 0.7),
+      lowRow('lead', ['lead'], 0.95)
+    ]
+    expect(radioBuildLightenRows(rows, 0.38)).toEqual(['d2', 'b'])
+    // at or under target + margin: kept
+    expect(radioBuildLightenRows(rows, 0.9 - INTENSITY_LIGHTEN_MARGIN)).toEqual([])
+    expect(radioBuildLightenRows(rows, 0.7 - INTENSITY_LIGHTEN_MARGIN)).toEqual(['d2'])
+  })
+
+  it('a combination row counts once; a row not sounding or not the arc to touch is left alone; unknown reads 0.5', () => {
+    expect(radioBuildLightenRows([lowRow('db', ['drums', 'bass'], 0.9)], 0.2)).toEqual(['db'])
+    expect(
+      radioBuildLightenRows(
+        [
+          lowRow('d', ['drums'], 0.9, { restable: false }),
+          lowRow('d2', ['drums'], 0.8),
+          lowRow('b', ['bass'], 0.9, { sounding: false })
+        ],
+        0.2
+      )
+    ).toEqual(['d2'])
+    expect(radioBuildLightenRows([lowRow('u', ['drums'], null)], 0.3)).toEqual(['u'])
+    expect(radioBuildLightenRows([lowRow('u', ['drums'], null)], 0.45)).toEqual([])
+  })
+})
+
+describe('the ride prepares the next build low, and its cycle renews the heavy drums and bass', () => {
+  // a ride (the drop) in its last phrase on a 4-bar loop: a 16-bar phrase is 4 laps
+  const ride = (o: Partial<RadioIntensityArc> = {}): RadioIntensityArc => ({
+    ...newRadioIntensityArc(),
+    begun: true,
+    first: false,
+    phase: 'drop',
+    phrases: 2,
+    done: 0,
+    untilBig: 3,
+    peakRows: 5,
+    ...o
+  })
+  const rows = [
+    lowRow('d', ['drums'], 0.85),
+    lowRow('b', ['bass'], 0.8),
+    lowRow('l', ['lead'], 0.4),
+    lowRow('w', ['warm'], 0.3)
+  ]
+  const input = (o: Partial<RadioIntensityStepInput>): RadioIntensityStepInput => ({
+    energy: 50,
+    drama: 60,
+    loopBars: 4,
+    lap: 0,
+    phraseLaps: 4,
+    held: false,
+    count: rows.length,
+    min: DENSITY_MIN,
+    max: DENSITY_MAX,
+    rows,
+    canAdd: true,
+    canStrip: true,
+    carryReady: false,
+    renewReady: () => false,
+    random: () => 0.5,
+    ...o
+  })
+
+  it("prepares light picks a phrase ahead (the ride's last phrase start), at the build's first target", () => {
+    // the ride's last phrase starts here (done 0 -> 1 of 2)
+    const r = stepRadioIntensityArc(ride(), input({ lap: 0 }))
+    expect(r.prepare).toEqual({
+      carry: false,
+      renew: [],
+      lighten: { rows: ['d', 'b'], target: radioIntensityLightTarget(50, 60) }
+    })
+    // nothing heavy: nothing prepared
+    const light = rows.map((x) => ({ ...x, score: 0.2 }))
+    expect(stepRadioIntensityArc(ride(), input({ lap: 0, rows: light })).prepare).toBeNull()
+  })
+
+  it('the cycle renews the prepared rows whose light pick is warm (and only those), drawing nothing more', () => {
+    const at = ride({ done: 1, prepared: 'drop' })
+    let draws = 0
+    const counting = (): number => {
+      draws += 1
+      return 0.5
+    }
+    const plain = stepRadioIntensityArc(at, input({ lap: 3, random: counting }))
+    const drawn = draws
+    expect(plain.decided).toMatchObject({ event: 'cycle', strip: true })
+    expect(plain.decided).not.toHaveProperty('lighten')
+    draws = 0
+    const lit = stepRadioIntensityArc(
+      at,
+      input({ lap: 3, random: counting, lightReady: (id) => id === 'b' })
+    )
+    expect(lit.decided).toMatchObject({ event: 'cycle', strip: true, lighten: ['b'] })
+    expect(draws).toBe(drawn)
+    const both = stepRadioIntensityArc(at, input({ lap: 3, lightReady: () => true }))
+    expect(both.decided).toMatchObject({ lighten: ['d', 'b'] })
+    // a row no longer heavy (renewed since, by radio's own change) is left as it is
+    const since = rows.map((x) => (x.id === 'd' ? { ...x, score: 0.2 } : x))
+    expect(
+      stepRadioIntensityArc(at, input({ lap: 3, rows: since, lightReady: () => true })).decided
+    ).toMatchObject({ lighten: ['b'] })
+    // the next cycle's state is the same either way
+    expect(lit.state.decided && { ...lit.state.decided, lighten: undefined }).toEqual({
+      ...plain.state.decided,
+      lighten: undefined
+    })
+  })
+
+  it("a button's build in the ride lightens nothing (nothing warmed for it)", () => {
+    const pressed = pressRadioIntensity(ride(), 'build', { lap: 1, phraseLaps: 4, late: false })!
+    expect(pressed.decided).toMatchObject({ event: 'cycle', forced: true })
+    expect(pressed.decided).not.toHaveProperty('lighten')
+    const r = stepRadioIntensityArc(pressed, input({ lap: 2, lightReady: () => true }))
+    expect(r.applied).toMatchObject({ event: 'cycle', forced: true })
+    expect(r.applied).not.toHaveProperty('lighten')
   })
 })
 

@@ -3,12 +3,13 @@
 import { createHash } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import {
-  INTENSITY_BAND_CHANCE,
+  INTENSITY_BAND_HALF_WIDTH,
   INTENSITY_WEIGHTS,
   applyIntensityBand,
   intensityPoolRanks,
   intensityTerms,
   radioBedIntensity,
+  radioIntensityLeanWeight,
   radioIntensityRankOf,
   radioIntensityRoleWeight,
   roundIntensity,
@@ -17,7 +18,7 @@ import {
   type IntensityValues
 } from './radioIntensity'
 import { buildQuantileTable, type TraitQuantileTables } from './traitQuantiles'
-import { rankCandidates } from './discoverRanking'
+import { pickReroll, rankCandidates } from './discoverRanking'
 import type { DiscoverCandidate } from './discoverCandidate'
 import { seededRandom } from './seededRandom'
 
@@ -194,17 +195,20 @@ describe('the band draw', () => {
     })
     expect(r.banded).toBe(true)
     expect(r.pool.length).toBeGreaterThanOrEqual(10)
+    // a firmer lean (Elling, 2026-10-06): within 0.15 of the target
+    expect(INTENSITY_BAND_HALF_WIDTH).toBe(0.15)
     for (const c of r.pool)
-      expect(Math.abs((c.intensity as number) - 0.9)).toBeLessThanOrEqual(0.2501)
+      expect(Math.abs((c.intensity as number) - 0.9)).toBeLessThanOrEqual(0.1501)
   })
 
-  it('draws once, at 0.5 w d', () => {
+  it("draws once, at the term's own weight: w (0.4 + 0.6 d)", () => {
     let n = 0
     const counting = (v: number) => () => {
       n += 1
       return v
     }
-    const half = INTENSITY_BAND_CHANCE * 0.35 * 0.6
+    const half = 0.35 * (0.4 + 0.6 * 0.6)
+    expect(radioIntensityLeanWeight(['lead'], 60)).toBeCloseTo(half, 12)
     expect(
       applyIntensityBand(big, {
         target: 0.5,
@@ -218,12 +222,41 @@ describe('the band draw', () => {
         .banded
     ).toBe(false)
     expect(n).toBe(2)
-    // drama 0: never banded, still one draw
+    // drama 0: banded at 0.4 w (the term leans there too), still one draw
     expect(
-      applyIntensityBand(big, { target: 0.5, kinds: ['drums'], drama: 0, random: counting(0) })
+      applyIntensityBand(big, { target: 0.5, kinds: ['drums'], drama: 0, random: counting(0.39) })
+        .banded
+    ).toBe(true)
+    expect(
+      applyIntensityBand(big, { target: 0.5, kinds: ['drums'], drama: 0, random: counting(0.4) })
         .banded
     ).toBe(false)
-    expect(n).toBe(3)
+    expect(n).toBe(4)
+  })
+
+  it('a drums pick at drama 60 lands near its target, from a varied pool (Discover chaos 75)', () => {
+    // a pool of 400 scored stems, uniformly spread; the pick's own rank against the target
+    const r = seededRandom('firm-lean')
+    const pool = Array.from({ length: 400 }, (_, i) => C(r(), `f${i}`))
+    for (const target of [0.14, 0.5, 0.86]) {
+      let err = 0
+      const seen = new Set<string>()
+      const N = 600
+      for (let k = 0; k < N; k++) {
+        const band = applyIntensityBand(pool, { target, kinds: ['drums'], drama: 60, random: r })
+        const ranked = rankCandidates(band.pool, {
+          targetBpm: 120,
+          intensity: radioIntensityRankOf(target, ['drums'], 60, band.ranks)
+        })
+        const c = pickReroll(ranked, 75, r)!
+        err += Math.abs(band.ranks.get(c)! - target)
+        seen.add(c.stemCID)
+      }
+      // (before: about 0.22, near a pick at random's 0.25-0.36)
+      expect(err / N).toBeLessThan(0.15)
+      // and still varied: most of the pool's stems near the target turn up
+      expect(seen.size).toBeGreaterThan(100)
+    }
   })
 
   it('ranks from the pool before the band: the term means the same target banded or not', () => {
@@ -249,13 +282,13 @@ describe('the band draw', () => {
     const open = applyIntensityBand(big, {
       target: 0.9,
       kinds: ['drums'],
-      drama: 100,
+      drama: 60,
       random: () => 0.99
     })
     expect(open.banded).toBe(false)
-    expect(
-      intensityTerms(open.pool, radioIntensityRankOf(0.9, ['drums'], 100, open.ranks))
-    ).toEqual(intensityTerms(big, radioIntensityRankOf(0.9, ['drums'], 100)))
+    expect(intensityTerms(open.pool, radioIntensityRankOf(0.9, ['drums'], 60, open.ranks))).toEqual(
+      intensityTerms(big, radioIntensityRankOf(0.9, ['drums'], 60))
+    )
   })
 
   it('backs off when too few would remain (max(8, pool / 8))', () => {

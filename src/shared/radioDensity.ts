@@ -148,6 +148,9 @@ export interface ArcRow {
   shrinksLoop: boolean
   /** Turns since it last changed (higher is staler). */
   staleness: number
+  /** Its stem's intensity score (radioIntensity; null or absent: unknown, read as 0.5), for the
+   * intensity arc's strip-back (pickArcRemoval's `heavy`). */
+  score?: number | null
 }
 
 /** A thinning arc's row on its way out (sssketch's arcExitRef): waiting for its drop-out to be
@@ -168,8 +171,13 @@ export function arcExitingRow(exit: ArcExit | null, lap: number, heldBack: boole
   return heldBack ? null : exit.slotId
 }
 
-/** Which row a thinning arc removes: the stalest it is allowed to, or null. */
-export function pickArcRemoval(rows: readonly ArcRow[]): string | null {
+/** Which row a thinning arc removes: the stalest it is allowed to, or null. `heavy` (the intensity
+ * arc's strip-back at a build's start, option C, Elling 2026-10-06): the busiest by score among the
+ * same rows (unknown 0.5), ties to the stalest, so the build starts from a lighter bed. */
+export function pickArcRemoval(
+  rows: readonly ArcRow[],
+  by: 'stale' | 'heavy' = 'stale'
+): string | null {
   const lastOfItsKind = (r: ArcRow): boolean =>
     r.kinds.some(
       (k) =>
@@ -180,9 +188,19 @@ export function pickArcRemoval(rows: readonly ArcRow[]): string | null {
   for (const r of rows) {
     if (!r.radioAdded || r.locked || r.soloed || r.held || r.busy || r.shrinksLoop) continue
     if (lastOfItsKind(r)) continue
-    if (best === null || r.staleness > best.staleness) best = r
+    if (best === null) best = r
+    else if (by === 'heavy') {
+      const a = arcRowScore(r)
+      const b = arcRowScore(best)
+      if (a > b || (a === b && r.staleness > best.staleness)) best = r
+    } else if (r.staleness > best.staleness) best = r
   }
   return best?.id ?? null
+}
+
+/** A row's score for pickArcRemoval's `heavy`: unknown reads 0.5. */
+function arcRowScore(r: ArcRow): number {
+  return typeof r.score === 'number' && Number.isFinite(r.score) ? r.score : 0.5
 }
 
 /** How a row the arc adds arrives: a filter in or a bloom (the two that
