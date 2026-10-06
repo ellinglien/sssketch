@@ -440,6 +440,12 @@ export async function prewarmDiscoverCandidateCaches(
     const liveStemCount = stemSignal?.count ?? null
     if (liveStemCount !== null && getCachedStemCount(ownDb, sourceDbKey) === liveStemCount) {
       const rows = await loadCachedInstrumentRows(ownDb, sourceDbKey, reportInstrumentRowsProgress)
+      // TODO(scan plan b21ea5a2 Task 3): saved rows are trusted on a matching
+      // COUNT alone and stamped with today's signal as "built", so a delete +
+      // insert of equal size between launches goes unseen -- here, and in
+      // getInstrumentMaskLookup, which trusts this stamp. Task 3 stores
+      // MaxRowid + WatermarkStemCID in DiscoverInstrumentRowsCacheMeta and
+      // loads only when they match too (else extend or rebuild).
       instrumentRowsCache.set(db, { rows, state: newScanCacheState(stemSignal) })
     } else {
       const rows = await getInstrumentRowsForDb(db, reportInstrumentRowsProgress)
@@ -596,7 +602,13 @@ const instrumentMaskLookups = new WeakMap<object, InstrumentRowsLookup>()
  * ~0.05 ms when nothing moved (tableChangeSignal.ts's shared count). Only a
  * read-only connection (the external archive): sssketch's own warehouse
  * is written all the time and its Stems IN query is an index lookup on the
- * internal disk (~0.5 ms), so it stays on SQL. */
+ * internal disk (~0.5 ms), so it stays on SQL.
+ *
+ * "Built" for rows loaded from the saved cache at startup is that launch's
+ * signal, checked against the saved row count only (see the TODO in
+ * prewarmDiscoverCandidateCaches: scan plan Task 3 adds the rowid
+ * watermark). Stems rows are written once, so the gap is a same-size
+ * delete + insert between launches. */
 export function getInstrumentMaskLookup(db: Database.Database): InstrumentRowsLookup | null {
   if (!db.readonly) return null
   const cached = instrumentRowsCache.get(db)

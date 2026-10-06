@@ -45,7 +45,7 @@ describe('createInstrumentRowsLookup', () => {
     expect(lookup('n')).toBeUndefined()
   })
 
-  it('first row wins for a repeated StemCID, as the SQL lookup took the first non-null', () => {
+  it('first row wins for a repeated StemCID (Stems keys StemCID, so this is only defensive)', () => {
     const lookup = createInstrumentRowsLookup([row('a', 1), row('b', 2), row('b', 3), row('c', 4)])
     expect(lookup('b')).toBe(2)
   })

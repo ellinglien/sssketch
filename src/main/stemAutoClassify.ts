@@ -9,6 +9,7 @@ import { getConfirmedEmbeddings } from './embeddingMatch'
 import { loadCategoryCentroidStore } from './categoryCentroidStore'
 import { upsertStemAutoCategory } from './stemAutoCategoryStore'
 import { countWork } from './workCounters'
+import { readTableSignal } from './tableChangeSignal'
 import {
   drainAutoClassifyInputRows,
   getAutoClassifyTrainingGeneration
@@ -329,8 +330,8 @@ const pendingByDb = new WeakMap<Database.Database, PendingState>()
 /** Background scan audit item 2 (2026-10-05): the ids each pass has already
  * taken under the current TRAINING KEY -- the confirmed-embedding
  * fingerprint, the training generation (confirmations, centroid retrains)
- * and the mask dbs (an archive connected later can give a stem the mask it
- * lacked). A stem neither classifier could place gets the same answer
+ * and the mask dbs with their Stems signals (an archive connected later, or
+ * a mask filled in, can give a stem the mask it lacked -- maskDbKey). A stem neither classifier could place gets the same answer
  * again until one of those moves, so the scheduler's 10-minute safety
  * rebuild leaves these out instead of re-running them: on Elling's library
  * that was the ~20k-stem residue, about 5 minutes of busy work (2.3 MB of
@@ -368,7 +369,23 @@ function trainingKey(
   generation: number,
   stemDbs: Database.Database[]
 ): string {
-  return `${prepared.fingerprint}|${generation}|${stemDbs.map(identityOf).join(',')}`
+  return `${prepared.fingerprint}|${generation}|${stemDbs.map(maskDbKey).join(',')}`
+}
+
+/** One mask db's part of the training key: which connection, and its Stems
+ * signal -- so a stem tried with no mask is tried again once one arrives.
+ * Count and MAX(rowid) (rows added or removed), this process's write
+ * counter (riffLibraryWriter.ts filling a stem in place), and on a
+ * read-only connection data_version too (the external archive changes only
+ * by another connection's commit). Not data_version on sssketch's own db:
+ * this process's commits never move it, and others' commits there are the
+ * read-only archive connection's, already seen as writes. ~0.05 ms per db
+ * while nothing moved (tableChangeSignal.ts's shared count). */
+function maskDbKey(db: Database.Database): string {
+  const signal = readTableSignal(db, 'Stems')
+  if (!signal) return `${identityOf(db)}:-`
+  const foreign = db.readonly ? `:${signal.dataVersion}` : ''
+  return `${identityOf(db)}:${signal.count}:${signal.maxRowid}:${signal.writes}${foreign}`
 }
 
 function attemptedFor(ownDb: Database.Database, key: string): AttemptedState {
@@ -379,19 +396,19 @@ function attemptedFor(ownDb: Database.Database, key: string): AttemptedState {
   return fresh
 }
 
-/** Takes up to `n` ids from `list`, recording them as attempted under the
- * current key; counts any taken again under the same key (a stem a store
+/** Records a FINISHED batch's ids as attempted under the current key --
+ * called only once its classification has committed, so a batch that throws
+ * part-way leaves its stems untried and the next rebuild picks them up
+ * again. Counts any recorded again under the same key (a stem a store
  * rewrote -- expected to stay near 0 once the first drain is done). */
-function takeAttempted(list: PendingList, attempted: Set<string>, n: number): string[] {
-  const taken = takePending(list, n)
+function markAttempted(attempted: Set<string>, ids: string[]): void {
   let retried = 0
-  for (const id of taken) {
+  for (const id of ids) {
     if (attempted.has(id)) retried += 1
     else attempted.add(id)
   }
-  countWork('auto-classify:rows-attempted', taken.length)
+  countWork('auto-classify:rows-attempted', ids.length)
   if (retried > 0) countWork('auto-classify:rows-retried', retried)
-  return taken
 }
 
 function withoutAttempted(ids: string[], attempted: Set<string>, noted: string[]): string[] {
@@ -606,13 +623,13 @@ export async function classifyAutoCategoryBatch(
     // still be classified even while the embedding axis itself has never
     // trained. `remaining` below only ever reflects ids not yet taken
     // from the pending lists; a fetched row left unresolved (no mask, axis
-    // untrained) stays eligible for the next rebuild, same accepted cost
-    // as an ambiguous embedding guess (see "leaves an unclassifiable stem
-    // out of StemAutoCategory", above).
-    const batchRows = fetchPendingEmbeddingRows(
-      ownDb,
-      takeAttempted(pending.embedding, attempted.embedding, BATCH_SIZE)
-    )
+    // untrained) is recorded as tried (AttemptedState) and taken again
+    // once the training key moves -- the axis training changes the
+    // fingerprint, a mask arriving moves its db's Stems signal -- same as
+    // an ambiguous embedding guess (see "leaves an unclassifiable stem out
+    // of StemAutoCategory", above).
+    const taken = takePending(pending.embedding, BATCH_SIZE)
+    const batchRows = fetchPendingEmbeddingRows(ownDb, taken)
     const masks = lookupInstrumentMasks(
       stemDbs,
       batchRows.map((r) => r.StemCID),
@@ -649,16 +666,14 @@ export async function classifyAutoCategoryBatch(
       }
       return false
     })
+    markAttempted(attempted.embedding, taken)
   }
 
   // --- Feature/centroid pass (fallback) ---
   if (pending.feature.ids.length > 0) {
     const centroidStore = loadCategoryCentroidStore()
-    const batchRows = fetchPendingFeatureRows(
-      ownDb,
-      takeAttempted(pending.feature, attempted.feature, BATCH_SIZE),
-      embeddingAxisTrained
-    )
+    const taken = takePending(pending.feature, BATCH_SIZE)
+    const batchRows = fetchPendingFeatureRows(ownDb, taken, embeddingAxisTrained)
     // Same instrument-mask short-circuit as the embedding pass above --
     // see reliableMaskSoundType's own doc comment for why.
     const masks = lookupInstrumentMasks(
@@ -692,6 +707,7 @@ export async function classifyAutoCategoryBatch(
       }
       return false
     })
+    markAttempted(attempted.feature, taken)
   }
 
   // Ids still waiting in this call's pending lists -- 0 means caught up

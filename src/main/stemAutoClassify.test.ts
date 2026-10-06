@@ -12,6 +12,7 @@ import type { StemFeatures } from '@shared/stemFeatures'
 import { setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { setStemFeatureCache } from './stemFeatureCacheStore'
 import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
+import { bumpTableWriteVersion } from './tableWriteVersion'
 
 // The centroid/feature pass reads app.getPath('userData') via
 // loadCategoryCentroidStore -- mock just that narrow surface, same
@@ -828,6 +829,21 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
     ).toEqual([])
   })
 
+  it('a batch that throws part-way leaves its stems untried, so the next rebuild retries them', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    seedEmbedding(db, 'drums-1', [0.9, 0.1, 0])
+    vi.spyOn(db, 'transaction').mockImplementationOnce(() => {
+      throw new Error('SQLITE_BUSY')
+    })
+    await expect(classifyAutoCategoryBatch(db)).rejects.toThrow('SQLITE_BUSY')
+
+    // The scheduler's next tick: the list is spent and nothing was noted, so
+    // it rebuilds -- and the stem the failed batch took is back in it.
+    expect(await classifyAutoCategoryBatch(db)).toEqual({ processed: 1, remaining: 0 })
+    expect(allClassifiedStemCIDs(db)).toEqual(new Set(['drums-1']))
+  })
+
   it('still picks up a row written outside the stores at the safety rebuild (a new id)', async () => {
     const db = freshDb()
     seedTrainedEmbeddings(db)
@@ -868,6 +884,43 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
     setStemEmbeddingCache(db, '/x/ambiguous-1', [0.9, 0.1, 0], 2000)
     expect(await classifyAutoCategoryBatch(db)).toEqual({ processed: 1, remaining: 0 })
     expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['ambiguous-1']))
+  })
+
+  it('re-attempts a tried stem once the writer fills in its mask (NULL -> drums)', async () => {
+    const db = freshDb()
+    seedTrainedEmbeddings(db)
+    seedEmbedding(db, 'late-mask', [0.5, 0.5, 0]) // ambiguous on the embedding axis
+    db.prepare(
+      `INSERT INTO Stems (StemCID, OwnerJamCID, Instrument) VALUES ('late-mask', 'jam1', NULL)`
+    ).run()
+    expect((await classifyAutoCategoryBatch(db, [db])).processed).toBe(0)
+    expect((await classifyAutoCategoryBatch(db, [db])).processed).toBe(0)
+
+    // In place, as riffLibraryWriter.ts fills a stem in: same count and
+    // MAX(rowid), its per-table write counter moves.
+    db.prepare(`UPDATE Stems SET Instrument = ? WHERE StemCID = 'late-mask'`).run(DRUMS_BIT)
+    bumpTableWriteVersion(db, 'Stems')
+    expect((await classifyAutoCategoryBatch(db, [db])).processed).toBe(1)
+    expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['late-mask']))
+  })
+
+  it('re-attempts a tried stem once another connection fills in its mask in the read-only archive', async () => {
+    const own = freshDb()
+    seedTrainedEmbeddings(own)
+    seedEmbedding(own, 'arch-late', [0.5, 0.5, 0])
+    const path = join(dir, 'archive.db')
+    const writer = new Database(path)
+    writer.exec(
+      `CREATE TABLE Stems (StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT, Instrument INTEGER)`
+    )
+    writer.prepare(`INSERT INTO Stems VALUES ('arch-late', 'jam1', NULL)`).run()
+    const archive = new Database(path, { readonly: true })
+    expect((await classifyAutoCategoryBatch(own, [archive, own])).processed).toBe(0)
+    expect((await classifyAutoCategoryBatch(own, [archive, own])).processed).toBe(0)
+
+    writer.prepare(`UPDATE Stems SET Instrument = ? WHERE StemCID = 'arch-late'`).run(NOTES_BIT)
+    expect((await classifyAutoCategoryBatch(own, [archive, own])).processed).toBe(1)
+    expect(getAutoCategorizedStemCIDs(own, 'lead')).toEqual(new Set(['arch-late']))
   })
 
   it('re-attempts tried stems when the mask dbs change (an archive connected)', async () => {

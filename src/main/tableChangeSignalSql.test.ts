@@ -160,6 +160,26 @@ describe('readTableSignal edge cases (unchanged behaviour)', () => {
     expect(readTableSignal(db, 'Stems')?.count).toBe(3)
   })
 
+  it('is null, never a throw, when the COUNT fails after the cheap half read fine', () => {
+    const db = new Database(seeded(5))
+    const real = db.prepare.bind(db)
+    vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      if (sql.includes('COUNT(*)')) throw new Error('SQLITE_IOERR: disk went away')
+      return real(sql)
+    }) as typeof db.prepare)
+    expect(readTableSignal(db, 'Riffs')).toBeNull()
+  })
+
+  it('is null, never a throw, when total_changes() fails', () => {
+    const db = new Database(seeded(5))
+    const real = db.prepare.bind(db)
+    vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
+      if (sql.includes('total_changes()')) throw new Error('SQLITE_BUSY')
+      return real(sql)
+    }) as typeof db.prepare)
+    expect(readTableSignal(db, 'Riffs')).toBeNull()
+  })
+
   it('an empty table reads count 0, maxRowid null', () => {
     const db = new Database(':memory:')
     db.exec(`CREATE TABLE Jams (JamCID TEXT)`)

@@ -152,6 +152,22 @@ function readSignal(db: Database.Database, table: ChangeSignalTable): TableSigna
       return null
     }
   }
+  // Every read below can still fail (an I/O error on the USB volume, a
+  // busy connection): null, the same "can't read it" answer as a missing
+  // table -- callers treat that as no signal, never as an exception.
+  try {
+    return countedSignal(db, table, head, writes)
+  } catch {
+    return null
+  }
+}
+
+function countedSignal(
+  db: Database.Database,
+  table: ChangeSignalTable,
+  head: { maxRowid: number | null; dataVersion: number },
+  writes: number
+): TableSignal {
   const totalChanges = db.readonly
     ? null
     : (db.prepare(`SELECT total_changes() AS n`).get() as { n: number }).n
