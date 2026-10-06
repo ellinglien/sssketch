@@ -11,7 +11,8 @@
 // remounts). While it is open, keys stay in it: the app's shortcuts (space for play) never see them.
 //
 // The diagrams are small static SVGs. Colour only on audio information: a lane's bars are its kind
-// of sound, in its type colour (typeColorVar); lines, ramps and the pace scale are ink.
+// of sound, in its type colour (typeColorVar); an ink lane (the intensity wave, not a sound),
+// lines, ramps and the pace scale are ink.
 import { useEffect, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
@@ -48,43 +49,47 @@ function GuideBars({
   return (
     <div role="img" aria-label={figure.alt} style={{ display: 'flex', flexDirection: 'column' }}>
       <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 4 }}>
-        {figure.lanes.map((lane, li) => (
-          <div key={li} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {lane.label !== undefined && labels && (
-              <span style={{ fontSize: 'var(--ra-fs-9)', color: 'var(--ra-text-3)' }}>
-                {lane.label}
-              </span>
-            )}
-            <svg
-              aria-hidden
-              width="100%"
-              height={laneHeight}
-              viewBox={`0 0 ${n} ${laneHeight}`}
-              preserveAspectRatio="none"
-              style={{ display: 'block' }}
-            >
-              {lane.cells.map((c, i) => {
-                const h = c.v * (laneHeight - 2)
-                const y = c.half === 'bottom' ? mid : mid - h / 2
-                const height = c.half === undefined ? h : h / 2
-                return (
-                  <g key={i} fill={typeColorVar(lane.kind)}>
-                    {c.blur === true && (
-                      <rect
-                        x={i - 0.3}
-                        y={mid - Math.min(mid, h * 0.65)}
-                        width={1.6}
-                        height={Math.min(laneHeight, h * 1.3)}
-                        opacity={0.22 * c.a}
-                      />
-                    )}
-                    <rect x={i + 0.15} y={y} width={0.7} height={height} opacity={c.a} />
-                  </g>
-                )
-              })}
-            </svg>
-          </div>
-        ))}
+        {figure.lanes.map((lane, li) => {
+          // a sound's lane in its type colour; an ink lane (not a sound) in ink
+          const fill = lane.kind === 'ink' ? 'var(--ra-text-2)' : typeColorVar(lane.kind)
+          return (
+            <div key={li} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+              {lane.label !== undefined && labels && (
+                <span style={{ fontSize: 'var(--ra-fs-9)', color: 'var(--ra-text-3)' }}>
+                  {lane.label}
+                </span>
+              )}
+              <svg
+                aria-hidden
+                width="100%"
+                height={laneHeight}
+                viewBox={`0 0 ${n} ${laneHeight}`}
+                preserveAspectRatio="none"
+                style={{ display: 'block' }}
+              >
+                {lane.cells.map((c, i) => {
+                  const h = c.v * (laneHeight - 2)
+                  const y = c.half === 'bottom' ? mid : mid - h / 2
+                  const height = c.half === undefined ? h : h / 2
+                  return (
+                    <g key={i} fill={fill}>
+                      {c.blur === true && (
+                        <rect
+                          x={i - 0.3}
+                          y={mid - Math.min(mid, h * 0.65)}
+                          width={1.6}
+                          height={Math.min(laneHeight, h * 1.3)}
+                          opacity={0.22 * c.a}
+                        />
+                      )}
+                      <rect x={i + 0.15} y={y} width={0.7} height={height} opacity={c.a} />
+                    </g>
+                  )
+                })}
+              </svg>
+            </div>
+          )
+        })}
         {/* Lines and the riser over every lane, in ink. */}
         <svg
           aria-hidden

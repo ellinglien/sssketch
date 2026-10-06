@@ -12,8 +12,9 @@
 // guide.test.ts check every one, so a renamed control fails a test.
 //
 // THE DIAGRAMS are data too: bars in lanes (a lane is a row of a kind of sound, a cell one step of
-// its waveform), plus lines, a riser ramp and words under them; and one scale (the pace slider).
-// Each app draws them its own way: the desktop in the type colours (typeColorVar), the web in ink.
+// its waveform; or an `ink` lane, not a sound), plus lines, a riser ramp and words under them; and
+// one scale (the pace slider). Each app draws them its own way: the desktop a sound's lane in its
+// type colour (typeColorVar) and an ink lane in ink, the web every lane in ink.
 //
 // Copy rules (tokens.css; the web's CLAUDE.md): lowercase, no emoji, no exclamation marks.
 // Pure: no DOM, no randomness (the waveforms come from a fixed seed).
@@ -62,7 +63,11 @@ import { DIG_NEAR_SHARE } from './radioDig'
 export type RadioGuideApp = 'desktop' | 'web'
 
 /** The kinds of sound a diagram's lanes are drawn as (the desktop's type colours). */
-export type RadioGuideKind = Extract<SoundType, 'drums' | 'bass' | 'notes' | 'extInst' | 'fx'>
+export type RadioGuideSoundKind = Extract<SoundType, 'drums' | 'bass' | 'notes' | 'extInst' | 'fx'>
+
+/** A lane's kind: a kind of sound, or `ink` for a lane that is not a sound (the intensity wave),
+ * drawn in ink in both apps. Colour is for audio information only (tokens.css). */
+export type RadioGuideKind = RadioGuideSoundKind | 'ink'
 
 /** One step of a lane's waveform: `v` its height (0..1), `a` how strongly it sounds (0 silent,
  * 1 full); `half` keeps only the top (the low end filtered out) or the bottom (the top end out);
@@ -177,7 +182,7 @@ const clamp = (v: number): number => Math.min(1, Math.max(0.06, v))
 
 /** `n` heights for a kind, from `seed`: drums hit on every fourth step, bass swells, notes ripple,
  * an instrument pulses, fx drift. */
-export function radioGuideWave(kind: RadioGuideKind, n: number, seed = 7): number[] {
+export function radioGuideWave(kind: RadioGuideSoundKind, n: number, seed = 7): number[] {
   const r = seeded(seed)
   const out: number[] = []
   for (let i = 0; i < n; i++) {
@@ -198,7 +203,7 @@ const full = (vs: readonly number[]): RadioGuideCell[] => vs.map((v) => ({ v, a:
 
 /** A lane of `kind`: `n` cells of its waveform, then `shape` applied to each cell by index. */
 function lane(
-  kind: RadioGuideKind,
+  kind: RadioGuideSoundKind,
   n: number,
   seed: number,
   shape?: (cell: RadioGuideCell, i: number) => RadioGuideCell
@@ -214,7 +219,7 @@ function lane(
 function phraseFigure(): RadioGuideBars {
   const N = 32
   const loop = 8
-  const repeat = (kind: RadioGuideKind, seed: number): number[] => {
+  const repeat = (kind: RadioGuideSoundKind, seed: number): number[] => {
     const one = radioGuideWave(kind, loop, seed)
     return Array.from({ length: N }, (_, i) => one[i % loop])
   }
@@ -293,7 +298,7 @@ function moveFigure(move: TurnaroundMove | 'gap'): RadioGuideBars {
   const wash = (c: RadioGuideCell, i: number): RadioGuideCell =>
     late(i) ? { ...c, blur: true } : c
   const gap = (c: RadioGuideCell, i: number): RadioGuideCell => (i >= N - 2 ? { ...c, a: 0 } : c)
-  const lanes = (shapes: Partial<Record<RadioGuideKind, typeof out>>): RadioGuideLane[] =>
+  const lanes = (shapes: Partial<Record<RadioGuideSoundKind, typeof out>>): RadioGuideLane[] =>
     (['drums', 'bass', 'notes', 'fx'] as const).map((k, j) => lane(k, N, 5 + j * 4, shapes[k]))
   const alt = (what: string): string => `the end of a phrase: ${what}`
   const line = [{ at: from / N }]
@@ -360,7 +365,8 @@ function moveFigure(move: TurnaroundMove | 'gap'): RadioGuideBars {
 }
 
 /** One wave of intensity: a build that starts low and climbs, the breakdown, the drop, a ride at
- * the top, and the next build starting low again. Heights are how intense the mix is. */
+ * the top, and the next build starting low again. Heights are how intense the mix is: not a
+ * sound, so an ink lane. */
 function intensityFigure(): RadioGuideBars {
   const N = 48
   const level = (i: number): number => {
@@ -377,7 +383,7 @@ function intensityFigure(): RadioGuideBars {
   return {
     type: 'bars',
     alt: 'intensity over a few minutes: a build climbs, the breakdown dips, the drop comes back at the top, a ride, then the next build starts low',
-    lanes: [{ kind: 'drums', cells }],
+    lanes: [{ kind: 'ink', cells }],
     lines: [{ at: 24 / N, strong: true }],
     labels: [
       { at: 0, text: 'build' },
@@ -413,7 +419,7 @@ function hookFigure(): RadioGuideBars {
 /** Fold: lanes of 4, 3 and 5 beats against the bar; a strong step where each lane restarts. */
 function foldFigure(): RadioGuideBars {
   const beats = 30
-  const fold = (kind: RadioGuideKind, len: number): RadioGuideLane => ({
+  const fold = (kind: RadioGuideSoundKind, len: number): RadioGuideLane => ({
     kind,
     label: `${len} beats`,
     cells: Array.from({ length: beats }, (_, b) =>

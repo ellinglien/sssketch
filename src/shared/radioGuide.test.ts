@@ -395,6 +395,19 @@ describe('the radio guide: the diagrams', () => {
     }
   })
 
+  it('colour is for sound only: the intensity wave, not a sound, is drawn in ink', () => {
+    const intensity = RADIO_GUIDE.sections
+      .find((s) => s.id === 'intensity')!
+      .blocks.flatMap((b) => (b.type === 'figure' && b.figure.type === 'bars' ? [b.figure] : []))
+    expect(intensity).toHaveLength(1)
+    expect(intensity[0].lanes.map((l) => l.kind)).toEqual(['ink'])
+    // every other lane is a sound's
+    const others = figures.filter(
+      (f): f is RadioGuideBars => f.type === 'bars' && f !== intensity[0]
+    )
+    for (const f of others) for (const l of f.lanes) expect(l.kind).not.toBe('ink')
+  })
+
   it('the pace scale climbs from slow to 100', () => {
     const scale = figures.find((f) => f.type === 'scale')
     expect(scale?.type).toBe('scale')
