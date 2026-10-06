@@ -21,7 +21,15 @@ vi.mock('./workCounters', async (importOriginal) => {
   return { ...actual, countWork: vi.fn() }
 })
 
+/** Pages of Stems walked for pairs -- since scan plan Task 4 the shared walk
+ * (stemsTableWalk.ts), counted as `walk:instrument-rows.page`. */
 function pairPages(): number {
+  return vi.mocked(countWork).mock.calls.filter(([kind]) => kind === 'walk:instrument-rows.page')
+    .length
+}
+
+/** The old, separate pairs walk's own pages: should never run now. */
+function oldPairWalkPages(): number {
   return vi
     .mocked(countWork)
     .mock.calls.filter(([kind]) => kind === 'sql:discover.artist-pairs-page').length
@@ -257,7 +265,7 @@ describe('pairs walk: failure and quit', () => {
     const realPrepare = db.prepare.bind(db)
     vi.spyOn(db, 'prepare').mockImplementation(((sql: string) => {
       const stmt = realPrepare(sql)
-      if (!sql.includes('AS jam')) return stmt
+      if (!sql.includes('rowid AS rid')) return stmt
       return {
         all: () => {
           throw new Error('disk gone')
@@ -280,7 +288,7 @@ describe('pairs walk: failure and quit', () => {
     expect(pairPages()).toBe(2)
   })
 
-  it('stops a running walk at its next page on quit and saves nothing', async () => {
+  it('on quit, a running walk adds nothing more; what was saved is a whole-page prefix', async () => {
     const own = ownDb()
     const db = archive()
     const insert = db.prepare(`INSERT INTO Stems VALUES (?, 'j1', ?)`)
@@ -295,10 +303,145 @@ describe('pairs walk: failure and quit', () => {
     await vi.waitFor(async () => {
       expect((await getArtistIndex(own, [db], 'elling')).jammedWithPending).toBe(false)
     })
+    // Saved page by page (scan plan Task 4): at most the pages read before
+    // the quit, and the meta names exactly the last of them -- a valid
+    // watermark the next launch extends from.
+    const meta = own
+      .prepare(`SELECT StemCount, MaxRowid FROM DiscoverJamUserPairsMeta WHERE SourceDbKey = ?`)
+      .get(db.name) as { StemCount: number; MaxRowid: number } | undefined
+    if (meta) {
+      expect(meta.StemCount % 2000).toBe(0)
+      expect(meta.MaxRowid).toBe(meta.StemCount)
+    }
+    expect((await getArtistIndex(own, [db], 'elling')).jammedWith).toBeNull()
+  })
+})
+
+// Scan plan b21ea5a2 Task 4: the pairs ride the one shared Stems walk and
+// extend from a rowid watermark.
+describe('pairs from the shared Stems walk (scan plan Task 4)', () => {
+  async function settled(own: Database.Database, dbs: Database.Database[]): Promise<void> {
+    await getArtistIndex(own, dbs, 'elling')
+    await vi.waitFor(async () => {
+      expect((await getArtistIndex(own, dbs, 'elling')).jammedWithPending).toBe(false)
+    })
+  }
+  function many(db: Database.Database, from: number, to: number): void {
+    const insert = db.prepare(`INSERT INTO Stems VALUES (?, ?, ?)`)
+    db.transaction(() => {
+      for (let i = from; i < to; i++) insert.run(`s${i}`, `jam${i % 40}`, `user${i % 23}`)
+    })()
+  }
+  async function fullWalkPairs(db: Database.Database): Promise<Set<string>> {
+    return new Set((await readJamUserPairs(db)).map(([j, u]) => `${j}|${u}`))
+  }
+  async function savedPairs(own: Database.Database, db: Database.Database): Promise<Set<string>> {
+    const rows = own
+      .prepare(`SELECT JamCID, User FROM DiscoverJamUserPairs WHERE SourceDbKey = ?`)
+      .all(db.name) as { JamCID: string; User: string }[]
+    return new Set(rows.map((r) => `${r.JamCID}|${r.User}`))
+  }
+
+  it('after the prewarm walk the picker has its pairs with no walk of its own', async () => {
+    const { prewarmDiscoverCandidateCaches } = await import('./discoverCandidates')
+    const own = ownDb()
+    own.exec(`
+      CREATE TABLE IF NOT EXISTS Riffs (RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
+        BPMrnd REAL, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
+        StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT);
+      CREATE TABLE DiscoverRiffIndexCache (SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL,
+        RiffCID TEXT NOT NULL, OwnerJamCID TEXT NOT NULL, BPMrnd REAL NOT NULL, CreationTime INTEGER,
+        PRIMARY KEY (SourceDbKey, StemCID));
+      CREATE TABLE DiscoverRiffIndexCacheMeta (SourceDbKey TEXT PRIMARY KEY, RiffCount INTEGER NOT NULL,
+        ComputedAt INTEGER NOT NULL);
+      CREATE TABLE DiscoverInstrumentRowsCache (SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL,
+        Instrument INTEGER, OwnerJamCID TEXT NOT NULL, PRIMARY KEY (SourceDbKey, StemCID));
+      CREATE TABLE DiscoverInstrumentRowsCacheMeta (SourceDbKey TEXT PRIMARY KEY, StemCount INTEGER NOT NULL,
+        ComputedAt INTEGER NOT NULL);`)
+    const db = archive()
+    db.exec(`CREATE TABLE Riffs (RiffCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, CreationTime INTEGER,
+      BPMrnd REAL, StemCID_1 TEXT, StemCID_2 TEXT, StemCID_3 TEXT, StemCID_4 TEXT, StemCID_5 TEXT,
+      StemCID_6 TEXT, StemCID_7 TEXT, StemCID_8 TEXT)`)
+    many(db, 0, 4_500)
+    getArtistIndex(own, [], 'elling') // the picker module is loaded (its sink installed)
+    vi.mocked(countWork).mockClear()
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: db }], own)
+    const walkPages = pairPages()
+    expect(walkPages).toBe(3)
+    const prepareSpy = vi.spyOn(db, 'prepare')
+    const index = await getArtistIndex(own, [db], 'elling')
+    expect(index.jammedWithPending).toBe(false)
+    expect(index.jammedWith).not.toBeNull()
+    expect(pairPages()).toBe(walkPages) // no second walk
+    expect(oldPairWalkPages()).toBe(0)
+    expect(prepareSpy.mock.calls.some(([sql]) => sql.includes('rowid AS rid'))).toBe(false)
+    expect(await savedPairs(own, db)).toEqual(await fullWalkPairs(db))
+  })
+
+  it('a poll after 50 new Stems rows extends: only rows past the watermark, pairs equal a full walk', async () => {
+    const own = ownDb()
+    const db = archive()
+    many(db, 0, 3_000)
+    await settled(own, [db])
+    many(db, 3_000, 3_050)
+    db.prepare(`INSERT INTO Stems VALUES ('fresh', 'newjam', 'newuser')`).run()
+    resetArtistIndexForTests() // a relaunch, so the saved pairs are the base
+    vi.mocked(countWork).mockClear()
+    await settled(own, [db])
     expect(pairPages()).toBe(1)
     expect(
-      (own.prepare(`SELECT COUNT(*) AS n FROM DiscoverJamUserPairsMeta`).get() as { n: number }).n
-    ).toBe(0)
+      vi
+        .mocked(countWork)
+        .mock.calls.filter(([kind]) => kind === 'walk:stems.rows')
+        .reduce((n, [, k]) => n + (k ?? 1), 0)
+    ).toBe(51)
+    expect(await savedPairs(own, db)).toEqual(await fullWalkPairs(db))
+    const index = await getArtistIndex(own, [db], 'user1')
+    expect(index.jammedWith).not.toBeNull()
+  })
+
+  it('in session, a moved table extends the in-memory pairs from their watermark', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const own = ownDb()
+    const db = archive()
+    many(db, 0, 2_100)
+    await settled(own, [db])
+    db.prepare(`INSERT INTO Stems VALUES ('late', 'jamlate', 'elling')`).run()
+    db.prepare(`INSERT INTO Stems VALUES ('late2', 'jamlate', 'latecomer')`).run()
+    vi.setSystemTime(Date.now() + 60_000)
+    vi.mocked(countWork).mockClear()
+    await settled(own, [db])
+    expect(pairPages()).toBe(1)
+    const index = await getArtistIndex(own, [db], 'elling')
+    expect(index.jammedWith?.some((j) => j.user === 'latecomer')).toBe(true)
+  })
+
+  it('a delete rebuilds', async () => {
+    const own = ownDb()
+    const db = archive()
+    many(db, 0, 2_500)
+    await settled(own, [db])
+    db.prepare(`DELETE FROM Stems WHERE rowid = 7`).run()
+    resetArtistIndexForTests()
+    vi.mocked(countWork).mockClear()
+    await settled(own, [db])
+    expect(pairPages()).toBe(2) // the whole table again
+    expect(await savedPairs(own, db)).toEqual(await fullWalkPairs(db))
+  })
+
+  it('the in-place UPDATE gap is unchanged (and still documented in the store header)', async () => {
+    const own = ownDb()
+    const db = archive()
+    many(db, 0, 10)
+    await settled(own, [db])
+    db.prepare(`UPDATE Stems SET CreatorUserName = 'renamed' WHERE StemCID = 's1'`).run()
+    resetArtistIndexForTests()
+    const index = await getArtistIndex(own, [db], 'elling')
+    expect(index.jammedWith?.some((j) => j.user === 'renamed') ?? false).toBe(false)
+    const { readFileSync } = await import('node:fs')
+    expect(readFileSync(join(__dirname, 'discoverJamUserPairsStore.ts'), 'utf8')).toMatch(
+      /KNOWN GAP: an in-place UPDATE/
+    )
   })
 })
 

@@ -17,6 +17,15 @@
 // delete) moves neither, so the saved pairs would survive it. Within a
 // session the full signal (writes, data_version) still catches it. Stems
 // rows are written once by the sync and not edited in place today.
+//
+// Since scan plan b21ea5a2 Task 4 the meta row also carries the StemCID at
+// MaxRowid (WatermarkStemCID), so the saved pairs are a rowid watermark
+// (rowidWatermark.ts): a launch after a sync EXTENDS them from the rows past
+// MaxRowid instead of re-walking, and they're written page by page as the
+// one shared Stems walk (stemsTableWalk.ts) goes, so an interrupted walk
+// resumes. A meta row without WatermarkStemCID is legacy: trusted while its
+// count and MAX(rowid) match, re-walked once when they move. The in-place
+// UPDATE gap above is unchanged.
 import type Database from 'better-sqlite3'
 
 /** Created lazily on first use, like the plan's DiscoverArtistScanQueue --
@@ -46,6 +55,12 @@ const ensured = new WeakSet<Database.Database>()
 function ensureTables(ownDb: Database.Database): void {
   if (ensured.has(ownDb)) return
   ownDb.exec(DISCOVER_JAM_USER_PAIRS_DDL)
+  const columns = ownDb.prepare(`PRAGMA table_info(DiscoverJamUserPairsMeta)`).all() as {
+    name: string
+  }[]
+  if (!columns.some((c) => c.name === 'WatermarkStemCID')) {
+    ownDb.exec(`ALTER TABLE DiscoverJamUserPairsMeta ADD COLUMN WatermarkStemCID TEXT`)
+  }
   ensured.add(ownDb)
 }
 
@@ -56,6 +71,8 @@ export interface PairsSignal {
 }
 
 export interface SavedPairs extends PairsSignal {
+  /** The StemCID at maxRowid; null on a legacy row (no watermark). */
+  watermarkStemCID: string | null
   pairs: [string, string][]
 }
 
@@ -65,8 +82,13 @@ export function loadSavedPairs(ownDb: Database.Database, sourceDbKey: string): S
   try {
     ensureTables(ownDb)
     const meta = ownDb
-      .prepare(`SELECT StemCount, MaxRowid FROM DiscoverJamUserPairsMeta WHERE SourceDbKey = ?`)
-      .get(sourceDbKey) as { StemCount: number | null; MaxRowid: number | null } | undefined
+      .prepare(
+        `SELECT StemCount, MaxRowid, WatermarkStemCID FROM DiscoverJamUserPairsMeta
+         WHERE SourceDbKey = ?`
+      )
+      .get(sourceDbKey) as
+      | { StemCount: number | null; MaxRowid: number | null; WatermarkStemCID: string | null }
+      | undefined
     if (!meta) return null
     const rows = ownDb
       .prepare(`SELECT JamCID, User FROM DiscoverJamUserPairs WHERE SourceDbKey = ?`)
@@ -74,6 +96,7 @@ export function loadSavedPairs(ownDb: Database.Database, sourceDbKey: string): S
     return {
       stemCount: meta.StemCount,
       maxRowid: meta.MaxRowid,
+      watermarkStemCID: meta.WatermarkStemCID,
       pairs: rows.map((r) => [r.JamCID, r.User])
     }
   } catch {
@@ -81,13 +104,38 @@ export function loadSavedPairs(ownDb: Database.Database, sourceDbKey: string): S
   }
 }
 
-/** Replaces one source db's saved pairs in one transaction. Never throws --
- * a failed save only costs that db's walk on the next launch. */
-export function savePairs(
+/** Starts one source db's saved pairs over, at an empty watermark (count 0)
+ * -- the first page of a full walk. Never throws. */
+export function resetSavedPairs(
   ownDb: Database.Database,
   sourceDbKey: string,
-  signal: PairsSignal,
+  now = Date.now()
+): void {
+  try {
+    ensureTables(ownDb)
+    ownDb.transaction(() => {
+      ownDb.prepare(`DELETE FROM DiscoverJamUserPairsMeta WHERE SourceDbKey = ?`).run(sourceDbKey)
+      ownDb.prepare(`DELETE FROM DiscoverJamUserPairs WHERE SourceDbKey = ?`).run(sourceDbKey)
+      ownDb
+        .prepare(
+          `INSERT INTO DiscoverJamUserPairsMeta (SourceDbKey, StemCount, MaxRowid, WatermarkStemCID, ComputedAt)
+           VALUES (?, 0, NULL, NULL, ?)`
+        )
+        .run(sourceDbKey, now)
+    })()
+  } catch (err) {
+    console.error('discoverJamUserPairsStore: reset failed:', err)
+  }
+}
+
+/** One walked page's new pairs, and the watermark after it, in one small
+ * transaction (a page brings a handful of new pairs at most). Never throws:
+ * a failed write only costs a re-walk from the last saved page. */
+export function appendSavedPairs(
+  ownDb: Database.Database,
+  sourceDbKey: string,
   pairs: readonly (readonly [string, string])[],
+  watermark: { count: number; maxRowid: number | null; keyAtMax: string | null },
   now = Date.now()
 ): void {
   try {
@@ -95,16 +143,17 @@ export function savePairs(
     const insertPair = ownDb.prepare(
       `INSERT OR IGNORE INTO DiscoverJamUserPairs (SourceDbKey, JamCID, User) VALUES (?, ?, ?)`
     )
-    const upsertMeta = ownDb.prepare(
-      `INSERT OR REPLACE INTO DiscoverJamUserPairsMeta (SourceDbKey, StemCount, MaxRowid, ComputedAt)
-       VALUES (?, ?, ?, ?)`
-    )
     ownDb.transaction(() => {
-      ownDb.prepare(`DELETE FROM DiscoverJamUserPairs WHERE SourceDbKey = ?`).run(sourceDbKey)
       for (const [jam, user] of pairs) insertPair.run(sourceDbKey, jam, user)
-      upsertMeta.run(sourceDbKey, signal.stemCount, signal.maxRowid, now)
+      ownDb
+        .prepare(
+          `INSERT OR REPLACE INTO DiscoverJamUserPairsMeta
+             (SourceDbKey, StemCount, MaxRowid, WatermarkStemCID, ComputedAt)
+           VALUES (?, ?, ?, ?, ?)`
+        )
+        .run(sourceDbKey, watermark.count, watermark.maxRowid, watermark.keyAtMax, now)
     })()
   } catch (err) {
-    console.error('discoverJamUserPairsStore: save failed:', err)
+    console.error('discoverJamUserPairsStore: append failed:', err)
   }
 }

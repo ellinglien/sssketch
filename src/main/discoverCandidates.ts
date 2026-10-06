@@ -547,6 +547,7 @@ async function warmInstrumentRows(
     const walked = await walkStems(db, watermark!, {
       onProgress,
       total: live.count,
+      ownDb,
       onPage: (page) => persistInstrumentRowsPage(ownDb, key, page.rows, page.watermark)
     })
     rows = extendable

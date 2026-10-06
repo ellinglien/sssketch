@@ -34,8 +34,9 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
 
-/** One walked page. `from` is where the whole walk started; `watermark` is
- * where it stands after this page (count = rows through this page). */
+/** One walked page. `from` is where the whole walk started (the same object
+ * for every page of one walk); `watermark` is where it stands after this
+ * page (count = rows through this page). */
 export interface StemsWalkPage {
   rows: InstrumentRow[]
   /** This page's distinct (OwnerJamCID, CreatorUserName) pairs, empty and
@@ -43,23 +44,43 @@ export interface StemsWalkPage {
   pairs: [string, string][]
   from: RowidWatermark
   watermark: RowidWatermark
-}
-
-export type StemsWalkPageSink = (db: Database.Database, page: StemsWalkPage) => Promise<void> | void
-
-/** Consumers that want every page of every walk, whoever started it (the
- * artist pairs, Task 4) -- so a launch after a LORE sync walks Stems once. */
-const sinks = new Set<StemsWalkPageSink>()
-
-export function addStemsWalkSink(sink: StemsWalkPageSink): () => void {
-  sinks.add(sink)
-  return () => sinks.delete(sink)
+  /** sssketch's own db, when the starter has it (the prewarm does): where
+   * a sink may persist what it derives. */
+  ownDb?: Database.Database
 }
 
 export interface StemsWalkResult {
   /** Every row walked, in rowid order. */
   rows: InstrumentRow[]
   watermark: RowidWatermark
+  /** False when a page read failed (no Stems table, a read error): the
+   * walk stopped early with what it had. */
+  complete: boolean
+}
+
+/** A consumer of every page of every walk, whoever started it (the artist
+ * pairs, Task 4) -- so a launch after a LORE sync walks Stems once. */
+export interface StemsWalkSink {
+  onPage: (db: Database.Database, page: StemsWalkPage) => void
+  /** After the walk that started at `from` ended, either way. */
+  onEnd?: (db: Database.Database, from: RowidWatermark, result: StemsWalkResult | null) => void
+}
+
+const sinks = new Set<StemsWalkSink>()
+
+export function addStemsWalkSink(sink: StemsWalkSink): () => void {
+  sinks.add(sink)
+  return () => sinks.delete(sink)
+}
+
+function eachSink(fn: (sink: StemsWalkSink) => void): void {
+  for (const sink of sinks) {
+    try {
+      fn(sink)
+    } catch (err) {
+      console.error('stemsTableWalk: a sink failed:', err)
+    }
+  }
 }
 
 const inFlight = new WeakMap<Database.Database, Map<string, Promise<StemsWalkResult>>>()
@@ -76,26 +97,27 @@ interface WalkRow {
   CreatorUserName: string | null
 }
 
+/** The walk's page statement. A Stems table missing Instrument or
+ * CreatorUserName (a hand-made or very old db) reads NULL for it: the walk
+ * still yields rows, or pairs, from what is there. Throws when there is no
+ * Stems table at all. */
 function pageStatement(db: Database.Database): Database.Statement {
-  try {
-    return db.prepare(
-      `SELECT rowid AS rid, StemCID, Instrument, OwnerJamCID, CreatorUserName FROM Stems
-       WHERE rowid > ? ORDER BY rowid LIMIT ?`
-    )
-  } catch {
-    // A Stems table without CreatorUserName (a hand-made or very old db):
-    // instrument rows still, no pairs.
-    return db.prepare(
-      `SELECT rowid AS rid, StemCID, Instrument, OwnerJamCID, NULL AS CreatorUserName FROM Stems
-       WHERE rowid > ? ORDER BY rowid LIMIT ?`
-    )
-  }
+  const columns = new Set(
+    (db.prepare(`PRAGMA table_info(Stems)`).all() as { name: string }[]).map((c) => c.name)
+  )
+  const column = (name: string): string => (columns.has(name) ? name : `NULL AS ${name}`)
+  return db.prepare(
+    `SELECT rowid AS rid, StemCID, ${column('Instrument')}, OwnerJamCID, ${column('CreatorUserName')}
+     FROM Stems WHERE rowid > ? ORDER BY rowid LIMIT ?`
+  )
 }
 
 export interface StemsWalkOptions {
   /** The starter's own per-page step (Discover persists its rows), awaited
    * before the sinks; a rejection stops the walk. */
   onPage?: (page: StemsWalkPage) => Promise<void>
+  /** Passed on to the sinks with every page. */
+  ownDb?: Database.Database
   onProgress?: (completed: number, total: number) => void
   total?: number
 }
@@ -118,7 +140,19 @@ export function walkStems(
   const key = fromKey(from)
   const running = perDb.get(key)
   if (running) return running
-  const promise = runWalk(db, { ...from }, options).finally(() => perDb.delete(key))
+  const start = { ...from }
+  const promise = runWalk(db, start, options).then(
+    (result) => {
+      perDb.delete(key)
+      eachSink((sink) => sink.onEnd?.(db, start, result))
+      return result
+    },
+    (err: unknown) => {
+      perDb.delete(key)
+      eachSink((sink) => sink.onEnd?.(db, start, null))
+      throw err
+    }
+  )
   perDb.set(key, promise)
   return promise
 }
@@ -134,19 +168,19 @@ async function runWalk(
   try {
     statement = pageStatement(db)
   } catch {
-    return { rows, watermark }
+    return { rows, watermark, complete: false }
   }
   for (;;) {
     const pageStarted = performance.now()
     let page: WalkRow[]
+    countWork('walk:instrument-rows.page')
     try {
       page = statement.all(watermark.maxRowid ?? 0, STEMS_WALK_PAGE_SIZE) as WalkRow[]
     } catch {
-      return { rows, watermark }
+      return { rows, watermark, complete: false }
     }
-    countWork('walk:instrument-rows.page')
     countWork('ms:walk.instrument-rows', Math.round(performance.now() - pageStarted))
-    if (page.length === 0) return { rows, watermark }
+    if (page.length === 0) return { rows, watermark, complete: true }
     countWork('walk:stems.rows', page.length)
 
     const pageRows: InstrumentRow[] = []
@@ -166,21 +200,21 @@ async function runWalk(
       maxRowid: last.rid,
       keyAtMax: last.StemCID
     }
-    const walked: StemsWalkPage = { rows: pageRows, pairs, from, watermark: next }
-    await options.onPage?.(walked)
-    for (const sink of sinks) {
-      try {
-        await sink(db, walked)
-      } catch (err) {
-        console.error('stemsTableWalk: a page sink failed:', err)
-      }
+    const walked: StemsWalkPage = {
+      rows: pageRows,
+      pairs,
+      from,
+      watermark: next,
+      ownDb: options.ownDb
     }
+    await options.onPage?.(walked)
+    eachSink((sink) => sink.onPage(db, walked))
     for (const r of pageRows) rows.push(r)
     watermark.count = next.count
     watermark.maxRowid = next.maxRowid
     watermark.keyAtMax = next.keyAtMax
     options.onProgress?.(watermark.count, options.total ?? watermark.count)
-    if (page.length < STEMS_WALK_PAGE_SIZE) return { rows, watermark }
+    if (page.length < STEMS_WALK_PAGE_SIZE) return { rows, watermark, complete: true }
     await yieldToEventLoop()
   }
 }

@@ -9,6 +9,10 @@
 //           cache). The obvious IN-subquery form took 60-69 s. So pairs are
 //           built by a BACKGROUND rowid walk, paged and yielding, and the
 //           picker works from the counts until it lands.
+// Since scan plan b21ea5a2 Task 4 the pairs ride the ONE shared Stems walk
+// (stemsTableWalk.ts; the same pages Discover's instrument rows are built
+// from) and are extended from a rowid watermark rather than re-walked -- see
+// onWalkPage below. readJamUserPairs stays for an in-memory db.
 // Counts are in memory, per session. Pairs are in memory AND saved to the
 // own db per source db (Elling's decision, 2026-10-01;
 // discoverJamUserPairsStore.ts): on launch a db whose Stems count and
@@ -39,7 +43,14 @@ import {
   getArtistStemCIDs,
   resetArtistStemAbortForTests
 } from './discoverArtistStems'
-import { loadSavedPairs, savePairs } from './discoverJamUserPairsStore'
+import { appendSavedPairs, loadSavedPairs, resetSavedPairs } from './discoverJamUserPairsStore'
+import { canExtendByRowid, keyAtRowid, type RowidWatermark } from './rowidWatermark'
+import {
+  addStemsWalkSink,
+  walkStems,
+  type StemsWalkPage,
+  type StemsWalkResult
+} from './stemsTableWalk'
 
 const USER_PAGE = 500
 /** Rowid pages of the full table. Kept at the size a cold USB page was
@@ -157,8 +168,30 @@ interface Cached<T> {
 }
 let countsCache = new WeakMap<Database.Database, Cached<ArtistCount[]>>()
 let countsInFlight = new WeakMap<Database.Database, Promise<ArtistCount[]>>()
-let pairsCache = new WeakMap<Database.Database, Cached<[string, string][]>>()
+/** One source db's pairs in memory: `keys` mirrors `value` (jam\0user), and
+ * `watermark` (rowidWatermark.ts) is how far through Stems they were built --
+ * null for pairs from a legacy saved row, or an uncacheable db's walk,
+ * which can be replaced but never extended. */
+interface PairsEntry extends Cached<[string, string][]> {
+  keys: Set<string>
+  watermark: RowidWatermark | null
+}
+let pairsCache = new WeakMap<Database.Database, PairsEntry>()
 let pairsInFlight = new WeakMap<Database.Database, Promise<void>>()
+/** Saved pairs loaded as the base of an extension walk this session. */
+let pairsBase = new WeakMap<Database.Database, PairsEntry>()
+/** The pairs a walk is building right now, per source db (scan plan Task 4:
+ * fed by stemsTableWalk.ts's sink, whoever started the walk). */
+interface Building {
+  from: RowidWatermark
+  value: [string, string][]
+  keys: Set<string>
+  ownDb: Database.Database | undefined
+}
+let building = new WeakMap<Database.Database, Building>()
+/** The own db the picker last passed: where pages of walks started without
+ * one (an in-session instrument-row refresh) are saved. */
+let lastOwnDb: Database.Database | undefined
 /** Saved pairs that no longer match their db: shown while it re-walks. */
 let stalePairs = new WeakMap<Database.Database, [string, string][]>()
 /** Source dbs whose saved pairs were already consulted this session. */
@@ -187,11 +220,171 @@ function countsFor(db: Database.Database, signalOf: SignalOf): Promise<ArtistCou
   return run
 }
 
-function savedSignalMatches(
-  saved: { stemCount: number | null; maxRowid: number | null },
+function sameWatermark(a: RowidWatermark, b: RowidWatermark): boolean {
+  return a.count === b.count && a.maxRowid === b.maxRowid && a.keyAtMax === b.keyAtMax
+}
+
+function entryOf(
+  value: [string, string][],
+  watermark: RowidWatermark | null,
+  signal: TableSignal | null
+): PairsEntry {
+  return {
+    value,
+    keys: new Set(value.map(([jam, user]) => `${jam}\u0000${user}`)),
+    watermark,
+    state: newScanCacheState(signal)
+  }
+}
+
+/** The saved pairs as an entry, when they are a watermark (new rows) or a
+ * legacy row; null when nothing was saved. */
+function savedEntry(
+  ownDb: Database.Database,
+  db: Database.Database,
   live: TableSignal | null
-): boolean {
-  return saved.stemCount === (live?.count ?? null) && saved.maxRowid === (live?.maxRowid ?? null)
+): { entry: PairsEntry; current: boolean; extendable: boolean } | null {
+  const saved = loadSavedPairs(ownDb, db.name)
+  if (!saved) return null
+  const legacy = saved.watermarkStemCID === null && (saved.stemCount ?? 0) > 0
+  const watermark: RowidWatermark | null = legacy
+    ? null
+    : { count: saved.stemCount ?? 0, maxRowid: saved.maxRowid, keyAtMax: saved.watermarkStemCID }
+  const sameCount =
+    saved.stemCount === (live?.count ?? null) && saved.maxRowid === (live?.maxRowid ?? null)
+  const current =
+    sameCount &&
+    (legacy ||
+      live?.maxRowid == null ||
+      keyAtRowid(db, 'Stems', 'StemCID', live.maxRowid) === saved.watermarkStemCID)
+  const extendable =
+    !current &&
+    watermark !== null &&
+    live !== null &&
+    canExtendByRowid(db, 'Stems', 'StemCID', watermark, live)
+  return { entry: entryOf(saved.pairs, watermark, live), current, extendable }
+}
+
+// The one place pairs are built (scan plan Task 4): every page of every
+// Stems walk (stemsTableWalk.ts) -- the prewarm's instrument-row walk, an
+// in-session refresh, or the picker's own -- comes through here. A walk
+// that starts where this db's pairs stand (a full walk, or an extension
+// from their watermark) builds on them page by page, saving each page with
+// its watermark; any other walk is ignored. So a launch after a LORE sync
+// walks Stems once for both Discover and the picker.
+function alignedBase(
+  db: Database.Database,
+  from: RowidWatermark,
+  ownDb: Database.Database | undefined
+): PairsEntry | null {
+  if (from.count === 0) return entryOf([], from, null)
+  for (const candidate of [pairsCache.get(db), pairsBase.get(db)]) {
+    if (candidate?.watermark && sameWatermark(candidate.watermark, from)) return candidate
+  }
+  // A walk that started before the picker looked (the prewarm's extension):
+  // the saved pairs, when they stand exactly where it started.
+  if (ownDb) {
+    const saved = savedEntry(ownDb, db, null)
+    if (saved?.entry.watermark && sameWatermark(saved.entry.watermark, from)) return saved.entry
+  }
+  return null
+}
+
+function onWalkPage(db: Database.Database, page: StemsWalkPage): void {
+  if (aborted) return
+  let b = building.get(db)
+  if (!b || b.from !== page.from) {
+    if (b) return // another walk is already building this db's pairs
+    const ownDb = page.ownDb ?? lastOwnDb
+    const base = alignedBase(db, page.from, ownDb)
+    if (!base) return
+    b = { from: page.from, value: base.value.slice(), keys: new Set(base.keys), ownDb }
+    building.set(db, b)
+    if (page.from.count === 0 && ownDb) resetSavedPairs(ownDb, db.name)
+  }
+  const added: [string, string][] = []
+  for (const [jam, user] of page.pairs) {
+    const key = `${jam}\u0000${user}`
+    if (b.keys.has(key)) continue
+    b.keys.add(key)
+    b.value.push([jam, user])
+    added.push([jam, user])
+  }
+  if (b.ownDb) appendSavedPairs(b.ownDb, db.name, added, page.watermark)
+}
+
+function onWalkEnd(
+  db: Database.Database,
+  from: RowidWatermark,
+  result: StemsWalkResult | null
+): void {
+  const b = building.get(db)
+  if (!b || b.from !== from) return
+  building.delete(db)
+  if (!result || !result.complete || aborted) return
+  // Current only if nothing landed past the walk's last page meanwhile;
+  // otherwise the next check sees the move and extends.
+  const live = readTableSignal(db, 'Stems')
+  const caughtUp =
+    live?.count === result.watermark.count && live?.maxRowid === result.watermark.maxRowid
+  const entry = entryOf(b.value, { ...result.watermark }, caughtUp ? live : null)
+  if (!caughtUp) entry.state.checkedAt = 0
+  pairsCache.set(db, entry)
+  pairsBase.delete(db)
+  stalePairs.delete(db)
+  pairsFailedAt.delete(db)
+}
+
+addStemsWalkSink({ onPage: onWalkPage, onEnd: onWalkEnd })
+
+/** Starts the walk that brings `db`'s pairs up to date -- from `base`'s
+ * watermark when it extends, else in full -- and resolves when it has
+ * landed (the sink above did the work). */
+function startPairsWalk(
+  ownDb: Database.Database,
+  db: Database.Database,
+  base: PairsEntry | null,
+  live: TableSignal | null
+): void {
+  if (db.memory) {
+    // No stable key to save under, nothing to extend: the plain walk.
+    const run = readJamUserPairs(db)
+      .then((value) => {
+        pairsCache.set(db, entryOf(value, null, live))
+        stalePairs.delete(db)
+        pairsFailedAt.delete(db)
+      })
+      .catch((err: unknown) => {
+        pairsFailedAt.set(db, Date.now())
+        if (!aborted) console.error('discoverArtistIndex: pairs walk failed:', err)
+      })
+      .finally(() => pairsInFlight.delete(db))
+    pairsInFlight.set(db, run)
+    return
+  }
+  const extend =
+    base?.watermark != null &&
+    live !== null &&
+    canExtendByRowid(db, 'Stems', 'StemCID', base.watermark, live)
+  if (extend) pairsBase.set(db, base!)
+  countWork(extend ? 'artist-pairs:extend' : 'artist-pairs:rebuild')
+  const from: RowidWatermark = extend
+    ? { ...base!.watermark! }
+    : { count: 0, maxRowid: null, keyAtMax: null }
+  const before = pairsCache.get(db)
+  const run = walkStems(db, from, { ownDb })
+    .then(() => {
+      // The walk landed without building this db's pairs (a page read
+      // failed, or another walk was building them): back off before the
+      // next try rather than walking again on every poll.
+      if (pairsCache.get(db) === before) pairsFailedAt.set(db, Date.now())
+    })
+    .catch((err: unknown) => {
+      pairsFailedAt.set(db, Date.now())
+      if (!aborted) console.error('discoverArtistIndex: pairs walk failed:', err)
+    })
+    .finally(() => pairsInFlight.delete(db))
+  pairsInFlight.set(db, run)
 }
 
 /** Current pairs, or null -- and starts the background walk when missing or
@@ -205,16 +398,17 @@ function pairsFor(
   if (hit && isCurrent(db, hit.state, signalOf)) return { pairs: hit.value, pending: false }
 
   // First look this session: the pairs saved on an earlier launch.
+  let base: PairsEntry | null = hit ?? null
   if (!hit && !diskTried.has(db)) {
     diskTried.add(db)
-    const saved = loadSavedPairs(ownDb, db.name)
+    const saved = db.memory ? null : savedEntry(ownDb, db, signalOf(db))
+    if (saved?.current) {
+      pairsCache.set(db, saved.entry)
+      return { pairs: saved.entry.value, pending: false }
+    }
     if (saved) {
-      const live = signalOf(db)
-      if (savedSignalMatches(saved, live)) {
-        pairsCache.set(db, { value: saved.pairs, state: newScanCacheState(live) })
-        return { pairs: saved.pairs, pending: false }
-      }
-      stalePairs.set(db, saved.pairs)
+      stalePairs.set(db, saved.entry.value)
+      base = saved.entry
     }
   }
 
@@ -226,27 +420,7 @@ function pairsFor(
   if (failedAt !== undefined && Date.now() - failedAt < PAIRS_RETRY_MS) {
     return { pairs: shown, pending: false }
   }
-
-  // Signal read BEFORE the walk: a write landing mid-walk reads as stale next time.
-  const state = newScanCacheState(signalOf(db))
-  const run = readJamUserPairs(db)
-    .then((value) => {
-      pairsCache.set(db, { value, state })
-      stalePairs.delete(db)
-      pairsFailedAt.delete(db)
-      savePairs(
-        ownDb,
-        db.name,
-        { stemCount: state.signal?.count ?? null, maxRowid: state.signal?.maxRowid ?? null },
-        value
-      )
-    })
-    .catch((err: unknown) => {
-      pairsFailedAt.set(db, Date.now())
-      if (!aborted) console.error('discoverArtistIndex: pairs walk failed:', err)
-    })
-    .finally(() => pairsInFlight.delete(db))
-  pairsInFlight.set(db, run)
+  startPairsWalk(ownDb, db, base ?? pairsBase.get(db) ?? null, signalOf(db))
   return { pairs: shown, pending: true }
 }
 
@@ -274,6 +448,7 @@ export async function getArtistIndex(
   ownUsername: string
 ): Promise<ArtistIndex> {
   const own = ownUsername.trim()
+  lastOwnDb = ownDb
   const signalOf = signalReader()
   const perDb = dbs.map((db) => pairsFor(ownDb, db, signalOf))
   const counts = mergeArtistCounts(await Promise.all(dbs.map((db) => countsFor(db, signalOf))))
@@ -340,6 +515,9 @@ export function resetArtistIndexForTests(): void {
   countsInFlight = new WeakMap()
   pairsCache = new WeakMap()
   pairsInFlight = new WeakMap()
+  pairsBase = new WeakMap()
+  building = new WeakMap()
+  lastOwnDb = undefined
   stalePairs = new WeakMap()
   diskTried = new WeakSet()
   pairsFailedAt = new WeakMap()

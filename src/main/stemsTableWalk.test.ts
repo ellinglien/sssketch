@@ -97,10 +97,15 @@ describe('walkStems', () => {
   it('every page also goes to the registered sinks', async () => {
     const db = stemsDb(4_100)
     const seen: number[] = []
-    const remove = addStemsWalkSink((_db, page) => void seen.push(page.rows.length))
+    const ended: boolean[] = []
+    const remove = addStemsWalkSink({
+      onPage: (_db, page) => void seen.push(page.rows.length),
+      onEnd: (_db, _from, result) => void ended.push(result?.complete ?? false)
+    })
     await walkStems(db, EMPTY)
     remove()
     expect(seen).toEqual([2_000, 2_000, 100])
+    expect(ended).toEqual([true])
   })
 
   it('a failing onPage stops the walk; the result never includes the failed page', async () => {
@@ -116,7 +121,11 @@ describe('walkStems', () => {
   })
 
   it('a db without a Stems table walks nothing', async () => {
-    expect(await walkStems(new Database(':memory:'), EMPTY)).toEqual({ rows: [], watermark: EMPTY })
+    expect(await walkStems(new Database(':memory:'), EMPTY)).toEqual({
+      rows: [],
+      watermark: EMPTY,
+      complete: false
+    })
   })
 })
 
