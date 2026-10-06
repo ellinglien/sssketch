@@ -689,13 +689,6 @@ app.whenReady().then(async () => {
   ownUsername = loadOwnUsername()
   setStemPriorityUsername(ownUsername)
 
-  // The archive's row counts, before anything reads them (faster startup,
-  // tableCountSeed.ts): a count saved at a launch the file is unchanged
-  // since is primed right here, synchronously; otherwise one is taken on a
-  // worker thread. Either way no reader pays the 1.7-2.3 s COUNT on the main
-  // thread (only one that runs before a worker count is back, after a sync).
-  for (const db of candidateDbsForRiff()) void seedTableCounts(db, openOwnRiffLibraryDb())
-
   // One-time (idempotent) migration off the old source-partitioned Endlesss
   // stem cache -- see stemCacheMigration.ts's own doc comment. Once a pass
   // finds nothing left to move it records a done-marker in ownDb
@@ -2299,6 +2292,18 @@ app.whenReady().then(async () => {
   )
 
   createWindow()
+
+  // The archive's row counts, before anything reads them (faster startup,
+  // tableCountSeed.ts): a count saved at a launch the file is unchanged
+  // since is primed right here, synchronously; otherwise one is taken on a
+  // worker thread, and readers wait for it (tableChangeSignal.ts's counts in
+  // flight). Either way no reader pays the 1.7-2.3 s COUNT on the main
+  // thread. Right after createWindow, so the window starts loading first:
+  // nothing above reads the signal, and nothing between here and there can
+  // run in between (no await, no timer has fired). Measured 2026-10-06 on
+  // his archive, warm: opening it 1-3 ms, this synchronous part 1-5 ms (MAX(rowid)
+  // per table and the file's header; a cold USB read of the heads is more).
+  for (const db of candidateDbsForRiff()) void seedTableCounts(db, openOwnRiffLibraryDb())
 
   // Only in a packaged (production) build -- never in dev, where there's no
   // meaningful "newer published release" to check against, and running it
