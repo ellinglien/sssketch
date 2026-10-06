@@ -1,6 +1,7 @@
 // src/main/discoverIndexCache.ts
 import type Database from 'better-sqlite3'
 import type { RiffIndexEntry } from './discoverCandidates'
+import { countWork } from './workCounters'
 
 /** Persisted counterpart to discoverCandidates.ts's own in-memory
  * riffIndexCache/instrumentRowsCache -- see the schema doc comment for
@@ -72,6 +73,7 @@ export async function loadCachedRiffIndex(
       CreationTime: number | null
     }[]
     if (page.length === 0) break
+    countWork('prewarm:rows-loaded.riff-index', page.length)
 
     for (const row of page) {
       index.set(row.StemCID, {
@@ -159,6 +161,7 @@ export async function loadCachedInstrumentRows(
       )
       .all(sourceDbKey, PAGE_SIZE, offset) as CachedInstrumentRow[]
     if (page.length === 0) break
+    countWork('prewarm:rows-loaded.instrument-rows', page.length)
 
     rows.push(...page)
     offset += page.length

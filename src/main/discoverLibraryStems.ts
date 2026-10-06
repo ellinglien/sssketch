@@ -96,11 +96,14 @@ export function createDirListingExists(): (path: string) => boolean {
     const dir = dirname(path)
     let entries = listings.get(dir)
     if (entries === undefined) {
+      const started = performance.now()
       try {
         entries = new Set(readdirSync(dir))
       } catch {
         entries = null
       }
+      countWork('fs:readdir')
+      countWork('ms:fs.readdir', Math.round(performance.now() - started))
       listings.set(dir, entries)
     }
     return entries?.has(basename(path)) ?? false

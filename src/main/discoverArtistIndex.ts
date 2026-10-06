@@ -112,7 +112,9 @@ export async function readJamUserPairs(
   for (;;) {
     if (aborted) throw new Error('discoverArtistIndex: aborted (quitting)')
     countWork('sql:discover.artist-pairs-page')
+    const pageStarted = performance.now()
     const page = stmt.all(after, pageSize) as { rid: number; jam: string; user: string | null }[]
+    countWork('ms:walk.artist-pairs', Math.round(performance.now() - pageStarted))
     for (const { jam, user } of page) {
       if (!user) continue
       const key = `${jam}\u0000${user}`

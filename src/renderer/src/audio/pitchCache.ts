@@ -1,6 +1,7 @@
 import type { PitchContour } from '@shared/pitchContour'
 import { decodeStemFile } from './decodeStemFile'
 import { computePitchContourOffThread } from './stemAnalysisClient'
+import { countWork } from '../perf/workCounters'
 
 const cache = new Map<string, Promise<PitchContour>>()
 
@@ -18,6 +19,7 @@ export function getPitchContour(path: string): Promise<PitchContour> {
   const promise = (async () => {
     try {
       const audioBuffer = await decodeStemFile(path)
+      countWork('analysis:pitch-contour')
       // Off the main thread (stemAnalysisClient.ts, 2026-09-21).
       return await computePitchContourOffThread(
         audioBuffer.getChannelData(0),

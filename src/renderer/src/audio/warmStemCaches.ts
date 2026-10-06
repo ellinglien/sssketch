@@ -3,6 +3,7 @@ import { getPeaks, getBrightness } from './peakCache'
 import { getBandEnergy } from './bandEnergyCache'
 import { getPitchContour } from './pitchCache'
 import { getStemFeatures } from './stemFeaturesCache'
+import { countWork } from '../perf/workCounters'
 
 function allStemPaths(state: AppState): string[] {
   const paths = new Set<string>()
@@ -32,6 +33,7 @@ function allStemPaths(state: AppState): string[] {
  * missing file shouldn't hold up the rest, and every consumer of these
  * caches already has its own fallback handling for a rejected decode. */
 export async function warmStemCaches(state: AppState): Promise<void> {
+  const started = performance.now()
   const paths = allStemPaths(state)
   await Promise.allSettled(
     paths.flatMap((path) => [
@@ -42,4 +44,6 @@ export async function warmStemCaches(state: AppState): Promise<void> {
       getStemFeatures(path)
     ])
   )
+  countWork('warm:paths', paths.length)
+  countWork('ms:warm-stem-caches', Math.round(performance.now() - started))
 }

@@ -311,6 +311,7 @@ async function buildRiffIndex(
   let offset = 0
   while (offset < total) {
     let page: RiffCandidateRow[]
+    const pageStarted = performance.now()
     try {
       page = db
         .prepare(
@@ -323,6 +324,8 @@ async function buildRiffIndex(
     } catch {
       break
     }
+    countWork('walk:riff-index.page')
+    countWork('ms:walk.riff-index', Math.round(performance.now() - pageStarted))
     if (page.length === 0) break
 
     let sinceYield = 0
@@ -552,6 +555,7 @@ async function getInstrumentRowsForDb(
   let offset = 0
   while (offset < total) {
     let page: Row[]
+    const pageStarted = performance.now()
     try {
       page = db
         .prepare(
@@ -561,6 +565,8 @@ async function getInstrumentRowsForDb(
     } catch {
       break
     }
+    countWork('walk:instrument-rows.page')
+    countWork('ms:walk.instrument-rows', Math.round(performance.now() - pageStarted))
     if (page.length === 0) break
 
     rows.push(...page)

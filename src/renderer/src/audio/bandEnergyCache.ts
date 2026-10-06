@@ -1,5 +1,6 @@
 import { computeBandEnergy, type BandEnergy } from '@shared/bandEnergy'
 import { decodeStemFile } from './decodeStemFile'
+import { countWork } from '../perf/workCounters'
 
 const cache = new Map<string, Promise<BandEnergy>>()
 
@@ -16,6 +17,7 @@ export function getBandEnergy(path: string): Promise<BandEnergy> {
   const promise = (async () => {
     try {
       const audioBuffer = await decodeStemFile(path)
+      countWork('analysis:band-energy')
       return computeBandEnergy(audioBuffer.getChannelData(0), audioBuffer.sampleRate)
     } catch (err) {
       cache.delete(path)
