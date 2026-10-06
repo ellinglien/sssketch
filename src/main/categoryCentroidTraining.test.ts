@@ -21,6 +21,11 @@ function freshDb(): Database.Database {
       StemCID TEXT PRIMARY KEY, FeaturesJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
     );
     CREATE TABLE Stems (StemCID TEXT PRIMARY KEY);
+    CREATE TABLE StemCategories (
+      StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
+      Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL,
+      SubcategoryNote TEXT
+    );
   `)
   return db
 }
@@ -53,29 +58,35 @@ describe('categoryCentroidTraining', () => {
     rmSync(userDataDir, { recursive: true, force: true })
   })
 
-  it('trainCentroidsFromBusEntries trains the bus axis from a stem with cached features', async () => {
+  it('recordStemCategoryBus trains the bus axis from a stem with cached features', async () => {
     const db = freshDb()
     seedFeatures(db, 'cid-1')
     seedFeatures(db, 'cid-2')
     seedFeatures(db, 'cid-3')
-    const { trainCentroidsFromBusEntries } = await import('./categoryCentroidTraining')
+    const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
     const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-    trainCentroidsFromBusEntries(db, [
-      { path: '/lib/cid-1', busId: 'drums' },
-      { path: '/lib/cid-2', busId: 'drums' },
-      { path: '/lib/cid-3', busId: 'drums' }
-    ])
+    recordStemCategoryBus(
+      db,
+      [
+        { path: '/lib/cid-1', busId: 'drums' },
+        { path: '/lib/cid-2', busId: 'drums' },
+        { path: '/lib/cid-3', busId: 'drums' }
+      ],
+      'tidyup',
+      null,
+      1000
+    )
     expect(loadCategoryCentroidStore().buses.drums?.count).toBe(3)
   })
 
-  it('trainCentroidsFromBusEntries silently skips a stem with no cached features yet', async () => {
+  it('recordStemCategoryBus silently skips a stem with no cached features yet', async () => {
     const db = freshDb()
     db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
     // No StemFeatureCache row for cid-1 -- never scanned yet.
-    const { trainCentroidsFromBusEntries } = await import('./categoryCentroidTraining')
+    const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
     const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
     expect(() =>
-      trainCentroidsFromBusEntries(db, [{ path: '/lib/cid-1', busId: 'drums' }])
+      recordStemCategoryBus(db, [{ path: '/lib/cid-1', busId: 'drums' }], 'tidyup', null, 1000)
     ).not.toThrow()
     expect(loadCategoryCentroidStore()).toEqual(emptyCategoryCentroidStore())
   })
@@ -145,15 +156,18 @@ describe('categoryCentroidTraining', () => {
         `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, ?)`
       ).run(cid, JSON.stringify(fakeFeatures()), 1000)
     }
-    const { trainCentroidsFromBusEntries } = await import('./categoryCentroidTraining')
+    const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
     const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
-    trainCentroidsFromBusEntries(
+    recordStemCategoryBus(
       db,
       [
         { path: '/lore-archive/cid-external', busId: 'bass' },
         { path: '/lore-archive/cid-external-2', busId: 'bass' },
         { path: '/lore-archive/cid-external-3', busId: 'bass' }
       ],
+      'tidyup',
+      null,
+      1000,
       [externalDb]
     )
     expect(loadCategoryCentroidStore().buses.bass?.count).toBe(3)

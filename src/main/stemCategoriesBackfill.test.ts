@@ -47,6 +47,30 @@ function analysedStem(db: Database.Database, stemCID: string): void {
   ).run(stemCID, JSON.stringify(FEATURES))
 }
 
+/** A store file from before generations: one sample on each named bus. */
+function legacyStore(buses: string[]): Record<string, unknown> {
+  const mean = new Array(19).fill(0.5)
+  return {
+    buses: Object.fromEntries(buses.map((bus) => [bus, { mean, count: 1 }])),
+    global: { mean, m2: new Array(19).fill(0), count: buses.length }
+  }
+}
+
+function storeFilePath(): string {
+  return join(userDataDir, 'busCentroids.json')
+}
+
+function fileGeneration(): unknown {
+  return (JSON.parse(readFileSync(storeFilePath(), 'utf-8')) as { generation?: unknown }).generation
+}
+
+function recordedGeneration(db: Database.Database): string | undefined {
+  const row = db
+    .prepare(`SELECT Generation FROM CentroidStoreGeneration WHERE StorePath = ?`)
+    .get(storeFilePath()) as { Generation: string } | undefined
+  return row?.Generation
+}
+
 function writeSketch(
   name: string,
   contents: { busOf: Record<string, string>; rifffs: Record<string, unknown> }
@@ -396,6 +420,8 @@ describe('stemCategoriesBackfill', () => {
       `INSERT INTO StemCategories (StemCID, BusId, Source, UpdatedAt)
        VALUES ('cid-1', 'drums', 'tidyup', 1), ('cid-2', 'bass', 'tidyup', 1)`
     ).run()
+    // The store those writes trained, from before generations.
+    writeFileSync(join(userDataDir, 'busCentroids.json'), JSON.stringify(legacyStore(['drums'])))
     writeSketch('old', {
       busOf: { 'group-a:1': 'drums', 'group-a:2': 'bass' },
       rifffs: {
@@ -411,7 +437,7 @@ describe('stemCategoriesBackfill', () => {
     const { backfillStemCategoriesFromProjectLibrary } = await import('./stemCategoriesBackfill')
     const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
     backfillStemCategoriesFromProjectLibrary(db)
-    expect(loadCategoryCentroidStore().buses.drums?.count).toBeUndefined()
+    expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
     // cid-2 had no features then, so was never trained: it trains once now.
     db.prepare(
       `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 0)`
@@ -535,6 +561,174 @@ describe('stemCategoriesBackfill', () => {
       backfillStemCategoriesFromProjectLibrary(db)
       expect(backfillStemCategoriesFromProjectLibrary(db).unchangedProjects).toBe(0)
       errors.mockRestore()
+    })
+  })
+
+  // Review of b4d9924a, important 1: busCentroids.json (userData) and the
+  // trained record (own db) can drift apart. Each store file carries a
+  // generation; the own db records, per store file, the generation its
+  // record describes.
+  describe('the store file and the trained record stay in step', () => {
+    const drums = { path: '/lib/cid-1', busId: 'drums' as const }
+    const bass = { path: '/lib/cid-2', busId: 'bass' as const }
+
+    it('a saved store carries a generation, and the own db records the same one', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      recordStemCategoryBus(db, [drums], 'tidyup', null, 1000)
+      expect(typeof fileGeneration()).toBe('string')
+      expect(recordedGeneration(db)).toBe(fileGeneration())
+    })
+
+    it('a store file that is gone restarts the record: every bus the db holds trains into the new one, once', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      analysedStem(db, 'cid-2')
+      analysedStem(db, 'cid-3')
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      recordStemCategoryBus(db, [drums, bass], 'tidyup', null, 1000)
+      const before = fileGeneration()
+      rmSync(storeFilePath())
+
+      // Any write retrains what the db holds, without a project being parsed.
+      recordStemCategoryBus(db, [{ path: '/lib/cid-3', busId: 'lead' }], 'tidyup', null, 2000)
+      let store = loadCategoryCentroidStore()
+      expect(store.buses).toMatchObject({ drums: { count: 1 }, bass: { count: 1 } })
+      expect(store.buses.lead?.count).toBe(1)
+      expect(fileGeneration()).not.toBe(before)
+      expect(recordedGeneration(db)).toBe(fileGeneration())
+
+      recordStemCategoryBus(db, [drums, bass], 'tidyup', null, 3000)
+      store = loadCategoryCentroidStore()
+      expect([store.buses.drums?.count, store.buses.bass?.count]).toEqual([1, 1])
+    })
+
+    it('a role write that finds no store file trains the bus record into the new file too', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      analysedStem(db, 'cid-2')
+      const { recordStemCategoryBus, trainCentroidsFromRoleEntries } =
+        await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      recordStemCategoryBus(db, [drums], 'tidyup', null, 1000)
+      rmSync(storeFilePath())
+      trainCentroidsFromRoleEntries(db, [{ path: '/lib/cid-2', arrangeRole: 'lead' }])
+      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+      expect(recordedGeneration(db)).toBe(fileGeneration())
+      recordStemCategoryBus(db, [drums], 'tidyup', null, 2000)
+      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+    })
+
+    it('a store file of another generation is kept as it is, and the record restarts for it', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      recordStemCategoryBus(db, [drums], 'tidyup', null, 1000)
+      // Another store put in its place (a backup restored, a file copied in).
+      writeFileSync(
+        storeFilePath(),
+        JSON.stringify({ ...legacyStore(['bass', 'lead']), generation: 'restored' })
+      )
+      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      recordStemCategoryBus(db, [drums], 'tidyup', null, 2000)
+      expect(warnings).toHaveBeenCalledTimes(1)
+      warnings.mockRestore()
+      const store = loadCategoryCentroidStore()
+      // Its samples stand; the pair it may not hold trains into it once.
+      expect(store.buses).toMatchObject({ bass: { count: 1 }, lead: { count: 1 } })
+      expect(store.buses.drums?.count).toBe(1)
+      expect(fileGeneration()).toBe('restored')
+      expect(recordedGeneration(db)).toBe('restored')
+      recordStemCategoryBus(db, [drums], 'tidyup', null, 3000)
+      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+    })
+
+    // The own db deleted (or a new one) under an existing store: nothing
+    // tells which pairs the file holds. It is kept, and each pair the new db
+    // learns trains into it once more -- once, not on every launch.
+    it('a store file with a generation the db has never recorded: each pair trains once more, then never', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      writeFileSync(
+        storeFilePath(),
+        JSON.stringify({ ...legacyStore(['drums']), generation: 'from-the-old-db' })
+      )
+      writeSketch('one', {
+        busOf: { 'group-a:1': 'drums' },
+        rifffs: { 'group-a': { groupId: 'group-a', stems: [{ slot: 1, path: '/lib/cid-1' }] } }
+      })
+      const { backfillStemCategoriesFromProjectLibrary } = await import('./stemCategoriesBackfill')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      const warnings = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      backfillStemCategoriesFromProjectLibrary(db)
+      writeSketch('one', {
+        busOf: { 'group-a:1': 'drums', 'group-a:9': 'bass' },
+        rifffs: { 'group-a': { groupId: 'group-a', stems: [{ slot: 1, path: '/lib/cid-1' }] } }
+      })
+      backfillStemCategoriesFromProjectLibrary(db)
+      warnings.mockRestore()
+      expect(loadCategoryCentroidStore().buses.drums?.count).toBe(2)
+      expect(recordedGeneration(db)).toBe('from-the-old-db')
+    })
+
+    it('a store from before generations is adopted: the bus rows it trained are recorded, not trained again', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      analysedStem(db, 'cid-2')
+      analysedStem(db, 'cid-3')
+      db.prepare(
+        `INSERT INTO StemCategories (StemCID, BusId, Source, UpdatedAt)
+         VALUES ('cid-1', 'drums', 'tidyup', 1)`
+      ).run()
+      // b4d9924a's record (no store path): cid-2's move off bass was trained.
+      db.exec(`CREATE TABLE StemBusTrained (
+        StemCID TEXT NOT NULL, BusId TEXT NOT NULL, PRIMARY KEY (StemCID, BusId)
+      )`)
+      db.prepare(`INSERT INTO StemBusTrained VALUES ('cid-1', 'drums'), ('cid-2', 'bass')`).run()
+      writeFileSync(storeFilePath(), JSON.stringify(legacyStore(['drums', 'bass'])))
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      recordStemCategoryBus(
+        db,
+        [drums, bass, { path: '/lib/cid-3', busId: 'lead' }],
+        'tidyup',
+        null,
+        1000
+      )
+      const store = loadCategoryCentroidStore()
+      expect(store.buses).toMatchObject({ drums: { count: 1 }, bass: { count: 1 } })
+      expect(store.buses.lead?.count).toBe(1)
+      expect(typeof fileGeneration()).toBe('string')
+      expect(recordedGeneration(db)).toBe(fileGeneration())
+    })
+
+    // The dev and the packaged app keep separate stores (userData) over one
+    // own db (~/Music): switching between them must not restart either record.
+    it('two store files over one db each keep their own record', async () => {
+      const db = freshDb()
+      analysedStem(db, 'cid-1')
+      const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+      const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+      const packaged = userDataDir
+      const dev = mkdtempSync(join(tmpdir(), 'sssketch-backfill-userdata-dev-test-'))
+      try {
+        recordStemCategoryBus(db, [drums], 'tidyup', null, 1000) // packaged
+        userDataDir = dev
+        recordStemCategoryBus(db, [drums], 'tidyup', null, 2000)
+        expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+        userDataDir = packaged
+        recordStemCategoryBus(db, [drums], 'tidyup', null, 3000)
+        expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+        userDataDir = dev
+        recordStemCategoryBus(db, [drums], 'tidyup', null, 4000)
+        expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
+      } finally {
+        userDataDir = packaged
+        rmSync(dev, { recursive: true, force: true })
+      }
     })
   })
 })

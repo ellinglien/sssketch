@@ -26,14 +26,27 @@ function storePath(): string {
   return join(app.getPath('userData'), STORE_FILENAME)
 }
 
+/** Where the store lives: the key of its trained record in the own db. The
+ * dev and the packaged app each have their own (userData) over one own db. */
+export function categoryCentroidStorePath(): string {
+  return storePath()
+}
+
 /** What is on disk: no file yet, a file that won't load (unreadable or not
- * a store), or the store it holds. Training reads this rather than
- * loadCategoryCentroidStore, so that it never mistakes a file that won't load
- * for an empty store and saves over it (review of b4d9924a, important 1). */
+ * a store), or the store it holds and its generation. Training reads this
+ * rather than loadCategoryCentroidStore, so that it never mistakes a file
+ * that won't load for an empty store and saves over it (review of b4d9924a,
+ * important 1).
+ *
+ * The generation names one store file's lineage: a random id given to a new
+ * file (or to one from before generations, null here) and kept by every save
+ * of it. The own db records which generation its trained record describes
+ * (categoryCentroidTraining.ts), so a file replaced, lost or recreated is
+ * told apart from the one the record was built for. */
 export type CategoryCentroidStoreFile =
   | { kind: 'missing' }
   | { kind: 'unreadable'; error: string }
-  | { kind: 'ok'; store: CategoryCentroidStore }
+  | { kind: 'ok'; store: CategoryCentroidStore; generation: string | null }
 
 /** A pre-existing file from before arrangeRoles/drumSubRoles existed (shaped
  * {buses, global} only) loads correctly, with both new axes defaulted to {}
@@ -47,10 +60,11 @@ export function readCategoryCentroidStoreFile(): CategoryCentroidStoreFile {
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       throw new Error('not a JSON object')
     }
-    const fields = parsed as Partial<CategoryCentroidStore>
+    const fields = parsed as Partial<CategoryCentroidStore> & { generation?: unknown }
     const empty = emptyCategoryCentroidStore()
     return {
       kind: 'ok',
+      generation: typeof fields.generation === 'string' ? fields.generation : null,
       store: {
         buses: fields.buses ?? empty.buses,
         arrangeRoles: fields.arrangeRoles ?? empty.arrangeRoles,
@@ -85,14 +99,20 @@ export function loadCategoryCentroidStore(): CategoryCentroidStore {
  * far). The temp file is fsynced before the rename: without that, a power
  * loss can put the rename on disk before the data, leaving the renamed file
  * empty. The rename is atomic within the userData folder. Synchronous, so
- * two saves in this process never share the temp file. True once saved. */
-export function saveCategoryCentroidStore(store: CategoryCentroidStore): boolean {
+ * two saves in this process never share the temp file. `generation` is
+ * written beside the store (null only keeps a file from before generations
+ * as it was). True once saved. */
+export function saveCategoryCentroidStore(
+  store: CategoryCentroidStore,
+  generation: string | null
+): boolean {
   const path = storePath()
   const tmpPath = `${path}.tmp`
   try {
     const fd = openSync(tmpPath, 'w')
     try {
-      writeFileSync(fd, JSON.stringify(store, null, 2), 'utf-8') // loops until all written
+      const contents = generation === null ? store : { generation, ...store }
+      writeFileSync(fd, JSON.stringify(contents, null, 2), 'utf-8') // loops until all written
       fsyncSync(fd)
     } finally {
       closeSync(fd)

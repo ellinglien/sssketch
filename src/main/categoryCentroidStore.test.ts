@@ -55,7 +55,8 @@ describe('categoryCentroidStore', () => {
     store = recordConfirmedCategory(store, 'bus', 'drums', new Array(19).fill(1))
     store = recordConfirmedCategory(store, 'arrangeRole', 'vocal', new Array(19).fill(2))
     store = recordConfirmedCategory(store, 'drumSubRole', 'kick', new Array(19).fill(3))
-    saveCategoryCentroidStore(store)
+    saveCategoryCentroidStore(store, 'gen-1')
+    // The generation is the file's, not the store's: readers never see it.
     expect(loadCategoryCentroidStore()).toEqual(store)
   })
 
@@ -91,13 +92,16 @@ describe('categoryCentroidStore', () => {
       'drums',
       new Array(19).fill(1)
     )
-    saveCategoryCentroidStore(before)
+    saveCategoryCentroidStore(before, 'gen-1')
     expect(readdirSync(userDataDir)).toEqual(['busCentroids.json'])
 
     // The temp file cannot be written: a directory stands in its place.
     mkdirSync(join(userDataDir, 'busCentroids.json.tmp'))
     const errors = vi.spyOn(console, 'error').mockImplementation(() => {})
-    saveCategoryCentroidStore(recordConfirmedCategory(before, 'bus', 'bass', new Array(19).fill(2)))
+    saveCategoryCentroidStore(
+      recordConfirmedCategory(before, 'bus', 'bass', new Array(19).fill(2)),
+      'gen-1'
+    )
     expect(errors).toHaveBeenCalled()
     errors.mockRestore()
     expect(loadCategoryCentroidStore()).toEqual(before)
@@ -109,7 +113,7 @@ describe('categoryCentroidStore', () => {
   it('the temp file is flushed to disk before it is renamed over the store', async () => {
     const { saveCategoryCentroidStore } = await import('./categoryCentroidStore')
     fsCalls.length = 0
-    expect(saveCategoryCentroidStore(emptyCategoryCentroidStore())).toBe(true)
+    expect(saveCategoryCentroidStore(emptyCategoryCentroidStore(), 'gen-1')).toBe(true)
     const fsync = fsCalls.indexOf('fsyncSync')
     expect(fsync).toBeGreaterThanOrEqual(0)
     expect(fsync).toBeLessThan(fsCalls.indexOf('renameSync'))
@@ -132,7 +136,11 @@ describe('categoryCentroidStore', () => {
       'drums',
       new Array(19).fill(1)
     )
-    saveCategoryCentroidStore(store)
-    expect(readCategoryCentroidStoreFile()).toEqual({ kind: 'ok', store })
+    saveCategoryCentroidStore(store, 'gen-1')
+    expect(readCategoryCentroidStoreFile()).toEqual({ kind: 'ok', store, generation: 'gen-1' })
+    // A file from before generations reads as generation null, and a save
+    // with null keeps it that way.
+    saveCategoryCentroidStore(store, null)
+    expect(readCategoryCentroidStoreFile()).toEqual({ kind: 'ok', store, generation: null })
   })
 })
