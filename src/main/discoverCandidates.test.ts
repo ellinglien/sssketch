@@ -14,7 +14,12 @@ import {
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { saveRiffIndexCache, saveInstrumentRowsCache } from './discoverIndexCache'
+import {
+  saveRiffIndexCache,
+  saveInstrumentRowsCache,
+  resetRiffIndexCache,
+  resetInstrumentRowsCache
+} from './discoverIndexCache'
 import { discoverStemRestriction } from './discoverArtistStems'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { RIFF_WALK_PAGE_SIZE } from './riffIndexWalk'
@@ -2817,6 +2822,17 @@ describe('only my stems: restricted before the bounded sample', () => {
   })
 })
 
+// Pass-through spies, so a test can make a reset of the saved copy fail
+// (faster startup review: the served own index must still be dropped).
+vi.mock('./discoverIndexCache', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./discoverIndexCache')>()
+  return {
+    ...actual,
+    resetRiffIndexCache: vi.fn(actual.resetRiffIndexCache),
+    resetInstrumentRowsCache: vi.fn(actual.resetInstrumentRowsCache)
+  }
+})
+
 // Pass-through spy for the trait fast-path test below (vi.mock is hoisted).
 // countWork is a no-op in tests, so recording calls changes nothing else.
 vi.mock('./workCounters', async (importOriginal) => {
@@ -3938,17 +3954,174 @@ describe('faster startup: usable before complete (2026-10-06)', () => {
     expect(await complete!).toBe(true)
   })
 
+  /** How far each walk had got: a read that waited for its walk resolves
+   * with that walk's `completed` at N. */
+  function walkProgress(): {
+    done: { riffIndex: number; instrumentRows: number }
+    onProgress: (p: { phase: string; completed: number }) => void
+  } {
+    const done = { riffIndex: 0, instrumentRows: 0 }
+    return {
+      done,
+      onProgress: (p) => {
+        if (p.phase === 'riffIndex' || p.phase === 'instrumentRows') done[p.phase] = p.completed
+      }
+    }
+  }
+
   it('no username: a rebuild serves nothing early, and usable still comes before complete', async () => {
     const path = archive()
     const own = freshDb()
     const src = launch(path)
     const order: string[] = []
-    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, undefined, {
+    const { done, onProgress } = walkProgress()
+    let mineAtUsable: Promise<{ size: number; walked: number }> | null = null
+    let mineRollAtUsable: Promise<{ users: Set<string | undefined>; walked: number }> | null = null
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, onProgress, {
       ownUsername: () => null,
-      onUsable: () => order.push('usable')
+      onUsable: () => {
+        order.push('usable')
+        expect(done).toEqual({ riffIndex: 0, instrumentRows: 0 })
+        // Asked as "only my stems" would ask: nothing early to answer it.
+        mineAtUsable = getRiffIndexForDb(src, { ownStemsOf: 'elling' }).then((i) => ({
+          size: i.size,
+          walked: done.riffIndex
+        }))
+        mineRollAtUsable = getDiscoverCandidates({
+          ownDb: own,
+          jams: [{ jamCID: 'jam0', dbForJam: src }],
+          kinds: ['drums'],
+          onlyOwnStems: true,
+          targetUser: 'elling',
+          ownStemsOf: 'elling'
+        }).then((pool) => ({
+          users: new Set(pool.map((c) => c.creatorUserName)),
+          walked: done.instrumentRows
+        }))
+      }
     })
     order.push('complete')
     expect(order).toEqual(['usable', 'complete'])
+    // Both waited for their full walk: answered only once it had finished.
+    expect(await mineAtUsable!).toEqual({ size: N, walked: N })
+    // (Drawn from the whole table, then filtered: a few of his, not all 450.)
+    expect(await mineRollAtUsable!).toEqual({ users: new Set(['elling']), walked: N })
+  })
+
+  it('a roll right at the own -> complete swap gets his stems, then the full index', async () => {
+    const path = archive()
+    const own = freshDb()
+    const src = launch(path)
+    const jams = [{ jamCID: 'jam0', dbForJam: src }]
+    const atSwap: Promise<unknown>[] = []
+    let mine: Promise<(string | undefined)[]> | null = null
+    let all: Promise<number> | null = null
+    let riffIndexAtSwap: Promise<number> | null = null
+    await prewarmDiscoverCandidateCaches(
+      jams,
+      own,
+      (progress) => {
+        // The riff walk's last page: the next thing it does is drop the own
+        // index and install the full one.
+        if (progress.phase !== 'riffIndex' || progress.completed !== N || mine) return
+        mine = getDiscoverCandidates({
+          ownDb: own,
+          jams,
+          kinds: ['drums'],
+          onlyOwnStems: true,
+          targetUser: 'elling',
+          ownStemsOf: 'elling'
+        }).then((pool) => pool.map((c) => c.creatorUserName))
+        all = getDiscoverCandidates({ ownDb: own, jams, kinds: ['drums'] }).then((p) => p.length)
+        riffIndexAtSwap = getRiffIndexForDb(src, { ownStemsOf: 'elling' }).then((i) => i.size)
+        atSwap.push(mine, all, riffIndexAtSwap)
+      },
+      { ownUsername: () => 'elling' }
+    )
+    expect(atSwap).toHaveLength(3)
+    const mineUsers = await mine!
+    expect(mineUsers.length).toBe(N / 10)
+    expect(new Set(mineUsers)).toEqual(new Set(['elling']))
+    expect(await all!).toBe(1000)
+    // Still the own index at that instant (the walk had not returned yet).
+    expect(await riffIndexAtSwap!).toBe(N / 10)
+    // After the swap: the full index, for anyone.
     expect((await getRiffIndexForDb(src, { ownStemsOf: 'elling' })).size).toBe(N)
+  })
+
+  it('a username change while the own index is served: the new user waits for the full walk', async () => {
+    const path = archive()
+    const own = freshDb()
+    const src = launch(path)
+    let username = 'elling'
+    const { done, onProgress } = walkProgress()
+    let elling: Promise<{ size: number; walked: number }> | null = null
+    let other: Promise<{ size: number; walked: number }> | null = null
+    let otherRoll: Promise<{ users: Set<string | undefined>; walked: number }> | null = null
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, onProgress, {
+      ownUsername: () => username,
+      onUsable: () => {
+        // The renderer reports another "me" right as the gate opens.
+        username = 'other'
+        elling = getRiffIndexForDb(src, { ownStemsOf: 'elling' }).then((i) => ({
+          size: i.size,
+          walked: done.riffIndex
+        }))
+        other = getRiffIndexForDb(src, { ownStemsOf: 'other' }).then((i) => ({
+          size: i.size,
+          walked: done.riffIndex
+        }))
+        otherRoll = getDiscoverCandidates({
+          ownDb: own,
+          jams: [{ jamCID: 'jam0', dbForJam: src }],
+          kinds: ['drums'],
+          onlyOwnStems: true,
+          targetUser: 'other',
+          ownStemsOf: 'other'
+        }).then((pool) => ({
+          users: new Set(pool.map((c) => c.creatorUserName)),
+          walked: done.instrumentRows
+        }))
+      }
+    })
+    // The index built for elling still answers elling, at once...
+    expect(await elling!).toEqual({ size: N / 10, walked: 0 })
+    // ...and never 'other': theirs waits for the full walks.
+    expect(await other!).toEqual({ size: N, walked: N })
+    expect(await otherRoll!).toEqual({ users: new Set(['other']), walked: N })
+  })
+
+  it('a reset of the saved riff index that fails still drops the own index', async () => {
+    const path = archive()
+    const own = freshDb()
+    const src = launch(path)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.mocked(resetRiffIndexCache).mockRejectedValueOnce(new Error('disk I/O error'))
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, undefined, {
+      ownUsername: () => 'elling'
+    })
+    expect(vi.mocked(resetRiffIndexCache)).toHaveBeenCalled()
+    // Not elling's 450 stems for the rest of the session: the full index.
+    expect((await getRiffIndexForDb(src, { ownStemsOf: 'elling' })).size).toBe(N)
+  })
+
+  it('a reset of the saved instrument rows that fails still drops the own rows', async () => {
+    const path = archive()
+    const own = freshDb()
+    const src = launch(path)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.mocked(resetInstrumentRowsCache).mockRejectedValueOnce(new Error('disk I/O error'))
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: src }], own, undefined, {
+      ownUsername: () => 'elling'
+    })
+    expect(vi.mocked(resetInstrumentRowsCache)).toHaveBeenCalled()
+    // Asked as elling's, unrestricted: the own rows would hold only his 450.
+    const pool = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jam0', dbForJam: src }],
+      kinds: ['drums'],
+      ownStemsOf: 'elling'
+    })
+    expect(pool.length).toBe(1000)
   })
 })

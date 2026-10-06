@@ -518,10 +518,12 @@ async function warmRiffIndex(
     phase.decided('rebuild')
     await phase.walk
     countWork('riff-index:rebuild')
-    await resetRiffIndexCache(ownDb, key)
     walk = emptyRiffIndexState()
   }
   try {
+    // Inside the try: a reset that throws must still drop the own index the
+    // rebuild served (below), not leave it served for the whole session.
+    if (!current && !extendable) await resetRiffIndexCache(ownDb, key)
     if (extendable) countWork('riff-index:extend')
     await walkRiffs(db, walk, {
       onProgress,
@@ -904,11 +906,12 @@ async function warmInstrumentRows(
     phase.decided('rebuild')
     await phase.walk
     countWork('instrument-rows:rebuild')
-    await resetInstrumentRowsCache(ownDb, key)
     rows = []
     watermark = { count: 0, maxRowid: null, keyAtMax: null }
   }
   try {
+    // Inside the try, as warmRiffIndex's: a failed reset still drops the own rows.
+    if (!current && !extendable) await resetInstrumentRowsCache(ownDb, key)
     if (extendable) countWork('instrument-rows:extend')
     const walked = await walkStems(db, watermark!, {
       onProgress,
