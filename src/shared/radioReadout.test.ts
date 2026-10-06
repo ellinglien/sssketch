@@ -383,6 +383,12 @@ describe("a gesture's word placed on the lap as it is now, every tick (as its vi
     ])
   })
 
+  it("a lead-in's word starts with its curve: half the loop at most, as the curve is capped", () => {
+    expect(place([], 'riser', 4, 16)).toEqual([
+      { rowId: 'a', word: 'riser', at: 66, key: 'g1', until: 68 }
+    ])
+  })
+
   it('a loop learned longer moves it to the wrap that ends the lap now, once', () => {
     const log = place(place([other], 'riser', 8), 'riser', 16)
     expect(log).toEqual([other, { rowId: 'a', word: 'riser', at: 78, key: 'g1', until: 80 }])

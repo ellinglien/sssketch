@@ -429,7 +429,8 @@ export function placeRadioGestureFlash(
   const rest = dropRadioFlashes(log, g.key)
   const word = radioGestureFlashWord(g.kind)
   if (word === null || g.kind === 'drop-out') return rest
-  const bars = g.beats / 4
+  // Capped at half the loop both ways, as the curves cap a lead-in and an arrival.
+  const bars = Math.min(g.beats / 4, g.loopBars / 2)
   const leads = radioGestureLeadsChange(g.kind)
   return [
     ...rest,
@@ -438,7 +439,7 @@ export function placeRadioGestureFlash(
       word,
       at: g.lapStart + (leads ? g.loopBars - bars : 0),
       key: g.key,
-      until: g.lapStart + (leads ? g.loopBars : Math.min(bars, g.loopBars / 2))
+      until: g.lapStart + (leads ? g.loopBars : bars)
     }
   ]
 }
