@@ -132,6 +132,17 @@ export type RadioRowPart =
   | 'lock-mark'
   | 'remove'
 
+/** The words a radio row's live buttons carry at rest (their tooltip and aria-label), in one
+ * place: DiscoverSlotRow draws them from here, and the `?` guide's test holds its words to them
+ * (radioGuide.test.ts), so a renamed button fails it. Hook and dig carry radioHooks' tooltips. */
+export const RADIO_ROW_LABEL = Object.freeze({
+  mute: 'mute',
+  solo: 'solo',
+  skip: 'skip',
+  like: 'like',
+  changeSoon: 'change soon'
+} as const)
+
 /** Every part, in the button line's reading order. */
 export const RADIO_ROW_PARTS: readonly RadioRowPart[] = [
   'mute-solo',

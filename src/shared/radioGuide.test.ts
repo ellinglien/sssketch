@@ -14,7 +14,7 @@ import {
   type RadioGuideItem
 } from './radioGuide'
 import { radioStripModel } from './radioStripModel'
-import { RADIO_ROW_PARTS, type RadioRowPart } from './radioView'
+import { RADIO_ROW_LABEL, RADIO_ROW_PARTS, type RadioRowPart } from './radioView'
 import {
   DEFAULT_RADIO_DENSITY,
   DEFAULT_RADIO_SETTINGS,
@@ -169,14 +169,17 @@ describe('the radio guide: every control it names exists', () => {
     fileURLToPath(new URL('../renderer/src/components/DiscoverSlotRow.tsx', import.meta.url)),
     'utf8'
   )
-  /** A row part's words, and how the row's source names each (a tooltip or an aria-label). */
-  const ROW_WORDS: Readonly<Record<string, readonly string[]>> = {
-    'mute-solo': ['mute', 'solo'],
-    skip: ['skip'],
-    like: ['like'],
-    'change-soon': ['change soon'],
+  /** A row part's words: the labels its buttons carry at rest (RADIO_ROW_LABEL, which the row
+   * draws them from; hook and dig, the shared tooltips' own words). */
+  const ROW_WORDS: Readonly<Partial<Record<RadioRowPart, readonly string[]>>> = {
+    'mute-solo': [RADIO_ROW_LABEL.mute, RADIO_ROW_LABEL.solo],
+    skip: [RADIO_ROW_LABEL.skip],
+    like: [RADIO_ROW_LABEL.like],
+    'change-soon': [RADIO_ROW_LABEL.changeSoon],
     'hook-dig': [RADIO_HOOK_TOOLTIP.split(':')[0], RADIO_DIG_TOOLTIP.split(':')[0]]
   }
+  /** A key's words: 'build · drop' is build and drop. */
+  const keyWords = (key: string): string[] => key.split(' · ')
 
   it('names a control in every app a control line shows in', () => {
     for (const app of APPS) {
@@ -189,34 +192,40 @@ describe('the radio guide: every control it names exists', () => {
     }
   })
 
-  it('every desktop strip control is in radioStripModel, under the word the guide uses', () => {
+  it('every desktop strip control is in radioStripModel, and the key is its label, word for word', () => {
     for (const i of itemsIn('desktop', true)) {
-      for (const ref of i.desktop ?? []) {
-        if (!('strip' in ref)) continue
-        const c = strip.find((x) => x.id === ref.strip)
-        expect(c, `${i.key}: ${ref.strip}`).toBeDefined()
-        expect(i.key, ref.strip).toContain(c!.label.split(' · ')[0])
+      const refs = (i.desktop ?? []).flatMap((r) => ('strip' in r ? [r.strip] : []))
+      if (refs.length === 0) continue
+      const labels = refs.map((id) => {
+        const c = strip.find((x) => x.id === id)
+        expect(c, `${i.key}: ${id}`).toBeDefined()
+        // a label's own part ('source · endlesss - other' is source)
+        return c!.label.split(' · ')[0]
+      })
+      expect(keyWords(i.key), i.key).toEqual(labels)
+    }
+  })
+
+  it('every desktop row button is a radio row part, and the key is its label, word for word', () => {
+    for (const i of itemsIn('desktop', true)) {
+      const parts = (i.desktop ?? []).flatMap((r) => ('row' in r ? [r.row] : []))
+      if (parts.length === 0) continue
+      for (const p of parts) expect(RADIO_ROW_PARTS).toContain(p)
+      const words = parts.flatMap((p) => ROW_WORDS[p] ?? [])
+      // each word of the key is a label of one of its parts, and each part is named
+      for (const w of keyWords(i.key)) expect(words, `${i.key}: ${w}`).toContain(w)
+      for (const p of parts) {
+        expect(
+          (ROW_WORDS[p] ?? []).some((w) => keyWords(i.key).includes(w)),
+          `${i.key} names ${p}`
+        ).toBe(true)
       }
     }
   })
 
-  it('every desktop row button is a radio row part, and the row still calls it that', () => {
-    for (const i of itemsIn('desktop', true)) {
-      for (const ref of i.desktop ?? []) {
-        if (!('row' in ref)) continue
-        expect(RADIO_ROW_PARTS).toContain(ref.row)
-        const wordsOf = ROW_WORDS[ref.row as RadioRowPart]
-        expect(wordsOf, ref.row).toBeDefined()
-        expect(
-          wordsOf.some((w) => i.key.includes(w)),
-          `${i.key} names ${ref.row}`
-        ).toBe(true)
-        for (const w of wordsOf) {
-          // the hook and dig words are the shared tooltips' own; the rest are in the row's source
-          if (ref.row === 'hook-dig') continue
-          expect(rowSource, w).toMatch(new RegExp(`['"]${w}['"]`))
-        }
-      }
+  it("the row draws its buttons' labels from RADIO_ROW_LABEL", () => {
+    for (const k of Object.keys(RADIO_ROW_LABEL)) {
+      expect(rowSource, k).toContain(`RADIO_ROW_LABEL.${k}`)
     }
   })
 

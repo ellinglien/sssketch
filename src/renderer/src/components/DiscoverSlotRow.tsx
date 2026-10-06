@@ -50,6 +50,7 @@ import { RadioRowPlates } from './RadioRowPlates'
 import type { RadioRowPlates as RadioRowPlatesModel } from '@shared/radioRowPlates'
 import {
   RADIO_LOCK_MARK_TOOLTIP,
+  RADIO_ROW_LABEL,
   radioRowParts,
   type RadioRowPart,
   type RadioView
@@ -1029,8 +1030,8 @@ export function DiscoverSlotRow({
             stem to mute (matching the waveform toggle's own guard). */}
       <button
         onClick={onTogglePreview}
-        data-tooltip={showsAsMuted ? 'unmute' : 'mute'}
-        aria-label={showsAsMuted ? 'unmute' : 'mute'}
+        data-tooltip={showsAsMuted ? 'unmute' : RADIO_ROW_LABEL.mute}
+        aria-label={showsAsMuted ? 'unmute' : RADIO_ROW_LABEL.mute}
         style={{
           ...at(3),
           display: 'flex',
@@ -1073,8 +1074,8 @@ export function DiscoverSlotRow({
             a hard fill like mute's). */}
       <button
         onClick={onToggleSolo}
-        data-tooltip={soloed ? 'unsolo' : 'solo'}
-        aria-label={soloed ? 'unsolo' : 'solo'}
+        data-tooltip={soloed ? 'unsolo' : RADIO_ROW_LABEL.solo}
+        aria-label={soloed ? 'unsolo' : RADIO_ROW_LABEL.solo}
         style={{
           ...at(4),
           display: 'flex',
@@ -1555,7 +1556,7 @@ export function DiscoverSlotRow({
   const skipButton = (
     <RowIconButton
       gridColumn={at(10).gridColumn}
-      tooltip="skip"
+      tooltip={RADIO_ROW_LABEL.skip}
       look={radioLayout ? 'live' : undefined}
       onClick={(e) => {
         setRerollAction('similar')
@@ -1646,12 +1647,14 @@ export function DiscoverSlotRow({
             : holding
               ? favourited
                 ? 'unlike · holding'
-                : 'like · holding'
+                : `${RADIO_ROW_LABEL.like} · holding`
               : favourited
                 ? 'unlike'
-                : 'like'
+                : RADIO_ROW_LABEL.like
       }
-      aria-label={listenOnlyStars ? 'hold, listening only' : favourited ? 'unlike' : 'like'}
+      aria-label={
+        listenOnlyStars ? 'hold, listening only' : favourited ? 'unlike' : RADIO_ROW_LABEL.like
+      }
       aria-pressed={favourited}
       aria-description={holding ? 'holding longer' : undefined}
       style={{
@@ -1686,7 +1689,7 @@ export function DiscoverSlotRow({
   const dislikeButton = (
     <RowIconButton
       gridColumn={at(15).gridColumn}
-      tooltip="change soon"
+      tooltip={RADIO_ROW_LABEL.changeSoon}
       look={radioLayout ? 'live' : undefined}
       onClick={onToggleReplaceSoon}
       toggle
