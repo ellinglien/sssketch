@@ -62,13 +62,9 @@ export interface StemBusCategoryEntry {
 
 /** What a bus write did, per entry. */
 export interface StemBusUpsertResult {
-  /** Entries whose write gave their stem a bus it did not have: a new row, a
-   * row with no BusId yet, or a different BusId. Only these are new training
-   * samples for the centroids: a re-confirmation (the same bus at a newer
-   * time, e.g. a project saved after the live Tidy Up write) or a write the
-   * UpdatedAt guard refused teaches nothing new, and training it again would
-   * count the same stem twice (review of plan b21ea5a2 Task 13 M1). */
-  newlyAssigned: StemBusCategoryEntry[]
+  /** Entries whose path resolved to a Stems row, with that StemCID. Their
+   * write may still have been refused by the UpdatedAt guard. */
+  resolved: { entry: StemBusCategoryEntry; stemCID: string }[]
   /** Entries whose path resolved to no Stems row: nothing written. */
   unresolved: StemBusCategoryEntry[]
 }
@@ -76,11 +72,10 @@ export interface StemBusUpsertResult {
 /** Column-scoped: only ever touches BusId/Source/SourceProject/UpdatedAt,
  * never ArrangeRole/DrumSubRole -- a bus write must never clobber an
  * independently-confirmed role on the same row. The `WHERE
- * excluded.UpdatedAt > StemCategories.UpdatedAt` guard makes this safe to
+ * excluded.UpdatedAt >= StemCategories.UpdatedAt` guard makes this safe to
  * call in any order across multiple sources (forward capture, backfill)
- * without needing to sort by recency first. Strict, so re-running the same
- * data (the backfill parsing an unchanged project again) changes nothing;
- * between two writes stamped the same instant, the first stands. */
+ * without needing to sort by recency first. Training is not decided here:
+ * see recordStemCategoryBus (categoryCentroidTraining.ts). */
 export function upsertStemCategoryBus(
   db: Database.Database,
   entries: StemBusCategoryEntry[],
@@ -89,7 +84,6 @@ export function upsertStemCategoryBus(
   updatedAt: number,
   extraCandidateDbs: Database.Database[] = []
 ): StemBusUpsertResult {
-  const priorBus = db.prepare(`SELECT BusId FROM StemCategories WHERE StemCID = ?`)
   const stmt = db.prepare(
     `INSERT INTO StemCategories (StemCID, BusId, Source, SourceProject, UpdatedAt)
      VALUES (@stemCID, @busId, @source, @sourceProject, @updatedAt)
@@ -98,9 +92,9 @@ export function upsertStemCategoryBus(
        Source = excluded.Source,
        SourceProject = excluded.SourceProject,
        UpdatedAt = excluded.UpdatedAt
-     WHERE excluded.UpdatedAt > StemCategories.UpdatedAt`
+     WHERE excluded.UpdatedAt >= StemCategories.UpdatedAt`
   )
-  const result: StemBusUpsertResult = { newlyAssigned: [], unresolved: [] }
+  const result: StemBusUpsertResult = { resolved: [], unresolved: [] }
   const txn = db.transaction((rows: StemBusCategoryEntry[]) => {
     for (const row of rows) {
       const stemCID = stemCIDForPath(db, row.path, extraCandidateDbs)
@@ -108,9 +102,8 @@ export function upsertStemCategoryBus(
         result.unresolved.push(row)
         continue
       }
-      const prior = priorBus.get(stemCID) as { BusId: string | null } | undefined
-      const { changes } = stmt.run({ stemCID, busId: row.busId, source, sourceProject, updatedAt })
-      if (changes > 0 && prior?.BusId !== row.busId) result.newlyAssigned.push(row)
+      stmt.run({ stemCID, busId: row.busId, source, sourceProject, updatedAt })
+      result.resolved.push({ entry: row, stemCID })
     }
   })
   txn(entries)

@@ -104,68 +104,35 @@ describe('stemCategoriesStore', () => {
       expect(getStemCategory(db, 'cid-1')?.busId).toBe('lead')
     })
 
-    // Review of Task 13 M1: re-running the same data must change nothing, so
-    // an equal UpdatedAt no longer overwrites (strict guard).
-    it('a write with the same UpdatedAt changes nothing', async () => {
+    // Ties keep the old `>=`: of two writes stamped the same instant (two
+    // Tidy Up assignments in one millisecond), the later one stands.
+    it('a write with the same UpdatedAt lands', async () => {
       const db = freshDb()
       db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
       const { upsertStemCategoryBus, getStemCategory } = await import('./stemCategoriesStore')
       upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'drums' }], 'tidyup', null, 2000)
-      upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'bass' }], 'backfill', '/p', 2000)
-      expect(getStemCategory(db, 'cid-1')).toMatchObject({
-        busId: 'drums',
-        source: 'tidyup',
-        sourceProject: null
-      })
+      upsertStemCategoryBus(db, [{ path: '/x/cid-1', busId: 'bass' }], 'tidyup', null, 2000)
+      expect(getStemCategory(db, 'cid-1')?.busId).toBe('bass')
     })
 
-    // Only a write that gives a stem a bus it did not have is a new training
-    // sample: a re-confirmation (same bus, newer time) and a write the guard
-    // refused are not, and an unresolved path wrote nothing.
-    it('reports which entries were newly assigned and which did not resolve', async () => {
+    it('reports the StemCID each entry resolved to, and the entries that did not resolve', async () => {
       const db = freshDb()
-      for (const cid of ['cid-1', 'cid-2', 'cid-3']) {
-        db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run(cid)
-      }
-      db.prepare(
-        `INSERT INTO StemCategories (StemCID, ArrangeRole, Source, UpdatedAt) VALUES ('cid-3', 'drums', 'x', 1)`
-      ).run()
+      db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
       const { upsertStemCategoryBus } = await import('./stemCategoriesStore')
-      const first = upsertStemCategoryBus(
+      const result = upsertStemCategoryBus(
         db,
         [
           { path: '/x/cid-1', busId: 'drums' },
-          { path: '/x/cid-3', busId: 'bass' }, // role-only row: no bus yet
           { path: '/drops/kick.wav', busId: 'drums' }
         ],
         'tidyup',
         null,
         2000
       )
-      expect(first.newlyAssigned.map((e) => e.path)).toEqual(['/x/cid-1', '/x/cid-3'])
-      expect(first.unresolved.map((e) => e.path)).toEqual(['/drops/kick.wav'])
-
-      const later = upsertStemCategoryBus(
-        db,
-        [
-          { path: '/x/cid-1', busId: 'drums' }, // same bus, newer: re-confirmation
-          { path: '/x/cid-2', busId: 'lead' }, // new row
-          { path: '/x/cid-3', busId: 'drums' } // a different bus
-        ],
-        'backfill',
-        '/p',
-        3000
-      )
-      expect(later.newlyAssigned.map((e) => e.path)).toEqual(['/x/cid-2', '/x/cid-3'])
-
-      const stale = upsertStemCategoryBus(
-        db,
-        [{ path: '/x/cid-2', busId: 'backing' }],
-        'backfill',
-        '/old',
-        1000
-      )
-      expect(stale).toEqual({ newlyAssigned: [], unresolved: [] })
+      expect(result).toEqual({
+        resolved: [{ entry: { path: '/x/cid-1', busId: 'drums' }, stemCID: 'cid-1' }],
+        unresolved: [{ path: '/drops/kick.wav', busId: 'drums' }]
+      })
     })
 
     it('a bus write never touches an existing ArrangeRole/DrumSubRole on the same row', async () => {

@@ -40,6 +40,12 @@ function trainableCategoriesFor(axis: CategoryAxis): string[] {
   }
 }
 
+/** Whether confirming `category` on `axis` trains anything (the catch-alls
+ * never do: see the TRAINABLE_* lists above). */
+export function isTrainableCategory(axis: CategoryAxis, category: string): boolean {
+  return trainableCategoriesFor(axis).includes(category)
+}
+
 type StoreKey = 'buses' | 'arrangeRoles' | 'drumSubRoles'
 
 function storeKeyFor(axis: CategoryAxis): StoreKey {

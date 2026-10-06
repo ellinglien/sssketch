@@ -59,13 +59,14 @@ interface ParsedSketch {
  * backfilled completely is not read or parsed again -- it holds nothing new,
  * and its upserts would change nothing (they only ever replace an older
  * UpdatedAt). "Completely": every assignment whose stem is a library stem
- * (a basename without '.': plan decision 10) resolved to a Stems row. Until
- * then the file is parsed every launch as before, so a stem whose jam syncs
- * later, or whose archive was unmounted, still lands. A file that fails to
- * parse records no stamp either (tried, and reported, again next launch).
- * Centroid training does not depend on the gate: only a write that gives a
- * stem a new bus trains (recordStemCategoryBus), so a project parsed again,
- * or saved after its assignments were trained live, adds no sample twice.
+ * (a basename without '.': plan decision 10) resolved to a Stems row, and
+ * every trainable one the row agrees with is in the centroids. Until then
+ * the file is parsed every launch as before, so a stem whose jam syncs
+ * later, whose archive was unmounted, or which is analysed later still
+ * lands and still trains. A file that fails to parse records no stamp
+ * either (tried, and reported, again next launch). Parsing a file again
+ * never trains a stem twice: each (stem, bus) pair is trained once, ever
+ * (recordStemCategoryBus), here or in the live Tidy Up handler.
  * `readFile` is injectable for tests. */
 export function backfillStemCategoriesFromProjectLibrary(
   db: Database.Database,
@@ -116,6 +117,7 @@ export function backfillStemCategoriesFromProjectLibrary(
     }
 
     let unresolved: StemBusCategoryEntry[] = []
+    let waiting: StemBusCategoryEntry[] = []
     if (entries.length > 0) {
       // Deliberately NOT Math.floor()'d to whole seconds: unrounded
       // fractional-seconds-since-epoch is this whole subsystem's house
@@ -127,20 +129,24 @@ export function backfillStemCategoriesFromProjectLibrary(
       // upsertStemCategoryBus's own "most recent wins" guard silently fall
       // back to iteration order instead, which is exactly what this
       // migration must not depend on (see this function's own doc
-      // comment). Only newly assigned buses train (recordStemCategoryBus).
-      unresolved = recordStemCategoryBus(
+      // comment). Each (stem, bus) trains once (recordStemCategoryBus).
+      ;({ unresolved, waiting } = recordStemCategoryBus(
         db,
         entries,
         'backfill',
         projectPath,
         sketch.mtimeMs / 1000,
         candidateDbsForRiff()
-      ).unresolved
+      ))
       categorizedStems += entries.length
     }
     // Complete once every library stem (a basename without '.': plan
-    // decision 10) resolved to a Stems row; a dropped file never will.
-    const complete = unresolved.every((entry) => basename(entry.path).includes('.'))
+    // decision 10) resolved to a Stems row, and every trainable assignment
+    // the rows agree with is trained -- worked out by the training itself,
+    // so no FeaturesJSON is read twice. A dropped file never resolves and
+    // an aux assignment never trains: neither is waited for.
+    const complete =
+      waiting.length === 0 && unresolved.every((entry) => basename(entry.path).includes('.'))
     if (stamp !== null && complete) recordSeen(db, projectPath, stamp)
   }
 

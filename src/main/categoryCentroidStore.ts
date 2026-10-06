@@ -50,16 +50,13 @@ export function loadCategoryCentroidStore(): CategoryCentroidStore {
  * disk mid-write leaves the previous store whole, never a truncated file
  * (which would load as an empty store and lose every sample trained so
  * far). The rename is atomic within the userData folder. Synchronous, so
- * two saves in this process never share the temp file. */
-export function saveCategoryCentroidStore(store: CategoryCentroidStore): void {
+ * two saves in this process never share the temp file. True once saved. */
+export function saveCategoryCentroidStore(store: CategoryCentroidStore): boolean {
   const path = storePath()
   const tmpPath = `${path}.tmp`
   try {
     writeFileSync(tmpPath, JSON.stringify(store, null, 2), 'utf-8')
     renameSync(tmpPath, path)
-    // Retrained centroids can place stems the classifier couldn't before --
-    // its pending lists rebuild on the next batch (background efficiency B4).
-    noteAutoClassifyTrainingChanged()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`saveCategoryCentroidStore: failed to write ${path}: ${message}`)
@@ -68,5 +65,10 @@ export function saveCategoryCentroidStore(store: CategoryCentroidStore): void {
     } catch {
       // Best effort: a stray temp file is never read.
     }
+    return false
   }
+  // Retrained centroids can place stems the classifier couldn't before --
+  // its pending lists rebuild on the next batch (background efficiency B4).
+  noteAutoClassifyTrainingChanged()
+  return true
 }

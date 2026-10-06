@@ -183,39 +183,48 @@ describe('stemCategoriesBackfill', () => {
     expect(getStemCategory(db, 'cid-1')?.busId).toBe('drums')
   })
 
-  // A version of a project is stamped once every library stem in it resolved
-  // to a Stems row: a stem the Stems tables don't hold yet (the archive
-  // unmounted, a jam not synced) is retried. Features are not waited for:
-  // only a new bus assignment trains, so a later parse could teach nothing.
-  it('a project with a stem not yet resolvable is parsed again until it is', async () => {
+  // A version of a project is only stamped once it has nothing left to give:
+  // a stem the Stems tables don't hold yet (the archive unmounted, a jam not
+  // synced) or a trainable one without features is retried -- and trains
+  // exactly once, when its features arrive.
+  it('a project with a stem not yet resolvable or analysed is parsed again until it is', async () => {
     const db = freshDb()
     writeSketch('waiting', {
-      busOf: { 'group-a:1': 'drums', 'group-a:2': 'bass' },
+      busOf: { 'group-a:1': 'drums', 'group-a:2': 'bass', 'group-a:3': 'aux' },
       rifffs: {
         'group-a': {
           groupId: 'group-a',
           stems: [
             { slot: 1, path: '/lib/cid-1' },
-            { slot: 2, path: '/drops/kick.wav' } // never a StemCID: never waited for
+            { slot: 2, path: '/drops/kick.wav' }, // never a StemCID: never waited for
+            { slot: 3, path: '/lib/cid-aux' } // aux never trains: never waited for
           ]
         }
       }
     })
+    db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-aux')
     const { backfillStemCategoriesFromProjectLibrary } = await import('./stemCategoriesBackfill')
     const { getStemCategory } = await import('./stemCategoriesStore')
+    const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
     let reads = 0
     const readFile = (path: string): string => {
       reads += 1
       return readFileSync(path, 'utf-8')
     }
     backfillStemCategoriesFromProjectLibrary(db, { readFile }) // cid-1 unknown
-    backfillStemCategoriesFromProjectLibrary(db, { readFile }) // still unknown
-    expect(reads).toBe(2)
     db.prepare(`INSERT INTO Stems (StemCID) VALUES (?)`).run('cid-1')
-    backfillStemCategoriesFromProjectLibrary(db, { readFile }) // known, no features: stamped
+    backfillStemCategoriesFromProjectLibrary(db, { readFile }) // known, no features
+    expect(reads).toBe(2)
     expect(getStemCategory(db, 'cid-1')?.busId).toBe('drums')
+    expect(loadCategoryCentroidStore().buses.drums?.count).toBeUndefined()
+    db.prepare(
+      `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 0)`
+    ).run('cid-1', JSON.stringify(FEATURES))
+    backfillStemCategoriesFromProjectLibrary(db, { readFile }) // trained, complete: stamped
+    expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
     backfillStemCategoriesFromProjectLibrary(db, { readFile })
     expect(reads).toBe(3)
+    expect(loadCategoryCentroidStore().buses.drums?.count).toBe(1)
   })
 
   // Review of Task 13 M1: a project that never completes (here a library
@@ -354,5 +363,61 @@ describe('stemCategoriesBackfill', () => {
     // Verify the centroid store was actually trained with this stem's category
     const store = loadCategoryCentroidStore()
     expect(store.buses.drums?.count).toBe(1)
+  })
+
+  // A stem whose bus flips between sources (an older project re-saved after
+  // a Tidy Up moved the stem) gives each bus one sample, however often it
+  // flips back.
+  it('a bus that flips back and forth is counted once per bus', async () => {
+    const db = freshDb()
+    analysedStem(db, 'cid-1')
+    const { recordStemCategoryBus } = await import('./categoryCentroidTraining')
+    const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+    const entry = (busId: 'drums' | 'bass'): { path: string; busId: 'drums' | 'bass' } => ({
+      path: '/lib/cid-1',
+      busId
+    })
+    recordStemCategoryBus(db, [entry('drums')], 'backfill', '/p1', 1000)
+    recordStemCategoryBus(db, [entry('bass')], 'tidyup', null, 2000)
+    recordStemCategoryBus(db, [entry('drums')], 'backfill', '/p1', 3000)
+    recordStemCategoryBus(db, [entry('bass')], 'tidyup', null, 4000)
+    const store = loadCategoryCentroidStore()
+    expect(store.buses.drums?.count).toBe(1)
+    expect(store.buses.bass?.count).toBe(1)
+  })
+
+  // The trained record starts from what earlier versions already trained:
+  // every bus row whose stem had features (each such write trained it).
+  it('a bus row trained before the record existed is not trained again', async () => {
+    const db = freshDb()
+    analysedStem(db, 'cid-1')
+    db.prepare(`INSERT INTO Stems (StemCID) VALUES ('cid-2')`).run()
+    db.prepare(
+      `INSERT INTO StemCategories (StemCID, BusId, Source, UpdatedAt)
+       VALUES ('cid-1', 'drums', 'tidyup', 1), ('cid-2', 'bass', 'tidyup', 1)`
+    ).run()
+    writeSketch('old', {
+      busOf: { 'group-a:1': 'drums', 'group-a:2': 'bass' },
+      rifffs: {
+        'group-a': {
+          groupId: 'group-a',
+          stems: [
+            { slot: 1, path: '/lib/cid-1' },
+            { slot: 2, path: '/lib/cid-2' }
+          ]
+        }
+      }
+    })
+    const { backfillStemCategoriesFromProjectLibrary } = await import('./stemCategoriesBackfill')
+    const { loadCategoryCentroidStore } = await import('./categoryCentroidStore')
+    backfillStemCategoriesFromProjectLibrary(db)
+    expect(loadCategoryCentroidStore().buses.drums?.count).toBeUndefined()
+    // cid-2 had no features then, so was never trained: it trains once now.
+    db.prepare(
+      `INSERT INTO StemFeatureCache (StemCID, FeaturesJSON, ExtractedAt) VALUES (?, ?, 0)`
+    ).run('cid-2', JSON.stringify(FEATURES))
+    backfillStemCategoriesFromProjectLibrary(db)
+    backfillStemCategoriesFromProjectLibrary(db)
+    expect(loadCategoryCentroidStore().buses.bass?.count).toBe(1)
   })
 })
