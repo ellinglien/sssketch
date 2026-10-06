@@ -4,6 +4,8 @@ import { describe, expect, it } from 'vitest'
 import {
   INTENSITY_PHRASES,
   NO_RADIO_INTENSITY_ARC,
+  intensityArcShown,
+  intensityPressNow,
   newRadioIntensityArc,
   pressRadioIntensity,
   radioBreakdownDepth,
@@ -1304,5 +1306,175 @@ describe('radioIntensityTargetAhead: the target where a change lands (option A, 
     }
     expect(JSON.stringify(arc)).toBe(before)
     expect(draws).toBe(0)
+  })
+})
+
+// ---- the buttons as both radios show and press them (intensityArcShown, intensityPressNow;
+// moved from sssketch's radioIntensityGlue for the web, review of ell.ing/radio 9d4f800) ----
+
+const arcWith = (o: Partial<RadioIntensityArc>): RadioIntensityArc => ({
+  ...newRadioIntensityArc(),
+  begun: true,
+  phrases: 2,
+  ...o
+})
+const drop = (returning: string[], renew: string[] = []): RadioIntensityDecided => ({
+  event: 'drop',
+  returning,
+  renew
+})
+
+describe('intensityArcShown', () => {
+  const room = { count: 3, max: 6, canAdd: true, canStrip: true }
+  const at = { lap: 0, phraseLaps: 2, room, quickDropCanSound: true }
+
+  it('before the machine has begun, neither button can act', () => {
+    const shown = intensityArcShown(newRadioIntensityArc(), at)
+    expect(shown).toEqual({
+      phase: 'build',
+      build: 'build',
+      drop: 'drop',
+      canBuild: false,
+      canDrop: false
+    })
+  })
+
+  it('in a build: build adds (with room), drop is the quick drop when its low drop can sound', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 5 })
+    expect(intensityArcShown(arc, at)).toMatchObject({ canBuild: true, canDrop: true })
+    expect(intensityArcShown(arc, { ...at, quickDropCanSound: false }).canDrop).toBe(false)
+  })
+
+  it('build in a build with no room and nothing left to halve cannot act', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 3, phrases: 1, done: 0 })
+    expect(intensityArcShown(arc, { ...at, room: { ...room, canAdd: false } }).canBuild).toBe(false)
+  })
+
+  it('in a breakdown: drop brings the rests back whatever the low drop says', () => {
+    const arc = arcWith({ phase: 'breakdown', rests: ['d'], phrases: 2 })
+    expect(intensityArcShown(arc, { ...at, quickDropCanSound: false })).toMatchObject({
+      phase: 'breakdown',
+      canBuild: true,
+      canDrop: true
+    })
+  })
+
+  it('a press waiting reads building or dropping; a decided drop pressed again does nothing', () => {
+    expect(intensityArcShown(arcWith({ forced: 'build' }), at).build).toBe('building')
+    const dropping = arcWith({ phase: 'breakdown', decided: drop(['d']) })
+    const shown = intensityArcShown(dropping, { ...at, quickDropCanSound: false })
+    expect(shown.canDrop).toBe(false)
+    expect(intensityArcShown(arcWith({ forced: 'drop' }), at).drop).toBe('dropping')
+  })
+
+  it('build in a breakdown already at its shortest cannot act (both radios; review of 9d4f800)', () => {
+    // the drop is decided at this phrase's decide wrap already: build changes nothing
+    const arc = arcWith({ phase: 'breakdown', rests: ['d'], phrases: 2, done: 1 })
+    expect(pressRadioIntensity(arc, 'build', { lap: 0, phraseLaps: 2, late: false })).toBe(arc)
+    expect(intensityArcShown(arc, at).canBuild).toBe(false)
+    // a phrase longer: build shortens it
+    expect(intensityArcShown({ ...arc, phrases: 3 }, at).canBuild).toBe(true)
+  })
+})
+
+describe('intensityPressNow', () => {
+  const room = { count: 3, max: 6, canAdd: true, canStrip: true }
+  const at = { lap: 0, phraseLaps: 2, can: room }
+  const noRoom = { ...room, canAdd: false }
+
+  it('refuses late what it refuses early: a build with no room and nothing to halve', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 3, phrases: 1, done: 0 })
+    for (const late of [false, true]) {
+      expect(intensityPressNow(arc, 'build', { ...at, late, can: noRoom }), String(late)).toBe(null)
+    }
+  })
+
+  it('late, a press whose event would do nothing only halves, as it would early (no forced)', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 3, phrases: 4, done: 0 })
+    const early = intensityPressNow(arc, 'build', { ...at, late: false, can: noRoom })
+    const late = intensityPressNow(arc, 'build', { ...at, late: true, can: noRoom })
+    expect(late).toEqual(early)
+    expect(late).toMatchObject({ phrases: 2, forced: null, decided: null })
+  })
+
+  it('late, a press with an event to land still waits for the top after', () => {
+    const arc = arcWith({ phase: 'build', peakRows: 5 })
+    expect(intensityPressNow(arc, 'build', { ...at, late: true })).toMatchObject({
+      forced: 'build',
+      decided: null
+    })
+    expect(intensityPressNow(arc, 'build', { ...at, late: false })?.decided).toMatchObject({
+      event: 'add'
+    })
+    expect(intensityPressNow(arc, 'drop', { ...at, late: true })).toMatchObject({
+      forced: 'drop',
+      decided: null
+    })
+  })
+
+  it('a press that changes nothing is null: build in a breakdown at its shortest, drop again', () => {
+    const shortest = arcWith({ phase: 'breakdown', rests: ['d'], phrases: 2, done: 1 })
+    for (const late of [false, true]) {
+      expect(intensityPressNow(shortest, 'build', { ...at, late }), String(late)).toBe(null)
+      const dropping = arcWith({ phase: 'breakdown', decided: drop(['d']) })
+      expect(intensityPressNow(dropping, 'drop', { ...at, late }), String(late)).toBe(null)
+    }
+  })
+
+  it("refuses a quick drop when the planner's low drop cannot sound, late or not", () => {
+    for (const phase of ['build', 'drop'] as const) {
+      const arc = arcWith({ phase, peakRows: 5 })
+      for (const late of [false, true]) {
+        const w = { ...at, late, quickDropCanSound: false }
+        expect(intensityPressNow(arc, 'drop', w), `${phase} ${late}`).toBe(null)
+        expect(intensityPressNow(arc, 'drop', { ...w, quickDropCanSound: true })).not.toBe(null)
+      }
+    }
+    // not a quick drop: the breakdown's drop brings the rests back whatever the low drop says
+    const bd = arcWith({ phase: 'breakdown', rests: ['d'] })
+    expect(
+      intensityPressNow(bd, 'drop', { ...at, late: false, quickDropCanSound: false })
+    ).not.toBe(null)
+  })
+
+  it('agrees with what the buttons show, late or not', () => {
+    const arcs = [
+      arcWith({ phase: 'build', peakRows: 3, phrases: 1, done: 0 }),
+      arcWith({ phase: 'build', peakRows: 5 }),
+      arcWith({ phase: 'breakdown', rests: ['d'] }),
+      arcWith({ phase: 'drop' }),
+      arcWith({ phase: 'breakdown', rests: ['d'], phrases: 2, done: 1 }),
+      arcWith({ phase: 'breakdown', decided: drop(['d']) }),
+      arcWith({ phase: 'drop', forced: 'build' }),
+      newRadioIntensityArc()
+    ]
+    for (const arc of arcs) {
+      for (const can of [room, noRoom]) {
+        for (const quickDropCanSound of [true, false]) {
+          for (const lap of [0, 1]) {
+            const shown = intensityArcShown(arc, {
+              lap,
+              phraseLaps: 2,
+              room: can,
+              quickDropCanSound
+            })
+            for (const late of [false, true]) {
+              for (const action of ['build', 'drop'] as const) {
+                const next = intensityPressNow(arc, action, {
+                  lap,
+                  phraseLaps: 2,
+                  late,
+                  can,
+                  quickDropCanSound
+                })
+                // a press acts (changes the machine) exactly when its button says it can
+                const acts = next !== null && next !== arc
+                expect(acts).toBe(action === 'build' ? shown.canBuild : shown.canDrop)
+              }
+            }
+          }
+        }
+      }
+    }
   })
 })

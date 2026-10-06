@@ -1000,3 +1000,75 @@ export function radioIntensityButtonLabel(
   if (action === 'build') return waiting ? RADIO_BUILDING_WORD : RADIO_BUILD_WORD
   return waiting ? RADIO_DROPPING_WORD : RADIO_DROP_WORD
 }
+
+// ---- the buttons as both radios show and press them (section 6) ----
+
+/** Whether `drop` pressed now is the quick drop (in the build or the ride, no drop decided): it
+ * needs the planner's `low drop` to sound. */
+export function radioIntensityQuickDrop(arc: RadioIntensityArc): boolean {
+  return arc.phase !== 'breakdown' && arc.decided?.event !== 'drop'
+}
+
+/** A press of build or drop as both radios make it (pressRadioIntensity, `late` the turn's
+ * too-late-to-arm): null when it would do nothing. Late, pressRadioIntensity stores any press for
+ * the top after, even one whose event would do nothing there (a build with no room); this asks
+ * the press as if early first, so a late press is refused, or only halves the build, exactly when
+ * an early one would. Only a press that would decide an event now waits for the top after. Null
+ * too for a press that leaves the machine as it is (pressRadioIntensity's own `arc`: a build in a
+ * breakdown already at its shortest, a press its decided event already answers), and for a quick
+ * drop whose `low drop` cannot sound (`quickDropCanSound` false; absent: the caller asks it).
+ * The buttons are shown from the early answer (intensityArcShown), so a press acts exactly when
+ * its button says it can (sssketch review of 6b57ace0; ell.ing/radio review of 9d4f800). */
+export function intensityPressNow(
+  arc: RadioIntensityArc,
+  action: RadioIntensityAction,
+  where: {
+    lap: number
+    phraseLaps: number
+    late: boolean
+    can: RadioIntensityRoom
+    quickDropCanSound?: boolean
+  }
+): RadioIntensityArc | null {
+  if (action === 'drop' && where.quickDropCanSound === false && radioIntensityQuickDrop(arc)) {
+    return null
+  }
+  const at = { lap: where.lap, phraseLaps: where.phraseLaps, late: where.late, can: where.can }
+  const early = pressRadioIntensity(arc, action, { ...at, late: false })
+  if (early === null || early === arc) return null
+  if (!where.late || early.decided === arc.decided) return early
+  return pressRadioIntensity(arc, action, at)
+}
+
+/** What the `build` and `drop` buttons show (spec 6; the desktop's strip and phone, the web's full
+ * mode): the phase, each button's label (`building` / `dropping` while its press waits for the
+ * top), and whether a press would act now -- intensityPressNow with the rows now (`room`) and the
+ * quick drop's `low drop` (`quickDropCanSound`); the lap's late stretch only moves a press to the
+ * top after, never makes one act, so it is not asked. Neither acts before the machine has begun. */
+export interface RadioArcShown {
+  phase: RadioIntensityPhase
+  build: string
+  drop: string
+  canBuild: boolean
+  canDrop: boolean
+}
+
+export function intensityArcShown(
+  arc: RadioIntensityArc,
+  o: { lap: number; phraseLaps: number; room: RadioIntensityRoom; quickDropCanSound: boolean }
+): RadioArcShown {
+  const where = {
+    lap: o.lap,
+    phraseLaps: o.phraseLaps,
+    late: false,
+    can: o.room,
+    quickDropCanSound: o.quickDropCanSound
+  }
+  return {
+    phase: arc.phase,
+    build: radioIntensityButtonLabel('build', arc),
+    drop: radioIntensityButtonLabel('drop', arc),
+    canBuild: intensityPressNow(arc, 'build', where) !== null,
+    canDrop: intensityPressNow(arc, 'drop', where) !== null
+  }
+}
