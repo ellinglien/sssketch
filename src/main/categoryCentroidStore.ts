@@ -133,7 +133,7 @@ export function saveCategoryCentroidStore(
     const fd = openSync(tmpPath, 'w')
     try {
       const contents = { ...store, trainedPairs }
-      writeFileSync(fd, JSON.stringify(contents, null, 2), 'utf-8') // loops until all written
+      writeFileSync(fd, JSON.stringify(contents), 'utf-8') // compact; loops until all written
       fsyncSync(fd)
     } finally {
       closeSync(fd)

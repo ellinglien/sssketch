@@ -166,4 +166,20 @@ describe('categoryCentroidStore', () => {
     const onDisk = JSON.parse(readFileSync(join(userDataDir, 'busCentroids.json'), 'utf-8'))
     expect(onDisk).toEqual({ ...store, trainedPairs: [{ stemCID: 'cid-1', busId: 'drums' }] })
   })
+
+  // Review of 6fd465fe, minor 6: trainedPairs grows with every confirmed
+  // stem, and nobody reads the file by hand: no indentation.
+  it('the file is written as compact JSON', async () => {
+    const { saveCategoryCentroidStore } = await import('./categoryCentroidStore')
+    const store = recordConfirmedCategory(
+      emptyCategoryCentroidStore(),
+      'bus',
+      'drums',
+      new Array(19).fill(1)
+    )
+    const trainedPairs = [{ stemCID: 'cid-1', busId: 'drums' }]
+    saveCategoryCentroidStore(store, trainedPairs)
+    const onDisk = readFileSync(join(userDataDir, 'busCentroids.json'), 'utf-8')
+    expect(onDisk).toBe(JSON.stringify({ ...store, trainedPairs }))
+  })
 })
