@@ -27,7 +27,8 @@ describe('discoverSettingsStore', () => {
     expect(loadDiscoverSettings()).toEqual({
       consentedToLibraryScan: false,
       traitMatchBar: 0.75,
-      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) }
+      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) },
+      radioView: 'simple'
     })
   })
 
@@ -68,12 +69,14 @@ describe('discoverSettingsStore', () => {
     saveDiscoverSettings({
       consentedToLibraryScan: true,
       traitMatchBar: 0.75,
-      radio: DEFAULT_RADIO_SETTINGS
+      radio: DEFAULT_RADIO_SETTINGS,
+      radioView: 'simple'
     })
     expect(loadDiscoverSettings()).toEqual({
       consentedToLibraryScan: true,
       traitMatchBar: 0.75,
-      radio: DEFAULT_RADIO_SETTINGS
+      radio: DEFAULT_RADIO_SETTINGS,
+      radioView: 'simple'
     })
   })
 
@@ -82,14 +85,16 @@ describe('discoverSettingsStore', () => {
     saveDiscoverSettings({
       consentedToLibraryScan: true,
       traitMatchBar: 0.75,
-      radio: DEFAULT_RADIO_SETTINGS
+      radio: DEFAULT_RADIO_SETTINGS,
+      radioView: 'simple'
     })
     writeFileSync(join(dir, 'discoverSettings.json'), 'not valid json{{{', 'utf-8')
     expect(() => loadDiscoverSettings()).not.toThrow()
     expect(loadDiscoverSettings()).toEqual({
       consentedToLibraryScan: false,
       traitMatchBar: 0.75,
-      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) }
+      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) },
+      radioView: 'simple'
     })
   })
 
@@ -98,13 +103,15 @@ describe('discoverSettingsStore', () => {
     saveDiscoverSettings({
       consentedToLibraryScan: true,
       traitMatchBar: 0.9,
-      radio: DEFAULT_RADIO_SETTINGS
+      radio: DEFAULT_RADIO_SETTINGS,
+      radioView: 'simple'
     })
     expect(loadDiscoverSettings().traitMatchBar).toBe(0.9)
     saveDiscoverSettings({
       consentedToLibraryScan: true,
       traitMatchBar: 0.33,
-      radio: DEFAULT_RADIO_SETTINGS
+      radio: DEFAULT_RADIO_SETTINGS,
+      radioView: 'simple'
     })
     expect(loadDiscoverSettings().traitMatchBar).toBe(0.75)
   })
@@ -135,8 +142,10 @@ describe('discoverSettingsStore', () => {
         sizedBuilds: false,
         energy: 20,
         drama: 85
-      }
+      },
+      radioView: 'advanced'
     })
+    expect(loadDiscoverSettings().radioView).toBe('advanced')
     expect(loadDiscoverSettings().radio).toEqual({
       pace: 'fast',
       paceBars: { min: 5, max: 9 },
@@ -159,6 +168,29 @@ describe('discoverSettingsStore', () => {
       energy: 20,
       drama: 85
     })
+  })
+
+  // Spec 2026-10-05-radio-simple-view-design: simple is the default, advanced is remembered.
+  it('radio view: simple for a file without it or with nonsense, advanced kept', async () => {
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ consentedToLibraryScan: true, radio: { pace: 'mid' } }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radioView).toBe('simple')
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radioView: 'full' }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radioView).toBe('simple')
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radioView: 'advanced' }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radioView).toBe('advanced')
   })
 
   it('sized builds: a saved file without the field loads on, one saved off stays off', async () => {
@@ -256,7 +288,8 @@ describe('discoverSettingsStore', () => {
     expect(loadDiscoverSettings()).toEqual({
       consentedToLibraryScan: true,
       traitMatchBar: 0.9,
-      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) }
+      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) },
+      radioView: 'simple'
     })
   })
 })

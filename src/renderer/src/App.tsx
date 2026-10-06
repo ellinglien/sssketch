@@ -117,6 +117,7 @@ import { usePlacedFlatStems } from './state/usePlacedFlatStems'
 import type { DiscoverSettings } from '../../main/discoverSettingsStore'
 import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
 import { DEFAULT_RADIO_SETTINGS, type RadioSettings } from '@shared/radioSchedule'
+import { DEFAULT_RADIO_VIEW } from '@shared/radioView'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 
 /** Tracks what the currently-open project actually is, so Save/Export know
@@ -1695,7 +1696,8 @@ function Frame(): React.JSX.Element {
   const [discoverSettings, setDiscoverSettingsState] = useState<DiscoverSettings>({
     consentedToLibraryScan: false,
     traitMatchBar: DEFAULT_TRAIT_BAR,
-    radio: DEFAULT_RADIO_SETTINGS
+    radio: DEFAULT_RADIO_SETTINGS,
+    radioView: DEFAULT_RADIO_VIEW
   })
   const discoverConsented = discoverSettings.consentedToLibraryScan
   const traitMatchBar = discoverSettings.traitMatchBar

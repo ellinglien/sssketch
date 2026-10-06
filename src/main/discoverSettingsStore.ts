@@ -8,6 +8,7 @@ import {
   normalizeRadioSettings,
   type RadioSettings
 } from '@shared/radioSchedule'
+import { DEFAULT_RADIO_VIEW, normalizeRadioView, type RadioView } from '@shared/radioView'
 
 export interface DiscoverSettings {
   /** Whether the user has explicitly agreed to the whole-library background
@@ -29,6 +30,10 @@ export interface DiscoverSettings {
    * because re-picking them every launch is an annoyance with a four-line
    * fix. docs/superpowers/specs/2026-09-28-radio-controls-design.md. */
   radio: RadioSettings
+  /** The radio view's `simple` / `advanced` switch (spec 2026-10-05-radio-simple-view-design):
+   * what the view shows, never what radio does, so it is not a RadioSettings field (a change to
+   * `radio` re-runs the panel's radio effects). Simple unless saved advanced. */
+  radioView: RadioView
 }
 
 const STORE_FILENAME = 'discoverSettings.json'
@@ -40,7 +45,8 @@ function storePath(): string {
 const DEFAULT_SETTINGS: DiscoverSettings = {
   consentedToLibraryScan: false,
   traitMatchBar: DEFAULT_TRAIT_BAR,
-  radio: DEFAULT_RADIO_SETTINGS
+  radio: DEFAULT_RADIO_SETTINGS,
+  radioView: DEFAULT_RADIO_VIEW
 }
 
 /** Mirrors categoryCentroidStore.ts's own loadCategoryCentroidStore -- an
@@ -58,7 +64,8 @@ export function loadDiscoverSettings(): DiscoverSettings {
         // `parsed.radioPace` is the 1.3.0 shape -- flat, no `radio` object.
         // Passing it through migrates a real user's chosen pace rather than
         // silently resetting it. An explicit `radio.pace` always wins.
-        radio: normalizeRadioSettings(parsed.radio, (parsed as { radioPace?: unknown }).radioPace)
+        radio: normalizeRadioSettings(parsed.radio, (parsed as { radioPace?: unknown }).radioPace),
+        radioView: normalizeRadioView(parsed.radioView)
       },
       parsed.radio?.foldSeed
     )
