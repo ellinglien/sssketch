@@ -9,7 +9,7 @@ import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readTableSignal } from './tableChangeSignal'
+import { primeTableCount, readTableSignal } from './tableChangeSignal'
 import { bumpTableWriteVersion } from './tableWriteVersion'
 
 let dir: string
@@ -184,5 +184,45 @@ describe('readTableSignal edge cases (unchanged behaviour)', () => {
     const db = new Database(':memory:')
     db.exec(`CREATE TABLE Jams (JamCID TEXT)`)
     expect(readTableSignal(db, 'Jams')).toMatchObject({ count: 0, maxRowid: null })
+  })
+})
+
+describe('primeTableCount (a count known without COUNT, faster startup)', () => {
+  it('is answered by readTableSignal with no COUNT while the head has not moved', () => {
+    const ro = new Database(seeded(5), { readonly: true })
+    const counted = counts(ro)
+    expect(primeTableCount(ro, 'Riffs', 5)).toBe(true)
+    expect(readTableSignal(ro, 'Riffs')).toMatchObject({ count: 5, maxRowid: 5 })
+    expect(counted()).toBe(0)
+  })
+
+  it('counts again once another connection moves the table', () => {
+    const path = seeded(5)
+    const ro = new Database(path, { readonly: true })
+    primeTableCount(ro, 'Riffs', 5)
+    const rw = new Database(path)
+    rw.prepare(`INSERT INTO Riffs (RiffCID) VALUES ('new')`).run()
+    const counted = counts(ro)
+    expect(readTableSignal(ro, 'Riffs')?.count).toBe(6)
+    expect(counted()).toBe(1)
+  })
+
+  it('primes a read-write connection too, until it writes', () => {
+    const db = new Database(seeded(3))
+    const counted = counts(db)
+    primeTableCount(db, 'Riffs', 3)
+    expect(readTableSignal(db, 'Riffs')?.count).toBe(3)
+    expect(counted()).toBe(0)
+    db.prepare(`INSERT INTO Other VALUES (1)`).run()
+    expect(readTableSignal(db, 'Riffs')?.count).toBe(3)
+    expect(counted()).toBe(1)
+  })
+
+  it('refuses inside a transaction, and on a table it cannot read', () => {
+    const db = new Database(seeded(3))
+    db.exec('BEGIN')
+    expect(primeTableCount(db, 'Riffs', 3)).toBe(false)
+    db.exec('COMMIT')
+    expect(primeTableCount(db, 'Stems', 3)).toBe(false)
   })
 })

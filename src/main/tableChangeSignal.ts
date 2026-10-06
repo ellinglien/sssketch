@@ -167,6 +167,38 @@ export function sameTableHead(a: TableHead, b: TableHead): boolean {
   return a.maxRowid === b.maxRowid && a.dataVersion === b.dataVersion && a.writes === b.writes
 }
 
+/** Records `count` as `table`'s row count right now, as if readTableSignal
+ * had just counted it: the next readTableSignal answers it with no COUNT
+ * while the cheap half of the signal has not moved (CountMemo above). For a
+ * count known without counting (tableCountSeed.ts: the archive file is
+ * unchanged since a saved count, or a sliced count that just finished) --
+ * the first COUNT of the archive's Stems is 2.3 s cold off the USB drive,
+ * one synchronous statement. The caller vouches for the count; `expect`,
+ * when given, is the head it was taken at: a head that has moved since
+ * (another connection committed, or this process wrote the table) refuses.
+ * False (nothing recorded) then, inside a transaction, or when the table
+ * can't be read. */
+export function primeTableCount(
+  db: Database.Database,
+  table: ChangeSignalTable,
+  count: number,
+  expect?: TableHead
+): boolean {
+  if (db.inTransaction) return false
+  const read = readTableHead(db, table)
+  if (!read || (expect && !sameTableHead(read, expect))) return false
+  const { writes, ...head } = read
+  try {
+    const totalChanges = db.readonly
+      ? null
+      : (db.prepare(`SELECT total_changes() AS n`).get() as { n: number }).n
+    remember(db, table, { ...head, writes, totalChanges, count })
+    return true
+  } catch {
+    return false
+  }
+}
+
 function readSignal(db: Database.Database, table: ChangeSignalTable): TableSignal | null {
   const read = readTableHead(db, table)
   if (!read) {
