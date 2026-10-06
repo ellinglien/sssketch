@@ -472,7 +472,7 @@ const MOVE_TEXT: Readonly<Record<TurnaroundMove, string>> = {
   'drum drop': 'a drums row drops out for the end of the phrase',
   'low drop': 'the drums and the bass drop out together',
   stop: 'everything stops but one melodic row',
-  wash: 'a swell of reverb blurs all but the drums, dry again on the one',
+  wash: 'a swell of reverb on the row about to leave, or a hook on its way out; with neither, all but the drums. dry again on the one',
   lift: 'a filter sweeps the low end out',
   dip: 'a filter sweeps the top end out',
   riser: 'a noise sweep climbs toward the one'

@@ -251,6 +251,16 @@ describe('the radio guide: its claims match the code', () => {
     ])
   })
 
+  it('the wash card names the rows a wash is on (radioTurnaround bedOf: the leaving row, else a hook going out, else all but the drums)', () => {
+    const wash = RADIO_GUIDE.sections
+      .find((s) => s.id === 'turnarounds')!
+      .blocks.flatMap((b) => (b.type === 'cards' ? b.items : []))
+      .find((i) => i.key === TURNAROUND_MOVE_LABEL.wash)
+    expect(wash?.text).toContain('the row about to leave')
+    expect(wash?.text).toContain('a hook on its way out')
+    expect(wash?.text).toContain('with neither, all but the drums')
+  })
+
   it('the web turnaround line names every family', () => {
     for (const f of TURNAROUND_FAMILIES) expect(textOf('web')).toContain(f)
   })
