@@ -8,6 +8,7 @@
 // rowid-range scans of a small SSD table, which is cheap.
 import type Database from 'better-sqlite3'
 import { countWork } from './workCounters'
+import { getStemPriority, getStemPriorityUsername } from './stemPriority'
 import {
   isScanCacheCurrent,
   newScanCacheState,
@@ -21,6 +22,11 @@ export interface ArtistStemRow {
 }
 
 const ARTIST_PAGE = 2000
+/** "Only my stems" for a name stemPriority.ts does not keep (the
+ * RIFF_LIBRARY_USERNAME fallback): his own run to ~69k rows, ~34 pages at
+ * ARTIST_PAGE, each up to ~250 ms of main-process block cold off the USB
+ * archive and again after every sync. A quarter of that per page. */
+const OWN_STEMS_PAGE = 500
 /** Per db. 31k rows is ~4.6 MB of row objects and CID strings; a handful
  * of artists per session is plenty. Combine artists keeps a whole selection
  * (at most MAX_COMBINED_ARTISTS) cached: discoverArtistStems.test.ts pins it. */
@@ -100,7 +106,11 @@ function perDbFor(db: Database.Database): PerDb {
   return perDb
 }
 
-function rowsForDb(db: Database.Database, artist: string): Promise<ArtistStemRow[]> {
+function rowsForDb(
+  db: Database.Database,
+  artist: string,
+  pageSize: number
+): Promise<ArtistStemRow[]> {
   const perDb = perDbFor(db)
   if (perDb.state !== null && !isScanCacheCurrent(db, 'Stems', perDb.state)) {
     perDb.state = null
@@ -127,7 +137,7 @@ function rowsForDb(db: Database.Database, artist: string): Promise<ArtistStemRow
   let walk: Promise<ArtistStemRow[]> | null = null
   walk = (async (): Promise<ArtistStemRow[]> => {
     try {
-      const rows = await readArtistStemRows(db, artist)
+      const rows = await readArtistStemRows(db, artist, pageSize)
       if (perDb.generation === generation) {
         perDb.artists.delete(artist)
         perDb.artists.set(artist, rows)
@@ -147,15 +157,18 @@ function rowsForDb(db: Database.Database, artist: string): Promise<ArtistStemRow
   return walk
 }
 
-/** Every db's rows, merged; the FIRST db listing a StemCID decides its jam. */
+/** Every db's rows, merged; the FIRST db listing a StemCID decides its jam.
+ * `pageSize` only shapes a walk this call starts (one already in flight or
+ * cached is shared whatever its page size). */
 export async function getArtistStemRows(
   dbs: readonly Database.Database[],
-  artist: string
+  artist: string,
+  pageSize = ARTIST_PAGE
 ): Promise<ArtistStemRow[]> {
   const seen = new Set<string>()
   const out: ArtistStemRow[] = []
   for (const db of dbs) {
-    for (const row of await rowsForDb(db, artist)) {
+    for (const row of await rowsForDb(db, artist, pageSize)) {
       if (seen.has(row.stemCID)) continue
       seen.add(row.stemCID)
       out.push(row)
@@ -168,9 +181,10 @@ export async function getArtistStemRows(
  * ~2 ms, so no second cache layer here. */
 export async function getArtistStemCIDs(
   dbs: readonly Database.Database[],
-  artist: string
+  artist: string,
+  pageSize = ARTIST_PAGE
 ): Promise<ReadonlySet<string>> {
-  return new Set((await getArtistStemRows(dbs, artist)).map((r) => r.stemCID))
+  return new Set((await getArtistStemRows(dbs, artist, pageSize)).map((r) => r.stemCID))
 }
 
 /** The stems a Discover roll may draw from, applied BEFORE each pool's
@@ -180,11 +194,15 @@ export async function getArtistStemCIDs(
  *
  * "Only my stems" used to sample 1,000 stems from the whole library and
  * filter by owner afterwards (the pools' post-filters, kept as a safety
- * net), so where his own are 1% a roll had ~10 candidates. Read the same
- * way as an artist's (cached per db and name, Stems_IndexUser windows) --
- * not through stemPriority.ts, which caches one username, while Discover's
- * targetUser may be the RIFF_LIBRARY_USERNAME fallback: the two would
- * evict each other. */
+ * net), so where his own are 1% a roll had ~10 candidates. His own come
+ * from stemPriority.ts when targetUser is the name it keeps (the usual
+ * case): already built, kept current by a rowid watermark, and asked for
+ * under that same name so it is never evicted. Its dbs are
+ * candidateDbsForRiff plus the own db -- the same dbs listJamsWithDb lists
+ * Discover's jams from -- so `dbs` is not consulted on that path. Any other
+ * name (the RIFF_LIBRARY_USERNAME fallback) is read as an artist is (cached
+ * per db and name, Stems_IndexUser windows) in OWN_STEMS_PAGE pages.
+ */
 export async function discoverStemRestriction(
   dbs: readonly Database.Database[],
   {
@@ -195,6 +213,8 @@ export async function discoverStemRestriction(
 ): Promise<ReadonlySet<string> | undefined> {
   const artistName = artist?.trim() || undefined
   if (artistName) return getArtistStemCIDs(dbs, artistName)
-  if (onlyOwnStems && targetUser) return getArtistStemCIDs(dbs, targetUser)
-  return undefined
+  const ownName = onlyOwnStems ? targetUser?.trim() || undefined : undefined
+  if (!ownName) return undefined
+  if (ownName === getStemPriorityUsername()) return (await getStemPriority(ownName)).own
+  return getArtistStemCIDs(dbs, ownName, OWN_STEMS_PAGE)
 }

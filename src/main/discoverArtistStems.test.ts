@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import {
   abortArtistStemWalks,
+  discoverStemRestriction,
   getArtistStemCIDs,
   getArtistStemRows,
   readArtistStemRows,
@@ -12,6 +13,7 @@ import {
 import { MAX_COMBINED_ARTISTS } from '@shared/artistSelection'
 import { countWork } from './workCounters'
 import { readTableSignal } from './tableChangeSignal'
+import { getStemPriority, getStemPriorityUsername, type StemPriority } from './stemPriority'
 
 // Pass-through spy: countWork is a no-op in tests (counters never enabled),
 // so recording the calls changes nothing else.
@@ -24,6 +26,13 @@ vi.mock('./tableChangeSignal', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./tableChangeSignal')>()
   return { ...actual, readTableSignal: vi.fn(actual.readTableSignal) }
 })
+
+// The app's own-stem set (stemPriority.ts): no username configured unless a
+// test says so.
+vi.mock('./stemPriority', () => ({
+  getStemPriorityUsername: vi.fn(() => null),
+  getStemPriority: vi.fn()
+}))
 
 function pageReads(): number {
   return vi
@@ -49,6 +58,8 @@ function seed(db: Database.Database, stemCID: string, jam: string, user: string 
 afterEach(() => {
   vi.useRealTimers()
   resetArtistStemAbortForTests()
+  vi.mocked(getStemPriorityUsername).mockReset().mockReturnValue(null)
+  vi.mocked(getStemPriority).mockReset()
 })
 
 describe('readArtistStemRows', () => {
@@ -204,5 +215,43 @@ describe('abort on quit', () => {
 describe('combine artists', () => {
   it('a whole selection fits the per-db artist cache', () => {
     expect(MAX_CACHED_ARTISTS).toBeGreaterThanOrEqual(MAX_COMBINED_ARTISTS)
+  })
+})
+
+// Review of 99b33f45: a "mine" roll read his ~69k rows in 2,000-row pages
+// (~120-250 ms of main-process block each, cold off the USB archive), again
+// after every sync, alongside stemPriority.ts reading the same rows.
+describe('discoverStemRestriction: only my stems', () => {
+  function priority(own: string[]): StemPriority {
+    return { username: 'elling', own: new Set(own), favourites: new Set(), version: 1 }
+  }
+
+  it("the stem-priority username's roll takes its kept own set and reads no pages", async () => {
+    const db = archive()
+    seed(db, 'e1', 'jam1', 'elling')
+    vi.mocked(getStemPriorityUsername).mockReturnValue('elling')
+    vi.mocked(getStemPriority).mockResolvedValue(priority(['kept1', 'kept2']))
+    vi.mocked(countWork).mockClear()
+    const set = await discoverStemRestriction([db], { onlyOwnStems: true, targetUser: ' elling ' })
+    expect([...(set ?? [])].sort()).toEqual(['kept1', 'kept2'])
+    expect(pageReads()).toBe(0)
+    // asked for that same name, so the kept set is never evicted
+    expect(vi.mocked(getStemPriority)).toHaveBeenCalledWith('elling')
+  })
+
+  it('another name (the fallback) is read in pages of 500', async () => {
+    const db = archive()
+    const insert = db.prepare(
+      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName) VALUES (?, 'jam1', 'elling')`
+    )
+    db.transaction(() => {
+      for (let i = 0; i < 1001; i++) insert.run(`e${i}`)
+    })()
+    vi.mocked(getStemPriorityUsername).mockReturnValue('someone')
+    vi.mocked(countWork).mockClear()
+    const set = await discoverStemRestriction([db], { onlyOwnStems: true, targetUser: 'elling' })
+    expect(set?.size).toBe(1001)
+    expect(pageReads()).toBe(3)
+    expect(vi.mocked(getStemPriority)).not.toHaveBeenCalled()
   })
 })
