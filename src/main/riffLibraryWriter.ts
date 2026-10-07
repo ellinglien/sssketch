@@ -15,6 +15,7 @@ import {
 import { bumpTableWriteVersion } from './tableWriteVersion'
 import { normalizeEndlesssUsername } from '@shared/endlesssUsername'
 import { MIGRATION_DONE_STAMP, recordSeen, seenStamp } from './startupBackfillGate'
+import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 
 export function upsertJam(db: Database.Database, jamCID: string, publicName: string): void {
   db.prepare(
@@ -25,7 +26,7 @@ export function upsertJam(db: Database.Database, jamCID: string, publicName: str
 }
 
 /** Tables whose rows name their jam in OwnerJamCID. */
-const OWNER_JAM_TABLES = ['Riffs', 'Stems', 'Tags'] as const
+const OWNER_JAM_TABLES = ['Riffs', 'Stems', 'Tags', 'RiffSyncFailures'] as const
 
 /** The Discover caches are derived, but they are only rebuilt on a row-count
  * change, which a move is not -- so they move too, when they exist (tests
@@ -135,13 +136,114 @@ export function isJamSyncComplete(db: Database.Database, jamCID: string): boolea
 /** Whether any of the jam's riffs was listed but never resolved -- a jam
  * marked complete with one has not really been walked to its end (the old
  * rule took a failed page for the end, and went past a riff that failed). One
- * probe of idx_riffs_needs_detail. */
+ * the sync has given up on (recordRiffSyncFailure) is not one: it would have
+ * the whole jam walked again on every sync. One probe of
+ * idx_riffs_needs_detail, and of the failures' primary key per riff it
+ * finds. */
 export function hasUnresolvedRiffs(db: Database.Database, jamCID: string): boolean {
+  ensureRiffSyncFailuresSchema(db)
   return (
     db
-      .prepare(`SELECT 1 FROM Riffs WHERE OwnerJamCID = ? AND AppVersion IS NULL LIMIT 1`)
+      .prepare(
+        `SELECT 1 FROM Riffs r WHERE r.OwnerJamCID = ? AND r.AppVersion IS NULL
+           AND NOT EXISTS (SELECT 1 FROM RiffSyncFailures f
+                           WHERE f.RiffCID = r.RiffCID AND ${GIVEN_UP})
+         LIMIT 1`
+      )
       .get(jamCID) !== undefined
   )
+}
+
+/** A riff whose resolve has failed this many times is given up on. */
+export const RIFF_SYNC_GIVE_UP_ATTEMPTS = 5
+
+/** Why a riff's resolve failed, as RiffSyncFailures records it: `error`
+ * (anything worth asking again: a 5xx, a timeout, a short answer),
+ * `missing` (Endlesss says a record is gone -- given up at once), or
+ * `not-in-feed` (a shared feed listed it, but its listing held no detail for
+ * it). A cancel, a 429 or a lost session is not the riff's doing, and is not
+ * recorded. */
+export type RiffSyncFailureReason = 'error' | 'missing' | 'not-in-feed'
+
+/** A RiffSyncFailures row the sync has given up on. */
+const GIVEN_UP = `(Attempts >= ${RIFF_SYNC_GIVE_UP_ATTEMPTS} OR LastReason = 'missing')`
+
+const riffSyncFailuresReady = new WeakSet<Database.Database>()
+
+/** RiffSyncFailures: the riffs whose resolve has failed, by riff (review of
+ * 97eb9189: one that can never resolve kept its jam unfinished for good, and
+ * every sync walked the jam to it again). JamRewalkExcess: how far a jam's
+ * Endlesss total may stay above the riffs held here without a re-walk
+ * (riffLibrarySync.ts). Both created on first use, in the own db only --
+ * the sync never writes anywhere else. */
+function ensureRiffSyncFailuresSchema(db: Database.Database): void {
+  if (riffSyncFailuresReady.has(db)) return
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS RiffSyncFailures (
+      RiffCID TEXT PRIMARY KEY,
+      OwnerJamCID TEXT NOT NULL,
+      Attempts INTEGER NOT NULL,
+      LastReason TEXT NOT NULL,
+      LastAttemptAt INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_riffsyncfailures_jam ON RiffSyncFailures(OwnerJamCID);
+    CREATE TABLE IF NOT EXISTS JamRewalkExcess (
+      JamCID TEXT PRIMARY KEY,
+      Excess INTEGER NOT NULL
+    );
+  `)
+  if (!db.inTransaction) riffSyncFailuresReady.add(db)
+}
+
+/** Records one failed resolve of `riffCID` (the sync calls this at most once
+ * per riff per run) and returns whether the riff is now given up on: after
+ * RIFF_SYNC_GIVE_UP_ATTEMPTS, or at once when Endlesss says it is gone. A
+ * riff given up on reads as done to areAllResolved, filterUnresolved and
+ * hasUnresolvedRiffs, so its jam can be complete; it is never asked for
+ * again, unless the jam is un-synced (deleteJamRows). */
+export function recordRiffSyncFailure(
+  db: Database.Database,
+  jamCID: string,
+  riffCID: string,
+  reason: RiffSyncFailureReason
+): boolean {
+  ensureRiffSyncFailuresSchema(db)
+  const row = db
+    .prepare(
+      `INSERT INTO RiffSyncFailures (RiffCID, OwnerJamCID, Attempts, LastReason, LastAttemptAt)
+       VALUES (?, ?, 1, ?, ?)
+       ON CONFLICT(RiffCID) DO UPDATE SET
+         OwnerJamCID = excluded.OwnerJamCID, Attempts = Attempts + 1,
+         LastReason = excluded.LastReason, LastAttemptAt = excluded.LastAttemptAt
+       RETURNING ${GIVEN_UP} AS givenUp`
+    )
+    .get(riffCID, jamCID, reason, Date.now()) as { givenUp: number }
+  return row.givenUp === 1
+}
+
+/** Forgets a riff's failures: it resolved. */
+export function clearRiffSyncFailure(db: Database.Database, riffCID: string): void {
+  ensureRiffSyncFailuresSchema(db)
+  db.prepare(`DELETE FROM RiffSyncFailures WHERE RiffCID = ?`).run(riffCID)
+}
+
+/** How many more riffs the jam's Endlesss total may name than are held here
+ * before a sync walks the whole jam again (riffLibrarySync.ts): what was
+ * left over the last time a walk reached the jam's end with nothing failing.
+ * 0 until then. */
+export function jamRewalkExcess(db: Database.Database, jamCID: string): number {
+  ensureRiffSyncFailuresSchema(db)
+  const row = db.prepare(`SELECT Excess FROM JamRewalkExcess WHERE JamCID = ?`).get(jamCID) as
+    { Excess: number } | undefined
+  return row?.Excess ?? 0
+}
+
+export function setJamRewalkExcess(db: Database.Database, jamCID: string, excess: number): void {
+  ensureRiffSyncFailuresSchema(db)
+  db.prepare(
+    `INSERT INTO JamRewalkExcess (JamCID, Excess) VALUES (?, ?)
+     ON CONFLICT(JamCID) DO UPDATE SET Excess = excluded.Excess`
+  ).run(jamCID, excess)
 }
 
 /** How many riffs of the jam are held here, resolved or not. */
@@ -172,8 +274,9 @@ export const STEMLESS_RIFF_HEAL_MARKER = 'heal:stemless-jam-riffs'
  * one riff-doc request, once, and is saved again as it was (resolveJamRiff
  * resolves a riff with no active slots) -- which is why this runs once, not
  * on every sync. A shared feed's riffs are left alone: its listing carries
- * every stem, so none was built from a failed lookup. A stem in slot 9+
- * (RiffStemsExtra) is a stem. */
+ * every stem, so none was built from a failed lookup. So is the discovered
+ * room's (DISCOVERED_JAM_CID): kept from Discover, never synced. A stem in
+ * slot 9+ (RiffStemsExtra) is a stem. */
 export function healStemlessRiffs(db: Database.Database): { riffs: number; jams: number } {
   if (seenStamp(db, STEMLESS_RIFF_HEAL_MARKER) === MIGRATION_DONE_STAMP) {
     return { riffs: 0, jams: 0 }
@@ -183,15 +286,20 @@ export function healStemlessRiffs(db: Database.Database): { riffs: number; jams:
     ? ` AND NOT EXISTS (SELECT 1 FROM RiffStemsExtra x WHERE x.RiffCID = Riffs.RiffCID)`
     : ''
   const stemless =
-    `AppVersion IS NOT NULL AND substr(OwnerJamCID, 1, 7) != 'shared:' AND ${noSlot}` + noExtra
+    `AppVersion IS NOT NULL AND substr(OwnerJamCID, 1, 7) != 'shared:' ` +
+    `AND OwnerJamCID != @discovered AND ${noSlot}` +
+    noExtra
+  const params = { discovered: DISCOVERED_JAM_CID }
   let healed = { riffs: 0, jams: 0 }
   db.transaction(() => {
     const jams = (
-      db.prepare(`SELECT DISTINCT OwnerJamCID FROM Riffs WHERE ${stemless}`).all() as {
+      db.prepare(`SELECT DISTINCT OwnerJamCID FROM Riffs WHERE ${stemless}`).all(params) as {
         OwnerJamCID: string
       }[]
     ).map((row) => row.OwnerJamCID)
-    const riffs = db.prepare(`UPDATE Riffs SET AppVersion = NULL WHERE ${stemless}`).run().changes
+    const riffs = db
+      .prepare(`UPDATE Riffs SET AppVersion = NULL WHERE ${stemless}`)
+      .run(params).changes
     const incomplete = db.prepare(`UPDATE Jams SET SyncComplete = 0 WHERE JamCID = ?`)
     for (const jam of jams) incomplete.run(jam)
     recordSeen(db, STEMLESS_RIFF_HEAL_MARKER, MIGRATION_DONE_STAMP)
@@ -401,7 +509,8 @@ export function isStemLedgered(db: Database.Database, stemCID: string): boolean 
 }
 
 /** True iff every one of `riffCIDs` already has a non-NULL AppVersion in
- * `Riffs` -- i.e., nothing in this list is a gap. Used by the sync engine's
+ * `Riffs`, or is given up on (recordRiffSyncFailure) -- i.e., nothing in this
+ * list is a gap. Used by the sync engine's
  * per-page "is there anything left to do here" stop-check, distinct from
  * findRiffsNeedingDetail (which returns the gaps themselves, not a
  * yes/no over a specific candidate set). Delegates to filterUnresolved
@@ -414,15 +523,19 @@ export function areAllResolved(db: Database.Database, riffCIDs: string[]): boole
 /** Which of `riffCIDs` do NOT yet have a resolved (non-NULL AppVersion)
  * Riffs row -- the complement of areAllResolved, but returning the actual
  * subset rather than a single boolean, for callers that need to know WHICH
- * ones still need resolving (not just whether any do). */
+ * ones still need resolving (not just whether any do). A riff the sync has
+ * given up on (recordRiffSyncFailure) needs none. */
 export function filterUnresolved(db: Database.Database, riffCIDs: string[]): string[] {
   if (riffCIDs.length === 0) return []
+  ensureRiffSyncFailuresSchema(db)
   const placeholders = riffCIDs.map(() => '?').join(',')
   const resolvedRows = db
     .prepare(
-      `SELECT RiffCID FROM Riffs WHERE RiffCID IN (${placeholders}) AND AppVersion IS NOT NULL`
+      `SELECT RiffCID FROM Riffs WHERE RiffCID IN (${placeholders}) AND AppVersion IS NOT NULL
+       UNION
+       SELECT RiffCID FROM RiffSyncFailures WHERE RiffCID IN (${placeholders}) AND ${GIVEN_UP}`
     )
-    .all(...riffCIDs) as { RiffCID: string }[]
+    .all(...riffCIDs, ...riffCIDs) as { RiffCID: string }[]
   const resolvedSet = new Set(resolvedRows.map((r) => r.RiffCID))
   return riffCIDs.filter((cid) => !resolvedSet.has(cid))
 }
@@ -462,8 +575,12 @@ export function deleteJamRows(db: Database.Database, jamCID: string): string[] {
   // binding a 20,000-riffCID list from JS.
   for (const stemCID of extraStemCIDsForJam(db, jamCID)) candidateStemCIDs.add(stemCID)
 
+  ensureRiffSyncFailuresSchema(db)
   db.transaction(() => {
     deleteExtraStemSlotsForJam(db, jamCID)
+    // A re-sync starts afresh: riffs given up on are asked for again.
+    db.prepare(`DELETE FROM RiffSyncFailures WHERE OwnerJamCID = ?`).run(jamCID)
+    db.prepare(`DELETE FROM JamRewalkExcess WHERE JamCID = ?`).run(jamCID)
     db.prepare(`DELETE FROM Riffs WHERE OwnerJamCID = ?`).run(jamCID)
     db.prepare(`DELETE FROM Tags WHERE OwnerJamCID = ?`).run(jamCID)
     db.prepare(`DELETE FROM Jams WHERE JamCID = ?`).run(jamCID)

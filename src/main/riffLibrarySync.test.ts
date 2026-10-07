@@ -920,7 +920,7 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
 
     it('during the stem lookup stops the run; the next sync waits out the backoff without a request', async () => {
       const { syncJam } = await loggedIn()
-      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
       const db = freshDb()
       let limit = true
       const server = jamServer({
@@ -950,7 +950,7 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
       expect(syncComplete(db, 'jam_1')).toBe(0)
 
       limit = false
-      vi.setSystemTime(Date.now() + 31_000)
+      vi.advanceTimersByTime(31_000)
       const third = await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
       expect(third).toEqual({ stopped: null })
       expect(count(db, 'AppVersion = 1 AND StemCID_1 IS NOT NULL')).toBe(30)
@@ -959,7 +959,7 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
 
     it('on a listing page stops the run, a minute by default', async () => {
       const { syncJam } = await loggedIn()
-      vi.useFakeTimers({ toFake: ['Date'] })
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
       const db = freshDb()
       const server = jamServer({
         cids: () => cidsOf('r', 230),
@@ -975,6 +975,98 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
       }
       expect(outcome).toEqual({ stopped: 'rate-limited', retryAt: Date.now() + 60_000 })
       expect(syncComplete(db, 'jam_1')).toBe(0)
+    })
+
+    /** A jam whose every stem lookup gets a 429 asking for `seconds`. */
+    function limitedJam(seconds: number): JamServer {
+      return jamServer({
+        cids: () => cidsOf('r', 3),
+        failStemDocs: () =>
+          Promise.resolve(
+            new Response('slow down', {
+              status: 429,
+              headers: { 'Retry-After': String(seconds) }
+            })
+          )
+      })
+    }
+
+    // Review of 97eb9189: the shared feed and the jams are one account to
+    // Endlesss.
+    it('during a jam sync, holds off a shared-feed sync started after it', async () => {
+      const { syncJam, syncSharedFeed } = await loggedIn()
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+      const db = freshDb()
+      const feedFetch = vi.fn(async () => new Response(JSON.stringify({ data: [] })))
+      const restore = quietErrors()
+      let feed
+      try {
+        await syncJam('jam_1', 'J', () => {}, limitedJam(30).fetchImpl, db)
+        feed = await syncSharedFeed('elling', () => {}, feedFetch as unknown as typeof fetch, db)
+      } finally {
+        restore()
+      }
+      expect(feed).toEqual({ stopped: 'rate-limited', retryAt: Date.now() + 30_000 })
+      expect(feedFetch).not.toHaveBeenCalled()
+    })
+
+    it('stops every sync in progress, not only the one that got it', async () => {
+      const { syncJam, syncSharedFeed, activeSyncCount } = await loggedIn()
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+      const db = freshDb()
+      // The feed's first page is out when the jam's 429 comes back.
+      let feedSignal: AbortSignal | undefined
+      let answerFeed = (): void => {}
+      const feedFetch = vi.fn(async (_url: string, init?: RequestInit) => {
+        feedSignal = init?.signal ?? undefined
+        await new Promise<void>((r) => (answerFeed = r))
+        if (feedSignal?.aborted) throw new DOMException('aborted', 'AbortError')
+        return new Response(JSON.stringify({ data: [] }))
+      })
+      const restore = quietErrors()
+      let feed, jam
+      try {
+        const feedRun = syncSharedFeed('elling', () => {}, feedFetch as unknown as typeof fetch, db)
+        await vi.waitFor(() => expect(feedFetch).toHaveBeenCalled())
+        jam = await syncJam('jam_1', 'J', () => {}, limitedJam(30).fetchImpl, db)
+        expect(feedSignal?.aborted).toBe(true)
+        answerFeed()
+        feed = await feedRun
+      } finally {
+        restore()
+      }
+      expect(jam).toEqual({ stopped: 'rate-limited', retryAt: Date.now() + 30_000 })
+      expect(feed).toEqual(jam)
+      expect(syncComplete(db, 'shared:elling')).toBe(0)
+      expect(activeSyncCount()).toBe(0)
+    })
+
+    // Review of 97eb9189: the backoff was kept against the wall clock, which
+    // the system can move.
+    it('is waited out on a monotonic clock: moving the wall clock neither lifts nor stretches it', async () => {
+      const { syncJam } = await loggedIn()
+      vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+      const db = freshDb()
+      const restore = quietErrors()
+      try {
+        await syncJam('jam_1', 'J', () => {}, limitedJam(30).fetchImpl, db)
+        const server = jamServer({ cids: () => cidsOf('r', 3) })
+
+        // An hour forward on the wall clock: still held off.
+        vi.setSystemTime(Date.now() + 60 * 60_000)
+        const forward = await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+        expect(forward).toEqual({ stopped: 'rate-limited', retryAt: Date.now() + 30_000 })
+        expect(server.requests('list')).toBe(0)
+
+        // Two hours back, then the 30 s pass: free to ask again.
+        vi.setSystemTime(Date.now() - 2 * 60 * 60_000)
+        vi.advanceTimersByTime(31_000)
+        const after = await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+        expect(after).toEqual({ stopped: null })
+        expect(server.requests('list')).toBe(1)
+      } finally {
+        restore()
+      }
     })
   })
 
@@ -1199,5 +1291,325 @@ describe('syncs in flight', () => {
     } finally {
       setSyncsInFlightListener(null)
     }
+  })
+})
+
+// Review of 97eb9189 (IMPORTANT): a riff that could never resolve kept its jam
+// unfinished for good, so every sync walked the whole jam again to it; and a
+// jam whose Endlesss total stays above what it lists was walked page by page
+// on every sync.
+describe('riffs given up on, and the re-walk allowance', () => {
+  async function loggedIn(): Promise<typeof import('./riffLibrarySync')> {
+    vi.resetModules()
+    const { loginWithCredentials } = await import('./endlesssApi')
+    await loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ token: 't', password: 'p', user_id: 'u1', expires: Date.now() + 1e6 }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+    return import('./riffLibrarySync')
+  }
+
+  function quietLogs(): () => void {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    return () => {
+      error.mockRestore()
+      warn.mockRestore()
+    }
+  }
+
+  const cidsOf = (prefix: string, n: number): string[] =>
+    Array.from({ length: n }, (_, i) => `${prefix}_${i}`)
+
+  function complete(db: Database.Database, jamCID: string): number {
+    return (
+      db.prepare(`SELECT SyncComplete FROM Jams WHERE JamCID = ?`).get(jamCID) as {
+        SyncComplete: number
+      }
+    ).SyncComplete
+  }
+
+  function failures(
+    db: Database.Database
+  ): { RiffCID: string; Attempts: number; LastReason: string }[] {
+    try {
+      return db
+        .prepare(`SELECT RiffCID, Attempts, LastReason FROM RiffSyncFailures ORDER BY RiffCID`)
+        .all() as { RiffCID: string; Attempts: number; LastReason: string }[]
+    } catch {
+      return []
+    }
+  }
+
+  type Kind = 'list' | 'riffdoc' | 'stemdocs'
+
+  /** A private jam, listed by skip, docs from _all_docs, every request logged
+   * by kind. `failRiffDoc`/`limitStemDocs` fail those requests for a riff;
+   * `goneStems` riffs' stem records are reported not_found; `phantom` is how
+   * many more riffs total_rows names than are listed. */
+  function jam(opts: {
+    cids: () => string[]
+    failRiffDoc?: (riffCID: string) => boolean
+    limitStemDocs?: (riffCID: string) => boolean
+    goneStems?: Set<string>
+    phantom?: () => number
+  }): { fetchImpl: typeof fetch; requests: (kind: Kind) => number; reset: () => void } {
+    const log: Kind[] = []
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://cdn.example.com')) return new Response(new ArrayBuffer(8))
+      if (url.includes('rifffLoopsByCreateTime')) {
+        log.push('list')
+        const params = new URL(url).searchParams
+        const offset = Number(params.get('skip'))
+        const limit = Number(params.get('limit'))
+        const all = opts.cids()
+        const rows = all
+          .slice(offset, offset + limit)
+          .map((cid, i) => rawRiffListRow(cid, 1700000000000 - offset - i))
+        const total = all.length + (opts.phantom?.() ?? 0)
+        return new Response(JSON.stringify({ total_rows: total, rows }))
+      }
+      const { keys } = JSON.parse(init!.body as string) as { keys: string[] }
+      if (keys[0].startsWith('stem_')) {
+        log.push('stemdocs')
+        const riffCID = keys[0].slice('stem_'.length)
+        if (opts.limitStemDocs?.(riffCID)) return new Response('', { status: 429 })
+        if (opts.goneStems?.has(riffCID)) {
+          return new Response(JSON.stringify({ rows: [{ key: keys[0], error: 'not_found' }] }))
+        }
+        return new Response(
+          JSON.stringify({ rows: [{ id: keys[0], doc: rawJamStemDoc(riffCID) }] })
+        )
+      }
+      log.push('riffdoc')
+      if (opts.failRiffDoc?.(keys[0])) return new Response('oops', { status: 500 })
+      return new Response(JSON.stringify({ rows: [{ id: keys[0], doc: rawJamRiffDoc(keys[0]) }] }))
+    }) as unknown as typeof fetch
+    return {
+      fetchImpl,
+      requests: (kind) => log.filter((k) => k === kind).length,
+      reset: () => {
+        log.length = 0
+      }
+    }
+  }
+
+  it('a riff that fails every sync is given up after five, and the jam is complete', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    const server = jam({ cids: () => cidsOf('r', 230), failRiffDoc: (cid) => cid === 'r_210' })
+    const restore = quietLogs()
+    try {
+      for (let run = 1; run <= 4; run++) {
+        await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+        expect(complete(db, 'jam_1')).toBe(0)
+        expect(failures(db)).toEqual([{ RiffCID: 'r_210', Attempts: run, LastReason: 'error' }])
+      }
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    } finally {
+      restore()
+    }
+    expect(failures(db)).toEqual([{ RiffCID: 'r_210', Attempts: 5, LastReason: 'error' }])
+    expect(complete(db, 'jam_1')).toBe(1)
+
+    // Not asked for again, nor walked to: one listing, as for any complete jam.
+    server.reset()
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(server.requests('list')).toBe(1)
+    expect(server.requests('riffdoc')).toBe(0)
+  })
+
+  it('a riff whose stem record Endlesss reports gone is given up at once', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    const server = jam({ cids: () => cidsOf('r', 3), goneStems: new Set(['r_1']) })
+    const restore = quietLogs()
+    try {
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    } finally {
+      restore()
+    }
+    expect(failures(db)).toEqual([{ RiffCID: 'r_1', Attempts: 1, LastReason: 'missing' }])
+    expect(complete(db, 'jam_1')).toBe(1)
+
+    server.reset()
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(server.requests('riffdoc')).toBe(0)
+  })
+
+  // A riff listed twice in one walk (the listing shifted under it) is one
+  // attempt, not two.
+  it('counts a riff at most once a run', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    const cids = cidsOf('r', 230)
+    cids[205] = 'r_3' // r_3 again, on the second page
+    const server = jam({ cids: () => cids, failRiffDoc: (cid) => cid === 'r_3' })
+    const restore = quietLogs()
+    try {
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    } finally {
+      restore()
+    }
+    expect(server.requests('riffdoc')).toBe(230)
+    expect(failures(db)).toEqual([{ RiffCID: 'r_3', Attempts: 1, LastReason: 'error' }])
+  })
+
+  it('a 429 is not counted against a riff, and a riff that resolves is cleared', async () => {
+    const { syncJam } = await loggedIn()
+    vi.useFakeTimers({ toFake: ['Date', 'performance'] })
+    const db = freshDb()
+    let failing = true
+    let limited = false
+    const server = jam({
+      cids: () => cidsOf('r', 3),
+      failRiffDoc: (cid) => failing && cid === 'r_2',
+      limitStemDocs: () => limited
+    })
+    const restore = quietLogs()
+    try {
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(failures(db)).toEqual([{ RiffCID: 'r_2', Attempts: 1, LastReason: 'error' }])
+
+      failing = false
+      limited = true
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(failures(db)).toEqual([{ RiffCID: 'r_2', Attempts: 1, LastReason: 'error' }])
+
+      limited = false
+      vi.advanceTimersByTime(61_000)
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    } finally {
+      restore()
+      vi.useRealTimers()
+    }
+    expect(failures(db)).toEqual([])
+    expect(complete(db, 'jam_1')).toBe(1)
+  })
+
+  describe('a jam whose Endlesss total stays above what it lists', () => {
+    it('is walked to the end once, then costs one listing while the gap holds', async () => {
+      const { syncJam } = await loggedIn()
+      const db = freshDb()
+      let phantom = 3
+      const server = jam({ cids: () => cidsOf('r', 230), phantom: () => phantom })
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(complete(db, 'jam_1')).toBe(1)
+
+      server.reset()
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(server.requests('list')).toBe(1)
+
+      // The gap grows past what was left over: walked again, to the end.
+      phantom = 5
+      server.reset()
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(server.requests('list')).toBe(2)
+      expect(server.requests('riffdoc')).toBe(0)
+
+      server.reset()
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(server.requests('list')).toBe(1)
+    })
+
+    it('a complete jam the count sends back walks once, and remembers what was left over', async () => {
+      const { syncJam } = await loggedIn()
+      const db = freshDb()
+      const cids = cidsOf('r', 230)
+      const server = jam({ cids: () => cids, phantom: () => 3 })
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      // As if synced before the allowance was kept.
+      db.exec(`DELETE FROM JamRewalkExcess`)
+
+      server.reset()
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(server.requests('list')).toBe(2)
+
+      server.reset()
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(server.requests('list')).toBe(1)
+    })
+
+    it('a walk in which a riff failed does not remember the gap', async () => {
+      const { syncJam } = await loggedIn()
+      const db = freshDb()
+      let failing = true
+      const server = jam({
+        cids: () => cidsOf('r', 230),
+        phantom: () => 3,
+        failRiffDoc: (cid) => failing && cid === 'r_220'
+      })
+      const restore = quietLogs()
+      try {
+        await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      } finally {
+        restore()
+      }
+      expect(complete(db, 'jam_1')).toBe(0)
+      expect(db.prepare(`SELECT COUNT(*) AS n FROM JamRewalkExcess`).get()).toEqual({ n: 0 })
+
+      failing = false
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(complete(db, 'jam_1')).toBe(1)
+      server.reset()
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(server.requests('list')).toBe(1)
+    })
+  })
+
+  // A shared-feed riff the listing named but held no detail for was skipped
+  // in silence: the feed was marked complete with it unresolved, and every
+  // sync after walked the whole feed again to it.
+  describe('the shared feed', () => {
+    afterEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('gives up on a listed riff its listing never holds, rather than walking the feed to it every sync', async () => {
+      const api = await import('./endlesssApi')
+      const { syncSharedFeed } = await import('./riffLibrarySync')
+      const peek = api.peekSharedFeedCache
+      vi.spyOn(api, 'peekSharedFeedCache').mockImplementation((cids) => {
+        const held = peek(cids)
+        held.delete('b_5')
+        return held
+      })
+      const db = freshDb()
+      const cids = [...cidsOf('a', 100), ...cidsOf('b', 30)]
+      let lists = 0
+      const fetchImpl = vi.fn(async (url: string) => {
+        if (url.startsWith('https://cdn.example.com')) return new Response(new ArrayBuffer(8))
+        lists++
+        const params = new URL(url).searchParams
+        const offset = Number(params.get('from'))
+        const size = Number(params.get('size'))
+        return new Response(
+          JSON.stringify(sharedFeedPage(cids.slice(offset, offset + size), false))
+        )
+      }) as unknown as typeof fetch
+      const restore = quietLogs()
+      try {
+        for (let run = 1; run <= 4; run++) {
+          await syncSharedFeed('elling', () => {}, fetchImpl, db)
+          expect(complete(db, 'shared:elling')).toBe(0)
+        }
+        await syncSharedFeed('elling', () => {}, fetchImpl, db)
+      } finally {
+        restore()
+      }
+      expect(failures(db)).toEqual([{ RiffCID: 'b_5', Attempts: 5, LastReason: 'not-in-feed' }])
+      expect(complete(db, 'shared:elling')).toBe(1)
+
+      lists = 0
+      await syncSharedFeed('elling', () => {}, fetchImpl, db)
+      expect(lists).toBe(1)
+    })
   })
 })

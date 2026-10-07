@@ -18,7 +18,12 @@ import {
   mergeSharedFeedCaseVariants,
   healStemlessRiffs,
   hasUnresolvedRiffs,
-  countJamRiffs
+  countJamRiffs,
+  recordRiffSyncFailure,
+  clearRiffSyncFailure,
+  jamRewalkExcess,
+  setJamRewalkExcess,
+  RIFF_SYNC_GIVE_UP_ATTEMPTS
 } from './riffLibraryWriter'
 import { RIFF_STEMS_EXTRA_DDL, readExtraStemSlots } from './riffStemsExtra'
 import { getTableWriteVersion } from './tableWriteVersion'
@@ -756,6 +761,125 @@ describe('a jam marked complete can still be missing riffs (review of b18e27fb)'
     expect(hasUnresolvedRiffs(db, 'jam_b')).toBe(true)
     expect(countJamRiffs(db, 'jam_a')).toBe(2)
     expect(countJamRiffs(db, 'jam_none')).toBe(0)
+    db.close()
+  })
+})
+
+// Review of 97eb9189: the heal is for riffs the old stem lookup saved; the
+// discovered room's riffs were never synced from Endlesss at all.
+describe('healStemlessRiffs and the discovered room', () => {
+  it('leaves the discovered room alone', () => {
+    const db = freshDb()
+    db.exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('discovered', 'discovered', 1);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion, GainsJSON) VALUES ('kept', 'discovered', 1, '{}');
+    `)
+    expect(healStemlessRiffs(db)).toEqual({ riffs: 0, jams: 0 })
+    expect(db.prepare(`SELECT AppVersion FROM Riffs WHERE RiffCID = 'kept'`).get()).toEqual({
+      AppVersion: 1
+    })
+    expect(isComplete(db, 'discovered')).toBe(1)
+    db.close()
+  })
+})
+
+function isComplete(db: Database.Database, jamCID: string): number {
+  return (
+    db.prepare(`SELECT SyncComplete FROM Jams WHERE JamCID = ?`).get(jamCID) as {
+      SyncComplete: number
+    }
+  ).SyncComplete
+}
+
+// Review of 97eb9189: a riff that can never resolve kept its jam unfinished
+// for good, and every sync walked the whole jam to it again.
+describe('riffs the sync has given up on', () => {
+  let db: Database.Database
+
+  beforeEach(() => {
+    db = freshDb()
+    db.exec(`
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES
+        ('done', 'jam_a', 1), ('stuck', 'jam_a', NULL), ('gone', 'jam_a', NULL),
+        ('other', 'jam_b', NULL);
+    `)
+  })
+
+  afterEach(() => {
+    db.close()
+  })
+
+  it(`gives a riff up after ${RIFF_SYNC_GIVE_UP_ATTEMPTS} failed attempts, and not before`, () => {
+    expect(RIFF_SYNC_GIVE_UP_ATTEMPTS).toBe(5)
+    for (let i = 1; i < 5; i++) {
+      expect(recordRiffSyncFailure(db, 'jam_a', 'stuck', 'error')).toBe(false)
+      expect(filterUnresolved(db, ['done', 'stuck'])).toEqual(['stuck'])
+      expect(hasUnresolvedRiffs(db, 'jam_a')).toBe(true)
+    }
+    recordRiffSyncFailure(db, 'jam_a', 'gone', 'missing')
+    expect(recordRiffSyncFailure(db, 'jam_a', 'stuck', 'error')).toBe(true)
+
+    expect(filterUnresolved(db, ['done', 'stuck', 'gone'])).toEqual([])
+    expect(areAllResolved(db, ['done', 'stuck', 'gone'])).toBe(true)
+    expect(hasUnresolvedRiffs(db, 'jam_a')).toBe(false)
+    // another jam's unresolved riff is still its own
+    expect(hasUnresolvedRiffs(db, 'jam_b')).toBe(true)
+    expect(
+      db
+        .prepare(
+          `SELECT Attempts, LastReason, OwnerJamCID FROM RiffSyncFailures WHERE RiffCID = 'stuck'`
+        )
+        .get()
+    ).toEqual({ Attempts: 5, LastReason: 'error', OwnerJamCID: 'jam_a' })
+  })
+
+  it('gives up at once on a riff Endlesss says is gone', () => {
+    expect(recordRiffSyncFailure(db, 'jam_a', 'gone', 'missing')).toBe(true)
+    expect(filterUnresolved(db, ['gone'])).toEqual([])
+  })
+
+  it('a riff that resolves after failing is cleared, and counts from zero again', () => {
+    recordRiffSyncFailure(db, 'jam_a', 'stuck', 'error')
+    clearRiffSyncFailure(db, 'stuck')
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM RiffSyncFailures`).get()).toEqual({ n: 0 })
+  })
+
+  it("an un-sync of the jam forgets its riffs' failures and its re-walk allowance", () => {
+    recordRiffSyncFailure(db, 'jam_a', 'stuck', 'error')
+    recordRiffSyncFailure(db, 'jam_b', 'other', 'error')
+    setJamRewalkExcess(db, 'jam_a', 3)
+    setJamRewalkExcess(db, 'jam_b', 2)
+    deleteJamRows(db, 'jam_a')
+    expect(db.prepare(`SELECT RiffCID FROM RiffSyncFailures`).all()).toEqual([{ RiffCID: 'other' }])
+    expect(jamRewalkExcess(db, 'jam_a')).toBe(0)
+    expect(jamRewalkExcess(db, 'jam_b')).toBe(2)
+  })
+
+  it("a capitalised feed's failures move with its riffs", () => {
+    db.exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 0);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES ('feed_r', 'shared:Elling', NULL);
+    `)
+    recordRiffSyncFailure(db, 'shared:Elling', 'feed_r', 'not-in-feed')
+    mergeSharedFeedCaseVariants(db, 'shared:elling')
+    expect(
+      db.prepare(`SELECT OwnerJamCID FROM RiffSyncFailures WHERE RiffCID = 'feed_r'`).get()
+    ).toEqual({
+      OwnerJamCID: 'shared:elling'
+    })
+  })
+})
+
+// Review of 97eb9189: a jam whose Endlesss total stays above what it lists
+// (Aethereal Forest) was walked page by page on every sync.
+describe('the re-walk allowance', () => {
+  it('is 0 until set, and per jam', () => {
+    const db = freshDb()
+    expect(jamRewalkExcess(db, 'jam_a')).toBe(0)
+    setJamRewalkExcess(db, 'jam_a', 3)
+    setJamRewalkExcess(db, 'jam_a', 4)
+    expect(jamRewalkExcess(db, 'jam_a')).toBe(4)
+    expect(jamRewalkExcess(db, 'jam_b')).toBe(0)
     db.close()
   })
 })
