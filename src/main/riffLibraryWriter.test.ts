@@ -529,6 +529,41 @@ describe('mergeSharedFeedCaseVariants (a feed synced under a capitalised login, 
     expect(ownerOf('Riffs', 'RiffCID', 'other')).toBe('shared:someoneelse')
   })
 
+  // Review of 0e27db79: the Discover caches hold every source db's rows; the
+  // fold is the own db's, so only the own db's rows move (and only their
+  // primary-key range is read, not the archive's ~90% of the table).
+  it("moves the Discover caches' rows for this db only, not another db's of the same name", () => {
+    db.exec(`
+      CREATE TABLE DiscoverRiffIndexCache (
+        SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL, RiffCID TEXT NOT NULL,
+        OwnerJamCID TEXT NOT NULL, BPMrnd REAL NOT NULL, CreationTime INTEGER,
+        PRIMARY KEY (SourceDbKey, StemCID)
+      );
+      CREATE TABLE DiscoverInstrumentRowsCache (
+        SourceDbKey TEXT NOT NULL, StemCID TEXT NOT NULL, Instrument INTEGER,
+        OwnerJamCID TEXT NOT NULL, PRIMARY KEY (SourceDbKey, StemCID)
+      );
+      INSERT INTO Jams (JamCID, PublicName) VALUES ('shared:Elling', 'Shared Feed');
+    `)
+    for (const source of [db.name, '/Volumes/archive/warehouse.db3']) {
+      db.prepare(
+        `INSERT INTO DiscoverRiffIndexCache VALUES (?, 's1', 'r1', 'shared:Elling', 120, 0)`
+      ).run(source)
+      db.prepare(
+        `INSERT INTO DiscoverInstrumentRowsCache VALUES (?, 's1', 2, 'shared:Elling')`
+      ).run(source)
+    }
+    mergeSharedFeedCaseVariants(db, 'shared:elling')
+    for (const table of ['DiscoverRiffIndexCache', 'DiscoverInstrumentRowsCache']) {
+      expect(
+        db.prepare(`SELECT SourceDbKey, OwnerJamCID FROM ${table} ORDER BY SourceDbKey`).all()
+      ).toEqual([
+        { SourceDbKey: '/Volumes/archive/warehouse.db3', OwnerJamCID: 'shared:Elling' },
+        { SourceDbKey: db.name, OwnerJamCID: 'shared:elling' }
+      ])
+    }
+  })
+
   it('renames a capitalised feed when there is no lowercase one yet', () => {
     db.exec(`
       INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 1);

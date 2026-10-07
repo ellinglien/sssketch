@@ -23,16 +23,20 @@ export function upsertJam(db: Database.Database, jamCID: string, publicName: str
   bumpTableWriteVersion(db, 'Jams')
 }
 
-/** Tables whose rows name their jam in OwnerJamCID. The Discover caches are
- * derived, but they are only rebuilt on a row-count change, which a move is
- * not -- so they move too, when they exist (tests build smaller dbs). */
-const OWNER_JAM_TABLES = [
-  'Riffs',
-  'Stems',
-  'Tags',
-  'DiscoverRiffIndexCache',
-  'DiscoverInstrumentRowsCache'
-] as const
+/** Tables whose rows name their jam in OwnerJamCID. */
+const OWNER_JAM_TABLES = ['Riffs', 'Stems', 'Tags'] as const
+
+/** The Discover caches are derived, but they are only rebuilt on a row-count
+ * change, which a move is not -- so they move too, when they exist (tests
+ * build smaller dbs). They hold every source db's rows, keyed by
+ * (SourceDbKey, StemCID): only this db's are moved (review of 0e27db79),
+ * which also reads just its primary-key range -- on Elling's own db ~82k of
+ * each table's ~0.9M rows, the rest the archive's. Measured on a copy of it
+ * (5,163 stems, 844 riffs moved): the whole fold ~200 ms before, ~105 ms
+ * after, ~45 ms of that the commit of the rows it rewrites, which no index
+ * would remove. It runs once per capitalised feed ever; every later sync
+ * pays only the 0.1 ms variant check. */
+const OWNER_JAM_CACHE_TABLES = ['DiscoverRiffIndexCache', 'DiscoverInstrumentRowsCache'] as const
 
 /** Folds every other spelling of the shared feed `key` (`shared:elling`) --
  * one synced under a login typed with a capital, `shared:Elling`, before
@@ -51,11 +55,11 @@ export function mergeSharedFeedCaseVariants(db: Database.Database, key: string):
       `shared:${normalizeEndlesssUsername(jam.JamCID.slice('shared:'.length))}` === key
   )
   if (variants.length === 0) return 0
-  const tables = OWNER_JAM_TABLES.filter(
-    (table) =>
-      db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) !==
-      undefined
-  )
+  const exists = (table: string): boolean =>
+    db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) !==
+    undefined
+  const tables = OWNER_JAM_TABLES.filter(exists)
+  const cacheTables = OWNER_JAM_CACHE_TABLES.filter(exists)
   db.transaction(() => {
     for (const variant of variants) {
       db.prepare(
@@ -67,6 +71,11 @@ export function mergeSharedFeedCaseVariants(db: Database.Database, key: string):
           key,
           variant.JamCID
         )
+      }
+      for (const table of cacheTables) {
+        db.prepare(
+          `UPDATE ${table} SET OwnerJamCID = ? WHERE SourceDbKey = ? AND OwnerJamCID = ?`
+        ).run(key, db.name, variant.JamCID)
       }
       db.prepare(`DELETE FROM Jams WHERE JamCID = ?`).run(variant.JamCID)
     }
