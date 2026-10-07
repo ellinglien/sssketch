@@ -295,7 +295,10 @@ namespace sssketch
         /** One parameter, and a state that is that parameter's value -- so two
          * instances' states differ, and a parameter change looks like a knob turned
          * in its editor (the host is told, as a hosted VST3/AU's edit is). Plus a
-         * meter (`meter`), which changes on its own. */
+         * meter (`meter`), which changes on its own; a second knob (`tone`, in the
+         * state once moved off 0.5); `hidden`, state no parameter reports (an IR or
+         * sample loaded in it); and `unstable`, a state that differs on every read
+         * (a timestamp, a counter). */
         class ParamTestPlugin : public juce::AudioProcessor
         {
         public:
@@ -308,6 +311,10 @@ namespace sssketch
                 auto m = std::make_unique<MeterTestParameter>();
                 meter = m.get();
                 addParameter(m.release());
+                auto t = std::make_unique<juce::AudioParameterFloat>(
+                    juce::ParameterID { "tone", 1 }, "tone", 0.0f, 1.0f, 0.5f);
+                tone = t.get();
+                addParameter(t.release());
             }
             const juce::String getName() const override { return "ParamTestPlugin"; }
             void prepareToPlay(double, int) override {}
@@ -325,12 +332,23 @@ namespace sssketch
             void changeProgramName(int, const juce::String&) override {}
             void getStateInformation(juce::MemoryBlock& block) override
             {
-                block.append(juce::String(amount->get()).toRawUTF8(), juce::String(amount->get()).getNumBytesAsUTF8());
+                auto text = juce::String(amount->get());
+                if (tone->get() != 0.5f)
+                    text << "|tone=" << tone->get();
+                if (hidden.isNotEmpty())
+                    text << "|" << hidden;
+                if (unstable)
+                    text << "|" << ++stateReads;
+                block.append(text.toRawUTF8(), text.getNumBytesAsUTF8());
             }
             void setStateInformation(const void*, int) override {}
 
             juce::AudioParameterFloat* amount = nullptr;
             juce::AudioParameterFloat* meter = nullptr;
+            juce::AudioParameterFloat* tone = nullptr;
+            juce::String hidden;
+            bool unstable = false;
+            int stateReads = 0;
 
             /** A knob turned the way a hosted plugin's editor reports it: begin, value, end. */
             void turnKnob(float value)
@@ -795,6 +813,103 @@ namespace sssketch
                     chain.applyPendingSwaps();
                     chain.drainRetired(); // destroys the watched one
                     last->amount->setValueNotifyingHost(0.9f);
+                    expect(!chain.takeEdited());
+                }
+
+                beginTest("edits: a gesture from another thread still counts");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    chain.watchEdits(0);
+                    // Some plugins send an editor's gestures from their own UI thread.
+                    std::thread([p = last] { p->turnKnob(0.6f); }).join();
+                    expect(chain.takeEdited());
+                }
+
+                // The fallback for edits no parameter reports: the plugin's state when
+                // its editor opened against its state when it closes (or when main asks,
+                // before quit or an autosave, or before a capture).
+                beginTest("state check: a change no parameter reports (an IR loaded) counts when the editor closes");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    chain.watchEdits(0);
+                    last->hidden = "room.wav";
+                    expect(!chain.takeEdited());
+                    chain.closeEditorWindow(0);
+                    expect(chain.takeEdited());
+                    // Closed: no longer compared.
+                    last->hidden = "hall.wav";
+                    chain.checkWatchedStates();
+                    expect(!chain.takeEdited());
+                }
+
+                beginTest("state check: checkWatchedStates catches it while the editor is open, once");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    chain.watchEdits(0);
+                    chain.checkWatchedStates();
+                    expect(!chain.takeEdited()); // nothing changed
+                    last->hidden = "room.wav";
+                    chain.checkWatchedStates();
+                    expect(chain.takeEdited());
+                    chain.checkWatchedStates();
+                    expect(!chain.takeEdited()); // compared with the last check now
+                    chain.closeEditorWindow(0);
+                    expect(!chain.takeEdited());
+                }
+
+                beginTest("state check: an edit already reported isn't counted again (a save in between stays saved)");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    chain.watchEdits(0);
+                    last->turnKnob(0.5f);
+                    expect(chain.takeEdited());
+                    chain.checkWatchedStates(); // a save's capture
+                    expect(!chain.takeEdited());
+                    chain.closeEditorWindow(0);
+                    expect(!chain.takeEdited());
+                }
+
+                beginTest("state check: a gesture-marking plugin changing another parameter without a gesture");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    chain.watchEdits(0);
+                    last->turnKnob(0.5f);
+                    expect(chain.takeEdited());
+                    chain.checkWatchedStates();
+                    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                    // It has sent gestures, so the listener takes this as its own.
+                    last->tone->setValueNotifyingHost(0.8f);
+                    expect(!chain.takeEdited());
+                    chain.closeEditorWindow(0);
+                    expect(chain.takeEdited());
+                }
+
+                beginTest("state check: a plugin whose state differs on every read is left out");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    last->unstable = true;
+                    chain.watchEdits(0);
+                    chain.checkWatchedStates();
+                    expect(!chain.takeEdited());
+                    chain.closeEditorWindow(0);
                     expect(!chain.takeEdited());
                 }
             }

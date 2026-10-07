@@ -143,6 +143,7 @@ import { slotsEngineHolds } from '@shared/pluginSwitch'
 import type { PluginStatesMap } from '@shared/pluginStates'
 import {
   clearPluginsTouched,
+  markPluginsTouched,
   pluginsTouchedSnapshot,
   usePluginsTouched
 } from './state/pluginsTouched'
@@ -1642,7 +1643,10 @@ function Frame(): React.JSX.Element {
   // recover, and once edits are undone back to the saved state the file this
   // session wrote is cleared (autosaveAction). Gated (autosaveGateRef): one
   // that started before a save, a discard or a clear is dropped when its
-  // engine round trip comes back.
+  // engine round trip comes back. Each tick first asks the engine for a plugin
+  // edit it had not reported (an IR loaded in an open editor, main's
+  // checkPluginEdits): one marks the plugins touched, which restarts this
+  // effect, and its next tick writes.
   useEffect(() => {
     if (recoverableAutosave !== null) return
     const now = Date.now()
@@ -1653,8 +1657,15 @@ function Frame(): React.JSX.Element {
       AUTOSAVE_DEBOUNCE_MS,
       AUTOSAVE_MAX_WAIT_MS
     )
-    const id = window.setTimeout(() => {
+    let cancelled = false
+    const id = window.setTimeout(async () => {
       autosaveUnsavedSinceRef.current = null
+      const pluginEdited = await window.rifffApi.engineCheckPluginEdits().catch(() => false)
+      if (pluginEdited) {
+        markPluginsTouched()
+        return
+      }
+      if (cancelled) return
       const unsaved = hasUnsavedChanges(
         state.rifffs,
         persistedJson,
@@ -1677,7 +1688,10 @@ function Frame(): React.JSX.Element {
         })
         .catch((err) => console.error('Frame: crash-recovery autosave failed:', err))
     }, delay)
-    return () => window.clearTimeout(id)
+    return () => {
+      cancelled = true
+      window.clearTimeout(id)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- serializeForSave is a fresh closure every render over this render's `state`, the one persistedJson was made from; keyed on persistedJson (not state) so a transient UI change doesn't restart the debounce (see above)
   }, [persistedJson, currentSketch, recoverableAutosave, pluginsTouched.version])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)

@@ -211,6 +211,20 @@ namespace sssketch
          * (the project has unsaved plugin settings). */
         bool takeEdited();
 
+        /** Message-thread API: the fallback for edits no parameter reports
+         * (an IR or sample loaded into a plugin, or a value changed without
+         * the gesture its plugin otherwise sends). For every watched plugin
+         * (its editor open, see watchEdits), hashes getStateInformation and
+         * compares it with the hash taken when watching began or at the last
+         * check: a difference that no edit reported since explains counts as
+         * an edit (takeEdited). closeEditorWindow does the same for its slot.
+         * IpcConnection runs it before a capture (get-plugin-states) and when
+         * main asks (check-plugin-edits: before a quit, at an autosave). Only
+         * open editors, only then: never on a timer. A plugin whose state
+         * differs between two reads in a row (a timestamp, a counter) is left
+         * out. A bridged plugin is not watched. */
+        void checkWatchedStates();
+
         // Public (not just used as this constructor's own default
         // argument value) so callers who need to pass a LATER constructor
         // argument explicitly (e.g. ChannelChainRegistry passing
@@ -240,6 +254,9 @@ namespace sssketch
             void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details) override;
 
             std::atomic<bool> watching { false };
+            // Set with every edit this reports; checkWatchedStates consumes it
+            // (a state change it explains has been reported already).
+            std::atomic<bool> editedSinceCheck { false };
 
             // How long a change still counts after its gesture ended (some
             // plugins send the final value after endEdit), and the longest a
@@ -253,6 +270,7 @@ namespace sssketch
             // parameter past it (added later) uses `anyGestureUntil`.
             std::atomic<juce::uint32>& gestureSlot(int index);
             static bool before(juce::uint32 now, juce::uint32 until);
+            void markEdited();
 
             std::atomic<bool>& edited;
             std::atomic<bool> seenGesture { false };
@@ -355,6 +373,12 @@ namespace sssketch
             // Message thread only: the SlotState whose editWatch is watching
             // (watchEdits), so it stops before that plugin goes.
             const SlotState* watchedFor = nullptr;
+            // Message thread only: a hash of watchedFor's getStateInformation
+            // when watching began or at the last check (checkWatchedState),
+            // and whether two reads in a row agreed -- a state that changes
+            // on every read can't be compared.
+            std::size_t watchedStateHash = 0;
+            bool watchedStateComparable = false;
             // Reused interleaved-stereo scratch for the bridged path,
             // resized only when numSamples changes -- mirrors `scratch`
             // above's own resize-only-if-changed pattern, for the exact
@@ -369,6 +393,9 @@ namespace sssketch
 
         // Message thread: stops the slot's watched plugin's EditWatch, if any.
         void unwatchEdits(Slot& slot);
+        // Message thread: checkWatchedStates for one slot.
+        void checkWatchedState(Slot& slot);
+        static std::size_t hashStateOf(const SlotState& state);
         Instantiator instantiator;
         BpmPlayHead playHead;
         BridgeClient* bridgeClient;

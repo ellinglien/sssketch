@@ -1277,8 +1277,33 @@ namespace sssketch
             const int slot = (int) payload.getProperty("slot", -1);
             channelChains.closeEditorWindow(channelId, slot);
         }
+        else if (type == "check-plugin-edits")
+        {
+            // Main asks before a quit and at an autosave: an open editor's
+            // plugin whose state changed with no parameter reporting it (an
+            // IR loaded) is an edit too (PluginChain::checkWatchedStates).
+            // Answers with every edit not pushed yet ('plugin-edited'),
+            // consumed here, so main can mark the project unsaved before it
+            // decides whether to ask.
+            masterChain.checkWatchedStates();
+            channelChains.checkWatchedStates();
+            const bool masterEdited = masterChain.takeEdited();
+            const bool channelEdited = channelChains.takeEdited();
+            juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
+            payloadObj->setProperty("edited", masterEdited || channelEdited);
+            juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+            obj->setProperty("type", "plugin-edits-checked");
+            obj->setProperty("payload", juce::var(payloadObj.get()));
+            sendJson(juce::var(obj.get()));
+        }
         else if (type == "get-plugin-states")
         {
+            // A save, autosave or export capture: first, a change no parameter
+            // reported in an open editor's plugin counts as an edit (pushed as
+            // 'plugin-edited' on the next tick), and what is captured now is
+            // what later checks compare with.
+            masterChain.checkWatchedStates();
+            channelChains.checkWatchedStates();
             juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
 
             juce::Array<juce::var> masterStatesVar;

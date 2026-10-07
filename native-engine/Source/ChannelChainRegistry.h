@@ -128,6 +128,10 @@ namespace sssketch
          * chain (each consumed). */
         bool takeEdited();
 
+        /** Message-thread API: PluginChain::checkWatchedStates() on every
+         * channel's chain. */
+        void checkWatchedStates();
+
         /** Audio-thread API: promotes pending swaps across every currently
          * published channel's chain. Call once per block, before any
          * chainFor()-based process() calls. */

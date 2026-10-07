@@ -1,7 +1,9 @@
 // src/renderer/src/state/pluginsTouched.ts -- "a plugin's settings may have changed since the
 // last save". Plugin settings live in the engine and are left out of the unsaved-changes check
 // (saveSerialization.ts's dirtyCheckJson), so the engine reports a knob turned in an open editor
-// window ('plugin-edited': a parameter change made with a gesture, see PluginChain's EditWatch),
+// window ('plugin-edited': a parameter change made with a gesture, see PluginChain's EditWatch;
+// or, as a fallback, an open editor's plugin state changing with no parameter saying so, an IR
+// loaded, found when the editor closes, at a capture, an autosave or a quit: checkWatchedStates),
 // and that sets this. Opening an editor does not, except a bridged plugin's, which the engine
 // can't watch (editorOpenMarksUnsaved). It makes the project unsaved (unsavedChanges.ts), so the
 // quit prompt and the discard guard ask, and each mark is a new `version`, which restarts the

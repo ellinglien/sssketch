@@ -169,6 +169,15 @@ namespace sssketch
         return any;
     }
 
+    void ChannelChainRegistry::checkWatchedStates()
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        const ReadScope scope(*this);
+        const auto* map = published.load();
+        for (auto& [channelId, chain] : *map)
+            chain->checkWatchedStates();
+    }
+
     PluginChain* ChannelChainRegistry::chainFor(const juce::String& channelId)
     {
         // Covers the lookup only. The returned chain stays valid only while

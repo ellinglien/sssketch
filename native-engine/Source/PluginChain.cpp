@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <optional>
 #include <cmath>
+#include <string_view>
 #include <thread>
 
 namespace sssketch
@@ -75,6 +76,12 @@ namespace sssketch
         return until != 0 && (juce::int32) (until - now) > 0;
     }
 
+    void PluginChain::EditWatch::markEdited()
+    {
+        editedSinceCheck.store(true);
+        edited.store(true);
+    }
+
     void PluginChain::EditWatch::audioProcessorParameterChangeGestureBegin(juce::AudioProcessor*, int index)
     {
         seenGesture.store(true);
@@ -95,7 +102,7 @@ namespace sssketch
         // Part of a gesture (a knob being turned, or just let go of): an edit.
         if (before(juce::Time::getMillisecondCounter(), gestureSlot(index).load()))
         {
-            edited.store(true);
+            markEdited();
             return;
         }
         // A plugin that marks its edits with gestures: a change without one is
@@ -122,14 +129,14 @@ namespace sssketch
             default:
                 break;
         }
-        edited.store(true);
+        markEdited();
     }
 
     void PluginChain::EditWatch::audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details)
     {
         // Not latency or parameter-name changes: those are the plugin's, not an edit.
         if (watching.load() && (details.programChanged || details.nonParameterStateChanged))
-            edited.store(true);
+            markEdited();
     }
 
     void PluginChain::applyPendingSwaps()
@@ -451,6 +458,8 @@ namespace sssketch
                 bridgeClient->closeEditor(state->bridgeSlotId);
             return;
         }
+        // Last chance to see a change no parameter reported (an IR loaded).
+        checkWatchedState(slot);
         unwatchEdits(slot);
         slot.editorWindow.reset();
         slot.editorFor = nullptr;
@@ -467,6 +476,14 @@ namespace sssketch
         unwatchEdits(slot);
         if (state == nullptr || state->editWatch == nullptr)
             return;
+        // What the state check compares with (checkWatchedState), read before
+        // watching starts: a change in between is then a difference no
+        // reported edit explains, so it still counts. Read twice: a state
+        // that differs between two reads in a row can't be compared.
+        const auto first = hashStateOf(*state);
+        slot.watchedStateHash = hashStateOf(*state);
+        slot.watchedStateComparable = first == slot.watchedStateHash;
+        state->editWatch->editedSinceCheck.store(false);
         // Only a flag: the EditWatch has been registered with the plugin
         // since before it was published (makeLocalState).
         state->editWatch->watching.store(true);
@@ -478,6 +495,38 @@ namespace sssketch
         if (slot.watchedFor != nullptr && slot.watchedFor->editWatch != nullptr)
             slot.watchedFor->editWatch->watching.store(false);
         slot.watchedFor = nullptr;
+        slot.watchedStateComparable = false;
+    }
+
+    std::size_t PluginChain::hashStateOf(const SlotState& state)
+    {
+        if (state.instance == nullptr)
+            return 0;
+        juce::MemoryBlock block;
+        state.instance->getStateInformation(block);
+        return std::hash<std::string_view> {}(
+            std::string_view(static_cast<const char*>(block.getData()), block.getSize()));
+    }
+
+    void PluginChain::checkWatchedState(Slot& slot)
+    {
+        // watchedFor is alive: only drainRetired frees a SlotState, on this
+        // thread, and it stops watching one first.
+        if (slot.watchedFor == nullptr || slot.watchedFor->editWatch == nullptr || !slot.watchedStateComparable)
+            return;
+        // Consumed first: an edit reported from now on is in the state read below.
+        const bool explained = slot.watchedFor->editWatch->editedSinceCheck.exchange(false);
+        const auto hash = hashStateOf(*slot.watchedFor);
+        if (hash != slot.watchedStateHash && !explained)
+            edited.store(true);
+        slot.watchedStateHash = hash;
+    }
+
+    void PluginChain::checkWatchedStates()
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        for (auto& slot : slots)
+            checkWatchedState(slot);
     }
 
     bool PluginChain::takeEdited()

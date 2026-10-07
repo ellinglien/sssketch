@@ -313,6 +313,36 @@ async function fetchLivePluginStates(logLabel: string): Promise<RawPluginStatesC
   }
 }
 
+/**
+ * Asks the engine whether a plugin was edited that it has not reported yet:
+ * an open editor's plugin whose state changed with no parameter saying so (an
+ * IR or sample loaded into it), checked against its state when the editor
+ * opened (PluginChain::checkWatchedStates), plus any knob turn not pushed yet.
+ * Asked before a quit (before-quit) and at an autosave (the renderer, through
+ * 'engine-check-plugin-edits'). When one was, the renderer is told as for a
+ * pushed 'plugin-edited', so the project is unsaved. Bounded, and false (never
+ * throws) without an engine or an answer: a quit is never held up by it.
+ */
+async function checkPluginEdits(logLabel: string): Promise<boolean> {
+  if (!playbackEngine) return false
+  try {
+    const reply = (await playbackEngine.client.sendAndAwaitType(
+      'check-plugin-edits',
+      undefined,
+      'plugin-edits-checked',
+      2000
+    )) as { edited?: boolean } | null
+    const edited = reply?.edited === true
+    if (edited && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('engine-plugin-edited')
+    }
+    return edited
+  } catch (err) {
+    console.error(`${logLabel}: failed to check plugin edits:`, err)
+    return false
+  }
+}
+
 // Tracks whichever BrowserWindow is currently live, reassigned every time
 // createWindow() runs (both the initial whenReady() call and any later
 // 'activate' call after the user closed all windows and reopened via the
@@ -390,6 +420,10 @@ let recoveryFile: RecoveryFileState = initialRecoveryFileState
 function noteRecoveryFile(event: RecoveryFileEvent): void {
   recoveryFile = recoveryFileStep(recoveryFile, event)
 }
+// Set once a quit attempt has asked the engine for plugin edits it has not
+// reported (checkPluginEdits), so the quit it re-issues doesn't ask again;
+// cleared when the quit prompt is cancelled.
+let pluginEditsCheckedForQuit = false
 // Set when the quit prompt's "Save" re-issues the quit: that save clears the
 // recovery file itself if it lands, and if it failed the file is all there
 // is, so the clean-quit clear above must not run.
@@ -2190,6 +2224,10 @@ app.whenReady().then(async () => {
     fetchLivePluginStates('engine-get-plugin-states')
   )
 
+  ipcMain.handle('engine-check-plugin-edits', (): Promise<boolean> =>
+    checkPluginEdits('engine-check-plugin-edits')
+  )
+
   ipcMain.handle(
     'engine-set-buffer-size',
     async (_event, bufferSize: number): Promise<{ ok: true } | { ok: false; error: string }> => {
@@ -2732,6 +2770,19 @@ app.on('before-quit', (event) => {
   // left to interrupt it for, not a bug.
   if (isQuitting) return
 
+  // First, a plugin edit the engine hasn't reported (an IR loaded in an open
+  // editor, say) makes the project unsaved before it is decided whether to
+  // ask. Only with a window: without one there is no project to save.
+  if (!pluginEditsCheckedForQuit && playbackEngine && mainWindow && !mainWindow.isDestroyed()) {
+    event.preventDefault()
+    pluginEditsCheckedForQuit = true
+    void checkPluginEdits('before-quit').then((edited) => {
+      if (edited) rendererHasUnsavedChanges = true
+      app.quit()
+    })
+    return
+  }
+
   // Ask before discarding real unsaved work -- see rendererHasUnsavedChanges's
   // own doc comment above (kept current via the 'set-dirty-state' IPC call).
   // A NATIVE dialog here, not the custom in-app UnsavedChangesDialog: at
@@ -2748,7 +2799,11 @@ app.on('before-quit', (event) => {
       message: 'This project has unsaved changes.',
       detail: 'Do you want to save before quitting?'
     })
-    if (choice === 2) return // Cancel -- stay open, nothing else to do.
+    if (choice === 2) {
+      // Cancel -- stay open; the next quit checks for plugin edits again.
+      pluginEditsCheckedForQuit = false
+      return
+    }
     if (choice === 0) {
       // Save -- ask the renderer to save and wait for its reply (bounded by
       // a timeout, see requestSaveBeforeQuit), then re-issue quit now that

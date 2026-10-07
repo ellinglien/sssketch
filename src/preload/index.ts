@@ -595,6 +595,9 @@ const api = {
     ipcRenderer.invoke('engine-get-sound-meters'),
   engineGetPluginStates: (): Promise<RawPluginStatesCapture | null> =>
     ipcRenderer.invoke('engine-get-plugin-states'),
+  /** Whether a plugin was edited that the engine had not reported (an IR loaded in an open
+   * editor; main's checkPluginEdits). False without an engine. */
+  engineCheckPluginEdits: (): Promise<boolean> => ipcRenderer.invoke('engine-check-plugin-edits'),
   engineSetBufferSize: (bufferSize: number): Promise<{ ok: true } | { ok: false; error: string }> =>
     ipcRenderer.invoke('engine-set-buffer-size', bufferSize),
   engineArmRecording: (
