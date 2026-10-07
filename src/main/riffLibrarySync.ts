@@ -9,9 +9,10 @@ import {
   type FetchLike
 } from './endlesssApi'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
-import { isValidSharedFeedKey } from '@shared/endlesssUsername'
+import { isValidSharedFeedKey, normalizeEndlesssUsername } from '@shared/endlesssUsername'
 import {
   upsertJam,
+  mergeSharedFeedCaseVariants,
   markJamSyncComplete,
   upsertRiffSkeletons,
   writeRiffDetail,
@@ -155,9 +156,12 @@ export async function syncSharedFeed(
   fetchImpl: FetchLike = fetch,
   db: Database.Database = openOwnRiffLibraryDb()
 ): Promise<void> {
-  const key = `shared:${userName}`
-  // Only a real username's feed: an email login used to sync one under the
-  // email (an empty duplicate "Shared Feed", 2026-10-07).
+  // Only a real username's feed, and always under its lowercase name (how
+  // Endlesss stores it): an email login used to sync one under the email (an
+  // empty duplicate "Shared Feed", 2026-10-07), and a login typed with a
+  // capital one under `shared:Elling`.
+  const name = normalizeEndlesssUsername(userName)
+  const key = `shared:${name}`
   if (!isValidSharedFeedKey(key)) {
     console.warn(`syncSharedFeed: "${userName}" is not an Endlesss username -- not syncing`)
     return
@@ -167,6 +171,8 @@ export async function syncSharedFeed(
   syncsInFlight.set(key, controller)
   noteSyncsInFlightChanged()
   try {
+    // A capitalised feed from before: all of it becomes this one, once.
+    mergeSharedFeedCaseVariants(db, key)
     upsertJam(db, key, 'Shared Feed')
     let offset = 0
     let resolvedCount = 0
@@ -174,7 +180,7 @@ export async function syncSharedFeed(
     for (;;) {
       if (controller.signal.aborted) break
       const page = await listSharedFeed(
-        userName,
+        name,
         offset,
         SYNC_SHARED_FEED_PAGE_SIZE,
         fetchImpl,

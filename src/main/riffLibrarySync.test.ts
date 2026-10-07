@@ -162,6 +162,37 @@ describe('syncSharedFeed', () => {
     expect(db.prepare(`SELECT COUNT(*) AS n FROM Jams`).get()).toEqual({ n: 0 })
   })
 
+  it('folds a feed synced under a capitalised login into the lowercase one, every page of it (2026-10-07)', async () => {
+    const { syncSharedFeed } = await import('./riffLibrarySync')
+    const db = freshDb()
+    // The old capitalised sync: 150 riffs, far more than one page of the
+    // feed. The new sync below only sees one (short) page.
+    db.prepare(
+      `INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 1)`
+    ).run()
+    const insert = db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES (?, 'shared:Elling', 1)`
+    )
+    for (let i = 0; i < 150; i++) insert.run(`old_${i}`)
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith('https://cdn.example.com')) {
+        return new Response(new ArrayBuffer(8), { status: 200 })
+      }
+      return new Response(JSON.stringify({ data: sharedFeedPage(['old_0'], false).data }), {
+        status: 200
+      })
+    })
+
+    // typed with a capital, too: still the one lowercase feed
+    await syncSharedFeed('Elling', () => {}, fetchImpl as typeof fetch, db)
+
+    expect(db.prepare(`SELECT JamCID FROM Jams`).all()).toEqual([{ JamCID: 'shared:elling' }])
+    expect(
+      db.prepare(`SELECT OwnerJamCID, COUNT(*) AS n FROM Riffs GROUP BY OwnerJamCID`).all()
+    ).toEqual([{ OwnerJamCID: 'shared:elling', n: 150 }])
+    expect(String(fetchImpl.mock.calls[0][0])).not.toContain('Elling')
+  })
+
   it('a repeat sync with nothing new stops after the first page instead of walking to the end', async () => {
     const { syncSharedFeed } = await import('./riffLibrarySync')
     const db = freshDb()

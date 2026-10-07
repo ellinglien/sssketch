@@ -43,7 +43,11 @@ describe('isValidSharedFeedKey', () => {
     expect(isValidSharedFeedKey('shared:elling')).toBe(true)
     expect(isValidSharedFeedKey('shared:someone@example.org')).toBe(false)
     expect(isValidSharedFeedKey('shared:')).toBe(false)
-    expect(isValidSharedFeedKey('shared:Elling')).toBe(false)
+    expect(isValidSharedFeedKey('shared:   ')).toBe(false)
+  })
+
+  it('a capitalised name is still a real feed (an earlier login typed with a capital)', () => {
+    expect(isValidSharedFeedKey('shared:Elling')).toBe(true)
   })
 
   it('anything else is not a shared feed key', () => {

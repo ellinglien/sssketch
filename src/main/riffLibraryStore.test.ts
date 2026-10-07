@@ -1460,6 +1460,15 @@ describe("shared-feed jams always read from sssketch's own database, regardless 
     expect(shared.map((j) => j.jamCID)).toEqual(['shared:elling'])
   })
 
+  it('still lists a shared feed synced under a capitalised login (shared:Elling): only an email or nobody is hidden', async () => {
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    openOwnRiffLibraryDb().exec(
+      `INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Someone', 'Shared Feed', 1);`
+    )
+    const shared = listJams('').filter((j) => j.name === 'Shared Feed')
+    expect(shared.map((j) => j.jamCID).sort()).toEqual(['shared:Someone', 'shared:elling'])
+  })
+
   it('resolveStemPath uses the own content-addressed cache for a shared-feed stem even though root is external', () => {
     expect(resolveStemPath('shared:elling', 'stem-shared-1')).toBe(
       join(userDataDir, 'endlesss-cache', 'stems', 's', 'stem-shared-1')

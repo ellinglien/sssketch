@@ -14,7 +14,8 @@ import {
   filterUnresolved,
   toggleWarehouseFavourite,
   listWarehouseFavourites,
-  deleteJamRows
+  deleteJamRows,
+  mergeSharedFeedCaseVariants
 } from './riffLibraryWriter'
 import { RIFF_STEMS_EXTRA_DDL, readExtraStemSlots } from './riffStemsExtra'
 
@@ -481,5 +482,80 @@ describe('riffLibraryWriter', () => {
     deleteJamRows(db, 'jam_1')
     const { n } = db.prepare(`SELECT COUNT(*) AS n FROM RiffStemsExtra`).get() as { n: number }
     expect(n).toBe(0)
+  })
+})
+
+describe('mergeSharedFeedCaseVariants (a feed synced under a capitalised login, 2026-10-07)', () => {
+  let db: Database.Database
+  beforeEach(() => {
+    db = freshDb()
+  })
+  afterEach(() => {
+    db.close()
+  })
+
+  function ownerOf(table: 'Riffs' | 'Stems' | 'Tags', idColumn: string, id: string): string {
+    const row = db.prepare(`SELECT OwnerJamCID FROM ${table} WHERE ${idColumn} = ?`).get(id) as {
+      OwnerJamCID: string
+    }
+    return row.OwnerJamCID
+  }
+
+  it('moves every row of shared:Elling into shared:elling and drops the old jam row', () => {
+    db.exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 1);
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:elling', 'Shared Feed', 0);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID) VALUES ('old_1', 'shared:Elling'), ('old_2', 'shared:Elling'),
+        ('new_1', 'shared:elling');
+      INSERT INTO Stems (StemCID, OwnerJamCID) VALUES ('s_old', 'shared:Elling');
+      INSERT INTO Tags (RiffCID, OwnerJamCID, Favour) VALUES ('old_1', 'shared:Elling', 1);
+      INSERT INTO Jams (JamCID, PublicName) VALUES ('shared:someoneelse', 'Shared Feed');
+      INSERT INTO Riffs (RiffCID, OwnerJamCID) VALUES ('other', 'shared:someoneelse');
+    `)
+
+    expect(mergeSharedFeedCaseVariants(db, 'shared:elling')).toBe(1)
+
+    const jams = db.prepare(`SELECT JamCID, SyncComplete FROM Jams ORDER BY JamCID`).all()
+    expect(jams).toEqual([
+      { JamCID: 'shared:elling', SyncComplete: 1 },
+      { JamCID: 'shared:someoneelse', SyncComplete: 0 }
+    ])
+    expect(ownerOf('Riffs', 'RiffCID', 'old_1')).toBe('shared:elling')
+    expect(ownerOf('Riffs', 'RiffCID', 'old_2')).toBe('shared:elling')
+    expect(ownerOf('Riffs', 'RiffCID', 'new_1')).toBe('shared:elling')
+    expect(ownerOf('Stems', 'StemCID', 's_old')).toBe('shared:elling')
+    expect(ownerOf('Tags', 'RiffCID', 'old_1')).toBe('shared:elling')
+    expect(ownerOf('Riffs', 'RiffCID', 'other')).toBe('shared:someoneelse')
+  })
+
+  it('renames a capitalised feed when there is no lowercase one yet', () => {
+    db.exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 1);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID) VALUES ('old_1', 'shared:Elling');
+    `)
+    expect(mergeSharedFeedCaseVariants(db, 'shared:elling')).toBe(1)
+    expect(db.prepare(`SELECT JamCID, PublicName, SyncComplete FROM Jams`).all()).toEqual([
+      { JamCID: 'shared:elling', PublicName: 'Shared Feed', SyncComplete: 1 }
+    ])
+    expect(ownerOf('Riffs', 'RiffCID', 'old_1')).toBe('shared:elling')
+  })
+
+  it('runs once: a second call finds nothing to move', () => {
+    db.exec(`INSERT INTO Jams (JamCID, PublicName) VALUES ('shared:Elling', 'Shared Feed');`)
+    expect(mergeSharedFeedCaseVariants(db, 'shared:elling')).toBe(1)
+    expect(mergeSharedFeedCaseVariants(db, 'shared:elling')).toBe(0)
+  })
+
+  it('is all or nothing: a failure part-way leaves every row where it was', () => {
+    db.exec(`
+      INSERT INTO Jams (JamCID, PublicName) VALUES ('shared:Elling', 'Shared Feed');
+      INSERT INTO Riffs (RiffCID, OwnerJamCID) VALUES ('old_1', 'shared:Elling');
+      INSERT INTO Stems (StemCID, OwnerJamCID) VALUES ('s_old', 'shared:Elling');
+      CREATE TRIGGER fail_on_stem_move BEFORE UPDATE ON Stems
+        BEGIN SELECT RAISE(ABORT, 'disk full'); END;
+    `)
+    expect(() => mergeSharedFeedCaseVariants(db, 'shared:elling')).toThrow(/disk full/)
+    expect(db.prepare(`SELECT JamCID FROM Jams`).all()).toEqual([{ JamCID: 'shared:Elling' }])
+    expect(ownerOf('Riffs', 'RiffCID', 'old_1')).toBe('shared:Elling')
   })
 })

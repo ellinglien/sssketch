@@ -32,10 +32,13 @@ export function canonicalUsernameCandidates(loginName: string, userId: string): 
   return out
 }
 
-/** Whether a `shared:<username>` jam key names a real username -- not one
- * an email login once synced (an empty duplicate "Shared Feed"). */
+/** Whether a `shared:<username>` jam key could name a real username -- not
+ * one an email login once synced (an empty duplicate "Shared Feed"), and not
+ * nobody. Case is not checked: a feed synced under a login typed with a
+ * capital (`shared:Elling`) is a real feed, folded into its lowercase key by
+ * the next sync (riffLibraryWriter.ts mergeSharedFeedCaseVariants). */
 export function isValidSharedFeedKey(jamCID: string): boolean {
   if (!jamCID.startsWith('shared:')) return false
-  const name = jamCID.slice('shared:'.length)
-  return name !== '' && normalizeEndlesssUsername(name) === name
+  const name = jamCID.slice('shared:'.length).trim()
+  return name !== '' && !name.includes('@')
 }

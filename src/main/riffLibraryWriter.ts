@@ -13,6 +13,7 @@ import {
   writeExtraStemSlots
 } from './riffStemsExtra'
 import { bumpTableWriteVersion } from './tableWriteVersion'
+import { normalizeEndlesssUsername } from '@shared/endlesssUsername'
 
 export function upsertJam(db: Database.Database, jamCID: string, publicName: string): void {
   db.prepare(
@@ -20,6 +21,60 @@ export function upsertJam(db: Database.Database, jamCID: string, publicName: str
      ON CONFLICT(JamCID) DO UPDATE SET PublicName = excluded.PublicName`
   ).run(jamCID, publicName)
   bumpTableWriteVersion(db, 'Jams')
+}
+
+/** Tables whose rows name their jam in OwnerJamCID. The Discover caches are
+ * derived, but they are only rebuilt on a row-count change, which a move is
+ * not -- so they move too, when they exist (tests build smaller dbs). */
+const OWNER_JAM_TABLES = [
+  'Riffs',
+  'Stems',
+  'Tags',
+  'DiscoverRiffIndexCache',
+  'DiscoverInstrumentRowsCache'
+] as const
+
+/** Folds every other spelling of the shared feed `key` (`shared:elling`) --
+ * one synced under a login typed with a capital, `shared:Elling`, before
+ * 2026-10-07 -- into `key`: all its rows move over, in one transaction, and
+ * its Jams row goes. A sync of `key` alone would only re-own the first page
+ * (it stops at a page it has already resolved), leaving two "Shared Feed"s.
+ * Returns how many variants were folded (0 once done, so it runs once). */
+export function mergeSharedFeedCaseVariants(db: Database.Database, key: string): number {
+  const variants = (
+    db
+      .prepare(`SELECT JamCID, PublicName, SyncComplete FROM Jams WHERE JamCID LIKE 'shared:%'`)
+      .all() as { JamCID: string; PublicName: string; SyncComplete: number }[]
+  ).filter(
+    (jam) =>
+      jam.JamCID !== key &&
+      `shared:${normalizeEndlesssUsername(jam.JamCID.slice('shared:'.length))}` === key
+  )
+  if (variants.length === 0) return 0
+  const tables = OWNER_JAM_TABLES.filter(
+    (table) =>
+      db.prepare(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?`).get(table) !==
+      undefined
+  )
+  db.transaction(() => {
+    for (const variant of variants) {
+      db.prepare(
+        `INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES (?, ?, ?)
+         ON CONFLICT(JamCID) DO UPDATE SET SyncComplete = MAX(SyncComplete, excluded.SyncComplete)`
+      ).run(key, variant.PublicName, variant.SyncComplete)
+      for (const table of tables) {
+        db.prepare(`UPDATE ${table} SET OwnerJamCID = ? WHERE OwnerJamCID = ?`).run(
+          key,
+          variant.JamCID
+        )
+      }
+      db.prepare(`DELETE FROM Jams WHERE JamCID = ?`).run(variant.JamCID)
+    }
+  })()
+  bumpTableWriteVersion(db, 'Jams')
+  bumpTableWriteVersion(db, 'Riffs')
+  bumpTableWriteVersion(db, 'Stems')
+  return variants.length
 }
 
 export function markJamSyncComplete(db: Database.Database, jamCID: string): void {
