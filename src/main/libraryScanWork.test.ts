@@ -184,7 +184,8 @@ function fixture(): { own: Database.Database; jams: Jams; src1: Database.Databas
   analyse(own, 'c1zeroshot', {})
   own.prepare(`INSERT INTO Stems VALUES ('c1zeroshot', 'jamA', NULL)`).run()
   putFile('jamA', 'c1zeroshot')
-  // in two jams: the first allowed pair (jamB, riff r0...) is absent on disk
+  // in two jams: the first allowed pair (jamB, riff r0...) is absent on disk, the later one
+  // (jamA) holds it -- not in the oracle, found by the later-pair rule (fixtureWork)
   putFile('jamA', 'c2twojams')
   // in a jam nobody listed (jamX), on disk there
   putFile('jamX', 'c3notallowed')
@@ -223,6 +224,15 @@ function fixture(): { own: Database.Database; jams: Jams; src1: Database.Databas
   return { own, jams, src1 }
 }
 
+/** The fixture's work: the oracle, plus what the later-pair rule finds that it drops (c2twojams,
+ * absent under its first pair's jamB, on disk under jamA). */
+async function fixtureWork(jams: Jams, own: Database.Database): Promise<Map<string, string>> {
+  const expected = await oracle(jams, own)
+  expect(expected.has('c2twojams')).toBe(false)
+  expected.set('c2twojams', stemPath('jamA', 'c2twojams'))
+  return expected
+}
+
 function asMap(work: { key: string; path: string }[]): Map<string, string> {
   return new Map(work.map((t) => [t.key, t.path]))
 }
@@ -252,7 +262,7 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
   it('equals the oracle: listLibraryScanTargets filtered by needsAnyAnalysis, minus placeholders', async () => {
     const { own, jams } = fixture()
     const result = await listLibraryScanWork(jams, own)
-    const expected = await oracle(jams, own)
+    const expected = await fixtureWork(jams, own)
     expect(asMap(result.work)).toEqual(expected)
     // spelled out, so the oracle itself is pinned too
     expect([...expected.keys()].sort()).toEqual(
@@ -264,6 +274,7 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
         'b2never',
         'b5zerostale',
         'c1zeroshot',
+        'c2twojams',
         'd2laterdb',
         'd3src2only'
       ].sort()
@@ -279,7 +290,7 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
     seedRiff(src1, 'r5', 'jamA', ['f1late'])
     putFile('jamA', 'f1late')
     const result = await listLibraryScanWork(jams, own)
-    expect(asMap(result.work)).toEqual(await oracle(jams, own))
+    expect(asMap(result.work)).toEqual(await fixtureWork(jams, own))
     expect(asMap(result.work).has('f1late')).toBe(true)
   })
 
@@ -340,7 +351,7 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
     expect(asMap(result.work).has('b4placeholder')).toBe(false)
     expect(result.placeholdersSkipped).toBe(1)
     expect(statted.map((p) => p.split('/').pop()).sort()).toEqual(
-      ['b1peaks', 'b2never', 'b4placeholder', 'd2laterdb', 'd3src2only'].sort()
+      ['b1peaks', 'b2never', 'b4placeholder', 'c2twojams', 'd2laterdb', 'd3src2only'].sort()
     )
     // a 0-byte file with a feature row is kept: it was decoded before
     expect(asMap(result.work).has('b5zerostale')).toBe(true)
@@ -366,6 +377,42 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
     const result = await listLibraryScanWork(jams, own, { windowSize: 3 })
     expect(asMap(result.work)).toEqual(await oracle(jams, own))
     expect(asMap(result.work).get('m0multi')).toBe(stemPath('jamB', 'm0multi'))
+  })
+
+  // Real data, 2026-10-07: 905 of Elling's stems that need the level pass sit on the archive
+  // under their own jam's folder, but a riff of ANOTHER allowed jam uses them first (lower
+  // RiffCID) and LORE never downloaded them there. The first pair's folder lacks the file, so
+  // the scan dropped them every session and the level backfill stalled at 98%.
+  it('a stem absent at its first allowed pair is found under a later allowed pair, in pair order', async () => {
+    const own = ownDb()
+    const src = sourceDb('src.db')
+    // p1level: pairs jamB (riff a1, first), jamC (riff b1), jamA (riff c1); on disk under jamA
+    // and jamC: jamC is the first of the later pairs that holds it
+    seedRiff(src, 'a1', 'jamB', ['p1level'])
+    seedRiff(src, 'b1', 'jamC', ['p1level'])
+    seedRiff(src, 'c1', 'jamA', ['p1level', 'p2never', 'p3placeholder', 'p4nowhere'])
+    analyse(own, 'p1level', { features: NO_LEVEL })
+    putFile('jamA', 'p1level')
+    putFile('jamC', 'p1level')
+    // never analysed: a later pair's copy is stat-ed like any other
+    seedRiff(src, 'a2', 'jamB', ['p2never', 'p3placeholder', 'p4nowhere'])
+    putFile('jamA', 'p2never')
+    putFile('jamA', 'p3placeholder', 0)
+    // in a jam nobody listed (jamX) only: never a path
+    seedRiff(src, 'a0', 'jamX', ['p4nowhere'])
+    putFile('jamX', 'p4nowhere')
+    const jams: Jams = [
+      { jamCID: 'jamA', dbForJam: src },
+      { jamCID: 'jamB', dbForJam: src },
+      { jamCID: 'jamC', dbForJam: src }
+    ]
+    const result = await listLibraryScanWork(jams, own)
+    const work = asMap(result.work)
+    expect(work.get('p1level')).toBe(stemPath('jamC', 'p1level'))
+    expect(work.get('p2never')).toBe(stemPath('jamA', 'p2never'))
+    expect(work.has('p3placeholder')).toBe(false)
+    expect(result.placeholdersSkipped).toBe(1)
+    expect(work.has('p4nowhere')).toBe(false)
   })
 
   it('an uncacheable db (in-memory) falls back to the walk', async () => {

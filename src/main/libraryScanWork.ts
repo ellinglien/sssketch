@@ -31,16 +31,24 @@
 // 5. existence: present by name in its folder (one async listing per folder,
 //    2 at a time), and for a stem with no feature row a `stat` with size > 0
 //    (8 at a time), so placeholders drop out. A stem with a feature row was
-//    decoded before and is never stat-ed.
+//    decoded before and is never stat-ed. Absent from its first pair's
+//    folder, it is looked for under its later allowed pairs' jams in this db,
+//    in the same order, and the first folder holding it gives its path
+//    (2026-10-07: 905 of Elling's level-backfill stems sat under their own
+//    jam's folder while a riff of another jam used them first, so the scan
+//    dropped them every session and the backfill stalled at 98%).
 // A db the pair cache can't hold (in-memory, no rowid) is walked as
-// listLibraryScanTargets walks it, with the same needs and existence steps.
+// listLibraryScanTargets walks it, with the same needs and existence steps
+// (first pair only: the walk keeps no other pairs).
 //
-// Exact against today's answer (listLibraryScanTargets, then needs, minus
-// placeholders), up to order: the work list is in StemCID order per db, not
-// RiffCID order (plan decision 6: processing order only). The only extra
-// items possible are stems whose name is not a library stem name (contains
-// `.`; none exist, measured) lacking an embedding -- the renderer still asks
-// needs per page, so an extra costs one needs row, never a decode.
+// Exact against listLibraryScanTargets, then needs, minus placeholders, up
+// to order -- except for the later-pair rule in step 5, which only adds
+// stems present on disk that answer dropped. The work list is in StemCID
+// order per db, not RiffCID order (plan decision 6: processing order only).
+// The only other extra items possible are stems whose name is not a library
+// stem name (contains `.`; none exist, measured) lacking an embedding -- the
+// renderer still asks needs per page, so an extra costs one needs row, never
+// a decode.
 //
 // Order (2026-10-06, Elling: own stems first): with `priority`, the list is
 // then stably partitioned -- his own stems, his favourites, the rest
@@ -106,6 +114,9 @@ const YIELD_SLICE_BUDGET_MS = 8
 interface Candidate {
   stemCID: string
   jamCID: string
+  /** The jams of its later allowed pairs in this db, in (RiffCID, slot) order, without
+   * `jamCID`: where else its file is looked for when the first pair's folder lacks it. */
+  laterJamCIDs?: string[]
   /** Has a StemFeatureCache row: decoded before, so never stat-ed. */
   hasFeatures: boolean
 }
@@ -141,24 +152,29 @@ function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
 
-/** The first allowed pair of one stem's pairs: min (RiffCID, slot) among
- * those whose jam is allowed. Undefined when none is. */
-function firstAllowed(
+/** One stem's allowed pairs as a candidate: the first allowed pair -- min (RiffCID, slot)
+ * among those whose jam is allowed -- decides its path, and the other allowed jams, in that
+ * order, are where its file is looked for when the first pair's folder lacks it (settle).
+ * Undefined when no pair is allowed. */
+function candidateOf(
   pairs: readonly PositionedStemJamPair[],
-  allowed: ReadonlySet<string>
-): PositionedStemJamPair | undefined {
-  let best: PositionedStemJamPair | undefined
-  for (const pair of pairs) {
-    if (!allowed.has(pair.jamCID)) continue
-    if (
-      !best ||
-      pair.riffCID < best.riffCID ||
-      (pair.riffCID === best.riffCID && pair.slot < best.slot)
-    ) {
-      best = pair
-    }
+  allowed: ReadonlySet<string>,
+  hasFeatures: boolean
+): Candidate | undefined {
+  const ordered = pairs
+    .filter((pair) => allowed.has(pair.jamCID))
+    .sort((a, b) => (a.riffCID < b.riffCID ? -1 : a.riffCID > b.riffCID ? 1 : a.slot - b.slot))
+  if (ordered.length === 0) return undefined
+  const first = ordered[0]
+  const later = [...new Set(ordered.map((pair) => pair.jamCID))].filter(
+    (jamCID) => jamCID !== first.jamCID
+  )
+  return {
+    stemCID: first.stemCID,
+    jamCID: first.jamCID,
+    ...(later.length > 0 && { laterJamCIDs: later }),
+    hasFeatures
   }
-  return best
 }
 
 /** Runs `fn` over `items`, at most `limit` at once. */
@@ -303,11 +319,29 @@ export async function listLibraryScanWork(
       if (sliceSpent()) await yieldSlice()
     }
     const present: { candidate: Candidate; path: string }[] = []
+    const absent: Candidate[] = []
     await Promise.all(
       [...byDir].map(async ([dir, items]) => {
         const names = await listing.list(dir)
-        if (!names) return
-        for (const item of items) if (names.has(basename(item.path))) present.push(item)
+        for (const item of items) {
+          if (names?.has(basename(item.path))) present.push(item)
+          else if (item.candidate.laterJamCIDs) absent.push(item.candidate)
+        }
+      })
+    )
+    // Not in its first pair's folder: the first of its later allowed pairs' folders that holds
+    // it (a stem used first by a riff of another jam, which never downloaded it there -- 905 of
+    // Elling's stems, 2026-10-07). Each folder is listed at most once (the listing memoizes).
+    await Promise.all(
+      absent.map(async (candidate) => {
+        for (const jamCID of candidate.laterJamCIDs ?? []) {
+          const path = resolveStemPath(jamCID, candidate.stemCID)
+          const names = await listing.list(dirname(path))
+          if (!names?.has(basename(path))) continue
+          countWork('library-scan-work.later-pair')
+          present.push({ candidate, path })
+          return
+        }
       })
     )
     const unstatted = present.filter((p) => !p.candidate.hasFeatures)
@@ -323,17 +357,14 @@ export async function listLibraryScanWork(
       }
     })
     // in the batch's (StemCID) order, whatever order the listings finished in
-    const kept = new Set(
+    const kept = new Map(
       present
         .filter((p) => p.candidate.hasFeatures || usable.has(p.candidate.stemCID))
-        .map((p) => p.candidate.stemCID)
+        .map((p) => [p.candidate.stemCID, p.path])
     )
     for (const candidate of candidates) {
-      if (!kept.has(candidate.stemCID)) continue
-      work.push({
-        key: candidate.stemCID,
-        path: resolveStemPath(candidate.jamCID, candidate.stemCID)
-      })
+      const path = kept.get(candidate.stemCID)
+      if (path !== undefined) work.push({ key: candidate.stemCID, path })
     }
   }
 
@@ -374,10 +405,8 @@ export async function listLibraryScanWork(
 
       const batch: Candidate[] = []
       const decide = (group: { pairs: PositionedStemJamPair[]; hasFeatures: boolean }): void => {
-        const pair = firstAllowed(group.pairs, allowed)
-        if (pair) {
-          batch.push({ stemCID: pair.stemCID, jamCID: pair.jamCID, hasFeatures: group.hasFeatures })
-        }
+        const candidate = candidateOf(group.pairs, allowed, group.hasFeatures)
+        if (candidate) batch.push(candidate)
       }
       for (const row of rows) {
         const pair = {
@@ -418,8 +447,8 @@ export async function listLibraryScanWork(
       const batch: Candidate[] = []
       for (const id of ids) {
         const pairs = byStem.get(id)
-        const pair = pairs && firstAllowed(pairs, allowed)
-        if (pair) batch.push({ stemCID: id, jamCID: pair.jamCID, hasFeatures: true })
+        const candidate = pairs && candidateOf(pairs, allowed, true)
+        if (candidate) batch.push(candidate)
       }
       await settle(batch)
       await yieldSlice()
