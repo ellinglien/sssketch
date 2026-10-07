@@ -58,9 +58,8 @@ import {
 } from '../audio/discoverSeed'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import {
-  RIFF_LIBRARY_USERNAME_CHANGED_EVENT,
   announceRiffLibraryUsernameChanged,
-  isLoggedOutEvent,
+  followEndlesssAuthStatus,
   loadTypedRiffLibraryUsername,
   storeTypedRiffLibraryUsername
 } from '../audio/riffLibraryUsername'
@@ -273,14 +272,13 @@ export function LibraryBrowser({
       .finally(() => {
         if (!cancelled) setAuthChecked(true)
       })
-    // A logout from elsewhere (the settings menu) changes who "me" is too.
-    const onUsernameChanged = (event: Event): void => {
-      if (isLoggedOutEvent(event)) takeAuthStatus({ loggedIn: false })
-    }
-    window.addEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onUsernameChanged)
+    // Then follows it: a logout from elsewhere (the settings menu), or an
+    // email login whose username main resolved after answering, changes
+    // who "me" is too -- without reopening the library.
+    const stopFollowing = followEndlesssAuthStatus(takeAuthStatus)
     return () => {
       cancelled = true
-      window.removeEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onUsernameChanged)
+      stopFollowing()
     }
   }, [takeAuthStatus])
 

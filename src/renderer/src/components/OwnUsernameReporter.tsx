@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import {
   RIFF_LIBRARY_USERNAME_CHANGED_EVENT,
   isLoggedOutEvent,
+  relayEndlesssUsernameChanges,
   resolveOwnUsernameReport
 } from '../audio/riffLibraryUsername'
 
@@ -25,7 +26,13 @@ export function OwnUsernameReporter(): null {
     const onChange = (event: Event): void => report(isLoggedOutEvent(event))
     report(false)
     window.addEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onChange)
-    return () => window.removeEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onChange)
+    // Mounted for the whole session, so the one relay of main's "the
+    // session's username resolved late" (an email login) lives here too.
+    const stopRelay = relayEndlesssUsernameChanges()
+    return () => {
+      stopRelay()
+      window.removeEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onChange)
+    }
   }, [])
   return null
 }

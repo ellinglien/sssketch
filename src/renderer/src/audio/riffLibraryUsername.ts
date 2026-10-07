@@ -9,8 +9,9 @@
 // go through it. There is no default identity.
 //
 // LibraryBrowser announces a possible change (a username edit, a login or
-// logout) with RIFF_LIBRARY_USERNAME_CHANGED_EVENT on `window`; listeners
-// resolve again and compare.
+// logout) with RIFF_LIBRARY_USERNAME_CHANGED_EVENT on `window`, and main's
+// word that a session's username resolved late is relayed as the same event
+// (relayEndlesssUsernameChanges); listeners resolve again and compare.
 
 import {
   ownUsernameReportFrom,
@@ -43,6 +44,47 @@ export function announceEndlesssLoggedOut(): void {
 export function isLoggedOutEvent(event: Event): boolean {
   const detail = (event as CustomEvent<{ loggedOut?: boolean } | null>).detail
   return detail?.loggedOut === true
+}
+
+/** What window.rifffApi.endlesssAuthStatus() answers. */
+export type EndlesssAuthStatus = Awaited<ReturnType<Window['rifffApi']['endlesssAuthStatus']>>
+
+/** Main's word that the Endlesss session's username changed after it
+ * answered auth status (its check against Endlesss finished in the
+ * background: an email login resolved later), relayed as
+ * RIFF_LIBRARY_USERNAME_CHANGED_EVENT so every listener resolves again.
+ * Mounted once for the app (OwnUsernameReporter). Returns the unsubscribe. */
+export function relayEndlesssUsernameChanges(): () => void {
+  return window.rifffApi.onEndlesssUsernameChanged(() => announceRiffLibraryUsernameChanged())
+}
+
+/** Keeps a view's copy of the Endlesss session current after its first
+ * answer: every RIFF_LIBRARY_USERNAME_CHANGED_EVENT asks auth status again
+ * (a logout reads as logged out at once), and an answer older than the
+ * latest ask is dropped. Returns the unsubscribe. */
+export function followEndlesssAuthStatus(
+  onStatus: (status: EndlesssAuthStatus) => void
+): () => void {
+  let latestAsk = 0
+  let stopped = false
+  const onChange = (event: Event): void => {
+    const ask = ++latestAsk
+    if (isLoggedOutEvent(event)) {
+      onStatus({ loggedIn: false })
+      return
+    }
+    window.rifffApi
+      .endlesssAuthStatus()
+      .then((status) => {
+        if (!stopped && ask === latestAsk) onStatus(status)
+      })
+      .catch((err) => console.error('followEndlesssAuthStatus: endlesssAuthStatus() failed:', err))
+  }
+  window.addEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onChange)
+  return () => {
+    stopped = true
+    window.removeEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onChange)
+  }
 }
 
 /** The typed username: a string (maybe empty) when one was ever set, else
