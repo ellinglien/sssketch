@@ -6,6 +6,7 @@ import {
   REMOTE_WRONG_ADDRESS_NOTICE
 } from './remotePage'
 import {
+  cryptoUnitRandom,
   startRemoteServer,
   type RemoteServerHandle,
   type RemoteServerOptions
@@ -929,5 +930,28 @@ describe('the arc route', () => {
     )
     expect(res.status).toBe(401)
     expect(commands).toEqual([])
+  })
+})
+
+// Share readiness S11 (2026-10-07): the pairing code is drawn from the crypto source, like the
+// session token, not Math.random.
+describe('cryptoUnitRandom', () => {
+  it('draws from [0, 1), spread across the range', () => {
+    const draws = Array.from({ length: 2000 }, () => cryptoUnitRandom())
+    for (const d of draws) {
+      expect(d).toBeGreaterThanOrEqual(0)
+      expect(d).toBeLessThan(1)
+    }
+    expect(Math.min(...draws)).toBeLessThan(0.1)
+    expect(Math.max(...draws)).toBeGreaterThan(0.9)
+  })
+
+  it('is what the server draws its pairing code from: Math.random is never read', async () => {
+    const spy = vi.spyOn(Math, 'random')
+    cryptoUnitRandom()
+    const { pairingCode } = await start()
+    expect(pairingCode).toMatch(/^[A-Z2-9]{4}$/)
+    expect(spy).not.toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

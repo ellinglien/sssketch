@@ -1,7 +1,7 @@
 // src/main/remoteServer.ts
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
-import { randomBytes } from 'node:crypto'
+import { randomBytes, randomInt } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
 import {
   REMOTE_PORT,
@@ -255,11 +255,17 @@ function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
  * (see `refuse`): an empty object for the page's own fetch calls, and the
  * same one-line notice page for every navigation. Same status, same
  * indistinguishability, one of them readable on a phone. */
+/** A uniform draw from [0, 1) off the crypto source, for the pairing code (share readiness S11,
+ * 2026-10-07). The lockout is the real protection; this just costs nothing. */
+export function cryptoUnitRandom(): number {
+  return randomInt(0, 2 ** 32) / 2 ** 32
+}
+
 export function startRemoteServer(options: RemoteServerOptions): RemoteServerHandle {
   const port = options.portOverride ?? REMOTE_PORT
   const expectedHost = `${options.lanAddress}:${port}`
   const localAddresses = options.localAddressesOverride ?? ownAddresses
-  const pairingCode = newPairingCode(Math.random)
+  const pairingCode = newPairingCode(cryptoUnitRandom)
   let gate: PairingGate = { attemptsUsed: 0, lockedOut: false }
   const tokens = new Set<string>()
 
