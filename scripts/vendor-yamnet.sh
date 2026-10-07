@@ -24,28 +24,34 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT_DIR="$REPO_ROOT/resources/yamnet"
-MODEL_URL="https://huggingface.co/andrelgomes/yamnet-onnx/resolve/main/yamnet.onnx"
+# Pinned to one commit of the Hugging Face repo, not `main`: a later push
+# there can never change what ships. Fallback if this URL ever goes away:
+# mirror the same file (same hash) as a GitHub release asset on this repo and
+# point MODEL_URL at that instead -- the hash check below stays as it is.
+MODEL_URL="https://huggingface.co/andrelgomes/yamnet-onnx/resolve/8a03a1572569685c42fdbef54ff36435dbaaf689/yamnet.onnx"
+# sha256 of that exact file (16093603 bytes), checked 2026-10-07 against the
+# copy vendored 2026-09-14.
+MODEL_SHA256="1510041dce24a2e9e84ec546807ac408ae496da6d1ed41bc3ccba649623f8e19"
 
-# A real, non-truncated download of this exact file is ~16MB (verified
-# 2026-09-14: content-length 16093603 bytes). curl -f only fails on an HTTP
-# error status -- it would NOT fail if Hugging Face ever served something
-# unexpected but still 200 OK (e.g. a Git-LFS pointer text file, the classic
-# gotcha for a wrong/blob-form URL -- a few hundred bytes of plaintext, not
-# the real binary). This runs unattended in CI before every release, so a
-# silent bad fetch here would ship a broken model with no build-time error,
-# only a confusing runtime failure much later when onnxruntime-web tries to
-# load it -- fail loudly here instead, immediately, with a clear message.
-MIN_EXPECTED_BYTES=$((10 * 1024 * 1024))
-
+# curl -f only fails on an HTTP error status -- it would NOT fail if Hugging
+# Face ever served something unexpected but still 200 OK (e.g. a Git-LFS
+# pointer text file, the classic gotcha for a wrong/blob-form URL), or a
+# different file. This runs unattended in CI before every release, so a
+# silent bad fetch would ship a broken model with no build-time error, only a
+# confusing runtime failure much later when onnxruntime-web tries to load it.
+# So the download goes to a temp file and only replaces the model once its
+# sha256 matches; anything else fails the build here, loudly.
 mkdir -p "$OUT_DIR"
-echo "vendor-yamnet: downloading $MODEL_URL"
-curl -fL --progress-bar "$MODEL_URL" -o "$OUT_DIR/yamnet.onnx"
+TMP_FILE="$OUT_DIR/yamnet.onnx.download"
+trap 'rm -f "$TMP_FILE"' EXIT
 
-actual_bytes=$(wc -c < "$OUT_DIR/yamnet.onnx" | tr -d ' ')
-if [ "$actual_bytes" -lt "$MIN_EXPECTED_BYTES" ]; then
-  echo "vendor-yamnet: downloaded file is only $actual_bytes bytes, expected at least $MIN_EXPECTED_BYTES -- this looks like a truncated download or an unexpected response (e.g. a Git-LFS pointer file) rather than the real model; removing it" >&2
-  rm -f "$OUT_DIR/yamnet.onnx"
+echo "vendor-yamnet: downloading $MODEL_URL"
+curl -fL --progress-bar "$MODEL_URL" -o "$TMP_FILE"
+
+if ! echo "$MODEL_SHA256  $TMP_FILE" | shasum -a 256 -c -; then
+  echo "vendor-yamnet: sha256 mismatch -- got $(shasum -a 256 "$TMP_FILE" | cut -d' ' -f1), expected $MODEL_SHA256 ($(wc -c < "$TMP_FILE" | tr -d ' ') bytes); not the pinned model (a truncated download, a Git-LFS pointer file, or a changed upstream), so it was not installed" >&2
   exit 1
 fi
 
+mv -f "$TMP_FILE" "$OUT_DIR/yamnet.onnx"
 echo "vendor-yamnet: wrote $OUT_DIR/yamnet.onnx ($(du -h "$OUT_DIR/yamnet.onnx" | cut -f1))"

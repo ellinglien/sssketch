@@ -17,7 +17,8 @@ const DEFAULT_LIMITS = {
   // ~21 MB today (out/ plus production node_modules); 60 MB leaves room to
   // grow and still catches the repo being bundled again.
   maxAsarBytes: 60 * 1024 * 1024,
-  // Same floor as scripts/vendor-yamnet.sh (the real file is ~16 MB).
+  // A floor, not a hash (scripts/vendor-yamnet.sh checks the sha256 at
+  // download): the real file is ~16 MB.
   minYamnetBytes: 10 * 1024 * 1024
 }
 
