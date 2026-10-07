@@ -329,41 +329,50 @@ export async function listLibraryScanWork(
         }
       })
     )
-    // Not in its first pair's folder: the first of its later allowed pairs' folders that holds
-    // it (a stem used first by a riff of another jam, which never downloaded it there -- 905 of
-    // Elling's stems, 2026-10-07). Each folder is listed at most once (the listing memoizes).
-    await Promise.all(
-      absent.map(async (candidate) => {
-        for (const jamCID of candidate.laterJamCIDs ?? []) {
-          const path = resolveStemPath(jamCID, candidate.stemCID)
-          const names = await listing.list(dirname(path))
-          if (!names?.has(basename(path))) continue
-          countWork('library-scan-work.later-pair')
-          present.push({ candidate, path })
-          return
-        }
-      })
-    )
-    const unstatted = present.filter((p) => !p.candidate.hasFeatures)
-    const usable = new Set<string>()
-    await forEachLimited(unstatted, STAT_CONCURRENCY, async ({ candidate, path }) => {
+    // Each stem's path: the first folder, in pair order, that holds a usable copy -- present by
+    // name and, when never analysed, a non-empty file. An analysed stem (hasFeatures) is never
+    // stat-ed: its first folder holding the name wins, as before.
+    const usable = new Map<string, string>()
+    const placeholders = new Set<string>()
+    const lookFurther: Candidate[] = [...absent]
+    /** Whether `path` is usable for `candidate`; notes a placeholder. */
+    const isUsable = async (candidate: Candidate, path: string): Promise<boolean> => {
+      if (candidate.hasFeatures) return true
       countWork('fs:stat.library-scan-work')
       try {
         const s = await statFn(path)
-        if (s.isFile() && s.size > 0) usable.add(candidate.stemCID)
-        else placeholdersSkipped += 1
+        if (s.isFile() && s.size > 0) return true
+        placeholders.add(candidate.stemCID)
       } catch {
-        // gone since the listing: nothing to analyse
+        // gone since the listing: nothing to analyse here
+      }
+      return false
+    }
+    await forEachLimited(present, STAT_CONCURRENCY, async ({ candidate, path }) => {
+      if (await isUsable(candidate, path)) usable.set(candidate.stemCID, path)
+      else if (candidate.laterJamCIDs) lookFurther.push(candidate)
+    })
+    // Not (usably) in its first pair's folder: the first of its later allowed pairs' folders that
+    // holds it (a stem used first by a riff of another jam, which never downloaded it there -- 905
+    // of Elling's stems, 2026-10-07). A 0-byte placeholder (an unfinished download) in one of them
+    // doesn't end the search: a later folder may hold the whole file (review of c6da2bce). Each
+    // folder is listed at most once (the listing memoizes).
+    await forEachLimited(lookFurther, STAT_CONCURRENCY, async (candidate) => {
+      for (const jamCID of candidate.laterJamCIDs ?? []) {
+        const path = resolveStemPath(jamCID, candidate.stemCID)
+        const names = await listing.list(dirname(path))
+        if (!names?.has(basename(path))) continue
+        if (!(await isUsable(candidate, path))) continue
+        countWork('library-scan-work.later-pair')
+        usable.set(candidate.stemCID, path)
+        return
       }
     })
+    // A stem with a usable copy somewhere is not a skipped placeholder, whatever else it met.
+    for (const stemCID of placeholders) if (!usable.has(stemCID)) placeholdersSkipped += 1
     // in the batch's (StemCID) order, whatever order the listings finished in
-    const kept = new Map(
-      present
-        .filter((p) => p.candidate.hasFeatures || usable.has(p.candidate.stemCID))
-        .map((p) => [p.candidate.stemCID, p.path])
-    )
     for (const candidate of candidates) {
-      const path = kept.get(candidate.stemCID)
+      const path = usable.get(candidate.stemCID)
       if (path !== undefined) work.push({ key: candidate.stemCID, path })
     }
   }

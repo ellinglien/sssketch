@@ -415,6 +415,36 @@ describe('listLibraryScanWork (background scan audit 3)', () => {
     expect(work.has('p4nowhere')).toBe(false)
   })
 
+  // Review of c6da2bce: a 0-byte placeholder (an unfinished download) in one folder ended the
+  // search, though a later allowed pair's folder could hold the whole file.
+  it('looks past a placeholder, at the first pair or a later one, to a later pair holding the file', async () => {
+    const own = ownDb()
+    const src = sourceDb('src.db')
+    // q1: pairs jamB, jamC, jamA -- placeholders under jamB and jamC, the file under jamA
+    seedRiff(src, 'a1', 'jamB', ['q1', 'q2', 'q3'])
+    seedRiff(src, 'b1', 'jamC', ['q1', 'q2', 'q3'])
+    seedRiff(src, 'c1', 'jamA', ['q1', 'q3'])
+    putFile('jamB', 'q1', 0)
+    putFile('jamC', 'q1', 0)
+    putFile('jamA', 'q1')
+    // q2: absent under jamB, a placeholder under jamC, and nowhere else: skipped, once
+    putFile('jamC', 'q2', 0)
+    // q3: placeholders wherever it is: skipped, counted once
+    putFile('jamB', 'q3', 0)
+    putFile('jamA', 'q3', 0)
+    const jams: Jams = [
+      { jamCID: 'jamA', dbForJam: src },
+      { jamCID: 'jamB', dbForJam: src },
+      { jamCID: 'jamC', dbForJam: src }
+    ]
+    const result = await listLibraryScanWork(jams, own)
+    const work = asMap(result.work)
+    expect(work.get('q1')).toBe(stemPath('jamA', 'q1'))
+    expect(work.has('q2')).toBe(false)
+    expect(work.has('q3')).toBe(false)
+    expect(result.placeholdersSkipped).toBe(2)
+  })
+
   it('an uncacheable db (in-memory) falls back to the walk', async () => {
     const own = ownDb()
     const mem = sourceDb(null)
