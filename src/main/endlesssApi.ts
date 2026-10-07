@@ -139,11 +139,14 @@ export function getAuthStatus():
   }
 }
 
-/** A check that couldn't reach Endlesss (offline) is tried again after this
- * long, not on every auth-status ask. */
+/** A check that couldn't reach Endlesss (offline, or a 5xx/429) is tried
+ * again after this long, not on every auth-status ask. */
 const CANONICAL_RETRY_MS = 60_000
 /** Per candidate. Short: an email login's auth status waits on the check. */
 const CANONICAL_CHECK_TIMEOUT_MS = 5000
+/** The membership view's answers that mean "not this account": no access, or
+ * no such user_appdata db. Every other non-ok status is an outage. */
+const CANDIDATE_REFUSED_STATUSES = new Set([401, 403, 404])
 /** The current session's check: `allFailed` once Endlesss answered no to
  * every candidate -- an answer, not an outage, so it is kept for the session
  * and never asked again (a new login is a new session, checked afresh). */
@@ -202,7 +205,15 @@ export async function ensureCanonicalUsername(fetchImpl: FetchLike = fetch): Pro
       }
       // Logged out (or in again) while this was out: not this session's to change.
       if (currentSession !== session) return
-      if (!res.ok) continue
+      if (!res.ok) {
+        // Only these are Endlesss saying "not this account's db": the next
+        // candidate is asked. A 5xx, a 429 or anything else is Endlesss being
+        // unwell, not an answer: left for the retry after CANONICAL_RETRY_MS,
+        // never counted toward allFailed (review of 8d003738).
+        if (CANDIDATE_REFUSED_STATUSES.has(res.status)) continue
+        console.error(`endlesssApi: the account username check got HTTP ${res.status}`)
+        return
+      }
       const before = sessionUsername(session)
       session.canonicalUsername = candidate
       persistSession(session)

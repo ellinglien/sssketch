@@ -1231,6 +1231,34 @@ describe('auth status and the username check behind it (2026-10-07 review)', () 
     ).toHaveLength(1)
   })
 
+  // Review of 8d003738: only 401/403/404 are Endlesss saying no. A 5xx or a
+  // 429 is Endlesss being unwell, retried after 60 s like an unreachable one.
+  for (const status of [500, 503, 429]) {
+    it(`a ${status} is not a refusal: tried again after 60 s, not given up on`, async () => {
+      const api = await import('./endlesssApi')
+      let membership = 0
+      const fetchImpl = vi.fn(async (url: string) => {
+        if (url.endsWith('/auth/login')) return loginResponse('elling')
+        membership++
+        return new Response('{}', { status })
+      }) as unknown as typeof fetch
+      vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      await api.loginWithCredentials('someone@example.org', 'pw', fetchImpl)
+      const start = Date.now()
+      const now = vi.spyOn(Date, 'now').mockReturnValue(start)
+
+      await api.authStatusWithUsername(fetchImpl)
+      // the first candidate's error stops the check: the next is not asked
+      expect(membership).toBe(1)
+      now.mockReturnValue(start + 59_000)
+      await api.authStatusWithUsername(fetchImpl)
+      expect(membership).toBe(1)
+      now.mockReturnValue(start + 61_000)
+      await api.authStatusWithUsername(fetchImpl)
+      expect(membership).toBe(2)
+    })
+  }
+
   it('a check that could not reach Endlesss is tried again only after 60 s', async () => {
     const api = await import('./endlesssApi')
     let membership = 0
