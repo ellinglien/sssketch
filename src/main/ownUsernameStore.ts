@@ -17,6 +17,7 @@ import {
 } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
+import { normalizeEndlesssUsername } from '@shared/endlesssUsername'
 
 const STORE_FILENAME = 'ownUsername.json'
 
@@ -24,13 +25,16 @@ function storePath(): string {
   return join(app.getPath('userData'), STORE_FILENAME)
 }
 
-/** The saved username, or null (none saved, or the file can't be read). */
+/** The saved username, normalised (@shared/endlesssUsername: lowercase, and
+ * an email is nobody -- a file saved before 2026-10-07 can hold either), or
+ * null (none saved, or the file can't be read). */
 export function loadOwnUsername(): string | null {
   const path = storePath()
   if (!existsSync(path)) return null
   try {
     const parsed = JSON.parse(readFileSync(path, 'utf-8')) as { username?: unknown }
-    const name = typeof parsed.username === 'string' ? parsed.username.trim() : ''
+    const name =
+      typeof parsed.username === 'string' ? normalizeEndlesssUsername(parsed.username) : ''
     return name === '' ? null : name
   } catch (err) {
     console.error(`loadOwnUsername: failed to read ${path}:`, err)

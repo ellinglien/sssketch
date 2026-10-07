@@ -58,6 +58,18 @@ describe('ownUsernameStore', () => {
     error.mockRestore()
   })
 
+  it('a name saved before usernames were normalised reads as the username, or none (2026-10-07)', async () => {
+    const { loadOwnUsername } = await import('./ownUsernameStore')
+    writeFileSync(join(dir, 'ownUsername.json'), JSON.stringify({ username: ' Elling ' }))
+    expect(loadOwnUsername()).toBe('elling')
+    // an email login was once saved as "me": it is nobody, never the email
+    writeFileSync(
+      join(dir, 'ownUsername.json'),
+      JSON.stringify({ username: 'someone@example.org' })
+    )
+    expect(loadOwnUsername()).toBeNull()
+  })
+
   it('a broken file reads as none, never a throw', async () => {
     writeFileSync(join(dir, 'ownUsername.json'), '{not json')
     const { loadOwnUsername } = await import('./ownUsernameStore')
