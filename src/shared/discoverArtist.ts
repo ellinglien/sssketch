@@ -158,6 +158,10 @@ export interface ArtistIndex {
   jammedWithPending: boolean
 }
 
+/** Adds up per-db counts. The lists must not share a stem: getArtistIndex
+ * (discoverArtistIndex.ts) gives each db after the first only the stems no
+ * earlier db has (readArtistCountsAfter), so a stem in both the archive and
+ * the own db is counted once, as the archive's. */
 export function mergeArtistCounts(lists: readonly (readonly ArtistCount[])[]): ArtistCount[] {
   const total = new Map<string, number>()
   for (const list of lists) {

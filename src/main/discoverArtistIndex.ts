@@ -24,6 +24,7 @@
 import type Database from 'better-sqlite3'
 import { countWork } from './workCounters'
 import { getTraitValueTable } from './traitQuantileCache'
+import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import {
   CACHE_CHANGE_CHECK_INTERVAL_MS,
   isTableCountInFlight,
@@ -107,6 +108,126 @@ export async function readArtistCounts(
   return out
 }
 
+/** Stems of a later db looked up in the earlier ones per IN query. */
+const SEEK_CHUNK = 500
+
+/** A Shared Feed jam or the kept groups: a synthetic jam holding copies of
+ * other jams' stems, so whether an earlier db has them is asked per stem. */
+function isSyntheticJam(jamCID: string): boolean {
+  return jamCID.startsWith('shared:') || jamCID === DISCOVERED_JAM_CID
+}
+
+/** The stems of `db` none of the `earlier` dbs holds, counted per user --
+ * so the lists getArtistIndex adds up count each StemCID once, in the first
+ * db that has it (the archive; review of b859757c: the own db's ~56k rows of
+ * jams the archive has, and the Shared Feed's 4,869 archive stems, were
+ * counted twice).
+ *
+ * By jam, as Discover routes them (riffLibraryStore.ts's ownRoutedJams): a
+ * real jam an earlier db has stems for is that db's, whole, so its rows here
+ * are skipped with one seek per jam (Stems_IndexOwner on the archive). A
+ * synthetic jam's stems (the Shared Feed's, kept groups) are looked up by
+ * StemCID. A real jam only this db has is counted without a lookup.
+ * Measured 2026-10-07 on his own db (81,902 stems) after the USB archive:
+ * 20,345 counted (was 81,902), 48-56 ms warm, 1.2-2.0 s when the archive's
+ * pages are cold (36 jam seeks, 5,307 lookups, spread over the walk's
+ * pages); looking up every stem was 3.2 s warm, 8.3 s cold. Off from an
+ * exact per-stem union by the stems this db alone has in jams an earlier db
+ * has (97 on his, left out of Discover too) and a stem a real jam shares
+ * with another db's jam (1 on his).
+ *
+ * The own db's Stems has no OwnerJamCID index, so it is walked in rowid
+ * pages, yielding between them -- .all() per page, never .iterate() across
+ * an await -- tallying real jams' rows per jam, then one seek per jam. A
+ * failed lookup in an earlier db leaves the stem (or jam) counted. */
+export async function readArtistCountsAfter(
+  db: Database.Database,
+  earlier: readonly Database.Database[],
+  pageSize = PAIR_PAGE
+): Promise<ArtistCount[]> {
+  if (earlier.length === 0) return readArtistCounts(db)
+  let page: Database.Statement
+  try {
+    page = db.prepare(
+      `SELECT rowid AS rid, StemCID AS id, OwnerJamCID AS jam, CreatorUserName AS user FROM Stems
+       WHERE rowid > ? ORDER BY rowid LIMIT ?`
+    )
+  } catch {
+    return []
+  }
+  const counts = new Map<string, number>()
+  const bump = (user: string, n = 1): void => {
+    counts.set(user, (counts.get(user) ?? 0) + n)
+  }
+  // Real jams' rows, per jam and user: which jams an earlier db takes is
+  // decided once the walk has seen them all.
+  const perJam = new Map<string, Map<string, number>>()
+  let after = 0
+  for (;;) {
+    if (aborted) throw new Error('discoverArtistIndex: aborted (quitting)')
+    countWork('sql:discover.artist-counts-page')
+    const rows = page.all(after, pageSize) as {
+      rid: number
+      id: string
+      jam: string
+      user: string | null
+    }[]
+    const lookUp: { id: string; user: string }[] = []
+    for (const { id, jam, user } of rows) {
+      if (!user) continue
+      if (isSyntheticJam(jam)) {
+        lookUp.push({ id, user })
+        continue
+      }
+      let users = perJam.get(jam)
+      if (!users) {
+        users = new Map()
+        perJam.set(jam, users)
+      }
+      users.set(user, (users.get(user) ?? 0) + 1)
+    }
+    for (let i = 0; i < lookUp.length; i += SEEK_CHUNK) {
+      const chunk = lookUp.slice(i, i + SEEK_CHUNK)
+      const held = new Set<string>()
+      for (const other of earlier) {
+        try {
+          const found = other
+            .prepare(
+              `SELECT StemCID AS id FROM Stems WHERE StemCID IN (${chunk.map(() => '?').join(',')})`
+            )
+            .all(...chunk.map((row) => row.id)) as { id: string }[]
+          for (const row of found) held.add(row.id)
+        } catch {
+          // Can't ask this db: these stems are counted here.
+        }
+      }
+      for (const { id, user } of chunk) if (!held.has(id)) bump(user)
+    }
+    if (rows.length < pageSize) break
+    after = rows[rows.length - 1].rid
+    await yieldToEventLoop()
+  }
+  countWork('sql:discover.artist-counts-jams')
+  const hasJam = earlier.flatMap((other) => {
+    try {
+      return [other.prepare(`SELECT 1 FROM Stems WHERE OwnerJamCID = ? LIMIT 1`)]
+    } catch {
+      return []
+    }
+  })
+  for (const [jam, users] of perJam) {
+    const taken = hasJam.some((stmt) => {
+      try {
+        return stmt.get(jam) !== undefined
+      } catch {
+        return false // can't ask this db: the jam's rows here are counted
+      }
+    })
+    if (!taken) for (const [user, n] of users) bump(user, n)
+  }
+  return [...counts].map(([user, stems]) => ({ user, stems }))
+}
+
 export async function readJamUserPairs(
   db: Database.Database,
   pageSize = PAIR_PAGE
@@ -173,6 +294,17 @@ interface Cached<T> {
 }
 let countsCache = new WeakMap<Database.Database, Cached<ArtistCount[]>>()
 let countsInFlight = new WeakMap<Database.Database, Promise<ArtistCount[]>>()
+/** A later db's counts (readArtistCountsAfter): they also depend on the
+ * earlier dbs, so they are kept with the earlier dbs and their states. */
+interface CachedAfter extends Cached<ArtistCount[]> {
+  earlier: readonly Database.Database[]
+  earlierStates: ScanCacheState[]
+}
+let countsAfterCache = new WeakMap<Database.Database, CachedAfter>()
+let countsAfterInFlight = new WeakMap<
+  Database.Database,
+  { earlier: readonly Database.Database[]; run: Promise<ArtistCount[]> }
+>()
 /** One source db's pairs in memory: `keys` mirrors `value` (jam\0user), and
  * `watermark` (rowidWatermark.ts) is how far through Stems they were built --
  * null for pairs from a legacy saved row, or an uncacheable db's walk,
@@ -224,6 +356,48 @@ function countsFor(db: Database.Database, signalOf: SignalOf): Promise<ArtistCou
       if (countsInFlight.get(db) === run) countsInFlight.delete(db)
     })
   countsInFlight.set(db, run)
+  return run
+}
+
+function sameDbs(a: readonly Database.Database[], b: readonly Database.Database[]): boolean {
+  return a.length === b.length && a.every((db, i) => db === b[i])
+}
+
+/** countsFor for a db after others in getArtistIndex's list: its stems no
+ * earlier db holds. Rebuilt when its own Stems or any earlier db's moves. */
+function countsAfterFor(
+  db: Database.Database,
+  earlier: readonly Database.Database[],
+  signalOf: SignalOf
+): Promise<ArtistCount[]> {
+  if (earlier.length === 0) return countsFor(db, signalOf)
+  const hit = countsAfterCache.get(db)
+  // Every state is checked (no short circuit), so each one's clock moves.
+  const current =
+    hit &&
+    sameDbs(hit.earlier, earlier) &&
+    [
+      isCurrent(db, hit.state, signalOf),
+      ...earlier.map((e, i) => isCurrent(e, hit.earlierStates[i], signalOf))
+    ].every(Boolean)
+  if (hit && current) return Promise.resolve(hit.value)
+  const pending = countsAfterInFlight.get(db)
+  if (pending && sameDbs(pending.earlier, earlier)) return pending.run
+  const state = newScanCacheState(signalOf(db))
+  const earlierStates = earlier.map((e) => newScanCacheState(signalOf(e)))
+  const run = readArtistCountsAfter(db, earlier)
+    .then((value) => {
+      countsAfterCache.set(db, { value, state, earlier: [...earlier], earlierStates })
+      return value
+    })
+    .catch((err: unknown) => {
+      if (!aborted) console.error('discoverArtistIndex: counts failed:', err)
+      return hit?.value ?? []
+    })
+    .finally(() => {
+      if (countsAfterInFlight.get(db)?.run === run) countsAfterInFlight.delete(db)
+    })
+  countsAfterInFlight.set(db, { earlier: [...earlier], run })
   return run
 }
 
@@ -472,7 +646,11 @@ export async function getArtistIndex(
   lastOwnDb = ownDb
   const signalOf = signalReader()
   const perDb = dbs.map((db) => pairsFor(ownDb, db, signalOf))
-  const counts = mergeArtistCounts(await Promise.all(dbs.map((db) => countsFor(db, signalOf))))
+  // Each db's list holds only stems no earlier db has (the archive comes
+  // first), so adding them up counts each StemCID once.
+  const counts = mergeArtistCounts(
+    await Promise.all(dbs.map((db, i) => countsAfterFor(db, dbs.slice(0, i), signalOf)))
+  )
   const ready = perDb.every((p) => p.pairs !== null)
   return {
     counts,
@@ -547,6 +725,8 @@ export async function getArtistAnalysed(
 export function resetArtistIndexForTests(): void {
   countsCache = new WeakMap()
   countsInFlight = new WeakMap()
+  countsAfterCache = new WeakMap()
+  countsAfterInFlight = new WeakMap()
   pairsCache = new WeakMap()
   pairsInFlight = new WeakMap()
   pairsBase = new WeakMap()

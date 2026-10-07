@@ -540,6 +540,59 @@ describe('pairs from the shared Stems walk (scan plan Task 4)', () => {
   })
 })
 
+describe('getArtistIndex: a stem in two dbs is counted once (review of b859757c)', () => {
+  /** The archive first, then the own db, as discoverSourceDbs lists them. */
+  function archiveAndOwn(): { lore: Database.Database; own: Database.Database } {
+    const lore = archive()
+    seed(lore, 's1', 'jam-a', 'tpj')
+    seed(lore, 's2', 'jam-a', 'elling')
+    seed(lore, 's3', 'jam-b', 'tpj')
+    const own = ownDb()
+    // A jam the archive has: the own copy is the archive's, whole -- s9 only
+    // the own db has, left out as Discover leaves it out.
+    seed(own, 's1', 'jam-a', 'tpj')
+    seed(own, 's9', 'jam-a', 'elling')
+    // The Shared Feed: s3 is an archive stem, s10 is not.
+    seed(own, 's3', 'shared:elling', 'tpj')
+    seed(own, 's10', 'shared:elling', 'zed')
+    // A jam only sssketch synced (own-routed): its own.
+    seed(own, 's20', 'jam-own', 'elling')
+    seed(own, 's21', 'jam-own', null)
+    return { lore, own }
+  }
+  const byUser = (counts: { user: string; stems: number }[]): Record<string, number> =>
+    Object.fromEntries(counts.map((c) => [c.user, c.stems]))
+
+  it('each StemCID once, the archive first: a jam it has and Shared Feed copies of its stems', async () => {
+    const { lore, own } = archiveAndOwn()
+    const index = await getArtistIndex(own, [lore, own], 'elling')
+    expect(byUser(index.counts)).toEqual({ tpj: 2, elling: 2, zed: 1 })
+  })
+
+  it('a db alone counts every stem, as before', async () => {
+    const { own } = archiveAndOwn()
+    const index = await getArtistIndex(own, [own], 'elling')
+    expect(byUser(index.counts)).toEqual({ tpj: 2, elling: 2, zed: 1 })
+    const { lore } = archiveAndOwn()
+    expect(byUser((await getArtistIndex(own, [lore], 'elling')).counts)).toEqual({
+      tpj: 2,
+      elling: 1
+    })
+  })
+
+  it('follows the archive: a stem it gains stops counting in the own db', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const { lore, own } = archiveAndOwn()
+    expect(byUser((await getArtistIndex(own, [lore, own], 'elling')).counts).zed).toBe(1)
+    seed(lore, 's10', 'jam-c', 'zed')
+    vi.setSystemTime(Date.now() + 60_000)
+    expect(byUser((await getArtistIndex(own, [lore, own], 'elling')).counts).zed).toBe(1)
+    seed(lore, 's11', 'jam-c', 'zed')
+    vi.setSystemTime(Date.now() + 60_000)
+    expect(byUser((await getArtistIndex(own, [lore, own], 'elling')).counts).zed).toBe(2)
+  })
+})
+
 describe('getArtistIndex: shared work', () => {
   it('concurrent first calls share one counts read', async () => {
     const own = ownDb()
