@@ -16,10 +16,10 @@
 					<IsValueSampleBased Value="false" />
 				</TrackDelay>
 				<Name>
-					<EffectiveName Value="1-8 - elling - Saturator - 166.304BPM - 2021-08-26-09-04" />
+					<EffectiveName Value="1-audio" />
 					<UserName Value="" />
 					<Annotation Value="" />
-					<MemorizedFirstClipName Value="8 - elling - Saturator - 166.304BPM - 2021-08-26-09-04" />
+					<MemorizedFirstClipName Value="" />
 				</Name>
 				<Color Value="23" />
 				<AutomationEnvelopes>
@@ -366,7 +366,7 @@
 											<HiddenLoopStart Value="0" />
 											<HiddenLoopEnd Value="32" />
 										</Loop>
-										<Name Value="8 - elling - Saturator - 166.304BPM - 2021-08-26-09-04" />
+										<Name Value="clip" />
 										<Annotation Value="" />
 										<Color Value="23" />
 										<LaunchMode Value="0" />
@@ -431,8 +431,8 @@
 										<SampleRef>
 											<FileRef>
 												<RelativePathType Value="1" />
-												<RelativePath Value="../8 - elling - Saturator - 166.304BPM - 2021-08-26-09-04.wav" />
-												<Path Value="/Users/user/Downloads/8 - elling - Saturator - 166.304BPM - 2021-08-26-09-04.wav" />
+												<RelativePath Value="../clip.wav" />
+												<Path Value="/Users/user/clip.wav" />
 												<Type Value="2" />
 												<LivePackName Value="" />
 												<LivePackId Value="" />

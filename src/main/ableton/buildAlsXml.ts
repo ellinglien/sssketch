@@ -921,6 +921,13 @@ function buildSharedAudioTrack(
   const trackBody = childArray(track, 'AudioTrack')
   setAttr(findChild(trackBody, 'TrackGroupId')!, '@_Value', groupTrackId)
   setTrackName(findChild(trackBody, 'Name')!, trackName)
+  // What Ableton remembers as the track's first clip: its clips carry the track's name. Never
+  // left at the template's own (which once held a clip name from the set it was cut from).
+  setAttr(
+    findChild(childArray(findChild(trackBody, 'Name')!, 'Name'), 'MemorizedFirstClipName')!,
+    '@_Value',
+    trackName
+  )
   setColor(trackBody, colorIndex)
 
   const deviceChain = findChild(trackBody, 'DeviceChain')!

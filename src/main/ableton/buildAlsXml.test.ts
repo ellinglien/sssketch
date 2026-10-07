@@ -168,6 +168,29 @@ describe('buildAlsXml', () => {
     expect(attrs(groupEffName)['@_Value']).toBe('AUX — DRUMS')
   })
 
+  // Share readiness S9 (2026-10-07): the template was cut from one of Elling's own sets, and its
+  // audio track still carried his clip name, which an export copied into MemorizedFirstClipName.
+  it("carries no name or path left over from the template's source set", () => {
+    expect(TEMPLATE_XML).not.toMatch(/\belling\b|saturator|downloads/i)
+    const state = emptyAppState({
+      rifffs: { 'rifff-1': drumsRifff() },
+      channelOrder: ['rifff-1'],
+      channelOf: { 'rifff-1': 'rifff-1' }
+    })
+    const xml = buildAlsXml(
+      TEMPLATE_XML,
+      state,
+      '/out',
+      new Map([['rifff-1:0', 'my-rifff-kick.wav']])
+    )
+    expect(xml).not.toMatch(/\belling\b|saturator|downloads/i)
+    const { tracks } = tracksOf(xml)
+    const audioTrack = findChild(tracks, 'AudioTrack')!
+    const audioName = findChild(childArray(audioTrack, 'AudioTrack'), 'Name')!
+    const memorized = findChild(childArray(audioName, 'Name'), 'MemorizedFirstClipName')!
+    expect(attrs(memorized)['@_Value']).toBe('my-rifff - kick')
+  })
+
   it('links the stem track to its group via TrackGroupId', () => {
     const state = emptyAppState({
       rifffs: { 'rifff-1': drumsRifff() },
