@@ -38,6 +38,16 @@ const OWNER_JAM_TABLES = ['Riffs', 'Stems', 'Tags'] as const
  * pays only the 0.1 ms variant check. */
 const OWNER_JAM_CACHE_TABLES = ['DiscoverRiffIndexCache', 'DiscoverInstrumentRowsCache'] as const
 
+/** The artist picker's saved (jam, user) pairs (discoverJamUserPairsStore.ts)
+ * name the jam as JamCID, keyed (SourceDbKey, JamCID, User): moved, not
+ * dropped, since dropping them would re-walk the own db's whole Stems table
+ * for rows a rename can't change. A pair both spellings already hold
+ * collides; that copy is the one deleted. Their watermark (the meta row)
+ * stays right, as the fold moves no Stems row. The pairs held in memory
+ * (discoverArtistIndex.ts) keep the old name until a relaunch, which nothing
+ * sees: jammedWithFromPairs leaves out every `shared:` jam. */
+const JAM_USER_PAIRS_TABLE = 'DiscoverJamUserPairs'
+
 /** Folds every other spelling of the shared feed `key` (`shared:elling`) --
  * one synced under a login typed with a capital, `shared:Elling`, before
  * 2026-10-07 -- into `key`: all its rows move over, in one transaction, and
@@ -60,6 +70,7 @@ export function mergeSharedFeedCaseVariants(db: Database.Database, key: string):
     undefined
   const tables = OWNER_JAM_TABLES.filter(exists)
   const cacheTables = OWNER_JAM_CACHE_TABLES.filter(exists)
+  const hasPairs = exists(JAM_USER_PAIRS_TABLE)
   db.transaction(() => {
     for (const variant of variants) {
       db.prepare(
@@ -76,6 +87,15 @@ export function mergeSharedFeedCaseVariants(db: Database.Database, key: string):
         db.prepare(
           `UPDATE ${table} SET OwnerJamCID = ? WHERE SourceDbKey = ? AND OwnerJamCID = ?`
         ).run(key, db.name, variant.JamCID)
+      }
+      if (hasPairs) {
+        db.prepare(
+          `UPDATE OR IGNORE ${JAM_USER_PAIRS_TABLE} SET JamCID = ? WHERE SourceDbKey = ? AND JamCID = ?`
+        ).run(key, db.name, variant.JamCID)
+        db.prepare(`DELETE FROM ${JAM_USER_PAIRS_TABLE} WHERE SourceDbKey = ? AND JamCID = ?`).run(
+          db.name,
+          variant.JamCID
+        )
       }
       db.prepare(`DELETE FROM Jams WHERE JamCID = ?`).run(variant.JamCID)
     }

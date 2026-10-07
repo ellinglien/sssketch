@@ -16,7 +16,9 @@
 // row's OwnerJamCID or CreatorUserName between launches (no insert, no
 // delete) moves neither, so the saved pairs would survive it. Within a
 // session the full signal (writes, data_version) still catches it. Stems
-// rows are written once by the sync and not edited in place today.
+// rows are written once by the sync and not edited in place today, save by
+// the shared-feed fold (riffLibraryWriter.ts mergeSharedFeedCaseVariants),
+// which renames these pairs' JamCID in its own transaction.
 //
 // Since scan plan b21ea5a2 Task 4 the meta row also carries the StemCID at
 // MaxRowid (WatermarkStemCID), so the saved pairs are a rowid watermark

@@ -19,6 +19,7 @@ import {
 } from './riffLibraryWriter'
 import { RIFF_STEMS_EXTRA_DDL, readExtraStemSlots } from './riffStemsExtra'
 import { getTableWriteVersion } from './tableWriteVersion'
+import { DISCOVER_JAM_USER_PAIRS_DDL } from './discoverJamUserPairsStore'
 
 // Same DDL as loreWarehouseSchema.ts's SCHEMA_SQL -- duplicated here
 // (rather than importing openOwnWarehouseDb, which requires mocking
@@ -562,6 +563,46 @@ describe('mergeSharedFeedCaseVariants (a feed synced under a capitalised login, 
         { SourceDbKey: db.name, OwnerJamCID: 'shared:elling' }
       ])
     }
+  })
+
+  // The artist picker's saved (jam, user) pairs name the jam too: they move
+  // with it, for this db only, and a pair both spellings already had is kept
+  // once. The watermark (meta row) stays: the fold moves no Stems row.
+  it("moves the artist picker's saved jam/user pairs for this db only, keeping a shared pair once", () => {
+    db.exec(DISCOVER_JAM_USER_PAIRS_DDL)
+    db.exec(`INSERT INTO Jams (JamCID, PublicName) VALUES ('shared:Elling', 'Shared Feed');`)
+    const insertPair = db.prepare(`INSERT INTO DiscoverJamUserPairs VALUES (?, ?, ?)`)
+    for (const source of [db.name, '/Volumes/archive/warehouse.db3']) {
+      insertPair.run(source, 'shared:Elling', 'elling')
+      insertPair.run(source, 'shared:Elling', 'bob')
+      insertPair.run(source, 'jam_1', 'bob')
+    }
+    insertPair.run(db.name, 'shared:elling', 'bob')
+    db.prepare(
+      `INSERT INTO DiscoverJamUserPairsMeta (SourceDbKey, StemCount, MaxRowid, ComputedAt)
+       VALUES (?, 3, 3, 0)`
+    ).run(db.name)
+
+    mergeSharedFeedCaseVariants(db, 'shared:elling')
+
+    expect(
+      db
+        .prepare(
+          `SELECT SourceDbKey, JamCID, User FROM DiscoverJamUserPairs
+           ORDER BY SourceDbKey, JamCID, User`
+        )
+        .all()
+    ).toEqual([
+      { SourceDbKey: '/Volumes/archive/warehouse.db3', JamCID: 'jam_1', User: 'bob' },
+      { SourceDbKey: '/Volumes/archive/warehouse.db3', JamCID: 'shared:Elling', User: 'bob' },
+      { SourceDbKey: '/Volumes/archive/warehouse.db3', JamCID: 'shared:Elling', User: 'elling' },
+      { SourceDbKey: db.name, JamCID: 'jam_1', User: 'bob' },
+      { SourceDbKey: db.name, JamCID: 'shared:elling', User: 'bob' },
+      { SourceDbKey: db.name, JamCID: 'shared:elling', User: 'elling' }
+    ])
+    expect(db.prepare(`SELECT StemCount, MaxRowid FROM DiscoverJamUserPairsMeta`).all()).toEqual([
+      { StemCount: 3, MaxRowid: 3 }
+    ])
   })
 
   it('renames a capitalised feed when there is no lowercase one yet', () => {
