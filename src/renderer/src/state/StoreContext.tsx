@@ -21,11 +21,23 @@ import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlaybac
 import { loopLengthBars } from './selectors'
 import { isWithinManualSeekGrace } from './manualSeek'
 import type { PluginCatalog } from '../../../main/pluginCatalog'
-import { buildPluginStatesMap, stateForSlot, type PluginStatesMap } from '@shared/pluginStates'
+import type { PluginStatesMap } from '@shared/pluginStates'
+import {
+  initialPluginSwitchState,
+  pluginSlotKey,
+  pluginSwitchStep,
+  type PluginChains,
+  type PluginSlotTarget,
+  type PluginSwitchEvent,
+  type PluginSwitchState,
+  type PluginSwitchStep
+} from '@shared/pluginSwitch'
 import { useFeatureEnabled } from './appFeatures'
 import {
   announceProjectOpened,
-  pendingPluginStatesRef as pluginStatesRef
+  pendingPluginStatesGeneration,
+  pendingPluginStatesRef as pluginStatesRef,
+  replacePendingPluginStates
 } from './pendingPluginStates'
 
 // Playback position/state now live entirely outside the undo-tracked main
@@ -269,9 +281,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const [scanning, setScanning] = useState(false)
   const [scanProgress, setScanProgress] = useState<{ done: number; total: number } | null>(null)
 
-  // Plugins wait for the catalog before loading: a slot's path comes from it,
-  // and a load sent with no path fails -- which clears the slot from the
-  // project (see onMasterPluginLoaded below).
+  // Plugins wait for the catalog before loading: a slot's path comes from it.
+  // A load sent with no path does NOT fail -- the engine reads an empty path
+  // as "no plugin" and reports success with an empty slot -- so it would
+  // quietly stand in for the plugin and its saved settings would be dropped.
+  // @shared/pluginSwitch never sends one: a slot whose plugin the catalog
+  // lacks waits (saved settings kept) until a scan finds it.
   const [catalogLoaded, setCatalogLoaded] = useState(false)
   useEffect(() => {
     void window.rifffApi.getPluginCatalog().then((catalog) => {
@@ -375,26 +390,21 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   }, [])
 
   // pluginStatesRef: pendingPluginStates.ts's module-level holder (read by a
-  // save too). Each entry is deleted
-  // the moment a diffing effect below actually applies it (see their own
-  // `delete pluginStatesRef.current[slotKey]` calls) -- without that, a later
-  // remove-then-reselect-the-same-plugin later in the SAME session would
-  // silently reapply a stale captured blob instead of loading the plugin at
-  // its current default state.
+  // save too): the project's saved plugin settings the engine hasn't been
+  // handed yet. Each entry stays until the engine reports a successful load
+  // of that plugin carrying it -- then it is dropped, so a later
+  // remove-then-reselect of the same plugin in the SAME session loads it at
+  // its default state rather than reapplying a stale blob. Owned, with what
+  // the engine holds, by @shared/pluginSwitch (pluginSwitchRef below).
 
   // The advanced features switch's `plugins` (@shared/features). Off -- and
   // until main has answered -- no plugin is loaded into the engine and no
   // slot of the project is touched; the project's plugin ids and saved
   // settings ride along untouched and are saved back as they were.
-  // pluginsLiveRef: the engine holds the project's plugins right now (set by
-  // the switch effect below, after the diffing effects). pluginsOnRef: the
-  // switch, for the async load-result handlers.
   const pluginsOn = useFeatureEnabled('plugins')
-  const pluginsOnRef = useRef(false)
-  const pluginsLiveRef = useRef(false)
   const restoreState = useCallback(
     (state: AppState, pluginStates: PluginStatesMap): void => {
-      pluginStatesRef.current = pluginStates
+      replacePendingPluginStates(pluginStates)
       dispatch({ type: 'LOAD_STATE', state })
       announceProjectOpened()
     },
@@ -825,156 +835,155 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     )
   }, [state.loopRegion])
 
-  // Diffs against the previous masterChain on every change so only the ONE
-  // slot that actually changed gets reloaded -- an unrelated arrangement
-  // edit elsewhere must never accidentally trigger a plugin reload/swap
-  // glitch on a slot nobody touched (see the design spec's "separate,
-  // explicit load-master-plugin message" rationale). Also reloads a slot
-  // whose identity DIDN'T change if pluginStatesRef still holds an
-  // unconsumed captured entry for it -- otherwise opening a project that
-  // reuses the same plugin (in the same slot) as whatever was already
-  // live would silently skip restoring that project's own saved
-  // parameters, since identity alone wouldn't have changed.
-  const masterChainRef = useRef(state.masterChain)
-  useEffect(() => {
-    const prev = masterChainRef.current
-    masterChainRef.current = state.masterChain
-    // Plugins not in the engine (advanced features off, or not loaded yet):
-    // nothing to diff against. The switch effect below loads every slot, with
-    // its pending settings, when they go live.
-    if (!pluginsLiveRef.current) return
-    state.masterChain.forEach((pluginId, slot) => {
-      const slotKey = `master:${slot}`
-      const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
-      if (pluginId !== prev[slot] || stateBase64 !== null) {
+  // What the engine holds of the project's plugins, kept in step by
+  // @shared/pluginSwitch (see its header for the rules that keep a project's
+  // plugin settings safe): the switch going on loads every occupied slot with
+  // its saved settings; going off reads the engine's settings back first and
+  // only then unloads; a chain edit reloads only the slot that changed (an
+  // unrelated arrangement edit never reloads a plugin -- see the design
+  // spec's "separate, explicit load-master-plugin message" rationale), or a
+  // slot whose plugin stayed the same but which has saved settings the engine
+  // hasn't had yet (a project reopened with the same plugin in the same
+  // slot); a plugin the catalog has no path for is never sent (the engine
+  // would report an empty slot as a success) and loads once a scan finds it.
+  const pluginSwitchRef = useRef<PluginSwitchState>(initialPluginSwitchState)
+  const pluginCatalogRef = useRef(pluginCatalog)
+  const setSlotStatus = useCallback(
+    (target: PluginSlotTarget, status: MasterChainSlotStatus, error: string | null): void => {
+      if (target.kind === 'master') {
+        const slot = target.slot
         setMasterChainStatus((s) => {
           const next = [...s] as typeof s
-          next[slot] = pluginId === null ? 'idle' : 'loading'
+          next[slot] = status
           return next
         })
-        const path =
-          pluginId === null
-            ? null
-            : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
-        if (stateBase64 !== null) delete pluginStatesRef.current[slotKey]
-        void window.rifffApi.engineLoadMasterPlugin(slot, pluginId, path, stateBase64)
+        setMasterChainError((s) => {
+          const next = [...s] as typeof s
+          next[slot] = error
+          return next
+        })
+        return
       }
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes pluginCatalog: this effect only reacts to masterChain CHANGES (a slot's id differing from its previous value) or a pending restore, never to the catalog itself updating around an unchanged id -- the migration effect above is what re-dispatches SET_MASTER_CHAIN_PLUGIN once a real id is known, which is what actually re-triggers this effect
-  }, [state.masterChain])
-
-  // Per-channel equivalent of the masterChainRef diffing effect above --
-  // same reasoning, generalized from a fixed 4-tuple to a Record<channelId,
-  // [SlotStatus, SlotStatus]> keyed by channel id -- including the same
-  // "also reload on an unconsumed captured entry, not just an identity
-  // change" fix.
-  const channelPluginsRef = useRef(state.channelPlugins)
-  useEffect(() => {
-    const prev = channelPluginsRef.current
-    channelPluginsRef.current = state.channelPlugins
-    if (!pluginsLiveRef.current) return // see the master chain's own effect above
-    for (const channelId of Object.keys(state.channelPlugins)) {
-      const slots = state.channelPlugins[channelId]
-      const prevSlots = prev[channelId]
-      slots.forEach((pluginId, slot) => {
-        const slotKey = `channel:${channelId}:${slot}`
-        const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
-        if (pluginId !== (prevSlots?.[slot] ?? null) || stateBase64 !== null) {
-          setChannelChainStatus((s) => {
-            const existing =
-              s[channelId] ?? (['idle', 'idle'] as [MasterChainSlotStatus, MasterChainSlotStatus])
-            const next = [...existing] as [MasterChainSlotStatus, MasterChainSlotStatus]
-            next[slot] = pluginId === null ? 'idle' : 'loading'
-            return { ...s, [channelId]: next }
-          })
-          const path =
-            pluginId === null
-              ? null
-              : (pluginCatalog.plugins.find((p) => p.id === pluginId)?.path ?? null)
-          if (stateBase64 !== null) delete pluginStatesRef.current[slotKey]
-          void window.rifffApi.engineLoadChannelPlugin(channelId, slot, pluginId, path, stateBase64)
-        }
+      const { channelId, slot } = target
+      setChannelChainStatus((s) => {
+        const existing =
+          s[channelId] ?? (['idle', 'idle'] as [MasterChainSlotStatus, MasterChainSlotStatus])
+        const next = [...existing] as [MasterChainSlotStatus, MasterChainSlotStatus]
+        next[slot] = status
+        return { ...s, [channelId]: next }
       })
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally excludes pluginCatalog, matching the master chain's own equivalent effect's own reasoning above
-  }, [state.channelPlugins])
-
-  // The switch going on (or main answering "on" at startup, once the catalog
-  // has loaded): load EVERY occupied slot, each with its pending saved
-  // settings -- the diffing effects above skipped everything while plugins
-  // were not live. Going off: capture what the engine holds into the pending
-  // map first (so a save while off still writes it, and turning back on
-  // restores it), then unload the engine's slots. The project's own slots
-  // never change either way. Declared after the diffing effects on purpose:
-  // in a commit that both opens a project and turns plugins live, they skip
-  // (not live yet) and this loads the opened project once.
-  useEffect(() => {
-    pluginsOnRef.current = pluginsOn
-    if (pluginsOn && catalogLoaded && !pluginsLiveRef.current) {
-      pluginsLiveRef.current = true
-      const pathOf = (id: string): string | null =>
-        pluginCatalog.plugins.find((p) => p.id === id)?.path ?? null
-      state.masterChain.forEach((pluginId, slot) => {
-        if (pluginId === null) return
-        const slotKey = `master:${slot}`
-        const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
-        setMasterChainStatus((st) => {
-          const next = [...st] as typeof st
-          next[slot] = 'loading'
-          return next
-        })
-        if (stateBase64 !== null) delete pluginStatesRef.current[slotKey]
-        void window.rifffApi.engineLoadMasterPlugin(slot, pluginId, pathOf(pluginId), stateBase64)
+      setChannelChainError((s) => {
+        const existing = s[channelId] ?? ([null, null] as [string | null, string | null])
+        const next = [...existing] as [string | null, string | null]
+        next[slot] = error
+        return { ...s, [channelId]: next }
       })
-      for (const [channelId, slots] of Object.entries(state.channelPlugins)) {
-        slots.forEach((pluginId, slot) => {
-          if (pluginId === null) return
-          const slotKey = `channel:${channelId}:${slot}`
-          const stateBase64 = stateForSlot(pluginStatesRef.current, slotKey, pluginId) ?? null
-          setChannelChainStatus((st) => {
-            const existing =
-              st[channelId] ?? (['idle', 'idle'] as [MasterChainSlotStatus, MasterChainSlotStatus])
-            const next = [...existing] as [MasterChainSlotStatus, MasterChainSlotStatus]
-            next[slot] = 'loading'
-            return { ...st, [channelId]: next }
-          })
-          if (stateBase64 !== null) delete pluginStatesRef.current[slotKey]
+    },
+    []
+  )
+  // Feeds one event to @shared/pluginSwitch and sends what it says. `chains`:
+  // the project's chains right now (the effects pass their own render's; the
+  // async replies read stateRef).
+  const applyPluginStep = useCallback(
+    (event: PluginSwitchEvent, chains: PluginChains): PluginSwitchStep => {
+      const catalog = pluginCatalogRef.current
+      const step = pluginSwitchStep(pluginSwitchRef.current, event, {
+        chains,
+        pending: pluginStatesRef.current,
+        pathOf: (id) => catalog.plugins.find((p) => p.id === id)?.path ?? null
+      })
+      pluginSwitchRef.current = step.state
+      pluginStatesRef.current = step.pending
+      for (const target of step.unloads) {
+        setSlotStatus(target, 'idle', null)
+        if (target.kind === 'master')
+          void window.rifffApi.engineLoadMasterPlugin(target.slot, null, null, null)
+        else
           void window.rifffApi.engineLoadChannelPlugin(
-            channelId,
-            slot,
-            pluginId,
-            pathOf(pluginId),
-            stateBase64
+            target.channelId,
+            target.slot,
+            null,
+            null,
+            null
           )
-        })
       }
-    } else if (!pluginsOn && pluginsLiveRef.current) {
-      pluginsLiveRef.current = false
-      const masterChain = state.masterChain
-      const channelPlugins = state.channelPlugins
-      void (async () => {
-        const raw = await window.rifffApi.engineGetPluginStates()
-        if (raw !== null) {
-          Object.assign(
-            pluginStatesRef.current,
-            buildPluginStatesMap(raw, masterChain, channelPlugins)
+      for (const target of step.missing) {
+        setSlotStatus(target, 'error', 'not in your plugin list · scan for plugins')
+      }
+      for (const load of step.loads) {
+        setSlotStatus(load.target, 'loading', null)
+        if (load.target.kind === 'master')
+          void window.rifffApi.engineLoadMasterPlugin(
+            load.target.slot,
+            load.pluginId,
+            load.path,
+            load.stateBase64
           )
-        }
-        // Turned back on while the capture was in flight: the load above has
-        // already run, so unloading now would silence it.
-        if (pluginsLiveRef.current) return
-        masterChain.forEach((pluginId, slot) => {
-          if (pluginId !== null) void window.rifffApi.engineLoadMasterPlugin(slot, null, null, null)
+        else
+          void window.rifffApi.engineLoadChannelPlugin(
+            load.target.channelId,
+            load.target.slot,
+            load.pluginId,
+            load.path,
+            load.stateBase64
+          )
+      }
+      return step
+    },
+    [setSlotStatus]
+  )
+
+  // applyPluginStep, plus the capture a switch-off asks for: its answer is
+  // fed back as capture-done (which never asks for another).
+  const stepPlugins = useCallback(
+    (event: PluginSwitchEvent, chains: PluginChains): void => {
+      const step = applyPluginStep(event, chains)
+      if (!step.capture) return
+      const generation = pendingPluginStatesGeneration()
+      void window.rifffApi
+        .engineGetPluginStates()
+        .catch(() => null)
+        .then((raw) => {
+          const now = stateRef.current
+          applyPluginStep(
+            {
+              type: 'capture-done',
+              raw,
+              projectReplaced: pendingPluginStatesGeneration() !== generation
+            },
+            { masterChain: now.masterChain, channelPlugins: now.channelPlugins }
+          )
         })
-        for (const [channelId, slots] of Object.entries(channelPlugins)) {
-          slots.forEach((pluginId, slot) => {
-            if (pluginId !== null)
-              void window.rifffApi.engineLoadChannelPlugin(channelId, slot, null, null, null)
-          })
-        }
-      })()
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally runs only when the switch or the catalog's arrival changes: it reads the CURRENT chains and catalog once at that moment; every later chain edit is the diffing effects' job
+    },
+    [applyPluginStep]
+  )
+
+  // Declared before the switch effect: in the commit where the catalog
+  // first arrives (catalogLoaded flips with it), the switch must already see it.
+  useEffect(() => {
+    pluginCatalogRef.current = pluginCatalog
+    stepPlugins(
+      { type: 'catalog-changed' },
+      { masterChain: state.masterChain, channelPlugins: state.channelPlugins }
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reacts to the catalog only (a scan finding a plugin an open project uses); chain edits are the effect below's
+  }, [pluginCatalog])
+
+  useEffect(() => {
+    stepPlugins(
+      { type: 'chains-changed' },
+      { masterChain: state.masterChain, channelPlugins: state.channelPlugins }
+    )
+  }, [state.masterChain, state.channelPlugins, stepPlugins])
+
+  // The switch (or main answering "on" at startup, once the catalog has
+  // loaded: a slot's path comes from it).
+  useEffect(() => {
+    stepPlugins(
+      { type: 'switch', on: pluginsOn && catalogLoaded },
+      { masterChain: state.masterChain, channelPlugins: state.channelPlugins }
+    )
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs only when the switch or the catalog's arrival changes; it reads the CURRENT chains once at that moment, every later chain edit is the effect above's
   }, [pluginsOn, catalogLoaded])
 
   // Runs the old-slug-to-catalog-id migration once the scan catalog is
@@ -1017,9 +1026,27 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         next[slot] = success ? null : (error ?? 'unknown error')
         return next
       })
-      // Never while plugins are off: an unload's failure must not cost the
+      stepPlugins(
+        {
+          type: 'load-result',
+          slotKey: pluginSlotKey({ kind: 'master', slot }),
+          pluginId,
+          success
+        },
+        {
+          masterChain: stateRef.current.masterChain,
+          channelPlugins: stateRef.current.channelPlugins
+        }
+      )
+      // Only a real load's failure, and only while plugins are live: an
+      // unload's failure, or one while the switch is off, must not cost the
       // project its plugin (the advanced features switch keeps the data).
-      if (!success && pluginsOnRef.current) {
+      if (
+        !success &&
+        pluginId &&
+        pluginSwitchRef.current.phase === 'live' &&
+        stateRef.current.masterChain[slot] === pluginId
+      ) {
         // A failed load must not leave state.masterChain[slot] pointing at the
         // plugin id that just failed -- otherwise a later, unrelated engine
         // crash-recovery restart would keep resending load-master-plugin for
@@ -1036,7 +1063,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         })
       }
     })
-  }, [])
+  }, [stepPlugins])
 
   useEffect(() => {
     return window.rifffApi.onChannelPluginLoaded(
@@ -1061,7 +1088,24 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
           next[slot] = success ? null : (error ?? 'unknown error')
           return { ...s, [channelId]: next }
         })
-        if (!success && pluginsOnRef.current) {
+        stepPlugins(
+          {
+            type: 'load-result',
+            slotKey: pluginSlotKey({ kind: 'channel', channelId, slot }),
+            pluginId,
+            success
+          },
+          {
+            masterChain: stateRef.current.masterChain,
+            channelPlugins: stateRef.current.channelPlugins
+          }
+        )
+        if (
+          !success &&
+          pluginId &&
+          pluginSwitchRef.current.phase === 'live' &&
+          stateRef.current.channelPlugins[channelId]?.[slot] === pluginId
+        ) {
           // Same reasoning as the master chain's own equivalent cleanup above
           // -- a failed load must not leave channelPlugins[channelId][slot]
           // pointing at the plugin id that just failed.
@@ -1074,7 +1118,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         }
       }
     )
-  }, [])
+  }, [stepPlugins])
 
   useEffect(() => {
     return window.rifffApi.onEnginePositionUpdate((pos) => {
@@ -1140,8 +1184,15 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   useEffect(() => {
     return window.rifffApi.onEngineRestarted(() => {
       dispatch({ type: 'STOP' })
+      stepPlugins(
+        { type: 'engine-restarted' },
+        {
+          masterChain: stateRef.current.masterChain,
+          channelPlugins: stateRef.current.channelPlugins
+        }
+      )
     })
-  }, [dispatch])
+  }, [dispatch, stepPlugins])
 
   return (
     <StateCtx.Provider value={state}>
