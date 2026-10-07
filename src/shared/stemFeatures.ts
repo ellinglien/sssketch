@@ -80,7 +80,8 @@ export function isCurrentStemFeatureVersion(features: StemFeatures): boolean {
  * order every caller must agree on (used identically by
  * standardizeFeatures below and by the clustering algorithm that
  * consumes its output) -- 6 scalar features followed by all 13 MFCC
- * coefficients, 19 numbers total. */
+ * coefficients, 19 numbers total. A change to it: bump CLASSIFIER_VERSION
+ * (src/main/stemAutoClassify.ts). */
 export function toFeatureArray(f: StemFeatures): number[] {
   return [
     f.transientDensity,

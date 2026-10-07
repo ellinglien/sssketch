@@ -4,7 +4,7 @@ import Database from 'better-sqlite3'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { classifyAutoCategoryBatch } from './stemAutoClassify'
+import { CLASSIFIER_VERSION, classifyAutoCategoryBatch } from './stemAutoClassify'
 import { getAutoCategorizedStemCIDs } from './stemAutoCategoryStore'
 import * as categoryCentroidStore from './categoryCentroidStore'
 import { emptyCategoryCentroidStore, recordConfirmedCategory } from '@shared/categoryCentroids'
@@ -1132,6 +1132,31 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
       const devFetches = featureFetches(devAgain)
       expect(await classifyAutoCategoryBatch(devAgain)).toEqual({ processed: 0, remaining: 0 })
       expect(devFetches()).toBe(0)
+    })
+
+    // Review of 0adc41ca, important 2: a classifier change (a threshold, the
+    // mask rule, the feature layout) can place a stem the old one couldn't,
+    // so it must move the fingerprint like a retrain does.
+    it('a relaunch re-tries stems tried by an older classifier version', async () => {
+      const path = join(dir, 'own.db')
+      const first = freshDb(path)
+      seedTrainedEmbeddings(first)
+      seedEmbedding(first, 'ambiguous-1', [0.5, 0.5, 0])
+      await classifyAutoCategoryBatch(first)
+      const [{ f }] = first
+        .prepare(`SELECT TrainingFingerprint AS f FROM StemAutoClassifyTried`)
+        .all() as { f: string }[]
+      expect(f.startsWith(`c${CLASSIFIER_VERSION}|`)).toBe(true)
+      // as an older classifier would have written it
+      first
+        .prepare(`UPDATE StemAutoClassifyTried SET TrainingFingerprint = ?`)
+        .run(f.replace(`c${CLASSIFIER_VERSION}|`, `c${CLASSIFIER_VERSION - 1}|`))
+      first.close()
+
+      const db = freshDb(path)
+      const fetches = embeddingFetches(db)
+      await classifyAutoCategoryBatch(db)
+      expect(fetches()).toHaveLength(1)
     })
 
     it('placing a stem drops its records under every fingerprint', async () => {

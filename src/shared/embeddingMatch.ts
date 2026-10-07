@@ -13,12 +13,14 @@ export interface ConfirmedEmbedding {
 // Mirrors categoryCentroids.ts's own MIN_SAMPLES_PER_CATEGORY exactly --
 // same reasoning, same value: a category needs at least this many confirmed
 // samples before it's trusted enough to suggest from.
+// Changing this? Bump CLASSIFIER_VERSION (src/main/stemAutoClassify.ts).
 const MIN_SAMPLES_PER_CATEGORY = 3
 
 // Mirrors categoryCentroids.ts's own MIN_TRAINED_CATEGORIES_FOR_SUGGESTION,
 // added there 2026-09-14 after a real bug: a single trained category force-
 // matched every query, since there was nothing to compare it against. Baked
 // in here from the start rather than needing the same fix twice.
+// Changing this? Bump CLASSIFIER_VERSION (src/main/stemAutoClassify.ts).
 const MIN_CATEGORIES_FOR_SUGGESTION = 2
 
 // The nearest DIFFERENT-category neighbor's cosine similarity must exceed
@@ -38,6 +40,7 @@ const MIN_CATEGORIES_FOR_SUGGESTION = 2
 // trade-off as categoryCentroids.ts's own 0.7->0.85 fix, not a bug fix:
 // more of the remaining backlog now gets auto-categorized, some of which
 // will be wrong and need correcting by hand via Tidy Up.
+// Changing this? Bump CLASSIFIER_VERSION (src/main/stemAutoClassify.ts).
 const SIMILARITY_MARGIN = 0.02
 
 /**

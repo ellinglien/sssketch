@@ -134,6 +134,7 @@ function getPreparedConfirmedEmbeddings(db: Database.Database): PreparedConfirme
 // processing cost, even at the expense of some precision -- "computers
 // aren't always good at [finding the perfect match]... if it means
 // trimming the processing time a lot we can go that way."
+// Changing this? Bump CLASSIFIER_VERSION (below).
 function reliableMaskSoundType(instrument: number): 'drums' | 'notes' | 'bass' | null {
   const soundType = instrumentMaskToSoundType(instrument)
   return soundType === 'drums' || soundType === 'notes' || soundType === 'bass' ? soundType : null
@@ -394,13 +395,43 @@ interface PendingState {
 }
 const pendingByDb = new WeakMap<Database.Database, PendingState>()
 
+/** The classifier's own code, as part of the training a stem is tried under
+ * (trainingFingerprintOf): a stem recorded as tried and not placed
+ * (StemAutoClassifyTried) is only tried again once its fingerprint moves, so
+ * any change that could place a stem the old code couldn't must move it too
+ * (review of 0adc41ca, important 2). Bump it for a change to any of:
+ * - categoryCentroids.ts: CONFIDENCE_RATIO, MIN_SAMPLES_PER_CATEGORY,
+ *   MIN_TRAINED_CATEGORIES_FOR_SUGGESTION, or how suggestCategory measures;
+ * - embeddingMatch.ts (the embedding suggester): SIMILARITY_MARGIN,
+ *   MIN_SAMPLES_PER_CATEGORY, MIN_CATEGORIES_FOR_SUGGESTION, or how
+ *   createEmbeddingSuggester ranks;
+ * - reliableMaskSoundType (below), or which source is preferred in
+ *   classifyAutoCategoryBatch;
+ * - the feature layout: toFeatureArray / StemFeatures (stemFeatures.ts).
+ * A bump re-tries the whole residue once (~10 min in the background on
+ * Elling's library), so don't bump it for a change that can't move an
+ * answer. */
+export const CLASSIFIER_VERSION = 1
+
 /** The training a stem is tried under, as it survives a restart
  * (2026-10-07): the confirmed-embedding fingerprint (COUNT:MAX(UpdatedAt))
  * and a hash of the two parts of the centroid store the centroid pass reads
  * (the arrangeRole axis and the global normalizer). A new confirmation or a
  * centroid retrain, in this app or the other one sharing the db, moves it;
  * a restart does not. Replaces the in-memory training generation, which
- * started at 0 every launch. The dev and the packaged app each have their
+ * started at 0 every launch. The classifier's code is in it too
+ * (CLASSIFIER_VERSION).
+ *
+ * One change it misses: a re-extracted embedding of an already-confirmed
+ * stem (the confirmed fingerprint leaves out ExtractedAt, see
+ * confirmedEmbeddingsFingerprint). Folding it in means reading past every
+ * embedding blob (~100 ms a batch), and it matters little: a lone
+ * re-extraction moves one reference among thousands, and a whole-library
+ * re-extraction (a new embedding model) rewrites every unplaced stem's row
+ * too, and each such write forgets that stem's record anyway
+ * (stemAutoClassifyWake.ts). The next confirmation picks it up.
+ *
+ * The dev and the packaged app each have their
  * own centroid store, so each tries under its own fingerprint and keeps its
  * own record of the same stem (StemAutoClassifyTried is keyed on both). */
 function trainingFingerprintOf(
@@ -411,7 +442,7 @@ function trainingFingerprintOf(
     .update(JSON.stringify([centroidStore.arrangeRoles, centroidStore.global]))
     .digest('hex')
     .slice(0, 16)
-  return `${prepared.fingerprint}|${centroids}`
+  return `c${CLASSIFIER_VERSION}|${prepared.fingerprint}|${centroids}`
 }
 
 /** Ids per mask lookup while filtering a rebuilt list: one IN query per db

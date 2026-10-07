@@ -152,6 +152,7 @@ export function recordConfirmedCategory(
 
 // A category needs at least this many confirmed samples before its
 // centroid is trusted enough to suggest from.
+// Changing this? Bump CLASSIFIER_VERSION (src/main/stemAutoClassify.ts).
 const MIN_SAMPLES_PER_CATEGORY = 3
 
 // The nearest category must be at least this much closer than the
@@ -166,6 +167,7 @@ const MIN_SAMPLES_PER_CATEGORY = 3
 // accuracy/coverage trade-off, not a bug fix: more borderline cases now
 // get suggested, some of which will be wrong and need correcting by hand
 // via Tidy Up.
+// Changing this? Bump CLASSIFIER_VERSION (src/main/stemAutoClassify.ts).
 const CONFIDENCE_RATIO = 0.95
 
 function standardize(vector: number[], stats: GlobalStats): number[] {
@@ -212,6 +214,7 @@ export function suggestCategory(
   // after Tidy Up started training them: 2026-09-14), there's no second
   // candidate to rule it out against, so every query would otherwise get
   // force-matched to that one category regardless of actual distance.
+  // Changing this? Bump CLASSIFIER_VERSION (src/main/stemAutoClassify.ts).
   const MIN_TRAINED_CATEGORIES_FOR_SUGGESTION = 2
   if (trainedCategories.length < MIN_TRAINED_CATEGORIES_FOR_SUGGESTION) return null
 
