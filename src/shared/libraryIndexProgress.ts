@@ -151,23 +151,92 @@ export function etaSampleOf(progress: LibraryIndexProgress | null): EtaSample | 
   }
 }
 
-/** Remembers the first sample of the key being timed; each update gives the
- * time left at the rate since then. */
+/** A key quiet this long starts a new rate when it reports again: the idle
+ * time is not part of how fast it goes (a walk of the same table later on). */
+const ETA_KEY_IDLE_MS = 10_000
+
+/** Remembers the first sample of each key being timed; each update gives
+ * the time left at that key's rate since then.
+ *
+ * Per key, not one (review of dc07ec69): an extension walk reporting while
+ * a load runs used to restart the rate on every alternation, so neither got
+ * a time left. A key restarts when its count goes backwards (a new walk of
+ * the same table) or after ETA_KEY_IDLE_MS without a sample. A null sample
+ * (a running count) gives null and leaves every rate alone. */
 export function createEtaTracker(): {
   update: (sample: EtaSample | null, at: number) => number | null
 } {
-  let first: { key: string; at: number; completed: number } | null = null
+  const firsts = new Map<
+    string,
+    { at: number; completed: number; lastAt: number; lastCompleted: number }
+  >()
   return {
     update(sample, at) {
-      if (!sample) {
-        first = null
+      if (!sample) return null
+      const first = firsts.get(sample.key)
+      if (!first || sample.completed < first.lastCompleted || at - first.lastAt > ETA_KEY_IDLE_MS) {
+        firsts.set(sample.key, {
+          at,
+          completed: sample.completed,
+          lastAt: at,
+          lastCompleted: sample.completed
+        })
         return null
       }
-      if (!first || first.key !== sample.key) {
-        first = { key: sample.key, at, completed: sample.completed }
-        return null
-      }
+      first.lastAt = at
+      first.lastCompleted = sample.completed
       return estimateRemainingMs(first, { at, completed: sample.completed }, sample.total)
+    }
+  }
+}
+
+/** How long a load holds the status line against a walk's updates after its
+ * own last one: a step that rebuilds instead never reports its load again. */
+const LOAD_HOLD_MS = 5_000
+
+function loadFinished(progress: LibraryIndexProgress): boolean {
+  const { completed, total } = progress.stage ?? progress
+  return total > 0 && completed >= total
+}
+
+/** What the status line shows for a stream of updates, and its time left
+ * (StartupGate, BackgroundWorkIndicator).
+ *
+ * A walk can report while saved copies still load (review of dc07ec69: an
+ * extension walk during a load), and showing the last update made the line
+ * alternate between "loading library" and "indexing library". A load in
+ * progress keeps the line -- it's what the gate waits for -- until it reaches
+ * its stage total or has been quiet LOAD_HOLD_MS; the walk's rate is still
+ * measured meanwhile, so it has a time left the moment it shows. The
+ * own-stems count is never held back. */
+export function createLibraryProgressView(): {
+  update: (
+    progress: LibraryIndexProgress | null,
+    at: number
+  ) => { progress: LibraryIndexProgress | null; timeLeftMs: number | null }
+} {
+  const eta = createEtaTracker()
+  const timeLeftByKey = new Map<string, number | null>()
+  let load: { progress: LibraryIndexProgress; at: number } | null = null
+  return {
+    update(progress, at) {
+      if (!progress) {
+        load = null
+        return { progress: null, timeLeftMs: null }
+      }
+      const sample = etaSampleOf(progress)
+      if (sample) timeLeftByKey.set(sample.key, eta.update(sample, at))
+      if (progress.loading) load = { progress, at }
+      const shown =
+        !progress.loading &&
+        progress.phase !== 'ownStems' &&
+        load &&
+        at - load.at < LOAD_HOLD_MS &&
+        !loadFinished(load.progress)
+          ? load.progress
+          : progress
+      const key = etaSampleOf(shown)?.key
+      return { progress: shown, timeLeftMs: key ? (timeLeftByKey.get(key) ?? null) : null }
     }
   }
 }

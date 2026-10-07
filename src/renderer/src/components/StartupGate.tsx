@@ -2,9 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { LoadingLoader } from './LoadingLoader'
 import type { PrewarmScanProgress } from '../../../main/discoverCandidates'
 import {
-  createEtaTracker,
+  createLibraryProgressView,
   describeStartupStatus,
-  etaSampleOf,
   formatTimeLeft
 } from '@shared/libraryIndexProgress'
 
@@ -65,7 +64,7 @@ export function StartupGate(): React.JSX.Element | null {
   // over the whole loading stage while saved copies load, over its own phase
   // for a walk. Null until there is a rate.
   const [timeLeftMs, setTimeLeftMs] = useState<number | null>(null)
-  const etaRef = useRef(createEtaTracker())
+  const viewRef = useRef(createLibraryProgressView())
 
   useEffect(() => {
     let cancelled = false
@@ -115,8 +114,11 @@ export function StartupGate(): React.JSX.Element | null {
   useEffect(() => {
     if (closed) return
     return window.rifffApi.onLibraryWarmupProgress((update) => {
-      setTimeLeftMs(etaRef.current.update(etaSampleOf(update), Date.now()))
-      setProgress(update)
+      // A walk reporting during a load doesn't take the line from it, and
+      // each keeps its own rate (@shared/libraryIndexProgress).
+      const shown = viewRef.current.update(update, Date.now())
+      setTimeLeftMs(shown.timeLeftMs)
+      setProgress(shown.progress)
     })
   }, [closed])
 

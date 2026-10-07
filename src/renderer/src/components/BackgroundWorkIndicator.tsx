@@ -6,8 +6,7 @@ import {
 } from '@shared/backgroundWork'
 import type { PrewarmScanProgress } from '../../../main/discoverCandidates'
 import {
-  createEtaTracker,
-  etaSampleOf,
+  createLibraryProgressView,
   formatTimeLeft,
   libraryProgressUnit
 } from '@shared/libraryIndexProgress'
@@ -163,7 +162,7 @@ function useLibraryIndexWork(): BackgroundWork | null {
   const [done, setDone] = useState(true)
   const [progress, setProgress] = useState<PrewarmScanProgress | null>(null)
   const [timeLeftMs, setTimeLeftMs] = useState<number | null>(null)
-  const etaRef = useRef(createEtaTracker())
+  const viewRef = useRef(createLibraryProgressView())
 
   useEffect(() => {
     let cancelled = false
@@ -183,8 +182,11 @@ function useLibraryIndexWork(): BackgroundWork | null {
     })
     const unsubscribeProgress = window.rifffApi.onLibraryWarmupProgress((update) => {
       if (cancelled) return
-      setTimeLeftMs(etaRef.current.update(etaSampleOf(update), Date.now()))
-      setProgress(update)
+      // A walk reporting during a load doesn't take the line from it, and
+      // each keeps its own rate (@shared/libraryIndexProgress).
+      const shown = viewRef.current.update(update, Date.now())
+      setTimeLeftMs(shown.timeLeftMs)
+      setProgress(shown.progress)
     })
     return () => {
       cancelled = true

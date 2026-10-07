@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   createEtaTracker,
+  createLibraryProgressView,
   createLoadStageTracker,
   describeLibraryProgressCount,
   describeStartupStatus,
@@ -150,6 +151,106 @@ describe('createEtaTracker', () => {
     expect(eta.update({ key: 'b', completed: 500, total: 1000 }, 6000)).toBeNull()
     expect(eta.update({ key: 'b', completed: 600, total: 1000 }, 7000)).toBe(4000)
     expect(eta.update(null, 8000)).toBeNull()
+  })
+})
+
+describe('createEtaTracker: interleaved phases (review of dc07ec69)', () => {
+  it('two keys reporting in turn each keep their own rate', () => {
+    const eta = createEtaTracker()
+    expect(eta.update({ key: 'load', completed: 0, total: 1000 }, 0)).toBeNull()
+    expect(eta.update({ key: 'walk', completed: 880, total: 900 }, 100)).toBeNull()
+    expect(eta.update({ key: 'load', completed: 200, total: 1000 }, 2000)).toBe(8000)
+    expect(eta.update({ key: 'walk', completed: 890, total: 900 }, 2100)).toBe(2000)
+    expect(eta.update({ key: 'load', completed: 400, total: 1000 }, 4000)).toBe(6000)
+  })
+
+  it('a key that went backwards, or was quiet a while, starts a new rate', () => {
+    const eta = createEtaTracker()
+    eta.update({ key: 'a', completed: 0, total: 100 }, 0)
+    expect(eta.update({ key: 'a', completed: 50, total: 100 }, 5000)).toBe(5000)
+    // A new walk of the same table, from the start.
+    expect(eta.update({ key: 'a', completed: 10, total: 100 }, 6000)).toBeNull()
+    expect(eta.update({ key: 'a', completed: 20, total: 100 }, 7000)).toBe(8000)
+    // Quiet for a minute, then again: the idle time is not part of the rate.
+    expect(eta.update({ key: 'a', completed: 30, total: 100 }, 67_000)).toBeNull()
+  })
+
+  it('a running count (no sample) leaves every rate alone', () => {
+    const eta = createEtaTracker()
+    eta.update({ key: 'a', completed: 0, total: 100 }, 0)
+    expect(eta.update(null, 1000)).toBeNull()
+    expect(eta.update({ key: 'a', completed: 50, total: 100 }, 5000)).toBe(5000)
+  })
+})
+
+describe('createLibraryProgressView (review of dc07ec69)', () => {
+  const load = (completed: number): LibraryIndexProgress => ({
+    ...base,
+    phase: 'riffIndex',
+    loading: true,
+    completed,
+    total: 1000,
+    stage: { part: 1, parts: 2, completed, total: 2000 }
+  })
+  const walk = (completed: number): LibraryIndexProgress => ({
+    ...base,
+    phase: 'instrumentRows',
+    completed,
+    total: 900
+  })
+
+  it('a walk reporting during a load does not take the line: it stays on the load, with its time left', () => {
+    const view = createLibraryProgressView()
+    const shown: string[] = []
+    const lefts: (number | null)[] = []
+    const steps: [LibraryIndexProgress, number][] = [
+      [load(0), 0],
+      [walk(880), 100],
+      [load(200), 1000],
+      [walk(885), 1100],
+      [load(400), 2000],
+      [walk(890), 2100]
+    ]
+    for (const [progress, at] of steps) {
+      const out = view.update(progress, at)
+      shown.push(describeStartupStatus(true, out.progress))
+      lefts.push(out.timeLeftMs)
+    }
+    expect(new Set(shown.map((line) => line.split(' · ')[0]))).toEqual(new Set(['loading library']))
+    expect(lefts).toEqual([null, null, 9000, 9000, 8000, 8000])
+  })
+
+  it('once the load is done, or quiet, the walk shows with its own time left', () => {
+    const view = createLibraryProgressView()
+    view.update(load(0), 0)
+    view.update(walk(800), 100)
+    view.update(load(2000), 1000)
+    // The load reached its stage total: the walk takes the line at once.
+    const done = view.update(walk(850), 1100)
+    expect(done.progress?.phase).toBe('instrumentRows')
+    expect(done.progress?.loading).toBeUndefined()
+    expect(done.timeLeftMs).toBe(1000)
+
+    const quiet = createLibraryProgressView()
+    quiet.update(load(0), 0)
+    quiet.update(load(100), 1000)
+    // A step that rebuilt instead never reports its load again.
+    expect(quiet.update(walk(10), 2000).progress?.loading).toBe(true)
+    expect(quiet.update(walk(20), 10_000).progress?.phase).toBe('instrumentRows')
+  })
+
+  it('the own-stems count is never hidden behind a load', () => {
+    const view = createLibraryProgressView()
+    view.update(load(100), 0)
+    const own = view.update({ ...base, phase: 'ownStems', completed: 500 }, 100)
+    expect(own.progress?.phase).toBe('ownStems')
+    expect(own.timeLeftMs).toBeNull()
+  })
+
+  it('null clears the line', () => {
+    const view = createLibraryProgressView()
+    view.update(load(100), 0)
+    expect(view.update(null, 100)).toEqual({ progress: null, timeLeftMs: null })
   })
 })
 
