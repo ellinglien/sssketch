@@ -5,10 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { EngineClient } from './engineClient'
 
-const ENGINE_BINARY = join(
-  __dirname,
-  '../../native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
-)
+// SSSKETCH_ENGINE_BINARY: an out-of-tree build instead (see engineProcess.test.ts).
+const ENGINE_BINARY =
+  process.env.SSSKETCH_ENGINE_BINARY ??
+  join(
+    __dirname,
+    '../../native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
+  )
 const TEST_PORT = 45323 // distinct from Phase 1's ipc-roundtrip.test.ts's 45322
 
 let serverProcess: ChildProcess | undefined

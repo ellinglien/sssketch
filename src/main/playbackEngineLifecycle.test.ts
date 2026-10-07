@@ -2,7 +2,8 @@ import { describe, expect, it, vi, afterEach } from 'vitest'
 
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
 
-const { startPlaybackEngine } = await import('./playbackEngineLifecycle')
+const { startPlaybackEngine, playbackEngineSpawnOptions } =
+  await import('./playbackEngineLifecycle')
 
 /**
  * Polls `condition` at a short interval until it returns true, or rejects
@@ -143,4 +144,33 @@ describe('startPlaybackEngine', () => {
     expect(seenBeforeCrash.length).toBe(seenBeforeCrashCount)
     expect(seenAfterCrash.length).toBeGreaterThan(0)
   }, 30000)
+
+  // Every engine on this Mac with Ableton Link on is a peer of every other, and the playback
+  // engine adopts a peer's tempo into the project (StoreContext's onLinkTempoChanged). An engine
+  // a test starts, loading a project at its own bpm, therefore retuned a running dev app's
+  // project -- to 60, nativeExport.test.ts's tempo, among others (Elling, 2026-10-07: "something
+  // might be changing the bpm to 60"). Only the app's own playback engine asks for Link.
+  it('a playback engine started without `link` stays off Ableton Link', async () => {
+    handle = await startPlaybackEngine()
+    const status = (await handle.client.sendAndAwaitType(
+      'get-link-status',
+      undefined,
+      'link-status'
+    )) as { enabled: boolean }
+    expect(status.enabled).toBe(false)
+  }, 30000)
+})
+
+describe('playbackEngineSpawnOptions', () => {
+  it('asks for neither Link nor an audio input unless told to', () => {
+    expect(playbackEngineSpawnOptions({})).toEqual({ audioInput: false, link: false })
+  })
+
+  it('asks for Link when the app does, and reads the audio input at every spawn', () => {
+    let recording = false
+    const options = { audioInput: () => recording, link: true }
+    expect(playbackEngineSpawnOptions(options)).toEqual({ audioInput: false, link: true })
+    recording = true
+    expect(playbackEngineSpawnOptions(options)).toEqual({ audioInput: true, link: true })
+  })
 })

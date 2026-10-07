@@ -253,7 +253,7 @@ static int runSpike()
     return (vst3Ok && auOk) ? 0 : 1;
 }
 
-static int runServe(int port, const juce::String& bridgeBinaryPath, bool openAudioInput)
+static int runServe(int port, const juce::String& bridgeBinaryPath, bool openAudioInput, bool linkEnabled)
 {
     StemBufferCache bufferCache;
     PlaybackEngine engine(bufferCache);
@@ -269,7 +269,7 @@ static int runServe(int port, const juce::String& bridgeBinaryPath, bool openAud
                                     // the engine still serves IPC and PlaybackEngine
                                     // still renders correctly, just nothing plays out loud
 
-    IpcServer server(engine, transport, masterChain, channelChains);
+    IpcServer server(engine, transport, masterChain, channelChains, linkEnabled);
     if (!server.beginWaitingForSocket(port, "127.0.0.1"))
     {
         juce::Logger::writeToLog("runServe: failed to bind to port " + juce::String(port));
@@ -499,10 +499,18 @@ int main(int argc, char* argv[])
         // --no-audio-input: open the output only, so macOS never asks for the microphone (the
         // app's advanced features switch with recording off; engineProcess.ts engineServeArgs).
         bool openAudioInput = true;
+        // --link: join Ableton Link at once. Only the app's playback engine passes it
+        // (engineProcess.ts engineServeArgs); an export's, a bake's or a test's engine with
+        // Link on is a peer whose project tempo the playback engine adopts (LinkSession.h).
+        bool linkEnabled = false;
         for (int i = 3; i < argc; ++i)
+        {
             if (juce::String(argv[i]) == "--no-audio-input")
                 openAudioInput = false;
-        return runServe(juce::String(argv[2]).getIntValue(), bridgeBinaryPath, openAudioInput);
+            if (juce::String(argv[i]) == "--link")
+                linkEnabled = true;
+        }
+        return runServe(juce::String(argv[2]).getIntValue(), bridgeBinaryPath, openAudioInput, linkEnabled);
     }
 
     if (argc > 4 && juce::String(argv[1]) == "--render-test")

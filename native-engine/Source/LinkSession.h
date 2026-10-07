@@ -45,7 +45,14 @@ namespace sssketch
     class LinkSession
     {
     public:
-        explicit LinkSession(double initialBpm);
+        /** `enabled`: join the Link session now. Off unless asked for -- only the app's own
+         * playback engine asks (Main.cpp's --link, passed by engineProcess.ts for
+         * playbackEngineLifecycle.ts's engine alone). Every enabled instance on the machine
+         * and the network is a peer of every other, and the playback engine adopts a peer's
+         * tempo into the open project (checkForExternalTempoChange below), so an export's,
+         * a bake's or a test's engine with Link on, loading a project at its own bpm,
+         * retuned the open project (Elling, 2026-10-07: tests' 60 bpm). */
+        explicit LinkSession(double initialBpm, bool enabled = false);
 
         void setEnabled(bool enabled) { link.enable(enabled); }
         bool isEnabled() const { return link.isEnabled(); }

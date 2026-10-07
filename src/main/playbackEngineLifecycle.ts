@@ -55,6 +55,23 @@ export interface PlaybackEngineHandle {
   getEngineProcess: () => ChildProcess
 }
 
+export interface PlaybackEngineOptions {
+  /** Read at EVERY spawn, respawns included, so a crash after the advanced features switch
+   * moved picks up where it is now. Absent: no audio input (see SpawnEngineOptions). */
+  audioInput?: () => boolean
+  /** Join Ableton Link, at every spawn. Only the app's own engine (index.ts) asks: a test's
+   * engine with Link on retunes a running app's project (see SpawnEngineOptions.link). */
+  link?: boolean
+}
+
+/** What one spawn of the playback engine asks spawnEngine for. */
+export function playbackEngineSpawnOptions(options: PlaybackEngineOptions): {
+  audioInput: boolean
+  link: boolean
+} {
+  return { audioInput: options.audioInput?.() === true, link: options.link === true }
+}
+
 /**
  * Spawns and owns the single, session-long native engine process used for
  * live playback — entirely separate from Phase 2's per-export spawned
@@ -79,11 +96,7 @@ export interface PlaybackEngineHandle {
  * variable) for this to hold.
  */
 export async function startPlaybackEngine(
-  options: {
-    /** Read at EVERY spawn, respawns included, so a crash after the advanced features switch
-     * moved picks up where it is now. Absent: no audio input (see SpawnEngineOptions). */
-    audioInput?: () => boolean
-  } = {}
+  options: PlaybackEngineOptions = {}
 ): Promise<PlaybackEngineHandle> {
   let engineHandle: EngineHandle
   let client: EngineClient
@@ -129,7 +142,7 @@ export async function startPlaybackEngine(
   }
 
   async function connect(): Promise<void> {
-    const newEngineHandle = await spawnEngine({ audioInput: options.audioInput?.() === true })
+    const newEngineHandle = await spawnEngine(playbackEngineSpawnOptions(options))
     attachExitListener(newEngineHandle)
 
     if (shuttingDown) {

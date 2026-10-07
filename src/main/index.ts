@@ -1517,7 +1517,11 @@ app.whenReady().then(async () => {
   // 100% of runs, not just sometimes, since the .then() callback can't run
   // until this synchronous turn drains) -- see subscribeEngineRelays' own
   // doc comment for what silently breaks if this ever regresses again.
-  void startPlaybackEngine({ audioInput: () => engineAudioInputWanted(currentAppFeatures()) })
+  // link: the playback engine is the only one that joins Ableton Link (SpawnEngineOptions.link).
+  void startPlaybackEngine({
+    audioInput: () => engineAudioInputWanted(currentAppFeatures()),
+    link: true
+  })
     .then((handle) => {
       playbackEngine = handle
       subscribeEngineRelays(handle)

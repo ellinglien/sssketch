@@ -58,8 +58,9 @@ namespace sssketch
         return juce::var(obj.get());
     }
 
-    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc)
-        : engine(e), transport(t), masterChain(mc), channelChains(cc), linkSession(t.currentBpm())
+    IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc,
+        bool linkEnabled)
+        : engine(e), transport(t), masterChain(mc), channelChains(cc), linkSession(t.currentBpm(), linkEnabled)
     {
         // Started once here, never stopped until teardown (destructor/
         // connectionLost below) -- deliberately NOT gated by play/pause/stop
@@ -1378,13 +1379,14 @@ namespace sssketch
         }
     }
 
-    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc)
-        : engine(e), transport(t), masterChain(mc), channelChains(cc)
+    IpcServer::IpcServer(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc,
+        bool linkOn)
+        : engine(e), transport(t), masterChain(mc), channelChains(cc), linkEnabled(linkOn)
     {
     }
 
     juce::InterprocessConnection* IpcServer::createConnectionObject()
     {
-        return new IpcConnection(engine, transport, masterChain, channelChains);
+        return new IpcConnection(engine, transport, masterChain, channelChains, linkEnabled);
     }
 }

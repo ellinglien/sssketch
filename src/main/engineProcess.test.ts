@@ -2,6 +2,7 @@ import { describe, expect, it, afterEach } from 'vitest'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { engineServeArgs, spawnEngine, type EngineHandle } from './engineProcess'
+import { EngineClient } from './engineClient'
 
 // spawnEngine()'s default binary-path resolution (defaultBinaryPath() in
 // engineProcess.ts) calls Electron's `app.getAppPath()`, which only behaves
@@ -17,10 +18,16 @@ import { engineServeArgs, spawnEngine, type EngineHandle } from './engineProcess
 // engineProcess.ts without needing a working Electron runtime, and without
 // asserting anything about defaultBinaryPath()'s internals (which would
 // require either a running Electron app or a mocked one).
-const realBinaryPath = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
-)
+//
+// SSSKETCH_ENGINE_BINARY points these tests at an out-of-tree build instead (the same idea as
+// SSSKETCH_GOLDEN_DIR for the native tests): e.g. a build made while the app is running from
+// native-engine/build, whose binary should not be rebuilt under it.
+const realBinaryPath =
+  process.env.SSSKETCH_ENGINE_BINARY ??
+  join(
+    dirname(fileURLToPath(import.meta.url)),
+    '../../native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
+  )
 
 let handle: EngineHandle | undefined
 
@@ -87,6 +94,27 @@ describe('spawnEngine', () => {
     handle = undefined // already stopped, don't double-stop in afterEach
   }, 30000)
 
+  // The engines nativeExport, exportToolkitAudio, bakeOffset, loopFolderImport, the phone loop
+  // renderer and their tests start: none may join Ableton Link (see engineServeArgs below).
+  it('an engine spawned without `link` stays off Ableton Link', async () => {
+    handle = await spawnEngine({
+      binaryPathOverride: realBinaryPath,
+      bridgeBinaryPathOverride: noBridgeBinaryPath
+    })
+    const client = new EngineClient()
+    await client.connect(handle.port)
+    try {
+      const status = (await client.sendAndAwaitType(
+        'get-link-status',
+        undefined,
+        'link-status'
+      )) as { enabled: boolean }
+      expect(status.enabled).toBe(false)
+    } finally {
+      client.disconnect()
+    }
+  }, 30000)
+
   it('rejects if the engine binary does not exist at the resolved path', async () => {
     await expect(spawnEngine({ binaryPathOverride: '/no/such/binary' })).rejects.toThrow()
   })
@@ -141,6 +169,15 @@ describe('engineServeArgs', () => {
 
   it('leaves the flag off when recording wants the input', () => {
     expect(engineServeArgs(5000, null, true)).toEqual(['--serve', '5000'])
+  })
+
+  // Ableton Link: only the app's own playback engine joins (playbackEngineLifecycle.ts). Every
+  // other engine -- an export's, a bake's, the phone loop's, and every engine a test starts --
+  // would otherwise be a Link peer whose project tempo the playback engine adopts.
+  it('asks for Ableton Link only when told to', () => {
+    expect(engineServeArgs(5000, null, false)).not.toContain('--link')
+    expect(engineServeArgs(5000, null, true, false)).toEqual(['--serve', '5000'])
+    expect(engineServeArgs(5000, null, true, true)).toEqual(['--serve', '5000', '--link'])
   })
 
   it('still passes the bridge binary', () => {

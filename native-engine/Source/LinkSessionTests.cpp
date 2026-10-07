@@ -22,12 +22,18 @@ namespace sssketch
 
         void runTest() override
         {
-            beginTest("starts enabled by default -- ableton::Link's own documented "
-                      "default is disabled, but sssketch's LinkSession deliberately "
-                      "enables it at construction so Link is on from engine startup "
-                      "without requiring a manual per-session toggle");
+            beginTest("starts disabled unless asked -- an engine that joins Link uninvited "
+                      "is a peer whose project tempo the playback engine adopts (a test's "
+                      "engine retuned a running app's project to 60)");
             {
                 LinkSession session(120.0);
+                expect(!session.isEnabled());
+            }
+
+            beginTest("starts enabled when asked -- the playback engine (--link) is on from "
+                      "startup without a manual per-session toggle");
+            {
+                LinkSession session(120.0, true);
                 expect(session.isEnabled());
             }
 
@@ -52,7 +58,7 @@ namespace sssketch
                       "stays at whatever it was constructed with");
             {
                 LinkSession session(120.0);
-                session.setEnabled(false); // sessions now start enabled by default
+                session.setEnabled(false); // already off; explicit, as this test is about it
                 session.syncTempo(140.0);
                 expectWithinAbsoluteError(session.sessionTempo(), 120.0, 0.01);
             }
@@ -97,7 +103,7 @@ namespace sssketch
             beginTest("pushTempoNow is a no-op while disabled");
             {
                 LinkSession session(120.0);
-                session.setEnabled(false); // sessions now start enabled by default
+                session.setEnabled(false); // already off; explicit, as this test is about it
                 session.pushTempoNow(140.0);
                 expectWithinAbsoluteError(session.sessionTempo(), 120.0, 0.01);
             }

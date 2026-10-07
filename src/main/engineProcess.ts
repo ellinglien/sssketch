@@ -25,17 +25,25 @@ export interface SpawnEngineOptions {
    * exportAudioMaterialization.ts) never record. An engine started without one still records:
    * arming names its device and opens the input then. */
   audioInput?: boolean
+  /** Join Ableton Link at launch. False unless asked for: only the playback engine asks
+   * (playbackEngineLifecycle.ts). Every engine with Link on is a peer of every other on the
+   * machine and the network, and the playback engine adopts a peer's tempo into the project
+   * (StoreContext's onLinkTempoChanged) -- so an export's, a bake's or a test's engine, loading a
+   * project at its own bpm, would retune the open project. */
+  link?: boolean
 }
 
-/** The engine's --serve arguments (Main.cpp's argv dispatch). Pure, so the flag is tested
+/** The engine's --serve arguments (Main.cpp's argv dispatch). Pure, so the flags are tested
  * without a spawn. */
 export function engineServeArgs(
   port: number,
   bridgeBinaryPath: string | null,
-  audioInput: boolean
+  audioInput: boolean,
+  link = false
 ): string[] {
   const args = ['--serve', String(port)]
   if (!audioInput) args.push('--no-audio-input')
+  if (link) args.push('--link')
   if (bridgeBinaryPath !== null) args.push('--bridge-binary', bridgeBinaryPath)
   return args
 }
@@ -174,7 +182,8 @@ export function spawnEngine(options: SpawnEngineOptions = {}): Promise<EngineHan
   const engineArgs = engineServeArgs(
     port,
     existsSync(bridgeBinaryPath) ? bridgeBinaryPath : null,
-    options.audioInput === true
+    options.audioInput === true,
+    options.link === true
   )
 
   return new Promise((resolve, reject) => {

@@ -39,8 +39,10 @@ namespace sssketch
     class IpcConnection : public juce::InterprocessConnection, private juce::MultiTimer
     {
     public:
+        /** `linkEnabled`: whether this connection's LinkSession joins Ableton Link at once
+         * (Main.cpp's --link; see LinkSession's constructor for why it is off unless asked). */
         IpcConnection(PlaybackEngine& engine, Transport& transport, PluginChain& masterChain,
-            ChannelChainRegistry& channelChains);
+            ChannelChainRegistry& channelChains, bool linkEnabled = false);
         ~IpcConnection() override;
 
         void connectionMade() override;
@@ -182,8 +184,9 @@ namespace sssketch
     class IpcServer : public juce::InterprocessConnectionServer
     {
     public:
+        /** `linkEnabled` is handed to every connection's LinkSession (Main.cpp's --link). */
         IpcServer(PlaybackEngine& engine, Transport& transport, PluginChain& masterChain,
-            ChannelChainRegistry& channelChains);
+            ChannelChainRegistry& channelChains, bool linkEnabled = false);
 
         juce::InterprocessConnection* createConnectionObject() override;
 
@@ -192,5 +195,6 @@ namespace sssketch
         Transport& transport;
         PluginChain& masterChain;
         ChannelChainRegistry& channelChains;
+        bool linkEnabled;
     };
 }
