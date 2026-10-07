@@ -8,6 +8,7 @@ import type { LiveParamField } from '@shared/liveParam'
 import type { OwnUsernameReport } from '@shared/ownUsernameReport'
 import type { AppFeatureSettings } from '@shared/features'
 import type { LoginSyncConsent } from '@shared/loginSyncConsent'
+import type { RiffArchivePick } from '@shared/riffArchiveRoot'
 import type {
   RiffLibraryJam,
   RiffLibraryRiffSummary,
@@ -765,6 +766,12 @@ const api = {
   riffLibraryIsOwn: (): Promise<boolean> => ipcRenderer.invoke('riff-library-is-own'),
   setRiffLibraryRoot: (newRoot: string): Promise<void> =>
     ipcRenderer.invoke('riff-library-set-root', newRoot),
+  /** A picked folder, snapped to the LORE archive root one level off it, or why not
+   * (@shared/riffArchiveRoot). Only an `ok` pick changes the root. */
+  setRiffLibraryRootFromPick: (picked: string): Promise<RiffArchivePick> =>
+    ipcRenderer.invoke('riff-library-set-root-from-pick', picked),
+  /** Back to sssketch's own library from a linked archive. */
+  useOwnRiffLibrary: (): Promise<void> => ipcRenderer.invoke('riff-library-use-own'),
   riffLibraryListJams: (filterText: string, targetUser?: string): Promise<RiffLibraryJam[]> =>
     ipcRenderer.invoke('riff-library-list-jams', filterText, targetUser),
   riffLibraryListRiffs: (
@@ -884,6 +891,13 @@ const api = {
     const listener = (): void => callback()
     ipcRenderer.on('endlesss-username-changed', listener)
     return () => ipcRenderer.removeListener('endlesss-username-changed', listener)
+  },
+  /** The session ended without a logout (it expired, or Endlesss refused
+   * it): ask endlesssAuthStatus again. */
+  onEndlesssSessionEnded: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('endlesss-session-ended', listener)
+    return () => ipcRenderer.removeListener('endlesss-session-ended', listener)
   },
   endlesssListJams: (): Promise<RiffLibraryJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
   endlesssJamRiffCount: (jamId: string): Promise<number | null> =>

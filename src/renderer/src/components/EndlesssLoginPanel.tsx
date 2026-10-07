@@ -1,6 +1,6 @@
 // src/renderer/src/components/EndlesssLoginPanel.tsx
 import { useEffect, useMemo, useState } from 'react'
-import { announceEndlesssLoggedOut } from '../audio/riffLibraryUsername'
+import { announceEndlesssLoggedOut, followEndlesssAuthStatus } from '../audio/riffLibraryUsername'
 
 type AuthStatus =
   | { loggedIn: false }
@@ -54,8 +54,17 @@ export function EndlesssLoginPanel({
       .catch((err) => {
         console.error('EndlesssLoginPanel: endlesssAuthStatus() failed:', err)
       })
+    // Then follows it, so a session that ended without a logout here (it
+    // expired, or Endlesss refused it -- review of a00e7aab) shows the login
+    // form rather than "logged in as". Not passed on to onStatusChange: the
+    // caller follows the session itself, and announcing from here would
+    // only re-ask in a loop.
+    const stopFollowing = followEndlesssAuthStatus((s) => {
+      if (!cancelled) setStatus(s)
+    })
     return () => {
       cancelled = true
+      stopFollowing()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- onStatusChange intentionally excluded, only fires on mount and after explicit login/logout below, not on every parent re-render
   }, [])

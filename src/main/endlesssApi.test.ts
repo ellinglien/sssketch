@@ -465,12 +465,6 @@ describe('endlesssApi riff listing in a jam', () => {
         vi.fn(async () => new Response('slow down', { status: 429 })) as unknown as typeof fetch
       )
       expect(noHeader.failed).toEqual({ reason: 'rate-limited' })
-      const unauthorised = await listRiffsInJam(
-        'jam_abc',
-        {},
-        vi.fn(async () => new Response('no', { status: 401 })) as unknown as typeof fetch
-      )
-      expect(unauthorised.failed).toEqual({ reason: 'logged-out' })
       const controller = new AbortController()
       const cancelled = await listRiffsInJam(
         'jam_abc',
@@ -482,6 +476,15 @@ describe('endlesssApi riff listing in a jam', () => {
         controller.signal
       )
       expect(cancelled.failed).toEqual({ reason: 'cancelled' })
+      // Last: a 401 the account's own view also gets ends the session.
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+      const unauthorised = await listRiffsInJam(
+        'jam_abc',
+        {},
+        vi.fn(async () => new Response('no', { status: 401 })) as unknown as typeof fetch
+      )
+      warn.mockRestore()
+      expect(unauthorised.failed).toEqual({ reason: 'logged-out' })
     } finally {
       errors.mockRestore()
     }
@@ -1545,5 +1548,210 @@ describe('auth status and the username check behind it (2026-10-07 review)', () 
     expect(await pending).toEqual({ loggedIn: false })
     expect(existsSync(sessionFile)).toBe(false)
     expect(changed).not.toHaveBeenCalled()
+  })
+})
+
+// Review of ca1f7306 / a00e7aab: a 401, or a session past its expiry, said
+// "log in to sync" and left the session in place -- so the renderer still
+// read as logged in, and the login form never showed. Either now ends the
+// session as a logout does (memory and the saved file), and says so.
+describe('a session Endlesss no longer takes ends, and is announced', () => {
+  const DAY = 1000 * 60 * 60 * 24
+
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  async function loggedInApi(expires = Date.now() + DAY): Promise<typeof import('./endlesssApi')> {
+    const api = await import('./endlesssApi')
+    await api.loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ token: 't', password: 'p', user_id: 'u1', expires }), {
+            status: 200
+          })
+      ) as unknown as typeof fetch
+    )
+    return api
+  }
+
+  const sessionFile = (): string => join(defaultUserDataDir, 'endlesss-session.enc')
+
+  /** Every request answered with `jam`, except the account's own membership
+   * view, answered with `own`. */
+  function endlesss(jam: number, own: number): typeof fetch & { urls: string[] } {
+    const urls: string[] = []
+    const fn = vi.fn(async (url: string) => {
+      urls.push(url)
+      const status = url.includes('/user_appdata$elling/_design/membership') ? own : jam
+      return new Response(status === 200 ? '{"rows":[]}' : 'no', { status })
+    })
+    return Object.assign(fn as unknown as typeof fetch, { urls })
+  }
+
+  it('a 401 on a jam listing that the account itself also gets ends the session like a logout', async () => {
+    const api = await loggedInApi()
+    const ended = vi.fn()
+    api.setSessionEndedListener(ended)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(existsSync(sessionFile())).toBe(true)
+
+    const page = await api.listRiffsInJam('jam_abc', {}, endlesss(401, 401))
+
+    expect(page.failed).toEqual({ reason: 'logged-out' })
+    expect(api.getAuthStatus()).toEqual({ loggedIn: false })
+    expect(existsSync(sessionFile())).toBe(false)
+    expect(ended).toHaveBeenCalledTimes(1)
+  })
+
+  // CouchDB answers 401 for a db the account can't read, too (the username
+  // check counts it as "not this account"): the account's own view says
+  // which it was.
+  it('a 401 on one jam that the account itself does not get is an error, and the session stays', async () => {
+    const api = await loggedInApi()
+    const ended = vi.fn()
+    api.setSessionEndedListener(ended)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const fetchImpl = endlesss(401, 200)
+    const page = await api.listRiffsInJam('jam_abc', {}, fetchImpl)
+
+    expect(page.failed).toEqual({ reason: 'error' })
+    expect(api.getAuthStatus().loggedIn).toBe(true)
+    expect(existsSync(sessionFile())).toBe(true)
+    expect(ended).not.toHaveBeenCalled()
+    expect(fetchImpl.urls.filter((u) => u.includes('membership'))).toHaveLength(1)
+  })
+
+  it('a 401 on the riff lookup ends the session too, once for lanes failing together', async () => {
+    const api = await loggedInApi()
+    const ended = vi.fn()
+    api.setSessionEndedListener(ended)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const fetchImpl = endlesss(401, 401)
+
+    const results = await Promise.all(
+      ['r1', 'r2', 'r3'].map((riff) => api.resolveJamRiffOrFailure('jam_abc', riff, fetchImpl))
+    )
+
+    expect(results).toEqual(Array(3).fill({ failure: { reason: 'logged-out' } }))
+    expect(api.getAuthStatus()).toEqual({ loggedIn: false })
+    expect(ended).toHaveBeenCalledTimes(1)
+    expect(fetchImpl.urls.filter((u) => u.includes('membership'))).toHaveLength(1)
+  })
+
+  it("a 401 on the account's own jam list ends the session", async () => {
+    const api = await loggedInApi()
+    const ended = vi.fn()
+    api.setSessionEndedListener(ended)
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    expect(await api.listJams(endlesss(401, 401))).toEqual([])
+    expect(api.getAuthStatus()).toEqual({ loggedIn: false })
+    expect(ended).toHaveBeenCalledTimes(1)
+  })
+
+  it('a session found past its expiry is removed like a logout, and announced once', async () => {
+    const api = await loggedInApi(Date.now() - 1000)
+    const ended = vi.fn()
+    api.setSessionEndedListener(ended)
+
+    expect(api.getAuthStatus()).toEqual({ loggedIn: false })
+    expect(api.getAuthStatus()).toEqual({ loggedIn: false })
+    expect(existsSync(sessionFile())).toBe(false)
+    expect(ended).toHaveBeenCalledTimes(1)
+  })
+
+  it('a logout is not announced as a session ending (the renderer did it)', async () => {
+    const api = await loggedInApi()
+    const ended = vi.fn()
+    api.setSessionEndedListener(ended)
+    api.logout()
+    expect(ended).not.toHaveBeenCalled()
+  })
+})
+
+// Review of 97eb9189: a riff whose stem record Endlesss says is gone can never
+// resolve; the sync gives it up at once rather than retrying it forever.
+describe('a record Endlesss reports gone is missing, not an error', () => {
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  async function loggedInApi(): Promise<typeof import('./endlesssApi')> {
+    const api = await import('./endlesssApi')
+    await api.loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ token: 't', password: 'p', user_id: 'u1', expires: Date.now() + 1e6 }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+    return api
+  }
+
+  /** riff_1 holds stem_1 and stem_2; the stem lookup answers `stemRows`. */
+  function lookup(riffRows: unknown[] | null, stemRows: unknown[]): typeof fetch {
+    return vi.fn(async (_url: string, init?: RequestInit) => {
+      const { keys } = JSON.parse(init!.body as string) as { keys: string[] }
+      if (keys[0] === 'riff_1') {
+        const riffDoc = rawRiffDoc('stem_1', {
+          state: {
+            bps: 2,
+            barLength: 4,
+            playback: [
+              { slot: { current: { on: true, currentLoop: 'stem_1', gain: 1 } } },
+              { slot: { current: { on: true, currentLoop: 'stem_2', gain: 1 } } }
+            ]
+          }
+        })
+        return new Response(JSON.stringify({ rows: riffRows ?? [{ id: 'riff_1', doc: riffDoc }] }))
+      }
+      return new Response(JSON.stringify({ rows: stemRows }))
+    }) as unknown as typeof fetch
+  }
+
+  const stem1 = { id: 'stem_1', key: 'stem_1', doc: rawStemDoc({ _id: 'stem_1' }) }
+
+  it.each([
+    ['not_found', { key: 'stem_2', error: 'not_found' }],
+    ['deleted', { id: 'stem_2', key: 'stem_2', value: { rev: '2-x', deleted: true }, doc: null }]
+  ])('a stem record reported %s fails the riff as missing', async (_name, row) => {
+    const api = await loggedInApi()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(
+      await api.resolveJamRiffOrFailure('jam_abc', 'riff_1', lookup(null, [stem1, row]))
+    ).toEqual({ failure: { reason: 'missing' } })
+  })
+
+  it('a riff record reported deleted is missing too', async () => {
+    const api = await loggedInApi()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const gone = [{ id: 'riff_1', key: 'riff_1', value: { rev: '3-x', deleted: true }, doc: null }]
+    expect(await api.resolveJamRiffOrFailure('jam_abc', 'riff_1', lookup(gone, []))).toEqual({
+      failure: { reason: 'missing' }
+    })
+  })
+
+  it('a stem row simply absent from the answer is still an error (worth asking again)', async () => {
+    const api = await loggedInApi()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    expect(await api.resolveJamRiffOrFailure('jam_abc', 'riff_1', lookup(null, [stem1]))).toEqual({
+      failure: { reason: 'error' }
+    })
   })
 })

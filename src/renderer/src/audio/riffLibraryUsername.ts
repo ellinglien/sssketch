@@ -10,7 +10,8 @@
 //
 // LibraryBrowser announces a possible change (a username edit, a login or
 // logout) with RIFF_LIBRARY_USERNAME_CHANGED_EVENT on `window`, and main's
-// word that a session's username resolved late is relayed as the same event
+// word that a session's username resolved late, or that the session ended
+// without a logout, is relayed as the same event
 // (relayEndlesssUsernameChanges); listeners resolve again and compare.
 
 import {
@@ -51,11 +52,24 @@ export type EndlesssAuthStatus = Awaited<ReturnType<Window['rifffApi']['endlesss
 
 /** Main's word that the Endlesss session's username changed after it
  * answered auth status (its check against Endlesss finished in the
- * background: an email login resolved later), relayed as
- * RIFF_LIBRARY_USERNAME_CHANGED_EVENT so every listener resolves again.
- * Mounted once for the app (OwnUsernameReporter). Returns the unsubscribe. */
+ * background: an email login resolved later), or that the session ended
+ * without a logout (it expired, or Endlesss refused it: review of
+ * a00e7aab), relayed as RIFF_LIBRARY_USERNAME_CHANGED_EVENT so every
+ * listener resolves again -- an open view then reads as logged out and
+ * shows the login form. An ended session is a change, not a logout: nobody
+ * chose it, so the saved "me" is kept (ownUsernameReportFrom). Mounted once
+ * for the app (OwnUsernameReporter). Returns the unsubscribe. */
 export function relayEndlesssUsernameChanges(): () => void {
-  return window.rifffApi.onEndlesssUsernameChanged(() => announceRiffLibraryUsernameChanged())
+  const stopUsername = window.rifffApi.onEndlesssUsernameChanged(() =>
+    announceRiffLibraryUsernameChanged()
+  )
+  const stopSession = window.rifffApi.onEndlesssSessionEnded(() =>
+    announceRiffLibraryUsernameChanged()
+  )
+  return () => {
+    stopUsername()
+    stopSession()
+  }
 }
 
 /** Keeps a view's copy of the Endlesss session current after its first

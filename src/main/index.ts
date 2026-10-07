@@ -78,6 +78,8 @@ import {
   riffLibraryHasRiffs,
   riffLibraryRootPath,
   setRiffLibraryRoot,
+  setRiffLibraryRootFromPick,
+  returnToOwnRiffLibrary,
   listJams,
   listRiffs,
   resolveRiff,
@@ -194,6 +196,7 @@ import {
   logout as endlesssLogout,
   authStatusWithUsername as endlesssAuthStatusWithUsername,
   setUsernameChangedListener as setEndlesssUsernameChangedListener,
+  setSessionEndedListener as setEndlesssSessionEndedListener,
   listJams as listEndlesssJams,
   jamRiffCount
 } from './endlesssApi'
@@ -958,6 +961,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('riff-library-is-own', () => riffLibraryRootPath() === ownRiffLibraryRoot())
 
   ipcMain.handle('riff-library-set-root', (_event, newRoot: string) => setRiffLibraryRoot(newRoot))
+  // The gear menu's pick: snapped to the archive root one level off, or refused (share
+  // readiness S7). And the way back to sssketch's own library.
+  ipcMain.handle('riff-library-set-root-from-pick', (_event, picked: string) =>
+    setRiffLibraryRootFromPick(picked)
+  )
+  ipcMain.handle('riff-library-use-own', () => returnToOwnRiffLibrary())
 
   ipcMain.handle(
     'riff-library-list-jams',
@@ -1145,6 +1154,12 @@ app.whenReady().then(async () => {
   ipcMain.handle('endlesss-auth-status', () => endlesssAuthStatusWithUsername())
   setEndlesssUsernameChangedListener(() => {
     mainWindow?.webContents.send('endlesss-username-changed')
+  })
+  // A session that ended without a logout (it expired, or Endlesss refused
+  // it with a 401): the renderer asks auth status again, so the login form
+  // shows instead of a "log in to sync" with no way to (endlesssApi.ts).
+  setEndlesssSessionEndedListener(() => {
+    mainWindow?.webContents.send('endlesss-session-ended')
   })
   ipcMain.handle('endlesss-list-jams', () => listEndlesssJams())
   ipcMain.handle('endlesss-jam-riff-count', (_event, jamId: string) => jamRiffCount(jamId))

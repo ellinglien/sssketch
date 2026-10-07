@@ -125,10 +125,12 @@ export interface RiffPage {
 
 /** Why a request to Endlesss produced nothing usable. `cancelled` is the
  * caller's own abort (a timeout is an `error`); `logged-out` is no session,
- * or one Endlesss refused (401); `rate-limited` is a 429, with how long its
- * Retry-After asked to wait when it said. */
+ * or one Endlesss refused (401) -- which ends it (endlesssApi.ts);
+ * `rate-limited` is a 429, with how long its Retry-After asked to wait when
+ * it said; `missing` is a record Endlesss says is gone (CouchDB's
+ * `not_found`, or deleted), which asking again will not bring back. */
 export interface EndlesssFetchFailure {
-  reason: 'cancelled' | 'rate-limited' | 'logged-out' | 'error'
+  reason: 'cancelled' | 'rate-limited' | 'logged-out' | 'missing' | 'error'
   retryAfterMs?: number
 }
 

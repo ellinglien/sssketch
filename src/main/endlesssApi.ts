@@ -109,11 +109,51 @@ function ensureSessionLoaded(): void {
 /** The live session, or null if there isn't one / it's expired. Every
  * network function in this module that needs auth calls this rather than
  * reading currentSession directly, so expiry is checked in exactly one
- * place. */
+ * place. One found past its expiry is ended (endSession). */
 function activeSession(): EndlesssSession | null {
   ensureSessionLoaded()
-  if (!currentSession || currentSession.expires <= Date.now()) return null
+  if (!currentSession) return null
+  if (currentSession.expires <= Date.now()) {
+    endSession(currentSession, 'it expired')
+    return null
+  }
   return currentSession
+}
+
+let sessionEndedListener: (() => void) | null = null
+
+/** Called when a session ends without the user logging out: it expired, or
+ * Endlesss refused it (index.ts tells the renderer, which asks auth status
+ * again, so the login form shows). Null: nobody. */
+export function setSessionEndedListener(listener: (() => void) | null): void {
+  sessionEndedListener = listener
+}
+
+/** Forgets the session in memory and on disk. */
+function forgetSession(): void {
+  currentSession = null
+  sessionLoadAttempted = true
+  const path = sessionFilePath()
+  if (existsSync(path)) {
+    try {
+      unlinkSync(path)
+    } catch (err) {
+      console.error('endlesssApi: failed to remove the persisted session:', err)
+    }
+  }
+}
+
+/** Ends `session` as a logout does -- in memory and its saved file -- and
+ * announces it (setSessionEndedListener). Review of ca1f7306: a 401 or an
+ * expired session used to say "log in to sync" while the session stayed,
+ * so the renderer still read as logged in and never showed the login form.
+ * A session already gone or replaced (a new login) is left alone, so lanes
+ * failing together announce it once. */
+function endSession(session: EndlesssSession, why: string): void {
+  if (currentSession !== session) return
+  console.warn(`endlesssApi: the Endlesss session ended (${why}); logged out`)
+  forgetSession()
+  sessionEndedListener?.()
 }
 
 /** The session's Endlesss username: the checked one, else the typed login
@@ -243,17 +283,9 @@ export async function authStatusWithUsername(
   return getAuthStatus()
 }
 
+/** The user's own logout: not announced (the renderer asked for it). */
 export function logout(): void {
-  currentSession = null
-  sessionLoadAttempted = true
-  const path = sessionFilePath()
-  if (existsSync(path)) {
-    try {
-      unlinkSync(path)
-    } catch (err) {
-      console.error('endlesssApi: failed to remove persisted session on logout:', err)
-    }
-  }
+  forgetSession()
 }
 
 function userAgent(): string {
@@ -796,6 +828,7 @@ function failedPage(offset: number, failure: EndlesssFetchFailure): RiffPage {
 
 const ERROR: EndlesssFetchFailure = { reason: 'error' }
 const LOGGED_OUT: EndlesssFetchFailure = { reason: 'logged-out' }
+const MISSING: EndlesssFetchFailure = { reason: 'missing' }
 
 /** A request that threw: the caller's own cancel when its signal is
  * aborted, anything else (a timeout included) an error. */
@@ -816,6 +849,64 @@ function statusFailure(res: Response): EndlesssFetchFailure {
   return Number.isFinite(ms) && ms > 0
     ? { reason: 'rate-limited', retryAfterMs: ms }
     : { reason: 'rate-limited' }
+}
+
+/** A "the session is fine" answer stands this long, so a run of 401s from
+ * one jam asks once. */
+const SESSION_CONFIRMED_MS = 60_000
+
+/** The last check of whether Endlesss still takes a session. */
+let sessionProbe: { session: EndlesssSession; at: number; taken: Promise<boolean> } | null = null
+
+/** Whether Endlesss still takes `session`, asked of the account's own
+ * membership view: CouchDB answers 401 for a db the account can't read too
+ * (the username check counts it as "not this account"), so a 401 from one
+ * jam does not by itself mean the session is gone. Only a 401 or 403 from
+ * the account's own view says no; an answer that never came (offline, a
+ * 5xx) keeps the session -- an outage logs nobody out. With no username to
+ * ask about (an email login not yet checked) the 401 is taken at its word.
+ * Lanes failing together share one check. */
+function sessionStillTaken(session: EndlesssSession, fetchImpl: FetchLike): Promise<boolean> {
+  const username = sessionUsername(session)
+  if (username === '') return Promise.resolve(false)
+  const now = Date.now()
+  if (
+    sessionProbe &&
+    sessionProbe.session === session &&
+    now - sessionProbe.at < SESSION_CONFIRMED_MS
+  ) {
+    return sessionProbe.taken
+  }
+  const taken = (async (): Promise<boolean> => {
+    try {
+      const res = await fetchWithTimeout(
+        fetchImpl,
+        `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(username)}/_design/membership/_view/getMembership?limit=0`,
+        { headers: { Authorization: basicAuthHeader(session), 'User-Agent': userAgent() } }
+      )
+      return res.status !== 401 && res.status !== 403
+    } catch (err) {
+      console.error('endlesssApi: could not check the session after a 401:', err)
+      return true
+    }
+  })()
+  sessionProbe = { session, at: now, taken }
+  return taken
+}
+
+/** Why a response that wasn't ok failed (statusFailure), where a 401 to a
+ * request made with `session` ends the session when Endlesss refuses it
+ * outright (sessionStillTaken) -- and is an error, the session kept, when it
+ * was only this one db. */
+async function responseFailure(
+  res: Response,
+  session: EndlesssSession | null,
+  fetchImpl: FetchLike
+): Promise<EndlesssFetchFailure> {
+  if (res.status !== 401 || !session) return statusFailure(res)
+  if (await sessionStillTaken(session, fetchImpl)) return ERROR
+  endSession(session, 'Endlesss refused it with a 401')
+  return LOGGED_OUT
 }
 
 export async function listSharedFeed(
@@ -844,7 +935,7 @@ export async function listSharedFeed(
   }
   if (!res.ok) {
     console.error(`endlesssApi: listSharedFeed HTTP ${res.status}`)
-    return failedPage(offset, statusFailure(res))
+    return failedPage(offset, await responseFailure(res, session, fetchImpl))
   }
 
   let body: RawSharedFeedResponse
@@ -960,6 +1051,8 @@ export async function listJams(fetchImpl: FetchLike = fetch): Promise<RiffLibrar
   }
   if (!res.ok) {
     console.error(`endlesssApi: listJams HTTP ${res.status}`)
+    // The account's own view refusing the session is the session gone.
+    if (res.status === 401) endSession(session, 'Endlesss refused it with a 401')
     return []
   }
 
@@ -1035,7 +1128,7 @@ export async function listRiffsInJam(
   }
   if (!res.ok) {
     console.error(`endlesssApi: listRiffsInJam HTTP ${res.status}`)
-    return failedPage(offset, statusFailure(res))
+    return failedPage(offset, await responseFailure(res, session, fetchImpl))
   }
 
   let body: RawRiffListResponse
@@ -1082,9 +1175,15 @@ export async function jamRiffCount(
   return page.totalCount ?? null
 }
 
+/** One row of an `_all_docs` answer: the doc, or, for a key with none,
+ * CouchDB's word on why -- `error: "not_found"` (never existed, or purged)
+ * or `value.deleted` (deleted). */
 interface RawDocsRow<T> {
-  id: string
-  doc: T
+  id?: string
+  key?: string
+  doc?: T | null
+  error?: string
+  value?: { deleted?: boolean }
 }
 
 interface RawDocsResponse<T> {
@@ -1092,19 +1191,21 @@ interface RawDocsResponse<T> {
   rows: RawDocsRow<T>[]
 }
 
-/** The docs found for `keys`, by id (a key with no doc is absent), or why
- * the lookup failed. A failure is never an empty map: the stem lookup's
- * used to be, and resolveJamRiff built the riff with no stems -- which the
- * sync saved as resolved, for good. */
+/** The docs found for `keys`, by id (a key with no doc is absent), with the
+ * keys Endlesss says are gone (`missing`: not_found or deleted), or why the
+ * lookup failed. A failure is never an empty map: the stem lookup's used to
+ * be, and resolveJamRiff built the riff with no stems -- which the sync saved
+ * as resolved, for good. */
 async function fetchDocsByKeys<T>(
   jamId: string,
   keys: string[],
   session: EndlesssSession,
   fetchImpl: FetchLike,
   signal?: AbortSignal
-): Promise<{ docs: Map<string, T> } | { failure: EndlesssFetchFailure }> {
+): Promise<{ docs: Map<string, T>; missing: Set<string> } | { failure: EndlesssFetchFailure }> {
   const result = new Map<string, T>()
-  if (keys.length === 0) return { docs: result }
+  const missing = new Set<string>()
+  if (keys.length === 0) return { docs: result, missing }
   let res: Response
   try {
     res = await fetchWithTimeout(
@@ -1128,7 +1229,7 @@ async function fetchDocsByKeys<T>(
   }
   if (!res.ok) {
     console.error(`endlesssApi: fetchDocsByKeys HTTP ${res.status}`)
-    return { failure: statusFailure(res) }
+    return { failure: await responseFailure(res, session, fetchImpl) }
   }
   let body: RawDocsResponse<T>
   try {
@@ -1138,9 +1239,12 @@ async function fetchDocsByKeys<T>(
     return { failure: thrownFailure(signal) }
   }
   for (const row of body.rows ?? []) {
-    if (row.doc) result.set(row.id, row.doc)
+    const id = row.id ?? row.key
+    if (id === undefined) continue
+    if (row.doc) result.set(id, row.doc)
+    else if (row.error === 'not_found' || row.value?.deleted === true) missing.add(id)
   }
-  return { docs: result }
+  return { docs: result, missing }
 }
 
 /** Resolves one riff within a private jam: fetches the riff doc, extracts
@@ -1166,7 +1270,8 @@ export async function resolveJamRiff(
  * whole: every active slot (one that is on, with a stem in it -- the same
  * slots buildResolvedRiff keeps) needs its stem record. A riff whose stem
  * lookup failed, or came back short, is a failure, never a riff with fewer
- * stems; a riff with no active slots is a real empty riff. */
+ * stems -- `missing` when Endlesss says a record is gone, which the sync
+ * gives up on at once; a riff with no active slots is a real empty riff. */
 export async function resolveJamRiffOrFailure(
   jamId: string,
   riffCID: string,
@@ -1180,7 +1285,7 @@ export async function resolveJamRiffOrFailure(
   const riffDocs = await fetchDocsByKeys<RawRiffDoc>(jamId, [riffCID], session, fetchImpl, signal)
   if ('failure' in riffDocs) return riffDocs
   const riffDoc = riffDocs.docs.get(riffCID)
-  if (!riffDoc) return { failure: ERROR }
+  if (!riffDoc) return { failure: riffDocs.missing.has(riffCID) ? MISSING : ERROR }
 
   const stemIds = riffDoc.state.playback
     .map((slot) => slot.slot?.current)
@@ -1199,12 +1304,17 @@ export async function resolveJamRiffOrFailure(
     signal
   )
   if ('failure' in stemDocs) return stemDocs
-  if (uniqueStemIds.some((id) => !stemDocs.docs.has(id))) {
+  const absent = uniqueStemIds.filter((id) => !stemDocs.docs.has(id))
+  if (absent.length > 0) {
+    const gone = absent.filter((id) => stemDocs.missing.has(id)).length
     console.error(
       `endlesssApi: riff ${riffCID} in ${jamId}: ${stemDocs.docs.size} of ` +
-        `${uniqueStemIds.length} stem records came back`
+        `${uniqueStemIds.length} stem records came back (${gone} reported gone)`
     )
-    return { failure: ERROR }
+    // One Endlesss says is gone can't come back: the riff never resolves
+    // whole (review of 97eb9189). One simply not in the answer is worth
+    // asking again.
+    return { failure: gone > 0 ? MISSING : ERROR }
   }
   const resolved = buildResolvedRiff(riffCID, riffDoc, [...stemDocs.docs.values()])
   return { riff: await downloadMissingStemsFor(resolved, fetchImpl, signal, onStemDownloaded) }
