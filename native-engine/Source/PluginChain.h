@@ -77,7 +77,9 @@ namespace sssketch
 
         /** Message-thread API: captures slotIndex's currently active
          * plugin's own parameter state via getStateInformation(),
-         * base64-encoded. Empty string if the slot has no plugin loaded
+         * base64-encoded -- or, when a finished load is still waiting for
+         * the audio thread's swap, that incoming plugin's (it is what the
+         * slot is about to hold; see the .cpp). Empty string if the slot has no plugin loaded
          * (including a bridged slot -- bridge-hosted plugin state capture
          * is out of scope for this feature, see the design doc's non-goals).
          *

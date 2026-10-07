@@ -403,6 +403,40 @@ namespace sssketch
                     expect(chain.captureStateBase64(0).isEmpty());
                 }
 
+                // The renderer drops a slot's saved settings once its load reports success;
+                // a capture between that reply and the audio thread's swap must still see
+                // the loaded plugin, or the settings are gone (advanced features switch off).
+                beginTest("captureStateBase64 sees a loaded plugin the audio thread hasn't swapped in yet");
+                {
+                    StateCapturingTestPlugin* raw = nullptr;
+                    PluginChain chain(4, stateCaptureInstantiator(raw));
+                    bool done = false;
+                    chain.requestLoad(0, "any-id", 44100.0, 64, [&](bool, const juce::String&) { done = true; });
+                    for (int i = 0; i < 2000 && !done; ++i)
+                        juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
+                    expect(done);
+                    // No applyPendingSwaps: the load is still pending.
+                    juce::MemoryBlock expected(StateCapturingTestPlugin::fixedState, sizeof(StateCapturingTestPlugin::fixedState));
+                    expectEquals(chain.captureStateBase64(0), expected.toBase64Encoding());
+                }
+
+                beginTest("captureStateBase64 returns empty for a slot whose pending swap is an unload");
+                {
+                    StateCapturingTestPlugin* raw = nullptr;
+                    PluginChain chain(4, stateCaptureInstantiator(raw));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "any-id", 44100.0, 512, err));
+                    expect(chain.captureStateBase64(0).isNotEmpty());
+                    bool done = false;
+                    chain.requestLoad(0, "", 44100.0, 64, [&](bool, const juce::String&) { done = true; });
+                    for (int i = 0; i < 2000 && !done; ++i)
+                        juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
+                    expect(done);
+                    expect(chain.captureStateBase64(0).isEmpty());
+                    chain.applyPendingSwaps();
+                    chain.drainRetired();
+                }
+
                 // applyPendingSwaps (audio thread) used to hand the instance it replaced
                 // to a detached thread for deletion, while captureStateBase64 (message
                 // thread, the get-plugin-states IPC handler) read slot.active with no

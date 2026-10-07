@@ -265,7 +265,19 @@ namespace sssketch
         // ONE load, then everything through it: the audio thread may swap
         // the slot at any moment, but the state loaded here can't be freed
         // until drainRetired() runs -- on this same (message) thread.
-        const auto* state = slots[(size_t) slotIndex].state.load(std::memory_order_acquire);
+        //
+        // A load the audio thread hasn't swapped in yet (slot.pending) is
+        // what the slot is about to hold, and its onLoaded has already told
+        // the renderer it succeeded -- which is when the renderer drops that
+        // slot's saved settings. So it wins over slot.state: a capture in
+        // that window (the advanced features switch going off) must not
+        // read the outgoing plugin, or nothing at all. Equally safe: only
+        // this (message) thread frees a pending SlotState (a newer
+        // requestLoad replacing it); the audio thread only moves it into
+        // slot.state.
+        const auto& slot = slots[(size_t) slotIndex];
+        const auto* pending = slot.pending.load(std::memory_order_acquire);
+        const auto* state = pending != nullptr ? pending : slot.state.load(std::memory_order_acquire);
         if (state == nullptr || state->instance == nullptr)
             return {};
         juce::MemoryBlock block;
