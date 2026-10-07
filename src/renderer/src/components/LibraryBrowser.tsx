@@ -4,7 +4,8 @@ import type {
   RiffLibraryJam,
   RiffLibraryResolvedRiff,
   RiffLibraryRiffSummary,
-  RiffFilters
+  RiffFilters,
+  SyncOutcome
 } from '@shared/riffLibraryTypes'
 import {
   instrumentMaskToSoundType,
@@ -64,7 +65,7 @@ import {
   storeTypedRiffLibraryUsername
 } from '../audio/riffLibraryUsername'
 import { resolveOwnUsername } from '@shared/ownUsernameReport'
-import { syncOutcomeNote } from '@shared/syncOutcomeNote'
+import { syncOutcomeNote, syncOutcomeNoteRefreshMs } from '@shared/syncOutcomeNote'
 import { loginSyncPromptText, type LoginSyncConsent } from '@shared/loginSyncConsent'
 
 // The "your username" setting is persisted locally (not in project files or
@@ -410,8 +411,23 @@ export function LibraryBrowser({
   const [syncBaseCountByKey, setSyncBaseCountByKey] = useState<Record<string, number>>({})
   // Why a jam's last sync stopped short, when the user can act on it ("log
   // in to sync", a 429's wait) -- it used to end silently. Cleared when that
-  // jam's next sync starts.
-  const [syncNoteByKey, setSyncNoteByKey] = useState<Record<string, string>>({})
+  // jam's next sync starts. Kept as the outcome, not its words: the note is
+  // worked out at render against syncNoteNow, so a 429's wait counts down
+  // and goes once it has passed (review of a00e7aab -- it said "try again in
+  // 6 min" for as long as the jam went unsynced).
+  const [syncOutcomeByKey, setSyncOutcomeByKey] = useState<Record<string, SyncOutcome>>({})
+  // The clock the notes are read against: set when an outcome arrives, and
+  // again whenever any note's text next changes (the effect below), so no
+  // note is ever shown out of date.
+  const [syncNoteNow, setSyncNoteNow] = useState(() => Date.now())
+  useEffect(() => {
+    const waits = Object.values(syncOutcomeByKey)
+      .map((outcome) => syncOutcomeNoteRefreshMs(outcome, syncNoteNow))
+      .filter((ms): ms is number => ms !== null)
+    if (waits.length === 0) return
+    const timer = setTimeout(() => setSyncNoteNow(Date.now()), Math.min(...waits))
+    return () => clearTimeout(timer)
+  }, [syncOutcomeByKey, syncNoteNow])
   // The jam's live riff count straight from Endlesss (not the local
   // warehouse) -- fetched below whenever a private jam is selected, purely
   // to warn before starting a sync that's going to take a while. null both
@@ -887,7 +903,7 @@ export function LibraryBrowser({
         delete next[key]
         return next
       })
-      setSyncNoteByKey((prev) => {
+      setSyncOutcomeByKey((prev) => {
         if (!(key in prev)) return prev
         const next = { ...prev }
         delete next[key]
@@ -898,8 +914,13 @@ export function LibraryBrowser({
         : window.rifffApi.riffLibrarySyncStartJam(jamCID, jamName)
       promise
         .then((outcome) => {
-          const note = syncOutcomeNote(outcome, Date.now())
-          if (note !== null) setSyncNoteByKey((prev) => ({ ...prev, [key]: note }))
+          if (outcome.stopped === null) return
+          setSyncNoteNow(Date.now())
+          setSyncOutcomeByKey((prev) => ({ ...prev, [key]: outcome }))
+          // No session: main ends one Endlesss refused and says so, but the
+          // session is asked about again here too, so the login form shows
+          // even when it had already gone (review of a00e7aab).
+          if (outcome.stopped === 'logged-out') announceRiffLibraryUsernameChanged()
         })
         .catch((err) => {
           console.error('LibraryBrowser: sync failed:', err)
@@ -1678,7 +1699,14 @@ export function LibraryBrowser({
     selectedSyncKey !== null ? syncProgressByKey[selectedSyncKey] : undefined
   const selectedSyncBaseCount =
     (selectedSyncKey !== null ? syncBaseCountByKey[selectedSyncKey] : undefined) ?? 0
-  const selectedSyncNote = selectedSyncKey !== null ? syncNoteByKey[selectedSyncKey] : undefined
+  const selectedSyncOutcome =
+    selectedSyncKey !== null ? syncOutcomeByKey[selectedSyncKey] : undefined
+  // "log in to sync" only while logged out: a login since has answered it.
+  const selectedSyncNote =
+    selectedSyncOutcome === undefined ||
+    (selectedSyncOutcome.stopped === 'logged-out' && authStatus.loggedIn)
+      ? null
+      : syncOutcomeNote(selectedSyncOutcome, syncNoteNow)
 
   // ---------------------------------------------------------------------
   // Escape-to-close
@@ -2158,13 +2186,23 @@ export function LibraryBrowser({
                                   ` (${bytesLabel(selectedSyncProgress.bytesDone)})`}
                               </span>
                             )}
-                            {!selectedSyncingHere && selectedSyncNote !== undefined && (
+                            {!selectedSyncingHere && selectedSyncNote !== null && (
                               <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
                                 {selectedSyncNote}
                               </span>
                             )}
                           </div>
                         )}
+                        {/* Logged out, the sync controls are gone and the
+                            login form above is the way back: the note says
+                            why this jam's sync stopped (review of a00e7aab). */}
+                        {!authStatus.loggedIn &&
+                          selectedJamCID !== DISCOVERED_JAM_CID &&
+                          selectedSyncNote !== null && (
+                            <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                              {selectedSyncNote}
+                            </span>
+                          )}
                       </div>
 
                       <div
