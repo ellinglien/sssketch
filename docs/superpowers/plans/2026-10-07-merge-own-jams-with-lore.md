@@ -212,3 +212,54 @@ read-only; the dev app's stem cache read through a symlink:
 Tests: riffLibraryStore.test.ts (8 new, root external + archive unreachable + own root),
 discoverCandidates.test.ts (a stem in both rolls once from the archive, mask and trait; an own jam
 rolls from the own db's existing indexes with no walk).
+
+### Review fixes (2026-10-07, review of b859757c and dc07ec69)
+
+Corrections to the claims above:
+
+- **"Archive unreachable … when the drive returns, the routing is recomputed and the shared jams go
+  back to the archive"** was only half true. The routing did come back, but `listJamsWithDb`
+  didn't. With the drive away at launch, its cache had only the own db as a source, so no signal
+  moved, and it kept routing the archive's jams to the own db while `resolveStemPath` sent their
+  stems to stem_v2. Fixed:
+  - `getRiffLibraryDb`'s open branch drops the jam list as well as the routing.
+  - The jam list remembers the archive connection it was built with. It calls `getRiffLibraryDb`
+    first, so a file that has come back (or gone) rebuilds the list on the next call.
+  - Test: the reviewer's replug repro, ported.
+- **"the archive connection closes"**: before this fix nothing closed it when the drive was unplugged
+  mid-session, and a dead handle was never reopened. Now:
+  - `getRiffLibraryDb` checks an open external archive's file at most once a second. If the file is
+    gone, it closes the connection and drops the caches, and the routing flips to the own db. When
+    the file is back, it opens a new connection.
+  - A read that fails with `SQLITE_IOERR*`/`SQLITE_CANTOPEN` closes the connection where the failure
+    is noticed: the routing's archive seeks, or a jam-list rebuild. The read is then retried once
+    through a new connection. This covers a drive that is pulled and pushed back in within a
+    second.
+  - Not covered: other modules' reads through a dead handle (the Discover walks, the stores'
+    StemCID checks) still just fail and log. A fresh connection only replaces the dead one once one
+    of the paths above notices. The Discover caches keyed by the old connection rebuild on demand
+    for the new one, and the archive's row counts are not re-seeded on the worker for it.
+- **"`listJams` checks the own db's Jams/Riffs signals"**: `resolveStemPath` didn't, so a jam
+  sssketch synced while the root was external got stem_v2 paths until the next jam-list rebuild. Now
+  the routing checks the own db's Jams/Riffs on every call:
+  - this process's own writes (`tableWriteVersion`) at once, at no cost;
+  - another connection's writes at the change check's pace.
+
+  Jams/Riffs, not Stems: those are the tables the rule reads.
+- **Artist picker counts** (`getArtistIndex`) summed the dbs, so a stem in both was counted twice:
+  the own db's rows of jams the archive has, plus the Shared Feed's archive stems. On his data, 81,902
+  own-db stems were counted where 20,345 are not in the archive. Each db after the first now counts
+  only stems no earlier db has (`readArtistCountsAfter`), using the routing rule:
+  - a real jam the archive has stems for is the archive's, whole;
+  - a Shared Feed or kept-group stem is looked up by StemCID.
+
+  Measured: 48-56 ms warm, 1.2-2.0 s with the archive's pages cold. Looking up every stem instead
+  took 3.2 s warm and 8.3 s cold. The result is off from an exact union by the 97 own-only stems
+  (which Discover also leaves out) and 1 stem.
+- **Radio hearts** looked stems up in the own db first. They now use the archive-first order
+  (`heartLookupDbs`), like every other reader.
+- **Loading ETA** (dc07ec69): an extension walk reporting during a load restarted the single rate on
+  every alternation, and the status line flipped between "loading" and "indexing". Fixed:
+  - The rate is now kept per key.
+  - `createLibraryProgressView` keeps the line on a load in progress until the load reaches its
+    total or has been quiet for 5 s.
