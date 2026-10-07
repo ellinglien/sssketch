@@ -80,9 +80,8 @@ import { requestCoachTensionOp } from './state/coachTensionBridge'
 import { registerCoachExport, requestCoachExport } from './state/coachExportBridge'
 import type { CoachExportOp } from '@shared/coachTension'
 import { BusyProvider, useBusy } from './state/BusyContext'
-import { serializeProject, deserializeProject } from './state/serialize'
+import { deserializeProject } from './state/serialize'
 import { hasUnsavedChanges } from './state/unsavedChanges'
-import { buildPluginStatesMap, mergePendingPluginStates } from '@shared/pluginStates'
 import { AUTO_ARRANGE_MAX_BARS } from '@shared/autoArrangeApply'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { BackgroundFeatureScan } from './audio/BackgroundFeatureScan'
@@ -124,7 +123,8 @@ import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
 import { mergeLatestSettings, nestedPatchFromLatest } from '@shared/latestSettings'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 import { useFeatureEnabled } from './state/appFeatures'
-import { pendingPluginStatesRef } from './state/pendingPluginStates'
+import { pendingPluginStatesRef, replacePendingPluginStates } from './state/pendingPluginStates'
+import { dirtyCheckJson, projectJsonForSave } from './state/saveSerialization'
 
 /** Tracks what the currently-open project actually is, so Save/Export know
  * whether to write in place (no dialog) or fall back to the existing
@@ -571,6 +571,8 @@ function ProjectMenu({
   setCurrentSketch,
   handleNew,
   handleSave,
+  serializeForSave,
+  markSaved,
   onOpenLibrary,
   onOpenClusterStems,
   onOpenClusterStemsLibrary,
@@ -586,6 +588,11 @@ function ProjectMenu({
    * ProjectMenu itself is purely presentational for these two. */
   handleNew: () => Promise<void>
   handleSave: () => Promise<boolean>
+  /** Frame's serializeForSave: the JSON every save path writes, plugin
+   * settings included (saveSerialization.ts). */
+  serializeForSave: () => Promise<string>
+  /** Records the live project as saved (the unsaved-changes baseline). */
+  markSaved: () => void
   onOpenLibrary: () => void
   /** Opens the "tidy up" browser -- the same callback TransportBar.tsx's
    * own tidy-up button already uses (wired to setClusterStemsOpen(true) in
@@ -664,17 +671,20 @@ function ProjectMenu({
 
   async function handleSaveCopyElsewhere(): Promise<void> {
     try {
-      await window.rifffApi.saveProject(serializeProject(state))
+      await window.rifffApi.saveProject(await serializeForSave())
     } catch (err) {
       console.error('ProjectMenu: failed to save a copy elsewhere:', err)
+      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 
   async function handleDuplicateAsNewVersion(): Promise<void> {
     if (currentSketch === null || currentSketch.kind !== 'library') return
     try {
-      // Save current edits first, so the duplicate reflects them.
-      await window.rifffApi.saveProjectToLibrary(currentSketch.name, serializeProject(state))
+      // Save current edits first, so the duplicate reflects them -- plugin
+      // settings included: this overwrites the ORIGINAL sketch.
+      await window.rifffApi.saveProjectToLibrary(currentSketch.name, await serializeForSave())
+      markSaved()
       const result = await window.rifffApi.duplicateSketch(currentSketch.name)
       if (!result) return
       setCurrentSketch({ kind: 'library', name: result.name })
@@ -1202,7 +1212,9 @@ function Frame(): React.JSX.Element {
   // effect further down) so both confirmDiscardIfDirty and the dirty
   // indicator below can reuse it instead of paying for a second serialize
   // of potentially-large project state on every render.
-  const persistedJson = useMemo(() => serializeProject(state), [state])
+  // dirtyCheckJson: never with plugin settings, and neither is any
+  // lastSavedJsonRef.current it is compared with (saveSerialization.ts).
+  const persistedJson = useMemo(() => dirtyCheckJson(state), [state])
 
   // Bumped after every explicit save (handleSave) so the dirty-tracking
   // effect below re-evaluates immediately. lastSavedJsonRef stays a plain
@@ -1250,10 +1262,10 @@ function Frame(): React.JSX.Element {
     setRenameError(null)
     if (currentSketch === null) {
       try {
-        const json = serializeProject(state)
-        await window.rifffApi.saveProjectToLibrary(newName, json)
+        await window.rifffApi.saveProjectToLibrary(newName, await serializeForSave())
         setCurrentSketch({ kind: 'library', name: newName })
-        lastSavedJsonRef.current = json
+        lastSavedJsonRef.current = dirtyCheckJson(state)
+        setSaveVersion((v) => v + 1)
       } catch (err) {
         console.error('Frame: failed to save project under new name:', err)
         setRenameError(err instanceof Error ? err.message : String(err))
@@ -1277,6 +1289,21 @@ function Frame(): React.JSX.Element {
     setCurrentSketch({ kind: 'external', path: result.path })
   }
 
+  /** The JSON every save path writes -- save, save a copy, duplicate,
+   * rename, the crash-recovery autosave: the engine's live plugin settings
+   * plus the saved settings of every plugin it doesn't hold (all of them
+   * while the advanced features switch has plugins off), so no save drops
+   * what the project read (saveSerialization.ts). A user's save refuses to
+   * write without the engine's answer (it would quietly fall back to the
+   * settings last opened); the autosave, best effort, takes `bestEffort`. */
+  async function serializeForSave(options?: { bestEffort?: boolean }): Promise<string> {
+    const raw = await window.rifffApi.engineGetPluginStates()
+    if (raw === null && !options?.bestEffort) {
+      throw new Error('failed to read current plugin state from the engine')
+    }
+    return projectJsonForSave(state, raw, pendingPluginStatesRef.current)
+  }
+
   /** Returns whether the save actually succeeded, so every discard-guard
    * call site (New, opening/restoring a library sketch, opening from disk,
    * quit-time save) can tell a real failure (disk full, permission denied,
@@ -1284,20 +1311,7 @@ function Frame(): React.JSX.Element {
    * replace the live project on top of a save that never landed. */
   async function handleSave(): Promise<boolean> {
     try {
-      const rawPluginStates = await window.rifffApi.engineGetPluginStates()
-      if (rawPluginStates === null) {
-        throw new Error('failed to read current plugin state from the engine')
-      }
-      // Plus the saved settings of any plugin not loaded into the engine --
-      // all of them while the advanced features switch has plugins off --
-      // so a save never drops what it read (mergePendingPluginStates).
-      const pluginStates = mergePendingPluginStates(
-        buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins),
-        pendingPluginStatesRef.current,
-        state.masterChain,
-        state.channelPlugins
-      )
-      const json = serializeProject(state, pluginStates)
+      const json = await serializeForSave()
       if (currentSketch === null) {
         const name = await window.rifffApi.generateDefaultProjectName()
         await window.rifffApi.saveProjectToLibrary(name, json)
@@ -1307,7 +1321,7 @@ function Frame(): React.JSX.Element {
       } else {
         await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
       }
-      lastSavedJsonRef.current = json
+      lastSavedJsonRef.current = dirtyCheckJson(state)
       setSaveVersion((v) => v + 1)
       return true
     } catch (err) {
@@ -1373,7 +1387,9 @@ function Frame(): React.JSX.Element {
       // Its own seed, so its timeline throws are its own (@shared/timelineThrows).
       const freshState = { ...initialState, bpm, sound, projectSeed: newProjectSeed() }
       dispatch({ type: 'LOAD_STATE', state: freshState })
-      lastSavedJsonRef.current = serializeProject(freshState)
+      // The previous project's saved plugin settings are not this one's.
+      replacePendingPluginStates({})
+      lastSavedJsonRef.current = dirtyCheckJson(freshState)
       setCurrentSketch({ kind: 'library', name })
       setNewProjectModal(null)
     })()
@@ -1460,7 +1476,7 @@ function Frame(): React.JSX.Element {
     setBusy('loading…')
     await warmStemCaches(loaded)
     restoreState(loaded, pluginStates)
-    lastSavedJsonRef.current = serializeProject(loaded, pluginStates)
+    lastSavedJsonRef.current = dirtyCheckJson(loaded)
     setBusy(null)
     const sketchJson = await window.rifffApi.loadAutosaveSketch()
     // The sketch-info sidecar can be missing/corrupted even when the
@@ -1526,10 +1542,15 @@ function Frame(): React.JSX.Element {
   useEffect(() => {
     if (recoverableAutosave !== null) return
     const id = window.setTimeout(() => {
-      void window.rifffApi.autosaveProject(persistedJson)
+      // With plugin settings (persistedJson has none), so a crash recovery
+      // keeps them; best effort if the engine doesn't answer.
+      void serializeForSave({ bestEffort: true })
+        .then((json) => window.rifffApi.autosaveProject(json))
+        .catch((err) => console.error('Frame: crash-recovery autosave failed:', err))
       void window.rifffApi.autosaveProjectSketch(JSON.stringify(currentSketch))
     }, AUTOSAVE_DEBOUNCE_MS)
     return () => window.clearTimeout(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- serializeForSave is a fresh closure every render over this render's `state`, the one persistedJson was made from; keyed on persistedJson (not state) so a transient UI change doesn't restart the debounce (see above)
   }, [persistedJson, currentSketch, recoverableAutosave])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [riffLibraryOpen, setRiffLibraryOpen] = useState(false)
@@ -2455,6 +2476,9 @@ function Frame(): React.JSX.Element {
       // enableGatedRecording()/lockInGatedRecording() many times in rapid
       // succession instead of once per physical press.
       if (e.key !== '\\' || e.repeat) return
+      // Recording off (the advanced features switch): \ is an ordinary key
+      // -- unless a pass is already running, which it still locks in.
+      if (!recordingOn && !state.gatedRecordingEnabled) return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       e.preventDefault()
@@ -2463,7 +2487,7 @@ function Frame(): React.JSX.Element {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- enableGatedRecording/lockInGatedRecording aren't memoized (fresh closures every render), but close over nothing beyond state/dispatch/playing, all effectively covered by `state` already being listed -- listing them too would just re-bind the listener on every render instead of only when state actually changes, with no safety benefit.
-  }, [state, dispatch])
+  }, [state, dispatch, recordingOn])
 
   // "/" adds a new recording channel -- same action as the "+ rec channel"
   // button below, just reachable without leaving the keyboard while
@@ -2692,6 +2716,11 @@ function Frame(): React.JSX.Element {
               setCurrentSketch={setCurrentSketch}
               handleNew={handleNew}
               handleSave={handleSave}
+              serializeForSave={() => serializeForSave()}
+              markSaved={() => {
+                lastSavedJsonRef.current = dirtyCheckJson(state)
+                setSaveVersion((v) => v + 1)
+              }}
               onOpenLibrary={openLibraryBrowser}
               onOpenClusterStems={() => openClusterStems('sketch')}
               onOpenClusterStemsLibrary={() => openClusterStems('library')}
@@ -2898,7 +2927,7 @@ function Frame(): React.JSX.Element {
                   setBusy('loading…')
                   await warmStemCaches(loaded)
                   restoreState(loaded, pluginStates)
-                  lastSavedJsonRef.current = serializeProject(loaded, pluginStates)
+                  lastSavedJsonRef.current = dirtyCheckJson(loaded)
                   setCurrentSketch({ kind: 'library', name })
                 } catch (err) {
                   console.error('App: failed to open library sketch:', err)
@@ -2935,7 +2964,7 @@ function Frame(): React.JSX.Element {
                   setBusy('loading…')
                   await warmStemCaches(loaded)
                   restoreState(loaded, pluginStates)
-                  lastSavedJsonRef.current = serializeProject(loaded, pluginStates)
+                  lastSavedJsonRef.current = dirtyCheckJson(loaded)
                   setCurrentSketch({ kind: 'external', path: result.path })
                 } catch (err) {
                   console.error('App: failed to open project from disk:', err)
