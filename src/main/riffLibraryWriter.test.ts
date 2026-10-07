@@ -18,6 +18,7 @@ import {
   mergeSharedFeedCaseVariants
 } from './riffLibraryWriter'
 import { RIFF_STEMS_EXTRA_DDL, readExtraStemSlots } from './riffStemsExtra'
+import { getTableWriteVersion } from './tableWriteVersion'
 
 // Same DDL as loreWarehouseSchema.ts's SCHEMA_SQL -- duplicated here
 // (rather than importing openOwnWarehouseDb, which requires mocking
@@ -538,6 +539,19 @@ describe('mergeSharedFeedCaseVariants (a feed synced under a capitalised login, 
       { JamCID: 'shared:elling', PublicName: 'Shared Feed', SyncComplete: 1 }
     ])
     expect(ownerOf('Riffs', 'RiffCID', 'old_1')).toBe('shared:elling')
+  })
+
+  // Review of 0e27db79: the fold rewrites Tags.OwnerJamCID in place, which
+  // no row count sees; every table it moves is announced.
+  it('announces an in-place write to every table it moves, Tags included', () => {
+    db.exec(`
+      INSERT INTO Jams (JamCID, PublicName) VALUES ('shared:Elling', 'Shared Feed');
+      INSERT INTO Tags (RiffCID, OwnerJamCID, Favour) VALUES ('old_1', 'shared:Elling', 1);
+    `)
+    const tables = ['Jams', 'Riffs', 'Stems', 'Tags'] as const
+    const before = tables.map((t) => getTableWriteVersion(db, t))
+    mergeSharedFeedCaseVariants(db, 'shared:elling')
+    tables.forEach((t, i) => expect(getTableWriteVersion(db, t)).toBe(before[i] + 1))
   })
 
   it('runs once: a second call finds nothing to move', () => {

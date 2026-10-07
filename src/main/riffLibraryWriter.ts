@@ -74,6 +74,7 @@ export function mergeSharedFeedCaseVariants(db: Database.Database, key: string):
   bumpTableWriteVersion(db, 'Jams')
   bumpTableWriteVersion(db, 'Riffs')
   bumpTableWriteVersion(db, 'Stems')
+  bumpTableWriteVersion(db, 'Tags')
   return variants.length
 }
 

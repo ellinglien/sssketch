@@ -28,8 +28,10 @@ import type Database from 'better-sqlite3'
 /** The tables anything in this app currently change-checks. Deliberately a
  * closed union rather than a plain string: tableChangeSignal.ts
  * interpolates the name straight into SQL (a bound parameter cannot name
- * a table), so the type is what keeps that interpolation safe. */
-export type ChangeSignalTable = 'Jams' | 'Riffs' | 'Stems'
+ * a table), so the type is what keeps that interpolation safe. Tags is
+ * announced by the shared-feed fold (riffLibraryWriter.ts), which rewrites
+ * its OwnerJamCID in place like the others' (review of 0e27db79). */
+export type ChangeSignalTable = 'Jams' | 'Riffs' | 'Stems' | 'Tags'
 
 const versions = new WeakMap<Database.Database, Map<ChangeSignalTable, number>>()
 
