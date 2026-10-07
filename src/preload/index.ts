@@ -857,8 +857,11 @@ const api = {
       .invoke('endlesss-login', username, password)
       .then((r) => (r.ok ? { ok: true } : { ok: false, error: r.error })),
   endlesssLogout: (): Promise<void> => ipcRenderer.invoke('endlesss-logout'),
+  /** `username`: the account's Endlesss username, '' when unknown (an
+   * email login not yet checked); `loginName`: what was typed at login. */
   endlesssAuthStatus: (): Promise<
-    { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
+    | { loggedIn: false }
+    | { loggedIn: true; userId: string; username: string; loginName?: string; expiresAt: number }
   > => ipcRenderer.invoke('endlesss-auth-status'),
   endlesssListJams: (): Promise<RiffLibraryJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
   endlesssJamRiffCount: (jamId: string): Promise<number | null> =>

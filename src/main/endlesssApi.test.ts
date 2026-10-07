@@ -988,3 +988,122 @@ describe('downloadMissingStemsFor and 0-byte cache files', () => {
     }
   })
 })
+
+describe('the canonical username behind a login (an email login, 2026-10-07)', () => {
+  const DAY = 1000 * 60 * 60 * 24
+
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
+  /** A fake Endlesss: the login answers with `userId`; the membership view
+   * answers 200 only in `ownDb`'s user_appdata db. */
+  function fakeEndlesss(userId: string, ownDb: string | null, offline = false): typeof fetch {
+    return vi.fn(async (url: string) => {
+      if (url.endsWith('/auth/login')) {
+        return new Response(
+          JSON.stringify({ token: 't', password: 'p', user_id: userId, expires: Date.now() + DAY }),
+          { status: 200 }
+        )
+      }
+      if (offline) throw new TypeError('fetch failed')
+      if (url.includes('/_design/membership/_view/getMembership')) {
+        const ok = ownDb !== null && url.includes(`/user_appdata$${ownDb}/`)
+        return new Response(JSON.stringify({ total_rows: 0, rows: [] }), {
+          status: ok ? 200 : 404
+        })
+      }
+      return new Response('{}', { status: 404 })
+    }) as unknown as typeof fetch
+  }
+
+  it('an email login resolves to the account username, and shows what was typed too', async () => {
+    const api = await import('./endlesssApi')
+    const fetchImpl = fakeEndlesss('elling', 'elling')
+    await api.loginWithCredentials('someone@example.org', 'pw', fetchImpl)
+    await api.ensureCanonicalUsername(fetchImpl)
+    expect(api.getAuthStatus()).toMatchObject({
+      loggedIn: true,
+      username: 'elling',
+      loginName: 'someone@example.org'
+    })
+  })
+
+  it('an email login that cannot be resolved is nobody, never the email', async () => {
+    const api = await import('./endlesssApi')
+    const fetchImpl = fakeEndlesss('opaque-id', null)
+    await api.loginWithCredentials('someone@example.org', 'pw', fetchImpl)
+    await api.ensureCanonicalUsername(fetchImpl)
+    expect(api.getAuthStatus()).toMatchObject({
+      loggedIn: true,
+      username: '',
+      loginName: 'someone@example.org'
+    })
+  })
+
+  it('an opaque user_id falls through to the typed name, checked and lowercased', async () => {
+    const api = await import('./endlesssApi')
+    const fetchImpl = fakeEndlesss('u1', 'elling')
+    await api.loginWithCredentials('Elling', 'pw', fetchImpl)
+    await api.ensureCanonicalUsername(fetchImpl)
+    expect(api.getAuthStatus()).toMatchObject({ username: 'elling', loginName: 'Elling' })
+  })
+
+  it('offline: a typed username still counts (lowercased); an email does not', async () => {
+    const api = await import('./endlesssApi')
+    const fetchImpl = fakeEndlesss('u1', null, true)
+    await api.loginWithCredentials('elling', 'pw', fetchImpl)
+    await api.ensureCanonicalUsername(fetchImpl)
+    expect(api.getAuthStatus()).toMatchObject({ username: 'elling' })
+
+    vi.resetModules()
+    const api2 = await import('./endlesssApi')
+    await api2.loginWithCredentials('someone@example.org', 'pw', fetchImpl)
+    await api2.ensureCanonicalUsername(fetchImpl)
+    expect(api2.getAuthStatus()).toMatchObject({ username: '' })
+  })
+
+  it('an existing email session is resolved without logging in again, and the answer persists', async () => {
+    const api = await import('./endlesssApi')
+    // logged in before this fix: nothing resolved yet
+    await api.loginWithCredentials('someone@example.org', 'pw', fakeEndlesss('elling', null, true))
+    expect(api.getAuthStatus()).toMatchObject({ username: '' })
+
+    vi.resetModules()
+    const relaunched = await import('./endlesssApi')
+    const online = fakeEndlesss('elling', 'elling')
+    await relaunched.ensureCanonicalUsername(online)
+    expect(relaunched.getAuthStatus()).toMatchObject({ username: 'elling' })
+
+    // the next launch knows it with no network at all
+    vi.resetModules()
+    const again = await import('./endlesssApi')
+    const noNetwork = vi.fn(async () => {
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+    await again.ensureCanonicalUsername(noNetwork)
+    expect(noNetwork).not.toHaveBeenCalled()
+    expect(again.getAuthStatus()).toMatchObject({ username: 'elling' })
+  })
+
+  it("listJams asks the account's own membership view, not the email's", async () => {
+    const api = await import('./endlesssApi')
+    const fetchImpl = fakeEndlesss('elling', 'elling')
+    await api.loginWithCredentials('someone@example.org', 'pw', fetchImpl)
+    await api.ensureCanonicalUsername(fetchImpl)
+    await api.listJams(fetchImpl)
+    const urls = vi.mocked(fetchImpl).mock.calls.map((c) => String(c[0]))
+    expect(urls.some((u) => u.includes('user_appdata$elling/_design/membership'))).toBe(true)
+    expect(urls.some((u) => u.includes('gmail.com'))).toBe(false)
+  })
+
+  it('listJams with no known username asks nothing', async () => {
+    const api = await import('./endlesssApi')
+    const fetchImpl = fakeEndlesss('opaque-id', null)
+    await api.loginWithCredentials('someone@example.org', 'pw', fetchImpl)
+    await api.ensureCanonicalUsername(fetchImpl)
+    vi.mocked(fetchImpl).mockClear()
+    expect(await api.listJams(fetchImpl)).toEqual([])
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+})

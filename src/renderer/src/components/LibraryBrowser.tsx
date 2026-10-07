@@ -98,8 +98,11 @@ function loadStoredOnlyMyJams(): boolean {
   }
 }
 
+/** `username`: the account's Endlesss username, '' when unknown (an email
+ * login main hasn't been able to check -- endlesssApi.ts). */
 type AuthStatus =
-  { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
+  | { loggedIn: false }
+  | { loggedIn: true; userId: string; username: string; loginName?: string; expiresAt: number }
 
 function sameAuthStatus(a: AuthStatus, b: AuthStatus): boolean {
   if (!a.loggedIn || !b.loggedIn) return a.loggedIn === b.loggedIn
@@ -596,11 +599,12 @@ export function LibraryBrowser({
       .endlesssListJams()
       .then((liveJams) => {
         if (cancelled) return
-        const sharedFeedEntry: RiffLibraryJam = {
-          jamCID: `shared:${authStatus.username}`,
-          name: 'Shared Feed',
-          lastRiffTime: 0
-        }
+        // No username known (an unchecked email login): no shared feed to
+        // name, and no own jam to pick out.
+        const sharedFeedEntries: RiffLibraryJam[] =
+          authStatus.username !== ''
+            ? [{ jamCID: `shared:${authStatus.username}`, name: 'Shared Feed', lastRiffTime: 0 }]
+            : []
         // Full membership list -- every jam the account has ever joined or
         // participated in (per endlesssListJams' own contract), not narrowed
         // down. Separately, still pick out the account's own private jam
@@ -610,8 +614,12 @@ export function LibraryBrowser({
         // own doc comment above and the two auto-sync effects further
         // down); it stays IN the full list too, not pulled out of it.
         const needle = authStatus.username.trim().toLowerCase()
-        setOwnJam(liveJams.find((j) => j.name.trim().toLowerCase() === needle) ?? null)
-        setMembershipJams([sharedFeedEntry, ...liveJams])
+        setOwnJam(
+          needle === ''
+            ? null
+            : (liveJams.find((j) => j.name.trim().toLowerCase() === needle) ?? null)
+        )
+        setMembershipJams([...sharedFeedEntries, ...liveJams])
       })
       .catch((err) => {
         console.error('LibraryBrowser: endlesssListJams() failed:', err)
@@ -893,6 +901,7 @@ export function LibraryBrowser({
   useEffect(() => {
     if (!authStatus.loggedIn) return
     const username = authStatus.username
+    if (username === '') return // an unchecked email login: no feed to sync
     // Deferred through a microtask, same as this component's other
     // early-resolve effects (see the membershipJams effect above) --
     // startSyncForJam's setSyncingKeys call is a real setState, so calling
@@ -2240,7 +2249,10 @@ export function LibraryBrowser({
                         />
                         <input
                           type="text"
-                          value={riffLibraryUsername}
+                          // What was typed, as typed (an email or capitals
+                          // included -- "me" is the normalised value); with
+                          // nothing typed, the login's username.
+                          value={typedUsername ?? riffLibraryUsername}
                           onChange={(e) => {
                             setTypedUsername(e.target.value)
                             // Persisted on the edit itself, not from an

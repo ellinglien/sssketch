@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { announceEndlesssLoggedOut } from '../audio/riffLibraryUsername'
 
 type AuthStatus =
-  { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
+  | { loggedIn: false }
+  | { loggedIn: true; userId: string; username: string; loginName?: string; expiresAt: number }
 
 function daysLeftFor(status: AuthStatus): number | null {
   if (!status.loggedIn) return null
@@ -93,7 +94,7 @@ export function EndlesssLoginPanel({
         }}
       >
         <span>
-          logged in as {status.loggedIn ? status.username : ''}
+          logged in as {status.loggedIn ? status.username || status.loginName || '' : ''}
           {daysLeft !== null && (
             <>
               {' '}

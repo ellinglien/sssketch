@@ -26,6 +26,16 @@ describe('resolveOwnUsername (the one rule for "me")', () => {
     expect(resolveOwnUsername('  ', null)).toBe('')
   })
 
+  it('an email (typed, or the login name of an email login) is never "me"', () => {
+    expect(resolveOwnUsername(null, 'someone@example.org')).toBe('')
+    expect(resolveOwnUsername('someone@example.org', 'elling')).toBe('')
+  })
+
+  it('lowercases: Endlesss stores every username lowercase', () => {
+    expect(resolveOwnUsername('Elling', null)).toBe('elling')
+    expect(resolveOwnUsername(null, 'ELLING')).toBe('elling')
+  })
+
   it('never invents a default identity', () => {
     for (const typed of [null, '', ' ']) {
       for (const session of [null, '', ' ']) {
@@ -44,6 +54,18 @@ describe('resolveOwnUsername (the one rule for "me")', () => {
         expect(report).toEqual(me === '' ? { kind: 'none' } : { kind: 'name', name: me })
       }
     }
+  })
+})
+
+describe('parseOwnUsernameReport normalises', () => {
+  it('lowercases a name, and an email is not one', () => {
+    expect(parseOwnUsernameReport({ kind: 'name', name: ' Elling ' })).toEqual({
+      kind: 'name',
+      name: 'elling'
+    })
+    expect(parseOwnUsernameReport({ kind: 'name', name: 'someone@example.org' })).toEqual({
+      kind: 'unknown'
+    })
   })
 })
 

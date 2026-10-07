@@ -11,6 +11,7 @@ import type {
 } from '@shared/riffLibraryTypes'
 import { computeOwnerFraction, resolveKeyName, stemDownloadUrl } from '@shared/riffLibraryTypes'
 import { isUsableStemFile } from './stemFile'
+import { canonicalUsernameCandidates, normalizeEndlesssUsername } from '@shared/endlesssUsername'
 
 const API_HOST = 'https://api.endlesss.fm'
 export const DATA_HOST = 'https://data.endlesss.fm'
@@ -32,6 +33,11 @@ export interface EndlesssSession {
    * session because some endpoints (jam membership) key off the username,
    * not the opaque user_id, and the login response doesn't echo it back. */
   username: string
+  /** The account's real Endlesss username (its user_appdata db), checked
+   * against Endlesss by ensureCanonicalUsername -- `username` above is
+   * whatever was typed, and Endlesss accepts an email there. Absent until
+   * checked (and on every session saved before 2026-10-07). */
+  canonicalUsername?: string
   /** Unix milliseconds. */
   expires: number
 }
@@ -79,6 +85,9 @@ function loadPersistedSession(): EndlesssSession | null {
     ) {
       return null
     }
+    if (typeof parsed.canonicalUsername !== 'string' || parsed.canonicalUsername === '') {
+      delete parsed.canonicalUsername
+    }
     return parsed as EndlesssSession
   } catch (err) {
     console.error('endlesssApi: failed to load persisted session:', err)
@@ -106,16 +115,73 @@ function activeSession(): EndlesssSession | null {
   return currentSession
 }
 
+/** The session's Endlesss username: the checked one, else the typed login
+ * name when it could be a username (lowercased; an email is not one). ''
+ * when unknown -- an email login that couldn't be checked yet. */
+function sessionUsername(session: EndlesssSession): string {
+  return session.canonicalUsername ?? normalizeEndlesssUsername(session.username)
+}
+
+/** `username` is the account's Endlesss username ('' when unknown: an
+ * email login not yet checked); `loginName` is what was typed at login, for
+ * display. */
 export function getAuthStatus():
-  { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number } {
+  | { loggedIn: false }
+  | { loggedIn: true; userId: string; username: string; loginName: string; expiresAt: number } {
   const session = activeSession()
   if (!session) return { loggedIn: false }
   return {
     loggedIn: true,
     userId: session.userId,
-    username: session.username,
+    username: sessionUsername(session),
+    loginName: session.username,
     expiresAt: session.expires
   }
+}
+
+/** A check that failed (offline) is tried again after this long, not on
+ * every auth-status ask. */
+const CANONICAL_RETRY_MS = 60_000
+/** Short: the library waits on auth status before showing Discover. */
+const CANONICAL_CHECK_TIMEOUT_MS = 5000
+let canonicalCheck: { session: EndlesssSession; at: number; done: Promise<void> } | null = null
+
+/** Works out the logged-in account's real username once (and saves it with
+ * the session, so later launches need no network): the first candidate --
+ * the login's user_id, then the typed login name, never an email -- whose
+ * own user_appdata membership view the session can read. Fixes an email
+ * login (Endlesss accepts one) being taken as the username, which matched
+ * nothing (2026-10-07); works for a session saved before this, with no new
+ * login. Never throws; a failed check leaves the session as it was and is
+ * retried after CANONICAL_RETRY_MS. */
+export async function ensureCanonicalUsername(fetchImpl: FetchLike = fetch): Promise<void> {
+  const session = activeSession()
+  if (!session || session.canonicalUsername) return
+  const now = Date.now()
+  if (canonicalCheck && canonicalCheck.session === session) {
+    if (now - canonicalCheck.at < CANONICAL_RETRY_MS) return canonicalCheck.done
+  }
+  const done = (async (): Promise<void> => {
+    for (const candidate of canonicalUsernameCandidates(session.username, session.userId)) {
+      try {
+        const res = await fetchWithTimeout(
+          fetchImpl,
+          `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(candidate)}/_design/membership/_view/getMembership?limit=0`,
+          { headers: { Authorization: basicAuthHeader(session), 'User-Agent': userAgent() } },
+          CANONICAL_CHECK_TIMEOUT_MS
+        )
+        if (!res.ok) continue
+        session.canonicalUsername = candidate
+        if (currentSession === session) persistSession(session)
+        return
+      } catch (err) {
+        console.error('endlesssApi: could not check the account username:', err)
+        return
+      }
+    }
+  })()
+  canonicalCheck = { session, at: now, done }
+  return done
 }
 
 export function logout(): void {
@@ -785,12 +851,15 @@ async function fetchJamDisplayName(
 export async function listJams(fetchImpl: FetchLike = fetch): Promise<RiffLibraryJam[]> {
   const session = activeSession()
   if (!session) return []
+  // The account's own db: never the typed login name, which can be an email.
+  const username = sessionUsername(session)
+  if (username === '') return []
 
   let res: Response
   try {
     res = await fetchWithTimeout(
       fetchImpl,
-      `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(session.username)}/_design/membership/_view/getMembership`,
+      `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(username)}/_design/membership/_view/getMembership`,
       { headers: { Authorization: basicAuthHeader(session), 'User-Agent': userAgent() } }
     )
   } catch (err) {

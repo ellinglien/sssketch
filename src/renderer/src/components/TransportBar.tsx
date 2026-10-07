@@ -546,7 +546,9 @@ export function TransportBar({
       .endlesssAuthStatus()
       .then((status) =>
         setEndlesssStatus(
-          status.loggedIn ? { loggedIn: true, username: status.username } : { loggedIn: false }
+          status.loggedIn
+            ? { loggedIn: true, username: status.username || status.loginName || '' }
+            : { loggedIn: false }
         )
       )
       .catch((err) => {

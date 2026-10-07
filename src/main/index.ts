@@ -179,6 +179,7 @@ import {
   loginWithCredentials,
   logout as endlesssLogout,
   getAuthStatus as getEndlesssAuthStatus,
+  ensureCanonicalUsername as ensureEndlesssCanonicalUsername,
   listJams as listEndlesssJams,
   jamRiffCount
 } from './endlesssApi'
@@ -1081,7 +1082,12 @@ app.whenReady().then(async () => {
     loginWithCredentials(username, password)
   )
   ipcMain.handle('endlesss-logout', () => endlesssLogout())
-  ipcMain.handle('endlesss-auth-status', () => getEndlesssAuthStatus())
+  // The account's real username first (once, then saved with the session):
+  // an email login would otherwise read as nobody (endlesssApi.ts).
+  ipcMain.handle('endlesss-auth-status', async () => {
+    await ensureEndlesssCanonicalUsername()
+    return getEndlesssAuthStatus()
+  })
   ipcMain.handle('endlesss-list-jams', () => listEndlesssJams())
   ipcMain.handle('endlesss-jam-riff-count', (_event, jamId: string) => jamRiffCount(jamId))
   ipcMain.handle('riff-library-sync-start-shared-feed', (event, userName: string) =>

@@ -11,6 +11,8 @@
 // name for this launch and the next. Only a deliberate act clears it: a typed
 // empty username, or a logout.
 
+import { normalizeEndlesssUsername } from './endlesssUsername'
+
 /** THE rule for who "me" is, everywhere (the import browser's username box
  * and its "only my jams", Discover's `mine` and artist `me`, the background
  * passes' own-first priority, main's ownUsername.json and the startup own
@@ -21,11 +23,15 @@
  * stranger with no login browsed and rolled as Elling (share-readiness
  * audit, B1).
  *
+ * Both are normalised (@shared/endlesssUsername): lowercased, as Endlesss
+ * stores every username, and an email is nobody -- Endlesss accepts one at
+ * login, and it matches no riff or stem.
+ *
  * `typed`: the stored "your username" setting, null when never set.
  * `sessionUsername`: the logged-in account's username, null when logged out. */
 export function resolveOwnUsername(typed: string | null, sessionUsername: string | null): string {
-  if (typed !== null) return typed.trim()
-  return (sessionUsername ?? '').trim()
+  if (typed !== null) return normalizeEndlesssUsername(typed)
+  return normalizeEndlesssUsername(sessionUsername)
 }
 
 export type OwnUsernameReport =
@@ -73,8 +79,9 @@ export function parseOwnUsernameReport(value: unknown): OwnUsernameReport {
   if (typeof value !== 'object' || value === null) return { kind: 'unknown' }
   const { kind, name } = value as { kind?: unknown; name?: unknown }
   if (kind === 'none') return { kind: 'none' }
-  if (kind === 'name' && typeof name === 'string' && name.trim() !== '') {
-    return { kind: 'name', name: name.trim() }
+  if (kind === 'name' && typeof name === 'string') {
+    const normalized = normalizeEndlesssUsername(name)
+    if (normalized !== '') return { kind: 'name', name: normalized }
   }
   return { kind: 'unknown' }
 }
