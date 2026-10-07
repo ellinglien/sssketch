@@ -133,3 +133,41 @@ export function recordStemTried(
 export function forgetStemTried(db: Database.Database, stemCID: string): void {
   statementsFor(db)?.forget.run(stemCID)
 }
+
+/** Rows per pruneStemsTriedSlice call: a rowid range of the table, each row
+ * checked by primary-key lookups -- a few ms. */
+export const TRIED_PRUNE_SLICE = 2000
+
+/** Drops, from the rows after rowid `after` (up to `limit` of them), those no
+ * classifier will read again (review of 0adc41ca): the stem was placed by
+ * another source (StemAutoCategory: the zero-shot pass, the other app),
+ * confirmed by hand (StemCategories), or has neither an embedding nor a
+ * feature row left. The classifier calls it once per pending-list rebuild
+ * (a launch, a training change, the 10-minute safety wake), so the whole
+ * table is swept a slice at a time, bounded per call. Returns where the
+ * next slice starts: 0 once the end is reached. Own db only (it reads the
+ * classifier's tables); one autocommitted DELETE. */
+export function pruneStemsTriedSlice(
+  db: Database.Database,
+  after: number,
+  limit = TRIED_PRUNE_SLICE
+): number {
+  const slice = db
+    .prepare(
+      `SELECT COUNT(*) AS n, MAX(rowid) AS last FROM (
+         SELECT rowid FROM StemAutoClassifyTried WHERE rowid > ? ORDER BY rowid LIMIT ?
+       )`
+    )
+    .get(after, limit) as { n: number; last: number | null }
+  if (slice.n === 0 || slice.last === null) return 0
+  db.prepare(
+    `DELETE FROM StemAutoClassifyTried AS t WHERE t.rowid > ? AND t.rowid <= ? AND (
+       EXISTS (SELECT 1 FROM StemAutoCategory a WHERE a.StemCID = t.StemCID)
+       OR EXISTS (SELECT 1 FROM StemCategories c
+                  WHERE c.StemCID = t.StemCID AND c.ArrangeRole IS NOT NULL)
+       OR (NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = t.StemCID)
+           AND NOT EXISTS (SELECT 1 FROM StemFeatureCache f WHERE f.StemCID = t.StemCID))
+     )`
+  ).run(after, slice.last)
+  return slice.n < limit ? 0 : slice.last
+}

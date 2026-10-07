@@ -8,7 +8,12 @@ import { suggestCategory, type CategoryCentroidStore } from '@shared/categoryCen
 import { toFeatureArray, type StemFeatures } from '@shared/stemFeatures'
 import { getConfirmedEmbeddings } from './embeddingMatch'
 import { loadCategoryCentroidStore } from './categoryCentroidStore'
-import { forgetStemTried, readStemsTriedUnder, recordStemTried } from './stemAutoClassifyTried'
+import {
+  forgetStemTried,
+  pruneStemsTriedSlice,
+  readStemsTriedUnder,
+  recordStemTried
+} from './stemAutoClassifyTried'
 import { upsertStemAutoCategory, type StemAutoCategorySource } from './stemAutoCategoryStore'
 import { countWork } from './workCounters'
 import { whenTableCountsSettled } from './tableChangeSignal'
@@ -505,6 +510,10 @@ async function withoutTried(
   return out
 }
 
+/** Where the next rebuild's prune of StemAutoClassifyTried starts
+ * (pruneStemsTriedSlice): one bounded slice per rebuild sweeps the table. */
+const triedPruneCursorByDb = new WeakMap<Database.Database, number>()
+
 async function getPendingState(
   ownDb: Database.Database,
   prepared: PreparedConfirmed,
@@ -548,6 +557,8 @@ async function getPendingState(
     'StemFeatureCache',
     featureEligibilityWhere('t', prepared.embeddingAxisTrained)
   )
+  countWork('sql:auto-classify.tried-prune')
+  triedPruneCursorByDb.set(ownDb, pruneStemsTriedSlice(ownDb, triedPruneCursorByDb.get(ownDb) ?? 0))
   countWork('sql:auto-classify.tried-read')
   const triedUnder = readStemsTriedUnder(ownDb, fingerprint)
   const rebuilt: PendingState = {

@@ -15,7 +15,8 @@ import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 import { bumpTableWriteVersion } from './tableWriteVersion'
 import {
   MAX_TRIED_FINGERPRINTS_PER_STEM,
-  STEM_AUTO_CLASSIFY_TRIED_DDL
+  STEM_AUTO_CLASSIFY_TRIED_DDL,
+  pruneStemsTriedSlice
 } from './stemAutoClassifyTried'
 
 // The centroid/feature pass reads app.getPath('userData') via
@@ -1174,6 +1175,47 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
       db.prepare(`UPDATE Stems SET Instrument = ? WHERE StemCID = 'late-mask'`).run(DRUMS_BIT)
       expect((await classifyAutoCategoryBatch(db, [db])).processed).toBe(1)
       expect(tried(db)).toEqual([])
+    })
+
+    // Review of 0adc41ca: a stem placed by another source (a confirmation,
+    // the zero-shot pass) or whose cache rows are gone kept its rows forever.
+    describe('pruning records nobody will read', () => {
+      function seedTried(db: Database.Database, stemCIDs: string[]): void {
+        const insert = db.prepare(
+          `INSERT INTO StemAutoClassifyTried (StemCID, TrainingFingerprint, Mask, TriedAt)
+           VALUES (?, 'f', NULL, 1)`
+        )
+        for (const id of stemCIDs) insert.run(id)
+      }
+
+      it('a rebuild drops the rows of stems placed elsewhere, confirmed, or with no input left', async () => {
+        const db = freshDb()
+        seedEmbedding(db, 'placed-elsewhere', [0.5, 0.5, 0])
+        db.prepare(
+          `INSERT INTO StemAutoCategory (StemCID, ArrangeRole, Source, ComputedAt)
+           VALUES ('placed-elsewhere', 'drums', 'yamnetZeroShot', 1)`
+        ).run()
+        seedEmbedding(db, 'confirmed', [0.5, 0.5, 0])
+        seedConfirmed(db, 'confirmed', 'bass')
+        // no embedding or feature row any more
+        seedEmbedding(db, 'still-waiting', [0.5, 0.5, 0])
+        seedTried(db, ['placed-elsewhere', 'confirmed', 'gone', 'still-waiting'])
+        await classifyAutoCategoryBatch(db)
+        // (still-waiting is recorded again under this training, beside 'f')
+        expect(new Set(tried(db))).toEqual(new Set(['still-waiting']))
+      })
+
+      it('looks at a bounded slice of rows per call, carrying on where it left off', () => {
+        const db = freshDb()
+        seedTried(db, ['gone-1', 'gone-2', 'gone-3', 'gone-4', 'gone-5'])
+        let cursor = pruneStemsTriedSlice(db, 0, 2)
+        expect(tried(db)).toEqual(['gone-3', 'gone-4', 'gone-5'])
+        cursor = pruneStemsTriedSlice(db, cursor, 2)
+        expect(tried(db)).toEqual(['gone-5'])
+        cursor = pruneStemsTriedSlice(db, cursor, 2)
+        expect(tried(db)).toEqual([])
+        expect(cursor).toBe(0) // the end: the next slice starts over
+      })
     })
 
     it('keeps at most a few fingerprints per stem, dropping the oldest', async () => {
