@@ -3,15 +3,29 @@ productName: sssketch
 directories:
   buildResources: build
 afterPack: build/afterPack.js
+# An allowlist: only what the packaged app reads goes into app.asar. Until
+# 2026-10-07 this was a short blocklist on top of electron-builder's
+# include-everything default, and every release carried the repo with it --
+# the engine and bridge CMake build dirs (JUCE _deps and all), docs/, test
+# stems, CLAUDE.md -- for a 488 MB app.asar where the app itself is ~17 MB
+# (share-readiness audit B2,
+# docs/superpowers/specs/2026-10-07-share-readiness-audit.md).
+#   - out/: the built main, preload and renderer (the renderer bundle carries
+#     onnxruntime-web's wasm itself, so that package is a devDependency).
+#   - resources/icon.png: main's `?asset` import resolves it next to out/.
+#   - Production node_modules are added by electron-builder whatever this
+#     list says; better-sqlite3's C sources are not needed at runtime (its
+#     prebuilt .node files are, and are unpacked from the asar automatically).
+# Everything else in resources/ ships through extraResources below, read from
+# process.resourcesPath -- so there's no asarUnpack of resources/ any more
+# (it shipped that folder twice).
+# The engine and bridge .apps also ship through extraResources, never asar.
 files:
-  - '!**/.vscode/*'
-  - '!src/*'
-  - '!electron.vite.config.{js,ts,mjs,cjs}'
-  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md,README.md}'
-  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
-  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
-asarUnpack:
-  - resources/**
+  - out/**
+  - package.json
+  - resources/icon.png
+  - LICENSE
+  - '!node_modules/better-sqlite3/{deps,src}/**'
 extraResources:
   - from: native-engine/build/sssketch_engine_artefacts/sssketch-engine.app
     to: native-engine/sssketch-engine.app
@@ -23,10 +37,12 @@ extraResources:
   # of requiring every tester to `brew install rubberband` themselves.
   - from: resources/rubberband
     to: rubberband
-  # Produced by scripts/vendor-yamnet.sh (run in CI before packaging, same
-  # as rubberband above) -- the YAMNet ONNX model used for stem-similarity
-  # embeddings (src/main/yamnetModel.ts). Gitignored, not committed --
-  # ~16MB, fetched at vendor time rather than bloating a now-public repo.
+  # Produced by scripts/vendor-yamnet.sh (run in CI before packaging, see
+  # release.yml's "Vendor YAMNet" step, which also checks the packaged app
+  # has it) -- the YAMNet ONNX model used for stem-similarity embeddings
+  # (src/main/yamnetModel.ts). Gitignored, not committed -- ~16MB, fetched
+  # at vendor time rather than bloating a now-public repo. Releases up to
+  # 1.4.0 shipped without it: the step was never added.
   - from: resources/yamnet
     to: yamnet
   - from: resources/demo-rifff
