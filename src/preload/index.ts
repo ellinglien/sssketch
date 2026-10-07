@@ -752,6 +752,8 @@ const api = {
     return () => ipcRenderer.removeListener('engine-link-tempo-changed', listener)
   },
   riffLibraryAvailable: (): Promise<boolean> => ipcRenderer.invoke('riff-library-available'),
+  /** Whether the riff library (archive and own) holds any riff at all. */
+  riffLibraryHasRiffs: (): Promise<boolean> => ipcRenderer.invoke('riff-library-has-riffs'),
   riffLibraryRoot: (): Promise<string> => ipcRenderer.invoke('riff-library-root'),
   // True iff the currently active riff library root is sssketch's own
   // self-built one (rather than a user-pointed real external LORE archive)

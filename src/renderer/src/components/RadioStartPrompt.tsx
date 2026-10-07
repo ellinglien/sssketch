@@ -35,7 +35,8 @@ export function RadioStartPrompt({
   onChange,
   onStart,
   onClose,
-  ignoreRef
+  ignoreRef,
+  emptyNote = null
 }: {
   x: number
   y: number
@@ -46,6 +47,8 @@ export function RadioStartPrompt({
   onStart: (level: number) => void
   onClose: () => void
   ignoreRef: React.RefObject<HTMLElement | null>
+  /** The riff library is empty (@shared/emptyLibraryNote): what to do, above the controls. */
+  emptyNote?: string[] | null
 }): React.JSX.Element {
   const promptRef = useRef<HTMLDivElement>(null)
   const [position, setPosition] = useState({ left: x, top: y })
@@ -119,6 +122,24 @@ export function RadioStartPrompt({
       }}
     >
       <span style={{ fontSize: 'var(--ra-fs-13)', color: 'var(--ra-text)' }}>start radio</span>
+      {emptyNote && (
+        <div
+          role="note"
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6,
+            fontSize: 10,
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          {emptyNote.map((line, i) => (
+            <p key={i} style={{ margin: 0, color: i === 0 ? 'var(--ra-text)' : undefined }}>
+              {line}
+            </p>
+          ))}
+        </div>
+      )}
       <ControlField label={RADIO_PACE_LABEL} tooltip={RADIO_PACE_TOOLTIP} readout={paceReadout}>
         <SegmentBar
           label={RADIO_PACE_LABEL}

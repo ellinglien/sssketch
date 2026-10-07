@@ -7,6 +7,7 @@ import { radioViewTopIds, type RadioView } from '@shared/radioView'
 import { RadioTopLine, RedoIcon, UndoIcon } from './RadioTopLine'
 import { DiceIcon } from './DiceIcon'
 import { RadioStartPrompt } from './RadioStartPrompt'
+import { emptyLibraryNote } from '@shared/emptyLibraryNote'
 import { BracketToggle } from './BracketToggle'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { warmEngineBuffer } from '../audio/warmEngineBuffer'
@@ -8358,6 +8359,31 @@ export function DiscoverPanel({
   // Frame(), on app startup) has long since resolved, so this reads the
   // real persisted value, not a stale default.
   const [showConsentPrompt, setShowConsentPrompt] = useState(() => !discoverConsented)
+  // An empty riff library (share readiness S6, 2026-10-07): Discover and radio say what to do
+  // instead of rolling nothing. Null until asked; asked again every few seconds while empty, so
+  // a first sync or a newly linked archive clears it without reopening the panel.
+  const [libraryEmpty, setLibraryEmpty] = useState<boolean | null>(null)
+  useEffect(() => {
+    if (libraryEmpty === false) return
+    let cancelled = false
+    const ask = (): void => {
+      window.rifffApi
+        .riffLibraryHasRiffs()
+        .then((has) => {
+          if (!cancelled) setLibraryEmpty(!has)
+        })
+        .catch((err) => {
+          console.error('DiscoverPanel: riffLibraryHasRiffs() failed:', err)
+        })
+    }
+    const first = window.setTimeout(ask, 0)
+    const id = window.setInterval(ask, 5000)
+    return () => {
+      cancelled = true
+      window.clearTimeout(first)
+      window.clearInterval(id)
+    }
+  }, [libraryEmpty])
 
   function acceptScanConsent(): void {
     setShowConsentPrompt(false)
@@ -13547,7 +13573,28 @@ export function DiscoverPanel({
           [data-radio-view] .discover-pending { animation: none; opacity: 0.45; }
         }
       `}</style>
-      {showConsentPrompt && (
+      {libraryEmpty === true && (
+        <div
+          role="note"
+          style={{
+            border: '1px solid var(--ra-border-strong)',
+            padding: 12,
+            marginBottom: 10,
+            fontSize: 10,
+            color: 'var(--ra-text-2)',
+            display: 'flex',
+            flexDirection: 'column',
+            gap: 6
+          }}
+        >
+          {emptyLibraryNote('discover').map((line, i) => (
+            <p key={i} style={{ margin: 0, color: i === 0 ? 'var(--ra-text)' : undefined }}>
+              {line}
+            </p>
+          ))}
+        </div>
+      )}
+      {showConsentPrompt && libraryEmpty !== true && (
         <div
           style={{
             border: '1px solid var(--ra-border-strong)',
@@ -13881,6 +13928,7 @@ export function DiscoverPanel({
                 }}
                 onClose={closeRadioPrompt}
                 ignoreRef={radioMenuButtonRef}
+                emptyNote={libraryEmpty === true ? emptyLibraryNote('radio') : null}
               />
             )}
             <button

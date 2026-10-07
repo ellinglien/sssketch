@@ -27,7 +27,8 @@ import {
   resolveRiffWithContext,
   downloadMissingStems,
   downloadStemForAnalysis,
-  discoveredStemPath
+  discoveredStemPath,
+  dbsHaveRiffs
 } from './riffLibraryStore'
 import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import { upsertJam, upsertRiffSkeletons, writeRiffDetail } from './riffLibraryWriter'
@@ -2029,5 +2030,20 @@ describe('own jams the archive has no riffs for are read from the own db', () =>
     other.close()
     vi.setSystemTime(Date.now() + CACHE_CHANGE_CHECK_INTERVAL_MS + 1_000)
     expect(resolveStemPath('jam-new', 'nstem1')).toBe(ownCachePath('nstem1'))
+  })
+})
+
+// Share readiness S6 (2026-10-07): Discover and radio explain an empty library.
+describe('dbsHaveRiffs', () => {
+  it('is true once any of the dbs holds a riff', () => {
+    const a = new Database(':memory:')
+    const b = new Database(':memory:')
+    for (const db of [a, b]) db.exec('CREATE TABLE Riffs (RiffCID TEXT PRIMARY KEY)')
+    expect(dbsHaveRiffs([])).toBe(false)
+    expect(dbsHaveRiffs([a, b])).toBe(false)
+    b.prepare('INSERT INTO Riffs VALUES (?)').run('r1')
+    expect(dbsHaveRiffs([a, b])).toBe(true)
+    a.close()
+    b.close()
   })
 })

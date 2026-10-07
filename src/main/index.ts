@@ -75,6 +75,7 @@ import {
 } from '@shared/riffLibraryTypes'
 import {
   riffLibraryAvailable,
+  riffLibraryHasRiffs,
   riffLibraryRootPath,
   setRiffLibraryRoot,
   listJams,
@@ -942,6 +943,15 @@ app.whenReady().then(async () => {
   )
 
   ipcMain.handle('riff-library-available', () => riffLibraryAvailable())
+  // Discover's and radio's empty-library line (share readiness S6).
+  ipcMain.handle('riff-library-has-riffs', () => {
+    try {
+      return riffLibraryHasRiffs()
+    } catch (err) {
+      console.error('riff-library-has-riffs failed:', err)
+      return true
+    }
+  })
 
   ipcMain.handle('riff-library-root', () => riffLibraryRootPath())
 

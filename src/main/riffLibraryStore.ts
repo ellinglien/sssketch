@@ -964,6 +964,18 @@ export function candidateDbsForRiff(): Database.Database[] {
   return dbs
 }
 
+/** Whether any of `dbs` holds a riff. Share readiness S6: Discover and radio say what to do when
+ * the library is empty, rather than rolling nothing and saying nothing. */
+export function dbsHaveRiffs(dbs: readonly Database.Database[]): boolean {
+  return dbs.some((db) => db.prepare('SELECT 1 FROM Riffs LIMIT 1').get() !== undefined)
+}
+
+/** dbsHaveRiffs over the library as it stands: the configured root's db (an archive may be
+ * unreachable) and sssketch's own. */
+export function riffLibraryHasRiffs(): boolean {
+  return dbsHaveRiffs(candidateDbsForRiff())
+}
+
 function buildResolvedRiff(
   db: Database.Database,
   riffRow: FullRiffRow,
