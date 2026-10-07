@@ -117,6 +117,36 @@ describe('appFeaturesStore', () => {
       )
     })
 
+    it('does not read the library when a cheap signal already decides on', async () => {
+      write('pluginCatalog.json', { plugins: [{ id: 'a' }], favouriteIds: [] })
+      libraryProject('a', { masterChain: ['verb', null, null, null] })
+      const { detectAdvancedUse, loadAppFeatures } = await import('./appFeaturesStore')
+      const signals = detectAdvancedUse(dir, {
+        projectLibraryDir: join(dir, 'sssketch', 'projects')
+      })
+      expect(signals.pluginsScanned).toBe(true)
+      expect(signals.projectUsesPlugins).toBe(false) // never looked
+      expect(loadAppFeatures()).toEqual(ON)
+      expect(JSON.parse(readFileSync(join(dir, 'appFeatures.json'), 'utf-8')).migratedFrom).toEqual(
+        ['pluginsScanned']
+      )
+    })
+
+    it('looks at a bounded number of library folders, by name, newest-dated first', async () => {
+      // Generated names start with the date, so a descending name order is roughly newest first.
+      libraryProject('2025-01-01-old-plugin', { masterChain: ['verb', null, null, null] })
+      libraryProject('2026-06-01-a', { masterChain: [null, null, null, null] })
+      libraryProject('2026-06-02-b', { masterChain: [null, null, null, null] })
+      const { detectAdvancedUse } = await import('./appFeaturesStore')
+      const projectLibraryDir = join(dir, 'sssketch', 'projects')
+      expect(detectAdvancedUse(dir, { projectLibraryDir, maxFolders: 2 }).projectUsesPlugins).toBe(
+        false
+      )
+      expect(detectAdvancedUse(dir, { projectLibraryDir, maxFolders: 3 }).projectUsesPlugins).toBe(
+        true
+      )
+    })
+
     it('shrugs off unreadable library projects and a missing library', async () => {
       const folder = join(dir, 'sssketch', 'projects', 'broken')
       mkdirSync(folder, { recursive: true })

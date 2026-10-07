@@ -5,9 +5,10 @@
 // docs/superpowers/plans/2026-10-07-advanced-features-toggle.md for every place it reaches.
 //
 // MIGRATION. With no file yet, the switch's starting value comes from what this install has
-// already used (advancedFeaturesDefault): a handful of small files in userData, and the newest
-// MAX_LIBRARY_PROJECTS projects of the project library (the autosave alone missed nearly
-// everyone: it is deleted on every save). Never a walk of the stem library (23k folders on
+// already used (advancedFeaturesDefault): a handful of small files in userData, and -- only when
+// none of those already says "on" -- the newest MAX_LIBRARY_PROJECTS projects of the project
+// library (the autosave alone missed nearly everyone: it is deleted on every save), out of at
+// most MAX_LIBRARY_FOLDERS folders looked at. Never a walk of the stem library (23k folders on
 // Elling's machine). The decision is written straight away, so it is made once: a later scan or
 // key never flips it behind his back, and an existing appFeatures.json is never re-decided.
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
@@ -41,6 +42,9 @@ const SOUND_SETTINGS_FILE = 'soundSettings.json'
  * reads at all: enough to find someone who uses plugins or records, cheap on a big library. */
 const MAX_LIBRARY_PROJECTS = 50
 const MAX_PROJECT_BYTES = 16 * 1024 * 1024
+/** How many of the library's folders are stat-ed at most: by name, descending. A generated name
+ * starts with its date (generateDefaultProjectName), so that is roughly newest first. */
+const MAX_LIBRARY_FOLDERS = 300
 
 /** The engine names its takes this way (IpcServer.cpp, arm-recording and the gated pass), and
  * importRecordedTake keeps the basename when it copies one into the library. */
@@ -101,16 +105,18 @@ function projectSignals(text: string): { plugins: boolean; takes: boolean } {
 }
 
 /** The library's project files (`<root>/<name>/<name>.sssketchproj`, projectLibrary.ts), newest
- * first, at most `max`. A missing or unreadable library is an empty one. */
-function newestLibraryProjects(root: string, max: number): string[] {
+ * first, at most `max`, out of the first `maxFolders` folder names in descending order (one stat
+ * each). A missing or unreadable library is an empty one. */
+function newestLibraryProjects(root: string, max: number, maxFolders: number): string[] {
   let names: string[]
   try {
     names = readdirSync(root)
   } catch {
     return []
   }
+  names.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
   const files: { path: string; mtimeMs: number }[] = []
-  for (const name of names) {
+  for (const name of names.slice(0, maxFolders)) {
     const path = join(root, name, `${name}.sssketchproj`)
     try {
       const stat = statSync(path)
@@ -126,27 +132,18 @@ function newestLibraryProjects(root: string, max: number): string[] {
 
 /** What this install has already used, read only -- never writes. Exported so the migration can
  * be checked against a real userData folder without running the app. `projectLibraryDir`: the
- * project library's root (none: not looked at). */
+ * project library's root (none: not looked at); it is read only when nothing cheaper (the files
+ * in userData, the autosave) already says "on", so a library's projects are left out of the
+ * signals then. */
 export function detectAdvancedUse(
   userDataDir: string,
-  options: { projectLibraryDir?: string | null; maxProjects?: number } = {}
+  options: { projectLibraryDir?: string | null; maxProjects?: number; maxFolders?: number } = {}
 ): AdvancedUseSignals {
   const catalog = readJson(join(userDataDir, PLUGIN_CATALOG_FILE)) as {
     plugins?: unknown[]
   } | null
   const found = projectSignals(readText(join(userDataDir, AUTOSAVE_FILE)))
-  if (options.projectLibraryDir) {
-    for (const path of newestLibraryProjects(
-      options.projectLibraryDir,
-      options.maxProjects ?? MAX_LIBRARY_PROJECTS
-    )) {
-      if (found.plugins && found.takes) break
-      const project = projectSignals(readText(path))
-      found.plugins ||= project.plugins
-      found.takes ||= project.takes
-    }
-  }
-  return {
+  const signals: AdvancedUseSignals = {
     pluginsScanned: Array.isArray(catalog?.plugins) && catalog.plugins.length > 0,
     projectUsesPlugins: found.plugins,
     phoneRemoteUsed: existsSync(join(userDataDir, PHONE_REMOTE_SETTINGS_FILE)),
@@ -154,6 +151,18 @@ export function detectAdvancedUse(
     recordingsMade: found.takes,
     soundDefaultsSet: existsSync(join(userDataDir, SOUND_SETTINGS_FILE))
   }
+  if (!options.projectLibraryDir || advancedFeaturesDefault(signals).on) return signals
+  for (const path of newestLibraryProjects(
+    options.projectLibraryDir,
+    options.maxProjects ?? MAX_LIBRARY_PROJECTS,
+    options.maxFolders ?? MAX_LIBRARY_FOLDERS
+  )) {
+    if (signals.projectUsesPlugins && signals.recordingsMade) break
+    const project = projectSignals(readText(path))
+    signals.projectUsesPlugins ||= project.plugins
+    signals.recordingsMade ||= project.takes
+  }
+  return signals
 }
 
 /** The last value loaded or saved in this process, for the gates' cheap reads. */
