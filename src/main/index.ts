@@ -1988,8 +1988,8 @@ app.whenReady().then(async () => {
       const db = openOwnRiffLibraryDb()
       const stemCID = stemCIDForPath(db, path, candidateDbsForRiff())
       if (!stemCID) return
-      // Floored -- see applyYamnetZeroShotCategory.
-      applyYamnetZeroShotCategory(db, stemCID, audiosetClassIndex, Math.floor(Date.now() / 1000))
+      // Milliseconds, like every other StemAutoCategory row -- see applyYamnetZeroShotCategory.
+      applyYamnetZeroShotCategory(db, stemCID, audiosetClassIndex, Date.now())
     }
   )
 

@@ -127,8 +127,11 @@ export function markYamnetZeroShotAttempted(
  * ArrangeRole writes nothing; neither does a stem that's already confirmed
  * or auto-categorized by any source (first classifier to claim a stem
  * wins, same convention as stemAutoClassify.ts's BASE_ELIGIBILITY_WHERE).
- * `computedAt` is floored seconds: StemAutoCategory's upsert has no
- * WHERE-guarded timestamp comparison, so no extra precision is needed. */
+ * `computedAt` is epoch milliseconds, as for every StemAutoCategory row
+ * (stemAutoClassify.ts writes Date.now()). Until 2026-10-07 the zero-shot
+ * rows were floored seconds; the only reader of ComputedAt is
+ * discoverCandidates.ts's change signal (MAX/TOTAL as a fingerprint, never
+ * compared to a time), so the 774 old rows in seconds are harmless. */
 export function applyYamnetZeroShotCategory(
   ownDb: Database.Database,
   stemCID: string,

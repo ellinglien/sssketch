@@ -73,6 +73,9 @@ export async function writeStemAnalysisResults(
     [db, ...extraCandidateDbs],
     results.map((r) => basename(r.path))
   )
+  // StemAutoCategory.ComputedAt is milliseconds, as the classifier writes it
+  // (stemAutoClassify.ts); `extractedAt` is the cache rows' seconds.
+  const classifiedAt = Date.now()
   let index = 0
   while (index < results.length) {
     const followUps: (() => void)[] = []
@@ -95,7 +98,7 @@ export async function writeStemAnalysisResults(
         }
         if (result.zeroShotAttempted) markYamnetZeroShotAttempted(db, stemCID, extractedAt)
         if (result.zeroShotClassIndex !== undefined) {
-          applyYamnetZeroShotCategory(db, stemCID, result.zeroShotClassIndex, extractedAt)
+          applyYamnetZeroShotCategory(db, stemCID, result.zeroShotClassIndex, classifiedAt)
         }
         // the level backfill: merged into the row as it now stands (spec 2026-10-05 7.3)
         if (result.level) {
