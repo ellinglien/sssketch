@@ -28,7 +28,9 @@ import {
   downloadMissingStems,
   downloadStemForAnalysis,
   discoveredStemPath,
-  dbsHaveRiffs
+  dbsHaveRiffs,
+  setRiffLibraryRootFromPick,
+  returnToOwnRiffLibrary
 } from './riffLibraryStore'
 import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
 import { upsertJam, upsertRiffSkeletons, writeRiffDetail } from './riffLibraryWriter'
@@ -107,6 +109,29 @@ describe('riffLibraryStore', () => {
       root: string
     }
     expect(prefs).toEqual({ root: '/Users/someone/Music/EndlesssSync' })
+  })
+
+  // Share readiness S7 (2026-10-07): a pick one level off snaps to the archive root; a pick with
+  // no archive near it changes nothing; "use sssketch's own library" goes back.
+  it('setRiffLibraryRootFromPick() snaps to the archive root, refuses a folder with none, and the own library comes back', async () => {
+    const { ownRiffLibraryRoot } = await import('./riffLibrarySchema')
+    setRiffLibraryRootForTests(null)
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    const lore = join(root, 'LORE')
+    mkdirSync(lore)
+    createFixtureWarehouse(lore)
+    mkdirSync(join(root, 'Photos'))
+    expect(riffLibraryRootPath()).toBe(ownRiffLibraryRoot())
+    expect(setRiffLibraryRootFromPick(join(lore, 'cache', 'common'))).toEqual({
+      ok: true,
+      root: lore
+    })
+    expect(riffLibraryRootPath()).toBe(lore)
+    expect(setRiffLibraryRootFromPick(root)).toEqual({ ok: true, root: lore })
+    expect(setRiffLibraryRootFromPick(join(root, 'Photos'))).toEqual({ ok: false, reason: 'none' })
+    expect(riffLibraryRootPath()).toBe(lore)
+    returnToOwnRiffLibrary()
+    expect(riffLibraryRootPath()).toBe(ownRiffLibraryRoot())
   })
 
   it('riffLibraryRootPath() reads prefs once, then serves from memory until the root is set again', () => {

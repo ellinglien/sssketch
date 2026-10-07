@@ -1,4 +1,12 @@
-import { existsSync, mkdirSync, writeFileSync, renameSync, readFileSync, rmSync } from 'node:fs'
+import {
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  renameSync,
+  readFileSync,
+  readdirSync,
+  rmSync
+} from 'node:fs'
 import { join, dirname } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
@@ -12,6 +20,7 @@ import type {
 } from '@shared/riffLibraryTypes'
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/riffLibraryTypes'
 import { isValidSharedFeedKey } from '@shared/endlesssUsername'
+import { findRiffArchiveRoot, type RiffArchivePick } from '@shared/riffArchiveRoot'
 import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
 import { columnStemSlots, mergeStemSlots, type StemSlotRef } from '@shared/riffStemSlots'
 import { readExtraStemSlots } from './riffStemsExtra'
@@ -140,6 +149,31 @@ export function setRiffLibraryRoot(newRoot: string): void {
   }
   cachedRiffLibraryRoot = null
   closeRiffLibraryDb()
+}
+
+/** The gear menu's "change riff archive location…" (share readiness S7, 2026-10-07): the picked
+ * folder, or the archive root one level off it (@shared/riffArchiveRoot), becomes the root. A
+ * pick with no single archive near it changes nothing; the caller says why. */
+export function setRiffLibraryRootFromPick(picked: string): RiffArchivePick {
+  const pick = findRiffArchiveRoot(picked, {
+    exists: existsSync,
+    childDirs: (dir) => {
+      try {
+        return readdirSync(dir, { withFileTypes: true })
+          .filter((d) => d.isDirectory())
+          .map((d) => d.name)
+      } catch {
+        return []
+      }
+    }
+  })
+  if (pick.ok) setRiffLibraryRoot(pick.root)
+  return pick
+}
+
+/** "use sssketch's own library": back from a linked archive. */
+export function returnToOwnRiffLibrary(): void {
+  setRiffLibraryRoot(ownRiffLibraryRoot())
 }
 
 /** True once the user has explicitly repointed the riff library away from

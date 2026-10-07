@@ -16,6 +16,7 @@ import { RadioHeartsKeyModal } from './RadioHeartsKeyModal'
 import { PhoneRemoteModal } from './PhoneRemoteModal'
 import { setAdvancedFeatures, useAppFeatures } from '../state/appFeatures'
 import { FEATURES, featureEnabled } from '@shared/features'
+import { riffArchivePickMessage } from '@shared/riffArchiveRoot'
 
 /** The gear menu's switch tooltip: what it covers, and the one part that waits for a relaunch
  * (the engine's audio input, i.e. the microphone, is opened or not at launch). */
@@ -338,6 +339,9 @@ export function TransportBar({
     loggedIn: boolean
     username?: string
   } | null>(null)
+  // Whether the riff library is sssketch's own, for "use sssketch's own library" (shown only with
+  // an archive linked). Fetched on menu open, like endlesssStatus.
+  const [riffLibraryIsOwn, setRiffLibraryIsOwn] = useState(true)
 
   // The phone remote (src/main/remoteServer.ts): OFF BY DEFAULT, opt-in per
   // session, never persisted, stopped on quit. Kept live rather than
@@ -538,13 +542,26 @@ export function TransportBar({
   // Points the riff library at a different OUROVEON/LORE sync target than
   // sssketch's own self-built one; see riffLibraryStore.ts for what "riff
   // library root" means.
+  //
+  // The pick snaps to the archive root when it is one level off (`cache`, `common`, the folder
+  // above), and a folder with no archive near it changes nothing and says what to pick (share
+  // readiness S7, @shared/riffArchiveRoot).
   async function handleChangeRiffLibraryLocation(): Promise<void> {
     try {
-      const newRoot = await window.rifffApi.pickFolder()
-      if (!newRoot) return
-      await window.rifffApi.setRiffLibraryRoot(newRoot)
+      const picked = await window.rifffApi.pickFolder()
+      if (!picked) return
+      const pick = await window.rifffApi.setRiffLibraryRootFromPick(picked)
+      if (!pick.ok) window.alert(riffArchivePickMessage(pick, picked))
     } catch (err) {
       console.error('TransportBar: handleChangeRiffLibraryLocation() failed:', err)
+    }
+  }
+
+  async function handleUseOwnRiffLibrary(): Promise<void> {
+    try {
+      await window.rifffApi.useOwnRiffLibrary()
+    } catch (err) {
+      console.error('TransportBar: handleUseOwnRiffLibrary() failed:', err)
     }
   }
 
@@ -557,6 +574,12 @@ export function TransportBar({
     }
     const rect = e.currentTarget.getBoundingClientRect()
     setSettingsMenu({ x: rect.left, y: rect.bottom + 4 })
+    void window.rifffApi
+      .riffLibraryIsOwn()
+      .then(setRiffLibraryIsOwn)
+      .catch((err) => {
+        console.error('TransportBar: riffLibraryIsOwn() failed:', err)
+      })
     void window.rifffApi
       .endlesssAuthStatus()
       .then((status) =>
@@ -1027,6 +1050,14 @@ export function TransportBar({
               label: 'change riff archive location…',
               onClick: () => void handleChangeRiffLibraryLocation()
             },
+            ...(riffLibraryIsOwn
+              ? []
+              : [
+                  {
+                    label: "use sssketch's own library",
+                    onClick: () => void handleUseOwnRiffLibrary()
+                  }
+                ]),
             // The phone remote. Off by default, per session, never
             // persisted -- see remoteServer.ts. ONE entry: the address, the
             // QR and the pairing code are a modal now (PhoneRemoteModal.tsx),
