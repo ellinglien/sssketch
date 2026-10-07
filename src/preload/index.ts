@@ -863,6 +863,13 @@ const api = {
     | { loggedIn: false }
     | { loggedIn: true; userId: string; username: string; loginName?: string; expiresAt: number }
   > => ipcRenderer.invoke('endlesss-auth-status'),
+  /** The session's username changed after an auth-status answer (its check
+   * against Endlesss finished): ask endlesssAuthStatus again. */
+  onEndlesssUsernameChanged: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('endlesss-username-changed', listener)
+    return () => ipcRenderer.removeListener('endlesss-username-changed', listener)
+  },
   endlesssListJams: (): Promise<RiffLibraryJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
   endlesssJamRiffCount: (jamId: string): Promise<number | null> =>
     ipcRenderer.invoke('endlesss-jam-riff-count', jamId),

@@ -178,8 +178,8 @@ import type { RawPluginStatesCapture } from '@shared/pluginStates'
 import {
   loginWithCredentials,
   logout as endlesssLogout,
-  getAuthStatus as getEndlesssAuthStatus,
-  ensureCanonicalUsername as ensureEndlesssCanonicalUsername,
+  authStatusWithUsername as endlesssAuthStatusWithUsername,
+  setUsernameChangedListener as setEndlesssUsernameChangedListener,
   listJams as listEndlesssJams,
   jamRiffCount
 } from './endlesssApi'
@@ -1082,11 +1082,13 @@ app.whenReady().then(async () => {
     loginWithCredentials(username, password)
   )
   ipcMain.handle('endlesss-logout', () => endlesssLogout())
-  // The account's real username first (once, then saved with the session):
-  // an email login would otherwise read as nobody (endlesssApi.ts).
-  ipcMain.handle('endlesss-auth-status', async () => {
-    await ensureEndlesssCanonicalUsername()
-    return getEndlesssAuthStatus()
+  // The account's real username (checked once, then saved with the
+  // session): waited for only by an email login, which would otherwise read
+  // as nobody; otherwise checked behind the answer, and a changed name is
+  // announced so the renderer asks again (endlesssApi.ts).
+  ipcMain.handle('endlesss-auth-status', () => endlesssAuthStatusWithUsername())
+  setEndlesssUsernameChangedListener(() => {
+    mainWindow?.webContents.send('endlesss-username-changed')
   })
   ipcMain.handle('endlesss-list-jams', () => listEndlesssJams())
   ipcMain.handle('endlesss-jam-riff-count', (_event, jamId: string) => jamRiffCount(jamId))

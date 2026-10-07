@@ -1111,3 +1111,164 @@ describe('the canonical username behind a login (an email login, 2026-10-07)', (
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 })
+
+describe('auth status and the username check behind it (2026-10-07 review)', () => {
+  const DAY = 1000 * 60 * 60 * 24
+
+  beforeEach(() => {
+    vi.resetModules()
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  function loginResponse(userId: string): Response {
+    return new Response(
+      JSON.stringify({ token: 't', password: 'p', user_id: userId, expires: Date.now() + DAY }),
+      { status: 200 }
+    )
+  }
+
+  /** A fake Endlesss whose membership answers wait until released: `release`
+   * answers every waiting one, 200 for `ownDb`'s view and 404 otherwise. */
+  function heldEndlesss(
+    userId: string,
+    ownDb: string
+  ): { fetchImpl: typeof fetch; release: () => Promise<void>; membershipCalls: () => number } {
+    const waiting: { url: string; resolve: (r: Response) => void }[] = []
+    let membership = 0
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith('/auth/login')) return loginResponse(userId)
+      membership++
+      return new Promise<Response>((resolve) => waiting.push({ url, resolve }))
+    }) as unknown as typeof fetch
+    const release = async (): Promise<void> => {
+      // answer each in turn: the check asks its candidates one at a time
+      for (let i = 0; i < 10; i++) {
+        const next = waiting.shift()
+        if (next) {
+          const ok = next.url.includes(`/user_appdata$${ownDb}/`)
+          next.resolve(new Response('{"rows":[]}', { status: ok ? 200 : 404 }))
+        }
+        await new Promise((r) => setTimeout(r, 0))
+      }
+    }
+    return { fetchImpl, release, membershipCalls: () => membership }
+  }
+
+  async function settledWithin<T>(promise: Promise<T>, ms: number): Promise<T | 'still waiting'> {
+    return Promise.race([
+      promise,
+      new Promise<'still waiting'>((r) => setTimeout(() => r('still waiting'), ms))
+    ])
+  }
+
+  it('a typed username answers at once; the check runs behind it and announces a change', async () => {
+    const api = await import('./endlesssApi')
+    const changed = vi.fn()
+    api.setUsernameChangedListener(changed)
+    // typed one name; the account's own db is the user_id's
+    const endlesss = heldEndlesss('elling', 'elling')
+    await api.loginWithCredentials('oldname', 'pw', endlesss.fetchImpl)
+
+    const status = await settledWithin(api.authStatusWithUsername(endlesss.fetchImpl), 50)
+    expect(status).toMatchObject({ loggedIn: true, username: 'oldname' })
+    expect(endlesss.membershipCalls()).toBe(1)
+    expect(changed).not.toHaveBeenCalled()
+
+    await endlesss.release()
+    expect(changed).toHaveBeenCalledTimes(1)
+    expect(api.getAuthStatus()).toMatchObject({ username: 'elling' })
+  })
+
+  it('a check that confirms the name already shown announces nothing', async () => {
+    const api = await import('./endlesssApi')
+    const changed = vi.fn()
+    api.setUsernameChangedListener(changed)
+    const endlesss = heldEndlesss('u1', 'elling')
+    await api.loginWithCredentials('elling', 'pw', endlesss.fetchImpl)
+    await settledWithin(api.authStatusWithUsername(endlesss.fetchImpl), 50)
+    await endlesss.release()
+    expect(api.getAuthStatus()).toMatchObject({ username: 'elling' })
+    expect(changed).not.toHaveBeenCalled()
+  })
+
+  it('an email login (no usable name yet) waits for the check, and announces the name', async () => {
+    const api = await import('./endlesssApi')
+    const changed = vi.fn()
+    api.setUsernameChangedListener(changed)
+    const endlesss = heldEndlesss('elling', 'elling')
+    await api.loginWithCredentials('someone@example.org', 'pw', endlesss.fetchImpl)
+
+    const pending = api.authStatusWithUsername(endlesss.fetchImpl)
+    expect(await settledWithin(pending, 50)).toBe('still waiting')
+    await endlesss.release()
+    expect(await pending).toMatchObject({ loggedIn: true, username: 'elling' })
+    expect(changed).toHaveBeenCalledTimes(1)
+  })
+
+  it('a check where every candidate failed is not asked again this session', async () => {
+    const api = await import('./endlesssApi')
+    const fetchImpl = vi.fn(async (url: string) =>
+      url.endsWith('/auth/login') ? loginResponse('opaque-id') : new Response('{}', { status: 404 })
+    ) as unknown as typeof fetch
+    await api.loginWithCredentials('someone@example.org', 'pw', fetchImpl)
+    expect(await api.authStatusWithUsername(fetchImpl)).toMatchObject({ username: '' })
+    vi.mocked(fetchImpl).mockClear()
+
+    const later = Date.now() + 10 * 60_000
+    vi.spyOn(Date, 'now').mockReturnValue(later)
+    expect(await api.authStatusWithUsername(fetchImpl)).toMatchObject({ username: '' })
+    expect(fetchImpl).not.toHaveBeenCalled()
+
+    // a new login is a new session: checked afresh
+    vi.mocked(fetchImpl).mockClear()
+    await api.loginWithCredentials('someone@example.org', 'pw', fetchImpl)
+    await api.authStatusWithUsername(fetchImpl)
+    expect(
+      vi.mocked(fetchImpl).mock.calls.filter((c) => String(c[0]).includes('/membership/'))
+    ).toHaveLength(1)
+  })
+
+  it('a check that could not reach Endlesss is tried again only after 60 s', async () => {
+    const api = await import('./endlesssApi')
+    let membership = 0
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.endsWith('/auth/login')) return loginResponse('elling')
+      membership++
+      throw new TypeError('fetch failed')
+    }) as unknown as typeof fetch
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    await api.loginWithCredentials('someone@example.org', 'pw', fetchImpl)
+    const start = Date.now()
+    const now = vi.spyOn(Date, 'now').mockReturnValue(start)
+
+    await api.authStatusWithUsername(fetchImpl)
+    expect(membership).toBe(1)
+    now.mockReturnValue(start + 59_000)
+    await api.authStatusWithUsername(fetchImpl)
+    expect(membership).toBe(1)
+    now.mockReturnValue(start + 61_000)
+    await api.authStatusWithUsername(fetchImpl)
+    expect(membership).toBe(2)
+  })
+
+  it('a logout while the check is out: the late answer is dropped, nothing saved or announced', async () => {
+    const api = await import('./endlesssApi')
+    const changed = vi.fn()
+    api.setUsernameChangedListener(changed)
+    const endlesss = heldEndlesss('elling', 'elling')
+    await api.loginWithCredentials('someone@example.org', 'pw', endlesss.fetchImpl)
+    const sessionFile = join(defaultUserDataDir, 'endlesss-session.enc')
+    expect(existsSync(sessionFile)).toBe(true)
+
+    const pending = api.authStatusWithUsername(endlesss.fetchImpl)
+    api.logout()
+    await endlesss.release()
+
+    expect(await pending).toEqual({ loggedIn: false })
+    expect(existsSync(sessionFile)).toBe(false)
+    expect(changed).not.toHaveBeenCalled()
+  })
+})

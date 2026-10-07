@@ -139,12 +139,28 @@ export function getAuthStatus():
   }
 }
 
-/** A check that failed (offline) is tried again after this long, not on
- * every auth-status ask. */
+/** A check that couldn't reach Endlesss (offline) is tried again after this
+ * long, not on every auth-status ask. */
 const CANONICAL_RETRY_MS = 60_000
-/** Short: the library waits on auth status before showing Discover. */
+/** Per candidate. Short: an email login's auth status waits on the check. */
 const CANONICAL_CHECK_TIMEOUT_MS = 5000
-let canonicalCheck: { session: EndlesssSession; at: number; done: Promise<void> } | null = null
+/** The current session's check: `allFailed` once Endlesss answered no to
+ * every candidate -- an answer, not an outage, so it is kept for the session
+ * and never asked again (a new login is a new session, checked afresh). */
+let canonicalCheck: {
+  session: EndlesssSession
+  at: number
+  done: Promise<void>
+  allFailed: boolean
+} | null = null
+
+let usernameChangedListener: (() => void) | null = null
+
+/** Called whenever a check changes the live session's username (index.ts
+ * tells the renderer, which asks auth status again). Null: nobody. */
+export function setUsernameChangedListener(listener: (() => void) | null): void {
+  usernameChangedListener = listener
+}
 
 /** Works out the logged-in account's real username once (and saves it with
  * the session, so later launches need no network): the first candidate --
@@ -152,36 +168,67 @@ let canonicalCheck: { session: EndlesssSession; at: number; done: Promise<void> 
  * own user_appdata membership view the session can read. Fixes an email
  * login (Endlesss accepts one) being taken as the username, which matched
  * nothing (2026-10-07); works for a session saved before this, with no new
- * login. Never throws; a failed check leaves the session as it was and is
- * retried after CANONICAL_RETRY_MS. */
+ * login. Never throws. A check Endlesss couldn't be reached for leaves the
+ * session as it was and is retried after CANONICAL_RETRY_MS; one where every
+ * candidate was refused is not retried this session. An answer that arrives
+ * after a logout (or a new login) is dropped. */
 export async function ensureCanonicalUsername(fetchImpl: FetchLike = fetch): Promise<void> {
   const session = activeSession()
   if (!session || session.canonicalUsername) return
   const now = Date.now()
   if (canonicalCheck && canonicalCheck.session === session) {
+    if (canonicalCheck.allFailed) return
     if (now - canonicalCheck.at < CANONICAL_RETRY_MS) return canonicalCheck.done
   }
-  const done = (async (): Promise<void> => {
+  const check: NonNullable<typeof canonicalCheck> = {
+    session,
+    at: now,
+    done: Promise.resolve(),
+    allFailed: false
+  }
+  check.done = (async (): Promise<void> => {
     for (const candidate of canonicalUsernameCandidates(session.username, session.userId)) {
+      let res: Response
       try {
-        const res = await fetchWithTimeout(
+        res = await fetchWithTimeout(
           fetchImpl,
           `${DATA_HOST}/user_appdata$${escapeCouchIdSegment(candidate)}/_design/membership/_view/getMembership?limit=0`,
           { headers: { Authorization: basicAuthHeader(session), 'User-Agent': userAgent() } },
           CANONICAL_CHECK_TIMEOUT_MS
         )
-        if (!res.ok) continue
-        session.canonicalUsername = candidate
-        if (currentSession === session) persistSession(session)
-        return
       } catch (err) {
         console.error('endlesssApi: could not check the account username:', err)
         return
       }
+      // Logged out (or in again) while this was out: not this session's to change.
+      if (currentSession !== session) return
+      if (!res.ok) continue
+      const before = sessionUsername(session)
+      session.canonicalUsername = candidate
+      persistSession(session)
+      if (candidate !== before) usernameChangedListener?.()
+      return
     }
+    check.allFailed = true
   })()
-  canonicalCheck = { session, at: now, done }
-  return done
+  canonicalCheck = check
+  return check.done
+}
+
+/** Auth status for the renderer. Answers at once when the session already
+ * has a usable name (a typed username): the check runs behind it, and a
+ * changed name is announced (setUsernameChangedListener). Only a session
+ * with no usable name yet (an email login) waits for the check, which a
+ * session asks Endlesss at most once a minute, and never again once refused. */
+export async function authStatusWithUsername(
+  fetchImpl: FetchLike = fetch
+): Promise<ReturnType<typeof getAuthStatus>> {
+  const session = activeSession()
+  if (session && !session.canonicalUsername) {
+    const check = ensureCanonicalUsername(fetchImpl)
+    if (sessionUsername(session) === '') await check
+  }
+  return getAuthStatus()
 }
 
 export function logout(): void {
