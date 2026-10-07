@@ -32,6 +32,7 @@ import {
   readTableSignal,
   type ScanCacheState
 } from './tableChangeSignal'
+import { getTableWriteVersion } from './tableWriteVersion'
 
 const RIFF_LIBRARY_PREFS_FILENAME = 'riffLibraryPrefs.json'
 
@@ -157,12 +158,41 @@ function riffLibraryDbPath(): string {
 
 let cachedDb: Database.Database | null = null
 
+/** How often an open external archive's warehouse file is looked for
+ * (getRiffLibraryDb): one stat a second at most, on a path the per-stem
+ * callers reach many times a second. */
+const ARCHIVE_PRESENCE_CHECK_MS = 1_000
+let archivePresenceCheckedAt = 0
+
+/** Whether the open archive's file has gone (the USB drive unplugged, the
+ * folder moved) -- looked at most once per ARCHIVE_PRESENCE_CHECK_MS, and
+ * only for an external root: the own library is on the system disk. */
+function archiveFileGone(): boolean {
+  const now = Date.now()
+  if (now - archivePresenceCheckedAt < ARCHIVE_PRESENCE_CHECK_MS) return false
+  archivePresenceCheckedAt = now
+  if (riffLibraryRootPath() === ownRiffLibraryRoot()) return false
+  return !existsSync(riffLibraryDbPath())
+}
+
 /** Lazily opens the warehouse DB read-only, with a busy-timeout so a moment
  * of LORE writing concurrently degrades gracefully instead of hanging.
  * Returns null (never throws) if the file doesn't exist or can't be opened —
- * callers treat that as "library unavailable", not a crash. */
+ * callers treat that as "library unavailable", not a crash.
+ *
+ * The drive coming and going (review of b859757c, 2026-10-07): an open
+ * connection whose file has gone is closed here (archiveFileGone), so the
+ * routing flips to the own db and nothing reads through a dead handle; a
+ * file that is back is opened as a new connection, which drops everything
+ * computed without it (the jam list, the own-jam routing). A dead handle
+ * whose file is still there (pulled and pushed back in within the check) is
+ * caught where a read fails: dropArchiveIfDead. */
 function getRiffLibraryDb(): Database.Database | null {
-  if (cachedDb) return cachedDb
+  if (cachedDb) {
+    if (!archiveFileGone()) return cachedDb
+    console.error(`getRiffLibraryDb: ${riffLibraryDbPath()} is gone; closing its connection`)
+    closeRiffLibraryDb()
+  }
   if (!existsSync(riffLibraryDbPath())) return null
   try {
     cachedDb = new Database(riffLibraryDbPath(), {
@@ -170,8 +200,11 @@ function getRiffLibraryDb(): Database.Database | null {
       fileMustExist: true,
       timeout: 2000
     })
-    // An archive that just came back (the drive remounted) takes its jams back.
+    archivePresenceCheckedAt = Date.now()
+    // An archive that just came back (the drive remounted) takes its jams
+    // back: the jam list and the routing were computed without it.
     ownRoutedMemo = null
+    cachedJamsWithDb = null
     return cachedDb
   } catch (err) {
     console.error('getRiffLibraryDb: failed to open warehouse.db3:', err)
@@ -179,8 +212,31 @@ function getRiffLibraryDb(): Database.Database | null {
   }
 }
 
+/** A read error that means the connection itself is dead, not the query:
+ * SQLite's I/O and can't-open codes (the volume went away under the handle,
+ * or came back as a new mount the old handle can't read). */
+function isDeadConnectionError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code
+  return typeof code === 'string' && (code.startsWith('SQLITE_IOERR') || code === 'SQLITE_CANTOPEN')
+}
+
+/** Closes the archive connection when `err` says it is dead; true if it did.
+ * The next getRiffLibraryDb opens a new one if the file is there. */
+function dropArchiveIfDead(err: unknown): boolean {
+  if (!cachedDb || !isDeadConnectionError(err)) return false
+  console.error('riffLibraryStore: an archive read failed; closing its connection:', err)
+  closeRiffLibraryDb()
+  return true
+}
+
 function closeRiffLibraryDb(): void {
-  cachedDb?.close()
+  try {
+    cachedDb?.close()
+  } catch (err) {
+    // A connection busy with a statement can't be closed; drop it anyway
+    // (better-sqlite3 closes it when it's collected).
+    console.error('closeRiffLibraryDb: close failed:', err)
+  }
   cachedDb = null
   cachedJamsWithDb = null
   ownRoutedMemo = null
@@ -310,10 +366,13 @@ function dbForJam(jamCID: string): Database.Database | null {
 // then one EXISTS seek per candidate on the archive's OwnerJamCID index --
 // never a walk of the archive. Memoised, because resolveStemPath asks once
 // per stem: dropped when listJamsWithDb rebuilds (a table moved in either
-// db), when the archive connection opens or closes, when the own db is a
-// different connection, and checked against the own db's Jams/Riffs signals
-// by listJams (the browser, after a sync). Computed with the archive away or
-// a seek failing, it is looked at again after OWN_ROUTING_RECHECK_MS: with
+// db), when the archive connection opens or closes (getRiffLibraryDb also
+// closes one whose file is gone, and dropArchiveIfDead one that fails a read
+// with an I/O error), when the own db is a different connection, and on
+// every call checked against the own db's Jams/Riffs (this process's writes
+// at once, another connection's at the change check's pace). Computed with
+// the archive away or a seek failing, it is looked at again after
+// OWN_ROUTING_RECHECK_MS, or at once when anything opens the archive: with
 // the archive away every own jam is read from the own db (all its data is
 // local), and the archive takes its jams back when it returns.
 interface OwnRoutedJams {
@@ -326,32 +385,46 @@ interface OwnRoutedJams {
   computedAt: number
   ownJamsState: ScanCacheState
   ownRiffsState: ScanCacheState
+  /** This process's writes to the own db's Jams/Riffs (tableWriteVersion.ts)
+   * when it was computed: a sync landing a new jam moves them, checked on
+   * every call for free. */
+  ownJamsWrites: number
+  ownRiffsWrites: number
 }
 let ownRoutedMemo: OwnRoutedJams | null = null
 const OWN_ROUTING_RECHECK_MS = 30_000
 
 /** The own jams read from the own db while the root is an external archive
- * (see above). Only meaningful with the root external. `checkOwnTables`:
- * also notice a jam synced into the own db since (listJams; not the
- * per-stem path). */
-function ownRoutedJams(checkOwnTables = false): ReadonlySet<string> {
+ * (see above). Only meaningful with the root external.
+ *
+ * Every call (the per-stem path too) notices a jam synced into the own db
+ * since: this process's own writes for free (tableWriteVersion.ts), another
+ * connection's at the change check's pace. Before 2026-10-07's review only
+ * listJams looked, so a newly synced own jam's stems resolved to the
+ * archive's folder until the next jam-list rebuild. */
+function ownRoutedJams(retryDeadArchive = true): ReadonlySet<string> {
   const own = openOwnRiffLibraryDb()
   const memo = ownRoutedMemo
   if (
     memo &&
     memo.own === own &&
+    memo.ownJamsWrites === getTableWriteVersion(own, 'Jams') &&
+    memo.ownRiffsWrites === getTableWriteVersion(own, 'Riffs') &&
     (memo.settled
-      ? memo.archive === cachedDb
+      ? // getRiffLibraryDb, not cachedDb: its presence check is what notices
+        // the drive gone when nothing else is asking.
+        memo.archive === getRiffLibraryDb()
       : Date.now() - memo.computedAt < OWN_ROUTING_RECHECK_MS) &&
-    (!checkOwnTables ||
-      (isScanCacheCurrent(own, 'Jams', memo.ownJamsState) &&
-        isScanCacheCurrent(own, 'Riffs', memo.ownRiffsState)))
+    isScanCacheCurrent(own, 'Jams', memo.ownJamsState) &&
+    isScanCacheCurrent(own, 'Riffs', memo.ownRiffsState)
   ) {
     return memo.jams
   }
   countWork('sql:own-jam-routing')
   const archive = getRiffLibraryDb()
   // Signals read BEFORE the queries, as listJamsWithDb's.
+  const ownJamsWrites = getTableWriteVersion(own, 'Jams')
+  const ownRiffsWrites = getTableWriteVersion(own, 'Riffs')
   const ownJamsState = newScanCacheState(readTableSignal(own, 'Jams'))
   const ownRiffsState = newScanCacheState(readTableSignal(own, 'Riffs'))
   const candidates = (
@@ -374,6 +447,9 @@ function ownRoutedJams(checkOwnTables = false): ReadonlySet<string> {
         if (archiveHasRiffs.get(jamCID) === undefined) jams.add(jamCID)
       }
     } catch (err) {
+      // A dead connection (the drive went and came back): closed, and asked
+      // again once through a new one, or the own db if the file is gone.
+      if (dropArchiveIfDead(err) && retryDeadArchive) return ownRoutedJams(false)
       // The archive can't answer right now: leave every jam to it, as before
       // this rule, and look again shortly.
       console.error('ownRoutedJams: the archive could not be read:', err)
@@ -388,7 +464,9 @@ function ownRoutedJams(checkOwnTables = false): ReadonlySet<string> {
     settled,
     computedAt: Date.now(),
     ownJamsState,
-    ownRiffsState
+    ownRiffsState,
+    ownJamsWrites,
+    ownRiffsWrites
   }
   return jams
 }
@@ -510,6 +588,10 @@ function attachJamOwnership(
  * entirely. listJamsWithDb below deliberately leaves it off -- it runs on
  * every Discover roll and has no use for them. */
 export function listJams(filterText: string, targetUser?: string): RiffLibraryJam[] {
+  // The routing first: it can close a dead archive connection (and open a
+  // new one), and the rows below must come from whichever is current.
+  const routed =
+    riffLibraryRootPath() === ownRiffLibraryRoot() ? new Set<string>() : ownRoutedJams()
   const db = getRiffLibraryDb()
   const withCounts = (rows: RiffLibraryJam[], from: Database.Database): RiffLibraryJam[] =>
     targetUser && targetUser.trim() !== ''
@@ -529,7 +611,6 @@ export function listJams(filterText: string, targetUser?: string): RiffLibraryJa
   // they show their real lastRiffTime (and riffs) instead of reading as
   // never-synced. Each such jam replaces the archive's name-only stub row:
   // one row per JamCID.
-  const routed = ownRoutedJams(true)
   const rows = db
     ? withCounts(
         queryJamsFromDb(db, filterText).filter((j) => listable(j) && !routed.has(j.jamCID)),
@@ -591,6 +672,10 @@ interface JamsWithDbCache {
    * against. Jams for the list itself, Riffs because each row's
    * lastRiffTime is a MAX() over that table and drives the ordering. */
   sources: { db: Database.Database; jamsState: ScanCacheState; riffsState: ScanCacheState }[]
+  /** The archive connection it was built with (null: none, e.g. the drive
+   * was away at launch). Any other now -- the drive came back, or went --
+   * and the list is rebuilt (review of b859757c). */
+  archive: Database.Database | null
 }
 let cachedJamsWithDb: JamsWithDbCache | null = null
 
@@ -615,8 +700,13 @@ function jamListSourceDbs(): Database.Database[] {
  * `dbForJam` above is this module's own established per-jam resolution
  * logic, just not previously exposed outside this file. */
 export function listJamsWithDb(): { jamCID: string; db: Database.Database }[] {
+  // The archive as of now: opens one whose file is back, closes one whose
+  // file is gone (getRiffLibraryDb) -- a stat at most once a second while
+  // open, one per call while away (a missing path; cheap).
+  const archive = getRiffLibraryDb()
   if (
     cachedJamsWithDb &&
+    cachedJamsWithDb.archive === archive &&
     cachedJamsWithDb.sources.every(
       ({ db, jamsState, riffsState }) =>
         isScanCacheCurrent(db, 'Jams', jamsState) && isScanCacheCurrent(db, 'Riffs', riffsState)
@@ -630,6 +720,19 @@ export function listJamsWithDb(): { jamCID: string; db: Database.Database }[] {
   // way), so "listJamsWithDb 312ms" is ambiguous on its own. This counter
   // next to sql:cache-check.Riffs in the same [work] line says which.
   countWork('sql:list-jams-rebuild')
+  try {
+    return rebuildJamsWithDb()
+  } catch (err) {
+    // A read through a dead archive connection (the drive pulled and pushed
+    // back in under it): closed, then built once more through a new one, or
+    // from the own db alone if the file is gone. The routing may have closed
+    // it already, which leaves this read failing on a closed handle.
+    if (!dropArchiveIfDead(err) && !(archive && !archive.open)) throw err
+    return rebuildJamsWithDb()
+  }
+}
+
+function rebuildJamsWithDb(): { jamCID: string; db: Database.Database }[] {
   // A table moved in some source db: which own jams the archive lacks may
   // have moved with it (a LORE sync, or one of sssketch's own).
   ownRoutedMemo = null
@@ -659,7 +762,7 @@ export function listJamsWithDb(): { jamCID: string; db: Database.Database }[] {
   // array trivially true and pin an empty jam list forever -- so leave the
   // cache alone and let the next call, which is cheap precisely because
   // there is nothing to read, pick the drive up the moment it returns.
-  cachedJamsWithDb = sources.length > 0 ? { jams, sources } : null
+  cachedJamsWithDb = sources.length > 0 ? { jams, sources, archive: getRiffLibraryDb() } : null
   return jams
 }
 

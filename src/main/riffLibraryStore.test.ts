@@ -6,7 +6,8 @@ import {
   writeFileSync,
   readFileSync,
   existsSync,
-  statSync
+  statSync,
+  renameSync
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,7 +30,7 @@ import {
   discoveredStemPath
 } from './riffLibraryStore'
 import { DISCOVERED_JAM_CID } from '@shared/discoveredRoom'
-import { writeRiffDetail } from './riffLibraryWriter'
+import { upsertJam, upsertRiffSkeletons, writeRiffDetail } from './riffLibraryWriter'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { stemDownloadUrl } from '@shared/riffLibraryTypes'
 import type { RiffLibraryJam } from '@shared/riffLibraryTypes'
@@ -1773,6 +1774,7 @@ describe('own jams the archive has no riffs for are read from the own db', () =>
 
   afterEach(async () => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
     const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
     closeOwnRiffLibraryDb()
     setRiffLibraryRootForTests(null)
@@ -1890,5 +1892,142 @@ describe('own jams the archive has no riffs for are read from the own db', () =>
     ).toEqual(['jam-own', 'jam-own-empty', 'jam-techno', 'shared:elling'])
     expect(listRiffs('jam-techno', {}).riffs.map((r) => r.riffCID)).toEqual(['techno-own-only'])
     expect(resolveStemPath('jam-techno', 'tstem9')).toBe(ownCachePath('tstem9'))
+  })
+
+  // --- The drive comes and goes (review of b859757c) ------------------------
+
+  const warehouseDir = (): string => join(externalRoot, 'cache')
+  const unplug = (): void => renameSync(warehouseDir(), join(externalRoot, 'cache-away'))
+  const replug = (): void => renameSync(join(externalRoot, 'cache-away'), warehouseDir())
+  const sortedIds = (pairs: { jamCID: string }[]): string[] => pairs.map((p) => p.jamCID).sort()
+
+  it('the drive away at launch, then plugged back in: the jam list and the stem paths agree (reviewer repro)', async () => {
+    vi.useFakeTimers()
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const own = openOwnRiffLibraryDb()
+    unplug()
+    const before = listJamsWithDb()
+    expect(sortedIds(before)).toEqual(['jam-own', 'jam-techno', 'shared:elling'])
+    expect(before.every((p) => p.db === own)).toBe(true)
+    replug()
+    vi.setSystemTime(Date.now() + 35_000)
+    // resolveStemPath first, as in the repro: its recheck opens the archive.
+    expect(resolveStemPath('jam-techno', 'tstem1')).toBe(loreStemPath('jam-techno', 'tstem1'))
+    const after = listJamsWithDb()
+    expect(after.find((p) => p.jamCID === 'jam-techno')?.db).not.toBe(own)
+    expect(after.find((p) => p.jamCID === 'jam-own')?.db).toBe(own)
+    expect(sortedIds(after)).toEqual([
+      'jam-ambient',
+      'jam-empty',
+      'jam-own',
+      'jam-own-empty',
+      'jam-techno',
+      'shared:elling'
+    ])
+  })
+
+  it('the drive plugged back in: the next jam list takes the archive back at once, and stem paths follow', async () => {
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const own = openOwnRiffLibraryDb()
+    unplug()
+    expect(listJamsWithDb().find((p) => p.jamCID === 'jam-techno')?.db).toBe(own)
+    expect(resolveStemPath('jam-techno', 'tstem9')).toBe(ownCachePath('tstem9'))
+    replug()
+    // No wait: the list notices the file is back, opens it, and the routing
+    // is recomputed against it.
+    const after = listJamsWithDb()
+    expect(after.find((p) => p.jamCID === 'jam-techno')?.db).not.toBe(own)
+    expect(resolveStemPath('jam-techno', 'tstem1')).toBe(loreStemPath('jam-techno', 'tstem1'))
+    expect(
+      listRiffs('jam-techno', {})
+        .riffs.map((r) => r.riffCID)
+        .sort()
+    ).toEqual(['riff-1', 'riff-2'])
+  })
+
+  it('the drive unplugged mid-session: the connection is closed, routing flips to the own db, and it reopens on return', async () => {
+    vi.useFakeTimers()
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const own = openOwnRiffLibraryDb()
+    const archive = listJamsWithDb().find((p) => p.jamCID === 'jam-techno')!.db
+    expect(archive).not.toBe(own)
+    expect(resolveStemPath('jam-techno', 'tstem1')).toBe(loreStemPath('jam-techno', 'tstem1'))
+    unplug()
+    vi.setSystemTime(Date.now() + 2_000)
+    const away = listJamsWithDb()
+    expect(archive.open).toBe(false)
+    expect(sortedIds(away)).toEqual(['jam-own', 'jam-techno', 'shared:elling'])
+    expect(away.every((p) => p.db === own)).toBe(true)
+    expect(resolveStemPath('jam-techno', 'tstem9')).toBe(ownCachePath('tstem9'))
+    expect(riffLibraryArchiveReachable()).toBe(false)
+    replug()
+    vi.setSystemTime(Date.now() + 2_000)
+    const back = listJamsWithDb()
+    const reopened = back.find((p) => p.jamCID === 'jam-techno')!.db
+    expect(reopened).not.toBe(own)
+    expect(reopened).not.toBe(archive)
+    expect(reopened.open).toBe(true)
+    expect(resolveStemPath('jam-techno', 'tstem1')).toBe(loreStemPath('jam-techno', 'tstem1'))
+  })
+
+  it('stem paths notice the drive gone without a jam-list rebuild', () => {
+    vi.useFakeTimers()
+    expect(resolveStemPath('jam-techno', 'tstem1')).toBe(loreStemPath('jam-techno', 'tstem1'))
+    unplug()
+    vi.setSystemTime(Date.now() + 2_000)
+    expect(resolveStemPath('jam-techno', 'tstem9')).toBe(ownCachePath('tstem9'))
+  })
+
+  it('an archive read that fails with an I/O error closes the dead connection and reads through a new one', async () => {
+    vi.useFakeTimers()
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const own = openOwnRiffLibraryDb()
+    const archive = listJamsWithDb().find((p) => p.jamCID === 'jam-techno')!.db
+    // The drive pulled and pushed back in faster than the presence check:
+    // the file is there, the old handle can't read it.
+    vi.spyOn(archive, 'prepare').mockImplementation(() => {
+      throw Object.assign(new Error('disk I/O error'), { code: 'SQLITE_IOERR_READ' })
+    })
+    vi.setSystemTime(Date.now() + CACHE_CHANGE_CHECK_INTERVAL_MS + 1_000)
+    const pairs = listJamsWithDb()
+    expect(archive.open).toBe(false)
+    const reopened = pairs.find((p) => p.jamCID === 'jam-techno')!.db
+    expect(reopened).not.toBe(own)
+    expect(reopened).not.toBe(archive)
+    expect(pairs.find((p) => p.jamCID === 'jam-own')?.db).toBe(own)
+    expect(sortedIds(pairs)).toEqual([
+      'jam-ambient',
+      'jam-empty',
+      'jam-own',
+      'jam-own-empty',
+      'jam-techno',
+      'shared:elling'
+    ])
+  })
+
+  it('a jam sssketch syncs while the root is external gets own-cache stem paths at once', async () => {
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const own = openOwnRiffLibraryDb()
+    expect(resolveStemPath('jam-own', 'ostem1')).toBe(ownCachePath('ostem1'))
+    // Not in the own db yet: the archive's folder, as any unknown jam.
+    expect(resolveStemPath('jam-new', 'nstem1')).toBe(loreStemPath('jam-new', 'nstem1'))
+    upsertJam(own, 'jam-new', 'New Jam')
+    upsertRiffSkeletons(own, 'jam-new', [{ riffCID: 'new-riff-1', creationTime: 9900 }])
+    expect(resolveStemPath('jam-new', 'nstem1')).toBe(ownCachePath('nstem1'))
+  })
+
+  it('a jam written to the own db by another connection gets own-cache paths after the change check', async () => {
+    vi.useFakeTimers()
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const own = openOwnRiffLibraryDb()
+    expect(resolveStemPath('jam-new', 'nstem1')).toBe(loreStemPath('jam-new', 'nstem1'))
+    const other = new Database(own.name)
+    other.exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('jam-new', 'New Jam', 1);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, AppVersion) VALUES ('new-riff-1', 'jam-new', 9900, 1);
+    `)
+    other.close()
+    vi.setSystemTime(Date.now() + CACHE_CHANGE_CHECK_INTERVAL_MS + 1_000)
+    expect(resolveStemPath('jam-new', 'nstem1')).toBe(ownCachePath('nstem1'))
   })
 })
