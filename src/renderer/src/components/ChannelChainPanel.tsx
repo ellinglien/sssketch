@@ -10,6 +10,7 @@ import {
   usePluginCatalogActions
 } from '../state/StoreContext'
 import { PluginCatalogBrowser } from './PluginCatalogBrowser'
+import { markPluginsTouched } from '../state/pluginsTouched'
 
 const SLOT_LABELS = ['1', '2'] as const
 
@@ -189,7 +190,11 @@ export function ChannelChainPanel({
                 }}
               />
               <button
-                onClick={() => void window.rifffApi.engineOpenChannelPluginEditor(channelId, slot)}
+                onClick={() => {
+                  // See MasterChainPanel: opening an editor may change the project.
+                  markPluginsTouched()
+                  void window.rifffApi.engineOpenChannelPluginEditor(channelId, slot)
+                }}
                 disabled={editDisabled}
                 aria-label={`edit channel ${channelId} slot ${label} plugin`}
                 data-tooltip={`edit slot ${label}`}

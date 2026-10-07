@@ -35,3 +35,15 @@ describe('hasUnsavedChanges', () => {
     expect(hasUnsavedChanges(oneRifff, '{"rifffs":{"r1":{}}}', null)).toBe(true)
   })
 })
+
+describe('hasUnsavedChanges: plugin settings', () => {
+  it('a plugin-only change (an editor window used since the last save) is unsaved', () => {
+    const json = '{"rifffs":{"r1":{}}}'
+    expect(hasUnsavedChanges(oneRifff, json, json, true)).toBe(true)
+    expect(hasUnsavedChanges(oneRifff, json, json, false)).toBe(false)
+  })
+
+  it('still never for a project with nothing in it', () => {
+    expect(hasUnsavedChanges(noRifffs, '{}', '{}', true)).toBe(false)
+  })
+})

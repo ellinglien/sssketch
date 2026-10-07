@@ -196,8 +196,13 @@ const api = {
     ipcRenderer.invoke('save-project-in-place', path, json),
   openLibrarySketch: (name: string): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-library-sketch', name),
-  duplicateSketch: (currentName: string): Promise<{ name: string; path: string } | null> =>
-    ipcRenderer.invoke('duplicate-sketch', currentName),
+  /** `json`: what the new version holds (the live project, with its plugin settings) -- the
+   * original sketch is left exactly as it is on disk. */
+  duplicateSketch: (
+    currentName: string,
+    json: string
+  ): Promise<{ name: string; path: string } | null> =>
+    ipcRenderer.invoke('duplicate-sketch', currentName, json),
   renameSketch: (
     oldName: string,
     newName: string
@@ -665,12 +670,26 @@ const api = {
     ipcRenderer.on('scan-progress', listener)
     return () => ipcRenderer.removeListener('scan-progress', listener)
   },
+  /** `previousState`: the settings of the plugin the slot held before this load or unload (the
+   * engine reads them first), '' or absent when there was none. */
   onMasterPluginLoaded: (
-    callback: (result: { slot: number; pluginId: string; success: boolean; error?: string }) => void
+    callback: (result: {
+      slot: number
+      pluginId: string
+      success: boolean
+      error?: string
+      previousState?: string
+    }) => void
   ): (() => void) => {
     const listener = (
       _event: unknown,
-      payload: { slot: number; pluginId: string; success: boolean; error?: string }
+      payload: {
+        slot: number
+        pluginId: string
+        success: boolean
+        error?: string
+        previousState?: string
+      }
     ): void => callback(payload)
     ipcRenderer.on('master-plugin-loaded', listener)
     return () => ipcRenderer.removeListener('master-plugin-loaded', listener)
@@ -682,6 +701,7 @@ const api = {
       pluginId: string
       success: boolean
       error?: string
+      previousState?: string
     }) => void
   ): (() => void) => {
     const listener = (
@@ -692,10 +712,17 @@ const api = {
         pluginId: string
         success: boolean
         error?: string
+        previousState?: string
       }
     ): void => callback(payload)
     ipcRenderer.on('channel-plugin-loaded', listener)
     return () => ipcRenderer.removeListener('channel-plugin-loaded', listener)
+  },
+  /** A parameter changed in an open plugin editor window (the engine checks every ~750 ms). */
+  onPluginEdited: (callback: () => void): (() => void) => {
+    const listener = (): void => callback()
+    ipcRenderer.on('engine-plugin-edited', listener)
+    return () => ipcRenderer.removeListener('engine-plugin-edited', listener)
   },
   onEnginePositionUpdate: (callback: (pos: number) => void): (() => void) => {
     const listener = (_event: unknown, payload: { pos: number }): void => callback(payload.pos)

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   initialPluginSwitchState,
   pluginSwitchStep,
+  slotsEngineHolds,
   type PluginChains,
   type PluginSwitchContext,
   type PluginSwitchEvent,
@@ -19,9 +20,21 @@ const CATALOG: Record<string, string> = {
 function ctx(
   chains: PluginChains,
   pending: PluginStatesMap,
-  catalog: Record<string, string> = CATALOG
+  catalog: Record<string, string> = CATALOG,
+  generation = 0
 ): PluginSwitchContext {
-  return { chains, pending, pathOf: (id) => catalog[id] ?? null }
+  return { chains, pending, pathOf: (id) => catalog[id] ?? null, generation }
+}
+
+/** A capture-done answering the capture in flight (run() fills in its id). */
+type TestEvent =
+  | PluginSwitchEvent
+  | { type: 'capture-done'; raw: RawPluginStatesCapture | null; captureId?: number }
+
+function withCaptureId(event: TestEvent, state: PluginSwitchState): PluginSwitchEvent {
+  if (event.type === 'capture-done' && event.captureId === undefined)
+    return { ...event, captureId: state.captureId }
+  return event as PluginSwitchEvent
 }
 
 const project: PluginChains = {
@@ -37,17 +50,22 @@ const saved: PluginStatesMap = {
 /** Feeds events in order, threading the state and the pending map through, the way StoreContext
  * does; returns every step so a test can look at any of them. */
 function run(
-  events: PluginSwitchEvent[],
+  events: TestEvent[],
   chains: PluginChains,
   pending: PluginStatesMap,
   catalog: Record<string, string> = CATALOG,
-  start: PluginSwitchState = initialPluginSwitchState
+  start: PluginSwitchState = initialPluginSwitchState,
+  generation = 0
 ): PluginSwitchStep[] {
   const steps: PluginSwitchStep[] = []
   let state = start
   let p = pending
   for (const event of events) {
-    const step = pluginSwitchStep(state, event, ctx(chains, p, catalog))
+    const step = pluginSwitchStep(
+      state,
+      withCaptureId(event, state),
+      ctx(chains, p, catalog, generation)
+    )
     steps.push(step)
     state = step.state
     p = step.pending
@@ -195,7 +213,7 @@ describe('pluginSwitchStep: turning off', () => {
 
     const done = pluginSwitchStep(
       off.state,
-      { type: 'capture-done', raw: liveCapture, projectReplaced: false },
+      { type: 'capture-done', raw: liveCapture, captureId: off.state.captureId },
       ctx(project, off.pending)
     )
     expect(done.state.phase).toBe('off')
@@ -217,7 +235,7 @@ describe('pluginSwitchStep: turning off', () => {
         { type: 'switch', on: true },
         { type: 'load-result', slotKey: 'master:0', pluginId: 'verb', success: true },
         { type: 'switch', on: false },
-        { type: 'capture-done', raw: null, projectReplaced: false },
+        { type: 'capture-done', raw: null },
         { type: 'switch', on: true }
       ],
       project,
@@ -243,8 +261,7 @@ describe('pluginSwitchStep: turning off', () => {
         { type: 'switch', on: false },
         {
           type: 'capture-done',
-          raw: { masterChain: ['', '', 'COMP2', ''], channelChains: [] },
-          projectReplaced: false
+          raw: { masterChain: ['', '', 'COMP2', ''], channelChains: [] }
         }
       ],
       project,
@@ -269,7 +286,7 @@ describe('pluginSwitchStep: turning off', () => {
       [
         { type: 'switch', on: true },
         { type: 'switch', on: false },
-        { type: 'capture-done', raw: liveCapture, projectReplaced: false }
+        { type: 'capture-done', raw: liveCapture }
       ],
       project,
       saved,
@@ -285,14 +302,19 @@ describe('pluginSwitchStep: turning off', () => {
     const steps = run(
       [
         { type: 'switch', on: true },
-        { type: 'switch', on: false },
-        { type: 'capture-done', raw: liveCapture, projectReplaced: true }
+        { type: 'switch', on: false }
       ],
       project,
       saved
     )
-    expect(steps[2].pending).toEqual(saved)
-    expect(steps[2].unloads.length).toBe(3)
+    // Same chains, but a newer project generation: what came back is the old project's.
+    const done = pluginSwitchStep(
+      steps[1].state,
+      { type: 'capture-done', raw: liveCapture, captureId: steps[1].state.captureId },
+      ctx(project, saved, CATALOG, 1)
+    )
+    expect(done.pending).toEqual(saved)
+    expect(done.unloads.length).toBe(3)
   })
 })
 
@@ -306,7 +328,7 @@ describe('pluginSwitchStep: off and quickly on again', () => {
         { type: 'load-result', slotKey: 'channel:ch1:0', pluginId: 'delay', success: true },
         { type: 'switch', on: false },
         { type: 'switch', on: true },
-        { type: 'capture-done', raw: liveCapture, projectReplaced: false }
+        { type: 'capture-done', raw: liveCapture }
       ],
       project,
       saved
@@ -329,7 +351,7 @@ describe('pluginSwitchStep: off and quickly on again', () => {
         { type: 'switch', on: false },
         { type: 'switch', on: true },
         { type: 'switch', on: false },
-        { type: 'capture-done', raw: liveCapture, projectReplaced: false }
+        { type: 'capture-done', raw: liveCapture }
       ],
       project,
       saved
@@ -353,8 +375,8 @@ describe('pluginSwitchStep: off and quickly on again', () => {
     )
     const done = pluginSwitchStep(
       first[2].state,
-      { type: 'capture-done', raw: liveCapture, projectReplaced: true },
-      ctx(other, otherSaved)
+      { type: 'capture-done', raw: liveCapture, captureId: first[2].state.captureId },
+      ctx(other, otherSaved, CATALOG, 1)
     )
     expect(done.state.phase).toBe('live')
     expect(done.loads.map((l) => [l.slotKey, l.pluginId, l.stateBase64])).toEqual([
@@ -451,16 +473,465 @@ describe('pluginSwitchStep: chain edits', () => {
   })
 })
 
+/** Live, with every load the switch sent answered (the engine holds every slot). */
+function allLoaded(
+  chains: PluginChains,
+  pending: PluginStatesMap,
+  generation = 0
+): PluginSwitchStep {
+  const [on] = run([{ type: 'switch', on: true }], chains, pending, CATALOG, undefined, generation)
+  let step = on
+  for (const load of on.loads) {
+    step = pluginSwitchStep(
+      step.state,
+      { type: 'load-result', slotKey: load.slotKey, pluginId: load.pluginId, success: true },
+      ctx(chains, step.pending, CATALOG, generation)
+    )
+  }
+  return step
+}
+
+const fallback: PluginStatesMap = {
+  'master:0': { pluginId: 'verb', stateBase64: 'VERB-LATEST' },
+  'master:2': { pluginId: 'comp', stateBase64: 'COMP-LATEST' },
+  'channel:ch1:0': { pluginId: 'delay', stateBase64: 'DELAY-LATEST' }
+}
+
 describe('pluginSwitchStep: the engine restarting', () => {
   it('forgets what was sent, so its answers can never come and nothing waits on them', () => {
     const [on] = run([{ type: 'switch', on: true }], project, saved)
     expect(Object.keys(on.state.sent).length).toBe(3)
     const restarted = pluginSwitchStep(
       on.state,
-      { type: 'engine-restarted' },
+      { type: 'engine-restarted', fallback: {} },
       ctx(project, on.pending)
     )
-    expect(restarted.state.sent).toEqual({})
+    // Only the reloads it sent itself are waited on.
+    expect(restarted.loads.length).toBe(3)
+    expect(Object.values(restarted.state.sent).every((q) => q.length === 1)).toBe(true)
     expect(restarted.pending).toEqual(saved)
+  })
+
+  it('reloads every slot while live, with the latest capture for settings already handed over', () => {
+    const live = allLoaded(project, saved)
+    expect(live.pending).toEqual({}) // dropped on each successful load
+    const restarted = pluginSwitchStep(
+      live.state,
+      { type: 'engine-restarted', fallback },
+      ctx(project, live.pending)
+    )
+    expect(restarted.state.phase).toBe('live')
+    expect(restarted.unloads).toEqual([])
+    expect(restarted.loads.map((l) => [l.slotKey, l.pluginId, l.stateBase64])).toEqual([
+      ['master:0', 'verb', 'VERB-LATEST'],
+      ['master:2', 'comp', 'COMP-LATEST'],
+      ['channel:ch1:0', 'delay', 'DELAY-LATEST']
+    ])
+    // A save before those loads land still has them.
+    expect(restarted.pending).toEqual(fallback)
+  })
+
+  it('prefers settings the engine was never handed over the fallback', () => {
+    const [on] = run([{ type: 'switch', on: true }], project, saved) // nothing answered yet
+    const restarted = pluginSwitchStep(
+      on.state,
+      { type: 'engine-restarted', fallback },
+      ctx(project, on.pending)
+    )
+    expect(restarted.loads.map((l) => l.stateBase64)).toEqual(['VERB', 'COMP', 'DELAY'])
+    expect(restarted.pending).toEqual(saved)
+  })
+
+  it('ignores a fallback entry for a plugin no longer in that slot', () => {
+    const live = allLoaded(project, saved)
+    const restarted = pluginSwitchStep(
+      live.state,
+      {
+        type: 'engine-restarted',
+        fallback: { 'master:0': { pluginId: 'delay', stateBase64: 'WRONG' } }
+      },
+      ctx(project, live.pending)
+    )
+    expect(restarted.loads.find((l) => l.slotKey === 'master:0')?.stateBase64).toBeNull()
+    expect(restarted.pending).toEqual({})
+  })
+
+  it('mid off-capture: ends off with nothing to unload, keeps the fallback, and the dead capture never makes it held', () => {
+    const live = allLoaded(project, saved)
+    const off = pluginSwitchStep(live.state, { type: 'switch', on: false }, ctx(project, {}))
+    expect(off.capture).toBe(true)
+    const restarted = pluginSwitchStep(
+      off.state,
+      { type: 'engine-restarted', fallback },
+      ctx(project, off.pending)
+    )
+    expect(restarted.state.phase).toBe('off')
+    expect(restarted.unloads).toEqual([])
+    expect(restarted.loads).toEqual([])
+    expect(restarted.pending).toEqual(fallback)
+    // The capture sent to the old engine times out afterwards.
+    const timedOut = pluginSwitchStep(
+      restarted.state,
+      { type: 'capture-done', raw: null, captureId: off.state.captureId },
+      ctx(project, restarted.pending)
+    )
+    expect(timedOut.state.phase).toBe('off')
+    // Back on later: everything loads with the recovered settings.
+    const backOn = pluginSwitchStep(
+      timedOut.state,
+      { type: 'switch', on: true },
+      ctx(project, timedOut.pending)
+    )
+    expect(backOn.loads.map((l) => l.stateBase64)).toEqual([
+      'VERB-LATEST',
+      'COMP-LATEST',
+      'DELAY-LATEST'
+    ])
+  })
+
+  it('mid off-capture with the switch already back on: reloads everything', () => {
+    const live = allLoaded(project, saved)
+    const off = pluginSwitchStep(live.state, { type: 'switch', on: false }, ctx(project, {}))
+    const on = pluginSwitchStep(off.state, { type: 'switch', on: true }, ctx(project, {}))
+    const restarted = pluginSwitchStep(
+      on.state,
+      { type: 'engine-restarted', fallback },
+      ctx(project, on.pending)
+    )
+    expect(restarted.state.phase).toBe('live')
+    expect(restarted.loads.length).toBe(3)
+  })
+
+  it('held: the engine no longer holds them, so it is off, with the fallback kept', () => {
+    const live = allLoaded(project, saved)
+    const steps = run(
+      [
+        { type: 'switch', on: false },
+        { type: 'capture-done', raw: null }
+      ],
+      project,
+      live.pending,
+      CATALOG,
+      live.state
+    )
+    expect(steps[1].state.phase).toBe('held')
+    const restarted = pluginSwitchStep(
+      steps[1].state,
+      { type: 'engine-restarted', fallback },
+      ctx(project, steps[1].pending)
+    )
+    expect(restarted.state.phase).toBe('off')
+    expect(restarted.unloads).toEqual([])
+    expect(restarted.pending).toEqual(fallback)
+  })
+})
+
+describe('pluginSwitchStep: held retries', () => {
+  it('retry-capture asks again; an answer to the failed capture is ignored', () => {
+    const live = allLoaded(project, saved)
+    const steps = run(
+      [
+        { type: 'switch', on: false },
+        { type: 'capture-done', raw: null }
+      ],
+      project,
+      live.pending,
+      CATALOG,
+      live.state
+    )
+    const firstId = steps[0].state.captureId
+    const retry = pluginSwitchStep(
+      steps[1].state,
+      { type: 'retry-capture' },
+      ctx(project, steps[1].pending)
+    )
+    expect(retry.capture).toBe(true)
+    expect(retry.state.phase).toBe('capturing')
+    expect(retry.state.captureId).not.toBe(firstId)
+    const stale = pluginSwitchStep(
+      retry.state,
+      { type: 'capture-done', raw: liveCapture, captureId: firstId },
+      ctx(project, retry.pending)
+    )
+    expect(stale.state.phase).toBe('capturing')
+    const done = pluginSwitchStep(
+      retry.state,
+      { type: 'capture-done', raw: liveCapture, captureId: retry.state.captureId },
+      ctx(project, retry.pending)
+    )
+    expect(done.state.phase).toBe('off')
+    expect(done.unloads.length).toBe(3)
+    expect(done.pending['master:0']).toEqual({ pluginId: 'verb', stateBase64: 'VERB2' })
+  })
+
+  it('is ignored unless held', () => {
+    const live = allLoaded(project, saved)
+    const step = pluginSwitchStep(live.state, { type: 'retry-capture' }, ctx(project, {}))
+    expect(step.capture).toBe(false)
+    expect(step.state.phase).toBe('live')
+  })
+})
+
+describe('slotsEngineHolds', () => {
+  it('lists every occupied slot whose plugin the engine has loaded for this project', () => {
+    const live = allLoaded(project, saved)
+    expect([...slotsEngineHolds(live.state, project, 0)].sort()).toEqual([
+      'channel:ch1:0',
+      'master:0',
+      'master:2'
+    ])
+  })
+
+  it('leaves out a slot whose load is still in flight', () => {
+    const [on] = run([{ type: 'switch', on: true }], project, saved)
+    const step = pluginSwitchStep(
+      on.state,
+      { type: 'load-result', slotKey: 'master:0', pluginId: 'verb', success: true },
+      ctx(project, on.pending)
+    )
+    expect([...slotsEngineHolds(step.state, project, 0)]).toEqual(['master:0'])
+  })
+
+  it('is empty while off or held, and while a project opened since the last sync is not yet loaded', () => {
+    const live = allLoaded(project, saved)
+    expect(slotsEngineHolds(initialPluginSwitchState, project, 0).size).toBe(0)
+    const steps = run(
+      [
+        { type: 'switch', on: false },
+        { type: 'capture-done', raw: null }
+      ],
+      project,
+      live.pending,
+      CATALOG,
+      live.state
+    )
+    // Capturing (unloading): it still holds them.
+    expect(slotsEngineHolds(steps[0].state, project, 0).size).toBe(3)
+    // ...unless another project (same plugins, same slots) was opened meanwhile.
+    expect(slotsEngineHolds(steps[0].state, project, 1).size).toBe(0)
+    // Held: the switch is off; a save must not take the engine's word for this project.
+    expect(slotsEngineHolds(steps[1].state, project, 0).size).toBe(0)
+  })
+
+  it('leaves out a slot edited but not yet synced, an uncataloged one and a failed one', () => {
+    const live = allLoaded(project, saved)
+    const edited: PluginChains = { ...project, masterChain: ['comp', null, 'comp', null] }
+    expect(slotsEngineHolds(live.state, edited, 0).has('master:0')).toBe(false)
+
+    const [partial] = run([{ type: 'switch', on: true }], project, saved, { comp: CATALOG.comp })
+    const answered = pluginSwitchStep(
+      partial.state,
+      { type: 'load-result', slotKey: 'master:2', pluginId: 'comp', success: true },
+      ctx(project, partial.pending, { comp: CATALOG.comp })
+    )
+    expect([...slotsEngineHolds(answered.state, project, 0)]).toEqual(['master:2'])
+
+    const failed = pluginSwitchStep(
+      answered.state,
+      { type: 'load-result', slotKey: 'master:2', pluginId: 'comp', success: false },
+      ctx(project, answered.pending, { comp: CATALOG.comp })
+    )
+    // (that reply matches nothing in flight, so it changes nothing)
+    expect(failed.state).toEqual(answered.state)
+  })
+})
+
+describe('pluginSwitchStep: opening another project', () => {
+  it('reloads every occupied slot, even with the same plugin, so the old project`s settings never carry over', () => {
+    const live = allLoaded(project, saved)
+    const step = pluginSwitchStep(
+      live.state,
+      { type: 'chains-changed' },
+      ctx(project, {}, CATALOG, 1)
+    )
+    expect(step.loads.map((l) => [l.slotKey, l.stateBase64])).toEqual([
+      ['master:0', null],
+      ['master:2', null],
+      ['channel:ch1:0', null]
+    ])
+    expect(slotsEngineHolds(step.state, project, 1).size).toBe(0) // until answered
+  })
+})
+
+describe('pluginSwitchStep: undo after removing or replacing a plugin', () => {
+  it('a removed plugin comes back with the settings it had when it went', () => {
+    const live = allLoaded(project, saved)
+    const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }
+    const rm = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(removed, {}))
+    expect(rm.unloads).toEqual([{ kind: 'master', slot: 0 }])
+    const answered = pluginSwitchStep(
+      rm.state,
+      {
+        type: 'load-result',
+        slotKey: 'master:0',
+        pluginId: '',
+        success: true,
+        previousState: 'VERB-TWEAKED'
+      },
+      ctx(removed, rm.pending)
+    )
+    // Not written to a save while the slot is empty.
+    expect(answered.pending).toEqual({})
+    const undone = pluginSwitchStep(
+      answered.state,
+      { type: 'chains-changed' },
+      ctx(project, answered.pending)
+    )
+    expect(undone.loads.map((l) => [l.slotKey, l.pluginId, l.stateBase64])).toEqual([
+      ['master:0', 'verb', 'VERB-TWEAKED']
+    ])
+    // Kept until that load lands, like any saved settings.
+    expect(undone.pending['master:0']).toEqual({ pluginId: 'verb', stateBase64: 'VERB-TWEAKED' })
+  })
+
+  it('a replaced plugin comes back with its settings too', () => {
+    const live = allLoaded(project, saved)
+    const replaced: PluginChains = { ...project, masterChain: ['delay', null, 'comp', null] }
+    const rp = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(replaced, {}))
+    const answered = pluginSwitchStep(
+      rp.state,
+      {
+        type: 'load-result',
+        slotKey: 'master:0',
+        pluginId: 'delay',
+        success: true,
+        previousState: 'VERB-TWEAKED'
+      },
+      ctx(replaced, rp.pending)
+    )
+    const undone = pluginSwitchStep(
+      answered.state,
+      { type: 'chains-changed' },
+      ctx(project, answered.pending)
+    )
+    expect(undone.loads.map((l) => [l.pluginId, l.stateBase64])).toEqual([['verb', 'VERB-TWEAKED']])
+  })
+
+  it('never carries a plugin`s settings into another project', () => {
+    const live = allLoaded(project, saved)
+    const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }
+    const rm = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(removed, {}))
+    // Another project opens (generation 1) before the unload's reply comes back.
+    const late = pluginSwitchStep(
+      rm.state,
+      {
+        type: 'load-result',
+        slotKey: 'master:0',
+        pluginId: '',
+        success: true,
+        previousState: 'VERB-TWEAKED'
+      },
+      ctx(removed, {}, CATALOG, 1)
+    )
+    const other = pluginSwitchStep(
+      late.state,
+      { type: 'chains-changed' },
+      ctx(project, {}, CATALOG, 1)
+    )
+    expect(other.loads.find((l) => l.slotKey === 'master:0')?.stateBase64).toBeNull()
+  })
+})
+
+describe('pluginSwitchStep: a load that fails', () => {
+  function replacedWithFailingComp(): PluginSwitchStep {
+    const live = allLoaded(project, saved)
+    const replaced: PluginChains = { ...project, masterChain: ['comp', null, 'comp', null] }
+    const rp = pluginSwitchStep(
+      live.state,
+      { type: 'chains-changed' },
+      ctx(replaced, { 'master:0': { pluginId: 'comp', stateBase64: 'C0' } })
+    )
+    return pluginSwitchStep(
+      rp.state,
+      {
+        type: 'load-result',
+        slotKey: 'master:0',
+        pluginId: 'comp',
+        success: false,
+        previousState: 'VERB-TWEAKED'
+      },
+      ctx(replaced, rp.pending)
+    )
+  }
+  const replaced: PluginChains = { ...project, masterChain: ['comp', null, 'comp', null] }
+
+  it('keeps the slot and its saved settings, marks it failed, and empties the engine`s slot', () => {
+    const failed = replacedWithFailingComp()
+    expect(failed.state.failed).toEqual(['master:0'])
+    expect(failed.pending['master:0']).toEqual({ pluginId: 'comp', stateBase64: 'C0' })
+    // The engine still had the verb there: it goes, so what plays matches the slot.
+    expect(failed.unloads).toEqual([{ kind: 'master', slot: 0 }])
+    expect(slotsEngineHolds(failed.state, replaced, 0).has('master:0')).toBe(false)
+  })
+
+  it('is not retried by every later edit', () => {
+    const failed = replacedWithFailingComp()
+    const edit = pluginSwitchStep(
+      failed.state,
+      { type: 'chains-changed' },
+      ctx(replaced, failed.pending)
+    )
+    expect(edit.loads).toEqual([])
+    expect(edit.unloads).toEqual([])
+  })
+
+  it('is retried after a scan, and with a successful load it is no longer failed', () => {
+    const failed = replacedWithFailingComp()
+    const unloaded = pluginSwitchStep(
+      failed.state,
+      { type: 'load-result', slotKey: 'master:0', pluginId: '', success: true },
+      ctx(replaced, failed.pending)
+    )
+    const scan = pluginSwitchStep(
+      unloaded.state,
+      { type: 'catalog-changed' },
+      ctx(replaced, unloaded.pending)
+    )
+    expect(scan.loads.map((l) => [l.slotKey, l.stateBase64])).toEqual([['master:0', 'C0']])
+    const ok = pluginSwitchStep(
+      scan.state,
+      { type: 'load-result', slotKey: 'master:0', pluginId: 'comp', success: true },
+      ctx(replaced, scan.pending)
+    )
+    expect(ok.state.failed).toEqual([])
+    expect(ok.pending['master:0']).toBeUndefined()
+  })
+
+  it('picking another plugin there clears it', () => {
+    const failed = replacedWithFailingComp()
+    const other: PluginChains = { ...project, masterChain: ['delay', null, 'comp', null] }
+    const pick = pluginSwitchStep(
+      failed.state,
+      { type: 'chains-changed' },
+      ctx(other, failed.pending)
+    )
+    expect(pick.loads.map((l) => l.pluginId)).toEqual(['delay'])
+    expect(pick.state.failed).toEqual([])
+  })
+})
+
+describe('pluginSwitchStep: retry-failed', () => {
+  it('reloads failed slots only (a channel the engine had not been told about yet, say)', () => {
+    const [on] = run([{ type: 'switch', on: true }], project, saved)
+    const failed = pluginSwitchStep(
+      on.state,
+      { type: 'load-result', slotKey: 'channel:ch1:0', pluginId: 'delay', success: false },
+      ctx(project, on.pending)
+    )
+    expect(failed.state.failed).toEqual(['channel:ch1:0'])
+    const retry = pluginSwitchStep(
+      failed.state,
+      { type: 'retry-failed' },
+      ctx(project, failed.pending)
+    )
+    expect(retry.loads.map((l) => [l.slotKey, l.stateBase64])).toEqual([['channel:ch1:0', 'DELAY']])
+    expect(retry.missing).toEqual([])
+  })
+
+  it('does nothing with no failed slot, or while not live', () => {
+    const live = allLoaded(project, saved)
+    expect(pluginSwitchStep(live.state, { type: 'retry-failed' }, ctx(project, {})).loads).toEqual(
+      []
+    )
   })
 })

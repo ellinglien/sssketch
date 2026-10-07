@@ -16,11 +16,15 @@ import type { AppState } from './store'
  *
  * An empty project (no rifffs at all) is never "unsaved" even if
  * lastSavedJson is null/stale -- nothing has been imported yet, so there's
- * nothing real to lose. */
+ * nothing real to lose.
+ *
+ * `pluginsTouched`: a plugin's settings may have changed since the last save
+ * (pluginsTouched.ts) -- they are not in the serialized state. */
 export function hasUnsavedChanges(
   rifffs: AppState['rifffs'],
   serializedState: string,
-  lastSavedJson: string | null
+  lastSavedJson: string | null,
+  pluginsTouched = false
 ): boolean {
-  return Object.keys(rifffs).length > 0 && serializedState !== lastSavedJson
+  return Object.keys(rifffs).length > 0 && (pluginsTouched || serializedState !== lastSavedJson)
 }

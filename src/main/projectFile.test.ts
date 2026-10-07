@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, rmSync, readFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { generateDefaultProjectName, randomAdjectiveNoun } from './projectFile'
@@ -111,20 +111,42 @@ describe('library-aware project functions', () => {
   })
 
   describe('duplicateSketchAsNewVersion', () => {
-    it('copies the current sketch json into a new -2 named sketch', async () => {
+    it('writes the given json (the live project) into a new -2 named sketch', async () => {
       const { saveProjectToLibrary, duplicateSketchAsNewVersion, openLibrarySketch } =
         await import('./projectFile')
       saveProjectToLibrary('outdoor-jam', '{"bpm":128}')
-      const result = duplicateSketchAsNewVersion('outdoor-jam')
+      const result = duplicateSketchAsNewVersion('outdoor-jam', '{"bpm":140}')
       expect(result).not.toBeNull()
       expect(result!.name).toBe('outdoor-jam-2')
       const reopened = openLibrarySketch('outdoor-jam-2')
-      expect(reopened!.json).toBe('{"bpm":128}')
+      expect(reopened!.json).toBe('{"bpm":140}')
+    })
+
+    it('leaves the original sketch byte-identical, its folder included', async () => {
+      const { saveProjectToLibrary, duplicateSketchAsNewVersion } = await import('./projectFile')
+      const { sketchDir } = await import('./projectLibrary')
+      saveProjectToLibrary('outdoor-jam', '{"bpm":128,"pluginStates":{"master:0":"A"}}')
+      saveProjectToLibrary('outdoor-jam', '{"bpm":129,"pluginStates":{"master:0":"B"}}') // a backup too
+      const snapshot = (): Record<string, string> => {
+        const out: Record<string, string> = {}
+        const walk = (dir: string): void => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const path = join(dir, entry.name)
+            if (entry.isDirectory()) walk(path)
+            else out[path] = readFileSync(path).toString('base64')
+          }
+        }
+        walk(sketchDir('outdoor-jam'))
+        return out
+      }
+      const before = snapshot()
+      duplicateSketchAsNewVersion('outdoor-jam', '{"bpm":140,"pluginStates":{"master:0":"LIVE"}}')
+      expect(snapshot()).toEqual(before)
     })
 
     it('returns null when the source sketch does not exist', async () => {
       const { duplicateSketchAsNewVersion } = await import('./projectFile')
-      expect(duplicateSketchAsNewVersion('does-not-exist')).toBeNull()
+      expect(duplicateSketchAsNewVersion('does-not-exist', '{}')).toBeNull()
     })
   })
 })

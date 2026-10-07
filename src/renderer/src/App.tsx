@@ -108,7 +108,7 @@ import {
 import { initialState, SNAP_DIVS, startupState } from './state/store'
 import { newProjectSeed } from '@shared/seededRandom'
 import { appSoundDefaults } from './state/appSoundDefaults'
-import type { LoopRegion } from './state/store'
+import type { AppState, LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
@@ -123,8 +123,27 @@ import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
 import { mergeLatestSettings, nestedPatchFromLatest } from '@shared/latestSettings'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
 import { useFeatureEnabled } from './state/appFeatures'
-import { pendingPluginStatesRef, replacePendingPluginStates } from './state/pendingPluginStates'
-import { dirtyCheckJson, projectJsonForSave } from './state/saveSerialization'
+import {
+  pendingPluginStatesGeneration,
+  pendingPluginStatesRef,
+  pluginCaptureFallback,
+  pluginSwitchStateRef,
+  recordPluginCapture,
+  replacePendingPluginStates
+} from './state/pendingPluginStates'
+import {
+  createAutosaveGate,
+  dirtyCheckJson,
+  liveSettingsForSave,
+  projectJsonForSave
+} from './state/saveSerialization'
+import { slotsEngineHolds } from '@shared/pluginSwitch'
+import type { PluginStatesMap } from '@shared/pluginStates'
+import {
+  clearPluginsTouched,
+  pluginsTouchedSnapshot,
+  usePluginsTouched
+} from './state/pluginsTouched'
 
 /** Tracks what the currently-open project actually is, so Save/Export know
  * whether to write in place (no dialog) or fall back to the existing
@@ -591,8 +610,10 @@ function ProjectMenu({
   /** Frame's serializeForSave: the JSON every save path writes, plugin
    * settings included (saveSerialization.ts). */
   serializeForSave: () => Promise<string>
-  /** Records the live project as saved (the unsaved-changes baseline). */
-  markSaved: () => void
+  /** Records the live project as saved (the unsaved-changes baseline).
+   * `pluginsTouchedVersion`: pluginsTouched.ts's version when the save
+   * started (a plugin touched since stays unsaved). */
+  markSaved: (pluginsTouchedVersion: number) => void
   onOpenLibrary: () => void
   /** Opens the "tidy up" browser -- the same callback TransportBar.tsx's
    * own tidy-up button already uses (wired to setClusterStemsOpen(true) in
@@ -681,13 +702,15 @@ function ProjectMenu({
   async function handleDuplicateAsNewVersion(): Promise<void> {
     if (currentSketch === null || currentSketch.kind !== 'library') return
     try {
-      // Save current edits first, so the duplicate reflects them -- plugin
-      // settings included: this overwrites the ORIGINAL sketch.
-      await window.rifffApi.saveProjectToLibrary(currentSketch.name, await serializeForSave())
-      markSaved()
-      const result = await window.rifffApi.duplicateSketch(currentSketch.name)
+      // The live project -- unsaved edits and plugin settings included --
+      // goes straight into the new version; the ORIGINAL sketch is never
+      // written (it keeps what it last saved).
+      const touchedVersion = pluginsTouchedSnapshot().version
+      const json = await serializeForSave()
+      const result = await window.rifffApi.duplicateSketch(currentSketch.name, json)
       if (!result) return
       setCurrentSketch({ kind: 'library', name: result.name })
+      markSaved(touchedVersion)
     } catch (err) {
       console.error('ProjectMenu: failed to duplicate sketch as a new version:', err)
       window.alert(`Duplicate failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1253,19 +1276,50 @@ function Frame(): React.JSX.Element {
   // which could move lastSavedJsonRef.current without tripping any of these
   // deps and let the indicator lag briefly until something else re-rendered;
   // Task 5 removed that write entirely, closing the gap.
+  // A plugin's settings changed since the last save (an editor window
+  // opened or used, pluginsTouched.ts) is unsaved too: they are not in
+  // persistedJson. Its version also restarts the autosave's debounce below.
+  const pluginsTouched = usePluginsTouched()
   const [dirty, setDirty] = useState(false)
   useEffect(() => {
-    setDirty(hasUnsavedChanges(state.rifffs, persistedJson, lastSavedJsonRef.current))
-  }, [state.rifffs, persistedJson, currentSketch, saveVersion])
+    setDirty(
+      hasUnsavedChanges(
+        state.rifffs,
+        persistedJson,
+        lastSavedJsonRef.current,
+        pluginsTouched.touched
+      )
+    )
+  }, [state.rifffs, persistedJson, currentSketch, saveVersion, pluginsTouched.touched])
+
+  // Bumped by every save, discard and clear of the crash-recovery autosave
+  // (recordSaved, clearAutosaveNow): an autosave waits on the engine, and
+  // one that started before must not land after and bring back what was
+  // just saved or thrown away.
+  const autosaveGateRef = useRef(createAutosaveGate())
+  function clearAutosaveNow(): void {
+    autosaveGateRef.current.bump()
+    void window.rifffApi.clearAutosave()
+  }
+
+  /** `saved` is now durably on disk as the open project: the unsaved-changes
+   * baseline, the plugins-touched flag (unless touched since
+   * `pluginsTouchedVersion`, the save's start) and the autosave gate. */
+  function recordSaved(saved: AppState, pluginsTouchedVersion: number): void {
+    lastSavedJsonRef.current = dirtyCheckJson(saved)
+    clearPluginsTouched(pluginsTouchedVersion)
+    autosaveGateRef.current.bump()
+    setSaveVersion((v) => v + 1)
+  }
 
   async function handleRename(newName: string): Promise<void> {
     setRenameError(null)
     if (currentSketch === null) {
       try {
+        const touchedVersion = pluginsTouchedSnapshot().version
         await window.rifffApi.saveProjectToLibrary(newName, await serializeForSave())
         setCurrentSketch({ kind: 'library', name: newName })
-        lastSavedJsonRef.current = dirtyCheckJson(state)
-        setSaveVersion((v) => v + 1)
+        recordSaved(state, touchedVersion)
       } catch (err) {
         console.error('Frame: failed to save project under new name:', err)
         setRenameError(err instanceof Error ? err.message : String(err))
@@ -1290,18 +1344,43 @@ function Frame(): React.JSX.Element {
   }
 
   /** The JSON every save path writes -- save, save a copy, duplicate,
-   * rename, the crash-recovery autosave: the engine's live plugin settings
-   * plus the saved settings of every plugin it doesn't hold (all of them
-   * while the advanced features switch has plugins off), so no save drops
-   * what the project read (saveSerialization.ts). A user's save refuses to
-   * write without the engine's answer (it would quietly fall back to the
-   * settings last opened); the autosave, best effort, takes `bestEffort`. */
+   * rename, the crash-recovery autosave (saveSerialization.ts): per slot,
+   * the engine's live plugin settings where it holds this project's plugin
+   * (@shared/pluginSwitch's slotsEngineHolds, before AND after the round
+   * trip, the project unchanged meanwhile), else the saved settings not yet
+   * handed over, else the latest capture -- so no save drops what the
+   * project read, and none takes another project's plugin for this one's.
+   * The engine is not asked at all when it holds none of them (plugins off,
+   * none in the project, none loaded yet). A user's save refuses to write
+   * when the engine holds them and doesn't answer (it would quietly fall
+   * back to older settings); the autosave, best effort, takes `bestEffort`.
+   * A successful capture is kept as the fallback (an engine restart reloads
+   * from it). */
   async function serializeForSave(options?: { bestEffort?: boolean }): Promise<string> {
-    const raw = await window.rifffApi.engineGetPluginStates()
-    if (raw === null && !options?.bestEffort) {
-      throw new Error('failed to read current plugin state from the engine')
+    const chains = { masterChain: state.masterChain, channelPlugins: state.channelPlugins }
+    const generation = pendingPluginStatesGeneration()
+    const pending = pendingPluginStatesRef.current
+    const fallback = pluginCaptureFallback()
+    const heldBefore = slotsEngineHolds(pluginSwitchStateRef.current, chains, generation)
+    let live: PluginStatesMap = {}
+    if (heldBefore.size > 0) {
+      const raw = await window.rifffApi.engineGetPluginStates()
+      const heldAfter = slotsEngineHolds(
+        pluginSwitchStateRef.current,
+        chains,
+        pendingPluginStatesGeneration() === generation ? generation : -1
+      )
+      const held = new Set([...heldBefore].filter((slotKey) => heldAfter.has(slotKey)))
+      // No answer while the engine still holds them: refuse. (An engine that
+      // restarted meanwhile holds none of them: the saved settings and the
+      // fallback are all there is.)
+      if (raw === null && held.size > 0 && !options?.bestEffort) {
+        throw new Error('failed to read current plugin state from the engine')
+      }
+      live = liveSettingsForSave(raw, chains, held)
+      recordPluginCapture(live, generation)
     }
-    return projectJsonForSave(state, raw, pendingPluginStatesRef.current)
+    return projectJsonForSave(state, live, pending, fallback)
   }
 
   /** Returns whether the save actually succeeded, so every discard-guard
@@ -1311,6 +1390,7 @@ function Frame(): React.JSX.Element {
    * replace the live project on top of a save that never landed. */
   async function handleSave(): Promise<boolean> {
     try {
+      const touchedVersion = pluginsTouchedSnapshot().version
       const json = await serializeForSave()
       if (currentSketch === null) {
         const name = await window.rifffApi.generateDefaultProjectName()
@@ -1321,8 +1401,7 @@ function Frame(): React.JSX.Element {
       } else {
         await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
       }
-      lastSavedJsonRef.current = dirtyCheckJson(state)
-      setSaveVersion((v) => v + 1)
+      recordSaved(state, touchedVersion)
       return true
     } catch (err) {
       console.error('Frame: failed to save project:', err)
@@ -1369,7 +1448,7 @@ function Frame(): React.JSX.Element {
       // snapshot of exactly that content on disk; clear it so a later
       // launch doesn't turn around and offer to "recover" what was just
       // discarded.
-      void window.rifffApi.clearAutosave()
+      clearAutosaveNow()
     }
     setNewProjectModal({ defaultName: await window.rifffApi.generateDefaultProjectName() })
   }
@@ -1452,7 +1531,7 @@ function Frame(): React.JSX.Element {
       // Autosave file exists but has no real content (see above) -- clear
       // it so it doesn't linger and get offered on some later launch once
       // it might coincidentally look more "real."
-      if (json) void window.rifffApi.clearAutosave()
+      if (json) clearAutosaveNow()
     })()
   }, [dispatch])
 
@@ -1489,7 +1568,7 @@ function Frame(): React.JSX.Element {
         ? (JSON.parse(sketchJson) as CurrentSketch)
         : { kind: 'library', name: await window.rifffApi.generateDefaultProjectName() }
     )
-    void window.rifffApi.clearAutosave()
+    clearAutosaveNow()
     setRecoverableAutosave(null)
     dismissOnboarding(dontShowAgain)
   }
@@ -1505,7 +1584,7 @@ function Frame(): React.JSX.Element {
    * "don't show this again," now that there's no longer a risk of
    * stranding the user on a bare recovery screen with no other buttons). */
   function handleDiscardRecovery(): void {
-    void window.rifffApi.clearAutosave()
+    clearAutosaveNow()
     setRecoverableAutosave(null)
   }
 
@@ -1539,19 +1618,29 @@ function Frame(): React.JSX.Element {
   // to provide. Resumes normally as soon as recoverableAutosave flips back
   // to null (Recover or Discard, both in handleRecoverAutosave/
   // handleDiscardRecovery above).
+  //
+  // Also restarted by a plugin being touched (pluginsTouched.version: an
+  // editor opened or used), so a plugin-only change is autosaved too. Gated
+  // (autosaveGateRef): one that started before a save, a discard or a clear
+  // is dropped when its engine round trip comes back.
   useEffect(() => {
     if (recoverableAutosave !== null) return
     const id = window.setTimeout(() => {
+      const token = autosaveGateRef.current.begin()
+      const sketchJson = JSON.stringify(currentSketch)
       // With plugin settings (persistedJson has none), so a crash recovery
       // keeps them; best effort if the engine doesn't answer.
       void serializeForSave({ bestEffort: true })
-        .then((json) => window.rifffApi.autosaveProject(json))
+        .then(async (json) => {
+          if (!autosaveGateRef.current.isCurrent(token)) return
+          await window.rifffApi.autosaveProject(json)
+          await window.rifffApi.autosaveProjectSketch(sketchJson)
+        })
         .catch((err) => console.error('Frame: crash-recovery autosave failed:', err))
-      void window.rifffApi.autosaveProjectSketch(JSON.stringify(currentSketch))
     }, AUTOSAVE_DEBOUNCE_MS)
     return () => window.clearTimeout(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- serializeForSave is a fresh closure every render over this render's `state`, the one persistedJson was made from; keyed on persistedJson (not state) so a transient UI change doesn't restart the debounce (see above)
-  }, [persistedJson, currentSketch, recoverableAutosave])
+  }, [persistedJson, currentSketch, recoverableAutosave, pluginsTouched.version])
   const [pickerGroupId, setPickerGroupId] = useState<string | null>(null)
   const [riffLibraryOpen, setRiffLibraryOpen] = useState(false)
   // Direct request, 2026-09-17: "i've had to close discover occasionally
@@ -1650,7 +1739,7 @@ function Frame(): React.JSX.Element {
     // already nulls it out itself before calling this, so this is a no-op
     // on that path.
     if (recoverableAutosave !== null) {
-      void window.rifffApi.clearAutosave()
+      clearAutosaveNow()
       setRecoverableAutosave(null)
     }
     if (!dontShowAgain) return
@@ -2717,10 +2806,7 @@ function Frame(): React.JSX.Element {
               handleNew={handleNew}
               handleSave={handleSave}
               serializeForSave={() => serializeForSave()}
-              markSaved={() => {
-                lastSavedJsonRef.current = dirtyCheckJson(state)
-                setSaveVersion((v) => v + 1)
-              }}
+              markSaved={(touchedVersion) => recordSaved(state, touchedVersion)}
               onOpenLibrary={openLibraryBrowser}
               onOpenClusterStems={() => openClusterStems('sketch')}
               onOpenClusterStemsLibrary={() => openClusterStems('library')}
@@ -2910,7 +2996,7 @@ function Frame(): React.JSX.Element {
                 if (!saved) return 'cancel'
               } else {
                 // 'discard' -- see handleNew's matching comment above.
-                void window.rifffApi.clearAutosave()
+                clearAutosaveNow()
               }
               return 'proceed'
             }}
@@ -2948,7 +3034,7 @@ function Frame(): React.JSX.Element {
                   if (!saved) return
                 } else {
                   // 'discard' -- see handleNew's matching comment above.
-                  void window.rifffApi.clearAutosave()
+                  clearAutosaveNow()
                 }
                 setLibraryBrowserOpen(false)
                 setBusy('opening project…')

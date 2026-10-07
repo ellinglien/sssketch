@@ -13,7 +13,17 @@
 //   save, or a capture coming back empty for that slot, still has them.
 // - Turning off asks the engine for its live settings first and unloads only once they are back.
 //   A failed capture unloads nothing (the engine keeps them, phase 'held'). Turning back on while
-//   the capture is in flight waits for it and then keeps the engine's plugins as they are.
+//   the capture is in flight waits for it and then keeps the engine's plugins as they are. A
+//   capture that failed is retried ('retry-capture', StoreContext's timer).
+// - Opening another project (a new `generation`) reloads every occupied slot, even one holding
+//   the same plugin, so the old project's settings never carry over; and nothing read back from
+//   the engine is taken as the new project's until it has (slotsEngineHolds).
+// - An engine restart leaves the engine holding nothing: every slot is reloaded, settings already
+//   handed over coming from the latest capture (the save's and the autosave's, the `fallback`).
+// - A load that fails keeps the slot and its saved settings ('failed', shown on the slot); it is
+//   retried after a scan, a restart, or the switch going on, never by every later edit.
+// - The engine reports the settings of a plugin it unloads or replaces (`previousState`); they
+//   are kept per slot and plugin (`parked`), so undoing a removal brings the plugin back as it was.
 import { buildPluginStatesMap, stateForSlot, type PluginStatesMap } from './pluginStates'
 import type { RawPluginStatesCapture } from './pluginStates'
 
@@ -35,21 +45,40 @@ export interface PluginSlotLoad {
 
 /** 'off': the engine holds none of the project's plugins. 'live': it holds them, kept in step.
  * 'capturing': switched off, the engine's settings are being read back; it still holds them.
- * 'held': switched off, but that read failed, so they were left loaded rather than lost. */
+ * 'held': switched off, but that read failed, so they were left loaded rather than lost (retried). */
 export type PluginSwitchPhase = 'off' | 'live' | 'capturing' | 'held'
+
+/** One load (pluginId) or unload (pluginId '') sent to a slot and not answered yet. */
+export interface SentEntry {
+  pluginId: string
+  stateBase64: string | null
+  /** What the engine held in that slot when this request reached it (null: nothing). */
+  outgoing: string | null
+  /** The project generation it was sent for. */
+  generation: number
+}
 
 export interface PluginSwitchState {
   phase: PluginSwitchPhase
   /** 'capturing' only: the switch went back on before the capture came back. */
   resumeAfterCapture: boolean
-  /** The chains as last reconciled with the engine: what it holds (bar `uncataloged`). Empty
-   * while 'off'. */
+  /** The chains as last reconciled with the engine: what it holds (bar `uncataloged` and
+   * `failed`). Empty while 'off'. */
   synced: PluginChains
+  /** The project generation `synced` belongs to (@renderer pendingPluginStates' counter). */
+  syncedGeneration: number
   /** Occupied slots not loaded because the catalog has no path for their plugin. */
   uncataloged: string[]
+  /** Occupied slots whose plugin failed to load (the engine holds nothing there). */
+  failed: string[]
   /** Per slot, every load or unload sent and not answered yet, oldest first. The engine answers
    * each, in order (pluginId '' for an unload). */
-  sent: Record<string, { pluginId: string; stateBase64: string | null }[]>
+  sent: Record<string, SentEntry[]>
+  /** Per slot, per plugin id: the settings a plugin had when the engine unloaded or replaced it
+   * there, for when it comes back (an undo). This project's only. */
+  parked: Record<string, Record<string, string>>
+  /** The capture in flight (or the last one): an answer to any other is ignored. */
+  captureId: number
 }
 
 export const EMPTY_PLUGIN_CHAINS: PluginChains = {
@@ -61,8 +90,12 @@ export const initialPluginSwitchState: PluginSwitchState = {
   phase: 'off',
   resumeAfterCapture: false,
   synced: EMPTY_PLUGIN_CHAINS,
+  syncedGeneration: 0,
   uncataloged: [],
-  sent: {}
+  failed: [],
+  sent: {},
+  parked: {},
+  captureId: 0
 }
 
 export type PluginSwitchEvent =
@@ -70,13 +103,26 @@ export type PluginSwitchEvent =
   | { type: 'switch'; on: boolean }
   | { type: 'chains-changed' }
   | { type: 'catalog-changed' }
-  /** The engine's answer to the capture a 'switch' off asked for. `projectReplaced`: another
-   * project was opened while it was in flight, so what came back belongs to the old one. */
-  | { type: 'capture-done'; raw: RawPluginStatesCapture | null; projectReplaced: boolean }
-  /** A master-/channel-plugin-loaded reply. pluginId '' answers an unload. */
-  | { type: 'load-result'; slotKey: string; pluginId: string; success: boolean }
-  /** The engine was respawned: nothing sent before will be answered. */
-  | { type: 'engine-restarted' }
+  /** The engine's answer to capture `captureId` (null: it failed or timed out). */
+  | { type: 'capture-done'; captureId: number; raw: RawPluginStatesCapture | null }
+  /** 'held': ask for the settings again. */
+  | { type: 'retry-capture' }
+  /** Reload every failed slot (a load that failed for a passing reason: a channel the engine
+   * had not been told about yet). */
+  | { type: 'retry-failed' }
+  /** A master-/channel-plugin-loaded reply. pluginId '' answers an unload. `previousState`: the
+   * settings of what the slot held before (the engine reads them before acting). */
+  | {
+      type: 'load-result'
+      slotKey: string
+      pluginId: string
+      success: boolean
+      previousState?: string
+    }
+  /** The engine was respawned: it holds nothing, and nothing sent before will be answered.
+   * `fallback`: the latest capture of this project's plugin settings (a save's or the
+   * autosave's), for slots whose saved settings were already handed over. */
+  | { type: 'engine-restarted'; fallback: PluginStatesMap }
 
 export interface PluginSwitchContext {
   /** The project's chains right now. */
@@ -85,6 +131,8 @@ export interface PluginSwitchContext {
   pending: PluginStatesMap
   /** A plugin id's file path from the catalog, null when the catalog doesn't list it. */
   pathOf: (pluginId: string) => string | null
+  /** Bumped every time a project is opened or a new one started. */
+  generation: number
 }
 
 export interface PluginSwitchStep {
@@ -97,7 +145,8 @@ export interface PluginSwitchStep {
   /** Occupied slots this step left unloaded because the catalog has no path for their plugin:
    * for the slot's status ("scan for plugins"). */
   missing: PluginSlotTarget[]
-  /** Ask the engine for its live plugin settings, then feed back 'capture-done'. */
+  /** Ask the engine for its live plugin settings, then feed back 'capture-done' with
+   * state.captureId. */
   capture: boolean
 }
 
@@ -105,6 +154,16 @@ export function pluginSlotKey(target: PluginSlotTarget): string {
   return target.kind === 'master'
     ? `master:${target.slot}`
     : `channel:${target.channelId}:${target.slot}`
+}
+
+function targetOfSlotKey(slotKey: string): PluginSlotTarget {
+  const slot = Number(slotKey.slice(slotKey.lastIndexOf(':') + 1))
+  if (slotKey.startsWith('master:')) return { kind: 'master', slot }
+  return {
+    kind: 'channel',
+    channelId: slotKey.slice('channel:'.length, slotKey.lastIndexOf(':')),
+    slot
+  }
 }
 
 function occupant(chains: PluginChains, target: PluginSlotTarget): string | null {
@@ -128,70 +187,157 @@ function slotsOf(chains: PluginChains): PluginSlotTarget[] {
 function withSent(
   sent: PluginSwitchState['sent'],
   slotKey: string,
-  entry: { pluginId: string; stateBase64: string | null }
+  entry: SentEntry
 ): PluginSwitchState['sent'] {
   return { ...sent, [slotKey]: [...(sent[slotKey] ?? []), entry] }
 }
 
+/** The slots of `chains` whose plugin the engine has loaded, for this project, with nothing in
+ * flight: the only slots where what a capture reads back is the project's own settings. While
+ * the switch is off or held, after another project was opened (same plugins or not) and until it
+ * is synced, for a slot edited but not synced, a load not answered yet, an uncataloged plugin or
+ * a failed load, a save takes the project's saved settings instead. */
+export function slotsEngineHolds(
+  state: PluginSwitchState,
+  chains: PluginChains,
+  generation: number
+): Set<string> {
+  const held = new Set<string>()
+  if (state.phase !== 'live' && state.phase !== 'capturing') return held
+  if (state.syncedGeneration !== generation) return held
+  for (const target of slotsOf(chains)) {
+    const slotKey = pluginSlotKey(target)
+    const id = occupant(chains, target)
+    if (id === null || occupant(state.synced, target) !== id) continue
+    if ((state.sent[slotKey] ?? []).length > 0) continue
+    if (state.uncataloged.includes(slotKey) || state.failed.includes(slotKey)) continue
+    held.add(slotKey)
+  }
+  return held
+}
+
+/** `fallback` entries for slots with no pending entry, whose plugin is still the slot's. */
+function withFallback(
+  pending: PluginStatesMap,
+  fallback: PluginStatesMap,
+  chains: PluginChains
+): PluginStatesMap {
+  const merged: PluginStatesMap = { ...pending }
+  for (const target of slotsOf(chains)) {
+    const slotKey = pluginSlotKey(target)
+    const entry = fallback[slotKey]
+    if (merged[slotKey] !== undefined || entry === undefined) continue
+    if (entry.pluginId === occupant(chains, target)) merged[slotKey] = entry
+  }
+  return merged
+}
+
 interface Reconciled {
   state: PluginSwitchState
+  pending: PluginStatesMap
   loads: PluginSlotLoad[]
   unloads: PluginSlotTarget[]
   missing: PluginSlotTarget[]
 }
 
 /** Brings the engine from `from` (what it holds) to ctx.chains. A slot is (re)loaded when its
- * plugin changed, when it is in `force`, or when it has saved settings the engine hasn't been sent
- * yet (a project reopened with the same plugin in the same slot). A channel gone from ctx.chains
- * is left alone: the engine drops its chain with the channel. */
+ * plugin changed, when it is in `force`, when another project was opened since the last sync, or
+ * when it has saved settings the engine hasn't been sent yet (a project reopened with the same
+ * plugin in the same slot) -- but a failed slot only when changed, forced or reopened. A channel
+ * gone from ctx.chains is left alone: the engine drops its chain with the channel. */
 function reconcile(
   state: PluginSwitchState,
   from: PluginChains,
   ctx: PluginSwitchContext,
   force: ReadonlySet<string> = new Set()
 ): Reconciled {
+  const reopened = state.syncedGeneration !== ctx.generation
   const loads: PluginSlotLoad[] = []
   const unloads: PluginSlotTarget[] = []
   const missing: PluginSlotTarget[] = []
   const uncataloged = new Set(state.uncataloged)
+  const failed = new Set(reopened ? [] : state.failed)
+  let parked = reopened ? {} : state.parked
+  let pending = ctx.pending
   let sent = state.sent
   for (const target of slotsOf(ctx.chains)) {
     const slotKey = pluginSlotKey(target)
     const prevId = occupant(from, target)
     const nextId = occupant(ctx.chains, target)
     const changed = prevId !== nextId
+    const queue = sent[slotKey] ?? []
+    const last = queue[queue.length - 1]
+    // What the engine will hold there once everything sent so far has landed.
+    const engineHas =
+      last !== undefined
+        ? last.pluginId === ''
+          ? null
+          : last.pluginId
+        : prevId !== null && !state.uncataloged.includes(slotKey) && !state.failed.includes(slotKey)
+          ? prevId
+          : null
+    const send = (pluginId: string, stateBase64: string | null): void => {
+      sent = withSent(sent, slotKey, {
+        pluginId,
+        stateBase64,
+        outgoing: engineHas,
+        generation: ctx.generation
+      })
+    }
     if (nextId === null) {
       uncataloged.delete(slotKey)
+      failed.delete(slotKey)
       if (changed) {
         unloads.push(target)
-        sent = withSent(sent, slotKey, { pluginId: '', stateBase64: null })
+        send('', null)
       }
       continue
     }
-    const stored = stateForSlot(ctx.pending, slotKey, nextId) ?? null
-    const queue = sent[slotKey] ?? []
-    const last = queue[queue.length - 1]
+    if (changed) failed.delete(slotKey)
+    let stored = stateForSlot(pending, slotKey, nextId) ?? null
     const storedNotSent =
       stored !== null &&
       !(last !== undefined && last.pluginId === nextId && last.stateBase64 === stored)
-    if (!changed && !force.has(slotKey) && !storedNotSent) continue
+    if (!changed && !reopened && !force.has(slotKey) && (failed.has(slotKey) || !storedNotSent))
+      continue
     const path = ctx.pathOf(nextId)
     if (path === null) {
       uncataloged.add(slotKey)
       missing.push(target)
       // The engine may still hold the plugin this slot had before.
-      if (changed && prevId !== null && !state.uncataloged.includes(slotKey)) {
+      if ((changed || reopened) && engineHas !== null) {
         unloads.push(target)
-        sent = withSent(sent, slotKey, { pluginId: '', stateBase64: null })
+        send('', null)
       }
       continue
     }
+    if (stored === null) {
+      // Back in a slot it was unloaded from (an undo): with the settings it left with.
+      const blob = parked[slotKey]?.[nextId]
+      if (blob !== undefined) {
+        stored = blob
+        pending = { ...pending, [slotKey]: { pluginId: nextId, stateBase64: blob } }
+        const restOfSlot = { ...parked[slotKey] }
+        delete restOfSlot[nextId]
+        parked = { ...parked, [slotKey]: restOfSlot }
+      }
+    }
     uncataloged.delete(slotKey)
+    failed.delete(slotKey)
     loads.push({ slotKey, target, pluginId: nextId, path, stateBase64: stored })
-    sent = withSent(sent, slotKey, { pluginId: nextId, stateBase64: stored })
+    send(nextId, stored)
   }
   return {
-    state: { ...state, synced: ctx.chains, uncataloged: [...uncataloged], sent },
+    state: {
+      ...state,
+      synced: ctx.chains,
+      syncedGeneration: ctx.generation,
+      uncataloged: [...uncataloged],
+      failed: [...failed],
+      sent,
+      parked
+    },
+    pending,
     loads,
     unloads,
     missing
@@ -216,7 +362,7 @@ export function pluginSwitchStep(
       if (event.on) {
         if (state.phase === 'off') {
           const r = reconcile(
-            { ...state, phase: 'live', uncataloged: [] },
+            { ...state, phase: 'live', uncataloged: [], failed: [] },
             EMPTY_PLUGIN_CHAINS,
             ctx
           )
@@ -235,7 +381,12 @@ export function pluginSwitchStep(
       if (state.phase === 'live') {
         return {
           ...nothing,
-          state: { ...state, phase: 'capturing', resumeAfterCapture: false },
+          state: {
+            ...state,
+            phase: 'capturing',
+            resumeAfterCapture: false,
+            captureId: state.captureId + 1
+          },
           capture: true
         }
       }
@@ -252,13 +403,34 @@ export function pluginSwitchStep(
     }
 
     case 'catalog-changed': {
-      if (state.phase !== 'live' || state.uncataloged.length === 0) return nothing
-      const r = reconcile(state, state.synced, ctx, new Set(state.uncataloged))
+      const retry = [...state.uncataloged, ...state.failed]
+      if (state.phase !== 'live' || retry.length === 0) return nothing
+      const r = reconcile(state, state.synced, ctx, new Set(retry))
       return { ...nothing, ...r }
     }
 
+    case 'retry-failed': {
+      if (state.phase !== 'live' || state.failed.length === 0) return nothing
+      const r = reconcile(state, state.synced, ctx, new Set(state.failed))
+      return { ...nothing, ...r }
+    }
+
+    case 'retry-capture': {
+      if (state.phase !== 'held') return nothing
+      return {
+        ...nothing,
+        state: {
+          ...state,
+          phase: 'capturing',
+          resumeAfterCapture: false,
+          captureId: state.captureId + 1
+        },
+        capture: true
+      }
+    }
+
     case 'capture-done': {
-      if (state.phase !== 'capturing') return nothing
+      if (state.phase !== 'capturing' || event.captureId !== state.captureId) return nothing
       if (state.resumeAfterCapture) {
         // Back on: the engine still holds every plugin with its live settings. Nothing is merged
         // into pending (it would only reload them); only what changed meanwhile goes out.
@@ -273,16 +445,19 @@ export function pluginSwitchStep(
         // Unloading now would lose the live settings: leave them in the engine.
         return { ...nothing, state: { ...state, phase: 'held' } }
       }
-      const uncataloged = new Set(state.uncataloged)
+      // Another project opened while it was in flight: what came back is the old one's.
+      const projectReplaced = state.syncedGeneration !== ctx.generation
+      const skip = new Set([...state.uncataloged, ...state.failed])
       let pending = ctx.pending
-      if (!event.projectReplaced) {
+      if (!projectReplaced) {
         const captured = buildPluginStatesMap(
           event.raw,
           state.synced.masterChain,
           state.synced.channelPlugins
         )
-        // An uncataloged slot was never loaded: whatever the engine has there isn't its plugin.
-        for (const slotKey of uncataloged) delete captured[slotKey]
+        // An uncataloged or failed slot was never loaded: whatever the engine has there isn't
+        // its plugin.
+        for (const slotKey of skip) delete captured[slotKey]
         // A slot that came back empty (a load still in flight, say) keeps its saved settings.
         pending = { ...ctx.pending, ...captured }
       }
@@ -290,9 +465,15 @@ export function pluginSwitchStep(
       let sent = state.sent
       for (const target of slotsOf(state.synced)) {
         const slotKey = pluginSlotKey(target)
-        if (occupant(state.synced, target) === null || uncataloged.has(slotKey)) continue
+        const id = occupant(state.synced, target)
+        if (id === null || skip.has(slotKey)) continue
         unloads.push(target)
-        sent = withSent(sent, slotKey, { pluginId: '', stateBase64: null })
+        sent = withSent(sent, slotKey, {
+          pluginId: '',
+          stateBase64: null,
+          outgoing: id,
+          generation: state.syncedGeneration
+        })
       }
       return {
         ...nothing,
@@ -302,6 +483,7 @@ export function pluginSwitchStep(
           resumeAfterCapture: false,
           synced: EMPTY_PLUGIN_CHAINS,
           uncataloged: [],
+          failed: [],
           sent
         },
         pending,
@@ -314,7 +496,7 @@ export function pluginSwitchStep(
       const head = queue[0]
       if (head === undefined || head.pluginId !== event.pluginId) return nothing
       const rest = queue.slice(1)
-      const sent = { ...state.sent }
+      let sent = { ...state.sent }
       if (rest.length === 0) delete sent[event.slotKey]
       else sent[event.slotKey] = rest
       let pending = ctx.pending
@@ -330,10 +512,68 @@ export function pluginSwitchStep(
         pending = { ...pending }
         delete pending[event.slotKey]
       }
-      return { ...nothing, state: { ...state, sent }, pending }
+      let parked = state.parked
+      if (
+        event.previousState &&
+        head.outgoing !== null &&
+        head.outgoing !== head.pluginId &&
+        head.generation === ctx.generation &&
+        state.syncedGeneration === ctx.generation
+      ) {
+        parked = {
+          ...parked,
+          [event.slotKey]: { ...parked[event.slotKey], [head.outgoing]: event.previousState }
+        }
+      }
+      let failed = state.failed
+      const unloads: PluginSlotTarget[] = []
+      if (event.pluginId !== '' && rest.length === 0) {
+        if (event.success) {
+          failed = failed.filter((k) => k !== event.slotKey)
+        } else if (state.phase === 'live' && !failed.includes(event.slotKey)) {
+          // The slot keeps its plugin and saved settings, marked failed. The engine left the slot
+          // as it was: empty it, so what plays matches the slot.
+          failed = [...failed, event.slotKey]
+          if (head.outgoing !== null) {
+            unloads.push(targetOfSlotKey(event.slotKey))
+            sent = withSent(sent, event.slotKey, {
+              pluginId: '',
+              stateBase64: null,
+              outgoing: head.outgoing,
+              generation: head.generation
+            })
+          }
+        }
+      }
+      return { ...nothing, state: { ...state, sent, parked, failed }, pending, unloads }
     }
 
-    case 'engine-restarted':
-      return { ...nothing, state: { ...state, sent: {} } }
+    case 'engine-restarted': {
+      // The new engine holds nothing. Settings already handed over come back from the fallback;
+      // any capture sent to the old engine is not waited on.
+      const pending = withFallback(ctx.pending, event.fallback, ctx.chains)
+      const base: PluginSwitchState = {
+        ...state,
+        sent: {},
+        uncataloged: [],
+        failed: [],
+        captureId: state.captureId + 1
+      }
+      const reload =
+        state.phase === 'live' || (state.phase === 'capturing' && state.resumeAfterCapture)
+      if (reload) {
+        const r = reconcile(
+          { ...base, phase: 'live', resumeAfterCapture: false, synced: EMPTY_PLUGIN_CHAINS },
+          EMPTY_PLUGIN_CHAINS,
+          { ...ctx, pending }
+        )
+        return { ...nothing, ...r }
+      }
+      return {
+        ...nothing,
+        state: { ...base, phase: 'off', resumeAfterCapture: false, synced: EMPTY_PLUGIN_CHAINS },
+        pending
+      }
+    }
   }
 }

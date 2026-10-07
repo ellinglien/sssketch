@@ -1303,8 +1303,8 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('open-library-sketch', (_event, name: string) => openLibrarySketch(name))
 
-  ipcMain.handle('duplicate-sketch', (_event, currentName: string) =>
-    duplicateSketchAsNewVersion(currentName)
+  ipcMain.handle('duplicate-sketch', (_event, currentName: string, json: string) =>
+    duplicateSketchAsNewVersion(currentName, json)
   )
 
   ipcMain.handle('rename-sketch', (_event, oldName: string, newName: string) =>
@@ -2540,6 +2540,15 @@ app.whenReady().then(async () => {
         }
       })
     }
+    // Unsolicited, from the engine's link-poll timer: a parameter changed in
+    // an open plugin editor window -- the project now has unsaved changes.
+    function subscribeToPluginEdited(): void {
+      engine.client.on('plugin-edited', () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents.send('engine-plugin-edited')
+        }
+      })
+    }
     // Mirrors subscribeToPositionUpdates exactly -- same "re-subscribe on
     // every crash-recovery respawn" requirement applies here too (see that
     // function's own doc comment above), since this push rides the same
@@ -2606,6 +2615,7 @@ app.whenReady().then(async () => {
     subscribeToProjectApplied()
     subscribeToMasterPluginLoaded()
     subscribeToChannelPluginLoaded()
+    subscribeToPluginEdited()
     subscribeToCaptureLevelUpdates()
     subscribeToGatedRecordingUpdates()
     subscribeToLinkTempoChanged()
@@ -2616,6 +2626,7 @@ app.whenReady().then(async () => {
       subscribeToProjectApplied()
       subscribeToMasterPluginLoaded()
       subscribeToChannelPluginLoaded()
+      subscribeToPluginEdited()
       subscribeToCaptureLevelUpdates()
       subscribeToGatedRecordingUpdates()
       subscribeToLinkTempoChanged()

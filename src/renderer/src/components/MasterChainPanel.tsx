@@ -10,6 +10,7 @@ import {
   usePluginCatalogActions
 } from '../state/StoreContext'
 import { PluginCatalogBrowser } from './PluginCatalogBrowser'
+import { markPluginsTouched } from '../state/pluginsTouched'
 
 const SLOT_LABELS = ['1', '2', '3', '4'] as const
 
@@ -182,7 +183,12 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
                 }}
               />
               <button
-                onClick={() => void window.rifffApi.engineOpenMasterPluginEditor(slot)}
+                onClick={() => {
+                  // A knob is only reachable in its editor: the project may
+                  // now differ from its last save (pluginsTouched.ts).
+                  markPluginsTouched()
+                  void window.rifffApi.engineOpenMasterPluginEditor(slot)
+                }}
                 disabled={editDisabled}
                 aria-label={`edit slot ${label} plugin`}
                 data-tooltip={`edit slot ${label}`}

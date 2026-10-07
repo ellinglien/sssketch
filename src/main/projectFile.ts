@@ -281,23 +281,27 @@ export function openLibrarySketch(name: string): { path: string; json: string } 
   }
 }
 
-/** "Duplicate as new version": copies currentName's own project JSON
- * verbatim into a freshly-computed `<name>-N` sketch. Nothing audio-related
- * is copied here -- the project file is just JSON pointers to source stem
- * paths; the new sketch's own NEXT Ableton export benefits from the shared
- * sample cache automatically (see projectLibrary.ts), no special-casing
- * needed at this layer. Returns null if currentName isn't an existing
- * library sketch. */
+/** "Duplicate as new version": writes `json` -- the live project, unsaved
+ * edits and plugin settings included (the renderer's serializeForSave) --
+ * as a freshly-computed `<name>-N` sketch. The original sketch is never
+ * written: its folder stays byte-identical, so the edits move to the new
+ * version and the original keeps what it last saved. As before, the project
+ * file is the only file the new version gets: nothing audio-related is
+ * copied (the project file is just JSON pointers to source stem paths; the
+ * new sketch's own NEXT Ableton export benefits from the shared sample
+ * cache automatically, see projectLibrary.ts), and the original's exports,
+ * backups and favourite flag stay its own. Returns null if currentName
+ * isn't an existing library sketch. */
 export function duplicateSketchAsNewVersion(
-  currentName: string
+  currentName: string,
+  json: string
 ): { name: string; path: string } | null {
-  const source = openLibrarySketch(currentName)
-  if (!source) return null
+  if (!existsSync(sketchProjectPath(currentName))) return null
   const newName = nextVersionName(
     currentName,
     listLibrarySketches().map((s) => s.name)
   )
-  return { name: newName, ...saveProjectToLibrary(newName, source.json) }
+  return { name: newName, ...saveProjectToLibrary(newName, json) }
 }
 
 const AUTOSAVE_FILENAME = 'autosave.sssketchproj'

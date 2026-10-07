@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { initialState, reducer, type AppState } from './store'
 import { deserializeProject } from './serialize'
-import { dirtyCheckJson, projectJsonForSave } from './saveSerialization'
+import {
+  createAutosaveGate,
+  dirtyCheckJson,
+  liveSettingsForSave,
+  projectJsonForSave
+} from './saveSerialization'
 import { hasUnsavedChanges } from './unsavedChanges'
 import type { PluginStatesMap, RawPluginStatesCapture } from '@shared/pluginStates'
 import type { Rifff } from '@shared/types'
@@ -25,7 +30,26 @@ function withPlugins(): AppState {
   return state
 }
 
-const emptyCapture: RawPluginStatesCapture = { masterChain: ['', '', '', ''], channelChains: [] }
+const chainsOf = (
+  state: AppState
+): { masterChain: (string | null)[]; channelPlugins: AppState['channelPlugins'] } => ({
+  masterChain: state.masterChain,
+  channelPlugins: state.channelPlugins
+})
+
+describe('liveSettingsForSave', () => {
+  it('takes the engine`s settings only for the slots it holds for this project', () => {
+    const state = withPlugins()
+    const raw: RawPluginStatesCapture = {
+      masterChain: ['VERB-LIVE', 'COMP-LIVE', '', ''],
+      channelChains: []
+    }
+    expect(liveSettingsForSave(raw, chainsOf(state), new Set(['master:0']))).toEqual({
+      'master:0': { pluginId: 'verb', stateBase64: 'VERB-LIVE' }
+    })
+    expect(liveSettingsForSave(null, chainsOf(state), new Set(['master:0']))).toEqual({})
+  })
+})
 
 describe('projectJsonForSave', () => {
   it('writes the engine`s live settings for a loaded plugin, and the saved ones for a plugin not loaded', () => {
@@ -33,11 +57,12 @@ describe('projectJsonForSave', () => {
     const pending: PluginStatesMap = {
       'master:1': { pluginId: 'comp', stateBase64: 'COMP-SAVED' }
     }
-    const json = projectJsonForSave(
-      state,
+    const live = liveSettingsForSave(
       { masterChain: ['VERB-LIVE', '', '', ''], channelChains: [] },
-      pending
+      chainsOf(state),
+      new Set(['master:0', 'master:1'])
     )
+    const json = projectJsonForSave(state, live, pending, {})
     expect(JSON.parse(json).pluginStates).toEqual({
       'master:0': { pluginId: 'verb', stateBase64: 'VERB-LIVE' },
       'master:1': { pluginId: 'comp', stateBase64: 'COMP-SAVED' }
@@ -50,15 +75,49 @@ describe('projectJsonForSave', () => {
       'master:0': { pluginId: 'verb', stateBase64: 'V' },
       'master:1': { pluginId: 'comp', stateBase64: 'C' }
     }
-    expect(JSON.parse(projectJsonForSave(state, emptyCapture, pending)).pluginStates).toEqual(
-      pending
-    )
+    expect(JSON.parse(projectJsonForSave(state, {}, pending, {})).pluginStates).toEqual(pending)
   })
 
-  it('with no engine answer at all (best effort, the crash-recovery autosave) still writes the saved settings', () => {
+  it('never writes another project`s settings for the same plugin: a slot the engine does not hold for this project takes this project`s own', () => {
+    // Project B open, same plugin in the same slot as project A, whose instance the engine
+    // still has (held, or a capture/load in flight): slotsEngineHolds leaves master:0 out.
     const state = withPlugins()
-    const pending: PluginStatesMap = { 'master:0': { pluginId: 'verb', stateBase64: 'V' } }
-    expect(JSON.parse(projectJsonForSave(state, null, pending)).pluginStates).toEqual(pending)
+    const bSaved: PluginStatesMap = { 'master:0': { pluginId: 'verb', stateBase64: 'B-VERB' } }
+    const live = liveSettingsForSave(
+      { masterChain: ['A-VERB', '', '', ''], channelChains: [] },
+      chainsOf(state),
+      new Set()
+    )
+    expect(JSON.parse(projectJsonForSave(state, live, bSaved, {})).pluginStates).toEqual(bSaved)
+  })
+
+  it('fills a slot neither held nor pending from the latest capture; saved settings beat it, live ones beat both', () => {
+    const state = withPlugins()
+    const fallback: PluginStatesMap = {
+      'master:0': { pluginId: 'verb', stateBase64: 'VERB-CAPTURED' },
+      'master:1': { pluginId: 'comp', stateBase64: 'COMP-CAPTURED' },
+      'master:2': { pluginId: 'gone', stateBase64: 'NOT-IN-THE-SLOT' }
+    }
+    const pending: PluginStatesMap = { 'master:1': { pluginId: 'comp', stateBase64: 'COMP-SAVED' } }
+    expect(JSON.parse(projectJsonForSave(state, {}, pending, fallback)).pluginStates).toEqual({
+      'master:0': { pluginId: 'verb', stateBase64: 'VERB-CAPTURED' },
+      'master:1': { pluginId: 'comp', stateBase64: 'COMP-SAVED' }
+    })
+    const live = { 'master:0': { pluginId: 'verb', stateBase64: 'VERB-LIVE' } }
+    expect(
+      JSON.parse(projectJsonForSave(state, live, pending, fallback)).pluginStates['master:0']
+    ).toEqual(live['master:0'])
+  })
+})
+
+describe('createAutosaveGate', () => {
+  it('drops an autosave started before a save, a discard or a clear', () => {
+    const gate = createAutosaveGate()
+    const before = gate.begin()
+    expect(gate.isCurrent(before)).toBe(true)
+    gate.bump()
+    expect(gate.isCurrent(before)).toBe(false)
+    expect(gate.isCurrent(gate.begin())).toBe(true)
   })
 })
 
@@ -66,7 +125,7 @@ describe('dirtyCheckJson', () => {
   it('a project with plugin settings reads as saved right after it is opened, and right after a save', () => {
     const state = withPlugins()
     const pending: PluginStatesMap = { 'master:0': { pluginId: 'verb', stateBase64: 'V' } }
-    const fileJson = projectJsonForSave(state, emptyCapture, pending)
+    const fileJson = projectJsonForSave(state, {}, pending, {})
     const { state: opened, pluginStates } = deserializeProject(JSON.parse(fileJson))
     expect(pluginStates).toEqual(pending)
     // What App.tsx records as "last saved" when opening it, and what it compares live:

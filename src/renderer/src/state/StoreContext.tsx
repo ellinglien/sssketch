@@ -23,13 +23,11 @@ import { isWithinManualSeekGrace } from './manualSeek'
 import type { PluginCatalog } from '../../../main/pluginCatalog'
 import type { PluginStatesMap } from '@shared/pluginStates'
 import {
-  initialPluginSwitchState,
   pluginSlotKey,
   pluginSwitchStep,
   type PluginChains,
   type PluginSlotTarget,
   type PluginSwitchEvent,
-  type PluginSwitchState,
   type PluginSwitchStep
 } from '@shared/pluginSwitch'
 import { useFeatureEnabled } from './appFeatures'
@@ -37,8 +35,25 @@ import {
   announceProjectOpened,
   pendingPluginStatesGeneration,
   pendingPluginStatesRef as pluginStatesRef,
+  pluginCaptureFallback,
+  pluginSwitchStateRef as pluginSwitchRef,
   replacePendingPluginStates
 } from './pendingPluginStates'
+import { markPluginsTouched } from './pluginsTouched'
+
+/** How long 'held' (a switch-off whose capture failed, plugins left loaded) waits before asking
+ * the engine for their settings again. */
+const HELD_RETRY_MS = 5000
+
+/** How many times a channel plugin load that failed with "unknown channel" is retried (see the
+ * channel-plugin-loaded handler). */
+const UNKNOWN_CHANNEL_RETRIES = 5
+
+/** A slot's status text while its plugin failed to load: the slot keeps the plugin and its saved
+ * settings (@shared/pluginSwitch's `failed`), retried after a scan. */
+function failedToLoadText(error: string | undefined): string {
+  return `failed to load · ${error ?? 'unknown error'} · scan for plugins to retry`
+}
 
 // Playback position/state now live entirely outside the undo-tracked main
 // reducer — see StoreProvider's dispatch below. Previously they were fields
@@ -846,7 +861,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   // hasn't had yet (a project reopened with the same plugin in the same
   // slot); a plugin the catalog has no path for is never sent (the engine
   // would report an empty slot as a success) and loads once a scan finds it.
-  const pluginSwitchRef = useRef<PluginSwitchState>(initialPluginSwitchState)
+  // pluginSwitchRef: pendingPluginStates.ts's module-level holder (a save reads it).
   const pluginCatalogRef = useRef(pluginCatalog)
   const setSlotStatus = useCallback(
     (target: PluginSlotTarget, status: MasterChainSlotStatus, error: string | null): void => {
@@ -890,12 +905,14 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       const step = pluginSwitchStep(pluginSwitchRef.current, event, {
         chains,
         pending: pluginStatesRef.current,
-        pathOf: (id) => catalog.plugins.find((p) => p.id === id)?.path ?? null
+        pathOf: (id) => catalog.plugins.find((p) => p.id === id)?.path ?? null,
+        generation: pendingPluginStatesGeneration()
       })
       pluginSwitchRef.current = step.state
       pluginStatesRef.current = step.pending
       for (const target of step.unloads) {
-        setSlotStatus(target, 'idle', null)
+        // A failed slot keeps showing why (the unload only empties the engine's slot).
+        if (!step.state.failed.includes(pluginSlotKey(target))) setSlotStatus(target, 'idle', null)
         if (target.kind === 'master')
           void window.rifffApi.engineLoadMasterPlugin(target.slot, null, null, null)
         else
@@ -933,30 +950,44 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     [setSlotStatus]
   )
 
-  // applyPluginStep, plus the capture a switch-off asks for: its answer is
-  // fed back as capture-done (which never asks for another).
+  // applyPluginStep, plus the capture a switch-off (or a retry) asks for --
+  // its answer is fed back as capture-done -- and, while 'held' (that capture
+  // failed, the plugins are still loaded), a retry after HELD_RETRY_MS.
+  // Through a ref so the capture's and the timer's callbacks reach the
+  // current one.
+  const heldRetryTimerRef = useRef<number | null>(null)
+  const stepPluginsRef = useRef<(event: PluginSwitchEvent, chains: PluginChains) => void>(() => {})
   const stepPlugins = useCallback(
     (event: PluginSwitchEvent, chains: PluginChains): void => {
       const step = applyPluginStep(event, chains)
+      if (step.state.phase === 'held' && heldRetryTimerRef.current === null) {
+        heldRetryTimerRef.current = window.setTimeout(() => {
+          heldRetryTimerRef.current = null
+          const now = stateRef.current
+          stepPluginsRef.current(
+            { type: 'retry-capture' },
+            { masterChain: now.masterChain, channelPlugins: now.channelPlugins }
+          )
+        }, HELD_RETRY_MS)
+      }
       if (!step.capture) return
-      const generation = pendingPluginStatesGeneration()
+      const captureId = step.state.captureId
       void window.rifffApi
         .engineGetPluginStates()
         .catch(() => null)
         .then((raw) => {
           const now = stateRef.current
-          applyPluginStep(
-            {
-              type: 'capture-done',
-              raw,
-              projectReplaced: pendingPluginStatesGeneration() !== generation
-            },
+          stepPluginsRef.current(
+            { type: 'capture-done', captureId, raw },
             { masterChain: now.masterChain, channelPlugins: now.channelPlugins }
           )
         })
     },
     [applyPluginStep]
   )
+  useEffect(() => {
+    stepPluginsRef.current = stepPlugins
+  }, [stepPlugins])
 
   // Declared before the switch effect: in the commit where the catalog
   // first arrives (catalogLoaded flips with it), the switch must already see it.
@@ -1007,118 +1038,96 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally re-runs on catalog/masterChain changes only; dispatch is stable
   }, [pluginsOn, pluginCatalog, state.masterChain])
 
-  useEffect(() => {
-    return window.rifffApi.onMasterPluginLoaded(({ slot, pluginId, success, error }) => {
-      if (!success)
-        console.error(`StoreContext: master chain slot ${slot} failed to load plugin: ${error}`)
-      setMasterChainStatus((s) => {
-        const next = [...s] as typeof s
-        // pluginId is empty for an unload request (see engineLoadMasterPlugin's
-        // null-path convention) -- a successful UNLOAD must land on 'idle', not
-        // 'loaded', or clearing a slot (including the auto-clear below, after a
-        // failed load) leaves the status dot bright and Edit clickable for a
-        // slot that's actually empty.
-        next[slot] = success ? (pluginId ? 'loaded' : 'idle') : 'error'
-        return next
-      })
-      setMasterChainError((s) => {
-        const next = [...s] as typeof s
-        next[slot] = success ? null : (error ?? 'unknown error')
-        return next
-      })
-      stepPlugins(
-        {
-          type: 'load-result',
-          slotKey: pluginSlotKey({ kind: 'master', slot }),
-          pluginId,
-          success
-        },
-        {
-          masterChain: stateRef.current.masterChain,
-          channelPlugins: stateRef.current.channelPlugins
-        }
-      )
-      // Only a real load's failure, and only while plugins are live: an
-      // unload's failure, or one while the switch is off, must not cost the
-      // project its plugin (the advanced features switch keeps the data).
-      if (
-        !success &&
-        pluginId &&
-        pluginSwitchRef.current.phase === 'live' &&
-        stateRef.current.masterChain[slot] === pluginId
-      ) {
-        // A failed load must not leave state.masterChain[slot] pointing at the
-        // plugin id that just failed -- otherwise a later, unrelated engine
-        // crash-recovery restart would keep resending load-master-plugin for
-        // the same known-bad id forever. rawDispatch (not dispatch) since this
-        // is plain state cleanup, not a user edit worth its own undo step; the
-        // SET_MASTER_CHAIN_PLUGIN case above would also reset
-        // masterChainStatus/masterChainError back to 'idle'/null and fire
-        // another (pointless) engineLoadMasterPlugin IPC call right back --
-        // acceptable, matches the reverted send-bus feature's own precedent.
-        rawDispatch({
-          type: 'SET_MASTER_CHAIN_PLUGIN',
-          slot: slot as 0 | 1 | 2 | 3,
-          pluginId: null
-        })
+  // A load or unload reply's slot status. pluginId is empty for an unload
+  // (engineLoad*Plugin's null-path convention): a successful UNLOAD lands on
+  // 'idle', not 'loaded', or a cleared slot keeps its dot bright and Edit
+  // clickable. A failed load no longer clears the slot from the project (a
+  // dongle unplugged for a minute would cost the project its plugin and its
+  // settings): the slot keeps both, shows "failed to load", and is retried
+  // after a scan (@shared/pluginSwitch's `failed`) -- including through the
+  // unload that empties the engine's slot after it.
+  const showLoadResult = useCallback(
+    (target: PluginSlotTarget, pluginId: string, success: boolean, error?: string): void => {
+      if (pluginSwitchRef.current.failed.includes(pluginSlotKey(target))) {
+        // The failed load's own reply; the unload after it leaves the message as it is.
+        if (!success && pluginId !== '') setSlotStatus(target, 'error', failedToLoadText(error))
+        return
       }
-    })
-  }, [stepPlugins])
+      if (success) setSlotStatus(target, pluginId ? 'loaded' : 'idle', null)
+      else setSlotStatus(target, 'error', error ?? 'unknown error')
+    },
+    [setSlotStatus]
+  )
 
   useEffect(() => {
-    return window.rifffApi.onChannelPluginLoaded(
-      ({ channelId, slot, pluginId, success, error }) => {
+    return window.rifffApi.onMasterPluginLoaded(
+      ({ slot, pluginId, success, error, previousState }) => {
         if (!success)
-          console.error(
-            `StoreContext: channel "${channelId}" slot ${slot} failed to load plugin: ${error}`
-          )
-        setChannelChainStatus((s) => {
-          const existing =
-            s[channelId] ?? (['idle', 'idle'] as [MasterChainSlotStatus, MasterChainSlotStatus])
-          const next = [...existing] as [MasterChainSlotStatus, MasterChainSlotStatus]
-          // See onMasterPluginLoaded's own comment -- same fix, same bug: an
-          // empty pluginId means this reply is for an unload, not a real load,
-          // so a successful one must land on 'idle', not 'loaded'.
-          next[slot] = success ? (pluginId ? 'loaded' : 'idle') : 'error'
-          return { ...s, [channelId]: next }
-        })
-        setChannelChainError((s) => {
-          const existing = s[channelId] ?? ([null, null] as [string | null, string | null])
-          const next = [...existing] as [string | null, string | null]
-          next[slot] = success ? null : (error ?? 'unknown error')
-          return { ...s, [channelId]: next }
-        })
+          console.error(`StoreContext: master chain slot ${slot} failed to load plugin: ${error}`)
+        const target: PluginSlotTarget = { kind: 'master', slot }
         stepPlugins(
           {
             type: 'load-result',
-            slotKey: pluginSlotKey({ kind: 'channel', channelId, slot }),
+            slotKey: pluginSlotKey(target),
             pluginId,
-            success
+            success,
+            previousState
           },
           {
             masterChain: stateRef.current.masterChain,
             channelPlugins: stateRef.current.channelPlugins
           }
         )
-        if (
+        showLoadResult(target, pluginId, success, error)
+      }
+    )
+  }, [stepPlugins, showLoadResult])
+
+  const unknownChannelRetriesRef = useRef(0)
+  useEffect(() => {
+    return window.rifffApi.onChannelPluginLoaded(
+      ({ channelId, slot, pluginId, success, error, previousState }) => {
+        if (!success)
+          console.error(
+            `StoreContext: channel "${channelId}" slot ${slot} failed to load plugin: ${error}`
+          )
+        const target: PluginSlotTarget = { kind: 'channel', channelId, slot }
+        stepPlugins(
+          {
+            type: 'load-result',
+            slotKey: pluginSlotKey(target),
+            pluginId,
+            success,
+            previousState
+          },
+          {
+            masterChain: stateRef.current.masterChain,
+            channelPlugins: stateRef.current.channelPlugins
+          }
+        )
+        showLoadResult(target, pluginId, success, error)
+        // The load can reach the engine before the project that creates its
+        // channel (the engine sync is built asynchronously, e.g. right after
+        // a project is opened): retry a few times, a little later each time.
+        if (success && pluginId) unknownChannelRetriesRef.current = 0
+        else if (
           !success &&
           pluginId &&
-          pluginSwitchRef.current.phase === 'live' &&
-          stateRef.current.channelPlugins[channelId]?.[slot] === pluginId
+          error?.startsWith('unknown channel') &&
+          unknownChannelRetriesRef.current < UNKNOWN_CHANNEL_RETRIES
         ) {
-          // Same reasoning as the master chain's own equivalent cleanup above
-          // -- a failed load must not leave channelPlugins[channelId][slot]
-          // pointing at the plugin id that just failed.
-          rawDispatch({
-            type: 'SET_CHANNEL_CHAIN_PLUGIN',
-            channelId,
-            slot: slot as 0 | 1,
-            pluginId: null
-          })
+          unknownChannelRetriesRef.current += 1
+          window.setTimeout(() => {
+            const now = stateRef.current
+            stepPlugins(
+              { type: 'retry-failed' },
+              { masterChain: now.masterChain, channelPlugins: now.channelPlugins }
+            )
+          }, 1000 * unknownChannelRetriesRef.current)
         }
       }
     )
-  }, [stepPlugins])
+  }, [stepPlugins, showLoadResult])
 
   useEffect(() => {
     return window.rifffApi.onEnginePositionUpdate((pos) => {
@@ -1184,8 +1193,10 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   useEffect(() => {
     return window.rifffApi.onEngineRestarted(() => {
       dispatch({ type: 'STOP' })
+      // The new engine holds no plugin: every slot is reloaded, settings
+      // already handed over coming from the latest capture.
       stepPlugins(
-        { type: 'engine-restarted' },
+        { type: 'engine-restarted', fallback: pluginCaptureFallback() },
         {
           masterChain: stateRef.current.masterChain,
           channelPlugins: stateRef.current.channelPlugins
@@ -1193,6 +1204,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       )
     })
   }, [dispatch, stepPlugins])
+
+  // A parameter changed in an open plugin editor window (the engine's
+  // 'plugin-edited', at most every ~750 ms): the project is unsaved
+  // (pluginsTouched.ts). Opening an editor sets the same flag (the panels).
+  useEffect(() => window.rifffApi.onPluginEdited(() => markPluginsTouched()), [])
 
   return (
     <StateCtx.Provider value={state}>

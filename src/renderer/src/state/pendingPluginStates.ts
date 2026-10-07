@@ -2,6 +2,8 @@
 // with what sits outside it (kept out of StoreContext.tsx so that file exports only components
 // and hooks).
 import type { PluginStatesMap } from '@shared/pluginStates'
+import { initialPluginSwitchState, type PluginSwitchState } from '@shared/pluginSwitch'
+import { clearPluginsTouched } from './pluginsTouched'
 
 /** The project's saved plugin settings the engine hasn't been handed yet -- see pluginStates.ts's
  * own doc comment for why this deliberately lives OUTSIDE the reducer/AppState. An entry stays
@@ -13,20 +15,47 @@ import type { PluginStatesMap } from '@shared/pluginStates'
  * (serializeForSave, mergePendingPluginStates). */
 export const pendingPluginStatesRef: { current: PluginStatesMap } = { current: {} }
 
-// Bumped by each replacement below (a project opened, a new one started), so the plugin switch's
-// capture can tell that what it read back belongs to a project no longer open
-// (@shared/pluginSwitch's capture-done `projectReplaced`).
+/** What @shared/pluginSwitch says the engine holds of the project's plugins -- owned by
+ * StoreContext (the only writer), read by a save (App.tsx's serializeForSave, through
+ * slotsEngineHolds) to know which slots' captured settings are this project's. */
+export const pluginSwitchStateRef: { current: PluginSwitchState } = {
+  current: initialPluginSwitchState
+}
+
+// Bumped by each replacement below (a project opened, a new one started): the project
+// generation @shared/pluginSwitch is given, so nothing the engine holds or reads back for one
+// project is taken as another's.
 let pendingGeneration = 0
 
+// The latest capture of this project's plugin settings (a save's or the autosave's: only the
+// slots the engine held for it), for an engine restart to reload a slot whose saved settings
+// were already handed over (@shared/pluginSwitch's engine-restarted `fallback`), and for a save
+// to fill such a slot until it has (saveSerialization.ts). This project's only.
+let captureFallback: PluginStatesMap = {}
+
 /** The project's saved plugin settings, replaced wholesale: a project was opened (its own), or a
- * new one started (none). */
+ * new one started (none). Also starts its plugin settings from scratch: no capture of the old
+ * project is kept, and nothing has been touched since its "save". */
 export function replacePendingPluginStates(pluginStates: PluginStatesMap): void {
   pendingPluginStatesRef.current = pluginStates
   pendingGeneration += 1
+  captureFallback = {}
+  clearPluginsTouched()
 }
 
 export function pendingPluginStatesGeneration(): number {
   return pendingGeneration
+}
+
+/** A capture taken at `generation` (slots the engine held only): merged into the fallback, unless
+ * another project was opened since. */
+export function recordPluginCapture(captured: PluginStatesMap, generation: number): void {
+  if (generation !== pendingGeneration) return
+  captureFallback = { ...captureFallback, ...captured }
+}
+
+export function pluginCaptureFallback(): PluginStatesMap {
+  return captureFallback
 }
 
 // Counts projects opened through StoreContext's restoreState (a sketch, a file, the autosave),
