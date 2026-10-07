@@ -11,6 +11,7 @@ import type {
   RiffPage
 } from '@shared/riffLibraryTypes'
 import { computeOwnerFraction, stemDownloadUrl, resolveKeyName } from '@shared/riffLibraryTypes'
+import { isValidSharedFeedKey } from '@shared/endlesssUsername'
 import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
 import { columnStemSlots, mergeStemSlots, type StemSlotRef } from '@shared/riffStemSlots'
 import { readExtraStemSlots } from './riffStemsExtra'
@@ -398,7 +399,12 @@ export function listJams(filterText: string, targetUser?: string): RiffLibraryJa
     targetUser && targetUser.trim() !== ''
       ? attachJamOwnership(rows, from, targetUser.trim())
       : rows
-  const rows = db ? withCounts(queryJamsFromDb(db, filterText), db) : []
+  // A shared feed under a name that isn't a username: the empty one an
+  // email login synced before 2026-10-07 (@shared/endlesssUsername) -- left
+  // in the db, never listed, so there's one "Shared Feed", not two.
+  const listable = (jam: RiffLibraryJam): boolean =>
+    !jam.jamCID.startsWith('shared:') || isValidSharedFeedKey(jam.jamCID)
+  const rows = db ? withCounts(queryJamsFromDb(db, filterText).filter(listable), db) : []
   // Shared Feed always lives in sssketch's own database regardless of
   // which root is configured for browsing (see dbForJam) -- when that's
   // NOT the currently active root, merge its own real Jams row(s) in
@@ -409,7 +415,7 @@ export function listJams(filterText: string, targetUser?: string): RiffLibraryJa
   const ownDb = openOwnRiffLibraryDb()
   const ownRows = withCounts(
     queryJamsFromDb(ownDb, filterText).filter(
-      (j) => j.jamCID.startsWith('shared:') || j.jamCID === DISCOVERED_JAM_CID
+      (j) => (j.jamCID.startsWith('shared:') && listable(j)) || j.jamCID === DISCOVERED_JAM_CID
     ),
     ownDb
   )

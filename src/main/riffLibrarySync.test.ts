@@ -152,6 +152,16 @@ describe('syncSharedFeed', () => {
     expect(progressUpdates.length).toBeGreaterThan(0)
   })
 
+  it('refuses a name that is not an Endlesss username (an email login): no request, no jam row', async () => {
+    const { syncSharedFeed } = await import('./riffLibrarySync')
+    const db = freshDb()
+    const fetchImpl = vi.fn(async () => new Response('{}', { status: 200 }))
+    await syncSharedFeed('someone@example.org', () => {}, fetchImpl as typeof fetch, db)
+    await syncSharedFeed('', () => {}, fetchImpl as typeof fetch, db)
+    expect(fetchImpl).not.toHaveBeenCalled()
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM Jams`).get()).toEqual({ n: 0 })
+  })
+
   it('a repeat sync with nothing new stops after the first page instead of walking to the end', async () => {
     const { syncSharedFeed } = await import('./riffLibrarySync')
     const db = freshDb()

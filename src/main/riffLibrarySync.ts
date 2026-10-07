@@ -9,6 +9,7 @@ import {
   type FetchLike
 } from './endlesssApi'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
+import { isValidSharedFeedKey } from '@shared/endlesssUsername'
 import {
   upsertJam,
   markJamSyncComplete,
@@ -155,6 +156,12 @@ export async function syncSharedFeed(
   db: Database.Database = openOwnRiffLibraryDb()
 ): Promise<void> {
   const key = `shared:${userName}`
+  // Only a real username's feed: an email login used to sync one under the
+  // email (an empty duplicate "Shared Feed", 2026-10-07).
+  if (!isValidSharedFeedKey(key)) {
+    console.warn(`syncSharedFeed: "${userName}" is not an Endlesss username -- not syncing`)
+    return
+  }
   if (syncsInFlight.has(key)) return
   const controller = new AbortController()
   syncsInFlight.set(key, controller)
