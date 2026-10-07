@@ -12,6 +12,8 @@ import {
   saveInstrumentRowsCache,
   persistRiffIndexPage,
   readRiffIndexMeta,
+  readRiffIndexEntryCount,
+  recordRiffIndexEntryCount,
   resetRiffIndexCache,
   loadCachedRiffOpenRowids
 } from './discoverIndexCache'
@@ -154,6 +156,33 @@ describe('discoverIndexCache', () => {
       expect(prepare.mock.calls.some(([sql]) => String(sql).includes('COUNT('))).toBe(false)
       expect(updates[0]).toEqual({ completed: expect.any(Number), total: 3000 })
       expect(updates[updates.length - 1]).toEqual({ completed: 2500, total: 2500 })
+    })
+
+    it('with no total given, the loads report a running count (total 0) until the end', async () => {
+      const own = freshOwnDb()
+      const index = new Map(
+        [...Array(2500)].map((_, i) => [
+          `s${String(i).padStart(5, '0')}`,
+          { riffCID: 'r1', ownerJamCID: 'j1', bpmRnd: 128, creationTime: 1 }
+        ])
+      )
+      saveRiffIndexCache(own, 'db-a', index, 1)
+      saveInstrumentRowsCache(
+        own,
+        'db-a',
+        [...index.keys()].map((StemCID) => ({ StemCID, Instrument: 1, OwnerJamCID: 'j1' })),
+        index.size
+      )
+      for (const load of [
+        (cb: (c: number, t: number) => void) => loadCachedRiffIndex(own, 'db-a', cb),
+        (cb: (c: number, t: number) => void) => loadCachedInstrumentRows(own, 'db-a', cb)
+      ]) {
+        const updates: Array<{ completed: number; total: number }> = []
+        await load((completed, total) => updates.push({ completed, total }))
+        expect(updates.slice(0, -1).every((u) => u.total === 0 && u.completed > 0)).toBe(true)
+        expect(updates.length).toBeGreaterThan(1)
+        expect(updates[updates.length - 1]).toEqual({ completed: 2500, total: 2500 })
+      }
     })
 
     it('loadCachedRiffIndex returns an empty map for an unknown key', async () => {
@@ -370,6 +399,73 @@ describe('persistRiffIndexPage (sliced saves)', () => {
       watermark: { count: 0, maxRowid: null, keyAtMax: null }
     })
     expect((await loadCachedRiffIndex(own, 'k')).size).toBe(0)
+  })
+})
+
+// 2026-10-07: a load's total must count what the load counts. The meta's
+// RiffCount counts Riffs (900,041 on his archive); the copy holds one entry
+// per stem in a riff (761,929). The entry count is kept beside it.
+describe('the saved riff index entry count', () => {
+  const entry = (
+    i: number
+  ): { riffCID: string; ownerJamCID: string; bpmRnd: number; creationTime: number } => ({
+    riffCID: `r${i}`,
+    ownerJamCID: 'j',
+    bpmRnd: 120,
+    creationTime: i
+  })
+
+  it('unknown for a copy saved without one', () => {
+    const own = freshOwnDb()
+    expect(readRiffIndexEntryCount(own, 'k')).toBeNull()
+    saveRiffIndexCache(own, 'k', new Map([['s1', entry(1)]]), 1)
+    expect(readRiffIndexEntryCount(own, 'k')).toBeNull()
+  })
+
+  it('a reset starts it at 0, each walked page records the walk total, a kept stem adds one', async () => {
+    const own = freshOwnDb()
+    await resetRiffIndexCache(own, 'k')
+    expect(readRiffIndexEntryCount(own, 'k')).toBe(0)
+    await persistRiffIndexPage(own, 'k', {
+      changed: [
+        ['s1', entry(1)],
+        ['s2', entry(1)]
+      ],
+      opened: [],
+      closed: [],
+      watermark: { count: 1, maxRowid: 1, keyAtMax: 'r1' },
+      entries: 2
+    })
+    expect(readRiffIndexEntryCount(own, 'k')).toBe(2)
+    // A page without a total (an older caller) leaves the count alone.
+    await persistRiffIndexPage(own, 'k', {
+      changed: [],
+      opened: [],
+      closed: [],
+      watermark: { count: 2, maxRowid: 2, keyAtMax: 'r2' }
+    })
+    expect(readRiffIndexEntryCount(own, 'k')).toBe(2)
+    appendRiffIndexRows(
+      own,
+      'k',
+      [
+        { stemCID: 's2', riffCID: 'r9', ownerJamCID: 'j', bpmRnd: 120, creationTime: 9 },
+        { stemCID: 's3', riffCID: 'r9', ownerJamCID: 'j', bpmRnd: 120, creationTime: 9 }
+      ],
+      1
+    )
+    expect(readRiffIndexEntryCount(own, 'k')).toBe(3) // s2 was already there
+    expect((await loadCachedRiffIndex(own, 'k')).size).toBe(3)
+  })
+
+  it('a load records the size it found, so the next one has a total', () => {
+    const own = freshOwnDb()
+    saveRiffIndexCache(own, 'k', new Map([['s1', entry(1)]]), 1)
+    recordRiffIndexEntryCount(own, 'k', 1)
+    expect(readRiffIndexEntryCount(own, 'k')).toBe(1)
+    // No meta row: nothing to record against.
+    recordRiffIndexEntryCount(own, 'other', 5)
+    expect(readRiffIndexEntryCount(own, 'other')).toBeNull()
   })
 })
 

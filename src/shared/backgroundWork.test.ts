@@ -41,6 +41,33 @@ describe('describeBackgroundWork', () => {
     ).toBe('indexing library · 1,200 of 900,000 · your stems ready · may slow things down')
   })
 
+  it('names the unit and the time left for the library index (2026-10-07)', () => {
+    expect(
+      describeBackgroundWork({
+        kind: 'libraryIndex',
+        done: 400000,
+        total: 900041,
+        unit: 'riffs',
+        timeLeft: 'about 3 min left'
+      })
+    ).toBe('indexing library · 400,000 of 900,041 riffs · about 3 min left · may slow things down')
+  })
+
+  it('a saved copy loading says loading, not indexing', () => {
+    expect(
+      describeBackgroundWork({
+        kind: 'libraryIndex',
+        verb: 'loading library',
+        done: 1000,
+        total: 891062,
+        unit: 'stems'
+      })
+    ).toBe('loading library · 1,000 of 891,062 stems · may slow things down')
+    expect(describeBackgroundWork({ kind: 'libraryIndex', verb: 'loading library' })).toBe(
+      'loading library · may slow things down'
+    )
+  })
+
   it('counts done of total when both are known', () => {
     expect(describeBackgroundWork({ kind: 'pluginScan', done: 12, total: 80 })).toBe(
       'scanning plugins · 12 of 80'

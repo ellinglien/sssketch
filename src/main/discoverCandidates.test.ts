@@ -3881,7 +3881,46 @@ describe('faster startup: usable before complete (2026-10-06)', () => {
       }
       expect(loads[loads.length - 1].completed).toBe(N)
       expect(loads[loads.length - 1].total).toBe(N)
+      // 2026-10-07: the right total from the first update -- the riff index
+      // keeps its entry count (N), not the Riffs count (N + 1,000).
+      for (const u of loads) expect(u.total).toBe(N)
     }
+    // The whole loading stage, for the time left: two copies of N entries
+    // (a riff-index entry weighted 2), in order, never going back.
+    const stages = updates.filter((u) => u.loading).map((u) => u.stage)
+    expect(stages.every((st) => st !== undefined && st.total === 3 * N && st.parts === 2)).toBe(
+      true
+    )
+    expect(stages[0]!.part).toBe(1)
+    expect(stages[stages.length - 1]!.part).toBe(2)
+    for (let i = 1; i < stages.length; i++) {
+      expect(stages[i]!.completed).toBeGreaterThanOrEqual(stages[i - 1]!.completed)
+    }
+    expect(stages[stages.length - 1]!.completed).toBe(3 * N)
+  })
+
+  it('a copy saved before entry counts were kept gets one at its first load', async () => {
+    const path = archive()
+    const own = freshDb()
+    await prewarmDiscoverCandidateCaches(
+      [{ jamCID: 'jam0', dbForJam: launch(path) }],
+      own,
+      () => {}
+    )
+    own.prepare(`UPDATE DiscoverRiffIndexCacheMeta SET EntryCount = NULL`).run()
+
+    const second: PrewarmScanProgress[] = []
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: launch(path) }], own, (p) =>
+      second.push({ ...p })
+    )
+    const firstLoad = second.find((u) => u.phase === 'riffIndex' && u.loading)!
+    expect(firstLoad.total).toBe(0) // no total known: a running count
+
+    const third: PrewarmScanProgress[] = []
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: launch(path) }], own, (p) =>
+      third.push({ ...p })
+    )
+    expect(third.find((u) => u.phase === 'riffIndex' && u.loading)!.total).toBe(N)
   })
 
   it('extend: the gate opens on the loaded copy, rolls are served from it while the walk runs, and see the new stems after', async () => {

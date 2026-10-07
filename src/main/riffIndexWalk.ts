@@ -153,12 +153,15 @@ async function applyRows(
   }
 }
 
-function pageOf(acc: PageAccumulator, watermark: RowidWatermark): RiffIndexPage {
+/** `entries`: the whole index's size after this page, saved with the meta
+ * for a later load's progress total. */
+function pageOf(acc: PageAccumulator, watermark: RowidWatermark, entries: number): RiffIndexPage {
   return {
     changed: [...acc.changed],
     opened: acc.opened,
     closed: acc.closed,
-    watermark: { ...watermark }
+    watermark: { ...watermark },
+    entries
   }
 }
 
@@ -228,7 +231,7 @@ export async function walkRiffs(
       await yieldToEventLoop()
     }
     if (acc.changed.size > 0 || acc.closed.length > 0) {
-      await options.onPage?.(pageOf(acc, watermark))
+      await options.onPage?.(pageOf(acc, watermark, state.index.size))
     }
   }
 
@@ -259,7 +262,7 @@ export async function walkRiffs(
     }
     // Persisted first, then adopted: a failed save leaves the in-memory
     // watermark on the last page that is also on disk.
-    await options.onPage?.(pageOf(acc, next))
+    await options.onPage?.(pageOf(acc, next, state.index.size))
     watermark.count = next.count
     watermark.maxRowid = next.maxRowid
     watermark.keyAtMax = next.keyAtMax

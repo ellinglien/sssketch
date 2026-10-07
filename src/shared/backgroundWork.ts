@@ -33,6 +33,16 @@ export interface BackgroundWork {
   /** A short aside after the progress, e.g. 'your stems ready' while the
    * library index rebuilds but his own stems can already roll. */
   note?: string
+  /** What done/total count, e.g. 'riffs' -- only where both count the same
+   * thing (the library index, @shared/libraryIndexProgress). */
+  unit?: string
+  /** A rough estimate of the time left, already worded (e.g. 'about 3 min
+   * left', @shared/libraryIndexProgress's formatTimeLeft), shown after the
+   * progress. */
+  timeLeft?: string
+  /** Overrides the kind's own verb, e.g. 'loading library' while a saved
+   * index is read back rather than walked. */
+  verb?: string
 }
 
 export interface BackgroundWorkSummary {
@@ -87,7 +97,8 @@ export function formatCount(n: number): string {
 
 function progressPart(work: BackgroundWork): string | null {
   if (work.done !== undefined && work.total !== undefined && work.total > 0) {
-    return `${formatCount(work.done)} of ${formatCount(work.total)}`
+    const count = `${formatCount(work.done)} of ${formatCount(work.total)}`
+    return work.unit ? `${count} ${work.unit}` : count
   }
   if (work.left !== undefined) return `${formatCount(work.left)} left`
   // A sync never knows its total up front (riffLibrarySync's own progress
@@ -100,9 +111,10 @@ function progressPart(work: BackgroundWork): string | null {
 
 /** One process's own line, e.g. 'analysing stems · 1,240 left · may slow things down'. */
 export function describeBackgroundWork(work: BackgroundWork): string {
-  const parts = [VERB[work.kind]]
+  const parts = [work.verb ?? VERB[work.kind]]
   const progress = progressPart(work)
   if (progress) parts.push(progress)
+  if (progress && work.timeLeft) parts.push(work.timeLeft)
   if (work.note) parts.push(work.note)
   if (work.paused) parts.push('paused')
   else if (SLOWS_UI.has(work.kind)) parts.push('may slow things down')

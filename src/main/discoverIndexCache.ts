@@ -72,7 +72,10 @@ export function ensureDiscoverIndexWatermarkSchema(ownDb: Database.Database): vo
   if (watermarkSchemaReady.has(ownDb)) return
   addColumnsIfMissing(ownDb, 'DiscoverRiffIndexCacheMeta', [
     ['MaxRowid', 'INTEGER'],
-    ['WatermarkRiffCID', 'TEXT']
+    ['WatermarkRiffCID', 'TEXT'],
+    // The entries the copy holds (one per stem in a riff): the total a load
+    // of it reports against (2026-10-07). NULL: not known (saved before).
+    ['EntryCount', 'INTEGER']
   ])
   addColumnsIfMissing(ownDb, 'DiscoverInstrumentRowsCacheMeta', [
     ['MaxRowid', 'INTEGER'],
@@ -114,21 +117,61 @@ export function readRiffIndexMeta(
   return row ? metaOf(row.RiffCount, row.MaxRowid, row.WatermarkRiffCID) : null
 }
 
+/** `entries`: the walk's entry count after this page (left as it was when
+ * not given). */
 function writeRiffIndexMeta(
   ownDb: Database.Database,
   sourceDbKey: string,
-  watermark: RowidWatermark
+  watermark: RowidWatermark,
+  entries?: number
 ): void {
   ownDb
     .prepare(
       `INSERT INTO DiscoverRiffIndexCacheMeta
-         (SourceDbKey, RiffCount, MaxRowid, WatermarkRiffCID, ComputedAt)
-       VALUES (?, ?, ?, ?, ?)
+         (SourceDbKey, RiffCount, MaxRowid, WatermarkRiffCID, ComputedAt, EntryCount)
+       VALUES (?, ?, ?, ?, ?, ?)
        ON CONFLICT(SourceDbKey) DO UPDATE SET
          RiffCount = excluded.RiffCount, MaxRowid = excluded.MaxRowid,
-         WatermarkRiffCID = excluded.WatermarkRiffCID, ComputedAt = excluded.ComputedAt`
+         WatermarkRiffCID = excluded.WatermarkRiffCID, ComputedAt = excluded.ComputedAt,
+         EntryCount = COALESCE(excluded.EntryCount, EntryCount)`
     )
-    .run(sourceDbKey, watermark.count, watermark.maxRowid, watermark.keyAtMax, Date.now())
+    .run(
+      sourceDbKey,
+      watermark.count,
+      watermark.maxRowid,
+      watermark.keyAtMax,
+      Date.now(),
+      entries ?? null
+    )
+}
+
+/** How many entries the saved riff index for `sourceDbKey` holds, or null
+ * when unknown (nothing saved, or saved before this was kept). Read with
+ * the meta, so a load's progress has a total in its own unit (2026-10-07:
+ * RiffCount counts Riffs, not entries -- "761,929 / 900,041"). */
+export function readRiffIndexEntryCount(
+  ownDb: Database.Database,
+  sourceDbKey: string
+): number | null {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  const row = ownDb
+    .prepare(`SELECT EntryCount FROM DiscoverRiffIndexCacheMeta WHERE SourceDbKey = ?`)
+    .get(sourceDbKey) as { EntryCount: number | null } | undefined
+  return row?.EntryCount ?? null
+}
+
+/** Records the entry count a load found (a copy saved before the count was
+ * kept, or one another app version touched), for the next load's total.
+ * Nothing without a meta row. */
+export function recordRiffIndexEntryCount(
+  ownDb: Database.Database,
+  sourceDbKey: string,
+  entries: number
+): void {
+  ensureDiscoverIndexWatermarkSchema(ownDb)
+  ownDb
+    .prepare(`UPDATE DiscoverRiffIndexCacheMeta SET EntryCount = ? WHERE SourceDbKey = ?`)
+    .run(entries, sourceDbKey)
 }
 
 /** Runs `steps` in time-budgeted transactions (TRANSACTION_BUDGET_MS each),
@@ -185,7 +228,7 @@ export async function resetRiffIndexCache(
   ownDb.prepare(`DELETE FROM DiscoverRiffIndexCacheMeta WHERE SourceDbKey = ?`).run(sourceDbKey)
   await deleteKeyInChunks(ownDb, 'DiscoverRiffIndexCache', sourceDbKey)
   await deleteKeyInChunks(ownDb, 'DiscoverRiffIndexOpenRiffs', sourceDbKey)
-  writeRiffIndexMeta(ownDb, sourceDbKey, { count: 0, maxRowid: null, keyAtMax: null })
+  writeRiffIndexMeta(ownDb, sourceDbKey, { count: 0, maxRowid: null, keyAtMax: null }, 0)
 }
 
 /** One walked page's effect on the riff index. */
@@ -197,6 +240,9 @@ export interface RiffIndexPage {
   closed: number[]
   /** The walk's watermark after this page. */
   watermark: RowidWatermark
+  /** The walk's entry count after this page (its whole index, not just
+   * this page's changes): saved with the meta, for a later load's total. */
+  entries?: number
 }
 
 /** Persists one walked page in time-budgeted transactions: entries (an
@@ -241,7 +287,7 @@ export async function persistRiffIndexPage(
         close.run(sourceDbKey, closed[i - changed.length - opened.length])
       }
     },
-    () => writeRiffIndexMeta(ownDb, sourceDbKey, page.watermark)
+    () => writeRiffIndexMeta(ownDb, sourceDbKey, page.watermark, page.entries)
   )
 }
 
@@ -317,7 +363,8 @@ export async function loadCachedRiffIndex(
       })
     }
     if (page.length < LOAD_PAGE_SIZE) break
-    onProgress?.(index.size, Math.max(totalHint, index.size))
+    // No total given: a running count (total 0), never "n of n".
+    onProgress?.(index.size, totalHint > 0 ? Math.max(totalHint, index.size) : 0)
     after = page[page.length - 1].StemCID
     await yieldToEventLoop()
   }
@@ -470,7 +517,7 @@ export async function loadCachedInstrumentRows(
     countWork('prewarm:rows-loaded.instrument-rows', page.length)
     for (const row of page) rows.push(row)
     if (page.length < LOAD_PAGE_SIZE) break
-    onProgress?.(rows.length, Math.max(totalHint, rows.length))
+    onProgress?.(rows.length, totalHint > 0 ? Math.max(totalHint, rows.length) : 0)
     after = page[page.length - 1].StemCID
     await yieldToEventLoop()
   }
@@ -559,8 +606,24 @@ export function appendRiffIndexRows(
     `INSERT INTO DiscoverRiffIndexCache (SourceDbKey, StemCID, RiffCID, OwnerJamCID, BPMrnd, CreationTime)
      VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(SourceDbKey, StemCID) DO NOTHING`
   )
+  let added = 0
   for (const row of rows) {
-    insert.run(sourceDbKey, row.stemCID, row.riffCID, row.ownerJamCID, row.bpmRnd, row.creationTime)
+    added += insert.run(
+      sourceDbKey,
+      row.stemCID,
+      row.riffCID,
+      row.ownerJamCID,
+      row.bpmRnd,
+      row.creationTime
+    ).changes
+  }
+  if (added > 0) {
+    ownDb
+      .prepare(
+        `UPDATE DiscoverRiffIndexCacheMeta SET EntryCount = EntryCount + ?
+         WHERE SourceDbKey = ? AND EntryCount IS NOT NULL`
+      )
+      .run(added, sourceDbKey)
   }
   // Scan plan decision 5: a watermarked meta is left alone -- the next
   // extension reads the kept riff (past the watermark) again, and the

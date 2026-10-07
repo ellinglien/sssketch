@@ -1,14 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { LoadingLoader } from './LoadingLoader'
 import type { PrewarmScanProgress } from '../../../main/discoverCandidates'
+import {
+  createEtaTracker,
+  describeStartupStatus,
+  etaSampleOf,
+  formatTimeLeft
+} from '@shared/libraryIndexProgress'
 
 const WORDMARK = 'SSSKETCH'.split('')
-
-const PHASE_LABEL: Record<PrewarmScanProgress['phase'], string> = {
-  riffIndex: 'riffs',
-  instrumentRows: 'stems',
-  ownStems: 'your stems'
-}
 
 /** Full-screen, genuinely BLOCKING gate shown from the moment the window
  * appears until both the native engine has finished starting AND every
@@ -61,9 +61,11 @@ export function StartupGate(): React.JSX.Element | null {
   const [engineDone, setEngineDone] = useState<boolean | null>(null)
   const [warmupDone, setWarmupDone] = useState<boolean | null>(null)
   const [progress, setProgress] = useState<PrewarmScanProgress | null>(null)
-  const [phaseStartedAt, setPhaseStartedAt] = useState<{ key: string; startedAt: number } | null>(
-    null
-  )
+  // Time left at the rate measured so far (@shared/libraryIndexProgress):
+  // over the whole loading stage while saved copies load, over its own phase
+  // for a walk. Null until there is a rate.
+  const [timeLeftMs, setTimeLeftMs] = useState<number | null>(null)
+  const etaRef = useRef(createEtaTracker())
 
   useEffect(() => {
     let cancelled = false
@@ -113,15 +115,14 @@ export function StartupGate(): React.JSX.Element | null {
   useEffect(() => {
     if (closed) return
     return window.rifffApi.onLibraryWarmupProgress((update) => {
-      const key = `${update.phase}:${update.dbIndex}${update.loading ? ':load' : ''}`
-      setPhaseStartedAt((prev) => (prev?.key === key ? prev : { key, startedAt: Date.now() }))
+      setTimeLeftMs(etaRef.current.update(etaSampleOf(update), Date.now()))
       setProgress(update)
     })
   }, [closed])
 
   if (closed) return null
 
-  const etaText = describeEta(progress, phaseStartedAt?.startedAt ?? null)
+  const etaText = engineDone === true && timeLeftMs !== null ? formatTimeLeft(timeLeftMs) : null
 
   return (
     <div
@@ -147,37 +148,10 @@ export function StartupGate(): React.JSX.Element | null {
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <LoadingLoader size={13} />
         <span style={{ fontSize: 11, color: 'var(--ra-text-2)' }}>
-          {describeStatus(engineDone === true, progress)}
+          {describeStartupStatus(engineDone === true, progress)}
         </span>
       </div>
       {etaText && <span style={{ fontSize: 10, color: 'var(--ra-text-3)' }}>{etaText}</span>}
     </div>
   )
-}
-
-function describeStatus(engineDone: boolean, progress: PrewarmScanProgress | null): string {
-  if (!engineDone) return 'starting engine…'
-  if (!progress) return 'loading library…'
-  // Reading a saved copy back is not indexing (2026-10-07): no walk, and no
-  // count -- it takes seconds, and the walk after it shows its own.
-  if (progress.loading) return 'loading library…'
-  if (progress.phase === 'ownStems') return 'indexing your stems first…'
-  const dbSuffix = progress.dbCount > 1 ? `, db ${progress.dbIndex + 1}/${progress.dbCount}` : ''
-  return `indexing ${PHASE_LABEL[progress.phase]}: ${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()}${dbSuffix}`
-}
-
-function describeEta(
-  progress: PrewarmScanProgress | null,
-  startedAt: number | null
-): string | null {
-  if (!progress || !startedAt || progress.completed <= 0 || progress.total <= 0) return null
-  if (progress.phase === 'ownStems' || progress.loading) return null
-  const elapsedMs = Date.now() - startedAt
-  const fractionDone = progress.completed / progress.total
-  const remainingMs = elapsedMs / fractionDone - elapsedMs
-  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return null
-  const remainingSec = Math.round(remainingMs / 1000)
-  if (remainingSec < 1) return null
-  if (remainingSec < 60) return `~${remainingSec}s left`
-  return `~${Math.round(remainingSec / 60)}m left`
 }

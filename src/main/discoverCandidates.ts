@@ -38,6 +38,8 @@ import {
   loadCachedRiffOpenRowids,
   persistRiffIndexPage,
   readRiffIndexMeta,
+  readRiffIndexEntryCount,
+  recordRiffIndexEntryCount,
   resetRiffIndexCache,
   loadCachedInstrumentRows,
   persistInstrumentRowsPage,
@@ -56,6 +58,7 @@ import { canExtendByRowidSliced, keyAtRowid, type RowidWatermark } from './rowid
 import { sortInstrumentRowsSliced, walkStems } from './stemsTableWalk'
 import { buildOwnStemIndex, type OwnStemIndex } from './ownStemIndex'
 import { seedTableCounts } from './tableCountSeed'
+import { createLoadStageTracker, type LibraryIndexProgress } from '@shared/libraryIndexProgress'
 import {
   isScanCacheCurrent,
   isTableCountInFlight,
@@ -113,21 +116,11 @@ interface JamDbPair {
  * of Y, N / M rows" and letting the renderer derive its own ETA from
  * elapsed-time-so-far is more honest than pretending to know the total
  * cost upfront. */
-export interface PrewarmScanProgress {
-  /** 'ownStems': the own-only index a rebuild serves first (faster startup,
-   * ownStemIndex.ts) -- `total` 0, a running count only. */
-  phase: 'riffIndex' | 'instrumentRows' | 'ownStems'
-  dbIndex: number
-  dbCount: number
-  completed: number
-  total: number
-  /** Some db is serving only its user's own stems until this walk ends. */
-  ownOnly?: boolean
-  /** Reading a saved copy back, not walking the table (2026-10-07): the gate
-   * says "loading library…" for these, "indexing…" only for a walk.
-   * `completed`/`total` count the copy's own entries. */
-  loading?: boolean
-}
+// The shape lives in @shared/libraryIndexProgress (2026-10-07), with the
+// wording and time-left estimate StartupGate and BackgroundWorkIndicator use:
+// `completed`/`total` count one unit per phase (riffs for a riff walk,
+// stems otherwise), and a load carries its place in the loading stage.
+export type PrewarmScanProgress = LibraryIndexProgress
 
 /** How a startup or in-session read of an index may be answered while that
  * index is still being walked (faster startup plan,
@@ -438,6 +431,20 @@ async function buildRiffIndex(
   return walk.index
 }
 
+/** Reads the saved riff index back, reporting against the entry count it
+ * was saved with (null for a copy saved before that was kept: a running
+ * count). When the count found differs, it is recorded for the next load. */
+async function loadSavedRiffIndex(
+  ownDb: Database.Database,
+  key: string,
+  onProgress: ScanProgressCallback
+): Promise<Map<string, RiffIndexEntry>> {
+  const entries = readRiffIndexEntryCount(ownDb, key)
+  const index = await loadCachedRiffIndex(ownDb, key, asLoading(onProgress), entries ?? 0)
+  if (entries !== index.size) recordRiffIndexEntryCount(ownDb, key, index.size)
+  return index
+}
+
 /** The prewarm's half for the riff index, against the copy saved in ownDb
  * (scan plan Task 2):
  * 1. saved and current (same count, MAX(rowid) and RiffCID at it; a legacy
@@ -467,14 +474,11 @@ async function warmRiffIndex(
   let preloaded: { meta: IndexCacheMeta; index: Map<string, RiffIndexEntry> } | undefined
   if (phase.counted) {
     const early = readRiffIndexMeta(ownDb, key)
-    // No total hint for these loads: the meta counts Riffs, the copy holds one
-    // entry per stem (his library: 900,041 riffs, 761,929 entries), so the
-    // gate read "761,929 / 900,041" and then the total dropped.
+    // The total is the copy's own entry count, never the meta's Riffs count:
+    // one entry per stem (his library: 900,041 riffs, 761,929 entries), so
+    // the gate read "761,929 / 900,041" and then the total dropped.
     if (early && mayKeepSavedCopy(db, 'Riffs', 'RiffCID', early)) {
-      preloaded = {
-        meta: early,
-        index: await loadCachedRiffIndex(ownDb, key, asLoading(onProgress))
-      }
+      preloaded = { meta: early, index: await loadSavedRiffIndex(ownDb, key, onProgress) }
     }
     await phase.counted
   }
@@ -504,7 +508,7 @@ async function warmRiffIndex(
       index:
         preloaded && sameSavedCopy(preloaded.meta, meta)
           ? preloaded.index
-          : await loadCachedRiffIndex(ownDb, key, asLoading(onProgress)),
+          : await loadSavedRiffIndex(ownDb, key, onProgress),
       open: loadCachedRiffOpenRowids(ownDb, key),
       watermark: meta!.watermark
     }
@@ -645,6 +649,30 @@ function gatedWarmStep<T>(
   return { promise, decided, open }
 }
 
+/** How many entries a launch's load of the saved riff index will read: its
+ * entry count, or for a copy saved before that was kept the saved Stems rows
+ * (an upper bound: 891,062 stems for 761,929 entries on his archive) -- only
+ * for timing the loading stage, never shown as a total. 0: nothing saved. */
+function plannedRiffIndexLoad(ownDb: Database.Database, key: string): number {
+  return plannedOrZero(() => {
+    const meta = readRiffIndexMeta(ownDb, key)
+    if (!meta || meta.count === 0) return 0
+    return (
+      readRiffIndexEntryCount(ownDb, key) ?? readInstrumentRowsMeta(ownDb, key)?.count ?? meta.count
+    )
+  })
+}
+
+/** Planning only times the wait: an ownDb without the cache tables (the
+ * steps cope with that themselves) plans nothing rather than throwing. */
+function plannedOrZero(read: () => number): number {
+  try {
+    return read()
+  } catch {
+    return 0
+  }
+}
+
 export async function prewarmDiscoverCandidateCaches(
   jams: JamDbPair[],
   ownDb: Database.Database,
@@ -657,9 +685,30 @@ export async function prewarmDiscoverCandidateCaches(
       (db) =>
         servedRiffIndex.get(db)?.scope === 'own' || servedInstrumentRows.get(db)?.scope === 'own'
     )
+  // Every saved copy this launch may read back before the gate opens, in
+  // the order the steps run, so a load can say which step of how many it is
+  // and the gate can time the whole wait (2026-10-07). A step that ends up
+  // rebuilding instead counts as done when it decides.
+  const loadStage = createLoadStageTracker(
+    uniqueDbs.flatMap((db, dbIndex) => [
+      {
+        key: `riffIndex:${dbIndex}`,
+        planned: plannedRiffIndexLoad(ownDb, db.name),
+        // A saved riff-index entry loads slower than a stem row: 2.7x warm
+        // on his data (762k entries 1.3 s, 891k rows 0.55 s, 2026-10-07),
+        // 1.4x cold (3.8 s / 3.1 s, 2026-10-06).
+        weight: 2
+      },
+      {
+        key: `instrumentRows:${dbIndex}`,
+        planned: plannedOrZero(() => readInstrumentRowsMeta(ownDb, db.name)?.count ?? 0)
+      }
+    ])
+  )
   const reporter =
     (phase: PrewarmScanProgress['phase'], dbIndex: number) =>
-    (completed: number, total: number, loading?: boolean): void =>
+    (completed: number, total: number, loading?: boolean): void => {
+      const stage = loading ? loadStage.report(`${phase}:${dbIndex}`, completed) : undefined
       onProgress?.({
         phase,
         dbIndex,
@@ -667,8 +716,10 @@ export async function prewarmDiscoverCandidateCaches(
         completed,
         total,
         ...(ownOnly() ? { ownOnly: true } : {}),
-        ...(loading ? { loading: true } : {})
+        ...(loading ? { loading: true } : {}),
+        ...(stage ? { stage } : {})
       })
+    }
 
   // The archive's row counts, with no COUNT on the main thread
   // (tableCountSeed.ts; index.ts started them when the archive opened, and
@@ -690,6 +741,7 @@ export async function prewarmDiscoverCandidateCaches(
       await pendingRiffs.promise.catch((err) =>
         console.error('prewarmDiscoverCandidateCaches: failed to warm riff index:', err)
       )
+      loadStage.finish(`riffIndex:${dbIndex}`)
     } else {
       // Created inside shareRiffIndexBuild's start, which reads the forget
       // generation first: a forget landing in the step's synchronous start
@@ -703,6 +755,7 @@ export async function prewarmDiscoverCandidateCaches(
         return step.promise
       }).catch(() => undefined)
       riffDecision = await step.decided
+      loadStage.finish(`riffIndex:${dbIndex}`)
       walks.push({
         open: step.open,
         settled: step.promise.catch((err) =>
@@ -719,12 +772,14 @@ export async function prewarmDiscoverCandidateCaches(
       await pendingRows.catch((err) =>
         console.error('prewarmDiscoverCandidateCaches: failed to warm instrument rows:', err)
       )
+      loadStage.finish(`instrumentRows:${dbIndex}`)
     } else {
       const step = gatedWarmStep(counted.get(db)!, (phase) =>
         warmInstrumentRows(db, ownDb, reporter('instrumentRows', dbIndex), phase)
       )
       void shareInstrumentRowsBuild(db, step.promise).catch(() => undefined)
       rowsDecision = await step.decided
+      loadStage.finish(`instrumentRows:${dbIndex}`)
       walks.push({
         open: step.open,
         settled: step.promise.catch((err) =>

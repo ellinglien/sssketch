@@ -5,6 +5,12 @@ import {
   type BackgroundWorkKind
 } from '@shared/backgroundWork'
 import type { PrewarmScanProgress } from '../../../main/discoverCandidates'
+import {
+  createEtaTracker,
+  etaSampleOf,
+  formatTimeLeft,
+  libraryProgressUnit
+} from '@shared/libraryIndexProgress'
 import type { AutoClassifyStatus } from '../../../main/stemAutoClassifyScheduler'
 import { backgroundScanGate } from '../audio/backgroundScanGate'
 import { backgroundWorkRegistry } from '../audio/backgroundWorkRegistry'
@@ -156,6 +162,8 @@ export function BackgroundWorkIndicator(): React.JSX.Element | null {
 function useLibraryIndexWork(): BackgroundWork | null {
   const [done, setDone] = useState(true)
   const [progress, setProgress] = useState<PrewarmScanProgress | null>(null)
+  const [timeLeftMs, setTimeLeftMs] = useState<number | null>(null)
+  const etaRef = useRef(createEtaTracker())
 
   useEffect(() => {
     let cancelled = false
@@ -174,7 +182,9 @@ function useLibraryIndexWork(): BackgroundWork | null {
       }
     })
     const unsubscribeProgress = window.rifffApi.onLibraryWarmupProgress((update) => {
-      if (!cancelled) setProgress(update)
+      if (cancelled) return
+      setTimeLeftMs(etaRef.current.update(etaSampleOf(update), Date.now()))
+      setProgress(update)
     })
     return () => {
       cancelled = true
@@ -186,10 +196,19 @@ function useLibraryIndexWork(): BackgroundWork | null {
   if (done) return null
   // While a rebuild serves only his own stems (faster startup), say so.
   const note = progress?.ownOnly ? 'your stems ready' : undefined
-  // A saved copy loading has no count worth showing: only a walk does.
-  return progress && progress.total > 0 && !progress.loading
-    ? { kind: 'libraryIndex', done: progress.completed, total: progress.total, note }
-    : { kind: 'libraryIndex', note }
+  const verb = progress?.loading ? 'loading library' : undefined
+  if (!progress || progress.total <= 0) return { kind: 'libraryIndex', note, verb }
+  // Count and total in one unit (2026-10-07): riffs for a riff walk, stems
+  // otherwise -- @shared/libraryIndexProgress.
+  return {
+    kind: 'libraryIndex',
+    done: progress.completed,
+    total: Math.max(progress.total, progress.completed),
+    unit: libraryProgressUnit(progress),
+    ...(timeLeftMs !== null && { timeLeft: formatTimeLeft(timeLeftMs) }),
+    note,
+    verb
+  }
 }
 
 function useAutoClassifyWork(): BackgroundWork | null {
