@@ -1,9 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isVst3Candidate, isAuCandidate, scanOneCandidate, getMtimeMs } from './pluginScan'
+import {
+  isVst3Candidate,
+  isAuCandidate,
+  scanOneCandidate,
+  getMtimeMs,
+  listPluginCandidates,
+  pluginDirectories
+} from './pluginScan'
 
 const realBinaryPath = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -50,6 +57,49 @@ describe('isAuCandidate', () => {
     expect(isAuCandidate('readme.txt')).toBe(false)
     expect(isAuCandidate('Foo.vst3')).toBe(false)
     expect(isAuCandidate('.DS_Store')).toBe(false)
+  })
+})
+
+// Share readiness S3 (2026-10-07): many plugins, most free ones, install per user into
+// ~/Library/Audio/Plug-Ins. The scan reads both roots.
+describe('pluginDirectories', () => {
+  it('lists the system folders first, then the home folders, for both formats', () => {
+    expect(pluginDirectories('/Users/someone')).toEqual({
+      vst3: ['/Library/Audio/Plug-Ins/VST3', '/Users/someone/Library/Audio/Plug-Ins/VST3'],
+      au: ['/Library/Audio/Plug-Ins/Components', '/Users/someone/Library/Audio/Plug-Ins/Components']
+    })
+  })
+})
+
+describe('listPluginCandidates', () => {
+  it('finds bundles in every folder, once per bundle name (the system copy wins)', () => {
+    const root = mkdtempSync(join(tmpdir(), 'sssketch-plugin-dirs-'))
+    try {
+      const dir = (...parts: string[]): string => {
+        const d = join(root, ...parts)
+        mkdirSync(d, { recursive: true })
+        return d
+      }
+      const sysVst3 = dir('sys', 'VST3')
+      const homeVst3 = dir('home', 'VST3')
+      const homeAu = dir('home', 'Components')
+      mkdirSync(join(sysVst3, 'Shared.vst3'))
+      mkdirSync(join(homeVst3, 'Shared.vst3'))
+      mkdirSync(join(homeVst3, 'Free.vst3'))
+      writeFileSync(join(homeVst3, 'readme.txt'), 'x')
+      mkdirSync(join(homeAu, 'Free.component'))
+      const found = listPluginCandidates({
+        vst3: [sysVst3, homeVst3],
+        au: [join(root, 'sys', 'Components'), homeAu]
+      })
+      expect(found).toEqual([
+        join(sysVst3, 'Shared.vst3'),
+        join(homeVst3, 'Free.vst3'),
+        join(homeAu, 'Free.component')
+      ])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 

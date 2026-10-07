@@ -2,6 +2,7 @@
 import { spawn } from 'node:child_process'
 import { readdirSync, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
 import { app } from 'electron'
 
 export interface ScannedPlugin {
@@ -29,46 +30,60 @@ export function isAuCandidate(filename: string): boolean {
   return filename.toLowerCase().endsWith('.component')
 }
 
-const VST3_DIRECTORY = '/Library/Audio/Plug-Ins/VST3'
-const AU_DIRECTORY = '/Library/Audio/Plug-Ins/Components'
-
-/** Lists candidate .vst3 bundle paths under the fixed VST3 plugin directory.
- * Pure directory listing -- no plugin code runs, so this carries none of the
- * hang/crash risk documented in native-engine/PHASE0_FINDINGS.md; that risk
- * only exists once a plugin's own code actually gets loaded, which is
- * scanOneCandidate's job below, always in its own isolated subprocess. */
-export function listVst3Candidates(): string[] {
-  let entries: string[]
-  try {
-    entries = readdirSync(VST3_DIRECTORY)
-  } catch {
-    return [] // no VST3 directory on this machine -- not an error, just nothing to scan
-  }
-  return entries.filter(isVst3Candidate).map((name) => join(VST3_DIRECTORY, name))
+/** The plugin folders, per format: the system-wide one, then the user's own (share readiness S3,
+ * 2026-10-07 -- many plugins, most free ones, install per user into ~/Library). */
+export interface PluginDirectories {
+  vst3: string[]
+  au: string[]
 }
 
-/** Lists candidate .component bundle paths under the fixed AU plugin
- * directory. Same pure-directory-listing reasoning as listVst3Candidates
- * above -- the real risk (PHASE0_FINDINGS.md documents a real infinite
- * assertion loop in JUCE's AU scanner against some system-style multi-type
- * component bundles) only exists once a candidate's plugin code actually
- * loads, which scanOneCandidate isolates per-candidate with a hard timeout.
- * That's what makes scanning this directory safe now, unlike the naive
- * whole-directory sweep PHASE0_FINDINGS.md was written against. */
-export function listAuCandidates(): string[] {
-  let entries: string[]
-  try {
-    entries = readdirSync(AU_DIRECTORY)
-  } catch {
-    return [] // no Components directory on this machine -- not an error, just nothing to scan
+export function pluginDirectories(home: string): PluginDirectories {
+  return {
+    vst3: ['/Library/Audio/Plug-Ins/VST3', join(home, 'Library/Audio/Plug-Ins/VST3')],
+    au: ['/Library/Audio/Plug-Ins/Components', join(home, 'Library/Audio/Plug-Ins/Components')]
   }
-  return entries.filter(isAuCandidate).map((name) => join(AU_DIRECTORY, name))
 }
 
-/** Every scan candidate across both supported formats -- the single entry
- * point runFullScan.ts uses. */
-export function listPluginCandidates(): string[] {
-  return [...listVst3Candidates(), ...listAuCandidates()]
+/** Candidate bundle paths in `dirs`, in order. Pure directory listing -- no plugin code runs, so
+ * this carries none of the hang/crash risk documented in native-engine/PHASE0_FINDINGS.md; that
+ * risk only exists once a plugin's own code actually gets loaded, which is scanOneCandidate's job
+ * below, always in its own isolated subprocess (PHASE0_FINDINGS.md documents a real infinite
+ * assertion loop in JUCE's AU scanner against some system-style multi-type component bundles).
+ * A missing folder is not an error, just nothing to scan. A bundle name already found in an
+ * earlier folder is skipped: the system copy wins, so a plugin id saved against it (JUCE's id
+ * hashes the path) stays the same. */
+function listCandidatesIn(
+  dirs: readonly string[],
+  accept: (filename: string) => boolean,
+  seen: Set<string>
+): string[] {
+  const found: string[] = []
+  for (const dir of dirs) {
+    let entries: string[]
+    try {
+      entries = readdirSync(dir)
+    } catch {
+      continue
+    }
+    for (const name of entries.filter(accept)) {
+      const key = name.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      found.push(join(dir, name))
+    }
+  }
+  return found
+}
+
+/** Every scan candidate across both supported formats and both folders -- the single entry point
+ * runFullScan.ts uses. `dirs` is for tests. */
+export function listPluginCandidates(
+  dirs: PluginDirectories = pluginDirectories(homedir())
+): string[] {
+  return [
+    ...listCandidatesIn(dirs.vst3, isVst3Candidate, new Set()),
+    ...listCandidatesIn(dirs.au, isAuCandidate, new Set())
+  ]
 }
 
 /** A candidate bundle's own mtime, in milliseconds -- `null` on any stat
