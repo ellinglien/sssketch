@@ -4,6 +4,7 @@ import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { LOOP_FOLDERS_DDL } from './loopFolders'
+import { STEM_AUTO_CLASSIFY_TRIED_DDL } from './stemAutoClassifyTried'
 
 /** sssketch's own self-built riff-sync database -- distinct from any
  * externally-pointed OUROVEON/LORE archive a user might separately
@@ -329,6 +330,12 @@ ${RIFF_STEMS_EXTRA_DDL}
 -- so loopFolders.test.ts builds its database from the same constant. New
 -- tables only, so the migration is exactly CREATE TABLE IF NOT EXISTS.
 ${LOOP_FOLDERS_DDL}
+
+-- The overnight classifier's stems tried and not placed, with the training
+-- and mask they were tried under (2026-10-07; stemAutoClassifyTried.ts).
+-- Interpolated so the classifier's tests build it from the same constant.
+-- New table only: CREATE TABLE IF NOT EXISTS is the whole migration.
+${STEM_AUTO_CLASSIFY_TRIED_DDL}
 `
 
 let cachedDb: Database.Database | null = null

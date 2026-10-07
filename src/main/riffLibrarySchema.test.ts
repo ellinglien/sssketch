@@ -50,6 +50,7 @@ describe('riffLibrarySchema', () => {
       'RiffStemsExtra',
       'Riffs',
       'StemAutoCategory',
+      'StemAutoClassifyTried',
       'StemCategories',
       'StemEmbeddingCache',
       'StemFavourite',

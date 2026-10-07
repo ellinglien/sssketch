@@ -13,6 +13,7 @@ import { setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { setStemFeatureCache } from './stemFeatureCacheStore'
 import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 import { bumpTableWriteVersion } from './tableWriteVersion'
+import { STEM_AUTO_CLASSIFY_TRIED_DDL } from './stemAutoClassifyTried'
 
 // The centroid/feature pass reads app.getPath('userData') via
 // loadCategoryCentroidStore -- mock just that narrow surface, same
@@ -33,25 +34,26 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true })
 })
 
-function freshDb(): Database.Database {
-  const db = new Database(':memory:')
+function freshDb(path = ':memory:'): Database.Database {
+  const db = new Database(path)
+  db.exec(STEM_AUTO_CLASSIFY_TRIED_DDL)
   db.exec(`
-    CREATE TABLE StemCategories (
+    CREATE TABLE IF NOT EXISTS StemCategories (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT, DrumSubRole TEXT, BusId TEXT,
       Source TEXT NOT NULL, SourceProject TEXT, UpdatedAt INTEGER NOT NULL,
       SubcategoryNote TEXT
     );
-    CREATE TABLE StemEmbeddingCache (
+    CREATE TABLE IF NOT EXISTS StemEmbeddingCache (
       StemCID TEXT PRIMARY KEY, EmbeddingJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
     );
-    CREATE TABLE StemFeatureCache (
+    CREATE TABLE IF NOT EXISTS StemFeatureCache (
       StemCID TEXT PRIMARY KEY, FeaturesJSON TEXT NOT NULL, ExtractedAt INTEGER NOT NULL
     );
-    CREATE TABLE StemAutoCategory (
+    CREATE TABLE IF NOT EXISTS StemAutoCategory (
       StemCID TEXT PRIMARY KEY, ArrangeRole TEXT NOT NULL, Source TEXT NOT NULL,
       ComputedAt INTEGER NOT NULL
     );
-    CREATE TABLE Stems (
+    CREATE TABLE IF NOT EXISTS Stems (
       StemCID TEXT PRIMARY KEY, OwnerJamCID TEXT NOT NULL, Instrument INTEGER
     );
   `)
@@ -950,6 +952,159 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
     noteAutoClassifyTrainingChanged()
     const second = await classifyAutoCategoryBatch(db)
     expect(second.processed).toBe(2)
+  })
+
+  // 2026-10-07: the tried record lived only in memory, so every launch
+  // re-tried the ~20,452-stem residue (~10 min, ~4 min of main CPU, 0
+  // placed), and any write to the own db's Stems table (a Shared Feed sync)
+  // re-tried it mid-session. Now persisted (StemAutoClassifyTried).
+  describe('tried stems persist across launches', () => {
+    function tried(db: Database.Database): string[] {
+      return (
+        db.prepare(`SELECT StemCID FROM StemAutoClassifyTried ORDER BY StemCID`).all() as {
+          StemCID: string
+        }[]
+      ).map((r) => r.StemCID)
+    }
+
+    function featureFetches(db: Database.Database): () => number {
+      const spy = vi.spyOn(db, 'prepare')
+      return () =>
+        spy.mock.calls.filter(([sql]) => String(sql).includes('f.FeaturesJSON AS')).length
+    }
+
+    it('a relaunch does not re-try a stem tried under the same training', async () => {
+      const path = join(dir, 'own.db')
+      const first = freshDb(path)
+      seedTrainedEmbeddings(first)
+      seedEmbedding(first, 'ambiguous-1', [0.5, 0.5, 0])
+      seedInstrument(first, 'ambiguous-1', AUDIO_IN_BIT)
+      seedFeatures(first, 'feat-ambiguous-1', { transientDensity: 0.5, bassEnergyRatio: 0.5 })
+      expect(await classifyAutoCategoryBatch(first)).toEqual({ processed: 0, remaining: 0 })
+      expect(tried(first)).toEqual(['ambiguous-1', 'feat-ambiguous-1'])
+      first.close()
+
+      // A new process: a new connection, nothing in memory.
+      const db = freshDb(path)
+      const fetches = embeddingFetches(db)
+      const features = featureFetches(db)
+      expect(await classifyAutoCategoryBatch(db)).toEqual({ processed: 0, remaining: 0 })
+      expect(fetches()).toEqual([])
+      expect(features()).toBe(0)
+    })
+
+    it('a write to the Stems table (a Shared Feed sync) does not re-try tried stems', async () => {
+      const db = freshDb()
+      seedTrainedEmbeddings(db)
+      seedEmbedding(db, 'ambiguous-1', [0.5, 0.5, 0])
+      seedInstrument(db, 'ambiguous-1', AUDIO_IN_BIT)
+      await classifyAutoCategoryBatch(db, [db])
+
+      seedInstrument(db, 'synced-from-feed', NOTES_BIT)
+      bumpTableWriteVersion(db, 'Stems')
+      const fetches = embeddingFetches(db)
+      expect(await classifyAutoCategoryBatch(db, [db])).toEqual({ processed: 0, remaining: 0 })
+      expect(fetches()).toEqual([])
+    })
+
+    it('a relaunch re-tries them once a new confirmation moved the training', async () => {
+      const path = join(dir, 'own.db')
+      const first = freshDb(path)
+      seedTrainedEmbeddings(first)
+      seedEmbedding(first, 'leans-lead', [0, 0, 1])
+      expect((await classifyAutoCategoryBatch(first)).processed).toBe(0)
+      first.close()
+
+      const db = freshDb(path)
+      for (let i = 0; i < 3; i++) {
+        seedConfirmed(db, `train-lead-${i}`, 'lead')
+        seedEmbedding(db, `train-lead-${i}`, [0, 0, 1])
+      }
+      expect((await classifyAutoCategoryBatch(db)).processed).toBe(1)
+      expect(getAutoCategorizedStemCIDs(db, 'lead')).toEqual(new Set(['leans-lead']))
+      expect(tried(db)).toEqual([])
+    })
+
+    it('a relaunch re-tries them once the centroid store changed', async () => {
+      const path = join(dir, 'own.db')
+      const first = freshDb(path)
+      seedFeatures(first, 'feat-1', { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+      expect((await classifyAutoCategoryBatch(first)).processed).toBe(0) // untrained store
+      expect(tried(first)).toEqual(['feat-1'])
+      first.close()
+
+      const same = freshDb(path)
+      expect((await classifyAutoCategoryBatch(same)).processed).toBe(0)
+      same.close()
+
+      const db = freshDb(path)
+      trainedCentroidStore() // retrained (by the other app, or before this launch)
+      expect((await classifyAutoCategoryBatch(db)).processed).toBe(1)
+    })
+
+    it('re-tries a tried stem whose own mask changed, after a relaunch too', async () => {
+      const path = join(dir, 'own.db')
+      const first = freshDb(path)
+      seedTrainedEmbeddings(first)
+      seedEmbedding(first, 'late-mask', [0.5, 0.5, 0])
+      first
+        .prepare(
+          `INSERT INTO Stems (StemCID, OwnerJamCID, Instrument) VALUES ('late-mask', 'j', NULL)`
+        )
+        .run()
+      expect((await classifyAutoCategoryBatch(first, [first])).processed).toBe(0)
+      first.prepare(`UPDATE Stems SET Instrument = ? WHERE StemCID = 'late-mask'`).run(DRUMS_BIT)
+      first.close()
+
+      const db = freshDb(path)
+      expect((await classifyAutoCategoryBatch(db, [db])).processed).toBe(1)
+      expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['late-mask']))
+    })
+
+    it('writes the record in the batch transaction: a batch that throws records nothing', async () => {
+      const db = freshDb()
+      seedTrainedEmbeddings(db)
+      seedEmbedding(db, 'ambiguous-1', [0.5, 0.5, 0])
+      const realTransaction = db.transaction.bind(db)
+      vi.spyOn(db, 'transaction').mockImplementationOnce((fn) =>
+        realTransaction(() => {
+          ;(fn as () => number)()
+          throw new Error('SQLITE_FULL')
+        })
+      )
+      await expect(classifyAutoCategoryBatch(db)).rejects.toThrow('SQLITE_FULL')
+      expect(tried(db)).toEqual([])
+    })
+
+    it('a store rewriting the row forgets it, so a relaunch re-tries it', async () => {
+      const path = join(dir, 'own.db')
+      const first = freshDb(path)
+      seedTrainedEmbeddings(first)
+      seedEmbedding(first, 'ambiguous-1', [0.5, 0.5, 0])
+      seedInstrument(first, 'ambiguous-1', AUDIO_IN_BIT) // so the store resolves the path
+      await classifyAutoCategoryBatch(first)
+      // Re-extracted, and the app quits before the classifier's next batch.
+      setStemEmbeddingCache(first, '/x/ambiguous-1', [0.9, 0.1, 0], 2000)
+      expect(tried(first)).toEqual([])
+      first.close()
+
+      const db = freshDb(path)
+      expect((await classifyAutoCategoryBatch(db)).processed).toBe(1)
+    })
+
+    it('with an untrained embedding axis, leaves the record to the feature pass', async () => {
+      const db = freshDb()
+      trainedCentroidStore()
+      // Embedding and features, no confirmations: the embedding pass can't
+      // place it, the centroid pass can.
+      seedEmbedding(db, 'both-1', [0.5, 0.5, 0])
+      seedFeatures(db, 'both-1', { transientDensity: 0.9, bassEnergyRatio: 0.1 })
+      seedEmbedding(db, 'both-2', [0.5, 0.5, 0])
+      seedFeatures(db, 'both-2', { transientDensity: 0.5, bassEnergyRatio: 0.5 })
+      await runToCompletion(db)
+      expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['both-1']))
+      expect(tried(db)).toEqual(['both-2'])
+    })
   })
 
   it('drops a listed id that was confirmed after the list was built', async () => {

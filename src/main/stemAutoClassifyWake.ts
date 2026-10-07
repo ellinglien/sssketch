@@ -9,15 +9,19 @@
 // - noteAutoClassifyInputRow: a StemEmbeddingCache / StemFeatureCache row
 //   was written (stemEmbeddingCacheStore.ts, stemFeatureCacheStore.ts, the
 //   batched writer) -- the StemCID joins the pending list without a
-//   re-query of the whole eligibility set.
+//   re-query of the whole eligibility set. Its tried record
+//   (StemAutoClassifyTried) is forgotten here too: a re-extraction can change
+//   the answer, and the record would otherwise keep it out of the lists at
+//   the next launch if the app quit before the classifier's next batch.
 // - noteAutoClassifyTrainingChanged: a confirmation or centroid retrain
 //   (stemCategoriesStore.ts's upsertStemCategoryRole, categoryCentroidStore.ts's
 //   saveCategoryCentroidStore) -- can make previously unclassifiable stems
 //   classifiable, so the next batch rebuilds the whole pending list.
 //
-// Pure and O(1) per call; no 'electron' import, so the stores stay testable
-// from plain vitest.
+// O(1) per call (one primary-key DELETE, nothing on a db without the
+// table); no 'electron' import, so the stores stay testable from plain vitest.
 import type Database from 'better-sqlite3'
+import { forgetStemTried } from './stemAutoClassifyTried'
 
 export type AutoClassifyInputKind = 'embedding' | 'feature'
 
@@ -46,6 +50,7 @@ export function noteAutoClassifyInputRow(
     addedByDb.set(db, added)
   }
   added[kind].add(stemCID)
+  forgetStemTried(db, stemCID)
   notify()
 }
 
