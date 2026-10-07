@@ -212,6 +212,9 @@ export interface ClassifyBatchOptions {
 interface EmbeddingCandidateRow {
   StemCID: string
   EmbeddingJSON: string
+  /** 1 when the stem has a StemFeatureCache row too (the feature pass's to
+   * record while the embedding axis is untrained), else 0. */
+  HasFeatures: number
 }
 
 interface FeatureCandidateRow {
@@ -566,7 +569,9 @@ function fetchPendingEmbeddingRows(
   countWork('sql:auto-classify.fetch-embeddings')
   return ownDb
     .prepare(
-      `SELECT e.StemCID AS StemCID, e.EmbeddingJSON AS EmbeddingJSON FROM StemEmbeddingCache e
+      `SELECT e.StemCID AS StemCID, e.EmbeddingJSON AS EmbeddingJSON,
+         EXISTS (SELECT 1 FROM StemFeatureCache f WHERE f.StemCID = e.StemCID) AS HasFeatures
+       FROM StemEmbeddingCache e
        WHERE e.StemCID IN (${inPlaceholders(ids)}) AND ${BASE_ELIGIBILITY_WHERE('e')}`
     )
     .all(...ids) as EmbeddingCandidateRow[]
@@ -743,9 +748,12 @@ export async function classifyAutoCategoryBatch(
     // trained. `remaining` below only ever reflects ids not yet taken
     // from the pending lists. A row left unplaced is recorded as tried
     // (StemAutoClassifyTried) and taken again once the training moves or
-    // its own mask does -- except while the axis is untrained: such a stem
-    // is in the feature list too, and that pass records it (recording it
-    // here would keep it out of the feature list at the next rebuild).
+    // its own mask does -- except while the axis is untrained and the stem
+    // has a feature row: it is in the feature list too, and that pass
+    // records it (recording it here would keep it out of the feature list
+    // at the next rebuild). One with no feature row is recorded here, or
+    // it'd be fetched again at every rebuild and launch (review of
+    // 0adc41ca); a feature row arriving through the store forgets it.
     const taken = takePending(pending.embedding, BATCH_SIZE)
     const batchRows = fetchPendingEmbeddingRows(ownDb, taken)
     const masks = lookupInstrumentMasks(
@@ -763,8 +771,11 @@ export async function classifyAutoCategoryBatch(
         })
       }
       // Nothing trained yet on this axis -- every call would return null;
-      // leave it to the feature pass rather than spending a classify call.
-      if (!embeddingAxisTrained) return settle(row.StemCID, instrument, 'skip')
+      // leave it to the feature pass rather than spending a classify call,
+      // or, with no feature row for that pass, record it as not placed.
+      if (!embeddingAxisTrained) {
+        return settle(row.StemCID, instrument, row.HasFeatures ? 'skip' : null)
+      }
       let guessed: string | null = null
       try {
         guessed = suggestFromEmbedding(JSON.parse(row.EmbeddingJSON) as number[])

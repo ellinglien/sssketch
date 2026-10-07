@@ -1214,6 +1214,43 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
       expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['both-1']))
       expect(tried(db)).toEqual(['both-2'])
     })
+
+    // Review of 0adc41ca: with no feature row, no feature pass records it,
+    // so it was fetched again at every rebuild and launch.
+    it('with an untrained embedding axis, records an embedding-only stem itself', async () => {
+      const path = join(dir, 'own.db')
+      const first = freshDb(path)
+      seedEmbedding(first, 'embedding-only', [0.5, 0.5, 0])
+      expect(await classifyAutoCategoryBatch(first)).toEqual({ processed: 0, remaining: 0 })
+      expect(tried(first)).toEqual(['embedding-only'])
+      first.close()
+
+      const db = freshDb(path)
+      const fetches = embeddingFetches(db)
+      expect(await classifyAutoCategoryBatch(db)).toEqual({ processed: 0, remaining: 0 })
+      expect(fetches()).toEqual([])
+
+      // a feature row arriving (through the store) brings it back, to the
+      // centroid pass
+      trainedCentroidStore()
+      seedInstrument(db, 'embedding-only', AUDIO_IN_BIT) // so the store resolves the path
+      setStemFeatureCache(
+        db,
+        '/x/embedding-only',
+        {
+          transientDensity: 0.9,
+          bassEnergyRatio: 0.1,
+          spectralCentroidHz: 0,
+          zcrBrightness: 0,
+          voicedFraction: 0,
+          pitchVarianceCents: 0,
+          mfcc: new Array(13).fill(0)
+        },
+        2000
+      )
+      await runToCompletion(db)
+      expect(getAutoCategorizedStemCIDs(db, 'drums')).toEqual(new Set(['embedding-only']))
+    })
   })
 
   it('drops a listed id that was confirmed after the list was built', async () => {
