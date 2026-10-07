@@ -171,8 +171,15 @@ export async function syncSharedFeed(
   syncsInFlight.set(key, controller)
   noteSyncsInFlightChanged()
   try {
-    // A capitalised feed from before: all of it becomes this one, once.
-    mergeSharedFeedCaseVariants(db, key)
+    // A capitalised feed from before: all of it becomes this one, once. A
+    // fold that fails (all or nothing: nothing moved) must not cost the sync
+    // itself -- logged, and tried again by the next sync, which finds the
+    // same variant still there (review of 0e27db79).
+    try {
+      mergeSharedFeedCaseVariants(db, key)
+    } catch (err) {
+      console.error(`syncSharedFeed: folding other spellings into ${key} failed:`, err)
+    }
     upsertJam(db, key, 'Shared Feed')
     let offset = 0
     let resolvedCount = 0

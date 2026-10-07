@@ -193,6 +193,44 @@ describe('syncSharedFeed', () => {
     expect(String(fetchImpl.mock.calls[0][0])).not.toContain('Elling')
   })
 
+  // Review of 0e27db79: the fold ran inside the sync's try, so a fold that
+  // threw ended every later sync of the feed too.
+  it('a fold that throws is logged and skipped: the sync goes on, and the next sync folds', async () => {
+    const { syncSharedFeed } = await import('./riffLibrarySync')
+    const db = freshDb()
+    db.exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 1);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES ('old_0', 'shared:Elling', 1);
+      CREATE TRIGGER fail_on_riff_move BEFORE UPDATE OF OwnerJamCID ON Riffs
+        WHEN OLD.OwnerJamCID = 'shared:Elling'
+        BEGIN SELECT RAISE(ABORT, 'disk full'); END;
+    `)
+    const fetchImpl = vi.fn(async (url: string) => {
+      if (url.startsWith('https://cdn.example.com')) {
+        return new Response(new ArrayBuffer(8), { status: 200 })
+      }
+      return new Response(JSON.stringify(sharedFeedPage(['new_0'], false)), { status: 200 })
+    })
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+      expect(errors).toHaveBeenCalled()
+    } finally {
+      errors.mockRestore()
+    }
+    // synced all the same
+    expect(
+      db.prepare(`SELECT RiffCID FROM Riffs WHERE OwnerJamCID = 'shared:elling'`).all()
+    ).toEqual([{ RiffCID: 'new_0' }])
+
+    db.exec(`DROP TRIGGER fail_on_riff_move`)
+    await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+    expect(db.prepare(`SELECT JamCID FROM Jams`).all()).toEqual([{ JamCID: 'shared:elling' }])
+    expect(
+      db.prepare(`SELECT COUNT(*) AS n FROM Riffs WHERE OwnerJamCID = 'shared:elling'`).get()
+    ).toEqual({ n: 2 })
+  })
+
   it('a repeat sync with nothing new stops after the first page instead of walking to the end', async () => {
     const { syncSharedFeed } = await import('./riffLibrarySync')
     const db = freshDb()
@@ -322,9 +360,6 @@ describe('syncJam', () => {
 })
 
 describe('syncs in flight', () => {
-  // Read by BackgroundWorkIndicator.tsx (via index.ts's
-  // riff-library-sync-active push), so "syncing library" shows while any
-  // sync runs -- including one started while the Library Browser is closed.
   it('reports how many syncs are running as each one starts and finishes', async () => {
     const { syncSharedFeed, activeSyncCount, setSyncsInFlightListener } =
       await import('./riffLibrarySync')
