@@ -71,6 +71,19 @@ interface HeartStemRow {
   CreatorUserName: string | null
 }
 
+/** The dbs a heart's stems are looked up in: the archive first, then the
+ * own db, always and last -- the order listJamsWithDb and
+ * candidateDbsForRiff give every other reader, so a stem both have (the
+ * Shared Feed holds 4,869 archive stems) resolves to the archive's row and
+ * audio, as Discover rolls it. It put the own db first until 2026-10-07's
+ * review of b859757c. */
+export function heartLookupDbs(
+  ownDb: Database.Database,
+  candidates: readonly Database.Database[]
+): Database.Database[] {
+  return [...candidates.filter((db) => db !== ownDb), ownDb]
+}
+
 /** A hearted stem as keep's own member shape, or null when it has no local
  * audio. Looks the stem up in each db in turn (own first, then any external
  * archive -- candidateDbsForRiff), and takes its path from resolveStemPath,

@@ -101,7 +101,7 @@ import {
   type DiscoveredMemberInput,
   type SaveDiscoveredResult
 } from './discoveredLibrary'
-import { fetchRadioHearts, resolveHeartStem } from './radioHeartsImport'
+import { fetchRadioHearts, heartLookupDbs, resolveHeartStem } from './radioHeartsImport'
 import { loadRadioHeartsKey, radioHeartsKeyStatus, saveRadioHeartsKey } from './radioHeartsKeyStore'
 import {
   lanIPv4Address,
@@ -1016,7 +1016,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('fetch-radio-hearts', () => {
     if (refusesListenOnly('fetchHearts')) return { ok: false, reason: 'listening only' } as const
     const ownDb = openOwnRiffLibraryDb()
-    const dbs = [ownDb, ...candidateDbsForRiff().filter((db) => db !== ownDb)]
+    const dbs = heartLookupDbs(ownDb, candidateDbsForRiff())
     return fetchRadioHearts({
       key: loadRadioHeartsKey(),
       fetch: (url, init) => fetch(url, { ...init, signal: AbortSignal.timeout(20_000) }),

@@ -583,4 +583,42 @@ describe('fetchRadioHearts', () => {
     // No row at all.
     expect(resolveHeartStem('nope', [db])).toBeNull()
   })
+
+  it('heartLookupDbs: the archive first, then the own db, as every other reader (review of b859757c)', async () => {
+    const { heartLookupDbs, resolveHeartStem } = await import('./radioHeartsImport')
+    const { setRiffLibraryRootForTests } = await import('./riffLibraryStore')
+    const own = freshOwnDb()
+    const lore = freshOwnDb()
+    expect(heartLookupDbs(own, [lore, own])).toEqual([lore, own])
+    expect(heartLookupDbs(own, [own])).toEqual([own])
+    expect(heartLookupDbs(own, [])).toEqual([own])
+
+    // A stem both have, with audio in both places: the archive's copy.
+    const root = mkdtempSync(join(tmpdir(), 'hearts-archive-'))
+    setRiffLibraryRootForTests(root)
+    try {
+      lore
+        .prepare(
+          `INSERT INTO Stems (StemCID, OwnerJamCID, BPMrnd, Length16s, PresetName, CreatorUserName)
+           VALUES ('abc123', 'jam-x', 120, 32, 'thud', 'tpj')`
+        )
+        .run()
+      own
+        .prepare(
+          `INSERT INTO Stems (StemCID, OwnerJamCID, BPMrnd, Length16s, PresetName, CreatorUserName)
+           VALUES ('abc123', 'shared:elling', 120, 32, 'thud', 'tpj')`
+        )
+        .run()
+      const lorePath = join(root, 'cache', 'common', 'stem_v2', 'jam-x', 'a', 'abc123')
+      const ownPath = join(userDataDir, 'endlesss-cache', 'stems', 'a', 'abc123')
+      for (const path of [lorePath, ownPath]) {
+        mkdirSync(join(path, '..'), { recursive: true })
+        writeFileSync(path, Buffer.from([1]))
+      }
+      expect(resolveHeartStem('abc123', heartLookupDbs(own, [lore, own]))?.path).toBe(lorePath)
+    } finally {
+      setRiffLibraryRootForTests(null)
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
