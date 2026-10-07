@@ -48,7 +48,8 @@ describe('markFreshPluginChoice', () => {
     }
     markFreshPluginChoice({ kind: 'master', slot: 1 })
     expect(pluginSwitchStateRef.current.fresh).toEqual(['master:1'])
-    expect(pluginSwitchStateRef.current.parked['master:1']).toBeUndefined()
+    // Parked settings stay: reconcile drops only the picked plugin's when it loads.
+    expect(pluginSwitchStateRef.current.parked['master:1']).toEqual({ verb: 'OLD' })
     pluginSwitchStateRef.current = initialPluginSwitchState
   })
 })

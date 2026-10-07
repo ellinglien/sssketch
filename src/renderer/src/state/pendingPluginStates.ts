@@ -31,7 +31,7 @@ export const pluginSwitchStateRef: { current: PluginSwitchState } = {
 /** A plugin picked for `target` by hand (the slot's menu, the plugin browser), called just before
  * the chain edit is dispatched: it starts at its defaults, whatever a removal of the same plugin
  * there left parked -- those settings are for an undo only (@shared/pluginSwitch's
- * withFreshChoice). StoreContext's next step reads the ref, so nothing is lost between. */
+ * withFreshChoice). Another plugin's parked there are kept, for an undo past this pick. StoreContext's next step reads the ref, so nothing is lost between. */
 export function markFreshPluginChoice(target: PluginSlotTarget): void {
   pluginSwitchStateRef.current = withFreshChoice(
     pluginSwitchStateRef.current,

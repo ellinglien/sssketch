@@ -1167,6 +1167,60 @@ describe('pluginSwitchStep: a plugin picked fresh (the browser or the slot`s men
     expect(picked.state.fresh).toEqual([])
   })
 
+  it('keeps the settings of another plugin removed from that slot: remove, pick, undo, undo', () => {
+    const live = allLoaded(project, saved)
+    const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }
+    const rm = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(removed, {}))
+    const rmAnswered = pluginSwitchStep(
+      rm.state,
+      {
+        type: 'load-result',
+        slotKey: 'master:0',
+        pluginId: '',
+        success: true,
+        previousState: 'VERB-TWEAKED'
+      },
+      ctx(removed, rm.pending)
+    )
+    // Another plugin picked fresh in the same slot.
+    const other: PluginChains = { ...project, masterChain: ['delay', null, 'comp', null] }
+    const picked = pluginSwitchStep(
+      withFreshChoice(rmAnswered.state, 'master:0'),
+      { type: 'chains-changed' },
+      ctx(other, rmAnswered.pending)
+    )
+    expect(picked.loads.map((l) => [l.pluginId, l.stateBase64])).toEqual([['delay', null]])
+    const pickAnswered = pluginSwitchStep(
+      picked.state,
+      { type: 'load-result', slotKey: 'master:0', pluginId: 'delay', success: true },
+      ctx(other, picked.pending)
+    )
+    // Undo the pick: the slot is empty again.
+    const undo1 = pluginSwitchStep(
+      pickAnswered.state,
+      { type: 'chains-changed' },
+      ctx(removed, pickAnswered.pending)
+    )
+    const undo1Answered = pluginSwitchStep(
+      undo1.state,
+      {
+        type: 'load-result',
+        slotKey: 'master:0',
+        pluginId: '',
+        success: true,
+        previousState: 'DELAY-X'
+      },
+      ctx(removed, undo1.pending)
+    )
+    // Undo the removal: the first plugin comes back as it was.
+    const undo2 = pluginSwitchStep(
+      undo1Answered.state,
+      { type: 'chains-changed' },
+      ctx(project, undo1Answered.pending)
+    )
+    expect(undo2.loads.map((l) => [l.pluginId, l.stateBase64])).toEqual([['verb', 'VERB-TWEAKED']])
+  })
+
   it('does not wait for a removal still in flight', () => {
     const live = allLoaded(project, saved)
     const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }

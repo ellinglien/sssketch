@@ -227,15 +227,14 @@ function engineWillHold(
 }
 
 /** A plugin picked fresh for `slotKey` (the browser, the slot's menu -- not an undo): its next
- * load starts at its defaults, not with settings parked there by an earlier removal. */
+ * load starts at its defaults, not with settings parked there by an earlier removal. Only the
+ * picked plugin's parked settings are dropped (reconcile, when it loads): another plugin removed
+ * from that slot keeps its own, for an undo past this pick. */
 export function withFreshChoice(state: PluginSwitchState, slotKey: string): PluginSwitchState {
-  const parked = { ...state.parked }
-  delete parked[slotKey]
   const awaiting = { ...state.awaiting }
   delete awaiting[slotKey]
   return {
     ...state,
-    parked,
     awaiting,
     fresh: state.fresh.includes(slotKey) ? state.fresh : [...state.fresh, slotKey]
   }
