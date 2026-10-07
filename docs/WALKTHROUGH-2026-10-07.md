@@ -273,8 +273,23 @@ Advanced features must be on (they should already be on for you, see the next se
 - [ ] Open a plugin editor, turn a knob, and close the editor. **You should see:**
   - the project shows as unsaved, and Cmd+Q asks to save;
   - after you save, quit and reopen, the knob is where you left it.
+- [ ] Save, open a plugin editor, and close it without touching anything. **You should see:** the
+  project stays saved. Opening an editor alone no longer counts as a change.
 - [ ] Save, then turn a knob with the editor still open. **You should see:** "unsaved" comes back
   within about a second.
+- [ ] Try a plugin that moves on its own: a compressor with a gain-reduction meter, or anything
+  with an LFO. Play something through it, save, then leave its editor open for a minute without
+  touching it. **You should see:** the project stays saved. Then turn one of its knobs. **You
+  should see:** "unsaved" within about a second. Try two or three different plugins (VST3 and AU)
+  if you can: a knob in a plugin that doesn't report it properly might be missed, and that's worth
+  a line here.
+- [ ] Keep turning knobs in an open editor for about a minute, then force-quit the app (Activity
+  Monitor → sssketch → Force Quit) and relaunch. **You should see:** the offer to recover unsaved
+  work, with your knob settings in it. (The crash-recovery copy is now written at least every 30
+  seconds while you keep editing; before, constant knob turns kept putting it off.)
+- [ ] Save, wait 10 seconds, Cmd+Q and relaunch. **You should see:** no "recover unsaved work"
+  offer. Do the same with a brand-new project's first save, and once after an edit you undid back
+  to the saved state.
 - [ ] With tweaked plugins loaded, run `pkill sssketch-engine` in a terminal, which forces the audio
   engine to restart. **You should see:**
   - the plugins reload with your tweaks;
@@ -283,16 +298,24 @@ Advanced features must be on (they should already be on for you, see the next se
   **You should see:**
   - B's X stays at its defaults;
   - saving B doesn't write A's settings into it.
+- [ ] Open a project with a plugin on a channel's insert, then open another project that has no
+  plugin on that channel (or no plugins at all). Play. **You should hear:** no trace of the first
+  project's plugin. Before this fix it kept playing in the second project.
 - [ ] Make some unsaved edits, then use Duplicate. **You should see:** the new version has the
   edits, and the original is unchanged. (Before this fix, Duplicate damaged the original.)
 - [ ] Use "save a copy" elsewhere, and rename an untitled project with plugins. **You should see:**
   both keep the plugin settings.
 - [ ] Remove a tweaked plugin, then press Cmd+Z. **You should see:** it comes back with its tweaks.
+  Do it again, pressing Cmd+Z straight after removing it (as fast as you can). **You should see:**
+  the same: its tweaks, not its defaults.
+- [ ] Remove a tweaked plugin, then pick the same plugin again from the slot's menu or "browse
+  all...". **You should see:** it comes back at its defaults. Only Cmd+Z brings back the tweaks.
 - [ ] Load a plugin that fails (or rename its file so it can't be found). **You should see:**
   - it stays in its slot and shows "failed to load" (or `not in your plugin list · scan for
     plugins`);
   - after a rescan it loads, with its settings.
 - [ ] Open a project that has channel plugins. **You should see:** they load and you hear them.
+  A slot that shows "failed to load" stays that way; it isn't retried over and over.
 - [ ] Open a project with plugins and touch nothing. **You should see:** it does **not** show as
   unsaved, and Cmd+Q doesn't ask to save.
 - [ ] If you have any plug-ins in your own `~/Library/Audio/Plug-Ins` folder, run "scan for
@@ -426,8 +449,23 @@ Advanced features must be on (they should already be on for you, see the next se
   about 2.5 minutes.
 - **The loudness backfill tops out at about 98%.** A few stems have no audio file anywhere and
   never get a level.
-- **Plugins through the Intel bridge** aren't watched while their editor is open, so a knob turned
-  there doesn't mark the project unsaved until something else does.
+- **Plugins through the Intel bridge** aren't watched while their editor is open. Opening such a
+  plugin's editor marks the project unsaved straight away, whether or not you then change anything.
+- **A plugin that changes by itself, without telling the host it's a knob turn:** a few plugins
+  never mark their knob turns (no "gesture"). For those, a change made on the app's main thread
+  counts, unless it's a meter. An AU that shows its meters as ordinary parameters can still mark
+  the project unsaved while its editor is open. Say which plugin if you see it.
+- **"plugins still loaded" (top right)** appears only if you turn advanced features off and the
+  plugins' settings can't be read back. It retries for about three minutes, then stops and says
+  to turn advanced features back on. There's no way to force this on purpose.
+- **Accepted, not fixed:**
+  - Opening a project reloads every plugin, even one already loaded with the same plugin in the
+    same slot. Expect a short gap in its sound and a little CPU. Reusing the loaded plugin and
+    applying the new settings to it would be faster, but riskier.
+  - The first-launch "advanced features" decision reads at most 300 library folders, taken by name
+    from the end. Generated names start with the date, so that's roughly the newest 300. A library
+    of hand-named folders could be read in a different order. That only affects whether advanced
+    features start on.
 - **Move visuals, for your eye:**
   - the echo-throw "ghost" is faint;
   - the throw's word ends before the echo stops ringing;
