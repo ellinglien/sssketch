@@ -13,13 +13,19 @@ AI disclosure: this codebase is AI-assisted. See [AI_DISCLOSURE.md](AI_DISCLOSUR
 
 ![sssketch arranger view](docs/screenshots/app.png)
 
+## What you need
+
+- **A Mac** running macOS 12 (Monterey) or newer. Both kinds of chip work: Apple Silicon and Intel each have their own download (see [Installing](#installing)).
+- **An Endlesss account**, really. You can drag any stems in without one, but importing, discover and radio all work from your riff library, and the easy way to fill that is to log into Endlesss and sync your jams.
+- **LORE** is optional. If you already have an [OUROVEON](https://github.com/OUROcorp/OUROVEON) LORE archive of your jams, sssketch can read it directly: gear menu → `change riff archive location…`, then pick the archive folder (the one with `cache/common/warehouse.db3` inside; if you pick a folder one level off, sssketch finds it). `use sssketch's own library` in the same menu switches back.
+
 ## Getting your audio in
 
 Two ways to bring stems into a project:
 
 - **Drag and drop** — drag a collection of stems directly into a project library (from Endlesss or ... wherever, though Endlesss audio is the only audio we've been testing with.)
 - **Log into Endlesss** — click "import" and sign in with your Endlesss account to
-  browse your shared feed or private jams directly.
+  browse your shared feed or private jams directly. The first time, sssketch asks before it syncs your shared feed and your own jam, because downloading all that audio can take a lot of space. Other jams sync when you press their sync button.
 
 ## The basic ideas
 
@@ -31,6 +37,39 @@ Two ways to bring stems into a project:
 - **sssketchy** — a small pixel character who walks you from a loop to a rough track: name what the loop is, pick a shape, and he lays out a map you can edit, then offers sweeps, fades and risers at the joins. He suggests goals rather than giving instructions, and everything he makes is ordinary clips and curves you can move or undo. Still new and rough.
 - **a built-in sound toolkit** — a filter sweep, a reverb send and a volume curve per clip, drawn by hand in an automation lane you show over the arrange view with the transport bar's automation button, plus white-noise risers you drag out to whatever length you want. On export you choose: bake them into the audio, or send them out as real automation on the DAW's own stock devices.
 - **Various DAW exports** — writes real app project files for Ableton Live 12 and REAPER, with the tidied bus groupings mapped onto tracks and colors. You can also export stems of the tidied buses too.
+
+## Discover and radio
+
+- **discover** rolls up a handful of stems from your riff library that should work together: same tempo, a sensible mix of drums, bass and the rest. Hold the ones you like, reroll the rest, and add the result to the timeline or keep it for later. The `source` dial chooses between Endlesss's built-in instruments and your own recorded sounds (half and half to start).
+- **radio** is discover on a clock: it keeps playing and swaps one layer at a time at the end of each loop, so it slowly drifts through your library. Good for finding combinations you'd never have picked by hand.
+
+Both only draw from your riff library. Stems you drag in, or import from a loop folder, go straight to the timeline instead. If your library is empty, both say so and point you at the ways to fill it.
+
+The first time you open discover it asks whether it may analyse your whole library in the background so it can find better matches. That analysis runs on your Mac; nothing is sent anywhere.
+
+## Advanced features
+
+sssketch has a few extras most people won't need, so they start switched off. Turn them on from the gear menu: `advanced features: on`. Switching off hides them again without deleting anything.
+
+- **plugins** — VST3 and Audio Unit effects on the master and on each channel. sssketch looks for them in `/Library/Audio/Plug-Ins` and in your own `~/Library/Audio/Plug-Ins`.
+- **recording** — record from your audio input straight into a project. macOS asks for microphone permission the first time.
+- **phone remote** — control discover and radio from your phone's browser. Your phone and Mac need to be on the same Wi-Fi; the Mac shows an address, a QR code and a four-character pairing code. macOS may ask whether to allow incoming connections: say yes. Playback stays on the Mac; the paired phone is sent the stems of the loop that's playing, and nothing else. Some routers (especially guest and mesh networks) stop devices on the same Wi-Fi from talking to each other; if the phone can't connect, a VPN like [Tailscale](https://tailscale.com/) on both works around it.
+- **sound defaults** — the starting sound settings for new projects.
+- **hearts key** — only for the web radio at ell.ing, so you can ignore this one.
+
+## Where your stuff lives
+
+- **`~/Music/sssketch`** — your saved sketches (unless you chose another place on first launch), and `library/`, the riff library database that the Endlesss sync fills in.
+- **`~/Library/Application Support/sssketch`** — app settings, caches, and the audio of every synced riff (`endlesss-cache`). This is the one that can get big: an active Endlesss account can mean many gigabytes.
+
+## What goes over the network
+
+sssketch has no accounts of its own, no analytics and no crash reporting. It only talks to:
+
+- **Endlesss**, while you're logged in: to log in, list your jams and riffs, and download the audio of the riffs you sync. Your password is never stored, only the session Endlesss gives back, encrypted by macOS.
+- **GitHub**, to check for a new version of sssketch: when the app starts and every few hours after. It sends nothing about you beyond a normal web request, and it asks before downloading an update.
+- **ell.ing**, only if you've entered a hearts key and press `fetch hearts`. Without a key, nothing is sent.
+- **Your own phone**, if you turn the phone remote on (advanced features). It only listens on your local network, only while it's on, and only answers a phone that has typed the pairing code.
 
 ## Exporting
 
@@ -65,16 +104,20 @@ Latest version: **1.4.0**
 - [**sssketch-1.4.0-arm64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.4.0/sssketch-1.4.0-arm64.dmg) — Apple Silicon (M1/M2/M3/M4)
 - [**sssketch-1.4.0-x64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.4.0/sssketch-1.4.0-x64.dmg) — Intel
 
-Not sure which you have? Apple menu → About This Mac — it lists the chip.
+### Which file do I download?
+
+- **Intel** → download the file with `-x64` in the name.
+- **Chip: Apple M1** (or M2, M3, M4 — any Apple chip) → download the one **without** `-x64` in the name.
+- Not sure, rule of thumb: Older Mac (roughly 2020 or earlier) likely Intel. Newer ones use the M chip.
+
+Picked wrong by accident? No harm done — it just won't open, and you can grab the other one. To check for sure: Apple menu → About This Mac lists the chip.
 
 Older versions, and the notes for each, are on the [Releases page](../../releases).
 
 Drag `sssketch.app` from the `.dmg` into Applications to install. The app is signed and
 notarized, so Gatekeeper should open it normally after you approve opening an app downloaded from the internet.
 
-**Uninstalling:** drag `sssketch.app` to the Trash. Your saved sketches live in `~/Music/sssketch` (or wherever you chose on first launch) and
-aren't touched; delete that folder too if you want them gone. App preferences and caches live
-in `~/Library/Application Support/sssketch`.
+**Uninstalling:** drag `sssketch.app` to the Trash. That leaves your stuff where it is (see [Where your stuff lives](#where-your-stuff-lives)): delete `~/Music/sssketch` if you want your sketches and riff library gone, and `~/Library/Application Support/sssketch` for the settings and the synced audio, which is usually the big one.
 
 ## Known issues
 
