@@ -784,6 +784,15 @@ export function peekSharedFeedCache(riffCIDs: string[]): Map<string, RiffLibrary
   return result
 }
 
+/** The page listSharedFeed/listRiffsInJam return when the request never
+ * produced one (cancelled, timed out, network error, HTTP error, malformed
+ * body, not logged in). Empty like the feed's real end, so it is marked
+ * `failed`: a sync that took it as the end marked the jam fully synced and
+ * never fetched the riffs past it. */
+function failedPage(offset: number): RiffPage {
+  return { riffs: [], hasMore: false, nextOffset: offset, failed: true }
+}
+
 export async function listSharedFeed(
   userName: string,
   offset: number,
@@ -806,11 +815,11 @@ export async function listSharedFeed(
     )
   } catch (err) {
     console.error('endlesssApi: listSharedFeed network failure:', err)
-    return { riffs: [], hasMore: false, nextOffset: offset }
+    return failedPage(offset)
   }
   if (!res.ok) {
     console.error(`endlesssApi: listSharedFeed HTTP ${res.status}`)
-    return { riffs: [], hasMore: false, nextOffset: offset }
+    return failedPage(offset)
   }
 
   let body: RawSharedFeedResponse
@@ -818,7 +827,7 @@ export async function listSharedFeed(
     body = (await res.json()) as RawSharedFeedResponse
   } catch (err) {
     console.error('endlesssApi: listSharedFeed malformed JSON:', err)
-    return { riffs: [], hasMore: false, nextOffset: offset }
+    return failedPage(offset)
   }
 
   const newCache = new Map<string, RiffLibraryResolvedRiff>()
@@ -984,7 +993,7 @@ export async function listRiffsInJam(
   const limit = filters.limit ?? DEFAULT_RIFF_PAGE_SIZE
 
   const session = activeSession()
-  if (!session) return { riffs: [], hasMore: false, nextOffset: offset }
+  if (!session) return failedPage(offset)
 
   let res: Response
   try {
@@ -997,11 +1006,11 @@ export async function listRiffsInJam(
     )
   } catch (err) {
     console.error('endlesssApi: listRiffsInJam network failure:', err)
-    return { riffs: [], hasMore: false, nextOffset: offset }
+    return failedPage(offset)
   }
   if (!res.ok) {
     console.error(`endlesssApi: listRiffsInJam HTTP ${res.status}`)
-    return { riffs: [], hasMore: false, nextOffset: offset }
+    return failedPage(offset)
   }
 
   let body: RawRiffListResponse
@@ -1009,7 +1018,7 @@ export async function listRiffsInJam(
     body = (await res.json()) as RawRiffListResponse
   } catch (err) {
     console.error('endlesssApi: listRiffsInJam malformed JSON:', err)
-    return { riffs: [], hasMore: false, nextOffset: offset }
+    return failedPage(offset)
   }
 
   const rows = body.rows ?? []

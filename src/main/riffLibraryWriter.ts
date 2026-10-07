@@ -114,6 +114,20 @@ export function markJamSyncComplete(db: Database.Database, jamCID: string): void
   bumpTableWriteVersion(db, 'Jams')
 }
 
+/** Takes back markJamSyncComplete, so the next sync walks the whole jam again
+ * (riffLibrarySync.ts): set before a catch-up of a complete jam resolves new
+ * riffs, which it can't promise to finish. */
+export function markJamSyncIncomplete(db: Database.Database, jamCID: string): void {
+  db.prepare(`UPDATE Jams SET SyncComplete = 0 WHERE JamCID = ?`).run(jamCID)
+  bumpTableWriteVersion(db, 'Jams')
+}
+
+export function isJamSyncComplete(db: Database.Database, jamCID: string): boolean {
+  const jam = db.prepare(`SELECT SyncComplete FROM Jams WHERE JamCID = ?`).get(jamCID) as
+    { SyncComplete: number } | undefined
+  return jam?.SyncComplete === 1
+}
+
 export interface RiffSkeleton {
   riffCID: string
   creationTime: number

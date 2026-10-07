@@ -383,6 +383,311 @@ describe('syncJam', () => {
   })
 })
 
+// A page that never arrived says nothing about where the feed ends: a cancel
+// mid-fetch, a network error, a 5xx or a timeout must leave the jam
+// resumable, and the next sync must pick up the riffs past that point.
+describe('a failed or cancelled page fetch is not the end of the feed', () => {
+  const abortError = (): Error => new DOMException('This operation was aborted', 'AbortError')
+
+  /** How the page fetch fails, for each way it can. */
+  const failures: [string, () => Promise<Response>][] = [
+    ['a 503', async () => new Response('busy', { status: 503 })],
+    ['a 500', async () => new Response('oops', { status: 500 })],
+    ['a network error', async () => Promise.reject(new TypeError('fetch failed'))],
+    [
+      'a timeout',
+      async () => Promise.reject(new DOMException('The operation timed out.', 'TimeoutError'))
+    ],
+    ['a malformed body', async () => new Response('<html>', { status: 200 })]
+  ]
+
+  function quietErrors(): () => void {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    return () => spy.mockRestore()
+  }
+
+  function count(db: Database.Database, where: string): number {
+    return (db.prepare(`SELECT COUNT(*) AS n FROM Riffs WHERE ${where}`).get() as { n: number }).n
+  }
+
+  function syncComplete(db: Database.Database, jamCID: string): number {
+    return (
+      db.prepare(`SELECT SyncComplete FROM Jams WHERE JamCID = ?`).get(jamCID) as {
+        SyncComplete: number
+      }
+    ).SyncComplete
+  }
+
+  /** A shared feed of `cids`, newest first, paged as the real endpoint is;
+   * `failPage(offset)` returns a failure for a page, or null to serve it. */
+  function feedFetch(
+    cids: () => string[],
+    failPage: (offset: number, init?: RequestInit) => Promise<Response> | null
+  ): typeof fetch {
+    return vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://cdn.example.com'))
+        return new Response(new ArrayBuffer(8), { status: 200 })
+      const params = new URL(url).searchParams
+      const offset = Number(params.get('from'))
+      const size = Number(params.get('size'))
+      const failure = failPage(offset, init)
+      if (failure) return failure
+      const page = cids().slice(offset, offset + size)
+      return new Response(JSON.stringify(sharedFeedPage(page, false)), { status: 200 })
+    }) as unknown as typeof fetch
+  }
+
+  const firstSyncCids = [
+    ...Array.from({ length: 100 }, (_, i) => `a_${i}`),
+    ...Array.from({ length: 30 }, (_, i) => `b_${i}`)
+  ]
+
+  it('a shared-feed sync cancelled during a page fetch stays resumable, and the next sync fetches the rest', async () => {
+    const { syncSharedFeed, abortSync } = await import('./riffLibrarySync')
+    const db = freshDb()
+    let cancelNext = true
+    const fetchImpl = feedFetch(
+      () => firstSyncCids,
+      (offset) => {
+        if (offset !== 100 || !cancelNext) return null
+        cancelNext = false
+        // The cancel lands while the second page is in flight; fetch then
+        // rejects, as a real one does when its signal aborts.
+        expect(abortSync('shared:elling')).toBe(true)
+        return Promise.reject(abortError())
+      }
+    )
+    const restore = quietErrors()
+    try {
+      await syncSharedFeed('elling', () => {}, fetchImpl, db)
+    } finally {
+      restore()
+    }
+    expect(count(db, '1')).toBe(100)
+    expect(syncComplete(db, 'shared:elling')).toBe(0)
+
+    await syncSharedFeed('elling', () => {}, fetchImpl, db)
+    expect(count(db, 'AppVersion IS NOT NULL')).toBe(130)
+    expect(syncComplete(db, 'shared:elling')).toBe(1)
+  })
+
+  it.each(failures)(
+    'a shared-feed page fetch that fails with %s leaves the jam unfinished, and the next sync goes on past it',
+    async (_name, fail) => {
+      const { syncSharedFeed } = await import('./riffLibrarySync')
+      const db = freshDb()
+      let failNext = true
+      const fetchImpl = feedFetch(
+        () => firstSyncCids,
+        (offset) => {
+          if (offset !== 100 || !failNext) return null
+          failNext = false
+          return fail()
+        }
+      )
+      const restore = quietErrors()
+      try {
+        await syncSharedFeed('elling', () => {}, fetchImpl, db)
+      } finally {
+        restore()
+      }
+      expect(count(db, '1')).toBe(100)
+      expect(syncComplete(db, 'shared:elling')).toBe(0)
+
+      await syncSharedFeed('elling', () => {}, fetchImpl, db)
+      expect(count(db, 'AppVersion IS NOT NULL')).toBe(130)
+      expect(syncComplete(db, 'shared:elling')).toBe(1)
+    }
+  )
+
+  it('a synced feed whose catch-up fails past its first page is no longer complete, so the next sync reaches the old riffs', async () => {
+    const { syncSharedFeed } = await import('./riffLibrarySync')
+    const db = freshDb()
+    // Synced to the end once: ten old riffs.
+    const old = Array.from({ length: 10 }, (_, i) => `old_${i}`)
+    let cids = old
+    let failNext = false
+    const fetchImpl = feedFetch(
+      () => cids,
+      (offset) => {
+        if (offset !== 100 || !failNext) return null
+        failNext = false
+        return Promise.resolve(new Response('busy', { status: 503 }))
+      }
+    )
+    await syncSharedFeed('elling', () => {}, fetchImpl, db)
+    expect(syncComplete(db, 'shared:elling')).toBe(1)
+
+    // 150 new ones since, more than a page: the catch-up resolves the first
+    // page, then the second page's fetch fails.
+    const fresh = Array.from({ length: 150 }, (_, i) => `new_${i}`)
+    cids = [...fresh, ...old]
+    failNext = true
+    const restore = quietErrors()
+    try {
+      await syncSharedFeed('elling', () => {}, fetchImpl, db)
+    } finally {
+      restore()
+    }
+    expect(syncComplete(db, 'shared:elling')).toBe(0)
+
+    // The first page is all done now, but the walk must not stop there.
+    await syncSharedFeed('elling', () => {}, fetchImpl, db)
+    expect(count(db, 'AppVersion IS NOT NULL')).toBe(160)
+    expect(syncComplete(db, 'shared:elling')).toBe(1)
+  })
+
+  it('a riff whose stem download a cancel cut short is not saved as resolved', async () => {
+    const { syncSharedFeed, abortSync } = await import('./riffLibrarySync')
+    const db = freshDb()
+    let cdnStarted = (): void => {}
+    const cdnRequested = new Promise<void>((r) => (cdnStarted = r))
+    let holdCdn = true
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://cdn.example.com')) {
+        if (!holdCdn) return new Response(new ArrayBuffer(8), { status: 200 })
+        cdnStarted()
+        // Held until the sync is cancelled, then rejects as fetch does.
+        return new Promise<Response>((_, reject) => {
+          init?.signal?.addEventListener('abort', () => reject(abortError()))
+        })
+      }
+      return new Response(JSON.stringify(sharedFeedPage(['r1'], false)), { status: 200 })
+    }) as unknown as typeof fetch
+
+    const restore = quietErrors()
+    try {
+      const running = syncSharedFeed('elling', () => {}, fetchImpl, db)
+      await cdnRequested
+      abortSync('shared:elling')
+      await running
+    } finally {
+      restore()
+    }
+    expect(count(db, 'AppVersion IS NOT NULL')).toBe(0)
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM StemLedger`).get()).toEqual({ n: 0 })
+    expect(syncComplete(db, 'shared:elling')).toBe(0)
+
+    holdCdn = false
+    await syncSharedFeed('elling', () => {}, fetchImpl, db)
+    expect(count(db, 'AppVersion IS NOT NULL')).toBe(1)
+    expect(syncComplete(db, 'shared:elling')).toBe(1)
+  })
+
+  describe('a private jam', () => {
+    async function loggedIn(): Promise<typeof import('./riffLibrarySync')> {
+      vi.resetModules()
+      const { loginWithCredentials } = await import('./endlesssApi')
+      const loginFetch = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ token: 't', password: 'p', user_id: 'u1', expires: Date.now() + 1e5 }),
+            { status: 200 }
+          )
+      )
+      await loginWithCredentials('elling', 'hunter2', loginFetch as unknown as typeof fetch)
+      return import('./riffLibrarySync')
+    }
+
+    // 200 is the jam page size: two pages, the second short.
+    const jamCids = Array.from({ length: 230 }, (_, i) => `j_${i}`)
+
+    function jamFetch(failPage: (offset: number) => Promise<Response> | null): typeof fetch {
+      return vi.fn(async (url: string, init?: RequestInit) => {
+        if (url.startsWith('https://cdn.example.com'))
+          return new Response(new ArrayBuffer(8), { status: 200 })
+        if (url.includes('rifffLoopsByCreateTime')) {
+          const params = new URL(url).searchParams
+          const offset = Number(params.get('skip'))
+          const limit = Number(params.get('limit'))
+          const failure = failPage(offset)
+          if (failure) return failure
+          const rows = jamCids
+            .slice(offset, offset + limit)
+            .map((cid, i) => rawRiffListRow(cid, 1700000000000 - offset - i))
+          return new Response(JSON.stringify({ total_rows: jamCids.length, rows }), {
+            status: 200
+          })
+        }
+        if (url.includes('_all_docs') && init?.method === 'POST') {
+          const { keys } = JSON.parse(init.body as string) as { keys: string[] }
+          const rows = keys.map((id) => ({
+            id,
+            doc: id.startsWith('stem_')
+              ? rawJamStemDoc(id.slice('stem_'.length))
+              : rawJamRiffDoc(id)
+          }))
+          return new Response(JSON.stringify({ total_rows: rows.length, rows }), { status: 200 })
+        }
+        throw new Error(`unexpected fetch: ${url}`)
+      }) as unknown as typeof fetch
+    }
+
+    it.each(failures)(
+      'a jam page fetch that fails with %s leaves the jam unfinished, and the next sync goes on past it',
+      async (_name, fail) => {
+        const { syncJam } = await loggedIn()
+        const db = freshDb()
+        let failNext = true
+        const fetchImpl = jamFetch((offset) => {
+          if (offset !== 200 || !failNext) return null
+          failNext = false
+          return fail()
+        })
+        const restore = quietErrors()
+        try {
+          await syncJam('jam_1', 'Test Jam', () => {}, fetchImpl, db)
+        } finally {
+          restore()
+        }
+        expect(count(db, '1')).toBe(200)
+        expect(syncComplete(db, 'jam_1')).toBe(0)
+
+        await syncJam('jam_1', 'Test Jam', () => {}, fetchImpl, db)
+        expect(count(db, 'AppVersion IS NOT NULL')).toBe(230)
+        expect(syncComplete(db, 'jam_1')).toBe(1)
+      }
+    )
+
+    it('a jam sync cancelled during a page fetch stays resumable', async () => {
+      const { syncJam, abortSync } = await loggedIn()
+      const db = freshDb()
+      let cancelNext = true
+      const fetchImpl = jamFetch((offset) => {
+        if (offset !== 200 || !cancelNext) return null
+        cancelNext = false
+        expect(abortSync('jam_1')).toBe(true)
+        return Promise.reject(abortError())
+      })
+      const restore = quietErrors()
+      try {
+        await syncJam('jam_1', 'Test Jam', () => {}, fetchImpl, db)
+      } finally {
+        restore()
+      }
+      expect(syncComplete(db, 'jam_1')).toBe(0)
+
+      await syncJam('jam_1', 'Test Jam', () => {}, fetchImpl, db)
+      expect(count(db, 'AppVersion IS NOT NULL')).toBe(230)
+      expect(syncComplete(db, 'jam_1')).toBe(1)
+    })
+
+    it('a jam sync with no session is not complete', async () => {
+      vi.resetModules()
+      const { syncJam } = await import('./riffLibrarySync')
+      const db = freshDb()
+      await syncJam(
+        'jam_1',
+        'Test Jam',
+        () => {},
+        jamFetch(() => null),
+        db
+      )
+      expect(syncComplete(db, 'jam_1')).toBe(0)
+    })
+  })
+})
+
 describe('syncs in flight', () => {
   /** A feed whose first page waits until `release`. */
   function heldFeed(): {

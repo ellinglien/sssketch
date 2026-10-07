@@ -314,6 +314,33 @@ describe('endlesssApi shared feed', () => {
     const page = await listSharedFeed('elling', 0, 20, fakeFetch as typeof fetch)
     expect(page.riffs[0].stemCount).toBe(1)
   })
+
+  // An empty page from a request that failed is not the feed's end: marked,
+  // so riffLibrarySync.ts doesn't mark the feed fully synced on it.
+  it('listSharedFeed marks a page whose request failed, and not a real empty one', async () => {
+    const { listSharedFeed } = await import('./endlesssApi')
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      for (const fail of [
+        async () => new Response('busy', { status: 503 }),
+        async () => Promise.reject(new TypeError('fetch failed')),
+        async () => Promise.reject(new DOMException('aborted', 'AbortError')),
+        async () => new Response('<html>', { status: 200 })
+      ]) {
+        const page = await listSharedFeed('elling', 100, 20, vi.fn(fail) as typeof fetch)
+        expect(page).toEqual({ riffs: [], hasMore: false, nextOffset: 100, failed: true })
+      }
+    } finally {
+      errors.mockRestore()
+    }
+    const end = await listSharedFeed(
+      'elling',
+      100,
+      20,
+      vi.fn(async () => new Response(JSON.stringify({ data: [] }), { status: 200 })) as typeof fetch
+    )
+    expect(end).toEqual({ riffs: [], hasMore: false, nextOffset: 100 })
+  })
 })
 
 describe('endlesssApi jam listing', () => {
@@ -389,11 +416,12 @@ describe('endlesssApi jam listing', () => {
 })
 
 describe('endlesssApi riff listing in a jam', () => {
-  it('listRiffsInJam returns [] when not logged in', async () => {
+  it('listRiffsInJam returns a failed empty page when not logged in', async () => {
     const { listRiffsInJam, logout } = await import('./endlesssApi')
     logout()
     const page = await listRiffsInJam('jam_abc', {}, vi.fn() as unknown as typeof fetch)
-    expect(page).toEqual({ riffs: [], hasMore: false, nextOffset: 0 })
+    // Not the jam's end: a sync must not mark it complete on this.
+    expect(page).toEqual({ riffs: [], hasMore: false, nextOffset: 0, failed: true })
   })
 
   it('listRiffsInJam parses the rifffLoopsByCreateTime view response', async () => {

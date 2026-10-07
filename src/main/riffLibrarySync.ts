@@ -9,12 +9,15 @@ import {
   type FetchLike
 } from './endlesssApi'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
+import type { RiffLibraryResolvedRiff, RiffLibraryResolvedStem } from '@shared/riffLibraryTypes'
 import { dropInMemoryJamIndexes } from './discoverCandidates'
 import { isValidSharedFeedKey, normalizeEndlesssUsername } from '@shared/endlesssUsername'
 import {
   upsertJam,
   mergeSharedFeedCaseVariants,
   markJamSyncComplete,
+  markJamSyncIncomplete,
+  isJamSyncComplete,
   upsertRiffSkeletons,
   writeRiffDetail,
   markStemDownloadFailed,
@@ -103,12 +106,61 @@ function inFlightKeyOf(key: string): string {
   return `shared:${normalizeEndlesssUsername(key.slice('shared:'.length))}`
 }
 
+/** What a sync does with one walked page: resolve its riffs, walk on past it
+ * (already done), or stop (the jam is complete). */
+type WalkStep = 'resolve' | 'skip' | 'done'
+
+/** The stop rule both syncs share, which is what keeps a cut-short sync
+ * resumable. A page whose riffs were all resolved before this run means
+ * every older riff was too only once the walk has reached the jam's end
+ * (SyncComplete): then the walk stops there. Before that -- a first sync, or
+ * one cancelled or failed part-way -- the walk goes on past done pages
+ * (listing them, resolving nothing) to wherever the last run stopped; it
+ * used to stop at the first done page and mark the jam complete, so the
+ * riffs past a cut were never fetched. A catch-up of a complete jam that
+ * starts resolving new riffs first clears SyncComplete: if it is cut off
+ * before it reaches a done page, the new riffs behind the cut would
+ * otherwise sit past a page the next sync stops at. */
+function newResumableWalk(
+  db: Database.Database,
+  jamCID: string
+): { beforeResolving: (pageFullyDone: boolean, hasMore: boolean) => WalkStep } {
+  const reachedEndBefore = isJamSyncComplete(db, jamCID)
+  let markedUnfinished = false
+  return {
+    beforeResolving(pageFullyDone, hasMore) {
+      if (pageFullyDone && !reachedEndBefore) {
+        if (hasMore) return 'skip'
+        markJamSyncComplete(db, jamCID)
+        return 'done'
+      }
+      if (!pageFullyDone && reachedEndBefore && !markedUnfinished) {
+        markJamSyncIncomplete(db, jamCID)
+        markedUnfinished = true
+      }
+      return 'resolve'
+    }
+  }
+}
+
+/** A stem with audio to fetch that has none on disk. */
+function stemMissing(stem: RiffLibraryResolvedStem): boolean {
+  return stem.path === null && stem.downloadUrl !== null
+}
+
+/** A riff whose stem downloads a cancel cut off: not written, so it stays
+ * unresolved and the next sync fetches it again, rather than being saved as
+ * resolved with its stems ledgered as failed downloads. */
+function cutShortByCancel(resolved: RiffLibraryResolvedRiff, signal: AbortSignal): boolean {
+  return signal.aborted && resolved.stems.some(stemMissing)
+}
+
 /** Requests that whichever sync is currently running for `key` stop as soon
- * as possible -- does NOT mark the jam as fully synced (see syncSharedFeed/
- * syncJam's own page-loop abort checks, which skip markJamSyncComplete on
- * abort), so a re-sync later picks up wherever this one left off, same as
- * any other partial/interrupted sync. Returns false if nothing was running
- * for this key (nothing to abort, not an error). */
+ * as possible -- does NOT mark the jam as fully synced: a page fetch the
+ * cancel cuts off comes back `failed`, not as the feed's end (see
+ * newResumableWalk), so a re-sync later picks up wherever this one left
+ * off, same as any other partial/interrupted sync. Returns false if nothing
+ * was running for this key (nothing to abort, not an error). */
 export function abortSync(key: string): boolean {
   const controller = syncsInFlight.get(inFlightKeyOf(key))
   if (!controller) return false
@@ -157,10 +209,12 @@ export function removeJamSync(
  * this call started (`pageFullyDone`) -- not merely "already known", which
  * is what the old JSON-index sync used and which could permanently skip a
  * riff that was seen but never resolved (see this plan's own header note
- * and the design spec's Background section). No-ops if a sync for this
- * exact userName is already running. Stoppable mid-run via abortSync(key) --
- * see the page-loop's own `controller.signal.aborted` check below for why
- * an aborted run never calls markJamSyncComplete. */
+ * and the design spec's Background section). That stop holds only once the
+ * feed has been walked to its end; until then the walk goes on past done
+ * pages (newResumableWalk). No-ops if a sync for this exact userName is
+ * already running. Stoppable mid-run via abortSync(key); a cancelled or
+ * failed page fetch (`page.failed`) ends the run without marking the feed
+ * complete. */
 export async function syncSharedFeed(
   userName: string,
   onProgress: (progress: SyncProgress) => void,
@@ -194,6 +248,7 @@ export async function syncSharedFeed(
       console.error(`syncSharedFeed: folding other spellings into ${key} failed:`, err)
     }
     upsertJam(db, key, 'Shared Feed')
+    const walk = newResumableWalk(db, key)
     let offset = 0
     let resolvedCount = 0
     let bytesDone = 0
@@ -206,6 +261,7 @@ export async function syncSharedFeed(
         fetchImpl,
         controller.signal
       )
+      if (page.failed) break
       if (page.riffs.length === 0) {
         markJamSyncComplete(db, key)
         break
@@ -219,6 +275,13 @@ export async function syncSharedFeed(
         key,
         page.riffs.map((r) => ({ riffCID: r.riffCID, creationTime: r.creationTime }))
       )
+
+      const step = walk.beforeResolving(pageFullyDone, page.hasMore)
+      if (step === 'done') break
+      if (step === 'skip') {
+        offset = page.nextOffset
+        continue
+      }
 
       // The shared feed's own listing embeds full riff+stem detail already
       // (see peekSharedFeedCache's doc comment in endlesssApi.ts) -- no
@@ -238,6 +301,7 @@ export async function syncSharedFeed(
               bytesDone += bytes
             }
           )
+          if (cutShortByCancel(resolved, controller.signal)) return
           const summary = page.riffs.find((r) => r.riffCID === riffCID)!
           writeRiffDetail(
             db,
@@ -246,8 +310,7 @@ export async function syncSharedFeed(
             resolved
           )
           for (const stem of resolved.stems) {
-            if (stem.path === null && stem.downloadUrl !== null)
-              markStemDownloadFailed(db, stem.stemCID)
+            if (stemMissing(stem)) markStemDownloadFailed(db, stem.stemCID)
           }
           resolvedCount++
           onProgress({ done: resolvedCount, total: resolvedCount, bytesDone })
@@ -291,6 +354,7 @@ export async function syncJam(
   noteSyncsInFlightChanged()
   try {
     upsertJam(db, jamId, jamName)
+    const walk = newResumableWalk(db, jamId)
     let offset = 0
     let resolvedCount = 0
     let bytesDone = 0
@@ -302,6 +366,7 @@ export async function syncJam(
         fetchImpl,
         controller.signal
       )
+      if (page.failed) break
       if (page.riffs.length === 0) {
         markJamSyncComplete(db, jamId)
         break
@@ -317,6 +382,13 @@ export async function syncJam(
         page.riffs.map((r) => ({ riffCID: r.riffCID, creationTime: r.creationTime }))
       )
 
+      const step = walk.beforeResolving(pageFullyDone, page.hasMore)
+      if (step === 'done') break
+      if (step === 'skip') {
+        offset = page.nextOffset
+        continue
+      }
+
       await runWithConcurrency(
         needsResolve,
         SYNC_CONCURRENCY,
@@ -330,7 +402,7 @@ export async function syncJam(
               bytesDone += bytes
             }
           )
-          if (resolved) {
+          if (resolved && !cutShortByCancel(resolved, controller.signal)) {
             const summary = page.riffs.find((r) => r.riffCID === riffCID)!
             // listRiffsInJam's raw view never carries a per-riff userName
             // (see its own doc comment in endlesssApi.ts) -- summary.userName
@@ -343,8 +415,7 @@ export async function syncJam(
               resolved
             )
             for (const stem of resolved.stems) {
-              if (stem.path === null && stem.downloadUrl !== null)
-                markStemDownloadFailed(db, stem.stemCID)
+              if (stemMissing(stem)) markStemDownloadFailed(db, stem.stemCID)
             }
           }
           resolvedCount++

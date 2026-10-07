@@ -115,6 +115,11 @@ export interface RiffPage {
    * shared-feed listing). Used to warn before syncing a particularly large
    * jam, not for pagination itself. */
   totalCount?: number
+  /** True when the listing request itself failed (cancelled, timed out,
+   * network error, an HTTP error, a malformed body, not logged in): `riffs`
+   * is empty but says nothing about where the feed ends, so a sync must not
+   * take it as the end (riffLibrarySync.ts). Absent on a page that arrived. */
+  failed?: true
 }
 
 export interface RiffLibraryResolvedRiff {
