@@ -65,9 +65,9 @@ afterEach(() => {
 describe('readArtistStemRows', () => {
   it('reads every row for the artist across several pages', async () => {
     const db = archive()
-    for (let i = 0; i < 25; i++) seed(db, `t${i}`, 'jam1', 'tpj')
+    for (let i = 0; i < 25; i++) seed(db, `t${i}`, 'jam1', 'tqk')
     seed(db, 'e1', 'jam1', 'elling')
-    const rows = await readArtistStemRows(db, 'tpj', 10)
+    const rows = await readArtistStemRows(db, 'tqk', 10)
     expect(rows.map((r) => r.stemCID).sort()).toEqual(
       Array.from({ length: 25 }, (_, i) => `t${i}`).sort()
     )
@@ -75,7 +75,7 @@ describe('readArtistStemRows', () => {
   })
 
   it('returns [] for a db with no Stems table rather than throwing', async () => {
-    expect(await readArtistStemRows(new Database(':memory:'), 'tpj')).toEqual([])
+    expect(await readArtistStemRows(new Database(':memory:'), 'tqk')).toEqual([])
   })
 })
 
@@ -83,10 +83,10 @@ describe('getArtistStemRows', () => {
   it('merges dbs, first db wins a duplicate StemCID', async () => {
     const a = archive()
     const b = archive()
-    seed(a, 's1', 'jamA', 'tpj')
-    seed(b, 's1', 'jamB', 'tpj')
-    seed(b, 's2', 'jamB', 'tpj')
-    const rows = await getArtistStemRows([a, b], 'tpj')
+    seed(a, 's1', 'jamA', 'tqk')
+    seed(b, 's1', 'jamB', 'tqk')
+    seed(b, 's2', 'jamB', 'tqk')
+    const rows = await getArtistStemRows([a, b], 'tqk')
     expect(rows).toEqual([
       { stemCID: 's1', jamCID: 'jamA' },
       { stemCID: 's2', jamCID: 'jamB' }
@@ -98,13 +98,13 @@ describe('getArtistStemRows', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-10-01T12:00:00Z'))
     const db = archive()
-    seed(db, 's1', 'jam1', 'tpj')
-    expect([...(await getArtistStemCIDs([db], 'tpj'))]).toEqual(['s1'])
-    seed(db, 's2', 'jam1', 'tpj')
+    seed(db, 's1', 'jam1', 'tqk')
+    expect([...(await getArtistStemCIDs([db], 'tqk'))]).toEqual(['s1'])
+    seed(db, 's2', 'jam1', 'tqk')
     // Inside the signal check interval: still the cached answer.
-    expect([...(await getArtistStemCIDs([db], 'tpj'))]).toEqual(['s1'])
+    expect([...(await getArtistStemCIDs([db], 'tqk'))]).toEqual(['s1'])
     vi.setSystemTime(new Date('2026-10-01T12:01:00Z'))
-    expect([...(await getArtistStemCIDs([db], 'tpj'))].sort()).toEqual(['s1', 's2'])
+    expect([...(await getArtistStemCIDs([db], 'tqk'))].sort()).toEqual(['s1', 's2'])
   })
 })
 
@@ -113,28 +113,28 @@ describe('concurrent reads and the shared Stems signal', () => {
     const db = archive()
     // 4,500 rows = 3 pages of 2,000.
     const insert = db.prepare(
-      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName) VALUES (?, 'jam1', 'tpj')`
+      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName) VALUES (?, 'jam1', 'tqk')`
     )
     db.transaction(() => {
       for (let i = 0; i < 4500; i++) insert.run(`t${i}`)
     })()
     vi.mocked(countWork).mockClear()
     const [a, b] = await Promise.all([
-      getArtistStemRows([db], 'tpj'),
-      getArtistStemRows([db], 'tpj')
+      getArtistStemRows([db], 'tqk'),
+      getArtistStemRows([db], 'tqk')
     ])
     expect(a).toHaveLength(4500)
     expect(b).toEqual(a)
     expect(pageReads()).toBe(3)
     // Settled: the next call is a cache hit, no page read.
-    await getArtistStemRows([db], 'tpj')
+    await getArtistStemRows([db], 'tqk')
     expect(pageReads()).toBe(3)
   })
 
   it('a later call after a settled walk is not stuck on the old promise', async () => {
     const db = archive()
-    seed(db, 's1', 'jam1', 'tpj')
-    await getArtistStemRows([db], 'tpj')
+    seed(db, 's1', 'jam1', 'tqk')
+    await getArtistStemRows([db], 'tqk')
     vi.mocked(countWork).mockClear()
     // A different artist on the same db walks again.
     expect(await getArtistStemRows([db], 'nobody')).toEqual([])
@@ -145,16 +145,16 @@ describe('concurrent reads and the shared Stems signal', () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date('2026-10-01T12:00:00Z'))
     const db = archive()
-    seed(db, 'a1', 'jam1', 'tpj')
-    seed(db, 'b1', 'jam1', 'honeydisco')
-    await getArtistStemCIDs([db], 'tpj')
-    await getArtistStemCIDs([db], 'honeydisco')
-    seed(db, 'a2', 'jam1', 'tpj')
-    seed(db, 'b2', 'jam1', 'honeydisco')
+    seed(db, 'a1', 'jam1', 'tqk')
+    seed(db, 'b1', 'jam1', 'hollowbell')
+    await getArtistStemCIDs([db], 'tqk')
+    await getArtistStemCIDs([db], 'hollowbell')
+    seed(db, 'a2', 'jam1', 'tqk')
+    seed(db, 'b2', 'jam1', 'hollowbell')
     vi.setSystemTime(new Date('2026-10-01T12:01:00Z'))
     vi.mocked(countWork).mockClear()
-    expect([...(await getArtistStemCIDs([db], 'tpj'))].sort()).toEqual(['a1', 'a2'])
-    expect([...(await getArtistStemCIDs([db], 'honeydisco'))].sort()).toEqual(['b1', 'b2'])
+    expect([...(await getArtistStemCIDs([db], 'tqk'))].sort()).toEqual(['a1', 'a2'])
+    expect([...(await getArtistStemCIDs([db], 'hollowbell'))].sort()).toEqual(['b1', 'b2'])
     // One signal check per db, not one per artist.
     const checks = vi
       .mocked(countWork)
@@ -166,10 +166,10 @@ describe('concurrent reads and the shared Stems signal', () => {
 describe('Task 3 review: in-flight walks and the signal', () => {
   it('concurrent first walks for two artists read the Stems signal once', async () => {
     const db = archive()
-    seed(db, 'a1', 'jam1', 'tpj')
-    seed(db, 'b1', 'jam1', 'honeydisco')
+    seed(db, 'a1', 'jam1', 'tqk')
+    seed(db, 'b1', 'jam1', 'hollowbell')
     vi.mocked(readTableSignal).mockClear()
-    await Promise.all([getArtistStemRows([db], 'tpj'), getArtistStemRows([db], 'honeydisco')])
+    await Promise.all([getArtistStemRows([db], 'tqk'), getArtistStemRows([db], 'hollowbell')])
     expect(vi.mocked(readTableSignal)).toHaveBeenCalledTimes(1)
   })
 
@@ -178,17 +178,17 @@ describe('Task 3 review: in-flight walks and the signal', () => {
     vi.setSystemTime(new Date('2026-10-01T12:00:00Z'))
     const db = archive()
     const insert = db.prepare(
-      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName) VALUES (?, 'jam1', 'tpj')`
+      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName) VALUES (?, 'jam1', 'tqk')`
     )
     db.transaction(() => {
       for (let i = 0; i < 4500; i++) insert.run(`t${i}`)
     })()
     // Fill the cache once so the db has a signal state to go stale.
     await getArtistStemRows([db], 'other')
-    const stale = getArtistStemRows([db], 'tpj') // page 1 read, then yields
+    const stale = getArtistStemRows([db], 'tqk') // page 1 read, then yields
     db.prepare(`DELETE FROM Stems WHERE StemCID = 't0'`).run()
     vi.setSystemTime(new Date('2026-10-01T12:01:00Z'))
-    const fresh = await getArtistStemRows([db], 'tpj')
+    const fresh = await getArtistStemRows([db], 'tqk')
     expect((await stale).some((r) => r.stemCID === 't0')).toBe(true)
     expect(fresh.some((r) => r.stemCID === 't0')).toBe(false)
     expect(fresh).toHaveLength(4499)
@@ -199,13 +199,13 @@ describe('abort on quit', () => {
   it('stops a running walk at its next page', async () => {
     const db = archive()
     const insert = db.prepare(
-      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName) VALUES (?, 'jam1', 'tpj')`
+      `INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName) VALUES (?, 'jam1', 'tqk')`
     )
     db.transaction(() => {
       for (let i = 0; i < 4500; i++) insert.run(`t${i}`)
     })()
     vi.mocked(countWork).mockClear()
-    const walk = getArtistStemRows([db], 'tpj') // page 1 read, then yields
+    const walk = getArtistStemRows([db], 'tqk') // page 1 read, then yields
     abortArtistStemWalks()
     await expect(walk).rejects.toThrow(/aborted/)
     expect(pageReads()).toBe(1)

@@ -600,13 +600,13 @@ describe('fetchRadioHearts', () => {
       lore
         .prepare(
           `INSERT INTO Stems (StemCID, OwnerJamCID, BPMrnd, Length16s, PresetName, CreatorUserName)
-           VALUES ('abc123', 'jam-x', 120, 32, 'thud', 'tpj')`
+           VALUES ('abc123', 'jam-x', 120, 32, 'thud', 'tqk')`
         )
         .run()
       own
         .prepare(
           `INSERT INTO Stems (StemCID, OwnerJamCID, BPMrnd, Length16s, PresetName, CreatorUserName)
-           VALUES ('abc123', 'shared:elling', 120, 32, 'thud', 'tpj')`
+           VALUES ('abc123', 'shared:elling', 120, 32, 'thud', 'tqk')`
         )
         .run()
       const lorePath = join(root, 'cache', 'common', 'stem_v2', 'jam-x', 'a', 'abc123')

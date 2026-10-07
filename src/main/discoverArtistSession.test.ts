@@ -29,7 +29,7 @@ describe('discover artist session', () => {
 
   // Elling, 2026-10-02: restrictions lifted -- any artist's stems can be used.
   it('refuses nothing while another artist is chosen', () => {
-    expect(setDiscoverArtistSession({ artist: 'bananepoep', ownUsername: 'elling' })).toBe('other')
+    expect(setDiscoverArtistSession({ artist: 'bluemoth', ownUsername: 'elling' })).toBe('other')
     expect(refusesListenOnly('keep')).toBe(false)
     expect(refusesListenOnly('star')).toBe(false)
     expect(refusesListenOnly('fetchHearts')).toBe(false)
@@ -49,7 +49,7 @@ describe('discover artist session', () => {
   })
 
   it('reset (a renderer reload) goes back to me', () => {
-    setDiscoverArtistSession({ artist: 'tpj', ownUsername: 'elling' })
+    setDiscoverArtistSession({ artist: 'tqk', ownUsername: 'elling' })
     resetDiscoverArtistSession()
     expect(currentArtistMode()).toBe('own')
   })
@@ -57,22 +57,22 @@ describe('discover artist session', () => {
   it("reads a combined selection; one member stays today's push", () => {
     expect(
       setDiscoverArtistSession({
-        artist: 'bananepoep',
+        artist: 'bluemoth',
         ownUsername: 'elling',
-        artists: ['bananepoep', null, 'tpj']
+        artists: ['bluemoth', null, 'tqk']
       })
     ).toBe('other')
-    expect(getDiscoverArtistSelection()).toEqual(['bananepoep', null, 'tpj'])
+    expect(getDiscoverArtistSelection()).toEqual(['bluemoth', null, 'tqk'])
     expect(getDiscoverArtistSession()).toEqual({
-      artist: 'bananepoep + tpj',
+      artist: 'bluemoth + tqk',
       ownUsername: 'elling'
     })
     expect(setDiscoverArtistSession({ artist: null, ownUsername: 'elling', artists: [null] })).toBe(
       'own'
     )
     expect(getDiscoverArtistSession()).toEqual({ artist: null, ownUsername: 'elling' })
-    setDiscoverArtistSession({ artist: 'tpj', ownUsername: 'elling' })
-    expect(getDiscoverArtistSelection()).toEqual(['tpj'])
+    setDiscoverArtistSession({ artist: 'tqk', ownUsername: 'elling' })
+    expect(getDiscoverArtistSelection()).toEqual(['tqk'])
     expect(currentArtistMode()).toBe('other')
     setDiscoverArtistSession({ artist: null, ownUsername: 'elling', artists: 'junk-but-a-name' })
     expect(getDiscoverArtistSelection()).toEqual(['junk-but-a-name'])
@@ -89,8 +89,8 @@ describe('discover artist session', () => {
 // stems still played; lifted 2026-10-02 along with the rest.
 describe("keep and star while another artist's stems remain", () => {
   it('in me, refuses neither, from the call or the session', () => {
-    setDiscoverArtistSession({ artist: null, ownUsername: 'elling', lingering: ['tpj'] })
-    expect(refusesKeep(['tpj'])).toBe(false)
+    setDiscoverArtistSession({ artist: null, ownUsername: 'elling', lingering: ['tqk'] })
+    expect(refusesKeep(['tqk'])).toBe(false)
     expect(refusesKeep(undefined)).toBe(false)
     expect(refusesStar()).toBe(false)
     expect(keepBlockedForPhone()).toBe(false)
@@ -98,7 +98,7 @@ describe("keep and star while another artist's stems remain", () => {
 
   it('ignores a malformed list', () => {
     setDiscoverArtistSession({ artist: null, ownUsername: 'elling' })
-    expect(refusesKeep('tpj')).toBe(false)
+    expect(refusesKeep('tqk')).toBe(false)
     expect(refusesKeep([7, null, ''])).toBe(false)
   })
 })

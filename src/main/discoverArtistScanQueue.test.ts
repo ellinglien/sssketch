@@ -25,12 +25,12 @@ describe('artist scan queue', () => {
     db.prepare(`INSERT INTO StemFeatureCache VALUES ('s2', '{}', 1)`).run()
     db.prepare(`INSERT INTO StemUnavailable VALUES ('s3', 'http 403', 1)`).run()
     const rows = ['s1', 's2', 's3', 's4'].map((stemCID) => ({ stemCID, jamCID: 'j1' }))
-    expect(queueArtistStems(db, rows, 'tpj', 1000)).toBe(2)
-    expect(queueArtistStems(db, rows, 'tpj', 2000)).toBe(0) // idempotent
+    expect(queueArtistStems(db, rows, 'tqk', 1000)).toBe(2)
+    expect(queueArtistStems(db, rows, 'tqk', 2000)).toBe(0) // idempotent
     expect(artistScanQueueSize(db)).toBe(2)
-    expect(peekArtistScanQueue(db, 1)).toEqual([{ stemCID: 's1', jamCID: 'j1', artist: 'tpj' }])
+    expect(peekArtistScanQueue(db, 1)).toEqual([{ stemCID: 's1', jamCID: 'j1', artist: 'tqk' }])
     removeFromArtistScanQueue(db, ['s1'])
-    expect(peekArtistScanQueue(db, 5)).toEqual([{ stemCID: 's4', jamCID: 'j1', artist: 'tpj' }])
+    expect(peekArtistScanQueue(db, 5)).toEqual([{ stemCID: 's4', jamCID: 'j1', artist: 'tqk' }])
   })
 
   it('serves earlier queues first', () => {
@@ -63,7 +63,7 @@ describe('takeArtistScanBatch', () => {
 
   it('pauses, downloads nothing and keeps every row while the archive is not mounted', async () => {
     const db = own()
-    queueArtistStems(db, [{ stemCID: 's1', jamCID: 'j' }], 'tpj', 1000)
+    queueArtistStems(db, [{ stemCID: 's1', jamCID: 'j' }], 'tqk', 1000)
     const d = deps({}, false)
     expect(await takeArtistScanBatch(db, 3, d)).toEqual({ status: 'paused', remaining: 1 })
     expect(d.download).not.toHaveBeenCalled()
@@ -72,7 +72,7 @@ describe('takeArtistScanBatch', () => {
 
   it('returns downloaded stems and keeps them queued until finished', async () => {
     const db = own()
-    queueArtistStems(db, [{ stemCID: 's1', jamCID: 'j' }], 'tpj', 1000)
+    queueArtistStems(db, [{ stemCID: 's1', jamCID: 'j' }], 'tqk', 1000)
     const batch = await takeArtistScanBatch(db, 3, deps({ s1: { status: 'ok', path: '/a/s1' } }))
     expect(batch).toEqual({
       status: 'ok',
@@ -84,7 +84,7 @@ describe('takeArtistScanBatch', () => {
 
   it('drops a stem known unfetchable', async () => {
     const db = own()
-    queueArtistStems(db, [{ stemCID: 's1', jamCID: 'j' }], 'tpj', 1000)
+    queueArtistStems(db, [{ stemCID: 's1', jamCID: 'j' }], 'tqk', 1000)
     const batch = await takeArtistScanBatch(
       db,
       3,
@@ -95,8 +95,8 @@ describe('takeArtistScanBatch', () => {
 
   it('keeps a temporarily failed stem, moved behind the rest of the queue', async () => {
     const db = own()
-    queueArtistStems(db, [{ stemCID: 's1', jamCID: 'j' }], 'tpj', 1000)
-    queueArtistStems(db, [{ stemCID: 's2', jamCID: 'j' }], 'tpj', 2000)
+    queueArtistStems(db, [{ stemCID: 's1', jamCID: 'j' }], 'tqk', 1000)
+    queueArtistStems(db, [{ stemCID: 's2', jamCID: 'j' }], 'tqk', 2000)
     const batch = await takeArtistScanBatch(
       db,
       1,
@@ -114,7 +114,7 @@ describe('takeArtistScanBatch', () => {
         { stemCID: 'own1', jamCID: 'shared:feed' },
         { stemCID: 'arc1', jamCID: 'archive-jam' }
       ],
-      'tpj',
+      'tqk',
       1000
     )
     // The own-db stem lands on the SSD; the archive one fails to write (EACCES).

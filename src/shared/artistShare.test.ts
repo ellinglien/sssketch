@@ -73,8 +73,8 @@ describe('one member', () => {
       [[null], 'elling', false],
       [[null], 'elling', true],
       [[null], '', false],
-      [['bananepoep'], 'elling', false],
-      [['bananepoep'], '', true]
+      [['bluemoth'], 'elling', false],
+      [['bluemoth'], '', true]
     ] as [ArtistSelection, string, boolean][]) {
       const r = counting(seededRandom('one'))
       const attempts = artistPickAttempts(sel, EMPTY_ARTIST_SHARE, r.random, own, onlyOwn)

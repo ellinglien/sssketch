@@ -88,13 +88,13 @@ describe('readJamUserPairs', () => {
     const db = archive()
     seed(db, 's1', 'j1', 'elling')
     seed(db, 's2', 'j1', 'elling')
-    seed(db, 's3', 'j1', 'tpj')
-    seed(db, 's4', 'j2', 'tpj')
+    seed(db, 's3', 'j1', 'tqk')
+    seed(db, 's4', 'j2', 'tqk')
     seed(db, 's5', 'j2', null)
     expect((await readJamUserPairs(db, 2)).sort()).toEqual([
       ['j1', 'elling'],
-      ['j1', 'tpj'],
-      ['j2', 'tpj']
+      ['j1', 'tqk'],
+      ['j2', 'tqk']
     ])
   })
 })
@@ -104,15 +104,15 @@ describe('getArtistIndex', () => {
     const own = ownDb()
     const db = archive()
     seed(db, 's1', 'j1', 'elling')
-    seed(db, 's2', 'j1', 'tpj')
-    seed(db, 's3', 'j2', 'bananepoep')
+    seed(db, 's2', 'j1', 'tqk')
+    seed(db, 's3', 'j2', 'bluemoth')
     const first = await getArtistIndex(own, [db], 'elling')
     expect(first.counts).toHaveLength(3)
     expect(first.jammedWith).toBeNull()
     expect(first.jammedWithPending).toBe(true)
     await vi.waitFor(async () => {
       const next = await getArtistIndex(own, [db], 'elling')
-      expect(next.jammedWith).toEqual([{ user: 'tpj', sharedJams: 1 }])
+      expect(next.jammedWith).toEqual([{ user: 'tqk', sharedJams: 1 }])
       expect(next.jammedWithPending).toBe(false)
     })
   })
@@ -122,18 +122,18 @@ describe('getArtistAnalysed', () => {
   it("is the share of the artist's stems with a StemFeatureCache row", async () => {
     const own = ownDb()
     const db = archive()
-    for (let i = 0; i < 10; i++) seed(db, `t${i}`, 'j1', 'tpj')
+    for (let i = 0; i < 10; i++) seed(db, `t${i}`, 'j1', 'tqk')
     own.prepare(`INSERT INTO StemFeatureCache VALUES ('t0', '{}', 1), ('t1', '{}', 1)`).run()
-    expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual({ analysed: 2, total: 10 })
+    expect(await getArtistAnalysed(own, [db], 'tqk')).toEqual({ analysed: 2, total: 10 })
   })
 
   it('refreshes when StemFeatureCache grows', async () => {
     const own = ownDb()
     const db = archive()
-    seed(db, 't0', 'j1', 'tpj')
-    expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual({ analysed: 0, total: 1 })
+    seed(db, 't0', 'j1', 'tqk')
+    expect(await getArtistAnalysed(own, [db], 'tqk')).toEqual({ analysed: 0, total: 1 })
     own.prepare(`INSERT INTO StemFeatureCache VALUES ('t0', '{}', 1)`).run()
-    expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual({ analysed: 1, total: 1 })
+    expect(await getArtistAnalysed(own, [db], 'tqk')).toEqual({ analysed: 1, total: 1 })
   })
 
   // Scan plan Task 13 M2 (audit minor): StemFeatureCache's count moves on
@@ -145,7 +145,7 @@ describe('getArtistAnalysed', () => {
       await import('./traitQuantileCache')
     const own = ownDb()
     const db = archive()
-    for (let i = 0; i < 10; i++) seed(db, `t${i}`, 'j1', 'tpj')
+    for (let i = 0; i < 10; i++) seed(db, `t${i}`, 'j1', 'tqk')
     seed(db, 'e0', 'j1', 'elling')
     own
       .prepare(
@@ -153,17 +153,17 @@ describe('getArtistAnalysed', () => {
          ('t2', '{not json', 1), ('e0', '{}', 1)`
       )
       .run()
-    const viaSql = await getArtistAnalysed(own, [db], 'tpj')
+    const viaSql = await getArtistAnalysed(own, [db], 'tqk')
     expect(viaSql).toEqual({ analysed: 3, total: 10 })
     resetArtistIndexForTests()
 
     await getTraitQuantileTables(own)
     vi.mocked(countWork).mockClear()
-    expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual(viaSql)
+    expect(await getArtistAnalysed(own, [db], 'tqk')).toEqual(viaSql)
     // a write through the app's own store moves the answer at once
     own.prepare(`INSERT INTO StemFeatureCache VALUES ('t3', '{}', 1)`).run()
     noteStemFeatureRowWritten(own, {} as never, 't3')
-    expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual({ analysed: 4, total: 10 })
+    expect(await getArtistAnalysed(own, [db], 'tqk')).toEqual({ analysed: 4, total: 10 })
     const kinds = vi.mocked(countWork).mock.calls.map(([kind]) => kind)
     expect(kinds).not.toContain('sql:discover.artist-analysed-chunk')
   })
@@ -172,12 +172,12 @@ describe('getArtistAnalysed', () => {
     const { getTraitQuantileTables } = await import('./traitQuantileCache')
     const own = ownDb()
     const db = archive()
-    seed(db, 't0', 'j1', 'tpj')
-    seed(db, 't1', 'j1', 'tpj')
+    seed(db, 't0', 'j1', 'tqk')
+    seed(db, 't1', 'j1', 'tqk')
     await getTraitQuantileTables(own)
     own.prepare(`INSERT INTO StemFeatureCache VALUES ('t0', '{}', 1)`).run() // behind its back
     vi.mocked(countWork).mockClear()
-    expect(await getArtistAnalysed(own, [db], 'tpj')).toEqual({ analysed: 1, total: 2 })
+    expect(await getArtistAnalysed(own, [db], 'tqk')).toEqual({ analysed: 1, total: 2 })
     const kinds = vi.mocked(countWork).mock.calls.map(([kind]) => kind)
     expect(kinds).toContain('sql:discover.artist-analysed-chunk')
   })
@@ -200,15 +200,15 @@ describe('pairs saved to disk', () => {
   function sharedArchive(): Database.Database {
     const db = archive()
     seed(db, 's1', 'j1', 'elling')
-    seed(db, 's2', 'j1', 'tpj')
+    seed(db, 's2', 'j1', 'tqk')
     seed(db, 's3', 'j2', 'elling')
-    seed(db, 's4', 'j2', 'tpj')
-    seed(db, 's5', 'j2', 'bananepoep')
+    seed(db, 's4', 'j2', 'tqk')
+    seed(db, 's5', 'j2', 'bluemoth')
     return db
   }
   const LIST = [
-    { user: 'tpj', sharedJams: 2 },
-    { user: 'bananepoep', sharedJams: 1 }
+    { user: 'tqk', sharedJams: 2 },
+    { user: 'bluemoth', sharedJams: 1 }
   ]
 
   it("writes each source db's pairs and its signal once its walk lands", async () => {
@@ -223,10 +223,10 @@ describe('pairs saved to disk', () => {
         .all(db.name)
     ).toEqual([
       { JamCID: 'j1', User: 'elling' },
-      { JamCID: 'j1', User: 'tpj' },
-      { JamCID: 'j2', User: 'bananepoep' },
+      { JamCID: 'j1', User: 'tqk' },
+      { JamCID: 'j2', User: 'bluemoth' },
       { JamCID: 'j2', User: 'elling' },
-      { JamCID: 'j2', User: 'tpj' }
+      { JamCID: 'j2', User: 'tqk' }
     ])
     expect(
       own
@@ -252,27 +252,27 @@ describe('pairs saved to disk', () => {
     const archiveDb = sharedArchive()
     const ownSource = archive()
     seed(ownSource, 'o1', 'j3', 'elling')
-    seed(ownSource, 'o2', 'j3', 'seaweed')
+    seed(ownSource, 'o2', 'j3', 'seawren')
     await settled(own, [archiveDb, ownSource])
     resetArtistIndexForTests()
-    seed(ownSource, 'o3', 'j3', 'honeydisco') // a riff sync on the own db
+    seed(ownSource, 'o3', 'j3', 'hollowbell') // a riff sync on the own db
     vi.mocked(countWork).mockClear()
     const first = await getArtistIndex(own, [archiveDb, ownSource], 'elling')
     // The moved db's old pairs are shown while it re-walks.
     expect(first.jammedWith).toEqual([
-      { user: 'tpj', sharedJams: 2 },
-      { user: 'bananepoep', sharedJams: 1 },
-      { user: 'seaweed', sharedJams: 1 }
+      { user: 'tqk', sharedJams: 2 },
+      { user: 'bluemoth', sharedJams: 1 },
+      { user: 'seawren', sharedJams: 1 }
     ])
     expect(first.jammedWithPending).toBe(true)
     await vi.waitFor(async () => {
       const next = await getArtistIndex(own, [archiveDb, ownSource], 'elling')
       expect(next.jammedWithPending).toBe(false)
       expect(next.jammedWith).toEqual([
-        { user: 'tpj', sharedJams: 2 },
-        { user: 'bananepoep', sharedJams: 1 },
-        { user: 'honeydisco', sharedJams: 1 },
-        { user: 'seaweed', sharedJams: 1 }
+        { user: 'tqk', sharedJams: 2 },
+        { user: 'bluemoth', sharedJams: 1 },
+        { user: 'hollowbell', sharedJams: 1 },
+        { user: 'seawren', sharedJams: 1 }
       ])
     })
     // One small page: the own-db source only. The archive was not walked.
@@ -284,11 +284,11 @@ describe('pairs saved to disk', () => {
     const db = sharedArchive()
     await settled(own, [db], 'elling')
     resetArtistIndexForTests()
-    const other = await getArtistIndex(own, [db], 'tpj')
+    const other = await getArtistIndex(own, [db], 'tqk')
     expect(other.jammedWithPending).toBe(false)
     expect(other.jammedWith).toEqual([
       { user: 'elling', sharedJams: 2 },
-      { user: 'bananepoep', sharedJams: 1 }
+      { user: 'bluemoth', sharedJams: 1 }
     ])
   })
 
@@ -544,16 +544,16 @@ describe('getArtistIndex: a stem in two dbs is counted once (review of b859757c)
   /** The archive first, then the own db, as discoverSourceDbs lists them. */
   function archiveAndOwn(): { lore: Database.Database; own: Database.Database } {
     const lore = archive()
-    seed(lore, 's1', 'jam-a', 'tpj')
+    seed(lore, 's1', 'jam-a', 'tqk')
     seed(lore, 's2', 'jam-a', 'elling')
-    seed(lore, 's3', 'jam-b', 'tpj')
+    seed(lore, 's3', 'jam-b', 'tqk')
     const own = ownDb()
     // A jam the archive has: the own copy is the archive's, whole -- s9 only
     // the own db has, left out as Discover leaves it out.
-    seed(own, 's1', 'jam-a', 'tpj')
+    seed(own, 's1', 'jam-a', 'tqk')
     seed(own, 's9', 'jam-a', 'elling')
     // The Shared Feed: s3 is an archive stem, s10 is not.
-    seed(own, 's3', 'shared:elling', 'tpj')
+    seed(own, 's3', 'shared:elling', 'tqk')
     seed(own, 's10', 'shared:elling', 'zed')
     // A jam only sssketch synced (own-routed): its own.
     seed(own, 's20', 'jam-own', 'elling')
@@ -566,16 +566,16 @@ describe('getArtistIndex: a stem in two dbs is counted once (review of b859757c)
   it('each StemCID once, the archive first: a jam it has and Shared Feed copies of its stems', async () => {
     const { lore, own } = archiveAndOwn()
     const index = await getArtistIndex(own, [lore, own], 'elling')
-    expect(byUser(index.counts)).toEqual({ tpj: 2, elling: 2, zed: 1 })
+    expect(byUser(index.counts)).toEqual({ tqk: 2, elling: 2, zed: 1 })
   })
 
   it('a db alone counts every stem, as before', async () => {
     const { own } = archiveAndOwn()
     const index = await getArtistIndex(own, [own], 'elling')
-    expect(byUser(index.counts)).toEqual({ tpj: 2, elling: 2, zed: 1 })
+    expect(byUser(index.counts)).toEqual({ tqk: 2, elling: 2, zed: 1 })
     const { lore } = archiveAndOwn()
     expect(byUser((await getArtistIndex(own, [lore], 'elling')).counts)).toEqual({
-      tpj: 2,
+      tqk: 2,
       elling: 1
     })
   })
@@ -622,10 +622,10 @@ describe('abort on quit: quiet, and reaches every loop', () => {
   it('stops the artist-stems walk and the analysed loop', async () => {
     const own = ownDb()
     const db = archive()
-    for (let i = 0; i < 10; i++) seed(db, `t${i}`, 'j1', 'tpj')
+    for (let i = 0; i < 10; i++) seed(db, `t${i}`, 'j1', 'tqk')
     vi.mocked(countWork).mockClear()
     abortArtistIndexWork()
-    await expect(getArtistAnalysed(own, [db], 'tpj')).rejects.toThrow(/aborted/)
+    await expect(getArtistAnalysed(own, [db], 'tqk')).rejects.toThrow(/aborted/)
     const kinds = vi.mocked(countWork).mock.calls.map(([kind]) => kind)
     expect(kinds).not.toContain('sql:discover.artist-stems-page')
     expect(kinds).not.toContain('sql:discover.artist-analysed-chunk')

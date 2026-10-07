@@ -598,7 +598,7 @@ function seedStemsAndGains(root: string): void {
   ).run(
     'stem-b',
     'jam-techno',
-    'mvdg',
+    'mvxk',
     'Lowpass',
     2,
     130,
@@ -643,7 +643,7 @@ describe('listRiffs', () => {
     const riff1 = riffs.find((r) => r.riffCID === 'riff-1')!
     expect(riff1.stemCount).toBe(2)
     expect(riff1.cachedStemCount).toBe(1) // only stem-a is actually on disk
-    expect(riff1.ownerFraction).toBe(0.5) // elling (stem-a) + mvdg (stem-b)
+    expect(riff1.ownerFraction).toBe(0.5) // elling (stem-a) + mvxk (stem-b)
 
     const riff2 = riffs.find((r) => r.riffCID === 'riff-2')!
     expect(riff2.stemCount).toBe(1)
@@ -731,11 +731,11 @@ describe('listRiffs', () => {
     setRiffLibraryRootForTests(root)
 
     // Symmetric to the 'reports ... ownerFraction' test above, but scored
-    // against 'mvdg' (stem-b's creator) instead of 'elling' —
+    // against 'mvxk' (stem-b's creator) instead of 'elling' —
     // proves the target user is a real per-call parameter, not baked in.
-    const { riffs } = listRiffs('jam-techno', { targetUser: 'mvdg' })
-    expect(riffs.find((r) => r.riffCID === 'riff-1')!.ownerFraction).toBe(0.5) // mvdg (stem-b) only
-    expect(riffs.find((r) => r.riffCID === 'riff-2')!.ownerFraction).toBe(0) // elling (stem-c) only, no mvdg
+    const { riffs } = listRiffs('jam-techno', { targetUser: 'mvxk' })
+    expect(riffs.find((r) => r.riffCID === 'riff-1')!.ownerFraction).toBe(0.5) // mvxk (stem-b) only
+    expect(riffs.find((r) => r.riffCID === 'riff-2')!.ownerFraction).toBe(0) // elling (stem-c) only, no mvxk
   })
 
   it('scores every riff 0 with no targetUser: there is no default identity', () => {
@@ -763,9 +763,9 @@ describe('listRiffs', () => {
     ).toEqual(['riff-2', 'riff-1'])
     // With nobody as "me" (no targetUser), nothing is mine.
     expect(listRiffs('jam-techno', { onlyContainsUser: true }).riffs).toEqual([])
-    // Only riff-1 has an mvdg stem (stem-b).
+    // Only riff-1 has an mvxk stem (stem-b).
     expect(
-      listRiffs('jam-techno', { targetUser: 'mvdg', onlyContainsUser: true }).riffs.map(
+      listRiffs('jam-techno', { targetUser: 'mvxk', onlyContainsUser: true }).riffs.map(
         (r) => r.riffCID
       )
     ).toEqual(['riff-1'])

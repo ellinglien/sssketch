@@ -92,11 +92,11 @@ describe('computeOwnerFraction', () => {
   })
 
   it('is 0.0 when no creator matches', () => {
-    expect(computeOwnerFraction(['ishaniii', 'mvdg'], 'elling')).toBe(0)
+    expect(computeOwnerFraction(['ishaniii', 'mvxk'], 'elling')).toBe(0)
   })
 
   it('is the matching fraction for a mix', () => {
-    expect(computeOwnerFraction(['elling', 'mvdg', 'elling', 'ishaniii'], 'elling')).toBe(0.5)
+    expect(computeOwnerFraction(['elling', 'mvxk', 'elling', 'ishaniii'], 'elling')).toBe(0.5)
   })
 
   it('is 0 for an empty stem list, not NaN or a divide-by-zero error', () => {
@@ -104,12 +104,12 @@ describe('computeOwnerFraction', () => {
   })
 
   it('is 0 with no target user: nobody is "me", so nothing is mine', () => {
-    expect(computeOwnerFraction(['elling', 'mvdg'], undefined)).toBe(0)
+    expect(computeOwnerFraction(['elling', 'mvxk'], undefined)).toBe(0)
   })
 
   it('a blank target never matches stems with no recorded author', () => {
     expect(computeOwnerFraction(['', ''], '')).toBe(0)
-    expect(computeOwnerFraction(['', 'mvdg'], '  ')).toBe(0)
+    expect(computeOwnerFraction(['', 'mvxk'], '  ')).toBe(0)
   })
 })
 

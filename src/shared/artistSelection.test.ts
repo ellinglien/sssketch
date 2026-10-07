@@ -42,13 +42,13 @@ const PICKS: (string | null)[] = [
   '  ',
   'elling',
   ' elling',
-  'bananepoep',
-  ' seasickcookie '
+  'bluemoth',
+  ' seasaltbiscuit '
 ]
 const SLOTS = [
   { id: 'a', creator: 'elling' },
-  { id: 'b', creator: 'bananepoep' },
-  { id: 'c', creator: 'seasickcookie' },
+  { id: 'b', creator: 'bluemoth' },
+  { id: 'c', creator: 'seasaltbiscuit' },
   { id: 'd', creator: null },
   { id: 'e', creator: 'shapednoise' }
 ]
@@ -56,8 +56,8 @@ const CANDIDATES = [
   null,
   undefined,
   {},
-  { pickedUnderArtist: 'bananepoep' },
-  { pickedUnderArtist: 'seasickcookie' }
+  { pickedUnderArtist: 'bluemoth' },
+  { pickedUnderArtist: 'seasaltbiscuit' }
 ]
 
 describe('one member is today, exactly', () => {
@@ -97,8 +97,8 @@ describe('normalizeArtistSelection', () => {
   it('reads the legacy single value and arrays alike', () => {
     expect(normalizeArtistSelection(null, 'elling')).toEqual([null])
     expect(normalizeArtistSelection(undefined, 'elling')).toEqual([null])
-    expect(normalizeArtistSelection('bananepoep', 'elling')).toEqual(['bananepoep'])
-    expect(normalizeArtistSelection(['bananepoep', null], 'elling')).toEqual(['bananepoep', null])
+    expect(normalizeArtistSelection('bluemoth', 'elling')).toEqual(['bluemoth'])
+    expect(normalizeArtistSelection(['bluemoth', null], 'elling')).toEqual(['bluemoth', null])
     expect(normalizeArtistSelection(42, 'elling')).toBe(ME_SELECTION)
     expect(normalizeArtistSelection([], 'elling')).toBe(ME_SELECTION)
   })
@@ -121,27 +121,27 @@ describe('normalizeArtistSelection', () => {
 })
 
 describe('a combination', () => {
-  const sel = normalizeArtistSelection(['bananepoep', null, 'seasickcookie'], 'elling')
+  const sel = normalizeArtistSelection(['bluemoth', null, 'seasaltbiscuit'], 'elling')
 
   it('reads as other, with me and its others', () => {
     expect(isCombined(sel)).toBe(true)
     expect(selectionMode(sel, 'elling')).toBe('other')
     expect(selectionHasMe(sel)).toBe(true)
-    expect(selectionOthers(sel)).toEqual(['bananepoep', 'seasickcookie'])
+    expect(selectionOthers(sel)).toEqual(['bluemoth', 'seasaltbiscuit'])
   })
 
   it('labels: two by name, more by count; the tooltip names everyone', () => {
-    expect(artistSelectionLabel(sel.slice(0, 2), 'elling')).toBe('artist: bananepoep + elling')
-    expect(artistSelectionLabel(sel, 'elling')).toBe('artist: bananepoep + 2 more')
+    expect(artistSelectionLabel(sel.slice(0, 2), 'elling')).toBe('artist: bluemoth + elling')
+    expect(artistSelectionLabel(sel, 'elling')).toBe('artist: bluemoth + 2 more')
     expect(artistSelectionLabel([null, 'a'], '')).toBe('artist: me + a')
     expect(artistSelectionTooltip(sel, 'elling')).toBe(
-      'picks shared evenly: bananepoep, elling, seasickcookie'
+      'picks shared evenly: bluemoth, elling, seasaltbiscuit'
     )
   })
 
   it('the notice names the others only', () => {
     expect(artistSelectionNotice(sel, 'elling')).toBe(
-      "listening to bananepoep's and seasickcookie's stems. to use them in your own work, ask them first."
+      "listening to bluemoth's and seasaltbiscuit's stems. to use them in your own work, ask them first."
     )
     expect(artistSelectionNotice(['a', 'b', 'c'], 'elling')).toBe(
       "listening to a's, b's and c's stems. to use them in your own work, ask them first."
@@ -156,14 +156,14 @@ describe('a combination', () => {
         targetUser: 'elling',
         artist: undefined
       })
-      expect(rollFilterForMember('bananepoep', sel, 'elling', onlyOwn)).toEqual(
-        rollFilterForArtist('bananepoep', 'elling', onlyOwn)
+      expect(rollFilterForMember('bluemoth', sel, 'elling', onlyOwn)).toEqual(
+        rollFilterForArtist('bluemoth', 'elling', onlyOwn)
       )
     }
   })
 
   it('neighbour lookups allow every member, me by name', () => {
-    expect(selectionCreatorFilter(sel, 'elling')).toEqual(['bananepoep', 'elling', 'seasickcookie'])
+    expect(selectionCreatorFilter(sel, 'elling')).toEqual(['bluemoth', 'elling', 'seasaltbiscuit'])
   })
 
   it('tags neighbour candidates by creator', () => {
@@ -171,9 +171,9 @@ describe('a combination', () => {
       creatorUserName
     })
     expect(tagByCreator(c('elling'), sel, 'elling')).toEqual(c('elling'))
-    expect(tagByCreator(c('bananepoep'), sel, 'elling')).toEqual({
-      creatorUserName: 'bananepoep',
-      pickedUnderArtist: 'bananepoep'
+    expect(tagByCreator(c('bluemoth'), sel, 'elling')).toEqual({
+      creatorUserName: 'bluemoth',
+      pickedUnderArtist: 'bluemoth'
     })
     expect(tagByCreator(c('stranger'), sel, 'elling')).toEqual(c('stranger'))
     expect(tagByCreator(c(null), sel, 'elling')).toEqual(c(null))
@@ -181,7 +181,7 @@ describe('a combination', () => {
 
   it('a landed pick counts for its member, or nobody', () => {
     expect(memberOfPick({}, sel)).toBe(null)
-    expect(memberOfPick({ pickedUnderArtist: 'seasickcookie' }, sel)).toBe('seasickcookie')
+    expect(memberOfPick({ pickedUnderArtist: 'seasaltbiscuit' }, sel)).toBe('seasaltbiscuit')
     expect(memberOfPick({ pickedUnderArtist: 'stranger' }, sel)).toBeUndefined()
     expect(memberOfPick({}, ['a', 'b'])).toBeUndefined()
     expect(memberOfPick(null, sel)).toBeUndefined()
@@ -192,7 +192,7 @@ describe('a combination', () => {
 
   it('turnover: adding an artist turns nothing over; rows by nobody chosen do', () => {
     expect([...selectionTurnoverIds(SLOTS, sel, 'elling')]).toEqual(['e'])
-    expect([...selectionTurnoverIds(SLOTS, ['bananepoep', 'shapednoise'], 'elling')]).toEqual([
+    expect([...selectionTurnoverIds(SLOTS, ['bluemoth', 'shapednoise'], 'elling')]).toEqual([
       'a',
       'c'
     ])
@@ -229,8 +229,8 @@ describe('the picker gestures', () => {
 
 describe('artistSkipWord', () => {
   it('names the artist, cut to the row', () => {
-    expect(artistSkipWord('bananepoep', 'elling')).toBe('no bananepoep fits')
-    expect(artistSkipWord('seasickcookie', 'elling')).toBe('no seasickco… fits')
+    expect(artistSkipWord('bluemoth', 'elling')).toBe('no bluemoth fits')
+    expect(artistSkipWord('seasaltbiscuit', 'elling')).toBe('no seasaltbi… fits')
     expect(artistSkipWord(null, 'elling')).toBe('no elling fits')
     expect(artistSkipWord(null, '')).toBe('no me fits')
   })
