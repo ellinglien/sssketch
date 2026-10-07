@@ -4,7 +4,10 @@ import { app } from 'electron'
 import Database from 'better-sqlite3'
 import { RIFF_STEMS_EXTRA_DDL } from './riffStemsExtra'
 import { LOOP_FOLDERS_DDL } from './loopFolders'
-import { STEM_AUTO_CLASSIFY_TRIED_DDL } from './stemAutoClassifyTried'
+import {
+  STEM_AUTO_CLASSIFY_TRIED_DDL,
+  ensureStemAutoClassifyTriedSchema
+} from './stemAutoClassifyTried'
 
 /** sssketch's own self-built riff-sync database -- distinct from any
  * externally-pointed OUROVEON/LORE archive a user might separately
@@ -334,7 +337,9 @@ ${LOOP_FOLDERS_DDL}
 -- The overnight classifier's stems tried and not placed, with the training
 -- and mask they were tried under (2026-10-07; stemAutoClassifyTried.ts).
 -- Interpolated so the classifier's tests build it from the same constant.
--- New table only: CREATE TABLE IF NOT EXISTS is the whole migration.
+-- Keyed on (StemCID, TrainingFingerprint) since the review of 0adc41ca:
+-- ensureStemAutoClassifyTriedSchema drops the first, StemCID-keyed shape
+-- before this runs.
 ${STEM_AUTO_CLASSIFY_TRIED_DDL}
 `
 
@@ -401,6 +406,7 @@ export function openOwnRiffLibraryDb(): Database.Database {
   db.pragma('journal_mode = WAL')
   ensureDiscoverRiffIndexCacheHasCreationTime(db)
   ensureStemCategoriesHasSubcategoryNote(db)
+  ensureStemAutoClassifyTriedSchema(db)
   db.exec(SCHEMA_SQL)
   cachedDb = db
   return db

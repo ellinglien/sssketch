@@ -13,7 +13,10 @@ import { setStemEmbeddingCache } from './stemEmbeddingCacheStore'
 import { setStemFeatureCache } from './stemFeatureCacheStore'
 import { noteAutoClassifyTrainingChanged } from './stemAutoClassifyWake'
 import { bumpTableWriteVersion } from './tableWriteVersion'
-import { STEM_AUTO_CLASSIFY_TRIED_DDL } from './stemAutoClassifyTried'
+import {
+  MAX_TRIED_FINGERPRINTS_PER_STEM,
+  STEM_AUTO_CLASSIFY_TRIED_DDL
+} from './stemAutoClassifyTried'
 
 // The centroid/feature pass reads app.getPath('userData') via
 // loadCategoryCentroidStore -- mock just that narrow surface, same
@@ -1090,6 +1093,87 @@ describe('classifyAutoCategoryBatch (pending list)', () => {
 
       const db = freshDb(path)
       expect((await classifyAutoCategoryBatch(db)).processed).toBe(1)
+    })
+
+    // Review of 0adc41ca, important 1: the dev and packaged apps share the
+    // own db but each has its own busCentroids.json, so their fingerprints
+    // differ; keyed on StemCID alone, each app's record overwrote the
+    // other's and every switch re-tried the whole residue.
+    it('two centroid stores against one db keep their own records: no re-try after switching back', async () => {
+      const path = join(dir, 'own.db')
+      const vector = (a: number, b: number, c: number): number[] =>
+        [a, b, c, 0, 0, 0].concat(new Array(13).fill(0))
+      let storeA = emptyCategoryCentroidStore()
+      for (let i = 0; i < 3; i++) {
+        storeA = recordConfirmedCategory(storeA, 'arrangeRole', 'drums', vector(1, 0, 0))
+        storeA = recordConfirmedCategory(storeA, 'arrangeRole', 'bass', vector(0, 1, 0))
+      }
+      const storeB = recordConfirmedCategory(storeA, 'arrangeRole', 'lead', vector(0, 0, 1))
+      const load = vi.spyOn(categoryCentroidStore, 'loadCategoryCentroidStore')
+      const seed = freshDb(path)
+      seedFeatures(seed, 'feat-ambiguous-1', { transientDensity: 0.5, bassEnergyRatio: 0.5 })
+      seed.close()
+
+      load.mockReturnValue(storeA) // the dev app
+      const dev = freshDb(path)
+      expect(await classifyAutoCategoryBatch(dev)).toEqual({ processed: 0, remaining: 0 })
+      expect(tried(dev)).toEqual(['feat-ambiguous-1'])
+      dev.close()
+
+      load.mockReturnValue(storeB) // the packaged app: its own training, tried afresh
+      const packaged = freshDb(path)
+      const packagedFetches = featureFetches(packaged)
+      expect(await classifyAutoCategoryBatch(packaged)).toEqual({ processed: 0, remaining: 0 })
+      expect(packagedFetches()).toBe(1)
+      packaged.close()
+
+      load.mockReturnValue(storeA) // the dev app again
+      const devAgain = freshDb(path)
+      const devFetches = featureFetches(devAgain)
+      expect(await classifyAutoCategoryBatch(devAgain)).toEqual({ processed: 0, remaining: 0 })
+      expect(devFetches()).toBe(0)
+    })
+
+    it('placing a stem drops its records under every fingerprint', async () => {
+      const db = freshDb()
+      seedTrainedEmbeddings(db)
+      seedEmbedding(db, 'late-mask', [0.5, 0.5, 0])
+      db.prepare(
+        `INSERT INTO Stems (StemCID, OwnerJamCID, Instrument) VALUES ('late-mask', 'j', NULL)`
+      ).run()
+      // tried by the other app, under its own training
+      db.prepare(
+        `INSERT INTO StemAutoClassifyTried (StemCID, TrainingFingerprint, Mask, TriedAt)
+         VALUES ('late-mask', 'the-other-app', NULL, 1)`
+      ).run()
+      db.prepare(`UPDATE Stems SET Instrument = ? WHERE StemCID = 'late-mask'`).run(DRUMS_BIT)
+      expect((await classifyAutoCategoryBatch(db, [db])).processed).toBe(1)
+      expect(tried(db)).toEqual([])
+    })
+
+    it('keeps at most a few fingerprints per stem, dropping the oldest', async () => {
+      const db = freshDb()
+      seedTrainedEmbeddings(db)
+      seedEmbedding(db, 'ambiguous-1', [0.5, 0.5, 0])
+      const insert = db.prepare(
+        `INSERT INTO StemAutoClassifyTried (StemCID, TrainingFingerprint, Mask, TriedAt)
+         VALUES ('ambiguous-1', ?, NULL, ?)`
+      )
+      for (let i = 0; i < 10; i++) insert.run(`old-${i}`, 100 + i)
+      await classifyAutoCategoryBatch(db)
+      const fingerprints = (
+        db
+          .prepare(
+            `SELECT TrainingFingerprint AS f FROM StemAutoClassifyTried ORDER BY TriedAt DESC`
+          )
+          .all() as { f: string }[]
+      ).map((r) => r.f)
+      expect(fingerprints).toHaveLength(MAX_TRIED_FINGERPRINTS_PER_STEM)
+      // the one just recorded is kept, then the newest of the old ones
+      expect(fingerprints[0]).not.toMatch(/^old-/)
+      expect(fingerprints.slice(1)).toEqual(
+        Array.from({ length: MAX_TRIED_FINGERPRINTS_PER_STEM - 1 }, (_, i) => `old-${9 - i}`)
+      )
     })
 
     it('with an untrained embedding axis, leaves the record to the feature pass', async () => {

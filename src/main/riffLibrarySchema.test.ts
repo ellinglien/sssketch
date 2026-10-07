@@ -141,6 +141,42 @@ describe('riffLibrarySchema', () => {
     expect(metaRow).toBeUndefined()
   })
 
+  it('opening a db whose StemAutoClassifyTried is keyed on StemCID alone recreates it keyed on (StemCID, TrainingFingerprint)', async () => {
+    const { ownRiffLibraryDbPath } = await import('./riffLibrarySchema')
+    const path = ownRiffLibraryDbPath()
+    mkdirSync(dirname(path), { recursive: true })
+    const raw = new Database(path)
+    // 0adc41ca's shape: one row per stem
+    raw.exec(`
+      CREATE TABLE StemAutoClassifyTried (
+        StemCID TEXT PRIMARY KEY, TrainingFingerprint TEXT NOT NULL, Mask INTEGER
+      );
+      INSERT INTO StemAutoClassifyTried VALUES ('s1', 'old', NULL);
+    `)
+    raw.close()
+
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const db = openOwnRiffLibraryDb()
+    const pk = (
+      db.prepare(`PRAGMA table_info(StemAutoClassifyTried)`).all() as {
+        name: string
+        pk: number
+      }[]
+    )
+      .filter((c) => c.pk > 0)
+      .sort((a, b) => a.pk - b.pk)
+      .map((c) => c.name)
+    expect(pk).toEqual(['StemCID', 'TrainingFingerprint'])
+    // a record under an older classifier: nothing in it is worth keeping
+    expect(db.prepare(`SELECT COUNT(*) AS n FROM StemAutoClassifyTried`).get()).toEqual({ n: 0 })
+    // two fingerprints for one stem now fit
+    const insert = db.prepare(
+      `INSERT INTO StemAutoClassifyTried (StemCID, TrainingFingerprint, Mask, TriedAt) VALUES ('s1', ?, NULL, 1)`
+    )
+    insert.run('dev')
+    insert.run('packaged')
+  })
+
   it('opening a db whose StemCategories predates SubcategoryNote adds the column WITHOUT touching existing rows -- real Tidy Up assignments, unlike DiscoverRiffIndexCache, must survive', async () => {
     const { ownRiffLibraryDbPath } = await import('./riffLibrarySchema')
     const path = ownRiffLibraryDbPath()

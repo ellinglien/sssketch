@@ -400,7 +400,9 @@ const pendingByDb = new WeakMap<Database.Database, PendingState>()
  * (the arrangeRole axis and the global normalizer). A new confirmation or a
  * centroid retrain, in this app or the other one sharing the db, moves it;
  * a restart does not. Replaces the in-memory training generation, which
- * started at 0 every launch. */
+ * started at 0 every launch. The dev and the packaged app each have their
+ * own centroid store, so each tries under its own fingerprint and keeps its
+ * own record of the same stem (StemAutoClassifyTried is keyed on both). */
 function trainingFingerprintOf(
   prepared: PreparedConfirmed,
   centroidStore: CategoryCentroidStore
@@ -694,7 +696,7 @@ export async function classifyAutoCategoryBatch(
       forgetStemTried(ownDb, stemCID)
       return true
     }
-    recordStemTried(ownDb, stemCID, fingerprint, mask ?? null)
+    recordStemTried(ownDb, stemCID, fingerprint, mask ?? null, now)
     countWork('auto-classify:rows-tried-recorded')
     return false
   }
