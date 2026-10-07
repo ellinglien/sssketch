@@ -1100,7 +1100,16 @@ export function TransportBar({
               : []),
             {
               label: `advanced features: ${advancedOn ? 'on' : 'off'}`,
-              onClick: () => void setAdvancedFeatures(!advancedOn),
+              onClick: () => {
+                // Turning off closes what it hides, so turning back on doesn't
+                // bring a stale panel back open.
+                if (advancedOn) {
+                  setPhoneRemoteAsked(false)
+                  setMasterChainPanelOpen(false)
+                  setSoundPanel((open) => (open === 'defaults' ? null : open))
+                }
+                void setAdvancedFeatures(!advancedOn)
+              },
               // Not clickable until main has said where it stands, so a click
               // can never flip an unknown value.
               disabled: appFeatures === null,
