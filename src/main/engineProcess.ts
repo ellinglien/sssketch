@@ -19,6 +19,25 @@ export interface SpawnEngineOptions {
    * small) instead of mocking the clock. Production callers leave it
    * unset. */
   readinessTimeoutMs?: number
+  /** Open an audio INPUT at launch (the advanced features switch's `recording`). Opening one is
+   * what asks macOS for the microphone, so it is false unless asked for: only the playback
+   * engine asks, and only with recording on. The short-lived engines (bakeOffset.ts,
+   * exportAudioMaterialization.ts) never record. An engine started without one still records:
+   * arming names its device and opens the input then. */
+  audioInput?: boolean
+}
+
+/** The engine's --serve arguments (Main.cpp's argv dispatch). Pure, so the flag is tested
+ * without a spawn. */
+export function engineServeArgs(
+  port: number,
+  bridgeBinaryPath: string | null,
+  audioInput: boolean
+): string[] {
+  const args = ['--serve', String(port)]
+  if (!audioInput) args.push('--no-audio-input')
+  if (bridgeBinaryPath !== null) args.push('--bridge-binary', bridgeBinaryPath)
+  return args
 }
 
 /**
@@ -152,10 +171,11 @@ export function spawnEngine(options: SpawnEngineOptions = {}): Promise<EngineHan
   // hasn't been built yet. The engine's own CLI parsing treats a missing
   // flag identically to bridging simply being unavailable this session.
   const bridgeBinaryPath = options.bridgeBinaryPathOverride ?? defaultBridgeBinaryPath()
-  const engineArgs = ['--serve', String(port)]
-  if (existsSync(bridgeBinaryPath)) {
-    engineArgs.push('--bridge-binary', bridgeBinaryPath)
-  }
+  const engineArgs = engineServeArgs(
+    port,
+    existsSync(bridgeBinaryPath) ? bridgeBinaryPath : null,
+    options.audioInput === true
+  )
 
   return new Promise((resolve, reject) => {
     const proc = spawn(binaryPath, engineArgs)

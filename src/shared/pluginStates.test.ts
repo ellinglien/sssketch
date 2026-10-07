@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildPluginStatesMap, stateForSlot, type RawPluginStatesCapture } from './pluginStates'
+import {
+  buildPluginStatesMap,
+  mergePendingPluginStates,
+  stateForSlot,
+  type RawPluginStatesCapture
+} from './pluginStates'
 
 describe('buildPluginStatesMap', () => {
   it('includes a master slot only when both a pluginId and a non-empty captured state exist', () => {
@@ -76,5 +81,35 @@ describe('stateForSlot', () => {
   it('returns undefined when pluginId being loaded is null (an unload/empty-slot request)', () => {
     const pluginStates = { 'master:0': { pluginId: 'reverb-plugin', stateBase64: 'AQIDBA==' } }
     expect(stateForSlot(pluginStates, 'master:0', null)).toBeUndefined()
+  })
+})
+
+// The advanced features switch: with plugins off nothing is loaded into the engine, so the
+// project's saved settings exist only as pending entries, and a save must write them back.
+describe('mergePendingPluginStates', () => {
+  const masterChain = ['comp', null, null, null]
+  const channelPlugins: Record<string, [string | null, string | null]> = { ch: ['eq', null] }
+
+  it('keeps every pending entry when the engine captured nothing (plugins off)', () => {
+    const pending = {
+      'master:0': { pluginId: 'comp', stateBase64: 'AAA' },
+      'channel:ch:0': { pluginId: 'eq', stateBase64: 'BBB' }
+    }
+    expect(mergePendingPluginStates({}, pending, masterChain, channelPlugins)).toEqual(pending)
+  })
+
+  it('prefers the live capture for a slot the engine holds', () => {
+    const live = { 'master:0': { pluginId: 'comp', stateBase64: 'NEW' } }
+    const pending = { 'master:0': { pluginId: 'comp', stateBase64: 'OLD' } }
+    expect(mergePendingPluginStates(live, pending, masterChain, channelPlugins)).toEqual(live)
+  })
+
+  it('drops a pending entry whose slot now holds another plugin, or nothing', () => {
+    const pending = {
+      'master:0': { pluginId: 'other', stateBase64: 'X' },
+      'master:1': { pluginId: 'gone', stateBase64: 'Y' },
+      'channel:nochannel:0': { pluginId: 'eq', stateBase64: 'Z' }
+    }
+    expect(mergePendingPluginStates({}, pending, masterChain, channelPlugins)).toEqual({})
   })
 })

@@ -1,7 +1,7 @@
 import { describe, expect, it, afterEach } from 'vitest'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { spawnEngine, type EngineHandle } from './engineProcess'
+import { engineServeArgs, spawnEngine, type EngineHandle } from './engineProcess'
 
 // spawnEngine()'s default binary-path resolution (defaultBinaryPath() in
 // engineProcess.ts) calls Electron's `app.getAppPath()`, which only behaves
@@ -130,4 +130,26 @@ describe('spawnEngine', () => {
     })
     expect(handle.port).toBeGreaterThan(0)
   }, 30000)
+})
+
+// The advanced features switch's `recording`: the engine opens an audio input at launch -- the
+// microphone request -- only when asked to.
+describe('engineServeArgs', () => {
+  it('opens no audio input unless asked', () => {
+    expect(engineServeArgs(5000, null, false)).toEqual(['--serve', '5000', '--no-audio-input'])
+  })
+
+  it('leaves the flag off when recording wants the input', () => {
+    expect(engineServeArgs(5000, null, true)).toEqual(['--serve', '5000'])
+  })
+
+  it('still passes the bridge binary', () => {
+    expect(engineServeArgs(5000, '/b', false)).toEqual([
+      '--serve',
+      '5000',
+      '--no-audio-input',
+      '--bridge-binary',
+      '/b'
+    ])
+  })
 })

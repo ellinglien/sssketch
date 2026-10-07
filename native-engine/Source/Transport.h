@@ -24,7 +24,12 @@ namespace sssketch
         explicit Transport(PlaybackEngine& engine, PluginChain& masterChain, ChannelChainRegistry& channelChains);
         ~Transport() override;
 
-        bool openDefaultDevice(); // returns false if no output device is available
+        // returns false if no output device is available. openInput=false opens output only:
+        // opening an input is what asks macOS for the microphone, so the app's advanced
+        // features switch keeps it closed while recording is off (Main.cpp's
+        // --no-audio-input). Arming still works afterwards: setRecordingInputDevice() names
+        // the device and its channels and opens the input then.
+        bool openDefaultDevice(bool openInput = true);
         void closeDevice();
 
         void play(double fromPositionBars);

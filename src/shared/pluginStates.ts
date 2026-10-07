@@ -81,3 +81,30 @@ export function stateForSlot(
   if (!entry || entry.pluginId !== pluginId) return undefined
   return entry.stateBase64
 }
+
+/** The map a save writes: the engine's live capture, plus every still-pending saved entry (one
+ * read off disk and not yet handed to the engine) whose slot still holds the same plugin. With
+ * the advanced features switch's plugins off nothing is loaded, the capture is empty, and the
+ * pending entries are the project's only copy of its plugin settings -- without this a save
+ * while off would quietly drop them. The live capture wins for a slot the engine holds. */
+export function mergePendingPluginStates(
+  live: PluginStatesMap,
+  pending: PluginStatesMap,
+  masterChain: (string | null)[],
+  channelPlugins: Record<string, [string | null, string | null]>
+): PluginStatesMap {
+  const merged: PluginStatesMap = {}
+  for (const [slotKey, entry] of Object.entries(pending)) {
+    const parts = slotKey.split(':')
+    const occupant =
+      parts[0] === 'master'
+        ? masterChain[Number(parts[1])]
+        : parts[0] === 'channel'
+          ? channelPlugins[parts.slice(1, -1).join(':')]?.[Number(parts[parts.length - 1])]
+          : undefined
+    if (occupant !== undefined && occupant !== null && occupant === entry.pluginId) {
+      merged[slotKey] = entry
+    }
+  }
+  return { ...merged, ...live }
+}

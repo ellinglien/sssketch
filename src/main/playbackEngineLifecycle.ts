@@ -78,7 +78,13 @@ export interface PlaybackEngineHandle {
  * fresh each time they need it (not destructure it once into a local
  * variable) for this to hold.
  */
-export async function startPlaybackEngine(): Promise<PlaybackEngineHandle> {
+export async function startPlaybackEngine(
+  options: {
+    /** Read at EVERY spawn, respawns included, so a crash after the advanced features switch
+     * moved picks up where it is now. Absent: no audio input (see SpawnEngineOptions). */
+    audioInput?: () => boolean
+  } = {}
+): Promise<PlaybackEngineHandle> {
   let engineHandle: EngineHandle
   let client: EngineClient
   let lastProject: unknown = null
@@ -123,7 +129,7 @@ export async function startPlaybackEngine(): Promise<PlaybackEngineHandle> {
   }
 
   async function connect(): Promise<void> {
-    const newEngineHandle = await spawnEngine()
+    const newEngineHandle = await spawnEngine({ audioInput: options.audioInput?.() === true })
     attachExitListener(newEngineHandle)
 
     if (shuttingDown) {

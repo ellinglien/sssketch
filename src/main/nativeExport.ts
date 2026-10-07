@@ -12,6 +12,7 @@ import { resolveStretchedForExport } from './resolveStretchedForExport'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { loadCatalog } from './pluginCatalog'
+import { currentAppFeatures, pluginCatalogForRender } from './appFeaturesStore'
 import { sketchStemsDir } from './projectLibrary'
 import { buildPluginStatesMap, type RawPluginStatesCapture } from '@shared/pluginStates'
 import { stemExportSound } from '@shared/radioSound'
@@ -173,7 +174,8 @@ export async function nativeExport(
   const project = await buildEngineProject(
     state,
     resolveStretchedForExport,
-    loadCatalog(),
+    // Advanced features off: no plugins in the render, as in the room (appFeaturesStore.ts).
+    pluginCatalogForRender(currentAppFeatures(), loadCatalog),
     pluginStates,
     { dubThrows: timelineDubThrows(state) }
   )
@@ -291,7 +293,7 @@ export async function renderStemsToDir(
   const engineHandle = await spawnEngine()
   const client = new EngineClient()
   const fileNames: string[] = []
-  const pluginCatalog = loadCatalog()
+  const pluginCatalog = pluginCatalogForRender(currentAppFeatures(), loadCatalog)
   // soloState below always zeroes masterChain (a solo render never goes
   // through the master chain, see soloState's own doc comment), so only
   // channelPlugins entries in pluginStates can ever actually apply here --
@@ -373,7 +375,7 @@ async function renderRisersIfAny(
   const project = await buildEngineProject(
     riserOnlyState(state, allKeys),
     resolveStretchedForExport,
-    loadCatalog()
+    pluginCatalogForRender(currentAppFeatures(), loadCatalog)
   )
   client.send('load-project', project)
   const result = (await client.sendAndAwaitType(
@@ -481,7 +483,7 @@ export async function renderStemTracksToDir(
   const engineHandle = await spawnEngine()
   const client = new EngineClient()
   const fileNames: string[] = []
-  const pluginCatalog = loadCatalog()
+  const pluginCatalog = pluginCatalogForRender(currentAppFeatures(), loadCatalog)
   // Same soloState-zeroes-masterChain reasoning as renderStemsToDir above --
   // only channelPlugins entries in pluginStates can ever actually apply.
   const pluginStates =

@@ -6,6 +6,7 @@ import type { StretchedStem } from '@shared/buildEngineProject'
 import type { ToolkitExportMode } from '@shared/toolkit'
 import type { LiveParamField } from '@shared/liveParam'
 import type { OwnUsernameReport } from '@shared/ownUsernameReport'
+import type { AppFeatureSettings } from '@shared/features'
 import type {
   RiffLibraryJam,
   RiffLibraryRiffSummary,
@@ -843,6 +844,16 @@ const api = {
     const listener = (_event: unknown, command: RemoteCommand): void => callback(command)
     ipcRenderer.on('remote-command', listener)
     return () => ipcRenderer.removeListener('remote-command', listener)
+  },
+  // The gear menu's "advanced features" switch (src/main/appFeaturesStore.ts,
+  // @shared/features).
+  getAppFeatures: (): Promise<AppFeatureSettings> => ipcRenderer.invoke('get-app-features'),
+  setAdvancedFeatures: (on: boolean): Promise<AppFeatureSettings> =>
+    ipcRenderer.invoke('set-advanced-features', on),
+  onAppFeaturesChanged: (callback: (settings: AppFeatureSettings) => void): (() => void) => {
+    const listener = (_event: unknown, settings: AppFeatureSettings): void => callback(settings)
+    ipcRenderer.on('app-features-changed', listener)
+    return () => ipcRenderer.removeListener('app-features-changed', listener)
   },
   onPhoneRemoteStatus: (callback: (status: PhoneRemoteStatus) => void): (() => void) => {
     const listener = (_event: unknown, status: PhoneRemoteStatus): void => callback(status)

@@ -110,6 +110,15 @@ import {
   type RemoteServerHandle
 } from './remoteServer'
 import { loadPhoneRemoteSettings, savePhoneRemoteSettings } from './phoneRemoteSettingsStore'
+import {
+  currentAppFeatures,
+  engineAudioInputWanted,
+  loadAppFeatures,
+  phoneRemoteStartAllowed,
+  saveAppFeatures,
+  scanPluginsUnlessOff
+} from './appFeaturesStore'
+import { featureEnabled, type AppFeatureSettings } from '@shared/features'
 import type { LanAddressCandidate } from '@shared/lanAddress'
 import { createRemoteLoopRenderer, type RemoteLoopRenderer } from './remoteLoopRenderer'
 import { createRemoteStemRenderer, type RemoteStemRenderer } from './remoteStemRenderer'
@@ -669,6 +678,11 @@ app.whenReady().then(async () => {
   // src/main/workCounters.ts. A no-op in packaged builds.
   enableWorkCounters(!app.isPackaged)
 
+  // The advanced features switch (appFeaturesStore.ts): read -- and on the
+  // first launch with it, decided from earlier use -- before the engine
+  // spawns, since the engine's audio input (the microphone request) follows it.
+  loadAppFeatures()
+
   // One-time, idempotent relocation of the project library from its old
   // default (~/Music/sssketch/ directly) onto its new one
   // (~/Music/sssketch/projects/) -- see projectLibraryMigration.ts's own
@@ -1028,6 +1042,8 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('start-phone-remote', () => {
     if (remoteServer) return phoneRemoteStatus()
+    // Advanced features off: no server, whatever asks (appFeaturesStore.ts).
+    if (!phoneRemoteStartAllowed(currentAppFeatures())) return phoneRemoteStatus()
     const lanAddress = lanIPv4Address(loadPhoneRemoteSettings().preferredAddress)
     if (lanAddress === null) return phoneRemoteStatus()
     startPhoneRemoteOn(lanAddress)
@@ -1058,6 +1074,21 @@ app.whenReady().then(async () => {
   ipcMain.handle('stop-phone-remote', () => {
     stopPhoneRemote()
     return phoneRemoteStatus()
+  })
+
+  // The gear menu's "advanced features" switch (appFeaturesStore.ts,
+  // @shared/features). Off stops a running phone remote now; the engine's
+  // audio input follows at its next spawn (the renderer's tooltip says so).
+  ipcMain.handle('get-app-features', () => currentAppFeatures())
+  ipcMain.handle('set-advanced-features', (_event, on: boolean): AppFeatureSettings => {
+    saveAppFeatures({ advancedFeatures: on === true })
+    const settings = currentAppFeatures()
+    if (!featureEnabled('phoneRemote', settings) && remoteServer) {
+      stopPhoneRemote()
+      mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
+    }
+    mainWindow?.webContents.send('app-features-changed', settings)
+    return settings
   })
 
   ipcMain.handle('set-remote-state', (_event, state: RemoteState) => {
@@ -1355,7 +1386,7 @@ app.whenReady().then(async () => {
   // 100% of runs, not just sometimes, since the .then() callback can't run
   // until this synchronous turn drains) -- see subscribeEngineRelays' own
   // doc comment for what silently breaks if this ever regresses again.
-  void startPlaybackEngine()
+  void startPlaybackEngine({ audioInput: () => engineAudioInputWanted(currentAppFeatures()) })
     .then((handle) => {
       playbackEngine = handle
       subscribeEngineRelays(handle)
@@ -2272,12 +2303,17 @@ app.whenReady().then(async () => {
     }
   )
 
-  ipcMain.handle('scan-plugins', async (event) => {
-    const catalog = await runFullScan((progress) => {
-      event.sender.send('scan-progress', progress)
-    })
-    return catalog
-  })
+  // Advanced features off: no scan, the stored catalog comes back untouched.
+  ipcMain.handle('scan-plugins', async (event) =>
+    scanPluginsUnlessOff(
+      currentAppFeatures(),
+      () =>
+        runFullScan((progress) => {
+          event.sender.send('scan-progress', progress)
+        }),
+      loadCatalog
+    )
+  )
 
   ipcMain.handle('get-plugin-catalog', () => loadCatalog())
 

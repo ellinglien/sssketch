@@ -253,7 +253,7 @@ static int runSpike()
     return (vst3Ok && auOk) ? 0 : 1;
 }
 
-static int runServe(int port, const juce::String& bridgeBinaryPath)
+static int runServe(int port, const juce::String& bridgeBinaryPath, bool openAudioInput)
 {
     StemBufferCache bufferCache;
     PlaybackEngine engine(bufferCache);
@@ -265,7 +265,7 @@ static int runServe(int port, const juce::String& bridgeBinaryPath)
     PluginChain masterChain(kNumMasterChainSlots, &PluginChain::defaultInstantiate, &bridgeClient);
     ChannelChainRegistry channelChains(nullptr, &bridgeClient);
     Transport transport(engine, masterChain, channelChains);
-    transport.openDefaultDevice(); // best-effort — if it fails (no device, e.g. CI),
+    transport.openDefaultDevice(openAudioInput); // best-effort — if it fails (no device, e.g. CI),
                                     // the engine still serves IPC and PlaybackEngine
                                     // still renders correctly, just nothing plays out loud
 
@@ -496,7 +496,13 @@ int main(int argc, char* argv[])
                 break;
             }
         }
-        return runServe(juce::String(argv[2]).getIntValue(), bridgeBinaryPath);
+        // --no-audio-input: open the output only, so macOS never asks for the microphone (the
+        // app's advanced features switch with recording off; engineProcess.ts engineServeArgs).
+        bool openAudioInput = true;
+        for (int i = 3; i < argc; ++i)
+            if (juce::String(argv[i]) == "--no-audio-input")
+                openAudioInput = false;
+        return runServe(juce::String(argv[2]).getIntValue(), bridgeBinaryPath, openAudioInput);
     }
 
     if (argc > 4 && juce::String(argv[1]) == "--render-test")

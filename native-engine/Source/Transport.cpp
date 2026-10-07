@@ -36,7 +36,7 @@ namespace sssketch
         : engine(e), masterChain(mc), channelChains(cc) {}
     Transport::~Transport() { closeDevice(); }
 
-    bool Transport::openDefaultDevice()
+    bool Transport::openDefaultDevice(bool openInput)
     {
         // Requests 1 input channel now (was 0) -- harmless when nothing is
         // ever armed (the extra channel just goes unread, same cost as
@@ -46,7 +46,12 @@ namespace sssketch
         // would glitch/interrupt playback on the output side too, since
         // JUCE reopens the whole device, not just the input half, when
         // input channel count changes on an already-open device).
-        auto error = deviceManager.initialiseWithDefaultDevices(1, 2);
+        //
+        // openInput=false (--no-audio-input, the app's recording feature off) asks for 0 input
+        // channels instead: no input is opened, so macOS never asks for the microphone. The
+        // price, only if recording is then turned on mid-session: the first arm reopens the
+        // device (the glitch described above), once.
+        auto error = deviceManager.initialiseWithDefaultDevices(openInput ? 1 : 0, 2);
         if (error.isNotEmpty())
         {
             juce::Logger::writeToLog("Transport: failed to open audio device: " + error);
