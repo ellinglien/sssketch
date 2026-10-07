@@ -1,9 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { initialPluginSwitchState } from '@shared/pluginSwitch'
 import {
+  markFreshPluginChoice,
   pendingPluginStatesGeneration,
   pluginCaptureFallback,
+  pluginsHeldStatus,
+  pluginSwitchStateRef,
   recordPluginCapture,
-  replacePendingPluginStates
+  replacePendingPluginStates,
+  setPluginsHeldStatus,
+  subscribePluginsHeld
 } from './pendingPluginStates'
 import { markPluginsTouched, pluginsTouchedSnapshot } from './pluginsTouched'
 
@@ -31,5 +37,32 @@ describe('the capture fallback', () => {
     markPluginsTouched()
     replacePendingPluginStates({})
     expect(pluginsTouchedSnapshot().touched).toBe(false)
+  })
+})
+
+describe('markFreshPluginChoice', () => {
+  it('marks the slot fresh in the switch state StoreContext steps next', () => {
+    pluginSwitchStateRef.current = {
+      ...initialPluginSwitchState,
+      parked: { 'master:1': { verb: 'OLD' } }
+    }
+    markFreshPluginChoice({ kind: 'master', slot: 1 })
+    expect(pluginSwitchStateRef.current.fresh).toEqual(['master:1'])
+    expect(pluginSwitchStateRef.current.parked['master:1']).toBeUndefined()
+    pluginSwitchStateRef.current = initialPluginSwitchState
+  })
+})
+
+describe('the plugins-held notice status', () => {
+  it('tells subscribers when it changes, and only then', () => {
+    const listener = vi.fn()
+    const unsubscribe = subscribePluginsHeld(listener)
+    setPluginsHeldStatus('retrying')
+    setPluginsHeldStatus('retrying')
+    expect(pluginsHeldStatus()).toBe('retrying')
+    setPluginsHeldStatus('gave-up')
+    setPluginsHeldStatus('none')
+    expect(listener).toHaveBeenCalledTimes(3)
+    unsubscribe()
   })
 })

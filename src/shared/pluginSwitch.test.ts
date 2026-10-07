@@ -3,6 +3,9 @@ import {
   initialPluginSwitchState,
   pluginSwitchStep,
   slotsEngineHolds,
+  withFreshChoice,
+  heldRetryDelayMs,
+  unknownChannelRetryDelayMs,
   type PluginChains,
   type PluginSwitchContext,
   type PluginSwitchEvent,
@@ -382,7 +385,11 @@ describe('pluginSwitchStep: off and quickly on again', () => {
     expect(done.loads.map((l) => [l.slotKey, l.pluginId, l.stateBase64])).toEqual([
       ['master:0', 'delay', 'D']
     ])
-    expect(done.unloads).toEqual([{ kind: 'master', slot: 2 }])
+    // And the old project's channel plugin, on a channel the other project has none on.
+    expect(done.unloads).toEqual([
+      { kind: 'master', slot: 2 },
+      { kind: 'channel', channelId: 'ch1', slot: 0 }
+    ])
     expect(done.pending).toEqual(otherSaved)
   })
 })
@@ -921,7 +928,7 @@ describe('pluginSwitchStep: retry-failed', () => {
     expect(failed.state.failed).toEqual(['channel:ch1:0'])
     const retry = pluginSwitchStep(
       failed.state,
-      { type: 'retry-failed' },
+      { type: 'retry-failed', slotKeys: ['channel:ch1:0'] },
       ctx(project, failed.pending)
     )
     expect(retry.loads.map((l) => [l.slotKey, l.stateBase64])).toEqual([['channel:ch1:0', 'DELAY']])
@@ -930,8 +937,261 @@ describe('pluginSwitchStep: retry-failed', () => {
 
   it('does nothing with no failed slot, or while not live', () => {
     const live = allLoaded(project, saved)
-    expect(pluginSwitchStep(live.state, { type: 'retry-failed' }, ctx(project, {})).loads).toEqual(
-      []
+    expect(
+      pluginSwitchStep(
+        live.state,
+        { type: 'retry-failed', slotKeys: ['master:0'] },
+        ctx(project, {})
+      ).loads
+    ).toEqual([])
+  })
+})
+
+describe('pluginSwitchStep: retry-failed for named slots', () => {
+  it('retries only the named slots that are still failed (a broken plugin elsewhere is left alone)', () => {
+    const [on] = run([{ type: 'switch', on: true }], project, saved)
+    let step = pluginSwitchStep(
+      on.state,
+      { type: 'load-result', slotKey: 'channel:ch1:0', pluginId: 'delay', success: false },
+      ctx(project, on.pending)
     )
+    step = pluginSwitchStep(
+      step.state,
+      { type: 'load-result', slotKey: 'master:0', pluginId: 'verb', success: false },
+      ctx(project, step.pending)
+    )
+    expect([...step.state.failed].sort()).toEqual(['channel:ch1:0', 'master:0'])
+    const retry = pluginSwitchStep(
+      step.state,
+      { type: 'retry-failed', slotKeys: ['channel:ch1:0', 'master:2'] },
+      ctx(project, step.pending)
+    )
+    expect(retry.loads.map((l) => l.slotKey)).toEqual(['channel:ch1:0'])
+    expect(retry.state.failed).toEqual(['master:0'])
+  })
+})
+
+describe('pluginSwitchStep: opening another project with fewer plugins', () => {
+  const bChains: PluginChains = {
+    masterChain: [null, null, null, null],
+    channelPlugins: { ch2: ['comp', null] }
+  }
+
+  it('unloads the old project`s plugins on a channel the new one has none on', () => {
+    const live = allLoaded(project, saved)
+    const step = pluginSwitchStep(
+      live.state,
+      { type: 'chains-changed' },
+      ctx(bChains, {}, CATALOG, 1)
+    )
+    expect(step.unloads).toEqual(
+      expect.arrayContaining([
+        { kind: 'master', slot: 0 },
+        { kind: 'master', slot: 2 },
+        { kind: 'channel', channelId: 'ch1', slot: 0 }
+      ])
+    )
+    expect(step.unloads).toHaveLength(3)
+    expect(step.loads.map((l) => l.slotKey)).toEqual(['channel:ch2:0'])
+  })
+
+  it('never keeps what those unloads report as the new project`s (no undo brings A`s settings into B)', () => {
+    const live = allLoaded(project, saved)
+    const open = pluginSwitchStep(
+      live.state,
+      { type: 'chains-changed' },
+      ctx(bChains, {}, CATALOG, 1)
+    )
+    let step = open
+    for (const [slotKey, previousState] of [
+      ['master:0', 'VERB-A'],
+      ['master:2', 'COMP-A'],
+      ['channel:ch1:0', 'DELAY-A']
+    ]) {
+      step = pluginSwitchStep(
+        step.state,
+        { type: 'load-result', slotKey, pluginId: '', success: true, previousState },
+        ctx(bChains, step.pending, CATALOG, 1)
+      )
+    }
+    expect(step.state.parked).toEqual({})
+    expect(step.state.sent['channel:ch1:0']).toBeUndefined()
+  })
+
+  it('within one project, a channel removed from it is left to the engine (it drops the chain)', () => {
+    const live = allLoaded(project, saved)
+    const noCh1: PluginChains = { ...project, channelPlugins: {} }
+    const step = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(noCh1, {}))
+    expect(step.unloads).toEqual([])
+  })
+})
+
+describe('pluginSwitchStep: undo before the engine has answered the removal', () => {
+  it('an undo of a removal waits for the unload`s reply, then loads the plugin as it was', () => {
+    const live = allLoaded(project, saved)
+    const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }
+    const rm = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(removed, {}))
+    const undone = pluginSwitchStep(rm.state, { type: 'chains-changed' }, ctx(project, rm.pending))
+    expect(undone.loads).toEqual([]) // not at its defaults
+    expect(slotsEngineHolds(undone.state, project, 0).has('master:0')).toBe(false)
+    const answered = pluginSwitchStep(
+      undone.state,
+      {
+        type: 'load-result',
+        slotKey: 'master:0',
+        pluginId: '',
+        success: true,
+        previousState: 'VERB-TWEAKED'
+      },
+      ctx(project, undone.pending)
+    )
+    expect(answered.loads.map((l) => [l.slotKey, l.pluginId, l.stateBase64])).toEqual([
+      ['master:0', 'verb', 'VERB-TWEAKED']
+    ])
+    expect(answered.pending['master:0']).toEqual({ pluginId: 'verb', stateBase64: 'VERB-TWEAKED' })
+    const landed = pluginSwitchStep(
+      answered.state,
+      { type: 'load-result', slotKey: 'master:0', pluginId: 'verb', success: true },
+      ctx(project, answered.pending)
+    )
+    expect(slotsEngineHolds(landed.state, project, 0).has('master:0')).toBe(true)
+    expect(landed.pending['master:0']).toBeUndefined()
+  })
+
+  it('an undo of a replacement waits for the new plugin`s reply, then brings the old one back as it was', () => {
+    const live = allLoaded(project, saved)
+    const replaced: PluginChains = { ...project, masterChain: ['delay', null, 'comp', null] }
+    const rp = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(replaced, {}))
+    const undone = pluginSwitchStep(rp.state, { type: 'chains-changed' }, ctx(project, rp.pending))
+    expect(undone.loads).toEqual([])
+    const answered = pluginSwitchStep(
+      undone.state,
+      {
+        type: 'load-result',
+        slotKey: 'master:0',
+        pluginId: 'delay',
+        success: true,
+        previousState: 'VERB-TWEAKED'
+      },
+      ctx(project, undone.pending)
+    )
+    expect(answered.loads.map((l) => [l.pluginId, l.stateBase64])).toEqual([
+      ['verb', 'VERB-TWEAKED']
+    ])
+  })
+
+  it('a reply without settings loads it at its defaults rather than never', () => {
+    const live = allLoaded(project, saved)
+    const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }
+    const rm = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(removed, {}))
+    const undone = pluginSwitchStep(rm.state, { type: 'chains-changed' }, ctx(project, rm.pending))
+    const answered = pluginSwitchStep(
+      undone.state,
+      { type: 'load-result', slotKey: 'master:0', pluginId: '', success: true },
+      ctx(project, undone.pending)
+    )
+    expect(answered.loads.map((l) => [l.pluginId, l.stateBase64])).toEqual([['verb', null]])
+  })
+
+  it('switched off before the reply: the settings it reports are kept for the save and the switch going on', () => {
+    const live = allLoaded(project, saved)
+    const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }
+    const rm = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(removed, {}))
+    const undone = pluginSwitchStep(rm.state, { type: 'chains-changed' }, ctx(project, rm.pending))
+    const off = pluginSwitchStep(undone.state, { type: 'switch', on: false }, ctx(project, {}))
+    const captured = pluginSwitchStep(
+      off.state,
+      {
+        type: 'capture-done',
+        captureId: off.state.captureId,
+        raw: {
+          masterChain: ['', '', 'COMP2', ''],
+          channelChains: [{ channelId: 'ch1', slots: ['DELAY2', ''] }]
+        }
+      },
+      ctx(project, off.pending)
+    )
+    expect(captured.state.phase).toBe('off')
+    let step = captured
+    for (const [pluginId, previousState] of [
+      ['', 'VERB-TWEAKED'], // the removal's reply
+      ['', undefined] // the switch-off's own unload of that slot
+    ] as const) {
+      step = pluginSwitchStep(
+        step.state,
+        { type: 'load-result', slotKey: 'master:0', pluginId, success: true, previousState },
+        ctx(project, step.pending)
+      )
+    }
+    expect(step.loads).toEqual([])
+    expect(step.pending['master:0']).toEqual({ pluginId: 'verb', stateBase64: 'VERB-TWEAKED' })
+  })
+
+  it('an engine restart meanwhile reloads it from the fallback, and nothing waits any more', () => {
+    const live = allLoaded(project, saved)
+    const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }
+    const rm = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(removed, {}))
+    const undone = pluginSwitchStep(rm.state, { type: 'chains-changed' }, ctx(project, rm.pending))
+    const restarted = pluginSwitchStep(
+      undone.state,
+      { type: 'engine-restarted', fallback },
+      ctx(project, undone.pending)
+    )
+    expect(restarted.loads.find((l) => l.slotKey === 'master:0')?.stateBase64).toBe('VERB-LATEST')
+    expect(restarted.state.awaiting).toEqual({})
+  })
+})
+
+describe('pluginSwitchStep: a plugin picked fresh (the browser or the slot`s menu)', () => {
+  it('starts at its defaults, even right after the same plugin was removed from that slot', () => {
+    const live = allLoaded(project, saved)
+    const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }
+    const rm = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(removed, {}))
+    const answered = pluginSwitchStep(
+      rm.state,
+      {
+        type: 'load-result',
+        slotKey: 'master:0',
+        pluginId: '',
+        success: true,
+        previousState: 'VERB-TWEAKED'
+      },
+      ctx(removed, rm.pending)
+    )
+    const picked = pluginSwitchStep(
+      withFreshChoice(answered.state, 'master:0'),
+      { type: 'chains-changed' },
+      ctx(project, answered.pending)
+    )
+    expect(picked.loads.map((l) => [l.pluginId, l.stateBase64])).toEqual([['verb', null]])
+    expect(picked.state.fresh).toEqual([])
+  })
+
+  it('does not wait for a removal still in flight', () => {
+    const live = allLoaded(project, saved)
+    const removed: PluginChains = { ...project, masterChain: [null, null, 'comp', null] }
+    const rm = pluginSwitchStep(live.state, { type: 'chains-changed' }, ctx(removed, {}))
+    const picked = pluginSwitchStep(
+      withFreshChoice(rm.state, 'master:0'),
+      { type: 'chains-changed' },
+      ctx(project, rm.pending)
+    )
+    expect(picked.loads.map((l) => [l.pluginId, l.stateBase64])).toEqual([['verb', null]])
+  })
+})
+
+describe('heldRetryDelayMs', () => {
+  it('backs off from 5 s, doubling, to at most a minute, then gives up', () => {
+    const delays: (number | null)[] = []
+    for (let attempt = 0; attempt < 8; attempt++) delays.push(heldRetryDelayMs(attempt))
+    expect(delays).toEqual([5000, 10000, 20000, 40000, 60000, 60000, null, null])
+  })
+})
+
+describe('unknownChannelRetryDelayMs', () => {
+  it('waits a little longer each time, a few times only', () => {
+    const delays: (number | null)[] = []
+    for (let attempt = 0; attempt < 7; attempt++) delays.push(unknownChannelRetryDelayMs(attempt))
+    expect(delays).toEqual([1000, 2000, 3000, 4000, 5000, null, null])
   })
 })

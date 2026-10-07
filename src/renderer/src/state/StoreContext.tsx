@@ -23,8 +23,10 @@ import { isWithinManualSeekGrace } from './manualSeek'
 import type { PluginCatalog } from '../../../main/pluginCatalog'
 import type { PluginStatesMap } from '@shared/pluginStates'
 import {
+  heldRetryDelayMs,
   pluginSlotKey,
   pluginSwitchStep,
+  unknownChannelRetryDelayMs,
   type PluginChains,
   type PluginSlotTarget,
   type PluginSwitchEvent,
@@ -37,17 +39,10 @@ import {
   pendingPluginStatesRef as pluginStatesRef,
   pluginCaptureFallback,
   pluginSwitchStateRef as pluginSwitchRef,
-  replacePendingPluginStates
+  replacePendingPluginStates,
+  setPluginsHeldStatus
 } from './pendingPluginStates'
 import { markPluginsTouched } from './pluginsTouched'
-
-/** How long 'held' (a switch-off whose capture failed, plugins left loaded) waits before asking
- * the engine for their settings again. */
-const HELD_RETRY_MS = 5000
-
-/** How many times a channel plugin load that failed with "unknown channel" is retried (see the
- * channel-plugin-loaded handler). */
-const UNKNOWN_CHANNEL_RETRIES = 5
 
 /** A slot's status text while its plugin failed to load: the slot keeps the plugin and its saved
  * settings (@shared/pluginSwitch's `failed`), retried after a scan. */
@@ -952,23 +947,40 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
 
   // applyPluginStep, plus the capture a switch-off (or a retry) asks for --
   // its answer is fed back as capture-done -- and, while 'held' (that capture
-  // failed, the plugins are still loaded), a retry after HELD_RETRY_MS.
-  // Through a ref so the capture's and the timer's callbacks reach the
-  // current one.
-  const heldRetryTimerRef = useRef<number | null>(null)
+  // failed, the plugins are still loaded), a retry, backing off
+  // (heldRetryDelayMs) until it gives up; the UI says the plugins are still
+  // loaded meanwhile (PluginsHeldNotice). Through a ref so the capture's and
+  // the timer's callbacks reach the current one.
+  const heldRetryRef = useRef<{ timer: number | null; attempt: number }>({
+    timer: null,
+    attempt: 0
+  })
   const stepPluginsRef = useRef<(event: PluginSwitchEvent, chains: PluginChains) => void>(() => {})
   const stepPlugins = useCallback(
     (event: PluginSwitchEvent, chains: PluginChains): void => {
       const step = applyPluginStep(event, chains)
-      if (step.state.phase === 'held' && heldRetryTimerRef.current === null) {
-        heldRetryTimerRef.current = window.setTimeout(() => {
-          heldRetryTimerRef.current = null
-          const now = stateRef.current
-          stepPluginsRef.current(
-            { type: 'retry-capture' },
-            { masterChain: now.masterChain, channelPlugins: now.channelPlugins }
-          )
-        }, HELD_RETRY_MS)
+      const held = heldRetryRef.current
+      if (step.state.phase === 'live' || step.state.phase === 'off') {
+        // Out of 'held' for good: on again, or its settings read and unloaded.
+        if (held.timer !== null) window.clearTimeout(held.timer)
+        heldRetryRef.current = { timer: null, attempt: 0 }
+        setPluginsHeldStatus('none')
+      } else if (step.state.phase === 'held' && held.timer === null) {
+        const delay = heldRetryDelayMs(held.attempt)
+        if (delay === null) {
+          setPluginsHeldStatus('gave-up')
+        } else {
+          setPluginsHeldStatus('retrying')
+          held.attempt += 1
+          held.timer = window.setTimeout(() => {
+            held.timer = null
+            const now = stateRef.current
+            stepPluginsRef.current(
+              { type: 'retry-capture' },
+              { masterChain: now.masterChain, channelPlugins: now.channelPlugins }
+            )
+          }, delay)
+        }
       }
       if (!step.capture) return
       const captureId = step.state.captureId
@@ -1083,15 +1095,35 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     )
   }, [stepPlugins, showLoadResult])
 
-  const unknownChannelRetriesRef = useRef(0)
+  // Per slot, for the open project only: how many times its channel plugin
+  // load was retried after "unknown channel", and the retries waiting.
+  // Reset when another project is opened (or started) and when the engine
+  // restarts (it reloads everything).
+  const unknownChannelRetriesRef = useRef<{
+    generation: number
+    attempts: Map<string, number>
+    timers: Set<number>
+  }>({ generation: -1, attempts: new Map(), timers: new Set() })
+  const resetUnknownChannelRetries = useCallback((): void => {
+    for (const timer of unknownChannelRetriesRef.current.timers) window.clearTimeout(timer)
+    unknownChannelRetriesRef.current = {
+      generation: pendingPluginStatesGeneration(),
+      attempts: new Map(),
+      timers: new Set()
+    }
+  }, [])
   useEffect(() => {
     return window.rifffApi.onChannelPluginLoaded(
       ({ channelId, slot, pluginId, success, error, previousState }) => {
-        if (!success)
+        const target: PluginSlotTarget = { kind: 'channel', channelId, slot }
+        const slotKey = pluginSlotKey(target)
+        // An unload sent to a channel the engine has already dropped (another
+        // project was opened): the plugin is gone with it, which is the point.
+        const goneWithChannel = !success && !pluginId && !!error?.startsWith('unknown channel')
+        if (!success && !goneWithChannel)
           console.error(
             `StoreContext: channel "${channelId}" slot ${slot} failed to load plugin: ${error}`
           )
-        const target: PluginSlotTarget = { kind: 'channel', channelId, slot }
         stepPlugins(
           {
             type: 'load-result',
@@ -1105,29 +1137,37 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
             channelPlugins: stateRef.current.channelPlugins
           }
         )
-        showLoadResult(target, pluginId, success, error)
+        if (goneWithChannel) showLoadResult(target, '', true)
+        else showLoadResult(target, pluginId, success, error)
         // The load can reach the engine before the project that creates its
         // channel (the engine sync is built asynchronously, e.g. right after
-        // a project is opened): retry a few times, a little later each time.
-        if (success && pluginId) unknownChannelRetriesRef.current = 0
-        else if (
-          !success &&
-          pluginId &&
-          error?.startsWith('unknown channel') &&
-          unknownChannelRetriesRef.current < UNKNOWN_CHANNEL_RETRIES
-        ) {
-          unknownChannelRetriesRef.current += 1
-          window.setTimeout(() => {
+        // a project is opened): retry that slot -- only that one, and only
+        // for this passing reason (another failed slot's plugin may be
+        // genuinely broken) -- a few times, a little later each time.
+        if (unknownChannelRetriesRef.current.generation !== pendingPluginStatesGeneration())
+          resetUnknownChannelRetries()
+        const retries = unknownChannelRetriesRef.current
+        if (success && pluginId) retries.attempts.delete(slotKey)
+        else if (!success && pluginId && error?.startsWith('unknown channel')) {
+          const attempt = retries.attempts.get(slotKey) ?? 0
+          const delay = unknownChannelRetryDelayMs(attempt)
+          if (delay === null) return
+          retries.attempts.set(slotKey, attempt + 1)
+          const timer = window.setTimeout(() => {
+            retries.timers.delete(timer)
+            // Another project opened meanwhile: its own loads have their own count.
+            if (retries.generation !== pendingPluginStatesGeneration()) return
             const now = stateRef.current
             stepPlugins(
-              { type: 'retry-failed' },
+              { type: 'retry-failed', slotKeys: [slotKey] },
               { masterChain: now.masterChain, channelPlugins: now.channelPlugins }
             )
-          }, 1000 * unknownChannelRetriesRef.current)
+          }, delay)
+          retries.timers.add(timer)
         }
       }
     )
-  }, [stepPlugins, showLoadResult])
+  }, [stepPlugins, showLoadResult, resetUnknownChannelRetries])
 
   useEffect(() => {
     return window.rifffApi.onEnginePositionUpdate((pos) => {
@@ -1193,6 +1233,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   useEffect(() => {
     return window.rifffApi.onEngineRestarted(() => {
       dispatch({ type: 'STOP' })
+      resetUnknownChannelRetries()
       // The new engine holds no plugin: every slot is reloaded, settings
       // already handed over coming from the latest capture.
       stepPlugins(
@@ -1203,11 +1244,12 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
         }
       )
     })
-  }, [dispatch, stepPlugins])
+  }, [dispatch, stepPlugins, resetUnknownChannelRetries])
 
-  // A parameter changed in an open plugin editor window (the engine's
-  // 'plugin-edited', at most every ~750 ms): the project is unsaved
-  // (pluginsTouched.ts). Opening an editor sets the same flag (the panels).
+  // A knob turned in an open plugin editor window (the engine's
+  // 'plugin-edited': a parameter change made with a gesture, at most every
+  // ~750 ms): the project is unsaved (pluginsTouched.ts). Opening a bridged
+  // plugin's editor sets the same flag (the panels); the engine can't watch it.
   useEffect(() => window.rifffApi.onPluginEdited(() => markPluginsTouched()), [])
 
   return (

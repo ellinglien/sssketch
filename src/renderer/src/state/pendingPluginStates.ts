@@ -2,7 +2,13 @@
 // with what sits outside it (kept out of StoreContext.tsx so that file exports only components
 // and hooks).
 import type { PluginStatesMap } from '@shared/pluginStates'
-import { initialPluginSwitchState, type PluginSwitchState } from '@shared/pluginSwitch'
+import {
+  initialPluginSwitchState,
+  pluginSlotKey,
+  withFreshChoice,
+  type PluginSlotTarget,
+  type PluginSwitchState
+} from '@shared/pluginSwitch'
 import { clearPluginsTouched } from './pluginsTouched'
 
 /** The project's saved plugin settings the engine hasn't been handed yet -- see pluginStates.ts's
@@ -16,10 +22,21 @@ import { clearPluginsTouched } from './pluginsTouched'
 export const pendingPluginStatesRef: { current: PluginStatesMap } = { current: {} }
 
 /** What @shared/pluginSwitch says the engine holds of the project's plugins -- owned by
- * StoreContext (the only writer), read by a save (App.tsx's serializeForSave, through
+ * StoreContext (the only writer bar markFreshPluginChoice), read by a save (App.tsx's serializeForSave, through
  * slotsEngineHolds) to know which slots' captured settings are this project's. */
 export const pluginSwitchStateRef: { current: PluginSwitchState } = {
   current: initialPluginSwitchState
+}
+
+/** A plugin picked for `target` by hand (the slot's menu, the plugin browser), called just before
+ * the chain edit is dispatched: it starts at its defaults, whatever a removal of the same plugin
+ * there left parked -- those settings are for an undo only (@shared/pluginSwitch's
+ * withFreshChoice). StoreContext's next step reads the ref, so nothing is lost between. */
+export function markFreshPluginChoice(target: PluginSlotTarget): void {
+  pluginSwitchStateRef.current = withFreshChoice(
+    pluginSwitchStateRef.current,
+    pluginSlotKey(target)
+  )
 }
 
 // Bumped by each replacement below (a project opened, a new one started): the project
@@ -75,4 +92,27 @@ export function subscribeProjectOpened(listener: () => void): () => void {
 
 export function projectOpenedCount(): number {
   return projectOpenCount
+}
+
+/** 'held' (@shared/pluginSwitch): plugins were switched off, but their settings couldn't be read
+ * back, so they were left loaded rather than lost. 'retrying': StoreContext asks again, backing
+ * off (heldRetryDelayMs); 'gave-up': it stopped asking. Shown by PluginsHeldNotice. */
+export type PluginsHeldStatus = 'none' | 'retrying' | 'gave-up'
+
+let heldStatus: PluginsHeldStatus = 'none'
+const heldListeners = new Set<() => void>()
+
+export function setPluginsHeldStatus(status: PluginsHeldStatus): void {
+  if (status === heldStatus) return
+  heldStatus = status
+  for (const listener of heldListeners) listener()
+}
+
+export function pluginsHeldStatus(): PluginsHeldStatus {
+  return heldStatus
+}
+
+export function subscribePluginsHeld(listener: () => void): () => void {
+  heldListeners.add(listener)
+  return () => heldListeners.delete(listener)
 }

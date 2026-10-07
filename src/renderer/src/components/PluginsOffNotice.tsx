@@ -2,7 +2,12 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { featureEnabled, projectUsesPlugins } from '@shared/features'
 import { useAppFeatures } from '../state/appFeatures'
 import { useAppSelector } from '../state/StoreContext'
-import { projectOpenedCount, subscribeProjectOpened } from '../state/pendingPluginStates'
+import {
+  pluginsHeldStatus,
+  projectOpenedCount,
+  subscribeProjectOpened,
+  subscribePluginsHeld
+} from '../state/pendingPluginStates'
 
 /** Same window as StemsUnavailableIndicator: long enough to read twice, short enough that it
  * never becomes furniture. */
@@ -62,5 +67,36 @@ export function PluginsOffNotice(): React.JSX.Element | null {
     >
       this project uses plugins · turn on advanced features to hear them
     </button>
+  )
+}
+
+/** While plugins are switched off but still loaded ('held': their settings couldn't be read back,
+ * so they were left in the engine rather than lost): says so, and whether it is still trying. Stays
+ * up as long as that lasts -- turning advanced features back on ends it, keeping the plugins as
+ * they are. One row below PluginsOffNotice. */
+export function PluginsHeldNotice(): React.JSX.Element | null {
+  const status = useSyncExternalStore(subscribePluginsHeld, pluginsHeldStatus)
+  if (status === 'none') return null
+  return (
+    <div
+      role="status"
+      title="plugins still loaded"
+      style={{
+        position: 'fixed',
+        top: 128,
+        right: 10,
+        zIndex: 2000,
+        padding: '5px 10px',
+        background: 'var(--ra-bg-bar)',
+        border: '1px solid var(--ra-border)',
+        borderRadius: 0,
+        fontSize: 9,
+        color: 'var(--ra-text-3)'
+      }}
+    >
+      {status === 'retrying'
+        ? "plugins still loaded · couldn't read their settings yet · retrying"
+        : "plugins still loaded · couldn't read their settings · turn advanced features on to keep them"}
+    </div>
   )
 }
