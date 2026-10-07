@@ -39,6 +39,13 @@ import {
   generateDefaultProjectName,
   renameExternalSketchFile
 } from './projectFile'
+import {
+  initialRecoveryFileState,
+  recoveryFileStep,
+  shouldClearRecoveryOnCleanQuit,
+  type RecoveryFileEvent,
+  type RecoveryFileState
+} from './recoveryFileTracker'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav } from './exportMix'
 import type { ToolkitExportMode } from '@shared/toolkit'
@@ -372,14 +379,17 @@ let engineStartupDone = false
 // Cmd+Q needs to ask before discarding real unsaved work.
 let rendererHasUnsavedChanges = false
 
-// Whether the open project has been saved in this session (library, in
-// place or duplicate). Each such save clears the crash-recovery file
-// (projectFile.ts), so any written afterwards is this session's own: a quit
-// with nothing unsaved clears it too (before-quit), rather than leave the
-// next launch offering to "recover" what is already on disk. Without a save
-// this session the file may be a previous session's crash recovery, still
-// waiting on its prompt, so it is left alone.
-let savedProjectThisSession = false
+// What main knows of the crash-recovery file: whether a save landed in this
+// window and whether an autosave was written since (recoveryFileTracker.ts).
+// A clean quit clears the file only when the last save came after the last
+// autosave write, rather than leave the next launch offering to "recover"
+// what is already on disk. Anything else (a previous session's file, or one
+// written after the last save and then left by a closed window, its prompt
+// now showing in a new one) may be the only copy of the work, so it stays.
+let recoveryFile: RecoveryFileState = initialRecoveryFileState
+function noteRecoveryFile(event: RecoveryFileEvent): void {
+  recoveryFile = recoveryFileStep(recoveryFile, event)
+}
 // Set when the quit prompt's "Save" re-issues the quit: that save clears the
 // recovery file itself if it lands, and if it failed the file is all there
 // is, so the clean-quit clear above must not run.
@@ -526,6 +536,9 @@ function stopPhoneRemote(): void {
 }
 
 function createWindow(): BrowserWindow {
+  // A new window starts knowing nothing of the recovery file: on macOS the
+  // last one may have closed with an autosave written after its last save.
+  noteRecoveryFile('window-created')
   // Create the browser window.
   const win = new BrowserWindow({
     // 1512x982 -- the current MacBook Pro's own logical resolution
@@ -1253,9 +1266,11 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs))
 
-  ipcMain.handle('save-project', (event, json: string) => {
+  ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
-    return saveProjectAs(win, json)
+    const path = await saveProjectAs(win, json)
+    if (path !== null) noteRecoveryFile('saved')
+    return path
   })
 
   ipcMain.handle('open-project', (event) => {
@@ -1263,13 +1278,22 @@ app.whenReady().then(async () => {
     return openProject(win)
   })
 
-  ipcMain.handle('autosave-project', (_event, json: string) => writeAutosave(json))
+  ipcMain.handle('autosave-project', (_event, json: string) => {
+    writeAutosave(json)
+    noteRecoveryFile('autosave-written')
+  })
 
   ipcMain.handle('load-autosave', () => loadAutosave())
 
-  ipcMain.handle('clear-autosave', () => clearAutosave())
+  ipcMain.handle('clear-autosave', () => {
+    clearAutosave()
+    noteRecoveryFile('cleared')
+  })
 
-  ipcMain.handle('autosave-project-sketch', (_event, json: string) => writeAutosaveSketchInfo(json))
+  ipcMain.handle('autosave-project-sketch', (_event, json: string) => {
+    writeAutosaveSketchInfo(json)
+    noteRecoveryFile('autosave-written')
+  })
 
   ipcMain.handle('load-autosave-sketch', () => loadAutosaveSketchInfo())
 
@@ -1308,20 +1332,20 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('save-project-to-library', (_event, name: string, json: string) => {
     const result = saveProjectToLibrary(name, json)
-    savedProjectThisSession = true
+    noteRecoveryFile('saved')
     return result
   })
 
   ipcMain.handle('save-project-in-place', (_event, path: string, json: string) => {
     saveProjectInPlace(path, json)
-    savedProjectThisSession = true
+    noteRecoveryFile('saved')
   })
 
   ipcMain.handle('open-library-sketch', (_event, name: string) => openLibrarySketch(name))
 
   ipcMain.handle('duplicate-sketch', (_event, currentName: string, json: string) => {
     const result = duplicateSketchAsNewVersion(currentName, json)
-    savedProjectThisSession = true
+    if (result !== null) noteRecoveryFile('saved')
     return result
   })
 
@@ -2742,15 +2766,26 @@ app.on('before-quit', (event) => {
     // this, the debounced autosave effect's last snapshot survives and the
     // next launch offers to "recover" exactly the content just discarded.
     clearAutosave()
+    noteRecoveryFile('cleared')
     rendererHasUnsavedChanges = false
     app.quit()
     return
   }
 
-  // Nothing unsaved, and the project was saved this session: a recovery file
-  // still on disk (written between that save and edits undone back to it, the
-  // renderer's own clear not due yet) only holds what is saved.
-  if (savedProjectThisSession && !quittingAfterSavePrompt) clearAutosave()
+  // Nothing unsaved, and main saw a save after the last autosave write: a
+  // recovery file can only hold what is saved. Otherwise it is left for the
+  // next launch's prompt (recoveryFileTracker.ts), even when its edits were
+  // undone back to the saved state and the renderer's own clear was not due
+  // yet: offering a needless recovery is the safe side.
+  if (
+    shouldClearRecoveryOnCleanQuit(recoveryFile, {
+      rendererDirty: rendererHasUnsavedChanges,
+      quittingAfterSavePrompt
+    })
+  ) {
+    clearAutosave()
+    noteRecoveryFile('cleared')
+  }
 
   // shutdown() is async — normally it resolves fast enough that this race
   // never matters, but if a crash-triggered respawn happens to be in flight
