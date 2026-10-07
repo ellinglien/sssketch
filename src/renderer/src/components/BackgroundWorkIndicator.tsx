@@ -186,7 +186,8 @@ function useLibraryIndexWork(): BackgroundWork | null {
   if (done) return null
   // While a rebuild serves only his own stems (faster startup), say so.
   const note = progress?.ownOnly ? 'your stems ready' : undefined
-  return progress && progress.total > 0
+  // A saved copy loading has no count worth showing: only a walk does.
+  return progress && progress.total > 0 && !progress.loading
     ? { kind: 'libraryIndex', done: progress.completed, total: progress.total, note }
     : { kind: 'libraryIndex', note }
 }

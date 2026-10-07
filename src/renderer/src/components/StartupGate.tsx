@@ -113,7 +113,7 @@ export function StartupGate(): React.JSX.Element | null {
   useEffect(() => {
     if (closed) return
     return window.rifffApi.onLibraryWarmupProgress((update) => {
-      const key = `${update.phase}:${update.dbIndex}`
+      const key = `${update.phase}:${update.dbIndex}${update.loading ? ':load' : ''}`
       setPhaseStartedAt((prev) => (prev?.key === key ? prev : { key, startedAt: Date.now() }))
       setProgress(update)
     })
@@ -157,7 +157,10 @@ export function StartupGate(): React.JSX.Element | null {
 
 function describeStatus(engineDone: boolean, progress: PrewarmScanProgress | null): string {
   if (!engineDone) return 'starting engine…'
-  if (!progress) return 'indexing library…'
+  if (!progress) return 'loading library…'
+  // Reading a saved copy back is not indexing (2026-10-07): no walk, and no
+  // count -- it takes seconds, and the walk after it shows its own.
+  if (progress.loading) return 'loading library…'
   if (progress.phase === 'ownStems') return 'indexing your stems first…'
   const dbSuffix = progress.dbCount > 1 ? `, db ${progress.dbIndex + 1}/${progress.dbCount}` : ''
   return `indexing ${PHASE_LABEL[progress.phase]}: ${progress.completed.toLocaleString()} / ${progress.total.toLocaleString()}${dbSuffix}`
@@ -168,7 +171,7 @@ function describeEta(
   startedAt: number | null
 ): string | null {
   if (!progress || !startedAt || progress.completed <= 0 || progress.total <= 0) return null
-  if (progress.phase === 'ownStems') return null
+  if (progress.phase === 'ownStems' || progress.loading) return null
   const elapsedMs = Date.now() - startedAt
   const fractionDone = progress.completed / progress.total
   const remainingMs = elapsedMs / fractionDone - elapsedMs

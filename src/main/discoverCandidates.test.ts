@@ -9,7 +9,8 @@ import {
   appendToInMemoryDiscoverCaches,
   getInstrumentMaskLookup,
   instrumentRowsInMemoryForTests,
-  sampleDistinctIndices
+  sampleDistinctIndices,
+  type PrewarmScanProgress
 } from './discoverCandidates'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -3842,6 +3843,46 @@ describe('faster startup: usable before complete (2026-10-06)', () => {
 
   const stemOf = (i: number): string => `s${(i * 7919).toString(16).padStart(6, '0')}x${i}`
   const launch = (path: string): Database.Database => new Database(path, { readonly: true })
+
+  // 2026-10-07: loading a saved copy reported "indexing riffs: 761,929 /
+  // 900,041" -- loaded entries (one per stem) against the meta's Riffs count
+  // -- and the total then dropped to 761,929. A load now says it is one, in
+  // one unit throughout; only a walk is "indexing".
+  it('a saved copy loading reports as loading, its total in the units it counts', async () => {
+    const path = archive()
+    // Riffs that reuse stems: more riffs than riff-index entries, as on his
+    // library (900,041 riffs, 761,929 entries).
+    const db = new Database(path)
+    const dup = db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, UserName, StemCID_1)
+       VALUES (?, 'jam0', 1, 120, 'other', ?)`
+    )
+    db.transaction(() => {
+      for (let i = 0; i < 1_000; i++) dup.run(`rdup${i}`, stemOf(i))
+    })()
+    db.close()
+    const own = freshDb()
+    const first: PrewarmScanProgress[] = []
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: launch(path) }], own, (p) =>
+      first.push({ ...p })
+    )
+    expect(first.some((u) => u.loading)).toBe(false) // nothing saved yet: walks only
+
+    const updates: PrewarmScanProgress[] = []
+    await prewarmDiscoverCandidateCaches([{ jamCID: 'jam0', dbForJam: launch(path) }], own, (p) =>
+      updates.push({ ...p })
+    )
+    for (const phase of ['riffIndex', 'instrumentRows'] as const) {
+      const loads = updates.filter((u) => u.phase === phase && u.loading)
+      expect(loads.length).toBeGreaterThan(1)
+      for (const u of loads) expect(u.completed).toBeLessThanOrEqual(u.total)
+      for (let i = 1; i < loads.length; i++) {
+        expect(loads[i].total).toBeGreaterThanOrEqual(loads[i - 1].total)
+      }
+      expect(loads[loads.length - 1].completed).toBe(N)
+      expect(loads[loads.length - 1].total).toBe(N)
+    }
+  })
 
   it('extend: the gate opens on the loaded copy, rolls are served from it while the walk runs, and see the new stems after', async () => {
     const path = archive()

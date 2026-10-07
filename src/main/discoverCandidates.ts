@@ -123,6 +123,10 @@ export interface PrewarmScanProgress {
   total: number
   /** Some db is serving only its user's own stems until this walk ends. */
   ownOnly?: boolean
+  /** Reading a saved copy back, not walking the table (2026-10-07): the gate
+   * says "loading library…" for these, "indexing…" only for a walk.
+   * `completed`/`total` count the copy's own entries. */
+  loading?: boolean
 }
 
 /** How a startup or in-session read of an index may be answered while that
@@ -212,7 +216,14 @@ type PrewarmProgressCallback = (progress: PrewarmScanProgress) => void
 // bare (completed, total) pairs; prewarmDiscoverCandidateCaches (below) is
 // the one place that knows enough to wrap that into a full
 // PrewarmScanProgress before forwarding to its own caller's onProgress.
-type ScanProgressCallback = (completed: number, total: number) => void
+// `loading`: the update is from reading a saved copy back (no walk of the
+// table), which the gate words differently (StartupGate.tsx).
+type ScanProgressCallback = (completed: number, total: number, loading?: boolean) => void
+
+/** For loading a saved copy: the same callback, each update marked. */
+function asLoading(onProgress: ScanProgressCallback): ScanProgressCallback {
+  return (completed, total) => onProgress(completed, total, true)
+}
 
 // Real bug this guards against, learned the hard way earlier this same
 // session (see discoverLibraryStems.ts's own YIELD_EVERY): the Electron
@@ -456,10 +467,13 @@ async function warmRiffIndex(
   let preloaded: { meta: IndexCacheMeta; index: Map<string, RiffIndexEntry> } | undefined
   if (phase.counted) {
     const early = readRiffIndexMeta(ownDb, key)
+    // No total hint for these loads: the meta counts Riffs, the copy holds one
+    // entry per stem (his library: 900,041 riffs, 761,929 entries), so the
+    // gate read "761,929 / 900,041" and then the total dropped.
     if (early && mayKeepSavedCopy(db, 'Riffs', 'RiffCID', early)) {
       preloaded = {
         meta: early,
-        index: await loadCachedRiffIndex(ownDb, key, onProgress, early.count)
+        index: await loadCachedRiffIndex(ownDb, key, asLoading(onProgress))
       }
     }
     await phase.counted
@@ -490,7 +504,7 @@ async function warmRiffIndex(
       index:
         preloaded && sameSavedCopy(preloaded.meta, meta)
           ? preloaded.index
-          : await loadCachedRiffIndex(ownDb, key, onProgress, meta!.count),
+          : await loadCachedRiffIndex(ownDb, key, asLoading(onProgress)),
       open: loadCachedRiffOpenRowids(ownDb, key),
       watermark: meta!.watermark
     }
@@ -645,14 +659,15 @@ export async function prewarmDiscoverCandidateCaches(
     )
   const reporter =
     (phase: PrewarmScanProgress['phase'], dbIndex: number) =>
-    (completed: number, total: number): void =>
+    (completed: number, total: number, loading?: boolean): void =>
       onProgress?.({
         phase,
         dbIndex,
         dbCount: uniqueDbs.length,
         completed,
         total,
-        ...(ownOnly() ? { ownOnly: true } : {})
+        ...(ownOnly() ? { ownOnly: true } : {}),
+        ...(loading ? { loading: true } : {})
       })
 
   // The archive's row counts, with no COUNT on the main thread
@@ -858,7 +873,7 @@ async function warmInstrumentRows(
     if (early && mayKeepSavedCopy(db, 'Stems', 'StemCID', early)) {
       preloaded = {
         meta: early,
-        rows: await loadCachedInstrumentRows(ownDb, key, onProgress, early.count)
+        rows: await loadCachedInstrumentRows(ownDb, key, asLoading(onProgress), early.count)
       }
     }
     await phase.counted
@@ -889,7 +904,7 @@ async function warmInstrumentRows(
     rows =
       preloaded && sameSavedCopy(preloaded.meta, meta)
         ? preloaded.rows
-        : await loadCachedInstrumentRows(ownDb, key, onProgress, meta!.count)
+        : await loadCachedInstrumentRows(ownDb, key, asLoading(onProgress), meta!.count)
     watermark = meta!.watermark && { ...meta!.watermark }
     if (current) {
       instrumentRowsCache.set(db, { rows, state, watermark })
