@@ -441,11 +441,23 @@ function trainingFingerprintOf(
   prepared: PreparedConfirmed,
   centroidStore: CategoryCentroidStore
 ): string {
-  const centroids = createHash('sha1')
+  return `c${CLASSIFIER_VERSION}|${prepared.fingerprint}|${centroidStoreHash(centroidStore)}`
+}
+
+/** Per store object: loadCategoryCentroidStore hands back the same object
+ * until the file changes, so the sha1 over the store's JSON runs once per
+ * save, not once per batch (review of 0adc41ca). */
+const centroidHashByStore = new WeakMap<CategoryCentroidStore, string>()
+
+function centroidStoreHash(centroidStore: CategoryCentroidStore): string {
+  const cached = centroidHashByStore.get(centroidStore)
+  if (cached !== undefined) return cached
+  const hash = createHash('sha1')
     .update(JSON.stringify([centroidStore.arrangeRoles, centroidStore.global]))
     .digest('hex')
     .slice(0, 16)
-  return `c${CLASSIFIER_VERSION}|${prepared.fingerprint}|${centroids}`
+  centroidHashByStore.set(centroidStore, hash)
+  return hash
 }
 
 /** Ids per mask lookup while filtering a rebuilt list: one IN query per db

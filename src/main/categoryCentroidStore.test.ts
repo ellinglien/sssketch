@@ -24,7 +24,8 @@ vi.mock('node:fs', async (importOriginal) => {
     writeFileSync: traced('writeFileSync', actual.writeFileSync),
     fsyncSync: traced('fsyncSync', actual.fsyncSync),
     closeSync: traced('closeSync', actual.closeSync),
-    renameSync: traced('renameSync', actual.renameSync)
+    renameSync: traced('renameSync', actual.renameSync),
+    readFileSync: traced('readFileSync', actual.readFileSync)
   }
 })
 
@@ -58,6 +59,29 @@ describe('categoryCentroidStore', () => {
     saveCategoryCentroidStore(store, [{ stemCID: 'cid-1', busId: 'drums' }])
     // The trained pairs are the file's, not the store's: readers never see them.
     expect(loadCategoryCentroidStore()).toEqual(store)
+  })
+
+  // Review of 0adc41ca: the classifier loads the store every batch (every
+  // few seconds through a backlog), and it only changes when saved.
+  it('loadCategoryCentroidStore reads an unchanged file once, and a saved one again', async () => {
+    const { loadCategoryCentroidStore, saveCategoryCentroidStore } =
+      await import('./categoryCentroidStore')
+    const first = recordConfirmedCategory(
+      emptyCategoryCentroidStore(),
+      'bus',
+      'drums',
+      new Array(19).fill(1)
+    )
+    saveCategoryCentroidStore(first, [])
+    fsCalls.length = 0
+    const loaded = loadCategoryCentroidStore()
+    expect(loaded).toEqual(first)
+    expect(loadCategoryCentroidStore()).toBe(loaded)
+    expect(fsCalls.filter((call) => call === 'readFileSync')).toHaveLength(1)
+
+    const second = recordConfirmedCategory(first, 'bus', 'drums', new Array(19).fill(1))
+    saveCategoryCentroidStore(second, [])
+    expect(loadCategoryCentroidStore()).toEqual(second)
   })
 
   it('loadCategoryCentroidStore returns an empty store rather than throwing on a corrupt file', async () => {

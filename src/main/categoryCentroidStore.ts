@@ -7,6 +7,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync
 } from 'fs'
 import { join } from 'path'
@@ -124,12 +125,37 @@ export function readCategoryCentroidStoreFile(): CategoryCentroidStoreFile {
  * across every sketch the user tidies/arranges, not start over cold on each
  * new one. */
 export function loadCategoryCentroidStore(): CategoryCentroidStore {
+  const path = storePath()
+  const version = fileVersionOf(path)
+  if (loaded && loaded.path === path && loaded.version === version) return loaded.store
   const file = readStoreFile()
-  if (file.kind === 'ok') return file.store
   if (file.kind === 'unreadable') {
-    console.error(`loadCategoryCentroidStore: failed to read ${storePath()}: ${file.error}`)
+    console.error(`loadCategoryCentroidStore: failed to read ${path}: ${file.error}`)
   }
-  return emptyCategoryCentroidStore()
+  const store = file.kind === 'ok' ? file.store : emptyCategoryCentroidStore()
+  loaded = { path, version, store }
+  return store
+}
+
+/** The last store loadCategoryCentroidStore read, and the file version it
+ * read it from (review of 0adc41ca): the classifier asks for it every batch
+ * -- every few seconds through a backlog -- and it only changes when saved,
+ * so an unchanged file is not read and parsed again. Callers get the same
+ * object until then and must not mutate it (none do: the shared helpers
+ * return a new store). It also keeps the classifier's hash of it
+ * (stemAutoClassify.ts) from being recomputed. */
+let loaded: { path: string; version: string; store: CategoryCentroidStore } | null = null
+
+/** What changes when the file does: a save renames a new file over it (a
+ * new inode), and any other write moves its size or times. 'missing' when
+ * there is none. */
+function fileVersionOf(path: string): string {
+  try {
+    const stat = statSync(path)
+    return `${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`
+  } catch {
+    return 'missing'
+  }
 }
 
 /** Written to a temp file beside it, then renamed over it: a crash or a full
