@@ -27,6 +27,7 @@ import {
   normalizeRadioPaceWindow,
   normalizeRadioPhraseBars,
   normalizeRadioSettings,
+  radioSourceOf,
   normalizeRadioTurnover,
   pickRadioSlotId,
   radioChangeBars,
@@ -1040,8 +1041,19 @@ describe('RadioSettings', () => {
       paceLevel: 25,
       sizedBuilds: true,
       energy: 50,
-      drama: 60
+      drama: 60,
+      source: 50
     })
+  })
+
+  it('keeps a saved source dial, clamped and rounded; absent reads as half and half', () => {
+    expect(normalizeRadioSettings({ source: 95 }).source).toBe(95)
+    expect(normalizeRadioSettings({ source: 140 }).source).toBe(100)
+    expect(normalizeRadioSettings({ source: 12.4 }).source).toBe(12)
+    expect(normalizeRadioSettings({ source: 'lots' }).source).toBe(50)
+    expect(normalizeRadioSettings({}).source).toBe(50)
+    expect(radioSourceOf({})).toBe(50)
+    expect(radioSourceOf({ source: 0 })).toBe(0)
   })
 
   it('normalizes a whole object, field by field, never throwing', () => {

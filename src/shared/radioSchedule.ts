@@ -12,6 +12,7 @@
 import type { DiscoverSlotKind } from './discoverSlotKind'
 import { radioSlotFlagWeightFactor, type RadioSlotFlags } from './radioSlotFlags'
 import { DEFAULT_FAVES, normalizeFaves } from './discoverFaves'
+import { DEFAULT_SOURCE_LEAN } from './discoverSlotModifier'
 import {
   DEFAULT_RADIO_TURNAROUNDS,
   DEFAULT_TURNAROUND_DEPTH,
@@ -1139,6 +1140,11 @@ export interface RadioSettings {
    * defaults (radioEnergyOf, radioDramaOf). Nothing reads them unless density is `intensity`. */
   energy?: number
   drama?: number
+  /** The source dial (@shared/discoverSlotModifier), 0..100: 0 endlesss sounds, 100 other.
+   * Discover's dial and the radio strip's `source` column set this one value. Optional for the
+   * same reason as `density`; normalizeRadioSettings always sets it, and absent reads as
+   * DEFAULT_SOURCE_LEAN (radioSourceOf). */
+  source?: number
 }
 
 /** Density is `intensity` for these settings: the intensity arc runs (radioIntensityArc.ts). */
@@ -1167,6 +1173,10 @@ export function radioFavesOf(settings: RadioSettings): number {
   return normalizeFaves(settings.faves)
 }
 
+export function radioSourceOf(settings: Pick<RadioSettings, 'source'>): number {
+  return normalizeRadioDial(settings.source, DEFAULT_SOURCE_LEAN)
+}
+
 export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   pace: DEFAULT_RADIO_PACE,
   paceBars: { ...RADIO_PACE_BARS[DEFAULT_RADIO_PACE] },
@@ -1187,7 +1197,8 @@ export const DEFAULT_RADIO_SETTINGS: RadioSettings = {
   paceLevel: DEFAULT_RADIO_PACE_LEVEL,
   sizedBuilds: true,
   energy: DEFAULT_RADIO_ENERGY,
-  drama: DEFAULT_RADIO_DRAMA
+  drama: DEFAULT_RADIO_DRAMA,
+  source: DEFAULT_SOURCE_LEAN
 }
 
 /** The window the clock draws a change's interval from: radioCadenceOf's (fold mode's own, 8-32
@@ -1262,7 +1273,10 @@ export function normalizeRadioSettings(value: unknown, legacyPace?: unknown): Ra
     sizedBuilds: raw.sizedBuilds !== false,
     // The intensity arc's dials (2026-10-05): saved values clamped and rounded, else 50 and 60.
     energy: normalizeRadioDial(raw.energy, DEFAULT_RADIO_ENERGY),
-    drama: normalizeRadioDial(raw.drama, DEFAULT_RADIO_DRAMA)
+    drama: normalizeRadioDial(raw.drama, DEFAULT_RADIO_DRAMA),
+    // The source dial (saved from 2026-10-07): clamped and rounded, else half and half. An
+    // existing install's older file is told apart in loadDiscoverSettings (LEGACY_SOURCE_LEAN).
+    source: normalizeRadioDial(raw.source, DEFAULT_SOURCE_LEAN)
   }
 }
 

@@ -332,7 +332,10 @@ export function radioStripModel(
       sets: ['faves'],
       dimmed: ctx.artistMode && ctx.artistsIncludeMe !== true
     }),
-    panel('source', 'source · endlesss - other', { tooltip: 'right for other, left for endlesss' }),
+    panel('source', 'source · endlesss - other', {
+      tooltip: 'right for other, left for endlesss',
+      sets: ['source']
+    }),
     panel('matching', 'matching', { tooltip: 'right for more matching' }),
     panel('artist', 'artist', { tooltip: 'whose stems discover plays' }),
     panel('my-sounds', 'my sounds', { disabled: !ctx.hasUsername || ctx.artistMode }),

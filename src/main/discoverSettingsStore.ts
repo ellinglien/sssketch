@@ -9,6 +9,7 @@ import {
   type RadioSettings
 } from '@shared/radioSchedule'
 import { DEFAULT_RADIO_VIEW, normalizeRadioView, type RadioView } from '@shared/radioView'
+import { LEGACY_SOURCE_LEAN } from '@shared/discoverSlotModifier'
 
 export interface DiscoverSettings {
   /** Whether the user has explicitly agreed to the whole-library background
@@ -64,7 +65,10 @@ export function loadDiscoverSettings(): DiscoverSettings {
         // `parsed.radioPace` is the 1.3.0 shape -- flat, no `radio` object.
         // Passing it through migrates a real user's chosen pace rather than
         // silently resetting it. An explicit `radio.pace` always wins.
-        radio: normalizeRadioSettings(parsed.radio, (parsed as { radioPace?: unknown }).radioPace),
+        radio: withLegacySourceLean(
+          normalizeRadioSettings(parsed.radio, (parsed as { radioPace?: unknown }).radioPace),
+          parsed.radio
+        ),
         radioView: normalizeRadioView(parsed.radioView)
       },
       parsed.radio?.foldSeed
@@ -74,6 +78,15 @@ export function loadDiscoverSettings(): DiscoverSettings {
     console.error(`loadDiscoverSettings: failed to read ${path}: ${message}`)
     return withRandomFoldSeed({ ...DEFAULT_SETTINGS }, undefined)
   }
+}
+
+/** The source dial was in-memory until 2026-10-07, starting at 95 every launch. A file saved
+ * before then (no `radio.source`) is an existing install, which keeps 95; a new install has no
+ * file and starts at DEFAULT_SOURCE_LEAN. Every later save writes `source`. */
+function withLegacySourceLean(radio: RadioSettings, savedRadio: unknown): RadioSettings {
+  const saved = (savedRadio as { source?: unknown } | null | undefined)?.source
+  if (typeof saved === 'number' && Number.isFinite(saved)) return radio
+  return { ...radio, source: LEGACY_SOURCE_LEAN }
 }
 
 /** Fold mode's first seed is random, not the shared default (Elling, 2026-10-03): a saved

@@ -49,12 +49,16 @@ export function slotRollOptions(
 /** The source dial's two ends. 0 is endlesss, 100 is other. */
 export const SOURCE_LEAN_ENDLESSS = 0
 export const SOURCE_LEAN_OTHER = 100
-/** Where the dial starts, and where a double-click puts it back: 95% of
- * rolls draw OTHER sounds -- Elling's own audio-in/mic recordings -- and 5%
- * Endlesss's built-in instruments (Elling, 2026-09-30: "default setting for
- * own sounds vs endlesss sounds should be 95% own sounds"). Not an end, so
- * a kind with no recordings still falls back to Endlesss sounds. */
-export const DEFAULT_SOURCE_LEAN = 95
+/** Where the dial starts on a new install, and where a double-click puts it back: half and half
+ * (share readiness, Elling, 2026-10-07). Most Endlesss libraries are mostly built-in instrument
+ * stems, so a dial leaning hard to recordings keeps hunting the same few. Not an end, so a kind
+ * with no recordings still falls back to Endlesss sounds. The dial is saved in the radio settings
+ * (RadioSettings.source). */
+export const DEFAULT_SOURCE_LEAN = 50
+/** Where the dial started before it was saved (Elling, 2026-09-30: "default setting for own
+ * sounds vs endlesss sounds should be 95% own sounds"): an install with a settings file from
+ * before then keeps it (loadDiscoverSettings). */
+export const LEGACY_SOURCE_LEAN = 95
 
 // Frozen: these are shared by every roll, so a caller mutating a returned
 // filter would corrupt all the later ones.

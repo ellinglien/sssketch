@@ -3,6 +3,7 @@ import {
   DISCOVER_SLOT_MODIFIER_LABEL,
   DISCOVER_SLOT_MODIFIER_OPTIONS,
   DEFAULT_SOURCE_LEAN,
+  LEGACY_SOURCE_LEAN,
   drawSoundSource,
   slotRollOptions,
   soundSourceForLean,
@@ -116,7 +117,12 @@ describe('soundSourceForLean', () => {
 })
 
 describe('DEFAULT_SOURCE_LEAN', () => {
-  it("leans 95% toward other sounds -- Elling's own recordings (2026-09-30)", () => {
-    expect(DEFAULT_SOURCE_LEAN).toBe(95)
+  // Share readiness (Elling, 2026-10-07): a new install starts half and half; 95 was his taste
+  // and his library's shape. An install from before the dial was saved keeps 95 (LEGACY).
+  it('starts half and half for a new install', () => {
+    expect(DEFAULT_SOURCE_LEAN).toBe(50)
+  })
+  it('keeps 95 for an install from before the dial was saved', () => {
+    expect(LEGACY_SOURCE_LEAN).toBe(95)
   })
 })

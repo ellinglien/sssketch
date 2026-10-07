@@ -87,6 +87,7 @@ import {
   type RadioClock,
   type RadioSettings,
   radioFavesOf,
+  radioSourceOf,
   radioPaceLevelOf,
   radioSizedBuildsOf
 } from '@shared/radioSchedule'
@@ -1160,14 +1161,27 @@ export function DiscoverPanel({
     )
   }, [artistsKey, currentUsername, lingeringKey])
   // The source dial (2026-09-29): 0 = endlesss, 100 = other, 50 = half and
-  // half. In-memory, like the switches it replaced. Mirrored into a ref
-  // because radio's picks run from long-lived callbacks that would
+  // half. Saved in the radio settings since 2026-10-07 (RadioSettings.source:
+  // 50 for a new install, an older install keeps the 95 it always started
+  // at). Live while it moves, saved on release, like the faves dial. Mirrored
+  // into a ref because radio's picks run from long-lived callbacks that would
   // otherwise read the value from whenever they were created.
-  const [sourceLean, setSourceLean] = useState(DEFAULT_SOURCE_LEAN)
-  const sourceLeanRef = useRef(DEFAULT_SOURCE_LEAN)
+  const savedSourceLean = radioSourceOf(radioSettings)
+  const [sourceDraft, setSourceDraft] = useState<number | null>(null)
+  const sourceLean = sourceDraft ?? savedSourceLean
+  const sourceLeanRef = useRef(savedSourceLean)
+  // The saved value arriving (App loads the settings after mount) moves the dial.
+  useEffect(() => {
+    sourceLeanRef.current = savedSourceLean
+  }, [savedSourceLean])
   function changeSourceLean(lean: number): void {
     sourceLeanRef.current = lean
-    setSourceLean(lean)
+    setSourceDraft(lean)
+  }
+  function commitSourceLean(lean: number): void {
+    sourceLeanRef.current = lean
+    setSourceDraft(lean)
+    void onRadioSettingsChange({ source: lean }).finally(() => setSourceDraft(null))
   }
   // The faves dial (@shared/discoverFaves, 2026-10-03), where `prefer faves` was: 0..100, how
   // often a roll draws only starred stems and how much the rest lean to them. Persisted in the
@@ -14335,6 +14349,7 @@ export function DiscoverPanel({
                   : FAVES_TOOLTIP,
             source: sourceLean,
             onSource: changeSourceLean,
+            onSourceCommit: commitSourceLean,
             matching: 100 - chaos,
             onMatching: (matching) => setChaos(100 - matching),
             artistLabel: artistSelectionLabel(artists, currentUsername),
@@ -14669,6 +14684,7 @@ export function DiscoverPanel({
                 <Dial
                   value={sourceLean}
                   onChange={changeSourceLean}
+                  onCommit={commitSourceLean}
                   defaultValue={DEFAULT_SOURCE_LEAN}
                   size={30}
                   ariaLabel="source"

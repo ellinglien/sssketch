@@ -64,6 +64,32 @@ describe('discoverSettingsStore', () => {
     expect(loadDiscoverSettings().radio.foldSeed).toMatch(FOLD_SEED)
   })
 
+  // Share readiness (2026-10-07): the source dial is saved now. A new install starts at 50; a
+  // settings file from before it was saved (no radio.source) is an existing install, which keeps
+  // the 95 it always started at.
+  it('starts the source dial at 50 with no file, 95 for an older file, and keeps a saved one', async () => {
+    const { loadDiscoverSettings } = await import('./discoverSettingsStore')
+    expect(loadDiscoverSettings().radio.source).toBe(50)
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ consentedToLibraryScan: true, radio: { pace: 'fast' } }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radio.source).toBe(95)
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ traitMatchBar: 0.5 }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radio.source).toBe(95)
+    writeFileSync(
+      join(dir, 'discoverSettings.json'),
+      JSON.stringify({ radio: { source: 30 } }),
+      'utf-8'
+    )
+    expect(loadDiscoverSettings().radio.source).toBe(30)
+  })
+
   it('persists consent across a save/load round trip', async () => {
     const { loadDiscoverSettings, saveDiscoverSettings } = await import('./discoverSettingsStore')
     saveDiscoverSettings({
@@ -141,7 +167,8 @@ describe('discoverSettingsStore', () => {
         paceLevel: 42,
         sizedBuilds: false,
         energy: 20,
-        drama: 85
+        drama: 85,
+        source: 30
       },
       radioView: 'advanced'
     })
@@ -166,7 +193,8 @@ describe('discoverSettingsStore', () => {
       paceLevel: 42,
       sizedBuilds: false,
       energy: 20,
-      drama: 85
+      drama: 85,
+      source: 30
     })
   })
 
@@ -234,7 +262,8 @@ describe('discoverSettingsStore', () => {
       pace: 'fast',
       paceBars: { min: 3, max: 6 },
       paceLevel: 50,
-      foldSeed: expect.stringMatching(FOLD_SEED)
+      foldSeed: expect.stringMatching(FOLD_SEED),
+      source: 95
     })
   })
 
@@ -264,7 +293,8 @@ describe('discoverSettingsStore', () => {
       paceBars: { min: 3, max: 6 },
       paceLevel: 50,
       loopEndOverBars: 0,
-      foldSeed: expect.stringMatching(FOLD_SEED)
+      foldSeed: expect.stringMatching(FOLD_SEED),
+      source: 95
     })
   })
 
@@ -274,7 +304,8 @@ describe('discoverSettingsStore', () => {
     expect(() => loadDiscoverSettings()).not.toThrow()
     expect(loadDiscoverSettings().radio).toEqual({
       ...DEFAULT_RADIO_SETTINGS,
-      foldSeed: expect.stringMatching(FOLD_SEED)
+      foldSeed: expect.stringMatching(FOLD_SEED),
+      source: 95
     })
   })
 
@@ -288,7 +319,11 @@ describe('discoverSettingsStore', () => {
     expect(loadDiscoverSettings()).toEqual({
       consentedToLibraryScan: true,
       traitMatchBar: 0.9,
-      radio: { ...DEFAULT_RADIO_SETTINGS, foldSeed: expect.stringMatching(FOLD_SEED) },
+      radio: {
+        ...DEFAULT_RADIO_SETTINGS,
+        foldSeed: expect.stringMatching(FOLD_SEED),
+        source: 95
+      },
       radioView: 'simple'
     })
   })

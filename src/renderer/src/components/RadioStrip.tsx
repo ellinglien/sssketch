@@ -92,7 +92,10 @@ export interface RadioStripProps {
     onFavesCommit: (v: number) => void
     favesTooltip: string
     source: number
+    /** Live, while it moves (the dial's picks read it at once). */
     onSource: (v: number) => void
+    /** The release: saves it (RadioSettings.source). */
+    onSourceCommit: (v: number) => void
     matching: number
     onMatching: (v: number) => void
     artistLabel: string
@@ -718,6 +721,7 @@ function RadioShapingColumns(
             defaultValue={DEFAULT_SOURCE_LEAN}
             tooltip={c.tooltip}
             onChange={picks.onSource}
+            onCommit={picks.onSourceCommit}
           />
         )
       case 'matching':
