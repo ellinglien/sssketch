@@ -9,6 +9,7 @@ import {
   appendToInMemoryDiscoverCaches,
   getInstrumentMaskLookup,
   instrumentRowsInMemoryForTests,
+  dropInMemoryJamIndexes,
   sampleDistinctIndices,
   type PrewarmScanProgress
 } from './discoverCandidates'
@@ -3584,6 +3585,40 @@ describe('instrument rows walk and extension (scan plan Task 3)', () => {
     expect(walkedStems()).toBe(2) // the extension read both
     expect(duplicateStemCIDs(src)).toEqual([])
     expect(instrumentRowsInMemoryForTests(src)!.length).toBe(52)
+  })
+
+  // Review of 0e27db79: a shared-feed fold renames a jam in place -- Stems' and Riffs' counts
+  // and rowids unchanged -- so an extension would keep serving the old jam's name in memory.
+  it('after a fold, dropInMemoryJamIndexes has both indexes read afresh, under the new name', async () => {
+    const path = archive()
+    seedStems(path, 50, 15)
+    const w = new Database(path)
+    const [first] = w.prepare(`SELECT StemCID FROM Stems WHERE OwnerJamCID = 'jam1'`).pluck().all()
+    w.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, BPMrnd, StemCID_1) VALUES ('r1', 'jam1', 120, ?)`
+    ).run(first)
+    w.close()
+    const own = freshDb()
+    const src = launch(path)
+    await prewarm(src, own)
+    expect((await getRiffIndexForDb(src)).get(first as string)?.ownerJamCID).toBe('jam1')
+
+    const fold = new Database(path)
+    fold.exec(`UPDATE Stems SET OwnerJamCID = 'jamZ' WHERE OwnerJamCID = 'jam1';
+               UPDATE Riffs SET OwnerJamCID = 'jamZ' WHERE OwnerJamCID = 'jam1';`)
+    fold.close()
+    dropInMemoryJamIndexes(src)
+    expect(instrumentRowsInMemoryForTests(src)).toBeNull()
+
+    expect((await getRiffIndexForDb(src)).get(first as string)?.ownerJamCID).toBe('jamZ')
+    await getDiscoverCandidates({
+      ownDb: own,
+      jams: [{ jamCID: 'jamZ', dbForJam: src }],
+      kinds: ['drums']
+    })
+    const rows = instrumentRowsInMemoryForTests(src)!
+    expect(rows.filter((r) => r.OwnerJamCID === 'jam1')).toEqual([])
+    expect(rows.some((r) => r.OwnerJamCID === 'jamZ')).toBe(true)
   })
 
   it('a delete, or a different StemCID at the watermark, rebuilds', async () => {

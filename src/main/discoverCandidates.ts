@@ -2768,6 +2768,24 @@ export function dropInMemoryRiffIndex(db: Database.Database): void {
   riffIndexInFlight.delete(db)
 }
 
+/** After a shared-feed fold (riffLibraryWriter.ts mergeSharedFeedCaseVariants)
+ * renamed a jam in `db` in place: forgets `db`'s in-memory riff index and
+ * instrument rows, which name each stem's jam, so the next read walks them
+ * afresh (review of 0e27db79). As with a forget, the change check can't do it:
+ * the rename moves no count or rowid, so an extension would read nothing and
+ * keep serving the old name, which the jam list no longer has -- those stems
+ * would drop out of Discover until a relaunch. The saved copies were renamed
+ * in the fold's own transaction. Once per capitalised feed, ever. */
+export function dropInMemoryJamIndexes(db: Database.Database): void {
+  dropInMemoryRiffIndex(db)
+  instrumentRowsCache.delete(db)
+  servedInstrumentRows.delete(db)
+  // A walk in flight may have read pages before the rename: its callers get
+  // its rows, then they are forgotten too.
+  const pending = instrumentRowsInFlight.get(db)
+  if (pending) void pending.finally(() => instrumentRowsCache.delete(db)).catch(() => undefined)
+}
+
 /** Tests only: `db`'s in-memory instrument rows, or null when none. */
 export function instrumentRowsInMemoryForTests(
   db: Database.Database

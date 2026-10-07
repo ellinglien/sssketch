@@ -193,6 +193,30 @@ describe('syncSharedFeed', () => {
     expect(String(fetchImpl.mock.calls[0][0])).not.toContain('Elling')
   })
 
+  // Review of 0e27db79: Discover's in-memory indexes name each stem's jam, and
+  // the rename moves no count or rowid -- they are dropped, as forget does.
+  it("a fold drops Discover's in-memory indexes for the db; a sync with nothing to fold does not", async () => {
+    const discover = await import('./discoverCandidates')
+    const drop = vi.spyOn(discover, 'dropInMemoryJamIndexes')
+    const { syncSharedFeed } = await import('./riffLibrarySync')
+    const db = freshDb()
+    db.prepare(
+      `INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 1)`
+    ).run()
+    const fetchImpl = vi.fn(
+      async () => new Response(JSON.stringify(sharedFeedPage([], false)), { status: 200 })
+    )
+    try {
+      await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+      expect(drop).toHaveBeenCalledTimes(1)
+      expect(drop).toHaveBeenCalledWith(db)
+      await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+      expect(drop).toHaveBeenCalledTimes(1)
+    } finally {
+      drop.mockRestore()
+    }
+  })
+
   // Review of 0e27db79: the fold ran inside the sync's try, so a fold that
   // threw ended every later sync of the feed too.
   it('a fold that throws is logged and skipped: the sync goes on, and the next sync folds', async () => {

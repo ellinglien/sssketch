@@ -9,6 +9,7 @@ import {
   type FetchLike
 } from './endlesssApi'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
+import { dropInMemoryJamIndexes } from './discoverCandidates'
 import { isValidSharedFeedKey, normalizeEndlesssUsername } from '@shared/endlesssUsername'
 import {
   upsertJam,
@@ -186,7 +187,9 @@ export async function syncSharedFeed(
     // itself -- logged, and tried again by the next sync, which finds the
     // same variant still there (review of 0e27db79).
     try {
-      mergeSharedFeedCaseVariants(db, key)
+      // Discover's in-memory indexes name each stem's jam: dropped, as a
+      // forget does, since the rename moves no count or rowid they'd notice.
+      if (mergeSharedFeedCaseVariants(db, key) > 0) dropInMemoryJamIndexes(db)
     } catch (err) {
       console.error(`syncSharedFeed: folding other spellings into ${key} failed:`, err)
     }
