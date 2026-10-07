@@ -1094,7 +1094,11 @@ describe('the canonical username behind a login (an email login, 2026-10-07)', (
     await api.listJams(fetchImpl)
     const urls = vi.mocked(fetchImpl).mock.calls.map((c) => String(c[0]))
     expect(urls.some((u) => u.includes('user_appdata$elling/_design/membership'))).toBe(true)
-    expect(urls.some((u) => u.includes('gmail.com'))).toBe(false)
+    // no request names the email, raw or escaped
+    for (const url of urls) {
+      expect(url).not.toContain('@')
+      expect(url).not.toContain('example.org')
+    }
   })
 
   it('listJams with no known username asks nothing', async () => {
