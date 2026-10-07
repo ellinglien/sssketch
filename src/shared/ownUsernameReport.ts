@@ -11,6 +11,23 @@
 // name for this launch and the next. Only a deliberate act clears it: a typed
 // empty username, or a logout.
 
+/** THE rule for who "me" is, everywhere (the import browser's username box
+ * and its "only my jams", Discover's `mine` and artist `me`, the background
+ * passes' own-first priority, main's ownUsername.json and the startup own
+ * index -- the last three through the report below, which follows it):
+ * a typed username wins (a typed empty one deliberately means nobody); else
+ * the Endlesss login's username; else nobody (''). There is no default
+ * identity: until 2026-10-07 the renderer fell back to 'elling', so a
+ * stranger with no login browsed and rolled as Elling (share-readiness
+ * audit, B1).
+ *
+ * `typed`: the stored "your username" setting, null when never set.
+ * `sessionUsername`: the logged-in account's username, null when logged out. */
+export function resolveOwnUsername(typed: string | null, sessionUsername: string | null): string {
+  if (typed !== null) return typed.trim()
+  return (sessionUsername ?? '').trim()
+}
+
 export type OwnUsernameReport =
   | { kind: 'name'; name: string }
   /** Deliberately nobody: a typed empty username, or just logged out. */
@@ -31,11 +48,11 @@ export function ownUsernameReportFrom(
   afterLogout: boolean
 ): OwnUsernameReport {
   if (typed !== null) {
-    const name = typed.trim()
+    const name = resolveOwnUsername(typed, null)
     return name === '' ? { kind: 'none' } : { kind: 'name', name }
   }
   if (auth === 'failed') return { kind: 'unknown' }
-  const session = auth.loggedIn ? (auth.username ?? '').trim() : ''
+  const session = resolveOwnUsername(null, auth.loggedIn ? (auth.username ?? null) : null)
   if (session !== '') return { kind: 'name', name: session }
   return afterLogout && !auth.loggedIn ? { kind: 'none' } : { kind: 'unknown' }
 }
