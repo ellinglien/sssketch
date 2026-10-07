@@ -2,6 +2,7 @@
 const { execFileSync } = require('node:child_process')
 const path = require('node:path')
 const fs = require('node:fs')
+const { packagedAppProblems } = require('./packagedAppCheck.js')
 
 // Signs the nested sssketch-engine.app/sssketch-bridge.app bundles (the
 // native JUCE audio engine + its x86_64 plugin-scan bridge, copied into the
@@ -57,6 +58,23 @@ const fs = require('node:fs')
 // yet.
 exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== 'darwin') return
+
+  // Before signing, notarizing and publishing: the packaged app must hold the
+  // engine, bridge, rubberband and the YAMNet model, and app.asar must be the
+  // app, not the repo (build/packagedAppCheck.js). Fatal in CI, so a
+  // release can't ship without them again; a warning for a local build.
+  const checkedAppPath = path.join(
+    context.appOutDir,
+    `${context.packager.appInfo.productFilename}.app`
+  )
+  const problems = packagedAppProblems(checkedAppPath)
+  if (problems.length > 0) {
+    const message = `afterPack: the packaged app is incomplete:\n  - ${problems.join('\n  - ')}`
+    if (process.env.CI) throw new Error(message)
+    console.warn(`${message}\n(a local build carries on; a CI build fails here)`)
+  } else {
+    console.log('afterPack: packaged app check passed')
+  }
 
   const identity = process.env.CSC_NAME
   if (!identity) {

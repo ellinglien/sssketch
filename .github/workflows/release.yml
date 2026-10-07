@@ -156,6 +156,17 @@ jobs:
             bash scripts/vendor-rubberband.sh
           fi
 
+      # Produces resources/yamnet/yamnet.onnx (gitignored), which
+      # electron-builder.yml's extraResources ships as Resources/yamnet: the
+      # model behind Discover's stem similarity (src/main/yamnetModel.ts).
+      # Every release up to 1.4.0 shipped without it -- electron-builder.yml
+      # said this step ran here, and it never did (share-readiness audit B3).
+      # The script fails on an HTTP error or a too-small download, and
+      # build/afterPack.js fails the build (in CI) if the packaged app doesn't
+      # hold the model, before anything is signed or published.
+      - name: Vendor YAMNet
+        run: bash scripts/vendor-yamnet.sh
+
       # electron-builder can handle CSC_LINK (base64-encoded .p12)/
       # CSC_KEY_PASSWORD itself for ITS OWN signing pass -- but it only
       # imports the cert into a keychain lazily, the first time that pass
