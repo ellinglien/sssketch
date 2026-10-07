@@ -283,13 +283,22 @@ Advanced features must be on (they should already be on for you, see the next se
   should see:** "unsaved" within about a second. Try two or three different plugins (VST3 and AU)
   if you can: a knob in a plugin that doesn't report it properly might be missed, and that's worth
   a line here.
+- [ ] Save, then in a plugin that takes a file (a convolution reverb's IR, a sampler's sample),
+  load a different file, or pick a preset from the plugin's own browser. Close the editor. **You
+  should see:** "unsaved" within about a second. Do it again, but leave the editor open and press
+  Cmd+Q. **You should see:** it asks to save. (The engine now compares the plugin's whole state
+  when its editor opened with its state when it closes, and before a quit or an autosave.)
 - [ ] Keep turning knobs in an open editor for about a minute, then force-quit the app (Activity
   Monitor → sssketch → Force Quit) and relaunch. **You should see:** the offer to recover unsaved
   work, with your knob settings in it. (The crash-recovery copy is now written at least every 30
   seconds while you keep editing; before, constant knob turns kept putting it off.)
 - [ ] Save, wait 10 seconds, Cmd+Q and relaunch. **You should see:** no "recover unsaved work"
   offer. Do the same with a brand-new project's first save, and once after an edit you undid back
-  to the saved state.
+  to the saved state (wait the 10 seconds after the undo too: see the limitations).
+- [ ] Save, make an edit, wait 10 seconds, then close the window with Cmd+W (the app keeps
+  running). Click sssketch in the Dock. **You should see:** the offer to recover unsaved work.
+  Don't answer it: press Cmd+Q, then relaunch. **You should see:** the same offer, with your edit
+  in it. (Before this fix, that Cmd+Q deleted the only copy.)
 - [ ] With tweaked plugins loaded, run `pkill sssketch-engine` in a terminal, which forces the audio
   engine to restart. **You should see:**
   - the plugins reload with your tweaks;
@@ -310,6 +319,9 @@ Advanced features must be on (they should already be on for you, see the next se
   the same: its tweaks, not its defaults.
 - [ ] Remove a tweaked plugin, then pick the same plugin again from the slot's menu or "browse
   all...". **You should see:** it comes back at its defaults. Only Cmd+Z brings back the tweaks.
+- [ ] Remove a tweaked plugin, wait a second, pick a **different** plugin in the same slot, then
+  press Cmd+Z twice. **You should see:** the first plugin comes back with its tweaks, not at its
+  defaults.
 - [ ] Load a plugin that fails (or rename its file so it can't be found). **You should see:**
   - it stays in its slot and shows "failed to load" (or `not in your plugin list · scan for
     plugins`);
@@ -455,6 +467,23 @@ Advanced features must be on (they should already be on for you, see the next se
   never mark their knob turns (no "gesture"). For those, a change made on the app's main thread
   counts, unless it's a meter. An AU that shows its meters as ordinary parameters can still mark
   the project unsaved while its editor is open. Say which plugin if you see it.
+- **Any VST3 "restart" counts as an edit.** When a VST3 plugin tells the host to refresh
+  (restartComponent: its latency, its parameter list, its program changed), the engine can't tell
+  which, so it counts as a change while the plugin's editor is open, even if you touched nothing.
+- **The whole-state check** (an IR or sample loaded, a preset picked in the plugin's own browser)
+  compares the plugin's state only while its editor is open: when it closes, at a save, an
+  autosave or an export, and before a quit. So:
+  - a plugin that keeps its window size or selected tab in its state marks the project unsaved
+    when you resize its editor or switch tabs;
+  - if you save with the editor open just after such a change, "unsaved" can come back right
+    after the save (the save has the change; a second save clears it);
+  - a plugin whose state is different every time it's read (a timestamp inside) is left out of
+    this check, so a file loaded into it with no knob turned is still missed;
+  - Intel-bridge plugins aren't checked (see above).
+- **Quitting within a few seconds of undoing back to the saved state** can still offer to recover
+  work at the next launch, although it's the same as what's saved. A clean quit now deletes the
+  recovery copy only when a save came after the last time it was written: an extra offer is the
+  safe side.
 - **"plugins still loaded" (top right)** appears only if you turn advanced features off and the
   plugins' settings can't be read back. It retries for about three minutes, then stops and says
   to turn advanced features back on. There's no way to force this on purpose.
