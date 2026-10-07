@@ -10,7 +10,8 @@ import {
   usePluginCatalogActions
 } from '../state/StoreContext'
 import { PluginCatalogBrowser } from './PluginCatalogBrowser'
-import { markPluginsTouched } from '../state/pluginsTouched'
+import { editorOpenMarksUnsaved, markPluginsTouched } from '../state/pluginsTouched'
+import { markFreshPluginChoice } from '../state/pendingPluginStates'
 
 const SLOT_LABELS = ['1', '2', '3', '4'] as const
 
@@ -147,6 +148,8 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
                     setBrowsingSlot(slot)
                     return
                   }
+                  // Picked by hand: at its defaults (parked settings are an undo's).
+                  if (e.target.value !== '') markFreshPluginChoice({ kind: 'master', slot })
                   dispatch({
                     type: 'SET_MASTER_CHAIN_PLUGIN',
                     slot: slot as 0 | 1 | 2 | 3,
@@ -184,9 +187,11 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
               />
               <button
                 onClick={() => {
-                  // A knob is only reachable in its editor: the project may
-                  // now differ from its last save (pluginsTouched.ts).
-                  markPluginsTouched()
+                  // Opening alone changes nothing: the engine reports a knob
+                  // turned in the editor ('plugin-edited'). Except a bridged
+                  // plugin, which it can't watch (pluginsTouched.ts).
+                  const arch = catalog.plugins.find((p) => p.id === pluginId)?.arch
+                  if (editorOpenMarksUnsaved(arch)) markPluginsTouched()
                   void window.rifffApi.engineOpenMasterPluginEditor(slot)
                 }}
                 disabled={editDisabled}
@@ -202,13 +207,14 @@ export function MasterChainPanel({ onClose }: { onClose: () => void }): React.JS
       </div>
       {browsingSlot !== null && (
         <PluginCatalogBrowser
-          onSelect={(id) =>
+          onSelect={(id) => {
+            markFreshPluginChoice({ kind: 'master', slot: browsingSlot })
             dispatch({
               type: 'SET_MASTER_CHAIN_PLUGIN',
               slot: browsingSlot as 0 | 1 | 2 | 3,
               pluginId: id
             })
-          }
+          }}
           onClose={() => setBrowsingSlot(null)}
         />
       )}

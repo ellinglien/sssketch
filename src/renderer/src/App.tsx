@@ -90,7 +90,7 @@ import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
 import { BackgroundWorkIndicator } from './components/BackgroundWorkIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { StemsUnavailableIndicator } from './components/StemsUnavailableIndicator'
-import { PluginsOffNotice } from './components/PluginsOffNotice'
+import { PluginsHeldNotice, PluginsOffNotice } from './components/PluginsOffNotice'
 import { StartupGate } from './components/StartupGate'
 import { OwnUsernameReporter } from './components/OwnUsernameReporter'
 import { markManualSeek } from './state/manualSeek'
@@ -132,6 +132,8 @@ import {
   replacePendingPluginStates
 } from './state/pendingPluginStates'
 import {
+  autosaveAction,
+  autosaveDelayMs,
   createAutosaveGate,
   dirtyCheckJson,
   liveSettingsForSave,
@@ -1102,11 +1104,13 @@ function ProjectMenu({
 
 // How long to wait after the last real edit before writing the crash-
 // recovery snapshot — frequent enough that a crash doesn't lose much work,
-// infrequent enough not to hammer disk I/O. Drags in this app already
-// commit as a single dispatch on release (not continuously while dragging),
-// so there's no realistic "the debounce never settles" scenario to guard
-// against with a separate max-interval ceiling.
+// infrequent enough not to hammer disk I/O.
 const AUTOSAVE_DEBOUNCE_MS = 4000
+// ...but never longer than this after the first change not yet autosaved
+// (saveSerialization.ts's autosaveDelayMs): a plugin editor reporting edits
+// every 750 ms, or non-stop editing, would otherwise restart the debounce
+// forever and nothing would ever be autosaved.
+const AUTOSAVE_MAX_WAIT_MS = 30_000
 
 const ONBOARDING_SEEN_STORAGE_KEY = 'sssketch:onboardingSeen'
 // Separate flag from onboarding's own -- this is a real one-time setup
@@ -1297,8 +1301,17 @@ function Frame(): React.JSX.Element {
   // one that started before must not land after and bring back what was
   // just saved or thrown away.
   const autosaveGateRef = useRef(createAutosaveGate())
+  // Whether this session has written a crash-recovery file since it (or a
+  // save, which clears it in main) last cleared one: the autosave timer
+  // clears it once nothing is unsaved, and never touches one it didn't write
+  // (a previous session's, still waiting on the recovery prompt).
+  const autosaveWrittenRef = useRef(false)
+  // When the first change not yet autosaved happened (null: none), for the
+  // autosave's max wait (AUTOSAVE_MAX_WAIT_MS).
+  const autosaveUnsavedSinceRef = useRef<number | null>(null)
   function clearAutosaveNow(): void {
     autosaveGateRef.current.bump()
+    autosaveWrittenRef.current = false
     void window.rifffApi.clearAutosave()
   }
 
@@ -1309,6 +1322,8 @@ function Frame(): React.JSX.Element {
     lastSavedJsonRef.current = dirtyCheckJson(saved)
     clearPluginsTouched(pluginsTouchedVersion)
     autosaveGateRef.current.bump()
+    // Every save path clears the recovery file in main (projectFile.ts).
+    autosaveWrittenRef.current = false
     setSaveVersion((v) => v + 1)
   }
 
@@ -1619,13 +1634,36 @@ function Frame(): React.JSX.Element {
   // to null (Recover or Discard, both in handleRecoverAutosave/
   // handleDiscardRecovery above).
   //
-  // Also restarted by a plugin being touched (pluginsTouched.version: an
-  // editor opened or used), so a plugin-only change is autosaved too. Gated
-  // (autosaveGateRef): one that started before a save, a discard or a clear
-  // is dropped when its engine round trip comes back.
+  // Also restarted by a plugin being touched (pluginsTouched.version: a knob
+  // turned in an open editor), so a plugin-only change is autosaved too --
+  // with a max wait (AUTOSAVE_MAX_WAIT_MS), since a plugin can report edits
+  // non-stop. Writes only while something is unsaved: just after a save, an
+  // open or a first save (currentSketch changing), there is nothing to
+  // recover, and once edits are undone back to the saved state the file this
+  // session wrote is cleared (autosaveAction). Gated (autosaveGateRef): one
+  // that started before a save, a discard or a clear is dropped when its
+  // engine round trip comes back.
   useEffect(() => {
     if (recoverableAutosave !== null) return
+    const now = Date.now()
+    autosaveUnsavedSinceRef.current ??= now
+    const delay = autosaveDelayMs(
+      now,
+      autosaveUnsavedSinceRef.current,
+      AUTOSAVE_DEBOUNCE_MS,
+      AUTOSAVE_MAX_WAIT_MS
+    )
     const id = window.setTimeout(() => {
+      autosaveUnsavedSinceRef.current = null
+      const unsaved = hasUnsavedChanges(
+        state.rifffs,
+        persistedJson,
+        lastSavedJsonRef.current,
+        pluginsTouchedSnapshot().touched
+      )
+      const action = autosaveAction(unsaved, autosaveWrittenRef.current)
+      if (action === 'clear') clearAutosaveNow()
+      if (action !== 'write') return
       const token = autosaveGateRef.current.begin()
       const sketchJson = JSON.stringify(currentSketch)
       // With plugin settings (persistedJson has none), so a crash recovery
@@ -1633,11 +1671,12 @@ function Frame(): React.JSX.Element {
       void serializeForSave({ bestEffort: true })
         .then(async (json) => {
           if (!autosaveGateRef.current.isCurrent(token)) return
+          autosaveWrittenRef.current = true
           await window.rifffApi.autosaveProject(json)
           await window.rifffApi.autosaveProjectSketch(sketchJson)
         })
         .catch((err) => console.error('Frame: crash-recovery autosave failed:', err))
-    }, AUTOSAVE_DEBOUNCE_MS)
+    }, delay)
     return () => window.clearTimeout(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- serializeForSave is a fresh closure every render over this render's `state`, the one persistedJson was made from; keyed on persistedJson (not state) so a transient UI change doesn't restart the debounce (see above)
   }, [persistedJson, currentSketch, recoverableAutosave, pluginsTouched.version])
@@ -2762,6 +2801,7 @@ function Frame(): React.JSX.Element {
       <EngineStartupIndicator />
       <StemsUnavailableIndicator />
       <PluginsOffNotice />
+      <PluginsHeldNotice />
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the

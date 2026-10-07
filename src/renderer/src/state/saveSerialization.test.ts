@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { initialState, reducer, type AppState } from './store'
 import { deserializeProject } from './serialize'
 import {
+  autosaveAction,
+  autosaveDelayMs,
   createAutosaveGate,
   dirtyCheckJson,
   liveSettingsForSave,
@@ -118,6 +120,35 @@ describe('createAutosaveGate', () => {
     gate.bump()
     expect(gate.isCurrent(before)).toBe(false)
     expect(gate.isCurrent(gate.begin())).toBe(true)
+  })
+})
+
+describe('autosaveDelayMs', () => {
+  it('is the debounce after a lone change', () => {
+    expect(autosaveDelayMs(1000, 1000, 4000, 30_000)).toBe(4000)
+  })
+
+  it('never lets constant changes (a plugin reporting its own) put it off past the max wait', () => {
+    // Unsaved since t=0, a change every 750 ms: each restart of the timer is shorter, and at
+    // the max wait it fires at once.
+    expect(autosaveDelayMs(27_000, 0, 4000, 30_000)).toBe(3000)
+    expect(autosaveDelayMs(29_250, 0, 4000, 30_000)).toBe(750)
+    expect(autosaveDelayMs(31_000, 0, 4000, 30_000)).toBe(0)
+  })
+})
+
+describe('autosaveAction', () => {
+  it('writes only while something is unsaved', () => {
+    expect(autosaveAction(true, false)).toBe('write')
+    expect(autosaveAction(true, true)).toBe('write')
+  })
+
+  it('with nothing unsaved: clears a recovery file this session wrote, else does nothing', () => {
+    // Saved, or edited back to the saved state: a recovery file would only offer what is on disk.
+    expect(autosaveAction(false, true)).toBe('clear')
+    // Never wrote one (just opened, just saved): leave the disk alone -- a file there may be a
+    // previous session's crash recovery, still waiting on the user.
+    expect(autosaveAction(false, false)).toBe('skip')
   })
 })
 

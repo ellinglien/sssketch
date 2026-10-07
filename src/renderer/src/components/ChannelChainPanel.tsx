@@ -10,7 +10,8 @@ import {
   usePluginCatalogActions
 } from '../state/StoreContext'
 import { PluginCatalogBrowser } from './PluginCatalogBrowser'
-import { markPluginsTouched } from '../state/pluginsTouched'
+import { editorOpenMarksUnsaved, markPluginsTouched } from '../state/pluginsTouched'
+import { markFreshPluginChoice } from '../state/pendingPluginStates'
 
 const SLOT_LABELS = ['1', '2'] as const
 
@@ -153,6 +154,9 @@ export function ChannelChainPanel({
                     setBrowsingSlot(slot)
                     return
                   }
+                  // Picked by hand: at its defaults (parked settings are an undo's).
+                  if (e.target.value !== '')
+                    markFreshPluginChoice({ kind: 'channel', channelId, slot })
                   dispatch({
                     type: 'SET_CHANNEL_CHAIN_PLUGIN',
                     channelId,
@@ -191,8 +195,10 @@ export function ChannelChainPanel({
               />
               <button
                 onClick={() => {
-                  // See MasterChainPanel: opening an editor may change the project.
-                  markPluginsTouched()
+                  // See MasterChainPanel: only a bridged plugin's editor marks
+                  // the project unsaved by opening.
+                  const arch = catalog.plugins.find((p) => p.id === pluginId)?.arch
+                  if (editorOpenMarksUnsaved(arch)) markPluginsTouched()
                   void window.rifffApi.engineOpenChannelPluginEditor(channelId, slot)
                 }}
                 disabled={editDisabled}
@@ -208,14 +214,15 @@ export function ChannelChainPanel({
       </div>
       {browsingSlot !== null && (
         <PluginCatalogBrowser
-          onSelect={(id) =>
+          onSelect={(id) => {
+            markFreshPluginChoice({ kind: 'channel', channelId, slot: browsingSlot })
             dispatch({
               type: 'SET_CHANNEL_CHAIN_PLUGIN',
               channelId,
               slot: browsingSlot as 0 | 1,
               pluginId: id
             })
-          }
+          }}
           onClose={() => setBrowsingSlot(null)}
         />
       )}

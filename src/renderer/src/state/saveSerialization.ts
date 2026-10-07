@@ -74,3 +74,28 @@ export function createAutosaveGate(): {
     isCurrent: (token) => token === generation
   }
 }
+
+/** How long the crash-recovery autosave waits, `now`, when the project has had changes not yet
+ * autosaved since `unsavedSince`: the debounce, but never past `maxWaitMs` after the first of
+ * them -- a plugin whose editor reports changes every 750 ms (or someone editing non-stop) would
+ * otherwise restart the debounce forever and nothing would ever be autosaved. */
+export function autosaveDelayMs(
+  now: number,
+  unsavedSince: number,
+  debounceMs: number,
+  maxWaitMs: number
+): number {
+  return Math.max(0, Math.min(debounceMs, unsavedSince + maxWaitMs - now))
+}
+
+/** What the autosave timer does when it fires: write the recovery file while something is
+ * unsaved; with nothing unsaved (just saved, or edited back to the saved state), clear the one
+ * this session wrote, if any -- it would only offer, at the next launch, what is already on disk.
+ * A file this session never wrote is left alone: it may be a previous session's crash recovery. */
+export function autosaveAction(
+  unsaved: boolean,
+  wroteSinceClear: boolean
+): 'write' | 'clear' | 'skip' {
+  if (unsaved) return 'write'
+  return wroteSinceClear ? 'clear' : 'skip'
+}
