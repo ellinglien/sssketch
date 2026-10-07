@@ -193,12 +193,17 @@ namespace sssketch
          * that slot. */
         void closeEditorWindow(int slotIndex);
 
-        /** Message-thread API: from now on, a parameter change (or a program /
-         * state change it reports) of slotIndex's current plugin is reported
-         * by takeEdited() -- until closeEditorWindow, or that plugin is
-         * swapped out. openEditorWindow calls it: a knob is only reachable in
-         * the editor, so this is the user editing the plugin, not its own
-         * restore at load time. A bridged plugin is not watched. */
+        /** Message-thread API: from now on, an edit of slotIndex's current
+         * plugin is reported by takeEdited() -- until closeEditorWindow, or
+         * that plugin is swapped out. openEditorWindow calls it: a knob is
+         * only reachable in the editor, so this is the user editing the
+         * plugin, not its own restore at load time. An edit is a parameter
+         * change made with a gesture (begin/end, as a knob turn is, or just
+         * after one), or a program / state change the plugin reports; from a
+         * plugin that never sends gestures, a change of an automatable,
+         * non-meter parameter on the message thread. Not a plugin's own
+         * changes: meters, self-modulation, VST3 output parameters set from
+         * process(). See EditWatch. A bridged plugin is not watched. */
         void watchEdits(int slotIndex);
 
         /** Any thread: whether a watched plugin was edited since the last
@@ -216,29 +221,48 @@ namespace sssketch
             const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut);
 
     private:
-        // Sets `edited` from a hosted plugin's own callbacks -- which can come
-        // from any thread (a parameter set from the audio thread, say), hence
-        // the atomic and nothing else.
-        class EditListener : public juce::AudioProcessorListener
+        // One per loaded plugin (its SlotState's): registered with the plugin
+        // once, on the message thread, before the audio thread can see it,
+        // and removed only after it has retired (~SlotState) -- so the
+        // plugin's listener list is never changed while the audio thread may
+        // be walking it. Whether it counts anything is `watching` (the
+        // editor is open), an atomic the callbacks check. Callbacks can come
+        // from any thread (an output parameter set from process(), say):
+        // atomics only, no allocation, no lock.
+        class EditWatch : public juce::AudioProcessorListener
         {
         public:
-            explicit EditListener(std::atomic<bool>& flagToSet) : flag(flagToSet) {}
-            void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override { flag.store(true); }
-            void audioProcessorParameterChangeGestureBegin(juce::AudioProcessor*, int) override { flag.store(true); }
-            void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details) override
-            {
-                // Not latency or parameter-name changes: those are the plugin's, not an edit.
-                if (details.programChanged || details.nonParameterStateChanged)
-                    flag.store(true);
-            }
+            EditWatch(std::atomic<bool>& editedFlag, int numParameters);
+
+            void audioProcessorParameterChanged(juce::AudioProcessor*, int index, float) override;
+            void audioProcessorParameterChangeGestureBegin(juce::AudioProcessor*, int index) override;
+            void audioProcessorParameterChangeGestureEnd(juce::AudioProcessor*, int index) override;
+            void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details) override;
+
+            std::atomic<bool> watching { false };
+
+            // How long a change still counts after its gesture ended (some
+            // plugins send the final value after endEdit), and the longest a
+            // gesture counts as held (one whose end never comes).
+            static constexpr juce::uint32 kAfterGestureMs = 250;
+            static constexpr juce::uint32 kLongestGestureMs = 30000;
 
         private:
-            std::atomic<bool>& flag;
+            // Until when (Time::getMillisecondCounter, 0: never) a change of
+            // that parameter is part of a gesture. Sized when attached; a
+            // parameter past it (added later) uses `anyGestureUntil`.
+            std::atomic<juce::uint32>& gestureSlot(int index);
+            static bool before(juce::uint32 now, juce::uint32 until);
+
+            std::atomic<bool>& edited;
+            std::atomic<bool> seenGesture { false };
+            const int numParams;
+            std::unique_ptr<std::atomic<juce::uint32>[]> gestureUntil;
+            std::atomic<juce::uint32> anyGestureUntil { 0 };
         };
 
-        // Declared before `slots`: outlives every plugin it is registered with.
+        // Declared before `slots`: outlives every EditWatch that sets it.
         std::atomic<bool> edited { false };
-        EditListener editListener { edited };
 
         // One shared playhead per chain (not per slot) -- tempo is a
         // chain-wide, not per-plugin, concept. setBpm() writes the atomic;
@@ -278,12 +302,28 @@ namespace sssketch
         // threaded export (loadPluginSync).
         struct SlotState
         {
+            // Declared before `instance`, so destroyed after it: a callback
+            // already under way on one of the plugin's own threads as it is
+            // removed still finds a live object.
+            std::unique_ptr<EditWatch> editWatch;
             std::unique_ptr<juce::AudioProcessor> instance;
             // Non-empty when this slot's plugin is running on the x86_64
             // bridge instead of in-process -- see
             // docs/superpowers/specs/2026-08-01-x86-plugin-bridge-design.md.
             juce::String bridgeSlotId;
             int processChannels = 2; // max(instance's total input, total output)
+
+            SlotState() = default;
+            SlotState(const SlotState&) = delete;
+            SlotState& operator=(const SlotState&) = delete;
+            // Unregisters editWatch -- only ever on the message thread (or in
+            // single-threaded export), once the audio thread can no longer see
+            // this state -- before the plugin goes.
+            ~SlotState()
+            {
+                if (instance != nullptr && editWatch != nullptr)
+                    instance->removeListener(editWatch.get());
+            }
         };
 
         // A fully-built SlotState for `instance` (may be null: empty slot),
@@ -312,9 +352,8 @@ namespace sssketch
             // belongs to, so drainRetired() can close it before destroying
             // that state's plugin (JUCE requires the editor go first).
             const SlotState* editorFor = nullptr;
-            // Message thread only: the SlotState whose plugin editListener is
-            // registered with (watchEdits), so it can be removed before that
-            // plugin goes.
+            // Message thread only: the SlotState whose editWatch is watching
+            // (watchEdits), so it stops before that plugin goes.
             const SlotState* watchedFor = nullptr;
             // Reused interleaved-stereo scratch for the bridged path,
             // resized only when numSamples changes -- mirrors `scratch`
@@ -328,7 +367,7 @@ namespace sssketch
 
         std::vector<Slot> slots;
 
-        // Message thread: removes editListener from the slot's watched plugin, if any.
+        // Message thread: stops the slot's watched plugin's EditWatch, if any.
         void unwatchEdits(Slot& slot);
         Instantiator instantiator;
         BpmPlayHead playHead;

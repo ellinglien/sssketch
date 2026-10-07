@@ -46,9 +46,90 @@ namespace sssketch
             instance->setPlayHead(&playHead);
             state->processChannels = std::max(
                 { 2, instance->getTotalNumInputChannels(), instance->getTotalNumOutputChannels() });
+            // Registered once, now, for the plugin's whole life (removed by
+            // ~SlotState): not watching until its editor opens.
+            state->editWatch = std::make_unique<EditWatch>(edited, instance->getParameters().size());
+            instance->addListener(state->editWatch.get());
         }
         state->instance = std::move(instance);
         return state;
+    }
+
+    PluginChain::EditWatch::EditWatch(std::atomic<bool>& editedFlag, int numParameters)
+        : edited(editedFlag),
+          numParams(std::max(0, numParameters)),
+          gestureUntil(std::make_unique<std::atomic<juce::uint32>[]>((size_t) std::max(1, numParameters)))
+    {
+        for (int i = 0; i < std::max(1, numParams); ++i)
+            gestureUntil[(size_t) i].store(0);
+    }
+
+    std::atomic<juce::uint32>& PluginChain::EditWatch::gestureSlot(int index)
+    {
+        return index >= 0 && index < numParams ? gestureUntil[(size_t) index] : anyGestureUntil;
+    }
+
+    bool PluginChain::EditWatch::before(juce::uint32 now, juce::uint32 until)
+    {
+        // Wrap-safe (the counter wraps every ~49 days); 0 is "never".
+        return until != 0 && (juce::int32) (until - now) > 0;
+    }
+
+    void PluginChain::EditWatch::audioProcessorParameterChangeGestureBegin(juce::AudioProcessor*, int index)
+    {
+        seenGesture.store(true);
+        const auto until = juce::Time::getMillisecondCounter() + kLongestGestureMs;
+        gestureSlot(index).store(until == 0 ? 1 : until);
+    }
+
+    void PluginChain::EditWatch::audioProcessorParameterChangeGestureEnd(juce::AudioProcessor*, int index)
+    {
+        const auto until = juce::Time::getMillisecondCounter() + kAfterGestureMs;
+        gestureSlot(index).store(until == 0 ? 1 : until);
+    }
+
+    void PluginChain::EditWatch::audioProcessorParameterChanged(juce::AudioProcessor* processor, int index, float)
+    {
+        if (!watching.load())
+            return;
+        // Part of a gesture (a knob being turned, or just let go of): an edit.
+        if (before(juce::Time::getMillisecondCounter(), gestureSlot(index).load()))
+        {
+            edited.store(true);
+            return;
+        }
+        // A plugin that marks its edits with gestures: a change without one is
+        // its own (a meter, its own modulation).
+        if (seenGesture.load())
+            return;
+        // One that never does: a click in its editor lands on the message
+        // thread; a change from anywhere else is the plugin's own (a VST3
+        // output parameter, set from process()).
+        if (!juce::MessageManager::existsAndIsCurrentThread() || processor == nullptr)
+            return;
+        const auto* parameter = processor->getParameters()[index];
+        if (parameter == nullptr || !parameter->isAutomatable() || parameter->isMetaParameter())
+            return;
+        switch (parameter->getCategory())
+        {
+            case juce::AudioProcessorParameter::inputMeter:
+            case juce::AudioProcessorParameter::outputMeter:
+            case juce::AudioProcessorParameter::compressorLimiterGainReductionMeter:
+            case juce::AudioProcessorParameter::expanderGateGainReductionMeter:
+            case juce::AudioProcessorParameter::analysisMeter:
+            case juce::AudioProcessorParameter::otherMeter:
+                return;
+            default:
+                break;
+        }
+        edited.store(true);
+    }
+
+    void PluginChain::EditWatch::audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details)
+    {
+        // Not latency or parameter-name changes: those are the plugin's, not an edit.
+        if (watching.load() && (details.programChanged || details.nonParameterStateChanged))
+            edited.store(true);
     }
 
     void PluginChain::applyPendingSwaps()
@@ -384,16 +465,18 @@ namespace sssketch
         if (slot.watchedFor == state)
             return;
         unwatchEdits(slot);
-        if (state == nullptr || state->instance == nullptr)
+        if (state == nullptr || state->editWatch == nullptr)
             return;
-        state->instance->addListener(&editListener);
+        // Only a flag: the EditWatch has been registered with the plugin
+        // since before it was published (makeLocalState).
+        state->editWatch->watching.store(true);
         slot.watchedFor = state;
     }
 
     void PluginChain::unwatchEdits(Slot& slot)
     {
-        if (slot.watchedFor != nullptr && slot.watchedFor->instance != nullptr)
-            slot.watchedFor->instance->removeListener(&editListener);
+        if (slot.watchedFor != nullptr && slot.watchedFor->editWatch != nullptr)
+            slot.watchedFor->editWatch->watching.store(false);
         slot.watchedFor = nullptr;
     }
 

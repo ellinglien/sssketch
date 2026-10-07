@@ -283,9 +283,19 @@ namespace sssketch
             };
         }
 
+        /** A level meter as a plugin reports one: not automatable, a meter. */
+        class MeterTestParameter : public juce::AudioParameterFloat
+        {
+        public:
+            MeterTestParameter() : juce::AudioParameterFloat(juce::ParameterID { "meter", 1 }, "meter", 0.0f, 1.0f, 0.0f) {}
+            bool isAutomatable() const override { return false; }
+            Category getCategory() const override { return outputMeter; }
+        };
+
         /** One parameter, and a state that is that parameter's value -- so two
          * instances' states differ, and a parameter change looks like a knob turned
-         * in its editor (the host is told, as a hosted VST3/AU's edit is). */
+         * in its editor (the host is told, as a hosted VST3/AU's edit is). Plus a
+         * meter (`meter`), which changes on its own. */
         class ParamTestPlugin : public juce::AudioProcessor
         {
         public:
@@ -295,6 +305,9 @@ namespace sssketch
                     juce::ParameterID { "amount", 1 }, "amount", 0.0f, 1.0f, initial);
                 amount = p.get();
                 addParameter(p.release());
+                auto m = std::make_unique<MeterTestParameter>();
+                meter = m.get();
+                addParameter(m.release());
             }
             const juce::String getName() const override { return "ParamTestPlugin"; }
             void prepareToPlay(double, int) override {}
@@ -317,6 +330,15 @@ namespace sssketch
             void setStateInformation(const void*, int) override {}
 
             juce::AudioParameterFloat* amount = nullptr;
+            juce::AudioParameterFloat* meter = nullptr;
+
+            /** A knob turned the way a hosted plugin's editor reports it: begin, value, end. */
+            void turnKnob(float value)
+            {
+                amount->beginChangeGesture();
+                amount->setValueNotifyingHost(value);
+                amount->endChangeGesture();
+            }
         };
 
         /** "param:<initial value>" -> a ParamTestPlugin (`last` is set to it); "" -> no plugin. */
@@ -683,6 +705,83 @@ namespace sssketch
                     chain.closeEditorWindow(0); // stops watching, editor or not
                     last->amount->setValueNotifyingHost(0.7f);
                     expect(!chain.takeEdited());
+                }
+
+                // A plugin can report changes on its own while its editor is open: a
+                // meter, its own modulation (VST3 output parameters, set from
+                // process()). Those aren't edits: only a change made with a gesture
+                // (begin/end, as a knob turn is) counts, or, from a plugin that never
+                // sends gestures, a change of an automatable, non-meter parameter on
+                // the message thread (where a click in its editor lands).
+                beginTest("edits: a knob turned with a gesture counts; the plugin's own changes don't");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    chain.watchEdits(0);
+                    last->turnKnob(0.5f);
+                    expect(chain.takeEdited());
+
+                    // It marks its edits with gestures: a change without one, once the
+                    // knob has been let go of for a moment, is its own.
+                    std::this_thread::sleep_for(std::chrono::milliseconds(400));
+                    last->amount->setValueNotifyingHost(0.6f);
+                    expect(!chain.takeEdited());
+                    last->meter->setValueNotifyingHost(0.9f);
+                    expect(!chain.takeEdited());
+
+                    last->turnKnob(0.7f);
+                    expect(chain.takeEdited());
+                }
+
+                beginTest("edits: a change just after its gesture ended still counts (the final value)");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    chain.watchEdits(0);
+                    last->amount->beginChangeGesture();
+                    last->amount->endChangeGesture();
+                    expect(!chain.takeEdited()); // a click that changed nothing
+                    last->amount->setValueNotifyingHost(0.4f);
+                    expect(chain.takeEdited());
+                }
+
+                beginTest("edits: from a plugin without gestures, a meter or a change off the message thread doesn't count");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    chain.watchEdits(0);
+                    last->meter->setValueNotifyingHost(0.9f);
+                    expect(!chain.takeEdited());
+                    // An output parameter set from process(): the audio thread.
+                    std::thread([p = last] { p->amount->setValueNotifyingHost(0.8f); }).join();
+                    expect(!chain.takeEdited());
+                    // A click in its editor: the message thread.
+                    last->amount->setValueNotifyingHost(0.3f);
+                    expect(chain.takeEdited());
+                }
+
+                beginTest("edits: watching follows the editor; closing and reopening it watches the same plugin again");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    expect(requestLoadAndWait(chain, 0, "param:0.25"));
+                    chain.applyPendingSwaps();
+                    last->turnKnob(0.3f); // not watched yet: its own restore, an automation
+                    expect(!chain.takeEdited());
+                    chain.watchEdits(0);
+                    chain.closeEditorWindow(0);
+                    last->turnKnob(0.4f);
+                    expect(!chain.takeEdited());
+                    chain.watchEdits(0);
+                    last->turnKnob(0.5f);
+                    expect(chain.takeEdited());
+                    chain.closeEditorWindow(0);
                 }
 
                 beginTest("a watched plugin swapped out is no longer watched, and its replacement isn't either");
