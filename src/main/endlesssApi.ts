@@ -2,6 +2,7 @@ import { app, safeStorage } from 'electron'
 import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import type {
+  EndlesssFetchFailure,
   RiffLibraryJam,
   RiffLibraryResolvedRiff,
   RiffLibraryResolvedStem,
@@ -789,8 +790,32 @@ export function peekSharedFeedCache(riffCIDs: string[]): Map<string, RiffLibrary
  * body, not logged in). Empty like the feed's real end, so it is marked
  * `failed`: a sync that took it as the end marked the jam fully synced and
  * never fetched the riffs past it. */
-function failedPage(offset: number): RiffPage {
-  return { riffs: [], hasMore: false, nextOffset: offset, failed: true }
+function failedPage(offset: number, failure: EndlesssFetchFailure): RiffPage {
+  return { riffs: [], hasMore: false, nextOffset: offset, failed: failure }
+}
+
+const ERROR: EndlesssFetchFailure = { reason: 'error' }
+const LOGGED_OUT: EndlesssFetchFailure = { reason: 'logged-out' }
+
+/** A request that threw: the caller's own cancel when its signal is
+ * aborted, anything else (a timeout included) an error. */
+function thrownFailure(signal?: AbortSignal): EndlesssFetchFailure {
+  return signal?.aborted ? { reason: 'cancelled' } : ERROR
+}
+
+/** A response that wasn't ok: a 429 is Endlesss asking to slow down (with
+ * its Retry-After, seconds or a date, when it gave one), a 401 a session it
+ * no longer takes. */
+function statusFailure(res: Response): EndlesssFetchFailure {
+  if (res.status === 401) return LOGGED_OUT
+  if (res.status !== 429) return ERROR
+  const header = res.headers.get('Retry-After')
+  if (header === null) return { reason: 'rate-limited' }
+  const seconds = Number(header)
+  const ms = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(header) - Date.now()
+  return Number.isFinite(ms) && ms > 0
+    ? { reason: 'rate-limited', retryAfterMs: ms }
+    : { reason: 'rate-limited' }
 }
 
 export async function listSharedFeed(
@@ -815,11 +840,11 @@ export async function listSharedFeed(
     )
   } catch (err) {
     console.error('endlesssApi: listSharedFeed network failure:', err)
-    return failedPage(offset)
+    return failedPage(offset, thrownFailure(signal))
   }
   if (!res.ok) {
     console.error(`endlesssApi: listSharedFeed HTTP ${res.status}`)
-    return failedPage(offset)
+    return failedPage(offset, statusFailure(res))
   }
 
   let body: RawSharedFeedResponse
@@ -827,7 +852,7 @@ export async function listSharedFeed(
     body = (await res.json()) as RawSharedFeedResponse
   } catch (err) {
     console.error('endlesssApi: listSharedFeed malformed JSON:', err)
-    return failedPage(offset)
+    return failedPage(offset, thrownFailure(signal))
   }
 
   const newCache = new Map<string, RiffLibraryResolvedRiff>()
@@ -993,7 +1018,7 @@ export async function listRiffsInJam(
   const limit = filters.limit ?? DEFAULT_RIFF_PAGE_SIZE
 
   const session = activeSession()
-  if (!session) return failedPage(offset)
+  if (!session) return failedPage(offset, LOGGED_OUT)
 
   let res: Response
   try {
@@ -1006,11 +1031,11 @@ export async function listRiffsInJam(
     )
   } catch (err) {
     console.error('endlesssApi: listRiffsInJam network failure:', err)
-    return failedPage(offset)
+    return failedPage(offset, thrownFailure(signal))
   }
   if (!res.ok) {
     console.error(`endlesssApi: listRiffsInJam HTTP ${res.status}`)
-    return failedPage(offset)
+    return failedPage(offset, statusFailure(res))
   }
 
   let body: RawRiffListResponse
@@ -1018,7 +1043,7 @@ export async function listRiffsInJam(
     body = (await res.json()) as RawRiffListResponse
   } catch (err) {
     console.error('endlesssApi: listRiffsInJam malformed JSON:', err)
-    return failedPage(offset)
+    return failedPage(offset, thrownFailure(signal))
   }
 
   const rows = body.rows ?? []
@@ -1067,15 +1092,19 @@ interface RawDocsResponse<T> {
   rows: RawDocsRow<T>[]
 }
 
+/** The docs found for `keys`, by id (a key with no doc is absent), or why
+ * the lookup failed. A failure is never an empty map: the stem lookup's
+ * used to be, and resolveJamRiff built the riff with no stems -- which the
+ * sync saved as resolved, for good. */
 async function fetchDocsByKeys<T>(
   jamId: string,
   keys: string[],
   session: EndlesssSession,
   fetchImpl: FetchLike,
   signal?: AbortSignal
-): Promise<Map<string, T>> {
+): Promise<{ docs: Map<string, T> } | { failure: EndlesssFetchFailure }> {
   const result = new Map<string, T>()
-  if (keys.length === 0) return result
+  if (keys.length === 0) return { docs: result }
   let res: Response
   try {
     res = await fetchWithTimeout(
@@ -1095,23 +1124,23 @@ async function fetchDocsByKeys<T>(
     )
   } catch (err) {
     console.error('endlesssApi: fetchDocsByKeys network failure:', err)
-    return result
+    return { failure: thrownFailure(signal) }
   }
   if (!res.ok) {
     console.error(`endlesssApi: fetchDocsByKeys HTTP ${res.status}`)
-    return result
+    return { failure: statusFailure(res) }
   }
   let body: RawDocsResponse<T>
   try {
     body = (await res.json()) as RawDocsResponse<T>
   } catch (err) {
     console.error('endlesssApi: fetchDocsByKeys malformed JSON:', err)
-    return result
+    return { failure: thrownFailure(signal) }
   }
   for (const row of body.rows ?? []) {
     if (row.doc) result.set(row.id, row.doc)
   }
-  return result
+  return { docs: result }
 }
 
 /** Resolves one riff within a private jam: fetches the riff doc, extracts
@@ -1119,7 +1148,8 @@ async function fetchDocsByKeys<T>(
  * docs, then downloads whatever stems aren't already cached locally --
  * mirroring downloadMissingStems' existing LORE-path contract exactly.
  * `signal`/`onStemDownloaded` are passed straight through to
- * fetchDocsByKeys/downloadMissingStemsFor -- see their own doc comments. */
+ * fetchDocsByKeys/downloadMissingStemsFor -- see their own doc comments.
+ * Null when the riff can't be resolved whole (resolveJamRiffOrFailure). */
 export async function resolveJamRiff(
   jamId: string,
   riffCID: string,
@@ -1127,12 +1157,30 @@ export async function resolveJamRiff(
   signal?: AbortSignal,
   onStemDownloaded?: (bytes: number) => void
 ): Promise<RiffLibraryResolvedRiff | null> {
+  const result = await resolveJamRiffOrFailure(jamId, riffCID, fetchImpl, signal, onStemDownloaded)
+  return 'riff' in result ? result.riff : null
+}
+
+/** resolveJamRiff, saying why when it fails -- the sync stops on a 429 or
+ * no session, and goes on past anything else. A riff is resolved only
+ * whole: every active slot (one that is on, with a stem in it -- the same
+ * slots buildResolvedRiff keeps) needs its stem record. A riff whose stem
+ * lookup failed, or came back short, is a failure, never a riff with fewer
+ * stems; a riff with no active slots is a real empty riff. */
+export async function resolveJamRiffOrFailure(
+  jamId: string,
+  riffCID: string,
+  fetchImpl: FetchLike = fetch,
+  signal?: AbortSignal,
+  onStemDownloaded?: (bytes: number) => void
+): Promise<{ riff: RiffLibraryResolvedRiff } | { failure: EndlesssFetchFailure }> {
   const session = activeSession()
-  if (!session) return null
+  if (!session) return { failure: LOGGED_OUT }
 
   const riffDocs = await fetchDocsByKeys<RawRiffDoc>(jamId, [riffCID], session, fetchImpl, signal)
-  const riffDoc = riffDocs.get(riffCID)
-  if (!riffDoc) return null
+  if ('failure' in riffDocs) return riffDocs
+  const riffDoc = riffDocs.docs.get(riffCID)
+  if (!riffDoc) return { failure: ERROR }
 
   const stemIds = riffDoc.state.playback
     .map((slot) => slot.slot?.current)
@@ -1140,9 +1188,24 @@ export async function resolveJamRiff(
       (current): current is { on: boolean; currentLoop?: string; gain: number } => !!current?.on
     )
     .map((current) => current.currentLoop)
-    .filter((id): id is string => typeof id === 'string')
+    .filter((id): id is string => typeof id === 'string' && id !== '')
+  const uniqueStemIds = [...new Set(stemIds)]
 
-  const stemDocs = await fetchDocsByKeys<RawStemDoc>(jamId, stemIds, session, fetchImpl, signal)
-  const resolved = buildResolvedRiff(riffCID, riffDoc, [...stemDocs.values()])
-  return downloadMissingStemsFor(resolved, fetchImpl, signal, onStemDownloaded)
+  const stemDocs = await fetchDocsByKeys<RawStemDoc>(
+    jamId,
+    uniqueStemIds,
+    session,
+    fetchImpl,
+    signal
+  )
+  if ('failure' in stemDocs) return stemDocs
+  if (uniqueStemIds.some((id) => !stemDocs.docs.has(id))) {
+    console.error(
+      `endlesssApi: riff ${riffCID} in ${jamId}: ${stemDocs.docs.size} of ` +
+        `${uniqueStemIds.length} stem records came back`
+    )
+    return { failure: ERROR }
+  }
+  const resolved = buildResolvedRiff(riffCID, riffDoc, [...stemDocs.docs.values()])
+  return { riff: await downloadMissingStemsFor(resolved, fetchImpl, signal, onStemDownloaded) }
 }

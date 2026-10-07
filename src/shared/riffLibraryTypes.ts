@@ -113,13 +113,32 @@ export interface RiffPage {
    * CouchDB view's total_rows -- see its own doc comment) -- undefined for
    * backends that don't expose it (the local warehouse's own listRiffs, the
    * shared-feed listing). Used to warn before syncing a particularly large
-   * jam, not for pagination itself. */
+   * jam, and by a sync to see that a jam marked complete is missing riffs
+   * (riffLibrarySync.ts) -- not for pagination itself. */
   totalCount?: number
-  /** True when the listing request itself failed (cancelled, timed out,
+  /** Set when the listing request itself failed (cancelled, timed out,
    * network error, an HTTP error, a malformed body, not logged in): `riffs`
    * is empty but says nothing about where the feed ends, so a sync must not
    * take it as the end (riffLibrarySync.ts). Absent on a page that arrived. */
-  failed?: true
+  failed?: EndlesssFetchFailure
+}
+
+/** Why a request to Endlesss produced nothing usable. `cancelled` is the
+ * caller's own abort (a timeout is an `error`); `logged-out` is no session,
+ * or one Endlesss refused (401); `rate-limited` is a 429, with how long its
+ * Retry-After asked to wait when it said. */
+export interface EndlesssFetchFailure {
+  reason: 'cancelled' | 'rate-limited' | 'logged-out' | 'error'
+  retryAfterMs?: number
+}
+
+/** How a library sync run ended (riffLibrarySync.ts), for the renderer to
+ * say so. `stopped` is set only for what the user can act on or wait out:
+ * no session (`logged-out`), or Endlesss asking to slow down
+ * (`rate-limited`, with `retryAt` the epoch ms a sync may ask again). */
+export interface SyncOutcome {
+  stopped: 'logged-out' | 'rate-limited' | null
+  retryAt?: number
 }
 
 export interface RiffLibraryResolvedRiff {

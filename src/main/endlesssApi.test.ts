@@ -328,7 +328,12 @@ describe('endlesssApi shared feed', () => {
         async () => new Response('<html>', { status: 200 })
       ]) {
         const page = await listSharedFeed('elling', 100, 20, vi.fn(fail) as typeof fetch)
-        expect(page).toEqual({ riffs: [], hasMore: false, nextOffset: 100, failed: true })
+        expect(page).toEqual({
+          riffs: [],
+          hasMore: false,
+          nextOffset: 100,
+          failed: { reason: 'error' }
+        })
       }
     } finally {
       errors.mockRestore()
@@ -421,7 +426,65 @@ describe('endlesssApi riff listing in a jam', () => {
     logout()
     const page = await listRiffsInJam('jam_abc', {}, vi.fn() as unknown as typeof fetch)
     // Not the jam's end: a sync must not mark it complete on this.
-    expect(page).toEqual({ riffs: [], hasMore: false, nextOffset: 0, failed: true })
+    expect(page).toEqual({
+      riffs: [],
+      hasMore: false,
+      nextOffset: 0,
+      failed: { reason: 'logged-out' }
+    })
+  })
+
+  // Why a page failed, so a sync can say "log in to sync" or back off from a
+  // 429 instead of going on asking.
+  it('listRiffsInJam says why a page failed: a 429 (with its retry-after), a 401, a cancel', async () => {
+    const { loginWithCredentials, listRiffsInJam } = await import('./endlesssApi')
+    await loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({ token: 't', password: 'p', user_id: 'u1', expires: Date.now() + 1e6 }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const limited = await listRiffsInJam(
+        'jam_abc',
+        { offset: 200 },
+        vi.fn(
+          async () => new Response('slow down', { status: 429, headers: { 'Retry-After': '120' } })
+        ) as unknown as typeof fetch
+      )
+      expect(limited.failed).toEqual({ reason: 'rate-limited', retryAfterMs: 120_000 })
+      const noHeader = await listRiffsInJam(
+        'jam_abc',
+        {},
+        vi.fn(async () => new Response('slow down', { status: 429 })) as unknown as typeof fetch
+      )
+      expect(noHeader.failed).toEqual({ reason: 'rate-limited' })
+      const unauthorised = await listRiffsInJam(
+        'jam_abc',
+        {},
+        vi.fn(async () => new Response('no', { status: 401 })) as unknown as typeof fetch
+      )
+      expect(unauthorised.failed).toEqual({ reason: 'logged-out' })
+      const controller = new AbortController()
+      const cancelled = await listRiffsInJam(
+        'jam_abc',
+        {},
+        vi.fn(async () => {
+          controller.abort()
+          throw new DOMException('aborted', 'AbortError')
+        }) as unknown as typeof fetch,
+        controller.signal
+      )
+      expect(cancelled.failed).toEqual({ reason: 'cancelled' })
+    } finally {
+      errors.mockRestore()
+    }
   })
 
   it('listRiffsInJam parses the rifffLoopsByCreateTime view response', async () => {
@@ -538,6 +601,162 @@ describe('endlesssApi jam riff resolution', () => {
     logout()
     const resolved = await resolveJamRiff('jam_abc', 'riff_1', vi.fn() as unknown as typeof fetch)
     expect(resolved).toBeNull()
+  })
+
+  /** A riff doc for riff_1 whose slots hold `slots` (null: an empty slot,
+   * `{ id, on }`: a stem, on or muted). */
+  function riffDocWithSlots(
+    slots: ({ id: string; on: boolean } | null)[]
+  ): Record<string, unknown> {
+    return rawRiffDoc('unused', {
+      state: {
+        bps: 2.0,
+        barLength: 4,
+        playback: slots.map((slot) =>
+          slot
+            ? { slot: { current: { on: slot.on, currentLoop: slot.id, gain: 1 } } }
+            : { slot: {} }
+        )
+      }
+    })
+  }
+
+  /** Serves riff_1's doc, then answers the stem lookup with `stems`. */
+  function docsFetch(
+    riffDoc: Record<string, unknown>,
+    stems: (keys: string[], init: RequestInit) => Promise<Response>
+  ): typeof fetch & { stemLookups: () => number } {
+    let stemLookups = 0
+    const fn = vi.fn(async (url: string, init?: RequestInit) => {
+      if (!url.includes('_all_docs')) throw new Error(`unexpected URL: ${url}`)
+      const { keys } = JSON.parse(init!.body as string) as { keys: string[] }
+      if (keys[0] === 'riff_1') {
+        return new Response(JSON.stringify({ rows: [{ id: 'riff_1', doc: riffDoc }] }), {
+          status: 200
+        })
+      }
+      stemLookups++
+      return stems(keys, init!)
+    })
+    return Object.assign(fn as unknown as typeof fetch, { stemLookups: () => stemLookups })
+  }
+
+  // The stem lookup used to come back as an empty map on any failure, and
+  // the riff was built -- and saved by the sync, for good -- with no stems
+  // (160 riffs across 19 jams in Elling's own library).
+  it.each([
+    ['a 429', async () => new Response('slow down', { status: 429 })],
+    ['a 503', async () => new Response('busy', { status: 503 })],
+    ['a network error', async () => Promise.reject(new TypeError('fetch failed'))],
+    [
+      'a timeout',
+      async () => Promise.reject(new DOMException('The operation timed out.', 'TimeoutError'))
+    ],
+    ['a malformed body', async () => new Response('<html>', { status: 200 })]
+  ])(
+    'resolveJamRiff returns null, not a riff with no stems, when the stem lookup fails with %s',
+    async (_name, fail) => {
+      await loggedIn()
+      const { resolveJamRiff } = await import('./endlesssApi')
+      const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+      try {
+        const fakeFetch = docsFetch(rawRiffDoc('stem_1'), fail)
+        expect(await resolveJamRiff('jam_abc', 'riff_1', fakeFetch)).toBeNull()
+      } finally {
+        errors.mockRestore()
+      }
+    }
+  )
+
+  it('resolveJamRiff returns null when a cancel cuts off the stem lookup', async () => {
+    await loggedIn()
+    const { resolveJamRiff } = await import('./endlesssApi')
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const controller = new AbortController()
+    try {
+      const fakeFetch = docsFetch(rawRiffDoc('stem_1'), async () => {
+        controller.abort()
+        throw new DOMException('aborted', 'AbortError')
+      })
+      expect(await resolveJamRiff('jam_abc', 'riff_1', fakeFetch, controller.signal)).toBeNull()
+    } finally {
+      errors.mockRestore()
+    }
+  })
+
+  it('resolveJamRiff returns null when fewer stem records come back than the riff has active slots', async () => {
+    await loggedIn()
+    const { resolveJamRiff } = await import('./endlesssApi')
+    const fakeFetch = docsFetch(
+      riffDocWithSlots([{ id: 'stem_1', on: true }, { id: 'stem_2', on: true }, null]),
+      async () =>
+        new Response(
+          JSON.stringify({
+            rows: [
+              { id: 'stem_1', doc: rawStemDoc({ _id: 'stem_1' }) },
+              { key: 'stem_2', error: 'not_found' }
+            ]
+          }),
+          { status: 200 }
+        )
+    )
+    expect(await resolveJamRiff('jam_abc', 'riff_1', fakeFetch)).toBeNull()
+  })
+
+  // A muted or empty slot is not an active one: a riff with none is a real
+  // empty riff, resolved with no stems and no stem lookup at all.
+  it('resolveJamRiff resolves a riff with no active slots, with no stems and no stem lookup', async () => {
+    await loggedIn()
+    const { resolveJamRiff } = await import('./endlesssApi')
+    const fakeFetch = docsFetch(riffDocWithSlots([{ id: 'stem_1', on: false }, null]), async () => {
+      throw new Error('no stem lookup expected')
+    })
+    const resolved = await resolveJamRiff('jam_abc', 'riff_1', fakeFetch)
+    expect(resolved).not.toBeNull()
+    expect(resolved!.stems).toEqual([])
+    expect(fakeFetch.stemLookups()).toBe(0)
+  })
+
+  it('resolveJamRiffOrFailure says why a riff failed: a 429 with its retry-after, a cancel, no session', async () => {
+    await loggedIn()
+    const { resolveJamRiffOrFailure, logout } = await import('./endlesssApi')
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const limited = await resolveJamRiffOrFailure(
+        'jam_abc',
+        'riff_1',
+        docsFetch(
+          rawRiffDoc('stem_1'),
+          async () => new Response('', { status: 429, headers: { 'Retry-After': '30' } })
+        )
+      )
+      expect(limited).toEqual({ failure: { reason: 'rate-limited', retryAfterMs: 30_000 } })
+
+      const short = await resolveJamRiffOrFailure(
+        'jam_abc',
+        'riff_1',
+        docsFetch(rawRiffDoc('stem_1'), async () => new Response(JSON.stringify({ rows: [] })))
+      )
+      expect(short).toEqual({ failure: { reason: 'error' } })
+
+      const controller = new AbortController()
+      const cancelled = await resolveJamRiffOrFailure(
+        'jam_abc',
+        'riff_1',
+        docsFetch(rawRiffDoc('stem_1'), async () => {
+          controller.abort()
+          throw new DOMException('aborted', 'AbortError')
+        }),
+        controller.signal
+      )
+      expect(cancelled).toEqual({ failure: { reason: 'cancelled' } })
+
+      logout()
+      const loggedOut = await resolveJamRiffOrFailure('jam_abc', 'riff_1', vi.fn() as typeof fetch)
+      expect(loggedOut).toEqual({ failure: { reason: 'logged-out' } })
+    } finally {
+      errors.mockRestore()
+    }
   })
 
   it('resolveJamRiff batch-fetches the riff doc then its stem docs', async () => {
