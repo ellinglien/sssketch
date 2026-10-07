@@ -55,4 +55,20 @@ describe('phoneRemoteSettingsStore', () => {
     writeFileSync(join(dir, 'phoneRemoteSettings.json'), '{"preferredAddress":17}', 'utf-8')
     expect(loadPhoneRemoteSettings()).toEqual({ preferredAddress: null })
   })
+
+  // Its existence is the advanced features migration's sign that the remote was used
+  // (appFeaturesStore.ts): written on the first start, so a start alone leaves that trace.
+  it('records the first start of the remote by writing the file, keeping a chosen address', async () => {
+    const { existsSync } = await import('fs')
+    const { loadPhoneRemoteSettings, recordPhoneRemoteStarted, savePhoneRemoteSettings } =
+      await import('./phoneRemoteSettingsStore')
+    const path = join(dir, 'phoneRemoteSettings.json')
+    expect(existsSync(path)).toBe(false)
+    recordPhoneRemoteStarted()
+    expect(existsSync(path)).toBe(true)
+    expect(loadPhoneRemoteSettings()).toEqual({ preferredAddress: null })
+    savePhoneRemoteSettings({ preferredAddress: '100.66.121.12' })
+    recordPhoneRemoteStarted()
+    expect(loadPhoneRemoteSettings()).toEqual({ preferredAddress: '100.66.121.12' })
+  })
 })

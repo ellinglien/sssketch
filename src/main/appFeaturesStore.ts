@@ -5,12 +5,15 @@
 // docs/superpowers/plans/2026-10-07-advanced-features-toggle.md for every place it reaches.
 //
 // MIGRATION. With no file yet, the switch's starting value comes from what this install has
-// already used (advancedFeaturesDefault), read from a handful of small files in userData -- never
-// a walk of the stem library (23k folders on Elling's machine). The decision is written straight
-// away, so it is made once: a later scan or key never flips it behind his back.
-import { existsSync, readFileSync, writeFileSync } from 'fs'
+// already used (advancedFeaturesDefault): a handful of small files in userData, and the newest
+// MAX_LIBRARY_PROJECTS projects of the project library (the autosave alone missed nearly
+// everyone: it is deleted on every save). Never a walk of the stem library (23k folders on
+// Elling's machine). The decision is written straight away, so it is made once: a later scan or
+// key never flips it behind his back, and an existing appFeatures.json is never re-decided.
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { app } from 'electron'
+import { libraryRootPath } from './projectLibrary'
 import {
   ADVANCED_FEATURES_OFF,
   advancedFeaturesDefault,
@@ -32,6 +35,12 @@ const PLUGIN_CATALOG_FILE = 'pluginCatalog.json'
 const PHONE_REMOTE_SETTINGS_FILE = 'phoneRemoteSettings.json'
 const RADIO_HEARTS_KEY_FILE = 'radio-hearts-key.enc'
 const AUTOSAVE_FILE = 'autosave.sssketchproj'
+const SOUND_SETTINGS_FILE = 'soundSettings.json'
+
+/** How many of the library's projects the migration reads, newest first, and the largest it
+ * reads at all: enough to find someone who uses plugins or records, cheap on a big library. */
+const MAX_LIBRARY_PROJECTS = 50
+const MAX_PROJECT_BYTES = 16 * 1024 * 1024
 
 /** The engine names its takes this way (IpcServer.cpp, arm-recording and the gated pass), and
  * importRecordedTake keeps the basename when it copies one into the library. */
@@ -46,34 +55,104 @@ function readJson(path: string): unknown {
   }
 }
 
-/** What this install has already used, read only -- never writes. Exported so the migration can
- * be checked against a real userData folder without running the app. */
-export function detectAdvancedUse(userDataDir: string): AdvancedUseSignals {
-  const catalog = readJson(join(userDataDir, PLUGIN_CATALOG_FILE)) as {
-    plugins?: unknown[]
-  } | null
-  const autosavePath = join(userDataDir, AUTOSAVE_FILE)
-  let autosaveText = ''
+function readText(path: string): string {
   try {
-    if (existsSync(autosavePath)) autosaveText = readFileSync(autosavePath, 'utf-8')
+    return existsSync(path) ? readFileSync(path, 'utf-8') : ''
   } catch {
-    autosaveText = ''
+    return ''
   }
-  let autosave: {
+}
+
+/** What one project file says, from only the fields asked about: its chains (parsed) and whether
+ * any stem is an engine take (a plain text search, no walk of its rifffs). */
+function projectSignals(text: string): { plugins: boolean; takes: boolean } {
+  if (text === '') return { plugins: false, takes: false }
+  let chains: {
     masterChain?: (string | null)[]
     channelPlugins?: Record<string, (string | null)[]>
   } | null = null
   try {
-    autosave = autosaveText === '' ? null : JSON.parse(autosaveText)
+    const parsed = JSON.parse(text) as Record<string, unknown> | null
+    if (parsed !== null && typeof parsed === 'object') {
+      chains = {
+        masterChain: Array.isArray(parsed.masterChain)
+          ? (parsed.masterChain as (string | null)[])
+          : undefined,
+        channelPlugins:
+          parsed.channelPlugins !== null && typeof parsed.channelPlugins === 'object'
+            ? (parsed.channelPlugins as Record<string, (string | null)[]>)
+            : undefined
+      }
+    }
   } catch {
-    autosave = null
+    chains = null
+  }
+  return {
+    plugins:
+      chains !== null &&
+      projectUsesPlugins(
+        chains.masterChain,
+        Object.fromEntries(
+          Object.entries(chains.channelPlugins ?? {}).filter(([, slots]) => Array.isArray(slots))
+        )
+      ),
+    takes: TAKE_FILE_MARKERS.some((m) => text.includes(m))
+  }
+}
+
+/** The library's project files (`<root>/<name>/<name>.sssketchproj`, projectLibrary.ts), newest
+ * first, at most `max`. A missing or unreadable library is an empty one. */
+function newestLibraryProjects(root: string, max: number): string[] {
+  let names: string[]
+  try {
+    names = readdirSync(root)
+  } catch {
+    return []
+  }
+  const files: { path: string; mtimeMs: number }[] = []
+  for (const name of names) {
+    const path = join(root, name, `${name}.sssketchproj`)
+    try {
+      const stat = statSync(path)
+      if (stat.isFile() && stat.size <= MAX_PROJECT_BYTES)
+        files.push({ path, mtimeMs: stat.mtimeMs })
+    } catch {
+      // not a sketch folder
+    }
+  }
+  files.sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return files.slice(0, max).map((f) => f.path)
+}
+
+/** What this install has already used, read only -- never writes. Exported so the migration can
+ * be checked against a real userData folder without running the app. `projectLibraryDir`: the
+ * project library's root (none: not looked at). */
+export function detectAdvancedUse(
+  userDataDir: string,
+  options: { projectLibraryDir?: string | null; maxProjects?: number } = {}
+): AdvancedUseSignals {
+  const catalog = readJson(join(userDataDir, PLUGIN_CATALOG_FILE)) as {
+    plugins?: unknown[]
+  } | null
+  const found = projectSignals(readText(join(userDataDir, AUTOSAVE_FILE)))
+  if (options.projectLibraryDir) {
+    for (const path of newestLibraryProjects(
+      options.projectLibraryDir,
+      options.maxProjects ?? MAX_LIBRARY_PROJECTS
+    )) {
+      if (found.plugins && found.takes) break
+      const project = projectSignals(readText(path))
+      found.plugins ||= project.plugins
+      found.takes ||= project.takes
+    }
   }
   return {
     pluginsScanned: Array.isArray(catalog?.plugins) && catalog.plugins.length > 0,
-    projectUsesPlugins: projectUsesPlugins(autosave?.masterChain, autosave?.channelPlugins),
+    projectUsesPlugins: found.plugins,
     phoneRemoteUsed: existsSync(join(userDataDir, PHONE_REMOTE_SETTINGS_FILE)),
     heartsKeySet: existsSync(join(userDataDir, RADIO_HEARTS_KEY_FILE)),
-    recordingsMade: TAKE_FILE_MARKERS.some((m) => autosaveText.includes(m))
+    recordingsMade: found.takes,
+    soundDefaultsSet: existsSync(join(userDataDir, SOUND_SETTINGS_FILE))
   }
 }
 
@@ -98,7 +177,9 @@ export function loadAppFeatures(): AppFeatureSettings {
     current = readStored(path)
     return { ...current }
   }
-  const decided = advancedFeaturesDefault(detectAdvancedUse(app.getPath('userData')))
+  const decided = advancedFeaturesDefault(
+    detectAdvancedUse(app.getPath('userData'), { projectLibraryDir: libraryRootPath() })
+  )
   const settings: AppFeatureSettings = { advancedFeatures: decided.on }
   writeSettings(settings, decided.because)
   if (decided.on) {

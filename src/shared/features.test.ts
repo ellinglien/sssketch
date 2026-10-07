@@ -47,7 +47,8 @@ describe('advancedFeaturesDefault (the migration rule)', () => {
     projectUsesPlugins: false,
     phoneRemoteUsed: false,
     heartsKeySet: false,
-    recordingsMade: false
+    recordingsMade: false,
+    soundDefaultsSet: false
   }
 
   it('is off when nothing advanced was ever used', () => {

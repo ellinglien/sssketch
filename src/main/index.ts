@@ -109,7 +109,11 @@ import {
   startRemoteServer,
   type RemoteServerHandle
 } from './remoteServer'
-import { loadPhoneRemoteSettings, savePhoneRemoteSettings } from './phoneRemoteSettingsStore'
+import {
+  loadPhoneRemoteSettings,
+  recordPhoneRemoteStarted,
+  savePhoneRemoteSettings
+} from './phoneRemoteSettingsStore'
 import {
   currentAppFeatures,
   engineAudioInputWanted,
@@ -678,11 +682,6 @@ app.whenReady().then(async () => {
   // src/main/workCounters.ts. A no-op in packaged builds.
   enableWorkCounters(!app.isPackaged)
 
-  // The advanced features switch (appFeaturesStore.ts): read -- and on the
-  // first launch with it, decided from earlier use -- before the engine
-  // spawns, since the engine's audio input (the microphone request) follows it.
-  loadAppFeatures()
-
   // One-time, idempotent relocation of the project library from its old
   // default (~/Music/sssketch/ directly) onto its new one
   // (~/Music/sssketch/projects/) -- see projectLibraryMigration.ts's own
@@ -697,6 +696,13 @@ app.whenReady().then(async () => {
   // time opening that connection -- moving the directory out from under an
   // already-open one would corrupt it.
   migrateRiffLibraryLocation()
+
+  // The advanced features switch (appFeaturesStore.ts): read -- and on the
+  // first launch with it, decided from earlier use -- before the engine
+  // spawns, since the engine's audio input (the microphone request) follows
+  // it. After the project library's relocation above: the first-launch
+  // decision reads the library's newest projects where they now live.
+  loadAppFeatures()
 
   // Whose own stems come first, known from the last launch until the
   // renderer reports it again (report-own-username): the startup prewarm's
@@ -1047,6 +1053,8 @@ app.whenReady().then(async () => {
     const lanAddress = lanIPv4Address(loadPhoneRemoteSettings().preferredAddress)
     if (lanAddress === null) return phoneRemoteStatus()
     startPhoneRemoteOn(lanAddress)
+    // The advanced features migration's trace of the remote (appFeaturesStore.ts).
+    recordPhoneRemoteStarted()
     return phoneRemoteStatus()
   })
 
@@ -1083,7 +1091,9 @@ app.whenReady().then(async () => {
   ipcMain.handle('set-advanced-features', (_event, on: boolean): AppFeatureSettings => {
     saveAppFeatures({ advancedFeatures: on === true })
     const settings = currentAppFeatures()
-    if (!featureEnabled('phoneRemote', settings) && remoteServer) {
+    // Unconditionally, not only with a server up: stopPhoneRemote also
+    // stops the remote's loop renderer (an engine), which can outlive it.
+    if (!featureEnabled('phoneRemote', settings)) {
       stopPhoneRemote()
       mainWindow?.webContents.send('phone-remote-status', phoneRemoteStatus())
     }

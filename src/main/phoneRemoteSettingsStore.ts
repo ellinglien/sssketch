@@ -59,3 +59,12 @@ export function savePhoneRemoteSettings(settings: PhoneRemoteSettings): void {
     console.error(`savePhoneRemoteSettings: failed to write ${storePath()}: ${message}`)
   }
 }
+
+/** The remote server started: makes sure this file exists, keeping a chosen address. Its
+ * existence is what the advanced features migration reads as "the phone remote was used"
+ * (appFeaturesStore.ts) -- before this, only picking an address wrote it, and nothing else of the
+ * remote outlives a session (pairing is per session, its temp files are swept on stop). */
+export function recordPhoneRemoteStarted(): void {
+  if (existsSync(storePath())) return
+  savePhoneRemoteSettings({ ...DEFAULT_SETTINGS })
+}

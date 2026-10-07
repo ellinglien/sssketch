@@ -43,18 +43,23 @@ export function featureEnabled(id: FeatureId, settings: AppFeatureSettings | nul
   return settings?.advancedFeatures === true
 }
 
-/** What an install has already used, each read cheaply from userData (appFeaturesStore.ts). */
+/** What an install has already used, each read cheaply (appFeaturesStore.ts): small files in
+ * userData, plus a bounded number of the project library's newest projects. */
 export interface AdvancedUseSignals {
   /** pluginCatalog.json lists at least one plugin. */
   pluginsScanned: boolean
-  /** The autosaved project has a plugin in a master or channel slot. */
+  /** A project in the library (or the autosave, rarely there: it is deleted on every save) has a
+   * plugin in a master or channel slot. */
   projectUsesPlugins: boolean
-  /** phoneRemoteSettings.json exists: an address was picked in the phone remote's modal. */
+  /** phoneRemoteSettings.json exists: an address was picked in the phone remote's modal, or (from
+   * now on) the remote server has run. */
   phoneRemoteUsed: boolean
   /** A radio hearts key is saved. */
   heartsKeySet: boolean
-  /** The autosaved project holds an engine take. */
+  /** A project in the library (or the autosave) holds an engine take. */
   recordingsMade: boolean
+  /** soundSettings.json exists: sound defaults were saved (it is only written then). */
+  soundDefaultsSet: boolean
 }
 
 /** The migration rule: an install that has used ANY of the five starts with the switch on, so
@@ -69,7 +74,8 @@ export function advancedFeaturesDefault(signals: AdvancedUseSignals): {
     'projectUsesPlugins',
     'phoneRemoteUsed',
     'heartsKeySet',
-    'recordingsMade'
+    'recordingsMade',
+    'soundDefaultsSet'
   ]
   const because = order.filter((k) => signals[k])
   return { on: because.length > 0, because }

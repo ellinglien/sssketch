@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 
@@ -50,7 +50,88 @@ describe('appFeaturesStore', () => {
       )
     })
 
-    it('is on when the autosaved project has a plugin', async () => {
+    // The autosave is deleted on every save, so on most installs it isn't there: the project
+    // library is where earlier plugin use and recordings are found.
+    const libraryProject = (name: string, body: unknown, mtime?: Date): void => {
+      // app.getPath is mocked to `dir` for every name, so the default library root is
+      // <dir>/sssketch/projects (projectLibrary.ts).
+      const folder = join(dir, 'sssketch', 'projects', name)
+      mkdirSync(folder, { recursive: true })
+      const file = join(folder, `${name}.sssketchproj`)
+      writeFileSync(file, JSON.stringify(body))
+      if (mtime) utimesSync(file, mtime, mtime)
+    }
+
+    it('is on when a project in the library has a plugin, with no autosave', async () => {
+      libraryProject('a', { masterChain: [null, null, null, null] })
+      libraryProject('b', { masterChain: [null, 'verb', null, null], channelPlugins: {} })
+      const { loadAppFeatures } = await import('./appFeaturesStore')
+      expect(loadAppFeatures()).toEqual(ON)
+      expect(JSON.parse(readFileSync(join(dir, 'appFeatures.json'), 'utf-8')).migratedFrom).toEqual(
+        ['projectUsesPlugins']
+      )
+    })
+
+    it('is on when a project in the library has a channel plugin', async () => {
+      libraryProject('a', {
+        masterChain: [null, null, null, null],
+        channelPlugins: { c: [null, 'p'] }
+      })
+      const { loadAppFeatures } = await import('./appFeaturesStore')
+      expect(loadAppFeatures()).toEqual(ON)
+    })
+
+    it('is on when a project in the library holds a recorded take, with no autosave', async () => {
+      libraryProject('a', {
+        masterChain: [null, null, null, null],
+        rifffs: { g: { stems: [{ path: '/x/g/sssketch-recording-1234.wav' }] } }
+      })
+      const { loadAppFeatures } = await import('./appFeaturesStore')
+      expect(loadAppFeatures()).toEqual(ON)
+      expect(JSON.parse(readFileSync(join(dir, 'appFeatures.json'), 'utf-8')).migratedFrom).toEqual(
+        ['recordingsMade']
+      )
+    })
+
+    it('is off when the library`s projects use neither', async () => {
+      libraryProject('a', {
+        masterChain: [null, null, null, null],
+        channelPlugins: { c: [null, null] },
+        rifffs: { g: { stems: [{ path: '/x/g/a.wav' }] } }
+      })
+      const { loadAppFeatures } = await import('./appFeaturesStore')
+      expect(loadAppFeatures()).toEqual(OFF)
+    })
+
+    it('reads a bounded number of library projects, newest first', async () => {
+      libraryProject('old', { masterChain: ['verb', null, null, null] }, new Date(2026, 0, 1))
+      libraryProject('new1', { masterChain: [null, null, null, null] }, new Date(2026, 5, 1))
+      libraryProject('new2', { masterChain: [null, null, null, null] }, new Date(2026, 5, 2))
+      const { detectAdvancedUse } = await import('./appFeaturesStore')
+      const projectLibraryDir = join(dir, 'sssketch', 'projects')
+      expect(detectAdvancedUse(dir, { projectLibraryDir, maxProjects: 2 }).projectUsesPlugins).toBe(
+        false
+      )
+      expect(detectAdvancedUse(dir, { projectLibraryDir, maxProjects: 3 }).projectUsesPlugins).toBe(
+        true
+      )
+    })
+
+    it('shrugs off unreadable library projects and a missing library', async () => {
+      const folder = join(dir, 'sssketch', 'projects', 'broken')
+      mkdirSync(folder, { recursive: true })
+      writeFileSync(join(folder, 'broken.sssketchproj'), '{nope')
+      const { detectAdvancedUse } = await import('./appFeaturesStore')
+      expect(
+        detectAdvancedUse(dir, { projectLibraryDir: join(dir, 'sssketch', 'projects') })
+          .projectUsesPlugins
+      ).toBe(false)
+      expect(
+        detectAdvancedUse(dir, { projectLibraryDir: join(dir, 'nowhere') }).projectUsesPlugins
+      ).toBe(false)
+    })
+
+    it('is on when the autosaved project (rarely there) has a plugin', async () => {
       write('autosave.sssketchproj', {
         masterChain: [null, null, null, null],
         channelPlugins: { c: [null, 'p'] }
@@ -59,8 +140,8 @@ describe('appFeaturesStore', () => {
       expect(loadAppFeatures()).toEqual(ON)
     })
 
-    it('is on when the phone remote was set up', async () => {
-      write('phoneRemoteSettings.json', { preferredAddress: '192.168.2.151' })
+    it('is on when the phone remote was set up or has run', async () => {
+      write('phoneRemoteSettings.json', { preferredAddress: null })
       const { loadAppFeatures } = await import('./appFeaturesStore')
       expect(loadAppFeatures()).toEqual(ON)
     })
@@ -71,13 +152,37 @@ describe('appFeaturesStore', () => {
       expect(loadAppFeatures()).toEqual(ON)
     })
 
-    it('is on when the autosaved project holds a recorded take', async () => {
+    it('is on when sound defaults were saved', async () => {
+      write('soundSettings.json', { saturation: 0.2 })
+      const { loadAppFeatures } = await import('./appFeaturesStore')
+      expect(loadAppFeatures()).toEqual(ON)
+      expect(JSON.parse(readFileSync(join(dir, 'appFeatures.json'), 'utf-8')).migratedFrom).toEqual(
+        ['soundDefaultsSet']
+      )
+    })
+
+    it('is on when the autosaved project (rarely there) holds a recorded take', async () => {
       write('autosave.sssketchproj', {
         masterChain: [null, null, null, null],
         rifffs: { g: { stems: [{ path: '/x/g/sssketch-gated-take-1234.wav' }] } }
       })
       const { loadAppFeatures } = await import('./appFeaturesStore')
       expect(loadAppFeatures()).toEqual(ON)
+    })
+
+    it('never re-migrates an existing appFeatures.json, either way', async () => {
+      write('appFeatures.json', { advancedFeatures: true, migratedFrom: ['pluginsScanned'] })
+      const first = await import('./appFeaturesStore')
+      expect(first.loadAppFeatures()).toEqual(ON) // nothing here would turn it on now
+      vi.resetModules()
+      write('appFeatures.json', { advancedFeatures: false })
+      write('pluginCatalog.json', { plugins: [{ id: 'a' }], favouriteIds: [] })
+      libraryProject('a', { masterChain: ['verb', null, null, null] })
+      const second = await import('./appFeaturesStore')
+      expect(second.loadAppFeatures()).toEqual(OFF)
+      expect(JSON.parse(readFileSync(join(dir, 'appFeatures.json'), 'utf-8'))).toEqual({
+        advancedFeatures: false
+      })
     })
 
     it('decides once: a scan after the first launch does not flip it', async () => {
@@ -96,7 +201,8 @@ describe('appFeaturesStore', () => {
         projectUsesPlugins: false,
         phoneRemoteUsed: false,
         heartsKeySet: false,
-        recordingsMade: false
+        recordingsMade: false,
+        soundDefaultsSet: false
       })
     })
   })
