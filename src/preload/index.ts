@@ -11,7 +11,8 @@ import type {
   RiffLibraryJam,
   RiffLibraryRiffSummary,
   RiffLibraryResolvedRiff,
-  DiscoverSoundSourceFilter
+  DiscoverSoundSourceFilter,
+  SyncOutcome
 } from '@shared/riffLibraryTypes'
 import type { LinkLoopFolderResult, LoopEntry, LoopFolderListing } from '@shared/loopFolderTypes'
 import type { PluginCatalog } from '../main/pluginCatalog'
@@ -884,9 +885,11 @@ const api = {
   endlesssListJams: (): Promise<RiffLibraryJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
   endlesssJamRiffCount: (jamId: string): Promise<number | null> =>
     ipcRenderer.invoke('endlesss-jam-riff-count', jamId),
-  riffLibrarySyncStartSharedFeed: (userName: string): Promise<void> =>
+  // Resolves when the sync ends, saying why when it stopped short for a
+  // reason the user can act on (riffLibrarySync.ts's SyncOutcome).
+  riffLibrarySyncStartSharedFeed: (userName: string): Promise<SyncOutcome> =>
     ipcRenderer.invoke('riff-library-sync-start-shared-feed', userName),
-  riffLibrarySyncStartJam: (jamId: string, jamName: string): Promise<void> =>
+  riffLibrarySyncStartJam: (jamId: string, jamName: string): Promise<SyncOutcome> =>
     ipcRenderer.invoke('riff-library-sync-start-jam', jamId, jamName),
   riffLibrarySyncStatus: (
     jamCID: string

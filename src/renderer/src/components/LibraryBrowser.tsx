@@ -64,6 +64,7 @@ import {
   storeTypedRiffLibraryUsername
 } from '../audio/riffLibraryUsername'
 import { resolveOwnUsername } from '@shared/ownUsernameReport'
+import { syncOutcomeNote } from '@shared/syncOutcomeNote'
 
 // The "your username" setting is persisted locally (not in project files or
 // app state) since it's a per-person identity setting, not something that
@@ -364,6 +365,10 @@ export function LibraryBrowser({
     Record<string, { done: number; total: number; bytesDone: number }>
   >({})
   const [syncBaseCountByKey, setSyncBaseCountByKey] = useState<Record<string, number>>({})
+  // Why a jam's last sync stopped short, when the user can act on it ("log
+  // in to sync", a 429's wait) -- it used to end silently. Cleared when that
+  // jam's next sync starts.
+  const [syncNoteByKey, setSyncNoteByKey] = useState<Record<string, string>>({})
   // The jam's live riff count straight from Endlesss (not the local
   // warehouse) -- fetched below whenever a private jam is selected, purely
   // to warn before starting a sync that's going to take a while. null both
@@ -839,10 +844,20 @@ export function LibraryBrowser({
         delete next[key]
         return next
       })
+      setSyncNoteByKey((prev) => {
+        if (!(key in prev)) return prev
+        const next = { ...prev }
+        delete next[key]
+        return next
+      })
       const promise = jamCID.startsWith('shared:')
         ? window.rifffApi.riffLibrarySyncStartSharedFeed(jamCID.slice('shared:'.length))
         : window.rifffApi.riffLibrarySyncStartJam(jamCID, jamName)
       promise
+        .then((outcome) => {
+          const note = syncOutcomeNote(outcome, Date.now())
+          if (note !== null) setSyncNoteByKey((prev) => ({ ...prev, [key]: note }))
+        })
         .catch((err) => {
           console.error('LibraryBrowser: sync failed:', err)
         })
@@ -1617,6 +1632,7 @@ export function LibraryBrowser({
     selectedSyncKey !== null ? syncProgressByKey[selectedSyncKey] : undefined
   const selectedSyncBaseCount =
     (selectedSyncKey !== null ? syncBaseCountByKey[selectedSyncKey] : undefined) ?? 0
+  const selectedSyncNote = selectedSyncKey !== null ? syncNoteByKey[selectedSyncKey] : undefined
 
   // ---------------------------------------------------------------------
   // Escape-to-close
@@ -2087,6 +2103,11 @@ export function LibraryBrowser({
                                 synced {selectedSyncBaseCount + selectedSyncProgress.done} so far
                                 {selectedSyncProgress.bytesDone > 0 &&
                                   ` (${bytesLabel(selectedSyncProgress.bytesDone)})`}
+                              </span>
+                            )}
+                            {!selectedSyncingHere && selectedSyncNote !== undefined && (
+                              <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
+                                {selectedSyncNote}
                               </span>
                             )}
                           </div>
