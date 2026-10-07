@@ -67,7 +67,7 @@ import {
   scanTargetSourceKey,
   type PositionedStemJamPair
 } from './scanTargetCache'
-import { stemCIDsNeedingRework } from './stemAnalysisNeeds'
+import { stemCIDsNeedingRework, type YamnetAvailability } from './stemAnalysisNeeds'
 import { awaitTraitQuantileBuild, prewarmTraitQuantileTables } from './traitQuantileCache'
 import { countWork } from './workCounters'
 import { orderByStemPriority, type StemPrioritySets } from '@shared/stemPriorityOrder'
@@ -84,7 +84,7 @@ export interface LibraryScanWork {
   placeholdersSkipped: number
 }
 
-export interface LibraryScanWorkOptions {
+export interface LibraryScanWorkOptions extends YamnetAvailability {
   /** Pairs per anti-join window (default 2000). */
   windowSize?: number
   readdirFn?: (dir: string) => Promise<string[]>
@@ -118,6 +118,12 @@ type EarlierDb =
 const MISSING_A_ROW = `(
   NOT EXISTS (SELECT 1 FROM StemPeaksCache p WHERE p.StemCID = t.StemCID)
   OR NOT EXISTS (SELECT 1 FROM StemEmbeddingCache e WHERE e.StemCID = t.StemCID)
+  OR NOT EXISTS (SELECT 1 FROM StemFeatureCache f WHERE f.StemCID = t.StemCID))`
+
+/** MISSING_A_ROW without the YAMNet model: an embedding row can never be
+ * written, so its absence is not work (stemAnalysisNeeds.ts YamnetAvailability). */
+const MISSING_A_ROW_NO_YAMNET = `(
+  NOT EXISTS (SELECT 1 FROM StemPeaksCache p WHERE p.StemCID = t.StemCID)
   OR NOT EXISTS (SELECT 1 FROM StemFeatureCache f WHERE f.StemCID = t.StemCID))`
 
 const WINDOW_COLUMNS = `t.StemCID AS StemCID, t.OwnerJamCID AS OwnerJamCID, t.RiffCID AS RiffCID,
@@ -174,7 +180,8 @@ async function forEachLimited<T>(
 async function fullyRowed(
   ownDb: Database.Database,
   stemCIDs: readonly string[],
-  between: () => Promise<void>
+  between: () => Promise<void>,
+  yamnetAvailable: boolean
 ): Promise<{
   all: Set<string>
   features: Set<string>
@@ -197,11 +204,11 @@ async function fullyRowed(
     const chunk = stemCIDs.slice(i, i + ID_CHUNK)
     countWork('sql:library-scan-work.rows')
     const peaks = present('StemPeaksCache', chunk)
-    const embeddings = present('StemEmbeddingCache', chunk)
+    const embeddings = yamnetAvailable ? present('StemEmbeddingCache', chunk) : null
     const feats = present('StemFeatureCache', chunk)
     for (const cid of chunk) {
       if (feats.has(cid)) features.add(cid)
-      if (peaks.has(cid) && embeddings.has(cid) && feats.has(cid)) all.add(cid)
+      if (peaks.has(cid) && (embeddings?.has(cid) ?? true) && feats.has(cid)) all.add(cid)
     }
     await between()
   }
@@ -251,12 +258,16 @@ export async function listLibraryScanWork(
   // otherwise do, so wait for it rather than parse twice.
   await prewarmTraitQuantileTables(ownDb)
   await awaitTraitQuantileBuild(ownDb)
-  const rework = await stemCIDsNeedingRework(ownDb)
+  const yamnetAvailable = options.yamnetAvailable !== false
+  const missingARow = yamnetAvailable ? MISSING_A_ROW : MISSING_A_ROW_NO_YAMNET
+  const rework = await stemCIDsNeedingRework(ownDb, { yamnetAvailable })
   // ...only those with all three rows: a stem missing one is the anti-join's.
   const maybeYield = async (): Promise<void> => {
     if (sliceSpent()) await yieldSlice()
   }
-  const reworkAnalysed = [...(await fullyRowed(ownDb, [...rework], maybeYield)).all].sort()
+  const reworkAnalysed = [
+    ...(await fullyRowed(ownDb, [...rework], maybeYield, yamnetAvailable)).all
+  ].sort()
   countWork('library-scan-work.rework', reworkAnalysed.length)
 
   const earlier: EarlierDb[] = []
@@ -338,12 +349,12 @@ export async function listLibraryScanWork(
     const windowed = ownDb.prepare(
       `SELECT ${WINDOW_COLUMNS} FROM DiscoverScanTargetCache t
        WHERE t.SourceDbKey = ? AND (t.StemCID, t.OwnerJamCID) > (?, ?)
-         AND (t.StemCID, t.OwnerJamCID) <= (?, ?) AND ${MISSING_A_ROW}
+         AND (t.StemCID, t.OwnerJamCID) <= (?, ?) AND ${missingARow}
        ORDER BY t.StemCID, t.OwnerJamCID`
     )
     const lastWindow = ownDb.prepare(
       `SELECT ${WINDOW_COLUMNS} FROM DiscoverScanTargetCache t
-       WHERE t.SourceDbKey = ? AND (t.StemCID, t.OwnerJamCID) > (?, ?) AND ${MISSING_A_ROW}
+       WHERE t.SourceDbKey = ? AND (t.StemCID, t.OwnerJamCID) > (?, ?) AND ${missingARow}
        ORDER BY t.StemCID, t.OwnerJamCID`
     )
     let after: [string, string] = ['', '']
@@ -432,7 +443,7 @@ export async function listLibraryScanWork(
     const ids = [...decided.keys()].sort()
     for (let i = 0; i < ids.length; i += ID_CHUNK) {
       const chunk = ids.slice(i, i + ID_CHUNK)
-      const rows = await fullyRowed(ownDb, chunk, maybeYield)
+      const rows = await fullyRowed(ownDb, chunk, maybeYield, yamnetAvailable)
       const batch: Candidate[] = []
       for (const id of chunk) {
         if (rows.all.has(id) && !rework.has(id)) continue // analysed, nothing to do

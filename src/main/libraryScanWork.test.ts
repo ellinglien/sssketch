@@ -228,6 +228,27 @@ function asMap(work: { key: string; path: string }[]): Map<string, string> {
 }
 
 describe('listLibraryScanWork (background scan audit 3)', () => {
+  it('with no YAMNet model, a missing embedding or zero-shot is not work (audit B3)', async () => {
+    const { own, jams } = fixture()
+    // analysed but for the embedding, on disk: with no model, nothing to do
+    analyse(own, 'f1noembed', { embedding: false })
+    putFile('jamD', 'f1noembed')
+    seedRiff(jams[0].dbForJam, 'r5', 'jamD', ['f1noembed'])
+
+    const withModel = asMap((await listLibraryScanWork(jams, own)).work)
+    expect(withModel.has('f1noembed')).toBe(true)
+    expect(withModel.has('c1zeroshot')).toBe(true)
+
+    const result = await listLibraryScanWork(jams, own, { yamnetAvailable: false })
+    const work = asMap(result.work)
+    expect(work.has('f1noembed')).toBe(false)
+    expect(work.has('c1zeroshot')).toBe(false)
+    // everything else is unchanged: the never-analysed and stale stems are still work
+    expect([...work.keys()].sort()).toEqual(
+      [...withModel.keys()].filter((k) => k !== 'f1noembed' && k !== 'c1zeroshot').sort()
+    )
+  })
+
   it('equals the oracle: listLibraryScanTargets filtered by needsAnyAnalysis, minus placeholders', async () => {
     const { own, jams } = fixture()
     const result = await listLibraryScanWork(jams, own)

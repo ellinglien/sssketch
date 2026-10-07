@@ -12,6 +12,11 @@ import { countWork } from '../perf/workCounters'
 
 let worker: Worker | null = null
 let readyPromise: Promise<void> | null = null
+/** Main answered "no model" (readYamnetModelBytes gave null): settled for
+ * this launch, unlike a failed ask, which is retried. Every later stem
+ * answers null at once, with no IPC and no log line per stem (share-
+ * readiness audit B3: every release up to 1.4.0 shipped without the model). */
+let modelMissing = false
 let nextRequestId = 0
 const pending = new Map<
   number,
@@ -89,7 +94,11 @@ function ensureReady(): Promise<void> {
   if (readyPromise) return readyPromise
   readyPromise = (async () => {
     const modelBytes = await window.rifffApi.getYamnetModel()
-    if (!modelBytes) throw new Error('yamnetClient: model bytes unavailable')
+    if (!modelBytes) {
+      modelMissing = true
+      console.warn('yamnetClient: no YAMNet model in this build -- embeddings are off this launch')
+      throw new Error('yamnetClient: no YAMNet model in this build (embeddings off this launch)')
+    }
     getWorker().postMessage({ type: 'init', modelBytes }, [modelBytes.buffer])
     await new Promise<void>((resolve, reject) => {
       const w = getWorker()
@@ -125,11 +134,14 @@ function ensureReady(): Promise<void> {
 export async function extractEmbeddingAndTopClass(
   pcm: Float32Array
 ): Promise<{ embedding: number[]; topClassIndex: number | null } | null> {
+  if (modelMissing) return null
   countWork('yamnet')
   try {
     await ensureReady()
   } catch (err) {
-    console.error('yamnetClient: model failed to load', err)
+    // A missing model was logged once where it was found (stems already in
+    // flight then all land here at once).
+    if (!modelMissing) console.error('yamnetClient: model failed to load', err)
     return null
   }
   return new Promise((resolve) => {

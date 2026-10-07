@@ -211,7 +211,7 @@ import { getStemPeaksCache, setStemPeaksCache, type StemPeaks } from './stemPeak
 import { getStemGlyphCache, setStemGlyphCache } from './stemGlyphCacheStore'
 import type { StemGlyphCacheEntry, StemGlyphCacheWrite } from '@shared/glyphBands'
 import { getStemEmbeddingCache, setStemEmbeddingCache } from './stemEmbeddingCacheStore'
-import { readYamnetModelBytes } from './yamnetModel'
+import { readYamnetModelBytes, yamnetModelAvailable } from './yamnetModel'
 import { enableWorkCounters } from './workCounters'
 import { getStemAnalysisNeeds } from './stemAnalysisNeeds'
 import { writeStemAnalysisResults } from './stemAnalysisResultsWriter'
@@ -1819,7 +1819,8 @@ app.whenReady().then(async () => {
       return listLibraryScanWork(
         listJamsWithDb().map(({ jamCID, db }) => ({ jamCID, dbForJam: db })),
         openOwnRiffLibraryDb(),
-        { priority: getStemPriority() }
+        // No model (audit B3): a missing embedding is not work.
+        { priority: getStemPriority(), yamnetAvailable: yamnetModelAvailable() }
       )
     }
   )
@@ -1891,7 +1892,9 @@ app.whenReady().then(async () => {
   ipcMain.handle(
     'get-stem-analysis-needs',
     (_event, paths: string[]): Promise<StemAnalysisNeeds[]> =>
-      getStemAnalysisNeeds(openOwnRiffLibraryDb(), paths)
+      getStemAnalysisNeeds(openOwnRiffLibraryDb(), paths, undefined, {
+        yamnetAvailable: yamnetModelAvailable()
+      })
   )
 
   ipcMain.handle('get-stem-feature-cache', (_event, path: string): StemFeatures | null =>

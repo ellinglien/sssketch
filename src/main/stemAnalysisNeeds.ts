@@ -19,6 +19,16 @@ import {
 
 const DEFAULT_CHUNK_SIZE = 500
 
+/** Whether the YAMNet model shipped (yamnetModel.ts yamnetModelAvailable).
+ * False: no stem needs the embedding or zero-shot step, since neither can
+ * ever run -- otherwise every stem lacking an embedding (all of them, in a
+ * build without the model: every release up to 1.4.0) stayed "needs work"
+ * forever, and each scan pass decoded it again only to fail (share-readiness
+ * audit B3). Absent: available. */
+export interface YamnetAvailability {
+  yamnetAvailable?: boolean
+}
+
 function yieldToEventLoop(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve))
 }
@@ -130,7 +140,10 @@ const REWORK_PAGE_SIZE = 2000
  * one JSON pass over StemFeatureCache in keyset pages with a yield after each. The zero-shot
  * half reads StemEmbeddingCache in key windows of REWORK_PAGE_SIZE (bounded statements, a yield
  * between). Never `.iterate()`. */
-export async function stemCIDsNeedingRework(db: Database.Database): Promise<Set<string>> {
+export async function stemCIDsNeedingRework(
+  db: Database.Database,
+  options: YamnetAvailability = {}
+): Promise<Set<string>> {
   const out = new Set<string>()
   const table = getTraitValueTable(db)
   if (table) {
@@ -162,6 +175,7 @@ export async function stemCIDsNeedingRework(db: Database.Database): Promise<Set<
       await yieldToEventLoop()
     }
   }
+  if (options.yamnetAvailable === false) return out
   for (const stemCID of await allZeroShotPendingStemCIDs(db)) out.add(stemCID)
   return out
 }
@@ -247,15 +261,18 @@ function zeroShotPendingStemCIDs(db: Database.Database, stemCIDs: string[]): Set
  * layout, see stemCIDForPath); a path with no cache rows simply needs
  * everything, exactly what the per-module getters would conclude -- except
  * that a path whose basename is not a library stem name (isLibraryStemName:
- * it contains `.`) never needs the embedding or zero-shot (YAMNet) step. Batched: one query per cache
+ * it contains `.`) never needs the embedding or zero-shot (YAMNet) step, nor
+ * does any path when the model is missing (`options.yamnetAvailable`). Batched: one query per cache
  * table per chunk of `chunkSize` paths (via `.all()`, never `.iterate()`
  * across the yields), yielding to the event loop between chunks.
  */
 export async function getStemAnalysisNeeds(
   db: Database.Database,
   paths: string[],
-  chunkSize = DEFAULT_CHUNK_SIZE
+  chunkSize = DEFAULT_CHUNK_SIZE,
+  options: YamnetAvailability = {}
 ): Promise<StemAnalysisNeeds[]> {
+  const yamnet = options.yamnetAvailable !== false
   const out: StemAnalysisNeeds[] = []
   for (let start = 0; start < paths.length; start += chunkSize) {
     if (start > 0) await yieldToEventLoop()
@@ -270,7 +287,7 @@ export async function getStemAnalysisNeeds(
       // Not a library stem name (a drag-imported, baked or loop-folder file):
       // its YAMNet result could never be stored, so it never needs one (audit
       // 6). Peaks and features stay needed -- they are used in-session.
-      const library = isLibraryStemName(stemCID)
+      const library = isLibraryStemName(stemCID) && yamnet
       out.push({
         peaks: !peaks.has(stemCID),
         features: !features.current.has(stemCID),

@@ -17,6 +17,28 @@ function yamnetModelPath(): string {
   return join(app.getAppPath(), 'resources', 'yamnet', 'yamnet.onnx')
 }
 
+let available: boolean | null = null
+
+/** Whether the YAMNet model is there -- checked once per launch, and a
+ * missing model logged once (not once per stem). The ambient scans then stop
+ * asking for embeddings and zero-shot at all (stemAnalysisNeeds.ts
+ * YamnetAvailability): every release up to 1.4.0 shipped without the model,
+ * and each scan pass decoded every stem again only for its embedding to fail
+ * (share-readiness audit B3). Once per launch, so a model vendored mid-
+ * session (dev) takes effect on the next launch. */
+export function yamnetModelAvailable(): boolean {
+  if (available === null) {
+    const path = yamnetModelPath()
+    available = existsSync(path)
+    if (!available) {
+      console.warn(
+        `yamnet: no model at ${path} -- stem similarity embeddings and zero-shot categories are off this launch`
+      )
+    }
+  }
+  return available
+}
+
 /** Reads the vendored YAMNet ONNX model's raw bytes -- returned to the
  * renderer over IPC (get-yamnet-model) for onnxruntime-web's
  * InferenceSession.create() to consume directly (it accepts a Uint8Array,
@@ -35,7 +57,6 @@ function yamnetModelPath(): string {
  * over IPC, not a new pattern. The existsSync check stays synchronous --
  * it's a cheap stat, not a bulk read. */
 export async function readYamnetModelBytes(): Promise<Uint8Array | null> {
-  const path = yamnetModelPath()
-  if (!existsSync(path)) return null
-  return new Uint8Array(await readFile(path))
+  if (!yamnetModelAvailable()) return null
+  return new Uint8Array(await readFile(yamnetModelPath()))
 }

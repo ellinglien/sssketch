@@ -333,6 +333,44 @@ describe('getStemAnalysisNeeds', () => {
     expect(pending.has('z01999')).toBe(false)
   })
 
+  it('with no YAMNet model, nothing needs the embedding or zero-shot step (audit B3)', async () => {
+    const db = freshDb()
+    // everything but the embedding: with no model, there is nothing left to do
+    addFeatures(db, 'noembed', current)
+    addPeaks(db, 'noembed')
+    // zero-shot pending: an embedding from when the model was there
+    addFeatures(db, 'zs', current)
+    addPeaks(db, 'zs')
+    addEmbedding(db, 'zs')
+    db.prepare(`INSERT INTO Stems VALUES ('zs', 'jam', NULL)`).run()
+
+    const paths = ['/lib/j/noembed', '/lib/j/zs', '/lib/j/never']
+    const withModel = await getStemAnalysisNeeds(db, paths)
+    expect(withModel.map((n) => [n.embedding, n.zeroShot])).toEqual([
+      [true, false],
+      [false, true],
+      [true, false]
+    ])
+    const needs = await getStemAnalysisNeeds(db, paths, undefined, { yamnetAvailable: false })
+    expect(needs).toEqual([
+      { peaks: false, features: false, embedding: false, zeroShot: false },
+      { peaks: false, features: false, embedding: false, zeroShot: false },
+      { peaks: true, features: true, embedding: false, zeroShot: false }
+    ])
+    expect(needsAnyAnalysis(needs[0])).toBe(false)
+    expect(needsAnyAnalysis(needs[1])).toBe(false)
+  })
+
+  it('stemCIDsNeedingRework: no zero-shot half with no YAMNet model', async () => {
+    const db = freshDb()
+    addFeatures(db, 'zs', current)
+    addEmbedding(db, 'zs')
+    db.prepare(`INSERT INTO Stems VALUES ('zs', 'jam', NULL)`).run()
+    addFeatures(db, 'stale', v1)
+    expect([...(await stemCIDsNeedingRework(db))].sort()).toEqual(['stale', 'zs'])
+    expect([...(await stemCIDsNeedingRework(db, { yamnetAvailable: false }))]).toEqual(['stale'])
+  })
+
   it('returns an empty list for no paths without querying', async () => {
     expect(await getStemAnalysisNeeds(freshDb(), [])).toEqual([])
   })
