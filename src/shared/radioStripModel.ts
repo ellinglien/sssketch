@@ -283,6 +283,9 @@ function soundDial(
 export function radioStripMixControls(): RadioStripControl[] {
   return [
     panel('similar-all', 'similar all'),
+    // Listed always, so the coverage tests keep pinning it; DRAWN only with a hearts key and the
+    // advanced features switch on (heartsButtonShown, @shared/features): RadioMixActions skips
+    // it when DiscoverPanel's bundle carries no `hearts`.
     panel('fetch-hearts', 'fetch hearts', { tooltip: 'fetch radio hearts' }),
     panel('add-to-shelf', 'add to shelf'),
     panel('add-to-timeline', 'add to timeline'),

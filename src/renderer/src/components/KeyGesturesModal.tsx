@@ -1,4 +1,6 @@
 import { KEY_GESTURES } from '@shared/keyGestures'
+import { visibleForFeatures } from '@shared/features'
+import { useAppFeatures } from '../state/appFeatures'
 
 /** Settings menu's "keys and gestures…" entry — the app's only
  * documentation of its own shortcuts and mouse gestures, after the copy
@@ -14,6 +16,9 @@ import { KEY_GESTURES } from '@shared/keyGestures'
  * be held to the app's rules by a unit test — same arrangement as
  * tourSteps.ts and the tour. Nothing here decides what is in the list. */
 export function KeyGesturesModal({ onClose }: { onClose: () => void }): React.JSX.Element {
+  // Recording's three gestures are left out while the advanced features
+  // switch has it off (their handlers do nothing then).
+  const appFeatures = useAppFeatures()
   return (
     <div
       style={{
@@ -58,7 +63,7 @@ export function KeyGesturesModal({ onClose }: { onClose: () => void }): React.JS
               style={{ display: 'flex', flexDirection: 'column', gap: 'var(--ra-s-1)' }}
             >
               <span className="ra-eyebrow">{group.area}</span>
-              {group.gestures.map((gesture) => (
+              {visibleForFeatures(group.gestures, appFeatures).map((gesture) => (
                 <div
                   key={gesture.keys}
                   style={{

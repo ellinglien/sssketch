@@ -54,6 +54,7 @@ import {
 import { DEFAULT_DISCOVER_CHAOS, rankCandidates, pickReroll } from '@shared/discoverRanking'
 import { pickAdjacentCandidate } from '@shared/discoverAdjacentPick'
 import { heartFetchLabel } from '@shared/radioHearts'
+import { heartsButtonShown } from '@shared/features'
 import { manualChangesUndoneBy, UndoSnapshotSequence } from '@shared/discoverUndoWithdraw'
 import { applyTraitBar } from '@shared/traitBar'
 import {
@@ -454,6 +455,7 @@ import {
 } from '../perf/radioTrace'
 import { initialState, type AppState } from '../state/store'
 import { appSoundDefaultsNow } from '../state/appSoundDefaults'
+import { useAppFeatures, useRadioHeartsKeySet } from '../state/appFeatures'
 import {
   neutralCutoff,
   type AutomationPoint,
@@ -8311,6 +8313,11 @@ export function DiscoverPanel({
   // keep, held longer because it carries counts to read, not a tick.
   const [fetchingHearts, setFetchingHearts] = useState(false)
   const [heartsLabel, setHeartsLabel] = useState<string | null>(null)
+  // Both `fetch hearts` buttons: only with a hearts key AND the advanced
+  // features switch on (@shared/features heartsButtonShown). The hearts are
+  // visitors' hearts on Elling's own web radio; without a key the button
+  // could only say "no key".
+  const heartsShown = heartsButtonShown(useAppFeatures(), useRadioHeartsKeySet())
 
   // The phone remote's arcade-ish counters. A run is a session -- these live
   // with the panel and reset when it unmounts or the app restarts. No points,
@@ -13389,13 +13396,15 @@ export function DiscoverPanel({
       pulse: keptLabel !== null,
       onClick: () => void keepGroup()
     },
-    hearts: {
-      label: fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts'),
-      disabled: fetchingHearts || listenOnly.has('fetchHearts'),
-      tooltip: listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts',
-      pulse: heartsLabel !== null,
-      onClick: () => void fetchHearts()
-    },
+    hearts: heartsShown
+      ? {
+          label: fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts'),
+          disabled: fetchingHearts || listenOnly.has('fetchHearts'),
+          tooltip: listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts',
+          pulse: heartsLabel !== null,
+          onClick: () => void fetchHearts()
+        }
+      : undefined,
     shelf: {
       label: addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf',
       disabled: addingToShelf || listenOnly.has('addToShelf'),
@@ -13900,26 +13909,28 @@ export function DiscoverPanel({
             >
               {keeping ? 'keeping…' : (keptLabel ?? 'keep')}
             </button>
-            <button
-              onClick={() => void fetchHearts()}
-              disabled={fetchingHearts || listenOnly.has('fetchHearts')}
-              data-tooltip={listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts'}
-              style={{
-                fontFamily: 'inherit',
-                fontSize: 10,
-                padding: '6px 14px',
-                background: 'transparent',
-                border: '1px solid var(--ra-border-strong)',
-                color:
-                  fetchingHearts || listenOnly.has('fetchHearts')
-                    ? 'var(--ra-text-4)'
-                    : 'var(--ra-text)',
-                cursor: fetchingHearts || listenOnly.has('fetchHearts') ? 'default' : 'pointer',
-                animation: heartsLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
-              }}
-            >
-              {fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts')}
-            </button>
+            {heartsShown && (
+              <button
+                onClick={() => void fetchHearts()}
+                disabled={fetchingHearts || listenOnly.has('fetchHearts')}
+                data-tooltip={listenOnly.has('fetchHearts') ? listenOnlyTip : 'fetch radio hearts'}
+                style={{
+                  fontFamily: 'inherit',
+                  fontSize: 10,
+                  padding: '6px 14px',
+                  background: 'transparent',
+                  border: '1px solid var(--ra-border-strong)',
+                  color:
+                    fetchingHearts || listenOnly.has('fetchHearts')
+                      ? 'var(--ra-text-4)'
+                      : 'var(--ra-text)',
+                  cursor: fetchingHearts || listenOnly.has('fetchHearts') ? 'default' : 'pointer',
+                  animation: heartsLabel !== null ? 'discover-add-pulse 500ms ease-out' : undefined
+                }}
+              >
+                {fetchingHearts ? 'fetching…' : (heartsLabel ?? 'fetch hearts')}
+              </button>
+            )}
             <button
               onClick={() => void addToShelf()}
               disabled={addingToShelf || listenOnly.has('addToShelf')}

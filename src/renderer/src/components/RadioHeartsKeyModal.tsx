@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { RadioHeartsKeyStatus } from '@shared/radioHearts'
+import { refreshRadioHeartsKeyStatus } from '../state/appFeatures'
 
 /** Settings menu's "radio hearts key…" entry -- the key Discover's "fetch
  * hearts" sends to ell.ing/radio's private hearts.json. Main keeps it
@@ -27,6 +28,8 @@ export function RadioHeartsKeyModal({ onClose }: { onClose: () => void }): React
   async function save(key: string | null): Promise<void> {
     setStatus(await window.rifffApi.setRadioHeartsKey(key))
     setDraft('')
+    // Discover's `fetch hearts` buttons show only with a key (appFeatures.ts).
+    refreshRadioHeartsKeyStatus()
   }
 
   const buttonStyle = {

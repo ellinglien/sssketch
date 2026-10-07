@@ -6,6 +6,7 @@ import {
   type DispatchableAction
 } from './StoreContext'
 import { stopActivePreview } from '../audio/previewLoop'
+import { useFeatureEnabled } from './appFeatures'
 import type { LoopRegion } from './store'
 import type { Dispatch } from 'react'
 
@@ -101,6 +102,11 @@ export function useGatedRecordingControls(): {
   const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
+  // The advanced features switch (@shared/features): with recording off,
+  // nothing STARTS a pass -- not the \ key, not the rec dot, not a name bar's
+  // double-click. Lock-in and disable still work, so a pass already running
+  // when the switch went off can be finished or dropped.
+  const recordingOn = useFeatureEnabled('recording')
 
   // Three separate actions (below), not one toggle-everything function:
   // enable (off -> on, \ key or clicking the rec dot while off), lock in
@@ -117,6 +123,7 @@ export function useGatedRecordingControls(): {
     // while a previous call is still awaiting the native IPC round trip
     // below, regardless of which component instance's closure this call
     // came from.
+    if (!recordingOn) return
     if (enablingGatedRecording) return
     enablingGatedRecording = true
     try {
@@ -419,6 +426,7 @@ export function useGatedRecordingControls(): {
   // having to splice a live loop-region change into an already-running
   // native capture.
   async function targetRifffForRecording(groupId: string, region: LoopRegion): Promise<void> {
+    if (!recordingOn) return
     if (!region) return
     // Re-clicking the rifff that's ALREADY the current target is a no-op
     // refresh, not a re-target -- covers the case where the clip's own

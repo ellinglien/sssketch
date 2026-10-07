@@ -13,6 +13,7 @@ const BUFFER_SIZE_OPTIONS = [128, 256, 512, 1024, 2048, 4096]
 
 export function AudioDeviceModal({
   onClose,
+  showInput = true,
   availableInputDevices,
   selectedInputDevice,
   onChangeInput,
@@ -24,6 +25,9 @@ export function AudioDeviceModal({
   onChangeBufferSize
 }: {
   onClose: () => void
+  /** The `audio in` row: only with recording on (the advanced features switch, @shared/features).
+   * Nothing else here records. */
+  showInput?: boolean
   availableInputDevices: string[]
   /** Already restored by the time this modal can even be opened —
    * TransportBar.tsx's own mount-time fetch/restore effects run well
@@ -76,27 +80,29 @@ export function AudioDeviceModal({
       >
         <p style={{ margin: 0, fontSize: 11, color: 'var(--ra-text)' }}>audio settings</p>
 
-        <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-          <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>audio in</span>
-          <select
-            value={selectedInputDevice ?? ''}
-            disabled={isAnyChannelArmed}
-            title={isAnyChannelArmed ? 'disarm recording first' : undefined}
-            onChange={(e) => onChangeInput(e.target.value || null)}
-            style={{ ...selectStyle, cursor: isAnyChannelArmed ? 'not-allowed' : 'pointer' }}
-          >
-            <option value="">
-              {availableInputDevices.length === 0
-                ? 'no input devices found'
-                : 'select input device...'}
-            </option>
-            {availableInputDevices.map((name) => (
-              <option key={name} value={name}>
-                {name}
+        {showInput && (
+          <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>audio in</span>
+            <select
+              value={selectedInputDevice ?? ''}
+              disabled={isAnyChannelArmed}
+              title={isAnyChannelArmed ? 'disarm recording first' : undefined}
+              onChange={(e) => onChangeInput(e.target.value || null)}
+              style={{ ...selectStyle, cursor: isAnyChannelArmed ? 'not-allowed' : 'pointer' }}
+            >
+              <option value="">
+                {availableInputDevices.length === 0
+                  ? 'no input devices found'
+                  : 'select input device...'}
               </option>
-            ))}
-          </select>
-        </label>
+              {availableInputDevices.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
 
         <label style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
           <span style={{ fontSize: 10, color: 'var(--ra-text-2)' }}>audio out</span>

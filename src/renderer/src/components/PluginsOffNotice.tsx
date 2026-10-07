@@ -1,0 +1,66 @@
+import { useEffect, useState, useSyncExternalStore } from 'react'
+import { featureEnabled, projectUsesPlugins } from '@shared/features'
+import { useAppFeatures } from '../state/appFeatures'
+import { useAppSelector } from '../state/StoreContext'
+import { projectOpenedCount, subscribeProjectOpened } from '../state/pendingPluginStates'
+
+/** Same window as StemsUnavailableIndicator: long enough to read twice, short enough that it
+ * never becomes furniture. */
+const VISIBLE_MS = 14_000
+
+/** A small, non-blocking pill, once per opened project: the project has add-on plugins, and the
+ * advanced features switch has plugins off, so they are not heard (StoreContext loads none).
+ * The project keeps them -- its slots and saved settings are written back as they were -- so
+ * this only says why it sounds different and where the switch is.
+ *
+ * Keyed on the project-opened count (StoreContext's restoreState), not on the slots, so an edit
+ * never brings it back; it waits for main's answer on the switch, so a project restored at
+ * startup still gets it. Same look and place as StemsUnavailableIndicator, one row below. */
+export function PluginsOffNotice(): React.JSX.Element | null {
+  const openCount = useSyncExternalStore(subscribeProjectOpened, projectOpenedCount)
+  const masterChain = useAppSelector((s) => s.masterChain)
+  const channelPlugins = useAppSelector((s) => s.channelPlugins)
+  const appFeatures = useAppFeatures()
+  const [dismissedCount, setDismissedCount] = useState(0)
+
+  const show =
+    openCount > dismissedCount &&
+    appFeatures !== null &&
+    !featureEnabled('plugins', appFeatures) &&
+    projectUsesPlugins(masterChain, channelPlugins)
+
+  useEffect(() => {
+    if (!show) return
+    const timer = setTimeout(() => setDismissedCount(openCount), VISIBLE_MS)
+    return () => clearTimeout(timer)
+  }, [show, openCount])
+
+  if (!show) return null
+
+  return (
+    <button
+      onClick={() => setDismissedCount(openCount)}
+      title="plugins are off"
+      style={{
+        position: 'fixed',
+        top: 100,
+        right: 10,
+        zIndex: 2000,
+        display: 'flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '5px 10px',
+        fontFamily: 'inherit',
+        textAlign: 'left',
+        background: 'var(--ra-bg-bar)',
+        border: '1px solid var(--ra-border)',
+        borderRadius: 0,
+        fontSize: 9,
+        color: 'var(--ra-text-3)',
+        cursor: 'pointer'
+      }}
+    >
+      this project uses plugins · turn on advanced features to hear them
+    </button>
+  )
+}

@@ -25,11 +25,15 @@
  * narrower thing is what is written here.
  */
 
+import type { FeatureId } from './features'
+
 export interface KeyGesture {
   /** The key or the gesture itself, e.g. `cmd+s` or `option+drag an edge`. */
   keys: string
   /** What it does, as a phrase that completes "this…". No trailing period. */
   does: string
+  /** Only listed while this feature is on (the advanced features switch, ./features.ts). */
+  feature?: FeatureId
 }
 
 export interface KeyGestureGroup {
@@ -59,8 +63,8 @@ export const KEY_GESTURES: readonly KeyGestureGroup[] = [
       { keys: 'ruler: cmd+drag', does: 'move the playhead instead' },
       { keys: 'ruler: drag an edge', does: 'move the loop start or end' },
       { keys: 'ruler: double-click', does: 'clear the loop region' },
-      { keys: '/', does: 'add a recording channel' },
-      { keys: '\\', does: 'start a gated pass, or lock in the one running' }
+      { keys: '/', does: 'add a recording channel', feature: 'recording' },
+      { keys: '\\', does: 'start a gated pass, or lock in the one running', feature: 'recording' }
     ]
   },
   {
@@ -80,7 +84,11 @@ export const KEY_GESTURES: readonly KeyGestureGroup[] = [
       { keys: 'ctrl+right-click', does: 'solo the group' },
       { keys: 'double-click a waveform', does: 'reset that stem to its starting volume' },
       { keys: 'click the name bar', does: 'expand or collapse' },
-      { keys: 'double-click the name bar', does: 'loop this clip and record into it' },
+      {
+        keys: 'double-click the name bar',
+        does: 'loop this clip and record into it',
+        feature: 'recording'
+      },
       { keys: 'right-click the name bar', does: 'copy, duplicate, ungroup, delete' }
     ]
   },

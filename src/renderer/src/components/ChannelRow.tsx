@@ -8,6 +8,7 @@ import { ChannelChainPanel } from './ChannelChainPanel'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { busColorHex } from '../theme/typeColor'
 import { risersOnChannel } from '@shared/riser'
+import { useFeatureEnabled } from '../state/appFeatures'
 import { linearToMeterFraction, nextMeterValue } from '../audio/meterBallistics'
 import {
   getStateSnapshot,
@@ -154,6 +155,11 @@ function ChannelRowImpl({
   const riserIds = useMemo(() => channelRisers.map((riser) => riser.id), [channelRisers])
   const isRecordingChannel = useAppSelector((s) => !!s.recordingChannelIds[channelId])
   const isArmed = useAppSelector((s) => s.armedChannelId === channelId)
+  // The advanced features switch (@shared/features): the arm button goes
+  // with recording (kept while armed, so a take can still be stopped), the
+  // fx button and its panel with plugins.
+  const recordingOn = useFeatureEnabled('recording')
+  const pluginsOn = useFeatureEnabled('plugins')
   // Brief "click here to arm" pointer -- see App.tsx's own "/" key handler
   // for when this gets set (pressing "/" while this channel already
   // exists, empty and unarmed, rather than creating yet another one).
@@ -553,7 +559,7 @@ function ChannelRowImpl({
           >
             s
           </button>
-          {CHANNEL_FX_BUTTON_ENABLED && (
+          {CHANNEL_FX_BUTTON_ENABLED && pluginsOn && (
             <button
               onClick={(e) => {
                 e.stopPropagation()
@@ -566,7 +572,7 @@ function ChannelRowImpl({
               fx
             </button>
           )}
-          {isRecordingChannel && (
+          {isRecordingChannel && (recordingOn || isArmed) && (
             <span style={{ position: 'relative', display: 'inline-block' }}>
               <button
                 onClick={(e) => {
@@ -799,7 +805,7 @@ function ChannelRowImpl({
           </div>
         </div>
       )}
-      {chainPanelOpen && (
+      {pluginsOn && chainPanelOpen && (
         <ChannelChainPanel channelId={channelId} onClose={() => setChainPanelOpen(false)} />
       )}
     </div>

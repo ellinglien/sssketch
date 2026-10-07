@@ -144,7 +144,9 @@ export interface RadioMixBundle {
   rolling: boolean
   onSimilarAll: (immediate: boolean) => void
   keep: RadioStripAction
-  hearts: RadioStripAction
+  /** Absent: not drawn -- `fetch hearts` needs a hearts key AND the advanced features switch
+   * (@shared/features heartsButtonShown). */
+  hearts?: RadioStripAction
   shelf: RadioStripAction
   timeline: RadioStripAction
 }
@@ -181,7 +183,7 @@ export function RadioMixActions({
           tooltip={mix.rolling ? 'rerolling…' : 'similar all'}
         />
       )}
-      {shown.has('fetch-hearts') && b('fetch-hearts', mix.hearts)}
+      {shown.has('fetch-hearts') && mix.hearts && b('fetch-hearts', mix.hearts)}
       {shown.has('add-to-shelf') && b('add-to-shelf', mix.shelf)}
       {shown.has('add-to-timeline') && b('add-to-timeline', mix.timeline)}
       {shown.has('keep') && b('keep', mix.keep, true)}

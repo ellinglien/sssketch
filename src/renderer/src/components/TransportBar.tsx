@@ -14,6 +14,12 @@ import { AudioDeviceModal } from './AudioDeviceModal'
 import { KeyGesturesModal } from './KeyGesturesModal'
 import { RadioHeartsKeyModal } from './RadioHeartsKeyModal'
 import { PhoneRemoteModal } from './PhoneRemoteModal'
+import { setAdvancedFeatures, useAppFeatures } from '../state/appFeatures'
+import { FEATURES, featureEnabled } from '@shared/features'
+
+/** The gear menu's switch tooltip: what it covers, and the one part that waits for a relaunch
+ * (the engine's audio input, i.e. the microphone, is opened or not at launch). */
+const ADVANCED_FEATURES_TOOLTIP = `${FEATURES.map((f) => f.label).join(', ')} · turning off frees the mic at the next launch`
 
 // Persisted per-machine (same pattern as LoreLibraryBrowser's own
 // loreUsername), not part of the project file -- selectedInputDevice/
@@ -300,6 +306,15 @@ export function TransportBar({
   const lanesAvailable = state.mode === 'normal'
   const pos = usePos()
   const playing = usePlaying()
+  // The advanced features switch (@shared/features, appFeatures.ts): each one
+  // hides its own controls here, live, no restart.
+  const appFeatures = useAppFeatures()
+  const advancedOn = appFeatures?.advancedFeatures === true
+  const phoneRemoteOn = featureEnabled('phoneRemote', appFeatures)
+  const recordingOn = featureEnabled('recording', appFeatures)
+  const pluginsOn = featureEnabled('plugins', appFeatures)
+  const soundDefaultsOn = featureEnabled('soundDefaults', appFeatures)
+  const heartsKeyOn = featureEnabled('radioHeartsKey', appFeatures)
   const [masterChainPanelOpen, setMasterChainPanelOpen] = useState(false)
   // The radio sound's settings: this project's (the sound button), or the app-wide defaults (the
   // gear menu's "sound defaults…"). One panel, two bindings -- see SoundSettingsPanel.tsx.
@@ -675,46 +690,50 @@ export function TransportBar({
         {playing ? '■' : '▶'}
       </button>
 
-      <button
-        onClick={() =>
-          state.gatedRecordingEnabled ? onDisableGatedRecording() : onEnableGatedRecording()
-        }
-        // Enabling needs a loop region selected first (see App.tsx's own
-        // enableGatedRecording, which otherwise just alerts and no-ops) --
-        // disabled rather than silently doing nothing on click, so the
-        // button itself communicates "you need a loop region first" before
-        // a click ever happens. Always enabled while recording mode is
-        // already on, regardless of loop region, so it can still be
-        // clicked to disable.
-        disabled={!state.gatedRecordingEnabled && !state.loopRegion}
-        aria-label={
-          state.gatedRecordingEnabled ? 'Disable gated recording' : 'Enable gated recording'
-        }
-        title={
-          state.gatedRecordingEnabled
-            ? 'recording mode: on'
-            : state.loopRegion
-              ? 'gated recording'
-              : 'needs loop region'
-        }
-        style={{
-          width: 22,
-          height: 22,
-          borderRadius: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          border: `1px solid ${state.gatedRecordingEnabled ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
-          background: 'var(--ra-bg-row-active)',
-          opacity: !state.gatedRecordingEnabled && !state.loopRegion ? 0.35 : 1,
-          cursor: !state.gatedRecordingEnabled && !state.loopRegion ? 'not-allowed' : 'pointer'
-        }}
-      >
-        <RecDotIcon
-          dim={!state.gatedRecordingEnabled}
-          pulse={state.gatedRecordingEnabled && playing}
-        />
-      </button>
+      {/* Kept while a pass is on, so one started before the switch went off
+          can still be stopped. */}
+      {(recordingOn || state.gatedRecordingEnabled) && (
+        <button
+          onClick={() =>
+            state.gatedRecordingEnabled ? onDisableGatedRecording() : onEnableGatedRecording()
+          }
+          // Enabling needs a loop region selected first (see App.tsx's own
+          // enableGatedRecording, which otherwise just alerts and no-ops) --
+          // disabled rather than silently doing nothing on click, so the
+          // button itself communicates "you need a loop region first" before
+          // a click ever happens. Always enabled while recording mode is
+          // already on, regardless of loop region, so it can still be
+          // clicked to disable.
+          disabled={!state.gatedRecordingEnabled && !state.loopRegion}
+          aria-label={
+            state.gatedRecordingEnabled ? 'Disable gated recording' : 'Enable gated recording'
+          }
+          title={
+            state.gatedRecordingEnabled
+              ? 'recording mode: on'
+              : state.loopRegion
+                ? 'gated recording'
+                : 'needs loop region'
+          }
+          style={{
+            width: 22,
+            height: 22,
+            borderRadius: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            border: `1px solid ${state.gatedRecordingEnabled ? 'var(--ra-recording-live)' : 'var(--ra-border)'}`,
+            background: 'var(--ra-bg-row-active)',
+            opacity: !state.gatedRecordingEnabled && !state.loopRegion ? 0.35 : 1,
+            cursor: !state.gatedRecordingEnabled && !state.loopRegion ? 'not-allowed' : 'pointer'
+          }}
+        >
+          <RecDotIcon
+            dim={!state.gatedRecordingEnabled}
+            pulse={state.gatedRecordingEnabled && playing}
+          />
+        </button>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
         {/* Remaining time leads now -- the biggest, most attention-grabbing
@@ -909,23 +928,29 @@ export function TransportBar({
         <AutomationIcon />
       </button>
 
-      <button
-        onClick={() => setMasterChainPanelOpen((open) => !open)}
-        aria-label="Toggle master chain panel"
-        data-tooltip="master plugin chain"
-        style={{
-          height: 22,
-          borderRadius: 0,
-          padding: '0 8px',
-          fontSize: 10,
-          background: masterChainPanelOpen ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-          border: `1px solid ${masterChainPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-          color: masterChainPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
-        }}
-      >
-        <SlidersIcon />
-      </button>
-      {masterChainPanelOpen && <MasterChainPanel onClose={() => setMasterChainPanelOpen(false)} />}
+      {pluginsOn && (
+        <button
+          onClick={() => setMasterChainPanelOpen((open) => !open)}
+          aria-label="Toggle master chain panel"
+          data-tooltip="master plugin chain"
+          style={{
+            height: 22,
+            borderRadius: 0,
+            padding: '0 8px',
+            fontSize: 10,
+            background: masterChainPanelOpen
+              ? 'var(--ra-stretch-on-bg)'
+              : 'var(--ra-bg-row-active)',
+            border: `1px solid ${masterChainPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
+            color: masterChainPanelOpen ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+          }}
+        >
+          <SlidersIcon />
+        </button>
+      )}
+      {pluginsOn && masterChainPanelOpen && (
+        <MasterChainPanel onClose={() => setMasterChainPanelOpen(false)} />
+      )}
 
       <button
         onClick={() => setSoundPanel((open) => (open === 'project' ? null : 'project'))}
@@ -944,24 +969,30 @@ export function TransportBar({
       >
         <SoundIcon />
       </button>
-      {soundPanel && <SoundSettingsPanel mode={soundPanel} onClose={() => setSoundPanel(null)} />}
+      {soundPanel && (soundPanel === 'project' || soundDefaultsOn) && (
+        <SoundSettingsPanel mode={soundPanel} onClose={() => setSoundPanel(null)} />
+      )}
 
-      <button
-        onClick={() => dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })}
-        aria-label="add another recording channel"
-        data-tooltip="add channel (/)"
-        style={{
-          height: 22,
-          borderRadius: 0,
-          padding: '0 8px',
-          fontSize: 10,
-          background: 'var(--ra-bg-row-active)',
-          border: '1px solid var(--ra-border)',
-          color: 'var(--ra-text-2)'
-        }}
-      >
-        <PlusMicIcon />
-      </button>
+      {recordingOn && (
+        <button
+          onClick={() =>
+            dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })
+          }
+          aria-label="add another recording channel"
+          data-tooltip="add channel (/)"
+          style={{
+            height: 22,
+            borderRadius: 0,
+            padding: '0 8px',
+            fontSize: 10,
+            background: 'var(--ra-bg-row-active)',
+            border: '1px solid var(--ra-border)',
+            color: 'var(--ra-text-2)'
+          }}
+        >
+          <PlusMicIcon />
+        </button>
+      )}
 
       <button
         ref={settingsButtonRef}
@@ -1002,15 +1033,19 @@ export function TransportBar({
             // not disabled rows under this one. Those rows only appeared if
             // you reopened the menu after switching the remote on, which is
             // exactly what nobody does.
-            {
-              label: phoneRemote?.running ? 'turn off phone remote…' : 'phone remote…',
-              onClick: () => void openPhoneRemote(),
-              disabled: phoneRemote !== null && phoneRemote.lanAddress === null,
-              title:
-                phoneRemote !== null && phoneRemote.lanAddress === null
-                  ? 'no network found'
-                  : undefined
-            },
+            ...(phoneRemoteOn
+              ? [
+                  {
+                    label: phoneRemote?.running ? 'turn off phone remote…' : 'phone remote…',
+                    onClick: () => void openPhoneRemote(),
+                    disabled: phoneRemote !== null && phoneRemote.lanAddress === null,
+                    title:
+                      phoneRemote !== null && phoneRemote.lanAddress === null
+                        ? 'no network found'
+                        : undefined
+                  }
+                ]
+              : []),
             {
               label: discoverConsented
                 ? 'turn off discover library scan'
@@ -1050,9 +1085,27 @@ export function TransportBar({
                   }
                 ]
               : []),
-            { label: 'sound defaults…', onClick: () => setSoundPanel('defaults') },
+            // "sound defaults…" is the app-wide sound a new project starts
+            // from (SoundSettingsPanel's `defaults` binding). Only this entry
+            // hides with the switch -- Elling: "just in the settings dropdown".
+            // The stored defaults keep applying; the transport's sound button
+            // and the radio strip's sound column edit THIS project's sound and
+            // stay.
+            ...(soundDefaultsOn
+              ? [{ label: 'sound defaults…', onClick: () => setSoundPanel('defaults') }]
+              : []),
             { label: 'keys and gestures…', onClick: () => setKeysModalOpen(true) },
-            { label: 'radio hearts key…', onClick: () => setRadioHeartsKeyOpen(true) },
+            ...(heartsKeyOn
+              ? [{ label: 'radio hearts key…', onClick: () => setRadioHeartsKeyOpen(true) }]
+              : []),
+            {
+              label: `advanced features: ${advancedOn ? 'on' : 'off'}`,
+              onClick: () => void setAdvancedFeatures(!advancedOn),
+              // Not clickable until main has said where it stands, so a click
+              // can never flip an unknown value.
+              disabled: appFeatures === null,
+              title: ADVANCED_FEATURES_TOOLTIP
+            },
             {
               label: 'audio…',
               onClick: () => {
@@ -1083,9 +1136,11 @@ export function TransportBar({
 
       {keysModalOpen && <KeyGesturesModal onClose={() => setKeysModalOpen(false)} />}
 
-      {radioHeartsKeyOpen && <RadioHeartsKeyModal onClose={() => setRadioHeartsKeyOpen(false)} />}
+      {heartsKeyOn && radioHeartsKeyOpen && (
+        <RadioHeartsKeyModal onClose={() => setRadioHeartsKeyOpen(false)} />
+      )}
 
-      {phoneRemoteView && (
+      {phoneRemoteOn && phoneRemoteView && (
         <PhoneRemoteModal
           view={phoneRemoteView}
           onClose={() => setPhoneRemoteAsked(false)}
@@ -1097,6 +1152,7 @@ export function TransportBar({
       {audioModalOpen && (
         <AudioDeviceModal
           onClose={() => setAudioModalOpen(false)}
+          showInput={recordingOn}
           availableInputDevices={availableInputDevices}
           selectedInputDevice={selectedInputDevice}
           isAnyChannelArmed={isAnyChannelArmed}

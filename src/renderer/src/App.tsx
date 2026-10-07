@@ -82,7 +82,7 @@ import type { CoachExportOp } from '@shared/coachTension'
 import { BusyProvider, useBusy } from './state/BusyContext'
 import { serializeProject, deserializeProject } from './state/serialize'
 import { hasUnsavedChanges } from './state/unsavedChanges'
-import { buildPluginStatesMap } from '@shared/pluginStates'
+import { buildPluginStatesMap, mergePendingPluginStates } from '@shared/pluginStates'
 import { AUTO_ARRANGE_MAX_BARS } from '@shared/autoArrangeApply'
 import { warmStemCaches } from './audio/warmStemCaches'
 import { BackgroundFeatureScan } from './audio/BackgroundFeatureScan'
@@ -91,6 +91,7 @@ import { DiscoverLibraryScan } from './audio/DiscoverLibraryScan'
 import { BackgroundWorkIndicator } from './components/BackgroundWorkIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { StemsUnavailableIndicator } from './components/StemsUnavailableIndicator'
+import { PluginsOffNotice } from './components/PluginsOffNotice'
 import { StartupGate } from './components/StartupGate'
 import { OwnUsernameReporter } from './components/OwnUsernameReporter'
 import { markManualSeek } from './state/manualSeek'
@@ -122,6 +123,8 @@ import { DEFAULT_RADIO_SETTINGS, type RadioSettings } from '@shared/radioSchedul
 import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
 import { mergeLatestSettings, nestedPatchFromLatest } from '@shared/latestSettings'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
+import { useFeatureEnabled } from './state/appFeatures'
+import { pendingPluginStatesRef } from './state/pendingPluginStates'
 
 /** Tracks what the currently-open project actually is, so Save/Export know
  * whether to write in place (no dialog) or fall back to the existing
@@ -1145,11 +1148,15 @@ function Frame(): React.JSX.Element {
   // never zero. The Endlesss-style gated recording feature (see the \
   // key handler below) always targets whichever one of these channels
   // comes first in channelOrder.
+  //
+  // Not with recording off (the advanced features switch, @shared/features):
+  // there is nothing to record onto then. Turning it on adds the channel.
+  const recordingOn = useFeatureEnabled('recording')
   useEffect(() => {
-    if (Object.keys(state.recordingChannelIds).length === 0) {
+    if (recordingOn && Object.keys(state.recordingChannelIds).length === 0) {
       dispatch({ type: 'ADD_RECORDING_CHANNEL', channelId: crypto.randomUUID() })
     }
-  }, [state.recordingChannelIds, dispatch])
+  }, [recordingOn, state.recordingChannelIds, dispatch])
 
   const history = useHistory()
   const playing = usePlaying()
@@ -1281,8 +1288,12 @@ function Frame(): React.JSX.Element {
       if (rawPluginStates === null) {
         throw new Error('failed to read current plugin state from the engine')
       }
-      const pluginStates = buildPluginStatesMap(
-        rawPluginStates,
+      // Plus the saved settings of any plugin not loaded into the engine --
+      // all of them while the advanced features switch has plugins off --
+      // so a save never drops what it read (mergePendingPluginStates).
+      const pluginStates = mergePendingPluginStates(
+        buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins),
+        pendingPluginStatesRef.current,
         state.masterChain,
         state.channelPlugins
       )
@@ -2472,7 +2483,7 @@ function Frame(): React.JSX.Element {
   // handleToggleArm's own normal path.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
-      if (e.key !== '/') return
+      if (e.key !== '/' || !recordingOn) return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       e.preventDefault()
@@ -2493,6 +2504,7 @@ function Frame(): React.JSX.Element {
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [
+    recordingOn,
     dispatch,
     state.channelOf,
     state.channelOrder,
@@ -2636,6 +2648,7 @@ function Frame(): React.JSX.Element {
       <BackgroundWorkIndicator />
       <EngineStartupIndicator />
       <StemsUnavailableIndicator />
+      <PluginsOffNotice />
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the
