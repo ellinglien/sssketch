@@ -47,6 +47,15 @@ namespace sssketch
         using Instantiator = std::function<std::unique_ptr<juce::AudioProcessor>(
             const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut)>;
 
+        /** requestLoad's completion: success, the error (on failure), and the
+         * settings of what the slot held when this request was carried out
+         * (captureStateBase64 of the outgoing plugin, read just before the new
+         * one is instantiated -- so with several loads in flight each reports
+         * the one it replaced). Empty when the slot held nothing (or a bridged
+         * plugin). The renderer keeps them so undoing a removal brings the
+         * plugin back as it was. */
+        using LoadCallback = std::function<void(bool success, const juce::String& error, const juce::String& previousState)>;
+
         explicit PluginChain(int numSlots, Instantiator instantiator = &PluginChain::defaultInstantiate, BridgeClient* bridgeClient = nullptr);
         ~PluginChain();
 
@@ -65,7 +74,7 @@ namespace sssketch
             const juce::String& path,
             double sampleRate,
             int blockSize,
-            std::function<void(bool success, const juce::String& error)> onLoaded,
+            LoadCallback onLoaded,
             const juce::String& stateBase64 = {});
 
         /** Synchronous, blocking load — offline export only, where nothing
@@ -178,10 +187,24 @@ namespace sssketch
         bool openEditorWindow(int slotIndex);
 
         /** Message-thread API: closes slotIndex's editor window if one is
-         * open. The underlying plugin instance keeps loaded and processing
-         * either way -- closing the editor is purely a UI action. No-op if
-         * no window is open for that slot. */
+         * open, and stops watching its edits (watchEdits). The underlying
+         * plugin instance keeps loaded and processing either way -- closing
+         * the editor is purely a UI action. No-op if no window is open for
+         * that slot. */
         void closeEditorWindow(int slotIndex);
+
+        /** Message-thread API: from now on, a parameter change (or a program /
+         * state change it reports) of slotIndex's current plugin is reported
+         * by takeEdited() -- until closeEditorWindow, or that plugin is
+         * swapped out. openEditorWindow calls it: a knob is only reachable in
+         * the editor, so this is the user editing the plugin, not its own
+         * restore at load time. A bridged plugin is not watched. */
+        void watchEdits(int slotIndex);
+
+        /** Any thread: whether a watched plugin was edited since the last
+         * call. Consumes it. IpcConnection polls it to push 'plugin-edited'
+         * (the project has unsaved plugin settings). */
+        bool takeEdited();
 
         // Public (not just used as this constructor's own default
         // argument value) so callers who need to pass a LATER constructor
@@ -193,6 +216,30 @@ namespace sssketch
             const juce::String& path, double sampleRate, int blockSize, juce::String& errorOut);
 
     private:
+        // Sets `edited` from a hosted plugin's own callbacks -- which can come
+        // from any thread (a parameter set from the audio thread, say), hence
+        // the atomic and nothing else.
+        class EditListener : public juce::AudioProcessorListener
+        {
+        public:
+            explicit EditListener(std::atomic<bool>& flagToSet) : flag(flagToSet) {}
+            void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override { flag.store(true); }
+            void audioProcessorParameterChangeGestureBegin(juce::AudioProcessor*, int) override { flag.store(true); }
+            void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details) override
+            {
+                // Not latency or parameter-name changes: those are the plugin's, not an edit.
+                if (details.programChanged || details.nonParameterStateChanged)
+                    flag.store(true);
+            }
+
+        private:
+            std::atomic<bool>& flag;
+        };
+
+        // Declared before `slots`: outlives every plugin it is registered with.
+        std::atomic<bool> edited { false };
+        EditListener editListener { edited };
+
         // One shared playhead per chain (not per slot) -- tempo is a
         // chain-wide, not per-plugin, concept. setBpm() writes the atomic;
         // getPosition() reads it -- called by a hosted plugin from inside
@@ -265,6 +312,10 @@ namespace sssketch
             // belongs to, so drainRetired() can close it before destroying
             // that state's plugin (JUCE requires the editor go first).
             const SlotState* editorFor = nullptr;
+            // Message thread only: the SlotState whose plugin editListener is
+            // registered with (watchEdits), so it can be removed before that
+            // plugin goes.
+            const SlotState* watchedFor = nullptr;
             // Reused interleaved-stereo scratch for the bridged path,
             // resized only when numSamples changes -- mirrors `scratch`
             // above's own resize-only-if-changed pattern, for the exact
@@ -276,6 +327,9 @@ namespace sssketch
         };
 
         std::vector<Slot> slots;
+
+        // Message thread: removes editListener from the slot's watched plugin, if any.
+        void unwatchEdits(Slot& slot);
         Instantiator instantiator;
         BpmPlayHead playHead;
         BridgeClient* bridgeClient;

@@ -116,13 +116,17 @@ namespace sssketch
             const juce::String& path,
             double sampleRate,
             int blockSize,
-            std::function<void(bool success, const juce::String& error)> onLoaded,
+            PluginChain::LoadCallback onLoaded,
             const juce::String& stateBase64 = {});
 
         /** Message-thread API: no-op (returns false) if channelId isn't
          * currently known. */
         bool openEditorWindow(const juce::String& channelId, int slotIndex);
         void closeEditorWindow(const juce::String& channelId, int slotIndex);
+
+        /** Message-thread API: PluginChain::takeEdited() across every channel's
+         * chain (each consumed). */
+        bool takeEdited();
 
         /** Audio-thread API: promotes pending swaps across every currently
          * published channel's chain. Call once per block, before any

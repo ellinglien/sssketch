@@ -115,14 +115,14 @@ namespace sssketch
         const juce::String& path,
         double sampleRate,
         int blockSize,
-        std::function<void(bool, const juce::String&)> onLoaded,
+        PluginChain::LoadCallback onLoaded,
         const juce::String& stateBase64)
     {
         auto* chain = chainFor(channelId);
         if (chain == nullptr)
         {
             if (onLoaded)
-                onLoaded(false, "unknown channel: " + channelId);
+                onLoaded(false, "unknown channel: " + channelId, {});
             return;
         }
         chain->requestLoad(slotIndex, path, sampleRate, blockSize, std::move(onLoaded), stateBase64);
@@ -156,6 +156,17 @@ namespace sssketch
         const auto* map = published.load();
         for (auto& [channelId, chain] : *map)
             chain->drainRetired();
+    }
+
+    bool ChannelChainRegistry::takeEdited()
+    {
+        jassert(juce::MessageManager::existsAndIsCurrentThread());
+        const ReadScope scope(*this);
+        const auto* map = published.load();
+        bool any = false;
+        for (auto& [channelId, chain] : *map)
+            any = chain->takeEdited() || any;
+        return any;
     }
 
     PluginChain* ChannelChainRegistry::chainFor(const juce::String& channelId)

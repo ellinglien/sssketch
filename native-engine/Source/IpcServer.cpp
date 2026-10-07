@@ -360,6 +360,18 @@ namespace sssketch
                 obj->setProperty("payload", juce::var(payload.get()));
                 sendJson(juce::var(obj.get()));
             }
+            // A knob turned in an open plugin editor window since the last
+            // tick: the project has unsaved plugin settings (the renderer's
+            // pluginsTouched.ts, via main's subscribeToPluginEdited). Both
+            // consumed, so not ||.
+            const bool masterEdited = masterChain.takeEdited();
+            const bool channelEdited = channelChains.takeEdited();
+            if (masterEdited || channelEdited)
+            {
+                juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+                obj->setProperty("type", "plugin-edited");
+                sendJson(juce::var(obj.get()));
+            }
             return;
         }
 
@@ -1183,8 +1195,11 @@ namespace sssketch
             // pluginId is only carried through to the reply below (the
             // renderer needs it to know which catalog entry succeeded) --
             // requestLoad itself only needs a real path to load.
+            //
+            // previousState: the settings of what the slot held before (see
+            // PluginChain::LoadCallback) -- the renderer keeps them for an undo.
             masterChain.requestLoad(slot, path, transport.currentSampleRate(), transport.currentBlockSize(),
-                [this, slot, pluginId](bool success, const juce::String& error)
+                [this, slot, pluginId](bool success, const juce::String& error, const juce::String& previousState)
                 {
                     juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
                     payloadObj->setProperty("slot", slot);
@@ -1192,6 +1207,8 @@ namespace sssketch
                     payloadObj->setProperty("success", success);
                     if (!success)
                         payloadObj->setProperty("error", error);
+                    if (previousState.isNotEmpty())
+                        payloadObj->setProperty("previousState", previousState);
                     juce::DynamicObject::Ptr obj = new juce::DynamicObject();
                     obj->setProperty("type", "master-plugin-loaded");
                     obj->setProperty("payload", juce::var(payloadObj.get()));
@@ -1226,7 +1243,7 @@ namespace sssketch
                 return;
 
             channelChains.requestLoad(channelId, slot, path, transport.currentSampleRate(), transport.currentBlockSize(),
-                [this, channelId, slot, pluginId](bool success, const juce::String& error)
+                [this, channelId, slot, pluginId](bool success, const juce::String& error, const juce::String& previousState)
                 {
                     juce::DynamicObject::Ptr payloadObj = new juce::DynamicObject();
                     payloadObj->setProperty("channelId", channelId);
@@ -1235,6 +1252,8 @@ namespace sssketch
                     payloadObj->setProperty("success", success);
                     if (!success)
                         payloadObj->setProperty("error", error);
+                    if (previousState.isNotEmpty())
+                        payloadObj->setProperty("previousState", previousState);
                     juce::DynamicObject::Ptr obj = new juce::DynamicObject();
                     obj->setProperty("type", "channel-plugin-loaded");
                     obj->setProperty("payload", juce::var(payloadObj.get()));

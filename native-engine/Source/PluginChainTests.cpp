@@ -250,7 +250,7 @@ namespace sssketch
         {
             bool done = false;
             bool ok = false;
-            chain.requestLoad(slot, pluginId, 44100.0, 64, [&](bool success, const juce::String&)
+            chain.requestLoad(slot, pluginId, 44100.0, 64, [&](bool success, const juce::String&, const juce::String&)
             {
                 ok = success;
                 done = true;
@@ -281,6 +281,69 @@ namespace sssketch
                 errorOut = "unknown test plugin id";
                 return nullptr;
             };
+        }
+
+        /** One parameter, and a state that is that parameter's value -- so two
+         * instances' states differ, and a parameter change looks like a knob turned
+         * in its editor (the host is told, as a hosted VST3/AU's edit is). */
+        class ParamTestPlugin : public juce::AudioProcessor
+        {
+        public:
+            explicit ParamTestPlugin(float initial)
+            {
+                auto p = std::make_unique<juce::AudioParameterFloat>(
+                    juce::ParameterID { "amount", 1 }, "amount", 0.0f, 1.0f, initial);
+                amount = p.get();
+                addParameter(p.release());
+            }
+            const juce::String getName() const override { return "ParamTestPlugin"; }
+            void prepareToPlay(double, int) override {}
+            void releaseResources() override {}
+            void processBlock(juce::AudioBuffer<float>&, juce::MidiBuffer&) override {}
+            double getTailLengthSeconds() const override { return 0.0; }
+            bool acceptsMidi() const override { return false; }
+            bool producesMidi() const override { return false; }
+            juce::AudioProcessorEditor* createEditor() override { return nullptr; }
+            bool hasEditor() const override { return false; }
+            int getNumPrograms() override { return 1; }
+            int getCurrentProgram() override { return 0; }
+            void setCurrentProgram(int) override {}
+            const juce::String getProgramName(int) override { return {}; }
+            void changeProgramName(int, const juce::String&) override {}
+            void getStateInformation(juce::MemoryBlock& block) override
+            {
+                block.append(juce::String(amount->get()).toRawUTF8(), juce::String(amount->get()).getNumBytesAsUTF8());
+            }
+            void setStateInformation(const void*, int) override {}
+
+            juce::AudioParameterFloat* amount = nullptr;
+        };
+
+        /** "param:<initial value>" -> a ParamTestPlugin (`last` is set to it); "" -> no plugin. */
+        PluginChain::Instantiator paramInstantiator(ParamTestPlugin*& last)
+        {
+            return [&last](const juce::String& pluginId, double, int, juce::String& errorOut) -> std::unique_ptr<juce::AudioProcessor>
+            {
+                errorOut = {};
+                if (pluginId.isEmpty())
+                    return nullptr;
+                auto plugin = std::make_unique<ParamTestPlugin>(pluginId.fromFirstOccurrenceOf(":", false, false).getFloatValue());
+                last = plugin.get();
+                return plugin;
+            };
+        }
+
+        juce::String stateOf(float amount)
+        {
+            const auto text = juce::String(amount);
+            juce::MemoryBlock block(text.toRawUTF8(), text.getNumBytesAsUTF8());
+            return block.toBase64Encoding();
+        }
+
+        void pumpUntil(const bool& done)
+        {
+            for (int i = 0; i < 2000 && !done; ++i)
+                juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
         }
 
         class PluginChainTests : public juce::UnitTest
@@ -411,7 +474,7 @@ namespace sssketch
                     StateCapturingTestPlugin* raw = nullptr;
                     PluginChain chain(4, stateCaptureInstantiator(raw));
                     bool done = false;
-                    chain.requestLoad(0, "any-id", 44100.0, 64, [&](bool, const juce::String&) { done = true; });
+                    chain.requestLoad(0, "any-id", 44100.0, 64, [&](bool, const juce::String&, const juce::String&) { done = true; });
                     for (int i = 0; i < 2000 && !done; ++i)
                         juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
                     expect(done);
@@ -428,7 +491,7 @@ namespace sssketch
                     expect(chain.loadPluginSync(0, "any-id", 44100.0, 512, err));
                     expect(chain.captureStateBase64(0).isNotEmpty());
                     bool done = false;
-                    chain.requestLoad(0, "", 44100.0, 64, [&](bool, const juce::String&) { done = true; });
+                    chain.requestLoad(0, "", 44100.0, 64, [&](bool, const juce::String&, const juce::String&) { done = true; });
                     for (int i = 0; i < 2000 && !done; ++i)
                         juce::MessageManager::getInstance()->runDispatchLoopUntil(1);
                     expect(done);
@@ -552,6 +615,88 @@ namespace sssketch
                     float r[1] = { 1.0f };
                     chain.process(1, l, r);
                     expectWithinAbsoluteError(l[0], 0.25f, 0.0001f);
+                }
+
+                // The renderer keeps a removed or replaced plugin's settings for an undo.
+                beginTest("a load or unload reports the settings of what the slot held before it");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String previous = "unset";
+                    bool done = false;
+                    chain.requestLoad(0, "param:0.25", 44100.0, 64,
+                        [&](bool ok, const juce::String&, const juce::String& prev) { expect(ok); previous = prev; done = true; });
+                    pumpUntil(done);
+                    expect(previous.isEmpty()); // nothing there before
+                    chain.applyPendingSwaps();
+                    chain.drainRetired();
+
+                    done = false;
+                    chain.requestLoad(0, "", 44100.0, 64,
+                        [&](bool ok, const juce::String&, const juce::String& prev) { expect(ok); previous = prev; done = true; });
+                    pumpUntil(done);
+                    expectEquals(previous, stateOf(0.25f));
+                    chain.applyPendingSwaps();
+                    chain.drainRetired();
+                }
+
+                beginTest("two loads in flight: each reports what it actually replaced");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    expect(requestLoadAndWait(chain, 0, "param:0.25"));
+                    chain.applyPendingSwaps();
+                    chain.drainRetired();
+                    juce::String first = "unset", second = "unset";
+                    bool done1 = false, done2 = false;
+                    // Both sent before either is instantiated.
+                    chain.requestLoad(0, "param:0.5", 44100.0, 64,
+                        [&](bool, const juce::String&, const juce::String& prev) { first = prev; done1 = true; });
+                    chain.requestLoad(0, "param:0.75", 44100.0, 64,
+                        [&](bool, const juce::String&, const juce::String& prev) { second = prev; done2 = true; });
+                    pumpUntil(done2);
+                    expect(done1);
+                    expectEquals(first, stateOf(0.25f));
+                    expectEquals(second, stateOf(0.5f));
+                    chain.applyPendingSwaps();
+                    chain.drainRetired();
+                }
+
+                // Knobs are only reachable in a plugin's editor window: while one is
+                // open its parameter changes are reported ('plugin-edited'), so a
+                // plugin-only change makes the project unsaved.
+                beginTest("parameter changes are reported only while watched, once each");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    juce::String err;
+                    expect(chain.loadPluginSync(0, "param:0.25", 44100.0, 64, err));
+                    expect(last != nullptr);
+                    last->amount->setValueNotifyingHost(0.4f); // e.g. its own state restore at load
+                    expect(!chain.takeEdited());
+
+                    chain.watchEdits(0);
+                    last->amount->setValueNotifyingHost(0.6f);
+                    expect(chain.takeEdited());
+                    expect(!chain.takeEdited()); // consumed
+
+                    chain.closeEditorWindow(0); // stops watching, editor or not
+                    last->amount->setValueNotifyingHost(0.7f);
+                    expect(!chain.takeEdited());
+                }
+
+                beginTest("a watched plugin swapped out is no longer watched, and its replacement isn't either");
+                {
+                    ParamTestPlugin* last = nullptr;
+                    PluginChain chain(2, paramInstantiator(last));
+                    expect(requestLoadAndWait(chain, 0, "param:0.25"));
+                    chain.applyPendingSwaps();
+                    chain.watchEdits(0);
+                    expect(requestLoadAndWait(chain, 0, "param:0.5"));
+                    chain.applyPendingSwaps();
+                    chain.drainRetired(); // destroys the watched one
+                    last->amount->setValueNotifyingHost(0.9f);
+                    expect(!chain.takeEdited());
                 }
             }
         };

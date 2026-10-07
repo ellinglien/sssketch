@@ -24,6 +24,7 @@ namespace sssketch
         // before its processor.
         for (auto& slot : slots)
         {
+            unwatchEdits(slot);
             slot.editorWindow.reset();
             delete slot.pending.exchange(nullptr);
             delete slot.retired.exchange(nullptr);
@@ -86,6 +87,8 @@ namespace sssketch
                 slot.editorWindow.reset(); // the editor must go before its processor
                 slot.editorFor = nullptr;
             }
+            if (slot.watchedFor == retired)
+                unwatchEdits(slot);
             delete retired;
             // Only now, after the delete: the audio thread treats an
             // occupied cell as "defer", so it never parks a second state
@@ -319,6 +322,7 @@ namespace sssketch
             // Still showing the editor of a plugin this slot has since
             // swapped away from (drainRetired would close it on its next
             // pass anyway) -- close it now and open the current one's.
+            unwatchEdits(slot);
             slot.editorWindow.reset();
             slot.editorFor = nullptr;
         }
@@ -350,6 +354,7 @@ namespace sssketch
         slot.editorWindow = std::make_unique<PluginEditorWindow>(
             state->instance->getName(), editor, [this, slotIndex]() { closeEditorWindow(slotIndex); });
         slot.editorFor = state;
+        watchEdits(slotIndex);
         return true;
     }
 
@@ -365,8 +370,36 @@ namespace sssketch
                 bridgeClient->closeEditor(state->bridgeSlotId);
             return;
         }
+        unwatchEdits(slot);
         slot.editorWindow.reset();
         slot.editorFor = nullptr;
+    }
+
+    void PluginChain::watchEdits(int slotIndex)
+    {
+        if (slotIndex < 0 || slotIndex >= (int) slots.size())
+            return;
+        auto& slot = slots[(size_t) slotIndex];
+        const auto* state = slot.state.load(std::memory_order_acquire);
+        if (slot.watchedFor == state)
+            return;
+        unwatchEdits(slot);
+        if (state == nullptr || state->instance == nullptr)
+            return;
+        state->instance->addListener(&editListener);
+        slot.watchedFor = state;
+    }
+
+    void PluginChain::unwatchEdits(Slot& slot)
+    {
+        if (slot.watchedFor != nullptr && slot.watchedFor->instance != nullptr)
+            slot.watchedFor->instance->removeListener(&editListener);
+        slot.watchedFor = nullptr;
+    }
+
+    bool PluginChain::takeEdited()
+    {
+        return edited.exchange(false);
     }
 
     void PluginChain::requestLoad(
@@ -374,7 +407,7 @@ namespace sssketch
         const juce::String& path,
         double sampleRate,
         int blockSize,
-        std::function<void(bool, const juce::String&)> onLoaded,
+        LoadCallback onLoaded,
         const juce::String& stateBase64)
     {
         if (bridgeClient != nullptr && !path.isEmpty() && detectPluginArchitecture(path) == "x86_64")
@@ -391,6 +424,7 @@ namespace sssketch
                     // Runs on the message thread (BridgeClient's own
                     // callback contract, mirroring the callAsync path
                     // below) -- safe to touch `slots` directly.
+                    const auto previousState = captureStateBase64(slotIndex);
                     if (success)
                     {
                         auto& slot = slots[(size_t) slotIndex];
@@ -399,7 +433,7 @@ namespace sssketch
                         delete slot.pending.exchange(next.release(), std::memory_order_acq_rel);
                     }
                     if (onLoaded)
-                        onLoaded(success, error);
+                        onLoaded(success, error, previousState);
                 });
             return;
         }
@@ -422,6 +456,9 @@ namespace sssketch
         juce::MessageManager::callAsync([this, slotIndex, path, sampleRate, blockSize, onLoaded, stateBase64]()
         {
             auto& slot = slots[(size_t) slotIndex];
+            // What this load replaces, read now (not when it was requested):
+            // an earlier load still in flight has landed by this point.
+            const auto previousState = captureStateBase64(slotIndex);
             juce::String error;
             auto instance = instantiator(path, sampleRate, blockSize, error);
             const bool success = error.isEmpty();
@@ -443,7 +480,7 @@ namespace sssketch
             }
 
             if (onLoaded)
-                onLoaded(success, error);
+                onLoaded(success, error, previousState);
         });
     }
 }
