@@ -8,7 +8,6 @@ import type {
 } from '@shared/riffLibraryTypes'
 import {
   instrumentMaskToSoundType,
-  RIFF_LIBRARY_USERNAME,
   RIFF_LIBRARY_ROOT_NAMES,
   RIFF_LIBRARY_SCALE_NAMES
 } from '@shared/riffLibraryTypes'
@@ -59,77 +58,23 @@ import {
 } from '../audio/discoverSeed'
 import type { DiscoverCandidate } from '../../../main/discoverCandidates'
 import {
-  RIFF_LIBRARY_USERNAME_STORAGE_KEY,
-  announceRiffLibraryUsernameChanged
+  RIFF_LIBRARY_USERNAME_CHANGED_EVENT,
+  announceRiffLibraryUsernameChanged,
+  isLoggedOutEvent,
+  loadTypedRiffLibraryUsername,
+  storeTypedRiffLibraryUsername
 } from '../audio/riffLibraryUsername'
+import { resolveOwnUsername } from '@shared/ownUsernameReport'
 
-// Persisted locally (not in project files or app state) since it's a
-// per-person identity setting, not something that travels with a project —
-// each tester on their own machine sets their own username once here and
-// it sticks across sessions, rather than being baked into the app.
-// (The key itself lives with the background passes' resolver,
-// riffLibraryUsername.ts, which reads the same setting.)
-// Pre-rename key -- see docs/superpowers/specs/
-// 2026-08-14-riff-library-rename-design.md §3. Only ever read once, by
-// loadStoredRiffLibraryUsername's own one-time carry-forward below; never
-// written again after this app version ships.
-const LEGACY_LORE_USERNAME_STORAGE_KEY = 'sssketch:loreUsername'
-
-function loadStoredRiffLibraryUsername(): string {
-  try {
-    const current = localStorage.getItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY)
-    if (current !== null) return current
-    // One-time carry-forward from the pre-rename key, so nobody's already-
-    // set username setting silently resets just because the storage key
-    // itself was renamed. Never runs again once the new key exists (the
-    // branch above already returns first on every subsequent call).
-    const legacy = localStorage.getItem(LEGACY_LORE_USERNAME_STORAGE_KEY)
-    if (legacy !== null) {
-      // Persisting the carry-forward is best-effort -- if the write/delete
-      // below throws (e.g. quota exceeded), still return the legacy value
-      // we already have in hand rather than silently falling back to the
-      // default, even though the migration itself didn't stick this time.
-      try {
-        localStorage.setItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY, legacy)
-        localStorage.removeItem(LEGACY_LORE_USERNAME_STORAGE_KEY)
-      } catch (err) {
-        console.error('LibraryBrowser: failed to persist riff library username carry-forward:', err)
-      }
-      return legacy
-    }
-    return RIFF_LIBRARY_USERNAME
-  } catch {
-    return RIFF_LIBRARY_USERNAME
-  }
-}
-
-/** The counterpart loadStoredRiffLibraryUsername never had: the comment
- * above has always claimed this setting is "persisted to localStorage from
- * here", and it never was -- only the one-time carry-forward above ever
- * wrote the key, so editing the username lasted exactly one session. Found
- * while making the jam sidebar count riffs against it, which is a setting
- * that has to survive a relaunch to be worth anything. */
-function storeRiffLibraryUsername(username: string): void {
-  try {
-    localStorage.setItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY, username)
-  } catch (err) {
-    console.error('LibraryBrowser: failed to persist the riff library username:', err)
-  }
-}
-
-/** Whether a username was ever explicitly set on this machine, as opposed
- * to falling back to RIFF_LIBRARY_USERNAME. Only an unset one gets adopted
- * from the Endlesss session -- an explicit choice is never overwritten. */
-function hasStoredRiffLibraryUsername(): boolean {
-  try {
-    return localStorage.getItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY) !== null
-  } catch {
-    return false
-  }
-}
+// The "your username" setting is persisted locally (not in project files or
+// app state) since it's a per-person identity setting, not something that
+// travels with a project. Its storage, and the one rule for who "me" is,
+// live in riffLibraryUsername.ts / @shared/ownUsernameReport, shared with
+// the background passes and main -- so this browser and main can't disagree.
 
 // Whether the jam sidebar is narrowed to jams he has riffs in. Defaults
-// ON -- his real external archive lists 5,056 jams, of which 5,014 are
+// ON (inert, and not offered, while nobody is "me" -- no username typed and
+// no Endlesss login) -- his real external archive lists 5,056 jams, of which 5,014 are
 // name-only stubs with not one riff synced and 42 hold riffs of his, so
 // an unnarrowed list is 99.2% rooms with nothing in them to import. Safe
 // as a default because jamMightBeMine (jamOwnership.ts) hides nothing it
@@ -139,6 +84,11 @@ function hasStoredRiffLibraryUsername(): boolean {
 // actually in can go missing. Persisted, like the username, since it is
 // a per-person browsing habit.
 const ONLY_MY_JAMS_STORAGE_KEY = 'sssketch:onlyMyJams'
+
+/** Shown where "only my jams" and "only mine" would be, while nobody is
+ * "me" (share-readiness audit B1). */
+const NEEDS_OWN_USERNAME_HINT =
+  'log into endlesss or type your endlesss username to see your own jams first'
 
 function loadStoredOnlyMyJams(): boolean {
   try {
@@ -150,6 +100,11 @@ function loadStoredOnlyMyJams(): boolean {
 
 type AuthStatus =
   { loggedIn: false } | { loggedIn: true; userId: string; username: string; expiresAt: number }
+
+function sameAuthStatus(a: AuthStatus, b: AuthStatus): boolean {
+  if (!a.loggedIn || !b.loggedIn) return a.loggedIn === b.loggedIn
+  return a.userId === b.userId && a.username === b.username && a.expiresAt === b.expiresAt
+}
 
 // Matches loreWarehouse.ts's RIFF_CONTEXT_WINDOW_BEFORE * 2 (10 before, 10
 // after) -- kept as a separate constant here rather than imported since the
@@ -290,6 +245,41 @@ export function LibraryBrowser({
 
   // Auth (gates sync-triggering and live jam-membership discovery)
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ loggedIn: false })
+  /** Takes a status, keeping the current object when nothing changed, so
+   * the two places that report it (the mount check below and the login
+   * panel's own) don't refire the effects keyed on it. */
+  const takeAuthStatus = useCallback((next: AuthStatus): void => {
+    setAuthStatus((prev) => (sameAuthStatus(prev, next) ? prev : next))
+  }, [])
+  // Whether the session has been asked about once (answered or failed).
+  // The login panel only mounts in 'browse', and the library can open
+  // straight into Discover, so this asks itself. With no default identity
+  // an unasked session reads as nobody, so Discover waits for the answer
+  // rather than rolling one render as nobody (riffLibraryUsername below).
+  const [authChecked, setAuthChecked] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    window.rifffApi
+      .endlesssAuthStatus()
+      .then((s) => {
+        if (!cancelled) takeAuthStatus(s)
+      })
+      .catch((err) => {
+        console.error('LibraryBrowser: endlesssAuthStatus() failed:', err)
+      })
+      .finally(() => {
+        if (!cancelled) setAuthChecked(true)
+      })
+    // A logout from elsewhere (the settings menu) changes who "me" is too.
+    const onUsernameChanged = (event: Event): void => {
+      if (isLoggedOutEvent(event)) takeAuthStatus({ loggedIn: false })
+    }
+    window.addEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onUsernameChanged)
+    return () => {
+      cancelled = true
+      window.removeEventListener(RIFF_LIBRARY_USERNAME_CHANGED_EVENT, onUsernameChanged)
+    }
+  }, [takeAuthStatus])
 
   // Warehouse availability + external folder config (unchanged from LoreLibraryBrowser.tsx)
   const [available, setAvailable] = useState<boolean | null>(null)
@@ -431,32 +421,31 @@ export function LibraryBrowser({
   const [scaleFilter, setScaleFilter] = useState('')
   const [userNameFilter, setUserNameFilter] = useState('')
   const [onlyFullyCached, setOnlyFullyCached] = useState(false)
-  // Which username "you" are, for ownerFraction (drives the ownership
-  // brightness coloring), the "only mine" riff filter and the jam
-  // sidebar's own ownership counts — editable and persisted per-machine
-  // (see loadStoredRiffLibraryUsername / storeRiffLibraryUsername), not
-  // hardcoded, since other people testing this app aren't Elling.
-  const [storedUsername, setStoredUsername] = useState(loadStoredRiffLibraryUsername)
-  // Whether a username was ever explicitly typed on this machine, read
-  // once at mount -- see riffLibraryUsername just below.
-  const [usernameIsExplicit, setUsernameIsExplicit] = useState(hasStoredRiffLibraryUsername)
-  /** Who "mine" is. The Endlesss session is the one place in the app that
-   * actually KNOWS -- it is the account whose jams are being listed -- so
-   * until somebody types a username, this follows it rather than sitting
-   * on RIFF_LIBRARY_USERNAME, a default named after one person and wrong
-   * for everybody else. Derived rather than copied into state on login,
-   * so there is no render where the jam counts are asked for under the
-   * wrong name. Typing in the username box makes the typed value stick
-   * for good: somebody browsing a LORE archive under a different handle
-   * from the account they logged in with keeps their choice. */
-  const riffLibraryUsername = useMemo(() => {
-    if (usernameIsExplicit) return storedUsername
-    if (authStatus.loggedIn && authStatus.username.trim() !== '') return authStatus.username.trim()
-    return storedUsername
-  }, [usernameIsExplicit, storedUsername, authStatus])
+  // The typed "your username" (null when never typed on this machine), for
+  // ownerFraction (drives the ownership brightness coloring), the "only
+  // mine" riff filter and the jam sidebar's own ownership counts.
+  const [typedUsername, setTypedUsername] = useState(loadTypedRiffLibraryUsername)
+  /** Who "mine" is, by the one rule (@shared/ownUsernameReport
+   * resolveOwnUsername): the typed username, else the Endlesss login's,
+   * else nobody (''). No default identity -- this used to fall back to
+   * 'elling' (share-readiness audit B1). Derived rather than copied into
+   * state on login, so there is no render where the jam counts are asked
+   * for under the wrong name. Typing in the username box makes the typed
+   * value stick for good: somebody browsing a LORE archive under a
+   * different handle from the account they logged in with keeps their
+   * choice. */
+  const riffLibraryUsername = useMemo(
+    () => resolveOwnUsername(typedUsername, authStatus.loggedIn ? authStatus.username : null),
+    [typedUsername, authStatus]
+  )
+  const hasOwnUsername = riffLibraryUsername !== ''
+  /** Whether "me" is settled: a typed name needs no session lookup. */
+  const ownUsernameKnown = typedUsername !== null || authChecked
   // Narrows the jam sidebar to jams he has riffs in -- see
-  // ONLY_MY_JAMS_STORAGE_KEY for why this starts on.
-  const [onlyMyJams, setOnlyMyJams] = useState(loadStoredOnlyMyJams)
+  // ONLY_MY_JAMS_STORAGE_KEY for why this starts on. The saved choice is
+  // kept, but the filter only acts with somebody to be "me".
+  const [onlyMyJamsChoice, setOnlyMyJams] = useState(loadStoredOnlyMyJams)
+  const onlyMyJams = onlyMyJamsChoice && hasOwnUsername
   const [onlyContainsMe, setOnlyContainsMe] = useState(false)
   // <input type="date"> values (YYYY-MM-DD strings, or '' for unset) —
   // converted to unix-seconds boundaries (start/end of day) when building
@@ -569,11 +558,11 @@ export function LibraryBrowser({
 
   useEffect(() => {
     try {
-      localStorage.setItem(ONLY_MY_JAMS_STORAGE_KEY, String(onlyMyJams))
+      localStorage.setItem(ONLY_MY_JAMS_STORAGE_KEY, String(onlyMyJamsChoice))
     } catch (err) {
       console.error('LibraryBrowser: failed to persist the only-my-jams setting:', err)
     }
-  }, [onlyMyJams])
+  }, [onlyMyJamsChoice])
 
   useEffect(() => {
     if (!available) return
@@ -1045,7 +1034,8 @@ export function LibraryBrowser({
     // also drives ownerFraction's brightness coloring on every riff shown,
     // not just the filtered subset.
     if (riffLibraryUsername.trim() !== '') filters.targetUser = riffLibraryUsername.trim()
-    if (onlyContainsMe) filters.onlyContainsUser = true
+    // Inert with nobody as "me": it would match nothing at all.
+    if (onlyContainsMe && filters.targetUser !== undefined) filters.onlyContainsUser = true
     if (offset > 0) filters.offset = offset
     if (limit !== undefined) filters.limit = limit
     return filters
@@ -1738,7 +1728,7 @@ export function LibraryBrowser({
           <>
             <EndlesssLoginPanel
               onStatusChange={(next) => {
-                setAuthStatus(next)
+                takeAuthStatus(next)
                 // A login or logout can change who "me" is for the
                 // background passes (own stems first).
                 announceRiffLibraryUsernameChanged()
@@ -1789,6 +1779,17 @@ export function LibraryBrowser({
                       writes no per-riff author for a private jam) has
                       nothing this can narrow, and a checkbox that visibly
                       changes nothing reads as broken. */}
+                  {!hasOwnUsername && (
+                    <span
+                      style={{
+                        padding: '4px 6px',
+                        fontSize: 9,
+                        color: 'var(--ra-text-3)'
+                      }}
+                    >
+                      {NEEDS_OWN_USERNAME_HINT}
+                    </span>
+                  )}
                   {hideableJamCount > 0 && (
                     <label
                       title="jams you played"
@@ -2241,24 +2242,18 @@ export function LibraryBrowser({
                           type="text"
                           value={riffLibraryUsername}
                           onChange={(e) => {
-                            setStoredUsername(e.target.value)
-                            setUsernameIsExplicit(true)
+                            setTypedUsername(e.target.value)
                             // Persisted on the edit itself, not from an
-                            // effect -- an effect would write the default
-                            // on first mount, which would both defeat the
-                            // legacy-key carry-forward and pin a brand-new
-                            // install to a username nobody chose. This is
-                            // also the writer the setting never had: the
-                            // comment on loadStoredRiffLibraryUsername has
-                            // always claimed it persisted, and only the
-                            // one-time carry-forward ever wrote the key,
-                            // so an edit used to last one session.
-                            storeRiffLibraryUsername(e.target.value)
+                            // effect -- an effect would write on first
+                            // mount, which would both defeat the legacy-key
+                            // carry-forward and pin a brand-new install to
+                            // a username nobody chose.
+                            storeTypedRiffLibraryUsername(e.target.value)
                             // The background passes rank own stems first.
                             announceRiffLibraryUsernameChanged()
                           }}
                           placeholder="your username"
-                          title="your username"
+                          title="your endlesss username: whose rifffs count as yours"
                           style={{
                             width: 100,
                             height: 22,
@@ -2281,7 +2276,9 @@ export function LibraryBrowser({
                         >
                           <input
                             type="checkbox"
-                            checked={onlyContainsMe}
+                            checked={onlyContainsMe && hasOwnUsername}
+                            disabled={!hasOwnUsername}
+                            title={hasOwnUsername ? undefined : NEEDS_OWN_USERNAME_HINT}
                             onChange={(e) => setOnlyContainsMe(e.target.checked)}
                           />
                           only mine
@@ -2524,7 +2521,7 @@ export function LibraryBrowser({
             )}
           </>
         )}
-        {libraryMode === 'discover' && (
+        {libraryMode === 'discover' && ownUsernameKnown && (
           <DiscoverPanel
             currentSketch={currentSketch}
             slots={discoverSlots}

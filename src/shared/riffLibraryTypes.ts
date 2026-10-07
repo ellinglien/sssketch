@@ -1,13 +1,6 @@
 import type { SoundType } from './types'
 import type { JamOwnership } from './jamOwnership'
 
-/** Default riff-library username, used only as the initial value of the
- * user-editable "your username" setting in LibraryBrowser (persisted to
- * localStorage from there) and as computeOwnerFraction's own fallback
- * default below. Not a hardcoded identity any more — other people testing
- * this app set their own in the riff library browser's filter bar. */
-export const RIFF_LIBRARY_USERNAME = 'elling'
-
 /** Extends JamOwnership, whose two count fields are attached only when
  * listJams was asked for them (a username to count against) and only for
  * jams that really live in a readable archive -- see jamOwnership.ts for
@@ -26,7 +19,7 @@ export interface RiffLibraryRiffSummary {
   userName: string
   stemCount: number // populated slots, 1..MAX_RIFFF_STEM_SLOTS (see @shared/riffStemSlots)
   cachedStemCount: number // of those, how many are on disk right now
-  ownerFraction: number // 0-1, fraction of populated slots created by RIFF_LIBRARY_USERNAME
+  ownerFraction: number // 0-1, fraction of populated slots created by the filters' targetUser (0 with none)
 }
 
 export interface RiffLibraryResolvedStem {
@@ -99,8 +92,8 @@ export interface RiffFilters {
    * owner; this instead affects how a riff's per-STEM authorship is scored,
    * regardless of who owns it. */
   targetUser?: string
-  /** Only riffs with at least one stem authored by targetUser (falls back to
-   * RIFF_LIBRARY_USERNAME if targetUser is unset). */
+  /** Only riffs with at least one stem authored by targetUser (none at all
+   * when targetUser is unset: with nobody as "me", nothing is mine). */
   onlyContainsUser?: boolean
   /** How many riffs (most-recent-first) to skip before this page — 0/undefined
    * for the first page. */
@@ -221,14 +214,18 @@ export function stemDownloadUrl(fileEndpoint: string, fileBucket: string, fileKe
   return `https://${host}/${fileKey}`
 }
 
-/** Fraction of `creatorUserNames` equal to `targetUser` (defaults to
- * RIFF_LIBRARY_USERNAME). Returns 0 for an empty list rather than dividing by zero. */
+/** Fraction of `creatorUserNames` equal to `targetUser`. No target (unset or
+ * blank: nobody is "me", @shared/ownUsernameReport resolveOwnUsername) scores
+ * 0 -- there is no default identity, and a blank target must not match the
+ * stems whose author was never recorded (''). Returns 0 for an empty list
+ * rather than dividing by zero. */
 export function computeOwnerFraction(
   creatorUserNames: string[],
-  targetUser: string = RIFF_LIBRARY_USERNAME
+  targetUser: string | undefined
 ): number {
-  if (creatorUserNames.length === 0) return 0
-  const matching = creatorUserNames.filter((u) => u === targetUser).length
+  const target = targetUser?.trim() ?? ''
+  if (target === '' || creatorUserNames.length === 0) return 0
+  const matching = creatorUserNames.filter((u) => u === target).length
   return matching / creatorUserNames.length
 }
 

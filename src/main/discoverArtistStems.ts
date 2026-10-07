@@ -24,8 +24,8 @@ export interface ArtistStemRow {
 }
 
 const ARTIST_PAGE = 2000
-/** "Only my stems" for a name stemPriority.ts does not keep (the
- * RIFF_LIBRARY_USERNAME fallback): his own run to ~69k rows, ~34 pages at
+/** "Only my stems" for a name stemPriority.ts does not keep (one main has
+ * not been told about yet): his own run to ~69k rows, ~34 pages at
  * ARTIST_PAGE, each up to ~250 ms of main-process block cold off the USB
  * archive and again after every sync. A quarter of that per page. */
 const OWN_STEMS_PAGE = 500
@@ -205,7 +205,7 @@ export async function getArtistStemCIDs(
  * under that same name so it is never evicted. Its dbs are
  * candidateDbsForRiff plus the own db -- the same dbs listJamsWithDb lists
  * Discover's jams from -- so `dbs` is not consulted on that path. Any other
- * name (the RIFF_LIBRARY_USERNAME fallback) is read as an artist is (cached
+ * name (one main has not been told about yet) is read as an artist is (cached
  * per db and name, Stems_IndexUser windows) in OWN_STEMS_PAGE pages.
  *
  * A failed or aborted "mine" read is logged and gives undefined: the roll

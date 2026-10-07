@@ -1,12 +1,12 @@
 // src/renderer/src/audio/riffLibraryUsername.ts
 //
-// "Who am I" for the background passes' priority (own stems first,
-// stemPriority.ts in main), resolved by the same rule LibraryBrowser's
-// riffLibraryUsername uses: a username typed on this machine wins (even an
-// empty one: then nobody is "me"); else the Endlesss session's; else none.
-// RIFF_LIBRARY_USERNAME, the compile-time fallback LibraryBrowser shows when
-// neither exists, does not count -- with no username configured the passes
-// keep their own order.
+// "Who am I": the typed "your username" setting, and the resolvers built on
+// @shared/ownUsernameReport's resolveOwnUsername -- the one rule for "me"
+// (a typed username wins, even an empty one: then nobody is "me"; else the
+// Endlesss session's; else nobody). LibraryBrowser (its username box, "only
+// my jams", Discover's `mine`), the background passes' priority
+// (stemPriority.ts in main) and main's saved name (OwnUsernameReporter) all
+// go through it. There is no default identity.
 //
 // LibraryBrowser announces a possible change (a username edit, a login or
 // logout) with RIFF_LIBRARY_USERNAME_CHANGED_EVENT on `window`; listeners
@@ -14,6 +14,7 @@
 
 import {
   ownUsernameReportFrom,
+  resolveOwnUsername,
   type EndlesssAuthAnswer,
   type OwnUsernameReport
 } from '@shared/ownUsernameReport'
@@ -57,6 +58,38 @@ function storedUsername(): string | null {
   }
 }
 
+/** LibraryBrowser's read of the typed username (null when never set), which
+ * also carries the pre-rename key forward once, so nobody's setting resets
+ * just because the storage key was renamed. */
+export function loadTypedRiffLibraryUsername(): string | null {
+  try {
+    const current = localStorage.getItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY)
+    if (current !== null) return current
+    const legacy = localStorage.getItem(LEGACY_LORE_USERNAME_STORAGE_KEY)
+    if (legacy === null) return null
+    // Best-effort: a failed write still returns the legacy value in hand.
+    try {
+      localStorage.setItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY, legacy)
+      localStorage.removeItem(LEGACY_LORE_USERNAME_STORAGE_KEY)
+    } catch (err) {
+      console.error('loadTypedRiffLibraryUsername: failed to persist the carry-forward:', err)
+    }
+    return legacy
+  } catch {
+    return null
+  }
+}
+
+/** Persists an edit of the "your username" box (written on the edit itself,
+ * never from an effect, so nothing writes a name nobody typed). */
+export function storeTypedRiffLibraryUsername(username: string): void {
+  try {
+    localStorage.setItem(RIFF_LIBRARY_USERNAME_STORAGE_KEY, username)
+  } catch (err) {
+    console.error('storeTypedRiffLibraryUsername: failed to persist the username:', err)
+  }
+}
+
 /** What to tell main about "me" (report-own-username): unlike
  * resolveRiffLibraryUsername, a failed session lookup is 'unknown', never
  * "nobody" -- it must not wipe the name main saved (ownUsernameReport.ts). */
@@ -75,13 +108,16 @@ export async function resolveOwnUsernameReport(afterLogout = false): Promise<Own
 
 /** The configured username, or null when there is none. */
 export async function resolveRiffLibraryUsername(): Promise<string | null> {
-  const stored = storedUsername()
-  if (stored !== null) return stored.trim() === '' ? null : stored.trim()
-  try {
-    const auth = await window.rifffApi.endlesssAuthStatus()
-    if (auth.loggedIn && auth.username.trim() !== '') return auth.username.trim()
-  } catch (err) {
-    console.error('resolveRiffLibraryUsername: endlesssAuthStatus() failed:', err)
+  const typed = storedUsername()
+  let session: string | null = null
+  if (typed === null) {
+    try {
+      const auth = await window.rifffApi.endlesssAuthStatus()
+      if (auth.loggedIn) session = auth.username
+    } catch (err) {
+      console.error('resolveRiffLibraryUsername: endlesssAuthStatus() failed:', err)
+    }
   }
-  return null
+  const me = resolveOwnUsername(typed, session)
+  return me === '' ? null : me
 }

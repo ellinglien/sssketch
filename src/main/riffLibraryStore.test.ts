@@ -638,7 +638,7 @@ describe('listRiffs', () => {
     seedStemsAndGains(root)
     setRiffLibraryRootForTests(root)
 
-    const { riffs } = listRiffs('jam-techno', {})
+    const { riffs } = listRiffs('jam-techno', { targetUser: 'elling' })
     const riff1 = riffs.find((r) => r.riffCID === 'riff-1')!
     expect(riff1.stemCount).toBe(2)
     expect(riff1.cachedStemCount).toBe(1) // only stem-a is actually on disk
@@ -723,18 +723,29 @@ describe('listRiffs', () => {
     expect(riffs).toHaveLength(0)
   })
 
-  it('scores ownerFraction against targetUser instead of the RIFF_LIBRARY_USERNAME default when given', () => {
+  it('scores ownerFraction against targetUser, a real per-call parameter', () => {
     root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
     createSeededFixtureWarehouse(root)
     seedStemsAndGains(root)
     setRiffLibraryRootForTests(root)
 
     // Symmetric to the 'reports ... ownerFraction' test above, but scored
-    // against 'mvdg' (stem-b's creator) instead of the default 'elling' —
+    // against 'mvdg' (stem-b's creator) instead of 'elling' —
     // proves the target user is a real per-call parameter, not baked in.
     const { riffs } = listRiffs('jam-techno', { targetUser: 'mvdg' })
     expect(riffs.find((r) => r.riffCID === 'riff-1')!.ownerFraction).toBe(0.5) // mvdg (stem-b) only
     expect(riffs.find((r) => r.riffCID === 'riff-2')!.ownerFraction).toBe(0) // elling (stem-c) only, no mvdg
+  })
+
+  it('scores every riff 0 with no targetUser: there is no default identity', () => {
+    root = mkdtempSync(join(tmpdir(), 'sssketch-lore-test-'))
+    createSeededFixtureWarehouse(root)
+    seedStemsAndGains(root)
+    setRiffLibraryRootForTests(root)
+
+    const { riffs } = listRiffs('jam-techno', {})
+    expect(riffs.length).toBeGreaterThan(0)
+    for (const riff of riffs) expect(riff.ownerFraction).toBe(0)
   })
 
   it('filters to only riffs containing targetUser when onlyContainsUser is true', () => {
@@ -743,11 +754,14 @@ describe('listRiffs', () => {
     seedStemsAndGains(root)
     setRiffLibraryRootForTests(root)
 
-    // Defaults to RIFF_LIBRARY_USERNAME ('elling') when targetUser is unset — both
-    // riff-1 and riff-2 have an elling stem.
-    expect(listRiffs('jam-techno', { onlyContainsUser: true }).riffs.map((r) => r.riffCID)).toEqual(
-      ['riff-2', 'riff-1']
-    )
+    // Both riff-1 and riff-2 have an elling stem.
+    expect(
+      listRiffs('jam-techno', { targetUser: 'elling', onlyContainsUser: true }).riffs.map(
+        (r) => r.riffCID
+      )
+    ).toEqual(['riff-2', 'riff-1'])
+    // With nobody as "me" (no targetUser), nothing is mine.
+    expect(listRiffs('jam-techno', { onlyContainsUser: true }).riffs).toEqual([])
     // Only riff-1 has an mvdg stem (stem-b).
     expect(
       listRiffs('jam-techno', { targetUser: 'mvdg', onlyContainsUser: true }).riffs.map(

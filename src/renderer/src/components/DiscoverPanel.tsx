@@ -933,16 +933,11 @@ export function DiscoverPanel({
   setUndoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
   redoStack: DiscoverSlot[][]
   setRedoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
-  /** The real, live "who am I" for this codebase -- LibraryBrowser.tsx's
-   * own `riffLibraryUsername` state (seeded from localStorage via
-   * loadStoredRiffLibraryUsername, editable through its own "your
-   * username" field, already the value its 'browse' tab's own
-   * `filters.targetUser` uses). `@shared/riffLibraryTypes`'s
-   * `RIFF_LIBRARY_USERNAME` is only that loader's compile-time fallback
-   * ('elling') for a machine that's never set a username -- NOT itself
-   * the live value -- so it's deliberately not used here; passing the
-   * real per-machine value down keeps "only own stems" rerolls scoped to
-   * whoever is actually using this install. */
+  /** The real, live "who am I" -- LibraryBrowser.tsx's own
+   * `riffLibraryUsername`, by the one rule (@shared/ownUsernameReport
+   * resolveOwnUsername: the typed username, else the Endlesss login's,
+   * else nobody). '' is nobody: `mine` is then disabled and rolls are not
+   * narrowed to anyone's stems. There is no default identity. */
   currentUsername: string
   /** Discover artist mode (2026-10-01), now the chosen artists (combine artists, 2026-10-06):
    * `[null]` = me. App.tsx state. */

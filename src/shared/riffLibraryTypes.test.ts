@@ -4,8 +4,7 @@ import {
   soundSourceMatchesFilter,
   computeOwnerFraction,
   stemDownloadUrl,
-  resolveKeyName,
-  RIFF_LIBRARY_USERNAME
+  resolveKeyName
 } from './riffLibraryTypes'
 
 describe('instrumentMaskToSoundType', () => {
@@ -104,8 +103,13 @@ describe('computeOwnerFraction', () => {
     expect(computeOwnerFraction([], 'elling')).toBe(0)
   })
 
-  it('matches RIFF_LIBRARY_USERNAME by default when no target is passed', () => {
-    expect(computeOwnerFraction([RIFF_LIBRARY_USERNAME], undefined)).toBe(1)
+  it('is 0 with no target user: nobody is "me", so nothing is mine', () => {
+    expect(computeOwnerFraction(['elling', 'mvdg'], undefined)).toBe(0)
+  })
+
+  it('a blank target never matches stems with no recorded author', () => {
+    expect(computeOwnerFraction(['', ''], '')).toBe(0)
+    expect(computeOwnerFraction(['', 'mvdg'], '  ')).toBe(0)
   })
 })
 

@@ -52,7 +52,7 @@ function legacyRiffLibraryPrefsPath(): string {
  * pre-rename prefs filename to the new one, so nobody's already-chosen
  * external LORE archive location silently reverts to the default just
  * because the prefs file itself was renamed -- mirrors
- * LibraryBrowser.tsx's own loadStoredRiffLibraryUsername() localStorage
+ * riffLibraryUsername.ts's own loadTypedRiffLibraryUsername() localStorage
  * carry-forward. Called at the top of both riffLibraryRootPath() and
  * hasStoredRiffLibraryRootOverride(), so it runs on whichever of those two
  * this process happens to call first -- self-terminating, since it's a
