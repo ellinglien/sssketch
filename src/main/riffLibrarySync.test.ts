@@ -360,6 +360,54 @@ describe('syncJam', () => {
 })
 
 describe('syncs in flight', () => {
+  /** A feed whose first page waits until `release`. */
+  function heldFeed(): {
+    fetchImpl: typeof fetch
+    release: () => void
+    signals: (AbortSignal | undefined)[]
+  } {
+    let release = (): void => {}
+    const held = new Promise<void>((r) => (release = r))
+    const signals: (AbortSignal | undefined)[] = []
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://cdn.example.com')) {
+        return new Response(new ArrayBuffer(8), { status: 200 })
+      }
+      signals.push(init?.signal ?? undefined)
+      await held
+      return new Response(JSON.stringify(sharedFeedPage([], false)), { status: 200 })
+    }) as unknown as typeof fetch
+    return { fetchImpl, release, signals }
+  }
+
+  // Review of 0e27db79: the sync runs under the lowercase key, so a cancel
+  // or a remove naming the feed as it was spelled must find it.
+  it('abortSync stops the running shared:elling sync when asked for shared:Elling', async () => {
+    const { syncSharedFeed, abortSync, activeSyncCount } = await import('./riffLibrarySync')
+    const db = freshDb()
+    const feed = heldFeed()
+    const running = syncSharedFeed('Elling', () => {}, feed.fetchImpl, db)
+    await vi.waitFor(() => expect(feed.signals).toHaveLength(1))
+    expect(abortSync('shared:Elling')).toBe(true)
+    expect(feed.signals[0]?.aborted).toBe(true)
+    feed.release()
+    await running
+    expect(activeSyncCount()).toBe(0)
+  })
+
+  it('removeJamSync refuses shared:Elling while shared:elling is syncing', async () => {
+    const { syncSharedFeed, removeJamSync } = await import('./riffLibrarySync')
+    const db = freshDb()
+    const feed = heldFeed()
+    const running = syncSharedFeed('elling', () => {}, feed.fetchImpl, db)
+    expect(() => removeJamSync('shared:Elling', false, db)).toThrow(/sync is currently running/)
+    feed.release()
+    await running
+  })
+
+  // Read by BackgroundWorkIndicator.tsx (via index.ts's
+  // riff-library-sync-active push), so "syncing library" shows while any
+  // sync runs -- including one started while the Library Browser is closed.
   it('reports how many syncs are running as each one starts and finishes', async () => {
     const { syncSharedFeed, activeSyncCount, setSyncsInFlightListener } =
       await import('./riffLibrarySync')

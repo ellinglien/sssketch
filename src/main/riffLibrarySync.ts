@@ -92,6 +92,16 @@ function noteSyncsInFlightChanged(): void {
   syncsInFlightListener?.(syncsInFlight.size)
 }
 
+/** The key a sync of `key` runs under in syncsInFlight: a shared feed's is
+ * always its lowercase name (syncSharedFeed), so `shared:Elling` -- the jam
+ * row a capitalised login once synced, still listed until the next sync
+ * folds it -- names the running `shared:elling` sync (review of 0e27db79).
+ * A private jam's id is used as is. */
+function inFlightKeyOf(key: string): string {
+  if (!key.startsWith('shared:')) return key
+  return `shared:${normalizeEndlesssUsername(key.slice('shared:'.length))}`
+}
+
 /** Requests that whichever sync is currently running for `key` stop as soon
  * as possible -- does NOT mark the jam as fully synced (see syncSharedFeed/
  * syncJam's own page-loop abort checks, which skip markJamSyncComplete on
@@ -99,7 +109,7 @@ function noteSyncsInFlightChanged(): void {
  * any other partial/interrupted sync. Returns false if nothing was running
  * for this key (nothing to abort, not an error). */
 export function abortSync(key: string): boolean {
-  const controller = syncsInFlight.get(key)
+  const controller = syncsInFlight.get(inFlightKeyOf(key))
   if (!controller) return false
   controller.abort()
   return true
@@ -127,7 +137,7 @@ export function removeJamSync(
   deleteFiles: boolean,
   db: Database.Database = openOwnRiffLibraryDb()
 ): RemoveJamSyncResult {
-  if (syncsInFlight.has(jamCID)) {
+  if (syncsInFlight.has(inFlightKeyOf(jamCID))) {
     throw new Error(`cannot remove ${jamCID}: a sync is currently running for it`)
   }
   const before = db
