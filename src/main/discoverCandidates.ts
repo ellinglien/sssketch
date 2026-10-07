@@ -2401,8 +2401,14 @@ async function getTraitPoolCandidates({
         // just this chunk, same as every other per-db query here.
         continue
       }
+      // A stem in more than one db (the Shared Feed holds archive stems, and
+      // since 2026-10-07 the own db's jams sit beside the archive's): the
+      // first db's row, which is the archive's -- listJamsWithDb lists its
+      // pairs first, as the mask pool's first-db-wins already assumes.
       for (const row of rows) {
-        if (allowedJamCIDs.has(row.OwnerJamCID)) stemByCID.set(row.StemCID, { db, row })
+        if (allowedJamCIDs.has(row.OwnerJamCID) && !stemByCID.has(row.StemCID)) {
+          stemByCID.set(row.StemCID, { db, row })
+        }
       }
       sinceYield += 1
       if (sinceYield >= RIFF_QUERY_YIELD_EVERY) {

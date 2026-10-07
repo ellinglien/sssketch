@@ -170,6 +170,8 @@ function getRiffLibraryDb(): Database.Database | null {
       fileMustExist: true,
       timeout: 2000
     })
+    // An archive that just came back (the drive remounted) takes its jams back.
+    ownRoutedMemo = null
     return cachedDb
   } catch (err) {
     console.error('getRiffLibraryDb: failed to open warehouse.db3:', err)
@@ -181,6 +183,7 @@ function closeRiffLibraryDb(): void {
   cachedDb?.close()
   cachedDb = null
   cachedJamsWithDb = null
+  ownRoutedMemo = null
   // Keyed by the Database object itself, so a new root can't collide
   // with the old archive's counts -- but the closed handle would sit in
   // this map forever if nothing dropped it.
@@ -250,7 +253,15 @@ export function resolveStemPath(jamCID: string, stemCID: string): string {
   // always writes through openOwnRiffLibraryDb, unconditionally). Checking
   // the jamCID directly, not just whether root === own root, is what keeps
   // this correct even while root is pointed elsewhere.
-  if (jamCID.startsWith('shared:') || root === ownRiffLibraryRoot()) {
+  // A jam sssketch synced itself and the archive has no riffs for
+  // (ownRoutedJams, below) is read from the own db, and its audio is where
+  // that sync put it: the same cache. Asked only with the root external, so
+  // the own-root case pays nothing; a Set lookup otherwise.
+  if (
+    jamCID.startsWith('shared:') ||
+    root === ownRiffLibraryRoot() ||
+    ownRoutedJams().has(jamCID)
+  ) {
     return join(app.getPath('userData'), 'endlesss-cache', 'stems', shard, stemCID)
   }
   return join(root, 'cache', 'common', 'stem_v2', jamCID, shard, stemCID)
@@ -269,12 +280,117 @@ export function discoveredStemPath(stemCID: string): string {
  * (openOwnRiffLibraryDb, via riffLibrarySync.ts's syncSharedFeed),
  * regardless of which root the user has configured for browsing here (e.g.
  * an external LORE archive) -- see riffLibrarySchema.ts's own doc comment.
- * Everything else follows whatever root is currently configured
- * (getRiffLibraryDb). */
+ * So, with the root external, does a jam sssketch synced itself that the
+ * archive has no riffs for (ownRoutedJams, below, 2026-10-07). Everything
+ * else follows whatever root is currently configured (getRiffLibraryDb). */
 function dbForJam(jamCID: string): Database.Database | null {
-  return jamCID.startsWith('shared:') || jamCID === DISCOVERED_JAM_CID
-    ? openOwnRiffLibraryDb()
-    : getRiffLibraryDb()
+  if (jamCID.startsWith('shared:') || jamCID === DISCOVERED_JAM_CID) return openOwnRiffLibraryDb()
+  if (riffLibraryRootPath() !== ownRiffLibraryRoot() && ownRoutedJams().has(jamCID)) {
+    return openOwnRiffLibraryDb()
+  }
+  return getRiffLibraryDb()
+}
+
+// --- Own jams beside an external archive (2026-10-07) ----------------------
+//
+// docs/superpowers/plans/2026-10-07-merge-own-jams-with-lore.md. With the
+// root on an external LORE archive, the jams sssketch synced itself (always
+// into the own db, riffLibrarySync.ts) used to be invisible: dbForJam sent
+// them to the archive, which on Elling's has only a name-only stub for 17 of
+// them (20,051 stems). The rule, per jam:
+//   an own regular jam (not shared:, not discovered) with at least one riff
+//   in the own db and NONE in the archive is read from the own db, whole --
+//   its riffs, its stems, its audio in the own cache (resolveStemPath).
+// Any jam the archive has riffs for stays the archive's, whole: the archive
+// wins every jam, riff and stem both have. (Splitting a jam across dbs would
+// need stem-level dedupe in every consumer; the cost is the 97 own-only
+// stems in 4 jams LORE also has, measured 2026-10-07.)
+//
+// Small reads only: the own db's Jams rows with an EXISTS riff seek each,
+// then one EXISTS seek per candidate on the archive's OwnerJamCID index --
+// never a walk of the archive. Memoised, because resolveStemPath asks once
+// per stem: dropped when listJamsWithDb rebuilds (a table moved in either
+// db), when the archive connection opens or closes, when the own db is a
+// different connection, and checked against the own db's Jams/Riffs signals
+// by listJams (the browser, after a sync). Computed with the archive away or
+// a seek failing, it is looked at again after OWN_ROUTING_RECHECK_MS: with
+// the archive away every own jam is read from the own db (all its data is
+// local), and the archive takes its jams back when it returns.
+interface OwnRoutedJams {
+  own: Database.Database
+  /** The archive connection it was computed against (null: unreachable). */
+  archive: Database.Database | null
+  jams: ReadonlySet<string>
+  /** False when the archive was away or a seek threw: recheck after a while. */
+  settled: boolean
+  computedAt: number
+  ownJamsState: ScanCacheState
+  ownRiffsState: ScanCacheState
+}
+let ownRoutedMemo: OwnRoutedJams | null = null
+const OWN_ROUTING_RECHECK_MS = 30_000
+
+/** The own jams read from the own db while the root is an external archive
+ * (see above). Only meaningful with the root external. `checkOwnTables`:
+ * also notice a jam synced into the own db since (listJams; not the
+ * per-stem path). */
+function ownRoutedJams(checkOwnTables = false): ReadonlySet<string> {
+  const own = openOwnRiffLibraryDb()
+  const memo = ownRoutedMemo
+  if (
+    memo &&
+    memo.own === own &&
+    (memo.settled
+      ? memo.archive === cachedDb
+      : Date.now() - memo.computedAt < OWN_ROUTING_RECHECK_MS) &&
+    (!checkOwnTables ||
+      (isScanCacheCurrent(own, 'Jams', memo.ownJamsState) &&
+        isScanCacheCurrent(own, 'Riffs', memo.ownRiffsState)))
+  ) {
+    return memo.jams
+  }
+  countWork('sql:own-jam-routing')
+  const archive = getRiffLibraryDb()
+  // Signals read BEFORE the queries, as listJamsWithDb's.
+  const ownJamsState = newScanCacheState(readTableSignal(own, 'Jams'))
+  const ownRiffsState = newScanCacheState(readTableSignal(own, 'Riffs'))
+  const candidates = (
+    own
+      .prepare(
+        `SELECT j.JamCID AS jamCID FROM Jams j
+         WHERE j.JamCID NOT LIKE 'shared:%' AND j.JamCID <> ?
+           AND EXISTS (SELECT 1 FROM Riffs r WHERE r.OwnerJamCID = j.JamCID)`
+      )
+      .all(DISCOVERED_JAM_CID) as { jamCID: string }[]
+  ).map((row) => row.jamCID)
+  const jams = new Set<string>()
+  let settled = archive !== null
+  if (!archive) {
+    for (const jamCID of candidates) jams.add(jamCID)
+  } else if (candidates.length > 0) {
+    try {
+      const archiveHasRiffs = archive.prepare(`SELECT 1 FROM Riffs WHERE OwnerJamCID = ? LIMIT 1`)
+      for (const jamCID of candidates) {
+        if (archiveHasRiffs.get(jamCID) === undefined) jams.add(jamCID)
+      }
+    } catch (err) {
+      // The archive can't answer right now: leave every jam to it, as before
+      // this rule, and look again shortly.
+      console.error('ownRoutedJams: the archive could not be read:', err)
+      jams.clear()
+      settled = false
+    }
+  }
+  ownRoutedMemo = {
+    own,
+    archive,
+    jams,
+    settled,
+    computedAt: Date.now(),
+    ownJamsState,
+    ownRiffsState
+  }
+  return jams
 }
 
 function queryJamsFromDb(db: Database.Database, filterText: string): RiffLibraryJam[] {
@@ -404,18 +520,29 @@ export function listJams(filterText: string, targetUser?: string): RiffLibraryJa
   // in the db, never listed, so there's one "Shared Feed", not two.
   const listable = (jam: RiffLibraryJam): boolean =>
     !jam.jamCID.startsWith('shared:') || isValidSharedFeedKey(jam.jamCID)
-  const rows = db ? withCounts(queryJamsFromDb(db, filterText).filter(listable), db) : []
-  // Shared Feed always lives in sssketch's own database regardless of
-  // which root is configured for browsing (see dbForJam) -- when that's
-  // NOT the currently active root, merge its own real Jams row(s) in
-  // separately, so "Shared Feed" still shows its real lastRiffTime instead
-  // of silently reading as never-synced just because browsing is currently
-  // pointed at an external archive.
-  if (riffLibraryRootPath() === ownRiffLibraryRoot()) return rows
+  if (riffLibraryRootPath() === ownRiffLibraryRoot()) {
+    return db ? withCounts(queryJamsFromDb(db, filterText).filter(listable), db) : []
+  }
+  // Root external. Shared Feed always lives in sssketch's own database (see
+  // dbForJam), and so do the jams sssketch synced itself that the archive
+  // has no riffs for (ownRoutedJams, 2026-10-07) -- merged in from there, so
+  // they show their real lastRiffTime (and riffs) instead of reading as
+  // never-synced. Each such jam replaces the archive's name-only stub row:
+  // one row per JamCID.
+  const routed = ownRoutedJams(true)
+  const rows = db
+    ? withCounts(
+        queryJamsFromDb(db, filterText).filter((j) => listable(j) && !routed.has(j.jamCID)),
+        db
+      )
+    : []
   const ownDb = openOwnRiffLibraryDb()
   const ownRows = withCounts(
     queryJamsFromDb(ownDb, filterText).filter(
-      (j) => (j.jamCID.startsWith('shared:') && listable(j)) || j.jamCID === DISCOVERED_JAM_CID
+      (j) =>
+        (j.jamCID.startsWith('shared:') && listable(j)) ||
+        j.jamCID === DISCOVERED_JAM_CID ||
+        routed.has(j.jamCID)
     ),
     ownDb
   )
@@ -503,6 +630,9 @@ export function listJamsWithDb(): { jamCID: string; db: Database.Database }[] {
   // way), so "listJamsWithDb 312ms" is ambiguous on its own. This counter
   // next to sql:cache-check.Riffs in the same [work] line says which.
   countWork('sql:list-jams-rebuild')
+  // A table moved in some source db: which own jams the archive lacks may
+  // have moved with it (a LORE sync, or one of sssketch's own).
+  ownRoutedMemo = null
   // Read BEFORE the query, so a write landing between the two makes the
   // cache look stale on the next call rather than being missed entirely.
   const sources = jamListSourceDbs().map((db) => ({
@@ -510,12 +640,20 @@ export function listJamsWithDb(): { jamCID: string; db: Database.Database }[] {
     jamsState: newScanCacheState(readTableSignal(db, 'Jams')),
     riffsState: newScanCacheState(readTableSignal(db, 'Riffs'))
   }))
-  const jams = listJams('')
+  const listed = listJams('')
     .map((jam) => {
       const db = dbForJam(jam.jamCID)
       return db ? { jamCID: jam.jamCID, db } : null
     })
     .filter((pair): pair is { jamCID: string; db: Database.Database } => pair !== null)
+  // The archive's pairs first, then the own db's (each in listJams' order):
+  // every consumer groups jams by db in this order, and where a stem is in
+  // both (the Shared Feed holds 4,869 archive stems), the first db's copy is
+  // the one taken -- the archive wins (2026-10-07).
+  const ownDb = riffLibraryRootPath() === ownRiffLibraryRoot() ? null : openOwnRiffLibraryDb()
+  const jams = ownDb
+    ? [...listed.filter((p) => p.db !== ownDb), ...listed.filter((p) => p.db === ownDb)]
+    : listed
   // No sources means no readable db at all (an unmounted external drive,
   // a never-synced warehouse). Caching that would make `every` on an empty
   // array trivially true and pin an empty jam list forever -- so leave the

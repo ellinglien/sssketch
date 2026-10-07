@@ -178,3 +178,37 @@ Checks: typecheck, lint on touched files, the DB tests locally, `CI=1 npx vitest
   the 1,765.
 - Discover and radio can draw stems from those jams.
 - Not done: the 97 own-only stems inside 4 jams LORE also has.
+
+## As built (2026-10-07)
+
+Changes from the plan above:
+- **16 jams, not 17.** The rule needs a riff in the own db; "ellingelling" has none, so it stays the
+  archive's stub row.
+- **The mask pool needed no change.** getDiscoverCandidatesPool's merge already keeps the first
+  candidate per StemCID, and the archive's pairs now come first. Only the trait pool changed (it
+  kept the last db's row).
+- `listJams` checks the own db's Jams/Riffs signals before reusing the routing, so a jam sssketch
+  syncs while the root is external shows up in the browser without waiting for a roll.
+
+Measured on a scratch clone of his own db (`VACUUM INTO`, 2026-10-07) against the USB archive,
+read-only; the dev app's stem cache read through a symlink:
+
+| | before | after |
+|---|---|---|
+| jams listed (browser) | 5,058 rows | 5,058 rows, 5,058 distinct (16 stubs replaced by own rows) |
+| pairs routed to the own db | 2 (Shared Feed, discovered) | 18, listed after the archive's |
+| library scan work list | 236 stems | 15,871 stems: +15,635 from the 16 jams (1,667 need only the level pass, 13,968 the full analysis) |
+| placeholders skipped | 607 | 607 |
+| work list build (warm) | | 4.5 s |
+
+- The routing itself: 4 ms for the own db's 36 candidates, 25 ms for the 36 archive seeks the first
+  time, under 1 ms after. No archive walk. (The archive's own jam-list query, unchanged, takes 4.0 s
+  on a fresh connection and 112 ms after.)
+- `resolveStemPath` over all 81,902 own-db stems: 153-162 ms, 25,214 to the own cache (the 16 jams
+  plus the Shared Feed and discovered).
+- 15,635 of the 20,051 stems have audio in the dev app's cache; the rest drop out at the existence
+  step, as any stem without audio does.
+
+Tests: riffLibraryStore.test.ts (8 new, root external + archive unreachable + own root),
+discoverCandidates.test.ts (a stem in both rolls once from the archive, mask and trait; an own jam
+rolls from the own db's existing indexes with no walk).

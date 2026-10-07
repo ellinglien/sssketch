@@ -4240,3 +4240,77 @@ describe('faster startup: usable before complete (2026-10-06)', () => {
     expect(pool.length).toBe(1000)
   })
 })
+
+// 2026-10-07 (docs/superpowers/plans/2026-10-07-merge-own-jams-with-lore.md):
+// with the own db's jams beside the archive, a stem can be in both (the
+// Shared Feed holds 4,869 archive stems). listJamsWithDb lists the
+// archive's pairs first; a roll offers each stem once, the archive's copy.
+describe('a stem in both the archive and the own db', () => {
+  function bothDbs(): { own: Database.Database; archive: Database.Database } {
+    const own = freshDb()
+    const archive = freshDb()
+    seedRiff(archive, 'r-arc', 'jamArc', 120, ['s1'])
+    seedStem(archive, 's1', 'jamArc', { instrument: 1 << 1, presetName: 'archive copy' })
+    seedRiff(own, 'r-own', 'shared:elling', 140, ['s1'])
+    seedStem(own, 's1', 'shared:elling', { instrument: 1 << 1, presetName: 'own copy' })
+    return { own, archive }
+  }
+
+  it('a mask roll offers it once, from the archive', async () => {
+    const { own, archive } = bothDbs()
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [
+        { jamCID: 'jamArc', dbForJam: archive },
+        { jamCID: 'shared:elling', dbForJam: own }
+      ],
+      kinds: ['drums']
+    })
+    expect(candidates.map((c) => [c.stemCID, c.jamCID, c.riffCID])).toEqual([
+      ['s1', 'jamArc', 'r-arc']
+    ])
+  })
+
+  it("an own jam listed beside the archive rolls from the own db's indexes, with no new walk", async () => {
+    const own = freshDb()
+    const archive = freshDb()
+    seedRiff(archive, 'r-arc', 'jamArc', 120, ['a1'])
+    seedStem(archive, 'a1', 'jamArc', { instrument: 1 << 1 })
+    seedRiff(own, 'r-shared', 'shared:elling', 120, ['sh1'])
+    seedStem(own, 'sh1', 'shared:elling', { instrument: 1 << 1 })
+    seedRiff(own, 'r-own', 'jamOwn', 120, ['o1'])
+    seedStem(own, 'o1', 'jamOwn', { instrument: 1 << 1 })
+    const before = [
+      { jamCID: 'jamArc', dbForJam: archive },
+      { jamCID: 'shared:elling', dbForJam: own }
+    ]
+    // Before: the own db is a source already (the Shared Feed), its own jam is not listed.
+    const first = await getDiscoverCandidates({ ownDb: own, jams: before, kinds: ['drums'] })
+    expect(first.map((c) => c.stemCID).sort()).toEqual(['a1', 'sh1'])
+    vi.mocked(countWork).mockClear()
+    const after = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [...before, { jamCID: 'jamOwn', dbForJam: own }],
+      kinds: ['drums']
+    })
+    expect(after.map((c) => c.stemCID).sort()).toEqual(['a1', 'o1', 'sh1'])
+    const kinds = vi.mocked(countWork).mock.calls.map(([kind]) => String(kind))
+    expect(kinds.filter((k) => k.startsWith('walk:') || k.endsWith(':rebuild'))).toEqual([])
+  })
+
+  it('a trait roll offers it once, from the archive', async () => {
+    const { own, archive } = bothDbs()
+    seedFeatures(own, 's1', featuresJSON({ transientDensity: 0.8 }))
+    const candidates = await getDiscoverCandidates({
+      ownDb: own,
+      jams: [
+        { jamCID: 'jamArc', dbForJam: archive },
+        { jamCID: 'shared:elling', dbForJam: own }
+      ],
+      kinds: ['rhythmic']
+    })
+    expect(candidates.map((c) => [c.stemCID, c.jamCID, c.presetName])).toEqual([
+      ['s1', 'jamArc', 'archive copy']
+    ])
+  })
+})

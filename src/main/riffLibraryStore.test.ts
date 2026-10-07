@@ -1732,3 +1732,163 @@ describe('listJamsWithDb', () => {
     })
   })
 })
+
+// 2026-10-07 (docs/superpowers/plans/2026-10-07-merge-own-jams-with-lore.md):
+// with the root on the USB LORE archive, the jams sssketch synced itself were
+// invisible -- 17 of Elling's (20,051 stems) have a name-only stub in the
+// archive and no riffs there. A jam the archive has no riffs for, and the own
+// db has, is now read from the own db whole; any jam both have stays the
+// archive's.
+describe('own jams the archive has no riffs for are read from the own db', () => {
+  let externalRoot: string
+
+  beforeEach(async () => {
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-own-jams-test-'))
+    const { closeOwnRiffLibraryDb, openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    closeOwnRiffLibraryDb()
+    openOwnRiffLibraryDb().exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES
+        ('jam-own', 'Own Only', 1),
+        ('jam-techno', 'Techno Jam', 1),
+        ('jam-own-empty', 'Synced Nothing', 1),
+        ('shared:elling', 'Shared Feed', 1);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName, StemCID_1, AppVersion) VALUES
+        ('own-riff-1', 'jam-own', 9000, 120, 4, 'elling', 'ostem1', 1),
+        ('techno-own-only', 'jam-techno', 3000, 130, 8, 'elling', 'tstem9', 1),
+        ('shared-riff-1', 'shared:elling', 5000, 140, 8, 'elling', NULL, 1);
+      INSERT INTO Stems (StemCID, OwnerJamCID, CreatorUserName, PresetName, Instrument, BPMrnd, Length16s) VALUES
+        ('ostem1', 'jam-own', 'elling', 'Pad', 4, 120, 64),
+        ('tstem9', 'jam-techno', 'elling', 'Kick', 2, 130, 128);
+    `)
+    externalRoot = mkdtempSync(join(tmpdir(), 'sssketch-own-jams-external-'))
+    createSeededFixtureWarehouse(externalRoot) // jam-techno (riffs), jam-ambient (riffs), jam-empty
+    // The archive knows the own jams' names, and has no riff of theirs.
+    const archive = new Database(join(externalRoot, 'cache', 'common', 'warehouse.db3'))
+    archive.exec(
+      `INSERT INTO Jams (JamCID, PublicName) VALUES ('jam-own', 'Own Only'), ('jam-own-empty', 'Synced Nothing')`
+    )
+    archive.close()
+    setRiffLibraryRootForTests(externalRoot)
+  })
+
+  afterEach(async () => {
+    vi.useRealTimers()
+    const { closeOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    closeOwnRiffLibraryDb()
+    setRiffLibraryRootForTests(null)
+    rmSync(externalRoot, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+  })
+
+  const ownCachePath = (stemCID: string): string =>
+    join(userDataDir, 'endlesss-cache', 'stems', stemCID[0], stemCID)
+  const loreStemPath = (jamCID: string, stemCID: string): string =>
+    join(externalRoot, 'cache', 'common', 'stem_v2', jamCID, stemCID[0], stemCID)
+
+  it('lists each jam once: the own-only jam from the own db, a jam both have from the archive', () => {
+    const jams = listJams('')
+    const byId = (id: string): RiffLibraryJam[] => jams.filter((j) => j.jamCID === id)
+    expect(byId('jam-own')).toEqual([{ jamCID: 'jam-own', name: 'Own Only', lastRiffTime: 9000 }])
+    expect(byId('jam-techno')).toEqual([
+      { jamCID: 'jam-techno', name: 'Techno Jam', lastRiffTime: 2000 }
+    ])
+    // No riffs in either db: the archive's row, as before.
+    expect(byId('jam-own-empty')).toHaveLength(1)
+    expect(jams.map((j) => j.jamCID).sort()).toEqual([
+      'jam-ambient',
+      'jam-empty',
+      'jam-own',
+      'jam-own-empty',
+      'jam-techno',
+      'shared:elling'
+    ])
+    // Newest riff first, across both dbs.
+    expect(jams[0].jamCID).toBe('jam-own')
+  })
+
+  it('the name filter applies to the own rows too', () => {
+    expect(listJams('own only').map((j) => j.jamCID)).toEqual(['jam-own'])
+  })
+
+  it('routes the own-only jam to the own db and the archive pairs come first', async () => {
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const own = openOwnRiffLibraryDb()
+    const pairs = listJamsWithDb()
+    expect(pairs.find((p) => p.jamCID === 'jam-own')?.db).toBe(own)
+    expect(pairs.find((p) => p.jamCID === 'shared:elling')?.db).toBe(own)
+    expect(pairs.find((p) => p.jamCID === 'jam-techno')?.db).not.toBe(own)
+    // Archive first, so wherever a stem is in both, the archive's copy is
+    // the one taken (every first-db-wins consumer groups dbs in this order).
+    const firstOwn = pairs.findIndex((p) => p.db === own)
+    expect(pairs.slice(firstOwn).every((p) => p.db === own)).toBe(true)
+    expect(firstOwn).toBeGreaterThan(0)
+  })
+
+  it("lists the own-only jam's riffs from the own db; a jam both have keeps the archive's riffs only", () => {
+    expect(listRiffs('jam-own', {}).riffs.map((r) => r.riffCID)).toEqual(['own-riff-1'])
+    expect(
+      listRiffs('jam-techno', {})
+        .riffs.map((r) => r.riffCID)
+        .sort()
+    ).toEqual(['riff-1', 'riff-2'])
+  })
+
+  it("resolves the own-only jam's stems to the own cache, a jam both have to the archive's folder", () => {
+    expect(resolveStemPath('jam-own', 'ostem1')).toBe(ownCachePath('ostem1'))
+    expect(resolveStemPath('jam-techno', 'tstem1')).toBe(loreStemPath('jam-techno', 'tstem1'))
+    expect(resolveStemPath('jam-ambient', 'astem1')).toBe(loreStemPath('jam-ambient', 'astem1'))
+  })
+
+  it('resolveRiff of an own-only riff finds its audio in the own cache', () => {
+    mkdirSync(join(userDataDir, 'endlesss-cache', 'stems', 'o'), { recursive: true })
+    writeFileSync(ownCachePath('ostem1'), 'audio')
+    const riff = resolveRiff('own-riff-1')
+    expect(riff?.stems.map((s) => s.path)).toEqual([ownCachePath('ostem1')])
+  })
+
+  it('a LORE sync that gives the jam riffs hands it back to the archive, after the change check', () => {
+    vi.useFakeTimers()
+    expect(resolveStemPath('jam-own', 'ostem1')).toBe(ownCachePath('ostem1'))
+    listJamsWithDb()
+    const archive = new Database(join(externalRoot, 'cache', 'common', 'warehouse.db3'))
+    archive
+      .prepare(
+        `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, BPMrnd, BarLength, UserName)
+         VALUES ('lore-own-riff', 'jam-own', 9500, 120, 4, 'elling')`
+      )
+      .run()
+    archive.close()
+    vi.setSystemTime(Date.now() + CACHE_CHANGE_CHECK_INTERVAL_MS + 1_000)
+    const pairs = listJamsWithDb()
+    const own = pairs.find((p) => p.jamCID === 'jam-own')!
+    expect(
+      own.db.prepare(`SELECT COUNT(*) AS n FROM Riffs WHERE RiffCID = 'lore-own-riff'`).get()
+    ).toEqual({ n: 1 })
+    expect(resolveStemPath('jam-own', 'ostem1')).toBe(loreStemPath('jam-own', 'ostem1'))
+    expect(listJams('').filter((j) => j.jamCID === 'jam-own')).toEqual([
+      { jamCID: 'jam-own', name: 'Own Only', lastRiffTime: 9500 }
+    ])
+  })
+
+  it('with the archive unreachable, every own jam with riffs is read from the own db', async () => {
+    setRiffLibraryRootForTests(join(externalRoot, 'gone'))
+    const { openOwnRiffLibraryDb } = await import('./riffLibrarySchema')
+    const own = openOwnRiffLibraryDb()
+    const pairs = listJamsWithDb()
+    expect(pairs.map((p) => p.jamCID).sort()).toEqual(['jam-own', 'jam-techno', 'shared:elling'])
+    expect(pairs.every((p) => p.db === own)).toBe(true)
+    expect(listRiffs('jam-techno', {}).riffs.map((r) => r.riffCID)).toEqual(['techno-own-only'])
+    expect(resolveStemPath('jam-techno', 'tstem9')).toBe(ownCachePath('tstem9'))
+  })
+
+  it('with the root on the own library, nothing changes: every jam is the own library', () => {
+    setRiffLibraryRootForTests(null)
+    expect(
+      listJams('')
+        .map((j) => j.jamCID)
+        .sort()
+    ).toEqual(['jam-own', 'jam-own-empty', 'jam-techno', 'shared:elling'])
+    expect(listRiffs('jam-techno', {}).riffs.map((r) => r.riffCID)).toEqual(['techno-own-only'])
+    expect(resolveStemPath('jam-techno', 'tstem9')).toBe(ownCachePath('tstem9'))
+  })
+})
