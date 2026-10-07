@@ -158,7 +158,9 @@ export function EndlesssLoginPanel({
           >
             <span style={{ color: 'var(--ra-text)' }}>{syncQuestion}</span>
             <span style={{ color: 'var(--ra-text-3)' }}>
-              every stem downloads to your music folder (sssketch/library). this can be large.
+              {
+                "the audio is saved on this mac, in sssketch's app support folder. this can be large."
+              }
             </span>
             <div style={{ display: 'flex', gap: 4 }}>
               <button
