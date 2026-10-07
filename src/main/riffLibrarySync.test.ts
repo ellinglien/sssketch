@@ -672,19 +672,462 @@ describe('a failed or cancelled page fetch is not the end of the feed', () => {
       expect(syncComplete(db, 'jam_1')).toBe(1)
     })
 
-    it('a jam sync with no session is not complete', async () => {
+    it('a jam sync with no session is not complete, and says to log in', async () => {
       vi.resetModules()
       const { syncJam } = await import('./riffLibrarySync')
       const db = freshDb()
-      await syncJam(
-        'jam_1',
-        'Test Jam',
-        () => {},
-        jamFetch(() => null),
-        db
-      )
+      const restore = quietErrors()
+      let outcome
+      try {
+        outcome = await syncJam(
+          'jam_1',
+          'Test Jam',
+          () => {},
+          jamFetch(() => null),
+          db
+        )
+      } finally {
+        restore()
+      }
+      expect(syncComplete(db, 'jam_1')).toBe(0)
+      expect(outcome).toEqual({ stopped: 'logged-out' })
+    })
+  })
+})
+
+// Review of b18e27fb. A private jam served the way the real endpoints are --
+// the listing paged by skip, riff and stem docs from _all_docs -- with every
+// request logged by kind, so a test can say what a sync cost.
+describe('a private jam: riffs that fail, and jams marked complete too early (review of b18e27fb)', () => {
+  const abortError = (): Error => new DOMException('This operation was aborted', 'AbortError')
+
+  async function loggedIn(): Promise<typeof import('./riffLibrarySync')> {
+    vi.resetModules()
+    const { loginWithCredentials } = await import('./endlesssApi')
+    const loginFetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ token: 't', password: 'p', user_id: 'u1', expires: Date.now() + 1e6 }),
+          { status: 200 }
+        )
+    )
+    await loginWithCredentials('elling', 'hunter2', loginFetch as unknown as typeof fetch)
+    return import('./riffLibrarySync')
+  }
+
+  function quietErrors(): () => void {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    return () => {
+      error.mockRestore()
+      warn.mockRestore()
+    }
+  }
+
+  function count(db: Database.Database, where: string): number {
+    return (db.prepare(`SELECT COUNT(*) AS n FROM Riffs WHERE ${where}`).get() as { n: number }).n
+  }
+
+  function syncComplete(db: Database.Database, jamCID: string): number {
+    return (
+      db.prepare(`SELECT SyncComplete FROM Jams WHERE JamCID = ?`).get(jamCID) as {
+        SyncComplete: number
+      }
+    ).SyncComplete
+  }
+
+  /** A riff saved stemless: what the old stem lookup left behind. */
+  const STEMLESS = 'AppVersion IS NOT NULL AND StemCID_1 IS NULL'
+
+  type Kind = 'list' | 'riffdoc' | 'stemdocs' | 'cdn'
+
+  interface JamServer {
+    fetchImpl: typeof fetch
+    requests: (kind: Kind) => number
+    reset: () => void
+  }
+
+  /** `cids` newest first. Each `fail*` returns a failure for that request,
+   * or null to serve it. `emptyRiffs` have no active slot. */
+  function jamServer(opts: {
+    cids: () => string[]
+    failList?: (offset: number) => Promise<Response> | null
+    failRiffDoc?: (riffCID: string) => Promise<Response> | null
+    failStemDocs?: (riffCID: string) => Promise<Response> | null
+    emptyRiffs?: Set<string>
+  }): JamServer {
+    const log: Kind[] = []
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://cdn.example.com')) {
+        log.push('cdn')
+        return new Response(new ArrayBuffer(8), { status: 200 })
+      }
+      if (url.includes('rifffLoopsByCreateTime')) {
+        log.push('list')
+        const params = new URL(url).searchParams
+        const offset = Number(params.get('skip'))
+        const limit = Number(params.get('limit'))
+        const failure = opts.failList?.(offset)
+        if (failure) return failure
+        const all = opts.cids()
+        const rows = all
+          .slice(offset, offset + limit)
+          .map((cid, i) => rawRiffListRow(cid, 1700000000000 - offset - i))
+        return new Response(JSON.stringify({ total_rows: all.length, rows }), { status: 200 })
+      }
+      if (url.includes('_all_docs') && init?.method === 'POST') {
+        const { keys } = JSON.parse(init.body as string) as { keys: string[] }
+        const stemBatch = keys[0].startsWith('stem_')
+        log.push(stemBatch ? 'stemdocs' : 'riffdoc')
+        const riffCID = stemBatch ? keys[0].slice('stem_'.length) : keys[0]
+        const failure = stemBatch ? opts.failStemDocs?.(riffCID) : opts.failRiffDoc?.(riffCID)
+        if (failure) return failure
+        const rows = keys.map((id) => {
+          if (id.startsWith('stem_')) return { id, doc: rawJamStemDoc(id.slice('stem_'.length)) }
+          const doc = rawJamRiffDoc(id)
+          if (opts.emptyRiffs?.has(id)) {
+            ;(doc.state as { playback: unknown[] }).playback = Array.from({ length: 8 }, () => ({
+              slot: {}
+            }))
+          }
+          return { id, doc }
+        })
+        return new Response(JSON.stringify({ rows }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+    return {
+      fetchImpl,
+      requests: (kind) => log.filter((k) => k === kind).length,
+      reset: () => {
+        log.length = 0
+      }
+    }
+  }
+
+  /** Riffs already held: `resolved` with a stem, `stemless` with none. */
+  function seed(
+    db: Database.Database,
+    jamCID: string,
+    complete: 0 | 1,
+    riffs: { resolved?: string[]; unresolved?: string[]; stemless?: string[] }
+  ): void {
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES (?, 'J', ?)`).run(
+      jamCID,
+      complete
+    )
+    const insert = db.prepare(
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, CreationTime, AppVersion, StemCID_1, GainsJSON)
+       VALUES (?, ?, 0, ?, ?, ?)`
+    )
+    db.transaction(() => {
+      for (const cid of riffs.resolved ?? []) insert.run(cid, jamCID, 1, `stem_${cid}`, '{"1":1}')
+      for (const cid of riffs.unresolved ?? []) insert.run(cid, jamCID, null, null, null)
+      for (const cid of riffs.stemless ?? []) insert.run(cid, jamCID, 1, null, '{}')
+    })()
+  }
+
+  const cidsOf = (prefix: string, n: number): string[] =>
+    Array.from({ length: n }, (_, i) => `${prefix}_${i}`)
+
+  // CRITICAL: a stem lookup that failed came back as no stems, and the riff
+  // was saved resolved with none, for good.
+  it.each([
+    ['a 503', async () => new Response('busy', { status: 503 })],
+    ['a network error', async () => Promise.reject(new TypeError('fetch failed'))],
+    [
+      'a timeout',
+      async () => Promise.reject(new DOMException('The operation timed out.', 'TimeoutError'))
+    ]
+  ])(
+    'a stem lookup that fails with %s leaves the riff unresolved and the jam unfinished; the next sync fetches it whole',
+    async (_name, fail) => {
+      const { syncJam } = await loggedIn()
+      const db = freshDb()
+      let failNext = true
+      const server = jamServer({
+        cids: () => cidsOf('r', 3),
+        failStemDocs: (cid) => {
+          if (cid !== 'r_1' || !failNext) return null
+          failNext = false
+          return fail()
+        }
+      })
+      const restore = quietErrors()
+      try {
+        await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      } finally {
+        restore()
+      }
+      expect(count(db, STEMLESS)).toBe(0)
+      expect(count(db, `RiffCID = 'r_1' AND AppVersion IS NULL`)).toBe(1)
+      expect(count(db, 'AppVersion IS NOT NULL')).toBe(2)
+      // A riff in this run failed: not complete, though the walk reached the end.
+      expect(syncComplete(db, 'jam_1')).toBe(0)
+
+      server.reset()
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(count(db, `StemCID_1 = 'stem_r_1' AND AppVersion = 1`)).toBe(1)
+      expect(server.requests('riffdoc')).toBe(1)
+      expect(syncComplete(db, 'jam_1')).toBe(1)
+    }
+  )
+
+  it('a cancel during the stem lookup leaves the riff unresolved, not saved with no stems', async () => {
+    const { syncJam, abortSync } = await loggedIn()
+    const db = freshDb()
+    let cancelNext = true
+    const server = jamServer({
+      cids: () => cidsOf('r', 1),
+      failStemDocs: () => {
+        if (!cancelNext) return null
+        cancelNext = false
+        expect(abortSync('jam_1')).toBe(true)
+        return Promise.reject(abortError())
+      }
+    })
+    const restore = quietErrors()
+    try {
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    } finally {
+      restore()
+    }
+    expect(count(db, STEMLESS)).toBe(0)
+    expect(count(db, 'AppVersion IS NULL')).toBe(1)
+    expect(syncComplete(db, 'jam_1')).toBe(0)
+
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(count(db, `StemCID_1 = 'stem_r_0' AND AppVersion = 1`)).toBe(1)
+    expect(syncComplete(db, 'jam_1')).toBe(1)
+  })
+
+  it('a riff with no active slots is a real empty riff: resolved, and the jam complete', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    const server = jamServer({ cids: () => cidsOf('r', 2), emptyRiffs: new Set(['r_1']) })
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(count(db, `RiffCID = 'r_1' AND ${STEMLESS}`)).toBe(1)
+    expect(syncComplete(db, 'jam_1')).toBe(1)
+  })
+
+  // A 429 used to go through every remaining riff, each one failing too.
+  describe('a 429', () => {
+    afterEach(() => {
+      vi.useRealTimers()
+      // The backoff is module state: no later test inherits it.
+      vi.resetModules()
+    })
+
+    it('during the stem lookup stops the run; the next sync waits out the backoff without a request', async () => {
+      const { syncJam } = await loggedIn()
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const db = freshDb()
+      let limit = true
+      const server = jamServer({
+        cids: () => cidsOf('r', 30),
+        failStemDocs: () =>
+          limit
+            ? Promise.resolve(
+                new Response('slow down', { status: 429, headers: { 'Retry-After': '30' } })
+              )
+            : null
+      })
+      const restore = quietErrors()
+      let first, second
+      try {
+        first = await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+        // No riff past the ones already in flight (three lanes) is asked for.
+        expect(server.requests('riffdoc')).toBeLessThanOrEqual(3)
+        server.reset()
+        second = await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      } finally {
+        restore()
+      }
+      expect(first).toEqual({ stopped: 'rate-limited', retryAt: Date.now() + 30_000 })
+      expect(second).toEqual(first)
+      expect(server.requests('list') + server.requests('riffdoc')).toBe(0)
+      expect(count(db, STEMLESS)).toBe(0)
+      expect(syncComplete(db, 'jam_1')).toBe(0)
+
+      limit = false
+      vi.setSystemTime(Date.now() + 31_000)
+      const third = await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(third).toEqual({ stopped: null })
+      expect(count(db, 'AppVersion = 1 AND StemCID_1 IS NOT NULL')).toBe(30)
+      expect(syncComplete(db, 'jam_1')).toBe(1)
+    })
+
+    it('on a listing page stops the run, a minute by default', async () => {
+      const { syncJam } = await loggedIn()
+      vi.useFakeTimers({ toFake: ['Date'] })
+      const db = freshDb()
+      const server = jamServer({
+        cids: () => cidsOf('r', 230),
+        failList: (offset) =>
+          offset === 200 ? Promise.resolve(new Response('', { status: 429 })) : null
+      })
+      const restore = quietErrors()
+      let outcome
+      try {
+        outcome = await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      } finally {
+        restore()
+      }
+      expect(outcome).toEqual({ stopped: 'rate-limited', retryAt: Date.now() + 60_000 })
       expect(syncComplete(db, 'jam_1')).toBe(0)
     })
+  })
+
+  // IMPORTANT: a riff that failed for any reason but a cancel was left
+  // behind -- the jam was marked complete once the walk reached its end.
+  it('a riff whose doc fetch fails is not left behind: the jam stays unfinished until it is fetched', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    let failNext = true
+    const server = jamServer({
+      cids: () => cidsOf('r', 230),
+      failRiffDoc: (cid) => {
+        if (cid !== 'r_5' || !failNext) return null
+        failNext = false
+        return Promise.resolve(new Response('oops', { status: 500 }))
+      }
+    })
+    const restore = quietErrors()
+    try {
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    } finally {
+      restore()
+    }
+    expect(count(db, 'AppVersion IS NULL')).toBe(1)
+    expect(syncComplete(db, 'jam_1')).toBe(0)
+
+    server.reset()
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(count(db, 'AppVersion IS NULL')).toBe(0)
+    expect(syncComplete(db, 'jam_1')).toBe(1)
+    // Both pages listed, only the one riff fetched.
+    expect(server.requests('list')).toBe(2)
+    expect(server.requests('riffdoc')).toBe(1)
+  })
+
+  // IMPORTANT: jams marked complete under the old rule were never walked
+  // again -- Night Owl, Techno! (27 unfetched riffs on its last page).
+  it('a jam marked complete with unfetched riffs is walked to them, fetching only those', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    const cids = cidsOf('r', 230)
+    seed(db, 'jam_1', 1, { resolved: cids.slice(0, 203), unresolved: cids.slice(203) })
+    const server = jamServer({ cids: () => cids })
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(server.requests('list')).toBe(2)
+    expect(server.requests('riffdoc')).toBe(27)
+    expect(count(db, 'AppVersion IS NULL')).toBe(0)
+    expect(syncComplete(db, 'jam_1')).toBe(1)
+  })
+
+  // Aethereal Forest held exactly 6000; ellingelling none at all. Page 0's
+  // total comes free with it.
+  it.each([
+    ['fewer riffs than the jam has', 400, 450, 3, 50],
+    ['no riffs at all', 0, 5, 1, 5]
+  ])(
+    'a jam marked complete holding %s is walked to the end',
+    async (_name, held, total, lists, fetched) => {
+      const { syncJam } = await loggedIn()
+      const db = freshDb()
+      const cids = cidsOf('r', total)
+      seed(db, 'jam_1', 1, { resolved: cids.slice(0, held) })
+      const server = jamServer({ cids: () => cids })
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+      expect(server.requests('list')).toBe(lists)
+      expect(server.requests('riffdoc')).toBe(fetched)
+      expect(count(db, 'AppVersion = 1')).toBe(total)
+      expect(syncComplete(db, 'jam_1')).toBe(1)
+    }
+  )
+
+  it('a complete jam with nothing new costs one listing request and no riff fetches', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    const cids = cidsOf('r', 230)
+    seed(db, 'jam_1', 1, { resolved: cids })
+    const server = jamServer({ cids: () => cids })
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(server.requests('list')).toBe(1)
+    expect(server.requests('riffdoc') + server.requests('stemdocs')).toBe(0)
+    expect(syncComplete(db, 'jam_1')).toBe(1)
+  })
+
+  it('a walk resumed past done pages fetches no riff on them', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    const cids = cidsOf('r', 900)
+    // A first sync cut off after 500: pages 0-1 done, page 2 half done.
+    seed(db, 'jam_1', 0, { resolved: cids.slice(0, 500), unresolved: cids.slice(500, 600) })
+    const server = jamServer({ cids: () => cids })
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(server.requests('list')).toBe(5)
+    expect(server.requests('riffdoc')).toBe(400)
+    expect(server.requests('stemdocs')).toBe(400)
+    expect(syncComplete(db, 'jam_1')).toBe(1)
+  })
+
+  it('a synced jam whose catch-up fails past its first page is no longer complete, so the next sync reaches the old riffs', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    const old = cidsOf('old', 10)
+    let cids = old
+    let failNext = false
+    const server = jamServer({
+      cids: () => cids,
+      failList: (offset) => {
+        if (offset !== 200 || !failNext) return null
+        failNext = false
+        return Promise.resolve(new Response('busy', { status: 503 }))
+      }
+    })
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(syncComplete(db, 'jam_1')).toBe(1)
+
+    // 250 new since, more than a page: the catch-up resolves the first page,
+    // then the second page's listing fails.
+    cids = [...cidsOf('new', 250), ...old]
+    failNext = true
+    const restore = quietErrors()
+    try {
+      await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    } finally {
+      restore()
+    }
+    expect(syncComplete(db, 'jam_1')).toBe(0)
+
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(count(db, 'AppVersion = 1')).toBe(260)
+    expect(syncComplete(db, 'jam_1')).toBe(1)
+  })
+
+  // The heal, end to end: what the old stem lookup left in Elling's library
+  // is fetched again by the next sync, once.
+  it('a riff saved stemless before is fetched again whole; one with no active slots only once', async () => {
+    const { syncJam } = await loggedIn()
+    const db = freshDb()
+    const cids = cidsOf('r', 4)
+    seed(db, 'jam_1', 1, { resolved: cids.slice(0, 2), stemless: cids.slice(2) })
+    seed(db, 'shared:elling', 1, { stemless: ['shared_r'] })
+    // r_3 really has no active slot.
+    const server = jamServer({ cids: () => cids, emptyRiffs: new Set(['r_3']) })
+
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(server.requests('riffdoc')).toBe(2)
+    expect(count(db, `RiffCID = 'r_2' AND StemCID_1 = 'stem_r_2' AND AppVersion = 1`)).toBe(1)
+    expect(count(db, `RiffCID = 'r_3' AND ${STEMLESS}`)).toBe(1)
+    expect(count(db, `RiffCID = 'shared_r' AND ${STEMLESS}`)).toBe(1)
+    expect(syncComplete(db, 'jam_1')).toBe(1)
+
+    server.reset()
+    await syncJam('jam_1', 'J', () => {}, server.fetchImpl, db)
+    expect(server.requests('list')).toBe(1)
+    expect(server.requests('riffdoc')).toBe(0)
   })
 })
 

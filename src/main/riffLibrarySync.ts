@@ -4,12 +4,18 @@ import {
   peekSharedFeedCache,
   downloadMissingStemsFor,
   listRiffsInJam,
-  resolveJamRiff,
+  resolveJamRiffOrFailure,
   deleteStemFiles,
   type FetchLike
 } from './endlesssApi'
 import { openOwnRiffLibraryDb } from './riffLibrarySchema'
-import type { RiffLibraryResolvedRiff, RiffLibraryResolvedStem } from '@shared/riffLibraryTypes'
+import type {
+  EndlesssFetchFailure,
+  RiffLibraryResolvedRiff,
+  RiffLibraryResolvedStem,
+  RiffPage,
+  SyncOutcome
+} from '@shared/riffLibraryTypes'
 import { dropInMemoryJamIndexes } from './discoverCandidates'
 import { isValidSharedFeedKey, normalizeEndlesssUsername } from '@shared/endlesssUsername'
 import {
@@ -18,6 +24,9 @@ import {
   markJamSyncComplete,
   markJamSyncIncomplete,
   isJamSyncComplete,
+  hasUnresolvedRiffs,
+  countJamRiffs,
+  healStemlessRiffs,
   upsertRiffSkeletons,
   writeRiffDetail,
   markStemDownloadFailed,
@@ -110,6 +119,16 @@ function inFlightKeyOf(key: string): string {
  * (already done), or stop (the jam is complete). */
 type WalkStep = 'resolve' | 'skip' | 'done'
 
+interface ResumableWalk {
+  /** Called once a page's skeletons are in. */
+  beforeResolving: (pageFullyDone: boolean, page: RiffPage) => WalkStep
+  /** A riff this run tried and could not resolve (not one a cancel cut off). */
+  riffFailed: () => void
+  /** The walk reached the jam's end, or a page done before a complete jam's
+   * catch-up: complete, unless a riff failed this run. */
+  reachedEnd: () => void
+}
+
 /** The stop rule both syncs share, which is what keeps a cut-short sync
  * resumable. A page whose riffs were all resolved before this run means
  * every older riff was too only once the walk has reached the jam's end
@@ -120,26 +139,106 @@ type WalkStep = 'resolve' | 'skip' | 'done'
  * riffs past a cut were never fetched. A catch-up of a complete jam that
  * starts resolving new riffs first clears SyncComplete: if it is cut off
  * before it reaches a done page, the new riffs behind the cut would
- * otherwise sit past a page the next sync stops at. */
-function newResumableWalk(
-  db: Database.Database,
-  jamCID: string
-): { beforeResolving: (pageFullyDone: boolean, hasMore: boolean) => WalkStep } {
-  const reachedEndBefore = isJamSyncComplete(db, jamCID)
+ * otherwise sit past a page the next sync stops at.
+ *
+ * Complete is not taken at its word (review of b18e27fb): jams were marked
+ * complete under the old rule with riffs past a failed page never listed,
+ * or listed and never fetched (Night Owl, Techno!: 27 on its last page).
+ * One with an unresolved riff, or whose page 0 says the jam has more riffs
+ * than are held here (its totalCount comes free with that page; counted
+ * after the page's own skeletons are in, so a catch-up's new riffs don't
+ * count), is walked as an unfinished one. And a run in which any riff
+ * failed does not mark the jam complete: the walk would stop above that
+ * riff next time and never fetch it. */
+function newResumableWalk(db: Database.Database, jamCID: string): ResumableWalk {
+  const markedComplete = isJamSyncComplete(db, jamCID)
+  let reachedEndBefore = markedComplete && !hasUnresolvedRiffs(db, jamCID)
   let markedUnfinished = false
+  const takeBackComplete = (): void => {
+    if (markedUnfinished) return
+    markJamSyncIncomplete(db, jamCID)
+    markedUnfinished = true
+  }
+  if (markedComplete && !reachedEndBefore) takeBackComplete()
+  let firstPage = true
+  let riffFailures = 0
+  const reachedEnd = (): void => {
+    if (riffFailures === 0) markJamSyncComplete(db, jamCID)
+  }
   return {
-    beforeResolving(pageFullyDone, hasMore) {
+    beforeResolving(pageFullyDone, page) {
+      if (firstPage) {
+        firstPage = false
+        if (
+          reachedEndBefore &&
+          page.totalCount !== undefined &&
+          page.totalCount > countJamRiffs(db, jamCID)
+        ) {
+          reachedEndBefore = false
+          takeBackComplete()
+        }
+      }
       if (pageFullyDone && !reachedEndBefore) {
-        if (hasMore) return 'skip'
-        markJamSyncComplete(db, jamCID)
+        if (page.hasMore) return 'skip'
+        reachedEnd()
         return 'done'
       }
-      if (!pageFullyDone && reachedEndBefore && !markedUnfinished) {
-        markJamSyncIncomplete(db, jamCID)
-        markedUnfinished = true
-      }
+      if (!pageFullyDone && reachedEndBefore) takeBackComplete()
       return 'resolve'
+    },
+    riffFailed() {
+      riffFailures++
+    },
+    reachedEnd
+  }
+}
+
+/** A 429 with no Retry-After waits this long; one asking for longer than
+ * the cap waits the cap. */
+const DEFAULT_RATE_LIMIT_BACKOFF_MS = 60_000
+const MAX_RATE_LIMIT_BACKOFF_MS = 15 * 60_000
+
+/** When Endlesss may next be asked, after a 429 (epoch ms). A sync started
+ * before then makes no request: the auto-syncs on login (LibraryBrowser.tsx)
+ * would otherwise ask again straight away. One for every sync -- the shared
+ * feed and the jams are one account to Endlesss. */
+let rateLimitedUntil = 0
+
+function rateLimitedOutcome(): SyncOutcome {
+  return { stopped: 'rate-limited', retryAt: rateLimitedUntil }
+}
+
+/** What a failed request means for the whole run: a 429 or no session ends
+ * it and is told to the renderer (the backoff noted); anything else does not
+ * (null). */
+function stopFor(failure: EndlesssFetchFailure): SyncOutcome | null {
+  if (failure.reason === 'logged-out') return { stopped: 'logged-out' }
+  if (failure.reason !== 'rate-limited') return null
+  const wait = Math.min(
+    failure.retryAfterMs ?? DEFAULT_RATE_LIMIT_BACKOFF_MS,
+    MAX_RATE_LIMIT_BACKOFF_MS
+  )
+  rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + wait)
+  console.warn(
+    `riffLibrarySync: Endlesss rate-limited the sync -- not asking again until ${new Date(rateLimitedUntil).toISOString()}`
+  )
+  return rateLimitedOutcome()
+}
+
+/** The one-time heal of riffs the old stem lookup saved stemless
+ * (healStemlessRiffs), run by whichever sync comes first. One that throws is
+ * logged and tried again next sync; it never costs the sync itself. */
+function healStemlessRiffsOnce(db: Database.Database): void {
+  try {
+    const healed = healStemlessRiffs(db)
+    if (healed.riffs > 0) {
+      console.warn(
+        `riffLibrarySync: ${healed.riffs} riff(s) in ${healed.jams} jam(s) were saved with no ` +
+          `stems after a failed lookup; their jams will fetch them again`
+      )
     }
+  } catch (err) {
+    console.error('riffLibrarySync: healing stemless riffs failed:', err)
   }
 }
 
@@ -220,7 +319,7 @@ export async function syncSharedFeed(
   onProgress: (progress: SyncProgress) => void,
   fetchImpl: FetchLike = fetch,
   db: Database.Database = openOwnRiffLibraryDb()
-): Promise<void> {
+): Promise<SyncOutcome> {
   // Only a real username's feed, and always under its lowercase name (how
   // Endlesss stores it): an email login used to sync one under the email (an
   // empty duplicate "Shared Feed", 2026-10-07), and a login typed with a
@@ -229,13 +328,16 @@ export async function syncSharedFeed(
   const key = `shared:${name}`
   if (!isValidSharedFeedKey(key)) {
     console.warn(`syncSharedFeed: "${userName}" is not an Endlesss username -- not syncing`)
-    return
+    return { stopped: null }
   }
-  if (syncsInFlight.has(key)) return
+  if (syncsInFlight.has(key)) return { stopped: null }
+  if (Date.now() < rateLimitedUntil) return rateLimitedOutcome()
   const controller = new AbortController()
   syncsInFlight.set(key, controller)
   noteSyncsInFlightChanged()
+  let outcome: SyncOutcome = { stopped: null }
   try {
+    healStemlessRiffsOnce(db)
     // A capitalised feed from before: all of it becomes this one, once. A
     // fold that fails (all or nothing: nothing moved) must not cost the sync
     // itself -- logged, and tried again by the next sync, which finds the
@@ -261,9 +363,12 @@ export async function syncSharedFeed(
         fetchImpl,
         controller.signal
       )
-      if (page.failed) break
+      if (page.failed) {
+        outcome = stopFor(page.failed) ?? outcome
+        break
+      }
       if (page.riffs.length === 0) {
-        markJamSyncComplete(db, key)
+        walk.reachedEnd()
         break
       }
 
@@ -276,7 +381,7 @@ export async function syncSharedFeed(
         page.riffs.map((r) => ({ riffCID: r.riffCID, creationTime: r.creationTime }))
       )
 
-      const step = walk.beforeResolving(pageFullyDone, page.hasMore)
+      const step = walk.beforeResolving(pageFullyDone, page)
       if (step === 'done') break
       if (step === 'skip') {
         offset = page.nextOffset
@@ -320,7 +425,7 @@ export async function syncSharedFeed(
 
       if (controller.signal.aborted) break
       if (pageFullyDone || !page.hasMore) {
-        markJamSyncComplete(db, key)
+        walk.reachedEnd()
         break
       }
       offset = page.nextOffset
@@ -329,6 +434,7 @@ export async function syncSharedFeed(
     syncsInFlight.delete(key)
     noteSyncsInFlightChanged()
   }
+  return outcome
 }
 
 const SYNC_JAM_PAGE_SIZE = 200 // matches DEFAULT_RIFF_PAGE_SIZE in endlesssApi.ts
@@ -347,12 +453,15 @@ export async function syncJam(
   onProgress: (progress: SyncProgress) => void,
   fetchImpl: FetchLike = fetch,
   db: Database.Database = openOwnRiffLibraryDb()
-): Promise<void> {
-  if (syncsInFlight.has(jamId)) return
+): Promise<SyncOutcome> {
+  if (syncsInFlight.has(jamId)) return { stopped: null }
+  if (Date.now() < rateLimitedUntil) return rateLimitedOutcome()
   const controller = new AbortController()
   syncsInFlight.set(jamId, controller)
   noteSyncsInFlightChanged()
+  let outcome: SyncOutcome = { stopped: null }
   try {
+    healStemlessRiffsOnce(db)
     upsertJam(db, jamId, jamName)
     const walk = newResumableWalk(db, jamId)
     let offset = 0
@@ -366,9 +475,12 @@ export async function syncJam(
         fetchImpl,
         controller.signal
       )
-      if (page.failed) break
+      if (page.failed) {
+        outcome = stopFor(page.failed) ?? outcome
+        break
+      }
       if (page.riffs.length === 0) {
-        markJamSyncComplete(db, jamId)
+        walk.reachedEnd()
         break
       }
 
@@ -382,7 +494,7 @@ export async function syncJam(
         page.riffs.map((r) => ({ riffCID: r.riffCID, creationTime: r.creationTime }))
       )
 
-      const step = walk.beforeResolving(pageFullyDone, page.hasMore)
+      const step = walk.beforeResolving(pageFullyDone, page)
       if (step === 'done') break
       if (step === 'skip') {
         offset = page.nextOffset
@@ -393,7 +505,7 @@ export async function syncJam(
         needsResolve,
         SYNC_CONCURRENCY,
         async (riffCID) => {
-          const resolved = await resolveJamRiff(
+          const result = await resolveJamRiffOrFailure(
             jamId,
             riffCID,
             fetchImpl,
@@ -402,21 +514,36 @@ export async function syncJam(
               bytesDone += bytes
             }
           )
-          if (resolved && !cutShortByCancel(resolved, controller.signal)) {
-            const summary = page.riffs.find((r) => r.riffCID === riffCID)!
-            // listRiffsInJam's raw view never carries a per-riff userName
-            // (see its own doc comment in endlesssApi.ts) -- summary.userName
-            // is always '' here, a known, pre-existing limitation of the jam
-            // listing endpoint itself, not something introduced by this sync.
-            writeRiffDetail(
-              db,
-              jamId,
-              { creationTime: summary.creationTime, userName: summary.userName },
-              resolved
-            )
-            for (const stem of resolved.stems) {
-              if (stemMissing(stem)) markStemDownloadFailed(db, stem.stemCID)
+          // Left unresolved, so the next sync fetches it again. A cancel
+          // ends the run anyway; anything else keeps the jam from being
+          // marked complete; a 429 or a lost session also ends the run --
+          // aborting the requests in flight and every lane's next riff,
+          // rather than asking for each remaining riff and failing it too.
+          if ('failure' in result) {
+            if (result.failure.reason === 'cancelled') return
+            walk.riffFailed()
+            const stop = stopFor(result.failure)
+            if (stop && outcome.stopped === null) {
+              outcome = stop
+              controller.abort()
             }
+            return
+          }
+          const resolved = result.riff
+          if (cutShortByCancel(resolved, controller.signal)) return
+          const summary = page.riffs.find((r) => r.riffCID === riffCID)!
+          // listRiffsInJam's raw view never carries a per-riff userName
+          // (see its own doc comment in endlesssApi.ts) -- summary.userName
+          // is always '' here, a known, pre-existing limitation of the jam
+          // listing endpoint itself, not something introduced by this sync.
+          writeRiffDetail(
+            db,
+            jamId,
+            { creationTime: summary.creationTime, userName: summary.userName },
+            resolved
+          )
+          for (const stem of resolved.stems) {
+            if (stemMissing(stem)) markStemDownloadFailed(db, stem.stemCID)
           }
           resolvedCount++
           onProgress({ done: resolvedCount, total: resolvedCount, bytesDone })
@@ -426,7 +553,7 @@ export async function syncJam(
 
       if (controller.signal.aborted) break
       if (pageFullyDone || !page.hasMore) {
-        markJamSyncComplete(db, jamId)
+        walk.reachedEnd()
         break
       }
       offset = page.nextOffset
@@ -435,4 +562,5 @@ export async function syncJam(
     syncsInFlight.delete(jamId)
     noteSyncsInFlightChanged()
   }
+  return outcome
 }

@@ -14,6 +14,7 @@ import {
 } from './riffStemsExtra'
 import { bumpTableWriteVersion } from './tableWriteVersion'
 import { normalizeEndlesssUsername } from '@shared/endlesssUsername'
+import { MIGRATION_DONE_STAMP, recordSeen, seenStamp } from './startupBackfillGate'
 
 export function upsertJam(db: Database.Database, jamCID: string, publicName: string): void {
   db.prepare(
@@ -73,9 +74,12 @@ export function mergeSharedFeedCaseVariants(db: Database.Database, key: string):
   const hasPairs = exists(JAM_USER_PAIRS_TABLE)
   db.transaction(() => {
     for (const variant of variants) {
+      // MIN: the folded feed has been walked to its end only if both had
+      // (review of b18e27fb) -- MAX marked it complete with the other
+      // spelling's unwalked riffs still behind it.
       db.prepare(
         `INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES (?, ?, ?)
-         ON CONFLICT(JamCID) DO UPDATE SET SyncComplete = MAX(SyncComplete, excluded.SyncComplete)`
+         ON CONFLICT(JamCID) DO UPDATE SET SyncComplete = MIN(SyncComplete, excluded.SyncComplete)`
       ).run(key, variant.PublicName, variant.SyncComplete)
       for (const table of tables) {
         db.prepare(`UPDATE ${table} SET OwnerJamCID = ? WHERE OwnerJamCID = ?`).run(
@@ -126,6 +130,78 @@ export function isJamSyncComplete(db: Database.Database, jamCID: string): boolea
   const jam = db.prepare(`SELECT SyncComplete FROM Jams WHERE JamCID = ?`).get(jamCID) as
     { SyncComplete: number } | undefined
   return jam?.SyncComplete === 1
+}
+
+/** Whether any of the jam's riffs was listed but never resolved -- a jam
+ * marked complete with one has not really been walked to its end (the old
+ * rule took a failed page for the end, and went past a riff that failed). One
+ * probe of idx_riffs_needs_detail. */
+export function hasUnresolvedRiffs(db: Database.Database, jamCID: string): boolean {
+  return (
+    db
+      .prepare(`SELECT 1 FROM Riffs WHERE OwnerJamCID = ? AND AppVersion IS NULL LIMIT 1`)
+      .get(jamCID) !== undefined
+  )
+}
+
+/** How many riffs of the jam are held here, resolved or not. */
+export function countJamRiffs(db: Database.Database, jamCID: string): number {
+  return (
+    db.prepare(`SELECT COUNT(*) AS n FROM Riffs WHERE OwnerJamCID = ?`).get(jamCID) as {
+      n: number
+    }
+  ).n
+}
+
+/** StartupBackfillGate's marker row for healStemlessRiffs. */
+export const STEMLESS_RIFF_HEAL_MARKER = 'heal:stemless-jam-riffs'
+
+/** Once per db: every resolved riff of a private jam with no stem in any
+ * slot goes back to unresolved, and its jam's complete is taken back, so the
+ * next sync of that jam walks to it and fetches it again.
+ *
+ * Why (review of b18e27fb): resolveJamRiff's stem lookup came back as no
+ * stems on any failure -- a cancel, a 429, a timeout, a 5xx -- and the riff
+ * was saved as resolved with none, for good: 160 riffs across 19 jams in
+ * Elling's own library (98 of them in Jazztronics). That lookup now fails
+ * the riff instead, so nothing new is saved this way.
+ *
+ * Whether a riff had active slots is not in the db: a stemless row holds no
+ * slot, and its GainsJSON is '{}', exactly as a riff with no active slots
+ * would be saved. So all of them are fetched again; a real empty riff costs
+ * one riff-doc request, once, and is saved again as it was (resolveJamRiff
+ * resolves a riff with no active slots) -- which is why this runs once, not
+ * on every sync. A shared feed's riffs are left alone: its listing carries
+ * every stem, so none was built from a failed lookup. A stem in slot 9+
+ * (RiffStemsExtra) is a stem. */
+export function healStemlessRiffs(db: Database.Database): { riffs: number; jams: number } {
+  if (seenStamp(db, STEMLESS_RIFF_HEAL_MARKER) === MIGRATION_DONE_STAMP) {
+    return { riffs: 0, jams: 0 }
+  }
+  const noSlot = STEM_SLOT_COLUMNS.map((column) => `${column} IS NULL`).join(' AND ')
+  const noExtra = hasExtraStemSlotsTable(db)
+    ? ` AND NOT EXISTS (SELECT 1 FROM RiffStemsExtra x WHERE x.RiffCID = Riffs.RiffCID)`
+    : ''
+  const stemless =
+    `AppVersion IS NOT NULL AND substr(OwnerJamCID, 1, 7) != 'shared:' AND ${noSlot}` + noExtra
+  let healed = { riffs: 0, jams: 0 }
+  db.transaction(() => {
+    const jams = (
+      db.prepare(`SELECT DISTINCT OwnerJamCID FROM Riffs WHERE ${stemless}`).all() as {
+        OwnerJamCID: string
+      }[]
+    ).map((row) => row.OwnerJamCID)
+    const riffs = db.prepare(`UPDATE Riffs SET AppVersion = NULL WHERE ${stemless}`).run().changes
+    const incomplete = db.prepare(`UPDATE Jams SET SyncComplete = 0 WHERE JamCID = ?`)
+    for (const jam of jams) incomplete.run(jam)
+    recordSeen(db, STEMLESS_RIFF_HEAL_MARKER, MIGRATION_DONE_STAMP)
+    healed = { riffs, jams: jams.length }
+  })()
+  if (healed.riffs > 0) {
+    bumpTableWriteVersion(db, 'Riffs')
+    bumpTableWriteVersion(db, 'Jams')
+  }
+  return healed
 }
 
 export interface RiffSkeleton {
@@ -420,13 +496,12 @@ export function deleteJamRows(db: Database.Database, jamCID: string): string[] {
 
 export interface WarehouseSyncStatus {
   riffCount: number
-  /** True once the walk has reached the true end of the feed/jam's history
-   * (or a page that's entirely already-resolved) -- NOT a guarantee that
-   * every riff in `riffCount` is itself fully resolved. A riff can still be
-   * a gap (AppVersion IS NULL) after `complete` is true, e.g. one whose
-   * resolveJamRiff/downloadMissingStemsFor call failed on the final walked
-   * page -- the next sync run will find and retry it via the same
-   * pageFullyDone logic, but this flag alone doesn't promise zero gaps. */
+  /** True once a walk has reached the true end of the feed/jam's history
+   * (or, catching up, a page that's entirely already-resolved) with no riff
+   * failing on the way -- a run in which one failed leaves this false, so
+   * the next sync walks to it (riffLibrarySync.ts). A jam marked complete
+   * before that rule (review of b18e27fb) can still hold a gap; its next
+   * sync finds it and walks the jam again. */
   complete: boolean
 }
 

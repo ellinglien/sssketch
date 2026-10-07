@@ -15,7 +15,10 @@ import {
   toggleWarehouseFavourite,
   listWarehouseFavourites,
   deleteJamRows,
-  mergeSharedFeedCaseVariants
+  mergeSharedFeedCaseVariants,
+  healStemlessRiffs,
+  hasUnresolvedRiffs,
+  countJamRiffs
 } from './riffLibraryWriter'
 import { RIFF_STEMS_EXTRA_DDL, readExtraStemSlots } from './riffStemsExtra'
 import { getTableWriteVersion } from './tableWriteVersion'
@@ -517,9 +520,11 @@ describe('mergeSharedFeedCaseVariants (a feed synced under a capitalised login, 
 
     expect(mergeSharedFeedCaseVariants(db, 'shared:elling')).toBe(1)
 
+    // Complete only if both were: the lowercase feed's own walk never
+    // reached its end, so the folded one hasn't either (review of b18e27fb).
     const jams = db.prepare(`SELECT JamCID, SyncComplete FROM Jams ORDER BY JamCID`).all()
     expect(jams).toEqual([
-      { JamCID: 'shared:elling', SyncComplete: 1 },
+      { JamCID: 'shared:elling', SyncComplete: 0 },
       { JamCID: 'shared:someoneelse', SyncComplete: 0 }
     ])
     expect(ownerOf('Riffs', 'RiffCID', 'old_1')).toBe('shared:elling')
@@ -647,5 +652,110 @@ describe('mergeSharedFeedCaseVariants (a feed synced under a capitalised login, 
     expect(() => mergeSharedFeedCaseVariants(db, 'shared:elling')).toThrow(/disk full/)
     expect(db.prepare(`SELECT JamCID FROM Jams`).all()).toEqual([{ JamCID: 'shared:Elling' }])
     expect(ownerOf('Riffs', 'RiffCID', 'old_1')).toBe('shared:Elling')
+  })
+})
+
+// Review of b18e27fb: a stem lookup that failed (a cancel, a 429, a timeout,
+// a 5xx) came back as no stems, and the sync saved the riff as resolved with
+// none -- 160 riffs across 19 jams in Elling's own library. The db keeps no
+// record of a riff's active slots (all 160 have GainsJSON '{}', as a riff
+// with none would), so every stemless resolved riff of a private jam is
+// fetched again, once; a real empty riff is saved again as it was.
+describe('healStemlessRiffs (review of b18e27fb)', () => {
+  let db: Database.Database
+
+  beforeEach(() => {
+    db = freshDb()
+    db.exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES
+        ('jam_a', 'A', 1), ('jam_b', 'B', 0), ('jam_c', 'C', 1), ('shared:elling', 'Shared Feed', 1);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion, GainsJSON) VALUES
+        ('stemless_a1', 'jam_a', 1, '{}'), ('stemless_a2', 'jam_a', 1, '{}'),
+        ('stemless_b', 'jam_b', 1, '{}'),
+        ('stemless_shared', 'shared:elling', 1, '{}'),
+        ('extra_only', 'jam_c', 1, '{}'),
+        ('unresolved_c', 'jam_c', NULL, NULL);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion, StemCID_3) VALUES ('whole_c', 'jam_c', 1, 's3');
+      INSERT INTO RiffStemsExtra (RiffCID, Slot, StemCID) VALUES ('extra_only', 12, 's12');
+    `)
+  })
+
+  afterEach(() => {
+    db.close()
+  })
+
+  function appVersions(): Record<string, number | null> {
+    const rows = db.prepare(`SELECT RiffCID, AppVersion FROM Riffs`).all() as {
+      RiffCID: string
+      AppVersion: number | null
+    }[]
+    return Object.fromEntries(rows.map((r) => [r.RiffCID, r.AppVersion]))
+  }
+
+  function complete(): Record<string, number> {
+    const rows = db.prepare(`SELECT JamCID, SyncComplete FROM Jams`).all() as {
+      JamCID: string
+      SyncComplete: number
+    }[]
+    return Object.fromEntries(rows.map((r) => [r.JamCID, r.SyncComplete]))
+  }
+
+  it("unresolves a private jam's resolved riffs with no stems, and takes back their jams' complete", () => {
+    const riffsBefore = getTableWriteVersion(db, 'Riffs')
+    const jamsBefore = getTableWriteVersion(db, 'Jams')
+
+    expect(healStemlessRiffs(db)).toEqual({ riffs: 3, jams: 2 })
+
+    expect(appVersions()).toEqual({
+      stemless_a1: null,
+      stemless_a2: null,
+      stemless_b: null,
+      // The shared feed's listing carries every stem; its riffs were never
+      // built from a failed lookup.
+      stemless_shared: 1,
+      // A stem in slot 12 is a stem.
+      extra_only: 1,
+      unresolved_c: null,
+      whole_c: 1
+    })
+    expect(complete()).toEqual({ jam_a: 0, jam_b: 0, jam_c: 1, 'shared:elling': 1 })
+    expect(getTableWriteVersion(db, 'Riffs')).toBeGreaterThan(riffsBefore)
+    expect(getTableWriteVersion(db, 'Jams')).toBeGreaterThan(jamsBefore)
+  })
+
+  it('runs once: a riff saved stemless after it (a real empty riff) is left alone', () => {
+    healStemlessRiffs(db)
+    db.exec(`UPDATE Riffs SET AppVersion = 1 WHERE RiffCID = 'stemless_a1'`)
+    db.exec(`UPDATE Jams SET SyncComplete = 1 WHERE JamCID = 'jam_a'`)
+
+    expect(healStemlessRiffs(db)).toEqual({ riffs: 0, jams: 0 })
+    expect(appVersions().stemless_a1).toBe(1)
+    expect(complete().jam_a).toBe(1)
+  })
+
+  it('works on a db without the slot-9+ table', () => {
+    const bare = freshDb()
+    bare.exec(`DROP TABLE RiffStemsExtra`)
+    bare.exec(`
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('jam_a', 'A', 1);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES ('r', 'jam_a', 1);
+    `)
+    expect(healStemlessRiffs(bare)).toEqual({ riffs: 1, jams: 1 })
+    bare.close()
+  })
+})
+
+describe('a jam marked complete can still be missing riffs (review of b18e27fb)', () => {
+  it('hasUnresolvedRiffs and countJamRiffs read one jam only', () => {
+    const db = freshDb()
+    db.exec(`
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES
+        ('a1', 'jam_a', 1), ('a2', 'jam_a', 1), ('b1', 'jam_b', NULL);
+    `)
+    expect(hasUnresolvedRiffs(db, 'jam_a')).toBe(false)
+    expect(hasUnresolvedRiffs(db, 'jam_b')).toBe(true)
+    expect(countJamRiffs(db, 'jam_a')).toBe(2)
+    expect(countJamRiffs(db, 'jam_none')).toBe(0)
+    db.close()
   })
 })
