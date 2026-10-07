@@ -65,6 +65,7 @@ import {
 } from '../audio/riffLibraryUsername'
 import { resolveOwnUsername } from '@shared/ownUsernameReport'
 import { syncOutcomeNote } from '@shared/syncOutcomeNote'
+import { loginSyncPromptText, type LoginSyncConsent } from '@shared/loginSyncConsent'
 
 // The "your username" setting is persisted locally (not in project files or
 // app state) since it's a per-person identity setting, not something that
@@ -310,6 +311,48 @@ export function LibraryBrowser({
   // `.find()` against it could miss the own jam entirely while the user has
   // something typed into the jam search box.
   const [ownJam, setOwnJam] = useState<RiffLibraryJam | null>(null)
+  // "sync your jams now?" (share readiness S4, 2026-10-07): a login starts the shared feed and
+  // own jam syncs only once this is `yes`. Null until main answers; an install that synced
+  // before reads `yes` (loginSyncConsentStore.ts), so Elling's setup syncs as it always has.
+  const [syncConsent, setSyncConsent] = useState<LoginSyncConsent | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    window.rifffApi
+      .loginSyncConsent()
+      .then((c) => {
+        if (!cancelled) setSyncConsent(c)
+      })
+      .catch((err) => {
+        console.error('LibraryBrowser: loginSyncConsent() failed:', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+  const answerSyncConsent = useCallback((consent: 'yes' | 'no'): void => {
+    setSyncConsent(consent)
+    window.rifffApi.setLoginSyncConsent(consent).catch((err) => {
+      console.error('LibraryBrowser: setLoginSyncConsent() failed:', err)
+    })
+  }, [])
+  // The question's riff count: the own jam's, asked only while the question is up.
+  const [ownJamRiffCount, setOwnJamRiffCount] = useState<number | null>(null)
+  const ownJamCIDForCount = syncConsent === 'ask' ? (ownJam?.jamCID ?? null) : null
+  useEffect(() => {
+    if (ownJamCIDForCount === null) return
+    let cancelled = false
+    window.rifffApi
+      .endlesssJamRiffCount(ownJamCIDForCount)
+      .then((count) => {
+        if (!cancelled) setOwnJamRiffCount(count)
+      })
+      .catch((err) => {
+        console.error('LibraryBrowser: endlesssJamRiffCount() failed:', err)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [ownJamCIDForCount])
   const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
   // A linked loop folder shown in the right-hand pane. Only shown while no
   // jam is selected, so picking a jam (or "go to rifff ID") hides it with
@@ -913,6 +956,8 @@ export function LibraryBrowser({
   // in bounded pages besides; see syncSharedFeed's own doc comment.
   useEffect(() => {
     if (!authStatus.loggedIn) return
+    // Only once "sync your jams now?" is answered yes (syncConsent above).
+    if (syncConsent !== 'yes') return
     const username = authStatus.username
     if (username === '') return // an unchecked email login: no feed to sync
     // Deferred through a microtask, same as this component's other
@@ -928,7 +973,7 @@ export function LibraryBrowser({
     // itself changes whenever syncingKeys does, or this would refire
     // mid-sync).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authStatus.loggedIn, authStatus.loggedIn ? authStatus.username : null])
+  }, [authStatus.loggedIn, authStatus.loggedIn ? authStatus.username : null, syncConsent])
 
   // Same auto-sync, for the account's own private jam once it's been
   // identified (see the membershipJams effect's own doc comment for how
@@ -936,6 +981,7 @@ export function LibraryBrowser({
   // real value, not on every render.
   useEffect(() => {
     if (!ownJam) return
+    if (syncConsent !== 'yes') return
     const jam = ownJam
     void Promise.resolve().then(() => {
       startSyncForJam(jam.jamCID, jam.name, 0)
@@ -943,7 +989,7 @@ export function LibraryBrowser({
     // See the shared-feed auto-sync effect just above for why
     // startSyncForJam is intentionally excluded here too.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ownJam])
+  }, [ownJam, syncConsent])
 
   const handleAbortSync = useCallback(() => {
     if (!selectedJamCID) return
@@ -1750,6 +1796,13 @@ export function LibraryBrowser({
         {libraryMode === 'browse' && (
           <>
             <EndlesssLoginPanel
+              syncQuestion={
+                syncConsent === 'ask'
+                  ? loginSyncPromptText(ownJam === null ? null : ownJamRiffCount)
+                  : null
+              }
+              onSyncAnswer={answerSyncConsent}
+              offerSyncNow={syncConsent === 'no'}
               onStatusChange={(next) => {
                 takeAuthStatus(next)
                 // A login or logout can change who "me" is for the

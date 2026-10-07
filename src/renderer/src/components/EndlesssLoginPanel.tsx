@@ -19,12 +19,21 @@ function daysLeftFor(status: AuthStatus): number | null {
  * lives in the main process (endlesssApi.ts); this component just reflects
  * it and drives login/logout. */
 export function EndlesssLoginPanel({
-  onStatusChange
+  onStatusChange,
+  syncQuestion = null,
+  onSyncAnswer,
+  offerSyncNow = false
 }: {
   /** Fires once on mount with the current status, then again after any
    * successful login/logout -- callers (EndlesssLibraryBrowser's tabs) use
    * this to decide whether to show a jam list / feed vs a login prompt. */
   onStatusChange: (status: AuthStatus) => void
+  /** "sync your jams now? ..." (@shared/loginSyncConsent), shown under the logged-in line until
+   * answered. Null: not asked. */
+  syncQuestion?: string | null
+  onSyncAnswer?: (consent: 'yes' | 'no') => void
+  /** Answered "not now": a quiet "sync my jams" beside log out, to change his mind. */
+  offerSyncNow?: boolean
 }): React.JSX.Element {
   const [status, setStatus] = useState<AuthStatus>({ loggedIn: false })
   const [username, setUsername] = useState('')
@@ -82,40 +91,79 @@ export function EndlesssLoginPanel({
     onStatusChange(s)
   }
 
+  const smallButton: React.CSSProperties = {
+    height: 20,
+    borderRadius: 0,
+    padding: '0 8px',
+    fontSize: 10,
+    border: '1px solid var(--ra-border)',
+    background: 'var(--ra-bg-row-active)',
+    color: 'var(--ra-text-2)'
+  }
+
   if (status.loggedIn) {
     return (
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          fontSize: 10,
-          color: 'var(--ra-text-2)'
-        }}
-      >
-        <span>
-          logged in as {status.loggedIn ? status.username || status.loginName || '' : ''}
-          {daysLeft !== null && (
-            <>
-              {' '}
-              — session expires in {daysLeft} day{daysLeft === 1 ? '' : 's'}
-            </>
-          )}
-        </span>
-        <button
-          onClick={() => void handleLogout()}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <div
           style={{
-            height: 20,
-            borderRadius: 0,
-            padding: '0 8px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
             fontSize: 10,
-            border: '1px solid var(--ra-border)',
-            background: 'var(--ra-bg-row-active)',
             color: 'var(--ra-text-2)'
           }}
         >
-          log out
-        </button>
+          <span>
+            logged in as {status.loggedIn ? status.username || status.loginName || '' : ''}
+            {daysLeft !== null && (
+              <>
+                {' '}
+                — session expires in {daysLeft} day{daysLeft === 1 ? '' : 's'}
+              </>
+            )}
+          </span>
+          {offerSyncNow && onSyncAnswer && (
+            <button
+              onClick={() => onSyncAnswer('yes')}
+              data-tooltip="download your shared feed and your own jam"
+              style={smallButton}
+            >
+              sync my jams
+            </button>
+          )}
+          <button onClick={() => void handleLogout()} style={smallButton}>
+            log out
+          </button>
+        </div>
+        {syncQuestion !== null && onSyncAnswer && (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              gap: 4,
+              padding: '6px 8px',
+              border: '1px solid var(--ra-border)',
+              fontSize: 10,
+              color: 'var(--ra-text-2)'
+            }}
+          >
+            <span style={{ color: 'var(--ra-text)' }}>{syncQuestion}</span>
+            <span style={{ color: 'var(--ra-text-3)' }}>
+              every stem downloads to your music folder (sssketch/library). this can be large.
+            </span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              <button
+                onClick={() => onSyncAnswer('yes')}
+                style={{ ...smallButton, color: 'var(--ra-text)' }}
+              >
+                sync
+              </button>
+              <button onClick={() => onSyncAnswer('no')} style={smallButton}>
+                not now
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     )
   }

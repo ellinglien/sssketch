@@ -7,6 +7,7 @@ import type { ToolkitExportMode } from '@shared/toolkit'
 import type { LiveParamField } from '@shared/liveParam'
 import type { OwnUsernameReport } from '@shared/ownUsernameReport'
 import type { AppFeatureSettings } from '@shared/features'
+import type { LoginSyncConsent } from '@shared/loginSyncConsent'
 import type {
   RiffLibraryJam,
   RiffLibraryRiffSummary,
@@ -885,6 +886,10 @@ const api = {
   endlesssListJams: (): Promise<RiffLibraryJam[]> => ipcRenderer.invoke('endlesss-list-jams'),
   endlesssJamRiffCount: (jamId: string): Promise<number | null> =>
     ipcRenderer.invoke('endlesss-jam-riff-count', jamId),
+  // Whether a login starts the library sync: `ask` until answered (@shared/loginSyncConsent).
+  loginSyncConsent: (): Promise<LoginSyncConsent> => ipcRenderer.invoke('login-sync-consent'),
+  setLoginSyncConsent: (consent: 'yes' | 'no'): Promise<void> =>
+    ipcRenderer.invoke('set-login-sync-consent', consent),
   // Resolves when the sync ends, saying why when it stopped short for a
   // reason the user can act on (riffLibrarySync.ts's SyncOutcome).
   riffLibrarySyncStartSharedFeed: (userName: string): Promise<SyncOutcome> =>

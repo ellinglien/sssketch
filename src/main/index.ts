@@ -206,6 +206,11 @@ import {
 } from './riffLibrarySync'
 import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
 import {
+  loadLoginSyncConsent,
+  ownDbHasEarlierSync,
+  saveLoginSyncConsent
+} from './loginSyncConsentStore'
+import {
   getWarehouseSyncStatus,
   listWarehouseFavourites,
   toggleWarehouseFavourite
@@ -1133,6 +1138,21 @@ app.whenReady().then(async () => {
   })
   ipcMain.handle('endlesss-list-jams', () => listEndlesssJams())
   ipcMain.handle('endlesss-jam-riff-count', (_event, jamId: string) => jamRiffCount(jamId))
+  // "sync your jams now?" (share readiness S4): whether a login starts the library sync. An
+  // install that synced before has said yes (loginSyncConsentStore.ts).
+  ipcMain.handle('login-sync-consent', () =>
+    loadLoginSyncConsent(() => {
+      try {
+        return ownDbHasEarlierSync(openOwnRiffLibraryDb())
+      } catch (err) {
+        console.error('login-sync-consent: reading the own riff library failed:', err)
+        return false
+      }
+    })
+  )
+  ipcMain.handle('set-login-sync-consent', (_event, consent: 'yes' | 'no') => {
+    if (consent === 'yes' || consent === 'no') saveLoginSyncConsent(consent)
+  })
   ipcMain.handle('riff-library-sync-start-shared-feed', (event, userName: string) =>
     syncSharedFeedToWarehouse(userName, (progress) => {
       event.sender.send('riff-library-sync-progress', {

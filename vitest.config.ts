@@ -97,7 +97,9 @@ export default defineConfig({
           'src/main/radioHeartsImport.test.ts',
           'src/main/stemFavouriteStore.test.ts',
           // Own stems first (2026-10-06): opens fixture dbs, so excluded before it can crash.
-          'src/main/stemPriority.test.ts'
+          'src/main/stemPriority.test.ts',
+          // The login sync question (2026-10-07): one case opens an in-memory db.
+          'src/main/loginSyncConsentStore.test.ts'
         ]
       : configDefaults.exclude,
     passWithNoTests: true,
