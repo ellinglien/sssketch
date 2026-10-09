@@ -10,6 +10,7 @@ import {
   startPreviewLoop,
   stopPreviewSources,
   registerActivePreview,
+  isActivePreview,
   unregisterActivePreview
 } from '../audio/previewLoop'
 import { stemKey } from '@shared/types'
@@ -18,6 +19,7 @@ import { LIBRARY_ENTRY_POINTS, type LibraryEntryPoint } from '@shared/libraryEnt
 import { formatBpm } from '@shared/format'
 import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './LoopOrOneShotPrompt'
 import { importPathsWithChoice } from '../audio/importPathsWithChoice'
+import { pauseArrangementBeforeShelfPreview } from '../audio/shelfPreviewHandoff'
 
 const TILE_SIZE = 42
 
@@ -101,15 +103,27 @@ export function Shelf({
   // Stable across renders (useCallback, empty deps) so it's safe to pass to
   // registerActivePreview/reference from effect cleanups without triggering
   // re-subscriptions.
-  const stopTilePreview = useCallback(() => {
+  const stopTilePreviewAudio = useCallback(() => {
+    // Cancels sources that already exist AND any file reads/decodes still
+    // working toward a start. Every terminal path (drag, Discover, global
+    // transport Play, unmount) comes through here.
+    previewGenerationRef.current += 1
     stopPreviewSources(previewSourcesRef.current)
     previewSourcesRef.current = []
     unregisterActivePreview(previewTokenRef.current)
   }, [])
 
+  // The global preview registry can stop this from outside Shelf (for
+  // example when the transport resumes). Clear the local play marker too,
+  // so the next click starts immediately instead of acting on stale UI.
+  const stopTilePreview = useCallback(() => {
+    stopTilePreviewAudio()
+    setPreviewingGroupId(null)
+  }, [stopTilePreviewAudio])
+
   useEffect(() => {
-    return () => stopTilePreview()
-  }, [stopTilePreview])
+    return () => stopTilePreviewAudio()
+  }, [stopTilePreviewAudio])
 
   // Delete/Backspace removes the targeted rifff(s) from the library
   // entirely (DELETE_RIFFFS) — not just from the timeline (that's
@@ -164,31 +178,49 @@ export function Shelf({
     }
     setMultiSelected(new Set())
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
-    previewGenerationRef.current += 1
-    const generation = previewGenerationRef.current
     stopTilePreview()
     if (previewingGroupId === rifff.groupId) {
-      setPreviewingGroupId(null)
       return
     }
+    const generation = previewGenerationRef.current
     setPreviewingGroupId(rifff.groupId)
-    if (playing) dispatch({ type: 'PAUSE' })
-    void startPreviewLoop(
-      getAudioContext(),
-      rifff.stems.map((s) => ({
-        path: s.path,
-        gain: state.vol[stemKey(rifff.groupId, s.slot)] ?? 1,
-        durationSec: s.durationSec
-      })),
-      () => previewGenerationRef.current !== generation
-    ).then((sources) => {
-      if (previewGenerationRef.current !== generation) {
+    // Own the global preview slot before the native handoff or decode starts.
+    // PLAY can now cancel this request even while no Web Audio source exists.
+    const previewToken = registerActivePreview(stopTilePreview)
+    previewTokenRef.current = previewToken
+    void (async () => {
+      try {
+        await pauseArrangementBeforeShelfPreview({
+          playing,
+          pauseArrangement: () => dispatch({ type: 'PAUSE' }),
+          stopEngine: () => window.rifffApi.engineStop()
+        })
+      } catch (err) {
+        // Do not start Web Audio when native silence could not be confirmed;
+        // that would recreate the exact two-playback overlap this handoff
+        // exists to prevent.
+        if (!isActivePreview(previewToken)) return
+        console.error('Shelf: failed to stop arrangement before preview:', err)
+        stopTilePreview()
+        return
+      }
+      if (previewGenerationRef.current !== generation || !isActivePreview(previewToken)) return
+      const sources = await startPreviewLoop(
+        getAudioContext(),
+        rifff.stems.map((s) => ({
+          path: s.path,
+          gain: state.vol[stemKey(rifff.groupId, s.slot)] ?? 1,
+          durationSec: s.durationSec
+        })),
+        () => previewGenerationRef.current !== generation || !isActivePreview(previewToken)
+      )
+      if (previewGenerationRef.current !== generation || !isActivePreview(previewToken)) {
         stopPreviewSources(sources)
         return
       }
       previewSourcesRef.current.push(...sources)
-      if (sources.length > 0) previewTokenRef.current = registerActivePreview(stopTilePreview)
-    })
+      if (sources.length === 0) stopTilePreview()
+    })()
   }
 
   // Shared by both import entry points below (drag-drop and the "+" tile's
@@ -379,6 +411,7 @@ export function Shelf({
                 }}
                 onMouseEnter={() => setHoverId(rifff.groupId)}
                 onClick={(e) => handleTileClick(e, rifff)}
+                aria-pressed={selected}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   // Real root cause of a live report, 2026-09-16: "right
@@ -401,14 +434,21 @@ export function Shelf({
                   height: TILE_SIZE,
                   flex: 'none',
                   padding: 2,
+                  boxSizing: 'border-box',
                   border: previewing
-                    ? '1px solid var(--ra-playhead)'
-                    : batchSelected
-                      ? '1px solid var(--ra-stretch-on)'
-                      : '1px solid transparent',
+                    ? '2px solid var(--ra-playhead)'
+                    : selected
+                      ? '2px solid var(--ra-text)'
+                      : batchSelected
+                        ? '1px solid var(--ra-stretch-on)'
+                        : '1px solid transparent',
                   cursor: 'grab',
-                  background: 'transparent',
-                  opacity: lit ? 1 : placed ? 0.4 : 0.72
+                  background: selected ? 'var(--ra-bg-row-active)' : 'transparent',
+                  boxShadow: selected
+                    ? 'inset 0 0 0 2px var(--ra-bg-page), inset 0 0 0 4px var(--ra-text-2)'
+                    : 'none',
+                  opacity: lit ? 1 : placed ? 0.4 : 0.72,
+                  transition: 'opacity 80ms ease'
                 }}
               >
                 <PolarGlyph

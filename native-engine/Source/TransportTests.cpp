@@ -122,6 +122,17 @@ namespace sssketch
                 expect(reachedSilence);
                 expect(!transport.isPlaying());
 
+                // Stop is idempotent once halted: it must not queue a new
+                // fade that renders project audio from an idle transport on
+                // the next device callback.
+                transport.stop();
+                std::fill(l.begin(), l.end(), 1.0f);
+                std::fill(r.begin(), r.end(), 1.0f);
+                transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                expect(!transport.isPlaying());
+                expect(std::all_of(l.begin(), l.end(), [](float sample) { return sample == 0.0f; }));
+                expect(std::all_of(r.begin(), r.end(), [](float sample) { return sample == 0.0f; }));
+
                 tone.deleteFile();
             }
 
@@ -169,7 +180,100 @@ namespace sssketch
                 // stale fade-out and silencing itself despite the later Play.
                 expect(transport.isPlaying());
 
+                // Same precedence when Play arrives before the audio thread
+                // has consumed Stop at all: the queued halt must be cleared,
+                // not applied as though it came after this newer Play.
+                transport.stop();
+                transport.play(0.0);
+                for (int i = 0; i < 50; ++i)
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                expect(transport.isPlaying());
+
+                // Deterministically deliver Play after this callback has
+                // already consumed its command flags but immediately before
+                // the older stop fade finalizes. The old callback must not
+                // overwrite either the newer playing=true or its position.
+                struct RaceContext
+                {
+                    Transport* transport;
+                    bool fired = false;
+                } race { &transport };
+                transport.stop();
+                transport.setHaltFinalizationHookForTest(
+                    [](void* raw)
+                    {
+                        auto& context = *static_cast<RaceContext*>(raw);
+                        context.fired = true;
+                        context.transport->play(2.0);
+                    },
+                    &race);
+                for (int i = 0; i < 50 && !race.fired; ++i)
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                expect(race.fired);
+                expect(transport.isPlaying());
+                expectWithinAbsoluteError(transport.currentPositionBars(), 2.0, 1.0e-12);
+                transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                expect(transport.isPlaying());
+                expect(transport.currentPositionBars() > 2.0);
+
+                // A still-newer Stop must win over that same late Play. This
+                // is the exact interleaving that a Play-only generation
+                // repair lost: the old halt briefly published false, Stop
+                // mistook it for idle, then Play recovery resumed anyway.
+                struct PlayThenStopRaceContext
+                {
+                    Transport* transport;
+                    unsigned long long stopGeneration = 0;
+                    bool fired = false;
+                } playThenStop { &transport };
+                transport.stop();
+                transport.setHaltFinalizationHookForTest(
+                    [](void* raw)
+                    {
+                        auto& context = *static_cast<PlayThenStopRaceContext*>(raw);
+                        context.fired = true;
+                        context.transport->play(3.0);
+                        context.stopGeneration = context.transport->stop();
+                    },
+                    &playThenStop);
+                for (int i = 0; i < 50 && !playThenStop.fired; ++i)
+                    transport.audioDeviceIOCallbackWithContext(nullptr, 0, channels, 2, numSamples, {});
+                expect(playThenStop.fired);
+                expect(!transport.isPlaying());
+                expectWithinAbsoluteError(transport.currentPositionBars(), 0.0, 1.0e-12);
+                expect(transport.completedHaltGeneration() >= playThenStop.stopGeneration);
+
                 tone.deleteFile();
+            }
+
+            beginTest("Play's requested position reaches gated capture in the same first callback as backing audio");
+            {
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
+                transport.setBpm(60.0);
+                transport.setRecordingLoop(2.0, 4.0);
+                GatedLoopRecorder recorder(44100.0, 2.0, 1.0);
+                transport.setGatedRecorder(&recorder);
+
+                constexpr int numSamples = 64;
+                std::vector<float> input((size_t) numSamples, 0.8f);
+                std::vector<float> l((size_t) numSamples), r((size_t) numSamples);
+                const float* inputs[1] = { input.data() };
+                float* outputs[2] = { l.data(), r.data() };
+
+                // Before ordered command application moved ahead of capture,
+                // gated capture still saw the old bar 0 here and skipped the
+                // block, even though output in this callback began at bar 2.
+                transport.play(2.0);
+                transport.audioDeviceIOCallbackWithContext(
+                    inputs, 1, outputs, 2, numSamples, {});
+
+                expect(recorder.isGateOpen());
+                expect(transport.currentPositionBars() > 2.0);
+                transport.setGatedRecorder(nullptr);
             }
 
             beginTest("playback wraps within the recording loop's own bounds while one is "
