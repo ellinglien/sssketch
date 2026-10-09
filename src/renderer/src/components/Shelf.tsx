@@ -432,7 +432,9 @@ export function Shelf({
                   flex: 'none',
                   padding: 2,
                   boxSizing: 'border-box',
-                  border: '1px solid transparent',
+                  // A sounding tile gets a 1px playhead-coloured edge: it is
+                  // audio information, so colour is allowed, but not a glow.
+                  border: `1px solid ${previewing ? 'var(--ra-playhead)' : 'transparent'}`,
                   cursor: 'grab',
                   opacity: lit ? 1 : placed ? 0.4 : 0.72,
                   transition: 'opacity 80ms ease'

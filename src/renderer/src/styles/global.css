@@ -172,8 +172,9 @@ textarea:focus-visible,
 }
 
 /* Riff selection keeps the original quiet square treatment with sharp
- * corners and no edge feather. Shelf playback gets a separate restrained
- * playhead-colored feather so selected and sounding remain distinct. */
+ * corners and no edge feather. A previewing Shelf tile gets a 1px
+ * playhead-coloured border instead (Shelf.tsx), so selected and sounding
+ * remain distinct without a glow. */
 .ra-riff-tile {
   position: relative;
   overflow: visible;
@@ -216,10 +217,6 @@ textarea:focus-visible,
   mask-repeat: repeat;
   mask-size: 8px 8px;
   pointer-events: none;
-}
-
-.ra-shelf-riff-tile[data-previewing='true'] {
-  box-shadow: 0 0 3px color-mix(in srgb, var(--ra-playhead) 18%, transparent);
 }
 
 /* Preserve keyboard focus with the same square geometry. */
