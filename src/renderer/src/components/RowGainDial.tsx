@@ -158,7 +158,17 @@ export function RowGainDial({
     // while the timeline scrolls horizontally without adding anything to
     // the row's own flow height.
     <div style={{ position: 'sticky', right: 0, top: 0, height: 0, zIndex: 6 }}>
-      <div style={{ position: 'absolute', right: DIAL_RIGHT_PX, top: 2 }}>
+      <div
+        style={{
+          position: 'absolute',
+          right: DIAL_RIGHT_PX,
+          top: 2,
+          padding: 3,
+          background: 'color-mix(in srgb, var(--ra-bg-bar) 94%, transparent)',
+          border: '1px solid var(--ra-border)',
+          boxShadow: '-3px 3px 10px color-mix(in srgb, #000 28%, transparent)'
+        }}
+      >
         <Dial
           value={Math.round(gain * 100)}
           onChange={handleChange}

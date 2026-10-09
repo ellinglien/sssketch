@@ -649,3 +649,43 @@ export async function syncJam(
   }
   return finalOutcome(outcome, controller.signal)
 }
+
+/** Repairs a legacy/private-jam riff whose locally-imported stem rows do not
+ * contain FileKey metadata. Those rows can still describe the riff well
+ * enough for the Import browser to show it, but downloadMissingStems cannot
+ * construct a URL from them, leaving a selected `0 cached` riff silent.
+ *
+ * Re-resolving the one riff through Endlesss refreshes its stem metadata and
+ * downloads its audio in the same authenticated request path used by a
+ * normal jam sync. This is deliberately foreground and narrowly scoped to
+ * the clicked riff; it does not restart or rewrite the whole jam. Shared
+ * feeds use a different API shape and cannot be re-resolved this way. */
+export async function recoverPrivateJamRiffAudio(
+  riffCID: string,
+  fetchImpl: FetchLike = fetch,
+  db: Database.Database = openOwnRiffLibraryDb()
+): Promise<RiffLibraryResolvedRiff | null> {
+  const row = db
+    .prepare(
+      `SELECT OwnerJamCID, CreationTime, UserName
+       FROM Riffs WHERE RiffCID = ?`
+    )
+    .get(riffCID) as
+    { OwnerJamCID: string; CreationTime: number | null; UserName: string | null } | undefined
+  if (!row || isValidSharedFeedKey(row.OwnerJamCID)) return null
+
+  const result = await resolveJamRiffOrFailure(row.OwnerJamCID, riffCID, fetchImpl)
+  if ('failure' in result) return null
+
+  writeRiffDetail(
+    db,
+    row.OwnerJamCID,
+    { creationTime: row.CreationTime ?? 0, userName: row.UserName ?? '' },
+    result.riff
+  )
+  clearRiffSyncFailure(db, riffCID)
+  for (const stem of result.riff.stems) {
+    if (stemMissing(stem)) markStemDownloadFailed(db, stem.stemCID)
+  }
+  return result.riff
+}

@@ -73,6 +73,20 @@ describe('project serialization', () => {
     expect(restored.inspectorCollapsed).toBe(false)
   })
 
+  it('persists durable stem disable but drops the temporary mixer layer', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+    state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'r1', muted: true })
+
+    const parsed = JSON.parse(serializeProject(state))
+    expect(parsed.mute['r1:1']).toBe(true)
+    expect(parsed.mixerMute).toBeUndefined()
+
+    const { state: restored } = deserializeProject(parsed)
+    expect(restored.mute['r1:1']).toBe(true)
+    expect(restored.mixerMute).toEqual({})
+  })
+
   it('does not persist gatedRecordingTargetGroupId -- always reopens with nothing targeted', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'SET_GATED_RECORDING_TARGET', groupId: 'r1' })

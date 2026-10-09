@@ -68,6 +68,7 @@ import {
 import { resolveOwnUsername } from '@shared/ownUsernameReport'
 import { syncOutcomeNote, syncOutcomeNoteRefreshMs } from '@shared/syncOutcomeNote'
 import { loginSyncPromptText, type LoginSyncConsent } from '@shared/loginSyncConsent'
+import { loadLastSelectedImportJam, storeLastSelectedImportJam } from './libraryBrowserSelection'
 
 // The "your username" setting is persisted locally (not in project files or
 // app state) since it's a per-person identity setting, not something that
@@ -355,7 +356,7 @@ export function LibraryBrowser({
       cancelled = true
     }
   }, [ownJamCIDForCount])
-  const [selectedJamCID, setSelectedJamCID] = useState<string | null>(null)
+  const [selectedJamCID, setSelectedJamCID] = useState<string | null>(loadLastSelectedImportJam)
   // A linked loop folder shown in the right-hand pane. Only shown while no
   // jam is selected, so picking a jam (or "go to rifff ID") hides it with
   // no extra bookkeeping.
@@ -643,6 +644,10 @@ export function LibraryBrowser({
       console.error('LibraryBrowser: failed to persist the only-my-jams setting:', err)
     }
   }, [onlyMyJamsChoice])
+
+  useEffect(() => {
+    storeLastSelectedImportJam(selectedJamCID)
+  }, [selectedJamCID])
 
   useEffect(() => {
     if (!available) return
@@ -1286,7 +1291,11 @@ export function LibraryBrowser({
     try {
       const refreshed = await window.rifffApi.riffLibraryDownloadMissingStems(riffCID)
       if (!refreshed) return resolved
-      if (riffCID === selectedRiffCID) setResolvedRiff(refreshed)
+      // Compare against the CURRENT resolved detail, not selectedRiffCID
+      // from this async call's render closure. A quick selection change can
+      // finish an older download after the new riff was clicked; the stale
+      // closure used to put that old riff back into the detail line.
+      setResolvedRiff((current) => (current?.riffCID === riffCID ? refreshed : current))
       patchRiffCacheCount(riffCID, refreshed)
       return refreshed
     } catch (err) {
@@ -1309,7 +1318,7 @@ export function LibraryBrowser({
       const refreshed = await window.rifffApi.riffLibraryDownloadMissingStems(riffCID)
       if (!refreshed) return
       patchRiffCacheCount(riffCID, refreshed)
-      if (riffCID === selectedRiffCID) setResolvedRiff(refreshed)
+      setResolvedRiff((current) => (current?.riffCID === riffCID ? refreshed : current))
     } catch (err) {
       console.error(`LibraryBrowser: background sync failed for riff ${riffCID}:`, err)
     }
@@ -2550,7 +2559,7 @@ export function LibraryBrowser({
                         )}
                       </div>
 
-                      {resolvedRiff && (
+                      {resolvedRiff && resolvedRiff.riffCID === selectedRiffCID && (
                         <div
                           style={{
                             display: 'flex',
@@ -2579,7 +2588,10 @@ export function LibraryBrowser({
                           />
                           <div style={{ fontSize: 10, color: 'var(--ra-text-2)', flex: 1 }}>
                             {formatBpm(resolvedRiff.bpm)} BPM · {resolvedRiff.stems.length} stems (
-                            {resolvedRiff.stems.filter((s) => s.path !== null).length} cached)
+                            {downloadingRiffCID === selectedRiffCID
+                              ? 'downloading…'
+                              : `${resolvedRiff.stems.filter((s) => s.path !== null).length} cached`}
+                            )
                             <div style={{ marginTop: 2, color: 'var(--ra-text-3)' }}>
                               {resolvedRiff.stems.map((s) => s.creatorUserName || '?').join(', ')}
                             </div>

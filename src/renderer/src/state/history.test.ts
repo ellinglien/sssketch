@@ -84,6 +84,29 @@ describe('historyReducer', () => {
     expect(h.present.availableInputDevices).toEqual(['mic'])
   })
 
+  it('does not push history for temporary mixer mute or solo', () => {
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    const beforeMixer = h.past.length
+    h = historyReducer(h, { type: 'SET_CHANNEL_MUTE', channelId: 'r1', muted: true })
+    h = historyReducer(h, { type: 'SOLO_CHANNEL', channelId: 'r1' })
+    expect(h.past).toHaveLength(beforeMixer)
+  })
+
+  it('keeps the live mixer layer pinned across undo and redo', () => {
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })
+    h = historyReducer(h, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 })
+    h = historyReducer(h, { type: 'SET_CHANNEL_MUTE', channelId: 'r1', muted: true })
+    const mixerMute = h.present.mixerMute
+
+    h = historyReducer(h, { type: 'UNDO' })
+    expect(h.present.mixerMute).toBe(mixerMute)
+    h = historyReducer(h, { type: 'REDO' })
+    expect(h.present.mixerMute).toBe(mixerMute)
+  })
+
   it('undoing past a transient action lands on the last real edit, not a stale UI-mode state', () => {
     let h = createHistoryState(initialState)
     h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff })

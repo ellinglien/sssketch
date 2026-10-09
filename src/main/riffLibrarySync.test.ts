@@ -381,6 +381,65 @@ describe('syncJam', () => {
     expect(jam.SyncComplete).toBe(1)
     expect(jam.PublicName).toBe('Test Jam')
   })
+
+  it('repairs a legacy resolved riff whose stem row has no downloadable file key', async () => {
+    vi.resetModules()
+    const { loginWithCredentials } = await import('./endlesssApi')
+    const { recoverPrivateJamRiffAudio } = await import('./riffLibrarySync')
+    const db = freshDb()
+    db.prepare(`INSERT INTO Jams (JamCID, PublicName) VALUES ('jam_1', 'Test Jam')`).run()
+    db.prepare(
+      `INSERT INTO Riffs
+         (RiffCID, OwnerJamCID, CreationTime, UserName, StemCID_1, AppVersion)
+       VALUES ('r1', 'jam_1', 1700000000, 'elling', 'stem_r1', 1)`
+    ).run()
+    db.prepare(
+      `INSERT INTO Stems
+         (StemCID, OwnerJamCID, FileEndpoint, FileBucket, FileKey, CreatorUserName)
+       VALUES ('stem_r1', 'jam_1', 'https://old.example.com', '', NULL, 'elling')`
+    ).run()
+
+    await loginWithCredentials(
+      'elling',
+      'hunter2',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              token: 't',
+              password: 'p',
+              user_id: 'u1',
+              expires: Date.now() + 100000
+            }),
+            { status: 200 }
+          )
+      ) as unknown as typeof fetch
+    )
+
+    const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.startsWith('https://cdn.example.com')) {
+        return new Response(new TextEncoder().encode('recovered audio'), { status: 200 })
+      }
+      if (url.includes('_all_docs') && init?.method === 'POST') {
+        const body = JSON.parse(init.body as string) as { keys: string[] }
+        const isStemBatch = body.keys[0]?.startsWith('stem_')
+        const rows = body.keys.map((id) => ({
+          id,
+          doc: isStemBatch ? rawJamStemDoc('r1') : rawJamRiffDoc('r1')
+        }))
+        return new Response(JSON.stringify({ total_rows: rows.length, rows }), { status: 200 })
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    const recovered = await recoverPrivateJamRiffAudio('r1', fetchImpl, db)
+
+    expect(recovered?.stems[0].path).not.toBeNull()
+    expect(db.prepare(`SELECT FileKey FROM Stems WHERE StemCID = 'stem_r1'`).get()).toEqual({
+      FileKey: 'k_r1'
+    })
+    expect(fetchImpl).toHaveBeenCalledTimes(3) // riff doc, stem doc, audio bytes
+  })
 })
 
 // A page that never arrived says nothing about where the feed ends: a cancel

@@ -218,7 +218,8 @@ import {
   abortSync as abortWarehouseSync,
   removeJamSync as removeWarehouseJamSync,
   activeSyncCount as activeWarehouseSyncCount,
-  setSyncsInFlightListener as setWarehouseSyncsInFlightListener
+  setSyncsInFlightListener as setWarehouseSyncsInFlightListener,
+  recoverPrivateJamRiffAudio
 } from './riffLibrarySync'
 import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
 import {
@@ -1076,9 +1077,21 @@ app.whenReady().then(async () => {
     resolveRiffWithContext(riffCID)
   )
 
-  ipcMain.handle('riff-library-download-missing-stems', (_event, riffCID: string) =>
-    downloadMissingStems(riffCID)
-  )
+  ipcMain.handle('riff-library-download-missing-stems', async (_event, riffCID: string) => {
+    const resolved = await downloadMissingStems(riffCID)
+    if (!resolved) return null
+    // Older imported warehouse rows can name stems without carrying the
+    // FileKey needed to download them. A normal anonymous download has no
+    // URL to try in that case, so refresh just this clicked private-jam riff
+    // through the authenticated Endlesss lookup and persist the repaired
+    // metadata/audio. Without this fallback, the Import UI looked playable
+    // but stayed forever at `0 cached` and produced no sound.
+    const needsMetadata = resolved.stems.some(
+      (stem) => stem.path === null && stem.downloadUrl === null
+    )
+    if (!needsMetadata) return resolved
+    return (await recoverPrivateJamRiffAudio(riffCID)) ?? resolved
+  })
 
   // One explicit, human-initiated save. Eight stemCIDForPath point lookups
   // is not what CLAUDE.md's "never one query per stem" rule is about;

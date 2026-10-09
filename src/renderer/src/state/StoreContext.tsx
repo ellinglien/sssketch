@@ -43,6 +43,7 @@ import {
   setPluginsHeldStatus
 } from './pendingPluginStates'
 import { markPluginsTouched } from './pluginsTouched'
+import { stateWithMixerMute } from './mixerMute'
 
 /** A slot's status text while its plugin failed to load: the slot keeps the plugin and its saved
  * settings (@shared/pluginSwitch's `failed`), retried after a scan. */
@@ -539,8 +540,14 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     ): Promise<void> =>
       flushQueueRef.current.run(async () => {
         if (shouldAbort?.()) return
+        const requestedState = { ...stateRef.current, ...overrides }
+        // Explicit overrides are audition snapshots (Discover/Tidy Up) and
+        // intentionally own their complete mute picture. A normal restore or
+        // automatic sync receives the live mixer layer.
+        const engineState =
+          overrides === undefined ? stateWithMixerMute(requestedState) : requestedState
         const project = await buildEngineProject(
-          { ...stateRef.current, ...overrides },
+          engineState,
           resolveStretchedForPlayback,
           pluginCatalog,
           undefined,
@@ -648,7 +655,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
             // The timeline's planned throws (native radio sound plan, Task 12): the same plan
             // every export builds from this project, so the pass and the bounce throw alike.
             const project = await buildEngineProject(
-              stateRef.current,
+              stateWithMixerMute(stateRef.current),
               resolveStretchedForPlayback,
               pluginCatalog,
               undefined,
@@ -686,6 +693,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.rifffs,
     state.vol,
     state.mute,
+    state.mixerMute,
     // Missing here meant a resize-handle drag (SET_PLAYED_BARS) never
     // reached the native engine during live playback -- the reducer state
     // updated fine (so the row visibly resized and export/re-open picked it

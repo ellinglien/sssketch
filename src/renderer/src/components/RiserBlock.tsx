@@ -104,6 +104,7 @@ export function RiserBlock({
   const dispatch = useDispatch()
   const ppb = useZoom()
   const riser = useAppSelector((s) => s.risers[riserId])
+  const mixerMuted = useAppSelector((s) => !!s.mixerMute[riserId])
   const automationLanes = useAppSelector((s) => s.automationLanes)
   const [hovered, setHovered] = useState(false)
 
@@ -378,7 +379,7 @@ export function RiserBlock({
                 // layer for the same reason) -- the block keeps its outline
                 // so a muted riser is still a thing you can grab, not a
                 // hole in the row. The red lives on the row's m button.
-                opacity: riser.muted ? 0.3 : 1
+                opacity: riser.muted || mixerMuted ? 0.3 : 1
               }}
             >
               <defs>

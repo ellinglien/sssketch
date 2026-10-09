@@ -80,28 +80,6 @@ function channelHasAnyClip(
   return Object.values(risers).some((riser) => riser.channelId === channelId)
 }
 
-/** Every riser on one channel, muted or unmuted together. Returns the SAME
- * record when nothing changed, so a mute on a riserless row cannot trigger
- * StoreContext's engine-sync effect (which depends on state.risers) for
- * nothing. */
-function setRisersMutedOnChannel(
-  risers: Record<string, RiserClip>,
-  channelId: string,
-  muted: boolean
-): Record<string, RiserClip> {
-  let changed = false
-  const next: Record<string, RiserClip> = {}
-  for (const [id, riser] of Object.entries(risers)) {
-    if (riser.channelId === channelId && riser.muted !== muted) {
-      next[id] = { ...riser, muted }
-      changed = true
-    } else {
-      next[id] = riser
-    }
-  }
-  return changed ? next : risers
-}
-
 /**
  * Writes one parameter's curve onto every given clip, normalising it first.
  *
@@ -218,7 +196,12 @@ export interface AppState {
   // widening SNAP_DIVS changes.
   snapIdx: 0 | 1 | 2 | 3 | 4
   vol: Record<string, number>
+  /** Durable arrangement state. `true` means the stem is disabled; this
+   * remains under the legacy persisted name for project compatibility. */
   mute: Record<string, boolean>
+  /** Temporary mixer/audition silence, keyed by stemKey or riser id. Solo
+   * and channel mute write here so they can never erase `mute`. */
+  mixerMute: Record<string, boolean>
   off: Record<string, number>
   stretch: Record<string, boolean>
   /** A rifff's own played length, in bars — the tiling loop's bound, keyed by
@@ -572,6 +555,7 @@ export const initialState: AppState = {
   snapIdx: 0,
   vol: {},
   mute: {},
+  mixerMute: {},
   off: {},
   stretch: {},
   playedBars: {},
@@ -1465,6 +1449,7 @@ export function reducer(state: AppState, action: Action): AppState {
         rifffs,
         vol: omitStems(state.vol),
         mute: omitStems(state.mute),
+        mixerMute: omitStems(state.mixerMute),
         muteRegions: omitStems(state.muteRegions),
         busOf: omitStems(state.busOf),
         // The toolkit is per clip now, so its three records are cleaned
@@ -1618,7 +1603,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'TOGGLE_MUTE':
       return { ...state, mute: { ...state.mute, [action.stemKey]: !state.mute[action.stemKey] } }
 
-    // Sets every stem in the rifff to the same mute state in one atomic edit
+    // Sets every stem in the rifff to the same durable enabled/disabled state
+    // in one atomic edit
     // (one undo step, not one per stem) — the collapsed view's single
     // group-mute button, which mutes/unmutes the whole rifff together rather
     // than exposing each stem's own mute individually.
@@ -1632,14 +1618,9 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     // Cmd/Ctrl+right-click on a clip, from any view (expanded, collapsed,
-    // sketch) — mutes every stem in every OTHER PLACED rifff and
-    // unmutes every stem in this one. A second SOLO_GROUP for the SAME
-    // groupId while it's already the only unmuted one toggles back to fully
-    // unmuted, rather than needing a separate "un-solo" action or having to
-    // snapshot the exact prior per-stem mute state (which stem was
-    // individually muted before soloing is usually not what you want
-    // restored anyway — "solo" is normally a temporary A/B listen, not a
-    // state worth preserving precisely).
+    // sketch) — applies a temporary mixer solo. Crucially, this never writes
+    // state.mute: whole-stem enable/disable is arrangement data and must
+    // survive a solo round-trip unchanged.
     //
     // Scoped to PLACED rifffs only — real bug this fixes: iterating every
     // rifff in state.rifffs (unfiltered) also mutated stems belonging to
@@ -1653,18 +1634,19 @@ export function reducer(state: AppState, action: Action): AppState {
       const alreadySoloed = rifffList.every((rifff) =>
         rifff.stems.every((stem) => {
           const expectedMuted = rifff.groupId !== action.groupId
-          return !!state.mute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
+          return !!state.mixerMute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
         })
       )
-      const mute = { ...state.mute }
+      const mixerMute = { ...state.mixerMute }
       for (const rifff of rifffList) {
         for (const stem of rifff.stems) {
-          mute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
+          mixerMute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
             ? false
             : rifff.groupId !== action.groupId
         }
       }
-      return { ...state, mute }
+      for (const riser of Object.values(state.risers)) mixerMute[riser.id] = !alreadySoloed
+      return { ...state, mixerMute }
     }
 
     // Channel-level counterpart to SET_GROUP_MUTE/SOLO_GROUP above, for the
@@ -1676,18 +1658,16 @@ export function reducer(state: AppState, action: Action): AppState {
         (r) =>
           r.startBar !== undefined && (state.channelOf[r.groupId] ?? r.groupId) === action.channelId
       )
-      const mute = { ...state.mute }
+      const mixerMute = { ...state.mixerMute }
       for (const rifff of rifffs) {
         for (const stem of rifff.stems) {
-          mute[stemKey(rifff.groupId, stem.slot)] = action.muted
+          mixerMute[stemKey(rifff.groupId, stem.slot)] = action.muted
         }
       }
-      // A riser has no stems, so state.mute has nothing to key it by: its
-      // own `muted` flag is the other half of this row's m button. Without
-      // this, a riser-only row's m button renders, lights up, and changes
-      // nothing audible.
-      const risers = setRisersMutedOnChannel(state.risers, action.channelId, action.muted)
-      return { ...state, mute, risers }
+      for (const riser of Object.values(state.risers)) {
+        if (riser.channelId === action.channelId) mixerMute[riser.id] = action.muted
+      }
+      return { ...state, mixerMute }
     }
 
     case 'SOLO_CHANNEL': {
@@ -1701,31 +1681,24 @@ export function reducer(state: AppState, action: Action): AppState {
         rifffList.every((rifff) =>
           rifff.stems.every((stem) => {
             const expectedMuted = channelOfRifff(rifff) !== action.channelId
-            return !!state.mute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
+            return !!state.mixerMute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
           })
-        ) && riserList.every((riser) => riser.muted === (riser.channelId !== action.channelId))
-      const mute = { ...state.mute }
+        ) &&
+        riserList.every(
+          (riser) => !!state.mixerMute[riser.id] === (riser.channelId !== action.channelId)
+        )
+      const mixerMute = { ...state.mixerMute }
       for (const rifff of rifffList) {
         for (const stem of rifff.stems) {
-          mute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
+          mixerMute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
             ? false
             : channelOfRifff(rifff) !== action.channelId
         }
       }
-      // Same identity guard as setRisersMutedOnChannel's: a project with no
-      // risers must not get a fresh (equal) record and a needless engine
-      // reload out of every solo press.
-      let risers = state.risers
-      if (riserList.length > 0) {
-        risers = {}
-        for (const riser of riserList) {
-          risers[riser.id] = {
-            ...riser,
-            muted: alreadySoloed ? false : riser.channelId !== action.channelId
-          }
-        }
+      for (const riser of riserList) {
+        mixerMute[riser.id] = alreadySoloed ? false : riser.channelId !== action.channelId
       }
-      return { ...state, mute, risers }
+      return { ...state, mixerMute }
     }
 
     // Solos an arbitrary SET of stems that may span multiple different
@@ -2159,12 +2132,15 @@ export function reducer(state: AppState, action: Action): AppState {
       if (!existing) return state
       const risers = { ...state.risers }
       delete risers[action.id]
+      const mixerMute = { ...state.mixerMute }
+      delete mixerMute[action.id]
       const stillOccupied =
         channelHasAnyClip(state.channelOf, risers, existing.channelId) ||
         !!state.recordingChannelIds[existing.channelId]
       return {
         ...state,
         risers,
+        mixerMute,
         channelOrder: stillOccupied
           ? state.channelOrder
           : state.channelOrder.filter((id) => id !== existing.channelId)

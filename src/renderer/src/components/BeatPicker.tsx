@@ -17,6 +17,7 @@ import { computePitchContour } from '@shared/pitchContour'
 import { octaveGridlines } from '@shared/noteNames'
 import { SpectrogramCanvas } from './SpectrogramCanvas'
 import { LoadingLoader } from './LoadingLoader'
+import { reOneMarkerModel } from './reOneMarker'
 
 // Shared frequency range/resolution for every stem's spectrogram lane —
 // explicit here (rather than relying on computeSpectrogram's own defaults)
@@ -791,6 +792,7 @@ export function BeatPicker({
   // separate from currentSubdivisionIndex, which is what the grid's
   // highlight comparison below actually uses.
   const currentBeat = currentSubdivisionIndex / subdivisionsPerBeat
+  const oneMarker = reOneMarkerModel(currentSubdivisionIndex, totalSubdivisions, hasPendingChange)
   const LANE_HEIGHT = 68
   const LANE_GAP = 3
   const lanesHeight = stemSpectrograms?.length
@@ -1313,6 +1315,73 @@ export function BeatPicker({
                   }}
                 />
               ))}
+              {oneMarker && (
+                // The exact cut that will become sample zero after Re-1.
+                // The cell tint remains useful as a broad hit target, but
+                // this hard edge + pointed flag makes the new beginning
+                // unambiguous before the user commits it. White keeps it
+                // distinct from the red moving playback line below.
+                <div
+                  data-re-one-marker={oneMarker.pending ? 'pending' : 'committed'}
+                  style={{
+                    position: 'absolute',
+                    zIndex: 4,
+                    top: 0,
+                    bottom: 0,
+                    left: `${oneMarker.leftPct}%`,
+                    width: 0,
+                    pointerEvents: 'none'
+                  }}
+                >
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      bottom: 0,
+                      left: 0,
+                      width: oneMarker.pending ? 3 : 2,
+                      transform: 'translateX(-1px)',
+                      background: 'var(--ra-stretch-on)',
+                      boxShadow: oneMarker.pending
+                        ? '0 0 0 1px var(--ra-bg), 0 0 8px color-mix(in srgb, var(--ra-stretch-on) 75%, transparent)'
+                        : '0 0 0 1px var(--ra-bg)'
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: 'absolute',
+                      top: 0,
+                      left: oneMarker.labelSide === 'right' ? 0 : -12,
+                      width: 12,
+                      height: 10,
+                      background: 'var(--ra-stretch-on)',
+                      clipPath:
+                        oneMarker.labelSide === 'right'
+                          ? 'polygon(0 0, 100% 0, 0 100%)'
+                          : 'polygon(0 0, 100% 0, 100% 100%)'
+                    }}
+                  />
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: 4,
+                      ...(oneMarker.labelSide === 'right' ? { left: 8 } : { right: 8 }),
+                      padding: oneMarker.pending ? '2px 4px' : '1px 3px',
+                      whiteSpace: 'nowrap',
+                      fontSize: oneMarker.pending ? 9 : 8,
+                      fontWeight: oneMarker.pending ? 700 : 500,
+                      letterSpacing: 0.4,
+                      textTransform: 'uppercase',
+                      color: 'var(--ra-play-on-ink)',
+                      background: 'var(--ra-stretch-on)',
+                      border: '1px solid var(--ra-bg)',
+                      boxShadow: '0 1px 4px color-mix(in srgb, black 65%, transparent)'
+                    }}
+                  >
+                    {oneMarker.label}
+                  </span>
+                </div>
+              )}
               {playheadPct !== null && (
                 <div
                   style={{

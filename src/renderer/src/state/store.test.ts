@@ -1299,13 +1299,13 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r1:6']).toBe(false)
-      expect(state.mute['r2:1']).toBe(true)
-      expect(state.mute['r2:6']).toBe(true)
+      expect(state.mixerMute['r1:1']).toBe(false)
+      expect(state.mixerMute['r1:6']).toBe(false)
+      expect(state.mixerMute['r2:1']).toBe(true)
+      expect(state.mixerMute['r2:6']).toBe(true)
     })
 
-    it('force-unmutes the soloed rifff even if one of its stems was already individually muted', () => {
+    it('keeps a durable disabled stem disabled while the rifff is soloed', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -1313,7 +1313,8 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
-      expect(state.mute['r1:1']).toBe(false)
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mixerMute['r1:1']).toBe(false)
     })
 
     it('toggles back to fully unmuted when SOLO_GROUP is dispatched again for the already-soloed rifff', () => {
@@ -1326,8 +1327,8 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r2:1']).toBe(false)
+      expect(state.mixerMute['r1:1']).toBe(false)
+      expect(state.mixerMute['r2:1']).toBe(false)
     })
 
     it('re-solos (does not toggle off) when dispatched for a DIFFERENT rifff than the one currently soloed', () => {
@@ -1340,8 +1341,8 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r2' })
-      expect(state.mute['r1:1']).toBe(true)
-      expect(state.mute['r2:1']).toBe(false)
+      expect(state.mixerMute['r1:1']).toBe(true)
+      expect(state.mixerMute['r2:1']).toBe(false)
     })
 
     it('does not touch a rifff still sitting unplaced in the shelf — regression test for a real bug where soloing anything would silently mute every shelf-only rifff, so a brand new clip could arrive pre-muted the moment it was later dragged onto the timeline', () => {
@@ -1355,6 +1356,8 @@ describe('reducer', () => {
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       expect(state.mute['r2:1']).toBeUndefined()
       expect(state.mute['r2:6']).toBeUndefined()
+      expect(state.mixerMute['r2:1']).toBeUndefined()
+      expect(state.mixerMute['r2:6']).toBeUndefined()
     })
   })
 
@@ -1378,8 +1381,8 @@ describe('reducer', () => {
         channelId: 'chan-a'
       })
       state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: true })
-      expect(state.mute['r1:1']).toBe(true)
-      expect(state.mute['r2:1']).toBe(true)
+      expect(state.mixerMute['r1:1']).toBe(true)
+      expect(state.mixerMute['r2:1']).toBe(true)
     })
 
     it('does not affect a rifff on a different channel', () => {
@@ -1401,8 +1404,27 @@ describe('reducer', () => {
         channelId: 'chan-b'
       })
       state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: true })
+      expect(state.mixerMute['r1:1']).toBe(true)
+      expect(state.mixerMute['r2:1']).toBeUndefined()
+    })
+
+    it('does not erase a durable stem disable after mute and unmute', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+      state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: true })
+      state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: false })
+
       expect(state.mute['r1:1']).toBe(true)
-      expect(state.mute['r2:1']).toBeUndefined()
+      expect(state.mixerMute['r1:1']).toBe(false)
     })
   })
 
@@ -1433,9 +1455,9 @@ describe('reducer', () => {
         channelId: 'chan-b'
       })
       state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-a' })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r2:1']).toBe(false)
-      expect(state.mute['r3:1']).toBe(true)
+      expect(state.mixerMute['r1:1']).toBe(false)
+      expect(state.mixerMute['r2:1']).toBe(false)
+      expect(state.mixerMute['r3:1']).toBe(true)
     })
 
     it('toggles back to fully unmuted when dispatched again for the already-soloed channel', () => {
@@ -1458,8 +1480,34 @@ describe('reducer', () => {
       })
       state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-a' })
       state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-a' })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r2:1']).toBe(false)
+      expect(state.mixerMute['r1:1']).toBe(false)
+      expect(state.mixerMute['r2:1']).toBe(false)
+    })
+
+    it('restores the full mix without re-enabling durably disabled stems', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r2',
+        startBar: 0,
+        channelId: 'chan-b'
+      })
+      state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+      state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-b' })
+      state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-b' })
+
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mixerMute['r1:1']).toBe(false)
     })
   })
 
@@ -3381,8 +3429,9 @@ describe('a riser on its own row', () => {
       riser: createRiser({ id: 'r2', channelId: 'other', startBar: 0 })
     })
     state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'ch-r1', muted: true })
-    expect(state.risers['r1'].muted).toBe(true)
-    expect(state.risers['r2'].muted).toBe(false)
+    expect(state.mixerMute['r1']).toBe(true)
+    expect(state.mixerMute['r2']).toBeUndefined()
+    expect(state.risers['r1'].muted).toBe(false)
   })
 
   it('solos a riser row by muting every other riser', () => {
@@ -3392,8 +3441,9 @@ describe('a riser on its own row', () => {
       riser: createRiser({ id: 'r2', channelId: 'other', startBar: 0 })
     })
     state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'ch-r1' })
-    expect(state.risers['r1'].muted).toBe(false)
-    expect(state.risers['r2'].muted).toBe(true)
+    expect(state.mixerMute['r1']).toBe(false)
+    expect(state.mixerMute['r2']).toBe(true)
+    expect(state.risers['r2'].muted).toBe(false)
   })
 
   it('un-solos back to everything audible on a second press', () => {
@@ -3404,8 +3454,8 @@ describe('a riser on its own row', () => {
     })
     state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'ch-r1' })
     state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'ch-r1' })
-    expect(state.risers['r1'].muted).toBe(false)
-    expect(state.risers['r2'].muted).toBe(false)
+    expect(state.mixerMute['r1']).toBe(false)
+    expect(state.mixerMute['r2']).toBe(false)
   })
 
   it('leaves the risers record untouched when there are none to solo', () => {

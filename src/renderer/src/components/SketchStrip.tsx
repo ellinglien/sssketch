@@ -6,6 +6,7 @@ import { stemColorVar } from '../theme/typeColor'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { markManualSeek } from '../state/manualSeek'
 import type { Rifff } from '@shared/types'
+import { sketchRiffClickAction } from './sketchRiffInteraction'
 
 export const TILE_SIZE = 64
 export const TILE_GAP = 10
@@ -61,6 +62,10 @@ export function SketchStrip(): React.JSX.Element {
   // handleTileClick's own doc comment for why the tile's click handler
   // needs to check this.
   const suppressNextTileClickRef = useRef(false)
+  // Native HTML drag normally has its trailing synthetic click swallowed by
+  // suppressNextSyntheticClick(). Keep a local guard too so a browser that
+  // targets that click unusually still cannot turn a reorder into play/stop.
+  const nativeTileDragRef = useRef(false)
   // Live preview while right-click-dragging a tile's bar-length (see
   // handleBarsMouseDown) — the committed value doesn't change until
   // release, but the tile's own label shows the candidate value as you drag,
@@ -158,6 +163,15 @@ export function SketchStrip(): React.JSX.Element {
   // back to the rifff's own start (or, while paused, starting playback from
   // there unexpectedly) right as you let go.
   function handleTileClick(e: React.MouseEvent, rifff: Rifff): void {
+    const targetPos = rifff.startBar ?? 0
+    const clickedRiffIsPlaying =
+      playing && pos >= targetPos && pos < targetPos + effectiveBars(rifff)
+    const playbackAction = sketchRiffClickAction(
+      playing,
+      clickedRiffIsPlaying,
+      nativeTileDragRef.current
+    )
+    if (playbackAction === 'ignore-drag') return
     if (suppressNextTileClickRef.current) {
       suppressNextTileClickRef.current = false
       return
@@ -185,15 +199,14 @@ export function SketchStrip(): React.JSX.Element {
     }
     setMultiSelected(new Set())
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
-    const targetPos = rifff.startBar ?? 0
-    // Already the one playing — just select it, don't yank the transport
-    // back to its start. Real bug this fixed: clicking the currently-playing
-    // tile (e.g. to select it before right-clicking, or just to confirm
-    // what's selected) restarted it from beat 1 instead of leaving playback
-    // alone, which read as "my click broke the loop."
-    if (playing && pos >= targetPos && pos < targetPos + effectiveBars(rifff)) return
+    // Selection persists independently of playback: a second click on the
+    // active riff stops transport but deliberately does not deselect it.
+    if (playbackAction === 'select-and-stop') {
+      dispatch({ type: 'PAUSE' })
+      return
+    }
     dispatch({ type: 'SET_POS', pos: targetPos })
-    if (playing) {
+    if (playbackAction === 'select-and-switch') {
       markManualSeek()
       void window.rifffApi.engineSetPosition(targetPos)
     } else {
@@ -396,6 +409,7 @@ export function SketchStrip(): React.JSX.Element {
         const start = rifff.startBar ?? 0
         const bars = effectiveBars(rifff)
         const isCurrent = playing && pos >= start && pos < start + bars
+        const isSelected = state.sel === rifff.groupId
         const batchSelected = multiSelected.has(rifff.groupId)
         // 0..1 progress through this rifff's own play window — only
         // meaningful while isCurrent, but harmless to compute either way.
@@ -413,8 +427,17 @@ export function SketchStrip(): React.JSX.Element {
             key={rifff.groupId}
             draggable
             onDragStart={(e) => {
+              nativeTileDragRef.current = true
               suppressNextSyntheticClick()
               e.dataTransfer.setData('text/rifff-group-id', rifff.groupId)
+            }}
+            onDragEnd={() => {
+              // The browser's trailing click is dispatched in the same event
+              // turn as dragend. Clear after that turn so the guard covers it
+              // without swallowing the user's next deliberate click.
+              window.setTimeout(() => {
+                nativeTileDragRef.current = false
+              }, 0)
             }}
             onClick={(e) => handleTileClick(e, rifff)}
             onContextMenu={(e) => e.preventDefault()}
@@ -426,9 +449,14 @@ export function SketchStrip(): React.JSX.Element {
               width: TILE_SIZE,
               height: TILE_SIZE,
               cursor: 'pointer',
-              border: batchSelected ? '1px solid var(--ra-stretch-on)' : '1px solid transparent',
+              border: batchSelected
+                ? '1px solid var(--ra-stretch-on)'
+                : isSelected
+                  ? '2px solid var(--ra-playhead)'
+                  : '1px solid transparent',
+              boxShadow: isCurrent ? '0 0 0 2px var(--ra-play-on)' : undefined,
               boxSizing: 'border-box',
-              opacity: state.sel === rifff.groupId || batchSelected ? 1 : 0.85
+              opacity: isSelected || batchSelected || isCurrent ? 1 : 0.85
             }}
           >
             <PolarGlyph

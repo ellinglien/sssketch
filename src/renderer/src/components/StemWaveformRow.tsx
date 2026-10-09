@@ -40,7 +40,9 @@ export function StemWaveformRow({
   // useAppState() call -- see
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
   const rifff = useAppSelector((s) => s.rifffs[groupId])
-  const muted = useAppSelector((s) => !!s.mute[key])
+  const disabled = useAppSelector((s) => !!s.mute[key])
+  const mixerMuted = useAppSelector((s) => !!s.mixerMute[key])
+  const muted = disabled || mixerMuted
   const volume = useAppSelector((s) => s.vol[key] ?? 1)
   const playedBarsOverride = useAppSelector((s) => s.playedBars[groupId])
   const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
@@ -64,12 +66,13 @@ export function StemWaveformRow({
   const dragPlayedBars = useAppSelector((s) => s.dragPlayedBars[groupId] ?? null)
   const dragLeftCropBars = useAppSelector((s) => s.dragLeftCropBars[groupId] ?? null)
 
-  // Right-click anywhere on the waveform toggles mute — moved off plain
+  // Right-click anywhere on the waveform toggles durable enable/disable — moved off plain
   // click (which now does nothing at this level) since an accidental click
   // meant for something else — selecting, starting a drag that didn't quite
   // register — used to silently mute a stem. Right-click has no other use
-  // here, so it can dispatch immediately with no debounce/disambiguation
-  // needed against the separate onDoubleClick (reset volume) handler below.
+  // here, so it can dispatch immediately with no debounce/disambiguation.
+  // This writes state.mute (persisted arrangement data), not mixerMute, so
+  // temporary channel mute/solo cannot erase it.
   // Ctrl+right-click solos this stem's whole rifff instead (see
   // SOLO_GROUP).
   function handleWaveformContextMenu(e: React.MouseEvent): void {

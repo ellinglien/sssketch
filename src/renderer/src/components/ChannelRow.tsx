@@ -83,11 +83,12 @@ const CHANNEL_FX_BUTTON_ENABLED = false
  * through to the Timeline container's own fallback (which always means
  * "give it a brand new channel instead").
  *
- * Also owns the channel's M/S/fx button stack (mute/solo the whole channel
+ * Also owns the channel's M/S/fx mixer stack (temporarily mute/solo the whole channel
  * at once via SET_CHANNEL_MUTE/SOLO_CHANNEL, plus the "fx" button opening
  * this channel's own 2-slot plugin chain panel — see
  * docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md).
- * Pinned to the row's own right edge with position:sticky so it stays on
+ * Pinned to the row's own right edge with position:sticky, on an opaque
+ * floating rail surface beside the Inspector, so it stays on
  * screen while the timeline scrolls horizontally, rather than the clip
  * title (which lives at the LEFT of each clip, per RifffBlockRow) ever
  * being covered. The sticky element itself has height:0 so it never adds
@@ -138,13 +139,13 @@ function ChannelRowImpl({
 }): React.JSX.Element {
   const [chainPanelOpen, setChainPanelOpen] = useState(false)
   const dispatch = useDispatch()
-  // Read as whole maps, not per-key -- the solo check below genuinely needs
-  // every rifff/mute entry in the project, not just this channel's own. This
+  // Read as a whole map, not per-key -- the solo check below genuinely needs
+  // every temporary mixer entry in the project, not just this channel's own. This
   // still helps: this component now only re-renders when mute state or the
   // rifffs map actually changes, not on every dispatch anywhere (a volume
   // drag, fade adjustment, tempo change, etc. no longer touches it). See
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
-  const mute = useAppSelector((s) => s.mute)
+  const mixerMute = useAppSelector((s) => s.mixerMute)
   const rifffsMap = useAppSelector((s) => s.rifffs)
   // The whole record, then narrowed with useMemo -- risersOnChannel builds a
   // fresh array every call, so selecting it directly would fail Object.is on
@@ -152,6 +153,17 @@ function ChannelRowImpl({
   // state.risers itself only changes when a riser actually does.
   const allRisers = useAppSelector((s) => s.risers)
   const channelRisers = useMemo(() => risersOnChannel(allRisers, channelId), [allRisers, channelId])
+  const mixerChannelRisers = useMemo(
+    () => channelRisers.map((riser) => ({ ...riser, muted: !!mixerMute[riser.id] })),
+    [channelRisers, mixerMute]
+  )
+  const mixerRisers = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(allRisers).map(([id, riser]) => [id, { ...riser, muted: !!mixerMute[id] }])
+      ),
+    [allRisers, mixerMute]
+  )
   const riserIds = useMemo(() => channelRisers.map((riser) => riser.id), [channelRisers])
   const isRecordingChannel = useAppSelector((s) => !!s.recordingChannelIds[channelId])
   const isArmed = useAppSelector((s) => s.armedChannelId === channelId)
@@ -191,8 +203,8 @@ function ChannelRowImpl({
   // else), and both are still memoized so that scan only re-runs when mute
   // state, the rifff set or the riser set actually changes.
   const allMuted = useMemo(
-    () => channelAllMuted({ rifffs, channelRisers, mute }),
-    [rifffs, channelRisers, mute]
+    () => channelAllMuted({ rifffs, channelRisers: mixerChannelRisers, mute: mixerMute }),
+    [rifffs, mixerChannelRisers, mixerMute]
   )
   const soloed = useMemo(
     () =>
@@ -200,10 +212,10 @@ function ChannelRowImpl({
         channelId,
         channelGroupIds: new Set(rifffs.map((r) => r.groupId)),
         rifffs: rifffsMap,
-        risers: allRisers,
-        mute
+        risers: mixerRisers,
+        mute: mixerMute
       }),
-    [channelId, rifffs, rifffsMap, allRisers, mute]
+    [channelId, rifffs, rifffsMap, mixerRisers, mixerMute]
   )
 
   const baseButtonStyle: React.CSSProperties = {
@@ -532,9 +544,16 @@ function ChannelRowImpl({
             position: 'absolute',
             right: 4,
             top: 4,
+            width: 54,
+            boxSizing: 'border-box',
             display: 'flex',
             flexDirection: 'column',
-            gap: 2
+            alignItems: 'flex-end',
+            gap: 2,
+            padding: 4,
+            background: 'color-mix(in srgb, var(--ra-bg-bar) 94%, transparent)',
+            border: '1px solid var(--ra-border)',
+            boxShadow: '-4px 4px 12px color-mix(in srgb, #000 32%, transparent)'
           }}
         >
           <button
@@ -543,7 +562,7 @@ function ChannelRowImpl({
               dispatch({ type: 'SET_CHANNEL_MUTE', channelId, muted: !allMuted })
             }}
             aria-label={`mute channel ${channelId}`}
-            title="mute channel"
+            title="temporarily mute channel"
             style={muteButtonStyle}
           >
             m
@@ -554,7 +573,7 @@ function ChannelRowImpl({
               dispatch({ type: 'SOLO_CHANNEL', channelId })
             }}
             aria-label={`solo channel ${channelId}`}
-            title="solo channel"
+            title="temporarily solo channel"
             style={soloButtonStyle}
           >
             s
