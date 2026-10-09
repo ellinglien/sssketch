@@ -46,7 +46,7 @@ import type { Stem } from '@shared/types'
 import type { DiscoverCandidate } from '@shared/discoverCandidate'
 import { typeColorVar } from '../theme/typeColor'
 import { discoverSlotKindForSoundType } from '../audio/discoverSeed'
-import { Waveform } from './Waveform'
+import { RepeatedWaveform } from './RepeatedWaveform'
 import { LoadingLoader } from './LoadingLoader'
 import { Dial } from './Dial'
 import { resolveCandidateStem } from './discoverCandidateStem'
@@ -77,6 +77,33 @@ function CrossWaveformPlayhead({ pct }: { pct: number | null }): React.JSX.Eleme
   if (pct === null) return null
   return (
     <span className="ra-cross-waveform-playhead" style={{ left: `${pct}%` }} aria-hidden="true" />
+  )
+}
+
+function crossWaveformTileWidthPct(stemBars: number, loopBars: number): number {
+  if (
+    !Number.isFinite(stemBars) ||
+    !Number.isFinite(loopBars) ||
+    !(stemBars > 0) ||
+    !(loopBars > 0)
+  ) {
+    return 100
+  }
+  return Math.min(100, (stemBars / loopBars) * 100)
+}
+
+function CrossWaveformRestartLines({
+  tileWidthPct
+}: {
+  tileWidthPct: number
+}): React.JSX.Element | null {
+  if (tileWidthPct >= 100) return null
+  return (
+    <span
+      className="ra-cross-waveform-restarts"
+      style={{ backgroundSize: `${tileWidthPct}% 100%` }}
+      aria-hidden="true"
+    />
   )
 }
 
@@ -155,6 +182,7 @@ function SourceRow({
   source,
   added,
   active,
+  loopBars,
   playheadPct,
   audible,
   soloed,
@@ -166,6 +194,7 @@ function SourceRow({
   source: CrossSourceOccurrence
   added: boolean
   active: boolean
+  loopBars: number
   playheadPct: number | null
   audible: boolean
   soloed: boolean
@@ -175,6 +204,7 @@ function SourceRow({
   onToggleSolo: () => void
 }): React.JSX.Element {
   const stem = source.stem
+  const tileWidthPct = stem ? crossWaveformTileWidthPct(stem.barLength, loopBars) : 100
   return (
     <div
       draggable={stem !== null}
@@ -227,7 +257,14 @@ function SourceRow({
           cursor: stem ? 'pointer' : 'default'
         }}
       >
-        {stem && <Waveform path={stem.path} color={typeColorVar(stem.type)} />}
+        {stem && (
+          <RepeatedWaveform
+            path={stem.path}
+            color={typeColorVar(stem.type)}
+            tileWidthPct={tileWidthPct}
+          />
+        )}
+        <CrossWaveformRestartLines tileWidthPct={tileWidthPct} />
         {stem && <CrossWaveformPlayhead pct={playheadPct} />}
         <span
           style={{
@@ -337,6 +374,7 @@ function SourceColumn({
           source={source}
           added={added.has(source.id)}
           active={selected && playing}
+          loopBars={parent.barLength}
           playheadPct={selected && playing ? playheadPct : null}
           audible={!muted.has(source.id)}
           soloed={availableCount > 1 && audibleCount === 1 && !muted.has(source.id)}
@@ -356,6 +394,7 @@ function CenterRow({
   index,
   soloed,
   rolling,
+  loopBars,
   playheadPct,
   onDropAt,
   onDraftChange,
@@ -369,6 +408,7 @@ function CenterRow({
   index: number
   soloed: boolean
   rolling: boolean
+  loopBars: number
   playheadPct: number | null
   onDropAt: (event: React.DragEvent, index: number) => void
   onDraftChange: Dispatch<SetStateAction<CrossDraft | null>>
@@ -378,6 +418,7 @@ function CenterRow({
   onDuplicate: () => void
 }): React.JSX.Element {
   const stem = source.stem!
+  const tileWidthPct = crossWaveformTileWidthPct(stem.barLength, loopBars)
   function beginGainDrag(event: React.PointerEvent): void {
     event.preventDefault()
     const startY = event.clientY
@@ -453,7 +494,7 @@ function CenterRow({
           cursor: 'ns-resize'
         }}
       >
-        <Waveform path={stem.path} color="var(--ra-text-4)" />
+        <RepeatedWaveform path={stem.path} color="var(--ra-text-4)" tileWidthPct={tileWidthPct} />
         {row.audible && (
           <div
             style={{
@@ -462,9 +503,14 @@ function CenterRow({
               clipPath: `inset(${(1 - row.gain) * 100}% 0 0 0)`
             }}
           >
-            <Waveform path={stem.path} color={typeColorVar(stem.type)} />
+            <RepeatedWaveform
+              path={stem.path}
+              color={typeColorVar(stem.type)}
+              tileWidthPct={tileWidthPct}
+            />
           </div>
         )}
+        <CrossWaveformRestartLines tileWidthPct={tileWidthPct} />
         <CrossWaveformPlayhead pct={playheadPct} />
         <span style={{ position: 'absolute', left: 5, top: 3, fontSize: 8 }}>
           {index + 1} · {stem.name}
@@ -1019,6 +1065,18 @@ export function CrossPanel({
           pointer-events: none;
           transform: translateX(-0.5px);
         }
+        .ra-cross-waveform-restarts {
+          position: absolute;
+          z-index: 1;
+          inset: 0;
+          background-image: linear-gradient(
+            to right,
+            transparent calc(100% - 1px),
+            color-mix(in srgb, var(--ra-text) 22%, transparent) calc(100% - 1px)
+          );
+          background-repeat: repeat-x;
+          pointer-events: none;
+        }
         @keyframes ra-cross-playing-meter {
           from { transform: scaleY(0.3); opacity: 0.55; }
           to { transform: scaleY(1); opacity: 1; }
@@ -1238,6 +1296,7 @@ export function CrossPanel({
                   draft.center.filter((item) => item.audible).length === 1
                 }
                 rolling={rollingRows.has(row.id)}
+                loopBars={centerLoopBars(draft)}
                 playheadPct={selectedTarget === 'center' ? playheadPct : null}
                 onDropAt={handleDropAt}
                 onDraftChange={setDraft}
