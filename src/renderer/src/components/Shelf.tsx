@@ -24,15 +24,13 @@ import { toggleRiffBatchSelection } from './sketchRiffInteraction'
 
 const TILE_SIZE = 42
 
-// A stable empty-Set reference for the "batch selection is stale" case
-// below, rather than allocating a fresh one every render.
-const EMPTY_SELECTION: Set<string> = new Set()
-
 export function Shelf({
   onImported,
   onOpenLibrary,
   onSeedDiscover,
-  onCrossSelectionChange
+  selectedRiffIds,
+  selectionAnchorId,
+  onSelectionChange
 }: {
   onImported: (groupId: string) => void
   /** Opens the riff library on the half the pressed button names -- the two
@@ -56,9 +54,10 @@ export function Shelf({
    * live drag onto Discover isn't possible (Discover's own full-screen
    * modal covers Shelf entirely), so this is triggered explicitly instead. */
   onSeedDiscover: (rifff: Rifff) => void
-  /** Publishes exactly-two selection to the Inspector, where the Cross
-   * action lives beside the existing Discover action. */
-  onCrossSelectionChange: (groupIds: [string, string] | null) => void
+  /** Shared with Sketch so both surfaces render one persistent working set. */
+  selectedRiffIds: ReadonlySet<string>
+  selectionAnchorId: string | null
+  onSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -78,36 +77,15 @@ export function Shelf({
   // tile without dragging it to the arranger previews it, matching the LORE
   // library browser's own click-to-preview convention.
   const [previewingGroupId, setPreviewingGroupId] = useState<string | null>(null)
-  // Batch selection (shift-click range, cmd/ctrl-click toggle) — separate
-  // from state.sel, which remains the single "anchor" tile that drives
-  // preview/detail-line/Inspector exactly as before. A plain click always
-  // collapses this back down to just that one tile. Same convention as the
-  // LORE library browser's own multi-select.
-  const [rawMultiSelected, setMultiSelected] = useState<Set<string>>(new Set())
-  // A shift/cmd-click batch always includes its own anchor tile (state.sel)
-  // as a member -- shift-click's range always spans from state.sel to the
-  // clicked tile inclusive; cmd/ctrl-click's toggle can in principle remove
-  // the anchor itself, an accepted edge case here. So once state.sel moves
-  // to something OUTSIDE this batch -- a click in the arranger, sketch
-  // mode, or a Tidy Up preview -- the batch is stale and treated as empty,
-  // without needing an effect or a ref to detect "state.sel changed" (this
-  // project's linter forbids setState-in-effect and ref reads/writes
-  // during render; see ClusterStemsBrowser.tsx's own "derive instead of
-  // reset" comment for the same convention elsewhere in this codebase).
-  // Reported 2026-09-01: shelf selection should clear on arranger/sketch
-  // interaction, and vice versa.
-  const multiSelected =
-    state.sel !== null && rawMultiSelected.has(state.sel) ? rawMultiSelected : EMPTY_SELECTION
-
-  const updateMultiSelection = useCallback(
-    (next: Set<string>): void => {
-      setMultiSelected(next)
-      const selectedIds = library
-        .filter((rifff) => next.has(rifff.groupId))
-        .map((rifff) => rifff.groupId)
-      onCrossSelectionChange(selectedIds.length === 2 ? [selectedIds[0], selectedIds[1]] : null)
+  // Frame owns this selection and gives the same Set to Sketch. This keeps
+  // the two views visually synchronized and preserves the chosen riffs
+  // underneath fullscreen Cross/Discover workspaces. The separate anchor
+  // prevents Sketch's playback auto-follow from rewriting a range choice.
+  const updateSelection = useCallback(
+    (next: Set<string>, anchorId: string | null = selectionAnchorId): void => {
+      onSelectionChange(next, anchorId)
     },
-    [library, onCrossSelectionChange]
+    [onSelectionChange, selectionAnchorId]
   )
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   // Bumped on every click so a preview whose decode is still in flight when
@@ -154,40 +132,49 @@ export function Shelf({
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       const targetIds =
-        multiSelected.size > 0 ? multiSelected : new Set(state.sel ? [state.sel] : [])
+        selectedRiffIds.size > 0 ? selectedRiffIds : new Set(state.sel ? [state.sel] : [])
       const groupIds = [...targetIds].filter((id) => state.rifffs[id]?.startBar === undefined)
       if (groupIds.length === 0) return
       dispatch({ type: 'DELETE_RIFFFS', groupIds })
-      updateMultiSelection(new Set())
+      updateSelection(new Set(), null)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [multiSelected, state.sel, state.rifffs, dispatch, updateMultiSelection])
+  }, [selectedRiffIds, state.sel, state.rifffs, dispatch, updateSelection])
 
-  // Shift-click extends/shrinks a range from the current anchor (state.sel);
+  // Shift-click extends/shrinks a range from the shared selection anchor;
   // cmd/ctrl-click toggles just the clicked tile in/out of the batch,
   // leaving the anchor alone. Neither previews audio — multi-selecting to
   // batch-drag or batch-delete shouldn't also start a preview loop, unlike
   // a plain click. A plain click always collapses back to a single
   // selection AND previews, exactly as before.
   function handleTileClick(e: React.MouseEvent, rifff: Rifff): void {
-    if (e.shiftKey && state.sel) {
-      const anchorIndex = library.findIndex((r) => r.groupId === state.sel)
+    if (e.shiftKey && selectionAnchorId) {
+      const anchorIndex = library.findIndex((r) => r.groupId === selectionAnchorId)
       const clickedIndex = library.findIndex((r) => r.groupId === rifff.groupId)
       if (anchorIndex === -1 || clickedIndex === -1) {
-        updateMultiSelection(new Set([rifff.groupId]))
+        updateSelection(new Set([rifff.groupId]), rifff.groupId)
+        dispatch({ type: 'SELECT', groupId: rifff.groupId })
         return
       }
       const [start, end] =
         anchorIndex < clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex]
-      updateMultiSelection(new Set(library.slice(start, end + 1).map((r) => r.groupId)))
+      updateSelection(
+        new Set(library.slice(start, end + 1).map((r) => r.groupId)),
+        selectionAnchorId
+      )
       return
     }
     if (e.metaKey || e.ctrlKey) {
-      updateMultiSelection(toggleRiffBatchSelection(multiSelected, state.sel, rifff.groupId))
+      const anchorId = selectionAnchorId ?? rifff.groupId
+      updateSelection(
+        toggleRiffBatchSelection(selectedRiffIds, selectionAnchorId, rifff.groupId),
+        anchorId
+      )
+      if (!selectionAnchorId) dispatch({ type: 'SELECT', groupId: rifff.groupId })
       return
     }
-    updateMultiSelection(new Set())
+    updateSelection(new Set([rifff.groupId]), rifff.groupId)
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
     stopTilePreview()
     if (previewingGroupId === rifff.groupId) {
@@ -376,10 +363,9 @@ export function Shelf({
           }}
         >
           {library.map((rifff) => {
-            const selected = state.sel === rifff.groupId
+            const selected = selectedRiffIds.has(rifff.groupId)
             const hovered = hoverId === rifff.groupId
             const previewing = previewingGroupId === rifff.groupId
-            const batchSelected = multiSelected.has(rifff.groupId)
             const placed = rifff.startBar !== undefined
             // Already placed on the timeline dims further than the normal idle
             // state — it's already in the arrangement, so the shelf's default
@@ -388,12 +374,12 @@ export function Shelf({
             // (selected/hovered/previewing/batch-selected) still lights it up
             // normally regardless of placement — greying out is only the idle
             // default, not a suppression of interaction feedback.
-            const lit = selected || hovered || previewing || batchSelected
+            const lit = selected || hovered || previewing
             return (
               <button
                 key={rifff.groupId}
                 className="ra-riff-tile ra-shelf-riff-tile"
-                data-selected={selected || batchSelected}
+                data-selected={selected}
                 data-previewing={previewing}
                 draggable
                 onDragStart={(e) => {
@@ -405,10 +391,10 @@ export function Shelf({
                   // for anything that only understands single-tile drops
                   // (the normal Timeline), which just places the one tile
                   // under the cursor rather than the whole batch.
-                  if (multiSelected.size > 1 && multiSelected.has(rifff.groupId)) {
+                  if (selectedRiffIds.size > 1 && selectedRiffIds.has(rifff.groupId)) {
                     e.dataTransfer.setData(
                       'text/rifff-shelf-source-ids',
-                      JSON.stringify([...multiSelected])
+                      JSON.stringify([...selectedRiffIds])
                     )
                   }
                   // Not yet placed — there's no existing on-timeline position to
@@ -425,7 +411,7 @@ export function Shelf({
                 }}
                 onMouseEnter={() => setHoverId(rifff.groupId)}
                 onClick={(e) => handleTileClick(e, rifff)}
-                aria-pressed={selected || batchSelected}
+                aria-pressed={selected}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   // Real root cause of a live report, 2026-09-16: "right

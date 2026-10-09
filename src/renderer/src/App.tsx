@@ -217,7 +217,9 @@ function Timeline({
   onCreateRiser,
   openRiserLaneId,
   onCloseRiserLane,
-  onCrossSelectionChange
+  selectedRiffIds,
+  riffSelectionAnchorId,
+  onRiffSelectionChange
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
@@ -237,7 +239,9 @@ function Timeline({
    * openRiserLaneId. */
   openRiserLaneId: string | null
   onCloseRiserLane: () => void
-  onCrossSelectionChange: (groupIds: [string, string] | null) => void
+  selectedRiffIds: ReadonlySet<string>
+  riffSelectionAnchorId: string | null
+  onRiffSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
    * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
@@ -472,7 +476,13 @@ function Timeline({
   }
 
   if (state.mode === 'sketch') {
-    return <SketchStrip onCrossSelectionChange={onCrossSelectionChange} />
+    return (
+      <SketchStrip
+        selectedRiffIds={selectedRiffIds}
+        selectionAnchorId={riffSelectionAnchorId}
+        onSelectionChange={onRiffSelectionChange}
+      />
+    )
   }
 
   const ghostRowHeight = GHOST_ROW_HEIGHT
@@ -1730,20 +1740,44 @@ function Frame(): React.JSX.Element {
   // draft, so opening another pair never needs a discard confirmation.
   const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
   const [crossOpen, setCrossOpen] = useState(false)
-  // Sketch and Shelf own their local multi-selection visuals, while the
-  // Inspector owns the action those selections expose. Keep only the two
-  // selected ids here so the Inspector can render Cross beside Discover
-  // without moving either component's selection mechanics into App.
-  const [crossSelectionIds, setCrossSelectionIds] = useState<[string, string] | null>(null)
-  const handleCrossSelectionChange = useCallback((groupIds: [string, string] | null) => {
-    setCrossSelectionIds(groupIds)
-  }, [])
+  // One shared, session-only riff selection for both Sketch and Shelf.
+  // Keeping this above the fullscreen Cross/Discover workspaces means the
+  // exact working set remains highlighted when either workspace closes;
+  // keeping it outside project serialization means it is still ordinary UI
+  // state, not musical project data. The anchor is separate from state.sel:
+  // Sketch's playback auto-follow legitimately changes state.sel as the
+  // playhead advances, but must not collapse a deliberate two-riff choice.
+  const [riffSelection, setRiffSelection] = useState<{
+    ids: Set<string>
+    anchorId: string | null
+  }>(() => ({ ids: new Set(), anchorId: null }))
+  const selectedRiffIds = useMemo(() => {
+    const valid = new Set([...riffSelection.ids].filter((id) => state.rifffs[id] !== undefined))
+    // A loaded project already has an Inspector selection. Until the user
+    // deliberately establishes a shared working set, mirror that one riff
+    // instead of making Shelf/Sketch look unselected after open/recovery.
+    if (valid.size === 0 && state.sel && state.rifffs[state.sel]) valid.add(state.sel)
+    return valid
+  }, [riffSelection.ids, state.rifffs, state.sel])
+  const riffSelectionAnchorId =
+    riffSelection.anchorId && state.rifffs[riffSelection.anchorId]
+      ? riffSelection.anchorId
+      : selectedRiffIds.size === 1
+        ? [...selectedRiffIds][0]
+        : null
+  const handleRiffSelectionChange = useCallback(
+    (groupIds: Set<string>, anchorId: string | null) => {
+      setRiffSelection({ ids: new Set(groupIds), anchorId })
+    },
+    []
+  )
   const inspectorCrossPair = useMemo<[Rifff, Rifff] | null>(() => {
-    if (!crossSelectionIds || !state.sel || !crossSelectionIds.includes(state.sel)) return null
-    const left = state.rifffs[crossSelectionIds[0]]
-    const right = state.rifffs[crossSelectionIds[1]]
+    if (selectedRiffIds.size !== 2) return null
+    const [leftId, rightId] = [...selectedRiffIds]
+    const left = state.rifffs[leftId]
+    const right = state.rifffs[rightId]
     return left && right ? [left, right] : null
-  }, [crossSelectionIds, state.rifffs, state.sel])
+  }, [selectedRiffIds, state.rifffs])
   // Discover artist mode: the chosen artists (combine artists, spec
   // 2026-10-06), `[null]` = me. Session-only, the same lifetime as
   // discoverSlots -- Discover opens on `me` at launch.
@@ -3004,7 +3038,9 @@ function Frame(): React.JSX.Element {
           onImported={handleImported}
           onOpenLibrary={openRiffLibrary}
           onSeedDiscover={openRiffLibraryWithDiscoverSeed}
-          onCrossSelectionChange={handleCrossSelectionChange}
+          selectedRiffIds={selectedRiffIds}
+          selectionAnchorId={riffSelectionAnchorId}
+          onSelectionChange={handleRiffSelectionChange}
         />
         <TransportBar
           onEnableGatedRecording={() => void enableGatedRecording()}
@@ -3060,7 +3096,9 @@ function Frame(): React.JSX.Element {
                   onCreateRiser={createRiserFromGesture}
                   openRiserLaneId={openRiserLaneId}
                   onCloseRiserLane={closeRiserLane}
-                  onCrossSelectionChange={handleCrossSelectionChange}
+                  selectedRiffIds={selectedRiffIds}
+                  riffSelectionAnchorId={riffSelectionAnchorId}
+                  onRiffSelectionChange={handleRiffSelectionChange}
                 />
               )}
             </div>

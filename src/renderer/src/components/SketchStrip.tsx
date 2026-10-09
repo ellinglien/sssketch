@@ -15,10 +15,6 @@ import {
 export const TILE_SIZE = 64
 export const TILE_GAP = 10
 
-// A stable empty-Set reference for the "batch selection is stale" case
-// below, rather than allocating a fresh one every render.
-const EMPTY_SELECTION: Set<string> = new Set()
-
 // Vertical pixels of right-click-drag movement per step through a tile's
 // bar-length option list (see handleBarsMouseDown) — small enough that the
 // whole short preset list is reachable within a comfortable drag distance.
@@ -33,9 +29,13 @@ const BARS_DRAG_PX_PER_STEP = 20
  * the orbiting playhead dot's lap speed, not tile size, so the strip stays
  * visually even regardless of how long each rifff actually is. */
 export function SketchStrip({
-  onCrossSelectionChange
+  selectedRiffIds,
+  selectionAnchorId,
+  onSelectionChange
 }: {
-  onCrossSelectionChange: (groupIds: [string, string] | null) => void
+  selectedRiffIds: ReadonlySet<string>
+  selectionAnchorId: string | null
+  onSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -52,30 +52,16 @@ export function SketchStrip({
 
   const [dropIndex, setDropIndex] = useState<number | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
-  // Batch selection (shift-click range, cmd/ctrl-click toggle) — same
-  // convention as Shelf's own multi-select. Separate from state.sel, which
-  // stays the single "anchor" tile a plain click always collapses back to.
-  const [rawMultiSelected, setMultiSelected] = useState<Set<string>>(new Set())
-  // A shift/cmd-click batch always includes its own anchor tile (state.sel)
-  // as a member, so once state.sel moves to something OUTSIDE this batch --
-  // a click in the Shelf, or a Tidy Up preview -- the batch is stale and
-  // treated as empty. Mirrors Shelf.tsx's identical derivation and its own
-  // comment on why this is derived rather than reset via an effect or a
-  // ref (this project's linter forbids both during/around render).
-  // Reported 2026-09-01: shelf selection should clear on arranger/sketch
-  // interaction, and vice versa.
-  const multiSelected =
-    state.sel !== null && rawMultiSelected.has(state.sel) ? rawMultiSelected : EMPTY_SELECTION
-
-  const updateMultiSelection = useCallback(
-    (next: Set<string>): void => {
-      setMultiSelected(next)
-      const selectedIds = sequence
-        .filter((rifff) => next.has(rifff.groupId))
-        .map((rifff) => rifff.groupId)
-      onCrossSelectionChange(selectedIds.length === 2 ? [selectedIds[0], selectedIds[1]] : null)
+  // Selection lives in Frame rather than in this view. Shelf receives the
+  // same Set, so both surfaces show the same riffs and fullscreen Cross or
+  // Discover cannot erase the working set by temporarily covering this
+  // component. Its anchor is deliberately independent of state.sel because
+  // Sketch auto-follow changes state.sel while transport advances.
+  const updateSelection = useCallback(
+    (next: Set<string>, anchorId: string | null = selectionAnchorId): void => {
+      onSelectionChange(next, anchorId)
     },
-    [sequence, onCrossSelectionChange]
+    [onSelectionChange, selectionAnchorId]
   )
   // Set (only) when a real drag of the scrub dot just ended — see
   // handleTileClick's own doc comment for why the tile's click handler
@@ -90,9 +76,10 @@ export function SketchStrip({
   // release, but the tile's own label shows the candidate value as you drag,
   // same "preview locally, commit on release" convention as the normal
   // arranger's own resize-drag state (e.g. CollapsedRifffRow's dragPlayedBars).
-  const [dragBarsFor, setDragBarsFor] = useState<{ groupIds: Set<string>; bars: number } | null>(
-    null
-  )
+  const [dragBarsFor, setDragBarsFor] = useState<{
+    groupIds: ReadonlySet<string>
+    bars: number
+  } | null>(null)
 
   // How many bars THIS tile actually plays before the sequence advances to
   // the next one — state.playedBars[groupId] when the right-click "adjust
@@ -132,7 +119,7 @@ export function SketchStrip({
   // Removes one or more tiles and re-packs whatever remains, in one
   // SEQUENCE_RIFFFS dispatch regardless of how many were removed.
   const removeTiles = useCallback(
-    (groupIds: Set<string>) => {
+    (groupIds: ReadonlySet<string>) => {
       const remaining = sequence.map((r) => r.groupId).filter((id) => !groupIds.has(id))
       for (const groupId of groupIds) dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })
       dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: remaining })
@@ -146,18 +133,18 @@ export function SketchStrip({
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
       const targets =
-        multiSelected.size > 0
-          ? multiSelected
+        selectedRiffIds.size > 0
+          ? selectedRiffIds
           : new Set(state.sel && sequence.some((r) => r.groupId === state.sel) ? [state.sel] : [])
       if (targets.size === 0) return
       removeTiles(targets)
-      updateMultiSelection(new Set())
+      updateSelection(new Set(), null)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state.sel, sequence, multiSelected, removeTiles, updateMultiSelection])
+  }, [state.sel, sequence, selectedRiffIds, removeTiles, updateSelection])
 
-  // Shift-click extends/shrinks a range from the current anchor (state.sel);
+  // Shift-click extends/shrinks a range from the shared selection anchor;
   // cmd/ctrl-click toggles just the clicked tile in/out of the batch — same
   // convention as Shelf's own multi-select, and neither jumps/plays, unlike
   // a plain click.
@@ -204,23 +191,32 @@ export function SketchStrip({
       suppressNextTileClickRef.current = false
       return
     }
-    if (e.shiftKey && state.sel) {
-      const anchorIndex = sequence.findIndex((r) => r.groupId === state.sel)
+    if (e.shiftKey && selectionAnchorId) {
+      const anchorIndex = sequence.findIndex((r) => r.groupId === selectionAnchorId)
       const clickedIndex = sequence.findIndex((r) => r.groupId === rifff.groupId)
       if (anchorIndex === -1 || clickedIndex === -1) {
-        updateMultiSelection(new Set([rifff.groupId]))
+        updateSelection(new Set([rifff.groupId]), rifff.groupId)
+        dispatch({ type: 'SELECT', groupId: rifff.groupId })
         return
       }
       const [start, end] =
         anchorIndex < clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex]
-      updateMultiSelection(new Set(sequence.slice(start, end + 1).map((r) => r.groupId)))
+      updateSelection(
+        new Set(sequence.slice(start, end + 1).map((r) => r.groupId)),
+        selectionAnchorId
+      )
       return
     }
     if (e.metaKey || e.ctrlKey) {
-      updateMultiSelection(toggleRiffBatchSelection(multiSelected, state.sel, rifff.groupId))
+      const anchorId = selectionAnchorId ?? rifff.groupId
+      updateSelection(
+        toggleRiffBatchSelection(selectedRiffIds, selectionAnchorId, rifff.groupId),
+        anchorId
+      )
+      if (!selectionAnchorId) dispatch({ type: 'SELECT', groupId: rifff.groupId })
       return
     }
-    updateMultiSelection(new Set())
+    updateSelection(new Set([rifff.groupId]), rifff.groupId)
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
     if (playbackAction === 'select-only') return
     // Selection persists independently of playback: a second click on the
@@ -312,8 +308,8 @@ export function SketchStrip({
     // cursor — same "act on the whole batch" convention multi-select already
     // has elsewhere in this component (delete, drag-out).
     const targetGroupIds =
-      multiSelected.size > 1 && multiSelected.has(rifff.groupId)
-        ? multiSelected
+      selectedRiffIds.size > 1 && selectedRiffIds.has(rifff.groupId)
+        ? selectedRiffIds
         : new Set([rifff.groupId])
     let finalBars = startBars
     startPointerDrag(
@@ -434,8 +430,7 @@ export function SketchStrip({
         const start = rifff.startBar ?? 0
         const bars = effectiveBars(rifff)
         const isCurrent = playing && pos >= start && pos < start + bars
-        const isSelected = state.sel === rifff.groupId
-        const batchSelected = multiSelected.has(rifff.groupId)
+        const isSelected = selectedRiffIds.has(rifff.groupId)
         // 0..1 progress through this rifff's own play window — only
         // meaningful while isCurrent, but harmless to compute either way.
         const fraction = (pos - start) / bars
@@ -451,7 +446,7 @@ export function SketchStrip({
           <div
             key={rifff.groupId}
             className="ra-riff-tile ra-sketch-riff-tile"
-            data-selected={isSelected || batchSelected}
+            data-selected={isSelected}
             draggable
             onDragStart={(e) => {
               nativeTileDragRef.current = true
@@ -478,7 +473,7 @@ export function SketchStrip({
               cursor: 'pointer',
               border: '1px solid transparent',
               boxSizing: 'border-box',
-              opacity: isSelected || batchSelected || isCurrent ? 1 : 0.85
+              opacity: isSelected || isCurrent ? 1 : 0.85
             }}
           >
             <PolarGlyph
