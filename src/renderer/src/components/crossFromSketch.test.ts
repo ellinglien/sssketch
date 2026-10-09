@@ -63,6 +63,44 @@ describe('rifffForSketchCross', () => {
     ])
   })
 
+  it('matches bake results to stems by path, whatever order the bake returns them in', async () => {
+    // bakeOffset renders WAV stems first and LORE (non-WAV) stems after, so a riff that mixes
+    // them comes back in a different order than it went in.
+    const source = riff()
+    source.stems[0] = { ...source.stems[0], path: '/lore/one.opus' }
+    const prepared = await rifffForSketchCross(
+      source,
+      { 'parent-a': 1, 'parent-a:2': -2 },
+      4,
+      async (jobs) =>
+        [...jobs]
+          .sort((a, b) => Number(!a.path.endsWith('.wav')) - Number(!b.path.endsWith('.wav')))
+          .map((job) => ({
+            path: job.path,
+            bakedPath: `/baked${job.path}`,
+            durationSec: job.path.endsWith('.wav') ? 8 : 7
+          }))
+    )
+
+    expect(prepared?.stems).toMatchObject([
+      {
+        path: '/baked/lore/one.opus',
+        durationSec: 7,
+        phaseSourcePath: '/lore/one.opus',
+        phaseBars: -0.25
+      },
+      { path: '/baked/two.wav', durationSec: 8, phaseSourcePath: '/original-two.wav' }
+    ])
+  })
+
+  it('rejects a bake whose results name a stem it was not asked for', async () => {
+    await expect(
+      rifffForSketchCross(riff(), { 'parent-a': 1 }, 4, async (jobs) =>
+        jobs.map((job) => ({ path: `${job.path}.other`, bakedPath: '/x.wav', durationSec: 8 }))
+      )
+    ).resolves.toBeNull()
+  })
+
   it('rejects an incomplete bake instead of constructing a partly phased parent', async () => {
     await expect(
       rifffForSketchCross(riff(), { 'parent-a': 1 }, 4, async () => [])

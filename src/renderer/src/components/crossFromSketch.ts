@@ -28,10 +28,17 @@ export async function rifffForSketchCross(
       rotationSec: rotationSecondsForStem(steps[index], snapDiv, stem)
     }))
   )
-  if (
-    results.length !== rifff.stems.length ||
-    results.some((result, index) => result.path !== rifff.stems[index]?.path)
-  ) {
+  // bakeOffset doesn't keep the jobs' order (it renders WAV stems before LORE
+  // ones), so each stem takes the result for its own path. A path two stems
+  // share is handed out in order, the order its jobs were rendered in.
+  const byPath = new Map<string, CrossBakeResult[]>()
+  for (const result of results) {
+    const queue = byPath.get(result.path) ?? []
+    queue.push(result)
+    byPath.set(result.path, queue)
+  }
+  const matched = rifff.stems.map((stem) => byPath.get(stem.path)?.shift())
+  if (results.length !== rifff.stems.length || matched.some((result) => result === undefined)) {
     return null
   }
 
@@ -39,8 +46,8 @@ export async function rifffForSketchCross(
     ...rifff,
     stems: rifff.stems.map((stem, index) => ({
       ...stem,
-      path: results[index].bakedPath,
-      durationSec: results[index].durationSec,
+      path: matched[index]!.bakedPath,
+      durationSec: matched[index]!.durationSec,
       phaseSourcePath: stem.phaseSourcePath ?? stem.path,
       phaseBars: (stem.phaseBars ?? 0) - steps[index] / snapDiv
     }))
