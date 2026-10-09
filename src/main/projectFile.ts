@@ -305,9 +305,73 @@ export function duplicateSketchAsNewVersion(
 }
 
 const AUTOSAVE_FILENAME = 'autosave.sssketchproj'
+const AUTOSAVE_SKETCH_FILENAME = 'autosaveSketch.json'
+// One kept previous snapshot (and its sidecar): an offered snapshot nobody decided on, moved
+// aside when this session needed the recovery file. Bounded at one: a second move aside
+// replaces it.
+const AUTOSAVE_PREVIOUS_FILENAME = 'autosave.previous.sssketchproj'
+const AUTOSAVE_PREVIOUS_SKETCH_FILENAME = 'autosaveSketch.previous.json'
 
 function autosavePath(): string {
   return join(app.getPath('userData'), AUTOSAVE_FILENAME)
+}
+
+function autosaveSketchPath(): string {
+  return join(app.getPath('userData'), AUTOSAVE_SKETCH_FILENAME)
+}
+
+function previousAutosavePath(): string {
+  return join(app.getPath('userData'), AUTOSAVE_PREVIOUS_FILENAME)
+}
+
+function previousAutosaveSketchPath(): string {
+  return join(app.getPath('userData'), AUTOSAVE_PREVIOUS_SKETCH_FILENAME)
+}
+
+// True while the recovery file on disk is one this app has offered (loadAutosave) and the user
+// has neither recovered nor discarded (discardAutosave). The welcome's x leaves it undecided,
+// and so does any welcome button other than recover/discard. Writing or clearing the recovery
+// file then would destroy it without the user deciding, so both move it aside first
+// (setUndecidedAutosaveAside), and the next launch offers it again.
+let autosaveUndecided = false
+
+function readIfExists(path: string, caller: string): string | null {
+  if (!existsSync(path)) return null
+  try {
+    return readFileSync(path, 'utf-8')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`${caller}: failed to read ${path}: ${message}`)
+    return null
+  }
+}
+
+function deleteIfExists(path: string, caller: string): void {
+  try {
+    if (existsSync(path)) unlinkSync(path)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`${caller}: failed to delete ${path}: ${message}`)
+  }
+}
+
+/** Moves an undecided snapshot (see autosaveUndecided) and its sidecar to the one kept previous
+ * slot, replacing whatever was there. A no-op once decided or moved. */
+function setUndecidedAutosaveAside(): void {
+  if (!autosaveUndecided) return
+  autosaveUndecided = false
+  try {
+    if (!existsSync(autosavePath())) return
+    renameSync(autosavePath(), previousAutosavePath())
+    // The sidecar goes with its snapshot; a missing one must not leave an older one paired
+    // with it.
+    if (existsSync(autosaveSketchPath()))
+      renameSync(autosaveSketchPath(), previousAutosaveSketchPath())
+    else deleteIfExists(previousAutosaveSketchPath(), 'setUndecidedAutosaveAside')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`setUndecidedAutosaveAside: failed to move ${autosavePath()}: ${message}`)
+  }
 }
 
 /**
@@ -316,8 +380,11 @@ function autosavePath(): string {
  * a dialog. Purely a crash/forgot-to-save safety net; App.tsx debounces
  * calls to this after real edits, independent of the user's own explicit
  * Save (which goes through saveProjectAs above and clears this instead).
+ * A previous session's snapshot still awaiting the user's decision is moved
+ * aside first, not overwritten (setUndecidedAutosaveAside).
  */
 export function writeAutosave(json: string): void {
+  setUndecidedAutosaveAside()
   try {
     writeFileSync(autosavePath(), json, 'utf-8')
   } catch (err) {
@@ -329,23 +396,12 @@ export function writeAutosave(json: string): void {
 /** Reads back the recovery snapshot, if one exists — checked once at
  * startup so App.tsx can offer to restore it. Returns null (not a thrown
  * error) both when no snapshot exists yet and when reading one fails, since
- * either way there's nothing to offer the user. */
+ * either way there's nothing to offer the user. A snapshot read here is being
+ * offered: it stays undecided (autosaveUndecided) until discardAutosave. */
 export function loadAutosave(): string | null {
-  const path = autosavePath()
-  if (!existsSync(path)) return null
-  try {
-    return readFileSync(path, 'utf-8')
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(`loadAutosave: failed to read ${path}: ${message}`)
-    return null
-  }
-}
-
-const AUTOSAVE_SKETCH_FILENAME = 'autosaveSketch.json'
-
-function autosaveSketchPath(): string {
-  return join(app.getPath('userData'), AUTOSAVE_SKETCH_FILENAME)
+  const json = readIfExists(autosavePath(), 'loadAutosave')
+  if (json !== null) autosaveUndecided = true
+  return json
 }
 
 /** Persists which sketch the current autosave snapshot belongs to (see
@@ -356,6 +412,7 @@ function autosaveSketchPath(): string {
  * library entry on the next Save. Written in lockstep with writeAutosave
  * from App.tsx's own debounced autosave effect. */
 export function writeAutosaveSketchInfo(json: string): void {
+  setUndecidedAutosaveAside()
   try {
     writeFileSync(autosaveSketchPath(), json, 'utf-8')
   } catch (err) {
@@ -370,39 +427,43 @@ export function writeAutosaveSketchInfo(json: string): void {
  * (e.g. an autosave captured before this existed, or a genuinely untitled
  * sketch) and when reading one fails. */
 export function loadAutosaveSketchInfo(): string | null {
-  const path = autosaveSketchPath()
-  if (!existsSync(path)) return null
-  try {
-    return readFileSync(path, 'utf-8')
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(`loadAutosaveSketchInfo: failed to read ${path}: ${message}`)
-    return null
-  }
+  return readIfExists(autosaveSketchPath(), 'loadAutosaveSketchInfo')
 }
 
-/** Deletes the recovery snapshot — called once the user has been asked
- * about it at startup (whichever way they answered, so a later launch
- * doesn't keep asking about the same stale snapshot), and again after any
- * explicit Save (see saveProjectAs above). Also deletes the sketch-info
- * sidecar (see writeAutosaveSketchInfo) in the same pass, so every
- * existing call site clears both files together automatically. A no-op
- * if there's nothing there. */
+/** Clears the recovery file because this session no longer needs it: after
+ * any explicit Save (see saveProjectAs above), a discard of this session's
+ * unsaved work (New, open, quit's Don't Save), or a welcome button that moves
+ * on without recovering. Deletes the snapshot and its sidecar (see
+ * writeAutosaveSketchInfo) together -- unless it is a previous session's
+ * snapshot still awaiting the user's decision, which is moved aside instead
+ * (setUndecidedAutosaveAside). A no-op if there's nothing there. */
 export function clearAutosave(): void {
-  const path = autosavePath()
-  try {
-    if (existsSync(path)) unlinkSync(path)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(`clearAutosave: failed to delete ${path}: ${message}`)
-  }
-  const sketchPath = autosaveSketchPath()
-  try {
-    if (existsSync(sketchPath)) unlinkSync(sketchPath)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    console.error(`clearAutosave: failed to delete ${sketchPath}: ${message}`)
-  }
+  setUndecidedAutosaveAside()
+  deleteIfExists(autosavePath(), 'clearAutosave')
+  deleteIfExists(autosaveSketchPath(), 'clearAutosave')
+}
+
+/** The user decided on the offered snapshot (recovered it into the editor, or
+ * discarded it): deletes it and its sidecar for good. */
+export function discardAutosave(): void {
+  autosaveUndecided = false
+  deleteIfExists(autosavePath(), 'discardAutosave')
+  deleteIfExists(autosaveSketchPath(), 'discardAutosave')
+}
+
+/** The one kept previous snapshot (see setUndecidedAutosaveAside) and its
+ * sidecar, offered at launch next to the current one. Null when there is none
+ * or it can't be read. */
+export function loadPreviousAutosave(): { json: string; sketchJson: string | null } | null {
+  const json = readIfExists(previousAutosavePath(), 'loadPreviousAutosave')
+  if (json === null) return null
+  return { json, sketchJson: readIfExists(previousAutosaveSketchPath(), 'loadPreviousAutosave') }
+}
+
+/** The user decided on the kept previous snapshot (recovered or discarded it). */
+export function discardPreviousAutosave(): void {
+  deleteIfExists(previousAutosavePath(), 'discardPreviousAutosave')
+  deleteIfExists(previousAutosaveSketchPath(), 'discardPreviousAutosave')
 }
 
 /**

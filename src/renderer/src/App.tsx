@@ -144,6 +144,7 @@ import {
 import {
   autosaveAction,
   autosaveWaitsOnRecoveryOffer,
+  recoverySnapshotHasContent,
   autosaveDelayMs,
   createAutosaveGate,
   dirtyCheckJson,
@@ -1336,10 +1337,21 @@ function Frame(): React.JSX.Element {
   // When the first change not yet autosaved happened (null: none), for the
   // autosave's max wait (AUTOSAVE_MAX_WAIT_MS).
   const autosaveUnsavedSinceRef = useRef<number | null>(null)
+  // This session is done with the recovery file (a save, a discard of its
+  // unsaved work, a welcome button). Main deletes it, or moves it aside when
+  // it is a previous session's snapshot still awaiting Recover or Discard
+  // (projectFile.ts's clearAutosave), so it is offered again next launch.
   function clearAutosaveNow(): void {
     autosaveGateRef.current.bump()
     autosaveWrittenRef.current = false
     void window.rifffApi.clearAutosave()
+  }
+  // The user decided on the offered snapshot (Recover or Discard), or it held
+  // nothing worth offering: deleted for good.
+  async function discardRecoveryNow(): Promise<void> {
+    autosaveGateRef.current.bump()
+    autosaveWrittenRef.current = false
+    await window.rifffApi.discardAutosave()
   }
 
   /** `saved` is now durably on disk as the open project: the unsaved-changes
@@ -1351,6 +1363,11 @@ function Frame(): React.JSX.Element {
     autosaveGateRef.current.bump()
     // Every save path clears the recovery file in main (projectFile.ts).
     autosaveWrittenRef.current = false
+    // A save moves a still-offered previous snapshot aside in main, replacing
+    // the kept older one: neither is on disk as offered any more. Both stay
+    // for the next launch's offer.
+    setRecoverableAutosave(null)
+    setRecoverablePrevious(null)
     setSaveVersion((v) => v + 1)
   }
 
@@ -1563,6 +1580,13 @@ function Frame(): React.JSX.Element {
   // normal new/open welcome -- see its own doc comment for why the view is
   // derived from this prop rather than mirrored into local state there.
   const [recoverableAutosave, setRecoverableAutosave] = useState<{ json: string } | null>(null)
+  // The one kept older snapshot (projectFile.ts's loadPreviousAutosave): a
+  // past session's offer that was left undecided and moved aside when that
+  // session needed the recovery file. Offered next to the current one.
+  const [recoverablePrevious, setRecoverablePrevious] = useState<{
+    json: string
+    sketchJson: string | null
+  } | null>(null)
   // The welcome's x (hideOnboardingForSession, below): closed for this session
   // without recovering or discarding. Declared here because the autosave
   // effect below keys off it (autosaveWaitsOnRecoveryOffer).
@@ -1600,14 +1624,18 @@ function Frame(): React.JSX.Element {
       // on their very next launch for content that was never really
       // there. Matches the same Object.keys(...).length > 0 definition
       // of "real" already used by the New-project dirty check above.
-      if (json !== null && Object.keys(JSON.parse(json).rifffs ?? {}).length > 0) {
+      if (json !== null && recoverySnapshotHasContent(json)) {
         setRecoverableAutosave({ json })
-        return
+      } else if (json) {
+        // Autosave file exists but has no real content (see above) -- delete
+        // it so it doesn't linger and get offered on some later launch once
+        // it might coincidentally look more "real."
+        await discardRecoveryNow()
       }
-      // Autosave file exists but has no real content (see above) -- clear
-      // it so it doesn't linger and get offered on some later launch once
-      // it might coincidentally look more "real."
-      if (json) clearAutosaveNow()
+      const previous = await window.rifffApi.loadPreviousAutosave()
+      if (previous !== null && recoverySnapshotHasContent(previous.json))
+        setRecoverablePrevious(previous)
+      else if (previous !== null) void window.rifffApi.discardPreviousAutosave()
     })()
   }, [dispatch])
 
@@ -1616,12 +1644,35 @@ function Frame(): React.JSX.Element {
    * writeAutosaveSketchInfo/loadAutosaveSketchInfo -- without this, the
    * next routine Save after a recovered library sketch would silently
    * fork a brand-new library entry instead of writing back to the sketch
-   * the recovered content actually came from), clears the snapshot, and
-   * dismisses the welcome modal. */
+   * the recovered content actually came from), deletes the snapshot, and
+   * closes the welcome modal. A kept older snapshot stays on disk, offered
+   * again next launch. */
   async function handleRecoverAutosave(dontShowAgain: boolean): Promise<void> {
     if (!recoverableAutosave) return
+    await loadRecoveredSnapshot(
+      recoverableAutosave.json,
+      await window.rifffApi.loadAutosaveSketch()
+    )
+    await discardRecoveryNow()
+    setRecoverableAutosave(null)
+    closeWelcome(dontShowAgain)
+  }
+
+  /** "recover older": the same for the kept older snapshot. The current
+   * snapshot, if one is still offered, is left undecided: the welcome's
+   * other buttons' rule applies (dismissOnboarding), so main moves it aside
+   * into the slot this just emptied. */
+  async function handleRecoverPrevious(dontShowAgain: boolean): Promise<void> {
+    if (!recoverablePrevious) return
+    await loadRecoveredSnapshot(recoverablePrevious.json, recoverablePrevious.sketchJson)
+    await window.rifffApi.discardPreviousAutosave()
+    setRecoverablePrevious(null)
+    dismissOnboarding(dontShowAgain)
+  }
+
+  async function loadRecoveredSnapshot(json: string, sketchJson: string | null): Promise<void> {
     const { state: loaded, pluginStates } = deserializeProject(
-      JSON.parse(recoverableAutosave.json),
+      JSON.parse(json),
       await appSoundDefaults()
     )
     // Same pre-warm-before-LOAD_STATE reasoning as the library browser's
@@ -1633,7 +1684,6 @@ function Frame(): React.JSX.Element {
     restoreState(loaded, pluginStates)
     lastSavedJsonRef.current = dirtyCheckJson(loaded)
     setBusy(null)
-    const sketchJson = await window.rifffApi.loadAutosaveSketch()
     // The sketch-info sidecar can be missing/corrupted even when the
     // content autosave above recovered fine (they're written/read
     // independently). Falling back to null here would leave real
@@ -1644,9 +1694,6 @@ function Frame(): React.JSX.Element {
         ? (JSON.parse(sketchJson) as CurrentSketch)
         : { kind: 'library', name: await window.rifffApi.generateDefaultProjectName() }
     )
-    clearAutosaveNow()
-    setRecoverableAutosave(null)
-    dismissOnboarding(dontShowAgain)
   }
 
   /** OnboardingModal's "discard" button -- clears the snapshot, which is
@@ -1660,8 +1707,13 @@ function Frame(): React.JSX.Element {
    * "don't show this again," now that there's no longer a risk of
    * stranding the user on a bare recovery screen with no other buttons). */
   function handleDiscardRecovery(): void {
-    clearAutosaveNow()
+    void discardRecoveryNow()
     setRecoverableAutosave(null)
+  }
+
+  function handleDiscardPreviousRecovery(): void {
+    void window.rifffApi.discardPreviousAutosave()
+    setRecoverablePrevious(null)
   }
 
   // Debounced crash-recovery autosave — fires AUTOSAVE_DEBOUNCE_MS after the
@@ -1694,9 +1746,11 @@ function Frame(): React.JSX.Element {
   // to provide. Resumes normally as soon as recoverableAutosave flips back
   // to null (Recover or Discard, both in handleRecoverAutosave/
   // handleDiscardRecovery above), or the welcome is closed with its x
-  // (autosaveWaitsOnRecoveryOffer): the snapshot is then kept until this
-  // session has unsaved work, whose first write replaces it. Waiting for the
-  // rest of the session left that work with no crash protection.
+  // (autosaveWaitsOnRecoveryOffer): the snapshot then stays until this
+  // session has unsaved work, whose first write moves it aside in main as
+  // the kept older snapshot (projectFile.ts), offered again next launch.
+  // Waiting for the rest of the session left that work with no crash
+  // protection.
   //
   // Also restarted by a plugin being touched (pluginsTouched.version: a knob
   // turned in an open editor), so a plugin-only change is autosaved too --
@@ -1755,9 +1809,13 @@ function Frame(): React.JSX.Element {
           await window.rifffApi.autosaveProject(json)
           await window.rifffApi.autosaveProjectSketch(sketchJson)
           // A previous session's snapshot, left by the welcome's x, is now
-          // replaced on disk: nothing is left to offer, and a later Discard
-          // would delete this session's file instead.
-          setRecoverableAutosave(null)
+          // moved aside in main, replacing the kept older one: what is left on
+          // disk is this session's, so offering either again here would
+          // recover or delete the wrong file. The next launch offers it.
+          if (recoverableAutosave !== null) {
+            setRecoverableAutosave(null)
+            setRecoverablePrevious(null)
+          }
         })
         .catch((err) => console.error('Frame: crash-recovery autosave failed:', err))
     }, delay)
@@ -1908,21 +1966,25 @@ function Frame(): React.JSX.Element {
   }
 
   function dismissOnboarding(dontShowAgain: boolean): void {
-    setShowOnboarding(false)
-    setOnboardingDismissedForSession(true)
     // Choosing any of this modal's normal actions (new/open/login/tour)
     // while a recovery notice is still showing (see OnboardingModal's own
     // doc comment -- the notice now sits ON TOP OF those buttons rather
-    // than replacing them) is an implicit "not recovering this" -- without
-    // clearing it here too, recoverableAutosave staying non-null would
-    // immediately reopen this same modal on the next render (its render
-    // condition ORs on recoverableAutosave !== null). handleRecoverAutosave
-    // already nulls it out itself before calling this, so this is a no-op
-    // on that path.
+    // than replacing them) moves on without recovering, but it isn't a
+    // decision to throw the snapshot away either: main moves it aside as the
+    // kept older snapshot (clearAutosaveNow, projectFile.ts), offered again
+    // next launch, and this session's autosave is free to run.
     if (recoverableAutosave !== null) {
       clearAutosaveNow()
       setRecoverableAutosave(null)
+      // Replaced on disk by the one just moved aside.
+      setRecoverablePrevious(null)
     }
+    closeWelcome(dontShowAgain)
+  }
+
+  function closeWelcome(dontShowAgain: boolean): void {
+    setShowOnboarding(false)
+    setOnboardingDismissedForSession(true)
     if (!dontShowAgain) return
     try {
       localStorage.setItem(ONBOARDING_SEEN_STORAGE_KEY, '1')
@@ -3442,11 +3504,14 @@ function Frame(): React.JSX.Element {
           silently dropping recoverable work. */}
         {!showLibraryLocationSetup &&
           !onboardingDismissedForSession &&
-          (showOnboarding || recoverableAutosave !== null) && (
+          (showOnboarding || recoverableAutosave !== null || recoverablePrevious !== null) && (
             <OnboardingModal
               hasRecovery={recoverableAutosave !== null}
               onRecover={(dontShowAgain) => void handleRecoverAutosave(dontShowAgain)}
               onDiscardRecovery={handleDiscardRecovery}
+              hasPreviousRecovery={recoverablePrevious !== null}
+              onRecoverPrevious={(dontShowAgain) => void handleRecoverPrevious(dontShowAgain)}
+              onDiscardPreviousRecovery={handleDiscardPreviousRecovery}
               onNewProject={(dontShowAgain) => {
                 // Dismiss first so the welcome modal doesn't visually stack
                 // behind/conflict with whatever handleNew() shows next (the

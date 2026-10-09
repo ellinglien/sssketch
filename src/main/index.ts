@@ -30,6 +30,9 @@ import {
   writeAutosave,
   loadAutosave,
   clearAutosave,
+  discardAutosave,
+  loadPreviousAutosave,
+  discardPreviousAutosave,
   writeAutosaveSketchInfo,
   loadAutosaveSketchInfo,
   saveProjectToLibrary,
@@ -1381,6 +1384,17 @@ app.whenReady().then(async () => {
     clearAutosave()
     noteRecoveryFile('cleared')
   })
+
+  // The user recovered or discarded the offered snapshot: deleted for good. clear-autosave
+  // (saves, discards of this session's work) moves an undecided one aside instead.
+  ipcMain.handle('discard-autosave', () => {
+    discardAutosave()
+    noteRecoveryFile('cleared')
+  })
+
+  ipcMain.handle('load-previous-autosave', () => loadPreviousAutosave())
+
+  ipcMain.handle('discard-previous-autosave', () => discardPreviousAutosave())
 
   ipcMain.handle('autosave-project-sketch', (_event, json: string) => {
     writeAutosaveSketchInfo(json)

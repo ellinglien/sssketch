@@ -148,6 +148,13 @@ const api = {
   autosaveProject: (json: string): Promise<void> => ipcRenderer.invoke('autosave-project', json),
   loadAutosave: (): Promise<string | null> => ipcRenderer.invoke('load-autosave'),
   clearAutosave: (): Promise<void> => ipcRenderer.invoke('clear-autosave'),
+  // Recover or Discard on the offered snapshot: deletes it for good (clearAutosave moves a
+  // still-undecided one aside, projectFile.ts).
+  discardAutosave: (): Promise<void> => ipcRenderer.invoke('discard-autosave'),
+  // The one kept earlier snapshot, set aside undecided; offered next to the current one.
+  loadPreviousAutosave: (): Promise<{ json: string; sketchJson: string | null } | null> =>
+    ipcRenderer.invoke('load-previous-autosave'),
+  discardPreviousAutosave: (): Promise<void> => ipcRenderer.invoke('discard-previous-autosave'),
   autosaveProjectSketch: (json: string): Promise<void> =>
     ipcRenderer.invoke('autosave-project-sketch', json),
   loadAutosaveSketch: (): Promise<string | null> => ipcRenderer.invoke('load-autosave-sketch'),

@@ -76,6 +76,9 @@ export function OnboardingModal({
   hasRecovery,
   onRecover,
   onDiscardRecovery,
+  hasPreviousRecovery,
+  onRecoverPrevious,
+  onDiscardPreviousRecovery,
   onNewProject,
   onOpenProject,
   onOpenEndlesss,
@@ -100,6 +103,13 @@ export function OnboardingModal({
    * opting out of the welcome screen, and those buttons carry the checkbox
    * themselves if the user goes on to use one of them. */
   onDiscardRecovery: () => void
+  /** True when an older snapshot was kept: one a past session moved aside, undecided, when it
+   * needed the recovery file (the welcome closed with its x, or left with another button,
+   * before recover or discard; projectFile.ts keeps one). Offered in the same box, below the
+   * current one, with the same recover/discard semantics. */
+  hasPreviousRecovery: boolean
+  onRecoverPrevious: (dontShowAgain: boolean) => void
+  onDiscardPreviousRecovery: () => void
   /** Dismisses the welcome modal, then routes through the exact same "new"
    * flow as the toolbar's New button: a discard-guard if there's real
    * unsaved content on the timeline (possible here too, since the welcome
@@ -120,9 +130,12 @@ export function OnboardingModal({
    * own handler confirms first when there's real content to protect, so
    * this component doesn't need to know about that itself. */
   onStartTour: (dontShowAgain: boolean) => void
-  /** Hides this overlay without starting a new flow or discarding a
-   * recoverable snapshot. Useful when development hot reload resurfaces the
-   * welcome screen over an already-open workspace. */
+  /** Hides this overlay for the session without starting a new flow,
+   * recovering or discarding. Useful when development hot reload resurfaces
+   * the welcome screen over an already-open workspace. An offered snapshot is
+   * never lost by it: it stays on disk until this session needs the recovery
+   * file (its first autosave, or a save), which moves it aside as the one
+   * kept older snapshot, offered again at the next launch. */
   onDismiss: () => void
   /** Once the tour has been started at least once, its welcome-screen
    * link goes away -- it's still reachable as a deliberate replay from the
@@ -206,7 +219,7 @@ export function OnboardingModal({
           ))}
         </div>
 
-        {hasRecovery && (
+        {(hasRecovery || hasPreviousRecovery) && (
           // A bordered box, not a color accent -- this design system spends
           // color only on audio information (see root CLAUDE.md's Design
           // system section), so "this is a notice" is carried by the border
@@ -222,17 +235,43 @@ export function OnboardingModal({
               border: '1px solid var(--ra-border-strong)'
             }}
           >
-            <div style={{ fontSize: 11, lineHeight: 1.7, color: 'var(--ra-text)' }}>
-              unsaved work from a previous session was found
-            </div>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}>
-              <button onClick={() => onRecover(dontShowAgain)} style={primaryButtonStyle}>
-                recover
-              </button>
-              <button onClick={onDiscardRecovery} style={secondaryButtonStyle}>
-                discard
-              </button>
-            </div>
+            {hasRecovery && (
+              <>
+                <div style={{ fontSize: 11, lineHeight: 1.7, color: 'var(--ra-text)' }}>
+                  unsaved work from a previous session was found
+                </div>
+                <div
+                  style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}
+                >
+                  <button onClick={() => onRecover(dontShowAgain)} style={primaryButtonStyle}>
+                    recover
+                  </button>
+                  <button onClick={onDiscardRecovery} style={secondaryButtonStyle}>
+                    discard
+                  </button>
+                </div>
+              </>
+            )}
+            {hasPreviousRecovery && (
+              <>
+                <div style={{ fontSize: 11, lineHeight: 1.7, color: 'var(--ra-text)' }}>
+                  {hasRecovery ? 'older unsaved work was kept too' : 'older unsaved work was kept'}
+                </div>
+                <div
+                  style={{ display: 'flex', flexWrap: 'wrap', gap: 8, justifyContent: 'center' }}
+                >
+                  <button
+                    onClick={() => onRecoverPrevious(dontShowAgain)}
+                    style={hasRecovery ? secondaryButtonStyle : primaryButtonStyle}
+                  >
+                    recover older
+                  </button>
+                  <button onClick={onDiscardPreviousRecovery} style={secondaryButtonStyle}>
+                    discard older
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
 

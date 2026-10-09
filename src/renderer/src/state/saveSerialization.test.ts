@@ -4,6 +4,7 @@ import { deserializeProject } from './serialize'
 import {
   autosaveAction,
   autosaveWaitsOnRecoveryOffer,
+  recoverySnapshotHasContent,
   autosaveDelayMs,
   createAutosaveGate,
   dirtyCheckJson,
@@ -226,5 +227,18 @@ describe('dirtyCheckJson', () => {
     const { pluginStates: written, ...rest } = JSON.parse(fileJson)
     expect(written).toEqual(pending)
     expect(rest).toEqual(JSON.parse(dirtyCheckJson(state)))
+  })
+})
+
+describe('recoverySnapshotHasContent', () => {
+  it('is worth offering only with at least one riff in it', () => {
+    expect(recoverySnapshotHasContent(JSON.stringify({ rifffs: { a: {} } }))).toBe(true)
+    // A launch left untouched still autosaves a startup project with no riffs.
+    expect(recoverySnapshotHasContent(JSON.stringify({ rifffs: {} }))).toBe(false)
+    expect(recoverySnapshotHasContent(JSON.stringify({ bpm: 120 }))).toBe(false)
+  })
+
+  it('is not worth offering when it cannot be read', () => {
+    expect(recoverySnapshotHasContent('{not json')).toBe(false)
   })
 })

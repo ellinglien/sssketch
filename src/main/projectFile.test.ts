@@ -182,3 +182,113 @@ describe('renameExternalSketchFile', () => {
     expect(existsSync(oldPath)).toBe(true)
   })
 })
+
+// The crash-recovery snapshot (writeAutosave/loadAutosave/clearAutosave). A previous session's
+// snapshot that has been offered (loadAutosave) and not yet recovered or discarded is never
+// overwritten or deleted by this session: it is moved aside to one kept previous snapshot,
+// offered again at the next launch.
+describe('crash-recovery snapshot', () => {
+  beforeEach(() => {
+    // Fresh module state: whether an offered snapshot is still undecided lives in the module.
+    vi.resetModules()
+    userDataDir = mkdtempSync(join(tmpdir(), 'sssketch-userdata-test-'))
+    musicDir = mkdtempSync(join(tmpdir(), 'sssketch-music-test-'))
+  })
+
+  afterEach(() => {
+    rmSync(userDataDir, { recursive: true, force: true })
+    rmSync(musicDir, { recursive: true, force: true })
+  })
+
+  /** A snapshot a previous session left behind, with its sketch-info sidecar. */
+  function leaveSnapshotFromLastSession(json: string, sketchJson: string): void {
+    writeFileSync(join(userDataDir, 'autosave.sssketchproj'), json)
+    writeFileSync(join(userDataDir, 'autosaveSketch.json'), sketchJson)
+  }
+
+  it('the first autosave after the offer moves the old snapshot aside instead of overwriting it', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{"kind":"library","name":"old"}')
+    expect(pf.loadAutosave()).toBe('{"old":1}')
+    pf.writeAutosave('{"new":1}')
+    pf.writeAutosaveSketchInfo('{"kind":"library","name":"new"}')
+    expect(pf.loadAutosave()).toBe('{"new":1}')
+    expect(pf.loadAutosaveSketchInfo()).toBe('{"kind":"library","name":"new"}')
+    expect(pf.loadPreviousAutosave()).toEqual({
+      json: '{"old":1}',
+      sketchJson: '{"kind":"library","name":"old"}'
+    })
+  })
+
+  it('a save moves an undecided snapshot aside instead of deleting it', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{"kind":"library","name":"old"}')
+    pf.loadAutosave()
+    pf.saveProjectInPlace(join(userDataDir, 'mine.sssketchproj'), '{"mine":1}')
+    expect(pf.loadAutosave()).toBeNull()
+    expect(pf.loadPreviousAutosave()?.json).toBe('{"old":1}')
+  })
+
+  it("once moved aside, this session's own autosaves and saves leave it alone", async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{}')
+    pf.loadAutosave()
+    pf.writeAutosave('{"new":1}')
+    pf.writeAutosave('{"new":2}')
+    pf.clearAutosave()
+    pf.writeAutosave('{"new":3}')
+    pf.saveProjectInPlace(join(userDataDir, 'mine.sssketchproj'), '{"mine":1}')
+    expect(pf.loadAutosave()).toBeNull()
+    expect(pf.loadPreviousAutosave()?.json).toBe('{"old":1}')
+  })
+
+  it('recovering or discarding the offer deletes it: nothing is moved aside afterwards', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{}')
+    pf.loadAutosave()
+    pf.discardAutosave()
+    expect(pf.loadAutosave()).toBeNull()
+    pf.writeAutosave('{"new":1}')
+    pf.clearAutosave()
+    expect(pf.loadPreviousAutosave()).toBeNull()
+  })
+
+  it('keeps one previous snapshot: a second move aside replaces the first', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"first":1}', '{"s":1}')
+    pf.loadAutosave()
+    pf.writeAutosave('{"second":1}')
+    // The next launch offers the second session's file and it is left undecided again.
+    vi.resetModules()
+    const next = await import('./projectFile')
+    expect(next.loadAutosave()).toBe('{"second":1}')
+    next.writeAutosave('{"third":1}')
+    expect(next.loadPreviousAutosave()).toEqual({ json: '{"second":1}', sketchJson: null })
+    expect(
+      readdirSync(userDataDir)
+        .filter((f) => f.startsWith('autosave'))
+        .sort()
+    ).toEqual(['autosave.previous.sssketchproj', 'autosave.sssketchproj'])
+  })
+
+  it('discardPreviousAutosave deletes the kept snapshot and its sidecar, not the current one', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{"s":1}')
+    pf.loadAutosave()
+    pf.writeAutosave('{"new":1}')
+    pf.discardPreviousAutosave()
+    expect(pf.loadPreviousAutosave()).toBeNull()
+    expect(existsSync(join(userDataDir, 'autosaveSketch.previous.json'))).toBe(false)
+    expect(pf.loadAutosave()).toBe('{"new":1}')
+  })
+
+  it('a snapshot this session wrote itself, never offered, is replaced and deleted as before', async () => {
+    const pf = await import('./projectFile')
+    pf.writeAutosave('{"a":1}')
+    pf.writeAutosave('{"a":2}')
+    expect(pf.loadPreviousAutosave()).toBeNull()
+    pf.clearAutosave()
+    expect(pf.loadAutosave()).toBeNull()
+    expect(pf.loadPreviousAutosave()).toBeNull()
+  })
+})

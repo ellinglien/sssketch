@@ -152,3 +152,16 @@ export function autosaveWaitsOnRecoveryOffer(offer: {
 }): boolean {
   return offer.recoveryPending && !offer.offerDismissed
 }
+
+/** Whether a crash-recovery snapshot holds real work, worth offering at launch: at least one
+ * riff. A launch left untouched still autosaves its startup project (a recording channel and
+ * nothing else), and offering that would ask to "recover" work that was never there. An
+ * unreadable snapshot has nothing the app could recover either. */
+export function recoverySnapshotHasContent(json: string): boolean {
+  try {
+    const parsed = JSON.parse(json) as { rifffs?: Record<string, unknown> } | null
+    return Object.keys(parsed?.rifffs ?? {}).length > 0
+  } catch {
+    return false
+  }
+}

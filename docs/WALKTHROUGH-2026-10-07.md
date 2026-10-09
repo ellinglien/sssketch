@@ -419,8 +419,11 @@ first: the engine changed.
 - [ ] Make a recovery offer: edit a project, wait 10 seconds, then force-quit (Activity Monitor →
   the `Electron` process in dev → Force Quit). Relaunch and press the welcome's × (not recover or
   discard). Make some new edits and wait 10 seconds, then force-quit again. Relaunch. **You should see:** a recovery offer
-  of the **new** edits. (Before the fix, there was none: closing the welcome had turned autosave
-  off.)
+  of the **new** edits, and under it "older unsaved work was kept too", whose recover older brings
+  back the **first** edits. (Before the fixes, there was no offer at all, then only the new one:
+  the first edits were overwritten.)
+- [ ] With a recovery offered, press the welcome's open (or Endlesss). Relaunch without saving.
+  **You should see:** "older unsaved work was kept", with the snapshot you moved past.
 - [ ] **Selection styling.** Select riffs in Sketch and the Shelf. **You should see:** the
   selection centred on the circle, a low-contrast texture, and selected and playing looking
   different.

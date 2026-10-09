@@ -99,9 +99,12 @@ a merge.
 - **Plugin settings safety:** every save path goes through `serializeForSave()`. Plugin on/off
   goes through `src/shared/pluginSwitch.ts`.
 - **Crash recovery:** the autosave/recovery file is never disabled or deleted while work is
-  unsaved, by any path (dismissing a dialog included). Closing the welcome with its × while it
-  offers a recovery keeps the old snapshot until this session has unsaved work, then the autosave
-  takes over (`autosaveWaitsOnRecoveryOffer`).
+  unsaved, by any path (dismissing a dialog included). An offered snapshot is deleted only by the
+  welcome's recover or discard. Closing the welcome any other way (its ×, open, Endlesss, tour,
+  new) leaves it undecided, and the autosave runs again (`autosaveWaitsOnRecoveryOffer`): the
+  first autosave or save then moves it aside to `autosave.previous.sssketchproj` instead of
+  overwriting or deleting it (`projectFile.ts`). One older snapshot is kept, and the next launch
+  offers it with the current one.
 - **The startup gate** shows until the library is usable, and has a × that closes it early. The
   welcome has a × too, which hides it for the session. Both are Elling's decisions; keep them.
 - **Disable, Mute and Solo are three layers** (CLAUDE.md has the detail). Disable (`state.mute`)

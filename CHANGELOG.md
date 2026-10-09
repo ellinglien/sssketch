@@ -30,6 +30,7 @@
 - Fixed Cross source stems with saved zero gain being inaudible when explicitly soloed, misleading default Solo indicators, aggressive source-row outlines, and center-slot over-allocation.
 - Added dismiss buttons to both startup/welcome overlays. Dismissing the recovery welcome only hides it for the current session and does not delete the recoverable autosave; once you have unsaved work of your own, the autosave protects that instead.
 - Closing the recovery welcome with its × no longer turns off crash autosave for the rest of the session.
+- Closing the recovery welcome without recovering or discarding (its ×, or open, Endlesss or tour) no longer loses the old unsaved work: the next autosave or save keeps it as an older copy, offered again at the next launch.
 - Cross opens correctly from a riff that mixes LORE and WAV stems with a live downbeat offset; each stem gets its own baked audio.
 - A riser muted with the old row mute can be unmuted again from its row's m.
 - Opening Discover from a riff with a live downbeat offset no longer marks the project unsaved.
