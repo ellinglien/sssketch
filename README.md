@@ -101,10 +101,10 @@ Plugins are the one thing no export carries. Stem and mix audio include whatever
 
 ## Installing
 
-Latest version: **1.6.0**
+Latest version: **1.6.1**
 
-- [**sssketch-1.6.0-arm64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.6.0/sssketch-1.6.0-arm64.dmg) — Apple Silicon (M1/M2/M3/M4)
-- [**sssketch-1.6.0-x64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.6.0/sssketch-1.6.0-x64.dmg) — Intel
+- [**sssketch-1.6.1-arm64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.6.1/sssketch-1.6.1-arm64.dmg) — Apple Silicon (M1/M2/M3/M4)
+- [**sssketch-1.6.1-x64.dmg**](https://github.com/ellinglien/sssketch/releases/download/v1.6.1/sssketch-1.6.1-x64.dmg) — Intel
 
 ### Which file do I download?
 
