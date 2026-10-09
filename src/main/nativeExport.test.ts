@@ -977,7 +977,7 @@ describe('exportStemTracksToLibrary / exportStemTracksNextToSource', () => {
 
       await exportStemTracksNextToSource(state, sourcePath)
 
-      expect(existsSync(join(projectDir, 'Stems', 'my-proj - lead 1.wav'))).toBe(true)
+      expect(existsSync(join(projectDir, 'Stems', 'my-proj', 'my-proj - lead 1.wav'))).toBe(true)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(projectDir, { recursive: true, force: true })
@@ -1047,7 +1047,7 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
     }
   }, 30000)
 
-  it('exportStemsNextToSource writes bus-grouped stems into <sourceDir>/Stems/', async () => {
+  it('exportStemsNextToSource writes bus-grouped stems into <sourceDir>/Stems/<project>/, sparing the rest of Stems/', async () => {
     const srcDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-src-'))
     const projectDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-project-'))
     try {
@@ -1079,10 +1079,18 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
         busOf: { 'r1:1': 'lead' }
       }
       const sourcePath = join(projectDir, 'my-proj.sssketchproj')
+      // A sibling sketch's export and the user's own file, both in Stems/.
+      const siblingStem = join(projectDir, 'Stems', 'other-proj', 'lead.wav')
+      const usersOwn = join(projectDir, 'Stems', 'vocal take.wav')
+      mkdirSync(join(projectDir, 'Stems', 'other-proj'), { recursive: true })
+      writeFileSync(siblingStem, 'sibling')
+      writeFileSync(usersOwn, 'mine')
 
       await exportStemsNextToSource(state, sourcePath)
 
-      expect(existsSync(join(projectDir, 'Stems', 'lead.wav'))).toBe(true)
+      expect(existsSync(join(projectDir, 'Stems', 'my-proj', 'lead.wav'))).toBe(true)
+      expect(existsSync(siblingStem)).toBe(true)
+      expect(existsSync(usersOwn)).toBe(true)
     } finally {
       rmSync(srcDir, { recursive: true, force: true })
       rmSync(projectDir, { recursive: true, force: true })
@@ -1114,8 +1122,10 @@ describe('exportStemsToLibrary / exportStemsNextToSource', () => {
   it('exportStemsNextToSource throws and does NOT clear a pre-existing Stems/ folder when nothing is placed', async () => {
     const projectDir = mkdtempSync(join(tmpdir(), 'sssketch-stems-project-'))
     try {
-      const stemsDir = join(projectDir, 'Stems')
+      // A previous export's folder, owned (marked) and so clearable.
+      const stemsDir = join(projectDir, 'Stems', 'my-proj')
       mkdirSync(stemsDir, { recursive: true })
+      writeFileSync(join(stemsDir, '.sssketch-stems'), '')
       const markerPath = join(stemsDir, 'aux.wav')
       writeFileSync(markerPath, 'not really a wav, just a marker')
 

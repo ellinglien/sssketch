@@ -1,6 +1,6 @@
 import { readFileSync, rmSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname, basename } from 'node:path'
+import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { BrowserWindow, dialog, shell } from 'electron'
 import type { AppState } from '../renderer/src/state/store'
@@ -14,6 +14,7 @@ import { EngineClient } from './engineClient'
 import { loadCatalog } from './pluginCatalog'
 import { currentAppFeatures, pluginCatalogForRender } from './appFeaturesStore'
 import { sketchStemsDir } from './projectLibrary'
+import { prepareExternalStemsDir } from './exportFileNames'
 import { buildPluginStatesMap, type RawPluginStatesCapture } from '@shared/pluginStates'
 import { stemExportSound } from '@shared/radioSound'
 import { timelineDubThrows } from '@shared/timelineThrows'
@@ -436,19 +437,19 @@ export async function exportStemsToLibrary(
 }
 
 /**
- * Same no-dialog, always-in-a-Stems-subfolder export as
- * exportStemsToLibrary above, for a sketch with a known external file
- * location but not in the library.
+ * Same no-dialog stems export as exportStemsToLibrary above, for a sketch
+ * with a known external file location but not in the library. Each source
+ * gets its own `<source directory>/Stems/<project name>/` folder, cleared
+ * only when sssketch's marker shows it made it (prepareExternalStemsDir), so
+ * a sibling sketch's stems or the user's own files in `Stems/` survive.
  */
 export async function exportStemsNextToSource(
   state: AppState,
   sourcePath: string,
   rawPluginStates: RawPluginStatesCapture | null = null
 ): Promise<void> {
-  assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
-  const stemsDir = join(dirname(sourcePath), 'Stems')
-  rmSync(stemsDir, { recursive: true, force: true })
-  mkdirSync(stemsDir, { recursive: true })
+  assertHasPlacedRifffs(state) // before the clear below -- see its own comment
+  const { outputDir: stemsDir } = prepareExternalStemsDir(sourcePath)
   await renderStemsToDir(state, stemsDir, rawPluginStates)
   await shell.openPath(stemsDir)
 }
@@ -598,11 +599,9 @@ export async function exportStemTracksNextToSource(
   sourcePath: string,
   rawPluginStates: RawPluginStatesCapture | null = null
 ): Promise<void> {
-  assertHasPlacedRifffs(state) // before the rmSync below -- see its own comment
-  const stemsDir = join(dirname(sourcePath), 'Stems')
-  rmSync(stemsDir, { recursive: true, force: true })
-  mkdirSync(stemsDir, { recursive: true })
-  const projectName = basename(sourcePath).replace(/\.sssketchproj$/i, '')
+  assertHasPlacedRifffs(state) // before the clear below -- see its own comment
+  // Its own Stems/<project name>/ folder, as exportStemsNextToSource's.
+  const { projectName, outputDir: stemsDir } = prepareExternalStemsDir(sourcePath)
   await renderStemTracksToDir(state, stemsDir, projectName, rawPluginStates)
   await shell.openPath(stemsDir)
 }
