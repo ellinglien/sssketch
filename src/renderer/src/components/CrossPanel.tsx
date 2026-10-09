@@ -259,6 +259,7 @@ function SourceColumn({
   onToggleSolo: (parent: CrossParent, sourceId: string) => void
 }): React.JSX.Element {
   const added = useMemo(() => new Set(draft.center.map((row) => row.sourceId)), [draft.center])
+  const availableCount = parent.sources.filter((source) => source.stem).length
   const audibleCount = parent.sources.filter(
     (source) => source.stem && !muted.has(source.id)
   ).length
@@ -292,7 +293,7 @@ function SourceColumn({
           added={added.has(source.id)}
           active={activeMode === `source:${source.id}`}
           audible={!muted.has(source.id)}
-          soloed={audibleCount === 1 && !muted.has(source.id)}
+          soloed={availableCount > 1 && audibleCount === 1 && !muted.has(source.id)}
           onAdd={() => onAdd(source.id)}
           onPreview={() => onPreviewSource(source)}
           onToggleMute={() => onToggleMute(parent, source.id)}
@@ -1059,7 +1060,11 @@ export function CrossPanel({
                 row={row}
                 source={source}
                 index={index}
-                soloed={row.audible && draft.center.filter((item) => item.audible).length === 1}
+                soloed={
+                  draft.center.length > 1 &&
+                  row.audible &&
+                  draft.center.filter((item) => item.audible).length === 1
+                }
                 rolling={rollingRows.has(row.id)}
                 onDropAt={handleDropAt}
                 onDraftChange={setDraft}
