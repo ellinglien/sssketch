@@ -177,6 +177,55 @@ describe('rotateJoiningStems', () => {
     expect(await rotateJoiningStems(wholeLoops, [bell], bake)).toEqual([bell])
   })
 
+  // A riff re-oned by 1 bar takes 1-bar and 4-bar late stems: the 1-bar ones wrap to no
+  // rotation and join as they are, the 4-bar one is baked by 1 bar. The riff still reads as
+  // re-oned by 1 bar afterwards, however many raw 1-bar stems it now has, so the next late
+  // 4-bar stem is baked too.
+  it('a 1-bar re-one: 1-bar late stems join as they are, 4-bar ones are baked', async () => {
+    const oneBarReone = rifff([
+      stem({
+        slot: 1,
+        path: '/lib/.bakes/a.baked.wav',
+        phaseSourcePath: '/lib/stems/a',
+        phaseBars: 1
+      })
+    ])
+    const oneBar = stem({ slot: 2, path: '/lib/stems/o', durationSec: 2, barLength: 1 })
+    const fourBar = stem({ slot: 3, path: '/lib/stems/f' })
+    const sent: ReoneBakeJob[][] = []
+    const bake = async (
+      jobs: ReoneBakeJob[]
+    ): Promise<{ path: string; bakedPath: string; durationSec: number }[]> => {
+      sent.push(jobs)
+      return jobs.map((job) => ({
+        path: job.path,
+        bakedPath: `/lib/.bakes/${job.path.slice(-1)}-1.baked.wav`,
+        durationSec: 8
+      }))
+    }
+    const joined = (await rotateJoiningStems(oneBarReone, [oneBar, fourBar], bake))!
+    expect(sent).toEqual([[{ path: '/lib/stems/f', rotationSec: 2 }]])
+    expect(joined[0]).toEqual(oneBar)
+    expect(joined[1]).toMatchObject({ path: '/lib/.bakes/f-1.baked.wav', phaseBars: 1 })
+
+    const moreOneBars = [5, 6].map((slot) =>
+      stem({ slot, path: `/lib/stems/o${slot}`, durationSec: 2, barLength: 1 })
+    )
+    expect(await rotateJoiningStems(oneBarReone, moreOneBars, bake)).toEqual(moreOneBars)
+    // One 4-bar copy at 1 bar against three raw 1-bar stems, and a baked 4-bar one.
+    const merged = rifff([oneBarReone.stems[0], oneBar, ...moreOneBars])
+    const later = stem({ slot: 4, path: '/lib/stems/l' })
+    expect(await rotateJoiningStems(merged, [later], bake)).toEqual([
+      {
+        ...later,
+        path: '/lib/.bakes/l-1.baked.wav',
+        durationSec: 8,
+        phaseSourcePath: '/lib/stems/l',
+        phaseBars: 1
+      }
+    ])
+  })
+
   it('is all or nothing: a short batch or a failed bake joins none of them', async () => {
     const short = async (
       jobs: ReoneBakeJob[]

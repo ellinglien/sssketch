@@ -62,27 +62,52 @@ export function reoneJob(stem: Stem, steps: number, snapDiv: number): ReoneBakeJ
   }
 }
 
+/** Whether a stem at `stemBars` (its lineage) sounds at `bars`: the same place within its own
+ * loop. 1 bar and 5 bars are one phase for a 4-bar stem, and any whole bar is no rotation at all
+ * for a 1-bar stem. */
+function sitsAt(stemBars: number, bars: number, barLength: number): boolean {
+  if (!(barLength > 0)) return Math.abs(stemBars - bars) < PHASE_EPSILON_BARS
+  const apart = (((bars - stemBars) % barLength) + barLength) % barLength
+  return apart < PHASE_EPSILON_BARS || barLength - apart < PHASE_EPSILON_BARS
+}
+
+const PHASE_EPSILON_BARS = 1e-6
+
 /** The rotation a riff's stems share, in bars from their originals (unwrapped, as phaseBars
- * accumulates): the value most of its stems carry, the earlier stem winning a tie. null when that
- * is no rotation. A stem that joins the riff later (a stem that finished downloading after a
- * re-one) is baked to this, so the riff stays at one phase. Mixed values only come from per-stem
- * offsets or a 1.5.0-era partial bake; the majority is the best guess at the riff's phase. */
+ * accumulates), or null when that is no rotation. A stem that joins the riff later (a stem that
+ * finished downloading after a re-one) is baked to this, so the riff stays at one phase.
+ *
+ * Each rotation a stem carries is scored by the stems that sound at it, compared within each
+ * stem's own loop: a stem left as it is because the rotation wraps to nothing for it (a 1-bar
+ * stem in a riff re-oned by whole bars has no copy and no lineage) agrees with that rotation
+ * rather than outvoting it. The best score wins; a tie goes to a rotation some copy carries over
+ * none (an unrotated stem in a re-oned riff is the one that missed it), then to the earlier
+ * stem. Stems that disagree only come from per-stem offsets or a 1.5.0-era partial bake, and
+ * get one console line. */
 export function sharedPhaseBars(
-  stems: readonly Pick<Stem, 'path' | 'phaseSourcePath' | 'phaseBars'>[]
+  stems: readonly Pick<Stem, 'path' | 'phaseSourcePath' | 'phaseBars' | 'barLength'>[]
 ): number | null {
-  const counts = new Map<number, number>()
-  let best: number | null = null
-  let bestCount = 0
-  for (const stem of stems) {
-    const bars = phaseLineage(stem).bars
-    const count = (counts.get(bars) ?? 0) + 1
-    counts.set(bars, count)
-    if (count > bestCount) {
-      best = bars
-      bestCount = count
+  const lineages = stems.map((stem) => ({ bars: phaseLineage(stem).bars, loop: stem.barLength }))
+  let best: { bars: number; score: number; carried: boolean } | null = null
+  const seen: number[] = []
+  for (const { bars } of lineages) {
+    if (seen.some((other) => Math.abs(other - bars) < PHASE_EPSILON_BARS)) continue
+    seen.push(bars)
+    const score = lineages.filter((stem) => sitsAt(stem.bars, bars, stem.loop)).length
+    const carried = bars !== 0
+    if (best === null || score > best.score || (score === best.score && carried && !best.carried)) {
+      best = { bars, score, carried }
     }
   }
-  return best === null || best === 0 ? null : best
+  if (best === null) return null
+  if (best.score < lineages.length) {
+    console.warn(
+      `sharedPhaseBars: stems disagree on the riff's rotation (${lineages
+        .map((stem) => stem.bars)
+        .join(', ')} bars); taking ${best.bars}`
+    )
+  }
+  return best.bars === 0 ? null : best.bars
 }
 
 /** The job that bakes `stem` to `bars` in total from its original: the same shape as reoneJob,

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Stem } from './types'
 import {
   bakeToPhaseJob,
@@ -120,6 +120,55 @@ describe('sharedPhaseBars', () => {
 
   it('is null when most stems are back at their original phase', () => {
     expect(sharedPhaseBars([copy(0, 'a'), copy(0, 'b'), copy(1, 'c')])).toBeNull()
+  })
+
+  describe('rotations compared within each stem loop', () => {
+    afterEach(() => vi.restoreAllMocks())
+    const raw = (name: string, barLength: number): Stem =>
+      stem({ path: `/src/${name}`, barLength, durationSec: barLength * 2 })
+
+    // A riff re-oned by 1 bar. Its 1-bar stems that joined later (late downloads, or Discover
+    // candidates aligned to it) wrap to no rotation at all, so they join as they are, with no
+    // copy and no lineage: they agree with the riff's rotation, and must not outvote it.
+    it('a 1-bar re-one: raw 1-bar stems agree with it, 4-bar stems carry it', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const fourBar = (name: string): Stem =>
+        stem({
+          path: `/lib/.bakes/${name}.baked.wav`,
+          phaseSourcePath: `/src/${name}`,
+          phaseBars: 1,
+          barLength: 4,
+          durationSec: 8
+        })
+      const riff = [fourBar('d'), raw('h1', 1), raw('h2', 1), raw('h3', 1)]
+      expect(sharedPhaseBars(riff)).toBe(1)
+      // ...so a 4-bar stem joining next is baked by 1 bar, and a 1-bar one needs no copy.
+      expect(rotationSecForBars(1, raw('late4', 4))).toBe(2)
+      expect(rotationSecForBars(1, raw('late1', 1))).toBe(0)
+      expect(sharedPhaseBars([...riff, fourBar('late4')])).toBe(1)
+      expect(warn).not.toHaveBeenCalled()
+    })
+
+    it('1 bar and 5 bars on a 4-bar loop are one phase', () => {
+      expect(sharedPhaseBars([copy(5, 'a'), copy(1, 'b'), copy(0.5, 'c')])).toBe(5)
+    })
+
+    it('breaks a tie towards a rotation a copy carries, whatever the stem order', () => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const unrotated = raw('u', 4)
+      expect(sharedPhaseBars([unrotated, copy(1, 'a')])).toBe(1)
+      expect(sharedPhaseBars([copy(1, 'a'), unrotated])).toBe(1)
+      // Two rotations each a copy carries: the earlier stem's.
+      expect(sharedPhaseBars([copy(0.5, 'a'), copy(1, 'b')])).toBe(0.5)
+    })
+
+    it('says so in one console line when the stems disagree', () => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      sharedPhaseBars([copy(1, 'a'), copy(1, 'b'), copy(0.5, 'c'), copy(0.25, 'd')])
+      expect(warn).toHaveBeenCalledTimes(1)
+      sharedPhaseBars([copy(1, 'a'), copy(5, 'b')])
+      expect(warn).toHaveBeenCalledTimes(1)
+    })
   })
 })
 

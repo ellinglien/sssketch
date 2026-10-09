@@ -33,7 +33,7 @@ export function isClockJam(jamCID: string): boolean {
   return jamCID !== DISCOVERED_JAM_CID && !jamCID.startsWith('shared:')
 }
 
-type SeedStem = Pick<Stem, 'path' | 'phaseSourcePath' | 'phaseBars'>
+type SeedStem = Pick<Stem, 'path' | 'phaseSourcePath' | 'phaseBars' | 'barLength'>
 
 /** The library StemCID an original's file is named after (no extension), or null. */
 function stemCIDOf(path: string): string | null {

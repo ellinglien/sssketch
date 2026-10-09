@@ -10,10 +10,12 @@ const copy = (
   path: string
   phaseSourcePath: string
   phaseBars: number
+  barLength: number
 } => ({
   path: `/lib/.bakes/${stemCID}-${phaseBars}.baked.wav`,
   phaseSourcePath: `/${jam}/stems/x/${stemCID}`,
-  phaseBars
+  phaseBars,
+  barLength: 4
 })
 
 describe('discoverSeedPhase', () => {
@@ -35,7 +37,10 @@ describe('discoverSeedPhase', () => {
   })
 
   it('is null for a seed never re-oned: its jam-mates are already at its phase', () => {
-    const raw = [{ path: '/lib/stems/x/s1' }, { path: '/lib/stems/x/s2' }]
+    const raw = [
+      { path: '/lib/stems/x/s1', barLength: 4 },
+      { path: '/lib/stems/x/s2', barLength: 4 }
+    ]
     expect(
       discoverSeedPhase(raw, { '/lib/stems/x/s1': 'jamA', '/lib/stems/x/s2': 'jamA' })
     ).toBeNull()
@@ -64,6 +69,24 @@ describe('discoverSeedPhase', () => {
     expect(candidatePhaseBars(phase, { stemCID: 'other', jamCID: 'shared:wren' })).toBeNull()
     // The seed's own stems still carry their own rotation, wherever they sit.
     expect(candidatePhaseBars(phase, { stemCID: 's1', jamCID: 'discovered' })).toBe(1.5)
+  })
+
+  // A riff re-oned by 1 bar, with 1-bar stems that came in as they are (Discover candidates or
+  // late stems the rotation wraps to nothing for): the jam still carries the 1-bar rotation, so a
+  // 4-bar candidate from it is baked and a 1-bar one needs no copy.
+  it('a 1-bar re-one with raw 1-bar stems keeps its rotation for 4-bar candidates', () => {
+    const oneBar = (stemCID: string): { path: string; barLength: number } => ({
+      path: `/lib/stems/x/${stemCID}`,
+      barLength: 1
+    })
+    const phase = discoverSeedPhase([copy('s1', 1), oneBar('h1'), oneBar('h2'), oneBar('h3')], {
+      '/lib/stems/x/s1': 'jamA',
+      '/lib/stems/x/h1': 'jamA',
+      '/lib/stems/x/h2': 'jamA',
+      '/lib/stems/x/h3': 'jamA'
+    })
+    expect(phase?.byJam).toEqual({ jamA: 1 })
+    expect(candidatePhaseBars(phase, { stemCID: 'four', jamCID: 'jamA' })).toBe(1)
   })
 
   it("names the seed's jams, for a notice about a stem that couldn't be lined up", () => {
