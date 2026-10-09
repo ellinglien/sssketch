@@ -53,6 +53,7 @@ import {
 } from './saveBeforeQuit'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { createEngineStopper } from './engineStop'
+import { createMetronomeSetting } from './metronomeSetting'
 import { claimSingleInstance } from './singleInstance'
 import { exportMixToWav } from './exportMix'
 import type { ToolkitExportMode } from '@shared/toolkit'
@@ -296,6 +297,8 @@ import {
 let playbackEngine: PlaybackEngineHandle | undefined
 // engine-stop's shared, token-correlated request (engineStop.ts).
 const engineStopper = createEngineStopper(() => playbackEngine?.client)
+// The metronome's last on/off and volume, re-sent to a respawned engine.
+const metronomeSetting = createMetronomeSetting()
 
 /**
  * Best-effort fetch of current plugin state from the PERSISTENT live engine
@@ -2380,7 +2383,9 @@ app.whenReady().then(async () => {
   })
 
   ipcMain.handle('engine-set-metronome', (_event, enabled: boolean, volume: number) => {
-    playbackEngine?.client.send('set-metronome', { enabled, volume })
+    const client = playbackEngine?.client
+    if (client)
+      metronomeSetting.apply((type, payload) => client.send(type, payload), enabled, volume)
   })
 
   ipcMain.handle('engine-set-link-enabled', (_event, enabled: boolean) => {
@@ -2778,6 +2783,8 @@ app.whenReady().then(async () => {
       subscribeToCaptureLevelUpdates()
       subscribeToGatedRecordingUpdates()
       subscribeToLinkTempoChanged()
+      // Not part of the re-sent project (metronomeSetting.ts).
+      metronomeSetting.resend((type, payload) => engine.client.send(type, payload))
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send('engine-restarted')
       }
