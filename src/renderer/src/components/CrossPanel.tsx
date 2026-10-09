@@ -445,6 +445,31 @@ export function CrossPanel({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
+      <style>{`
+        .ra-cross-button {
+          min-height: 26px;
+          border: 1px solid var(--ra-border-strong);
+          border-radius: 0;
+          padding: 0 10px;
+          background: var(--ra-bg-row-active);
+          color: var(--ra-text);
+          font-size: 10px;
+        }
+        .ra-cross-button:disabled {
+          opacity: var(--ra-opacity-disabled);
+          cursor: default;
+        }
+        .ra-cross-button[data-active='true'] {
+          background: var(--ra-play-on);
+          color: var(--ra-play-on-ink);
+        }
+        .ra-cross-primary {
+          min-width: 146px;
+          height: 32px;
+          border-width: 2px;
+          font-size: 11px;
+        }
+      `}</style>
       <div
         style={{
           display: 'flex',
@@ -454,7 +479,7 @@ export function CrossPanel({
           borderBottom: '1px solid var(--ra-border)'
         }}
       >
-        <button onClick={onBack} disabled={!!committing}>
+        <button className="ra-cross-button" onClick={onBack} disabled={!!committing}>
           ← sketch
         </button>
         <span className="ra-eyebrow">cross</span>
@@ -463,24 +488,28 @@ export function CrossPanel({
         </span>
         <div style={{ flex: 1 }} />
         <button
+          className="ra-cross-button"
           onClick={() => setDraft((value) => (value ? undoCross(value) : value))}
           disabled={!!committing || !draft.past.length}
         >
           undo
         </button>
         <button
+          className="ra-cross-button"
           onClick={() => setDraft((value) => (value ? redoCross(value) : value))}
           disabled={!!committing || !draft.future.length}
         >
           redo
         </button>
         <button
+          className="ra-cross-button"
           onClick={() => setDraft((value) => (value ? swapCrossSides(value) : value))}
           disabled={!!committing}
         >
           swap sides
         </button>
         <button
+          className="ra-cross-button"
           onClick={() => setDraft((value) => (value ? clearCrossCenter(value) : value))}
           disabled={!!committing || draft.center.length === 0}
         >
@@ -530,6 +559,8 @@ export function CrossPanel({
               {draft.center.length} / {MAX_RIFFF_STEM_SLOTS}
             </span>
             <button
+              className="ra-cross-button"
+              data-active={activeMode === 'center'}
               onClick={() =>
                 activeMode === 'center' ? (stop(), setActiveMode(null)) : void playCenter()
               }
@@ -604,6 +635,7 @@ export function CrossPanel({
         }}
       >
         <button
+          className="ra-cross-button ra-cross-primary"
           onClick={() => void commit('shelf')}
           disabled={!!committing || draft.center.length === 0}
         >
@@ -616,6 +648,7 @@ export function CrossPanel({
           )}
         </button>
         <button
+          className="ra-cross-button ra-cross-primary"
           onClick={() => void commit('timeline')}
           disabled={!!committing || draft.center.length === 0}
         >

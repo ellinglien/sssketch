@@ -420,7 +420,19 @@ export function SketchStrip({
           }}
         >
           {canResumeCross && crossPair.length !== 2 && (
-            <button onClick={onResumeCross}>resume cross</button>
+            <button
+              onClick={onResumeCross}
+              style={{
+                height: 30,
+                padding: '0 14px',
+                borderRadius: 0,
+                border: '1px solid var(--ra-border-strong)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text)'
+              }}
+            >
+              resume cross
+            </button>
           )}
           {crossPair.length === 2 && (
             <button
