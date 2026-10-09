@@ -49,6 +49,7 @@ import {
 import { awaitSaveBeforeQuit, type SaveBeforeQuitResult } from './saveBeforeQuit'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { createEngineStopper } from './engineStop'
+import { claimSingleInstance } from './singleInstance'
 import { exportMixToWav } from './exportMix'
 import type { ToolkitExportMode } from '@shared/toolkit'
 import type { LiveParamField } from '@shared/liveParam'
@@ -753,23 +754,23 @@ if (is.dev) {
 // both copies a few milliseconds apart produces comb filtering/phasey
 // "crunch" that is easily mistaken for buffer underruns. A second launch
 // now just brings the existing window forward and exits before it can
-// create another engine.
-const hasSingleInstanceLock = app.requestSingleInstanceLock()
-if (!hasSingleInstanceLock) {
-  app.quit()
-} else {
-  app.on('second-instance', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return
-    if (mainWindow.isMinimized()) mainWindow.restore()
-    mainWindow.show()
-    mainWindow.focus()
-  })
-}
+// create another engine (singleInstance.ts: it exits rather than quits, and
+// the whenReady handler below checks isPrimaryInstance first).
+const isPrimaryInstance = claimSingleInstance(app, () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+})
 
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
 app.whenReady().then(async () => {
+  // A second launch has already called app.exit(); make sure it opens no
+  // database and starts no engine in the moment before it's gone.
+  if (!isPrimaryInstance) return
+
   // Set app user model id for windows
   electronApp.setAppUserModelId('com.ellinglien.sssketch')
 
