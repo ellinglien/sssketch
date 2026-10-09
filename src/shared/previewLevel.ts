@@ -25,3 +25,15 @@ export function previewLevelGain(level: number): number {
   const fraction = clampLevel(level) / 100
   return fraction * fraction
 }
+
+/** The level as the dial's tooltip says it: what it does to the sound, in plain terms. The knob
+ * position would mislead, since 50 on the dial is a quarter of the gain. Whole dB, with one
+ * decimal near the top so a slightly turned-down dial never reads as full. */
+export function previewLevelLabel(level: number): string {
+  const gain = previewLevelGain(level)
+  if (gain >= 1) return 'full level'
+  if (gain <= 0) return 'silent'
+  const db = 20 * Math.log10(gain)
+  const shown = db > -1 ? db.toFixed(1) : Math.round(db).toString()
+  return `${shown.replace('-', '−')} dB`
+}

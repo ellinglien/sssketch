@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_PREVIEW_LEVEL, normalizePreviewLevel, previewLevelGain } from './previewLevel'
+import {
+  DEFAULT_PREVIEW_LEVEL,
+  normalizePreviewLevel,
+  previewLevelGain,
+  previewLevelLabel
+} from './previewLevel'
 
 describe('previewLevelGain', () => {
   it('is unity at 100%, the default, so previews sound as they always have', () => {
@@ -44,5 +49,23 @@ describe('normalizePreviewLevel', () => {
     for (const raw of [undefined, null, '40', NaN, Infinity, {}]) {
       expect(normalizePreviewLevel(raw)).toBe(DEFAULT_PREVIEW_LEVEL)
     }
+  })
+})
+
+describe('previewLevelLabel', () => {
+  it('says what the dial does to the sound, not where the knob sits', () => {
+    // 50 on the dial is a quarter of the gain, so "50%" would mislead.
+    expect(previewLevelLabel(50)).toBe('−12 dB')
+    expect(previewLevelLabel(25)).toBe('−24 dB')
+    expect(previewLevelLabel(71)).toBe('−6 dB')
+  })
+
+  it('reads the ends in words', () => {
+    expect(previewLevelLabel(100)).toBe('full level')
+    expect(previewLevelLabel(0)).toBe('silent')
+  })
+
+  it('never reads a turned-down dial as full', () => {
+    expect(previewLevelLabel(99)).toBe('−0.2 dB')
   })
 })

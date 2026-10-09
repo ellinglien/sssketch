@@ -81,7 +81,7 @@ import { syncOutcomeNote, syncOutcomeNoteRefreshMs } from '@shared/syncOutcomeNo
 import { loginSyncPromptText, type LoginSyncConsent } from '@shared/loginSyncConsent'
 import { loadLastSelectedImportJam, storeLastSelectedImportJam } from './libraryBrowserSelection'
 import { IMPORT_MULTI_SELECT_HINT } from '@shared/keyGestures'
-import { DEFAULT_PREVIEW_LEVEL } from '@shared/previewLevel'
+import { DEFAULT_PREVIEW_LEVEL, previewLevelLabel } from '@shared/previewLevel'
 import { Dial } from './Dial'
 import { commitPreviewLevel, setPreviewLevel, usePreviewLevel } from '../audio/previewOutput'
 import { useBlockUndo } from '../state/undoRouting'
@@ -1939,7 +1939,7 @@ export function LibraryBrowser({
                   defaultValue={DEFAULT_PREVIEW_LEVEL}
                   size={22}
                   ariaLabel="preview level"
-                  tooltip={`preview level ${previewLevel}% · every preview, not the arrangement`}
+                  tooltip={`preview level ${previewLevelLabel(previewLevel)} · every preview, not the arrangement`}
                 />
               </div>
             )}
