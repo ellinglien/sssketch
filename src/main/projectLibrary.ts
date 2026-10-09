@@ -105,6 +105,13 @@ export function bakeAssetsDir(): string {
   return join(libraryRootPath(), '.bakes')
 }
 
+/** Durable, immutable audio produced by Shape Riff. Like `.bakes`, this is
+ * project data rather than an evictable cache: saved shelf riffs may refer to
+ * these files indefinitely. */
+export function shapeAssetsDir(): string {
+  return join(libraryRootPath(), '.shapes')
+}
+
 // A hard, reliable split rather than a probe/fallback -- matches
 // bakeOffset.ts's and exportAbleton.ts's own isWavPath exactly: a regular
 // drag-and-drop import is always a WAV, while a LORE-cached stem's path is

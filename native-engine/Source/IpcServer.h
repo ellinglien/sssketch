@@ -5,6 +5,7 @@
 #include "EngineProject.h"
 #include "RenderExport.h"
 #include "BakeStem.h"
+#include "ShapeRender.h"
 #include "PluginChain.h"
 #include "ChannelChainRegistry.h"
 #include "LoopRecorder.h"

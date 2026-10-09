@@ -1,4 +1,4 @@
-// src/renderer/src/components/UnsavedChangesDialog.tsx
+import { ConfirmationDialog } from './ConfirmationDialog'
 
 // Same backdrop+panel shape as LockInConfirmDialog.tsx, but driven by plain
 // props (App.tsx's Frame owns the visibility state and a stored
@@ -16,18 +16,6 @@
 // reintroduce the exact ambiguity (save? discard? cancel?) this dialog
 // exists to remove. The user must press one of the three explicitly
 // labeled buttons.
-function buttonStyle(): React.CSSProperties {
-  return {
-    fontFamily: 'inherit',
-    fontSize: 10,
-    padding: '4px 10px',
-    background: 'var(--ra-bg-row-active)',
-    border: '1px solid var(--ra-border)',
-    color: 'var(--ra-text)',
-    cursor: 'pointer'
-  }
-}
-
 export function UnsavedChangesDialog({
   onSave,
   onDiscard,
@@ -38,41 +26,13 @@ export function UnsavedChangesDialog({
   onCancel: () => void
 }): React.JSX.Element {
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        zIndex: 'var(--ra-z-modal)',
-        background: 'var(--ra-backdrop)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center'
-      }}
-    >
-      <div
-        style={{
-          background: 'var(--ra-bg-row-active)',
-          border: '1px solid var(--ra-border)',
-          padding: 14,
-          width: 320,
-          fontSize: 11
-        }}
-      >
-        <p style={{ margin: '0 0 12px', color: 'var(--ra-text)' }}>
-          this project has unsaved changes.
-        </p>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-          <button onClick={onCancel} style={buttonStyle()}>
-            cancel
-          </button>
-          <button onClick={onDiscard} style={buttonStyle()}>
-            discard
-          </button>
-          <button onClick={onSave} style={buttonStyle()}>
-            save
-          </button>
-        </div>
-      </div>
-    </div>
+    <ConfirmationDialog
+      message="this project has unsaved changes."
+      actions={[
+        { label: 'cancel', onClick: onCancel },
+        { label: 'discard', onClick: onDiscard, danger: true },
+        { label: 'save', onClick: onSave, primary: true }
+      ]}
+    />
   )
 }

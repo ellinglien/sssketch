@@ -60,6 +60,28 @@ namespace sssketch
         return juce::var(obj.get());
     }
 
+    static juce::var makeShapeRenderResult(
+        bool success,
+        const ShapeRenderInfo& info,
+        const juce::String& error)
+    {
+        juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+        payload->setProperty("success", success);
+        if (success)
+        {
+            payload->setProperty("durationSec", info.durationSec);
+            payload->setProperty("sampleRate", info.sampleRate);
+            payload->setProperty("frames", info.frames);
+            payload->setProperty("channels", info.channels);
+        }
+        if (error.isNotEmpty())
+            payload->setProperty("error", error);
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("type", "render-shape-stem-result");
+        obj->setProperty("payload", juce::var(payload.get()));
+        return juce::var(obj.get());
+    }
+
     IpcConnection::IpcConnection(PlaybackEngine& e, Transport& t, PluginChain& mc, ChannelChainRegistry& cc,
         bool linkEnabled)
         : engine(e), transport(t), masterChain(mc), channelChains(cc), linkSession(t.currentBpm(), linkEnabled)
@@ -723,7 +745,8 @@ namespace sssketch
                 sendTransportStopped(pending.token, false);
             pendingHaltAcks.clear();
             const double fromPos = payload.isObject() ? (double) payload.getProperty("fromPos", 0.0) : 0.0;
-            transport.play(fromPos);
+            const bool fadeIn = payload.isObject() && (bool) payload.getProperty("fadeIn", false);
+            transport.play(fromPos, fadeIn);
             // ~33ms (~30Hz) position-update push rate — matches the renderer's
             // existing ~60fps rAF poll closely enough for a smooth playhead
             // without flooding the socket. kLinkPollTimerId is untouched here
@@ -1450,6 +1473,59 @@ namespace sssketch
             double durationSec = 0.0;
             const bool ok = bakeStemToWav(sourcePath, rotationSec, outputPath, durationSec, error);
             sendJson(makeBakeStemResult(ok, durationSec, ok ? juce::String() : error));
+        }
+        else if (type == "render-shape-stem")
+        {
+            ShapeRenderInfo info;
+            if (!payload.isObject())
+            {
+                sendJson(makeShapeRenderResult(false, info, "render-shape-stem payload must be an object"));
+                return;
+            }
+
+            const auto sourcePath = payload.getProperty("sourcePath", "").toString();
+            const auto outputPath = payload.getProperty("outputPath", "").toString();
+            const double sourceDurationSec = (double) payload.getProperty("sourceDurationSec", 0.0);
+            const double sourceBarLength = (double) payload.getProperty("sourceBarLength", 0.0);
+            const double targetBpm = (double) payload.getProperty("targetBpm", 0.0);
+            const double loopBars = (double) payload.getProperty("loopBars", 0.0);
+            std::vector<ShapeRenderSegment> segments;
+            if (auto* array = payload.getProperty("segments", juce::var()).getArray())
+            {
+                segments.reserve((size_t) array->size());
+                for (const auto& entry : *array)
+                {
+                    if (!entry.isObject())
+                    {
+                        sendJson(makeShapeRenderResult(false, info, "Shape segment must be an object"));
+                        return;
+                    }
+                    segments.push_back({
+                        (double) entry.getProperty("sourceStartBars", -1.0),
+                        (double) entry.getProperty("sourceEndBars", -1.0),
+                        (double) entry.getProperty("destStartBars", -1.0),
+                        (bool) entry.getProperty("reversed", false)
+                    });
+                }
+            }
+            else
+            {
+                sendJson(makeShapeRenderResult(false, info, "Shape segments must be an array"));
+                return;
+            }
+
+            juce::String error;
+            const bool ok = renderShapeStemToWav(
+                sourcePath,
+                sourceDurationSec,
+                sourceBarLength,
+                targetBpm,
+                loopBars,
+                segments,
+                outputPath,
+                info,
+                error);
+            sendJson(makeShapeRenderResult(ok, info, ok ? juce::String() : error));
         }
         else if (type == "quit")
         {

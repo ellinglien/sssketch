@@ -43,6 +43,7 @@ import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { ConfirmedEmbedding } from '@shared/embeddingMatch'
 import type { RemoteCommand, RemoteKeepOutcome, RemoteState } from '@shared/remoteState'
 import type { LanAddressCandidate } from '@shared/lanAddress'
+import type { ShapeMaterializeRequest, ShapeMaterializeResult } from '@shared/shape'
 
 /** What the gear menu needs to show the phone remote's whole state: whether
  * it is on, the URL to type, the pairing code, how many tries are left, and
@@ -142,6 +143,14 @@ const api = {
     jobs: { path: string; rotationSec: number }[]
   ): Promise<{ path: string; bakedPath: string; durationSec: number }[]> =>
     ipcRenderer.invoke('bake-offset', jobs),
+  materializeShape: (request: ShapeMaterializeRequest): Promise<ShapeMaterializeResult> =>
+    ipcRenderer.invoke('shape-materialize', request),
+  cancelShapeMaterialization: (jobId: string): Promise<void> =>
+    ipcRenderer.invoke('shape-cancel', jobId),
+  cleanupShapePreview: (paths: string[]): Promise<void> =>
+    ipcRenderer.invoke('shape-cleanup-preview', paths),
+  cleanupUncommittedShapeAssets: (paths: string[]): Promise<void> =>
+    ipcRenderer.invoke('shape-cleanup-uncommitted', paths),
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-project'),
@@ -356,7 +365,8 @@ const api = {
     ipcRenderer.on('engine-project-applied', listener)
     return () => ipcRenderer.removeListener('engine-project-applied', listener)
   },
-  enginePlay: (fromPos: number): Promise<void> => ipcRenderer.invoke('engine-play', fromPos),
+  enginePlay: (fromPos: number, fadeIn = false): Promise<void> =>
+    ipcRenderer.invoke('engine-play', fromPos, fadeIn),
   engineStop: (): Promise<void> => ipcRenderer.invoke('engine-stop'),
   engineSetPosition: (pos: number): Promise<void> => ipcRenderer.invoke('engine-set-position', pos),
   engineSetLiveParam: (field: LiveParamField, key: string, value: number): Promise<void> =>

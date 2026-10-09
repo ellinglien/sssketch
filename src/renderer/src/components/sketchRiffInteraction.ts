@@ -1,3 +1,5 @@
+import type { Action } from '../state/store'
+
 export type SketchRiffClickAction =
   'ignore-drag' | 'select-only' | 'select-and-play' | 'select-and-stop' | 'select-and-switch'
 
@@ -48,4 +50,31 @@ export function toggleRiffBatchSelection(
   if (next.has(clickedId)) next.delete(clickedId)
   else next.add(clickedId)
   return next
+}
+
+/** Resolve a global Delete/Backspace gesture to riffs that are actually
+ * placed in Sketch. Shared Shelf/Sketch selection may also contain shelf-only
+ * riffs, which must never be treated as Sketch removal targets. */
+export function sketchRemovalTargets(
+  selectedIds: ReadonlySet<string>,
+  selectedRiffId: string | null,
+  placedIds: readonly string[]
+): Set<string> {
+  const placed = new Set(placedIds)
+  const targets = new Set([...selectedIds].filter((id) => placed.has(id)))
+  if (targets.size === 0 && selectedRiffId && placed.has(selectedRiffId)) {
+    targets.add(selectedRiffId)
+  }
+  return targets
+}
+
+/** Build the ordered edits for one atomic history BATCH. */
+export function sketchRemovalActions(
+  sequenceIds: readonly string[],
+  targetIds: ReadonlySet<string>
+): Action[] {
+  return [
+    ...[...targetIds].map((groupId): Action => ({ type: 'REMOVE_FROM_TIMELINE', groupId })),
+    { type: 'SEQUENCE_RIFFFS', groupIds: sequenceIds.filter((id) => !targetIds.has(id)) }
+  ]
 }

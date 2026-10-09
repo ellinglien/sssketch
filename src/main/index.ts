@@ -256,6 +256,13 @@ import type { StemAnalysisWrite } from '@shared/stemAnalysisWrite'
 import type { StemAnalysisNeeds } from '@shared/stemAnalysisNeeds'
 import type { StemFeatures } from '@shared/stemFeatures'
 import type { ProjectRef } from '@shared/types'
+import type { ShapeMaterializeRequest } from '@shared/shape'
+import {
+  cancelShapeMaterialization,
+  cleanupShapePreview,
+  cleanupUncommittedShapeAssets,
+  materializeShape
+} from './shapeMaterialize'
 import { restrictStems } from '@shared/discoverFaves'
 import { migrateEndlesssStemCache } from './stemCacheMigration'
 import { migrateLegacyFavourites } from './riffFavouritesMigration'
@@ -274,6 +281,7 @@ import {
   listLibrarySketches,
   libraryRootPath,
   bakeAssetsDir,
+  shapeAssetsDir,
   setLibraryRootPath,
   shouldWarnBeforeOverwrite,
   renameSketch,
@@ -1371,6 +1379,15 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs, bakeAssetsDir()))
 
+  ipcMain.handle('shape-materialize', (_event, request: ShapeMaterializeRequest) =>
+    materializeShape(request, shapeAssetsDir())
+  )
+  ipcMain.handle('shape-cancel', (_event, jobId: string) => cancelShapeMaterialization(jobId))
+  ipcMain.handle('shape-cleanup-preview', (_event, paths: string[]) => cleanupShapePreview(paths))
+  ipcMain.handle('shape-cleanup-uncommitted', (_event, paths: string[]) =>
+    cleanupUncommittedShapeAssets(paths, shapeAssetsDir())
+  )
+
   ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
     const path = await saveProjectAs(win, json)
@@ -1655,13 +1672,13 @@ app.whenReady().then(async () => {
     }
   )
 
-  ipcMain.handle('engine-play', (_event, fromPos: number) => {
+  ipcMain.handle('engine-play', (_event, fromPos: number, fadeIn = false) => {
     // A new Play deliberately supersedes any halt still fading. Let a
     // subsequent stop create a fresh request rather than inheriting the
     // superseded handoff promise; the old waiter will either be acked by
     // that later stop or time out harmlessly.
     engineStopInFlight = null
-    playbackEngine?.client.send('play', { fromPos })
+    playbackEngine?.client.send('play', { fromPos, fadeIn })
   })
 
   ipcMain.handle('engine-stop', () => stopPlaybackEngineAndWait())

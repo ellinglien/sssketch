@@ -168,6 +168,7 @@ export function LibraryBrowser({
   discoverSeedBpm,
   setDiscoverSeedBpm,
   onCoachSlotsChange,
+  onPublishedToShelf,
   initialMode
 }: {
   onClose: () => void
@@ -230,6 +231,7 @@ export function LibraryBrowser({
   setDiscoverSeedBpm: React.Dispatch<React.SetStateAction<number | null>>
   /** Passed straight through to DiscoverPanel -- see its own doc comments. */
   onCoachSlotsChange?: (slots: CoachSlotSnapshot[]) => void
+  onPublishedToShelf: (groupId: string) => void
   /** Which half to open on. Required, and always honoured: the shelf now has
    * one button per half (see @shared/libraryEntryPoints), so the half a user
    * lands on is exactly the button they pressed -- never a guess.
@@ -2737,6 +2739,7 @@ export function LibraryBrowser({
             setDiscoverConsented={setDiscoverConsented}
             seedBpm={discoverSeedBpm}
             onCoachSlotsChange={onCoachSlotsChange}
+            onPublishedToShelf={onPublishedToShelf}
           />
         )}
       </div>

@@ -101,6 +101,33 @@ export interface Stem {
    * correctly. Undefined for a one-shot/recorded-in-app stem (no
    * originating riff at all) or any import path that predates this field. */
   creationTime?: number
+  /** Non-destructive source recipe for a WAV materialized by Shape Riff.
+   * Ordinary playback uses this stem's `path`; Shape alone reads this
+   * versioned provenance to reopen the editable source fragments. */
+  shape?: ShapeStemProvenanceV1
+}
+
+export interface ShapeFragmentRecipe {
+  id: string
+  sourceStartBars: number
+  sourceEndBars: number
+  destStartBars: number
+  disabled: boolean
+  /** Plays this clip's source interval from end to start. Missing in older
+   * Shape recipes means ordinary forward playback. */
+  reversed?: boolean
+}
+
+/** A deliberately non-recursive source snapshot. */
+export type ShapeSourceStem = Omit<Stem, 'slot' | 'shape'>
+
+export interface ShapeStemProvenanceV1 {
+  version: 1
+  source: ShapeSourceStem
+  loopBars: number
+  laneDisabled: boolean
+  gain: number
+  fragments: ShapeFragmentRecipe[]
 }
 
 export interface Rifff {

@@ -34,17 +34,34 @@ export async function issueCrossPreviewLoad(
   return !isCancelled()
 }
 
+/** Runs a preview swap/restore only after the native halt fade has reached
+ * actual silence. Project snapshots otherwise change underneath audible
+ * samples, which produces a click even though Transport itself fades Stop. */
+export async function continueCrossPreviewAfterSilence(
+  halt: () => Promise<void>,
+  continuation: () => Promise<void> | void,
+  isCancelled: () => boolean
+): Promise<boolean> {
+  await halt()
+  if (isCancelled()) return false
+  await continuation()
+  return !isCancelled()
+}
+
 /** A narrow throwaway-project controller for Cross. One ownership token
  * covers source audition and the child mix, so switching modes can never
  * leave an older source playing underneath a newer one. */
-export function useCrossPreview(): {
+export function useCrossPreview(owner: 'cross-preview' | 'shape-preview' = 'cross-preview'): {
   preview: (
     mode: CrossPreviewMode,
     members: CrossPreviewMember[],
     targetBpm: number,
-    loopBars: number
+    loopBars: number,
+    fromPos?: number,
+    smoothSwap?: boolean
   ) => Promise<void>
   stop: () => void
+  owns: () => boolean
 } {
   const dispatch = useDispatch()
   const masterChain = useAppSelector((state) => state.masterChain)
@@ -68,7 +85,7 @@ export function useCrossPreview(): {
   const modeRef = useRef<CrossPreviewMode | null>(null)
 
   const stop = useCallback(() => {
-    generationRef.current += 1
+    const generation = ++generationRef.current
     const token = tokenRef.current
     tokenRef.current = null
     modeRef.current = null
@@ -78,7 +95,17 @@ export function useCrossPreview(): {
     const released = releaseEngine()
     if (!needsRestore) return
     dispatch({ type: 'PAUSE' })
-    void flushEngineSyncNow(undefined, () => !stillOwnEngine(released))
+    void continueCrossPreviewAfterSilence(
+      () => window.rifffApi.engineStop(),
+      () => flushEngineSyncNow(undefined, () => !stillOwnEngine(released)),
+      () => generationRef.current !== generation || !stillOwnEngine(released)
+    ).catch((err) => {
+      // A fresh Play deliberately cancels an in-flight halt. Its new owner
+      // also bumps one of the guards above, so that expected case needs no
+      // stale restore; log only genuinely current failures.
+      if (generationRef.current === generation && stillOwnEngine(released))
+        console.error('useCrossPreview: failed to reach silence before restore:', err)
+    })
   }, [dispatch, flushEngineSyncNow, releaseEngine, stillOwnEngine])
 
   useEffect(() => {
@@ -94,7 +121,9 @@ export function useCrossPreview(): {
       mode: CrossPreviewMode,
       members: CrossPreviewMember[],
       targetBpm: number,
-      loopBars: number
+      loopBars: number,
+      fromPos = 0,
+      smoothSwap = false
     ): Promise<void> => {
       if (members.length === 0) {
         stop()
@@ -110,8 +139,9 @@ export function useCrossPreview(): {
       if (!assembly) return
 
       const changingMode = !needsRestoreRef.current || modeRef.current !== mode
+      const shouldSmoothSwap = smoothSwap && !changingMode
       const generation = ++generationRef.current
-      const token = claimEngine('cross-preview')
+      const token = claimEngine(owner)
       tokenRef.current = token
       const { rifff, vol } = assembly
       const previewState: AppState = {
@@ -138,6 +168,15 @@ export function useCrossPreview(): {
         )
         if (unmountedRef.current || generationRef.current !== generation) return
         if (!stillOwnEngine(token)) return
+        if (shouldSmoothSwap) {
+          const reachedSilence = await continueCrossPreviewAfterSilence(
+            () => window.rifffApi.engineStop(),
+            () => undefined,
+            () =>
+              unmountedRef.current || generationRef.current !== generation || !stillOwnEngine(token)
+          )
+          if (!reachedSilence) return
+        }
         const loadIsCurrent = await issueCrossPreviewLoad(
           () => window.rifffApi.engineLoadProject(project),
           () => {
@@ -148,7 +187,15 @@ export function useCrossPreview(): {
         )
         if (!loadIsCurrent) return
         modeRef.current = mode
-        if (changingMode) void window.rifffApi.engineSetPosition(0)
+        if (shouldSmoothSwap) {
+          // Redux intentionally remains in its playing state throughout a
+          // solo handoff, so resume the native transport directly. This is
+          // the narrow use for the optional start fade: a new solo stem can
+          // begin at an arbitrary waveform phase without clicking.
+          void window.rifffApi.enginePlay(fromPos, true)
+          return
+        }
+        if (changingMode) void window.rifffApi.engineSetPosition(fromPos)
         dispatch({ type: 'PLAY' })
       } catch (err) {
         console.error('useCrossPreview: failed to load preview:', err)
@@ -163,6 +210,7 @@ export function useCrossPreview(): {
       claimEngine,
       dispatch,
       masterChain,
+      owner,
       pluginCatalog,
       releaseEngine,
       sound,
@@ -171,5 +219,10 @@ export function useCrossPreview(): {
     ]
   )
 
-  return { preview, stop }
+  const owns = useCallback(() => {
+    const token = tokenRef.current
+    return token !== null && stillOwnEngine(token)
+  }, [stillOwnEngine])
+
+  return { preview, stop, owns }
 }

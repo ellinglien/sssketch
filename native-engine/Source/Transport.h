@@ -33,7 +33,7 @@ namespace sssketch
         bool openDefaultDevice(bool openInput = true);
         void closeDevice();
 
-        void play(double fromPositionBars);
+        void play(double fromPositionBars, bool fadeIn = false);
         // Both arm a short fade-out that the audio callback applies to the
         // next block(s) of real content before actually going silent —
         // rather than cutting straight to zero at whatever amplitude the
@@ -389,6 +389,9 @@ namespace sssketch
          * of the next block's first sample, which renderLoopAware returns. */
         double advanceClock(int numSamples);
         unsigned long long publishTransportCommand(TransportCommandKind kind);
+        /** AUDIO THREAD. Applies the transparent play-start declick ramp after
+         * every other processor, immediately before the device output. */
+        void applyPlayStartFade(float* outL, float* outR, int numSamples);
 
 
         PlaybackEngine& engine;
@@ -417,6 +420,7 @@ namespace sssketch
         std::atomic<unsigned long long> desiredTransportCommand { 0 };
         std::atomic<unsigned long long> completedHaltCommandGeneration { 0 };
         std::atomic<double> requestedPlayPosition { 0.0 };
+        std::atomic<bool> requestedPlayFadeIn { false };
         std::atomic<bool> repositionRequested { false }; // set by setPosition(), consumed by the audio thread
         std::atomic<double> repositionTarget { 0.0 }; // always the latest requested position
         // All audio-thread-only (never touched off that thread) — no atomics needed.
@@ -425,6 +429,8 @@ namespace sssketch
         unsigned long long activeHaltCommandGeneration = 0;
         unsigned long long appliedTransportCommand = 0;
         double haltFadeElapsedSec = 0.0;
+        bool fadingIn = false;
+        double playFadeElapsedSec = 0.0;
         bool repositioning = false;
         // Audio-thread-only. True only in the should-never-happen case
         // where applyStagedProjectAtWrap found the retirement slot still

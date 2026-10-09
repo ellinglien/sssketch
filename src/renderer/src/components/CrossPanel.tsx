@@ -599,6 +599,7 @@ export function CrossPanel({
   setDraft,
   currentProjectKey,
   onSourceLeanCommit,
+  onPublishedToShelf,
   onBack
 }: {
   draft: CrossDraft
@@ -608,6 +609,7 @@ export function CrossPanel({
    * The draft still updates live while the knob moves; this fires once when
    * the gesture finishes so reopening Cross does not reset the choice. */
   onSourceLeanCommit: (sourceLean: number) => void
+  onPublishedToShelf: (groupId: string) => void
   onBack: () => void
 }): React.JSX.Element {
   const dispatch = useDispatch()
@@ -971,6 +973,7 @@ export function CrossPanel({
       if (!crossCommitIsCurrent(revision, projectKey, current, currentProjectKeyRef.current)) return
       if (destination === 'shelf') {
         dispatch({ type: 'ADD_TO_SHELF', rifff: assembly.rifff, vol: assembly.vol })
+        onPublishedToShelf(assembly.rifff.groupId)
       } else {
         const ends = Object.values(rifffs)
           .filter((rifff) => rifff.startBar !== undefined)
@@ -1050,8 +1053,8 @@ export function CrossPanel({
           color: var(--ra-mute-on-ink);
         }
         .ra-cross-row-button[data-control='solo'][data-active='true'] {
-          border-color: var(--ra-solo-on);
-          background: var(--ra-solo-on);
+          border-color: color-mix(in srgb, var(--ra-solo-on) 75%, var(--ra-bg-page));
+          background: color-mix(in srgb, var(--ra-solo-on) 75%, var(--ra-bg-page));
           color: var(--ra-solo-on-ink);
         }
         .ra-cross-row-button:disabled {

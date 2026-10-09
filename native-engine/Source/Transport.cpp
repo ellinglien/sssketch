@@ -12,6 +12,12 @@ namespace sssketch
         // inaudible as an intentional fade, just enough to remove the
         // discontinuity a hard position jump would otherwise produce.
         constexpr double kLoopSeamFadeSec = 0.003;
+        // Play can begin at an arbitrary non-zero waveform sample (Shape's
+        // cursor playback makes that especially common). Starting at full
+        // gain turns that discontinuity into a click. Keep this as short as
+        // the existing per-clip micro-fade: it removes the edge without
+        // rounding off a musically meaningful transient.
+        constexpr double kPlayFadeSec = 0.003;
 
         // Longer than the loop-seam declick above on purpose — these are
         // deliberate, audible transitions rather than invisible
@@ -320,9 +326,27 @@ namespace sssketch
         return generation;
     }
 
-    void Transport::play(double fromPositionBars)
+    void Transport::applyPlayStartFade(float* outL, float* outR, int numSamples)
+    {
+        if (!fadingIn || deviceSampleRate <= 0.0)
+            return;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const double elapsed = playFadeElapsedSec + (double) i / deviceSampleRate;
+            const float gain = (float) std::clamp(elapsed / kPlayFadeSec, 0.0, 1.0);
+            outL[i] *= gain;
+            outR[i] *= gain;
+        }
+        playFadeElapsedSec += (double) numSamples / deviceSampleRate;
+        if (playFadeElapsedSec >= kPlayFadeSec)
+            fadingIn = false;
+    }
+
+    void Transport::play(double fromPositionBars, bool fadeIn)
     {
         requestedPlayPosition.store(fromPositionBars);
+        requestedPlayFadeIn.store(fadeIn);
         publishTransportCommand(TransportCommandKind::Play);
         // `playing` and positionBars are actual audio-thread state, not
         // desired UI state. Publishing them here would let a Stop arriving
@@ -732,6 +756,8 @@ namespace sssketch
                 positionBars.store(requestedPlayPosition.load());
                 playing.store(true);
                 fadingOut = false;
+                fadingIn = requestedPlayFadeIn.load();
+                playFadeElapsedSec = 0.0;
                 activeHaltKind = HaltKind::None;
                 return;
             }
@@ -746,6 +772,7 @@ namespace sssketch
                 // Already silent: apply Stop's position semantics without
                 // entering a fade that would render idle project audio.
                 fadingOut = false;
+                fadingIn = false;
                 if (haltKind == HaltKind::Stop)
                     positionBars.store(0.0);
                 completedHaltCommandGeneration.store(generation, std::memory_order_release);
@@ -883,6 +910,7 @@ namespace sssketch
             // plugins (a plugin after the limiter would undo its ceiling), and before this
             // fade -- the same call RenderExport makes. See PlaybackEngine::processMaster.
             engine.processMaster(deviceSampleRate, numSamples, outL, outR);
+            applyPlayStartFade(outL, outR, numSamples);
             for (int i = 0; i < numSamples; ++i)
             {
                 // The fade-in starts repositionHoldSec late (0 unless the master stage is on;
@@ -936,6 +964,7 @@ namespace sssketch
         masterChain.process(numSamples, outL, outR);
         // As above: the master stage, then the halt fade.
         engine.processMaster(deviceSampleRate, numSamples, outL, outR);
+        applyPlayStartFade(outL, outR, numSamples);
 
         if (fadingOut)
         {
@@ -966,6 +995,7 @@ namespace sssketch
             if (!fadingOut)
                 return;
             fadingOut = false;
+            fadingIn = false;
             playing.store(false);
             // The limiter's 75-sample lookahead still holds the last unfaded audio (the fade
             // runs after it): clear it, so the next play starts as an export does.

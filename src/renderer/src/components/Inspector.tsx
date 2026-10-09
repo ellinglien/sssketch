@@ -56,7 +56,9 @@ export function Inspector({
   onOpenBeatPicker,
   onSeedDiscover,
   crossPair,
-  onCrossRiffs
+  onCrossRiffs,
+  shapeRifff,
+  onShapeRifff
 }: {
   onOpenBeatPicker: (groupId: string) => void
   /** App.tsx's own openRiffLibraryWithDiscoverSeed -- identical mechanism
@@ -72,6 +74,8 @@ export function Inspector({
   onSeedDiscover: (rifff: Rifff) => void
   crossPair: [Rifff, Rifff] | null
   onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
+  shapeRifff: Rifff | null
+  onShapeRifff: (rifff: Rifff) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -197,6 +201,15 @@ export function Inspector({
             >
               discover this rifff
             </button>
+            {shapeRifff && (
+              <button
+                onClick={() => onShapeRifff(shapeRifff)}
+                title="edit this riff in Shape"
+                style={inspectorActionButtonStyle}
+              >
+                shape riff
+              </button>
+            )}
             {crossPair && (
               <button
                 onClick={() => onCrossRiffs(crossPair)}

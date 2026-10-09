@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   sketchRiffClickAction,
   sketchRiffPlaybackHit,
+  sketchRemovalActions,
+  sketchRemovalTargets,
   toggleRiffBatchSelection
 } from './sketchRiffInteraction'
 
@@ -49,5 +51,28 @@ describe('toggleRiffBatchSelection', () => {
 
   it('toggles within an existing multi-selection', () => {
     expect([...toggleRiffBatchSelection(new Set(['a', 'b']), 'a', 'b')]).toEqual(['a'])
+  })
+})
+
+describe('Sketch riff removal', () => {
+  it('ignores shelf-only riffs in shared selection', () => {
+    expect([
+      ...sketchRemovalTargets(new Set(['placed-a', 'shelf-only']), null, ['placed-a', 'placed-b'])
+    ]).toEqual(['placed-a'])
+  })
+
+  it('falls back to the selected riff only when it is placed', () => {
+    expect([...sketchRemovalTargets(new Set(), 'placed-b', ['placed-a', 'placed-b'])]).toEqual([
+      'placed-b'
+    ])
+    expect([...sketchRemovalTargets(new Set(), 'shelf-only', ['placed-a', 'placed-b'])]).toEqual([])
+  })
+
+  it('builds all removals and resequencing as one ordered batch payload', () => {
+    expect(sketchRemovalActions(['a', 'b', 'c'], new Set(['a', 'c']))).toEqual([
+      { type: 'REMOVE_FROM_TIMELINE', groupId: 'a' },
+      { type: 'REMOVE_FROM_TIMELINE', groupId: 'c' },
+      { type: 'SEQUENCE_RIFFFS', groupIds: ['b'] }
+    ])
   })
 })

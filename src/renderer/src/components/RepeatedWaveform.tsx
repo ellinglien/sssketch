@@ -14,11 +14,13 @@ import { getWaveformMask, peekWaveformMask } from '../audio/waveformMaskCache'
 export const RepeatedWaveform = memo(function RepeatedWaveform({
   path,
   color,
-  tileWidthPct
+  tileWidthPct,
+  maskPositionPct = 0
 }: {
   path: string
   color: string
   tileWidthPct: number
+  maskPositionPct?: number
 }): React.JSX.Element | null {
   const [loaded, setLoaded] = useState<{ path: string; url: string } | null>(null)
   // Warm peaks resolve synchronously, so a remount or a new stem never
@@ -43,12 +45,22 @@ export const RepeatedWaveform = memo(function RepeatedWaveform({
   if (!url) return null
 
   const mask = `url("${url}")`
-  const size = `${tileWidthPct}% 100%`
+  // CSS percentage mask-position is relative to the difference between the
+  // container and image widths, so it cannot express a musical source
+  // offset. Move and widen the masked element itself instead: both lengths
+  // are percentages of the host, and the adjusted mask size preserves the
+  // requested tile width in host pixels.
+  const offset = Math.min(0, maskPositionPct)
+  const widthPct = 100 - offset + tileWidthPct
+  const size = `${(tileWidthPct / widthPct) * 100}% 100%`
   return (
     <div
       style={{
         position: 'absolute',
-        inset: 0,
+        top: 0,
+        bottom: 0,
+        left: `${offset}%`,
+        width: `${widthPct}%`,
         background: color,
         maskImage: mask,
         maskRepeat: 'repeat-x',

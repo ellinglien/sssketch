@@ -1232,6 +1232,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       if (
         owner === 'discover-preview' ||
         owner === 'cross-preview' ||
+        owner === 'shape-preview' ||
         owner === 'tidy-up-library-preview'
       ) {
         dispatch({ type: 'SET_POS', pos })

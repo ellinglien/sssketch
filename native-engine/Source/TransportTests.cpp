@@ -136,6 +136,50 @@ namespace sssketch
                 tone.deleteFile();
             }
 
+            beginTest("play() fades in from silence when starting in the middle of a waveform");
+            {
+                auto tone = writeConstantToneWav("sssketch_transport_play_fade.wav", 44100);
+
+                EngineProject project;
+                project.bpm = 60.0;
+                project.snapDiv = 16.0;
+                EngineRifff rifff;
+                rifff.startBar = 0.0;
+                rifff.barLength = 4;
+                EngineStem stem;
+                stem.resolvedPath = tone.getFullPathName();
+                stem.durationSec = 1.0;
+                stem.barLength = 1;
+                rifff.stems.push_back(stem);
+                project.rifffs.push_back(rifff);
+
+                StemBufferCache cache;
+                PlaybackEngine engine(cache);
+                engine.setProject(project);
+                PluginChain masterChain(kNumMasterChainSlots);
+                ChannelChainRegistry channelChains;
+                Transport transport(engine, masterChain, channelChains);
+                transport.setBpm(60.0);
+
+                constexpr int numSamples = 256;
+                std::vector<float> l((size_t) numSamples), r((size_t) numSamples);
+                float* channels[2] = { l.data(), r.data() };
+                transport.play(0.125, true); // 0.5 s in: deliberately away from the clip edge
+                transport.audioDeviceIOCallbackWithContext(
+                    nullptr, 0, channels, 2, numSamples, {});
+
+                expectWithinAbsoluteError(l.front(), 0.0f, 1.0e-7f);
+                expectWithinAbsoluteError(r.front(), 0.0f, 1.0e-7f);
+                expect(std::abs(l[200]) > 0.2f, "the play-start ramp never reached full level");
+                float largestStep = 0.0f;
+                for (int i = 1; i < numSamples; ++i)
+                    largestStep = std::max(largestStep, std::abs(l[(size_t) i] - l[(size_t) i - 1]));
+                expect(largestStep < 0.02f,
+                       "play-start still contains a click-sized step: " + juce::String(largestStep));
+
+                tone.deleteFile();
+            }
+
             beginTest("a fresh play() cancels an in-flight stop fade instead of getting stuck fading out forever");
             {
                 auto tone = writeConstantToneWav("sssketch_transport_tone2.wav", 44100);

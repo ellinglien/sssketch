@@ -9,6 +9,8 @@ import type { Rifff } from '@shared/types'
 import {
   sketchRiffClickAction,
   sketchRiffPlaybackHit,
+  sketchRemovalActions,
+  sketchRemovalTargets,
   toggleRiffBatchSelection
 } from './sketchRiffInteraction'
 
@@ -116,13 +118,17 @@ export function SketchStrip({
     return Math.max(0, Math.min(sequence.length, row * itemsPerRow + col))
   }
 
-  // Removes one or more tiles and re-packs whatever remains, in one
-  // SEQUENCE_RIFFFS dispatch regardless of how many were removed.
+  // Removes one or more tiles and re-packs whatever remains as ONE history
+  // action. The previous loop pushed one undo checkpoint per riff plus a
+  // final sequencing checkpoint, so an accidental multi-delete looked
+  // catastrophic and needed several Command-Z presses to restore.
   const removeTiles = useCallback(
     (groupIds: ReadonlySet<string>) => {
-      const remaining = sequence.map((r) => r.groupId).filter((id) => !groupIds.has(id))
-      for (const groupId of groupIds) dispatch({ type: 'REMOVE_FROM_TIMELINE', groupId })
-      dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: remaining })
+      const actions = sketchRemovalActions(
+        sequence.map((rifff) => rifff.groupId),
+        groupIds
+      )
+      dispatch({ type: 'BATCH', actions })
     },
     [sequence, dispatch]
   )
@@ -132,11 +138,21 @@ export function SketchStrip({
       if (e.key !== 'Delete' && e.key !== 'Backspace') return
       const target = e.target as HTMLElement | null
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) return
-      const targets =
-        selectedRiffIds.size > 0
-          ? selectedRiffIds
-          : new Set(state.sel && sequence.some((r) => r.groupId === state.sel) ? [state.sel] : [])
+      const targets = sketchRemovalTargets(
+        selectedRiffIds,
+        state.sel,
+        sequence.map((rifff) => rifff.groupId)
+      )
       if (targets.size === 0) return
+      if (
+        targets.size > 1 &&
+        !window.confirm(
+          `Remove ${targets.size} selected riffs from Sketch? They will remain available in the shelf.`
+        )
+      ) {
+        return
+      }
+      e.preventDefault()
       removeTiles(targets)
       updateSelection(new Set(), null)
     }

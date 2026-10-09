@@ -5,6 +5,8 @@ export interface WavChunkInfo {
   sampleRate: number
   numChannels: number
   bitsPerSample: number
+  /** 1 = integer PCM, 3 = IEEE float, 0 when no fmt chunk was found. */
+  audioFormat: number
 }
 
 /**
@@ -22,6 +24,7 @@ export function findWavChunks(bytes: Uint8Array): WavChunkInfo {
   let sampleRate = 0
   let numChannels = 0
   let bitsPerSample = 0
+  let audioFormat = 0
   let dataOffset = -1
   let dataSize = 0
 
@@ -53,6 +56,7 @@ export function findWavChunks(bytes: Uint8Array): WavChunkInfo {
       }
       if (chunkId === 'fmt ') {
         if (chunkSize < 16) throw new Error('WAV fmt chunk is smaller than expected')
+        audioFormat = view.getUint16(bodyOffset, true)
         numChannels = view.getUint16(bodyOffset + 2, true)
         sampleRate = view.getUint32(bodyOffset + 4, true)
         bitsPerSample = view.getUint16(bodyOffset + 14, true)
@@ -61,5 +65,5 @@ export function findWavChunks(bytes: Uint8Array): WavChunkInfo {
     offset = bodyOffset + chunkSize + (chunkSize % 2)
   }
 
-  return { dataOffset, dataSize, sampleRate, numChannels, bitsPerSample }
+  return { dataOffset, dataSize, sampleRate, numChannels, bitsPerSample, audioFormat }
 }

@@ -30,7 +30,8 @@ export function Shelf({
   onSeedDiscover,
   selectedRiffIds,
   selectionAnchorId,
-  onSelectionChange
+  onSelectionChange,
+  onBeforePreview
 }: {
   onImported: (groupId: string) => void
   /** Opens the riff library on the half the pressed button names -- the two
@@ -58,6 +59,8 @@ export function Shelf({
   selectedRiffIds: ReadonlySet<string>
   selectionAnchorId: string | null
   onSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
+  /** Synchronous ownership handoff for fullscreen native-engine previews. */
+  onBeforePreview?: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -176,6 +179,7 @@ export function Shelf({
     }
     updateSelection(new Set([rifff.groupId]), rifff.groupId)
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
+    onBeforePreview?.()
     stopTilePreview()
     if (previewingGroupId === rifff.groupId) {
       return

@@ -83,7 +83,10 @@ namespace sssketch
         // Uses applyLoopSewingBlend's own default window (matching
         // OUROVEON's fixed 128-sample tuning exactly — see its doc comment
         // for why a bigger, per-stem-adaptive window was tried and reverted).
-        applyLoopSewingBlend(entry.buffer, loopEndSample);
+        const bool alreadySewnByShape =
+            path.endsWithIgnoreCase(".shape.wav") || path.endsWithIgnoreCase(".shape-preview.wav");
+        if (!alreadySewnByShape)
+            applyLoopSewingBlend(entry.buffer, loopEndSample);
 
         cache.emplace(key, std::move(entry));
         return true;
