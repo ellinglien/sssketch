@@ -3041,6 +3041,37 @@ function Frame(): React.JSX.Element {
                 />
               )}
             </div>
+            {state.mode === 'normal' && (
+              <div
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  zIndex: 4,
+                  top: 0,
+                  right: 0,
+                  bottom: 12,
+                  width: 72,
+                  boxSizing: 'border-box',
+                  borderLeft: '1px solid var(--ra-border)',
+                  background: 'color-mix(in srgb, var(--ra-bg-bar) 97%, transparent)',
+                  boxShadow: '-5px 0 14px color-mix(in srgb, #000 28%, transparent)',
+                  pointerEvents: 'none'
+                }}
+              >
+                <div
+                  style={{
+                    height: 24,
+                    display: 'grid',
+                    placeItems: 'center',
+                    borderBottom: '1px solid var(--ra-border)',
+                    color: 'var(--ra-text-4)',
+                    fontSize: 8
+                  }}
+                >
+                  mix
+                </div>
+              </div>
+            )}
           </div>
           {/* Drawer handle — same subtle-strip visual language as the stem
             resize handles (StemWaveformRow/CollapsedRifffRow), just click

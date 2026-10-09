@@ -87,8 +87,8 @@ const CHANNEL_FX_BUTTON_ENABLED = false
  * at once via SET_CHANNEL_MUTE/SOLO_CHANNEL, plus the "fx" button opening
  * this channel's own 2-slot plugin chain panel — see
  * docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md).
- * Pinned to the row's own right edge with position:sticky, on an opaque
- * floating rail surface beside the Inspector, so it stays on
+ * Pinned to the row's own right edge with position:sticky, over the fixed
+ * mixer rail beside the Inspector, so it stays on
  * screen while the timeline scrolls horizontally, rather than the clip
  * title (which lives at the LEFT of each clip, per RifffBlockRow) ever
  * being covered. The sticky element itself has height:0 so it never adds
@@ -544,16 +544,12 @@ function ChannelRowImpl({
             position: 'absolute',
             right: 4,
             top: 4,
-            width: 54,
+            width: 20,
             boxSizing: 'border-box',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'flex-end',
-            gap: 2,
-            padding: 4,
-            background: 'color-mix(in srgb, var(--ra-bg-bar) 94%, transparent)',
-            border: '1px solid var(--ra-border)',
-            boxShadow: '-4px 4px 12px color-mix(in srgb, #000 32%, transparent)'
+            gap: 3
           }}
         >
           <button

@@ -14,7 +14,7 @@ const DIAL_SIZE = 18
  * stack is pinned at right: 4 and each button is ~16px wide, so this parks
  * the dial in its own column immediately to the LEFT of those letters
  * rather than underneath them. */
-const DIAL_RIGHT_PX = 26
+const DIAL_RIGHT_PX = 34
 
 /** Whose gain this dial moves. An EXPANDED rifff shows one row per stem, so
  * each dial owns exactly its own stem; a COLLAPSED one draws its stems as a
@@ -163,10 +163,7 @@ export function RowGainDial({
           position: 'absolute',
           right: DIAL_RIGHT_PX,
           top: 2,
-          padding: 3,
-          background: 'color-mix(in srgb, var(--ra-bg-bar) 94%, transparent)',
-          border: '1px solid var(--ra-border)',
-          boxShadow: '-3px 3px 10px color-mix(in srgb, #000 28%, transparent)'
+          padding: 2
         }}
       >
         <Dial
