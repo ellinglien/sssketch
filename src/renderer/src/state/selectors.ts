@@ -10,6 +10,7 @@ import type { StemAutomation } from '@shared/toolkit'
 import { riserEndBar, type RiserClip } from '@shared/riser'
 import { clipLengthBars } from '@shared/automationEdit'
 import type { SoundSettings } from '@shared/radioSound'
+import { rotationSecForBars } from '@shared/reonedRotation'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 import { appSoundDefaultsNow } from './appSoundDefaults'
 import type { HistoryAction } from './history'
@@ -558,9 +559,7 @@ export function offsetStepsForBeatIndex(beatIndex: number, snapDiv: number): num
  * loop length rather than the rifff's.
  */
 export function rotationSecondsForStem(offsetSteps: number, snapDiv: number, stem: Stem): number {
-  const kBars = -offsetSteps / snapDiv
-  const wrapped = ((kBars % stem.barLength) + stem.barLength) % stem.barLength
-  return wrapped * (stem.durationSec / stem.barLength)
+  return rotationSecForBars(-offsetSteps / snapDiv, stem)
 }
 
 /**
