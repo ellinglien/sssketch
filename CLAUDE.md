@@ -169,8 +169,8 @@ it, and unmuting the row clears it (`rowMuteToggleActions()` in `selectors.ts`).
 
 A re-one (downbeat correction) is baked into new audio files, never into the source:
 `src/main/bakeOffset.ts` renders a whole riff's stems as one all-or-nothing batch into
-`<library root>/.bakes/<uuid>.baked.wav` (`bakeAssetsDir()` in `projectLibrary.ts`). The files are
-immutable; a later re-one makes new ones. Results don't come back in job order (WAVs render before
+`<library root>/.bakes/<recipe>.baked.wav` (`bakeAssetsDir()` in `projectLibrary.ts`). A published
+copy is never rewritten; a different rotation is a different file. Results don't come back in job order (WAVs render before
 LORE stems), so always match them to stems by `path`. Each stem records where its audio came from
 (`phaseSourcePath`) and how far it has been rotated (`phaseBars`). Each riff can carry a
 `phaseLinkId`: a re-one moves exactly the riffs sharing it (`bakeTargetGroupIds()` in
@@ -181,9 +181,41 @@ old path-based rule.
 
 Auditioning never adopts a bake: Cross (`components/crossFromSketch.ts`) and a Discover seed
 render a riff's live offset to `.bakes` and use those files without dispatching `APPLY_BAKE`, so
-the project isn't edited or marked unsaved. Nothing deletes from `.bakes` yet; the design for a
-cleanup is an open item in `TO-DO.md`. Don't add deletion without its reference-counted, dry-run
-design: saved projects anywhere on disk can name these files.
+the project isn't edited or marked unsaved.
+
+`.bakes` is a rebuildable cache. A copy is named by its recipe (`src/main/reonedRecipe.ts`: the
+original's path, size and mtime, the rotation in samples, `BAKER_VERSION`), and a re-one bakes
+from the stem's original (`phaseSourcePath`) by the total rotation (`phaseBars`), falling back to
+the current file only while the original is away. So the same riff at the same phase, whether
+re-oned, crossed or seeded into Discover, reuses one file. A saved lineage counts only while the
+stem's file is a `.baked.wav` copy (`phaseLineage()` in `src/shared/reonedRotation.ts`); a stretched
+one-shot drops it. A riff's first re-one gives it a `phaseLinkId`, so two riffs that merely reuse
+one copy never move together. A copy a project names but that is missing is rebuilt from that
+lineage when the project opens (`state/reonedRepairOnOpen.ts`) and before any export
+(`ensureReonedCopiesForState`, `reonedRebuild.ts`, placed riffs only). It lands on the same name,
+so the project isn't marked unsaved. One that can't be rebuilt shows "re-oned copy missing ·
+rebuilds when its original is back" (`ReonedCopyMissingNotice.tsx`, the Inspector) and is retried
+every 15 s while its original is unreachable. Unused copies are cleaned by the launch notice
+(`ReonedCopiesNotice.tsx`, from 200 MB, "not now" for 7 days) and the gear menu's "clean up
+re-oned stem copies…". Their IPC (rebuild, library check, survey, clean, not now) is in
+`src/main/reonedCopiesIpc.ts`, registered from `index.ts`.
+
+"Used" means named by:
+- any library project or backup;
+- the autosave or its aside snapshot;
+- a remembered outside project (`reonedCopiesStore.ts`, 50 kept);
+- the open project, its undo history, Cross or Discover (`state/reonedInUse.ts`);
+- a copy handed out this session (read inside the `.bakes` lock at delete time).
+
+A copy is deleted only if it is unused and more than a day old (`reonedUsage.ts`). Rules:
+- Bump `BAKER_VERSION` whenever the baker's bytes change (rotation, seam blend, `BakeStem.cpp`).
+  `bakeOffset.test.ts`'s golden hashes fail with "baker output changed: bump BAKER_VERSION".
+- Anything new that can hold a stem path, such as a new session type or a new saved file, must
+  join the used set.
+- A failed bake never deletes a copy it didn't create.
+- Never delete outside `.bakes`, and leave the legacy `.sssketch-bakes/` folders alone.
+- `bakeOffset` and the scans are async and yield between stems and slices: the library is often
+  on a USB drive.
 
 ### Cross
 

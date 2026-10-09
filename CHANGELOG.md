@@ -7,6 +7,7 @@
 - Added **Cross Riffs**, opened from exactly two selected riffs in Sketch, Arrange, Map, or the shelf. The three-column workspace can audition either source or the new center riff, move stems into the center by dragging or using inward buttons, generate matching stems, edit mute/solo/gain, undo and redo, change the preview tempo (the project's own tempo is left alone), and add the result to the shelf or timeline.
 - Added a draggable metronome-volume gesture while preserving click-to-toggle.
 - Added clearer pre-commit re-one markers and recovery utilities for repairing older projects whose stems lost their shared phase lineage.
+- Re-oned stem copies are now reused instead of duplicated, rebuilt automatically when one is missing, and can be cleaned up: a notice at launch from 200 MB of unused copies, or any time from the gear menu's "clean up re-oned stem copies…". Your rifffs, stems and projects are never touched.
 - Added focused tests for Cross assembly and playback, phase propagation, caching, import resolution, selection behavior, mixer state, save/quit handling, export naming, and native transport ordering.
 
 ### Changed
@@ -20,6 +21,7 @@
 - Riff selection styling is centered on the circular glyph and uses a restrained, low-contrast pixel texture while keeping selected and playing states visually distinct.
 - Shelf previews take ownership of playback instead of layering over the running arrangement, and their highlighting is easier to see.
 - Import browsing preserves the selected jam while moving back and forth, and clicking an already-playing import preview stops it.
+- A re-one now bakes from the stem's original audio.
 
 ### Fixed
 
