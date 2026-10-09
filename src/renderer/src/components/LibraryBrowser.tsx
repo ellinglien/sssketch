@@ -29,7 +29,7 @@ import { classifyStems } from '../audio/classifyStems'
 import {
   buildImportedRifff,
   importedStemVolumes,
-  rotateJoiningStems
+  mergeJoiningStems
 } from '../audio/importResolvedRiff'
 import { evictStemAnalysis } from '../audio/evictStemAnalysis'
 import { showReoneNotice } from '../state/reoneNotice'
@@ -1597,22 +1597,21 @@ export function LibraryBrowser({
     if (newStemSlots.length === 0 && existing) return { groupId, rifff }
     if (existing) {
       const joining = rifff.stems.filter((s) => newStemSlots.includes(s.slot))
-      const rotated = await rotateJoiningStems(existing, joining, (jobs) =>
-        window.rifffApi.bakeOffset(jobs)
+      // The bake is awaited, so the merge reads the riff again after it: one
+      // deleted meanwhile isn't brought back, and one re-oned meanwhile has
+      // its new stems baked again to the new rotation.
+      const merge = await mergeJoiningStems(
+        () => getStateSnapshot().rifffs[groupId],
+        joining,
+        (jobs) => window.rifffApi.bakeOffset(jobs)
       )
-      if (!rotated) {
-        showReoneNotice(lateStemsNotAddedText(existing.name, joining.length))
-        return { groupId, rifff: existing }
+      if (merge.kind === 'gone') return null
+      if (merge.kind === 'failed') {
+        showReoneNotice(lateStemsNotAddedText(merge.rifff.name, joining.length))
+        return { groupId, rifff: merge.rifff }
       }
-      evictStemAnalysis(rotated.filter((s) => !joining.includes(s)).map((s) => s.path))
-      // Merged onto the riff as it is now: the bake was awaited.
-      const latest = getStateSnapshot().rifffs[groupId] ?? existing
-      const present = new Set(latest.stems.map((s) => s.slot))
-      rifff = {
-        ...latest,
-        key: rifff.key,
-        stems: [...latest.stems, ...rotated.filter((s) => !present.has(s.slot))]
-      }
+      evictStemAnalysis(merge.rotated.filter((s) => !joining.includes(s)).map((s) => s.path))
+      rifff = { ...merge.rifff, key: rifff.key }
     }
 
     dispatch({

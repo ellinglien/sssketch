@@ -173,3 +173,44 @@ export async function rotateJoiningStems(
     }
   })
 }
+
+export type JoiningMerge =
+  | { kind: 'merged'; rifff: Rifff; rotated: Stem[] }
+  | { kind: 'gone' }
+  | { kind: 'failed'; rifff: Rifff }
+
+/** Joins late stems onto a riff that lives in the store (`readLatest`, read again after every
+ * await): bakes them to the riff's rotation (rotateJoiningStems), then merges them onto the
+ * riff as it is by then. The bake takes seconds, so the riff can move under it:
+ * - deleted: `gone`, and nothing is merged, so the riff isn't brought back;
+ * - re-oned (its rotation changed): the stems are baked again to the new one, up to `attempts`
+ *   bakes in all, then `failed`, as when a bake fails. A `failed` riff is the latest one, for the
+ *   notice to name. */
+export async function mergeJoiningStems(
+  readLatest: () => Rifff | undefined,
+  joining: readonly Stem[],
+  bake: JoiningBake,
+  attempts = 2
+): Promise<JoiningMerge> {
+  let before = readLatest()
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    if (!before) return { kind: 'gone' }
+    const rotated = await rotateJoiningStems(before, joining, bake)
+    const latest = readLatest()
+    if (!latest) return { kind: 'gone' }
+    if (!rotated) return { kind: 'failed', rifff: latest }
+    if (sharedPhaseBars(latest.stems) === sharedPhaseBars(before.stems)) {
+      const present = new Set(latest.stems.map((s) => s.slot))
+      return {
+        kind: 'merged',
+        rifff: {
+          ...latest,
+          stems: [...latest.stems, ...rotated.filter((s) => !present.has(s.slot))]
+        },
+        rotated
+      }
+    }
+    before = latest
+  }
+  return before ? { kind: 'failed', rifff: before } : { kind: 'gone' }
+}

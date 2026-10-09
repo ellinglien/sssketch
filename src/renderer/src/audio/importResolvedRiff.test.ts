@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { buildImportedRifff, importedStemVolumes, rotateJoiningStems } from './importResolvedRiff'
+import {
+  buildImportedRifff,
+  importedStemVolumes,
+  mergeJoiningStems,
+  rotateJoiningStems
+} from './importResolvedRiff'
 import type { ReoneBakeJob } from '@shared/reonedRotation'
 import type { Rifff, Stem } from '@shared/types'
 import { friendlyRiffName } from '@shared/friendlyRiffName'
@@ -237,5 +242,114 @@ describe('rotateJoiningStems', () => {
       throw new Error('ipc down')
     }
     expect(await rotateJoiningStems(reoned, [harp], failing)).toBeNull()
+  })
+})
+
+describe('mergeJoiningStems', () => {
+  const stem = (over: Partial<Stem>): Stem => ({
+    slot: 1,
+    author: 'a',
+    name: 'harp',
+    type: 'notes',
+    path: '/lib/stems/h',
+    durationSec: 8,
+    barLength: 4,
+    ...over
+  })
+  const copyAt = (slot: number, bars: number): Stem =>
+    stem({
+      slot,
+      path: `/lib/.bakes/${slot}-${bars}.baked.wav`,
+      phaseSourcePath: `/lib/stems/${slot}`,
+      phaseBars: bars
+    })
+  const rifff = (stems: Stem[], name = 'riff'): Rifff => ({
+    groupId: 'g',
+    phaseLinkId: 'g',
+    name,
+    bpm: 120,
+    barLength: 4,
+    folderPath: 'riff library',
+    stems
+  })
+  const harp = stem({ slot: 3, path: '/lib/stems/h' })
+  type Baked = { path: string; bakedPath: string; durationSec: number }
+  const bakeTo =
+    (onBake?: (jobs: ReoneBakeJob[]) => void) =>
+    async (jobs: ReoneBakeJob[]): Promise<Baked[]> => {
+      onBake?.(jobs)
+      return jobs.map((job) => ({
+        path: job.path,
+        bakedPath: `/lib/.bakes/h@${job.rotationSec}.baked.wav`,
+        durationSec: 8
+      }))
+    }
+
+  it('merges onto the riff as it is after the bake, keeping what changed meanwhile', async () => {
+    let state: Rifff | undefined = rifff([copyAt(1, 1)])
+    const merged = await mergeJoiningStems(
+      () => state,
+      [harp],
+      bakeTo(() => {
+        state = rifff([copyAt(1, 1)], 'renamed meanwhile')
+      })
+    )
+    expect(merged.kind).toBe('merged')
+    if (merged.kind !== 'merged') return
+    expect(merged.rifff.name).toBe('renamed meanwhile')
+    expect(merged.rifff.stems.map((s) => s.path)).toEqual([
+      '/lib/.bakes/1-1.baked.wav',
+      '/lib/.bakes/h@2.baked.wav'
+    ])
+    expect(merged.rotated[0]).toMatchObject({ slot: 3, phaseBars: 1 })
+  })
+
+  it("doesn't bring back a riff deleted while its stems baked", async () => {
+    let state: Rifff | undefined = rifff([copyAt(1, 1)])
+    const merged = await mergeJoiningStems(
+      () => state,
+      [harp],
+      bakeTo(() => {
+        state = undefined
+      })
+    )
+    expect(merged).toEqual({ kind: 'gone' })
+  })
+
+  it('a riff re-oned while its stems baked: bakes them again, to its new rotation', async () => {
+    let state: Rifff | undefined = rifff([copyAt(1, 1)])
+    const rotations: number[] = []
+    const merged = await mergeJoiningStems(
+      () => state,
+      [harp],
+      bakeTo((jobs) => {
+        rotations.push(jobs[0].rotationSec)
+        if (rotations.length === 1) state = rifff([copyAt(1, 0.5)])
+      })
+    )
+    expect(rotations).toEqual([2, 1])
+    expect(merged.kind).toBe('merged')
+    if (merged.kind !== 'merged') return
+    expect(merged.rifff.stems[1]).toMatchObject({ phaseBars: 0.5 })
+  })
+
+  it('gives up, naming the riff, when its rotation keeps moving or the bake fails', async () => {
+    let state: Rifff | undefined = rifff([copyAt(1, 1)])
+    let bars = 1
+    const moving = await mergeJoiningStems(
+      () => state,
+      [harp],
+      bakeTo(() => {
+        bars += 0.25
+        state = rifff([copyAt(1, bars)])
+      })
+    )
+    expect(moving).toMatchObject({ kind: 'failed', rifff: { stems: [{ phaseBars: 1.5 }] } })
+    const failing = await mergeJoiningStems(
+      () => rifff([copyAt(1, 1)]),
+      [harp],
+      async () => []
+    )
+    expect(failing.kind).toBe('failed')
   })
 })
