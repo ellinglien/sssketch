@@ -1,11 +1,17 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterAll, describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
 // bakeOffset's native path resolves the engine binary through app.getAppPath() (see
 // bakeOffset.test.ts); these tests only bake WAVs, so it is never reached.
-vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => tmpdir() } }))
+// getPath gets a folder of this file's own, so a default library root is never the shared tmpdir.
+const appPaths = vi.hoisted(() => ({ dir: '' }))
+vi.mock('electron', () => ({
+  app: { getAppPath: () => process.cwd(), getPath: () => appPaths.dir }
+}))
+appPaths.dir = mkdtempSync(join(tmpdir(), 'sssketch-rebuild-app-'))
+afterAll(() => rmSync(appPaths.dir, { recursive: true, force: true }))
 
 import { bakeOffset } from './bakeOffset'
 import {
@@ -316,10 +322,28 @@ describe('ensureReonedCopiesForState', () => {
     try {
       const copy = join(dir, 'x.baked.wav')
       writeFileSync(copy, 'anything')
-      const state = { rifffs: { g: riffOn(copy, '/nowhere.wav', 1) } } as unknown as AppState
+      const state = {
+        rifffs: { g: { ...riffOn(copy, '/nowhere.wav', 1), startBar: 0 } }
+      } as unknown as AppState
       expect(await ensureReonedCopiesForState(state)).toBe(state)
       const none = { rifffs: {} } as unknown as AppState
       expect(await ensureReonedCopiesForState(none)).toBe(none)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('rebuilds only what the export renders: a shelf-only riff is left alone', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-rebuild-'))
+    try {
+      const root = join(dir, 'lib')
+      mkdirSync(root)
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const missing = join(root, '.bakes', 'ffffffffffffffffffffffffffffffff.baked.wav')
+      const state = { rifffs: { g: riffOn(missing, source, 1) } } as unknown as AppState
+      expect(await ensureReonedCopiesForState(state)).toBe(state)
+      expect(existsSync(join(root, '.bakes'))).toBe(false)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

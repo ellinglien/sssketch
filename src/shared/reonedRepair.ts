@@ -42,9 +42,14 @@ const isCopyPath = (path: string): boolean => path.toLowerCase().endsWith('.bake
  * rebuilt: a lineage to bake from. Main checks which of them are actually missing. A copy two
  * stems of one riff name is planned once, from the first: a recipe name implies one lineage, and
  * two renders for one path would leave one orphaned. */
-export function planReonedRepair(rifffs: Readonly<Record<string, Rifff>>): ReonedRepairBatch[] {
+export function planReonedRepair(
+  rifffs: Readonly<Record<string, Rifff>>,
+  options: { placedOnly?: boolean } = {}
+): ReonedRepairBatch[] {
   const batches: ReonedRepairBatch[] = []
   for (const rifff of Object.values(rifffs)) {
+    // An export renders only what is on the timeline: a shelf riff's copies can wait for an open.
+    if (options.placedOnly && rifff.startBar === undefined) continue
     const stems: ReonedRepairStem[] = []
     const planned = new Set<string>()
     for (const s of rifff.stems) {

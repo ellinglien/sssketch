@@ -135,12 +135,12 @@ export async function rebuildReonedCopies(
   return all
 }
 
-/** For the export choke points (decision D6): the state with every missing copy rebuilt,
- * repointed only where a rebuild landed under a new name. A copy still missing is left as is:
- * that stem renders silent, as a missing file always has. Returns `state` itself when nothing
- * moved. */
+/** For the export choke points (decision D6): the state with every missing copy a placed riff
+ * names rebuilt (an export renders nothing from the shelf), repointed only where a rebuild
+ * landed under a new name. A copy still missing is left as is: that stem renders silent, as a
+ * missing file always has. Returns `state` itself when nothing moved. */
 export async function ensureReonedCopiesForState(state: AppState): Promise<AppState> {
-  const batches = planReonedRepair(state.rifffs)
+  const batches = planReonedRepair(state.rifffs, { placedOnly: true })
   if (batches.length === 0) return state
   const outcomes = await rebuildReonedCopies(batches)
   const { rifffs, missing } = applyReonedRepair(state.rifffs, outcomes)

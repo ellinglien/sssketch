@@ -98,6 +98,15 @@ describe('planReonedRepair', () => {
   })
 })
 
+describe('planReonedRepair for an export', () => {
+  it('placedOnly: only riffs on the timeline, since a shelf riff is never rendered', () => {
+    const r = rifffs()
+    r.b.startBar = 0
+    expect(planReonedRepair(r, { placedOnly: true }).map((b) => b.groupId)).toEqual(['b'])
+    expect(planReonedRepair(r).map((b) => b.groupId)).toEqual(['a', 'b'])
+  })
+})
+
 describe('planReonedRepair, one copy named twice in a riff', () => {
   it('plans it once: the first stem naming it wins', () => {
     const r = rifffs()
