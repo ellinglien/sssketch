@@ -1,4 +1,4 @@
-import { app, shell, BrowserWindow, ipcMain, dialog } from 'electron'
+import { app, shell, BrowserWindow, ipcMain, dialog, type IpcMainEvent } from 'electron'
 import { join } from 'path'
 import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import { autoUpdater } from 'electron-updater'
@@ -46,6 +46,7 @@ import {
   type RecoveryFileEvent,
   type RecoveryFileState
 } from './recoveryFileTracker'
+import { awaitSaveBeforeQuit, type SaveBeforeQuitResult } from './saveBeforeQuit'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { exportMixToWav } from './exportMix'
 import type { ToolkitExportMode } from '@shared/toolkit'
@@ -459,10 +460,13 @@ function noteRecoveryFile(event: RecoveryFileEvent): void {
 // reported (checkPluginEdits), so the quit it re-issues doesn't ask again;
 // cleared when the quit prompt is cancelled.
 let pluginEditsCheckedForQuit = false
-// Set when the quit prompt's "Save" re-issues the quit: that save clears the
-// recovery file itself if it lands, and if it failed the file is all there
-// is, so the clean-quit clear above must not run.
+// Set only after the quit prompt's save actually succeeds and re-issues the
+// quit. A failed or timed-out save leaves the app open and dirty.
 let quittingAfterSavePrompt = false
+// Prevents repeated Cmd+Q events from opening overlapping save prompts while
+// the renderer is already handling the first prompt's Save choice.
+let saveBeforeQuitPending = false
+let saveBeforeQuitRequestCounter = 0
 
 // The phone remote is OFF BY DEFAULT and per-session -- never auto-started,
 // stopped on quit, and no accounts. The one thing that IS persisted, since
@@ -2813,20 +2817,31 @@ app.on('will-quit', () => {
 // Asks the renderer to save now (the quit dialog's own "Save" choice,
 // below), awaiting its reply over a dedicated round-trip pair --
 // 'request-save-before-quit' pushed to the renderer, 'save-before-quit-
-// complete' sent back once handleSave() resolves (see preload/index.ts's
+// complete' sent back with handleSave()'s boolean result (see preload/index.ts's
 // onRequestSaveBeforeQuit/notifySaveBeforeQuitComplete and App.tsx's Frame,
-// which wires the two together). Raced against a fixed timeout, the same
-// Promise.race shape as the engine shutdownTimeout below, so a hung or
-// already-torn-down renderer can't make the app un-quittable.
-function requestSaveBeforeQuit(): Promise<void> {
-  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve()
+// which wires the two together). A timeout is failure, not permission to
+// discard dirty work: the app stays open and the user can retry or explicitly
+// choose Don't Save.
+function requestSaveBeforeQuit(): Promise<SaveBeforeQuitResult> {
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve('failed')
   const win = mainWindow
-  const replyPromise = new Promise<void>((resolve) => {
-    ipcMain.once('save-before-quit-complete', () => resolve())
-  })
-  const timeoutPromise = new Promise<void>((resolve) => setTimeout(resolve, 5000))
-  win.webContents.send('request-save-before-quit')
-  return Promise.race([replyPromise, timeoutPromise])
+  const requestId = `quit-save-${++saveBeforeQuitRequestCounter}`
+  return awaitSaveBeforeQuit(
+    requestId,
+    (id) => win.webContents.send('request-save-before-quit', id),
+    (complete) => {
+      const listener = (
+        event: IpcMainEvent,
+        completedRequestId: unknown,
+        success: unknown
+      ): void => {
+        if (event.sender !== win.webContents || typeof completedRequestId !== 'string') return
+        complete(completedRequestId, success === true)
+      }
+      ipcMain.on('save-before-quit-complete', listener)
+      return () => ipcMain.removeListener('save-before-quit-complete', listener)
+    }
+  )
 }
 
 app.on('before-quit', (event) => {
@@ -2836,6 +2851,10 @@ app.on('before-quit', (event) => {
   // each of those is a deliberate re-issue of quit once there's nothing
   // left to interrupt it for, not a bug.
   if (isQuitting) return
+  if (saveBeforeQuitPending) {
+    event.preventDefault()
+    return
+  }
 
   // First, a plugin edit the engine hasn't reported (an IR loaded in an open
   // editor, say) makes the project unsaved before it is decided whether to
@@ -2872,10 +2891,25 @@ app.on('before-quit', (event) => {
       return
     }
     if (choice === 0) {
-      // Save -- ask the renderer to save and wait for its reply (bounded by
-      // a timeout, see requestSaveBeforeQuit), then re-issue quit now that
-      // there's nothing left to lose.
-      void requestSaveBeforeQuit().finally(() => {
+      // Save -- only re-issue quit after an explicit success reply. Failure
+      // or timeout leaves the dirty project open rather than converting an
+      // inability to save into an implicit Don't Save.
+      saveBeforeQuitPending = true
+      void requestSaveBeforeQuit().then((result) => {
+        saveBeforeQuitPending = false
+        if (result !== 'saved') {
+          pluginEditsCheckedForQuit = false
+          if (result === 'timeout') {
+            dialog.showMessageBoxSync({
+              type: 'error',
+              buttons: ['OK'],
+              message: 'The project is still saving.',
+              detail:
+                'sssketch stayed open so no unsaved work was discarded. Please try Save again.'
+            })
+          }
+          return
+        }
         rendererHasUnsavedChanges = false
         quittingAfterSavePrompt = true
         app.quit()
