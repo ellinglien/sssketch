@@ -1367,9 +1367,13 @@ export function BeatPicker({
                       width: oneMarker.pending ? 3 : 2,
                       transform: 'translateX(-1px)',
                       background: 'var(--ra-stretch-on)',
-                      boxShadow: oneMarker.pending
-                        ? '0 0 0 1px var(--ra-bg), 0 0 8px color-mix(in srgb, var(--ra-stretch-on) 75%, transparent)'
-                        : '0 0 0 1px var(--ra-bg)'
+                      // A dark 1px ring separates the line from the lanes. A
+                      // pending cut adds a dashed edge outside that ring: it
+                      // reads as "not yet committed" without a glow.
+                      boxShadow: '0 0 0 1px var(--ra-bg-row)',
+                      ...(oneMarker.pending
+                        ? { outline: '1px dashed var(--ra-stretch-on)', outlineOffset: 1 }
+                        : {})
                     }}
                   />
                   <div
@@ -1399,8 +1403,7 @@ export function BeatPicker({
                       textTransform: 'uppercase',
                       color: 'var(--ra-play-on-ink)',
                       background: 'var(--ra-stretch-on)',
-                      border: '1px solid var(--ra-bg)',
-                      boxShadow: '0 1px 4px color-mix(in srgb, black 65%, transparent)'
+                      border: '1px solid var(--ra-bg-row)'
                     }}
                   >
                     {oneMarker.label}
