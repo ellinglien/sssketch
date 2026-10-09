@@ -14,11 +14,24 @@ import {
   usePluginCatalog
 } from './StoreContext'
 
-export type CrossPreviewMode = 'center' | 'left-riff' | 'right-riff' | `source:${string}`
+export type CrossPreviewMode = 'center' | `riff:${string}` | `source:${string}`
 
 export interface CrossPreviewMember {
   stem: Omit<Stem, 'slot'>
   gain: number
+}
+
+/** Marks the native load as restore-relevant before issuing it. This order
+ * is the cancellation barrier: Stop/Back/unmount can then restore the real
+ * arrangement even while engineLoadProject's acknowledgement is pending. */
+export async function issueCrossPreviewLoad(
+  load: () => Promise<void>,
+  markLoadIssued: () => void,
+  isCancelled: () => boolean
+): Promise<boolean> {
+  markLoadIssued()
+  await load()
+  return !isCancelled()
 }
 
 /** A narrow throwaway-project controller for Cross. One ownership token
@@ -48,7 +61,10 @@ export function useCrossPreview(): {
   const unmountedRef = useRef(false)
   const generationRef = useRef(0)
   const tokenRef = useRef<number | null>(null)
-  const loadedRef = useRef(false)
+  // True from immediately BEFORE a load is issued until the real project is
+  // restored. It deliberately means "may have reached native", not merely
+  // "load acknowledgement returned".
+  const needsRestoreRef = useRef(false)
   const modeRef = useRef<CrossPreviewMode | null>(null)
 
   const stop = useCallback(() => {
@@ -56,11 +72,11 @@ export function useCrossPreview(): {
     const token = tokenRef.current
     tokenRef.current = null
     modeRef.current = null
-    const hadLoaded = loadedRef.current
-    loadedRef.current = false
+    const needsRestore = needsRestoreRef.current
+    needsRestoreRef.current = false
     if (token === null || !stillOwnEngine(token)) return
     const released = releaseEngine()
-    if (!hadLoaded) return
+    if (!needsRestore) return
     dispatch({ type: 'PAUSE' })
     void flushEngineSyncNow(undefined, () => !stillOwnEngine(released))
   }, [dispatch, flushEngineSyncNow, releaseEngine, stillOwnEngine])
@@ -93,7 +109,7 @@ export function useCrossPreview(): {
       )
       if (!assembly) return
 
-      const changingMode = !loadedRef.current || modeRef.current !== mode
+      const changingMode = !needsRestoreRef.current || modeRef.current !== mode
       const generation = ++generationRef.current
       const token = claimEngine('cross-preview')
       tokenRef.current = token
@@ -122,16 +138,24 @@ export function useCrossPreview(): {
         )
         if (unmountedRef.current || generationRef.current !== generation) return
         if (!stillOwnEngine(token)) return
-        await window.rifffApi.engineLoadProject(project)
-        if (unmountedRef.current || generationRef.current !== generation) return
-        if (!stillOwnEngine(token)) return
-        loadedRef.current = true
+        const loadIsCurrent = await issueCrossPreviewLoad(
+          () => window.rifffApi.engineLoadProject(project),
+          () => {
+            needsRestoreRef.current = true
+          },
+          () =>
+            unmountedRef.current || generationRef.current !== generation || !stillOwnEngine(token)
+        )
+        if (!loadIsCurrent) return
         modeRef.current = mode
         if (changingMode) void window.rifffApi.engineSetPosition(0)
         dispatch({ type: 'PLAY' })
       } catch (err) {
         console.error('useCrossPreview: failed to load preview:', err)
-        if (!loadedRef.current && stillOwnEngine(token)) releaseEngine()
+        if (stillOwnEngine(token)) {
+          if (needsRestoreRef.current) stop()
+          else releaseEngine()
+        }
       }
     },
     [

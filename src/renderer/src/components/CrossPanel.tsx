@@ -147,7 +147,6 @@ function SourceRow({
 }
 
 function SourceColumn({
-  side,
   parent,
   draft,
   activeMode,
@@ -155,13 +154,12 @@ function SourceColumn({
   onPreviewSource,
   onPreviewParent
 }: {
-  side: 'left' | 'right'
   parent: CrossParent
   draft: CrossDraft
   activeMode: CrossPreviewMode | null
   onAdd: (sourceId: string) => void
   onPreviewSource: (source: CrossSourceOccurrence) => void
-  onPreviewParent: (parent: CrossParent, side: 'left' | 'right') => void
+  onPreviewParent: (parent: CrossParent) => void
 }): React.JSX.Element {
   const added = useMemo(() => new Set(draft.center.map((row) => row.sourceId)), [draft.center])
   return (
@@ -175,7 +173,7 @@ function SourceColumn({
         </span>
         <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{Math.round(parent.bpm)} bpm</span>
         <button
-          onClick={() => onPreviewParent(parent, side)}
+          onClick={() => onPreviewParent(parent)}
           style={{
             height: 24,
             borderRadius: 0,
@@ -184,7 +182,7 @@ function SourceColumn({
             color: 'var(--ra-text)'
           }}
         >
-          {activeMode === `${side}-riff` ? '■ stop' : '▶ riff'}
+          {activeMode === `riff:${parent.id}` ? '■ stop' : '▶ riff'}
         </button>
       </div>
       {parent.sources.map((source) => (
@@ -504,7 +502,6 @@ export function CrossPanel({
         }}
       >
         <SourceColumn
-          side="left"
           parent={left}
           draft={draft}
           activeMode={activeMode}
@@ -520,7 +517,7 @@ export function CrossPanel({
             )
           }
           onPreviewParent={(parent) =>
-            togglePreview('left-riff', sourceMembers(parent), parent.barLength)
+            togglePreview(`riff:${parent.id}`, sourceMembers(parent), parent.barLength)
           }
         />
 
@@ -577,7 +574,6 @@ export function CrossPanel({
         </section>
 
         <SourceColumn
-          side="right"
           parent={right}
           draft={draft}
           activeMode={activeMode}
@@ -593,7 +589,7 @@ export function CrossPanel({
             )
           }
           onPreviewParent={(parent) =>
-            togglePreview('right-riff', sourceMembers(parent), parent.barLength)
+            togglePreview(`riff:${parent.id}`, sourceMembers(parent), parent.barLength)
           }
         />
       </div>

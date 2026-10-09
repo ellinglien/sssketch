@@ -19,6 +19,7 @@ import { sqrtGain } from '@shared/mixGain'
 import { getAudioContext } from '../audio/peakCache'
 import {
   startPreviewLoop,
+  stopActivePreview,
   stopPreviewSources,
   registerActivePreview,
   isActivePreview,
@@ -587,6 +588,16 @@ export function LibraryBrowser({
   // somewhere else always redirects/stops the walk instead of two queues
   // racing each other.
   const syncQueueTokenRef = useRef(0)
+  // Cancels an in-flight Cross parent resolve when a newer request starts or
+  // this browser unmounts. The draft lives above this component in App, so a
+  // stale closure must not be allowed to overwrite a later session's draft.
+  const crossRequestGenerationRef = useRef(0)
+
+  useEffect(() => {
+    return () => {
+      crossRequestGenerationRef.current += 1
+    }
+  }, [])
 
   const playing = usePlaying()
   const dispatch = useDispatch()
@@ -614,6 +625,24 @@ export function LibraryBrowser({
     stopPreviewAudio()
     setPlayingRiffCID(null)
   }, [stopPreviewAudio])
+
+  const prepareCrossEntry = useCallback(() => {
+    // Cross owns its own native preview. Invalidate both the Import Web
+    // Audio nodes and any delayed resolve/download chain before every entry
+    // path, including Resume, so neither can start behind Cross later.
+    syncQueueTokenRef.current += 1
+    setSelectedRiffPreviewEnabled(false)
+    stopActivePreview()
+    stopPreview()
+  }, [stopPreview])
+
+  const openExistingCross = useCallback(() => {
+    crossRequestGenerationRef.current += 1
+    prepareCrossEntry()
+    setCrossLoading(false)
+    setCrossError(null)
+    setCrossOpen(true)
+  }, [prepareCrossEntry])
 
   // NOT auto-dispatched (see seedDiscoverFromBrowseRiff's own doc comment
   // below for the full root-cause writeup): an earlier version of this
@@ -1807,8 +1836,7 @@ export function LibraryBrowser({
     )
     if (!pair || crossLoading) return
     if (crossDraft?.projectKey === projectKey && sameCrossPair(crossDraft, pair)) {
-      setCrossError(null)
-      setCrossOpen(true)
+      openExistingCross()
       return
     }
     if (
@@ -1819,37 +1847,39 @@ export function LibraryBrowser({
       return
     }
 
-    // Invalidate both the already-playing Web Audio nodes and the delayed
-    // resolve/download chain that could otherwise start them again after
-    // Cross has claimed the native engine.
-    syncQueueTokenRef.current += 1
-    setSelectedRiffPreviewEnabled(false)
-    stopPreview()
+    const requestGeneration = ++crossRequestGenerationRef.current
+    const requestCancelled = (): boolean => crossRequestGenerationRef.current !== requestGeneration
+    prepareCrossEntry()
     setCrossLoading(true)
     setCrossError(null)
     try {
       const parents: CrossParent[] = []
       for (const riffCID of pair) {
-        const initiallyResolved =
-          riffCID === selectedRiffCID && resolvedRiff
-            ? resolvedRiff
-            : await window.rifffApi.riffLibraryResolveRiff(riffCID)
+        // Resolve each selected identity explicitly. selectedRiffCID changes
+        // synchronously on Cmd-click while resolvedRiff changes later, so
+        // pairing those two independent states can temporarily label A's
+        // audio as B and build a duplicate-parent Cross.
+        const initiallyResolved = await window.rifffApi.riffLibraryResolveRiff(riffCID)
+        if (requestCancelled()) return
         if (!initiallyResolved) throw new Error('could not resolve one of the selected rifffs')
         const resolved = await ensureStemsDownloaded(riffCID, initiallyResolved)
+        if (requestCancelled()) return
         const parent = resolvedCrossParent(riffCID, resolved)
         if (!parent.sources.some((source) => source.stem !== null)) {
           throw new Error('one of the selected rifffs has no available stems')
         }
         parents.push(parent)
       }
+      if (requestCancelled()) return
       const next = createCrossDraft(projectKey, parents[0], parents[1], appState.bpm)
       setCrossDraft(next)
       setCrossOpen(true)
     } catch (err) {
+      if (requestCancelled()) return
       console.error('LibraryBrowser: failed to open Cross:', err)
       setCrossError(err instanceof Error ? err.message : 'could not open Cross')
     } finally {
-      setCrossLoading(false)
+      if (!requestCancelled()) setCrossLoading(false)
     }
   }
 
@@ -1970,10 +2000,7 @@ export function LibraryBrowser({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             {libraryMode === 'browse' && crossDraft?.projectKey === projectKey && (
               <button
-                onClick={() => {
-                  setCrossError(null)
-                  setCrossOpen(true)
-                }}
+                onClick={openExistingCross}
                 style={{
                   height: 24,
                   borderRadius: 0,
