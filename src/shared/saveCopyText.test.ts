@@ -29,14 +29,15 @@ describe('save menu copy', () => {
 
   it('says which file you are in after each', () => {
     expect(SAVE_AS_NEW_VERSION_HINT).toContain('carry on in')
+    expect(SAVE_AS_NEW_VERSION_HINT).toContain('save this one')
     expect(SAVE_COPY_TO_FILE_HINT).toContain('you stay in')
   })
 })
 
 describe('newVersionConfirmation', () => {
-  it('names the copy you are now in and says the original was left as last saved', () => {
+  it('names the copy you are now in and says the original was saved first', () => {
     expect(newVersionConfirmation('misty kestrel 2', 'misty kestrel')).toBe(
-      "you're now working in misty kestrel 2 · misty kestrel keeps its last save"
+      "you're now working in misty kestrel 2 · misty kestrel was saved first"
     )
   })
 })

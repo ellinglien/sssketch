@@ -303,9 +303,9 @@ export function openLibrarySketch(name: string): { path: string; json: string } 
 
 /** "Duplicate as new version": writes `json` -- the live project, unsaved
  * edits and plugin settings included (the renderer's serializeForSave) --
- * as a freshly-computed `<name>-N` sketch. The original sketch is never
- * written: its folder stays byte-identical, so the edits move to the new
- * version and the original keeps what it last saved. As before, the project
+ * as a freshly-computed `<name>-N` sketch. This function never writes the
+ * original: "save as a new version" saves it first, with the same JSON, as a
+ * normal save (renderer state/saveAsNewVersion.ts). As before, the project
  * file is the only file the new version gets: nothing audio-related is
  * copied (the project file is just JSON pointers to source stem paths; the
  * new sketch's own NEXT Ableton export benefits from the shared sample

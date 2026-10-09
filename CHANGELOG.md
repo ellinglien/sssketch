@@ -26,7 +26,8 @@
 - A re-one now bakes from the stem's original audio.
 - While Discover, radio or Cross is open, Cmd+Z and Cmd+Shift+Z undo and redo there, not in the project hidden underneath.
 - Keep in Discover and radio saves what you hear: with a row soloed, the other rows are kept silent (at gain 0), as a muted row already was.
-- The save menu's copy items say which file you end up in: "save as a new version" moves you into the copy and leaves the original as last saved; "save a copy to a file…" writes a file and leaves you where you were. Each confirms with one line.
+- The save menu's copy items say which file you end up in: "save as a new version" moves you into the copy; "save a copy to a file…" writes a file and leaves you where you were. Each confirms with one line.
+- "save as a new version" saves the original first, so its last save has your latest edits, then makes the numbered copy and moves you into it. If the original can't be saved, no copy is made and you see the save error.
 - The shelf tile of the riff Sketch is playing now gets the playhead-coloured edge, so it's easy to spot.
 - Clearer tooltips: radio's turn, like, keep and add buttons, the source dial (Endlesss instruments to the left, audio-in recordings to the right), and the import view's multi-select (shift-click a run, cmd-click to add). The keys and gestures list has an import section.
 - The re-one picker draws each stem as a waveform in its own colour, like everywhere else, instead of a spectrogram with a pitch line. The waveform is finer than the arranger's, so drum hits and note onsets stand out as separate spikes.

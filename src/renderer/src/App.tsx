@@ -106,13 +106,13 @@ import { ReoneNotice } from './components/ReoneNotice'
 import { SaveCopyNotice } from './components/SaveCopyNotice'
 import { TopRightNotices } from './components/TopRightNotices'
 import { showSaveCopyNotice } from './state/saveCopyNotice'
+import { saveAsNewVersion } from './state/saveAsNewVersion'
 import {
   SAVE_AS_NEW_VERSION_HINT,
   SAVE_AS_NEW_VERSION_LABEL,
   SAVE_COPY_TO_FILE_HINT,
   SAVE_COPY_TO_FILE_LABEL,
-  copyToFileConfirmation,
-  newVersionConfirmation
+  copyToFileConfirmation
 } from '@shared/saveCopyText'
 import { showReoneNotice } from './state/reoneNotice'
 import { reoneSiblings, siblingsNotReonedText } from '@shared/reoneNotices'
@@ -780,21 +780,27 @@ function ProjectMenu({
 
   async function handleDuplicateAsNewVersion(): Promise<void> {
     if (currentSketch === null || currentSketch.kind !== 'library') return
-    try {
-      // The live project -- unsaved edits and plugin settings included --
-      // goes straight into the new version; the ORIGINAL sketch is never
-      // written (it keeps what it last saved).
-      const touchedVersion = pluginsTouchedSnapshot().version
-      const json = await serializeForSave()
-      const result = await window.rifffApi.duplicateSketch(currentSketch.name, json)
-      if (!result) return
-      setCurrentSketch({ kind: 'library', name: result.name })
-      markSaved(touchedVersion)
-      showSaveCopyNotice(newVersionConfirmation(result.name, currentSketch.name))
-    } catch (err) {
-      console.error('ProjectMenu: failed to duplicate sketch as a new version:', err)
-      window.alert(`duplicate failed: ${err instanceof Error ? err.message : String(err)}`)
+    // Saves the original first, as save does, then writes the same project as the next numbered
+    // version and moves you into it (state/saveAsNewVersion.ts). A failed save makes no copy.
+    const touchedVersion = pluginsTouchedSnapshot().version
+    const outcome = await saveAsNewVersion(currentSketch.name, {
+      serialize: () => serializeForSave(),
+      saveOriginal: (name, json) => window.rifffApi.saveProjectToLibrary(name, json),
+      writeCopy: (name, json) => window.rifffApi.duplicateSketch(name, json)
+    })
+    if (outcome.kind === 'save-failed') {
+      window.alert(outcome.alert)
+      return
     }
+    if (outcome.kind === 'copy-failed') {
+      // The original's save landed: it counts as saved, and you stay in it.
+      markSaved(touchedVersion)
+      window.alert(outcome.alert)
+      return
+    }
+    setCurrentSketch({ kind: 'library', name: outcome.copyName })
+    markSaved(touchedVersion)
+    showSaveCopyNotice(outcome.notice)
   }
 
   async function handleExportMix(): Promise<void> {
