@@ -330,6 +330,8 @@ describe('crash-recovery snapshot', () => {
 // The re-oned copies cleanup keeps the copies a project outside the library names, even once
 // that project's drive is unplugged (reonedCopiesStore.ts). Library projects are scanned anyway.
 describe('remembering projects outside the library', () => {
+  const paths = (read: { ok: boolean; projects?: { path: string }[] }): string[] =>
+    read.ok ? (read.projects ?? []).map((p) => p.path) : []
   const COPY = '0123456789abcdef0123456789abcdef.baked.wav'
   const json = `{"rifffs":{"g":{"stems":[{"path":"/lib/.bakes/${COPY}"}]}}}`
   let outside: string
@@ -352,10 +354,13 @@ describe('remembering projects outside the library', () => {
     const { knownProjects } = await import('./reonedCopiesStore')
     const path = join(outside, 'mine.sssketchproj')
     pf.saveProjectInPlace(path, json)
-    expect(knownProjects()).toEqual([{ path, names: [COPY], at: expect.any(Number) }])
+    expect(knownProjects()).toEqual({
+      ok: true,
+      projects: [{ path, names: [COPY], at: expect.any(Number) }]
+    })
     const renamed = pf.renameExternalSketchFile(path, 'yours')
     expect(renamed.ok).toBe(true)
-    expect(knownProjects().map((p) => p.path)).toEqual([join(outside, 'yours.sssketchproj')])
+    expect(paths(knownProjects())).toEqual([join(outside, 'yours.sssketchproj')])
   })
 
   it('save as and open through the dialog are remembered', async () => {
@@ -367,16 +372,13 @@ describe('remembering projects outside the library', () => {
     writeFileSync(opened, json)
     dialogPick.path = opened
     await pf.openProject({} as never)
-    expect(knownProjects().map((p) => p.path)).toEqual([
-      opened,
-      join(outside, 'saved-as.sssketchproj')
-    ])
+    expect(paths(knownProjects())).toEqual([opened, join(outside, 'saved-as.sssketchproj')])
   })
 
   it('a library save is not remembered', async () => {
     const pf = await import('./projectFile')
     const { knownProjects } = await import('./reonedCopiesStore')
     pf.saveProjectToLibrary('my-sketch', json)
-    expect(knownProjects()).toEqual([])
+    expect(knownProjects()).toEqual({ ok: true, projects: [] })
   })
 })

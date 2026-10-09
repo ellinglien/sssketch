@@ -55,12 +55,16 @@ function validBatches(value: unknown): ReonedRepairBatch[] {
 /** The used set from scratch: library projects and backups, the autosave and its aside
  * snapshot, remembered outside projects (read fresh), what the renderer holds, and this
  * session's copies and project names (read again inside the lock by cleanBakes). */
-function scanUsed(inMemoryNames: string[]): Promise<UsedScan> {
+async function scanUsed(inMemoryNames: string[]): Promise<UsedScan> {
   const userData = app.getPath('userData')
+  // A store that can't be trusted may have been the only record of a project whose drive is
+  // away (reonedCopiesStore.ts): stop, as for an unreadable project.
+  const known = knownProjects()
+  if (!known.ok) return { ok: false, path: known.path }
   return collectUsedNames({
     libraryRoot: libraryRootPath(),
     userDataFiles: [join(userData, AUTOSAVE_FILENAME), join(userData, AUTOSAVE_PREVIOUS_FILENAME)],
-    knownProjects: knownProjects(),
+    knownProjects: known.projects,
     inMemoryNames,
     sessionIssued: sessionKeptNames()
   })
