@@ -408,6 +408,26 @@ describe('projectLibrary', () => {
       expect(contents).toContain(1)
     })
 
+    it('restores the oldest backup even when rotation prunes a full backup set', async () => {
+      const { saveProjectToLibrary, openLibrarySketch } = await import('./projectFile')
+      const { listSketchBackups, restoreSketchBackup } = await import('./projectLibrary')
+      for (let i = 0; i < 16; i++) {
+        saveProjectToLibrary('full-restore', `{"rifffs":{"n":${i}}}`)
+        await tick()
+      }
+      const backups = listSketchBackups('full-restore')
+      expect(backups).toHaveLength(15)
+
+      const result = restoreSketchBackup('full-restore', backups.at(-1)!.path)
+
+      expect(result).toEqual({ ok: true })
+      expect(openLibrarySketch('full-restore')?.json).toBe('{"rifffs":{"n":0}}')
+      const remaining = listSketchBackups('full-restore').map(
+        (backup) => JSON.parse(readFileSync(backup.path, 'utf-8')).rifffs.n
+      )
+      expect(remaining).toContain(15)
+    })
+
     it("rejects a backup path outside this sketch's own backups folder", async () => {
       const { saveProjectToLibrary } = await import('./projectFile')
       const { restoreSketchBackup, sketchProjectPath } = await import('./projectLibrary')

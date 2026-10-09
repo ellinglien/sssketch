@@ -409,8 +409,12 @@ export function restoreSketchBackup(
   if (!existsSync(resolvedBackup)) {
     return { ok: false, reason: 'that backup no longer exists' }
   }
+  // Rotation prunes the backup set to MAX_BACKUPS. If the selected source is
+  // the oldest entry at the cap, that pruning can delete it, so capture its
+  // small project JSON before rotating the current live file.
+  const restoredBytes = readFileSync(resolvedBackup)
   rotateBackupBeforeOverwrite(name)
-  cloneOrCopy(resolvedBackup, sketchProjectPath(name))
+  writeFileSync(sketchProjectPath(name), restoredBytes)
   return { ok: true }
 }
 
