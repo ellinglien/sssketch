@@ -2696,6 +2696,34 @@ export function LibraryBrowser({
                                 : 'download missing stems'}
                             </button>
                           )}
+                          {/* The visible way to stop the preview. Clicking the
+                              playing riff again does the same (libraryPreviewToggle),
+                              but nothing said so (Ben, 2026-10-08). */}
+                          {playingRiffCID === selectedRiffCID && (
+                            <button
+                              onClick={() => setSelectedRiffPreviewEnabled(false)}
+                              aria-label="stop the preview"
+                              title="stop the preview · or click the playing riff again"
+                              style={{
+                                height: 24,
+                                borderRadius: 0,
+                                padding: '0 10px',
+                                fontSize: 10,
+                                border: '1px solid var(--ra-border)',
+                                background: 'var(--ra-bg-row-active)',
+                                color: 'var(--ra-text-2)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 6
+                              }}
+                            >
+                              <span
+                                aria-hidden="true"
+                                style={{ width: 6, height: 6, background: 'currentColor' }}
+                              />
+                              stop
+                            </button>
+                          )}
                           {selectedRiffCIDs.size <= 1 && (
                             <button
                               onClick={() => void seedDiscoverFromBrowseRiff()}
