@@ -235,6 +235,10 @@ A copy is deleted only if it is unused and more than a day old (`reonedUsage.ts`
 - `bakeOffset` and the scans are async and yield between stems and slices: the library is often
   on a USB drive.
 
+Known limit: the scan finds a copy name only as plain text. A name inside a plugin's base64
+state (or any other encoded blob in a project) isn't seen, so a plugin that stored a `.bakes` path
+in its own state doesn't keep that copy. No shipped feature puts one there.
+
 ### Cross
 
 Cross combines two selected riffs into a new one. Open it from exactly two riffs selected in
