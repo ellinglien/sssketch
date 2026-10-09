@@ -55,6 +55,7 @@ import {
   type RadioRowPart,
   type RadioView
 } from '@shared/radioView'
+import { DISCOVER_LIKE_TOOLTIP, RADIO_LIKE_TOOLTIP } from '@shared/radioControlCopy'
 import {
   peekResolvedCandidateStem,
   resolveCandidateStem,
@@ -1640,6 +1641,9 @@ export function DiscoverSlotRow({
   // reserved either way, so nothing shifts.
   // In the radio layout 👍 shows only the star: holding is the bar at the row's left edge there.
   const likeInverted = holding && !radioLayout
+  // What 👍 does, said in full (the 2026-10-08 call: "what does like do?"): with radio on it
+  // also hooks the stem, so radio keeps bringing it back.
+  const likeTooltip = `${RADIO_ROW_LABEL.like}: ${radioOn ? RADIO_LIKE_TOOLTIP : DISCOVER_LIKE_TOOLTIP}`
   const likeButton = hasStemToActOn && (
     <button
       onClick={onLike}
@@ -1656,10 +1660,10 @@ export function DiscoverSlotRow({
             : holding
               ? favourited
                 ? 'unlike · holding'
-                : `${RADIO_ROW_LABEL.like} · holding`
+                : `${likeTooltip} · holding`
               : favourited
                 ? 'unlike'
-                : RADIO_ROW_LABEL.like
+                : likeTooltip
       }
       aria-label={
         listenOnlyStars ? 'hold, listening only' : favourited ? 'unlike' : RADIO_ROW_LABEL.like

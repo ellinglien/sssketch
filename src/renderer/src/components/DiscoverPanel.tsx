@@ -489,6 +489,12 @@ import { resolveCandidateStem, type ResolvedCandidateStem } from './discoverCand
 import type { DiscoverSeedPhase } from '@shared/discoverSeedPhase'
 import { useClaimUndo } from '../state/undoRouting'
 import {
+  RADIO_ADD_TO_SHELF_TOOLTIP,
+  RADIO_ADD_TO_TIMELINE_TOOLTIP,
+  RADIO_KEEP_TOOLTIP,
+  SOURCE_DIAL_TOOLTIP
+} from '@shared/radioControlCopy'
+import {
   DISCOVER_ROW_GRID_COLUMNS,
   DISCOVER_ROW_COLUMN_GAP,
   DISCOVER_WAVEFORM_COLUMN,
@@ -13450,7 +13456,7 @@ export function DiscoverPanel({
     keep: {
       label: keeping ? 'keeping…' : (keptLabel ?? 'keep'),
       disabled: keeping || listenOnly.has('keep'),
-      tooltip: listenOnly.has('keep') ? listenOnlyTip : 'keep this group',
+      tooltip: listenOnly.has('keep') ? listenOnlyTip : RADIO_KEEP_TOOLTIP,
       pulse: keptLabel !== null,
       onClick: () => void keepGroup()
     },
@@ -13466,14 +13472,14 @@ export function DiscoverPanel({
     shelf: {
       label: addingToShelf ? 'adding…' : justAddedToShelf ? '✓ added' : 'add to shelf',
       disabled: addingToShelf || listenOnly.has('addToShelf'),
-      tooltip: listenOnly.has('addToShelf') ? listenOnlyTip : undefined,
+      tooltip: listenOnly.has('addToShelf') ? listenOnlyTip : RADIO_ADD_TO_SHELF_TOOLTIP,
       pulse: justAddedToShelf,
       onClick: () => void addToShelf()
     },
     timeline: {
       label: addingToTimeline ? 'adding…' : justAddedToTimeline ? '✓ added' : 'add to timeline',
       disabled: addingToTimeline || listenOnly.has('addToTimeline'),
-      tooltip: listenOnly.has('addToTimeline') ? listenOnlyTip : undefined,
+      tooltip: listenOnly.has('addToTimeline') ? listenOnlyTip : RADIO_ADD_TO_TIMELINE_TOOLTIP,
       pulse: justAddedToTimeline,
       onClick: () => void addToTimeline()
     }
@@ -13975,7 +13981,7 @@ export function DiscoverPanel({
             <button
               onClick={() => void keepGroup()}
               disabled={keeping || listenOnly.has('keep')}
-              data-tooltip={listenOnly.has('keep') ? listenOnlyTip : 'keep this group'}
+              data-tooltip={listenOnly.has('keep') ? listenOnlyTip : RADIO_KEEP_TOOLTIP}
               style={{
                 fontFamily: 'inherit',
                 fontSize: 10,
@@ -14014,7 +14020,9 @@ export function DiscoverPanel({
             <button
               onClick={() => void addToShelf()}
               disabled={addingToShelf || listenOnly.has('addToShelf')}
-              data-tooltip={listenOnly.has('addToShelf') ? listenOnlyTip : undefined}
+              data-tooltip={
+                listenOnly.has('addToShelf') ? listenOnlyTip : RADIO_ADD_TO_SHELF_TOOLTIP
+              }
               style={{
                 fontFamily: 'inherit',
                 fontSize: 10,
@@ -14034,7 +14042,9 @@ export function DiscoverPanel({
             <button
               onClick={() => void addToTimeline()}
               disabled={addingToTimeline || listenOnly.has('addToTimeline')}
-              data-tooltip={listenOnly.has('addToTimeline') ? listenOnlyTip : undefined}
+              data-tooltip={
+                listenOnly.has('addToTimeline') ? listenOnlyTip : RADIO_ADD_TO_TIMELINE_TOOLTIP
+              }
               style={{
                 fontFamily: 'inherit',
                 fontSize: 10,
@@ -14757,7 +14767,7 @@ export function DiscoverPanel({
                   defaultValue={DEFAULT_SOURCE_LEAN}
                   size={30}
                   ariaLabel="source"
-                  tooltip="other clockwise"
+                  tooltip={SOURCE_DIAL_TOOLTIP}
                 />
                 <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
               </div>
