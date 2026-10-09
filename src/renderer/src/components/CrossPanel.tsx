@@ -327,8 +327,7 @@ function SourceRow({
             left: 5,
             top: 3,
             fontSize: 8,
-            color: 'var(--ra-text)',
-            textShadow: '0 1px 2px var(--ra-bg)'
+            color: 'var(--ra-text)'
           }}
         >
           {stem?.name ?? 'unavailable'}
