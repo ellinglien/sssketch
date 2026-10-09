@@ -1528,8 +1528,12 @@ export function reducer(state: AppState, action: Action): AppState {
     // and any timeline windows the caller deliberately linked to it. Path
     // equality is only a compatibility signal used before this action is
     // dispatched; it is never sufficient here to mutate another shelf riff.
-    // Every result is a fresh immutable asset, so independently edited copies
-    // can no longer fight over one on-disk `.baked.wav` alias.
+    // A copy is never rewritten once published, but it is named by its recipe
+    // (src/main/reonedRecipe.ts), so two riffs re-oned to the same spot of the
+    // same original share one file. That is why a riff's first re-one gives
+    // it (and the windows moving with it) a phaseLinkId: from then on the
+    // path rule in bakeTargetGroupIds never ties it to another riff that
+    // merely reuses the same copy.
     //
     // The batch is adopted only when it covers every stem in a target riff.
     // On an unsupported/corrupt input the main process returns no partial
@@ -1552,8 +1556,15 @@ export function reducer(state: AppState, action: Action): AppState {
       if (touched.length === 0) return state
       const rifffs = { ...state.rifffs }
       const off = { ...state.off }
+      // The riffs that moved together stay linked. A legacy riff (saved before phaseLinkId)
+      // joins its first target's lineage, or starts one named after it.
+      const linkId =
+        touched.map((groupId) => rifffs[groupId].phaseLinkId).find((id) => id !== undefined) ??
+        touched[0]
       for (const groupId of touched) {
-        const rifff = rifffs[groupId]
+        const rifff = rifffs[groupId].phaseLinkId
+          ? rifffs[groupId]
+          : { ...rifffs[groupId], phaseLinkId: linkId }
         const stems = rifff.stems.map((s) => {
           const result = resultMap.get(s.path)
           return {

@@ -13,6 +13,7 @@ import {
 } from './selectors'
 import { risersOnChannel } from '@shared/riser'
 import { createHistoryState, historyReducer } from './history'
+import { bakeTargetGroupIds } from '@shared/bakePropagation'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import { lockClimaxFromArrangeRoles, type CoachSlotSnapshot } from '@shared/coachClimax'
 import { startCoach } from '@shared/coach'
@@ -421,6 +422,47 @@ describe('reducer', () => {
     expect(state.off.r1).toBe(0)
     expect(state.off['r1:1']).toBeUndefined()
     expect(state.off['r1:6']).toBeUndefined()
+  })
+
+  it("a riff's first re-one gives it a phaseLinkId, so another riff later re-oned onto the same reused copy stays independent", () => {
+    const placed = (groupId: string): Rifff =>
+      makeRifff({ groupId, startBar: 0, stems: [makeRifff().stems[0]] })
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: placed('a') })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: placed('w') }) // a window copy of a
+    const COPY = '/lib/.bakes/0123456789abcdef0123456789abcdef.baked.wav'
+    const result = {
+      path: '/x/1.wav',
+      bakedPath: COPY,
+      durationSec: 12.8,
+      phaseSourcePath: '/x/1.wav',
+      phaseBars: 1
+    }
+    state = reducer(state, { type: 'APPLY_BAKE', targetGroupIds: ['a', 'w'], results: [result] })
+    expect(state.rifffs.a.phaseLinkId).toBe('a')
+    expect(state.rifffs.w.phaseLinkId).toBe('a') // moved together, so linked together
+    // An independent riff, re-oned on its own to the same spot, reuses the same copy.
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: placed('b') })
+    state = reducer(state, { type: 'APPLY_BAKE', targetGroupIds: ['b'], results: [result] })
+    expect(state.rifffs.b.stems[0].path).toBe(COPY)
+    expect(state.rifffs.b.phaseLinkId).toBe('b')
+    expect(bakeTargetGroupIds(state.rifffs, 'a').sort()).toEqual(['a', 'w'])
+    expect(bakeTargetGroupIds(state.rifffs, 'b')).toEqual(['b'])
+  })
+
+  it('a riff that already has a phaseLinkId keeps it through a re-one', () => {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: makeRifff({ phaseLinkId: 'lineage-x' })
+    })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
+      results: [
+        { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 },
+        { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.2 }
+      ]
+    })
+    expect(state.rifffs.r1.phaseLinkId).toBe('lineage-x')
   })
 
   it('stores immutable phase provenance with a completed bake', () => {
