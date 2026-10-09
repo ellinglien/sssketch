@@ -12,6 +12,7 @@
 #include "LinkSession.h"
 #include <juce_events/juce_events.h>
 #include <memory>
+#include <vector>
 
 namespace sssketch
 {
@@ -21,7 +22,7 @@ namespace sssketch
      * stop, set-position), and pushes position-update while playing.
      *
      * private juce::MultiTimer, not plain juce::Timer -- this connection
-     * needs two independent polling cadences that DON'T share a lifecycle:
+     * needs independent polling cadences that DON'T share a lifecycle:
      * the existing position-update/capture-level push (kPositionTimerId in
      * IpcServer.cpp, started/stopped around play/pause/stop, ~30Hz) and
      * LinkSession's own external-tempo-change poll (kLinkPollTimerId,
@@ -29,7 +30,9 @@ namespace sssketch
      * see LinkSession.h's own doc comment for why tempo detection must
      * keep running independent of play state, same reasoning already
      * established for syncTempo's own OUTBOUND push on load-project).
-     * MultiTimer still runs both on the same message thread via JUCE's
+     * A third, short-lived cadence confirms when Transport's stop fade has
+     * actually reached silence for the renderer's preview handoff.
+     * MultiTimer still runs all of them on the same message thread via JUCE's
      * existing timer machinery -- no new thread, matching this codebase's
      * real-time-thread discipline (see this repo's own CLAUDE.md); it's
      * the same category of thing as BridgeClient's own separate 500ms
@@ -51,7 +54,9 @@ namespace sssketch
 
     private:
         void sendJson(const juce::var& payload);
-        // timerID is one of kPositionTimerId/kLinkPollTimerId (IpcServer.cpp) --
+        void sendTransportStopped(int token, bool stopped);
+        // timerID is one of kPositionTimerId/kLinkPollTimerId/
+        // kHaltAckTimerId (IpcServer.cpp) --
         // see this class's own doc comment above for why this is a MultiTimer
         // now instead of a single juce::Timer.
         void timerCallback(int timerID) override;
@@ -179,6 +184,16 @@ namespace sssketch
         // shouldn't have one; an edge on this counter is how the swap
         // reports itself.
         unsigned long long lastSeenStagedApplies = 0;
+        // Renderer-chosen tokens for stop requests waiting for the audio
+        // thread's fade to reach true silence. Normally one; an immediate
+        // transport re-render may issue the same logical stop twice, and
+        // every waiter receives its own correlated acknowledgement.
+        struct PendingHaltAck
+        {
+            int token;
+            unsigned long long commandGeneration;
+        };
+        std::vector<PendingHaltAck> pendingHaltAcks;
     };
 
     class IpcServer : public juce::InterprocessConnectionServer

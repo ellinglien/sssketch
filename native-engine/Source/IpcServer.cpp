@@ -11,6 +11,7 @@ namespace sssketch
         // single juce::Timer no longer suffices.
         constexpr int kPositionTimerId = 0; // position-update/capture-level pushes -- ~30Hz, only while playing
         constexpr int kLinkPollTimerId = 1; // LinkSession::checkForExternalTempoChange -- always running
+        constexpr int kHaltAckTimerId = 2; // short-lived poll until the audio thread's halt fade is silent
 
         // ~500ms-1s, per this feature's own design doc -- frequent enough that a
         // peer's tempo nudge reaches Maschine/Ableton/etc. via sssketch within
@@ -20,6 +21,7 @@ namespace sssketch
         // 30x/sec when nothing needs sub-second freshness here, unlike the
         // playhead).
         constexpr int kLinkPollIntervalMs = 750;
+        constexpr int kHaltAckPollIntervalMs = 2;
     }
 
     // File-local helper for building the render-export-result reply — mirrors
@@ -74,6 +76,7 @@ namespace sssketch
     {
         stopTimer(kPositionTimerId);
         stopTimer(kLinkPollTimerId);
+        stopTimer(kHaltAckTimerId);
         // Same reasoning as connectionLost below -- this object is going
         // away, and a staged swap it will never be able to ack must not
         // outlive it.
@@ -135,6 +138,7 @@ namespace sssketch
         juce::Logger::writeToLog("IpcConnection: client disconnected");
         stopTimer(kPositionTimerId);
         stopTimer(kLinkPollTimerId);
+        stopTimer(kHaltAckTimerId);
         transport.stop();
         // Nothing left to ack it to, and a swap firing on behalf of a
         // client that has gone away is nobody's intent. The engine's
@@ -332,6 +336,17 @@ namespace sssketch
         sendMessage(block);
     }
 
+    void IpcConnection::sendTransportStopped(int token, bool stopped)
+    {
+        juce::DynamicObject::Ptr payload = new juce::DynamicObject();
+        payload->setProperty("token", token);
+        payload->setProperty("stopped", stopped);
+        juce::DynamicObject::Ptr obj = new juce::DynamicObject();
+        obj->setProperty("type", "transport-stopped");
+        obj->setProperty("payload", juce::var(payload.get()));
+        sendJson(juce::var(obj.get()));
+    }
+
     void IpcConnection::timerCallback(int timerID)
     {
         // Both cadences, on purpose. The 30Hz one is the cadence a staged
@@ -340,6 +355,30 @@ namespace sssketch
         // collects retirements and still enforces the deadline after
         // playback has stopped, when the 30Hz timer isn't running at all.
         pumpStagedProject();
+
+        if (timerID == kHaltAckTimerId)
+        {
+            // A boolean playing=false is not a sufficient barrier: an older
+            // halt callback can briefly publish it while a newer ordered
+            // command is still pending. Each waiter is paired to the exact
+            // Stop generation the audio thread reports complete.
+            const auto completed = transport.completedHaltGeneration();
+            for (auto it = pendingHaltAcks.begin(); it != pendingHaltAcks.end();)
+            {
+                if (it->commandGeneration <= completed)
+                {
+                    sendTransportStopped(it->token, true);
+                    it = pendingHaltAcks.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
+            if (pendingHaltAcks.empty())
+                stopTimer(kHaltAckTimerId);
+            return;
+        }
 
         if (timerID == kLinkPollTimerId)
         {
@@ -661,6 +700,13 @@ namespace sssketch
         }
         else if (type == "play")
         {
+            // Play explicitly wins over an in-flight stop fade. Resolve any
+            // silence waiters as cancelled now, rather than leaving them to
+            // time out while the transport keeps playing.
+            stopTimer(kHaltAckTimerId);
+            for (const auto& pending : pendingHaltAcks)
+                sendTransportStopped(pending.token, false);
+            pendingHaltAcks.clear();
             const double fromPos = payload.isObject() ? (double) payload.getProperty("fromPos", 0.0) : 0.0;
             transport.play(fromPos);
             // ~33ms (~30Hz) position-update push rate — matches the renderer's
@@ -677,8 +723,21 @@ namespace sssketch
         }
         else if (type == "stop")
         {
-            transport.stop();
+            const auto commandGeneration = transport.stop();
             stopTimer(kPositionTimerId);
+            const int token = payload.isObject() ? (int) payload.getProperty("token", -1) : -1;
+            if (token >= 0)
+            {
+                const auto duplicate = std::find_if(
+                    pendingHaltAcks.begin(), pendingHaltAcks.end(),
+                    [token](const PendingHaltAck& pending) { return pending.token == token; });
+                if (duplicate == pendingHaltAcks.end())
+                    pendingHaltAcks.push_back({ token, commandGeneration });
+                // Even an already-idle transport uses the timer path so the
+                // reply is consistently asynchronous and the waiter is
+                // installed before it can arrive.
+                startTimer(kHaltAckTimerId, kHaltAckPollIntervalMs);
+            }
         }
         else if (type == "set-position")
         {

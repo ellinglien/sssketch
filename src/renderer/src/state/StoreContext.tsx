@@ -43,6 +43,7 @@ import {
   setPluginsHeldStatus
 } from './pendingPluginStates'
 import { markPluginsTouched } from './pluginsTouched'
+import { stopActivePreview } from '../audio/previewLoop'
 
 /** A slot's status text while its plugin failed to load: the slot keeps the plugin and its saved
  * settings (@shared/pluginSwitch's `failed`), retried after a scan. */
@@ -371,6 +372,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   const dispatch = useCallback((action: DispatchableAction): void => {
     switch (action.type) {
       case 'PLAY':
+        // Web Audio auditions (Shelf/Import) and native arrangement
+        // playback are mutually exclusive. Keeping this at the transport
+        // boundary covers every way playback can start—button, spacebar,
+        // Sketch tile, coach, or recording—not just one click handler.
+        stopActivePreview()
         setPlaying(true)
         return
       case 'PAUSE':
@@ -818,7 +824,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     if (playing) {
       void window.rifffApi.enginePlay(pos)
     } else {
-      void window.rifffApi.engineStop()
+      void window.rifffApi.engineStop().catch((err) => {
+        // A rapid Stop -> Play deliberately cancels the native halt fade;
+        // the explicit preview handoff handles its own failure separately.
+        console.error('StoreContext: native engine stop was not confirmed:', err)
+      })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentionally only re-runs on play/pause transitions, matching the old effect's behavior; pos is read once at play-start via closure, not tracked as a dependency
   }, [playing])
