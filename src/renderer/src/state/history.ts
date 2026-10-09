@@ -32,9 +32,6 @@ const MAX_HISTORY = 100
 // toggles that still go through this reducer (so useAppState() consumers
 // see them) but shouldn't themselves be undo-able edits.
 const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
-  // A missing re-oned copy rebuilt under a new name: a repair, not an edit. Undoing past it
-  // would bring back the missing path (plan risk R7, accepted as rare).
-  'REPAIR_REONED_PATHS',
   // The startup state adopting the app-wide sound defaults once they arrive
   // (store.ts): a baseline, like a project being created, not an edit.
   'ADOPT_APP_SOUND_DEFAULTS',
@@ -297,6 +294,21 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
     const past = [...state.past, state.present].slice(-MAX_HISTORY)
     const present = action.actions.reduce((s, a) => reducer(s, a), state.present)
     return { past, present, future: [] }
+  }
+
+  // A missing re-oned copy rebuilt under a new name: a repair, not an edit, so no undo step. The
+  // new copy is the same audio under another name, so every step of the history is repointed:
+  // otherwise an undo or redo would bring back the missing path.
+  if (action.type === 'REPAIR_REONED_PATHS') {
+    const repoint = (s: AppState): AppState => reducer(s, action)
+    const present = repoint(state.present)
+    const past = state.past.map(repoint)
+    const future = state.future.map(repoint)
+    const unchanged =
+      present === state.present &&
+      past.every((s, i) => s === state.past[i]) &&
+      future.every((s, i) => s === state.future[i])
+    return unchanged ? state : { past, present, future }
   }
 
   if (TRANSIENT_ACTION_TYPES.has(action.type)) {

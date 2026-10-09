@@ -728,7 +728,8 @@ export type Action =
     }
   | {
       /** A missing re-oned copy rebuilt under a new name (reonedRepairOnOpen.ts's retry, in
-       * ReonedCopyMissingNotice.tsx). Transient: a repair, not an undo step (history.ts). */
+       * ReonedCopyMissingNotice.tsx). A repair, not an undo step: history.ts applies it to the
+       * present and to every past and future step, since it is the same audio under a new name. */
       type: 'REPAIR_REONED_PATHS'
       results: { path: string; bakedPath: string; durationSec: number }[]
     }
