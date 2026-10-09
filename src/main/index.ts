@@ -1385,8 +1385,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
+    // "save a copy to a file…": the open project stays unsaved, so its recovery file stays.
     const path = await saveProjectAs(win, json)
-    if (path !== null) noteRecoveryFile('saved')
+    if (path !== null) noteRecoveryFile('copy-written')
     return path
   })
 

@@ -51,4 +51,5 @@
 - Adding a loop from Discover or radio keeps what you hear: muted rows, and every row but a soloed one, arrive disabled at their own level. Adding from Cross now does the same.
 - A riff re-oned by whole bars no longer loses track of its rotation after taking short (1-bar) stems, so later stems still come in at the same rotation.
 - Arrange's mute, solo and gain controls now stay in the mixer rail beside the inspector on any length of arrangement. On one longer than the window they used to sit at the far end of the timeline, and the rail itself didn't respond to clicks.
+- "save a copy to a file…" no longer deletes the crash-recovery copy of the project you're still working in. That project stays unsaved, so its recovery copy stays too.
 - Kept quit blocked until the current project is saved, isolated export materialization and filenames to avoid collisions, and hardened backup restoration and phone-remote pairing lockout.

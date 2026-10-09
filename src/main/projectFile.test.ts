@@ -316,6 +316,33 @@ describe('crash-recovery snapshot', () => {
     expect(readdirSync(userDataDir).filter((f) => f.endsWith('.tmp'))).toEqual([])
   })
 
+  // "save a copy to a file…" leaves you in the open project, unsaved as it was: its recovery
+  // file is still the only copy of that project's unsaved work, so the copy must not touch it.
+  it("saving a copy to a file leaves the open project's autosave and sidecar in place", async () => {
+    const pf = await import('./projectFile')
+    pf.writeAutosave('{"unsaved":1}')
+    pf.writeAutosaveSketchInfo('{"kind":"library","name":"mine"}')
+    dialogPick.path = join(userDataDir, 'copy.sssketchproj')
+    expect(await pf.saveProjectAs({} as never, '{"unsaved":1}')).toBe(dialogPick.path)
+    expect(readFileSync(join(userDataDir, 'autosave.sssketchproj'), 'utf-8')).toBe('{"unsaved":1}')
+    expect(readFileSync(join(userDataDir, 'autosaveSketch.json'), 'utf-8')).toBe(
+      '{"kind":"library","name":"mine"}'
+    )
+  })
+
+  it('saving a copy to a file leaves an undecided snapshot undecided, not moved aside', async () => {
+    const pf = await import('./projectFile')
+    leaveSnapshotFromLastSession('{"old":1}', '{"kind":"library","name":"old"}')
+    pf.loadAutosave()
+    dialogPick.path = join(userDataDir, 'copy.sssketchproj')
+    await pf.saveProjectAs({} as never, '{"mine":1}')
+    expect(pf.loadPreviousAutosave()).toBeNull()
+    expect(readFileSync(join(userDataDir, 'autosave.sssketchproj'), 'utf-8')).toBe('{"old":1}')
+    // Still undecided: this session's first autosave moves it aside, as without the copy.
+    pf.writeAutosave('{"new":1}')
+    expect(pf.loadPreviousAutosave()?.json).toBe('{"old":1}')
+  })
+
   it('a snapshot this session wrote itself, never offered, is replaced and deleted as before', async () => {
     const pf = await import('./projectFile')
     pf.writeAutosave('{"a":1}')

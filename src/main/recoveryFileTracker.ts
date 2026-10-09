@@ -10,13 +10,17 @@
 // A new window ('window-created') therefore starts knowing nothing.
 
 export interface RecoveryFileState {
-  /** A save (library, in place, duplicate, save as) landed since the window was created. */
+  /** A save of the open project (library, in place, duplicate as a new version) landed since
+   * the window was created. A copy to a file isn't one. */
   savedInThisWindow: boolean
   /** An autosave was written since the last save or clear. */
   writtenSinceSaveOrClear: boolean
 }
 
-export type RecoveryFileEvent = 'window-created' | 'saved' | 'autosave-written' | 'cleared'
+/** 'copy-written': "save a copy to a file…" wrote another file. The open project stays
+ * unsaved, and the recovery file is still its only copy, so nothing changes. */
+export type RecoveryFileEvent =
+  'window-created' | 'saved' | 'copy-written' | 'autosave-written' | 'cleared'
 
 export const initialRecoveryFileState: RecoveryFileState = {
   savedInThisWindow: false,
@@ -33,6 +37,8 @@ export function recoveryFileStep(
     case 'saved':
       // Every save clears the file (projectFile.ts) after writing the project.
       return { savedInThisWindow: true, writtenSinceSaveOrClear: false }
+    case 'copy-written':
+      return state
     case 'autosave-written':
       return { ...state, writtenSinceSaveOrClear: true }
     case 'cleared':

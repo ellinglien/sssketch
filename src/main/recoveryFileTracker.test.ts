@@ -53,6 +53,16 @@ describe('shouldClearRecoveryOnCleanQuit', () => {
     expect(shouldClearRecoveryOnCleanQuit(state, clean)).toBe(true)
   })
 
+  // "save a copy to a file…" writes another file and leaves you in the unsaved project: the
+  // recovery file is still the only copy of that project's edits. Edit, save a copy, close the
+  // window (main resets the dirty flag), quit: kept.
+  it('saving a copy to a file is not a save of the open project', () => {
+    const state = after(['window-created', 'autosave-written', 'copy-written'])
+    expect(shouldClearRecoveryOnCleanQuit(state, clean)).toBe(false)
+    const afterSave = after(['window-created', 'saved', 'autosave-written', 'copy-written'])
+    expect(shouldClearRecoveryOnCleanQuit(afterSave, clean)).toBe(false)
+  })
+
   it('never while the renderer reports unsaved work, or after the quit prompt`s save', () => {
     const state = after(['window-created', 'saved'])
     expect(

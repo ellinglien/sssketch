@@ -213,10 +213,9 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
     // Before the write: a clean running now keeps what this project names (reonedCopiesSession).
     noteSessionProjectText(json)
     writeFileSync(result.filePath, json, 'utf-8')
-    // The user's own file now has this exact content, so the crash-recovery
-    // snapshot (see writeAutosave below) is redundant — clear it so a later
-    // launch doesn't offer to "recover" work that's already safely saved.
-    clearAutosave()
+    // Only "save a copy to a file…" comes here, and it leaves you in the open project,
+    // unsaved as it was (@shared/saveCopyText). The recovery file belongs to that project, so
+    // it is neither cleared nor, if undecided, moved aside (AGENTS.md, crash recovery).
     if (!isInsideLibrary(result.filePath)) rememberExternalProject(result.filePath, json)
     return result.filePath
   } catch (err) {
@@ -226,9 +225,9 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
   }
 }
 
-/** Writes json directly to path, no dialog -- the write-and-clear-autosave
- * sequence saveProjectToLibrary needs; saveProjectAs still does this inline
- * since it's kept untouched as the escape hatch.
+/** Writes json directly to path, no dialog, and clears the autosave: the
+ * open project is now saved. saveProjectToLibrary comes through here. (Not
+ * saveProjectAs: a copy to a file leaves the open project unsaved.)
  *
  * Deliberately no try/catch here: unlike openProject/openLibrarySketch/
  * autosave (which return null on failure because they're either
@@ -400,7 +399,7 @@ function setUndecidedAutosaveAside(): void {
  * location — never the user's own named .sssketchproj file, and never through
  * a dialog. Purely a crash/forgot-to-save safety net; App.tsx debounces
  * calls to this after real edits, independent of the user's own explicit
- * Save (which goes through saveProjectAs above and clears this instead).
+ * Save (which goes through saveProjectInPlace above and clears this instead).
  * A previous session's snapshot still awaiting the user's decision is moved
  * aside first, not overwritten (setUndecidedAutosaveAside). Written to a
  * temporary and renamed over, so a crash or a full disk midway leaves the
@@ -459,7 +458,7 @@ export function loadAutosaveSketchInfo(): string | null {
 }
 
 /** Clears the recovery file because this session no longer needs it: after
- * any explicit Save (see saveProjectAs above), a discard of this session's
+ * any explicit Save (see saveProjectInPlace above), a discard of this session's
  * unsaved work (New, open, quit's Don't Save), or a welcome button that moves
  * on without recovering. Deletes the snapshot and its sidecar (see
  * writeAutosaveSketchInfo) together -- unless it is a previous session's
