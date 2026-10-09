@@ -464,10 +464,12 @@ export function CrossPanel({
           color: var(--ra-play-on-ink);
         }
         .ra-cross-primary {
-          min-width: 146px;
-          height: 32px;
-          border-width: 2px;
-          font-size: 11px;
+          min-width: 112px;
+        }
+        .ra-cross-close {
+          width: 34px;
+          padding: 0;
+          font-size: 14px;
         }
       `}</style>
       <div
@@ -479,9 +481,6 @@ export function CrossPanel({
           borderBottom: '1px solid var(--ra-border)'
         }}
       >
-        <button className="ra-cross-button" onClick={onBack} disabled={!!committing}>
-          ← sketch
-        </button>
         <span className="ra-eyebrow">cross</span>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
           project tempo · {Math.round(draft.targetBpm)} bpm
@@ -514,6 +513,41 @@ export function CrossPanel({
           disabled={!!committing || draft.center.length === 0}
         >
           clear
+        </button>
+        <button
+          className="ra-cross-button ra-cross-primary"
+          onClick={() => void commit('shelf')}
+          disabled={!!committing || draft.center.length === 0}
+        >
+          {committing === 'shelf' ? (
+            <LoadingLoader size={12} />
+          ) : committed === 'shelf' ? (
+            '✓ added to shelf'
+          ) : (
+            'add to shelf'
+          )}
+        </button>
+        <button
+          className="ra-cross-button ra-cross-primary"
+          onClick={() => void commit('timeline')}
+          disabled={!!committing || draft.center.length === 0}
+        >
+          {committing === 'timeline' ? (
+            <LoadingLoader size={12} />
+          ) : committed === 'timeline' ? (
+            '✓ added to timeline'
+          ) : (
+            'add to timeline'
+          )}
+        </button>
+        <button
+          className="ra-cross-button ra-cross-close"
+          onClick={onBack}
+          disabled={!!committing}
+          aria-label="close Cross"
+          title="close"
+        >
+          ×
         </button>
       </div>
 
@@ -623,43 +657,6 @@ export function CrossPanel({
             togglePreview(`riff:${parent.id}`, sourceMembers(parent), parent.barLength)
           }
         />
-      </div>
-
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'center',
-          gap: 8,
-          padding: 10,
-          borderTop: '1px solid var(--ra-border)'
-        }}
-      >
-        <button
-          className="ra-cross-button ra-cross-primary"
-          onClick={() => void commit('shelf')}
-          disabled={!!committing || draft.center.length === 0}
-        >
-          {committing === 'shelf' ? (
-            <LoadingLoader size={12} />
-          ) : committed === 'shelf' ? (
-            '✓ added to shelf'
-          ) : (
-            'add to shelf'
-          )}
-        </button>
-        <button
-          className="ra-cross-button ra-cross-primary"
-          onClick={() => void commit('timeline')}
-          disabled={!!committing || draft.center.length === 0}
-        >
-          {committing === 'timeline' ? (
-            <LoadingLoader size={12} />
-          ) : committed === 'timeline' ? (
-            '✓ added to timeline'
-          ) : (
-            'add to timeline'
-          )}
-        </button>
       </div>
     </div>
   )
