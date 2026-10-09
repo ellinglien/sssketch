@@ -181,7 +181,11 @@ describe('createEngineStopper against the real engine', () => {
     }
   }, 30000)
 
-  it('answers a stop that a play superseded with stopped=false, not silence', async () => {
+  // Which answer comes is a race inside the engine (the second play's message against
+  // its 2 ms ack poll, on different threads), so this proves only that the raced stop is
+  // answered either way, never left to time out, and that the stopper works after it. The
+  // superseded reply's handling is pinned deterministically by the fake-server test above.
+  it('a stop raced by a play is answered, silent or superseded, never left to time out', async () => {
     handle = await spawnEngine({
       binaryPathOverride: realBinaryPath,
       bridgeBinaryPathOverride: noBridgeBinaryPath
@@ -190,9 +194,9 @@ describe('createEngineStopper against the real engine', () => {
     await client.connect(handle.port)
     try {
       const stopper = createEngineStopper(() => client, 1500)
-      // Play, then stop, then play again before the first stop can be acknowledged: the
-      // engine's play handler answers every pending stop as superseded. Sent back to back
-      // on one socket, so the engine reads them in this order before its 2 ms ack poll.
+      // Play, then stop, then play again, back to back on one socket: the engine's play
+      // handler answers a stop still pending as superseded, and its ack poll answers one
+      // already silent.
       client.send('play', { fromPos: 0 })
       const stopped = stopper.stop()
       client.send('play', { fromPos: 0 })
@@ -201,7 +205,7 @@ describe('createEngineStopper against the real engine', () => {
         () => 'silent',
         (err: Error) => err.message
       )
-      // Either is correct engine behaviour: the second play can land after the ack poll ran.
+      // A timeout would reject with its own message, and fail here.
       expect(['silent', 'native engine stop was superseded by a newer play']).toContain(outcome)
       await stopper.stop()
     } finally {
