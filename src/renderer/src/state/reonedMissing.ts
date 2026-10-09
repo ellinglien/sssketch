@@ -25,6 +25,13 @@ export function clearReonedMissing(paths: Iterable<string>): void {
   publish(missing.filter((m) => !gone.has(m.path)))
 }
 
+/** A retry's news on copies still missing: their reason now (a failed render stops retrying). */
+export function updateReonedMissingReasons(entries: readonly ReonedMissing[]): void {
+  const reasons = new Map(entries.map((e) => [e.path, e.reason]))
+  if (!missing.some((m) => reasons.has(m.path) && reasons.get(m.path) !== m.reason)) return
+  publish(missing.map((m) => ({ ...m, reason: reasons.get(m.path) ?? m.reason })))
+}
+
 export function reonedMissingPaths(): string[] {
   return missing.map((m) => m.path)
 }
