@@ -1,6 +1,6 @@
 import type { Rifff } from '@shared/types'
 import { stemKey } from '@shared/types'
-import { nextPhaseBars, reoneJob, type ReoneBakeJob } from '@shared/reonedRotation'
+import { nextPhaseBars, phaseLineage, reoneJob, type ReoneBakeJob } from '@shared/reonedRotation'
 
 export interface CrossBakeResult {
   path: string
@@ -49,7 +49,7 @@ export async function rifffForSketchCross(
       ...stem,
       path: matched[index]!.bakedPath,
       durationSec: matched[index]!.durationSec,
-      phaseSourcePath: stem.phaseSourcePath ?? stem.path,
+      phaseSourcePath: phaseLineage(stem).sourcePath,
       phaseBars: nextPhaseBars(stem, steps[index], snapDiv)
     }))
   }

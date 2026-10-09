@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Stem } from './types'
 import {
   nextPhaseBars,
+  phaseLineage,
   rebuildRotationCandidates,
   reoneJob,
   rotationSecForBars
@@ -30,8 +31,9 @@ describe('rotationSecForBars', () => {
 describe('nextPhaseBars', () => {
   it('accumulates unwrapped, the way BeatPicker always has: phaseBars - steps / snapDiv', () => {
     expect(nextPhaseBars(stem(), -4, 4)).toBe(1)
-    expect(nextPhaseBars(stem({ phaseBars: 1 }), -2, 4)).toBe(1.5)
-    expect(nextPhaseBars(stem({ phaseBars: 3 }), -10, 4)).toBe(5.5)
+    const copy = { path: '/lib/.bakes/x.baked.wav', phaseSourcePath: '/src/one.wav' }
+    expect(nextPhaseBars(stem({ ...copy, phaseBars: 1 }), -2, 4)).toBe(1.5)
+    expect(nextPhaseBars(stem({ ...copy, phaseBars: 3 }), -10, 4)).toBe(5.5)
   })
 })
 
@@ -51,6 +53,20 @@ describe('reoneJob', () => {
       rotationSec: 1, // 0.5 bar of the current file: today's chain, the fallback
       recipe: { sourcePath: '/src/one.wav', rotationSec: 3 } // 1.5 bars of the original
     })
+  })
+
+  it('a stale lineage on a file that is not a re-oned copy (a stretched one-shot) is ignored: the job bakes that file and the lineage restarts there', () => {
+    const s = stem({
+      path: '/stretch-cache/kick-stretched.wav',
+      phaseSourcePath: '/src/kick.wav',
+      phaseBars: 1
+    })
+    expect(reoneJob(s, -4, 4)).toEqual({
+      path: '/stretch-cache/kick-stretched.wav',
+      rotationSec: 2
+    })
+    expect(phaseLineage(s)).toEqual({ sourcePath: '/stretch-cache/kick-stretched.wav', bars: 0 })
+    expect(nextPhaseBars(s, -4, 4)).toBe(1)
   })
 
   it('a lineage that names the stem itself is not a separate recipe', () => {

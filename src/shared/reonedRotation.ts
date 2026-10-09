@@ -13,13 +13,29 @@ export function rotationSecForBars(
   return wrapped * (stem.durationSec / stem.barLength)
 }
 
+const isCopyPath = (path: string): boolean => path.toLowerCase().endsWith('.baked.wav')
+
+/** Where the stem's audio really comes from, and how far it is rotated from there. The saved
+ * lineage counts only while `path` is a re-oned copy: anything else that replaced the file (a
+ * stretched one-shot's render, say) is a new original, so a stale lineage left on it would bake
+ * the old audio with the new length. Then the lineage restarts at the stem's own file. */
+export function phaseLineage(stem: Pick<Stem, 'path' | 'phaseSourcePath' | 'phaseBars'>): {
+  sourcePath: string
+  bars: number
+} {
+  if (stem.phaseSourcePath !== undefined && isCopyPath(stem.path)) {
+    return { sourcePath: stem.phaseSourcePath, bars: stem.phaseBars ?? 0 }
+  }
+  return { sourcePath: stem.path, bars: 0 }
+}
+
 /** The stem's total rotation after a re-one by `steps` at `snapDiv`, in bars, unwrapped. */
 export function nextPhaseBars(
-  stem: Pick<Stem, 'phaseBars'>,
+  stem: Pick<Stem, 'path' | 'phaseSourcePath' | 'phaseBars'>,
   steps: number,
   snapDiv: number
 ): number {
-  return (stem.phaseBars ?? 0) - steps / snapDiv
+  return phaseLineage(stem).bars - steps / snapDiv
 }
 
 export interface ReoneBakeJob {
@@ -35,11 +51,12 @@ export interface ReoneBakeJob {
 /** The job every re-one, re-bake, Cross parent and Discover seed sends to bakeOffset. */
 export function reoneJob(stem: Stem, steps: number, snapDiv: number): ReoneBakeJob {
   const job = { path: stem.path, rotationSec: rotationSecForBars(-steps / snapDiv, stem) }
-  if (stem.phaseSourcePath === undefined || stem.phaseSourcePath === stem.path) return job
+  const { sourcePath } = phaseLineage(stem)
+  if (sourcePath === stem.path) return job
   return {
     ...job,
     recipe: {
-      sourcePath: stem.phaseSourcePath,
+      sourcePath,
       rotationSec: rotationSecForBars(nextPhaseBars(stem, steps, snapDiv), stem)
     }
   }

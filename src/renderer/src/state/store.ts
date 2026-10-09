@@ -1403,7 +1403,11 @@ export function reducer(state: AppState, action: Action): AppState {
                 path: action.path,
                 durationSec: action.durationSec,
                 trimStartSec: undefined,
-                trimEndSec: undefined
+                trimEndSec: undefined,
+                // The stretched render is a new original. A lineage kept from before would make
+                // the next re-one (or a rebuild) bake the unstretched source with this length.
+                phaseSourcePath: undefined,
+                phaseBars: undefined
               }
             ]
           }

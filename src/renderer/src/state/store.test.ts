@@ -1269,6 +1269,38 @@ describe('reducer', () => {
       expect(stem.trimEndSec).toBeUndefined()
       expect(state.rifffs.r1.startBar).toBe(3)
     })
+
+    it('drops the phase lineage: the stretched render is a new original, so a later re-one bakes it, not the unstretched source', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeOneShotRifff({
+          stems: [
+            {
+              slot: 1,
+              author: '',
+              name: 'kick',
+              type: 'fx',
+              path: '/lib/.bakes/0123456789abcdef0123456789abcdef.baked.wav',
+              durationSec: 0.6,
+              barLength: 1,
+              oneShot: true,
+              phaseSourcePath: '/x/kick.wav',
+              phaseBars: 0.5
+            }
+          ]
+        })
+      })
+      state = reducer(state, {
+        type: 'SET_ONE_SHOT_STRETCHED',
+        groupId: 'r1',
+        path: '/x/kick-stretched.wav',
+        durationSec: 0.9,
+        startBar: 3
+      })
+      const stem = state.rifffs.r1.stems[0]
+      expect(stem.phaseSourcePath).toBeUndefined()
+      expect(stem.phaseBars).toBeUndefined()
+    })
   })
 
   describe('SET_GROUP_MUTE', () => {

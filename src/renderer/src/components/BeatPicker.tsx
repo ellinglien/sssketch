@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch } from 'react'
 import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { offsetStepsForBeatIndex, rotationSecondsForStem } from '../state/selectors'
-import { nextPhaseBars, reoneJob } from '@shared/reonedRotation'
+import { nextPhaseBars, phaseLineage, reoneJob } from '@shared/reonedRotation'
 import type { Action, AppState } from '../state/store'
 import { getAudioContext } from '../audio/peakCache'
 import { decodeStemFile } from '../audio/decodeStemFile'
@@ -101,7 +101,7 @@ export async function bakeStems(
       const stepCount = typeof steps === 'function' ? steps(stem) : steps
       return {
         ...result,
-        phaseSourcePath: stem.phaseSourcePath ?? stem.path,
+        phaseSourcePath: phaseLineage(stem).sourcePath,
         phaseBars: nextPhaseBars(stem, stepCount, snapDiv)
       }
     })
@@ -147,7 +147,7 @@ export async function rebakeRifff(
       const stem = stemsByPath.get(result.path)!
       return {
         ...result,
-        phaseSourcePath: stem.phaseSourcePath ?? stem.path,
+        phaseSourcePath: phaseLineage(stem).sourcePath,
         phaseBars: nextPhaseBars(stem, steps, snapDiv)
       }
     })

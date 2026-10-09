@@ -24,7 +24,7 @@ function riff(): Rifff {
         author: 'b',
         name: 'bass',
         type: 'bass',
-        path: '/two.wav',
+        path: '/two.baked.wav',
         durationSec: 8,
         barLength: 4,
         phaseSourcePath: '/original-two.wav',
@@ -56,7 +56,7 @@ describe('rifffForSketchCross', () => {
         }))
     )
 
-    expect(source.stems.map((stem) => stem.path)).toEqual(['/one.wav', '/two.wav'])
+    expect(source.stems.map((stem) => stem.path)).toEqual(['/one.wav', '/two.baked.wav'])
     expect(prepared?.stems).toMatchObject([
       { path: '/baked-1.wav', phaseSourcePath: '/one.wav', phaseBars: -0.25 },
       { path: '/baked-2.wav', phaseSourcePath: '/original-two.wav', phaseBars: 0.75 }
@@ -89,7 +89,7 @@ describe('rifffForSketchCross', () => {
         phaseSourcePath: '/lore/one.opus',
         phaseBars: -0.25
       },
-      { path: '/baked/two.wav', durationSec: 8, phaseSourcePath: '/original-two.wav' }
+      { path: '/baked/two.baked.wav', durationSec: 8, phaseSourcePath: '/original-two.wav' }
     ])
   })
 
@@ -101,7 +101,7 @@ describe('rifffForSketchCross', () => {
     expect(bakeOffset.mock.calls[0][0]).toEqual([
       { path: '/one.wav', rotationSec: 1 },
       {
-        path: '/two.wav',
+        path: '/two.baked.wav',
         rotationSec: 1,
         recipe: { sourcePath: '/original-two.wav', rotationSec: 1.5 } // 0.25 + 0.5 bars, 2 s per bar
       }
