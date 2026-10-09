@@ -528,11 +528,33 @@ describe('bakeOffset recipes', () => {
 // still reused and a rebuilt one no longer matches it. So the bytes of one WAV bake and one native
 // (LORE-style, Ogg) bake are pinned per version. A failure here means: bump BAKER_VERSION in
 // reonedRecipe.ts, then record the new hashes under the new version.
-const GOLDEN_BAKES: Record<number, { wav: string; native: string }> = {
+// The native bake decodes the Ogg in the engine, and the Vorbis decode's float maths differs by
+// a hair between an arm64 and an x86_64 engine (the release's Intel leg runs one under Rosetta).
+// Copies are made and reused on the machine that bakes them, so each engine CPU pins its own hash.
+const GOLDEN_BAKES: Record<number, { wav: string; native: Record<string, string> }> = {
   1: {
     wav: '6930acd04f1977f9cac54439f325eb7ca9d9fb12353ffb284df18059553c757e',
-    native: 'a8bce419a6f113ee6e867b890e02f4f1cca41d846257de13ce1c4dc106c8bfb5'
+    native: {
+      arm64: 'a8bce419a6f113ee6e867b890e02f4f1cca41d846257de13ce1c4dc106c8bfb5',
+      x64: 'aa0c9d2648d425ef7d7b84b44e25b4d1c67df826d9dbc4aa7cb5b392136e3cb5'
+    }
   }
+}
+
+/** The dev engine binary's CPU from its thin Mach-O header ('arm64', 'x64'), as the render-parity
+ * test reads it; process.arch when the header isn't one we know. */
+function engineArch(): string {
+  const binary = join(
+    process.cwd(),
+    'native-engine/build/sssketch_engine_artefacts/sssketch-engine.app/Contents/MacOS/sssketch-engine'
+  )
+  if (!existsSync(binary)) return process.arch
+  const head = readFileSync(binary).subarray(0, 8)
+  if (head.readUInt32LE(0) !== 0xfeedfacf) return process.arch
+  const cpu = head.readUInt32LE(4)
+  if (cpu === 0x0100000c) return 'arm64'
+  if (cpu === 0x01000007) return 'x64'
+  return process.arch
 }
 const BAKER_CHANGED = 'baker output changed: bump BAKER_VERSION'
 
@@ -595,7 +617,9 @@ describe('bakeOffset golden output (BAKER_VERSION)', () => {
       const source = join(dir, '0123456789abcdef01234567')
       writeFileSync(source, readFileSync(join(process.cwd(), 'fixtures/reone-golden/tone.ogg')))
       const [baked] = await bakeOffset([{ path: source, rotationSec: 0.2 }], join(dir, 'bakes'))
-      expect(sha256(baked.bakedPath), BAKER_CHANGED).toBe(GOLDEN_BAKES[BAKER_VERSION]?.native)
+      expect(sha256(baked.bakedPath), BAKER_CHANGED).toBe(
+        GOLDEN_BAKES[BAKER_VERSION]?.native[engineArch()]
+      )
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
