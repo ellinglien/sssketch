@@ -63,6 +63,16 @@ function cryptoFraction(): number {
   return crypto.getRandomValues(new Uint32Array(1))[0] / 0x100000000
 }
 
+function CrossPlaybackIndicator(): React.JSX.Element {
+  return (
+    <span className="ra-cross-playing-indicator" aria-hidden="true">
+      <i />
+      <i />
+      <i />
+    </span>
+  )
+}
+
 function randomCrossSlotKind(): DiscoverSlotKind {
   const index = crypto.getRandomValues(new Uint32Array(1))[0] % DISCOVER_SLOT_KIND_OPTIONS.length
   return DISCOVER_SLOT_KIND_OPTIONS[index]
@@ -302,8 +312,11 @@ function SourceColumn({
           {parent.label}
         </span>
         <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{Math.round(parent.bpm)} bpm</span>
-        <span style={{ width: 12, color: selected ? 'var(--ra-playhead)' : 'var(--ra-text-4)' }}>
-          {selected && playing ? '▶' : selected ? '●' : ''}
+        <span
+          style={{ width: 12, color: selected ? 'var(--ra-playhead)' : 'var(--ra-text-4)' }}
+          aria-label={selected ? (playing ? 'playing' : 'selected') : undefined}
+        >
+          {selected && playing ? <CrossPlaybackIndicator /> : selected ? '●' : ''}
         </span>
       </button>
       {parent.sources.map((source) => (
@@ -947,6 +960,41 @@ export function CrossPanel({
           color: var(--ra-text-4);
           cursor: default;
         }
+        .ra-cross-playing-indicator {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 1px;
+          width: 12px;
+          height: 12px;
+          color: var(--ra-playhead);
+        }
+        .ra-cross-playing-indicator > i {
+          width: 2px;
+          height: 8px;
+          background: currentColor;
+          transform-origin: center;
+          animation: ra-cross-playing-meter 720ms ease-in-out infinite alternate;
+        }
+        .ra-cross-playing-indicator > i:nth-child(2) {
+          animation-delay: -480ms;
+        }
+        .ra-cross-playing-indicator > i:nth-child(3) {
+          animation-delay: -240ms;
+        }
+        @keyframes ra-cross-playing-meter {
+          from { transform: scaleY(0.3); opacity: 0.55; }
+          to { transform: scaleY(1); opacity: 1; }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .ra-cross-playing-indicator > i {
+            animation: none;
+          }
+          .ra-cross-playing-indicator > i:nth-child(1),
+          .ra-cross-playing-indicator > i:nth-child(3) {
+            transform: scaleY(0.55);
+          }
+        }
       `}</style>
       <div
         style={{
@@ -1125,12 +1173,17 @@ export function CrossPanel({
                 width: 12,
                 color: selectedTarget === 'center' ? 'var(--ra-playhead)' : 'var(--ra-text-4)'
               }}
+              aria-label={
+                selectedTarget === 'center' ? (playing ? 'playing' : 'selected') : undefined
+              }
             >
-              {selectedTarget === 'center' && playing
-                ? '▶'
-                : selectedTarget === 'center'
-                  ? '●'
-                  : ''}
+              {selectedTarget === 'center' && playing ? (
+                <CrossPlaybackIndicator />
+              ) : selectedTarget === 'center' ? (
+                '●'
+              ) : (
+                ''
+              )}
             </span>
           </button>
           {draft.center.map((row, index) => {
