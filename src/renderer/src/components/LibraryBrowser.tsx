@@ -1357,7 +1357,11 @@ export function LibraryBrowser({
         // Auto-preview on selection, full mix only — same reasoning as
         // BeatPicker's own preview: pause the main arrangement first so the
         // two don't play over each other.
-        await pauseArrangementBeforeShelfPreview({
+        //
+        // When the engine can't confirm the stop, the preview stays off, but
+        // the riff's stems still download below: a failed stop used to
+        // reject out of this whole chain and skip the sync with it.
+        const engineStopped = await pauseArrangementBeforeShelfPreview({
           playing,
           pauseArrangement: () => dispatch({ type: 'PAUSE' }),
           stopEngine: () => window.rifffApi.engineStop()
@@ -1372,6 +1376,7 @@ export function LibraryBrowser({
         // applied at all, so it has to be computed fresh here, same as this
         // preview always did.
         async function tryStartPreview(riff: RiffLibraryResolvedRiff): Promise<boolean> {
+          if (!engineStopped) return false
           const cachedStems = riff.stems.filter((s) => s.path !== null)
           if (cachedStems.length === 0) return false
           const gain = sqrtGain(cachedStems.length)

@@ -362,10 +362,18 @@ namespace sssketch
             // halt callback can briefly publish it while a newer ordered
             // command is still pending. Each waiter is paired to the exact
             // Stop generation the audio thread reports complete.
+            // When the device isn't rendering at all, nothing is audible and
+            // the fade can't run, so silence is acknowledged without it
+            // (HaltAck.h) rather than leaving the renderer to time out.
             const auto completed = transport.completedHaltGeneration();
+            const bool deviceRunning = transport.audioDeviceRunning();
+            const auto rendered = transport.renderedCallbacks();
+            const auto nowMs = juce::Time::getMillisecondCounter();
+            const auto stallMs = haltAckStallMs(transport.currentBlockSize(),
+                                                transport.currentSampleRate());
             for (auto it = pendingHaltAcks.begin(); it != pendingHaltAcks.end();)
             {
-                if (it->commandGeneration <= completed)
+                if (haltAckDue(*it, completed, deviceRunning, rendered, nowMs, stallMs))
                 {
                     sendTransportStopped(it->token, true);
                     it = pendingHaltAcks.erase(it);
@@ -730,12 +738,15 @@ namespace sssketch
             {
                 const auto duplicate = std::find_if(
                     pendingHaltAcks.begin(), pendingHaltAcks.end(),
-                    [token](const PendingHaltAck& pending) { return pending.token == token; });
+                    [token](const HaltAckWait& pending) { return pending.token == token; });
                 if (duplicate == pendingHaltAcks.end())
-                    pendingHaltAcks.push_back({ token, commandGeneration });
-                // Even an already-idle transport uses the timer path so the
-                // reply is consistently asynchronous and the waiter is
-                // installed before it can arrive.
+                    pendingHaltAcks.push_back({ token, commandGeneration,
+                                                transport.renderedCallbacks(),
+                                                juce::Time::getMillisecondCounter() });
+                // Even an already-idle transport (or a stopped device) uses
+                // the timer path so the reply is consistently asynchronous
+                // and the waiter is installed before it can arrive; the first
+                // tick, 2 ms later, answers it.
                 startTimer(kHaltAckTimerId, kHaltAckPollIntervalMs);
             }
         }

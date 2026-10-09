@@ -189,22 +189,19 @@ export function Shelf({
     const previewToken = registerActivePreview(stopTilePreview)
     previewTokenRef.current = previewToken
     void (async () => {
-      try {
-        await pauseArrangementBeforeShelfPreview({
-          playing,
-          pauseArrangement: () => dispatch({ type: 'PAUSE' }),
-          stopEngine: () => window.rifffApi.engineStop()
-        })
-      } catch (err) {
-        // Do not start Web Audio when native silence could not be confirmed;
-        // that would recreate the exact two-playback overlap this handoff
-        // exists to prevent.
-        if (!isActivePreview(previewToken)) return
-        console.error('Shelf: failed to stop arrangement before preview:', err)
+      const stopped = await pauseArrangementBeforeShelfPreview({
+        playing,
+        pauseArrangement: () => dispatch({ type: 'PAUSE' }),
+        stopEngine: () => window.rifffApi.engineStop()
+      })
+      if (previewGenerationRef.current !== generation || !isActivePreview(previewToken)) return
+      // Do not start Web Audio when native silence could not be confirmed;
+      // that would recreate the exact two-playback overlap this handoff
+      // exists to prevent.
+      if (!stopped) {
         stopTilePreview()
         return
       }
-      if (previewGenerationRef.current !== generation || !isActivePreview(previewToken)) return
       const sources = await startPreviewLoop(
         getAudioContext(),
         rifff.stems.map((s) => ({

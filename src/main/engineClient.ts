@@ -37,6 +37,7 @@ export class EngineClient {
   private recvBuf = Buffer.alloc(0)
   private pendingWaiters: {
     type: string
+    accept?: (payload: unknown) => boolean
     resolve: (payload: unknown) => void
     reject: (err: Error) => void
   }[] = []
@@ -119,7 +120,9 @@ export class EngineClient {
       for (const cb of subs) cb(msg.payload)
     }
 
-    const waiterIdx = this.pendingWaiters.findIndex((w) => w.type === msg.type)
+    const waiterIdx = this.pendingWaiters.findIndex(
+      (w) => w.type === msg.type && (w.accept === undefined || w.accept(msg.payload))
+    )
     if (waiterIdx === -1) return // not something anyone's waiting for (e.g. a stray position-update)
     const [waiter] = this.pendingWaiters.splice(waiterIdx, 1)
     waiter.resolve(msg.payload)
@@ -159,12 +162,17 @@ export class EngineClient {
    * (render-export -> render-export-result). Does not attempt to correlate
    * multiple concurrent requests of the same type; this client is used for
    * one export at a time, matching engineProcess.ts's one-process-per-export
-   * design. */
+   * design.
+   *
+   * `accept` narrows the match for a reply that carries its own correlation
+   * (engine-stop's token): a reply of the right type that it rejects is left
+   * for whichever waiter it belongs to, rather than consumed here. */
   sendAndAwaitType(
     type: string,
     payload: unknown,
     responseType: string,
-    timeoutMs = 30000
+    timeoutMs = 30000,
+    accept?: (payload: unknown) => boolean
   ): Promise<unknown> {
     return new Promise((resolve, reject) => {
       // The list holds this wrapper, not the promise's own resolve, so the
@@ -172,6 +180,7 @@ export class EngineClient {
       // in place would let it swallow the next reply of its type.
       const waiter = {
         type: responseType,
+        accept,
         resolve: (payload: unknown): void => {
           clearTimeout(timer)
           resolve(payload)

@@ -192,12 +192,16 @@ export function LoopFolderPane({
     const previewCancelled = (): boolean => cancelled || !isActivePreview(previewToken)
     void (async () => {
       try {
-        await pauseArrangementBeforeShelfPreview({
+        const stopped = await pauseArrangementBeforeShelfPreview({
           playing,
           pauseArrangement: () => dispatch({ type: 'PAUSE' }),
           stopEngine: () => window.rifffApi.engineStop()
         })
         if (previewCancelled()) return
+        if (!stopped) {
+          stopPreview()
+          return
+        }
         const sources = await startPreviewLoop(
           getAudioContext(),
           [{ path: anchor.path, gain: 1 }],

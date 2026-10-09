@@ -48,6 +48,7 @@ import {
 } from './recoveryFileTracker'
 import { awaitSaveBeforeQuit, type SaveBeforeQuitResult } from './saveBeforeQuit'
 import { bakeOffset, type BakeJob } from './bakeOffset'
+import { createEngineStopper } from './engineStop'
 import { exportMixToWav } from './exportMix'
 import type { ToolkitExportMode } from '@shared/toolkit'
 import type { LiveParamField } from '@shared/liveParam'
@@ -281,35 +282,8 @@ import {
 // read from the before-quit handler below, which runs in a different
 // closure and can't otherwise reach it.
 let playbackEngine: PlaybackEngineHandle | undefined
-let engineStopToken = 0
-let engineStopInFlight: Promise<void> | null = null
-
-/** Sends one native stop request and resolves only after Transport's audio
- * callback has completed its click-free halt fade. Concurrent renderer
- * callers share the same request, which prevents Shelf's explicit handoff
- * and StoreContext's playing-state effect from sending duplicate stops. */
-function stopPlaybackEngineAndWait(): Promise<void> {
-  if (!playbackEngine) return Promise.resolve()
-  if (engineStopInFlight) return engineStopInFlight
-  const token = ++engineStopToken
-  const request = playbackEngine.client
-    .sendAndAwaitType('stop', { token }, 'transport-stopped', 2000)
-    .then((payload) => {
-      if (
-        typeof payload !== 'object' ||
-        payload === null ||
-        (payload as { token?: unknown }).token !== token ||
-        (payload as { stopped?: unknown }).stopped !== true
-      ) {
-        throw new Error('native engine did not confirm that transport reached silence')
-      }
-    })
-  const shared = request.finally(() => {
-    if (engineStopInFlight === shared) engineStopInFlight = null
-  })
-  engineStopInFlight = shared
-  return shared
-}
+// engine-stop's shared, token-correlated request (engineStop.ts).
+const engineStopper = createEngineStopper(() => playbackEngine?.client)
 
 /**
  * Best-effort fetch of current plugin state from the PERSISTENT live engine
@@ -1639,13 +1613,13 @@ app.whenReady().then(async () => {
   ipcMain.handle('engine-play', (_event, fromPos: number) => {
     // A new Play deliberately supersedes any halt still fading. Let a
     // subsequent stop create a fresh request rather than inheriting the
-    // superseded handoff promise; the old waiter will either be acked by
-    // that later stop or time out harmlessly.
-    engineStopInFlight = null
+    // superseded handoff promise; the engine answers the old waiter
+    // stopped=false.
+    engineStopper.supersede()
     playbackEngine?.client.send('play', { fromPos })
   })
 
-  ipcMain.handle('engine-stop', () => stopPlaybackEngineAndWait())
+  ipcMain.handle('engine-stop', () => engineStopper.stop())
 
   ipcMain.handle('engine-set-position', (_event, pos: number) => {
     playbackEngine?.client.send('set-position', { pos })

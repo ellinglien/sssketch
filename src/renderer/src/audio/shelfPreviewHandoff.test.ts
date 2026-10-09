@@ -35,4 +35,29 @@ describe('pauseArrangementBeforeShelfPreview', () => {
     expect(pauseArrangement).not.toHaveBeenCalled()
     expect(stopEngine).toHaveBeenCalledOnce()
   })
+
+  it('reports true once the engine confirms the stop', async () => {
+    await expect(
+      pauseArrangementBeforeShelfPreview({
+        playing: true,
+        pauseArrangement: vi.fn(),
+        stopEngine: async () => undefined
+      })
+    ).resolves.toBe(true)
+  })
+
+  it('reports false, never rejects, when the engine cannot confirm the stop', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await expect(
+        pauseArrangementBeforeShelfPreview({
+          playing: true,
+          pauseArrangement: vi.fn(),
+          stopEngine: () => Promise.reject(new Error('timed out waiting for "transport-stopped"'))
+        })
+      ).resolves.toBe(false)
+    } finally {
+      warn.mockRestore()
+    }
+  })
 })

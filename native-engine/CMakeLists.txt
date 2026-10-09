@@ -152,6 +152,7 @@ target_sources(sssketch_engine PRIVATE
   Source/ChannelChainRegistry.cpp
   Source/ChannelChainRegistryTests.cpp
   Source/GracePeriodTests.cpp
+  Source/HaltAckTests.cpp
   Source/SchedulePlayback.cpp
   Source/SchedulePlaybackTests.cpp
   Source/FadeGain.cpp

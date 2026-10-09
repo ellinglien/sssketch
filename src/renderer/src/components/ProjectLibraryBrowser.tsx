@@ -216,19 +216,16 @@ export function ProjectLibraryBrowser({
       return
     }
     if (previewCancelled()) return
-    try {
-      await pauseArrangementBeforeShelfPreview({
-        playing,
-        pauseArrangement: () => dispatch({ type: 'PAUSE' }),
-        stopEngine: () => window.rifffApi.engineStop()
-      })
-    } catch (err) {
-      if (!isActivePreview(previewToken)) return
-      console.error('ProjectLibraryBrowser: failed to stop arrangement before preview:', err)
+    const stopped = await pauseArrangementBeforeShelfPreview({
+      playing,
+      pauseArrangement: () => dispatch({ type: 'PAUSE' }),
+      stopEngine: () => window.rifffApi.engineStop()
+    })
+    if (previewCancelled()) return
+    if (!stopped) {
       stopBackupPreview()
       return
     }
-    if (previewCancelled()) return
     setPreviewingPath(backupPath)
     const sources = await startPreviewLoop(getAudioContext(), stems, previewCancelled)
     if (previewCancelled()) {
