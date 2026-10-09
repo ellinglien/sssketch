@@ -377,7 +377,15 @@ first: the engine changed.
     appears below;
   - clicking a column's stem plays that column; the playhead and the playing column's indicator
     move;
-  - `undo`, `redo`, `swap sides` and `clear` do what they say.
+  - `undo`, `redo`, `swap sides` and `clear` do what they say;
+  - the selected column's `●` is grey while nothing plays, and the column's meter is red only
+    while it sounds.
+- [ ] **Cross metronome.** In Cross, press the metronome button beside the tempo (or Tab to it and
+  press Enter), then play. **You should hear:** the click at Cross's tempo; press the tempo `+` a
+  few times and the click speeds up with the preview. Drag the button up and down. **You should
+  hear:** the click get louder and softer. Close Cross. **You should see:** the main transport's
+  metronome button in the same on/off state and volume. Play the project. **You should hear:**
+  the click at the project's tempo, not Cross's.
 - [ ] In Cross, press the tempo `+` a few times while it plays. **You should hear:** the preview
   speed up. Close Cross. **You should see:** the project's tempo unchanged, the project not marked
   unsaved, and nothing new to undo.
@@ -407,7 +415,7 @@ first: the engine changed.
   the project is marked unsaved (it changes the saved project); Cmd+Z mutes it again.
 - [ ] **Metronome volume.** Drag the metronome button up and down. **You should hear:** the click
   get louder and softer; a plain click still turns it on and off. The default is louder than
-  before (1.5); say if that's too loud.
+  before (1.5), as decided.
 - [ ] Optional: with the metronome on at a non-default volume and the transport playing, run
   `pkill -x sssketch-engine` in a terminal. **You should hear:** after the engine restarts and you
   press play, the click at the same volume.
@@ -426,7 +434,8 @@ first: the engine changed.
   **You should see:** "older unsaved work was kept", with the snapshot you moved past.
 - [ ] **Selection styling.** Select riffs in Sketch and the Shelf. **You should see:** the
   selection centred on the circle, a low-contrast texture, and selected and playing looking
-  different.
+  different: a previewing Shelf tile has a thin red edge, with no glow. The Arrange mixer strip
+  has a plain border on its left, with no shadow.
 
 ---
 
@@ -595,7 +604,3 @@ first: the engine changed.
 
 - With advanced features off, should the sound panel's "make this project's the default" hide too?
   Right now it stays.
-- The codex/phase-cache branch left a few small design-system slips, not fixed at the merge: a `#000` drop shadow
-  in `App.tsx`, a colour baked into `riff-selection-crosshatch.svg`, a red label on Cross's selected
-  column when nothing plays, and some sentence-case `aria-label`s (`Decrease tempo`). Fix them as
-  they are, or leave them?

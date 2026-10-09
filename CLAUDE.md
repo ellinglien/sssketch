@@ -201,7 +201,10 @@ control, which changes only `draft.targetBpm`.
 
 On/off and volume (`metronomeVolume`, drag the metronome button up/down) are app state, not saved
 with the project. Main keeps the last `set-metronome` it sent (`src/main/metronomeSetting.ts`) and
-re-sends it to a respawned engine, which otherwise starts at its own defaults.
+re-sends it to a respawned engine, which otherwise starts at its own defaults. The button is one
+component, `components/MetronomeButton.tsx`, used by the main transport and by Cross. The click has
+no tempo of its own: the engine clicks at the loaded project's bpm, so during a Cross preview it
+follows `draft.targetBpm` and after it the project's tempo (`PlaybackEngineTests`).
 
 ## Why the engine is a GUI app, and why its plugin editor windows are `setAlwaysOnTop`
 
