@@ -33,6 +33,10 @@ export interface BakeJob {
    * the original. When the original is away (an unplugged LORE drive) the bake falls back to
    * rotating `path` by `rotationSec`, still recipe-named from the file it was really made from. */
   recipe?: { sourcePath: string; rotationSec: number }
+  /** No fallback: when the recipe's original can't be read, the job fails. A rebuild
+   * (reonedRebuild.ts) sets it, because its `path` is the missing copy, and rotating that by 0
+   * under a new name if it reappeared would repoint the project for nothing. */
+  recipeOnly?: boolean
 }
 
 export interface BakeResult {
@@ -77,7 +81,8 @@ async function planJob(job: BakeJob, dir: string): Promise<PlannedJob> {
   if (job.recipe) {
     try {
       recipe = await resolveRecipe(job.recipe.sourcePath, job.recipe.rotationSec)
-    } catch {
+    } catch (err) {
+      if (job.recipeOnly) throw err
       // The original is away (an unplugged LORE drive): today's chain from the current
       // file, still recipe-named, from what it was really made from.
       recipe = await resolveRecipe(job.path, job.rotationSec)
