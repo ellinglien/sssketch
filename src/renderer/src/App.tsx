@@ -3215,7 +3215,6 @@ function Frame(): React.JSX.Element {
                   boxSizing: 'border-box',
                   borderLeft: '1px solid var(--ra-border)',
                   background: 'color-mix(in srgb, var(--ra-bg-bar) 97%, transparent)',
-                  boxShadow: '-5px 0 14px color-mix(in srgb, #000 28%, transparent)',
                   pointerEvents: 'none'
                 }}
               >
