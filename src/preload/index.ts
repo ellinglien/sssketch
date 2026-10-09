@@ -4,6 +4,7 @@ import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import type { DiscoverSlotKind, DiscoverTraitKind } from '@shared/discoverSlotKind'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type { ToolkitExportMode } from '@shared/toolkit'
+import type { ReoneBakeJob } from '@shared/reonedRotation'
 import type { LiveParamField } from '@shared/liveParam'
 import type { OwnUsernameReport } from '@shared/ownUsernameReport'
 import type { AppFeatureSettings } from '@shared/features'
@@ -139,7 +140,7 @@ const api = {
   renderStretched: (stemPath: string, ratio: number): Promise<StretchedStem> =>
     ipcRenderer.invoke('render-stretched', stemPath, ratio),
   bakeOffset: (
-    jobs: { path: string; rotationSec: number }[]
+    jobs: ReoneBakeJob[]
   ): Promise<{ path: string; bakedPath: string; durationSec: number }[]> =>
     ipcRenderer.invoke('bake-offset', jobs),
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),

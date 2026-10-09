@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch } from 'react'
 import { useAppState, useDispatch, usePlaying } from '../state/StoreContext'
 import { offsetStepsForBeatIndex, rotationSecondsForStem } from '../state/selectors'
+import { nextPhaseBars, reoneJob } from '@shared/reonedRotation'
 import type { Action, AppState } from '../state/store'
 import { getAudioContext } from '../audio/peakCache'
 import { decodeStemFile } from '../audio/decodeStemFile'
@@ -86,14 +87,9 @@ export async function bakeStems(
   | null
 > {
   try {
-    const jobs = stems.map((s) => ({
-      path: s.path,
-      rotationSec: rotationSecondsForStem(
-        typeof steps === 'function' ? steps(s) : steps,
-        snapDiv,
-        s
-      )
-    }))
+    const jobs = stems.map((s) =>
+      reoneJob(s, typeof steps === 'function' ? steps(s) : steps, snapDiv)
+    )
     const results = await window.rifffApi.bakeOffset(jobs)
     if (results.length !== jobs.length) {
       console.error('BeatPicker: bake did not produce a complete riff; leaving state unchanged')
@@ -106,7 +102,7 @@ export async function bakeStems(
       return {
         ...result,
         phaseSourcePath: stem.phaseSourcePath ?? stem.path,
-        phaseBars: (stem.phaseBars ?? 0) - stepCount / snapDiv
+        phaseBars: nextPhaseBars(stem, stepCount, snapDiv)
       }
     })
     evictStemAnalysis(adopted.map((r) => r.bakedPath))
@@ -140,10 +136,7 @@ export async function rebakeRifff(
   const snapDiv = SNAP_DIVS[state.snapIdx]
   const steps = state.off[groupId] ?? 0
   try {
-    const jobs = rifff.stems.map((s) => ({
-      path: s.path,
-      rotationSec: rotationSecondsForStem(steps, snapDiv, s)
-    }))
+    const jobs = rifff.stems.map((s) => reoneJob(s, steps, snapDiv))
     const results = await window.rifffApi.bakeOffset(jobs)
     if (results.length !== jobs.length) {
       console.error('BeatPicker: re-bake did not produce a complete riff; leaving state unchanged')
@@ -155,7 +148,7 @@ export async function rebakeRifff(
       return {
         ...result,
         phaseSourcePath: stem.phaseSourcePath ?? stem.path,
-        phaseBars: (stem.phaseBars ?? 0) - steps / snapDiv
+        phaseBars: nextPhaseBars(stem, steps, snapDiv)
       }
     })
     evictStemAnalysis(adopted.map((r) => r.bakedPath))

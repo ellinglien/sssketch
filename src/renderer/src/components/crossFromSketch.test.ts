@@ -93,6 +93,21 @@ describe('rifffForSketchCross', () => {
     ])
   })
 
+  it('sends each stem a recipe from its original at the total phase, so a repeat audition reuses the copy', async () => {
+    const bakeOffset = vi.fn(async (jobs: { path: string }[]) =>
+      jobs.map((job, i) => ({ path: job.path, bakedPath: `/baked-${i}.wav`, durationSec: 8 }))
+    )
+    await rifffForSketchCross(riff(), { 'parent-a': -2 }, 4, bakeOffset)
+    expect(bakeOffset.mock.calls[0][0]).toEqual([
+      { path: '/one.wav', rotationSec: 1 },
+      {
+        path: '/two.wav',
+        rotationSec: 1,
+        recipe: { sourcePath: '/original-two.wav', rotationSec: 1.5 } // 0.25 + 0.5 bars, 2 s per bar
+      }
+    ])
+  })
+
   it('rejects a bake whose results name a stem it was not asked for', async () => {
     await expect(
       rifffForSketchCross(riff(), { 'parent-a': 1 }, 4, async (jobs) =>
