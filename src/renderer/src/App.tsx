@@ -98,6 +98,7 @@ import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { StemsUnavailableIndicator } from './components/StemsUnavailableIndicator'
 import { PluginsHeldNotice, PluginsOffNotice } from './components/PluginsOffNotice'
 import { ReonedCopyMissingNotice } from './components/ReonedCopyMissingNotice'
+import { ReonedCopiesNotice } from './components/ReonedCopiesNotice'
 import { StartupGate } from './components/StartupGate'
 import { OwnUsernameReporter } from './components/OwnUsernameReporter'
 import { markManualSeek } from './state/manualSeek'
@@ -3097,6 +3098,7 @@ function Frame(): React.JSX.Element {
       <PluginsOffNotice />
       <PluginsHeldNotice />
       <ReonedCopyMissingNotice />
+      <ReonedCopiesNotice />
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the
