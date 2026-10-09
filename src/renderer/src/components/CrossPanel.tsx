@@ -57,6 +57,7 @@ import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreC
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { useCrossPreview, type CrossPreviewMode } from '../state/useCrossPreview'
 import { crossEmptyDropSlotCount } from './crossDropSlots'
+import { crossColumnMark } from './crossColumnMark'
 
 const SOURCE_DRAG_TYPE = 'application/x-sssketch-cross-source'
 const ROW_DRAG_TYPE = 'application/x-sssketch-cross-row'
@@ -72,6 +73,21 @@ function CrossPlaybackIndicator(): React.JSX.Element {
       <i />
       <i />
       <i />
+    </span>
+  )
+}
+
+function CrossColumnMarkView({
+  selected,
+  playing
+}: {
+  selected: boolean
+  playing: boolean
+}): React.JSX.Element {
+  const mark = crossColumnMark(selected, playing)
+  return (
+    <span style={{ width: 16, color: mark.color }} aria-label={mark.label}>
+      {mark.kind === 'playing' ? <CrossPlaybackIndicator /> : mark.kind === 'selected' ? '●' : ''}
     </span>
   )
 }
@@ -386,12 +402,7 @@ function SourceColumn({
           {parent.label}
         </span>
         <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{Math.round(parent.bpm)} bpm</span>
-        <span
-          style={{ width: 16, color: selected ? 'var(--ra-playhead)' : 'var(--ra-text-4)' }}
-          aria-label={selected ? (playing ? 'playing' : 'selected') : undefined}
-        >
-          {selected && playing ? <CrossPlaybackIndicator /> : selected ? '●' : ''}
-        </span>
+        <CrossColumnMarkView selected={selected} playing={playing} />
       </button>
       {parent.sources.map((source) => (
         <SourceRow
@@ -1312,23 +1323,7 @@ export function CrossPanel({
             <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>
               {draft.center.length} / {MAX_RIFFF_STEM_SLOTS}
             </span>
-            <span
-              style={{
-                width: 16,
-                color: selectedTarget === 'center' ? 'var(--ra-playhead)' : 'var(--ra-text-4)'
-              }}
-              aria-label={
-                selectedTarget === 'center' ? (playing ? 'playing' : 'selected') : undefined
-              }
-            >
-              {selectedTarget === 'center' && playing ? (
-                <CrossPlaybackIndicator />
-              ) : selectedTarget === 'center' ? (
-                '●'
-              ) : (
-                ''
-              )}
-            </span>
+            <CrossColumnMarkView selected={selectedTarget === 'center'} playing={playing} />
           </button>
           {draft.center.map((row, index) => {
             const source = crossSourceForRow(draft, row)
