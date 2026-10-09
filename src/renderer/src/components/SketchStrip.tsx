@@ -6,7 +6,7 @@ import { stemColorVar } from '../theme/typeColor'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { markManualSeek } from '../state/manualSeek'
 import type { Rifff } from '@shared/types'
-import { sketchRiffClickAction, toggleSketchBatchSelection } from './sketchRiffInteraction'
+import { sketchRiffClickAction, toggleRiffBatchSelection } from './sketchRiffInteraction'
 
 export const TILE_SIZE = 64
 export const TILE_GAP = 10
@@ -194,7 +194,7 @@ export function SketchStrip({
       return
     }
     if (e.metaKey || e.ctrlKey) {
-      setMultiSelected((prev) => toggleSketchBatchSelection(prev, state.sel, rifff.groupId))
+      setMultiSelected((prev) => toggleRiffBatchSelection(prev, state.sel, rifff.groupId))
       return
     }
     setMultiSelected(new Set())

@@ -16,10 +16,11 @@ export function sketchRiffClickAction(
   return playing ? 'select-and-switch' : 'select-and-play'
 }
 
-/** Cmd/Ctrl-click starts from the plain-click anchor when the batch is still
- * empty. Without that seed, clicking A then Cmd-clicking B selected only B,
- * so the UI could never reach the two-riff state that exposes Cross. */
-export function toggleSketchBatchSelection(
+/** Sketch and Shelf Cmd/Ctrl-click both start from the plain-click anchor
+ * when their local batch is still empty. Without that seed, clicking A then
+ * Cmd-clicking B selects only B, so the UI can never reach the two-riff
+ * state that exposes Cross. */
+export function toggleRiffBatchSelection(
   current: ReadonlySet<string>,
   anchorId: string | null,
   clickedId: string

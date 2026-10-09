@@ -20,6 +20,7 @@ import { formatBpm } from '@shared/format'
 import { LoopOrOneShotPrompt, type LoopOrOneShotChoice } from './LoopOrOneShotPrompt'
 import { importPathsWithChoice } from '../audio/importPathsWithChoice'
 import { pauseArrangementBeforeShelfPreview } from '../audio/shelfPreviewHandoff'
+import { toggleRiffBatchSelection } from './sketchRiffInteraction'
 
 const TILE_SIZE = 42
 
@@ -30,7 +31,8 @@ const EMPTY_SELECTION: Set<string> = new Set()
 export function Shelf({
   onImported,
   onOpenLibrary,
-  onSeedDiscover
+  onSeedDiscover,
+  onCrossRiffs
 }: {
   onImported: (groupId: string) => void
   /** Opens the riff library on the half the pressed button names -- the two
@@ -54,6 +56,10 @@ export function Shelf({
    * live drag onto Discover isn't possible (Discover's own full-screen
    * modal covers Shelf entirely), so this is triggered explicitly instead. */
   onSeedDiscover: (rifff: Rifff) => void
+  /** Opens Cross from exactly two Shelf-selected riffs. Shelf is shared by
+   * Sketch and Arrange, so this entry point is intentionally available in
+   * either workspace. */
+  onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -93,6 +99,7 @@ export function Shelf({
   // interaction, and vice versa.
   const multiSelected =
     state.sel !== null && rawMultiSelected.has(state.sel) ? rawMultiSelected : EMPTY_SELECTION
+  const crossPair = library.filter((rifff) => multiSelected.has(rifff.groupId))
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   // Bumped on every click so a preview whose decode is still in flight when
   // a different tile gets clicked knows it's been superseded and shouldn't
@@ -168,12 +175,7 @@ export function Shelf({
       return
     }
     if (e.metaKey || e.ctrlKey) {
-      setMultiSelected((prev) => {
-        const next = new Set(prev)
-        if (next.has(rifff.groupId)) next.delete(rifff.groupId)
-        else next.add(rifff.groupId)
-        return next
-      })
+      setMultiSelected((prev) => toggleRiffBatchSelection(prev, state.sel, rifff.groupId))
       return
     }
     setMultiSelected(new Set())
@@ -411,7 +413,7 @@ export function Shelf({
                 }}
                 onMouseEnter={() => setHoverId(rifff.groupId)}
                 onClick={(e) => handleTileClick(e, rifff)}
-                aria-pressed={selected}
+                aria-pressed={selected || batchSelected}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   // Real root cause of a live report, 2026-09-16: "right
@@ -451,6 +453,23 @@ export function Shelf({
               </button>
             )
           })}
+          {crossPair.length === 2 && (
+            <button
+              onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
+              aria-label="Cross the two selected Shelf riffs"
+              style={{
+                height: 28,
+                borderRadius: 0,
+                padding: '0 14px',
+                fontSize: 12,
+                border: '2px solid var(--ra-border-strong)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text)'
+              }}
+            >
+              cross riffs
+            </button>
+          )}
           <div
             onDragOver={(e) => {
               e.preventDefault()

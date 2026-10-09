@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sketchRiffClickAction, toggleSketchBatchSelection } from './sketchRiffInteraction'
+import { sketchRiffClickAction, toggleRiffBatchSelection } from './sketchRiffInteraction'
 
 describe('sketchRiffClickAction', () => {
   it('selects and starts an idle riff', () => {
@@ -20,12 +20,12 @@ describe('sketchRiffClickAction', () => {
   })
 })
 
-describe('toggleSketchBatchSelection', () => {
+describe('toggleRiffBatchSelection', () => {
   it('seeds the first plain-click anchor before adding the second riff', () => {
-    expect([...toggleSketchBatchSelection(new Set(), 'a', 'b')]).toEqual(['a', 'b'])
+    expect([...toggleRiffBatchSelection(new Set(), 'a', 'b')]).toEqual(['a', 'b'])
   })
 
   it('toggles within an existing multi-selection', () => {
-    expect([...toggleSketchBatchSelection(new Set(['a', 'b']), 'a', 'b')]).toEqual(['a'])
+    expect([...toggleRiffBatchSelection(new Set(['a', 'b']), 'a', 'b')]).toEqual(['a'])
   })
 })

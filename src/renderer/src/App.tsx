@@ -2175,10 +2175,10 @@ function Frame(): React.JSX.Element {
     setRiffLibraryOpen(true)
   }
 
-  /** Opens Cross from exactly the two riffs selected in Sketch. Cross is a
+  /** Opens Cross from exactly the two riffs selected in Sketch or Shelf. Cross is a
    * peer music-making workspace to Discover, not a library/import action:
    * its parents are the two project riffs exactly as currently heard. */
-  async function openCrossFromSketch([left, right]: [Rifff, Rifff]): Promise<void> {
+  async function openCrossFromRiffs([left, right]: [Rifff, Rifff]): Promise<void> {
     const projectKey = crossProjectKey(currentSketch, state.projectSeed)
     const selectedIds = new Set([left.groupId, right.groupId])
     const existingIds = new Set(crossDraft?.parents.map((parent) => parent.id) ?? [])
@@ -2224,7 +2224,7 @@ function Frame(): React.JSX.Element {
       )
       setCrossOpen(true)
     } catch (err) {
-      console.error('App: failed to prepare Sketch riffs for Cross:', err)
+      console.error('App: failed to prepare selected riffs for Cross:', err)
       window.alert(
         'Could not prepare the selected riffs for Cross. Nothing was changed; try again.'
       )
@@ -2982,6 +2982,7 @@ function Frame(): React.JSX.Element {
           onImported={handleImported}
           onOpenLibrary={openRiffLibrary}
           onSeedDiscover={openRiffLibraryWithDiscoverSeed}
+          onCrossRiffs={(rifffs) => void openCrossFromRiffs(rifffs)}
         />
         <TransportBar
           onEnableGatedRecording={() => void enableGatedRecording()}
@@ -3037,7 +3038,7 @@ function Frame(): React.JSX.Element {
                   onCreateRiser={createRiserFromGesture}
                   openRiserLaneId={openRiserLaneId}
                   onCloseRiserLane={closeRiserLane}
-                  onCrossRiffs={(rifffs) => void openCrossFromSketch(rifffs)}
+                  onCrossRiffs={(rifffs) => void openCrossFromRiffs(rifffs)}
                 />
               )}
             </div>
