@@ -172,13 +172,13 @@ textarea:focus-visible,
 }
 
 /* Riff selection keeps the original quiet square treatment, with only a
- * small corner radius and short feather at its edges. Shelf playback gets a
+ * 2px corner radius and very short feather at its edges. Shelf playback gets a
  * separate restrained playhead-colored feather so selected and sounding
  * remain distinct without the concentric-ring/corona effect. */
 .ra-riff-tile {
   position: relative;
   overflow: visible;
-  border-radius: 4px;
+  border-radius: 2px;
   background: transparent;
   transition:
     opacity 80ms ease,
@@ -188,11 +188,11 @@ textarea:focus-visible,
 
 .ra-riff-tile[data-selected='true'] {
   background: var(--ra-bg-riff-selected);
-  box-shadow: 0 0 7px 1px color-mix(in srgb, var(--ra-text-2) 13%, transparent);
+  box-shadow: 0 0 3px color-mix(in srgb, var(--ra-text-2) 9%, transparent);
 }
 
 .ra-shelf-riff-tile[data-previewing='true'] {
-  box-shadow: 0 0 7px 1px color-mix(in srgb, var(--ra-playhead) 24%, transparent);
+  box-shadow: 0 0 3px color-mix(in srgb, var(--ra-playhead) 18%, transparent);
 }
 
 /* Preserve keyboard focus with the same gently-rounded geometry. */
