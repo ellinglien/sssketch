@@ -42,13 +42,13 @@ import {
 import {
   initialRecoveryFileState,
   recoveryFileStep,
-  shouldClearRecoveryOnCleanQuit,
   type RecoveryFileEvent,
   type RecoveryFileState
 } from './recoveryFileTracker'
 import {
+  afterSaveBeforeQuit,
   awaitSaveBeforeQuit,
-  saveBeforeQuitNotice,
+  beforeQuitPlan,
   type SaveBeforeQuitResult
 } from './saveBeforeQuit'
 import { bakeOffset, type BakeJob } from './bakeOffset'
@@ -691,7 +691,12 @@ function createWindow(): BrowserWindow {
       })
   })
 
-  win.on('closed', () => windowNotices.windowGone(win))
+  win.on('closed', () => {
+    windowNotices.windowGone(win)
+    // Its unsaved work goes with it: what survives is the recovery file, which
+    // a later quit must neither ask about nor delete (beforeQuitPlan).
+    if (win === mainWindow) rendererHasUnsavedChanges = false
+  })
 
   win.webContents.setWindowOpenHandler((details) => {
     shell.openExternal(details.url)
@@ -2842,7 +2847,15 @@ app.on('before-quit', (event) => {
   // shutdown the window may already be tearing down, and a native
   // quit-prompt matches what every Mac user already expects from Cmd+Q. See
   // docs/superpowers/specs/2026-08-14-explicit-save-model-design.md, §5.
-  if (rendererHasUnsavedChanges) {
+  // Only a live window's: a closed one's edits live on in the recovery file
+  // alone, and this prompt's Don't Save would delete it (beforeQuitPlan).
+  const plan = beforeQuitPlan({
+    rendererDirty: rendererHasUnsavedChanges,
+    windowLive: !!mainWindow && !mainWindow.isDestroyed(),
+    recovery: recoveryFile,
+    quittingAfterSavePrompt
+  })
+  if (plan.kind === 'prompt') {
     event.preventDefault()
     const choice = dialog.showMessageBoxSync({
       type: 'warning',
@@ -2858,16 +2871,18 @@ app.on('before-quit', (event) => {
       return
     }
     if (choice === 0) {
-      // Save -- only re-issue quit after an explicit success reply. Failure
-      // or timeout leaves the dirty project open rather than converting an
+      // Save -- re-issue quit after an explicit success reply, or when there
+      // was no renderer to ask (keeping the recovery file). Failure or
+      // timeout leaves the dirty project open rather than converting an
       // inability to save into an implicit Don't Save.
       saveBeforeQuitPending = true
       void requestSaveBeforeQuit().then((result) => {
         saveBeforeQuitPending = false
-        if (result !== 'saved') {
+        const next = afterSaveBeforeQuit(result)
+        if (next.notice)
+          dialog.showMessageBoxSync({ type: 'error', buttons: ['OK'], ...next.notice })
+        if (next.action === 'stay') {
           pluginEditsCheckedForQuit = false
-          const notice = saveBeforeQuitNotice(result)
-          if (notice) dialog.showMessageBoxSync({ type: 'error', buttons: ['OK'], ...notice })
           return
         }
         rendererHasUnsavedChanges = false
@@ -2893,12 +2908,7 @@ app.on('before-quit', (event) => {
   // next launch's prompt (recoveryFileTracker.ts), even when its edits were
   // undone back to the saved state and the renderer's own clear was not due
   // yet: offering a needless recovery is the safe side.
-  if (
-    shouldClearRecoveryOnCleanQuit(recoveryFile, {
-      rendererDirty: rendererHasUnsavedChanges,
-      quittingAfterSavePrompt
-    })
-  ) {
+  if (plan.clearRecovery) {
     clearAutosave()
     noteRecoveryFile('cleared')
   }

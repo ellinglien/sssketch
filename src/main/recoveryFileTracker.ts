@@ -1,6 +1,6 @@
 // src/main/recoveryFileTracker.ts -- what main knows about the crash-recovery file
 // (projectFile.ts's writeAutosave/clearAutosave), to decide whether a clean quit may delete it.
-// Pure: index.ts feeds it events and asks shouldClearRecoveryOnCleanQuit at before-quit.
+// Pure: index.ts feeds it events and asks at before-quit, through saveBeforeQuit.ts's beforeQuitPlan.
 //
 // A clean quit (the renderer reports nothing unsaved) deletes the file only when main itself saw
 // a successful save in this window, and no autosave write since. Anything else is left for the

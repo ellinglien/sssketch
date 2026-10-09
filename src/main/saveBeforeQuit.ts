@@ -1,30 +1,79 @@
+import { shouldClearRecoveryOnCleanQuit, type RecoveryFileState } from './recoveryFileTracker'
+
 /** 'failed': the renderer answered that the save didn't land (it has already
  * told the user why). 'unreachable': there was no renderer to ask. */
 export type SaveBeforeQuitResult = 'saved' | 'failed' | 'timeout' | 'unreachable'
 
-/** What the quit prompt's Save says when it can't go on and quit. Every
- * outcome but 'saved' keeps the app open; this makes sure none of them does
- * so silently. Null for 'saved', and for 'failed', whose renderer has already
- * shown its own message right after replying ("Save failed: ...", or the
- * changed-while-saving notice; saveOutcomeNotice in saveSerialization.ts). */
-export function saveBeforeQuitNotice(
-  result: SaveBeforeQuitResult
-): { message: string; detail: string } | null {
+export interface SaveBeforeQuitNotice {
+  message: string
+  detail: string
+}
+
+/** What the quit prompt's Save does once the renderer has answered (or couldn't).
+ * 'quit' re-issues the quit as one that follows the prompt's Save, which keeps
+ * the recovery file (shouldClearRecoveryOnCleanQuit): a save that landed has
+ * cleared it itself, and with no renderer to ask ('unreachable') it may be the
+ * only copy of the work, which is what quitting did before the prompt waited
+ * for an answer. 'stay' keeps the app open, never silently: 'failed' is
+ * explained by the renderer right after it replies ("Save failed: ...", or the
+ * changed-while-saving notice; saveOutcomeNotice in saveSerialization.ts).
+ * No notice recommends Don't Save, which deletes the recovery file. */
+export function afterSaveBeforeQuit(result: SaveBeforeQuitResult): {
+  action: 'quit' | 'stay'
+  notice: SaveBeforeQuitNotice | null
+} {
   switch (result) {
     case 'saved':
+      return { action: 'quit', notice: null }
     case 'failed':
-      return null
+      return { action: 'stay', notice: null }
     case 'timeout':
       return {
-        message: 'The project is still saving.',
-        detail: 'sssketch stayed open so no unsaved work was discarded. Please try Save again.'
+        action: 'stay',
+        notice: {
+          message: 'The project is still saving.',
+          detail: 'sssketch stayed open so no unsaved work was discarded. Please try Save again.'
+        }
       }
     case 'unreachable':
       return {
-        message: "The project couldn't be saved.",
-        detail:
-          "sssketch stayed open so no unsaved work was discarded. To quit without saving, quit again and choose Don't Save."
+        action: 'quit',
+        notice: {
+          message: "The project couldn't be saved.",
+          detail:
+            'There was no open window to save it from. sssketch will quit and keep any recovery copy of it, to offer the next time it opens.'
+        }
       }
+  }
+}
+
+export interface BeforeQuitState {
+  /** The renderer's last 'set-dirty-state'; index.ts resets it when the window closes. */
+  rendererDirty: boolean
+  /** A window whose renderer can be asked to save. */
+  windowLive: boolean
+  recovery: RecoveryFileState
+  /** This quit was re-issued by the quit prompt's Save. */
+  quittingAfterSavePrompt: boolean
+}
+
+/** Whether a quit asks Save / Don't Save / Cancel, and if not, whether it may
+ * delete the recovery file. Only a live window's unsaved work is asked about:
+ * on macOS a window can close with unsaved edits whose only copy is the
+ * recovery file, and a prompt then could save nothing, while its Don't Save
+ * would delete that copy. Without the prompt, the file is cleared only by the
+ * same rule as any clean quit (recoveryFileTracker.ts), which a dirty flag
+ * still keeps from clearing. */
+export function beforeQuitPlan(
+  state: BeforeQuitState
+): { kind: 'prompt' } | { kind: 'quit'; clearRecovery: boolean } {
+  if (state.rendererDirty && state.windowLive) return { kind: 'prompt' }
+  return {
+    kind: 'quit',
+    clearRecovery: shouldClearRecoveryOnCleanQuit(state.recovery, {
+      rendererDirty: state.rendererDirty,
+      quittingAfterSavePrompt: state.quittingAfterSavePrompt
+    })
   }
 }
 
