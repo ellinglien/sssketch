@@ -1,16 +1,5 @@
-import {
-  closeSync,
-  existsSync,
-  fstatSync,
-  fsyncSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readSync,
-  renameSync,
-  unlinkSync,
-  writeFileSync
-} from 'fs'
+import { access, mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import type { FileHandle } from 'node:fs/promises'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { blendRotatedWavSeam, rotateWavFrames } from '@shared/rotateWav'
@@ -96,26 +85,41 @@ async function planJob(job: BakeJob, dir: string): Promise<PlannedJob> {
     recipe,
     finalPath,
     temporaryPath: join(dir, `.${recipe.name}.${randomUUID()}.baking.wav`),
-    reusedDurationSec: existingCopyDuration(finalPath),
-    existedBefore: existsSync(finalPath)
+    reusedDurationSec: await existingCopyDuration(finalPath),
+    existedBefore: await exists(finalPath)
   }
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await access(path)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** One turn of the event loop. Between stems, so a riff's renders and publishes (0.5-2.5 s on a
+ * USB library) never block the main thread in one piece (AGENTS.md section 6). */
+function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve))
 }
 
 /** The duration of a whole copy at `path`, or null when there is none to reuse. A copy is only
  * ever published by rename after a full, synced write, so one that is there is normally whole.
  * Reads the header only. A header that won't parse, or a data chunk that runs past the end of
  * the file (cut short), counts as absent, and the copy is rendered over. */
-function existingCopyDuration(path: string): number | null {
-  let fd: number
+async function existingCopyDuration(path: string): Promise<number | null> {
+  let handle: FileHandle
   try {
-    fd = openSync(path, 'r')
+    handle = await open(path, 'r')
   } catch {
     return null
   }
   try {
-    const fileSize = fstatSync(fd).size
+    const fileSize = (await handle.stat()).size
     const header = Buffer.alloc(Math.min(fileSize, 4096))
-    const bytesRead = readSync(fd, header, 0, header.length, 0)
+    const { bytesRead } = await handle.read(header, 0, header.length, 0)
     const bytes = new Uint8Array(header.buffer, header.byteOffset, bytesRead)
     const { dataOffset, sampleRate, numChannels, bitsPerSample } = findWavChunks(bytes)
     const bytesPerSecond = sampleRate * numChannels * (bitsPerSample / 8)
@@ -126,18 +130,18 @@ function existingCopyDuration(path: string): number | null {
   } catch {
     return null
   } finally {
-    closeSync(fd)
+    await handle.close()
   }
 }
 
 /** Flushes a rendered temporary to the disk before it is renamed into place, so a published
  * copy is whole even after a power cut (the reuse check trusts a published copy). */
-function syncToDisk(path: string): void {
-  const fd = openSync(path, 'r+')
+async function syncToDisk(path: string): Promise<void> {
+  const handle = await open(path, 'r+')
   try {
-    fsyncSync(fd)
+    await handle.sync()
   } finally {
-    closeSync(fd)
+    await handle.close()
   }
 }
 
@@ -185,9 +189,9 @@ function isWavPath(path: string): boolean {
 
 /** Renders `recipe.sourcePath` rotated by `recipe.rotationSec` into `temporaryPath`, and returns
  * the rendered file's measured duration, or null on failure. */
-function bakeWavJob(recipe: ResolvedRecipe, temporaryPath: string): number | null {
+async function bakeWavJob(recipe: ResolvedRecipe, temporaryPath: string): Promise<number | null> {
   try {
-    const bytes = new Uint8Array(readFileSync(recipe.sourcePath))
+    const bytes = new Uint8Array(await readFile(recipe.sourcePath))
     const { sampleRate } = findWavChunks(bytes)
     if (!sampleRate) {
       console.error(`bakeOffset: "${recipe.sourcePath}" has no usable fmt chunk, skipping`)
@@ -198,7 +202,7 @@ function bakeWavJob(recipe: ResolvedRecipe, temporaryPath: string): number | nul
     const rotated = rotateWavFrames(bytes, rotationFrames, {
       seamBlendFrames: isRebake ? 0 : LOOP_SEW_WINDOW_FRAMES
     })
-    writeFileSync(temporaryPath, rotated)
+    await writeFile(temporaryPath, rotated)
     return readWavDurationSeconds(rotated)
   } catch (err) {
     console.error(`bakeOffset: failed to bake "${recipe.sourcePath}":`, err)
@@ -219,12 +223,12 @@ function bakeWavJob(recipe: ResolvedRecipe, temporaryPath: string): number | nul
  * instead, because the output path ends in .wav. A failure here fails the job:
  * the copy's recipe name promises the blend, and a published copy is reused
  * from then on, so an unblended one would never be replaced. */
-function blendNativeBakeSeam(outputPath: string, rotationSec: number): boolean {
+async function blendNativeBakeSeam(outputPath: string, rotationSec: number): Promise<boolean> {
   try {
-    const baked = new Uint8Array(readFileSync(outputPath))
+    const baked = new Uint8Array(await readFile(outputPath))
     const { sampleRate } = findWavChunks(baked)
     if (!sampleRate) throw new Error('no usable fmt chunk')
-    writeFileSync(outputPath, blendRotatedWavSeam(baked, Math.round(rotationSec * sampleRate)))
+    await writeFile(outputPath, blendRotatedWavSeam(baked, Math.round(rotationSec * sampleRate)))
     return true
   } catch (err) {
     console.error(`bakeOffset: could not blend the seam in "${outputPath}":`, err)
@@ -264,7 +268,7 @@ async function bakeNativeJobs(
         }
         if (
           !isPreviouslyBaked(recipe.sourcePath) &&
-          !blendNativeBakeSeam(outputPath, recipe.rotationSec)
+          !(await blendNativeBakeSeam(outputPath, recipe.rotationSec))
         ) {
           continue
         }
@@ -288,15 +292,33 @@ export interface BakeOptions {
   mayCreateRoot?: boolean
 }
 
+/** Why a batch produced nothing. `source-unreadable`: an original (or, without a recipe, the
+ * job's own file) can't be read, or the library folder is away; it can work once that is back.
+ * `render-failed`: everything was readable and a render or a publish failed. */
+export type BakeFailure = 'source-unreadable' | 'render-failed'
+
+export type BakeOutcome = { ok: true; results: BakeResult[] } | { ok: false; reason: BakeFailure }
+
 /** Bakes one riff's jobs as one all-or-nothing batch, under the `.bakes` lock
  * (reonedCopiesSession.ts), so no cleanup can delete a copy between this finding it and handing
- * it out. Results come back one per job, in job order, keyed by each job's own `path`. */
+ * it out. Results come back one per job, in job order, keyed by each job's own `path`; a failed
+ * batch gives none. */
 export async function bakeOffset(
   jobs: BakeJob[],
   outputDir?: string,
   options: BakeOptions = {}
 ): Promise<BakeResult[]> {
-  if (jobs.length === 0) return []
+  const outcome = await bakeOffsetDetailed(jobs, outputDir, options)
+  return outcome.ok ? outcome.results : []
+}
+
+/** bakeOffset, saying why a batch failed: a rebuild retries only what may work later. */
+export async function bakeOffsetDetailed(
+  jobs: BakeJob[],
+  outputDir?: string,
+  options: BakeOptions = {}
+): Promise<BakeOutcome> {
+  if (jobs.length === 0) return { ok: true, results: [] }
   return withReonedCopiesLock(() => bakeOffsetLocked(jobs, outputDir, options))
 }
 
@@ -304,21 +326,27 @@ async function bakeOffsetLocked(
   jobs: BakeJob[],
   outputDir: string | undefined,
   options: BakeOptions
-): Promise<BakeResult[]> {
+): Promise<BakeOutcome> {
   const durableDir = outputDir ?? join(dirname(jobs[0].path), '.sssketch-bakes')
   // Only what this call wrote. A failure removes these and nothing else: a copy that was there
   // before (reused, or shared with other projects) is never deleted here.
   const temporaries: string[] = []
   const published: string[] = []
   let committed = false
+  const failed = (reason: BakeFailure): BakeOutcome => ({ ok: false, reason })
   try {
-    if (outputDir !== undefined && !options.mayCreateRoot && !existsSync(dirname(outputDir))) {
+    if (outputDir !== undefined && !options.mayCreateRoot && !(await exists(dirname(outputDir)))) {
       console.error(`bakeOffset: the library folder ${dirname(outputDir)} is not there; not baking`)
-      return []
+      return failed('source-unreadable')
     }
     // Inside the try: a folder that can't be made is a failed bake like any other, returned as
     // no result, not a throw the renderer's callers would have to catch.
-    mkdirSync(durableDir, { recursive: true })
+    try {
+      await mkdir(durableDir, { recursive: true })
+    } catch (err) {
+      console.error(`bakeOffset: could not make ${durableDir}:`, err)
+      return failed('render-failed')
+    }
 
     let planned: PlannedJob[]
     try {
@@ -326,7 +354,7 @@ async function bakeOffsetLocked(
     } catch (err) {
       // Neither the original nor the job's own file is readable.
       console.error('bakeOffset: a source could not be read:', err)
-      return []
+      return failed('source-unreadable')
     }
 
     // One render per distinct recipe that isn't already on disk.
@@ -339,13 +367,14 @@ async function bakeOffsetLocked(
     const rendered = new Map<string, number>()
     for (const entry of renders.values()) {
       if (!isWavPath(entry.recipe.sourcePath)) continue
+      await yieldToEventLoop()
       temporaries.push(entry.temporaryPath)
-      const durationSec = bakeWavJob(entry.recipe, entry.temporaryPath)
+      const durationSec = await bakeWavJob(entry.recipe, entry.temporaryPath)
       if (durationSec !== null) rendered.set(entry.recipe.name, durationSec)
     }
     const native = [...renders.values()].filter((entry) => !isWavPath(entry.recipe.sourcePath))
     // A WAV that failed already fails the batch: don't spawn an engine for the rest.
-    if (rendered.size !== renders.size - native.length) return []
+    if (rendered.size !== renders.size - native.length) return failed('render-failed')
     temporaries.push(...native.map((entry) => entry.temporaryPath))
     for (const [name, durationSec] of await bakeNativeJobs(native)) rendered.set(name, durationSec)
 
@@ -353,11 +382,12 @@ async function bakeOffsetLocked(
     // the successful stems physically rotated while the failed stems still
     // depend on runtime state, the exact mixed representation that caused
     // stems within one riff to drift out of phase.
-    if (rendered.size !== renders.size) return []
+    if (rendered.size !== renders.size) return failed('render-failed')
 
     for (const entry of renders.values()) {
-      syncToDisk(entry.temporaryPath)
-      renameSync(entry.temporaryPath, entry.finalPath)
+      await yieldToEventLoop()
+      await syncToDisk(entry.temporaryPath)
+      await rename(entry.temporaryPath, entry.finalPath)
       // A file that was already there (unreadable, so rendered over) isn't this call's to
       // delete: same recipe, same bytes, and another project may name it.
       if (!entry.existedBefore) published.push(entry.finalPath)
@@ -369,20 +399,23 @@ async function bakeOffsetLocked(
     }))
     for (const result of results) noteIssuedCopy(result.bakedPath)
     committed = true
-    return results
+    return { ok: true, results }
   } catch (err) {
     console.error('bakeOffset: atomic bake failed:', err)
-    return []
+    return failed('render-failed')
   } finally {
     // On success the temporaries were renamed and no longer exist. On any failure, remove
     // this call's unpublished temporaries and any finals it published before a later rename
     // failed; no renderer state can reference them because this call returns no partial result.
+    // Still under the lock: nothing can reuse a final between its publish and this delete.
     if (!committed) {
       for (const path of [...temporaries, ...published]) {
         try {
-          if (existsSync(path)) unlinkSync(path)
+          await unlink(path)
         } catch (err) {
-          console.error(`bakeOffset: could not remove uncommitted "${path}":`, err)
+          if ((err as { code?: string }).code !== 'ENOENT') {
+            console.error(`bakeOffset: could not remove uncommitted "${path}":`, err)
+          }
         }
       }
     }
