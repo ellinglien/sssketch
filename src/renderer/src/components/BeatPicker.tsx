@@ -568,8 +568,8 @@ export function BeatPicker({
     }
   }, [state.metronomeVolume])
 
-  // Commits only after every stem has been baked into a fresh immutable
-  // asset. The pending picker choice is deliberately not dispatched as a
+  // Commits only after every stem has a re-oned copy (rendered, or an
+  // identical one reused by its recipe). The pending picker choice is deliberately not dispatched as a
   // runtime offset first: a failed native bake must leave project state and
   // every old audio path exactly as they were.
   async function applyOffset(target: number, before: number): Promise<boolean> {

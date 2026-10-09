@@ -571,8 +571,10 @@ export function rotationSecondsForStem(offsetSteps: number, snapDiv: number, ste
  * deleted before pasting).
  *
  * Sharing file paths is safe even when two pasted copies are later re-oned
- * independently: BeatPicker writes a new immutable derived file per operation,
- * so the second correction cannot overwrite audio used by the first.
+ * independently: a re-oned copy is never rewritten once published (a different
+ * rotation is a different file, named by its recipe), so the second correction
+ * cannot overwrite audio used by the first, and each copy's own phaseLinkId
+ * keeps their re-ones apart even when both land on one reused file.
  */
 export function pasteRifffAction(
   state: AppState,
