@@ -613,7 +613,6 @@ export function CrossPanel({
   const dispatch = useDispatch()
   const rifffs = useAppSelector((state) => state.rifffs)
   const playedBars = useAppSelector((state) => state.playedBars)
-  const projectBpm = useAppSelector((state) => state.bpm)
   const playing = usePlaying()
   const pos = usePos()
   const { preview } = useCrossPreview()
@@ -645,11 +644,6 @@ export function CrossPanel({
     draftRef.current = draft
     currentProjectKeyRef.current = currentProjectKey
   }, [currentProjectKey, draft])
-
-  useEffect(() => {
-    if (draft.targetBpm === projectBpm) return
-    setDraft((value) => (value ? setCrossTargetBpm(value, projectBpm) : value))
-  }, [draft.targetBpm, projectBpm, setDraft])
 
   function toggleSideMute(sourceId: string): void {
     setSideMuted((before) => {
@@ -889,8 +883,14 @@ export function CrossPanel({
     }
   }
 
+  /** Cross's tempo is the preview's, not the project's. The draft starts at
+   * the project tempo (createCrossDraft) and its preview plays at
+   * draft.targetBpm (useCrossPreview's throwaway project); changing it here
+   * used to dispatch SET_TEMPO too, which retuned the real arrangement behind
+   * Cross as an undoable edit and marked the project unsaved. A committed
+   * Cross riff keeps this tempo as its own bpm, and the project plays it at
+   * the project tempo like any other riff. */
   function changeTempo(nextBpm: number): void {
-    dispatch({ type: 'SET_TEMPO', bpm: nextBpm })
     setDraft((value) => (value ? setCrossTargetBpm(value, nextBpm) : value))
   }
 
@@ -1159,7 +1159,7 @@ export function CrossPanel({
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>tempo</span>
         <button
           className="ra-cross-button"
-          onClick={() => changeTempo(projectBpm - 1)}
+          onClick={() => changeTempo(draft.targetBpm - 1)}
           aria-label="Decrease tempo"
         >
           −
@@ -1172,11 +1172,11 @@ export function CrossPanel({
             color: 'var(--ra-text)'
           }}
         >
-          {Math.round(projectBpm)}
+          {Math.round(draft.targetBpm)}
         </span>
         <button
           className="ra-cross-button"
-          onClick={() => changeTempo(projectBpm + 1)}
+          onClick={() => changeTempo(draft.targetBpm + 1)}
           aria-label="Increase tempo"
         >
           +

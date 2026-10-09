@@ -296,7 +296,10 @@ export function duplicateCrossRow(
   return commitCenter(draft, center)
 }
 
-/** Follows the real project tempo without creating a separate Cross undo step. */
+/** Cross's own preview tempo, clamped to 40..200. It is the draft's, not the
+ * project's: it starts at the project tempo and changing it never touches the
+ * arrangement. Not a Cross undo step either; the revision bump replays a
+ * playing preview at the new tempo. */
 export function setCrossTargetBpm(draft: CrossDraft, targetBpm: number): CrossDraft {
   const bpm = Math.max(40, Math.min(200, targetBpm))
   return bpm === draft.targetBpm

@@ -20,6 +20,7 @@ import {
   redoCross,
   removeCrossRow,
   setCrossGain,
+  setCrossTargetBpm,
   swapCrossSides,
   toggleCrossAudible,
   toggleCrossSoloedId,
@@ -279,6 +280,24 @@ describe('Cross center editing', () => {
     value = redoCross(value)
     expect(value.center[1].sourceId).toBe('discover-d')
     expect(assembleCrossRifff(value, 'with-discover')?.rifff.stems[1].path).toBe('/replacement.wav')
+  })
+})
+
+describe('setCrossTargetBpm', () => {
+  it("changes only the draft's preview tempo, clamped, and replays a playing preview", () => {
+    const start = draft()
+    const next = setCrossTargetBpm(start, 96)
+    expect(next.targetBpm).toBe(96)
+    expect(next.revision).toBe(start.revision + 1)
+    expect(next.past).toEqual(start.past)
+    expect(setCrossTargetBpm(start, 500).targetBpm).toBe(200)
+    expect(setCrossTargetBpm(start, start.targetBpm)).toBe(start)
+  })
+
+  it('a committed Cross riff keeps the tempo it was auditioned at as its own bpm', () => {
+    let value = setCrossTargetBpm(draft(), 96)
+    value = addCrossSource(value, 'a:1', 0)
+    expect(assembleCrossRifff(value, 'child')?.rifff.bpm).toBe(96)
   })
 })
 
