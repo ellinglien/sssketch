@@ -414,8 +414,27 @@ export function restoreSketchBackup(
   // small project JSON before rotating the current live file.
   const restoredBytes = readFileSync(resolvedBackup)
   rotateBackupBeforeOverwrite(name)
-  writeFileSync(sketchProjectPath(name), restoredBytes)
+  writeFileAtomically(sketchProjectPath(name), restoredBytes)
   return { ok: true }
+}
+
+/** Writes beside `path` and renames over it, so a crash or full disk midway
+ * leaves the old file whole instead of a truncated project. Same directory,
+ * so the rename is atomic on one volume. The temp name ends in .tmp, which
+ * nothing that lists sketches or backups picks up. */
+function writeFileAtomically(path: string, data: Buffer): void {
+  const tempPath = `${path}.${randomBytes(4).toString('hex')}.tmp`
+  try {
+    writeFileSync(tempPath, data)
+    renameSync(tempPath, path)
+  } catch (err) {
+    try {
+      unlinkSync(tempPath)
+    } catch {
+      // never written, or already renamed
+    }
+    throw err
+  }
 }
 
 /** Reads a specific backup's raw project JSON, for previewing (audio-only,

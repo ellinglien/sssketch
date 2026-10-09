@@ -1,6 +1,15 @@
 // src/main/projectLibrary.test.ts
 import { describe, expect, it, vi, beforeEach, afterEach, type Mock } from 'vitest'
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import {
+  mkdtempSync,
+  rmSync,
+  mkdirSync,
+  writeFileSync,
+  readFileSync,
+  existsSync,
+  readdirSync
+} from 'node:fs'
+import { dirname } from 'node:path'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -426,6 +435,25 @@ describe('projectLibrary', () => {
         (backup) => JSON.parse(readFileSync(backup.path, 'utf-8')).rifffs.n
       )
       expect(remaining).toContain(15)
+    })
+
+    it('writes the restored project through a temporary file, leaving none behind', async () => {
+      const { saveProjectToLibrary, openLibrarySketch } = await import('./projectFile')
+      const { listSketchBackups, restoreSketchBackup, sketchProjectPath } =
+        await import('./projectLibrary')
+      saveProjectToLibrary('atomic-restore', '{"rifffs":{"n":1}}')
+      await tick()
+      saveProjectToLibrary('atomic-restore', '{"rifffs":{"n":2}}')
+      const before = readdirSync(dirname(sketchProjectPath('atomic-restore'))).sort()
+
+      const result = restoreSketchBackup(
+        'atomic-restore',
+        listSketchBackups('atomic-restore')[0].path
+      )
+
+      expect(result).toEqual({ ok: true })
+      expect(openLibrarySketch('atomic-restore')?.json).toBe('{"rifffs":{"n":1}}')
+      expect(readdirSync(dirname(sketchProjectPath('atomic-restore'))).sort()).toEqual(before)
     })
 
     it("rejects a backup path outside this sketch's own backups folder", async () => {
