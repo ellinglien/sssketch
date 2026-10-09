@@ -11,7 +11,9 @@ export interface CrossBakeResult {
 /** Makes runtime Re-1 offsets physical for a Cross draft without changing
  * either parent riff in the open project. Cross has no runtime `off` map of
  * its own, so passing the original paths through would silently discard the
- * phase the musician is hearing in Sketch. */
+ * phase the musician is hearing in Sketch. Discover's seed from a project
+ * riff uses it for the same reason: the bake is rendered but never adopted
+ * into the project (no APPLY_BAKE), so neither opening leaves it unsaved. */
 export async function rifffForSketchCross(
   rifff: Rifff,
   off: Readonly<Record<string, number>>,

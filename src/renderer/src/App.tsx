@@ -115,7 +115,7 @@ import type { AppState, LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
-import { stemKey, type BusId, type Rifff } from '@shared/types'
+import type { BusId, Rifff } from '@shared/types'
 import {
   createCrossDraft,
   crossParentFromRifff,
@@ -2228,41 +2228,23 @@ function Frame(): React.JSX.Element {
     ) {
       return
     }
-    let seedRifff = rifff
-    const groupSteps = state.off[rifff.groupId] ?? 0
-    const effectiveSteps = new Map(
-      rifff.stems.map((stem) => [
-        stem.slot,
-        state.off[stemKey(rifff.groupId, stem.slot)] ?? groupSteps
-      ])
+    // Discover's library/Keep formats do not carry runtime phase, so the
+    // exact effective phase of every source stem is made physical first, as
+    // one immutable all-or-nothing batch, and Discover is seeded from those
+    // files. Auditioning a riff in Discover must not edit the project: this
+    // renders the bake without adopting it into the riff (no APPLY_BAKE), as
+    // Cross does for its parents, so opening Discover leaves the project
+    // saved and its undo history alone. A riff with no live phase is used as
+    // it is.
+    const seedRifff = await rifffForSketchCross(
+      rifff,
+      state.off,
+      SNAP_DIVS[state.snapIdx],
+      (jobs) => window.rifffApi.bakeOffset(jobs)
     )
-    if ([...effectiveSteps.values()].some((steps) => steps !== 0)) {
-      // Discover's library/Keep formats do not carry runtime phase. Make
-      // the exact effective phase of every source stem physical first, as
-      // one immutable all-or-nothing batch, then seed from those returned
-      // paths. This also repairs the intended per-stem precedence of a
-      // legacy partial bake instead of copying its contradictory off map.
-      const results = await bakeStems(
-        dispatch,
-        (stem) => effectiveSteps.get(stem.slot) ?? 0,
-        SNAP_DIVS[state.snapIdx],
-        rifff.stems,
-        [rifff.groupId]
-      )
-      if (!results) {
-        window.alert('Could not prepare every stem for Discover. Nothing was changed; try again.')
-        return
-      }
-      const byPath = new Map(results.map((result) => [result.path, result]))
-      seedRifff = {
-        ...rifff,
-        stems: rifff.stems.map((stem) => {
-          const result = byPath.get(stem.path)
-          return result
-            ? { ...stem, path: result.bakedPath, durationSec: result.durationSec }
-            : stem
-        })
-      }
+    if (!seedRifff) {
+      window.alert('Could not prepare every stem for Discover. Nothing was changed; try again.')
+      return
     }
 
     setLibraryBrowserOpen(false)
