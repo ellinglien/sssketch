@@ -21,6 +21,7 @@ import {
   modeLabel,
   nextArrangerMode,
   groupIdAtPosition,
+  sketchSoundingGroupId,
   tileOffsetsPx,
   buildArrangeReplaceActions
 } from './selectors'
@@ -1460,5 +1461,35 @@ describe('channelIsSoloed', () => {
         mixerSolo: ['g1:1', 'there']
       })
     ).toBe(false)
+  })
+})
+
+describe('sketchSoundingGroupId', () => {
+  function twoPlaced(): typeof initialState {
+    let state = reducer(initialState, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r1', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, {
+      type: 'ADD_TO_SHELF',
+      rifff: { ...rifff, groupId: 'r2', barLength: 4, startBar: undefined }
+    })
+    state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+    return reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+  }
+
+  it('is the riff under the playhead while Sketch plays', () => {
+    const state = { ...twoPlaced(), mode: 'sketch' as const }
+    expect(sketchSoundingGroupId(state, true, 5)).toBe('r2')
+  })
+
+  it('is nothing while stopped: a parked playhead is not sounding', () => {
+    const state = { ...twoPlaced(), mode: 'sketch' as const }
+    expect(sketchSoundingGroupId(state, false, 5)).toBeNull()
+  })
+
+  it('is nothing outside Sketch, where several riffs can sound at once', () => {
+    const state = { ...twoPlaced(), mode: 'normal' as const }
+    expect(sketchSoundingGroupId(state, true, 5)).toBeNull()
   })
 })

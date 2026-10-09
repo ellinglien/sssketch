@@ -28,6 +28,7 @@ export function Shelf({
   onImported,
   onOpenLibrary,
   onSeedDiscover,
+  sketchSoundingId,
   selectedRiffIds,
   selectionAnchorId,
   onSelectionChange
@@ -54,6 +55,10 @@ export function Shelf({
    * live drag onto Discover isn't possible (Discover's own full-screen
    * modal covers Shelf entirely), so this is triggered explicitly instead. */
   onSeedDiscover: (rifff: Rifff) => void
+  /** The riff Sketch is playing right now, or null (sketchSoundingGroupId).
+   * Its tile gets the same playhead-coloured edge as a previewing tile:
+   * it's the one you're hearing. */
+  sketchSoundingId: string | null
   /** Shared with Sketch so both surfaces render one persistent working set. */
   selectedRiffIds: ReadonlySet<string>
   selectionAnchorId: string | null
@@ -363,6 +368,10 @@ export function Shelf({
             const selected = selectedRiffIds.has(rifff.groupId)
             const hovered = hoverId === rifff.groupId
             const previewing = previewingGroupId === rifff.groupId
+            // What you hear: this tile's own preview, or Sketch playing it
+            // (Ben and Elling, 2026-10-08: the selection alone was too quiet
+            // a link between the two).
+            const sounding = previewing || sketchSoundingId === rifff.groupId
             const placed = rifff.startBar !== undefined
             // Already placed on the timeline dims further than the normal idle
             // state — it's already in the arrangement, so the shelf's default
@@ -371,13 +380,14 @@ export function Shelf({
             // (selected/hovered/previewing/batch-selected) still lights it up
             // normally regardless of placement — greying out is only the idle
             // default, not a suppression of interaction feedback.
-            const lit = selected || hovered || previewing
+            const lit = selected || hovered || sounding
             return (
               <button
                 key={rifff.groupId}
                 className="ra-riff-tile ra-shelf-riff-tile"
                 data-selected={selected}
                 data-previewing={previewing}
+                data-sounding={sounding}
                 draggable
                 onDragStart={(e) => {
                   suppressNextSyntheticClick()
@@ -434,7 +444,7 @@ export function Shelf({
                   boxSizing: 'border-box',
                   // A sounding tile gets a 1px playhead-coloured edge: it is
                   // audio information, so colour is allowed, but not a glow.
-                  border: `1px solid ${previewing ? 'var(--ra-playhead)' : 'transparent'}`,
+                  border: `1px solid ${sounding ? 'var(--ra-playhead)' : 'transparent'}`,
                   cursor: 'grab',
                   opacity: lit ? 1 : placed ? 0.4 : 0.72,
                   transition: 'opacity 80ms ease'

@@ -321,6 +321,18 @@ export function groupIdAtPosition(state: AppState, pos: number): string | null {
   return null
 }
 
+/** The riff Sketch is playing right now, for the shelf to mark (the 2026-10-08 call, U2): the one
+ * under the playhead, only while the transport runs and only in Sketch, the one mode where a
+ * single riff sounds at a time. */
+export function sketchSoundingGroupId(
+  state: AppState,
+  playing: boolean,
+  pos: number
+): string | null {
+  if (state.mode !== 'sketch' || !playing) return null
+  return groupIdAtPosition(state, pos)
+}
+
 /** Fields clipGeometryFromFields needs -- an options object rather than a
  * long positional parameter list deliberately, matching this codebase's own
  * convention for functions like this (computeBandEnergy/computePitchContour/

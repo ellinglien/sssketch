@@ -133,6 +133,7 @@ import {
   nextArrangerMode,
   isSketchEligible,
   groupIdAtPosition,
+  sketchSoundingGroupId,
   resolvePlayedBars
 } from './state/selectors'
 import { initialState, SNAP_DIVS, startupState } from './state/store'
@@ -1233,12 +1234,27 @@ const TOUR_SEEN_STORAGE_KEY = 'sssketch:tourSeen'
  * sluggish visuals during playback on any project with a nontrivial clip
  * count. Isolating the subscription here means only this invisible
  * component (cheap: no DOM, no children) re-renders on each tick instead. */
-function SketchModeAutoFollow(): null {
+function SketchModeAutoFollow({
+  onSoundingChange
+}: {
+  /** The riff Sketch is playing now, or null (sketchSoundingGroupId), reported
+   * only when it changes so Frame doesn't re-render on every position tick.
+   * The shelf marks that riff's tile. */
+  onSoundingChange: (groupId: string | null) => void
+}): null {
   const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
   const pos = usePos()
   const autoFollowedGroupIdRef = useRef<string | null>(null)
+  const soundingRef = useRef<string | null>(null)
+  useEffect(() => {
+    const sounding = sketchSoundingGroupId(state, playing, pos)
+    if (sounding !== soundingRef.current) {
+      soundingRef.current = sounding
+      onSoundingChange(sounding)
+    }
+  }, [state, playing, pos, onSoundingChange])
   useEffect(() => {
     if (state.mode !== 'sketch' || !playing) {
       autoFollowedGroupIdRef.current = null
@@ -1926,6 +1942,9 @@ function Frame(): React.JSX.Element {
   // state, not musical project data. The anchor is separate from state.sel:
   // Sketch's playback auto-follow legitimately changes state.sel as the
   // playhead advances, but must not collapse a deliberate two-riff choice.
+  // The riff Sketch is playing right now (SketchModeAutoFollow), for the
+  // shelf's playhead-coloured edge on its tile.
+  const [sketchSoundingId, setSketchSoundingId] = useState<string | null>(null)
   const [riffSelection, setRiffSelection] = useState<{
     ids: Set<string>
     anchorId: string | null
@@ -3176,7 +3195,7 @@ function Frame(): React.JSX.Element {
     <div className="ra-viewport">
       <StartupGate />
       <OwnUsernameReporter />
-      <SketchModeAutoFollow />
+      <SketchModeAutoFollow onSoundingChange={setSketchSoundingId} />
       <BackgroundFeatureScan />
       {/* The one app-wide "what is running in the background" line --
        * analysis scans, library index, auto-classify, plugin scan, sync
@@ -3247,6 +3266,7 @@ function Frame(): React.JSX.Element {
         {/* Kept above the mode-specific Arrange / Map / Sketch content so
             two-riff Shelf selection and Cross are available in all three. */}
         <Shelf
+          sketchSoundingId={sketchSoundingId}
           onImported={handleImported}
           onOpenLibrary={openRiffLibrary}
           onSeedDiscover={openRiffLibraryWithDiscoverSeed}
