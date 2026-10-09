@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   utimesSync,
   writeFileSync
 } from 'node:fs'
@@ -16,7 +17,13 @@ import { basename, join } from 'node:path'
 // which reads app.getAppPath(), is never reached.
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
 
-import { cleanBakes, collectUsedNames, surveyBakes, type UsedNameSources } from './reonedUsage'
+import {
+  cleanBakes,
+  collectUsedNames,
+  isReadByLibraryWalk,
+  surveyBakes,
+  type UsedNameSources
+} from './reonedUsage'
 import { bakeOffset } from './bakeOffset'
 import { resolveRecipe } from './reonedRecipe'
 import { sessionIssuedNames } from './reonedCopiesSession'
@@ -146,6 +153,104 @@ describe('collectUsedNames: each source on its own keeps a copy', () => {
   it('stops when the library itself cannot be listed (an unplugged drive)', async () => {
     const scan = await collectUsedNames(sources({ libraryRoot: join(dir, 'unplugged') }))
     expect(scan.ok).toBe(false)
+  })
+})
+
+// Review finding I2: projectFile.ts's isInsideLibrary counts any path under the root as a library
+// project (so it isn't remembered), so the scan must find a project anywhere under the root.
+describe('collectUsedNames: the whole library tree', () => {
+  it('a project two or more folders deep (a sketch name with a slash), and its backups', async () => {
+    project(join(root, 'a', 'b', 'a', 'b.sssketchproj'), 1)
+    project(join(root, 'a', 'b', '.backups', 'b-2026-10-01.sssketchproj'), 2)
+    project(join(root, 'x', 'y', 'z', 'deep.sssketchproj'), 3)
+    const scan = await collectUsedNames(sources())
+    expect(scan.ok && sorted(scan.used)).toEqual([name(1), name(2), name(3)])
+  })
+
+  it('a dot-named sketch folder', async () => {
+    project(join(root, '.hidden', '.hidden.sssketchproj'), 4)
+    project(join(root, '.hidden', '.backups', '.hidden-1.sssketchproj'), 5)
+    const scan = await collectUsedNames(sources())
+    expect(scan.ok && sorted(scan.used)).toEqual([name(4), name(5)])
+  })
+
+  it('every file in a .backups folder, whatever it is named', async () => {
+    project(join(root, 's', '.backups', 'kept-by-hand.json'), 6)
+    const scan = await collectUsedNames(sources())
+    expect(scan.ok && sorted(scan.used)).toEqual([name(6)])
+  })
+
+  it('a symlinked folder is followed, and a cycle back up the tree ends', async () => {
+    const outside = join(dir, 'outside')
+    project(join(outside, 'p', 'p.sssketchproj'), 7)
+    symlinkSync(outside, join(root, 'linked'))
+    // Back to the library root, and to itself: each folder is walked once.
+    symlinkSync(root, join(outside, 'up'))
+    symlinkSync(join(outside, 'p'), join(outside, 'p', 'self'))
+    const scan = await collectUsedNames(sources())
+    expect(scan.ok && sorted(scan.used)).toEqual([name(7)])
+  })
+
+  it('a symlinked project file is read', async () => {
+    project(join(dir, 'outside', 'q.sssketchproj'), 8)
+    mkdirSync(join(root, 'q'))
+    symlinkSync(join(dir, 'outside', 'q.sssketchproj'), join(root, 'q', 'q.sssketchproj'))
+    const scan = await collectUsedNames(sources())
+    expect(scan.ok && sorted(scan.used)).toEqual([name(8)])
+  })
+
+  it('stops at a symlink whose target is away (it may be a folder of projects)', async () => {
+    symlinkSync(join(dir, 'unplugged', 'projects'), join(root, 'away'))
+    const scan = await collectUsedNames(sources())
+    expect(scan).toEqual({ ok: false, path: join(root, 'away') })
+  })
+
+  it.skipIf(process.getuid?.() === 0)(
+    'stops at a folder that cannot be listed, and names it',
+    async () => {
+      mkdirSync(join(root, 'locked'))
+      chmodSync(join(root, 'locked'), 0o000)
+      try {
+        const scan = await collectUsedNames(sources())
+        expect(scan).toEqual({ ok: false, path: join(root, 'locked') })
+      } finally {
+        chmodSync(join(root, 'locked'), 0o755)
+      }
+    }
+  )
+
+  it("skips the app's own caches: .bakes and .samples-cache are never read", async () => {
+    project(join(root, '.samples-cache', 'odd.sssketchproj'), 1)
+    project(join(bakes, 'odd.sssketchproj'), 2)
+    const scan = await collectUsedNames(sources())
+    expect(scan.ok && sorted(scan.used)).toEqual([])
+  })
+
+  it('yields between folders, so a big tree never blocks the main thread', async () => {
+    for (let i = 0; i < 20; i++) mkdirSync(join(root, `sketch-${i}`, 'Stems'), { recursive: true })
+    let yields = 0
+    const scan = await collectUsedNames(sources(), async () => void yields++)
+    expect(scan.ok).toBe(true)
+    expect(yields).toBeGreaterThanOrEqual(40)
+  })
+})
+
+describe('isReadByLibraryWalk: what projectFile.ts counts as inside the library', () => {
+  it('agrees with the walk', () => {
+    const lib = '/lib'
+    expect(isReadByLibraryWalk('/lib/s/s.sssketchproj', lib)).toBe(true)
+    expect(isReadByLibraryWalk('/lib/a/b/a/b.sssketchproj', lib)).toBe(true)
+    expect(isReadByLibraryWalk('/lib/.hidden/.hidden.sssketchproj', lib)).toBe(true)
+    expect(isReadByLibraryWalk('/lib/s/.backups/whatever', lib)).toBe(true)
+    expect(isReadByLibraryWalk('/lib/top.sssketchproj', lib)).toBe(true)
+    // Not read by the walk, so remembered instead.
+    expect(isReadByLibraryWalk('/lib/.bakes/x.sssketchproj', lib)).toBe(false)
+    expect(isReadByLibraryWalk('/lib/.samples-cache/x.sssketchproj', lib)).toBe(false)
+    expect(isReadByLibraryWalk('/lib/s/notes.json', lib)).toBe(false)
+    expect(isReadByLibraryWalk('/library/x.sssketchproj', lib)).toBe(false)
+    expect(isReadByLibraryWalk('/lib/../x.sssketchproj', lib)).toBe(false)
+    expect(isReadByLibraryWalk('/lib', lib)).toBe(false)
+    expect(isReadByLibraryWalk('/lib/..odd/x.sssketchproj', lib)).toBe(true)
   })
 })
 

@@ -1,5 +1,5 @@
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, renameSync } from 'fs'
-import { dirname, join, resolve, sep } from 'path'
+import { dirname, join } from 'path'
 import { dialog, BrowserWindow, app } from 'electron'
 import {
   sketchDir,
@@ -12,12 +12,13 @@ import {
 } from './projectLibrary'
 import { rememberExternalProject, renameKnownProject } from './reonedCopiesStore'
 import { noteSessionProjectText } from './reonedCopiesSession'
+import { isReadByLibraryWalk } from './reonedUsage'
 
 /** Library projects are scanned for the re-oned copies they name at cleanup time; a project
  * anywhere else is remembered with its names (reonedCopiesStore.ts), so its copies stay kept
- * while its drive is away. */
+ * while its drive is away. "Inside" means exactly what the scan's walk reads (reonedUsage.ts). */
 function isInsideLibrary(path: string): boolean {
-  return resolve(path).startsWith(resolve(libraryRootPath()) + sep)
+  return isReadByLibraryWalk(path, libraryRootPath())
 }
 
 // Fun, short words for the auto-generated default project name -- kept

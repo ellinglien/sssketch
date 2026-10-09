@@ -3,8 +3,9 @@
 // with async I/O only and a turn of the event loop between slices, so the main thread never
 // blocks (AGENTS.md section 6). No electron and no better-sqlite3: reonedCopiesIpc.ts passes
 // every root in, and this module's test stays off vitest.config.ts's CI exclude list.
-import { readdir, readFile, stat, unlink } from 'node:fs/promises'
-import { join } from 'node:path'
+import type { Dirent } from 'node:fs'
+import { readdir, readFile, realpath, stat, unlink } from 'node:fs/promises'
+import { basename, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { CLEANUP_GRACE_MS } from '@shared/reonedCleanup'
 import { isReonedCopyFileName, isStaleTempFileName, reonedNamesInText } from '@shared/reonedNames'
 import { sessionKeptNames, withReonedCopiesLock } from './reonedCopiesSession'
@@ -46,24 +47,87 @@ async function scanText(
   }
 }
 
-/** Every .sssketchproj in the library: at its root, each sketch folder's own, and each sketch's
- * .backups. Dot folders at the root (.bakes, .samples-cache) hold no projects. */
-async function libraryProjectFiles(root: string): Promise<string[]> {
+/** Folders the walk never enters. The app's own caches hold audio, never a project:
+ * `.bakes` (re-oned copies) and `.samples-cache` (export samples, projectLibrary.ts). The rest are
+ * macOS's own bookkeeping at a volume's root, which can't be listed and would stop every pass for
+ * a library kept at the top of a drive. */
+const SKIPPED_FOLDERS = new Set([
+  '.bakes',
+  '.samples-cache',
+  '.Trashes',
+  '.Spotlight-V100',
+  '.fseventsd',
+  '.TemporaryItems',
+  '.DocumentRevisions-V100'
+])
+
+const isProjectFileName = (name: string): boolean => name.toLowerCase().endsWith('.sssketchproj')
+
+/** True when the library walk below reads `path`: under `root`, outside every skipped folder,
+ * and a project file name or in a `.backups` folder. projectFile.ts remembers any project this
+ * says false for (reonedCopiesStore.ts), so the two can never disagree. Lexical, as the walk's
+ * paths are: a symlinked folder under the root counts as inside. */
+export function isReadByLibraryWalk(path: string, root: string): boolean {
+  const rel = relative(resolve(root), resolve(path))
+  if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) return false
+  const parts = rel.split(sep)
+  const fileName = parts.pop() as string
+  if (parts.some((part) => SKIPPED_FOLDERS.has(part))) return false
+  return isProjectFileName(fileName) || parts.at(-1) === '.backups'
+}
+
+type LibraryListing = { ok: true; files: string[] } | { ok: false; path: string }
+
+/** Every project file anywhere under the library root, as projectFile.ts's isInsideLibrary sees
+ * it (any path under the root counts as a library project, so it is never remembered on its
+ * own): every `.sssketchproj` at any depth, dot-named folders included, and every file in any
+ * `.backups` folder. Symlinked folders are followed; each real folder is walked once, so a link
+ * back up the tree ends. Stops (ok: false, naming it) at a folder that can't be listed, or a
+ * symlink whose target is away: either may hold projects whose copies would then be deleted.
+ * Async, with a turn of the event loop after each folder. */
+async function libraryProjectFiles(
+  root: string,
+  yieldFn: () => Promise<void>
+): Promise<LibraryListing> {
   const files: string[] = []
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    if (entry.isFile() && entry.name.endsWith('.sssketchproj')) files.push(join(root, entry.name))
-    if (!entry.isDirectory() || entry.name.startsWith('.')) continue
-    for (const sub of [join(root, entry.name), join(root, entry.name, '.backups')]) {
-      try {
-        for (const f of await readdir(sub)) {
-          if (f.endsWith('.sssketchproj')) files.push(join(sub, f))
+  const walked = new Set<string>()
+  const pending: string[] = [root]
+  while (pending.length > 0) {
+    const folder = pending.pop() as string
+    let entries: Dirent[]
+    try {
+      const real = await realpath(folder)
+      if (walked.has(real)) continue
+      walked.add(real)
+      entries = await readdir(folder, { withFileTypes: true })
+    } catch (err) {
+      // The root itself must be there; a subfolder removed since its parent was listed is fine.
+      if (folder !== root && isNotFound(err)) continue
+      return { ok: false, path: folder }
+    }
+    const inBackups = basename(folder) === '.backups'
+    for (const entry of entries) {
+      const path = join(folder, entry.name)
+      let isDirectory = entry.isDirectory()
+      let isFile = entry.isFile()
+      if (entry.isSymbolicLink()) {
+        try {
+          const target = await stat(path)
+          isDirectory = target.isDirectory()
+          isFile = target.isFile()
+        } catch {
+          return { ok: false, path }
         }
-      } catch (err) {
-        if (!isNotFound(err)) throw err
+      }
+      if (isDirectory) {
+        if (!SKIPPED_FOLDERS.has(entry.name)) pending.push(path)
+      } else if (isFile && (inBackups || isProjectFileName(entry.name))) {
+        files.push(path)
       }
     }
+    await yieldFn()
   }
-  return files
+  return { ok: true, files }
 }
 
 /** Every copy name any project, snapshot or session names. Stops (ok: false) at a library
@@ -92,13 +156,9 @@ export async function collectUsedNames(
   for (const path of src.userDataFiles) {
     if (!(await scanRequired(path))) return { ok: false, path }
   }
-  let libraryFiles: string[]
-  try {
-    libraryFiles = await libraryProjectFiles(src.libraryRoot)
-  } catch {
-    return { ok: false, path: src.libraryRoot }
-  }
-  for (const path of libraryFiles) {
+  const library = await libraryProjectFiles(src.libraryRoot, yieldFn)
+  if (!library.ok) return library
+  for (const path of library.files) {
     if (!(await scanRequired(path))) return { ok: false, path }
   }
   for (const { path } of src.knownProjects) {
