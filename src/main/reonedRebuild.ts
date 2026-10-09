@@ -8,10 +8,11 @@ import type { AppState } from '../renderer/src/state/store'
 import {
   applyReonedRepair,
   planReonedRepair,
+  type ReonedMissingReason,
   type ReonedRepairBatch,
   type ReonedRepairOutcome
 } from '@shared/reonedRepair'
-import { bakeOffset } from './bakeOffset'
+import { bakeOffsetDetailed } from './bakeOffset'
 import { resolveRecipe } from './reonedRecipe'
 import { bakeAssetsDir, libraryRootPath } from './projectLibrary'
 
@@ -47,7 +48,8 @@ async function chooseRotation(stem: ReonedRepairBatch['stems'][number]): Promise
 
 /** Checks each batch's copies (async, so a slow library drive never blocks the main thread)
  * and rebuilds the missing ones. A riff whose missing copies can't all be rebuilt (an original
- * away, the library drive unplugged, a failed render) rebuilds none of them. */
+ * away, the library drive unplugged, a failed render) rebuilds none of them, and each says why:
+ * `unreachable` (worth retrying once the drive is back) or `render-failed`. */
 export async function rebuildReonedCopies(
   batches: readonly ReonedRepairBatch[],
   dirs?: RebuildDirs
@@ -57,16 +59,15 @@ export async function rebuildReonedCopies(
   for (const batch of batches) {
     const present = await Promise.all(batch.stems.map((s) => exists(s.path)))
     const needed = batch.stems.filter((_, i) => !present[i])
-    const out: ReonedRepairOutcome[] = batch.stems.map((s, i) =>
-      present[i] ? { path: s.path, status: 'present' } : { path: s.path, status: 'missing' }
-    )
+    let reason: ReonedMissingReason = 'unreachable'
+    const rebuilt = new Map<string, { bakedPath: string; durationSec: number }>()
     if (needed.length > 0) {
       // Resolved only when something is missing: the defaults read app.getPath.
       dirs ??= { outputDir: bakeAssetsDir(), libraryRoot: libraryRootPath() }
       if (await exists(dirs.libraryRoot)) {
         const rotations = await Promise.all(needed.map(chooseRotation))
         if (rotations.every((r): r is number => r !== null)) {
-          const results = await bakeOffset(
+          const outcome = await bakeOffsetDetailed(
             needed.map((s, i) => ({
               path: s.path,
               rotationSec: 0,
@@ -75,24 +76,23 @@ export async function rebuildReonedCopies(
             })),
             dirs.outputDir
           )
-          if (results.length === needed.length) {
-            const byPath = new Map(results.map((r) => [r.path, r]))
-            for (let i = 0; i < out.length; i++) {
-              const r = byPath.get(out[i].path)
-              if (r && out[i].status === 'missing') {
-                out[i] = {
-                  path: r.path,
-                  status: 'rebuilt',
-                  bakedPath: r.bakedPath,
-                  durationSec: r.durationSec
-                }
-              }
-            }
+          if (outcome.ok && outcome.results.length === needed.length) {
+            for (const r of outcome.results) rebuilt.set(r.path, r)
+          } else if (!outcome.ok && outcome.reason === 'render-failed') {
+            reason = 'render-failed'
           }
         }
       }
     }
-    all.push(out)
+    all.push(
+      batch.stems.map((s, i): ReonedRepairOutcome => {
+        if (present[i]) return { path: s.path, status: 'present' }
+        const r = rebuilt.get(s.path)
+        return r
+          ? { path: s.path, status: 'rebuilt', bakedPath: r.bakedPath, durationSec: r.durationSec }
+          : { path: s.path, status: 'missing', reason }
+      })
+    )
   }
   return all
 }

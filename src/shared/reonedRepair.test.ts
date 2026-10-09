@@ -123,15 +123,30 @@ describe('applyReonedRepair', () => {
     expect(r.a.stems[0].path).toBe(COPY) // input not mutated
     expect(out.missing).toEqual([])
 
-    const missing = applyReonedRepair(r, [[{ path: COPY, status: 'missing' }]])
+    const missing = applyReonedRepair(r, [
+      [{ path: COPY, status: 'missing', reason: 'unreachable' }]
+    ])
     expect(missing.rifffs).toBe(r)
-    expect(missing.missing).toEqual([COPY])
+    expect(missing.missing).toEqual([{ path: COPY, reason: 'unreachable' }])
+  })
+
+  it('keeps why a copy is missing; named missing twice, "unreachable" wins, since it can be retried', () => {
+    const r = rifffs()
+    expect(
+      applyReonedRepair(r, [[{ path: COPY, status: 'missing', reason: 'render-failed' }]]).missing
+    ).toEqual([{ path: COPY, reason: 'render-failed' }])
+    expect(
+      applyReonedRepair(r, [
+        [{ path: COPY, status: 'missing', reason: 'render-failed' }],
+        [{ path: COPY, status: 'missing', reason: 'unreachable' }]
+      ]).missing
+    ).toEqual([{ path: COPY, reason: 'unreachable' }])
   })
 
   it('a copy one riff could not rebuild but another riff did is not missing', () => {
     const r = rifffs()
     const out = applyReonedRepair(r, [
-      [{ path: COPY, status: 'missing' }],
+      [{ path: COPY, status: 'missing', reason: 'unreachable' }],
       [{ path: COPY, status: 'rebuilt', bakedPath: COPY, durationSec: 8 }]
     ])
     expect(out.missing).toEqual([])

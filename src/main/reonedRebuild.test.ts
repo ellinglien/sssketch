@@ -128,7 +128,10 @@ describe('rebuildReonedCopies', () => {
         outputDir: join(dir, '.bakes'),
         libraryRoot: dir
       })
-      expect(outcomes[0].map((o) => o.status)).toEqual(['missing', 'missing'])
+      expect(outcomes[0]).toEqual([
+        { path: rifff.stems[0].path, status: 'missing', reason: 'unreachable' },
+        { path: rifff.stems[1].path, status: 'missing', reason: 'unreachable' }
+      ])
       const bakes = join(dir, '.bakes')
       expect(existsSync(bakes) ? readdirSync(bakes) : []).toEqual([])
     } finally {
@@ -146,8 +149,24 @@ describe('rebuildReonedCopies', () => {
         planReonedRepair({ g: riffOn(join(root, '.bakes', 'a.baked.wav'), source, 1) }),
         { outputDir: join(root, '.bakes'), libraryRoot: root }
       )
-      expect(outcomes[0][0].status).toBe('missing')
+      expect(outcomes[0][0]).toMatchObject({ status: 'missing', reason: 'unreachable' })
       expect(existsSync(root)).toBe(false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('an original that is there but will not render: missing as "render-failed", which a retry skips', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-rebuild-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeFileSync(source, 'not a wav at all')
+      const copy = join(dir, '.bakes', 'a.baked.wav')
+      const outcomes = await rebuildReonedCopies(planReonedRepair({ g: riffOn(copy, source, 1) }), {
+        outputDir: join(dir, '.bakes'),
+        libraryRoot: dir
+      })
+      expect(outcomes[0]).toEqual([{ path: copy, status: 'missing', reason: 'render-failed' }])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

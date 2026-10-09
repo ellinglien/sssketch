@@ -16,10 +16,21 @@ export interface ReonedRepairBatch {
   stems: ReonedRepairStem[]
 }
 
+/** Why a copy couldn't be rebuilt. `unreachable`: its original, or the library folder, can't be
+ * read (an unplugged drive, a deleted file); retried while the project is open, since it works
+ * once that is back. `render-failed`: everything was there and the bake failed; not retried
+ * until the project is opened again. */
+export type ReonedMissingReason = 'unreachable' | 'render-failed'
+
 export type ReonedRepairOutcome =
   | { path: string; status: 'present' }
   | { path: string; status: 'rebuilt'; bakedPath: string; durationSec: number }
-  | { path: string; status: 'missing' }
+  | { path: string; status: 'missing'; reason: ReonedMissingReason }
+
+export interface ReonedMissing {
+  path: string
+  reason: ReonedMissingReason
+}
 
 const isCopyPath = (path: string): boolean => path.toLowerCase().endsWith('.baked.wav')
 
@@ -61,13 +72,14 @@ export function planReonedRepair(rifffs: Readonly<Record<string, Rifff>>): Reone
 export function applyReonedRepair(
   rifffs: Readonly<Record<string, Rifff>>,
   outcomes: readonly (readonly ReonedRepairOutcome[])[]
-): { rifffs: Readonly<Record<string, Rifff>>; missing: string[] } {
+): { rifffs: Readonly<Record<string, Rifff>>; missing: ReonedMissing[] } {
   const moved = new Map<string, { bakedPath: string; durationSec: number }>()
   const found = new Set<string>()
-  const missing = new Set<string>()
+  const missing = new Map<string, ReonedMissingReason>()
   for (const outcome of outcomes.flat()) {
     if (outcome.status === 'missing') {
-      missing.add(outcome.path)
+      // Named missing twice (two riffs), "unreachable" wins: it is the one a retry can fix.
+      if (missing.get(outcome.path) !== 'unreachable') missing.set(outcome.path, outcome.reason)
       continue
     }
     found.add(outcome.path)
@@ -75,7 +87,9 @@ export function applyReonedRepair(
       moved.set(outcome.path, outcome)
     }
   }
-  const stillMissing = [...missing].filter((path) => !found.has(path))
+  const stillMissing = [...missing]
+    .filter(([path]) => !found.has(path))
+    .map(([path, reason]) => ({ path, reason }))
   if (moved.size === 0) return { rifffs, missing: stillMissing }
   const next: Record<string, Rifff> = {}
   for (const [groupId, rifff] of Object.entries(rifffs)) {
