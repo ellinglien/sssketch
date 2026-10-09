@@ -15,6 +15,7 @@ import { RowGainDial } from './RowGainDial'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { muteRegionsClipPath } from './muteClipPath'
+import { mixerKeyIsSilenced } from '../state/mixerMute'
 import { startPointerDrag } from './dragUtils'
 import { markManualSeek } from '../state/manualSeek'
 import {
@@ -116,6 +117,7 @@ export function CollapsedRifffRow({
   const bpm = useAppSelector((s) => s.bpm)
   const mute = useAppSelector((s) => s.mute)
   const mixerMute = useAppSelector((s) => s.mixerMute)
+  const mixerSolo = useAppSelector((s) => s.mixerSolo)
   const automationLanes = useAppSelector((s) => s.automationLanes)
   const busOf = useAppSelector((s) => s.busOf)
   const muteRegionsByStem = useAppSelector((s) => s.muteRegions)
@@ -156,7 +158,7 @@ export function CollapsedRifffRow({
   const allMuted = rifff.stems.every((stem) => mute[stemKey(groupId, stem.slot)])
   const effectivelyMuted = (slot: number): boolean => {
     const key = stemKey(groupId, slot)
-    return !!mute[key] || !!mixerMute[key]
+    return !!mute[key] || mixerKeyIsSilenced(mixerMute, mixerSolo, key)
   }
 
   // Shared, store-backed live preview, not local useState -- this row is

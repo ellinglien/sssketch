@@ -1,4 +1,4 @@
-import { Fragment } from 'react'
+import { Fragment, type CSSProperties } from 'react'
 import { useAppState, useDispatch } from '../state/StoreContext'
 import { stretchRatio } from '../state/selectors'
 import { offsetLabels } from '@shared/visuals'
@@ -35,6 +35,18 @@ function summarizeStemTypes(stems: Stem[]): string {
 // happens to be — the whole point of separating "nudge precision" from
 // "clip-placement snap precision".
 const NUDGE_TARGET_MS = 1
+
+const inspectorActionButtonStyle: CSSProperties = {
+  height: 20,
+  borderRadius: 0,
+  padding: '0 6px',
+  fontSize: 10,
+  border: '1px solid var(--ra-border)',
+  background: 'var(--ra-bg-row-active)',
+  color: 'var(--ra-text-2)',
+  cursor: 'pointer'
+}
+
 function fineNudgeDelta(bpm: number, snapDiv: number): number {
   const msPerStep = ((60 / bpm) * 4 * 1000) / snapDiv
   return NUDGE_TARGET_MS / msPerStep
@@ -42,7 +54,9 @@ function fineNudgeDelta(bpm: number, snapDiv: number): number {
 
 export function Inspector({
   onOpenBeatPicker,
-  onSeedDiscover
+  onSeedDiscover,
+  crossPair,
+  onCrossRiffs
 }: {
   onOpenBeatPicker: (groupId: string) => void
   /** App.tsx's own openRiffLibraryWithDiscoverSeed -- identical mechanism
@@ -56,6 +70,8 @@ export function Inspector({
    * Shelf-resident one -- buildSeedSlotsFromStems only ever needs the
    * rifff's own Stem[], regardless of where it currently lives. */
   onSeedDiscover: (rifff: Rifff) => void
+  crossPair: [Rifff, Rifff] | null
+  onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -165,23 +181,32 @@ export function Inspector({
           >
             {rifff.folderPath}/
           </div>
-          <button
-            onClick={() => onSeedDiscover(rifff)}
-            title="seed discover"
+          <div
             style={{
-              marginTop: 8,
-              height: 20,
-              borderRadius: 0,
-              padding: '0 6px',
-              fontSize: 10,
-              border: '1px solid var(--ra-border)',
-              background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text-2)',
-              cursor: 'pointer'
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8,
+              marginTop: 8
             }}
           >
-            discover this rifff
-          </button>
+            <button
+              onClick={() => onSeedDiscover(rifff)}
+              title="seed discover"
+              style={inspectorActionButtonStyle}
+            >
+              discover this rifff
+            </button>
+            {crossPair && (
+              <button
+                onClick={() => onCrossRiffs(crossPair)}
+                title="cross selected riffs"
+                style={inspectorActionButtonStyle}
+              >
+                cross riffs
+              </button>
+            )}
+          </div>
         </>
       )}
 

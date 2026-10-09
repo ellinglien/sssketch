@@ -1407,31 +1407,31 @@ describe('channelIsSoloed', () => {
   const riserHere = createRiser({ id: 'here', channelId: 'ch1', startBar: 0 })
   const riserThere = createRiser({ id: 'there', channelId: 'ch2', startBar: 0 })
 
-  it('is true for a riser-only row when every other riser is muted', () => {
-    expect(
-      channelIsSoloed({
-        channelId: 'ch1',
-        channelGroupIds: new Set<string>(),
-        rifffs: {},
-        risers: { here: riserHere, there: { ...riserThere, muted: true } },
-        mute: {}
-      })
-    ).toBe(true)
-  })
-
-  it('is false while another row is still audible', () => {
+  it('is true for a riser-only row explicitly targeted by Solo', () => {
     expect(
       channelIsSoloed({
         channelId: 'ch1',
         channelGroupIds: new Set<string>(),
         rifffs: {},
         risers: { here: riserHere, there: riserThere },
-        mute: {}
+        mixerSolo: ['here']
+      })
+    ).toBe(true)
+  })
+
+  it('is false when there is no explicit Solo', () => {
+    expect(
+      channelIsSoloed({
+        channelId: 'ch1',
+        channelGroupIds: new Set<string>(),
+        rifffs: {},
+        risers: { here: riserHere, there: riserThere },
+        mixerSolo: null
       })
     ).toBe(false)
   })
 
-  it('is false for a clip row while a riser elsewhere is still audible', () => {
+  it('is false for a clip row when the Solo target contains another row too', () => {
     const clip: Rifff = {
       groupId: 'g1',
       name: 'g1',
@@ -1457,7 +1457,7 @@ describe('channelIsSoloed', () => {
         channelGroupIds: new Set(['g1']),
         rifffs: { g1: clip },
         risers: { there: riserThere },
-        mute: {}
+        mixerSolo: ['g1:1', 'there']
       })
     ).toBe(false)
   })

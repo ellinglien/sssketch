@@ -86,12 +86,16 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   // treatment as SET_DRAG_PREVIEW; the real edits are ADD_MUTE_REGION/
   // REMOVE_MUTE_REGION, dispatched once Delete/Backspace actually commits.
   'SET_REGION_SELECTION',
-  // Monitoring state, not arrangement data. Durable whole-stem disable is
-  // TOGGLE_MUTE/SET_GROUP_MUTE; these only change AppState.mixerMute and
-  // should neither dirty the project nor become undo checkpoints.
+  // Monitoring state, not arrangement data. Durable whole-stem Disable is
+  // TOGGLE_MUTE/SET_GROUP_MUTE; these change only the independent temporary
+  // Mute/Solo layers and should neither dirty the project nor become undo
+  // checkpoints.
   'SET_CHANNEL_MUTE',
   'SOLO_CHANNEL',
   'SOLO_GROUP',
+  'SOLO_STEMS',
+  'CLEAR_MIXER_SOLO',
+  'RESTORE_MIXER_SOLO',
   // Where you are in the guided flow -- "what am I being walked through
   // right now," the same category as SET_ARRANGER_MODE at the top of this
   // set, not an arrangement edit. Undo must walk back through the clips
@@ -246,6 +250,7 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
         ...previous,
         armedChannelId: state.present.armedChannelId,
         mixerMute: state.present.mixerMute,
+        mixerSolo: state.present.mixerSolo,
         coach: pinnedCoach
       },
       future: [state.present, ...state.future]
@@ -261,6 +266,7 @@ export function historyReducer(state: HistoryState, action: HistoryAction): Hist
         ...next,
         armedChannelId: state.present.armedChannelId,
         mixerMute: state.present.mixerMute,
+        mixerSolo: state.present.mixerSolo,
         // Same rule as UNDO, in the other direction: the flow is pinned to
         // where the user actually is, while `sections` and `tension` come
         // from the state being redone into, so redoing a section placement

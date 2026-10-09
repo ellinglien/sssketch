@@ -85,14 +85,17 @@ describe('project serialization', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
     state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'r1', muted: true })
+    state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
 
     const parsed = JSON.parse(serializeProject(state))
     expect(parsed.mute['r1:1']).toBe(true)
     expect(parsed.mixerMute).toBeUndefined()
+    expect(parsed.mixerSolo).toBeUndefined()
 
     const { state: restored } = deserializeProject(parsed)
     expect(restored.mute['r1:1']).toBe(true)
     expect(restored.mixerMute).toEqual({})
+    expect(restored.mixerSolo).toBeNull()
   })
 
   it('does not persist gatedRecordingTargetGroupId -- always reopens with nothing targeted', () => {

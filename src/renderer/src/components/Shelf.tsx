@@ -32,7 +32,7 @@ export function Shelf({
   onImported,
   onOpenLibrary,
   onSeedDiscover,
-  onCrossRiffs
+  onCrossSelectionChange
 }: {
   onImported: (groupId: string) => void
   /** Opens the riff library on the half the pressed button names -- the two
@@ -56,10 +56,9 @@ export function Shelf({
    * live drag onto Discover isn't possible (Discover's own full-screen
    * modal covers Shelf entirely), so this is triggered explicitly instead. */
   onSeedDiscover: (rifff: Rifff) => void
-  /** Opens Cross from exactly two Shelf-selected riffs. Shelf is shared by
-   * Sketch and Arrange, so this entry point is intentionally available in
-   * either workspace. */
-  onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
+  /** Publishes exactly-two selection to the Inspector, where the Cross
+   * action lives beside the existing Discover action. */
+  onCrossSelectionChange: (groupIds: [string, string] | null) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -99,7 +98,17 @@ export function Shelf({
   // interaction, and vice versa.
   const multiSelected =
     state.sel !== null && rawMultiSelected.has(state.sel) ? rawMultiSelected : EMPTY_SELECTION
-  const crossPair = library.filter((rifff) => multiSelected.has(rifff.groupId))
+
+  const updateMultiSelection = useCallback(
+    (next: Set<string>): void => {
+      setMultiSelected(next)
+      const selectedIds = library
+        .filter((rifff) => next.has(rifff.groupId))
+        .map((rifff) => rifff.groupId)
+      onCrossSelectionChange(selectedIds.length === 2 ? [selectedIds[0], selectedIds[1]] : null)
+    },
+    [library, onCrossSelectionChange]
+  )
   const previewSourcesRef = useRef<AudioBufferSourceNode[]>([])
   // Bumped on every click so a preview whose decode is still in flight when
   // a different tile gets clicked knows it's been superseded and shouldn't
@@ -149,11 +158,11 @@ export function Shelf({
       const groupIds = [...targetIds].filter((id) => state.rifffs[id]?.startBar === undefined)
       if (groupIds.length === 0) return
       dispatch({ type: 'DELETE_RIFFFS', groupIds })
-      setMultiSelected(new Set())
+      updateMultiSelection(new Set())
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [multiSelected, state.sel, state.rifffs, dispatch])
+  }, [multiSelected, state.sel, state.rifffs, dispatch, updateMultiSelection])
 
   // Shift-click extends/shrinks a range from the current anchor (state.sel);
   // cmd/ctrl-click toggles just the clicked tile in/out of the batch,
@@ -166,19 +175,19 @@ export function Shelf({
       const anchorIndex = library.findIndex((r) => r.groupId === state.sel)
       const clickedIndex = library.findIndex((r) => r.groupId === rifff.groupId)
       if (anchorIndex === -1 || clickedIndex === -1) {
-        setMultiSelected(new Set([rifff.groupId]))
+        updateMultiSelection(new Set([rifff.groupId]))
         return
       }
       const [start, end] =
         anchorIndex < clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex]
-      setMultiSelected(new Set(library.slice(start, end + 1).map((r) => r.groupId)))
+      updateMultiSelection(new Set(library.slice(start, end + 1).map((r) => r.groupId)))
       return
     }
     if (e.metaKey || e.ctrlKey) {
-      setMultiSelected((prev) => toggleRiffBatchSelection(prev, state.sel, rifff.groupId))
+      updateMultiSelection(toggleRiffBatchSelection(multiSelected, state.sel, rifff.groupId))
       return
     }
-    setMultiSelected(new Set())
+    updateMultiSelection(new Set())
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
     stopTilePreview()
     if (previewingGroupId === rifff.groupId) {
@@ -491,23 +500,6 @@ export function Shelf({
               of its own to anchor. Keeps the same gap the row itself uses,
               so wrapping them changes nothing visually. */}
           <div style={{ display: 'flex', gap: 5 }}>
-            {crossPair.length === 2 && (
-              <button
-                onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
-                aria-label="Cross the two selected Shelf riffs"
-                style={{
-                  height: 28,
-                  borderRadius: 0,
-                  padding: '0 14px',
-                  fontSize: 12,
-                  border: '1px solid var(--ra-border-strong)',
-                  background: 'var(--ra-bg-row-active)',
-                  color: 'var(--ra-text)'
-                }}
-              >
-                cross riffs
-              </button>
-            )}
             <div data-tour-id="tour-import" style={{ display: 'flex', gap: 5 }}>
               {LIBRARY_ENTRY_POINTS.map((entry) => (
                 <button

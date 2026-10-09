@@ -50,6 +50,7 @@ export type PersistedProject = Omit<
   | 'gatedRecordingTargetGroupId'
   | 'pendingLockInConfirm'
   | 'mixerMute'
+  | 'mixerSolo'
 >
 
 /** The shape of a .sssketchproj saved before channels replaced trackOrder —
@@ -86,6 +87,7 @@ export function serializeProject(state: AppState, pluginStates: PluginStatesMap 
     gatedRecordingTargetGroupId,
     pendingLockInConfirm,
     mixerMute,
+    mixerSolo,
     ...rest
   } = state
   /* eslint-enable @typescript-eslint/no-unused-vars */

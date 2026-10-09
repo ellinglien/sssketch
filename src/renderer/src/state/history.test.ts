@@ -100,11 +100,15 @@ describe('historyReducer', () => {
     h = historyReducer(h, { type: 'SET_TEMPO', bpm: 100 })
     h = historyReducer(h, { type: 'SET_CHANNEL_MUTE', channelId: 'r1', muted: true })
     const mixerMute = h.present.mixerMute
+    h = historyReducer(h, { type: 'SOLO_CHANNEL', channelId: 'r1' })
+    const mixerSolo = h.present.mixerSolo
 
     h = historyReducer(h, { type: 'UNDO' })
     expect(h.present.mixerMute).toBe(mixerMute)
+    expect(h.present.mixerSolo).toBe(mixerSolo)
     h = historyReducer(h, { type: 'REDO' })
     expect(h.present.mixerMute).toBe(mixerMute)
+    expect(h.present.mixerSolo).toBe(mixerSolo)
   })
 
   it('undoing past a transient action lands on the last real edit, not a stale UI-mode state', () => {

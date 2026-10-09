@@ -128,7 +128,7 @@ export function PolarGlyph({
     .sort((a, b) => b.amp - a.amp)
 
   return (
-    <svg width={size} height={size} viewBox="0 0 100 100">
+    <svg className="ra-polar-glyph" width={size} height={size} viewBox="0 0 100 100">
       {glyphs.map((g, i) => (
         <g key={i}>
           {g.bandPaths.map((b, j) => (

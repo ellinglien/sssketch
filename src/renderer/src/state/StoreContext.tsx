@@ -700,6 +700,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.vol,
     state.mute,
     state.mixerMute,
+    state.mixerSolo,
     // Missing here meant a resize-handle drag (SET_PLAYED_BARS) never
     // reached the native engine during live playback -- the reducer state
     // updated fine (so the row visibly resized and export/re-open picked it

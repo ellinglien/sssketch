@@ -31,4 +31,70 @@ describe('stateWithMixerMute', () => {
     expect(effective.risers.rise.muted).toBe(true)
     expect(state.risers.rise.muted).toBe(false)
   })
+
+  it('lets Solo temporarily override Mute while durable Disable still wins', () => {
+    const state = {
+      ...initialState,
+      rifffs: {
+        one: {
+          groupId: 'one',
+          name: 'one',
+          bpm: 120,
+          barLength: 4,
+          folderPath: '/one',
+          startBar: 0,
+          stems: [
+            {
+              slot: 1,
+              author: 'a',
+              name: 'one',
+              type: 'fx' as const,
+              path: '/one.wav',
+              durationSec: 8,
+              barLength: 4
+            }
+          ]
+        },
+        two: {
+          groupId: 'two',
+          name: 'two',
+          bpm: 120,
+          barLength: 4,
+          folderPath: '/two',
+          startBar: 0,
+          stems: [
+            {
+              slot: 1,
+              author: 'a',
+              name: 'two',
+              type: 'fx' as const,
+              path: '/two.wav',
+              durationSec: 8,
+              barLength: 4
+            }
+          ]
+        }
+      },
+      mute: { 'one:1': true },
+      mixerMute: { 'one:1': true },
+      mixerSolo: ['one:1']
+    }
+
+    const effective = stateWithMixerMute(state)
+
+    expect(effective.mute['one:1']).toBe(true)
+    expect(effective.mute['two:1']).toBe(true)
+    expect(state.mixerMute['one:1']).toBe(true)
+    expect(state.mixerSolo).toEqual(['one:1'])
+  })
+
+  it('reveals the original temporary Mute after Solo clears', () => {
+    const soloed = {
+      ...initialState,
+      mixerMute: { 'one:1': true },
+      mixerSolo: ['one:1']
+    }
+    expect(stateWithMixerMute(soloed).mute['one:1']).toBeUndefined()
+    expect(stateWithMixerMute({ ...soloed, mixerSolo: null }).mute['one:1']).toBe(true)
+  })
 })

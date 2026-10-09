@@ -201,8 +201,13 @@ export interface AppState {
    * remains under the legacy persisted name for project compatibility. */
   mute: Record<string, boolean>
   /** Temporary mixer/audition silence, keyed by stemKey or riser id. Solo
-   * and channel mute write here so they can never erase `mute`. */
+   * never writes here: this is the musician's independent Mute layer. */
   mixerMute: Record<string, boolean>
+  /** Temporary Solo layer, expressed as the exact stem/riser keys allowed
+   * through while active. `null` means no solo. It is separate from both
+   * durable `mute` (Disable) and `mixerMute`, so solo/unsolo can never
+   * rewrite either underlying choice. */
+  mixerSolo: string[] | null
   off: Record<string, number>
   stretch: Record<string, boolean>
   /** A rifff's own played length, in bars — the tiling loop's bound, keyed by
@@ -560,6 +565,7 @@ export const initialState: AppState = {
   vol: {},
   mute: {},
   mixerMute: {},
+  mixerSolo: null,
   off: {},
   stretch: {},
   playedBars: {},
@@ -740,6 +746,8 @@ export type Action =
   | { type: 'SET_CHANNEL_MUTE'; channelId: string; muted: boolean }
   | { type: 'SOLO_CHANNEL'; channelId: string }
   | { type: 'SOLO_STEMS'; stemKeys: string[] }
+  | { type: 'CLEAR_MIXER_SOLO' }
+  | { type: 'RESTORE_MIXER_SOLO'; mixerSolo: string[] | null }
   | { type: 'RESTORE_MUTE'; mute: Record<string, boolean> }
   | { type: 'RESTORE_VOL'; vol: Record<string, number> }
   | { type: 'SET_GROUP_VOLUME'; groupId: string; volume: number }
@@ -1016,6 +1024,26 @@ export function soloStemsMute(
     }
   }
   return mute
+}
+
+function sameMixerSolo(current: readonly string[] | null, target: readonly string[]): boolean {
+  if (current === null || current.length !== target.length) return false
+  const currentKeys = new Set(current)
+  return target.every((key) => currentKeys.has(key))
+}
+
+function toggledMixerSolo(current: readonly string[] | null, target: string[]): string[] | null {
+  if (target.length === 0) return current ? [...current] : null
+  return sameMixerSolo(current, target) ? null : target
+}
+
+function withoutMixerSoloKeys(
+  current: readonly string[] | null,
+  removed: ReadonlySet<string>
+): string[] | null {
+  if (current === null) return null
+  const remaining = current.filter((key) => !removed.has(key))
+  return remaining.length > 0 ? remaining : null
 }
 
 /**
@@ -1385,6 +1413,7 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'REMOVE_FROM_TIMELINE': {
       const rifff = state.rifffs[action.groupId]
+      const removedStemKeys = new Set(rifff.stems.map((stem) => stemKey(action.groupId, stem.slot)))
       const previousChannelId = state.channelOf[action.groupId]
       const channelOf = { ...state.channelOf }
       delete channelOf[action.groupId]
@@ -1406,7 +1435,8 @@ export function reducer(state: AppState, action: Action): AppState {
         sel: state.sel === action.groupId ? null : state.sel,
         channelOf,
         channelOrder,
-        channelPlugins
+        channelPlugins,
+        mixerSolo: withoutMixerSoloKeys(state.mixerSolo, removedStemKeys)
       }
     }
 
@@ -1456,6 +1486,7 @@ export function reducer(state: AppState, action: Action): AppState {
         vol: omitStems(state.vol),
         mute: omitStems(state.mute),
         mixerMute: omitStems(state.mixerMute),
+        mixerSolo: withoutMixerSoloKeys(state.mixerSolo, stemKeysToStrip),
         muteRegions: omitStems(state.muteRegions),
         busOf: omitStems(state.busOf),
         // The toolkit is per clip now, so its three records are cleaned
@@ -1624,9 +1655,9 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     // Cmd/Ctrl+right-click on a clip, from any view (expanded, collapsed,
-    // sketch) — applies a temporary mixer solo. Crucially, this never writes
-    // state.mute: whole-stem enable/disable is arrangement data and must
-    // survive a solo round-trip unchanged.
+    // sketch) — applies a temporary mixer solo. Solo has its own layer: it
+    // never rewrites durable Disable (`mute`) OR temporary Mute
+    // (`mixerMute`), so both are revealed intact when Solo is cleared.
     //
     // Scoped to PLACED rifffs only — real bug this fixes: iterating every
     // rifff in state.rifffs (unfiltered) also mutated stems belonging to
@@ -1636,23 +1667,10 @@ export function reducer(state: AppState, action: Action): AppState {
     // it was never actually muted on, surfacing later as "why is this brand
     // new clip already muted" the moment it's dragged onto the timeline.
     case 'SOLO_GROUP': {
-      const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
-      const alreadySoloed = rifffList.every((rifff) =>
-        rifff.stems.every((stem) => {
-          const expectedMuted = rifff.groupId !== action.groupId
-          return !!state.mixerMute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
-        })
-      )
-      const mixerMute = { ...state.mixerMute }
-      for (const rifff of rifffList) {
-        for (const stem of rifff.stems) {
-          mixerMute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
-            ? false
-            : rifff.groupId !== action.groupId
-        }
-      }
-      for (const riser of Object.values(state.risers)) mixerMute[riser.id] = !alreadySoloed
-      return { ...state, mixerMute }
+      const rifff = state.rifffs[action.groupId]
+      if (!rifff || rifff.startBar === undefined) return state
+      const target = rifff.stems.map((stem) => stemKey(rifff.groupId, stem.slot))
+      return { ...state, mixerSolo: toggledMixerSolo(state.mixerSolo, target) }
     }
 
     // Channel-level counterpart to SET_GROUP_MUTE/SOLO_GROUP above, for the
@@ -1680,31 +1698,16 @@ export function reducer(state: AppState, action: Action): AppState {
       const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
       const channelOfRifff = (r: Rifff): string => state.channelOf[r.groupId] ?? r.groupId
       const riserList = Object.values(state.risers)
-      // Risers join the "is this already the only thing audible" scan on the
-      // same terms the clips do -- otherwise soloing a riser-only row would
-      // look like a no-op to the toggle and never turn back off.
-      const alreadySoloed =
-        rifffList.every((rifff) =>
-          rifff.stems.every((stem) => {
-            const expectedMuted = channelOfRifff(rifff) !== action.channelId
-            return !!state.mixerMute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
-          })
-        ) &&
-        riserList.every(
-          (riser) => !!state.mixerMute[riser.id] === (riser.channelId !== action.channelId)
-        )
-      const mixerMute = { ...state.mixerMute }
-      for (const rifff of rifffList) {
-        for (const stem of rifff.stems) {
-          mixerMute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
-            ? false
-            : channelOfRifff(rifff) !== action.channelId
-        }
-      }
+      const target = rifffList.flatMap((rifff) =>
+        channelOfRifff(rifff) === action.channelId
+          ? rifff.stems.map((stem) => stemKey(rifff.groupId, stem.slot))
+          : []
+      )
       for (const riser of riserList) {
-        mixerMute[riser.id] = alreadySoloed ? false : riser.channelId !== action.channelId
+        if (riser.channelId === action.channelId) target.push(riser.id)
       }
-      return { ...state, mixerMute }
+      if (target.length === 0) return state
+      return { ...state, mixerSolo: toggledMixerSolo(state.mixerSolo, target) }
     }
 
     // Solos an arbitrary SET of stems that may span multiple different
@@ -1723,31 +1726,36 @@ export function reducer(state: AppState, action: Action): AppState {
     // hear everything come back." Always solos EXACTLY `action.stemKeys`,
     // every time, no matter what was soloed before. Scoped to placed
     // rifffs only, for the same reason documented on SOLO_GROUP above.
-    case 'SOLO_STEMS':
-      return { ...state, mute: soloStemsMute(state.rifffs, state.mute, action.stemKeys) }
+    case 'SOLO_STEMS': {
+      const placedKeys = new Set(
+        Object.values(state.rifffs)
+          .filter((rifff) => rifff.startBar !== undefined)
+          .flatMap((rifff) => rifff.stems.map((stem) => stemKey(rifff.groupId, stem.slot)))
+      )
+      const target = action.stemKeys.filter((key) => placedKeys.has(key))
+      return target.length === 0 ? state : { ...state, mixerSolo: target }
+    }
 
-    // Restores a full mute snapshot verbatim -- used by ClusterStemsBrowser
-    // to undo whatever temporary SOLO_STEMS preview-auditioning it did while
-    // open, the moment it closes. SOLO_STEMS (like SOLO_GROUP/SOLO_CHANNEL)
-    // deliberately discards the exact prior per-stem mute state on solo
-    // (documented on SOLO_GROUP above: "solo is normally a temporary A/B
-    // listen, not a state worth preserving precisely") -- fine for those
-    // in-context solo toggles, but the cluster browser's own preview
-    // shouldn't leak into the real arrangement's mute state once you've
-    // closed it and gone back to just play the project normally.
+    case 'CLEAR_MIXER_SOLO':
+      return state.mixerSolo === null ? state : { ...state, mixerSolo: null }
+
+    case 'RESTORE_MIXER_SOLO':
+      return { ...state, mixerSolo: action.mixerSolo }
+
+    // Generic full Disable-map restore retained for callers that need an
+    // atomic snapshot restore. Solo no longer uses or writes this layer.
     case 'RESTORE_MUTE':
       return { ...state, mute: action.mute }
 
-    // Replaces the whole vol map verbatim -- the volume equivalent of
-    // RESTORE_MUTE above, added for useStemPreviewPlayback.ts's own preview-
+    // Replaces the whole vol map verbatim, used by
+    // useStemPreviewPlayback.ts's own preview-
     // volume boost (2026-09-14: previewing a stem in Tidy Up/Auto-Arrange
     // should let you actually hear it regardless of how quiet it's mixed in
     // the real rifff/arrangement -- see that hook's own doc comment). Used
     // BOTH directions there: applying the temporary full-volume-ish preview
     // override, and restoring the real vol map once that preview's own
     // caller closes/unmounts. Not mute-specific in name or shape on
-    // purpose -- a plain "set the whole map" primitive, same as RESTORE_MUTE
-    // already is in practice even though only one caller uses it today.
+    // purpose -- a plain "set the whole map" primitive.
     case 'RESTORE_VOL':
       return { ...state, vol: action.vol }
 
@@ -2151,6 +2159,7 @@ export function reducer(state: AppState, action: Action): AppState {
         ...state,
         risers,
         mixerMute,
+        mixerSolo: withoutMixerSoloKeys(state.mixerSolo, new Set([action.id])),
         channelOrder: stillOccupied
           ? state.channelOrder
           : state.channelOrder.filter((id) => id !== existing.channelId)

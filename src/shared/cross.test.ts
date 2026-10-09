@@ -6,10 +6,12 @@ import {
   assembleCrossRifff,
   createCrossDraft,
   crossCommitIsCurrent,
+  crossItemIsAudible,
   crossParentFromRifff,
   crossPairInVisualOrder,
   crossParentOnSide,
   crossProjectKey,
+  crossSourceAuditionGain,
   duplicateCrossRow,
   finishCrossGainDrag,
   moveCrossRow,
@@ -20,7 +22,7 @@ import {
   setCrossGain,
   swapCrossSides,
   toggleCrossAudible,
-  toggleCrossSolo,
+  toggleCrossSoloedId,
   undoCross,
   type CrossDraft,
   type CrossParent
@@ -68,6 +70,17 @@ describe('crossProjectKey', () => {
   it('uses the project seed as the stable identity when present', () => {
     expect(crossProjectKey({ kind: 'library', name: 'demo' }, 'abc')).toBe('seed:abc')
     expect(crossProjectKey({ kind: 'external', path: '/tmp/demo' })).toBe('external:/tmp/demo')
+  })
+})
+
+describe('crossSourceAuditionGain', () => {
+  it('makes a zero-gain stem audible while it is soloed', () => {
+    expect(crossSourceAuditionGain(0, true)).toBe(1)
+  })
+
+  it('preserves inherited gain outside a sole-source audition', () => {
+    expect(crossSourceAuditionGain(0, false)).toBe(0)
+    expect(crossSourceAuditionGain(0.35, true)).toBe(0.35)
   })
 })
 
@@ -180,16 +193,22 @@ describe('Cross center editing', () => {
     expect(value.center.map((row) => row.sourceId)).toEqual(['a:1'])
   })
 
-  it('matches Discover solo semantics: unsolo restores every center row', () => {
+  it('keeps mute choices intact beneath temporary solo', () => {
     let value = addCrossSource(draft(), 'a:1')
     value = addCrossSource(value, 'a:2')
     value = addCrossSource(value, 'b:1')
     value = toggleCrossAudible(value, 'a:2')
     expect(value.center.map((row) => row.audible)).toEqual([true, false, true])
-    value = toggleCrossSolo(value, 'b:1')
-    expect(value.center.map((row) => row.audible)).toEqual([false, false, true])
-    value = toggleCrossSolo(value, 'b:1')
-    expect(value.center.map((row) => row.audible)).toEqual([true, true, true])
+
+    let soloedId = toggleCrossSoloedId(null, 'a:2')
+    expect(crossItemIsAudible('a:2', true, soloedId)).toBe(true)
+    expect(crossItemIsAudible('a:1', false, soloedId)).toBe(false)
+    expect(value.center.map((row) => row.audible)).toEqual([true, false, true])
+
+    soloedId = toggleCrossSoloedId(soloedId, 'a:2')
+    expect(crossItemIsAudible('a:2', true, soloedId)).toBe(false)
+    expect(crossItemIsAudible('a:1', false, soloedId)).toBe(true)
+    expect(value.center.map((row) => row.audible)).toEqual([true, false, true])
   })
 
   it('caps the center at twenty source occurrences', () => {

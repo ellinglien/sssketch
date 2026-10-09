@@ -267,6 +267,8 @@ export function DiscoverSlotRow({
   rerolling,
   manualWaiting,
   previewing,
+  sounding,
+  soloSuppressed,
   radioResting = false,
   soloed,
   favourited,
@@ -336,17 +338,19 @@ export function DiscoverSlotRow({
    * TOGETHER, looped, like the Upcycle reference this screen is modeled on
    * -- not a one-at-a-time solo. */
   previewing: boolean
+  /** Effective audition state after the independent Solo layer is applied. */
+  sounding: boolean
+  /** Enabled in the underlying mix, but temporarily excluded by another
+   * row's Solo. This shares Mute's subtle recede without lighting M. */
+  soloSuppressed: boolean
   /** Radio is resting this row (a hook's rest, the intensity arc's breakdown: spec
    * 2026-10-05-radio-move-visuals-design, decision 11): out of the mix for radio, so its colour
    * layer stays, drawn at the dim floor ([data-mv-rest]) and following the music with radio's
    * moves, where a mute is grey. The radio layout only. */
   radioResting?: boolean
-  /** True while THIS slot is the ONLY one currently in the playing mix
-   * (DiscoverPanel's own `previewingSlotIds.size === 1 && ...has(slot.id)`)
-   * -- drives the "S" button's active state, matching ChannelRow.tsx's own
-   * `soloed` computed-fresh-from-mute-state convention (not a separately
-   * persisted "which slot is soloed" flag). Direct request, 2026-09-15
-   * (Upcycle-inspired). */
+  /** True while THIS slot is the explicit temporary Solo target. This is
+   * independent of `previewing`: Solo may audition a muted row, then the
+   * row's original Mute state returns unchanged when Solo is cleared. */
   soloed: boolean
   /** True when this slot's own resolved candidate's stemCID is in
    * DiscoverPanel's own `stemFavourites` set -- direct request,
@@ -1086,9 +1090,9 @@ export function DiscoverSlotRow({
           padding: 0,
           fontFamily: 'inherit',
           fontSize: 10,
-          background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-          border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : liveBorder}`,
-          color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+          background: soloed ? 'var(--ra-solo-on)' : 'var(--ra-bg-row-active)',
+          border: `1px solid ${soloed ? 'var(--ra-solo-on)' : liveBorder}`,
+          color: soloed ? 'var(--ra-solo-on-ink)' : 'var(--ra-text-2)',
           cursor: 'pointer'
         }}
       >
@@ -1110,7 +1114,7 @@ export function DiscoverSlotRow({
   // effect writes --mv-* on this cell (data-move-row) at every position tick; its rules dim and
   // shape the colour layer (mv-colour), show the echo's ghost and a change's riser line. The same
   // one element in both radio views.
-  const colourShown = previewing || (radioLayout && radioResting)
+  const colourShown = sounding || (radioLayout && radioResting)
   const waveformCell = (
     <div
       data-move-row={radioLayout ? slot.id : undefined}
@@ -1286,7 +1290,7 @@ export function DiscoverSlotRow({
                   // a change's riser, filling along the row's foot toward the one
                   <div className="mv-riser" aria-hidden />
                 )}
-                {previewing && (
+                {sounding && (
                   <div
                     style={{
                       position: 'absolute',
@@ -1780,7 +1784,9 @@ export function DiscoverSlotRow({
             position: 'relative',
             border: `1px solid ${radioApproach !== null ? 'var(--ra-border-strong)' : 'var(--ra-border)'}`,
             marginBottom: 6,
-            background: approachBackground ?? 'var(--ra-bg-row)'
+            background: approachBackground ?? 'var(--ra-bg-row)',
+            opacity: soloed ? 1 : showsAsMuted || soloSuppressed ? 0.72 : 1,
+            transition: 'opacity 100ms ease-out'
           }}
         >
           {holding && (
@@ -1972,7 +1978,9 @@ export function DiscoverSlotRow({
           // counting down. The 0.5 fallback is the stopped value, for the
           // one frame before the effect has written the variable.
           background: approachBackground,
-          borderBottom: '1px solid var(--ra-border-soft)'
+          borderBottom: '1px solid var(--ra-border-soft)',
+          opacity: soloed ? 1 : showsAsMuted || soloSuppressed ? 0.72 : 1,
+          transition: 'opacity 100ms ease-out'
         }}
       >
         {removeButton}

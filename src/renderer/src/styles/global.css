@@ -171,14 +171,13 @@ textarea:focus-visible,
   outline-offset: -1px;
 }
 
-/* Riff selection keeps the original quiet square treatment, with only a
- * 2px corner radius and very short feather at its edges. Shelf playback gets a
- * separate restrained playhead-colored feather so selected and sounding
- * remain distinct without the concentric-ring/corona effect. */
+/* Riff selection keeps the original quiet square treatment with sharp
+ * corners and no edge feather. Shelf playback gets a separate restrained
+ * playhead-colored feather so selected and sounding remain distinct. */
 .ra-riff-tile {
   position: relative;
   overflow: visible;
-  border-radius: 2px;
+  border-radius: 0;
   background: transparent;
   transition:
     opacity 80ms ease,
@@ -186,16 +185,34 @@ textarea:focus-visible,
     box-shadow 120ms ease;
 }
 
+/* The tiles use border-box sizing while their glyphs deliberately retain
+ * their original dimensions. Center the glyph geometrically instead of
+ * allowing the border/padding content origin to shift it one pixel down and
+ * right. This applies only to the circular glyph directly inside a riff tile;
+ * playback and recording overlays keep their existing positioning. */
+.ra-sketch-riff-tile > .ra-polar-glyph,
+.ra-shelf-riff-tile > .ra-polar-glyph {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  transform: translate(-50%, -50%);
+}
+
 .ra-riff-tile[data-selected='true'] {
-  background: var(--ra-bg-riff-selected);
-  box-shadow: 0 0 3px color-mix(in srgb, var(--ra-text-2) 9%, transparent);
+  background-color: var(--ra-bg-riff-selected);
+  background-image: url('../assets/riff-selection-crosshatch.svg');
+  background-repeat: repeat;
+  background-size: 8px 8px;
+  image-rendering: pixelated;
+  box-shadow: none;
 }
 
 .ra-shelf-riff-tile[data-previewing='true'] {
   box-shadow: 0 0 3px color-mix(in srgb, var(--ra-playhead) 18%, transparent);
 }
 
-/* Preserve keyboard focus with the same gently-rounded geometry. */
+/* Preserve keyboard focus with the same square geometry. */
 .ra-riff-tile:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--ra-text-2) 42%, transparent);
   outline-offset: 2px;

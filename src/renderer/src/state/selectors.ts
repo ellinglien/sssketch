@@ -974,15 +974,8 @@ export function channelAllMuted(fields: {
   )
 }
 
-/**
- * Is this row the only audible thing in the project -- the state the row's
- * `s` button lights up for, and the same definition SOLO_CHANNEL's own
- * "alreadySoloed" check uses so the toggle and the light cannot disagree.
- *
- * When the project has exactly one row this is trivially true even with
- * nothing "soloed" -- the same accepted edge case SOLO_GROUP has always had,
- * not a new one.
- */
+/** Is this exact row the current explicit Solo target? Solo has its own
+ * transient layer, so this never infers Solo from a pattern of Mute values. */
 export function channelIsSoloed(fields: {
   channelId: string
   /** The groupIds of this row's placed rifffs. */
@@ -992,14 +985,19 @@ export function channelIsSoloed(fields: {
   rifffs: Record<string, Rifff>
   /** EVERY riser in the project, for the same reason. */
   risers: Record<string, RiserClip>
-  mute: Record<string, boolean>
+  mixerSolo: readonly string[] | null
 }): boolean {
-  const { channelId, channelGroupIds, rifffs, risers, mute } = fields
-  const clipsAgree = Object.values(rifffs).every((rifff) => {
-    if (rifff.startBar === undefined) return true
-    const inThisChannel = channelGroupIds.has(rifff.groupId)
-    return rifff.stems.every((s) => !!mute[stemKey(rifff.groupId, s.slot)] === !inThisChannel)
-  })
-  if (!clipsAgree) return false
-  return Object.values(risers).every((riser) => riser.muted === (riser.channelId !== channelId))
+  const { channelId, channelGroupIds, rifffs, risers, mixerSolo } = fields
+  if (mixerSolo === null) return false
+  const target = Object.values(rifffs).flatMap((rifff) =>
+    rifff.startBar !== undefined && channelGroupIds.has(rifff.groupId)
+      ? rifff.stems.map((stem) => stemKey(rifff.groupId, stem.slot))
+      : []
+  )
+  for (const riser of Object.values(risers)) {
+    if (riser.channelId === channelId) target.push(riser.id)
+  }
+  if (target.length !== mixerSolo.length) return false
+  const soloKeys = new Set(mixerSolo)
+  return target.every((key) => soloKeys.has(key))
 }

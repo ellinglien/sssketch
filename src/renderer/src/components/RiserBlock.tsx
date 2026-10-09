@@ -12,6 +12,7 @@ import { startPointerDrag } from './dragUtils'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { useAppSelector, useDispatch, useZoom } from '../state/StoreContext'
+import { mixerKeyIsSilenced } from '../state/mixerMute'
 
 /** How many points the sweep line and the swell wedge are drawn with. The
  * sweep can be an arbitrary hand-drawn curve, so it is SAMPLED rather than
@@ -104,7 +105,7 @@ export function RiserBlock({
   const dispatch = useDispatch()
   const ppb = useZoom()
   const riser = useAppSelector((s) => s.risers[riserId])
-  const mixerMuted = useAppSelector((s) => !!s.mixerMute[riserId])
+  const mixerSilenced = useAppSelector((s) => mixerKeyIsSilenced(s.mixerMute, s.mixerSolo, riserId))
   const automationLanes = useAppSelector((s) => s.automationLanes)
   const [hovered, setHovered] = useState(false)
 
@@ -379,7 +380,7 @@ export function RiserBlock({
                 // layer for the same reason) -- the block keeps its outline
                 // so a muted riser is still a thing you can grab, not a
                 // hole in the row. The red lives on the row's m button.
-                opacity: riser.muted || mixerMuted ? 0.3 : 1
+                opacity: riser.muted || mixerSilenced ? 0.3 : 1
               }}
             >
               <defs>

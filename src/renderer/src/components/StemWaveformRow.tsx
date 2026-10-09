@@ -17,6 +17,7 @@ import { startPointerDrag } from './dragUtils'
 import { mouseBarFromDragEvent } from './dragGrabOffset'
 import { markManualSeek } from '../state/manualSeek'
 import { muteRegionsClipPath } from './muteClipPath'
+import { mixerKeyIsSilenced } from '../state/mixerMute'
 
 export const ROW_HEIGHT = 44
 
@@ -43,8 +44,8 @@ export function StemWaveformRow({
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
   const rifff = useAppSelector((s) => s.rifffs[groupId])
   const disabled = useAppSelector((s) => !!s.mute[key])
-  const mixerMuted = useAppSelector((s) => !!s.mixerMute[key])
-  const muted = disabled || mixerMuted
+  const mixerSilenced = useAppSelector((s) => mixerKeyIsSilenced(s.mixerMute, s.mixerSolo, key))
+  const muted = disabled || mixerSilenced
   const volume = useAppSelector((s) => s.vol[key] ?? 1)
   const playedBarsOverride = useAppSelector((s) => s.playedBars[groupId])
   const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)

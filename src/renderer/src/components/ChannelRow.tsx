@@ -147,6 +147,7 @@ function ChannelRowImpl({
   // drag, fade adjustment, tempo change, etc. no longer touches it). See
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
   const mixerMute = useAppSelector((s) => s.mixerMute)
+  const mixerSolo = useAppSelector((s) => s.mixerSolo)
   const rifffsMap = useAppSelector((s) => s.rifffs)
   // The whole record, then narrowed with useMemo -- risersOnChannel builds a
   // fresh array every call, so selecting it directly would fail Object.is on
@@ -157,13 +158,6 @@ function ChannelRowImpl({
   const mixerChannelRisers = useMemo(
     () => channelRisers.map((riser) => ({ ...riser, muted: !!mixerMute[riser.id] })),
     [channelRisers, mixerMute]
-  )
-  const mixerRisers = useMemo(
-    () =>
-      Object.fromEntries(
-        Object.entries(allRisers).map(([id, riser]) => [id, { ...riser, muted: !!mixerMute[id] }])
-      ),
-    [allRisers, mixerMute]
   )
   const riserIds = useMemo(() => channelRisers.map((riser) => riser.id), [channelRisers])
   const isRecordingChannel = useAppSelector((s) => !!s.recordingChannelIds[channelId])
@@ -213,10 +207,10 @@ function ChannelRowImpl({
         channelId,
         channelGroupIds: new Set(rifffs.map((r) => r.groupId)),
         rifffs: rifffsMap,
-        risers: mixerRisers,
-        mute: mixerMute
+        risers: allRisers,
+        mixerSolo
       }),
-    [channelId, rifffs, rifffsMap, mixerRisers, mixerMute]
+    [channelId, rifffs, rifffsMap, allRisers, mixerSolo]
   )
 
   const baseButtonStyle: React.CSSProperties = {
@@ -237,13 +231,11 @@ function ChannelRowImpl({
     color: allMuted ? 'var(--ra-mute-on-ink)' : 'var(--ra-text-2)'
   }
 
-  // Matches Inspector's own stretch-toggle treatment: a soft tinted
-  // background with the accent color on border/text, not a hard fill.
   const soloButtonStyle: React.CSSProperties = {
     ...baseButtonStyle,
-    background: soloed ? 'var(--ra-stretch-on-bg)' : 'var(--ra-bg-row-active)',
-    border: `1px solid ${soloed ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-    color: soloed ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+    background: soloed ? 'var(--ra-solo-on)' : 'var(--ra-bg-row-active)',
+    border: `1px solid ${soloed ? 'var(--ra-solo-on)' : 'var(--ra-border)'}`,
+    color: soloed ? 'var(--ra-solo-on-ink)' : 'var(--ra-text-2)'
   }
 
   const fxButtonStyle: React.CSSProperties = {

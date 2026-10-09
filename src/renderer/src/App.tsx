@@ -128,7 +128,7 @@ import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
 import type { DiscoverSettings } from '../../main/discoverSettingsStore'
 import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
-import { DEFAULT_RADIO_SETTINGS, type RadioSettings } from '@shared/radioSchedule'
+import { DEFAULT_RADIO_SETTINGS, radioSourceOf, type RadioSettings } from '@shared/radioSchedule'
 import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
 import { mergeLatestSettings, nestedPatchFromLatest } from '@shared/latestSettings'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
@@ -217,7 +217,7 @@ function Timeline({
   onCreateRiser,
   openRiserLaneId,
   onCloseRiserLane,
-  onCrossRiffs
+  onCrossSelectionChange
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
@@ -237,7 +237,7 @@ function Timeline({
    * openRiserLaneId. */
   openRiserLaneId: string | null
   onCloseRiserLane: () => void
-  onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
+  onCrossSelectionChange: (groupIds: [string, string] | null) => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
    * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
@@ -472,7 +472,7 @@ function Timeline({
   }
 
   if (state.mode === 'sketch') {
-    return <SketchStrip onCrossRiffs={onCrossRiffs} />
+    return <SketchStrip onCrossSelectionChange={onCrossSelectionChange} />
   }
 
   const ghostRowHeight = GHOST_ROW_HEIGHT
@@ -1730,6 +1730,20 @@ function Frame(): React.JSX.Element {
   // draft, so opening another pair never needs a discard confirmation.
   const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
   const [crossOpen, setCrossOpen] = useState(false)
+  // Sketch and Shelf own their local multi-selection visuals, while the
+  // Inspector owns the action those selections expose. Keep only the two
+  // selected ids here so the Inspector can render Cross beside Discover
+  // without moving either component's selection mechanics into App.
+  const [crossSelectionIds, setCrossSelectionIds] = useState<[string, string] | null>(null)
+  const handleCrossSelectionChange = useCallback((groupIds: [string, string] | null) => {
+    setCrossSelectionIds(groupIds)
+  }, [])
+  const inspectorCrossPair = useMemo<[Rifff, Rifff] | null>(() => {
+    if (!crossSelectionIds || !state.sel || !crossSelectionIds.includes(state.sel)) return null
+    const left = state.rifffs[crossSelectionIds[0]]
+    const right = state.rifffs[crossSelectionIds[1]]
+    return left && right ? [left, right] : null
+  }, [crossSelectionIds, state.rifffs, state.sel])
   // Discover artist mode: the chosen artists (combine artists, spec
   // 2026-10-06), `[null]` = me. Session-only, the same lifetime as
   // discoverSlots -- Discover opens on `me` at launch.
@@ -1804,8 +1818,16 @@ function Frame(): React.JSX.Element {
       return true
     }
   })
+  const [onboardingDismissedForSession, setOnboardingDismissedForSession] = useState(false)
+
+  function hideOnboardingForSession(): void {
+    setShowOnboarding(false)
+    setOnboardingDismissedForSession(true)
+  }
+
   function dismissOnboarding(dontShowAgain: boolean): void {
     setShowOnboarding(false)
+    setOnboardingDismissedForSession(true)
     // Choosing any of this modal's normal actions (new/open/login/tour)
     // while a recovery notice is still showing (see OnboardingModal's own
     // doc comment -- the notice now sits ON TOP OF those buttons rather
@@ -1839,6 +1861,7 @@ function Frame(): React.JSX.Element {
       // localStorage unavailable -- it just won't auto-show again next
       // launch either way; still open it now.
     }
+    setOnboardingDismissedForSession(false)
     setShowOnboarding(true)
   }
 
@@ -2207,14 +2230,18 @@ function Frame(): React.JSX.Element {
         window.alert('Could not prepare every stem for Cross. Nothing was changed; try again.')
         return
       }
-      setCrossDraft(
-        createCrossDraft(
+      setCrossDraft({
+        ...createCrossDraft(
           projectKey,
           crossParentFromRifff(prepared[0], state.vol),
           crossParentFromRifff(prepared[1], state.vol),
           state.bpm
-        )
-      )
+        ),
+        // Cross and Discover expose the same Endlesss↔Other choice. Seed a
+        // disposable Cross draft from the persisted setting rather than
+        // resetting the knob whenever a new pair is opened.
+        sourceLean: radioSourceOf(discoverSettingsRef.current.radio)
+      })
       setCrossOpen(true)
     } catch (err) {
       console.error('App: failed to prepare selected riffs for Cross:', err)
@@ -2977,7 +3004,7 @@ function Frame(): React.JSX.Element {
           onImported={handleImported}
           onOpenLibrary={openRiffLibrary}
           onSeedDiscover={openRiffLibraryWithDiscoverSeed}
-          onCrossRiffs={(rifffs) => void openCrossFromRiffs(rifffs)}
+          onCrossSelectionChange={handleCrossSelectionChange}
         />
         <TransportBar
           onEnableGatedRecording={() => void enableGatedRecording()}
@@ -3033,7 +3060,7 @@ function Frame(): React.JSX.Element {
                   onCreateRiser={createRiserFromGesture}
                   openRiserLaneId={openRiserLaneId}
                   onCloseRiserLane={closeRiserLane}
-                  onCrossRiffs={(rifffs) => void openCrossFromRiffs(rifffs)}
+                  onCrossSelectionChange={handleCrossSelectionChange}
                 />
               )}
             </div>
@@ -3112,6 +3139,8 @@ function Frame(): React.JSX.Element {
             <Inspector
               onOpenBeatPicker={handleOpenBeatPickerForEdit}
               onSeedDiscover={openRiffLibraryWithDiscoverSeed}
+              crossPair={inspectorCrossPair}
+              onCrossRiffs={(rifffs) => void openCrossFromRiffs(rifffs)}
             />
           </div>
         </div>
@@ -3187,6 +3216,7 @@ function Frame(): React.JSX.Element {
                 draft={crossDraft}
                 setDraft={setCrossDraft}
                 currentProjectKey={crossProjectKey(currentSketch, state.projectSeed)}
+                onSourceLeanCommit={(source) => void setRadioSettings({ source })}
                 onBack={() => {
                   setCrossOpen(false)
                   setCrossDraft(null)
@@ -3334,44 +3364,47 @@ function Frame(): React.JSX.Element {
           crash-recovery snapshot always wins over "don't show this again,"
           since that opt-out was about the welcome pitch, not about
           silently dropping recoverable work. */}
-        {!showLibraryLocationSetup && (showOnboarding || recoverableAutosave !== null) && (
-          <OnboardingModal
-            hasRecovery={recoverableAutosave !== null}
-            onRecover={(dontShowAgain) => void handleRecoverAutosave(dontShowAgain)}
-            onDiscardRecovery={handleDiscardRecovery}
-            onNewProject={(dontShowAgain) => {
-              // Dismiss first so the welcome modal doesn't visually stack
-              // behind/conflict with whatever handleNew() shows next (the
-              // discard-guard dialog and/or NewProjectModal) -- see
-              // handleNew()'s own doc comment for why this routes through
-              // the exact same path as the toolbar's "new" button rather
-              // than a separate welcome-only shortcut.
-              dismissOnboarding(dontShowAgain)
-              void handleNew()
-            }}
-            onOpenProject={(dontShowAgain) => {
-              dismissOnboarding(dontShowAgain)
-              openLibraryBrowser()
-            }}
-            onOpenEndlesss={(dontShowAgain) => {
-              dismissOnboarding(dontShowAgain)
-              openRiffLibrary('import')
-            }}
-            onStartTour={(dontShowAgain) => {
-              const hasExistingContent = Object.keys(state.rifffs).length > 0
-              if (
-                hasExistingContent &&
-                !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
-              ) {
-                return
-              }
-              dismissOnboarding(dontShowAgain)
-              void startTour()
-            }}
-            tourSeen={tourSeen}
-            endlesssLoggedIn={endlesssLoggedIn}
-          />
-        )}
+        {!showLibraryLocationSetup &&
+          !onboardingDismissedForSession &&
+          (showOnboarding || recoverableAutosave !== null) && (
+            <OnboardingModal
+              hasRecovery={recoverableAutosave !== null}
+              onRecover={(dontShowAgain) => void handleRecoverAutosave(dontShowAgain)}
+              onDiscardRecovery={handleDiscardRecovery}
+              onNewProject={(dontShowAgain) => {
+                // Dismiss first so the welcome modal doesn't visually stack
+                // behind/conflict with whatever handleNew() shows next (the
+                // discard-guard dialog and/or NewProjectModal) -- see
+                // handleNew()'s own doc comment for why this routes through
+                // the exact same path as the toolbar's "new" button rather
+                // than a separate welcome-only shortcut.
+                dismissOnboarding(dontShowAgain)
+                void handleNew()
+              }}
+              onOpenProject={(dontShowAgain) => {
+                dismissOnboarding(dontShowAgain)
+                openLibraryBrowser()
+              }}
+              onOpenEndlesss={(dontShowAgain) => {
+                dismissOnboarding(dontShowAgain)
+                openRiffLibrary('import')
+              }}
+              onStartTour={(dontShowAgain) => {
+                const hasExistingContent = Object.keys(state.rifffs).length > 0
+                if (
+                  hasExistingContent &&
+                  !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
+                ) {
+                  return
+                }
+                dismissOnboarding(dontShowAgain)
+                void startTour()
+              }}
+              onDismiss={hideOnboardingForSession}
+              tourSeen={tourSeen}
+              endlesssLoggedIn={endlesssLoggedIn}
+            />
+          )}
         {tourStepIndex !== null && (
           <TourOverlay
             steps={TOUR_STEPS}

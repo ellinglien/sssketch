@@ -6,7 +6,11 @@ import { stemColorVar } from '../theme/typeColor'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { markManualSeek } from '../state/manualSeek'
 import type { Rifff } from '@shared/types'
-import { sketchRiffClickAction, toggleRiffBatchSelection } from './sketchRiffInteraction'
+import {
+  sketchRiffClickAction,
+  sketchRiffPlaybackHit,
+  toggleRiffBatchSelection
+} from './sketchRiffInteraction'
 
 export const TILE_SIZE = 64
 export const TILE_GAP = 10
@@ -29,9 +33,9 @@ const BARS_DRAG_PX_PER_STEP = 20
  * the orbiting playhead dot's lap speed, not tile size, so the strip stays
  * visually even regardless of how long each rifff actually is. */
 export function SketchStrip({
-  onCrossRiffs
+  onCrossSelectionChange
 }: {
-  onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
+  onCrossSelectionChange: (groupIds: [string, string] | null) => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -62,7 +66,17 @@ export function SketchStrip({
   // interaction, and vice versa.
   const multiSelected =
     state.sel !== null && rawMultiSelected.has(state.sel) ? rawMultiSelected : EMPTY_SELECTION
-  const crossPair = sequence.filter((rifff) => multiSelected.has(rifff.groupId))
+
+  const updateMultiSelection = useCallback(
+    (next: Set<string>): void => {
+      setMultiSelected(next)
+      const selectedIds = sequence
+        .filter((rifff) => next.has(rifff.groupId))
+        .map((rifff) => rifff.groupId)
+      onCrossSelectionChange(selectedIds.length === 2 ? [selectedIds[0], selectedIds[1]] : null)
+    },
+    [sequence, onCrossSelectionChange]
+  )
   // Set (only) when a real drag of the scrub dot just ended — see
   // handleTileClick's own doc comment for why the tile's click handler
   // needs to check this.
@@ -137,11 +151,11 @@ export function SketchStrip({
           : new Set(state.sel && sequence.some((r) => r.groupId === state.sel) ? [state.sel] : [])
       if (targets.size === 0) return
       removeTiles(targets)
-      setMultiSelected(new Set())
+      updateMultiSelection(new Set())
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [state.sel, sequence, multiSelected, removeTiles])
+  }, [state.sel, sequence, multiSelected, removeTiles, updateMultiSelection])
 
   // Shift-click extends/shrinks a range from the current anchor (state.sel);
   // cmd/ctrl-click toggles just the clicked tile in/out of the batch — same
@@ -151,10 +165,11 @@ export function SketchStrip({
   // A plain click is an "arranger" gesture, not a "library" one — unlike
   // Shelf/LORE browser tiles (which aren't placed yet and preview via an
   // isolated Web Audio loop), these rifffs are already part of the actual
-  // arrangement, so clicking one (with no modifier) jumps the REAL
-  // transport to its position and plays from there, same as clicking a
-  // spot on the Ruler, and collapses any active batch selection back down
-  // to just that one tile. Real bug this fixed: starting an isolated
+  // arrangement. Clicking INSIDE the circular glyph (with no modifier)
+  // jumps the real transport to its position and plays/stops it; clicking
+  // an exposed corner of the square selection tile only selects it. Both
+  // collapse any active batch selection back down to that tile. Real bug
+  // this fixed: starting an isolated
   // preview also paused the main transport underneath it, so clicking a
   // tile while playing silently cut the arrangement's audio — looked
   // exactly like "play isn't working."
@@ -171,10 +186,18 @@ export function SketchStrip({
     const targetPos = rifff.startBar ?? 0
     const clickedRiffIsPlaying =
       playing && pos >= targetPos && pos < targetPos + effectiveBars(rifff)
+    const rect = e.currentTarget.getBoundingClientRect()
+    const playbackHit = sketchRiffPlaybackHit(
+      e.clientX - rect.left,
+      e.clientY - rect.top,
+      rect.width,
+      rect.height
+    )
     const playbackAction = sketchRiffClickAction(
       playing,
       clickedRiffIsPlaying,
-      nativeTileDragRef.current
+      nativeTileDragRef.current,
+      playbackHit
     )
     if (playbackAction === 'ignore-drag') return
     if (suppressNextTileClickRef.current) {
@@ -185,20 +208,21 @@ export function SketchStrip({
       const anchorIndex = sequence.findIndex((r) => r.groupId === state.sel)
       const clickedIndex = sequence.findIndex((r) => r.groupId === rifff.groupId)
       if (anchorIndex === -1 || clickedIndex === -1) {
-        setMultiSelected(new Set([rifff.groupId]))
+        updateMultiSelection(new Set([rifff.groupId]))
         return
       }
       const [start, end] =
         anchorIndex < clickedIndex ? [anchorIndex, clickedIndex] : [clickedIndex, anchorIndex]
-      setMultiSelected(new Set(sequence.slice(start, end + 1).map((r) => r.groupId)))
+      updateMultiSelection(new Set(sequence.slice(start, end + 1).map((r) => r.groupId)))
       return
     }
     if (e.metaKey || e.ctrlKey) {
-      setMultiSelected((prev) => toggleRiffBatchSelection(prev, state.sel, rifff.groupId))
+      updateMultiSelection(toggleRiffBatchSelection(multiSelected, state.sel, rifff.groupId))
       return
     }
-    setMultiSelected(new Set())
+    updateMultiSelection(new Set())
     dispatch({ type: 'SELECT', groupId: rifff.groupId })
+    if (playbackAction === 'select-only') return
     // Selection persists independently of playback: a second click on the
     // active riff stops transport but deliberately does not deselect it.
     if (playbackAction === 'select-and-stop') {
@@ -406,24 +430,6 @@ export function SketchStrip({
         flexWrap: 'wrap'
       }}
     >
-      {crossPair.length === 2 && (
-        <button
-          onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
-          style={{
-            position: 'absolute',
-            top: 16,
-            right: 16,
-            zIndex: 3,
-            height: 30,
-            padding: '0 16px',
-            border: '2px solid var(--ra-border-strong)',
-            background: 'var(--ra-bg-row-active)',
-            color: 'var(--ra-text)'
-          }}
-        >
-          cross riffs
-        </button>
-      )}
       {sequence.map((rifff, index) => {
         const start = rifff.startBar ?? 0
         const bars = effectiveBars(rifff)

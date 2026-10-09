@@ -64,6 +64,30 @@ export interface CrossAssembly {
   vol: Record<string, number>
 }
 
+/** A parent stem can legitimately arrive at gain 0 when it was muted in
+ * Discover before being saved. Cross keeps that inherited gain for normal
+ * whole-riff playback, but Solo is an audition command: if this is the sole
+ * audible stem, silence would make the control useless. Use unity only for
+ * that temporary audition; the source's stored gain remains unchanged. */
+export function crossSourceAuditionGain(gain: number, soleAudible: boolean): number {
+  return soleAudible && gain <= 0 ? 1 : gain
+}
+
+/** Solo is a temporary listening layer over the persisted mute choice. A
+ * soloed item is heard even when its own underlying mute is on; clearing
+ * solo reveals that untouched mute state again. */
+export function crossItemIsAudible(
+  itemId: string,
+  muted: boolean,
+  soloedId: string | null
+): boolean {
+  return soloedId === null ? !muted : itemId === soloedId
+}
+
+export function toggleCrossSoloedId(current: string | null, itemId: string): string | null {
+  return current === itemId ? null : itemId
+}
+
 /** Turns a riff that already belongs to the current sketch into one side of
  * Cross. Unlike the library-browser adapter this preserves the complete stem
  * metadata (including phase lineage) and reads the gains the musician is
@@ -365,17 +389,6 @@ export function toggleCrossAudible(draft: CrossDraft, rowId: string): CrossDraft
   return commitCenter(
     draft,
     draft.center.map((row) => (row.id === rowId ? { ...row, audible: !row.audible } : row))
-  )
-}
-
-/** Matches Discover's real toggleSlotSolo behavior: solo leaves one audible;
- * pressing solo on that sole audible row again brings every row back. */
-export function toggleCrossSolo(draft: CrossDraft, rowId: string): CrossDraft {
-  const alreadySoloed = draft.center.filter((row) => row.audible).map((row) => row.id)
-  const restoreAll = alreadySoloed.length === 1 && alreadySoloed[0] === rowId
-  return commitCenter(
-    draft,
-    draft.center.map((row) => ({ ...row, audible: restoreAll || row.id === rowId }))
   )
 }
 
