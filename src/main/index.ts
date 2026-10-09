@@ -192,6 +192,7 @@ import { prewarmTraitQuantileTables } from './traitQuantileCache'
 import { resolveStemArrangeRoles } from './resolveStemArrangeRole'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { loadDiscoverSettings, saveDiscoverSettings } from './discoverSettingsStore'
+import { loadPreviewLevel, savePreviewLevel } from './previewLevelStore'
 import type { DiscoverSettings } from './discoverSettingsStore'
 import { loadSoundSettings, saveSoundSettings } from './soundSettingsStore'
 import type { SoundMeters, SoundSettings } from '@shared/radioSound'
@@ -2053,6 +2054,10 @@ app.whenReady().then(async () => {
   setWarehouseSyncsInFlightListener((count) => {
     mainWindow?.webContents.send('riff-library-sync-active', count)
   })
+
+  // The import view's preview level dial (previewLevelStore.ts).
+  ipcMain.handle('get-preview-level', (): number => loadPreviewLevel())
+  ipcMain.handle('set-preview-level', (_event, level: number): void => savePreviewLevel(level))
 
   ipcMain.handle('get-discover-settings', (): DiscoverSettings => loadDiscoverSettings())
   ipcMain.handle('set-discover-settings', (_event, settings: DiscoverSettings): void =>

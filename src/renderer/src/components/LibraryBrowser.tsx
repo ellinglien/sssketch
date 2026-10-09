@@ -81,6 +81,9 @@ import { syncOutcomeNote, syncOutcomeNoteRefreshMs } from '@shared/syncOutcomeNo
 import { loginSyncPromptText, type LoginSyncConsent } from '@shared/loginSyncConsent'
 import { loadLastSelectedImportJam, storeLastSelectedImportJam } from './libraryBrowserSelection'
 import { IMPORT_MULTI_SELECT_HINT } from '@shared/keyGestures'
+import { DEFAULT_PREVIEW_LEVEL } from '@shared/previewLevel'
+import { Dial } from './Dial'
+import { commitPreviewLevel, setPreviewLevel, usePreviewLevel } from '../audio/previewOutput'
 
 // The "your username" setting is persisted locally (not in project files or
 // app state) since it's a per-person identity setting, not something that
@@ -598,6 +601,7 @@ export function LibraryBrowser({
       ? (loopFolders.folders.find((f) => f.rootPath === selectedLoopRoot) ?? null)
       : null
   const setBusy = useBusy()
+  const previewLevel = usePreviewLevel()
 
   // Stable across renders (useCallback, empty deps) so it's safe to pass to
   // registerActivePreview/reference from effect cleanups without triggering
@@ -1918,6 +1922,22 @@ export function LibraryBrowser({
               one click away. */}
           <span className="ra-eyebrow">{libraryModeLabel(libraryMode)}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {/* How loud previews play, to talk over them on a call (Ben, 2026-10-08). Every
+                Web Audio preview, not just this view's (audio/previewOutput.ts); remembered. */}
+            {libraryMode === 'browse' && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginRight: 4 }}>
+                <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>preview level</span>
+                <Dial
+                  value={previewLevel}
+                  onChange={setPreviewLevel}
+                  onCommit={commitPreviewLevel}
+                  defaultValue={DEFAULT_PREVIEW_LEVEL}
+                  size={22}
+                  ariaLabel="preview level"
+                  tooltip={`preview level ${previewLevel}% · every preview, not the arrangement`}
+                />
+              </div>
+            )}
             <button
               onClick={attemptClose}
               aria-label="close library browser"

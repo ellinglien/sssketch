@@ -542,6 +542,9 @@ const api = {
     ipcRenderer.on('engine-startup-complete', listener)
     return () => ipcRenderer.removeListener('engine-startup-complete', listener)
   },
+  // The import view's "preview level" dial, 0..100 (src/main/previewLevelStore.ts).
+  getPreviewLevel: (): Promise<number> => ipcRenderer.invoke('get-preview-level'),
+  setPreviewLevel: (level: number): Promise<void> => ipcRenderer.invoke('set-preview-level', level),
   getDiscoverSettings: (): Promise<DiscoverSettings> => ipcRenderer.invoke('get-discover-settings'),
   setDiscoverSettings: (settings: DiscoverSettings): Promise<void> =>
     ipcRenderer.invoke('set-discover-settings', settings),

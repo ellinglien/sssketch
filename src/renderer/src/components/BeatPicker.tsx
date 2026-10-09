@@ -4,6 +4,7 @@ import { offsetStepsForBeatIndex, rotationSecondsForStem } from '../state/select
 import { nextPhaseBars, phaseLineage, reoneJob } from '@shared/reonedRotation'
 import type { Action, AppState } from '../state/store'
 import { getAudioContext } from '../audio/peakCache'
+import { previewOutput } from '../audio/previewOutput'
 import { decodeStemFile } from '../audio/decodeStemFile'
 import { stopActivePreview } from '../audio/previewLoop'
 import { applyLoopMicroFade } from '../audio/microFade'
@@ -490,7 +491,7 @@ export function BeatPicker({
     gain.gain.value = metronomeVolumeRef.current
     metronomeGainRef.current = gain
     source.connect(gain)
-    gain.connect(ctx.destination)
+    gain.connect(previewOutput(ctx))
     source.start(0)
     return () => {
       metronomeGainRef.current = null
@@ -816,7 +817,7 @@ export function BeatPicker({
       // rifff (worse the more stems it has).
       gainNode.gain.value = state.vol[stemKey(rifff.groupId, s.slot)] ?? 1
       source.connect(gainNode)
-      gainNode.connect(ctx.destination)
+      gainNode.connect(previewOutput(ctx))
       source.start(0)
       previewSourcesRef.current.push(source)
     }
@@ -903,7 +904,7 @@ export function BeatPicker({
       // comment.
       gainNode.gain.value = state.vol[stemKey(rifff.groupId, s.slot)] ?? 1
       source.connect(gainNode)
-      gainNode.connect(ctx.destination)
+      gainNode.connect(previewOutput(ctx))
       source.start(0)
       previewSourcesRef.current.push(source)
     }

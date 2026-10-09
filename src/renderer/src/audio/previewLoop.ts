@@ -1,5 +1,6 @@
 import { applyLoopMicroFade } from './microFade'
 import { decodeStemFile } from './decodeStemFile'
+import { previewOutput } from './previewOutput'
 
 export interface PreviewStemInput {
   path: string
@@ -71,7 +72,7 @@ async function buildPreviewSources(
       const gainNode = ctx.createGain()
       gainNode.gain.value = stem.gain ?? 1
       source.connect(gainNode)
-      gainNode.connect(ctx.destination)
+      gainNode.connect(previewOutput(ctx))
       source.start(0)
       pairs.push({ source, gainNode, stem })
     } catch (err) {

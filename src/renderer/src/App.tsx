@@ -151,6 +151,7 @@ import {
   type CrossDraft
 } from '@shared/cross'
 import { stopActivePreview } from './audio/previewLoop'
+import { loadSavedPreviewLevel } from './audio/previewOutput'
 import { assessTidyUpReadiness, unbussedStemPaths } from '@shared/tidyUpReadiness'
 import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
@@ -1933,6 +1934,8 @@ function Frame(): React.JSX.Element {
   const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
   const [crossOpen, setCrossOpen] = useState(false)
   // The re-oned copies cleanup counts what Cross and Discover hold as in use (reonedInUse.ts).
+  // The saved preview level, before the first preview plays (audio/previewOutput.ts).
+  useEffect(() => loadSavedPreviewLevel(), [])
   useEffect(() => setReonedSessionRoot('cross', crossDraft), [crossDraft])
   useEffect(() => setReonedSessionRoot('discover', discoverSlots), [discoverSlots])
   // One shared, session-only riff selection for both Sketch and Shelf.
