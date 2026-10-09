@@ -1,6 +1,6 @@
 # Re-oned stem copies: reuse, rebuild, clean up
 
-Elling, 2026-10-09. Follows the merge of Ben's `codex/phase-cache` (phase lineage), where every
+Elling, 2026-10-09. Follows the merge of Rowan's (Ben's) `codex/phase-cache` (phase lineage), where every
 re-one writes new files to `<library root>/.bakes/` and nothing ever deletes them.
 
 ## Words
