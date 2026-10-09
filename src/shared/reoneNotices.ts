@@ -46,3 +46,24 @@ export function siblingsNotReonedText(failed: readonly string[], batchSize: numb
 export function lateStemsNotAddedText(rifffName: string, count: number): string {
   return `couldn't re-one ${count} new ${count === 1 ? 'stem' : 'stems'} of ${rifffName} · not added · import it again`.toLowerCase()
 }
+
+/** A Discover candidate from the seed's jam couldn't be baked to the seed's rotation, so its row
+ * was left unresolved rather than played out of phase. `jamName` null: not known. */
+export function candidateNotAlignedText(jamName: string | null): string {
+  return `couldn't line up a stem from ${jamName ?? "the seed's jam"} · skipped`.toLowerCase()
+}
+
+/** Whether a notice line may show now: once per `intervalMs` per line, so a bake that keeps
+ * failing (every roll of a jam whose originals are away) says so without nagging. */
+export function createNoticeThrottle(
+  intervalMs: number,
+  now: () => number = Date.now
+): (line: string) => boolean {
+  const shownAt = new Map<string, number>()
+  return (line) => {
+    const last = shownAt.get(line)
+    if (last !== undefined && now() - last < intervalMs) return false
+    shownAt.set(line, now())
+    return true
+  }
+}

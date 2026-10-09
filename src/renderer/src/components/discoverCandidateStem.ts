@@ -11,6 +11,9 @@ import {
   rotationSecForBars,
   type ReoneBakeJob
 } from '@shared/reonedRotation'
+import { createBakeBatcher, type BakeBatchResult } from '@shared/bakeBatcher'
+import { candidateNotAlignedText, createNoticeThrottle } from '@shared/reoneNotices'
+import { showReoneNotice } from '../state/reoneNotice'
 
 export interface ResolvedCandidateStem {
   author: string
@@ -149,9 +152,28 @@ export function resolveCandidateStem(
   return cachedResolve(candidateKey(candidate, phase), async () => {
     const raw = await resolveRawCandidateStem(candidate)
     if (!raw) return null
-    return alignCandidateStem(raw, bars, (jobs) => window.rifffApi.bakeOffset(jobs))
+    const aligned = await alignCandidateStem(raw, bars, bakeBatched)
+    if (!aligned) {
+      const line = candidateNotAlignedText(phase?.jamNames[candidate.jamCID] ?? null)
+      if (mayShowNotAligned(line)) showReoneNotice(line)
+    }
+    return aligned
   })
 }
+
+/** Every alignment's bake, gathered (src/shared/bakeBatcher.ts): the rows of one roll resolve
+ * together, and each bakeOffset call with a LORE stem spawns its own engine. */
+const bakeOneBatched = createBakeBatcher<BakeBatchResult>((jobs) =>
+  window.rifffApi.bakeOffset(jobs)
+)
+const bakeBatched: CandidateBake = async (jobs) => {
+  const results = await Promise.all(jobs.map(bakeOneBatched))
+  return results.every((result) => result !== null) ? (results as BakeBatchResult[]) : []
+}
+
+/** A failed alignment leaves its row unresolved, never out of phase, and says so: once a
+ * minute per jam, since a jam whose originals are away fails on every roll. */
+const mayShowNotAligned = createNoticeThrottle(60_000)
 
 function resolveRawCandidateStem(
   candidate: DiscoverCandidate

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { lateStemsNotAddedText, reoneSiblings, siblingsNotReonedText } from './reoneNotices'
+import {
+  candidateNotAlignedText,
+  createNoticeThrottle,
+  lateStemsNotAddedText,
+  reoneSiblings,
+  siblingsNotReonedText
+} from './reoneNotices'
 
 describe('reoneSiblings', () => {
   it('bakes every sibling and names the ones that came back with nothing', async () => {
@@ -70,5 +76,30 @@ describe('lateStemsNotAddedText', () => {
     expect(lateStemsNotAddedText('misty kestrel', 1)).toBe(
       "couldn't re-one 1 new stem of misty kestrel · not added · import it again"
     )
+  })
+})
+
+describe('candidateNotAlignedText', () => {
+  it("names the jam, lowercase, or the seed's jam when its name isn't known", () => {
+    expect(candidateNotAlignedText('Night Bus')).toBe(
+      "couldn't line up a stem from night bus · skipped"
+    )
+    expect(candidateNotAlignedText(null)).toBe(
+      "couldn't line up a stem from the seed's jam · skipped"
+    )
+  })
+})
+
+describe('createNoticeThrottle', () => {
+  it('lets a line through once per interval, each line on its own clock', () => {
+    let now = 1000
+    const may = createNoticeThrottle(60_000, () => now)
+    expect(may('a')).toBe(true)
+    expect(may('a')).toBe(false)
+    expect(may('b')).toBe(true)
+    now += 59_999
+    expect(may('a')).toBe(false)
+    now += 1
+    expect(may('a')).toBe(true)
   })
 })

@@ -1,6 +1,13 @@
-import { describe, expect, it } from 'vitest'
-import { alignCandidateStem, type ResolvedCandidateStem } from './discoverCandidateStem'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import {
+  alignCandidateStem,
+  peekResolvedCandidateStem,
+  resolveCandidateStem,
+  type ResolvedCandidateStem
+} from './discoverCandidateStem'
 import type { ReoneBakeJob } from '@shared/reonedRotation'
+import type { DiscoverCandidate } from '@shared/discoverCandidate'
+import { discoverSeedPhase } from '@shared/discoverSeedPhase'
 
 const raw: ResolvedCandidateStem = {
   author: 'wren',
@@ -44,5 +51,137 @@ describe('alignCandidateStem', () => {
         throw new Error('ipc down')
       })
     ).toBeNull()
+  })
+})
+
+describe('resolveCandidateStem cache keying', () => {
+  // A riff the library resolves with its one stem downloaded; each test uses its own ids, since
+  // the cache lives for the module.
+  const candidate = (riffCID: string, stemCID: string, jamCID: string): DiscoverCandidate => ({
+    stemCID,
+    jamCID,
+    riffCID,
+    presetName: 'harp',
+    creatorUserName: 'wren',
+    slotKinds: [],
+    drumSubRole: null,
+    riffBpm: 120,
+    traitValues: {},
+    traitPercentiles: {},
+    kindSources: {},
+    riffCreationTime: null
+  })
+  // The seed: re-oned by 1.5 bars, from jamA.
+  const phase = discoverSeedPhase(
+    [
+      {
+        path: '/lib/.bakes/seed.baked.wav',
+        phaseSourcePath: '/lib/stems/x/seed',
+        phaseBars: 1.5,
+        barLength: 4
+      }
+    ],
+    { '/lib/stems/x/seed': 'jamA' }
+  )
+
+  function stubLibrary(bake: (jobs: ReoneBakeJob[]) => Promise<unknown[]>): {
+    resolves: string[]
+    bakes: ReoneBakeJob[][]
+  } {
+    const resolves: string[] = []
+    const bakes: ReoneBakeJob[][] = []
+    vi.stubGlobal('window', {
+      rifffApi: {
+        riffLibraryResolveRiff: async (riffCID: string) => {
+          resolves.push(riffCID)
+          return {
+            riffCID,
+            bpm: 120,
+            barLength: 4,
+            creationTime: 1,
+            stems: [
+              {
+                stemCID: `${riffCID}-stem`,
+                path: `/lib/stems/x/${riffCID}-stem`,
+                creatorUserName: 'wren',
+                presetName: 'harp',
+                instrumentMask: 0,
+                durationSec: 8,
+                barLength: 4
+              }
+            ]
+          }
+        },
+        bakeOffset: async (jobs: ReoneBakeJob[]) => {
+          bakes.push(jobs)
+          return bake(jobs)
+        }
+      }
+    })
+    return { resolves, bakes }
+  }
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('keys a candidate by the rotation the seed gives it: raw and aligned are two entries', async () => {
+    const { resolves, bakes } = stubLibrary(async (jobs) =>
+      jobs.map((job) => ({ path: job.path, bakedPath: '/lib/.bakes/k1.baked.wav', durationSec: 8 }))
+    )
+    const sameJam = candidate('k1', 'k1-stem', 'jamA')
+    const raw = await resolveCandidateStem(sameJam, null)
+    const aligned = await resolveCandidateStem(sameJam, phase)
+    expect(raw?.path).toBe('/lib/stems/x/k1-stem')
+    expect(aligned).toMatchObject({ path: '/lib/.bakes/k1.baked.wav', phaseBars: 1.5 })
+    // The aligned entry is built on the raw one: one library resolve, one bake.
+    expect(resolves).toEqual(['k1'])
+    expect(bakes).toHaveLength(1)
+    // Each key is cached, settled, and readable without an await.
+    expect(await resolveCandidateStem(sameJam, phase)).toBe(aligned)
+    expect(bakes).toHaveLength(1)
+    expect(peekResolvedCandidateStem(sameJam, phase)).toBe(aligned)
+    expect(peekResolvedCandidateStem(sameJam, null)).toBe(raw)
+  })
+
+  it('a candidate the seed gives no rotation shares the raw entry, phase or not', async () => {
+    const { resolves, bakes } = stubLibrary(async () => [])
+    const otherJam = candidate('k2', 'k2-stem', 'jamB')
+    const withPhase = await resolveCandidateStem(otherJam, phase)
+    expect(await resolveCandidateStem(otherJam, null)).toBe(withPhase)
+    expect(resolves).toEqual(['k2'])
+    expect(bakes).toEqual([])
+  })
+
+  it('a failed alignment is not cached: the next resolve bakes again', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    let fail = true
+    const { bakes } = stubLibrary(async (jobs) =>
+      fail
+        ? []
+        : jobs.map((job) => ({
+            path: job.path,
+            bakedPath: '/lib/.bakes/k3.baked.wav',
+            durationSec: 8
+          }))
+    )
+    const sameJam = candidate('k3', 'k3-stem', 'jamA')
+    expect(await resolveCandidateStem(sameJam, phase)).toBeNull()
+    expect(peekResolvedCandidateStem(sameJam, phase)).toBeNull()
+    fail = false
+    expect((await resolveCandidateStem(sameJam, phase))?.path).toBe('/lib/.bakes/k3.baked.wav')
+    expect(bakes).toHaveLength(2)
+  })
+
+  it('aligns the candidates that resolve together in one bake', async () => {
+    const { bakes } = stubLibrary(async (jobs) =>
+      jobs.map((job) => ({ path: job.path, bakedPath: `${job.path}.baked.wav`, durationSec: 8 }))
+    )
+    const rolled = ['k4', 'k5', 'k6'].map((id) => candidate(id, `${id}-stem`, 'jamA'))
+    const aligned = await Promise.all(rolled.map((c) => resolveCandidateStem(c, phase)))
+    expect(aligned.map((stem) => stem?.path)).toEqual([
+      '/lib/stems/x/k4-stem.baked.wav',
+      '/lib/stems/x/k5-stem.baked.wav',
+      '/lib/stems/x/k6-stem.baked.wav'
+    ])
+    expect(bakes).toHaveLength(1)
   })
 })
