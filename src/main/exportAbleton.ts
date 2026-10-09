@@ -18,6 +18,7 @@ import templatePath from './ableton/template.xml?asset'
 import autoFilterPath from './ableton/autoFilter2.xml?asset'
 import { buildAlsXml } from './ableton/buildAlsXml'
 import { sketchAbletonDir, writeSketchMeta } from './projectLibrary'
+import { ensureReonedCopiesForState } from './reonedRebuild'
 import { materializeStemsForExport } from './exportAudioMaterialization'
 import { renderToolkitAudio } from './exportToolkitAudio'
 import type { ToolkitExportMode } from '@shared/toolkit'
@@ -52,6 +53,9 @@ export async function buildAndWriteAlsProject(
    * rendered, nothing is skipped, and the .als is what it always was. */
   toolkitMode: ToolkitExportMode = 'bake'
 ): Promise<void> {
+  // Rebuild any re-oned copy this project names that has gone missing (cleaned up, or never
+  // made on this machine), so the export renders the riff as it plays.
+  state = await ensureReonedCopiesForState(state)
   // Before materializing: a baked clip gets no dry copy at all (it would
   // just be an unused file), so the bake has to have happened by the time
   // materializeStemsForExport decides what to copy.

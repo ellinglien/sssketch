@@ -14,6 +14,7 @@ import { EngineClient } from './engineClient'
 import { loadCatalog } from './pluginCatalog'
 import { currentAppFeatures, pluginCatalogForRender } from './appFeaturesStore'
 import { sketchStemsDir } from './projectLibrary'
+import { ensureReonedCopiesForState } from './reonedRebuild'
 import { prepareExternalStemsDir } from './exportFileNames'
 import { buildPluginStatesMap, type RawPluginStatesCapture } from '@shared/pluginStates'
 import { stemExportSound } from '@shared/radioSound'
@@ -166,6 +167,9 @@ export async function nativeExport(
   state: AppState,
   rawPluginStates: RawPluginStatesCapture | null
 ): Promise<Uint8Array> {
+  // Rebuild any re-oned copy this project names that has gone missing (cleaned up, or never
+  // made on this machine), so the export renders the riff as it plays.
+  state = await ensureReonedCopiesForState(state)
   const pluginStates =
     rawPluginStates !== null
       ? buildPluginStatesMap(rawPluginStates, state.masterChain, state.channelPlugins)
@@ -288,6 +292,9 @@ export async function renderStemsToDir(
   rawPluginStates: RawPluginStatesCapture | null = null
 ): Promise<string[]> {
   assertHasPlacedRifffs(state)
+  // Rebuild any re-oned copy this project names that has gone missing (cleaned up, or never
+  // made on this machine), so the export renders the riff as it plays.
+  state = await ensureReonedCopiesForState(state)
   const keysByBus = stemEntriesByBus(state)
   const allKeys = [...keysByBus.values()].flat().map((e) => e.key)
   const durationBars = loopLengthBarsFor(state)
@@ -477,6 +484,9 @@ export async function renderStemTracksToDir(
   rawPluginStates: RawPluginStatesCapture | null = null
 ): Promise<string[]> {
   assertHasPlacedRifffs(state)
+  // Rebuild any re-oned copy this project names that has gone missing (cleaned up, or never
+  // made on this machine), so the export renders the riff as it plays.
+  state = await ensureReonedCopiesForState(state)
   const entriesByBus = stemEntriesByBus(state)
   const allKeys = [...entriesByBus.values()].flat().map((e) => e.key)
   const sanitizedProjectName = sanitizeFileNamePart(projectName)
