@@ -29,13 +29,9 @@ const BARS_DRAG_PX_PER_STEP = 20
  * the orbiting playhead dot's lap speed, not tile size, so the strip stays
  * visually even regardless of how long each rifff actually is. */
 export function SketchStrip({
-  onCrossRiffs,
-  canResumeCross,
-  onResumeCross
+  onCrossRiffs
 }: {
   onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
-  canResumeCross: boolean
-  onResumeCross: () => void
 }): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
@@ -409,7 +405,7 @@ export function SketchStrip({
         flexWrap: 'wrap'
       }}
     >
-      {(crossPair.length === 2 || canResumeCross) && (
+      {crossPair.length === 2 && (
         <div
           style={{
             order: -100,
@@ -419,35 +415,18 @@ export function SketchStrip({
             gap: 6
           }}
         >
-          {canResumeCross && crossPair.length !== 2 && (
-            <button
-              onClick={onResumeCross}
-              style={{
-                height: 30,
-                padding: '0 14px',
-                borderRadius: 0,
-                border: '1px solid var(--ra-border-strong)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text)'
-              }}
-            >
-              resume cross
-            </button>
-          )}
-          {crossPair.length === 2 && (
-            <button
-              onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
-              style={{
-                height: 30,
-                padding: '0 16px',
-                border: '2px solid var(--ra-border-strong)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text)'
-              }}
-            >
-              cross riffs
-            </button>
-          )}
+          <button
+            onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
+            style={{
+              height: 30,
+              padding: '0 16px',
+              border: '2px solid var(--ra-border-strong)',
+              background: 'var(--ra-bg-row-active)',
+              color: 'var(--ra-text)'
+            }}
+          >
+            cross riffs
+          </button>
         </div>
       )}
       {sequence.map((rifff, index) => {

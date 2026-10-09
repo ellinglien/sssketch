@@ -216,9 +216,7 @@ function Timeline({
   onCreateRiser,
   openRiserLaneId,
   onCloseRiserLane,
-  onCrossRiffs,
-  canResumeCross,
-  onResumeCross
+  onCrossRiffs
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
@@ -239,8 +237,6 @@ function Timeline({
   openRiserLaneId: string | null
   onCloseRiserLane: () => void
   onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
-  canResumeCross: boolean
-  onResumeCross: () => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
    * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
@@ -475,13 +471,7 @@ function Timeline({
   }
 
   if (state.mode === 'sketch') {
-    return (
-      <SketchStrip
-        onCrossRiffs={onCrossRiffs}
-        canResumeCross={canResumeCross}
-        onResumeCross={onResumeCross}
-      />
-    )
+    return <SketchStrip onCrossRiffs={onCrossRiffs} />
   }
 
   const ghostRowHeight = GHOST_ROW_HEIGHT
@@ -2243,12 +2233,6 @@ function Frame(): React.JSX.Element {
     }
   }
 
-  function resumeCross(): void {
-    if (crossDraft?.projectKey !== crossProjectKey(currentSketch, state.projectSeed)) return
-    stopActivePreview()
-    dispatch({ type: 'PAUSE' })
-    setCrossOpen(true)
-  }
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
   // Which stems the open Tidy Up pass is over -- see TidyUpPopulation
   // (ClusterStemsBrowser.tsx). Every existing entry point means 'sketch';
@@ -3054,10 +3038,6 @@ function Frame(): React.JSX.Element {
                   openRiserLaneId={openRiserLaneId}
                   onCloseRiserLane={closeRiserLane}
                   onCrossRiffs={(rifffs) => void openCrossFromSketch(rifffs)}
-                  canResumeCross={
-                    crossDraft?.projectKey === crossProjectKey(currentSketch, state.projectSeed)
-                  }
-                  onResumeCross={resumeCross}
                 />
               )}
             </div>
