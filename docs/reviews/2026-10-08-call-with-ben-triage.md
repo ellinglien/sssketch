@@ -24,8 +24,8 @@ are covered by unit tests, typecheck and lint only; nobody has heard them in the
 
 **Updated 2026-10-09, after review of 2dd7c781..459cd8d5:** the review's findings on B1 paths 1
 and 2 and on F6 are fixed (72fa76ff, 012d8d12, 54346754, 2282438f, ae2c065e, 2af444aa); each
-item below says what changed. One question for Elling is open under F6 (Keep and solo). Same
-caveat: unit tests, typecheck and lint only.
+item below says what changed. The question under F6 (Keep and solo) has since been decided and
+done. Same caveat: unit tests, typecheck and lint only.
 
 ---
 
@@ -379,16 +379,16 @@ shelf or adding to timeline. If it remembered the state of the mute. Or solo."
 - Disable (`state.mute`) is the saved layer, so those rows stay silent in the arrangement after a
   save. The temporary mixer Mute would have been dropped by the save. `ADD_TO_SHELF` and
   `PLACE_LOOP_ON_TIMELINE` take the Disables as an optional `mute`.
-- Keep is unchanged: it ignores solo and saves a muted row at gain 0, since the library has no
-  Disable.
+- Keep now follows the same rule (see the resolved question below).
 - **Review follow-ups: fixed** (2af444aa). Discover and Cross share one rule for what's heard
   (`src/shared/heard.ts`). Cross's add now does the same as Discover's: a muted center row arrives
   Disabled at its own level instead of at gain 0, and the center solo counts. It fits Cross's
   model, where a row's mute is the draft's choice and solo the temporary layer over it.
-- **Open question for Elling: Keep and solo.** Keep still saves every row, muted ones at gain 0,
-  whatever is soloed, so a kept group can sound different from what was playing when it was kept.
-  Should Keep follow solo too (keep only the soloed row, or keep all with the others at gain 0)?
-  Left as it is until he decides.
+- **Keep and solo: resolved** (Elling, 2026-10-09: what you hear is what you get, as add does).
+  Keep now uses the add path's solo, so with a row soloed only that row is heard. Rows not heard
+  are saved **at gain 0**, not left out: that's how Keep already handled a muted row, since the
+  library has no Disable, and the stems stay in the group to bring back up
+  (`discoverKeepMembers`, `audio/discoverRifffAssembly.ts`). Unit tests, typecheck and lint only.
 
 ### F7. Re-one or nudge rows inside Discover
 

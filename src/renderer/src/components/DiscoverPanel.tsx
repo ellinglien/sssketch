@@ -15,6 +15,7 @@ import { warmEngineBuffer } from '../audio/warmEngineBuffer'
 import { getPeaks, peekPeaks } from '../audio/peakCache'
 import {
   assembleDiscoverRifff,
+  discoverKeepMembers,
   discoverRowDisabledOnAdd,
   type DiscoverRifffAssembly
 } from '../audio/discoverRifffAssembly'
@@ -13299,8 +13300,8 @@ export function DiscoverPanel({
   }
 
   // Reuses resolveDiscoverRifff() -- the same helper addToTimeline and
-  // addToShelf share. A slot muted in the preview mix is kept at gain 0, not
-  // dropped, so a muted stem is saved as silence, still there.
+  // addToShelf share, with the same solo. A slot not heard in the preview mix
+  // is kept at gain 0, not dropped, so its stem is saved as silence, still there.
   /** Returns what the keep came to, for the phone's confirmation
    * (RemoteKeepOutcome). The Mac's own button ignores it. */
   async function keepGroup(): Promise<RemoteKeepOutcome> {
@@ -13312,21 +13313,14 @@ export function DiscoverPanel({
     if (blockedActions(nowMode, still).has('keep')) return 'refused'
     setKeeping(true)
     try {
-      // Keep ignores solo, as it always has; a muted row is saved silent (gain 0),
-      // since the library has no Disable.
-      const assembly = await resolveDiscoverRifff(null)
+      // What you hear is what you get, as add-to-shelf and add-to-timeline do:
+      // with a row soloed only that row is heard. A row not heard is saved
+      // silent (gain 0), as a muted row always was, since the library has no
+      // Disable (discoverKeepMembers).
+      const assembly = await resolveDiscoverRifff(soloedSlotIdRef.current)
       if (!assembly) return 'none'
-      const { rifff, vol, mute } = assembly
-      const members = rifff.stems.map((stem) => ({
-        path: stem.path,
-        gain: mute[stemKey(rifff.groupId, stem.slot)]
-          ? 0
-          : (vol[stemKey(rifff.groupId, stem.slot)] ?? 1),
-        name: stem.name,
-        author: stem.author,
-        barLength: stem.barLength,
-        durationSec: stem.durationSec
-      }))
+      const { rifff } = assembly
+      const members = discoverKeepMembers(assembly)
       // The rows' lingering artists as of NOW, so main can refuse even if
       // its mirror has not caught up (refusesKeep).
       const saved = await window.rifffApi.saveDiscoveredRifff(

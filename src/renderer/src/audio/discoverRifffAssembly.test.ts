@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   assembleDiscoverRifff,
+  discoverKeepMembers,
   discoverRowDisabledOnAdd,
   type DiscoverRifffMember
 } from './discoverRifffAssembly'
@@ -262,5 +263,49 @@ describe('discoverRowDisabledOnAdd', () => {
 
   it('a soloed row is heard, so it comes in even when it was muted underneath', () => {
     expect(discoverRowDisabledOnAdd('c', previewing, 'c')).toBe(false)
+  })
+})
+
+describe('discoverKeepMembers (keep: what you hear is what you get)', () => {
+  const previewing = new Set(['a', 'b'])
+  const rows = [
+    { id: 'a', gain: 0.9 },
+    { id: 'b', gain: 0.7 },
+    { id: 'c', gain: 0.5 }
+  ]
+  const keptGains = (soloed: string | null): number[] => {
+    const assembly = assembleDiscoverRifff(
+      'd',
+      rows.map((row) => ({
+        stem: fixtureStem({ name: row.id, path: `/${row.id}.wav` }),
+        gain: row.gain,
+        disabled: discoverRowDisabledOnAdd(row.id, previewing, soloed)
+      })),
+      120
+    )!
+    return discoverKeepMembers(assembly).map((m) => m.gain)
+  }
+
+  it('without a solo, keeps every row and saves a muted one silent', () => {
+    expect(keptGains(null)).toEqual([0.9, 0.7, 0])
+  })
+
+  it('with a solo, saves only the soloed row at its level, the rest silent', () => {
+    expect(keptGains('b')).toEqual([0, 0.7, 0])
+  })
+
+  it('a soloed row muted underneath is heard, so it is kept at its level', () => {
+    expect(keptGains('c')).toEqual([0, 0, 0.5])
+  })
+
+  it('carries each stem as the library needs it, in slot order', () => {
+    const assembly = assembleDiscoverRifff(
+      'd',
+      [{ stem: fixtureStem({ name: 'x', path: '/x.wav', barLength: 2 }), gain: 0.4 }],
+      120
+    )!
+    expect(discoverKeepMembers(assembly)).toEqual([
+      { path: '/x.wav', gain: 0.4, name: 'x', author: 'wren', barLength: 2, durationSec: 4 }
+    ])
   })
 })

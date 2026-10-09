@@ -46,6 +46,36 @@ export function discoverRowDisabledOnAdd(
   return disabledOnAdd(id, !previewing.has(id), soloed)
 }
 
+/** One member of a kept group, as saveDiscoveredRifff writes it to the library. */
+export interface DiscoverKeepMember {
+  path: string
+  gain: number
+  name: string
+  author: string
+  barLength: number
+  durationSec: number
+}
+
+/** The members keep saves, from the same assembly add-to-shelf and add-to-timeline use. Keep
+ * follows their rule too (Elling, 2026-10-09: what you hear is what you get): a row that isn't
+ * heard (muted, or left out by a solo; `mute`) is saved at gain 0, as a muted row always was.
+ * The library has no Disable, so silence is the nearest thing, and the stem is still there to
+ * bring back up. */
+export function discoverKeepMembers(assembly: DiscoverRifffAssembly): DiscoverKeepMember[] {
+  const { rifff, vol, mute } = assembly
+  return rifff.stems.map((stem) => {
+    const key = stemKey(rifff.groupId, stem.slot)
+    return {
+      path: stem.path,
+      gain: mute[key] ? 0 : (vol[key] ?? 1),
+      name: stem.name,
+      author: stem.author,
+      barLength: stem.barLength,
+      durationSec: stem.durationSec
+    }
+  })
+}
+
 // The persisted ceiling on one rifff: 20. Riffs.StemCID_1..8 addresses the
 // first eight and the RiffStemsExtra side table addresses slots 9-20 (see
 // src/main/riffStemsExtra.ts) -- so this caps at the most a Rifff could
