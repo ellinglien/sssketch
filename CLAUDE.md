@@ -125,6 +125,84 @@ doesn't permanently poison it) rather than decoding inline in a component. `peak
 specifically computes peaks AND zero-crossing brightness from the *same* decode — don't split
 that back into two decodes for two cheap derived values.
 
+### One running app (single-instance lock)
+
+`src/main/singleInstance.ts`'s `claimSingleInstance()` runs at module load in `index.ts`, before
+`app.whenReady()`. Two copies of the app meant two playback engines playing the same project a few
+ms apart (comb filtering that sounds like underruns). A second launch calls `app.exit(0)` (not
+`quit()`: it must never reach `whenReady`, open the databases or spawn an engine), and the first
+instance's `second-instance` handler brings its window forward. The `whenReady` handler also
+returns early when `isPrimaryInstance` is false. Keep that check first if you restructure startup.
+
+### Stopping the engine: the `transport-stopped` handshake
+
+Stop is confirmed, not fire-and-forget, because a Web Audio preview (Shelf tile, import riff,
+loop folder, backup) must not start until the arrangement is actually silent. The renderer's
+`engine-stop` IPC goes through `src/main/engineStop.ts` (one shared, token-correlated request for
+concurrent callers): main sends `stop { token }`, and the engine answers
+`transport-stopped { token, stopped }` once the audio callback has finished its 15 ms halt fade.
+`stopped: false` means a newer Play (or arming a recording) superseded it
+(`playSupersedingStops` in `IpcServer.cpp`). When the audio device isn't rendering at all, the
+engine answers at once instead of waiting for a fade that can't run (`native-engine/Source/
+HaltAck.h`). `EngineClient` removes a waiter that times out, so it can't take a later reply.
+Renderer callers use `pauseArrangementBeforeShelfPreview()` (`audio/shelfPreviewHandoff.ts`),
+which resolves `true`/`false` and never rejects: on `false`, don't start the preview, but don't
+skip unrelated work either (an import riff's stems still download).
+
+### Disable, Mute and Solo: three layers
+
+- **Disable** is `state.mute` (stem keys): saved with the project, in exports, undoable
+  (`TOGGLE_MUTE`, `SET_GROUP_MUTE`).
+- **Mute** is `state.mixerMute` (stem and riser keys): what a row's `m` writes
+  (`SET_CHANNEL_MUTE`). Temporary: not saved (`serializeProject` drops it), not in exports, not
+  an undo step (`history.ts` lists it as transient and pins it across undo/redo).
+- **Solo** is `state.mixerSolo` (the exact keys allowed through, or `null`): temporary like Mute,
+  and separate from both, so clearing Solo restores the exact Mute state underneath. It's drawn
+  blue (`--ra-solo-on`), the one chrome colour Elling accepted outside audio information.
+
+Only the engine snapshot sees Mute and Solo: `stateWithMixerMute()` (`state/mixerMute.ts`)
+overlays them in `StoreContext`'s engine sync. Disable always wins. A riser's own saved `muted`
+is legacy from the old row `m`: nothing sets it now, `risersForRowMute()` lights the row's `m` for
+it, and unmuting the row clears it (`rowMuteToggleActions()` in `selectors.ts`).
+
+### Phase lineage and the `.bakes` folder
+
+A re-one (downbeat correction) is baked into new audio files, never into the source:
+`src/main/bakeOffset.ts` renders a whole riff's stems as one all-or-nothing batch into
+`<library root>/.bakes/<uuid>.baked.wav` (`bakeAssetsDir()` in `projectLibrary.ts`). The files are
+immutable; a later re-one makes new ones. Results don't come back in job order (WAVs render before
+LORE stems), so always match them to stems by `path`. Each stem records where its audio came from
+(`phaseSourcePath`) and how far it has been rotated (`phaseBars`). Each riff can carry a
+`phaseLinkId`: a re-one moves exactly the riffs sharing it (`bakeTargetGroupIds()` in
+`src/shared/bakePropagation.ts`). Auto-arrange's window copies keep their source's id, so they
+follow it; a pasted riff or stem, an ungrouped stem and a Cross child get their own id and stay
+independent, even when they point at the same file. Riffs saved before the field fall back to the
+old path-based rule.
+
+Auditioning never adopts a bake: Cross (`components/crossFromSketch.ts`) and a Discover seed
+render a riff's live offset to `.bakes` and use those files without dispatching `APPLY_BAKE`, so
+the project isn't edited or marked unsaved. Nothing deletes from `.bakes` yet; the design for a
+cleanup is an open item in `TO-DO.md`. Don't add deletion without its reference-counted, dry-run
+design: saved projects anywhere on disk can name these files.
+
+### Cross
+
+Cross combines two selected riffs into a new one. Open it from exactly two riffs selected in
+Sketch or the Shelf (`openCrossFromRiffs` in `App.tsx`); it's a full-window workspace like
+Discover. The draft model is pure, in `src/shared/cross.ts`: the two parents, the center rows,
+gains, mute/solo, undo/redo, and `assembleCrossRifff()`, which builds the committed riff (with
+`phaseLinkId` set to its own id). `components/CrossPanel.tsx` is the UI. `state/useCrossPreview.ts`
+plays a throwaway engine project under an engine-ownership token and restores the real project on
+stop, Back or unmount. The draft is session-only and disposable (closing discards it), and nothing
+in Cross touches the project until "add to shelf" / "add to timeline". That includes its tempo
+control, which changes only `draft.targetBpm`.
+
+### Metronome
+
+On/off and volume (`metronomeVolume`, drag the metronome button up/down) are app state, not saved
+with the project. Main keeps the last `set-metronome` it sent (`src/main/metronomeSetting.ts`) and
+re-sends it to a respawned engine, which otherwise starts at its own defaults.
+
 ## Why the engine is a GUI app, and why its plugin editor windows are `setAlwaysOnTop`
 
 The engine started as a `juce_add_console_app` and was converted to `juce_add_gui_app`

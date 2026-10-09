@@ -27,6 +27,9 @@ The sections that matter most:
 - **Testing conventions**: summarised in section 5 below.
 - **Faust DSPs**: the `.dsp` files are shared with the web radio and golden-tested bit-exact.
   Follow the regeneration steps exactly.
+- **One running app, the stop handshake, Disable/Mute/Solo, phase lineage and `.bakes`, Cross,
+  the metronome**: how each works and what it relies on. Read the matching section before
+  touching any of them.
 
 ## 2. Design system (hard rules)
 
@@ -37,8 +40,8 @@ The sections that matter most:
 - **Silkscreen font** throughout (`--ra-font`).
 - **Sharp corners.** No `border-radius`.
 - **Colour only on audio information**: stem waveforms and glyphs, the playhead, mute/danger
-  state. Never on chrome. Solo, selection, highlights and toggles stay monochrome (grey fill,
-  bright ink).
+  state. Never on chrome. One accepted exception: Solo is blue (`--ra-solo-on`). Selection,
+  highlights and toggles stay monochrome (grey fill, bright ink).
 - **No gradients, glow, blur or scale-on-hover** on chrome. Shadows use the tokens.
 - **Lowercase UI copy**, including `aria-label`s, titles, tooltips and dialog text. No emoji, no
   exclamation marks.
@@ -87,7 +90,8 @@ The sections that matter most:
 
 ## 6. Behaviours that must not regress
 
-All shipped in 1.5.0. Breaking one of these blocks a merge.
+Shipped in 1.5.0, or merged with `codex/phase-cache` on 2026-10-09. Breaking one of these blocks
+a merge.
 
 - **Who "me" is:** a typed name, else the Endlesss login, else nobody. Never a default username.
 - **The advanced-features switch** (`src/shared/features.ts`) gates plugins, recording, the
@@ -95,16 +99,30 @@ All shipped in 1.5.0. Breaking one of these blocks a merge.
 - **Plugin settings safety:** every save path goes through `serializeForSave()`. Plugin on/off
   goes through `src/shared/pluginSwitch.ts`.
 - **Crash recovery:** the autosave/recovery file is never disabled or deleted while work is
-  unsaved, by any path (dismissing a dialog included).
-- **The startup gate blocks** until the library is usable. That's a product decision; don't add
-  a skip or close button.
-- **Mute and solo:** mute is saved with the project and affects exports. Don't change what a
-  row's `m` button means without Elling's decision.
+  unsaved, by any path (dismissing a dialog included). Closing the welcome with its × while it
+  offers a recovery keeps the old snapshot until this session has unsaved work, then the autosave
+  takes over (`autosaveWaitsOnRecoveryOffer`).
+- **The startup gate** shows until the library is usable, and has a × that closes it early. The
+  welcome has a × too, which hides it for the session. Both are Elling's decisions; keep them.
+- **Disable, Mute and Solo are three layers** (CLAUDE.md has the detail). Disable (`state.mute`)
+  is saved and affects exports. A row's `m` is a temporary Mute (`mixerMute`) and its `s` a
+  temporary Solo (`mixerSolo`): neither is saved, exported or undoable, and clearing Solo restores
+  the Mute underneath. A riser's old saved mute still clears with its row's `m`. Don't change what
+  these mean without Elling's decision.
+- **Auditioning doesn't edit the project:** opening Cross or a Discover seed, and Cross's tempo
+  control, never change the project, its undo history or its saved state. Bakes they need are
+  rendered, not adopted.
+- **One running app:** the single-instance lock is claimed before `whenReady`, and a second launch
+  exits before it can open a database or spawn an engine.
+- **Stopping is confirmed:** a preview starts only after `transport-stopped` reports silence, and a
+  failed or superseded stop never rejects into a caller (`pauseArrangementBeforeShelfPreview`).
 - **SQLite in main:** never `.iterate()` across an `await`; use `.all()`. Jams share one db, so
   batch per-jam work by db connection instead of re-querying per jam.
 - **Main thread:** no blocks over ~100 ms. The LORE archive often lives on a slow USB drive.
 - **Audio thread (engine):** no locks, no allocation, no logging.
 - **Disk:** every file the app generates needs a cleanup story. No unbounded hidden folders.
+  Known gap: `<library>/.bakes` has none yet (open in `TO-DO.md`). Don't add deletion there
+  without that item's reference-counted, dry-run design.
 
 ## 7. Product decisions are Elling's
 
@@ -116,8 +134,8 @@ and keep the shipped behaviour until he answers.
 
 - No personal names, home-directory paths, tokens or keys, in code, tests, fixtures or docs.
   Use made-up names in tests.
-- Don't add new top-level docs (CHANGELOG, TO-DO and the like) without asking. That convention
-  isn't decided yet.
+- `CHANGELOG.md` and `TO-DO.md` are in the repo: keep the "Unreleased" section and open items
+  current when a change affects them. Don't add other top-level docs without asking.
 - Release notes are written by hand at release time. Don't generate them.
 
 ## 9. Engine and Ableton Link

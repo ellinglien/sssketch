@@ -364,6 +364,67 @@ Advanced features must be on (they should already be on for you, see the next se
 - [ ] Check `fetch hearts`. **You should see:** it shows only with a hearts key set **and** the
   switch on.
 
+### The codex/phase-cache branch (merged 2026-10-09)
+
+Its features, plus the fixes made on top of them at the merge. Rebuild the engine and Cmd+Q
+first: the engine changed.
+
+- [ ] **Cross.** Select exactly two riffs in Sketch (or the Shelf). **You should see:** a `cross`
+  action beside Discover in the inspector; with one or three riffs selected, it's gone.
+  Open it. **You should see:**
+  - the two riffs as columns, and a center column with one empty `drop stem here` slot;
+  - dragging a stem (or using the inward buttons) into the center adds it, and a new empty slot
+    appears below;
+  - clicking a column's stem plays that column; the playhead and the playing column's indicator
+    move;
+  - `undo`, `redo`, `swap sides` and `clear` do what they say.
+- [ ] In Cross, press the tempo `+` a few times while it plays. **You should hear:** the preview
+  speed up. Close Cross. **You should see:** the project's tempo unchanged, the project not marked
+  unsaved, and nothing new to undo.
+- [ ] If you have one, re-one a riff whose stems mix LORE audio and a dragged-in WAV, so it has a downbeat offset
+  that isn't baked yet, then open Cross with it. **You should hear:** every stem in time, each
+  with its own sound (none swapped with another).
+- [ ] Build a center, press `add to shelf`, then `add to timeline`. **You should see:**
+  `✓ added to shelf` / `✓ added to timeline`, and the new riff in each place. Close Cross.
+  **You should see:** your riff selection still highlighted, and reopening Cross starts a fresh
+  draft.
+- [ ] Re-one one of the Cross child's parents. **You should see:** the parent's arranged copies
+  move with it, and the Cross child doesn't.
+- [ ] **Discover seed.** Re-one a riff without baking (leave the offset live), save, then open
+  Discover from it. **You should see:** Discover seeded with its stems, in time, and the project
+  still saved (no unsaved mark, nothing new to undo).
+- [ ] **Arrange mixer strip.** Open Arrange. **You should see:** each row's `m`, `s` and gain in a
+  narrow rail beside the inspector, lined up with the rows, and the clips no longer covered by
+  them.
+- [ ] **Mute and solo layers.** Press a row's `m`. **You should hear:** it go silent. Save, close
+  and reopen. **You should see:** it's unmuted again (the row `m` is temporary now). Export a mix
+  with a row's `m` on. **You should hear:** that row in the export.
+- [ ] Mute two rows with `m`, then solo a third with `s`. **You should see:** `s` lit blue, and
+  only the soloed row sounds. Clear the solo. **You should see:** the same two rows still muted.
+  Undo. **You should see:** mute and solo left alone (they aren't undo steps).
+- [ ] Open an older project where you muted a riser's row before this version. **You should see:**
+  that row's `m` lit and the riser silent. Press `m`. **You should hear:** the riser again, and
+  the project is marked unsaved (it changes the saved project); Cmd+Z mutes it again.
+- [ ] **Metronome volume.** Drag the metronome button up and down. **You should hear:** the click
+  get louder and softer; a plain click still turns it on and off. The default is louder than
+  before (1.5); say if that's too loud.
+- [ ] Optional: with the metronome on at a non-default volume and the transport playing, run
+  `pkill -x sssketch-engine` in a terminal. **You should hear:** after the engine restarts and you
+  press play, the click at the same volume.
+- [ ] **Import press-to-stop.** In import, click a riff to preview it, then click the same riff
+  again. **You should hear:** it stop, with the riff still selected; a third click plays it again.
+  Switch jams and come back. **You should see:** the jam you had selected.
+- [ ] **Startup and welcome ×.** At launch, press the × on the loading screen. **You should see:**
+  the app, usable as the library finishes loading.
+- [ ] Make a recovery offer: edit a project, wait 10 seconds, then force-quit (Activity Monitor →
+  the `Electron` process in dev → Force Quit). Relaunch and press the welcome's × (not recover or
+  discard). Make some new edits and wait 10 seconds, then force-quit again. Relaunch. **You should see:** a recovery offer
+  of the **new** edits. (Before the fix, there was none: closing the welcome had turned autosave
+  off.)
+- [ ] **Selection styling.** Select riffs in Sketch and the Shelf. **You should see:** the
+  selection centred on the circle, a low-contrast texture, and selected and playing looking
+  different.
+
 ---
 
 ## B. On a fresh macOS user account, with a packaged build
@@ -523,7 +584,15 @@ Advanced features must be on (they should already be on for you, see the next se
 - **Endlesss session expiry** can't be forced on purpose. If it happens, the login form should
   appear instead of a stuck "log in to sync".
 
+- **`.bakes` grows.** Every re-one, and every Cross or Discover opening from a riff with a live
+  offset, writes new audio into `<your library>/.bakes`, and nothing deletes it yet. It's an open
+  item in `TO-DO.md`; deleting it safely needs a check across every saved project first.
+
 ## Decisions still open
 
 - With advanced features off, should the sound panel's "make this project's the default" hide too?
   Right now it stays.
+- The codex/phase-cache branch left a few small design-system slips, not fixed at the merge: a `#000` drop shadow
+  in `App.tsx`, a colour baked into `riff-selection-crosshatch.svg`, a red label on Cross's selected
+  column when nothing plays, and some sentence-case `aria-label`s (`Decrease tempo`). Fix them as
+  they are, or leave them?
