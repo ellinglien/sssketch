@@ -21,6 +21,8 @@ import {
   useZoom
 } from './state/StoreContext'
 import { setReonedSessionRoot } from './state/reonedInUse'
+import { openWithReonedRepair } from './state/reonedRepairOnOpen'
+import { setReonedMissing } from './state/reonedMissing'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
 import { Ruler, PPB } from './components/Ruler'
@@ -1556,8 +1558,9 @@ function Frame(): React.JSX.Element {
       // Its own seed, so its timeline throws are its own (@shared/timelineThrows).
       const freshState = { ...initialState, bpm, sound, projectSeed: newProjectSeed() }
       dispatch({ type: 'LOAD_STATE', state: freshState })
-      // The previous project's saved plugin settings are not this one's.
+      // The previous project's saved plugin settings are not this one's, nor its missing copies.
       replacePendingPluginStates({})
+      setReonedMissing([])
       lastSavedJsonRef.current = dirtyCheckJson(freshState)
       setCurrentSketch({ kind: 'library', name })
       setNewProjectModal(null)
@@ -1681,9 +1684,12 @@ function Frame(): React.JSX.Element {
     // strip rendering with blank waveforms that pop in one at a time as
     // each mounted component's own decode finishes.
     setBusy('loading…')
-    await warmStemCaches(loaded)
-    restoreState(loaded, pluginStates)
-    lastSavedJsonRef.current = dirtyCheckJson(loaded)
+    // Missing re-oned copies are rebuilt before the engine sees the project; the baseline is the
+    // snapshot as saved, so only a copy that moved shows as unsaved (reonedRepairOnOpen.ts).
+    const opened = await openWithReonedRepair(loaded)
+    await warmStemCaches(opened.state)
+    restoreState(opened.state, pluginStates)
+    lastSavedJsonRef.current = opened.savedJson
     setBusy(null)
     // The sketch-info sidecar can be missing/corrupted even when the
     // content autosave above recovered fine (they're written/read
@@ -3403,9 +3409,10 @@ function Frame(): React.JSX.Element {
                     await appSoundDefaults()
                   )
                   setBusy('loading…')
-                  await warmStemCaches(loaded)
-                  restoreState(loaded, pluginStates)
-                  lastSavedJsonRef.current = dirtyCheckJson(loaded)
+                  const opened = await openWithReonedRepair(loaded)
+                  await warmStemCaches(opened.state)
+                  restoreState(opened.state, pluginStates)
+                  lastSavedJsonRef.current = opened.savedJson
                   setCurrentSketch({ kind: 'library', name })
                 } catch (err) {
                   console.error('App: failed to open library sketch:', err)
@@ -3440,9 +3447,10 @@ function Frame(): React.JSX.Element {
                   // Same pre-warm-before-LOAD_STATE reasoning as the onSelect
                   // handler right above -- see its own comment history.
                   setBusy('loading…')
-                  await warmStemCaches(loaded)
-                  restoreState(loaded, pluginStates)
-                  lastSavedJsonRef.current = dirtyCheckJson(loaded)
+                  const opened = await openWithReonedRepair(loaded)
+                  await warmStemCaches(opened.state)
+                  restoreState(opened.state, pluginStates)
+                  lastSavedJsonRef.current = opened.savedJson
                   setCurrentSketch({ kind: 'external', path: result.path })
                 } catch (err) {
                   console.error('App: failed to open project from disk:', err)
