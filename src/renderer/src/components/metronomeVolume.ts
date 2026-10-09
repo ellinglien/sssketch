@@ -13,3 +13,17 @@ export function metronomeVolumeFromDrag(start: number, deltaY: number): number {
     Math.round(clampMetronomeVolume(start - deltaY / METRONOME_VOLUME_DRAG_PX_PER_UNIT) * 100) / 100
   )
 }
+
+/** The metronome button's tooltip: on or off, the volume, and the gesture. */
+export function metronomeButtonTitle(enabled: boolean, volume: number): string {
+  return `metronome: ${enabled ? 'on' : 'off'} · ${Math.round(volume * 100)}% · drag up/down for volume`
+}
+
+/** The button's volume bar is drawn inside a 26px button; 22px is its full height. */
+export const METRONOME_VOLUME_BAR_MAX_PX = 22
+
+export function metronomeVolumeBarPx(volume: number): number {
+  return Math.round(
+    (clampMetronomeVolume(volume) / MAX_METRONOME_VOLUME) * METRONOME_VOLUME_BAR_MAX_PX
+  )
+}

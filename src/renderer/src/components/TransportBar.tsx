@@ -17,8 +17,7 @@ import { PhoneRemoteModal } from './PhoneRemoteModal'
 import { setAdvancedFeatures, useAppFeatures } from '../state/appFeatures'
 import { FEATURES, featureEnabled } from '@shared/features'
 import { riffArchivePickMessage } from '@shared/riffArchiveRoot'
-import { startPointerDrag } from './dragUtils'
-import { metronomeVolumeFromDrag } from './metronomeVolume'
+import { MetronomeButton } from './MetronomeButton'
 
 /** The gear menu's switch tooltip: what it covers, and the one part that waits for a relaunch
  * (the engine's audio input, i.e. the microphone, is opened or not at launch). */
@@ -61,23 +60,8 @@ function storeSelectedInputDevice(device: string | null): void {
 // state rather than global reducer state either way, since nothing outside
 // this settings menu needs to read which output device is active.
 
-// A plain triangle-body + pendulum-arm silhouette, monochrome via
-// currentColor -- matches this app's existing convention of drawing
-// transport glyphs directly (▶/■ elsewhere in this same file) rather than
-// pulling in an icon library, and its "no emoji in chrome" design-system
-// rule (CLAUDE.md).
-function MetronomeIcon(): React.JSX.Element {
-  return (
-    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor">
-      <path d="M5 14 L8 2 L11 14 Z" strokeWidth="1.4" strokeLinejoin="round" />
-      <line x1="8" y1="12" x2="11" y2="4" strokeWidth="1.2" strokeLinecap="round" />
-      <circle cx="9.7" cy="7" r="1" fill="currentColor" stroke="none" />
-    </svg>
-  )
-}
-
 // Simplified 6-tooth cog silhouette, same hand-drawn-glyph/no-icon-library
-// convention as MetronomeIcon above -- outer ring + hole drawn as strokes,
+// convention as MetronomeIcon (MetronomeButton.tsx) -- outer ring + hole drawn as strokes,
 // teeth as small rects rotated around the same center. (The "tidy" button
 // this used to sit next to moved up to App.tsx's own ProjectMenu, in the
 // top row -- see that component's tidy button for tidy-up/tidy-view.)
@@ -796,49 +780,7 @@ export function TransportBar({
         >
           {positionLabel(pos)}
         </span>
-        <button
-          onClick={() => dispatch({ type: 'TOGGLE_METRONOME' })}
-          onMouseDown={(event) => {
-            const startVolume = state.metronomeVolume
-            startPointerDrag(event, (_deltaX, deltaY) => {
-              dispatch({
-                type: 'SET_METRONOME_VOLUME',
-                volume: metronomeVolumeFromDrag(startVolume, deltaY)
-              })
-            })
-          }}
-          aria-label="toggle metronome"
-          title={`${state.metronomeEnabled ? 'metronome: on' : 'metronome: off'} · ${Math.round(state.metronomeVolume * 100)}% · drag up/down for volume`}
-          style={{
-            height: 26,
-            width: 26,
-            borderRadius: 0,
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            background: state.metronomeEnabled
-              ? 'var(--ra-stretch-on-bg)'
-              : 'var(--ra-bg-row-active)',
-            border: `1px solid ${state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-            color: state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
-            position: 'relative'
-          }}
-        >
-          <MetronomeIcon />
-          <span
-            aria-hidden
-            style={{
-              position: 'absolute',
-              right: 1,
-              bottom: 1,
-              width: 2,
-              height: `${Math.round((state.metronomeVolume / 2) * 22)}px`,
-              maxHeight: 22,
-              background: 'currentColor',
-              pointerEvents: 'none'
-            }}
-          />
-        </button>
+        <MetronomeButton />
       </div>
 
       <div
