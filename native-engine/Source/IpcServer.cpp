@@ -1239,7 +1239,11 @@ namespace sssketch
         else if (type == "set-metronome")
         {
             const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);
+            const float volume = payload.isObject()
+                ? (float) payload.getProperty("volume", 1.5)
+                : 1.5f;
             engine.setMetronomeEnabled(enabled);
+            engine.setMetronomeVolume(volume);
         }
         else if (type == "load-master-plugin")
         {

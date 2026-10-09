@@ -17,6 +17,8 @@ import { PhoneRemoteModal } from './PhoneRemoteModal'
 import { setAdvancedFeatures, useAppFeatures } from '../state/appFeatures'
 import { FEATURES, featureEnabled } from '@shared/features'
 import { riffArchivePickMessage } from '@shared/riffArchiveRoot'
+import { startPointerDrag } from './dragUtils'
+import { metronomeVolumeFromDrag } from './metronomeVolume'
 
 /** The gear menu's switch tooltip: what it covers, and the one part that waits for a relaunch
  * (the engine's audio input, i.e. the microphone, is opened or not at launch). */
@@ -796,8 +798,17 @@ export function TransportBar({
         </span>
         <button
           onClick={() => dispatch({ type: 'TOGGLE_METRONOME' })}
+          onMouseDown={(event) => {
+            const startVolume = state.metronomeVolume
+            startPointerDrag(event, (_deltaX, deltaY) => {
+              dispatch({
+                type: 'SET_METRONOME_VOLUME',
+                volume: metronomeVolumeFromDrag(startVolume, deltaY)
+              })
+            })
+          }}
           aria-label="Toggle metronome"
-          title={state.metronomeEnabled ? 'metronome: on' : 'metronome: off'}
+          title={`${state.metronomeEnabled ? 'metronome: on' : 'metronome: off'} · ${Math.round(state.metronomeVolume * 100)}% · drag up/down for volume`}
           style={{
             height: 26,
             width: 26,
@@ -809,10 +820,24 @@ export function TransportBar({
               ? 'var(--ra-stretch-on-bg)'
               : 'var(--ra-bg-row-active)',
             border: `1px solid ${state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-border)'}`,
-            color: state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)'
+            color: state.metronomeEnabled ? 'var(--ra-stretch-on)' : 'var(--ra-text-2)',
+            position: 'relative'
           }}
         >
           <MetronomeIcon />
+          <span
+            aria-hidden
+            style={{
+              position: 'absolute',
+              right: 1,
+              bottom: 1,
+              width: 2,
+              height: `${Math.round((state.metronomeVolume / 2) * 22)}px`,
+              maxHeight: 22,
+              background: 'currentColor',
+              pointerEvents: 'none'
+            }}
+          />
         </button>
       </div>
 

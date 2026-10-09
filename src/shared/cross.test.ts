@@ -5,6 +5,7 @@ import {
   assembleCrossRifff,
   createCrossDraft,
   crossCommitIsCurrent,
+  crossParentFromRifff,
   crossPairInVisualOrder,
   crossParentOnSide,
   crossProjectKey,
@@ -64,6 +65,47 @@ describe('crossProjectKey', () => {
   it('uses the project seed as the stable identity when present', () => {
     expect(crossProjectKey({ kind: 'library', name: 'demo' }, 'abc')).toBe('seed:abc')
     expect(crossProjectKey({ kind: 'external', path: '/tmp/demo' })).toBe('external:/tmp/demo')
+  })
+})
+
+describe('crossParentFromRifff', () => {
+  it('keeps stem phase lineage and uses the project mix gains', () => {
+    const value = crossParentFromRifff(
+      {
+        groupId: 'group-a',
+        name: 'first parent',
+        bpm: 128,
+        barLength: 4,
+        folderPath: '',
+        stems: [
+          {
+            ...stem('/rotated.wav', 4),
+            slot: 3,
+            phaseSourcePath: '/source.wav',
+            phaseBars: -0.5
+          }
+        ]
+      },
+      { 'group-a:3': 0.42 }
+    )
+
+    expect(value).toMatchObject({
+      id: 'group-a',
+      label: 'first parent',
+      bpm: 128,
+      sources: [
+        {
+          id: 'group-a:3',
+          sourceSlot: 3,
+          gain: 0.42,
+          stem: {
+            path: '/rotated.wav',
+            phaseSourcePath: '/source.wav',
+            phaseBars: -0.5
+          }
+        }
+      ]
+    })
   })
 })
 

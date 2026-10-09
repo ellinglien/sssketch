@@ -2570,6 +2570,18 @@ describe('reducer', () => {
   })
 })
 
+describe('metronome volume', () => {
+  it('uses an audible default and clamps drag updates', () => {
+    expect(initialState.metronomeVolume).toBe(1.5)
+    expect(
+      reducer(initialState, { type: 'SET_METRONOME_VOLUME', volume: 99 }).metronomeVolume
+    ).toBe(2)
+    expect(
+      reducer(initialState, { type: 'SET_METRONOME_VOLUME', volume: -1 }).metronomeVolume
+    ).toBe(0)
+  })
+})
+
 describe('automation curves', () => {
   it('stores a drawn curve on one clip, normalised', () => {
     const state = reducer(initialState, {

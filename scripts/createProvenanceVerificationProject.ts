@@ -114,7 +114,10 @@ project.channelOf = Object.fromEntries(controls.map((riff) => [riff.groupId, rif
 project.sel = controls[0].groupId
 delete project.sound
 
-const buildingDir = join(dirname(destinationDir), `.${basename(destinationDir)}.building-${randomUUID()}`)
+const buildingDir = join(
+  dirname(destinationDir),
+  `.${basename(destinationDir)}.building-${randomUUID()}`
+)
 try {
   mkdirSync(buildingDir, { recursive: true })
   const destinationProjectPath = join(destinationDir, `${basename(destinationDir)}.sssketchproj`)

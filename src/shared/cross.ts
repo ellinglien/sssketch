@@ -47,6 +47,34 @@ export interface CrossAssembly {
   vol: Record<string, number>
 }
 
+/** Turns a riff that already belongs to the current sketch into one side of
+ * Cross. Unlike the library-browser adapter this preserves the complete stem
+ * metadata (including phase lineage) and reads the gains the musician is
+ * actually hearing in the project. */
+export function crossParentFromRifff(
+  rifff: Rifff,
+  vol: Readonly<Record<string, number>>
+): CrossParent {
+  const groupGain = vol[rifff.groupId] ?? 1
+  return {
+    id: rifff.groupId,
+    riffCID: rifff.groupId,
+    label: rifff.name || 'untitled rifff',
+    bpm: rifff.bpm,
+    barLength: rifff.barLength,
+    sources: rifff.stems.map((member) => {
+      const { slot, ...stem } = member
+      return {
+        id: `${rifff.groupId}:${slot}`,
+        parentId: rifff.groupId,
+        sourceSlot: slot,
+        stem,
+        gain: Math.max(0, Math.min(1, vol[stemKey(rifff.groupId, slot)] ?? groupGain))
+      }
+    })
+  }
+}
+
 export function crossProjectKey(project: ProjectRef, projectSeed?: string): string {
   if (projectSeed) return `seed:${projectSeed}`
   if (project?.kind === 'library') return `library:${project.name}`

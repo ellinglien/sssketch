@@ -455,7 +455,7 @@ export function CrossPanel({
         }}
       >
         <button onClick={onBack} disabled={!!committing}>
-          ← import
+          ← sketch
         </button>
         <span className="ra-eyebrow">cross</span>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>

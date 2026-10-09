@@ -32,6 +32,8 @@ import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
+import { CrossPanel } from './components/CrossPanel'
+import { rifffForSketchCross } from './components/crossFromSketch'
 import { Playhead } from './components/Playhead'
 import { RiserExtentGesture } from './components/RiserExtentGesture'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
@@ -113,7 +115,13 @@ import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
 import { stemKey, type BusId, type Rifff } from '@shared/types'
-import type { CrossDraft } from '@shared/cross'
+import {
+  createCrossDraft,
+  crossParentFromRifff,
+  crossProjectKey,
+  type CrossDraft
+} from '@shared/cross'
+import { stopActivePreview } from './audio/previewLoop'
 import { assessTidyUpReadiness, unbussedStemPaths } from '@shared/tidyUpReadiness'
 import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
@@ -207,7 +215,10 @@ function Timeline({
   onCancelRiserArm,
   onCreateRiser,
   openRiserLaneId,
-  onCloseRiserLane
+  onCloseRiserLane,
+  onCrossRiffs,
+  canResumeCross,
+  onResumeCross
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
@@ -227,6 +238,9 @@ function Timeline({
    * openRiserLaneId. */
   openRiserLaneId: string | null
   onCloseRiserLane: () => void
+  onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
+  canResumeCross: boolean
+  onResumeCross: () => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
    * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
@@ -461,7 +475,13 @@ function Timeline({
   }
 
   if (state.mode === 'sketch') {
-    return <SketchStrip />
+    return (
+      <SketchStrip
+        onCrossRiffs={onCrossRiffs}
+        canResumeCross={canResumeCross}
+        onResumeCross={onResumeCross}
+      />
+    )
   }
 
   const ghostRowHeight = GHOST_ROW_HEIGHT
@@ -1714,10 +1734,11 @@ function Frame(): React.JSX.Element {
   // within one already-open session -- App.tsx itself never unmounts for
   // the life of the app, LibraryBrowser does every time the modal closes.
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
-  // Cross is a session draft like Discover: closing the full-screen library
-  // must not discard a half-built child. LibraryBrowser validates it against
-  // the current project before offering Resume Cross.
+  // Cross is a session draft like Discover: returning to Sketch must not
+  // discard a half-built child. Its project key prevents a draft from one
+  // sketch being resumed or committed into another.
   const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
+  const [crossOpen, setCrossOpen] = useState(false)
   // Discover artist mode: the chosen artists (combine artists, spec
   // 2026-10-06), `[null]` = me. Session-only, the same lifetime as
   // discoverSlots -- Discover opens on `me` at launch.
@@ -2162,6 +2183,71 @@ function Frame(): React.JSX.Element {
     setDiscoverRedoStack([])
     setDiscoverSeedBpm(rifff.bpm)
     setRiffLibraryOpen(true)
+  }
+
+  /** Opens Cross from exactly the two riffs selected in Sketch. Cross is a
+   * peer music-making workspace to Discover, not a library/import action:
+   * its parents are the two project riffs exactly as currently heard. */
+  async function openCrossFromSketch([left, right]: [Rifff, Rifff]): Promise<void> {
+    const projectKey = crossProjectKey(currentSketch, state.projectSeed)
+    const selectedIds = new Set([left.groupId, right.groupId])
+    const existingIds = new Set(crossDraft?.parents.map((parent) => parent.id) ?? [])
+    const samePair =
+      crossDraft?.projectKey === projectKey &&
+      existingIds.size === 2 &&
+      [...selectedIds].every((id) => existingIds.has(id))
+
+    stopActivePreview()
+    dispatch({ type: 'PAUSE' })
+    if (samePair) {
+      setCrossOpen(true)
+      return
+    }
+    if (
+      crossDraft?.projectKey === projectKey &&
+      crossDraft.center.length > 0 &&
+      !window.confirm('Start a new Cross? Your current Cross draft will be replaced.')
+    ) {
+      return
+    }
+
+    setBusy('preparing cross…')
+    try {
+      const prepared = await Promise.all(
+        [left, right].map((rifff) =>
+          rifffForSketchCross(rifff, state.off, SNAP_DIVS[state.snapIdx], (jobs) =>
+            window.rifffApi.bakeOffset(jobs)
+          )
+        )
+      )
+      if (!prepared[0] || !prepared[1]) {
+        window.alert('Could not prepare every stem for Cross. Nothing was changed; try again.')
+        return
+      }
+      setCrossDraft(
+        createCrossDraft(
+          projectKey,
+          crossParentFromRifff(prepared[0], state.vol),
+          crossParentFromRifff(prepared[1], state.vol),
+          state.bpm
+        )
+      )
+      setCrossOpen(true)
+    } catch (err) {
+      console.error('App: failed to prepare Sketch riffs for Cross:', err)
+      window.alert(
+        'Could not prepare the selected riffs for Cross. Nothing was changed; try again.'
+      )
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  function resumeCross(): void {
+    if (crossDraft?.projectKey !== crossProjectKey(currentSketch, state.projectSeed)) return
+    stopActivePreview()
+    dispatch({ type: 'PAUSE' })
+    setCrossOpen(true)
   }
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
   // Which stems the open Tidy Up pass is over -- see TidyUpPopulation
@@ -2967,6 +3053,11 @@ function Frame(): React.JSX.Element {
                   onCreateRiser={createRiserFromGesture}
                   openRiserLaneId={openRiserLaneId}
                   onCloseRiserLane={closeRiserLane}
+                  onCrossRiffs={(rifffs) => void openCrossFromSketch(rifffs)}
+                  canResumeCross={
+                    crossDraft?.projectKey === crossProjectKey(currentSketch, state.projectSeed)
+                  }
+                  onResumeCross={resumeCross}
                 />
               )}
             </div>
@@ -3070,12 +3161,29 @@ function Frame(): React.JSX.Element {
             setDiscoverRedoStack={setDiscoverRedoStack}
             discoverSeedBpm={discoverSeedBpm}
             setDiscoverSeedBpm={setDiscoverSeedBpm}
-            crossDraft={crossDraft}
-            setCrossDraft={setCrossDraft}
             initialMode={riffLibraryInitialMode}
             onCoachSlotsChange={handleCoachSlotsChange}
           />
         )}
+        {crossOpen &&
+          crossDraft?.projectKey === crossProjectKey(currentSketch, state.projectSeed) && (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 'var(--ra-z-fullscreen)',
+                display: 'flex',
+                background: 'var(--ra-bg-page)'
+              }}
+            >
+              <CrossPanel
+                draft={crossDraft}
+                setDraft={setCrossDraft}
+                currentProjectKey={crossProjectKey(currentSketch, state.projectSeed)}
+                onBack={() => setCrossOpen(false)}
+              />
+            </div>
+          )}
         {libraryBrowserOpen && (
           <ProjectLibraryBrowser
             onClose={() => setLibraryBrowserOpen(false)}

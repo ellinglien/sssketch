@@ -43,7 +43,9 @@ const RUBBERBAND_FROM = 'resources/rubberband'
 
 const original = config.extraResources
 if (!Array.isArray(original)) {
-  throw new Error(`expected electron-builder.yml's extraResources to be an array, got: ${JSON.stringify(original)}`)
+  throw new Error(
+    `expected electron-builder.yml's extraResources to be an array, got: ${JSON.stringify(original)}`
+  )
 }
 if (!original.some((r) => r.from === ARM64_ENGINE_FROM)) {
   throw new Error(

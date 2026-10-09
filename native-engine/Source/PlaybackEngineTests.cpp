@@ -4,6 +4,7 @@
 #include "ChannelChainRegistry.h"
 #include "RenderExport.h"
 #include "NoiseRiser.h"
+#include "Metronome.h"
 #include <juce_core/juce_core.h>
 #include <atomic>
 #include <cmath>
@@ -137,8 +138,12 @@ namespace sssketch
                 ChannelChainRegistry channelChains;
                 engine.setProject(project);
                 expect(!engine.isMetronomeEnabled()); // off by default
+                expectWithinAbsoluteError(engine.getMetronomeVolume(), 1.5f, 1.0e-6f);
                 engine.setMetronomeEnabled(true);
                 expect(engine.isMetronomeEnabled());
+                engine.setMetronomeVolume(9.0f);
+                expectWithinAbsoluteError(engine.getMetronomeVolume(), 2.0f, 1.0e-6f);
+                engine.setMetronomeVolume(1.5f);
 
                 std::vector<float> l(512, 0.0f), r(512, 0.0f);
                 engine.renderBlock(0.0, 44100.0, 512, l.data(), r.data(), channelChains);
@@ -149,6 +154,10 @@ namespace sssketch
                 expect(std::abs(l[1]) > 0.0f);
                 expect(std::abs(r[1]) > 0.0f);
                 expectWithinAbsoluteError(l[1], r[1], 1.0e-6f); // mono click, identical on both channels
+                expectWithinAbsoluteError(
+                    l[1],
+                    metronomeSampleAt(1.0 / 44100.0, 1.0) * 1.5f,
+                    1.0e-6f);
             }
 
             beginTest("metronome contributes nothing when disabled (the default)");

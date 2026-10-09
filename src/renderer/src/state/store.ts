@@ -17,6 +17,7 @@ import {
   type SoundSettings,
   type SoundSettingsPatch
 } from '@shared/radioSound'
+import { DEFAULT_METRONOME_VOLUME, clampMetronomeVolume } from '../components/metronomeVolume'
 import { appSoundDefaultsNow } from './appSoundDefaults'
 import { newProjectSeed } from '@shared/seededRandom'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
@@ -351,6 +352,9 @@ export interface AppState {
    * serialize.ts) — always starts off, matching every other "how I'm
    * currently working" toggle in this app. */
   metronomeEnabled: boolean
+  /** Output gain for both the native transport click and BeatPicker's Web
+   * Audio click. Transient like metronomeEnabled; 1 is the original level. */
+  metronomeVolume: number
   /** masterChain[i] is a scanned plugin catalog id (see src/main/pluginCatalog.ts)
    * or null for an empty slot. Persists normally -- real arrangement data, not
    * transient UI state. See docs/superpowers/specs/2026-07-31-plugin-scan-favourites-design.md. */
@@ -586,6 +590,7 @@ export const initialState: AppState = {
   tidiedView: false,
   regionSelection: null,
   metronomeEnabled: false,
+  metronomeVolume: DEFAULT_METRONOME_VOLUME,
   masterChain: [null, null, null, null],
   channelPlugins: {},
   stemFilters: {},
@@ -817,6 +822,7 @@ export type Action =
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'TOGGLE_TIDIED_VIEW' }
   | { type: 'TOGGLE_METRONOME' }
+  | { type: 'SET_METRONOME_VOLUME'; volume: number }
   | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
   /** The project's sound settings (AppState.sound): `settings` is merged over them stage by
    * stage and normalised; a state with none merges onto the app-wide defaults
@@ -1940,6 +1946,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_METRONOME':
       return { ...state, metronomeEnabled: !state.metronomeEnabled }
+
+    case 'SET_METRONOME_VOLUME':
+      return { ...state, metronomeVolume: clampMetronomeVolume(action.volume) }
 
     case 'SET_SOUND_SETTINGS':
       return {

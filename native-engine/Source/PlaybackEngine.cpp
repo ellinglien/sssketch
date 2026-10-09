@@ -655,13 +655,14 @@ namespace sssketch
         // function of absolute time (see its own doc comment), so it's
         // already correctly phase-locked through any seek/scrub with no
         // extra state needed here.
-        if (metronomeEnabled)
+        if (metronomeEnabled.load())
         {
             const double secPerBeat = spb / (double) kMetronomeBeatsPerBar;
+            const float clickGain = metronomeVolume.load();
             for (int i2 = 0; i2 < numSamples; ++i2)
             {
                 const double sampleTimeSec = blockStartSec + (double) i2 / sampleRate;
-                const float click = metronomeSampleAt(sampleTimeSec, secPerBeat);
+                const float click = metronomeSampleAt(sampleTimeSec, secPerBeat) * clickGain;
                 outL[i2] += click;
                 outR[i2] += click;
             }

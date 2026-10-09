@@ -2395,8 +2395,8 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('preload-stem', { path, durationSec })
   })
 
-  ipcMain.handle('engine-set-metronome', (_event, enabled: boolean) => {
-    playbackEngine?.client.send('set-metronome', { enabled })
+  ipcMain.handle('engine-set-metronome', (_event, enabled: boolean, volume: number) => {
+    playbackEngine?.client.send('set-metronome', { enabled, volume })
   })
 
   ipcMain.handle('engine-set-link-enabled', (_event, enabled: boolean) => {

@@ -25,6 +25,7 @@ describe('project serialization', () => {
     state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 2 })
 
     const json = serializeProject(state)
+    expect(json).not.toContain('metronomeVolume')
     const { state: restored } = deserializeProject(JSON.parse(json))
 
     expect(restored.bpm).toBe(96)

@@ -18,6 +18,8 @@ import { octaveGridlines } from '@shared/noteNames'
 import { SpectrogramCanvas } from './SpectrogramCanvas'
 import { LoadingLoader } from './LoadingLoader'
 import { reOneMarkerModel } from './reOneMarker'
+import { startPointerDrag } from './dragUtils'
+import { metronomeVolumeFromDrag } from './metronomeVolume'
 
 // Shared frequency range/resolution for every stem's spectrogram lane —
 // explicit here (rather than relying on computeSpectrogram's own defaults)
@@ -247,6 +249,8 @@ export function BeatPicker({
   // so it needs its own local Web Audio click track. Off by default, same
   // as the arranger's.
   const [metronomeOn, setMetronomeOn] = useState(false)
+  const metronomeGainRef = useRef<GainNode | null>(null)
+  const metronomeVolumeRef = useRef(state.metronomeVolume)
   const [isFreePlaying, setIsFreePlaying] = useState(false)
   // Which gridline (if any) is the source of the audio currently playing — lets a
   // second click on the same beat act as a stop, rather than every click always
@@ -548,9 +552,14 @@ export function BeatPicker({
     source.loop = true
     source.loopStart = 0
     source.loopEnd = riffDurationSec
-    source.connect(ctx.destination)
+    const gain = ctx.createGain()
+    gain.gain.value = metronomeVolumeRef.current
+    metronomeGainRef.current = gain
+    source.connect(gain)
+    gain.connect(ctx.destination)
     source.start(0)
     return () => {
+      metronomeGainRef.current = null
       try {
         source.stop()
       } catch {
@@ -558,6 +567,13 @@ export function BeatPicker({
       }
     }
   }, [metronomeOn, isFreePlaying, previewingBeat, stem, rifff])
+
+  useEffect(() => {
+    metronomeVolumeRef.current = state.metronomeVolume
+    if (metronomeGainRef.current) {
+      metronomeGainRef.current.gain.value = state.metronomeVolume
+    }
+  }, [state.metronomeVolume])
 
   // Commits only after every stem has been baked into a fresh immutable
   // asset. The pending picker choice is deliberately not dispatched as a
@@ -1093,8 +1109,17 @@ export function BeatPicker({
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <button
               onClick={() => setMetronomeOn((v) => !v)}
+              onMouseDown={(event) => {
+                const startVolume = state.metronomeVolume
+                startPointerDrag(event, (_deltaX, deltaY) => {
+                  dispatch({
+                    type: 'SET_METRONOME_VOLUME',
+                    volume: metronomeVolumeFromDrag(startVolume, deltaY)
+                  })
+                })
+              }}
               aria-label="Toggle metronome click"
-              title={metronomeOn ? 'metronome click: on' : 'metronome click: off'}
+              title={`${metronomeOn ? 'metronome click: on' : 'metronome click: off'} · ${Math.round(state.metronomeVolume * 100)}% · drag up/down for volume`}
               style={{
                 display: 'flex',
                 alignItems: 'center',

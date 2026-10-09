@@ -38,6 +38,7 @@ export type PersistedProject = Omit<
   | 'automationParamOf'
   | 'inspectorCollapsed'
   | 'metronomeEnabled'
+  | 'metronomeVolume'
   | 'armedChannelId'
   | 'recordingArmReminderChannelId'
   | 'availableInputDevices'
@@ -73,6 +74,7 @@ export function serializeProject(state: AppState, pluginStates: PluginStatesMap 
     automationParamOf,
     inspectorCollapsed,
     metronomeEnabled,
+    metronomeVolume,
     armedChannelId,
     recordingArmReminderChannelId,
     availableInputDevices,

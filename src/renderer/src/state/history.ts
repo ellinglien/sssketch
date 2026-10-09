@@ -51,6 +51,7 @@ const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
   'SET_AUTOMATION_PARAM',
   'TOGGLE_INSPECTOR_COLLAPSED',
   'TOGGLE_METRONOME',
+  'SET_METRONOME_VOLUME',
   'ARM_RECORDING_CHANNEL',
   'DISARM_RECORDING_CHANNEL',
   // Rotates on every gated-recording lock-in (see App.tsx's

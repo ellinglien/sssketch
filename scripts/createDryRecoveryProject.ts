@@ -96,7 +96,10 @@ db.close()
 // original mix rather than globally applying Discover's room/pump/panning.
 delete project.sound
 
-const buildingDir = join(dirname(destinationDir), `.${basename(destinationDir)}.building-${randomUUID()}`)
+const buildingDir = join(
+  dirname(destinationDir),
+  `.${basename(destinationDir)}.building-${randomUUID()}`
+)
 const buildingAudioDir = join(buildingDir, 'Recovered Audio')
 const finalAudioDir = join(destinationDir, 'Recovered Audio')
 const copied = new Map<string, string>()

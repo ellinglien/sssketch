@@ -6,7 +6,7 @@ import { stemColorVar } from '../theme/typeColor'
 import { startPointerDrag, suppressNextSyntheticClick } from './dragUtils'
 import { markManualSeek } from '../state/manualSeek'
 import type { Rifff } from '@shared/types'
-import { sketchRiffClickAction } from './sketchRiffInteraction'
+import { sketchRiffClickAction, toggleSketchBatchSelection } from './sketchRiffInteraction'
 
 export const TILE_SIZE = 64
 export const TILE_GAP = 10
@@ -28,7 +28,15 @@ const BARS_DRAG_PX_PER_STEP = 20
  * shelf and LORE library browser); duration is communicated only through
  * the orbiting playhead dot's lap speed, not tile size, so the strip stays
  * visually even regardless of how long each rifff actually is. */
-export function SketchStrip(): React.JSX.Element {
+export function SketchStrip({
+  onCrossRiffs,
+  canResumeCross,
+  onResumeCross
+}: {
+  onCrossRiffs: (rifffs: [Rifff, Rifff]) => void
+  canResumeCross: boolean
+  onResumeCross: () => void
+}): React.JSX.Element {
   const state = useAppState()
   const dispatch = useDispatch()
   const playing = usePlaying()
@@ -58,6 +66,7 @@ export function SketchStrip(): React.JSX.Element {
   // interaction, and vice versa.
   const multiSelected =
     state.sel !== null && rawMultiSelected.has(state.sel) ? rawMultiSelected : EMPTY_SELECTION
+  const crossPair = sequence.filter((rifff) => multiSelected.has(rifff.groupId))
   // Set (only) when a real drag of the scrub dot just ended — see
   // handleTileClick's own doc comment for why the tile's click handler
   // needs to check this.
@@ -189,12 +198,7 @@ export function SketchStrip(): React.JSX.Element {
       return
     }
     if (e.metaKey || e.ctrlKey) {
-      setMultiSelected((prev) => {
-        const next = new Set(prev)
-        if (next.has(rifff.groupId)) next.delete(rifff.groupId)
-        else next.add(rifff.groupId)
-        return next
-      })
+      setMultiSelected((prev) => toggleSketchBatchSelection(prev, state.sel, rifff.groupId))
       return
     }
     setMultiSelected(new Set())
@@ -405,6 +409,35 @@ export function SketchStrip(): React.JSX.Element {
         flexWrap: 'wrap'
       }}
     >
+      {(crossPair.length === 2 || canResumeCross) && (
+        <div
+          style={{
+            order: -100,
+            width: '100%',
+            display: 'flex',
+            justifyContent: 'flex-end',
+            gap: 6
+          }}
+        >
+          {canResumeCross && crossPair.length !== 2 && (
+            <button onClick={onResumeCross}>resume cross</button>
+          )}
+          {crossPair.length === 2 && (
+            <button
+              onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
+              style={{
+                height: 30,
+                padding: '0 16px',
+                border: '2px solid var(--ra-border-strong)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text)'
+              }}
+            >
+              cross riffs
+            </button>
+          )}
+        </div>
+      )}
       {sequence.map((rifff, index) => {
         const start = rifff.startBar ?? 0
         const bars = effectiveBars(rifff)

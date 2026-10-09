@@ -842,8 +842,8 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   }, [playing])
 
   useEffect(() => {
-    void window.rifffApi.engineSetMetronome(state.metronomeEnabled)
-  }, [state.metronomeEnabled])
+    void window.rifffApi.engineSetMetronome(state.metronomeEnabled, state.metronomeVolume)
+  }, [state.metronomeEnabled, state.metronomeVolume])
 
   // Drives Transport's playback wrap directly from loopRegion, live, on
   // every change -- independent of whether any channel is armed (see
