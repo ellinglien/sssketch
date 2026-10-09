@@ -31,7 +31,7 @@ import {
 
 function stem(path: string, barLength = 4): Omit<Stem, 'slot'> {
   return {
-    author: 'elling',
+    author: 'wren',
     name: path.slice(1),
     type: 'fx',
     path,

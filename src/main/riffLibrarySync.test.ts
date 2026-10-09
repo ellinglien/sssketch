@@ -74,7 +74,7 @@ function sharedFeedPage(riffCIDs: string[], hasMore: boolean): Record<string, un
             ...Array.from({ length: 7 }, () => ({ slot: {} }))
           ]
         },
-        userName: 'elling',
+        userName: 'wren',
         created: 1700000000000 + i,
         root: 0,
         scale: 0
@@ -88,7 +88,7 @@ function sharedFeedPage(riffCIDs: string[], hasMore: boolean): Record<string, un
           bps: 2.0,
           length16ths: 64,
           presetName: 'preset',
-          creatorUserName: 'elling'
+          creatorUserName: 'wren'
         },
         null,
         null,
@@ -133,7 +133,7 @@ describe('syncSharedFeed', () => {
     })
     const progressUpdates: { done: number; total: number }[] = []
 
-    await syncSharedFeed('elling', (p) => progressUpdates.push(p), fetchImpl as typeof fetch, db)
+    await syncSharedFeed('wren', (p) => progressUpdates.push(p), fetchImpl as typeof fetch, db)
 
     const riffCount = db.prepare('SELECT COUNT(*) as n FROM Riffs').get() as { n: number }
     expect(riffCount.n).toBe(101)
@@ -143,9 +143,7 @@ describe('syncSharedFeed', () => {
       n: number
     }
     expect(resolvedCount.n).toBe(101)
-    const jam = db
-      .prepare('SELECT SyncComplete FROM Jams WHERE JamCID = ?')
-      .get('shared:elling') as {
+    const jam = db.prepare('SELECT SyncComplete FROM Jams WHERE JamCID = ?').get('shared:wren') as {
       SyncComplete: number
     }
     expect(jam.SyncComplete).toBe(1)
@@ -168,10 +166,10 @@ describe('syncSharedFeed', () => {
     // The old capitalised sync: 150 riffs, far more than one page of the
     // feed. The new sync below only sees one (short) page.
     db.prepare(
-      `INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 1)`
+      `INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Wren', 'Shared Feed', 1)`
     ).run()
     const insert = db.prepare(
-      `INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES (?, 'shared:Elling', 1)`
+      `INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES (?, 'shared:Wren', 1)`
     )
     for (let i = 0; i < 150; i++) insert.run(`old_${i}`)
     const fetchImpl = vi.fn(async (url: string) => {
@@ -184,13 +182,13 @@ describe('syncSharedFeed', () => {
     })
 
     // typed with a capital, too: still the one lowercase feed
-    await syncSharedFeed('Elling', () => {}, fetchImpl as typeof fetch, db)
+    await syncSharedFeed('Wren', () => {}, fetchImpl as typeof fetch, db)
 
-    expect(db.prepare(`SELECT JamCID FROM Jams`).all()).toEqual([{ JamCID: 'shared:elling' }])
+    expect(db.prepare(`SELECT JamCID FROM Jams`).all()).toEqual([{ JamCID: 'shared:wren' }])
     expect(
       db.prepare(`SELECT OwnerJamCID, COUNT(*) AS n FROM Riffs GROUP BY OwnerJamCID`).all()
-    ).toEqual([{ OwnerJamCID: 'shared:elling', n: 150 }])
-    expect(String(fetchImpl.mock.calls[0][0])).not.toContain('Elling')
+    ).toEqual([{ OwnerJamCID: 'shared:wren', n: 150 }])
+    expect(String(fetchImpl.mock.calls[0][0])).not.toContain('Wren')
   })
 
   // Review of 0e27db79: Discover's in-memory indexes name each stem's jam, and
@@ -201,16 +199,16 @@ describe('syncSharedFeed', () => {
     const { syncSharedFeed } = await import('./riffLibrarySync')
     const db = freshDb()
     db.prepare(
-      `INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 1)`
+      `INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Wren', 'Shared Feed', 1)`
     ).run()
     const fetchImpl = vi.fn(
       async () => new Response(JSON.stringify(sharedFeedPage([], false)), { status: 200 })
     )
     try {
-      await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+      await syncSharedFeed('wren', () => {}, fetchImpl as typeof fetch, db)
       expect(drop).toHaveBeenCalledTimes(1)
       expect(drop).toHaveBeenCalledWith(db)
-      await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+      await syncSharedFeed('wren', () => {}, fetchImpl as typeof fetch, db)
       expect(drop).toHaveBeenCalledTimes(1)
     } finally {
       drop.mockRestore()
@@ -223,10 +221,10 @@ describe('syncSharedFeed', () => {
     const { syncSharedFeed } = await import('./riffLibrarySync')
     const db = freshDb()
     db.exec(`
-      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Elling', 'Shared Feed', 1);
-      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES ('old_0', 'shared:Elling', 1);
+      INSERT INTO Jams (JamCID, PublicName, SyncComplete) VALUES ('shared:Wren', 'Shared Feed', 1);
+      INSERT INTO Riffs (RiffCID, OwnerJamCID, AppVersion) VALUES ('old_0', 'shared:Wren', 1);
       CREATE TRIGGER fail_on_riff_move BEFORE UPDATE OF OwnerJamCID ON Riffs
-        WHEN OLD.OwnerJamCID = 'shared:Elling'
+        WHEN OLD.OwnerJamCID = 'shared:Wren'
         BEGIN SELECT RAISE(ABORT, 'disk full'); END;
     `)
     const fetchImpl = vi.fn(async (url: string) => {
@@ -237,21 +235,21 @@ describe('syncSharedFeed', () => {
     })
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     try {
-      await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+      await syncSharedFeed('wren', () => {}, fetchImpl as typeof fetch, db)
       expect(errors).toHaveBeenCalled()
     } finally {
       errors.mockRestore()
     }
     // synced all the same
-    expect(
-      db.prepare(`SELECT RiffCID FROM Riffs WHERE OwnerJamCID = 'shared:elling'`).all()
-    ).toEqual([{ RiffCID: 'new_0' }])
+    expect(db.prepare(`SELECT RiffCID FROM Riffs WHERE OwnerJamCID = 'shared:wren'`).all()).toEqual(
+      [{ RiffCID: 'new_0' }]
+    )
 
     db.exec(`DROP TRIGGER fail_on_riff_move`)
-    await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
-    expect(db.prepare(`SELECT JamCID FROM Jams`).all()).toEqual([{ JamCID: 'shared:elling' }])
+    await syncSharedFeed('wren', () => {}, fetchImpl as typeof fetch, db)
+    expect(db.prepare(`SELECT JamCID FROM Jams`).all()).toEqual([{ JamCID: 'shared:wren' }])
     expect(
-      db.prepare(`SELECT COUNT(*) AS n FROM Riffs WHERE OwnerJamCID = 'shared:elling'`).get()
+      db.prepare(`SELECT COUNT(*) AS n FROM Riffs WHERE OwnerJamCID = 'shared:wren'`).get()
     ).toEqual({ n: 2 })
   })
 
@@ -269,9 +267,9 @@ describe('syncSharedFeed', () => {
       return new Response(JSON.stringify(sharedFeedPage(['r1'], true)), { status: 200 })
     })
 
-    await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+    await syncSharedFeed('wren', () => {}, fetchImpl as typeof fetch, db)
     pageCalls = 0
-    await syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+    await syncSharedFeed('wren', () => {}, fetchImpl as typeof fetch, db)
 
     expect(pageCalls).toBe(1)
   })
@@ -292,7 +290,7 @@ function rawJamRiffDoc(riffCID: string): Record<string, unknown> {
         ...Array.from({ length: 7 }, () => ({ slot: {} }))
       ]
     },
-    userName: 'elling',
+    userName: 'wren',
     created: 1700000000000,
     root: 0,
     scale: 0
@@ -308,7 +306,7 @@ function rawJamStemDoc(riffCID: string): Record<string, unknown> {
     bps: 2.0,
     length16ths: 64,
     presetName: 'preset',
-    creatorUserName: 'elling'
+    creatorUserName: 'wren'
   }
 }
 
@@ -337,7 +335,7 @@ describe('syncJam', () => {
           }
         )
     )
-    await loginWithCredentials('elling', 'hunter2', loginFetch as unknown as typeof fetch)
+    await loginWithCredentials('wren', 'hunter2', loginFetch as unknown as typeof fetch)
 
     const fetchImpl = vi.fn(async (url: string, init?: RequestInit) => {
       if (url.startsWith('https://cdn.example.com'))
@@ -391,16 +389,16 @@ describe('syncJam', () => {
     db.prepare(
       `INSERT INTO Riffs
          (RiffCID, OwnerJamCID, CreationTime, UserName, StemCID_1, AppVersion)
-       VALUES ('r1', 'jam_1', 1700000000, 'elling', 'stem_r1', 1)`
+       VALUES ('r1', 'jam_1', 1700000000, 'wren', 'stem_r1', 1)`
     ).run()
     db.prepare(
       `INSERT INTO Stems
          (StemCID, OwnerJamCID, FileEndpoint, FileBucket, FileKey, CreatorUserName)
-       VALUES ('stem_r1', 'jam_1', 'https://old.example.com', '', NULL, 'elling')`
+       VALUES ('stem_r1', 'jam_1', 'https://old.example.com', '', NULL, 'wren')`
     ).run()
 
     await loginWithCredentials(
-      'elling',
+      'wren',
       'hunter2',
       vi.fn(
         async () =>
@@ -512,22 +510,22 @@ describe('a failed or cancelled page fetch is not the end of the feed', () => {
         cancelNext = false
         // The cancel lands while the second page is in flight; fetch then
         // rejects, as a real one does when its signal aborts.
-        expect(abortSync('shared:elling')).toBe(true)
+        expect(abortSync('shared:wren')).toBe(true)
         return Promise.reject(abortError())
       }
     )
     const restore = quietErrors()
     try {
-      await syncSharedFeed('elling', () => {}, fetchImpl, db)
+      await syncSharedFeed('wren', () => {}, fetchImpl, db)
     } finally {
       restore()
     }
     expect(count(db, '1')).toBe(100)
-    expect(syncComplete(db, 'shared:elling')).toBe(0)
+    expect(syncComplete(db, 'shared:wren')).toBe(0)
 
-    await syncSharedFeed('elling', () => {}, fetchImpl, db)
+    await syncSharedFeed('wren', () => {}, fetchImpl, db)
     expect(count(db, 'AppVersion IS NOT NULL')).toBe(130)
-    expect(syncComplete(db, 'shared:elling')).toBe(1)
+    expect(syncComplete(db, 'shared:wren')).toBe(1)
   })
 
   it.each(failures)(
@@ -546,16 +544,16 @@ describe('a failed or cancelled page fetch is not the end of the feed', () => {
       )
       const restore = quietErrors()
       try {
-        await syncSharedFeed('elling', () => {}, fetchImpl, db)
+        await syncSharedFeed('wren', () => {}, fetchImpl, db)
       } finally {
         restore()
       }
       expect(count(db, '1')).toBe(100)
-      expect(syncComplete(db, 'shared:elling')).toBe(0)
+      expect(syncComplete(db, 'shared:wren')).toBe(0)
 
-      await syncSharedFeed('elling', () => {}, fetchImpl, db)
+      await syncSharedFeed('wren', () => {}, fetchImpl, db)
       expect(count(db, 'AppVersion IS NOT NULL')).toBe(130)
-      expect(syncComplete(db, 'shared:elling')).toBe(1)
+      expect(syncComplete(db, 'shared:wren')).toBe(1)
     }
   )
 
@@ -574,8 +572,8 @@ describe('a failed or cancelled page fetch is not the end of the feed', () => {
         return Promise.resolve(new Response('busy', { status: 503 }))
       }
     )
-    await syncSharedFeed('elling', () => {}, fetchImpl, db)
-    expect(syncComplete(db, 'shared:elling')).toBe(1)
+    await syncSharedFeed('wren', () => {}, fetchImpl, db)
+    expect(syncComplete(db, 'shared:wren')).toBe(1)
 
     // 150 new ones since, more than a page: the catch-up resolves the first
     // page, then the second page's fetch fails.
@@ -584,16 +582,16 @@ describe('a failed or cancelled page fetch is not the end of the feed', () => {
     failNext = true
     const restore = quietErrors()
     try {
-      await syncSharedFeed('elling', () => {}, fetchImpl, db)
+      await syncSharedFeed('wren', () => {}, fetchImpl, db)
     } finally {
       restore()
     }
-    expect(syncComplete(db, 'shared:elling')).toBe(0)
+    expect(syncComplete(db, 'shared:wren')).toBe(0)
 
     // The first page is all done now, but the walk must not stop there.
-    await syncSharedFeed('elling', () => {}, fetchImpl, db)
+    await syncSharedFeed('wren', () => {}, fetchImpl, db)
     expect(count(db, 'AppVersion IS NOT NULL')).toBe(160)
-    expect(syncComplete(db, 'shared:elling')).toBe(1)
+    expect(syncComplete(db, 'shared:wren')).toBe(1)
   })
 
   it('a riff whose stem download a cancel cut short is not saved as resolved', async () => {
@@ -616,21 +614,21 @@ describe('a failed or cancelled page fetch is not the end of the feed', () => {
 
     const restore = quietErrors()
     try {
-      const running = syncSharedFeed('elling', () => {}, fetchImpl, db)
+      const running = syncSharedFeed('wren', () => {}, fetchImpl, db)
       await cdnRequested
-      abortSync('shared:elling')
+      abortSync('shared:wren')
       await running
     } finally {
       restore()
     }
     expect(count(db, 'AppVersion IS NOT NULL')).toBe(0)
     expect(db.prepare(`SELECT COUNT(*) AS n FROM StemLedger`).get()).toEqual({ n: 0 })
-    expect(syncComplete(db, 'shared:elling')).toBe(0)
+    expect(syncComplete(db, 'shared:wren')).toBe(0)
 
     holdCdn = false
-    await syncSharedFeed('elling', () => {}, fetchImpl, db)
+    await syncSharedFeed('wren', () => {}, fetchImpl, db)
     expect(count(db, 'AppVersion IS NOT NULL')).toBe(1)
-    expect(syncComplete(db, 'shared:elling')).toBe(1)
+    expect(syncComplete(db, 'shared:wren')).toBe(1)
   })
 
   describe('a private jam', () => {
@@ -644,7 +642,7 @@ describe('a failed or cancelled page fetch is not the end of the feed', () => {
             { status: 200 }
           )
       )
-      await loginWithCredentials('elling', 'hunter2', loginFetch as unknown as typeof fetch)
+      await loginWithCredentials('wren', 'hunter2', loginFetch as unknown as typeof fetch)
       return import('./riffLibrarySync')
     }
 
@@ -770,7 +768,7 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
           { status: 200 }
         )
     )
-    await loginWithCredentials('elling', 'hunter2', loginFetch as unknown as typeof fetch)
+    await loginWithCredentials('wren', 'hunter2', loginFetch as unknown as typeof fetch)
     return import('./riffLibrarySync')
   }
 
@@ -1061,7 +1059,7 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
       let feed
       try {
         await syncJam('jam_1', 'J', () => {}, limitedJam(30).fetchImpl, db)
-        feed = await syncSharedFeed('elling', () => {}, feedFetch as unknown as typeof fetch, db)
+        feed = await syncSharedFeed('wren', () => {}, feedFetch as unknown as typeof fetch, db)
       } finally {
         restore()
       }
@@ -1085,7 +1083,7 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
       const restore = quietErrors()
       let feed, jam
       try {
-        const feedRun = syncSharedFeed('elling', () => {}, feedFetch as unknown as typeof fetch, db)
+        const feedRun = syncSharedFeed('wren', () => {}, feedFetch as unknown as typeof fetch, db)
         await vi.waitFor(() => expect(feedFetch).toHaveBeenCalled())
         jam = await syncJam('jam_1', 'J', () => {}, limitedJam(30).fetchImpl, db)
         expect(feedSignal?.aborted).toBe(true)
@@ -1096,7 +1094,7 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
       }
       expect(jam).toEqual({ stopped: 'rate-limited', retryAt: Date.now() + 30_000 })
       expect(feed).toEqual(jam)
-      expect(syncComplete(db, 'shared:elling')).toBe(0)
+      expect(syncComplete(db, 'shared:wren')).toBe(0)
       expect(activeSyncCount()).toBe(0)
     })
 
@@ -1176,7 +1174,7 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
     expect(syncComplete(db, 'jam_1')).toBe(1)
   })
 
-  // Aethereal Forest held exactly 6000; ellingelling none at all. Page 0's
+  // Aethereal Forest held exactly 6000; another jam none at all. Page 0's
   // total comes free with it.
   it.each([
     ['fewer riffs than the jam has', 400, 450, 3, 50],
@@ -1257,14 +1255,14 @@ describe('a private jam: riffs that fail, and jams marked complete too early (re
     expect(syncComplete(db, 'jam_1')).toBe(1)
   })
 
-  // The heal, end to end: what the old stem lookup left in Elling's library
+  // The heal, end to end: what the old stem lookup left in a real library
   // is fetched again by the next sync, once.
   it('a riff saved stemless before is fetched again whole; one with no active slots only once', async () => {
     const { syncJam } = await loggedIn()
     const db = freshDb()
     const cids = cidsOf('r', 4)
     seed(db, 'jam_1', 1, { resolved: cids.slice(0, 2), stemless: cids.slice(2) })
-    seed(db, 'shared:elling', 1, { stemless: ['shared_r'] })
+    seed(db, 'shared:wren', 1, { stemless: ['shared_r'] })
     // r_3 really has no active slot.
     const server = jamServer({ cids: () => cids, emptyRiffs: new Set(['r_3']) })
 
@@ -1305,25 +1303,25 @@ describe('syncs in flight', () => {
 
   // Review of 0e27db79: the sync runs under the lowercase key, so a cancel
   // or a remove naming the feed as it was spelled must find it.
-  it('abortSync stops the running shared:elling sync when asked for shared:Elling', async () => {
+  it('abortSync stops the running shared:wren sync when asked for shared:Wren', async () => {
     const { syncSharedFeed, abortSync, activeSyncCount } = await import('./riffLibrarySync')
     const db = freshDb()
     const feed = heldFeed()
-    const running = syncSharedFeed('Elling', () => {}, feed.fetchImpl, db)
+    const running = syncSharedFeed('Wren', () => {}, feed.fetchImpl, db)
     await vi.waitFor(() => expect(feed.signals).toHaveLength(1))
-    expect(abortSync('shared:Elling')).toBe(true)
+    expect(abortSync('shared:Wren')).toBe(true)
     expect(feed.signals[0]?.aborted).toBe(true)
     feed.release()
     await running
     expect(activeSyncCount()).toBe(0)
   })
 
-  it('removeJamSync refuses shared:Elling while shared:elling is syncing', async () => {
+  it('removeJamSync refuses shared:Wren while shared:wren is syncing', async () => {
     const { syncSharedFeed, removeJamSync } = await import('./riffLibrarySync')
     const db = freshDb()
     const feed = heldFeed()
-    const running = syncSharedFeed('elling', () => {}, feed.fetchImpl, db)
-    expect(() => removeJamSync('shared:Elling', false, db)).toThrow(/sync is currently running/)
+    const running = syncSharedFeed('wren', () => {}, feed.fetchImpl, db)
+    expect(() => removeJamSync('shared:Wren', false, db)).toThrow(/sync is currently running/)
     feed.release()
     await running
   })
@@ -1342,7 +1340,7 @@ describe('syncs in flight', () => {
     const counts: number[] = []
     setSyncsInFlightListener((count) => counts.push(count))
     try {
-      const running = syncSharedFeed('elling', () => {}, fetchImpl as typeof fetch, db)
+      const running = syncSharedFeed('wren', () => {}, fetchImpl as typeof fetch, db)
       expect(activeSyncCount()).toBe(1)
       await running
       expect(activeSyncCount()).toBe(0)
@@ -1362,7 +1360,7 @@ describe('riffs given up on, and the re-walk allowance', () => {
     vi.resetModules()
     const { loginWithCredentials } = await import('./endlesssApi')
     await loginWithCredentials(
-      'elling',
+      'wren',
       'hunter2',
       vi.fn(
         async () =>
@@ -1656,18 +1654,18 @@ describe('riffs given up on, and the re-walk allowance', () => {
       const restore = quietLogs()
       try {
         for (let run = 1; run <= 4; run++) {
-          await syncSharedFeed('elling', () => {}, fetchImpl, db)
-          expect(complete(db, 'shared:elling')).toBe(0)
+          await syncSharedFeed('wren', () => {}, fetchImpl, db)
+          expect(complete(db, 'shared:wren')).toBe(0)
         }
-        await syncSharedFeed('elling', () => {}, fetchImpl, db)
+        await syncSharedFeed('wren', () => {}, fetchImpl, db)
       } finally {
         restore()
       }
       expect(failures(db)).toEqual([{ RiffCID: 'b_5', Attempts: 5, LastReason: 'not-in-feed' }])
-      expect(complete(db, 'shared:elling')).toBe(1)
+      expect(complete(db, 'shared:wren')).toBe(1)
 
       lists = 0
-      await syncSharedFeed('elling', () => {}, fetchImpl, db)
+      await syncSharedFeed('wren', () => {}, fetchImpl, db)
       expect(lists).toBe(1)
     })
   })

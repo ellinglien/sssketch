@@ -5,7 +5,7 @@ import type { Stem } from '@shared/types'
 
 function fixtureStem(overrides: Partial<Omit<Stem, 'slot'>> = {}): Omit<Stem, 'slot'> {
   return {
-    author: 'elling',
+    author: 'wren',
     name: 'a stem',
     type: 'fx',
     path: '/a.wav',
@@ -138,7 +138,7 @@ describe('assembleDiscoverRifff', () => {
 
   it("preserves every other field of each member's own stem, including immutable phase provenance", () => {
     const stem = fixtureStem({
-      author: 'elling',
+      author: 'wren',
       name: 'kick',
       type: 'drums',
       durationSec: 2.5,
@@ -148,7 +148,7 @@ describe('assembleDiscoverRifff', () => {
     })
     const assembly = assembleDiscoverRifff('discover preview', [{ stem, gain: 1 }], 120)
     expect(assembly!.rifff.stems[0]).toMatchObject({
-      author: 'elling',
+      author: 'wren',
       name: 'kick',
       type: 'drums',
       durationSec: 2.5,
