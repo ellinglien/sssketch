@@ -13,7 +13,11 @@ import { BracketToggle } from './BracketToggle'
 import { resolveStretchedForPlayback } from '../audio/resolveStretchedForPlayback'
 import { warmEngineBuffer } from '../audio/warmEngineBuffer'
 import { getPeaks, peekPeaks } from '../audio/peakCache'
-import { assembleDiscoverRifff, type DiscoverRifffAssembly } from '../audio/discoverRifffAssembly'
+import {
+  assembleDiscoverRifff,
+  discoverRowDisabledOnAdd,
+  type DiscoverRifffAssembly
+} from '../audio/discoverRifffAssembly'
 import {
   DISCOVER_SLOT_KIND_LABEL,
   DISCOVER_SLOT_KIND_OPTIONS,
@@ -13022,7 +13026,15 @@ export function DiscoverPanel({
   // case is unreachable here, since placed.length === 0 already returned
   // above) -- callers early-return on null rather than dispatching an
   // empty rifff.
-  async function resolveDiscoverRifff(): Promise<DiscoverRifffAssembly | null> {
+  //
+  // `soloed` is the row soloed when the loop was added. Rows that weren't
+  // heard (discoverRowDisabledOnAdd: muted, or left out by that solo) come
+  // back `disabled`, at their real gain, and the assembly's `mute` Disables
+  // them: what you hear is what you get, after a save too (F6 of the
+  // 2026-10-08 call triage).
+  async function resolveDiscoverRifff(
+    soloed: string | null
+  ): Promise<DiscoverRifffAssembly | null> {
     // Direct report, 2026-09-16: "when user plunks to the timeline, the
     // volume levels should be copied over pls" -- root cause traced to
     // something bigger than just gain: this filter used to require a real
@@ -13039,18 +13051,10 @@ export function DiscoverPanel({
     // Direct report, 2026-09-17: "when adding discover-created rifffs to
     // the arranger, i've noticed that tracks that are muted are not muted
     // in the arrangement .. can we make it so they are, if they are
-    // muted?" -- this used to pass every placeable slot's own `gain`
-    // (the visible drag-on-waveform slider, 0..1) straight through
-    // unconditionally, with no reference to previewingSlotIds at all, so
-    // a slot muted in Discover's own mix (excluded from what you hear
-    // while auditioning) still landed in the placed rifff at full/whatever
-    // gain. Forcing a muted slot's own gain to 0 here -- rather than
-    // dropping it from `placeable` outright -- keeps the stem itself
-    // present in the resulting rifff (still visible/re-adjustable later
-    // via the real arranger's own per-stem gain drag, StemWaveformRow.tsx),
-    // just silent, matching what "mute" actually means everywhere else in
-    // this app (ChannelRow.tsx's own mute always wins over whatever gain
-    // is set underneath it) rather than a one-way, unrecoverable removal.
+    // muted?" A row that isn't heard stays in the rifff (still there to
+    // turn back on later) rather than being dropped. It used to come in at
+    // gain 0, which looked unmuted and lost its level; since the 2026-10-08
+    // call (F6) it comes in Disabled at its own gain, and a solo counts.
     const resolved = await Promise.all(
       placeable.map(
         async ({
@@ -13058,14 +13062,15 @@ export function DiscoverPanel({
           candidate,
           seedStem,
           gain
-        }): Promise<{ stem: ResolvedCandidateStem; gain: number } | null> => {
+        }): Promise<{ stem: ResolvedCandidateStem; gain: number; disabled: boolean } | null> => {
           const stem = candidate ? await resolveCandidateStem(candidate) : (seedStem ?? null)
-          return stem ? { stem, gain: previewingSlotIds.has(id) ? gain : 0 } : null
+          const disabled = discoverRowDisabledOnAdd(id, previewingSlotIds, soloed)
+          return stem ? { stem, gain, disabled } : null
         }
       )
     )
     const placed = resolved.filter(
-      (r): r is { stem: ResolvedCandidateStem; gain: number } => r !== null
+      (r): r is { stem: ResolvedCandidateStem; gain: number; disabled: boolean } => r !== null
     )
     if (placed.length === 0) return null
 
@@ -13095,7 +13100,7 @@ export function DiscoverPanel({
     // and is its own piece of work.
     return assembleDiscoverRifff(
       `discover: ${kinds.join('+')}`,
-      placed.map(({ stem, gain }) => ({ stem, gain })),
+      placed.map(({ stem, gain, disabled }) => ({ stem, gain, disabled })),
       bpm,
       placed.length
     )
@@ -13133,9 +13138,9 @@ export function DiscoverPanel({
     if (refusesNow('addToTimeline')) return
     setAddingToTimeline(true)
     try {
-      const assembly = await resolveDiscoverRifff()
+      const assembly = await resolveDiscoverRifff(soloedSlotIdRef.current)
       if (!assembly) return
-      const { rifff, vol } = assembly
+      const { rifff, vol, mute } = assembly
 
       // Appends after the furthest-right currently-placed clip, matching
       // "adds alongside, never replaces" from the design spec's own §8.4 --
@@ -13155,7 +13160,7 @@ export function DiscoverPanel({
         )
       const startBar = placedEnds.length > 0 ? Math.max(...placedEnds) : 0
 
-      dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: [rifff], startBar, vol })
+      dispatch({ type: 'PLACE_LOOP_ON_TIMELINE', stems: [rifff], startBar, vol, mute })
 
       // Real bug, live-reported 2026-09-17: "i just clicked add to timeline
       // and the last slot started playing the previous instance of that slot
@@ -13268,10 +13273,10 @@ export function DiscoverPanel({
     if (refusesNow('addToShelf')) return
     setAddingToShelf(true)
     try {
-      const assembly = await resolveDiscoverRifff()
+      const assembly = await resolveDiscoverRifff(soloedSlotIdRef.current)
       if (!assembly) return
-      const { rifff, vol } = assembly
-      dispatch({ type: 'ADD_TO_SHELF', rifff, vol })
+      const { rifff, vol, mute } = assembly
+      dispatch({ type: 'ADD_TO_SHELF', rifff, vol, mute })
       setJustAddedToShelf(true)
       window.setTimeout(() => setJustAddedToShelf(false), 500)
     } finally {
@@ -13279,11 +13284,9 @@ export function DiscoverPanel({
     }
   }
 
-  // Reuses resolveDiscoverRifff() verbatim -- the same helper addToTimeline
-  // and addToShelf already share, which is what carries one non-obvious
-  // inherited behaviour worth keeping: a slot muted in the preview mix is
-  // placed at gain 0, not dropped, so a muted stem is saved as silence,
-  // still there, still un-muteable later.
+  // Reuses resolveDiscoverRifff() -- the same helper addToTimeline and
+  // addToShelf share. A slot muted in the preview mix is kept at gain 0, not
+  // dropped, so a muted stem is saved as silence, still there.
   /** Returns what the keep came to, for the phone's confirmation
    * (RemoteKeepOutcome). The Mac's own button ignores it. */
   async function keepGroup(): Promise<RemoteKeepOutcome> {
@@ -13295,12 +13298,16 @@ export function DiscoverPanel({
     if (blockedActions(nowMode, still).has('keep')) return 'refused'
     setKeeping(true)
     try {
-      const assembly = await resolveDiscoverRifff()
+      // Keep ignores solo, as it always has; a muted row is saved silent (gain 0),
+      // since the library has no Disable.
+      const assembly = await resolveDiscoverRifff(null)
       if (!assembly) return 'none'
-      const { rifff, vol } = assembly
+      const { rifff, vol, mute } = assembly
       const members = rifff.stems.map((stem) => ({
         path: stem.path,
-        gain: vol[stemKey(rifff.groupId, stem.slot)] ?? 1,
+        gain: mute[stemKey(rifff.groupId, stem.slot)]
+          ? 0
+          : (vol[stemKey(rifff.groupId, stem.slot)] ?? 1),
         name: stem.name,
         author: stem.author,
         barLength: stem.barLength,

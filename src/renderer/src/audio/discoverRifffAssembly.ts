@@ -15,6 +15,9 @@ import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
 export interface DiscoverRifffMember {
   stem: Omit<Stem, 'slot'>
   gain: number
+  /** Not heard in Discover when it was added (muted, or left out by a solo): the member arrives
+   * Disabled (`mute` below), at its own `gain`. */
+  disabled?: boolean
 }
 
 export interface DiscoverRifffAssembly {
@@ -24,6 +27,22 @@ export interface DiscoverRifffAssembly {
    * whatever AppState.vol the caller is building (PLACE_LOOP_ON_TIMELINE's
    * own vol param, or a throwaway preview AppState). */
   vol: Record<string, number>
+  /** stemKey -> true for every `disabled` member: the saved Disable layer (state.mute), for
+   * ADD_TO_SHELF / PLACE_LOOP_ON_TIMELINE's own `mute`. Empty when every member is heard. */
+  mute: Record<string, boolean>
+}
+
+/** Whether a Discover row arrives Disabled when the loop is added to the shelf or timeline.
+ * Elling's rule (the 2026-10-08 call, F6): what you hear is what you get. A soloed row is the
+ * only one heard, even if it was muted underneath; without a solo, the muted rows (out of
+ * `previewing`) are the ones not heard. Disable is the saved layer, so they stay silent in the
+ * arrangement after a save, rather than the temporary mixer Mute, which a save drops. */
+export function discoverRowDisabledOnAdd(
+  id: string,
+  previewing: ReadonlySet<string>,
+  soloed: string | null
+): boolean {
+  return soloed !== null ? id !== soloed : !previewing.has(id)
 }
 
 // The persisted ceiling on one rifff: 20. Riffs.StemCID_1..8 addresses the
@@ -132,9 +151,11 @@ export function assembleDiscoverRifff(
   // what you hear, full stop -- the earlier loudness-matching goal was
   // real but secondary to that.
   const vol: Record<string, number> = {}
-  capped.forEach(({ gain }, i) => {
+  const mute: Record<string, boolean> = {}
+  capped.forEach(({ gain, disabled }, i) => {
     vol[stemKey(groupId, i + 1)] = gain
+    if (disabled) mute[stemKey(groupId, i + 1)] = true
   })
 
-  return { rifff, vol }
+  return { rifff, vol, mute }
 }

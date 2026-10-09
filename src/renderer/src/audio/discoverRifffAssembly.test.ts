@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { assembleDiscoverRifff } from './discoverRifffAssembly'
+import {
+  assembleDiscoverRifff,
+  discoverRowDisabledOnAdd,
+  type DiscoverRifffMember
+} from './discoverRifffAssembly'
 import { stemKey } from '@shared/types'
 import type { Stem } from '@shared/types'
 
@@ -210,5 +214,53 @@ describe('assembleDiscoverRifff', () => {
     const b = assembleDiscoverRifff('discover preview', members, 120)
     expect(a!.rifff.groupId).not.toBe('')
     expect(a!.rifff.groupId).not.toBe(b!.rifff.groupId)
+  })
+})
+
+describe('Disabled members (what you hear is what you get)', () => {
+  const member = (name: string, gain: number, disabled?: boolean): DiscoverRifffMember => ({
+    stem: {
+      author: 'wren',
+      name,
+      type: 'drums',
+      path: `/tmp/${name}`,
+      durationSec: 2,
+      barLength: 4
+    },
+    gain,
+    ...(disabled === undefined ? {} : { disabled })
+  })
+
+  it('marks a disabled member in `mute` and keeps its real gain', () => {
+    const assembly = assembleDiscoverRifff(
+      'd',
+      [member('a', 0.9), member('b', 0.7, true), member('c', 0.5, false)],
+      120
+    )!
+    const key = (slot: number): string => stemKey(assembly.rifff.groupId, slot)
+    expect(assembly.mute).toEqual({ [key(2)]: true })
+    expect(assembly.vol[key(2)]).toBe(0.7)
+  })
+
+  it('has an empty `mute` when every member is heard', () => {
+    expect(assembleDiscoverRifff('d', [member('a', 1)], 120)!.mute).toEqual({})
+  })
+})
+
+describe('discoverRowDisabledOnAdd', () => {
+  const previewing = new Set(['a', 'b'])
+
+  it('without a solo, a row is Disabled when it is muted (out of the preview mix)', () => {
+    expect(discoverRowDisabledOnAdd('a', previewing, null)).toBe(false)
+    expect(discoverRowDisabledOnAdd('c', previewing, null)).toBe(true)
+  })
+
+  it('with a solo, every row but the soloed one is Disabled', () => {
+    expect(discoverRowDisabledOnAdd('a', previewing, 'b')).toBe(true)
+    expect(discoverRowDisabledOnAdd('b', previewing, 'b')).toBe(false)
+  })
+
+  it('a soloed row is heard, so it comes in even when it was muted underneath', () => {
+    expect(discoverRowDisabledOnAdd('c', previewing, 'c')).toBe(false)
   })
 })

@@ -646,6 +646,9 @@ export type Action =
        * intended. Every existing caller omits this field and keeps today's
        * sqrtGain-default behavior unchanged. */
       vol?: Record<string, number>
+      /** Stems that arrive Disabled (state.mute), keyed by stemKey: Discover's rows that weren't
+       * heard when it was added (discoverRowDisabledOnAdd). Merged in; omitted by every import. */
+      mute?: Record<string, boolean>
     }
   | { type: 'PLACE_ON_TIMELINE'; groupId: string; startBar: number }
   | { type: 'MOVE_TO_CHANNEL'; groupId: string; startBar: number; channelId: string }
@@ -665,6 +668,8 @@ export type Action =
        * volume-slider tests) that omits it keeps reading the universal
        * `state.vol[key] ?? 1` default unchanged. */
       vol?: Record<string, number>
+      /** Stems that arrive Disabled (state.mute), as ADD_TO_SHELF's own `mute`. */
+      mute?: Record<string, boolean>
     }
   | { type: 'SEQUENCE_RIFFFS'; groupIds: string[] }
   | { type: 'SELECT'; groupId: string }
@@ -1140,7 +1145,8 @@ export function reducer(state: AppState, action: Action): AppState {
       return {
         ...state,
         rifffs: { ...state.rifffs, [action.rifff.groupId]: action.rifff },
-        vol
+        vol,
+        ...(action.mute ? { mute: { ...state.mute, ...action.mute } } : {})
       }
     }
 
@@ -1661,7 +1667,8 @@ export function reducer(state: AppState, action: Action): AppState {
         channelOf,
         channelOrder,
         stretch,
-        vol: { ...state.vol, ...action.vol }
+        vol: { ...state.vol, ...action.vol },
+        ...(action.mute ? { mute: { ...state.mute, ...action.mute } } : {})
       }
     }
 

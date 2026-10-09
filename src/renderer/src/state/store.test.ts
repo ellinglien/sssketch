@@ -2709,6 +2709,93 @@ describe('reducer', () => {
       )
       expect(alreadyPresent.channelOrder.filter((id) => id === 'pre-existing').length).toBe(1)
     })
+
+    // What you hear is what you get: a row muted (or left out by a solo) in
+    // Discover arrives Disabled, the saved layer, so it stays silent in the
+    // arrangement after a save, at its own real level.
+    it('Disables the stems given in `mute`, keeping their levels', () => {
+      const discoverRifff = {
+        groupId: 'disc',
+        name: 'discover: drums+bass',
+        bpm: 120,
+        barLength: 4,
+        folderPath: '',
+        stems: [1, 2].map((slot) => ({
+          slot,
+          author: 'wren',
+          name: `${slot}.wav`,
+          path: `/tmp/${slot}.wav`,
+          type: 'drums' as const,
+          durationSec: 2,
+          barLength: 4
+        }))
+      }
+      const next = reducer(initialState, {
+        type: 'PLACE_LOOP_ON_TIMELINE',
+        startBar: 0,
+        stems: [discoverRifff],
+        vol: { 'disc:1': 0.8, 'disc:2': 0.6 },
+        mute: { 'disc:2': true }
+      })
+      expect(next.mute['disc:2']).toBe(true)
+      expect(next.mute['disc:1']).toBeFalsy()
+      expect(next.vol['disc:2']).toBe(0.6)
+      expect(next.mixerMute['disc:2']).toBeUndefined()
+    })
+  })
+
+  describe('ADD_TO_SHELF from Discover', () => {
+    it('Disables the stems given in `mute`, keeping their levels', () => {
+      const next = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: {
+          groupId: 'disc',
+          name: 'discover: drums',
+          bpm: 120,
+          barLength: 4,
+          folderPath: '',
+          stems: [1, 2].map((slot) => ({
+            slot,
+            author: 'wren',
+            name: `${slot}.wav`,
+            path: `/tmp/${slot}.wav`,
+            type: 'drums' as const,
+            durationSec: 2,
+            barLength: 4
+          }))
+        },
+        vol: { 'disc:1': 0.8, 'disc:2': 0.6 },
+        mute: { 'disc:2': true }
+      })
+      expect(next.mute['disc:2']).toBe(true)
+      expect(next.mute['disc:1']).toBeFalsy()
+      expect(next.vol['disc:2']).toBe(0.6)
+    })
+
+    it("a merge without `mute` leaves the riff's Disables alone", () => {
+      const rifff = {
+        groupId: 'r',
+        name: 'r',
+        bpm: 120,
+        barLength: 4,
+        folderPath: '',
+        stems: [
+          {
+            slot: 1,
+            author: 'wren',
+            name: '1.wav',
+            path: '/tmp/1.wav',
+            type: 'drums' as const,
+            durationSec: 2,
+            barLength: 4
+          }
+        ]
+      }
+      const disabled = { ...reducer(initialState, { type: 'ADD_TO_SHELF', rifff }) }
+      disabled.mute = { 'r:1': true }
+      const next = reducer(disabled, { type: 'ADD_TO_SHELF', rifff })
+      expect(next.mute['r:1']).toBe(true)
+    })
   })
 })
 
