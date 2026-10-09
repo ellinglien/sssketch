@@ -16,9 +16,9 @@ import { sessionKeptNames } from './reonedCopiesSession'
 import { bakeAssetsDir, libraryRootPath } from './projectLibrary'
 import { AUTOSAVE_FILENAME, AUTOSAVE_PREVIOUS_FILENAME } from './projectFile'
 
-async function libraryAvailable(): Promise<boolean> {
+async function libraryAvailable(root: string): Promise<boolean> {
   try {
-    await access(libraryRootPath())
+    await access(root)
     return true
   } catch {
     return false
@@ -55,14 +55,14 @@ function validBatches(value: unknown): ReonedRepairBatch[] {
 /** The used set from scratch: library projects and backups, the autosave and its aside
  * snapshot, remembered outside projects (read fresh), what the renderer holds, and this
  * session's copies and project names (read again inside the lock by cleanBakes). */
-async function scanUsed(inMemoryNames: string[]): Promise<UsedScan> {
+async function scanUsed(libraryRoot: string, inMemoryNames: string[]): Promise<UsedScan> {
   const userData = app.getPath('userData')
   // A store that can't be trusted may have been the only record of a project whose drive is
   // away (reonedCopiesStore.ts): stop, as for an unreadable project.
   const known = knownProjects()
   if (!known.ok) return { ok: false, path: known.path }
   return collectUsedNames({
-    libraryRoot: libraryRootPath(),
+    libraryRoot,
     userDataFiles: [join(userData, AUTOSAVE_FILENAME), join(userData, AUTOSAVE_PREVIOUS_FILENAME)],
     knownProjects: known.projects,
     inMemoryNames,
@@ -77,7 +77,7 @@ export function registerReonedCopiesIpc(ipcMain: IpcMain): void {
       rebuildReonedCopies(validBatches(batches))
   )
 
-  ipcMain.handle('reoned-copies-library-available', () => libraryAvailable())
+  ipcMain.handle('reoned-copies-library-available', () => libraryAvailable(libraryRootPath()))
 
   ipcMain.handle(
     'reoned-copies-survey',
@@ -85,36 +85,44 @@ export function registerReonedCopiesIpc(ipcMain: IpcMain): void {
       _event,
       request: { inMemoryNames?: unknown; respectNotNow?: unknown } | undefined
     ): Promise<ReonedSurvey> => {
-      if (!(await libraryAvailable())) return { status: 'library-missing' }
+      const root = libraryRootPath()
+      if (!(await libraryAvailable(root))) return { status: 'library-missing' }
       const snoozedUntil = notNowUntil()
       if (request?.respectNotNow === true && snoozedUntil !== null && snoozedUntil > Date.now()) {
         return { status: 'snoozed' }
       }
       try {
-        const scan = await scanUsed(stringArray(request?.inMemoryNames))
+        const scan = await scanUsed(root, stringArray(request?.inMemoryNames))
         if (!scan.ok) return { status: 'unreadable', path: scan.path }
-        const { unused, unusedBytes } = await surveyBakes(bakeAssetsDir(), scan.used, Date.now())
+        const { unused, unusedBytes } = await surveyBakes(
+          bakeAssetsDir(root),
+          scan.used,
+          Date.now()
+        )
         return { status: 'ok', unusedBytes, unusedCount: unused.length, notNowUntil: snoozedUntil }
       } catch (err) {
         console.error('reoned-copies-survey failed:', err)
-        return { status: 'unreadable', path: bakeAssetsDir() }
+        return { status: 'unreadable', path: bakeAssetsDir(root) }
       }
     }
   )
 
   // Recomputes the used set at click time: a survey's list is never reused, since projects,
-  // memory and this session's copies may all have changed since it ran.
+  // memory and this session's copies may all have changed since it ran. The library root is
+  // read once: the scan and the delete are always about the same library, even if it is
+  // repointed meanwhile.
   ipcMain.handle(
     'reoned-copies-clean',
     async (_event, inMemoryNames: unknown): Promise<ReonedCleanResult> => {
-      if (!(await libraryAvailable())) return { status: 'library-missing' }
+      const root = libraryRootPath()
+      if (!(await libraryAvailable(root))) return { status: 'library-missing' }
       try {
-        const scan = await scanUsed(stringArray(inMemoryNames))
+        const scan = await scanUsed(root, stringArray(inMemoryNames))
         if (!scan.ok) return { status: 'unreadable', path: scan.path }
-        return { status: 'ok', ...(await cleanBakes(bakeAssetsDir(), scan.used, Date.now())) }
+        return { status: 'ok', ...(await cleanBakes(bakeAssetsDir(root), scan.used, Date.now())) }
       } catch (err) {
         console.error('reoned-copies-clean failed:', err)
-        return { status: 'unreadable', path: bakeAssetsDir() }
+        return { status: 'unreadable', path: bakeAssetsDir(root) }
       }
     }
   )

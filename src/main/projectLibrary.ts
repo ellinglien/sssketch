@@ -109,8 +109,8 @@ export function samplesCacheDir(): string {
  * dot-prefix this is not an evictable cache: saved projects may reference
  * these immutable files indefinitely. Keeping them under the relocatable
  * project-library root avoids writing beside read-only LORE/archive audio. */
-export function bakeAssetsDir(): string {
-  return join(libraryRootPath(), '.bakes')
+export function bakeAssetsDir(root: string = libraryRootPath()): string {
+  return join(root, '.bakes')
 }
 
 // A hard, reliable split rather than a probe/fallback -- matches
