@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 
 // bakeOffset's native path resolves the engine binary through app.getAppPath() (see
 // bakeOffset.test.ts); these tests only bake WAVs, so it is never reached.
@@ -171,6 +171,30 @@ describe('rebuildReonedCopies', () => {
         libraryRoot: dir
       })
       expect(outcomes[0]).toEqual([{ path: copy, status: 'missing', reason: 'render-failed' }])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('the default library root is made when it is not there, as the bake handler does', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-rebuild-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const root = join(dir, 'Music', 'sssketch', 'projects')
+      const [copy] = await bakeOffset(
+        [{ path: source, rotationSec: 1 }],
+        join(dir, 'made', '.bakes'),
+        {
+          mayCreateRoot: true
+        }
+      )
+      const missing = join(root, '.bakes', basename(copy.bakedPath))
+      const outcomes = await rebuildReonedCopies(
+        planReonedRepair({ g: riffOn(missing, source, 1) }),
+        { outputDir: join(root, '.bakes'), libraryRoot: root, mayCreateRoot: true }
+      )
+      expect(outcomes[0][0]).toMatchObject({ status: 'rebuilt', bakedPath: missing })
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

@@ -15,7 +15,7 @@ import {
 import { rotationSecForBars } from '@shared/reonedRotation'
 import { bakeOffsetDetailed } from './bakeOffset'
 import { resolveRecipe } from './reonedRecipe'
-import { bakeAssetsDir, libraryRootPath } from './projectLibrary'
+import { bakeAssetsDir, isDefaultLibraryRoot, libraryRootPath } from './projectLibrary'
 
 async function exists(path: string): Promise<boolean> {
   try {
@@ -29,6 +29,9 @@ async function exists(path: string): Promise<boolean> {
 export interface RebuildDirs {
   outputDir: string
   libraryRoot: string
+  /** The default root may be made when it isn't there, as the bake handler allows (a fresh
+   * install that hasn't saved yet). A custom root that is missing is an unplugged drive. */
+  mayCreateRoot?: boolean
 }
 
 type StemMetadataDurationLookup = (sourcePath: string) => number | null
@@ -93,8 +96,12 @@ export async function rebuildReonedCopies(
     const rebuilt = new Map<string, { bakedPath: string; durationSec: number }>()
     if (needed.length > 0) {
       // Resolved only when something is missing: the defaults read app.getPath.
-      dirs ??= { outputDir: bakeAssetsDir(), libraryRoot: libraryRootPath() }
-      if (await exists(dirs.libraryRoot)) {
+      dirs ??= {
+        outputDir: bakeAssetsDir(),
+        libraryRoot: libraryRootPath(),
+        mayCreateRoot: isDefaultLibraryRoot()
+      }
+      if (dirs.mayCreateRoot || (await exists(dirs.libraryRoot))) {
         const rotations = await Promise.all(needed.map(chooseRotation))
         if (rotations.every((r): r is number => r !== null)) {
           const outcome = await bakeOffsetDetailed(
@@ -104,7 +111,8 @@ export async function rebuildReonedCopies(
               recipe: { sourcePath: s.sourcePath, rotationSec: rotations[i] },
               recipeOnly: true
             })),
-            dirs.outputDir
+            dirs.outputDir,
+            { mayCreateRoot: dirs.mayCreateRoot }
           )
           if (outcome.ok && outcome.results.length === needed.length) {
             for (const r of outcome.results) rebuilt.set(r.path, r)
