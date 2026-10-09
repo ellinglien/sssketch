@@ -17,13 +17,15 @@ import { startPointerDrag } from './dragUtils'
 import { mouseBarFromDragEvent } from './dragGrabOffset'
 import { markManualSeek } from '../state/manualSeek'
 import { muteRegionsClipPath } from './muteClipPath'
+import { mixerKeyIsSilenced } from '../state/mixerMute'
 
 export const ROW_HEIGHT = 44
 
 export function StemWaveformRow({
   groupId,
   slot,
-  ppb
+  ppb,
+  belowChannelButtons = false
 }: {
   groupId: string
   slot: number
@@ -32,6 +34,7 @@ export function StemWaveformRow({
    * than read directly so every stem row in the arranger always agrees
    * with the Ruler/Playhead/clip blocks around it. */
   ppb: number
+  belowChannelButtons?: boolean
 }): React.JSX.Element {
   const dispatch = useDispatch()
   const playing = usePlaying()
@@ -40,7 +43,9 @@ export function StemWaveformRow({
   // useAppState() call -- see
   // docs/superpowers/specs/2026-08-03-fine-grained-state-selectors-design.md.
   const rifff = useAppSelector((s) => s.rifffs[groupId])
-  const muted = useAppSelector((s) => !!s.mute[key])
+  const disabled = useAppSelector((s) => !!s.mute[key])
+  const mixerSilenced = useAppSelector((s) => mixerKeyIsSilenced(s.mixerMute, s.mixerSolo, key))
+  const muted = disabled || mixerSilenced
   const volume = useAppSelector((s) => s.vol[key] ?? 1)
   const playedBarsOverride = useAppSelector((s) => s.playedBars[groupId])
   const offsetSteps = useAppSelector((s) => s.off[groupId] ?? 0)
@@ -64,12 +69,13 @@ export function StemWaveformRow({
   const dragPlayedBars = useAppSelector((s) => s.dragPlayedBars[groupId] ?? null)
   const dragLeftCropBars = useAppSelector((s) => s.dragLeftCropBars[groupId] ?? null)
 
-  // Right-click anywhere on the waveform toggles mute — moved off plain
+  // Right-click anywhere on the waveform toggles durable enable/disable — moved off plain
   // click (which now does nothing at this level) since an accidental click
   // meant for something else — selecting, starting a drag that didn't quite
   // register — used to silently mute a stem. Right-click has no other use
-  // here, so it can dispatch immediately with no debounce/disambiguation
-  // needed against the separate onDoubleClick (reset volume) handler below.
+  // here, so it can dispatch immediately with no debounce/disambiguation.
+  // This writes state.mute (persisted arrangement data), not mixerMute, so
+  // temporary channel mute/solo cannot erase it.
   // Ctrl+right-click solos this stem's whole rifff instead (see
   // SOLO_GROUP).
   function handleWaveformContextMenu(e: React.MouseEvent): void {
@@ -529,7 +535,7 @@ export function StemWaveformRow({
           )}
         </div>
 
-        {/* This stem's own gain, pinned to the right edge of the row beside
+        {/* This stem's own gain, pinned into the narrow mixer column beneath
             the channel's m/s letters -- the LEVEL the clip's drawn volume
             curve (its shape) multiplies on top of. Outside the clip box on
             purpose: it belongs to the stem wherever that clip happens to
@@ -539,6 +545,7 @@ export function StemWaveformRow({
           target={{ kind: 'stem', stemKey: key }}
           defaultGain={sqrtGain(rifff.stems.length)}
           ariaLabel={`gain for ${stem.name}`}
+          belowChannelButtons={belowChannelButtons}
         />
       </div>
     </div>

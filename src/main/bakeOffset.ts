@@ -1,4 +1,6 @@
-import { readFileSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'fs'
+import { randomUUID } from 'node:crypto'
+import { dirname, join } from 'node:path'
 import { blendRotatedWavSeam, rotateWavFrames } from '@shared/rotateWav'
 import { LOOP_SEW_WINDOW_FRAMES } from '@shared/loopSewPCM16'
 import { findWavChunks } from '@shared/wavChunks'
@@ -31,23 +33,26 @@ export interface BakeResult {
   durationSec: number
 }
 
-// Re-baking (picking a different beat after already baking once) rotates whatever
-// is currently at `path`, which may itself already be a `.baked.wav` — write back
-// to that same file rather than growing the filename further, so pristine.wav (or,
-// for a LORE-sourced stem, the original warehouse file) is always left untouched
-// as an implicit original/backup no matter how many times baking is repeated.
-//
-// LORE-cached stems have no file extension at all (see loreWarehouse.ts's
-// resolveStemPath — the path is just the raw StemCID) — appending rather than
-// replacing lands the baked copy right alongside the original in the SAME
-// warehouse directory, same sibling convention as a regular WAV import, rather
-// than needing a separate cache location elsewhere. The original file is only
-// ever read, never overwritten — LORE's own sync/indexing keys off the exact
-// StemCID filename, so this sibling is invisible to it either way.
-function bakedPathFor(path: string): string {
-  if (path.toLowerCase().endsWith('.baked.wav')) return path
-  if (path.toLowerCase().endsWith('.wav')) return path.replace(/\.wav$/i, '.baked.wav')
-  return `${path}.baked.wav`
+interface BakeDestination {
+  temporaryPath: string
+  finalPath: string
+}
+
+/** One immutable destination per job. A batch publishes none of these
+ * until every stem has baked successfully; UUIDs keep a re-one from ever
+ * mutating audio referenced by an older shelf riff or saved project. */
+function allocateDestination(outputDir: string): BakeDestination {
+  const id = randomUUID()
+  return {
+    temporaryPath: join(outputDir, `.${id}.baking.wav`),
+    // Keep the explicit suffix as durable provenance: a later re-bake must
+    // not apply the first-bake seam blend again.
+    finalPath: join(outputDir, `${id}.baked.wav`)
+  }
+}
+
+function isPreviouslyBaked(path: string): boolean {
+  return path.toLowerCase().endsWith('.baked.wav')
 }
 
 // A hard, reliable split rather than a probe/fallback: a regular drag-and-drop
@@ -81,7 +86,11 @@ function isWavPath(path: string): boolean {
 // original: bakedPathFor is already idempotent, so a path it maps to itself IS
 // an already-baked file. (A user who imports their own file literally named
 // "anything.baked.wav" gets a first bake with no blend. That is the whole cost.)
-function bakeWavJob(job: BakeJob): BakeResult | null {
+interface PendingBakeResult extends BakeResult {
+  temporaryPath: string
+}
+
+function bakeWavJob(job: BakeJob, destination: BakeDestination): PendingBakeResult | null {
   try {
     const bytes = new Uint8Array(readFileSync(job.path))
     const { sampleRate } = findWavChunks(bytes)
@@ -90,13 +99,17 @@ function bakeWavJob(job: BakeJob): BakeResult | null {
       return null
     }
     const rotationFrames = Math.round(job.rotationSec * sampleRate)
-    const bakedPath = bakedPathFor(job.path)
-    const isRebake = bakedPath === job.path
+    const isRebake = isPreviouslyBaked(job.path)
     const rotated = rotateWavFrames(bytes, rotationFrames, {
       seamBlendFrames: isRebake ? 0 : LOOP_SEW_WINDOW_FRAMES
     })
-    writeFileSync(bakedPath, rotated)
-    return { path: job.path, bakedPath, durationSec: readWavDurationSeconds(rotated) }
+    writeFileSync(destination.temporaryPath, rotated)
+    return {
+      path: job.path,
+      bakedPath: destination.finalPath,
+      temporaryPath: destination.temporaryPath,
+      durationSec: readWavDurationSeconds(rotated)
+    }
   } catch (err) {
     console.error(`bakeOffset: failed to bake "${job.path}":`, err)
     return null
@@ -134,15 +147,17 @@ function blendNativeBakeSeam(outputPath: string, rotationSec: number): void {
  * batch (typically one rifff's worth of stems, up to 8), not one per stem —
  * mirrors nativeExport.ts's own spawn-connect-act-teardown shape for a
  * one-off native operation. */
-async function bakeNativeJobs(jobs: BakeJob[]): Promise<BakeResult[]> {
+async function bakeNativeJobs(
+  jobs: { job: BakeJob; destination: BakeDestination }[]
+): Promise<PendingBakeResult[]> {
   if (jobs.length === 0) return []
-  const results: BakeResult[] = []
+  const results: PendingBakeResult[] = []
   const engineHandle = await spawnEngine()
   const client = new EngineClient()
   try {
     await client.connect(engineHandle.port)
-    for (const job of jobs) {
-      const outputPath = bakedPathFor(job.path)
+    for (const { job, destination } of jobs) {
+      const outputPath = destination.temporaryPath
       try {
         const result = (await client.sendAndAwaitType(
           'bake-stem',
@@ -153,8 +168,13 @@ async function bakeNativeJobs(jobs: BakeJob[]): Promise<BakeResult[]> {
           console.error(`bakeOffset: native bake failed for "${job.path}": ${result.error}`)
           continue
         }
-        blendNativeBakeSeam(outputPath, job.rotationSec)
-        results.push({ path: job.path, bakedPath: outputPath, durationSec: result.durationSec })
+        if (!isPreviouslyBaked(job.path)) blendNativeBakeSeam(outputPath, job.rotationSec)
+        results.push({
+          path: job.path,
+          bakedPath: destination.finalPath,
+          temporaryPath: destination.temporaryPath,
+          durationSec: result.durationSec
+        })
       } catch (err) {
         console.error(`bakeOffset: native bake failed for "${job.path}":`, err)
       }
@@ -166,11 +186,45 @@ async function bakeNativeJobs(jobs: BakeJob[]): Promise<BakeResult[]> {
   return results
 }
 
-export async function bakeOffset(jobs: BakeJob[]): Promise<BakeResult[]> {
-  const wavResults = jobs
-    .filter((j) => isWavPath(j.path))
-    .map(bakeWavJob)
-    .filter((r): r is BakeResult => r !== null)
-  const nativeResults = await bakeNativeJobs(jobs.filter((j) => !isWavPath(j.path)))
-  return [...wavResults, ...nativeResults]
+export async function bakeOffset(jobs: BakeJob[], outputDir?: string): Promise<BakeResult[]> {
+  if (jobs.length === 0) return []
+  const durableDir = outputDir ?? join(dirname(jobs[0].path), '.sssketch-bakes')
+  mkdirSync(durableDir, { recursive: true })
+  const planned = jobs.map((job) => ({ job, destination: allocateDestination(durableDir) }))
+  const pending: PendingBakeResult[] = []
+  try {
+    for (const entry of planned.filter(({ job }) => isWavPath(job.path))) {
+      const result = bakeWavJob(entry.job, entry.destination)
+      if (result) pending.push(result)
+    }
+    pending.push(...(await bakeNativeJobs(planned.filter(({ job }) => !isWavPath(job.path)))))
+
+    // A group correction is indivisible. Publishing a subset would leave
+    // the successful stems physically rotated while the failed stems still
+    // depend on runtime state, the exact mixed representation that caused
+    // stems within one riff to drift out of phase.
+    if (pending.length !== jobs.length) return []
+
+    for (const result of pending) renameSync(result.temporaryPath, result.bakedPath)
+    return pending.map(({ path, bakedPath, durationSec }) => ({ path, bakedPath, durationSec }))
+  } catch (err) {
+    console.error('bakeOffset: atomic bake failed:', err)
+    return []
+  } finally {
+    // On success the temporary names were renamed and no longer exist. On
+    // any failure, remove both unpublished temps and any finals published
+    // before a later rename failed; no renderer state can reference them
+    // because this call returns no partial result.
+    if (pending.length !== jobs.length || pending.some((r) => existsSync(r.temporaryPath))) {
+      for (const { destination } of planned) {
+        for (const path of [destination.temporaryPath, destination.finalPath]) {
+          try {
+            if (existsSync(path)) unlinkSync(path)
+          } catch (err) {
+            console.error(`bakeOffset: could not remove uncommitted "${path}":`, err)
+          }
+        }
+      }
+    }
+  }
 }

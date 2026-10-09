@@ -69,6 +69,19 @@ describe('buildSeedSlotsFromStems', () => {
     expect(slots[0].gain).toBe(1)
   })
 
+  it('seeds from the exact baked audio while preserving its provenance', () => {
+    const [slot] = buildSeedSlotsFromStems([
+      fixtureStem({
+        path: '/derived/immutable.baked.wav',
+        phaseSourcePath: '/warehouse/original',
+        phaseBars: 0.0625
+      })
+    ])
+    expect(slot.seedStem?.path).toBe('/derived/immutable.baked.wav')
+    expect(slot.seedStem?.phaseSourcePath).toBe('/warehouse/original')
+    expect(slot.seedStem?.phaseBars).toBe(0.0625)
+  })
+
   it('gives every slot a fresh, distinct id', () => {
     const slots = buildSeedSlotsFromStems([fixtureStem(), fixtureStem()])
     expect(slots[0].id).not.toBe(slots[1].id)

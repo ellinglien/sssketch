@@ -25,6 +25,7 @@ describe('project serialization', () => {
     state = reducer(state, { type: 'NUDGE_OFFSET', key: 'r1', delta: 2 })
 
     const json = serializeProject(state)
+    expect(json).not.toContain('metronomeVolume')
     const { state: restored } = deserializeProject(JSON.parse(json))
 
     expect(restored.bpm).toBe(96)
@@ -33,6 +34,13 @@ describe('project serialization', () => {
     // playing/pos aren't part of AppState at all anymore (they're
     // StoreContext.tsx's own transport state, never touched by serialization)
     // — nothing to assert here now the way there used to be.
+  })
+
+  it('round-trips explicit re-one lineage for an independent Cross child', () => {
+    const crossRifff = { ...rifff, groupId: 'cross-1', phaseLinkId: 'cross-1' }
+    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: crossRifff })
+    const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
+    expect(restored.rifffs['cross-1'].phaseLinkId).toBe('cross-1')
   })
 
   it('does not persist which view was showing — always reopens in the default one', () => {
@@ -71,6 +79,23 @@ describe('project serialization', () => {
 
     const { state: restored } = deserializeProject(JSON.parse(json))
     expect(restored.inspectorCollapsed).toBe(false)
+  })
+
+  it('persists durable stem disable but drops the temporary mixer layer', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
+    state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+    state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'r1', muted: true })
+    state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
+
+    const parsed = JSON.parse(serializeProject(state))
+    expect(parsed.mute['r1:1']).toBe(true)
+    expect(parsed.mixerMute).toBeUndefined()
+    expect(parsed.mixerSolo).toBeUndefined()
+
+    const { state: restored } = deserializeProject(parsed)
+    expect(restored.mute['r1:1']).toBe(true)
+    expect(restored.mixerMute).toEqual({})
+    expect(restored.mixerSolo).toBeNull()
   })
 
   it('does not persist gatedRecordingTargetGroupId -- always reopens with nothing targeted', () => {

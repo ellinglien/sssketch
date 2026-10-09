@@ -171,6 +171,53 @@ textarea:focus-visible,
   outline-offset: -1px;
 }
 
+/* Riff selection keeps the original quiet square treatment with sharp
+ * corners and no edge feather. Shelf playback gets a separate restrained
+ * playhead-colored feather so selected and sounding remain distinct. */
+.ra-riff-tile {
+  position: relative;
+  overflow: visible;
+  border-radius: 0;
+  background: transparent;
+  transition:
+    opacity 80ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+/* The tiles use border-box sizing while their glyphs deliberately retain
+ * their original dimensions. Center the glyph geometrically instead of
+ * allowing the border/padding content origin to shift it one pixel down and
+ * right. This applies only to the circular glyph directly inside a riff tile;
+ * playback and recording overlays keep their existing positioning. */
+.ra-sketch-riff-tile > .ra-polar-glyph,
+.ra-shelf-riff-tile > .ra-polar-glyph {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  display: block;
+  transform: translate(-50%, -50%);
+}
+
+.ra-riff-tile[data-selected='true'] {
+  background-color: var(--ra-bg-riff-selected);
+  background-image: url('../assets/riff-selection-crosshatch.svg');
+  background-repeat: repeat;
+  background-size: 8px 8px;
+  image-rendering: pixelated;
+  box-shadow: none;
+}
+
+.ra-shelf-riff-tile[data-previewing='true'] {
+  box-shadow: 0 0 3px color-mix(in srgb, var(--ra-playhead) 18%, transparent);
+}
+
+/* Preserve keyboard focus with the same square geometry. */
+.ra-riff-tile:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--ra-text-2) 42%, transparent);
+  outline-offset: 2px;
+}
+
 /* Immediate custom tooltip for icon-only buttons -- direct request,
  * 2026-09-17, three same-day rounds: "can we make the tooltips much
  * faster? for the new icons," then "can the tooltips be even a bit

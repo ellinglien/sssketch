@@ -401,6 +401,21 @@ namespace sssketch
 
         if (timerID == kLinkPollTimerId)
         {
+            // CoreAudio exposes a native missed-callback counter through JUCE. Log only the
+            // initial reading and changes, so a report of choppy playback immediately tells us
+            // whether the device actually missed deadlines without adding any work to the
+            // real-time callback or spamming a healthy session's log.
+            const int xRuns = transport.currentXRunCount();
+            if (xRuns != lastLoggedXRunCount)
+            {
+                juce::Logger::writeToLog(
+                    "Transport: audio health xruns=" + juce::String(xRuns)
+                    + ", callback-load="
+                    + juce::String(transport.currentCpuUsage() * 100.0, 1) + "%"
+                    + ", callback-block=" + juce::String(transport.currentCallbackBlockSize()));
+                lastLoggedXRunCount = xRuns;
+            }
+
             // Unsolicited push, same "engine spontaneously tells the
             // renderer something changed" pattern as position-update/
             // capture-level-update/gated-recording-update below -- relayed
@@ -1239,7 +1254,11 @@ namespace sssketch
         else if (type == "set-metronome")
         {
             const bool enabled = payload.isObject() && (bool) payload.getProperty("enabled", false);
+            const float volume = payload.isObject()
+                ? (float) payload.getProperty("volume", 1.5)
+                : 1.5f;
             engine.setMetronomeEnabled(enabled);
+            engine.setMetronomeVolume(volume);
         }
         else if (type == "load-master-plugin")
         {

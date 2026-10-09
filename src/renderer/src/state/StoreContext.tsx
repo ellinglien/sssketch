@@ -43,6 +43,7 @@ import {
   setPluginsHeldStatus
 } from './pendingPluginStates'
 import { markPluginsTouched } from './pluginsTouched'
+import { stateWithMixerMute } from './mixerMute'
 import { stopActivePreview } from '../audio/previewLoop'
 
 /** A slot's status text while its plugin failed to load: the slot keeps the plugin and its saved
@@ -545,8 +546,14 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     ): Promise<void> =>
       flushQueueRef.current.run(async () => {
         if (shouldAbort?.()) return
+        const requestedState = { ...stateRef.current, ...overrides }
+        // Explicit overrides are audition snapshots (Discover/Tidy Up) and
+        // intentionally own their complete mute picture. A normal restore or
+        // automatic sync receives the live mixer layer.
+        const engineState =
+          overrides === undefined ? stateWithMixerMute(requestedState) : requestedState
         const project = await buildEngineProject(
-          { ...stateRef.current, ...overrides },
+          engineState,
           resolveStretchedForPlayback,
           pluginCatalog,
           undefined,
@@ -654,7 +661,7 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
             // The timeline's planned throws (native radio sound plan, Task 12): the same plan
             // every export builds from this project, so the pass and the bounce throw alike.
             const project = await buildEngineProject(
-              stateRef.current,
+              stateWithMixerMute(stateRef.current),
               resolveStretchedForPlayback,
               pluginCatalog,
               undefined,
@@ -692,6 +699,8 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
     state.rifffs,
     state.vol,
     state.mute,
+    state.mixerMute,
+    state.mixerSolo,
     // Missing here meant a resize-handle drag (SET_PLAYED_BARS) never
     // reached the native engine during live playback -- the reducer state
     // updated fine (so the row visibly resized and export/re-open picked it
@@ -834,8 +843,8 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
   }, [playing])
 
   useEffect(() => {
-    void window.rifffApi.engineSetMetronome(state.metronomeEnabled)
-  }, [state.metronomeEnabled])
+    void window.rifffApi.engineSetMetronome(state.metronomeEnabled, state.metronomeVolume)
+  }, [state.metronomeEnabled, state.metronomeVolume])
 
   // Drives Transport's playback wrap directly from loopRegion, live, on
   // every change -- independent of whether any channel is armed (see
@@ -1220,7 +1229,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       // it loads a throwaway one-stem project, so the real timeline's own
       // loop length is the wrong reference entirely.
       const owner = engineOwnershipRef.current.current
-      if (owner === 'discover-preview' || owner === 'tidy-up-library-preview') {
+      if (
+        owner === 'discover-preview' ||
+        owner === 'cross-preview' ||
+        owner === 'tidy-up-library-preview'
+      ) {
         dispatch({ type: 'SET_POS', pos })
         return
       }

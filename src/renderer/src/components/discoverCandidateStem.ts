@@ -11,6 +11,8 @@ export interface ResolvedCandidateStem {
   path: string
   durationSec: number
   barLength: number
+  phaseSourcePath?: string
+  phaseBars?: number
   /** The owning riff's own creation time (RiffLibraryResolvedRiff.
    * creationTime, Unix seconds) -- see @shared/types's Stem.creationTime
    * doc comment. Undefined only if the resolved riff itself predates this

@@ -15,6 +15,7 @@ import { RowGainDial } from './RowGainDial'
 import { Waveform } from './Waveform'
 import { ROW_HEIGHT } from './StemWaveformRow'
 import { muteRegionsClipPath } from './muteClipPath'
+import { mixerKeyIsSilenced } from '../state/mixerMute'
 import { startPointerDrag } from './dragUtils'
 import { markManualSeek } from '../state/manualSeek'
 import {
@@ -115,6 +116,8 @@ export function CollapsedRifffRow({
   const firstStemKey = rifff.stems[0] ? stemKey(groupId, rifff.stems[0].slot) : null
   const bpm = useAppSelector((s) => s.bpm)
   const mute = useAppSelector((s) => s.mute)
+  const mixerMute = useAppSelector((s) => s.mixerMute)
+  const mixerSolo = useAppSelector((s) => s.mixerSolo)
   const automationLanes = useAppSelector((s) => s.automationLanes)
   const busOf = useAppSelector((s) => s.busOf)
   const muteRegionsByStem = useAppSelector((s) => s.muteRegions)
@@ -153,6 +156,10 @@ export function CollapsedRifffRow({
   // already muted (clicking unmutes everything) — same filled-means-active
   // convention as every other mute dot in this app.
   const allMuted = rifff.stems.every((stem) => mute[stemKey(groupId, stem.slot)])
+  const effectivelyMuted = (slot: number): boolean => {
+    const key = stemKey(groupId, slot)
+    return !!mute[key] || mixerKeyIsSilenced(mixerMute, mixerSolo, key)
+  }
 
   // Shared, store-backed live preview, not local useState -- this row is
   // the one place a live volume/fade/length/crop preview needs to be
@@ -176,7 +183,8 @@ export function CollapsedRifffRow({
     isStretch: boolean
   } | null>(null)
 
-  // Right-click anywhere on the block toggles the whole group's mute —
+  // Right-click anywhere on the block toggles the whole group's durable
+  // enable/disable state —
   // moved off plain click, same as StemWaveformRow's identical change, since
   // an accidental click meant for something else used to silently mute the
   // whole group. Ctrl+right-click solos this rifff instead (see
@@ -559,7 +567,7 @@ export function CollapsedRifffRow({
           data-rifff-clip
           data-tour-id="tour-mute"
           onContextMenu={handleBlockContextMenu}
-          title="mute or solo"
+          title="disable or solo"
           style={{
             position: 'absolute',
             top: 0,
@@ -603,7 +611,7 @@ export function CollapsedRifffRow({
             }}
           >
             {isOneShot && oneShotStem
-              ? !mute[stemKey(groupId, oneShotStem.slot)] && (
+              ? !effectivelyMuted(oneShotStem.slot) && (
                   <div
                     style={{
                       position: 'absolute',
@@ -624,7 +632,7 @@ export function CollapsedRifffRow({
                   </div>
                 )
               : rifff.stems
-                  .filter((stem) => !mute[stemKey(groupId, stem.slot)])
+                  .filter((stem) => !effectivelyMuted(stem.slot))
                   .map((stem) => (
                     <CollapsedTiles
                       key={stem.slot}
@@ -798,8 +806,8 @@ export function CollapsedRifffRow({
           )}
         </div>
 
-        {/* The whole rifff's gain, pinned to the right edge of the row
-            beside the channel's m/s letters. One dial for the group, same
+        {/* The whole rifff's gain, pinned below the channel's m/s letters in
+            the narrow mixer column. One dial for the group, same
             reason there's one mute button and one lane here: collapsing
             already hides per-stem detail. It writes SET_GROUP_VOLUME, so
             expanding afterwards shows per-stem dials that agree with it and
@@ -809,6 +817,7 @@ export function CollapsedRifffRow({
             target={{ kind: 'group', groupId, representativeStemKey: firstStemKey }}
             defaultGain={sqrtGain(rifff.stems.length)}
             ariaLabel={`gain for ${rifff.name}`}
+            belowChannelButtons
           />
         )}
       </div>

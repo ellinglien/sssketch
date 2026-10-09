@@ -402,6 +402,7 @@ describe('reducer', () => {
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       results: [
         { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 },
         { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.2 }
@@ -410,18 +411,54 @@ describe('reducer', () => {
     expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.baked.wav')
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.baked.wav')
     expect(state.off.r1).toBe(0)
-    expect(state.off['r1:1']).toBe(0)
-    expect(state.off['r1:6']).toBe(0)
+    expect(state.off['r1:1']).toBeUndefined()
+    expect(state.off['r1:6']).toBeUndefined()
   })
 
-  it('applying a bake leaves a stem untouched if its path is missing from the results', () => {
+  it('stores immutable phase provenance with a completed bake', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
+      results: [
+        {
+          path: '/x/1.wav',
+          bakedPath: '/derived/one.baked.wav',
+          durationSec: 12.8,
+          phaseSourcePath: '/x/1.wav',
+          phaseBars: 0.25
+        },
+        {
+          path: '/x/6.wav',
+          bakedPath: '/derived/six.baked.wav',
+          durationSec: 3.2,
+          phaseSourcePath: '/x/6.wav',
+          phaseBars: 0.25
+        }
+      ]
+    })
+
+    expect(state.rifffs.r1.stems[0]).toMatchObject({
+      path: '/derived/one.baked.wav',
+      phaseSourcePath: '/x/1.wav',
+      phaseBars: 0.25
+    })
+    expect(state.rifffs.r1.stems[1]).toMatchObject({
+      path: '/derived/six.baked.wav',
+      phaseSourcePath: '/x/6.wav',
+      phaseBars: 0.25
+    })
+  })
+
+  it('applying an incomplete bake leaves the entire target untouched', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       // slot 6's file failed to bake
       results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 }]
     })
-    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.baked.wav')
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.wav')
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.wav')
   })
 
@@ -435,6 +472,7 @@ describe('reducer', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       // Deliberately different from makeRifff's own defaults (12.8, 3.2) so
       // a test that silently kept the old value would fail loudly.
       results: [
@@ -450,9 +488,10 @@ describe('reducer', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.85 }]
     })
-    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.durationSec).toBe(12.85)
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.durationSec).toBe(12.8)
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.durationSec).toBe(3.2) // unchanged default
   })
 
@@ -464,7 +503,7 @@ describe('reducer', () => {
     // actually be baked, with no other place that correction was captured.
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })
-    state = reducer(state, { type: 'APPLY_BAKE', results: [] })
+    state = reducer(state, { type: 'APPLY_BAKE', targetGroupIds: ['r1'], results: [] })
     expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.wav')
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.wav')
     expect(state.off.r1).toBe(-6)
@@ -475,14 +514,12 @@ describe('reducer', () => {
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 }] // slot 6 failed
     })
-    // The group key is what a linked group actually reads at playback time
-    // (see resolveOffsetKey) — zeroing it while slot 6 is still relying on
-    // the runtime shift would silently un-correct that stem, even though
-    // slot 1 really did get baked.
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.wav')
     expect(state.off.r1).toBe(-6)
-    expect(state.off['r1:1']).toBe(0)
+    expect(state.off['r1:1']).toBeUndefined()
     expect(state.off['r1:6']).toBeUndefined()
   })
 
@@ -492,7 +529,7 @@ describe('reducer', () => {
   // point?" Auto-arrange gives every window-copy a fresh groupId over one
   // shared file (pasteStemWindowAction), so a bake scoped to one groupId
   // reached one clip out of the many made of that audio.
-  it('applying a bake repoints EVERY clip made of that file, not just one', () => {
+  it('applying a bake repoints every explicitly linked clip, not just the source', () => {
     const shared = makeRifff({ groupId: 'src' })
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: shared })
     state = reducer(state, {
@@ -505,6 +542,7 @@ describe('reducer', () => {
     })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['src', 'copyA', 'copyB'],
       results: [
         { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.85 },
         { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.19 }
@@ -520,6 +558,32 @@ describe('reducer', () => {
     }
   })
 
+  it('does not mutate another shelf riff merely because it shares the same paths', () => {
+    const source = makeRifff({ groupId: 'source' })
+    const independent = makeRifff({
+      groupId: 'independent',
+      stems: source.stems.map((stem) => ({ ...stem }))
+    })
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: source })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: independent })
+    state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'independent', steps: 3 })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      targetGroupIds: ['source'],
+      results: [
+        { path: '/x/1.wav', bakedPath: '/x/source-1.baked.wav', durationSec: 12.8 },
+        { path: '/x/6.wav', bakedPath: '/x/source-6.baked.wav', durationSec: 3.2 }
+      ]
+    })
+
+    expect(state.rifffs.source.stems[0].path).toBe('/x/source-1.baked.wav')
+    expect(state.rifffs.independent.stems.map((stem) => stem.path)).toEqual([
+      '/x/1.wav',
+      '/x/6.wav'
+    ])
+    expect(state.off.independent).toBe(3)
+  })
+
   it('zeroes the runtime offset on every clip the bake reached', () => {
     const shared = makeRifff({ groupId: 'src' })
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: shared })
@@ -531,6 +595,7 @@ describe('reducer', () => {
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'copyA', steps: -6 })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['src', 'copyA'],
       results: [
         { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 },
         { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.2 }
@@ -538,7 +603,7 @@ describe('reducer', () => {
     })
     expect(state.off.src).toBe(0)
     expect(state.off.copyA).toBe(0)
-    expect(state.off['copyA:1']).toBe(0)
+    expect(state.off['copyA:1']).toBeUndefined()
   })
 
   it('leaves a clip built from a different file completely alone', () => {
@@ -566,6 +631,7 @@ describe('reducer', () => {
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'unrelated', steps: -4 })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['src'],
       results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 }]
     })
     expect(state.rifffs.unrelated.stems[0].path).toBe('/x/other.wav')
@@ -939,6 +1005,8 @@ describe('reducer', () => {
       expect(newRifffs).toHaveLength(2) // makeRifff() has 2 stems
       expect(newRifffs.every((r) => r.stems.length === 1)).toBe(true)
       expect(newRifffs.every((r) => r.startBar === 6)).toBe(true)
+      expect(newRifffs.every((r) => r.phaseLinkId === r.groupId)).toBe(true)
+      expect(new Set(newRifffs.map((r) => r.phaseLinkId)).size).toBe(2)
       expect(state.sel).toBe(newRifffs[0].groupId)
     })
 
@@ -1224,7 +1292,7 @@ describe('reducer', () => {
   })
 
   describe('SOLO_GROUP', () => {
-    it('mutes every stem in every other PLACED rifff and unmutes every stem in this one', () => {
+    it('targets every stem in this placed rifff without rewriting Mute', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -1233,13 +1301,11 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r1:6']).toBe(false)
-      expect(state.mute['r2:1']).toBe(true)
-      expect(state.mute['r2:6']).toBe(true)
+      expect(state.mixerSolo).toEqual(['r1:1', 'r1:6'])
+      expect(state.mixerMute).toEqual({})
     })
 
-    it('force-unmutes the soloed rifff even if one of its stems was already individually muted', () => {
+    it('keeps a durable disabled stem disabled while the rifff is soloed', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -1247,10 +1313,11 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
-      expect(state.mute['r1:1']).toBe(false)
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mixerSolo).toContain('r1:1')
     })
 
-    it('toggles back to fully unmuted when SOLO_GROUP is dispatched again for the already-soloed rifff', () => {
+    it('toggles Solo off without changing the underlying Mute layer', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -1260,8 +1327,8 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r2:1']).toBe(false)
+      expect(state.mixerSolo).toBeNull()
+      expect(state.mixerMute).toEqual({})
     })
 
     it('re-solos (does not toggle off) when dispatched for a DIFFERENT rifff than the one currently soloed', () => {
@@ -1274,8 +1341,7 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r2' })
-      expect(state.mute['r1:1']).toBe(true)
-      expect(state.mute['r2:1']).toBe(false)
+      expect(state.mixerSolo).toEqual(['r2:1', 'r2:6'])
     })
 
     it('does not touch a rifff still sitting unplaced in the shelf — regression test for a real bug where soloing anything would silently mute every shelf-only rifff, so a brand new clip could arrive pre-muted the moment it was later dragged onto the timeline', () => {
@@ -1289,6 +1355,27 @@ describe('reducer', () => {
       state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
       expect(state.mute['r2:1']).toBeUndefined()
       expect(state.mute['r2:6']).toBeUndefined()
+      expect(state.mixerMute['r2:1']).toBeUndefined()
+      expect(state.mixerMute['r2:6']).toBeUndefined()
+      expect(state.mixerSolo).toEqual(['r1:1', 'r1:6'])
+    })
+
+    it('preserves a temporary channel Mute across a Solo round-trip', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
+      state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
+      state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'r2', muted: true })
+      const muteBeforeSolo = state.mixerMute
+
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r1' })
+
+      expect(state.mixerMute).toEqual(muteBeforeSolo)
+      expect(state.mixerMute['r2:1']).toBe(true)
     })
   })
 
@@ -1312,8 +1399,8 @@ describe('reducer', () => {
         channelId: 'chan-a'
       })
       state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: true })
-      expect(state.mute['r1:1']).toBe(true)
-      expect(state.mute['r2:1']).toBe(true)
+      expect(state.mixerMute['r1:1']).toBe(true)
+      expect(state.mixerMute['r2:1']).toBe(true)
     })
 
     it('does not affect a rifff on a different channel', () => {
@@ -1335,13 +1422,32 @@ describe('reducer', () => {
         channelId: 'chan-b'
       })
       state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: true })
+      expect(state.mixerMute['r1:1']).toBe(true)
+      expect(state.mixerMute['r2:1']).toBeUndefined()
+    })
+
+    it('does not erase a durable stem disable after mute and unmute', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+      state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: true })
+      state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'chan-a', muted: false })
+
       expect(state.mute['r1:1']).toBe(true)
-      expect(state.mute['r2:1']).toBeUndefined()
+      expect(state.mixerMute['r1:1']).toBe(false)
     })
   })
 
   describe('SOLO_CHANNEL', () => {
-    it('unmutes every rifff on this channel and mutes every rifff on every other channel', () => {
+    it('targets every stem on this channel without rewriting Mute', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -1367,9 +1473,8 @@ describe('reducer', () => {
         channelId: 'chan-b'
       })
       state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-a' })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r2:1']).toBe(false)
-      expect(state.mute['r3:1']).toBe(true)
+      expect(state.mixerSolo).toEqual(['r1:1', 'r1:6', 'r2:1', 'r2:6'])
+      expect(state.mixerMute).toEqual({})
     })
 
     it('toggles back to fully unmuted when dispatched again for the already-soloed channel', () => {
@@ -1392,13 +1497,38 @@ describe('reducer', () => {
       })
       state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-a' })
       state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-a' })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r2:1']).toBe(false)
+      expect(state.mixerSolo).toBeNull()
+    })
+
+    it('restores the full mix without re-enabling durably disabled stems', () => {
+      let state = reducer(initialState, {
+        type: 'ADD_TO_SHELF',
+        rifff: makeRifff({ groupId: 'r1' })
+      })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r1',
+        startBar: 0,
+        channelId: 'chan-a'
+      })
+      state = reducer(state, {
+        type: 'MOVE_TO_CHANNEL',
+        groupId: 'r2',
+        startBar: 0,
+        channelId: 'chan-b'
+      })
+      state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r1:1' })
+      state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-b' })
+      state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'chan-b' })
+
+      expect(state.mute['r1:1']).toBe(true)
+      expect(state.mixerSolo).toBeNull()
     })
   })
 
   describe('SOLO_STEMS', () => {
-    it('solos an arbitrary set of stems spanning multiple different rifffs, muting every other stem', () => {
+    it('solos an arbitrary set of stems without rewriting durable Disable', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -1411,12 +1541,8 @@ describe('reducer', () => {
       // Cluster spans one stem from r1, one stem from r2 -- neither whole
       // rifff, which SOLO_GROUP/SOLO_CHANNEL couldn't express.
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1', 'r2:6'] })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r1:6']).toBe(true)
-      expect(state.mute['r2:1']).toBe(true)
-      expect(state.mute['r2:6']).toBe(false)
-      expect(state.mute['r3:1']).toBe(true)
-      expect(state.mute['r3:6']).toBe(true)
+      expect(state.mixerSolo).toEqual(['r1:1', 'r2:6'])
+      expect(state.mute).toEqual({})
     })
 
     it('does not touch a rifff still sitting unplaced in the shelf', () => {
@@ -1430,6 +1556,7 @@ describe('reducer', () => {
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
       expect(state.mute['r2:1']).toBeUndefined()
       expect(state.mute['r2:6']).toBeUndefined()
+      expect(state.mixerSolo).toEqual(['r1:1'])
     })
 
     it('stays soloed (does NOT toggle off) when dispatched again with the same stemKeys', () => {
@@ -1449,10 +1576,8 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
-      expect(state.mute['r1:1']).toBe(false)
-      expect(state.mute['r1:6']).toBe(true)
-      expect(state.mute['r2:1']).toBe(true)
-      expect(state.mute['r2:6']).toBe(true)
+      expect(state.mixerSolo).toEqual(['r1:1'])
+      expect(state.mute).toEqual({})
     })
 
     it('re-solos (does not toggle off) when dispatched for a DIFFERENT stemKeys set than the one currently soloed', () => {
@@ -1465,13 +1590,13 @@ describe('reducer', () => {
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r2:1'] })
-      expect(state.mute['r1:1']).toBe(true)
-      expect(state.mute['r2:1']).toBe(false)
+      expect(state.mixerSolo).toEqual(['r2:1'])
+      expect(state.mute).toEqual({})
     })
   })
 
-  describe('RESTORE_MUTE', () => {
-    it('replaces the whole mute map verbatim, undoing whatever SOLO_STEMS did since', () => {
+  describe('RESTORE_MIXER_SOLO', () => {
+    it('restores the Solo layer without touching a pre-existing Disable', () => {
       let state = reducer(initialState, {
         type: 'ADD_TO_SHELF',
         rifff: makeRifff({ groupId: 'r1' })
@@ -1479,19 +1604,16 @@ describe('reducer', () => {
       state = reducer(state, { type: 'ADD_TO_SHELF', rifff: makeRifff({ groupId: 'r2' }) })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r1', startBar: 0 })
       state = reducer(state, { type: 'PLACE_ON_TIMELINE', groupId: 'r2', startBar: 4 })
-      // A real pre-existing mute the user had set deliberately, before any
-      // solo preview happened -- this is the exact state RESTORE_MUTE must
-      // bring back, not a blanket "unmute everything."
       state = reducer(state, { type: 'TOGGLE_MUTE', stemKey: 'r2:1' })
-      const snapshot = state.mute
+      state = reducer(state, { type: 'SOLO_GROUP', groupId: 'r2' })
+      const snapshot = state.mixerSolo
 
       state = reducer(state, { type: 'SOLO_STEMS', stemKeys: ['r1:1'] })
-      expect(state.mute).not.toEqual(snapshot)
+      expect(state.mixerSolo).toEqual(['r1:1'])
 
-      state = reducer(state, { type: 'RESTORE_MUTE', mute: snapshot })
-      expect(state.mute).toEqual(snapshot)
+      state = reducer(state, { type: 'RESTORE_MIXER_SOLO', mixerSolo: snapshot })
+      expect(state.mixerSolo).toEqual(snapshot)
       expect(state.mute['r2:1']).toBe(true)
-      expect(state.mute['r1:1']).toBeFalsy()
     })
   })
 
@@ -2454,6 +2576,18 @@ describe('reducer', () => {
   })
 })
 
+describe('metronome volume', () => {
+  it('uses an audible default and clamps drag updates', () => {
+    expect(initialState.metronomeVolume).toBe(1.5)
+    expect(
+      reducer(initialState, { type: 'SET_METRONOME_VOLUME', volume: 99 }).metronomeVolume
+    ).toBe(2)
+    expect(
+      reducer(initialState, { type: 'SET_METRONOME_VOLUME', volume: -1 }).metronomeVolume
+    ).toBe(0)
+  })
+})
+
 describe('automation curves', () => {
   it('stores a drawn curve on one clip, normalised', () => {
     const state = reducer(initialState, {
@@ -3315,19 +3449,21 @@ describe('a riser on its own row', () => {
       riser: createRiser({ id: 'r2', channelId: 'other', startBar: 0 })
     })
     state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'ch-r1', muted: true })
-    expect(state.risers['r1'].muted).toBe(true)
-    expect(state.risers['r2'].muted).toBe(false)
+    expect(state.mixerMute['r1']).toBe(true)
+    expect(state.mixerMute['r2']).toBeUndefined()
+    expect(state.risers['r1'].muted).toBe(false)
   })
 
-  it('solos a riser row by muting every other riser', () => {
+  it('solos a riser row without rewriting riser Mute state', () => {
     let state = withRiser('r1', 'ch-r1')
     state = reducer(state, {
       type: 'ADD_RISER',
       riser: createRiser({ id: 'r2', channelId: 'other', startBar: 0 })
     })
     state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'ch-r1' })
-    expect(state.risers['r1'].muted).toBe(false)
-    expect(state.risers['r2'].muted).toBe(true)
+    expect(state.mixerSolo).toEqual(['r1'])
+    expect(state.mixerMute).toEqual({})
+    expect(state.risers['r2'].muted).toBe(false)
   })
 
   it('un-solos back to everything audible on a second press', () => {
@@ -3338,8 +3474,7 @@ describe('a riser on its own row', () => {
     })
     state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'ch-r1' })
     state = reducer(state, { type: 'SOLO_CHANNEL', channelId: 'ch-r1' })
-    expect(state.risers['r1'].muted).toBe(false)
-    expect(state.risers['r2'].muted).toBe(false)
+    expect(state.mixerSolo).toBeNull()
   })
 
   it('leaves the risers record untouched when there are none to solo', () => {

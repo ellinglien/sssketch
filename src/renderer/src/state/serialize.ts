@@ -38,6 +38,7 @@ export type PersistedProject = Omit<
   | 'automationParamOf'
   | 'inspectorCollapsed'
   | 'metronomeEnabled'
+  | 'metronomeVolume'
   | 'armedChannelId'
   | 'recordingArmReminderChannelId'
   | 'availableInputDevices'
@@ -48,6 +49,8 @@ export type PersistedProject = Omit<
   | 'gatedRecordingChannelId'
   | 'gatedRecordingTargetGroupId'
   | 'pendingLockInConfirm'
+  | 'mixerMute'
+  | 'mixerSolo'
 >
 
 /** The shape of a .sssketchproj saved before channels replaced trackOrder —
@@ -72,6 +75,7 @@ export function serializeProject(state: AppState, pluginStates: PluginStatesMap 
     automationParamOf,
     inspectorCollapsed,
     metronomeEnabled,
+    metronomeVolume,
     armedChannelId,
     recordingArmReminderChannelId,
     availableInputDevices,
@@ -82,6 +86,8 @@ export function serializeProject(state: AppState, pluginStates: PluginStatesMap 
     gatedRecordingChannelId,
     gatedRecordingTargetGroupId,
     pendingLockInConfirm,
+    mixerMute,
+    mixerSolo,
     ...rest
   } = state
   /* eslint-enable @typescript-eslint/no-unused-vars */

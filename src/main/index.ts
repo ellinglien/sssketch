@@ -107,6 +107,7 @@ import {
 import {
   getDiscoverCandidates,
   getRandomLibraryCandidate,
+  getInstrumentMaskLookup,
   prewarmDiscoverCandidateCaches,
   appendToInMemoryDiscoverCaches,
   type DiscoverCandidate,
@@ -192,6 +193,10 @@ import {
   markYamnetZeroShotAttempted,
   type StemAutoClassifyProgress
 } from './stemAutoCategoryStore'
+import {
+  currentAutoClassifyTrainingFingerprint,
+  lookupAutoClassifyInstrumentMasks
+} from './stemAutoClassify'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
 import { getStemPriority, seedStemPriorityOwnStems, setStemPriorityUsername } from './stemPriority'
@@ -220,7 +225,8 @@ import {
   abortSync as abortWarehouseSync,
   removeJamSync as removeWarehouseJamSync,
   activeSyncCount as activeWarehouseSyncCount,
-  setSyncsInFlightListener as setWarehouseSyncsInFlightListener
+  setSyncsInFlightListener as setWarehouseSyncsInFlightListener,
+  recoverPrivateJamRiffAudio
 } from './riffLibrarySync'
 import { openOwnRiffLibraryDb, ownRiffLibraryRoot } from './riffLibrarySchema'
 import {
@@ -273,6 +279,7 @@ import { migrateRiffLibraryLocation } from './riffLibraryMigration'
 import {
   listLibrarySketches,
   libraryRootPath,
+  bakeAssetsDir,
   setLibraryRootPath,
   shouldWarnBeforeOverwrite,
   renameSketch,
@@ -1087,9 +1094,21 @@ app.whenReady().then(async () => {
     resolveRiffWithContext(riffCID)
   )
 
-  ipcMain.handle('riff-library-download-missing-stems', (_event, riffCID: string) =>
-    downloadMissingStems(riffCID)
-  )
+  ipcMain.handle('riff-library-download-missing-stems', async (_event, riffCID: string) => {
+    const resolved = await downloadMissingStems(riffCID)
+    if (!resolved) return null
+    // Older imported warehouse rows can name stems without carrying the
+    // FileKey needed to download them. A normal anonymous download has no
+    // URL to try in that case, so refresh just this clicked private-jam riff
+    // through the authenticated Endlesss lookup and persist the repaired
+    // metadata/audio. Without this fallback, the Import UI looked playable
+    // but stayed forever at `0 cached` and produced no sound.
+    const needsMetadata = resolved.stems.some(
+      (stem) => stem.path === null && stem.downloadUrl === null
+    )
+    if (!needsMetadata) return resolved
+    return (await recoverPrivateJamRiffAudio(riffCID)) ?? resolved
+  })
 
   // One explicit, human-initiated save. Eight stemCIDForPath point lookups
   // is not what CLAUDE.md's "never one query per stem" rule is about;
@@ -1334,7 +1353,7 @@ app.whenReady().then(async () => {
     renderStretched(stemPath, ratio)
   )
 
-  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs))
+  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs, bakeAssetsDir()))
 
   ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
@@ -2007,9 +2026,15 @@ app.whenReady().then(async () => {
     saveSoundSettings(settings)
   )
 
-  ipcMain.handle('get-discover-classify-progress', (): StemAutoClassifyProgress =>
-    getStemAutoClassifyProgress(openOwnRiffLibraryDb())
-  )
+  ipcMain.handle('get-discover-classify-progress', async (): Promise<StemAutoClassifyProgress> => {
+    const ownDb = openOwnRiffLibraryDb()
+    const dbs = candidateDbsForRiff()
+    return getStemAutoClassifyProgress(
+      ownDb,
+      currentAutoClassifyTrainingFingerprint(ownDb),
+      (stemCIDs) => lookupAutoClassifyInstrumentMasks(dbs, stemCIDs, getInstrumentMaskLookup)
+    )
+  })
 
   // The library scan's work list (background scan audit 3, libraryScanWork.ts):
   // what needs analysis first (SQL preselect over the persisted stem/jam pairs,
@@ -2354,8 +2379,8 @@ app.whenReady().then(async () => {
     playbackEngine?.client.send('preload-stem', { path, durationSec })
   })
 
-  ipcMain.handle('engine-set-metronome', (_event, enabled: boolean) => {
-    playbackEngine?.client.send('set-metronome', { enabled })
+  ipcMain.handle('engine-set-metronome', (_event, enabled: boolean, volume: number) => {
+    playbackEngine?.client.send('set-metronome', { enabled, volume })
   })
 
   ipcMain.handle('engine-set-link-enabled', (_event, enabled: boolean) => {

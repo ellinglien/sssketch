@@ -49,9 +49,36 @@ export function placedClipsSharingStems(
   rifffs: Readonly<Record<string, Rifff>>,
   groupId: string
 ): number {
-  const source = rifffs[groupId]
-  if (!source) return 0
-  const paths = source.stems.map((stem) => stem.path)
-  return groupIdsSharingStemPaths(rifffs, paths).filter((id) => rifffs[id].startBar !== undefined)
+  return bakeTargetGroupIds(rifffs, groupId).filter((id) => rifffs[id].startBar !== undefined)
     .length
+}
+
+/** Explicit compatibility target set for a re-one operation. A source may
+ * own auto-arranged, single-stem timeline windows, so those placed clips move
+ * with it when every stem they contain comes from that source. Other shelf
+ * riffs are never included. This is intentionally narrower than
+ * groupIdsSharingStemPaths: path equality alone is not ownership. */
+export function bakeTargetGroupIds(
+  rifffs: Readonly<Record<string, Rifff>>,
+  groupId: string
+): string[] {
+  const source = rifffs[groupId]
+  if (!source) return []
+  if (source.phaseLinkId !== undefined) {
+    return Object.entries(rifffs)
+      .filter(([, candidate]) => candidate.phaseLinkId === source.phaseLinkId)
+      .map(([candidateId]) => candidateId)
+  }
+  const sourcePaths = new Set(source.stems.map((stem) => stem.path))
+  const targets = [groupId]
+  for (const [candidateId, candidate] of Object.entries(rifffs)) {
+    if (candidateId === groupId || candidate.startBar === undefined) continue
+    // An explicitly-owned child is independent even when it currently
+    // references one of this legacy source's materialized files.
+    if (candidate.phaseLinkId !== undefined) continue
+    if (candidate.stems.length > 0 && candidate.stems.every((stem) => sourcePaths.has(stem.path))) {
+      targets.push(candidateId)
+    }
+  }
+  return targets
 }

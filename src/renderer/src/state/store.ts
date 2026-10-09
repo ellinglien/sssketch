@@ -1,5 +1,4 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
-import { groupIdsSharingStemPaths } from '@shared/bakePropagation'
 import { sqrtGain } from '@shared/mixGain'
 import {
   DEFAULT_REVERB,
@@ -18,6 +17,7 @@ import {
   type SoundSettings,
   type SoundSettingsPatch
 } from '@shared/radioSound'
+import { DEFAULT_METRONOME_VOLUME, clampMetronomeVolume } from '../components/metronomeVolume'
 import { appSoundDefaultsNow } from './appSoundDefaults'
 import { newProjectSeed } from '@shared/seededRandom'
 import { nextBusClipName, originalNameFromBusName } from '@shared/busNaming'
@@ -79,28 +79,6 @@ function channelHasAnyClip(
 ): boolean {
   if (Object.values(channelOf).includes(channelId)) return true
   return Object.values(risers).some((riser) => riser.channelId === channelId)
-}
-
-/** Every riser on one channel, muted or unmuted together. Returns the SAME
- * record when nothing changed, so a mute on a riserless row cannot trigger
- * StoreContext's engine-sync effect (which depends on state.risers) for
- * nothing. */
-function setRisersMutedOnChannel(
-  risers: Record<string, RiserClip>,
-  channelId: string,
-  muted: boolean
-): Record<string, RiserClip> {
-  let changed = false
-  const next: Record<string, RiserClip> = {}
-  for (const [id, riser] of Object.entries(risers)) {
-    if (riser.channelId === channelId && riser.muted !== muted) {
-      next[id] = { ...riser, muted }
-      changed = true
-    } else {
-      next[id] = riser
-    }
-  }
-  return changed ? next : risers
 }
 
 /**
@@ -219,7 +197,17 @@ export interface AppState {
   // widening SNAP_DIVS changes.
   snapIdx: 0 | 1 | 2 | 3 | 4
   vol: Record<string, number>
+  /** Durable arrangement state. `true` means the stem is disabled; this
+   * remains under the legacy persisted name for project compatibility. */
   mute: Record<string, boolean>
+  /** Temporary mixer/audition silence, keyed by stemKey or riser id. Solo
+   * never writes here: this is the musician's independent Mute layer. */
+  mixerMute: Record<string, boolean>
+  /** Temporary Solo layer, expressed as the exact stem/riser keys allowed
+   * through while active. `null` means no solo. It is separate from both
+   * durable `mute` (Disable) and `mixerMute`, so solo/unsolo can never
+   * rewrite either underlying choice. */
+  mixerSolo: string[] | null
   off: Record<string, number>
   stretch: Record<string, boolean>
   /** A rifff's own played length, in bars — the tiling loop's bound, keyed by
@@ -369,6 +357,9 @@ export interface AppState {
    * serialize.ts) — always starts off, matching every other "how I'm
    * currently working" toggle in this app. */
   metronomeEnabled: boolean
+  /** Output gain for both the native transport click and BeatPicker's Web
+   * Audio click. Transient like metronomeEnabled; 1 is the original level. */
+  metronomeVolume: number
   /** masterChain[i] is a scanned plugin catalog id (see src/main/pluginCatalog.ts)
    * or null for an empty slot. Persists normally -- real arrangement data, not
    * transient UI state. See docs/superpowers/specs/2026-07-31-plugin-scan-favourites-design.md. */
@@ -573,6 +564,8 @@ export const initialState: AppState = {
   snapIdx: 0,
   vol: {},
   mute: {},
+  mixerMute: {},
+  mixerSolo: null,
   off: {},
   stretch: {},
   playedBars: {},
@@ -603,6 +596,7 @@ export const initialState: AppState = {
   tidiedView: false,
   regionSelection: null,
   metronomeEnabled: false,
+  metronomeVolume: DEFAULT_METRONOME_VOLUME,
   masterChain: [null, null, null, null],
   channelPlugins: {},
   stemFilters: {},
@@ -716,11 +710,20 @@ export type Action =
       startBar: number
     }
   | {
-      /** Deliberately has NO groupId: a bake is scoped by the PATHS it
-       * rewrote, and every clip made of one of those files moves with it.
-       * See the case's own comment in the reducer below. */
+      /** Adopts a complete immutable bake only into the explicitly resolved
+       * riff instances below. The result paths alone never authorize a
+       * project-wide mutation. */
       type: 'APPLY_BAKE'
-      results: { path: string; bakedPath: string; durationSec: number }[]
+      /** The only riff instances authorized to adopt these new immutable
+       * assets. Never infer shelf mutation from path equality. */
+      targetGroupIds: string[]
+      results: {
+        path: string
+        bakedPath: string
+        durationSec: number
+        phaseSourcePath?: string
+        phaseBars?: number
+      }[]
     }
   | {
       type: 'PASTE_RIFFF'
@@ -743,6 +746,8 @@ export type Action =
   | { type: 'SET_CHANNEL_MUTE'; channelId: string; muted: boolean }
   | { type: 'SOLO_CHANNEL'; channelId: string }
   | { type: 'SOLO_STEMS'; stemKeys: string[] }
+  | { type: 'CLEAR_MIXER_SOLO' }
+  | { type: 'RESTORE_MIXER_SOLO'; mixerSolo: string[] | null }
   | { type: 'RESTORE_MUTE'; mute: Record<string, boolean> }
   | { type: 'RESTORE_VOL'; vol: Record<string, number> }
   | { type: 'SET_GROUP_VOLUME'; groupId: string; volume: number }
@@ -825,6 +830,7 @@ export type Action =
   | { type: 'TOGGLE_INSPECTOR_COLLAPSED' }
   | { type: 'TOGGLE_TIDIED_VIEW' }
   | { type: 'TOGGLE_METRONOME' }
+  | { type: 'SET_METRONOME_VOLUME'; volume: number }
   | { type: 'SET_MASTER_CHAIN_PLUGIN'; slot: 0 | 1 | 2 | 3; pluginId: string | null }
   /** The project's sound settings (AppState.sound): `settings` is merged over them stage by
    * stage and normalised; a state with none merges onto the app-wide defaults
@@ -1018,6 +1024,26 @@ export function soloStemsMute(
     }
   }
   return mute
+}
+
+function sameMixerSolo(current: readonly string[] | null, target: readonly string[]): boolean {
+  if (current === null || current.length !== target.length) return false
+  const currentKeys = new Set(current)
+  return target.every((key) => currentKeys.has(key))
+}
+
+function toggledMixerSolo(current: readonly string[] | null, target: string[]): string[] | null {
+  if (target.length === 0) return current ? [...current] : null
+  return sameMixerSolo(current, target) ? null : target
+}
+
+function withoutMixerSoloKeys(
+  current: readonly string[] | null,
+  removed: ReadonlySet<string>
+): string[] | null {
+  if (current === null) return null
+  const remaining = current.filter((key) => !removed.has(key))
+  return remaining.length > 0 ? remaining : null
 }
 
 /**
@@ -1387,6 +1413,7 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'REMOVE_FROM_TIMELINE': {
       const rifff = state.rifffs[action.groupId]
+      const removedStemKeys = new Set(rifff.stems.map((stem) => stemKey(action.groupId, stem.slot)))
       const previousChannelId = state.channelOf[action.groupId]
       const channelOf = { ...state.channelOf }
       delete channelOf[action.groupId]
@@ -1408,7 +1435,8 @@ export function reducer(state: AppState, action: Action): AppState {
         sel: state.sel === action.groupId ? null : state.sel,
         channelOf,
         channelOrder,
-        channelPlugins
+        channelPlugins,
+        mixerSolo: withoutMixerSoloKeys(state.mixerSolo, removedStemKeys)
       }
     }
 
@@ -1457,6 +1485,8 @@ export function reducer(state: AppState, action: Action): AppState {
         rifffs,
         vol: omitStems(state.vol),
         mute: omitStems(state.mute),
+        mixerMute: omitStems(state.mixerMute),
+        mixerSolo: withoutMixerSoloKeys(state.mixerSolo, stemKeysToStrip),
         muteRegions: omitStems(state.muteRegions),
         busOf: omitStems(state.busOf),
         // The toolkit is per clip now, so its three records are cleaned
@@ -1490,64 +1520,52 @@ export function reducer(state: AppState, action: Action): AppState {
     // since the correction that offset was compensating for is now baked into
     // the audio itself.
     //
-    // SCOPED BY PATH, NOT BY groupId — this is the fix for "the loop start
-    // point for the rifff i started with for auto arrange just now.. it's in
-    // the wrong place. is there a way to adjust all of the clips at once"
-    // (2026-09-23). A downbeat correction is a fact about a FILE. Auto-arrange
-    // turns one source rifff into N single-stem rifffs with N fresh groupIds
-    // over ONE file on disk (pasteStemWindowAction in selectors.ts; see also
-    // PASTE_RIFFF's own comment below, "new groupId, same stem file paths"),
-    // and bakeOffset itself takes and returns paths, never groupIds. Scoping
-    // the state update to one groupId meant the other N-1 clips either kept
-    // pointing at the unrotated original (a first bake, which writes a new
-    // path) or silently drew and scheduled a file that had been rotated out
-    // from under them (a re-bake, which bakedPathFor deliberately writes in
-    // place). groupIdsSharingStemPaths (shared/bakePropagation.ts) is the
-    // lookup that closes that; the old `groupId` field is gone from the
-    // action rather than left sitting there meaning nothing.
+    // EXPLICITLY SCOPED — a downbeat choice belongs to the riff being edited
+    // and any timeline windows the caller deliberately linked to it. Path
+    // equality is only a compatibility signal used before this action is
+    // dispatched; it is never sufficient here to mutate another shelf riff.
+    // Every result is a fresh immutable asset, so independently edited copies
+    // can no longer fight over one on-disk `.baked.wav` alias.
     //
-    // A clip that had its OWN different offset on the same file loses it
-    // here. That case was never really supported — pasteRifffAction's own doc
-    // comment already records that two copies re-baked differently fight over
-    // the same .baked.wav and "the second one wins on disk" — so this makes
-    // the state agree with the disk instead of disagreeing quietly.
-    //
-    // Only for stems that actually got a bakedPath back: bakeOffset
-    // silently skips any source it can't rotate in place (e.g. a LORE-sourced
-    // stem — an Ogg Vorbis file it has no way to rewrite, and shouldn't
-    // anyway, since those are read-only references into Elling's warehouse,
-    // never copies). Resetting a stem's offset when it was never actually
-    // baked would silently throw away the correction — the runtime offset is
-    // the ONLY place it's captured for a stem baking can't reach, so it has
-    // to survive this action untouched. The group-level key only resets if
-    // every stem in the riff baked successfully — a linked group reads that
-    // single key for every stem (see resolveOffsetKey), so zeroing it while
-    // even one stem is still relying on the runtime shift would un-correct
-    // that stem too.
+    // The batch is adopted only when it covers every stem in a target riff.
+    // On an unsupported/corrupt input the main process returns no partial
+    // result, and this reducer preserves both the old paths and their runtime
+    // offsets. That keeps a single riff from acquiring a mixed physical/
+    // runtime phase representation.
     case 'APPLY_BAKE': {
       const pathMap = new Map(action.results.map((r) => [r.path, r.bakedPath]))
-      // durationSec is the baked file's own real, measured length — not
-      // necessarily equal to whatever this stem's durationSec already was
-      // (a LORE stem's is metadata-derived, not measured from the actual
-      // audio; see bakeOffset.ts's BakeResult doc comment). Leaving it stale
-      // desyncs the native engine's own tile-boundary scheduling from the
-      // real baked file, heard as clicking/stuttering.
-      const durationMap = new Map(action.results.map((r) => [r.path, r.durationSec]))
-      const touched = groupIdsSharingStemPaths(state.rifffs, pathMap.keys())
+      const resultMap = new Map(action.results.map((r) => [r.path, r]))
+      // Each result also carries the baked file's real measured duration
+      // and phase provenance; resultMap applies all three atomically below.
+      // A target changes only if the batch covers every one of its stems.
+      // Mixed old/new paths plus one surviving group offset is not a valid
+      // phase representation, so a partially-covered linked group stays
+      // completely untouched.
+      const touched = action.targetGroupIds.filter((groupId) => {
+        const rifff = state.rifffs[groupId]
+        return rifff !== undefined && rifff.stems.every((stem) => pathMap.has(stem.path))
+      })
       if (touched.length === 0) return state
       const rifffs = { ...state.rifffs }
       const off = { ...state.off }
       for (const groupId of touched) {
         const rifff = rifffs[groupId]
-        const stems = rifff.stems.map((s) => ({
-          ...s,
-          path: pathMap.get(s.path) ?? s.path,
-          durationSec: durationMap.get(s.path) ?? s.durationSec
-        }))
+        const stems = rifff.stems.map((s) => {
+          const result = resultMap.get(s.path)
+          return {
+            ...s,
+            path: result?.bakedPath ?? s.path,
+            durationSec: result?.durationSec ?? s.durationSec,
+            phaseSourcePath: result?.phaseSourcePath ?? s.phaseSourcePath,
+            phaseBars: result?.phaseBars ?? s.phaseBars
+          }
+        })
         rifffs[groupId] = { ...rifff, stems }
-        if (rifff.stems.every((s) => pathMap.has(s.path))) off[groupId] = 0
+        off[groupId] = 0
         for (const s of rifff.stems) {
-          if (pathMap.has(s.path)) off[stemKey(groupId, s.slot)] = 0
+          // The entire target was baked as one transaction, so no old
+          // per-stem fallback/override remains meaningful.
+          delete off[stemKey(groupId, s.slot)]
         }
       }
       return { ...state, rifffs, off }
@@ -1622,7 +1640,8 @@ export function reducer(state: AppState, action: Action): AppState {
     case 'TOGGLE_MUTE':
       return { ...state, mute: { ...state.mute, [action.stemKey]: !state.mute[action.stemKey] } }
 
-    // Sets every stem in the rifff to the same mute state in one atomic edit
+    // Sets every stem in the rifff to the same durable enabled/disabled state
+    // in one atomic edit
     // (one undo step, not one per stem) — the collapsed view's single
     // group-mute button, which mutes/unmutes the whole rifff together rather
     // than exposing each stem's own mute individually.
@@ -1636,14 +1655,9 @@ export function reducer(state: AppState, action: Action): AppState {
     }
 
     // Cmd/Ctrl+right-click on a clip, from any view (expanded, collapsed,
-    // sketch) — mutes every stem in every OTHER PLACED rifff and
-    // unmutes every stem in this one. A second SOLO_GROUP for the SAME
-    // groupId while it's already the only unmuted one toggles back to fully
-    // unmuted, rather than needing a separate "un-solo" action or having to
-    // snapshot the exact prior per-stem mute state (which stem was
-    // individually muted before soloing is usually not what you want
-    // restored anyway — "solo" is normally a temporary A/B listen, not a
-    // state worth preserving precisely).
+    // sketch) — applies a temporary mixer solo. Solo has its own layer: it
+    // never rewrites durable Disable (`mute`) OR temporary Mute
+    // (`mixerMute`), so both are revealed intact when Solo is cleared.
     //
     // Scoped to PLACED rifffs only — real bug this fixes: iterating every
     // rifff in state.rifffs (unfiltered) also mutated stems belonging to
@@ -1653,22 +1667,10 @@ export function reducer(state: AppState, action: Action): AppState {
     // it was never actually muted on, surfacing later as "why is this brand
     // new clip already muted" the moment it's dragged onto the timeline.
     case 'SOLO_GROUP': {
-      const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
-      const alreadySoloed = rifffList.every((rifff) =>
-        rifff.stems.every((stem) => {
-          const expectedMuted = rifff.groupId !== action.groupId
-          return !!state.mute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
-        })
-      )
-      const mute = { ...state.mute }
-      for (const rifff of rifffList) {
-        for (const stem of rifff.stems) {
-          mute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
-            ? false
-            : rifff.groupId !== action.groupId
-        }
-      }
-      return { ...state, mute }
+      const rifff = state.rifffs[action.groupId]
+      if (!rifff || rifff.startBar === undefined) return state
+      const target = rifff.stems.map((stem) => stemKey(rifff.groupId, stem.slot))
+      return { ...state, mixerSolo: toggledMixerSolo(state.mixerSolo, target) }
     }
 
     // Channel-level counterpart to SET_GROUP_MUTE/SOLO_GROUP above, for the
@@ -1680,56 +1682,32 @@ export function reducer(state: AppState, action: Action): AppState {
         (r) =>
           r.startBar !== undefined && (state.channelOf[r.groupId] ?? r.groupId) === action.channelId
       )
-      const mute = { ...state.mute }
+      const mixerMute = { ...state.mixerMute }
       for (const rifff of rifffs) {
         for (const stem of rifff.stems) {
-          mute[stemKey(rifff.groupId, stem.slot)] = action.muted
+          mixerMute[stemKey(rifff.groupId, stem.slot)] = action.muted
         }
       }
-      // A riser has no stems, so state.mute has nothing to key it by: its
-      // own `muted` flag is the other half of this row's m button. Without
-      // this, a riser-only row's m button renders, lights up, and changes
-      // nothing audible.
-      const risers = setRisersMutedOnChannel(state.risers, action.channelId, action.muted)
-      return { ...state, mute, risers }
+      for (const riser of Object.values(state.risers)) {
+        if (riser.channelId === action.channelId) mixerMute[riser.id] = action.muted
+      }
+      return { ...state, mixerMute }
     }
 
     case 'SOLO_CHANNEL': {
       const rifffList = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
       const channelOfRifff = (r: Rifff): string => state.channelOf[r.groupId] ?? r.groupId
       const riserList = Object.values(state.risers)
-      // Risers join the "is this already the only thing audible" scan on the
-      // same terms the clips do -- otherwise soloing a riser-only row would
-      // look like a no-op to the toggle and never turn back off.
-      const alreadySoloed =
-        rifffList.every((rifff) =>
-          rifff.stems.every((stem) => {
-            const expectedMuted = channelOfRifff(rifff) !== action.channelId
-            return !!state.mute[stemKey(rifff.groupId, stem.slot)] === expectedMuted
-          })
-        ) && riserList.every((riser) => riser.muted === (riser.channelId !== action.channelId))
-      const mute = { ...state.mute }
-      for (const rifff of rifffList) {
-        for (const stem of rifff.stems) {
-          mute[stemKey(rifff.groupId, stem.slot)] = alreadySoloed
-            ? false
-            : channelOfRifff(rifff) !== action.channelId
-        }
+      const target = rifffList.flatMap((rifff) =>
+        channelOfRifff(rifff) === action.channelId
+          ? rifff.stems.map((stem) => stemKey(rifff.groupId, stem.slot))
+          : []
+      )
+      for (const riser of riserList) {
+        if (riser.channelId === action.channelId) target.push(riser.id)
       }
-      // Same identity guard as setRisersMutedOnChannel's: a project with no
-      // risers must not get a fresh (equal) record and a needless engine
-      // reload out of every solo press.
-      let risers = state.risers
-      if (riserList.length > 0) {
-        risers = {}
-        for (const riser of riserList) {
-          risers[riser.id] = {
-            ...riser,
-            muted: alreadySoloed ? false : riser.channelId !== action.channelId
-          }
-        }
-      }
-      return { ...state, mute, risers }
+      if (target.length === 0) return state
+      return { ...state, mixerSolo: toggledMixerSolo(state.mixerSolo, target) }
     }
 
     // Solos an arbitrary SET of stems that may span multiple different
@@ -1748,31 +1726,36 @@ export function reducer(state: AppState, action: Action): AppState {
     // hear everything come back." Always solos EXACTLY `action.stemKeys`,
     // every time, no matter what was soloed before. Scoped to placed
     // rifffs only, for the same reason documented on SOLO_GROUP above.
-    case 'SOLO_STEMS':
-      return { ...state, mute: soloStemsMute(state.rifffs, state.mute, action.stemKeys) }
+    case 'SOLO_STEMS': {
+      const placedKeys = new Set(
+        Object.values(state.rifffs)
+          .filter((rifff) => rifff.startBar !== undefined)
+          .flatMap((rifff) => rifff.stems.map((stem) => stemKey(rifff.groupId, stem.slot)))
+      )
+      const target = action.stemKeys.filter((key) => placedKeys.has(key))
+      return target.length === 0 ? state : { ...state, mixerSolo: target }
+    }
 
-    // Restores a full mute snapshot verbatim -- used by ClusterStemsBrowser
-    // to undo whatever temporary SOLO_STEMS preview-auditioning it did while
-    // open, the moment it closes. SOLO_STEMS (like SOLO_GROUP/SOLO_CHANNEL)
-    // deliberately discards the exact prior per-stem mute state on solo
-    // (documented on SOLO_GROUP above: "solo is normally a temporary A/B
-    // listen, not a state worth preserving precisely") -- fine for those
-    // in-context solo toggles, but the cluster browser's own preview
-    // shouldn't leak into the real arrangement's mute state once you've
-    // closed it and gone back to just play the project normally.
+    case 'CLEAR_MIXER_SOLO':
+      return state.mixerSolo === null ? state : { ...state, mixerSolo: null }
+
+    case 'RESTORE_MIXER_SOLO':
+      return { ...state, mixerSolo: action.mixerSolo }
+
+    // Generic full Disable-map restore retained for callers that need an
+    // atomic snapshot restore. Solo no longer uses or writes this layer.
     case 'RESTORE_MUTE':
       return { ...state, mute: action.mute }
 
-    // Replaces the whole vol map verbatim -- the volume equivalent of
-    // RESTORE_MUTE above, added for useStemPreviewPlayback.ts's own preview-
+    // Replaces the whole vol map verbatim, used by
+    // useStemPreviewPlayback.ts's own preview-
     // volume boost (2026-09-14: previewing a stem in Tidy Up/Auto-Arrange
     // should let you actually hear it regardless of how quiet it's mixed in
     // the real rifff/arrangement -- see that hook's own doc comment). Used
     // BOTH directions there: applying the temporary full-volume-ish preview
     // override, and restoring the real vol map once that preview's own
     // caller closes/unmounts. Not mute-specific in name or shape on
-    // purpose -- a plain "set the whole map" primitive, same as RESTORE_MUTE
-    // already is in practice even though only one caller uses it today.
+    // purpose -- a plain "set the whole map" primitive.
     case 'RESTORE_VOL':
       return { ...state, vol: action.vol }
 
@@ -1869,6 +1852,7 @@ export function reducer(state: AppState, action: Action): AppState {
               )
         rifffs[newGroupId] = {
           groupId: newGroupId,
+          phaseLinkId: newGroupId,
           name,
           bpm: rifff.bpm,
           // The group's own CURRENT resolved length (reflecting any active
@@ -1970,6 +1954,9 @@ export function reducer(state: AppState, action: Action): AppState {
 
     case 'TOGGLE_METRONOME':
       return { ...state, metronomeEnabled: !state.metronomeEnabled }
+
+    case 'SET_METRONOME_VOLUME':
+      return { ...state, metronomeVolume: clampMetronomeVolume(action.volume) }
 
     case 'SET_SOUND_SETTINGS':
       return {
@@ -2163,12 +2150,16 @@ export function reducer(state: AppState, action: Action): AppState {
       if (!existing) return state
       const risers = { ...state.risers }
       delete risers[action.id]
+      const mixerMute = { ...state.mixerMute }
+      delete mixerMute[action.id]
       const stillOccupied =
         channelHasAnyClip(state.channelOf, risers, existing.channelId) ||
         !!state.recordingChannelIds[existing.channelId]
       return {
         ...state,
         risers,
+        mixerMute,
+        mixerSolo: withoutMixerSoloKeys(state.mixerSolo, new Set([action.id])),
         channelOrder: stillOccupied
           ? state.channelOrder
           : state.channelOrder.filter((id) => id !== existing.channelId)

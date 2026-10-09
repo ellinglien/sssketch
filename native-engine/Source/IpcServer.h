@@ -132,6 +132,7 @@ namespace sssketch
 
         PlaybackEngine& engine;
         Transport& transport;
+        int lastLoggedXRunCount = -1;
         PluginChain& masterChain;
         ChannelChainRegistry& channelChains;
         // Owns whichever LoopRecorder is currently armed (nullptr = none) --

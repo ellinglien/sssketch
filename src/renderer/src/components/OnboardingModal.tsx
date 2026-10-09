@@ -80,6 +80,7 @@ export function OnboardingModal({
   onOpenProject,
   onOpenEndlesss,
   onStartTour,
+  onDismiss,
   tourSeen,
   endlesssLoggedIn
 }: {
@@ -119,6 +120,10 @@ export function OnboardingModal({
    * own handler confirms first when there's real content to protect, so
    * this component doesn't need to know about that itself. */
   onStartTour: (dontShowAgain: boolean) => void
+  /** Hides this overlay without starting a new flow or discarding a
+   * recoverable snapshot. Useful when development hot reload resurfaces the
+   * welcome screen over an already-open workspace. */
+  onDismiss: () => void
   /** Once the tour has been started at least once, its welcome-screen
    * link goes away -- it's still reachable as a deliberate replay from the
    * gear/settings menu (see TransportBar.tsx), which isn't gated on this. */
@@ -152,6 +157,7 @@ export function OnboardingModal({
     >
       <div
         style={{
+          position: 'relative',
           width: 'min(420px, 90vw)',
           // A real, literal black -- distinct from the shell's own near-
           // black (--ra-bg-bar, #0a0a0a) per direct feedback ("black
@@ -170,6 +176,28 @@ export function OnboardingModal({
           textAlign: 'center'
         }}
       >
+        <button
+          onClick={onDismiss}
+          aria-label="dismiss welcome screen"
+          title="dismiss"
+          style={{
+            position: 'absolute',
+            top: 8,
+            right: 8,
+            width: 26,
+            height: 26,
+            border: '1px solid var(--ra-border-strong)',
+            borderRadius: 0,
+            background: 'transparent',
+            color: 'var(--ra-text)',
+            fontFamily: 'inherit',
+            fontSize: 15,
+            lineHeight: 1,
+            cursor: 'pointer'
+          }}
+        >
+          ×
+        </button>
         <div style={{ display: 'flex', gap: 1 }}>
           {WORDMARK.map((ch, i) => (
             <span key={i} style={{ fontSize: 28, lineHeight: 1, color: 'var(--ra-text)' }}>

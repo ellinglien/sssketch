@@ -154,7 +154,7 @@ function reliableMaskSoundType(instrument: number): 'drums' | 'notes' | 'bass' |
  * Bounded to exactly the StemCIDs asked for (a plain primary-key
  * `IN (...)` lookup per db, up to BATCH_SIZE=200 at a time) rather than a
  * full table scan -- cheap even against a huge external archive. */
-function lookupInstrumentMasks(
+export function lookupAutoClassifyInstrumentMasks(
   dbs: Database.Database[],
   stemCIDs: string[],
   instrumentLookup: InstrumentLookupFor | undefined
@@ -197,6 +197,11 @@ function lookupInstrumentMasks(
   }
   return found
 }
+
+// Kept as a local name throughout the batch implementation; the exported
+// name lets the read-only progress snapshot use the exact same lookup and
+// null/zero semantics without duplicating them.
+const lookupInstrumentMasks = lookupAutoClassifyInstrumentMasks
 
 /** For a db, a StemCID -> Stems.Instrument lookup over rows already in
  * memory (number, null for no mask, undefined for no such stem), or null to
@@ -447,6 +452,15 @@ function trainingFingerprintOf(
   centroidStore: CategoryCentroidStore
 ): string {
   return `c${CLASSIFIER_VERSION}|${prepared.fingerprint}|${centroidStoreHash(centroidStore)}`
+}
+
+/** The persisted tried-ledger key for the classifier as trained right now.
+ * Unlike getPreparedConfirmedEmbeddings, this does not parse the confirmed
+ * embedding blobs or construct a suggester: the gear-menu progress request
+ * needs the identity of the training, never the classifier itself. */
+export function currentAutoClassifyTrainingFingerprint(ownDb: Database.Database): string {
+  const preparedFingerprint = confirmedEmbeddingsFingerprint(ownDb)
+  return `c${CLASSIFIER_VERSION}|${preparedFingerprint}|${centroidStoreHash(loadCategoryCentroidStore())}`
 }
 
 /** Per store object: loadCategoryCentroidStore hands back the same object

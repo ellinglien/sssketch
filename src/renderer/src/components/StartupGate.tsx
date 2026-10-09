@@ -51,6 +51,7 @@ const WORDMARK = 'SSSKETCH'.split('')
  * this IS the welcome screen for the brief window before the real one
  * (or the normal app) can show. */
 export function StartupGate(): React.JSX.Element | null {
+  const [dismissed, setDismissed] = useState(false)
   // null = not answered yet. Direct report, 2026-09-22: these used to START
   // as `true` (optimistically "done") and only flip to false once the status
   // IPC answered -- so the welcome screen painted for a few seconds before
@@ -122,7 +123,7 @@ export function StartupGate(): React.JSX.Element | null {
     })
   }, [closed])
 
-  if (closed) return null
+  if (closed || dismissed) return null
 
   const etaText = engineDone === true && timeLeftMs !== null ? formatTimeLeft(timeLeftMs) : null
 
@@ -140,6 +141,28 @@ export function StartupGate(): React.JSX.Element | null {
         gap: 22
       }}
     >
+      <button
+        onClick={() => setDismissed(true)}
+        aria-label="dismiss startup screen"
+        title="dismiss"
+        style={{
+          position: 'absolute',
+          top: 12,
+          right: 12,
+          width: 28,
+          height: 28,
+          border: '1px solid var(--ra-border-strong)',
+          borderRadius: 0,
+          background: 'transparent',
+          color: 'var(--ra-text)',
+          fontFamily: 'inherit',
+          fontSize: 16,
+          lineHeight: 1,
+          cursor: 'pointer'
+        }}
+      >
+        ×
+      </button>
       <div style={{ display: 'flex', gap: 1 }}>
         {WORDMARK.map((ch, i) => (
           <span key={i} style={{ fontSize: 28, lineHeight: 1, color: 'var(--ra-text)' }}>

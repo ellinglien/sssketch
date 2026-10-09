@@ -100,6 +100,13 @@ namespace sssketch
          * 512 samples) only apply before the device has ever started. */
         double currentSampleRate() const { return deviceSampleRate; }
         int currentBlockSize() const { return deviceBlockSize; }
+        int currentCallbackBlockSize() const { return callbackBlockSize.load(); }
+
+        /** CoreAudio/JUCE's native missed-callback counter and the device
+         * manager's smoothed callback load. Read from the message thread for
+         * diagnostics; neither value adds work to the real-time callback. */
+        int currentXRunCount() const noexcept { return deviceManager.getXRunCount(); }
+        double currentCpuUsage() const { return deviceManager.getCpuUsage(); }
 
         /** Every input device name CoreAudio currently reports for the
          * active device type -- used by the renderer's input-device
@@ -490,6 +497,7 @@ namespace sssketch
         std::atomic<double> secPerBar { 2.0 };
         double deviceSampleRate = 44100.0;
         int deviceBlockSize = 512;
+        std::atomic<int> callbackBlockSize { 0 };
 
         // The device name that setRecordingInputDevice() last SUCCESSFULLY
         // applied its full recording configuration to (explicit input

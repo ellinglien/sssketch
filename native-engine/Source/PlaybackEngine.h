@@ -403,8 +403,13 @@ namespace sssketch
          * export always uses its own fresh PlaybackEngine instance (see
          * RenderExport.cpp), so this defaulting to false there is automatic
          * — the metronome is a practice aid, not part of the actual mix. */
-        void setMetronomeEnabled(bool enabled) { metronomeEnabled = enabled; }
-        bool isMetronomeEnabled() const { return metronomeEnabled; }
+        void setMetronomeEnabled(bool enabled) { metronomeEnabled.store(enabled); }
+        bool isMetronomeEnabled() const { return metronomeEnabled.load(); }
+        void setMetronomeVolume(float volume)
+        {
+            metronomeVolume.store(volume < 0.0f ? 0.0f : (volume > 2.0f ? 2.0f : volume));
+        }
+        float getMetronomeVolume() const { return metronomeVolume.load(); }
 
         /** Message-thread API: called by IpcServer's set-live-param handler
          * to push a new live volume/fade value, and by its load-project
@@ -764,7 +769,8 @@ namespace sssketch
         std::atomic<unsigned long long> stagedApplies { 0 };
         std::atomic<unsigned long long> stagedDeferrals { 0 };
 
-        bool metronomeEnabled = false;
+        std::atomic<bool> metronomeEnabled { false };
+        std::atomic<float> metronomeVolume { 1.5f };
 
         // See StemDspState's own doc comment for the threading and
         // lifetime rules these two live under. `mutable` for the same

@@ -1266,6 +1266,18 @@ export function DiscoverPanel({
   // anymore -- buildEngineProject resolves each stem's own stretch ratio
   // fresh, every call.
   const [previewingSlotIds, setPreviewingSlotIds] = useState<Set<string>>(new Set())
+  // Solo is an independent audition layer over the musician's mute choices.
+  // `previewingSlotIds` remains the underlying mix; this id only narrows
+  // what is heard temporarily, so unsolo reveals the exact mix untouched.
+  const [soloedSlotId, setSoloedSlotId] = useState<string | null>(null)
+  const soloedSlotIdRef = useRef<string | null>(null)
+  const effectivePreviewingSlotIds = useMemo(
+    () => (soloedSlotId === null ? previewingSlotIds : new Set([soloedSlotId])),
+    [previewingSlotIds, soloedSlotId]
+  )
+  useEffect(() => {
+    soloedSlotIdRef.current = soloedSlotId
+  }, [soloedSlotId])
   // Mirrors `previewingSlotIds` for reportSlotResolution (below) to read --
   // that callback is invoked from each DiscoverSlotRow's own resolve effect,
   // which deliberately doesn't depend on this closure, so it can be invoked
@@ -1408,7 +1420,7 @@ export function DiscoverPanel({
   const rowsRef = useRef<HTMLDivElement>(null)
   const sweepLapRef = useRef({ lapIndex: 0, lastPos: 0, loopBars: 0 })
   const previewLoopBars = resolvedBarLengths.size > 0 ? Math.max(...resolvedBarLengths.values()) : 0
-  const sweepActive = previewingSlotIds.size > 0 && previewLoopBars > 0
+  const sweepActive = effectivePreviewingSlotIds.size > 0 && previewLoopBars > 0
   useLayoutEffect(() => {
     const moved = radioFoldMoveRef.current
     const move = radioFoldTransportMove(moved, pos, playing, previewLoopBars)
@@ -2096,9 +2108,11 @@ export function DiscoverPanel({
    * below has a dozen early returns and every one of them has to leave
    * liveSyncInFlightRef where it found it. */
   async function syncPreviewToEngine(ids: Set<string>, stage?: RadioStageRequest): Promise<void> {
+    const soloed = soloedSlotIdRef.current
+    const effectiveIds = soloed === null ? ids : new Set([soloed])
     if (stage !== undefined) {
       try {
-        await buildAndPushPreview(ids, stage)
+        await buildAndPushPreview(effectiveIds, stage)
       } finally {
         // A build that bailed out before the write left nothing with the
         // engine, so the ref has to let go -- otherwise stepRadioStage
@@ -2120,7 +2134,7 @@ export function DiscoverPanel({
     cancelStagedSwap('load-project')
     liveSyncInFlightRef.current += 1
     try {
-      await buildAndPushPreview(ids, undefined)
+      await buildAndPushPreview(effectiveIds, undefined)
     } finally {
       liveSyncInFlightRef.current -= 1
     }
@@ -2895,31 +2909,15 @@ export function DiscoverPanel({
     void syncPreviewToEngine(next)
   }
 
-  // Direct request, 2026-09-15 (Upcycle-inspired): solo THIS slot -- drop
-  // every other slot out of the mix, leaving just this one audible.
-  // Deliberately NOT a separate persisted "soloed slot id": mirrors
-  // store.ts's own SOLO_GROUP/SOLO_CHANNEL convention exactly (computed
-  // fresh from current state, toggle-back-to-full-mix on a second click of
-  // the SAME already-sole slot, rather than trying to snapshot/restore
-  // whatever the mix looked like before soloing -- "solo is normally a
-  // temporary A/B listen, not a state worth preserving precisely," same
-  // reasoning documented on SOLO_GROUP in store.ts). "Full mix" here means
-  // every currently-RESOLVED slot (resolvedStemsRef's own keys), matching
-  // this panel's own existing autoplay convention (a freshly resolved slot
-  // joins the mix automatically) rather than trying to recall which
-  // slots happened to be included right before the solo.
+  // Solo is deliberately separate from previewingSlotIds (the underlying
+  // Mute choices). Pressing S again clears only this audition layer; no
+  // slot is added to or removed from the saved mix.
   function toggleSlotSolo(id: string): void {
-    const alreadySoleSoloed = previewingSlotIds.size === 1 && previewingSlotIds.has(id)
-    // Un-solo brings back every resolved row but those radio is resting: its rest is not the
-    // user's mute, and un-soloing does not end it. Soloing a resting row puts it back in the mix
-    // by hand: its hook's return, now.
-    const next = alreadySoleSoloed
-      ? new Set([...resolvedStemsRef.current.keys()].filter((k) => !radioRestingRef.current.has(k)))
-      : new Set([id])
-    if (!alreadySoleSoloed) radioRestReturnsByHand(id)
-    previewingSlotIdsRef.current = next
-    setPreviewingSlotIds(next)
-    void syncPreviewToEngine(next)
+    const next = soloedSlotIdRef.current === id ? null : id
+    soloedSlotIdRef.current = next
+    setSoloedSlotId(next)
+    if (next !== null) radioRestReturnsByHand(id)
+    void syncPreviewToEngine(previewingSlotIdsRef.current)
   }
 
   // Called by each DiscoverSlotRow whenever its OWN resolved stem changes
@@ -8620,11 +8618,11 @@ export function DiscoverPanel({
                 barLength: stem.barLength
               },
         gain: slot.gain,
-        audible: previewingSlotIds.has(slot.id),
+        audible: effectivePreviewingSlotIds.has(slot.id),
         rolling: rerollingSlotIds.has(slot.id)
       }
     })
-  }, [slots, resolvedBarLengths, previewingSlotIds, rerollingSlotIds])
+  }, [slots, resolvedBarLengths, effectivePreviewingSlotIds, rerollingSlotIds])
 
   useEffect(() => {
     if (!onCoachSlotsChange) return
@@ -9242,6 +9240,10 @@ export function DiscoverPanel({
     // behind it. This is the one "that stem is never coming" signal the
     // panel has that isn't a timeout.
     releaseSyncHold(id)
+    if (soloedSlotIdRef.current === id) {
+      soloedSlotIdRef.current = null
+      setSoloedSlotId(null)
+    }
     resolvedStemsRef.current.delete(id)
     if (resolvedBarLengthsRef.current.has(id)) {
       const next = new Map(resolvedBarLengthsRef.current)
@@ -11278,7 +11280,6 @@ export function DiscoverPanel({
     const lengths = resolvedBarLengthsRef.current
     const longest = lengths.size > 0 ? Math.max(...lengths.values()) : 0
     const atLongest = [...lengths.values()].filter((b) => b === longest).length
-    const previewing = previewingSlotIdsRef.current
     const led = radioLedChangeRef.current
     return pickArcRemoval(
       slotsRef.current.map((s) => ({
@@ -11286,7 +11287,7 @@ export function DiscoverPanel({
         kinds: s.kinds,
         radioAdded: s.radioAdded === true,
         locked: s.locked,
-        soloed: previewing.size === 1 && previewing.has(s.id),
+        soloed: soloedSlotIdRef.current === s.id,
         // a hook's home, in any state: reserved for it
         held: radioHookReservesRow(radioHooksRef.current, s.id),
         // a row a hook rests on (or will, from the coming wrap) is not heard: it does not count as
@@ -13416,7 +13417,7 @@ export function DiscoverPanel({
     artistsIncludeMe: combined && selectionHasMe(artists),
     hasUsername,
     sound: soundNow,
-    sounding: previewingSlotIds.size > 0
+    sounding: effectivePreviewingSlotIds.size > 0
   }
   // The mix ids depend on the view alone (radioViewTopIds), so no strip model per render here.
   const radioMixShown: ReadonlySet<string> = useMemo(
@@ -13632,7 +13633,7 @@ export function DiscoverPanel({
       {radioOn ? (
         <RadioTopLine
           playing={playing}
-          canPlay={previewingSlotIds.size > 0}
+          canPlay={effectivePreviewingSlotIds.size > 0}
           onPlayToggle={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
           onStopRadio={() => {
             focusAfterSwitchRef.current = 'header'
@@ -13679,7 +13680,7 @@ export function DiscoverPanel({
                 row (was the actions row) -- direct request, 2026-09-17. */}
             <button
               onClick={() => dispatch({ type: playing ? 'PAUSE' : 'PLAY' })}
-              disabled={previewingSlotIds.size === 0}
+              disabled={effectivePreviewingSlotIds.size === 0}
               data-tooltip={playing ? 'stop' : 'play'}
               aria-label={playing ? 'stop' : 'play'}
               style={{
@@ -13692,18 +13693,18 @@ export function DiscoverPanel({
                 fontSize: 11,
                 border: '1px solid var(--ra-border-strong)',
                 background:
-                  previewingSlotIds.size === 0
+                  effectivePreviewingSlotIds.size === 0
                     ? 'var(--ra-bg-row-active)'
                     : playing
                       ? 'var(--ra-play-on)'
                       : 'var(--ra-bg-row-active)',
                 color:
-                  previewingSlotIds.size === 0
+                  effectivePreviewingSlotIds.size === 0
                     ? 'var(--ra-text-4)'
                     : playing
                       ? 'var(--ra-play-on-ink)'
                       : 'var(--ra-text)',
-                cursor: previewingSlotIds.size === 0 ? 'default' : 'pointer'
+                cursor: effectivePreviewingSlotIds.size === 0 ? 'default' : 'pointer'
               }}
             >
               {playing ? '■' : '▶'}
@@ -14082,7 +14083,7 @@ export function DiscoverPanel({
           field on the engine's project (spec 4A.3), with its own
           ChannelFilter over the summed master pair. */}
       {/* While radio runs these dials are the strip's sound group (radio view plan Task 9). */}
-      {previewingSlotIds.size > 0 && !radioOn && (
+      {effectivePreviewingSlotIds.size > 0 && !radioOn && (
         <div
           style={{
             display: 'flex',
@@ -14244,8 +14245,10 @@ export function DiscoverPanel({
               rerolling={rerollingSlotIds.has(slot.id)}
               manualWaiting={manualWaitingSlotIds.has(slot.id)}
               previewing={previewingSlotIds.has(slot.id)}
+              sounding={effectivePreviewingSlotIds.has(slot.id)}
+              soloSuppressed={soloedSlotId !== null && soloedSlotId !== slot.id}
               radioResting={radioOn && radioRestingShown.has(slot.id)}
-              soloed={previewingSlotIds.size === 1 && previewingSlotIds.has(slot.id)}
+              soloed={soloedSlotId === slot.id}
               favourited={slot.candidate !== null && stemFavourites.has(slot.candidate.stemCID)}
               maxBarLength={maxBarLength}
               onToggleLock={() => toggleLock(slot.id)}

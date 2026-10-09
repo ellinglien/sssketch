@@ -7,6 +7,8 @@ audio engine (JUCE) running underneath for playback and (basic) plugin hosting.
 
 **Status:** early beta. Expect rough edges — see [Known issues](#known-issues) below.
 
+See the [changelog](CHANGELOG.md) for the latest unreleased work.
+
 This app isn't affiliated with or endorsed by Endlesss or Hablab London. Use at your own risk.
 
 AI disclosure: this codebase is AI-assisted. See [AI_DISCLOSURE.md](AI_DISCLOSURE.md).

@@ -25,9 +25,8 @@ export function getAutoCategorizedStemCIDs(
 }
 
 export interface StemAutoClassifyProgress {
-  /** Rows in StemAutoCategory -- stems the background scan has already
-   * classified. */
-  classified: number
+  /** Eligible analysed stems that received an automatic category. */
+  categorized: number
   /** Distinct stems with a cached embedding or feature vector (whichever
    * of the two the background scan can classify from, see
    * stemAutoClassify.ts's own two-pass logic) that aren't already
@@ -39,9 +38,18 @@ export interface StemAutoClassifyProgress {
    * counted here at all -- see that component's own progress readout for
    * extraction progress, a genuinely separate number. */
   eligible: number
+  /** Eligible stems tried under the classifier's current training whose
+   * instrument mask has not changed, but for which neither classifier had
+   * a confident answer. These are complete work, not a pending backlog. */
+  terminalUnclassified: number
+  /** Eligible stems neither categorized nor terminal under current
+   * training. This is the number that can still make forward progress. */
+  pending: number
+  /** categorized + terminalUnclassified. */
+  processed: number
 }
 
-/** A cheap, on-demand snapshot of the background classify scan's own
+/** An on-demand snapshot of the background classify scan's own
  * progress (stemAutoClassify.ts) -- for the settings menu's "turn on/off
  * discover library scan" entry to show alongside itself
  * (TransportBar.tsx). Deliberately a live query, not a running counter
@@ -50,25 +58,64 @@ export interface StemAutoClassifyProgress {
  * TransportBar.tsx's own endlesssStatus/linkStatus already use), so there's
  * no persistent poll/subscription just for a number glanced at a few times
  * a session. */
-export function getStemAutoClassifyProgress(ownDb: Database.Database): StemAutoClassifyProgress {
-  const classified = (
-    ownDb.prepare(`SELECT COUNT(*) AS n FROM StemAutoCategory`).get() as { n: number }
-  ).n
-  const eligible = (
-    ownDb
-      .prepare(
-        `SELECT COUNT(*) AS n FROM (
-           SELECT StemCID FROM StemEmbeddingCache
-           UNION
-           SELECT StemCID FROM StemFeatureCache
-         ) candidates
-         WHERE candidates.StemCID NOT IN (
-           SELECT StemCID FROM StemCategories WHERE ArrangeRole IS NOT NULL
-         )`
-      )
-      .get() as { n: number }
-  ).n
-  return { classified, eligible }
+export async function getStemAutoClassifyProgress(
+  ownDb: Database.Database,
+  trainingFingerprint?: string,
+  lookupMasks?: (stemCIDs: string[]) => Map<string, number>
+): Promise<StemAutoClassifyProgress> {
+  const rows = ownDb
+    .prepare(
+      `SELECT candidates.StemCID AS StemCID,
+         EXISTS (SELECT 1 FROM StemAutoCategory a
+                 WHERE a.StemCID = candidates.StemCID) AS Categorized
+       FROM (
+         SELECT StemCID FROM StemEmbeddingCache
+         UNION
+         SELECT StemCID FROM StemFeatureCache
+       ) candidates
+       WHERE NOT EXISTS (
+         SELECT 1 FROM StemCategories c
+         WHERE c.StemCID = candidates.StemCID AND c.ArrangeRole IS NOT NULL
+       )`
+    )
+    .all() as { StemCID: string; Categorized: number }[]
+
+  const categorized = rows.reduce((n, row) => n + (row.Categorized ? 1 : 0), 0)
+  let terminalUnclassified = 0
+  if (trainingFingerprint !== undefined && lookupMasks !== undefined) {
+    const triedRows = ownDb
+      .prepare(`SELECT StemCID, Mask FROM StemAutoClassifyTried WHERE TrainingFingerprint = ?`)
+      .all(trainingFingerprint) as { StemCID: string; Mask: number | null }[]
+    const tried = new Map(triedRows.map((row) => [row.StemCID, row.Mask]))
+    const unresolved = rows
+      .filter((row) => !row.Categorized && tried.has(row.StemCID))
+      .map((row) => row.StemCID)
+    // Keep each SQL fallback used by lookupMasks below SQLite's variable
+    // limit, matching the classifier's own tried-mask audit chunk size.
+    const chunkSize = 500
+    for (let start = 0; start < unresolved.length; start += chunkSize) {
+      const chunk = unresolved.slice(start, start + chunkSize)
+      const currentMasks = lookupMasks(chunk)
+      for (const stemCID of chunk) {
+        if ((currentMasks.get(stemCID) ?? null) === tried.get(stemCID)) {
+          terminalUnclassified += 1
+        }
+      }
+      if (start + chunkSize < unresolved.length) {
+        await new Promise<void>((resolve) => setImmediate(resolve))
+      }
+    }
+  }
+
+  const eligible = rows.length
+  const processed = categorized + terminalUnclassified
+  return {
+    categorized,
+    eligible,
+    terminalUnclassified,
+    pending: eligible - processed,
+    processed
+  }
 }
 
 /** Persists one stem's precomputed classification. Upsert (not insert-only)

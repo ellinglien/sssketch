@@ -54,6 +54,15 @@ export interface Stem {
   path: string
   durationSec: number
   barLength: number
+  /** Original audio path before a re-one/downbeat correction was baked.
+   * Preserved as provenance so a later re-one can create another immutable
+   * derivative without mutating audio referenced by older riffs, and so
+   * Discover can return to a common unrotated basis while auditioning
+   * replacements. */
+  phaseSourcePath?: string
+  /** Total clockwise rotation already materialized into `path`, measured
+   * in musical bars relative to phaseSourcePath. */
+  phaseBars?: number
   /** True for a one-shot sample dropped directly from Finder onto the
    * arranger (see docs/superpowers/specs/2026-08-02-one-shot-sample-import-design.md)
    * -- never tiled/looped, never auto-resampled to match project bpm.
@@ -96,6 +105,12 @@ export interface Stem {
 
 export interface Rifff {
   groupId: string
+  /** Explicit ownership lineage for downbeat/re-one propagation. Rifffs
+   * with different lineage ids may point at the same materialized audio
+   * file without phase edits leaking between them (Cross offspring are the
+   * first such case). Undefined keeps the legacy path-based compatibility
+   * behavior for projects saved before this field existed. */
+  phaseLinkId?: string
   name: string
   bpm: number
   barLength: number

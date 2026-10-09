@@ -30,8 +30,11 @@ import {
 } from './components/zoomMath'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
+import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './components/arrangementMixerRail'
 import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
+import { CrossPanel } from './components/CrossPanel'
+import { rifffForSketchCross } from './components/crossFromSketch'
 import { Playhead } from './components/Playhead'
 import { RiserExtentGesture } from './components/RiserExtentGesture'
 import { BeatPicker, bakeStems, rebakeRifff } from './components/BeatPicker'
@@ -112,13 +115,20 @@ import type { AppState, LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
-import type { BusId, Rifff } from '@shared/types'
+import { stemKey, type BusId, type Rifff } from '@shared/types'
+import {
+  createCrossDraft,
+  crossParentFromRifff,
+  crossProjectKey,
+  type CrossDraft
+} from '@shared/cross'
+import { stopActivePreview } from './audio/previewLoop'
 import { assessTidyUpReadiness, unbussedStemPaths } from '@shared/tidyUpReadiness'
 import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
 import type { DiscoverSettings } from '../../main/discoverSettingsStore'
 import { DEFAULT_TRAIT_BAR, nextTraitMatchBar } from '@shared/traitBar'
-import { DEFAULT_RADIO_SETTINGS, type RadioSettings } from '@shared/radioSchedule'
+import { DEFAULT_RADIO_SETTINGS, radioSourceOf, type RadioSettings } from '@shared/radioSchedule'
 import { DEFAULT_RADIO_VIEW, type RadioView } from '@shared/radioView'
 import { mergeLatestSettings, nestedPatchFromLatest } from '@shared/latestSettings'
 import { pickBestRifffForReOne } from '@shared/reOneScoring'
@@ -208,7 +218,10 @@ function Timeline({
   onCancelRiserArm,
   onCreateRiser,
   openRiserLaneId,
-  onCloseRiserLane
+  onCloseRiserLane,
+  selectedRiffIds,
+  riffSelectionAnchorId,
+  onRiffSelectionChange
 }: {
   onOpenClipMenu: (x: number, y: number, groupId: string) => void
   onOpenRiserMenu: (x: number, y: number, riserId: string) => void
@@ -228,6 +241,9 @@ function Timeline({
    * openRiserLaneId. */
   openRiserLaneId: string | null
   onCloseRiserLane: () => void
+  selectedRiffIds: ReadonlySet<string>
+  riffSelectionAnchorId: string | null
+  onRiffSelectionChange: (groupIds: Set<string>, anchorId: string | null) => void
   /** Fires for every mousedown anywhere in the timeline's content area,
    * including on a clip — the caller (Frame) is the one that checks
    * e.metaKey and whether the mousedown landed on a `[data-rifff-clip]`
@@ -462,7 +478,13 @@ function Timeline({
   }
 
   if (state.mode === 'sketch') {
-    return <SketchStrip />
+    return (
+      <SketchStrip
+        selectedRiffIds={selectedRiffIds}
+        selectionAnchorId={riffSelectionAnchorId}
+        onSelectionChange={onRiffSelectionChange}
+      />
+    )
   }
 
   const ghostRowHeight = GHOST_ROW_HEIGHT
@@ -1739,6 +1761,49 @@ function Frame(): React.JSX.Element {
   // within one already-open session -- App.tsx itself never unmounts for
   // the life of the app, LibraryBrowser does every time the modal closes.
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
+  // Cross is deliberately disposable: its result only persists when the
+  // user explicitly adds it to Shelf or Timeline. Closing Cross clears this
+  // draft, so opening another pair never needs a discard confirmation.
+  const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
+  const [crossOpen, setCrossOpen] = useState(false)
+  // One shared, session-only riff selection for both Sketch and Shelf.
+  // Keeping this above the fullscreen Cross/Discover workspaces means the
+  // exact working set remains highlighted when either workspace closes;
+  // keeping it outside project serialization means it is still ordinary UI
+  // state, not musical project data. The anchor is separate from state.sel:
+  // Sketch's playback auto-follow legitimately changes state.sel as the
+  // playhead advances, but must not collapse a deliberate two-riff choice.
+  const [riffSelection, setRiffSelection] = useState<{
+    ids: Set<string>
+    anchorId: string | null
+  }>(() => ({ ids: new Set(), anchorId: null }))
+  const selectedRiffIds = useMemo(() => {
+    const valid = new Set([...riffSelection.ids].filter((id) => state.rifffs[id] !== undefined))
+    // A loaded project already has an Inspector selection. Until the user
+    // deliberately establishes a shared working set, mirror that one riff
+    // instead of making Shelf/Sketch look unselected after open/recovery.
+    if (valid.size === 0 && state.sel && state.rifffs[state.sel]) valid.add(state.sel)
+    return valid
+  }, [riffSelection.ids, state.rifffs, state.sel])
+  const riffSelectionAnchorId =
+    riffSelection.anchorId && state.rifffs[riffSelection.anchorId]
+      ? riffSelection.anchorId
+      : selectedRiffIds.size === 1
+        ? [...selectedRiffIds][0]
+        : null
+  const handleRiffSelectionChange = useCallback(
+    (groupIds: Set<string>, anchorId: string | null) => {
+      setRiffSelection({ ids: new Set(groupIds), anchorId })
+    },
+    []
+  )
+  const inspectorCrossPair = useMemo<[Rifff, Rifff] | null>(() => {
+    if (selectedRiffIds.size !== 2) return null
+    const [leftId, rightId] = [...selectedRiffIds]
+    const left = state.rifffs[leftId]
+    const right = state.rifffs[rightId]
+    return left && right ? [left, right] : null
+  }, [selectedRiffIds, state.rifffs])
   // Discover artist mode: the chosen artists (combine artists, spec
   // 2026-10-06), `[null]` = me. Session-only, the same lifetime as
   // discoverSlots -- Discover opens on `me` at launch.
@@ -1813,8 +1878,16 @@ function Frame(): React.JSX.Element {
       return true
     }
   })
+  const [onboardingDismissedForSession, setOnboardingDismissedForSession] = useState(false)
+
+  function hideOnboardingForSession(): void {
+    setShowOnboarding(false)
+    setOnboardingDismissedForSession(true)
+  }
+
   function dismissOnboarding(dontShowAgain: boolean): void {
     setShowOnboarding(false)
+    setOnboardingDismissedForSession(true)
     // Choosing any of this modal's normal actions (new/open/login/tour)
     // while a recovery notice is still showing (see OnboardingModal's own
     // doc comment -- the notice now sits ON TOP OF those buttons rather
@@ -1848,6 +1921,7 @@ function Frame(): React.JSX.Element {
       // localStorage unavailable -- it just won't auto-show again next
       // launch either way; still open it now.
     }
+    setOnboardingDismissedForSession(false)
     setShowOnboarding(true)
   }
 
@@ -2122,7 +2196,7 @@ function Frame(): React.JSX.Element {
   // applied here too now that it's a real possibility (previously
   // LibraryBrowser always mounted fresh on open, so there was never
   // anything to lose).
-  function openRiffLibraryWithDiscoverSeed(rifff: Rifff): void {
+  async function openRiffLibraryWithDiscoverSeed(rifff: Rifff): Promise<void> {
     const hasRealContent = discoverHasRealContent(discoverSlots)
     if (
       hasRealContent &&
@@ -2132,6 +2206,43 @@ function Frame(): React.JSX.Element {
     ) {
       return
     }
+    let seedRifff = rifff
+    const groupSteps = state.off[rifff.groupId] ?? 0
+    const effectiveSteps = new Map(
+      rifff.stems.map((stem) => [
+        stem.slot,
+        state.off[stemKey(rifff.groupId, stem.slot)] ?? groupSteps
+      ])
+    )
+    if ([...effectiveSteps.values()].some((steps) => steps !== 0)) {
+      // Discover's library/Keep formats do not carry runtime phase. Make
+      // the exact effective phase of every source stem physical first, as
+      // one immutable all-or-nothing batch, then seed from those returned
+      // paths. This also repairs the intended per-stem precedence of a
+      // legacy partial bake instead of copying its contradictory off map.
+      const results = await bakeStems(
+        dispatch,
+        (stem) => effectiveSteps.get(stem.slot) ?? 0,
+        SNAP_DIVS[state.snapIdx],
+        rifff.stems,
+        [rifff.groupId]
+      )
+      if (!results) {
+        window.alert('Could not prepare every stem for Discover. Nothing was changed; try again.')
+        return
+      }
+      const byPath = new Map(results.map((result) => [result.path, result]))
+      seedRifff = {
+        ...rifff,
+        stems: rifff.stems.map((stem) => {
+          const result = byPath.get(stem.path)
+          return result
+            ? { ...stem, path: result.bakedPath, durationSec: result.durationSec }
+            : stem
+        })
+      }
+    }
+
     setLibraryBrowserOpen(false)
     // Says 'discover' outright rather than leaving the browser to infer it
     // from the slots seeded on the next line. That inference used to be the
@@ -2140,13 +2251,68 @@ function Frame(): React.JSX.Element {
     // on 'browse'); now that every opener names its half, this one should
     // too.
     setRiffLibraryInitialMode('discover')
-    setDiscoverSlots(buildSeedSlotsFromStems(rifff.stems))
+    setDiscoverSlots(buildSeedSlotsFromStems(seedRifff.stems))
     setDiscoverChaos(DEFAULT_DISCOVER_CHAOS)
     setDiscoverUndoStack([[]])
     setDiscoverRedoStack([])
     setDiscoverSeedBpm(rifff.bpm)
     setRiffLibraryOpen(true)
   }
+
+  /** Opens Cross from exactly the two riffs selected in Sketch or Shelf. Cross is a
+   * peer music-making workspace to Discover, not a library/import action:
+   * its parents are the two project riffs exactly as currently heard. */
+  async function openCrossFromRiffs([left, right]: [Rifff, Rifff]): Promise<void> {
+    const projectKey = crossProjectKey(currentSketch, state.projectSeed)
+    const selectedIds = new Set([left.groupId, right.groupId])
+    const existingIds = new Set(crossDraft?.parents.map((parent) => parent.id) ?? [])
+    const samePair =
+      crossDraft?.projectKey === projectKey &&
+      existingIds.size === 2 &&
+      [...selectedIds].every((id) => existingIds.has(id))
+
+    stopActivePreview()
+    dispatch({ type: 'PAUSE' })
+    if (samePair) {
+      setCrossOpen(true)
+      return
+    }
+    setBusy('preparing cross…')
+    try {
+      const prepared = await Promise.all(
+        [left, right].map((rifff) =>
+          rifffForSketchCross(rifff, state.off, SNAP_DIVS[state.snapIdx], (jobs) =>
+            window.rifffApi.bakeOffset(jobs)
+          )
+        )
+      )
+      if (!prepared[0] || !prepared[1]) {
+        window.alert('Could not prepare every stem for Cross. Nothing was changed; try again.')
+        return
+      }
+      setCrossDraft({
+        ...createCrossDraft(
+          projectKey,
+          crossParentFromRifff(prepared[0], state.vol),
+          crossParentFromRifff(prepared[1], state.vol),
+          state.bpm
+        ),
+        // Cross and Discover expose the same Endlesss↔Other choice. Seed a
+        // disposable Cross draft from the persisted setting rather than
+        // resetting the knob whenever a new pair is opened.
+        sourceLean: radioSourceOf(discoverSettingsRef.current.radio)
+      })
+      setCrossOpen(true)
+    } catch (err) {
+      console.error('App: failed to prepare selected riffs for Cross:', err)
+      window.alert(
+        'Could not prepare the selected riffs for Cross. Nothing was changed; try again.'
+      )
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const [clusterStemsOpen, setClusterStemsOpen] = useState(false)
   // Which stems the open Tidy Up pass is over -- see TidyUpPopulation
   // (ClusterStemsBrowser.tsx). Every existing entry point means 'sketch';
@@ -2900,10 +3066,15 @@ function Frame(): React.JSX.Element {
             />
           </div>
         </div>
+        {/* Kept above the mode-specific Arrange / Map / Sketch content so
+            two-riff Shelf selection and Cross are available in all three. */}
         <Shelf
           onImported={handleImported}
           onOpenLibrary={openRiffLibrary}
           onSeedDiscover={openRiffLibraryWithDiscoverSeed}
+          selectedRiffIds={selectedRiffIds}
+          selectionAnchorId={riffSelectionAnchorId}
+          onSelectionChange={handleRiffSelectionChange}
         />
         <TransportBar
           onEnableGatedRecording={() => void enableGatedRecording()}
@@ -2959,9 +3130,43 @@ function Frame(): React.JSX.Element {
                   onCreateRiser={createRiserFromGesture}
                   openRiserLaneId={openRiserLaneId}
                   onCloseRiserLane={closeRiserLane}
+                  selectedRiffIds={selectedRiffIds}
+                  riffSelectionAnchorId={riffSelectionAnchorId}
+                  onRiffSelectionChange={handleRiffSelectionChange}
                 />
               )}
             </div>
+            {state.mode === 'normal' && (
+              <div
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  zIndex: 4,
+                  top: 0,
+                  right: 0,
+                  bottom: 0,
+                  width: ARRANGEMENT_MIXER_RAIL_WIDTH,
+                  boxSizing: 'border-box',
+                  borderLeft: '1px solid var(--ra-border)',
+                  background: 'color-mix(in srgb, var(--ra-bg-bar) 97%, transparent)',
+                  boxShadow: '-5px 0 14px color-mix(in srgb, #000 28%, transparent)',
+                  pointerEvents: 'none'
+                }}
+              >
+                <div
+                  style={{
+                    height: 24,
+                    display: 'grid',
+                    placeItems: 'center',
+                    borderBottom: '1px solid var(--ra-border)',
+                    color: 'var(--ra-text-4)',
+                    fontSize: 8
+                  }}
+                >
+                  mix
+                </div>
+              </div>
+            )}
           </div>
           {/* Drawer handle — same subtle-strip visual language as the stem
             resize handles (StemWaveformRow/CollapsedRifffRow), just click
@@ -3006,6 +3211,8 @@ function Frame(): React.JSX.Element {
             <Inspector
               onOpenBeatPicker={handleOpenBeatPickerForEdit}
               onSeedDiscover={openRiffLibraryWithDiscoverSeed}
+              crossPair={inspectorCrossPair}
+              onCrossRiffs={(rifffs) => void openCrossFromRiffs(rifffs)}
             />
           </div>
         </div>
@@ -3031,7 +3238,9 @@ function Frame(): React.JSX.Element {
               for (const siblingGroupId of siblingGroupIds) {
                 const siblingRifff = state.rifffs[siblingGroupId]
                 if (!siblingRifff) continue
-                void bakeStems(dispatch, steps, SNAP_DIVS[state.snapIdx], siblingRifff.stems)
+                void bakeStems(dispatch, steps, SNAP_DIVS[state.snapIdx], siblingRifff.stems, [
+                  siblingGroupId
+                ])
               }
             }}
           />
@@ -3064,6 +3273,29 @@ function Frame(): React.JSX.Element {
             onCoachSlotsChange={handleCoachSlotsChange}
           />
         )}
+        {crossOpen &&
+          crossDraft?.projectKey === crossProjectKey(currentSketch, state.projectSeed) && (
+            <div
+              style={{
+                position: 'fixed',
+                inset: 0,
+                zIndex: 'var(--ra-z-fullscreen)',
+                display: 'flex',
+                background: 'var(--ra-bg-page)'
+              }}
+            >
+              <CrossPanel
+                draft={crossDraft}
+                setDraft={setCrossDraft}
+                currentProjectKey={crossProjectKey(currentSketch, state.projectSeed)}
+                onSourceLeanCommit={(source) => void setRadioSettings({ source })}
+                onBack={() => {
+                  setCrossOpen(false)
+                  setCrossDraft(null)
+                }}
+              />
+            </div>
+          )}
         {libraryBrowserOpen && (
           <ProjectLibraryBrowser
             onClose={() => setLibraryBrowserOpen(false)}
@@ -3204,44 +3436,47 @@ function Frame(): React.JSX.Element {
           crash-recovery snapshot always wins over "don't show this again,"
           since that opt-out was about the welcome pitch, not about
           silently dropping recoverable work. */}
-        {!showLibraryLocationSetup && (showOnboarding || recoverableAutosave !== null) && (
-          <OnboardingModal
-            hasRecovery={recoverableAutosave !== null}
-            onRecover={(dontShowAgain) => void handleRecoverAutosave(dontShowAgain)}
-            onDiscardRecovery={handleDiscardRecovery}
-            onNewProject={(dontShowAgain) => {
-              // Dismiss first so the welcome modal doesn't visually stack
-              // behind/conflict with whatever handleNew() shows next (the
-              // discard-guard dialog and/or NewProjectModal) -- see
-              // handleNew()'s own doc comment for why this routes through
-              // the exact same path as the toolbar's "new" button rather
-              // than a separate welcome-only shortcut.
-              dismissOnboarding(dontShowAgain)
-              void handleNew()
-            }}
-            onOpenProject={(dontShowAgain) => {
-              dismissOnboarding(dontShowAgain)
-              openLibraryBrowser()
-            }}
-            onOpenEndlesss={(dontShowAgain) => {
-              dismissOnboarding(dontShowAgain)
-              openRiffLibrary('import')
-            }}
-            onStartTour={(dontShowAgain) => {
-              const hasExistingContent = Object.keys(state.rifffs).length > 0
-              if (
-                hasExistingContent &&
-                !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
-              ) {
-                return
-              }
-              dismissOnboarding(dontShowAgain)
-              void startTour()
-            }}
-            tourSeen={tourSeen}
-            endlesssLoggedIn={endlesssLoggedIn}
-          />
-        )}
+        {!showLibraryLocationSetup &&
+          !onboardingDismissedForSession &&
+          (showOnboarding || recoverableAutosave !== null) && (
+            <OnboardingModal
+              hasRecovery={recoverableAutosave !== null}
+              onRecover={(dontShowAgain) => void handleRecoverAutosave(dontShowAgain)}
+              onDiscardRecovery={handleDiscardRecovery}
+              onNewProject={(dontShowAgain) => {
+                // Dismiss first so the welcome modal doesn't visually stack
+                // behind/conflict with whatever handleNew() shows next (the
+                // discard-guard dialog and/or NewProjectModal) -- see
+                // handleNew()'s own doc comment for why this routes through
+                // the exact same path as the toolbar's "new" button rather
+                // than a separate welcome-only shortcut.
+                dismissOnboarding(dontShowAgain)
+                void handleNew()
+              }}
+              onOpenProject={(dontShowAgain) => {
+                dismissOnboarding(dontShowAgain)
+                openLibraryBrowser()
+              }}
+              onOpenEndlesss={(dontShowAgain) => {
+                dismissOnboarding(dontShowAgain)
+                openRiffLibrary('import')
+              }}
+              onStartTour={(dontShowAgain) => {
+                const hasExistingContent = Object.keys(state.rifffs).length > 0
+                if (
+                  hasExistingContent &&
+                  !window.confirm('Start the tour? This adds a demo rifff to your current sketch.')
+                ) {
+                  return
+                }
+                dismissOnboarding(dontShowAgain)
+                void startTour()
+              }}
+              onDismiss={hideOnboardingForSession}
+              tourSeen={tourSeen}
+              endlesssLoggedIn={endlesssLoggedIn}
+            />
+          )}
         {tourStepIndex !== null && (
           <TourOverlay
             steps={TOUR_STEPS}

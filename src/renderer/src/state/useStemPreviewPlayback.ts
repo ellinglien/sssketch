@@ -12,7 +12,7 @@ import { markManualSeek } from './manualSeek'
 /** Solo-and-seek stem preview playback -- extracted out of
  * ClusterStemsBrowser.tsx (Tidy Up), which AutoArrangeRoleStep.tsx's own
  * per-stem preview was built to mirror as closely as possible. Originally
- * duplicated whole between the two (previewingKeys, muteSnapshot, the
+ * duplicated whole between the two (previewingKeys, solo snapshot, the
  * unmount-cleanup restore, and startPreview's own async ordering), which
  * is a real risk specifically BECAUSE that ordering embeds a fix for a
  * previously-shipped bug (see startPreview's own doc comment below) -- a
@@ -47,6 +47,7 @@ export function useStemPreviewPlayback(): {
   const dispatch = useDispatch()
   const rifffs = useAppSelector((s) => s.rifffs)
   const mute = useAppSelector((s) => s.mute)
+  const mixerSolo = useAppSelector((s) => s.mixerSolo)
   const vol = useAppSelector((s) => s.vol)
   const sound = useAppSelector((s) => s.sound)
   const playing = usePlaying()
@@ -57,14 +58,10 @@ export function useStemPreviewPlayback(): {
     release: releaseEngine
   } = useEngineOwnership()
 
-  // Snapshot of the REAL mute/vol state as it stood the moment this hook
-  // first mounted (useState's lazy initializer runs exactly once) --
-  // restored verbatim on unmount below so any SOLO_STEMS preview-auditioning
-  // (mute) or preview-volume boost (vol, see startPreview below) done by a
-  // caller never leaks into the real arrangement's mute/volume state once
-  // its own UI (the cluster browser, the role-confirmation step, ...)
-  // closes/advances.
-  const [muteSnapshot] = useState(() => mute)
+  // Snapshot the pre-existing Solo layer so a temporary Tidy Up/Auto Arrange
+  // audition can replace it and then put it back exactly. Durable Disable
+  // and temporary Mute are never changed by the audition at all.
+  const [mixerSoloSnapshot] = useState(() => mixerSolo)
   // 2026-09-14: previewing a stem here is meant to answer "what does this
   // sound like," not "how loud is it mixed into the real rifff/arrangement"
   // -- a stem quietly mixed on import (see LibraryBrowser.tsx's own gain
@@ -79,7 +76,7 @@ export function useStemPreviewPlayback(): {
   // unmounted WHILE flushEngineSyncNow was still in flight. flushEngineSyncNow
   // bypasses the coalesced sync and pushes the soloed mute straight to the
   // engine; if the component unmounts mid-await, the unmount-cleanup effect
-  // below fires first (RESTORE_MUTE + PAUSE), but the pending
+  // below fires first (RESTORE_MIXER_SOLO + PAUSE), but the pending
   // flushEngineSyncNow call was already promised to resolve and, without
   // this guard, would go on to push the stale soloed mute back to the
   // engine and then seek/PLAY using a `playing` value closed over from
@@ -144,18 +141,18 @@ export function useStemPreviewPlayback(): {
       // is the detail that matters most in this whole change. This
       // cleanup does NOT itself flush to the engine; it dispatches into
       // the reducer and relies on StoreContext's own automatic sync
-      // effect (which watches state.mute/state.vol, both changed by the
+      // effect (which watches state.mixerSolo/state.vol, both changed by the
       // two dispatches below) to notice and push the correction. Without
       // this release() call, that automatic effect would believe this
       // hook still owns the engine forever after this component
       // unmounts, and would silently stop restoring the real project's
-      // mute/vol here on out.
+      // solo/vol here on out.
       releaseEngine()
-      dispatch({ type: 'RESTORE_MUTE', mute: muteSnapshot })
+      dispatch({ type: 'RESTORE_MIXER_SOLO', mixerSolo: mixerSoloSnapshot })
       dispatch({ type: 'RESTORE_VOL', vol: volSnapshot })
       dispatch({ type: 'PAUSE' })
     }
-  }, [dispatch, muteSnapshot, volSnapshot, releaseEngine])
+  }, [dispatch, mixerSoloSnapshot, volSnapshot, releaseEngine])
 
   // Centralizing the seek here -- rather than resuming from wherever the
   // transport already happened to be -- is what makes "what's playing"

@@ -3,18 +3,11 @@ import { dbLabel } from '@shared/visuals'
 import { stemKey } from '@shared/types'
 import { scheduleLiveParamSync } from './liveParamSync'
 import { useAppSelector, useDispatch } from '../state/StoreContext'
+import { ARRANGEMENT_FIRST_GAIN_TOP, ARRANGEMENT_MIXER_CONTROL_INSET } from './arrangementMixerRail'
 
-/** The dial's own size. Small enough to sit in a 44px row's control stack
- * beside the m/s letters (ChannelRow's own buttons are ~15px tall) without
- * crowding it -- "a very tiny dial on the right of each channel? where the
- * letters are" (Elling, 2026-09-22). */
+/** The dial's own size. Small enough to continue the narrow right-edge
+ * control stack beneath the channel's m/s letters without crowding it. */
 const DIAL_SIZE = 18
-
-/** How far in from the row's right edge the dial sits. ChannelRow's m/s/fx
- * stack is pinned at right: 4 and each button is ~16px wide, so this parks
- * the dial in its own column immediately to the LEFT of those letters
- * rather than underneath them. */
-const DIAL_RIGHT_PX = 26
 
 /** Whose gain this dial moves. An EXPANDED rifff shows one row per stem, so
  * each dial owns exactly its own stem; a COLLAPSED one draws its stems as a
@@ -37,8 +30,8 @@ export type GainDialTarget =
   | { kind: 'riser'; riserId: string }
 
 /**
- * The static per-stem gain (state.vol), as a knob pinned to the right edge
- * of one arranger row.
+ * The static per-stem gain (state.vol), as a knob in the narrow mixer column
+ * pinned to the right edge of one arranger row.
  *
  * This is the LEVEL. The clip's automation lane's `volume` curve is its
  * SHAPE, and the two multiply -- see buildEngineProject's buildStemToolkit,
@@ -71,7 +64,8 @@ export type GainDialTarget =
 export function RowGainDial({
   target,
   defaultGain,
-  ariaLabel
+  ariaLabel,
+  belowChannelButtons = false
 }: {
   target: GainDialTarget
   /** Where a double-click puts it back to -- the same import-time default
@@ -79,6 +73,10 @@ export function RowGainDial({
    * double-click-to-reset already uses, so the two gestures agree. */
   defaultGain: number
   ariaLabel: string
+  /** The first/only gain in a channel starts below Mute and Solo. Additional
+   * expanded-stem gains sit at the top of their own rows, continuing down
+   * the same narrow mixer column without wasting vertical space. */
+  belowChannelButtons?: boolean
 }): React.JSX.Element {
   const dispatch = useDispatch()
   const key =
@@ -158,7 +156,14 @@ export function RowGainDial({
     // while the timeline scrolls horizontally without adding anything to
     // the row's own flow height.
     <div style={{ position: 'sticky', right: 0, top: 0, height: 0, zIndex: 6 }}>
-      <div style={{ position: 'absolute', right: DIAL_RIGHT_PX, top: 2 }}>
+      <div
+        style={{
+          position: 'absolute',
+          right: ARRANGEMENT_MIXER_CONTROL_INSET,
+          top: belowChannelButtons ? ARRANGEMENT_FIRST_GAIN_TOP : 2,
+          padding: 2
+        }}
+      >
         <Dial
           value={Math.round(gain * 100)}
           onChange={handleChange}

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { writeFileSync, mkdtempSync, rmSync, readFileSync, existsSync } from 'node:fs'
+import { writeFileSync, mkdtempSync, rmSync, readFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -58,7 +58,8 @@ describe('bakeOffset', () => {
       writeRampWav(path, 1000, 1000)
       const results = await bakeOffset([{ path, rotationSec: 0.25 }])
       expect(results).toHaveLength(1)
-      expect(results[0].bakedPath).toBe(join(dir, 'source.baked.wav'))
+      expect(results[0].bakedPath).toMatch(/\.sssketch-bakes\/.+\.baked\.wav$/)
+      expect(results[0].bakedPath).not.toBe(path)
       // A rotation preserves the exact sample count, so this must still be
       // 1000 samples / 1000Hz = 1 real second, measured from the actual
       // rotated bytes rather than assumed.
@@ -90,7 +91,10 @@ describe('bakeOffset', () => {
       // pair of frames that were adjacent in the source, so blending it again
       // would smear real audio — and would do so once per re-bake, forever.
       const second = await bakeOffset([{ path: first[0].bakedPath, rotationSec: 0.1 }])
-      expect(second[0].bakedPath).toBe(first[0].bakedPath)
+      expect(second[0].bakedPath).not.toBe(first[0].bakedPath)
+      // Immutable means the first version's bytes stay exactly as they were
+      // while the second version is published at a fresh path.
+      expect(readFileSync(first[0].bakedPath)).toEqual(afterFirst)
       const afterSecond = readFileSync(second[0].bakedPath)
       const dataOffset = findDataChunkOffset(afterSecond)
       const firstData = afterFirst.subarray(findDataChunkOffset(afterFirst))
@@ -108,7 +112,7 @@ describe('bakeOffset', () => {
     }
   })
 
-  it('bakes an extensionless (LORE-style) job through the native engine, writing a .baked.wav sibling next to the original', async () => {
+  it('bakes an extensionless (LORE-style) job through the native engine into an immutable managed asset', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
     try {
       // No extension at all — matches loreWarehouse.ts's resolveStemPath
@@ -119,7 +123,7 @@ describe('bakeOffset', () => {
       const results = await bakeOffset([{ path, rotationSec: 0.25 }])
       expect(results).toHaveLength(1)
       expect(results[0].path).toBe(path)
-      expect(results[0].bakedPath).toBe(`${path}.baked.wav`)
+      expect(results[0].bakedPath).toMatch(/\.sssketch-bakes\/.+\.baked\.wav$/)
       expect(existsSync(results[0].bakedPath)).toBe(true)
       // Real bug this covers: this must be MEASURED from the actual decoded
       // Ogg/WAV content (1000 samples / 1000Hz = 1s here), not whatever
@@ -164,6 +168,27 @@ describe('bakeOffset', () => {
       writeFileSync(path, Buffer.from('not a real wav file'))
       const results = await bakeOffset([{ path, rotationSec: 0.1 }])
       expect(results).toEqual([])
+      expect(readdirSync(join(dir, '.sssketch-bakes'))).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('publishes no stem when any job in the riff fails', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const good = join(dir, 'good.wav')
+      const bad = join(dir, 'bad.wav')
+      writeRampWav(good, 1000, 1000)
+      writeFileSync(bad, Buffer.from('not a wav'))
+
+      expect(
+        await bakeOffset([
+          { path: good, rotationSec: 0.25 },
+          { path: bad, rotationSec: 0.25 }
+        ])
+      ).toEqual([])
+      expect(readdirSync(join(dir, '.sssketch-bakes'))).toEqual([])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

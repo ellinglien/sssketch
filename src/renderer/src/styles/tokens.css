@@ -15,6 +15,7 @@
   --ra-bg-rail:        #0a0a0a;  /* shelf strip, ruler */
   --ra-bg-row:         #0a0a0a;  /* block row */
   --ra-bg-row-active:  #161616;  /* selected block row, control fill */
+  --ra-bg-riff-selected: #191919; /* quiet pixel-grid riff selection */
   --ra-bg-row-sub:     #0e0e0e;  /* expanded stem sub-row */
 
   --ra-border:         #222222;
@@ -61,6 +62,8 @@
   --ra-play-on-ink:    #0a0a0a;
   --ra-mute-on:        #c56164;
   --ra-mute-on-ink:    #1a0a0a;
+  --ra-solo-on:        #7fb0d8;
+  --ra-solo-on-ink:    #07131c;
   --ra-stretch-on:     #ededed;
   --ra-stretch-on-bg:  #161616;
   /* This app's own "recorded via the loop-record feature" color -- covers
