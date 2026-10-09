@@ -24,7 +24,7 @@ describe('the keys and gestures list', () => {
     // two numbers deliberately. A DROP here means a gesture stopped being
     // documented anywhere in the app at all.
     expect(groups).toHaveLength(7)
-    expect(rows).toHaveLength(65)
+    expect(rows).toHaveLength(67)
     for (const group of groups) expect(group.gestures.length).toBeGreaterThan(0)
   })
 

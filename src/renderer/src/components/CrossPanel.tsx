@@ -59,6 +59,7 @@ import { useCrossPreview, type CrossPreviewMode } from '../state/useCrossPreview
 import { crossEmptyDropSlotCount } from './crossDropSlots'
 import { crossColumnMark } from './crossColumnMark'
 import { MetronomeButton } from './MetronomeButton'
+import { useClaimUndo } from '../state/undoRouting'
 
 const SOURCE_DRAG_TYPE = 'application/x-sssketch-cross-source'
 const ROW_DRAG_TYPE = 'application/x-sssketch-cross-row'
@@ -1023,6 +1024,18 @@ export function CrossPanel({
         100
       : null
   const placeholders = crossEmptyDropSlotCount(draft.center.length, MAX_RIFFF_STEM_SLOTS)
+
+  // Cmd+Z / Cmd+Shift+Z drive Cross's own undo and redo while it's open,
+  // like the buttons below (and held off while a result is being added, as
+  // they are), not the project's history hidden under it (undoRouting.ts).
+  useClaimUndo(
+    () => {
+      if (!committing) setDraft((value) => (value ? undoCross(value) : value))
+    },
+    () => {
+      if (!committing) setDraft((value) => (value ? redoCross(value) : value))
+    }
+  )
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>

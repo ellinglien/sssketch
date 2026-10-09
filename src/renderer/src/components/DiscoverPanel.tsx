@@ -486,6 +486,7 @@ import { DiscoverSlotRow } from './DiscoverSlotRow'
 import { radioRowPlates } from '@shared/radioRowPlates'
 import { resolveCandidateStem, type ResolvedCandidateStem } from './discoverCandidateStem'
 import type { DiscoverSeedPhase } from '@shared/discoverSeedPhase'
+import { useClaimUndo } from '../state/undoRouting'
 import {
   DISCOVER_ROW_GRID_COLUMNS,
   DISCOVER_ROW_COLUMN_GAP,
@@ -8570,6 +8571,11 @@ export function DiscoverPanel({
     setRedoStack((prev) => prev.slice(0, -1))
     applySlotsSnapshot(snapshot)
   }
+
+  // Cmd+Z / Cmd+Shift+Z drive these while Discover or radio is open, the
+  // same as the header's undo and redo, instead of the project's history
+  // hidden under it (undoRouting.ts).
+  useClaimUndo(undoDiscoverAction, redoDiscoverAction)
 
   // While radio runs, the new row appears at once but silent, and joins at
   // the loop top: it is not previewing, so its roll queues as `joining`,

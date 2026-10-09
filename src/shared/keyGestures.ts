@@ -118,6 +118,8 @@ export const KEY_GESTURES: readonly KeyGestureGroup[] = [
   {
     area: 'discover',
     gestures: [
+      { keys: 'cmd+z', does: "undo a discover or radio change, not the project's" },
+      { keys: 'cmd+shift+z', does: 'redo it' },
       { keys: 'click a match meter', does: 'open the reclassify picker' },
       { keys: 'esc', does: 'drop the kinds you were about to add' }
     ]

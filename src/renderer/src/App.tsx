@@ -36,6 +36,7 @@ import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './components/arrangementMixerRail'
 import { useScrollbarInsets } from './components/useScrollbarInsets'
+import { undoRouter, undoShortcutFor } from './state/undoRouting'
 import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
 import { CrossPanel } from './components/CrossPanel'
@@ -2858,21 +2859,24 @@ function Frame(): React.JSX.Element {
   // checkbox or radio has no text of its own to undo, and a range input keeps focus
   // after a drag -- without this, Cmd+Z right after dragging a sound panel slider did
   // nothing at all. The other global shortcuts keep their broader guard.
+  //
+  // While Discover/radio or Cross is open it claims these keys (undoRouting.ts):
+  // they drive that panel's own undo, not the project's, which would silently
+  // undo arrangement edits hidden under the overlay.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
-      const key = e.key.toLowerCase()
-      const isUndo = (e.metaKey || e.ctrlKey) && key === 'z' && !e.shiftKey
-      const isRedo =
-        ((e.metaKey || e.ctrlKey) && key === 'z' && e.shiftKey) || (e.ctrlKey && key === 'y')
-      if (!isUndo && !isRedo) return
-      const target = e.target as HTMLElement | null
-      const textInput =
-        target?.tagName === 'INPUT' &&
-        !['range', 'checkbox', 'radio'].includes((target as HTMLInputElement).type)
-      if (textInput || target?.tagName === 'TEXTAREA') return
+      const action = undoShortcutFor({
+        key: e.key,
+        metaKey: e.metaKey,
+        ctrlKey: e.ctrlKey,
+        shiftKey: e.shiftKey,
+        target: e.target as HTMLInputElement | null
+      })
+      if (action === null) return
       e.preventDefault()
-      if (isRedo) history.redo()
-      else history.undo()
+      const owner = undoRouter.current() ?? history
+      if (action === 'redo') owner.redo()
+      else owner.undo()
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
