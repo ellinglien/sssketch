@@ -53,6 +53,8 @@ import {
   RADIO_ADD_TO_TIMELINE_TOOLTIP,
   RADIO_KEEP_TOOLTIP,
   RADIO_TURN_TOOLTIP,
+  SOURCE_DIAL_LEFT_LABEL,
+  SOURCE_DIAL_RIGHT_LABEL,
   SOURCE_DIAL_TOOLTIP
 } from './radioControlCopy'
 import { soundPanelModel, type SoundSliderControl } from './soundPanelModel'
@@ -339,7 +341,7 @@ export function radioStripModel(
       sets: ['faves'],
       dimmed: ctx.artistMode && ctx.artistsIncludeMe !== true
     }),
-    panel('source', 'source · endlesss - other', {
+    panel('source', `source · ${SOURCE_DIAL_LEFT_LABEL} - ${SOURCE_DIAL_RIGHT_LABEL}`, {
       tooltip: SOURCE_DIAL_TOOLTIP,
       sets: ['source']
     }),

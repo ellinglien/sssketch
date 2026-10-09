@@ -199,10 +199,20 @@ describe('the radio guide: every control it names exists', () => {
       const labels = refs.map((id) => {
         const c = strip.find((x) => x.id === id)
         expect(c, `${i.key}: ${id}`).toBeDefined()
-        // a label's own part ('source · endlesss - other' is source)
+        // a label's own part ('source · instruments - recorded' is source)
         return c!.label.split(' · ')[0]
       })
       expect(keyWords(i.key), i.key).toEqual(labels)
+    }
+  })
+
+  it("the source item names the dial's two ends, in both apps", () => {
+    for (const app of APPS) {
+      const source = itemsIn(app, true).find((i) => i.key === 'source')
+      expect(source, app).toBeDefined()
+      expect(source!.text, app).toContain('instruments')
+      expect(source!.text, app).toContain('recorded')
+      expect(source!.text, app).not.toContain('other')
     }
   })
 

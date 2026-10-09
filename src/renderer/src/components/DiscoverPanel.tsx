@@ -496,6 +496,8 @@ import {
   RADIO_ADD_TO_SHELF_TOOLTIP,
   RADIO_ADD_TO_TIMELINE_TOOLTIP,
   RADIO_KEEP_TOOLTIP,
+  SOURCE_DIAL_LEFT_LABEL,
+  SOURCE_DIAL_RIGHT_LABEL,
   SOURCE_DIAL_TOOLTIP
 } from '@shared/radioControlCopy'
 import {
@@ -14763,11 +14765,13 @@ export function DiscoverPanel({
                 marginRight: 12
               }}
             >
-              {/* The source dial (2026-09-29): 0 = endlesss sounds, 100 =
-                  other sounds, 50 = half and half. The ends are "only". See
-                  drawSoundSource. */}
+              {/* The source dial (2026-09-29): 0 = endlesss instruments, 100 =
+                  recorded (audio-in), 50 = half and half. The ends are "only".
+                  See drawSoundSource. */}
               <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
+                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>
+                  {SOURCE_DIAL_LEFT_LABEL}
+                </span>
                 <Dial
                   value={sourceLean}
                   onChange={changeSourceLean}
@@ -14777,7 +14781,9 @@ export function DiscoverPanel({
                   ariaLabel="source"
                   tooltip={SOURCE_DIAL_TOOLTIP}
                 />
-                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
+                <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>
+                  {SOURCE_DIAL_RIGHT_LABEL}
+                </span>
               </div>
               <span style={{ fontSize: 8, color: 'var(--ra-text-3)', whiteSpace: 'nowrap' }}>
                 source

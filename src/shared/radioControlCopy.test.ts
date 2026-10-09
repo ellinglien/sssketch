@@ -6,6 +6,8 @@ import {
   RADIO_LIKE_TOOLTIP,
   DISCOVER_LIKE_TOOLTIP,
   RADIO_TURN_TOOLTIP,
+  SOURCE_DIAL_LEFT_LABEL,
+  SOURCE_DIAL_RIGHT_LABEL,
   SOURCE_DIAL_TOOLTIP
 } from './radioControlCopy'
 import { RADIO_GUIDE } from './radioGuide'
@@ -17,6 +19,8 @@ const all = [
   RADIO_LIKE_TOOLTIP,
   DISCOVER_LIKE_TOOLTIP,
   RADIO_TURN_TOOLTIP,
+  SOURCE_DIAL_LEFT_LABEL,
+  SOURCE_DIAL_RIGHT_LABEL,
   SOURCE_DIAL_TOOLTIP
 ]
 
@@ -55,8 +59,12 @@ describe('radio and discover control tooltips', () => {
     expect(RADIO_ADD_TO_TIMELINE_TOOLTIP).toContain('this project')
   })
 
-  it('name both ends of the source dial', () => {
-    expect(SOURCE_DIAL_TOOLTIP).toContain('endlesss')
+  it('name both ends of the source dial: instruments to the left, recorded to the right', () => {
+    expect(SOURCE_DIAL_LEFT_LABEL).toBe('instruments')
+    expect(SOURCE_DIAL_RIGHT_LABEL).toBe('recorded')
+    expect(SOURCE_DIAL_TOOLTIP).toContain(SOURCE_DIAL_LEFT_LABEL)
+    expect(SOURCE_DIAL_TOOLTIP).toContain(SOURCE_DIAL_RIGHT_LABEL)
     expect(SOURCE_DIAL_TOOLTIP).toContain('audio-in')
+    expect(SOURCE_DIAL_TOOLTIP).not.toContain('other')
   })
 })

@@ -2496,7 +2496,7 @@ function Frame(): React.JSX.Element {
           crossParentFromRifff(prepared[1], state.vol),
           state.bpm
         ),
-        // Cross and Discover expose the same Endlesss↔Other choice. Seed a
+        // Cross and Discover expose the same source choice (instruments↔recorded). Seed a
         // disposable Cross draft from the persisted setting rather than
         // resetting the knob whenever a new pair is opened.
         sourceLean: radioSourceOf(discoverSettingsRef.current.radio)

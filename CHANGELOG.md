@@ -14,7 +14,7 @@
 
 ### Changed
 
-- Cross now keeps one trailing empty center slot, grows as needed, discards unsaved drafts without an unnecessary confirmation, remembers the Endlesss/Other source setting, and places its actions and close control consistently with the rest of the app.
+- Cross now keeps one trailing empty center slot, grows as needed, discards unsaved drafts without an unnecessary confirmation, remembers the source setting, and places its actions and close control consistently with the rest of the app.
 - Cross playback now auditions one whole column at a time. Clicking a stem switches to that column, tiled waveforms match the audible loop, a dim playhead shows position, and the active column has a larger animated playback indicator.
 - Arrange view now places its compact Mute, Solo, and Gain controls in a narrow mixer rail beside the inspector instead of embedding them in arrangement lanes.
 - Riff selection is available consistently from Sketch, Arrange, Map, and the shelf. Cross appears beside the inspector's Discover action only when exactly two riffs are selected.
@@ -28,8 +28,9 @@
 - Keep in Discover and radio saves what you hear: with a row soloed, the other rows are kept silent (at gain 0), as a muted row already was.
 - The save menu's copy items say which file you end up in: "save as a new version" moves you into the copy; "save a copy to a file…" writes a file and leaves you where you were. Each confirms with one line.
 - "save as a new version" saves the original first, so its last save has your latest edits, then makes the numbered copy and moves you into it. If the original can't be saved, no copy is made and you see the save error.
+- The source dial's ends are now "instruments" and "recorded" (they were "endlesss" and "other"), in Discover, Cross, the radio strip, the radio guide and the web radio, and its tooltip uses the same words.
 - The shelf tile of the riff Sketch is playing now gets the playhead-coloured edge, so it's easy to spot.
-- Clearer tooltips: radio's turn, like, keep and add buttons, the source dial (Endlesss instruments to the left, audio-in recordings to the right), and the import view's multi-select (shift-click a run, cmd-click to add). The keys and gestures list has an import section.
+- Clearer tooltips: radio's turn, like, keep and add buttons, the source dial (Endlesss instruments to the left, recorded audio-in to the right), and the import view's multi-select (shift-click a run, cmd-click to add). The keys and gestures list has an import section.
 - The re-one picker draws each stem as a waveform in its own colour, like everywhere else, instead of a spectrogram with a pitch line. The waveform is finer than the arranger's, so drum hits and note onsets stand out as separate spikes.
 
 ### Fixed

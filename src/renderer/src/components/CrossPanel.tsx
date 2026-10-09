@@ -43,6 +43,11 @@ import {
 } from '@shared/discoverSlotKind'
 import { DEFAULT_DISCOVER_CHAOS, pickReroll, rankCandidates } from '@shared/discoverRanking'
 import { DEFAULT_SOURCE_LEAN, drawSoundSource } from '@shared/discoverSlotModifier'
+import {
+  SOURCE_DIAL_LEFT_LABEL,
+  SOURCE_DIAL_RIGHT_LABEL,
+  SOURCE_DIAL_TOOLTIP
+} from '@shared/radioControlCopy'
 import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
 import type { Stem } from '@shared/types'
 import type { DiscoverCandidate } from '@shared/discoverCandidate'
@@ -616,7 +621,7 @@ export function CrossPanel({
   draft: CrossDraft
   setDraft: Dispatch<SetStateAction<CrossDraft | null>>
   currentProjectKey: string
-  /** Persists the Endlesss↔Other source preference shared with Discover.
+  /** Persists the source preference (instruments↔recorded) shared with Discover.
    * The draft still updates live while the knob moves; this fires once when
    * the gesture finishes so reopening Cross does not reset the choice. */
   onSourceLeanCommit: (sourceLean: number) => void
@@ -1460,7 +1465,9 @@ export function CrossPanel({
                 style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>endlesss</span>
+                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>
+                    {SOURCE_DIAL_LEFT_LABEL}
+                  </span>
                   <Dial
                     value={draft.sourceLean ?? DEFAULT_SOURCE_LEAN}
                     onChange={(sourceLean) =>
@@ -1470,9 +1477,11 @@ export function CrossPanel({
                     defaultValue={DEFAULT_SOURCE_LEAN}
                     size={28}
                     ariaLabel="source"
-                    tooltip="other sounds clockwise"
+                    tooltip={SOURCE_DIAL_TOOLTIP}
                   />
-                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>other</span>
+                  <span style={{ fontSize: 7, color: 'var(--ra-text-3)' }}>
+                    {SOURCE_DIAL_RIGHT_LABEL}
+                  </span>
                 </div>
                 <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>source</span>
               </div>
