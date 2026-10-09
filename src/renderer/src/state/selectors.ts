@@ -974,6 +974,38 @@ export function channelAllMuted(fields: {
   )
 }
 
+/** A row's risers as its `m` button sees them: muted by the temporary layer
+ * (`mixerMute`, what the row's m writes now) or by the riser's own saved
+ * `muted`. Nothing writes the saved one any more, but a project saved before
+ * the temporary layers has it wherever the old row m was pressed; counting it
+ * here lights the m, so the riser can be found and brought back
+ * (rowMuteToggleActions). */
+export function risersForRowMute(
+  channelRisers: RiserClip[],
+  mixerMute: Record<string, boolean>
+): RiserClip[] {
+  return channelRisers.map((riser) => ({ ...riser, muted: riser.muted || !!mixerMute[riser.id] }))
+}
+
+/** What pressing a row's `m` dispatches. Muting is temporary
+ * (SET_CHANNEL_MUTE: not saved, not exported, not undoable). Unmuting also
+ * clears a riser's saved mute from before the temporary layers
+ * (SET_RISER_MUTE, an ordinary undoable edit, since it changes the saved
+ * project and its exports), which is otherwise unreachable. */
+export function rowMuteToggleActions(
+  channelId: string,
+  allMuted: boolean,
+  channelRisers: RiserClip[]
+): Action[] {
+  if (!allMuted) return [{ type: 'SET_CHANNEL_MUTE', channelId, muted: true }]
+  return [
+    { type: 'SET_CHANNEL_MUTE', channelId, muted: false },
+    ...channelRisers
+      .filter((riser) => riser.muted)
+      .map((riser): Action => ({ type: 'SET_RISER_MUTE', id: riser.id, muted: false }))
+  ]
+}
+
 /** Is this exact row the current explicit Solo target? Solo has its own
  * transient layer, so this never infers Solo from a pattern of Mute values. */
 export function channelIsSoloed(fields: {

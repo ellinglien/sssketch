@@ -1,7 +1,12 @@
 import { memo, useEffect, useMemo, useState } from 'react'
 import type { BusId, Rifff } from '@shared/types'
 import type { LoopRegion } from '../state/store'
-import { channelAllMuted, channelIsSoloed } from '../state/selectors'
+import {
+  channelAllMuted,
+  channelIsSoloed,
+  risersForRowMute,
+  rowMuteToggleActions
+} from '../state/selectors'
 import { RifffBlockRow, NAME_BAR_HEIGHT } from './RifffBlockRow'
 import { RiserBlock } from './RiserBlock'
 import { ChannelChainPanel } from './ChannelChainPanel'
@@ -155,8 +160,10 @@ function ChannelRowImpl({
   // state.risers itself only changes when a riser actually does.
   const allRisers = useAppSelector((s) => s.risers)
   const channelRisers = useMemo(() => risersOnChannel(allRisers, channelId), [allRisers, channelId])
+  // Temporary mute, plus a riser's saved mute from before the temporary
+  // layers, so that one lights the m and clears with it (risersForRowMute).
   const mixerChannelRisers = useMemo(
-    () => channelRisers.map((riser) => ({ ...riser, muted: !!mixerMute[riser.id] })),
+    () => risersForRowMute(channelRisers, mixerMute),
     [channelRisers, mixerMute]
   )
   const riserIds = useMemo(() => channelRisers.map((riser) => riser.id), [channelRisers])
@@ -548,7 +555,8 @@ function ChannelRowImpl({
           <button
             onClick={(e) => {
               e.stopPropagation()
-              dispatch({ type: 'SET_CHANNEL_MUTE', channelId, muted: !allMuted })
+              for (const action of rowMuteToggleActions(channelId, allMuted, channelRisers))
+                dispatch(action)
             }}
             aria-label={`mute channel ${channelId}`}
             title="temporarily mute channel"

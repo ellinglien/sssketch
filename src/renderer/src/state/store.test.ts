@@ -4,7 +4,14 @@ import { stemKey, type Rifff } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
 import { MIN_RISER_LENGTH_BARS, createRiser } from '@shared/riser'
 import { normalizeSoundSettings } from '@shared/radioSound'
-import { channelsInOrder, loopLengthBars } from './selectors'
+import {
+  channelAllMuted,
+  channelsInOrder,
+  loopLengthBars,
+  risersForRowMute,
+  rowMuteToggleActions
+} from './selectors'
+import { risersOnChannel } from '@shared/riser'
 import type { DiscoverSlotKind } from '@shared/discoverSlotKind'
 import { lockClimaxFromArrangeRoles, type CoachSlotSnapshot } from '@shared/coachClimax'
 import { startCoach } from '@shared/coach'
@@ -3451,6 +3458,40 @@ describe('a riser on its own row', () => {
     state = reducer(state, { type: 'SET_CHANNEL_MUTE', channelId: 'ch-r1', muted: true })
     expect(state.mixerMute['r1']).toBe(true)
     expect(state.mixerMute['r2']).toBeUndefined()
+    expect(state.risers['r1'].muted).toBe(false)
+  })
+
+  it("gives a riser muted under the old saved mute a way back through the row's m", () => {
+    // Before the temporary mute layers, the row m wrote the riser's own saved `muted`. Nothing
+    // dispatches SET_RISER_MUTE any more, so such a riser must show on the row's m and clear
+    // with it, or it can never be heard again.
+    let state = withRiser('r1', 'ch-r1')
+    state = reducer(state, { type: 'SET_RISER_MUTE', id: 'r1', muted: true })
+    const rowRisers = (): ReturnType<typeof risersForRowMute> =>
+      risersForRowMute(risersOnChannel(state.risers, 'ch-r1'), state.mixerMute)
+    const allMuted = channelAllMuted({ rifffs: [], channelRisers: rowRisers(), mute: {} })
+    expect(allMuted).toBe(true)
+
+    for (const action of rowMuteToggleActions(
+      'ch-r1',
+      allMuted,
+      risersOnChannel(state.risers, 'ch-r1')
+    ))
+      state = reducer(state, action)
+    expect(state.risers['r1'].muted).toBe(false)
+    expect(state.mixerMute['r1']).toBe(false)
+    expect(channelAllMuted({ rifffs: [], channelRisers: rowRisers(), mute: {} })).toBe(false)
+  })
+
+  it('a new row mute stays temporary: it never writes the saved riser mute', () => {
+    let state = withRiser('r1', 'ch-r1')
+    for (const action of rowMuteToggleActions(
+      'ch-r1',
+      false,
+      risersOnChannel(state.risers, 'ch-r1')
+    ))
+      state = reducer(state, action)
+    expect(state.mixerMute['r1']).toBe(true)
     expect(state.risers['r1'].muted).toBe(false)
   })
 
