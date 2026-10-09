@@ -8,11 +8,12 @@ describe('crossEmptyDropSlotCount', () => {
     expect(crossEmptyDropSlotCount(2, 20)).toBe(4)
     expect(crossEmptyDropSlotCount(3, 20)).toBe(3)
     expect(crossEmptyDropSlotCount(4, 20)).toBe(2)
+    expect(crossEmptyDropSlotCount(5, 20)).toBe(1)
   })
 
-  it('grows the tray to retain two trailing drop slots', () => {
-    expect(crossEmptyDropSlotCount(5, 20)).toBe(2)
-    expect(crossEmptyDropSlotCount(12, 20)).toBe(2)
+  it('grows the tray to retain one trailing drop slot', () => {
+    expect(crossEmptyDropSlotCount(6, 20)).toBe(1)
+    expect(crossEmptyDropSlotCount(12, 20)).toBe(1)
   })
 
   it('never exceeds the remaining riff capacity', () => {
