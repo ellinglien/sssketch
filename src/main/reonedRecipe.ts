@@ -12,7 +12,9 @@ import { sampleRateFromHeader } from '@shared/audioHeaderSampleRate'
  * when it fails with "baker output changed", bump this and record the new hashes. */
 export const BAKER_VERSION = 1
 
-const HEADER_BYTES = 64 * 1024
+/** How much of a file is read to find its format: enough for WAV chunks before `data` (a long
+ * LIST or bext), an Ogg identification page, or FLAC STREAMINFO. */
+export const HEADER_BYTES = 64 * 1024
 
 export interface SourceIdentity {
   path: string

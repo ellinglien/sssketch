@@ -8,7 +8,7 @@ import { findWavChunks } from '@shared/wavChunks'
 import { readWavDurationSeconds } from '@shared/wavDuration'
 import { spawnEngine } from './engineProcess'
 import { EngineClient } from './engineClient'
-import { resolveRecipe, type ResolvedRecipe } from './reonedRecipe'
+import { HEADER_BYTES, resolveRecipe, type ResolvedRecipe } from './reonedRecipe'
 import { noteIssuedCopy, withReonedCopiesLock } from './reonedCopiesSession'
 
 export interface BakeJob {
@@ -118,7 +118,7 @@ async function existingCopyDuration(path: string): Promise<number | null> {
   }
   try {
     const fileSize = (await handle.stat()).size
-    const header = Buffer.alloc(Math.min(fileSize, 4096))
+    const header = Buffer.alloc(Math.min(fileSize, HEADER_BYTES))
     const { bytesRead } = await handle.read(header, 0, header.length, 0)
     const bytes = new Uint8Array(header.buffer, header.byteOffset, bytesRead)
     const { dataOffset, sampleRate, numChannels, bitsPerSample } = findWavChunks(bytes)

@@ -411,6 +411,31 @@ describe('bakeOffset recipes', () => {
     }
   })
 
+  it('reuses a copy whose data chunk starts past 4 KB (a source with a large metadata chunk)', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const plain = join(dir, 'plain.wav')
+      writeRampWav(plain, 4000, 1000)
+      const bytes = readFileSync(plain)
+      // RIFF/WAVE + fmt (36 bytes), then a 10 KB LIST chunk, then data.
+      const list = Buffer.alloc(8 + 10_000)
+      list.write('LIST', 0)
+      list.writeUInt32LE(10_000, 4)
+      const source = join(dir, 'source.wav')
+      const withList = Buffer.concat([bytes.subarray(0, 36), list, bytes.subarray(36)])
+      withList.writeUInt32LE(withList.length - 8, 4)
+      writeFileSync(source, withList)
+      const out = join(dir, 'bakes')
+      const [first] = await bakeOffset([{ path: source, rotationSec: 1 }], out)
+      const before = statSync(first.bakedPath).mtimeMs
+      const [second] = await bakeOffset([{ path: source, rotationSec: 1 }], out)
+      expect(second.bakedPath).toBe(first.bakedPath)
+      expect(statSync(second.bakedPath).mtimeMs).toBe(before) // reused, not rendered again
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('a copy cut short is not reused: it is rendered again, whole', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
     try {
