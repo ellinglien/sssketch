@@ -968,7 +968,9 @@ export function CrossPanel({
     if (committingRef.current) return
     const revision = draft.revision
     const projectKey = draft.projectKey
-    const assembly = assembleCrossRifff(draft)
+    // The center solo counts, as in Discover's add: a row that isn't heard
+    // arrives Disabled at its own level (assembleCrossRifff).
+    const assembly = assembleCrossRifff(draft, undefined, activeCenterSoloedId)
     if (!assembly) return
     committingRef.current = true
     setCommitting(destination)
@@ -981,7 +983,12 @@ export function CrossPanel({
       const current = draftRef.current
       if (!crossCommitIsCurrent(revision, projectKey, current, currentProjectKeyRef.current)) return
       if (destination === 'shelf') {
-        dispatch({ type: 'ADD_TO_SHELF', rifff: assembly.rifff, vol: assembly.vol })
+        dispatch({
+          type: 'ADD_TO_SHELF',
+          rifff: assembly.rifff,
+          vol: assembly.vol,
+          mute: assembly.mute
+        })
       } else {
         const ends = Object.values(rifffs)
           .filter((rifff) => rifff.startBar !== undefined)
@@ -994,7 +1001,8 @@ export function CrossPanel({
           type: 'PLACE_LOOP_ON_TIMELINE',
           stems: [assembly.rifff],
           startBar: ends.length > 0 ? Math.max(...ends) : 0,
-          vol: assembly.vol
+          vol: assembly.vol,
+          mute: assembly.mute
         })
       }
       setCommitted(destination)

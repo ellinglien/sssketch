@@ -1,6 +1,7 @@
 // src/renderer/src/audio/discoverRifffAssembly.ts
 import { stemKey, type Rifff, type Stem } from '@shared/types'
 import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
+import { disabledOnAdd } from '@shared/heard'
 
 /** One stem to include in an assembled Discover rifff, paired with its own
  * committed gain (0-1) -- gain lives OUTSIDE the Stem/Rifff shape itself
@@ -42,7 +43,7 @@ export function discoverRowDisabledOnAdd(
   previewing: ReadonlySet<string>,
   soloed: string | null
 ): boolean {
-  return soloed !== null ? id !== soloed : !previewing.has(id)
+  return disabledOnAdd(id, !previewing.has(id), soloed)
 }
 
 // The persisted ceiling on one rifff: 20. Riffs.StemCID_1..8 addresses the

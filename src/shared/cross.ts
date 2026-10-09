@@ -4,6 +4,7 @@ import type { DiscoverSlotKind } from './discoverSlotKind'
 import { DEFAULT_SOURCE_LEAN } from './discoverSlotModifier'
 import { DEFAULT_DISCOVER_CHAOS } from './discoverRanking'
 import { stemKey, type ProjectRef, type Rifff, type Stem } from './types'
+import { disabledOnAdd, isHeard } from './heard'
 
 export interface CrossSourceOccurrence {
   /** Stable within a draft. Side is deliberately absent: swapping the two
@@ -62,6 +63,10 @@ export interface CrossHistorySnapshot {
 export interface CrossAssembly {
   rifff: Rifff
   vol: Record<string, number>
+  /** stemKey -> true for each row that wasn't heard when it was added (muted, or left out by a
+   * solo): it arrives Disabled, at its own gain in `vol`. ADD_TO_SHELF / PLACE_LOOP_ON_TIMELINE's
+   * own `mute`, as Discover's add. */
+  mute: Record<string, boolean>
 }
 
 /** A parent stem can legitimately arrive at gain 0 when it was muted in
@@ -75,13 +80,14 @@ export function crossSourceAuditionGain(gain: number, soleAudible: boolean): num
 
 /** Solo is a temporary listening layer over the persisted mute choice. A
  * soloed item is heard even when its own underlying mute is on; clearing
- * solo reveals that untouched mute state again. */
+ * solo reveals that untouched mute state again. The one rule Discover's mix
+ * shares (src/shared/heard.ts). */
 export function crossItemIsAudible(
   itemId: string,
   muted: boolean,
   soloedId: string | null
 ): boolean {
-  return soloedId === null ? !muted : itemId === soloedId
+  return isHeard(itemId, muted, soloedId)
 }
 
 export function toggleCrossSoloedId(current: string | null, itemId: string): string | null {
@@ -430,9 +436,12 @@ export function crossSourceForRow(
   return sourceMap(draft).get(row.sourceId) ?? null
 }
 
+/** The center as a riff. `soloedId`: the center row soloed when it was added. What you hear is
+ * what you get: a row that wasn't heard arrives Disabled at its own level (disabledOnAdd). */
 export function assembleCrossRifff(
   draft: CrossDraft,
-  groupId = crypto.randomUUID()
+  groupId = crypto.randomUUID(),
+  soloedId: string | null = null
 ): CrossAssembly | null {
   const sources = sourceMap(draft)
   const members = draft.center.flatMap((row) => {
@@ -452,8 +461,11 @@ export function assembleCrossRifff(
     stems: members.map(({ stem }, index) => ({ ...stem, slot: index + 1 }))
   }
   const vol: Record<string, number> = {}
+  const mute: Record<string, boolean> = {}
   members.forEach(({ row }, index) => {
-    vol[stemKey(groupId, index + 1)] = row.audible ? row.gain : 0
+    const key = stemKey(groupId, index + 1)
+    vol[key] = row.gain
+    if (disabledOnAdd(row.id, !row.audible, soloedId)) mute[key] = true
   })
-  return { rifff, vol }
+  return { rifff, vol, mute }
 }

@@ -302,7 +302,7 @@ describe('setCrossTargetBpm', () => {
 })
 
 describe('assembleCrossRifff', () => {
-  it('assembles displayed order, max bar length, exact gains, and silent excluded rows', () => {
+  it('assembles displayed order, max bar length, exact gains, and Disabled excluded rows', () => {
     let value = addCrossSource(draft(), 'a:1')
     value = addCrossSource(value, 'b:2')
     value = setCrossGain(value, 'a:1', 0.42)
@@ -319,7 +319,18 @@ describe('assembleCrossRifff', () => {
       [1, '/same.wav'],
       [2, '/b2.wav']
     ])
-    expect(assembly?.vol).toEqual({ 'group-cross:1': 0.42, 'group-cross:2': 0 })
+    // What you hear is what you get (the 2026-10-08 call, F6), as Discover's add: a muted row
+    // arrives Disabled at its own level, not at gain 0 looking unmuted.
+    expect(assembly?.vol).toEqual({ 'group-cross:1': 0.42, 'group-cross:2': 0.9 })
+    expect(assembly?.mute).toEqual({ 'group-cross:2': true })
+  })
+
+  it('with a center row soloed, Disables every other row, and brings in the soloed one even if muted', () => {
+    let value = addCrossSource(draft(), 'a:1')
+    value = addCrossSource(value, 'b:2')
+    value = toggleCrossAudible(value, 'b:2')
+    expect(assembleCrossRifff(value, 'g', 'b:2')?.mute).toEqual({ 'g:1': true })
+    expect(assembleCrossRifff(value, 'g', null)?.mute).toEqual({ 'g:2': true })
   })
 
   it('returns null when the center is empty', () => {
