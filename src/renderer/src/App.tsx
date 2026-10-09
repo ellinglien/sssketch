@@ -34,7 +34,7 @@ import {
 } from './components/zoomMath'
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
-import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './components/arrangementMixerRail'
+import { ARRANGEMENT_MIXER_RAIL_WIDTH, railWheelGesture } from './components/arrangementMixerRail'
 import { useScrollbarInsets } from './components/useScrollbarInsets'
 import { undoRouter, undoShortcutFor } from './state/undoRouting'
 import { ChannelRow } from './components/ChannelRow'
@@ -3361,11 +3361,10 @@ function Frame(): React.JSX.Element {
               // outside the scroller, it hands wheel gestures back to it.
               <div
                 onWheel={(e) => {
-                  if (e.metaKey) {
-                    handleTimelineWheel(e)
-                    return
-                  }
-                  scrollContainerRef.current?.scrollBy({ left: e.deltaX, top: e.deltaY })
+                  const gesture = railWheelGesture(e)
+                  if (gesture.kind === 'zoom') handleTimelineWheel(e)
+                  else
+                    scrollContainerRef.current?.scrollBy({ left: gesture.left, top: gesture.top })
                 }}
                 style={{
                   position: 'absolute',
