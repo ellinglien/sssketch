@@ -9,6 +9,7 @@ import {
   statSync,
   mkdirSync
 } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
 
@@ -19,7 +20,7 @@ import { basename, join } from 'node:path'
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd() } }))
 
 import { bakeOffset } from './bakeOffset'
-import { recipeName } from './reonedRecipe'
+import { BAKER_VERSION, recipeName } from './reonedRecipe'
 import { rotationSecForBars } from '@shared/reonedRotation'
 
 /** A 16-bit mono WAV ramping linearly from 0 to just under full scale, so a
@@ -457,4 +458,83 @@ describe('bakeOffset recipes', () => {
       rmSync(dir, { recursive: true, force: true })
     }
   })
+})
+
+// What guards BAKER_VERSION. A copy is reused by its recipe name, which names the baker's version,
+// not its bytes: if the baker's output changes and the version doesn't, every existing copy is
+// still reused and a rebuilt one no longer matches it. So the bytes of one WAV bake and one native
+// (LORE-style, Ogg) bake are pinned per version. A failure here means: bump BAKER_VERSION in
+// reonedRecipe.ts, then record the new hashes under the new version.
+const GOLDEN_BAKES: Record<number, { wav: string; native: string }> = {
+  1: {
+    wav: '6930acd04f1977f9cac54439f325eb7ca9d9fb12353ffb284df18059553c757e',
+    native: 'a8bce419a6f113ee6e867b890e02f4f1cca41d846257de13ce1c4dc106c8bfb5'
+  }
+}
+const BAKER_CHANGED = 'baker output changed: bump BAKER_VERSION'
+
+/** Stereo 16-bit 44.1 kHz, half a second, from integer arithmetic only (no Math.sin), so the
+ * source bytes are the same on every machine. */
+function writeGoldenSourceWav(path: string): void {
+  const frames = 22050
+  const dataSize = frames * 4
+  const buf = Buffer.alloc(44 + dataSize)
+  buf.write('RIFF', 0)
+  buf.writeUInt32LE(36 + dataSize, 4)
+  buf.write('WAVE', 8)
+  buf.write('fmt ', 12)
+  buf.writeUInt32LE(16, 16)
+  buf.writeUInt16LE(1, 20)
+  buf.writeUInt16LE(2, 22)
+  buf.writeUInt32LE(44100, 24)
+  buf.writeUInt32LE(44100 * 4, 28)
+  buf.writeUInt16LE(4, 32)
+  buf.writeUInt16LE(16, 34)
+  buf.write('data', 36)
+  buf.writeUInt32LE(dataSize, 40)
+  let seed = 12345
+  for (let i = 0; i < frames; i++) {
+    seed = (seed * 1103515245 + 12345) % 2147483648
+    const saw = ((i * 200) % 32768) - 16384
+    buf.writeInt16LE(saw, 44 + i * 4)
+    buf.writeInt16LE((seed % 20000) - 10000, 44 + i * 4 + 2)
+  }
+  writeFileSync(path, buf)
+}
+
+const sha256 = (path: string): string =>
+  createHash('sha256').update(readFileSync(path)).digest('hex')
+
+describe('bakeOffset golden output (BAKER_VERSION)', () => {
+  it('this baker version has recorded hashes', () => {
+    expect(
+      GOLDEN_BAKES[BAKER_VERSION],
+      'record GOLDEN_BAKES for the new BAKER_VERSION'
+    ).toBeDefined()
+  })
+
+  it('a WAV bake is byte-for-byte what this baker version made', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-golden-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeGoldenSourceWav(source)
+      const [baked] = await bakeOffset([{ path: source, rotationSec: 0.3 }], join(dir, 'bakes'))
+      expect(sha256(baked.bakedPath), BAKER_CHANGED).toBe(GOLDEN_BAKES[BAKER_VERSION]?.wav)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a native (LORE-style Ogg) bake is byte-for-byte what this baker version made', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-golden-'))
+    try {
+      // Extensionless, as a LORE StemCID is: routed through the engine's decode.
+      const source = join(dir, '0123456789abcdef01234567')
+      writeFileSync(source, readFileSync(join(process.cwd(), 'fixtures/reone-golden/tone.ogg')))
+      const [baked] = await bakeOffset([{ path: source, rotationSec: 0.2 }], join(dir, 'bakes'))
+      expect(sha256(baked.bakedPath), BAKER_CHANGED).toBe(GOLDEN_BAKES[BAKER_VERSION]?.native)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }, 45000)
 })

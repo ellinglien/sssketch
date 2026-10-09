@@ -7,7 +7,9 @@ import { sampleRateFromHeader } from '@shared/audioHeaderSampleRate'
 
 /** Bump whenever the baker's output for the same inputs changes: rotateWav.ts's rotation or
  * seam blend, LOOP_SEW_WINDOW_FRAMES, BakeStem.cpp's decode or bit depth, bakeOffset.ts's
- * blend-once rule. Old copies are then never reused; cleanup clears them once unused. */
+ * blend-once rule. Old copies are then never reused; cleanup clears them once unused.
+ * bakeOffset.test.ts pins one WAV bake's and one native bake's bytes per version (GOLDEN_BAKES):
+ * when it fails with "baker output changed", bump this and record the new hashes. */
 export const BAKER_VERSION = 1
 
 const HEADER_BYTES = 64 * 1024
