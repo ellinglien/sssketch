@@ -1,5 +1,6 @@
 // src/renderer/src/components/DiscoverPanel.tsx
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { formatBpm } from '@shared/format'
 import { Dial } from './Dial'
 import { RadioMixActions, RadioStrip, type RadioMixBundle } from './RadioStrip'
 import type { RadioStripContext } from '@shared/radioStripModel'
@@ -1223,17 +1224,18 @@ export function DiscoverPanel({
   // controlled input that snaps back to the clamped value on every
   // keystroke makes multi-digit typing impossible. Free-type locally, only
   // committing (and clamping, via the reducer) on blur/Enter.
-  const [tempoText, setTempoText] = useState(String(bpm))
+  const [tempoText, setTempoText] = useState(formatBpm(bpm))
   const [tempoFocused, setTempoFocused] = useState(false)
-  if (!tempoFocused && tempoText !== String(bpm)) setTempoText(String(bpm))
+  if (!tempoFocused && tempoText !== formatBpm(bpm)) setTempoText(formatBpm(bpm))
 
   function commitTempo(): void {
     setTempoFocused(false)
     const nextBpm = Number(tempoText)
+    if (tempoText === formatBpm(bpm)) return // shown rounded; untouched changes nothing
     if (!Number.isNaN(nextBpm) && tempoText.trim() !== '') {
       dispatch({ type: 'SET_TEMPO', bpm: nextBpm })
     } else {
-      setTempoText(String(bpm))
+      setTempoText(formatBpm(bpm))
     }
   }
 

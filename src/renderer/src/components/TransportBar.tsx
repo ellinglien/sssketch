@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { formatBpm } from '@shared/format'
 import { announceEndlesssLoggedOut } from '../audio/riffLibraryUsername'
 import { traitMatchBarLabel } from '@shared/traitBar'
 import { phoneRemoteModalView, type PhoneRemoteStatus } from '@shared/phoneRemoteView'
@@ -635,19 +636,22 @@ export function TransportBar({
   // during render rather than an effect (React's "adjust state while rendering"
   // pattern) whenever state.bpm changes from elsewhere (±buttons, loading a
   // project) while the field isn't being actively edited.
-  const [tempoText, setTempoText] = useState(String(state.bpm))
+  const [tempoText, setTempoText] = useState(formatBpm(state.bpm))
   const [tempoFocused, setTempoFocused] = useState(false)
-  if (!tempoFocused && tempoText !== String(state.bpm)) {
-    setTempoText(String(state.bpm))
+  if (!tempoFocused && tempoText !== formatBpm(state.bpm)) {
+    setTempoText(formatBpm(state.bpm))
   }
 
   function commitTempo(): void {
     setTempoFocused(false)
     const bpm = Number(tempoText)
+    // The field shows the tempo rounded (formatBpm); leaving it untouched must not
+    // round the project's real tempo, so an unchanged text dispatches nothing.
+    if (tempoText === formatBpm(state.bpm)) return
     if (!Number.isNaN(bpm) && tempoText.trim() !== '') {
       dispatch({ type: 'SET_TEMPO', bpm })
     } else {
-      setTempoText(String(state.bpm))
+      setTempoText(formatBpm(state.bpm))
     }
   }
 
