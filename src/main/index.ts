@@ -773,6 +773,25 @@ if (is.dev) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
 }
 
+// One live playback engine per app, always. Two dev launches used to be
+// allowed to coexist despite sharing the same userData path; each opened
+// its own native engine and sent the same project to CoreAudio. Hearing
+// both copies a few milliseconds apart produces comb filtering/phasey
+// "crunch" that is easily mistaken for buffer underruns. A second launch
+// now just brings the existing window forward and exits before it can
+// create another engine.
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
+}
+
 // This method will be called when Electron has finished
 // initialization and is ready to create browser windows.
 // Some APIs can only be used after this event occurs.
