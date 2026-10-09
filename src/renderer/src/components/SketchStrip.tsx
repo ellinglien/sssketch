@@ -449,6 +449,8 @@ export function SketchStrip({
         return (
           <div
             key={rifff.groupId}
+            className="ra-riff-tile ra-sketch-riff-tile"
+            data-selected={isSelected || batchSelected}
             draggable
             onDragStart={(e) => {
               nativeTileDragRef.current = true
@@ -474,8 +476,6 @@ export function SketchStrip({
               height: TILE_SIZE,
               cursor: 'pointer',
               border: '1px solid transparent',
-              background:
-                isSelected || batchSelected ? 'var(--ra-bg-riff-selected)' : 'transparent',
               boxSizing: 'border-box',
               opacity: isSelected || batchSelected || isCurrent ? 1 : 0.85
             }}

@@ -171,6 +171,43 @@ textarea:focus-visible,
   outline-offset: -1px;
 }
 
+/* Riff tiles are circular artwork, so their selection should feather around
+ * the glyph instead of drawing a hard square behind it. Selection stays a
+ * neutral gray; Shelf playback gets its own restrained playhead-colored halo
+ * so "selected" and "currently sounding" remain separate states. */
+.ra-riff-tile {
+  border-radius: 50%;
+  background: transparent;
+  transition:
+    opacity 80ms ease,
+    background 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.ra-riff-tile[data-selected='true'] {
+  background: radial-gradient(
+    circle at center,
+    var(--ra-bg-riff-selected) 0%,
+    var(--ra-bg-riff-selected) 48%,
+    color-mix(in srgb, var(--ra-bg-riff-selected) 62%, transparent) 70%,
+    transparent 100%
+  );
+  box-shadow: 0 0 10px color-mix(in srgb, var(--ra-text-2) 12%, transparent);
+}
+
+.ra-shelf-riff-tile[data-previewing='true'] {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--ra-playhead) 38%, transparent),
+    0 0 9px color-mix(in srgb, var(--ra-playhead) 24%, transparent);
+}
+
+/* Preserve keyboard focus, but follow the glyph's round shape and use a
+ * quieter stroke than the app-wide rectangular button focus treatment. */
+.ra-riff-tile:focus-visible {
+  outline: 1px solid color-mix(in srgb, var(--ra-text-2) 42%, transparent);
+  outline-offset: 3px;
+}
+
 /* Immediate custom tooltip for icon-only buttons -- direct request,
  * 2026-09-17, three same-day rounds: "can we make the tooltips much
  * faster? for the new icons," then "can the tooltips be even a bit

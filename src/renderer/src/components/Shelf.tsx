@@ -383,6 +383,9 @@ export function Shelf({
             return (
               <button
                 key={rifff.groupId}
+                className="ra-riff-tile ra-shelf-riff-tile"
+                data-selected={selected || batchSelected}
+                data-previewing={previewing}
                 draggable
                 onDragStart={(e) => {
                   suppressNextSyntheticClick()
@@ -437,10 +440,8 @@ export function Shelf({
                   flex: 'none',
                   padding: 2,
                   boxSizing: 'border-box',
-                  border: previewing ? '2px solid var(--ra-playhead)' : '1px solid transparent',
+                  border: '1px solid transparent',
                   cursor: 'grab',
-                  background:
-                    selected || batchSelected ? 'var(--ra-bg-riff-selected)' : 'transparent',
                   opacity: lit ? 1 : placed ? 0.4 : 0.72,
                   transition: 'opacity 80ms ease'
                 }}
