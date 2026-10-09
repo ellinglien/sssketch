@@ -1725,9 +1725,9 @@ function Frame(): React.JSX.Element {
   // within one already-open session -- App.tsx itself never unmounts for
   // the life of the app, LibraryBrowser does every time the modal closes.
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
-  // Cross is a session draft like Discover: returning to Sketch must not
-  // discard a half-built child. Its project key prevents a draft from one
-  // sketch being resumed or committed into another.
+  // Cross is deliberately disposable: its result only persists when the
+  // user explicitly adds it to Shelf or Timeline. Closing Cross clears this
+  // draft, so opening another pair never needs a discard confirmation.
   const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
   const [crossOpen, setCrossOpen] = useState(false)
   // Discover artist mode: the chosen artists (combine artists, spec
@@ -2194,14 +2194,6 @@ function Frame(): React.JSX.Element {
       setCrossOpen(true)
       return
     }
-    if (
-      crossDraft?.projectKey === projectKey &&
-      crossDraft.center.length > 0 &&
-      !window.confirm('Start a new Cross? Your current Cross draft will be replaced.')
-    ) {
-      return
-    }
-
     setBusy('preparing cross…')
     try {
       const prepared = await Promise.all(
@@ -3195,7 +3187,10 @@ function Frame(): React.JSX.Element {
                 draft={crossDraft}
                 setDraft={setCrossDraft}
                 currentProjectKey={crossProjectKey(currentSketch, state.projectSeed)}
-                onBack={() => setCrossOpen(false)}
+                onBack={() => {
+                  setCrossOpen(false)
+                  setCrossDraft(null)
+                }}
               />
             </div>
           )}
