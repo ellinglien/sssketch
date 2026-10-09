@@ -51,7 +51,7 @@ import { LoadingLoader } from './LoadingLoader'
 import { Dial } from './Dial'
 import { resolveCandidateStem } from './discoverCandidateStem'
 import { Copy, Shuffle, SkipForward } from '@phosphor-icons/react'
-import { useAppSelector, useDispatch, usePlaying } from '../state/StoreContext'
+import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { useCrossPreview, type CrossPreviewMode } from '../state/useCrossPreview'
 
@@ -70,6 +70,13 @@ function CrossPlaybackIndicator(): React.JSX.Element {
       <i />
       <i />
     </span>
+  )
+}
+
+function CrossWaveformPlayhead({ pct }: { pct: number | null }): React.JSX.Element | null {
+  if (pct === null) return null
+  return (
+    <span className="ra-cross-waveform-playhead" style={{ left: `${pct}%` }} aria-hidden="true" />
   )
 }
 
@@ -148,6 +155,7 @@ function SourceRow({
   source,
   added,
   active,
+  playheadPct,
   audible,
   soloed,
   onAdd,
@@ -158,6 +166,7 @@ function SourceRow({
   source: CrossSourceOccurrence
   added: boolean
   active: boolean
+  playheadPct: number | null
   audible: boolean
   soloed: boolean
   onAdd: () => void
@@ -219,6 +228,7 @@ function SourceRow({
         }}
       >
         {stem && <Waveform path={stem.path} color={typeColorVar(stem.type)} />}
+        {stem && <CrossWaveformPlayhead pct={playheadPct} />}
         <span
           style={{
             position: 'absolute',
@@ -259,6 +269,7 @@ function SourceColumn({
   draft,
   selected,
   playing,
+  playheadPct,
   muted,
   onAdd,
   onSelect,
@@ -269,6 +280,7 @@ function SourceColumn({
   draft: CrossDraft
   selected: boolean
   playing: boolean
+  playheadPct: number | null
   muted: ReadonlySet<string>
   onAdd: (sourceId: string) => void
   onSelect: () => void
@@ -325,6 +337,7 @@ function SourceColumn({
           source={source}
           added={added.has(source.id)}
           active={selected && playing}
+          playheadPct={selected && playing ? playheadPct : null}
           audible={!muted.has(source.id)}
           soloed={availableCount > 1 && audibleCount === 1 && !muted.has(source.id)}
           onAdd={() => onAdd(source.id)}
@@ -343,6 +356,7 @@ function CenterRow({
   index,
   soloed,
   rolling,
+  playheadPct,
   onDropAt,
   onDraftChange,
   onSelect,
@@ -355,6 +369,7 @@ function CenterRow({
   index: number
   soloed: boolean
   rolling: boolean
+  playheadPct: number | null
   onDropAt: (event: React.DragEvent, index: number) => void
   onDraftChange: Dispatch<SetStateAction<CrossDraft | null>>
   onSelect: () => void
@@ -450,6 +465,7 @@ function CenterRow({
             <Waveform path={stem.path} color={typeColorVar(stem.type)} />
           </div>
         )}
+        <CrossWaveformPlayhead pct={playheadPct} />
         <span style={{ position: 'absolute', left: 5, top: 3, fontSize: 8 }}>
           {index + 1} · {stem.name}
         </span>
@@ -511,6 +527,7 @@ export function CrossPanel({
   const playedBars = useAppSelector((state) => state.playedBars)
   const projectBpm = useAppSelector((state) => state.bpm)
   const playing = usePlaying()
+  const pos = usePos()
   const { preview } = useCrossPreview()
   const [selectedTarget, setSelectedTarget] = useState<CrossTarget>(() =>
     draft.center.length > 0 ? 'center' : 'left'
@@ -885,6 +902,15 @@ export function CrossPanel({
   }
 
   const remainingSlots = MAX_RIFFF_STEM_SLOTS - draft.center.length
+  const selectedLoopBars =
+    selectedTarget === 'center'
+      ? centerLoopBars(draft)
+      : crossParentOnSide(draft, selectedTarget).barLength
+  const playheadPct =
+    playing && selectedLoopBars > 0
+      ? ((((pos % selectedLoopBars) + selectedLoopBars) % selectedLoopBars) / selectedLoopBars) *
+        100
+      : null
   const placeholders = Math.max(
     0,
     Math.min(
@@ -981,6 +1007,17 @@ export function CrossPanel({
         }
         .ra-cross-playing-indicator > i:nth-child(3) {
           animation-delay: -240ms;
+        }
+        .ra-cross-waveform-playhead {
+          position: absolute;
+          z-index: 2;
+          top: 0;
+          bottom: 0;
+          width: 1px;
+          background: var(--ra-playhead);
+          opacity: 0.42;
+          pointer-events: none;
+          transform: translateX(-0.5px);
         }
         @keyframes ra-cross-playing-meter {
           from { transform: scaleY(0.3); opacity: 0.55; }
@@ -1126,6 +1163,7 @@ export function CrossPanel({
           draft={draft}
           selected={selectedTarget === 'left'}
           playing={playing}
+          playheadPct={playheadPct}
           muted={sideMuted}
           onAdd={(sourceId) =>
             setDraft((value) => (value ? addCrossSource(value, sourceId) : value))
@@ -1200,6 +1238,7 @@ export function CrossPanel({
                   draft.center.filter((item) => item.audible).length === 1
                 }
                 rolling={rollingRows.has(row.id)}
+                playheadPct={selectedTarget === 'center' ? playheadPct : null}
                 onDropAt={handleDropAt}
                 onDraftChange={setDraft}
                 onSelect={() => selectAndPlay('center')}
@@ -1344,6 +1383,7 @@ export function CrossPanel({
           draft={draft}
           selected={selectedTarget === 'right'}
           playing={playing}
+          playheadPct={playheadPct}
           muted={sideMuted}
           onAdd={(sourceId) =>
             setDraft((value) => (value ? addCrossSource(value, sourceId) : value))
