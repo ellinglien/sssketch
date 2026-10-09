@@ -325,7 +325,7 @@ function SourceColumn({
         </span>
         <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{Math.round(parent.bpm)} bpm</span>
         <span
-          style={{ width: 12, color: selected ? 'var(--ra-playhead)' : 'var(--ra-text-4)' }}
+          style={{ width: 16, color: selected ? 'var(--ra-playhead)' : 'var(--ra-text-4)' }}
           aria-label={selected ? (playing ? 'playing' : 'selected') : undefined}
         >
           {selected && playing ? <CrossPlaybackIndicator /> : selected ? '●' : ''}
@@ -990,14 +990,14 @@ export function CrossPanel({
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          gap: 1px;
-          width: 12px;
-          height: 12px;
+          gap: 2px;
+          width: 16px;
+          height: 14px;
           color: var(--ra-playhead);
         }
         .ra-cross-playing-indicator > i {
-          width: 2px;
-          height: 8px;
+          width: 3px;
+          height: 10px;
           background: currentColor;
           transform-origin: center;
           animation: ra-cross-playing-meter 720ms ease-in-out infinite alternate;
@@ -1208,7 +1208,7 @@ export function CrossPanel({
             </span>
             <span
               style={{
-                width: 12,
+                width: 16,
                 color: selectedTarget === 'center' ? 'var(--ra-playhead)' : 'var(--ra-text-4)'
               }}
               aria-label={
