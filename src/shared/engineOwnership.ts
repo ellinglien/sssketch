@@ -19,7 +19,11 @@
  * not wrap a throwaway preview's position against the real timeline's own
  * loopLengthBars. */
 export type EngineOwner =
-  'discover-preview' | 'stem-solo-preview' | 'coach-section-preview' | 'tidy-up-library-preview'
+  | 'discover-preview'
+  | 'cross-preview'
+  | 'stem-solo-preview'
+  | 'coach-section-preview'
+  | 'tidy-up-library-preview'
 
 export interface EngineOwnershipTracker {
   /** Claims ownership, returning a generation token. The caller must hold

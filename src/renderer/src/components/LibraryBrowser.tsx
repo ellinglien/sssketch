@@ -70,6 +70,15 @@ import {
 import { resolveOwnUsername } from '@shared/ownUsernameReport'
 import { syncOutcomeNote, syncOutcomeNoteRefreshMs } from '@shared/syncOutcomeNote'
 import { loginSyncPromptText, type LoginSyncConsent } from '@shared/loginSyncConsent'
+import {
+  createCrossDraft,
+  crossPairInVisualOrder,
+  crossProjectKey,
+  type CrossDraft,
+  type CrossParent
+} from '@shared/cross'
+import { friendlyRiffName } from '@shared/friendlyRiffName'
+import { CrossPanel } from './CrossPanel'
 
 // The "your username" setting is persisted locally (not in project files or
 // app state) since it's a per-person identity setting, not something that
@@ -166,6 +175,8 @@ export function LibraryBrowser({
   setDiscoverRedoStack,
   discoverSeedBpm,
   setDiscoverSeedBpm,
+  crossDraft,
+  setCrossDraft,
   onCoachSlotsChange,
   initialMode
 }: {
@@ -227,6 +238,9 @@ export function LibraryBrowser({
   setDiscoverRedoStack: React.Dispatch<React.SetStateAction<DiscoverSlot[][]>>
   discoverSeedBpm: number | null
   setDiscoverSeedBpm: React.Dispatch<React.SetStateAction<number | null>>
+  /** Session-only Cross draft, lifted to App so closing Import preserves it. */
+  crossDraft: CrossDraft | null
+  setCrossDraft: React.Dispatch<React.SetStateAction<CrossDraft | null>>
   /** Passed straight through to DiscoverPanel -- see its own doc comments. */
   onCoachSlotsChange?: (slots: CoachSlotSnapshot[]) => void
   /** Which half to open on. Required, and always honoured: the shelf now has
@@ -250,6 +264,9 @@ export function LibraryBrowser({
   // why that content-carrying move is the ONLY way across, now that the tab
   // pair is gone.
   const [libraryMode, setLibraryMode] = useState<LibraryMode>(() => initialMode)
+  const [crossOpen, setCrossOpen] = useState(false)
+  const [crossLoading, setCrossLoading] = useState(false)
+  const [crossError, setCrossError] = useState<string | null>(null)
 
   // Auth (gates sync-triggering and live jam-membership discovery)
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ loggedIn: false })
@@ -574,6 +591,7 @@ export function LibraryBrowser({
   const playing = usePlaying()
   const dispatch = useDispatch()
   const appState = useAppState()
+  const projectKey = crossProjectKey(currentSketch, appState.projectSeed)
   // Rescanned when IMPORT opens (spec, "Staying current") -- the browse
   // half only; opening on discover never touches the loop folders.
   const loopFolders = useLoopFolders(appState.bpm, initialMode === 'browse')
@@ -582,6 +600,13 @@ export function LibraryBrowser({
       ? (loopFolders.folders.find((f) => f.rootPath === selectedLoopRoot) ?? null)
       : null
   const setBusy = useBusy()
+
+  useEffect(() => {
+    if (crossDraft !== null && crossDraft.projectKey !== projectKey) {
+      setCrossOpen(false)
+      setCrossDraft(null)
+    }
+  }, [crossDraft, projectKey, setCrossDraft])
 
   // Stable across renders (useCallback, empty deps) so it's safe to pass to
   // registerActivePreview/reference from effect cleanups without triggering
@@ -1745,6 +1770,99 @@ export function LibraryBrowser({
     }
   }
 
+  function resolvedCrossParent(
+    riffCID: string,
+    resolved: RiffLibraryResolvedRiff
+  ): CrossParent {
+    return {
+      id: riffCID,
+      riffCID,
+      label:
+        resolved.name ?? friendlyRiffName(riffCID, isOwnRiffLibrary ? 'library' : 'lore'),
+      bpm: resolved.bpm,
+      barLength: resolved.barLength,
+      sources: resolved.stems.map((stem) => ({
+        id: `${riffCID}:${stem.slot}`,
+        parentId: riffCID,
+        sourceSlot: stem.slot,
+        stem:
+          stem.path === null
+            ? null
+            : {
+                author: stem.creatorUserName,
+                name: stem.presetName,
+                type:
+                  instrumentMaskToSoundType(stem.instrumentMask) ??
+                  guessSoundTypeFromPresetName(stem.presetName) ??
+                  'fx',
+                path: stem.path,
+                durationSec: stem.durationSec,
+                barLength: stem.barLength,
+                creationTime: resolved.creationTime
+              },
+        gain: stem.gain
+      }))
+    }
+  }
+
+  function sameCrossPair(draft: CrossDraft, pair: readonly [string, string]): boolean {
+    const current = new Set(draft.parents.map((parent) => parent.riffCID))
+    return current.size === 2 && pair.every((riffCID) => current.has(riffCID))
+  }
+
+  async function handleCross(): Promise<void> {
+    const pair = crossPairInVisualOrder(
+      riffs.map((riff) => riff.riffCID),
+      selectedRiffCIDs
+    )
+    if (!pair || crossLoading) return
+    if (crossDraft?.projectKey === projectKey && sameCrossPair(crossDraft, pair)) {
+      setCrossError(null)
+      setCrossOpen(true)
+      return
+    }
+    if (
+      crossDraft?.projectKey === projectKey &&
+      crossDraft.center.length > 0 &&
+      !window.confirm('Start a new Cross? Your current Cross draft will be replaced.')
+    ) {
+      return
+    }
+
+    // Invalidate both the already-playing Web Audio nodes and the delayed
+    // resolve/download chain that could otherwise start them again after
+    // Cross has claimed the native engine.
+    syncQueueTokenRef.current += 1
+    setSelectedRiffPreviewEnabled(false)
+    stopPreview()
+    setCrossLoading(true)
+    setCrossError(null)
+    try {
+      const parents: CrossParent[] = []
+      for (const riffCID of pair) {
+        const initiallyResolved =
+          riffCID === selectedRiffCID && resolvedRiff
+            ? resolvedRiff
+            : await window.rifffApi.riffLibraryResolveRiff(riffCID)
+        if (!initiallyResolved) throw new Error('could not resolve one of the selected rifffs')
+        const resolved = await ensureStemsDownloaded(riffCID, initiallyResolved)
+        const parent = resolvedCrossParent(riffCID, resolved)
+        if (!parent.sources.some((source) => source.stem !== null)) {
+          throw new Error('one of the selected rifffs has no available stems')
+        }
+        parents.push(parent)
+      }
+      const next = createCrossDraft(projectKey, parents[0], parents[1], appState.bpm)
+      setCrossDraft(next)
+      setCrossOpen(true)
+    } catch (err) {
+      console.error('LibraryBrowser: failed to open Cross:', err)
+      setCrossError(err instanceof Error ? err.message : 'could not open Cross')
+    } finally {
+      setCrossLoading(false)
+    }
+  }
+
   // Derived per-key lookups for whichever jam the detail pane is currently
   // showing -- selectedJamCID can be null (nothing selected), so this stays
   // undefined/false rather than throwing in that case.
@@ -1826,7 +1944,8 @@ export function LibraryBrowser({
           height: '100%',
           background: 'var(--ra-bg-bar)',
           display: 'flex',
-          flexDirection: 'column'
+          flexDirection: 'column',
+          position: 'relative'
         }}
         onClick={(e) => e.stopPropagation()}
       >
@@ -1858,22 +1977,43 @@ export function LibraryBrowser({
               name, and the two buttons that replaced it are one escape and
               one click away. */}
           <span className="ra-eyebrow">{libraryModeLabel(libraryMode)}</span>
-          <button
-            onClick={attemptClose}
-            aria-label="close library browser"
-            data-tooltip="close"
-            style={{
-              height: 22,
-              borderRadius: 0,
-              padding: '0 10px',
-              fontSize: 10,
-              border: '1px solid var(--ra-border)',
-              background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text-2)'
-            }}
-          >
-            ×
-          </button>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {libraryMode === 'browse' && crossDraft?.projectKey === projectKey && (
+              <button
+                onClick={() => {
+                  setCrossError(null)
+                  setCrossOpen(true)
+                }}
+                style={{
+                  height: 24,
+                  borderRadius: 0,
+                  padding: '0 10px',
+                  fontSize: 10,
+                  border: '1px solid var(--ra-border-strong)',
+                  background: 'var(--ra-bg-row-active)',
+                  color: 'var(--ra-text)'
+                }}
+              >
+                resume cross
+              </button>
+            )}
+            <button
+              onClick={attemptClose}
+              aria-label="close library browser"
+              data-tooltip="close"
+              style={{
+                height: 22,
+                borderRadius: 0,
+                padding: '0 10px',
+                fontSize: 10,
+                border: '1px solid var(--ra-border)',
+                background: 'var(--ra-bg-row-active)',
+                color: 'var(--ra-text-2)'
+              }}
+            >
+              ×
+            </button>
+          </div>
         </div>
 
         {libraryMode === 'browse' && (
@@ -2650,6 +2790,24 @@ export function LibraryBrowser({
                               seed discover with this
                             </button>
                           )}
+                          {selectedRiffCIDs.size === 2 && (
+                            <button
+                              onClick={() => void handleCross()}
+                              disabled={crossLoading || downloadingRiffCID !== null}
+                              title="combine stems from these two rifffs"
+                              style={{
+                                height: 34,
+                                borderRadius: 0,
+                                padding: '0 20px',
+                                fontSize: 13,
+                                border: '2px solid var(--ra-border-strong)',
+                                background: 'var(--ra-bg-row-active)',
+                                color: 'var(--ra-text)'
+                              }}
+                            >
+                              {crossLoading ? 'opening cross…' : 'cross'}
+                            </button>
+                          )}
                           <button
                             onClick={() => {
                               if (selectedRiffCIDs.size > 1) {
@@ -2689,6 +2847,11 @@ export function LibraryBrowser({
                                 ? 'imported to project ✓ — import again'
                                 : 'import to project'}
                           </button>
+                          {crossError && (
+                            <span style={{ maxWidth: 180, fontSize: 9, color: 'var(--ra-text-3)' }}>
+                              {crossError}
+                            </span>
+                          )}
                         </div>
                       )}
                     </>
@@ -2722,6 +2885,24 @@ export function LibraryBrowser({
             seedBpm={discoverSeedBpm}
             onCoachSlotsChange={onCoachSlotsChange}
           />
+        )}
+        {crossOpen && crossDraft?.projectKey === projectKey && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 1,
+              display: 'flex',
+              background: 'var(--ra-bg-bar)'
+            }}
+          >
+            <CrossPanel
+              draft={crossDraft}
+              setDraft={setCrossDraft}
+              currentProjectKey={projectKey}
+              onBack={() => setCrossOpen(false)}
+            />
+          </div>
         )}
       </div>
       {/* Rendered INSIDE the modal's own zIndex:var(--ra-z-fullscreen) stacking context

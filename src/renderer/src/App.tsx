@@ -113,6 +113,7 @@ import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
 import { stemKey, type BusId, type Rifff } from '@shared/types'
+import type { CrossDraft } from '@shared/cross'
 import { assessTidyUpReadiness, unbussedStemPaths } from '@shared/tidyUpReadiness'
 import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
@@ -1706,6 +1707,10 @@ function Frame(): React.JSX.Element {
   // within one already-open session -- App.tsx itself never unmounts for
   // the life of the app, LibraryBrowser does every time the modal closes.
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
+  // Cross is a session draft like Discover: closing the full-screen library
+  // must not discard a half-built child. LibraryBrowser validates it against
+  // the current project before offering Resume Cross.
+  const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
   // Discover artist mode: the chosen artists (combine artists, spec
   // 2026-10-06), `[null]` = me. Session-only, the same lifetime as
   // discoverSlots -- Discover opens on `me` at launch.
@@ -3068,6 +3073,8 @@ function Frame(): React.JSX.Element {
             setDiscoverRedoStack={setDiscoverRedoStack}
             discoverSeedBpm={discoverSeedBpm}
             setDiscoverSeedBpm={setDiscoverSeedBpm}
+            crossDraft={crossDraft}
+            setCrossDraft={setCrossDraft}
             initialMode={riffLibraryInitialMode}
             onCoachSlotsChange={handleCoachSlotsChange}
           />

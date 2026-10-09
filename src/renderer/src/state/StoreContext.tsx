@@ -1220,7 +1220,11 @@ export function StoreProvider({ children }: { children: ReactNode }): React.JSX.
       // it loads a throwaway one-stem project, so the real timeline's own
       // loop length is the wrong reference entirely.
       const owner = engineOwnershipRef.current.current
-      if (owner === 'discover-preview' || owner === 'tidy-up-library-preview') {
+      if (
+        owner === 'discover-preview' ||
+        owner === 'cross-preview' ||
+        owner === 'tidy-up-library-preview'
+      ) {
         dispatch({ type: 'SET_POS', pos })
         return
       }
