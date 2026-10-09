@@ -35,6 +35,13 @@ describe('project serialization', () => {
     // — nothing to assert here now the way there used to be.
   })
 
+  it('round-trips explicit re-one lineage for an independent Cross child', () => {
+    const crossRifff = { ...rifff, groupId: 'cross-1', phaseLinkId: 'cross-1' }
+    const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: crossRifff })
+    const { state: restored } = deserializeProject(JSON.parse(serializeProject(state)))
+    expect(restored.rifffs['cross-1'].phaseLinkId).toBe('cross-1')
+  })
+
   it('does not persist which view was showing — always reopens in the default one', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })
     state = reducer(state, { type: 'SET_ARRANGER_MODE', mode: 'map' })

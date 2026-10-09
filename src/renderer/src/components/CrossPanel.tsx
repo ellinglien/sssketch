@@ -11,6 +11,7 @@ import {
   addCrossSource,
   assembleCrossRifff,
   clearCrossCenter,
+  crossCommitIsCurrent,
   crossParentOnSide,
   crossSourceForRow,
   finishCrossGainDrag,
@@ -28,6 +29,7 @@ import {
   type CrossSourceOccurrence
 } from '@shared/cross'
 import { MAX_RIFFF_STEM_SLOTS } from '@shared/riffStemSlots'
+import type { Stem } from '@shared/types'
 import { typeColorVar } from '../theme/typeColor'
 import { Waveform } from './Waveform'
 import { LoadingLoader } from './LoadingLoader'
@@ -38,13 +40,16 @@ import { useCrossPreview, type CrossPreviewMode } from '../state/useCrossPreview
 const SOURCE_DRAG_TYPE = 'application/x-sssketch-cross-source'
 const ROW_DRAG_TYPE = 'application/x-sssketch-cross-row'
 
-function sourceMembers(parent: CrossParent) {
+function sourceMembers(parent: CrossParent): { stem: Omit<Stem, 'slot'>; gain: number }[] {
   return parent.sources.flatMap((source) =>
     source.stem ? [{ stem: source.stem, gain: source.gain }] : []
   )
 }
 
-function centerMembers(draft: CrossDraft, audibleOnly: boolean) {
+function centerMembers(
+  draft: CrossDraft,
+  audibleOnly: boolean
+): { stem: Omit<Stem, 'slot'>; gain: number }[] {
   return draft.center.flatMap((row) => {
     const source = crossSourceForRow(draft, row)
     if (!source?.stem || (audibleOnly && !row.audible)) return []
@@ -162,7 +167,10 @@ function SourceColumn({
   return (
     <section style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28 }}>
-        <span className="ra-eyebrow" style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+        <span
+          className="ra-eyebrow"
+          style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}
+        >
           {parent.label}
         </span>
         <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>{Math.round(parent.bpm)} bpm</span>
@@ -218,9 +226,7 @@ function CenterRow({
     const end = (): void => {
       window.removeEventListener('pointermove', move)
       window.removeEventListener('pointerup', end)
-      onDraftChange((draft) =>
-        draft ? finishCrossGainDrag(draft, row.id, startGain) : draft
-      )
+      onDraftChange((draft) => (draft ? finishCrossGainDrag(draft, row.id, startGain) : draft))
     }
     window.addEventListener('pointermove', move)
     window.addEventListener('pointerup', end, { once: true })
@@ -334,10 +340,13 @@ export function CrossPanel({
   const draftRef = useRef(draft)
   const currentProjectKeyRef = useRef(currentProjectKey)
   const committingRef = useRef(false)
-  draftRef.current = draft
-  currentProjectKeyRef.current = currentProjectKey
   const left = crossParentOnSide(draft, 'left')
   const right = crossParentOnSide(draft, 'right')
+
+  useEffect(() => {
+    draftRef.current = draft
+    currentProjectKeyRef.current = currentProjectKey
+  }, [currentProjectKey, draft])
 
   const playCenter = useCallback(async (): Promise<void> => {
     const members = centerMembers(draft, true)
@@ -351,9 +360,16 @@ export function CrossPanel({
   }, [draft, preview, stop])
 
   useEffect(() => {
-    if (activeMode === 'center') void playCenter()
-    // revision is the intended trigger; playCenter closes over the matching
-    // immutable draft snapshot but would otherwise retrigger on every render.
+    if (activeMode !== 'center') return
+    const members = centerMembers(draft, true)
+    if (members.length === 0) {
+      stop()
+      void Promise.resolve().then(() => setActiveMode(null))
+      return
+    }
+    void preview('center', members, draft.targetBpm, centerLoopBars(draft))
+    // revision is the intended trigger; the matching immutable draft is
+    // captured here without re-arming on unrelated renders.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft.revision])
 
@@ -394,13 +410,7 @@ export function CrossPanel({
       // revision without allowing a stale Cross snapshot into another project.
       await Promise.resolve()
       const current = draftRef.current
-      if (
-        current.revision !== revision ||
-        current.projectKey !== projectKey ||
-        currentProjectKeyRef.current !== projectKey
-      ) {
-        return
-      }
+      if (!crossCommitIsCurrent(revision, projectKey, current, currentProjectKeyRef.current)) return
       if (destination === 'shelf') {
         dispatch({ type: 'ADD_TO_SHELF', rifff: assembly.rifff, vol: assembly.vol })
       } else {
@@ -446,24 +456,35 @@ export function CrossPanel({
           borderBottom: '1px solid var(--ra-border)'
         }}
       >
-        <button onClick={onBack}>← import</button>
+        <button onClick={onBack} disabled={!!committing}>
+          ← import
+        </button>
         <span className="ra-eyebrow">cross</span>
         <span style={{ fontSize: 9, color: 'var(--ra-text-3)' }}>
           project tempo · {Math.round(draft.targetBpm)} bpm
         </span>
         <div style={{ flex: 1 }} />
-        <button onClick={() => setDraft((value) => (value ? undoCross(value) : value))} disabled={!draft.past.length}>
+        <button
+          onClick={() => setDraft((value) => (value ? undoCross(value) : value))}
+          disabled={!!committing || !draft.past.length}
+        >
           undo
         </button>
-        <button onClick={() => setDraft((value) => (value ? redoCross(value) : value))} disabled={!draft.future.length}>
+        <button
+          onClick={() => setDraft((value) => (value ? redoCross(value) : value))}
+          disabled={!!committing || !draft.future.length}
+        >
           redo
         </button>
-        <button onClick={() => setDraft((value) => (value ? swapCrossSides(value) : value))}>
+        <button
+          onClick={() => setDraft((value) => (value ? swapCrossSides(value) : value))}
+          disabled={!!committing}
+        >
           swap sides
         </button>
         <button
           onClick={() => setDraft((value) => (value ? clearCrossCenter(value) : value))}
-          disabled={draft.center.length === 0}
+          disabled={!!committing || draft.center.length === 0}
         >
           clear
         </button>
@@ -477,7 +498,9 @@ export function CrossPanel({
           padding: 12,
           overflow: 'auto',
           flex: 1,
-          minHeight: 0
+          minHeight: 0,
+          pointerEvents: committing ? 'none' : 'auto',
+          opacity: committing ? 0.65 : 1
         }}
       >
         <SourceColumn
@@ -485,21 +508,36 @@ export function CrossPanel({
           parent={left}
           draft={draft}
           activeMode={activeMode}
-          onAdd={(sourceId) => setDraft((value) => (value ? addCrossSource(value, sourceId) : value))}
+          onAdd={(sourceId) =>
+            setDraft((value) => (value ? addCrossSource(value, sourceId) : value))
+          }
           onPreviewSource={(source) =>
             source.stem &&
-            togglePreview(`source:${source.id}`, [{ stem: source.stem, gain: source.gain }], source.stem.barLength)
+            togglePreview(
+              `source:${source.id}`,
+              [{ stem: source.stem, gain: source.gain }],
+              source.stem.barLength
+            )
           }
-          onPreviewParent={(parent) => togglePreview('left-riff', sourceMembers(parent), parent.barLength)}
+          onPreviewParent={(parent) =>
+            togglePreview('left-riff', sourceMembers(parent), parent.barLength)
+          }
         />
 
         <section style={{ minWidth: 0, display: 'flex', flexDirection: 'column', gap: 5 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 28 }}>
-            <span className="ra-eyebrow" style={{ flex: 1 }}>new cross</span>
+            <span className="ra-eyebrow" style={{ flex: 1 }}>
+              new cross
+            </span>
             <span style={{ fontSize: 8, color: 'var(--ra-text-3)' }}>
               {draft.center.length} / {MAX_RIFFF_STEM_SLOTS}
             </span>
-            <button onClick={() => (activeMode === 'center' ? (stop(), setActiveMode(null)) : void playCenter())} disabled={draft.center.length === 0}>
+            <button
+              onClick={() =>
+                activeMode === 'center' ? (stop(), setActiveMode(null)) : void playCenter()
+              }
+              disabled={draft.center.length === 0}
+            >
               {activeMode === 'center' ? '■ stop' : '▶ mix'}
             </button>
           </div>
@@ -543,12 +581,20 @@ export function CrossPanel({
           parent={right}
           draft={draft}
           activeMode={activeMode}
-          onAdd={(sourceId) => setDraft((value) => (value ? addCrossSource(value, sourceId) : value))}
+          onAdd={(sourceId) =>
+            setDraft((value) => (value ? addCrossSource(value, sourceId) : value))
+          }
           onPreviewSource={(source) =>
             source.stem &&
-            togglePreview(`source:${source.id}`, [{ stem: source.stem, gain: source.gain }], source.stem.barLength)
+            togglePreview(
+              `source:${source.id}`,
+              [{ stem: source.stem, gain: source.gain }],
+              source.stem.barLength
+            )
           }
-          onPreviewParent={(parent) => togglePreview('right-riff', sourceMembers(parent), parent.barLength)}
+          onPreviewParent={(parent) =>
+            togglePreview('right-riff', sourceMembers(parent), parent.barLength)
+          }
         />
       </div>
 
@@ -561,11 +607,29 @@ export function CrossPanel({
           borderTop: '1px solid var(--ra-border)'
         }}
       >
-        <button onClick={() => void commit('shelf')} disabled={!!committing || draft.center.length === 0}>
-          {committing === 'shelf' ? <LoadingLoader size={12} /> : committed === 'shelf' ? '✓ added to shelf' : 'add to shelf'}
+        <button
+          onClick={() => void commit('shelf')}
+          disabled={!!committing || draft.center.length === 0}
+        >
+          {committing === 'shelf' ? (
+            <LoadingLoader size={12} />
+          ) : committed === 'shelf' ? (
+            '✓ added to shelf'
+          ) : (
+            'add to shelf'
+          )}
         </button>
-        <button onClick={() => void commit('timeline')} disabled={!!committing || draft.center.length === 0}>
-          {committing === 'timeline' ? <LoadingLoader size={12} /> : committed === 'timeline' ? '✓ added to timeline' : 'add to timeline'}
+        <button
+          onClick={() => void commit('timeline')}
+          disabled={!!committing || draft.center.length === 0}
+        >
+          {committing === 'timeline' ? (
+            <LoadingLoader size={12} />
+          ) : committed === 'timeline' ? (
+            '✓ added to timeline'
+          ) : (
+            'add to timeline'
+          )}
         </button>
       </div>
     </div>

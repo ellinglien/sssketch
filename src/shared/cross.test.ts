@@ -4,7 +4,9 @@ import {
   addCrossSource,
   assembleCrossRifff,
   createCrossDraft,
+  crossCommitIsCurrent,
   crossPairInVisualOrder,
+  crossParentOnSide,
   crossProjectKey,
   finishCrossGainDrag,
   moveCrossRow,
@@ -12,9 +14,11 @@ import {
   redoCross,
   removeCrossRow,
   setCrossGain,
+  swapCrossSides,
   toggleCrossAudible,
   toggleCrossSolo,
   undoCross,
+  type CrossDraft,
   type CrossParent
 } from './cross'
 
@@ -46,8 +50,14 @@ function parent(id: string, paths: string[], bpm = 120): CrossParent {
   }
 }
 
-function draft() {
-  return createCrossDraft('project-a', parent('a', ['/same.wav', '/a2.wav']), parent('b', ['/same.wav', '/b2.wav']), 126, 'draft-1')
+function draft(): CrossDraft {
+  return createCrossDraft(
+    'project-a',
+    parent('a', ['/same.wav', '/a2.wav']),
+    parent('b', ['/same.wav', '/b2.wav']),
+    126,
+    'draft-1'
+  )
 }
 
 describe('crossProjectKey', () => {
@@ -57,12 +67,22 @@ describe('crossProjectKey', () => {
   })
 })
 
+describe('crossCommitIsCurrent', () => {
+  it('rejects a stale build and a project switch', () => {
+    const value = draft()
+    expect(crossCommitIsCurrent(value.revision, value.projectKey, value, value.projectKey)).toBe(
+      true
+    )
+    expect(
+      crossCommitIsCurrent(value.revision - 1, value.projectKey, value, value.projectKey)
+    ).toBe(false)
+    expect(crossCommitIsCurrent(value.revision, value.projectKey, value, 'project-b')).toBe(false)
+  })
+})
+
 describe('crossPairInVisualOrder', () => {
   it('captures exactly two selected riffs in current visual order', () => {
-    expect(crossPairInVisualOrder(['r3', 'r1', 'r2'], new Set(['r2', 'r3']))).toEqual([
-      'r3',
-      'r2'
-    ])
+    expect(crossPairInVisualOrder(['r3', 'r1', 'r2'], new Set(['r2', 'r3']))).toEqual(['r3', 'r2'])
   })
 
   it('returns null for any selection size other than two', () => {
@@ -72,6 +92,20 @@ describe('crossPairInVisualOrder', () => {
 })
 
 describe('Cross center editing', () => {
+  it('swaps presentation sides without changing source identity', () => {
+    let value = addCrossSource(draft(), 'a:1')
+    value = swapCrossSides(value)
+    expect(crossParentOnSide(value, 'left').id).toBe('b')
+    expect(value.center[0].sourceId).toBe('a:1')
+  })
+
+  it('ignores an unavailable source instead of creating a broken center row', () => {
+    const left = parent('a', ['/a.wav'])
+    left.sources[0] = { ...left.sources[0], stem: null }
+    const value = createCrossDraft('project-a', left, parent('b', ['/b.wav']), 120, 'unavailable')
+    expect(addCrossSource(value, 'a:1')).toBe(value)
+  })
+
   it('treats identical audio in different parents as distinct source occurrences', () => {
     let value = addCrossSource(draft(), 'a:1')
     value = addCrossSource(value, 'b:1')
@@ -119,7 +153,8 @@ describe('Cross center editing', () => {
       Array.from({ length: 12 }, (_, index) => `/b${index}.wav`)
     )
     let value = createCrossDraft('project-a', left, right, 120, 'draft-20')
-    for (const source of [...left.sources, ...right.sources]) value = addCrossSource(value, source.id)
+    for (const source of [...left.sources, ...right.sources])
+      value = addCrossSource(value, source.id)
     expect(value.center).toHaveLength(20)
   })
 
@@ -145,6 +180,7 @@ describe('assembleCrossRifff', () => {
     const assembly = assembleCrossRifff(value, 'group-cross')
     expect(assembly?.rifff).toMatchObject({
       groupId: 'group-cross',
+      phaseLinkId: 'group-cross',
       bpm: 126,
       barLength: 8,
       name: 'cross: parent a × parent b'

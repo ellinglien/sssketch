@@ -1005,6 +1005,8 @@ describe('reducer', () => {
       expect(newRifffs).toHaveLength(2) // makeRifff() has 2 stems
       expect(newRifffs.every((r) => r.stems.length === 1)).toBe(true)
       expect(newRifffs.every((r) => r.startBar === 6)).toBe(true)
+      expect(newRifffs.every((r) => r.phaseLinkId === r.groupId)).toBe(true)
+      expect(new Set(newRifffs.map((r) => r.phaseLinkId)).size).toBe(2)
       expect(state.sel).toBe(newRifffs[0].groupId)
     })
 

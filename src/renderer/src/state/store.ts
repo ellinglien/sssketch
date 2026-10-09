@@ -1865,6 +1865,7 @@ export function reducer(state: AppState, action: Action): AppState {
               )
         rifffs[newGroupId] = {
           groupId: newGroupId,
+          phaseLinkId: newGroupId,
           name,
           bpm: rifff.bpm,
           // The group's own CURRENT resolved length (reflecting any active

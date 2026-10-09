@@ -601,13 +601,6 @@ export function LibraryBrowser({
       : null
   const setBusy = useBusy()
 
-  useEffect(() => {
-    if (crossDraft !== null && crossDraft.projectKey !== projectKey) {
-      setCrossOpen(false)
-      setCrossDraft(null)
-    }
-  }, [crossDraft, projectKey, setCrossDraft])
-
   // Stable across renders (useCallback, empty deps) so it's safe to pass to
   // registerActivePreview/reference from effect cleanups without triggering
   // re-subscriptions.
@@ -1467,7 +1460,8 @@ export function LibraryBrowser({
     return () => {
       cancelled = true
       stopPreviewAudio()
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- the lint rule's concern (reading a ref that may have changed by cleanup time) is exactly the point here: this always bumps whatever the CURRENT token is, invalidating any queue started by this run or a still-in-flight later one, not a stale snapshot from when the effect started
+      // Always bump the CURRENT token, invalidating any queue started by
+      // this run or a still-in-flight later one, not a stale snapshot.
       syncQueueTokenRef.current++
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- playing/dispatch intentionally excluded: this only re-runs on riff selection, matching BeatPicker's own pattern of reading transport state at the moment a preview starts rather than tracking it as a dependency
@@ -1770,15 +1764,11 @@ export function LibraryBrowser({
     }
   }
 
-  function resolvedCrossParent(
-    riffCID: string,
-    resolved: RiffLibraryResolvedRiff
-  ): CrossParent {
+  function resolvedCrossParent(riffCID: string, resolved: RiffLibraryResolvedRiff): CrossParent {
     return {
       id: riffCID,
       riffCID,
-      label:
-        resolved.name ?? friendlyRiffName(riffCID, isOwnRiffLibrary ? 'library' : 'lore'),
+      label: resolved.name ?? friendlyRiffName(riffCID, isOwnRiffLibrary ? 'library' : 'lore'),
       bpm: resolved.bpm,
       barLength: resolved.barLength,
       sources: resolved.stems.map((stem) => ({

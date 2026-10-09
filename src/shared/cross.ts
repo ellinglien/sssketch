@@ -54,12 +54,27 @@ export function crossProjectKey(project: ProjectRef, projectSeed?: string): stri
   return 'unsaved'
 }
 
+export function crossCommitIsCurrent(
+  capturedRevision: number,
+  capturedProjectKey: string,
+  currentDraft: CrossDraft,
+  currentProjectKey: string
+): boolean {
+  return (
+    currentDraft.revision === capturedRevision &&
+    currentDraft.projectKey === capturedProjectKey &&
+    currentProjectKey === capturedProjectKey
+  )
+}
+
 function cloneCenter(center: readonly CrossCenterRow[]): CrossCenterRow[] {
   return center.map((row) => ({ ...row }))
 }
 
 function sourceMap(draft: CrossDraft): Map<string, CrossSourceOccurrence> {
-  return new Map(draft.parents.flatMap((parent) => parent.sources).map((source) => [source.id, source]))
+  return new Map(
+    draft.parents.flatMap((parent) => parent.sources).map((source) => [source.id, source])
+  )
 }
 
 function commitCenter(draft: CrossDraft, center: CrossCenterRow[]): CrossDraft {
