@@ -157,15 +157,17 @@ const api = {
   setDirtyState: (dirty: boolean): Promise<void> => ipcRenderer.invoke('set-dirty-state', dirty),
   // Main pushes this when the quit dialog's "Save" choice is picked (see
   // index.ts's requestSaveBeforeQuit) -- the renderer's own listener (Frame)
-  // runs handleSave() and calls notifySaveBeforeQuitComplete() once it
-  // resolves, which main is waiting on via a matching ipcMain.once().
-  onRequestSaveBeforeQuit: (callback: () => void): (() => void) => {
-    const listener = (): void => callback()
+  // runs handleSave() and reports its boolean result. Main quits only after
+  // true; false or a timeout leaves the dirty project open.
+  onRequestSaveBeforeQuit: (callback: (requestId: string) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, requestId: unknown): void => {
+      if (typeof requestId === 'string') callback(requestId)
+    }
     ipcRenderer.on('request-save-before-quit', listener)
     return () => ipcRenderer.removeListener('request-save-before-quit', listener)
   },
-  notifySaveBeforeQuitComplete: (): void => {
-    ipcRenderer.send('save-before-quit-complete')
+  notifySaveBeforeQuitComplete: (requestId: string, success: boolean): void => {
+    ipcRenderer.send('save-before-quit-complete', requestId, success)
   },
   exportMix: (bytes: Uint8Array, defaultName?: string): Promise<string | null> =>
     ipcRenderer.invoke('export-mix', bytes, defaultName),

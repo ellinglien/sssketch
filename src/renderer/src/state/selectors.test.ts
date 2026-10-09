@@ -864,6 +864,7 @@ describe('rotationSecondsForStem', () => {
 describe('pasteRifffAction', () => {
   const twoStemRifff: Rifff = {
     groupId: 'r1',
+    phaseLinkId: 'cross-family',
     name: 'test',
     bpm: 150,
     barLength: 8,
@@ -893,6 +894,7 @@ describe('pasteRifffAction', () => {
     expect(action?.type).toBe('PASTE_RIFFF')
     if (action?.type !== 'PASTE_RIFFF') throw new Error('expected PASTE_RIFFF')
     expect(action.rifff.groupId).not.toBe('r1')
+    expect(action.rifff.phaseLinkId).toBe(action.rifff.groupId)
     expect(action.rifff.startBar).toBe(20)
     expect(action.rifff.stems.map((s) => s.path)).toEqual(['/a.wav', '/b.wav'])
   })
@@ -932,6 +934,7 @@ describe('pasteRifffAction', () => {
 describe('pasteStemAction', () => {
   const twoStemRifff: Rifff = {
     groupId: 'r1',
+    phaseLinkId: 'cross-family',
     name: 'test',
     bpm: 150,
     barLength: 8,
@@ -971,6 +974,7 @@ describe('pasteStemAction', () => {
     expect(action.rifff.stems[0].path).toBe('/b.wav')
     expect(action.rifff.name).toBe('b') // the stem's own name, not the rifff's
     expect(action.rifff.bpm).toBe(150) // carried from the source rifff
+    expect(action.rifff.phaseLinkId).toBe(action.rifff.groupId)
   })
 
   it('sets barLength to the CURRENT resolved (possibly resized) length, not the source rifff’s own barLength', () => {
@@ -1017,6 +1021,7 @@ describe('pasteStemAction', () => {
 describe('buildArrangeReplaceActions', () => {
   const r1: Rifff = {
     groupId: 'r1',
+    phaseLinkId: 'cross-family',
     name: 'test',
     bpm: 150,
     barLength: 8,
@@ -1086,6 +1091,7 @@ describe('buildArrangeReplaceActions', () => {
         a.type === 'PASTE_RIFFF' && a.rifff.stems[0].slot === 1
     )
     expect(pastes).toHaveLength(2)
+    expect(pastes.every((action) => action.rifff.phaseLinkId === 'cross-family')).toBe(true)
     expect(
       pastes.map((a) => ({ startBar: a.rifff.startBar, barLength: a.rifff.barLength }))
     ).toEqual([

@@ -82,7 +82,14 @@ namespace sssketch
                     Rig rig;
                     rig.transport.setBpm(120.0);
                     rig.transport.setLoopLengthBars(loop);
-                    rig.transport.play(loop > 0.0 ? 6.0 : 64.0);
+                    const double start = loop > 0.0 ? 6.0 : 64.0;
+                    rig.transport.play(start);
+                    // Play is an ordered audio-thread command. Prime one callback so the
+                    // jump detector starts after that command has established its position.
+                    rig.block();
+                    expectWithinAbsoluteError(rig.transport.currentPositionBars(),
+                                              start + kBlock * barsPerSample(120.0),
+                                              barsPerSample(120.0));
                     const double hiBpm = loop > 0.0 ? 121.0 : 125.0;
                     const double worst = worstJump(rig, loop, 600, 120.0, hiBpm, [&](int b) {
                         if (b % 50 == 25)
@@ -102,7 +109,14 @@ namespace sssketch
                     Rig rig;
                     rig.transport.setBpm(120.0);
                     rig.transport.setLoopLengthBars(loop);
-                    rig.transport.play(loop > 0.0 ? 6.0 : 64.0);
+                    const double start = loop > 0.0 ? 6.0 : 64.0;
+                    rig.transport.play(start);
+                    // Apply the ordered Play command before the concurrent tempo hammer
+                    // starts, and verify that playback began at the requested position.
+                    rig.block();
+                    expectWithinAbsoluteError(rig.transport.currentPositionBars(),
+                                              start + kBlock * barsPerSample(120.0),
+                                              barsPerSample(120.0));
                     std::atomic<bool> stop { false };
                     std::thread hammer([&] {
                         while (! stop.load())

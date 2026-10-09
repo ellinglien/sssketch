@@ -584,7 +584,13 @@ export function pasteRifffAction(
 
   const newGroupId = crypto.randomUUID()
   const stems = source.stems.map((s) => ({ ...s }))
-  const rifff: Rifff = { ...source, groupId: newGroupId, stems, startBar }
+  const rifff: Rifff = {
+    ...source,
+    groupId: newGroupId,
+    phaseLinkId: newGroupId,
+    stems,
+    startBar
+  }
 
   const vol: Record<string, number> = {}
   const mute: Record<string, boolean> = {}
@@ -645,6 +651,7 @@ export function pasteStemAction(
   const newGroupId = crypto.randomUUID()
   const rifff: Rifff = {
     groupId: newGroupId,
+    phaseLinkId: newGroupId,
     name: stem.name,
     bpm: source.bpm,
     barLength: resolvePlayedBars(state, sourceGroupId),
@@ -703,6 +710,7 @@ function pasteStemWindowAction(
   const newGroupId = crypto.randomUUID()
   const rifff: Rifff = {
     groupId: newGroupId,
+    phaseLinkId: source.phaseLinkId,
     name: stem.name,
     bpm: source.bpm,
     barLength,

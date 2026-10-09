@@ -363,6 +363,55 @@ describe('pairing over the wire', () => {
     const state = await send(port, '/api/state', { authorization: `Bearer ${token}` })
     expect(state.status).toBe(200)
   })
+
+  it('does not let a request already awaiting its body bypass a later lockout', async () => {
+    const { port, pairingCode } = await start()
+    const pending = Array.from({ length: 6 }, () => {
+      let resolveResponse!: (response: RawResponse) => void
+      let rejectResponse!: (error: Error) => void
+      const response = new Promise<RawResponse>((resolve, reject) => {
+        resolveResponse = resolve
+        rejectResponse = reject
+      })
+      const req = request(
+        {
+          host: '127.0.0.1',
+          port,
+          path: '/api/pair',
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'transfer-encoding': 'chunked' },
+          agent: false
+        },
+        (res) => {
+          let body = ''
+          res.setEncoding('utf8')
+          res.on('data', (chunk: string) => {
+            body += chunk
+          })
+          res.on('end', () =>
+            resolveResponse({
+              status: res.statusCode ?? 0,
+              contentType: String(res.headers['content-type'] ?? ''),
+              body
+            })
+          )
+        }
+      )
+      req.on('error', rejectResponse)
+      req.flushHeaders()
+      return { req, response }
+    })
+
+    // Let all six handlers pass the initial gate check and park in
+    // readJsonBody before completing the first five wrong attempts.
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    for (const attempt of pending.slice(0, 5)) {
+      attempt.req.end(JSON.stringify({ code: 'ZZZZ' }))
+      expect((await attempt.response).status).toBe(401)
+    }
+    pending[5].req.end(JSON.stringify({ code: pairingCode }))
+    expect((await pending[5].response).status).toBe(403)
+  })
 })
 
 /** The eighth route, 2026-09-27. One route with an enumerated action, not

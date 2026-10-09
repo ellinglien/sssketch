@@ -7,7 +7,8 @@ import {
   createAutosaveGate,
   dirtyCheckJson,
   liveSettingsForSave,
-  projectJsonForSave
+  projectJsonForSave,
+  saveCompletionIsCurrent
 } from './saveSerialization'
 import { hasUnsavedChanges } from './unsavedChanges'
 import type { PluginStatesMap, RawPluginStatesCapture } from '@shared/pluginStates'
@@ -24,6 +25,14 @@ const rifff: Rifff = {
     { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 }
   ]
 }
+
+describe('saveCompletionIsCurrent', () => {
+  it('rejects newer project or plugin edits made while a save was awaiting', () => {
+    expect(saveCompletionIsCurrent('saved', 'saved', 4, 4)).toBe(true)
+    expect(saveCompletionIsCurrent('saved', 'newer project', 4, 4)).toBe(false)
+    expect(saveCompletionIsCurrent('saved', 'saved', 4, 5)).toBe(false)
+  })
+})
 
 function withPlugins(): AppState {
   let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff })

@@ -113,6 +113,7 @@ import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
 import { stemKey, type BusId, type Rifff } from '@shared/types'
+import type { CrossDraft } from '@shared/cross'
 import { assessTidyUpReadiness, unbussedStemPaths } from '@shared/tidyUpReadiness'
 import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
@@ -137,7 +138,8 @@ import {
   createAutosaveGate,
   dirtyCheckJson,
   liveSettingsForSave,
-  projectJsonForSave
+  projectJsonForSave,
+  saveCompletionIsCurrent
 } from './state/saveSerialization'
 import { slotsEngineHolds } from '@shared/pluginSwitch'
 import type { PluginStatesMap } from '@shared/pluginStates'
@@ -1407,6 +1409,7 @@ function Frame(): React.JSX.Element {
   async function handleSave(): Promise<boolean> {
     try {
       const touchedVersion = pluginsTouchedSnapshot().version
+      const savedDirtyJson = dirtyCheckJson(state)
       const json = await serializeForSave()
       if (currentSketch === null) {
         const name = await window.rifffApi.generateDefaultProjectName()
@@ -1418,7 +1421,12 @@ function Frame(): React.JSX.Element {
         await window.rifffApi.saveProjectInPlace(currentSketch.path, json)
       }
       recordSaved(state, touchedVersion)
-      return true
+      return saveCompletionIsCurrent(
+        savedDirtyJson,
+        dirtyCheckJson(stateRef.current),
+        touchedVersion,
+        pluginsTouchedSnapshot().version
+      )
     } catch (err) {
       console.error('Frame: failed to save project:', err)
       window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1706,6 +1714,10 @@ function Frame(): React.JSX.Element {
   // within one already-open session -- App.tsx itself never unmounts for
   // the life of the app, LibraryBrowser does every time the modal closes.
   const [discoverSlots, setDiscoverSlots] = useState<DiscoverSlot[]>([])
+  // Cross is a session draft like Discover: closing the full-screen library
+  // must not discard a half-built child. LibraryBrowser validates it against
+  // the current project before offering Resume Cross.
+  const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
   // Discover artist mode: the chosen artists (combine artists, spec
   // 2026-10-06), `[null]` = me. Session-only, the same lifetime as
   // discoverSlots -- Discover opens on `me` at launch.
@@ -2625,24 +2637,14 @@ function Frame(): React.JSX.Element {
 
   // Main pushes 'request-save-before-quit' when the user picks "Save" on
   // the native quit-time dialog (index.ts's before-quit handler) -- run the
-  // same handleSave() the Save button/Cmd+S use, then reply so main's own
-  // requestSaveBeforeQuit() (racing against a timeout) can stop waiting.
-  //
-  // We reply unconditionally here (ignoring handleSave()'s success/failure)
-  // rather than only replying on success: main already dismissed its own
-  // dialog and is just waiting on this round trip (or a 5s timeout) before
-  // calling app.quit() -- there's no "cancel the quit" signal this bridge
-  // can send back, so withholding the reply on failure would only burn the
-  // full timeout, not actually protect anything. handleSave() already shows
-  // a blocking window.alert() on failure, which delays this .finally() (and
-  // therefore the quit) until the user dismisses it, so they do see the
-  // failure before the app exits -- just can't stop the quit outright from
-  // here. A real fix (e.g. main aborting the pending quit on an explicit
-  // failure signal) would need a new IPC contract in main; flagged rather
-  // than guessed at.
+  // same handleSave() the Save button/Cmd+S use, then report whether it
+  // actually landed. Main keeps the app open on false or timeout.
   useEffect(() => {
-    return window.rifffApi.onRequestSaveBeforeQuit(() => {
-      void handleSave().finally(() => window.rifffApi.notifySaveBeforeQuitComplete())
+    return window.rifffApi.onRequestSaveBeforeQuit((requestId) => {
+      void handleSave().then(
+        (success) => window.rifffApi.notifySaveBeforeQuitComplete(requestId, success),
+        () => window.rifffApi.notifySaveBeforeQuitComplete(requestId, false)
+      )
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- handleSave is a fresh closure every render (reads state/currentSketch directly), same reasoning as the Cmd+S effect just above: re-subscribing on every render would be wasteful without behavioral difference, since the listener always reads the CURRENT closure's state anyway.
   }, [state, currentSketch])
@@ -3068,6 +3070,8 @@ function Frame(): React.JSX.Element {
             setDiscoverRedoStack={setDiscoverRedoStack}
             discoverSeedBpm={discoverSeedBpm}
             setDiscoverSeedBpm={setDiscoverSeedBpm}
+            crossDraft={crossDraft}
+            setCrossDraft={setCrossDraft}
             initialMode={riffLibraryInitialMode}
             onCoachSlotsChange={handleCoachSlotsChange}
           />

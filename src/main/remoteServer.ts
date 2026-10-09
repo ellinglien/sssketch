@@ -332,6 +332,10 @@ export function startRemoteServer(options: RemoteServerOptions): RemoteServerHan
       if (req.method === 'POST' && url === '/api/pair') {
         if (gate.lockedOut) return respond(res, 403, { lockedOut: true })
         const body = await readJsonBody(req)
+        // Other requests can finish while this one is awaiting its body.
+        // Recheck so a connection whose headers arrived before the fifth
+        // failure cannot submit the right code after lockout and get a token.
+        if (gate.lockedOut) return respond(res, 403, { lockedOut: true })
         const correct = codesMatch(String(body.code ?? ''), pairingCode)
         gate = recordPairAttempt(gate, correct)
         options.onPairingChanged(gate)

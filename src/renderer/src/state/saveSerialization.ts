@@ -57,6 +57,21 @@ export function dirtyCheckJson(state: AppState): string {
   return serializeProject(state)
 }
 
+/** A completed write may have saved exactly what it started with while the
+ * user made newer edits during an awaited plugin capture or disk write. Such
+ * a write is successful as a snapshot, but it is not current enough to
+ * authorize discarding the live project on quit. */
+export function saveCompletionIsCurrent(
+  savedDirtyJson: string,
+  currentDirtyJson: string,
+  pluginsTouchedVersionAtStart: number,
+  pluginsTouchedVersionNow: number
+): boolean {
+  return (
+    savedDirtyJson === currentDirtyJson && pluginsTouchedVersionAtStart === pluginsTouchedVersionNow
+  )
+}
+
 /** The crash-recovery autosave's generation: bumped by a save, a discard and a clear, so an
  * autosave that started before one (it waits on the engine) never lands after it and brings back
  * what was just saved or thrown away. */

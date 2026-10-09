@@ -21,6 +21,7 @@ import { sketchAbletonDir, writeSketchMeta } from './projectLibrary'
 import { materializeStemsForExport } from './exportAudioMaterialization'
 import { renderToolkitAudio } from './exportToolkitAudio'
 import type { ToolkitExportMode } from '@shared/toolkit'
+import { createStemExportFileNameAllocator, externalDawExportLocation } from './exportFileNames'
 
 /**
  * Materializes every placed stem's source audio into
@@ -54,11 +55,13 @@ export async function buildAndWriteAlsProject(
   // Before materializing: a baked clip gets no dry copy at all (it would
   // just be an unused file), so the bake has to have happened by the time
   // materializeStemsForExport decides what to copy.
-  const toolkitAudio = await renderToolkitAudio(state, outputDir, toolkitMode)
+  const uniqueFileName = createStemExportFileNameAllocator()
+  const toolkitAudio = await renderToolkitAudio(state, outputDir, toolkitMode, uniqueFileName)
   const { stemFileNames, stemSampleRates } = await materializeStemsForExport(
     state,
     outputDir,
-    new Set(toolkitAudio.bakedClips.keys())
+    new Set(toolkitAudio.bakedClips.keys()),
+    uniqueFileName
   )
 
   const templateXml = readFileSync(templatePath, 'utf-8')
@@ -110,29 +113,19 @@ export async function exportAbletonToLibrary(
  * Same no-dialog, always-named-after-the-project export as
  * exportAbletonToLibrary above, for a sketch that's real and has a known
  * file location but ISN'T a library sketch -- one opened from an external
- * `.sssketchproj` path. Writes into an `Ableton/` folder next to that
- * source file (mirroring the library convention's own `<sketch>/Ableton/`
- * layout, just rooted at the external file's own directory instead of the
- * library root), named identically to the project (its own file name,
- * minus the `.sssketchproj` extension) -- what "the exported project
- * should be... named the same as the project" actually asks for, once
- * there's a real source file to be identical to.
- *
- * Clears `Ableton/Samples/Imported/` first, same reasoning as
- * exportAbletonToLibrary: this specific `Ableton/` folder is one this
- * export owns outright (freshly computed from the source path, not a
- * user-chosen arbitrary folder), so stale removed-stem copies can be
- * safely cleaned up before repopulating.
+ * `.sssketchproj` path. Each source gets its own
+ * `<source directory>/Ableton/<project name>/` folder, so exporting a
+ * sibling sketch cannot remove or overwrite this one's materialized audio.
+ * The folder is not recursively cleared: a computed path alone does not
+ * prove sssketch owns pre-existing contents there.
  */
 export async function exportAbletonNextToSource(
   state: AppState,
   sourcePath: string,
   toolkitMode: ToolkitExportMode = 'bake'
 ): Promise<void> {
-  const projectName = basename(sourcePath, '.sssketchproj')
-  const abletonDir = join(dirname(sourcePath), 'Ableton')
+  const { projectName, outputDir: abletonDir } = externalDawExportLocation(sourcePath, 'Ableton')
   mkdirSync(abletonDir, { recursive: true })
-  rmSync(join(abletonDir, 'Samples', 'Imported'), { recursive: true, force: true })
   await buildAndWriteAlsProject(state, abletonDir, projectName, toolkitMode)
   await shell.openPath(abletonDir)
 }
