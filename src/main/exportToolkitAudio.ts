@@ -17,17 +17,14 @@ import {
   timelineThrowPlan,
   type ArrangementThrowPlan
 } from '@shared/timelineThrows'
+import {
+  createStemExportFileNameAllocator,
+  type StemExportFileNameAllocator
+} from './exportFileNames'
 
 // Same ceiling nativeExport.ts uses for a render-export round trip, and for
 // the same reason -- see RENDER_EXPORT_TIMEOUT_MS's own comment there.
 const RENDER_EXPORT_TIMEOUT_MS = 10 * 60 * 1000
-
-// Duplicated from exportAudioMaterialization.ts/nativeExport.ts, matching
-// their own note to each other: a five-line pure function neither module
-// exports, not worth coupling three independent export features over.
-function sanitizeFileNamePart(name: string): string {
-  return name.replace(/[/\\:*?"<>|]/g, '_').trim() || 'stem'
-}
 
 /** How long the project's reverb rings after the last thing sent to it, in seconds. Only ever
  * used to decide how much EXTRA time a baked clip needs rendered past its own end so its reverb
@@ -214,7 +211,8 @@ export function clipsToBake(
 export async function renderToolkitAudio(
   state: AppState,
   outputDir: string,
-  mode: ToolkitExportMode
+  mode: ToolkitExportMode,
+  uniqueFileName: StemExportFileNameAllocator = createStemExportFileNameAllocator()
 ): Promise<ToolkitAudio> {
   // The timeline's throws (Task 12): planned once, from the whole project, and given to every
   // clip's render (a clip's own solo state would plan other throws). Only baked clips carry them:
@@ -273,18 +271,15 @@ export async function renderToolkitAudio(
 
   const bakedClips = new Map<string, BakedClip>()
   let riserFileName: string | undefined
+  if (hasRisers) uniqueFileName.reserve('risers.wav')
 
   const engineHandle = await spawnEngine()
   const client = new EngineClient()
   try {
     await client.connect(engineHandle.port)
 
-    const usedNames = new Map<string, number>()
     for (const clip of baking) {
-      const base = `${sanitizeFileNamePart(clip.rifffName)}-${sanitizeFileNamePart(clip.stemName)}-toolkit`
-      const count = (usedNames.get(base) ?? 0) + 1
-      usedNames.set(base, count)
-      const fileName = count === 1 ? `${base}.wav` : `${base}-${count}.wav`
+      const fileName = uniqueFileName(clip.rifffName, clip.stemName, 'toolkit')
       const tailBars = tailBarsFor(clip)
 
       // Risers are rendered separately (they belong to a channel, not to any

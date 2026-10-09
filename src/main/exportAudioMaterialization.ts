@@ -7,15 +7,10 @@ import { spawnEngine, type EngineHandle } from './engineProcess'
 import { EngineClient } from './engineClient'
 import { isWavPath, cachedStemPath, cloneOrCopy, samplesCacheDir } from './projectLibrary'
 import { readWavHeaderBytes } from './importRifff'
-
-// Anything outside this set is unsafe (or at least unwelcome) in a filename
-// across macOS/Windows/Linux -- matches nativeExport.ts's own
-// sanitizeFileNamePart exactly (duplicated rather than imported: it's not
-// exported from that module, and it's a five-line pure function -- not worth
-// coupling these two independent export features over).
-function sanitizeFileNamePart(name: string): string {
-  return name.replace(/[/\\:*?"<>|]/g, '_').trim() || 'stem'
-}
+import {
+  createStemExportFileNameAllocator,
+  type StemExportFileNameAllocator
+} from './exportFileNames'
 
 /** Materializes one stem's audio at `destPath`, via the shared cache (see
  * projectLibrary.ts's cachedStemPath/cloneOrCopy): if this stem's own
@@ -98,7 +93,8 @@ export async function materializeStemsForExport(
    * through the toolkit (see exportToolkitAudio.ts). Left out of the returned
    * map as well as of the folder, so an exporter reading only this map still
    * skips them and has to look at the baked map to place them. */
-  skipKeys: ReadonlySet<string> = new Set()
+  skipKeys: ReadonlySet<string> = new Set(),
+  uniqueFileName: StemExportFileNameAllocator = createStemExportFileNameAllocator()
 ): Promise<MaterializedStems> {
   const placed = Object.values(state.rifffs).filter((r) => r.startBar !== undefined)
   if (placed.length === 0) {
@@ -110,13 +106,6 @@ export async function materializeStemsForExport(
   mkdirSync(samplesCacheDir(), { recursive: true })
 
   const stemFileNames = new Map<string, string>()
-  const usedNames = new Map<string, number>()
-  function uniqueFileName(rifffName: string, stemName: string): string {
-    const base = `${sanitizeFileNamePart(rifffName)}-${sanitizeFileNamePart(stemName)}`
-    const count = (usedNames.get(base) ?? 0) + 1
-    usedNames.set(base, count)
-    return count === 1 ? `${base}.wav` : `${base}-${count}.wav`
-  }
 
   const stemEntries: { key: string; path: string; destPath: string }[] = []
   for (const rifff of placed) {
