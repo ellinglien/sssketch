@@ -30,6 +30,10 @@ function freshDb(): Database.Database {
     CREATE TABLE StemYamnetZeroShotAttempted (
       StemCID TEXT PRIMARY KEY, AttemptedAt INTEGER NOT NULL
     );
+    CREATE TABLE StemAutoClassifyTried (
+      StemCID TEXT NOT NULL, TrainingFingerprint TEXT NOT NULL, Mask INTEGER,
+      TriedAt INTEGER NOT NULL, PRIMARY KEY (StemCID, TrainingFingerprint)
+    );
   `)
   return db
 }
@@ -80,12 +84,18 @@ describe('upsertStemAutoCategory / getAutoCategorizedStemCIDs', () => {
 })
 
 describe('getStemAutoClassifyProgress', () => {
-  it('returns zero/zero when nothing has been extracted or classified', () => {
+  it('returns an empty caught-up snapshot when nothing has been extracted', async () => {
     const db = freshDb()
-    expect(getStemAutoClassifyProgress(db)).toEqual({ classified: 0, eligible: 0 })
+    expect(await getStemAutoClassifyProgress(db)).toEqual({
+      categorized: 0,
+      eligible: 0,
+      terminalUnclassified: 0,
+      pending: 0,
+      processed: 0
+    })
   })
 
-  it('counts embedded and featured stems (deduped) toward eligible, and StemAutoCategory rows toward classified', () => {
+  it('dedupes embedded/featured stems and counts categories only inside the eligible set', async () => {
     const db = freshDb()
     seedEmbedding(db, 's1')
     seedFeatures(db, 's2')
@@ -93,16 +103,56 @@ describe('getStemAutoClassifyProgress', () => {
     seedFeatures(db, 's3') // both -- counted once, not twice
     upsertStemAutoCategory(db, 's1', 'drums', 'embedding', 1000)
 
-    expect(getStemAutoClassifyProgress(db)).toEqual({ classified: 1, eligible: 3 })
+    expect(await getStemAutoClassifyProgress(db)).toEqual({
+      categorized: 1,
+      eligible: 3,
+      terminalUnclassified: 0,
+      pending: 2,
+      processed: 1
+    })
   })
 
-  it('excludes a stem confirmed for any role from eligible, even if it has an embedding', () => {
+  it('excludes a stem confirmed for any role from eligible, even if it has an embedding', async () => {
     const db = freshDb()
     seedEmbedding(db, 's1')
     seedConfirmed(db, 's1', 'bass')
     seedEmbedding(db, 's2') // unconfirmed -- still eligible
 
-    expect(getStemAutoClassifyProgress(db)).toEqual({ classified: 0, eligible: 1 })
+    expect(await getStemAutoClassifyProgress(db)).toEqual({
+      categorized: 0,
+      eligible: 1,
+      terminalUnclassified: 0,
+      pending: 1,
+      processed: 0
+    })
+  })
+
+  it('treats a current tried row as terminal only while its instrument mask still matches', async () => {
+    const db = freshDb()
+    seedEmbedding(db, 'same-mask')
+    seedFeatures(db, 'changed-mask')
+    db.prepare(`INSERT INTO StemAutoClassifyTried VALUES (?, 'training-1', ?, 1000)`).run(
+      'same-mask',
+      4
+    )
+    db.prepare(`INSERT INTO StemAutoClassifyTried VALUES (?, 'training-1', ?, 1000)`).run(
+      'changed-mask',
+      8
+    )
+
+    expect(
+      await getStemAutoClassifyProgress(
+        db,
+        'training-1',
+        (ids) => new Map(ids.map((id) => [id, id === 'same-mask' ? 4 : 16]))
+      )
+    ).toEqual({
+      categorized: 0,
+      eligible: 2,
+      terminalUnclassified: 1,
+      pending: 1,
+      processed: 1
+    })
   })
 })
 

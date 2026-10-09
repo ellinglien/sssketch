@@ -112,7 +112,7 @@ import type { AppState, LoopRegion } from './state/store'
 import { applyGrabOffset, getGrabOffsetBars } from './components/dragGrabOffset'
 import { startPointerDrag } from './components/dragUtils'
 import { useHandModeHeld } from './components/useHandModeHeld'
-import type { BusId, Rifff } from '@shared/types'
+import { stemKey, type BusId, type Rifff } from '@shared/types'
 import { assessTidyUpReadiness, unbussedStemPaths } from '@shared/tidyUpReadiness'
 import type { ArrangeRole } from '@shared/stemRole'
 import { usePlacedFlatStems } from './state/usePlacedFlatStems'
@@ -2089,7 +2089,7 @@ function Frame(): React.JSX.Element {
   // applied here too now that it's a real possibility (previously
   // LibraryBrowser always mounted fresh on open, so there was never
   // anything to lose).
-  function openRiffLibraryWithDiscoverSeed(rifff: Rifff): void {
+  async function openRiffLibraryWithDiscoverSeed(rifff: Rifff): Promise<void> {
     const hasRealContent = discoverHasRealContent(discoverSlots)
     if (
       hasRealContent &&
@@ -2099,6 +2099,43 @@ function Frame(): React.JSX.Element {
     ) {
       return
     }
+    let seedRifff = rifff
+    const groupSteps = state.off[rifff.groupId] ?? 0
+    const effectiveSteps = new Map(
+      rifff.stems.map((stem) => [
+        stem.slot,
+        state.off[stemKey(rifff.groupId, stem.slot)] ?? groupSteps
+      ])
+    )
+    if ([...effectiveSteps.values()].some((steps) => steps !== 0)) {
+      // Discover's library/Keep formats do not carry runtime phase. Make
+      // the exact effective phase of every source stem physical first, as
+      // one immutable all-or-nothing batch, then seed from those returned
+      // paths. This also repairs the intended per-stem precedence of a
+      // legacy partial bake instead of copying its contradictory off map.
+      const results = await bakeStems(
+        dispatch,
+        (stem) => effectiveSteps.get(stem.slot) ?? 0,
+        SNAP_DIVS[state.snapIdx],
+        rifff.stems,
+        [rifff.groupId]
+      )
+      if (!results) {
+        window.alert('Could not prepare every stem for Discover. Nothing was changed; try again.')
+        return
+      }
+      const byPath = new Map(results.map((result) => [result.path, result]))
+      seedRifff = {
+        ...rifff,
+        stems: rifff.stems.map((stem) => {
+          const result = byPath.get(stem.path)
+          return result
+            ? { ...stem, path: result.bakedPath, durationSec: result.durationSec }
+            : stem
+        })
+      }
+    }
+
     setLibraryBrowserOpen(false)
     // Says 'discover' outright rather than leaving the browser to infer it
     // from the slots seeded on the next line. That inference used to be the
@@ -2107,7 +2144,7 @@ function Frame(): React.JSX.Element {
     // on 'browse'); now that every opener names its half, this one should
     // too.
     setRiffLibraryInitialMode('discover')
-    setDiscoverSlots(buildSeedSlotsFromStems(rifff.stems))
+    setDiscoverSlots(buildSeedSlotsFromStems(seedRifff.stems))
     setDiscoverChaos(DEFAULT_DISCOVER_CHAOS)
     setDiscoverUndoStack([[]])
     setDiscoverRedoStack([])
@@ -3000,7 +3037,9 @@ function Frame(): React.JSX.Element {
               for (const siblingGroupId of siblingGroupIds) {
                 const siblingRifff = state.rifffs[siblingGroupId]
                 if (!siblingRifff) continue
-                void bakeStems(dispatch, steps, SNAP_DIVS[state.snapIdx], siblingRifff.stems)
+                void bakeStems(dispatch, steps, SNAP_DIVS[state.snapIdx], siblingRifff.stems, [
+                  siblingGroupId
+                ])
               }
             }}
           />

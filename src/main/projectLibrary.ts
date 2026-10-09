@@ -97,6 +97,14 @@ export function samplesCacheDir(): string {
   return join(libraryRootPath(), '.samples-cache')
 }
 
+/** Durable derived audio created by the re-one/downbeat baker. Despite the
+ * dot-prefix this is not an evictable cache: saved projects may reference
+ * these immutable files indefinitely. Keeping them under the relocatable
+ * project-library root avoids writing beside read-only LORE/archive audio. */
+export function bakeAssetsDir(): string {
+  return join(libraryRootPath(), '.bakes')
+}
+
 // A hard, reliable split rather than a probe/fallback -- matches
 // bakeOffset.ts's and exportAbleton.ts's own isWavPath exactly: a regular
 // drag-and-drop import is always a WAV, while a LORE-cached stem's path is

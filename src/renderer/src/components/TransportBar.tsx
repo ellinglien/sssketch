@@ -409,8 +409,11 @@ export function TransportBar({
   // that scheduler's own doc comment), so a snapshot fetched right as the
   // menu opens is accurate enough for a number glanced at occasionally.
   const [classifyProgress, setClassifyProgress] = useState<{
-    classified: number
+    categorized: number
     eligible: number
+    terminalUnclassified: number
+    pending: number
+    processed: number
   } | null>(null)
 
   // Output device: component-local (unlike selectedInputDevice, nothing
@@ -1106,13 +1109,25 @@ export function TransportBar({
                     // stopped would just look stuck.
                     label:
                       (classifyProgress
-                        ? `categorized ${classifyProgress.classified} / ${classifyProgress.eligible} stems`
-                        : 'categorized …') + (backgroundScanGate.isHeld() ? ' · paused' : ''),
+                        ? `processed ${classifyProgress.processed} / ${classifyProgress.eligible} stems` +
+                          ` · ${classifyProgress.categorized} categorized` +
+                          (classifyProgress.terminalUnclassified > 0
+                            ? ` · ${classifyProgress.terminalUnclassified} unclassified`
+                            : '')
+                        : 'classification …') +
+                      (backgroundScanGate.isHeld() && classifyProgress?.pending
+                        ? ' · paused'
+                        : classifyProgress?.pending === 0
+                          ? ' · caught up'
+                          : ''),
                     onClick: () => {},
                     disabled: true,
-                    title: backgroundScanGate.isHeld()
-                      ? 'paused -- resumes where it left off'
-                      : 'classified so far'
+                    title:
+                      backgroundScanGate.isHeld() && classifyProgress?.pending
+                        ? 'paused -- resumes where it left off'
+                        : classifyProgress?.pending === 0
+                          ? 'classification caught up for analyzed stems'
+                          : 'classification progress for analyzed stems'
                   }
                 ]
               : []),

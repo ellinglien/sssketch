@@ -54,6 +54,13 @@ export interface Stem {
   path: string
   durationSec: number
   barLength: number
+  /** Original audio path before a re-one/downbeat correction was baked.
+   * Preserved as provenance so a later re-one can create another immutable
+   * derivative without mutating audio referenced by older riffs. */
+  phaseSourcePath?: string
+  /** Total clockwise rotation already materialized into `path`, measured
+   * in musical bars relative to phaseSourcePath. */
+  phaseBars?: number
   /** True for a one-shot sample dropped directly from Finder onto the
    * arranger (see docs/superpowers/specs/2026-08-02-one-shot-sample-import-design.md)
    * -- never tiled/looped, never auto-resampled to match project bpm.

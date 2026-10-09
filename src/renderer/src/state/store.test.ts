@@ -402,6 +402,7 @@ describe('reducer', () => {
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       results: [
         { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 },
         { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.2 }
@@ -410,18 +411,54 @@ describe('reducer', () => {
     expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.baked.wav')
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.baked.wav')
     expect(state.off.r1).toBe(0)
-    expect(state.off['r1:1']).toBe(0)
-    expect(state.off['r1:6']).toBe(0)
+    expect(state.off['r1:1']).toBeUndefined()
+    expect(state.off['r1:6']).toBeUndefined()
   })
 
-  it('applying a bake leaves a stem untouched if its path is missing from the results', () => {
+  it('stores immutable phase provenance with a completed bake', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
+      results: [
+        {
+          path: '/x/1.wav',
+          bakedPath: '/derived/one.baked.wav',
+          durationSec: 12.8,
+          phaseSourcePath: '/x/1.wav',
+          phaseBars: 0.25
+        },
+        {
+          path: '/x/6.wav',
+          bakedPath: '/derived/six.baked.wav',
+          durationSec: 3.2,
+          phaseSourcePath: '/x/6.wav',
+          phaseBars: 0.25
+        }
+      ]
+    })
+
+    expect(state.rifffs.r1.stems[0]).toMatchObject({
+      path: '/derived/one.baked.wav',
+      phaseSourcePath: '/x/1.wav',
+      phaseBars: 0.25
+    })
+    expect(state.rifffs.r1.stems[1]).toMatchObject({
+      path: '/derived/six.baked.wav',
+      phaseSourcePath: '/x/6.wav',
+      phaseBars: 0.25
+    })
+  })
+
+  it('applying an incomplete bake leaves the entire target untouched', () => {
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       // slot 6's file failed to bake
       results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 }]
     })
-    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.baked.wav')
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.wav')
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.wav')
   })
 
@@ -435,6 +472,7 @@ describe('reducer', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       // Deliberately different from makeRifff's own defaults (12.8, 3.2) so
       // a test that silently kept the old value would fail loudly.
       results: [
@@ -450,9 +488,10 @@ describe('reducer', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.85 }]
     })
-    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.durationSec).toBe(12.85)
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.durationSec).toBe(12.8)
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.durationSec).toBe(3.2) // unchanged default
   })
 
@@ -464,7 +503,7 @@ describe('reducer', () => {
     // actually be baked, with no other place that correction was captured.
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })
-    state = reducer(state, { type: 'APPLY_BAKE', results: [] })
+    state = reducer(state, { type: 'APPLY_BAKE', targetGroupIds: ['r1'], results: [] })
     expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.wav')
     expect(state.rifffs.r1.stems.find((s) => s.slot === 6)?.path).toBe('/x/6.wav')
     expect(state.off.r1).toBe(-6)
@@ -475,14 +514,12 @@ describe('reducer', () => {
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'r1', steps: -6 })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['r1'],
       results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 }] // slot 6 failed
     })
-    // The group key is what a linked group actually reads at playback time
-    // (see resolveOffsetKey) — zeroing it while slot 6 is still relying on
-    // the runtime shift would silently un-correct that stem, even though
-    // slot 1 really did get baked.
+    expect(state.rifffs.r1.stems.find((s) => s.slot === 1)?.path).toBe('/x/1.wav')
     expect(state.off.r1).toBe(-6)
-    expect(state.off['r1:1']).toBe(0)
+    expect(state.off['r1:1']).toBeUndefined()
     expect(state.off['r1:6']).toBeUndefined()
   })
 
@@ -492,7 +529,7 @@ describe('reducer', () => {
   // point?" Auto-arrange gives every window-copy a fresh groupId over one
   // shared file (pasteStemWindowAction), so a bake scoped to one groupId
   // reached one clip out of the many made of that audio.
-  it('applying a bake repoints EVERY clip made of that file, not just one', () => {
+  it('applying a bake repoints every explicitly linked clip, not just the source', () => {
     const shared = makeRifff({ groupId: 'src' })
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: shared })
     state = reducer(state, {
@@ -505,6 +542,7 @@ describe('reducer', () => {
     })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['src', 'copyA', 'copyB'],
       results: [
         { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.85 },
         { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.19 }
@@ -520,6 +558,32 @@ describe('reducer', () => {
     }
   })
 
+  it('does not mutate another shelf riff merely because it shares the same paths', () => {
+    const source = makeRifff({ groupId: 'source' })
+    const independent = makeRifff({
+      groupId: 'independent',
+      stems: source.stems.map((stem) => ({ ...stem }))
+    })
+    let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: source })
+    state = reducer(state, { type: 'ADD_TO_SHELF', rifff: independent })
+    state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'independent', steps: 3 })
+    state = reducer(state, {
+      type: 'APPLY_BAKE',
+      targetGroupIds: ['source'],
+      results: [
+        { path: '/x/1.wav', bakedPath: '/x/source-1.baked.wav', durationSec: 12.8 },
+        { path: '/x/6.wav', bakedPath: '/x/source-6.baked.wav', durationSec: 3.2 }
+      ]
+    })
+
+    expect(state.rifffs.source.stems[0].path).toBe('/x/source-1.baked.wav')
+    expect(state.rifffs.independent.stems.map((stem) => stem.path)).toEqual([
+      '/x/1.wav',
+      '/x/6.wav'
+    ])
+    expect(state.off.independent).toBe(3)
+  })
+
   it('zeroes the runtime offset on every clip the bake reached', () => {
     const shared = makeRifff({ groupId: 'src' })
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: shared })
@@ -531,6 +595,7 @@ describe('reducer', () => {
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'copyA', steps: -6 })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['src', 'copyA'],
       results: [
         { path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 },
         { path: '/x/6.wav', bakedPath: '/x/6.baked.wav', durationSec: 3.2 }
@@ -538,7 +603,7 @@ describe('reducer', () => {
     })
     expect(state.off.src).toBe(0)
     expect(state.off.copyA).toBe(0)
-    expect(state.off['copyA:1']).toBe(0)
+    expect(state.off['copyA:1']).toBeUndefined()
   })
 
   it('leaves a clip built from a different file completely alone', () => {
@@ -566,6 +631,7 @@ describe('reducer', () => {
     state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'unrelated', steps: -4 })
     state = reducer(state, {
       type: 'APPLY_BAKE',
+      targetGroupIds: ['src'],
       results: [{ path: '/x/1.wav', bakedPath: '/x/1.baked.wav', durationSec: 12.8 }]
     })
     expect(state.rifffs.unrelated.stems[0].path).toBe('/x/other.wav')

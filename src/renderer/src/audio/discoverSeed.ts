@@ -79,9 +79,15 @@ export function buildSeedSlotsFromStems(stems: readonly Stem[]): DiscoverSlot[] 
       author: stem.author,
       name: stem.name,
       type: stem.type,
+      // Keep the exact audio the Shelf riff was already playing. A baked
+      // seed and a freshly rolled candidate each carry their own correct
+      // downbeat; forcing both back onto one shared phase changes the
+      // candidate relative to the mix the user actually auditioned.
       path: stem.path,
       durationSec: stem.durationSec,
-      barLength: stem.barLength
+      barLength: stem.barLength,
+      phaseSourcePath: stem.phaseSourcePath,
+      phaseBars: stem.phaseBars
     }
     return {
       id: freshSlotId(),

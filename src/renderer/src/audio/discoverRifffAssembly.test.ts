@@ -136,14 +136,25 @@ describe('assembleDiscoverRifff', () => {
     expect(assembly!.rifff.bpm).toBe(140)
   })
 
-  it("preserves every other field of each member's own stem (author/name/type/path/durationSec) unchanged", () => {
-    const stem = fixtureStem({ author: 'elling', name: 'kick', type: 'drums', durationSec: 2.5 })
+  it("preserves every other field of each member's own stem, including immutable phase provenance", () => {
+    const stem = fixtureStem({
+      author: 'elling',
+      name: 'kick',
+      type: 'drums',
+      durationSec: 2.5,
+      path: '/derived/one.baked.wav',
+      phaseSourcePath: '/warehouse/original',
+      phaseBars: 0.0625
+    })
     const assembly = assembleDiscoverRifff('discover preview', [{ stem, gain: 1 }], 120)
     expect(assembly!.rifff.stems[0]).toMatchObject({
       author: 'elling',
       name: 'kick',
       type: 'drums',
-      durationSec: 2.5
+      durationSec: 2.5,
+      path: '/derived/one.baked.wav',
+      phaseSourcePath: '/warehouse/original',
+      phaseBars: 0.0625
     })
   })
 

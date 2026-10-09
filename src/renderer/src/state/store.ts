@@ -1,5 +1,4 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
-import { groupIdsSharingStemPaths } from '@shared/bakePropagation'
 import { sqrtGain } from '@shared/mixGain'
 import {
   DEFAULT_REVERB,
@@ -716,11 +715,20 @@ export type Action =
       startBar: number
     }
   | {
-      /** Deliberately has NO groupId: a bake is scoped by the PATHS it
-       * rewrote, and every clip made of one of those files moves with it.
-       * See the case's own comment in the reducer below. */
+      /** Adopts a complete immutable bake only into the explicitly resolved
+       * riff instances below. The result paths alone never authorize a
+       * project-wide mutation. */
       type: 'APPLY_BAKE'
-      results: { path: string; bakedPath: string; durationSec: number }[]
+      /** The only riff instances authorized to adopt these new immutable
+       * assets. Never infer shelf mutation from path equality. */
+      targetGroupIds: string[]
+      results: {
+        path: string
+        bakedPath: string
+        durationSec: number
+        phaseSourcePath?: string
+        phaseBars?: number
+      }[]
     }
   | {
       type: 'PASTE_RIFFF'
@@ -1490,64 +1498,52 @@ export function reducer(state: AppState, action: Action): AppState {
     // since the correction that offset was compensating for is now baked into
     // the audio itself.
     //
-    // SCOPED BY PATH, NOT BY groupId — this is the fix for "the loop start
-    // point for the rifff i started with for auto arrange just now.. it's in
-    // the wrong place. is there a way to adjust all of the clips at once"
-    // (2026-09-23). A downbeat correction is a fact about a FILE. Auto-arrange
-    // turns one source rifff into N single-stem rifffs with N fresh groupIds
-    // over ONE file on disk (pasteStemWindowAction in selectors.ts; see also
-    // PASTE_RIFFF's own comment below, "new groupId, same stem file paths"),
-    // and bakeOffset itself takes and returns paths, never groupIds. Scoping
-    // the state update to one groupId meant the other N-1 clips either kept
-    // pointing at the unrotated original (a first bake, which writes a new
-    // path) or silently drew and scheduled a file that had been rotated out
-    // from under them (a re-bake, which bakedPathFor deliberately writes in
-    // place). groupIdsSharingStemPaths (shared/bakePropagation.ts) is the
-    // lookup that closes that; the old `groupId` field is gone from the
-    // action rather than left sitting there meaning nothing.
+    // EXPLICITLY SCOPED — a downbeat choice belongs to the riff being edited
+    // and any timeline windows the caller deliberately linked to it. Path
+    // equality is only a compatibility signal used before this action is
+    // dispatched; it is never sufficient here to mutate another shelf riff.
+    // Every result is a fresh immutable asset, so independently edited copies
+    // can no longer fight over one on-disk `.baked.wav` alias.
     //
-    // A clip that had its OWN different offset on the same file loses it
-    // here. That case was never really supported — pasteRifffAction's own doc
-    // comment already records that two copies re-baked differently fight over
-    // the same .baked.wav and "the second one wins on disk" — so this makes
-    // the state agree with the disk instead of disagreeing quietly.
-    //
-    // Only for stems that actually got a bakedPath back: bakeOffset
-    // silently skips any source it can't rotate in place (e.g. a LORE-sourced
-    // stem — an Ogg Vorbis file it has no way to rewrite, and shouldn't
-    // anyway, since those are read-only references into Elling's warehouse,
-    // never copies). Resetting a stem's offset when it was never actually
-    // baked would silently throw away the correction — the runtime offset is
-    // the ONLY place it's captured for a stem baking can't reach, so it has
-    // to survive this action untouched. The group-level key only resets if
-    // every stem in the riff baked successfully — a linked group reads that
-    // single key for every stem (see resolveOffsetKey), so zeroing it while
-    // even one stem is still relying on the runtime shift would un-correct
-    // that stem too.
+    // The batch is adopted only when it covers every stem in a target riff.
+    // On an unsupported/corrupt input the main process returns no partial
+    // result, and this reducer preserves both the old paths and their runtime
+    // offsets. That keeps a single riff from acquiring a mixed physical/
+    // runtime phase representation.
     case 'APPLY_BAKE': {
       const pathMap = new Map(action.results.map((r) => [r.path, r.bakedPath]))
-      // durationSec is the baked file's own real, measured length — not
-      // necessarily equal to whatever this stem's durationSec already was
-      // (a LORE stem's is metadata-derived, not measured from the actual
-      // audio; see bakeOffset.ts's BakeResult doc comment). Leaving it stale
-      // desyncs the native engine's own tile-boundary scheduling from the
-      // real baked file, heard as clicking/stuttering.
-      const durationMap = new Map(action.results.map((r) => [r.path, r.durationSec]))
-      const touched = groupIdsSharingStemPaths(state.rifffs, pathMap.keys())
+      const resultMap = new Map(action.results.map((r) => [r.path, r]))
+      // Each result also carries the baked file's real measured duration
+      // and phase provenance; resultMap applies all three atomically below.
+      // A target changes only if the batch covers every one of its stems.
+      // Mixed old/new paths plus one surviving group offset is not a valid
+      // phase representation, so a partially-covered linked group stays
+      // completely untouched.
+      const touched = action.targetGroupIds.filter((groupId) => {
+        const rifff = state.rifffs[groupId]
+        return rifff !== undefined && rifff.stems.every((stem) => pathMap.has(stem.path))
+      })
       if (touched.length === 0) return state
       const rifffs = { ...state.rifffs }
       const off = { ...state.off }
       for (const groupId of touched) {
         const rifff = rifffs[groupId]
-        const stems = rifff.stems.map((s) => ({
-          ...s,
-          path: pathMap.get(s.path) ?? s.path,
-          durationSec: durationMap.get(s.path) ?? s.durationSec
-        }))
+        const stems = rifff.stems.map((s) => {
+          const result = resultMap.get(s.path)
+          return {
+            ...s,
+            path: result?.bakedPath ?? s.path,
+            durationSec: result?.durationSec ?? s.durationSec,
+            phaseSourcePath: result?.phaseSourcePath ?? s.phaseSourcePath,
+            phaseBars: result?.phaseBars ?? s.phaseBars
+          }
+        })
         rifffs[groupId] = { ...rifff, stems }
-        if (rifff.stems.every((s) => pathMap.has(s.path))) off[groupId] = 0
+        off[groupId] = 0
         for (const s of rifff.stems) {
-          if (pathMap.has(s.path)) off[stemKey(groupId, s.slot)] = 0
+          // The entire target was baked as one transaction, so no old
+          // per-stem fallback/override remains meaningful.
+          delete off[stemKey(groupId, s.slot)]
         }
       }
       return { ...state, rifffs, off }

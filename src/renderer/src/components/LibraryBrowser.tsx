@@ -24,7 +24,7 @@ import {
   unregisterActivePreview
 } from '../audio/previewLoop'
 import { classifyStems } from '../audio/classifyStems'
-import { buildImportedRifff } from '../audio/importResolvedRiff'
+import { buildImportedRifff, importedStemVolumes } from '../audio/importResolvedRiff'
 import {
   usePlaying,
   useDispatch,
@@ -38,13 +38,14 @@ import { libraryModeLabel, type LibraryMode } from '@shared/libraryEntryPoints'
 import type { RadioSettings } from '@shared/radioSchedule'
 import type { RadioView } from '@shared/radioView'
 import { bytesLabel } from '@shared/visuals'
-import { stemKey, type Rifff } from '@shared/types'
+import type { Rifff } from '@shared/types'
 import type { ProjectRef } from '@shared/types'
 import { EndlesssLoginPanel } from './EndlesssLoginPanel'
 import { RiffCircle } from './RiffCircle'
 import { PolarGlyph } from './PolarGlyph'
 import { typeColorVar } from '../theme/typeColor'
 import { LoadingLoader } from './LoadingLoader'
+import { libraryPreviewClickAction } from './libraryPreviewToggle'
 import { ContextMenu } from './ContextMenu'
 import { LoopFolderSidebar } from './LoopFolderSidebar'
 import { LoopFolderPane } from './LoopFolderPane'
@@ -539,6 +540,15 @@ export function LibraryBrowser({
 
   const [resolvedRiff, setResolvedRiff] = useState<RiffLibraryResolvedRiff | null>(null)
   const [playingRiffCID, setPlayingRiffCID] = useState<string | null>(null)
+  // Selection and preview are deliberately separate. A selected riff can
+  // stay selected while its audio is stopped, so clicking that same circle
+  // again can resume it without losing the detail/import controls below.
+  // This also gives the selection-driven preview effect a real dependency
+  // to react to: setting selectedRiffCID to the value it already has is a
+  // React no-op, which is why a second click used to leave the preview
+  // running forever.
+  const [selectedRiffPreviewEnabled, setSelectedRiffPreviewEnabled] = useState(true)
+  const [selectedRiffPreviewRequest, setSelectedRiffPreviewRequest] = useState(0)
   // riffCID -> the groupId it was imported as, so re-clicking Import after
   // more of a riff's stems finish downloading in the background (see
   // ensureStemsDownloaded) merges the newly-available ones into that SAME
@@ -574,11 +584,16 @@ export function LibraryBrowser({
   // Stable across renders (useCallback, empty deps) so it's safe to pass to
   // registerActivePreview/reference from effect cleanups without triggering
   // re-subscriptions.
-  const stopPreview = useCallback(() => {
+  const stopPreviewAudio = useCallback(() => {
     stopPreviewSources(previewSourcesRef.current)
     previewSourcesRef.current = []
     unregisterActivePreview(previewTokenRef.current)
   }, [])
+
+  const stopPreview = useCallback(() => {
+    stopPreviewAudio()
+    setPlayingRiffCID(null)
+  }, [stopPreviewAudio])
 
   // NOT auto-dispatched (see seedDiscoverFromBrowseRiff's own doc comment
   // below for the full root-cause writeup): an earlier version of this
@@ -1232,6 +1247,7 @@ export function LibraryBrowser({
         setOnlyFullyCached(false)
         setOnlyContainsMe(false)
         setPendingJump({ offset: result.offset, matchedRiffCID: result.matchedRiffCID })
+        setSelectedRiffPreviewEnabled(true)
         setSelectedJamCID(result.jamCID)
       })
       .catch((err) => {
@@ -1329,12 +1345,16 @@ export function LibraryBrowser({
   }
 
   useEffect(() => {
-    stopPreview()
+    stopPreviewAudio()
+    // Keep the effect itself limited to synchronizing external audio. The
+    // UI marker follows in a microtask, before the async resolve below can
+    // start the replacement preview.
+    void Promise.resolve().then(() => setPlayingRiffCID(null))
     // No "deselect riff" affordance exists — selecting always moves to a new
     // non-null riffCID, so there's nothing to clear here; resolvedRiff stays
     // stale-but-unrendered the same way riffs does above (the detail line is
     // only rendered when resolvedRiff is truthy).
-    if (!selectedRiffCID) return
+    if (!selectedRiffCID || !selectedRiffPreviewEnabled) return
     let cancelled = false
     // Stable for this whole effect run's async chain — cleanup below
     // increments the ref itself, so by the time a new run starts,
@@ -1406,11 +1426,11 @@ export function LibraryBrowser({
       syncQueueTokenRef.current++
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- playing/dispatch intentionally excluded: this only re-runs on riff selection, matching BeatPicker's own pattern of reading transport state at the moment a preview starts rather than tracking it as a dependency
-  }, [selectedRiffCID])
+  }, [selectedRiffCID, selectedRiffPreviewEnabled, selectedRiffPreviewRequest])
 
   useEffect(() => {
-    return () => stopPreview()
-  }, [stopPreview])
+    return () => stopPreviewAudio()
+  }, [stopPreviewAudio])
 
   // ---------------------------------------------------------------------
   // Selection, import, and favourite handlers
@@ -1427,6 +1447,7 @@ export function LibraryBrowser({
       const anchorIndex = riffs.findIndex((r) => r.riffCID === selectedRiffCID)
       const clickedIndex = riffs.findIndex((r) => r.riffCID === riffCID)
       if (anchorIndex === -1 || clickedIndex === -1) {
+        setSelectedRiffPreviewEnabled(true)
         setSelectedRiffCID(riffCID)
         setSelectedRiffCIDs(new Set([riffCID]))
         return
@@ -1447,9 +1468,24 @@ export function LibraryBrowser({
         else next.add(riffCID)
         return next
       })
+      setSelectedRiffPreviewEnabled(true)
       setSelectedRiffCID(riffCID)
       return
     }
+    const previewAction = libraryPreviewClickAction(selectedRiffCID, playingRiffCID, riffCID)
+    if (previewAction !== 'select-and-play') {
+      if (previewAction === 'stop') {
+        setSelectedRiffPreviewEnabled(false)
+      } else {
+        setSelectedRiffPreviewEnabled(true)
+        // `true` may already be the current value when some other preview
+        // claimed global audio ownership and stopped this one. The request
+        // counter still re-runs the effect so this click reliably resumes.
+        setSelectedRiffPreviewRequest((request) => request + 1)
+      }
+      return
+    }
+    setSelectedRiffPreviewEnabled(true)
     setSelectedRiffCID(riffCID)
     setSelectedRiffCIDs(new Set([riffCID]))
   }
@@ -1502,12 +1538,11 @@ export function LibraryBrowser({
     const { groupId, rifff, newStemSlots } = result
     if (newStemSlots.length === 0 && existing) return { groupId, rifff }
 
-    dispatch({ type: 'ADD_TO_SHELF', rifff })
-    for (const stem of resolved.stems.filter((s) => s.path !== null)) {
-      if (Math.abs(stem.gain - 1.0) > 1e-6) {
-        dispatch({ type: 'SET_VOLUME', stemKey: stemKey(groupId, stem.slot), volume: stem.gain })
-      }
-    }
+    dispatch({
+      type: 'ADD_TO_SHELF',
+      rifff,
+      vol: importedStemVolumes(groupId, resolved, newStemSlots)
+    })
     setImportedRiffGroupIds((prev) => new Map(prev).set(riffCID, groupId))
 
     // Same "fill in unclassified stems by ear" heuristic drag-and-drop import

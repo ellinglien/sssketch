@@ -10,7 +10,7 @@ import { buildMetronomeBuffer } from '../audio/metronome'
 import { SNAP_DIVS } from '../state/store'
 import { stemColorVar } from '../theme/typeColor'
 import { stemKey, type Stem } from '@shared/types'
-import { placedClipsSharingStems } from '@shared/bakePropagation'
+import { bakeTargetGroupIds, placedClipsSharingStems } from '@shared/bakePropagation'
 import { evictStemAnalysis } from '../audio/evictStemAnalysis'
 import { computeSpectrogram, type Spectrogram } from '@shared/spectrogram'
 import { computePitchContour } from '@shared/pitchContour'
@@ -62,25 +62,56 @@ function freqToTopPct(freqHz: number): number {
 // apply the same picked offset to sibling riffs directly, without opening
 // this picker again for each one — see onBaked below.
 //
-// Takes no groupId: a bake is scoped by the PATHS it rewrote, and APPLY_BAKE
-// moves every clip made of one of those files (see its own reducer comment).
+// targetGroupIds is resolved by the caller before the async round trip, so
+// APPLY_BAKE can adopt the immutable results without inferring ownership from
+// shared paths or touching an unrelated shelf riff.
 // eslint-disable-next-line react-refresh/only-export-components -- shared helper, not a component
 export async function bakeStems(
   dispatch: Dispatch<Action>,
-  steps: number,
+  steps: number | ((stem: Stem) => number),
   snapDiv: number,
-  stems: Stem[]
-): Promise<void> {
+  stems: Stem[],
+  targetGroupIds: string[]
+): Promise<
+  | {
+      path: string
+      bakedPath: string
+      durationSec: number
+      phaseSourcePath: string
+      phaseBars: number
+    }[]
+  | null
+> {
   try {
     const jobs = stems.map((s) => ({
       path: s.path,
-      rotationSec: rotationSecondsForStem(steps, snapDiv, s)
+      rotationSec: rotationSecondsForStem(
+        typeof steps === 'function' ? steps(s) : steps,
+        snapDiv,
+        s
+      )
     }))
     const results = await window.rifffApi.bakeOffset(jobs)
-    evictStemAnalysis(results.map((r) => r.bakedPath))
-    dispatch({ type: 'APPLY_BAKE', results })
+    if (results.length !== jobs.length) {
+      console.error('BeatPicker: bake did not produce a complete riff; leaving state unchanged')
+      return null
+    }
+    const stemsByPath = new Map(stems.map((stem) => [stem.path, stem]))
+    const adopted = results.map((result) => {
+      const stem = stemsByPath.get(result.path)!
+      const stepCount = typeof steps === 'function' ? steps(stem) : steps
+      return {
+        ...result,
+        phaseSourcePath: stem.phaseSourcePath ?? stem.path,
+        phaseBars: (stem.phaseBars ?? 0) - stepCount / snapDiv
+      }
+    })
+    evictStemAnalysis(adopted.map((r) => r.bakedPath))
+    dispatch({ type: 'APPLY_BAKE', targetGroupIds, results: adopted })
+    return adopted
   } catch (err) {
     console.error('BeatPicker: failed to bake offset into audio files:', err)
+    return null
   }
 }
 
@@ -104,14 +135,28 @@ export async function rebakeRifff(
   const rifff = state.rifffs[groupId]
   if (!rifff) return
   const snapDiv = SNAP_DIVS[state.snapIdx]
+  const steps = state.off[groupId] ?? 0
   try {
-    const jobs = rifff.stems.map((s) => {
-      const steps = state.off[groupId] ?? 0
-      return { path: s.path, rotationSec: rotationSecondsForStem(steps, snapDiv, s) }
-    })
+    const jobs = rifff.stems.map((s) => ({
+      path: s.path,
+      rotationSec: rotationSecondsForStem(steps, snapDiv, s)
+    }))
     const results = await window.rifffApi.bakeOffset(jobs)
-    evictStemAnalysis(results.map((r) => r.bakedPath))
-    dispatch({ type: 'APPLY_BAKE', results })
+    if (results.length !== jobs.length) {
+      console.error('BeatPicker: re-bake did not produce a complete riff; leaving state unchanged')
+      return
+    }
+    const stemsByPath = new Map(rifff.stems.map((stem) => [stem.path, stem]))
+    const adopted = results.map((result) => {
+      const stem = stemsByPath.get(result.path)!
+      return {
+        ...result,
+        phaseSourcePath: stem.phaseSourcePath ?? stem.path,
+        phaseBars: (stem.phaseBars ?? 0) - steps / snapDiv
+      }
+    })
+    evictStemAnalysis(adopted.map((r) => r.bakedPath))
+    dispatch({ type: 'APPLY_BAKE', targetGroupIds: [groupId], results: adopted })
   } catch (err) {
     console.error('BeatPicker: failed to re-bake offset into audio files:', err)
   }
@@ -219,20 +264,13 @@ export function BeatPicker({
   // docs/superpowers/specs/2026-08-10-beatpicker-confirm-cancel-design.md
   // -- ok if that doc doesn't exist, this comment is the design record.
   const [pendingSteps, setPendingSteps] = useState<number | null>(null)
-  // What state.off[groupId] was the moment this picker started showing THIS
-  // riff (captured once per groupId, below) — cancelPending's revert
-  // target. Deliberately captured once per groupId, not re-read on every
-  // render: a confirm earlier in this same visit changes state.off, and
-  // cancelPending needs to know the value from BEFORE that confirm, not
-  // "whatever's current," to be able to undo it too (see cancelPending's
-  // own doc comment).
-  const initialStepsRef = useRef(0)
   // Guards confirmPending/cancelPending against a rapid double-click
   // re-entering mid-flight (same reasoning/pattern as ChannelRow.tsx's own
   // togglingArm) — both are async (native bake round-trip), and both
   // mutate state.off, so two overlapping calls could race and leave it on
   // neither value cleanly.
   const [applying, setApplying] = useState(false)
+  const [applyError, setApplyError] = useState<string | null>(null)
 
   // Runs once, right when this picker opens (mount) — real bug this fixed:
   // previewing a riff in the LORE library browser, then importing it, left
@@ -442,7 +480,6 @@ export function BeatPicker({
   // would corrupt cancelPending's own "revert to before this visit" target
   // into "revert to whatever's current" the moment a confirm changes it).
   useEffect(() => {
-    initialStepsRef.current = state.off[groupId] ?? 0
     // Deferred through a microtask (not called directly) so this doesn't
     // read as a synchronous setState-in-effect -- same established
     // workaround as this file's own stemSpectrograms reset effect above.
@@ -453,7 +490,6 @@ export function BeatPicker({
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- deliberately keyed only on groupId, not state.off -- see this effect's own doc comment above
   }, [groupId])
 
   // Sweeps a vertical marker across the waveform whenever anything from this
@@ -522,18 +558,26 @@ export function BeatPicker({
     }
   }, [metronomeOn, isFreePlaying, previewingBeat, stem, rifff])
 
-  // Shared by confirmPendingRef/cancelPendingRef below — dispatches the
-  // target steps value live, then (unless it's already what's live, e.g.
-  // re-confirming an unchanged pick) bakes it for real. Async because
-  // bakeStems is a native round-trip; callers own the `applying` guard
-  // around it (see that state's own doc comment above) since both callers
-  // need slightly different behavior around it (cancel also needs to skip
-  // the bake entirely when nothing was ever confirmed this visit).
-  async function applyOffset(target: number, before: number): Promise<void> {
-    dispatch({ type: 'SET_OFFSET_STEPS', key: groupId, steps: target })
-    if (target !== before && rifff) {
-      await bakeStems(dispatch, target, SNAP_DIVS[state.snapIdx], rifff.stems)
-    }
+  // Commits only after every stem has been baked into a fresh immutable
+  // asset. The pending picker choice is deliberately not dispatched as a
+  // runtime offset first: a failed native bake must leave project state and
+  // every old audio path exactly as they were.
+  async function applyOffset(target: number, before: number): Promise<boolean> {
+    if (!rifff) return true
+    const hasStemOverrides = rifff.stems.some(
+      (stem) => state.off[stemKey(groupId, stem.slot)] !== undefined
+    )
+    if (target === before && !hasStemOverrides) return true
+    setApplyError(null)
+    const results = await bakeStems(
+      dispatch,
+      target,
+      SNAP_DIVS[state.snapIdx],
+      rifff.stems,
+      bakeTargetGroupIds(state.rifffs, groupId)
+    )
+    if (!results) setApplyError('Could not update every stem. Nothing was changed; try again.')
+    return results !== null
   }
 
   // commitAndClose is a fresh function every render (it closes over onClose/rifff/
@@ -642,7 +686,8 @@ export function BeatPicker({
       }
       setApplying(true)
       void applyOffset(target, before)
-        .then(() => {
+        .then((ok) => {
+          if (!ok) return
           onBaked?.(target)
           if (isNewImport) {
             stopPreview()
@@ -656,22 +701,13 @@ export function BeatPicker({
         })
     }
 
-    // "cancel" — reverts all the way to initialStepsRef.current, the value
-    // in effect when this visit to THIS riff began (see that ref's own doc
-    // comment), not just "undo the latest click." If an earlier pick this
-    // same visit was already confirmed (state.off no longer equals
-    // initialStepsRef.current), this re-bakes back to it too -- "cancel"
-    // discards the whole editing session, not just the newest unconfirmed
-    // click, per this feature's own design discussion.
+    // The staged choice has not touched project state or audio yet, so
+    // cancel is a true discard—no compensating re-bake and no new asset.
     cancelPendingRef.current = () => {
       if (applying) return
       stopPreview()
       setPendingSteps(null)
-      const before = state.off[groupId] ?? 0
-      const target = initialStepsRef.current
-      if (target === before) return // nothing was actually confirmed this visit -- true no-op
-      setApplying(true)
-      void applyOffset(target, before).finally(() => setApplying(false))
+      setApplyError(null)
     }
 
     escapeRef.current = () => {
@@ -1312,6 +1348,10 @@ export function BeatPicker({
           <div style={{ marginTop: 4, fontSize: 10, color: 'var(--ra-text-3)' }}>
             moves {sharedClipCount} clips made of this audio
           </div>
+        )}
+
+        {applyError && (
+          <div style={{ marginTop: 6, fontSize: 10, color: 'var(--ra-danger)' }}>{applyError}</div>
         )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>

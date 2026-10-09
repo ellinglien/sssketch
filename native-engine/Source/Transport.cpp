@@ -67,6 +67,7 @@ namespace sssketch
         // buffer size the device already opened with above rather than
         // tearing down transport setup entirely over it.
         auto setup = deviceManager.getAudioDeviceSetup();
+
         setup.bufferSize = kPreferredBufferSize;
         auto bufferSizeError = deviceManager.setAudioDeviceSetup(setup, true);
         if (bufferSizeError.isNotEmpty())
@@ -682,6 +683,7 @@ namespace sssketch
         float* const* outputChannelData, int numOutputChannels,
         int numSamples, const juce::AudioIODeviceCallbackContext&)
     {
+        callbackBlockSize.store(numSamples, std::memory_order_relaxed);
         // Cheap, non-blocking pointer check -- must run every callback
         // regardless of playback state so a plugin load requested while
         // paused/stopped is still promoted promptly once ready, not stuck
@@ -935,6 +937,20 @@ namespace sssketch
     {
         deviceSampleRate = device->getCurrentSampleRate();
         deviceBlockSize = device->getCurrentBufferSizeSamples();
+        juce::Logger::writeToLog(
+            "Transport: audio device \"" + device->getName()
+            + "\", " + juce::String(deviceSampleRate, 0) + " Hz, "
+            + juce::String(deviceBlockSize) + " samples");
+        juce::StringArray availableRates;
+        for (const auto rate : device->getAvailableSampleRates())
+            availableRates.add(juce::String(rate, 0));
+        juce::Logger::writeToLog(
+            "Transport: available sample rates " + availableRates.joinIntoString(", "));
+
+        if (deviceSampleRate < 44100.0)
+            juce::Logger::writeToLog(
+                "Transport: warning: low-rate audio route; Bluetooth output may be in "
+                "headset mode. Select a different system input, then reconnect the output.");
         // A restart (at the same rate too, where prepareMaster below rebuilds nothing) must not
         // replay the last 75 samples left in the limiter's line, or fade in from them. No
         // callback is running here -- JUCE's AudioDeviceManager calls this before the device

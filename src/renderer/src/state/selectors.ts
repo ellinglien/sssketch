@@ -570,11 +570,9 @@ export function rotationSecondsForStem(offsetSteps: number, snapDiv: number, ste
  * source. Returns null if the source no longer exists (e.g. copied, then
  * deleted before pasting).
  *
- * Sharing file paths does have one real edge: if two pasted copies are each
- * later independently re-baked (BeatPicker) with different downbeat picks,
- * their bakes target the same derived `.baked.wav` sibling file and the second
- * one wins on disk — a narrow, deliberate scope trade-off rather than adding a
- * file-copy step to every paste.
+ * Sharing file paths is safe even when two pasted copies are later re-oned
+ * independently: BeatPicker writes a new immutable derived file per operation,
+ * so the second correction cannot overwrite audio used by the first.
  */
 export function pasteRifffAction(
   state: AppState,

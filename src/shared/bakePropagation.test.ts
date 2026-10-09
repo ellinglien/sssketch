@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { groupIdsSharingStemPaths, placedClipsSharingStems } from './bakePropagation'
+import {
+  bakeTargetGroupIds,
+  groupIdsSharingStemPaths,
+  placedClipsSharingStems
+} from './bakePropagation'
 import type { Rifff, Stem } from './types'
 
 function stem(slot: number, path: string): Stem {
@@ -74,5 +78,25 @@ describe('placedClipsSharingStems', () => {
 
   it('is 1 for a lone clip nothing else shares', () => {
     expect(placedClipsSharingStems(arranged, 'other')).toBe(1)
+  })
+})
+
+describe('bakeTargetGroupIds', () => {
+  it('includes compatible timeline copies but never another shelf riff sharing the path', () => {
+    const rifffs = {
+      source: rifff('source', [stem(0, '/w/a.wav')]),
+      timelineA: rifff('timelineA', [stem(0, '/w/a.wav')], 0),
+      timelineB: rifff('timelineB', [stem(0, '/w/a.wav')], 8),
+      otherShelf: rifff('otherShelf', [stem(0, '/w/a.wav')])
+    }
+    expect(bakeTargetGroupIds(rifffs, 'source')).toEqual(['source', 'timelineA', 'timelineB'])
+  })
+
+  it('does not partially repoint a multi-stem timeline riff', () => {
+    const rifffs = {
+      source: rifff('source', [stem(0, '/w/a.wav')]),
+      mixed: rifff('mixed', [stem(0, '/w/a.wav'), stem(1, '/w/b.wav')], 0)
+    }
+    expect(bakeTargetGroupIds(rifffs, 'source')).toEqual(['source'])
   })
 })

@@ -2,7 +2,36 @@ import type { RiffLibraryResolvedRiff } from '@shared/riffLibraryTypes'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { friendlyRiffName } from '@shared/friendlyRiffName'
-import type { Rifff } from '@shared/types'
+import { stemKey, type Rifff } from '@shared/types'
+import { sqrtGain } from '@shared/mixGain'
+
+/**
+ * The committed volumes for stems added by a library import.
+ *
+ * Library preview plays each row at `sqrtGain(cached stem count) * GainsJSON
+ * gain`. Import has to commit that same product, not choose between the two:
+ * ADD_TO_SHELF supplies sqrtGain only as a fallback, while the old caller
+ * overwrote that fallback with the un-normalised GainsJSON value whenever it
+ * differed from 1. The riff therefore changed balance as soon as it moved
+ * from Browse to the shelf/timeline.
+ *
+ * On a later partial-download merge only the newly added slots are returned;
+ * volumes for rows the user may already have adjusted remain untouched.
+ */
+export function importedStemVolumes(
+  groupId: string,
+  resolved: RiffLibraryResolvedRiff,
+  newStemSlots: readonly number[]
+): Record<string, number> {
+  const cachedStems = resolved.stems.filter((stem) => stem.path !== null)
+  const headroom = sqrtGain(cachedStems.length)
+  const added = new Set(newStemSlots)
+  return Object.fromEntries(
+    cachedStems
+      .filter((stem) => added.has(stem.slot))
+      .map((stem) => [stemKey(groupId, stem.slot), headroom * stem.gain])
+  )
+}
 
 /** Builds (or merges into) a Rifff from a resolved riff -- the shared core
  * of what LoreLibraryBrowser.tsx's own importResolvedRiff has always done,

@@ -100,6 +100,7 @@ import {
 import {
   getDiscoverCandidates,
   getRandomLibraryCandidate,
+  getInstrumentMaskLookup,
   prewarmDiscoverCandidateCaches,
   appendToInMemoryDiscoverCaches,
   type DiscoverCandidate,
@@ -185,6 +186,10 @@ import {
   markYamnetZeroShotAttempted,
   type StemAutoClassifyProgress
 } from './stemAutoCategoryStore'
+import {
+  currentAutoClassifyTrainingFingerprint,
+  lookupAutoClassifyInstrumentMasks
+} from './stemAutoClassify'
 import { arrangeRoleForAudiosetClass } from '@shared/audiosetClasses'
 import { listLibraryScanWork, type LibraryScanWork } from './libraryScanWork'
 import { getStemPriority, seedStemPriorityOwnStems, setStemPriorityUsername } from './stemPriority'
@@ -266,6 +271,7 @@ import { migrateRiffLibraryLocation } from './riffLibraryMigration'
 import {
   listLibrarySketches,
   libraryRootPath,
+  bakeAssetsDir,
   setLibraryRootPath,
   shouldWarnBeforeOverwrite,
   renameSketch,
@@ -738,6 +744,25 @@ function createWindow(): BrowserWindow {
 // startup, before the 'ready' event fires.
 if (is.dev) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
+
+// One live playback engine per app, always. Two dev launches used to be
+// allowed to coexist despite sharing the same userData path; each opened
+// its own native engine and sent the same project to CoreAudio. Hearing
+// both copies a few milliseconds apart produces comb filtering/phasey
+// "crunch" that is easily mistaken for buffer underruns. A second launch
+// now just brings the existing window forward and exits before it can
+// create another engine.
+const hasSingleInstanceLock = app.requestSingleInstanceLock()
+if (!hasSingleInstanceLock) {
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    if (mainWindow.isMinimized()) mainWindow.restore()
+    mainWindow.show()
+    mainWindow.focus()
+  })
 }
 
 // This method will be called when Electron has finished
@@ -1298,7 +1323,7 @@ app.whenReady().then(async () => {
     renderStretched(stemPath, ratio)
   )
 
-  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs))
+  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs, bakeAssetsDir()))
 
   ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!
@@ -1968,9 +1993,15 @@ app.whenReady().then(async () => {
     saveSoundSettings(settings)
   )
 
-  ipcMain.handle('get-discover-classify-progress', (): StemAutoClassifyProgress =>
-    getStemAutoClassifyProgress(openOwnRiffLibraryDb())
-  )
+  ipcMain.handle('get-discover-classify-progress', async (): Promise<StemAutoClassifyProgress> => {
+    const ownDb = openOwnRiffLibraryDb()
+    const dbs = candidateDbsForRiff()
+    return getStemAutoClassifyProgress(
+      ownDb,
+      currentAutoClassifyTrainingFingerprint(ownDb),
+      (stemCIDs) => lookupAutoClassifyInstrumentMasks(dbs, stemCIDs, getInstrumentMaskLookup)
+    )
+  })
 
   // The library scan's work list (background scan audit 3, libraryScanWork.ts):
   // what needs analysis first (SQL preselect over the persisted stem/jam pairs,
