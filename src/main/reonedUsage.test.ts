@@ -277,9 +277,14 @@ describe('surveyBakes and cleanBakes', () => {
   })
 
   it('re-checks age right before deleting: a copy refreshed since the survey stays', async () => {
-    // "now" too early: nothing is old enough.
-    const result = await cleanBakes(bakes, new Set(), now - 3 * DAY, () => [])
-    expect(result.deletedCount).toBe(0)
+    // The survey sees copy 1 as old and unused...
+    const survey = await surveyBakes(bakes, new Set(), now)
+    expect(survey.unused.map((f) => f.name)).toContain(name(1))
+    // ...then something writes it again (a rebuild landing on the same name) before the clean.
+    age(join(bakes, name(1)), 0)
+    const result = await cleanBakes(bakes, new Set(), now, () => [])
+    expect(result.deletedCount).toBe(8)
+    expect(readdirSync(bakes)).toEqual([name(1)])
   })
 
   it('no .bakes folder at all: nothing unused, nothing cleaned', async () => {
