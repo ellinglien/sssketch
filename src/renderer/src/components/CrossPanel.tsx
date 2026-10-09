@@ -54,10 +54,10 @@ import { Copy, Shuffle, SkipForward } from '@phosphor-icons/react'
 import { useAppSelector, useDispatch, usePlaying, usePos } from '../state/StoreContext'
 import { resolvedPlayedBarsFromFields } from '../state/selectors'
 import { useCrossPreview, type CrossPreviewMode } from '../state/useCrossPreview'
+import { crossEmptyDropSlotCount } from './crossDropSlots'
 
 const SOURCE_DRAG_TYPE = 'application/x-sssketch-cross-source'
 const ROW_DRAG_TYPE = 'application/x-sssketch-cross-row'
-const CROSS_EMPTY_DROP_SLOTS = 6
 type CrossTarget = 'left' | 'center' | 'right'
 
 function cryptoFraction(): number {
@@ -948,7 +948,6 @@ export function CrossPanel({
     }
   }
 
-  const remainingSlots = MAX_RIFFF_STEM_SLOTS - draft.center.length
   const selectedLoopBars =
     selectedTarget === 'center'
       ? centerLoopBars(draft)
@@ -958,11 +957,7 @@ export function CrossPanel({
       ? ((((pos % selectedLoopBars) + selectedLoopBars) % selectedLoopBars) / selectedLoopBars) *
         100
       : null
-  // Keep a generous landing area visible even after the center already has
-  // stems. A single trailing target technically allowed repeated additions,
-  // but read like the Cross could hold only one more; six empty rows make its
-  // larger working capacity obvious and allow deliberate insertion positions.
-  const placeholders = Math.max(0, Math.min(remainingSlots, CROSS_EMPTY_DROP_SLOTS))
+  const placeholders = crossEmptyDropSlotCount(draft.center.length, MAX_RIFFF_STEM_SLOTS)
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: 0, flex: 1 }}>
