@@ -1,13 +1,22 @@
 import { readFileSync, writeFileSync, existsSync, unlinkSync, mkdirSync, renameSync } from 'fs'
-import { dirname, join } from 'path'
+import { dirname, join, resolve, sep } from 'path'
 import { dialog, BrowserWindow, app } from 'electron'
 import {
   sketchDir,
   sketchProjectPath,
   listLibrarySketches,
   nextVersionName,
-  rotateBackupBeforeOverwrite
+  rotateBackupBeforeOverwrite,
+  libraryRootPath
 } from './projectLibrary'
+import { rememberExternalProject, renameKnownProject } from './reonedCopiesStore'
+
+/** Library projects are scanned for the re-oned copies they name at cleanup time; a project
+ * anywhere else is remembered with its names (reonedCopiesStore.ts), so its copies stay kept
+ * while its drive is away. */
+function isInsideLibrary(path: string): boolean {
+  return resolve(path).startsWith(resolve(libraryRootPath()) + sep)
+}
 
 // Fun, short words for the auto-generated default project name -- kept
 // tasteful and on-theme for a music/creative tool, not an exhaustive
@@ -203,6 +212,7 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
     // snapshot (see writeAutosave below) is redundant — clear it so a later
     // launch doesn't offer to "recover" work that's already safely saved.
     clearAutosave()
+    if (!isInsideLibrary(result.filePath)) rememberExternalProject(result.filePath, json)
     return result.filePath
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -227,6 +237,8 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
 export function saveProjectInPlace(path: string, json: string): void {
   writeFileSync(path, json, 'utf-8')
   clearAutosave()
+  // saveProjectToLibrary comes through here too: only a file outside the library is remembered.
+  if (!isInsideLibrary(path)) rememberExternalProject(path, json)
 }
 
 /** Renames an explicitly-opened (non-library) sketch file in place -- same
@@ -242,6 +254,7 @@ export function renameExternalSketchFile(
     return { ok: false, reason: `a file named "${newName}.sssketchproj" already exists there` }
   }
   renameSync(oldPath, newPath)
+  renameKnownProject(oldPath, newPath)
   return { ok: true, path: newPath }
 }
 
@@ -482,7 +495,9 @@ export async function openProject(
 
   const path = result.filePaths[0]
   try {
-    return { path, json: readFileSync(path, 'utf-8') }
+    const json = readFileSync(path, 'utf-8')
+    if (!isInsideLibrary(path)) rememberExternalProject(path, json)
+    return { path, json }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`openProject: failed to read project from ${path}: ${message}`)
