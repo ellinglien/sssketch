@@ -316,6 +316,60 @@ describe('rebuildReonedCopies', () => {
   })
 })
 
+describe('a copy no candidate names (a legacy uuid copy, or an original that changed)', () => {
+  it('is rebuilt under its recipe name, and the stem is repointed there', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-rebuild-'))
+    try {
+      const root = join(dir, 'lib')
+      mkdirSync(root)
+      const bakes = join(root, '.bakes')
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const legacy = join(bakes, '3f1c2a4e-1111-4222-8333-944455556666.baked.wav')
+      const rifffs = { g: riffOn(legacy, source, 1) }
+      const outcomes = await rebuildReonedCopies(planReonedRepair(rifffs), {
+        outputDir: bakes,
+        libraryRoot: root
+      })
+      const [outcome] = outcomes[0]
+      expect(outcome).toMatchObject({ path: legacy, status: 'rebuilt' })
+      const bakedPath = (outcome as { bakedPath: string }).bakedPath
+      expect(bakedPath).not.toBe(legacy)
+      expect(basename(bakedPath)).toMatch(/^[0-9a-f]{32}\.baked\.wav$/)
+      const { rifffs: repaired } = applyReonedRepair(rifffs, outcomes)
+      expect(repaired.g.stems[0]).toMatchObject({ path: bakedPath, phaseSourcePath: source })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('ensureReonedCopiesForState hands the export a state that names the rebuilt copy', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-rebuild-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      // The default library root (under the mocked music folder), as an export uses it.
+      const legacy = join(
+        dir,
+        'old-root',
+        '.bakes',
+        '3f1c2a4e-1111-4222-8333-944455556666.baked.wav'
+      )
+      const state = {
+        rifffs: { g: { ...riffOn(legacy, source, 1), startBar: 0 } }
+      } as unknown as AppState
+      const repaired = await ensureReonedCopiesForState(state)
+      expect(repaired).not.toBe(state)
+      const path = repaired.rifffs.g.stems[0].path
+      expect(path.startsWith(appPaths.dir)).toBe(true)
+      expect(existsSync(path)).toBe(true)
+      expect(state.rifffs.g.stems[0].path).toBe(legacy) // the input is not mutated
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('ensureReonedCopiesForState', () => {
   it('returns the very same state when every copy is present, so the export sees the project as saved', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-rebuild-'))

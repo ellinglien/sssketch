@@ -7,7 +7,8 @@ import {
   existsSync,
   readdirSync,
   statSync,
-  mkdirSync
+  mkdirSync,
+  utimesSync
 } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
@@ -431,6 +432,43 @@ describe('bakeOffset recipes', () => {
       const [second] = await bakeOffset([{ path: source, rotationSec: 1 }], out)
       expect(second.bakedPath).toBe(first.bakedPath)
       expect(statSync(second.bakedPath).mtimeMs).toBe(before) // reused, not rendered again
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('an original whose mtime changed (re-downloaded, re-saved) gets a new copy, not the old one', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const out = join(dir, 'bakes')
+      const [first] = await bakeOffset([{ path: source, rotationSec: 1 }], out)
+      const later = new Date(statSync(source).mtimeMs + 60_000)
+      utimesSync(source, later, later)
+      const [second] = await bakeOffset([{ path: source, rotationSec: 1 }], out)
+      expect(second.bakedPath).not.toBe(first.bakedPath)
+      expect(readdirSync(out).sort()).toEqual(
+        [basename(first.bakedPath), basename(second.bakedPath)].sort()
+      )
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('two bakes of one recipe at once: one file, the same result, no temporary left', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 4000, 1000)
+      const out = join(dir, 'bakes')
+      const [a, b] = await Promise.all([
+        bakeOffset([{ path: source, rotationSec: 1 }], out),
+        bakeOffset([{ path: source, rotationSec: 1 }], out)
+      ])
+      expect(a).toHaveLength(1)
+      expect(b).toEqual(a)
+      expect(readdirSync(out)).toEqual([basename(a[0].bakedPath)])
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
