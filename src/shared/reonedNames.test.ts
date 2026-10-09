@@ -25,6 +25,14 @@ describe('reonedNamesInText', () => {
     expect([...reonedNamesInText(json)]).toEqual([HASH])
   })
 
+  it('stays linear on a long run of name characters (a base64 plugin state of zeros)', () => {
+    const run = 'A'.repeat(2_000_000)
+    const started = performance.now()
+    expect([...reonedNamesInText(`{"state":"${run}","p":"/b/${HASH}"}`)]).toEqual([HASH])
+    expect([...reonedNamesInText(`{"state":"${run}.baked.wav"}`)]).toHaveLength(1)
+    expect(performance.now() - started).toBeLessThan(500)
+  })
+
   it('ignores ordinary audio', () => {
     expect([...reonedNamesInText('{"path":"/a/b.wav","x":"baked.wav"}')]).toEqual([])
   })

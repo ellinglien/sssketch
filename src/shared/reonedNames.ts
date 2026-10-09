@@ -15,9 +15,32 @@ export function isStaleTempFileName(name: string): boolean {
   return TEMP_FILE.test(name)
 }
 
+const SUFFIX = '.baked.wav'
+/** Longer than any copy name's stem (32 hex, or a 36-character legacy uuid). */
+const MAX_STEM_CHARS = 96
+
+function isNameChar(code: number): boolean {
+  return (
+    (code >= 48 && code <= 57) || // 0-9
+    (code >= 65 && code <= 90) || // A-Z
+    (code >= 97 && code <= 122) || // a-z
+    code === 95 || // _
+    code === 45 // -
+  )
+}
+
+/** Every copy name in `text`. Finds each `.baked.wav` and walks back over name characters, so
+ * it stays linear in the text's length: a regex like NAME_SOURCE, run over a long run of name
+ * characters (a base64 plugin state of zeros), backtracks quadratically and would block the
+ * main thread for minutes on one project. */
 export function reonedNamesInText(text: string, into: Set<string> = new Set()): Set<string> {
-  const pattern = new RegExp(NAME_SOURCE, 'g')
-  for (const match of text.matchAll(pattern)) into.add(match[0])
+  for (let at = text.indexOf(SUFFIX); at !== -1; at = text.indexOf(SUFFIX, at + SUFFIX.length)) {
+    let start = at
+    while (start > 0 && at - start < MAX_STEM_CHARS && isNameChar(text.charCodeAt(start - 1))) {
+      start--
+    }
+    if (start < at) into.add(text.slice(start, at + SUFFIX.length))
+  }
   return into
 }
 
