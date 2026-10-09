@@ -18,13 +18,11 @@ import {
 import { getAudioContext, getDecodedDuration } from '../audio/peakCache'
 import { decodeStemFile } from '../audio/decodeStemFile'
 import {
-  isActivePreview,
   registerActivePreview,
   startPreviewLoop,
   stopPreviewSources,
   unregisterActivePreview
 } from '../audio/previewLoop'
-import { pauseArrangementBeforeShelfPreview } from '../audio/shelfPreviewHandoff'
 import { useDispatch, usePlaying } from '../state/StoreContext'
 import { useBusy } from '../state/BusyContext'
 import { typeColorVar } from '../theme/typeColor'
@@ -187,40 +185,18 @@ export function LoopFolderPane({
     const anchor = selection.anchor !== null ? loopsById.get(selection.anchor) : undefined
     if (!anchor || !folder.available) return
     let cancelled = false
-    const previewToken = registerActivePreview(stopPreview)
-    previewTokenRef.current = previewToken
-    const previewCancelled = (): boolean => cancelled || !isActivePreview(previewToken)
-    void (async () => {
-      try {
-        await pauseArrangementBeforeShelfPreview({
-          playing,
-          pauseArrangement: () => dispatch({ type: 'PAUSE' }),
-          stopEngine: () => window.rifffApi.engineStop()
-        })
-        if (previewCancelled()) return
-        const sources = await startPreviewLoop(
-          getAudioContext(),
-          [{ path: anchor.path, gain: 1 }],
-          previewCancelled
-        )
-        if (previewCancelled()) {
-          stopPreviewSources(sources)
-          return
-        }
-        if (sources.length === 0) {
-          stopPreview()
-          return
-        }
-        previewSourcesRef.current.push(...sources)
-      } catch (err) {
-        if (!isActivePreview(previewToken)) return
-        console.error('LoopFolderPane: failed to start preview:', err)
-        stopPreview()
-      }
-    })()
+    if (playing) dispatch({ type: 'PAUSE' })
+    void startPreviewLoop(
+      getAudioContext(),
+      [{ path: anchor.path, gain: 1 }],
+      () => cancelled
+    ).then((sources) => {
+      if (cancelled || sources.length === 0) return
+      previewSourcesRef.current.push(...sources)
+      previewTokenRef.current = registerActivePreview(stopPreview)
+    })
     return () => {
       cancelled = true
-      stopPreview()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-runs on a new anchor only. loopsById changes whenever a row's length or tempo is filled in, and that must not restart a playing preview; transport state is read at the moment a preview starts, as LibraryBrowser's rifff preview does.
   }, [selection.anchor])

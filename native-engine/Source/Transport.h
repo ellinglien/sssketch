@@ -17,7 +17,6 @@ namespace sssketch
     /** Pause and Stop don't cut to silence synchronously — see HaltKind
      * below. */
     enum class HaltKind { None, Pause, Stop };
-    enum class TransportCommandKind : unsigned long long { None, Play, Pause, Stop };
 
     class Transport : public juce::AudioIODeviceCallback
     {
@@ -42,9 +41,7 @@ namespace sssketch
         // playback had reached once the fade completes; Stop resets it to 0,
         // matching each one's existing pre-fade behavior.
         void pause();
-        /** Returns the ordered command generation that becomes complete only
-         * after the audio thread has reached silence. */
-        unsigned long long stop();
+        void stop();
         // Doesn't jump synchronously — a raw position jump mid-waveform is
         // exactly the same class of click as an unfaded pause/stop, just
         // landing on unrelated new content instead of silence. Arms a
@@ -63,19 +60,6 @@ namespace sssketch
          * between callbacks, never while one runs). */
         LapClock lapClockForTest() const { return lapClock(); }
         bool isPlaying() const { return playing.load(); }
-        unsigned long long completedHaltGeneration() const
-        {
-            return completedHaltCommandGeneration.load();
-        }
-        /** Deterministic regression seam for the cross-thread Play-during-
-         * halt-finalization race. Tests install a no-allocation function
-         * pointer before driving the callback; production never sets it. */
-        using HaltFinalizationHookForTest = void (*)(void*);
-        void setHaltFinalizationHookForTest(HaltFinalizationHookForTest hook, void* context)
-        {
-            haltFinalizationHookForTest = hook;
-            haltFinalizationHookContextForTest = context;
-        }
 
         /** The real audio device's own sample rate / callback block size —
          * used when loading a master-chain plugin live, so prepareToPlay()
@@ -388,7 +372,6 @@ namespace sssketch
         /** AUDIO THREAD. Moves the sample clock past this block and returns the position
          * of the next block's first sample, which renderLoopAware returns. */
         double advanceClock(int numSamples);
-        unsigned long long publishTransportCommand(TransportCommandKind kind);
 
 
         PlaybackEngine& engine;
@@ -408,22 +391,18 @@ namespace sssketch
         std::atomic<double> recordingLoopEndBar { 0.0 }; // <= start = disabled
         std::atomic<LoopRecorder*> loopRecorder { nullptr }; // nullptr = nothing armed
         std::atomic<GatedLoopRecorder*> gatedRecorder { nullptr }; // nullptr = gated recording mode off
-        // One atomically-published, totally ordered desired transport
-        // command. Low two bits are TransportCommandKind; the upper bits are
-        // its monotonically increasing generation. A single word prevents
-        // Play/Stop/Pause from observing and repairing one another out of
-        // order across the message and audio threads.
-        std::atomic<unsigned long long> nextTransportCommandGeneration { 0 };
-        std::atomic<unsigned long long> desiredTransportCommand { 0 };
-        std::atomic<unsigned long long> completedHaltCommandGeneration { 0 };
-        std::atomic<double> requestedPlayPosition { 0.0 };
+        std::atomic<HaltKind> pendingHalt { HaltKind::None }; // set by pause()/stop(), consumed once by the audio thread
+        // `playing` stays true for the entire duration of a halt fade (only
+        // finalization, once the fade completes, sets it false) — so it
+        // can't itself be used to detect "Play was just (re)pressed," the
+        // signal needed to cancel a fade already in progress. This is that
+        // signal, set by play(), consumed once by the audio thread.
+        std::atomic<bool> playRequested { false };
         std::atomic<bool> repositionRequested { false }; // set by setPosition(), consumed by the audio thread
         std::atomic<double> repositionTarget { 0.0 }; // always the latest requested position
         // All audio-thread-only (never touched off that thread) — no atomics needed.
         bool fadingOut = false;
         HaltKind activeHaltKind = HaltKind::None;
-        unsigned long long activeHaltCommandGeneration = 0;
-        unsigned long long appliedTransportCommand = 0;
         double haltFadeElapsedSec = 0.0;
         bool repositioning = false;
         // Audio-thread-only. True only in the should-never-happen case
@@ -437,8 +416,6 @@ namespace sssketch
         bool stagedApplyRetryDue = false;
         bool repositionFadingIn = false;
         double repositionElapsedSec = 0.0;
-        HaltFinalizationHookForTest haltFinalizationHookForTest = nullptr;
-        void* haltFinalizationHookContextForTest = nullptr;
 
         // The playback clock, audio-thread-only: the position is anchorBars plus an INTEGER
         // count of samples since the anchor, converted the way RenderExport converts its own

@@ -139,26 +139,18 @@ export function stopPreviewSources(sources: AudioBufferSourceNode[]): void {
 let activeGeneration = 0
 let activeStop: (() => void) | null = null
 
-/** Claims ownership for a preview request and installs its stop function,
- * immediately cancelling whatever request was previously registered. The
- * claim deliberately happens BEFORE file reads/downloads/decodes: transport
- * Play must be able to cancel work that has not produced AudioBufferSources
- * yet, otherwise that work can finish later and start over the arrangement.
- *
- * Callers must keep the returned token and include isActivePreview(token) in
- * every async cancellation check before source.start(). */
+/** Registers `stop` as the currently-active preview's stop function,
+ * immediately stopping whatever was previously registered (starting any new
+ * preview always supersedes an old one, everywhere, not just within the
+ * same component). Call this right after a preview actually starts
+ * playing — not before, or a fast reselect could register-then-immediately-
+ * get-stopped by the very same click that started it. Returns a token to
+ * pass to unregisterActivePreview later. */
 export function registerActivePreview(stop: () => void): number {
-  stopActivePreview()
+  activeStop?.()
   activeGeneration += 1
   activeStop = stop
   return activeGeneration
-}
-
-/** True only while `token` still owns the one global preview slot. This is
- * the async half of the registry contract: a stopped/superseded request can
- * use it to prove it still owns permission to start audio. */
-export function isActivePreview(token: number): boolean {
-  return activeStop !== null && token === activeGeneration
 }
 
 /** Clears the registry entry if (and only if) `token` matches the most
@@ -167,20 +159,13 @@ export function isActivePreview(token: number): boolean {
  * accidentally clear a *different*, newer preview that superseded it in
  * the meantime. */
 export function unregisterActivePreview(token: number): void {
-  if (token !== activeGeneration) return
-  activeStop = null
-  activeGeneration += 1
+  if (token === activeGeneration) activeStop = null
 }
 
 /** Stops whichever preview is currently registered, from anywhere. Safe to
  * call when nothing is playing. Used by BeatPicker on open, so any preview
  * running elsewhere never keeps playing underneath it. */
 export function stopActivePreview(): void {
-  const stop = activeStop
+  activeStop?.()
   activeStop = null
-  // Invalidate ownership before invoking user code. Its cleanup commonly
-  // calls unregisterActivePreview(oldToken); that must not clear a newer
-  // owner installed re-entrantly from the cleanup.
-  activeGeneration += 1
-  stop?.()
 }

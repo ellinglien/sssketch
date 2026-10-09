@@ -21,10 +21,8 @@ import {
   startPreviewLoop,
   stopPreviewSources,
   registerActivePreview,
-  isActivePreview,
   unregisterActivePreview
 } from '../audio/previewLoop'
-import { pauseArrangementBeforeShelfPreview } from '../audio/shelfPreviewHandoff'
 import { classifyStems } from '../audio/classifyStems'
 import { buildImportedRifff, importedStemVolumes } from '../audio/importResolvedRiff'
 import {
@@ -1358,12 +1356,6 @@ export function LibraryBrowser({
     // only rendered when resolvedRiff is truthy).
     if (!selectedRiffCID || !selectedRiffPreviewEnabled) return
     let cancelled = false
-    // Claim preview ownership before resolve/download/decode. A transport
-    // PLAY during any of those awaits invalidates this token, preventing a
-    // late Web Audio start over the arrangement.
-    const previewToken = registerActivePreview(stopPreview)
-    previewTokenRef.current = previewToken
-    const previewCancelled = (): boolean => cancelled || !isActivePreview(previewToken)
     // Stable for this whole effect run's async chain — cleanup below
     // increments the ref itself, so by the time a new run starts,
     // syncQueueTokenRef.current already IS this run's own token.
@@ -1371,18 +1363,13 @@ export function LibraryBrowser({
     window.rifffApi
       .riffLibraryResolveRiff(selectedRiffCID)
       .then(async (resolved) => {
-        if (previewCancelled() || !resolved) return
+        if (cancelled || !resolved) return
         setResolvedRiff(resolved)
 
         // Auto-preview on selection, full mix only — same reasoning as
         // BeatPicker's own preview: pause the main arrangement first so the
         // two don't play over each other.
-        await pauseArrangementBeforeShelfPreview({
-          playing,
-          pauseArrangement: () => dispatch({ type: 'PAUSE' }),
-          stopEngine: () => window.rifffApi.engineStop()
-        })
-        if (previewCancelled()) return
+        if (playing) dispatch({ type: 'PAUSE' })
 
         // previewLoop.ts itself no longer applies sqrtGain's stem-count
         // headroom normalization — Shelf.tsx's tile preview passes
@@ -1402,14 +1389,11 @@ export function LibraryBrowser({
               gain: gain * s.gain,
               durationSec: s.durationSec
             })),
-            previewCancelled
+            () => cancelled
           )
-          if (previewCancelled()) {
-            stopPreviewSources(sources)
-            return false
-          }
           if (sources.length === 0) return false
           previewSourcesRef.current.push(...sources)
+          previewTokenRef.current = registerActivePreview(stopPreview)
           setPlayingRiffCID(selectedRiffCID)
           return true
         }
@@ -1419,9 +1403,9 @@ export function LibraryBrowser({
         // Selecting a riff also starts syncing it (if anything's missing),
         // then keeps going outward to nearby riffs in the background — see
         // runBackgroundSync's own doc comment.
-        if (previewCancelled()) return
+        if (cancelled) return
         const refreshed = await ensureStemsDownloaded(selectedRiffCID, resolved)
-        if (previewCancelled() || syncQueueToken !== syncQueueTokenRef.current) return
+        if (cancelled || syncQueueToken !== syncQueueTokenRef.current) return
         if (!startedOnFirstTry) {
           // Nothing was cached locally yet on the first attempt (a riff
           // that's never been synced), so tryStartPreview above was a
@@ -1429,19 +1413,15 @@ export function LibraryBrowser({
           // brought real stem paths in, so a never-synced riff plays on its
           // first click instead of requiring the user to click away and
           // back once the download quietly finishes in the background.
-          const startedAfterDownload = await tryStartPreview(refreshed)
-          if (!startedAfterDownload && !previewCancelled()) stopPreview()
+          await tryStartPreview(refreshed)
         }
         void runBackgroundSync(syncQueueToken, selectedRiffCID)
       })
       .catch((err) => {
-        if (!isActivePreview(previewToken)) return
         console.error('LibraryBrowser: riffLibraryResolveRiff() failed:', err)
-        stopPreview()
       })
     return () => {
       cancelled = true
-      stopPreviewAudio()
       // eslint-disable-next-line react-hooks/exhaustive-deps -- the lint rule's concern (reading a ref that may have changed by cleanup time) is exactly the point here: this always bumps whatever the CURRENT token is, invalidating any queue started by this run or a still-in-flight later one, not a stale snapshot from when the effect started
       syncQueueTokenRef.current++
     }

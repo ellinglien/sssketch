@@ -312,35 +312,16 @@ namespace sssketch
         deviceManager.closeAudioDevice();
     }
 
-    unsigned long long Transport::publishTransportCommand(TransportCommandKind kind)
-    {
-        const auto generation = nextTransportCommandGeneration.fetch_add(1) + 1;
-        const auto command = (generation << 2) | static_cast<unsigned long long>(kind);
-        desiredTransportCommand.store(command, std::memory_order_release);
-        return generation;
-    }
-
     void Transport::play(double fromPositionBars)
     {
-        requestedPlayPosition.store(fromPositionBars);
-        publishTransportCommand(TransportCommandKind::Play);
-        // `playing` and positionBars are actual audio-thread state, not
-        // desired UI state. Publishing them here would let a Stop arriving
-        // before the next callback mistake an as-yet-unheard Play for live
-        // audio and render an unnecessary halt fade.
+        positionBars.store(fromPositionBars);
+        playing.store(true);
+        playRequested.store(true);
     }
 
-    void Transport::pause()
-    {
-        publishTransportCommand(TransportCommandKind::Pause);
-    }
+    void Transport::pause() { pendingHalt.store(HaltKind::Pause); }
 
-    unsigned long long Transport::stop()
-    {
-        const auto generation = publishTransportCommand(TransportCommandKind::Stop);
-        if (!playing.load()) positionBars.store(0.0);
-        return generation;
-    }
+    void Transport::stop() { pendingHalt.store(HaltKind::Stop); }
 
     void Transport::setPosition(double bars)
     {
@@ -718,51 +699,6 @@ namespace sssketch
         juce::FloatVectorOperations::clear(outL, numSamples);
         juce::FloatVectorOperations::clear(outR, numSamples);
 
-        const auto applyLatestTransportCommand = [this]()
-        {
-            const auto command = desiredTransportCommand.load(std::memory_order_acquire);
-            if (command == appliedTransportCommand)
-                return;
-
-            appliedTransportCommand = command;
-            const auto generation = command >> 2;
-            const auto kind = static_cast<TransportCommandKind>(command & 0x3ULL);
-            if (kind == TransportCommandKind::Play)
-            {
-                positionBars.store(requestedPlayPosition.load());
-                playing.store(true);
-                fadingOut = false;
-                activeHaltKind = HaltKind::None;
-                return;
-            }
-
-            const auto haltKind = kind == TransportCommandKind::Stop
-                ? HaltKind::Stop
-                : HaltKind::Pause;
-            activeHaltKind = haltKind;
-            activeHaltCommandGeneration = generation;
-            if (!playing.load())
-            {
-                // Already silent: apply Stop's position semantics without
-                // entering a fade that would render idle project audio.
-                fadingOut = false;
-                if (haltKind == HaltKind::Stop)
-                    positionBars.store(0.0);
-                completedHaltCommandGeneration.store(generation, std::memory_order_release);
-                return;
-            }
-            if (!fadingOut)
-            {
-                fadingOut = true;
-                haltFadeElapsedSec = 0.0;
-            }
-        };
-
-        // Apply the ordered Play/Pause/Stop command before either recorder
-        // reads positionBars. The capture and backing audio in this callback
-        // must describe the same position, especially on Play-from-bar-N.
-        applyLatestTransportCommand();
-
         // Recording capture: independent of play/pause/halt-fade state
         // below entirely -- you can arm and record while transport
         // playback itself is paused/stopped just as validly as while
@@ -822,6 +758,31 @@ namespace sssketch
                     gated->writeBlock(inputChannelData, numInputChannels, 0, numSamples,
                                        loopPos - recStart);
             }
+        }
+
+        if (playRequested.exchange(false))
+        {
+            // An explicit Play always wins over any pause/stop fade still
+            // winding down from a rapid halt-then-play — abrupt, but this is
+            // a rare edge case, and resuming instantly matters more here
+            // than finishing a fade nobody asked to hear the tail of.
+            //
+            // Deliberately NOT `if (playing.load())` — playing stays true
+            // for the entire halt fade below (only finalization sets it
+            // false once the fade actually completes), so checking it here
+            // could never detect a pending halt in the first place: every
+            // callback between stop() and the fade's own completion would
+            // see playing still true, reset fadingOut before it's even
+            // examined pendingHalt, and the halt would never process at all.
+            fadingOut = false;
+        }
+
+        const HaltKind requested = pendingHalt.exchange(HaltKind::None);
+        if (requested != HaltKind::None && !fadingOut)
+        {
+            fadingOut = true;
+            activeHaltKind = requested;
+            haltFadeElapsedSec = 0.0;
         }
 
         if (!playing.load() && !fadingOut)
@@ -951,20 +912,6 @@ namespace sssketch
 
         if (fadingOut && haltFadeElapsedSec >= kHaltFadeSec)
         {
-            if (haltFinalizationHookForTest != nullptr)
-            {
-                const auto hook = haltFinalizationHookForTest;
-                haltFinalizationHookForTest = nullptr;
-                hook(haltFinalizationHookContextForTest);
-            }
-            // Re-read the one ordered command word at the last possible
-            // safe point. A newer Play cancels this old halt; a newer
-            // Pause/Stop becomes the halt finalized below. Commands arriving
-            // after this point remain pending for the next callback, and an
-            // acknowledgement waits on their own generation.
-            applyLatestTransportCommand();
-            if (!fadingOut)
-                return;
             fadingOut = false;
             playing.store(false);
             // The limiter's 75-sample lookahead still holds the last unfaded audio (the fade
@@ -980,8 +927,6 @@ namespace sssketch
             // fade finished; Stop resets to the top, matching each one's
             // existing pre-fade behavior.
             positionBars.store(activeHaltKind == HaltKind::Stop ? 0.0 : newPos);
-            completedHaltCommandGeneration.store(
-                activeHaltCommandGeneration, std::memory_order_release);
             return;
         }
 
