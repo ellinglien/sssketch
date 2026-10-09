@@ -239,6 +239,17 @@ Known limit: the scan finds a copy name only as plain text. A name inside a plug
 state (or any other encoded blob in a project) isn't seen, so a plugin that stored a `.bakes` path
 in its own state doesn't keep that copy. No shipped feature puts one there.
 
+Costs, known and accepted:
+- **The `.bakes` lock is held for the whole delete phase** (`cleanBakes`: the re-survey and every
+  unlink). The scan runs outside it, but while the delete runs, every bake waits: a re-one, a
+  Cross or Discover-seed audition, an export's rebuild and the missing-copy retry.
+- **A rebuild spawns one engine per riff** (`rebuildReonedCopies` runs riffs one at a time, and
+  each riff with Ogg/LORE stems to render gets its own engine process via `bakeNativeJobs`). A
+  project with many missing LORE copies opens slowly; WAV stems are rotated in-process.
+- **The missing-copy retry has no cap.** It runs every 15 s for as long as a copy is unreachable,
+  but each round only sends the riffs that name a retryable copy, and main fails fast with an
+  `access` check while the original or library is away, so a round costs a few file checks.
+
 ### Cross
 
 Cross combines two selected riffs into a new one. Open it from exactly two riffs selected in
