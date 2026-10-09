@@ -465,6 +465,60 @@ describe('reducer', () => {
     expect(state.rifffs.r1.phaseLinkId).toBe('lineage-x')
   })
 
+  describe('REPAIR_REONED_PATHS', () => {
+    const COPY = '/lib/.bakes/0123456789abcdef0123456789abcdef.baked.wav'
+    const NEW = '/lib/.bakes/ffffffffffffffffffffffffffffffff.baked.wav'
+    const onCopy = (groupId: string): Rifff =>
+      makeRifff({
+        groupId,
+        stems: [
+          {
+            ...makeRifff().stems[0],
+            path: COPY,
+            phaseSourcePath: '/x/1.wav',
+            phaseBars: 1
+          },
+          makeRifff().stems[1]
+        ]
+      })
+
+    it('repoints every stem naming the copy and leaves off and phase lineage alone', () => {
+      let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: onCopy('a') })
+      state = reducer(state, { type: 'ADD_TO_SHELF', rifff: onCopy('b') })
+      state = reducer(state, { type: 'SET_OFFSET_STEPS', key: 'a', steps: 3 })
+      const next = reducer(state, {
+        type: 'REPAIR_REONED_PATHS',
+        results: [{ path: COPY, bakedPath: NEW, durationSec: 12.81 }]
+      })
+      for (const id of ['a', 'b']) {
+        expect(next.rifffs[id].stems[0]).toMatchObject({
+          path: NEW,
+          durationSec: 12.81,
+          phaseSourcePath: '/x/1.wav',
+          phaseBars: 1
+        })
+        expect(next.rifffs[id].stems[1]).toBe(state.rifffs[id].stems[1])
+      }
+      expect(next.off).toBe(state.off)
+    })
+
+    it('returns the same state when no stem names the path, or the path is unchanged', () => {
+      const state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: onCopy('a') })
+      expect(
+        reducer(state, {
+          type: 'REPAIR_REONED_PATHS',
+          results: [{ path: '/elsewhere.baked.wav', bakedPath: NEW, durationSec: 1 }]
+        })
+      ).toBe(state)
+      expect(
+        reducer(state, {
+          type: 'REPAIR_REONED_PATHS',
+          results: [{ path: COPY, bakedPath: COPY, durationSec: 1 }]
+        })
+      ).toBe(state)
+    })
+  })
+
   it('stores immutable phase provenance with a completed bake', () => {
     let state = reducer(initialState, { type: 'ADD_TO_SHELF', rifff: makeRifff() })
     state = reducer(state, {

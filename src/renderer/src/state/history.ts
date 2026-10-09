@@ -32,6 +32,9 @@ const MAX_HISTORY = 100
 // toggles that still go through this reducer (so useAppState() consumers
 // see them) but shouldn't themselves be undo-able edits.
 const TRANSIENT_ACTION_TYPES = new Set<Action['type']>([
+  // A missing re-oned copy rebuilt under a new name: a repair, not an edit. Undoing past it
+  // would bring back the missing path (plan risk R7, accepted as rare).
+  'REPAIR_REONED_PATHS',
   // The startup state adopting the app-wide sound defaults once they arrive
   // (store.ts): a baseline, like a project being created, not an edit.
   'ADOPT_APP_SOUND_DEFAULTS',

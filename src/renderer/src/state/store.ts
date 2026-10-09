@@ -1,4 +1,5 @@
 import { TYPE_ORDER, stemKey, type BusId, type Rifff, type SoundType } from '@shared/types'
+import { applyReonedRepair } from '@shared/reonedRepair'
 import { sqrtGain } from '@shared/mixGain'
 import {
   DEFAULT_REVERB,
@@ -724,6 +725,12 @@ export type Action =
         phaseSourcePath?: string
         phaseBars?: number
       }[]
+    }
+  | {
+      /** A missing re-oned copy rebuilt under a new name (reonedRepairOnOpen.ts's retry, in
+       * ReonedCopyMissingNotice.tsx). Transient: a repair, not an undo step (history.ts). */
+      type: 'REPAIR_REONED_PATHS'
+      results: { path: string; bakedPath: string; durationSec: number }[]
     }
   | {
       type: 'PASTE_RIFFF'
@@ -1584,6 +1591,17 @@ export function reducer(state: AppState, action: Action): AppState {
         }
       }
       return { ...state, rifffs, off }
+    }
+
+    // A missing re-oned copy came back under a new name. A repair is not a phase edit: the
+    // copy holds the same rotation of the same original, so `off` and the lineage are untouched.
+    // Unlike APPLY_BAKE, it applies to every riff naming the path: they all named one missing
+    // file, and it is the same audio again.
+    case 'REPAIR_REONED_PATHS': {
+      const { rifffs } = applyReonedRepair(state.rifffs, [
+        action.results.map((r) => ({ ...r, status: 'rebuilt' as const }))
+      ])
+      return rifffs === state.rifffs ? state : { ...state, rifffs: rifffs as AppState['rifffs'] }
     }
 
     // Adds a fresh, independent rifff instance (new groupId, same stem file paths

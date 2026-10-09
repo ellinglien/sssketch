@@ -677,4 +677,26 @@ describe('the arrangement map', () => {
     expect(history.present.mode).toBe('map')
     expect(history.present.automationLanes).toBe(true)
   })
+
+  it('a re-oned copy repair is not an undo step (REPAIR_REONED_PATHS is transient)', () => {
+    const onCopy: Rifff = {
+      ...rifff,
+      stems: [{ ...rifff.stems[0], path: '/b/0123456789abcdef0123456789abcdef.baked.wav' }]
+    }
+    let h = createHistoryState(initialState)
+    h = historyReducer(h, { type: 'ADD_TO_SHELF', rifff: onCopy })
+    const before = h.past.length
+    h = historyReducer(h, {
+      type: 'REPAIR_REONED_PATHS',
+      results: [
+        {
+          path: '/b/0123456789abcdef0123456789abcdef.baked.wav',
+          bakedPath: '/b/ffffffffffffffffffffffffffffffff.baked.wav',
+          durationSec: 1
+        }
+      ]
+    })
+    expect(h.present.rifffs.r1.stems[0].path).toBe('/b/ffffffffffffffffffffffffffffffff.baked.wav')
+    expect(h.past).toHaveLength(before)
+  })
 })

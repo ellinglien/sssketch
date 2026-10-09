@@ -103,8 +103,10 @@ export function applyReonedRepair(
     .map(([path, reason]) => ({ path, reason }))
   if (moved.size === 0) return { rifffs, missing: stillMissing }
   const next: Record<string, Rifff> = {}
+  let anyTouched = false
   for (const [groupId, rifff] of Object.entries(rifffs)) {
     const touched = rifff.stems.some((s) => moved.has(s.path))
+    anyTouched ||= touched
     next[groupId] = touched
       ? {
           ...rifff,
@@ -115,5 +117,5 @@ export function applyReonedRepair(
         }
       : rifff
   }
-  return { rifffs: next, missing: stillMissing }
+  return { rifffs: anyTouched ? next : rifffs, missing: stillMissing }
 }
