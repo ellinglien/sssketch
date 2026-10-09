@@ -54,7 +54,7 @@ import {
   beforeQuitPlan,
   type SaveBeforeQuitResult
 } from './saveBeforeQuit'
-import { stemJamsForPaths } from './stemJams'
+import { jamNamesFor, stemJamsForPaths } from './stemJams'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { setStemMetadataDurationLookup } from './reonedRebuild'
 import { registerReonedCopiesIpc } from './reonedCopiesIpc'
@@ -1101,12 +1101,16 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('riff-library-resolve-riff', (_event, riffCID: string) => resolveRiff(riffCID))
 
-  // Which jam each library stem file belongs to: Discover aligns candidates from a seed's
-  // own jam to the seed's rotation (src/shared/discoverSeedPhase.ts). A seed's few stems,
-  // one query per db.
-  ipcMain.handle('riff-library-stem-jams', (_event, paths: string[]) =>
-    stemJamsForPaths(candidateDbsForRiff(), paths)
-  )
+  // Which jam each library stem file belongs to, and the jams' names: Discover aligns
+  // candidates from a seed's own jam to the seed's rotation (src/shared/discoverSeedPhase.ts).
+  // The jam is the riff index's, as on every candidate (stemJams.ts); a seed's few stems.
+  ipcMain.handle('riff-library-stem-jams', async (_event, paths: string[]) => {
+    const jams = await stemJamsForPaths(
+      paths,
+      async (path) => (await findRiffForStemPath(path))?.jamCID ?? null
+    )
+    return { jams, names: jamNamesFor(candidateDbsForRiff(), Object.values(jams)) }
+  })
 
   ipcMain.handle('riff-library-resolve-riff-with-context', (_event, riffCID: string) =>
     resolveRiffWithContext(riffCID)

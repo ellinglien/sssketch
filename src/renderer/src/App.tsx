@@ -2361,10 +2361,8 @@ function Frame(): React.JSX.Element {
     let seedPhase: DiscoverSeedPhase | null = null
     try {
       const originals = seedRifff.stems.map((stem) => phaseLineage(stem).sourcePath)
-      seedPhase = seedPhaseOfStems(
-        seedRifff.stems,
-        await window.rifffApi.riffLibraryStemJams(originals)
-      )
+      const { jams, names } = await window.rifffApi.riffLibraryStemJams(originals)
+      seedPhase = seedPhaseOfStems(seedRifff.stems, jams, names)
     } catch (err) {
       console.error("App: couldn't look up the Discover seed's jams:", err)
       seedPhase = seedPhaseOfStems(seedRifff.stems, {})

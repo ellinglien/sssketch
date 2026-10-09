@@ -851,8 +851,11 @@ const api = {
     ipcRenderer.invoke('riff-library-resolve-riff-with-context', riffCID),
   riffLibraryDownloadMissingStems: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
     ipcRenderer.invoke('riff-library-download-missing-stems', riffCID),
-  /** path -> the jam (OwnerJamCID) of each library stem file a library knows. */
-  riffLibraryStemJams: (paths: string[]): Promise<Record<string, string>> =>
+  /** path -> the jam of each library stem file the riff index knows (the jam of the riff it
+   * plays from, as a Discover candidate's jamCID), and those jams' names. */
+  riffLibraryStemJams: (
+    paths: string[]
+  ): Promise<{ jams: Record<string, string>; names: Record<string, string> }> =>
     ipcRenderer.invoke('riff-library-stem-jams', paths),
   saveDiscoveredRifff: (
     members: {

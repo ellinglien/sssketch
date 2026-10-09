@@ -22,7 +22,7 @@ describe('discoverSeedPhase', () => {
       '/lib/stems/x/s1': 'jamA',
       '/lib/stems/x/s2': 'jamA'
     })
-    expect(phase).toEqual({ byJam: { jamA: 1.5 }, byStem: { s1: 1.5, s2: 1.5 } })
+    expect(phase).toEqual({ byJam: { jamA: 1.5 }, byStem: { s1: 1.5, s2: 1.5 }, jamNames: {} })
   })
 
   it('keeps each jam to its own stems, for a seed collaged from several jams', () => {
@@ -42,7 +42,37 @@ describe('discoverSeedPhase', () => {
   })
 
   it('still knows the seed stems themselves when no library knows their jam', () => {
-    expect(discoverSeedPhase([copy('s1', 1.5)], {})).toEqual({ byJam: {}, byStem: { s1: 1.5 } })
+    expect(discoverSeedPhase([copy('s1', 1.5)], {})).toEqual({
+      byJam: {},
+      byStem: { s1: 1.5 },
+      jamNames: {}
+    })
+  })
+
+  // The discovered room holds kept groups: stems of many jams, some already baked to another
+  // seed's rotation (a kept aligned candidate is a new StemCID with rotated audio). The Shared
+  // Feed's jams hold riffs posted from many jams. Neither shares a clock, so rotating their
+  // other stems by this seed's rotation would only rotate them a second time, or at random.
+  it('never keeps a rotation for the discovered room or a Shared Feed jam', () => {
+    const phase = discoverSeedPhase([copy('s1', 1.5), copy('s2', 1.5), copy('s3', 0.5)], {
+      '/lib/stems/x/s1': 'discovered',
+      '/lib/stems/x/s2': 'shared:wren',
+      '/lib/stems/x/s3': 'jamA'
+    })
+    expect(phase?.byJam).toEqual({ jamA: 0.5 })
+    expect(candidatePhaseBars(phase, { stemCID: 'other', jamCID: 'discovered' })).toBeNull()
+    expect(candidatePhaseBars(phase, { stemCID: 'other', jamCID: 'shared:wren' })).toBeNull()
+    // The seed's own stems still carry their own rotation, wherever they sit.
+    expect(candidatePhaseBars(phase, { stemCID: 's1', jamCID: 'discovered' })).toBe(1.5)
+  })
+
+  it("names the seed's jams, for a notice about a stem that couldn't be lined up", () => {
+    const phase = discoverSeedPhase(
+      [copy('s1', 1.5)],
+      { '/lib/stems/x/s1': 'jamA' },
+      { jamA: 'night bus', jamZ: 'unrelated' }
+    )
+    expect(phase?.jamNames).toEqual({ jamA: 'night bus' })
   })
 })
 
