@@ -26,11 +26,19 @@ import {
 } from '../audio/previewLoop'
 import { pauseArrangementBeforeShelfPreview } from '../audio/shelfPreviewHandoff'
 import { classifyStems } from '../audio/classifyStems'
-import { buildImportedRifff, importedStemVolumes } from '../audio/importResolvedRiff'
+import {
+  buildImportedRifff,
+  importedStemVolumes,
+  rotateJoiningStems
+} from '../audio/importResolvedRiff'
+import { evictStemAnalysis } from '../audio/evictStemAnalysis'
+import { showReoneNotice } from '../state/reoneNotice'
+import { lateStemsNotAddedText } from '@shared/reoneNotices'
 import {
   usePlaying,
   useDispatch,
   useAppState,
+  getStateSnapshot,
   useRiffFavourites,
   useRiffFavouritesActions
 } from '../state/StoreContext'
@@ -1556,12 +1564,19 @@ export function LibraryBrowser({
    * through riffLibraryStore.ts's riff-library-* channels either way; only
    * which underlying root is currently active changes what the resulting
    * riff should be labeled as having come from. */
-  function importResolvedRiff(
+  //
+  // A merge into a riff that was re-oned since its first import bakes the
+  // new stems to the riff's rotation first (rotateJoiningStems), all or
+  // nothing: stems that can't be baked are left out, with a notice, rather
+  // than joining at their raw phase ("only some stems rotated", B1 path 2 of
+  // the 2026-10-08 call triage).
+  async function importResolvedRiff(
     riffCID: string,
     resolved: RiffLibraryResolvedRiff
-  ): { groupId: string; rifff: Rifff } | null {
+  ): Promise<{ groupId: string; rifff: Rifff } | null> {
     const existingGroupId = importedRiffGroupIds.get(riffCID)
-    const existing = existingGroupId ? appState.rifffs[existingGroupId] : undefined
+    // The live state, not this render's: downloads were awaited on the way here.
+    const existing = existingGroupId ? getStateSnapshot().rifffs[existingGroupId] : undefined
     const result = buildImportedRifff(
       riffCID,
       resolved,
@@ -1570,8 +1585,28 @@ export function LibraryBrowser({
       isOwnRiffLibrary ? 'riff library' : 'lore library'
     )
     if (!result) return null
-    const { groupId, rifff, newStemSlots } = result
+    const { groupId, newStemSlots } = result
+    let rifff = result.rifff
     if (newStemSlots.length === 0 && existing) return { groupId, rifff }
+    if (existing) {
+      const joining = rifff.stems.filter((s) => newStemSlots.includes(s.slot))
+      const rotated = await rotateJoiningStems(existing, joining, (jobs) =>
+        window.rifffApi.bakeOffset(jobs)
+      )
+      if (!rotated) {
+        showReoneNotice(lateStemsNotAddedText(existing.name, joining.length))
+        return { groupId, rifff: existing }
+      }
+      evictStemAnalysis(rotated.filter((s) => !joining.includes(s)).map((s) => s.path))
+      // Merged onto the riff as it is now: the bake was awaited.
+      const latest = getStateSnapshot().rifffs[groupId] ?? existing
+      const present = new Set(latest.stems.map((s) => s.slot))
+      rifff = {
+        ...latest,
+        key: rifff.key,
+        stems: [...latest.stems, ...rotated.filter((s) => !present.has(s.slot))]
+      }
+    }
 
     dispatch({
       type: 'ADD_TO_SHELF',
@@ -1712,7 +1747,7 @@ export function LibraryBrowser({
     setBusy('importing rifff…')
     try {
       const toImport = await ensureStemsDownloaded(selectedRiffCID, resolvedRiff)
-      const result = importResolvedRiff(selectedRiffCID, toImport)
+      const result = await importResolvedRiff(selectedRiffCID, toImport)
       if (result) onImported([result.groupId])
     } finally {
       setBusy(null)
@@ -1741,7 +1776,7 @@ export function LibraryBrowser({
               : await window.rifffApi.riffLibraryResolveRiff(riffCID)
           if (resolved) {
             const toImport = await ensureStemsDownloaded(riffCID, resolved)
-            const result = importResolvedRiff(riffCID, toImport)
+            const result = await importResolvedRiff(riffCID, toImport)
             if (result) {
               groupIds.push(result.groupId)
               rifffs.push(result.rifff)

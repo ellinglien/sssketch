@@ -2,8 +2,16 @@ import type { RiffLibraryResolvedRiff } from '@shared/riffLibraryTypes'
 import { instrumentMaskToSoundType } from '@shared/riffLibraryTypes'
 import { guessSoundTypeFromPresetName } from '@shared/presetNames'
 import { friendlyRiffName } from '@shared/friendlyRiffName'
-import { stemKey, type Rifff } from '@shared/types'
+import { stemKey, type Rifff, type Stem } from '@shared/types'
 import { sqrtGain } from '@shared/mixGain'
+import {
+  bakeToPhaseJob,
+  matchBakeResults,
+  phaseLineage,
+  rotationSecForBars,
+  sharedPhaseBars,
+  type ReoneBakeJob
+} from '@shared/reonedRotation'
 
 /**
  * The committed volumes for stems added by a library import.
@@ -115,4 +123,53 @@ export function buildImportedRifff(
       }
 
   return { groupId, rifff, newStemSlots: newStems.map((s) => s.slot) }
+}
+
+export type JoiningBake = (
+  jobs: ReoneBakeJob[]
+) => Promise<{ path: string; bakedPath: string; durationSec: number }[]>
+
+/** Stems joining a riff that is already re-oned (a later import of a riff whose stems were
+ * still downloading when it was re-oned) are baked to the riff's rotation before they join, so
+ * the riff stays at one phase. Without it they came in at their raw Endlesss phase: "only some
+ * stems rotated" (the triage of the 2026-10-08 call, B1 path 2).
+ *
+ * Bakes through the re-oned copies path (`bakeToPhaseJob`: recipe-named, so a copy some other
+ * riff or audition already made is reused), as one all-or-nothing batch. Returns the stems to
+ * add: as they are when the riff carries no rotation (or it wraps to none for a stem), rotated
+ * with their lineage set otherwise, and null when the bake fails or comes back short, in which
+ * case none of them may join. Adopting is the caller's: this edits nothing. */
+export async function rotateJoiningStems(
+  existing: Rifff,
+  joining: readonly Stem[],
+  bake: JoiningBake
+): Promise<Stem[] | null> {
+  const bars = sharedPhaseBars(existing.stems)
+  if (bars === null) return [...joining]
+  const toBake = joining.filter((stem) => rotationSecForBars(bars, stem) !== 0)
+  if (toBake.length === 0) return [...joining]
+  let results: Awaited<ReturnType<JoiningBake>>
+  try {
+    results = await bake(toBake.map((stem) => bakeToPhaseJob(stem, bars)))
+  } catch (err) {
+    console.error('rotateJoiningStems: bake failed:', err)
+    return null
+  }
+  const matched = matchBakeResults(
+    toBake.map((stem) => stem.path),
+    results
+  )
+  if (!matched) return null
+  const baked = new Map(toBake.map((stem, i) => [stem, matched[i]]))
+  return joining.map((stem) => {
+    const result = baked.get(stem)
+    if (!result) return stem
+    return {
+      ...stem,
+      path: result.bakedPath,
+      durationSec: result.durationSec,
+      phaseSourcePath: phaseLineage(stem).sourcePath,
+      phaseBars: bars
+    }
+  })
 }

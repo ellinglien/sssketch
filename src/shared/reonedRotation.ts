@@ -62,6 +62,67 @@ export function reoneJob(stem: Stem, steps: number, snapDiv: number): ReoneBakeJ
   }
 }
 
+/** The rotation a riff's stems share, in bars from their originals (unwrapped, as phaseBars
+ * accumulates): the value most of its stems carry, the earlier stem winning a tie. null when that
+ * is no rotation. A stem that joins the riff later (a stem that finished downloading after a
+ * re-one) is baked to this, so the riff stays at one phase. Mixed values only come from per-stem
+ * offsets or a 1.5.0-era partial bake; the majority is the best guess at the riff's phase. */
+export function sharedPhaseBars(
+  stems: readonly Pick<Stem, 'path' | 'phaseSourcePath' | 'phaseBars'>[]
+): number | null {
+  const counts = new Map<number, number>()
+  let best: number | null = null
+  let bestCount = 0
+  for (const stem of stems) {
+    const bars = phaseLineage(stem).bars
+    const count = (counts.get(bars) ?? 0) + 1
+    counts.set(bars, count)
+    if (count > bestCount) {
+      best = bars
+      bestCount = count
+    }
+  }
+  return best === null || best === 0 ? null : best
+}
+
+/** The job that bakes `stem` to `bars` in total from its original: the same shape as reoneJob,
+ * for a target rotation rather than a step. A raw stem's job rotates its own file, which main
+ * names by that recipe; a re-oned stem's job carries the recipe from its original at the total.
+ * So a stem baked to a phase some other riff or audition already made reuses that copy. */
+export function bakeToPhaseJob(stem: Stem, bars: number): ReoneBakeJob {
+  const lineage = phaseLineage(stem)
+  const job = { path: stem.path, rotationSec: rotationSecForBars(bars - lineage.bars, stem) }
+  if (lineage.sourcePath === stem.path) return job
+  return {
+    ...job,
+    recipe: { sourcePath: lineage.sourcePath, rotationSec: rotationSecForBars(bars, stem) }
+  }
+}
+
+/** Each path's own bake result, in `paths` order. Results don't come back in job order (WAVs
+ * render before LORE stems), so they are matched by path; a path several jobs share is handed
+ * its results in the order those jobs were sent. null unless every path has exactly one result:
+ * a bake is all or nothing. */
+export function matchBakeResults<T extends { path: string }>(
+  paths: readonly string[],
+  results: readonly T[]
+): T[] | null {
+  if (results.length !== paths.length) return null
+  const byPath = new Map<string, T[]>()
+  for (const result of results) {
+    const queue = byPath.get(result.path) ?? []
+    queue.push(result)
+    byPath.set(result.path, queue)
+  }
+  const matched: T[] = []
+  for (const path of paths) {
+    const result = byPath.get(path)?.shift()
+    if (result === undefined) return null
+    matched.push(result)
+  }
+  return matched
+}
+
 /** The rotations a rebuild of a missing copy may have been made with, most likely first
  * (decision D5 in the plan): from the stem's current durationSec, then from LORE metadata
  * (barLength × 60/bpm × 4, how riffLibraryStore/endlesssApi set durationSec before APPLY_BAKE

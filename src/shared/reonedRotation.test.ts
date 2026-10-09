@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import type { Stem } from './types'
 import {
+  bakeToPhaseJob,
+  matchBakeResults,
   nextPhaseBars,
   phaseLineage,
   rebuildRotationCandidates,
   reoneJob,
-  rotationSecForBars
+  rotationSecForBars,
+  sharedPhaseBars
 } from './reonedRotation'
 
 const stem = (over: Partial<Stem> = {}): Stem => ({
@@ -89,5 +92,78 @@ describe('rebuildRotationCandidates', () => {
     const s = stem({ phaseSourcePath: '/src/one.wav', phaseBars: 1 })
     expect(rebuildRotationCandidates(s, 120)).toEqual([2])
     expect(rebuildRotationCandidates(s, 0)).toEqual([2])
+  })
+})
+
+describe('sharedPhaseBars', () => {
+  const copy = (phaseBars: number, name = 'x'): Stem =>
+    stem({ path: `/lib/.bakes/${name}.baked.wav`, phaseSourcePath: `/src/${name}.wav`, phaseBars })
+
+  it('is null for a riff never re-oned', () => {
+    expect(sharedPhaseBars([stem(), stem({ path: '/src/two.wav' })])).toBeNull()
+    expect(sharedPhaseBars([])).toBeNull()
+  })
+
+  it('is the rotation the riff was re-oned by', () => {
+    expect(sharedPhaseBars([copy(1.5, 'a'), copy(1.5, 'b')])).toBe(1.5)
+  })
+
+  it('takes the rotation most stems carry, and the earlier stem on a tie', () => {
+    expect(sharedPhaseBars([copy(1, 'a'), copy(0.5, 'b'), copy(0.5, 'c')])).toBe(0.5)
+    expect(sharedPhaseBars([copy(1, 'a'), copy(0.5, 'b')])).toBe(1)
+  })
+
+  it('reads the lineage the way a re-one does: a stale lineage on a non-copy counts as unrotated', () => {
+    const stale = stem({ path: '/stretch/one.wav', phaseSourcePath: '/src/one.wav', phaseBars: 1 })
+    expect(sharedPhaseBars([stale])).toBeNull()
+  })
+
+  it('is null when most stems are back at their original phase', () => {
+    expect(sharedPhaseBars([copy(0, 'a'), copy(0, 'b'), copy(1, 'c')])).toBeNull()
+  })
+})
+
+describe('bakeToPhaseJob', () => {
+  it('a raw stem: rotates its own file by the total, named by its recipe in main', () => {
+    expect(bakeToPhaseJob(stem(), 1.5)).toEqual({ path: '/src/one.wav', rotationSec: 3 })
+  })
+
+  it('a re-oned stem: the step from where it is, plus the recipe from the original at the total', () => {
+    const s = stem({
+      path: '/lib/.bakes/x.baked.wav',
+      phaseSourcePath: '/src/one.wav',
+      phaseBars: 1
+    })
+    expect(bakeToPhaseJob(s, 1.5)).toEqual({
+      path: '/lib/.bakes/x.baked.wav',
+      rotationSec: 1,
+      recipe: { sourcePath: '/src/one.wav', rotationSec: 3 }
+    })
+  })
+})
+
+describe('matchBakeResults', () => {
+  const result = (path: string, bakedPath: string): { path: string; bakedPath: string } => ({
+    path,
+    bakedPath
+  })
+
+  it('matches each path to its own result, whatever order they came back in', () => {
+    expect(
+      matchBakeResults(['/a', '/b'], [result('/b', '/b.baked'), result('/a', '/a.baked')])
+    ).toEqual([result('/a', '/a.baked'), result('/b', '/b.baked')])
+  })
+
+  it('hands a shared path its results in the order the jobs were sent', () => {
+    expect(
+      matchBakeResults(['/a', '/a'], [result('/a', '/one.baked'), result('/a', '/two.baked')])
+    ).toEqual([result('/a', '/one.baked'), result('/a', '/two.baked')])
+  })
+
+  it('is null when any path has no result, or results are left over', () => {
+    expect(matchBakeResults(['/a', '/b'], [result('/a', '/a.baked')])).toBeNull()
+    expect(
+      matchBakeResults(['/a'], [result('/a', '/a.baked'), result('/c', '/c.baked')])
+    ).toBeNull()
   })
 })
