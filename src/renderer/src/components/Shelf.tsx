@@ -454,23 +454,6 @@ export function Shelf({
               </button>
             )
           })}
-          {crossPair.length === 2 && (
-            <button
-              onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
-              aria-label="Cross the two selected Shelf riffs"
-              style={{
-                height: 28,
-                borderRadius: 0,
-                padding: '0 14px',
-                fontSize: 12,
-                border: '2px solid var(--ra-border-strong)',
-                background: 'var(--ra-bg-row-active)',
-                color: 'var(--ra-text)'
-              }}
-            >
-              cross riffs
-            </button>
-          )}
           <div
             onDragOver={(e) => {
               e.preventDefault()
@@ -507,20 +490,12 @@ export function Shelf({
               and the tour is capped at seven steps so discover gets no step
               of its own to anchor. Keeps the same gap the row itself uses,
               so wrapping them changes nothing visually. */}
-          <div data-tour-id="tour-import" style={{ display: 'flex', gap: 5 }}>
-            {LIBRARY_ENTRY_POINTS.map((entry) => (
+          <div style={{ display: 'flex', gap: 5 }}>
+            {crossPair.length === 2 && (
               <button
-                key={entry.id}
-                onClick={() => onOpenLibrary(entry.id)}
-                data-tooltip={entry.tooltip}
+                onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
+                aria-label="Cross the two selected Shelf riffs"
                 style={{
-                  // Direct follow-up report, 2026-09-17 (screenshot): the first
-                  // "a bunch bigger" pass (height: 36) pushed this row's own
-                  // content just past its maxHeight: 100 cap above, triggering
-                  // an unwanted scrollbar on a row with nothing actually left
-                  // to scroll to -- 28 is shorter than TILE_SIZE (42, the "+"
-                  // drop-zone/tile height next to it), so it can never be the
-                  // tallest thing in this row's own flex-wrap line.
                   height: 28,
                   borderRadius: 0,
                   padding: '0 14px',
@@ -530,9 +505,36 @@ export function Shelf({
                   color: 'var(--ra-text)'
                 }}
               >
-                {entry.label}
+                cross riffs
               </button>
-            ))}
+            )}
+            <div data-tour-id="tour-import" style={{ display: 'flex', gap: 5 }}>
+              {LIBRARY_ENTRY_POINTS.map((entry) => (
+                <button
+                  key={entry.id}
+                  onClick={() => onOpenLibrary(entry.id)}
+                  data-tooltip={entry.tooltip}
+                  style={{
+                    // Direct follow-up report, 2026-09-17 (screenshot): the first
+                    // "a bunch bigger" pass (height: 36) pushed this row's own
+                    // content just past its maxHeight: 100 cap above, triggering
+                    // an unwanted scrollbar on a row with nothing actually left
+                    // to scroll to -- 28 is shorter than TILE_SIZE (42, the "+"
+                    // drop-zone/tile height next to it), so it can never be the
+                    // tallest thing in this row's own flex-wrap line.
+                    height: 28,
+                    borderRadius: 0,
+                    padding: '0 14px',
+                    fontSize: 12,
+                    border: '1px solid var(--ra-border-strong)',
+                    background: 'var(--ra-bg-row-active)',
+                    color: 'var(--ra-text)'
+                  }}
+                >
+                  {entry.label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
       </div>

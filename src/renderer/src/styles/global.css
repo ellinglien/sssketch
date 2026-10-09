@@ -171,14 +171,14 @@ textarea:focus-visible,
   outline-offset: -1px;
 }
 
-/* Riff tiles are circular artwork, so their selection should feather around
- * the glyph instead of drawing a hard square behind it. Selection stays a
- * neutral gray; Shelf playback gets its own restrained playhead-colored halo
- * so "selected" and "currently sounding" remain separate states. */
+/* Riff selection keeps the original quiet square treatment, with only a
+ * small corner radius and short feather at its edges. Shelf playback gets a
+ * separate restrained playhead-colored feather so selected and sounding
+ * remain distinct without the concentric-ring/corona effect. */
 .ra-riff-tile {
   position: relative;
   overflow: visible;
-  border-radius: 50%;
+  border-radius: 4px;
   background: transparent;
   transition:
     opacity 80ms ease,
@@ -186,83 +186,19 @@ textarea:focus-visible,
     box-shadow 120ms ease;
 }
 
-.ra-riff-tile::before {
-  content: '';
-  position: absolute;
-  border-radius: 50%;
-  pointer-events: none;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
 .ra-riff-tile[data-selected='true'] {
-  background: radial-gradient(
-    circle at center,
-    var(--ra-bg-riff-selected) 0%,
-    var(--ra-bg-riff-selected) 56%,
-    color-mix(in srgb, var(--ra-bg-riff-selected) 78%, transparent) 76%,
-    transparent 100%
-  );
-}
-
-.ra-sketch-riff-tile[data-selected='true'] {
-  box-shadow: none;
-}
-
-.ra-sketch-riff-tile::before {
-  inset: -18px;
-}
-
-.ra-sketch-riff-tile[data-selected='true']::before {
-  opacity: 1;
-  background: radial-gradient(
-    circle,
-    color-mix(in srgb, var(--ra-text-2) 25%, transparent) 0%,
-    color-mix(in srgb, var(--ra-text-2) 23%, transparent) 58%,
-    color-mix(in srgb, var(--ra-text-2) 14%, transparent) 76%,
-    transparent 100%
-  );
-}
-
-.ra-shelf-riff-tile[data-selected='true'] {
-  box-shadow: none;
-}
-
-.ra-shelf-riff-tile::before {
-  inset: -11px;
-}
-
-.ra-shelf-riff-tile[data-selected='true']::before {
-  opacity: 1;
-  background: radial-gradient(
-    circle,
-    color-mix(in srgb, var(--ra-text-2) 22%, transparent) 0%,
-    color-mix(in srgb, var(--ra-text-2) 19%, transparent) 58%,
-    color-mix(in srgb, var(--ra-text-2) 11%, transparent) 76%,
-    transparent 100%
-  );
+  background: var(--ra-bg-riff-selected);
+  box-shadow: 0 0 7px 1px color-mix(in srgb, var(--ra-text-2) 13%, transparent);
 }
 
 .ra-shelf-riff-tile[data-previewing='true'] {
-  box-shadow: none;
+  box-shadow: 0 0 7px 1px color-mix(in srgb, var(--ra-playhead) 24%, transparent);
 }
 
-.ra-shelf-riff-tile[data-previewing='true']::before {
-  opacity: 1;
-  background: radial-gradient(
-    circle,
-    color-mix(in srgb, var(--ra-playhead) 31%, transparent) 0%,
-    color-mix(in srgb, var(--ra-playhead) 27%, transparent) 58%,
-    color-mix(in srgb, var(--ra-playhead) 15%, transparent) 76%,
-    transparent 100%
-  );
-}
-
-/* Preserve keyboard focus, but follow the glyph's round shape and use a
- * quieter stroke than the app-wide rectangular button focus treatment. */
+/* Preserve keyboard focus with the same gently-rounded geometry. */
 .ra-riff-tile:focus-visible {
   outline: 1px solid color-mix(in srgb, var(--ra-text-2) 42%, transparent);
-  outline-offset: 3px;
+  outline-offset: 2px;
 }
 
 /* Immediate custom tooltip for icon-only buttons -- direct request,

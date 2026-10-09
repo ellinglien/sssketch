@@ -398,6 +398,7 @@ export function SketchStrip({
         dispatch({ type: 'SEQUENCE_RIFFFS', groupIds: withoutDragged })
       }}
       style={{
+        position: 'relative',
         display: 'flex',
         alignItems: 'center',
         gap: TILE_GAP,
@@ -406,28 +407,22 @@ export function SketchStrip({
       }}
     >
       {crossPair.length === 2 && (
-        <div
+        <button
+          onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
           style={{
-            order: -100,
-            width: '100%',
-            display: 'flex',
-            justifyContent: 'flex-end',
-            gap: 6
+            position: 'absolute',
+            top: 16,
+            right: 16,
+            zIndex: 3,
+            height: 30,
+            padding: '0 16px',
+            border: '2px solid var(--ra-border-strong)',
+            background: 'var(--ra-bg-row-active)',
+            color: 'var(--ra-text)'
           }}
         >
-          <button
-            onClick={() => onCrossRiffs([crossPair[0], crossPair[1]])}
-            style={{
-              height: 30,
-              padding: '0 16px',
-              border: '2px solid var(--ra-border-strong)',
-              background: 'var(--ra-bg-row-active)',
-              color: 'var(--ra-text)'
-            }}
-          >
-            cross riffs
-          </button>
-        </div>
+          cross riffs
+        </button>
       )}
       {sequence.map((rifff, index) => {
         const start = rifff.startBar ?? 0
