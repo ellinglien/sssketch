@@ -56,6 +56,7 @@ import {
 } from './saveBeforeQuit'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { setStemMetadataDurationLookup } from './reonedRebuild'
+import { registerReonedCopiesIpc } from './reonedCopiesIpc'
 import { createEngineStopper } from './engineStop'
 import { createMetronomeSetting } from './metronomeSetting'
 import { claimSingleInstance } from './singleInstance'
@@ -1367,6 +1368,7 @@ app.whenReady().then(async () => {
   ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) =>
     bakeOffset(jobs, bakeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
   )
+  registerReonedCopiesIpc(ipcMain)
 
   ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!

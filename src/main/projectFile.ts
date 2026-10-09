@@ -317,12 +317,12 @@ export function duplicateSketchAsNewVersion(
   return { name: newName, ...saveProjectToLibrary(newName, json) }
 }
 
-const AUTOSAVE_FILENAME = 'autosave.sssketchproj'
+export const AUTOSAVE_FILENAME = 'autosave.sssketchproj'
 const AUTOSAVE_SKETCH_FILENAME = 'autosaveSketch.json'
 // One kept previous snapshot (and its sidecar): an offered snapshot nobody decided on, moved
 // aside when this session needed the recovery file. Bounded at one: a second move aside
 // replaces it.
-const AUTOSAVE_PREVIOUS_FILENAME = 'autosave.previous.sssketchproj'
+export const AUTOSAVE_PREVIOUS_FILENAME = 'autosave.previous.sssketchproj'
 const AUTOSAVE_PREVIOUS_SKETCH_FILENAME = 'autosaveSketch.previous.json'
 
 function autosavePath(): string {
