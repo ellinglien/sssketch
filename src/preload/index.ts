@@ -851,6 +851,9 @@ const api = {
     ipcRenderer.invoke('riff-library-resolve-riff-with-context', riffCID),
   riffLibraryDownloadMissingStems: (riffCID: string): Promise<RiffLibraryResolvedRiff | null> =>
     ipcRenderer.invoke('riff-library-download-missing-stems', riffCID),
+  /** path -> the jam (OwnerJamCID) of each library stem file a library knows. */
+  riffLibraryStemJams: (paths: string[]): Promise<Record<string, string>> =>
+    ipcRenderer.invoke('riff-library-stem-jams', paths),
   saveDiscoveredRifff: (
     members: {
       path: string
