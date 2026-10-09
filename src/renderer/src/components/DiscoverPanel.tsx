@@ -485,7 +485,11 @@ import {
 } from '@shared/radioCompanions'
 import { DiscoverSlotRow } from './DiscoverSlotRow'
 import { radioRowPlates } from '@shared/radioRowPlates'
-import { resolveCandidateStem, type ResolvedCandidateStem } from './discoverCandidateStem'
+import {
+  cancelDiscoverAlignments,
+  resolveCandidateStem,
+  type ResolvedCandidateStem
+} from './discoverCandidateStem'
 import type { DiscoverSeedPhase } from '@shared/discoverSeedPhase'
 import { useClaimUndo } from '../state/undoRouting'
 import {
@@ -8583,6 +8587,10 @@ export function DiscoverPanel({
   // same as the header's undo and redo, instead of the project's history
   // hidden under it (undoRouting.ts).
   useClaimUndo(undoDiscoverAction, redoDiscoverAction)
+
+  // Closing Discover drops the alignment bakes still queued, and silences
+  // their "couldn't line up" notices (discoverCandidateStem.ts).
+  useEffect(() => () => cancelDiscoverAlignments(), [])
 
   // While radio runs, the new row appears at once but silent, and joins at
   // the loop top: it is not previewing, so its roll queues as `joining`,

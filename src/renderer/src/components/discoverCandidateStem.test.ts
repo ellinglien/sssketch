@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   alignCandidateStem,
+  cancelDiscoverAlignments,
   peekResolvedCandidateStem,
   resolveCandidateStem,
   type ResolvedCandidateStem
@@ -8,6 +9,9 @@ import {
 import type { ReoneBakeJob } from '@shared/reonedRotation'
 import type { DiscoverCandidate } from '@shared/discoverCandidate'
 import { discoverSeedPhase } from '@shared/discoverSeedPhase'
+import { showReoneNotice } from '../state/reoneNotice'
+
+vi.mock('../state/reoneNotice', () => ({ showReoneNotice: vi.fn() }))
 
 const raw: ResolvedCandidateStem = {
   author: 'wren',
@@ -183,5 +187,60 @@ describe('resolveCandidateStem cache keying', () => {
       '/lib/stems/x/k6-stem.baked.wav'
     ])
     expect(bakes).toHaveLength(1)
+  })
+
+  describe('when Discover closes', () => {
+    // Each test names its jam, so the once-a-minute notice throttle of one can't hide another's.
+    const namedPhase = (jamName: string): ReturnType<typeof discoverSeedPhase> =>
+      discoverSeedPhase(
+        [
+          {
+            path: '/lib/.bakes/seed.baked.wav',
+            phaseSourcePath: '/lib/stems/x/seed',
+            phaseBars: 1.5,
+            barLength: 4
+          }
+        ],
+        { '/lib/stems/x/seed': 'jamA' },
+        { jamA: jamName }
+      )
+    const tick = (ms = 0): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
+
+    afterEach(() => vi.mocked(showReoneNotice).mockClear())
+
+    it('says so when an alignment fails while Discover is open', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      stubLibrary(async () => [])
+      expect(
+        await resolveCandidateStem(candidate('c1', 'c1-stem', 'jamA'), namedPhase('one'))
+      ).toBeNull()
+      expect(showReoneNotice).toHaveBeenCalledWith("couldn't line up a stem from one · skipped")
+    })
+
+    it('drops an alignment not yet baked, and says nothing', async () => {
+      const { bakes } = stubLibrary(async (jobs) =>
+        jobs.map((job) => ({ path: job.path, bakedPath: `${job.path}.baked.wav`, durationSec: 8 }))
+      )
+      const pending = resolveCandidateStem(candidate('c2', 'c2-stem', 'jamA'), namedPhase('two'))
+      await tick()
+      cancelDiscoverAlignments()
+      expect(await pending).toBeNull()
+      await tick(50)
+      expect(bakes).toEqual([])
+      expect(showReoneNotice).not.toHaveBeenCalled()
+    })
+
+    it('lets a bake in flight finish, and says nothing if it fails', async () => {
+      vi.spyOn(console, 'error').mockImplementation(() => {})
+      let settle: (results: unknown[]) => void = () => {}
+      const { bakes } = stubLibrary(() => new Promise((resolve) => (settle = resolve)))
+      const pending = resolveCandidateStem(candidate('c3', 'c3-stem', 'jamA'), namedPhase('three'))
+      await tick(50)
+      expect(bakes).toHaveLength(1)
+      cancelDiscoverAlignments()
+      settle([])
+      expect(await pending).toBeNull()
+      expect(showReoneNotice).not.toHaveBeenCalled()
+    })
   })
 })

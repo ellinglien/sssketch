@@ -150,10 +150,12 @@ export function resolveCandidateStem(
   const bars = candidatePhaseBars(phase, candidate)
   if (bars === null) return resolveRawCandidateStem(candidate)
   return cachedResolve(candidateKey(candidate, phase), async () => {
+    const session = alignSession
     const raw = await resolveRawCandidateStem(candidate)
-    if (!raw) return null
+    if (!raw || session !== alignSession) return null
     const aligned = await alignCandidateStem(raw, bars, bakeBatched)
-    if (!aligned) {
+    // Discover closed meanwhile: nobody is looking at this row, so no notice.
+    if (!aligned && session === alignSession) {
       const line = candidateNotAlignedText(phase?.jamNames[candidate.jamCID] ?? null)
       if (mayShowNotAligned(line)) showReoneNotice(line)
     }
@@ -169,6 +171,18 @@ const bakeOneBatched = createBakeBatcher<BakeBatchResult>((jobs) =>
 const bakeBatched: CandidateBake = async (jobs) => {
   const results = await Promise.all(jobs.map(bakeOneBatched))
   return results.every((result) => result !== null) ? (results as BakeBatchResult[]) : []
+}
+
+/** Bumped when Discover closes (cancelDiscoverAlignments): an alignment begun before it bakes
+ * nothing it hasn't started, and says nothing if it fails. */
+let alignSession = 0
+
+/** Discover is closing: drop the alignments not yet baking, so they let go of the `.bakes` lock
+ * sooner and nothing waits on them, and keep any that fail from saying so. A bake already
+ * running may finish. Each dropped resolve is null, so it leaves the cache. */
+export function cancelDiscoverAlignments(): void {
+  alignSession++
+  bakeOneBatched.cancel()
 }
 
 /** A failed alignment leaves its row unresolved, never out of phase, and says so: once a
