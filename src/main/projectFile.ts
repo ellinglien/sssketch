@@ -7,7 +7,8 @@ import {
   listLibrarySketches,
   nextVersionName,
   rotateBackupBeforeOverwrite,
-  libraryRootPath
+  libraryRootPath,
+  writeFileAtomically
 } from './projectLibrary'
 import { rememberExternalProject, renameKnownProject } from './reonedCopiesStore'
 import { noteSessionProjectText } from './reonedCopiesSession'
@@ -400,13 +401,15 @@ function setUndecidedAutosaveAside(): void {
  * calls to this after real edits, independent of the user's own explicit
  * Save (which goes through saveProjectAs above and clears this instead).
  * A previous session's snapshot still awaiting the user's decision is moved
- * aside first, not overwritten (setUndecidedAutosaveAside).
+ * aside first, not overwritten (setUndecidedAutosaveAside). Written to a
+ * temporary and renamed over, so a crash or a full disk midway leaves the
+ * last snapshot whole, and the re-oned cleanup's scan never reads half of one.
  */
 export function writeAutosave(json: string): void {
   setUndecidedAutosaveAside()
   noteSessionProjectText(json)
   try {
-    writeFileSync(autosavePath(), json, 'utf-8')
+    writeFileAtomically(autosavePath(), json)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`writeAutosave: failed to write ${autosavePath()}: ${message}`)

@@ -15,6 +15,20 @@ let userDataDir: string
 let musicDir: string
 
 const dialogPick = vi.hoisted(() => ({ path: '' }))
+// A write to a path matching `pattern` puts half its data there, then fails (a crash or a full
+// disk midway). Every other write passes through.
+const tornWrite = vi.hoisted(() => ({ pattern: null as RegExp | null }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  const writeFileSync: typeof actual.writeFileSync = (file, data, options) => {
+    if (tornWrite.pattern && typeof file === 'string' && tornWrite.pattern.test(file)) {
+      actual.writeFileSync(file, String(data).slice(0, Math.floor(String(data).length / 2)))
+      throw Object.assign(new Error('ENOSPC: no space left on device'), { code: 'ENOSPC' })
+    }
+    actual.writeFileSync(file, data, options)
+  }
+  return { ...actual, default: { ...actual, writeFileSync }, writeFileSync }
+})
 vi.mock('electron', () => ({
   app: {
     getPath: (name: string) => (name === 'music' ? musicDir : userDataDir)
@@ -285,6 +299,21 @@ describe('crash-recovery snapshot', () => {
     expect(pf.loadPreviousAutosave()).toBeNull()
     expect(existsSync(join(userDataDir, 'autosaveSketch.previous.json'))).toBe(false)
     expect(pf.loadAutosave()).toBe('{"new":1}')
+  })
+
+  it('an autosave that fails midway leaves the last one whole, for a recover or a scan to read', async () => {
+    const pf = await import('./projectFile')
+    pf.writeAutosave('{"whole":1}')
+    tornWrite.pattern = /autosave\.sssketchproj/
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      pf.writeAutosave(`{"next":"${'x'.repeat(100)}"}`)
+    } finally {
+      tornWrite.pattern = null
+      log.mockRestore()
+    }
+    expect(readFileSync(join(userDataDir, 'autosave.sssketchproj'), 'utf-8')).toBe('{"whole":1}')
+    expect(readdirSync(userDataDir).filter((f) => f.endsWith('.tmp'))).toEqual([])
   })
 
   it('a snapshot this session wrote itself, never offered, is replaced and deleted as before', async () => {

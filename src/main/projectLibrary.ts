@@ -440,7 +440,7 @@ export function restoreSketchBackup(
  * leaves the old file whole instead of a truncated project. Same directory,
  * so the rename is atomic on one volume. The temp name ends in .tmp, which
  * nothing that lists sketches or backups picks up. */
-function writeFileAtomically(path: string, data: Buffer): void {
+export function writeFileAtomically(path: string, data: Buffer | string): void {
   const tempPath = `${path}.${randomBytes(4).toString('hex')}.tmp`
   try {
     writeFileSync(tempPath, data)
