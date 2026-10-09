@@ -31,8 +31,9 @@ export function undoShortcutFor(e: UndoKeyEvent): 'undo' | 'redo' | null {
 }
 
 export interface UndoOwner {
-  undo: () => void
-  redo: () => void
+  /** `repeat`: the key is being held (KeyboardEvent.repeat). */
+  undo: (repeat?: boolean) => void
+  redo: (repeat?: boolean) => void
 }
 
 export interface UndoRouter {
@@ -69,22 +70,68 @@ export function createUndoRouter(): UndoRouter {
 /** The app's one router: App's Cmd+Z handler asks it before the project's history. */
 export const undoRouter = createUndoRouter()
 
+export interface RepeatGate {
+  /** Whether a press may run now. `repeat`: the key is being held. */
+  pass: (repeat: boolean) => boolean
+  /** The owner re-rendered: its handlers see the state the last press left. */
+  rendered: () => void
+}
+
 /**
- * Claims Cmd+Z for as long as the calling component is mounted. The handlers
- * may be fresh closures every render; the latest ones are always called,
- * and the claim itself is made once, so its place in the order holds.
+ * Holding Cmd+Z repeats the key faster than React re-renders, and an owner's
+ * handlers close over the state of their render (Discover's undo stack): two
+ * repeats before a render would both pop the same top snapshot. A repeat is
+ * let through only once the owner has rendered since the last press; a fresh
+ * press always is, so a press that changed nothing can't wedge the keys.
  */
-export function useClaimUndo(undo: () => void, redo: () => void): void {
-  const latest = useRef<UndoOwner>({ undo, redo })
+export function createRepeatGate(): RepeatGate {
+  let renderedSinceLastPress = true
+  return {
+    pass(repeat) {
+      if (repeat && !renderedSinceLastPress) return false
+      renderedSinceLastPress = false
+      return true
+    },
+    rendered() {
+      renderedSinceLastPress = true
+    }
+  }
+}
+
+/**
+ * Claims Cmd+Z while the calling component is mounted and `enabled`. The
+ * handlers may be fresh closures every render; the latest ones are always
+ * called, a held key waits for each render (createRepeatGate), and the claim
+ * itself is made once per enabling, so its place in the order holds.
+ */
+export function useClaimUndo(undo: () => void, redo: () => void, enabled = true): void {
+  const latest = useRef({ undo, redo })
+  const gate = useRef<RepeatGate | null>(null)
+  if (gate.current === null) gate.current = createRepeatGate()
   useEffect(() => {
     latest.current = { undo, redo }
+    gate.current?.rendered()
   })
-  useEffect(
-    () =>
-      undoRouter.claim({
-        undo: () => latest.current.undo(),
-        redo: () => latest.current.redo()
-      }),
-    []
-  )
+  useEffect(() => {
+    if (!enabled) return
+    return undoRouter.claim({
+      undo: (repeat = false) => {
+        if (gate.current?.pass(repeat)) latest.current.undo()
+      },
+      redo: (repeat = false) => {
+        if (gate.current?.pass(repeat)) latest.current.redo()
+      }
+    })
+  }, [enabled])
+}
+
+const nothing = (): void => {}
+
+/**
+ * Takes Cmd+Z away from the project while an overlay with no undo of its own
+ * is showing (the import view's browse mode), so the keys do nothing instead
+ * of undoing the arrangement hidden under it.
+ */
+export function useBlockUndo(enabled = true): void {
+  useClaimUndo(nothing, nothing, enabled)
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createUndoRouter, undoShortcutFor } from './undoRouting'
+import { createRepeatGate, createUndoRouter, undoShortcutFor } from './undoRouting'
 
 const key = (
   k: string,
@@ -87,5 +87,28 @@ describe('createUndoRouter', () => {
     release()
     release()
     expect(router.current()).toBe(discover)
+  })
+})
+
+describe('createRepeatGate', () => {
+  it('lets every fresh press through, rendered or not', () => {
+    const gate = createRepeatGate()
+    expect(gate.pass(false)).toBe(true)
+    expect(gate.pass(false)).toBe(true)
+  })
+
+  it('drops a held key repeating before the owner re-rendered, so it never reuses a stale stack', () => {
+    const gate = createRepeatGate()
+    expect(gate.pass(false)).toBe(true)
+    expect(gate.pass(true)).toBe(false)
+    expect(gate.pass(true)).toBe(false)
+    gate.rendered()
+    expect(gate.pass(true)).toBe(true)
+    expect(gate.pass(true)).toBe(false)
+  })
+
+  it('lets the first repeat through when nothing was undone since the last render', () => {
+    const gate = createRepeatGate()
+    expect(gate.pass(true)).toBe(true)
   })
 })

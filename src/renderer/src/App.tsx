@@ -2917,7 +2917,8 @@ function Frame(): React.JSX.Element {
   //
   // While Discover/radio or Cross is open it claims these keys (undoRouting.ts):
   // they drive that panel's own undo, not the project's, which would silently
-  // undo arrangement edits hidden under the overlay.
+  // undo arrangement edits hidden under the overlay. The import view's browse
+  // mode claims them to do nothing, for the same reason.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent): void {
       const action = undoShortcutFor({
@@ -2929,9 +2930,13 @@ function Frame(): React.JSX.Element {
       })
       if (action === null) return
       e.preventDefault()
-      const owner = undoRouter.current() ?? history
-      if (action === 'redo') owner.redo()
-      else owner.undo()
+      const owner = undoRouter.current()
+      if (owner) {
+        // A held key waits for the owner's render (undoRouting.ts, createRepeatGate).
+        if (action === 'redo') owner.redo(e.repeat)
+        else owner.undo(e.repeat)
+      } else if (action === 'redo') history.redo()
+      else history.undo()
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)

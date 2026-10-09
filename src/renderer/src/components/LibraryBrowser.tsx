@@ -84,6 +84,7 @@ import { IMPORT_MULTI_SELECT_HINT } from '@shared/keyGestures'
 import { DEFAULT_PREVIEW_LEVEL } from '@shared/previewLevel'
 import { Dial } from './Dial'
 import { commitPreviewLevel, setPreviewLevel, usePreviewLevel } from '../audio/previewOutput'
+import { useBlockUndo } from '../state/undoRouting'
 
 // The "your username" setting is persisted locally (not in project files or
 // app state) since it's a per-person identity setting, not something that
@@ -270,6 +271,10 @@ export function LibraryBrowser({
   // why that content-carrying move is the ONLY way across, now that the tab
   // pair is gone.
   const [libraryMode, setLibraryMode] = useState<LibraryMode>(() => initialMode)
+  // Browse mode has no undo of its own: Cmd+Z does nothing here rather than
+  // undo the arrangement hidden under the view. Discover claims its own
+  // (undoRouting.ts).
+  useBlockUndo(libraryMode === 'browse')
 
   // Auth (gates sync-triggering and live jam-membership discovery)
   const [authStatus, setAuthStatus] = useState<AuthStatus>({ loggedIn: false })
