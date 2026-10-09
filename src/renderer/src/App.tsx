@@ -1932,6 +1932,11 @@ function Frame(): React.JSX.Element {
   const [discoverChaos, setDiscoverChaos] = useState(DEFAULT_DISCOVER_CHAOS)
   const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>([])
   const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
+  // An undo or redo in Discover can bring back a slot seeded from a copy (reonedInUse.ts).
+  useEffect(
+    () => setReonedSessionRoot('discover-history', [discoverUndoStack, discoverRedoStack]),
+    [discoverUndoStack, discoverRedoStack]
+  )
   const [discoverSeedBpm, setDiscoverSeedBpm] = useState<number | null>(null)
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
   // welcome modal (suppresses it below while this is up), since knowing

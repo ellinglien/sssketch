@@ -11,6 +11,7 @@ afterEach(() => {
   __setHistoryForTest(createHistoryState(initialState))
   setReonedSessionRoot('cross', null)
   setReonedSessionRoot('discover', null)
+  setReonedSessionRoot('discover-history', null)
 })
 
 describe('collectInMemoryReonedNames', () => {
@@ -25,5 +26,15 @@ describe('collectInMemoryReonedNames', () => {
     expect(collectInMemoryReonedNames().sort()).toEqual([n(1), n(2), n(3), n(4), n(5)])
     setReonedSessionRoot('cross', null)
     expect(collectInMemoryReonedNames()).not.toContain(n(4))
+  })
+})
+
+// Review finding M2: Discover's own undo and redo can bring back a slot whose seed was a copy.
+describe("discover's undo and redo", () => {
+  it('count as held in memory', () => {
+    const undo = [[{ seedStem: { path: `/b/${n(6)}` } }]]
+    const redo = [[{ candidate: { stem: { path: `/b/${n(7)}` } } }]]
+    setReonedSessionRoot('discover-history', [undo, redo])
+    expect(collectInMemoryReonedNames().sort()).toEqual([n(6), n(7)])
   })
 })
