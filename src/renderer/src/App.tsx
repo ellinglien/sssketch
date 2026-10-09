@@ -103,6 +103,16 @@ import { PluginsHeldNotice, PluginsOffNotice } from './components/PluginsOffNoti
 import { ReonedCopyMissingNotice } from './components/ReonedCopyMissingNotice'
 import { ReonedCopiesNotice } from './components/ReonedCopiesNotice'
 import { ReoneNotice } from './components/ReoneNotice'
+import { SaveCopyNotice } from './components/SaveCopyNotice'
+import { showSaveCopyNotice } from './state/saveCopyNotice'
+import {
+  SAVE_AS_NEW_VERSION_HINT,
+  SAVE_AS_NEW_VERSION_LABEL,
+  SAVE_COPY_TO_FILE_HINT,
+  SAVE_COPY_TO_FILE_LABEL,
+  copyToFileConfirmation,
+  newVersionConfirmation
+} from '@shared/saveCopyText'
 import { showReoneNotice } from './state/reoneNotice'
 import { reoneSiblings, siblingsNotReonedText } from '@shared/reoneNotices'
 import {
@@ -748,7 +758,17 @@ function ProjectMenu({
 
   async function handleSaveCopyElsewhere(): Promise<void> {
     try {
-      await window.rifffApi.saveProject(await serializeForSave())
+      // Writes a copy and changes nothing about the project you're in: no
+      // switch, and it stays exactly as saved or unsaved as it was.
+      const written = await window.rifffApi.saveProject(await serializeForSave())
+      if (written === null) return
+      const currentName =
+        currentSketch === null
+          ? null
+          : currentSketch.kind === 'library'
+            ? currentSketch.name
+            : basenameWithoutProjectExt(currentSketch.path)
+      showSaveCopyNotice(copyToFileConfirmation(written, currentName))
     } catch (err) {
       console.error('ProjectMenu: failed to save a copy elsewhere:', err)
       window.alert(`save failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -767,6 +787,7 @@ function ProjectMenu({
       if (!result) return
       setCurrentSketch({ kind: 'library', name: result.name })
       markSaved(touchedVersion)
+      showSaveCopyNotice(newVersionConfirmation(result.name, currentSketch.name))
     } catch (err) {
       console.error('ProjectMenu: failed to duplicate sketch as a new version:', err)
       window.alert(`duplicate failed: ${err instanceof Error ? err.message : String(err)}`)
@@ -1016,10 +1037,22 @@ function ProjectMenu({
           ignoreRef={saveButtonRef}
           items={[
             { label: 'save', onClick: handleSave },
-            { label: 'save a copy elsewhere…', onClick: handleSaveCopyElsewhere },
+            // Named for what each leaves you in (@shared/saveCopyText): the
+            // new version switches you to the copy, the file copy doesn't.
             ...(currentSketch !== null && currentSketch.kind === 'library'
-              ? [{ label: 'save a copy', onClick: handleDuplicateAsNewVersion }]
-              : [])
+              ? [
+                  {
+                    label: SAVE_AS_NEW_VERSION_LABEL,
+                    hint: SAVE_AS_NEW_VERSION_HINT,
+                    onClick: handleDuplicateAsNewVersion
+                  }
+                ]
+              : []),
+            {
+              label: SAVE_COPY_TO_FILE_LABEL,
+              hint: SAVE_COPY_TO_FILE_HINT,
+              onClick: handleSaveCopyElsewhere
+            }
           ]}
           onClose={() => setSaveMenu(null)}
         />
@@ -3157,6 +3190,7 @@ function Frame(): React.JSX.Element {
       <ReonedCopyMissingNotice />
       <ReonedCopiesNotice />
       <ReoneNotice />
+      <SaveCopyNotice />
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the
