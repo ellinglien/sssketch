@@ -18,8 +18,8 @@ const RETRY_MS = 15_000
 /** While the open project names a re-oned copy that couldn't be rebuilt: a persistent pill with
  * the spec's words (the Inspector repeats them under each affected stem), and a retry every 15 s
  * of the copies whose original was unreachable, so plugging the drive back in brings the audio
- * back without reopening (spec part 1). A failed render is shown but not retried. One row below
- * PluginsHeldNotice, styled the same. */
+ * back without reopening (spec part 1). A failed render is shown but not retried. Stacked below
+ * PluginsHeldNotice (TopRightNotices), styled the same. */
 export function ReonedCopyMissingNotice(): React.JSX.Element | null {
   const missing = useReonedMissing()
   const dispatch = useDispatch()
@@ -70,10 +70,7 @@ export function ReonedCopyMissingNotice(): React.JSX.Element | null {
       role="status"
       title={missingCopiesTitle(missing.length)}
       style={{
-        position: 'fixed',
-        top: 156,
-        right: 10,
-        zIndex: 2000,
+        pointerEvents: 'auto',
         padding: '5px 10px',
         background: 'var(--ra-bg-bar)',
         border: '1px solid var(--ra-border)',

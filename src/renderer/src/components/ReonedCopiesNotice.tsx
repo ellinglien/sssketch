@@ -193,10 +193,7 @@ export function ReonedCopiesNotice(): React.JSX.Element | null {
       role="status"
       onClick={notice.kind === 'done' ? hide : undefined}
       style={{
-        position: 'fixed',
-        top: 184,
-        right: 10,
-        zIndex: 2000,
+        pointerEvents: 'auto',
         maxWidth: 360,
         padding: '5px 10px',
         background: 'var(--ra-bg-bar)',

@@ -17,16 +17,10 @@ import { LoadingLoader } from './LoadingLoader'
  * finished starting before this component mounted" and "it hasn't yet."
  *
  * (LibraryWarmupIndicator has since been folded into BackgroundWorkIndicator,
- * bottom-right; this position is left as it was.)
+ * bottom-right.)
  *
- * Positioned below LibraryWarmupIndicator (top: 40 vs its top: 10) rather
- * than at the same top: 10 -- both pills are plausibly visible at once
- * right after a cold launch (engine still starting AND library still
- * warming up), and identical positioning would have them overlap. 40 (not
- * 34) leaves a real, intentional-looking gap: at fontSize 9 with
- * Silkscreen's own line-height, the sibling pill's actual height works out
- * to ~23.5px, so 34 cleared it by under a pixel -- code review found the
- * two borders would read as visually flush. */
+ * First in the top-right column (TopRightNotices, which starts at top: 40),
+ * where it always sat. */
 export function EngineStartupIndicator(): React.JSX.Element | null {
   const [done, setDone] = useState(true)
 
@@ -54,10 +48,7 @@ export function EngineStartupIndicator(): React.JSX.Element | null {
   return (
     <div
       style={{
-        position: 'fixed',
-        top: 40,
-        right: 10,
-        zIndex: 2000,
+        pointerEvents: 'auto',
         display: 'flex',
         alignItems: 'center',
         gap: 6,

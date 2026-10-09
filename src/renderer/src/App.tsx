@@ -104,6 +104,7 @@ import { ReonedCopyMissingNotice } from './components/ReonedCopyMissingNotice'
 import { ReonedCopiesNotice } from './components/ReonedCopiesNotice'
 import { ReoneNotice } from './components/ReoneNotice'
 import { SaveCopyNotice } from './components/SaveCopyNotice'
+import { TopRightNotices } from './components/TopRightNotices'
 import { showSaveCopyNotice } from './state/saveCopyNotice'
 import {
   SAVE_AS_NEW_VERSION_HINT,
@@ -3210,14 +3211,17 @@ function Frame(): React.JSX.Element {
        * (see its own doc comment). Replaces LibraryWarmupIndicator and
        * DiscoverLibraryScan's own progress line. */}
       <BackgroundWorkIndicator />
-      <EngineStartupIndicator />
-      <StemsUnavailableIndicator />
-      <PluginsOffNotice />
-      <PluginsHeldNotice />
-      <ReonedCopyMissingNotice />
-      <ReonedCopiesNotice />
-      <ReoneNotice />
-      <SaveCopyNotice />
+      {/* One column, so a notice that wraps pushes the next down (TopRightNotices). */}
+      <TopRightNotices>
+        <EngineStartupIndicator />
+        <StemsUnavailableIndicator />
+        <PluginsOffNotice />
+        <PluginsHeldNotice />
+        <ReonedCopyMissingNotice />
+        <ReonedCopiesNotice />
+        <ReoneNotice />
+        <SaveCopyNotice />
+      </TopRightNotices>
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the
