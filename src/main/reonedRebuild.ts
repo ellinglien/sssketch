@@ -12,6 +12,7 @@ import {
   type ReonedRepairBatch,
   type ReonedRepairOutcome
 } from '@shared/reonedRepair'
+import { rotationSecForBars } from '@shared/reonedRotation'
 import { bakeOffsetDetailed } from './bakeOffset'
 import { resolveRecipe } from './reonedRecipe'
 import { bakeAssetsDir, libraryRootPath } from './projectLibrary'
@@ -30,17 +31,46 @@ export interface RebuildDirs {
   libraryRoot: string
 }
 
+type StemMetadataDurationLookup = (sourcePath: string) => number | null
+let stemMetadataDuration: StemMetadataDurationLookup | null = null
+
+/** How the stem's durationSec was set before its first bake, from its own LORE row (BPMrnd,
+ * Length16s), or null when no library knows it. index.ts sets it: reading the library pulls in
+ * better-sqlite3, which this module must not import (its test stays off the CI exclude list). */
+export function setStemMetadataDurationLookup(lookup: StemMetadataDurationLookup | null): void {
+  stemMetadataDuration = lookup
+}
+
+/** The renderer's candidates, with the riff-bpm one replaced by the stem's own LORE metadata
+ * when main knows it: a Discover collage's riff bpm is another stem's. */
+function rotationCandidates(stem: ReonedRepairBatch['stems'][number]): number[] {
+  let metadataDurationSec: number | null = null
+  try {
+    metadataDurationSec = stemMetadataDuration?.(stem.sourcePath) ?? null
+  } catch (err) {
+    console.error('reonedRebuild: the stem metadata lookup failed:', err)
+  }
+  if (metadataDurationSec === null || !(metadataDurationSec > 0)) return stem.rotationSecCandidates
+  const own = rotationSecForBars(stem.phaseBars, {
+    barLength: stem.barLength,
+    durationSec: metadataDurationSec
+  })
+  const [measured] = stem.rotationSecCandidates
+  return measured === undefined || measured === own ? [own] : [measured, own]
+}
+
 /** Which candidate rotation made the copy the project names (decision D5 in the plan): the one
  * whose recipe name is the missing file's name; else the first. null when the original can't be
  * read, so the stem stays missing. */
 async function chooseRotation(stem: ReonedRepairBatch['stems'][number]): Promise<number | null> {
+  const candidates = rotationCandidates(stem)
   try {
-    for (const candidate of stem.rotationSecCandidates) {
+    for (const candidate of candidates) {
       if ((await resolveRecipe(stem.sourcePath, candidate)).name === basename(stem.path)) {
         return candidate
       }
     }
-    return stem.rotationSecCandidates[0] ?? null
+    return candidates[0] ?? null
   } catch {
     return null
   }

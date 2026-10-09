@@ -66,7 +66,8 @@ export function reoneJob(stem: Stem, steps: number, snapDiv: number): ReoneBakeJ
  * (decision D5 in the plan): from the stem's current durationSec, then from LORE metadata
  * (barLength × 60/bpm × 4, how riffLibraryStore/endlesssApi set durationSec before APPLY_BAKE
  * replaced it with the measured length). Main keeps the one whose recipe name matches the
- * missing file. */
+ * missing file. The riff's bpm stands in for the stem's own here; main swaps in the stem's
+ * own LORE bpm when its library knows the stem (reonedRebuild.ts). */
 export function rebuildRotationCandidates(stem: Stem, rifffBpm: number): number[] {
   const bars = stem.phaseBars ?? 0
   const candidates = [rotationSecForBars(bars, stem)]

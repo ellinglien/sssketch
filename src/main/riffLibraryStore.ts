@@ -7,7 +7,7 @@ import {
   readdirSync,
   rmSync
 } from 'node:fs'
-import { join, dirname } from 'node:path'
+import { basename, join, dirname } from 'node:path'
 import { app } from 'electron'
 import Database from 'better-sqlite3'
 import type {
@@ -1140,6 +1140,24 @@ export interface RiffContextResult {
 }
 
 const RIFF_CONTEXT_WINDOW_BEFORE = 10
+
+/** A LORE stem's durationSec as resolveRiff set it before any bake: its own Length16s and
+ * BPMrnd. null for a path that isn't a LORE stem (one with an extension) or a stem no library
+ * knows. The re-oned copy rebuild uses it (reonedRebuild.ts's setStemMetadataDurationLookup):
+ * a stem's first re-one rotated by these seconds per bar, before APPLY_BAKE stored the measured
+ * length. */
+export function stemMetadataDurationSec(path: string): number | null {
+  const stemCID = basename(path)
+  if (stemCID.includes('.')) return null
+  for (const db of candidateDbsForRiff()) {
+    const row = db.prepare('SELECT BPMrnd, Length16s FROM Stems WHERE StemCID = ?').get(stemCID) as
+      { BPMrnd: number | null; Length16s: number | null } | undefined
+    if (row === undefined) continue
+    if (!(row.BPMrnd && row.BPMrnd > 0)) return null
+    return ((row.Length16s ?? 16) / 16) * (60 / row.BPMrnd) * 4
+  }
+  return null
+}
 
 /** Resolves which jam a riffCID belongs to and an offset centered on it,
  * for "jump straight to this riff" lookups -- unlike resolveRiff, this

@@ -8,7 +8,11 @@ import { join } from 'node:path'
 vi.mock('electron', () => ({ app: { getAppPath: () => process.cwd(), getPath: () => tmpdir() } }))
 
 import { bakeOffset } from './bakeOffset'
-import { ensureReonedCopiesForState, rebuildReonedCopies } from './reonedRebuild'
+import {
+  ensureReonedCopiesForState,
+  rebuildReonedCopies,
+  setStemMetadataDurationLookup
+} from './reonedRebuild'
 import { applyReonedRepair, planReonedRepair } from '@shared/reonedRepair'
 import { rotationSecForBars } from '@shared/reonedRotation'
 import type { Rifff } from '@shared/types'
@@ -219,6 +223,35 @@ describe('rebuildReonedCopies', () => {
         libraryRoot: root
       })
       expect(outcomes[0][0]).toMatchObject({ status: 'rebuilt', bakedPath: copy.bakedPath })
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("D5: a stem whose own LORE bpm differs from its riff's (a Discover collage) is matched by the stem's own metadata", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-rebuild-'))
+    try {
+      const root = join(dir, 'lib')
+      mkdirSync(root)
+      const bakes = join(root, '.bakes')
+      const source = join(dir, 'source.wav')
+      writeRampWav(source, 8010, 1000) // 4 bars at its own 120 bpm: 8 s metadata, 8.01 s decoded
+      const [copy] = await bakeOffset(
+        [{ path: source, rotationSec: rotationSecForBars(1, { barLength: 4, durationSec: 8 }) }],
+        bakes
+      )
+      rmSync(copy.bakedPath)
+      // The riff says 240 bpm (another stem's), and APPLY_BAKE stored the measured 8.01.
+      const rifffs = { g: riffOn(copy.bakedPath, source, 1, 8.01) }
+      const plan = planReonedRepair(rifffs)
+      const dirs = { outputDir: bakes, libraryRoot: root }
+      setStemMetadataDurationLookup((path) => (path === source ? 8 : null))
+      try {
+        const outcomes = await rebuildReonedCopies(plan, dirs)
+        expect(outcomes[0][0]).toMatchObject({ status: 'rebuilt', bakedPath: copy.bakedPath })
+      } finally {
+        setStemMetadataDurationLookup(null)
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

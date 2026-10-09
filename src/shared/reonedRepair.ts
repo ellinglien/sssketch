@@ -9,6 +9,10 @@ export interface ReonedRepairStem {
   path: string
   sourcePath: string
   rotationSecCandidates: number[]
+  /** The lineage the candidates came from, so main can add one from the stem's own LORE
+   * metadata, which only main can read (reonedRebuild.ts). */
+  phaseBars: number
+  barLength: number
 }
 
 export interface ReonedRepairBatch {
@@ -52,7 +56,9 @@ export function planReonedRepair(rifffs: Readonly<Record<string, Rifff>>): Reone
       stems.push({
         path: s.path,
         sourcePath: s.phaseSourcePath,
-        rotationSecCandidates: rebuildRotationCandidates(s, rifff.bpm)
+        rotationSecCandidates: rebuildRotationCandidates(s, rifff.bpm),
+        phaseBars: s.phaseBars ?? 0,
+        barLength: s.barLength
       })
     }
     if (stems.length > 0) batches.push({ groupId: rifff.groupId, stems })

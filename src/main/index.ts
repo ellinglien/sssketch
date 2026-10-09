@@ -55,6 +55,7 @@ import {
   type SaveBeforeQuitResult
 } from './saveBeforeQuit'
 import { bakeOffset, type BakeJob } from './bakeOffset'
+import { setStemMetadataDurationLookup } from './reonedRebuild'
 import { createEngineStopper } from './engineStop'
 import { createMetronomeSetting } from './metronomeSetting'
 import { claimSingleInstance } from './singleInstance'
@@ -106,7 +107,8 @@ import {
   downloadStemForAnalysis,
   candidateDbsForRiff,
   listJamsWithDb,
-  riffLibraryArchiveReachable
+  riffLibraryArchiveReachable,
+  stemMetadataDurationSec
 } from './riffLibraryStore'
 import {
   getDiscoverCandidates,
@@ -1360,6 +1362,8 @@ app.whenReady().then(async () => {
     renderStretched(stemPath, ratio)
   )
 
+  // A missing re-oned copy's rebuild matches it by the stem's own LORE metadata.
+  setStemMetadataDurationLookup(stemMetadataDurationSec)
   ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) =>
     bakeOffset(jobs, bakeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
   )

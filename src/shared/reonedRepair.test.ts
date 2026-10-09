@@ -63,11 +63,27 @@ describe('planReonedRepair', () => {
     expect(planReonedRepair(rifffs())).toEqual([
       {
         groupId: 'a',
-        stems: [{ path: COPY, sourcePath: '/src/d.wav', rotationSecCandidates: [2] }]
+        stems: [
+          {
+            path: COPY,
+            sourcePath: '/src/d.wav',
+            rotationSecCandidates: [2],
+            phaseBars: 1,
+            barLength: 4
+          }
+        ]
       },
       {
         groupId: 'b',
-        stems: [{ path: COPY, sourcePath: '/src/d.wav', rotationSecCandidates: [2] }]
+        stems: [
+          {
+            path: COPY,
+            sourcePath: '/src/d.wav',
+            rotationSecCandidates: [2],
+            phaseBars: 1,
+            barLength: 4
+          }
+        ]
       }
     ])
   })
@@ -89,7 +105,15 @@ describe('planReonedRepair, one copy named twice in a riff', () => {
     expect(planReonedRepair({ a: r.a })).toEqual([
       {
         groupId: 'a',
-        stems: [{ path: COPY, sourcePath: '/src/d.wav', rotationSecCandidates: [2] }]
+        stems: [
+          {
+            path: COPY,
+            sourcePath: '/src/d.wav',
+            rotationSecCandidates: [2],
+            phaseBars: 1,
+            barLength: 4
+          }
+        ]
       }
     ])
   })
