@@ -435,18 +435,10 @@ export function Shelf({
                   flex: 'none',
                   padding: 2,
                   boxSizing: 'border-box',
-                  border: previewing
-                    ? '2px solid var(--ra-playhead)'
-                    : selected
-                      ? '2px solid var(--ra-text)'
-                      : batchSelected
-                        ? '1px solid var(--ra-stretch-on)'
-                        : '1px solid transparent',
+                  border: previewing ? '2px solid var(--ra-playhead)' : '1px solid transparent',
                   cursor: 'grab',
-                  background: selected ? 'var(--ra-bg-row-active)' : 'transparent',
-                  boxShadow: selected
-                    ? 'inset 0 0 0 2px var(--ra-bg-page), inset 0 0 0 4px var(--ra-text-2)'
-                    : 'none',
+                  background:
+                    selected || batchSelected ? 'var(--ra-bg-riff-selected)' : 'transparent',
                   opacity: lit ? 1 : placed ? 0.4 : 0.72,
                   transition: 'opacity 80ms ease'
                 }}

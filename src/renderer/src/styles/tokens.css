@@ -15,6 +15,7 @@
   --ra-bg-rail:        #0a0a0a;  /* shelf strip, ruler */
   --ra-bg-row:         #0a0a0a;  /* block row */
   --ra-bg-row-active:  #161616;  /* selected block row, control fill */
+  --ra-bg-riff-selected: #202020; /* quiet but visible riff-tile selection */
   --ra-bg-row-sub:     #0e0e0e;  /* expanded stem sub-row */
 
   --ra-border:         #222222;

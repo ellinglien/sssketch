@@ -473,12 +473,9 @@ export function SketchStrip({
               width: TILE_SIZE,
               height: TILE_SIZE,
               cursor: 'pointer',
-              border: batchSelected
-                ? '1px solid var(--ra-stretch-on)'
-                : isSelected
-                  ? '2px solid var(--ra-playhead)'
-                  : '1px solid transparent',
-              boxShadow: isCurrent ? '0 0 0 2px var(--ra-play-on)' : undefined,
+              border: '1px solid transparent',
+              background:
+                isSelected || batchSelected ? 'var(--ra-bg-riff-selected)' : 'transparent',
               boxSizing: 'border-box',
               opacity: isSelected || batchSelected || isCurrent ? 1 : 0.85
             }}
