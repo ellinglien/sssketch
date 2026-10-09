@@ -19,6 +19,9 @@ doc first).
 Nothing here was clicked through in the app. Every status comes from reading the code and git
 history.
 
+**Updated 2026-10-09:** B1 paths 1 to 3 and F6 are fixed on master, and F7 has a note. Those fixes
+are covered by unit tests, typecheck and lint only; nobody has heard them in the app yet.
+
 ---
 
 ## Bugs
@@ -42,7 +45,8 @@ history.
   position to the rhythmic thing". The problem also showed up on Discover-made riffs he had never
   used undo on. Elling: "it might be the same error in both places."
 
-**Status: mostly fixed by Ben's phase lineage. Four paths are still open (below).**
+**Status: mostly fixed by Ben's phase lineage. Paths 1 to 3 below were fixed on 2026-10-09; path 4
+is still open.**
 
 **Why 1.5.0 broke.** Three things in 1.5.0 fit both repros. Each was checked with
 `git show v1.5.0:...`.
@@ -114,6 +118,14 @@ riff, or a Discover result, mixed phase.
    - **Fix:** when a candidate comes from the seed's jam, bake it by the seed's `phaseBars` (or
      offer that as a toggle). Add a per-row nudge or re-one in Discover for everything else (see
      F7). **Medium.**
+   - **Status: fixed** (b2f554ab, 0085afad). Seeding from a project riff looks up each seed
+     original's jam (`riff-library-stem-jams`) and keeps the rotation per jam
+     (`src/shared/discoverSeedPhase.ts`). A candidate from that jam, or one of the seed's own
+     stems, resolves to a recipe-named copy at the seed's rotation, rendered without adopting
+     (`alignCandidateStem`, `discoverCandidateStem.ts`). Rows, radio's warm-up and add share it,
+     and add carries the lineage. Always on, no toggle: a same-jam candidate at the raw phase is
+     never what the musician meant. A failed bake leaves the row unresolved rather than out of
+     phase. Candidates from other jams keep their own phase; see F7 for why there's no nudge yet.
 2. **Late stems merge into an already re-oned riff unrotated.** `buildImportedRifff()`
    (`audio/importResolvedRiff.ts`) appends stems that finished downloading after the first import
    onto the same riff, at raw phase. Nothing re-bakes them by the riff's `phaseBars`.
@@ -125,12 +137,21 @@ riff, or a Discover result, mixed phase.
    - **Fix:** in `importResolvedRiff` (`LibraryBrowser.tsx`), when the existing riff's stems carry
      a lineage, bake the new stems by the same total `phaseBars` before `ADD_TO_SHELF`, as one
      batch. Or refuse the merge and import a fresh riff. **Small.**
+   - **Status: fixed** (4ff42723). The merge bakes the joining stems to the riff's rotation
+     (`sharedPhaseBars`, the rotation most of its stems carry) through the re-oned copies path
+     (`bakeToPhaseJob`, recipe-named), all or nothing (`rotateJoiningStems`,
+     `audio/importResolvedRiff.ts`). If the bake fails the new stems aren't added, and a notice
+     says "couldn't re-one 1 new stem of … · not added · import it again".
 3. **A sibling's bake in a batch import fails silently.** `onBaked` in `App.tsx` fires
    `void bakeStems(...)` for each sibling and ignores a `null` result. A sibling whose bake fails
    stays wholly unrotated, with only a console line.
    - That matches "this riff is perfect, this other one's off" at 1:20.
    - **Fix:** collect the sibling results and show "couldn't re-one 2 of 5 riffs · try again", as
      the picker's own `applyError` does. **Small.**
+   - **Status: fixed** (2dd7c781). The sibling bakes are collected (`reoneSiblings`,
+     `src/shared/reoneNotices.ts`), and a failure shows a persistent pill
+     (`components/ReoneNotice.tsx`): "couldn't re-one 2 of 5 riffs: … · they're at their original
+     phase · re-one them from the inspector".
 4. **Projects saved by 1.5.0 keep their damage.** A riff that was already mixed stays mixed. A
    re-pick bakes every stem by the same delta, so it keeps the error.
    - The repair is a dev script (`scripts/recoverLegacyPhaseProject.ts`), not something a user can
@@ -196,7 +217,8 @@ jam (1:11), and at 1:13 had "all the things".
 - This also feeds B1, path 2.
 
 **Fix.** Show "imported 4 of 5 stems · the rest are still downloading" on import, and re-bake late
-arrivals as in B1, path 2. **Small.**
+arrivals as in B1, path 2. **Small.** The re-bake of late arrivals is done (4ff42723); the import
+notice isn't.
 
 ### B5. The "categorized" count looked stuck
 
@@ -308,30 +330,34 @@ undo button: "oh, there's undo... we just discovered a feature."
 **What happened.** At 2:22 Elling: "it doesn't save the mute state... I wish it did, for adding to
 shelf or adding to timeline. If it remembered the state of the mute. Or solo."
 
-**Status: partly done.**
-- `resolveDiscoverRifff()` adds a muted row at gain 0 (608fc047, from 2026-09-17). The stem is
-  there and silent, but it looks unmuted: no Disable, and the row's `m` isn't lit. Its real gain
-  is lost.
-- Solo is ignored.
-
-**Fix.**
-- Add muted rows as Disabled (`state.mute` keys alongside `vol` on `ADD_TO_SHELF` and
-  `PLACE_LOOP_ON_TIMELINE`), keeping their real gain.
-- For solo, Elling should decide between two behaviours: add only the soloed row, or add every row
-  with the others Disabled.
-
-**Small.**
+**Status: fixed** (ad5a3673), by Elling's decision: what you hear is what you get.
+- Adding to the shelf or timeline Disables every row that wasn't heard
+  (`discoverRowDisabledOnAdd`, `audio/discoverRifffAssembly.ts`): the muted rows, or, while a row
+  is soloed, every row but that one. A soloed row comes in even if it was muted underneath.
+- Levels carry as they are; a muted row keeps its real gain instead of 0.
+- Disable (`state.mute`) is the saved layer, so those rows stay silent in the arrangement after a
+  save. The temporary mixer Mute would have been dropped by the save. `ADD_TO_SHELF` and
+  `PLACE_LOOP_ON_TIMELINE` take the Disables as an optional `mute`.
+- Keep is unchanged: it ignores solo and saves a muted row at gain 0, since the library has no
+  Disable.
 
 ### F7. Re-one or nudge rows inside Discover
 
 **What happened.** At 1:46 Ben: "other jams could be out of sync with this, right?" Elling: "there's
 no re-oning here... it is what it is."
 
-**Status: not done.** Only the seed's existing rotation is carried in. This is the same gap as B1,
-path 1.
+**Status: not done, on purpose for now.** Candidates from the seed's own jam now follow the seed's
+rotation (B1, path 1, fixed). That covers the case that sounds broken: stems that shared a clock
+in Endlesss playing out of phase. A per-row nudge wasn't added with it, because:
+- A candidate from another jam has no phase relation to the seed. Its raw bar 1 is as good a guess
+  as any, and a nudge there is taste, not a fix.
+- It's new UI on a crowded row (radio, hooks, solo, kinds), and what it means for radio's
+  turnover (does a nudge survive a reroll?) is a product decision.
+- The pipeline is ready when it's wanted: `bakeToPhaseJob` plus `alignCandidateStem` bake a row to
+  any rotation, recipe-named, and add already carries `phaseBars`.
 
 **Fix.** A per-row shift by beat or bar, baked through the same `.bakes` pipeline the seed uses and
-carried into add as `phaseBars`. **Medium.**
+carried into add as `phaseBars`. **Medium.** Elling decides whether it's wanted.
 
 ### F8. Zoom the timeline
 
@@ -537,11 +563,9 @@ It was the pitch line.
 
 ## Suggested order
 
-1. **B1, paths 2 and 3**: re-bake late-merged stems by the riff's rotation, and report sibling bake
-   failures. Small, and they close the remaining import routes to "out of sync with itself".
-2. **B1, path 1 / F7**: align same-jam Discover candidates to the seed's rotation. Medium; it's the
-   likeliest cause if the 2:37 complaint comes back.
-3. **F6**: carry Discover mute (as Disable) and solo into add. Small.
+1. ~~**B1, paths 2 and 3**~~: done 2026-10-09.
+2. ~~**B1, path 1**~~: done 2026-10-09. **F7** (a per-row nudge) waits on Elling.
+3. ~~**F6**~~: done 2026-10-09.
 4. **U3**: confirm and fix Arrange's row controls on long arrangements. Small.
 5. **F5 (Cmd+Z routing)**, **F1 (stop button)**, **U1 (save wording)**, **U2 (shelf highlight)**,
    **U5, U6, U7 (labels and hints)**: small, and good as one polish batch.
