@@ -195,7 +195,25 @@ like every copy):
   state). A candidate from that jam, or one of the seed's own stems, resolves to a copy at the
   seed's rotation (`resolveCandidateStem(candidate, seedPhase)`), rendered, never adopted. Every
   Discover caller passes the phase, so rows, radio's warm-up and add share one cache entry.
-  Candidates from other jams keep their own phase.
+  Candidates from other jams keep their own phase. The rules:
+  - "Jam" is the riff index's on both sides (the jam of the riff a stem is mapped to,
+    `findRiffForStemPath`), which is what every candidate's `jamCID` carries. Never
+    `Stems.OwnerJamCID`: that is whichever jam first wrote the stem's row.
+  - Only real jams carry a rotation (`isClockJam`). The discovered room and the Shared Feed's
+    `shared:` jams collect stems of many jams with no clock between them.
+  - The phase holds only while a seed row is in Discover (`activeSeedPhase`); it isn't reset by a
+    project open, because Discover's rows (the seed's among them) stay through one.
+  - Alignments are gathered into shared bakes (`createBakeBatcher`, `src/shared/bakeBatcher.ts`):
+    each `bakeOffset` call with a LORE stem spawns an engine (about 0.4 s), so 8 rows rolled at
+    once are one or two calls, not eight. A failed batch is baked again one job at a time. A
+    failed alignment leaves its row unresolved and shows "couldn't line up a stem from <jam> ·
+    skipped" (throttled to once a minute per jam).
+  - An aligned candidate kept with Keep is a `.bakes` file with no Stems row, so the discovered
+    room gives it a new `discovered-<uuid>` StemCID and copies the rotated audio. Its analysis,
+    categories and favourite (all keyed by StemCID) don't carry over from the original.
+- **A riff's rotation** (`sharedPhaseBars`) is the rotation most stems sound at, compared within
+  each stem's own loop: a stem the rotation wraps to nothing for (a 1-bar stem in a riff re-oned
+  by whole bars) joins as it is, with no copy and no lineage, and still counts as agreeing.
 
 `.bakes` is a rebuildable cache. A copy is named by its recipe (`src/main/reonedRecipe.ts`: the
 original's path, size and mtime, the rotation in samples, `BAKER_VERSION`), and a re-one bakes

@@ -22,6 +22,11 @@ history.
 **Updated 2026-10-09:** B1 paths 1 to 3 and F6 are fixed on master, and F7 has a note. Those fixes
 are covered by unit tests, typecheck and lint only; nobody has heard them in the app yet.
 
+**Updated 2026-10-09, after review of 2dd7c781..459cd8d5:** the review's findings on B1 paths 1
+and 2 and on F6 are fixed (72fa76ff, 012d8d12, 54346754, 2282438f, ae2c065e, 2af444aa); each
+item below says what changed. One question for Elling is open under F6 (Keep and solo). Same
+caveat: unit tests, typecheck and lint only.
+
 ---
 
 ## Bugs
@@ -126,6 +131,28 @@ riff, or a Discover result, mixed phase.
      and add carries the lineage. Always on, no toggle: a same-jam candidate at the raw phase is
      never what the musician meant. A failed bake leaves the row unresolved rather than out of
      phase. Candidates from other jams keep their own phase; see F7 for why there's no nudge yet.
+   - **Review follow-ups: fixed.**
+     - *Double rotation through the discovered room* (72fa76ff). The discovered room and the
+       Shared Feed's `shared:` jams collect stems from many jams, and a kept aligned candidate is
+       a new StemCID whose audio is already rotated. A seed whose stems sat there rotated every
+       candidate from the room again. Those jams never carry a rotation now (`isClockJam`).
+     - *One jam notion on both sides* (72fa76ff). The seed read `Stems.OwnerJamCID` and
+       candidates carry the riff index's jam; the seed now asks the riff index too
+       (`findRiffForStemPath`, the lookup its rows already use).
+     - *One engine per same-jam candidate* (54346754). Alignments are gathered into shared bakes
+       (`createBakeBatcher`): those within 30 ms of each other, then everything that arrived while
+       a batch baked. An engine takes about 0.4 s to spawn here (measured, 8 runs, 365 to 425 ms),
+       so 8 same-jam LORE rows went from about 3.1 s of spawns to one or two (0.4 to 0.8 s). A
+       failed batch is baked again one job at a time, so one bad stem fails only its row.
+     - *A failed bake was silent* (54346754). It now shows "couldn't line up a stem from <jam> ·
+       skipped", at most once a minute per jam.
+     - *Seed phase lifetime* (ae2c065e). The phase holds only while a seed row is in Discover
+       (`activeSeedPhase`) and comes back with one on undo. It is **not** reset when a project
+       opens: Discover's rows, the seed's among them, stay through an open, and dropping the
+       phase under them would put new same-jam candidates out of phase with them.
+     - *Cache keying* has its own tests now (`discoverCandidateStem.test.ts`).
+     - Noted in CLAUDE.md: an aligned candidate kept with Keep gets a new `discovered-` StemCID,
+       so its analysis and categories don't carry over.
 2. **Late stems merge into an already re-oned riff unrotated.** `buildImportedRifff()`
    (`audio/importResolvedRiff.ts`) appends stems that finished downloading after the first import
    onto the same riff, at raw phase. Nothing re-bakes them by the riff's `phaseBars`.
@@ -142,6 +169,20 @@ riff, or a Discover result, mixed phase.
      (`bakeToPhaseJob`, recipe-named), all or nothing (`rotateJoiningStems`,
      `audio/importResolvedRiff.ts`). If the bake fails the new stems aren't added, and a notice
      says "couldn't re-one 1 new stem of … · not added · import it again".
+   - **Review follow-ups: fixed.**
+     - *Stems the rotation wraps to whole loops* (012d8d12). A 1-bar stem joining a riff re-oned
+       by whole bars joins as it is, with no lineage, and `sharedPhaseBars` counted it as
+       unrotated: three of them outvoted the riff's one 4-bar copy, so the next 4-bar stem came in
+       raw. Rotations are now compared within each stem's own loop, so such a stem agrees with
+       the riff's rotation. Chosen over giving it a lineage, which `phaseLineage` ignores on
+       anything but a copy. Tested with a 1-bar re-one taking 1-bar and 4-bar stems, on the
+       import and the Discover side.
+     - *Mixed rotations* (012d8d12). Compared wrapped to each stem's loop; a tie goes to a
+       rotation a copy carries, then to the earlier stem; stems that disagree get one console
+       line.
+     - *Merge race* (2282438f). After the bake, the merge re-reads the riff: one deleted meanwhile
+       isn't brought back, and one re-oned meanwhile has the stems baked again to its new rotation
+       (two bakes in all, then the usual notice).
 3. **A sibling's bake in a batch import fails silently.** `onBaked` in `App.tsx` fires
    `void bakeStems(...)` for each sibling and ignores a `null` result. A sibling whose bake fails
    stays wholly unrotated, with only a console line.
@@ -340,6 +381,14 @@ shelf or adding to timeline. If it remembered the state of the mute. Or solo."
   `PLACE_LOOP_ON_TIMELINE` take the Disables as an optional `mute`.
 - Keep is unchanged: it ignores solo and saves a muted row at gain 0, since the library has no
   Disable.
+- **Review follow-ups: fixed** (2af444aa). Discover and Cross share one rule for what's heard
+  (`src/shared/heard.ts`). Cross's add now does the same as Discover's: a muted center row arrives
+  Disabled at its own level instead of at gain 0, and the center solo counts. It fits Cross's
+  model, where a row's mute is the draft's choice and solo the temporary layer over it.
+- **Open question for Elling: Keep and solo.** Keep still saves every row, muted ones at gain 0,
+  whatever is soloed, so a kept group can sound different from what was playing when it was kept.
+  Should Keep follow solo too (keep only the soloed row, or keep all with the others at gain 0)?
+  Left as it is until he decides.
 
 ### F7. Re-one or nudge rows inside Discover
 

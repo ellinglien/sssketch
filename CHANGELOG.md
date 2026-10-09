@@ -40,6 +40,7 @@
 - The metronome keeps its on/off and volume after the audio engine restarts.
 - Stems that finish downloading after a riff was re-oned now join it at the same rotation when the riff is imported again. If that can't be done they're left out, with a notice, instead of coming in out of phase.
 - A batch import now names the riffs whose re-one failed, instead of leaving them at their original phase without a word.
-- Discover and radio seeded from a re-oned riff now play candidates from the seed's own jam at the seed's rotation, so they stay in phase with it.
-- Adding a loop from Discover or radio keeps what you hear: muted rows, and every row but a soloed one, arrive disabled at their own level.
+- Discover and radio seeded from a re-oned riff now play candidates from the seed's own jam at the seed's rotation, so they stay in phase with it. Lining up a roll's stems is quicker, a stem that can't be lined up is skipped with a notice, and once the seed's own rows are gone new stems come in at their own phase again. Stems from your discovered groups and the Shared Feed are never shifted.
+- Adding a loop from Discover or radio keeps what you hear: muted rows, and every row but a soloed one, arrive disabled at their own level. Adding from Cross now does the same.
+- A riff re-oned by whole bars no longer loses track of its rotation after taking short (1-bar) stems, so later stems still come in at the same rotation.
 - Kept quit blocked until the current project is saved, isolated export materialization and filenames to avoid collisions, and hardened backup restoration and phone-remote pairing lockout.
