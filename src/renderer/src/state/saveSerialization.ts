@@ -72,14 +72,14 @@ export function saveOutcomeNotice(
   outcome: SaveOutcome,
   purpose: 'save' | 'leaving'
 ): string | null {
-  if (outcome.kind === 'failed') return `Save failed: ${outcome.error}`
+  if (outcome.kind === 'failed') return `save failed: ${outcome.error}`
   if (outcome.kind === 'changed' && purpose === 'leaving') return CHANGED_DURING_SAVE_NOTICE
   return null
 }
 
 const CHANGED_DURING_SAVE_NOTICE =
-  "Saved, but the project changed while it was saving, so the newest changes aren't saved yet.\n\n" +
-  'Nothing was closed. Save again, then try again.'
+  "saved, but the project changed while it was saving, so the newest changes aren't saved yet.\n\n" +
+  'nothing was closed. save again, then try again.'
 
 /** A completed write may have saved exactly what it started with while the
  * user made newer edits during an awaited plugin capture or disk write. Such

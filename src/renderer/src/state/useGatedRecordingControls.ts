@@ -152,7 +152,7 @@ export function useGatedRecordingControls(): {
         state.selectedInputDevice
       )
       if (!result.success) {
-        if (result.error) window.alert(`Couldn't enable recording mode: ${result.error}`)
+        if (result.error) window.alert(`couldn't enable recording mode: ${result.error}`)
         return
       }
       dispatch({ type: 'SET_GATED_RECORDING_ENABLED', enabled: true })
@@ -338,7 +338,7 @@ export function useGatedRecordingControls(): {
               // rifff vanished while we were awaiting it. Surfacing this
               // rather than silently dropping the take is the same
               // silent-take-loss concern this whole fallback exists for.
-              window.alert("Couldn't attach the recorded take: the target rifff no longer exists.")
+              window.alert("couldn't attach the recorded take: the target rifff no longer exists.")
             }
           }
         } else {
@@ -350,7 +350,7 @@ export function useGatedRecordingControls(): {
           // undefined) and silently dropping the take here would be exactly
           // the kind of silent take-loss confirmLockInIfRecording above was
           // built to avoid.
-          window.alert("Couldn't attach the recorded take: the target rifff no longer exists.")
+          window.alert("couldn't attach the recorded take: the target rifff no longer exists.")
         }
         return
       }
@@ -408,7 +408,7 @@ export function useGatedRecordingControls(): {
         await stopGatedRecordingNative()
       }
     } else if (result.error) {
-      window.alert(`Couldn't lock in recording: ${result.error}`)
+      window.alert(`couldn't lock in recording: ${result.error}`)
     }
   }
 

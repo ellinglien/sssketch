@@ -37,10 +37,10 @@ describe('saveOutcomeNotice', () => {
 
   it('always reports a failed save, with its error', () => {
     expect(saveOutcomeNotice({ kind: 'failed', error: 'disk full' }, 'save')).toBe(
-      'Save failed: disk full'
+      'save failed: disk full'
     )
     expect(saveOutcomeNotice({ kind: 'failed', error: 'disk full' }, 'leaving')).toBe(
-      'Save failed: disk full'
+      'save failed: disk full'
     )
   })
 
