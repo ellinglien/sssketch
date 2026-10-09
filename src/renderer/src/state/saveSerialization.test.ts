@@ -8,7 +8,8 @@ import {
   dirtyCheckJson,
   liveSettingsForSave,
   projectJsonForSave,
-  saveCompletionIsCurrent
+  saveCompletionIsCurrent,
+  saveOutcomeNotice
 } from './saveSerialization'
 import { hasUnsavedChanges } from './unsavedChanges'
 import type { PluginStatesMap, RawPluginStatesCapture } from '@shared/pluginStates'
@@ -25,6 +26,27 @@ const rifff: Rifff = {
     { slot: 1, author: 'e', name: 'a', type: 'fx', path: '/a.wav', durationSec: 1, barLength: 8 }
   ]
 }
+
+describe('saveOutcomeNotice', () => {
+  it('says nothing after a save that holds the newest edits', () => {
+    expect(saveOutcomeNotice({ kind: 'saved' }, 'save')).toBeNull()
+    expect(saveOutcomeNotice({ kind: 'saved' }, 'leaving')).toBeNull()
+  })
+
+  it('always reports a failed save, with its error', () => {
+    expect(saveOutcomeNotice({ kind: 'failed', error: 'disk full' }, 'save')).toBe(
+      'Save failed: disk full'
+    )
+    expect(saveOutcomeNotice({ kind: 'failed', error: 'disk full' }, 'leaving')).toBe(
+      'Save failed: disk full'
+    )
+  })
+
+  it('explains a save that went stale only when it stops a quit, New or open', () => {
+    expect(saveOutcomeNotice({ kind: 'changed' }, 'save')).toBeNull()
+    expect(saveOutcomeNotice({ kind: 'changed' }, 'leaving')).toMatch(/changed while it was saving/)
+  })
+})
 
 describe('saveCompletionIsCurrent', () => {
   it('rejects newer project or plugin edits made while a save was awaiting', () => {

@@ -46,7 +46,11 @@ import {
   type RecoveryFileEvent,
   type RecoveryFileState
 } from './recoveryFileTracker'
-import { awaitSaveBeforeQuit, type SaveBeforeQuitResult } from './saveBeforeQuit'
+import {
+  awaitSaveBeforeQuit,
+  saveBeforeQuitNotice,
+  type SaveBeforeQuitResult
+} from './saveBeforeQuit'
 import { bakeOffset, type BakeJob } from './bakeOffset'
 import { createEngineStopper } from './engineStop'
 import { claimSingleInstance } from './singleInstance'
@@ -2786,7 +2790,7 @@ app.on('will-quit', () => {
 // discard dirty work: the app stays open and the user can retry or explicitly
 // choose Don't Save.
 function requestSaveBeforeQuit(): Promise<SaveBeforeQuitResult> {
-  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve('failed')
+  if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve('unreachable')
   const win = mainWindow
   const requestId = `quit-save-${++saveBeforeQuitRequestCounter}`
   return awaitSaveBeforeQuit(
@@ -2862,15 +2866,8 @@ app.on('before-quit', (event) => {
         saveBeforeQuitPending = false
         if (result !== 'saved') {
           pluginEditsCheckedForQuit = false
-          if (result === 'timeout') {
-            dialog.showMessageBoxSync({
-              type: 'error',
-              buttons: ['OK'],
-              message: 'The project is still saving.',
-              detail:
-                'sssketch stayed open so no unsaved work was discarded. Please try Save again.'
-            })
-          }
+          const notice = saveBeforeQuitNotice(result)
+          if (notice) dialog.showMessageBoxSync({ type: 'error', buttons: ['OK'], ...notice })
           return
         }
         rendererHasUnsavedChanges = false

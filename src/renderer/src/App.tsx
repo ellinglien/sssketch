@@ -138,7 +138,9 @@ import {
   dirtyCheckJson,
   liveSettingsForSave,
   projectJsonForSave,
-  saveCompletionIsCurrent
+  saveCompletionIsCurrent,
+  saveOutcomeNotice,
+  type SaveOutcome
 } from './state/saveSerialization'
 import { slotsEngineHolds } from '@shared/pluginSwitch'
 import type { PluginStatesMap } from '@shared/pluginStates'
@@ -1405,7 +1407,10 @@ function Frame(): React.JSX.Element {
    * quit-time save) can tell a real failure (disk full, permission denied,
    * etc.) apart from a resolved promise and avoid proceeding to discard/
    * replace the live project on top of a save that never landed. */
-  async function handleSave(): Promise<boolean> {
+  /** Writes the live project and says how it went, without telling the user
+   * anything itself (saveOutcomeNotice decides that): the quit prompt's save
+   * has to answer main before an alert can block the renderer. */
+  async function saveProjectNow(): Promise<SaveOutcome> {
     try {
       const touchedVersion = pluginsTouchedSnapshot().version
       const savedDirtyJson = dirtyCheckJson(state)
@@ -1426,11 +1431,32 @@ function Frame(): React.JSX.Element {
         touchedVersion,
         pluginsTouchedSnapshot().version
       )
+        ? { kind: 'saved' }
+        : { kind: 'changed' }
     } catch (err) {
       console.error('Frame: failed to save project:', err)
-      window.alert(`Save failed: ${err instanceof Error ? err.message : String(err)}`)
-      return false
+      return { kind: 'failed', error: err instanceof Error ? err.message : String(err) }
     }
+  }
+
+  /** The Save button and Cmd+S: true when the write landed. Newer edits made
+   * while it was in flight just leave the project marked unsaved. */
+  async function handleSave(): Promise<boolean> {
+    const outcome = await saveProjectNow()
+    const notice = saveOutcomeNotice(outcome, 'save')
+    if (notice) window.alert(notice)
+    return outcome.kind !== 'failed'
+  }
+
+  /** Saving before something that closes or replaces the live project
+   * (quit's Save, and Save in the discard guard before New or opening
+   * another). True only when the save holds the newest edits; on false the
+   * caller must not go on, and the user has already been told why. */
+  async function saveBeforeLeaving(): Promise<boolean> {
+    const outcome = await saveProjectNow()
+    const notice = saveOutcomeNotice(outcome, 'leaving')
+    if (notice) window.alert(notice)
+    return outcome.kind === 'saved'
   }
 
   /** Shared discard-guard -- called from every place about to replace the
@@ -1460,8 +1486,8 @@ function Frame(): React.JSX.Element {
     const choice = await confirmDiscardIfDirty()
     if (choice === 'cancel') return
     if (choice === 'save') {
-      const saved = await handleSave()
-      // Save failed (handleSave already alerted) -- the live project is
+      const saved = await saveBeforeLeaving()
+      // Save failed (saveBeforeLeaving already alerted) -- the live project is
       // still safely in the editor and unsaved, so bail out here rather
       // than opening the new-project modal, which would discard it.
       if (!saved) return
@@ -2595,12 +2621,20 @@ function Frame(): React.JSX.Element {
 
   // Main pushes 'request-save-before-quit' when the user picks "Save" on
   // the native quit-time dialog (index.ts's before-quit handler) -- run the
-  // same handleSave() the Save button/Cmd+S use, then report whether it
-  // actually landed. Main keeps the app open on false or timeout.
+  // same save the Save button/Cmd+S use, then report whether it landed AND
+  // holds the newest edits (saveBeforeLeaving's rule). Main keeps the app
+  // open on false or timeout, and says nothing itself on false: the notice
+  // below is the user's explanation. It's shown only after main has its
+  // answer, since an alert blocks the renderer and would otherwise run main
+  // into its timeout and a misleading "still saving" dialog.
   useEffect(() => {
     return window.rifffApi.onRequestSaveBeforeQuit((requestId) => {
-      void handleSave().then(
-        (success) => window.rifffApi.notifySaveBeforeQuitComplete(requestId, success),
+      void saveProjectNow().then(
+        (outcome) => {
+          window.rifffApi.notifySaveBeforeQuitComplete(requestId, outcome.kind === 'saved')
+          const notice = saveOutcomeNotice(outcome, 'leaving')
+          if (notice) window.alert(notice)
+        },
         () => window.rifffApi.notifySaveBeforeQuitComplete(requestId, false)
       )
     })
@@ -3040,8 +3074,8 @@ function Frame(): React.JSX.Element {
               const choice = await confirmDiscardIfDirty()
               if (choice === 'cancel') return 'cancel'
               if (choice === 'save') {
-                const saved = await handleSave()
-                // Save failed (handleSave already alerted) -- abort the
+                const saved = await saveBeforeLeaving()
+                // Save failed (saveBeforeLeaving already alerted) -- abort the
                 // open/restore rather than replacing the still-unsaved
                 // live project.
                 if (!saved) return 'cancel'
@@ -3078,8 +3112,8 @@ function Frame(): React.JSX.Element {
                 const choice = await confirmDiscardIfDirty()
                 if (choice === 'cancel') return
                 if (choice === 'save') {
-                  const saved = await handleSave()
-                  // Save failed (handleSave already alerted) -- bail out
+                  const saved = await saveBeforeLeaving()
+                  // Save failed (saveBeforeLeaving already alerted) -- bail out
                   // rather than proceeding to the disk-open flow, which
                   // would replace the still-unsaved live project.
                   if (!saved) return

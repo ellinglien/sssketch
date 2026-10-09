@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { awaitSaveBeforeQuit } from './saveBeforeQuit'
+import { awaitSaveBeforeQuit, saveBeforeQuitNotice } from './saveBeforeQuit'
 
 describe('awaitSaveBeforeQuit', () => {
   it('reports the renderer result and unsubscribes', async () => {
@@ -65,5 +65,34 @@ describe('awaitSaveBeforeQuit', () => {
       1000
     )
     await expect(result).resolves.toBe('failed')
+  })
+
+  it('reports unreachable when the request cannot be sent at all', async () => {
+    const unsubscribe = vi.fn()
+    const result = awaitSaveBeforeQuit(
+      'request-5',
+      () => {
+        throw new Error('render frame was disposed')
+      },
+      () => unsubscribe,
+      1000
+    )
+    await expect(result).resolves.toBe('unreachable')
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+})
+
+describe('saveBeforeQuitNotice', () => {
+  it('stays quiet only when the save landed or the renderer already explained', () => {
+    expect(saveBeforeQuitNotice('saved')).toBeNull()
+    expect(saveBeforeQuitNotice('failed')).toBeNull()
+  })
+
+  it('tells the user why the app stayed open in every other case', () => {
+    for (const result of ['timeout', 'unreachable'] as const) {
+      const notice = saveBeforeQuitNotice(result)
+      expect(notice?.message).toBeTruthy()
+      expect(notice?.detail).toContain('stayed open')
+    }
   })
 })

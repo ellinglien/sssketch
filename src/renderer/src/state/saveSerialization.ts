@@ -57,6 +57,30 @@ export function dirtyCheckJson(state: AppState): string {
   return serializeProject(state)
 }
 
+/** How an explicit save went. 'changed': the write landed, but the project
+ * changed while it was awaiting a plugin capture or the disk
+ * (saveCompletionIsCurrent false), so it doesn't hold the newest edits. */
+export type SaveOutcome =
+  { kind: 'saved' } | { kind: 'changed' } | { kind: 'failed'; error: string }
+
+/** What to tell the user after a save, or null for nothing. `purpose` is
+ * 'save' for the Save button and Cmd+S, where a 'changed' save just leaves the
+ * project marked unsaved, and 'leaving' for a save before quitting, New or
+ * opening another project, which doesn't go on unless the save is current and
+ * so must say why it stopped. */
+export function saveOutcomeNotice(
+  outcome: SaveOutcome,
+  purpose: 'save' | 'leaving'
+): string | null {
+  if (outcome.kind === 'failed') return `Save failed: ${outcome.error}`
+  if (outcome.kind === 'changed' && purpose === 'leaving') return CHANGED_DURING_SAVE_NOTICE
+  return null
+}
+
+const CHANGED_DURING_SAVE_NOTICE =
+  "Saved, but the project changed while it was saving, so the newest changes aren't saved yet.\n\n" +
+  'Nothing was closed. Save again, then try again.'
+
 /** A completed write may have saved exactly what it started with while the
  * user made newer edits during an awaited plugin capture or disk write. Such
  * a write is successful as a snapshot, but it is not current enough to
