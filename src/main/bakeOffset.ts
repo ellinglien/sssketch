@@ -189,10 +189,13 @@ async function bakeNativeJobs(
 export async function bakeOffset(jobs: BakeJob[], outputDir?: string): Promise<BakeResult[]> {
   if (jobs.length === 0) return []
   const durableDir = outputDir ?? join(dirname(jobs[0].path), '.sssketch-bakes')
-  mkdirSync(durableDir, { recursive: true })
   const planned = jobs.map((job) => ({ job, destination: allocateDestination(durableDir) }))
   const pending: PendingBakeResult[] = []
   try {
+    // Inside the try: a folder that can't be made (the library drive
+    // unplugged) is a failed bake like any other, returned as no result,
+    // not a throw the renderer's callers would have to catch.
+    mkdirSync(durableDir, { recursive: true })
     for (const entry of planned.filter(({ job }) => isWavPath(job.path))) {
       const result = bakeWavJob(entry.job, entry.destination)
       if (result) pending.push(result)

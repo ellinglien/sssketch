@@ -174,6 +174,22 @@ describe('bakeOffset', () => {
     }
   })
 
+  it('resolves to no result, rather than throwing, when the bake folder cannot be made', async () => {
+    // As when the library drive is unplugged: the folder's parent is gone or not a folder.
+    const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
+    try {
+      const path = join(dir, 'source.wav')
+      writeRampWav(path, 1000, 1000)
+      const notAFolder = join(dir, 'not-a-folder')
+      writeFileSync(notAFolder, 'a file')
+      await expect(
+        bakeOffset([{ path, rotationSec: 0.25 }], join(notAFolder, 'bakes'))
+      ).resolves.toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('publishes no stem when any job in the riff fails', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'sssketch-bake-test-'))
     try {

@@ -2298,12 +2298,18 @@ function Frame(): React.JSX.Element {
     // Cross does for its parents, so opening Discover leaves the project
     // saved and its undo history alone. A riff with no live phase is used as
     // it is.
-    const seedRifff = await rifffForSketchCross(
-      rifff,
-      state.off,
-      SNAP_DIVS[state.snapIdx],
-      (jobs) => window.rifffApi.bakeOffset(jobs)
-    )
+    // Can reject (the bake IPC failing outright); callers fire this and
+    // forget, so a rejection here would vanish without a word.
+    let seedRifff: Rifff | null
+    try {
+      seedRifff = await rifffForSketchCross(rifff, state.off, SNAP_DIVS[state.snapIdx], (jobs) =>
+        window.rifffApi.bakeOffset(jobs)
+      )
+    } catch (err) {
+      console.error('App: failed to prepare a riff for Discover:', err)
+      window.alert('could not prepare this riff for discover. nothing was changed; try again.')
+      return
+    }
     if (!seedRifff) {
       window.alert('Could not prepare every stem for Discover. Nothing was changed; try again.')
       return
