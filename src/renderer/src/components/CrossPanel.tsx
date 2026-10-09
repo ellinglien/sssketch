@@ -185,7 +185,7 @@ function SourceRow({
       }}
       style={{
         minHeight: 54,
-        border: `1px solid ${active ? 'var(--ra-playhead)' : 'var(--ra-border)'}`,
+        border: '1px solid var(--ra-border-strong)',
         background: 'var(--ra-bg-row)',
         display: 'grid',
         gridTemplateColumns: '28px 28px minmax(0, 1fr) 34px',
