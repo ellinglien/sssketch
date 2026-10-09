@@ -35,6 +35,7 @@ import {
 import { Shelf } from './components/Shelf'
 import { Inspector } from './components/Inspector'
 import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './components/arrangementMixerRail'
+import { useScrollbarInsets } from './components/useScrollbarInsets'
 import { ChannelRow } from './components/ChannelRow'
 import { SketchStrip } from './components/SketchStrip'
 import { CrossPanel } from './components/CrossPanel'
@@ -527,9 +528,11 @@ function Timeline({
   // whatever clip happened to sit near that stale boundary. Setting this
   // width explicitly (redundant with Ruler's own width, but that's fine --
   // it's the source of truth for "how wide is the whole timeline") gives
-  // every child the correct wide containing block, so sticky tracks the
-  // real viewport edge exactly like Ruler's own horizontal scroll already
-  // does correctly.
+  // every child the correct wide containing block. That alone wasn't enough
+  // for the sticky stack, though: a full-width sticky box fills its row and
+  // can't move, so the controls sat at the timeline's END. MixerRailAnchor
+  // makes it zero-width at the row's end, which is what lets it slide to the
+  // viewport's right edge (the mixer rail).
   //
   // minWidth:'100%' alongside the explicit width (rather than just the
   // explicit width alone) keeps this filling the full viewport on a short
@@ -3012,6 +3015,7 @@ function Frame(): React.JSX.Element {
   // than having to grab the scrollbar directly.
   const handModeHeld = useHandModeHeld()
   const scrollContainerRef = useRef<HTMLDivElement>(null)
+  const scrollbarInsets = useScrollbarInsets(scrollContainerRef, state.mode === 'normal')
   const [panning, setPanning] = useState(false)
 
   // Captured by handleTimelineWheel, consumed by the effect below once the
@@ -3273,33 +3277,63 @@ function Frame(): React.JSX.Element {
               )}
             </div>
             {state.mode === 'normal' && (
+              // The mixer rail: the column every row's m/s/fx and gain
+              // controls are pinned into (MixerRailAnchor), docked at the
+              // viewport's right edge beside the inspector. It's drawn here,
+              // outside the scroller, so it never scrolls; the controls
+              // themselves live in their rows (so they line up with them
+              // vertically) and sit above this at zIndex 5/6. It sits just
+              // left of the scroller's own scrollbars, where the sticky
+              // controls land, rather than over them.
+              //
+              // It takes the pointer, so a click in a gap between controls
+              // doesn't scrub or grab a clip hidden underneath. Being
+              // outside the scroller, it hands wheel gestures back to it.
               <div
-                aria-hidden="true"
+                onWheel={(e) => {
+                  if (e.metaKey) {
+                    handleTimelineWheel(e)
+                    return
+                  }
+                  scrollContainerRef.current?.scrollBy({ left: e.deltaX, top: e.deltaY })
+                }}
                 style={{
                   position: 'absolute',
                   zIndex: 4,
                   top: 0,
-                  right: 0,
-                  bottom: 0,
+                  right: scrollbarInsets.right,
+                  bottom: scrollbarInsets.bottom,
                   width: ARRANGEMENT_MIXER_RAIL_WIDTH,
                   boxSizing: 'border-box',
                   borderLeft: '1px solid var(--ra-border)',
-                  background: 'color-mix(in srgb, var(--ra-bg-bar) 97%, transparent)',
+                  background: 'var(--ra-bg-bar)'
+                }}
+              />
+            )}
+            {state.mode === 'normal' && (
+              // The rail's heading, over the ruler's right end (the ruler is
+              // zIndex 10, above the rail itself).
+              <div
+                aria-hidden="true"
+                style={{
+                  position: 'absolute',
+                  zIndex: 11,
+                  top: 0,
+                  right: scrollbarInsets.right,
+                  width: ARRANGEMENT_MIXER_RAIL_WIDTH,
+                  height: 24,
+                  boxSizing: 'border-box',
+                  display: 'grid',
+                  placeItems: 'center',
+                  borderLeft: '1px solid var(--ra-border)',
+                  borderBottom: '1px solid var(--ra-border)',
+                  background: 'var(--ra-bg-bar)',
+                  color: 'var(--ra-text-4)',
+                  fontSize: 8,
                   pointerEvents: 'none'
                 }}
               >
-                <div
-                  style={{
-                    height: 24,
-                    display: 'grid',
-                    placeItems: 'center',
-                    borderBottom: '1px solid var(--ra-border)',
-                    color: 'var(--ra-text-4)',
-                    fontSize: 8
-                  }}
-                >
-                  mix
-                </div>
+                mix
               </div>
             )}
           </div>

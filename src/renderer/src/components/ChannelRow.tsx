@@ -23,6 +23,7 @@ import {
   useZoom
 } from '../state/StoreContext'
 import { ARRANGEMENT_MIXER_RAIL_WIDTH } from './arrangementMixerRail'
+import { MixerRailAnchor } from './MixerRailAnchor'
 
 // The right-edge m/s/fx/r/x button stack (rendered further down, an
 // absolutely-positioned flex column with gap: 2, anchored at top: 4 from
@@ -93,15 +94,10 @@ const CHANNEL_FX_BUTTON_ENABLED = false
  * at once via SET_CHANNEL_MUTE/SOLO_CHANNEL, plus the "fx" button opening
  * this channel's own 2-slot plugin chain panel — see
  * docs/superpowers/specs/2026-08-01-channel-plugin-inserts-design.md).
- * Pinned to the row's own right edge with position:sticky, over the fixed
- * mixer rail beside the Inspector, so it stays on
- * screen while the timeline scrolls horizontally, rather than the clip
- * title (which lives at the LEFT of each clip, per RifffBlockRow) ever
- * being covered. The sticky element itself has height:0 so it never adds
- * to the row's own flow height -- the actual visible buttons hang off it
- * via an absolutely-positioned child, a standard "zero-size sticky anchor"
- * technique for pinning an overlay to a scrolling viewport's edge without
- * disturbing surrounding layout. */
+ * Pinned into the fixed mixer rail beside the Inspector by MixerRailAnchor,
+ * so it stays on screen at the viewport's right edge however long the
+ * timeline is and wherever it's scrolled. See MixerRailAnchor for why the
+ * anchor must be zero-width. */
 function ChannelRowImpl({
   channelId,
   rifffs,
@@ -538,7 +534,7 @@ function ChannelRowImpl({
         borderLeft: bus ? `3px solid ${busColorHex(bus)}` : undefined
       }}
     >
-      <div style={{ position: 'sticky', right: 0, top: 0, height: 0, zIndex: 5 }}>
+      <MixerRailAnchor zIndex={5}>
         <div
           style={{
             position: 'absolute',
@@ -666,7 +662,7 @@ function ChannelRowImpl({
             </button>
           )}
         </div>
-      </div>
+      </MixerRailAnchor>
       {/* No automation pointer-events wrapper here, deliberately.
           There used to be one -- `pointerEvents: 'none'` over this whole
           stack whenever the lanes were up, so a drag landed on the lane rather than
