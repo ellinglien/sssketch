@@ -11,6 +11,7 @@ import {
 } from 'react'
 import {
   StoreProvider,
+  getStateSnapshot,
   useAppSelector,
   useAppState,
   useDispatch,
@@ -20,6 +21,9 @@ import {
   useRestoreState,
   useZoom
 } from './state/StoreContext'
+import { setReonedSessionRoot } from './state/reonedInUse'
+import { openWithReonedRepair } from './state/reonedRepairOnOpen'
+import { reconcileReonedMissing, setReonedMissing } from './state/reonedMissing'
 import { Titlebar } from './components/Titlebar'
 import { TransportBar } from './components/TransportBar'
 import { Ruler, PPB } from './components/Ruler'
@@ -94,6 +98,8 @@ import { BackgroundWorkIndicator } from './components/BackgroundWorkIndicator'
 import { EngineStartupIndicator } from './components/EngineStartupIndicator'
 import { StemsUnavailableIndicator } from './components/StemsUnavailableIndicator'
 import { PluginsHeldNotice, PluginsOffNotice } from './components/PluginsOffNotice'
+import { ReonedCopyMissingNotice } from './components/ReonedCopyMissingNotice'
+import { ReonedCopiesNotice } from './components/ReonedCopiesNotice'
 import { StartupGate } from './components/StartupGate'
 import { OwnUsernameReporter } from './components/OwnUsernameReporter'
 import { markManualSeek } from './state/manualSeek'
@@ -198,6 +204,13 @@ const GHOST_ROW_HEIGHT = 44
 // No Node `path` module in the renderer -- a plain string split covers what
 // this needs (an externally-opened sketch's own file name, sans its project
 // extension, as an Ableton export's default suggested filename).
+/** An open that failed after openWithReonedRepair set the new project's missing copies: the
+ * project in the store (the previous one, or the new one if it got that far) keeps only the
+ * entries it names, so the pill and the retry never chase another project's copies. */
+function reonedOpenFailed(): void {
+  reconcileReonedMissing(getStateSnapshot().rifffs)
+}
+
 function basenameWithoutProjectExt(filePath: string): string {
   const base = filePath.split(/[\\/]/).pop() ?? filePath
   return base.replace(/\.sssketchproj$/i, '')
@@ -1555,8 +1568,9 @@ function Frame(): React.JSX.Element {
       // Its own seed, so its timeline throws are its own (@shared/timelineThrows).
       const freshState = { ...initialState, bpm, sound, projectSeed: newProjectSeed() }
       dispatch({ type: 'LOAD_STATE', state: freshState })
-      // The previous project's saved plugin settings are not this one's.
+      // The previous project's saved plugin settings are not this one's, nor its missing copies.
       replacePendingPluginStates({})
+      setReonedMissing([])
       lastSavedJsonRef.current = dirtyCheckJson(freshState)
       setCurrentSketch({ kind: 'library', name })
       setNewProjectModal(null)
@@ -1680,9 +1694,17 @@ function Frame(): React.JSX.Element {
     // strip rendering with blank waveforms that pop in one at a time as
     // each mounted component's own decode finishes.
     setBusy('loading…')
-    await warmStemCaches(loaded)
-    restoreState(loaded, pluginStates)
-    lastSavedJsonRef.current = dirtyCheckJson(loaded)
+    // Missing re-oned copies are rebuilt before the engine sees the project; the baseline is the
+    // snapshot as saved, so only a copy that moved shows as unsaved (reonedRepairOnOpen.ts).
+    const opened = await openWithReonedRepair(loaded)
+    try {
+      await warmStemCaches(opened.state)
+      restoreState(opened.state, pluginStates)
+    } catch (err) {
+      reonedOpenFailed()
+      throw err
+    }
+    lastSavedJsonRef.current = opened.savedJson
     setBusy(null)
     // The sketch-info sidecar can be missing/corrupted even when the
     // content autosave above recovered fine (they're written/read
@@ -1848,6 +1870,9 @@ function Frame(): React.JSX.Element {
   // draft, so opening another pair never needs a discard confirmation.
   const [crossDraft, setCrossDraft] = useState<CrossDraft | null>(null)
   const [crossOpen, setCrossOpen] = useState(false)
+  // The re-oned copies cleanup counts what Cross and Discover hold as in use (reonedInUse.ts).
+  useEffect(() => setReonedSessionRoot('cross', crossDraft), [crossDraft])
+  useEffect(() => setReonedSessionRoot('discover', discoverSlots), [discoverSlots])
   // One shared, session-only riff selection for both Sketch and Shelf.
   // Keeping this above the fullscreen Cross/Discover workspaces means the
   // exact working set remains highlighted when either workspace closes;
@@ -1907,6 +1932,11 @@ function Frame(): React.JSX.Element {
   const [discoverChaos, setDiscoverChaos] = useState(DEFAULT_DISCOVER_CHAOS)
   const [discoverUndoStack, setDiscoverUndoStack] = useState<DiscoverSlot[][]>([])
   const [discoverRedoStack, setDiscoverRedoStack] = useState<DiscoverSlot[][]>([])
+  // An undo or redo in Discover can bring back a slot seeded from a copy (reonedInUse.ts).
+  useEffect(
+    () => setReonedSessionRoot('discover-history', [discoverUndoStack, discoverRedoStack]),
+    [discoverUndoStack, discoverRedoStack]
+  )
   const [discoverSeedBpm, setDiscoverSeedBpm] = useState<number | null>(null)
   // First-launch-only "where do sketches save?" step -- shown BEFORE the
   // welcome modal (suppresses it below while this is up), since knowing
@@ -3085,6 +3115,8 @@ function Frame(): React.JSX.Element {
       <StemsUnavailableIndicator />
       <PluginsOffNotice />
       <PluginsHeldNotice />
+      <ReonedCopyMissingNotice />
+      <ReonedCopiesNotice />
       {/* Mounted here (not inside DiscoverPanel.tsx), same top-level,
        * mount-once-per-app-session pattern as BackgroundFeatureScan just
        * above, and gated on the same `discoverConsented` state the
@@ -3399,12 +3431,14 @@ function Frame(): React.JSX.Element {
                     await appSoundDefaults()
                   )
                   setBusy('loading…')
-                  await warmStemCaches(loaded)
-                  restoreState(loaded, pluginStates)
-                  lastSavedJsonRef.current = dirtyCheckJson(loaded)
+                  const opened = await openWithReonedRepair(loaded)
+                  await warmStemCaches(opened.state)
+                  restoreState(opened.state, pluginStates)
+                  lastSavedJsonRef.current = opened.savedJson
                   setCurrentSketch({ kind: 'library', name })
                 } catch (err) {
                   console.error('App: failed to open library sketch:', err)
+                  reonedOpenFailed()
                 } finally {
                   setBusy(null)
                 }
@@ -3436,12 +3470,14 @@ function Frame(): React.JSX.Element {
                   // Same pre-warm-before-LOAD_STATE reasoning as the onSelect
                   // handler right above -- see its own comment history.
                   setBusy('loading…')
-                  await warmStemCaches(loaded)
-                  restoreState(loaded, pluginStates)
-                  lastSavedJsonRef.current = dirtyCheckJson(loaded)
+                  const opened = await openWithReonedRepair(loaded)
+                  await warmStemCaches(opened.state)
+                  restoreState(opened.state, pluginStates)
+                  lastSavedJsonRef.current = opened.savedJson
                   setCurrentSketch({ kind: 'external', path: result.path })
                 } catch (err) {
                   console.error('App: failed to open project from disk:', err)
+                  reonedOpenFailed()
                 } finally {
                   setBusy(null)
                 }

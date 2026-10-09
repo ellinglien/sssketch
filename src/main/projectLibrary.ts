@@ -14,6 +14,7 @@ import {
 import { join, basename, resolve, sep } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import { app, shell } from 'electron'
+import { noteSessionProjectText } from './reonedCopiesSession'
 
 const LIBRARY_PREFS_FILENAME = 'libraryPrefs.json'
 
@@ -47,6 +48,13 @@ export function libraryRootPath(): string {
     console.error(`libraryRootPath: failed to read ${path}: ${message}`)
     return defaultLibraryRoot()
   }
+}
+
+/** True when the library is at its default location. That folder may not exist yet (a fresh
+ * install creates it on its first save), so a missing default root is made, while a missing
+ * custom root means its drive is unplugged or the folder moved (see bakeOffset's BakeOptions). */
+export function isDefaultLibraryRoot(): boolean {
+  return libraryRootPath() === defaultLibraryRoot()
 }
 
 export function setLibraryRootPath(newRoot: string): void {
@@ -97,12 +105,17 @@ export function samplesCacheDir(): string {
   return join(libraryRootPath(), '.samples-cache')
 }
 
-/** Durable derived audio created by the re-one/downbeat baker. Despite the
- * dot-prefix this is not an evictable cache: saved projects may reference
- * these immutable files indefinitely. Keeping them under the relocatable
- * project-library root avoids writing beside read-only LORE/archive audio. */
-export function bakeAssetsDir(): string {
-  return join(libraryRootPath(), '.bakes')
+/** The re-oned stem copies the re-one baker writes: a rebuildable cache.
+ * Each copy is named by its recipe (reonedRecipe.ts), a missing one that a
+ * project names is rebuilt from the stem's lineage on open and before export
+ * (reonedRebuild.ts), and the cleanup deletes only copies no project, backup,
+ * snapshot or session names that are more than a day old (reonedUsage.ts).
+ * `root` defaults to the library root; the cleanup passes the one it resolved,
+ * so its scan and its delete are about the same library. Under the
+ * relocatable project-library root, so nothing is written beside read-only
+ * LORE/archive audio. */
+export function bakeAssetsDir(root: string = libraryRootPath()): string {
+  return join(root, '.bakes')
 }
 
 // A hard, reliable split rather than a probe/fallback -- matches
@@ -421,6 +434,8 @@ export function restoreSketchBackup(
   // the oldest entry at the cap, that pruning can delete it, so capture its
   // small project JSON before rotating the current live file.
   const restoredBytes = readFileSync(resolvedBackup)
+  // The restored project is the sketch the renderer opens next (reonedCopiesSession).
+  noteSessionProjectText(restoredBytes.toString('utf-8'))
   rotateBackupBeforeOverwrite(name)
   writeFileAtomically(sketchProjectPath(name), restoredBytes)
   return { ok: true }
@@ -430,7 +445,7 @@ export function restoreSketchBackup(
  * leaves the old file whole instead of a truncated project. Same directory,
  * so the rename is atomic on one volume. The temp name ends in .tmp, which
  * nothing that lists sketches or backups picks up. */
-function writeFileAtomically(path: string, data: Buffer): void {
+export function writeFileAtomically(path: string, data: Buffer | string): void {
   const tempPath = `${path}.${randomBytes(4).toString('hex')}.tmp`
   try {
     writeFileSync(tempPath, data)
@@ -455,7 +470,9 @@ export function readSketchBackup(name: string, backupPath: string): string | nul
   const resolvedBackup = resolveBackupPathOrNull(name, backupPath)
   if (!resolvedBackup || !existsSync(resolvedBackup)) return null
   try {
-    return readFileSync(resolvedBackup, 'utf-8')
+    const json = readFileSync(resolvedBackup, 'utf-8')
+    noteSessionProjectText(json)
+    return json
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`readSketchBackup: failed to read ${resolvedBackup}: ${message}`)

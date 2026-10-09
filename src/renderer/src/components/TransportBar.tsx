@@ -11,6 +11,8 @@ import { stopActivePreview } from '../audio/previewLoop'
 import { MasterChainPanel } from './MasterChainPanel'
 import { SoundSettingsPanel } from './SoundSettingsPanel'
 import { ContextMenu } from './ContextMenu'
+import { CLEANUP_MENU_LABEL, LIBRARY_MISSING_TITLE } from '@shared/reonedCleanup'
+import { requestReonedCleanup } from '../state/reonedCleanupRequest'
 import { AudioDeviceModal } from './AudioDeviceModal'
 import { KeyGesturesModal } from './KeyGesturesModal'
 import { RadioHeartsKeyModal } from './RadioHeartsKeyModal'
@@ -308,6 +310,9 @@ export function TransportBar({
   // gear menu's "sound defaults…"). One panel, two bindings -- see SoundSettingsPanel.tsx.
   const [soundPanel, setSoundPanel] = useState<'project' | 'defaults' | null>(null)
   const [settingsMenu, setSettingsMenu] = useState<{ x: number; y: number } | null>(null)
+  // Whether the project library is reachable, fetched as the menu opens: the cleanup of re-oned
+  // stem copies is greyed while its drive is away. null until main answers.
+  const [reonedLibraryAvailable, setReonedLibraryAvailable] = useState<boolean | null>(null)
   const settingsButtonRef = useRef<HTMLButtonElement>(null)
   // The settings menu's "audio…" entry -- replaces the two dropdowns that
   // used to sit directly in the transport bar (see AudioDeviceModal.tsx's
@@ -564,6 +569,14 @@ export function TransportBar({
     }
     const rect = e.currentTarget.getBoundingClientRect()
     setSettingsMenu({ x: rect.left, y: rect.bottom + 4 })
+    setReonedLibraryAvailable(null)
+    void window.rifffApi
+      .reonedCopiesLibraryAvailable()
+      .then(setReonedLibraryAvailable)
+      .catch((err) => {
+        console.error('TransportBar: reonedCopiesLibraryAvailable() failed:', err)
+        setReonedLibraryAvailable(false)
+      })
     void window.rifffApi
       .riffLibraryIsOwn()
       .then(setRiffLibraryIsOwn)
@@ -1020,6 +1033,12 @@ export function TransportBar({
             { label: 'show welcome screen', onClick: onShowWelcome },
             { label: 'take the tour', onClick: onStartTour },
             { label: 'change save location…', onClick: () => void handleChangeSaveLocation() },
+            {
+              label: CLEANUP_MENU_LABEL,
+              onClick: () => requestReonedCleanup(),
+              disabled: reonedLibraryAvailable !== true,
+              title: reonedLibraryAvailable === false ? LIBRARY_MISSING_TITLE : undefined
+            },
             {
               label: 'change riff archive location…',
               onClick: () => void handleChangeRiffLibraryLocation()

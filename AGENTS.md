@@ -124,8 +124,13 @@ a merge.
 - **Main thread:** no blocks over ~100 ms. The LORE archive often lives on a slow USB drive.
 - **Audio thread (engine):** no locks, no allocation, no logging.
 - **Disk:** every file the app generates needs a cleanup story. No unbounded hidden folders.
-  Known gap: `<library>/.bakes` has none yet (open in `TO-DO.md`). Don't add deletion there
-  without that item's reference-counted, dry-run design.
+  `<library>/.bakes` is a rebuildable cache (CLAUDE.md, phase lineage). Keep three rules:
+  anything new that holds stem paths joins the used set (`reonedUsage.ts` /
+  `state/reonedInUse.ts`, and `noteSessionProjectText` for any new way main hands a project to
+  the renderer or writes one); `BAKER_VERSION` is bumped when the baker's output changes; and
+  cleanup deletes only unused copies more than a day old, never outside `.bakes`.
+- **Re-oned copies:** a missing copy is rebuilt on open and before export without marking the
+  project unsaved, and a failed bake never deletes a copy it didn't create.
 
 ## 7. Product decisions are Elling's
 

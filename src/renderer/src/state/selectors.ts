@@ -10,6 +10,7 @@ import type { StemAutomation } from '@shared/toolkit'
 import { riserEndBar, type RiserClip } from '@shared/riser'
 import { clipLengthBars } from '@shared/automationEdit'
 import type { SoundSettings } from '@shared/radioSound'
+import { rotationSecForBars } from '@shared/reonedRotation'
 import { SNAP_DIVS, type Action, type AppState, type ArrangerMode } from './store'
 import { appSoundDefaultsNow } from './appSoundDefaults'
 import type { HistoryAction } from './history'
@@ -558,9 +559,7 @@ export function offsetStepsForBeatIndex(beatIndex: number, snapDiv: number): num
  * loop length rather than the rifff's.
  */
 export function rotationSecondsForStem(offsetSteps: number, snapDiv: number, stem: Stem): number {
-  const kBars = -offsetSteps / snapDiv
-  const wrapped = ((kBars % stem.barLength) + stem.barLength) % stem.barLength
-  return wrapped * (stem.durationSec / stem.barLength)
+  return rotationSecForBars(-offsetSteps / snapDiv, stem)
 }
 
 /**
@@ -572,8 +571,10 @@ export function rotationSecondsForStem(offsetSteps: number, snapDiv: number, ste
  * deleted before pasting).
  *
  * Sharing file paths is safe even when two pasted copies are later re-oned
- * independently: BeatPicker writes a new immutable derived file per operation,
- * so the second correction cannot overwrite audio used by the first.
+ * independently: a re-oned copy is never rewritten once published (a different
+ * rotation is a different file, named by its recipe), so the second correction
+ * cannot overwrite audio used by the first, and each copy's own phaseLinkId
+ * keeps their re-ones apart even when both land on one reused file.
  */
 export function pasteRifffAction(
   state: AppState,

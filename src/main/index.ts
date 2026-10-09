@@ -55,6 +55,8 @@ import {
   type SaveBeforeQuitResult
 } from './saveBeforeQuit'
 import { bakeOffset, type BakeJob } from './bakeOffset'
+import { setStemMetadataDurationLookup } from './reonedRebuild'
+import { registerReonedCopiesIpc } from './reonedCopiesIpc'
 import { createEngineStopper } from './engineStop'
 import { createMetronomeSetting } from './metronomeSetting'
 import { claimSingleInstance } from './singleInstance'
@@ -106,7 +108,8 @@ import {
   downloadStemForAnalysis,
   candidateDbsForRiff,
   listJamsWithDb,
-  riffLibraryArchiveReachable
+  riffLibraryArchiveReachable,
+  stemMetadataDurationSec
 } from './riffLibraryStore'
 import {
   getDiscoverCandidates,
@@ -284,6 +287,7 @@ import {
   listLibrarySketches,
   libraryRootPath,
   bakeAssetsDir,
+  isDefaultLibraryRoot,
   setLibraryRootPath,
   shouldWarnBeforeOverwrite,
   renameSketch,
@@ -1359,7 +1363,12 @@ app.whenReady().then(async () => {
     renderStretched(stemPath, ratio)
   )
 
-  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) => bakeOffset(jobs, bakeAssetsDir()))
+  // A missing re-oned copy's rebuild matches it by the stem's own LORE metadata.
+  setStemMetadataDurationLookup(stemMetadataDurationSec)
+  ipcMain.handle('bake-offset', (_event, jobs: BakeJob[]) =>
+    bakeOffset(jobs, bakeAssetsDir(), { mayCreateRoot: isDefaultLibraryRoot() })
+  )
+  registerReonedCopiesIpc(ipcMain)
 
   ipcMain.handle('save-project', async (event, json: string) => {
     const win = BrowserWindow.fromWebContents(event.sender)!

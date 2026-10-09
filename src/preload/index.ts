@@ -4,6 +4,9 @@ import type { ArrangeRole, DrumSubRole } from '@shared/stemRole'
 import type { DiscoverSlotKind, DiscoverTraitKind } from '@shared/discoverSlotKind'
 import type { StretchedStem } from '@shared/buildEngineProject'
 import type { ToolkitExportMode } from '@shared/toolkit'
+import type { ReoneBakeJob } from '@shared/reonedRotation'
+import type { ReonedRepairBatch, ReonedRepairOutcome } from '@shared/reonedRepair'
+import type { ReonedCleanResult, ReonedSurvey } from '@shared/reonedCleanup'
 import type { LiveParamField } from '@shared/liveParam'
 import type { OwnUsernameReport } from '@shared/ownUsernameReport'
 import type { AppFeatureSettings } from '@shared/features'
@@ -139,9 +142,21 @@ const api = {
   renderStretched: (stemPath: string, ratio: number): Promise<StretchedStem> =>
     ipcRenderer.invoke('render-stretched', stemPath, ratio),
   bakeOffset: (
-    jobs: { path: string; rotationSec: number }[]
+    jobs: ReoneBakeJob[]
   ): Promise<{ path: string; bakedPath: string; durationSec: number }[]> =>
     ipcRenderer.invoke('bake-offset', jobs),
+  // The re-oned copies cleanup (src/main/reonedCopiesIpc.ts).
+  rebuildReonedCopies: (batches: ReonedRepairBatch[]): Promise<ReonedRepairOutcome[][]> =>
+    ipcRenderer.invoke('rebuild-reoned-copies', batches),
+  reonedCopiesLibraryAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke('reoned-copies-library-available'),
+  reonedCopiesSurvey: (request: {
+    inMemoryNames: string[]
+    respectNotNow: boolean
+  }): Promise<ReonedSurvey> => ipcRenderer.invoke('reoned-copies-survey', request),
+  reonedCopiesClean: (inMemoryNames: string[]): Promise<ReonedCleanResult> =>
+    ipcRenderer.invoke('reoned-copies-clean', inMemoryNames),
+  reonedCopiesNotNow: (): Promise<void> => ipcRenderer.invoke('reoned-copies-not-now'),
   saveProject: (json: string): Promise<string | null> => ipcRenderer.invoke('save-project', json),
   openProject: (): Promise<{ path: string; json: string } | null> =>
     ipcRenderer.invoke('open-project'),

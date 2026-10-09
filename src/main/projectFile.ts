@@ -6,8 +6,20 @@ import {
   sketchProjectPath,
   listLibrarySketches,
   nextVersionName,
-  rotateBackupBeforeOverwrite
+  rotateBackupBeforeOverwrite,
+  libraryRootPath,
+  writeFileAtomically
 } from './projectLibrary'
+import { rememberExternalProject, renameKnownProject } from './reonedCopiesStore'
+import { noteSessionProjectText } from './reonedCopiesSession'
+import { isReadByLibraryWalk } from './reonedUsage'
+
+/** Library projects are scanned for the re-oned copies they name at cleanup time; a project
+ * anywhere else is remembered with its names (reonedCopiesStore.ts), so its copies stay kept
+ * while its drive is away. "Inside" means exactly what the scan's walk reads (reonedUsage.ts). */
+function isInsideLibrary(path: string): boolean {
+  return isReadByLibraryWalk(path, libraryRootPath())
+}
 
 // Fun, short words for the auto-generated default project name -- kept
 // tasteful and on-theme for a music/creative tool, not an exhaustive
@@ -198,11 +210,14 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
   if (result.canceled || !result.filePath) return null
 
   try {
+    // Before the write: a clean running now keeps what this project names (reonedCopiesSession).
+    noteSessionProjectText(json)
     writeFileSync(result.filePath, json, 'utf-8')
     // The user's own file now has this exact content, so the crash-recovery
     // snapshot (see writeAutosave below) is redundant — clear it so a later
     // launch doesn't offer to "recover" work that's already safely saved.
     clearAutosave()
+    if (!isInsideLibrary(result.filePath)) rememberExternalProject(result.filePath, json)
     return result.filePath
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -225,8 +240,11 @@ export async function saveProjectAs(win: BrowserWindow, json: string): Promise<s
  * caught and resolved as null. The caller (a later task's App.tsx Save
  * action) is expected to wrap this in its own try/catch. */
 export function saveProjectInPlace(path: string, json: string): void {
+  noteSessionProjectText(json)
   writeFileSync(path, json, 'utf-8')
   clearAutosave()
+  // saveProjectToLibrary comes through here too: only a file outside the library is remembered.
+  if (!isInsideLibrary(path)) rememberExternalProject(path, json)
 }
 
 /** Renames an explicitly-opened (non-library) sketch file in place -- same
@@ -242,6 +260,7 @@ export function renameExternalSketchFile(
     return { ok: false, reason: `a file named "${newName}.sssketchproj" already exists there` }
   }
   renameSync(oldPath, newPath)
+  renameKnownProject(oldPath, newPath)
   return { ok: true, path: newPath }
 }
 
@@ -273,7 +292,9 @@ export function openLibrarySketch(name: string): { path: string; json: string } 
   const path = sketchProjectPath(name)
   if (!existsSync(path)) return null
   try {
-    return { path, json: readFileSync(path, 'utf-8') }
+    const json = readFileSync(path, 'utf-8')
+    noteSessionProjectText(json)
+    return { path, json }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`openLibrarySketch: failed to read ${path}: ${message}`)
@@ -304,12 +325,12 @@ export function duplicateSketchAsNewVersion(
   return { name: newName, ...saveProjectToLibrary(newName, json) }
 }
 
-const AUTOSAVE_FILENAME = 'autosave.sssketchproj'
+export const AUTOSAVE_FILENAME = 'autosave.sssketchproj'
 const AUTOSAVE_SKETCH_FILENAME = 'autosaveSketch.json'
 // One kept previous snapshot (and its sidecar): an offered snapshot nobody decided on, moved
 // aside when this session needed the recovery file. Bounded at one: a second move aside
 // replaces it.
-const AUTOSAVE_PREVIOUS_FILENAME = 'autosave.previous.sssketchproj'
+export const AUTOSAVE_PREVIOUS_FILENAME = 'autosave.previous.sssketchproj'
 const AUTOSAVE_PREVIOUS_SKETCH_FILENAME = 'autosaveSketch.previous.json'
 
 function autosavePath(): string {
@@ -381,12 +402,15 @@ function setUndecidedAutosaveAside(): void {
  * calls to this after real edits, independent of the user's own explicit
  * Save (which goes through saveProjectAs above and clears this instead).
  * A previous session's snapshot still awaiting the user's decision is moved
- * aside first, not overwritten (setUndecidedAutosaveAside).
+ * aside first, not overwritten (setUndecidedAutosaveAside). Written to a
+ * temporary and renamed over, so a crash or a full disk midway leaves the
+ * last snapshot whole, and the re-oned cleanup's scan never reads half of one.
  */
 export function writeAutosave(json: string): void {
   setUndecidedAutosaveAside()
+  noteSessionProjectText(json)
   try {
-    writeFileSync(autosavePath(), json, 'utf-8')
+    writeFileAtomically(autosavePath(), json)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`writeAutosave: failed to write ${autosavePath()}: ${message}`)
@@ -400,7 +424,11 @@ export function writeAutosave(json: string): void {
  * offered: it stays undecided (autosaveUndecided) until discardAutosave. */
 export function loadAutosave(): string | null {
   const json = readIfExists(autosavePath(), 'loadAutosave')
-  if (json !== null) autosaveUndecided = true
+  if (json !== null) {
+    autosaveUndecided = true
+    // Offered to the renderer: a recover may delete the file before a clean's scan reads it.
+    noteSessionProjectText(json)
+  }
   return json
 }
 
@@ -457,6 +485,7 @@ export function discardAutosave(): void {
 export function loadPreviousAutosave(): { json: string; sketchJson: string | null } | null {
   const json = readIfExists(previousAutosavePath(), 'loadPreviousAutosave')
   if (json === null) return null
+  noteSessionProjectText(json)
   return { json, sketchJson: readIfExists(previousAutosaveSketchPath(), 'loadPreviousAutosave') }
 }
 
@@ -482,7 +511,10 @@ export async function openProject(
 
   const path = result.filePaths[0]
   try {
-    return { path, json: readFileSync(path, 'utf-8') }
+    const json = readFileSync(path, 'utf-8')
+    noteSessionProjectText(json)
+    if (!isInsideLibrary(path)) rememberExternalProject(path, json)
+    return { path, json }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`openProject: failed to read project from ${path}: ${message}`)
