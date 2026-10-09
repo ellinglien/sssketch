@@ -1,6 +1,8 @@
 import { MAX_RIFFF_STEM_SLOTS } from './riffStemSlots'
 import type { DiscoverCandidate } from './discoverCandidate'
 import type { DiscoverSlotKind } from './discoverSlotKind'
+import { DEFAULT_SOURCE_LEAN } from './discoverSlotModifier'
+import { DEFAULT_DISCOVER_CHAOS } from './discoverRanking'
 import { stemKey, type ProjectRef, type Rifff, type Stem } from './types'
 
 export interface CrossSourceOccurrence {
@@ -40,6 +42,9 @@ export interface CrossDraft {
   /** Parent ids, left then right. Swapping changes only this tuple. */
   sideOrder: [string, string]
   targetBpm: number
+  /** Discover-style center-add controls; optional for drafts alive across hot reloads. */
+  sourceLean?: number
+  matching?: number
   center: CrossCenterRow[]
   /** Locally-resolved stems added from the center column rather than either parent. */
   discoveredSources?: CrossSourceOccurrence[]
@@ -209,6 +214,8 @@ export function createCrossDraft(
     parents: [left, right],
     sideOrder: [left.id, right.id],
     targetBpm,
+    sourceLean: DEFAULT_SOURCE_LEAN,
+    matching: 100 - DEFAULT_DISCOVER_CHAOS,
     center: [],
     discoveredSources: [],
     past: [],

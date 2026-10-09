@@ -137,6 +137,10 @@ describe('crossPairInVisualOrder', () => {
 })
 
 describe('Cross center editing', () => {
+  it('starts with the same source and matching controls as Discover', () => {
+    expect(draft()).toMatchObject({ sourceLean: 50, matching: 25 })
+  })
+
   it('swaps presentation sides without changing source identity', () => {
     let value = addCrossSource(draft(), 'a:1')
     value = swapCrossSides(value)
