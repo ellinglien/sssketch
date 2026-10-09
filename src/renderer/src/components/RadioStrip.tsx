@@ -390,7 +390,7 @@ function RadioLiveBar(
           <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--ra-s-1)' }}>
             <button
               onClick={() => play.onTempoStep(-1)}
-              aria-label="Decrease tempo"
+              aria-label="decrease tempo"
               style={tempoStepStyle}
             >
               −
@@ -404,7 +404,7 @@ function RadioLiveBar(
               onKeyDown={(e) => {
                 if (e.key === 'Enter') e.currentTarget.blur()
               }}
-              aria-label="Tempo (BPM)"
+              aria-label="tempo (bpm)"
               style={{
                 fontFamily: 'inherit',
                 fontSize: 'var(--ra-fs-13)',
@@ -421,7 +421,7 @@ function RadioLiveBar(
             />
             <button
               onClick={() => play.onTempoStep(1)}
-              aria-label="Increase tempo"
+              aria-label="increase tempo"
               style={tempoStepStyle}
             >
               +
@@ -430,7 +430,7 @@ function RadioLiveBar(
               <button
                 onClick={play.onMatchSeed}
                 title={`seed tempo ${play.seedTempo} bpm`}
-                aria-label="Match seeded riff's own tempo"
+                aria-label="match seeded riff's own tempo"
                 style={{
                   ...tempoStepStyle,
                   width: 'auto',
