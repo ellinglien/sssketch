@@ -27,6 +27,11 @@ and 2 and on F6 are fixed (72fa76ff, 012d8d12, 54346754, 2282438f, ae2c065e, 2af
 item below says what changed. The question under F6 (Keep and solo) has since been decided and
 done. Same caveat: unit tests, typecheck and lint only.
 
+**Updated 2026-10-09, suggested order 4 to 6:** U3, F5's Cmd+Z, F1, U1, U2, U5, U6, U7 and F2 are
+done on master (7d48d45a to 0d29aa5e); each item below says how. Keep now follows solo (F6,
+eda26853). Nobody has clicked through any of it: pure logic has unit tests, the rest is typecheck
+and lint only.
+
 ---
 
 ## Bugs
@@ -305,23 +310,33 @@ starts playing." He was stopping it by pressing play and then stop on the transp
 the notes: "we need a way to stop and start the riffs that we're previewing... click to start and
 click to stop." Ben at 1:30: "it's killing me not to be able to stop this guy."
 
-**Status: mostly fixed.** Clicking the playing riff again stops it (7a5aa5fd,
+**Status: fixed** (click-to-stop, plus a stop button since 8a0447f9). Clicking the playing riff again stops it (7a5aa5fd,
 `libraryPreviewToggle.ts`, `handleRiffClick` in `LibraryBrowser.tsx`). What's left: the detail row
 has no visible stop button, so the gesture is invisible.
 
 **Fix.** Add a "stop" button beside "import to project" while a preview plays. **Small.**
+
+**Done** (8a0447f9). While a preview plays, the detail row shows a small "stop" button (a square
+and the word), before "seed discover with this". It does what the second click does.
 
 ### F2. A monitoring volume knob in the import view
 
 **What happened.** At 1:24 Ben: "it would be cool to have a monitoring volume knob... so when we're
 on calls we could reduce it slightly and chat over top of it."
 
-**Status: not done.** Import previews (`audio/previewLoop.ts`) and the re-one picker's previews
+**Status: fixed** (0d29aa5e; see below). Before: Import previews (`audio/previewLoop.ts`) and the re-one picker's previews
 (`BeatPicker.tsx`) connect straight to the speakers. There's no shared gain and no setting.
 
 **Fix.** Route all Web Audio previews through one shared gain node (a new
 `audio/previewOutput.ts`). Add a small slider in the import header, remembered in localStorage.
 **Small to medium.**
+
+**Done** (0d29aa5e), as a dial rather than a slider, and remembered in app settings rather than
+localStorage. Import riffs, shelf tiles, loop folders, the project browser and the re-one picker
+(its click included) all play through `audio/previewOutput.ts`. The import header has a
+"preview level" dial (the existing `Dial`, 0 to 100, default 100 = unity, squared taper so 50 is
+-12 dB). It's saved in `previewLevel.json` in userData (`src/main/previewLevelStore.ts`) and read
+at startup. The arrangement isn't touched.
 
 ### F3. Remember the selected jam in the import view
 
@@ -351,7 +366,7 @@ Cross's "generate matching stems" may already cover it.
 notes: "add a way to go back to the previous state of the radio." At 2:34 they found Discover's
 undo button: "oh, there's undo... we just discovered a feature."
 
-**Status: partly done.**
+**Status: partly done.** The Cmd+Z routing is done (4c01540e); radio's "back" is not.
 - Undo and redo exist in the radio and Discover headers. They cover hand edits, skips and a turn
   still waiting.
 - Radio's own automatic changes push no undo point, on purpose (`DiscoverPanel.tsx`: "a radio
@@ -361,7 +376,11 @@ undo button: "oh, there's undo... we just discovered a feature."
   arrangement edits nobody is looking at.
 
 **Fix.**
-- Route Cmd+Z and Shift+Cmd+Z to Discover's undo while it's open. **Small.**
+- Route Cmd+Z and Shift+Cmd+Z to Discover's undo while it's open. **Small.** **Done**
+  (4c01540e): an overlay with its own undo claims the keys while it's mounted
+  (`state/undoRouting.ts`, newest claim wins). Discover and radio get their header's undo and
+  redo. Cross didn't route the keys either (its undo was buttons only), so it now claims them
+  too. With nothing open, the project keeps them.
 - A "back" that restores the slots from before radio's last automatic change, as a short ring of
   snapshots kept apart from the hand-edit undo. **Medium.** Elling decides whether radio changes
   should be undoable at all.
@@ -462,7 +481,7 @@ sure the original had been saved. "The normal thing, save as... it's not like gi
 the state of the first one before you went on to create a new one. It's more like you change the
 name of the thing you're in."
 
-**Status: not done.** Nothing has changed since 1.5.0.
+**Status: wording fixed** (18e46f68; see below). Before:
 - "save a copy" (`handleDuplicateAsNewVersion` in `App.tsx`) writes the live project, unsaved
   edits included, as a new numbered version. It switches the window to that version and never
   writes the original. That really is a fork, but the unsaved work goes with the copy.
@@ -477,13 +496,25 @@ name of the thing you're in."
 
 **Small.**
 
+**Done, wording only** (18e46f68). Checked against the code: "save a copy elsewhere…" never
+renames anything or switches the window; it writes a file and leaves you where you were, unsaved
+state included. The rename-like one is "save a copy", which moves you into the copy. Now:
+- "save as a new version", hint "carry on in a copy · the original stays as saved"; afterwards
+  "you're now working in <copy> · <original> keeps its last save".
+- "save a copy to a file…", hint "write a copy anywhere · you stay in this one"; afterwards
+  "copy saved as <file> · you're still working in <name>".
+
+The confirmation is a notice under the others, top right, gone after eight seconds or a click.
+Behaviour is unchanged; whether the new version should save the original first is still open
+for Elling.
+
 ### U2. The shelf doesn't clearly show what Sketch is playing
 
 **What happened.** At 2:38 to 2:39 Ben wanted "a little more contrast up here, or a stronger
 highlight, to show the connection" between the riff playing in Sketch and its shelf tile. Elling:
 "it's already doing it... the highlight is not prominent enough."
 
-**Status: not done.** Shelf tiles mark selection, hover and the shelf's own preview (a 1px
+**Status: fixed** (203361c8; see below). Before: Shelf tiles mark selection, hover and the shelf's own preview (a 1px
 playhead-coloured edge, 9548d6f0). A riff already on the timeline is dimmed to 0.4. No "sounding
 in Sketch" state reaches `Shelf.tsx`. The 10-08 selection commits made the selection quieter, not
 louder.
@@ -492,13 +523,24 @@ louder.
 that tile full opacity and the playhead edge (2px). Playhead colour is audio information, so it's
 allowed. **Small.**
 
+**Done** (203361c8), with a 1px edge: the same edge a previewing tile has, since both mean "the
+riff you're hearing". While Sketch plays, the tile of the riff under the playhead
+(`sketchSoundingGroupId`) is at full opacity with that edge. No glow.
+
 ### U3. Arrange's per-row controls sit at the far end of the timeline
 
 **What happened.** At 0:12 to 0:14 Ben couldn't find a row's mute, solo and volume. "Could you
 scroll all the way to the right? Oh, that's where they're hidden." He had assumed the inspector
 had replaced them.
 
-**Status: probably not fixed. Check it in dev with a long arrangement.**
+**Status: fixed** (7d48d45a). Confirmed in the code first: the controls hung off a full-width
+sticky box, which can't move inside a timeline-wide row, so they sat at the timeline's end; and the
+rail was `pointerEvents: none`, `aria-hidden`. Now each row's m/s/fx stack and gain dial hang off a
+zero-width sticky anchor at the row's end (`MixerRailAnchor`), which slides to the viewport's right
+edge, so they sit in the rail beside the inspector at any length and scroll position. The rail is
+drawn just left of the scroller's scrollbars, where the controls land (it used to cover the
+vertical scrollbar); it takes clicks in the gaps between controls and hands the wheel back to the
+timeline. One set of controls per row, nothing duplicated. What was there before:
 - cbb2b3d6, f8af3f08 and 853f758e restyled the controls and added a "mix" rail at the right edge of
   the viewport. But that rail is decoration only (`pointerEvents: none`).
 - The real buttons are still inside a `position: sticky; right: 0` box in each row
@@ -526,34 +568,46 @@ paste, duplicate and ungroup each make a new riff.
 **What happened.** At 0:07 to 0:08 and 1:36: shift-click for a range, cmd-click for single riffs.
 Even Elling had to try a few keys.
 
-**Status: not done.** It works, but nothing says so. `src/shared/keyGestures.ts` has no import
+**Status: fixed** (0b9a8fab; see below). Before: It works, but nothing says so. `src/shared/keyGestures.ts` has no import
 section.
 
 **Fix.** Add an import section to the gestures list, and a one-line hint by "import to project".
 **Small.**
+
+**Done** (0b9a8fab). Each riff's tooltip and the import button's end with "shift-click a run ·
+cmd-click to add", and the keys and gestures list has an import section.
 
 ### U6. Radio controls don't explain themselves
 
 **What happened.** At 2:02 Ben hovered "turn": "it doesn't explain it." At 2:05: "what does like
 do?" At 2:07: "what does keep mean?", next to add to shelf and add to timeline.
 
-**Status: not done.** The tooltips are "turn at the top", "like" and "keep this group". The add
+**Status: fixed** (23796773; see below). Before: The tooltips are "turn at the top", "like" and "keep this group". The add
 buttons have none. The radio guide (`src/shared/radioGuide.ts`) already has better sentences, for
 example keep = "save the rows playing now to your library".
 
 **Fix.** Use the guide's sentences as the tooltips. Give the add buttons "into this project".
 **Small.**
 
+**Done** (23796773). One module (`src/shared/radioControlCopy.ts`) holds the sentences, and the
+guide reads it too. turn: "a turnaround at the next loop top"; keep: "save the rows playing now to
+your library"; add: "into this project's shelf" / "onto this project's timeline"; like: "like: star
+the sound as a favourite and hook it" with radio on, "...as a favourite" with it off.
+
 ### U7. Discover's source dial was confusing
 
 **What happened.** At 1:45 Elling explained that the dial "gives fifty percent microphone input",
 and Ben: "but wouldn't it just ignore it anyway?"
 
-**Status: not done.** The ends are labelled "endlesss / other", with the tooltip "other clockwise".
+**Status: partly done**: the tooltip (23796773; see below). Before: The ends are labelled "endlesss / other", with the tooltip "other clockwise".
 "Other" means recorded audio-in stems.
 
 **Fix.** Relabel the ends "instruments / recorded", with a tooltip saying what each end pulls from.
 **Small.**
+
+**Tooltip done** (23796773): "endlesss instruments to the left, audio-in recordings to the right",
+the same in Discover's dial, radio's strip and the guide. The end labels still read
+"endlesss / other"; relabelling them is Elling's call.
 
 ### U8. What the re-one screen is for
 
@@ -615,9 +669,10 @@ It was the pitch line.
 1. ~~**B1, paths 2 and 3**~~: done 2026-10-09.
 2. ~~**B1, path 1**~~: done 2026-10-09. **F7** (a per-row nudge) waits on Elling.
 3. ~~**F6**~~: done 2026-10-09.
-4. **U3**: confirm and fix Arrange's row controls on long arrangements. Small.
-5. **F5 (Cmd+Z routing)**, **F1 (stop button)**, **U1 (save wording)**, **U2 (shelf highlight)**,
-   **U5, U6, U7 (labels and hints)**: small, and good as one polish batch.
-6. **F2**: preview volume. Small to medium.
+4. ~~**U3**~~: done 2026-10-09.
+5. ~~**F5 (Cmd+Z routing)**, **F1 (stop button)**, **U1 (save wording)**, **U2 (shelf
+   highlight)**, **U5, U6, U7 (labels and hints)**~~: done 2026-10-09. U1's "save the original
+   first?" and U7's end labels wait on Elling.
+6. ~~**F2**~~: done 2026-10-09.
 7. **B2, B3**: need Ben's crash reports and engine logs first.
 8. **B6, U4, F10, F5's radio "back"**: medium. Design first; decisions are Elling's.

@@ -303,6 +303,18 @@ component, `components/MetronomeButton.tsx`, used by the main transport and by C
 no tempo of its own: the engine clicks at the loaded project's bpm, so during a Cross preview it
 follows `draft.targetBpm` and after it the project's tempo (`PlaybackEngineTests`).
 
+### Previews, Cmd+Z and the mixer rail (renderer conventions)
+
+- **Web Audio previews** connect to `previewOutput(ctx)` (`audio/previewOutput.ts`), never to
+  `ctx.destination`: that's the import view's "preview level" dial (saved in `previewLevel.json`,
+  `src/main/previewLevelStore.ts`). A new preview that skips it ignores the dial.
+- **Cmd+Z** goes to the project's history unless an overlay with its own undo has claimed it with
+  `useClaimUndo` (`state/undoRouting.ts`; Discover/radio and Cross do). A new overlay with an undo
+  should claim it too, or Cmd+Z silently undoes arrangement edits hidden under it.
+- **Arrange's row controls** (m/s/fx, gain) hang off `MixerRailAnchor`: a zero-width sticky box at
+  the row's end. A full-width sticky box can't move inside a timeline-wide row, which is how they
+  once ended up at the timeline's far end.
+
 ## Why the engine is a GUI app, and why its plugin editor windows are `setAlwaysOnTop`
 
 The engine started as a `juce_add_console_app` and was converted to `juce_add_gui_app`

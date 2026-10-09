@@ -8,6 +8,8 @@
 - Added a draggable metronome-volume gesture while preserving click-to-toggle.
 - Added clearer pre-commit re-one markers and recovery utilities for repairing older projects whose stems lost their shared phase lineage.
 - Re-oned stem copies are now reused instead of duplicated, rebuilt automatically when one is missing, and can be cleaned up: a notice at launch from 200 MB of unused copies, or any time from the gear menu's "clean up re-oned stem copies…". Your rifffs, stems and projects are never touched.
+- Added a **preview level** dial to the import view. It sets how loud every preview plays (import riffs, shelf tiles, loop folders, the project browser and the re-one picker), so you can talk over them, and it's remembered between sessions. The arrangement isn't affected.
+- Added a **stop** button beside the playing preview in the import view. Clicking the playing riff again still stops it too.
 - Added focused tests for Cross assembly and playback, phase propagation, caching, import resolution, selection behavior, mixer state, save/quit handling, export naming, and native transport ordering.
 
 ### Changed
@@ -22,6 +24,11 @@
 - Shelf previews take ownership of playback instead of layering over the running arrangement, and their highlighting is easier to see.
 - Import browsing preserves the selected jam while moving back and forth, and clicking an already-playing import preview stops it.
 - A re-one now bakes from the stem's original audio.
+- While Discover, radio or Cross is open, Cmd+Z and Cmd+Shift+Z undo and redo there, not in the project hidden underneath.
+- Keep in Discover and radio saves what you hear: with a row soloed, the other rows are kept silent (at gain 0), as a muted row already was.
+- The save menu's copy items say which file you end up in: "save as a new version" moves you into the copy and leaves the original as last saved; "save a copy to a file…" writes a file and leaves you where you were. Each confirms with one line.
+- The shelf tile of the riff Sketch is playing now gets the playhead-coloured edge, so it's easy to spot.
+- Clearer tooltips: radio's turn, like, keep and add buttons, the source dial (Endlesss instruments to the left, audio-in recordings to the right), and the import view's multi-select (shift-click a run, cmd-click to add). The keys and gestures list has an import section.
 - The re-one picker draws each stem as a waveform in its own colour, like everywhere else, instead of a spectrogram with a pitch line. The waveform is finer than the arranger's, so drum hits and note onsets stand out as separate spikes.
 
 ### Fixed
@@ -43,4 +50,5 @@
 - Discover and radio seeded from a re-oned riff now play candidates from the seed's own jam at the seed's rotation, so they stay in phase with it. Lining up a roll's stems is quicker, a stem that can't be lined up is skipped with a notice, and once the seed's own rows are gone new stems come in at their own phase again. Stems from your discovered groups and the Shared Feed are never shifted.
 - Adding a loop from Discover or radio keeps what you hear: muted rows, and every row but a soloed one, arrive disabled at their own level. Adding from Cross now does the same.
 - A riff re-oned by whole bars no longer loses track of its rotation after taking short (1-bar) stems, so later stems still come in at the same rotation.
+- Arrange's mute, solo and gain controls now stay in the mixer rail beside the inspector on any length of arrangement. On one longer than the window they used to sit at the far end of the timeline, and the rail itself didn't respond to clicks.
 - Kept quit blocked until the current project is saved, isolated export materialization and filenames to avoid collisions, and hardened backup restoration and phone-remote pairing lockout.
